@@ -411,6 +411,7 @@
         class="conversation-item"
         :class="{
           'conversation-item-actionable': entry.kind === 'message' && (canShowMessageActions(entry.message) || canFavoriteMessage(entry.message)),
+          'conversation-item-actions-active': entry.kind === 'message' && isMessageActionBarActive(entry.message),
           'conversation-item-highlighted': entry.kind === 'message' && highlightedMessageId === entry.message.id,
         }"
         :data-role="entry.kind === 'message' ? entry.message.role : 'assistant'"
@@ -512,18 +513,12 @@
                 class="message-card"
                 :class="{ 'is-favorited': isFavoriteMessage(entry.message) }"
                 :data-role="entry.message.role"
+                :tabindex="canShowMessageActionBar(entry.message) ? 0 : undefined"
+                @click="onMessageCardActivate(entry.message)"
+                @focusin="onMessageCardActivate(entry.message)"
+                @keydown.enter.prevent="onMessageCardActivate(entry.message)"
+                @keydown.space.prevent="onMessageCardActivate(entry.message)"
               >
-                <button
-                  v-if="canFavoriteMessage(entry.message)"
-                  class="message-favorite-button"
-                  :class="{ 'is-favorited': isFavoriteMessage(entry.message) }"
-                  type="button"
-                  :title="isFavoriteMessage(entry.message) ? '取消收藏这条消息' : '收藏这条消息'"
-                  @click="onToggleFavorite(entry.message)"
-                >
-                  <IconTablerBookmark class="message-favorite-icon" :filled="isFavoriteMessage(entry.message)" />
-                  <span class="sr-only">{{ isFavoriteMessage(entry.message) ? '取消收藏' : '收藏' }}</span>
-                </button>
                 <div class="message-text-flow">
                   <template
                     v-for="(block, blockIndex) in getPreparedMessageBlocks(entry.message)"
@@ -581,13 +576,24 @@
               </article>
             </article>
 
-            <div v-if="canShowMessageActions(entry.message)" class="message-actions">
+            <div v-if="canShowMessageActionBar(entry.message)" class="message-actions">
+              <button
+                v-if="canFavoriteMessage(entry.message)"
+                class="message-action-button message-action-button--favorite"
+                :class="{ 'is-favorited': isFavoriteMessage(entry.message) }"
+                type="button"
+                :title="isFavoriteMessage(entry.message) ? '取消收藏这条消息' : '收藏这条消息'"
+                @click.stop="onToggleFavorite(entry.message)"
+              >
+                <IconTablerBookmark class="message-action-icon" :filled="isFavoriteMessage(entry.message)" />
+                <span class="message-action-label">{{ isFavoriteMessage(entry.message) ? '取消收藏' : '收藏' }}</span>
+              </button>
               <button
                 v-if="canCopyMessage(entry.message)"
                 class="message-action-button"
                 type="button"
                 title="复制消息内容"
-                @click="onCopyMessage(entry.message)"
+                @click.stop="onCopyMessage(entry.message)"
               >
                 <IconTablerCopy class="message-action-icon" />
                 <span class="message-action-label">复制</span>
@@ -597,7 +603,7 @@
                 class="message-action-button"
                 type="button"
                 title="回滚到这条消息，并移除其后的当前轮次内容"
-                @click="onRollback(entry.message)"
+                @click.stop="onRollback(entry.message)"
               >
                 <IconTablerArrowBackUp class="message-action-icon" />
                 <span class="message-action-label">回滚</span>
@@ -1223,6 +1229,7 @@ const fileLinkContextMenuY = ref(0)
 const fileLinkContextBrowseUrl = ref('')
 const fileLinkContextEditUrl = ref('')
 const highlightedMessageId = ref('')
+const activeMessageActionId = ref('')
 const EMPTY_MESSAGES: UiMessage[] = []
 const conversationViewportHeight = ref(0)
 const conversationScrollTop = ref(0)
@@ -1645,7 +1652,7 @@ function estimateMessageHeight(message: UiMessage): number {
     height += imageCount * 196
   }
 
-  if (canShowMessageActions(message)) {
+  if (canShowMessageActionBar(message)) {
     height += 30
   }
 
@@ -2950,6 +2957,19 @@ function canShowMessageActions(message: UiMessage): boolean {
   return canCopyMessage(message) || canRollbackMessage(message)
 }
 
+function canShowMessageActionBar(message: UiMessage): boolean {
+  return canFavoriteMessage(message) || canShowMessageActions(message)
+}
+
+function isMessageActionBarActive(message: UiMessage): boolean {
+  return activeMessageActionId.value === message.id
+}
+
+function onMessageCardActivate(message: UiMessage): void {
+  if (!canShowMessageActionBar(message)) return
+  activeMessageActionId.value = message.id
+}
+
 function onToggleFavorite(message: UiMessage): void {
   if (!canFavoriteMessage(message)) return
   emit('toggleFavorite', message)
@@ -3834,6 +3854,7 @@ watch(
 
 watch(() => props.activeThreadId, () => {
   clearHighlightedMessage()
+  activeMessageActionId.value = ''
 })
 
 defineExpose<{
@@ -4419,7 +4440,6 @@ onBeforeUnmount(() => {
 
 .message-text-flow {
   @apply flex flex-col gap-1;
-  padding-right: 2rem;
 }
 
 .message-text {
@@ -4504,18 +4524,6 @@ onBeforeUnmount(() => {
   max-width: min(62rem, 100%);
 }
 
-.message-favorite-button {
-  @apply absolute top-1.5 right-1.5 inline-flex h-8 w-8 items-center justify-center rounded-full border border-transparent bg-transparent text-[#b7a891] opacity-55 transition-[background-color,border-color,color,opacity] duration-150 hover:border-[#ddd3c2] hover:bg-[#fff8ee] hover:text-[#7b6b57] hover:opacity-100;
-}
-
-.message-favorite-button.is-favorited {
-  @apply border-[#d8c5a6] bg-[#f5ecdd] text-[#8a5b17] opacity-100;
-}
-
-.message-favorite-icon {
-  @apply h-4 w-4;
-}
-
 .sr-only {
   position: absolute;
   width: 1px;
@@ -4594,9 +4602,14 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.16), 0 14px 32px rgba(15, 118, 110, 0.12);
 }
 
-.conversation-item-actionable:hover .message-action-button,
+.message-card:focus-visible {
+  outline: 2px solid rgba(15, 118, 110, 0.28);
+  outline-offset: 3px;
+}
+
+.conversation-item-actions-active .message-action-button,
 .conversation-item-actionable:focus-within .message-action-button {
-  @apply opacity-85;
+  @apply opacity-90;
 }
 
 .message-actions {
@@ -4611,6 +4624,10 @@ onBeforeUnmount(() => {
 .message-action-button {
   @apply opacity-0 inline-flex min-h-8 items-center gap-1 self-start rounded-full border border-transparent bg-[#fffdf8]/88 px-2 py-0.5 text-[11px] text-[#82786b] shadow-sm shadow-[#2d261f]/5 transition-[background-color,border-color,color,opacity] duration-150 hover:border-[#d8cfbf] hover:bg-[#f7f1e5] hover:text-[#544a3d];
   pointer-events: auto;
+}
+
+.message-action-button--favorite.is-favorited {
+  @apply border-[#d8c5a6] bg-[#f5ecdd] text-[#8a5b17] opacity-100;
 }
 
 .message-stack[data-role='user'] .message-actions {
@@ -4646,10 +4663,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 767px) {
-  .message-text-flow {
-    padding-right: 1.75rem;
-  }
-
   .message-text {
     font-size: 14.5px;
     line-height: 1.58;
