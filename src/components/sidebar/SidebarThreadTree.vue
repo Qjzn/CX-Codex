@@ -46,19 +46,19 @@
                   <IconTablerDots class="thread-icon" />
                 </button>
                 <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @click.stop>
-                  <button class="thread-menu-item" type="button" @click="onBrowseThreadFiles(thread.id)">
+                  <button class="thread-menu-item" type="button" @click.stop="onBrowseThreadFiles(thread.id)">
                     浏览文件
                   </button>
-                  <button class="thread-menu-item" type="button" @click="onExportThread(thread.id)">
+                  <button class="thread-menu-item" type="button" @click.stop="onExportThread(thread.id)">
                     导出会话
                   </button>
-                  <button class="thread-menu-item" type="button" @click="onForkThread(thread.id)">
+                  <button class="thread-menu-item" type="button" @click.stop="onForkThread(thread.id)">
                     创建分支会话
                   </button>
-                  <button class="thread-menu-item" type="button" @click="openRenameThreadDialog(thread.id, thread.title)">
+                  <button class="thread-menu-item" type="button" @click.stop="openRenameThreadDialog(thread.id, thread.title)">
                     重命名会话
                   </button>
-                  <button class="thread-menu-item thread-menu-item-danger" type="button" @click="openDeleteThreadDialog(thread.id, thread.title)">
+                  <button class="thread-menu-item thread-menu-item-danger" type="button" @click.stop="openDeleteThreadDialog(thread.id, thread.title)">
                     删除会话
                   </button>
                 </div>
@@ -120,19 +120,19 @@
                   <IconTablerDots class="thread-icon" />
                 </button>
                 <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @click.stop>
-                  <button class="thread-menu-item" type="button" @click="onBrowseThreadFiles(thread.id)">
+                  <button class="thread-menu-item" type="button" @click.stop="onBrowseThreadFiles(thread.id)">
                     浏览文件
                   </button>
-                  <button class="thread-menu-item" type="button" @click="onExportThread(thread.id)">
+                  <button class="thread-menu-item" type="button" @click.stop="onExportThread(thread.id)">
                     导出会话
                   </button>
-                  <button class="thread-menu-item" type="button" @click="onForkThread(thread.id)">
+                  <button class="thread-menu-item" type="button" @click.stop="onForkThread(thread.id)">
                     创建分支会话
                   </button>
-                  <button class="thread-menu-item" type="button" @click="openRenameThreadDialog(thread.id, thread.title)">
+                  <button class="thread-menu-item" type="button" @click.stop="openRenameThreadDialog(thread.id, thread.title)">
                     重命名会话
                   </button>
-                  <button class="thread-menu-item thread-menu-item-danger" type="button" @click="openDeleteThreadDialog(thread.id, thread.title)">
+                  <button class="thread-menu-item thread-menu-item-danger" type="button" @click.stop="openDeleteThreadDialog(thread.id, thread.title)">
                     删除会话
                   </button>
                 </div>
@@ -238,19 +238,19 @@
                 <IconTablerDots class="thread-icon" />
               </button>
               <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @click.stop>
-                <button class="thread-menu-item" type="button" @click="onBrowseThreadFiles(thread.id)">
+                <button class="thread-menu-item" type="button" @click.stop="onBrowseThreadFiles(thread.id)">
                   浏览文件
                 </button>
-                <button class="thread-menu-item" type="button" @click="onExportThread(thread.id)">
+                <button class="thread-menu-item" type="button" @click.stop="onExportThread(thread.id)">
                   导出会话
                 </button>
-                <button class="thread-menu-item" type="button" @click="onForkThread(thread.id)">
+                <button class="thread-menu-item" type="button" @click.stop="onForkThread(thread.id)">
                   创建分支会话
                 </button>
-                <button class="thread-menu-item" type="button" @click="openRenameThreadDialog(thread.id, thread.title)">
+                <button class="thread-menu-item" type="button" @click.stop="openRenameThreadDialog(thread.id, thread.title)">
                   重命名会话
                 </button>
-                <button class="thread-menu-item thread-menu-item-danger" type="button" @click="openDeleteThreadDialog(thread.id, thread.title)">
+                <button class="thread-menu-item thread-menu-item-danger" type="button" @click.stop="openDeleteThreadDialog(thread.id, thread.title)">
                   删除会话
                 </button>
               </div>
@@ -399,19 +399,19 @@
                       <IconTablerDots class="thread-icon" />
                     </button>
                     <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @click.stop>
-                      <button class="thread-menu-item" type="button" @click="onBrowseThreadFiles(thread.id)">
+                      <button class="thread-menu-item" type="button" @click.stop="onBrowseThreadFiles(thread.id)">
                         浏览文件
                       </button>
-                      <button class="thread-menu-item" type="button" @click="onExportThread(thread.id)">
+                      <button class="thread-menu-item" type="button" @click.stop="onExportThread(thread.id)">
                         导出会话
                       </button>
-                      <button class="thread-menu-item" type="button" @click="onForkThread(thread.id)">
+                      <button class="thread-menu-item" type="button" @click.stop="onForkThread(thread.id)">
                         创建分支会话
                       </button>
-                      <button class="thread-menu-item" type="button" @click="openRenameThreadDialog(thread.id, thread.title)">
+                      <button class="thread-menu-item" type="button" @click.stop="openRenameThreadDialog(thread.id, thread.title)">
                         重命名会话
                       </button>
-                      <button class="thread-menu-item thread-menu-item-danger" type="button" @click="openDeleteThreadDialog(thread.id, thread.title)">
+                      <button class="thread-menu-item thread-menu-item-danger" type="button" @click.stop="openDeleteThreadDialog(thread.id, thread.title)">
                         删除会话
                       </button>
                     </div>
@@ -440,8 +440,15 @@
     </div>
 
     <Teleport to="body">
-      <div v-if="renameThreadDialogVisible" class="rename-thread-overlay" @click.self="closeRenameThreadDialog">
-        <div class="rename-thread-panel" role="dialog" aria-modal="true" aria-label="Thread title">
+      <div v-if="renameThreadDialogVisible" class="rename-thread-overlay" @click.self="onRenameThreadOverlayClick">
+        <div
+          class="rename-thread-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Thread title"
+          @pointerdown.stop
+          @click.stop
+        >
           <h3 class="rename-thread-title">重命名会话</h3>
           <p class="rename-thread-subtitle">建议简短、容易识别。</p>
           <input
@@ -450,6 +457,8 @@
             class="rename-thread-input"
             type="text"
             placeholder="输入会话标题..."
+            @pointerdown.stop
+            @click.stop
             @keydown.enter.prevent="submitRenameThread"
             @keydown.esc.prevent="closeRenameThreadDialog"
           />
@@ -561,6 +570,7 @@ const renameThreadDialogVisible = ref(false)
 const renameThreadDialogThreadId = ref('')
 const renameThreadDraft = ref('')
 const renameThreadInputRef = ref<HTMLInputElement | null>(null)
+const renameThreadDialogOpenedAt = ref(0)
 const deleteThreadDialogVisible = ref(false)
 const deleteThreadDialogThreadId = ref('')
 const deleteThreadTitle = ref('')
@@ -1031,21 +1041,38 @@ function onThreadRowContextMenu(event: MouseEvent, threadId: string): void {
   openThreadMenuId.value = threadId
 }
 
+function focusRenameThreadInput(): void {
+  if (typeof window === 'undefined') return
+
+  window.requestAnimationFrame(() => {
+    if (!renameThreadDialogVisible.value) return
+    const input = renameThreadInputRef.value
+    if (!input) return
+    input.focus({ preventScroll: true })
+    input.select()
+  })
+}
+
 function openRenameThreadDialog(threadId: string, currentTitle: string): void {
+  closeThreadMenu()
   renameThreadDialogThreadId.value = threadId
   renameThreadDraft.value = currentTitle
+  renameThreadDialogOpenedAt.value = typeof performance === 'undefined' ? Date.now() : performance.now()
   renameThreadDialogVisible.value = true
-  closeThreadMenu()
-  nextTick(() => {
-    renameThreadInputRef.value?.focus()
-    renameThreadInputRef.value?.select()
-  })
+  void nextTick(focusRenameThreadInput)
 }
 
 function closeRenameThreadDialog(): void {
   renameThreadDialogVisible.value = false
   renameThreadDialogThreadId.value = ''
   renameThreadDraft.value = ''
+  renameThreadDialogOpenedAt.value = 0
+}
+
+function onRenameThreadOverlayClick(): void {
+  const now = typeof performance === 'undefined' ? Date.now() : performance.now()
+  if (renameThreadDialogOpenedAt.value > 0 && now - renameThreadDialogOpenedAt.value < 250) return
+  closeRenameThreadDialog()
 }
 
 function submitRenameThread(): void {
@@ -1613,7 +1640,9 @@ watch(
   },
 )
 
-const hasOpenDismissableMenu = computed(() => isOrganizeMenuOpen.value || openProjectMenuId.value !== '')
+const hasOpenDismissableMenu = computed(() => (
+  isOrganizeMenuOpen.value || openProjectMenuId.value !== '' || openThreadMenuId.value !== ''
+))
 
 watch(hasOpenDismissableMenu, (isOpen) => {
   if (isOpen) {
@@ -1631,6 +1660,7 @@ onBeforeUnmount(() => {
   }
   projectGroupElementByName.clear()
   projectMenuWrapElementByName.clear()
+  threadMenuWrapElementById.clear()
   unbindProjectMenuDismissListeners()
   resetProjectDragState()
 })
