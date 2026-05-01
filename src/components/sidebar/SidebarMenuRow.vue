@@ -97,8 +97,12 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
 
 @media (max-width: 767px) {
   .sidebar-menu-row {
-    @apply px-3 py-2.5;
+    @apply rounded-[14px] px-2.5 py-1.5;
     column-gap: 0.5rem;
+  }
+
+  .sidebar-menu-row-left {
+    margin-top: 0.05rem;
   }
 }
 

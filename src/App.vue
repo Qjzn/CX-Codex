@@ -129,6 +129,7 @@
             :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads"
             :search-query="sidebarSearchQuery"
             :search-matched-thread-ids="serverMatchedThreadIds"
+            :desktop-list-parity="isMobile || isMobileShellAvailable"
             @select="onSelectThread"
             @archive="onArchiveThread" @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
             @browse-thread-files="onBrowseThreadFiles"
@@ -2326,7 +2327,11 @@ function confirmDesktopRefresh(): void {
 function toggleSidebarSearch(): void {
   isSidebarSearchVisible.value = !isSidebarSearchVisible.value
   if (isSidebarSearchVisible.value) {
-    nextTick(() => sidebarSearchInputRef.value?.focus())
+    nextTick(() => {
+      if (!isDualPaneMobile.value) {
+        sidebarSearchInputRef.value?.focus()
+      }
+    })
   } else {
     sidebarSearchQuery.value = ''
   }
@@ -2334,7 +2339,9 @@ function toggleSidebarSearch(): void {
 
 function clearSidebarSearch(): void {
   sidebarSearchQuery.value = ''
-  sidebarSearchInputRef.value?.focus()
+  if (!isDualPaneMobile.value) {
+    sidebarSearchInputRef.value?.focus()
+  }
 }
 
 function onSidebarSearchKeydown(event: KeyboardEvent): void {
@@ -3406,6 +3413,10 @@ async function submitFirstMessageForNewThread(
   @apply px-2.5 py-2.5 gap-2.5;
 }
 
+.sidebar-root--dual-pane-touch .sidebar-top-shell {
+  @apply rounded-[16px] px-2 py-2;
+}
+
 .skip-to-content {
   position: fixed;
   left: 1rem;
@@ -3779,19 +3790,20 @@ async function submitFirstMessageForNewThread(
 }
 
 .new-thread-empty {
-  @apply flex-1 min-h-0 flex flex-col items-center justify-center gap-1.5 px-3 sm:px-6;
+  @apply flex-1 min-h-0 flex flex-col items-center justify-center gap-1 px-3 sm:px-6;
+  padding-bottom: clamp(4.75rem, 16dvh, 9rem);
 }
 
 .new-thread-hero {
-  @apply m-0 text-[1.8rem] sm:text-[2.5rem] font-semibold leading-[1.04] text-[#1f2937];
+  @apply m-0 text-[1.55rem] sm:text-[2.2rem] font-semibold leading-[1.06] text-[#1f2937];
 }
 
 .new-thread-folder-dropdown {
-  @apply text-2xl sm:text-[2.5rem] text-[#73695d];
+  @apply text-xl sm:text-[2.2rem] text-[#73695d];
 }
 
 .new-thread-folder-dropdown :deep(.composer-dropdown-trigger) {
-  @apply h-auto text-2xl sm:text-[2.5rem] leading-[1.05];
+  @apply h-auto text-xl sm:text-[2.2rem] leading-[1.05];
 }
 
 .new-thread-folder-dropdown :deep(.composer-dropdown-value) {
@@ -4204,12 +4216,12 @@ async function submitFirstMessageForNewThread(
 
 @media (max-width: 767px) {
   .sidebar-scrollable {
-    @apply gap-1.5 px-1.5 pt-3 pb-2;
-    padding-top: max(0.75rem, env(safe-area-inset-top));
+    @apply gap-1.5 px-1.5 pt-2 pb-1.5;
+    padding-top: max(0.5rem, env(safe-area-inset-top));
   }
 
   .sidebar-top-shell {
-    @apply gap-1.5 px-1.5 py-1.5 rounded-[24px];
+    @apply gap-1.5 px-1.5 py-1.5 rounded-[16px];
   }
 
   .sidebar-settings-area {
@@ -4247,11 +4259,11 @@ async function submitFirstMessageForNewThread(
   }
 
   .content-body {
-    @apply gap-1.5;
+    @apply gap-1;
   }
 
   .content-grid {
-    @apply gap-1.5;
+    @apply gap-1;
   }
 
   .content-meta-row {
@@ -4290,6 +4302,7 @@ async function submitFirstMessageForNewThread(
 
   .new-thread-empty {
     @apply px-4;
+    padding-bottom: clamp(5.5rem, 18dvh, 8rem);
   }
 
   .skip-to-content {

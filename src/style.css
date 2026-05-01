@@ -9,7 +9,7 @@
   --font-size-meta: 12px;
   --font-size-title: 17px;
   --line-height-reading: 1.62;
-  --tracking-tight-soft: -0.012em;
+  --tracking-tight-soft: 0;
   --tracking-body-soft: 0;
 }
 
@@ -38,6 +38,14 @@ body {
   -moz-osx-font-smoothing: grayscale;
   background: #fcfbf8;
   color: #2d261f;
+}
+
+@media (max-width: 767px) {
+  :root {
+    --font-size-reading: 14px;
+    --font-size-title: 16px;
+    --line-height-reading: 1.52;
+  }
 }
 
 button,

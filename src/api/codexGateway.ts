@@ -465,12 +465,23 @@ function normalizeThreadTokenUsage(value: unknown): UiThreadTokenUsage | null {
 }
 
 async function getThreadGroupsV2(options: RpcCallOptions = {}): Promise<UiProjectGroup[]> {
-  const payload = await callRpc<ThreadListResponse>('thread/list', {
-    archived: false,
-    limit: 100,
-    sortKey: 'updated_at',
-  }, options)
-  return normalizeThreadGroupsV2(payload)
+  const data: ThreadListResponse['data'] = []
+  let cursor: string | null = null
+
+  do {
+    const payload: ThreadListResponse = await callRpc<ThreadListResponse>('thread/list', {
+      archived: false,
+      limit: 100,
+      sortKey: 'updated_at',
+      cursor,
+    }, options)
+    data.push(...payload.data)
+    cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.length > 0
+      ? payload.nextCursor
+      : null
+  } while (cursor)
+
+  return normalizeThreadGroupsV2({ data, nextCursor: null })
 }
 
 async function getThreadMessagesV2(threadId: string, options: RpcCallOptions = {}): Promise<UiMessage[]> {

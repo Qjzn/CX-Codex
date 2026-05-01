@@ -4151,15 +4151,7 @@ export function useDesktopState() {
 
     try {
       const [groups] = await Promise.all([getThreadGroups({ signal: options.signal }), loadThreadTitleCacheIfNeeded()])
-      const hiddenThreadIdSet = new Set(hiddenThreadIds.value)
-      const visibleGroups = hiddenThreadIdSet.size === 0
-        ? groups
-        : groups
-          .map((group) => ({
-            projectName: group.projectName,
-            threads: group.threads.filter((thread) => !hiddenThreadIdSet.has(thread.id)),
-          }))
-          .filter((group) => group.threads.length > 0)
+      const visibleGroups = groups
       await hydrateWorkspaceRootsStateIfNeeded(visibleGroups)
 
       const nextProjectOrder = mergeProjectOrder(projectOrder.value, visibleGroups)

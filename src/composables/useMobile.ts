@@ -35,13 +35,47 @@ export function useMobile() {
   const viewportHeight = ref(readViewportHeight())
   const viewportSegmentCount = ref(readViewportSegmentCount())
   const isCoarsePointer = ref(false)
+  const stableDualPaneMobile = ref(false)
 
   let coarsePointerMql: MediaQueryList | null = null
 
+  function isDualPaneCandidate(width: number, height: number, segmentCount: number): boolean {
+    const shortEdge = Math.min(width, height)
+    const longEdge = Math.max(width, height)
+    const hasFoldableSegments = segmentCount > 1
+    return (
+      isCoarsePointer.value
+      && shortEdge >= TOUCH_DUAL_PANE_MIN_WIDTH
+      && shortEdge <= TOUCH_DUAL_PANE_MAX_WIDTH
+      && (longEdge <= TOUCH_DUAL_PANE_MAX_LONG_EDGE || hasFoldableSegments)
+    )
+  }
+
+  function canKeepStableDualPane(width: number, height: number, segmentCount: number): boolean {
+    const longEdge = Math.max(width, height)
+    const hasFoldableSegments = segmentCount > 1
+    return (
+      stableDualPaneMobile.value
+      && isCoarsePointer.value
+      && width >= TOUCH_DUAL_PANE_MIN_WIDTH
+      && width <= TOUCH_DUAL_PANE_MAX_WIDTH
+      && (longEdge <= TOUCH_DUAL_PANE_MAX_LONG_EDGE || hasFoldableSegments)
+    )
+  }
+
   function refreshViewport(): void {
-    viewportWidth.value = readViewportWidth()
-    viewportHeight.value = readViewportHeight()
-    viewportSegmentCount.value = readViewportSegmentCount()
+    const width = readViewportWidth()
+    const height = readViewportHeight()
+    const segmentCount = readViewportSegmentCount()
+    viewportWidth.value = width
+    viewportHeight.value = height
+    viewportSegmentCount.value = segmentCount
+
+    if (isDualPaneCandidate(width, height, segmentCount)) {
+      stableDualPaneMobile.value = true
+    } else if (!canKeepStableDualPane(width, height, segmentCount)) {
+      stableDualPaneMobile.value = false
+    }
   }
 
   function onCoarsePointerChange(event: MediaQueryListEvent): void {
@@ -49,17 +83,7 @@ export function useMobile() {
     refreshViewport()
   }
 
-  const isDualPaneMobile = computed(() => {
-    const shortEdge = Math.min(viewportWidth.value, viewportHeight.value)
-    const longEdge = Math.max(viewportWidth.value, viewportHeight.value)
-    const hasFoldableSegments = viewportSegmentCount.value > 1
-    return (
-      isCoarsePointer.value
-      && shortEdge >= TOUCH_DUAL_PANE_MIN_WIDTH
-      && shortEdge <= TOUCH_DUAL_PANE_MAX_WIDTH
-      && (longEdge <= TOUCH_DUAL_PANE_MAX_LONG_EDGE || hasFoldableSegments)
-    )
-  })
+  const isDualPaneMobile = computed(() => stableDualPaneMobile.value)
 
   const isMobile = computed(() => (
     viewportWidth.value < MOBILE_BREAKPOINT

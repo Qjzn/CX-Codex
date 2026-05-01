@@ -29,7 +29,6 @@
                   <span class="thread-row-title">{{ thread.title }}</span>
                   <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
                 </span>
-                <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
               </span>
             </button>
             <template #right>
@@ -45,20 +44,23 @@
                 >
                   <IconTablerDots class="thread-icon" />
                 </button>
-                <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @click.stop>
-                  <button class="thread-menu-item" type="button" @click.stop="onBrowseThreadFiles(thread.id)">
+                <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @pointerdown.stop @click.stop>
+                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onBrowseThreadFiles(thread.id)">
                     浏览文件
                   </button>
-                  <button class="thread-menu-item" type="button" @click.stop="onExportThread(thread.id)">
+                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onExportThread(thread.id)">
                     导出会话
                   </button>
-                  <button class="thread-menu-item" type="button" @click.stop="onForkThread(thread.id)">
+                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onToggleThreadPin(thread.id)">
+                    {{ isPinned(thread.id) ? '取消置顶' : '置顶会话' }}
+                  </button>
+                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onForkThread(thread.id)">
                     创建分支会话
                   </button>
-                  <button class="thread-menu-item" type="button" @click.stop="openRenameThreadDialog(thread.id, thread.title)">
+                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="openRenameThreadDialog(thread.id, thread.title)">
                     重命名会话
                   </button>
-                  <button class="thread-menu-item thread-menu-item-danger" type="button" @click.stop="openDeleteThreadDialog(thread.id, thread.title)">
+                  <button class="thread-menu-item thread-menu-item-danger" type="button" @pointerdown.stop @click.stop.prevent="openDeleteThreadDialog(thread.id, thread.title)">
                     删除会话
                   </button>
                 </div>
@@ -103,7 +105,6 @@
                   <span class="thread-row-title">{{ thread.title }}</span>
                   <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
                 </span>
-                <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
               </span>
             </button>
             <template #right>
@@ -119,20 +120,23 @@
                 >
                   <IconTablerDots class="thread-icon" />
                 </button>
-                <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @click.stop>
-                  <button class="thread-menu-item" type="button" @click.stop="onBrowseThreadFiles(thread.id)">
+                <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @pointerdown.stop @click.stop>
+                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onBrowseThreadFiles(thread.id)">
                     浏览文件
                   </button>
-                  <button class="thread-menu-item" type="button" @click.stop="onExportThread(thread.id)">
+                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onExportThread(thread.id)">
                     导出会话
                   </button>
-                  <button class="thread-menu-item" type="button" @click.stop="onForkThread(thread.id)">
+                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onToggleThreadPin(thread.id)">
+                    {{ isPinned(thread.id) ? '取消置顶' : '置顶会话' }}
+                  </button>
+                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onForkThread(thread.id)">
                     创建分支会话
                   </button>
-                  <button class="thread-menu-item" type="button" @click.stop="openRenameThreadDialog(thread.id, thread.title)">
+                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="openRenameThreadDialog(thread.id, thread.title)">
                     重命名会话
                   </button>
-                  <button class="thread-menu-item thread-menu-item-danger" type="button" @click.stop="openDeleteThreadDialog(thread.id, thread.title)">
+                  <button class="thread-menu-item thread-menu-item-danger" type="button" @pointerdown.stop @click.stop.prevent="openDeleteThreadDialog(thread.id, thread.title)">
                     删除会话
                   </button>
                 </div>
@@ -145,8 +149,8 @@
 
     <SidebarMenuRow as="header" class="thread-tree-header-row">
       <span class="thread-tree-header-stack">
-        <span class="thread-tree-header">{{ isChronologicalView ? '最近会话' : '项目' }}</span>
-        <span class="thread-tree-header-subtitle">{{ isChronologicalView ? '其余会话，按最近活动排序' : '按工作区分组浏览' }}</span>
+        <span class="thread-tree-header">{{ threadTreeHeader }}</span>
+        <span class="thread-tree-header-subtitle">{{ threadTreeHeaderSubtitle }}</span>
       </span>
       <template #right>
         <div ref="organizeMenuWrapRef" class="organize-menu-wrap">
@@ -161,25 +165,28 @@
             <IconTablerDots class="thread-icon" />
           </button>
 
-          <div v-if="isOrganizeMenuOpen" class="organize-menu-panel" @click.stop>
+          <div v-if="isOrganizeMenuOpen" class="organize-menu-panel" @pointerdown.stop @click.stop>
             <p class="organize-menu-title">整理方式</p>
             <button
               class="organize-menu-item"
-              :data-active="threadViewMode === 'project'"
+              :data-active="effectiveThreadViewMode === 'project'"
               type="button"
-              @click="setThreadViewMode('project')"
+              @pointerdown.stop
+              @click.stop.prevent="setThreadViewMode('project')"
             >
               <span>按项目</span>
-              <span v-if="threadViewMode === 'project'">✓</span>
+              <span v-if="effectiveThreadViewMode === 'project'">✓</span>
             </button>
             <button
+              v-if="!useDesktopListParity"
               class="organize-menu-item"
-              :data-active="threadViewMode === 'chronological'"
+              :data-active="effectiveThreadViewMode === 'chronological'"
               type="button"
-              @click="setThreadViewMode('chronological')"
+              @pointerdown.stop
+              @click.stop.prevent="setThreadViewMode('chronological')"
             >
               <span>按时间</span>
-              <span v-if="threadViewMode === 'chronological'">✓</span>
+              <span v-if="effectiveThreadViewMode === 'chronological'">✓</span>
             </button>
           </div>
         </div>
@@ -221,7 +228,6 @@
                 <span class="thread-row-title">{{ thread.title }}</span>
                 <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
               </span>
-              <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
             </span>
           </button>
           <template #right>
@@ -237,20 +243,23 @@
               >
                 <IconTablerDots class="thread-icon" />
               </button>
-              <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @click.stop>
-                <button class="thread-menu-item" type="button" @click.stop="onBrowseThreadFiles(thread.id)">
+              <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @pointerdown.stop @click.stop>
+                <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onBrowseThreadFiles(thread.id)">
                   浏览文件
                 </button>
-                <button class="thread-menu-item" type="button" @click.stop="onExportThread(thread.id)">
+                <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onExportThread(thread.id)">
                   导出会话
                 </button>
-                <button class="thread-menu-item" type="button" @click.stop="onForkThread(thread.id)">
+                <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onToggleThreadPin(thread.id)">
+                  {{ isPinned(thread.id) ? '取消置顶' : '置顶会话' }}
+                </button>
+                <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onForkThread(thread.id)">
                   创建分支会话
                 </button>
-                <button class="thread-menu-item" type="button" @click.stop="openRenameThreadDialog(thread.id, thread.title)">
+                <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="openRenameThreadDialog(thread.id, thread.title)">
                   重命名会话
                 </button>
-                <button class="thread-menu-item thread-menu-item-danger" type="button" @click.stop="openDeleteThreadDialog(thread.id, thread.title)">
+                <button class="thread-menu-item thread-menu-item-danger" type="button" @pointerdown.stop @click.stop.prevent="openDeleteThreadDialog(thread.id, thread.title)">
                   删除会话
                 </button>
               </div>
@@ -262,7 +271,7 @@
 
     <div v-else ref="groupsContainerRef" class="thread-tree-groups" :style="groupsContainerStyle">
       <article
-        v-for="group in filteredGroups"
+        v-for="group in displayedGroups"
         :key="group.projectName"
         :ref="(el) => setProjectGroupRef(group.projectName, el)"
         class="project-group"
@@ -315,15 +324,16 @@
                     <IconTablerDots class="thread-icon" />
                   </button>
 
-                  <div v-if="isProjectMenuOpen(group.projectName)" class="project-menu-panel" @click.stop>
+                  <div v-if="isProjectMenuOpen(group.projectName)" class="project-menu-panel" @pointerdown.stop @click.stop>
                     <template v-if="projectMenuMode === 'actions'">
-                      <button class="project-menu-item" type="button" @click="openRenameProjectMenu(group.projectName)">
+                      <button class="project-menu-item" type="button" @pointerdown.stop @click.stop.prevent="openRenameProjectMenu(group.projectName)">
                         修改名称
                       </button>
                       <button
                         class="project-menu-item project-menu-item-danger"
                         type="button"
-                        @click="onRemoveProject(group.projectName)"
+                        @pointerdown.stop
+                        @click.stop.prevent="onRemoveProject(group.projectName)"
                       >
                         移除
                       </button>
@@ -382,7 +392,6 @@
                       <span class="thread-row-title">{{ thread.title }}</span>
                       <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
                     </span>
-                    <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
                   </span>
                 </button>
                 <template #right>
@@ -398,20 +407,23 @@
                     >
                       <IconTablerDots class="thread-icon" />
                     </button>
-                    <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @click.stop>
-                      <button class="thread-menu-item" type="button" @click.stop="onBrowseThreadFiles(thread.id)">
+                    <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @pointerdown.stop @click.stop>
+                      <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onBrowseThreadFiles(thread.id)">
                         浏览文件
                       </button>
-                      <button class="thread-menu-item" type="button" @click.stop="onExportThread(thread.id)">
+                      <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onExportThread(thread.id)">
                         导出会话
                       </button>
-                      <button class="thread-menu-item" type="button" @click.stop="onForkThread(thread.id)">
+                      <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onToggleThreadPin(thread.id)">
+                        {{ isPinned(thread.id) ? '取消置顶' : '置顶会话' }}
+                      </button>
+                      <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onForkThread(thread.id)">
                         创建分支会话
                       </button>
-                      <button class="thread-menu-item" type="button" @click.stop="openRenameThreadDialog(thread.id, thread.title)">
+                      <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="openRenameThreadDialog(thread.id, thread.title)">
                         重命名会话
                       </button>
-                      <button class="thread-menu-item thread-menu-item-danger" type="button" @click.stop="openDeleteThreadDialog(thread.id, thread.title)">
+                      <button class="thread-menu-item thread-menu-item-danger" type="button" @pointerdown.stop @click.stop.prevent="openDeleteThreadDialog(thread.id, thread.title)">
                         删除会话
                       </button>
                     </div>
@@ -463,8 +475,8 @@
             @keydown.esc.prevent="closeRenameThreadDialog"
           />
           <div class="rename-thread-actions">
-            <button class="rename-thread-button" type="button" @click="closeRenameThreadDialog">取消</button>
-            <button class="rename-thread-button rename-thread-button-primary" type="button" @click="submitRenameThread">保存</button>
+            <button class="rename-thread-button" type="button" @pointerdown.stop @click.stop.prevent="closeRenameThreadDialog">取消</button>
+            <button class="rename-thread-button rename-thread-button-primary" type="button" @pointerdown.stop @click.stop.prevent="submitRenameThread">保存</button>
           </div>
         </div>
       </div>
@@ -472,14 +484,21 @@
 
     <Teleport to="body">
       <div v-if="deleteThreadDialogVisible" class="rename-thread-overlay" @click.self="closeDeleteThreadDialog">
-        <div class="rename-thread-panel" role="dialog" aria-modal="true" aria-label="删除会话">
+        <div
+          class="rename-thread-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-label="删除会话"
+          @pointerdown.stop
+          @click.stop
+        >
           <h3 class="rename-thread-title">删除会话？</h3>
           <p class="rename-thread-subtitle">
             这会把会话“{{ deleteThreadTitle }}”移到归档中，之后仍可在归档列表中找到。
           </p>
           <div class="rename-thread-actions">
-            <button class="rename-thread-button" type="button" @click="closeDeleteThreadDialog">取消</button>
-            <button class="rename-thread-button rename-thread-button-danger" type="button" @click="submitDeleteThread">删除</button>
+            <button class="rename-thread-button" type="button" @pointerdown.stop @click.stop.prevent="closeDeleteThreadDialog">取消</button>
+            <button class="rename-thread-button rename-thread-button-danger" type="button" @pointerdown.stop @click.stop.prevent="submitDeleteThread">删除</button>
           </div>
         </div>
       </div>
@@ -509,6 +528,7 @@ const props = defineProps<{
   isLoading: boolean
   searchQuery: string
   searchMatchedThreadIds: string[] | null
+  desktopListParity?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -676,7 +696,7 @@ async function hydratePinnedThreadIds(): Promise<void> {
     return
   }
 
-  pinnedThreadIdsHydrationPromise = (async () => {
+  const hydrationPromise = (async () => {
     try {
       const serverPinnedThreadIds = await getPinnedThreadIds()
       if (serverPinnedThreadIds.length === 0 && pinnedThreadIds.value.length > 0) {
@@ -694,8 +714,15 @@ async function hydratePinnedThreadIds(): Promise<void> {
       hasPinnedThreadIdsHydrated.value = true
     }
   })()
+  pinnedThreadIdsHydrationPromise = hydrationPromise
 
-  await pinnedThreadIdsHydrationPromise
+  try {
+    await hydrationPromise
+  } finally {
+    if (pinnedThreadIdsHydrationPromise === hydrationPromise) {
+      pinnedThreadIdsHydrationPromise = null
+    }
+  }
 }
 
 async function persistPinnedThreadIds(nextPinnedThreadIds: string[]): Promise<void> {
@@ -736,30 +763,10 @@ watch(threadViewMode, (value) => {
   window.localStorage.setItem(THREAD_VIEW_MODE_STORAGE_KEY, value)
 })
 
-watch(
-  [() => props.groups, () => props.isLoading],
-  ([groups]) => {
-    if (groups.length === 0) return
-
-    const availableThreadIds = new Set<string>()
-    for (const group of groups) {
-      for (const thread of group.threads) {
-        availableThreadIds.add(thread.id)
-      }
-    }
-
-    const nextPinnedThreadIds = normalizePinnedThreadIds(pinnedThreadIds.value)
-      .filter((threadId) => availableThreadIds.has(threadId))
-    if (!areStringArraysEqual(pinnedThreadIds.value, nextPinnedThreadIds)) {
-      setPinnedThreadIds(nextPinnedThreadIds)
-    }
-  },
-  { immediate: true, deep: true },
-)
-
 const normalizedSearchQuery = computed(() => props.searchQuery.trim().toLowerCase())
 
 const isSearchActive = computed(() => normalizedSearchQuery.value.length > 0)
+const useDesktopListParity = computed(() => props.desktopListParity === true)
 const matchedThreadIdSet = computed(() => {
   if (!props.searchMatchedThreadIds) return null
   return new Set(props.searchMatchedThreadIds)
@@ -775,12 +782,18 @@ function matchesThreadSearch(
   if (matchedIds) {
     return matchedIds.has(thread.id)
   }
-  return thread.title.toLowerCase().includes(query) || thread.preview.toLowerCase().includes(query)
+  return thread.title.toLowerCase().includes(query)
 }
 
 function compareThreadByUpdatedAt(first: UiThread, second: UiThread): number {
   const firstTimestamp = new Date(first.updatedAtIso || first.createdAtIso).getTime()
   const secondTimestamp = new Date(second.updatedAtIso || second.createdAtIso).getTime()
+  return secondTimestamp - firstTimestamp
+}
+
+function compareProjectGroupByUpdatedAt(first: UiProjectGroup, second: UiProjectGroup): number {
+  const firstTimestamp = new Date(first.threads[0]?.updatedAtIso || first.threads[0]?.createdAtIso || 0).getTime()
+  const secondTimestamp = new Date(second.threads[0]?.updatedAtIso || second.threads[0]?.createdAtIso || 0).getTime()
   return secondTimestamp - firstTimestamp
 }
 
@@ -863,7 +876,19 @@ function threadMatchesSearch(thread: UiThread): boolean {
 }
 
 const filteredGroups = computed<UiProjectGroup[]>(() => threadCollections.value.filteredGroups)
-const isChronologicalView = computed(() => threadViewMode.value === 'chronological')
+const displayedGroups = computed<UiProjectGroup[]>(() => (
+  useDesktopListParity.value
+    ? [...filteredGroups.value].sort(compareProjectGroupByUpdatedAt)
+    : filteredGroups.value
+))
+const effectiveThreadViewMode = computed<'project' | 'chronological'>(() => (
+  useDesktopListParity.value ? 'project' : threadViewMode.value
+))
+const isChronologicalView = computed(() => effectiveThreadViewMode.value === 'chronological')
+const threadTreeHeader = computed(() => (isChronologicalView.value ? '最近会话' : '项目'))
+const threadTreeHeaderSubtitle = computed(() => (
+  isChronologicalView.value ? '按最近活动排序' : '按工作区分组浏览'
+))
 const globalThreads = computed<UiThread[]>(() => threadCollections.value.globalThreads)
 const threadById = computed(() => threadCollections.value.threadById)
 const threadProjectNameById = computed(() => threadCollections.value.threadProjectNameById)
@@ -884,7 +909,9 @@ const projectedDropProjectIndex = computed<number | null>(() => {
 })
 
 const layoutProjectOrder = computed<string[]>(() => {
-  const sourceGroups = isSearchActive.value ? filteredGroups.value : props.groups
+  const sourceGroups = useDesktopListParity.value
+    ? displayedGroups.value
+    : (isSearchActive.value ? filteredGroups.value : props.groups)
   const names = sourceGroups.map((group) => group.projectName)
   const drag = activeProjectDrag.value
   const projectedIndex = projectedDropProjectIndex.value
@@ -985,6 +1012,11 @@ function togglePin(threadId: string): void {
   }
 
   setPinnedThreadIds([threadId, ...pinnedThreadIds.value])
+}
+
+function onToggleThreadPin(threadId: string): void {
+  togglePin(threadId)
+  closeThreadMenu()
 }
 
 function onSelect(threadId: string): void {
@@ -1601,6 +1633,7 @@ function projectThreads(group: UiProjectGroup): UiThread[] {
 function visibleThreads(group: UiProjectGroup): UiThread[] {
   if (isSearchActive.value) return projectThreads(group)
   if (isCollapsed(group.projectName)) return []
+  if (useDesktopListParity.value) return projectThreads(group)
 
   const rows = projectThreads(group)
   return isExpanded(group.projectName) ? rows : rows.slice(0, 10)
@@ -1608,6 +1641,7 @@ function visibleThreads(group: UiProjectGroup): UiThread[] {
 
 function hasHiddenThreads(group: UiProjectGroup): boolean {
   if (isSearchActive.value) return false
+  if (useDesktopListParity.value) return false
   return !isCollapsed(group.projectName) && projectThreads(group).length > 10
 }
 
@@ -1917,8 +1951,8 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-content {
-  @apply min-w-0 flex flex-col justify-center gap-[0.12rem];
-  min-height: 2.7rem;
+  @apply min-w-0 flex flex-col justify-center;
+  min-height: 1.7rem;
 }
 
 .thread-row-title-wrap {
@@ -2112,19 +2146,45 @@ onBeforeUnmount(() => {
 
 @media (max-width: 767px) {
   .thread-tree-root {
-    @apply gap-2;
+    @apply gap-1.5;
   }
 
   .project-group {
-    @apply rounded-[22px];
+    @apply rounded-[16px];
   }
 
   .project-group > .thread-list {
-    @apply px-0.5 pb-0.5;
+    @apply mt-0.5 px-0.5 pb-0.5;
   }
 
   .thread-list {
-    @apply gap-1;
+    @apply gap-0.5;
+  }
+
+  .thread-row {
+    min-height: 2.45rem;
+  }
+
+  .thread-row-content {
+    min-height: 1.55rem;
+  }
+
+  .thread-row-title {
+    @apply text-[13px];
+    line-height: 1.05rem;
+  }
+
+  .thread-row-preview {
+    @apply text-[11px];
+    line-height: 0.9rem;
+  }
+
+  .project-title {
+    @apply text-[13px];
+  }
+
+  .project-summary {
+    @apply text-[10px];
   }
 
   .thread-row-time {
@@ -2147,7 +2207,7 @@ onBeforeUnmount(() => {
   }
 
   .thread-row {
-    min-height: 3.7rem;
+    min-height: 2.65rem;
   }
 }
 

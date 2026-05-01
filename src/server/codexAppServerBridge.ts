@@ -982,11 +982,7 @@ function extractThreadMessageText(threadReadPayload: unknown): string {
 function isExactPhraseMatch(query: string, doc: ThreadSearchDocument): boolean {
   const q = query.trim().toLowerCase()
   if (!q) return false
-  return (
-    doc.title.toLowerCase().includes(q) ||
-    doc.preview.toLowerCase().includes(q) ||
-    doc.messageText.toLowerCase().includes(q)
-  )
+  return doc.title.toLowerCase().includes(q)
 }
 
 function scoreFileCandidate(path: string, query: string): number {
@@ -3036,40 +3032,13 @@ async function loadAllThreadsForSearch(appServer: AppServerProcess): Promise<Thr
     cursor = typeof response?.nextCursor === 'string' && response.nextCursor.length > 0 ? response.nextCursor : null
   } while (cursor)
 
-  const docs: ThreadSearchDocument[] = []
-  const concurrency = 4
-  for (let offset = 0; offset < threads.length; offset += concurrency) {
-    const batch = threads.slice(offset, offset + concurrency)
-    const loaded = await Promise.all(batch.map(async (thread) => {
-      try {
-        const readResponse = await appServer.rpc('thread/read', {
-          threadId: thread.id,
-          includeTurns: true,
-        })
-        const messageText = extractThreadMessageText(readResponse)
-        const searchableText = [thread.title, thread.preview, messageText].filter(Boolean).join('\n')
-        return {
-          id: thread.id,
-          title: thread.title,
-          preview: thread.preview,
-          messageText,
-          searchableText,
-        } satisfies ThreadSearchDocument
-      } catch {
-        const searchableText = [thread.title, thread.preview].filter(Boolean).join('\n')
-        return {
-          id: thread.id,
-          title: thread.title,
-          preview: thread.preview,
-          messageText: '',
-          searchableText,
-        } satisfies ThreadSearchDocument
-      }
-    }))
-    docs.push(...loaded)
-  }
-
-  return docs
+  return threads.map((thread) => ({
+    id: thread.id,
+    title: thread.title,
+    preview: thread.preview,
+    messageText: '',
+    searchableText: thread.title,
+  }))
 }
 
 async function buildThreadSearchIndex(appServer: AppServerProcess): Promise<ThreadSearchIndex> {

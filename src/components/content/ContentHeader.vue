@@ -97,7 +97,21 @@ const hasTitleSuffix = computed(() => Boolean(slots['title-suffix']))
 
 @media (max-width: 767px) {
   .content-header {
-    padding-top: max(0.5rem, env(safe-area-inset-top));
+    @apply gap-0.5 px-3 pb-1.5;
+    padding-top: max(0.35rem, env(safe-area-inset-top));
+  }
+
+  .content-header-main {
+    @apply min-h-10 gap-2;
+  }
+
+  .content-title {
+    @apply text-[15px] leading-5;
+    letter-spacing: 0;
+  }
+
+  .content-meta {
+    @apply gap-1;
   }
 }
 </style>

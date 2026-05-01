@@ -1827,22 +1827,22 @@ watch(
 
 @media (max-width: 767px) {
   .thread-composer {
-    @apply px-2.5;
+    @apply px-2;
   }
 
   .thread-composer-shell {
-    @apply rounded-[20px] px-3 py-2;
+    @apply rounded-[16px] px-2.5 py-1.5;
   }
 
   .thread-composer-input {
-    @apply min-h-9 py-1.5 text-[14.5px];
-    line-height: 1.5;
+    @apply min-h-8 py-1 text-[14px];
+    line-height: 1.42;
   }
 
   .thread-composer-controls {
-    @apply mt-1.5 items-center gap-2;
+    @apply mt-1 items-center gap-1.5;
     display: grid;
-    grid-template-columns: 2.5rem minmax(0, 1fr) auto;
+    grid-template-columns: 2.25rem minmax(0, 1fr) auto;
   }
 
   .thread-composer-attach {
@@ -1850,9 +1850,9 @@ watch(
   }
 
   .thread-composer-control-strip {
-    @apply w-full min-w-0 gap-1.5 pr-0 overflow-visible;
+    @apply w-full min-w-0 gap-1 pr-0 overflow-visible;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 2.5rem;
+    grid-template-columns: minmax(0, 1fr) 2.25rem;
   }
 
   .thread-composer-control {
@@ -1869,7 +1869,7 @@ watch(
   .thread-composer-mic,
   .thread-composer-submit,
   .thread-composer-stop {
-    @apply h-10 w-10;
+    @apply h-9 w-9;
   }
 
   .thread-composer-attach-menu {
@@ -1882,7 +1882,7 @@ watch(
 
   .thread-composer-control :deep(.composer-dropdown-trigger),
   .thread-composer-control :deep(.search-dropdown-trigger) {
-    @apply h-10 rounded-2xl border border-[#e4dac9] bg-[#f7f3ea] px-3;
+    @apply h-9 rounded-[14px] border border-[#e4dac9] bg-[#f7f3ea] px-2.5 text-[13px];
   }
 
   .thread-composer-control :deep(.composer-dropdown-trigger) {
@@ -1895,7 +1895,7 @@ watch(
   }
 
   .thread-composer-compact-settings-trigger {
-    @apply h-10 w-10 justify-center rounded-2xl px-0;
+    @apply h-9 w-9 justify-center rounded-[14px] px-0;
   }
 
   .thread-composer-compact-settings-label {

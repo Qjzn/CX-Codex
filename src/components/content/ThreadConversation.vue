@@ -4663,19 +4663,24 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 767px) {
+  .conversation-list {
+    @apply gap-1 px-2;
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+
   .message-text {
-    font-size: 14.5px;
-    line-height: 1.58;
+    font-size: 14px;
+    line-height: 1.52;
   }
 
   .message-card[data-role='assistant'],
   .message-card[data-role='system'] {
-    @apply px-3 py-2.5;
+    @apply rounded-[14px] px-2.5 py-2;
   }
 
   .message-card[data-role='user'] {
-    @apply px-3 py-2;
-    max-width: min(34rem, 84vw);
+    @apply rounded-[14px] px-2.5 py-1.5;
+    max-width: min(34rem, 86vw);
   }
 
   .message-action-button {
