@@ -96,7 +96,9 @@ function resolveCandidatePath(inputPath: string): string {
 
 function getDefaultConfigCandidates(): string[] {
   return [
+    join(process.cwd(), 'cx-codex.config.json'),
     join(process.cwd(), 'codexui.config.json'),
+    join(homedir(), '.cx-codex', 'config.json'),
     join(homedir(), '.codexui', 'config.json'),
   ]
 }
@@ -128,7 +130,7 @@ async function loadLaunchConfig(explicitConfigPath?: string): Promise<LoadedLaun
     return await loadConfigFile(trimmedExplicit)
   }
 
-  const envConfigPath = process.env.CODEXUI_CONFIG?.trim()
+  const envConfigPath = process.env.CX_CODEX_CONFIG?.trim() || process.env.CODEXUI_CONFIG?.trim()
   if (envConfigPath) {
     return await loadConfigFile(envConfigPath)
   }

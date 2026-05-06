@@ -14,8 +14,8 @@ logs/
 
 pnpm-lock.yaml
 .codex/
-.codexui/
+.cx-codex/
 .env
 
 package.json
-codexui.config.json
+cx-codex.config.json

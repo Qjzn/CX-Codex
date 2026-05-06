@@ -54,7 +54,7 @@ if ([string]::IsNullOrWhiteSpace($OutputDir)) {
   $OutputDir = Join-Path $repoRoot "artifacts"
 }
 
-$bundleName = "codexui-server-bridge-$Version"
+$bundleName = "CX-Codex-$Version"
 $stagingRoot = Join-Path $OutputDir $bundleName
 $zipPath = Join-Path $OutputDir "$bundleName.zip"
 $checksumPath = Join-Path $OutputDir "$bundleName.sha256"
@@ -76,7 +76,7 @@ $releaseItems = @(
   "LICENSE",
   "README.md",
   "RELEASE.md",
-  "codexui.config.example.json",
+  "cx-codex.config.example.json",
   "docs",
   "index.html",
   "package-lock.json",

@@ -22,7 +22,7 @@ import { createServer as createApp } from '../server/httpServer.js'
 import { generatePassword } from '../server/password.js'
 import { spawnSyncCommand } from '../utils/commandInvocation.js'
 
-const program = new Command().name('codexui').description('Web interface for Codex app-server')
+const program = new Command().name('cx-codex').description('CX-Codex Web bridge for Codex app-server')
 const __dirname = dirname(fileURLToPath(import.meta.url))
 let hasPromptedCloudflaredInstall = false
 
@@ -39,12 +39,21 @@ function logRuntimeError(scope: string, error: unknown): void {
 }
 
 process.on('unhandledRejection', (error) => {
-  logRuntimeError('codexui-unhandled-rejection', error)
+  logRuntimeError('cx-codex-unhandled-rejection', error)
 })
 
 process.on('uncaughtExceptionMonitor', (error) => {
-  logRuntimeError('codexui-uncaught-exception', error)
+  logRuntimeError('cx-codex-uncaught-exception', error)
 })
+
+function getBridgeEnv(name: 'CONFIG' | 'CODEX_COMMAND' | 'RG_COMMAND' | 'CLOUDFLARED_COMMAND'): string | undefined {
+  return process.env[`CX_CODEX_${name}`]?.trim() || process.env[`CODEXUI_${name}`]?.trim()
+}
+
+function setBridgeEnv(name: 'CODEX_COMMAND' | 'RG_COMMAND' | 'CLOUDFLARED_COMMAND', value: string): void {
+  process.env[`CX_CODEX_${name}`] = value
+  process.env[`CODEXUI_${name}`] = value
+}
 
 function getCodexHomePath(): string {
   return process.env.CODEX_HOME?.trim() || join(homedir(), '.codex')
@@ -119,7 +128,7 @@ function mapCloudflaredWindowsArch(arch: NodeJS.Architecture): string | null {
 }
 
 function resolveCloudflaredCommand(): string | null {
-  const explicit = process.env.CODEXUI_CLOUDFLARED_COMMAND?.trim()
+  const explicit = getBridgeEnv('CLOUDFLARED_COMMAND')
   const candidates = [
     explicit,
     'cloudflared',
@@ -557,18 +566,18 @@ async function startServer(options: {
     }
   }
   if (options.codexCommand) {
-    process.env.CODEXUI_CODEX_COMMAND = options.codexCommand
+    setBridgeEnv('CODEX_COMMAND', options.codexCommand)
   }
   if (options.ripgrepCommand) {
-    process.env.CODEXUI_RG_COMMAND = options.ripgrepCommand
+    setBridgeEnv('RG_COMMAND', options.ripgrepCommand)
   }
   if (options.cloudflaredCommand) {
-    process.env.CODEXUI_CLOUDFLARED_COMMAND = options.cloudflaredCommand
+    setBridgeEnv('CLOUDFLARED_COMMAND', options.cloudflaredCommand)
   }
 
   const codexCommand = ensureCodexInstalled() ?? resolveCodexCommand()
   if (codexCommand) {
-    process.env.CODEXUI_CODEX_COMMAND = codexCommand
+    setBridgeEnv('CODEX_COMMAND', codexCommand)
   }
   if (!hasCodexAuth() && codexCommand) {
     console.log('\nCodex is not logged in. Starting `codex login`...\n')
@@ -600,7 +609,7 @@ async function startServer(options: {
     try {
       const cloudflaredCommand = await resolveCloudflaredForTunnel()
       if (!cloudflaredCommand) {
-        throw new Error('cloudflared is not installed. Install it first, rerun in an interactive terminal to allow auto-install, or set cloudflaredCommand / CODEXUI_CLOUDFLARED_COMMAND.')
+        throw new Error('cloudflared is not installed. Install it first, rerun in an interactive terminal to allow auto-install, or set cloudflaredCommand / CX_CODEX_CLOUDFLARED_COMMAND.')
       }
       resolvedCloudflaredCommand = cloudflaredCommand
       const tunnel = await startCloudflaredTunnel(cloudflaredCommand, port)
@@ -614,9 +623,9 @@ async function startServer(options: {
 
   const lines = [
     '',
-    'Codex Web Local is running!',
+    'CX-Codex Web is running!',
     `  Version:  ${version}`,
-    '  GitHub:   https://github.com/Qjzn/codexui-server-bridge',
+    '  GitHub:   https://github.com/Qjzn/CX-Codex',
     '',
     `  Bind:     http://${host}:${String(port)}`,
   ]
@@ -680,7 +689,7 @@ async function startServer(options: {
 
 async function runLogin() {
   const codexCommand = ensureCodexInstalled() ?? 'codex'
-  process.env.CODEXUI_CODEX_COMMAND = codexCommand
+  setBridgeEnv('CODEX_COMMAND', codexCommand)
   console.log('\nStarting `codex login`...\n')
   runOrFail(codexCommand, ['login'], 'Codex login')
 }
@@ -726,12 +735,12 @@ program
 
 program.command('login').description('Install/check Codex CLI and run `codex login`').action(runLogin)
 
-program.command('help').description('Show codexui command help').action(() => {
+program.command('help').description('Show CX-Codex command help').action(() => {
   program.outputHelp()
 })
 
 program.parseAsync(process.argv).catch((error) => {
   const message = error instanceof Error ? error.message : String(error)
-  console.error(`\nFailed to run codexui: ${message}`)
+  console.error(`\nFailed to run CX-Codex: ${message}`)
   process.exit(1)
 })

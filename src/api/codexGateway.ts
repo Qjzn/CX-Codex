@@ -25,7 +25,7 @@ import {
   normalizeThreadMessagesV2,
   readThreadInProgressFromResponse,
 } from './normalizers/v2'
-import type { SpeedMode, UiMessage, UiProjectGroup, UiThreadTokenUsage, UiTokenUsageBreakdown } from '../types/codex'
+import type { CollaborationMode, SpeedMode, UiMessage, UiProjectGroup, UiThreadTokenUsage, UiTokenUsageBreakdown } from '../types/codex'
 import { normalizePathForUi } from '../pathUtils.js'
 import { shouldAutoLoginForResponse, tryMobileShellAutoLogin } from '../mobile/mobileAuth'
 
@@ -865,6 +865,7 @@ export async function startThreadTurn(
   effort?: ReasoningEffort,
   skills?: Array<{ name: string; path: string }>,
   fileAttachments: FileAttachmentParam[] = [],
+  collaborationMode: CollaborationMode = 'execute',
 ): Promise<string> {
   try {
     const finalText = buildTextWithAttachments(text, fileAttachments)
@@ -894,6 +895,9 @@ export async function startThreadTurn(
     const params: Record<string, unknown> = {
       threadId,
       input,
+    }
+    if (collaborationMode === 'plan') {
+      params.collaborationMode = 'plan'
     }
     if (attachments.length > 0) params.attachments = attachments
     if (typeof model === 'string' && model.length > 0) {

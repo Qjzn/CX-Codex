@@ -36,6 +36,7 @@ import {
   type ThreadRuntimeSnapshot,
 } from '../api/codexGateway'
 import type {
+  CollaborationMode,
   CommandExecutionData,
   ReasoningEffort,
   SpeedMode,
@@ -117,6 +118,7 @@ const READ_STATE_STORAGE_KEY = 'codex-web-local.thread-read-state.v1'
 const SCROLL_STATE_STORAGE_KEY = 'codex-web-local.thread-scroll-state.v1'
 const SELECTED_THREAD_STORAGE_KEY = 'codex-web-local.selected-thread-id.v1'
 const SELECTED_MODEL_STORAGE_KEY = 'codex-web-local.selected-model-id.v1'
+const SELECTED_COLLABORATION_MODE_STORAGE_KEY = 'codex-web-local.selected-collaboration-mode.v1'
 const PROJECT_ORDER_STORAGE_KEY = 'codex-web-local.project-order.v1'
 const PROJECT_DISPLAY_NAME_STORAGE_KEY = 'codex-web-local.project-display-name.v1'
 const HIDDEN_THREAD_IDS_STORAGE_KEY = 'codex-web-local.hidden-thread-ids.v1'
@@ -158,6 +160,7 @@ type QueuedMessage = {
   imageUrls: string[]
   skills: Array<{ name: string; path: string }>
   fileAttachments: FileAttachment[]
+  collaborationMode: CollaborationMode
 }
 
 type RealtimeConnectionState = RpcConnectionState
@@ -192,6 +195,7 @@ function localizeActivityText(value: string): string {
 
   const directMap: Record<string, string> = {
     'Thinking': '思考中',
+    'Planning': '规划中',
     'Running command': '执行命令',
     'Preparing context': '准备上下文',
     'Streaming reply': '生成回复',
@@ -300,6 +304,26 @@ function saveSelectedModelId(modelId: string): void {
     return
   }
   window.localStorage.setItem(SELECTED_MODEL_STORAGE_KEY, normalizedModelId)
+}
+
+function loadSelectedCollaborationMode(): CollaborationMode {
+  if (typeof window === 'undefined') return 'execute'
+  try {
+    return window.localStorage.getItem(SELECTED_COLLABORATION_MODE_STORAGE_KEY) === 'plan'
+      ? 'plan'
+      : 'execute'
+  } catch {
+    return 'execute'
+  }
+}
+
+function saveSelectedCollaborationMode(mode: CollaborationMode): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(SELECTED_COLLABORATION_MODE_STORAGE_KEY, mode)
+  } catch {
+    // Keep in-memory mode when localStorage is unavailable.
+  }
 }
 
 function loadProjectOrder(): string[] {
@@ -415,6 +439,7 @@ function normalizeQueuedMessage(value: unknown): QueuedMessage | null {
     imageUrls,
     skills,
     fileAttachments,
+    collaborationMode: row.collaborationMode === 'plan' ? 'plan' : 'execute',
   }
 }
 
@@ -1008,6 +1033,7 @@ export function useDesktopState() {
     skills: Array<{ name: string; path: string }>
     fileAttachments: FileAttachment[]
     effort: ReasoningEffort | ''
+    collaborationMode: CollaborationMode
     fallbackRetried: boolean
     createdAtMs: number
   }
@@ -1020,6 +1046,7 @@ export function useDesktopState() {
   const selectedModelId = ref(loadSelectedModelId())
   const selectedReasoningEffort = ref<ReasoningEffort | ''>('medium')
   const selectedSpeedMode = ref<SpeedMode>('standard')
+  const selectedCollaborationMode = ref<CollaborationMode>(loadSelectedCollaborationMode())
   const readStateByThreadId = ref<Record<string, string>>(loadReadStateMap())
   const scrollStateByThreadId = ref<Record<string, ThreadScrollState>>(loadThreadScrollStateMap())
   const projectOrder = ref<string[]>(loadProjectOrder())
@@ -1335,7 +1362,7 @@ export function useDesktopState() {
   }
   function getThreadDisplayTitle(threadId: string): string {
     const normalizedThreadId = threadId.trim()
-    if (!normalizedThreadId || normalizedThreadId === GLOBAL_SERVER_REQUEST_SCOPE) return 'CX Codex'
+    if (!normalizedThreadId || normalizedThreadId === GLOBAL_SERVER_REQUEST_SCOPE) return 'CX-Codex'
     return (
       threadTitleById.value[normalizedThreadId]?.trim() ||
       sourceThreadById.value[normalizedThreadId]?.title?.trim() ||
@@ -1493,8 +1520,8 @@ export function useDesktopState() {
       error.value = ''
       setTurnSummaryForThread(threadId, null)
       setTurnActivityForThread(threadId, {
-        label: 'Thinking',
-        details: buildPendingTurnDetails(MODEL_FALLBACK_ID, pending.effort),
+        label: pending.collaborationMode === 'plan' ? 'Planning' : 'Thinking',
+        details: buildPendingTurnDetails(MODEL_FALLBACK_ID, pending.effort, pending.collaborationMode),
       })
       setThreadInProgress(threadId, true)
       markThreadLiveExecutionSignal(threadId)
@@ -1509,6 +1536,7 @@ export function useDesktopState() {
         pending.effort || undefined,
         pending.skills.length > 0 ? pending.skills : undefined,
         pending.fileAttachments,
+        pending.collaborationMode,
       )
 
       markThreadResumed(threadId)
@@ -1535,6 +1563,12 @@ export function useDesktopState() {
     selectedReasoningEffort.value = effort
   }
 
+  function setSelectedCollaborationMode(mode: CollaborationMode): void {
+    const nextMode: CollaborationMode = mode === 'plan' ? 'plan' : 'execute'
+    selectedCollaborationMode.value = nextMode
+    saveSelectedCollaborationMode(nextMode)
+  }
+
   async function updateSelectedSpeedMode(mode: SpeedMode): Promise<void> {
     const nextMode: SpeedMode = mode === 'fast' ? 'fast' : 'standard'
     if (isUpdatingSpeedMode.value || selectedSpeedMode.value === nextMode) {
@@ -1556,11 +1590,12 @@ export function useDesktopState() {
     }
   }
 
-  function buildPendingTurnDetails(modelId: string, effort: ReasoningEffort | ''): string[] {
+  function buildPendingTurnDetails(modelId: string, effort: ReasoningEffort | '', mode: CollaborationMode = selectedCollaborationMode.value): string[] {
     const modelLabel = modelId.trim() || 'default'
     const effortLabel = effort || 'default'
     const speedLabel = selectedSpeedMode.value === 'fast' ? 'Fast' : 'Standard'
     return [
+      mode === 'plan' ? '模式：计划' : '模式：执行',
       localizeActivityText(`Model: ${modelLabel}`),
       localizeActivityText(`Thinking: ${effortLabel}`),
       localizeActivityText(`Speed: ${speedLabel}`),
@@ -2170,6 +2205,30 @@ export function useDesktopState() {
     }
   }
 
+  function settleRecoveredExecutionTracking(threadId: string): void {
+    if (!threadId) return
+    clearThreadExecutionTracking(threadId)
+    setThreadInProgress(threadId, false)
+    setTurnActivityForThread(threadId, null)
+    clearLiveReasoningForThread(threadId)
+    if (liveCommandsByThreadId.value[threadId]) {
+      liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
+    }
+    if (activeTurnIdByThreadId.value[threadId]) {
+      activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, threadId)
+    }
+    runtimeExecutionStateByThreadId.value = {
+      ...runtimeExecutionStateByThreadId.value,
+      [threadId]: 'completed',
+    }
+    if (threadId in runtimeStaleByThreadId.value) {
+      runtimeStaleByThreadId.value = omitKey(runtimeStaleByThreadId.value, threadId)
+    }
+    if (threadId in runtimeCanStopByThreadId.value) {
+      runtimeCanStopByThreadId.value = omitKey(runtimeCanStopByThreadId.value, threadId)
+    }
+  }
+
   function hasFreshExecutionSignal(threadId: string, maxAgeMs = ACTIVE_SYNC_STALE_MS): boolean {
     if (!threadId) return false
     const lastSignalAt = lastExecutionSignalAtByThreadId.value[threadId] ?? 0
@@ -2389,13 +2448,14 @@ export function useDesktopState() {
     if (!threadId) return false
     if (hasQueuedThreadWork(threadId)) return true
     if (hasRunningLiveCommand(threadId)) return true
-    if (hasPersistedRunningCommand(threadId)) return true
+    if (!hasRecoveredCompletionAfterRunningCommand(threadId) && hasPersistedRunningCommand(threadId)) return true
     return (pendingServerRequestsByThreadId.value[threadId] ?? []).length > 0
   }
 
   function hasAuthoritativeExecutionSignal(threadId: string): boolean {
     if (!threadId) return false
     const runtimeState = runtimeExecutionStateByThreadId.value[threadId]
+    if (hasRecoveredCompletionAfterRunningCommand(threadId) && !hasRunningLiveCommand(threadId)) return false
     if (isRuntimeExecutionFreshActiveState(threadId)) return true
     if (isRuntimeExecutionSettledState(runtimeState) && !hasStrongExecutionSignal(threadId)) return false
     if (hasSettledThreadDetail(threadId) && !hasStrongExecutionSignal(threadId)) return false
@@ -2417,6 +2477,10 @@ export function useDesktopState() {
     const runtimeState = runtimeExecutionStateByThreadId.value[threadId]
     if (isRuntimeExecutionSettledState(runtimeState) && !hasStrongExecutionSignal(threadId)) {
       clearThreadExecutionTracking(threadId)
+      return { inProgress: false, activeTurnId: '' }
+    }
+    if (hasRecoveredCompletionAfterRunningCommand(threadId) && !hasRunningLiveCommand(threadId)) {
+      settleRecoveredExecutionTracking(threadId)
       return { inProgress: false, activeTurnId: '' }
     }
     if (isRuntimeExecutionFreshActiveState(threadId)) {
@@ -2459,7 +2523,7 @@ export function useDesktopState() {
 
     const activeTurnKey = normalizeActiveTurnId(normalizedActiveTurnId)
     if (ignoredStaleActiveTurnByThreadId.value[threadId] === activeTurnKey) {
-      setThreadReadActiveState(threadId, null)
+      settleRecoveredExecutionTracking(threadId)
       return { inProgress: false, activeTurnId: '' }
     }
 
@@ -2491,7 +2555,7 @@ export function useDesktopState() {
       now - lastMeaningfulActivityAt >= STALE_THREAD_ACTIVE_TURN_TTL_MS
     ) {
       rememberIgnoredStaleActiveTurn(threadId, activeTurnKey)
-      setThreadReadActiveState(threadId, null)
+      settleRecoveredExecutionTracking(threadId)
       return { inProgress: false, activeTurnId: '' }
     }
 
@@ -2517,6 +2581,15 @@ export function useDesktopState() {
       if (message?.role === 'assistant' && message.text.trim().length > 0) return true
     }
     return false
+  }
+
+  function hasRecoveredCompletionAfterRunningCommand(threadId: string): boolean {
+    if (!threadId) return false
+    if (!hasLoadedThreadDetail(threadId)) return false
+    if (!hasAssistantOutputAfterLatestPersistedRunningCommand(threadId)) return false
+    if (hasPendingServerRequestSignal(threadId)) return false
+    if (hasQueuedThreadWork(threadId)) return false
+    return true
   }
 
   function settlePersistedRunningCommandsForThread(threadId: string): void {
@@ -2547,6 +2620,7 @@ export function useDesktopState() {
 
   function hasPersistedRunningCommand(threadId: string): boolean {
     if (!threadId) return false
+    if (hasRecoveredCompletionAfterRunningCommand(threadId)) return false
     const hasAuthoritativeRunningSignal =
       isRuntimeExecutionFreshActiveState(threadId) ||
       hasRunningLiveCommand(threadId) ||
@@ -3141,6 +3215,14 @@ export function useDesktopState() {
     return typeof value === 'string' ? value : ''
   }
 
+  function readStringByAliases(record: Record<string, unknown>, ...keys: string[]): string {
+    for (const key of keys) {
+      const value = readString(record[key])
+      if (value) return value
+    }
+    return ''
+  }
+
   function readNumber(value: unknown): number | null {
     return typeof value === 'number' && Number.isFinite(value) ? value : null
   }
@@ -3216,8 +3298,25 @@ export function useDesktopState() {
     }
   }
 
+  function getRateLimitWindowKey(window: UiRateLimitSnapshot['primary']): string {
+    if (!window) return 'none'
+    return [
+      Math.round(window.usedPercent),
+      window.windowDurationMins ?? 'any',
+      window.resetsAt ?? 'open',
+    ].join(':')
+  }
+
   function getRateLimitSnapshotKey(snapshot: UiRateLimitSnapshot): string {
-    return snapshot.limitId?.trim() || snapshot.limitName?.trim() || '__default__'
+    const stableId = snapshot.limitId?.trim() || snapshot.limitName?.trim()
+    if (stableId) return stableId
+    return [
+      snapshot.planType ?? '',
+      getRateLimitWindowKey(snapshot.primary),
+      getRateLimitWindowKey(snapshot.secondary),
+      snapshot.credits?.balance ?? '',
+      snapshot.credits?.unlimited === true ? 'unlimited' : '',
+    ].join('|')
   }
 
   function normalizeRateLimitWindow(value: unknown): UiRateLimitSnapshot['primary'] {
@@ -3225,30 +3324,31 @@ export function useDesktopState() {
     if (!record) return null
 
     return {
-      usedPercent: clamp(readNumber(record.usedPercent) ?? 0, 0, 100),
-      windowDurationMins: readNumber(record.windowDurationMins),
-      resetsAt: readNumber(record.resetsAt),
+      usedPercent: clamp(readNumberByAliases(record, 'usedPercent', 'used_percent') ?? 0, 0, 100),
+      windowDurationMins: readNumberByAliases(record, 'windowDurationMins', 'window_duration_mins', 'window_minutes'),
+      resetsAt: readNumberByAliases(record, 'resetsAt', 'resets_at'),
     }
   }
 
-  function normalizeRateLimitSnapshot(value: unknown): UiRateLimitSnapshot | null {
+  function normalizeRateLimitSnapshot(value: unknown, fallbackLimitId = ''): UiRateLimitSnapshot | null {
     const record = asRecord(value)
     if (!record) return null
 
     const credits = asRecord(record.credits)
+    const limitId = readStringByAliases(record, 'limitId', 'limit_id') || fallbackLimitId
     return {
-      limitId: readString(record.limitId) || null,
-      limitName: readString(record.limitName) || null,
+      limitId: limitId || null,
+      limitName: readStringByAliases(record, 'limitName', 'limit_name') || null,
       primary: normalizeRateLimitWindow(record.primary),
       secondary: normalizeRateLimitWindow(record.secondary),
       credits: credits
         ? {
-            hasCredits: credits.hasCredits === true,
+            hasCredits: credits.hasCredits === true || credits.has_credits === true,
             unlimited: credits.unlimited === true,
             balance: readString(credits.balance) || null,
           }
         : null,
-      planType: readString(record.planType) || null,
+      planType: readStringByAliases(record, 'planType', 'plan_type') || null,
     }
   }
 
@@ -3266,12 +3366,12 @@ export function useDesktopState() {
       next.push(snapshot)
     }
 
-    pushSnapshot(normalizeRateLimitSnapshot(record.rateLimits))
+    pushSnapshot(normalizeRateLimitSnapshot(record.rateLimits ?? record.rate_limits))
 
-    const byLimitId = asRecord(record.rateLimitsByLimitId)
+    const byLimitId = asRecord(record.rateLimitsByLimitId ?? record.rate_limits_by_limit_id)
     if (byLimitId) {
-      for (const snapshot of Object.values(byLimitId)) {
-        pushSnapshot(normalizeRateLimitSnapshot(snapshot))
+      for (const [limitId, snapshot] of Object.entries(byLimitId)) {
+        pushSnapshot(normalizeRateLimitSnapshot(snapshot, limitId))
       }
     }
 
@@ -4532,6 +4632,7 @@ export function useDesktopState() {
     mode: 'steer' | 'queue' = 'steer',
     fileAttachments: FileAttachment[] = [],
     queueInsertIndex?: number,
+    collaborationMode: CollaborationMode = selectedCollaborationMode.value,
   ): Promise<void> {
     if (isUpdatingSpeedMode.value) return
 
@@ -4560,7 +4661,7 @@ export function useDesktopState() {
       const insertIndex = typeof queueInsertIndex === 'number'
         ? Math.max(0, Math.min(queueInsertIndex, nextQueue.length))
         : nextQueue.length
-      nextQueue.splice(insertIndex, 0, { id, text: nextText, imageUrls, skills, fileAttachments })
+      nextQueue.splice(insertIndex, 0, { id, text: nextText, imageUrls, skills, fileAttachments, collaborationMode })
       setQueuedMessagesForThread(threadId, nextQueue)
       return
     }
@@ -4569,7 +4670,7 @@ export function useDesktopState() {
       shouldAutoScrollOnNextAgentEvent = true
       markActiveSyncBoost()
       try {
-        await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments)
+        await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode)
       } catch (unknownError) {
         removeOptimisticUserMessage(threadId, optimisticMessageId)
         const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
@@ -4586,13 +4687,16 @@ export function useDesktopState() {
     setTurnSummaryForThread(threadId, null)
     setTurnActivityForThread(
       threadId,
-      { label: 'Thinking', details: buildPendingTurnDetails(selectedModelId.value, selectedReasoningEffort.value) },
+      {
+        label: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
+        details: buildPendingTurnDetails(selectedModelId.value, selectedReasoningEffort.value, collaborationMode),
+      },
     )
     setTurnErrorForThread(threadId, null)
     setThreadInProgress(threadId, true)
 
     try {
-      await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments)
+      await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode)
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false
       removeOptimisticUserMessage(threadId, optimisticMessageId)
@@ -4611,6 +4715,7 @@ export function useDesktopState() {
     imageUrls: string[] = [],
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
+    collaborationMode: CollaborationMode = selectedCollaborationMode.value,
   ): Promise<string> {
     if (isUpdatingSpeedMode.value) return ''
 
@@ -4649,14 +4754,17 @@ export function useDesktopState() {
       setTurnSummaryForThread(threadId, null)
       setTurnActivityForThread(
         threadId,
-        { label: 'Thinking', details: buildPendingTurnDetails(selectedModelId.value, selectedReasoningEffort.value) },
+        {
+          label: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
+          details: buildPendingTurnDetails(selectedModelId.value, selectedReasoningEffort.value, collaborationMode),
+        },
       )
       setTurnErrorForThread(threadId, null)
       setThreadInProgress(threadId, true)
       const capturedThreadId = threadId
       const capturedCwd = targetCwd || null
       const capturedPrompt = nextText
-      void startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments)
+      void startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode)
         .catch((unknownError) => {
           shouldAutoScrollOnNextAgentEvent = false
           removeOptimisticUserMessage(threadId, optimisticMessageId)
@@ -4693,6 +4801,7 @@ export function useDesktopState() {
     imageUrls: string[] = [],
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
+    collaborationMode: CollaborationMode = selectedCollaborationMode.value,
   ): Promise<void> {
     const modelId = selectedModelId.value.trim()
     const reasoningEffort = selectedReasoningEffort.value
@@ -4707,6 +4816,7 @@ export function useDesktopState() {
       skills: normalizedSkills,
       fileAttachments: normalizedFileAttachments,
       effort: reasoningEffort,
+      collaborationMode,
       fallbackRetried: false,
       createdAtMs: Date.now(),
     })
@@ -4724,6 +4834,7 @@ export function useDesktopState() {
           reasoningEffort || undefined,
           skills.length > 0 ? skills : undefined,
           fileAttachments,
+          collaborationMode,
         )
       } catch (unknownError) {
         if (modelId && modelId !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
@@ -4734,6 +4845,7 @@ export function useDesktopState() {
             skills: normalizedSkills,
             fileAttachments: normalizedFileAttachments,
             effort: reasoningEffort,
+            collaborationMode,
             fallbackRetried: true,
             createdAtMs: Date.now(),
           })
@@ -4745,6 +4857,7 @@ export function useDesktopState() {
             reasoningEffort || undefined,
             skills.length > 0 ? skills : undefined,
             fileAttachments,
+            collaborationMode,
           )
         } else {
           throw unknownError
@@ -4786,14 +4899,17 @@ export function useDesktopState() {
     error.value = ''
     shouldAutoScrollOnNextAgentEvent = true
     setTurnSummaryForThread(threadId, null)
-    setTurnActivityForThread(threadId, { label: 'Thinking', details: buildPendingTurnDetails(selectedModelId.value, selectedReasoningEffort.value) })
+    setTurnActivityForThread(threadId, {
+      label: next.collaborationMode === 'plan' ? 'Planning' : 'Thinking',
+      details: buildPendingTurnDetails(selectedModelId.value, selectedReasoningEffort.value, next.collaborationMode),
+    })
     setTurnErrorForThread(threadId, null)
     setThreadInProgress(threadId, true)
     markThreadLiveExecutionSignal(threadId)
     markActiveSyncBoost()
     const optimisticMessageId = addOptimisticUserMessage(threadId, next.text, next.imageUrls, next.fileAttachments)
     try {
-      await startTurnForThread(threadId, next.text, next.imageUrls, next.skills, next.fileAttachments)
+      await startTurnForThread(threadId, next.text, next.imageUrls, next.skills, next.fileAttachments, next.collaborationMode)
       removeQueuedMessageByThreadId(threadId, next.id)
     } catch {
       removeOptimisticUserMessage(threadId, optimisticMessageId)
@@ -5604,7 +5720,7 @@ export function useDesktopState() {
     const msg = queue.find((m) => m.id === messageId)
     if (!msg) return
     try {
-      await sendMessageToSelectedThread(msg.text, msg.imageUrls, msg.skills, 'steer', msg.fileAttachments)
+      await sendMessageToSelectedThread(msg.text, msg.imageUrls, msg.skills, 'steer', msg.fileAttachments, undefined, msg.collaborationMode)
       removeQueuedMessageByThreadId(threadId, messageId)
     } catch {
       // Keep the queued message so the user can retry or edit it.
@@ -5626,6 +5742,7 @@ export function useDesktopState() {
     selectedModelId,
     selectedReasoningEffort,
     selectedSpeedMode,
+    selectedCollaborationMode,
     installedSkills,
     accountRateLimitSnapshots,
     messages,
@@ -5661,6 +5778,7 @@ export function useDesktopState() {
     markAllThreadsAsRead,
     setSelectedModelId,
     setWorktreeGitAutomationEnabled,
+    setSelectedCollaborationMode,
     setSelectedReasoningEffort,
     updateSelectedSpeedMode,
     respondToPendingServerRequest,

@@ -1,13 +1,13 @@
 [CmdletBinding()]
 param(
-  [string]$InstallDir = "$env:LOCALAPPDATA\codexui-server-bridge",
+  [string]$InstallDir = "$env:LOCALAPPDATA\CX-Codex",
   [string]$WorkspacePath = "$env:USERPROFILE\CodexWorkspace",
   [int]$Port = 7420,
   [string]$BindHost = "0.0.0.0",
   [string]$Password = "",
   [switch]$NoPassword,
   [string]$RepoOwner = "Qjzn",
-  [string]$RepoName = "codexui-server-bridge",
+  [string]$RepoName = "CX-Codex",
   [string]$Branch = "main",
   [switch]$SkipStartupTask,
   [switch]$SkipWatchdogTask,
@@ -38,7 +38,7 @@ function Get-PortableNodeRuntime {
   param([string]$TargetBaseDir)
 
   Write-Step "Installing portable Node.js"
-  $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" -Headers @{ "User-Agent" = "codexui-bootstrap" }
+  $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" -Headers @{ "User-Agent" = "cx-codex-bootstrap" }
   $release = $index |
     Where-Object { $_.lts -and ($_.files -contains "win-x64-zip") } |
     Select-Object -First 1
@@ -150,8 +150,8 @@ $invokeArgs = @(
   "-CreateProjectPath",
   "-Port", "$Port",
   "-BindHost", $BindHost,
-  "-ConfigPath", "$env:USERPROFILE\.codexui\config.json",
-  "-LauncherPath", "$env:USERPROFILE\.local\bin\codexui-start.cmd"
+  "-ConfigPath", "$env:USERPROFILE\.cx-codex\config.json",
+  "-LauncherPath", "$env:USERPROFILE\.local\bin\cx-codex-start.cmd"
 )
 
 if ($NoPassword) {
@@ -193,8 +193,8 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host ""
 Write-Host "Bootstrap complete." -ForegroundColor Green
 Write-Host "Install dir: $repoRoot"
-Write-Host "Launcher:    $env:USERPROFILE\.local\bin\codexui-start.cmd"
-Write-Host "Logs:        $env:USERPROFILE\.codexui\logs"
+Write-Host "Launcher:    $env:USERPROFILE\.local\bin\cx-codex-start.cmd"
+Write-Host "Logs:        $env:USERPROFILE\.cx-codex\logs"
 if ($EnableCloudflareTunnel) {
-  Write-Host "Tunnel:      enabled; open the trycloudflare.com URL printed above or in codexui.out.log"
+  Write-Host "Tunnel:      enabled; open the trycloudflare.com URL printed above or in cx-codex.out.log"
 }

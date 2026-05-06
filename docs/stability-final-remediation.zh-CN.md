@@ -440,8 +440,8 @@ Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:7420/codex-api/runtime/snap
 1. `src/mobile/capacitorBridge.ts`
 2. `src/mobile/mobileShell.ts`
 3. `src/composables/useDesktopState.ts`
-4. `android/app/src/main/java/com/codexui/bridge/MainActivity.java`
-5. `android/app/src/main/java/com/codexui/bridge/MobileShellPlugin.java`
+4. `android/app/src/main/java/com/cxcodex/bridge/MainActivity.java`
+5. `android/app/src/main/java/com/cxcodex/bridge/MobileShellPlugin.java`
 
 任务：
 

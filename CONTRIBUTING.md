@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢愿意改进 `codexui-server-bridge`。这个项目优先解决真实使用问题：部署简单、手机可用、会话稳定、交互清晰。
+感谢愿意改进 `CX-Codex`。这个项目优先解决真实使用问题：部署简单、手机可用、会话稳定、交互清晰。
 
 ## 适合贡献的内容
 
@@ -38,7 +38,7 @@ Windows 安装脚本 smoke：
 ```powershell
 .\scripts\bootstrap-windows.ps1 `
   -SourceRepoRoot $PWD `
-  -InstallDir "$env:TEMP\codexui-smoke-install" `
+  -InstallDir "$env:TEMP\cx-codex-smoke-install" `
   -WorkspacePath "$env:TEMP\CodexWorkspace" `
   -Port 7441 `
   -Password "ci-password" `

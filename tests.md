@@ -456,13 +456,13 @@ This file tracks manual regression and feature verification steps.
 
 #### Prerequisites
 - `7420` 服务运行中，前端资源已更新到本轮构建版本。
-- Android CX Codex 或移动端 WebView 可以访问当前服务。
+- Android CX-Codex 或移动端 WebView 可以访问当前服务。
 - 准备一个可运行长任务的会话，用于观察锁屏/切后台恢复。
 
 #### Steps
 1. 在 Android 端打开一个会话并发送一条会执行较久的任务。
 2. 等待界面出现执行中状态后，锁屏 10-20 秒。
-3. 解锁回到 CX Codex。
+3. 解锁回到 CX-Codex。
 4. 观察页面是否先恢复“执行中/等待确认/已完成”等状态，而不是长时间卡在空白或旧状态。
 5. 如果任务已完成，等待 2-3 秒，确认最终消息会自动补齐。
 6. 再次切后台 10 秒后回到应用，重复观察一次。
@@ -625,7 +625,7 @@ This file tracks manual regression and feature verification steps.
 2. 启动 App，确认不会因为空 `serverUrl` 在原生初始化阶段闪退。
 3. 构建默认公网地址 APK，检查 `android/app/src/main/assets/capacitor.config.json` 包含 `server.url`。
 4. 安装默认公网地址 APK，打开 App。
-5. 如仍闪退，连接真机执行 `adb logcat -d -t 300 | Select-String "com.codexui.bridge|AndroidRuntime|FATAL EXCEPTION"`。
+5. 如仍闪退，连接真机执行 `adb logcat -d -t 300 | Select-String "com.cxcodex.bridge|AndroidRuntime|FATAL EXCEPTION"`。
 
 #### Expected Results
 - 未配置远程地址时，原生层不会把空字符串传给 Capacitor `serverUrl`。
@@ -633,7 +633,7 @@ This file tracks manual regression and feature verification steps.
 - APK 可启动到 WebView；公网不可用时应显示页面加载错误或 Web 侧状态，而不是原生闪退。
 
 #### Rollback/Cleanup
-- 若需回退，恢复 `android/app/src/main/java/com/codexui/bridge/MainActivity.java` 与 `scripts/package-android-release.ps1`。
+- 若需回退，恢复 `android/app/src/main/java/com/cxcodex/bridge/MainActivity.java` 与 `scripts/package-android-release.ps1`。
 
 ---
 
@@ -760,7 +760,7 @@ This file tracks manual regression and feature verification steps.
 1. 在 Android 端会话内容页发送任务。
 2. 等待页面出现思考或执行命令卡片。
 3. 切到其他应用或锁屏 2-5 分钟。
-4. 解锁回到 CX Codex。
+4. 解锁回到 CX-Codex。
 5. 等待首轮自动同步完成，不手动点刷新。
 6. 查看会话中是否已经出现新的助手回复。
 7. 如果回复已完成，确认底部不再保留 `思考中` 或 `执行命令` 运行卡片，停止按钮也不继续显示。
@@ -784,7 +784,7 @@ This file tracks manual regression and feature verification steps.
 - 当前机器的 7420 `/health` 和 `/codex-api/health` 正常。
 
 #### Steps
-1. 打开 Android CX Codex。
+1. 打开 Android CX-Codex。
 2. 进入任意会话内容页。
 3. 查看标题下方状态胶囊。
 4. 切换会话、锁屏后返回，再次查看状态胶囊。

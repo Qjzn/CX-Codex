@@ -46,8 +46,10 @@ function resolveConfigCandidatePath(configPath: string): string {
 
 function getConfigCandidatePaths(): string[] {
   const candidates = [
-    process.env.CODEXUI_CONFIG?.trim() ?? '',
+    process.env.CX_CODEX_CONFIG?.trim() ?? process.env.CODEXUI_CONFIG?.trim() ?? '',
+    join(process.cwd(), 'cx-codex.config.json'),
     join(process.cwd(), 'codexui.config.json'),
+    join(homedir(), '.cx-codex', 'config.json'),
     join(homedir(), '.codexui', 'config.json'),
   ]
 
@@ -96,9 +98,9 @@ async function readLaunchConfigSnapshot(): Promise<LaunchConfigSnapshot> {
 }
 
 function getDefaultConfigWritePath(): string {
-  const explicit = process.env.CODEXUI_CONFIG?.trim()
+  const explicit = process.env.CX_CODEX_CONFIG?.trim() || process.env.CODEXUI_CONFIG?.trim()
   if (explicit) return resolveConfigCandidatePath(explicit)
-  return join(homedir(), '.codexui', 'config.json')
+  return join(homedir(), '.cx-codex', 'config.json')
 }
 
 function getCloudflaredUserBinDir(): string {
@@ -107,7 +109,7 @@ function getCloudflaredUserBinDir(): string {
 
 function resolveCloudflaredCommand(configuredCommand: string): string {
   const candidates = [
-    process.env.CODEXUI_CLOUDFLARED_COMMAND?.trim() ?? '',
+    process.env.CX_CODEX_CLOUDFLARED_COMMAND?.trim() ?? process.env.CODEXUI_CLOUDFLARED_COMMAND?.trim() ?? '',
     configuredCommand,
     'cloudflared',
     join(getCloudflaredUserBinDir(), 'cloudflared'),
@@ -128,7 +130,7 @@ function resolveCloudflaredCommand(configuredCommand: string): string {
 }
 
 function getTunnelLogPath(): string {
-  return join(homedir(), '.codexui', 'logs', 'codexui.out.log')
+  return join(homedir(), '.cx-codex', 'logs', 'cx-codex.out.log')
 }
 
 function readLatestTunnelSnapshotFromLog(logText: string): LogTunnelSnapshot {

@@ -1,7 +1,7 @@
 <template>
-  <aside v-if="snapshots.length > 0" class="rate-limit-status" aria-live="polite">
+  <aside v-if="displaySnapshots.length > 0" class="rate-limit-status" aria-live="polite">
     <div
-      v-for="snapshot in snapshots"
+      v-for="snapshot in displaySnapshots"
       :key="getSnapshotKey(snapshot)"
       class="rate-limit-card"
       :title="buildTooltip(snapshot)"
@@ -29,9 +29,10 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { UiRateLimitSnapshot, UiRateLimitWindow } from '../../types/codex'
 
-defineProps<{
+const props = defineProps<{
   snapshots: UiRateLimitSnapshot[]
 }>()
 
@@ -41,11 +42,37 @@ type RateLimitMetric = {
 }
 
 function getSnapshotKey(snapshot: UiRateLimitSnapshot): string {
-  return snapshot.limitId?.trim() || snapshot.limitName?.trim() || '__default__'
+  return getSnapshotIdentity(snapshot)
+}
+
+function getWindowIdentity(window: UiRateLimitWindow | null): string {
+  if (!window) return 'none'
+  return [
+    Math.round(window.usedPercent),
+    window.windowDurationMins ?? 'any',
+    window.resetsAt ?? 'open',
+  ].join(':')
+}
+
+function getSnapshotIdentity(snapshot: UiRateLimitSnapshot): string {
+  return [
+    snapshot.limitId?.trim() || '',
+    snapshot.limitName?.trim() || '',
+    snapshot.planType?.trim() || '',
+    getWindowIdentity(snapshot.primary),
+    getWindowIdentity(snapshot.secondary),
+    snapshot.credits?.balance ?? '',
+    snapshot.credits?.unlimited === true ? 'unlimited' : '',
+  ].join('|')
 }
 
 function getSnapshotTitle(snapshot: UiRateLimitSnapshot): string {
-  return snapshot.limitName?.trim() || snapshot.limitId?.trim() || '额度限制'
+  const name = snapshot.limitName?.trim()
+  if (name) return name
+  const id = snapshot.limitId?.trim()
+  if (!id) return '套餐余量'
+  if (id.toLowerCase() === 'codex') return 'Codex 套餐'
+  return id.replace(/[_-]+/g, ' ')
 }
 
 function formatPlanType(value: string): string {
@@ -155,7 +182,7 @@ function getCreditsText(snapshot: UiRateLimitSnapshot): string {
   const credits = snapshot.credits
   if (!credits) return ''
   if (credits.unlimited) return '额度不限'
-  if (credits.balance) return `额度 ${credits.balance}`
+  if (credits.balance) return `余额 ${credits.balance}`
   if (credits.hasCredits) return '有可用额度'
   return ''
 }
@@ -181,41 +208,52 @@ function buildTooltip(snapshot: UiRateLimitSnapshot): string {
   }
   return lines.join('\n')
 }
+
+const displaySnapshots = computed(() => {
+  const seen = new Set<string>()
+  const next: UiRateLimitSnapshot[] = []
+  for (const snapshot of props.snapshots) {
+    const identity = getSnapshotIdentity(snapshot)
+    if (seen.has(identity)) continue
+    seen.add(identity)
+    next.push(snapshot)
+  }
+  return next
+})
 </script>
 
 <style scoped>
 @reference "tailwindcss";
 
 .rate-limit-status {
-  @apply flex w-full flex-col items-end gap-2;
+  @apply grid w-full gap-2;
 }
 
 .rate-limit-card {
-  @apply w-full rounded-xl border border-zinc-200 bg-white/95 px-3 py-2 text-right shadow-sm backdrop-blur;
-  max-width: 22rem;
+  @apply w-full rounded-lg border border-[#e6dccb] bg-white/90 px-3 py-2 text-left;
 }
 
 .rate-limit-card-header {
-  @apply flex items-center justify-end gap-2;
+  @apply flex min-w-0 items-center justify-between gap-2;
 }
 
 .rate-limit-card-title {
-  @apply text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500;
+  @apply min-w-0 truncate text-xs font-semibold text-[#3f372d];
 }
 
 .rate-limit-card-plan {
-  @apply rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-600;
+  @apply shrink-0 rounded-full bg-[#f1ebde] px-2 py-0.5 text-[10px] font-medium text-[#7b7062];
 }
 
 .rate-limit-card-metrics {
-  @apply mt-1 flex flex-wrap justify-end gap-1;
+  @apply mt-2 grid grid-cols-2 gap-1.5;
 }
 
 .rate-limit-card-metric {
-  @apply rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800;
+  @apply rounded-md bg-[#fff7ed] px-2 py-1 text-center text-xs font-semibold text-[#9a3412];
 }
 
 .rate-limit-card-footer {
-  @apply mt-1 text-[11px] text-zinc-500;
+  @apply mt-1.5 text-[11px] leading-4 text-[#8f8577];
 }
 </style>

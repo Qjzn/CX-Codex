@@ -8,8 +8,8 @@ param(
   [switch]$NoPassword,
   [switch]$Tunnel,
   [switch]$OpenBrowser,
-  [string]$ConfigPath = "$env:USERPROFILE\.codexui\config.json",
-  [string]$LauncherPath = "$env:USERPROFILE\.local\bin\codexui-start.cmd",
+  [string]$ConfigPath = "$env:USERPROFILE\.cx-codex\config.json",
+  [string]$LauncherPath = "$env:USERPROFILE\.local\bin\cx-codex-start.cmd",
   [string]$CodexCommand = "",
   [string]$RipgrepCommand = "",
   [string]$CloudflaredCommand = "",
@@ -208,7 +208,7 @@ function Stop-ExistingCodexUiProcesses {
   }
 
   foreach ($managedProcessId in $managedProcessIds) {
-    Write-Host "Stopping previous codexui process (PID $managedProcessId)..."
+    Write-Host "Stopping previous CX-Codex process (PID $managedProcessId)..."
     Stop-Process -Id $managedProcessId -Force -ErrorAction SilentlyContinue
   }
 
@@ -232,10 +232,10 @@ function Create-LauncherFile {
   $launcherContent = @"
 @echo off
 setlocal
-set "CODEXUI_LOG_DIR=%USERPROFILE%\.codexui\logs"
-if not exist "%CODEXUI_LOG_DIR%" mkdir "%CODEXUI_LOG_DIR%"
+set "CX_CODEX_LOG_DIR=%USERPROFILE%\.cx-codex\logs"
+if not exist "%CX_CODEX_LOG_DIR%" mkdir "%CX_CODEX_LOG_DIR%"
 cd /d "$RepoRoot"
-"$NodePath" "$RepoRoot\dist-cli\index.js" --config "$TargetConfigPath" >>"%CODEXUI_LOG_DIR%\codexui.out.log" 2>>"%CODEXUI_LOG_DIR%\codexui.err.log"
+"$NodePath" "$RepoRoot\dist-cli\index.js" --config "$TargetConfigPath" >>"%CX_CODEX_LOG_DIR%\cx-codex.out.log" 2>>"%CX_CODEX_LOG_DIR%\cx-codex.err.log"
 "@
 
   Set-Content -LiteralPath $TargetLauncherPath -Value $launcherContent -Encoding ASCII
@@ -436,7 +436,7 @@ try {
   }
 
   if (-not $SkipBuild) {
-    Write-Step "Building codexui"
+    Write-Step "Building CX-Codex"
     & $npmExecutable run build
     if ($LASTEXITCODE -ne 0) {
       throw "npm run build failed with exit code $LASTEXITCODE"
@@ -526,7 +526,7 @@ if ($CreateWatchdogTask) {
 
 if ($OpenFirewall) {
   Write-Step "Opening firewall port"
-  $ruleName = if ([string]::IsNullOrWhiteSpace($FirewallRuleName)) { "codexui-$Port" } else { $FirewallRuleName }
+  $ruleName = if ([string]::IsNullOrWhiteSpace($FirewallRuleName)) { "cx-codex-$Port" } else { $FirewallRuleName }
   try {
     $existingRule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
     if ($existingRule) {
@@ -541,7 +541,7 @@ if ($OpenFirewall) {
 
 $healthPayload = $null
 if ($StartNow) {
-  Write-Step "Starting codexui"
+  Write-Step "Starting CX-Codex"
   $canStart = Stop-ExistingCodexUiProcesses -TargetPort $Port -RepoRoot $repoRoot -TargetLauncherPath $LauncherPath -TargetConfigPath $ConfigPath
   if ($canStart) {
     Start-Process -FilePath $LauncherPath | Out-Null
@@ -551,8 +551,8 @@ if ($StartNow) {
   }
 }
 
-$logDir = "$env:USERPROFILE\.codexui\logs"
-$outLogPath = Join-Path $logDir "codexui.out.log"
+$logDir = "$env:USERPROFILE\.cx-codex\logs"
+$outLogPath = Join-Path $logDir "cx-codex.out.log"
 $accessUrls = Get-AccessibleUrls -BindHostValue $BindHost -TargetPort $Port
 $tunnelUrl = if ($Tunnel -and $StartNow) { Wait-ForTunnelUrlFromLog -LogPath $outLogPath } else { $null }
 

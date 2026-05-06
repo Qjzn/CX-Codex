@@ -3,13 +3,13 @@
 仓库地址：
 
 ```text
-https://github.com/Qjzn/codexui-server-bridge
+https://github.com/Qjzn/CX-Codex
 ```
 
 提示词：
 
 ```text
-打开并检查 https://github.com/Qjzn/codexui-server-bridge 这个仓库。
+打开并检查 https://github.com/Qjzn/CX-Codex 这个仓库。
 请在这台机器上用最简单、最稳的方式部署这个项目。
 
 要求：

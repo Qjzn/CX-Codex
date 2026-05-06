@@ -3,13 +3,13 @@
 Repository URL:
 
 ```text
-https://github.com/Qjzn/codexui-server-bridge
+https://github.com/Qjzn/CX-Codex
 ```
 
 Prompt:
 
 ```text
-Open and inspect https://github.com/Qjzn/codexui-server-bridge.
+Open and inspect https://github.com/Qjzn/CX-Codex.
 Deploy this project on this machine using the simplest supported path.
 
 Requirements:

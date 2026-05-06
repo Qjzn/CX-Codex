@@ -14,7 +14,7 @@
 ## 正文模板
 
 ~~~md
-# codexui-server-bridge
+# CX-Codex
 
 Self-hosted OpenAI Codex Web UI and Android client bridge.
 
@@ -35,7 +35,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 ## 快速安装
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercontent.com/Qjzn/codexui-server-bridge/main/scripts/bootstrap-windows.ps1 | iex
+Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1 | iex
 ```
 
 ## Android APK

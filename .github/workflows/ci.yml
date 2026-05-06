@@ -51,7 +51,7 @@ jobs:
         run: |
           ./scripts/bootstrap-windows.ps1 `
             -SourceRepoRoot $PWD `
-            -InstallDir "$env:TEMP\codexui-smoke-install" `
+            -InstallDir "$env:TEMP\cx-codex-smoke-install" `
             -WorkspacePath "$env:TEMP\CodexWorkspace" `
             -Port 7441 `
             -Password "ci-password" `
@@ -63,5 +63,5 @@ jobs:
       - name: Validate generated files
         shell: pwsh
         run: |
-          Test-Path "$env:USERPROFILE\.local\bin\codexui-start.cmd" | Where-Object { $_ } | Out-Null
-          Test-Path "$env:USERPROFILE\.codexui\config.json" | Where-Object { $_ } | Out-Null
+          Test-Path "$env:USERPROFILE\.local\bin\cx-codex-start.cmd" | Where-Object { $_ } | Out-Null
+          Test-Path "$env:USERPROFILE\.cx-codex\config.json" | Where-Object { $_ } | Out-Null

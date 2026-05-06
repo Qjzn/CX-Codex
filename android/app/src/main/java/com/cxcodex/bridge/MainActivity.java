@@ -1,4 +1,4 @@
-package com.codexui.bridge;
+package com.cxcodex.bridge;
 
 import android.content.Intent;
 import android.os.Bundle;

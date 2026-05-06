@@ -118,7 +118,7 @@ export function prependPathEntry(existingPath: string, entry: string): string {
 }
 
 export function resolveCodexCommand(): string | null {
-  const explicit = process.env.CODEXUI_CODEX_COMMAND?.trim()
+  const explicit = process.env.CX_CODEX_CODEX_COMMAND?.trim() || process.env.CODEXUI_CODEX_COMMAND?.trim()
   const packageCandidates = getPotentialNpmPrefixes().flatMap(getPotentialCodexExecutables)
   const fallbackCandidates = process.platform === 'win32'
     ? [...packageCandidates, 'codex']
@@ -134,7 +134,7 @@ export function resolveCodexCommand(): string | null {
 }
 
 export function resolveRipgrepCommand(): string | null {
-  const explicit = process.env.CODEXUI_RG_COMMAND?.trim()
+  const explicit = process.env.CX_CODEX_RG_COMMAND?.trim() || process.env.CODEXUI_RG_COMMAND?.trim()
   const packageCandidates = getPotentialNpmPrefixes().flatMap(getPotentialRipgrepExecutables)
   const fallbackCandidates = process.platform === 'win32'
     ? [...packageCandidates, 'rg']

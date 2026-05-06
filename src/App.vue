@@ -5,7 +5,7 @@
       <div class="mobile-shell-setup-brand">
         <img src="/branding/cx-codex-app-icon.png" alt="" class="mobile-shell-setup-logo" />
         <div class="mobile-shell-setup-copy">
-          <p class="mobile-shell-setup-kicker">CX Codex</p>
+          <p class="mobile-shell-setup-kicker">CX-Codex</p>
           <h1 class="mobile-shell-setup-title">正在启动</h1>
         </div>
       </div>
@@ -19,7 +19,7 @@
       <div class="mobile-shell-setup-brand">
         <img src="/branding/cx-codex-app-icon.png" alt="" class="mobile-shell-setup-logo" />
         <div class="mobile-shell-setup-copy">
-          <p class="mobile-shell-setup-kicker">CX Codex</p>
+          <p class="mobile-shell-setup-kicker">CX-Codex</p>
           <h1 class="mobile-shell-setup-title">输入连接地址</h1>
         </div>
       </div>
@@ -200,6 +200,18 @@
                 <span class="sidebar-settings-label">GitHub 热门项目</span>
                 <span class="sidebar-settings-toggle" :class="{ 'is-on': showGithubTrendingProjects }" />
               </button>
+              <section class="sidebar-settings-section" aria-label="套餐余量">
+                <p class="sidebar-settings-section-title">套餐余量</p>
+                <div class="sidebar-settings-rate-limits">
+                  <RateLimitStatus
+                    v-if="accountRateLimitSnapshots.length > 0"
+                    :snapshots="accountRateLimitSnapshots"
+                  />
+                  <p v-else class="sidebar-settings-hint sidebar-settings-hint-compact">
+                    正在读取套餐余量...
+                  </p>
+                </div>
+              </section>
               <section class="sidebar-settings-section" aria-label="权限控制">
                 <p class="sidebar-settings-section-title">权限控制</p>
                 <button class="sidebar-settings-row" type="button" :title="SETTINGS_HELP.allowAllPermissions" @click="toggleAllowAllPermissionRequests">
@@ -335,10 +347,6 @@
               <section v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="App 更新">
                 <p class="sidebar-settings-section-title">App 更新</p>
                 <div class="sidebar-settings-row sidebar-settings-row--static">
-                  <span class="sidebar-settings-label">当前安装</span>
-                  <span class="sidebar-settings-value">{{ mobileShellInstalledVersionLabel }}</span>
-                </div>
-                <div class="sidebar-settings-row sidebar-settings-row--static">
                   <span class="sidebar-settings-label">最新发布</span>
                   <span class="sidebar-settings-value">{{ mobileShellLatestVersionLabel }}</span>
                 </div>
@@ -350,18 +358,18 @@
                   <button
                     class="sidebar-settings-github-button"
                     type="button"
+                    :disabled="!canRunMobileShellUpdatePrimaryAction"
+                    @click="runMobileShellUpdatePrimaryAction"
+                  >
+                    {{ mobileShellUpdatePrimaryButtonLabel }}
+                  </button>
+                  <button
+                    class="sidebar-settings-github-button sidebar-settings-github-button--secondary"
+                    type="button"
                     :disabled="isMobileShellUpdateLoading || isMobileShellInstalling"
                     @click="checkMobileShellUpdate({ showSuccessMessage: true, promptOnUpdate: true })"
                   >
-                    {{ isMobileShellUpdateLoading ? '检查中...' : '检查更新' }}
-                  </button>
-                  <button
-                    class="sidebar-settings-github-button"
-                    type="button"
-                    :disabled="!canInstallLatestMobileShellRelease"
-                    @click="installLatestMobileShellRelease"
-                  >
-                    {{ mobileShellInstallButtonLabel }}
+                    重新检查
                   </button>
                   <button
                     class="sidebar-settings-github-button sidebar-settings-github-button--secondary"
@@ -408,7 +416,7 @@
               </button>
               <section class="sidebar-settings-about" aria-label="项目版本和 GitHub 仓库">
                 <div class="sidebar-settings-brand-card">
-                  <img class="sidebar-settings-brand-logo" :src="MOBILE_SHELL_BRANDING_LOGO_URL" alt="CX Codex 标识" />
+                  <img class="sidebar-settings-brand-logo" :src="MOBILE_SHELL_BRANDING_LOGO_URL" alt="CX-Codex 标识" />
                   <div class="sidebar-settings-brand-copy">
                     <span class="sidebar-settings-brand-kicker">Android Shell</span>
                     <strong class="sidebar-settings-brand-title">{{ MOBILE_SHELL_BRAND_NAME }}</strong>
@@ -593,6 +601,7 @@
                 :models="availableModelIds" :selected-model="selectedModelId"
                 :selected-reasoning-effort="selectedReasoningEffort"
                 :selected-speed-mode="selectedSpeedMode"
+                :selected-collaboration-mode="selectedCollaborationMode"
                 :is-updating-speed-mode="isUpdatingSpeedMode"
                 :skills="installedSkills"
                 :is-turn-in-progress="false"
@@ -604,7 +613,8 @@
                 @submit="onSubmitThreadMessage"
                 @update:selected-model="onSelectModel"
                 @update:selected-reasoning-effort="onSelectReasoningEffort"
-                @update:selected-speed-mode="onSelectSpeedMode" />
+                @update:selected-speed-mode="onSelectSpeedMode"
+                @update:selected-collaboration-mode="onSelectCollaborationMode" />
             </div>
           </template>
           <template v-else>
@@ -641,6 +651,7 @@
                   :selected-model="selectedModelId"
                   :selected-reasoning-effort="selectedReasoningEffort"
                   :selected-speed-mode="selectedSpeedMode"
+                  :selected-collaboration-mode="selectedCollaborationMode"
                   :is-updating-speed-mode="isUpdatingSpeedMode"
                   :skills="installedSkills"
                   :is-turn-in-progress="isSelectedThreadInterruptible" :is-interrupting-turn="isInterruptingTurn"
@@ -653,6 +664,7 @@
                   @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
                   @update:selected-reasoning-effort="onSelectReasoningEffort"
                   @update:selected-speed-mode="onSelectSpeedMode"
+                  @update:selected-collaboration-mode="onSelectCollaborationMode"
                   @interrupt="onInterruptTurn" />
               </div>
             </div>
@@ -757,6 +769,7 @@ import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadConversation from './components/content/ThreadConversation.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import QueuedMessages from './components/content/QueuedMessages.vue'
+import RateLimitStatus from './components/content/RateLimitStatus.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import FavoritesModal from './components/content/FavoritesModal.vue'
@@ -783,8 +796,8 @@ import {
   searchThreads,
   updateWebBridgeSettings,
 } from './api/codexGateway'
-import type { ReasoningEffort, SpeedMode, ThreadScrollState, UiLiveOverlay, UiMessage, UiServerRequest, UiThread } from './types/codex'
-import type { ComposerDraftPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
+import type { CollaborationMode, ReasoningEffort, SpeedMode, ThreadScrollState, UiLiveOverlay, UiMessage, UiServerRequest, UiThread } from './types/codex'
+import type { ComposerDraftPayload, SubmitPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
 import type { ThreadConversationExposed } from './components/content/ThreadConversation.vue'
 import type {
   DesktopAppStatus,
@@ -801,6 +814,7 @@ import {
   getMobileShellServerConfig,
   installMobileShellApk,
   isNativeAndroidShell,
+  openMobileShellUrl,
   requestMobileShellNotificationPermission,
   resetMobileShellServerUrl,
   setMobileShellServerUrl,
@@ -824,8 +838,8 @@ const ComposerRuntimeDropdown = defineAsyncComponent(() => import('./components/
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
-const PROJECT_GITHUB_URL = 'https://github.com/Qjzn/codexui-server-bridge'
-const MOBILE_SHELL_BRAND_NAME = 'CX Codex'
+const PROJECT_GITHUB_URL = 'https://github.com/Qjzn/CX-Codex'
+const MOBILE_SHELL_BRAND_NAME = 'CX-Codex'
 const MOBILE_SHELL_BRANDING_LOGO_URL = '/branding/cx-codex-logo.png'
 const CONTEXT_RING_RADIUS = 16
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS
@@ -993,7 +1007,9 @@ const {
   selectedModelId,
   selectedReasoningEffort,
   selectedSpeedMode,
+  selectedCollaborationMode,
   installedSkills,
+  accountRateLimitSnapshots,
   messages,
   isLoadingThreads,
   isLoadingMessages,
@@ -1007,6 +1023,7 @@ const {
   refreshAll,
   refreshSelectedThreadContent,
   refreshSkills,
+  refreshRateLimits,
   selectThread,
   setThreadScrollState,
   archiveThreadById,
@@ -1028,6 +1045,7 @@ const {
   setSelectedModelId,
   setWorktreeGitAutomationEnabled,
   setSelectedReasoningEffort,
+  setSelectedCollaborationMode,
   updateSelectedSpeedMode,
   respondToPendingServerRequest,
   renameProject,
@@ -1294,9 +1312,21 @@ const canInstallLatestMobileShellRelease = computed(() => (
   && !isMobileShellUpdateLoading.value
   && !!mobileShellLatestRelease.value?.asset?.downloadUrl
 ))
+const canRunMobileShellUpdatePrimaryAction = computed(() => (
+  isMobileShellAvailable.value
+  && !isMobileShellInstalling.value
+  && !isMobileShellUpdateLoading.value
+))
 const canOpenLatestMobileShellReleasePage = computed(() => (
   (mobileShellLatestRelease.value?.htmlUrl.trim() || getMobileReleasesPageUrl()).length > 0
 ))
+const mobileShellUpdatePrimaryButtonLabel = computed(() => {
+  if (isMobileShellInstalling.value) return '下载安装中...'
+  if (isMobileShellUpdateLoading.value) return '检查中...'
+  if (!mobileShellLatestRelease.value?.tagName.trim()) return '检查更新'
+  if (!mobileShellLatestRelease.value?.asset?.downloadUrl) return '重新检查'
+  return hasMobileShellUpdate.value ? '下载并安装' : '重新安装'
+})
 const mobileShellInstallButtonLabel = computed(() => {
   if (isMobileShellInstalling.value) return '下载安装中...'
   if (!mobileShellLatestRelease.value?.asset?.downloadUrl) return '暂无安装包'
@@ -1307,9 +1337,9 @@ const mobileShellUpdatePromptTitle = computed(() => {
     return mobileShellLatestRelease.value.releaseName.trim()
   }
   if (mobileShellLatestRelease.value?.tagName.trim()) {
-    return `CX Codex ${mobileShellLatestRelease.value.tagName.trim()}`
+    return `CX-Codex ${mobileShellLatestRelease.value.tagName.trim()}`
   }
-  return 'CX Codex 新版本'
+  return 'CX-Codex 新版本'
 })
 const mobileShellUpdatePublishedAtLabel = computed(() => {
   const iso = mobileShellLatestRelease.value?.publishedAtIso.trim() || ''
@@ -1351,8 +1381,8 @@ const contentTitle = computed(() => {
 })
 const browserHostName =
   typeof window !== 'undefined'
-    ? (window.location.hostname || window.location.host || 'codexui')
-    : 'codexui'
+    ? (window.location.hostname || window.location.host || 'cx-codex')
+    : 'cx-codex'
 const pageTitle = computed(() => {
   const threadTitle = selectedThread.value?.title?.trim() ?? ''
   return threadTitle || browserHostName
@@ -1909,6 +1939,9 @@ onUnmounted(() => {
 function onWindowFocusRefreshAccountState(): void {
   if (requiresMobileShellServerSetup.value) return
   void refreshFavorites()
+  if (isSettingsOpen.value) {
+    void refreshRateLimits()
+  }
 }
 
 watch(sidebarSearchQuery, (value) => {
@@ -1942,9 +1975,11 @@ watch(sidebarSearchQuery, (value) => {
 watch(isSettingsOpen, (open) => {
   if (open) {
     void refreshWebBridgeSettings()
+    void refreshRateLimits({ force: true })
     void refreshMobileShellServerConfig({ preserveInput: true })
     void refreshMobileShellRuntimeInfo()
     void refreshMobileShellNotificationPermission()
+    void refreshMobileShellUpdateState()
     window.addEventListener('pointerdown', onWindowPointerDownForSettings, { capture: true })
     return
   }
@@ -2000,7 +2035,7 @@ function setMobileShellUpdateStatus(message: string): void {
   mobileShellUpdateStatusTimer = setTimeout(() => {
     mobileShellUpdateStatus.value = ''
     mobileShellUpdateStatusTimer = null
-  }, 3200)
+  }, 8000)
 }
 
 function normalizeUrlInput(value: string): string {
@@ -2129,13 +2164,28 @@ async function requestMobileShellNotifications(): Promise<void> {
   }
 }
 
-function openLatestMobileShellReleasePage(): void {
+async function openLatestMobileShellReleasePage(): Promise<void> {
   const targetUrl = mobileShellLatestRelease.value?.htmlUrl.trim() || getMobileReleasesPageUrl()
   if (!targetUrl) {
     setMobileShellUpdateStatus('当前没有可打开的发布页地址')
     return
   }
-  window.open(targetUrl, '_blank', 'noopener,noreferrer')
+  if (isMobileShellAvailable.value) {
+    try {
+      const result = await openMobileShellUrl(targetUrl)
+      setMobileShellUpdateStatus(result.opened ? '已打开 GitHub 发布页' : '系统没有返回打开结果，请检查浏览器')
+      return
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '打开 GitHub 发布页失败'
+      setMobileShellUpdateStatus(message)
+      return
+    }
+  }
+
+  const popup = window.open(targetUrl, '_blank', 'noopener,noreferrer')
+  if (!popup) {
+    setMobileShellUpdateStatus('浏览器阻止了新窗口，请允许弹窗后重试')
+  }
 }
 
 async function refreshMobileShellUpdateState(showSuccessMessage = false): Promise<void> {
@@ -2178,6 +2228,23 @@ async function checkMobileShellUpdate(options: { showSuccessMessage?: boolean; p
   }
 }
 
+async function runMobileShellUpdatePrimaryAction(): Promise<void> {
+  if (!canRunMobileShellUpdatePrimaryAction.value) return
+
+  const hasReleaseInfo = mobileShellLatestRelease.value?.tagName.trim().length
+  if (!hasReleaseInfo || !mobileShellLatestRelease.value?.asset?.downloadUrl) {
+    await checkMobileShellUpdate({ showSuccessMessage: true, promptOnUpdate: true })
+    return
+  }
+
+  if (hasMobileShellUpdate.value) {
+    isMobileShellUpdatePromptVisible.value = true
+    return
+  }
+
+  await installLatestMobileShellRelease()
+}
+
 async function refreshDesktopAppAvailability(): Promise<void> {
   try {
     desktopAppStatus.value = await getDesktopAppStatus()
@@ -2204,21 +2271,36 @@ function onRefreshDesktopApp(): void {
   isDesktopRefreshConfirmVisible.value = true
 }
 
-function openMobileShellServerUrl(): void {
+async function openMobileShellServerUrl(): Promise<void> {
   const url = mobileShellServerConfig.value?.serverUrl.trim() || ''
   if (!url) {
     setMobileShellStatus('当前没有可打开的连接地址')
     return
   }
-  window.open(url, '_blank', 'noopener,noreferrer')
+  if (isMobileShellAvailable.value) {
+    try {
+      const result = await openMobileShellUrl(url)
+      setMobileShellStatus(result.opened ? '已打开当前连接地址' : '系统没有返回打开结果，请检查浏览器')
+      return
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '打开连接地址失败'
+      setMobileShellStatus(message)
+      return
+    }
+  }
+
+  const popup = window.open(url, '_blank', 'noopener,noreferrer')
+  if (!popup) {
+    setMobileShellStatus('浏览器阻止了新窗口，请允许弹窗后重试')
+  }
 }
 
 function onOpenAppVersionDetails(): void {
   if (!isMobileShellAvailable.value) {
-    openLatestMobileShellReleasePage()
+    void openLatestMobileShellReleasePage()
     return
   }
-  void checkMobileShellUpdate({ showSuccessMessage: true, promptOnUpdate: true })
+  void runMobileShellUpdatePrimaryAction()
 }
 
 async function saveMobileShellServerAddress(): Promise<void> {
@@ -2277,7 +2359,7 @@ async function installLatestMobileShellRelease(): Promise<void> {
   try {
     const result = await installMobileShellApk(asset.downloadUrl, asset.name)
     if (result.status === 'permission_required') {
-      setMobileShellUpdateStatus('请允许 CX Codex 安装未知应用，然后再点下载安装')
+      setMobileShellUpdateStatus('请允许 CX-Codex 安装未知应用，然后再点下载安装')
     } else {
       setMobileShellUpdateStatus('更新包已下载，系统安装界面正在打开')
     }
@@ -2597,7 +2679,7 @@ function onWindowPointerDownForSettings(event: PointerEvent): void {
   isSettingsOpen.value = false
 }
 
-function onSubmitThreadMessage(payload: { text: string; imageUrls: string[]; fileAttachments: Array<{ label: string; path: string; fsPath: string }>; skills: Array<{ name: string; path: string }>; mode: 'steer' | 'queue'; rollbackLatestUserTurn?: boolean }): void {
+function onSubmitThreadMessage(payload: SubmitPayload): void {
   const text = payload.text
   const editingState = editingQueuedMessageState.value
   const queueInsertIndex =
@@ -2608,14 +2690,28 @@ function onSubmitThreadMessage(payload: { text: string; imageUrls: string[]; fil
       : undefined
   editingQueuedMessageState.value = null
   if (isHomeRoute.value) {
-    void submitFirstMessageForNewThread(text, payload.imageUrls, payload.skills, payload.fileAttachments)
+    void submitFirstMessageForNewThread(
+      text,
+      payload.imageUrls,
+      payload.skills,
+      payload.fileAttachments,
+      payload.collaborationMode,
+    )
     return
   }
   if (payload.rollbackLatestUserTurn === true) {
     void rollbackAndResendDictation(payload)
     return
   }
-  void sendMessageToSelectedThread(text, payload.imageUrls, payload.skills, payload.mode, payload.fileAttachments, queueInsertIndex)
+  void sendMessageToSelectedThread(
+    text,
+    payload.imageUrls,
+    payload.skills,
+    payload.mode,
+    payload.fileAttachments,
+    queueInsertIndex,
+    payload.collaborationMode,
+  )
 }
 
 function onGithubTipsScopeChange(nextValue: string): void {
@@ -2727,6 +2823,7 @@ async function rollbackAndResendDictation(payload: {
   imageUrls: string[]
   fileAttachments: Array<{ label: string; path: string; fsPath: string }>
   skills: Array<{ name: string; path: string }>
+  collaborationMode: CollaborationMode
 }): Promise<void> {
   if (isSelectedThreadInProgress.value) {
     await interruptSelectedThreadTurn()
@@ -2735,7 +2832,15 @@ async function rollbackAndResendDictation(payload: {
   if (rollbackTargetTurnIndex >= 0) {
     await rollbackSelectedThread(rollbackTargetTurnIndex)
   }
-  await sendMessageToSelectedThread(payload.text, payload.imageUrls, payload.skills, 'steer', payload.fileAttachments)
+  await sendMessageToSelectedThread(
+    payload.text,
+    payload.imageUrls,
+    payload.skills,
+    'steer',
+    payload.fileAttachments,
+    undefined,
+    payload.collaborationMode,
+  )
 }
 
 function onSelectNewThreadFolder(cwd: string): void {
@@ -2893,6 +2998,10 @@ function onSelectReasoningEffort(effort: ReasoningEffort | ''): void {
 
 function onSelectSpeedMode(mode: SpeedMode): void {
   void updateSelectedSpeedMode(mode)
+}
+
+function onSelectCollaborationMode(mode: CollaborationMode): void {
+  setSelectedCollaborationMode(mode)
 }
 
 function onInterruptTurn(): void {
@@ -3369,6 +3478,7 @@ async function submitFirstMessageForNewThread(
   imageUrls: string[] = [],
   skills: Array<{ name: string; path: string }> = [],
   fileAttachments: Array<{ label: string; path: string; fsPath: string }> = [],
+  collaborationMode: CollaborationMode = selectedCollaborationMode.value,
 ): Promise<void> {
   try {
     worktreeInitStatus.value = { phase: 'idle', title: '', message: '' }
@@ -3393,7 +3503,7 @@ async function submitFirstMessageForNewThread(
         return
       }
     }
-    const threadId = await sendMessageToNewThread(text, targetCwd, imageUrls, skills, fileAttachments)
+    const threadId = await sendMessageToNewThread(text, targetCwd, imageUrls, skills, fileAttachments, collaborationMode)
     if (!threadId) return
     await router.replace({ name: 'thread', params: { threadId } })
   } catch {
@@ -4004,6 +4114,10 @@ async function submitFirstMessageForNewThread(
   @apply text-[#0f766e];
 }
 
+.sidebar-settings-hint-compact {
+  @apply px-1 py-1;
+}
+
 .sidebar-settings-language-dropdown {
   @apply min-w-0 max-w-52;
 }
@@ -4129,7 +4243,7 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-rate-limits {
-  @apply border-t border-[#e9dfce] px-2 pt-2;
+  @apply px-3 pb-2;
 }
 
 .sidebar-settings-about {

@@ -40,7 +40,7 @@ function renderFrontendMissingHtml(message: string, details?: string[]): string 
   return [
     '<!doctype html>',
     '<html lang="zh-CN">',
-    '<head><meta charset="utf-8"><title>Codex Web 界面错误</title></head>',
+    '<head><meta charset="utf-8"><title>CX-Codex 界面错误</title></head>',
     '<body>',
     `<h1>${message}</h1>`,
     lines,
@@ -81,7 +81,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
   app.get('/health', (_req, res) => {
     res.status(200).json({
       status: 'ok',
-      service: 'codexui',
+      service: 'cx-codex',
       atIso: new Date().toISOString(),
     })
   })
@@ -216,10 +216,10 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
         .status(503)
         .type('text/html; charset=utf-8')
         .send(
-          renderFrontendMissingHtml('Codex Web 前端资源缺失。', [
+          renderFrontendMissingHtml('CX-Codex 前端资源缺失。', [
             `期望文件：${spaEntryFile}`,
             '如果是源码运行，请先执行：pnpm run build:frontend',
-            '如果使用 npx 运行，请清理 npx 缓存后重新安装 codexapp。',
+            '如果使用 npx 运行，请清理 npx 缓存后重新安装 cx-codex。',
           ]),
         )
       return

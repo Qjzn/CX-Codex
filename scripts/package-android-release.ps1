@@ -1,4 +1,4 @@
-﻿param(
+param(
   [Parameter(Mandatory = $true)]
   [string]$Version,
 
@@ -23,7 +23,7 @@ $androidRoot = Join-Path $repoRoot 'android'
 $keystoreProperties = Join-Path $androidRoot 'keystore.properties'
 
 if (-not (Test-Path $keystoreProperties)) {
-  throw "未找到 Android 签名配置：$keystoreProperties"
+  throw "Android signing config was not found: $keystoreProperties"
 }
 
 $defaultJavaHome = 'C:\Program Files\Java\jdk-24'
@@ -32,7 +32,7 @@ if (Test-Path $defaultJavaHome) {
   $resolvedJavaHome = $defaultJavaHome
 }
 if (-not $resolvedJavaHome -or -not (Test-Path $resolvedJavaHome)) {
-  throw '未找到可用的 JAVA_HOME，请先安装 JDK 24 或显式设置 JAVA_HOME。'
+  throw 'JAVA_HOME was not found. Install JDK 24 or set JAVA_HOME explicitly.'
 }
 
 $resolvedAndroidSdk = $env:ANDROID_SDK_ROOT
@@ -44,7 +44,7 @@ if (-not $resolvedAndroidSdk) {
   }
 }
 if (-not $resolvedAndroidSdk -or -not (Test-Path $resolvedAndroidSdk)) {
-  throw '未找到 ANDROID_SDK_ROOT，请先安装 Android SDK 或显式设置 ANDROID_SDK_ROOT。'
+  throw 'ANDROID_SDK_ROOT was not found. Install Android SDK or set ANDROID_SDK_ROOT explicitly.'
 }
 
 $env:JAVA_HOME = $resolvedJavaHome
@@ -67,14 +67,14 @@ try {
 
   npm.cmd run mobile:android:sync
   if ($LASTEXITCODE -ne 0) {
-    throw "mobile:android:sync 执行失败，退出码：$LASTEXITCODE"
+    throw "mobile:android:sync failed with exit code $LASTEXITCODE"
   }
 
   Push-Location $androidRoot
   try {
     .\gradlew.bat assembleRelease
     if ($LASTEXITCODE -ne 0) {
-      throw "assembleRelease 执行失败，退出码：$LASTEXITCODE"
+      throw "assembleRelease failed with exit code $LASTEXITCODE"
     }
   } finally {
     Pop-Location
@@ -92,7 +92,7 @@ try {
 
   $sourceApk = Join-Path $androidRoot 'app\build\outputs\apk\release\app-release.apk'
   if (-not (Test-Path $sourceApk)) {
-    throw "未找到构建产物：$sourceApk"
+    throw "Build artifact was not found: $sourceApk"
   }
 
   $apkName = "cx-codex-android-$Version.apk"

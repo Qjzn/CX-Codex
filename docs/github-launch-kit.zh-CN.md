@@ -96,11 +96,11 @@ Run Codex locally, use it from your phone or browser, and expose it through your
 
 中文：
 
-`codexui-server-bridge` 是一个把本机 OpenAI Codex 暴露到浏览器和 Android 手机上的自托管工作台。它重点解决 Windows / Windows Server 部署麻烦、移动端同步不稳、远程访问门槛高这几个问题。项目不试图替代官方 Codex，而是把“本地 Codex 如何稳定出现在浏览器和手机里”这条链路做稳。
+`CX-Codex` 是一个把本机 OpenAI Codex 暴露到浏览器和 Android 手机上的自托管工作台。它重点解决 Windows / Windows Server 部署麻烦、移动端同步不稳、远程访问门槛高这几个问题。项目不试图替代官方 Codex，而是把“本地 Codex 如何稳定出现在浏览器和手机里”这条链路做稳。
 
 English:
 
-`codexui-server-bridge` is a self-hosted OpenAI Codex Web UI and Android client bridge. It focuses on Windows-friendly deployment, phone access, mobile sync recovery, and remote self-hosted access for local Codex.
+`CX-Codex` is a self-hosted OpenAI Codex Web UI and Android client bridge. It focuses on Windows-friendly deployment, phone access, mobile sync recovery, and remote self-hosted access for local Codex.
 
 ## 推广切入点
 

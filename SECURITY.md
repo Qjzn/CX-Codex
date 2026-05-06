@@ -1,10 +1,10 @@
 # 安全策略
 
-`codexui-server-bridge` 会把本机 Codex 能力暴露到浏览器，因此部署时必须注意访问边界。
+`CX-Codex` 会把本机 Codex 能力暴露到浏览器，因此部署时必须注意访问边界。
 
 ## 支持版本
 
-当前只维护最新的 `bridge` 版本线。请优先升级到 [最新 Release](https://github.com/Qjzn/codexui-server-bridge/releases/latest) 后再反馈安全问题。
+当前只维护最新的 `bridge` 版本线。请优先升级到 [最新 Release](https://github.com/Qjzn/CX-Codex/releases/latest) 后再反馈安全问题。
 
 ## 安全边界
 

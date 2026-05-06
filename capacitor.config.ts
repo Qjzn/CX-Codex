@@ -3,8 +3,8 @@ import type { CapacitorConfig } from '@capacitor/cli'
 const serverUrl = process.env.CAP_SERVER_URL?.trim() ?? ''
 
 const config: CapacitorConfig = {
-  appId: 'com.codexui.bridge',
-  appName: 'CX Codex',
+  appId: 'com.cxcodex.bridge',
+  appName: 'CX-Codex',
   webDir: 'dist',
   bundledWebRuntime: false,
   server: serverUrl

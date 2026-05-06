@@ -1,14 +1,14 @@
 [CmdletBinding()]
 param(
   [int]$Port = 7420,
-  [string]$ConfigPath = "$env:USERPROFILE\.codexui\config.json",
+  [string]$ConfigPath = "$env:USERPROFILE\.cx-codex\config.json",
   [string]$RepoRoot = "",
   [string]$NodePath = "C:\Program Files\nodejs\node.exe",
   [string]$BindHealthHost = "127.0.0.1",
   [int]$FailureThreshold = 2,
   [string]$PublicHealthUrl = "",
-  [string]$StatePath = "$env:USERPROFILE\.codexui\codexui-7420-watchdog.state.json",
-  [string]$LogPath = "$env:USERPROFILE\.codexui\codexui-7420-watchdog.log"
+  [string]$StatePath = "$env:USERPROFILE\.cx-codex\cx-codex-7420-watchdog.state.json",
+  [string]$LogPath = "$env:USERPROFILE\.cx-codex\cx-codex-7420-watchdog.log"
 )
 
 $ErrorActionPreference = "Stop"
@@ -103,7 +103,7 @@ if ($localOk) {
 }
 
 if (-not $localOk -and [int]$state.localFailures -ge [Math]::Max(1, $FailureThreshold)) {
-  Write-WatchdogLog "restarting local codexui service port=$Port"
+  Write-WatchdogLog "restarting local CX-Codex service port=$Port"
   try {
     & $restartScript -Port $Port -ConfigPath $ConfigPath -NodePath $resolvedNodePath -BindHealthHost $BindHealthHost | Out-String |
       ForEach-Object {

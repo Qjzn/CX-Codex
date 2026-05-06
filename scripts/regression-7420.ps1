@@ -3,7 +3,7 @@ param(
   [string]$BaseUrl = "http://127.0.0.1:7420",
   [string]$PublicHealthUrl = "",
   [int]$Port = 7420,
-  [string]$ConfigPath = "$env:USERPROFILE\.codexui\config.json",
+  [string]$ConfigPath = "$env:USERPROFILE\.cx-codex\config.json",
   [switch]$RestartIfUnhealthy,
   [switch]$SkipBrowser,
   [string]$ScreenshotDir = ""
@@ -186,7 +186,7 @@ function Assert-PageMetrics {
 }
 
 function Assert-ReplayCursorRecovery {
-  $session = "codexui-reg-replay"
+  $session = "cx-codex-reg-replay"
   $cursorKey = "codex-web-local.notification-seq.v1"
   $reloadUrl = "$BaseUrl/?regression=cursor-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
   Invoke-AgentBrowser -Arguments @("--session", $session, "set", "viewport", "390", "844") | Out-Null
@@ -257,7 +257,7 @@ $viewports = @(
 $results = foreach ($viewport in $viewports) {
   Write-Step "checking $($viewport.name) viewport $($viewport.width)x$($viewport.height)"
   $metrics = Get-PageMetrics `
-    -Session "codexui-reg-$($viewport.name)" `
+    -Session "cx-codex-reg-$($viewport.name)" `
     -Name $viewport.name `
     -Width $viewport.width `
     -Height $viewport.height

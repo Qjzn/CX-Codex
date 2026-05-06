@@ -19,13 +19,13 @@ Cloudflare Tunnel 适合想从手机或外网访问家里电脑 / Windows Server
 ## 一条命令开启快速隧道
 
 ```powershell
-& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/codexui-server-bridge/main/scripts/bootstrap-windows.ps1'))) `
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) `
   -EnableCloudflareTunnel
 ```
 
 这个命令会：
 
-- 安装或更新 `codexui-server-bridge`
+- 安装或更新 `CX-Codex`
 - 自动下载 `cloudflared.exe` 到用户目录
 - 生成 `7420` 固定端口配置
 - 开启 `tunnel: true`
@@ -34,7 +34,7 @@ Cloudflare Tunnel 适合想从手机或外网访问家里电脑 / Windows Server
 现在直接用 CLI 启动也支持这条链路：
 
 ```powershell
-npx codexapp --host 0.0.0.0 --port 7420 --tunnel
+npx cx-codex --host 0.0.0.0 --port 7420 --tunnel
 ```
 
 如果本机还没有 `cloudflared`，交互终端会提示是否自动安装到：
@@ -46,13 +46,13 @@ npx codexapp --host 0.0.0.0 --port 7420 --tunnel
 如果你已经有单独安装的 `cloudflared.exe`，也可以显式指定：
 
 ```powershell
-npx codexapp --host 0.0.0.0 --port 7420 --tunnel --cloudflared-command "C:\Users\your-user\.local\bin\cloudflared.exe"
+npx cx-codex --host 0.0.0.0 --port 7420 --tunnel --cloudflared-command "C:\Users\your-user\.local\bin\cloudflared.exe"
 ```
 
 如果你只想配置本地服务，不想自动下载 `cloudflared`：
 
 ```powershell
-& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/codexui-server-bridge/main/scripts/bootstrap-windows.ps1'))) `
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) `
   -EnableCloudflareTunnel `
   -SkipCloudflaredInstall
 ```
@@ -60,7 +60,7 @@ npx codexapp --host 0.0.0.0 --port 7420 --tunnel --cloudflared-command "C:\Users
 安装完成后查看日志：
 
 ```powershell
-Get-Content "$env:USERPROFILE\.codexui\logs\codexui.out.log" -Tail 80
+Get-Content "$env:USERPROFILE\.cx-codex\logs\cx-codex.out.log" -Tail 80
 ```
 
 找到类似下面的地址后，用手机打开：
@@ -121,7 +121,7 @@ cloudflared tunnel login
 ### 创建 Tunnel
 
 ```powershell
-cloudflared tunnel create codexui
+cloudflared tunnel create cx-codex
 ```
 
 ### 绑定域名
@@ -129,7 +129,7 @@ cloudflared tunnel create codexui
 把下面的域名换成你自己的子域名：
 
 ```powershell
-cloudflared tunnel route dns codexui codex.example.com
+cloudflared tunnel route dns cx-codex codex.example.com
 ```
 
 ### 配置转发
@@ -143,7 +143,7 @@ New-Item -ItemType Directory -Force "$env:USERPROFILE\.cloudflared"
 创建 `$env:USERPROFILE\.cloudflared\config.yml`：
 
 ```yaml
-tunnel: codexui
+tunnel: cx-codex
 credentials-file: C:\Users\your-user\.cloudflared\your-tunnel-id.json
 
 ingress:
@@ -157,7 +157,7 @@ ingress:
 ### 启动 Tunnel
 
 ```powershell
-cloudflared tunnel run codexui
+cloudflared tunnel run cx-codex
 ```
 
 然后打开：

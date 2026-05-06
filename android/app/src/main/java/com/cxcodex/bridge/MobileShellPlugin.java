@@ -1,4 +1,4 @@
-package com.codexui.bridge;
+package com.cxcodex.bridge;
 
 import android.Manifest;
 import android.app.NotificationChannel;
@@ -50,7 +50,7 @@ public class MobileShellPlugin extends Plugin {
     private static final int READ_TIMEOUT_MS = 90_000;
     private static final int NOTIFICATION_PERMISSION_REQUEST_CODE = 7420;
     private static final String TASK_NOTIFICATION_CHANNEL_ID = "cx_codex_tasks";
-    private static final String TASK_NOTIFICATION_CHANNEL_NAME = "CX Codex 任务";
+    private static final String TASK_NOTIFICATION_CHANNEL_NAME = "CX-Codex 任务";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -289,7 +289,7 @@ public class MobileShellPlugin extends Plugin {
 
     @PluginMethod
     public void showNotification(PluginCall call) {
-        String title = normalizeNotificationText(call.getString("title", "CX Codex"), "CX Codex");
+        String title = normalizeNotificationText(call.getString("title", "CX-Codex"), "CX-Codex");
         String body = normalizeNotificationText(call.getString("body", ""), "");
         String type = normalizeNotificationText(call.getString("type", "status"), "status");
         Integer incomingId = call.getInt("notificationId");

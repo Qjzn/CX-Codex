@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: 中文部署提示词
-    url: https://github.com/Qjzn/codexui-server-bridge/blob/main/docs/deploy-with-codex.zh-CN.md
+    url: https://github.com/Qjzn/CX-Codex/blob/main/docs/deploy-with-codex.zh-CN.md
     about: 如果你只是想部署，建议先复制这里的提示词给 Codex 执行。
   - name: 最新版本
-    url: https://github.com/Qjzn/codexui-server-bridge/releases/latest
+    url: https://github.com/Qjzn/CX-Codex/releases/latest
     about: 下载最新 Release 或查看更新说明。

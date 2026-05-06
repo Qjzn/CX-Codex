@@ -31,8 +31,8 @@
    ```
 
 5. 检查 `artifacts/` 中是否生成：
-   - `codexui-server-bridge-<version>.zip`
-   - `codexui-server-bridge-<version>.sha256`
+   - `CX-Codex-<version>.zip`
+   - `CX-Codex-<version>.sha256`
    - `cx-codex-android-<version>.apk`
    - `cx-codex-android-<version>.apk.sha256`
 

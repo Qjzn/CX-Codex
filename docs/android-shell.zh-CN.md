@@ -1,6 +1,6 @@
 # Android 壳应用一期
 
-本项目的一期 Android 方案不是把 Node 桥接后端搬进手机，而是用 Capacitor 把现有 Web 前端封装成安卓壳，并连接一台已经运行 `codexui-server-bridge` 的远程地址。
+本项目的一期 Android 方案不是把 Node 桥接后端搬进手机，而是用 Capacitor 把现有 Web 前端封装成安卓壳，并连接一台已经运行 `CX-Codex` 的远程地址。
 
 ## 目标
 
@@ -15,11 +15,11 @@
 - 已新增 Android 原生通知权限和任务通知桥接
 - App 回到前台、网络恢复或 WebView 重新载入时，会先回放持久化的服务端事件游标，再复用现有 Web 端自动补同步逻辑
 
-当前这版仍然依赖远程 `codexui-server-bridge`，不支持离线独立运行。
+当前这版仍然依赖远程 `CX-Codex`，不支持离线独立运行。
 
 ## 使用方式
 
-1. 先准备一台可访问的 `codexui-server-bridge`
+1. 先准备一台可访问的 `CX-Codex`
 
 例如局域网或公网地址：
 
@@ -63,7 +63,7 @@ npm run mobile:android:open
 
 当前工作区已经支持本地签名版 APK：
 
-- 本地 keystore：`%USERPROFILE%\\.codexui\\android-signing\\codexui-release.jks`
+- 本地 keystore：`%USERPROFILE%\\.cx-codex\\android-signing\\cxcodex-release.jks`
 - 本地签名配置：`android/keystore.properties`
 
 这两个文件只用于当前机器：
@@ -87,7 +87,7 @@ cd android
 
 ## 当前 Android 产品化收口
 
-- 应用名称：`CX Codex`
+- 应用名称：`CX-Codex`
 - 默认远程地址：发行包默认留空；如需私有包预置地址，可通过 `CAP_SERVER_URL` 同步写入原生配置
 - Android 已显式放开 HTTP 明文访问，适配自托管 `http://host:port` 场景
 - 启动页已改为原生 SplashScreen + 品牌图标方案
@@ -163,7 +163,7 @@ npm run test:7420 -- -RestartIfUnhealthy
 配置后，打标签发版时会自动：
 
 - 构建 Web Release 包
-- 构建签名版 `CX Codex` Android APK
+- 构建签名版 `CX-Codex` Android APK
 - 将 APK 与 `.sha256` 一并挂到 GitHub Release
 
 ## 已知边界

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [int]$Port = 7420,
-  [string]$ConfigPath = "$env:USERPROFILE\.codexui\config.json",
+  [string]$ConfigPath = "$env:USERPROFILE\.cx-codex\config.json",
   [string]$NodePath = "C:\Program Files\nodejs\node.exe",
   [string]$BindHealthHost = "127.0.0.1"
 )
@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $distCliPath = Join-Path $repoRoot "dist-cli\index.js"
-$logDir = Join-Path $env:USERPROFILE ".codexui\logs"
+$logDir = Join-Path $env:USERPROFILE ".cx-codex\logs"
 
 function Get-ManagedCodexUiProcessIds {
   param(
@@ -108,8 +108,8 @@ foreach ($listenerProcessId in $remainingListeners) {
 }
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$outLog = Join-Path $logDir "codexui-$Port-$timestamp.out.log"
-$errLog = Join-Path $logDir "codexui-$Port-$timestamp.err.log"
+$outLog = Join-Path $logDir "cx-codex-$Port-$timestamp.out.log"
+$errLog = Join-Path $logDir "cx-codex-$Port-$timestamp.err.log"
 
 $process = Start-Process `
   -FilePath $NodePath `

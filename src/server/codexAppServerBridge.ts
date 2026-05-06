@@ -43,6 +43,8 @@ type RpcProxyRequest = {
   params?: unknown
 }
 
+type CollaborationMode = 'execute' | 'plan'
+
 type ServerRequestReply = {
   result?: unknown
   error?: {
@@ -72,6 +74,7 @@ type AppServerHealth = {
   pendingRpcCount: number
   queuedRpcCount: number
   pendingServerRequestCount: number
+  activePlanModeTurnCount: number
   rpcDiagnostics?: RpcDiagnostics
 }
 
@@ -273,6 +276,18 @@ const APP_SERVER_THREAD_LIST_STALE_CACHE_TTL_MS = 20 * 60_000
 const APP_SERVER_THREAD_LIST_BACKGROUND_REFRESH_MIN_INTERVAL_MS = 30_000
 const RUNTIME_SNAPSHOT_STALE_MS = 90_000
 const BRIDGE_HEARTBEAT_METHOD = 'bridge/heartbeat'
+const PLAN_MODE_PROMPT_PREFIX = `# Codex Plan Mode
+
+You are working in plan mode.
+
+Rules:
+- Do not run shell commands.
+- Do not edit, create, delete, rename, or move files.
+- Do not call tools or MCP actions that change local or remote state.
+- You may inspect the user's request and provide a concrete implementation plan, risks, verification steps, and files likely to change.
+- If the user asks you to execute the plan, wait for a separate execute-mode message.
+
+# User Request`
 const DEFAULT_WEB_BRIDGE_SETTINGS: WebBridgeSettings = {
   permissions: {
     allowAllPermissionRequests: false,
@@ -562,6 +577,73 @@ function readTurnIdFromPayload(payload: unknown): string {
   if (direct) return direct
   const turn = asRecord(root.turn)
   return readStringByAliases(turn, 'id', 'turnId', 'turn_id')
+}
+
+function readCollaborationModeFromPayload(payload: unknown): CollaborationMode {
+  const root = asRecord(payload)
+  const raw =
+    typeof root?.collaborationMode === 'string'
+      ? root.collaborationMode
+      : typeof root?.mode === 'string'
+        ? root.mode
+        : ''
+  return raw.trim().toLowerCase() === 'plan' ? 'plan' : 'execute'
+}
+
+function buildPlanModePrompt(text: string): string {
+  const normalizedText = text.trim()
+  return `${PLAN_MODE_PROMPT_PREFIX}\n\n${normalizedText || '请先制定计划。'}`
+}
+
+function normalizePlanModeTurnStartParams(params: unknown, options: { includeNativeMode?: boolean } = {}): unknown {
+  const root = asRecord(params)
+  if (!root || readCollaborationModeFromPayload(root) !== 'plan') return params
+
+  const next: Record<string, unknown> = { ...root }
+  delete next.collaborationMode
+  if (options.includeNativeMode !== false) {
+    next.mode = 'plan'
+  } else if (next.mode === 'plan') {
+    delete next.mode
+  }
+
+  const input = Array.isArray(root.input) ? root.input : []
+  let didWrapText = false
+  next.input = input.map((item) => {
+    const record = asRecord(item)
+    if (!record || didWrapText || record.type !== 'text' || typeof record.text !== 'string') {
+      return item
+    }
+    didWrapText = true
+    return {
+      ...record,
+      text: buildPlanModePrompt(record.text),
+    }
+  })
+
+  if (!didWrapText) {
+    next.input = [
+      { type: 'text', text: buildPlanModePrompt('') },
+      ...input,
+    ]
+  }
+
+  return next
+}
+
+function shouldRetryPlanModeWithoutNativeMode(error: unknown): boolean {
+  const message = getErrorMessage(error, '').toLowerCase()
+  if (!message) return false
+  return (
+    message.includes('mode') &&
+    (
+      message.includes('unknown') ||
+      message.includes('invalid') ||
+      message.includes('unexpected') ||
+      message.includes('unrecognized') ||
+      message.includes('deserialize')
+    )
+  )
 }
 
 function readItemIdFromPayload(payload: unknown): string {
@@ -1131,7 +1213,7 @@ async function translateGithubDescriptionToChinese(text: string): Promise<string
   const response = await fetch(`https://translate.googleapis.com/translate_a/single?${query.toString()}`, {
     headers: {
       Accept: 'application/json, text/plain, */*',
-      'User-Agent': 'codexui-server-bridge',
+      'User-Agent': 'cx-codex-server-bridge',
     },
   })
   if (!response.ok) {
@@ -2064,6 +2146,7 @@ class AppServerProcess {
   private readonly sharedReadRpcByKey = new Map<string, Promise<unknown>>()
   private readonly cachedThreadListRpcByKey = new Map<string, CachedRpcResponse>()
   private readonly threadTokenUsageByThreadId = new Map<string, ThreadTokenUsage>()
+  private readonly planModeTurnsByThreadId = new Map<string, { turnId: string; startedAtMs: number }>()
   private webBridgeSettings: WebBridgeSettings = DEFAULT_WEB_BRIDGE_SETTINGS
   private readonly appServerArgs = [
     'app-server',
@@ -2076,7 +2159,7 @@ class AppServerProcess {
   private getCodexCommand(): string {
     const codexCommand = resolveCodexCommand()
     if (!codexCommand) {
-      throw new Error('Codex CLI is not available. Install @openai/codex or set CODEXUI_CODEX_COMMAND.')
+      throw new Error('Codex CLI is not available. Install @openai/codex or set CX_CODEX_CODEX_COMMAND.')
     }
     return codexCommand
   }
@@ -2441,6 +2524,17 @@ class AppServerProcess {
       this.clearThreadListCache()
     }
 
+    if (
+      notification.method === 'turn/completed' ||
+      notification.method === 'thread/completed' ||
+      notification.method === 'turn/interrupted' ||
+      notification.method === 'thread/interrupted' ||
+      notification.method === 'error' ||
+      notification.method.endsWith('/failed')
+    ) {
+      this.clearPlanModeTurn(readThreadIdFromPayload(notification.params), readTurnIdFromPayload(notification.params))
+    }
+
     if (notification.method !== 'thread/tokenUsage/updated') return
 
     const params = asRecord(notification.params)
@@ -2479,6 +2573,55 @@ class AppServerProcess {
 
   getWebBridgeSettings(): WebBridgeSettings {
     return this.webBridgeSettings
+  }
+
+  markPlanModeTurn(threadId: string, turnId = ''): void {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return
+    this.planModeTurnsByThreadId.set(normalizedThreadId, {
+      turnId: turnId.trim(),
+      startedAtMs: Date.now(),
+    })
+  }
+
+  clearPlanModeTurn(threadId: string, turnId = ''): void {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return
+    const current = this.planModeTurnsByThreadId.get(normalizedThreadId)
+    if (!current) return
+    const normalizedTurnId = turnId.trim()
+    if (normalizedTurnId && current.turnId && current.turnId !== normalizedTurnId) return
+    this.planModeTurnsByThreadId.delete(normalizedThreadId)
+  }
+
+  getActivePlanModeTurnCount(): number {
+    return this.planModeTurnsByThreadId.size
+  }
+
+  private isPlanModeServerRequest(params: unknown): boolean {
+    const threadId = this.readServerRequestThreadId(params)
+    if (!threadId) return false
+    const activePlan = this.planModeTurnsByThreadId.get(threadId)
+    if (!activePlan) return false
+    const requestTurnId = readTurnIdFromPayload(params)
+    if (activePlan.turnId && requestTurnId && activePlan.turnId !== requestTurnId) return false
+    return true
+  }
+
+  private shouldDeclinePlanModeServerRequest(method: string, params: unknown): boolean {
+    if (!this.isPlanModeServerRequest(params)) return false
+    return (
+      method === 'item/commandExecution/requestApproval' ||
+      method === 'item/fileChange/requestApproval' ||
+      isMcpToolPermissionRequest(method, params)
+    )
+  }
+
+  private buildPlanModeDeclineResult(method: string, params: unknown): unknown {
+    if (isMcpToolPermissionRequest(method, params)) {
+      return { action: 'decline' }
+    }
+    return { decision: 'decline' }
   }
 
   private shouldAutoApproveServerRequest(method: string, params: unknown): boolean {
@@ -2548,6 +2691,14 @@ class AppServerProcess {
   }
 
   private handleServerRequest(requestId: number, method: string, params: unknown): void {
+    if (this.shouldDeclinePlanModeServerRequest(method, params)) {
+      this.sendServerRequestReply(requestId, {
+        result: this.buildPlanModeDeclineResult(method, params),
+      })
+      this.emitServerRequestResolved(requestId, method, params, 'automatic')
+      return
+    }
+
     if (this.shouldAutoApproveServerRequest(method, params)) {
       this.sendServerRequestReply(requestId, {
         result: this.buildAutoApprovalResult(method, params),
@@ -2797,6 +2948,7 @@ class AppServerProcess {
       pendingRpcCount: this.pending.size,
       queuedRpcCount: this.queuedRpcCalls.length,
       pendingServerRequestCount: this.pendingServerRequests.size,
+      activePlanModeTurnCount: this.planModeTurnsByThreadId.size,
       rpcDiagnostics: {
         activeRpcCalls: this.activeRpcCalls,
         pendingRpcCount: this.pending.size,
@@ -2860,7 +3012,7 @@ class MethodCatalog {
     await new Promise<void>((resolve, reject) => {
       const codexCommand = resolveCodexCommand()
       if (!codexCommand) {
-        reject(new Error('Codex CLI is not available. Install @openai/codex or set CODEXUI_CODEX_COMMAND.'))
+        reject(new Error('Codex CLI is not available. Install @openai/codex or set CX_CODEX_CODEX_COMMAND.'))
         return
       }
 
@@ -3350,9 +3502,19 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           return
         }
 
-        const rpcThreadId = readThreadIdFromPayload(body.params)
+        const collaborationMode = body.method === 'turn/start'
+          ? readCollaborationModeFromPayload(body.params)
+          : 'execute'
+        const rpcParams = body.method === 'turn/start'
+          ? normalizePlanModeTurnStartParams(body.params, { includeNativeMode: true })
+          : body.params
+        const rpcThreadId = readThreadIdFromPayload(rpcParams)
         if (body.method === 'turn/start' && rpcThreadId) {
-          runtimeStateStore.markStarting(rpcThreadId, readTurnIdFromPayload(body.params))
+          const initialTurnId = readTurnIdFromPayload(rpcParams)
+          runtimeStateStore.markStarting(rpcThreadId, initialTurnId)
+          if (collaborationMode === 'plan') {
+            appServer.markPlanModeTurn(rpcThreadId, initialTurnId)
+          }
         } else if (body.method === 'turn/interrupt' && rpcThreadId) {
           runtimeStateStore.markStopping(rpcThreadId)
         } else if ((body.method === 'thread/resume' || body.method === 'thread/read') && rpcThreadId) {
@@ -3361,7 +3523,23 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
         let rpcResult: unknown
         try {
-          rpcResult = await appServer.rpc(body.method, body.params ?? null)
+          try {
+            rpcResult = await appServer.rpc(body.method, rpcParams ?? null)
+          } catch (error) {
+            if (body.method !== 'turn/start' || collaborationMode !== 'plan' || !shouldRetryPlanModeWithoutNativeMode(error)) {
+              throw error
+            }
+            const fallbackParams = normalizePlanModeTurnStartParams(body.params, { includeNativeMode: false })
+            rpcResult = await appServer.rpc(body.method, fallbackParams ?? null)
+          }
+          if (body.method === 'turn/start' && collaborationMode === 'plan' && rpcThreadId) {
+            const startedTurnId = readTurnIdFromPayload(rpcResult)
+            if (startedTurnId) {
+              appServer.markPlanModeTurn(rpcThreadId, startedTurnId)
+            }
+          } else if (body.method === 'turn/interrupt' && rpcThreadId) {
+            appServer.clearPlanModeTurn(rpcThreadId, readTurnIdFromPayload(rpcParams))
+          }
         } catch (error) {
           if (
             (body.method === 'thread/resume' || body.method === 'thread/archive')

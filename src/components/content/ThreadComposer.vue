@@ -208,6 +208,26 @@
         </div>
 
         <div v-if="!isDictationRecording" class="thread-composer-control-strip" aria-label="发送设置">
+          <div class="thread-composer-mode-toggle" role="group" aria-label="协作模式">
+            <button
+              type="button"
+              :class="{ 'is-active': selectedCollaborationMode === 'execute' }"
+              :aria-pressed="selectedCollaborationMode === 'execute'"
+              :disabled="isInteractionDisabled"
+              @click="onCollaborationModeSelect('execute')"
+            >
+              执行
+            </button>
+            <button
+              type="button"
+              :class="{ 'is-active': selectedCollaborationMode === 'plan' }"
+              :aria-pressed="selectedCollaborationMode === 'plan'"
+              :disabled="isInteractionDisabled"
+              @click="onCollaborationModeSelect('plan')"
+            >
+              计划
+            </button>
+          </div>
           <template v-if="isCompactViewport">
             <ComposerSearchDropdown
               class="thread-composer-control thread-composer-control--skills"
@@ -420,7 +440,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { ReasoningEffort, SpeedMode } from '../../types/codex'
+import type { CollaborationMode, ReasoningEffort, SpeedMode } from '../../types/codex'
 import { useDictation } from '../../composables/useDictation'
 import { searchComposerFiles, uploadFile, type ComposerFileSuggestion } from '../../api/codexGateway'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
@@ -443,6 +463,7 @@ const props = defineProps<{
   selectedModel: string
   selectedReasoningEffort: ReasoningEffort | ''
   selectedSpeedMode: SpeedMode
+  selectedCollaborationMode: CollaborationMode
   skills?: SkillItem[]
   isTurnInProgress?: boolean
   isInterruptingTurn?: boolean
@@ -471,6 +492,7 @@ export type SubmitPayload = {
   imageUrls: string[]
   fileAttachments: FileAttachment[]
   skills: Array<{ name: string; path: string }>
+  collaborationMode: CollaborationMode
   mode: 'steer' | 'queue'
   rollbackLatestUserTurn?: boolean
 }
@@ -486,6 +508,7 @@ const emit = defineEmits<{
   'update:selected-model': [modelId: string]
   'update:selected-reasoning-effort': [effort: ReasoningEffort | '']
   'update:selected-speed-mode': [mode: SpeedMode]
+  'update:selected-collaboration-mode': [mode: CollaborationMode]
 }>()
 
 type SelectedImage = {
@@ -680,6 +703,11 @@ function resolveSubmitMode(): 'steer' | 'queue' {
   return props.isTurnInProgress ? 'queue' : 'steer'
 }
 
+function onCollaborationModeSelect(mode: CollaborationMode): void {
+  if (isInteractionDisabled.value) return
+  emit('update:selected-collaboration-mode', mode)
+}
+
 function onSubmit(mode: 'steer' | 'queue' = 'steer', options?: { rollbackLatestUserTurn?: boolean }): void {
   const text = draft.value.trim()
   if (!canSubmit.value) return
@@ -688,6 +716,7 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer', options?: { rollbackLatestU
     imageUrls: selectedImages.value.map((image) => image.url),
     fileAttachments: [...fileAttachments.value],
     skills: selectedSkills.value.map((s) => ({ name: s.name, path: s.path })),
+    collaborationMode: props.selectedCollaborationMode,
     mode,
     rollbackLatestUserTurn: options?.rollbackLatestUserTurn === true,
   })
@@ -1702,6 +1731,18 @@ watch(
   @apply min-w-0 flex flex-1 items-center gap-2 sm:gap-2;
 }
 
+.thread-composer-mode-toggle {
+  @apply inline-grid h-9 shrink-0 grid-cols-2 overflow-hidden rounded-[14px] border border-[#e4dac9] bg-[#f7f3ea] p-0.5;
+}
+
+.thread-composer-mode-toggle button {
+  @apply min-w-0 rounded-[11px] px-2.5 text-[13px] font-semibold leading-none text-[#7a705f] transition disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+.thread-composer-mode-toggle button.is-active {
+  @apply bg-[#0f766e] text-white shadow-sm;
+}
+
 .thread-composer-control :deep(.composer-dropdown-value) {
   @apply truncate;
 }
@@ -1852,7 +1893,15 @@ watch(
   .thread-composer-control-strip {
     @apply w-full min-w-0 gap-1 pr-0 overflow-visible;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 2.25rem;
+    grid-template-columns: auto minmax(0, 1fr) 2.25rem;
+  }
+
+  .thread-composer-mode-toggle {
+    @apply h-9;
+  }
+
+  .thread-composer-mode-toggle button {
+    @apply px-2 text-[12px];
   }
 
   .thread-composer-control {

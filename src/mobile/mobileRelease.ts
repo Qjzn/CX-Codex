@@ -1,5 +1,5 @@
-const LATEST_RELEASE_API_URL = 'https://api.github.com/repos/Qjzn/codexui-server-bridge/releases/latest'
-const RELEASES_PAGE_URL = 'https://github.com/Qjzn/codexui-server-bridge/releases'
+const LATEST_RELEASE_API_URL = 'https://api.github.com/repos/Qjzn/CX-Codex/releases/latest'
+const RELEASES_PAGE_URL = 'https://github.com/Qjzn/CX-Codex/releases'
 const LATEST_RELEASE_TIMEOUT_MS = 12_000
 
 export type MobileReleaseAsset = {
@@ -39,6 +39,7 @@ type GithubLatestReleaseResponse = {
 const APK_ASSET_PATTERNS = [
   /^cx-codex-android-.*\.apk$/iu,
   /^cx-codex.*\.apk$/iu,
+  /^cxcodex-android-.*\.apk$/iu,
   /^codexui-android-.*\.apk$/iu,
   /android.*release.*\.apk$/iu,
   /\.apk$/iu,

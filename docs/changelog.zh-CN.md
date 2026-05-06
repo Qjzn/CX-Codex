@@ -1,5 +1,24 @@
 # 更新日志
 
+## 2.1.17
+
+发布时间：2026-05-06
+
+- 项目正式更名为 `CX-Codex`：
+  - GitHub 仓库、README、Release 文案、Issue 引导和部署文档统一指向 `Qjzn/CX-Codex`
+  - Windows 一键安装命令改为读取 `https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1`
+- 更新运行命名：
+  - npm 包名和 CLI 命令改为 `cx-codex`
+  - 默认配置文件改为 `cx-codex.config.json`
+  - 默认用户配置目录改为 `~/.cx-codex`
+  - 日志和 watchdog 状态文件改为 `cx-codex` 前缀
+- 更新 Android 身份：
+  - App 显示名称改为 `CX-Codex`
+  - Android 包名改为 `com.cxcodex.bridge`
+  - Release APK 命名保持 `cx-codex-android-<version>.apk`
+- 保留兼容：
+  - 仍可读取旧 `codexui.config.json`、旧 `~/.codexui/config.json` 和旧 `CODEXUI_*` 环境变量，避免已有部署直接失效。
+
 ## 2.1.16
 
 发布时间：2026-05-01
@@ -211,12 +230,12 @@
   - 本机已补齐最小 Android SDK、命令行工具和本地 keystore
   - 可直接产出签名版 `release APK`
 - Android 壳进一步收口：
-  - 应用名称改为 `CX Codex`
+  - 应用名称改为 `CX-Codex`
   - 明确放开 Android 端 HTTP 明文访问，适配当前公网地址
   - 启动页改为原生 SplashScreen 方案，减少默认脚手架感
   - 新增 Android 原生“移动端连接”插件，可在 App 设置里直接查看、修改和恢复服务地址
   - 保存新地址后会自动重连，不再需要为了切换地址重新同步 `CAP_SERVER_URL` 再打包
-  - 新增品牌图标生成脚本，统一产出 `CX Codex` 的 Android 图标与 Web 品牌资源
+  - 新增品牌图标生成脚本，统一产出 `CX-Codex` 的 Android 图标与 Web 品牌资源
   - 新增 Android 原生“App 更新”能力，可读取 GitHub 最新 Release 并直接下载 APK 安装
   - 新增 `scripts/package-android-release.ps1`，可一键同步前端、构建签名版 APK 并输出 SHA256
   - GitHub Release 工作流新增 Android APK 发布通道，支持在配置签名 secrets 后自动挂 APK 资产
@@ -332,7 +351,7 @@
   - 置顶线程列表也同步迁移到本机账号目录下的持久化文件
   - 新浏览器或重新登录后会自动回补账号级收藏与置顶状态
 - Cloudflare Tunnel 状态检测与设置交互增强：
-  - 修复只读取固定 `codexui.out.log` 导致 7420 实际日志无法识别的问题
+  - 修复只读取固定 `cx-codex.out.log` 导致 7420 实际日志无法识别的问题
   - 改为扫描最新 `.out.log`，正确识别当前端口对应的日志、`cloudflared` 路径和公网地址
   - 设置面板新增 Tunnel 开关、打开公网地址、保存检测到的 `cloudflared` 路径，便于直接在前端操作
 

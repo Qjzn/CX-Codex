@@ -27,7 +27,7 @@ def derivedVersionCode = versionParts[0] * 10000 + versionParts[1] * 100 + versi
 def resolvedVersionCode = Integer.parseInt(String.valueOf(System.getenv('APP_VERSION_CODE') ?: String.valueOf(derivedVersionCode)))
 
 android {
-    namespace = "com.codexui.bridge"
+    namespace = "com.cxcodex.bridge"
     compileSdk = rootProject.ext.compileSdkVersion
     signingConfigs {
         release {
@@ -40,7 +40,7 @@ android {
         }
     }
     defaultConfig {
-        applicationId "com.codexui.bridge"
+        applicationId "com.cxcodex.bridge"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode resolvedVersionCode

@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">CX Codex</string>
-    <string name="title_activity_main">CX Codex</string>
-    <string name="package_name">com.codexui.bridge</string>
-    <string name="custom_url_scheme">com.codexui.bridge</string>
+    <string name="app_name">CX-Codex</string>
+    <string name="title_activity_main">CX-Codex</string>
+    <string name="package_name">com.cxcodex.bridge</string>
+    <string name="custom_url_scheme">com.cxcodex.bridge</string>
 </resources>

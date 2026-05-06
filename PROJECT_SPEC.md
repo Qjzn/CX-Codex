@@ -1,12 +1,12 @@
-# codexui-server-bridge — Project Specification
+# CX-Codex — Project Specification
 
 ## Overview
 
-**codexui-server-bridge** is a lightweight, browser-based web UI for [OpenAI Codex](https://github.com/openai/codex). It mirrors the Codex Desktop experience and runs on top of the Codex `app-server`, allowing remote access to a local Codex instance from any browser.
+**CX-Codex** is a lightweight, browser-based web UI for [OpenAI Codex](https://github.com/openai/codex). It mirrors the Codex Desktop experience and runs on top of the Codex `app-server`, allowing remote access to a local Codex instance from any browser.
 
 - **Author:** Pavel Voronin
 - **License:** MIT
-- **Repository:** https://github.com/Qjzn/codexui-server-bridge
+- **Repository:** https://github.com/Qjzn/CX-Codex
 
 ## Architecture
 

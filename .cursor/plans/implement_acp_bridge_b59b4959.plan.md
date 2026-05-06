@@ -12,7 +12,7 @@ todos:
     content: Create ACP bridge middleware that translates the app's existing HTTP API (thread/list, thread/create, etc.) to ACP protocol calls, maintaining in-memory session/thread state
     status: pending
   - id: agent-selection
-    content: "Add agent selection support: --agent CLI flag, env var CODEXUI_AGENT, command resolution for gemini/claude/codex agents, wire into httpServer and vite.config.ts"
+    content: "Add agent selection support: --agent CLI flag, env var CX_CODEX_AGENT, command resolution for gemini/claude/codex agents, wire into httpServer and vite.config.ts"
     status: pending
   - id: yolo-auto-accept
     content: "Implement automatic acceptance of all session/request_permission requests: pick allow_always or allow_once option, respond immediately without surfacing to UI"

@@ -1,4 +1,4 @@
-# codexui-server-bridge
+# CX-Codex
 
 Self-hosted OpenAI Codex Web UI and Android client bridge.
 
@@ -6,7 +6,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 
 > 截图使用浏览器渲染的脱敏演示数据，不包含真实账号、真实路径、密钥、公网地址或私人会话内容。
 
-![CX Codex desktop workspace](./docs/screenshots/chat.png)
+![CX-Codex desktop workspace](./docs/screenshots/chat.png)
 
 ## 核心卖点
 
@@ -55,7 +55,7 @@ GitHub 热门项目：
 Windows 一条命令：
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercontent.com/Qjzn/codexui-server-bridge/main/scripts/bootstrap-windows.ps1 | iex
+Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1 | iex
 ```
 
 安装脚本会自动完成：
@@ -78,7 +78,7 @@ http://127.0.0.1:7420
 也可以把下面的提示词交给目标机器上的 Codex：
 
 ```text
-打开并检查 https://github.com/Qjzn/codexui-server-bridge 这个仓库。
+打开并检查 https://github.com/Qjzn/CX-Codex 这个仓库。
 请在这台机器上用最简单、最稳的方式部署这个项目。
 
 要求：
@@ -94,7 +94,7 @@ http://127.0.0.1:7420
 
 ## Android 客户端
 
-`CX Codex` Android 壳用于连接你自己的 Codex Web 服务。
+`CX-Codex` Android 壳用于连接你自己的 Codex Web 服务。
 
 设计原则：
 
@@ -111,21 +111,21 @@ Release 页面会发布 Android APK；如果你自己构建，请查看：
 ## 手动运行
 
 ```bash
-npx codexapp
+npx cx-codex
 ```
 
 固定到 `7420`：
 
 ```powershell
-npx codexapp --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
+npx cx-codex --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
 ```
 
 配置文件优先级：
 
 1. `--config <path>`
-2. `CODEXUI_CONFIG`
-3. `./codexui.config.json`
-4. `~/.codexui/config.json`
+2. `CX_CODEX_CONFIG`
+3. `./cx-codex.config.json`
+4. `~/.cx-codex/config.json`
 
 示例配置：
 
@@ -152,7 +152,7 @@ npx codexapp --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
 Cloudflare Tunnel 一条命令：
 
 ```powershell
-& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/codexui-server-bridge/main/scripts/bootstrap-windows.ps1'))) -EnableCloudflareTunnel
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) -EnableCloudflareTunnel
 ```
 
 长期固定域名请看：
@@ -162,7 +162,7 @@ Cloudflare Tunnel 一条命令：
 ## 功能清单
 
 - Codex Web UI browser bridge
-- Android CX Codex client shell
+- Android CX-Codex client shell
 - 移动端恢复补同步
 - 线程列表、会话内容、执行状态和停止状态展示
 - 消息收藏、置顶、复制和跳转

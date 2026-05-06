@@ -1,4 +1,4 @@
-package com.codexui.bridge;
+package com.cxcodex.bridge;
 
 import android.app.Activity;
 import android.content.Context;
@@ -9,7 +9,7 @@ import java.util.Locale;
 
 public final class MobileShellConfig {
 
-    public static final String PREFS_NAME = "CodexUiMobileShell";
+    public static final String PREFS_NAME = "CxCodexMobileShell";
     public static final String PREF_SERVER_URL = "serverUrl";
     public static final String PREF_AUTH_KEY = "authKey";
 

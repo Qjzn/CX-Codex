@@ -10,7 +10,7 @@ import {
 import { initializeCapacitorBridge } from './mobile/capacitorBridge'
 import './style.css'
 
-console.log('Welcome to codexapp. GitHub: https://github.com/Qjzn/codexui-server-bridge')
+console.log('Welcome to CX-Codex. GitHub: https://github.com/Qjzn/CX-Codex')
 
 if (typeof window !== 'undefined') {
   void initializeCapacitorBridge()

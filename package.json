@@ -1,17 +1,17 @@
 {
-  "name": "codexapp",
-  "version": "2.1.16",
-  "description": "OpenAI Codex web UI and browser bridge for Windows, Linux, Android, LAN, and remote self-hosted access",
+  "name": "cx-codex",
+  "version": "2.1.17",
+  "description": "CX-Codex Web UI and browser bridge for Windows, Linux, Android, LAN, and remote self-hosted access",
   "type": "module",
   "license": "MIT",
   "author": "Pavel Voronin, Igor Levochkin, and contributors",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Qjzn/codexui-server-bridge.git"
+    "url": "git+https://github.com/Qjzn/CX-Codex.git"
   },
-  "homepage": "https://github.com/Qjzn/codexui-server-bridge#readme",
+  "homepage": "https://github.com/Qjzn/CX-Codex#readme",
   "bugs": {
-    "url": "https://github.com/Qjzn/codexui-server-bridge/issues"
+    "url": "https://github.com/Qjzn/CX-Codex/issues"
   },
   "keywords": [
     "codex",
@@ -42,8 +42,8 @@
     "node": ">=18"
   },
   "bin": {
-    "codexapp": "dist-cli/index.js",
-    "codexui": "dist-cli/index.js"
+    "cx-codex": "dist-cli/index.js",
+    "cxcodex": "dist-cli/index.js"
   },
   "files": [
     "dist/",
