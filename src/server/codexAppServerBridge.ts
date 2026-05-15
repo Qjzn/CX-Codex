@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { mkdtemp, readFile, mkdir, stat } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -14,6 +14,7 @@ import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoute
 import { getDesktopAppRefreshStatus, requestDesktopAppRefresh } from './desktopAppRefresh.js'
 import { getTunnelStatus, updateTunnelConfig } from './tunnelStatus.js'
 import { readFavoriteRecords, readPinnedThreadIds, writeFavoriteRecords, writePinnedThreadIds } from './webUiState.js'
+import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } from './runtimeStore.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import {
   resolveCodexCommand,
@@ -95,13 +96,16 @@ type RuntimeExecutionState =
   | 'idle'
   | 'queued'
   | 'starting'
+  | 'start_uncertain'
   | 'running'
   | 'waiting_permission'
   | 'stopping'
+  | 'stop_uncertain'
   | 'completed_pending_sync'
   | 'completed'
   | 'failed'
   | 'interrupted'
+  | 'stopped'
   | 'sync_degraded'
 
 type RuntimeSnapshotSource = 'events' | 'thread-read' | 'cache' | 'unknown'
@@ -529,6 +533,20 @@ function isRpcTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AppServerRpcTimeoutError'
 }
 
+function isInterruptSettledError(error: unknown): boolean {
+  if (isRpcTimeoutError(error)) return false
+  const message = getErrorMessage(error, '').toLowerCase()
+  if (!message) return false
+  return (
+    message.includes('no active turn') ||
+    message.includes('not running') ||
+    message.includes('already completed') ||
+    message.includes('cannot interrupt') ||
+    message.includes('unable to interrupt') ||
+    message.includes('active turn not found')
+  )
+}
+
 function normalizeThreadId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
@@ -599,6 +617,98 @@ function readCollaborationModeFromPayload(payload: unknown): CollaborationMode {
         ? root.mode
         : ''
   return raw.trim().toLowerCase() === 'plan' ? 'plan' : 'execute'
+}
+
+function createRuntimeRequestId(): string {
+  return `rt-${Date.now().toString(36)}-${randomBytes(6).toString('hex')}`
+}
+
+function createRuntimePromptHash(value: unknown): string {
+  let input = ''
+  try {
+    input = JSON.stringify(value ?? null)
+  } catch {
+    input = String(value ?? '')
+  }
+  return createHash('sha256').update(input).digest('hex')
+}
+
+function summarizeRuntimeInput(input: unknown[]): Record<string, unknown> {
+  let textCount = 0
+  let imageCount = 0
+  let localImageCount = 0
+  let skillCount = 0
+  for (const item of input) {
+    const record = asRecord(item)
+    const type = typeof record?.type === 'string' ? record.type : ''
+    if (type === 'text') textCount += 1
+    else if (type === 'image') imageCount += 1
+    else if (type === 'localImage') localImageCount += 1
+    else if (type === 'skill') skillCount += 1
+  }
+  return {
+    inputCount: input.length,
+    textCount,
+    imageCount,
+    localImageCount,
+    skillCount,
+  }
+}
+
+function buildRuntimeRequestPayloadSummary(args: {
+  threadId: string
+  cwd: string
+  model: string
+  effort: unknown
+  collaborationMode: CollaborationMode
+  input: unknown[]
+  attachments: unknown
+}): Record<string, unknown> {
+  return {
+    hasThreadId: args.threadId.length > 0,
+    hasCwd: args.cwd.length > 0,
+    cwdHash: args.cwd ? createRuntimePromptHash(args.cwd) : '',
+    model: args.model,
+    effort: readString(args.effort).trim(),
+    collaborationMode: args.collaborationMode,
+    input: summarizeRuntimeInput(args.input),
+    attachmentCount: Array.isArray(args.attachments) ? args.attachments.length : 0,
+  }
+}
+
+function readRuntimeRequestStatusFromExecutionState(state: RuntimeExecutionState): RuntimeRequestStatus {
+  if (state === 'start_uncertain') return 'start_uncertain'
+  if (state === 'stop_uncertain') return 'stop_uncertain'
+  if (state === 'stopping') return 'stopping'
+  if (state === 'interrupted') return 'interrupted'
+  if (state === 'failed') return 'failed'
+  if (state === 'completed' || state === 'completed_pending_sync') return 'completed'
+  if (state === 'running' || state === 'waiting_permission' || state === 'starting') return 'running'
+  if (state === 'sync_degraded') return 'sync_degraded'
+  return 'stopped'
+}
+
+function normalizeRuntimeEventForReplay(event: {
+  seq: number
+  method: string
+  params: unknown
+  atIso: string
+}): BridgeNotificationEvent {
+  return {
+    seq: event.seq,
+    method: event.method,
+    params: event.params,
+    atIso: event.atIso,
+  }
+}
+
+function toPersistableRuntimeSnapshot(snapshot: ThreadRuntimeSnapshot): ThreadRuntimeSnapshot {
+  return {
+    ...snapshot,
+    threadRead: null,
+    pendingServerRequests: [],
+    tokenUsage: null,
+  }
 }
 
 function buildPlanModePrompt(text: string): string {
@@ -673,9 +783,11 @@ function isRuntimeActiveState(state: RuntimeExecutionState): boolean {
   return (
     state === 'queued'
     || state === 'starting'
+    || state === 'start_uncertain'
     || state === 'running'
     || state === 'waiting_permission'
     || state === 'stopping'
+    || state === 'stop_uncertain'
   )
 }
 
@@ -685,6 +797,7 @@ function isRuntimeSettledState(state: RuntimeExecutionState): boolean {
     state === 'completed' ||
     state === 'failed' ||
     state === 'interrupted' ||
+    state === 'stopped' ||
     state === 'idle'
   )
 }
@@ -757,11 +870,57 @@ class RuntimeStateStore {
     }, 'events')
   }
 
+  markStartUncertain(threadId: string, lastError: string | null = null): void {
+    if (!threadId.trim()) return
+    this.touch(threadId, {
+      executionState: 'start_uncertain',
+      stopRequested: false,
+      degradedReason: 'turn start requires verification',
+      lastError,
+    }, 'events')
+  }
+
+  markRunning(threadId: string, turnId = ''): void {
+    if (!threadId.trim()) return
+    const current = this.getMutable(threadId)
+    this.touch(threadId, {
+      executionState: 'running',
+      activeTurnId: turnId || current.activeTurnId,
+      stopRequested: false,
+      degradedReason: null,
+      lastError: null,
+      lastStartedAtIso: current.lastStartedAtIso ?? new Date().toISOString(),
+    }, 'events')
+  }
+
   markStopping(threadId: string): void {
     if (!threadId.trim()) return
     this.touch(threadId, {
       executionState: 'stopping',
       stopRequested: true,
+    }, 'events')
+  }
+
+  markStopUncertain(threadId: string, lastError: string | null = null): void {
+    if (!threadId.trim()) return
+    this.touch(threadId, {
+      executionState: 'stop_uncertain',
+      stopRequested: true,
+      degradedReason: 'turn interrupt requires verification',
+      lastError,
+    }, 'events')
+  }
+
+  markInterrupted(threadId: string, lastError: string | null = null): void {
+    if (!threadId.trim()) return
+    this.touch(threadId, {
+      executionState: 'interrupted',
+      activeTurnId: '',
+      activeItemId: '',
+      stopRequested: false,
+      lastCompletedAtIso: new Date().toISOString(),
+      lastError,
+      degradedReason: null,
     }, 'events')
   }
 
@@ -914,7 +1073,7 @@ class RuntimeStateStore {
       inProgress: isRuntimeActiveState(executionState),
       activeTurnId: state.activeTurnId,
       activeItemId: state.activeItemId,
-      canStop: isRuntimeActiveState(executionState),
+      canStop: isRuntimeActiveState(executionState) && executionState !== 'start_uncertain' && executionState !== 'stop_uncertain' && !state.stopRequested,
       stopRequested: state.stopRequested,
       updatedAtIso: state.updatedAtIso,
       lastEventSeq: state.lastEventSeq,
@@ -989,6 +1148,60 @@ function shouldInvalidateThreadListCacheForNotification(method: string): boolean
     method.endsWith('/forked') ||
     method.endsWith('/moved')
   )
+}
+
+function shouldInvalidateThreadReadCacheForRpc(method: string): boolean {
+  return (
+    method === 'turn/start' ||
+    method === 'turn/interrupt' ||
+    method === 'thread/resume' ||
+    method === 'thread/rollback' ||
+    method === 'thread/archive' ||
+    method === 'thread/name/set'
+  )
+}
+
+function shouldInvalidateThreadReadCacheForNotification(method: string): boolean {
+  if (
+    method === 'turn/started' ||
+    method === 'turn/start' ||
+    method === 'turn/completed' ||
+    method === 'thread/completed' ||
+    method === 'turn/interrupted' ||
+    method === 'thread/interrupted' ||
+    method === 'error' ||
+    method.endsWith('/failed')
+  ) {
+    return true
+  }
+
+  return (
+    method === 'item/started' ||
+    method === 'item/updated' ||
+    method === 'item/completed'
+  )
+}
+
+function readIsoTimestampMs(value: string | null | undefined): number {
+  if (!value) return 0
+  const timestampMs = Date.parse(value)
+  return Number.isFinite(timestampMs) ? timestampMs : 0
+}
+
+function isCachedThreadReadStaleForRuntime(
+  cachedThreadRead: CachedThreadRead,
+  runtimeSnapshot: ThreadRuntimeSnapshot,
+  lightThreadInProgress: boolean,
+): boolean {
+  if (lightThreadInProgress) return false
+  if (isRuntimeActiveState(runtimeSnapshot.executionState) || runtimeSnapshot.executionState === 'completed_pending_sync') {
+    return true
+  }
+
+  const completedAtMs = readIsoTimestampMs(runtimeSnapshot.lastCompletedAtIso)
+  if (completedAtMs <= 0) return false
+  const cachedAtMs = readIsoTimestampMs(cachedThreadRead.cachedAtIso)
+  return cachedAtMs <= 0 || cachedAtMs < completedAtMs
 }
 
 function getRpcQueuePriority(method: string, params: unknown): number {
@@ -3113,6 +3326,10 @@ class AppServerProcess {
     }
   }
 
+  getStartedAtMs(): number {
+    return this.startedAtMs
+  }
+
   dispose(): void {
     const failure = new Error('codex app-server stopped')
     this.rejectQueuedRpcCalls(failure)
@@ -3400,9 +3617,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   let threadSearchIndexPromise: Promise<ThreadSearchIndex> | null = null
   const cachedThreadReadsByThreadId = new Map<string, CachedThreadRead>()
   const runtimeStateStore = new RuntimeStateStore()
+  const runtimeStore = new RuntimeStore()
   const notificationReplayBuffer: BridgeNotificationEvent[] = []
   const bridgeNotificationListeners = new Set<(value: BridgeNotificationEvent) => void>()
-  let notificationSeq = 0
+  let notificationSeq = runtimeStore.getLatestEventSeq()
 
   async function getThreadSearchIndex(): Promise<ThreadSearchIndex> {
     if (threadSearchIndex) return threadSearchIndex
@@ -3432,6 +3650,25 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     return cachedThreadRead
   }
 
+  function persistRuntimeSnapshot(threadId: string, snapshot?: ThreadRuntimeSnapshot): ThreadRuntimeSnapshot {
+    const nextSnapshot = snapshot ?? runtimeStateStore.snapshot(threadId, {
+      pendingServerRequests: appServer.listPendingServerRequestsForThread(threadId),
+      tokenUsage: appServer.getThreadTokenUsage(threadId),
+    })
+    runtimeStore.upsertSnapshot({
+      threadId,
+      executionState: nextSnapshot.executionState,
+      activeTurnId: nextSnapshot.activeTurnId,
+      activeItemId: nextSnapshot.activeItemId,
+      canStop: nextSnapshot.canStop,
+      stopRequested: nextSnapshot.stopRequested,
+      lastEventSeq: nextSnapshot.lastEventSeq,
+      updatedAtIso: nextSnapshot.updatedAtIso,
+      snapshot: toPersistableRuntimeSnapshot(nextSnapshot),
+    })
+    return nextSnapshot
+  }
+
   function rememberNotificationEvent(notification: { method: string; params: unknown }): BridgeNotificationEvent {
     notificationSeq += 1
     const event: BridgeNotificationEvent = {
@@ -3440,6 +3677,14 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       atIso: new Date().toISOString(),
       seq: notificationSeq,
     }
+    runtimeStore.appendEvent({
+      seq: event.seq,
+      method: event.method,
+      params: event.params,
+      atIso: event.atIso,
+      threadId: readThreadIdFromPayload(event.params),
+      turnId: readTurnIdFromPayload(event.params),
+    })
     notificationReplayBuffer.push(event)
     if (notificationReplayBuffer.length > NOTIFICATION_REPLAY_BUFFER_LIMIT) {
       notificationReplayBuffer.splice(0, notificationReplayBuffer.length - NOTIFICATION_REPLAY_BUFFER_LIMIT)
@@ -3454,6 +3699,14 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   } {
     const normalizedAfterSeq = Number.isFinite(afterSeq) ? Math.max(0, Math.trunc(afterSeq)) : 0
     const normalizedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.trunc(limit), NOTIFICATION_REPLAY_BUFFER_LIMIT)) : 200
+    const persistedReplay = runtimeStore.listEventsAfter(normalizedAfterSeq, normalizedLimit)
+    if (persistedReplay.notifications.length > 0 || normalizedAfterSeq < persistedReplay.latestSeq) {
+      return {
+        notifications: persistedReplay.notifications.map(normalizeRuntimeEventForReplay),
+        latestSeq: persistedReplay.latestSeq,
+        oldestSeq: persistedReplay.oldestSeq,
+      }
+    }
     return {
       notifications: notificationReplayBuffer
         .filter((notification) => notification.seq > normalizedAfterSeq)
@@ -3466,6 +3719,16 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const unsubscribeAppServerNotifications = appServer.onNotification((notification: { method: string; params: unknown }) => {
     const event = rememberNotificationEvent(notification)
     runtimeStateStore.observeEvent(event)
+    const eventThreadId = readThreadIdFromPayload(notification.params)
+    if (eventThreadId) {
+      const snapshot = persistRuntimeSnapshot(eventThreadId)
+      updateRuntimeRequestsFromSnapshot(eventThreadId, snapshot)
+    }
+    if (shouldInvalidateThreadReadCacheForNotification(notification.method)) {
+      if (eventThreadId) {
+        cachedThreadReadsByThreadId.delete(eventThreadId)
+      }
+    }
     for (const listener of bridgeNotificationListeners) {
       listener(event)
     }
@@ -3511,10 +3774,20 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     }
 
     const lightUpdatedAtIso = lightThreadRead ? readThreadUpdatedAtIsoFromThreadReadPayload(lightThreadRead) : ''
+    const lightInProgress = lightThreadRead ? readThreadInProgressFromThreadReadPayload(lightThreadRead) : false
+    const runtimeSnapshotBeforeMessageRead = runtimeStateStore.snapshot(normalizedThreadId, {
+      pendingServerRequests: appServer.listPendingServerRequestsForThread(normalizedThreadId),
+      tokenUsage: appServer.getThreadTokenUsage(normalizedThreadId),
+    })
     let threadRead: unknown = null
     let messageState: ThreadRuntimeSnapshot['messageState'] = 'unavailable'
 
-    if (cachedThreadRead && lightUpdatedAtIso && cachedThreadRead.updatedAtIso === lightUpdatedAtIso) {
+    if (
+      cachedThreadRead &&
+      lightUpdatedAtIso &&
+      cachedThreadRead.updatedAtIso === lightUpdatedAtIso &&
+      !isCachedThreadReadStaleForRuntime(cachedThreadRead, runtimeSnapshotBeforeMessageRead, lightInProgress)
+    ) {
       threadRead = cachedThreadRead.threadRead
       messageState = 'fresh'
     } else {
@@ -3566,7 +3839,6 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           : threadRead
             ? readThreadUpdatedAtIsoFromThreadReadPayload(threadRead)
             : ''
-    const lightInProgress = lightThreadRead ? readThreadInProgressFromThreadReadPayload(lightThreadRead) : false
     const freshThreadInProgress =
       threadRead && messageState === 'fresh'
         ? readThreadInProgressFromThreadReadPayload(threadRead)
@@ -3592,13 +3864,331 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       runtimeStateStore.markDegraded(normalizedThreadId, 'thread snapshot unavailable')
     }
 
-    return runtimeStateStore.snapshot(normalizedThreadId, {
+    return persistRuntimeSnapshot(normalizedThreadId, runtimeStateStore.snapshot(normalizedThreadId, {
       threadRead,
       messageState,
       pendingServerRequests: appServer.listPendingServerRequestsForThread(normalizedThreadId),
       tokenUsage,
-    })
+    }))
   }
+
+  function readLocalRuntimeSnapshot(threadId: string): ThreadRuntimeSnapshot {
+    const normalizedThreadId = threadId.trim()
+    const persisted = runtimeStore.getSnapshot(normalizedThreadId)
+    const persistedSnapshot = asRecord(persisted?.snapshot) as ThreadRuntimeSnapshot | null
+    const pendingServerRequests = appServer.listPendingServerRequestsForThread(normalizedThreadId)
+    const tokenUsage = appServer.getThreadTokenUsage(normalizedThreadId)
+    if (persistedSnapshot) {
+      const persistedLastAtMs =
+        readIsoTimestampMs(persistedSnapshot.lastEventAtIso) ||
+        readIsoTimestampMs(persistedSnapshot.updatedAtIso)
+      const persistedStale =
+        pendingServerRequests.length === 0 &&
+        isRuntimeActiveState(persistedSnapshot.executionState) &&
+        persistedLastAtMs > 0 &&
+        (
+          Date.now() - persistedLastAtMs > RUNTIME_SNAPSHOT_STALE_MS ||
+          appServer.getStartedAtMs() > persistedLastAtMs
+        )
+      const executionState: RuntimeExecutionState = persistedStale ? 'sync_degraded' : persistedSnapshot.executionState
+      return {
+        ...persistedSnapshot,
+        executionState,
+        pendingServerRequests,
+        tokenUsage,
+        threadRead: null,
+        messageState: 'unavailable',
+        inProgress: isRuntimeActiveState(executionState),
+        canStop: persistedSnapshot.canStop === true && !persistedSnapshot.stale && !persistedStale,
+        stale: persistedSnapshot.stale === true || persistedStale,
+        degradedReason: persistedStale
+          ? appServer.getStartedAtMs() > persistedLastAtMs
+            ? 'app-server restarted after active runtime snapshot'
+            : 'persisted runtime snapshot is stale'
+          : persistedSnapshot.degradedReason,
+      }
+    }
+    return persistRuntimeSnapshot(normalizedThreadId, runtimeStateStore.snapshot(normalizedThreadId, {
+      pendingServerRequests,
+      tokenUsage,
+    }))
+  }
+
+  function updateRuntimeRequestsFromSnapshot(threadId: string, snapshot: ThreadRuntimeSnapshot): void {
+    const activeRequests = runtimeStore.listRequestsByThread(threadId, [
+      'pending_start',
+      'start_uncertain',
+      'running',
+      'stopping',
+      'stop_uncertain',
+      'still_running',
+    ])
+    if (activeRequests.length === 0) return
+
+    for (const request of activeRequests) {
+      const nextStatus =
+        snapshot.inProgress && (request.status === 'stopping' || request.status === 'stop_uncertain')
+          ? 'still_running'
+          : readRuntimeRequestStatusFromExecutionState(snapshot.executionState)
+      runtimeStore.updateRequest(request.requestId, {
+        status: nextStatus,
+        threadId,
+        turnId: snapshot.activeTurnId || request.turnId,
+        lastError: snapshot.lastError,
+      })
+    }
+  }
+
+  async function reconcileRuntimeThread(threadId: string): Promise<ThreadRuntimeSnapshot> {
+    const snapshot = await readThreadRuntimeSnapshot(threadId)
+    updateRuntimeRequestsFromSnapshot(threadId, snapshot)
+    return snapshot
+  }
+
+  async function startRuntimeTurn(payload: unknown): Promise<{
+    request: RuntimeRequestRecord
+    threadId: string
+    turnId: string
+    status: RuntimeRequestStatus
+  }> {
+    const body = asRecord(payload)
+    if (!body) throw new Error('Invalid body: expected runtime send payload')
+
+    const requestId = readString(body.requestId).trim() || createRuntimeRequestId()
+    const clientMessageId = readString(body.clientMessageId).trim()
+    const mode = readCollaborationModeFromPayload(body)
+    const model = readString(body.model).trim()
+    const cwd = readString(body.cwd).trim()
+    let threadId = readStringByAliases(body, 'threadId', 'thread_id')
+    const input = Array.isArray(body.input) ? body.input : []
+    if (input.length === 0) {
+      throw new Error('runtime/send requires input')
+    }
+
+    runtimeStore.createRequest({
+      requestId,
+      clientMessageId,
+      threadId,
+      status: 'pending_start',
+      promptHash: createRuntimePromptHash(input),
+      mode,
+      payload: buildRuntimeRequestPayloadSummary({
+        threadId,
+        cwd,
+        model,
+        collaborationMode: mode,
+        input,
+        effort: body.effort,
+        attachments: body.attachments,
+      }),
+    })
+
+    try {
+      if (!threadId) {
+        const threadParams: Record<string, unknown> = {}
+        if (cwd) threadParams.cwd = cwd
+        if (model) threadParams.model = model
+        const startedThread = await appServer.rpc('thread/start', threadParams)
+        threadId = readThreadIdFromPayload(startedThread)
+        if (!threadId) throw new Error('thread/start did not return a thread id')
+        runtimeStore.updateRequest(requestId, {
+          threadId,
+          status: 'pending_start',
+        })
+      }
+
+      const turnParams: Record<string, unknown> = {
+        threadId,
+        input,
+      }
+      if (Array.isArray(body.attachments) && body.attachments.length > 0) {
+        turnParams.attachments = body.attachments
+      }
+      if (model) turnParams.model = model
+      const effort = readString(body.effort).trim()
+      if (effort) turnParams.effort = effort
+      if (mode === 'plan') turnParams.collaborationMode = 'plan'
+
+      runtimeStateStore.markStarting(threadId)
+      persistRuntimeSnapshot(threadId)
+      runtimeStore.updateRequest(requestId, {
+        status: 'starting',
+        threadId,
+      })
+
+      let rpcParams: unknown = mode === 'plan'
+        ? normalizePlanModeTurnStartParams(turnParams, { includeNativeMode: true })
+        : turnParams
+      let rpcResult: unknown
+      try {
+        rpcResult = await appServer.rpc('turn/start', rpcParams)
+      } catch (error) {
+        if (mode !== 'plan' || !shouldRetryPlanModeWithoutNativeMode(error)) {
+          throw error
+        }
+        rpcParams = normalizePlanModeTurnStartParams(turnParams, { includeNativeMode: false })
+        rpcResult = await appServer.rpc('turn/start', rpcParams)
+      }
+
+      const turnId = readTurnIdFromPayload(rpcResult)
+      if (mode === 'plan') {
+        appServer.markPlanModeTurn(threadId, turnId)
+      }
+      runtimeStateStore.markRunning(threadId, turnId)
+      const snapshot = persistRuntimeSnapshot(threadId)
+      const request = runtimeStore.updateRequest(requestId, {
+        status: 'running',
+        threadId,
+        turnId: turnId || snapshot.activeTurnId,
+        lastError: null,
+      }) ?? runtimeStore.getRequest(requestId)
+      return {
+        request: request as RuntimeRequestRecord,
+        threadId,
+        turnId: turnId || snapshot.activeTurnId,
+        status: 'running',
+      }
+    } catch (error) {
+      if (threadId && isRpcTimeoutError(error)) {
+        runtimeStateStore.markStartUncertain(threadId, getErrorMessage(error, 'turn/start timed out'))
+        persistRuntimeSnapshot(threadId)
+        const request = runtimeStore.updateRequest(requestId, {
+          status: 'start_uncertain',
+          threadId,
+          lastError: getErrorMessage(error, 'turn/start timed out'),
+        }) ?? runtimeStore.getRequest(requestId)
+        return {
+          request: request as RuntimeRequestRecord,
+          threadId,
+          turnId: '',
+          status: 'start_uncertain',
+        }
+      }
+
+      runtimeStore.updateRequest(requestId, {
+        status: 'failed',
+        threadId,
+        lastError: getErrorMessage(error, 'runtime send failed'),
+      })
+      throw error
+    }
+  }
+
+  async function interruptRuntimeTurn(payload: unknown): Promise<{
+    requestId: string
+    threadId: string
+    turnId: string
+    status: RuntimeRequestStatus
+  }> {
+    const body = asRecord(payload)
+    if (!body) throw new Error('Invalid body: expected runtime interrupt payload')
+
+    const threadId = readStringByAliases(body, 'threadId', 'thread_id')
+    const turnId = readStringByAliases(body, 'turnId', 'turn_id', 'activeTurnId')
+    if (!threadId) throw new Error('runtime/interrupt requires threadId')
+    if (!turnId) throw new Error('runtime/interrupt requires turnId')
+
+    const requestId = readString(body.requestId).trim() || createRuntimeRequestId()
+    runtimeStore.createRequest({
+      requestId,
+      threadId,
+      turnId,
+      status: 'stopping',
+      mode: 'interrupt',
+      payload: { threadId, turnId },
+    })
+    runtimeStateStore.markStopping(threadId)
+    persistRuntimeSnapshot(threadId)
+
+    try {
+      await appServer.rpc('turn/interrupt', { threadId, turnId })
+      appServer.clearPlanModeTurn(threadId, turnId)
+      runtimeStateStore.markInterrupted(threadId)
+      persistRuntimeSnapshot(threadId)
+      runtimeStore.updateRequest(requestId, {
+        status: 'stopped',
+        threadId,
+        turnId,
+        lastError: null,
+      })
+      return { requestId, threadId, turnId, status: 'stopped' }
+    } catch (error) {
+      if (isInterruptSettledError(error)) {
+        appServer.clearPlanModeTurn(threadId, turnId)
+        runtimeStateStore.markInterrupted(threadId, getErrorMessage(error, 'turn already settled'))
+        persistRuntimeSnapshot(threadId)
+        runtimeStore.updateRequest(requestId, {
+          status: 'stopped',
+          threadId,
+          turnId,
+          lastError: null,
+        })
+        return { requestId, threadId, turnId, status: 'stopped' }
+      }
+
+      if (isRpcTimeoutError(error)) {
+        runtimeStateStore.markStopUncertain(threadId, getErrorMessage(error, 'turn/interrupt timed out'))
+        persistRuntimeSnapshot(threadId)
+        runtimeStore.updateRequest(requestId, {
+          status: 'stop_uncertain',
+          threadId,
+          turnId,
+          lastError: getErrorMessage(error, 'turn/interrupt timed out'),
+        })
+        return { requestId, threadId, turnId, status: 'stop_uncertain' }
+      }
+
+      runtimeStore.updateRequest(requestId, {
+        status: 'failed',
+        threadId,
+        turnId,
+        lastError: getErrorMessage(error, 'runtime interrupt failed'),
+      })
+      throw error
+    }
+  }
+
+  let runtimeReconcileInFlight = false
+  const runtimeReconcileLastAtMsByThreadId = new Map<string, number>()
+  const runtimeReconcileTimer = setInterval(() => {
+    if (runtimeReconcileInFlight) return
+    const now = Date.now()
+    const candidates = runtimeStore
+      .listUncertainRequests(10)
+      .filter((request) => {
+        if (!request.threadId) return false
+        if (request.status !== 'running' && request.status !== 'still_running') return true
+        const lastAtMs = runtimeReconcileLastAtMsByThreadId.get(request.threadId) ?? 0
+        return now - lastAtMs >= 10_000
+      })
+      .slice(0, 3)
+    if (candidates.length === 0) return
+
+    runtimeReconcileInFlight = true
+    void (async () => {
+      for (const request of candidates) {
+        try {
+          await reconcileRuntimeThread(request.threadId)
+          runtimeReconcileLastAtMsByThreadId.set(request.threadId, Date.now())
+        } catch (error) {
+          runtimeStore.updateRequest(request.requestId, {
+            status: request.status === 'stopping' ? 'stop_uncertain' : request.status,
+            lastError: getErrorMessage(error, 'runtime reconcile failed'),
+            incrementRetry: true,
+          })
+          writeBridgeLog('warn', 'Runtime reconcile failed', {
+            threadId: request.threadId,
+            requestId: request.requestId,
+            status: request.status,
+            error: getErrorMessage(error, 'runtime reconcile failed'),
+          })
+        }
+      }
+    })().finally(() => {
+      runtimeReconcileInFlight = false
+    })
+  }, 2000)
+  runtimeReconcileTimer.unref?.()
 
   async function readCachedThreadTokenUsage(threadId: string): Promise<ThreadTokenUsage | null> {
     const normalizedThreadId = threadId.trim()
@@ -3704,16 +4294,22 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           ? normalizePlanModeTurnStartParams(body.params, { includeNativeMode: true })
           : body.params
         const rpcThreadId = readThreadIdFromPayload(rpcParams)
+        if (rpcThreadId && shouldInvalidateThreadReadCacheForRpc(body.method)) {
+          cachedThreadReadsByThreadId.delete(rpcThreadId)
+        }
         if (body.method === 'turn/start' && rpcThreadId) {
           const initialTurnId = readTurnIdFromPayload(rpcParams)
           runtimeStateStore.markStarting(rpcThreadId, initialTurnId)
+          persistRuntimeSnapshot(rpcThreadId)
           if (collaborationMode === 'plan') {
             appServer.markPlanModeTurn(rpcThreadId, initialTurnId)
           }
         } else if (body.method === 'turn/interrupt' && rpcThreadId) {
           runtimeStateStore.markStopping(rpcThreadId)
+          persistRuntimeSnapshot(rpcThreadId)
         } else if (body.method === 'thread/resume' && rpcThreadId) {
           runtimeStateStore.markQueued(rpcThreadId)
+          persistRuntimeSnapshot(rpcThreadId)
         }
 
         let rpcResult: unknown
@@ -3727,15 +4323,29 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             const fallbackParams = normalizePlanModeTurnStartParams(body.params, { includeNativeMode: false })
             rpcResult = await appServer.rpc(body.method, fallbackParams ?? null)
           }
-          if (body.method === 'turn/start' && collaborationMode === 'plan' && rpcThreadId) {
+          if (body.method === 'turn/start' && rpcThreadId) {
             const startedTurnId = readTurnIdFromPayload(rpcResult)
-            if (startedTurnId) {
+            runtimeStateStore.markRunning(rpcThreadId, startedTurnId)
+            persistRuntimeSnapshot(rpcThreadId)
+            if (collaborationMode === 'plan' && startedTurnId) {
               appServer.markPlanModeTurn(rpcThreadId, startedTurnId)
             }
           } else if (body.method === 'turn/interrupt' && rpcThreadId) {
             appServer.clearPlanModeTurn(rpcThreadId, readTurnIdFromPayload(rpcParams))
           }
         } catch (error) {
+          if (body.method === 'turn/interrupt' && rpcThreadId && isInterruptSettledError(error)) {
+            appServer.clearPlanModeTurn(rpcThreadId, readTurnIdFromPayload(rpcParams))
+            runtimeStateStore.markInterrupted(rpcThreadId)
+            persistRuntimeSnapshot(rpcThreadId)
+            setJson(res, 200, {
+              result: null,
+              warning: isRpcTimeoutError(error)
+                ? 'turn/interrupt timed out; runtime state was settled locally'
+                : 'turn/interrupt did not find an active turn; runtime state was settled locally',
+            })
+            return
+          }
           if (
             (body.method === 'thread/resume' || body.method === 'thread/archive')
             && isThreadMaterializingError(error)
@@ -3749,7 +4359,28 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           ? await augmentThreadListRpcResult(appServer, rpcParams, rpcResult)
           : rpcResult
         const result = trimThreadTurnsInRpcResult(body.method, enrichedRpcResult)
+        if (
+          body.method === 'thread/read' &&
+          rpcThreadId &&
+          asRecord(rpcParams)?.includeTurns === true
+        ) {
+          rememberCachedThreadRead(rpcThreadId, result)
+        }
         setJson(res, 200, { result })
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/runtime/send') {
+        const payload = await readJsonBody(req)
+        const result = await startRuntimeTurn(payload)
+        setJson(res, result.status === 'start_uncertain' ? 202 : 200, { data: result })
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/runtime/interrupt') {
+        const payload = await readJsonBody(req)
+        const result = await interruptRuntimeTurn(payload)
+        setJson(res, result.status === 'stop_uncertain' ? 202 : 200, { data: result })
         return
       }
 
@@ -3796,16 +4427,60 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
+      if (url.pathname.startsWith('/codex-api/runtime/thread/')) {
+        const suffix = url.pathname.slice('/codex-api/runtime/thread/'.length)
+        const isReconcile = suffix.endsWith('/reconcile')
+        const encodedThreadId = isReconcile ? suffix.slice(0, -'/reconcile'.length) : suffix
+        const threadId = decodeURIComponent(encodedThreadId).trim()
+        if (!threadId) {
+          setJson(res, 400, { error: 'Missing threadId' })
+          return
+        }
+        if (req.method === 'POST' && isReconcile) {
+          const snapshot = await reconcileRuntimeThread(threadId)
+          setJson(res, 200, {
+            data: {
+              snapshot,
+              requests: runtimeStore.listRequestsByThread(threadId, [
+                'pending_start',
+                'start_uncertain',
+                'running',
+                'stopping',
+                'stop_uncertain',
+                'still_running',
+              ]),
+            },
+          })
+          return
+        }
+        if (req.method === 'GET' && !isReconcile) {
+          setJson(res, 200, {
+            data: {
+              snapshot: readLocalRuntimeSnapshot(threadId),
+              requests: runtimeStore.listRequestsByThread(threadId, [
+                'pending_start',
+                'start_uncertain',
+                'running',
+                'stopping',
+                'stop_uncertain',
+                'still_running',
+              ]),
+            },
+          })
+          return
+        }
+      }
+
       if (req.method === 'GET' && url.pathname === '/codex-api/runtime/snapshot') {
         const threadId = (url.searchParams.get('threadId') ?? '').trim()
         if (!threadId) {
           setJson(res, 400, { error: 'Missing threadId' })
           return
         }
-        const snapshot = runtimeStateStore.snapshot(threadId, {
+        const snapshot = persistRuntimeSnapshot(threadId, runtimeStateStore.snapshot(threadId, {
           pendingServerRequests: appServer.listPendingServerRequestsForThread(threadId),
           tokenUsage: appServer.getThreadTokenUsage(threadId),
-        })
+        }))
         setJson(res, 200, { data: snapshot })
         return
       }
@@ -3856,6 +4531,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           status: 'ok',
           data: {
             appServer: appServer.getStatus(),
+            runtimeStore: runtimeStore.getHealth(),
             timestamp: new Date().toISOString(),
           },
         })
@@ -4367,9 +5043,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   }
 
   middleware.dispose = () => {
+    clearInterval(runtimeReconcileTimer)
     threadSearchIndex = null
     bridgeNotificationListeners.clear()
     unsubscribeAppServerNotifications()
+    runtimeStore.close()
     appServer.dispose()
   }
   middleware.subscribeNotifications = (

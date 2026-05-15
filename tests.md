@@ -883,3 +883,222 @@ This file tracks manual regression and feature verification steps.
 
 #### Rollback/Cleanup
 - 若需回退，恢复 `src/server/codexAppServerBridge.ts`、`src/composables/useDesktopState.ts` 和启动脚本的稳定性收敛改动。
+
+---
+
+### Feature: 点击停止后立即清理思考中卡片
+
+#### Prerequisites
+- `7420` 服务运行中，当前构建已包含停止收敛修复。
+- `/codex-api/health` 可访问。
+
+#### Steps
+1. 打开 Android 或移动宽度浏览器。
+2. 在任意会话发送一个会持续一段时间的任务。
+3. 等待底部出现 `思考中` 或执行卡片，并确认输入区显示停止按钮。
+4. 点击停止按钮。
+5. 立即观察底部运行卡片和停止按钮。
+6. 等待 5-10 秒，再打开 `/codex-api/health`。
+7. 如果后端 `turn/interrupt` 发生 timeout，刷新当前会话再观察。
+
+#### Expected Results
+- 点击停止后前端立即隐藏 `思考中` 卡片和停止按钮，不等待 `turn/interrupt` RPC 返回。
+- 本地 `activeTurnId`、`liveOverlay`、运行中命令残影和 pending turn request 会同步清理。
+- 如果 `turn/interrupt` 超时或 app-server 已无 active turn，后端 runtime snapshot 会收敛为 `interrupted`，不会继续返回 `stopping`。
+- 刷新当前会话后不会重新出现旧的 `思考中` 卡片。
+
+#### Rollback/Cleanup
+- 若需回退，恢复 `src/composables/useDesktopState.ts` 的 `settleInterruptedThreadState` 调用，以及 `src/server/codexAppServerBridge.ts` 中 interrupt timeout 的本地收敛逻辑。
+
+---
+
+### Feature: 完成快照清理本地 pending turn
+
+#### Prerequisites
+- `7420` 服务运行中，当前构建已包含 runtime snapshot 收敛修复。
+- 已存在一个后端快照显示 `executionState=completed`、`inProgress=false` 的会话。
+
+#### Steps
+1. 打开一个此前出现过 `思考中` 残留的会话。
+2. 调用 `/codex-api/runtime/snapshot?threadId=<threadId>`。
+3. 确认返回 `completed`、`canStop=false`、`pendingServerRequests=[]`。
+4. 刷新当前会话页面。
+5. 观察底部 live overlay 和输入区停止按钮。
+
+#### Expected Results
+- 后端快照已经 settled 时，前端会清理本地 `pendingTurnRequest`。
+- `pendingTurnRequest` 不再阻止 `clearSettledRuntimeResidue` 执行。
+- 页面不再因为旧 optimistic/pending 状态继续显示 `思考中`。
+- 停止按钮不会在已完成会话里残留。
+
+#### Regression Evidence
+- 2026-05-13 验证线程 `019e15aa-f206-7e01-8258-9361cc4768ce`：
+  - `/codex-api/runtime/snapshot` 返回 `executionState=completed`、`inProgress=false`、`canStop=false`。
+  - 浏览器回归断言 `hasThinking=false`、`hasStop=false`。
+
+#### Rollback/Cleanup
+- 若需回退，恢复 `src/composables/useDesktopState.ts` 中 `applyRuntimeSnapshotState` 对 settled 快照清理 `pendingTurnRequest` 的逻辑。
+
+---
+
+### Feature: 完成快照强制补齐最新消息
+
+#### Prerequisites
+- `7420` 服务运行中，当前构建已包含 settled runtime message refresh 修复。
+- 存在一个老线程：`thread/read(includeTurns:false)` 的 `updatedAt` 不随最新 turn 变化，但 `thread/read(includeTurns:true)` 已能读到最终回复。
+
+#### Steps
+1. 在当前线程发送任务。
+2. 任务执行期间关闭页面、切换应用或让通知流断开。
+3. 等待后端任务完成。
+4. 重新打开同一线程。
+5. 等待一次后台同步或点击顶部刷新。
+6. 观察页面尾部消息和底部 live overlay。
+
+#### Expected Results
+- `/codex-api/runtime/snapshot` 返回 `completed`、`interrupted`、`failed`、`idle` 或 `sync_degraded` 时，前端把它视为非运行态。
+- 即使线程列表版本号没有变化，前端也会按 runtime 的完成事件 key 对当前线程强制重拉一次消息详情。
+- 服务端不能仅因 `thread/read(includeTurns:false)` 的 `updatedAt` 与缓存一致就复用旧 turns；当 runtime 已完成且缓存早于完成事件时，必须重读完整 turns。
+- 前端遇到 settled runtime 的补齐场景时，会额外走一次直接 `thread/read(includeTurns:true)`，避免旧状态快照缓存遮住最终回复。
+- 若后续轮询返回的状态快照比本地已补齐的消息更旧，前端会保留本地较新的消息，不允许旧快照倒退覆盖。
+- 最新用户消息和最终回复会补齐显示。
+- 旧的 `思考中` 卡片、停止按钮和运行中命令残影不会继续出现。
+
+#### Regression Evidence
+- 2026-05-13 浏览器自动化验证线程 `019e15aa-f206-7e01-8258-9361cc4768ce`：
+  - 页面命中最新问题 `为什么生产环境的回复比测试环境慢`。
+  - 页面命中最终回复关键词 `生产比测试慢` / `生产链路更长`。
+  - 等待 7 秒后仍为 `hasThinking=false`、`hasNoCommand=false`，旧状态快照未再覆盖新消息。
+
+#### Rollback/Cleanup
+- 若需回退，恢复 `src/composables/useDesktopState.ts` 中 `settledRuntimeMessageRefreshKeyByThreadId` 和 `sync_degraded` settled 判定相关改动。
+
+---
+
+### Feature: SQLite runtime store 任务状态中枢
+
+#### Prerequisites
+- 当前构建已包含 `~/.cx-codex/runtime.sqlite` runtime store。
+- 不通过重启 7420 修复运行中任务。
+
+#### Steps
+1. 启动 7420 后打开任意已有会话。
+2. 发送一个短任务，等待出现运行态。
+3. 查询 `/codex-api/health`，确认返回 `runtimeStore`。
+4. 查询 `/codex-api/runtime/thread/<threadId>`，确认返回本地 snapshot 和 request。
+5. 调用 `/codex-api/runtime/events?afterSeq=0&limit=20`，确认事件带递增 `seq`。
+6. 关闭页面后等待任务完成，再重新打开同一线程。
+7. 点击顶部刷新，确认会调用 reconcile 并按后端状态收敛。
+
+#### Expected Results
+- `runtimeStore.path` 指向 `~/.cx-codex/runtime.sqlite`。
+- `runtimeStore.latestSeq` 随 app-server notification 增长。
+- 发送请求先产生 runtime request，再进入 `running` 或 `start_uncertain`。
+- `start_uncertain` 不会无限显示普通 `思考中`，而是显示 `确认任务状态中`。
+- 页面恢复优先读取 runtime snapshot，再按需补消息。
+- SQLite 事件 replay 不依赖内存 buffer，页面关闭后仍可补游标。
+
+#### Regression Evidence
+- 2026-05-13 静态验证：`git diff --check` 通过。
+- 2026-05-13 构建验证：`npm.cmd run build` 通过。
+- 2026-05-13 重启 7420 后健康检查通过：
+  - `/health` 返回 `status=ok`。
+  - `/codex-api/health` 返回 `runtimeStore.path=~\.cx-codex\runtime.sqlite`、`pendingRpcCount=0`、`queuedRpcCount=0`、`pendingServerRequestCount=0`、`activePlanModeTurnCount=0`。
+- 2026-05-13 浏览器自动化移动视口验证线程 `019e2206-b4dd-7ee1-906b-ed2aae1b4531`：
+  - 短任务最终回复 `7420-runtime-ok`。
+  - 20 秒 PowerShell 等待任务发送后关闭页面，等待完成后重新打开同一线程，最终回复 `7420-runtime-sleep-ok` 可见。
+  - 重新打开后断言 `hasThinking=false`、`hasProcessing=false`、`hasStop=false`。
+
+---
+
+### Feature: 手动刷新保持当前线程
+
+#### Prerequisites
+- 当前构建已包含 `loadThreads({ preserveMissingSelected: true })` 的手动刷新和后台同步保护。
+- 当前打开的线程可能暂时不在 `thread/list` 返回的当前批次里。
+
+#### Steps
+1. 打开线程 `019e2206-b4dd-7ee1-906b-ed2aae1b4531`。
+2. 点击顶部“刷新当前会话内容”按钮。
+3. 等待刷新完成。
+4. 检查 URL、最终回复、运行卡片和后端健康状态。
+
+#### Expected Results
+- 刷新当前线程时不会因为 `thread/list` 缺少当前线程而跳到列表第一项。
+- URL 保持当前线程。
+- 已完成任务不会重新触发。
+- 页面不出现 `思考中`、`正在处理` 或停止按钮。
+
+#### Regression Evidence
+- 2026-05-13 浏览器自动化移动视口验证：
+  - 点击刷新前后 URL 均为 `#/thread/019e2206-b4dd-7ee1-906b-ed2aae1b4531`。
+  - 页面仍显示 `7420-runtime-sleep-ok`。
+  - 刷新后断言 `hasThinking=false`、`hasProcessing=false`、`hasStop=false`。
+  - 5 秒后 `/codex-api/health` 收敛为 `pendingRpcCount=0`、`queuedRpcCount=0`、`pendingServerRequestCount=0`、`runtimeStore.uncertainRequestCount=0`。
+
+---
+
+### Feature: Runtime store 产品化风险加固
+
+#### Prerequisites
+- 当前构建已包含 SQLite runtime store。
+- 7420 已重启并加载最新 `dist-cli`。
+
+#### Steps
+1. 在移动视口打开 7420。
+2. 发送短任务并等待完成。
+3. 查询最新 `runtime_requests.payload_json`。
+4. 发送长任务后关闭页面，等待后台完成再重新打开线程。
+5. 点击顶部刷新。
+6. 发送长任务并点击停止。
+
+#### Expected Results
+- `runtime_requests.payload_json` 不保存完整用户提示词，只保留计数、模式、模型和哈希等摘要。
+- `runtime_events` 有保留上限，避免长期流式事件无限增长。
+- 7420 或 app-server 重启后，早于当前 app-server 启动时间的 active 快照会降级为 `sync_degraded`。
+- 页面恢复、手动刷新、停止后都不残留 `思考中`、`正在处理` 或停止按钮。
+
+#### Regression Evidence
+- 2026-05-14 静态验证：`git diff --check` 通过。
+- 2026-05-14 构建验证：`npm.cmd run build` 通过。
+- 2026-05-14 重启 7420 后健康检查通过：
+  - `/health` 返回 `status=ok`。
+  - `/codex-api/health` 返回 `pendingRpcCount=0`、`queuedRpcCount=0`、`pendingServerRequestCount=0`、`activePlanModeTurnCount=0`。
+- 2026-05-14 浏览器自动化移动视口验证线程 `019e2222-3f5f-7260-8034-15412b0062e4`：
+  - 短任务最终回复 `7420-risk-ok`，页面断言 `hasThinking=false`、`hasProcessing=false`、`hasStop=false`。
+  - 技能按钮为图标触发器，尺寸约 `36x36`。
+  - 最新 `runtime_requests.payload_json` 不包含 `7420-risk-smoke`，`promptHash` 长度为 64。
+  - 25 秒后台任务发送后关闭页面，等待完成后重新打开同一线程，最终回复 `7420-risk-background-close-ok` 可见。
+  - 点击顶部刷新后 URL 保持 `#/thread/019e2222-3f5f-7260-8034-15412b0062e4`。
+  - 45 秒任务点击停止后，事件 replay 显示 `turn/completed.status=interrupted`，页面最终断言 `hasThinking=false`、`hasProcessing=false`、`hasStop=false`。
+
+---
+
+### Feature: 停止按钮确认式收敛
+
+#### Prerequisites
+- 当前构建已包含 `/codex-api/runtime/interrupt`。
+- 当前会话存在一个可停止的运行中 turn。
+
+#### Steps
+1. 发送一个会运行 30 秒以上的任务。
+2. 等停止按钮出现后点击停止。
+3. 观察按钮和底部运行卡片。
+4. 如果 `turn/interrupt` 正常返回，确认运行卡片消失。
+5. 如果 `turn/interrupt` 超时，确认页面显示 `停止确认中`。
+6. 点击顶部刷新或等待后台 reconciler，确认最终进入 stopped/completed/running 中的一种真实状态。
+
+#### Expected Results
+- 点击停止后不再直接假设任务已停止。
+- timeout 不会被当成成功；会进入 `stop_uncertain`。
+- `stop_uncertain` 下停止按钮禁用，避免重复误点。
+- reconcile 发现仍在运行时恢复运行态，发现已完成/已中断时清理旧卡片。
+
+#### Regression Evidence
+- 2026-05-13 静态验证：`git diff --check` 通过。
+- 2026-05-13 构建验证：`npm.cmd run build` 通过。
+- 2026-05-13 浏览器自动化移动视口验证线程 `019e2206-b4dd-7ee1-906b-ed2aae1b4531`：
+  - 发送 60 秒 PowerShell 等待任务，运行态出现后点击停止。
+  - 事件 replay 显示 `turn/completed` 的 `status=interrupted`。
+  - 页面最终断言 `hasThinking=false`、`hasStop=false`。
+  - `/codex-api/health` 收敛为 `pendingRpcCount=0`、`queuedRpcCount=0`、`pendingServerRequestCount=0`、`runtimeStore.uncertainRequestCount=0`。

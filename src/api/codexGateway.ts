@@ -41,13 +41,16 @@ export type RuntimeExecutionState =
   | 'idle'
   | 'queued'
   | 'starting'
+  | 'start_uncertain'
   | 'running'
   | 'waiting_permission'
   | 'stopping'
+  | 'stop_uncertain'
   | 'completed_pending_sync'
   | 'completed'
   | 'failed'
   | 'interrupted'
+  | 'stopped'
   | 'sync_degraded'
 
 export type ThreadRuntimeSnapshot = {
@@ -69,6 +72,27 @@ export type ThreadRuntimeSnapshot = {
   messageState: 'fresh' | 'cached' | 'unavailable'
   pendingServerRequests: unknown[]
   tokenUsage: UiThreadTokenUsage | null
+}
+
+export type RuntimeRequestStatus =
+  | 'pending_start'
+  | 'starting'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'start_uncertain'
+  | 'stopping'
+  | 'stop_uncertain'
+  | 'stopped'
+  | 'interrupted'
+  | 'still_running'
+  | 'sync_degraded'
+
+export type RuntimeTurnStartResult = {
+  requestId: string
+  threadId: string
+  turnId: string
+  status: RuntimeRequestStatus
 }
 
 export type WorkspaceRootsState = {
@@ -225,6 +249,7 @@ const githubDescriptionTranslationCache = new Map<string, string>()
 const GATEWAY_FETCH_TIMEOUT_MS = 15000
 const GATEWAY_BACKGROUND_FETCH_TIMEOUT_MS = 12000
 const GATEWAY_UPLOAD_FETCH_TIMEOUT_MS = 30000
+const GATEWAY_RUNTIME_FETCH_TIMEOUT_MS = 90000
 
 function hasCjkCharacters(value: string): boolean {
   return /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/u.test(value)
@@ -552,13 +577,16 @@ export async function getThreadRuntimeSnapshot(
   const executionState: RuntimeExecutionState =
     rawExecutionState === 'queued' ||
     rawExecutionState === 'starting' ||
+    rawExecutionState === 'start_uncertain' ||
     rawExecutionState === 'running' ||
     rawExecutionState === 'waiting_permission' ||
     rawExecutionState === 'stopping' ||
+    rawExecutionState === 'stop_uncertain' ||
     rawExecutionState === 'completed_pending_sync' ||
     rawExecutionState === 'completed' ||
     rawExecutionState === 'failed' ||
     rawExecutionState === 'interrupted' ||
+    rawExecutionState === 'stopped' ||
     rawExecutionState === 'sync_degraded'
       ? rawExecutionState
       : 'idle'
@@ -601,7 +629,7 @@ export async function getThreadRuntimeStatusSnapshot(
   threadId: string,
   options: RpcCallOptions = {},
 ): Promise<ThreadRuntimeSnapshot> {
-  const response = await fetchWithTimeout(`/codex-api/runtime/snapshot?threadId=${encodeURIComponent(threadId)}`, {
+  const response = await fetchWithTimeout(`/codex-api/runtime/thread/${encodeURIComponent(threadId)}`, {
     signal: options.signal,
   }, {
     timeoutMs: GATEWAY_BACKGROUND_FETCH_TIMEOUT_MS,
@@ -621,24 +649,31 @@ export async function getThreadRuntimeStatusSnapshot(
     record.data && typeof record.data === 'object' && !Array.isArray(record.data)
       ? (record.data as Record<string, unknown>)
       : {}
-  const rawExecutionState = typeof data.executionState === 'string' ? data.executionState.trim() : ''
+  const snapshotData =
+    data.snapshot && typeof data.snapshot === 'object' && !Array.isArray(data.snapshot)
+      ? (data.snapshot as Record<string, unknown>)
+      : data
+  const rawExecutionState = typeof snapshotData.executionState === 'string' ? snapshotData.executionState.trim() : ''
   const executionState: RuntimeExecutionState =
     rawExecutionState === 'queued' ||
     rawExecutionState === 'starting' ||
+    rawExecutionState === 'start_uncertain' ||
     rawExecutionState === 'running' ||
     rawExecutionState === 'waiting_permission' ||
     rawExecutionState === 'stopping' ||
+    rawExecutionState === 'stop_uncertain' ||
     rawExecutionState === 'completed_pending_sync' ||
     rawExecutionState === 'completed' ||
     rawExecutionState === 'failed' ||
     rawExecutionState === 'interrupted' ||
+    rawExecutionState === 'stopped' ||
     rawExecutionState === 'sync_degraded'
       ? rawExecutionState
       : 'idle'
   const readNullableString = (value: unknown): string | null => (
     typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
   )
-  const rawMessageState = typeof data.messageState === 'string' ? data.messageState.trim() : ''
+  const rawMessageState = typeof snapshotData.messageState === 'string' ? snapshotData.messageState.trim() : ''
   const messageState: ThreadRuntimeSnapshot['messageState'] =
     rawMessageState === 'fresh' || rawMessageState === 'cached' || rawMessageState === 'unavailable'
       ? rawMessageState
@@ -647,24 +682,24 @@ export async function getThreadRuntimeStatusSnapshot(
   return {
     messages: [],
     executionState,
-    inProgress: data.inProgress === true,
-    activeTurnId: typeof data.activeTurnId === 'string' ? data.activeTurnId.trim() : '',
-    activeItemId: typeof data.activeItemId === 'string' ? data.activeItemId.trim() : '',
-    canStop: data.canStop === true,
-    stopRequested: data.stopRequested === true,
-    updatedAtIso: typeof data.updatedAtIso === 'string' ? data.updatedAtIso.trim() : '',
-    lastEventSeq: typeof data.lastEventSeq === 'number' && Number.isFinite(data.lastEventSeq)
-      ? Math.max(0, Math.trunc(data.lastEventSeq))
+    inProgress: snapshotData.inProgress === true,
+    activeTurnId: typeof snapshotData.activeTurnId === 'string' ? snapshotData.activeTurnId.trim() : '',
+    activeItemId: typeof snapshotData.activeItemId === 'string' ? snapshotData.activeItemId.trim() : '',
+    canStop: snapshotData.canStop === true,
+    stopRequested: snapshotData.stopRequested === true,
+    updatedAtIso: typeof snapshotData.updatedAtIso === 'string' ? snapshotData.updatedAtIso.trim() : '',
+    lastEventSeq: typeof snapshotData.lastEventSeq === 'number' && Number.isFinite(snapshotData.lastEventSeq)
+      ? Math.max(0, Math.trunc(snapshotData.lastEventSeq))
       : 0,
-    lastEventAtIso: readNullableString(data.lastEventAtIso),
-    lastStartedAtIso: readNullableString(data.lastStartedAtIso),
-    lastCompletedAtIso: readNullableString(data.lastCompletedAtIso),
-    lastError: readNullableString(data.lastError),
-    stale: data.stale === true,
-    degradedReason: readNullableString(data.degradedReason),
+    lastEventAtIso: readNullableString(snapshotData.lastEventAtIso),
+    lastStartedAtIso: readNullableString(snapshotData.lastStartedAtIso),
+    lastCompletedAtIso: readNullableString(snapshotData.lastCompletedAtIso),
+    lastError: readNullableString(snapshotData.lastError),
+    stale: snapshotData.stale === true,
+    degradedReason: readNullableString(snapshotData.degradedReason),
     messageState,
-    pendingServerRequests: Array.isArray(data.pendingServerRequests) ? data.pendingServerRequests : [],
-    tokenUsage: normalizeThreadTokenUsage(data.tokenUsage),
+    pendingServerRequests: Array.isArray(snapshotData.pendingServerRequests) ? snapshotData.pendingServerRequests : [],
+    tokenUsage: normalizeThreadTokenUsage(snapshotData.tokenUsage),
   }
 }
 
@@ -797,6 +832,73 @@ function normalizeThreadIdFromPayload(payload: unknown): string {
   return ''
 }
 
+function normalizeRuntimeRequestStatus(value: unknown): RuntimeRequestStatus {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  if (
+    normalized === 'pending_start' ||
+    normalized === 'starting' ||
+    normalized === 'running' ||
+    normalized === 'completed' ||
+    normalized === 'failed' ||
+    normalized === 'start_uncertain' ||
+    normalized === 'stopping' ||
+    normalized === 'stop_uncertain' ||
+    normalized === 'stopped' ||
+    normalized === 'interrupted' ||
+    normalized === 'still_running' ||
+    normalized === 'sync_degraded'
+  ) {
+    return normalized
+  }
+  return 'failed'
+}
+
+function normalizeRuntimeExecutionState(value: unknown): RuntimeExecutionState {
+  const rawExecutionState = typeof value === 'string' ? value.trim() : ''
+  return rawExecutionState === 'queued' ||
+    rawExecutionState === 'starting' ||
+    rawExecutionState === 'start_uncertain' ||
+    rawExecutionState === 'running' ||
+    rawExecutionState === 'waiting_permission' ||
+    rawExecutionState === 'stopping' ||
+    rawExecutionState === 'stop_uncertain' ||
+    rawExecutionState === 'completed_pending_sync' ||
+    rawExecutionState === 'completed' ||
+    rawExecutionState === 'failed' ||
+    rawExecutionState === 'interrupted' ||
+    rawExecutionState === 'stopped' ||
+    rawExecutionState === 'sync_degraded'
+    ? rawExecutionState
+    : 'idle'
+}
+
+function normalizeRuntimeTurnStartResult(payload: unknown): RuntimeTurnStartResult {
+  const root =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : {}
+  const data =
+    root.data && typeof root.data === 'object' && !Array.isArray(root.data)
+      ? root.data as Record<string, unknown>
+      : root
+  const request =
+    data.request && typeof data.request === 'object' && !Array.isArray(data.request)
+      ? data.request as Record<string, unknown>
+      : {}
+  const requestId =
+    typeof data.requestId === 'string' && data.requestId.trim().length > 0
+      ? data.requestId.trim()
+      : typeof request.requestId === 'string'
+        ? request.requestId.trim()
+        : ''
+  return {
+    requestId,
+    threadId: typeof data.threadId === 'string' ? data.threadId.trim() : '',
+    turnId: typeof data.turnId === 'string' ? data.turnId.trim() : '',
+    status: normalizeRuntimeRequestStatus(data.status),
+  }
+}
+
 export async function startThread(cwd?: string, model?: string): Promise<string> {
   try {
     const params: Record<string, unknown> = {}
@@ -865,6 +967,38 @@ function isLocalImageInput(value: string): boolean {
   return value.startsWith('/')
 }
 
+function buildTurnStartInput(
+  text: string,
+  imageUrls: string[] = [],
+  skills?: Array<{ name: string; path: string }>,
+  fileAttachments: FileAttachmentParam[] = [],
+): Array<Record<string, unknown>> {
+  const finalText = buildTextWithAttachments(text, fileAttachments)
+  const input: Array<Record<string, unknown>> = [{ type: 'text', text: finalText }]
+  for (const imageUrl of imageUrls) {
+    const normalizedUrl = imageUrl.trim()
+    if (!normalizedUrl) continue
+    if (isLocalImageInput(normalizedUrl)) {
+      input.push({
+        type: 'localImage',
+        path: normalizedUrl,
+      })
+      continue
+    }
+    input.push({
+      type: 'image',
+      url: normalizedUrl,
+      image_url: normalizedUrl,
+    })
+  }
+  if (skills) {
+    for (const skill of skills) {
+      input.push({ type: 'skill', name: skill.name, path: skill.path })
+    }
+  }
+  return input
+}
+
 export async function startThreadTurn(
   threadId: string,
   text: string,
@@ -876,29 +1010,7 @@ export async function startThreadTurn(
   collaborationMode: CollaborationMode = 'execute',
 ): Promise<string> {
   try {
-    const finalText = buildTextWithAttachments(text, fileAttachments)
-    const input: Array<Record<string, unknown>> = [{ type: 'text', text: finalText }]
-    for (const imageUrl of imageUrls) {
-      const normalizedUrl = imageUrl.trim()
-      if (!normalizedUrl) continue
-      if (isLocalImageInput(normalizedUrl)) {
-        input.push({
-          type: 'localImage',
-          path: normalizedUrl,
-        })
-        continue
-      }
-      input.push({
-        type: 'image',
-        url: normalizedUrl,
-        image_url: normalizedUrl,
-      })
-    }
-    if (skills) {
-      for (const skill of skills) {
-        input.push({ type: 'skill', name: skill.name, path: skill.path })
-      }
-    }
+    const input = buildTurnStartInput(text, imageUrls, skills, fileAttachments)
     const attachments = fileAttachments.map((f) => ({ label: f.label, path: f.path, fsPath: f.fsPath }))
     const params: Record<string, unknown> = {
       threadId,
@@ -921,6 +1033,45 @@ export async function startThreadTurn(
   }
 }
 
+export async function startRuntimeThreadTurn(args: {
+  threadId?: string
+  cwd?: string
+  text: string
+  imageUrls?: string[]
+  model?: string
+  effort?: ReasoningEffort
+  skills?: Array<{ name: string; path: string }>
+  fileAttachments?: FileAttachmentParam[]
+  collaborationMode?: CollaborationMode
+  clientMessageId?: string
+}): Promise<RuntimeTurnStartResult> {
+  const fileAttachments = args.fileAttachments ?? []
+  const body: Record<string, unknown> = {
+    threadId: args.threadId?.trim() ?? '',
+    cwd: args.cwd?.trim() ?? '',
+    input: buildTurnStartInput(args.text, args.imageUrls ?? [], args.skills, fileAttachments),
+    attachments: fileAttachments.map((f) => ({ label: f.label, path: f.path, fsPath: f.fsPath })),
+    collaborationMode: args.collaborationMode ?? 'execute',
+    clientMessageId: args.clientMessageId ?? '',
+  }
+  if (args.model?.trim()) body.model = args.model.trim()
+  if (args.effort?.trim()) body.effort = args.effort.trim()
+
+  const response = await fetchWithTimeout('/codex-api/runtime/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, {
+    timeoutMs: GATEWAY_RUNTIME_FETCH_TIMEOUT_MS,
+    label: 'Runtime turn start request',
+  })
+  const payload = (await response.json()) as unknown
+  if (!response.ok && response.status !== 202) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to start runtime turn'))
+  }
+  return normalizeRuntimeTurnStartResult(payload)
+}
+
 export async function interruptThreadTurn(threadId: string, turnId?: string): Promise<void> {
   const normalizedThreadId = threadId.trim()
   const normalizedTurnId = turnId?.trim() || ''
@@ -933,6 +1084,76 @@ export async function interruptThreadTurn(threadId: string, turnId?: string): Pr
     await callRpc('turn/interrupt', { threadId: normalizedThreadId, turnId: normalizedTurnId })
   } catch (error) {
     throw normalizeCodexApiError(error, `Failed to interrupt turn for thread ${normalizedThreadId}`, 'turn/interrupt')
+  }
+}
+
+export async function interruptRuntimeThreadTurn(threadId: string, turnId?: string): Promise<RuntimeTurnStartResult> {
+  const normalizedThreadId = threadId.trim()
+  const normalizedTurnId = turnId?.trim() || ''
+  if (!normalizedThreadId) {
+    return { requestId: '', threadId: '', turnId: '', status: 'failed' }
+  }
+  if (!normalizedTurnId) {
+    throw new Error('runtime/interrupt requires turnId')
+  }
+  const response = await fetchWithTimeout('/codex-api/runtime/interrupt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ threadId: normalizedThreadId, turnId: normalizedTurnId }),
+  }, {
+    timeoutMs: GATEWAY_RUNTIME_FETCH_TIMEOUT_MS,
+    label: 'Runtime interrupt request',
+  })
+  const payload = (await response.json()) as unknown
+  if (!response.ok && response.status !== 202) {
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to interrupt turn for thread ${normalizedThreadId}`))
+  }
+  return normalizeRuntimeTurnStartResult(payload)
+}
+
+export async function reconcileThreadRuntime(threadId: string, options: RpcCallOptions = {}): Promise<ThreadRuntimeSnapshot> {
+  const response = await fetchWithTimeout(`/codex-api/runtime/thread/${encodeURIComponent(threadId)}/reconcile`, {
+    method: 'POST',
+    signal: options.signal,
+  }, {
+    timeoutMs: GATEWAY_RUNTIME_FETCH_TIMEOUT_MS,
+    label: `Runtime reconcile request for ${threadId}`,
+  })
+  const payload = (await response.json()) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to reconcile runtime thread ${threadId}`))
+  }
+  const record =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : {}
+  const data =
+    record.data && typeof record.data === 'object' && !Array.isArray(record.data)
+      ? record.data as Record<string, unknown>
+      : {}
+  const snapshot =
+    data.snapshot && typeof data.snapshot === 'object' && !Array.isArray(data.snapshot)
+      ? data.snapshot as Record<string, unknown>
+      : {}
+  return {
+    messages: [],
+    executionState: normalizeRuntimeExecutionState(snapshot.executionState),
+    inProgress: snapshot.inProgress === true,
+    activeTurnId: typeof snapshot.activeTurnId === 'string' ? snapshot.activeTurnId : '',
+    activeItemId: typeof snapshot.activeItemId === 'string' ? snapshot.activeItemId : '',
+    canStop: snapshot.canStop === true,
+    stopRequested: snapshot.stopRequested === true,
+    updatedAtIso: typeof snapshot.updatedAtIso === 'string' ? snapshot.updatedAtIso : '',
+    lastEventSeq: typeof snapshot.lastEventSeq === 'number' ? snapshot.lastEventSeq : 0,
+    lastEventAtIso: typeof snapshot.lastEventAtIso === 'string' ? snapshot.lastEventAtIso : null,
+    lastStartedAtIso: typeof snapshot.lastStartedAtIso === 'string' ? snapshot.lastStartedAtIso : null,
+    lastCompletedAtIso: typeof snapshot.lastCompletedAtIso === 'string' ? snapshot.lastCompletedAtIso : null,
+    lastError: typeof snapshot.lastError === 'string' ? snapshot.lastError : null,
+    stale: snapshot.stale === true,
+    degradedReason: typeof snapshot.degradedReason === 'string' ? snapshot.degradedReason : null,
+    messageState: 'unavailable',
+    pendingServerRequests: Array.isArray(snapshot.pendingServerRequests) ? snapshot.pendingServerRequests : [],
+    tokenUsage: normalizeThreadTokenUsage(snapshot.tokenUsage),
   }
 }
 

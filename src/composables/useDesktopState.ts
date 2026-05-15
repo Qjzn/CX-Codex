@@ -13,8 +13,9 @@ import {
   getThreadRuntimeSnapshot,
   getThreadRuntimeStatusSnapshot,
   getThreadTokenUsage,
-  interruptThreadTurn,
+  interruptRuntimeThreadTurn,
   replyToServerRequest,
+  reconcileThreadRuntime,
   rollbackThread,
   getThreadGroups,
   getWorkspaceRootsState,
@@ -28,8 +29,8 @@ import {
   resumeThread,
   rollbackWorktreeToMessage,
   startThread,
+  startRuntimeThreadTurn,
   subscribeCodexNotifications,
-  startThreadTurn,
   type RpcConnectionState,
   type RpcNotification,
   type SkillInfo,
@@ -202,6 +203,10 @@ function localizeActivityText(value: string): string {
     'Reading messages': '读取消息',
     'Syncing': '同步中',
     'Queued': '排队中',
+    'Sending': '发送中',
+    'Confirming status': '确认任务状态中',
+    'Stopping': '停止中',
+    'Confirming stop': '停止确认中',
     'Model': '模型',
     'Speed': '速度',
     'Fast': '快速',
@@ -1119,6 +1124,8 @@ export function useDesktopState() {
   let lastAndroidNotificationAtMs = 0
   let replayNotificationsPromise: Promise<void> | null = null
   const pendingTurnStartsById = new Map<string, TurnStartedInfo>()
+  const settledRuntimeMessageRefreshKeyByThreadId = new Map<string, string>()
+  const settledRuntimeRpcRefreshKeyByThreadId = new Map<string, string>()
   const fallbackRetryInFlightThreadIds = new Set<string>()
   const isWorktreeGitAutomationEnabled = ref(true)
   const bufferedAgentDeltaByKey = new Map<string, BufferedAgentDelta>()
@@ -1316,6 +1323,10 @@ export function useDesktopState() {
     if (!threadId) return false
     if (hasRecoveredCompletionAfterRunningActivity(threadId)) return false
     if (runtimeCanStopByThreadId.value[threadId] === true) return true
+    const runtimeState = runtimeExecutionStateByThreadId.value[threadId]
+    if (runtimeState === 'start_uncertain' || runtimeState === 'stopping' || runtimeState === 'stop_uncertain') {
+      return false
+    }
     if (
       isRuntimeExecutionStale(threadId) &&
       !hasRunningLiveCommand(threadId) &&
@@ -1451,6 +1462,8 @@ export function useDesktopState() {
   }
 
   function setPendingTurnRequest(threadId: string, request: PendingTurnRequest): void {
+    settledRuntimeMessageRefreshKeyByThreadId.delete(threadId)
+    settledRuntimeRpcRefreshKeyByThreadId.delete(threadId)
     pendingTurnRequestByThreadId.value = {
       ...pendingTurnRequestByThreadId.value,
       [threadId]: request,
@@ -1537,16 +1550,22 @@ export function useDesktopState() {
 
       await ensureThreadResumed(threadId)
 
-      await startThreadTurn(
+      const retryResult = await startRuntimeThreadTurn({
         threadId,
-        pending.text,
-        pending.imageUrls,
-        MODEL_FALLBACK_ID,
-        pending.effort || undefined,
-        pending.skills.length > 0 ? pending.skills : undefined,
-        pending.fileAttachments,
-        pending.collaborationMode,
-      )
+        text: pending.text,
+        imageUrls: pending.imageUrls,
+        model: MODEL_FALLBACK_ID,
+        effort: pending.effort || undefined,
+        skills: pending.skills.length > 0 ? pending.skills : undefined,
+        fileAttachments: pending.fileAttachments,
+        collaborationMode: pending.collaborationMode,
+      })
+      if (retryResult.turnId) {
+        activeTurnIdByThreadId.value = {
+          ...activeTurnIdByThreadId.value,
+          [threadId]: retryResult.turnId,
+        }
+      }
 
       markThreadResumed(threadId)
 
@@ -2306,9 +2325,11 @@ export function useDesktopState() {
     return (
       state === 'queued' ||
       state === 'starting' ||
+      state === 'start_uncertain' ||
       state === 'running' ||
       state === 'waiting_permission' ||
-      state === 'stopping'
+      state === 'stopping' ||
+      state === 'stop_uncertain'
     )
   }
 
@@ -2318,8 +2339,35 @@ export function useDesktopState() {
       state === 'completed' ||
       state === 'failed' ||
       state === 'interrupted' ||
-      state === 'idle'
+      state === 'stopped' ||
+      state === 'idle' ||
+      state === 'sync_degraded'
     )
+  }
+
+  function getSettledRuntimeMessageRefreshKey(snapshot: ThreadRuntimeSnapshot | null): string {
+    if (!snapshot) return ''
+    if (!isRuntimeExecutionSettledState(snapshot.executionState)) return ''
+    if ((snapshot.pendingServerRequests ?? []).length > 0) return ''
+
+    const eventSeqKey = snapshot.lastEventSeq > 0 ? `seq:${snapshot.lastEventSeq}` : ''
+    const timeKey = snapshot.lastCompletedAtIso || snapshot.lastEventAtIso || ''
+    if (!eventSeqKey && !timeKey) return ''
+    return `${snapshot.executionState}:${eventSeqKey}:${timeKey}`
+  }
+
+  function shouldRefreshMessagesForSettledRuntime(threadId: string, snapshot: ThreadRuntimeSnapshot | null): boolean {
+    if (!threadId) return false
+    const refreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
+    if (!refreshKey) return false
+    return settledRuntimeMessageRefreshKeyByThreadId.get(threadId) !== refreshKey
+  }
+
+  function markSettledRuntimeMessagesRefreshed(threadId: string, snapshot: ThreadRuntimeSnapshot | null): void {
+    if (!threadId) return
+    const refreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
+    if (!refreshKey) return
+    settledRuntimeMessageRefreshKeyByThreadId.set(threadId, refreshKey)
   }
 
   function isRuntimeExecutionStale(threadId: string): boolean {
@@ -2355,12 +2403,31 @@ export function useDesktopState() {
 
     if (isRuntimeExecutionActiveState(snapshot.executionState)) {
       if (snapshot.stale) return
+      settledRuntimeMessageRefreshKeyByThreadId.delete(threadId)
+      settledRuntimeRpcRefreshKeyByThreadId.delete(threadId)
+      if (snapshot.executionState === 'start_uncertain') {
+        setTurnActivityForThread(threadId, {
+          label: 'Confirming status',
+          details: snapshot.lastError ? [snapshot.lastError] : [],
+        })
+      } else if (snapshot.executionState === 'stopping') {
+        setTurnActivityForThread(threadId, { label: 'Stopping', details: [] })
+      } else if (snapshot.executionState === 'stop_uncertain') {
+        setTurnActivityForThread(threadId, {
+          label: 'Confirming stop',
+          details: snapshot.lastError ? [snapshot.lastError] : [],
+        })
+      }
       markThreadLiveExecutionSignal(threadId)
       return
     }
 
     if (isRuntimeExecutionSettledState(snapshot.executionState)) {
-      if ((snapshot.pendingServerRequests ?? []).length === 0 && !hasQueuedThreadWork(threadId)) {
+      const hasPendingServerRequests = (snapshot.pendingServerRequests ?? []).length > 0
+      if (!hasPendingServerRequests && pendingTurnRequestByThreadId.value[threadId]) {
+        clearPendingTurnRequest(threadId)
+      }
+      if (!hasPendingServerRequests && !hasQueuedFollowupWork(threadId)) {
         clearSettledRuntimeResidue(threadId, snapshot.executionState)
         return
       }
@@ -2403,6 +2470,15 @@ export function useDesktopState() {
     }
 
     if (isRuntimeExecutionActiveState(state)) {
+      settledRuntimeMessageRefreshKeyByThreadId.delete(threadId)
+      settledRuntimeRpcRefreshKeyByThreadId.delete(threadId)
+      if (state === 'start_uncertain') {
+        setTurnActivityForThread(threadId, { label: 'Confirming status', details: [] })
+      } else if (state === 'stopping') {
+        setTurnActivityForThread(threadId, { label: 'Stopping', details: [] })
+      } else if (state === 'stop_uncertain') {
+        setTurnActivityForThread(threadId, { label: 'Confirming stop', details: [] })
+      }
       setThreadInProgress(threadId, true)
       markThreadLiveExecutionSignal(threadId)
       setThreadReadActiveState(threadId, null)
@@ -2478,7 +2554,14 @@ export function useDesktopState() {
   async function refreshRuntimeStatusSnapshot(threadId: string, signal?: AbortSignal): Promise<ThreadRuntimeSnapshot | null> {
     if (!threadId) return null
     try {
-      const snapshot = await getThreadRuntimeStatusSnapshot(threadId, { signal })
+      let snapshot = await getThreadRuntimeStatusSnapshot(threadId, { signal })
+      if (
+        snapshot.executionState === 'start_uncertain' ||
+        snapshot.executionState === 'stopping' ||
+        snapshot.executionState === 'stop_uncertain'
+      ) {
+        snapshot = await reconcileThreadRuntime(threadId, { signal })
+      }
       applyRuntimeSnapshotState(threadId, snapshot)
       const normalizedPendingRequests = snapshot.pendingServerRequests
         .map((row) => normalizeServerRequest(row))
@@ -2732,6 +2815,12 @@ export function useDesktopState() {
     return (queuedMessagesByThreadId.value[threadId] ?? []).length > 0
   }
 
+  function hasQueuedFollowupWork(threadId: string): boolean {
+    if (!threadId) return false
+    if (queueProcessingByThreadId.value[threadId] === true) return true
+    return (queuedMessagesByThreadId.value[threadId] ?? []).length > 0
+  }
+
   function hasPendingServerRequestSignal(threadId: string): boolean {
     if (!threadId) return false
     if ((pendingServerRequestsByThreadId.value[threadId] ?? []).length > 0) return true
@@ -2821,6 +2910,33 @@ export function useDesktopState() {
     clearThreadExecutionTracking(threadId)
     setThreadInProgress(threadId, false)
     reconcileLiveThreadState(threadId, false)
+  }
+
+  function settleInterruptedThreadState(threadId: string): void {
+    if (!threadId) return
+    clearPendingTurnRequest(threadId)
+    clearThreadExecutionTracking(threadId)
+    setThreadInProgress(threadId, false)
+    setTurnActivityForThread(threadId, null)
+    setTurnErrorForThread(threadId, null)
+    clearLiveReasoningForThread(threadId)
+    setPendingServerRequestsForThread(threadId, [])
+    if (liveCommandsByThreadId.value[threadId]) {
+      liveCommandsByThreadId.value = omitKey(liveCommandsByThreadId.value, threadId)
+    }
+    if (activeTurnIdByThreadId.value[threadId]) {
+      activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, threadId)
+    }
+    runtimeExecutionStateByThreadId.value = {
+      ...runtimeExecutionStateByThreadId.value,
+      [threadId]: 'interrupted',
+    }
+    if (threadId in runtimeStaleByThreadId.value) {
+      runtimeStaleByThreadId.value = omitKey(runtimeStaleByThreadId.value, threadId)
+    }
+    if (threadId in runtimeCanStopByThreadId.value) {
+      runtimeCanStopByThreadId.value = omitKey(runtimeCanStopByThreadId.value, threadId)
+    }
   }
 
   async function recoverThreadExecutionState(threadId: string): Promise<void> {
@@ -4330,7 +4446,7 @@ export function useDesktopState() {
     }
   }
 
-  async function loadThreads(options: { signal?: AbortSignal } = {}) {
+  async function loadThreads(options: { signal?: AbortSignal; preserveMissingSelected?: boolean } = {}) {
     if (!hasLoadedThreads.value) {
       isLoadingThreads.value = true
     }
@@ -4370,12 +4486,64 @@ export function useDesktopState() {
 
       const currentExists = flatThreads.some((thread) => thread.id === selectedThreadId.value)
 
-      if (!currentExists) {
+      if (!currentExists && options.preserveMissingSelected !== true) {
         setSelectedThreadId(flatThreads[0]?.id ?? '')
       }
     } finally {
       isLoadingThreads.value = false
     }
+  }
+
+  async function refreshSettledSnapshotMessagesFromRpc(
+    threadId: string,
+    snapshot: ThreadRuntimeSnapshot,
+    previousMessages: UiMessage[],
+    signal?: AbortSignal,
+  ): Promise<ThreadRuntimeSnapshot> {
+    const refreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
+    if (!refreshKey) return snapshot
+    const nextMessageIds = new Set(snapshot.messages.map((message) => message.id))
+    const snapshotMissesPreviousMessages = previousMessages.some((message) => !nextMessageIds.has(message.id))
+    if (
+      settledRuntimeRpcRefreshKeyByThreadId.get(threadId) === refreshKey &&
+      !snapshotMissesPreviousMessages
+    ) {
+      return snapshot
+    }
+    if ((snapshot.pendingServerRequests ?? []).length > 0) return snapshot
+
+    try {
+      const detail = await getThreadDetail(threadId, { signal })
+      if (detail.messages.length === 0 && snapshot.messages.length > 0) {
+        return snapshot
+      }
+      settledRuntimeRpcRefreshKeyByThreadId.set(threadId, refreshKey)
+      return {
+        ...snapshot,
+        messages: detail.messages,
+        inProgress: detail.inProgress,
+        activeTurnId: detail.activeTurnId,
+        canStop: detail.inProgress,
+        executionState: detail.inProgress ? 'running' : snapshot.executionState,
+        messageState: 'fresh',
+      }
+    } catch {
+      return snapshot
+    }
+  }
+
+  function shouldPreserveMessagesAfterSettledRpcRefresh(
+    threadId: string,
+    snapshot: ThreadRuntimeSnapshot,
+    previousMessages: UiMessage[],
+    nextMessages: UiMessage[],
+  ): boolean {
+    const refreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
+    if (!refreshKey || settledRuntimeRpcRefreshKeyByThreadId.get(threadId) !== refreshKey) return false
+    if (previousMessages.length === 0 || nextMessages.length >= previousMessages.length) return false
+
+    const nextMessageIds = new Set(nextMessages.map((message) => message.id))
+    return previousMessages.some((message) => !nextMessageIds.has(message.id))
   }
 
   async function loadMessages(threadId: string, options: { silent?: boolean; signal?: AbortSignal } = {}) {
@@ -4415,6 +4583,8 @@ export function useDesktopState() {
         await ensureThreadResumed(threadId, { signal: options.signal })
         snapshot = await getThreadRuntimeSnapshot(threadId, { signal: options.signal })
       }
+      const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
+      snapshot = await refreshSettledSnapshotMessagesFromRpc(threadId, snapshot, previousPersisted, options.signal)
 
       applyRuntimeSnapshotState(threadId, snapshot)
       const nextMessages = snapshot.messages
@@ -4428,11 +4598,18 @@ export function useDesktopState() {
         .map((row) => normalizeServerRequest(row))
         .filter((request): request is UiServerRequest => request !== null)
       setPendingServerRequestsForThread(threadId, normalizedPendingRequests)
-      const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
+      const shouldPreserveSettledRpcMessages = shouldPreserveMessagesAfterSettledRpcRefresh(
+        threadId,
+        snapshot,
+        previousPersisted,
+        nextMessages,
+      )
       const shouldPreserveMissingMessages =
-        (options.silent === true && inProgress) || snapshot.messageState !== 'fresh'
+        shouldPreserveSettledRpcMessages ||
+        (options.silent === true && inProgress) ||
+        snapshot.messageState !== 'fresh'
       const mergedMessages = mergeMessages(previousPersisted, nextMessages, {
-        // Preserve previous content whenever the server only returned cached/unavailable message state.
+        // Preserve previous content when the server only returns partial or stale message state.
         preserveMissing: shouldPreserveMissingMessages,
       })
       setPersistedMessagesForThread(threadId, mergedMessages)
@@ -4566,17 +4743,19 @@ export function useDesktopState() {
       pendingThreadMessageRefresh.delete(threadId)
 
       try {
-        await refreshRuntimeStatusSnapshot(threadId)
+        const reconciledSnapshot = await reconcileThreadRuntime(threadId)
+        applyRuntimeSnapshotState(threadId, reconciledSnapshot)
         await loadMessages(threadId, { silent: true })
       } catch (unknownError) {
         if (!isAbortLikeError(unknownError)) throw unknownError
         await new Promise((resolve) => window.setTimeout(resolve, 50))
-        await refreshRuntimeStatusSnapshot(threadId)
+        const reconciledSnapshot = await reconcileThreadRuntime(threadId)
+        applyRuntimeSnapshotState(threadId, reconciledSnapshot)
         await loadMessages(threadId, { silent: true })
       }
 
       await loadPendingServerRequestsFromBridge()
-      await loadThreads()
+      await loadThreads({ preserveMissingSelected: true })
 
       if (selectedThreadId.value === threadId) {
         const resolvedExecutionState = resolveThreadReadExecutionState(
@@ -4874,19 +5053,20 @@ export function useDesktopState() {
       const capturedThreadId = threadId
       const capturedCwd = targetCwd || null
       const capturedPrompt = nextText
-      void startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode)
-        .catch((unknownError) => {
-          shouldAutoScrollOnNextAgentEvent = false
-          removeOptimisticUserMessage(threadId, optimisticMessageId)
-          setThreadInProgress(threadId, false)
-          setTurnActivityForThread(threadId, null)
-          const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
-          setTurnErrorForThread(threadId, errorMessage)
-          error.value = errorMessage
-        })
-        .finally(() => {
-          isSendingMessage.value = false
-        })
+      try {
+        await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode)
+      } catch (unknownError) {
+        shouldAutoScrollOnNextAgentEvent = false
+        removeOptimisticUserMessage(threadId, optimisticMessageId)
+        setThreadInProgress(threadId, false)
+        setTurnActivityForThread(threadId, null)
+        const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+        setTurnErrorForThread(threadId, errorMessage)
+        error.value = errorMessage
+        throw unknownError
+      } finally {
+        isSendingMessage.value = false
+      }
       consumePlanModeAfterSubmit(collaborationMode)
       void requestThreadTitleGeneration(capturedThreadId, capturedPrompt, capturedCwd)
       return threadId
@@ -4936,17 +5116,20 @@ export function useDesktopState() {
       await ensureThreadResumed(threadId)
 
       let startedTurnId = ''
+      let runtimeStartStatus: 'running' | 'start_uncertain' | '' = ''
       try {
-        startedTurnId = await startThreadTurn(
+        const runtimeResult = await startRuntimeThreadTurn({
           threadId,
-          nextText,
+          text: nextText,
           imageUrls,
-          modelId || undefined,
-          reasoningEffort || undefined,
-          skills.length > 0 ? skills : undefined,
+          model: modelId || undefined,
+          effort: reasoningEffort || undefined,
+          skills: skills.length > 0 ? skills : undefined,
           fileAttachments,
           collaborationMode,
-        )
+        })
+        startedTurnId = runtimeResult.turnId
+        runtimeStartStatus = runtimeResult.status === 'start_uncertain' ? 'start_uncertain' : 'running'
       } catch (unknownError) {
         if (modelId && modelId !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
           await applyFallbackModelSelection()
@@ -4960,21 +5143,30 @@ export function useDesktopState() {
             fallbackRetried: true,
             createdAtMs: Date.now(),
           })
-          startedTurnId = await startThreadTurn(
+          const runtimeFallbackResult = await startRuntimeThreadTurn({
             threadId,
-            nextText,
+            text: nextText,
             imageUrls,
-            MODEL_FALLBACK_ID,
-            reasoningEffort || undefined,
-            skills.length > 0 ? skills : undefined,
+            model: MODEL_FALLBACK_ID,
+            effort: reasoningEffort || undefined,
+            skills: skills.length > 0 ? skills : undefined,
             fileAttachments,
             collaborationMode,
-          )
+          })
+          startedTurnId = runtimeFallbackResult.turnId
+          runtimeStartStatus = runtimeFallbackResult.status === 'start_uncertain' ? 'start_uncertain' : 'running'
         } else {
           throw unknownError
         }
       }
 
+      if (runtimeStartStatus === 'start_uncertain') {
+        setRuntimeExecutionState(threadId, 'start_uncertain', { canStop: false })
+        setTurnActivityForThread(threadId, {
+          label: 'Confirming status',
+          details: ['等待 7420 后台核验任务是否已开始'],
+        })
+      }
       if (startedTurnId) {
         activeTurnIdByThreadId.value = {
           ...activeTurnIdByThreadId.value,
@@ -5054,14 +5246,22 @@ export function useDesktopState() {
     triggerAndroidHaptic('warning')
     isInterruptingTurn.value = true
     error.value = ''
+    setRuntimeExecutionState(threadId, 'stopping', { canStop: false, activeTurnId: turnId })
+    setTurnActivityForThread(threadId, { label: 'Stopping', details: [] })
+    pendingThreadMessageRefresh.add(threadId)
+    pendingThreadsRefresh = true
     try {
-      await interruptThreadTurn(threadId, turnId)
-      clearThreadExecutionTracking(threadId)
-      setThreadInProgress(threadId, false)
-      setTurnActivityForThread(threadId, null)
-      setTurnErrorForThread(threadId, null)
-      if (activeTurnIdByThreadId.value[threadId]) {
-        activeTurnIdByThreadId.value = omitKey(activeTurnIdByThreadId.value, threadId)
+      const result = await interruptRuntimeThreadTurn(threadId, turnId)
+      if (result.status === 'stop_uncertain') {
+        setRuntimeExecutionState(threadId, 'stop_uncertain', { canStop: false, activeTurnId: turnId })
+        setTurnActivityForThread(threadId, {
+          label: 'Confirming stop',
+          details: ['停止请求超时，正在核验任务是否已结束'],
+        })
+      } else if (result.status === 'still_running') {
+        setRuntimeExecutionState(threadId, 'running', { canStop: true, activeTurnId: turnId })
+      } else {
+        settleInterruptedThreadState(threadId)
       }
       pendingThreadMessageRefresh.add(threadId)
       pendingThreadsRefresh = true
@@ -5069,6 +5269,7 @@ export function useDesktopState() {
     } catch (unknownError) {
       const staleInterrupt = isStaleInterruptError(unknownError) || isRuntimeExecutionStale(threadId)
       if (staleInterrupt) {
+        settleInterruptedThreadState(threadId)
         try {
           await loadMessages(threadId, { silent: true })
         } catch {
@@ -5080,12 +5281,13 @@ export function useDesktopState() {
           error.value = ''
           pendingThreadMessageRefresh.add(threadId)
           pendingThreadsRefresh = true
+          void syncFromNotifications()
           return
         }
       }
       const errorMessage = unknownError instanceof Error ? unknownError.message : 'Failed to interrupt active turn'
-      setTurnErrorForThread(threadId, errorMessage)
       error.value = errorMessage
+      void refreshRuntimeStatusSnapshot(threadId)
     } finally {
       isInterruptingTurn.value = false
     }
@@ -5272,7 +5474,7 @@ export function useDesktopState() {
   async function syncThreadStatus(
     options: { includeThreadList?: boolean; forceMessageRefresh?: boolean; urgent?: boolean } = {},
   ): Promise<void> {
-    const forceMessageRefresh = options.forceMessageRefresh === true
+    let forceMessageRefresh = options.forceMessageRefresh === true
     const includeThreadList = options.includeThreadList !== false
     const urgent = options.urgent === true
 
@@ -5303,15 +5505,36 @@ export function useDesktopState() {
 
     try {
       const initialThreadId = selectedThreadId.value
+      let initialRuntimeSnapshot: ThreadRuntimeSnapshot | null = null
       if (initialThreadId) {
-        await refreshRuntimeStatusSnapshot(initialThreadId, controller?.signal)
+        const wasExecutionActive =
+          isThreadExecutionActive(initialThreadId) ||
+          Boolean(pendingTurnRequestByThreadId.value[initialThreadId]) ||
+          Boolean(activeTurnIdByThreadId.value[initialThreadId])
+        const snapshot = await refreshRuntimeStatusSnapshot(initialThreadId, controller?.signal)
+        initialRuntimeSnapshot = snapshot
+        if (
+          snapshot &&
+          wasExecutionActive &&
+          isRuntimeExecutionSettledState(snapshot.executionState) &&
+          (snapshot.pendingServerRequests ?? []).length === 0
+        ) {
+          forceMessageRefresh = true
+        }
+        if (shouldRefreshMessagesForSettledRuntime(initialThreadId, snapshot)) {
+          forceMessageRefresh = true
+        }
       }
       if (forceMessageRefresh && initialThreadId) {
         await refreshSelectedMessagesNow(initialThreadId)
+        markSettledRuntimeMessagesRefreshed(initialThreadId, initialRuntimeSnapshot)
       }
 
       if (includeThreadList) {
-        await loadThreads({ signal: controller?.signal })
+        await loadThreads({
+          signal: controller?.signal,
+          preserveMissingSelected: Boolean(initialThreadId),
+        })
       }
 
       if (
@@ -5592,7 +5815,10 @@ export function useDesktopState() {
       }
 
       if (shouldRefreshThreads) {
-        await loadThreads({ signal: controller?.signal })
+        await loadThreads({
+          signal: controller?.signal,
+          preserveMissingSelected: Boolean(initialActiveThreadId),
+        })
       }
 
       const activeThreadId = selectedThreadId.value

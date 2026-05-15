@@ -4,6 +4,7 @@
       class="composer-dropdown-trigger"
       type="button"
       :disabled="disabled"
+      :aria-label="triggerAriaLabelText"
       @click="onToggle"
     >
       <component :is="selectedPrefixIcon" v-if="selectedPrefixIcon" class="composer-dropdown-prefix-icon" />
@@ -24,7 +25,7 @@
       <div ref="menuRef" class="composer-dropdown-menu" :style="mobileDialogStyle">
         <div v-if="isMobileViewport" class="composer-dropdown-dialog-head">
           <div class="composer-dropdown-dialog-handle" aria-hidden="true" />
-          <p class="composer-dropdown-dialog-title">{{ selectedLabel || placeholder?.trim() || '请选择' }}</p>
+          <p class="composer-dropdown-dialog-title">{{ menuTitleLabel || placeholder?.trim() || '请选择' }}</p>
         </div>
 
         <div v-if="enableSearch" class="composer-dropdown-search-wrap">
@@ -46,7 +47,12 @@
               type="button"
               @click="onSelect(option.value)"
             >
-              {{ option.label }}
+              <span class="composer-dropdown-option-copy">
+                <span class="composer-dropdown-option-label">{{ option.label }}</span>
+                <span v-if="option.description" class="composer-dropdown-option-description">
+                  {{ option.description }}
+                </span>
+              </span>
             </button>
           </li>
           <li v-if="filteredOptions.length === 0" class="composer-dropdown-empty">
@@ -91,12 +97,15 @@ import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 type DropdownOption = {
   value: string
   label: string
+  description?: string
 }
 
 const props = defineProps<{
   modelValue: string
   options: DropdownOption[]
   placeholder?: string
+  triggerDisplayLabel?: string
+  triggerAriaLabel?: string
   disabled?: boolean
   selectedPrefixIcon?: Component | null
   openDirection?: 'up' | 'down'
@@ -128,9 +137,22 @@ const isMobileViewport = ref(typeof window !== 'undefined' ? window.innerWidth <
 
 const selectedLabel = computed(() => {
   const selected = props.options.find((option) => option.value === props.modelValue)
+  const triggerLabel = props.triggerDisplayLabel?.trim()
+  if (triggerLabel) return triggerLabel
   if (selected) return selected.label
   return props.placeholder?.trim() || ''
 })
+const menuTitleLabel = computed(() => {
+  const selected = props.options.find((option) => option.value === props.modelValue)
+  if (selected) return selected.label
+  return props.placeholder?.trim() || ''
+})
+const triggerAriaLabelText = computed(() =>
+  props.triggerAriaLabel?.trim()
+  || selectedLabel.value
+  || props.placeholder?.trim()
+  || '选择项目',
+)
 
 const openDirection = computed(() => props.openDirection ?? 'down')
 const enableSearch = computed(() => props.enableSearch === true)
@@ -255,7 +277,7 @@ onBeforeUnmount(() => {
 .composer-dropdown-trigger {
   @apply inline-flex h-7 min-w-0 items-center gap-1 border-0 bg-transparent p-0 text-sm leading-none text-zinc-500 outline-none transition;
   font-family: var(--font-sans-ui);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .composer-dropdown-prefix-icon {
@@ -308,7 +330,7 @@ onBeforeUnmount(() => {
 .composer-dropdown-dialog-title {
   @apply m-0 px-2 text-center text-sm font-semibold text-zinc-800;
   font-family: var(--font-sans-reading);
-  letter-spacing: var(--tracking-tight-soft);
+  letter-spacing: 0;
 }
 
 .composer-dropdown-search-wrap {
@@ -328,11 +350,28 @@ onBeforeUnmount(() => {
 }
 
 .composer-dropdown-option {
-  @apply flex w-full items-center rounded-lg border-0 bg-transparent px-2 py-1.5 text-left text-sm text-zinc-700 transition hover:bg-zinc-100;
+  @apply flex w-full items-center justify-between gap-3 rounded-lg border-0 bg-transparent px-2 py-1.5 text-left text-sm text-zinc-700 transition hover:bg-zinc-100;
 }
 
 .composer-dropdown-option.is-selected {
   @apply bg-zinc-100;
+}
+
+.composer-dropdown-option.is-selected::after {
+  content: '✓';
+  @apply shrink-0 text-base leading-none text-zinc-600;
+}
+
+.composer-dropdown-option-copy {
+  @apply min-w-0;
+}
+
+.composer-dropdown-option-label {
+  @apply block truncate;
+}
+
+.composer-dropdown-option-description {
+  @apply mt-0.5 block text-xs leading-snug text-zinc-500;
 }
 
 .composer-dropdown-empty {

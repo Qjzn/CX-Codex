@@ -2,12 +2,19 @@
   <div ref="rootRef" class="search-dropdown">
     <button
       class="search-dropdown-trigger"
+      :class="{ 'is-icon': isIconTrigger, 'has-selection': triggerSelectedCount > 0 }"
       type="button"
       :disabled="disabled"
+      :aria-label="triggerLabel"
+      :title="triggerLabel"
       @click="onToggle"
     >
+      <slot v-if="isIconTrigger" name="trigger-icon" />
       <span class="search-dropdown-value">{{ displayLabel }}</span>
-      <IconTablerChevronDown class="search-dropdown-chevron" />
+      <span v-if="isIconTrigger && triggerSelectedCount > 0" class="search-dropdown-count" aria-hidden="true">
+        {{ triggerSelectedCountLabel }}
+      </span>
+      <IconTablerChevronDown v-if="!isIconTrigger" class="search-dropdown-chevron" />
     </button>
 
     <Teleport to="body">
@@ -93,6 +100,10 @@ const props = defineProps<{
   searchPlaceholder?: string
   disabled?: boolean
   openDirection?: 'up' | 'down'
+  triggerVariant?: 'text' | 'icon'
+  triggerAriaLabel?: string
+  triggerDisplayLabel?: string
+  selectedCount?: number
 }>()
 
 const emit = defineEmits<{
@@ -112,6 +123,12 @@ const viewportBottomInset = ref(0)
 const isMobileViewport = ref(typeof window !== 'undefined' ? window.innerWidth < 640 : false)
 
 const selected = computed(() => new Set(props.selectedValues))
+const isIconTrigger = computed(() => props.triggerVariant === 'icon')
+const triggerLabel = computed(() => props.triggerAriaLabel || displayLabel.value)
+const triggerSelectedCount = computed(() => Math.max(0, props.selectedCount ?? props.selectedValues.length))
+const triggerSelectedCountLabel = computed(() => (
+  triggerSelectedCount.value > 9 ? '9+' : String(triggerSelectedCount.value)
+))
 const overlayStyle = computed(() => {
   const baseInset = isMobileViewport.value ? 12 : 20
   return {
@@ -137,6 +154,7 @@ const mobileListStyle = computed(() => {
 })
 
 const displayLabel = computed(() => {
+  if (props.triggerDisplayLabel) return props.triggerDisplayLabel
   if (props.selectedValues.length === 0) return props.placeholder || '请选择...'
   if (props.selectedValues.length === 1) {
     const opt = props.options.find((o) => o.value === props.selectedValues[0])
@@ -248,12 +266,28 @@ watch(
   @apply inline-flex h-7 items-center gap-1 border-0 bg-transparent p-0 text-sm leading-none text-zinc-500 outline-none transition;
 }
 
+.search-dropdown-trigger.is-icon {
+  @apply relative justify-center gap-0;
+}
+
 .search-dropdown-trigger:disabled {
   @apply cursor-not-allowed text-zinc-500;
 }
 
 .search-dropdown-value {
   @apply whitespace-nowrap text-left;
+}
+
+.search-dropdown-trigger.is-icon .search-dropdown-value {
+  @apply sr-only;
+}
+
+.search-dropdown-trigger.is-icon :slotted(svg) {
+  @apply h-4 w-4;
+}
+
+.search-dropdown-count {
+  @apply absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[#0f766e] px-1 text-[10px] font-semibold leading-none text-white shadow-sm;
 }
 
 .search-dropdown-chevron {

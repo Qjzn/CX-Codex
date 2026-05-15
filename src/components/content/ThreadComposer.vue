@@ -181,116 +181,140 @@
               拍照
             </button>
             <div class="thread-composer-attach-separator" />
-            <button
-              v-if="isFastModeSupported"
-              class="thread-composer-attach-setting"
-              type="button"
-              role="switch"
-              :aria-checked="selectedSpeedMode === 'fast'"
-              :aria-label="`快速模式${selectedSpeedMode === 'fast' ? '已开启' : '已关闭'}`"
-              :disabled="isSpeedToggleDisabled"
-              @click="onToggleSpeedMode"
-            >
-              <span class="thread-composer-attach-setting-copy">
-                <span class="thread-composer-attach-setting-label">快速模式</span>
-                <span class="thread-composer-attach-setting-description">{{ speedModeDescription }}</span>
-              </span>
+            <div class="thread-composer-attach-section" aria-label="发送模式">
+              <span class="thread-composer-attach-section-title">发送模式</span>
+              <div class="thread-composer-attach-mode-toggle" role="group" aria-label="协作模式">
+                <button
+                  type="button"
+                  :class="{ 'is-active': selectedCollaborationMode === 'execute' }"
+                  :aria-pressed="selectedCollaborationMode === 'execute'"
+                  :disabled="isInteractionDisabled"
+                  @click="onCollaborationModeSelect('execute')"
+                >
+                  执行
+                </button>
+                <button
+                  type="button"
+                  :class="{ 'is-active': selectedCollaborationMode === 'plan' }"
+                  :aria-pressed="selectedCollaborationMode === 'plan'"
+                  :disabled="isInteractionDisabled"
+                  @click="onCollaborationModeSelect('plan')"
+                >
+                  计划
+                </button>
+              </div>
               <span
-                class="thread-composer-attach-switch"
-                :class="{
-                  'is-on': selectedSpeedMode === 'fast',
-                  'is-busy': isUpdatingSpeedMode,
-                  'is-disabled': isSpeedToggleDisabled,
-                }"
+                v-if="collaborationModeHintText"
+                class="thread-composer-attach-mode-hint"
+                :class="{ 'is-plan': selectedCollaborationMode === 'plan' }"
+              >
+                {{ collaborationModeHintText }}
+              </span>
+            </div>
+            <div class="thread-composer-attach-section" aria-label="技能">
+              <ComposerSearchDropdown
+                class="thread-composer-attach-skill-dropdown"
+                :options="skillDropdownOptions"
+                :selected-values="selectedSkillPaths"
+                placeholder="技能"
+                search-placeholder="搜索技能..."
+                open-direction="up"
+                trigger-display-label="技能"
+                :trigger-aria-label="skillTriggerLabel"
+                :selected-count="selectedSkills.length"
+                :disabled="disabled || !activeThreadId"
+                @toggle="onSkillDropdownToggle"
               />
-            </button>
+            </div>
           </div>
         </div>
 
         <div v-if="!isDictationRecording" class="thread-composer-control-strip" aria-label="发送设置">
-          <div class="thread-composer-mode-toggle" role="group" aria-label="协作模式">
+          <div ref="runtimeSettingsRootRef" class="thread-composer-runtime">
             <button
+              class="thread-composer-runtime-trigger"
               type="button"
-              :class="{ 'is-active': selectedCollaborationMode === 'execute' }"
-              :aria-pressed="selectedCollaborationMode === 'execute'"
-              :disabled="isInteractionDisabled"
-              @click="onCollaborationModeSelect('execute')"
+              :disabled="isInteractionDisabled || models.length === 0"
+              :aria-expanded="isRuntimeSettingsOpen"
+              aria-label="配置模型、质量和速度"
+              @click="toggleRuntimeSettings"
             >
-              执行
+              <IconTablerBolt
+                v-if="selectedSpeedMode === 'fast'"
+                class="thread-composer-runtime-bolt"
+              />
+              <span class="thread-composer-runtime-summary">{{ runtimeSettingsSummary }}</span>
+              <IconTablerChevronDown
+                class="thread-composer-runtime-chevron"
+                :class="{ 'is-open': isRuntimeSettingsOpen }"
+              />
             </button>
             <button
+              v-if="isRuntimeSettingsOpen && isCompactViewport"
+              class="thread-composer-mobile-backdrop"
               type="button"
-              :class="{ 'is-active': selectedCollaborationMode === 'plan' }"
-              :aria-pressed="selectedCollaborationMode === 'plan'"
-              :disabled="isInteractionDisabled"
-              @click="onCollaborationModeSelect('plan')"
+              aria-label="关闭配置菜单"
+              @click="closeRuntimeSettings"
+            />
+            <div
+              v-if="isRuntimeSettingsOpen"
+              class="thread-composer-runtime-panel"
+              :class="{ 'thread-composer-runtime-panel--sheet': isCompactViewport }"
+              role="dialog"
+              aria-label="模型、质量和速度"
             >
-              计划
-            </button>
+              <div v-if="isCompactViewport" class="thread-composer-runtime-handle" aria-hidden="true" />
+              <div class="thread-composer-runtime-section">
+                <div class="thread-composer-runtime-section-title">模型</div>
+                <div class="thread-composer-runtime-options thread-composer-runtime-options--models">
+                  <button
+                    v-for="option in modelOptions"
+                    :key="option.value"
+                    class="thread-composer-runtime-option"
+                    :class="{ 'is-selected': option.value === selectedModel }"
+                    type="button"
+                    :disabled="disabled || !activeThreadId"
+                    @click="onRuntimeModelSelect(option.value)"
+                  >
+                    <span>{{ option.label }}</span>
+                  </button>
+                </div>
+              </div>
+              <div class="thread-composer-runtime-section">
+                <div class="thread-composer-runtime-section-title">质量</div>
+                <div class="thread-composer-runtime-options">
+                  <button
+                    v-for="option in reasoningOptions"
+                    :key="option.value"
+                    class="thread-composer-runtime-option"
+                    :class="{ 'is-selected': option.value === selectedReasoningEffort }"
+                    type="button"
+                    :disabled="disabled || !activeThreadId"
+                    @click="onRuntimeReasoningEffortSelect(option.value)"
+                  >
+                    <span>{{ option.label }}</span>
+                  </button>
+                </div>
+              </div>
+              <div class="thread-composer-runtime-section">
+                <div class="thread-composer-runtime-section-title">速度</div>
+                <div class="thread-composer-runtime-options">
+                  <button
+                    v-for="option in speedModeOptions"
+                    :key="option.value"
+                    class="thread-composer-runtime-option thread-composer-runtime-option--stacked"
+                    :class="{ 'is-selected': option.value === selectedSpeedMode }"
+                    type="button"
+                    :disabled="isSpeedToggleDisabled"
+                    @click="onRuntimeSpeedModeSelect(option.value)"
+                  >
+                    <span>{{ option.label }}</span>
+                    <small>{{ option.description }}</small>
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
-          <span
-            v-if="collaborationModeHintText"
-            class="thread-composer-mode-hint"
-            :class="{ 'is-plan': selectedCollaborationMode === 'plan' }"
-          >
-            {{ collaborationModeHintText }}
-          </span>
-          <template v-if="isCompactViewport">
-            <ComposerSearchDropdown
-              class="thread-composer-control thread-composer-control--skills"
-              :options="skillDropdownOptions"
-              :selected-values="selectedSkillPaths"
-              placeholder="技能"
-              search-placeholder="搜索技能..."
-              open-direction="up"
-              :disabled="disabled || !activeThreadId"
-              @toggle="onSkillDropdownToggle"
-            />
-            <button
-              class="thread-composer-compact-settings-trigger"
-              type="button"
-              :disabled="isInteractionDisabled"
-              :aria-expanded="isCompactSettingsOpen"
-              aria-label="更多设置"
-              @click="toggleCompactSettings"
-            >
-              <IconTablerSettings class="thread-composer-compact-settings-icon" />
-              <span class="thread-composer-compact-settings-label">更多设置</span>
-            </button>
-          </template>
-          <template v-else>
-            <ComposerDropdown
-              class="thread-composer-control"
-              :model-value="selectedModel"
-              :options="modelOptions"
-              :selected-prefix-icon="showFastModeModelIcon ? IconTablerBolt : null"
-              placeholder="模型"
-              open-direction="up"
-              :disabled="disabled || !activeThreadId || models.length === 0"
-              @update:model-value="onModelSelect"
-            />
-
-            <ComposerSearchDropdown
-              class="thread-composer-control"
-              :options="skillDropdownOptions"
-              :selected-values="selectedSkillPaths"
-              placeholder="技能"
-              search-placeholder="搜索技能..."
-              open-direction="up"
-              :disabled="disabled || !activeThreadId"
-              @toggle="onSkillDropdownToggle"
-            />
-
-            <ComposerDropdown
-              class="thread-composer-control"
-              :model-value="selectedReasoningEffort"
-              :options="reasoningOptions"
-              placeholder="思考强度"
-              open-direction="up"
-              :disabled="disabled || !activeThreadId"
-              @update:model-value="onReasoningEffortSelect"
-            />
-          </template>
         </div>
 
         <div
@@ -359,53 +383,6 @@
       </div>
 
     </div>
-    <button
-      v-if="isCompactSettingsOpen"
-      class="thread-composer-mobile-backdrop"
-      type="button"
-      aria-label="关闭更多设置"
-      @click="closeCompactSettings"
-    />
-    <div
-      v-if="isCompactSettingsOpen"
-      class="thread-composer-compact-settings-panel"
-      role="dialog"
-      aria-modal="true"
-      aria-label="更多设置"
-    >
-      <div class="thread-composer-compact-settings-header">
-        <span class="thread-composer-compact-settings-title">更多设置</span>
-        <button
-          class="thread-composer-compact-settings-close"
-          type="button"
-          aria-label="关闭更多设置"
-          @click="closeCompactSettings"
-        >
-          完成
-        </button>
-      </div>
-      <div class="thread-composer-compact-settings-grid">
-        <ComposerDropdown
-          class="thread-composer-control"
-          :model-value="selectedModel"
-          :options="modelOptions"
-          :selected-prefix-icon="showFastModeModelIcon ? IconTablerBolt : null"
-          placeholder="模型"
-          open-direction="up"
-          :disabled="disabled || !activeThreadId || models.length === 0"
-          @update:model-value="onCompactModelSelect"
-        />
-        <ComposerDropdown
-          class="thread-composer-control"
-          :model-value="selectedReasoningEffort"
-          :options="reasoningOptions"
-          placeholder="思考强度"
-          open-direction="up"
-          :disabled="disabled || !activeThreadId"
-          @update:model-value="onCompactReasoningEffortSelect"
-        />
-      </div>
-    </div>
     <input
       ref="photoLibraryInputRef"
       class="thread-composer-hidden-input"
@@ -452,12 +429,11 @@ import { useDictation } from '../../composables/useDictation'
 import { searchComposerFiles, uploadFile, type ComposerFileSuggestion } from '../../api/codexGateway'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerBolt from '../icons/IconTablerBolt.vue'
+import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerFolder from '../icons/IconTablerFolder.vue'
 import IconTablerMicrophone from '../icons/IconTablerMicrophone.vue'
 import IconTablerPlayerStopFilled from '../icons/IconTablerPlayerStopFilled.vue'
-import IconTablerSettings from '../icons/IconTablerSettings.vue'
-import ComposerDropdown from './ComposerDropdown.vue'
 import ComposerSearchDropdown from './ComposerSearchDropdown.vue'
 import ComposerSkillPicker from './ComposerSkillPicker.vue'
 
@@ -581,12 +557,14 @@ const {
   },
 })
 const attachMenuRootRef = ref<HTMLElement | null>(null)
+const runtimeSettingsRootRef = ref<HTMLElement | null>(null)
 const photoLibraryInputRef = ref<HTMLInputElement | null>(null)
 const cameraCaptureInputRef = ref<HTMLInputElement | null>(null)
 const audioCaptureInputRef = ref<HTMLInputElement | null>(null)
 const folderPickerInputRef = ref<HTMLInputElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const isAttachMenuOpen = ref(false)
+const isRuntimeSettingsOpen = ref(false)
 const isSlashMenuOpen = ref(false)
 const mentionStartIndex = ref<number | null>(null)
 const mentionQuery = ref('')
@@ -594,7 +572,6 @@ const fileMentionSuggestions = ref<ComposerFileSuggestion[]>([])
 const isFileMentionOpen = ref(false)
 const fileMentionHighlightedIndex = ref(0)
 const isCompactViewport = ref(false)
-const isCompactSettingsOpen = ref(false)
 const draftGeneration = ref(0)
 let fileMentionSearchToken = 0
 let fileMentionDebounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -605,23 +582,63 @@ const DRAFT_STORAGE_PREFIX = 'codex-web-local.thread-draft.v1.'
 let lastActiveThreadId = ''
 
 const reasoningOptions: Array<{ value: ReasoningEffort; label: string }> = [
-  { value: 'none', label: '无' },
+  { value: 'none', label: '智能' },
   { value: 'minimal', label: '极低' },
   { value: 'low', label: '低' },
   { value: 'medium', label: '中' },
   { value: 'high', label: '高' },
-  { value: 'xhigh', label: '极高' },
+  { value: 'xhigh', label: '超高' },
 ]
+
+const speedModeOptions: Array<{ value: SpeedMode; label: string; description: string }> = [
+  { value: 'standard', label: '标准', description: '默认速度，常规用量' },
+  { value: 'fast', label: '快速', description: '约 1.5 倍速，用量增加' },
+]
+
 function formatModelLabel(modelId: string): string {
   return modelId.trim().replace(/^gpt/i, 'GPT')
+}
+
+function formatModelTriggerLabel(modelId: string): string {
+  const normalized = modelId.trim().toLowerCase()
+  const version = normalized.match(/^gpt-(\d+(?:\.\d+)?)/u)?.[1]
+  if (version) {
+    if (normalized.includes('spark')) return `${version} Spark`
+    if (normalized.includes('mini')) return `${version} mini`
+    return version
+  }
+  return formatModelLabel(modelId).replace(/^GPT-?/i, '').trim()
 }
 
 const modelOptions = computed(() =>
   props.models.map((modelId) => ({ value: modelId, label: formatModelLabel(modelId) })),
 )
+const selectedModelTriggerLabel = computed(() =>
+  formatModelTriggerLabel(props.selectedModel) || '模型',
+)
+const selectedReasoningEffortTriggerLabel = computed(() => {
+  const selected = reasoningOptions.find((option) => option.value === props.selectedReasoningEffort)
+  return selected?.label ?? '智能'
+})
+const selectedSpeedModeTriggerLabel = computed(() =>
+  props.selectedSpeedMode === 'fast' ? '快速' : '标准',
+)
+const runtimeSettingsSummary = computed(() => {
+  const parts = [
+    selectedModelTriggerLabel.value,
+    selectedReasoningEffortTriggerLabel.value,
+    selectedSpeedModeTriggerLabel.value,
+  ].filter((part) => part.trim().length > 0)
+  return parts.join(' · ') || '配置'
+})
 
 const skillOptions = computed<SkillItem[]>(() => props.skills ?? [])
 const selectedSkillPaths = computed(() => selectedSkills.value.map((s) => s.path))
+const skillTriggerLabel = computed(() => (
+  selectedSkills.value.length > 0
+    ? `选择技能，已选 ${selectedSkills.value.length} 个`
+    : '选择技能'
+))
 const skillDropdownOptions = computed(() =>
   (props.skills ?? []).map((s) => ({
     value: s.path,
@@ -651,21 +668,9 @@ const standaloneFileAttachments = computed(() => {
   return fileAttachments.value.filter((att) => !grouped.has(att.fsPath))
 })
 const isInteractionDisabled = computed(() => props.disabled || !props.activeThreadId)
-const isFastModeSupported = computed(() => props.selectedModel.trim() === 'gpt-5.4')
-const showFastModeModelIcon = computed(() =>
-  props.selectedSpeedMode === 'fast' && isFastModeSupported.value,
-)
 const isSpeedToggleDisabled = computed(() =>
   isInteractionDisabled.value || props.isUpdatingSpeedMode === true,
 )
-const speedModeDescription = computed(() => {
-  if (props.isUpdatingSpeedMode) {
-    return '正在保存速度设置...'
-  }
-  return props.selectedSpeedMode === 'fast'
-    ? '约 1.5 倍速度，额度消耗按 2 倍计算'
-    : '默认速度，按正常额度消耗'
-})
 const collaborationModeHintText = computed(() => {
   if (props.isTurnInProgress) return ''
   return props.selectedCollaborationMode === 'plan'
@@ -790,8 +795,8 @@ function replaceDraftState(payload: ComposerDraftPayload): void {
   folderUploadGroups.value = []
   dictationFeedback.value = ''
   isAttachMenuOpen.value = false
+  isRuntimeSettingsOpen.value = false
   isSlashMenuOpen.value = false
-  isCompactSettingsOpen.value = false
   closeFileMention()
 }
 
@@ -899,28 +904,33 @@ function onReasoningEffortSelect(value: string): void {
   emit('update:selected-reasoning-effort', value as ReasoningEffort)
 }
 
-function onCompactModelSelect(value: string): void {
-  onModelSelect(value)
-  closeCompactSettings()
-}
-
-function onCompactReasoningEffortSelect(value: string): void {
-  onReasoningEffortSelect(value)
-  closeCompactSettings()
-}
-
-function onToggleSpeedMode(): void {
+function onSpeedModeSelect(value: string): void {
   if (isSpeedToggleDisabled.value) return
-  emit('update:selected-speed-mode', props.selectedSpeedMode === 'fast' ? 'standard' : 'fast')
+  emit('update:selected-speed-mode', value === 'fast' ? 'fast' : 'standard')
 }
 
-function toggleCompactSettings(): void {
-  if (isInteractionDisabled.value) return
-  isCompactSettingsOpen.value = !isCompactSettingsOpen.value
+function onRuntimeModelSelect(value: string): void {
+  onModelSelect(value)
 }
 
-function closeCompactSettings(): void {
-  isCompactSettingsOpen.value = false
+function onRuntimeReasoningEffortSelect(value: ReasoningEffort): void {
+  onReasoningEffortSelect(value)
+}
+
+function onRuntimeSpeedModeSelect(value: SpeedMode): void {
+  onSpeedModeSelect(value)
+}
+
+function toggleRuntimeSettings(): void {
+  if (isInteractionDisabled.value || props.models.length === 0) return
+  isRuntimeSettingsOpen.value = !isRuntimeSettingsOpen.value
+  if (isRuntimeSettingsOpen.value) {
+    isAttachMenuOpen.value = false
+  }
+}
+
+function closeRuntimeSettings(): void {
+  isRuntimeSettingsOpen.value = false
 }
 
 function onDictationToggle(): void {
@@ -995,6 +1005,9 @@ function onDocumentVisibilityChange(): void {
 function toggleAttachMenu(): void {
   if (isInteractionDisabled.value) return
   isAttachMenuOpen.value = !isAttachMenuOpen.value
+  if (isAttachMenuOpen.value) {
+    isRuntimeSettingsOpen.value = false
+  }
 }
 
 function triggerPhotoLibrary(): void {
@@ -1399,20 +1412,27 @@ function onSkillDropdownToggle(path: string, checked: boolean): void {
 }
 
 function onDocumentClick(event: MouseEvent): void {
-  if (!isAttachMenuOpen.value) return
-  const root = attachMenuRootRef.value
-  if (!root) return
   const target = event.target as Node | null
-  if (!target || root.contains(target)) return
-  isAttachMenuOpen.value = false
+  if (!target) return
+
+  if (isAttachMenuOpen.value) {
+    const attachRoot = attachMenuRootRef.value
+    if (attachRoot && !attachRoot.contains(target)) {
+      isAttachMenuOpen.value = false
+    }
+  }
+
+  if (isRuntimeSettingsOpen.value) {
+    const runtimeRoot = runtimeSettingsRootRef.value
+    if (runtimeRoot && !runtimeRoot.contains(target)) {
+      isRuntimeSettingsOpen.value = false
+    }
+  }
 }
 
 function syncCompactViewport(): void {
   if (typeof window === 'undefined') return
   isCompactViewport.value = window.matchMedia('(max-width: 767px)').matches
-  if (!isCompactViewport.value) {
-    isCompactSettingsOpen.value = false
-  }
 }
 
 onMounted(() => {
@@ -1645,7 +1665,7 @@ watch(
   font-family: var(--font-sans-reading);
   font-size: var(--font-size-reading, 15px);
   line-height: 1.55;
-  letter-spacing: var(--tracking-body-soft);
+  letter-spacing: 0;
 }
 
 .thread-composer-input:focus {
@@ -1673,7 +1693,7 @@ watch(
 }
 
 .thread-composer-attach-menu {
-  @apply absolute bottom-11 left-0 z-20 w-72 max-w-[calc(100vw-1rem)] rounded-xl border border-zinc-200 bg-white p-1;
+  @apply absolute bottom-11 left-0 z-20 w-72 max-w-[calc(100vw_-_1rem)] rounded-xl border border-zinc-200 bg-white p-1;
 }
 
 .thread-composer-attach-menu--sheet {
@@ -1688,138 +1708,146 @@ watch(
   @apply my-1 h-px bg-zinc-100;
 }
 
-.thread-composer-attach-setting {
-  @apply flex w-full items-center justify-between gap-3 rounded-lg border-0 bg-transparent px-3 py-2 text-left transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-400;
+.thread-composer-attach-section {
+  @apply flex flex-col gap-2 rounded-lg px-2 py-2;
 }
 
-.thread-composer-attach-setting-copy {
-  @apply min-w-0 flex flex-col;
+.thread-composer-attach-section-title {
+  @apply text-xs font-semibold text-[#8a8173];
 }
 
-.thread-composer-attach-setting-label {
-  @apply text-sm text-zinc-800;
+.thread-composer-attach-mode-toggle {
+  @apply grid h-10 grid-cols-2 gap-1 rounded-[16px] border border-[#e4dac9] bg-[#f7f3ea] p-1;
 }
 
-.thread-composer-attach-setting-description {
-  @apply mt-0.5 text-xs text-zinc-500;
+.thread-composer-attach-mode-toggle button {
+  @apply min-w-0 rounded-[12px] px-3 text-sm font-semibold leading-none text-[#6f6555] transition hover:bg-white/70 disabled:cursor-not-allowed disabled:opacity-50;
 }
 
-.thread-composer-attach-switch {
-  @apply relative h-5 w-9 shrink-0 rounded-full bg-zinc-300 transition-colors;
-}
-
-.thread-composer-attach-switch::after {
-  content: '';
-  @apply absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform shadow-sm;
-}
-
-.thread-composer-attach-switch.is-on {
-  @apply bg-emerald-600;
-}
-
-.thread-composer-attach-switch.is-on::after {
-  transform: translateX(16px);
-}
-
-.thread-composer-attach-switch.is-busy {
-  @apply opacity-70;
-}
-
-.thread-composer-attach-switch.is-disabled {
-  @apply opacity-50;
-}
-
-.thread-composer-control {
-  @apply shrink min-w-0;
-}
-
-.thread-composer-control--skills {
-  @apply flex-1 min-w-0 w-full;
-  overflow: hidden;
-}
-
-.thread-composer-control--skills :deep(.search-dropdown-trigger) {
-  width: 100%;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.thread-composer-control--skills :deep(.search-dropdown-value) {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.thread-composer-control-strip {
-  @apply min-w-0 flex flex-1 items-center gap-2 sm:gap-2;
-}
-
-.thread-composer-mode-toggle {
-  @apply inline-grid h-9 shrink-0 grid-cols-2 overflow-hidden rounded-[14px] border border-[#e4dac9] bg-[#f7f3ea] p-0.5;
-}
-
-.thread-composer-mode-toggle button {
-  @apply min-w-0 rounded-[11px] px-2.5 text-[13px] font-semibold leading-none text-[#7a705f] transition disabled:cursor-not-allowed disabled:opacity-50;
-}
-
-.thread-composer-mode-toggle button.is-active {
+.thread-composer-attach-mode-toggle button.is-active {
   @apply bg-[#0f766e] text-white shadow-sm;
 }
 
-.thread-composer-mode-hint {
-  @apply min-w-0 truncate text-[12px] font-medium text-[#8a8173];
+.thread-composer-attach-mode-hint {
+  @apply min-w-0 text-xs font-medium leading-relaxed text-[#8a8173];
 }
 
-.thread-composer-mode-hint.is-plan {
+.thread-composer-attach-mode-hint.is-plan {
   @apply text-[#0f766e];
 }
 
-.thread-composer-control :deep(.composer-dropdown-value) {
-  @apply truncate;
+.thread-composer-attach-skill-dropdown {
+  @apply w-full min-w-0;
 }
 
-.thread-composer-control :deep(.search-dropdown-value) {
-  @apply truncate;
+.thread-composer-attach-skill-dropdown :deep(.search-dropdown-trigger) {
+  @apply h-10 w-full justify-between rounded-[16px] border border-[#e4dac9] bg-[#fffaf3] px-3 text-sm font-semibold text-[#544a3d] transition hover:border-[#d7ccb8] hover:bg-[#f7f3ea] disabled:cursor-not-allowed disabled:opacity-50;
 }
 
-.thread-composer-actions {
-  @apply ml-auto flex min-w-0 items-center gap-2;
+.thread-composer-attach-skill-dropdown :deep(.search-dropdown-value) {
+  @apply min-w-0 truncate;
 }
 
-.thread-composer-compact-settings-trigger {
-  @apply inline-flex h-9 shrink-0 items-center gap-1.5 rounded-2xl border border-[#e4dac9] bg-[#f7f3ea] px-3 text-sm font-medium text-[#544a3d] transition hover:border-[#d7ccb8] hover:bg-[#efe8dc] disabled:cursor-not-allowed disabled:opacity-50;
+.thread-composer-control-strip {
+  @apply min-w-0 flex flex-1 items-center overflow-visible;
 }
 
-.thread-composer-compact-settings-icon {
-  @apply h-4 w-4 shrink-0 text-[#7a705f];
+.thread-composer-runtime {
+  @apply relative min-w-0;
+  width: min(12.5rem, 100%);
 }
 
-.thread-composer-compact-settings-label {
-  @apply whitespace-nowrap;
+.thread-composer-runtime-trigger {
+  @apply inline-flex h-8 w-full min-w-0 items-center justify-center gap-1 rounded-[14px] border-0 bg-transparent px-2 text-[13px] font-semibold text-[#544a3d] transition hover:bg-[#f7f3ea] active:bg-[#efe8dc] disabled:cursor-not-allowed disabled:opacity-50;
+  font-family: var(--font-sans-ui);
+  letter-spacing: 0;
+}
+
+.thread-composer-runtime-bolt {
+  @apply h-4 w-4 shrink-0 text-[#6f6555];
+}
+
+.thread-composer-runtime-summary {
+  @apply min-w-0 truncate;
+}
+
+.thread-composer-runtime-chevron {
+  @apply h-3 w-3 shrink-0 text-[#7a705f] transition-transform;
+}
+
+.thread-composer-runtime-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.thread-composer-runtime-panel {
+  @apply absolute bottom-[calc(100%+0.5rem)] left-0 z-[70] w-[20rem] max-w-[calc(100vw_-_1.5rem)] rounded-[22px] border border-[#ddd5c7] bg-[#fffdf8] p-2 shadow-xl shadow-[#1f2937]/10;
+}
+
+.thread-composer-runtime-panel--sheet {
+  @apply fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] w-auto max-w-none rounded-[24px] p-3;
+}
+
+.thread-composer-runtime-handle {
+  @apply mx-auto mb-2 h-1 w-10 rounded-full bg-[#d8d0c2];
+}
+
+.thread-composer-runtime-section {
+  @apply py-1.5;
+}
+
+.thread-composer-runtime-section + .thread-composer-runtime-section {
+  @apply border-t border-[#eee7dc];
+}
+
+.thread-composer-runtime-section-title {
+  @apply px-2 pb-1 text-xs font-semibold text-[#8a8173];
+}
+
+.thread-composer-runtime-options {
+  @apply grid grid-cols-2 gap-1;
+}
+
+.thread-composer-runtime-options--models {
+  @apply grid-cols-1;
+}
+
+.thread-composer-runtime-option {
+  @apply relative flex min-h-9 min-w-0 items-center justify-between gap-2 rounded-[14px] border-0 bg-transparent px-2.5 py-2 text-left text-sm font-medium text-[#3b332a] transition hover:bg-[#f7f3ea] disabled:cursor-not-allowed disabled:opacity-50;
+  font-family: var(--font-sans-ui);
+  letter-spacing: 0;
+}
+
+.thread-composer-runtime-option span {
+  @apply min-w-0 truncate;
+}
+
+.thread-composer-runtime-option small {
+  @apply mt-0.5 block text-xs font-normal leading-snug text-[#8a8173];
+}
+
+.thread-composer-runtime-option--stacked {
+  @apply flex-col items-start justify-center gap-0.5;
+}
+
+.thread-composer-runtime-option.is-selected {
+  @apply bg-[#f7f3ea] pr-7 text-[#0f766e];
+}
+
+.thread-composer-runtime-option.is-selected::after {
+  content: '✓';
+  @apply absolute right-2 top-1/2 -translate-y-1/2 text-base leading-none text-[#0f766e];
+}
+
+.thread-composer-runtime-option--stacked.is-selected {
+  @apply pr-7;
 }
 
 .thread-composer-mobile-backdrop {
   @apply fixed inset-0 z-[60] border-0 bg-[#1f2937]/24 p-0;
 }
 
-.thread-composer-compact-settings-panel {
-  @apply fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-[70] rounded-[24px] border border-[#ddd5c7] bg-[#fffdf8] p-3 shadow-xl shadow-[#1f2937]/10;
-}
-
-.thread-composer-compact-settings-header {
-  @apply mb-3 flex items-center justify-between gap-3;
-}
-
-.thread-composer-compact-settings-title {
-  @apply text-sm font-semibold text-[#2d261f];
-}
-
-.thread-composer-compact-settings-close {
-  @apply rounded-full border border-[#e4dac9] bg-[#f7f3ea] px-3 py-1 text-xs font-medium text-[#544a3d] transition hover:bg-[#efe8dc];
-}
-
-.thread-composer-compact-settings-grid {
-  @apply flex flex-col gap-2;
+.thread-composer-actions {
+  @apply ml-auto flex min-w-0 items-center gap-2;
 }
 
 .thread-composer-actions--recording {
@@ -1922,30 +1950,21 @@ watch(
   }
 
   .thread-composer-control-strip {
-    @apply w-full min-w-0 gap-1 pr-0 overflow-visible;
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) 2.25rem;
+    @apply w-full min-w-0 overflow-visible pr-0;
+    display: flex;
+    justify-content: flex-start;
   }
 
-  .thread-composer-mode-toggle {
-    @apply h-9;
+  .thread-composer-runtime {
+    width: min(10.75rem, 100%);
   }
 
-  .thread-composer-mode-toggle button {
-    @apply px-2 text-[12px];
-  }
-
-  .thread-composer-mode-hint {
-    @apply hidden;
-  }
-
-  .thread-composer-control {
-    min-width: 0;
-    max-width: none;
+  .thread-composer-runtime-trigger {
+    @apply h-9 gap-1 rounded-[14px] border border-[#e4dac9] bg-[#f7f3ea] px-2 text-[13px];
   }
 
   .thread-composer-actions {
-    @apply ml-0 min-w-0 shrink-0 w-auto justify-end;
+    @apply ml-0 min-w-0 shrink-0 w-auto justify-end gap-1;
     justify-self: end;
   }
 
@@ -1964,26 +1983,15 @@ watch(
     max-width: min(20rem, calc(100vw - 1.5rem));
   }
 
-  .thread-composer-control :deep(.composer-dropdown-trigger),
-  .thread-composer-control :deep(.search-dropdown-trigger) {
-    @apply h-9 rounded-[14px] border border-[#e4dac9] bg-[#f7f3ea] px-2.5 text-[13px];
+  .thread-composer-runtime-options--models {
+    max-height: 14rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
   }
 
-  .thread-composer-control :deep(.composer-dropdown-trigger) {
-    min-width: 100%;
-  }
-
-  .thread-composer-control :deep(.search-dropdown-trigger) {
-    min-width: 100%;
-    justify-content: space-between;
-  }
-
-  .thread-composer-compact-settings-trigger {
-    @apply h-9 w-9 justify-center rounded-[14px] px-0;
-  }
-
-  .thread-composer-compact-settings-label {
-    @apply sr-only;
+  .thread-composer-runtime-options--models::-webkit-scrollbar {
+    display: none;
   }
 }
 </style>
