@@ -6,7 +6,7 @@ import { writeFile, stat } from 'node:fs/promises'
 import express, { type Express } from 'express'
 import { createCodexBridgeMiddleware } from './codexAppServerBridge.js'
 import { createAuthSession } from './authMiddleware.js'
-import { createDirectoryListingHtml, createLocalFileActionHtml, createTextEditorHtml, decodeBrowsePath, isTextEditableFile, normalizeLocalPath } from './localBrowseUi.js'
+import { createDirectoryListingHtml, createLocalFileActionHtml, createTextEditorHtml, decodeBrowsePath, isPreviewableLocalPath, isTextEditableFile, normalizeLocalPath, toLocalFilePreviewHref } from './localBrowseUi.js'
 import { WebSocketServer, type WebSocket } from 'ws'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -130,8 +130,16 @@ function setLocalFileContentType(res: express.Response, localPath: string): void
   res.setHeader('Content-Type', getLocalFileContentType(localPath))
 }
 
-function setLocalFileDisposition(res: express.Response, localPath: string): void {
-  if (shouldDownloadLocalFile(localPath)) {
+function setLocalFileDisposition(
+  res: express.Response,
+  localPath: string,
+  mode: 'inline' | 'attachment' | undefined = undefined,
+): void {
+  if (mode === 'inline') {
+    res.setHeader('Content-Disposition', 'inline')
+    return
+  }
+  if (mode === 'attachment' || shouldDownloadLocalFile(localPath)) {
     res.setHeader('Content-Disposition', encodeContentDispositionFileName(basename(localPath) || 'download'))
     return
   }
@@ -192,8 +200,13 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
     }
 
     res.setHeader('Cache-Control', 'private, no-store')
+    const dispositionMode = req.query.inline === '1'
+      ? 'inline'
+      : req.query.download === '1'
+        ? 'attachment'
+        : undefined
     setLocalFileContentType(res, localPath)
-    setLocalFileDisposition(res, localPath)
+    setLocalFileDisposition(res, localPath, dispositionMode)
     res.sendFile(localPath, { dotfiles: 'allow' }, (error) => {
       if (!error) return
       if (!res.headersSent) res.status(404).json({ error: '文件不存在。' })
@@ -215,6 +228,11 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       if (fileStat.isDirectory()) {
         const html = await createDirectoryListingHtml(localPath)
         res.status(200).type('text/html; charset=utf-8').send(html)
+        return
+      }
+
+      if (isPreviewableLocalPath(localPath)) {
+        res.redirect(302, toLocalFilePreviewHref(localPath))
         return
       }
 

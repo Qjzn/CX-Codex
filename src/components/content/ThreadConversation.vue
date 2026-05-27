@@ -2362,11 +2362,16 @@ function isMobileShellExternalUrl(href: string): boolean {
   return /^(https?:|mailto:|tel:)/iu.test(href.trim())
 }
 
+function shouldOpenInternalHrefInCurrentWindow(href: string): boolean {
+  if (!href.startsWith('/')) return false
+  return isNativeAndroidShell() || window.matchMedia('(max-width: 820px)').matches
+}
+
 async function openHyperlink(href: string): Promise<void> {
   const normalizedHref = href.trim()
   if (!normalizedHref || normalizedHref === '#') return
 
-  if (isNativeAndroidShell() && normalizedHref.startsWith('/')) {
+  if (shouldOpenInternalHrefInCurrentWindow(normalizedHref)) {
     window.location.href = normalizedHref
     return
   }

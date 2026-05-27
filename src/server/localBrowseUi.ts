@@ -15,6 +15,13 @@ const TEXT_EDITABLE_EXTENSIONS = new Set([
   '.sh', '.toml', '.ini', '.conf', '.sql', '.bat', '.cmd', '.ps1',
 ])
 
+const PREVIEWABLE_EXTENSIONS = new Set([
+  '.pdf',
+  '.md', '.markdown', '.txt', '.log', '.json', '.csv', '.xml', '.yaml', '.yml',
+  '.docx',
+  '.avif', '.bmp', '.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp',
+])
+
 function languageForPath(pathValue: string): string {
   const extension = extname(pathValue).toLowerCase()
   switch (extension) {
@@ -68,6 +75,10 @@ export function decodeBrowsePath(rawPath: string): string {
 
 export function isTextEditablePath(pathValue: string): boolean {
   return TEXT_EDITABLE_EXTENSIONS.has(extname(pathValue).toLowerCase())
+}
+
+export function isPreviewableLocalPath(pathValue: string): boolean {
+  return PREVIEWABLE_EXTENSIONS.has(extname(pathValue).toLowerCase())
 }
 
 function looksLikeTextBuffer(buffer: Buffer): boolean {
@@ -127,6 +138,10 @@ function toFileHref(pathValue: string): string {
   return `/codex-local-file?path=${encodeURIComponent(pathValue)}&download=1`
 }
 
+export function toLocalFilePreviewHref(pathValue: string): string {
+  return `/local-preview.html?path=${encodeURIComponent(pathValue)}`
+}
+
 function escapeForInlineScriptString(value: string): string {
   // Prevent breaking out of inline <script> blocks when file content contains HTML/script tokens.
   return JSON.stringify(value)
@@ -174,6 +189,10 @@ function formatFileSize(bytes: number): string {
 function fileTypeLabel(localPath: string): string {
   const extension = extname(localPath).toLowerCase()
   switch (extension) {
+    case '.md':
+    case '.markdown': return 'Markdown 文档'
+    case '.txt':
+    case '.log': return '文本文件'
     case '.doc':
     case '.docx': return 'Word 文档'
     case '.xls':
@@ -306,10 +325,25 @@ export function createLocalFileActionHtml(
     const openBtn = document.getElementById('openBtn');
     const downloadBtn = document.getElementById('downloadBtn');
     const copyBtn = document.getElementById('copyBtn');
-    const ACTION_TIMEOUT_MS = 25000;
+    const ACTION_TIMEOUT_MS = 30000;
 
     function getMobileShell() {
       return window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.MobileShell;
+    }
+
+    function isAndroidShellPage() {
+      return Boolean(window.Capacitor && typeof window.Capacitor.getPlatform === 'function' && window.Capacitor.getPlatform() === 'android');
+    }
+
+    function callMobileShell(method, options) {
+      const mobileShell = getMobileShell();
+      if (mobileShell && typeof mobileShell[method] === 'function') {
+        return mobileShell[method](options || {});
+      }
+      if (window.Capacitor && typeof window.Capacitor.nativePromise === 'function') {
+        return window.Capacitor.nativePromise('MobileShell', method, options || {});
+      }
+      return null;
     }
 
     function setBusy(button, busy) {
@@ -325,6 +359,35 @@ export function createLocalFileActionHtml(
       return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timer));
     }
 
+    async function describeAndroidShellVersion() {
+      const mobileShell = getMobileShell();
+      if (!mobileShell && !(window.Capacitor && typeof window.Capacitor.nativePromise === 'function')) {
+        return '';
+      }
+      try {
+        const infoPromise = callMobileShell('getAppInfo', {});
+        if (!infoPromise) return '';
+        const info = await withTimeout(infoPromise, '客户端版本检测超时。');
+        return info && info.versionName ? '当前客户端版本：' + info.versionName + '。' : '';
+      } catch {
+        return '';
+      }
+    }
+
+    async function explainMissingNativeDownload() {
+      const version = await describeAndroidShellVersion();
+      if (isAndroidShellPage()) {
+        status.textContent = (version ? version + ' ' : '') + '当前 Android 客户端不支持原生文件下载，请在设置里检查更新并安装 2.2.3 或以上版本；临时可复制路径后用文件管理器打开。';
+        return;
+      }
+      status.textContent = '当前页面不在 CX Codex Android 客户端内，无法调用原生下载；已尝试交给浏览器下载，若无提示请复制路径后在文件管理器中打开。';
+    }
+
+    function isMissingNativeMethodError(error) {
+      const message = error && error.message ? String(error.message) : String(error || '');
+      return /not implemented|not found|not available|not registered|no such method|method.*missing|plugin.*missing/iu.test(message);
+    }
+
     function requestBrowserDownload(message) {
       status.textContent = message;
       const anchor = document.createElement('a');
@@ -337,36 +400,42 @@ export function createLocalFileActionHtml(
       window.setTimeout(() => {
         setBusy(openBtn, false);
         if (status.textContent === message) {
-          status.textContent = '已请求系统下载；如果没有下载提示，请更新 Android 客户端或复制路径后在文件管理器中打开。';
+          void explainMissingNativeDownload();
         }
       }, 1200);
     }
 
     async function downloadWithMobileShell(absoluteUrl) {
-      const mobileShell = getMobileShell();
-      if (!mobileShell || typeof mobileShell.downloadFileFromUrl !== 'function') {
+      const downloadPromise = callMobileShell('downloadFileFromUrl', { url: absoluteUrl, fileName, mimeType: contentType });
+      if (!downloadPromise) {
         return false;
       }
-      await withTimeout(
-        mobileShell.downloadFileFromUrl({ url: absoluteUrl, fileName, mimeType: contentType }),
+      const result = await withTimeout(
+        downloadPromise,
         '下载请求超时，请检查网络或稍后重试。'
       );
-      status.textContent = '已加入系统下载，请在通知栏或下载目录查看。';
+      if (result && result.status === 'started') {
+        status.textContent = '已开始后台下载，完成后会保存到系统下载目录。';
+      } else if (result && result.status === 'saved') {
+        status.textContent = '已保存到系统下载目录。';
+      } else {
+        status.textContent = '已加入系统下载，请在通知栏或下载目录查看。';
+      }
       return true;
     }
 
     openBtn.addEventListener('click', async () => {
       const absoluteUrl = new URL(downloadHref, window.location.href).toString();
-      const mobileShell = getMobileShell();
       setBusy(openBtn, true);
       status.textContent = '正在打开文件...';
       try {
-        if (mobileShell && typeof mobileShell.openFileFromUrl === 'function') {
+        const openPromise = callMobileShell('openFileFromUrl', { url: absoluteUrl, fileName, mimeType: contentType });
+        if (openPromise) {
           await withTimeout(
-            mobileShell.openFileFromUrl({ url: absoluteUrl, fileName, mimeType: contentType }),
+            openPromise,
             '打开请求超时，已停止等待。'
           );
-          status.textContent = '已交给系统应用打开。';
+          status.textContent = '已开始后台打开，下载完成后会自动交给系统应用。';
           setBusy(openBtn, false);
           return;
         }
@@ -378,7 +447,11 @@ export function createLocalFileActionHtml(
 
         requestBrowserDownload('当前 App 版本不支持直接打开，正在改为下载文件...');
       } catch (error) {
-        status.textContent = error && error.message ? error.message : '打开失败，请尝试下载文件。';
+        if (isMissingNativeMethodError(error)) {
+          await explainMissingNativeDownload();
+        } else {
+          status.textContent = error && error.message ? error.message : '打开失败，请尝试下载文件。';
+        }
         setBusy(openBtn, false);
       }
     });
@@ -396,7 +469,11 @@ export function createLocalFileActionHtml(
         }
         requestBrowserDownload('正在请求系统下载...');
       } catch (error) {
-        status.textContent = error && error.message ? error.message : '下载失败，请稍后重试。';
+        if (isMissingNativeMethodError(error)) {
+          await explainMissingNativeDownload();
+        } else {
+          status.textContent = error && error.message ? error.message : '下载失败，请稍后重试。';
+        }
         setBusy(openBtn, false);
       }
     });

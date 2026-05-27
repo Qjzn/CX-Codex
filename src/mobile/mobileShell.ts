@@ -70,17 +70,20 @@ export type MobileShellOpenUrlResult = {
 }
 
 export type MobileShellOpenFileResult = {
-  status: 'opened'
+  status: 'opened' | 'started'
   fileName?: string
   savedPath?: string
   mimeType?: string
 }
 
 export type MobileShellDownloadFileResult = {
-  status: 'queued'
+  status: 'queued' | 'saved' | 'started'
   downloadId?: number
   fileName?: string
   mimeType?: string
+  savedPath?: string
+  uri?: string
+  bytes?: number
 }
 
 type MobileShellPlugin = {

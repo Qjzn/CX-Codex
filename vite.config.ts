@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { createCodexBridgeMiddleware } from "./src/server/codexAppServerBridge";
-import { createDirectoryListingHtml, createTextEditorHtml, decodeBrowsePath, isTextEditableFile, normalizeLocalPath } from "./src/server/localBrowseUi";
+import { createDirectoryListingHtml, createTextEditorHtml, decodeBrowsePath, isPreviewableLocalPath, isTextEditableFile, normalizeLocalPath, toLocalFilePreviewHref } from "./src/server/localBrowseUi";
 import tailwindcss from "@tailwindcss/vite";
 import { spawnSync } from "node:child_process";
 import { createReadStream } from "node:fs";
@@ -78,6 +78,30 @@ function getWorktreeName(): string {
 const worktreeName = getWorktreeName();
 const appVersion = typeof pkg.version === "string" ? pkg.version : "unknown";
 const WS_UPGRADE_ATTACHED_KEY = "__codexBridgeWsAttached__";
+const DOCUMENT_PREVIEW_VENDOR_MARKERS = [
+  "node_modules/pdfjs-dist/",
+  "node_modules/@napi-rs/canvas/",
+  "node_modules/markdown-it/",
+  "node_modules/dompurify/",
+  "node_modules/docx-preview/",
+  "node_modules/jszip/",
+  "node_modules/linkify-it/",
+  "node_modules/mdurl/",
+  "node_modules/uc.micro/",
+  "node_modules/entities/",
+  "node_modules/argparse/",
+  "node_modules/pako/",
+  "node_modules/lie/",
+  "node_modules/immediate/",
+  "node_modules/readable-stream/",
+  "node_modules/process-nextick-args/",
+  "node_modules/safe-buffer/",
+  "node_modules/string_decoder/",
+  "node_modules/core-util-is/",
+  "node_modules/isarray/",
+  "node_modules/setimmediate/",
+  "node_modules/punycode.js/",
+];
 
 export default defineConfig({
   define: {
@@ -86,9 +110,17 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
+      input: {
+        app: "index.html",
+        localPreview: "local-preview.html",
+      },
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return undefined;
+          const normalizedId = id.replace(/\\/g, "/");
+          if (DOCUMENT_PREVIEW_VENDOR_MARKERS.some((marker) => normalizedId.includes(marker))) {
+            return "document-preview-vendor";
+          }
           if (
             id.includes("node_modules/vue/") ||
             id.includes("node_modules/@vue/") ||
@@ -209,7 +241,8 @@ export default defineConfig({
 
           res.statusCode = 200;
           res.setHeader("Cache-Control", "private, no-store");
-          res.setHeader("Content-Disposition", `inline; filename="${basename(localPath)}"`);
+          const disposition = url.searchParams.get("download") === "1" ? "attachment" : "inline";
+          res.setHeader("Content-Disposition", `${disposition}; filename="${basename(localPath)}"`);
 
           const stream = createReadStream(localPath);
           stream.on("error", () => {
@@ -241,6 +274,13 @@ export default defineConfig({
               res.statusCode = 200;
               res.setHeader("Content-Type", "text/html; charset=utf-8");
               res.end(html);
+              return;
+            }
+
+            if (isPreviewableLocalPath(localPath)) {
+              res.statusCode = 302;
+              res.setHeader("Location", toLocalFilePreviewHref(localPath));
+              res.end();
               return;
             }
 

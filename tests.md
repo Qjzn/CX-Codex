@@ -1129,3 +1129,55 @@ This file tracks manual regression and feature verification steps.
   - 打开 `/skills?cb=<timestamp>` 后 URL 为 `/#/skills?cb=<timestamp>`，页面显示 `技能中心`、`安装、管理并发现 GitHub 上的 Codex 技能`、`已安装（63）`。
   - 打开 `/github-trending?cb=<timestamp>` 后 URL 为 `/#/github-trending?cb=<timestamp>`，页面显示 `GitHub 热门`、`热门仓库`、`进入主页`。
   - 两个页面控制台均无 error，Network 未捕获 404。
+
+---
+
+### Feature: 本地文档预览
+
+#### Prerequisites
+- 当前构建已包含 `local-preview.html`。
+- 本地文件通过 `/codex-local-browse/*path` 或 `/local-preview.html?path=<absolutePath>` 打开。
+
+#### Steps
+1. 打开 Markdown 文件。
+2. 打开 DOCX 文件。
+3. 打开图片文件。
+4. 打开 PDF 文件。
+5. 从 `/codex-local-browse/*path` 打开一个可预览文件。
+
+#### Expected Results
+- Markdown 在本地页面渲染为 HTML，并清洗原始 HTML。
+- DOCX 在浏览器内预览；复杂排版可继续使用系统打开或下载。
+- PDF 使用本地 `pdf.js` worker 渲染，支持放大和缩小。
+- 图片在预览页内展示。
+- `/codex-local-browse/*path` 对可预览文件跳转到 `local-preview.html`。
+- 文档内容不上传到第三方在线预览服务。
+
+#### Regression Evidence
+- 2026-05-28 静态验证：`git diff --check` 通过。
+- 2026-05-28 构建验证：`npm.cmd run build` 通过。
+- 2026-05-28 浏览器自动化验证：
+  - `README.md` 显示 `预览已就绪`，页面存在 `.markdown-body`。
+  - DOCX 示例文件显示 `Word 预览已就绪`，页面存在 `.docx-body .docx`。
+  - `cx-codex-logo.png` 显示 `预览已就绪`，页面存在 `.image-body img`。
+  - 临时 PDF 显示 `PDF 预览已就绪，共 1 页`，页面存在 `.pdf-page canvas`。
+  - `/codex-local-browse/.../README.md` 自动跳转到 `/local-preview.html?path=...`。
+- 2026-05-28 7420 实机前端回归：
+  - 重启后 `/health` 正常，`/codex-api/health` 显示 `pendingRpcCount=0`、`queuedRpcCount=0`、`pendingServerRequestCount=0`、`activePlanModeTurnCount=0`。
+  - 首页 `/#/` 加载出侧栏和输入框。
+  - `/skills` 规范化为 `/#/skills`，技能中心无白屏。
+  - `/github-trending` 规范化为 `/#/github-trending`，GitHub 热门无白屏。
+  - `/codex-local-file?inline=1` 返回 `Content-Disposition: inline`，`download=1` 返回 `attachment`。
+  - 393x852 移动视口下 DOCX 预览无横向溢出，`scrollWidth == clientWidth`，操作按钮未越界。
+- 2026-05-28 Android 兼容回归：
+  - `git diff --check` 通过。
+  - `npm.cmd run build` 通过。
+  - `android\gradlew.bat assembleDebug` 通过。
+  - 使用临时 17422 服务和 393x852 视口验证：模拟 Android 原生 `downloadFileFromUrl` 不返回时，12 秒后状态从 `正在请求系统下载...` 收敛为兼容下载提示，打开/下载按钮恢复可点，页面无横向溢出；再次点击下载会直接走兼容下载，不再重复等待原生回调。
+  - 模拟 Android 原生 `openFileFromUrl` 返回 `started` 时，页面显示 `已开始后台打开，完成后会自动唤起系统应用。`。
+  - 点击 `返回会话` 后 URL 回到 `/#/`，避免文件预览页返回后停在不可操作的全屏列表状态。
+- 2026-05-28 公开地址 PDF 回归：
+  - URL：`http://116.62.234.104:17420/local-preview.html?path=E%3A%2Fjavaword%2FCXCodex%2Ffinal_multi_target_resume%2F%E9%82%B5%E5%8D%AB-%E6%9C%80%E7%BB%88%E6%8A%95%E9%80%92%E7%AE%80%E5%8E%86-%E4%BA%A7%E5%93%81%E7%BB%8F%E7%90%86%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%E9%A1%B9%E7%9B%AE%E7%BB%8F%E7%90%86-2026-05-27.pdf`。
+  - 登录后 393x852 移动视口显示 `PDF 预览已就绪，共 2 页。`，页面 `scrollWidth == clientWidth`。
+  - `复制路径` 在公开 HTTP 页面可用，状态显示 `路径已复制。`，干净会话 `errors=[]`。
+  - 模拟 Android 原生 `downloadFileFromUrl` 不返回时，12 秒后不再卡在 `正在请求系统下载...`，按钮恢复，状态显示兼容下载提示；再次点击下载直接进入兼容下载。
