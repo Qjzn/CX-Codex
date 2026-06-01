@@ -124,6 +124,22 @@ export type UiLiveOverlay = {
   errorText: string
 }
 
+export type UiRuntimeStatusSummary = {
+  threadId: string
+  executionState: string
+  canStop: boolean
+  stale: boolean
+  stopRequested: boolean
+  activeTurnId: string
+  lastError: string | null
+  degradedReason: string | null
+  messageState: 'fresh' | 'cached' | 'unavailable'
+  updatedAtIso: string
+  lastEventSeq: number
+  lastStartedAtIso: string | null
+  lastCompletedAtIso: string | null
+}
+
 export type UiCreditsSnapshot = {
   hasCredits: boolean
   unlimited: boolean

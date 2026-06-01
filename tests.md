@@ -1187,3 +1187,73 @@ This file tracks manual regression and feature verification steps.
   - 浏览器自动化打开本地 `local-preview.html?path=README.md`，注入 Android 环境和不会返回的 `downloadFileFromUrl` 后点击 `下载`，页面直接显示 `已请求系统下载...`，`nativeDownloadCalled=false`，不再出现 `原生下载未确认`。
   - 393x852 移动视口下 `scrollWidth <= clientWidth`，下载状态和按钮不造成横向溢出。
   - 构建产物 `dist-cli/index.js` 已包含 `/codex-local-browse/*path` 文件操作页的 Android 分支：点击 `下载` 先触发浏览器/WebView 下载，不再等待原生下载 Promise。
+
+---
+
+### Feature: 新会话发送失败保护与超长消息展示
+
+#### Prerequisites
+- 当前构建已包含 runtime 发送接口。
+- 使用临时服务 `http://127.0.0.1:17422` 验证，不影响正在运行的 7420。
+
+#### Steps
+1. 在新会话页拦截 `/codex-api/runtime/send` 后点击发送。
+2. 确认页面仍停留在新会话页，输入框保留原始草稿。
+3. 打开包含 1 万字以上用户首条消息的历史线程。
+4. 确认超长用户消息默认折叠，支持展开、收起、复制全文。
+5. 点击回滚时必须先出现确认框。
+
+#### Expected Results
+- 新会话发送失败不会先创建空线程，也不会清空输入框内容。
+- 超长用户消息不会把会话滚动区撑到几千像素高，回复不再从中间位置露出。
+- 展开全文后消息体在卡片内滚动，不撑坏整页。
+- 回滚是危险操作，必须二次确认。
+
+#### Regression Evidence
+- 2026-06-01 静态验证：`git diff --check` 通过。
+- 2026-06-01 构建验证：`npm.cmd run build` 通过。
+- 2026-06-01 浏览器自动化验证：
+  - 临时 17422 服务健康，打开 `/#/` 后拦截 `http://127.0.0.1:17422/codex-api/runtime/send`，发送测试草稿后仍停留在 `新会话`，输入框保留原始草稿。
+  - 打开长 prompt 线程 `/#/thread/019e8166-4f20-7183-9c8a-f2fe56246e95`，页面存在 `.message-text-flow--long-collapsed`，显示 `展开全文`、`复制全文` 和 `已发送完整内容 · 1.1万 字`。
+  - 展开全文后页面存在 `.message-text-flow--long-expanded`，高度为 760px 且内部可滚动。
+  - 触发回滚按钮时弹出 `确认回滚` 确认框，取消后 URL 保持在当前线程。
+
+---
+
+### Feature: 产品化运行状态与强制恢复
+
+#### Prerequisites
+- 当前构建已包含 runtime 状态摘要和统一任务状态条。
+- 使用临时服务 `http://127.0.0.1:17423` 验证，不影响正在运行的 7420。
+
+#### Steps
+1. 打开一个已有线程页面。
+2. 确认线程顶部显示运行状态条，包含发送、接收、执行、收敛四段状态。
+3. 点击状态条里的强制恢复按钮。
+4. 切换到 393x852 移动视口，确认状态条不会造成横向滚动。
+
+#### Expected Results
+- 用户可以直接看到当前任务是否发送、执行、收敛或需要恢复。
+- 强制恢复按钮调用同一套 reconcile 流程，不重复触发任务。
+- 恢复成功后显示轻量 Toast，不用阻塞式弹窗。
+- 移动端状态条保持一行紧凑展示，按钮收敛为图标尺寸。
+
+#### Regression Evidence
+- 2026-06-01 静态验证：`git diff --check` 通过。
+- 2026-06-01 构建验证：`npm.cmd run build` 通过。
+- 2026-06-01 浏览器自动化验证：
+  - 临时 17423 服务健康，打开线程 `/#/thread/019e8166-4f20-7183-9c8a-f2fe56246e95` 后存在 `.runtime-status-bar`。
+  - 状态条显示 `状态已收敛`、`发送`、`接收`、`执行`、`收敛` 和 `强制恢复`。
+  - 点击状态条里的强制恢复按钮后，页面显示 Toast `当前会话状态已强制恢复。`，停止按钮未残留。
+  - 桌面视口 `scrollWidth == clientWidth`。
+  - 393x852 移动视口下状态条宽度 349px，高度 50px，强制恢复按钮宽度 32px，`scrollWidth == clientWidth`。
+- 2026-06-01 本地 7420 更新后回归：
+  - `npm.cmd run build` 通过后重启正式 7420，服务 PID 为 `13664`，`/health` 正常。
+  - `/codex-api/health` 显示 `pendingRpcCount=0`、`queuedRpcCount=0`、`pendingServerRequestCount=0`、`activePlanModeTurnCount=0`、`runtimeStore.uncertainRequestCount=0`。
+  - 首页 `/#/` 加载出侧栏、线程列表和输入框，无前端运行时错误。
+  - 线程 `/#/thread/019e8166-4f20-7183-9c8a-f2fe56246e95` 显示 `.runtime-status-bar`，强制恢复按钮可点击并显示 Toast `当前会话状态已强制恢复。`。
+  - 该线程长首条消息仍默认折叠，显示 `展开全文` 和 `复制全文`。
+  - 393x852 移动视口下状态条宽度 349px，高度 50px，强制恢复按钮宽度 32px，`scrollWidth == clientWidth`。
+  - `/skills` 自动规范化到 `/#/skills`，技能中心非白屏。
+  - `/github-trending` 自动规范化到 `/#/github-trending`，GitHub 热门非白屏。
+  - `local-preview.html?path=C%3A%2FUsers%2FSW%2FDocuments%2FPlayground%2Fcodexui%2FREADME.md` 显示 `预览已就绪`，存在 `.markdown-body`，移动视口无横向溢出。

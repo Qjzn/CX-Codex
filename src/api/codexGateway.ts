@@ -95,6 +95,15 @@ export type RuntimeTurnStartResult = {
   status: RuntimeRequestStatus
 }
 
+export type RuntimeRequestLookupResult = {
+  requestId: string
+  clientMessageId: string
+  threadId: string
+  turnId: string
+  status: RuntimeRequestStatus
+  lastError: string | null
+}
+
 export type WorkspaceRootsState = {
   order: string[]
   labels: Record<string, string>
@@ -899,6 +908,26 @@ function normalizeRuntimeTurnStartResult(payload: unknown): RuntimeTurnStartResu
   }
 }
 
+function normalizeRuntimeRequestLookupResult(payload: unknown): RuntimeRequestLookupResult | null {
+  const root =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : {}
+  const data =
+    root.data && typeof root.data === 'object' && !Array.isArray(root.data)
+      ? root.data as Record<string, unknown>
+      : null
+  if (!data) return null
+  return {
+    requestId: typeof data.requestId === 'string' ? data.requestId.trim() : '',
+    clientMessageId: typeof data.clientMessageId === 'string' ? data.clientMessageId.trim() : '',
+    threadId: typeof data.threadId === 'string' ? data.threadId.trim() : '',
+    turnId: typeof data.turnId === 'string' ? data.turnId.trim() : '',
+    status: normalizeRuntimeRequestStatus(data.status),
+    lastError: typeof data.lastError === 'string' ? data.lastError : null,
+  }
+}
+
 export async function startThread(cwd?: string, model?: string): Promise<string> {
   try {
     const params: Record<string, unknown> = {}
@@ -1070,6 +1099,25 @@ export async function startRuntimeThreadTurn(args: {
     throw new Error(getErrorMessageFromPayload(payload, 'Failed to start runtime turn'))
   }
   return normalizeRuntimeTurnStartResult(payload)
+}
+
+export async function getRuntimeRequestByClientMessageId(clientMessageId: string): Promise<RuntimeRequestLookupResult | null> {
+  const normalizedClientMessageId = clientMessageId.trim()
+  if (!normalizedClientMessageId) return null
+  const response = await fetchWithTimeout(
+    `/codex-api/runtime/request?clientMessageId=${encodeURIComponent(normalizedClientMessageId)}`,
+    { method: 'GET' },
+    {
+      timeoutMs: GATEWAY_FETCH_TIMEOUT_MS,
+      label: 'Runtime request lookup',
+    },
+  )
+  if (response.status === 404) return null
+  const payload = (await response.json()) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to look up runtime request'))
+  }
+  return normalizeRuntimeRequestLookupResult(payload)
 }
 
 export async function interruptThreadTurn(threadId: string, turnId?: string): Promise<void> {

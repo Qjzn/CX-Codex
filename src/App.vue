@@ -563,6 +563,23 @@
           </template>
         </ContentHeader>
 
+        <RuntimeStatusBar
+          v-if="showRuntimeStatusBar"
+          class="content-runtime-status"
+          :summary="selectedThreadRuntimeStatus"
+          :live-overlay="selectedLiveOverlay"
+          :pending-request-count="selectedThreadServerRequests.length"
+          :is-sending="isSendingMessage"
+          :is-loading="isLoadingMessages"
+          :is-refreshing="isManualThreadRefreshRunning"
+          :sync-lagging="syncLagging"
+          :sync-error="syncError"
+          :notification-stale="notificationStale"
+          :connection-state="realtimeConnectionState"
+          @refresh="onRefreshSelectedThreadContent"
+          @stop="onInterruptTurn"
+        />
+
         <section class="content-body">
           <template v-if="isSkillsRoute">
             <SkillsHub @skills-changed="onSkillsChanged" />
@@ -719,6 +736,14 @@
   </Teleport>
 
   <Teleport to="body">
+    <Transition name="product-toast">
+      <div v-if="productToast" class="product-toast" :data-tone="productToast.tone" role="status" aria-live="polite">
+        {{ productToast.message }}
+      </div>
+    </Transition>
+  </Teleport>
+
+  <Teleport to="body">
     <div
       v-if="isMobileShellUpdatePromptVisible"
       class="mobile-update-confirm-overlay"
@@ -783,6 +808,7 @@ import ThreadConversation from './components/content/ThreadConversation.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import QueuedMessages from './components/content/QueuedMessages.vue'
 import RateLimitStatus from './components/content/RateLimitStatus.vue'
+import RuntimeStatusBar from './components/content/RuntimeStatusBar.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import FavoritesModal from './components/content/FavoritesModal.vue'
@@ -1014,6 +1040,7 @@ const {
   selectedThreadScrollState,
   selectedThreadServerRequests,
   selectedLiveOverlay,
+  selectedThreadRuntimeStatus,
   selectedThreadTokenUsage,
   selectedThreadId,
   availableModelIds,
@@ -1098,6 +1125,7 @@ const worktreeInitStatus = ref<{ phase: 'idle' | 'running' | 'error'; title: str
 const isSidebarCollapsed = ref(loadSidebarCollapsed())
 const isFavoritesModalVisible = ref(false)
 const favoritesStatusText = ref('')
+const productToast = ref<{ id: number; message: string; tone: 'success' | 'info' | 'warning' | 'danger' } | null>(null)
 const pendingFavoriteJump = ref<{ threadId: string; messageId: string } | null>(null)
 const sidebarSearchQuery = ref('')
 const isSidebarSearchVisible = ref(false)
@@ -1130,6 +1158,7 @@ const webBridgeSettings = ref<WebBridgeSettings>(DEFAULT_WEB_BRIDGE_SETTINGS)
 const webBridgeSettingsStatus = ref('')
 let webBridgeSettingsStatusTimer: ReturnType<typeof setTimeout> | null = null
 let favoritesStatusTimer: ReturnType<typeof setTimeout> | null = null
+let productToastTimer: number | null = null
 function isBundledMobileShellEntry(): boolean {
   if (!isNativeAndroidShell() || typeof window === 'undefined') return false
   const hostname = window.location.hostname.toLowerCase()
@@ -1414,8 +1443,13 @@ const showMobileThreadRefreshButton = computed(() => (
   route.name === 'thread'
   && selectedThreadId.value.trim().length > 0
 ))
+const showRuntimeStatusBar = computed(() => (
+  route.name === 'thread'
+  && selectedThreadId.value.trim().length > 0
+  && !isRouteOnlyEmptyThread.value
+))
 const mobileThreadRefreshButtonTitle = computed(() => (
-  isManualThreadRefreshRunning.value ? '正在刷新当前会话内容...' : '刷新当前会话内容'
+  isManualThreadRefreshRunning.value ? '正在强制恢复当前会话状态...' : '强制恢复当前会话状态'
 ))
 const contentContextUsage = computed(() => {
   if (isNonThreadRoute.value || isRouteOnlyEmptyThread.value) return null
@@ -1964,6 +1998,10 @@ onUnmounted(() => {
   if (favoritesStatusTimer) {
     clearTimeout(favoritesStatusTimer)
     favoritesStatusTimer = null
+  }
+  if (productToastTimer) {
+    clearTimeout(productToastTimer)
+    productToastTimer = null
   }
   stopPolling()
 })
@@ -2793,9 +2831,10 @@ async function onRefreshSelectedThreadContent(): Promise<void> {
   isManualThreadRefreshRunning.value = true
   try {
     await refreshSelectedThreadContent()
+    showProductToast('当前会话状态已强制恢复。', 'success')
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : '刷新当前会话内容失败'
-    window.alert(message)
+    showProductToast(message, 'danger', 4200)
   } finally {
     isManualThreadRefreshRunning.value = false
   }
@@ -2898,6 +2937,10 @@ async function rollbackAndResendDictation(payload: {
 
 function onSelectNewThreadFolder(cwd: string): void {
   newThreadCwd.value = cwd.trim()
+}
+
+function restoreHomeThreadComposerDraft(payload: ComposerDraftPayload): void {
+  homeThreadComposerRef.value?.hydrateDraft(payload)
 }
 
 async function onAddNewProject(rawInput: string): Promise<void> {
@@ -3058,6 +3101,7 @@ function onSelectCollaborationMode(mode: CollaborationMode): void {
 }
 
 function onInterruptTurn(): void {
+  showProductToast('已请求停止，正在确认任务状态。', 'warning')
   void interruptSelectedThreadTurn()
 }
 
@@ -3169,6 +3213,28 @@ function loadBoolPref(key: string, fallback: boolean): boolean {
   const v = window.localStorage.getItem(key)
   if (v === null) return fallback
   return v === '1'
+}
+
+function showProductToast(
+  message: string,
+  tone: 'success' | 'info' | 'warning' | 'danger' = 'info',
+  durationMs = 2600,
+): void {
+  if (!message.trim()) return
+  if (typeof window === 'undefined') return
+  if (productToastTimer) {
+    window.clearTimeout(productToastTimer)
+    productToastTimer = null
+  }
+  productToast.value = {
+    id: Date.now(),
+    message: message.trim(),
+    tone,
+  }
+  productToastTimer = window.setTimeout(() => {
+    productToastTimer = null
+    productToast.value = null
+  }, durationMs)
 }
 
 function loadDarkModePref(): 'system' | 'light' | 'dark' {
@@ -3553,16 +3619,21 @@ async function submitFirstMessageForNewThread(
           title: '工作树初始化失败',
           message: '无法创建工作树，请重试或切换到当前项目。',
         }
+        restoreHomeThreadComposerDraft({ text, imageUrls, fileAttachments, skills })
         return ''
       }
     }
     const threadId = await sendMessageToNewThread(text, targetCwd, imageUrls, skills, fileAttachments, collaborationMode)
-    if (!threadId) return ''
+    if (!threadId) {
+      restoreHomeThreadComposerDraft({ text, imageUrls, fileAttachments, skills })
+      return ''
+    }
     await router.replace({ name: 'thread', params: { threadId } })
     markDesktopSyncPending(threadId)
     return threadId
   } catch {
     // Error is already reflected in state.
+    restoreHomeThreadComposerDraft({ text, imageUrls, fileAttachments, skills })
     return ''
   }
 }
@@ -3810,6 +3881,10 @@ async function submitFirstMessageForNewThread(
   animation: content-title-refresh-spin 0.9s linear infinite;
 }
 
+.content-runtime-status {
+  @apply shrink-0;
+}
+
 .content-favorites-button {
   @apply inline-flex h-7 min-w-7 shrink-0 items-center justify-center gap-1 rounded-full border border-[#ddd3c2] bg-[#fffdf8] px-2 text-[11px] font-semibold text-[#544a3d] transition-[background-color,border-color,color] duration-150 hover:border-[#ccb89c] hover:bg-[#f7f1e5] hover:text-[#1f2937];
   font-family: var(--font-sans-ui);
@@ -3949,6 +4024,35 @@ async function submitFirstMessageForNewThread(
 
 .content-error {
   @apply m-0 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700;
+}
+
+.product-toast {
+  @apply fixed left-1/2 z-[70] max-w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 rounded-full border bg-[#fffdf8] px-4 py-2 text-sm font-medium text-[#544a3d] shadow-lg shadow-[#2d261f]/10;
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  font-family: var(--font-sans-ui);
+}
+
+.product-toast[data-tone='success'] {
+  @apply border-[#bde7df] bg-[#eef8f5] text-[#0f766e];
+}
+
+.product-toast[data-tone='warning'] {
+  @apply border-[#e7d9b0] bg-[#fcf7e8] text-[#8a6a11];
+}
+
+.product-toast[data-tone='danger'] {
+  @apply border-[#f1cbc3] bg-[#fff0ec] text-[#c2410c];
+}
+
+.product-toast-enter-active,
+.product-toast-leave-active {
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.product-toast-enter-from,
+.product-toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 8px);
 }
 
 .content-grid {

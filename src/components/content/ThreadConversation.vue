@@ -519,88 +519,112 @@
                 @keydown.enter.prevent="onMessageCardActivate(entry.message)"
                 @keydown.space.prevent="onMessageCardActivate(entry.message)"
               >
-                <div class="message-text-flow">
-                  <template
-                    v-for="(block, blockIndex) in getPreparedMessageBlocks(entry.message)"
-                    :key="`block-${blockIndex}`"
-                  >
-                    <p v-if="block.kind === 'text'" class="message-text">
-                      <template v-for="(segment, segmentIndex) in block.segments" :key="`seg-${blockIndex}-${segmentIndex}`">
-                        <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
-                        <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
-                        <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
+                <div
+                  class="message-text-flow"
+                  :class="{
+                    'message-text-flow--long-collapsed': isLongUserMessageCollapsed(entry.message),
+                    'message-text-flow--long-expanded': isLongUserMessage(entry.message) && !isLongUserMessageCollapsed(entry.message),
+                  }"
+                >
+                  <template v-if="isLongUserMessageCollapsed(entry.message)">
+                    <p class="message-text">{{ longMessagePreview(entry.message) }}</p>
+                    <p class="message-long-summary">
+                      已发送完整内容 · {{ formatCharacterCount(entry.message.text.length) }} 字
+                    </p>
+                  </template>
+                  <template v-else>
+                    <template
+                      v-for="(block, blockIndex) in getPreparedMessageBlocks(entry.message)"
+                      :key="`block-${blockIndex}`"
+                    >
+                      <p v-if="block.kind === 'text'" class="message-text">
+                        <template v-for="(segment, segmentIndex) in block.segments" :key="`seg-${blockIndex}-${segmentIndex}`">
+                          <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
+                          <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
+                          <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
+                            <a
+                              class="message-file-link"
+                              :href="toBrowseUrl(segment.path)"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              :title="segment.path"
+                              @click="onHyperlinkClick($event, toBrowseUrl(segment.path))"
+                              @contextmenu.prevent="onFileLinkContextMenu($event, segment.path)"
+                            >
+                              {{ segment.displayPath }}
+                            </a>
+                          </span>
                           <a
+                            v-else-if="segment.kind === 'url'"
                             class="message-file-link"
-                            :href="toBrowseUrl(segment.path)"
+                            :href="segment.href"
                             target="_blank"
                             rel="noopener noreferrer"
-                            :title="segment.path"
-                            @click="onHyperlinkClick($event, toBrowseUrl(segment.path))"
-                            @contextmenu.prevent="onFileLinkContextMenu($event, segment.path)"
+                            :title="segment.href"
+                            @click="onHyperlinkClick($event, segment.href)"
+                            @contextmenu.prevent="onUrlLinkContextMenu($event, segment.href)"
                           >
-                            {{ segment.displayPath }}
+                            {{ segment.value }}
                           </a>
-                        </span>
-                        <a
-                          v-else-if="segment.kind === 'url'"
-                          class="message-file-link"
-                          :href="segment.href"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          :title="segment.href"
-                          @click="onHyperlinkClick($event, segment.href)"
-                          @contextmenu.prevent="onUrlLinkContextMenu($event, segment.href)"
-                        >
-                          {{ segment.value }}
-                        </a>
-                        <code v-else class="message-inline-code">{{ segment.value }}</code>
-                      </template>
-                    </p>
-                    <p v-else-if="isMarkdownImageFailed(entry.message.id, blockIndex)" class="message-text">{{ block.markdown }}</p>
-                    <button
-                      v-else
-                      class="message-image-button"
-                      type="button"
-                      @click="openImageModal(block.url)"
-                    >
-                      <img
-                        class="message-image-preview message-markdown-image"
-                        :src="block.url"
-                        :alt="block.alt || '消息内图片'"
-                        loading="lazy"
-                        @error="onMarkdownImageError(entry.message.id, blockIndex)"
-                      />
-                    </button>
+                          <code v-else class="message-inline-code">{{ segment.value }}</code>
+                        </template>
+                      </p>
+                      <p v-else-if="isMarkdownImageFailed(entry.message.id, blockIndex)" class="message-text">{{ block.markdown }}</p>
+                      <button
+                        v-else
+                        class="message-image-button"
+                        type="button"
+                        @click="openImageModal(block.url)"
+                      >
+                        <img
+                          class="message-image-preview message-markdown-image"
+                          :src="block.url"
+                          :alt="block.alt || '消息内图片'"
+                          loading="lazy"
+                          @error="onMarkdownImageError(entry.message.id, blockIndex)"
+                        />
+                      </button>
+                    </template>
                   </template>
+                  <div v-if="isLongUserMessage(entry.message)" class="message-long-actions">
+                    <button type="button" class="message-long-action" @click.stop="toggleLongUserMessage(entry.message)">
+                      {{ isLongUserMessageCollapsed(entry.message) ? '展开全文' : '收起' }}
+                    </button>
+                    <button type="button" class="message-long-action" @click.stop="onCopyMessage(entry.message)">
+                      复制全文
+                    </button>
+                  </div>
                 </div>
               </article>
             </article>
 
             <div v-if="canShowMessageActionBar(entry.message)" class="message-actions">
-              <button
-                v-if="canFavoriteMessage(entry.message)"
-                class="message-action-button message-action-button--favorite"
-                :class="{ 'is-favorited': isFavoriteMessage(entry.message) }"
-                type="button"
-                :title="isFavoriteMessage(entry.message) ? '取消收藏这条消息' : '收藏这条消息'"
-                @click.stop="onToggleFavorite(entry.message)"
-              >
-                <IconTablerBookmark class="message-action-icon" :filled="isFavoriteMessage(entry.message)" />
-                <span class="message-action-label">{{ isFavoriteMessage(entry.message) ? '取消收藏' : '收藏' }}</span>
-              </button>
-              <button
-                v-if="canCopyMessage(entry.message)"
-                class="message-action-button"
-                type="button"
-                title="复制消息内容"
-                @click.stop="onCopyMessage(entry.message)"
-              >
-                <IconTablerCopy class="message-action-icon" />
-                <span class="message-action-label">复制</span>
-              </button>
+              <div class="message-actions-main">
+                <button
+                  v-if="canFavoriteMessage(entry.message)"
+                  class="message-action-button message-action-button--favorite"
+                  :class="{ 'is-favorited': isFavoriteMessage(entry.message) }"
+                  type="button"
+                  :title="isFavoriteMessage(entry.message) ? '取消收藏这条消息' : '收藏这条消息'"
+                  @click.stop="onToggleFavorite(entry.message)"
+                >
+                  <IconTablerBookmark class="message-action-icon" :filled="isFavoriteMessage(entry.message)" />
+                  <span class="message-action-label">{{ isFavoriteMessage(entry.message) ? '取消收藏' : '收藏' }}</span>
+                </button>
+                <button
+                  v-if="canCopyMessage(entry.message)"
+                  class="message-action-button"
+                  type="button"
+                  title="复制消息内容"
+                  @click.stop="onCopyMessage(entry.message)"
+                >
+                  <IconTablerCopy class="message-action-icon" />
+                  <span class="message-action-label">复制</span>
+                </button>
+              </div>
               <button
                 v-if="canRollbackMessage(entry.message)"
-                class="message-action-button"
+                class="message-action-button message-action-button--rollback"
                 type="button"
                 title="回滚到这条消息，并移除其后的当前轮次内容"
                 @click.stop="onRollback(entry.message)"
@@ -1177,6 +1201,9 @@ const autoAnchoredLongResponseId = ref('')
 const BOTTOM_THRESHOLD_PX = 16
 const LONG_RESPONSE_ANCHOR_MAX_WIDTH_PX = 1100
 const LONG_RESPONSE_MIN_HEIGHT_PX = 260
+const LONG_USER_MESSAGE_COLLAPSE_THRESHOLD = 3000
+const LONG_USER_MESSAGE_PREVIEW_LENGTH = 900
+const LONG_USER_MESSAGE_EXPANDED_MAX_HEIGHT_PX = 760
 const IMAGE_MODAL_MIN_SCALE = 1
 const IMAGE_MODAL_MAX_SCALE = 4
 const IMAGE_MODAL_SCALE_STEP = 0.25
@@ -1226,6 +1253,7 @@ let lastScrollStateEmitAt = 0
 const trackedPendingImages = new WeakSet<HTMLImageElement>()
 const failedMarkdownImageKeys = ref<Set<string>>(new Set())
 const preparedMessageBlocksById = new Map<string, { text: string; blocks: PreparedMessageBlock[] }>()
+const expandedLongUserMessageIds = ref<Set<string>>(new Set())
 const isFileLinkContextMenuVisible = ref(false)
 const fileLinkContextMenuX = ref(0)
 const fileLinkContextMenuY = ref(0)
@@ -1641,7 +1669,13 @@ function estimateMessageHeight(message: UiMessage): number {
   }
 
   let height = message.role === 'user' ? 74 : 92
-  height += Math.min(estimateTextHeight(message.text), 520)
+  if (isLongUserMessageCollapsed(message)) {
+    height += 230
+  } else if (isLongUserMessage(message)) {
+    height += LONG_USER_MESSAGE_EXPANDED_MAX_HEIGHT_PX
+  } else {
+    height += Math.min(estimateTextHeight(message.text), 520)
+  }
 
   const attachmentCount = message.fileAttachments?.length ?? 0
   if (attachmentCount > 0) {
@@ -1659,7 +1693,7 @@ function estimateMessageHeight(message: UiMessage): number {
     height += 30
   }
 
-  return Math.min(Math.max(height, 72), 980)
+  return Math.min(Math.max(height, 72), isLongUserMessage(message) ? 1120 : 980)
 }
 
 type ParsedToolQuestion = {
@@ -2507,12 +2541,57 @@ function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
   return blocks
 }
 
+function isLongUserMessage(message: UiMessage): boolean {
+  return message.role === 'user' && message.text.trim().length >= LONG_USER_MESSAGE_COLLAPSE_THRESHOLD
+}
+
+function isLongUserMessageCollapsed(message: UiMessage): boolean {
+  return isLongUserMessage(message) && !expandedLongUserMessageIds.value.has(message.id)
+}
+
+function longMessagePreview(message: UiMessage): string {
+  const normalizedText = message.text.trim()
+  if (normalizedText.length <= LONG_USER_MESSAGE_PREVIEW_LENGTH) return normalizedText
+  return `${normalizedText.slice(0, LONG_USER_MESSAGE_PREVIEW_LENGTH).trimEnd()}...`
+}
+
+function formatCharacterCount(count: number): string {
+  if (count >= 10000) {
+    return `${(count / 10000).toFixed(1)}万`
+  }
+  return String(count)
+}
+
+function toggleLongUserMessage(message: UiMessage): void {
+  if (!isLongUserMessage(message)) return
+  const nextIds = new Set(expandedLongUserMessageIds.value)
+  if (nextIds.has(message.id)) {
+    nextIds.delete(message.id)
+  } else {
+    nextIds.add(message.id)
+  }
+  expandedLongUserMessageIds.value = nextIds
+}
+
 function prunePreparedMessageBlockCache(messages: UiMessage[]): void {
   const keepIds = new Set(messages.map((message) => message.id))
   for (const messageId of preparedMessageBlocksById.keys()) {
     if (!keepIds.has(messageId)) {
       preparedMessageBlocksById.delete(messageId)
     }
+  }
+  let nextExpandedIds = expandedLongUserMessageIds.value
+  let hasExpandedIdChange = false
+  for (const messageId of expandedLongUserMessageIds.value) {
+    if (keepIds.has(messageId)) continue
+    if (!hasExpandedIdChange) {
+      nextExpandedIds = new Set(expandedLongUserMessageIds.value)
+      hasExpandedIdChange = true
+    }
+    nextExpandedIds.delete(messageId)
+  }
+  if (hasExpandedIdChange) {
+    expandedLongUserMessageIds.value = nextExpandedIds
   }
 }
 
@@ -3151,6 +3230,8 @@ async function onCopyMessage(message: UiMessage): Promise<void> {
 
 function onRollback(message: UiMessage): void {
   if (!canRollbackMessage(message)) return
+  const confirmed = window.confirm('确认回滚到这条消息？这会移除这条消息之后的当前轮次内容。')
+  if (!confirmed) return
   const prependText = message.role === 'user' ? message.text.trim() : ''
   emit('rollback', {
     turnIndex: message.turnIndex!,
@@ -4526,6 +4607,15 @@ onBeforeUnmount(() => {
   @apply flex flex-col gap-1;
 }
 
+.message-text-flow--long-collapsed {
+  @apply rounded-2xl border border-[#e7ddcf] bg-[#fffaf2]/65 p-2.5;
+}
+
+.message-text-flow--long-expanded {
+  @apply max-h-[760px] overflow-auto rounded-2xl border border-[#e7ddcf] bg-[#fffaf2]/65 p-2.5;
+  overscroll-behavior: contain;
+}
+
 .message-text {
   @apply m-0 text-sm whitespace-pre-wrap text-[#28231d];
   font-family: var(--font-sans-reading);
@@ -4545,6 +4635,18 @@ onBeforeUnmount(() => {
 .message-inline-code {
   @apply rounded-xl border border-[#dfd7ca] bg-[#f5f1e8] px-1.5 py-0.5 text-[0.875em] leading-[1.4] text-[#2d261f] font-mono;
   font-family: var(--font-mono-ui);
+}
+
+.message-long-summary {
+  @apply m-0 text-[11px] leading-tight text-[#8f8577];
+}
+
+.message-long-actions {
+  @apply mt-1 flex flex-wrap gap-1.5;
+}
+
+.message-long-action {
+  @apply inline-flex min-h-7 items-center rounded-full border border-[#d8cfbf] bg-[#fffdf8] px-2.5 py-1 text-xs font-medium text-[#62584b] transition-[background-color,border-color,color] duration-150 hover:border-[#bfae93] hover:bg-[#f7f1e5] hover:text-[#322b24];
 }
 
 .message-file-link {
@@ -4697,12 +4799,16 @@ onBeforeUnmount(() => {
 }
 
 .message-actions {
-  @apply inline-flex items-center gap-0.5;
+  @apply inline-flex items-center gap-2;
   position: absolute;
   left: 0.5rem;
   bottom: -0.5rem;
   z-index: 10;
   pointer-events: none;
+}
+
+.message-actions-main {
+  @apply inline-flex items-center gap-0.5;
 }
 
 .message-action-button {
@@ -4712,6 +4818,10 @@ onBeforeUnmount(() => {
 
 .message-action-button--favorite.is-favorited {
   @apply border-[#d8c5a6] bg-[#f5ecdd] text-[#8a5b17] opacity-100;
+}
+
+.message-action-button--rollback {
+  @apply border-[#ead1c8] bg-[#fff7f4]/92 text-[#9f4a35] hover:border-[#ddb2a3] hover:bg-[#fff1ec] hover:text-[#7f3325];
 }
 
 .message-stack[data-role='user'] .message-actions {

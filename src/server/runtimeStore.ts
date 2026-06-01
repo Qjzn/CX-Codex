@@ -207,6 +207,8 @@ export class RuntimeStore {
       );
       CREATE INDEX IF NOT EXISTS idx_runtime_requests_thread_status
         ON runtime_requests(thread_id, status, updated_at_iso);
+      CREATE INDEX IF NOT EXISTS idx_runtime_requests_client_message
+        ON runtime_requests(client_message_id, updated_at_iso);
 
       CREATE TABLE IF NOT EXISTS runtime_events (
         seq INTEGER PRIMARY KEY,
@@ -325,6 +327,18 @@ export class RuntimeStore {
 
   getRequest(requestId: string): RuntimeRequestRecord | null {
     const row = this.db.prepare('SELECT * FROM runtime_requests WHERE request_id = ?').get(requestId) as RuntimeRequestRow | undefined
+    return row ? fromRequestRow(row) : null
+  }
+
+  getLatestRequestByClientMessageId(clientMessageId: string): RuntimeRequestRecord | null {
+    const normalizedClientMessageId = clientMessageId.trim()
+    if (!normalizedClientMessageId) return null
+    const row = this.db.prepare(`
+      SELECT * FROM runtime_requests
+      WHERE client_message_id = ?
+      ORDER BY updated_at_iso DESC
+      LIMIT 1
+    `).get(normalizedClientMessageId) as RuntimeRequestRow | undefined
     return row ? fromRequestRow(row) : null
   }
 

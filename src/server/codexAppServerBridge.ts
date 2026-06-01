@@ -4377,6 +4377,21 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
+      if (req.method === 'GET' && url.pathname === '/codex-api/runtime/request') {
+        const clientMessageId = url.searchParams.get('clientMessageId')?.trim() ?? ''
+        if (!clientMessageId) {
+          setJson(res, 400, { error: 'Missing clientMessageId' })
+          return
+        }
+        const request = runtimeStore.getLatestRequestByClientMessageId(clientMessageId)
+        if (!request) {
+          setJson(res, 404, { data: null })
+          return
+        }
+        setJson(res, 200, { data: request })
+        return
+      }
+
       if (req.method === 'POST' && url.pathname === '/codex-api/runtime/interrupt') {
         const payload = await readJsonBody(req)
         const result = await interruptRuntimeTurn(payload)

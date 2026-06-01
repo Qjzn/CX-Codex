@@ -24,11 +24,11 @@ import {
   setWorkspaceRootsState,
   getThreadTitleCache,
   getNotificationReplay,
+  getRuntimeRequestByClientMessageId,
   persistThreadTitle,
   generateThreadTitle,
   resumeThread,
   rollbackWorktreeToMessage,
-  startThread,
   startRuntimeThreadTurn,
   subscribeCodexNotifications,
   type RpcConnectionState,
@@ -46,6 +46,7 @@ import type {
   UiMessage,
   UiProjectGroup,
   UiRateLimitSnapshot,
+  UiRuntimeStatusSummary,
   UiServerRequest,
   UiServerRequestReply,
   UiThreadTokenUsage,
@@ -165,6 +166,14 @@ type QueuedMessage = {
 }
 
 type RealtimeConnectionState = RpcConnectionState
+
+function createClientMessageId(): string {
+  const randomPart =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2, 12)
+  return `cm-${Date.now()}-${randomPart}`
+}
 
 function loadReadStateMap(): Record<string, string> {
   if (typeof window === 'undefined') return {}
@@ -1068,6 +1077,7 @@ export function useDesktopState() {
   const runtimeExecutionStateByThreadId = ref<Record<string, ThreadRuntimeSnapshot['executionState']>>({})
   const runtimeCanStopByThreadId = ref<Record<string, boolean>>({})
   const runtimeStaleByThreadId = ref<Record<string, boolean>>({})
+  const runtimeStatusSummaryByThreadId = ref<Record<string, UiRuntimeStatusSummary>>({})
   const lastExecutionSignalAtByThreadId = ref<Record<string, number>>({})
   const threadReadActiveStateByThreadId = ref<Record<string, ThreadReadActiveState>>({})
   const ignoredStaleActiveTurnByThreadId = ref<Record<string, string>>({})
@@ -1338,6 +1348,22 @@ export function useDesktopState() {
       typeof activeTurnIdByThreadId.value[threadId] === 'string' &&
       activeTurnIdByThreadId.value[threadId].trim().length > 0
     )
+  })
+  const selectedThreadRuntimeStatus = computed<UiRuntimeStatusSummary>(() => {
+    const threadId = selectedThreadId.value
+    if (!threadId) return emptyRuntimeStatusSummary('')
+    const previous = runtimeStatusSummaryByThreadId.value[threadId] ?? emptyRuntimeStatusSummary(threadId)
+    const executionState = runtimeExecutionStateByThreadId.value[threadId] ?? previous.executionState
+    const turnError = turnErrorByThreadId.value[threadId]?.message ?? ''
+    return {
+      ...previous,
+      threadId,
+      executionState,
+      canStop: selectedThreadCanStop.value,
+      stale: runtimeStaleByThreadId.value[threadId] === true || previous.stale,
+      activeTurnId: activeTurnIdByThreadId.value[threadId] ?? previous.activeTurnId,
+      lastError: turnError || previous.lastError,
+    }
   })
   const selectedThreadTokenUsage = computed<UiThreadTokenUsage | null>(() => {
     const threadId = selectedThreadId.value
@@ -1858,6 +1884,7 @@ export function useDesktopState() {
     runtimeExecutionStateByThreadId.value = pruneThreadStateMap(runtimeExecutionStateByThreadId.value, activeThreadIds)
     runtimeCanStopByThreadId.value = pruneThreadStateMap(runtimeCanStopByThreadId.value, activeThreadIds)
     runtimeStaleByThreadId.value = pruneThreadStateMap(runtimeStaleByThreadId.value, activeThreadIds)
+    runtimeStatusSummaryByThreadId.value = pruneThreadStateMap(runtimeStatusSummaryByThreadId.value, activeThreadIds)
     lastExecutionSignalAtByThreadId.value = pruneThreadStateMap(lastExecutionSignalAtByThreadId.value, activeThreadIds)
     threadReadActiveStateByThreadId.value = pruneThreadStateMap(threadReadActiveStateByThreadId.value, activeThreadIds)
     ignoredStaleActiveTurnByThreadId.value = pruneThreadStateMap(ignoredStaleActiveTurnByThreadId.value, activeThreadIds)
@@ -2378,8 +2405,78 @@ export function useDesktopState() {
     return isRuntimeExecutionActiveState(runtimeExecutionStateByThreadId.value[threadId]) && !isRuntimeExecutionStale(threadId)
   }
 
+  function emptyRuntimeStatusSummary(threadId: string): UiRuntimeStatusSummary {
+    return {
+      threadId,
+      executionState: 'idle',
+      canStop: false,
+      stale: false,
+      stopRequested: false,
+      activeTurnId: '',
+      lastError: null,
+      degradedReason: null,
+      messageState: 'unavailable',
+      updatedAtIso: '',
+      lastEventSeq: 0,
+      lastStartedAtIso: null,
+      lastCompletedAtIso: null,
+    }
+  }
+
+  function rememberRuntimeStatusSummary(threadId: string, nextSummary: UiRuntimeStatusSummary): void {
+    if (!threadId) return
+    const previous = runtimeStatusSummaryByThreadId.value[threadId]
+    if (previous && JSON.stringify(previous) === JSON.stringify(nextSummary)) return
+    runtimeStatusSummaryByThreadId.value = {
+      ...runtimeStatusSummaryByThreadId.value,
+      [threadId]: nextSummary,
+    }
+  }
+
+  function rememberRuntimeSnapshotSummary(threadId: string, snapshot: ThreadRuntimeSnapshot): void {
+    rememberRuntimeStatusSummary(threadId, {
+      threadId,
+      executionState: snapshot.executionState,
+      canStop: snapshot.canStop && !snapshot.stale,
+      stale: snapshot.stale,
+      stopRequested: snapshot.stopRequested,
+      activeTurnId: snapshot.activeTurnId,
+      lastError: snapshot.lastError,
+      degradedReason: snapshot.degradedReason,
+      messageState: snapshot.messageState,
+      updatedAtIso: snapshot.updatedAtIso,
+      lastEventSeq: snapshot.lastEventSeq,
+      lastStartedAtIso: snapshot.lastStartedAtIso,
+      lastCompletedAtIso: snapshot.lastCompletedAtIso,
+    })
+  }
+
+  function rememberRuntimeLocalStateSummary(
+    threadId: string,
+    state: ThreadRuntimeSnapshot['executionState'],
+    options: { canStop?: boolean; activeTurnId?: string } = {},
+  ): void {
+    const previous = runtimeStatusSummaryByThreadId.value[threadId] ?? emptyRuntimeStatusSummary(threadId)
+    const nextActiveTurnId = options.activeTurnId?.trim() || (isRuntimeExecutionSettledState(state) ? '' : previous.activeTurnId)
+    rememberRuntimeStatusSummary(threadId, {
+      ...previous,
+      threadId,
+      executionState: state,
+      canStop: options.canStop === true,
+      stale: false,
+      stopRequested: state === 'stopping' || state === 'stop_uncertain'
+        ? true
+        : isRuntimeExecutionSettledState(state)
+          ? false
+          : previous.stopRequested,
+      activeTurnId: nextActiveTurnId,
+      updatedAtIso: new Date().toISOString(),
+    })
+  }
+
   function applyRuntimeSnapshotState(threadId: string, snapshot: ThreadRuntimeSnapshot): void {
     if (!threadId) return
+    rememberRuntimeSnapshotSummary(threadId, snapshot)
     runtimeExecutionStateByThreadId.value = {
       ...runtimeExecutionStateByThreadId.value,
       [threadId]: snapshot.executionState,
@@ -2442,6 +2539,7 @@ export function useDesktopState() {
     options: { canStop?: boolean; activeTurnId?: string } = {},
   ): void {
     if (!threadId) return
+    rememberRuntimeLocalStateSummary(threadId, state, options)
     runtimeExecutionStateByThreadId.value = {
       ...runtimeExecutionStateByThreadId.value,
       [threadId]: state,
@@ -5012,32 +5110,128 @@ export function useDesktopState() {
     const targetCwd = cwd.trim()
     const selectedModel = selectedModelId.value.trim()
     if (!nextText && imageUrls.length === 0 && fileAttachments.length === 0) return ''
+    const clientMessageId = createClientMessageId()
     triggerAndroidHaptic('medium')
 
     isSendingMessage.value = true
     error.value = ''
     let threadId = ''
+    let optimisticMessageId = ''
 
-    try {
-      try {
-        threadId = await startThread(targetCwd || undefined, selectedModel || undefined)
-      } catch (unknownError) {
-        if (selectedModel && selectedModel !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
-          await applyFallbackModelSelection()
-          threadId = await startThread(targetCwd || undefined, MODEL_FALLBACK_ID)
-        } else {
-          throw unknownError
-        }
-      }
-      if (!threadId) return ''
-
+    const activateNewThreadUi = (nextThreadId: string, turnId = ''): void => {
+      if (threadId === nextThreadId) return
+      threadId = nextThreadId
       insertOptimisticThread(threadId, targetCwd, nextText || '[Image]')
       resumedThreadById.value = {
         ...resumedThreadById.value,
         [threadId]: true,
       }
       setSelectedThreadId(threadId)
-      const optimisticMessageId = addOptimisticUserMessage(threadId, nextText, imageUrls, fileAttachments)
+      optimisticMessageId = addOptimisticUserMessage(threadId, nextText, imageUrls, fileAttachments)
+      setPendingTurnRequest(threadId, {
+        text: nextText,
+        imageUrls: [...imageUrls],
+        skills: skills.map((skill) => ({ name: skill.name, path: skill.path })),
+        fileAttachments: fileAttachments.map((file) => ({ ...file })),
+        effort: selectedReasoningEffort.value,
+        collaborationMode,
+        fallbackRetried: false,
+        createdAtMs: Date.now(),
+      })
+      if (turnId) {
+        activeTurnIdByThreadId.value = {
+          ...activeTurnIdByThreadId.value,
+          [threadId]: turnId,
+        }
+      }
+    }
+
+    const recoverRuntimeRequestByClientMessage = async (): Promise<boolean> => {
+      try {
+        const recovered = await getRuntimeRequestByClientMessageId(clientMessageId)
+        if (!recovered?.threadId) return false
+        activateNewThreadUi(recovered.threadId, recovered.turnId)
+        shouldAutoScrollOnNextAgentEvent = true
+        markActiveSyncBoost()
+        setTurnSummaryForThread(recovered.threadId, null)
+        setTurnErrorForThread(recovered.threadId, recovered.lastError)
+        if (recovered.status === 'failed') {
+          setThreadInProgress(recovered.threadId, false)
+          setTurnActivityForThread(recovered.threadId, null)
+          clearPendingTurnRequest(recovered.threadId)
+          if (recovered.lastError) error.value = recovered.lastError
+        } else if (recovered.status === 'start_uncertain') {
+          setThreadInProgress(recovered.threadId, true)
+          setRuntimeExecutionState(recovered.threadId, 'start_uncertain', { canStop: false, activeTurnId: recovered.turnId })
+          setTurnActivityForThread(recovered.threadId, {
+            label: 'Confirming status',
+            details: ['发送结果未确认，正在由 7420 后台核验'],
+          })
+        } else {
+          setThreadInProgress(recovered.threadId, true)
+          setRuntimeExecutionState(recovered.threadId, 'running', { canStop: true, activeTurnId: recovered.turnId })
+          setTurnActivityForThread(recovered.threadId, {
+            label: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
+            details: buildPendingTurnDetails(selectedModelId.value, selectedReasoningEffort.value, collaborationMode),
+          })
+        }
+        markThreadLiveExecutionSignal(recovered.threadId)
+        markThreadResumed(recovered.threadId)
+        pendingThreadMessageRefresh.add(recovered.threadId)
+        pendingThreadsRefresh = true
+        scheduleEventSync(700)
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    try {
+      let runtimeResult = null as Awaited<ReturnType<typeof startRuntimeThreadTurn>> | null
+      try {
+        runtimeResult = await startRuntimeThreadTurn({
+          cwd: targetCwd || undefined,
+          text: nextText,
+          imageUrls,
+          model: selectedModel || undefined,
+          effort: selectedReasoningEffort.value || undefined,
+          skills: skills.length > 0 ? skills : undefined,
+          fileAttachments,
+          collaborationMode,
+          clientMessageId,
+        })
+      } catch (unknownError) {
+        if (selectedModel && selectedModel !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
+          await applyFallbackModelSelection()
+          runtimeResult = await startRuntimeThreadTurn({
+            cwd: targetCwd || undefined,
+            text: nextText,
+            imageUrls,
+            model: MODEL_FALLBACK_ID,
+            effort: selectedReasoningEffort.value || undefined,
+            skills: skills.length > 0 ? skills : undefined,
+            fileAttachments,
+            collaborationMode,
+            clientMessageId,
+          })
+        } else {
+          if (await recoverRuntimeRequestByClientMessage()) {
+            isSendingMessage.value = false
+            return threadId
+          }
+          throw unknownError
+        }
+      }
+      const resultThreadId = runtimeResult?.threadId ?? ''
+      if (!resultThreadId) {
+        if (await recoverRuntimeRequestByClientMessage()) {
+          isSendingMessage.value = false
+          return threadId
+        }
+        throw new Error('runtime/send did not return a thread id')
+      }
+
+      activateNewThreadUi(resultThreadId, runtimeResult?.turnId ?? '')
       shouldAutoScrollOnNextAgentEvent = true
       markActiveSyncBoost()
       setTurnSummaryForThread(threadId, null)
@@ -5050,23 +5244,24 @@ export function useDesktopState() {
       )
       setTurnErrorForThread(threadId, null)
       setThreadInProgress(threadId, true)
+      if (runtimeResult?.status === 'start_uncertain') {
+        setRuntimeExecutionState(threadId, 'start_uncertain', { canStop: false, activeTurnId: runtimeResult.turnId })
+        setTurnActivityForThread(threadId, {
+          label: 'Confirming status',
+          details: ['等待 7420 后台核验任务是否已开始'],
+        })
+      } else {
+        setRuntimeExecutionState(threadId, 'running', { canStop: true, activeTurnId: runtimeResult?.turnId ?? '' })
+      }
+      markThreadLiveExecutionSignal(threadId)
+      markThreadResumed(threadId)
+      pendingThreadMessageRefresh.add(threadId)
+      pendingThreadsRefresh = true
+      scheduleEventSync(700)
       const capturedThreadId = threadId
       const capturedCwd = targetCwd || null
       const capturedPrompt = nextText
-      try {
-        await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode)
-      } catch (unknownError) {
-        shouldAutoScrollOnNextAgentEvent = false
-        removeOptimisticUserMessage(threadId, optimisticMessageId)
-        setThreadInProgress(threadId, false)
-        setTurnActivityForThread(threadId, null)
-        const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
-        setTurnErrorForThread(threadId, errorMessage)
-        error.value = errorMessage
-        throw unknownError
-      } finally {
-        isSendingMessage.value = false
-      }
+      isSendingMessage.value = false
       consumePlanModeAfterSubmit(collaborationMode)
       void requestThreadTitleGeneration(capturedThreadId, capturedPrompt, capturedCwd)
       return threadId
@@ -5075,6 +5270,10 @@ export function useDesktopState() {
       if (threadId) {
         setThreadInProgress(threadId, false)
         setTurnActivityForThread(threadId, null)
+        clearPendingTurnRequest(threadId)
+      }
+      if (threadId && optimisticMessageId) {
+        removeOptimisticUserMessage(threadId, optimisticMessageId)
       }
       const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
       if (threadId) {
@@ -6100,6 +6299,7 @@ export function useDesktopState() {
     selectedLiveOverlay,
     selectedThreadExecutionActive,
     selectedThreadCanStop,
+    selectedThreadRuntimeStatus,
     selectedThreadTokenUsage,
     selectedThreadId,
     availableModelIds,
