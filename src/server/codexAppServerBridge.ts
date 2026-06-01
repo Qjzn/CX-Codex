@@ -278,6 +278,9 @@ const APP_SERVER_RPC_DIAGNOSTIC_LIMIT = 20
 const APP_SERVER_THREAD_LIST_FRESH_CACHE_TTL_MS = 3 * 60_000
 const APP_SERVER_THREAD_LIST_STALE_CACHE_TTL_MS = 20 * 60_000
 const APP_SERVER_THREAD_LIST_BACKGROUND_REFRESH_MIN_INTERVAL_MS = 30_000
+const APP_SERVER_MODEL_LIST_FRESH_CACHE_TTL_MS = 10 * 60_000
+const APP_SERVER_MODEL_LIST_STALE_CACHE_TTL_MS = 60 * 60_000
+const APP_SERVER_MODEL_LIST_BACKGROUND_REFRESH_MIN_INTERVAL_MS = 5 * 60_000
 const SUPPLEMENTAL_THREAD_SUMMARY_CACHE_TTL_MS = 5 * 60_000
 const SUPPLEMENTAL_THREAD_SUMMARY_MAX_READS = 20
 const RUNTIME_SNAPSHOT_STALE_MS = 90_000
@@ -1116,7 +1119,7 @@ function getRpcTimeoutMs(method: string, params: unknown): number {
 }
 
 function getShareableRpcKey(method: string, params: unknown): string | null {
-  if (method !== 'thread/list' && method !== 'thread/read') {
+  if (method !== 'thread/list' && method !== 'thread/read' && method !== 'model/list') {
     return null
   }
 
@@ -2495,6 +2498,7 @@ class AppServerProcess {
   private readonly pendingServerRequests = new Map<number, PendingServerRequest>()
   private readonly sharedReadRpcByKey = new Map<string, Promise<unknown>>()
   private readonly cachedThreadListRpcByKey = new Map<string, CachedRpcResponse>()
+  private readonly cachedModelListRpcByKey = new Map<string, CachedRpcResponse>()
   private readonly threadTokenUsageByThreadId = new Map<string, ThreadTokenUsage>()
   private readonly planModeTurnsByThreadId = new Map<string, { turnId: string; startedAtMs: number }>()
   private webBridgeSettings: WebBridgeSettings = DEFAULT_WEB_BRIDGE_SETTINGS
@@ -2627,33 +2631,67 @@ class AppServerProcess {
     this.cachedThreadListRpcByKey.clear()
   }
 
-  private readCachedThreadListRpc(shareableKey: string, allowStale = false): CachedRpcRead | null {
-    const cached = this.cachedThreadListRpcByKey.get(shareableKey)
+  private readCachedRpc(
+    cache: Map<string, CachedRpcResponse>,
+    shareableKey: string,
+    ttlMs: number,
+    staleTtlMs: number,
+    allowStale = false,
+  ): CachedRpcRead | null {
+    const cached = cache.get(shareableKey)
     if (!cached) return null
     const ageMs = Date.now() - cached.cachedAtMs
-    if (ageMs <= APP_SERVER_THREAD_LIST_FRESH_CACHE_TTL_MS) {
+    if (ageMs <= ttlMs) {
       return { value: cached.value, stale: false }
     }
-    if (allowStale && ageMs <= APP_SERVER_THREAD_LIST_STALE_CACHE_TTL_MS) {
+    if (allowStale && ageMs <= staleTtlMs) {
       return { value: cached.value, stale: true }
     }
-    if (ageMs > APP_SERVER_THREAD_LIST_STALE_CACHE_TTL_MS) {
-      this.cachedThreadListRpcByKey.delete(shareableKey)
+    if (ageMs > staleTtlMs) {
+      cache.delete(shareableKey)
     }
     return null
   }
 
-  private writeCachedThreadListRpc(shareableKey: string, value: unknown): void {
-    this.cachedThreadListRpcByKey.set(shareableKey, {
+  private writeCachedRpc(cache: Map<string, CachedRpcResponse>, shareableKey: string, value: unknown, maxEntries = 20): void {
+    cache.set(shareableKey, {
       value,
       cachedAtMs: Date.now(),
       refreshStartedAtMs: 0,
     })
-    if (this.cachedThreadListRpcByKey.size <= 20) return
-    const oldestKey = this.cachedThreadListRpcByKey.keys().next().value
+    if (cache.size <= maxEntries) return
+    const oldestKey = cache.keys().next().value
     if (typeof oldestKey === 'string') {
-      this.cachedThreadListRpcByKey.delete(oldestKey)
+      cache.delete(oldestKey)
     }
+  }
+
+  private readCachedThreadListRpc(shareableKey: string, allowStale = false): CachedRpcRead | null {
+    return this.readCachedRpc(
+      this.cachedThreadListRpcByKey,
+      shareableKey,
+      APP_SERVER_THREAD_LIST_FRESH_CACHE_TTL_MS,
+      APP_SERVER_THREAD_LIST_STALE_CACHE_TTL_MS,
+      allowStale,
+    )
+  }
+
+  private writeCachedThreadListRpc(shareableKey: string, value: unknown): void {
+    this.writeCachedRpc(this.cachedThreadListRpcByKey, shareableKey, value)
+  }
+
+  private readCachedModelListRpc(shareableKey: string, allowStale = false): CachedRpcRead | null {
+    return this.readCachedRpc(
+      this.cachedModelListRpcByKey,
+      shareableKey,
+      APP_SERVER_MODEL_LIST_FRESH_CACHE_TTL_MS,
+      APP_SERVER_MODEL_LIST_STALE_CACHE_TTL_MS,
+      allowStale,
+    )
+  }
+
+  private writeCachedModelListRpc(shareableKey: string, value: unknown): void {
+    this.writeCachedRpc(this.cachedModelListRpcByKey, shareableKey, value, 4)
   }
 
   private refreshThreadListCacheInBackground(shareableKey: string, params: unknown): void {
@@ -2679,6 +2717,41 @@ class AppServerProcess {
       .catch((error) => {
         logBridgeError('Background thread/list refresh failed', error)
         const current = this.cachedThreadListRpcByKey.get(shareableKey)
+        if (current) {
+          current.refreshStartedAtMs = 0
+        }
+        return null
+      })
+      .finally(() => {
+        this.sharedReadRpcByKey.delete(shareableKey)
+      })
+
+    this.sharedReadRpcByKey.set(shareableKey, request)
+  }
+
+  private refreshModelListCacheInBackground(shareableKey: string, params: unknown): void {
+    if (this.sharedReadRpcByKey.has(shareableKey)) return
+
+    const cached = this.cachedModelListRpcByKey.get(shareableKey)
+    const now = Date.now()
+    if (
+      cached?.refreshStartedAtMs &&
+      now - cached.refreshStartedAtMs < APP_SERVER_MODEL_LIST_BACKGROUND_REFRESH_MIN_INTERVAL_MS
+    ) {
+      return
+    }
+    if (cached) {
+      cached.refreshStartedAtMs = now
+    }
+
+    const request = this.enqueueRpc('model/list', params)
+      .then((value) => {
+        this.writeCachedModelListRpc(shareableKey, value)
+        return value
+      })
+      .catch((error) => {
+        logBridgeError('Background model/list refresh failed', error)
+        const current = this.cachedModelListRpcByKey.get(shareableKey)
         if (current) {
           current.refreshStartedAtMs = 0
         }
@@ -3223,6 +3296,15 @@ class AppServerProcess {
         return cached.value
       }
     }
+    if (method === 'model/list') {
+      const cached = this.readCachedModelListRpc(shareableKey, true)
+      if (cached) {
+        if (cached.stale) {
+          this.refreshModelListCacheInBackground(shareableKey, params)
+        }
+        return cached.value
+      }
+    }
 
     const existingRequest = this.sharedReadRpcByKey.get(shareableKey)
     if (existingRequest) {
@@ -3233,6 +3315,8 @@ class AppServerProcess {
       .then((value) => {
         if (method === 'thread/list') {
           this.writeCachedThreadListRpc(shareableKey, value)
+        } else if (method === 'model/list') {
+          this.writeCachedModelListRpc(shareableKey, value)
         }
         return value
       })

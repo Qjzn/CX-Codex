@@ -2,6 +2,9 @@
 
 ## 未发布
 
+- 性能与稳定性：
+  - `model/list` 增加服务端 stale-while-revalidate 缓存，重复打开页面、切换视图或回归测试时不再频繁触发慢模型列表 RPC。
+  - 模型列表缓存保持后台刷新，不影响发送、停止、权限响应和当前会话恢复等交互优先级。
 - 文档运营：
   - 新增 [平台兼容与 Slash Command 支持](./platform-and-commands.zh-CN.md)，说明 Windows、Android、Linux、WSL2 和 macOS 的支持边界。
   - 补充 `/model`、`/skill`、计划模式、图片、文件引用和工具权限在 CX-Codex 中的等价入口。
