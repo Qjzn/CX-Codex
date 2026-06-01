@@ -19,6 +19,30 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: GitHub Issues #2 and #3 long prompt safety
+
+#### Prerequisites
+- App server is running from this repository.
+- A workspace path is selected on the home page.
+
+#### Steps
+1. Paste a prompt longer than 3000 characters into the home composer and submit it.
+2. Confirm the app enters the newly created thread before the first turn finishes.
+3. Confirm the user prompt is shown as a collapsed preview with `展开完整 Prompt` and `复制全文`.
+4. Expand the prompt, collapse it again, and copy the full prompt.
+5. Hover or focus a message action bar and click `回滚` once.
+6. Click outside or wait 4 seconds, then click `回滚` twice on the same message.
+
+#### Expected Results
+- Long first prompts no longer leave the user on the home page while the task starts.
+- If the first turn fails after the thread is created, the thread and optimistic prompt remain visible with an error instead of disappearing.
+- The collapsed long prompt clearly says it is a preview and the full prompt was sent.
+- Rollback requires a second confirmation click; a single accidental click does not mutate the thread.
+- Rollback is visually separated from favorite/copy actions.
+
+#### Rollback/Cleanup
+- Archive or delete the test thread if it is not needed.
+
 ### Feature: Web settings permission policy
 
 #### Prerequisites

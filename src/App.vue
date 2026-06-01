@@ -3477,7 +3477,13 @@ watch(
   async (threadId) => {
     if (!hasInitialized.value) return
     if (isRouteSyncInProgress.value) return
-    if (isNonThreadRoute.value) return
+    if (isNonThreadRoute.value) {
+      if (isHomeRoute.value && threadId && isSendingMessage.value) {
+        rememberRoutableThreadId(threadId)
+        await router.replace({ name: 'thread', params: { threadId } })
+      }
+      return
+    }
 
     if (!threadId) {
       if (route.name !== 'home') {

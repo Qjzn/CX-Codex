@@ -529,7 +529,7 @@
                   <template v-if="isLongUserMessageCollapsed(entry.message)">
                     <p class="message-text">{{ longMessagePreview(entry.message) }}</p>
                     <p class="message-long-summary">
-                      已发送完整内容 · {{ formatCharacterCount(entry.message.text.length) }} 字
+                      当前为折叠预览，完整 Prompt 已发送 · {{ formatCharacterCount(entry.message.text.length) }} 字
                     </p>
                   </template>
                   <template v-else>
@@ -588,7 +588,7 @@
                   </template>
                   <div v-if="isLongUserMessage(entry.message)" class="message-long-actions">
                     <button type="button" class="message-long-action" @click.stop="toggleLongUserMessage(entry.message)">
-                      {{ isLongUserMessageCollapsed(entry.message) ? '展开全文' : '收起' }}
+                      {{ isLongUserMessageCollapsed(entry.message) ? '展开完整 Prompt' : '收起' }}
                     </button>
                     <button type="button" class="message-long-action" @click.stop="onCopyMessage(entry.message)">
                       复制全文
@@ -599,7 +599,18 @@
             </article>
 
             <div v-if="canShowMessageActionBar(entry.message)" class="message-actions">
-              <div class="message-actions-main">
+              <button
+                v-if="canRollbackMessage(entry.message)"
+                class="message-action-button message-action-button--rollback"
+                :class="{ 'is-confirming': isRollbackConfirming(entry.message) }"
+                type="button"
+                :title="isRollbackConfirming(entry.message) ? '再次点击确认回滚' : '回滚到这条消息，并移除其后的当前轮次内容'"
+                @click.stop="onRollback(entry.message)"
+              >
+                <IconTablerArrowBackUp class="message-action-icon" />
+                <span class="message-action-label">{{ isRollbackConfirming(entry.message) ? '确认回滚' : '回滚' }}</span>
+              </button>
+              <div v-if="canFavoriteMessage(entry.message) || canCopyMessage(entry.message)" class="message-actions-main">
                 <button
                   v-if="canFavoriteMessage(entry.message)"
                   class="message-action-button message-action-button--favorite"
@@ -622,16 +633,6 @@
                   <span class="message-action-label">复制</span>
                 </button>
               </div>
-              <button
-                v-if="canRollbackMessage(entry.message)"
-                class="message-action-button message-action-button--rollback"
-                type="button"
-                title="回滚到这条消息，并移除其后的当前轮次内容"
-                @click.stop="onRollback(entry.message)"
-              >
-                <IconTablerArrowBackUp class="message-action-icon" />
-                <span class="message-action-label">回滚</span>
-              </button>
             </div>
           </div>
         </div>
@@ -1202,7 +1203,7 @@ const BOTTOM_THRESHOLD_PX = 16
 const LONG_RESPONSE_ANCHOR_MAX_WIDTH_PX = 1100
 const LONG_RESPONSE_MIN_HEIGHT_PX = 260
 const LONG_USER_MESSAGE_COLLAPSE_THRESHOLD = 3000
-const LONG_USER_MESSAGE_PREVIEW_LENGTH = 900
+const LONG_USER_MESSAGE_PREVIEW_LENGTH = 1600
 const LONG_USER_MESSAGE_EXPANDED_MAX_HEIGHT_PX = 760
 const IMAGE_MODAL_MIN_SCALE = 1
 const IMAGE_MODAL_MAX_SCALE = 4
@@ -1213,6 +1214,8 @@ let modalImageDragStartY = 0
 let modalImageDragOriginX = 0
 let modalImageDragOriginY = 0
 let highlightedMessageTimer: number | null = null
+const pendingRollbackMessageId = ref('')
+let rollbackConfirmTimer: number | null = null
 let previousBodyOverflow = ''
 type InlineSegment =
   | { kind: 'text'; value: string }
@@ -3228,10 +3231,36 @@ async function onCopyMessage(message: UiMessage): Promise<void> {
   }
 }
 
+function clearRollbackConfirmation(): void {
+  pendingRollbackMessageId.value = ''
+  if (rollbackConfirmTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(rollbackConfirmTimer)
+    rollbackConfirmTimer = null
+  }
+}
+
+function isRollbackConfirming(message: UiMessage): boolean {
+  return pendingRollbackMessageId.value === message.id
+}
+
 function onRollback(message: UiMessage): void {
   if (!canRollbackMessage(message)) return
-  const confirmed = window.confirm('确认回滚到这条消息？这会移除这条消息之后的当前轮次内容。')
-  if (!confirmed) return
+  if (!isRollbackConfirming(message)) {
+    pendingRollbackMessageId.value = message.id
+    if (rollbackConfirmTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(rollbackConfirmTimer)
+    }
+    if (typeof window !== 'undefined') {
+      rollbackConfirmTimer = window.setTimeout(() => {
+        rollbackConfirmTimer = null
+        if (pendingRollbackMessageId.value === message.id) {
+          pendingRollbackMessageId.value = ''
+        }
+      }, 3600)
+    }
+    return
+  }
+  clearRollbackConfirmation()
   const prependText = message.role === 'user' ? message.text.trim() : ''
   emit('rollback', {
     turnIndex: message.turnIndex!,
@@ -4019,6 +4048,7 @@ watch(
 
 watch(() => props.activeThreadId, () => {
   clearHighlightedMessage()
+  clearRollbackConfirmation()
   activeMessageActionId.value = ''
 })
 
@@ -4031,6 +4061,7 @@ defineExpose<{
 onBeforeUnmount(() => {
   stopCommandElapsedTimer()
   clearHighlightedMessage()
+  clearRollbackConfirmation()
   if (scrollRestoreFrame) {
     cancelAnimationFrame(scrollRestoreFrame)
   }
@@ -4605,10 +4636,11 @@ onBeforeUnmount(() => {
 
 .message-text-flow {
   @apply flex flex-col gap-1;
+  overflow-wrap: anywhere;
 }
 
 .message-text-flow--long-collapsed {
-  @apply rounded-2xl border border-[#e7ddcf] bg-[#fffaf2]/65 p-2.5;
+  @apply rounded-2xl border border-[#e7ddcf] bg-[#fffaf2]/65 p-3;
 }
 
 .message-text-flow--long-expanded {
@@ -4638,7 +4670,7 @@ onBeforeUnmount(() => {
 }
 
 .message-long-summary {
-  @apply m-0 text-[11px] leading-tight text-[#8f8577];
+  @apply m-0 text-xs leading-snug text-[#776d60];
 }
 
 .message-long-actions {
@@ -4802,6 +4834,7 @@ onBeforeUnmount(() => {
   @apply inline-flex items-center gap-2;
   position: absolute;
   left: 0.5rem;
+  right: 0.5rem;
   bottom: -0.5rem;
   z-index: 10;
   pointer-events: none;
@@ -4809,6 +4842,7 @@ onBeforeUnmount(() => {
 
 .message-actions-main {
   @apply inline-flex items-center gap-0.5;
+  margin-left: auto;
 }
 
 .message-action-button {
@@ -4824,9 +4858,9 @@ onBeforeUnmount(() => {
   @apply border-[#ead1c8] bg-[#fff7f4]/92 text-[#9f4a35] hover:border-[#ddb2a3] hover:bg-[#fff1ec] hover:text-[#7f3325];
 }
 
-.message-stack[data-role='user'] .message-actions {
-  left: auto;
-  right: 0.5rem;
+.message-action-button--rollback.is-confirming {
+  @apply border-[#dc8f78] bg-[#fff1ec] text-[#7f3325] opacity-100;
+  box-shadow: 0 0 0 2px rgba(220, 143, 120, 0.18);
 }
 
 .message-action-icon {

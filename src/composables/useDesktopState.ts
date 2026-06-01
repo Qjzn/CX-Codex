@@ -22,6 +22,7 @@ import {
   setCodexSpeedMode,
   setDefaultModel,
   setWorkspaceRootsState,
+  startThread,
   getThreadTitleCache,
   getNotificationReplay,
   getRuntimeRequestByClientMessageId,
@@ -5187,9 +5188,29 @@ export function useDesktopState() {
     }
 
     try {
+      if (!threadId) {
+        const prestartedThreadId = await startThread(targetCwd || undefined, selectedModel || undefined)
+        if (prestartedThreadId) {
+          activateNewThreadUi(prestartedThreadId)
+          shouldAutoScrollOnNextAgentEvent = true
+          markActiveSyncBoost()
+          setTurnSummaryForThread(prestartedThreadId, null)
+          setTurnErrorForThread(prestartedThreadId, null)
+          setThreadInProgress(prestartedThreadId, true)
+          setRuntimeExecutionState(prestartedThreadId, 'starting', { canStop: false })
+          setTurnActivityForThread(prestartedThreadId, {
+            label: 'Sending',
+            details: ['会话已创建，正在提交首条任务'],
+          })
+          markThreadLiveExecutionSignal(prestartedThreadId)
+          markThreadResumed(prestartedThreadId)
+        }
+      }
+
       let runtimeResult = null as Awaited<ReturnType<typeof startRuntimeThreadTurn>> | null
       try {
         runtimeResult = await startRuntimeThreadTurn({
+          threadId: threadId || undefined,
           cwd: targetCwd || undefined,
           text: nextText,
           imageUrls,
@@ -5204,6 +5225,7 @@ export function useDesktopState() {
         if (selectedModel && selectedModel !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
           await applyFallbackModelSelection()
           runtimeResult = await startRuntimeThreadTurn({
+            threadId: threadId || undefined,
             cwd: targetCwd || undefined,
             text: nextText,
             imageUrls,
@@ -5273,7 +5295,10 @@ export function useDesktopState() {
         clearPendingTurnRequest(threadId)
       }
       if (threadId && optimisticMessageId) {
-        removeOptimisticUserMessage(threadId, optimisticMessageId)
+        const threadExists = Boolean(sourceThreadById.value[threadId])
+        if (!threadExists) {
+          removeOptimisticUserMessage(threadId, optimisticMessageId)
+        }
       }
       const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
       if (threadId) {
