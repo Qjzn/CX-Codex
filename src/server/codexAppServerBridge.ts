@@ -4553,6 +4553,49 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
+      if (req.method === 'GET' && url.pathname === '/codex-api/diagnostics') {
+        const runtimeHealth = runtimeStore.getHealth()
+        const recentEvents = runtimeStore
+          .listEventsAfter(Math.max(0, runtimeHealth.latestSeq - 20), 20)
+          .notifications
+          .slice(-10)
+          .map((event) => ({
+            seq: event.seq,
+            method: event.method,
+            atIso: event.atIso,
+            threadId: event.threadId,
+            turnId: event.turnId,
+          }))
+        const uncertainRequests = runtimeStore.listUncertainRequests(10).map((request) => ({
+          requestId: request.requestId,
+          clientMessageId: request.clientMessageId,
+          threadId: request.threadId,
+          turnId: request.turnId,
+          status: request.status,
+          retryCount: request.retryCount,
+          updatedAtIso: request.updatedAtIso,
+          lastError: request.lastError,
+        }))
+        setJson(res, 200, {
+          status: 'ok',
+          data: {
+            appServer: appServer.getStatus(),
+            runtimeStore: runtimeHealth,
+            runtime: {
+              uncertainRequests,
+              recentEvents,
+            },
+            pendingServerRequests: appServer.listPendingServerRequests().map((request) => ({
+              id: request.id,
+              method: request.method,
+              receivedAtIso: request.receivedAtIso,
+            })),
+            timestamp: new Date().toISOString(),
+          },
+        })
+        return
+      }
+
       if (req.method === 'GET' && url.pathname === '/codex-api/meta/methods') {
         const methods = await methodCatalog.listMethods()
         setJson(res, 200, { data: methods })

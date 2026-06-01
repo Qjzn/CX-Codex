@@ -121,6 +121,14 @@
               >
                 GitHub 热门
               </button>
+              <button
+                class="sidebar-skills-link"
+                :class="{ 'is-active': isDiagnosticsRoute }"
+                type="button"
+                @click="router.push({ name: 'diagnostics' }); isMobile && setSidebarCollapsed(true)"
+              >
+                运行诊断
+              </button>
             </div>
           </div>
 
@@ -581,7 +589,10 @@
         />
 
         <section class="content-body">
-          <template v-if="isSkillsRoute">
+          <template v-if="isDiagnosticsRoute">
+            <DiagnosticsPanel />
+          </template>
+          <template v-else-if="isSkillsRoute">
             <SkillsHub @skills-changed="onSkillsChanged" />
           </template>
           <template v-else-if="isGithubTrendingRoute">
@@ -873,6 +884,7 @@ import {
 const SkillsHub = defineAsyncComponent(() => import('./components/content/SkillsHub.vue'))
 const GithubTrendingHub = defineAsyncComponent(() => import('./components/content/GithubTrendingHub.vue'))
 const ComposerRuntimeDropdown = defineAsyncComponent(() => import('./components/content/ComposerRuntimeDropdown.vue'))
+const DiagnosticsPanel = defineAsyncComponent(() => import('./components/content/DiagnosticsPanel.vue'))
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
@@ -1222,8 +1234,9 @@ const routableThreadIdSet = computed(() => {
 const isHomeRoute = computed(() => route.name === 'home')
 const isSkillsRoute = computed(() => route.name === 'skills')
 const isGithubTrendingRoute = computed(() => route.name === 'github-trending')
+const isDiagnosticsRoute = computed(() => route.name === 'diagnostics')
 const isNonThreadRoute = computed(() => (
-  isHomeRoute.value || isSkillsRoute.value || isGithubTrendingRoute.value
+  isHomeRoute.value || isSkillsRoute.value || isGithubTrendingRoute.value || isDiagnosticsRoute.value
 ))
 const displayAppVersion = computed(() => {
   const version = String(appVersion).trim()
@@ -1417,6 +1430,7 @@ const isRouteOnlyEmptyThread = computed(() => (
   && selectedThreadServerRequests.value.length === 0
 ))
 const contentTitle = computed(() => {
+  if (isDiagnosticsRoute.value) return '运行诊断'
   if (isSkillsRoute.value) return '技能'
   if (isGithubTrendingRoute.value) return 'GitHub 热门'
   if (isHomeRoute.value) return '新会话'
@@ -1432,6 +1446,7 @@ const pageTitle = computed(() => {
   return threadTitle || browserHostName
 })
 const headerSubtitle = computed(() => {
+  if (isDiagnosticsRoute.value) return '检查后端队列、运行状态和恢复链路。'
   if (isSkillsRoute.value) return '管理已安装技能和当前运行能力。'
   if (isGithubTrendingRoute.value) return '浏览热门仓库、查看介绍，并直接带着项目链接发起提问。'
   if (isHomeRoute.value) return '从已配置工作区快速发起新的 Codex 任务。'
@@ -3420,7 +3435,7 @@ async function syncThreadSelectionWithRoute(): Promise<void> {
   isRouteSyncInProgress.value = true
 
   try {
-    if (route.name === 'home' || route.name === 'skills' || route.name === 'github-trending') {
+    if (isNonThreadRoute.value) {
       if (selectedThreadId.value !== '') {
         await selectThread('')
       }

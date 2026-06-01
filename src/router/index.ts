@@ -6,6 +6,7 @@ function normalizeInitialHashRoute(): void {
   const { pathname, search, hash } = window.location
   const isKnownCleanRoute = pathname === '/skills'
     || pathname === '/github-trending'
+    || pathname === '/diagnostics'
     || pathname.startsWith('/thread/')
   if (!isKnownCleanRoute) return
   if (hash && hash !== '#/') return
@@ -40,6 +41,11 @@ const router = createRouter({
     {
       path: '/github-trending',
       name: 'github-trending',
+      component: EmptyRouteView,
+    },
+    {
+      path: '/diagnostics',
+      name: 'diagnostics',
       component: EmptyRouteView,
     },
     {

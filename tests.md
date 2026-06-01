@@ -1257,3 +1257,32 @@ This file tracks manual regression and feature verification steps.
   - `/skills` 自动规范化到 `/#/skills`，技能中心非白屏。
   - `/github-trending` 自动规范化到 `/#/github-trending`，GitHub 热门非白屏。
   - `local-preview.html?path=C%3A%2FUsers%2FSW%2FDocuments%2FPlayground%2Fcodexui%2FREADME.md` 显示 `预览已就绪`，存在 `.markdown-body`，移动视口无横向溢出。
+
+---
+
+### Feature: 运行诊断中心与前端回归脚本
+
+#### Prerequisites
+- 当前构建包含 `/diagnostics` 路由和 `/codex-api/diagnostics` 只读接口。
+- 本机已安装 `agent-browser`。
+
+#### Steps
+1. 打开 `/diagnostics`。
+2. 确认页面展示后端服务、Runtime Store、恢复队列、慢 RPC 和最近事件。
+3. 执行 `npm.cmd run test:7420:frontend -- -BaseUrl <url>`。
+4. 可选传入 `-ThreadId <threadId>`，额外验证线程页运行状态条。
+
+#### Expected Results
+- 诊断中心不触发任务、不修改 runtime store，只展示状态。
+- 诊断接口不返回 prompt payload、token、auth header、密码等敏感字段。
+- 前端回归脚本覆盖首页、技能中心、GitHub 热门、诊断中心、本地预览和移动端横向溢出检查。
+- 传入线程 ID 后，脚本额外校验线程页 `.runtime-status-bar`。
+
+#### Regression Evidence
+- 2026-06-01 静态验证：`git diff --check` 通过。
+- 2026-06-01 构建验证：`npm.cmd run build` 通过。
+- 2026-06-01 临时 17424 服务验证：
+  - `/health` 正常。
+  - `/codex-api/diagnostics` 返回 `appServer`、`runtimeStore`、`runtime.uncertainRequests`、`runtime.recentEvents`，且不包含请求 payload。
+  - `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:17424 -ThreadId 019e8166-4f20-7183-9c8a-f2fe56246e95` 通过。
+  - 脚本验证了 `/#/`、`/#/skills`、`/#/github-trending`、`/#/diagnostics`、`local-preview.html` 和线程页，移动视口均无横向溢出。

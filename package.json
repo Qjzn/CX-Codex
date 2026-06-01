@@ -62,6 +62,7 @@
     "package:release": "powershell -ExecutionPolicy Bypass -File ./scripts/package-release.ps1",
     "setup:windows": "powershell -ExecutionPolicy Bypass -File ./setup.ps1",
     "test:7420": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/regression-7420.ps1",
+    "test:7420:frontend": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/regression-7420-frontend.ps1",
     "test:7420:soak": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/soak-7420.ps1",
     "preview": "vite preview",
     "prepublishOnly": "npm run build"
