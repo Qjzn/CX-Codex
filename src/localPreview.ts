@@ -8,7 +8,7 @@ declare global {
   interface Window {
     Capacitor?: {
       getPlatform?: () => string
-      Plugins?: Record<string, Record<string, (...args: unknown[]) => Promise<unknown>>>
+      Plugins?: Record<string, Record<string, unknown>>
       nativePromise?: (pluginName: string, methodName: string, options?: Record<string, unknown>) => Promise<unknown>
     }
   }
@@ -20,7 +20,26 @@ type MobileShellResult = {
   status?: string
 }
 
+type MobileShellFileOperationEvent = {
+  operationId?: string
+  status?: string
+  message?: string
+  fileName?: string
+}
+
+type MobileShellListenerHandle = {
+  remove?: () => Promise<void> | void
+}
+
+type MobileShellPluginObject = Record<string, unknown> & {
+  addListener?: (
+    eventName: string,
+    callback: (event: MobileShellFileOperationEvent) => void
+  ) => Promise<MobileShellListenerHandle> | MobileShellListenerHandle
+}
+
 const NATIVE_ACTION_TIMEOUT_MS = 12_000
+const FILE_OPERATION_EVENT_TIMEOUT_MS = 120_000
 
 const root = document.getElementById('local-preview-root')
 if (!root) {
@@ -41,6 +60,7 @@ const state = {
   zoom: 1,
   pdfData: null as Uint8Array | null,
   renderGeneration: 0,
+  fileActionGeneration: 0,
   mimeType: '',
   fileName: '',
   nativeFileActionsUnavailable: false,
@@ -135,6 +155,40 @@ function setFileActionsDisabled(disabled: boolean): void {
   })
 }
 
+function fileAccessError(response: Pick<Response, 'status'>): Error {
+  if (response.status === 404) {
+    return new Error('文件不存在或已移动，请返回会话重新打开最新链接。')
+  }
+  if (response.status === 401 || response.status === 403) {
+    return new Error('没有权限读取该文件，请刷新会话或重新登录后再试。')
+  }
+  return new Error(`文件无法访问（HTTP ${response.status}），请检查路径或稍后重试。`)
+}
+
+function updateFileMetadataFromResponse(response: Response): void {
+  const contentType = response.headers.get('content-type')
+  if (contentType) state.mimeType = contentType
+  const contentLength = Number(response.headers.get('content-length') ?? '')
+  if (Number.isFinite(contentLength) && contentLength > 0) {
+    const size = document.querySelector<HTMLElement>('[data-preview-size]')
+    if (size) size.textContent = formatFileSize(contentLength)
+  }
+}
+
+async function verifyFileAccessible(mode: 'inline' | 'download' = 'inline'): Promise<void> {
+  let response: Response
+  try {
+    response = await fetch(fileUrl(mode), {
+      method: 'HEAD',
+      cache: 'no-store',
+    })
+  } catch {
+    throw new Error('文件地址无法访问，请检查连接后重试。')
+  }
+  if (!response.ok) throw fileAccessError(response)
+  updateFileMetadataFromResponse(response)
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timer: number | undefined
   const timeout = new Promise<never>((_, reject) => {
@@ -157,8 +211,13 @@ function isNativeTimeoutError(error: unknown): boolean {
   return /timeout|超时|没有返回确认/iu.test(message)
 }
 
-function getMobileShellMethod(method: string): ((options: Record<string, unknown>) => Promise<unknown>) | null {
+function getMobileShellPlugin(): MobileShellPluginObject | null {
   const mobileShell = window.Capacitor?.Plugins?.MobileShell
+  return mobileShell ? mobileShell as MobileShellPluginObject : null
+}
+
+function getMobileShellMethod(method: string): ((options: Record<string, unknown>) => Promise<unknown>) | null {
+  const mobileShell = getMobileShellPlugin()
   const directMethod = mobileShell?.[method]
   if (typeof directMethod === 'function') {
     return (options) => directMethod.call(mobileShell, options)
@@ -171,6 +230,45 @@ function getMobileShellMethod(method: string): ((options: Record<string, unknown
 
 function isAndroidShell(): boolean {
   return window.Capacitor?.getPlatform?.() === 'android'
+}
+
+function createOperationId(prefix: 'open' | 'download'): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function trackFileOperation(operationId: string, completedFallback: string, failedFallback: string): () => void {
+  if (!isAndroidShell()) return () => {}
+  const mobileShell = getMobileShellPlugin()
+  const addListener = mobileShell?.addListener
+  if (typeof addListener !== 'function') return () => {}
+
+  let disposed = false
+  let timeoutId: number | undefined
+  let handlePromise: Promise<MobileShellListenerHandle | null> = Promise.resolve(null)
+
+  const remove = (): void => {
+    if (disposed) return
+    disposed = true
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId)
+    void handlePromise
+      .then((handle) => {
+        if (typeof handle?.remove === 'function') {
+          return handle.remove()
+        }
+        return undefined
+      })
+      .catch(() => {})
+  }
+
+  handlePromise = Promise.resolve(addListener.call(mobileShell, 'fileOperationStatus', (event: MobileShellFileOperationEvent) => {
+    if (event.operationId !== operationId) return
+    const message = event.message || (event.status === 'failed' ? failedFallback : completedFallback)
+    setStatus(message, event.status === 'failed' ? 'error' : 'neutral')
+    remove()
+  }) as Promise<MobileShellListenerHandle> | MobileShellListenerHandle)
+
+  timeoutId = window.setTimeout(remove, FILE_OPERATION_EVENT_TIMEOUT_MS)
+  return remove
 }
 
 function requestBrowserDownload(): void {
@@ -222,21 +320,32 @@ async function copyTextToClipboard(value: string): Promise<void> {
 }
 
 async function openWithSystem(): Promise<void> {
+  state.fileActionGeneration += 1
   setFileActionsDisabled(true)
+  let stopTrackingFileOperation: (() => void) | null = null
   try {
+    await verifyFileAccessible('download')
     const openFile = state.nativeFileActionsUnavailable ? null : getMobileShellMethod('openFileFromUrl')
     if (openFile) {
+      const operationId = createOperationId('open')
+      stopTrackingFileOperation = trackFileOperation(operationId, '已交给系统应用打开。', '打开文件失败，请尝试下载。')
       setStatus('正在交给系统应用打开...')
       const result = await withTimeout(
         openFile({
           url: absoluteFileUrl('download'),
           fileName: state.fileName,
           mimeType: state.mimeType,
+          operationId,
         }) as Promise<MobileShellResult>,
         NATIVE_ACTION_TIMEOUT_MS,
         '原生打开没有返回确认。'
       )
-      setStatus(result.status === 'started' ? '已开始后台打开，完成后会自动唤起系统应用。' : '已交给系统应用打开。')
+      if (result.status === 'started') {
+        setStatus('已开始后台打开，完成后会自动唤起系统应用。')
+      } else {
+        stopTrackingFileOperation()
+        setStatus('已交给系统应用打开。')
+      }
       return
     }
     const opened = window.open(fileUrl('inline'), '_blank', 'noopener,noreferrer')
@@ -247,6 +356,7 @@ async function openWithSystem(): Promise<void> {
       setStatus('已在新窗口打开文件。')
     }
   } catch (error) {
+    stopTrackingFileOperation?.()
     if (isAndroidShell() && (isMissingNativeMethodError(error) || isNativeTimeoutError(error))) {
       state.nativeFileActionsUnavailable = true
       requestBrowserDownload()
@@ -260,38 +370,45 @@ async function openWithSystem(): Promise<void> {
 }
 
 async function downloadWithSystem(): Promise<void> {
+  state.fileActionGeneration += 1
   setFileActionsDisabled(true)
+  let stopTrackingFileOperation: (() => void) | null = null
   try {
-    if (isAndroidShell()) {
-      requestBrowserDownload()
-      setStatus('已请求系统下载；如果没有下载提示，请更新 Android 客户端或复制路径后用文件管理器打开。')
-      return
-    }
-
+    await verifyFileAccessible('download')
     const downloadFile = state.nativeFileActionsUnavailable ? null : getMobileShellMethod('downloadFileFromUrl')
     if (downloadFile) {
-      setStatus('正在请求系统下载...')
+      const operationId = createOperationId('download')
+      stopTrackingFileOperation = trackFileOperation(operationId, '已保存到系统下载目录。', '下载文件失败，请再次点击下载或复制路径。')
+      setStatus(isAndroidShell() ? '正在保存到系统下载目录...' : '正在请求系统下载...')
       const result = await withTimeout(
         downloadFile({
           url: absoluteFileUrl('download'),
           fileName: state.fileName,
           mimeType: state.mimeType,
+          operationId,
         }) as Promise<MobileShellResult>,
         NATIVE_ACTION_TIMEOUT_MS,
         '原生下载没有返回确认。'
       )
-      setStatus(result.status === 'started' ? '已开始后台下载，完成后会保存到系统下载目录。' : '已保存到系统下载目录。')
+      if (result.status === 'started') {
+        setStatus('已开始后台下载，完成后会保存到系统下载目录。')
+      } else {
+        stopTrackingFileOperation()
+        setStatus('已保存到系统下载目录。')
+      }
       return
     }
+
     requestBrowserDownload()
     if (isAndroidShell()) {
       setStatus(state.nativeFileActionsUnavailable
         ? '已请求兼容下载；如果没有系统提示，请复制路径后用文件管理器打开。'
-        : '已请求下载；如果没有系统提示，请更新 Android 客户端。')
+        : '当前 Android 客户端不支持原生下载，已尝试浏览器下载；如果没有提示，请更新客户端或复制路径。')
     } else {
       setStatus('已请求浏览器下载。')
     }
   } catch (error) {
+    stopTrackingFileOperation?.()
     if (isAndroidShell() && (isMissingNativeMethodError(error) || isNativeTimeoutError(error))) {
       state.nativeFileActionsUnavailable = true
       requestBrowserDownload()
@@ -369,8 +486,8 @@ window.addEventListener('pageshow', () => {
 
 async function fetchBlob(): Promise<Blob> {
   const response = await fetch(fileUrl('inline'), { cache: 'no-store' })
-  if (!response.ok) throw new Error('文件读取失败。')
-  state.mimeType = response.headers.get('content-type') ?? ''
+  if (!response.ok) throw fileAccessError(response)
+  updateFileMetadataFromResponse(response)
   const blob = await response.blob()
   const size = document.querySelector<HTMLElement>('[data-preview-size]')
   if (size) size.textContent = formatFileSize(blob.size)
@@ -440,6 +557,7 @@ async function renderPdf(): Promise<void> {
 async function rerenderPdf(): Promise<void> {
   if (!state.pdfData) return
   const generation = ++state.renderGeneration
+  const fileActionGenerationAtStart = state.fileActionGeneration
   const container = getContentContainer()
   container.className = 'preview-content pdf-body'
   container.replaceChildren()
@@ -453,9 +571,10 @@ async function rerenderPdf(): Promise<void> {
     const availableWidth = Math.max(280, Math.min(container.clientWidth - 16, 1100))
     const fitScale = availableWidth / baseViewport.width
     const viewport = page.getViewport({ scale: fitScale * state.zoom })
-    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1.5), 2.5)
     const pageShell = document.createElement('article')
     pageShell.className = 'pdf-page'
+    pageShell.style.width = `${viewport.width}px`
     const canvas = document.createElement('canvas')
     canvas.width = Math.floor(viewport.width * dpr)
     canvas.height = Math.floor(viewport.height * dpr)
@@ -470,12 +589,12 @@ async function rerenderPdf(): Promise<void> {
     container.append(pageShell)
     await page.render({ canvas, canvasContext: context, viewport }).promise
   }
-  if (generation === state.renderGeneration) {
+  if (generation === state.renderGeneration && state.fileActionGeneration === fileActionGenerationAtStart) {
     setStatus(`PDF 预览已就绪，共 ${doc.numPages} 页。`)
   }
 }
 
-function renderUnsupported(message = '当前文件暂不支持内嵌预览，请使用系统应用打开或下载。'): void {
+function renderUnsupported(message = '当前文件暂不支持内嵌预览，请使用系统应用打开或下载。', tone: 'neutral' | 'error' = 'neutral'): void {
   const container = getContentContainer()
   container.className = 'preview-content unsupported-body'
   container.innerHTML = `
@@ -485,7 +604,7 @@ function renderUnsupported(message = '当前文件暂不支持内嵌预览，请
       <p>文件内容不会上传到第三方服务。你可以继续使用打开或下载。</p>
     </div>
   `
-  setStatus('已切换到操作模式。')
+  setStatus(message, tone)
 }
 
 function getContentContainer(): HTMLElement {
@@ -561,9 +680,9 @@ function injectStyles(): void {
     .docx-body { background: #ede8df; padding: 18px 8px; }
     .docx-body .docx-wrapper { background: transparent; padding: 0; }
     .docx-body .docx { box-shadow: 0 10px 30px rgba(45, 37, 28, 0.12); margin: 0 auto 14px; max-width: 100%; }
-    .pdf-body { display: flex; flex-direction: column; align-items: center; gap: 14px; background: #ede8df; }
-    .pdf-page { width: min-content; max-width: 100%; margin: 0; }
-    .pdf-page canvas { display: block; max-width: 100%; height: auto !important; border-radius: 4px; background: #fff; box-shadow: 0 8px 24px rgba(45, 37, 28, 0.16); }
+    .pdf-body { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; background: #ede8df; overflow-x: auto; }
+    .pdf-page { width: auto; margin: 0 auto; flex: 0 0 auto; }
+    .pdf-page canvas { display: block; width: 100%; max-width: none; height: auto !important; border-radius: 4px; background: #fff; box-shadow: 0 8px 24px rgba(45, 37, 28, 0.16); }
     .pdf-page p { margin: 6px 0 0; text-align: center; color: #6b6258; font-size: 12px; }
     .image-body { display: flex; justify-content: center; align-items: flex-start; background: #ede8df; }
     .image-body img { max-width: 100%; height: auto; border-radius: 10px; box-shadow: 0 8px 24px rgba(45, 37, 28, 0.16); }
@@ -588,7 +707,7 @@ async function main(): Promise<void> {
   injectStyles()
   if (!state.localPath) {
     renderShell('unsupported')
-    renderUnsupported('缺少文件路径。')
+    renderUnsupported('缺少文件路径。', 'error')
     return
   }
   const kind = getPreviewKind(state.localPath)
@@ -600,7 +719,7 @@ async function main(): Promise<void> {
     else if (kind === 'image') await renderImage()
     else renderUnsupported()
   } catch (error) {
-    renderUnsupported(errorMessage(error, '文件预览失败。'))
+    renderUnsupported(errorMessage(error, '文件预览失败。'), 'error')
   }
 }
 

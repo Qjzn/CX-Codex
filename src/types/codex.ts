@@ -5,6 +5,37 @@ export type RpcEnvelope<T> = {
 export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
 export type SpeedMode = 'standard' | 'fast'
 export type CollaborationMode = 'execute' | 'plan'
+export type PluginAuthStatus = 'unsupported' | 'notLoggedIn' | 'bearerToken' | 'oAuth' | 'unknown'
+
+export type ComposerPluginSelection = {
+  id: string
+  name: string
+}
+
+export type TurnGoalSelection = {
+  enabled: boolean
+  text: string
+}
+
+export type ComposerTurnOptions = {
+  plugins?: ComposerPluginSelection[]
+  goal?: TurnGoalSelection
+}
+
+export type ComposerPluginInfo = {
+  id: string
+  name: string
+  description: string
+  authStatus: PluginAuthStatus
+  toolCount: number
+  resourceCount: number
+  resourceTemplateCount: number
+  tools: Array<{
+    name: string
+    title: string
+    description: string
+  }>
+}
 
 export type RpcMethodCatalog = {
   data: string[]

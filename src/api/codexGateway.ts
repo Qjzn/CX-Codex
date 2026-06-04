@@ -25,7 +25,17 @@ import {
   normalizeThreadMessagesV2,
   readThreadInProgressFromResponse,
 } from './normalizers/v2'
-import type { CollaborationMode, SpeedMode, UiMessage, UiProjectGroup, UiThreadTokenUsage, UiTokenUsageBreakdown } from '../types/codex'
+import type {
+  CollaborationMode,
+  ComposerPluginInfo,
+  ComposerTurnOptions,
+  PluginAuthStatus,
+  SpeedMode,
+  UiMessage,
+  UiProjectGroup,
+  UiThreadTokenUsage,
+  UiTokenUsageBreakdown,
+} from '../types/codex'
 import { normalizePathForUi } from '../pathUtils.js'
 import { shouldAutoLoginForResponse, tryMobileShellAutoLogin } from '../mobile/mobileAuth'
 
@@ -1072,6 +1082,7 @@ export async function startRuntimeThreadTurn(args: {
   skills?: Array<{ name: string; path: string }>
   fileAttachments?: FileAttachmentParam[]
   collaborationMode?: CollaborationMode
+  turnOptions?: ComposerTurnOptions
   clientMessageId?: string
 }): Promise<RuntimeTurnStartResult> {
   const fileAttachments = args.fileAttachments ?? []
@@ -1081,6 +1092,7 @@ export async function startRuntimeThreadTurn(args: {
     input: buildTurnStartInput(args.text, args.imageUrls ?? [], args.skills, fileAttachments),
     attachments: fileAttachments.map((f) => ({ label: f.label, path: f.path, fsPath: f.fsPath })),
     collaborationMode: args.collaborationMode ?? 'execute',
+    turnOptions: args.turnOptions,
     clientMessageId: args.clientMessageId ?? '',
   }
   if (args.model?.trim()) body.model = args.model.trim()
@@ -2039,6 +2051,123 @@ type SkillsListResponseEntry = {
     enabled: boolean
   }>
   errors: unknown[]
+}
+
+type McpServerStatusResponseEntry = {
+  name?: string
+  tools?: Record<string, {
+    name?: string
+    title?: string
+    description?: string
+  }>
+  resources?: unknown[]
+  resourceTemplates?: unknown[]
+  authStatus?: string
+}
+
+function normalizePluginAuthStatus(value: unknown): PluginAuthStatus {
+  if (
+    value === 'unsupported' ||
+    value === 'notLoggedIn' ||
+    value === 'bearerToken' ||
+    value === 'oAuth'
+  ) {
+    return value
+  }
+  return 'unknown'
+}
+
+function normalizePluginDisplayName(name: string): string {
+  const trimmed = name.trim()
+  if (!trimmed) return '未命名插件'
+  const known: Record<string, string> = {
+    chrome: 'Chrome',
+    computer: '电脑',
+    'computer-use': '电脑',
+    documents: 'Documents',
+    spreadsheets: 'Spreadsheets',
+    presentations: 'Presentations',
+    netlify: 'Netlify',
+    superpowers: 'Superpowers',
+    hyperframes: 'HyperFrames by HeyGen',
+  }
+  const key = trimmed.toLowerCase()
+  if (known[key]) return known[key]
+  return trimmed
+    .split(/[-_\s]+/u)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function normalizeMcpServerStatus(entry: McpServerStatusResponseEntry): ComposerPluginInfo | null {
+  const rawName = typeof entry.name === 'string' ? entry.name.trim() : ''
+  if (!rawName) return null
+  const tools = Object.entries(entry.tools ?? {})
+    .map(([key, tool]) => {
+      const name = (tool?.name || key).trim()
+      if (!name) return null
+      return {
+        name,
+        title: (tool?.title || tool?.name || key).trim(),
+        description: (tool?.description || '').trim(),
+      }
+    })
+    .filter((tool): tool is { name: string; title: string; description: string } => tool !== null)
+    .sort((first, second) => first.title.localeCompare(second.title))
+
+  return {
+    id: rawName,
+    name: normalizePluginDisplayName(rawName),
+    description: tools[0]?.description || '',
+    authStatus: normalizePluginAuthStatus(entry.authStatus),
+    toolCount: tools.length,
+    resourceCount: Array.isArray(entry.resources) ? entry.resources.length : 0,
+    resourceTemplateCount: Array.isArray(entry.resourceTemplates) ? entry.resourceTemplates.length : 0,
+    tools,
+  }
+}
+
+export async function getComposerPluginsList(): Promise<ComposerPluginInfo[]> {
+  try {
+    const plugins: ComposerPluginInfo[] = []
+    const seen = new Set<string>()
+    let cursor: string | null = null
+    do {
+      const params: Record<string, unknown> = {}
+      if (cursor) params.cursor = cursor
+      const payload = await callRpc<{ data?: McpServerStatusResponseEntry[]; nextCursor?: string | null }>(
+        'mcpServerStatus/list',
+        params,
+      )
+      for (const entry of payload.data ?? []) {
+        const plugin = normalizeMcpServerStatus(entry)
+        if (!plugin || seen.has(plugin.id)) continue
+        seen.add(plugin.id)
+        plugins.push(plugin)
+      }
+      cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.trim()
+        ? payload.nextCursor.trim()
+        : null
+    } while (cursor)
+    return plugins.sort((first, second) => first.name.localeCompare(second.name))
+  } catch {
+    return []
+  }
+}
+
+export async function startComposerPluginOauthLogin(pluginId: string): Promise<string> {
+  const name = pluginId.trim()
+  if (!name) throw new Error('插件名称不能为空')
+  const payload = await callRpc<{ authorizationUrl?: string }>('mcpServer/oauth/login', {
+    name,
+    timeoutSecs: 120,
+  })
+  return payload.authorizationUrl?.trim() ?? ''
+}
+
+export async function reloadComposerPlugins(): Promise<void> {
+  await callRpc('config/mcpServer/reload')
 }
 
 export async function getSkillsList(cwds?: string[]): Promise<SkillInfo[]> {

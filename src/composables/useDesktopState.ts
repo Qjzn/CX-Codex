@@ -6,6 +6,7 @@ import {
   getAccountRateLimits,
   renameThread,
   getAvailableModelIds,
+  getComposerPluginsList,
   getCurrentModelConfig,
   getPendingServerRequests,
   getSkillsList,
@@ -23,6 +24,8 @@ import {
   setDefaultModel,
   setWorkspaceRootsState,
   startThread,
+  startComposerPluginOauthLogin,
+  reloadComposerPlugins,
   getThreadTitleCache,
   getNotificationReplay,
   getRuntimeRequestByClientMessageId,
@@ -39,6 +42,8 @@ import {
 } from '../api/codexGateway'
 import type {
   CollaborationMode,
+  ComposerPluginInfo,
+  ComposerTurnOptions,
   CommandExecutionData,
   ReasoningEffort,
   SpeedMode,
@@ -164,6 +169,7 @@ type QueuedMessage = {
   skills: Array<{ name: string; path: string }>
   fileAttachments: FileAttachment[]
   collaborationMode: CollaborationMode
+  turnOptions?: ComposerTurnOptions
 }
 
 type RealtimeConnectionState = RpcConnectionState
@@ -174,6 +180,41 @@ function createClientMessageId(): string {
       ? crypto.randomUUID()
       : Math.random().toString(36).slice(2, 12)
   return `cm-${Date.now()}-${randomPart}`
+}
+
+function normalizeTurnOptions(value: unknown): ComposerTurnOptions | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const row = value as Record<string, unknown>
+  const plugins = Array.isArray(row.plugins)
+    ? row.plugins
+      .filter((item): item is { id: string; name: string } => (
+        Boolean(item)
+        && typeof item === 'object'
+        && typeof (item as Record<string, unknown>).id === 'string'
+        && typeof (item as Record<string, unknown>).name === 'string'
+      ))
+      .map((item) => ({ id: item.id.trim(), name: item.name.trim() }))
+      .filter((item) => item.id.length > 0 && item.name.length > 0)
+    : []
+  const rawGoal = row.goal
+  const goal = rawGoal && typeof rawGoal === 'object' && !Array.isArray(rawGoal)
+    ? {
+        enabled: (rawGoal as Record<string, unknown>).enabled === true,
+        text: typeof (rawGoal as Record<string, unknown>).text === 'string'
+          ? ((rawGoal as Record<string, unknown>).text as string).trim()
+          : '',
+      }
+    : undefined
+  const normalizedGoal = goal?.enabled === true ? goal : undefined
+  if (plugins.length === 0 && !normalizedGoal) return undefined
+  return {
+    ...(plugins.length > 0 ? { plugins } : {}),
+    ...(normalizedGoal ? { goal: normalizedGoal } : {}),
+  }
+}
+
+function cloneTurnOptions(options?: ComposerTurnOptions): ComposerTurnOptions | undefined {
+  return normalizeTurnOptions(options)
 }
 
 function loadReadStateMap(): Record<string, string> {
@@ -455,6 +496,7 @@ function normalizeQueuedMessage(value: unknown): QueuedMessage | null {
     skills,
     fileAttachments,
     collaborationMode: row.collaborationMode === 'plan' ? 'plan' : 'execute',
+    turnOptions: normalizeTurnOptions(row.turnOptions),
   }
 }
 
@@ -1049,6 +1091,7 @@ export function useDesktopState() {
     fileAttachments: FileAttachment[]
     effort: ReasoningEffort | ''
     collaborationMode: CollaborationMode
+    turnOptions?: ComposerTurnOptions
     fallbackRetried: boolean
     createdAtMs: number
   }
@@ -1088,6 +1131,8 @@ export function useDesktopState() {
   const threadTitleById = ref<Record<string, string>>({})
 
   const installedSkills = ref<SkillInfo[]>([])
+  const availableComposerPlugins = ref<ComposerPluginInfo[]>([])
+  const isLoadingComposerPlugins = ref(false)
   const accountRateLimitSnapshots = ref<UiRateLimitSnapshot[]>([])
 
   const isLoadingThreads = ref(false)
@@ -1178,7 +1223,7 @@ export function useDesktopState() {
       case 'item/tool/requestUserInput':
         return '等待输入'
       case 'item/tool/call':
-        return '等待处理'
+        return '工具不可用'
       default:
         if (isMcpPermissionPrompt(request)) return '等待授权'
         return isMcpElicitationRequestMethod(request.method) ? '等待输入' : '等待处理'
@@ -1253,7 +1298,7 @@ export function useDesktopState() {
         details.push('需要补充输入')
         break
       case 'item/tool/call':
-        details.push('工具调用等待处理')
+        details.push('CX-Codex Web 暂不支持执行桌面端工具调用')
         break
       default:
         if (isMcpPermissionPrompt(request)) {
@@ -1586,6 +1631,7 @@ export function useDesktopState() {
         skills: pending.skills.length > 0 ? pending.skills : undefined,
         fileAttachments: pending.fileAttachments,
         collaborationMode: pending.collaborationMode,
+        turnOptions: pending.turnOptions,
       })
       if (retryResult.turnId) {
         activeTurnIdByThreadId.value = {
@@ -3693,6 +3739,17 @@ export function useDesktopState() {
     const snakeConversationId = readString(params.conversation_id)
     if (snakeConversationId) return snakeConversationId
 
+    const request = asRecord(params.request)
+    const nestedRequestDirectThreadId = readString(request?.threadId)
+    if (nestedRequestDirectThreadId) return nestedRequestDirectThreadId
+    const nestedRequestDirectSnakeThreadId = readString(request?.thread_id)
+    if (nestedRequestDirectSnakeThreadId) return nestedRequestDirectSnakeThreadId
+    const nestedRequestParams = asRecord(request?.params)
+    const nestedRequestThreadId = readString(nestedRequestParams?.threadId)
+    if (nestedRequestThreadId) return nestedRequestThreadId
+    const nestedRequestSnakeThreadId = readString(nestedRequestParams?.thread_id)
+    if (nestedRequestSnakeThreadId) return nestedRequestSnakeThreadId
+
     const thread = asRecord(params.thread)
     const nestedThreadId = readString(thread?.id)
     if (nestedThreadId) return nestedThreadId
@@ -3748,7 +3805,7 @@ export function useDesktopState() {
     }
 
     const requestParamRecord = asRecord(requestParams)
-    const threadId = readString(requestParamRecord?.threadId) || GLOBAL_SERVER_REQUEST_SCOPE
+    const threadId = extractThreadIdFromNotification({ method, params: requestParams, atIso: '' }) || GLOBAL_SERVER_REQUEST_SCOPE
     const turnId = readString(requestParamRecord?.turnId)
     const itemId = readString(requestParamRecord?.itemId)
     const receivedAtIso = readString(row.receivedAtIso) || new Date().toISOString()
@@ -3804,6 +3861,27 @@ export function useDesktopState() {
       }
     }
     pendingServerRequestsByThreadId.value = next
+  }
+
+  function pruneAutoResolvedPendingServerRequests(): void {
+    if (Object.keys(pendingServerRequestsByThreadId.value).length === 0) return
+
+    const next: Record<string, UiServerRequest[]> = {}
+    let changed = false
+    for (const [threadId, requests] of Object.entries(pendingServerRequestsByThreadId.value)) {
+      const filtered = requests.filter((request) => request.method !== 'item/tool/call')
+      if (filtered.length !== requests.length) {
+        changed = true
+      }
+      if (filtered.length > 0) {
+        next[threadId] = filtered
+      }
+    }
+
+    if (changed) {
+      pendingServerRequestsByThreadId.value = next
+      applyThreadFlags()
+    }
   }
 
   function handleServerRequestNotification(notification: RpcNotification): boolean {
@@ -4203,6 +4281,10 @@ export function useDesktopState() {
 
     if (notification.method === 'account/rateLimits/updated') {
       scheduleRateLimitRefresh()
+    }
+
+    if (notification.method === 'mcpServer/oauthLogin/completed') {
+      void refreshComposerPlugins()
     }
 
     const threadTokenUsageUpdate = readThreadTokenUsageUpdate(notification)
@@ -4806,6 +4888,39 @@ export function useDesktopState() {
     }
   }
 
+  async function refreshComposerPlugins(): Promise<void> {
+    isLoadingComposerPlugins.value = true
+    try {
+      availableComposerPlugins.value = await getComposerPluginsList()
+    } catch {
+      // Keep previous plugins on failure; plugin state must not block chat.
+    } finally {
+      isLoadingComposerPlugins.value = false
+    }
+  }
+
+  async function loginComposerPlugin(pluginId: string): Promise<string> {
+    try {
+      const authorizationUrl = await startComposerPluginOauthLogin(pluginId)
+      if (authorizationUrl && typeof window !== 'undefined') {
+        window.open(authorizationUrl, '_blank', 'noopener,noreferrer')
+      }
+      return authorizationUrl
+    } catch {
+      return ''
+    }
+  }
+
+  async function reloadAndRefreshComposerPlugins(): Promise<void> {
+    try {
+      await reloadComposerPlugins()
+    } catch {
+      // Reload failure should not break the composer; refresh keeps the latest known plugin list.
+    } finally {
+      await refreshComposerPlugins()
+    }
+  }
+
   async function refreshAll(
     options: { loadMessages?: boolean; loadSkills?: boolean; refreshModelPreferences?: boolean } = {},
   ) {
@@ -4818,6 +4933,7 @@ export function useDesktopState() {
       }
       if (options.loadSkills !== false) {
         await refreshSkills()
+        void refreshComposerPlugins()
       }
       if (options.loadMessages !== false) {
         await loadMessages(selectedThreadId.value)
@@ -5018,6 +5134,7 @@ export function useDesktopState() {
     fileAttachments: FileAttachment[] = [],
     queueInsertIndex?: number,
     collaborationMode: CollaborationMode = selectedCollaborationMode.value,
+    turnOptions?: ComposerTurnOptions,
   ): Promise<void> {
     if (isUpdatingSpeedMode.value) return
 
@@ -5046,7 +5163,15 @@ export function useDesktopState() {
       const insertIndex = typeof queueInsertIndex === 'number'
         ? Math.max(0, Math.min(queueInsertIndex, nextQueue.length))
         : nextQueue.length
-      nextQueue.splice(insertIndex, 0, { id, text: nextText, imageUrls, skills, fileAttachments, collaborationMode })
+      nextQueue.splice(insertIndex, 0, {
+        id,
+        text: nextText,
+        imageUrls,
+        skills,
+        fileAttachments,
+        collaborationMode,
+        turnOptions: cloneTurnOptions(turnOptions),
+      })
       setQueuedMessagesForThread(threadId, nextQueue)
       consumePlanModeAfterSubmit(collaborationMode)
       return
@@ -5056,7 +5181,7 @@ export function useDesktopState() {
       shouldAutoScrollOnNextAgentEvent = true
       markActiveSyncBoost()
       try {
-        await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode)
+        await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode, turnOptions)
         consumePlanModeAfterSubmit(collaborationMode)
       } catch (unknownError) {
         removeOptimisticUserMessage(threadId, optimisticMessageId)
@@ -5083,7 +5208,7 @@ export function useDesktopState() {
     setThreadInProgress(threadId, true)
 
     try {
-      await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode)
+      await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode, turnOptions)
       consumePlanModeAfterSubmit(collaborationMode)
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false
@@ -5104,6 +5229,7 @@ export function useDesktopState() {
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
     collaborationMode: CollaborationMode = selectedCollaborationMode.value,
+    turnOptions?: ComposerTurnOptions,
   ): Promise<string> {
     if (isUpdatingSpeedMode.value) return ''
 
@@ -5136,6 +5262,7 @@ export function useDesktopState() {
         fileAttachments: fileAttachments.map((file) => ({ ...file })),
         effort: selectedReasoningEffort.value,
         collaborationMode,
+        turnOptions: cloneTurnOptions(turnOptions),
         fallbackRetried: false,
         createdAtMs: Date.now(),
       })
@@ -5219,6 +5346,7 @@ export function useDesktopState() {
           skills: skills.length > 0 ? skills : undefined,
           fileAttachments,
           collaborationMode,
+          turnOptions,
           clientMessageId,
         })
       } catch (unknownError) {
@@ -5234,6 +5362,7 @@ export function useDesktopState() {
             skills: skills.length > 0 ? skills : undefined,
             fileAttachments,
             collaborationMode,
+            turnOptions,
             clientMessageId,
           })
         } else {
@@ -5317,6 +5446,7 @@ export function useDesktopState() {
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
     collaborationMode: CollaborationMode = selectedCollaborationMode.value,
+    turnOptions?: ComposerTurnOptions,
   ): Promise<void> {
     const modelId = selectedModelId.value.trim()
     const reasoningEffort = selectedReasoningEffort.value
@@ -5332,6 +5462,7 @@ export function useDesktopState() {
       fileAttachments: normalizedFileAttachments,
       effort: reasoningEffort,
       collaborationMode,
+      turnOptions: cloneTurnOptions(turnOptions),
       fallbackRetried: false,
       createdAtMs: Date.now(),
     })
@@ -5351,6 +5482,7 @@ export function useDesktopState() {
           skills: skills.length > 0 ? skills : undefined,
           fileAttachments,
           collaborationMode,
+          turnOptions,
         })
         startedTurnId = runtimeResult.turnId
         runtimeStartStatus = runtimeResult.status === 'start_uncertain' ? 'start_uncertain' : 'running'
@@ -5364,6 +5496,7 @@ export function useDesktopState() {
             fileAttachments: normalizedFileAttachments,
             effort: reasoningEffort,
             collaborationMode,
+            turnOptions: cloneTurnOptions(turnOptions),
             fallbackRetried: true,
             createdAtMs: Date.now(),
           })
@@ -5376,6 +5509,7 @@ export function useDesktopState() {
             skills: skills.length > 0 ? skills : undefined,
             fileAttachments,
             collaborationMode,
+            turnOptions,
           })
           startedTurnId = runtimeFallbackResult.turnId
           runtimeStartStatus = runtimeFallbackResult.status === 'start_uncertain' ? 'start_uncertain' : 'running'
@@ -5436,7 +5570,15 @@ export function useDesktopState() {
     markActiveSyncBoost()
     const optimisticMessageId = addOptimisticUserMessage(threadId, next.text, next.imageUrls, next.fileAttachments)
     try {
-      await startTurnForThread(threadId, next.text, next.imageUrls, next.skills, next.fileAttachments, next.collaborationMode)
+      await startTurnForThread(
+        threadId,
+        next.text,
+        next.imageUrls,
+        next.skills,
+        next.fileAttachments,
+        next.collaborationMode,
+        next.turnOptions,
+      )
       removeQueuedMessageByThreadId(threadId, next.id)
     } catch {
       removeOptimisticUserMessage(threadId, optimisticMessageId)
@@ -6154,7 +6296,9 @@ export function useDesktopState() {
       pendingServerRequestsByThreadId.value = nextPending
       applyThreadFlags()
     } catch {
-      // Keep UI usable when pending request endpoint is temporarily unavailable.
+      // The backend auto-resolves unsupported tool calls; stale local copies should not keep
+      // the conversation in an artificial waiting state if pending request sync misses once.
+      pruneAutoResolvedPendingServerRequests()
     }
   }
 
@@ -6308,7 +6452,16 @@ export function useDesktopState() {
     const msg = queue.find((m) => m.id === messageId)
     if (!msg) return
     try {
-      await sendMessageToSelectedThread(msg.text, msg.imageUrls, msg.skills, 'steer', msg.fileAttachments, undefined, msg.collaborationMode)
+      await sendMessageToSelectedThread(
+        msg.text,
+        msg.imageUrls,
+        msg.skills,
+        'steer',
+        msg.fileAttachments,
+        undefined,
+        msg.collaborationMode,
+        msg.turnOptions,
+      )
       removeQueuedMessageByThreadId(threadId, messageId)
     } catch {
       // Keep the queued message so the user can retry or edit it.
@@ -6333,6 +6486,8 @@ export function useDesktopState() {
     selectedSpeedMode,
     selectedCollaborationMode,
     installedSkills,
+    availableComposerPlugins,
+    isLoadingComposerPlugins,
     accountRateLimitSnapshots,
     messages,
     isLoadingThreads,
@@ -6348,6 +6503,9 @@ export function useDesktopState() {
     refreshAll,
     refreshSelectedThreadContent,
     refreshSkills,
+    refreshComposerPlugins,
+    loginComposerPlugin,
+    reloadComposerPlugins: reloadAndRefreshComposerPlugins,
     refreshRateLimits,
     selectThread,
     setThreadScrollState,

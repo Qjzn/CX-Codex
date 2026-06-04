@@ -106,6 +106,14 @@
             <div class="sidebar-explore-nav">
               <button
                 class="sidebar-skills-link"
+                :class="{ 'is-active': isWorkbenchRoute }"
+                type="button"
+                @click="router.push({ name: 'workbench' }); isMobile && setSidebarCollapsed(true)"
+              >
+                工作台
+              </button>
+              <button
+                class="sidebar-skills-link"
                 :class="{ 'is-active': isSkillsRoute }"
                 type="button"
                 @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
@@ -537,7 +545,7 @@
               </span>
               <span class="content-context-badge-number">{{ contentContextPercentLabel }}</span>
             </span>
-              <div class="content-status-strip">
+              <div v-if="showHeaderStatusStrip" class="content-status-strip">
                 <span class="content-status-pill" :data-tone="contentStatusTone">
                   <span class="content-status-pill-label">{{ contentStatusCaption }}</span>
                   <span>{{ contentStatusLabel }}</span>
@@ -589,7 +597,30 @@
         />
 
         <section class="content-body">
-          <template v-if="isDiagnosticsRoute">
+          <template v-if="isWorkbenchRoute">
+            <WorkspaceWorkbench
+              :project-name="workbenchProjectName"
+              :project-path="workbenchProjectPath"
+              :runtime="newThreadRuntime"
+              :selected-model="selectedModelId"
+              :selected-reasoning-effort="selectedReasoningEffort"
+              :selected-speed-mode="selectedSpeedMode"
+              :selected-collaboration-mode="selectedCollaborationMode"
+              :has-preset="Boolean(currentProjectWorkbenchPreset)"
+              :preset-summary="currentProjectWorkbenchPresetSummary"
+              :status-items="workbenchStatusItems"
+              :templates="workbenchTemplates"
+              :is-sending="isSendingMessage"
+              @run-template="onRunWorkbenchTemplate"
+              @save-preset="onSaveWorkbenchProjectPreset"
+              @apply-preset="onApplyWorkbenchProjectPreset"
+              @open-diagnostics="router.push({ name: 'diagnostics' })"
+              @open-skills="router.push({ name: 'skills' })"
+              @open-github-trending="router.push({ name: 'github-trending' })"
+              @refresh="onWorkbenchRefresh"
+            />
+          </template>
+          <template v-else-if="isDiagnosticsRoute">
             <DiagnosticsPanel />
           </template>
           <template v-else-if="isSkillsRoute">
@@ -637,6 +668,18 @@
                 </div>
               </div>
 
+                <div
+                  v-if="quotaReminder"
+                  class="quota-reminder"
+                  :data-tone="quotaReminder.tone"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span class="quota-reminder-dot" aria-hidden="true" />
+                  <span class="quota-reminder-title">{{ quotaReminder.title }}</span>
+                  <span class="quota-reminder-detail">{{ quotaReminder.detail }}</span>
+                </div>
+
                 <ThreadComposer ref="homeThreadComposerRef" :active-thread-id="composerThreadContextId"
                 :cwd="composerCwd"
                 :models="availableModelIds" :selected-model="selectedModelId"
@@ -645,6 +688,8 @@
                 :selected-collaboration-mode="selectedCollaborationMode"
                 :is-updating-speed-mode="isUpdatingSpeedMode"
                 :skills="installedSkills"
+                :plugins="availableComposerPlugins"
+                :is-loading-plugins="isLoadingComposerPlugins"
                 :is-turn-in-progress="false"
                 :is-interrupting-turn="false" :send-with-enter="sendWithEnter"
                 :dictation-click-to-toggle="dictationClickToToggle" :dictation-auto-send="dictationAutoSend"
@@ -655,7 +700,10 @@
                 @update:selected-model="onSelectModel"
                 @update:selected-reasoning-effort="onSelectReasoningEffort"
                 @update:selected-speed-mode="onSelectSpeedMode"
-                @update:selected-collaboration-mode="onSelectCollaborationMode" />
+                @update:selected-collaboration-mode="onSelectCollaborationMode"
+                @refresh-plugins="refreshComposerPlugins"
+                @reload-plugins="reloadComposerPlugins"
+                @login-plugin="loginComposerPlugin" />
             </div>
           </template>
           <template v-else>
@@ -679,6 +727,17 @@
               </div>
 
               <div class="composer-with-queue">
+                <div
+                  v-if="quotaReminder"
+                  class="quota-reminder"
+                  :data-tone="quotaReminder.tone"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span class="quota-reminder-dot" aria-hidden="true" />
+                  <span class="quota-reminder-title">{{ quotaReminder.title }}</span>
+                  <span class="quota-reminder-detail">{{ quotaReminder.detail }}</span>
+                </div>
                 <QueuedMessages
                   :messages="selectedThreadQueuedMessages"
                   :is-processing="selectedThreadQueueProcessing"
@@ -695,6 +754,8 @@
                   :selected-collaboration-mode="selectedCollaborationMode"
                   :is-updating-speed-mode="isUpdatingSpeedMode"
                   :skills="installedSkills"
+                  :plugins="availableComposerPlugins"
+                  :is-loading-plugins="isLoadingComposerPlugins"
                   :is-turn-in-progress="isSelectedThreadInterruptible" :is-interrupting-turn="isInterruptingTurn"
                   :has-queue-above="selectedThreadQueuedMessages.length > 0"
                   :send-with-enter="sendWithEnter"
@@ -706,6 +767,9 @@
                   @update:selected-reasoning-effort="onSelectReasoningEffort"
                   @update:selected-speed-mode="onSelectSpeedMode"
                   @update:selected-collaboration-mode="onSelectCollaborationMode"
+                  @refresh-plugins="refreshComposerPlugins"
+                  @reload-plugins="reloadComposerPlugins"
+                  @login-plugin="loginComposerPlugin"
                   @interrupt="onInterruptTurn" />
               </div>
             </div>
@@ -846,7 +910,19 @@ import {
   searchThreads,
   updateWebBridgeSettings,
 } from './api/codexGateway'
-import type { CollaborationMode, ReasoningEffort, SpeedMode, ThreadScrollState, UiLiveOverlay, UiMessage, UiServerRequest, UiThread } from './types/codex'
+import type {
+  CollaborationMode,
+  ComposerTurnOptions,
+  ReasoningEffort,
+  SpeedMode,
+  ThreadScrollState,
+  UiLiveOverlay,
+  UiMessage,
+  UiRateLimitSnapshot,
+  UiRateLimitWindow,
+  UiServerRequest,
+  UiThread,
+} from './types/codex'
 import type { ComposerDraftPayload, SubmitPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
 import type { ThreadConversationExposed } from './components/content/ThreadConversation.vue'
 import type {
@@ -882,6 +958,7 @@ import {
 } from './mobile/mobileRelease'
 
 const SkillsHub = defineAsyncComponent(() => import('./components/content/SkillsHub.vue'))
+const WorkspaceWorkbench = defineAsyncComponent(() => import('./components/content/WorkspaceWorkbench.vue'))
 const GithubTrendingHub = defineAsyncComponent(() => import('./components/content/GithubTrendingHub.vue'))
 const ComposerRuntimeDropdown = defineAsyncComponent(() => import('./components/content/ComposerRuntimeDropdown.vue'))
 const DiagnosticsPanel = defineAsyncComponent(() => import('./components/content/DiagnosticsPanel.vue'))
@@ -1031,6 +1108,73 @@ function clampPercent(value: number): number {
   return Math.min(Math.max(value, 0), 100)
 }
 
+type QuotaReminder = {
+  tone: 'warning' | 'danger'
+  title: string
+  detail: string
+}
+
+type QuotaCandidate = {
+  snapshot: UiRateLimitSnapshot
+  window: UiRateLimitWindow
+}
+
+type WorkbenchStatusTone = 'good' | 'warning' | 'danger' | 'neutral'
+
+type WorkbenchStatusItem = {
+  label: string
+  value: string
+  detail?: string
+  tone: WorkbenchStatusTone
+}
+
+type WorkbenchTemplate = {
+  id: string
+  title: string
+  description: string
+  badge: string
+  prompt: string
+  collaborationMode: CollaborationMode
+}
+
+type WorkbenchProjectPreset = {
+  cwd: string
+  modelId: string
+  reasoningEffort: ReasoningEffort | ''
+  speedMode: SpeedMode
+  collaborationMode: CollaborationMode
+  runtime: 'local' | 'worktree'
+  savedAtIso: string
+}
+
+function formatQuotaWindowDuration(windowDurationMins: number | null): string {
+  if (!windowDurationMins || windowDurationMins <= 0) return '当前窗口'
+  if (windowDurationMins % 1440 === 0) return `${String(windowDurationMins / 1440)} 天`
+  if (windowDurationMins % 60 === 0) return `${String(windowDurationMins / 60)} 小时`
+  if (windowDurationMins < 60) return `${String(windowDurationMins)} 分钟`
+  return `${String(Math.round((windowDurationMins / 60) * 10) / 10)} 小时`
+}
+
+function formatQuotaResetText(window: UiRateLimitWindow): string {
+  if (!window.resetsAt) return ''
+  const diffMs = window.resetsAt * 1000 - Date.now()
+  if (diffMs <= 0) return '正在重置'
+  const diffMinutes = Math.max(1, Math.round(diffMs / 60000))
+  if (diffMinutes < 60) return `${String(diffMinutes)} 分钟后恢复`
+  const diffHours = Math.round(diffMinutes / 60)
+  if (diffHours < 24) return `${String(diffHours)} 小时后恢复`
+  return `${String(Math.round(diffHours / 24))} 天后恢复`
+}
+
+function getQuotaSnapshotTitle(snapshot: UiRateLimitSnapshot): string {
+  const name = snapshot.limitName?.trim()
+  if (name) return name
+  const id = snapshot.limitId?.trim()
+  if (!id) return '使用额度'
+  if (id.toLowerCase() === 'codex') return 'Codex 额度'
+  return id.replace(/[_-]+/g, ' ')
+}
+
 function humanizeActivityLabel(raw: string): string {
   const label = raw.trim()
   if (!label) return ''
@@ -1046,6 +1190,7 @@ function humanizeActivityLabel(raw: string): string {
 }
 
 const {
+  error: desktopStateError,
   projectGroups,
   projectDisplayNameById,
   selectedThread,
@@ -1061,6 +1206,8 @@ const {
   selectedSpeedMode,
   selectedCollaborationMode,
   installedSkills,
+  availableComposerPlugins,
+  isLoadingComposerPlugins,
   accountRateLimitSnapshots,
   messages,
   isLoadingThreads,
@@ -1075,6 +1222,9 @@ const {
   refreshAll,
   refreshSelectedThreadContent,
   refreshSkills,
+  refreshComposerPlugins,
+  loginComposerPlugin,
+  reloadComposerPlugins,
   refreshRateLimits,
   selectThread,
   setThreadScrollState,
@@ -1110,7 +1260,7 @@ const {
 
 const route = useRoute()
 const router = useRouter()
-const { isMobile, isDualPaneMobile } = useMobile()
+const { isMobile, isDualPaneMobile, viewportWidth } = useMobile()
 const isSettingsSheetMode = computed(() => isMobile.value || isDualPaneMobile.value)
 const { favorites, toggleFavorite, removeFavorite, refreshFavorites } = useFavorites()
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
@@ -1155,6 +1305,7 @@ const DICTATION_AUTO_SEND_KEY = 'codex-web-local.dictation-auto-send.v1'
 const DICTATION_LANGUAGE_KEY = 'codex-web-local.dictation-language.v1'
 const WORKTREE_GIT_AUTOMATION_KEY = 'codex-web-local.worktree-git-automation.v1'
 const GITHUB_TRENDING_PROJECTS_KEY = 'codex-web-local.github-trending-projects.v1'
+const WORKBENCH_PROJECT_PRESETS_KEY = 'cx-codex.workbench.project-presets.v1'
 const sendWithEnter = ref(loadBoolPref(SEND_WITH_ENTER_KEY, true))
 const darkMode = ref<'system' | 'light' | 'dark'>(loadDarkModePref())
 const dictationClickToToggle = ref(loadBoolPref(DICTATION_CLICK_TO_TOGGLE_KEY, false))
@@ -1167,6 +1318,7 @@ const dictationLanguageOptions = computed(() => buildDictationLanguageOptions())
 const worktreeGitAutomationEnabled = ref(loadBoolPref(WORKTREE_GIT_AUTOMATION_KEY, true))
 const showGithubTrendingProjects = ref(loadBoolPref(GITHUB_TRENDING_PROJECTS_KEY, true))
 const webBridgeSettings = ref<WebBridgeSettings>(DEFAULT_WEB_BRIDGE_SETTINGS)
+const workbenchProjectPresets = ref<Record<string, WorkbenchProjectPreset>>(loadWorkbenchProjectPresets())
 const webBridgeSettingsStatus = ref('')
 let webBridgeSettingsStatusTimer: ReturnType<typeof setTimeout> | null = null
 let favoritesStatusTimer: ReturnType<typeof setTimeout> | null = null
@@ -1232,11 +1384,12 @@ const routableThreadIdSet = computed(() => {
 })
 
 const isHomeRoute = computed(() => route.name === 'home')
+const isWorkbenchRoute = computed(() => route.name === 'workbench')
 const isSkillsRoute = computed(() => route.name === 'skills')
 const isGithubTrendingRoute = computed(() => route.name === 'github-trending')
 const isDiagnosticsRoute = computed(() => route.name === 'diagnostics')
 const isNonThreadRoute = computed(() => (
-  isHomeRoute.value || isSkillsRoute.value || isGithubTrendingRoute.value || isDiagnosticsRoute.value
+  isHomeRoute.value || isWorkbenchRoute.value || isSkillsRoute.value || isGithubTrendingRoute.value || isDiagnosticsRoute.value
 ))
 const displayAppVersion = computed(() => {
   const version = String(appVersion).trim()
@@ -1430,6 +1583,7 @@ const isRouteOnlyEmptyThread = computed(() => (
   && selectedThreadServerRequests.value.length === 0
 ))
 const contentTitle = computed(() => {
+  if (isWorkbenchRoute.value) return '工作台'
   if (isDiagnosticsRoute.value) return '运行诊断'
   if (isSkillsRoute.value) return '技能'
   if (isGithubTrendingRoute.value) return 'GitHub 热门'
@@ -1446,6 +1600,7 @@ const pageTitle = computed(() => {
   return threadTitle || browserHostName
 })
 const headerSubtitle = computed(() => {
+  if (isWorkbenchRoute.value) return '集中查看状态、复用项目配置，并一键发起标准化任务。'
   if (isDiagnosticsRoute.value) return '检查后端队列、运行状态和恢复链路。'
   if (isSkillsRoute.value) return '管理已安装技能和当前运行能力。'
   if (isGithubTrendingRoute.value) return '浏览热门仓库、查看介绍，并直接带着项目链接发起提问。'
@@ -1458,10 +1613,17 @@ const showMobileThreadRefreshButton = computed(() => (
   route.name === 'thread'
   && selectedThreadId.value.trim().length > 0
 ))
+const isCompactTouchContent = computed(() => (
+  isMobile.value ||
+  isDualPaneMobile.value ||
+  (viewportWidth.value > 0 && viewportWidth.value < 1024)
+))
+const showHeaderStatusStrip = computed(() => !isCompactTouchContent.value)
 const showRuntimeStatusBar = computed(() => (
   route.name === 'thread'
   && selectedThreadId.value.trim().length > 0
   && !isRouteOnlyEmptyThread.value
+  && !isCompactTouchContent.value
 ))
 const mobileThreadRefreshButtonTitle = computed(() => (
   isManualThreadRefreshRunning.value ? '正在强制恢复当前会话状态...' : '强制恢复当前会话状态'
@@ -1741,6 +1903,38 @@ const contentStatusDetail = computed(() => {
   }
   return ''
 })
+
+const quotaReminder = computed<QuotaReminder | null>(() => {
+  const candidates: QuotaCandidate[] = []
+  for (const snapshot of accountRateLimitSnapshots.value) {
+    if (snapshot.primary) candidates.push({ snapshot, window: snapshot.primary })
+    if (snapshot.secondary) candidates.push({ snapshot, window: snapshot.secondary })
+  }
+
+  const tightest = candidates
+    .filter((candidate) => Number.isFinite(candidate.window.usedPercent))
+    .sort((first, second) => second.window.usedPercent - first.window.usedPercent)[0]
+
+  if (!tightest || tightest.window.usedPercent < 75) return null
+
+  const usedPercent = clampPercent(tightest.window.usedPercent)
+  const remainingPercent = Math.max(0, Math.round(100 - usedPercent))
+  const tone: QuotaReminder['tone'] = usedPercent >= 95 ? 'danger' : 'warning'
+  const title = usedPercent >= 95 ? '额度即将用尽' : '额度提醒'
+  const resetText = formatQuotaResetText(tightest.window)
+  const durationText = formatQuotaWindowDuration(tightest.window.windowDurationMins)
+  const detailParts = [
+    getQuotaSnapshotTitle(tightest.snapshot),
+    `${durationText}剩余 ${String(remainingPercent)}%`,
+    resetText,
+  ].filter((value) => value.length > 0)
+
+  return {
+    tone,
+    title,
+    detail: detailParts.join(' · '),
+  }
+})
 const newThreadFolderOptions = computed(() => {
   const options: Array<{ value: string; label: string }> = []
   const seenCwds = new Set<string>()
@@ -1784,6 +1978,142 @@ const githubTipsScopeOptions = computed<Array<{ value: GithubTipsScope; label: s
   { value: 'trending-weekly', label: '趋势周榜' },
   { value: 'trending-monthly', label: '趋势月榜' },
 ])
+const workbenchProjectPath = computed(() => {
+  const selected = newThreadCwd.value.trim()
+  if (selected) return selected
+  return newThreadFolderOptions.value[0]?.value?.trim() ?? ''
+})
+const workbenchProjectName = computed(() => {
+  const path = workbenchProjectPath.value
+  if (!path) return '工作台'
+  const option = newThreadFolderOptions.value.find((item) => item.value === path)
+  return option?.label?.trim() || getPathLeafName(path)
+})
+const currentProjectWorkbenchPreset = computed<WorkbenchProjectPreset | null>(() => {
+  const key = normalizeWorkbenchPresetKey(workbenchProjectPath.value)
+  if (!key) return null
+  return workbenchProjectPresets.value[key] ?? null
+})
+const currentProjectWorkbenchPresetSummary = computed(() => {
+  const preset = currentProjectWorkbenchPreset.value
+  if (!preset) return ''
+  const parts = [
+    preset.modelId || '默认模型',
+    formatReasoningEffortLabel(preset.reasoningEffort),
+    preset.speedMode === 'fast' ? '快速' : '标准',
+    preset.collaborationMode === 'plan' ? '计划' : '执行',
+    preset.runtime === 'worktree' ? '新工作树' : '当前项目',
+  ]
+  return `${formatWorkbenchSavedAt(preset.savedAtIso)} 保存 · ${parts.join(' · ')}`
+})
+const workbenchStatusItems = computed<WorkbenchStatusItem[]>(() => {
+  const connectionState = realtimeConnectionState.value
+  const hasConnectionIssue = Boolean(syncError.value || notificationStale.value || syncLagging.value)
+  const connectionTone: WorkbenchStatusTone = syncError.value
+    ? 'danger'
+    : hasConnectionIssue
+      ? 'warning'
+      : connectionState === 'connected'
+        ? 'good'
+        : 'neutral'
+  const pendingRequestCount = selectedThreadServerRequests.value.length
+  const queuedMessageCount = selectedThreadQueuedMessages.value.length
+  const runtimeState = selectedThreadRuntimeStatus.value?.executionState?.trim() ?? ''
+  const taskTone: WorkbenchStatusTone = pendingRequestCount > 0
+    ? 'warning'
+    : selectedThreadExecutionActive.value || isSendingMessage.value
+      ? 'warning'
+      : 'good'
+  const taskValue = pendingRequestCount > 0
+    ? `${String(pendingRequestCount)} 个待确认`
+    : selectedThreadExecutionActive.value
+      ? '运行中'
+      : isSendingMessage.value
+        ? '发送中'
+        : queuedMessageCount > 0
+          ? `${String(queuedMessageCount)} 条排队`
+          : '空闲'
+  const quota = quotaReminder.value
+  const quotaTone: WorkbenchStatusTone = quota?.tone === 'danger'
+    ? 'danger'
+    : quota?.tone === 'warning'
+      ? 'warning'
+      : 'good'
+
+  return [
+    {
+      label: '连接',
+      value: formatConnectionStateLabel(connectionState),
+      detail: syncError.value || (notificationStale.value ? '通知流可能断档，可刷新恢复。' : syncLagging.value ? '同步有延迟。' : '实时事件正常。'),
+      tone: connectionTone,
+    },
+    {
+      label: '任务',
+      value: taskValue,
+      detail: runtimeState ? `后端状态：${runtimeState}` : '当前没有阻塞任务。',
+      tone: taskTone,
+    },
+    {
+      label: '额度',
+      value: quota?.title ?? '正常',
+      detail: quota?.detail ?? '未触发额度提醒。',
+      tone: quotaTone,
+    },
+    {
+      label: '能力',
+      value: `${String(installedSkills.value.length)} 技能 · ${String(availableComposerPlugins.value.length)} 插件`,
+      detail: isLoadingComposerPlugins.value ? '正在读取插件状态。' : '插件会作为本轮偏好传给 Codex。',
+      tone: 'neutral',
+    },
+  ]
+})
+const workbenchTemplates = computed<WorkbenchTemplate[]>(() => {
+  const projectName = workbenchProjectName.value
+  const projectPath = workbenchProjectPath.value || '当前工作区'
+  const context = `项目：${projectName}\n目录：${projectPath}`
+  return [
+    {
+      id: 'mobile-regression',
+      title: '移动端回归测试',
+      description: '检查最近改动、截图取证、发现问题后做小范围修复。',
+      badge: '测试',
+      collaborationMode: 'execute',
+      prompt: `${context}\n\n请对这个项目执行一次移动端前端回归测试，重点覆盖对话输入区、加号菜单、计划模式、插件选择、状态栏、文档查看和下载。使用浏览器自动化记录复现步骤和截图；如果发现确定问题，请做小范围修复并运行必要构建校验。不要自动重启 7420，除非我再次明确要求。`,
+    },
+    {
+      id: 'runtime-diagnostics',
+      title: '稳定性诊断',
+      description: '排查卡在思考中、无回复、队列堆积和慢调用风险。',
+      badge: '诊断',
+      collaborationMode: 'execute',
+      prompt: `${context}\n\n请全面检查 7420 当前稳定性风险：运行日志、后端队列、Runtime Store、通知 replay、发送/停止/恢复链路和前端状态收敛逻辑。先给出真实原因证据，再实施低风险修复，并用构建和前端回归验证。不要通过重启掩盖问题。`,
+    },
+    {
+      id: 'release-readiness',
+      title: '发布前检查',
+      description: '整理变更、构建验证、检查敏感信息和发布风险。',
+      badge: '发布',
+      collaborationMode: 'execute',
+      prompt: `${context}\n\n请做一次发布前检查：审查未提交改动、确认没有泄露本地隐私和凭据、运行构建/静态校验、列出版本发布风险和建议。只在确认安全后再给出提交与发布建议，不要立即推送或发布。`,
+    },
+    {
+      id: 'product-ux-audit',
+      title: '产品体验走查',
+      description: '从真实用户工作流找出能提升效率的下一批改造。',
+      badge: '体验',
+      collaborationMode: 'plan',
+      prompt: `${context}\n\n请从长期稳定产品角度审查当前 CX-Codex 使用体验，重点看移动端阅读、会话列表、任务恢复、插件/技能、文件查看下载、GitHub 运营入口。给出按收益排序的下一批设计方案，并标出哪些适合立即实施。`,
+    },
+    {
+      id: 'github-issues',
+      title: 'GitHub Issues 处理',
+      description: '读取待处理 issue，先复现再给修复方案。',
+      badge: '运营',
+      collaborationMode: 'execute',
+      prompt: `${context}\n\n请检查当前 GitHub 项目的最新 Issues，优先处理最近两个未解决问题。要求：先复现或确认原因，再做低风险修复，前端回归测试通过后再准备回复内容。不要泄露我的本地路径、token 或个人信息。`,
+    },
+  ]
+})
 
 watch(
   () => [
@@ -2795,6 +3125,7 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
       payload.skills,
       payload.fileAttachments,
       payload.collaborationMode,
+      payload.turnOptions,
     )
     return
   }
@@ -2810,6 +3141,7 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
     payload.fileAttachments,
     queueInsertIndex,
     payload.collaborationMode,
+    payload.turnOptions,
   ).then(() => {
     if (payload.mode !== 'queue') {
       markDesktopSyncPending(selectedThreadId.value)
@@ -2900,6 +3232,73 @@ async function onAskTrendingProject(project: GithubTrendingProject): Promise<voi
   })
 }
 
+async function onWorkbenchRefresh(): Promise<void> {
+  await refreshAll({ loadMessages: false })
+  const message = desktopStateError.value.trim()
+  if (message) {
+    showProductToast(message, 'danger', 4200)
+    return
+  }
+  showProductToast('工作台状态已刷新。', 'success')
+}
+
+function onSaveWorkbenchProjectPreset(): void {
+  const cwd = workbenchProjectPath.value.trim()
+  if (!cwd) {
+    showProductToast('请先选择一个工作目录。', 'warning')
+    return
+  }
+  const key = normalizeWorkbenchPresetKey(cwd)
+  if (!key) return
+  saveWorkbenchProjectPresets({
+    ...workbenchProjectPresets.value,
+    [key]: {
+      cwd,
+      modelId: selectedModelId.value,
+      reasoningEffort: selectedReasoningEffort.value,
+      speedMode: selectedSpeedMode.value,
+      collaborationMode: selectedCollaborationMode.value,
+      runtime: newThreadRuntime.value,
+      savedAtIso: new Date().toISOString(),
+    },
+  })
+  showProductToast('已保存该项目默认配置。', 'success')
+}
+
+function onApplyWorkbenchProjectPreset(): void {
+  const preset = currentProjectWorkbenchPreset.value
+  if (!preset) {
+    showProductToast('当前项目还没有保存默认配置。', 'warning')
+    return
+  }
+  if (preset.modelId.trim()) setSelectedModelId(preset.modelId)
+  setSelectedReasoningEffort(preset.reasoningEffort)
+  setSelectedCollaborationMode(preset.collaborationMode)
+  void updateSelectedSpeedMode(preset.speedMode)
+  newThreadRuntime.value = preset.runtime
+  showProductToast('已应用该项目默认配置。', 'success')
+}
+
+async function onRunWorkbenchTemplate(templateId: string): Promise<void> {
+  const template = workbenchTemplates.value.find((item) => item.id === templateId)
+  if (!template || isSendingMessage.value) return
+  if (!newThreadCwd.value.trim() && workbenchProjectPath.value.trim()) {
+    newThreadCwd.value = workbenchProjectPath.value.trim()
+  }
+  const threadId = await submitFirstMessageForNewThread(
+    template.prompt,
+    [],
+    [],
+    [],
+    template.collaborationMode,
+  )
+  if (threadId) {
+    showProductToast('已发起工作台任务。', 'success')
+  } else {
+    showProductToast('任务未发出，请检查工作目录或连接状态。', 'warning')
+  }
+}
+
 function onEditQueuedMessage(messageId: string): void {
   const queueIndex = selectedThreadQueuedMessages.value.findIndex((item) => item.id === messageId)
   const message = queueIndex >= 0 ? selectedThreadQueuedMessages.value[queueIndex] : undefined
@@ -2919,6 +3318,8 @@ function onEditQueuedMessage(messageId: string): void {
     imageUrls: [...message.imageUrls],
     fileAttachments: message.fileAttachments.map((attachment) => ({ ...attachment })),
     skills: message.skills.map((skill) => ({ ...skill })),
+    plugins: message.turnOptions?.plugins?.map((plugin) => ({ ...plugin })),
+    goal: message.turnOptions?.goal ? { ...message.turnOptions.goal } : undefined,
   }
   composer.hydrateDraft(payload)
   removeQueuedMessage(messageId)
@@ -2930,6 +3331,7 @@ async function rollbackAndResendDictation(payload: {
   fileAttachments: Array<{ label: string; path: string; fsPath: string }>
   skills: Array<{ name: string; path: string }>
   collaborationMode: CollaborationMode
+  turnOptions?: ComposerTurnOptions
 }): Promise<void> {
   if (isSelectedThreadInProgress.value) {
     await interruptSelectedThreadTurn()
@@ -2946,6 +3348,7 @@ async function rollbackAndResendDictation(payload: {
     payload.fileAttachments,
     undefined,
     payload.collaborationMode,
+    payload.turnOptions,
   )
   markDesktopSyncPending(selectedThreadId.value)
 }
@@ -3228,6 +3631,84 @@ function loadBoolPref(key: string, fallback: boolean): boolean {
   const v = window.localStorage.getItem(key)
   if (v === null) return fallback
   return v === '1'
+}
+
+function normalizeWorkbenchPresetKey(cwd: string): string {
+  return cwd.trim().toLowerCase()
+}
+
+function isWorkbenchProjectPreset(value: unknown): value is WorkbenchProjectPreset {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<WorkbenchProjectPreset>
+  return typeof candidate.cwd === 'string'
+    && typeof candidate.modelId === 'string'
+    && (candidate.reasoningEffort === ''
+      || candidate.reasoningEffort === 'none'
+      || candidate.reasoningEffort === 'minimal'
+      || candidate.reasoningEffort === 'low'
+      || candidate.reasoningEffort === 'medium'
+      || candidate.reasoningEffort === 'high'
+      || candidate.reasoningEffort === 'xhigh')
+    && (candidate.speedMode === 'standard' || candidate.speedMode === 'fast')
+    && (candidate.collaborationMode === 'execute' || candidate.collaborationMode === 'plan')
+    && (candidate.runtime === 'local' || candidate.runtime === 'worktree')
+    && typeof candidate.savedAtIso === 'string'
+}
+
+function loadWorkbenchProjectPresets(): Record<string, WorkbenchProjectPreset> {
+  if (typeof window === 'undefined') return {}
+  const raw = window.localStorage.getItem(WORKBENCH_PROJECT_PRESETS_KEY)
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object') return {}
+    const next: Record<string, WorkbenchProjectPreset> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!isWorkbenchProjectPreset(value)) continue
+      const normalizedKey = normalizeWorkbenchPresetKey(key || value.cwd)
+      if (normalizedKey) next[normalizedKey] = value
+    }
+    return next
+  } catch {
+    return {}
+  }
+}
+
+function saveWorkbenchProjectPresets(next: Record<string, WorkbenchProjectPreset>): void {
+  workbenchProjectPresets.value = next
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(WORKBENCH_PROJECT_PRESETS_KEY, JSON.stringify(next))
+}
+
+function formatReasoningEffortLabel(value: ReasoningEffort | ''): string {
+  const labels: Record<string, string> = {
+    none: '无',
+    minimal: '极低',
+    low: '低',
+    medium: '中',
+    high: '高',
+    xhigh: '超高',
+  }
+  return labels[value] ?? '智能'
+}
+
+function formatWorkbenchSavedAt(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '最近'
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function formatConnectionStateLabel(value: string): string {
+  if (value === 'connected') return '实时连接'
+  if (value === 'connecting') return '连接中'
+  if (value === 'reconnecting') return '重连中'
+  if (value === 'disconnected') return '已断开'
+  return value || '未知'
 }
 
 function showProductToast(
@@ -3619,6 +4100,7 @@ async function submitFirstMessageForNewThread(
   skills: Array<{ name: string; path: string }> = [],
   fileAttachments: Array<{ label: string; path: string; fsPath: string }> = [],
   collaborationMode: CollaborationMode = selectedCollaborationMode.value,
+  turnOptions?: ComposerTurnOptions,
 ): Promise<string> {
   try {
     worktreeInitStatus.value = { phase: 'idle', title: '', message: '' }
@@ -3640,13 +4122,35 @@ async function submitFirstMessageForNewThread(
           title: '工作树初始化失败',
           message: '无法创建工作树，请重试或切换到当前项目。',
         }
-        restoreHomeThreadComposerDraft({ text, imageUrls, fileAttachments, skills })
+        restoreHomeThreadComposerDraft({
+          text,
+          imageUrls,
+          fileAttachments,
+          skills,
+          plugins: turnOptions?.plugins,
+          goal: turnOptions?.goal,
+        })
         return ''
       }
     }
-    const threadId = await sendMessageToNewThread(text, targetCwd, imageUrls, skills, fileAttachments, collaborationMode)
+    const threadId = await sendMessageToNewThread(
+      text,
+      targetCwd,
+      imageUrls,
+      skills,
+      fileAttachments,
+      collaborationMode,
+      turnOptions,
+    )
     if (!threadId) {
-      restoreHomeThreadComposerDraft({ text, imageUrls, fileAttachments, skills })
+      restoreHomeThreadComposerDraft({
+        text,
+        imageUrls,
+        fileAttachments,
+        skills,
+        plugins: turnOptions?.plugins,
+        goal: turnOptions?.goal,
+      })
       return ''
     }
     await router.replace({ name: 'thread', params: { threadId } })
@@ -3654,7 +4158,14 @@ async function submitFirstMessageForNewThread(
     return threadId
   } catch {
     // Error is already reflected in state.
-    restoreHomeThreadComposerDraft({ text, imageUrls, fileAttachments, skills })
+    restoreHomeThreadComposerDraft({
+      text,
+      imageUrls,
+      fileAttachments,
+      skills,
+      plugins: turnOptions?.plugins,
+      goal: turnOptions?.goal,
+    })
     return ''
   }
 }
@@ -4101,6 +4612,41 @@ async function submitFirstMessageForNewThread(
   background:
     linear-gradient(180deg, rgba(250,247,240,0) 0%, rgba(250,247,240,0.84) 18%, rgba(250,247,240,0.965) 100%);
   padding-bottom: max(0.35rem, env(safe-area-inset-bottom));
+}
+
+.quota-reminder {
+  @apply mx-auto mb-1.5 flex w-full max-w-3xl items-center gap-2 rounded-full border px-3 py-1.5 text-xs leading-4 shadow-sm;
+  font-family: var(--font-sans-ui);
+  background: rgba(255, 253, 248, 0.92);
+  backdrop-filter: blur(10px);
+}
+
+.quota-reminder[data-tone='warning'] {
+  @apply border-[#e7d9b0] text-[#74560a];
+}
+
+.quota-reminder[data-tone='danger'] {
+  @apply border-[#f1cbc3] text-[#a23b13];
+}
+
+.quota-reminder-dot {
+  @apply h-2 w-2 shrink-0 rounded-full;
+}
+
+.quota-reminder[data-tone='warning'] .quota-reminder-dot {
+  @apply bg-[#d99b19];
+}
+
+.quota-reminder[data-tone='danger'] .quota-reminder-dot {
+  @apply bg-[#c2410c];
+}
+
+.quota-reminder-title {
+  @apply shrink-0 font-semibold;
+}
+
+.quota-reminder-detail {
+  @apply min-w-0 truncate text-[#6d6354];
 }
 
 .new-thread-empty {
@@ -4615,12 +5161,18 @@ async function submitFirstMessageForNewThread(
   .composer-with-queue {
     @apply pt-1.5;
     background:
-      linear-gradient(180deg, rgba(250,247,240,0) 0%, rgba(250,247,240,0.88) 24%, rgba(250,247,240,0.98) 100%);
+      linear-gradient(180deg, rgba(250,247,240,0) 0%, rgba(250,247,240,0.78) 30%, rgba(250,247,240,0.97) 100%);
+  }
+
+  .quota-reminder {
+    @apply mb-1 px-2.5 py-1 text-[11px];
   }
 
   .new-thread-empty {
     @apply px-4;
-    padding-bottom: clamp(5.5rem, 18dvh, 8rem);
+    justify-content: flex-start;
+    padding-top: clamp(4.5rem, 16dvh, 7rem);
+    padding-bottom: clamp(3rem, 10dvh, 5rem);
   }
 
   .skip-to-content {

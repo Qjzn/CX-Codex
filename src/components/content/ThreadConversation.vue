@@ -142,14 +142,7 @@
                   class="live-overlay-action live-overlay-action-primary"
                   @click="onRespondToolCallFailure(overlayPrimaryPendingRequest.id)"
                 >
-                  返回失败
-                </button>
-                <button
-                  type="button"
-                  class="live-overlay-action"
-                  @click="onRespondToolCallSuccess(overlayPrimaryPendingRequest.id)"
-                >
-                  返回成功
+                  让 Codex 改用文字继续
                 </button>
                 <button
                   type="button"
@@ -191,6 +184,14 @@
                 </div>
                 <p class="live-overlay-compact-hint">{{ liveOverlayCompactHint(liveOverlay) }}</p>
               </div>
+              <button
+                v-if="hasLiveOverlayDetail"
+                class="live-overlay-detail-button"
+                type="button"
+                @click="openLiveOverlayDetail"
+              >
+                详情
+              </button>
             </div>
           </template>
         </article>
@@ -369,8 +370,7 @@
               </section>
 
               <section v-else-if="request.method === 'item/tool/call'" class="request-actions">
-                <button type="button" class="request-button request-button-primary" @click="onRespondToolCallFailure(request.id)">返回失败</button>
-                <button type="button" class="request-button" @click="onRespondToolCallSuccess(request.id)">返回成功（空结果）</button>
+                <button type="button" class="request-button request-button-primary" @click="onRespondToolCallFailure(request.id)">让 Codex 改用文字继续</button>
               </section>
 
               <section v-else class="request-actions">
@@ -662,6 +662,72 @@
       </button>
     </template>
 
+    <Teleport to="body">
+      <div
+        v-if="isLiveOverlayDetailOpen && liveOverlay"
+        class="live-overlay-detail-backdrop"
+        role="presentation"
+        @click="closeLiveOverlayDetail"
+      >
+        <section
+          class="live-overlay-detail-sheet"
+          role="dialog"
+          aria-modal="true"
+          aria-label="运行详情"
+          @click.stop
+        >
+          <span class="live-overlay-detail-handle" aria-hidden="true" />
+          <header class="live-overlay-detail-header">
+            <div class="live-overlay-detail-title-group">
+              <p class="live-overlay-detail-kicker">运行状态</p>
+              <h2 class="live-overlay-detail-title">{{ liveOverlayPrimaryLabel(liveOverlay) }}</h2>
+            </div>
+            <button class="live-overlay-detail-close" type="button" @click="closeLiveOverlayDetail">
+              关闭
+            </button>
+          </header>
+
+          <div v-if="liveOverlayDetails(liveOverlay).length > 0" class="live-overlay-detail-list live-overlay-detail-sheet-chips">
+            <span
+              v-for="detail in liveOverlayDetails(liveOverlay)"
+              :key="`detail-sheet:${detail}`"
+              class="live-overlay-detail-chip"
+            >
+              {{ detail }}
+            </span>
+          </div>
+
+          <section v-if="liveOverlayCommandMessage" class="live-overlay-detail-block">
+            <p class="live-overlay-detail-block-title">命令执行</p>
+            <div class="cmd-row cmd-status-running live-overlay-detail-command-row">
+              <span class="cmd-status">{{ commandStatusLabel(liveOverlayCommandMessage) }}</span>
+              <span v-if="commandDurationLabel(liveOverlayCommandMessage)" class="cmd-duration">
+                {{ commandDurationLabel(liveOverlayCommandMessage) }}
+              </span>
+              <code class="cmd-label">{{ liveOverlayCommandMessage.commandExecution?.command || '（命令）' }}</code>
+            </div>
+            <pre v-if="liveOverlayCommandOutput" class="cmd-output live-overlay-detail-output">{{ liveOverlayCommandOutput }}</pre>
+            <p v-else class="live-overlay-detail-empty">暂无命令输出。</p>
+          </section>
+
+          <section v-if="liveOverlay.reasoningText" class="live-overlay-detail-block">
+            <p class="live-overlay-detail-block-title">思考过程</p>
+            <pre class="live-overlay-detail-reasoning">{{ liveOverlay.reasoningText }}</pre>
+          </section>
+
+          <section v-if="overlayPrimaryPendingRequest" class="live-overlay-detail-block">
+            <p class="live-overlay-detail-block-title">待处理请求</p>
+            <p class="live-overlay-detail-copy">下方有待处理请求，处理后任务会继续执行。</p>
+            <button class="live-overlay-detail-primary" type="button" @click="goToPendingRequestsFromDetail">
+              查看待处理请求
+            </button>
+          </section>
+
+          <p v-if="liveOverlay.errorText" class="live-overlay-detail-error">{{ liveOverlay.errorText }}</p>
+        </section>
+      </div>
+    </Teleport>
+
     <div v-if="modalImageUrl.length > 0" class="image-modal-backdrop" @click="closeImageModal">
       <div class="image-modal-content" role="dialog" aria-modal="true" aria-label="图片预览" @click.stop>
         <div class="image-modal-toolbar">
@@ -952,6 +1018,7 @@ const isRevealingOlderMessages = ref(false)
 const canAutoRevealOlderMessages = ref(true)
 const visibleMessageStartIndex = ref(0)
 const isRequestPanelExpanded = ref(false)
+const isLiveOverlayDetailOpen = ref(false)
 const expandedGuidedTurnIndexes = ref<Set<number>>(new Set())
 
 function latestVisibleStartIndex(messageCount: number): number {
@@ -1339,15 +1406,24 @@ const showJumpToLatestButton = computed(() => (
 ))
 const overlayPrimaryPendingRequest = computed<UiServerRequest | null>(() => props.pendingRequests[0] ?? null)
 const favoriteMessageIdSet = computed(() => new Set(props.favoriteMessageIds ?? []))
+const hasLiveOverlayDetail = computed<boolean>(() => {
+  const overlay = props.liveOverlay
+  if (!overlay) return false
+  return Boolean(
+    overlayPrimaryPendingRequest.value ||
+    liveOverlayCommandMessage.value ||
+    liveOverlayCommandOutput.value ||
+    overlay.reasoningText.trim().length > 0 ||
+    overlay.errorText.trim().length > 0 ||
+    liveOverlayDetails(overlay).length > 0,
+  )
+})
 const shouldRenderDetailedLiveOverlay = computed<boolean>(() => {
   const overlay = props.liveOverlay
   if (!overlay) return false
   if (overlayPrimaryPendingRequest.value) return true
   if (overlay.errorText.trim().length > 0) return true
-  if (liveOverlayCommandMessage.value) return true
-  if (overlay.reasoningText.trim().length > 0) return true
-  if (liveOverlayDetails(overlay).length > 0) return true
-  return overlay.activityLabel.trim().length > 0
+  return false
 })
 const liveOverlayBehaviorSignature = computed<string>(() => {
   const overlay = props.liveOverlay
@@ -2988,19 +3064,9 @@ function onRespondToolCallFailure(requestId: number): void {
       contentItems: [
         {
           type: 'inputText',
-          text: '工具调用已被 codex-web-local 界面拒绝。',
+          text: 'CX-Codex Web 已收到插件偏好，但当前 Web 端不能代执行这个 Codex 工具调用。请改用文字方式继续，或提示用户在桌面端 Codex 客户端处理需要的工具操作。',
         },
       ],
-    },
-  })
-}
-
-function onRespondToolCallSuccess(requestId: number): void {
-  emit('respondServerRequest', {
-    id: requestId,
-    result: {
-      success: true,
-      contentItems: [],
     },
   })
 }
@@ -3017,7 +3083,7 @@ function onRejectUnknownRequest(requestId: number): void {
     id: requestId,
     error: {
       code: -32000,
-      message: '请求已被 codex-web-local 界面拒绝。',
+      message: '请求已被 CX-Codex Web 拒绝。',
     },
   })
 }
@@ -3117,7 +3183,7 @@ function requestMethodLabel(method: string): string {
     case 'item/tool/requestUserInput':
       return '需要补充输入'
     case 'item/tool/call':
-      return '工具调用等待处理'
+      return '不支持的工具调用'
     default:
       if (isMcpElicitationRequest(method)) return 'MCP 服务需要补充信息'
       return method
@@ -3144,6 +3210,7 @@ function pendingRequestActionLabel(request: UiServerRequest): string {
 function liveOverlayPrimaryLabel(overlay: UiLiveOverlay): string {
   const label = overlay.activityLabel.trim()
   if (!label) return '思考中'
+  if (/工具不可用|unsupported tool|tool unavailable/iu.test(label)) return '工具不可用'
   if (/等待授权|waiting for approval|approval required/iu.test(label)) return '等待确认'
   if (/等待确认|requires confirmation|needs confirmation/iu.test(label)) return '等待确认'
   if (/等待输入|request user input|needs input/iu.test(label)) return '等待补充'
@@ -3161,7 +3228,8 @@ function liveOverlayDetails(overlay: UiLiveOverlay): string[] {
   if (command && !details.includes(command)) {
     details.push(command)
   }
-  if (!command) {
+  const isUnsupportedTool = /工具不可用|unsupported tool|tool unavailable/iu.test(overlay.activityLabel)
+  if (!command && !isUnsupportedTool) {
     if (!details.some((detail) => /命令|command/iu.test(detail))) {
       details.push('暂无命令执行')
     }
@@ -3173,6 +3241,9 @@ function liveOverlayDetails(overlay: UiLiveOverlay): string[] {
 }
 
 function liveOverlayHint(overlay: UiLiveOverlay): string {
+  if (/工具不可用|unsupported tool|tool unavailable/iu.test(overlay.activityLabel)) {
+    return '这个工具调用无法在 CX-Codex Web 执行，可让 Codex 改用文字方式继续。'
+  }
   if (/等待授权|waiting for approval|approval required/iu.test(overlay.activityLabel)) {
     return '下方有权限确认，允许或拒绝后会继续执行。'
   }
@@ -3192,6 +3263,9 @@ function liveOverlayHint(overlay: UiLiveOverlay): string {
 }
 
 function liveOverlayCompactHint(overlay: UiLiveOverlay): string {
+  if (/工具不可用|unsupported tool|tool unavailable/iu.test(overlay.activityLabel)) {
+    return '当前工具调用不可用，可让 Codex 改用文字方式继续。'
+  }
   if (/执行命令|running command|executing command/iu.test(overlay.activityLabel)) {
     return '命令仍在执行，可先查看上方历史，新输出会继续追加。'
   }
@@ -3211,6 +3285,22 @@ function scrollToPendingRequests(): void {
     return
   }
   jumpToLatest()
+}
+
+function openLiveOverlayDetail(): void {
+  if (!hasLiveOverlayDetail.value) return
+  isLiveOverlayDetailOpen.value = true
+}
+
+function closeLiveOverlayDetail(): void {
+  isLiveOverlayDetailOpen.value = false
+}
+
+function goToPendingRequestsFromDetail(): void {
+  closeLiveOverlayDetail()
+  void nextTick(() => {
+    scrollToPendingRequests()
+  })
 }
 
 async function onCopyMessage(message: UiMessage): Promise<void> {
@@ -4046,10 +4136,20 @@ watch(
   },
 )
 
+watch(
+  () => props.liveOverlay,
+  (overlay) => {
+    if (!overlay) {
+      closeLiveOverlayDetail()
+    }
+  },
+)
+
 watch(() => props.activeThreadId, () => {
   clearHighlightedMessage()
   clearRollbackConfirmation()
   activeMessageActionId.value = ''
+  closeLiveOverlayDetail()
 })
 
 defineExpose<{
@@ -4405,15 +4505,16 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-inline {
-  @apply w-full rounded-2xl border border-[#d7ebe7] bg-[#f7fbfa] px-3 py-2 flex flex-col gap-1.5;
+  @apply w-full rounded-2xl border border-[#d7ebe7] bg-[#f9fcfb] px-3 py-2 flex flex-col gap-1.5;
   max-width: min(60rem, 100%);
   position: relative;
   overflow: hidden;
+  box-shadow: 0 10px 24px -24px rgba(15, 118, 110, 0.42);
 }
 
 .live-overlay-inline-compact {
-  @apply rounded-2xl px-3 py-1.5;
-  max-width: min(36rem, 100%);
+  @apply rounded-[18px] px-2.5 py-1.5;
+  max-width: min(38rem, 100%);
 }
 
 .live-overlay-inline::after {
@@ -4483,7 +4584,7 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-compact-label {
-  @apply m-0 text-[13px] font-semibold text-[#1b4d47];
+  @apply m-0 text-[12px] font-semibold text-[#1b4d47];
 }
 
 .live-overlay-dots {
@@ -4543,6 +4644,93 @@ onBeforeUnmount(() => {
 
 .live-overlay-compact-hint {
   @apply m-0 text-[11px] leading-4 text-[#6b8a84];
+}
+
+.live-overlay-detail-button {
+  @apply relative z-[1] inline-flex h-7 shrink-0 items-center justify-center rounded-full border border-[#c8ddd8] bg-white/90 px-3 text-[11px] font-semibold text-[#0f766e] shadow-sm transition-[background-color,border-color,color,transform] duration-150 hover:border-[#97c2b8] hover:bg-white hover:text-[#0b5e58];
+  touch-action: manipulation;
+}
+
+.live-overlay-detail-button:active {
+  transform: translateY(1px);
+}
+
+.live-overlay-detail-backdrop {
+  @apply fixed inset-0 z-[80] flex items-end justify-center bg-[#111827]/28 px-2 pb-0 backdrop-blur-[2px];
+}
+
+.live-overlay-detail-sheet {
+  @apply w-full max-w-3xl rounded-t-[26px] border border-[#d8eee9] bg-[#fffdf8] px-4 pb-4 pt-2 text-[#1f2937] shadow-2xl shadow-[#1f2937]/20;
+  max-height: min(74dvh, 40rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.live-overlay-detail-handle {
+  @apply mx-auto mb-2 block h-1.5 w-10 rounded-full bg-[#d8cfbf];
+}
+
+.live-overlay-detail-header {
+  @apply sticky top-0 z-[1] -mx-4 flex items-start justify-between gap-3 border-b border-[#eee6d8] bg-[#fffdf8]/96 px-4 pb-3 pt-1 backdrop-blur;
+}
+
+.live-overlay-detail-title-group {
+  @apply min-w-0;
+}
+
+.live-overlay-detail-kicker {
+  @apply m-0 text-[11px] font-semibold uppercase text-[#8f8577];
+  letter-spacing: 0.08em;
+}
+
+.live-overlay-detail-title {
+  @apply m-0 mt-0.5 truncate text-base font-semibold leading-6 text-[#1f2937];
+}
+
+.live-overlay-detail-close {
+  @apply inline-flex h-8 shrink-0 items-center justify-center rounded-full border border-[#d8cfbf] bg-white px-3 text-xs font-semibold text-[#544a3d] shadow-sm;
+}
+
+.live-overlay-detail-sheet-chips {
+  @apply py-3;
+}
+
+.live-overlay-detail-block {
+  @apply border-t border-[#eee6d8] py-3;
+}
+
+.live-overlay-detail-block-title {
+  @apply m-0 mb-2 text-xs font-semibold text-[#0f766e];
+}
+
+.live-overlay-detail-command-row {
+  @apply cursor-default hover:bg-[#f8f4ec];
+}
+
+.live-overlay-detail-output,
+.live-overlay-detail-reasoning {
+  @apply mt-2 max-h-[44dvh] overflow-auto rounded-2xl border border-[#d8cfbf] bg-[#111827] px-3 py-2 text-xs leading-5 text-[#f8fafc];
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-overflow-scrolling: touch;
+}
+
+.live-overlay-detail-reasoning {
+  @apply bg-[#f8f4ec] text-[#34413d];
+}
+
+.live-overlay-detail-empty,
+.live-overlay-detail-copy {
+  @apply m-0 text-sm leading-5 text-[#6d6354];
+}
+
+.live-overlay-detail-primary {
+  @apply mt-2 inline-flex h-9 items-center justify-center rounded-full border border-[#0f766e] bg-[#0f766e] px-4 text-sm font-semibold text-white shadow-sm;
+}
+
+.live-overlay-detail-error {
+  @apply m-0 rounded-2xl border border-[#f1cbc3] bg-[#fff0ec] px-3 py-2 text-sm leading-5 text-[#c2410c];
 }
 
 .live-overlay-request-link {
@@ -4894,6 +5082,47 @@ onBeforeUnmount(() => {
   .conversation-list {
     @apply gap-1 px-2;
     padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+
+  .conversation-process-panel {
+    @apply mb-0;
+  }
+
+  .live-overlay-inline {
+    @apply rounded-[16px];
+  }
+
+  .live-overlay-inline-compact {
+    max-width: 100%;
+  }
+
+  .live-overlay-compact-main {
+    @apply gap-1.5;
+  }
+
+  .live-overlay-compact-copy {
+    @apply gap-0;
+  }
+
+  .live-overlay-compact-hint {
+    @apply truncate;
+  }
+
+  .live-overlay-detail-button {
+    @apply h-7 px-2.5;
+  }
+
+  .live-overlay-detail-backdrop {
+    @apply px-0;
+  }
+
+  .live-overlay-detail-sheet {
+    @apply rounded-t-[22px] px-3 pb-3;
+    max-height: min(78dvh, 42rem);
+  }
+
+  .live-overlay-detail-header {
+    @apply -mx-3 px-3;
   }
 
   .message-text {

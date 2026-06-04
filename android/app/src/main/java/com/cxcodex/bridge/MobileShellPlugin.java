@@ -403,6 +403,7 @@ public class MobileShellPlugin extends Plugin {
         }
 
         String mimeType = normalizeMimeType(call.getString("mimeType", ""));
+        String operationId = normalizeOperationId(call.getString("operationId", ""));
         String fileName = sanitizeFileName(call.getString("fileName", ""));
         if (fileName.isEmpty()) {
             fileName = sanitizeFileName(URLUtil.guessFileName(downloadUrl, null, mimeType));
@@ -413,13 +414,15 @@ public class MobileShellPlugin extends Plugin {
 
         final String resolvedFileName = fileName;
         final String resolvedMimeType = mimeType;
+        final String resolvedOperationId = operationId;
         JSObject result = new JSObject();
         result.put("status", "started");
         result.put("fileName", resolvedFileName);
         result.put("mimeType", resolvedMimeType);
+        result.put("operationId", resolvedOperationId);
         call.resolve(result);
         mainHandler.post(() -> showToast("正在后台准备打开：" + resolvedFileName));
-        new Thread(() -> downloadAndOpenFile(downloadUrl, resolvedFileName, resolvedMimeType)).start();
+        new Thread(() -> downloadAndOpenFile(downloadUrl, resolvedFileName, resolvedMimeType, resolvedOperationId)).start();
     }
 
     @PluginMethod
@@ -436,6 +439,7 @@ public class MobileShellPlugin extends Plugin {
         }
 
         String mimeType = normalizeMimeType(call.getString("mimeType", ""));
+        String operationId = normalizeOperationId(call.getString("operationId", ""));
         String fileName = sanitizeFileName(call.getString("fileName", ""));
         if (fileName.isEmpty()) {
             fileName = sanitizeFileName(URLUtil.guessFileName(downloadUrl, null, mimeType));
@@ -446,13 +450,15 @@ public class MobileShellPlugin extends Plugin {
 
         final String resolvedFileName = fileName;
         final String resolvedMimeType = mimeType;
+        final String resolvedOperationId = operationId;
         JSObject result = new JSObject();
         result.put("status", "started");
         result.put("fileName", resolvedFileName);
         result.put("mimeType", resolvedMimeType);
+        result.put("operationId", resolvedOperationId);
         call.resolve(result);
         mainHandler.post(() -> showToast("正在后台下载：" + resolvedFileName));
-        new Thread(() -> downloadFileToDownloads(downloadUrl, resolvedFileName, resolvedMimeType)).start();
+        new Thread(() -> downloadFileToDownloads(downloadUrl, resolvedFileName, resolvedMimeType, resolvedOperationId)).start();
     }
 
     private void downloadAndInstallApk(PluginCall call, String downloadUrl, String fileName) {
@@ -537,7 +543,7 @@ public class MobileShellPlugin extends Plugin {
         }
     }
 
-    private void downloadAndOpenFile(String downloadUrl, String fileName, String requestedMimeType) {
+    private void downloadAndOpenFile(String downloadUrl, String fileName, String requestedMimeType, String operationId) {
         HttpURLConnection connection = null;
         File targetDirectory = getContext().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
         if (targetDirectory == null) {
@@ -545,7 +551,10 @@ public class MobileShellPlugin extends Plugin {
         }
         if (!targetDirectory.exists() && !targetDirectory.mkdirs()) {
             File finalTargetDirectory = targetDirectory;
-            mainHandler.post(() -> notifyFileOperationFailed("打开文件失败：无法创建下载目录 " + finalTargetDirectory.getAbsolutePath()));
+            mainHandler.post(() -> {
+                emitFileOperationStatus(operationId, "open", "failed", "打开文件失败：无法创建下载目录 " + finalTargetDirectory.getAbsolutePath(), fileName);
+                notifyFileOperationFailed("打开文件失败：无法创建下载目录 " + finalTargetDirectory.getAbsolutePath());
+            });
             return;
         }
 
@@ -607,15 +616,21 @@ public class MobileShellPlugin extends Plugin {
                 try {
                     openFileIntent(openedFile, resolvedMimeType);
                     showToast("已交给系统应用打开：" + fileName);
+                    emitFileOperationStatus(operationId, "open", "completed", "已交给系统应用打开：" + fileName, fileName);
                 } catch (ActivityNotFoundException exception) {
+                    emitFileOperationStatus(operationId, "open", "failed", "没有找到可打开此文件的应用，文件已保存到：" + openedFile.getAbsolutePath(), fileName);
                     notifyFileOperationFailed("没有找到可打开此文件的应用，文件已保存到：" + openedFile.getAbsolutePath());
                 } catch (Exception exception) {
+                    emitFileOperationStatus(operationId, "open", "failed", "打开文件失败：" + exception.getMessage(), fileName);
                     notifyFileOperationFailed("打开文件失败：" + exception.getMessage());
                 }
             });
         } catch (Exception exception) {
             Exception resolvedException = exception instanceof Exception ? (Exception) exception : new Exception(exception);
-            mainHandler.post(() -> notifyFileOperationFailed("打开文件失败：" + resolvedException.getMessage()));
+            mainHandler.post(() -> {
+                emitFileOperationStatus(operationId, "open", "failed", "打开文件失败：" + resolvedException.getMessage(), fileName);
+                notifyFileOperationFailed("打开文件失败：" + resolvedException.getMessage());
+            });
         } finally {
             if (connection != null) {
                 connection.disconnect();
@@ -623,7 +638,7 @@ public class MobileShellPlugin extends Plugin {
         }
     }
 
-    private void downloadFileToDownloads(String downloadUrl, String fileName, String requestedMimeType) {
+    private void downloadFileToDownloads(String downloadUrl, String fileName, String requestedMimeType, String operationId) {
         HttpURLConnection connection = null;
         Uri mediaStoreUri = null;
         boolean mediaStorePending = false;
@@ -702,6 +717,7 @@ public class MobileShellPlugin extends Plugin {
 
             mainHandler.post(() -> {
                 showToast("已保存到下载目录：" + fileName);
+                emitFileOperationStatus(operationId, "download", "completed", "已保存到下载目录：" + fileName, fileName);
                 notifyFileOperationCompleted("已保存到下载目录", fileName);
             });
         } catch (Exception exception) {
@@ -717,7 +733,10 @@ public class MobileShellPlugin extends Plugin {
                 tempFile.delete();
             }
             Exception resolvedException = exception instanceof Exception ? (Exception) exception : new Exception(exception);
-            mainHandler.post(() -> notifyFileOperationFailed("下载文件失败：" + resolvedException.getMessage()));
+            mainHandler.post(() -> {
+                emitFileOperationStatus(operationId, "download", "failed", "下载文件失败：" + resolvedException.getMessage(), fileName);
+                notifyFileOperationFailed("下载文件失败：" + resolvedException.getMessage());
+            });
         } finally {
             if (connection != null) {
                 connection.disconnect();
@@ -1023,6 +1042,19 @@ public class MobileShellPlugin extends Plugin {
         showFileOperationNotification("文件处理失败", message, "error");
     }
 
+    private void emitFileOperationStatus(String operationId, String action, String status, String message, String fileName) {
+        if (operationId == null || operationId.isEmpty()) {
+            return;
+        }
+        JSObject event = new JSObject();
+        event.put("operationId", operationId);
+        event.put("action", action);
+        event.put("status", status);
+        event.put("message", message);
+        event.put("fileName", fileName);
+        notifyListeners("fileOperationStatus", event);
+    }
+
     private void showFileOperationNotification(String title, String body, String type) {
         if (!hasNotificationPermission()) {
             return;
@@ -1134,6 +1166,14 @@ public class MobileShellPlugin extends Plugin {
             return "";
         }
         return normalized.replaceAll("[\\\\/:*?\"<>|]", "-");
+    }
+
+    private static String normalizeOperationId(String value) {
+        String normalized = value == null ? "" : value.trim();
+        if (normalized.length() > 128) {
+            return normalized.substring(0, 128);
+        }
+        return normalized;
     }
 
     private static class NetworkSnapshot {

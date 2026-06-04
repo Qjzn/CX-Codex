@@ -573,6 +573,9 @@ function readThreadIdFromPayload(payload: unknown): string {
   const request = asRecord(root.request)
   const requestThreadId = readStringByAliases(request, 'threadId', 'thread_id')
   if (requestThreadId) return requestThreadId
+  const requestParams = asRecord(request?.params)
+  const requestParamsThreadId = readStringByAliases(requestParams, 'threadId', 'thread_id')
+  if (requestParamsThreadId) return requestParamsThreadId
 
   const params = asRecord(root.params)
   const paramsThreadId = readStringByAliases(params, 'threadId', 'thread_id')
@@ -601,6 +604,9 @@ function readTurnIdFromPayload(payload: unknown): string {
   const request = asRecord(root.request)
   const requestTurnId = readStringByAliases(request, 'turnId', 'turn_id', 'activeTurnId')
   if (requestTurnId) return requestTurnId
+  const requestParams = asRecord(request?.params)
+  const requestParamsTurnId = readStringByAliases(requestParams, 'turnId', 'turn_id', 'activeTurnId')
+  if (requestParamsTurnId) return requestParamsTurnId
   const params = asRecord(root.params)
   const paramsTurnId = readStringByAliases(params, 'turnId', 'turn_id', 'activeTurnId')
   if (paramsTurnId) return paramsTurnId
@@ -666,6 +672,7 @@ function buildRuntimeRequestPayloadSummary(args: {
   collaborationMode: CollaborationMode
   input: unknown[]
   attachments: unknown
+  turnOptions: RuntimeTurnOptions | null
 }): Record<string, unknown> {
   return {
     hasThreadId: args.threadId.length > 0,
@@ -676,7 +683,85 @@ function buildRuntimeRequestPayloadSummary(args: {
     collaborationMode: args.collaborationMode,
     input: summarizeRuntimeInput(args.input),
     attachmentCount: Array.isArray(args.attachments) ? args.attachments.length : 0,
+    turnOptions: {
+      pluginCount: args.turnOptions?.plugins.length ?? 0,
+      hasGoal: args.turnOptions?.goal?.enabled === true,
+    },
   }
+}
+
+type RuntimeTurnOptions = {
+  plugins: Array<{ id: string; name: string }>
+  goal?: { enabled: boolean; text: string }
+}
+
+function readRuntimeTurnOptions(value: unknown): RuntimeTurnOptions | null {
+  const root = asRecord(value)
+  if (!root) return null
+
+  const plugins = Array.isArray(root.plugins)
+    ? root.plugins
+      .map((item) => {
+        const record = asRecord(item)
+        const id = readString(record?.id).trim()
+        const name = readString(record?.name).trim()
+        return id && name ? { id, name } : null
+      })
+      .filter((item): item is { id: string; name: string } => item !== null)
+    : []
+
+  const rawGoal = asRecord(root.goal)
+  const goal = rawGoal && rawGoal.enabled === true
+    ? {
+        enabled: true,
+        text: readString(rawGoal.text).trim(),
+      }
+    : undefined
+
+  if (plugins.length === 0 && !goal) return null
+  return {
+    plugins,
+    ...(goal ? { goal } : {}),
+  }
+}
+
+function buildRuntimeTurnOptionsPrompt(options: RuntimeTurnOptions | null): string {
+  if (!options) return ''
+  const lines: string[] = []
+  if (options.plugins.length > 0) {
+    const names = options.plugins.map((plugin) => plugin.name).join('、')
+    lines.push(`插件偏好: ${names}。如当前 Codex 会话可以使用这些能力，请优先使用；如果 Web 端不能代执行工具调用，请明确说明原因并改用文字方案继续。`)
+  }
+  if (options.goal?.enabled === true) {
+    const goalText = options.goal.text || '持续追求当前任务目标'
+    lines.push(`追求目标: ${goalText}。请围绕这个目标主动推进，不只停留在解释。`)
+  }
+  if (lines.length === 0) return ''
+  return `<!-- CX-Codex turn options\n${lines.join('\n')}\n-->`
+}
+
+function applyRuntimeTurnOptionsToInput(input: unknown[], options: RuntimeTurnOptions | null): unknown[] {
+  const optionsPrompt = buildRuntimeTurnOptionsPrompt(options)
+  if (!optionsPrompt) return input
+
+  let didApply = false
+  const next = input.map((item) => {
+    const record = asRecord(item)
+    if (!record || didApply || record.type !== 'text' || typeof record.text !== 'string') return item
+    didApply = true
+    return {
+      ...record,
+      text: record.text.trim()
+        ? `${optionsPrompt}\n${record.text}`
+        : optionsPrompt,
+    }
+  })
+
+  if (didApply) return next
+  return [
+    { type: 'text', text: optionsPrompt },
+    ...input,
+  ]
 }
 
 function readRuntimeRequestStatusFromExecutionState(state: RuntimeExecutionState): RuntimeRequestStatus {
@@ -3090,13 +3175,27 @@ class AppServerProcess {
     return { decision: 'acceptForSession' }
   }
 
+  private shouldRejectUnsupportedServerRequest(method: string): boolean {
+    return method === 'item/tool/call'
+  }
+
+  private buildUnsupportedServerRequestResult(method: string): unknown {
+    if (method === 'item/tool/call') {
+      return {
+        success: false,
+        contentItems: [
+          {
+            type: 'inputText',
+            text: 'CX-Codex Web 已收到插件偏好，但当前 Web 端不能代执行这个 Codex 工具调用。请改用文字方式继续，或提示用户在桌面端 Codex 客户端处理需要的工具操作。',
+          },
+        ],
+      }
+    }
+    return {}
+  }
+
   private readServerRequestThreadId(params: unknown): string {
-    const requestParams = asRecord(params)
-    return (
-      typeof requestParams?.threadId === 'string' && requestParams.threadId.length > 0
-        ? requestParams.threadId
-        : ''
-    )
+    return readThreadIdFromPayload(params)
   }
 
   private emitServerRequestResolved(
@@ -3140,6 +3239,20 @@ class AppServerProcess {
     if (this.shouldAutoApproveServerRequest(method, params)) {
       this.sendServerRequestReply(requestId, {
         result: this.buildAutoApprovalResult(method, params),
+      })
+      this.emitServerRequestResolved(requestId, method, params, 'automatic')
+      return
+    }
+
+    if (this.shouldRejectUnsupportedServerRequest(method)) {
+      writeBridgeLog('warn', 'Declined unsupported app-server request', {
+        requestId,
+        method,
+        threadId: this.readServerRequestThreadId(params),
+        turnId: readTurnIdFromPayload(params),
+      })
+      this.sendServerRequestReply(requestId, {
+        result: this.buildUnsupportedServerRequestResult(method),
       })
       this.emitServerRequestResolved(requestId, method, params, 'automatic')
       return
@@ -4044,7 +4157,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     const model = readString(body.model).trim()
     const cwd = readString(body.cwd).trim()
     let threadId = readStringByAliases(body, 'threadId', 'thread_id')
-    const input = Array.isArray(body.input) ? body.input : []
+    const turnOptions = readRuntimeTurnOptions(body.turnOptions)
+    const input = applyRuntimeTurnOptionsToInput(Array.isArray(body.input) ? body.input : [], turnOptions)
     if (input.length === 0) {
       throw new Error('runtime/send requires input')
     }
@@ -4064,6 +4178,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         input,
         effort: body.effort,
         attachments: body.attachments,
+        turnOptions,
       }),
     })
 

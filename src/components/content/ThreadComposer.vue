@@ -71,12 +71,36 @@
         </span>
       </div>
 
+      <div v-if="selectedPlugins.length > 0 || goalModeEnabled" class="thread-composer-option-chips">
+        <span v-for="plugin in selectedPlugins" :key="plugin.id" class="thread-composer-option-chip">
+          <span class="thread-composer-option-chip-dot" aria-hidden="true" />
+          <span class="thread-composer-option-chip-name">{{ plugin.name }}</span>
+          <button
+            class="thread-composer-option-chip-remove"
+            type="button"
+            :aria-label="`移除插件 ${plugin.name}`"
+            @click="removePlugin(plugin.id)"
+          >×</button>
+        </span>
+        <span v-if="goalModeEnabled" class="thread-composer-option-chip thread-composer-option-chip--goal">
+          <span class="thread-composer-option-chip-dot" aria-hidden="true" />
+          <span class="thread-composer-option-chip-name">{{ activeGoalLabel }}</span>
+          <button
+            class="thread-composer-option-chip-remove"
+            type="button"
+            aria-label="关闭追求目标"
+            @click="disableGoalMode"
+          >×</button>
+        </span>
+      </div>
+
       <div class="thread-composer-input-wrap">
         <button
           v-if="isFileMentionOpen && isCompactViewport"
           class="thread-composer-mobile-backdrop"
           type="button"
           aria-label="关闭文件引用菜单"
+          @pointerdown.stop.prevent="closeFileMention"
           @click="closeFileMention"
         />
         <div
@@ -149,7 +173,8 @@
             class="thread-composer-mobile-backdrop"
             type="button"
             aria-label="关闭附件菜单"
-            @click="isAttachMenuOpen = false"
+            @pointerdown.stop.prevent="closeAttachMenu"
+            @click="closeAttachMenu"
           />
           <div
             v-if="isAttachMenuOpen"
@@ -162,7 +187,11 @@
               :disabled="isInteractionDisabled"
               @click="triggerPhotoLibrary"
             >
-              添加图片和文件
+              <IconTablerFilePencil class="thread-composer-attach-item-icon" />
+              <span class="thread-composer-attach-item-body">
+                <span class="thread-composer-attach-item-title">添加照片和文件</span>
+                <span class="thread-composer-attach-item-subtitle">上传图片、文档或其他附件</span>
+              </span>
             </button>
             <button
               class="thread-composer-attach-item"
@@ -170,7 +199,11 @@
               :disabled="isInteractionDisabled"
               @click="triggerFolderPicker"
             >
-              添加文件夹
+              <IconTablerFolder class="thread-composer-attach-item-icon" />
+              <span class="thread-composer-attach-item-body">
+                <span class="thread-composer-attach-item-title">添加文件夹</span>
+                <span class="thread-composer-attach-item-subtitle">批量引用整个目录里的文件</span>
+              </span>
             </button>
             <button
               class="thread-composer-attach-item"
@@ -178,40 +211,124 @@
               :disabled="isInteractionDisabled"
               @click="triggerCameraCapture"
             >
-              拍照
+              <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--text">●</span>
+              <span class="thread-composer-attach-item-body">
+                <span class="thread-composer-attach-item-title">拍照</span>
+                <span class="thread-composer-attach-item-subtitle">调用移动端相机上传图片</span>
+              </span>
             </button>
             <div class="thread-composer-attach-separator" />
-            <div class="thread-composer-attach-section" aria-label="发送模式">
-              <span class="thread-composer-attach-section-title">发送模式</span>
-              <div class="thread-composer-attach-mode-toggle" role="group" aria-label="协作模式">
+            <button
+              class="thread-composer-attach-item thread-composer-attach-item--toggle"
+              type="button"
+              :aria-pressed="selectedCollaborationMode === 'plan'"
+              :disabled="isInteractionDisabled"
+              @click="togglePlanMode"
+            >
+              <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--text">✓</span>
+              <span class="thread-composer-attach-item-body">
+                <span class="thread-composer-attach-item-title">计划模式</span>
+                <span class="thread-composer-attach-item-subtitle">
+                  {{ selectedCollaborationMode === 'plan' ? '只制定计划，发送后回到执行' : '先规划，不执行文件和命令' }}
+                </span>
+              </span>
+              <span class="thread-composer-switch" :class="{ 'is-on': selectedCollaborationMode === 'plan' }" aria-hidden="true" />
+            </button>
+            <button
+              class="thread-composer-attach-item thread-composer-attach-item--toggle"
+              type="button"
+              :aria-pressed="goalModeEnabled"
+              :disabled="isInteractionDisabled"
+              @click="toggleGoalMode"
+            >
+              <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--text">◎</span>
+              <span class="thread-composer-attach-item-body">
+                <span class="thread-composer-attach-item-title">追求目标</span>
+                <span class="thread-composer-attach-item-subtitle">{{ activeGoalLabel }}</span>
+              </span>
+              <span class="thread-composer-switch" :class="{ 'is-on': goalModeEnabled }" aria-hidden="true" />
+            </button>
+            <div v-if="goalModeEnabled" class="thread-composer-goal-editor">
+              <textarea
+                v-model="goalText"
+                class="thread-composer-goal-input"
+                placeholder="输入本轮要持续追求的目标，例如：给出可执行方案并主动补齐风险"
+                :disabled="isInteractionDisabled"
+                rows="2"
+              />
+            </div>
+            <div class="thread-composer-attach-submenu-wrap">
+              <button
+                class="thread-composer-attach-item thread-composer-attach-item--submenu"
+                type="button"
+                :aria-expanded="isPluginSubmenuOpen"
+                :disabled="isInteractionDisabled"
+                @click="togglePluginSubmenu"
+              >
+                <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--grid">⌘</span>
+                <span class="thread-composer-attach-item-body">
+                  <span class="thread-composer-attach-item-title">插件偏好</span>
+                  <span class="thread-composer-attach-item-subtitle">{{ pluginMenuSummary }}</span>
+                </span>
+                <IconTablerChevronRight
+                  class="thread-composer-attach-chevron"
+                  :class="{ 'is-open': isPluginSubmenuOpen }"
+                />
+              </button>
+              <div
+                v-if="isPluginSubmenuOpen"
+                class="thread-composer-plugin-menu"
+                :class="{ 'thread-composer-plugin-menu--inline': isCompactViewport }"
+              >
+                <div class="thread-composer-plugin-menu-header">
+                  <span>{{ pluginMenuTitle }}</span>
+                  <button
+                    type="button"
+                    class="thread-composer-plugin-menu-action"
+                    :disabled="props.isLoadingPlugins"
+                    @click.stop="onRefreshPlugins"
+                  >
+                    刷新
+                  </button>
+                </div>
+                <div v-if="props.isLoadingPlugins" class="thread-composer-plugin-menu-empty">正在读取插件...</div>
+                <div v-else-if="pluginOptions.length === 0" class="thread-composer-plugin-menu-empty">
+                  当前 app-server 没有返回可用插件
+                </div>
+                <template v-else>
+                  <button
+                    v-for="plugin in pluginOptions"
+                    :key="plugin.id"
+                    class="thread-composer-plugin-row"
+                    :class="{
+                      'is-selected': isPluginSelected(plugin.id),
+                      'is-disabled': !isPluginSelectable(plugin),
+                    }"
+                    type="button"
+                    :disabled="!isPluginSelectable(plugin)"
+                    @click="onPluginRowClick(plugin)"
+                  >
+                    <span class="thread-composer-plugin-avatar">{{ getPluginAvatar(plugin.name) }}</span>
+                    <span class="thread-composer-plugin-row-body">
+                      <span class="thread-composer-plugin-row-title">{{ plugin.name }}</span>
+                      <span class="thread-composer-plugin-row-meta">{{ getPluginMeta(plugin) }}</span>
+                    </span>
+                    <span v-if="isPluginSelected(plugin.id)" class="thread-composer-plugin-check">✓</span>
+                    <span v-else-if="plugin.authStatus === 'notLoggedIn'" class="thread-composer-plugin-login">登录</span>
+                  </button>
+                </template>
                 <button
+                  class="thread-composer-plugin-reload"
                   type="button"
-                  :class="{ 'is-active': selectedCollaborationMode === 'execute' }"
-                  :aria-pressed="selectedCollaborationMode === 'execute'"
-                  :disabled="isInteractionDisabled"
-                  @click="onCollaborationModeSelect('execute')"
+                  :disabled="props.isLoadingPlugins"
+                  @click="onReloadPlugins"
                 >
-                  执行
-                </button>
-                <button
-                  type="button"
-                  :class="{ 'is-active': selectedCollaborationMode === 'plan' }"
-                  :aria-pressed="selectedCollaborationMode === 'plan'"
-                  :disabled="isInteractionDisabled"
-                  @click="onCollaborationModeSelect('plan')"
-                >
-                  计划
+                  重新加载插件配置
                 </button>
               </div>
-              <span
-                v-if="collaborationModeHintText"
-                class="thread-composer-attach-mode-hint"
-                :class="{ 'is-plan': selectedCollaborationMode === 'plan' }"
-              >
-                {{ collaborationModeHintText }}
-              </span>
             </div>
             <div class="thread-composer-attach-section" aria-label="技能">
+              <span class="thread-composer-attach-section-title">技能</span>
               <ComposerSearchDropdown
                 class="thread-composer-attach-skill-dropdown"
                 :options="skillDropdownOptions"
@@ -254,6 +371,7 @@
               class="thread-composer-mobile-backdrop"
               type="button"
               aria-label="关闭配置菜单"
+              @pointerdown.stop.prevent="closeRuntimeSettings"
               @click="closeRuntimeSettings"
             />
             <div
@@ -424,12 +542,21 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { CollaborationMode, ReasoningEffort, SpeedMode } from '../../types/codex'
+import type {
+  CollaborationMode,
+  ComposerPluginInfo,
+  ComposerPluginSelection,
+  ComposerTurnOptions,
+  ReasoningEffort,
+  SpeedMode,
+  TurnGoalSelection,
+} from '../../types/codex'
 import { useDictation } from '../../composables/useDictation'
 import { searchComposerFiles, uploadFile, type ComposerFileSuggestion } from '../../api/codexGateway'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerBolt from '../icons/IconTablerBolt.vue'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
+import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerFolder from '../icons/IconTablerFolder.vue'
 import IconTablerMicrophone from '../icons/IconTablerMicrophone.vue'
@@ -448,6 +575,8 @@ const props = defineProps<{
   selectedSpeedMode: SpeedMode
   selectedCollaborationMode: CollaborationMode
   skills?: SkillItem[]
+  plugins?: ComposerPluginInfo[]
+  isLoadingPlugins?: boolean
   isTurnInProgress?: boolean
   isInterruptingTurn?: boolean
   isUpdatingSpeedMode?: boolean
@@ -468,6 +597,8 @@ export type ComposerDraftPayload = {
   imageUrls: string[]
   fileAttachments: FileAttachment[]
   skills: Array<{ name: string; path: string }>
+  plugins?: ComposerPluginSelection[]
+  goal?: TurnGoalSelection
 }
 
 export type SubmitPayload = {
@@ -475,6 +606,7 @@ export type SubmitPayload = {
   imageUrls: string[]
   fileAttachments: FileAttachment[]
   skills: Array<{ name: string; path: string }>
+  turnOptions?: ComposerTurnOptions
   collaborationMode: CollaborationMode
   mode: 'steer' | 'queue'
   rollbackLatestUserTurn?: boolean
@@ -492,6 +624,9 @@ const emit = defineEmits<{
   'update:selected-reasoning-effort': [effort: ReasoningEffort | '']
   'update:selected-speed-mode': [mode: SpeedMode]
   'update:selected-collaboration-mode': [mode: CollaborationMode]
+  'refresh-plugins': []
+  'reload-plugins': []
+  'login-plugin': [pluginId: string]
 }>()
 
 type SelectedImage = {
@@ -513,6 +648,9 @@ type FolderUploadGroup = {
 const draft = ref('')
 const selectedImages = ref<SelectedImage[]>([])
 const selectedSkills = ref<SkillItem[]>([])
+const selectedPlugins = ref<ComposerPluginSelection[]>([])
+const goalModeEnabled = ref(false)
+const goalText = ref('')
 const fileAttachments = ref<FileAttachment[]>([])
 const folderUploadGroups = ref<FolderUploadGroup[]>([])
 
@@ -564,6 +702,7 @@ const audioCaptureInputRef = ref<HTMLInputElement | null>(null)
 const folderPickerInputRef = ref<HTMLInputElement | null>(null)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const isAttachMenuOpen = ref(false)
+const isPluginSubmenuOpen = ref(false)
 const isRuntimeSettingsOpen = ref(false)
 const isSlashMenuOpen = ref(false)
 const mentionStartIndex = ref<number | null>(null)
@@ -633,12 +772,27 @@ const runtimeSettingsSummary = computed(() => {
 })
 
 const skillOptions = computed<SkillItem[]>(() => props.skills ?? [])
+const pluginOptions = computed<ComposerPluginInfo[]>(() => props.plugins ?? [])
 const selectedSkillPaths = computed(() => selectedSkills.value.map((s) => s.path))
 const skillTriggerLabel = computed(() => (
   selectedSkills.value.length > 0
     ? `选择技能，已选 ${selectedSkills.value.length} 个`
     : '选择技能'
 ))
+const activeGoalLabel = computed(() => {
+  const text = goalText.value.trim()
+  if (goalModeEnabled.value && text) return text
+  return goalModeEnabled.value ? '持续追求当前任务目标' : '保持默认单轮回复'
+})
+const pluginMenuTitle = computed(() =>
+  pluginOptions.value.length > 0 ? `${pluginOptions.value.length} 个可选插件偏好` : '插件偏好',
+)
+const pluginMenuSummary = computed(() => {
+  if (props.isLoadingPlugins) return '正在读取插件'
+  if (selectedPlugins.value.length > 0) return `已选 ${selectedPlugins.value.length} 个偏好`
+  if (pluginOptions.value.length > 0) return `${pluginOptions.value.length} 个能力偏好`
+  return '读取插件能力'
+})
 const skillDropdownOptions = computed(() =>
   (props.skills ?? []).map((s) => ({
     value: s.path,
@@ -657,6 +811,8 @@ const hasUnsavedDraft = computed(() =>
   draft.value.trim().length > 0
   || selectedImages.value.length > 0
   || selectedSkills.value.length > 0
+  || selectedPlugins.value.length > 0
+  || goalModeEnabled.value
   || fileAttachments.value.length > 0
   || folderUploadGroups.value.length > 0,
 )
@@ -736,6 +892,18 @@ function onCollaborationModeSelect(mode: CollaborationMode): void {
   emit('update:selected-collaboration-mode', mode)
 }
 
+function buildTurnOptions(): ComposerTurnOptions | undefined {
+  const plugins = selectedPlugins.value.map((plugin) => ({ id: plugin.id, name: plugin.name }))
+  const goal = goalModeEnabled.value
+    ? { enabled: true, text: activeGoalLabel.value.trim() || '持续追求当前任务目标' }
+    : undefined
+  if (plugins.length === 0 && !goal) return undefined
+  return {
+    ...(plugins.length > 0 ? { plugins } : {}),
+    ...(goal ? { goal } : {}),
+  }
+}
+
 function onSubmit(mode: 'steer' | 'queue' = 'steer', options?: { rollbackLatestUserTurn?: boolean }): void {
   const text = draft.value.trim()
   if (!canSubmit.value) return
@@ -744,6 +912,7 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer', options?: { rollbackLatestU
     imageUrls: selectedImages.value.map((image) => image.url),
     fileAttachments: [...fileAttachments.value],
     skills: selectedSkills.value.map((s) => ({ name: s.name, path: s.path })),
+    turnOptions: buildTurnOptions(),
     collaborationMode: props.selectedCollaborationMode,
     mode,
     rollbackLatestUserTurn: options?.rollbackLatestUserTurn === true,
@@ -791,10 +960,20 @@ function replaceDraftState(payload: ComposerDraftPayload): void {
     (props.skills ?? []).find((item) => item.path === skill.path)
     ?? { name: skill.name, description: '', path: skill.path }
   ))
+  selectedPlugins.value = (payload.plugins ?? []).map((plugin) => {
+    const matched = (props.plugins ?? []).find((item) => item.id === plugin.id)
+    return {
+      id: plugin.id,
+      name: matched?.name || plugin.name || plugin.id,
+    }
+  })
+  goalModeEnabled.value = payload.goal?.enabled === true
+  goalText.value = payload.goal?.text ?? ''
   fileAttachments.value = payload.fileAttachments.map((attachment) => ({ ...attachment }))
   folderUploadGroups.value = []
   dictationFeedback.value = ''
   isAttachMenuOpen.value = false
+  isPluginSubmenuOpen.value = false
   isRuntimeSettingsOpen.value = false
   isSlashMenuOpen.value = false
   closeFileMention()
@@ -806,6 +985,8 @@ function clearDraftState(): void {
     imageUrls: [],
     fileAttachments: [],
     skills: [],
+    plugins: [],
+    goal: { enabled: false, text: '' },
   })
 }
 
@@ -849,6 +1030,25 @@ function loadPersistedDraftForThread(threadId: string): ComposerDraftPayload | n
           && typeof skill.path === 'string'
         ))
         : [],
+      plugins: Array.isArray(parsed.plugins)
+        ? parsed.plugins.filter((plugin): plugin is ComposerPluginSelection => (
+          Boolean(plugin)
+          && typeof plugin.id === 'string'
+          && typeof plugin.name === 'string'
+        ))
+        : [],
+      goal: (
+        parsed.goal &&
+        typeof parsed.goal === 'object' &&
+        !Array.isArray(parsed.goal)
+      )
+        ? {
+            enabled: (parsed.goal as Partial<TurnGoalSelection>).enabled === true,
+            text: typeof (parsed.goal as Partial<TurnGoalSelection>).text === 'string'
+              ? ((parsed.goal as Partial<TurnGoalSelection>).text ?? '')
+              : '',
+          }
+        : { enabled: false, text: '' },
     }
   } catch {
     return null
@@ -864,6 +1064,8 @@ function persistDraftForThread(threadId: string, payload: ComposerDraftPayload):
       || payload.imageUrls.length > 0
       || payload.fileAttachments.length > 0
       || payload.skills.length > 0
+      || (payload.plugins?.length ?? 0) > 0
+      || payload.goal?.enabled === true
     if (hasContent) {
       window.localStorage.setItem(getDraftStorageKey(normalizedThreadId), JSON.stringify(payload))
       return
@@ -880,6 +1082,8 @@ function clearPersistedDraftForThread(threadId: string): void {
     imageUrls: [],
     fileAttachments: [],
     skills: [],
+    plugins: [],
+    goal: { enabled: false, text: '' },
   })
 }
 
@@ -889,6 +1093,8 @@ function getCurrentDraftPayload(): ComposerDraftPayload {
     imageUrls: selectedImages.value.map((image) => image.url),
     fileAttachments: fileAttachments.value.map((attachment) => ({ ...attachment })),
     skills: selectedSkills.value.map((skill) => ({ name: skill.name, path: skill.path })),
+    plugins: selectedPlugins.value.map((plugin) => ({ ...plugin })),
+    goal: { enabled: goalModeEnabled.value, text: goalText.value.trim() },
   }
 }
 
@@ -931,6 +1137,83 @@ function toggleRuntimeSettings(): void {
 
 function closeRuntimeSettings(): void {
   isRuntimeSettingsOpen.value = false
+}
+
+function togglePlanMode(): void {
+  if (isInteractionDisabled.value) return
+  onCollaborationModeSelect(props.selectedCollaborationMode === 'plan' ? 'execute' : 'plan')
+}
+
+function toggleGoalMode(): void {
+  if (isInteractionDisabled.value) return
+  goalModeEnabled.value = !goalModeEnabled.value
+  if (goalModeEnabled.value && !goalText.value.trim()) {
+    goalText.value = '持续追求当前任务目标，主动给出可执行的下一步。'
+  }
+}
+
+function disableGoalMode(): void {
+  goalModeEnabled.value = false
+}
+
+function togglePluginSubmenu(): void {
+  if (isInteractionDisabled.value) return
+  isPluginSubmenuOpen.value = !isPluginSubmenuOpen.value
+  if (isPluginSubmenuOpen.value && pluginOptions.value.length === 0 && !props.isLoadingPlugins) {
+    emit('refresh-plugins')
+  }
+}
+
+function isPluginSelected(pluginId: string): boolean {
+  return selectedPlugins.value.some((plugin) => plugin.id === pluginId)
+}
+
+function isPluginSelectable(plugin: ComposerPluginInfo): boolean {
+  return plugin.toolCount > 0
+    || plugin.resourceCount > 0
+    || plugin.resourceTemplateCount > 0
+    || plugin.authStatus === 'notLoggedIn'
+}
+
+function onPluginRowClick(plugin: ComposerPluginInfo): void {
+  if (!isPluginSelectable(plugin)) return
+  if (plugin.authStatus === 'notLoggedIn') {
+    emit('login-plugin', plugin.id)
+    return
+  }
+  if (isPluginSelected(plugin.id)) {
+    removePlugin(plugin.id)
+    return
+  }
+  selectedPlugins.value = [...selectedPlugins.value, { id: plugin.id, name: plugin.name }]
+}
+
+function removePlugin(pluginId: string): void {
+  selectedPlugins.value = selectedPlugins.value.filter((plugin) => plugin.id !== pluginId)
+}
+
+function onRefreshPlugins(): void {
+  emit('refresh-plugins')
+}
+
+function onReloadPlugins(): void {
+  emit('reload-plugins')
+}
+
+function getPluginAvatar(name: string): string {
+  return name.trim().slice(0, 1).toUpperCase() || 'P'
+}
+
+function getPluginMeta(plugin: ComposerPluginInfo): string {
+  if (plugin.authStatus === 'notLoggedIn') return '需要登录授权'
+  const parts: string[] = []
+  if (plugin.toolCount > 0) parts.push(`${plugin.toolCount} 个工具`)
+  if (plugin.resourceCount > 0) parts.push(`${plugin.resourceCount} 个资源`)
+  if (plugin.resourceTemplateCount > 0) parts.push(`${plugin.resourceTemplateCount} 个模板`)
+  if (plugin.authStatus === 'unsupported' && parts.length > 0) {
+    parts.push('本地能力')
+  }
+  return parts.join(' · ') || '暂无可用能力'
 }
 
 function onDictationToggle(): void {
@@ -1007,14 +1290,23 @@ function toggleAttachMenu(): void {
   isAttachMenuOpen.value = !isAttachMenuOpen.value
   if (isAttachMenuOpen.value) {
     isRuntimeSettingsOpen.value = false
+  } else {
+    isPluginSubmenuOpen.value = false
   }
 }
 
+function closeAttachMenu(): void {
+  isAttachMenuOpen.value = false
+  isPluginSubmenuOpen.value = false
+}
+
 function triggerPhotoLibrary(): void {
+  closeAttachMenu()
   photoLibraryInputRef.value?.click()
 }
 
 function triggerCameraCapture(): void {
+  closeAttachMenu()
   cameraCaptureInputRef.value?.click()
 }
 
@@ -1028,6 +1320,7 @@ function triggerAudioCapture(): void {
 }
 
 function triggerFolderPicker(): void {
+  closeAttachMenu()
   folderPickerInputRef.value?.click()
 }
 
@@ -1185,21 +1478,21 @@ function onPhotoLibraryChange(event: Event): void {
   const input = event.target as HTMLInputElement | null
   addFiles(input?.files ?? null)
   clearInputValue(input)
-  isAttachMenuOpen.value = false
+  closeAttachMenu()
 }
 
 function onCameraCaptureChange(event: Event): void {
   const input = event.target as HTMLInputElement | null
   addFiles(input?.files ?? null)
   clearInputValue(input)
-  isAttachMenuOpen.value = false
+  closeAttachMenu()
 }
 
 function onFolderPickerChange(event: Event): void {
   const input = event.target as HTMLInputElement | null
   void addFolderFiles(input?.files ?? null)
   clearInputValue(input)
-  isAttachMenuOpen.value = false
+  closeAttachMenu()
 }
 
 function onInputChange(): void {
@@ -1418,7 +1711,7 @@ function onDocumentClick(event: MouseEvent): void {
   if (isAttachMenuOpen.value) {
     const attachRoot = attachMenuRootRef.value
     if (attachRoot && !attachRoot.contains(target)) {
-      isAttachMenuOpen.value = false
+      closeAttachMenu()
     }
   }
 
@@ -1478,7 +1771,7 @@ watch(
   { immediate: true },
 )
 
-watch([draft, selectedImages, fileAttachments, selectedSkills], () => {
+watch([draft, selectedImages, fileAttachments, selectedSkills, selectedPlugins, goalModeEnabled, goalText], () => {
   if (!lastActiveThreadId) return
   persistDraftForThread(lastActiveThreadId, getCurrentDraftPayload())
 }, { deep: true })
@@ -1489,6 +1782,17 @@ watch(
     if (isFileMentionOpen.value) {
       void queueFileMentionSearch()
     }
+  },
+)
+
+watch(
+  () => props.plugins,
+  () => {
+    if (selectedPlugins.value.length === 0) return
+    selectedPlugins.value = selectedPlugins.value.map((plugin) => {
+      const matched = (props.plugins ?? []).find((item) => item.id === plugin.id)
+      return matched ? { id: matched.id, name: matched.name } : plugin
+    })
   },
 )
 
@@ -1597,6 +1901,35 @@ watch(
   @apply ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border-0 bg-transparent text-emerald-500 transition hover:bg-emerald-200 hover:text-emerald-700 text-xs leading-none p-0;
 }
 
+.thread-composer-option-chips {
+  @apply mb-2 flex flex-wrap gap-1.5;
+}
+
+.thread-composer-option-chip {
+  @apply inline-flex max-w-full items-center gap-1.5 rounded-md border border-[#d8cfc0] bg-[#f7f3ea] px-2 py-0.5 text-xs text-[#544a3d];
+}
+
+.thread-composer-option-chip--goal {
+  @apply border-amber-200 bg-amber-50 text-amber-800;
+}
+
+.thread-composer-option-chip-dot {
+  @apply h-1.5 w-1.5 shrink-0 rounded-full bg-[#0d9488];
+}
+
+.thread-composer-option-chip--goal .thread-composer-option-chip-dot {
+  @apply bg-amber-500;
+}
+
+.thread-composer-option-chip-name {
+  @apply min-w-0 truncate font-medium;
+  max-width: min(22rem, calc(100vw - 8rem));
+}
+
+.thread-composer-option-chip-remove {
+  @apply ml-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border-0 bg-transparent text-[#7a705f] transition hover:bg-[#e6ddcf] hover:text-[#2f281f] text-xs leading-none p-0;
+}
+
 .thread-composer-input-wrap {
   @apply relative;
 }
@@ -1693,15 +2026,156 @@ watch(
 }
 
 .thread-composer-attach-menu {
-  @apply absolute bottom-11 left-0 z-20 w-72 max-w-[calc(100vw_-_1rem)] rounded-xl border border-zinc-200 bg-white p-1;
+  @apply absolute bottom-11 left-0 z-20 w-72 max-w-[calc(100vw_-_1rem)] rounded-[18px] border border-[#ddd5c7] bg-[#fffdf8] p-1.5 shadow-xl shadow-[#1f2937]/10;
 }
 
 .thread-composer-attach-menu--sheet {
   @apply fixed left-3 right-3 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-[70] w-auto max-w-none rounded-[24px] border border-[#ddd5c7] bg-[#fffdf8] p-2;
+  max-height: min(82dvh, 46rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .thread-composer-attach-item {
-  @apply block w-full rounded-lg border-0 bg-transparent px-3 py-2 text-left text-sm text-zinc-800 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:text-zinc-400;
+  @apply flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[14px] border-0 bg-transparent px-2.5 py-2 text-left text-sm text-[#3b332a] transition hover:bg-[#f7f3ea] disabled:cursor-not-allowed disabled:text-zinc-400;
+  font-family: var(--font-sans-ui);
+}
+
+.thread-composer-attach-item-icon {
+  @apply h-5 w-5 shrink-0 text-[#6f6555];
+}
+
+.thread-composer-attach-item-icon--text,
+.thread-composer-attach-item-icon--grid {
+  @apply inline-flex h-5 w-5 items-center justify-center rounded-md text-sm font-semibold text-[#6f6555];
+}
+
+.thread-composer-attach-item-body {
+  @apply flex min-w-0 flex-1 flex-col;
+}
+
+.thread-composer-attach-item-title {
+  @apply truncate text-sm font-semibold leading-snug text-[#2f281f];
+}
+
+.thread-composer-attach-item-subtitle {
+  @apply truncate text-xs font-normal leading-snug text-[#8a8173];
+}
+
+.thread-composer-attach-item--toggle,
+.thread-composer-attach-item--submenu {
+  @apply pr-2;
+}
+
+.thread-composer-switch {
+  @apply relative h-6 w-10 shrink-0 rounded-full bg-[#e5ded3] transition;
+}
+
+.thread-composer-switch::after {
+  content: '';
+  @apply absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition;
+}
+
+.thread-composer-switch.is-on {
+  @apply bg-[#0d9488];
+}
+
+.thread-composer-switch.is-on::after {
+  transform: translateX(1rem);
+}
+
+.thread-composer-goal-editor {
+  @apply px-2 pb-1;
+}
+
+.thread-composer-goal-input {
+  @apply w-full resize-none rounded-[14px] border border-[#e4dac9] bg-[#fffaf3] px-3 py-2 text-sm leading-relaxed text-[#3b332a] outline-none transition focus:border-[#0d9488] disabled:cursor-not-allowed disabled:opacity-60;
+  font-family: var(--font-sans-reading);
+}
+
+.thread-composer-attach-submenu-wrap {
+  @apply relative;
+}
+
+.thread-composer-attach-chevron {
+  @apply h-4 w-4 shrink-0 text-[#8a8173] transition-transform;
+}
+
+.thread-composer-attach-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.thread-composer-plugin-menu {
+  @apply absolute bottom-0 left-[calc(100%+0.5rem)] z-[75] w-80 max-w-[calc(100vw_-_2rem)] rounded-[18px] border border-[#ddd5c7] bg-[#fffdf8] p-1.5 shadow-xl shadow-[#1f2937]/10;
+  max-height: min(32rem, calc(100dvh - 10rem));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.thread-composer-plugin-menu--inline {
+  @apply static mt-1 w-full max-w-none rounded-[16px] border-[#e4dac9] bg-[#fffaf3] shadow-none;
+  max-height: min(42dvh, 22rem);
+}
+
+.thread-composer-plugin-menu-header {
+  @apply flex items-center justify-between gap-2 px-2 py-1.5 text-xs font-semibold text-[#8a8173];
+}
+
+.thread-composer-plugin-menu-action {
+  @apply rounded-md border-0 bg-transparent px-2 py-1 text-xs font-semibold text-[#0f766e] transition hover:bg-[#edf7f5] disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+.thread-composer-plugin-menu-empty {
+  @apply px-2 py-3 text-sm text-[#8a8173];
+}
+
+.thread-composer-plugin-row {
+  @apply flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[14px] border-0 bg-transparent px-2 py-2 text-left transition hover:bg-[#f7f3ea];
+}
+
+.thread-composer-plugin-row.is-selected {
+  @apply bg-[#edf7f5];
+}
+
+.thread-composer-plugin-row.is-disabled {
+  @apply cursor-not-allowed opacity-55;
+}
+
+.thread-composer-plugin-row:disabled {
+  @apply cursor-not-allowed opacity-55;
+}
+
+.thread-composer-plugin-avatar {
+  @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#e9e4da] text-xs font-bold text-[#6f6555];
+}
+
+.thread-composer-plugin-row-body {
+  @apply flex min-w-0 flex-1 flex-col;
+}
+
+.thread-composer-plugin-row-title {
+  @apply truncate text-sm font-semibold text-[#2f281f];
+}
+
+.thread-composer-plugin-row-meta {
+  @apply truncate text-xs text-[#8a8173];
+}
+
+.thread-composer-plugin-check,
+.thread-composer-plugin-login {
+  @apply shrink-0 rounded-full px-2 py-1 text-xs font-semibold;
+}
+
+.thread-composer-plugin-check {
+  @apply text-[#0f766e];
+}
+
+.thread-composer-plugin-login {
+  @apply bg-[#f0ede5] text-[#6f6555];
+}
+
+.thread-composer-plugin-reload {
+  @apply mt-1 flex min-h-10 w-full items-center justify-center rounded-[14px] border border-[#e4dac9] bg-[#fffaf3] px-3 text-sm font-semibold text-[#544a3d] transition hover:bg-[#f7f3ea] disabled:cursor-not-allowed disabled:opacity-50;
 }
 
 .thread-composer-attach-separator {
