@@ -569,6 +569,123 @@
                           <code v-else class="message-inline-code">{{ segment.value }}</code>
                         </template>
                       </p>
+                      <div v-else-if="block.kind === 'table'" class="message-table-block">
+                        <div class="message-table-scroll" role="region" aria-label="表格内容">
+                          <table class="message-table">
+                            <thead>
+                              <tr>
+                                <th v-for="(header, headerIndex) in block.headers" :key="`table-head-${blockIndex}-${headerIndex}`">
+                                  <template v-for="(segment, segmentIndex) in header.segments" :key="`table-head-seg-${blockIndex}-${headerIndex}-${segmentIndex}`">
+                                    <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
+                                    <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
+                                    <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
+                                      <a
+                                        class="message-file-link"
+                                        :href="toBrowseUrl(segment.path)"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        :title="segment.path"
+                                        @click="onHyperlinkClick($event, toBrowseUrl(segment.path))"
+                                        @contextmenu.prevent="onFileLinkContextMenu($event, segment.path)"
+                                      >
+                                        {{ segment.displayPath }}
+                                      </a>
+                                    </span>
+                                    <a
+                                      v-else-if="segment.kind === 'url'"
+                                      class="message-file-link"
+                                      :href="segment.href"
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      :title="segment.href"
+                                      @click="onHyperlinkClick($event, segment.href)"
+                                      @contextmenu.prevent="onUrlLinkContextMenu($event, segment.href)"
+                                    >
+                                      {{ segment.value }}
+                                    </a>
+                                    <code v-else class="message-inline-code">{{ segment.value }}</code>
+                                  </template>
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr v-for="(row, rowIndex) in block.rows" :key="`table-row-${blockIndex}-${rowIndex}`">
+                                <td v-for="(cell, cellIndex) in row" :key="`table-cell-${blockIndex}-${rowIndex}-${cellIndex}`">
+                                  <template v-for="(segment, segmentIndex) in cell.segments" :key="`table-cell-seg-${blockIndex}-${rowIndex}-${cellIndex}-${segmentIndex}`">
+                                    <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
+                                    <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
+                                    <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
+                                      <a
+                                        class="message-file-link"
+                                        :href="toBrowseUrl(segment.path)"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        :title="segment.path"
+                                        @click="onHyperlinkClick($event, toBrowseUrl(segment.path))"
+                                        @contextmenu.prevent="onFileLinkContextMenu($event, segment.path)"
+                                      >
+                                        {{ segment.displayPath }}
+                                      </a>
+                                    </span>
+                                    <a
+                                      v-else-if="segment.kind === 'url'"
+                                      class="message-file-link"
+                                      :href="segment.href"
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      :title="segment.href"
+                                      @click="onHyperlinkClick($event, segment.href)"
+                                      @contextmenu.prevent="onUrlLinkContextMenu($event, segment.href)"
+                                    >
+                                      {{ segment.value }}
+                                    </a>
+                                    <code v-else class="message-inline-code">{{ segment.value }}</code>
+                                  </template>
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                        <div class="message-table-cards" aria-label="表格内容">
+                          <article v-for="(row, rowIndex) in block.rows" :key="`table-card-${blockIndex}-${rowIndex}`" class="message-table-card">
+                            <div v-for="(cell, cellIndex) in row" :key="`table-card-cell-${blockIndex}-${rowIndex}-${cellIndex}`" class="message-table-card-row">
+                              <span class="message-table-card-label">{{ block.headers[cellIndex]?.value || `列 ${cellIndex + 1}` }}</span>
+                              <span class="message-table-card-value">
+                                <template v-for="(segment, segmentIndex) in cell.segments" :key="`table-card-cell-seg-${blockIndex}-${rowIndex}-${cellIndex}-${segmentIndex}`">
+                                  <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
+                                  <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
+                                  <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
+                                    <a
+                                      class="message-file-link"
+                                      :href="toBrowseUrl(segment.path)"
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      :title="segment.path"
+                                      @click="onHyperlinkClick($event, toBrowseUrl(segment.path))"
+                                      @contextmenu.prevent="onFileLinkContextMenu($event, segment.path)"
+                                    >
+                                      {{ segment.displayPath }}
+                                    </a>
+                                  </span>
+                                  <a
+                                    v-else-if="segment.kind === 'url'"
+                                    class="message-file-link"
+                                    :href="segment.href"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    :title="segment.href"
+                                    @click="onHyperlinkClick($event, segment.href)"
+                                    @contextmenu.prevent="onUrlLinkContextMenu($event, segment.href)"
+                                  >
+                                    {{ segment.value }}
+                                  </a>
+                                  <code v-else class="message-inline-code">{{ segment.value }}</code>
+                                </template>
+                              </span>
+                            </div>
+                          </article>
+                        </div>
+                      </div>
                       <p v-else-if="isMarkdownImageFailed(entry.message.id, blockIndex)" class="message-text">{{ block.markdown }}</p>
                       <button
                         v-else
@@ -1072,6 +1189,11 @@ const latestRenderableTurnIndex = computed<number | null>(() => {
 
 function isTurnCompleted(turnIndex: number): boolean {
   if (turnIndex !== latestRenderableTurnIndex.value) return true
+  if (
+    props.isTurnInProgress !== true &&
+    !props.liveOverlay &&
+    props.pendingRequests.length === 0
+  ) return true
   return typeof workedSummaryDurationByTurnIndex.value[turnIndex] === 'number'
 }
 
@@ -1292,10 +1414,16 @@ type InlineSegment =
   | { kind: 'file'; value: string; path: string; displayPath: string; downloadName: string }
 type MessageBlock =
   | { kind: 'text'; value: string }
+  | { kind: 'table'; headers: string[]; rows: string[][] }
   | { kind: 'image'; url: string; alt: string; markdown: string }
 type PreparedMessageBlock =
   | { kind: 'text'; value: string; segments: InlineSegment[] }
+  | { kind: 'table'; headers: PreparedTableCell[]; rows: PreparedTableCell[][] }
   | { kind: 'image'; url: string; alt: string; markdown: string }
+type PreparedTableCell = {
+  value: string
+  segments: InlineSegment[]
+}
 type MeasureRefTarget = Element | ComponentPublicInstance | null
 type ScrollAnchorSnapshot = {
   measureId: string
@@ -2566,12 +2694,55 @@ function onWindowKeydownForFileLinkContextMenu(event: KeyboardEvent): void {
   closeFileLinkContextMenu()
 }
 
-function parseMessageBlocks(text: string): MessageBlock[] {
+function splitMarkdownTableRow(line: string): string[] {
+  const trimmed = line.trim()
+  if (!trimmed.includes('|')) return []
+  const normalized = trimmed.startsWith('|') ? trimmed.slice(1) : trimmed
+  const withoutTrailingPipe = normalized.endsWith('|') ? normalized.slice(0, -1) : normalized
+  const cells: string[] = []
+  let current = ''
+  let escaped = false
+
+  for (const char of withoutTrailingPipe) {
+    if (escaped) {
+      current += char
+      escaped = false
+      continue
+    }
+    if (char === '\\') {
+      escaped = true
+      continue
+    }
+    if (char === '|') {
+      cells.push(current.trim())
+      current = ''
+      continue
+    }
+    current += char
+  }
+  cells.push(current.trim())
+  return cells
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const cells = splitMarkdownTableRow(line)
+  if (cells.length < 2) return false
+  return cells.every((cell) => /^:?-{3,}:?$/u.test(cell.replace(/\s+/gu, '')))
+}
+
+function normalizeMarkdownTableRow(cells: string[], columnCount: number): string[] {
+  const normalized = cells.slice(0, columnCount)
+  while (normalized.length < columnCount) normalized.push('')
+  return normalized
+}
+
+function pushTextWithImages(blocks: MessageBlock[], text: string): void {
+  if (!text) return
   if (!text.includes('![') || !text.includes('](')) {
-    return [{ kind: 'text', value: text }]
+    blocks.push({ kind: 'text', value: text })
+    return
   }
 
-  const blocks: MessageBlock[] = []
   const imagePattern = /!\[([^\]]*)\]\(([^)\n]+)\)/gu
   let cursor = 0
 
@@ -2595,8 +2766,57 @@ function parseMessageBlocks(text: string): MessageBlock[] {
   if (cursor < text.length) {
     blocks.push({ kind: 'text', value: text.slice(cursor) })
   }
+}
+
+function parseMessageBlocks(text: string): MessageBlock[] {
+  const blocks: MessageBlock[] = []
+  const lines = text.split('\n')
+  const pendingTextLines: string[] = []
+
+  const flushText = (): void => {
+    if (pendingTextLines.length === 0) return
+    pushTextWithImages(blocks, pendingTextLines.join('\n'))
+    pendingTextLines.length = 0
+  }
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const headerCells = splitMarkdownTableRow(lines[index] ?? '')
+    const separatorLine = lines[index + 1] ?? ''
+    if (headerCells.length >= 2 && isMarkdownTableSeparator(separatorLine)) {
+      const columnCount = headerCells.length
+      const rows: string[][] = []
+      let cursor = index + 2
+      while (cursor < lines.length) {
+        const rowCells = splitMarkdownTableRow(lines[cursor] ?? '')
+        if (rowCells.length < 2) break
+        rows.push(normalizeMarkdownTableRow(rowCells, columnCount))
+        cursor += 1
+      }
+
+      if (rows.length > 0) {
+        flushText()
+        blocks.push({
+          kind: 'table',
+          headers: normalizeMarkdownTableRow(headerCells, columnCount),
+          rows,
+        })
+        index = cursor - 1
+        continue
+      }
+    }
+    pendingTextLines.push(lines[index] ?? '')
+  }
+
+  flushText()
 
   return blocks.length > 0 ? blocks : [{ kind: 'text', value: text }]
+}
+
+function prepareTableCell(value: string): PreparedTableCell {
+  return {
+    value,
+    segments: parseInlineSegments(value),
+  }
 }
 
 function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
@@ -2611,6 +2831,13 @@ function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
         kind: 'text',
         value: block.value,
         segments: parseInlineSegments(block.value),
+      }
+    }
+    if (block.kind === 'table') {
+      return {
+        kind: 'table',
+        headers: block.headers.map(prepareTableCell),
+        rows: block.rows.map((row) => row.map(prepareTableCell)),
       }
     }
     return block
@@ -3064,7 +3291,7 @@ function onRespondToolCallFailure(requestId: number): void {
       contentItems: [
         {
           type: 'inputText',
-          text: 'CX-Codex Web 已收到插件偏好，但当前 Web 端不能代执行这个 Codex 工具调用。请改用文字方式继续，或提示用户在桌面端 Codex 客户端处理需要的工具操作。',
+          text: 'CX-Codex Web 收到了 Codex 工具调用请求，但当前 Web 端不能代执行这个工具。请改用文字方案继续，或提示用户在桌面端 Codex 客户端处理需要的工具操作。',
         },
       ],
     },
@@ -4857,6 +5084,64 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono-ui);
 }
 
+.message-table-block {
+  @apply my-1 max-w-full;
+}
+
+.message-table-scroll {
+  @apply max-w-full overflow-x-auto rounded-2xl border border-[#e6ddcf] bg-[#fffdf8];
+  overscroll-behavior-x: contain;
+}
+
+.message-table {
+  @apply w-full border-collapse text-left;
+  min-width: 620px;
+  font-family: var(--font-sans-reading);
+  font-size: var(--font-size-reading, 15px);
+  line-height: 1.58;
+}
+
+.message-table th {
+  @apply border-b border-[#e5dccd] bg-[#f8f2e8] px-3 py-2 text-xs font-semibold text-[#5c5144];
+  vertical-align: top;
+}
+
+.message-table td {
+  @apply border-b border-[#eee6db] px-3 py-2 text-sm text-[#2b261f];
+  vertical-align: top;
+}
+
+.message-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.message-table th,
+.message-table td {
+  overflow-wrap: anywhere;
+}
+
+.message-table-cards {
+  @apply hidden flex-col gap-2;
+}
+
+.message-table-card {
+  @apply rounded-2xl border border-[#e8dfd1] bg-[#fffdf8] p-2.5;
+}
+
+.message-table-card-row {
+  @apply grid gap-1 border-b border-[#eee6db] py-2 first:pt-0 last:border-b-0 last:pb-0;
+  grid-template-columns: minmax(5.5rem, 34%) minmax(0, 1fr);
+}
+
+.message-table-card-label {
+  @apply text-xs font-semibold leading-relaxed text-[#7a6d5e];
+}
+
+.message-table-card-value {
+  @apply text-sm leading-relaxed text-[#29241e];
+  overflow-wrap: anywhere;
+}
+
 .message-long-summary {
   @apply m-0 text-xs leading-snug text-[#776d60];
 }
@@ -5128,6 +5413,14 @@ onBeforeUnmount(() => {
   .message-text {
     font-size: 14px;
     line-height: 1.52;
+  }
+
+  .message-table-scroll {
+    @apply hidden;
+  }
+
+  .message-table-cards {
+    @apply flex;
   }
 
   .message-card[data-role='assistant'],

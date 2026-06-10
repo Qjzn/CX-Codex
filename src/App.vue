@@ -363,8 +363,8 @@
               <section v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="App 更新">
                 <p class="sidebar-settings-section-title">App 更新</p>
                 <div class="sidebar-settings-row sidebar-settings-row--static">
-                  <span class="sidebar-settings-label">最新发布</span>
-                  <span class="sidebar-settings-value">{{ mobileShellLatestVersionLabel }}</span>
+                  <span class="sidebar-settings-label">版本状态</span>
+                  <span class="sidebar-settings-value">{{ mobileShellUpdateVersionStatusLabel }}</span>
                 </div>
                 <div class="sidebar-settings-row sidebar-settings-row--static sidebar-settings-row--stacked">
                   <span class="sidebar-settings-label">更新包</span>
@@ -1492,6 +1492,13 @@ const mobileShellLatestVersionLabel = computed(() => {
   if (!tagName) return isMobileShellUpdateLoading.value ? '检查中' : '未检测到'
   return tagName
 })
+const mobileShellUpdateVersionStatusLabel = computed(() => {
+  if (isMobileShellUpdateLoading.value) return '检查中'
+  if (hasMobileShellUpdate.value) return `可更新至 ${mobileShellLatestVersionLabel.value}`
+  if (!mobileShellLatestRelease.value?.tagName.trim()) return '未检测到'
+  if (mobileShellReleaseComparison.value > 0) return '本机版本较新'
+  return '已是最新'
+})
 const mobileShellLatestAssetLabel = computed(() => (
   mobileShellLatestRelease.value?.asset?.name.trim()
   || '当前发布页还没有 Android APK'
@@ -1512,7 +1519,7 @@ const mobileShellVersionActionLabel = computed(() => {
   if (!isMobileShellAvailable.value) return '打开 GitHub 发布页'
   if (isMobileShellInstalling.value) return '正在下载安装...'
   if (isMobileShellUpdateLoading.value) return '正在检查新版本...'
-  if (hasMobileShellUpdate.value) return `发现 ${mobileShellLatestVersionLabel.value}，点击更新`
+  if (hasMobileShellUpdate.value) return '发现新版本，点击更新'
   if (mobileShellReleaseComparison.value > 0) return '当前安装包比 GitHub 更新'
   return '点击检查 GitHub 更新'
 })
@@ -2639,6 +2646,7 @@ async function checkMobileShellUpdate(options: { showSuccessMessage?: boolean; p
     && hasMobileShellUpdate.value
     && mobileShellLatestRelease.value?.asset?.downloadUrl
   ) {
+    isSettingsOpen.value = false
     isMobileShellUpdatePromptVisible.value = true
   }
 }
@@ -2653,10 +2661,12 @@ async function runMobileShellUpdatePrimaryAction(): Promise<void> {
   }
 
   if (hasMobileShellUpdate.value) {
+    isSettingsOpen.value = false
     isMobileShellUpdatePromptVisible.value = true
     return
   }
 
+  isSettingsOpen.value = false
   await installLatestMobileShellRelease()
 }
 
@@ -2760,13 +2770,13 @@ async function restoreDefaultMobileShellServerAddress(): Promise<void> {
   }
 }
 
-async function installLatestMobileShellRelease(): Promise<void> {
-  if (!isMobileShellAvailable.value || isMobileShellInstalling.value) return
+async function installLatestMobileShellRelease(): Promise<boolean> {
+  if (!isMobileShellAvailable.value || isMobileShellInstalling.value) return false
 
   const asset = mobileShellLatestRelease.value?.asset
   if (!asset?.downloadUrl) {
     setMobileShellUpdateStatus('当前没有可下载安装的 Android 更新包')
-    return
+    return false
   }
 
   isMobileShellInstalling.value = true
@@ -2774,13 +2784,15 @@ async function installLatestMobileShellRelease(): Promise<void> {
   try {
     const result = await installMobileShellApk(asset.downloadUrl, asset.name)
     if (result.status === 'permission_required') {
-      setMobileShellUpdateStatus('请允许 CX-Codex 安装未知应用，然后再点下载安装')
+      setMobileShellUpdateStatus('更新包已下载；请允许安装未知应用，返回后会自动打开安装界面')
     } else {
       setMobileShellUpdateStatus('更新包已下载，系统安装界面正在打开')
     }
+    return true
   } catch (error) {
     const message = error instanceof Error ? error.message : '下载安装更新失败'
     setMobileShellUpdateStatus(message)
+    return false
   } finally {
     isMobileShellInstalling.value = false
   }
@@ -2791,8 +2803,10 @@ function closeMobileShellUpdatePrompt(): void {
 }
 
 async function confirmLatestMobileShellReleaseInstall(): Promise<void> {
-  closeMobileShellUpdatePrompt()
-  await installLatestMobileShellRelease()
+  const started = await installLatestMobileShellRelease()
+  if (started) {
+    closeMobileShellUpdatePrompt()
+  }
 }
 
 function closeDesktopRefreshConfirm(): void {

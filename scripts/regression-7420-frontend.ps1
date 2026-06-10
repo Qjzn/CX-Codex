@@ -5,7 +5,8 @@ param(
   [int]$DesktopWidth = 1440,
   [int]$DesktopHeight = 900,
   [int]$PhoneWidth = 393,
-  [int]$PhoneHeight = 852
+  [int]$PhoneHeight = 852,
+  [int]$AgentBrowserTimeoutSec = 25
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,17 +29,48 @@ function Assert-True {
 function Invoke-AgentBrowser {
   param([string[]]$Arguments)
 
-  $previousErrorActionPreference = $ErrorActionPreference
-  $ErrorActionPreference = "Continue"
+  $command = Get-Command agent-browser -ErrorAction Stop
+  $stdoutPath = [IO.Path]::GetTempFileName()
+  $stderrPath = [IO.Path]::GetTempFileName()
+  $process = $null
   try {
-    $output = & agent-browser @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
+    if ($command.CommandType -eq "ExternalScript") {
+      $fileName = "powershell"
+      $argumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $command.Source) + $Arguments
+    } else {
+      $fileName = $command.Source
+      $argumentList = $Arguments
+    }
+
+    $process = Start-Process `
+      -FilePath $fileName `
+      -ArgumentList $argumentList `
+      -NoNewWindow `
+      -RedirectStandardOutput $stdoutPath `
+      -RedirectStandardError $stderrPath `
+      -PassThru
+
+    if (-not $process.WaitForExit($AgentBrowserTimeoutSec * 1000)) {
+      try {
+        Stop-Process -Id $process.Id -Force -ErrorAction Stop
+      } catch {}
+      throw "agent-browser $($Arguments -join ' ') timed out after $AgentBrowserTimeoutSec seconds"
+    }
+
+    $output = @()
+    if (Test-Path -LiteralPath $stdoutPath) {
+      $output += Get-Content -LiteralPath $stdoutPath -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $stderrPath) {
+      $output += Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue
+    }
+    $exitCode = if ($null -eq $process.ExitCode) { 0 } else { [int]$process.ExitCode }
     if ($exitCode -ne 0) {
       throw "agent-browser $($Arguments -join ' ') failed with exit code $exitCode`n$($output -join "`n")"
     }
     return @($output)
   } finally {
-    $ErrorActionPreference = $previousErrorActionPreference
+    Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
   }
 }
 
@@ -51,13 +83,13 @@ function Invoke-BrowserEvalJson {
   $bytes = [Text.Encoding]::UTF8.GetBytes($Script)
   $base64 = [Convert]::ToBase64String($bytes)
   $output = Invoke-AgentBrowser -Arguments @("--session", $Session, "eval", "-b", $base64)
-  $jsonLine = $output |
+  $jsonLines = $output |
     ForEach-Object { [string]$_ } |
     Where-Object {
       $line = $_.Trim()
       $line.StartsWith("{") -or $line.StartsWith('"')
-    } |
-    Select-Object -First 1
+    }
+  $jsonLine = (($jsonLines | ForEach-Object { $_.Trim() }) -join "")
 
   if (-not $jsonLine) {
     throw "agent-browser eval did not return JSON. Output:`n$($output -join "`n")"
@@ -100,7 +132,7 @@ JSON.stringify((() => {
   const text = document.body.innerText.replace(/\s+/g, ' ').trim();
   return {
     url: location.href,
-    text: text.slice(0, 800),
+    text: text.includes('Runtime Store') ? 'Runtime Store' : '',
     textLength: text.length,
     hasBlankBody: text.length < 20,
     hasComposer: !!document.querySelector('textarea,[contenteditable=true],input[type=text],.thread-composer'),

@@ -684,10 +684,11 @@ function savePinnedThreadIds(value: string[]): void {
 function setPinnedThreadIds(value: string[]): void {
   const normalized = normalizePinnedThreadIds(value)
   if (areStringArraysEqual(pinnedThreadIds.value, normalized)) return
+  const previousPinnedThreadIds = pinnedThreadIds.value
   pinnedThreadIds.value = normalized
   savePinnedThreadIds(normalized)
   if (!hasPinnedThreadIdsHydrated.value) return
-  void persistPinnedThreadIds(normalized)
+  void persistPinnedThreadIds(normalized, previousPinnedThreadIds)
 }
 
 async function hydratePinnedThreadIds(): Promise<void> {
@@ -698,9 +699,12 @@ async function hydratePinnedThreadIds(): Promise<void> {
 
   const hydrationPromise = (async () => {
     try {
+      const hydrationSequence = pinnedThreadIdsSequence
       const serverPinnedThreadIds = await getPinnedThreadIds()
+      if (pinnedThreadIdsSequence !== hydrationSequence) return
       if (serverPinnedThreadIds.length === 0 && pinnedThreadIds.value.length > 0) {
         const migrated = await updatePinnedThreadIds(pinnedThreadIds.value)
+        if (pinnedThreadIdsSequence !== hydrationSequence) return
         pinnedThreadIds.value = migrated
         savePinnedThreadIds(migrated)
         return
@@ -725,7 +729,7 @@ async function hydratePinnedThreadIds(): Promise<void> {
   }
 }
 
-async function persistPinnedThreadIds(nextPinnedThreadIds: string[]): Promise<void> {
+async function persistPinnedThreadIds(nextPinnedThreadIds: string[], previousPinnedThreadIds: string[]): Promise<void> {
   const sequence = pinnedThreadIdsSequence + 1
   pinnedThreadIdsSequence = sequence
   try {
@@ -733,8 +737,11 @@ async function persistPinnedThreadIds(nextPinnedThreadIds: string[]): Promise<vo
     if (pinnedThreadIdsSequence !== sequence) return
     pinnedThreadIds.value = saved
     savePinnedThreadIds(saved)
-  } catch {
-    // Keep local cache when sync fails; a later hydration can reconcile the state.
+  } catch (error) {
+    if (pinnedThreadIdsSequence !== sequence) return
+    pinnedThreadIds.value = previousPinnedThreadIds
+    savePinnedThreadIds(previousPinnedThreadIds)
+    console.warn('Failed to persist pinned thread ids', error)
   }
 }
 
@@ -1184,6 +1191,15 @@ function onProjectNameInput(projectName: string): void {
 }
 
 function onRemoveProject(projectName: string): void {
+  const targetGroup = props.groups.find((group) => group.projectName === projectName)
+  const archivedThreadIds = new Set(
+    (targetGroup?.threads ?? [])
+      .map((thread) => thread.id.trim())
+      .filter((threadId) => threadId.length > 0),
+  )
+  if (archivedThreadIds.size > 0) {
+    setPinnedThreadIds(pinnedThreadIds.value.filter((threadId) => !archivedThreadIds.has(threadId)))
+  }
   emit('remove-project', projectName)
   closeProjectMenu()
 }

@@ -1,5 +1,8 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage } from 'node:http'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 import type { RequestHandler, Request, Response, NextFunction } from 'express'
 import {
   WEB_AUTH_EXPIRED_MESSAGE,
@@ -11,6 +14,21 @@ import {
 } from '../shared/webAuth.js'
 
 const TOKEN_COOKIE = 'codex_web_local_token'
+const TOKEN_MAX_AGE_SECONDS = 31536000
+const TOKEN_MAX_AGE_MS = TOKEN_MAX_AGE_SECONDS * 1000
+const TOKEN_STORE_MAX_ENTRIES = 24
+
+type StoredAuthToken = {
+  hash: string
+  createdAt: number
+  lastSeenAt: number
+}
+
+type StoredAuthState = {
+  version: 1
+  passwordFingerprint?: string
+  tokens: StoredAuthToken[]
+}
 
 function constantTimeCompare(a: string, b: string): boolean {
   const bufA = Buffer.from(a)
@@ -32,6 +50,66 @@ function parseCookies(header: string | undefined): Record<string, string> {
   return cookies
 }
 
+function getAuthTokenStorePath(): string {
+  return join(homedir(), '.cx-codex', 'web-auth-tokens.json')
+}
+
+function hashToken(token: string): string {
+  return createHash('sha256').update(token, 'utf8').digest('hex')
+}
+
+function hashPasswordFingerprint(password: string): string {
+  return createHash('sha256').update(`cx-codex-auth-password-v1:${password}`, 'utf8').digest('hex')
+}
+
+function normalizeStoredAuthToken(value: unknown, now = Date.now()): StoredAuthToken | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const hash = typeof record.hash === 'string' ? record.hash.trim() : ''
+  if (!/^[a-f0-9]{64}$/iu.test(hash)) return null
+  const createdAt = typeof record.createdAt === 'number' && Number.isFinite(record.createdAt)
+    ? Math.trunc(record.createdAt)
+    : now
+  const lastSeenAt = typeof record.lastSeenAt === 'number' && Number.isFinite(record.lastSeenAt)
+    ? Math.trunc(record.lastSeenAt)
+    : createdAt
+  if (now - Math.max(createdAt, lastSeenAt) > TOKEN_MAX_AGE_MS) return null
+  return { hash, createdAt, lastSeenAt }
+}
+
+function loadStoredAuthTokens(passwordFingerprint: string): StoredAuthToken[] {
+  try {
+    const storePath = getAuthTokenStorePath()
+    if (!existsSync(storePath)) return []
+    const parsed = JSON.parse(readFileSync(storePath, 'utf8')) as Partial<StoredAuthState>
+    if (parsed.passwordFingerprint !== passwordFingerprint) return []
+    const now = Date.now()
+    return (Array.isArray(parsed.tokens) ? parsed.tokens : [])
+      .map((token) => normalizeStoredAuthToken(token, now))
+      .filter((token): token is StoredAuthToken => token !== null)
+      .sort((first, second) => second.lastSeenAt - first.lastSeenAt)
+      .slice(0, TOKEN_STORE_MAX_ENTRIES)
+  } catch {
+    return []
+  }
+}
+
+function persistStoredAuthTokens(tokens: StoredAuthToken[], passwordFingerprint: string): void {
+  try {
+    const now = Date.now()
+    const normalized = tokens
+      .map((token) => normalizeStoredAuthToken(token, now))
+      .filter((token): token is StoredAuthToken => token !== null)
+      .sort((first, second) => second.lastSeenAt - first.lastSeenAt)
+      .slice(0, TOKEN_STORE_MAX_ENTRIES)
+    const storePath = getAuthTokenStorePath()
+    mkdirSync(dirname(storePath), { recursive: true })
+    writeFileSync(storePath, JSON.stringify({ version: 1, passwordFingerprint, tokens: normalized }, null, 2), 'utf8')
+  } catch {
+    // Authentication should keep working in memory even if persistence is unavailable.
+  }
+}
+
 function isLocalhostRemote(remote: string): boolean {
   return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
 }
@@ -49,11 +127,17 @@ function clearTokenCookie(res: Response): void {
   res.setHeader('Set-Cookie', `${TOKEN_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`)
 }
 
+function isValidStoredTokenHash(hash: string, storedHash: string): boolean {
+  if (hash.length !== storedHash.length) return false
+  return timingSafeEqual(Buffer.from(hash), Buffer.from(storedHash))
+}
+
 function isAuthorizedByRequestLike(
   remoteAddress: string | undefined,
   hostHeader: string | undefined,
   cookieHeader: string | undefined,
-  validTokens: Set<string>,
+  validTokenHashes: Map<string, StoredAuthToken>,
+  passwordFingerprint: string,
 ): boolean {
   const remote = remoteAddress ?? ''
   if (isLocalhostRemote(remote) || isLocalhostHost(hostHeader ?? '')) {
@@ -62,7 +146,24 @@ function isAuthorizedByRequestLike(
 
   const cookies = parseCookies(cookieHeader)
   const token = cookies[TOKEN_COOKIE]
-  return Boolean(token && validTokens.has(token))
+  if (!token) return false
+  const incomingHash = hashToken(token)
+  for (const [storedHash, stored] of validTokenHashes.entries()) {
+    if (!isValidStoredTokenHash(incomingHash, storedHash)) continue
+    const now = Date.now()
+    if (now - Math.max(stored.createdAt, stored.lastSeenAt) > TOKEN_MAX_AGE_MS) {
+      validTokenHashes.delete(storedHash)
+      persistStoredAuthTokens([...validTokenHashes.values()], passwordFingerprint)
+      return false
+    }
+    if (now - stored.lastSeenAt > 60_000) {
+      stored.lastSeenAt = now
+      validTokenHashes.set(storedHash, stored)
+      persistStoredAuthTokens([...validTokenHashes.values()], passwordFingerprint)
+    }
+    return true
+  }
+  return false
 }
 
 const LOGIN_PAGE_HTML = `<!DOCTYPE html>
@@ -187,10 +288,14 @@ export type AuthSession = {
 }
 
 export function createAuthSession(password: string): AuthSession {
-  const validTokens = new Set<string>()
+  const validTokenHashes = new Map<string, StoredAuthToken>()
+  const passwordFingerprint = hashPasswordFingerprint(password)
+  for (const token of loadStoredAuthTokens(passwordFingerprint)) {
+    validTokenHashes.set(token.hash, token)
+  }
 
   const middleware: RequestHandler = (req: Request, res: Response, next: NextFunction): void => {
-    if (isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, validTokens)) {
+    if (isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, validTokenHashes, passwordFingerprint)) {
       next()
       return
     }
@@ -211,9 +316,16 @@ export function createAuthSession(password: string): AuthSession {
           }
 
           const token = randomBytes(32).toString('hex')
-          validTokens.add(token)
+          const tokenHash = hashToken(token)
+          const now = Date.now()
+          validTokenHashes.set(tokenHash, {
+            hash: tokenHash,
+            createdAt: now,
+            lastSeenAt: now,
+          })
+          persistStoredAuthTokens([...validTokenHashes.values()], passwordFingerprint)
 
-          res.setHeader('Set-Cookie', `${TOKEN_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`)
+          res.setHeader('Set-Cookie', `${TOKEN_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${TOKEN_MAX_AGE_SECONDS}`)
           res.json({ ok: true })
         } catch {
           res.status(400).json({ error: '请求体格式无效' })
@@ -241,7 +353,7 @@ export function createAuthSession(password: string): AuthSession {
   return {
     middleware,
     isRequestAuthorized: (req: IncomingMessage) => (
-      isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, validTokens)
+      isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, validTokenHashes, passwordFingerprint)
     ),
   }
 }

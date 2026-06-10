@@ -28,6 +28,7 @@ import {
 import type {
   CollaborationMode,
   ComposerPluginInfo,
+  ComposerPluginSelection,
   ComposerTurnOptions,
   PluginAuthStatus,
   SpeedMode,
@@ -1011,6 +1012,7 @@ function buildTurnStartInput(
   imageUrls: string[] = [],
   skills?: Array<{ name: string; path: string }>,
   fileAttachments: FileAttachmentParam[] = [],
+  plugins?: ComposerPluginSelection[],
 ): Array<Record<string, unknown>> {
   const finalText = buildTextWithAttachments(text, fileAttachments)
   const input: Array<Record<string, unknown>> = [{ type: 'text', text: finalText }]
@@ -1033,6 +1035,15 @@ function buildTurnStartInput(
   if (skills) {
     for (const skill of skills) {
       input.push({ type: 'skill', name: skill.name, path: skill.path })
+    }
+  }
+  if (plugins) {
+    for (const plugin of plugins) {
+      const name = plugin.name.trim()
+      const id = plugin.id.trim()
+      const path = plugin.path?.trim() || (plugin.source === 'app' ? `app://${id}` : `plugin://${id}`)
+      if (!name || !path) continue
+      input.push({ type: 'mention', name, path })
     }
   }
   return input
@@ -1089,7 +1100,7 @@ export async function startRuntimeThreadTurn(args: {
   const body: Record<string, unknown> = {
     threadId: args.threadId?.trim() ?? '',
     cwd: args.cwd?.trim() ?? '',
-    input: buildTurnStartInput(args.text, args.imageUrls ?? [], args.skills, fileAttachments),
+    input: buildTurnStartInput(args.text, args.imageUrls ?? [], args.skills, fileAttachments, args.turnOptions?.plugins),
     attachments: fileAttachments.map((f) => ({ label: f.label, path: f.path, fsPath: f.fsPath })),
     collaborationMode: args.collaborationMode ?? 'execute',
     turnOptions: args.turnOptions,
@@ -2065,6 +2076,18 @@ type McpServerStatusResponseEntry = {
   authStatus?: string
 }
 
+type AppListResponseEntry = {
+  id?: string
+  name?: string
+  description?: string | null
+  logoUrl?: string | null
+  logoUrlDark?: string | null
+  distributionChannel?: string | null
+  installUrl?: string | null
+  isAccessible?: boolean
+  isEnabled?: boolean
+}
+
 function normalizePluginAuthStatus(value: unknown): PluginAuthStatus {
   if (
     value === 'unsupported' ||
@@ -2100,6 +2123,10 @@ function normalizePluginDisplayName(name: string): string {
     .join(' ')
 }
 
+function normalizePluginListKey(source: 'mcp' | 'app', id: string): string {
+  return `${source}:${id.trim().toLowerCase()}`
+}
+
 function normalizeMcpServerStatus(entry: McpServerStatusResponseEntry): ComposerPluginInfo | null {
   const rawName = typeof entry.name === 'string' ? entry.name.trim() : ''
   if (!rawName) return null
@@ -2120,6 +2147,8 @@ function normalizeMcpServerStatus(entry: McpServerStatusResponseEntry): Composer
     id: rawName,
     name: normalizePluginDisplayName(rawName),
     description: tools[0]?.description || '',
+    source: 'mcp',
+    mentionPath: `plugin://${rawName}`,
     authStatus: normalizePluginAuthStatus(entry.authStatus),
     toolCount: tools.length,
     resourceCount: Array.isArray(entry.resources) ? entry.resources.length : 0,
@@ -2128,10 +2157,39 @@ function normalizeMcpServerStatus(entry: McpServerStatusResponseEntry): Composer
   }
 }
 
+function normalizeAppPluginInfo(entry: AppListResponseEntry): ComposerPluginInfo | null {
+  const id = typeof entry.id === 'string' ? entry.id.trim() : ''
+  if (!id) return null
+  const rawName = typeof entry.name === 'string' ? entry.name.trim() : ''
+  const description = typeof entry.description === 'string' ? entry.description.trim() : ''
+  const distributionChannel = typeof entry.distributionChannel === 'string'
+    ? entry.distributionChannel.trim()
+    : null
+  const installUrl = typeof entry.installUrl === 'string' ? entry.installUrl.trim() : null
+
+  return {
+    id,
+    name: rawName || normalizePluginDisplayName(id),
+    description,
+    source: 'app',
+    mentionPath: `app://${id}`,
+    authStatus: 'unknown',
+    isAccessible: entry.isAccessible !== false,
+    isEnabled: entry.isEnabled !== false,
+    distributionChannel: distributionChannel || null,
+    installUrl: installUrl || null,
+    toolCount: 0,
+    resourceCount: 0,
+    resourceTemplateCount: 0,
+    tools: [],
+  }
+}
+
 export async function getComposerPluginsList(): Promise<ComposerPluginInfo[]> {
+  const plugins: ComposerPluginInfo[] = []
+  const seen = new Set<string>()
+
   try {
-    const plugins: ComposerPluginInfo[] = []
-    const seen = new Set<string>()
     let cursor: string | null = null
     do {
       const params: Record<string, unknown> = {}
@@ -2142,18 +2200,46 @@ export async function getComposerPluginsList(): Promise<ComposerPluginInfo[]> {
       )
       for (const entry of payload.data ?? []) {
         const plugin = normalizeMcpServerStatus(entry)
-        if (!plugin || seen.has(plugin.id)) continue
-        seen.add(plugin.id)
+        if (!plugin) continue
+        const key = normalizePluginListKey(plugin.source, plugin.id)
+        if (seen.has(key)) continue
+        seen.add(key)
         plugins.push(plugin)
       }
       cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.trim()
         ? payload.nextCursor.trim()
         : null
     } while (cursor)
-    return plugins.sort((first, second) => first.name.localeCompare(second.name))
   } catch {
-    return []
+    // Older app-server builds may not expose MCP status. Keep app-list fallback below.
   }
+
+  try {
+    let cursor: string | null = null
+    do {
+      const params: Record<string, unknown> = {}
+      if (cursor) params.cursor = cursor
+      const payload = await callRpc<{ data?: AppListResponseEntry[]; nextCursor?: string | null }>('app/list', params)
+      for (const entry of payload.data ?? []) {
+        const plugin = normalizeAppPluginInfo(entry)
+        if (!plugin) continue
+        const key = normalizePluginListKey(plugin.source, plugin.id)
+        if (seen.has(key)) continue
+        seen.add(key)
+        plugins.push(plugin)
+      }
+      cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.trim()
+        ? payload.nextCursor.trim()
+        : null
+    } while (cursor)
+  } catch {
+    // App list is optional. MCP plugins remain usable without it.
+  }
+
+  return plugins.sort((first, second) => {
+    if (first.source !== second.source) return first.source === 'mcp' ? -1 : 1
+    return first.name.localeCompare(second.name)
+  })
 }
 
 export async function startComposerPluginOauthLogin(pluginId: string): Promise<string> {

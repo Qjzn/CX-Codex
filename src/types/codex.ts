@@ -6,10 +6,13 @@ export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | '
 export type SpeedMode = 'standard' | 'fast'
 export type CollaborationMode = 'execute' | 'plan'
 export type PluginAuthStatus = 'unsupported' | 'notLoggedIn' | 'bearerToken' | 'oAuth' | 'unknown'
+export type ComposerPluginSource = 'mcp' | 'app'
 
 export type ComposerPluginSelection = {
   id: string
   name: string
+  path?: string
+  source?: ComposerPluginSource
 }
 
 export type TurnGoalSelection = {
@@ -26,7 +29,13 @@ export type ComposerPluginInfo = {
   id: string
   name: string
   description: string
+  source: ComposerPluginSource
+  mentionPath: string
   authStatus: PluginAuthStatus
+  isAccessible?: boolean
+  isEnabled?: boolean
+  distributionChannel?: string | null
+  installUrl?: string | null
   toolCount: number
   resourceCount: number
   resourceTemplateCount: number

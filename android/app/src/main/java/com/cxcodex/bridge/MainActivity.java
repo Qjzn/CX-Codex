@@ -40,6 +40,7 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         configureWebViewDownloadListener();
+        MobileShellPlugin.retryPendingApkInstall(this);
     }
 
     private void configureWebViewDownloadListener() {
@@ -57,6 +58,18 @@ public class MainActivity extends BridgeActivity {
         String contentDisposition,
         String mimetype,
         long contentLength
+    ) {
+        new Thread(() -> {
+            MobileShellPlugin.ensureWebAuthCookie(this, url);
+            enqueueWebViewDownload(url, userAgent, contentDisposition, mimetype);
+        }).start();
+    }
+
+    private void enqueueWebViewDownload(
+        String url,
+        String userAgent,
+        String contentDisposition,
+        String mimetype
     ) {
         try {
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
@@ -81,14 +94,18 @@ public class MainActivity extends BridgeActivity {
 
             DownloadManager manager = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
             if (manager == null) {
-                Toast.makeText(this, "系统下载服务不可用", Toast.LENGTH_SHORT).show();
+                showToastOnUiThread("系统下载服务不可用", Toast.LENGTH_SHORT);
                 return;
             }
             manager.enqueue(request);
-            Toast.makeText(this, "已开始下载：" + fileName, Toast.LENGTH_SHORT).show();
+            showToastOnUiThread("已开始下载：" + fileName, Toast.LENGTH_SHORT);
         } catch (Exception exception) {
-            Toast.makeText(this, "下载失败：" + exception.getMessage(), Toast.LENGTH_LONG).show();
+            showToastOnUiThread("下载失败：" + exception.getMessage(), Toast.LENGTH_LONG);
         }
+    }
+
+    private void showToastOnUiThread(String message, int duration) {
+        runOnUiThread(() -> Toast.makeText(this, message, duration).show());
     }
 
     private void showServerSetupScreen() {

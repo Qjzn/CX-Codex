@@ -50,6 +50,7 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
 
@@ -61,6 +62,7 @@ public class MobileShellPlugin extends Plugin {
     private static final int NOTIFICATION_PERMISSION_REQUEST_CODE = 7420;
     private static final String TASK_NOTIFICATION_CHANNEL_ID = "cx_codex_tasks";
     private static final String TASK_NOTIFICATION_CHANNEL_NAME = "CX-Codex 任务";
+    private static final String PREF_PENDING_APK_INSTALL_PATH = "pending_apk_install_path";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -376,15 +378,6 @@ public class MobileShellPlugin extends Plugin {
             fileName = fileName + ".apk";
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getContext().getPackageManager().canRequestPackageInstalls()) {
-            openUnknownAppsSettings();
-            JSObject result = new JSObject();
-            result.put("status", "permission_required");
-            result.put("fileName", fileName);
-            call.resolve(result);
-            return;
-        }
-
         final String resolvedFileName = fileName;
         new Thread(() -> downloadAndInstallApk(call, downloadUrl, resolvedFileName)).start();
     }
@@ -523,7 +516,20 @@ public class MobileShellPlugin extends Plugin {
             File apkFile = targetFile;
             mainHandler.post(() -> {
                 try {
-                    openInstallIntent(apkFile);
+                    if (requiresUnknownAppsPermission(getContext())) {
+                        rememberPendingApkInstall(getContext(), apkFile);
+                        openUnknownAppsSettings(getContext());
+                        showToast("更新包已下载，请允许安装未知应用后返回 CX-Codex");
+                        JSObject result = new JSObject();
+                        result.put("status", "permission_required");
+                        result.put("fileName", fileName);
+                        result.put("savedPath", apkFile.getAbsolutePath());
+                        call.resolve(result);
+                        return;
+                    }
+
+                    openInstallIntent(getContext(), apkFile);
+                    clearPendingApkInstall(getContext());
                     JSObject result = new JSObject();
                     result.put("status", "started");
                     result.put("fileName", fileName);
@@ -568,23 +574,13 @@ public class MobileShellPlugin extends Plugin {
                 throw new IOException("无法清理旧临时文件");
             }
 
-            connection = (HttpURLConnection) new URL(downloadUrl).openConnection();
-            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
-            connection.setRequestProperty("Accept", buildFileAcceptHeader(requestedMimeType));
-            connection.setRequestProperty("User-Agent", "CX-Codex-Android-FileOpener");
-            String cookies = CookieManager.getInstance().getCookie(downloadUrl);
-            if (cookies != null && !cookies.isEmpty()) {
-                connection.setRequestProperty("Cookie", cookies);
-            }
-            connection.setUseCaches(false);
-            connection.setInstanceFollowRedirects(true);
-            connection.connect();
-
-            int statusCode = connection.getResponseCode();
-            if (statusCode < 200 || statusCode >= 300) {
-                throw new IOException("HTTP " + statusCode);
-            }
+            connection = openVerifiedFileConnection(
+                downloadUrl,
+                buildFileAcceptHeader(requestedMimeType),
+                "CX-Codex-Android-FileOpener",
+                fileName,
+                requestedMimeType
+            );
 
             long expectedLength = connection.getContentLengthLong();
             long totalBytes = 0L;
@@ -644,23 +640,13 @@ public class MobileShellPlugin extends Plugin {
         boolean mediaStorePending = false;
         File tempFile = null;
         try {
-            connection = (HttpURLConnection) new URL(downloadUrl).openConnection();
-            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
-            connection.setRequestProperty("Accept", buildFileAcceptHeader(requestedMimeType));
-            connection.setRequestProperty("User-Agent", "CX-Codex-Android-FileDownloader");
-            String cookies = CookieManager.getInstance().getCookie(downloadUrl);
-            if (cookies != null && !cookies.isEmpty()) {
-                connection.setRequestProperty("Cookie", cookies);
-            }
-            connection.setUseCaches(false);
-            connection.setInstanceFollowRedirects(true);
-            connection.connect();
-
-            int statusCode = connection.getResponseCode();
-            if (statusCode < 200 || statusCode >= 300) {
-                throw new IOException("HTTP " + statusCode);
-            }
+            connection = openVerifiedFileConnection(
+                downloadUrl,
+                buildFileAcceptHeader(requestedMimeType),
+                "CX-Codex-Android-FileDownloader",
+                fileName,
+                requestedMimeType
+            );
 
             long expectedLength = connection.getContentLengthLong();
             String responseMimeType = normalizeMimeType(connection.getContentType());
@@ -988,6 +974,157 @@ public class MobileShellPlugin extends Plugin {
         }
     }
 
+    private HttpURLConnection openVerifiedFileConnection(
+        String downloadUrl,
+        String acceptHeader,
+        String userAgent,
+        String fileName,
+        String requestedMimeType
+    ) throws IOException {
+        ensureWebAuthCookie(downloadUrl);
+
+        HttpURLConnection connection = openFileConnection(downloadUrl, acceptHeader, userAgent);
+        verifyFileConnection(connection, fileName, requestedMimeType);
+        if (!isUnexpectedHtmlFileResponse(connection, fileName, requestedMimeType)) {
+            return connection;
+        }
+
+        connection.disconnect();
+        if (performWebAuthLogin(downloadUrl)) {
+            connection = openFileConnection(downloadUrl, acceptHeader, userAgent);
+            verifyFileConnection(connection, fileName, requestedMimeType);
+            if (!isUnexpectedHtmlFileResponse(connection, fileName, requestedMimeType)) {
+                return connection;
+            }
+            connection.disconnect();
+        }
+
+        throw new IOException("登录状态已失效，请在 CX-Codex 内重新登录后再打开文件");
+    }
+
+    private HttpURLConnection openFileConnection(String downloadUrl, String acceptHeader, String userAgent) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection) new URL(downloadUrl).openConnection();
+        connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        connection.setReadTimeout(READ_TIMEOUT_MS);
+        connection.setRequestProperty("Accept", acceptHeader);
+        connection.setRequestProperty("User-Agent", userAgent);
+        String cookies = CookieManager.getInstance().getCookie(downloadUrl);
+        if (cookies != null && !cookies.isEmpty()) {
+            connection.setRequestProperty("Cookie", cookies);
+        }
+        connection.setUseCaches(false);
+        connection.setInstanceFollowRedirects(true);
+        connection.connect();
+        return connection;
+    }
+
+    private void verifyFileConnection(HttpURLConnection connection, String fileName, String requestedMimeType) throws IOException {
+        int statusCode = connection.getResponseCode();
+        if (statusCode == HttpURLConnection.HTTP_UNAUTHORIZED || statusCode == HttpURLConnection.HTTP_FORBIDDEN) {
+            throw new IOException("登录状态已失效，请重新登录后再试");
+        }
+        if (statusCode < 200 || statusCode >= 300) {
+            throw new IOException("HTTP " + statusCode);
+        }
+        if (isUnexpectedHtmlFileResponse(connection, fileName, requestedMimeType)) {
+            return;
+        }
+    }
+
+    private boolean isUnexpectedHtmlFileResponse(HttpURLConnection connection, String fileName, String requestedMimeType) {
+        String responseMimeType = normalizeMimeType(connection.getContentType());
+        if (!responseMimeType.contains("text/html")) {
+            return false;
+        }
+        String expectedMimeType = resolveFileMimeType(fileName, requestedMimeType, "");
+        return !expectedMimeType.equals("text/html") && !expectedMimeType.equals("application/octet-stream");
+    }
+
+    public static void ensureWebAuthCookie(Context context, String downloadUrl) {
+        if (context == null) {
+            return;
+        }
+        String cookies = CookieManager.getInstance().getCookie(downloadUrl);
+        if (cookies != null && cookies.contains("codex_web_local_token=")) {
+            return;
+        }
+        performWebAuthLogin(context, downloadUrl);
+    }
+
+    private void ensureWebAuthCookie(String downloadUrl) {
+        ensureWebAuthCookie(getContext(), downloadUrl);
+    }
+
+    private boolean performWebAuthLogin(String downloadUrl) {
+        return performWebAuthLogin(getContext(), downloadUrl);
+    }
+
+    private static boolean performWebAuthLogin(Context context, String downloadUrl) {
+        if (context == null) {
+            return false;
+        }
+        String authKey = MobileShellConfig.getStoredAuthKey(context);
+        if (authKey.isEmpty()) {
+            return false;
+        }
+
+        HttpURLConnection loginConnection = null;
+        try {
+            URL fileUrl = new URL(downloadUrl);
+            String origin = fileUrl.getProtocol() + "://" + fileUrl.getHost();
+            if (fileUrl.getPort() >= 0) {
+                origin += ":" + fileUrl.getPort();
+            }
+            URL loginUrl = new URL(origin + "/auth/login");
+            loginConnection = (HttpURLConnection) loginUrl.openConnection();
+            loginConnection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            loginConnection.setReadTimeout(CONNECT_TIMEOUT_MS);
+            loginConnection.setRequestMethod("POST");
+            loginConnection.setDoOutput(true);
+            loginConnection.setUseCaches(false);
+            loginConnection.setInstanceFollowRedirects(false);
+            loginConnection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            loginConnection.setRequestProperty("Accept", "application/json");
+            loginConnection.setRequestProperty("User-Agent", "CX-Codex-Android-FileAuth");
+            String payload = "{\"password\":\"" + escapeJson(authKey) + "\"}";
+            byte[] payloadBytes = payload.getBytes(StandardCharsets.UTF_8);
+            loginConnection.setFixedLengthStreamingMode(payloadBytes.length);
+            try (OutputStream outputStream = loginConnection.getOutputStream()) {
+                outputStream.write(payloadBytes);
+                outputStream.flush();
+            }
+            int statusCode = loginConnection.getResponseCode();
+            if (statusCode < 200 || statusCode >= 300) {
+                return false;
+            }
+            String setCookie = loginConnection.getHeaderField("Set-Cookie");
+            if (setCookie == null || setCookie.trim().isEmpty()) {
+                return false;
+            }
+            CookieManager cookieManager = CookieManager.getInstance();
+            cookieManager.setCookie(origin, setCookie);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                cookieManager.flush();
+            }
+            return true;
+        } catch (Exception exception) {
+            return false;
+        } finally {
+            if (loginConnection != null) {
+                loginConnection.disconnect();
+            }
+        }
+    }
+
+    private static String escapeJson(String value) {
+        return value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t");
+    }
+
     private void openFileIntent(File file, String mimeType) {
         Uri fileUri = FileProvider.getUriForFile(
             getContext(),
@@ -1014,11 +1151,15 @@ public class MobileShellPlugin extends Plugin {
     }
 
     private void grantUriReadPermissions(Intent intent, Uri uri) {
-        List<ResolveInfo> resolvedActivities = getContext()
+        grantUriReadPermissions(getContext(), intent, uri);
+    }
+
+    private static void grantUriReadPermissions(Context context, Intent intent, Uri uri) {
+        List<ResolveInfo> resolvedActivities = context
             .getPackageManager()
             .queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY);
         for (ResolveInfo resolvedActivity : resolvedActivities) {
-            getContext().grantUriPermission(
+            context.grantUriPermission(
                 resolvedActivity.activityInfo.packageName,
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -1085,27 +1226,83 @@ public class MobileShellPlugin extends Plugin {
         }
     }
 
-    private void openInstallIntent(File apkFile) {
+    public static void retryPendingApkInstall(Context context) {
+        if (context == null || requiresUnknownAppsPermission(context)) {
+            return;
+        }
+
+        String apkPath = MobileShellConfig.getPreferences(context).getString(PREF_PENDING_APK_INSTALL_PATH, "");
+        if (apkPath == null || apkPath.trim().isEmpty()) {
+            return;
+        }
+
+        File apkFile = new File(apkPath.trim());
+        if (!apkFile.exists() || apkFile.length() <= 0) {
+            clearPendingApkInstall(context);
+            return;
+        }
+
+        try {
+            openInstallIntent(context, apkFile);
+            clearPendingApkInstall(context);
+        } catch (Exception exception) {
+            Toast.makeText(context, "打开更新安装包失败：" + exception.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private static void rememberPendingApkInstall(Context context, File apkFile) {
+        MobileShellConfig.getPreferences(context)
+            .edit()
+            .putString(PREF_PENDING_APK_INSTALL_PATH, apkFile.getAbsolutePath())
+            .apply();
+    }
+
+    private static void clearPendingApkInstall(Context context) {
+        MobileShellConfig.getPreferences(context)
+            .edit()
+            .remove(PREF_PENDING_APK_INSTALL_PATH)
+            .apply();
+    }
+
+    private static boolean requiresUnknownAppsPermission(Context context) {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            && !context.getPackageManager().canRequestPackageInstalls();
+    }
+
+    private static void openInstallIntent(Context context, File apkFile) {
         Uri apkUri = FileProvider.getUriForFile(
-            getContext(),
-            getContext().getPackageName() + ".fileprovider",
+            context,
+            context.getPackageName() + ".fileprovider",
             apkFile
         );
 
-        Intent installIntent = new Intent(Intent.ACTION_VIEW);
+        Intent installIntent = new Intent(Intent.ACTION_INSTALL_PACKAGE);
         installIntent.setDataAndType(apkUri, "application/vnd.android.package-archive");
         installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        getContext().startActivity(installIntent);
+        installIntent.putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true);
+        installIntent.putExtra(Intent.EXTRA_RETURN_RESULT, false);
+        grantUriReadPermissions(context, installIntent, apkUri);
+
+        try {
+            context.startActivity(installIntent);
+        } catch (ActivityNotFoundException exception) {
+            Intent fallbackIntent = new Intent(Intent.ACTION_VIEW);
+            fallbackIntent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+            fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            fallbackIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            grantUriReadPermissions(context, fallbackIntent, apkUri);
+            context.startActivity(fallbackIntent);
+        }
     }
 
-    private void openUnknownAppsSettings() {
+    private static void openUnknownAppsSettings(Context context) {
         Intent settingsIntent = new Intent(
             Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-            Uri.parse("package:" + getContext().getPackageName())
+            Uri.parse("package:" + context.getPackageName())
         );
         settingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        getContext().startActivity(settingsIntent);
+        context.startActivity(settingsIntent);
     }
 
     private void scheduleRestart() {

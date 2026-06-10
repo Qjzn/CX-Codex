@@ -3,13 +3,15 @@ param(
   [int]$Port = 7420,
   [string]$ConfigPath = "$env:USERPROFILE\.cx-codex\config.json",
   [string]$NodePath = "C:\Program Files\nodejs\node.exe",
-  [string]$BindHealthHost = "127.0.0.1"
+  [string]$BindHealthHost = "127.0.0.1",
+  [string]$ExpectedVersion = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $distCliPath = Join-Path $repoRoot "dist-cli\index.js"
+$packageJsonPath = Join-Path $repoRoot "package.json"
 $logDir = Join-Path $env:USERPROFILE ".cx-codex\logs"
 $defaultConfigPath = [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE ".cx-codex\config.json"))
 $legacyConfigPath = [IO.Path]::GetFullPath((Join-Path $env:USERPROFILE ".codexui\config.json"))
@@ -72,6 +74,13 @@ function Test-Health {
 
 if (-not (Test-Path -LiteralPath $distCliPath)) {
   throw "Missing CLI entry: $distCliPath"
+}
+
+if (-not $ExpectedVersion -and (Test-Path -LiteralPath $packageJsonPath)) {
+  try {
+    $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
+    $ExpectedVersion = [string]$packageJson.version
+  } catch {}
 }
 
 if (-not (Test-Path -LiteralPath $NodePath)) {
@@ -142,9 +151,22 @@ if (-not $healthPayload) {
   throw "Service started with PID $($process.Id), but /health did not become ready on port $Port."
 }
 
+if ($ExpectedVersion) {
+  $startupOutput = Get-Content -Raw -LiteralPath $outLog -ErrorAction SilentlyContinue
+  $versionMatch = [regex]::Match([string]$startupOutput, "Version:\s+([^\r\n]+)")
+  $actualVersion = if ($versionMatch.Success) { $versionMatch.Groups[1].Value.Trim() } else { "" }
+  if ($actualVersion -ne $ExpectedVersion) {
+    try {
+      Stop-Process -Id $process.Id -Force -ErrorAction Stop
+    } catch {}
+    throw "Service started with unexpected version '$actualVersion'; expected '$ExpectedVersion'. OutLog: $outLog"
+  }
+}
+
 [PSCustomObject]@{
   Port = $Port
   Pid = $process.Id
+  Version = $ExpectedVersion
   Health = $healthPayload
   OutLog = $outLog
   ErrLog = $errLog

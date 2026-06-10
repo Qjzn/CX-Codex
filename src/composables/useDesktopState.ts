@@ -43,6 +43,7 @@ import {
 import type {
   CollaborationMode,
   ComposerPluginInfo,
+  ComposerPluginSource,
   ComposerTurnOptions,
   CommandExecutionData,
   ReasoningEffort,
@@ -126,21 +127,22 @@ const READ_STATE_STORAGE_KEY = 'codex-web-local.thread-read-state.v1'
 const SCROLL_STATE_STORAGE_KEY = 'codex-web-local.thread-scroll-state.v1'
 const SELECTED_THREAD_STORAGE_KEY = 'codex-web-local.selected-thread-id.v1'
 const SELECTED_MODEL_STORAGE_KEY = 'codex-web-local.selected-model-id.v1'
+const SELECTED_REASONING_EFFORT_STORAGE_KEY = 'codex-web-local.selected-reasoning-effort.v1'
 const SELECTED_COLLABORATION_MODE_STORAGE_KEY = 'codex-web-local.selected-collaboration-mode.v1'
 const PROJECT_ORDER_STORAGE_KEY = 'codex-web-local.project-order.v1'
 const PROJECT_DISPLAY_NAME_STORAGE_KEY = 'codex-web-local.project-display-name.v1'
 const HIDDEN_THREAD_IDS_STORAGE_KEY = 'codex-web-local.hidden-thread-ids.v1'
 const QUEUED_MESSAGES_STORAGE_KEY = 'codex-web-local.queued-messages.v1'
 const NOTIFICATION_SEQ_STORAGE_KEY = 'codex-web-local.notification-seq.v1'
-const EVENT_SYNC_DEBOUNCE_MS = 220
-const BACKGROUND_SYNC_INTERVAL_MS = 5000
-const ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS = 6000
-const ACTIVE_THREAD_DETAIL_SYNC_IDLE_MS = 9000
+const EVENT_SYNC_DEBOUNCE_MS = 350
+const BACKGROUND_SYNC_INTERVAL_MS = 9000
+const ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS = 12000
+const ACTIVE_THREAD_DETAIL_SYNC_IDLE_MS = 18000
 const ACTIVE_SYNC_BOOST_INTERVAL_MS = 2500
 const ACTIVE_SYNC_BOOST_WINDOW_MS = 18000
-const RESUME_SYNC_RETRY_DELAYS_MS = [0, 700, 1800, 4200, 8200, 15000]
-const ANDROID_RESUME_SYNC_RETRY_DELAYS_MS = [0, 2500, 9000]
-const ANDROID_RESUME_SYNC_DEBOUNCE_MS = 1200
+const RESUME_SYNC_RETRY_DELAYS_MS = [0, 1200, 4500, 12000]
+const ANDROID_RESUME_SYNC_RETRY_DELAYS_MS = [0, 4500, 12000]
+const ANDROID_RESUME_SYNC_DEBOUNCE_MS = 2500
 const ACTIVE_SYNC_THREAD_LIST_INTERVAL_MS = 120000
 const ACTIVE_SYNC_STALE_MS = 14000
 const STALE_THREAD_ACTIVE_TURN_TTL_MS = 5 * 60 * 1000
@@ -149,11 +151,11 @@ const OPTIMISTIC_EXECUTION_RECOVERY_GRACE_MS = 6000
 const LIVE_OVERLAY_ACTIVITY_GRACE_MS = 4500
 const UNKNOWN_ACTIVE_TURN_ID = '__unknown_active_turn__'
 const LIVE_DELTA_BATCH_MS = 48
-const NOTIFICATION_STALE_MS = 18000
-const THREAD_LIST_REFRESH_INTERVAL_MS = 180000
+const NOTIFICATION_STALE_MS = 30000
+const THREAD_LIST_REFRESH_INTERVAL_MS = 300000
 const THREAD_TOKEN_USAGE_REFRESH_RETRY_MS = 5 * 60 * 1000
-const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 500
-const RATE_LIMIT_REFRESH_MIN_INTERVAL_MS = 120000
+const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 1500
+const RATE_LIMIT_REFRESH_MIN_INTERVAL_MS = 300000
 const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
 const GLOBAL_SERVER_REQUEST_SCOPE = '__global__'
 const THREAD_TOKEN_USAGE_UPDATED_METHOD = 'thread/tokenUsage/updated'
@@ -168,6 +170,9 @@ type QueuedMessage = {
   imageUrls: string[]
   skills: Array<{ name: string; path: string }>
   fileAttachments: FileAttachment[]
+  modelId: string
+  reasoningEffort: ReasoningEffort | ''
+  speedMode: SpeedMode
   collaborationMode: CollaborationMode
   turnOptions?: ComposerTurnOptions
 }
@@ -187,13 +192,21 @@ function normalizeTurnOptions(value: unknown): ComposerTurnOptions | undefined {
   const row = value as Record<string, unknown>
   const plugins = Array.isArray(row.plugins)
     ? row.plugins
-      .filter((item): item is { id: string; name: string } => (
+      .filter((item): item is { id: string; name: string; path?: string; source?: 'mcp' | 'app' } => (
         Boolean(item)
         && typeof item === 'object'
         && typeof (item as Record<string, unknown>).id === 'string'
         && typeof (item as Record<string, unknown>).name === 'string'
       ))
-      .map((item) => ({ id: item.id.trim(), name: item.name.trim() }))
+      .map((item) => {
+        const id = item.id.trim()
+        const name = item.name.trim()
+        const source: ComposerPluginSource = item.source === 'app' ? 'app' : 'mcp'
+        const path = typeof item.path === 'string' && item.path.trim()
+          ? item.path.trim()
+          : (source === 'app' ? `app://${id}` : `plugin://${id}`)
+        return { id, name, path, source }
+      })
       .filter((item) => item.id.length > 0 && item.name.length > 0)
     : []
   const rawGoal = row.goal
@@ -362,6 +375,39 @@ function saveSelectedModelId(modelId: string): void {
   window.localStorage.setItem(SELECTED_MODEL_STORAGE_KEY, normalizedModelId)
 }
 
+function loadSelectedReasoningEffort(): ReasoningEffort | '' {
+  if (typeof window === 'undefined') return 'medium'
+  try {
+    const raw = window.localStorage.getItem(SELECTED_REASONING_EFFORT_STORAGE_KEY)?.trim() ?? ''
+    return REASONING_EFFORT_OPTIONS.includes(raw as ReasoningEffort) ? raw as ReasoningEffort : 'medium'
+  } catch {
+    return 'medium'
+  }
+}
+
+function hasStoredSelectedReasoningEffort(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    const raw = window.localStorage.getItem(SELECTED_REASONING_EFFORT_STORAGE_KEY)?.trim() ?? ''
+    return REASONING_EFFORT_OPTIONS.includes(raw as ReasoningEffort)
+  } catch {
+    return false
+  }
+}
+
+function saveSelectedReasoningEffort(effort: ReasoningEffort | ''): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (!effort) {
+      window.localStorage.removeItem(SELECTED_REASONING_EFFORT_STORAGE_KEY)
+      return
+    }
+    window.localStorage.setItem(SELECTED_REASONING_EFFORT_STORAGE_KEY, effort)
+  } catch {
+    // Keep the in-memory effort when localStorage is unavailable.
+  }
+}
+
 function loadSelectedCollaborationMode(): CollaborationMode {
   if (typeof window === 'undefined') return 'execute'
   try {
@@ -495,6 +541,11 @@ function normalizeQueuedMessage(value: unknown): QueuedMessage | null {
     imageUrls,
     skills,
     fileAttachments,
+    modelId: typeof row.modelId === 'string' ? row.modelId.trim() : '',
+    reasoningEffort: typeof row.reasoningEffort === 'string' && REASONING_EFFORT_OPTIONS.includes(row.reasoningEffort as ReasoningEffort)
+      ? row.reasoningEffort as ReasoningEffort
+      : '',
+    speedMode: row.speedMode === 'fast' ? 'fast' : 'standard',
     collaborationMode: row.collaborationMode === 'plan' ? 'plan' : 'execute',
     turnOptions: normalizeTurnOptions(row.turnOptions),
   }
@@ -1060,6 +1111,22 @@ function toProjectNameFromWorkspaceRoot(value: string): string {
   return toProjectName(value)
 }
 
+function normalizeComparablePath(value: string): string {
+  return normalizePathForUi(value).replace(/\/+$/u, '').toLowerCase()
+}
+
+function isWorkspaceRootForProject(rootPath: string, projectName: string, projectCwds: string[]): boolean {
+  const rootProjectName = toProjectNameFromWorkspaceRoot(rootPath)
+  if (rootProjectName === projectName) return true
+
+  const normalizedRoot = normalizeComparablePath(rootPath)
+  if (!normalizedRoot) return false
+  return projectCwds.some((cwd) => {
+    const normalizedCwd = normalizeComparablePath(cwd)
+    return normalizedCwd === normalizedRoot || normalizedCwd.startsWith(`${normalizedRoot}/`)
+  })
+}
+
 function toOptimisticThreadTitle(message: string): string {
   const firstLine = message
     .split('\n')
@@ -1102,7 +1169,7 @@ export function useDesktopState() {
   const eventUnreadByThreadId = ref<Record<string, boolean>>({})
   const availableModelIds = ref<string[]>([])
   const selectedModelId = ref(loadSelectedModelId())
-  const selectedReasoningEffort = ref<ReasoningEffort | ''>('medium')
+  const selectedReasoningEffort = ref<ReasoningEffort | ''>(loadSelectedReasoningEffort())
   const selectedSpeedMode = ref<SpeedMode>('standard')
   const selectedCollaborationMode = ref<CollaborationMode>(loadSelectedCollaborationMode())
   const readStateByThreadId = ref<Record<string, string>>(loadReadStateMap())
@@ -1662,6 +1729,7 @@ export function useDesktopState() {
       return
     }
     selectedReasoningEffort.value = effort
+    saveSelectedReasoningEffort(effort)
   }
 
   function setSelectedCollaborationMode(mode: CollaborationMode): void {
@@ -1731,6 +1799,7 @@ export function useDesktopState() {
       }
 
       if (
+        !hasStoredSelectedReasoningEffort() &&
         currentConfig.reasoningEffort &&
         REASONING_EFFORT_OPTIONS.includes(currentConfig.reasoningEffort)
       ) {
@@ -2167,12 +2236,25 @@ export function useDesktopState() {
       return
     }
 
+    if (isTransientConnectionStatusMessage(normalizedMessage)) {
+      if (previous) {
+        turnErrorByThreadId.value = omitKey(turnErrorByThreadId.value, threadId)
+      }
+      return
+    }
+
     if (previous?.message === normalizedMessage) return
 
     turnErrorByThreadId.value = {
       ...turnErrorByThreadId.value,
       [threadId]: { message: normalizedMessage },
     }
+  }
+
+  function clearTransientTurnErrorForThread(threadId: string): void {
+    const previous = turnErrorByThreadId.value[threadId]?.message ?? ''
+    if (!previous || !isTransientConnectionStatusMessage(previous)) return
+    turnErrorByThreadId.value = omitKey(turnErrorByThreadId.value, threadId)
   }
 
   function normalizeActiveTurnId(turnId: string): string {
@@ -2192,6 +2274,26 @@ export function useDesktopState() {
     return ''
   }
 
+  function isTransientConnectionStatusMessage(message: string): boolean {
+    const normalizedMessage = normalizeMessageText(message)
+    if (!normalizedMessage) return false
+    const lowerMessage = normalizedMessage.toLowerCase()
+    if (
+      lowerMessage.includes('responses/compact') ||
+      lowerMessage.includes('remote compact') ||
+      lowerMessage.includes('stream disconnected before completion')
+    ) {
+      return false
+    }
+
+    if (/reconnecting(?:\.*\s*\d+\s*\/\s*\d+)?/iu.test(normalizedMessage)) return true
+    if (/实时通道|通知流|事件流|重连|断线重连/iu.test(normalizedMessage)) return true
+    return (
+      /websocket|eventsource|event source|sse|transport|notification stream|network|connection/iu.test(normalizedMessage) &&
+      /timeout|timed out|disconnect|disconnected|reconnect|超时|断开|重连/iu.test(normalizedMessage)
+    )
+  }
+
   function isStaleInterruptError(error: unknown): boolean {
     const message = readErrorMessage(error).toLowerCase()
     if (!message) return false
@@ -2201,7 +2303,8 @@ export function useDesktopState() {
       message.includes('already completed') ||
       message.includes('cannot interrupt') ||
       message.includes('unable to interrupt') ||
-      message.includes('active turn not found')
+      message.includes('active turn not found') ||
+      message.includes('thread not found')
     )
   }
 
@@ -2228,6 +2331,22 @@ export function useDesktopState() {
       message.includes('includeturns is unavailable before first user message') ||
       message.includes('no rollout found for thread id') ||
       (message.includes('rollout') && message.includes('is empty'))
+    )
+  }
+
+  function isMissingThreadError(error: unknown): boolean {
+    const message = readErrorMessage(error).toLowerCase()
+    return message.includes('thread not found')
+  }
+
+  function isTerminalExecutionError(error: unknown): boolean {
+    const message = readErrorMessage(error).toLowerCase()
+    if (!message) return false
+    return (
+      isMissingThreadError(error) ||
+      message.includes('error running remote compact task') ||
+      message.includes('responses/compact') ||
+      message.includes('stream disconnected before completion')
     )
   }
 
@@ -2313,6 +2432,7 @@ export function useDesktopState() {
         [threadId]: now,
       }
     }
+    clearTransientTurnErrorForThread(threadId)
     clearIgnoredStaleActiveTurn(threadId)
   }
 
@@ -2373,6 +2493,23 @@ export function useDesktopState() {
         ...runtimeExecutionStateByThreadId.value,
         [threadId]: state,
       }
+    }
+  }
+
+  function settleTerminalExecutionError(threadId: string, terminalError: unknown): void {
+    if (!threadId) return
+
+    const errorMessage = normalizeMessageText(readErrorMessage(terminalError)) || '任务已中断，状态已恢复'
+    clearPendingTurnRequest(threadId)
+    clearSettledRuntimeResidue(threadId, 'failed')
+    setPendingServerRequestsForThread(threadId, [])
+    setTurnErrorForThread(threadId, errorMessage)
+    error.value = errorMessage
+    pendingThreadMessageRefresh.delete(threadId)
+    pendingThreadsRefresh = true
+
+    if (!isMissingThreadError(terminalError)) {
+      void processQueuedMessages(threadId)
     }
   }
 
@@ -2716,6 +2853,9 @@ export function useDesktopState() {
       return snapshot
     } catch (error) {
       if (isAbortLikeError(error)) throw error
+      if (isTerminalExecutionError(error)) {
+        settleTerminalExecutionError(threadId, error)
+      }
       return null
     }
   }
@@ -4404,21 +4544,45 @@ export function useDesktopState() {
     const notificationErrorMessage = readNotificationErrorMessage(notification)
     if (notificationErrorMessage) {
       const errorThreadId = extractThreadIdFromNotification(notification)
-      if (errorThreadId) {
-        setTurnErrorForThread(errorThreadId, notificationErrorMessage)
-        showAndroidTaskNotification(
-          'error',
-          '任务出错',
-          notificationErrorMessage,
-          errorThreadId,
-        )
-      }
-      error.value = notificationErrorMessage
-      if (selectedModelId.value !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(new Error(notificationErrorMessage))) {
+      if (isTransientConnectionStatusMessage(notificationErrorMessage)) {
         if (errorThreadId) {
-          void retryPendingTurnWithFallback(errorThreadId)
-        } else {
-          void applyFallbackModelSelection()
+          clearTransientTurnErrorForThread(errorThreadId)
+          if (isThreadExecutionActive(errorThreadId)) {
+            markThreadLiveExecutionSignal(errorThreadId)
+          }
+        }
+        if (error.value === notificationErrorMessage) {
+          error.value = ''
+        }
+      } else {
+        const terminalErrorThreadId =
+          isTerminalExecutionError(notificationErrorMessage) && !errorThreadId
+            ? selectedThreadId.value
+            : errorThreadId
+        if (terminalErrorThreadId && isTerminalExecutionError(notificationErrorMessage)) {
+          settleTerminalExecutionError(terminalErrorThreadId, notificationErrorMessage)
+          showAndroidTaskNotification(
+            'error',
+            '任务出错',
+            notificationErrorMessage,
+            terminalErrorThreadId,
+          )
+        } else if (errorThreadId) {
+          setTurnErrorForThread(errorThreadId, notificationErrorMessage)
+          showAndroidTaskNotification(
+            'error',
+            '任务出错',
+            notificationErrorMessage,
+            errorThreadId,
+          )
+        }
+        error.value = notificationErrorMessage
+        if (selectedModelId.value !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(new Error(notificationErrorMessage))) {
+          if (errorThreadId) {
+            void retryPendingTurnWithFallback(errorThreadId)
+          } else {
+            void applyFallbackModelSelection()
+          }
         }
       }
     }
@@ -4634,7 +4798,13 @@ export function useDesktopState() {
 
     try {
       const [groups] = await Promise.all([getThreadGroups({ signal: options.signal }), loadThreadTitleCacheIfNeeded()])
+      const hiddenThreadIdSet = new Set(hiddenThreadIds.value)
       const visibleGroups = groups
+        .map((group) => ({
+          projectName: group.projectName,
+          threads: group.threads.filter((thread) => !hiddenThreadIdSet.has(thread.id)),
+        }))
+        .filter((group) => group.threads.length > 0)
       await hydrateWorkspaceRootsStateIfNeeded(visibleGroups)
 
       const nextProjectOrder = mergeProjectOrder(projectOrder.value, visibleGroups)
@@ -4855,6 +5025,14 @@ export function useDesktopState() {
       if (isAbortLikeError(error)) {
         throw error
       }
+      if (isTerminalExecutionError(error)) {
+        settleTerminalExecutionError(threadId, error)
+        lastThreadDetailSyncAtById.value = {
+          ...lastThreadDetailSyncAtById.value,
+          [threadId]: Date.now(),
+        }
+        return
+      }
       if (isThreadMaterializingError(error)) {
         lastThreadDetailSyncAtById.value = {
           ...lastThreadDetailSyncAtById.value,
@@ -5065,6 +5243,11 @@ export function useDesktopState() {
   async function archiveThreadById(threadId: string) {
     try {
       await archiveThread(threadId)
+      const normalizedThreadId = threadId.trim()
+      if (normalizedThreadId && !hiddenThreadIds.value.includes(normalizedThreadId)) {
+        hiddenThreadIds.value = [...hiddenThreadIds.value, normalizedThreadId]
+        saveHiddenThreadIds(hiddenThreadIds.value)
+      }
       const flatThreads = removeThreadFromSourceGroups(threadId)
       if (selectedThreadId.value === threadId) {
         setSelectedThreadId(flatThreads[0]?.id ?? '')
@@ -5169,6 +5352,9 @@ export function useDesktopState() {
         imageUrls,
         skills,
         fileAttachments,
+        modelId: selectedModelId.value.trim(),
+        reasoningEffort: selectedReasoningEffort.value,
+        speedMode: selectedSpeedMode.value,
         collaborationMode,
         turnOptions: cloneTurnOptions(turnOptions),
       })
@@ -5447,9 +5633,10 @@ export function useDesktopState() {
     fileAttachments: FileAttachment[] = [],
     collaborationMode: CollaborationMode = selectedCollaborationMode.value,
     turnOptions?: ComposerTurnOptions,
+    runtimeOverrides: { modelId?: string; reasoningEffort?: ReasoningEffort | '' } = {},
   ): Promise<void> {
-    const modelId = selectedModelId.value.trim()
-    const reasoningEffort = selectedReasoningEffort.value
+    const modelId = (runtimeOverrides.modelId ?? selectedModelId.value).trim()
+    const reasoningEffort = runtimeOverrides.reasoningEffort ?? selectedReasoningEffort.value
     const normalizedText = nextText.trim()
     const normalizedSkills = skills.map((skill) => ({ name: skill.name, path: skill.path }))
     const normalizedFileAttachments = fileAttachments.map((file) => ({ ...file }))
@@ -5559,10 +5746,13 @@ export function useDesktopState() {
     isSendingMessage.value = true
     error.value = ''
     shouldAutoScrollOnNextAgentEvent = true
+    const queuedModelId = next.modelId.trim() || selectedModelId.value.trim()
+    const queuedReasoningEffort = next.reasoningEffort || selectedReasoningEffort.value
+    const queuedSpeedMode: SpeedMode = next.speedMode === 'fast' ? 'fast' : 'standard'
     setTurnSummaryForThread(threadId, null)
     setTurnActivityForThread(threadId, {
       label: next.collaborationMode === 'plan' ? 'Planning' : 'Thinking',
-      details: buildPendingTurnDetails(selectedModelId.value, selectedReasoningEffort.value, next.collaborationMode),
+      details: buildPendingTurnDetails(queuedModelId, queuedReasoningEffort, next.collaborationMode),
     })
     setTurnErrorForThread(threadId, null)
     setThreadInProgress(threadId, true)
@@ -5570,6 +5760,12 @@ export function useDesktopState() {
     markActiveSyncBoost()
     const optimisticMessageId = addOptimisticUserMessage(threadId, next.text, next.imageUrls, next.fileAttachments)
     try {
+      if (selectedSpeedMode.value !== queuedSpeedMode) {
+        await updateSelectedSpeedMode(queuedSpeedMode)
+        if (selectedSpeedMode.value !== queuedSpeedMode) {
+          throw new Error('Failed to apply queued speed mode before sending')
+        }
+      }
       await startTurnForThread(
         threadId,
         next.text,
@@ -5578,6 +5774,10 @@ export function useDesktopState() {
         next.fileAttachments,
         next.collaborationMode,
         next.turnOptions,
+        {
+          modelId: queuedModelId,
+          reasoningEffort: queuedReasoningEffort,
+        },
       )
       removeQueuedMessageByThreadId(threadId, next.id)
     } catch {
@@ -5633,9 +5833,16 @@ export function useDesktopState() {
       pendingThreadsRefresh = true
       await syncFromNotifications()
     } catch (unknownError) {
-      const staleInterrupt = isStaleInterruptError(unknownError) || isRuntimeExecutionStale(threadId)
+      const staleInterrupt =
+        isStaleInterruptError(unknownError) ||
+        isTerminalExecutionError(unknownError) ||
+        isRuntimeExecutionStale(threadId)
       if (staleInterrupt) {
-        settleInterruptedThreadState(threadId)
+        if (isTerminalExecutionError(unknownError)) {
+          settleTerminalExecutionError(threadId, unknownError)
+        } else {
+          settleInterruptedThreadState(threadId)
+        }
         try {
           await loadMessages(threadId, { silent: true })
         } catch {
@@ -5734,7 +5941,6 @@ export function useDesktopState() {
       setSelectedThreadId(flatThreads[0]?.id ?? '')
     }
 
-    void persistProjectOrderToWorkspaceRoots()
   }
 
   async function removeProject(projectName: string): Promise<void> {
@@ -5742,6 +5948,9 @@ export function useDesktopState() {
     if (normalizedProjectName.length === 0) return
 
     const targetGroup = sourceGroups.value.find((group) => group.projectName === normalizedProjectName)
+    const projectCwds = targetGroup?.threads
+      .map((thread) => thread.cwd.trim())
+      .filter((cwd) => cwd.length > 0) ?? []
     const threadIds = targetGroup?.threads
       .map((thread) => thread.id.trim())
       .filter((threadId) => threadId.length > 0) ?? []
@@ -5750,11 +5959,40 @@ export function useDesktopState() {
       for (const threadId of threadIds) {
         await archiveThread(threadId)
       }
+      await removeProjectFromWorkspaceRoots(normalizedProjectName, projectCwds)
+      if (threadIds.length > 0) {
+        const hiddenSet = new Set(hiddenThreadIds.value)
+        for (const threadId of threadIds) hiddenSet.add(threadId)
+        hiddenThreadIds.value = [...hiddenSet]
+        saveHiddenThreadIds(hiddenThreadIds.value)
+      }
       removeProjectLocally(normalizedProjectName)
       await loadThreads()
     } catch (unknownError) {
       error.value = unknownError instanceof Error ? unknownError.message : 'Failed to remove project'
     }
+  }
+
+  async function removeProjectFromWorkspaceRoots(projectName: string, projectCwds: string[]): Promise<void> {
+    const rootsState = await getWorkspaceRootsState()
+    const shouldRemoveRoot = (rootPath: string): boolean => isWorkspaceRootForProject(rootPath, projectName, projectCwds)
+    const nextOrder = rootsState.order.filter((rootPath) => !shouldRemoveRoot(rootPath))
+    const nextActive = rootsState.active.filter((rootPath) => !shouldRemoveRoot(rootPath))
+    const nextLabels: Record<string, string> = {}
+    for (const [rootPath, label] of Object.entries(rootsState.labels)) {
+      if (!shouldRemoveRoot(rootPath)) {
+        nextLabels[rootPath] = label
+      }
+    }
+    if (nextActive.length === 0 && nextOrder.length > 0) {
+      nextActive.push(nextOrder[0])
+    }
+
+    await setWorkspaceRootsState({
+      order: nextOrder,
+      labels: nextLabels,
+      active: nextActive,
+    })
   }
 
   function reorderProject(projectName: string, toIndex: number): void {

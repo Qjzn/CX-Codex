@@ -728,10 +728,6 @@ function readRuntimeTurnOptions(value: unknown): RuntimeTurnOptions | null {
 function buildRuntimeTurnOptionsPrompt(options: RuntimeTurnOptions | null): string {
   if (!options) return ''
   const lines: string[] = []
-  if (options.plugins.length > 0) {
-    const names = options.plugins.map((plugin) => plugin.name).join('、')
-    lines.push(`插件偏好: ${names}。如当前 Codex 会话可以使用这些能力，请优先使用；如果 Web 端不能代执行工具调用，请明确说明原因并改用文字方案继续。`)
-  }
   if (options.goal?.enabled === true) {
     const goalText = options.goal.text || '持续追求当前任务目标'
     lines.push(`追求目标: ${goalText}。请围绕这个目标主动推进，不只停留在解释。`)
@@ -2194,10 +2190,35 @@ async function readDesktopPinnedThreadIds(): Promise<string[]> {
   }
 }
 
+async function writeDesktopPinnedThreadIds(pinnedThreadIds: string[]): Promise<string[]> {
+  const normalized = normalizeStringArray(pinnedThreadIds)
+  const statePath = getCodexGlobalStatePath()
+  let payload: Record<string, unknown> = {}
+  try {
+    const raw = await readFile(statePath, 'utf8')
+    payload = asRecord(JSON.parse(raw)) ?? {}
+  } catch {
+    payload = {}
+  }
+  payload['pinned-thread-ids'] = normalized
+  await mkdir(getCodexHomeDir(), { recursive: true })
+  await writeFile(statePath, JSON.stringify(payload), 'utf8')
+  return normalized
+}
+
 async function readMergedPinnedThreadIds(): Promise<string[]> {
   const [webPinnedIds, desktopPinnedIds] = await Promise.all([
     readPinnedThreadIds(),
     readDesktopPinnedThreadIds(),
+  ])
+  return normalizeStringArray([...webPinnedIds, ...desktopPinnedIds])
+}
+
+async function writeMergedPinnedThreadIds(pinnedThreadIds: string[]): Promise<string[]> {
+  const normalized = normalizeStringArray(pinnedThreadIds)
+  const [webPinnedIds, desktopPinnedIds] = await Promise.all([
+    writePinnedThreadIds(normalized),
+    writeDesktopPinnedThreadIds(normalized),
   ])
   return normalizeStringArray([...webPinnedIds, ...desktopPinnedIds])
 }
@@ -3186,7 +3207,7 @@ class AppServerProcess {
         contentItems: [
           {
             type: 'inputText',
-            text: 'CX-Codex Web 已收到插件偏好，但当前 Web 端不能代执行这个 Codex 工具调用。请改用文字方式继续，或提示用户在桌面端 Codex 客户端处理需要的工具操作。',
+            text: 'CX-Codex Web 收到了 Codex 工具调用请求，但当前 Web 端不能代执行这个工具。请改用文字方案继续，或提示用户在桌面端 Codex 客户端处理需要的工具操作。',
           },
         ],
       }
@@ -4470,7 +4491,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           payload && typeof payload === 'object' && !Array.isArray(payload)
             ? payload as Record<string, unknown>
             : {}
-        const pinnedThreadIds = await writePinnedThreadIds(
+        const pinnedThreadIds = await writeMergedPinnedThreadIds(
           Array.isArray(record.pinnedThreadIds) ? record.pinnedThreadIds as never[] : [],
         )
         setJson(res, 200, { data: pinnedThreadIds })

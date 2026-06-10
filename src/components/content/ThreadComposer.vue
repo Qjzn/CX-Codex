@@ -72,14 +72,14 @@
       </div>
 
       <div v-if="selectedPlugins.length > 0 || goalModeEnabled" class="thread-composer-option-chips">
-        <span v-for="plugin in selectedPlugins" :key="plugin.id" class="thread-composer-option-chip">
+        <span v-for="plugin in selectedPlugins" :key="getSelectedPluginKey(plugin)" class="thread-composer-option-chip">
           <span class="thread-composer-option-chip-dot" aria-hidden="true" />
           <span class="thread-composer-option-chip-name">{{ plugin.name }}</span>
           <button
             class="thread-composer-option-chip-remove"
             type="button"
             :aria-label="`移除插件 ${plugin.name}`"
-            @click="removePlugin(plugin.id)"
+            @click="removePlugin(getSelectedPluginKey(plugin))"
           >×</button>
         </span>
         <span v-if="goalModeEnabled" class="thread-composer-option-chip thread-composer-option-chip--goal">
@@ -267,7 +267,7 @@
               >
                 <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--grid">⌘</span>
                 <span class="thread-composer-attach-item-body">
-                  <span class="thread-composer-attach-item-title">插件偏好</span>
+                  <span class="thread-composer-attach-item-title">插件</span>
                   <span class="thread-composer-attach-item-subtitle">{{ pluginMenuSummary }}</span>
                 </span>
                 <IconTablerChevronRight
@@ -298,10 +298,10 @@
                 <template v-else>
                   <button
                     v-for="plugin in pluginOptions"
-                    :key="plugin.id"
+                    :key="`${plugin.source}:${plugin.id}`"
                     class="thread-composer-plugin-row"
                     :class="{
-                      'is-selected': isPluginSelected(plugin.id),
+                      'is-selected': isPluginSelected(plugin),
                       'is-disabled': !isPluginSelectable(plugin),
                     }"
                     type="button"
@@ -313,8 +313,8 @@
                       <span class="thread-composer-plugin-row-title">{{ plugin.name }}</span>
                       <span class="thread-composer-plugin-row-meta">{{ getPluginMeta(plugin) }}</span>
                     </span>
-                    <span v-if="isPluginSelected(plugin.id)" class="thread-composer-plugin-check">✓</span>
-                    <span v-else-if="plugin.authStatus === 'notLoggedIn'" class="thread-composer-plugin-login">登录</span>
+                    <span v-if="isPluginSelected(plugin)" class="thread-composer-plugin-check">✓</span>
+                    <span v-else-if="plugin.source === 'mcp' && plugin.authStatus === 'notLoggedIn'" class="thread-composer-plugin-login">登录</span>
                   </button>
                 </template>
                 <button
@@ -785,13 +785,13 @@ const activeGoalLabel = computed(() => {
   return goalModeEnabled.value ? '持续追求当前任务目标' : '保持默认单轮回复'
 })
 const pluginMenuTitle = computed(() =>
-  pluginOptions.value.length > 0 ? `${pluginOptions.value.length} 个可选插件偏好` : '插件偏好',
+  pluginOptions.value.length > 0 ? `${pluginOptions.value.length} 个可用插件` : '插件',
 )
 const pluginMenuSummary = computed(() => {
   if (props.isLoadingPlugins) return '正在读取插件'
-  if (selectedPlugins.value.length > 0) return `已选 ${selectedPlugins.value.length} 个偏好`
-  if (pluginOptions.value.length > 0) return `${pluginOptions.value.length} 个能力偏好`
-  return '读取插件能力'
+  if (selectedPlugins.value.length > 0) return `已选 ${selectedPlugins.value.length} 个插件`
+  if (pluginOptions.value.length > 0) return `${pluginOptions.value.length} 个插件`
+  return '读取插件'
 })
 const skillDropdownOptions = computed(() =>
   (props.skills ?? []).map((s) => ({
@@ -892,8 +892,29 @@ function onCollaborationModeSelect(mode: CollaborationMode): void {
   emit('update:selected-collaboration-mode', mode)
 }
 
+function getPluginMentionPath(plugin: ComposerPluginSelection): string {
+  const id = plugin.id.trim()
+  return plugin.path?.trim() || (plugin.source === 'app' ? `app://${id}` : `plugin://${id}`)
+}
+
+function getSelectedPluginKey(plugin: ComposerPluginSelection): string {
+  return getPluginMentionPath(plugin)
+}
+
+function normalizePluginSelection(plugin: ComposerPluginSelection): ComposerPluginSelection {
+  const matched = (props.plugins ?? []).find((item) => (
+    item.id === plugin.id
+    && (plugin.path ? item.mentionPath === plugin.path : true)
+  ))
+  const source = plugin.source ?? matched?.source ?? 'mcp'
+  const id = (matched?.id || plugin.id).trim()
+  const name = (matched?.name || plugin.name || id).trim()
+  const path = (matched?.mentionPath || plugin.path || (source === 'app' ? `app://${id}` : `plugin://${id}`)).trim()
+  return { id, name, path, source }
+}
+
 function buildTurnOptions(): ComposerTurnOptions | undefined {
-  const plugins = selectedPlugins.value.map((plugin) => ({ id: plugin.id, name: plugin.name }))
+  const plugins = selectedPlugins.value.map((plugin) => normalizePluginSelection(plugin))
   const goal = goalModeEnabled.value
     ? { enabled: true, text: activeGoalLabel.value.trim() || '持续追求当前任务目标' }
     : undefined
@@ -961,11 +982,7 @@ function replaceDraftState(payload: ComposerDraftPayload): void {
     ?? { name: skill.name, description: '', path: skill.path }
   ))
   selectedPlugins.value = (payload.plugins ?? []).map((plugin) => {
-    const matched = (props.plugins ?? []).find((item) => item.id === plugin.id)
-    return {
-      id: plugin.id,
-      name: matched?.name || plugin.name || plugin.id,
-    }
+    return normalizePluginSelection(plugin)
   })
   goalModeEnabled.value = payload.goal?.enabled === true
   goalText.value = payload.goal?.text ?? ''
@@ -1035,6 +1052,15 @@ function loadPersistedDraftForThread(threadId: string): ComposerDraftPayload | n
           Boolean(plugin)
           && typeof plugin.id === 'string'
           && typeof plugin.name === 'string'
+          && (
+            typeof (plugin as Partial<ComposerPluginSelection>).path === 'undefined'
+            || typeof (plugin as Partial<ComposerPluginSelection>).path === 'string'
+          )
+          && (
+            typeof (plugin as Partial<ComposerPluginSelection>).source === 'undefined'
+            || (plugin as Partial<ComposerPluginSelection>).source === 'mcp'
+            || (plugin as Partial<ComposerPluginSelection>).source === 'app'
+          )
         ))
         : [],
       goal: (
@@ -1164,11 +1190,14 @@ function togglePluginSubmenu(): void {
   }
 }
 
-function isPluginSelected(pluginId: string): boolean {
-  return selectedPlugins.value.some((plugin) => plugin.id === pluginId)
+function isPluginSelected(plugin: ComposerPluginInfo): boolean {
+  return selectedPlugins.value.some((item) => getSelectedPluginKey(item) === plugin.mentionPath)
 }
 
 function isPluginSelectable(plugin: ComposerPluginInfo): boolean {
+  if (plugin.source === 'app') {
+    return plugin.isAccessible !== false && plugin.isEnabled !== false
+  }
   return plugin.toolCount > 0
     || plugin.resourceCount > 0
     || plugin.resourceTemplateCount > 0
@@ -1177,19 +1206,27 @@ function isPluginSelectable(plugin: ComposerPluginInfo): boolean {
 
 function onPluginRowClick(plugin: ComposerPluginInfo): void {
   if (!isPluginSelectable(plugin)) return
-  if (plugin.authStatus === 'notLoggedIn') {
+  if (plugin.source === 'mcp' && plugin.authStatus === 'notLoggedIn') {
     emit('login-plugin', plugin.id)
     return
   }
-  if (isPluginSelected(plugin.id)) {
-    removePlugin(plugin.id)
+  if (isPluginSelected(plugin)) {
+    removePlugin(plugin.mentionPath)
     return
   }
-  selectedPlugins.value = [...selectedPlugins.value, { id: plugin.id, name: plugin.name }]
+  selectedPlugins.value = [
+    ...selectedPlugins.value,
+    {
+      id: plugin.id,
+      name: plugin.name,
+      path: plugin.mentionPath,
+      source: plugin.source,
+    },
+  ]
 }
 
-function removePlugin(pluginId: string): void {
-  selectedPlugins.value = selectedPlugins.value.filter((plugin) => plugin.id !== pluginId)
+function removePlugin(pluginKey: string): void {
+  selectedPlugins.value = selectedPlugins.value.filter((plugin) => getSelectedPluginKey(plugin) !== pluginKey)
 }
 
 function onRefreshPlugins(): void {
@@ -1205,6 +1242,11 @@ function getPluginAvatar(name: string): string {
 }
 
 function getPluginMeta(plugin: ComposerPluginInfo): string {
+  if (plugin.source === 'app') {
+    if (plugin.isAccessible === false) return '当前不可访问'
+    if (plugin.isEnabled === false) return '未启用'
+    return plugin.distributionChannel ? `应用 · ${plugin.distributionChannel}` : '应用插件'
+  }
   if (plugin.authStatus === 'notLoggedIn') return '需要登录授权'
   const parts: string[] = []
   if (plugin.toolCount > 0) parts.push(`${plugin.toolCount} 个工具`)
@@ -1790,8 +1832,10 @@ watch(
   () => {
     if (selectedPlugins.value.length === 0) return
     selectedPlugins.value = selectedPlugins.value.map((plugin) => {
-      const matched = (props.plugins ?? []).find((item) => item.id === plugin.id)
-      return matched ? { id: matched.id, name: matched.name } : plugin
+      const matched = (props.plugins ?? []).find((item) => item.mentionPath === getSelectedPluginKey(plugin))
+      return matched
+        ? { id: matched.id, name: matched.name, path: matched.mentionPath, source: matched.source }
+        : normalizePluginSelection(plugin)
     })
   },
 )
