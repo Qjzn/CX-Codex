@@ -219,6 +219,7 @@ import {
   createRuntimeRequestSnapshotPatch,
   RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES,
 } from '../src/server/appServerRuntimeRequestReconciliation.js'
+import { createLocalRuntimeSnapshotFromPersisted } from '../src/server/appServerRuntimeSnapshotRecovery.js'
 import {
   normalizeWorkspaceRootsState,
   readWorkspaceRootsState,
@@ -292,6 +293,7 @@ try {
   smokeAppServerNotificationReplay()
   smokeAppServerRuntimeBridge()
   smokeAppServerRuntimeRequestReconciliation()
+  smokeAppServerRuntimeSnapshotRecovery()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
 } finally {
@@ -2441,6 +2443,70 @@ function smokeAppServerRuntimeRequestReconciliation(): void {
     turnId: 'turn-b',
     lastError: 'failed after interrupt',
   })
+}
+
+function smokeAppServerRuntimeSnapshotRecovery(): void {
+  const activeSnapshot = createThreadRuntimeSnapshot({
+    executionState: 'running',
+    inProgress: true,
+    canStop: true,
+    stale: false,
+    lastEventAtIso: '2026-01-01T00:00:00.000Z',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    threadRead: { stale: 'payload' },
+    messageState: 'fresh',
+    pendingServerRequests: [],
+    tokenUsage: { total: 1 },
+  })
+
+  const fresh = createLocalRuntimeSnapshotFromPersisted(activeSnapshot, {
+    pendingServerRequests: [],
+    tokenUsage: { total: 2 },
+    appServerStartedAtMs: Date.parse('2025-12-31T23:59:59.000Z'),
+    nowMs: Date.parse('2026-01-01T00:00:30.000Z'),
+    staleMs: 90_000,
+  })
+  assert.equal(fresh.executionState, 'running')
+  assert.equal(fresh.inProgress, true)
+  assert.equal(fresh.canStop, true)
+  assert.equal(fresh.stale, false)
+  assert.equal(fresh.threadRead, null)
+  assert.equal(fresh.messageState, 'unavailable')
+  assert.deepEqual(fresh.tokenUsage, { total: 2 })
+
+  const timedOut = createLocalRuntimeSnapshotFromPersisted(activeSnapshot, {
+    pendingServerRequests: [],
+    tokenUsage: null,
+    appServerStartedAtMs: Date.parse('2025-12-31T23:59:59.000Z'),
+    nowMs: Date.parse('2026-01-01T00:02:00.000Z'),
+    staleMs: 90_000,
+  })
+  assert.equal(timedOut.executionState, 'sync_degraded')
+  assert.equal(timedOut.inProgress, false)
+  assert.equal(timedOut.canStop, false)
+  assert.equal(timedOut.stale, true)
+  assert.equal(timedOut.degradedReason, 'persisted runtime snapshot is stale')
+
+  const restarted = createLocalRuntimeSnapshotFromPersisted(activeSnapshot, {
+    pendingServerRequests: [],
+    tokenUsage: null,
+    appServerStartedAtMs: Date.parse('2026-01-01T00:00:01.000Z'),
+    nowMs: Date.parse('2026-01-01T00:00:30.000Z'),
+    staleMs: 90_000,
+  })
+  assert.equal(restarted.executionState, 'sync_degraded')
+  assert.equal(restarted.degradedReason, 'app-server restarted after active runtime snapshot')
+
+  const waitingPermission = createLocalRuntimeSnapshotFromPersisted(activeSnapshot, {
+    pendingServerRequests: [{ id: 1, method: 'server/request', params: { threadId: 'thread-a' }, receivedAtIso: '2026-01-01T00:00:01.000Z' }],
+    tokenUsage: null,
+    appServerStartedAtMs: Date.parse('2026-01-01T00:00:01.000Z'),
+    nowMs: Date.parse('2026-01-01T00:02:00.000Z'),
+    staleMs: 90_000,
+  })
+  assert.equal(waitingPermission.executionState, 'running')
+  assert.equal(waitingPermission.stale, false)
+  assert.equal(waitingPermission.pendingServerRequests.length, 1)
 }
 
 function smokeAppServerNotificationReplay(): void {

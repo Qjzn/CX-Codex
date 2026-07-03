@@ -2318,6 +2318,37 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server runtime snapshot recovery 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRuntimeSnapshotRecovery.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 persisted runtime snapshot 恢复时的新鲜 active snapshot、超时 active snapshot、App Server 重启后的 active snapshot，以及存在 pending server request 时不降级的分支。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 在 `readLocalRuntimeSnapshot()` 中通过 `createLocalRuntimeSnapshotFromPersisted()` 恢复 persisted snapshot，不再内联 stale/restarted 判定。
+5. 代码审查确认 active persisted snapshot 在无 pending request 且超时或 App Server 重启后仍降级为 `sync_degraded`，避免前端长期显示假运行态。
+
+#### Expected Results
+- persisted snapshot 恢复逻辑集中在 `src/server/appServerRuntimeSnapshotRecovery.ts`。
+- 新鲜 active persisted snapshot 仍保留原 execution state、`inProgress` 和 `canStop`。
+- 超时 active persisted snapshot 降级为 `sync_degraded`，`stale` 为 true，`degradedReason` 为 `persisted runtime snapshot is stale`。
+- App Server 启动时间晚于 persisted event 时间时，active persisted snapshot 降级并标记 `app-server restarted after active runtime snapshot`。
+- 存在 pending server request 时不按 stale/restart 降级，避免权限等待场景被误判为同步降级。
+- server module smoke 覆盖上述分支；release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/appServerRuntimeSnapshotRecovery.ts`，撤销 `scripts/server-module-smoke.ts` 中的 runtime snapshot recovery smoke，并把 persisted snapshot stale/restarted 判定恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: App Server runtime request reconciliation 模块化
 
 #### Prerequisites

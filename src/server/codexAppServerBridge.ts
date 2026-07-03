@@ -18,11 +18,8 @@ import {
   RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES,
 } from './appServerRuntimeRequestReconciliation.js'
 import {
-  isRuntimeActiveState,
-  RUNTIME_SNAPSHOT_STALE_MS,
   RuntimeStateStore,
   toPersistableRuntimeSnapshot,
-  type RuntimeExecutionState,
   type RuntimeSnapshotOverlay,
   type ThreadRuntimeSnapshot,
 } from './runtimeState.js'
@@ -103,9 +100,9 @@ import {
 import { getRpcTimeoutMs } from './appServerRpcTimeoutPolicy.js'
 import {
   isCachedThreadReadStaleForRuntime,
-  readIsoTimestampMs,
   type CachedThreadRead,
 } from './appServerThreadReadCache.js'
+import { createLocalRuntimeSnapshotFromPersisted } from './appServerRuntimeSnapshotRecovery.js'
 import {
   createAppServerJsonRpcError,
   createRpcTimeoutError,
@@ -1177,34 +1174,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     const pendingServerRequests = appServer.listPendingServerRequestsForThread(normalizedThreadId)
     const tokenUsage = appServer.getThreadTokenUsage(normalizedThreadId)
     if (persistedSnapshot) {
-      const persistedLastAtMs =
-        readIsoTimestampMs(persistedSnapshot.lastEventAtIso) ||
-        readIsoTimestampMs(persistedSnapshot.updatedAtIso)
-      const persistedStale =
-        pendingServerRequests.length === 0 &&
-        isRuntimeActiveState(persistedSnapshot.executionState) &&
-        persistedLastAtMs > 0 &&
-        (
-          Date.now() - persistedLastAtMs > RUNTIME_SNAPSHOT_STALE_MS ||
-          appServer.getStartedAtMs() > persistedLastAtMs
-        )
-      const executionState: RuntimeExecutionState = persistedStale ? 'sync_degraded' : persistedSnapshot.executionState
-      return {
-        ...persistedSnapshot,
-        executionState,
+      return createLocalRuntimeSnapshotFromPersisted(persistedSnapshot, {
         pendingServerRequests,
         tokenUsage,
-        threadRead: null,
-        messageState: 'unavailable',
-        inProgress: isRuntimeActiveState(executionState),
-        canStop: persistedSnapshot.canStop === true && !persistedSnapshot.stale && !persistedStale,
-        stale: persistedSnapshot.stale === true || persistedStale,
-        degradedReason: persistedStale
-          ? appServer.getStartedAtMs() > persistedLastAtMs
-            ? 'app-server restarted after active runtime snapshot'
-            : 'persisted runtime snapshot is stale'
-          : persistedSnapshot.degradedReason,
-      }
+        appServerStartedAtMs: appServer.getStartedAtMs(),
+      })
     }
     return persistRuntimeSnapshot(normalizedThreadId, runtimeStateStore.snapshot(normalizedThreadId, {
       pendingServerRequests,
