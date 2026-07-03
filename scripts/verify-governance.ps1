@@ -187,6 +187,10 @@ Assert-ContentIncludes "scripts/verify-release-artifacts.ps1" @(
   "Checksum file must reference an artifact file name only"
 )
 
+Assert-ContentIncludes "package.json" @(
+  '"verify:release-artifacts": "pwsh -NoProfile -File ./scripts/verify-release-artifacts.ps1"'
+)
+
 Assert-ContentIncludes "scripts/package-release.ps1" @(
   ".github\ISSUE_TEMPLATE\protocol_compatibility.yml",
   ".github\PULL_REQUEST_TEMPLATE.md",
