@@ -66,6 +66,7 @@ import {
   AppServerRpcQueue,
   getAppServerRpcQueuePriority,
 } from './appServerRpcQueue.js'
+import { AppServerLineBuffer } from './appServerLineBuffer.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -1758,7 +1759,7 @@ class AppServerProcess {
   private process: ChildProcessWithoutNullStreams | null = null
   private initialized = false
   private initializePromise: Promise<void> | null = null
-  private readBuffer = ''
+  private readonly stdoutLineBuffer = new AppServerLineBuffer()
   private nextId = 1
   private stopping = false
   private startedAtMs = 0
@@ -1818,19 +1819,7 @@ class AppServerProcess {
 
     proc.stdout.setEncoding('utf8')
     proc.stdout.on('data', (chunk: string) => {
-      this.readBuffer += chunk
-
-      let lineEnd = this.readBuffer.indexOf('\n')
-      while (lineEnd !== -1) {
-        const line = this.readBuffer.slice(0, lineEnd).trim()
-        this.readBuffer = this.readBuffer.slice(lineEnd + 1)
-
-        if (line.length > 0) {
-          this.handleLine(line)
-        }
-
-        lineEnd = this.readBuffer.indexOf('\n')
-      }
+      this.stdoutLineBuffer.push(chunk, (line) => this.handleLine(line))
     })
 
     proc.stderr.setEncoding('utf8')
@@ -1858,7 +1847,7 @@ class AppServerProcess {
       this.process = null
       this.initialized = false
       this.initializePromise = null
-      this.readBuffer = ''
+      this.stdoutLineBuffer.clear()
     })
 
     proc.on('exit', () => {
@@ -1881,7 +1870,7 @@ class AppServerProcess {
         this.process = null
         this.initialized = false
         this.initializePromise = null
-        this.readBuffer = ''
+        this.stdoutLineBuffer.clear()
       }
     })
   }
@@ -1984,7 +1973,7 @@ class AppServerProcess {
     this.process = null
     this.initialized = false
     this.initializePromise = null
-    this.readBuffer = ''
+    this.stdoutLineBuffer.clear()
     this.rejectAllPending(new Error(`codex app-server restarted: ${reason}`))
     this.rejectQueuedRpcCalls(new Error(`codex app-server restarted: ${reason}`))
     this.pendingServerRequests.clear()
@@ -2494,7 +2483,7 @@ class AppServerProcess {
     this.process = null
     this.initialized = false
     this.initializePromise = null
-    this.readBuffer = ''
+    this.stdoutLineBuffer.clear()
 
     this.rejectAllPending(failure)
     this.pendingServerRequests.clear()

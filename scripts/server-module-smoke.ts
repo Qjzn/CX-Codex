@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { AppServerLineBuffer } from '../src/server/appServerLineBuffer.js'
 import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheForRpc } from '../src/server/appServerRpcCache.js'
 import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.js'
 import { AppServerRpcQueue, getAppServerRpcQueuePriority } from '../src/server/appServerRpcQueue.js'
@@ -16,6 +17,7 @@ try {
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
   await smokeAppServerRpcQueue()
+  smokeAppServerLineBuffer()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
 } finally {
@@ -184,6 +186,31 @@ async function smokeAppServerRpcQueue(): Promise<void> {
   )
   stalledQueue.rejectAll(new Error('queue stopped'))
   await assert.rejects(pending, /queue stopped/)
+}
+
+function smokeAppServerLineBuffer(): void {
+  const captured = { lines: [] as string[] }
+  const captureLine = (line: string): void => {
+    captured.lines.push(line)
+  }
+  const buffer = new AppServerLineBuffer()
+
+  buffer.push('{"jsonrpc":"2.0"', captureLine)
+  assert.equal(buffer.pendingLength, 16)
+  assert.deepEqual(captured.lines, [])
+
+  buffer.push(',"id":1}\n\n  {"method":"notify"}\n{"pending":', captureLine)
+  assert.deepEqual(captured.lines, ['{"jsonrpc":"2.0","id":1}', '{"method":"notify"}'])
+  assert.equal(buffer.pendingLength, 11)
+
+  buffer.push('true}\n', captureLine)
+  assert.deepEqual(captured.lines, ['{"jsonrpc":"2.0","id":1}', '{"method":"notify"}', '{"pending":true}'])
+  assert.equal(buffer.pendingLength, 0)
+
+  buffer.push('partial', captureLine)
+  assert.equal(buffer.pendingLength, 7)
+  buffer.clear()
+  assert.equal(buffer.pendingLength, 0)
 }
 
 function smokeRuntimeStateStore(): void {

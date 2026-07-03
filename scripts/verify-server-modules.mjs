@@ -30,6 +30,7 @@ writeFileSync(tsconfigPath, `${JSON.stringify({
   },
   include: [
     join(repoRoot, 'scripts', 'server-module-smoke.ts'),
+    join(repoRoot, 'src', 'server', 'appServerLineBuffer.ts'),
     join(repoRoot, 'src', 'server', 'appServerRpcCache.ts'),
     join(repoRoot, 'src', 'server', 'appServerRpcDiagnostics.ts'),
     join(repoRoot, 'src', 'server', 'appServerRpcQueue.ts'),
