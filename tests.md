@@ -1437,3 +1437,30 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 配置验证：`node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json ok')"` 输出 `package.json ok`。
 - 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
 - 2026-07-03 构建期间仅出现 Vite 大 chunk 提示和 npm update config store 提示，未出现 TypeScript 或打包错误。
+
+---
+
+### Feature: 转写代理 bridge 模块化
+
+#### Prerequisites
+- 当前仓库已包含 `src/server/transcriptionProxy.ts`。
+- 本机可运行 `npm.cmd run build`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run build`。
+3. 执行 `node dist-cli/index.js --help`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; console.log('cli cjs launcher smoke ok')"`。
+5. 代码审查确认 `/codex-api/transcribe` 仍按配置优先调用 OpenAI 官方转写，未配置 API key 时回退到 ChatGPT/Codex 登录态代理。
+
+#### Expected Results
+- `src/server/codexAppServerBridge.ts` 不再内联 OpenAI/ChatGPT 转写代理实现，只保留路由、请求体读取、鉴权选择和响应转发。
+- `src/server/transcriptionProxy.ts` 封装 OpenAI 官方转写、ChatGPT 回退、multipart 默认字段、curl-impersonate fallback 和上传大小配置。
+- 构建和 CLI smoke 通过，证明拆分后的服务端模块导入正常。
+- 由于项目是 ESM package，没有公开 CJS entry；CJS 启动烟测通过即可作为本次模块加载兼容证据。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CLI smoke：`node dist-cli/index.js --help` 通过并输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。

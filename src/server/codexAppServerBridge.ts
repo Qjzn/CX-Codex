@@ -3,8 +3,6 @@ import { createHash, randomBytes } from 'node:crypto'
 import { mkdtemp, readFile, mkdir, stat } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { request as httpRequest } from 'node:http'
-import { request as httpsRequest } from 'node:https'
 import { homedir } from 'node:os'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
@@ -16,6 +14,13 @@ import { getTunnelStatus, updateTunnelConfig } from './tunnelStatus.js'
 import { readFavoriteRecords, readPinnedThreadIds, writeFavoriteRecords, writePinnedThreadIds } from './webUiState.js'
 import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } from './runtimeStore.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
+import {
+  getOpenAiTranscribeApiKey,
+  getTranscribeRequestBodyLimitBytes,
+  proxyChatGptTranscribe,
+  proxyOpenAiTranscribe,
+  type TranscriptionProxyResult,
+} from './transcriptionProxy.js'
 import {
   resolveCodexCommand,
   resolveRipgrepCommand,
@@ -2453,178 +2458,6 @@ function handleFileUpload(req: IncomingMessage, res: ServerResponse): void {
   })
 }
 
-function httpPost(
-  url: string,
-  headers: Record<string, string | number>,
-  body: Buffer,
-): Promise<{ status: number; body: string }> {
-  const doRequest = url.startsWith('http://') ? httpRequest : httpsRequest
-  return new Promise((resolve, reject) => {
-    const req = doRequest(url, { method: 'POST', headers }, (res) => {
-      const chunks: Buffer[] = []
-      res.on('data', (c: Buffer) => chunks.push(c))
-      res.on('end', () => resolve({ status: res.statusCode ?? 500, body: Buffer.concat(chunks).toString('utf8') }))
-      res.on('error', reject)
-    })
-    req.on('error', reject)
-    req.write(body)
-    req.end()
-  })
-}
-
-let curlImpersonateAvailable: boolean | null = null
-
-const OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions'
-const DEFAULT_OPENAI_TRANSCRIBE_MODEL = 'gpt-4o-transcribe'
-const TRANSCRIBE_REQUEST_BODY_LIMIT_BYTES = 26 * 1024 * 1024
-
-function curlImpersonatePost(
-  url: string,
-  headers: Record<string, string | number>,
-  body: Buffer,
-): Promise<{ status: number; body: string }> {
-  return new Promise((resolve, reject) => {
-    const args = ['-s', '-w', '\n%{http_code}', '-X', 'POST', url]
-    for (const [k, v] of Object.entries(headers)) {
-      if (k.toLowerCase() === 'content-length') continue
-      args.push('-H', `${k}: ${String(v)}`)
-    }
-    args.push('--data-binary', '@-')
-    const proc = spawn('curl-impersonate-chrome', args, {
-      env: { ...process.env, CURL_IMPERSONATE: 'chrome116' },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
-    const chunks: Buffer[] = []
-    proc.stdout.on('data', (c: Buffer) => chunks.push(c))
-    proc.on('error', (e) => {
-      curlImpersonateAvailable = false
-      reject(e)
-    })
-    proc.on('close', (code) => {
-      const raw = Buffer.concat(chunks).toString('utf8')
-      const lastNewline = raw.lastIndexOf('\n')
-      const statusStr = lastNewline >= 0 ? raw.slice(lastNewline + 1).trim() : ''
-      const responseBody = lastNewline >= 0 ? raw.slice(0, lastNewline) : raw
-      const status = parseInt(statusStr, 10) || (code === 0 ? 200 : 500)
-      curlImpersonateAvailable = true
-      resolve({ status, body: responseBody })
-    })
-    proc.stdin.write(body)
-    proc.stdin.end()
-  })
-}
-
-function readTranscribeEnv(name: string): string {
-  return (
-    process.env[`CX_CODEX_${name}`]?.trim() ||
-    process.env[`CODEXUI_${name}`]?.trim() ||
-    process.env[name]?.trim() ||
-    ''
-  )
-}
-
-function getOpenAiTranscribeApiKey(): string {
-  return readTranscribeEnv('OPENAI_API_KEY')
-}
-
-function getOpenAiTranscribeModel(): string {
-  return readTranscribeEnv('OPENAI_TRANSCRIBE_MODEL') || DEFAULT_OPENAI_TRANSCRIBE_MODEL
-}
-
-function getOpenAiTranscribeUrl(): string {
-  return readTranscribeEnv('OPENAI_TRANSCRIBE_URL') || OPENAI_TRANSCRIBE_URL
-}
-
-function getTranscribeRequestBodyLimitBytes(): number {
-  const configured = Number.parseInt(readTranscribeEnv('OPENAI_TRANSCRIBE_MAX_BYTES'), 10)
-  if (Number.isFinite(configured) && configured > 0) return configured
-  return TRANSCRIBE_REQUEST_BODY_LIMIT_BYTES
-}
-
-function getMultipartBoundary(contentType: string): string {
-  const match = contentType.match(/boundary=(?:"([^"]+)"|([^;\s]+))/iu)
-  return (match?.[1] ?? match?.[2] ?? '').trim()
-}
-
-function appendMultipartTextField(body: Buffer, boundary: string, name: string, value: string): Buffer {
-  const finalBoundary = Buffer.from(`--${boundary}--`)
-  const finalBoundaryIndex = body.lastIndexOf(finalBoundary)
-  if (finalBoundaryIndex < 0) return body
-
-  const prefix = body.subarray(0, finalBoundaryIndex)
-  const suffix = body.subarray(finalBoundaryIndex)
-  const separator = prefix.length > 0 && !prefix.subarray(-2).equals(Buffer.from('\r\n')) ? '\r\n' : ''
-  const field = Buffer.from(
-    `${separator}--${boundary}\r\n` +
-    `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
-    `${value}\r\n`,
-  )
-  return Buffer.concat([prefix, field, suffix])
-}
-
-function prepareOpenAiTranscribeBody(body: Buffer, contentType: string): Buffer {
-  const boundary = getMultipartBoundary(contentType)
-  if (!boundary) return body
-
-  let nextBody = body
-  if (!body.includes(Buffer.from('name="model"'))) {
-    nextBody = appendMultipartTextField(nextBody, boundary, 'model', getOpenAiTranscribeModel())
-  }
-  if (!body.includes(Buffer.from('name="response_format"'))) {
-    nextBody = appendMultipartTextField(nextBody, boundary, 'response_format', 'json')
-  }
-  return nextBody
-}
-
-async function proxyOpenAiTranscribe(
-  body: Buffer,
-  contentType: string,
-  apiKey: string,
-): Promise<{ status: number; body: string }> {
-  const upstreamBody = prepareOpenAiTranscribeBody(body, contentType)
-  return httpPost(getOpenAiTranscribeUrl(), {
-    'Content-Type': contentType,
-    'Content-Length': upstreamBody.length,
-    Authorization: `Bearer ${apiKey}`,
-  }, upstreamBody)
-}
-
-async function proxyChatGptTranscribe(
-  body: Buffer,
-  contentType: string,
-  authToken: string,
-  accountId?: string,
-): Promise<{ status: number; body: string }> {
-  const chatgptHeaders: Record<string, string | number> = {
-    'Content-Type': contentType,
-    'Content-Length': body.length,
-    Authorization: `Bearer ${authToken}`,
-    originator: 'Codex Desktop',
-    'User-Agent': `Codex Desktop/0.1.0 (${process.platform}; ${process.arch})`,
-  }
-  if (accountId) chatgptHeaders['ChatGPT-Account-Id'] = accountId
-
-  const postFn = curlImpersonateAvailable !== false ? curlImpersonatePost : httpPost
-  let result: { status: number; body: string }
-  try {
-    result = await postFn('https://chatgpt.com/backend-api/transcribe', chatgptHeaders, body)
-  } catch {
-    result = await httpPost('https://chatgpt.com/backend-api/transcribe', chatgptHeaders, body)
-  }
-
-  if (result.status === 403 && result.body.includes('cf_chl')) {
-    if (curlImpersonateAvailable !== false && postFn !== curlImpersonatePost) {
-      try {
-        const ciResult = await curlImpersonatePost('https://chatgpt.com/backend-api/transcribe', chatgptHeaders, body)
-        if (ciResult.status !== 403) return ciResult
-      } catch {}
-    }
-    return { status: 503, body: JSON.stringify({ error: 'Transcription blocked by Cloudflare. Install curl-impersonate-chrome.' }) }
-  }
-
-  return result
-}
-
 function readString(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
@@ -4741,7 +4574,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
         const incomingCt = readHeaderValue(req.headers['content-type'], 'application/octet-stream')
         const openAiApiKey = getOpenAiTranscribeApiKey()
-        let upstream: { status: number; body: string }
+        let upstream: TranscriptionProxyResult
         if (openAiApiKey) {
           upstream = await proxyOpenAiTranscribe(rawBody, incomingCt, openAiApiKey)
         } else {
