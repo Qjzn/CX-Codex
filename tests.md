@@ -2318,6 +2318,35 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Runtime thread state payload 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRuntimeRequestReconciliation.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 runtime thread state payload 生成和 active runtime request 状态过滤集合。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `/codex-api/runtime/thread/:threadId` 和 `/codex-api/runtime/thread/:threadId/reconcile` 都使用 `createRuntimeThreadStatePayload()` 返回 `snapshot` 与 `requests`。
+5. 代码审查确认 runtime thread state payload 仍使用 `RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES` 过滤 `pending_start`、`start_uncertain`、`running`、`stopping`、`stop_uncertain` 和 `still_running` 请求。
+
+#### Expected Results
+- runtime thread 本地状态查询和 reconcile 查询共享同一 active request 过滤口径。
+- `src/server/codexAppServerBridge.ts` 不再在两个 HTTP 分支内重复手写 active request 状态数组。
+- server module smoke 能证明 payload helper 返回原有 `{ snapshot, requests }` 结构，并把统一状态集合传给 `runtimeStore.listRequestsByThread()`。
+- release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `createRuntimeThreadStatePayload()` 和对应 smoke 断言，并把两个 runtime thread HTTP 分支恢复为直接返回 `snapshot` 与 `runtimeStore.listRequestsByThread(threadId, [...])`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: Thread read cache entry 构造模块化
 
 #### Prerequisites

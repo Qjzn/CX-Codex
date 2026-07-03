@@ -14,6 +14,7 @@ import {
 } from './appServerRuntimeBridge.js'
 import { AppServerNotificationReplay } from './appServerNotificationReplay.js'
 import {
+  createRuntimeThreadStatePayload,
   createRuntimeRequestSnapshotPatch,
   RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES,
 } from './appServerRuntimeRequestReconciliation.js'
@@ -1700,35 +1701,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
         if (req.method === 'POST' && isReconcile) {
           const snapshot = await reconcileRuntimeThread(threadId)
-          setJson(res, 200, {
-            data: {
-              snapshot,
-              requests: runtimeStore.listRequestsByThread(threadId, [
-                'pending_start',
-                'start_uncertain',
-                'running',
-                'stopping',
-                'stop_uncertain',
-                'still_running',
-              ]),
-            },
-          })
+          setJson(res, 200, { data: createRuntimeThreadStatePayload(threadId, snapshot, runtimeStore) })
           return
         }
         if (req.method === 'GET' && !isReconcile) {
-          setJson(res, 200, {
-            data: {
-              snapshot: readLocalRuntimeSnapshot(threadId),
-              requests: runtimeStore.listRequestsByThread(threadId, [
-                'pending_start',
-                'start_uncertain',
-                'running',
-                'stopping',
-                'stop_uncertain',
-                'still_running',
-              ]),
-            },
-          })
+          const snapshot = readLocalRuntimeSnapshot(threadId)
+          setJson(res, 200, { data: createRuntimeThreadStatePayload(threadId, snapshot, runtimeStore) })
           return
         }
       }

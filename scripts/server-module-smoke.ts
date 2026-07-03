@@ -211,6 +211,7 @@ import {
   type RuntimeExecutionState,
   type ThreadRuntimeSnapshot,
 } from '../src/server/runtimeState.js'
+import type { RuntimeRequestRecord } from '../src/server/runtimeStore.js'
 import {
   parseRuntimeInterruptPayload,
   parseRuntimeSendPayload,
@@ -222,6 +223,7 @@ import {
 import { AppServerNotificationReplay } from '../src/server/appServerNotificationReplay.js'
 import {
   createRuntimeRequestSnapshotPatch,
+  createRuntimeThreadStatePayload,
   RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES,
 } from '../src/server/appServerRuntimeRequestReconciliation.js'
 import { createLocalRuntimeSnapshotFromPersisted } from '../src/server/appServerRuntimeSnapshotRecovery.js'
@@ -2427,6 +2429,34 @@ function smokeAppServerRuntimeRequestReconciliation(): void {
     'stop_uncertain',
     'still_running',
   ])
+
+  const snapshot = createThreadRuntimeSnapshot({ executionState: 'running', activeTurnId: 'turn-a' })
+  const statusFilters: unknown[] = []
+  const runtimeRequests: RuntimeRequestRecord[] = [{
+    requestId: 'request-a',
+    clientMessageId: 'client-a',
+    threadId: 'thread-a',
+    turnId: 'turn-a',
+    status: 'running',
+    mode: 'default',
+    promptHash: 'hash-a',
+    payload: {},
+    retryCount: 0,
+    createdAtIso: '2026-01-01T00:00:00.000Z',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    lastError: null,
+  }]
+  assert.deepEqual(createRuntimeThreadStatePayload('thread-a', snapshot, {
+    listRequestsByThread: (threadId, statuses) => {
+      assert.equal(threadId, 'thread-a')
+      statusFilters.push(statuses)
+      return runtimeRequests
+    },
+  }), {
+    snapshot,
+    requests: runtimeRequests,
+  })
+  assert.deepEqual(statusFilters, [RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES])
 
   assert.deepEqual(createRuntimeRequestSnapshotPatch(
     { status: 'running', turnId: 'old-turn' },

@@ -21,6 +21,26 @@ export type RuntimeRequestSnapshotPatch = {
   lastError: string | null
 }
 
+export type RuntimeThreadStatePayload = {
+  snapshot: ThreadRuntimeSnapshot
+  requests: RuntimeRequestRecord[]
+}
+
+type RuntimeThreadStateStore = {
+  listRequestsByThread(threadId: string, statuses?: RuntimeRequestStatus[]): RuntimeRequestRecord[]
+}
+
+export function createRuntimeThreadStatePayload(
+  threadId: string,
+  snapshot: ThreadRuntimeSnapshot,
+  runtimeStore: RuntimeThreadStateStore,
+): RuntimeThreadStatePayload {
+  return {
+    snapshot,
+    requests: runtimeStore.listRequestsByThread(threadId, RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES),
+  }
+}
+
 export function createRuntimeRequestSnapshotPatch(
   request: Pick<RuntimeRequestRecord, 'status' | 'turnId'>,
   threadId: string,
