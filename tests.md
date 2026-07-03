@@ -1410,6 +1410,36 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: GitHub Actions Release 验证门禁
+
+#### Prerequisites
+- 仓库包含 `.github/workflows/ci.yml` 和 `.github/workflows/release.yml`。
+- 本机可运行 PowerShell 7 (`pwsh`) 和 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+3. 检查 `.github/workflows/ci.yml`，确认 Linux CI 使用 `pwsh` 调用 `./scripts/verify-release.ps1 -SchemaAudit skip`。
+4. 检查 `.github/workflows/release.yml`，确认发版 workflow 在打包前执行 `./scripts/verify-release.ps1 -RequireCleanGit -SchemaAudit skip`。
+5. 检查 `package.json`，确认 `verify:release` 使用 `pwsh`。
+6. 检查 `.github/PULL_REQUEST_TEMPLATE.md`，确认 PR 验证清单包含 `verify:release`。
+
+#### Expected Results
+- CI、Release workflow 和本地维护者命令共用同一个 release verification 脚本。
+- `verify-release.ps1` 在 Windows 使用 `npm.cmd`，在 Linux/macOS 使用 `npm`，能被 GitHub Actions `pwsh` 调用。
+- `package.json` 通过 `pwsh` 暴露同一套 `verify:release` 本地门禁，适合跨平台贡献者使用。
+- GitHub Actions 默认 `-SchemaAudit skip`，避免 runner 因没有 Codex CLI 而失败；正式发版仍由维护者本地执行 `warn` 或 `strict` 并记录摘要。
+- PR 模板提醒贡献者运行 `verify:release` 或说明未运行原因。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 本地 release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `git diff --check`、`package.json` 解析、`npm.cmd run build` 和 `node dist-cli/index.js --help`。
+- 2026-07-03 兼容修正验证：Windows PowerShell 5 环境下 `verify-release.ps1` 使用 .NET `RuntimeInformation` 识别 Windows，并正确调用 `npm.cmd`。
+- 2026-07-03 npm 脚本审查：`verify:release` 改为 `pwsh -NoProfile -File ./scripts/verify-release.ps1`，与 GitHub Actions 执行环境一致。
+- 2026-07-03 workflow 审查：CI workflow 使用 `pwsh` 直接调用 `./scripts/verify-release.ps1 -SchemaAudit skip`；Release workflow 在打包前调用 `./scripts/verify-release.ps1 -RequireCleanGit -SchemaAudit skip`。
+
+---
+
 ### Feature: OpenAI 官方语音转写与停止请求审计
 
 #### Prerequisites

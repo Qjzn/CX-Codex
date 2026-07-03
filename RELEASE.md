@@ -27,6 +27,8 @@
    - `-SchemaAudit warn` 会生成最新 App Server schema 审计摘要；如果发现 drift，命令继续完成但必须人工审计。
    - 已准备更新 schema 基线并要求严格阻断时，改用 `-SchemaAudit strict`。
    - 快速本地预检可用 `-SchemaAudit skip`，但不能作为最终发版证据。
+   - GitHub Actions Release workflow 默认执行 `-SchemaAudit skip`，因为 runner 不保证安装 Codex CLI；正式发版前应在维护者机器运行 `warn` 或 `strict` 并记录摘要。
+   - 本地 `npm run verify:release` 使用 PowerShell 7 (`pwsh`)；Windows PowerShell 5 用户可直接执行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1`。
 
 4. 打包 Release：
 

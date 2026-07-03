@@ -59,6 +59,27 @@ function Get-LatestSchemaAuditSummaryPath {
   return ""
 }
 
+function Get-NpmCommand {
+  if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+    return "npm.cmd"
+  }
+  return "npm"
+}
+
+function Get-PowerShellCommand {
+  $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+  if ($pwsh) {
+    return $pwsh.Source
+  }
+
+  $windowsPowerShell = Get-Command powershell -ErrorAction SilentlyContinue
+  if ($windowsPowerShell) {
+    return $windowsPowerShell.Source
+  }
+
+  throw "PowerShell executable not found"
+}
+
 Write-Host "CX-Codex release verification"
 Write-Host "Repository:  $repoRoot"
 Write-Host "SchemaAudit: $SchemaAudit"
@@ -79,8 +100,10 @@ if ($RequireCleanGit -and -not $AllowDirty) {
 Invoke-CheckedCommand -Label "Whitespace check" -Command "git" -Arguments @("diff", "--check")
 Invoke-NodeInline -Label "package.json parse check" -Script "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json ok')"
 
+$npmCommand = Get-NpmCommand
+
 if (-not $SkipBuild) {
-  Invoke-CheckedCommand -Label "Build frontend and CLI" -Command "npm.cmd" -Arguments @("run", "build")
+  Invoke-CheckedCommand -Label "Build frontend and CLI" -Command $npmCommand -Arguments @("run", "build")
 } else {
   Write-Host ""
   Write-Host "==> Build skipped"
@@ -100,7 +123,8 @@ if (-not $SkipCliSmoke) {
 if ($SchemaAudit -ne "skip") {
   Write-Host ""
   Write-Host "==> App Server schema audit ($SchemaAudit)"
-  & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts/audit-app-server-schemas.ps1")
+  $powerShellCommand = Get-PowerShellCommand
+  & $powerShellCommand -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts/audit-app-server-schemas.ps1")
   $auditExitCode = $LASTEXITCODE
   $summaryPath = Get-LatestSchemaAuditSummaryPath
   if ($summaryPath) {

@@ -65,7 +65,7 @@
     "test:7420:frontend": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/regression-7420-frontend.ps1",
     "test:7420:soak": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/soak-7420.ps1",
     "audit:app-server-schemas": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/audit-app-server-schemas.ps1",
-    "verify:release": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1",
+    "verify:release": "pwsh -NoProfile -File ./scripts/verify-release.ps1",
     "preview": "vite preview",
     "prepublishOnly": "npm run build"
   },
