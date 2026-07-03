@@ -1951,3 +1951,34 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 代码审查：`rg` 确认 token usage 归一化、session log token cache 和 `ThreadTokenUsageStore` 均在 `src/server/threadTokenUsage.ts`。
 - 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
 - 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `Server module smoke`、构建和 CLI smoke。
+
+---
+
+### Feature: Server request policy 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/serverRequestPolicy.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 server request 策略行为。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run build`。
+3. 执行 `npm.cmd run verify:server-modules`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 通过 `evaluateServerRequestPolicy()` 处理 plan-mode decline、auto-approve 和 unsupported tool-call；bridge 仍负责 JSON-RPC reply、warn 日志、`server/request/resolved` 通知和 pending request 记录。
+
+#### Expected Results
+- `src/server/serverRequestPolicy.ts` 集中维护 `PermissionDecision`、`WebBridgeSettings` 类型、MCP elicitation/tool permission 判断、plan-mode 自动拒绝、权限自动批准和 unsupported `item/tool/call` 结果。
+- plan-mode permission request 优先于 allow-for-session 自动批准，仍返回 `{ decision: 'decline' }` 或 MCP `{ action: 'decline' }`。
+- allow-for-session 权限仍自动批准 command/file request；MCP tool permission 仍返回 `{ action: 'accept' }`。
+- unsupported `item/tool/call` 仍自动返回不能代执行工具的中文结果，并由 bridge 写 warn 日志。
+- Server module smoke 验证 MCP 正常/历史拼写方法名、allow/ask 权限、plan decline 优先级、queue fallback 和 unsupported tool-call。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-03 代码审查：`rg` 确认 MCP permission 和 server request policy helper 已集中到 `src/server/serverRequestPolicy.ts`，bridge 只调用 `evaluateServerRequestPolicy()`。
+- 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `Server module smoke`、构建和 CLI smoke。

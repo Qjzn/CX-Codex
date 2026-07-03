@@ -10,6 +10,14 @@ import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/serv
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
 import { PlanModeTurnStore } from '../src/server/planModeTurnStore.js'
 import {
+  buildAutoApprovalResult,
+  buildPlanModeDeclineResult,
+  buildUnsupportedServerRequestResult,
+  evaluateServerRequestPolicy,
+  isMcpToolPermissionRequest,
+  shouldAutoApproveServerRequest,
+} from '../src/server/serverRequestPolicy.js'
+import {
   normalizeThreadTokenUsage,
   normalizeThreadTokenUsageFromSessionLogEntry,
   parseThreadTokenUsageFromSessionLog,
@@ -33,6 +41,7 @@ try {
   smokeAppServerLineBuffer()
   smokeAppServerStderrLogger()
   smokePlanModeTurnStore()
+  smokeServerRequestPolicy()
   await smokeThreadTokenUsage()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
@@ -282,6 +291,69 @@ function smokePlanModeTurnStore(): void {
   assert.equal(store.count, 1)
   store.clearAll()
   assert.equal(store.count, 0)
+}
+
+function smokeServerRequestPolicy(): void {
+  const askPermissions = {
+    allowAllPermissionRequests: false,
+    commandExecution: 'ask' as const,
+    fileChange: 'ask' as const,
+    mcpTools: 'ask' as const,
+  }
+  const allowSessionPermissions = {
+    allowAllPermissionRequests: false,
+    commandExecution: 'allowForSession' as const,
+    fileChange: 'allowForSession' as const,
+    mcpTools: 'allowForSession' as const,
+  }
+
+  const mcpParams = {
+    request: {
+      params: {
+        message: 'Allow the demo MCP server to run tool "lookup"?',
+      },
+    },
+  }
+  assert.equal(isMcpToolPermissionRequest('mcpserver/elicitation/request', mcpParams), true)
+  assert.equal(isMcpToolPermissionRequest('mcpserver/elication/request', {
+    serverName: 'demo',
+    toolName: 'lookup',
+  }), true)
+  assert.equal(isMcpToolPermissionRequest('elicitation/create', { params: { message: 'Choose a value' } }), false)
+
+  assert.equal(shouldAutoApproveServerRequest('item/commandExecution/requestApproval', {}, askPermissions), false)
+  assert.equal(shouldAutoApproveServerRequest('item/commandExecution/requestApproval', {}, allowSessionPermissions), true)
+  assert.deepEqual(buildAutoApprovalResult('item/commandExecution/requestApproval', {}), { decision: 'acceptForSession' })
+  assert.deepEqual(buildAutoApprovalResult('mcpserver/elicitation/request', mcpParams), { action: 'accept' })
+
+  assert.deepEqual(buildPlanModeDeclineResult('item/fileChange/requestApproval', {}), { decision: 'decline' })
+  assert.deepEqual(buildPlanModeDeclineResult('mcpserver/elicitation/request', mcpParams), { action: 'decline' })
+  assert.equal(evaluateServerRequestPolicy({
+    method: 'item/fileChange/requestApproval',
+    params: {},
+    permissions: allowSessionPermissions,
+    isPlanModeRequest: true,
+  }).kind, 'plan-decline')
+  assert.equal(evaluateServerRequestPolicy({
+    method: 'mcpserver/elicitation/request',
+    params: mcpParams,
+    permissions: askPermissions,
+    isPlanModeRequest: false,
+  }).kind, 'queue')
+  assert.equal(evaluateServerRequestPolicy({
+    method: 'mcpserver/elicitation/request',
+    params: mcpParams,
+    permissions: allowSessionPermissions,
+    isPlanModeRequest: false,
+  }).kind, 'auto-approve')
+  const unsupported = evaluateServerRequestPolicy({
+    method: 'item/tool/call',
+    params: {},
+    permissions: allowSessionPermissions,
+    isPlanModeRequest: false,
+  })
+  assert.equal(unsupported.kind, 'reject-unsupported')
+  assert.match(JSON.stringify(buildUnsupportedServerRequestResult('item/tool/call')), /不能代执行这个工具/)
 }
 
 async function smokeThreadTokenUsage(): Promise<void> {

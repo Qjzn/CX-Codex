@@ -75,6 +75,11 @@ import {
   ThreadTokenUsageStore,
   type ThreadTokenUsage,
 } from './threadTokenUsage.js'
+import {
+  evaluateServerRequestPolicy,
+  type PermissionDecision,
+  type WebBridgeSettings,
+} from './serverRequestPolicy.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -123,19 +128,6 @@ type AppServerHealth = {
   pendingServerRequestCount: number
   activePlanModeTurnCount: number
   rpcDiagnostics?: RpcDiagnostics
-}
-
-type PermissionDecision = 'ask' | 'allowForSession'
-
-type WebBridgePermissionSettings = {
-  allowAllPermissionRequests: boolean
-  commandExecution: PermissionDecision
-  fileChange: PermissionDecision
-  mcpTools: PermissionDecision
-}
-
-type WebBridgeSettings = {
-  permissions: WebBridgePermissionSettings
 }
 
 type CachedThreadRead = {
@@ -218,6 +210,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null
+}
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value : ''
 }
 
 function trimThreadTurnsInRpcResult(method: string, result: unknown): unknown {
@@ -1532,56 +1528,6 @@ function handleFileUpload(req: IncomingMessage, res: ServerResponse): void {
   })
 }
 
-function readString(value: unknown): string {
-  return typeof value === 'string' ? value : ''
-}
-
-function looksLikeMcpElicitationPayload(payload: Record<string, unknown> | null): boolean {
-  if (!payload) return false
-  return (
-    readString(payload.message).trim().length > 0 ||
-    readString(payload.mode).trim().length > 0 ||
-    readString(payload.url).trim().length > 0 ||
-    asRecord(payload.requestedSchema) !== null ||
-    asRecord(payload.schema) !== null ||
-    asRecord(payload.inputSchema) !== null ||
-    asRecord(payload.jsonSchema) !== null
-  )
-}
-
-function readMcpElicitationPayload(params: unknown): Record<string, unknown> | null {
-  const row = asRecord(params)
-  if (!row) return null
-  const requestParams = asRecord(asRecord(row.request)?.params)
-  if (looksLikeMcpElicitationPayload(requestParams)) return requestParams
-  const elicitationParams = asRecord(asRecord(row.elicitation)?.params)
-  if (looksLikeMcpElicitationPayload(elicitationParams)) return elicitationParams
-  const nestedParams = asRecord(row.params)
-  if (looksLikeMcpElicitationPayload(nestedParams)) return nestedParams
-  return row
-}
-
-function isMcpElicitationRequestMethod(method: string): boolean {
-  const normalized = method.trim().toLowerCase()
-  return (
-    normalized === 'mcpserver/elicitation/request' ||
-    normalized === 'mcpserver/elication/request' ||
-    normalized === 'elicitation/create'
-  )
-}
-
-function isMcpToolPermissionRequest(method: string, params: unknown): boolean {
-  if (!isMcpElicitationRequestMethod(method)) return false
-  const payload = readMcpElicitationPayload(params)
-  const message = readString(payload?.message).trim()
-  if (/^Allow\s+the\s+.+?\s+MCP\s+server\s+to\s+run\s+tool\s+["“][^"”]+["”]\??$/iu.test(message)) {
-    return true
-  }
-  const serverName = readString(payload?.serverName || payload?.server).trim()
-  const toolName = readString(payload?.toolName || payload?.tool).trim()
-  return serverName.length > 0 && toolName.length > 0
-}
-
 class AppServerProcess {
   private process: ChildProcessWithoutNullStreams | null = null
   private initialized = false
@@ -1927,69 +1873,6 @@ class AppServerProcess {
     return this.planModeTurns.isActiveRequest(threadId, turnId)
   }
 
-  private shouldDeclinePlanModeServerRequest(method: string, params: unknown): boolean {
-    if (!this.isPlanModeServerRequest(params)) return false
-    return (
-      method === 'item/commandExecution/requestApproval' ||
-      method === 'item/fileChange/requestApproval' ||
-      isMcpToolPermissionRequest(method, params)
-    )
-  }
-
-  private buildPlanModeDeclineResult(method: string, params: unknown): unknown {
-    if (isMcpToolPermissionRequest(method, params)) {
-      return { action: 'decline' }
-    }
-    return { decision: 'decline' }
-  }
-
-  private shouldAutoApproveServerRequest(method: string, params: unknown): boolean {
-    const permissions = this.webBridgeSettings.permissions
-    if (permissions.allowAllPermissionRequests) {
-      return (
-        method === 'item/commandExecution/requestApproval' ||
-        method === 'item/fileChange/requestApproval' ||
-        isMcpToolPermissionRequest(method, params)
-      )
-    }
-    if (method === 'item/commandExecution/requestApproval') {
-      return permissions.commandExecution === 'allowForSession'
-    }
-    if (method === 'item/fileChange/requestApproval') {
-      return permissions.fileChange === 'allowForSession'
-    }
-    if (isMcpToolPermissionRequest(method, params)) {
-      return permissions.mcpTools === 'allowForSession'
-    }
-    return false
-  }
-
-  private buildAutoApprovalResult(method: string, params: unknown): unknown {
-    if (isMcpToolPermissionRequest(method, params)) {
-      return { action: 'accept' }
-    }
-    return { decision: 'acceptForSession' }
-  }
-
-  private shouldRejectUnsupportedServerRequest(method: string): boolean {
-    return method === 'item/tool/call'
-  }
-
-  private buildUnsupportedServerRequestResult(method: string): unknown {
-    if (method === 'item/tool/call') {
-      return {
-        success: false,
-        contentItems: [
-          {
-            type: 'inputText',
-            text: 'CX-Codex Web 收到了 Codex 工具调用请求，但当前 Web 端不能代执行这个工具。请改用文字方案继续，或提示用户在桌面端 Codex 客户端处理需要的工具操作。',
-          },
-        ],
-      }
-    }
-    return {}
-  }
-
   private readServerRequestThreadId(params: unknown): string {
     return readThreadIdFromPayload(params)
   }
@@ -2023,23 +1906,30 @@ class AppServerProcess {
   }
 
   private handleServerRequest(requestId: number, method: string, params: unknown): void {
-    if (this.shouldDeclinePlanModeServerRequest(method, params)) {
+    const policy = evaluateServerRequestPolicy({
+      method,
+      params,
+      permissions: this.webBridgeSettings.permissions,
+      isPlanModeRequest: this.isPlanModeServerRequest(params),
+    })
+
+    if (policy.kind === 'plan-decline') {
       this.sendServerRequestReply(requestId, {
-        result: this.buildPlanModeDeclineResult(method, params),
+        result: policy.result,
       })
       this.emitServerRequestResolved(requestId, method, params, 'automatic')
       return
     }
 
-    if (this.shouldAutoApproveServerRequest(method, params)) {
+    if (policy.kind === 'auto-approve') {
       this.sendServerRequestReply(requestId, {
-        result: this.buildAutoApprovalResult(method, params),
+        result: policy.result,
       })
       this.emitServerRequestResolved(requestId, method, params, 'automatic')
       return
     }
 
-    if (this.shouldRejectUnsupportedServerRequest(method)) {
+    if (policy.kind === 'reject-unsupported') {
       writeBridgeLog('warn', 'Declined unsupported app-server request', {
         requestId,
         method,
@@ -2047,7 +1937,7 @@ class AppServerProcess {
         turnId: readTurnIdFromPayload(params),
       })
       this.sendServerRequestReply(requestId, {
-        result: this.buildUnsupportedServerRequestResult(method),
+        result: policy.result,
       })
       this.emitServerRequestResolved(requestId, method, params, 'automatic')
       return
