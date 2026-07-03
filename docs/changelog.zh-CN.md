@@ -8,6 +8,7 @@
   - 未配置 OpenAI API key 时仍保留原有 ChatGPT 登录态代理转写链路，避免破坏既有安装。
 - 安全加固：
   - 普通 JSON API 请求体新增默认 2MiB 服务端保护，可通过 `CX_CODEX_JSON_BODY_MAX_BYTES` 或 `JSON_BODY_MAX_BYTES` 覆盖。
+  - 普通文件上传请求体新增默认 50MiB 服务端保护，可通过 `CX_CODEX_FILE_UPLOAD_MAX_BYTES` 或 `FILE_UPLOAD_MAX_BYTES` 覆盖。
 
 ## 2.2.7
 

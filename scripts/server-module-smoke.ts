@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { AppServerLineBuffer } from '../src/server/appServerLineBuffer.js'
 import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheForRpc } from '../src/server/appServerRpcCache.js'
 import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.js'
@@ -27,7 +28,9 @@ import {
 import {
   FileUploadError,
   bufferIndexOf,
+  getFileUploadRequestBodyLimitBytes,
   parseMultipartFileUpload,
+  readRequestBody,
   readMultipartBoundary,
   writeUploadedFile,
 } from '../src/server/fileUpload.js'
@@ -403,6 +406,18 @@ function smokeServerRequestPolicy(): void {
 }
 
 async function smokeFileUpload(): Promise<void> {
+  const originalUploadLimit = process.env.CX_CODEX_FILE_UPLOAD_MAX_BYTES
+  try {
+    process.env.CX_CODEX_FILE_UPLOAD_MAX_BYTES = '12345'
+    assert.equal(getFileUploadRequestBodyLimitBytes(), 12345)
+  } finally {
+    if (typeof originalUploadLimit === 'string') {
+      process.env.CX_CODEX_FILE_UPLOAD_MAX_BYTES = originalUploadLimit
+    } else {
+      delete process.env.CX_CODEX_FILE_UPLOAD_MAX_BYTES
+    }
+  }
+
   assert.equal(bufferIndexOf(Buffer.from('abc--boundary'), Buffer.from('--')), 3)
   assert.equal(bufferIndexOf(Buffer.from('abc'), Buffer.from('missing')), -1)
   assert.equal(readMultipartBoundary('multipart/form-data; boundary=demo-boundary'), 'demo-boundary')
@@ -429,6 +444,11 @@ async function smokeFileUpload(): Promise<void> {
   const parsed = parseMultipartFileUpload(body, `multipart/form-data; boundary=${boundary}`)
   assert.equal(parsed.fileName, 'nested_path_demo.txt')
   assert.equal(parsed.fileData.toString('utf8'), 'hello upload')
+  assert.equal((await readRequestBody(Readable.from([Buffer.from('hello')]) as never, { maxBytes: 5 })).toString('utf8'), 'hello')
+  await assert.rejects(
+    readRequestBody(Readable.from([Buffer.from('too-large')]) as never, { maxBytes: 3 }),
+    (error) => error instanceof FileUploadError && error.statusCode === 413 && error.maxBytes === 3,
+  )
   assert.throws(
     () => parseMultipartFileUpload(Buffer.from(`--${boundary}\r\n\r\nno file\r\n`, 'utf8'), `multipart/form-data; boundary=${boundary}`),
     (error) => error instanceof FileUploadError && error.statusCode === 400 && /No file in request/.test(error.message),

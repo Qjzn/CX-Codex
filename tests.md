@@ -1910,11 +1910,11 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
-### Feature: Multipart file upload 模块化
+### Feature: Multipart file upload 模块化与大小限制
 
 #### Prerequisites
 - 当前仓库包含 `src/server/fileUpload.ts`。
-- `scripts/server-module-smoke.ts` 已覆盖 multipart boundary 读取、文件 part 解析、文件名净化、CRLF 裁剪、缺失文件错误和临时目录写入。
+- `scripts/server-module-smoke.ts` 已覆盖 multipart boundary 读取、文件 part 解析、文件名净化、CRLF 裁剪、缺失文件错误、请求体大小限制、环境变量覆盖和临时目录写入。
 
 #### Steps
 1. 执行 `git diff --check`。
@@ -1927,6 +1927,7 @@ This file tracks manual regression and feature verification steps.
 #### Expected Results
 - 缺少 multipart boundary 时仍返回 400 和 `Missing multipart boundary`。
 - 请求中没有文件 part 时仍返回 400 和 `No file in request`。
+- 超过上传请求体上限时返回 413，默认上限为 50MiB，可通过 `CX_CODEX_FILE_UPLOAD_MAX_BYTES` 或 `FILE_UPLOAD_MAX_BYTES` 覆盖。
 - 上传文件名中的 `/` 和 `\` 会替换为 `_`，避免路径穿越。
 - 上传文件仍写入系统临时目录下的 `codex-web-uploads/f-*` 子目录，并返回 `{ path }`。
 - 构建、server module smoke、CJS 启动烟测和 release gate 均通过。

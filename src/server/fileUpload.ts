@@ -2,20 +2,39 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import type { IncomingMessage } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { RequestBodyTooLargeError, readRawBody } from './httpBody.js'
 
 export type ParsedMultipartFileUpload = {
   fileName: string
   fileData: Buffer
 }
 
+const FILE_UPLOAD_REQUEST_BODY_LIMIT_BYTES = 50 * 1024 * 1024
+
 export class FileUploadError extends Error {
   constructor(
     message: string,
     readonly statusCode: number,
+    readonly maxBytes?: number,
   ) {
     super(message)
     this.name = 'FileUploadError'
   }
+}
+
+function readUploadEnv(name: string): string {
+  return (
+    process.env[`CX_CODEX_${name}`]?.trim() ||
+    process.env[`CODEXUI_${name}`]?.trim() ||
+    process.env[name]?.trim() ||
+    ''
+  )
+}
+
+export function getFileUploadRequestBodyLimitBytes(): number {
+  const configured = Number.parseInt(readUploadEnv('FILE_UPLOAD_MAX_BYTES'), 10)
+  if (Number.isFinite(configured) && configured > 0) return configured
+  return FILE_UPLOAD_REQUEST_BODY_LIMIT_BYTES
 }
 
 export function bufferIndexOf(buf: Buffer, needle: Buffer, start = 0): number {
@@ -73,13 +92,16 @@ export function parseMultipartFileUpload(body: Buffer, contentType: string): Par
   throw new FileUploadError('No file in request', 400)
 }
 
-export async function readRequestBody(req: IncomingMessage): Promise<Buffer> {
-  const chunks: Buffer[] = []
-  return await new Promise<Buffer>((resolve, reject) => {
-    req.on('data', (chunk: Buffer) => chunks.push(chunk))
-    req.on('end', () => resolve(Buffer.concat(chunks)))
-    req.on('error', (error: Error) => reject(error))
-  })
+export async function readRequestBody(req: IncomingMessage, options: { maxBytes?: number } = {}): Promise<Buffer> {
+  const maxBytes = options.maxBytes ?? getFileUploadRequestBodyLimitBytes()
+  try {
+    return await readRawBody(req, { maxBytes })
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      throw new FileUploadError(`Upload is too large. Maximum request size is ${error.maxBytes} bytes.`, 413, error.maxBytes)
+    }
+    throw error
+  }
 }
 
 export async function writeUploadedFile(
