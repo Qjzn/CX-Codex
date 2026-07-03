@@ -126,6 +126,38 @@
 
     <section class="diagnostics-section diagnostics-section-wide">
       <div class="diagnostics-section-header">
+        <h2>权限请求队列</h2>
+        <span class="diagnostics-badge" :data-tone="pendingServerRequests.length > 0 ? 'warning' : 'ok'">
+          {{ pendingServerRequests.length }} 个待处理
+        </span>
+      </div>
+      <div v-if="pendingServerRequests.length === 0" class="diagnostics-empty">
+        当前没有 App Server permission、approval 或 elicitation 请求。
+      </div>
+      <div v-else class="diagnostics-table-wrap">
+        <table class="diagnostics-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>方法</th>
+              <th>类型</th>
+              <th>等待</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="request in pendingServerRequests" :key="request.id">
+              <td class="diagnostics-mono">#{{ request.id }}</td>
+              <td class="diagnostics-mono">{{ request.method }}</td>
+              <td>{{ formatServerRequestKind(request.method) }}</td>
+              <td>{{ formatAge(request.receivedAtIso) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="diagnostics-section diagnostics-section-wide">
+      <div class="diagnostics-section-header">
         <h2>恢复队列</h2>
         <span class="diagnostics-badge" :data-tone="uncertainRequests.length > 0 ? 'warning' : 'ok'">
           {{ uncertainRequests.length }} 个不确定请求
@@ -283,6 +315,12 @@ type RuntimeEventDiagnostics = {
   turnId: string
 }
 
+type PendingServerRequestDiagnostics = {
+  id: number
+  method: string
+  receivedAtIso: string
+}
+
 type UnknownNotificationDiagnostics = {
   method: string
   count: number
@@ -362,6 +400,7 @@ type DiagnosticsData = {
     uncertainRequests: RuntimeRequestDiagnostics[]
     recentEvents: RuntimeEventDiagnostics[]
   }
+  pendingServerRequests?: PendingServerRequestDiagnostics[]
   timestamp: string
 }
 
@@ -439,6 +478,7 @@ const transcription = computed(() => diagnostics.value?.transcription ?? emptyTr
 const schemaAudit = computed(() => diagnostics.value?.schemaAudit ?? emptySchemaAudit)
 const uncertainRequests = computed(() => diagnostics.value?.runtime.uncertainRequests ?? [])
 const recentEvents = computed(() => diagnostics.value?.runtime.recentEvents ?? [])
+const pendingServerRequests = computed(() => diagnostics.value?.pendingServerRequests ?? [])
 const slowRpcCalls = computed(() => appServer.value.rpcDiagnostics?.recentSlowRpc ?? [])
 const timeoutCount = computed(() => appServer.value.rpcDiagnostics?.recentTimeouts?.length ?? 0)
 const unknownNotifications = computed(() => diagnostics.value?.notificationDiagnostics?.recentUnknownNotifications ?? [])
@@ -473,6 +513,7 @@ const overallTone = computed<Tone>(() => {
     || runtimeTone.value === 'warning'
     || schemaAuditTone.value === 'warning'
     || schemaAuditTone.value === 'danger'
+    || pendingServerRequests.value.length > 0
     || unknownNotificationCount.value > 0
     || unknownStatusCount.value > 0
   ) return 'warning'
@@ -574,6 +615,15 @@ function formatTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+function formatServerRequestKind(method: string): string {
+  const normalized = method.toLowerCase()
+  if (normalized.includes('permission')) return '权限'
+  if (normalized.includes('approval')) return '审批'
+  if (normalized.includes('elicitation')) return '补充信息'
+  if (normalized.includes('tool')) return '工具'
+  return '请求'
 }
 
 function formatAge(value: string): string {

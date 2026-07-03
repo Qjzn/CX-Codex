@@ -15,6 +15,7 @@
   - Release/governance 门禁会校验 schema audit 摘要结构，避免协议差异记录丢失或无法复核。
   - App Server `thread/read` 未知 thread/turn status 会在 health、diagnostics 和诊断中心按来源聚合计数，方便发现官方协议新增状态且不误判为运行态。
   - 诊断中心新增 schema audit 摘要卡片，展示审计状态、生成时间、官方文档入口和 TypeScript/JSON schema 差异计数。
+  - 诊断中心新增权限请求队列，脱敏展示 App Server pending permission、approval、elicitation 或 tool request，便于排查任务等待授权的原因。
 
 ## 2.2.7
 
