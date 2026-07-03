@@ -1,3 +1,5 @@
+import type { PendingServerRequest } from './pendingServerRequests.js'
+
 export type RuntimeExecutionState =
   | 'idle'
   | 'queued'
@@ -15,13 +17,6 @@ export type RuntimeExecutionState =
   | 'sync_degraded'
 
 export type RuntimeSnapshotSource = 'events' | 'thread-read' | 'cache' | 'unknown'
-
-export type PendingServerRequest = {
-  id: number
-  method: string
-  params: unknown
-  receivedAtIso: string
-}
 
 export type ThreadRuntimeSnapshot = {
   threadId: string

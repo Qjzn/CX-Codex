@@ -18,11 +18,11 @@ import {
   RUNTIME_SNAPSHOT_STALE_MS,
   RuntimeStateStore,
   toPersistableRuntimeSnapshot,
-  type PendingServerRequest,
   type RuntimeExecutionState,
   type RuntimeSnapshotOverlay,
   type ThreadRuntimeSnapshot,
 } from './runtimeState.js'
+import { PendingServerRequestStore, type PendingServerRequest } from './pendingServerRequests.js'
 import { logBridgeError, writeBridgeLog } from './bridgeLog.js'
 import {
   applyRuntimeTurnOptionsToInput,
@@ -1822,7 +1822,7 @@ class AppServerProcess {
   private readonly queuedRpcCalls: QueuedRpcTask[] = []
   private readonly expectedExitProcesses = new WeakSet<ChildProcessWithoutNullStreams>()
   private readonly notificationListeners = new Set<(value: { method: string; params: unknown }) => void>()
-  private readonly pendingServerRequests = new Map<number, PendingServerRequest>()
+  private readonly pendingServerRequests = new PendingServerRequestStore()
   private readonly rpcCache = new AppServerRpcCache()
   private readonly threadTokenUsageByThreadId = new Map<string, ThreadTokenUsage>()
   private readonly planModeTurnsByThreadId = new Map<string, { turnId: string; startedAtMs: number }>()
@@ -1903,7 +1903,7 @@ class AppServerProcess {
       if (!expectedExit) {
         logBridgeError('Codex app-server exited unexpectedly', failure, {
           pendingRpcCount: this.pending.size,
-          pendingServerRequestCount: this.pendingServerRequests.size,
+          pendingServerRequestCount: this.pendingServerRequests.count,
         })
       }
 
@@ -2052,7 +2052,7 @@ class AppServerProcess {
       reason,
       pid: proc.pid,
       pendingRpcCount: this.pending.size,
-      pendingServerRequestCount: this.pendingServerRequests.size,
+      pendingServerRequestCount: this.pendingServerRequests.count,
       ...details,
     })
 
@@ -2320,11 +2320,10 @@ class AppServerProcess {
   }
 
   private resolvePendingServerRequest(requestId: number, reply: ServerRequestReply): void {
-    const pendingRequest = this.pendingServerRequests.get(requestId)
+    const pendingRequest = this.pendingServerRequests.consume(requestId)
     if (!pendingRequest) {
       throw new Error(`No pending server request found for id ${String(requestId)}`)
     }
-    this.pendingServerRequests.delete(requestId)
 
     this.sendServerRequestReply(requestId, reply)
     this.emitServerRequestResolved(requestId, pendingRequest.method, pendingRequest.params, 'manual')
@@ -2361,13 +2360,7 @@ class AppServerProcess {
       return
     }
 
-    const pendingRequest: PendingServerRequest = {
-      id: requestId,
-      method,
-      params,
-      receivedAtIso: new Date().toISOString(),
-    }
-    this.pendingServerRequests.set(requestId, pendingRequest)
+    const pendingRequest = this.pendingServerRequests.record(requestId, method, params)
 
     this.emitNotification({
       method: 'server/request',
@@ -2587,15 +2580,11 @@ class AppServerProcess {
   }
 
   listPendingServerRequests(): PendingServerRequest[] {
-    return Array.from(this.pendingServerRequests.values())
+    return this.pendingServerRequests.list()
   }
 
   listPendingServerRequestsForThread(threadId: string): PendingServerRequest[] {
-    const normalizedThreadId = threadId.trim()
-    if (!normalizedThreadId) return []
-    return this.listPendingServerRequests().filter((request) => (
-      this.readServerRequestThreadId(request.params) === normalizedThreadId
-    ))
+    return this.pendingServerRequests.listForThread(threadId, (params) => this.readServerRequestThreadId(params))
   }
 
   getThreadTokenUsage(threadId: string): ThreadTokenUsage | null {
@@ -2612,7 +2601,7 @@ class AppServerProcess {
       pid: this.process?.pid ?? null,
       pendingRpcCount: this.pending.size,
       queuedRpcCount: this.queuedRpcCalls.length,
-      pendingServerRequestCount: this.pendingServerRequests.size,
+      pendingServerRequestCount: this.pendingServerRequests.count,
       activePlanModeTurnCount: this.planModeTurnsByThreadId.size,
       rpcDiagnostics: {
         activeRpcCalls: this.activeRpcCalls,
