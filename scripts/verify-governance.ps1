@@ -63,6 +63,7 @@ $requiredFiles = @(
   "docs/changelog.zh-CN.md",
   "docs/roadmap.zh-CN.md",
   "docs/operations-plan.zh-CN.md",
+  "docs/dependency-maintenance.zh-CN.md",
   ".github/PULL_REQUEST_TEMPLATE.md",
   ".github/dependabot.yml",
   ".github/ISSUE_TEMPLATE/config.yml",
@@ -90,6 +91,7 @@ Assert-ContentIncludes "README.md" @(
   "Self-hosted OpenAI Codex Web UI and Android client bridge",
   "docs/security-hardening.zh-CN.md",
   "docs/app-server-protocol-matrix.zh-CN.md",
+  "docs/dependency-maintenance.zh-CN.md",
   "CODE_OF_CONDUCT.md",
   "SECURITY.md",
   "CONTRIBUTING.md",
@@ -107,7 +109,17 @@ Assert-ContentIncludes "CODE_OF_CONDUCT.md" @(
 Assert-ContentIncludes "CONTRIBUTING.md" @(
   "CODE_OF_CONDUCT.md",
   ".github/dependabot.yml",
+  "docs/dependency-maintenance.zh-CN.md",
   "Pull Request 要求"
+)
+
+Assert-ContentIncludes "docs/dependency-maintenance.zh-CN.md" @(
+  ".github/dependabot.yml",
+  "npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip",
+  "npm.cmd run audit:app-server-schemas",
+  "Codex App Server",
+  "OpenAI API",
+  "major 更新不自动合并"
 )
 
 Assert-ContentIncludes "README.md" @(

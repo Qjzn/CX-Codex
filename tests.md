@@ -1758,6 +1758,36 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Dependabot 依赖维护手册
+
+#### Prerequisites
+- 当前仓库包含 `.github/dependabot.yml`。
+- 当前仓库包含 `docs/dependency-maintenance.zh-CN.md`。
+
+#### Steps
+1. 检查 `README.md` 的文档列表，确认包含 `docs/dependency-maintenance.zh-CN.md`。
+2. 检查 `CONTRIBUTING.md` 的 Pull Request 要求，确认依赖更新说明指向依赖维护手册。
+3. 检查 `docs/dependency-maintenance.zh-CN.md`，确认覆盖 npm、GitHub Actions、runtime、frontend、build、mobile、ci 影响分类。
+4. 检查依赖维护手册，确认 Codex App Server 或 OpenAI API 相关更新需要运行 `npm.cmd run audit:app-server-schemas`。
+5. 执行 `npm.cmd run verify:governance`。
+6. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+
+#### Expected Results
+- 维护者可以从 README 和贡献指南进入依赖维护手册。
+- 手册明确 Dependabot PR 的审查步骤、验证命令、major 更新策略和回滚路径。
+- 治理门禁会校验手册存在，并确认 README、CONTRIBUTING 和手册内容互相引用。
+- Release gate 保持通过，说明新增治理文档不会破坏发布包、CLI smoke 或 release package smoke。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `docs/dependency-maintenance.zh-CN.md`，并撤销 README、CONTRIBUTING、governance 和本测试章节中的相关引用。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁验证：`npm.cmd run verify:governance` 通过，确认依赖维护手册、README、CONTRIBUTING 和 governance 断言已互相锁定。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含构建、server module smoke、普通 CLI smoke、CLI CJS launcher smoke、Release package smoke 和 schema audit skip。
+
+---
+
 ### Feature: 开源社区行为准则
 
 #### Prerequisites

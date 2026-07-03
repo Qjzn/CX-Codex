@@ -239,6 +239,7 @@ Cloudflare Tunnel 一条命令：
 - App Server 协议能力矩阵: [docs/app-server-protocol-matrix.zh-CN.md](./docs/app-server-protocol-matrix.zh-CN.md)
 - 路线图: [docs/roadmap.zh-CN.md](./docs/roadmap.zh-CN.md)
 - 运营规划: [docs/operations-plan.zh-CN.md](./docs/operations-plan.zh-CN.md)
+- 依赖维护手册: [docs/dependency-maintenance.zh-CN.md](./docs/dependency-maintenance.zh-CN.md)
 - GitHub 包装文案包: [docs/github-launch-kit.zh-CN.md](./docs/github-launch-kit.zh-CN.md)
 - Release 模板: [docs/release-template.zh-CN.md](./docs/release-template.zh-CN.md)
 - Android 壳: [docs/android-shell.zh-CN.md](./docs/android-shell.zh-CN.md)
