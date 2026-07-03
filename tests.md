@@ -1375,6 +1375,41 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Release 验证脚本
+
+#### Prerequisites
+- 本机可运行 `npm.cmd run build`。
+- 如需执行 schema audit，Codex CLI 可用并支持 `app-server generate-ts` 和 `app-server generate-json-schema`。
+- 如需发版前 clean-git 门禁，当前工作树和 index 均无未提交改动。
+
+#### Steps
+1. 快速验证脚本路径：执行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1 -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit skip`。
+2. 完整构建验证：执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+3. 协议审计验证：执行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1 -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit warn`。
+4. 发版候选验证：在 clean worktree 上执行 `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn`。
+5. 已完成 schema 基线升级并要求严格阻断时，执行 `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit strict`。
+
+#### Expected Results
+- 快速验证执行 `git diff --check` 和 `package.json` 解析检查。
+- 完整构建验证执行 `npm.cmd run build` 并运行 `node dist-cli/index.js --help` CLI smoke。
+- `-SchemaAudit warn` 遇到 schema drift 时继续完成，但输出 warning 和最新 `audit-summary.json` 路径。
+- `-SchemaAudit strict` 遇到 schema drift 时失败，阻止未审计协议差异进入 release。
+- `-RequireCleanGit` 会在发版候选阶段阻止未提交 worktree 或 index。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 配置验证：`node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json ok')"` 输出 `package.json ok`。
+- 2026-07-03 快速脚本验证：`powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1 -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit skip` 通过。
+- 2026-07-03 主路径验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `vue-tsc --noEmit`、`vite build`、`tsup` 和 `node dist-cli/index.js --help` CLI smoke。
+- 2026-07-03 schema warn 验证：`powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1 -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit warn` 通过，生成 `output/app-server-schema-audit/20260703-193751/audit-summary.json`，并将 schema drift 作为 warning 输出。
+- 2026-07-03 schema warn 摘要计数：TypeScript v2 新增 260、移除 14；JSON v2 新增 110、移除 10。
+
+#### Rollback / Cleanup
+- 可删除 `output/app-server-schema-audit/<timestamp>` 临时输出。
+- 如验证步骤发生变化，同步更新 `RELEASE.md` 和本节证据。
+
+---
+
 ### Feature: OpenAI 官方语音转写与停止请求审计
 
 #### Prerequisites

@@ -18,19 +18,29 @@
    npm.cmd run build
    ```
 
-3. 打包 Release：
+3. 运行发版验证：
+
+   ```powershell
+   npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn
+   ```
+
+   - `-SchemaAudit warn` 会生成最新 App Server schema 审计摘要；如果发现 drift，命令继续完成但必须人工审计。
+   - 已准备更新 schema 基线并要求严格阻断时，改用 `-SchemaAudit strict`。
+   - 快速本地预检可用 `-SchemaAudit skip`，但不能作为最终发版证据。
+
+4. 打包 Release：
 
    ```powershell
    npm.cmd run package:release -- -Version 2.1.15
    ```
 
-4. 如本机需要发布 APK，运行：
+5. 如本机需要发布 APK，运行：
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\scripts\package-android-release.ps1 -Version 2.1.15
    ```
 
-5. 检查 `artifacts/` 中是否生成：
+6. 检查 `artifacts/` 中是否生成：
    - `CX-Codex-<version>.zip`
    - `CX-Codex-<version>.sha256`
    - `cx-codex-android-<version>.apk`
