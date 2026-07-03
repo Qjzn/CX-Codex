@@ -1726,6 +1726,38 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: 开源社区行为准则
+
+#### Prerequisites
+- 仓库包含 `CODE_OF_CONDUCT.md`、`README.md`、`CONTRIBUTING.md`、`scripts/verify-governance.ps1` 和 `scripts/package-release.ps1`。
+- 本机可运行 `npm.cmd run verify:governance` 和 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:governance`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 检查 `README.md` 的文档列表和反馈与贡献区域，确认链接到 `CODE_OF_CONDUCT.md`。
+5. 检查 `CONTRIBUTING.md`，确认贡献入口要求先阅读行为准则。
+6. 检查 `output\release-package-smoke\CX-Codex-verify-smoke.zip`，确认包含 `CODE_OF_CONDUCT.md`。
+
+#### Expected Results
+- 仓库具备 GitHub 社区健康所需的行为准则入口。
+- 行为准则覆盖尊重协作、脱敏、凭据泄露、安全漏洞、Codex sandbox / approval 和 Issue / PR 处理边界。
+- `verify:governance` 会阻止 README、CONTRIBUTING、行为准则内容或 release package 清单遗漏行为准则。
+- 默认 release gate 的 Release package smoke 会校验 Web zip 内包含 `CODE_OF_CONDUCT.md`。
+
+#### Rollback / Cleanup
+- 如需回滚，删除 `CODE_OF_CONDUCT.md`，并撤销 README、CONTRIBUTING、package release、governance、release smoke 和本测试章节中的相关引用。
+- 可删除 `output\release-package-smoke` 临时输出。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁验证：`npm.cmd run verify:governance` 通过，确认 README、CONTRIBUTING、行为准则内容、release package 清单和 release smoke 均已锁定 `CODE_OF_CONDUCT.md`。
+- 2026-07-04 完整 release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含构建、server module smoke、普通 CLI smoke、CLI CJS launcher smoke、Release package smoke 和 schema audit skip。
+- 2026-07-04 Release package smoke：默认 release gate 输出 `release package smoke ok`，确认 Web zip 包内包含 `CODE_OF_CONDUCT.md`。
+
+---
+
 ### Feature: GitHub Actions Release 验证门禁
 
 #### Prerequisites

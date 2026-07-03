@@ -50,6 +50,7 @@ function Assert-IssueTemplate {
 $requiredFiles = @(
   "README.md",
   "README.zh-CN.md",
+  "CODE_OF_CONDUCT.md",
   "CONTRIBUTING.md",
   "SECURITY.md",
   "SUPPORT.md",
@@ -88,9 +89,23 @@ Assert-ContentIncludes "README.md" @(
   "Self-hosted OpenAI Codex Web UI and Android client bridge",
   "docs/security-hardening.zh-CN.md",
   "docs/app-server-protocol-matrix.zh-CN.md",
+  "CODE_OF_CONDUCT.md",
   "SECURITY.md",
   "CONTRIBUTING.md",
   "SUPPORT.md"
+)
+
+Assert-ContentIncludes "CODE_OF_CONDUCT.md" @(
+  "行为准则",
+  "SECURITY.md",
+  "SUPPORT.md",
+  "Codex sandbox / approval",
+  "脱敏"
+)
+
+Assert-ContentIncludes "CONTRIBUTING.md" @(
+  "CODE_OF_CONDUCT.md",
+  "Pull Request 要求"
 )
 
 Assert-ContentIncludes "README.md" @(
@@ -131,6 +146,7 @@ Assert-ContentIncludes "scripts/package-release.ps1" @(
   ".github\PULL_REQUEST_TEMPLATE.md",
   ".github\release-body.md",
   ".github\workflows\release.yml",
+  "CODE_OF_CONDUCT.md",
   "CONTRIBUTING.md",
   "SECURITY.md",
   "SUPPORT.md"

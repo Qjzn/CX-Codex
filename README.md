@@ -246,6 +246,7 @@ Cloudflare Tunnel 一条命令：
 - Cloudflare Tunnel: [docs/cloudflare-tunnel.zh-CN.md](./docs/cloudflare-tunnel.zh-CN.md)
 - 安全硬化清单: [docs/security-hardening.zh-CN.md](./docs/security-hardening.zh-CN.md)
 - 贡献指南: [CONTRIBUTING.md](./CONTRIBUTING.md)
+- 行为准则: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
 - 安全策略: [SECURITY.md](./SECURITY.md)
 
 ## GitHub 搜索关键词
@@ -257,5 +258,6 @@ OpenAI Codex Web UI, Codex Android client, self-hosted Codex, Codex browser brid
 - 安装部署问题请使用 `Install` Issue 模板。
 - 稳定性、同步、手机端体验问题请使用 `Bug` Issue 模板。
 - 新能力建议请使用 `Feature` Issue 模板。
+- 参与 Issue / PR 前请遵守 [行为准则](./CODE_OF_CONDUCT.md)。
 - 提交截图、日志或配置前，请先脱敏密码、Token、Cookie、真实公网地址和个人目录。
 - 不确定如何描述问题时，先看 [SUPPORT.md](./SUPPORT.md) 的诊断命令和信息清单。

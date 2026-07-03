@@ -81,6 +81,7 @@ $releaseItems = @(
   ".github\release-body.md",
   ".github\workflows\ci.yml",
   ".github\workflows\release.yml",
+  "CODE_OF_CONDUCT.md",
   "CONTRIBUTING.md",
   "LICENSE",
   "README.md",
