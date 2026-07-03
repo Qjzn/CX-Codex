@@ -43,6 +43,18 @@ import {
   searchComposerFileCandidates,
 } from '../src/server/composerFileSearch.js'
 import {
+  decodeHtmlEntities,
+  normalizeGithubDescriptionTranslationText,
+  normalizeGithubTrendingLimit,
+  normalizeGithubTrendingSince,
+  normalizeGithubTrendingTranslationDescriptions,
+  parseGithubTrendingHtml,
+  readGoogleTranslateText,
+  shouldTranslateGithubDescription,
+  stripHtml,
+  translateGithubDescriptionsToChinese,
+} from '../src/server/githubTrending.js'
+import {
   normalizeThreadTokenUsage,
   normalizeThreadTokenUsageFromSessionLogEntry,
   parseThreadTokenUsageFromSessionLog,
@@ -102,6 +114,7 @@ try {
   smokeServerRequestPolicy()
   await smokeFileUpload()
   await smokeComposerFileSearch()
+  await smokeGithubTrending()
   await smokeWebBridgeSettings()
   await smokeThreadTokenUsage()
   await smokeThreadTitleCache()
@@ -531,6 +544,79 @@ async function smokeComposerFileSearch(): Promise<void> {
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+}
+
+async function smokeGithubTrending(): Promise<void> {
+  assert.equal(normalizeGithubTrendingSince('weekly'), 'weekly')
+  assert.equal(normalizeGithubTrendingSince('monthly'), 'monthly')
+  assert.equal(normalizeGithubTrendingSince('invalid'), 'daily')
+  assert.equal(normalizeGithubTrendingLimit(undefined), 6)
+  assert.equal(normalizeGithubTrendingLimit('0'), 1)
+  assert.equal(normalizeGithubTrendingLimit('99'), 10)
+  assert.equal(normalizeGithubTrendingLimit('bad'), 6)
+  assert.deepEqual(
+    normalizeGithubTrendingTranslationDescriptions(['one', 2, 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven']),
+    ['one', '', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'],
+  )
+
+  assert.equal(decodeHtmlEntities('A &amp; B &lt;tag&gt; &quot;x&quot; &#39;y&#39; &#x2F;'), 'A & B <tag> "x" \'y\' /')
+  assert.equal(stripHtml('<p> A&nbsp; <strong>&amp;</strong> B </p>').includes('&'), true)
+  assert.equal(normalizeGithubDescriptionTranslationText('  hello\n world  '), 'hello world')
+  assert.equal(shouldTranslateGithubDescription('hello world'), true)
+  assert.equal(shouldTranslateGithubDescription('中文说明'), false)
+  assert.equal(shouldTranslateGithubDescription('12345'), false)
+  assert.equal(readGoogleTranslateText([[['你好', 'hello'], ['世界', 'world']]]), '你好世界')
+  assert.equal(readGoogleTranslateText({ invalid: true }), '')
+
+  const originalNow = Date.now
+  Date.now = () => 10_000
+  try {
+    const html = [
+      '<article>',
+      '<h2><a href="/owner/repo">owner / repo</a></h2>',
+      '<p class="col-9 color-fg-muted">Build &amp; ship <strong>tools</strong></p>',
+      '<span itemprop="programmingLanguage">TypeScript</span>',
+      '<a href="/owner/repo/stargazers">1,234</a>',
+      '</article>',
+      '<article>',
+      '<h2><a href="/owner/repo">duplicate / repo</a></h2>',
+      '<p>Duplicate</p>',
+      '</article>',
+      '<article>',
+      '<h2><a href="/other/project">other / project</a></h2>',
+      '<p class="color-fg-muted">Second project</p>',
+      '<span itemprop="programmingLanguage">Rust</span>',
+      '<a href="/other/project/stargazers">bad</a>',
+      '</article>',
+    ].join('')
+    assert.deepEqual(parseGithubTrendingHtml(html, 10), [
+      {
+        id: 10_000,
+        fullName: 'owner/repo',
+        url: 'https://github.com/owner/repo',
+        description: 'Build & ship tools',
+        language: 'TypeScript',
+        stars: 1234,
+      },
+      {
+        id: 10_001,
+        fullName: 'other/project',
+        url: 'https://github.com/other/project',
+        description: 'Second project',
+        language: 'Rust',
+        stars: 0,
+      },
+    ])
+    assert.deepEqual(parseGithubTrendingHtml(html, 1).map((item) => item.fullName), ['owner/repo'])
+  } finally {
+    Date.now = originalNow
+  }
+
+  assert.deepEqual(await translateGithubDescriptionsToChinese(['  中文\n说明  ', '', '12345']), [
+    '中文 说明',
+    '',
+    '12345',
+  ])
 }
 
 async function smokeWebBridgeSettings(): Promise<void> {

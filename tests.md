@@ -1867,6 +1867,41 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: GitHub Trending 服务模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/githubTrending.ts`。
+- 本机安装依赖已完成，`node_modules/typescript` 可用于 `verify:server-modules`。
+- 如需真实接口验证，当前网络需能访问 GitHub Trending；server module smoke 不依赖外部网络。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 的 `/codex-api/github-trending` 和 `/codex-api/github-trending/translate` 路由只负责读取 query/body、调用 `githubTrending.ts`、映射 502/fallback 响应和返回 JSON。
+
+#### Expected Results
+- `src/server/githubTrending.ts` 集中维护 `since` 默认值、limit 截断、翻译 batch 截断、GitHub Trending HTML 解析、HTML entity 清理、Google Translate payload 读取和翻译缓存。
+- `/codex-api/github-trending` 的 `since` 仅接受 `daily`、`weekly`、`monthly`，非法值回退到 `daily`；`limit` 限制在 1 到 10，非法值回退到 6。
+- GitHub Trending fetch 失败仍返回 502，错误文案来自原始错误或 `Failed to fetch GitHub trending` fallback。
+- 翻译接口最多处理 10 条描述，非字符串描述转为空字符串；翻译失败时仍返回原描述数组，保持前端可用。
+- Server module smoke 覆盖 HTML 解析去重、stars 数字解析、limit 裁剪、since/limit 归一化、翻译 payload 归一化、CJK/no-letter 跳过翻译和 Google Translate JSON 拼接。
+- 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Rollback / Cleanup
+- 若验证失败，回滚 `src/server/githubTrending.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs` 和本测试章节，再重新运行相关门禁。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace、package parse、governance docs、构建、server module smoke 和 CLI smoke；schema audit 按本阶段命令跳过。
+
+---
+
 ### Feature: Thread title cache 模块化
 
 #### Prerequisites
