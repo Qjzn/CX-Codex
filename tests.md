@@ -1832,6 +1832,41 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Composer file search 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/composerFileSearch.ts`。
+- 本机安装依赖已完成，`node_modules/typescript` 可用于 `verify:server-modules`。
+- 如需真实接口验证，测试目录内需有可被 `rg --files` 枚举的文件。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 的 `/codex-api/composer-file-search` 路由只负责读取 payload、调用 `searchComposerFiles()`、映射 `ComposerFileSearchError` 状态码和返回 JSON。
+
+#### Expected Results
+- `src/server/composerFileSearch.ts` 集中维护 cwd 归一化、cwd 存在性校验、limit 截断、候选文件打分、排序和 `rg --files` 枚举。
+- 缺失 `cwd` 返回 400；`cwd` 指向文件返回 400；`cwd` 不存在返回 404；`rg --files` 或运行时异常返回 500。
+- 空 query 保留原行为：全部候选分数为 0，并按路径字典序返回前 N 个。
+- 非空 query 仍按 basename 精确匹配、basename 前缀、basename 包含、路径分段、路径包含的优先级排序，并过滤不匹配候选。
+- Server module smoke 覆盖 limit 边界、cwd 错误状态码、打分优先级、空 query 排序和候选裁剪。
+- 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Rollback / Cleanup
+- 若验证失败，回滚 `src/server/composerFileSearch.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs` 和本测试章节，再重新运行相关门禁。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace、package parse、governance docs、构建、server module smoke 和 CLI smoke；schema audit 按本阶段命令跳过。
+
+---
+
 ### Feature: Thread title cache 模块化
 
 #### Prerequisites

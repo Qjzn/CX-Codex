@@ -35,6 +35,14 @@ import {
   writeUploadedFile,
 } from '../src/server/fileUpload.js'
 import {
+  ComposerFileSearchError,
+  assertComposerFileSearchCwd,
+  normalizeComposerFileSearchCwd,
+  normalizeComposerFileSearchLimit,
+  scoreFileCandidate,
+  searchComposerFileCandidates,
+} from '../src/server/composerFileSearch.js'
+import {
   normalizeThreadTokenUsage,
   normalizeThreadTokenUsageFromSessionLogEntry,
   parseThreadTokenUsageFromSessionLog,
@@ -93,6 +101,7 @@ try {
   smokePlanModeTurnStore()
   smokeServerRequestPolicy()
   await smokeFileUpload()
+  await smokeComposerFileSearch()
   await smokeWebBridgeSettings()
   await smokeThreadTokenUsage()
   await smokeThreadTitleCache()
@@ -465,6 +474,60 @@ async function smokeFileUpload(): Promise<void> {
   try {
     const destPath = await writeUploadedFile(parsed, tempDir)
     assert.equal(await readFile(destPath, 'utf8'), 'hello upload')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function smokeComposerFileSearch(): Promise<void> {
+  assert.equal(normalizeComposerFileSearchLimit(undefined), 20)
+  assert.equal(normalizeComposerFileSearchLimit(0), 1)
+  assert.equal(normalizeComposerFileSearchLimit(500), 100)
+  assert.equal(normalizeComposerFileSearchCwd('relative-cwd').endsWith('relative-cwd'), true)
+  assert.throws(
+    () => normalizeComposerFileSearchCwd(''),
+    (error) => error instanceof ComposerFileSearchError
+      && error.statusCode === 400
+      && error.message === 'Missing cwd',
+  )
+
+  assert.equal(scoreFileCandidate('src/App.vue', 'app.vue'), 0)
+  assert.equal(scoreFileCandidate('src/App.vue', 'app'), 1)
+  assert.equal(scoreFileCandidate('src/components/AppShell.vue', 'shell'), 2)
+  assert.equal(scoreFileCandidate('src/server/app/file.ts', 'server'), 3)
+  assert.equal(scoreFileCandidate('src/server/file.ts', 'ver/f'), 4)
+  assert.equal(scoreFileCandidate('src/server/file.ts', 'missing'), 10)
+  assert.deepEqual(searchComposerFileCandidates([
+    'src/server/file.ts',
+    'src/App.vue',
+    'README.md',
+    'src/components/AppShell.vue',
+  ], 'app', 2), [
+    { path: 'src/App.vue' },
+    { path: 'src/components/AppShell.vue' },
+  ])
+  assert.deepEqual(searchComposerFileCandidates(['b.txt', 'a.txt'], '', 10), [
+    { path: 'a.txt' },
+    { path: 'b.txt' },
+  ])
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-composer-file-search-'))
+  try {
+    await assertComposerFileSearchCwd(tempDir)
+    const filePath = join(tempDir, 'file.txt')
+    await writeFile(filePath, 'not a directory', 'utf8')
+    await assert.rejects(
+      assertComposerFileSearchCwd(filePath),
+      (error) => error instanceof ComposerFileSearchError
+        && error.statusCode === 400
+        && error.message === 'cwd is not a directory',
+    )
+    await assert.rejects(
+      assertComposerFileSearchCwd(join(tempDir, 'missing')),
+      (error) => error instanceof ComposerFileSearchError
+        && error.statusCode === 404
+        && error.message === 'cwd does not exist',
+    )
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
