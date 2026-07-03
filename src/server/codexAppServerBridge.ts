@@ -38,6 +38,7 @@ import {
   readRawBody,
   RequestBodyTooLargeError,
 } from './httpBody.js'
+import { setJson } from './httpJsonResponse.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import {
   getOpenAiTranscribeApiKey,
@@ -575,12 +576,6 @@ function isCachedThreadReadStaleForRuntime(
   if (completedAtMs <= 0) return false
   const cachedAtMs = readIsoTimestampMs(cachedThreadRead.cachedAtIso)
   return cachedAtMs <= 0 || cachedAtMs < completedAtMs
-}
-
-function setJson(res: ServerResponse, statusCode: number, payload: unknown): void {
-  res.statusCode = statusCode
-  res.setHeader('Content-Type', 'application/json; charset=utf-8')
-  res.end(JSON.stringify(payload))
 }
 
 function isMissingHeadError(error: unknown): boolean {

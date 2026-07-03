@@ -180,6 +180,7 @@ import {
   getTranscriptionProxyConfigSnapshot,
   prepareOpenAiTranscribeBody,
 } from '../src/server/transcriptionProxy.js'
+import { setJson } from '../src/server/httpJsonResponse.js'
 
 const originalNow = Date.now
 
@@ -207,6 +208,7 @@ try {
   smokeServerRequestReply()
   await smokeCommandRunner()
   await smokeFileUpload()
+  smokeHttpJsonResponse()
   await smokeComposerFileSearch()
   await smokeGithubTrending()
   smokeCodexPaths()
@@ -1281,6 +1283,26 @@ async function smokeFileUpload(): Promise<void> {
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+}
+
+function smokeHttpJsonResponse(): void {
+  const headers = new Map<string, string | number | readonly string[]>()
+  let endedBody = ''
+  const response = {
+    statusCode: 0,
+    setHeader(name: string, value: string | number | readonly string[]) {
+      headers.set(name, value)
+    },
+    end(value: string) {
+      endedBody = value
+    },
+  }
+
+  setJson(response as never, 202, { ok: true, count: 2 })
+
+  assert.equal(response.statusCode, 202)
+  assert.equal(headers.get('Content-Type'), 'application/json; charset=utf-8')
+  assert.equal(endedBody, '{"ok":true,"count":2}')
 }
 
 async function smokeComposerFileSearch(): Promise<void> {
