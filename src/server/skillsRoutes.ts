@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, readdir, rm, mkdir, stat, lstat, readlink, symlink, link } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { resolvePythonCommand, resolveSkillInstallerScriptPath } from '../commandResolution.js'
@@ -19,6 +19,11 @@ import {
   searchSkillsHub,
   type InstalledSkillInfo,
 } from './skillsHubService.js'
+import {
+  getCodexHomeDir,
+  getSkillsInstallDir,
+  getSkillsSyncStatePath,
+} from './codexPaths.js'
 
 type AppServerLike = {
   rpc(method: string, params: unknown): Promise<unknown>
@@ -73,15 +78,6 @@ function sanitizeGithubRef(value: string): string {
   const normalized = value.trim()
   if (!normalized || normalized.includes('..')) return ''
   return /^[A-Za-z0-9._/-]{1,120}$/u.test(normalized) ? normalized : ''
-}
-
-function getCodexHomeDir(): string {
-  const codexHome = process.env.CODEX_HOME?.trim()
-  return codexHome && codexHome.length > 0 ? codexHome : join(homedir(), '.codex')
-}
-
-function getSkillsInstallDir(): string {
-  return join(getCodexHomeDir(), 'skills')
 }
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000
@@ -277,10 +273,6 @@ async function scanInstalledSkillsFromDisk(): Promise<Map<string, InstalledSkill
     }
   } catch {}
   return map
-}
-
-function getSkillsSyncStatePath(): string {
-  return join(getCodexHomeDir(), 'skills-sync.json')
 }
 
 async function readSkillsSyncState(): Promise<SkillsSyncState> {

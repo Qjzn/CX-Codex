@@ -19,6 +19,7 @@
   - 诊断中心新增权限请求队列，由服务端脱敏并分类展示 App Server pending permission、approval、elicitation 或 tool request，便于排查任务等待授权的原因。
   - `/codex-api/health`、`/codex-api/diagnostics` 和 `/codex-api/server-requests/pending/diagnostics` 新增 `serverRequestDiagnostics` 快照，包含 pending 总数、按类型计数和脱敏请求列表；原始 `/codex-api/server-requests/pending` 保持给审批交互使用。
   - App Server method/notification catalog 生成逻辑从 bridge 主文件拆出，并清理临时 schema 输出目录，减少协议元数据读取的本地残留。
+  - Codex home、auth、global state、web settings、skills 和 worktrees 路径统一收口到 `codexPaths.ts`，让 bridge、Web UI state 和 skills 服务一致支持 `CODEX_HOME`。
 
 ## 2.2.7
 

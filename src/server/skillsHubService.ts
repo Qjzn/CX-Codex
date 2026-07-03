@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { getSkillsSyncStatePath } from './codexPaths.js'
 
 export type SkillHubEntry = {
   name: string
@@ -92,11 +91,6 @@ let skillsTreeCache: SkillsTreeCache | null = null
 const metaCache = new Map<string, { description: string; displayName: string; publishedAt: number }>()
 const githubSkillSearchCache = new Map<string, GithubSkillSearchCache>()
 
-function getCodexHomeDir(): string {
-  const codexHome = process.env.CODEX_HOME?.trim()
-  return codexHome && codexHome.length > 0 ? codexHome : join(homedir(), '.codex')
-}
-
 function getEnvValue(name: string): string {
   return process.env[name]?.trim() ?? ''
 }
@@ -129,7 +123,7 @@ export function getSkillsHubRawFileUrl(owner: string, name: string, fileName: st
 
 async function getSkillsSyncToken(): Promise<string | null> {
   try {
-    const raw = await readFile(join(getCodexHomeDir(), 'skills-sync.json'), 'utf8')
+    const raw = await readFile(getSkillsSyncStatePath(), 'utf8')
     const parsed = JSON.parse(raw) as SkillsSyncState
     const token = typeof parsed.githubToken === 'string' ? parsed.githubToken.trim() : ''
     return token || null

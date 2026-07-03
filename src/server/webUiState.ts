@@ -1,6 +1,10 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import {
+  getCodexHomeDir,
+  getWebFavoritesPath,
+  getWebPinnedThreadIdsPath,
+  getWebUiStatePath,
+} from './codexPaths.js'
 
 export type FavoriteRecord = {
   id: string
@@ -23,22 +27,6 @@ type WebUiState = {
 const DEFAULT_WEB_UI_STATE: WebUiState = {
   favorites: [],
   pinnedThreadIds: [],
-}
-
-function getCodexHomeDir(): string {
-  return join(homedir(), '.codex')
-}
-
-function getWebUiStatePath(): string {
-  return join(getCodexHomeDir(), 'web-ui-state.json')
-}
-
-function getFavoritesPath(): string {
-  return join(getCodexHomeDir(), 'web-favorites.json')
-}
-
-function getPinnedThreadIdsPath(): string {
-  return join(getCodexHomeDir(), 'web-pinned-thread-ids.json')
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -141,7 +129,7 @@ async function syncLegacyCombinedWebUiState(): Promise<void> {
 
 export async function readFavoriteRecords(): Promise<FavoriteRecord[]> {
   try {
-    const raw = await readFile(getFavoritesPath(), 'utf8')
+    const raw = await readFile(getWebFavoritesPath(), 'utf8')
     return normalizeFavoriteRecords(JSON.parse(raw) as unknown)
   } catch {
     const state = await readWebUiState()
@@ -152,14 +140,14 @@ export async function readFavoriteRecords(): Promise<FavoriteRecord[]> {
 export async function writeFavoriteRecords(favorites: FavoriteRecord[]): Promise<FavoriteRecord[]> {
   const normalized = normalizeFavoriteRecords(favorites)
   await mkdir(getCodexHomeDir(), { recursive: true })
-  await writeFile(getFavoritesPath(), JSON.stringify(normalized, null, 2), 'utf8')
+  await writeFile(getWebFavoritesPath(), JSON.stringify(normalized, null, 2), 'utf8')
   await syncLegacyCombinedWebUiState()
   return normalized
 }
 
 export async function readPinnedThreadIds(): Promise<string[]> {
   try {
-    const raw = await readFile(getPinnedThreadIdsPath(), 'utf8')
+    const raw = await readFile(getWebPinnedThreadIdsPath(), 'utf8')
     return normalizeStringArray(JSON.parse(raw) as unknown)
   } catch {
     const state = await readWebUiState()
@@ -170,7 +158,7 @@ export async function readPinnedThreadIds(): Promise<string[]> {
 export async function writePinnedThreadIds(pinnedThreadIds: string[]): Promise<string[]> {
   const normalized = normalizeStringArray(pinnedThreadIds)
   await mkdir(getCodexHomeDir(), { recursive: true })
-  await writeFile(getPinnedThreadIdsPath(), JSON.stringify(normalized, null, 2), 'utf8')
+  await writeFile(getWebPinnedThreadIdsPath(), JSON.stringify(normalized, null, 2), 'utf8')
   await syncLegacyCombinedWebUiState()
   return normalized
 }

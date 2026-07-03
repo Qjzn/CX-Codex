@@ -97,6 +97,19 @@ import {
   runCommandWithOutput,
 } from '../src/server/commandRunner.js'
 import {
+  getCodexAuthPath,
+  getCodexGlobalStatePath,
+  getCodexHomeDir,
+  getCodexSessionIndexPath,
+  getCodexWorktreesDir,
+  getSkillsInstallDir,
+  getSkillsSyncStatePath,
+  getWebBridgeSettingsPath,
+  getWebFavoritesPath,
+  getWebPinnedThreadIdsPath,
+  getWebUiStatePath,
+} from '../src/server/codexPaths.js'
+import {
   normalizeThreadTokenUsage,
   normalizeThreadTokenUsageFromSessionLogEntry,
   parseThreadTokenUsageFromSessionLog,
@@ -174,6 +187,7 @@ try {
   await smokeFileUpload()
   await smokeComposerFileSearch()
   await smokeGithubTrending()
+  smokeCodexPaths()
   await smokeWebBridgeSettings()
   await smokeThreadTokenUsage()
   await smokeThreadTitleCache()
@@ -1196,6 +1210,33 @@ async function smokeGithubTrending(): Promise<void> {
     '',
     '12345',
   ])
+}
+
+function smokeCodexPaths(): void {
+  const previous = process.env.CODEX_HOME
+  try {
+    process.env.CODEX_HOME = '  C:\\cx-codex-home  '
+    assert.equal(getCodexHomeDir(), 'C:\\cx-codex-home')
+    assert.equal(getCodexAuthPath(), join('C:\\cx-codex-home', 'auth.json'))
+    assert.equal(getCodexGlobalStatePath(), join('C:\\cx-codex-home', '.codex-global-state.json'))
+    assert.equal(getCodexSessionIndexPath(), join('C:\\cx-codex-home', 'session_index.jsonl'))
+    assert.equal(getWebBridgeSettingsPath(), join('C:\\cx-codex-home', 'web-bridge-settings.json'))
+    assert.equal(getWebUiStatePath(), join('C:\\cx-codex-home', 'web-ui-state.json'))
+    assert.equal(getWebFavoritesPath(), join('C:\\cx-codex-home', 'web-favorites.json'))
+    assert.equal(getWebPinnedThreadIdsPath(), join('C:\\cx-codex-home', 'web-pinned-thread-ids.json'))
+    assert.equal(getSkillsInstallDir(), join('C:\\cx-codex-home', 'skills'))
+    assert.equal(getSkillsSyncStatePath(), join('C:\\cx-codex-home', 'skills-sync.json'))
+    assert.equal(getCodexWorktreesDir(), join('C:\\cx-codex-home', 'worktrees'))
+
+    process.env.CODEX_HOME = '   '
+    assert.match(getCodexHomeDir(), /\.codex$/u)
+  } finally {
+    if (typeof previous === 'string') {
+      process.env.CODEX_HOME = previous
+    } else {
+      delete process.env.CODEX_HOME
+    }
+  }
 }
 
 async function smokeWebBridgeSettings(): Promise<void> {

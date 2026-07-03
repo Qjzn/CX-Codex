@@ -91,6 +91,14 @@ import { createAppServerClientInfo, readPackageVersion } from './appServerClient
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
 import { AppServerMethodCatalog } from './appServerMethodCatalog.js'
+import {
+  getCodexAuthPath,
+  getCodexGlobalStatePath,
+  getCodexHomeDir,
+  getCodexSessionIndexPath,
+  getCodexWorktreesDir,
+  getWebBridgeSettingsPath,
+} from './codexPaths.js'
 import { PlanModeTurnStore } from './planModeTurnStore.js'
 import {
   readThreadTokenUsageFromSessionLog,
@@ -578,11 +586,6 @@ function setJson(res: ServerResponse, statusCode: number, payload: unknown): voi
   res.end(JSON.stringify(payload))
 }
 
-function getCodexHomeDir(): string {
-  const codexHome = process.env.CODEX_HOME?.trim()
-  return codexHome && codexHome.length > 0 ? codexHome : join(homedir(), '.codex')
-}
-
 function isMissingHeadError(error: unknown): boolean {
   const message = getErrorMessage(error, '').toLowerCase()
   return (
@@ -717,10 +720,6 @@ async function findRollbackCommitByExactMessage(cwd: string, message: string): P
   return ''
 }
 
-function getCodexAuthPath(): string {
-  return join(getCodexHomeDir(), 'auth.json')
-}
-
 type CodexAuth = {
   tokens?: {
     access_token?: string
@@ -738,18 +737,6 @@ async function readCodexAuth(): Promise<{ accessToken: string; accountId?: strin
   } catch {
     return null
   }
-}
-
-function getCodexGlobalStatePath(): string {
-  return join(getCodexHomeDir(), '.codex-global-state.json')
-}
-
-function getWebBridgeSettingsPath(): string {
-  return join(getCodexHomeDir(), 'web-bridge-settings.json')
-}
-
-function getCodexSessionIndexPath(): string {
-  return join(getCodexHomeDir(), 'session_index.jsonl')
 }
 
 async function readDesktopPinnedThreadIds(): Promise<string[]> {
@@ -2706,7 +2693,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             gitRoot = await runCommandCapture('git', ['rev-parse', '--show-toplevel'], { cwd: sourceCwd })
           }
           const repoName = basename(gitRoot) || 'repo'
-          const worktreesRoot = join(getCodexHomeDir(), 'worktrees')
+          const worktreesRoot = getCodexWorktreesDir()
           await mkdir(worktreesRoot, { recursive: true })
 
           // Match Codex desktop layout so project grouping resolves to repo name:

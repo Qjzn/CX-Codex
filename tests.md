@@ -2501,11 +2501,11 @@ This file tracks manual regression and feature verification steps.
 3. 执行 `npm.cmd run verify:server-modules`。
 4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
 5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
-6. 代码审查确认 `src/server/codexAppServerBridge.ts` 只保留 `getWebBridgeSettingsPath()` 路径生成，默认值、`normalizeWebBridgeSettings()`、`readWebBridgeSettings()` 和 `writeWebBridgeSettings()` 均来自 `src/server/webBridgeSettings.ts`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 通过 `codexPaths.ts` 获取 settings 路径，默认值、`normalizeWebBridgeSettings()`、`readWebBridgeSettings()` 和 `writeWebBridgeSettings()` 均来自 `src/server/webBridgeSettings.ts`。
 
 #### Expected Results
 - `src/server/webBridgeSettings.ts` 集中维护默认权限、permission decision 归一化、settings payload 归一化、配置 JSON 读取和写入。
-- 配置文件路径仍由 bridge 的 `getWebBridgeSettingsPath()` 生成，保持原来的 `web-bridge-settings.json` 位置。
+- 配置文件路径由 `src/server/codexPaths.ts` 的 `getWebBridgeSettingsPath()` 生成，保持原来的 `web-bridge-settings.json` 位置，并跟随 `CODEX_HOME`。
 - 缺失或非法 JSON 配置会回退到默认权限；写入接口会先归一化再持久化。
 - Server module smoke 验证 `ask`/`allowForSession` 判定、非法值回退、missing/invalid file 读取、写入归一化和再次读取一致。
 - 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
@@ -2517,6 +2517,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 代码审查：`rg` 确认 settings 默认值、归一化和读写 helper 已集中到 `src/server/webBridgeSettings.ts`。
 - 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
 - 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `Server module smoke`、构建和 CLI smoke。
+
+---
+
+### Feature: Codex 本机路径模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/codexPaths.ts`。
+- 本机可运行 `npm.cmd run verify:server-modules` 和 `npm.cmd run build`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 `node dist-cli\index.js --help`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `codexAppServerBridge.ts`、`webUiState.ts`、`skillsRoutes.ts` 和 `skillsHubService.ts` 不再各自实现 `getCodexHomeDir()`，统一从 `codexPaths.ts` 获取 Codex home、auth、global state、web settings、skills 和 worktrees 路径。
+
+#### Expected Results
+- `CODEX_HOME` 为空或空白时默认回退到用户目录下的 `.codex`。
+- 设置 `CODEX_HOME` 时，auth、global state、session index、web settings、Web UI state、favorites、pinned thread ids、skills、skills sync state 和 worktrees 路径都跟随该目录。
+- Web UI state 和 skills 服务不再忽略 `CODEX_HOME`。
+- Server module smoke 覆盖默认回退和所有关键路径构造。
+- 构建、server module smoke、CLI smoke 和 release gate 均通过。
+
+#### Rollback / Cleanup
+- 如需回滚，撤销 `src/server/codexPaths.ts`、bridge/webUiState/skillsRoutes/skillsHubService import 调整、server module smoke、verify-server-modules、changelog 和本节测试记录。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 `CODEX_HOME` trim、默认回退和 Codex auth/global state/session/settings/Web UI/skills/worktrees 路径。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CLI smoke：`node dist-cli\index.js --help` 通过并输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace、package parse、governance docs、构建、server module smoke 和 CLI smoke；schema audit 按本阶段命令跳过。
 
 ---
 
