@@ -118,6 +118,8 @@ if (-not $SkipBuild) {
   Write-Host "==> Build skipped"
 }
 
+Invoke-CheckedCommand -Label "Server module smoke" -Command $npmCommand -Arguments @("run", "verify:server-modules")
+
 if (-not $SkipCliSmoke) {
   $cliEntry = Join-Path $repoRoot "dist-cli/index.js"
   if (-not (Test-Path -LiteralPath $cliEntry)) {
