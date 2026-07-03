@@ -62,6 +62,10 @@ import {
   AppServerRpcDiagnostics,
   type RpcDiagnostics,
 } from './appServerRpcDiagnostics.js'
+import {
+  AppServerRpcQueue,
+  getAppServerRpcQueuePriority,
+} from './appServerRpcQueue.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -141,15 +145,6 @@ type PendingRpc = {
   params: unknown
   startedAtMs: number
   timeoutId: ReturnType<typeof setTimeout>
-}
-
-type QueuedRpcTask = {
-  method: string
-  params: unknown
-  priority: number
-  queuedAtMs: number
-  resolve: (value: unknown) => void
-  reject: (reason?: unknown) => void
 }
 
 type TokenUsageBreakdown = {
@@ -654,32 +649,6 @@ function isCachedThreadReadStaleForRuntime(
   if (completedAtMs <= 0) return false
   const cachedAtMs = readIsoTimestampMs(cachedThreadRead.cachedAtIso)
   return cachedAtMs <= 0 || cachedAtMs < completedAtMs
-}
-
-function getRpcQueuePriority(method: string, params: unknown): number {
-  if (
-    method === 'turn/start' ||
-    method === 'turn/interrupt' ||
-    method === 'thread/start' ||
-    method === 'thread/resume' ||
-    method === 'server/request/respond'
-  ) {
-    return 0
-  }
-
-  if (method === 'thread/read') {
-    return 1
-  }
-
-  if (method === 'thread/list') {
-    return 4
-  }
-
-  if (method === 'model/list' || method === 'skills/list' || method === 'account/rateLimits/read') {
-    return 5
-  }
-
-  return 1
 }
 
 function setJson(res: ServerResponse, statusCode: number, payload: unknown): void {
@@ -1809,7 +1778,12 @@ class AppServerProcess {
     },
   )
   private readonly pending = new Map<number, PendingRpc>()
-  private readonly queuedRpcCalls: QueuedRpcTask[] = []
+  private readonly rpcQueue = new AppServerRpcQueue({
+    maxSize: APP_SERVER_RPC_QUEUE_MAX_SIZE,
+    maxInFlight: APP_SERVER_RPC_MAX_IN_FLIGHT,
+    diagnostics: this.rpcDiagnostics,
+    execute: (method, params) => this.call(method, params),
+  })
   private readonly expectedExitProcesses = new WeakSet<ChildProcessWithoutNullStreams>()
   private readonly notificationListeners = new Set<(value: { method: string; params: unknown }) => void>()
   private readonly pendingServerRequests = new PendingServerRequestStore()
@@ -1937,9 +1911,7 @@ class AppServerProcess {
   }
 
   private rejectQueuedRpcCalls(error: Error): void {
-    for (const request of this.queuedRpcCalls.splice(0)) {
-      request.reject(error)
-    }
+    this.rpcQueue.rejectAll(error)
   }
 
   private finalizePendingRpc(id: number): PendingRpc | null {
@@ -2322,44 +2294,7 @@ class AppServerProcess {
   }
 
   private enqueueRpc(method: string, params: unknown): Promise<unknown> {
-    if (this.queuedRpcCalls.length >= APP_SERVER_RPC_QUEUE_MAX_SIZE) {
-      return Promise.reject(new Error(`codex app-server RPC queue is full (${APP_SERVER_RPC_QUEUE_MAX_SIZE})`))
-    }
-
-    return new Promise((resolve, reject) => {
-      const queuedAtMs = Date.now()
-      this.queuedRpcCalls.push({
-        method,
-        params,
-        priority: getRpcQueuePriority(method, params),
-        queuedAtMs,
-        resolve,
-        reject,
-      })
-      this.queuedRpcCalls.sort((left, right) => {
-        if (left.priority !== right.priority) return left.priority - right.priority
-        return left.queuedAtMs - right.queuedAtMs
-      })
-      this.rpcDiagnostics.recordQueueDepth(this.queuedRpcCalls.length, queuedAtMs)
-      this.rpcDiagnostics.maybeWarnQueueBacklog(method, params, this.queuedRpcCalls.length, queuedAtMs)
-
-      this.drainRpcQueue()
-    })
-  }
-
-  private drainRpcQueue(): void {
-    while (this.rpcDiagnostics.activeCount < APP_SERVER_RPC_MAX_IN_FLIGHT && this.queuedRpcCalls.length > 0) {
-      const request = this.queuedRpcCalls.shift()
-      if (!request) return
-
-      this.rpcDiagnostics.incrementActive()
-      void this.call(request.method, request.params)
-        .then(request.resolve, request.reject)
-        .finally(() => {
-          this.rpcDiagnostics.decrementActive()
-          this.drainRpcQueue()
-        })
-    }
+    return this.rpcQueue.enqueue(method, params)
   }
 
   private async call(method: string, params: unknown): Promise<unknown> {
@@ -2425,7 +2360,7 @@ class AppServerProcess {
     if (shouldInvalidateThreadListCacheForRpc(method)) {
       this.rpcCache.clearThreadList()
     }
-    if (getRpcQueuePriority(method, params) === 0) {
+    if (getAppServerRpcQueuePriority(method, params) === 0) {
       return this.call(method, params)
     }
 
@@ -2538,10 +2473,10 @@ class AppServerProcess {
       stopping: this.stopping,
       pid: this.process?.pid ?? null,
       pendingRpcCount: this.pending.size,
-      queuedRpcCount: this.queuedRpcCalls.length,
+      queuedRpcCount: this.rpcQueue.count,
       pendingServerRequestCount: this.pendingServerRequests.count,
       activePlanModeTurnCount: this.planModeTurnsByThreadId.size,
-      rpcDiagnostics: this.rpcDiagnostics.snapshot(this.pending.size, this.queuedRpcCalls.length),
+      rpcDiagnostics: this.rpcDiagnostics.snapshot(this.pending.size, this.rpcQueue.count),
     }
   }
 

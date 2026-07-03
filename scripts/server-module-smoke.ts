@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheForRpc } from '../src/server/appServerRpcCache.js'
 import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.js'
+import { AppServerRpcQueue, getAppServerRpcQueuePriority } from '../src/server/appServerRpcQueue.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
 import {
   isRuntimeActiveState,
@@ -14,6 +15,7 @@ try {
   smokePendingServerRequests()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
+  await smokeAppServerRpcQueue()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
 } finally {
@@ -111,6 +113,79 @@ function smokeAppServerRpcDiagnostics(): void {
   assert.equal(diagnostics.noteRestartableTimeout('thread/start', now + 20_000).shouldRestart, false)
 }
 
+async function smokeAppServerRpcQueue(): Promise<void> {
+  assert.equal(getAppServerRpcQueuePriority('turn/start', {}), 0)
+  assert.equal(getAppServerRpcQueuePriority('thread/read', {}), 1)
+  assert.equal(getAppServerRpcQueuePriority('thread/list', {}), 4)
+  assert.equal(getAppServerRpcQueuePriority('model/list', {}), 5)
+
+  let now = 9_000
+  Date.now = () => now++
+  const diagnostics = new AppServerRpcDiagnostics(
+    {
+      isHeavyThreadRead: (method, params) => method === 'thread/read' && readIncludeTurns(params) === true,
+    },
+    {
+      slowWarnMs: 100,
+      queueWarnSize: 10,
+      queueWarnIntervalMs: 1_000,
+      timeoutRestartWindowMs: 10_000,
+      timeoutRestartThreshold: 2,
+    },
+  )
+
+  const startedMethods: string[] = []
+  const releaseCurrent: Array<() => void> = []
+  const queue = new AppServerRpcQueue({
+    maxSize: 3,
+    maxInFlight: 1,
+    diagnostics,
+    execute: async (method) => {
+      startedMethods.push(method)
+      await new Promise<void>((resolve) => {
+        releaseCurrent.push(resolve)
+      })
+      return `${method}:done`
+    },
+  })
+
+  const first = queue.enqueue('thread/read', { includeTurns: false })
+  await flushMicrotasks()
+  assert.deepEqual(startedMethods, ['thread/read'])
+
+  const lowPriority = queue.enqueue('model/list', {})
+  const highPriority = queue.enqueue('thread/read', { includeTurns: false })
+  assert.equal(queue.count, 2)
+
+  releaseCurrent.shift()?.()
+  assert.equal(await first, 'thread/read:done')
+  await flushMicrotasks()
+  assert.deepEqual(startedMethods, ['thread/read', 'thread/read'])
+
+  releaseCurrent.shift()?.()
+  assert.equal(await highPriority, 'thread/read:done')
+  await flushMicrotasks()
+  assert.deepEqual(startedMethods, ['thread/read', 'thread/read', 'model/list'])
+
+  releaseCurrent.shift()?.()
+  assert.equal(await lowPriority, 'model/list:done')
+  assert.equal(queue.count, 0)
+
+  const stalledQueue = new AppServerRpcQueue({
+    maxSize: 1,
+    maxInFlight: 0,
+    diagnostics,
+    execute: async () => 'unreachable',
+  })
+  const pending = stalledQueue.enqueue('thread/read', {})
+  await assert.rejects(
+    stalledQueue.enqueue('thread/read', {}),
+    /codex app-server RPC queue is full \(1\)/,
+  )
+  stalledQueue.rejectAll(new Error('queue stopped'))
+  await assert.rejects(pending, /queue stopped/)
+}
+
 function smokeRuntimeStateStore(): void {
   const store = new RuntimeStateStore({
     readThreadIdFromPayload,
@@ -140,6 +215,11 @@ function smokeRuntimeStateStore(): void {
   assert.equal(persistable.threadRead, null)
   assert.deepEqual(persistable.pendingServerRequests, [])
   assert.equal(persistable.tokenUsage, null)
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
 }
 
 function readThreadIdFromPayload(payload: unknown): string {

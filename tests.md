@@ -1792,10 +1792,40 @@ This file tracks manual regression and feature verification steps.
 
 #### Expected Results
 - `verify:server-modules` 会用本地 `tsc` 把 server 模块和 smoke 入口编译到 `output/server-module-smoke/`，再用 Node 执行真实行为断言。
-- smoke 覆盖 shareable RPC key、thread/model cache stale、后台刷新、pending request consume/list/filter、RPC diagnostics timeout/restart window、runtime stale/completed snapshot 和 persistable snapshot 清理。
+- smoke 覆盖 shareable RPC key、thread/model cache stale、后台刷新、pending request consume/list/filter、RPC queue priority/concurrency/capacity/rejectAll、RPC diagnostics timeout/restart window、runtime stale/completed snapshot 和 persistable snapshot 清理。
 - `verify:release` 默认包含 server module smoke，避免这些核心 bridge 小模块只被 build 覆盖。
 
 #### Regression Evidence
 - 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
 - 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
 - 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `Server module smoke`、governance docs check、构建和 CLI smoke。
+
+---
+
+### Feature: App Server RPC queue 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRpcQueue.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖队列行为。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run build`。
+3. 执行 `npm.cmd run verify:server-modules`。
+4. 执行 `node dist-cli/index.js --help`。
+5. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+6. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+7. 代码审查确认 `src/server/codexAppServerBridge.ts` 通过 `AppServerRpcQueue` 管理排队、排序、容量限制、并发 drain 和 rejectAll；JSON-RPC call、timeout、App Server 生命周期和直接优先级 0 RPC 仍由 bridge 控制。
+
+#### Expected Results
+- `src/server/appServerRpcQueue.ts` 集中维护 `QueuedRpcTask`、`getAppServerRpcQueuePriority`、队列容量检查、优先级排序、并发调度和 rejectAll。
+- `turn/start`、`turn/interrupt`、`thread/start`、`thread/resume` 和 `server/request/respond` 仍返回优先级 0，并在 bridge 中直接调用 `call()`。
+- Server module smoke 验证 max-in-flight 为 1 时高优先级排队请求先于低优先级请求执行，并验证满队列错误和 rejectAll。
+- 构建、server module smoke、CLI smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `Server module smoke`、构建和 CLI smoke。
