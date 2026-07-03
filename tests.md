@@ -1464,3 +1464,30 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
 - 2026-07-03 CLI smoke：`node dist-cli/index.js --help` 通过并输出 `CX-Codex Web bridge for Codex app-server`。
 - 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
+
+---
+
+### Feature: HTTP body helper 模块化与 JSON 请求体保护
+
+#### Prerequisites
+- 当前仓库已包含 `src/server/httpBody.ts`。
+- 本机可运行 `npm.cmd run build`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run build`。
+3. 执行 `node dist-cli/index.js --help`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; console.log('cli cjs launcher smoke ok')"`。
+5. 可选设置 `CX_CODEX_JSON_BODY_MAX_BYTES=64` 后向任意 JSON POST API 发送大于 64 字节的 JSON 请求，确认返回 `413`。
+
+#### Expected Results
+- `src/server/codexAppServerBridge.ts` 不再内联通用 `readRawBody`、`readJsonBody`、`readHeaderValue` 和 `RequestBodyTooLargeError`。
+- 普通 JSON API 请求体默认限制为 2MiB，并可通过 `CX_CODEX_JSON_BODY_MAX_BYTES`、`CODEXUI_JSON_BODY_MAX_BYTES` 或 `JSON_BODY_MAX_BYTES` 覆盖。
+- 转写上传继续使用独立的 26MiB 上限，不受普通 JSON API 上限影响。
+- 超限请求返回 `413`，不会落入通用 `502` bridge error。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CLI smoke：`node dist-cli/index.js --help` 通过并输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。

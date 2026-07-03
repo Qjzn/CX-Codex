@@ -13,6 +13,12 @@ import { getDesktopAppRefreshStatus, requestDesktopAppRefresh } from './desktopA
 import { getTunnelStatus, updateTunnelConfig } from './tunnelStatus.js'
 import { readFavoriteRecords, readPinnedThreadIds, writeFavoriteRecords, writePinnedThreadIds } from './webUiState.js'
 import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } from './runtimeStore.js'
+import {
+  readHeaderValue,
+  readJsonBody,
+  readRawBody,
+  RequestBodyTooLargeError,
+} from './httpBody.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import {
   getOpenAiTranscribeApiKey,
@@ -2361,39 +2367,6 @@ async function writeWebBridgeSettings(settings: WebBridgeSettings): Promise<WebB
   const normalized = normalizeWebBridgeSettings(settings)
   await writeFile(getWebBridgeSettingsPath(), JSON.stringify(normalized, null, 2), 'utf8')
   return normalized
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  const raw = await readRawBody(req)
-  if (raw.length === 0) return null
-  const text = raw.toString('utf8').trim()
-  if (text.length === 0) return null
-  return JSON.parse(text) as unknown
-}
-
-class RequestBodyTooLargeError extends Error {
-  constructor(readonly maxBytes: number) {
-    super(`Request body exceeds ${maxBytes} bytes`)
-  }
-}
-
-async function readRawBody(req: IncomingMessage, options: { maxBytes?: number } = {}): Promise<Buffer> {
-  const chunks: Uint8Array[] = []
-  let totalBytes = 0
-  for await (const chunk of req) {
-    const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
-    totalBytes += buffer.length
-    if (typeof options.maxBytes === 'number' && options.maxBytes > 0 && totalBytes > options.maxBytes) {
-      throw new RequestBodyTooLargeError(options.maxBytes)
-    }
-    chunks.push(buffer)
-  }
-  return Buffer.concat(chunks)
-}
-
-function readHeaderValue(value: string | string[] | undefined, fallback = ''): string {
-  if (Array.isArray(value)) return value[0] ?? fallback
-  return value ?? fallback
 }
 
 function bufferIndexOf(buf: Buffer, needle: Buffer, start = 0): number {
@@ -5267,6 +5240,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       next()
     } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        setJson(res, 413, { error: `Request body is too large. Maximum request size is ${error.maxBytes} bytes.` })
+        return
+      }
       const message = getErrorMessage(error, 'Unknown bridge error')
       logBridgeError('Bridge request failed', error, {
         requestMethod: req.method ?? '',
