@@ -35,6 +35,7 @@ import {
   rollbackWorktreeToMessage,
   startRuntimeThreadTurn,
   subscribeCodexNotifications,
+  type RuntimeInterruptSource,
   type RpcConnectionState,
   type RpcNotification,
   type SkillInfo,
@@ -5790,7 +5791,7 @@ export function useDesktopState() {
     }
   }
 
-  async function interruptSelectedThreadTurn(): Promise<void> {
+  async function interruptSelectedThreadTurn(source: RuntimeInterruptSource = 'unknown'): Promise<void> {
     const threadId = selectedThreadId.value
     if (!threadId) return
     if (inProgressById.value[threadId] !== true) return
@@ -5817,7 +5818,13 @@ export function useDesktopState() {
     pendingThreadMessageRefresh.add(threadId)
     pendingThreadsRefresh = true
     try {
-      const result = await interruptRuntimeThreadTurn(threadId, turnId)
+      const startedAtMs = parseIsoTimestamp(runtimeStatusSummaryByThreadId.value[threadId]?.lastStartedAtIso ?? '')
+      const result = await interruptRuntimeThreadTurn(threadId, turnId, {
+        source,
+        requestedAtIso: new Date().toISOString(),
+        clientElapsedMs: startedAtMs ? Math.max(0, Date.now() - startedAtMs) : null,
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+      })
       if (result.status === 'stop_uncertain') {
         setRuntimeExecutionState(threadId, 'stop_uncertain', { canStop: false, activeTurnId: turnId })
         setTurnActivityForThread(threadId, {

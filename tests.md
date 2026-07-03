@@ -1342,3 +1342,33 @@ This file tracks manual regression and feature verification steps.
 #### Rollback / Cleanup
 - 审计完成后可删除 `output/app-server-schema-audit/<timestamp>` 临时目录。
 - 如果确认官方 schema 变化需要纳入仓库，先更新代码兼容层和文档，再有意覆盖 `documentation/app-server-schemas/` 基线并记录验证证据。
+
+---
+
+### Feature: OpenAI 官方语音转写与停止请求审计
+
+#### Prerequisites
+- 本机可运行 `npm.cmd run build`。
+- 如需验证官方转写链路，配置 `CX_CODEX_OPENAI_API_KEY` 或 `OPENAI_API_KEY`。
+- 如需验证旧链路回退，确保未配置 OpenAI API key，并保留可用的 Codex / ChatGPT 登录态。
+
+#### Steps
+1. 执行 `npm.cmd run build`。
+2. 配置 OpenAI API key 后，在前端录音或上传音频文件，确认 `/codex-api/transcribe` 返回包含 `text` 的 JSON。
+3. 未配置 OpenAI API key 时重复转写，确认后端仍回退到原 ChatGPT 登录态代理链路。
+4. 上传超过默认请求体限制的音频 multipart 请求，确认接口返回 `413` 和可读错误。
+5. 在移动端或窄屏开始一次任务后，立即观察底部停止按钮，确认短暂防误触窗口内不会展示停止按钮。
+6. 任务进行中点击 composer 停止按钮和运行状态条停止按钮，确认 `/codex-api/runtime/interrupt` payload 分别包含 `source=composer-stop` 或 `source=runtime-status-stop`，并带有 `requestedAtIso`、`clientElapsedMs`、截断后的 `userAgent`。
+
+#### Expected Results
+- 官方转写链路默认补齐 `model=gpt-4o-transcribe` 和 `response_format=json`，前端能继续从返回 JSON 中提取文本。
+- 未配置官方 API key 时，不破坏既有 Codex / ChatGPT 登录态转写。
+- 过大转写请求在本地服务端被拒绝，不继续代理到上游。
+- 停止请求带来源和耗时审计字段，便于定位误触、移动端重复点击和状态条停止行为。
+- 移动端刚发送任务后的短暂窗口不会立即展示停止按钮，降低误触概率。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 配置验证：`node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json ok')"` 输出 `package.json ok`。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 构建期间仅出现 Vite 大 chunk 提示和 npm update config store 提示，未出现 TypeScript 或打包错误。

@@ -2,7 +2,10 @@
 
 ## 未发布
 
-- 暂无。
+- 语音输入：
+  - 后端转写支持优先使用 OpenAI 官方音频转写 API，配置 `CX_CODEX_OPENAI_API_KEY` 或 `OPENAI_API_KEY` 后不再依赖 ChatGPT 网页登录态。
+  - 转写上传请求体新增默认 26MiB 服务端保护，可通过 `CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES` 或 `OPENAI_TRANSCRIBE_MAX_BYTES` 覆盖。
+  - 未配置 OpenAI API key 时仍保留原有 ChatGPT 登录态代理转写链路，避免破坏既有安装。
 
 ## 2.2.7
 

@@ -593,7 +593,7 @@
           :notification-stale="notificationStale"
           :connection-state="realtimeConnectionState"
           @refresh="onRefreshSelectedThreadContent"
-          @stop="onInterruptTurn"
+          @stop="onInterruptTurn('runtime-status-stop')"
         />
 
         <section class="content-body">
@@ -770,7 +770,7 @@
                   @refresh-plugins="refreshComposerPlugins"
                   @reload-plugins="reloadComposerPlugins"
                   @login-plugin="loginComposerPlugin"
-                  @interrupt="onInterruptTurn" />
+                  @interrupt="onInterruptTurn('composer-stop')" />
               </div>
             </div>
           </template>
@@ -3532,9 +3532,9 @@ function onSelectCollaborationMode(mode: CollaborationMode): void {
   setSelectedCollaborationMode(mode)
 }
 
-function onInterruptTurn(): void {
+function onInterruptTurn(source: 'composer-stop' | 'runtime-status-stop' | 'unknown' = 'unknown'): void {
   showProductToast('已请求停止，正在确认任务状态。', 'warning')
-  void interruptSelectedThreadTurn()
+  void interruptSelectedThreadTurn(source)
 }
 
 function onRollback(payload: { turnIndex: number; prependText?: string }): void {

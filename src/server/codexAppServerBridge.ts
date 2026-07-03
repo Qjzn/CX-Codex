@@ -2366,12 +2366,29 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(text) as unknown
 }
 
-async function readRawBody(req: IncomingMessage): Promise<Buffer> {
+class RequestBodyTooLargeError extends Error {
+  constructor(readonly maxBytes: number) {
+    super(`Request body exceeds ${maxBytes} bytes`)
+  }
+}
+
+async function readRawBody(req: IncomingMessage, options: { maxBytes?: number } = {}): Promise<Buffer> {
   const chunks: Uint8Array[] = []
+  let totalBytes = 0
   for await (const chunk of req) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+    const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+    totalBytes += buffer.length
+    if (typeof options.maxBytes === 'number' && options.maxBytes > 0 && totalBytes > options.maxBytes) {
+      throw new RequestBodyTooLargeError(options.maxBytes)
+    }
+    chunks.push(buffer)
   }
   return Buffer.concat(chunks)
+}
+
+function readHeaderValue(value: string | string[] | undefined, fallback = ''): string {
+  if (Array.isArray(value)) return value[0] ?? fallback
+  return value ?? fallback
 }
 
 function bufferIndexOf(buf: Buffer, needle: Buffer, start = 0): number {
@@ -2457,6 +2474,10 @@ function httpPost(
 
 let curlImpersonateAvailable: boolean | null = null
 
+const OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions'
+const DEFAULT_OPENAI_TRANSCRIBE_MODEL = 'gpt-4o-transcribe'
+const TRANSCRIBE_REQUEST_BODY_LIMIT_BYTES = 26 * 1024 * 1024
+
 function curlImpersonatePost(
   url: string,
   headers: Record<string, string | number>,
@@ -2493,7 +2514,82 @@ function curlImpersonatePost(
   })
 }
 
-async function proxyTranscribe(
+function readTranscribeEnv(name: string): string {
+  return (
+    process.env[`CX_CODEX_${name}`]?.trim() ||
+    process.env[`CODEXUI_${name}`]?.trim() ||
+    process.env[name]?.trim() ||
+    ''
+  )
+}
+
+function getOpenAiTranscribeApiKey(): string {
+  return readTranscribeEnv('OPENAI_API_KEY')
+}
+
+function getOpenAiTranscribeModel(): string {
+  return readTranscribeEnv('OPENAI_TRANSCRIBE_MODEL') || DEFAULT_OPENAI_TRANSCRIBE_MODEL
+}
+
+function getOpenAiTranscribeUrl(): string {
+  return readTranscribeEnv('OPENAI_TRANSCRIBE_URL') || OPENAI_TRANSCRIBE_URL
+}
+
+function getTranscribeRequestBodyLimitBytes(): number {
+  const configured = Number.parseInt(readTranscribeEnv('OPENAI_TRANSCRIBE_MAX_BYTES'), 10)
+  if (Number.isFinite(configured) && configured > 0) return configured
+  return TRANSCRIBE_REQUEST_BODY_LIMIT_BYTES
+}
+
+function getMultipartBoundary(contentType: string): string {
+  const match = contentType.match(/boundary=(?:"([^"]+)"|([^;\s]+))/iu)
+  return (match?.[1] ?? match?.[2] ?? '').trim()
+}
+
+function appendMultipartTextField(body: Buffer, boundary: string, name: string, value: string): Buffer {
+  const finalBoundary = Buffer.from(`--${boundary}--`)
+  const finalBoundaryIndex = body.lastIndexOf(finalBoundary)
+  if (finalBoundaryIndex < 0) return body
+
+  const prefix = body.subarray(0, finalBoundaryIndex)
+  const suffix = body.subarray(finalBoundaryIndex)
+  const separator = prefix.length > 0 && !prefix.subarray(-2).equals(Buffer.from('\r\n')) ? '\r\n' : ''
+  const field = Buffer.from(
+    `${separator}--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
+    `${value}\r\n`,
+  )
+  return Buffer.concat([prefix, field, suffix])
+}
+
+function prepareOpenAiTranscribeBody(body: Buffer, contentType: string): Buffer {
+  const boundary = getMultipartBoundary(contentType)
+  if (!boundary) return body
+
+  let nextBody = body
+  if (!body.includes(Buffer.from('name="model"'))) {
+    nextBody = appendMultipartTextField(nextBody, boundary, 'model', getOpenAiTranscribeModel())
+  }
+  if (!body.includes(Buffer.from('name="response_format"'))) {
+    nextBody = appendMultipartTextField(nextBody, boundary, 'response_format', 'json')
+  }
+  return nextBody
+}
+
+async function proxyOpenAiTranscribe(
+  body: Buffer,
+  contentType: string,
+  apiKey: string,
+): Promise<{ status: number; body: string }> {
+  const upstreamBody = prepareOpenAiTranscribeBody(body, contentType)
+  return httpPost(getOpenAiTranscribeUrl(), {
+    'Content-Type': contentType,
+    'Content-Length': upstreamBody.length,
+    Authorization: `Bearer ${apiKey}`,
+  }, upstreamBody)
+}
+
+async function proxyChatGptTranscribe(
   body: Buffer,
   contentType: string,
   authToken: string,
@@ -4309,13 +4405,26 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     if (!turnId) throw new Error('runtime/interrupt requires turnId')
 
     const requestId = readString(body.requestId).trim() || createRuntimeRequestId()
+    const source = readString(body.source).trim() || 'unknown'
+    const requestedAtIso = readString(body.requestedAtIso).trim()
+    const userAgent = readString(body.userAgent).trim()
+    const clientElapsedMs = typeof body.clientElapsedMs === 'number' && Number.isFinite(body.clientElapsedMs)
+      ? Math.max(0, Math.round(body.clientElapsedMs))
+      : null
     runtimeStore.createRequest({
       requestId,
       threadId,
       turnId,
       status: 'stopping',
       mode: 'interrupt',
-      payload: { threadId, turnId },
+      payload: {
+        threadId,
+        turnId,
+        source,
+        requestedAtIso,
+        clientElapsedMs,
+        userAgent: userAgent.slice(0, 240),
+      },
     })
     runtimeStateStore.markStopping(threadId)
     persistRuntimeSnapshot(threadId)
@@ -4620,15 +4729,29 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'POST' && url.pathname === '/codex-api/transcribe') {
-        const auth = await readCodexAuth()
-        if (!auth) {
-          setJson(res, 401, { error: 'No auth token available for transcription' })
-          return
+        let rawBody: Buffer
+        try {
+          rawBody = await readRawBody(req, { maxBytes: getTranscribeRequestBodyLimitBytes() })
+        } catch (err) {
+          if (err instanceof RequestBodyTooLargeError) {
+            setJson(res, 413, { error: `Transcription upload is too large. Maximum request size is ${err.maxBytes} bytes.` })
+            return
+          }
+          throw err
         }
-
-        const rawBody = await readRawBody(req)
-        const incomingCt = req.headers['content-type'] ?? 'application/octet-stream'
-        const upstream = await proxyTranscribe(rawBody, incomingCt, auth.accessToken, auth.accountId)
+        const incomingCt = readHeaderValue(req.headers['content-type'], 'application/octet-stream')
+        const openAiApiKey = getOpenAiTranscribeApiKey()
+        let upstream: { status: number; body: string }
+        if (openAiApiKey) {
+          upstream = await proxyOpenAiTranscribe(rawBody, incomingCt, openAiApiKey)
+        } else {
+          const auth = await readCodexAuth()
+          if (!auth) {
+            setJson(res, 401, { error: 'No auth token available for transcription' })
+            return
+          }
+          upstream = await proxyChatGptTranscribe(rawBody, incomingCt, auth.accessToken, auth.accountId)
+        }
 
         res.statusCode = upstream.status
         res.setHeader('Content-Type', 'application/json; charset=utf-8')

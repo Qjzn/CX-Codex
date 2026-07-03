@@ -475,12 +475,12 @@
           </button>
 
           <button
-            v-if="isTurnInProgress && !hasSubmitContent"
+            v-if="shouldShowStopButton"
             class="thread-composer-stop"
             type="button"
             aria-label="停止"
             :disabled="disabled || !activeThreadId || isInterruptingTurn"
-            @click="onInterrupt"
+            @click="onInterruptClick"
           >
             <IconTablerPlayerStopFilled class="thread-composer-stop-icon" />
           </button>
@@ -718,7 +718,9 @@ let isHoldPressActive = false
 let dictationShouldRollbackLatestUserTurn = false
 const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)
 const DRAFT_STORAGE_PREFIX = 'codex-web-local.thread-draft.v1.'
+const MOBILE_STOP_GUARD_MS = 2500
 let lastActiveThreadId = ''
+let stopGuardTimer: ReturnType<typeof setTimeout> | null = null
 
 const reasoningOptions: Array<{ value: ReasoningEffort; label: string }> = [
   { value: 'none', label: '智能' },
@@ -882,9 +884,33 @@ const placeholderText = computed(() =>
 const hasSubmitContent = computed(() =>
   draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0,
 )
+const isStopGuardActive = ref(false)
+const shouldUseStopGuard = computed(() => isAndroid || isCompactViewport.value)
+const shouldShowStopButton = computed(() => (
+  props.isTurnInProgress === true
+  && !hasSubmitContent.value
+  && !isStopGuardActive.value
+))
 
 function resolveSubmitMode(): 'steer' | 'queue' {
   return props.isTurnInProgress ? 'queue' : 'steer'
+}
+
+function armStopGuard(): void {
+  if (!shouldUseStopGuard.value) return
+  isStopGuardActive.value = true
+  if (stopGuardTimer) {
+    clearTimeout(stopGuardTimer)
+  }
+  stopGuardTimer = setTimeout(() => {
+    isStopGuardActive.value = false
+    stopGuardTimer = null
+  }, MOBILE_STOP_GUARD_MS)
+}
+
+function onInterruptClick(): void {
+  if (isStopGuardActive.value) return
+  emit('interrupt')
 }
 
 function onCollaborationModeSelect(mode: CollaborationMode): void {
@@ -928,6 +954,9 @@ function buildTurnOptions(): ComposerTurnOptions | undefined {
 function onSubmit(mode: 'steer' | 'queue' = 'steer', options?: { rollbackLatestUserTurn?: boolean }): void {
   const text = draft.value.trim()
   if (!canSubmit.value) return
+  if (mode === 'steer') {
+    armStopGuard()
+  }
   emit('submit', {
     text,
     imageUrls: selectedImages.value.map((image) => image.url),
@@ -1125,7 +1154,7 @@ function getCurrentDraftPayload(): ComposerDraftPayload {
 }
 
 function onInterrupt(): void {
-  emit('interrupt')
+  onInterruptClick()
 }
 
 function onModelSelect(value: string): void {
@@ -1783,6 +1812,10 @@ defineExpose<ThreadComposerExposed>({
 })
 
 onBeforeUnmount(() => {
+  if (stopGuardTimer) {
+    clearTimeout(stopGuardTimer)
+    stopGuardTimer = null
+  }
   document.removeEventListener('click', onDocumentClick)
   document.removeEventListener('visibilitychange', onDocumentVisibilityChange)
   window.removeEventListener('resize', syncCompactViewport)

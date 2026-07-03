@@ -1158,7 +1158,20 @@ export async function interruptThreadTurn(threadId: string, turnId?: string): Pr
   }
 }
 
-export async function interruptRuntimeThreadTurn(threadId: string, turnId?: string): Promise<RuntimeTurnStartResult> {
+export type RuntimeInterruptSource = 'composer-stop' | 'runtime-status-stop' | 'unknown'
+
+export type RuntimeInterruptAudit = {
+  source?: RuntimeInterruptSource
+  requestedAtIso?: string
+  clientElapsedMs?: number | null
+  userAgent?: string
+}
+
+export async function interruptRuntimeThreadTurn(
+  threadId: string,
+  turnId?: string,
+  audit: RuntimeInterruptAudit = {},
+): Promise<RuntimeTurnStartResult> {
   const normalizedThreadId = threadId.trim()
   const normalizedTurnId = turnId?.trim() || ''
   if (!normalizedThreadId) {
@@ -1170,7 +1183,14 @@ export async function interruptRuntimeThreadTurn(threadId: string, turnId?: stri
   const response = await fetchWithTimeout('/codex-api/runtime/interrupt', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ threadId: normalizedThreadId, turnId: normalizedTurnId }),
+    body: JSON.stringify({
+      threadId: normalizedThreadId,
+      turnId: normalizedTurnId,
+      source: audit.source ?? 'unknown',
+      requestedAtIso: audit.requestedAtIso,
+      clientElapsedMs: audit.clientElapsedMs,
+      userAgent: audit.userAgent,
+    }),
   }, {
     timeoutMs: GATEWAY_RUNTIME_FETCH_TIMEOUT_MS,
     label: 'Runtime interrupt request',
