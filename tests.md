@@ -1821,6 +1821,36 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Release package 关键治理文档烟测
+
+#### Prerequisites
+- 当前仓库包含 `scripts/verify-release.ps1` 和 `scripts/package-release.ps1`。
+- 当前仓库包含 `docs/openai-docs-review.zh-CN.md`、`docs/dependency-maintenance.zh-CN.md`、`docs/security-hardening.zh-CN.md`、`docs/protocol-compatibility.zh-CN.md` 和 `docs/app-server-protocol-matrix.zh-CN.md`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:governance`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 检查 release gate 输出包含 `Release package smoke` 和 `release package smoke ok`。
+5. 检查 `scripts/verify-release.ps1`，确认 `Assert-ZipContains` 会校验关键治理文档在 Web zip 内。
+
+#### Expected Results
+- Release package smoke 会阻止关键治理文档从发布 zip 中遗漏。
+- 治理门禁会阻止 release package smoke 断言被删弱。
+- 完整 release gate 保持通过，说明新增 zip 断言与现有打包脚本一致。
+
+#### Rollback/Cleanup
+- 如需回滚，撤销 `scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和本测试章节中的相关引用。
+- 可删除 `output\release-package-smoke` 临时输出。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁验证：`npm.cmd run verify:governance` 通过，确认 release smoke 关键治理文档断言已被 governance 锁定。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含构建、server module smoke、普通 CLI smoke、CLI CJS launcher smoke、Release package smoke 和 schema audit skip。
+- 2026-07-04 Release package smoke：输出 `release package smoke ok`，确认发布 zip 包含关键治理文档。
+
+---
+
 ### Feature: 开源社区行为准则
 
 #### Prerequisites

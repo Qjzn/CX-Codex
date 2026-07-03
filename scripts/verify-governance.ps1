@@ -167,7 +167,12 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "spawnSync(process.execPath",
   "Release package smoke",
   "release package smoke ok",
-  "Assert-ZipContains"
+  "Assert-ZipContains",
+  "docs\app-server-protocol-matrix.zh-CN.md",
+  "docs\dependency-maintenance.zh-CN.md",
+  "docs\openai-docs-review.zh-CN.md",
+  "docs\protocol-compatibility.zh-CN.md",
+  "docs\security-hardening.zh-CN.md"
 )
 
 Assert-ContentIncludes "scripts/package-release.ps1" @(
