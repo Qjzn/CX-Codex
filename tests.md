@@ -1476,6 +1476,38 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server method catalog 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerMethodCatalog.ts` 和 `src/server/codexAppServerBridge.ts`。
+- Codex CLI 支持 `codex app-server generate-json-schema --out <dir>`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 `node dist-cli\index.js --help`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `/codex-api/meta/methods` 和 `/codex-api/meta/notifications` 通过 `AppServerMethodCatalog` 读取 schema method 列表，`src/server/codexAppServerBridge.ts` 不再内联 `MethodCatalog`。
+
+#### Expected Results
+- `AppServerMethodCatalog` 负责调用 `codex app-server generate-json-schema`、读取 `ClientRequest.json` / `ServerNotification.json`、提取 method enum、缓存结果并清理临时 schema 目录。
+- `extractMethodCatalogFromSchema()` 对重复 method 去重、排序，并忽略空字符串和非字符串 enum 项。
+- bridge 主文件只保留 shared state、HTTP 路由和 App Server 编排。
+- 构建、server module smoke、CLI smoke 和 release gate 均通过。
+
+#### Rollback / Cleanup
+- 如需回滚，撤销 `src/server/appServerMethodCatalog.ts`、bridge import/shared state 调整、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、协议矩阵、changelog 和本节测试记录。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 method schema 去重、排序和异常结构 fallback。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CLI smoke：`node dist-cli\index.js --help` 通过并输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace、package parse、governance docs、构建、server module smoke 和 CLI smoke；schema audit 按本阶段命令跳过。
+
+---
+
 ### Feature: App Server clientInfo 版本跟随 package
 
 #### Prerequisites

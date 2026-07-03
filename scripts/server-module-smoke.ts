@@ -13,6 +13,7 @@ import {
   AppServerNotificationDiagnostics,
   isKnownAppServerNotificationMethod,
 } from '../src/server/appServerNotificationDiagnostics.js'
+import { extractMethodCatalogFromSchema } from '../src/server/appServerMethodCatalog.js'
 import {
   AppServerStatusDiagnostics,
   isKnownAppServerThreadStatus,
@@ -155,6 +156,7 @@ try {
   await smokeAppServerClientInfo()
   smokePendingServerRequests()
   smokeAppServerJsonRpcWire()
+  smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
   smokeAppServerStatusDiagnostics()
   await smokeAppServerSchemaAuditSummary()
@@ -352,6 +354,19 @@ function smokeAppServerNotificationDiagnostics(): void {
 
   diagnostics.clear()
   assert.equal(diagnostics.snapshot().unknownNotificationCount, 0)
+}
+
+function smokeAppServerMethodCatalog(): void {
+  const methods = extractMethodCatalogFromSchema({
+    oneOf: [
+      { properties: { method: { enum: ['thread/list', 'turn/start'] } } },
+      { properties: { method: { enum: ['thread/list', 'thread/read', ''] } } },
+      { properties: { method: { enum: [123, 'mcp/list'] } } },
+      { properties: { other: { enum: ['ignored'] } } },
+    ],
+  })
+  assert.deepEqual(methods, ['mcp/list', 'thread/list', 'thread/read', 'turn/start'])
+  assert.deepEqual(extractMethodCatalogFromSchema({ oneOf: null }), [])
 }
 
 function smokeAppServerStatusDiagnostics(): void {
