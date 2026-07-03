@@ -79,6 +79,11 @@ import {
   readThreadSessionPathFromThreadReadPayload,
   readThreadUpdatedAtIsoFromThreadReadPayload,
 } from '../src/server/appServerThreadPayload.js'
+import {
+  isCachedThreadReadStaleForRuntime,
+  readIsoTimestampMs,
+  type CachedThreadRead,
+} from '../src/server/appServerThreadReadCache.js'
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
 import {
@@ -190,6 +195,7 @@ import {
   isRuntimeActiveState,
   RuntimeStateStore,
   toPersistableRuntimeSnapshot,
+  type ThreadRuntimeSnapshot,
 } from '../src/server/runtimeState.js'
 import {
   normalizeWorkspaceRootsState,
@@ -232,6 +238,7 @@ try {
   smokeAppServerRpcResult()
   smokeAppServerPayloadIds()
   smokeAppServerThreadPayload()
+  smokeAppServerThreadReadCache()
   smokeAppServerRpcTimeoutPolicy()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
@@ -876,6 +883,42 @@ function smokeAppServerThreadPayload(): void {
   assert.equal(readThreadInProgressFromThreadReadPayload({ thread: { status: 'completed' } }), false)
   assert.equal(readThreadSessionPathFromThreadReadPayload({ path: ' C:/sessions/fallback.jsonl ', thread: {} }), 'C:/sessions/fallback.jsonl')
   assert.equal(readThreadUpdatedAtIsoFromThreadReadPayload({ thread: { updatedAt: 0 } }), '')
+}
+
+function smokeAppServerThreadReadCache(): void {
+  assert.equal(readIsoTimestampMs('2026-01-01T00:00:00.000Z'), Date.parse('2026-01-01T00:00:00.000Z'))
+  assert.equal(readIsoTimestampMs('not-a-date'), 0)
+  assert.equal(readIsoTimestampMs(null), 0)
+
+  const cachedThreadRead: CachedThreadRead = {
+    threadRead: { thread: { id: 'thread-a' } },
+    inProgress: false,
+    activeTurnId: '',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    sessionPath: 'C:/sessions/thread-a.jsonl',
+    cachedAtIso: '2026-01-01T00:00:05.000Z',
+  }
+  const baseSnapshot = createThreadRuntimeSnapshot({
+    executionState: 'completed',
+    lastCompletedAtIso: '2026-01-01T00:00:04.000Z',
+  })
+
+  assert.equal(isCachedThreadReadStaleForRuntime(cachedThreadRead, baseSnapshot, true), false)
+  assert.equal(isCachedThreadReadStaleForRuntime(cachedThreadRead, createThreadRuntimeSnapshot({ executionState: 'running' }), false), true)
+  assert.equal(isCachedThreadReadStaleForRuntime(cachedThreadRead, createThreadRuntimeSnapshot({ executionState: 'completed_pending_sync' }), false), true)
+  assert.equal(isCachedThreadReadStaleForRuntime(cachedThreadRead, baseSnapshot, false), false)
+  assert.equal(isCachedThreadReadStaleForRuntime(cachedThreadRead, createThreadRuntimeSnapshot({
+    executionState: 'completed',
+    lastCompletedAtIso: '2026-01-01T00:00:06.000Z',
+  }), false), true)
+  assert.equal(isCachedThreadReadStaleForRuntime({
+    ...cachedThreadRead,
+    cachedAtIso: 'invalid-date',
+  }, baseSnapshot, false), true)
+  assert.equal(isCachedThreadReadStaleForRuntime(cachedThreadRead, createThreadRuntimeSnapshot({
+    executionState: 'completed',
+    lastCompletedAtIso: null,
+  }), false), false)
 }
 
 function smokeAppServerRpcTimeoutPolicy(): void {
@@ -2174,6 +2217,32 @@ function smokeRuntimeStateStore(): void {
   assert.equal(persistable.threadRead, null)
   assert.deepEqual(persistable.pendingServerRequests, [])
   assert.equal(persistable.tokenUsage, null)
+}
+
+function createThreadRuntimeSnapshot(overrides: Partial<ThreadRuntimeSnapshot> = {}): ThreadRuntimeSnapshot {
+  return {
+    threadId: 'thread-a',
+    executionState: 'completed',
+    inProgress: false,
+    activeTurnId: '',
+    activeItemId: '',
+    canStop: false,
+    stopRequested: false,
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    lastEventSeq: 0,
+    lastEventAtIso: null,
+    lastStartedAtIso: null,
+    lastCompletedAtIso: null,
+    lastError: null,
+    stale: false,
+    degradedReason: null,
+    source: 'thread-read',
+    threadRead: null,
+    messageState: 'fresh',
+    pendingServerRequests: [],
+    tokenUsage: null,
+    ...overrides,
+  }
 }
 
 async function flushMicrotasks(): Promise<void> {

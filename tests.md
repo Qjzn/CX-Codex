@@ -2318,6 +2318,37 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server thread/read cache 新鲜度模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerThreadReadCache.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 timestamp 解析和 runtime snapshot 驱动的 cached thread/read stale 判断。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 从 `appServerThreadReadCache.ts` 导入 `CachedThreadRead`、`readIsoTimestampMs()` 和 `isCachedThreadReadStaleForRuntime()`，不再内联 heavy thread/read cache stale 判断。
+5. 代码审查确认 `readLocalRuntimeSnapshot()` 仍复用同一个 `readIsoTimestampMs()`，前台恢复时 stale persisted runtime snapshot 的判断不变。
+
+#### Expected Results
+- `src/server/appServerThreadReadCache.ts` 集中维护 heavy `thread/read(includeTurns:true)` cache 是否可复用的纯判断。
+- light thread/read 仍在运行时，cached heavy read 不会被标记 stale。
+- runtime snapshot 处于 active 或 `completed_pending_sync` 时，cached heavy read 会被标记 stale。
+- runtime completion 时间晚于 cache 时间，或 cache 时间无效时，cached heavy read 会被标记 stale。
+- 无有效 completion 时间时，cached heavy read 不会因为 completion 时间判断被误标 stale。
+- server module smoke 覆盖上述分支；release gate 通过，证明拆分后的 ESM import、runtime/cache helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/appServerThreadReadCache.ts`，撤销 `scripts/server-module-smoke.ts` 中的 thread/read cache smoke，并把 `CachedThreadRead`、`readIsoTimestampMs()` 和 `isCachedThreadReadStaleForRuntime()` 恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: App Server RPC cache invalidation 模块化
 
 #### Prerequisites
