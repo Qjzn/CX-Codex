@@ -7,6 +7,34 @@ export type RuntimeTurnOptions = {
   goal?: { enabled: boolean; text: string }
 }
 
+export type ParsedRuntimeSendPayload = {
+  requestId: string
+  clientMessageId: string
+  mode: CollaborationMode
+  model: string
+  cwd: string
+  threadId: string
+  input: unknown[]
+  attachments: unknown
+  effort: unknown
+  turnOptions: RuntimeTurnOptions | null
+  payloadSummary: Record<string, unknown>
+}
+
+export type ParsedRuntimeInterruptPayload = {
+  requestId: string
+  threadId: string
+  turnId: string
+  payloadSummary: {
+    threadId: string
+    turnId: string
+    source: string
+    requestedAtIso: string
+    clientElapsedMs: number | null
+    userAgent: string
+  }
+}
+
 const PLAN_MODE_PROMPT_PREFIX = `# Codex Plan Mode
 
 You are working in plan mode.
@@ -28,6 +56,15 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+function readStringByAliases(record: Record<string, unknown> | null | undefined, ...keys: string[]): string {
+  if (!record) return ''
+  for (const key of keys) {
+    const value = readString(record[key]).trim()
+    if (value) return value
+  }
+  return ''
 }
 
 function getErrorMessage(payload: unknown, fallback: string): string {
@@ -109,6 +146,78 @@ export function buildRuntimeRequestPayloadSummary(args: {
     turnOptions: {
       pluginCount: args.turnOptions?.plugins.length ?? 0,
       hasGoal: args.turnOptions?.goal?.enabled === true,
+    },
+  }
+}
+
+export function parseRuntimeSendPayload(payload: unknown): ParsedRuntimeSendPayload {
+  const body = asRecord(payload)
+  if (!body) throw new Error('Invalid body: expected runtime send payload')
+
+  const requestId = readString(body.requestId).trim() || createRuntimeRequestId()
+  const clientMessageId = readString(body.clientMessageId).trim()
+  const mode = readCollaborationModeFromPayload(body)
+  const model = readString(body.model).trim()
+  const cwd = readString(body.cwd).trim()
+  const threadId = readStringByAliases(body, 'threadId', 'thread_id')
+  const turnOptions = readRuntimeTurnOptions(body.turnOptions)
+  const input = applyRuntimeTurnOptionsToInput(Array.isArray(body.input) ? body.input : [], turnOptions)
+  if (input.length === 0) {
+    throw new Error('runtime/send requires input')
+  }
+
+  return {
+    requestId,
+    clientMessageId,
+    mode,
+    model,
+    cwd,
+    threadId,
+    input,
+    attachments: body.attachments,
+    effort: body.effort,
+    turnOptions,
+    payloadSummary: buildRuntimeRequestPayloadSummary({
+      threadId,
+      cwd,
+      model,
+      collaborationMode: mode,
+      input,
+      effort: body.effort,
+      attachments: body.attachments,
+      turnOptions,
+    }),
+  }
+}
+
+export function parseRuntimeInterruptPayload(payload: unknown): ParsedRuntimeInterruptPayload {
+  const body = asRecord(payload)
+  if (!body) throw new Error('Invalid body: expected runtime interrupt payload')
+
+  const threadId = readStringByAliases(body, 'threadId', 'thread_id')
+  const turnId = readStringByAliases(body, 'turnId', 'turn_id', 'activeTurnId')
+  if (!threadId) throw new Error('runtime/interrupt requires threadId')
+  if (!turnId) throw new Error('runtime/interrupt requires turnId')
+
+  const requestId = readString(body.requestId).trim() || createRuntimeRequestId()
+  const source = readString(body.source).trim() || 'unknown'
+  const requestedAtIso = readString(body.requestedAtIso).trim()
+  const userAgent = readString(body.userAgent).trim()
+  const clientElapsedMs = typeof body.clientElapsedMs === 'number' && Number.isFinite(body.clientElapsedMs)
+    ? Math.max(0, Math.round(body.clientElapsedMs))
+    : null
+
+  return {
+    requestId,
+    threadId,
+    turnId,
+    payloadSummary: {
+      threadId,
+      turnId,
+      source,
+      requestedAtIso,
+      clientElapsedMs,
+      userAgent: userAgent.slice(0, 240),
     },
   }
 }

@@ -2318,6 +2318,36 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Runtime API payload parsing 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/runtimePayload.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 `/codex-api/runtime/send` 和 `/codex-api/runtime/interrupt` payload 解析、别名字段、必填校验、turn options 注入、摘要生成、clientElapsedMs 归一化和 userAgent 截断。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 使用 `parseRuntimeSendPayload()` 和 `parseRuntimeInterruptPayload()`，不再内联 runtime API payload 解析校验。
+5. 代码审查确认 runtime send 仍保留 plan mode 参数兼容重试、thread/start 缺省启动、attachments/model/effort 传递，以及 interrupt 的 `turn/interrupt` 调用语义。
+
+#### Expected Results
+- runtime send payload 的 requestId、clientMessageId、mode、model、cwd、threadId、input、attachments、effort、turnOptions 和 payload summary 在 `runtimePayload.ts` 中集中解析。
+- 空 input 仍返回 `runtime/send requires input` 错误，非法 body 仍返回 `Invalid body: expected runtime send payload`。
+- runtime interrupt payload 仍支持 `threadId/thread_id`、`turnId/turn_id/activeTurnId`，缺失 threadId 或 turnId 时保持原错误。
+- interrupt payload 仍把空 source 归一化为 `unknown`，把 clientElapsedMs 四舍五入到非负整数，并把 userAgent 截断到 240 字符。
+- server module smoke 覆盖上述分支；release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，撤销 `src/server/runtimePayload.ts` 中的 parser 增量，撤销 `scripts/server-module-smoke.ts` 中的 runtime payload parsing smoke，并把 send/interrupt payload 解析恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: App Server runtime snapshot recovery 模块化
 
 #### Prerequisites

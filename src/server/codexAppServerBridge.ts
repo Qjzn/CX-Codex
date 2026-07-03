@@ -27,15 +27,12 @@ import { PendingServerRequestStore, type PendingServerRequest } from './pendingS
 import { logBridgeError, writeBridgeLog } from './bridgeLog.js'
 import { getErrorMessage } from './errorMessage.js'
 import {
-  applyRuntimeTurnOptionsToInput,
-  buildRuntimeRequestPayloadSummary,
   createRuntimePromptHash,
-  createRuntimeRequestId,
   normalizePlanModeTurnStartParams,
+  parseRuntimeInterruptPayload,
+  parseRuntimeSendPayload,
   readCollaborationModeFromPayload,
-  readRuntimeTurnOptions,
   shouldRetryPlanModeWithoutNativeMode,
-  type CollaborationMode,
 } from './runtimePayload.js'
 import {
   readHeaderValue,
@@ -247,10 +244,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null
-}
-
-function readString(value: unknown): string {
-  return typeof value === 'string' ? value : ''
 }
 
 function isMissingHeadError(error: unknown): boolean {
@@ -1207,50 +1200,29 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     turnId: string
     status: RuntimeRequestStatus
   }> {
-    const body = asRecord(payload)
-    if (!body) throw new Error('Invalid body: expected runtime send payload')
-
-    const requestId = readString(body.requestId).trim() || createRuntimeRequestId()
-    const clientMessageId = readString(body.clientMessageId).trim()
-    const mode = readCollaborationModeFromPayload(body)
-    const model = readString(body.model).trim()
-    const cwd = readString(body.cwd).trim()
-    let threadId = readStringByAliases(body, 'threadId', 'thread_id')
-    const turnOptions = readRuntimeTurnOptions(body.turnOptions)
-    const input = applyRuntimeTurnOptionsToInput(Array.isArray(body.input) ? body.input : [], turnOptions)
-    if (input.length === 0) {
-      throw new Error('runtime/send requires input')
-    }
+    const parsed = parseRuntimeSendPayload(payload)
+    let threadId = parsed.threadId
 
     runtimeStore.createRequest({
-      requestId,
-      clientMessageId,
+      requestId: parsed.requestId,
+      clientMessageId: parsed.clientMessageId,
       threadId,
       status: 'pending_start',
-      promptHash: createRuntimePromptHash(input),
-      mode,
-      payload: buildRuntimeRequestPayloadSummary({
-        threadId,
-        cwd,
-        model,
-        collaborationMode: mode,
-        input,
-        effort: body.effort,
-        attachments: body.attachments,
-        turnOptions,
-      }),
+      promptHash: createRuntimePromptHash(parsed.input),
+      mode: parsed.mode,
+      payload: parsed.payloadSummary,
     })
 
     try {
       if (!threadId) {
         const threadParams: Record<string, unknown> = {}
-        if (cwd) threadParams.cwd = cwd
-        if (model) threadParams.model = model
+        if (parsed.cwd) threadParams.cwd = parsed.cwd
+        if (parsed.model) threadParams.model = parsed.model
         const startedThread = await appServer.rpc('thread/start', threadParams)
         threadId = readThreadIdFromPayload(startedThread)
         if (!threadId) throw new Error('thread/start did not return a thread id')
         threadSearchIndexStore.clear()
-        runtimeStore.updateRequest(requestId, {
+        runtimeStore.updateRequest(parsed.requestId, {
           threadId,
           status: 'pending_start',
         })
@@ -1258,31 +1230,31 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       const turnParams: Record<string, unknown> = {
         threadId,
-        input,
+        input: parsed.input,
       }
-      if (Array.isArray(body.attachments) && body.attachments.length > 0) {
-        turnParams.attachments = body.attachments
+      if (Array.isArray(parsed.attachments) && parsed.attachments.length > 0) {
+        turnParams.attachments = parsed.attachments
       }
-      if (model) turnParams.model = model
-      const effort = readString(body.effort).trim()
+      if (parsed.model) turnParams.model = parsed.model
+      const effort = typeof parsed.effort === 'string' ? parsed.effort.trim() : ''
       if (effort) turnParams.effort = effort
-      if (mode === 'plan') turnParams.collaborationMode = 'plan'
+      if (parsed.mode === 'plan') turnParams.collaborationMode = 'plan'
 
       runtimeStateStore.markStarting(threadId)
       persistRuntimeSnapshot(threadId)
-      runtimeStore.updateRequest(requestId, {
+      runtimeStore.updateRequest(parsed.requestId, {
         status: 'starting',
         threadId,
       })
 
-      let rpcParams: unknown = mode === 'plan'
+      let rpcParams: unknown = parsed.mode === 'plan'
         ? normalizePlanModeTurnStartParams(turnParams, { includeNativeMode: true })
         : turnParams
       let rpcResult: unknown
       try {
         rpcResult = await appServer.rpc('turn/start', rpcParams)
       } catch (error) {
-        if (mode !== 'plan' || !shouldRetryPlanModeWithoutNativeMode(error)) {
+        if (parsed.mode !== 'plan' || !shouldRetryPlanModeWithoutNativeMode(error)) {
           throw error
         }
         rpcParams = normalizePlanModeTurnStartParams(turnParams, { includeNativeMode: false })
@@ -1290,17 +1262,17 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       const turnId = readTurnIdFromPayload(rpcResult)
-      if (mode === 'plan') {
+      if (parsed.mode === 'plan') {
         appServer.markPlanModeTurn(threadId, turnId)
       }
       runtimeStateStore.markRunning(threadId, turnId)
       const snapshot = persistRuntimeSnapshot(threadId)
-      const request = runtimeStore.updateRequest(requestId, {
+      const request = runtimeStore.updateRequest(parsed.requestId, {
         status: 'running',
         threadId,
         turnId: turnId || snapshot.activeTurnId,
         lastError: null,
-      }) ?? runtimeStore.getRequest(requestId)
+      }) ?? runtimeStore.getRequest(parsed.requestId)
       return {
         request: request as RuntimeRequestRecord,
         threadId,
@@ -1311,11 +1283,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (threadId && isRpcTimeoutError(error)) {
         runtimeStateStore.markStartUncertain(threadId, getErrorMessage(error, 'turn/start timed out'))
         persistRuntimeSnapshot(threadId)
-        const request = runtimeStore.updateRequest(requestId, {
+        const request = runtimeStore.updateRequest(parsed.requestId, {
           status: 'start_uncertain',
           threadId,
           lastError: getErrorMessage(error, 'turn/start timed out'),
-        }) ?? runtimeStore.getRequest(requestId)
+        }) ?? runtimeStore.getRequest(parsed.requestId)
         return {
           request: request as RuntimeRequestRecord,
           threadId,
@@ -1324,7 +1296,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
       }
 
-      runtimeStore.updateRequest(requestId, {
+      runtimeStore.updateRequest(parsed.requestId, {
         status: 'failed',
         threadId,
         lastError: getErrorMessage(error, 'runtime send failed'),
@@ -1339,81 +1311,60 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     turnId: string
     status: RuntimeRequestStatus
   }> {
-    const body = asRecord(payload)
-    if (!body) throw new Error('Invalid body: expected runtime interrupt payload')
-
-    const threadId = readStringByAliases(body, 'threadId', 'thread_id')
-    const turnId = readStringByAliases(body, 'turnId', 'turn_id', 'activeTurnId')
-    if (!threadId) throw new Error('runtime/interrupt requires threadId')
-    if (!turnId) throw new Error('runtime/interrupt requires turnId')
-
-    const requestId = readString(body.requestId).trim() || createRuntimeRequestId()
-    const source = readString(body.source).trim() || 'unknown'
-    const requestedAtIso = readString(body.requestedAtIso).trim()
-    const userAgent = readString(body.userAgent).trim()
-    const clientElapsedMs = typeof body.clientElapsedMs === 'number' && Number.isFinite(body.clientElapsedMs)
-      ? Math.max(0, Math.round(body.clientElapsedMs))
-      : null
+    const parsed = parseRuntimeInterruptPayload(payload)
     runtimeStore.createRequest({
-      requestId,
-      threadId,
-      turnId,
+      requestId: parsed.requestId,
+      threadId: parsed.threadId,
+      turnId: parsed.turnId,
       status: 'stopping',
       mode: 'interrupt',
-      payload: {
-        threadId,
-        turnId,
-        source,
-        requestedAtIso,
-        clientElapsedMs,
-        userAgent: userAgent.slice(0, 240),
-      },
+      payload: parsed.payloadSummary,
     })
-    runtimeStateStore.markStopping(threadId)
-    persistRuntimeSnapshot(threadId)
+    runtimeStateStore.markStopping(parsed.threadId)
+    persistRuntimeSnapshot(parsed.threadId)
 
     try {
-      await appServer.rpc('turn/interrupt', { threadId, turnId })
-      appServer.clearPlanModeTurn(threadId, turnId)
-      runtimeStateStore.markInterrupted(threadId)
-      persistRuntimeSnapshot(threadId)
-      runtimeStore.updateRequest(requestId, {
+      await appServer.rpc('turn/interrupt', { threadId: parsed.threadId, turnId: parsed.turnId })
+      appServer.clearPlanModeTurn(parsed.threadId, parsed.turnId)
+      runtimeStateStore.markInterrupted(parsed.threadId)
+      persistRuntimeSnapshot(parsed.threadId)
+      runtimeStore.updateRequest(parsed.requestId, {
         status: 'stopped',
-        threadId,
-        turnId,
+        threadId: parsed.threadId,
+        turnId: parsed.turnId,
         lastError: null,
       })
-      return { requestId, threadId, turnId, status: 'stopped' }
+      return { requestId: parsed.requestId, threadId: parsed.threadId, turnId: parsed.turnId, status: 'stopped' }
     } catch (error) {
       if (isInterruptSettledError(error)) {
-        appServer.clearPlanModeTurn(threadId, turnId)
-        runtimeStateStore.markInterrupted(threadId, getErrorMessage(error, 'turn already settled'))
-        persistRuntimeSnapshot(threadId)
-        runtimeStore.updateRequest(requestId, {
+        appServer.clearPlanModeTurn(parsed.threadId, parsed.turnId)
+        runtimeStateStore.markInterrupted(parsed.threadId, getErrorMessage(error, 'turn already settled'))
+        persistRuntimeSnapshot(parsed.threadId)
+        runtimeStore.updateRequest(parsed.requestId, {
           status: 'stopped',
-          threadId,
-          turnId,
+          threadId: parsed.threadId,
+          turnId: parsed.turnId,
           lastError: null,
         })
-        return { requestId, threadId, turnId, status: 'stopped' }
+        return { requestId: parsed.requestId, threadId: parsed.threadId, turnId: parsed.turnId, status: 'stopped' }
       }
 
       if (isRpcTimeoutError(error)) {
-        runtimeStateStore.markStopUncertain(threadId, getErrorMessage(error, 'turn/interrupt timed out'))
-        persistRuntimeSnapshot(threadId)
-        runtimeStore.updateRequest(requestId, {
+        runtimeStateStore.markStopUncertain(parsed.threadId, getErrorMessage(error, 'turn/interrupt timed out'))
+        persistRuntimeSnapshot(parsed.threadId)
+        runtimeStore.updateRequest(parsed.requestId, {
           status: 'stop_uncertain',
-          threadId,
-          turnId,
+          threadId: parsed.threadId,
+          turnId: parsed.turnId,
           lastError: getErrorMessage(error, 'turn/interrupt timed out'),
         })
-        return { requestId, threadId, turnId, status: 'stop_uncertain' }
+        return { requestId: parsed.requestId, threadId: parsed.threadId, turnId: parsed.turnId, status: 'stop_uncertain' }
       }
 
-      runtimeStore.updateRequest(requestId, {
+      runtimeStore.updateRequest(parsed.requestId, {
         status: 'failed',
-        threadId,
-        turnId,
+        threadId: parsed.threadId,
+        turnId: parsed.turnId,
         lastError: getErrorMessage(error, 'runtime interrupt failed'),
       })
       throw error

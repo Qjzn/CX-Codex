@@ -211,6 +211,10 @@ import {
   type ThreadRuntimeSnapshot,
 } from '../src/server/runtimeState.js'
 import {
+  parseRuntimeInterruptPayload,
+  parseRuntimeSendPayload,
+} from '../src/server/runtimePayload.js'
+import {
   normalizeRuntimeEventForReplay,
   readRuntimeRequestStatusFromExecutionState,
 } from '../src/server/appServerRuntimeBridge.js'
@@ -290,6 +294,7 @@ try {
   await smokeThreadSearchIndex()
   await smokeWorkspaceRootsState()
   await smokeProjectRoots()
+  smokeRuntimePayloadParsing()
   smokeAppServerNotificationReplay()
   smokeAppServerRuntimeBridge()
   smokeAppServerRuntimeRequestReconciliation()
@@ -2443,6 +2448,95 @@ function smokeAppServerRuntimeRequestReconciliation(): void {
     turnId: 'turn-b',
     lastError: 'failed after interrupt',
   })
+}
+
+function smokeRuntimePayloadParsing(): void {
+  const parsedSend = parseRuntimeSendPayload({
+    requestId: 'request-a',
+    clientMessageId: 'client-a',
+    mode: 'plan',
+    model: 'gpt-test',
+    cwd: ' E:/project ',
+    thread_id: ' thread-a ',
+    effort: ' high ',
+    attachments: [{ path: 'a.txt' }],
+    turnOptions: {
+      goal: { enabled: true, text: '持续完成目标' },
+      plugins: [{ id: 'plugin-a', name: 'Plugin A' }, { id: '', name: 'skip' }],
+    },
+    input: [{ type: 'text', text: ' hello ' }],
+  })
+  assert.equal(parsedSend.requestId, 'request-a')
+  assert.equal(parsedSend.clientMessageId, 'client-a')
+  assert.equal(parsedSend.mode, 'plan')
+  assert.equal(parsedSend.model, 'gpt-test')
+  assert.equal(parsedSend.cwd, 'E:/project')
+  assert.equal(parsedSend.threadId, 'thread-a')
+  assert.equal(parsedSend.input.length, 1)
+  assert.match(JSON.stringify(parsedSend.input[0]), /CX-Codex turn options/)
+  assert.deepEqual(parsedSend.payloadSummary, {
+    hasThreadId: true,
+    hasCwd: true,
+    cwdHash: parsedSend.payloadSummary.cwdHash,
+    model: 'gpt-test',
+    effort: 'high',
+    collaborationMode: 'plan',
+    input: {
+      inputCount: 1,
+      textCount: 1,
+      imageCount: 0,
+      localImageCount: 0,
+      skillCount: 0,
+    },
+    attachmentCount: 1,
+    turnOptions: {
+      pluginCount: 1,
+      hasGoal: true,
+    },
+  })
+  assert.equal(typeof parsedSend.payloadSummary.cwdHash, 'string')
+  assert.equal((parsedSend.payloadSummary.cwdHash as string).length, 64)
+
+  assert.throws(
+    () => parseRuntimeSendPayload({ input: [] }),
+    /runtime\/send requires input/,
+  )
+  assert.throws(
+    () => parseRuntimeSendPayload(null),
+    /Invalid body: expected runtime send payload/,
+  )
+
+  const longUserAgent = 'u'.repeat(260)
+  const parsedInterrupt = parseRuntimeInterruptPayload({
+    requestId: 'interrupt-a',
+    thread_id: ' thread-a ',
+    activeTurnId: ' turn-a ',
+    source: '',
+    requestedAtIso: '2026-01-01T00:00:00.000Z',
+    clientElapsedMs: 12.7,
+    userAgent: longUserAgent,
+  })
+  assert.deepEqual(parsedInterrupt, {
+    requestId: 'interrupt-a',
+    threadId: 'thread-a',
+    turnId: 'turn-a',
+    payloadSummary: {
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+      source: 'unknown',
+      requestedAtIso: '2026-01-01T00:00:00.000Z',
+      clientElapsedMs: 13,
+      userAgent: longUserAgent.slice(0, 240),
+    },
+  })
+  assert.throws(
+    () => parseRuntimeInterruptPayload({ turnId: 'turn-a' }),
+    /runtime\/interrupt requires threadId/,
+  )
+  assert.throws(
+    () => parseRuntimeInterruptPayload({ threadId: 'thread-a' }),
+    /runtime\/interrupt requires turnId/,
+  )
 }
 
 function smokeAppServerRuntimeSnapshotRecovery(): void {
