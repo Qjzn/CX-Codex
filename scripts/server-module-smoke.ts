@@ -3,6 +3,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
+import {
+  createAppServerClientInfo,
+  normalizePackageVersion,
+  readPackageVersion,
+} from '../src/server/appServerClientInfo.js'
 import { AppServerLineBuffer } from '../src/server/appServerLineBuffer.js'
 import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheForRpc } from '../src/server/appServerRpcCache.js'
 import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.js'
@@ -121,6 +126,7 @@ import {
 const originalNow = Date.now
 
 try {
+  await smokeAppServerClientInfo()
   smokePendingServerRequests()
   smokeAppServerJsonRpcWire()
   await smokeAppServerRpcCache()
@@ -144,6 +150,30 @@ try {
   console.log('server module smoke ok')
 } finally {
   Date.now = originalNow
+}
+
+async function smokeAppServerClientInfo(): Promise<void> {
+  assert.deepEqual(createAppServerClientInfo('2.3.4'), {
+    name: 'codex-web-local',
+    title: 'CX-Codex',
+    version: '2.3.4',
+  })
+  assert.equal(normalizePackageVersion(' 2.3.5 '), '2.3.5')
+  assert.equal(normalizePackageVersion(''), 'unknown')
+  assert.equal(normalizePackageVersion(null), 'unknown')
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-client-info-'))
+  try {
+    const packageJsonPath = join(tempDir, 'package.json')
+    await writeFile(packageJsonPath, '{"version":"9.8.7"}\n', 'utf8')
+    assert.equal(await readPackageVersion(packageJsonPath), '9.8.7')
+
+    const invalidPackageJsonPath = join(tempDir, 'invalid-package.json')
+    await writeFile(invalidPackageJsonPath, '{"version":""}\n', 'utf8')
+    assert.equal(await readPackageVersion(invalidPackageJsonPath), 'unknown')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
 }
 
 function smokePendingServerRequests(): void {

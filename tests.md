@@ -1476,6 +1476,38 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server clientInfo 版本跟随 package
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerClientInfo.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `package.json` 包含当前 CX-Codex 版本。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `ensureInitialized()` 使用 `createAppServerClientInfo(await readPackageVersion())`，不再硬编码 `clientInfo.version`。
+
+#### Expected Results
+- App Server `initialize.params.clientInfo` 仍包含 `name: codex-web-local` 和 `title: CX-Codex`。
+- `clientInfo.version` 从 `package.json` 读取；打包或测试路径读取失败时回退为 `unknown`，不阻断 App Server 初始化。
+- Server module smoke 覆盖版本归一化、临时 `package.json` 读取、空版本回退和 clientInfo 生成。
+- 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Rollback / Cleanup
+- 若某个发布包布局无法读取 root `package.json` 且官方日志必须记录精确版本，保留 `appServerClientInfo` 模块并改为构建期注入版本，不要回到 bridge 内硬编码。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`；该 smoke 覆盖 `createAppServerClientInfo()`、`normalizePackageVersion()` 和临时 `package.json` 读取。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CLI 启动烟测：`node dist-cli\index.js --help` 通过，输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke 和 CLI smoke。
+
+---
+
 ### Feature: Release 验证脚本
 
 #### Prerequisites

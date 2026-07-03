@@ -84,6 +84,7 @@ import {
   createAppServerRpcRequest,
   createAppServerRpcSuccessResponse,
 } from './appServerJsonRpcWire.js'
+import { createAppServerClientInfo, readPackageVersion } from './appServerClientInfo.js'
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
 import { PlanModeTurnStore } from './planModeTurnStore.js'
@@ -1313,16 +1314,12 @@ class AppServerProcess {
       return
     }
 
-    this.initializePromise = this.call('initialize', {
-      clientInfo: {
-        name: 'codex-web-local',
-        title: 'CX-Codex',
-        version: '2.2.7',
-      },
-    }).then(() => {
+    this.initializePromise = (async () => {
+      const clientInfo = createAppServerClientInfo(await readPackageVersion())
+      await this.call('initialize', { clientInfo })
       this.sendLine(createAppServerRpcNotification('initialized'))
       this.initialized = true
-    }).finally(() => {
+    })().finally(() => {
       this.initializePromise = null
     })
 
