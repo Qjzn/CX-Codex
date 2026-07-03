@@ -8,7 +8,7 @@ import { writeFile } from 'node:fs/promises'
 import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoutes.js'
 import { getDesktopAppRefreshStatus, requestDesktopAppRefresh } from './desktopAppRefresh.js'
 import { getTunnelStatus, updateTunnelConfig } from './tunnelStatus.js'
-import { readFavoriteRecords, readPinnedThreadIds, writeFavoriteRecords, writePinnedThreadIds } from './webUiState.js'
+import { readFavoriteRecords, writeFavoriteRecords } from './webUiState.js'
 import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } from './runtimeStore.js'
 import {
   isRuntimeActiveState,
@@ -94,11 +94,14 @@ import { AppServerMethodCatalog } from './appServerMethodCatalog.js'
 import {
   getCodexAuthPath,
   getCodexGlobalStatePath,
-  getCodexHomeDir,
   getCodexSessionIndexPath,
   getCodexWorktreesDir,
   getWebBridgeSettingsPath,
 } from './codexPaths.js'
+import {
+  readMergedPinnedThreadIds,
+  writeMergedPinnedThreadIds,
+} from './pinnedThreads.js'
 import { PlanModeTurnStore } from './planModeTurnStore.js'
 import {
   readThreadTokenUsageFromSessionLog,
@@ -616,17 +619,6 @@ async function ensureRepoHasInitialCommit(repoRoot: string): Promise<void> {
   )
 }
 
-function normalizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  const normalized: string[] = []
-  for (const item of value) {
-    if (typeof item === 'string' && item.length > 0 && !normalized.includes(item)) {
-      normalized.push(item)
-    }
-  }
-  return normalized
-}
-
 function normalizeCommitMessage(value: unknown): string {
   if (typeof value !== 'string') return ''
   const normalized = value
@@ -737,49 +729,6 @@ async function readCodexAuth(): Promise<{ accessToken: string; accountId?: strin
   } catch {
     return null
   }
-}
-
-async function readDesktopPinnedThreadIds(): Promise<string[]> {
-  try {
-    const raw = await readFile(getCodexGlobalStatePath(), 'utf8')
-    const payload = asRecord(JSON.parse(raw)) ?? {}
-    return normalizeStringArray(payload['pinned-thread-ids'])
-  } catch {
-    return []
-  }
-}
-
-async function writeDesktopPinnedThreadIds(pinnedThreadIds: string[]): Promise<string[]> {
-  const normalized = normalizeStringArray(pinnedThreadIds)
-  const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    payload = asRecord(JSON.parse(raw)) ?? {}
-  } catch {
-    payload = {}
-  }
-  payload['pinned-thread-ids'] = normalized
-  await mkdir(getCodexHomeDir(), { recursive: true })
-  await writeFile(statePath, JSON.stringify(payload), 'utf8')
-  return normalized
-}
-
-async function readMergedPinnedThreadIds(): Promise<string[]> {
-  const [webPinnedIds, desktopPinnedIds] = await Promise.all([
-    readPinnedThreadIds(),
-    readDesktopPinnedThreadIds(),
-  ])
-  return normalizeStringArray([...webPinnedIds, ...desktopPinnedIds])
-}
-
-async function writeMergedPinnedThreadIds(pinnedThreadIds: string[]): Promise<string[]> {
-  const normalized = normalizeStringArray(pinnedThreadIds)
-  const [webPinnedIds, desktopPinnedIds] = await Promise.all([
-    writePinnedThreadIds(normalized),
-    writeDesktopPinnedThreadIds(normalized),
-  ])
-  return normalizeStringArray([...webPinnedIds, ...desktopPinnedIds])
 }
 
 const supplementalThreadSummaryCacheById = new Map<string, { value: unknown | null; cachedAtMs: number; failed?: boolean }>()

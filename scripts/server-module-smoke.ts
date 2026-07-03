@@ -40,6 +40,12 @@ import {
 import { AppServerRpcQueue, getAppServerRpcQueuePriority } from '../src/server/appServerRpcQueue.js'
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
+import {
+  normalizePinnedThreadIds,
+  readDesktopPinnedThreadIds,
+  readMergedPinnedThreadIds,
+  writeMergedPinnedThreadIds,
+} from '../src/server/pinnedThreads.js'
 import { PlanModeTurnStore } from '../src/server/planModeTurnStore.js'
 import {
   buildAutoApprovalResult,
@@ -188,6 +194,7 @@ try {
   await smokeComposerFileSearch()
   await smokeGithubTrending()
   smokeCodexPaths()
+  await smokePinnedThreads()
   await smokeWebBridgeSettings()
   await smokeThreadTokenUsage()
   await smokeThreadTitleCache()
@@ -1236,6 +1243,38 @@ function smokeCodexPaths(): void {
     } else {
       delete process.env.CODEX_HOME
     }
+  }
+}
+
+async function smokePinnedThreads(): Promise<void> {
+  assert.deepEqual(normalizePinnedThreadIds([' a ', '', 'a', 3, 'b']), ['a', 'b'])
+
+  const previous = process.env.CODEX_HOME
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-pinned-threads-'))
+  try {
+    process.env.CODEX_HOME = tempDir
+    await writeFile(getWebPinnedThreadIdsPath(), JSON.stringify(['web-a', 'desktop-a', ' web-b ']), 'utf8')
+    await writeFile(getCodexGlobalStatePath(), JSON.stringify({
+      existing: true,
+      'pinned-thread-ids': ['desktop-a', 'desktop-b', '', 'desktop-b'],
+    }), 'utf8')
+
+    assert.deepEqual(await readDesktopPinnedThreadIds(), ['desktop-a', 'desktop-b'])
+    assert.deepEqual(await readMergedPinnedThreadIds(), ['web-a', 'desktop-a', 'web-b', 'desktop-b'])
+
+    assert.deepEqual(await writeMergedPinnedThreadIds([' next-a ', 'next-a', 'next-b']), ['next-a', 'next-b'])
+    const webPinned = JSON.parse(await readFile(getWebPinnedThreadIdsPath(), 'utf8')) as unknown
+    const desktopState = JSON.parse(await readFile(getCodexGlobalStatePath(), 'utf8')) as Record<string, unknown>
+    assert.deepEqual(webPinned, ['next-a', 'next-b'])
+    assert.equal(desktopState.existing, true)
+    assert.deepEqual(desktopState['pinned-thread-ids'], ['next-a', 'next-b'])
+  } finally {
+    if (typeof previous === 'string') {
+      process.env.CODEX_HOME = previous
+    } else {
+      delete process.env.CODEX_HOME
+    }
+    await rm(tempDir, { recursive: true, force: true })
   }
 }
 
