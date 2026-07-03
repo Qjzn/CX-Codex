@@ -1501,7 +1501,7 @@ This file tracks manual regression and feature verification steps.
 - 如需回滚，撤销 `src/server/appServerInitialization.ts`、bridge import/call 调整、server module smoke、verify-server-modules、协议矩阵、changelog 和本节测试记录。
 
 #### Regression Evidence
-- 2026-07-04 官方文档核对：`node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` 返回 current manual，Codex App Server 章节说明 `experimentalApi` capability 需要显式 opt-in。
+- 2026-07-04 官方文档核对：`node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` 返回 current manual，Codex App Server 章节说明 `experimentalApi` capability 需要显式 opt-in。
 - 2026-07-04 静态验证：`git diff --check` 通过。
 - 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
 - 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
@@ -1538,7 +1538,7 @@ This file tracks manual regression and feature verification steps.
 - 如需回滚，撤销 `src/server/appServerLaunch.ts`、bridge import/call 调整、server module smoke、verify-server-modules、README、changelog、安全文档和本节测试记录。
 
 #### Regression Evidence
-- 2026-07-04 官方文档核对：`node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` 返回 current manual，Codex sandbox/approval 章节记录常见 sandbox 和 approval policy 值。
+- 2026-07-04 官方文档核对：`node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` 返回 current manual，Codex sandbox/approval 章节记录常见 sandbox 和 approval policy 值。
 - 2026-07-04 静态验证：`git diff --check` 通过。
 - 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
 - 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
@@ -1784,6 +1784,39 @@ This file tracks manual regression and feature verification steps.
 #### Regression Evidence
 - 2026-07-04 静态验证：`git diff --check` 通过。
 - 2026-07-04 治理门禁验证：`npm.cmd run verify:governance` 通过，确认依赖维护手册、README、CONTRIBUTING 和 governance 断言已互相锁定。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含构建、server module smoke、普通 CLI smoke、CLI CJS launcher smoke、Release package smoke 和 schema audit skip。
+
+---
+
+### Feature: OpenAI 官方文档审查手册
+
+#### Prerequisites
+- 当前仓库包含 `docs/openai-docs-review.zh-CN.md`。
+- 本机可访问 OpenAI 官方开发者文档，或已通过官方 Codex manual helper 获取当前 manual 摘要。
+
+#### Steps
+1. 执行 `node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs`，确认 Codex manual 可刷新或缓存仍是 current。
+2. 检查 `docs/openai-docs-review.zh-CN.md`，确认包含 Codex App Server、Agent approvals & security、Remote connections 和 Speech to text 官方入口。
+3. 检查手册，确认 Codex App Server 相关变更需要运行 `npm.cmd run audit:app-server-schemas`。
+4. 检查 `README.md` 的快速入口和文档列表，确认均链接到 `docs/openai-docs-review.zh-CN.md`。
+5. 检查 `CONTRIBUTING.md` 的 Pull Request 要求，确认 Codex App Server 兼容改动需要先按官方文档审查手册复核。
+6. 执行 `npm.cmd run verify:governance`。
+7. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+
+#### Expected Results
+- 官方文档审查入口集中记录在 `docs/openai-docs-review.zh-CN.md`。
+- 维护者可以从 README 和贡献指南进入该手册。
+- 治理门禁会阻止手册缺失、官方入口缺失或 schema audit 要求缺失。
+- Release gate 保持通过，说明新增治理文档不会破坏构建、CLI smoke 或 release package smoke。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `docs/openai-docs-review.zh-CN.md`，并撤销 README、CONTRIBUTING、governance 和本测试章节中的相关引用。
+
+#### Regression Evidence
+- 2026-07-04 官方文档刷新：`node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` 通过，输出 `Manual status: local manual was already current.`。
+- 2026-07-04 官方页面核对：确认 `https://developers.openai.com/codex/app-server`、`https://developers.openai.com/codex/agent-approvals-security`、`https://developers.openai.com/codex/remote-connections` 和 `https://developers.openai.com/api/docs/guides/speech-to-text` 可访问。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁验证：`npm.cmd run verify:governance` 通过，确认官方文档审查手册、README、CONTRIBUTING 和 governance 断言已互相锁定。
 - 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含构建、server module smoke、普通 CLI smoke、CLI CJS launcher smoke、Release package smoke 和 schema audit skip。
 
 ---

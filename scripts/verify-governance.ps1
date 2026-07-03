@@ -60,6 +60,7 @@ $requiredFiles = @(
   "docs/security-hardening.zh-CN.md",
   "docs/protocol-compatibility.zh-CN.md",
   "docs/app-server-protocol-matrix.zh-CN.md",
+  "docs/openai-docs-review.zh-CN.md",
   "docs/changelog.zh-CN.md",
   "docs/roadmap.zh-CN.md",
   "docs/operations-plan.zh-CN.md",
@@ -91,6 +92,7 @@ Assert-ContentIncludes "README.md" @(
   "Self-hosted OpenAI Codex Web UI and Android client bridge",
   "docs/security-hardening.zh-CN.md",
   "docs/app-server-protocol-matrix.zh-CN.md",
+  "docs/openai-docs-review.zh-CN.md",
   "docs/dependency-maintenance.zh-CN.md",
   "CODE_OF_CONDUCT.md",
   "SECURITY.md",
@@ -108,9 +110,22 @@ Assert-ContentIncludes "CODE_OF_CONDUCT.md" @(
 
 Assert-ContentIncludes "CONTRIBUTING.md" @(
   "CODE_OF_CONDUCT.md",
+  "docs/openai-docs-review.zh-CN.md",
   ".github/dependabot.yml",
   "docs/dependency-maintenance.zh-CN.md",
   "Pull Request 要求"
+)
+
+Assert-ContentIncludes "docs/openai-docs-review.zh-CN.md" @(
+  "https://developers.openai.com/codex/app-server",
+  "https://developers.openai.com/codex/agent-approvals-security",
+  "https://developers.openai.com/codex/remote-connections",
+  "https://developers.openai.com/api/docs/guides/speech-to-text",
+  "experimentalApi",
+  "npm.cmd run audit:app-server-schemas",
+  "docs/app-server-schema-audit-summary.json",
+  "docs/app-server-protocol-matrix.zh-CN.md",
+  "App Server transport"
 )
 
 Assert-ContentIncludes "docs/dependency-maintenance.zh-CN.md" @(

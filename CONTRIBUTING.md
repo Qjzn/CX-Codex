@@ -55,7 +55,7 @@ Windows 安装脚本 smoke：
 - 描述问题、解决方案和验证结果
 - UI 改动请附截图或录屏
 - 部署脚本改动请说明目标系统和回滚方式
-- Codex App Server 兼容改动请说明参考的官方文档、Codex CLI/App 版本、受影响 method / event，以及是否更新了 schema audit 或 `tests.md`
+- Codex App Server 兼容改动请先按 [OpenAI 官方文档审查手册](./docs/openai-docs-review.zh-CN.md) 复核，并说明参考的官方文档、Codex CLI/App 版本、受影响 method / event，以及是否更新了 schema audit 或 `tests.md`
 - 依赖更新优先通过 `.github/dependabot.yml` 生成的 PR 处理；人工升级依赖时请按 [依赖维护手册](./docs/dependency-maintenance.zh-CN.md) 说明范围、风险和验证命令
 - 文档默认使用中文，必要时补英文摘要
 - 不要提交本地日志、截图里的隐私内容或个人配置
