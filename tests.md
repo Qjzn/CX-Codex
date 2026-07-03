@@ -2290,6 +2290,34 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server thread/read payload 解析模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerThreadPayload.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 thread/read payload 中 active turn、运行态、更新时间和 session path 解析。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 从 `appServerThreadPayload.ts` 导入 thread/read payload 解析器，不再内联 active turn、in-progress、updatedAt 和 session path helper。
+5. 代码审查确认 `src/server/appServerThreadPayload.ts` 保留原有兼容来源：`thread.activeTurnId`、`thread.status.activeTurnId`、`thread.status.turnId`、最新 `inProgress` turn、`thread.inProgress`、`thread.turnStatus`、`thread.status`、`thread.updatedAt` 和 `thread.path`/根 `path`。
+
+#### Expected Results
+- `src/server/appServerThreadPayload.ts` 集中维护 thread/read payload 的协议兼容解析逻辑。
+- `src/server/codexAppServerBridge.ts` 继续负责 App Server 进程、RPC、runtime 和 HTTP 编排，不再承载 thread/read payload 细节。
+- server module smoke 覆盖 direct active turn、status turn fallback、turn fallback、运行态状态别名、completed 非运行态、session path fallback 和非法 updatedAt；release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/appServerThreadPayload.ts`，撤销 `scripts/server-module-smoke.ts` 中的 thread payload smoke，并把 thread/read payload 解析 helper 恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: App Server RPC result turns 裁剪模块化
 
 #### Prerequisites

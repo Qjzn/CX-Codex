@@ -49,6 +49,12 @@ import {
   createAppServerRpcSuccessResponse,
 } from '../src/server/appServerJsonRpcWire.js'
 import { AppServerRpcQueue, getAppServerRpcQueuePriority } from '../src/server/appServerRpcQueue.js'
+import {
+  readActiveTurnIdFromThreadReadPayload,
+  readThreadInProgressFromThreadReadPayload,
+  readThreadSessionPathFromThreadReadPayload,
+  readThreadUpdatedAtIsoFromThreadReadPayload,
+} from '../src/server/appServerThreadPayload.js'
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
 import {
@@ -200,6 +206,7 @@ try {
   smokeTranscriptionProxyConfig()
   smokeTranscriptionMultipartDefaults()
   smokeAppServerRpcResult()
+  smokeAppServerThreadPayload()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
   await smokeAppServerRpcQueue()
@@ -773,6 +780,46 @@ function smokeAppServerRpcResult(): void {
   assert.equal(trimmed.other, true)
   assert.equal(trimmed.thread.turns.length, 10)
   assert.deepEqual(trimThreadTurnsInRpcResult('thread/resume', { thread: { turns: null } }), { thread: { turns: null } })
+}
+
+function smokeAppServerThreadPayload(): void {
+  const timestampSeconds = 1_700_000_000
+  const payload = {
+    thread: {
+      activeTurnId: ' direct-turn ',
+      inProgress: false,
+      updatedAt: timestampSeconds,
+      path: ' C:/sessions/thread.jsonl ',
+      turns: [
+        { id: 'turn-1', status: 'completed' },
+        { id: 'turn-2', status: 'inProgress' },
+      ],
+    },
+  }
+  assert.equal(readActiveTurnIdFromThreadReadPayload(payload), 'direct-turn')
+  assert.equal(readThreadInProgressFromThreadReadPayload(payload), true)
+  assert.equal(readThreadUpdatedAtIsoFromThreadReadPayload(payload), new Date(timestampSeconds * 1000).toISOString())
+  assert.equal(readThreadSessionPathFromThreadReadPayload(payload), 'C:/sessions/thread.jsonl')
+
+  assert.equal(readActiveTurnIdFromThreadReadPayload({
+    thread: {
+      status: { turnId: ' status-turn ' },
+      turns: [{ id: 'turn-1', status: 'inProgress' }],
+    },
+  }), 'status-turn')
+  assert.equal(readActiveTurnIdFromThreadReadPayload({
+    thread: {
+      turns: [
+        { id: 'turn-1', status: 'completed' },
+        { id: ' turn-2 ', status: 'inProgress' },
+      ],
+    },
+  }), 'turn-2')
+  assert.equal(readThreadInProgressFromThreadReadPayload({ thread: { status: { type: 'Running' } } }), true)
+  assert.equal(readThreadInProgressFromThreadReadPayload({ thread: { turnStatus: 'in_progress' } }), true)
+  assert.equal(readThreadInProgressFromThreadReadPayload({ thread: { status: 'completed' } }), false)
+  assert.equal(readThreadSessionPathFromThreadReadPayload({ path: ' C:/sessions/fallback.jsonl ', thread: {} }), 'C:/sessions/fallback.jsonl')
+  assert.equal(readThreadUpdatedAtIsoFromThreadReadPayload({ thread: { updatedAt: 0 } }), '')
 }
 
 function smokeTranscriptionProxyConfig(): void {
