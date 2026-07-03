@@ -68,6 +68,7 @@ import {
 } from './appServerRpcQueue.js'
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
+import { PlanModeTurnStore } from './planModeTurnStore.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -1790,7 +1791,7 @@ class AppServerProcess {
   private readonly pendingServerRequests = new PendingServerRequestStore()
   private readonly rpcCache = new AppServerRpcCache()
   private readonly threadTokenUsageByThreadId = new Map<string, ThreadTokenUsage>()
-  private readonly planModeTurnsByThreadId = new Map<string, { turnId: string; startedAtMs: number }>()
+  private readonly planModeTurns = new PlanModeTurnStore()
   private webBridgeSettings: WebBridgeSettings = DEFAULT_WEB_BRIDGE_SETTINGS
   private readonly appServerArgs = [
     'app-server',
@@ -1844,6 +1845,7 @@ class AppServerProcess {
       this.rpcCache.clearSharedReads()
       this.rpcCache.clearThreadList()
       this.threadTokenUsageByThreadId.clear()
+      this.planModeTurns.clearAll()
       this.process = null
       this.initialized = false
       this.initializePromise = null
@@ -1867,6 +1869,7 @@ class AppServerProcess {
         this.rpcCache.clearSharedReads()
         this.rpcCache.clearThreadList()
         this.threadTokenUsageByThreadId.clear()
+        this.planModeTurns.clearAll()
         this.process = null
         this.initialized = false
         this.initializePromise = null
@@ -1964,6 +1967,7 @@ class AppServerProcess {
     this.rpcCache.clearSharedReads()
     this.rpcCache.clearThreadList()
     this.threadTokenUsageByThreadId.clear()
+    this.planModeTurns.clearAll()
 
     try {
       proc.stdin.end()
@@ -2085,51 +2089,27 @@ class AppServerProcess {
   }
 
   markPlanModeTurn(threadId: string, turnId = ''): void {
-    const normalizedThreadId = threadId.trim()
-    if (!normalizedThreadId) return
-    this.planModeTurnsByThreadId.set(normalizedThreadId, {
-      turnId: turnId.trim(),
-      startedAtMs: Date.now(),
-    })
+    this.planModeTurns.mark(threadId, turnId)
   }
 
   clearPlanModeTurn(threadId: string, turnId = ''): void {
-    const normalizedThreadId = threadId.trim()
-    if (!normalizedThreadId) return
-    const current = this.planModeTurnsByThreadId.get(normalizedThreadId)
-    if (!current) return
-    const normalizedTurnId = turnId.trim()
-    if (normalizedTurnId && current.turnId && current.turnId !== normalizedTurnId) return
-    this.planModeTurnsByThreadId.delete(normalizedThreadId)
+    this.planModeTurns.clear(threadId, turnId)
   }
 
   clearPlanModeTurnByPayload(payload: unknown): void {
     const threadId = readThreadIdFromPayload(payload)
     const turnId = readTurnIdFromPayload(payload)
-    if (threadId) {
-      this.clearPlanModeTurn(threadId, turnId)
-      return
-    }
-    if (!turnId) return
-    for (const [activeThreadId, activePlan] of this.planModeTurnsByThreadId.entries()) {
-      if (activePlan.turnId && activePlan.turnId === turnId) {
-        this.planModeTurnsByThreadId.delete(activeThreadId)
-      }
-    }
+    this.planModeTurns.clearByThreadOrTurn(threadId, turnId)
   }
 
   getActivePlanModeTurnCount(): number {
-    return this.planModeTurnsByThreadId.size
+    return this.planModeTurns.count
   }
 
   private isPlanModeServerRequest(params: unknown): boolean {
     const threadId = this.readServerRequestThreadId(params)
-    if (!threadId) return false
-    const activePlan = this.planModeTurnsByThreadId.get(threadId)
-    if (!activePlan) return false
-    const requestTurnId = readTurnIdFromPayload(params)
-    if (activePlan.turnId && requestTurnId && activePlan.turnId !== requestTurnId) return false
-    return true
+    const turnId = readTurnIdFromPayload(params)
+    return this.planModeTurns.isActiveRequest(threadId, turnId)
   }
 
   private shouldDeclinePlanModeServerRequest(method: string, params: unknown): boolean {
@@ -2448,7 +2428,7 @@ class AppServerProcess {
       pendingRpcCount: this.pending.size,
       queuedRpcCount: this.rpcQueue.count,
       pendingServerRequestCount: this.pendingServerRequests.count,
-      activePlanModeTurnCount: this.planModeTurnsByThreadId.size,
+      activePlanModeTurnCount: this.planModeTurns.count,
       rpcDiagnostics: this.rpcDiagnostics.snapshot(this.pending.size, this.rpcQueue.count),
     }
   }
@@ -2474,6 +2454,7 @@ class AppServerProcess {
     this.rpcCache.clearSharedReads()
     this.rpcCache.clearThreadList()
     this.threadTokenUsageByThreadId.clear()
+    this.planModeTurns.clearAll()
 
     try {
       proc.stdin.end()

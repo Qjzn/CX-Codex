@@ -5,6 +5,7 @@ import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.j
 import { AppServerRpcQueue, getAppServerRpcQueuePriority } from '../src/server/appServerRpcQueue.js'
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
+import { PlanModeTurnStore } from '../src/server/planModeTurnStore.js'
 import {
   isRuntimeActiveState,
   RuntimeStateStore,
@@ -20,6 +21,7 @@ try {
   await smokeAppServerRpcQueue()
   smokeAppServerLineBuffer()
   smokeAppServerStderrLogger()
+  smokePlanModeTurnStore()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
 } finally {
@@ -239,6 +241,35 @@ function smokeAppServerStderrLogger(): void {
   assert.equal(logger.log('fourth warning message'), true)
   assert.deepEqual(entries[1], { message: 'fourth warni', suppressedCount: 2 })
   assert.equal(logger.pendingSuppressedCount, 0)
+}
+
+function smokePlanModeTurnStore(): void {
+  let now = 10_000
+  const store = new PlanModeTurnStore({ now: () => now })
+
+  store.mark(' thread-a ', ' turn-a ')
+  assert.equal(store.count, 1)
+  assert.deepEqual(store.list(), [{ threadId: 'thread-a', turnId: 'turn-a', startedAtMs: 10_000 }])
+  assert.equal(store.isActiveRequest('thread-a', ''), true)
+  assert.equal(store.isActiveRequest('thread-a', 'turn-a'), true)
+  assert.equal(store.isActiveRequest('thread-a', 'other-turn'), false)
+
+  store.clear('thread-a', 'other-turn')
+  assert.equal(store.count, 1)
+  store.clear('thread-a', 'turn-a')
+  assert.equal(store.count, 0)
+
+  now += 1
+  store.mark('thread-b', 'turn-b')
+  store.mark('thread-c', 'turn-c')
+  store.clearByThreadOrTurn('', 'turn-b')
+  assert.equal(store.isActiveRequest('thread-b', 'turn-b'), false)
+  assert.equal(store.isActiveRequest('thread-c', 'turn-c'), true)
+
+  store.clearByThreadOrTurn('thread-c', 'wrong-turn')
+  assert.equal(store.count, 1)
+  store.clearAll()
+  assert.equal(store.count, 0)
 }
 
 function smokeRuntimeStateStore(): void {
