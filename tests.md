@@ -1548,3 +1548,29 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace check、`package.json` 解析、前端/CLI 构建和 `node dist-cli/index.js --help`。
 - 2026-07-03 模板审查：新增 `protocol_compatibility.yml` 覆盖版本、transport、method/event、脱敏 payload、期望兼容行为和安全确认。
 - 2026-07-03 文档审查：`CONTRIBUTING.md`、`SUPPORT.md` 和 Issue config 已指向 App Server 兼容问题的标准收集路径。
+
+---
+
+### Feature: 安全硬化清单与发版复核
+
+#### Prerequisites
+- 仓库包含 `SECURITY.md`、`RELEASE.md`、`.github/PULL_REQUEST_TEMPLATE.md` 和 `docs/`。
+- 本机可运行 `git diff --check`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行文档入口检查，确认 `README.md` 和 `SECURITY.md` 链接到 `docs/security-hardening.zh-CN.md`。
+3. 检查 `docs/security-hardening.zh-CN.md`，确认覆盖默认访问边界、Codex App Server transport、Codex sandbox / approval、OpenAI API key、远程访问、贡献发版检查和事故处理。
+4. 检查 `RELEASE.md`，确认发版流程包含安全边界复核步骤。
+5. 检查 `.github/PULL_REQUEST_TEMPLATE.md`，确认 PR 隐私与安全清单覆盖 App Server transport、权限确认、转写代理和日志输出。
+6. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+
+#### Expected Results
+- 维护者和贡献者能在一个固定文档中复核自托管远程访问、App Server transport、权限确认和凭据处理。
+- 发版前必须检查安全边界，不再只依赖构建成功。
+- README、SECURITY、Release 和 PR 模板都指向同一套安全硬化口径。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 文档入口审查：`README.md`、`SECURITY.md`、`RELEASE.md` 和 `.github/PULL_REQUEST_TEMPLATE.md` 均已串联 `docs/security-hardening.zh-CN.md` 或等价检查项。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace check、`package.json` 解析、前端/CLI 构建和 `node dist-cli/index.js --help`。

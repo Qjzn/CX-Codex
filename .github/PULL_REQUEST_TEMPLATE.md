@@ -15,3 +15,4 @@
 - [ ] 不包含密码、Token、Cookie、私有 IP、真实公网地址或个人目录
 - [ ] 不写死个人配置、私人服务器地址或本地路径
 - [ ] 新增远程访问能力时已说明安全边界
+- [ ] 涉及 App Server transport、权限确认、语音转写代理或日志输出时，已对照 `docs/security-hardening.zh-CN.md`

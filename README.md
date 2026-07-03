@@ -21,6 +21,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 - Android 客户端说明: [docs/android-shell.zh-CN.md](./docs/android-shell.zh-CN.md)
 - 平台兼容与 Slash Command 支持: [docs/platform-and-commands.zh-CN.md](./docs/platform-and-commands.zh-CN.md)
 - 远程访问方案: [docs/cloudflare-tunnel.zh-CN.md](./docs/cloudflare-tunnel.zh-CN.md)
+- 安全硬化清单: [docs/security-hardening.zh-CN.md](./docs/security-hardening.zh-CN.md)
 - 问题反馈前排查: [SUPPORT.md](./SUPPORT.md)
 
 ## 为什么用它
@@ -230,6 +231,7 @@ Cloudflare Tunnel 一条命令：
 - Android 壳: [docs/android-shell.zh-CN.md](./docs/android-shell.zh-CN.md)
 - Windows Server 安装: [docs/windows-server.md](./docs/windows-server.md)
 - Cloudflare Tunnel: [docs/cloudflare-tunnel.zh-CN.md](./docs/cloudflare-tunnel.zh-CN.md)
+- 安全硬化清单: [docs/security-hardening.zh-CN.md](./docs/security-hardening.zh-CN.md)
 - 贡献指南: [CONTRIBUTING.md](./CONTRIBUTING.md)
 - 安全策略: [SECURITY.md](./SECURITY.md)
 

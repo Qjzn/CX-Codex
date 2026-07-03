@@ -30,19 +30,24 @@
    - GitHub Actions Release workflow 默认执行 `-SchemaAudit skip`，因为 runner 不保证安装 Codex CLI；正式发版前应在维护者机器运行 `warn` 或 `strict` 并记录摘要。
    - 本地 `npm run verify:release` 使用 PowerShell 7 (`pwsh`)；Windows PowerShell 5 用户可直接执行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1`。
 
-4. 打包 Release：
+4. 安全边界复核：
+
+   - 对照 [docs/security-hardening.zh-CN.md](./docs/security-hardening.zh-CN.md) 检查默认绑定地址、密码、远程访问、App Server transport、权限确认、语音转写 API key、日志和截图。
+   - 涉及远程访问、App Server transport、权限确认或转写代理的版本，Release 正文必须说明安全边界和回滚方式。
+
+5. 打包 Release：
 
    ```powershell
    npm.cmd run package:release -- -Version 2.1.15
    ```
 
-5. 如本机需要发布 APK，运行：
+6. 如本机需要发布 APK，运行：
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\scripts\package-android-release.ps1 -Version 2.1.15
    ```
 
-6. 检查 `artifacts/` 中是否生成：
+7. 检查 `artifacts/` 中是否生成：
    - `CX-Codex-<version>.zip`
    - `CX-Codex-<version>.sha256`
    - `cx-codex-android-<version>.apk`
