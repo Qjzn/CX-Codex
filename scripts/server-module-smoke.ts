@@ -54,6 +54,12 @@ import {
 } from '../src/server/appServerJsonRpcWire.js'
 import { AppServerRpcQueue, getAppServerRpcQueuePriority } from '../src/server/appServerRpcQueue.js'
 import {
+  readItemIdFromPayload,
+  readStringByAliases,
+  readThreadIdFromPayload,
+  readTurnIdFromPayload,
+} from '../src/server/appServerPayloadIds.js'
+import {
   readActiveTurnIdFromThreadReadPayload,
   readThreadInProgressFromThreadReadPayload,
   readThreadSessionPathFromThreadReadPayload,
@@ -210,6 +216,7 @@ try {
   smokeTranscriptionProxyConfig()
   smokeTranscriptionMultipartDefaults()
   smokeAppServerRpcResult()
+  smokeAppServerPayloadIds()
   smokeAppServerThreadPayload()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
@@ -785,6 +792,35 @@ function smokeAppServerRpcResult(): void {
   assert.equal(trimmed.other, true)
   assert.equal(trimmed.thread.turns.length, 10)
   assert.deepEqual(trimThreadTurnsInRpcResult('thread/resume', { thread: { turns: null } }), { thread: { turns: null } })
+}
+
+function smokeAppServerPayloadIds(): void {
+  assert.equal(readStringByAliases({ threadId: '', thread_id: ' thread-under ' }, 'threadId', 'thread_id'), 'thread-under')
+  assert.equal(readStringByAliases(null, 'threadId'), '')
+
+  assert.equal(readThreadIdFromPayload({ threadId: ' thread-direct ' }), 'thread-direct')
+  assert.equal(readThreadIdFromPayload({ request: { thread_id: ' thread-request ' } }), 'thread-request')
+  assert.equal(readThreadIdFromPayload({ request: { params: { threadId: ' thread-request-params ' } } }), 'thread-request-params')
+  assert.equal(readThreadIdFromPayload({ params: { thread_id: ' thread-params ' } }), 'thread-params')
+  assert.equal(readThreadIdFromPayload({ thread: { id: ' thread-record ' } }), 'thread-record')
+  assert.equal(readThreadIdFromPayload({ turn: { threadId: ' thread-turn ' } }), 'thread-turn')
+  assert.equal(readThreadIdFromPayload({ item: { thread_id: ' thread-item ' } }), 'thread-item')
+  assert.equal(readThreadIdFromPayload(null), '')
+
+  assert.equal(readTurnIdFromPayload({ turnId: ' turn-direct ' }), 'turn-direct')
+  assert.equal(readTurnIdFromPayload({ activeTurnId: ' turn-active ' }), 'turn-active')
+  assert.equal(readTurnIdFromPayload({ request: { turn_id: ' turn-request ' } }), 'turn-request')
+  assert.equal(readTurnIdFromPayload({ request: { params: { activeTurnId: ' turn-request-params ' } } }), 'turn-request-params')
+  assert.equal(readTurnIdFromPayload({ params: { turnId: ' turn-params ' } }), 'turn-params')
+  assert.equal(readTurnIdFromPayload({ turn: { id: ' turn-record ' } }), 'turn-record')
+  assert.equal(readTurnIdFromPayload({ item: { turn_id: ' turn-item ' } }), 'turn-item')
+  assert.equal(readTurnIdFromPayload([]), '')
+
+  assert.equal(readItemIdFromPayload({ itemId: ' item-direct ' }), 'item-direct')
+  assert.equal(readItemIdFromPayload({ item_id: ' item-under ' }), 'item-under')
+  assert.equal(readItemIdFromPayload({ item: { id: ' item-record ' } }), 'item-record')
+  assert.equal(readItemIdFromPayload({ item: { item_id: ' item-nested ' } }), 'item-nested')
+  assert.equal(readItemIdFromPayload({ item: { id: 42 } }), '')
 }
 
 function smokeAppServerThreadPayload(): void {
@@ -2136,21 +2172,6 @@ function withTranscriptionEnv(
   }
 }
 
-function readThreadIdFromPayload(payload: unknown): string {
-  const root = asRecord(payload)
-  const direct = readString(root, 'threadId')
-  if (direct) return direct
-  return readString(asRecord(root?.thread), 'id')
-}
-
-function readTurnIdFromPayload(payload: unknown): string {
-  return readString(asRecord(payload), 'turnId')
-}
-
-function readItemIdFromPayload(payload: unknown): string {
-  return readString(asRecord(payload), 'itemId')
-}
-
 function readIncludeTurns(payload: unknown): boolean | undefined {
   const value = asRecord(payload)?.includeTurns
   return typeof value === 'boolean' ? value : undefined
@@ -2158,11 +2179,6 @@ function readIncludeTurns(payload: unknown): boolean | undefined {
 
 function readBooleanProperty(payload: unknown, key: string): boolean {
   return asRecord(payload)?.[key] === true
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string {
-  const value = record?.[key]
-  return typeof value === 'string' ? value.trim() : ''
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

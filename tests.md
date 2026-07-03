@@ -2318,6 +2318,35 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server payload ID 解析模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerPayloadIds.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 threadId、turnId、itemId 和 alias 解析行为。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 从 `appServerPayloadIds.ts` 导入 payload ID 解析器，不再内联 `readStringByAliases()`、`readThreadIdFromPayload()`、`readTurnIdFromPayload()` 和 `readItemIdFromPayload()`。
+5. 代码审查确认 `scripts/server-module-smoke.ts` 的 runtime state store smoke 使用正式 payload ID 解析器，而不是脚本内简化 reader。
+
+#### Expected Results
+- `src/server/appServerPayloadIds.ts` 集中维护 App Server payload 中 threadId、turnId 和 itemId 的兼容解析。
+- 兼容来源包括 root、`request`、`request.params`、`params`、`thread`、`turn` 和 `item` 中的 camelCase/snake_case 字段。
+- `src/server/codexAppServerBridge.ts` 继续负责 runtime、通知、RPC 和 HTTP 编排，不再承载 payload ID 字段探测细节。
+- server module smoke 覆盖 alias fallback、空值 trim、嵌套 request/params/thread/turn/item 来源和非字符串忽略；release gate 通过，证明拆分后的 ESM import、runtime store 注入和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/appServerPayloadIds.ts`，撤销 `scripts/server-module-smoke.ts` 中的 payload ID smoke，并把 payload ID helper 恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: App Server thread/read payload 解析模块化
 
 #### Prerequisites
