@@ -91,6 +91,7 @@ import {
   readThreadIdFromPayload,
   readTurnIdFromPayload,
 } from './appServerPayloadIds.js'
+import { getRpcTimeoutMs } from './appServerRpcTimeoutPolicy.js'
 import {
   createAppServerJsonRpcError,
   createRpcTimeoutError,
@@ -217,10 +218,6 @@ type PendingRpc = {
   timeoutId: ReturnType<typeof setTimeout>
 }
 
-const APP_SERVER_RPC_TIMEOUT_MS = 60_000
-const APP_SERVER_RPC_INIT_TIMEOUT_MS = 60_000
-const APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS = 30_000
-const APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS = 60_000
 const APP_SERVER_RPC_SLOW_WARN_MS = 1_800
 const APP_SERVER_RPC_MAX_IN_FLIGHT = 2
 const APP_SERVER_RPC_QUEUE_WARN_SIZE = 6
@@ -267,22 +264,6 @@ function normalizeRuntimeEventForReplay(event: {
     params: event.params,
     atIso: event.atIso,
   }
-}
-
-function getRpcTimeoutMs(method: string, params: unknown): number {
-  if (method === 'initialize') {
-    return APP_SERVER_RPC_INIT_TIMEOUT_MS
-  }
-  if (method === 'thread/read') {
-    const record = asRecord(params)
-    return record?.includeTurns === true
-      ? APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS
-      : APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS
-  }
-  if (method === 'thread/resume') {
-    return APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS
-  }
-  return APP_SERVER_RPC_TIMEOUT_MS
 }
 
 function shouldInvalidateThreadListCacheForNotification(method: string): boolean {

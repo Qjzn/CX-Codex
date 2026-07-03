@@ -2318,6 +2318,35 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server RPC timeout policy 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRpcTimeoutPolicy.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 initialize、thread/read、thread/resume 和默认 RPC timeout 策略。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 从 `appServerRpcTimeoutPolicy.ts` 导入 `getRpcTimeoutMs()`，不再内联 initialize、thread/read、thread/resume 和默认 RPC timeout 常量。
+5. 代码审查确认队列大小、慢调用诊断和重启阈值仍留在 bridge/AppServerProcess 范围内，本次没有改变进程调度和重启策略。
+
+#### Expected Results
+- `src/server/appServerRpcTimeoutPolicy.ts` 集中维护 App Server RPC method 到 timeout 毫秒数的映射。
+- `initialize`、heavy `thread/read(includeTurns:true)`、`thread/resume` 仍为 60 秒，light `thread/read` 仍为 30 秒，其他 RPC 仍为 60 秒。
+- 非布尔 `includeTurns` 不会被当作 heavy read。
+- server module smoke 覆盖上述 timeout 分支；release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/appServerRpcTimeoutPolicy.ts`，撤销 `scripts/server-module-smoke.ts` 中的 timeout policy smoke，并把 timeout 常量和 `getRpcTimeoutMs()` 恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: App Server payload ID 解析模块化
 
 #### Prerequisites

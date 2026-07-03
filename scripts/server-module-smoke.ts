@@ -37,6 +37,13 @@ import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheF
 import { trimThreadTurnsInRpcResult } from '../src/server/appServerRpcResult.js'
 import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.js'
 import {
+  APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS,
+  APP_SERVER_RPC_INIT_TIMEOUT_MS,
+  APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS,
+  APP_SERVER_RPC_TIMEOUT_MS,
+  getRpcTimeoutMs,
+} from '../src/server/appServerRpcTimeoutPolicy.js'
+import {
   APP_SERVER_OVERLOADED_ERROR_CODE,
   AppServerJsonRpcError,
   createAppServerJsonRpcError,
@@ -218,6 +225,7 @@ try {
   smokeAppServerRpcResult()
   smokeAppServerPayloadIds()
   smokeAppServerThreadPayload()
+  smokeAppServerRpcTimeoutPolicy()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
   smokeAppServerRpcErrors()
@@ -861,6 +869,17 @@ function smokeAppServerThreadPayload(): void {
   assert.equal(readThreadInProgressFromThreadReadPayload({ thread: { status: 'completed' } }), false)
   assert.equal(readThreadSessionPathFromThreadReadPayload({ path: ' C:/sessions/fallback.jsonl ', thread: {} }), 'C:/sessions/fallback.jsonl')
   assert.equal(readThreadUpdatedAtIsoFromThreadReadPayload({ thread: { updatedAt: 0 } }), '')
+}
+
+function smokeAppServerRpcTimeoutPolicy(): void {
+  assert.equal(getRpcTimeoutMs('initialize', {}), APP_SERVER_RPC_INIT_TIMEOUT_MS)
+  assert.equal(getRpcTimeoutMs('thread/read', { includeTurns: false }), APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS)
+  assert.equal(getRpcTimeoutMs('thread/read', {}), APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS)
+  assert.equal(getRpcTimeoutMs('thread/read', { includeTurns: true }), APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS)
+  assert.equal(getRpcTimeoutMs('thread/read', { includeTurns: 'true' }), APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS)
+  assert.equal(getRpcTimeoutMs('thread/resume', {}), APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS)
+  assert.equal(getRpcTimeoutMs('model/list', {}), APP_SERVER_RPC_TIMEOUT_MS)
+  assert.equal(getRpcTimeoutMs('turn/start', null), APP_SERVER_RPC_TIMEOUT_MS)
 }
 
 function smokeTranscriptionProxyConfig(): void {
