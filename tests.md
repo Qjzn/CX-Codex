@@ -2318,6 +2318,35 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server RPC cache invalidation 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRpcCache.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 thread/list 与 thread/read 的 RPC/notification cache invalidation 规则。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 从 `appServerRpcCache.ts` 导入 `shouldInvalidateThreadListCacheForNotification()`、`shouldInvalidateThreadReadCacheForRpc()` 和 `shouldInvalidateThreadReadCacheForNotification()`，不再内联这些规则。
+5. 代码审查确认原有 invalidation method 列表未改变，缓存清理调用点仍在 notification、RPC proxy 和 runtime path 中执行。
+
+#### Expected Results
+- `src/server/appServerRpcCache.ts` 集中维护 shareable RPC key、thread/model list cache 和 thread cache invalidation 策略。
+- `thread/list` cache 仍会被 thread start/fork/archive/name set RPC 和 thread created/archived/unarchived/deleted/removed/forked/moved/name updated notification 清理。
+- `thread/read` cache 仍会被 turn start/interrupt、thread resume/rollback/archive/name set RPC，以及 turn/item completion、interrupt、error 和 failed notification 清理。
+- server module smoke 覆盖 RPC 与 notification 正反样例；release gate 通过，证明拆分后的 ESM import、cache helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，撤销 `src/server/appServerRpcCache.ts` 中新增 invalidation helper，撤销 `scripts/server-module-smoke.ts` 中的新增断言，并把 helper 恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: App Server RPC timeout policy 模块化
 
 #### Prerequisites

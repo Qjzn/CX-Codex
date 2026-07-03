@@ -33,7 +33,14 @@ import {
   normalizeAppServerSchemaAuditSummary,
   readAppServerSchemaAuditSummary,
 } from '../src/server/appServerSchemaAuditSummary.js'
-import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheForRpc } from '../src/server/appServerRpcCache.js'
+import {
+  AppServerRpcCache,
+  getShareableRpcKey,
+  shouldInvalidateThreadListCacheForNotification,
+  shouldInvalidateThreadListCacheForRpc,
+  shouldInvalidateThreadReadCacheForNotification,
+  shouldInvalidateThreadReadCacheForRpc,
+} from '../src/server/appServerRpcCache.js'
 import { trimThreadTurnsInRpcResult } from '../src/server/appServerRpcResult.js'
 import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.js'
 import {
@@ -983,6 +990,16 @@ async function smokeAppServerRpcCache(): Promise<void> {
   assert.equal(getShareableRpcKey('thread/list', { limit: 1 }), 'thread/list:{"limit":1}')
   assert.equal(shouldInvalidateThreadListCacheForRpc('thread/name/set'), true)
   assert.equal(shouldInvalidateThreadListCacheForRpc('thread/read'), false)
+  assert.equal(shouldInvalidateThreadListCacheForNotification('thread/name/updated'), true)
+  assert.equal(shouldInvalidateThreadListCacheForNotification('thread/created'), true)
+  assert.equal(shouldInvalidateThreadListCacheForNotification('item/completed'), false)
+  assert.equal(shouldInvalidateThreadReadCacheForRpc('turn/start'), true)
+  assert.equal(shouldInvalidateThreadReadCacheForRpc('thread/name/set'), true)
+  assert.equal(shouldInvalidateThreadReadCacheForRpc('model/list'), false)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('turn/completed'), true)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/updated'), true)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('tool/failed'), true)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('thread/name/updated'), false)
 
   let now = 1_000
   Date.now = () => now

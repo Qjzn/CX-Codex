@@ -69,7 +69,10 @@ import {
 import {
   AppServerRpcCache,
   getShareableRpcKey,
+  shouldInvalidateThreadListCacheForNotification,
   shouldInvalidateThreadListCacheForRpc,
+  shouldInvalidateThreadReadCacheForNotification,
+  shouldInvalidateThreadReadCacheForRpc,
 } from './appServerRpcCache.js'
 import {
   AppServerRpcDiagnostics,
@@ -264,52 +267,6 @@ function normalizeRuntimeEventForReplay(event: {
     params: event.params,
     atIso: event.atIso,
   }
-}
-
-function shouldInvalidateThreadListCacheForNotification(method: string): boolean {
-  if (method === 'thread/name/updated') return true
-  if (!method.startsWith('thread/')) return false
-  return (
-    method.endsWith('/created') ||
-    method.endsWith('/archived') ||
-    method.endsWith('/unarchived') ||
-    method.endsWith('/deleted') ||
-    method.endsWith('/removed') ||
-    method.endsWith('/forked') ||
-    method.endsWith('/moved')
-  )
-}
-
-function shouldInvalidateThreadReadCacheForRpc(method: string): boolean {
-  return (
-    method === 'turn/start' ||
-    method === 'turn/interrupt' ||
-    method === 'thread/resume' ||
-    method === 'thread/rollback' ||
-    method === 'thread/archive' ||
-    method === 'thread/name/set'
-  )
-}
-
-function shouldInvalidateThreadReadCacheForNotification(method: string): boolean {
-  if (
-    method === 'turn/started' ||
-    method === 'turn/start' ||
-    method === 'turn/completed' ||
-    method === 'thread/completed' ||
-    method === 'turn/interrupted' ||
-    method === 'thread/interrupted' ||
-    method === 'error' ||
-    method.endsWith('/failed')
-  ) {
-    return true
-  }
-
-  return (
-    method === 'item/started' ||
-    method === 'item/updated' ||
-    method === 'item/completed'
-  )
 }
 
 function readIsoTimestampMs(value: string | null | undefined): number {
