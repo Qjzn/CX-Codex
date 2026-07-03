@@ -91,6 +91,13 @@ import {
   readWebBridgeSettings,
   writeWebBridgeSettings,
 } from './webBridgeSettings.js'
+import {
+  normalizeWorkspaceRootsState,
+  readWorkspaceRootsState,
+  upsertWorkspaceRootState,
+  writeWorkspaceRootsState,
+  type WorkspaceRootsState,
+} from './workspaceRootsState.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -121,12 +128,6 @@ type ServerRequestReply = {
     code: number
     message: string
   }
-}
-
-type WorkspaceRootsState = {
-  order: string[]
-  labels: Record<string, string>
-  active: string[]
 }
 
 type AppServerHealth = {
@@ -952,17 +953,6 @@ function normalizeStringArray(value: unknown): string[] {
   return normalized
 }
 
-function normalizeStringRecord(value: unknown): Record<string, string> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-  const next: Record<string, string> = {}
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof key === 'string' && key.length > 0 && typeof item === 'string') {
-      next[key] = item
-    }
-  }
-  return next
-}
-
 function normalizeCommitMessage(value: unknown): string {
   if (typeof value !== 'string') return ''
   const normalized = value
@@ -1198,42 +1188,6 @@ async function loadThreadSummariesById(
   }
 
   return summaries
-}
-
-async function readWorkspaceRootsState(): Promise<WorkspaceRootsState> {
-  const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    const parsed = JSON.parse(raw) as unknown
-    payload = asRecord(parsed) ?? {}
-  } catch {
-    payload = {}
-  }
-
-  return {
-    order: normalizeStringArray(payload['electron-saved-workspace-roots']),
-    labels: normalizeStringRecord(payload['electron-workspace-root-labels']),
-    active: normalizeStringArray(payload['active-workspace-roots']),
-  }
-}
-
-async function writeWorkspaceRootsState(nextState: WorkspaceRootsState): Promise<void> {
-  const statePath = getCodexGlobalStatePath()
-  let payload: Record<string, unknown> = {}
-  try {
-    const raw = await readFile(statePath, 'utf8')
-    payload = asRecord(JSON.parse(raw)) ?? {}
-  } catch {
-    payload = {}
-  }
-
-  payload['electron-saved-workspace-roots'] = normalizeStringArray(nextState.order)
-  payload['electron-workspace-root-labels'] = normalizeStringRecord(nextState.labels)
-  payload['active-workspace-roots'] = normalizeStringArray(nextState.active)
-
-  await writeFile(statePath, JSON.stringify(payload), 'utf8')
 }
 
 function bufferIndexOf(buf: Buffer, needle: Buffer, start = 0): number {
@@ -3225,7 +3179,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/workspace-roots-state') {
-        const state = await readWorkspaceRootsState()
+        const state = await readWorkspaceRootsState(getCodexGlobalStatePath())
         setJson(res, 200, { data: state })
         return
       }
@@ -3454,12 +3408,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           setJson(res, 400, { error: 'Invalid body: expected object' })
           return
         }
-        const nextState: WorkspaceRootsState = {
-          order: normalizeStringArray(record.order),
-          labels: normalizeStringRecord(record.labels),
-          active: normalizeStringArray(record.active),
-        }
-        await writeWorkspaceRootsState(nextState)
+        const nextState: WorkspaceRootsState = normalizeWorkspaceRootsState(record)
+        await writeWorkspaceRootsState(getCodexGlobalStatePath(), nextState)
         setJson(res, 200, { ok: true })
         return
       }
@@ -3493,18 +3443,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           return
         }
 
-        const existingState = await readWorkspaceRootsState()
-        const nextOrder = [normalizedPath, ...existingState.order.filter((item) => item !== normalizedPath)]
-        const nextActive = [normalizedPath, ...existingState.active.filter((item) => item !== normalizedPath)]
-        const nextLabels = { ...existingState.labels }
-        if (label.trim().length > 0) {
-          nextLabels[normalizedPath] = label.trim()
-        }
-        await writeWorkspaceRootsState({
-          order: nextOrder,
-          labels: nextLabels,
-          active: nextActive,
-        })
+        const statePath = getCodexGlobalStatePath()
+        const existingState = await readWorkspaceRootsState(statePath)
+        await writeWorkspaceRootsState(statePath, upsertWorkspaceRootState(existingState, normalizedPath, label))
         setJson(res, 200, { data: { path: normalizedPath } })
         return
       }

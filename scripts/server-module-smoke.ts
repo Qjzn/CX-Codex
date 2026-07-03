@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AppServerLineBuffer } from '../src/server/appServerLineBuffer.js'
@@ -48,6 +48,13 @@ import {
   RuntimeStateStore,
   toPersistableRuntimeSnapshot,
 } from '../src/server/runtimeState.js'
+import {
+  normalizeWorkspaceRootsState,
+  readWorkspaceRootsState,
+  readWorkspaceRootsStateFromPayload,
+  upsertWorkspaceRootState,
+  writeWorkspaceRootsState,
+} from '../src/server/workspaceRootsState.js'
 
 const originalNow = Date.now
 
@@ -63,6 +70,7 @@ try {
   await smokeWebBridgeSettings()
   await smokeThreadTokenUsage()
   await smokeThreadTitleCache()
+  await smokeWorkspaceRootsState()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
 } finally {
@@ -591,6 +599,61 @@ async function smokeThreadTitleCache(): Promise<void> {
       titles: { manual: 'Manual title', 'thread-a': 'New A', 'thread-b': 'Beta' },
       order: ['thread-a', 'thread-b', 'manual'],
     })
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function smokeWorkspaceRootsState(): Promise<void> {
+  assert.deepEqual(normalizeWorkspaceRootsState(null), { order: [], labels: {}, active: [] })
+  assert.deepEqual(normalizeWorkspaceRootsState({
+    order: ['C:\\work\\one', 'C:\\work\\one', '', 7],
+    labels: { 'C:\\work\\one': 'One', empty: '', bad: 9 },
+    active: ['C:\\work\\two', 'C:\\work\\two'],
+  }), {
+    order: ['C:\\work\\one'],
+    labels: { 'C:\\work\\one': 'One', empty: '' },
+    active: ['C:\\work\\two'],
+  })
+  assert.deepEqual(readWorkspaceRootsStateFromPayload({
+    'electron-saved-workspace-roots': ['C:\\work\\old', 'C:\\work\\old'],
+    'electron-workspace-root-labels': { 'C:\\work\\old': 'Old' },
+    'active-workspace-roots': ['C:\\work\\active'],
+  }), {
+    order: ['C:\\work\\old'],
+    labels: { 'C:\\work\\old': 'Old' },
+    active: ['C:\\work\\active'],
+  })
+
+  const upserted = upsertWorkspaceRootState({
+    order: ['C:\\work\\old', 'C:\\work\\new'],
+    labels: { 'C:\\work\\old': 'Old' },
+    active: ['C:\\work\\old'],
+  }, 'C:\\work\\new', 'New')
+  assert.deepEqual(upserted, {
+    order: ['C:\\work\\new', 'C:\\work\\old'],
+    labels: { 'C:\\work\\old': 'Old', 'C:\\work\\new': 'New' },
+    active: ['C:\\work\\new', 'C:\\work\\old'],
+  })
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-workspace-roots-'))
+  try {
+    const statePath = join(tempDir, 'global-state.json')
+    assert.deepEqual(await readWorkspaceRootsState(statePath), { order: [], labels: {}, active: [] })
+
+    await writeFile(statePath, JSON.stringify({ existing: true }), 'utf8')
+    await writeWorkspaceRootsState(statePath, {
+      order: ['C:\\work\\one', 'C:\\work\\one'],
+      labels: { 'C:\\work\\one': 'One' },
+      active: ['C:\\work\\one'],
+    })
+
+    assert.deepEqual(await readWorkspaceRootsState(statePath), {
+      order: ['C:\\work\\one'],
+      labels: { 'C:\\work\\one': 'One' },
+      active: ['C:\\work\\one'],
+    })
+    assert.equal(JSON.parse(await readFile(statePath, 'utf8')).existing, true)
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }

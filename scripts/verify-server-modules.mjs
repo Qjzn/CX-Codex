@@ -43,6 +43,7 @@ writeFileSync(tsconfigPath, `${JSON.stringify({
     join(repoRoot, 'src', 'server', 'threadTitleCache.ts'),
     join(repoRoot, 'src', 'server', 'threadTokenUsage.ts'),
     join(repoRoot, 'src', 'server', 'webBridgeSettings.ts'),
+    join(repoRoot, 'src', 'server', 'workspaceRootsState.ts'),
   ],
 }, null, 2)}\n`)
 

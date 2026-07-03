@@ -1858,6 +1858,32 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Workspace roots state 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/workspaceRootsState.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 workspace roots state 归一化、全局 state 读写和项目根目录 upsert 行为。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 只负责路由、路径存在性检查和传入 `getCodexGlobalStatePath()`，workspace roots state 的归一化、读写和 upsert 均来自 `src/server/workspaceRootsState.ts`。
+
+#### Expected Results
+- `src/server/workspaceRootsState.ts` 集中维护 `electron-saved-workspace-roots`、`electron-workspace-root-labels` 和 `active-workspace-roots` 三个全局 state key。
+- 重复 workspace root 会去重并保持最近项目在最前；新增项目根目录会同时更新 order 和 active。
+- 写回 workspace roots state 时会保留 `.codex-global-state.json` 中不相关的其他字段。
+- `/codex-api/workspace-roots-state` GET/PUT 和 `/codex-api/project-root` 的行为与拆分前一致。
+- 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Rollback/Cleanup
+- 如需回滚，移除 `src/server/workspaceRootsState.ts`，将 bridge 重新改回内联 workspace roots helper，并从 `scripts/verify-server-modules.mjs` 与 `scripts/server-module-smoke.ts` 移除对应 smoke 覆盖。
+
+---
+
 ### Feature: App Server stdout line buffer 模块化
 
 #### Prerequisites
