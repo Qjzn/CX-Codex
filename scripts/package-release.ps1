@@ -72,10 +72,20 @@ if (Test-Path -LiteralPath $checksumPath) {
 New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
 
 $releaseItems = @(
+  ".github\ISSUE_TEMPLATE\bug_report.yml",
+  ".github\ISSUE_TEMPLATE\config.yml",
+  ".github\ISSUE_TEMPLATE\feature_request.yml",
+  ".github\ISSUE_TEMPLATE\install_help.yml",
+  ".github\ISSUE_TEMPLATE\protocol_compatibility.yml",
+  ".github\PULL_REQUEST_TEMPLATE.md",
+  ".github\release-body.md",
   ".github\workflows\ci.yml",
+  "CONTRIBUTING.md",
   "LICENSE",
   "README.md",
   "RELEASE.md",
+  "SECURITY.md",
+  "SUPPORT.md",
   "cx-codex.config.example.json",
   "docs",
   "index.html",

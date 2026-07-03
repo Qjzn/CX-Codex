@@ -122,6 +122,15 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "spawnSync(process.execPath"
 )
 
+Assert-ContentIncludes "scripts/package-release.ps1" @(
+  ".github\ISSUE_TEMPLATE\protocol_compatibility.yml",
+  ".github\PULL_REQUEST_TEMPLATE.md",
+  ".github\release-body.md",
+  "CONTRIBUTING.md",
+  "SECURITY.md",
+  "SUPPORT.md"
+)
+
 Assert-ContentIncludes ".github/PULL_REQUEST_TEMPLATE.md" @(
   "npm run verify:release",
   "docs/security-hardening.zh-CN.md",

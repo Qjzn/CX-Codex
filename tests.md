@@ -1687,6 +1687,37 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Release 包开源治理文件清单
+
+#### Prerequisites
+- 本机可运行 `npm.cmd run build` 和 `npm.cmd run package:release`。
+- 构建产物 `dist/` 和 `dist-cli/` 已存在，或先执行完整 release gate。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:governance`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 执行 `npm.cmd run package:release -- -Version governance-smoke -OutputDir output\package-release-smoke`。
+5. 打开 `output\package-release-smoke\CX-Codex-governance-smoke.zip`，确认包含 `SECURITY.md`、`SUPPORT.md`、`CONTRIBUTING.md`、`.github\release-body.md`、`.github\PULL_REQUEST_TEMPLATE.md` 和 `.github\ISSUE_TEMPLATE\protocol_compatibility.yml`。
+
+#### Expected Results
+- Web Release zip 除运行产物、源码和 docs 外，还包含贡献、支持、安全、Release 正文、PR 模板和协议兼容 Issue 模板。
+- `verify:governance` 会校验 `scripts/package-release.ps1` 的必需开源治理打包清单，避免后续误删。
+- Release zip 和 `.sha256` 校验文件都生成在指定 `OutputDir`。
+
+#### Rollback / Cleanup
+- 可删除 `output\package-release-smoke` 临时目录。
+- 如需回滚，撤销 `scripts/package-release.ps1` 的治理文件清单、`scripts/verify-governance.ps1` 的打包清单断言和本测试章节。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁验证：`npm.cmd run verify:governance` 通过，确认 package release 清单已锁定贡献、支持、安全、PR、Issue 和 Release 正文文件。
+- 2026-07-04 完整 release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含构建、server module smoke、普通 CLI smoke 和 CLI CJS launcher smoke。
+- 2026-07-04 打包验证：`npm.cmd run package:release -- -Version governance-smoke -OutputDir output\package-release-smoke` 通过，生成 `CX-Codex-governance-smoke.zip` 和 `.sha256`。
+- 2026-07-04 Zip 清单验证：PowerShell `System.IO.Compression.ZipFile` 检查通过，确认 zip 包含 `SECURITY.md`、`SUPPORT.md`、`CONTRIBUTING.md`、`.github\release-body.md`、`.github\PULL_REQUEST_TEMPLATE.md` 和 `.github\ISSUE_TEMPLATE\protocol_compatibility.yml`。
+
+---
+
 ### Feature: GitHub Actions Release 验证门禁
 
 #### Prerequisites
