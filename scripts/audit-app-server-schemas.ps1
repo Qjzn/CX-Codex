@@ -61,6 +61,98 @@ if (-not $SkipGenerate) {
   exit 0
 }
 
+function Get-FileBaseNames {
+  param(
+    [string]$Path
+  )
+
+  if (-not (Test-Path -LiteralPath $Path)) {
+    return @()
+  }
+
+  return @(
+    Get-ChildItem -LiteralPath $Path -File |
+      ForEach-Object { $_.BaseName } |
+      Sort-Object -Unique
+  )
+}
+
+function Compare-NameSets {
+  param(
+    [string[]]$Baseline,
+    [string[]]$Generated
+  )
+
+  $baselineSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  foreach ($name in $Baseline) {
+    [void]$baselineSet.Add($name)
+  }
+
+  $generatedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  foreach ($name in $Generated) {
+    [void]$generatedSet.Add($name)
+  }
+
+  $added = @(
+    foreach ($name in $Generated) {
+      if (-not $baselineSet.Contains($name)) { $name }
+    }
+  )
+  $removed = @(
+    foreach ($name in $Baseline) {
+      if (-not $generatedSet.Contains($name)) { $name }
+    }
+  )
+
+  return [ordered]@{
+    baselineCount = $Baseline.Count
+    generatedCount = $Generated.Count
+    addedCount = $added.Count
+    removedCount = $removed.Count
+    added = $added
+    removed = $removed
+  }
+}
+
+function Write-AuditSummary {
+  $baselineTsRootNames = Get-FileBaseNames -Path $baselineTs
+  $generatedTsRootNames = Get-FileBaseNames -Path $auditTs
+  $baselineTsV2Names = Get-FileBaseNames -Path (Join-Path $baselineTs "v2")
+  $generatedTsV2Names = Get-FileBaseNames -Path (Join-Path $auditTs "v2")
+  $baselineJsonRootNames = Get-FileBaseNames -Path $baselineJson
+  $generatedJsonRootNames = Get-FileBaseNames -Path $auditJson
+  $baselineJsonV2Names = Get-FileBaseNames -Path (Join-Path $baselineJson "v2")
+  $generatedJsonV2Names = Get-FileBaseNames -Path (Join-Path $auditJson "v2")
+
+  $summary = [ordered]@{
+    generatedAtIso = (Get-Date).ToUniversalTime().ToString("o")
+    codexCommand = $codexCommand
+    repository = $repoRoot
+    auditRoot = $auditRoot
+    baseline = [ordered]@{
+      typescript = $baselineTs
+      json = $baselineJson
+    }
+    generated = [ordered]@{
+      typescript = $auditTs
+      json = $auditJson
+    }
+    comparison = [ordered]@{
+      typescriptRoot = Compare-NameSets -Baseline $baselineTsRootNames -Generated $generatedTsRootNames
+      typescriptV2 = Compare-NameSets -Baseline $baselineTsV2Names -Generated $generatedTsV2Names
+      jsonRoot = Compare-NameSets -Baseline $baselineJsonRootNames -Generated $generatedJsonRootNames
+      jsonV2 = Compare-NameSets -Baseline $baselineJsonV2Names -Generated $generatedJsonV2Names
+    }
+  }
+
+  $summaryPath = Join-Path $auditRoot "audit-summary.json"
+  $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
+  Write-Host ""
+  Write-Host "Audit summary: $summaryPath"
+}
+
+Write-AuditSummary
+
 $hasDiff = $false
 
 function Compare-SchemaDirectory {

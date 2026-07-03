@@ -1345,6 +1345,36 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server 协议差异矩阵和审计摘要
+
+#### Prerequisites
+- 当前仓库已包含 `scripts/audit-app-server-schemas.ps1`。
+- 本机存在可执行的 Codex CLI，或只做 `-SkipGenerate` 脚本路径验证。
+
+#### Steps
+1. 执行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/audit-app-server-schemas.ps1 -SkipGenerate`。
+2. 执行 `git diff --check`。
+3. 阅读 `docs/app-server-protocol-matrix.zh-CN.md`，确认矩阵包含 Thread/Turn、Runtime、权限、Command、File System、MCP、Plugins、Skills、Hooks、Realtime、Windows Sandbox、Notifications、Release governance 等能力域。
+4. 后续完整审计时执行 `npm.cmd run audit:app-server-schemas`，确认输出目录包含 `audit-summary.json`。
+
+#### Expected Results
+- `-SkipGenerate` 能验证脚本基础路径，不要求生成 schema。
+- 完整审计会在 `output/app-server-schema-audit/<timestamp>/audit-summary.json` 写入基线与生成 schema 的文件名差异摘要。
+- 协议差异矩阵能作为后续阶段的兼容 backlog，不直接覆盖 schema 基线。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 脚本路径验证：`powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/audit-app-server-schemas.ps1 -SkipGenerate` 通过。
+- 2026-07-03 schema 证据验证：确认 `output/app-server-schema-audit/20260703-192708` 中存在 `codex_app_server_protocol.v2.schemas.json`、`PermissionsRequestApprovalParams.ts`、`ThreadGoal.ts`、`FsReadFileParams.ts`、`PluginListParams.ts`、`ThreadRealtimeTranscriptDeltaNotification.ts`。
+- 2026-07-03 完整审计验证：`npm.cmd run audit:app-server-schemas` 生成 `output/app-server-schema-audit/20260703-193428/audit-summary.json`，命令退出码为 `1`，符合“发现协议差异需要审计”的预期。
+- 2026-07-03 摘要计数：`audit-summary.json` 显示 TypeScript v2 新增 260、移除 14；JSON v2 新增 110、移除 10。
+
+#### Rollback / Cleanup
+- 可删除 `output/app-server-schema-audit/<timestamp>` 临时输出。
+- 如矩阵中的能力域判断发生变化，只更新对应行并补充验证证据。
+
+---
+
 ### Feature: OpenAI 官方语音转写与停止请求审计
 
 #### Prerequisites

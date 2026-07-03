@@ -88,6 +88,8 @@ npm run audit:app-server-schemas
 
 这意味着下一阶段的优先级应是“协议差异落图”，而不是直接覆盖基线。
 
+详细差异矩阵见 `docs/app-server-protocol-matrix.zh-CN.md`。该矩阵把最新 schema 差异拆成核心 thread/turn、runtime、权限、MCP、插件、文件系统、realtime、Windows sandbox、release governance 等能力域，并标记当前项目状态和下一步门槛。
+
 ## 与其他 OpenAI API 的边界
 
 通用 OpenAI API 只用于补充能力。例如语音转写使用 `gpt-4o-transcribe` / `gpt-4o-mini-transcribe`，但不能替代 App Server 的线程协议。接入这些 API 时，应保持独立配置、独立错误处理和最小权限环境变量，避免把 Platform API key 与 Codex App Server 认证混用。
