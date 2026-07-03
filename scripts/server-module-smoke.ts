@@ -40,7 +40,11 @@ import {
   APP_SERVER_OVERLOADED_ERROR_CODE,
   AppServerJsonRpcError,
   createAppServerJsonRpcError,
+  createRpcTimeoutError,
   isAppServerOverloadedError,
+  isInterruptSettledError,
+  isRpcTimeoutError,
+  isThreadMaterializingError,
 } from '../src/server/appServerRpcErrors.js'
 import {
   createAppServerRpcErrorResponse,
@@ -209,6 +213,7 @@ try {
   smokeAppServerThreadPayload()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
+  smokeAppServerRpcErrors()
   await smokeAppServerRpcQueue()
   smokeAppServerLineBuffer()
   smokeAppServerStderrLogger()
@@ -993,16 +998,35 @@ function smokeAppServerRpcDiagnostics(): void {
   assert.equal(diagnostics.noteRestartableTimeout('thread/start', now + 20_000).shouldRestart, false)
 }
 
-async function smokeAppServerRpcQueue(): Promise<void> {
-  assert.equal(getAppServerRpcQueuePriority('turn/start', {}), 0)
-  assert.equal(getAppServerRpcQueuePriority('thread/read', {}), 1)
-  assert.equal(getAppServerRpcQueuePriority('thread/list', {}), 4)
-  assert.equal(getAppServerRpcQueuePriority('model/list', {}), 5)
+function smokeAppServerRpcErrors(): void {
   assert.equal(isAppServerOverloadedError(createAppServerJsonRpcError({
     code: APP_SERVER_OVERLOADED_ERROR_CODE,
     message: 'Server overloaded; retry later.',
   })), true)
   assert.equal(isAppServerOverloadedError(new AppServerJsonRpcError(123, 'Other error')), false)
+  assert.equal(isThreadMaterializingError(new Error('thread is not materialized yet')), true)
+  assert.equal(isThreadMaterializingError(new Error('includeTurns is unavailable before first user message')), true)
+  assert.equal(isThreadMaterializingError(new Error('no rollout found for thread id')), true)
+  assert.equal(isThreadMaterializingError(new Error('rollout is empty')), true)
+  assert.equal(isThreadMaterializingError(new Error('permission denied')), false)
+
+  const timeout = createRpcTimeoutError('thread/read', 30_000)
+  assert.equal(timeout.name, 'AppServerRpcTimeoutError')
+  assert.equal(timeout.message, 'thread/read timed out after 30s')
+  assert.equal(isRpcTimeoutError(timeout), true)
+  assert.equal(isRpcTimeoutError(new Error('thread/read timed out after 30s')), false)
+
+  assert.equal(isInterruptSettledError(new Error('no active turn')), true)
+  assert.equal(isInterruptSettledError(new Error('already completed')), true)
+  assert.equal(isInterruptSettledError(new Error('cannot interrupt')), true)
+  assert.equal(isInterruptSettledError(timeout), false)
+}
+
+async function smokeAppServerRpcQueue(): Promise<void> {
+  assert.equal(getAppServerRpcQueuePriority('turn/start', {}), 0)
+  assert.equal(getAppServerRpcQueuePriority('thread/read', {}), 1)
+  assert.equal(getAppServerRpcQueuePriority('thread/list', {}), 4)
+  assert.equal(getAppServerRpcQueuePriority('model/list', {}), 5)
 
   let now = 9_000
   Date.now = () => now++

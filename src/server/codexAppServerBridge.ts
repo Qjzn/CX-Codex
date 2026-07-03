@@ -85,7 +85,13 @@ import {
   readThreadSessionPathFromThreadReadPayload,
   readThreadUpdatedAtIsoFromThreadReadPayload,
 } from './appServerThreadPayload.js'
-import { createAppServerJsonRpcError } from './appServerRpcErrors.js'
+import {
+  createAppServerJsonRpcError,
+  createRpcTimeoutError,
+  isInterruptSettledError,
+  isRpcTimeoutError,
+  isThreadMaterializingError,
+} from './appServerRpcErrors.js'
 import { AppServerNotificationDiagnostics } from './appServerNotificationDiagnostics.js'
 import { AppServerStatusDiagnostics } from './appServerStatusDiagnostics.js'
 import { readAppServerSchemaAuditSummary } from './appServerSchemaAuditSummary.js'
@@ -229,41 +235,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value : ''
-}
-
-function isThreadMaterializingError(error: unknown): boolean {
-  const message = getErrorMessage(error, '').toLowerCase()
-  if (!message) return false
-  return (
-    message.includes('is not materialized yet') ||
-    message.includes('includeturns is unavailable before first user message') ||
-    message.includes('no rollout found for thread id') ||
-    (message.includes('rollout') && message.includes('is empty'))
-  )
-}
-
-function createRpcTimeoutError(method: string, timeoutMs: number): Error {
-  const error = new Error(`${method} timed out after ${Math.ceil(timeoutMs / 1000)}s`)
-  error.name = 'AppServerRpcTimeoutError'
-  return error
-}
-
-function isRpcTimeoutError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AppServerRpcTimeoutError'
-}
-
-function isInterruptSettledError(error: unknown): boolean {
-  if (isRpcTimeoutError(error)) return false
-  const message = getErrorMessage(error, '').toLowerCase()
-  if (!message) return false
-  return (
-    message.includes('no active turn') ||
-    message.includes('not running') ||
-    message.includes('already completed') ||
-    message.includes('cannot interrupt') ||
-    message.includes('unable to interrupt') ||
-    message.includes('active turn not found')
-  )
 }
 
 function normalizeThreadId(value: unknown): string {
