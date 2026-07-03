@@ -1476,6 +1476,40 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server initialize capabilities 边界
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerInitialization.ts`、`src/server/appServerClientInfo.ts` 和 `src/server/codexAppServerBridge.ts`。
+- 官方 Codex App Server 文档说明 `initialize.params.capabilities.experimentalApi` 需要显式 opt-in，未设置或为 `false` 时保持稳定 API surface。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 `node dist-cli\index.js --help`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `ensureInitialized()` 通过 `createAppServerInitializeParams(clientInfo)` 生成初始化参数，不再在 bridge 主文件内拼装 `initialize` payload。
+
+#### Expected Results
+- 默认初始化 payload 只包含 `clientInfo`，不发送 `capabilities.experimentalApi`，保持稳定 App Server API。
+- 显式传入 `{ experimentalApi: true }` 时才生成 `capabilities: { experimentalApi: true }`。
+- `optOutNotificationMethods` 只保留非空字符串，未来如需精确 opt-out notification，可在同一模块集中接入。
+- Server module smoke 覆盖默认稳定模式、显式 experimental false、显式 experimental true 和 notification opt-out 归一化。
+- `docs/app-server-protocol-matrix.zh-CN.md` 中 Transport / handshake / auth 行记录 experimental capability 的接入边界。
+
+#### Rollback / Cleanup
+- 如需回滚，撤销 `src/server/appServerInitialization.ts`、bridge import/call 调整、server module smoke、verify-server-modules、协议矩阵、changelog 和本节测试记录。
+
+#### Regression Evidence
+- 2026-07-04 官方文档核对：`node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` 返回 current manual，Codex App Server 章节说明 `experimentalApi` capability 需要显式 opt-in。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-04 CLI smoke：`node dist-cli\index.js --help` 通过并输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace、package parse、governance docs、构建、server module smoke 和 CLI smoke；schema audit 按本阶段命令跳过。
+
+---
+
 ### Feature: App Server method catalog 模块化
 
 #### Prerequisites

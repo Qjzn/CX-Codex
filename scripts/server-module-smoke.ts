@@ -8,6 +8,7 @@ import {
   normalizePackageVersion,
   readPackageVersion,
 } from '../src/server/appServerClientInfo.js'
+import { createAppServerInitializeParams } from '../src/server/appServerInitialization.js'
 import { AppServerLineBuffer } from '../src/server/appServerLineBuffer.js'
 import {
   AppServerNotificationDiagnostics,
@@ -176,6 +177,7 @@ try {
   await smokeAppServerClientInfo()
   smokePendingServerRequests()
   smokeAppServerJsonRpcWire()
+  smokeAppServerInitialization()
   smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
   smokeAppServerStatusDiagnostics()
@@ -327,6 +329,33 @@ function smokeAppServerJsonRpcWire(): void {
   const error = createAppServerRpcErrorResponse(4, { code: -32601, message: 'Unsupported' })
   assert.deepEqual(error, { id: 4, error: { code: -32601, message: 'Unsupported' } })
   assert.equal('jsonrpc' in error, false)
+}
+
+function smokeAppServerInitialization(): void {
+  const clientInfo = createAppServerClientInfo('2.2.7')
+  assert.deepEqual(createAppServerInitializeParams(clientInfo), {
+    clientInfo,
+  })
+
+  assert.deepEqual(createAppServerInitializeParams(clientInfo, { experimentalApi: false }), {
+    clientInfo,
+  })
+
+  assert.deepEqual(createAppServerInitializeParams(clientInfo, { experimentalApi: true }), {
+    clientInfo,
+    capabilities: {
+      experimentalApi: true,
+    },
+  })
+
+  assert.deepEqual(createAppServerInitializeParams(clientInfo, {
+    optOutNotificationMethods: ['thread/started', '', 3, 'item/agentMessage/delta'],
+  }), {
+    clientInfo,
+    capabilities: {
+      optOutNotificationMethods: ['thread/started', 'item/agentMessage/delta'],
+    },
+  })
 }
 
 function smokeAppServerNotificationDiagnostics(): void {

@@ -88,6 +88,7 @@ import {
   createAppServerRpcSuccessResponse,
 } from './appServerJsonRpcWire.js'
 import { createAppServerClientInfo, readPackageVersion } from './appServerClientInfo.js'
+import { createAppServerInitializeParams } from './appServerInitialization.js'
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
 import { AppServerMethodCatalog } from './appServerMethodCatalog.js'
@@ -1238,7 +1239,7 @@ class AppServerProcess {
 
     this.initializePromise = (async () => {
       const clientInfo = createAppServerClientInfo(await readPackageVersion())
-      await this.call('initialize', { clientInfo })
+      await this.call('initialize', createAppServerInitializeParams(clientInfo))
       this.sendLine(createAppServerRpcNotification('initialized'))
       this.initialized = true
     })().finally(() => {
