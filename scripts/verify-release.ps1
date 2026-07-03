@@ -82,6 +82,62 @@ function Get-PowerShellCommand {
   throw "PowerShell executable not found"
 }
 
+function Get-Sha256Hex {
+  param(
+    [string]$Path
+  )
+
+  $fileHashCommand = Get-Command Get-FileHash -ErrorAction SilentlyContinue
+  if ($null -ne $fileHashCommand) {
+    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+  }
+
+  $stream = [System.IO.File]::OpenRead($Path)
+  try {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $bytes = $sha256.ComputeHash($stream)
+      return ([BitConverter]::ToString($bytes) -replace "-", "").ToLowerInvariant()
+    } finally {
+      $sha256.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
+function Assert-ChecksumMatches {
+  param(
+    [string]$ZipPath,
+    [string]$ChecksumPath
+  )
+
+  if (-not (Test-Path -LiteralPath $ChecksumPath -PathType Leaf)) {
+    throw "Release package smoke failed: missing $ChecksumPath"
+  }
+
+  $expectedFileName = [System.IO.Path]::GetFileName($ZipPath)
+  $checksumLine = (Get-Content -LiteralPath $ChecksumPath -TotalCount 1)
+  if ([string]::IsNullOrWhiteSpace($checksumLine)) {
+    throw "Release package smoke failed: checksum file is empty"
+  }
+
+  $match = [regex]::Match($checksumLine.Trim(), "^(?<hash>[0-9a-fA-F]{64})\s+\*?(?<file>.+)$")
+  if (-not $match.Success) {
+    throw "Release package smoke failed: checksum file has unexpected format"
+  }
+
+  $actualHash = Get-Sha256Hex -Path $ZipPath
+  $checksumHash = $match.Groups["hash"].Value.ToLowerInvariant()
+  $checksumFileName = $match.Groups["file"].Value.Trim()
+  if ($checksumHash -ne $actualHash) {
+    throw "Release package smoke failed: checksum hash does not match zip"
+  }
+  if ($checksumFileName -ne $expectedFileName) {
+    throw "Release package smoke failed: checksum file name '$checksumFileName' does not match '$expectedFileName'"
+  }
+}
+
 function Assert-ZipContains {
   param(
     [string]$ZipPath,
@@ -192,9 +248,7 @@ if (-not $SkipPackageSmoke) {
   $bundleName = "CX-Codex-$packageVersion"
   $zipPath = Join-Path $packageSmokeDir "$bundleName.zip"
   $checksumPath = Join-Path $packageSmokeDir "$bundleName.sha256"
-  if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) {
-    throw "Release package smoke failed: missing $checksumPath"
-  }
+  Assert-ChecksumMatches -ZipPath $zipPath -ChecksumPath $checksumPath
 
   Assert-ZipContains -ZipPath $zipPath -RequiredEntries @(
     "README.md",

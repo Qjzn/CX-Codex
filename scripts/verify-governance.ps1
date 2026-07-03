@@ -167,6 +167,8 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "spawnSync(process.execPath",
   "Release package smoke",
   "release package smoke ok",
+  "Assert-ChecksumMatches",
+  "checksum hash does not match zip",
   "Assert-ZipContains",
   "docs\app-server-protocol-matrix.zh-CN.md",
   "docs\dependency-maintenance.zh-CN.md",

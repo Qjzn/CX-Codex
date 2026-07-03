@@ -1851,6 +1851,36 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Release package checksum 内容校验
+
+#### Prerequisites
+- 当前仓库包含 `scripts/verify-release.ps1` 和 `scripts/package-release.ps1`。
+- 本机可运行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:governance`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 检查 release gate 输出包含 `Release package smoke` 和 `release package smoke ok`。
+5. 检查 `scripts/verify-release.ps1`，确认 release smoke 会读取 `.sha256` 文件，校验第一列 SHA256 与 zip 实际哈希一致，并校验 checksum 文件名与 zip 文件名一致。
+
+#### Expected Results
+- Release package smoke 不只检查 `.sha256` 文件存在，还会检查 checksum 内容和 zip 真实哈希一致。
+- checksum 文件为空、格式错误、哈希不一致或文件名不一致时，release gate 会失败。
+- 治理门禁会阻止 checksum 内容校验被删弱。
+
+#### Rollback/Cleanup
+- 如需回滚，撤销 `scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和本测试章节中的相关引用。
+- 可删除 `output\release-package-smoke` 临时输出。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁验证：`npm.cmd run verify:governance` 通过，确认 checksum 内容校验已被 governance 锁定。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含构建、server module smoke、普通 CLI smoke、CLI CJS launcher smoke、Release package smoke 和 schema audit skip。
+- 2026-07-04 Release package smoke：输出 `release package smoke ok`，确认 `.sha256` 文件内容与 zip 实际 SHA256 和文件名一致。
+
+---
+
 ### Feature: 开源社区行为准则
 
 #### Prerequisites
