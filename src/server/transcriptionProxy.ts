@@ -165,17 +165,69 @@ function appendMultipartTextField(body: Buffer, boundary: string, name: string, 
   return Buffer.concat([prefix, field, suffix])
 }
 
-function prepareOpenAiTranscribeBody(body: Buffer, contentType: string): Buffer {
+function getMultipartHeaderEnd(body: Buffer, fromIndex: number, toIndex: number): number {
+  const headerEnd = body.indexOf(Buffer.from('\r\n\r\n'), fromIndex)
+  return headerEnd >= 0 && headerEnd < toIndex ? headerEnd : -1
+}
+
+function getMultipartPartFieldName(headers: string): string {
+  const disposition = headers.match(/^content-disposition:\s*form-data\b([^\r\n]*)$/imu)?.[1] ?? ''
+  const quoted = disposition.match(/(?:^|;)\s*name="([^"]+)"/iu)?.[1]
+  if (quoted) return quoted
+  return disposition.match(/(?:^|;)\s*name=([^;\s]+)/iu)?.[1] ?? ''
+}
+
+function removeMultipartTextFields(body: Buffer, boundary: string, fieldNames: Set<string>): Buffer {
+  const delimiter = Buffer.from(`--${boundary}`)
+  const chunks: Buffer[] = []
+  let cursor = 0
+
+  while (cursor < body.length) {
+    const boundaryIndex = body.indexOf(delimiter, cursor)
+    if (boundaryIndex < 0) {
+      chunks.push(body.subarray(cursor))
+      break
+    }
+
+    chunks.push(body.subarray(cursor, boundaryIndex))
+    const afterBoundary = boundaryIndex + delimiter.length
+    if (body.subarray(afterBoundary, afterBoundary + 2).equals(Buffer.from('--'))) {
+      chunks.push(body.subarray(boundaryIndex))
+      break
+    }
+
+    const nextBoundaryIndex = body.indexOf(delimiter, afterBoundary)
+    if (nextBoundaryIndex < 0) {
+      chunks.push(body.subarray(boundaryIndex))
+      break
+    }
+
+    const headerStart = body.subarray(afterBoundary, afterBoundary + 2).equals(Buffer.from('\r\n'))
+      ? afterBoundary + 2
+      : afterBoundary
+    const headerEnd = getMultipartHeaderEnd(body, headerStart, nextBoundaryIndex)
+    const fieldName = headerEnd >= 0
+      ? getMultipartPartFieldName(body.subarray(headerStart, headerEnd).toString('utf8'))
+      : ''
+    if (fieldNames.has(fieldName)) {
+      cursor = nextBoundaryIndex
+      continue
+    }
+
+    chunks.push(body.subarray(boundaryIndex, nextBoundaryIndex))
+    cursor = nextBoundaryIndex
+  }
+
+  return Buffer.concat(chunks)
+}
+
+export function prepareOpenAiTranscribeBody(body: Buffer, contentType: string): Buffer {
   const boundary = getMultipartBoundary(contentType)
   if (!boundary) return body
 
-  let nextBody = body
-  if (!body.includes(Buffer.from('name="model"'))) {
-    nextBody = appendMultipartTextField(nextBody, boundary, 'model', getOpenAiTranscribeModel())
-  }
-  if (!body.includes(Buffer.from('name="response_format"'))) {
-    nextBody = appendMultipartTextField(nextBody, boundary, 'response_format', DEFAULT_OPENAI_TRANSCRIBE_RESPONSE_FORMAT)
-  }
+  let nextBody = removeMultipartTextFields(body, boundary, new Set(['model', 'response_format']))
+  nextBody = appendMultipartTextField(nextBody, boundary, 'model', getOpenAiTranscribeModel())
+  nextBody = appendMultipartTextField(nextBody, boundary, 'response_format', DEFAULT_OPENAI_TRANSCRIBE_RESPONSE_FORMAT)
   return nextBody
 }
 

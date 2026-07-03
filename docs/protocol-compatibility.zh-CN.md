@@ -105,4 +105,4 @@ npm run audit:app-server-schemas
 
 ## 与其他 OpenAI API 的边界
 
-通用 OpenAI API 只用于补充能力。例如语音转写使用 `gpt-4o-transcribe` / `gpt-4o-mini-transcribe`，但不能替代 App Server 的线程协议。接入这些 API 时，应保持独立配置、独立错误处理和最小权限环境变量，避免把 Platform API key 与 Codex App Server 认证混用。诊断接口可以展示转写 provider、模型、上传上限和 endpoint host/path，但不得展示 API key、Authorization、Cookie 或 URL query。
+通用 OpenAI API 只用于补充能力。例如语音转写使用 `gpt-4o-transcribe` / `gpt-4o-mini-transcribe`，但不能替代 App Server 的线程协议。接入这些 API 时，应保持独立配置、独立错误处理和最小权限环境变量，避免把 Platform API key 与 Codex App Server 认证混用。官方转写 multipart 由服务端规范化 `model` 和 `response_format=json`，避免客户端字段把官方模型带到不支持的响应格式。诊断接口可以展示转写 provider、模型、上传上限和 endpoint host/path，但不得展示 API key、Authorization、Cookie 或 URL query。

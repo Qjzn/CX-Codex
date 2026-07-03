@@ -146,6 +146,7 @@ import {
   getOpenAiTranscribeModel,
   getTranscribeRequestBodyLimitBytes,
   getTranscriptionProxyConfigSnapshot,
+  prepareOpenAiTranscribeBody,
 } from '../src/server/transcriptionProxy.js'
 
 const originalNow = Date.now
@@ -158,6 +159,7 @@ try {
   smokeAppServerStatusDiagnostics()
   await smokeAppServerSchemaAuditSummary()
   smokeTranscriptionProxyConfig()
+  smokeTranscriptionMultipartDefaults()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
   await smokeAppServerRpcQueue()
@@ -565,6 +567,40 @@ function smokeTranscriptionProxyConfig(): void {
         path: '/v1/audio/transcriptions',
       },
     })
+  })
+}
+
+function smokeTranscriptionMultipartDefaults(): void {
+  const boundary = '----cx-codex-smoke-boundary'
+  const body = Buffer.from(
+    `--${boundary}\r\n` +
+      'Content-Disposition: form-data; name="file"; filename="hello.wav"\r\n' +
+      'Content-Type: audio/wav\r\n\r\n' +
+      'RIFF_AUDIO_PAYLOAD\r\n' +
+      `--${boundary}\r\n` +
+      'Content-Disposition: form-data; name="model"\r\n\r\n' +
+      'whisper-1\r\n' +
+      `--${boundary}\r\n` +
+      'Content-Disposition: form-data; name="response_format"\r\n\r\n' +
+      'text\r\n' +
+      `--${boundary}--\r\n`,
+  )
+
+  withTranscriptionEnv({
+    OPENAI_TRANSCRIBE_MODEL: undefined,
+    CX_CODEX_OPENAI_TRANSCRIBE_MODEL: 'gpt-4o-mini-transcribe',
+    CODEXUI_OPENAI_TRANSCRIBE_MODEL: undefined,
+  }, () => {
+    const prepared = prepareOpenAiTranscribeBody(
+      body,
+      `multipart/form-data; boundary=${boundary}`,
+    ).toString('utf8')
+    assert.match(prepared, /name="file"; filename="hello\.wav"/)
+    assert.match(prepared, /RIFF_AUDIO_PAYLOAD/)
+    assert.match(prepared, /name="model"\r\n\r\ngpt-4o-mini-transcribe\r\n/)
+    assert.match(prepared, /name="response_format"\r\n\r\njson\r\n/)
+    assert.doesNotMatch(prepared, /name="model"\r\n\r\nwhisper-1\r\n/)
+    assert.doesNotMatch(prepared, /name="response_format"\r\n\r\ntext\r\n/)
   })
 }
 
