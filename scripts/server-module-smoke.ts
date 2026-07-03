@@ -540,7 +540,7 @@ async function smokeThreadTitleCache(): Promise<void> {
   assert.deepEqual(normalizeThreadTitleCache(null), { titles: {}, order: [] })
   assert.deepEqual(normalizeThreadTitleCache({
     titles: { a: 'Alpha', b: '', c: 7 },
-    order: ['a', 'missing', '', 9],
+    order: ['a', 'missing', 'a', '', 9],
   }), {
     titles: { a: 'Alpha' },
     order: ['a', 'missing'],

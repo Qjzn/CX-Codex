@@ -32,7 +32,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return []
-  return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+  const normalized: string[] = []
+  for (const item of value) {
+    if (typeof item === 'string' && item.length > 0 && !normalized.includes(item)) {
+      normalized.push(item)
+    }
+  }
+  return normalized
 }
 
 function getSessionIndexFileSignature(stats: { mtimeMs: number; size: number }): string {
