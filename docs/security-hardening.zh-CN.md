@@ -33,6 +33,7 @@
 ## OpenAI API Key 与语音转写
 
 - 官方语音转写只从环境变量或用户本机配置读取 API key，不写入前端包、截图、日志或 Issue。
+- `/codex-api/health`、`/codex-api/diagnostics` 和诊断页只能展示 provider、模型、上传上限、endpoint host/path 等脱敏配置；不得展示 API key、Authorization header、Cookie 或 URL query。
 - 转写上传保持服务端大小限制，避免把超大请求继续代理到上游。
 - 未配置官方 API key 时可以回退到既有 Codex / ChatGPT 登录态代理，但不得记录或暴露登录态凭据。
 

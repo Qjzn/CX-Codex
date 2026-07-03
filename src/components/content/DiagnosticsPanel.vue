@@ -65,6 +65,31 @@
           </div>
         </dl>
       </section>
+
+      <section class="diagnostics-section">
+        <div class="diagnostics-section-header">
+          <h2>语音转写</h2>
+          <span class="diagnostics-badge" :data-tone="transcriptionTone">{{ transcriptionLabel }}</span>
+        </div>
+        <dl class="diagnostics-kv">
+          <div>
+            <dt>模型</dt>
+            <dd class="diagnostics-mono">{{ transcription.model || '-' }}</dd>
+          </div>
+          <div>
+            <dt>响应</dt>
+            <dd>{{ transcription.responseFormat }}</dd>
+          </div>
+          <div>
+            <dt>上限</dt>
+            <dd>{{ transcription.requestBodyLimitMiB }} MiB</dd>
+          </div>
+          <div>
+            <dt>Endpoint</dt>
+            <dd class="diagnostics-mono">{{ transcriptionEndpointLabel }}</dd>
+          </div>
+        </dl>
+      </section>
     </div>
 
     <section class="diagnostics-section diagnostics-section-wide">
@@ -218,12 +243,27 @@ type UnknownNotificationDiagnostics = {
   turnId: string
 }
 
+type TranscriptionDiagnostics = {
+  provider: 'openai' | 'chatgpt'
+  officialApiConfigured: boolean
+  model: string
+  responseFormat: 'json'
+  requestBodyLimitBytes: number
+  requestBodyLimitMiB: number
+  endpoint: {
+    isDefault: boolean
+    host: string
+    path: string
+  }
+}
+
 type DiagnosticsData = {
   appServer: AppServerDiagnostics
   notificationDiagnostics?: {
     unknownNotificationCount: number
     recentUnknownNotifications: UnknownNotificationDiagnostics[]
   }
+  transcription?: TranscriptionDiagnostics
   runtimeStore: RuntimeStoreDiagnostics
   runtime: {
     uncertainRequests: RuntimeRequestDiagnostics[]
@@ -252,6 +292,20 @@ const emptyRuntimeStore: RuntimeStoreDiagnostics = {
   snapshotCount: 0,
 }
 
+const emptyTranscription: TranscriptionDiagnostics = {
+  provider: 'chatgpt',
+  officialApiConfigured: false,
+  model: 'gpt-4o-transcribe',
+  responseFormat: 'json',
+  requestBodyLimitBytes: 26 * 1024 * 1024,
+  requestBodyLimitMiB: 26,
+  endpoint: {
+    isDefault: true,
+    host: 'api.openai.com',
+    path: '/v1/audio/transcriptions',
+  },
+}
+
 const diagnostics = ref<DiagnosticsData | null>(null)
 const error = ref('')
 const isLoading = ref(false)
@@ -259,6 +313,7 @@ let refreshTimer: number | null = null
 
 const appServer = computed(() => diagnostics.value?.appServer ?? emptyAppServer)
 const runtimeStore = computed(() => diagnostics.value?.runtimeStore ?? emptyRuntimeStore)
+const transcription = computed(() => diagnostics.value?.transcription ?? emptyTranscription)
 const uncertainRequests = computed(() => diagnostics.value?.runtime.uncertainRequests ?? [])
 const recentEvents = computed(() => diagnostics.value?.runtime.recentEvents ?? [])
 const slowRpcCalls = computed(() => appServer.value.rpcDiagnostics?.recentSlowRpc ?? [])
@@ -274,6 +329,10 @@ const appServerTone = computed<Tone>(() => {
 
 const runtimeTone = computed<Tone>(() => (
   runtimeStore.value.uncertainRequestCount > 0 ? 'warning' : 'ok'
+))
+
+const transcriptionTone = computed<Tone>(() => (
+  transcription.value.officialApiConfigured ? 'ok' : 'neutral'
 ))
 
 const overallTone = computed<Tone>(() => {
@@ -300,6 +359,16 @@ const runtimeLabel = computed(() => (
     ? `${runtimeStore.value.uncertainRequestCount} 个待收敛`
     : '已收敛'
 ))
+
+const transcriptionLabel = computed(() => (
+  transcription.value.provider === 'openai' ? '官方 API' : '登录态回退'
+))
+
+const transcriptionEndpointLabel = computed(() => {
+  const endpoint = transcription.value.endpoint
+  const marker = endpoint.isDefault ? '默认' : '自定义'
+  return `${marker} ${endpoint.host}${endpoint.path}`
+})
 
 const lastLoadedLabel = computed(() => (
   diagnostics.value?.timestamp ? `更新于 ${formatTime(diagnostics.value.timestamp)}` : ''

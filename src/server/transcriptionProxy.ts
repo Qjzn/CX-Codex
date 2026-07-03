@@ -7,9 +7,26 @@ export type TranscriptionProxyResult = {
   body: string
 }
 
+export type TranscriptionEndpointSnapshot = {
+  isDefault: boolean
+  host: string
+  path: string
+}
+
+export type TranscriptionProxyConfigSnapshot = {
+  provider: 'openai' | 'chatgpt'
+  officialApiConfigured: boolean
+  model: string
+  responseFormat: 'json'
+  requestBodyLimitBytes: number
+  requestBodyLimitMiB: number
+  endpoint: TranscriptionEndpointSnapshot
+}
+
 const CHATGPT_TRANSCRIBE_URL = 'https://chatgpt.com/backend-api/transcribe'
 const OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions'
 const DEFAULT_OPENAI_TRANSCRIBE_MODEL = 'gpt-4o-transcribe'
+const DEFAULT_OPENAI_TRANSCRIBE_RESPONSE_FORMAT = 'json'
 const TRANSCRIBE_REQUEST_BODY_LIMIT_BYTES = 26 * 1024 * 1024
 
 let curlImpersonateAvailable: boolean | null = null
@@ -82,7 +99,7 @@ export function getOpenAiTranscribeApiKey(): string {
   return readTranscribeEnv('OPENAI_API_KEY')
 }
 
-function getOpenAiTranscribeModel(): string {
+export function getOpenAiTranscribeModel(): string {
   return readTranscribeEnv('OPENAI_TRANSCRIBE_MODEL') || DEFAULT_OPENAI_TRANSCRIBE_MODEL
 }
 
@@ -94,6 +111,37 @@ export function getTranscribeRequestBodyLimitBytes(): number {
   const configured = Number.parseInt(readTranscribeEnv('OPENAI_TRANSCRIBE_MAX_BYTES'), 10)
   if (Number.isFinite(configured) && configured > 0) return configured
   return TRANSCRIBE_REQUEST_BODY_LIMIT_BYTES
+}
+
+function snapshotTranscribeEndpoint(url: string): TranscriptionEndpointSnapshot {
+  try {
+    const parsed = new URL(url)
+    return {
+      isDefault: url === OPENAI_TRANSCRIBE_URL,
+      host: parsed.host,
+      path: parsed.pathname,
+    }
+  } catch {
+    return {
+      isDefault: false,
+      host: 'invalid-url',
+      path: '',
+    }
+  }
+}
+
+export function getTranscriptionProxyConfigSnapshot(): TranscriptionProxyConfigSnapshot {
+  const officialApiConfigured = getOpenAiTranscribeApiKey().length > 0
+  const requestBodyLimitBytes = getTranscribeRequestBodyLimitBytes()
+  return {
+    provider: officialApiConfigured ? 'openai' : 'chatgpt',
+    officialApiConfigured,
+    model: getOpenAiTranscribeModel(),
+    responseFormat: DEFAULT_OPENAI_TRANSCRIBE_RESPONSE_FORMAT,
+    requestBodyLimitBytes,
+    requestBodyLimitMiB: Math.round((requestBodyLimitBytes / 1024 / 1024) * 10) / 10,
+    endpoint: snapshotTranscribeEndpoint(getOpenAiTranscribeUrl()),
+  }
 }
 
 function getMultipartBoundary(contentType: string): string {
@@ -126,7 +174,7 @@ function prepareOpenAiTranscribeBody(body: Buffer, contentType: string): Buffer 
     nextBody = appendMultipartTextField(nextBody, boundary, 'model', getOpenAiTranscribeModel())
   }
   if (!body.includes(Buffer.from('name="response_format"'))) {
-    nextBody = appendMultipartTextField(nextBody, boundary, 'response_format', 'json')
+    nextBody = appendMultipartTextField(nextBody, boundary, 'response_format', DEFAULT_OPENAI_TRANSCRIBE_RESPONSE_FORMAT)
   }
   return nextBody
 }

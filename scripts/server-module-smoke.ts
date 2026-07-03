@@ -126,6 +126,12 @@ import {
   resolveProjectRoot,
   suggestProjectRoot,
 } from '../src/server/projectRoots.js'
+import {
+  getOpenAiTranscribeApiKey,
+  getOpenAiTranscribeModel,
+  getTranscribeRequestBodyLimitBytes,
+  getTranscriptionProxyConfigSnapshot,
+} from '../src/server/transcriptionProxy.js'
 
 const originalNow = Date.now
 
@@ -134,6 +140,7 @@ try {
   smokePendingServerRequests()
   smokeAppServerJsonRpcWire()
   smokeAppServerNotificationDiagnostics()
+  smokeTranscriptionProxyConfig()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
   await smokeAppServerRpcQueue()
@@ -277,6 +284,68 @@ function smokeAppServerNotificationDiagnostics(): void {
 
   diagnostics.clear()
   assert.equal(diagnostics.snapshot().unknownNotificationCount, 0)
+}
+
+function smokeTranscriptionProxyConfig(): void {
+  withTranscriptionEnv({
+    OPENAI_API_KEY: undefined,
+    OPENAI_TRANSCRIBE_MODEL: undefined,
+    OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+    OPENAI_TRANSCRIBE_URL: undefined,
+    CX_CODEX_OPENAI_API_KEY: undefined,
+    CX_CODEX_OPENAI_TRANSCRIBE_MODEL: undefined,
+    CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+    CX_CODEX_OPENAI_TRANSCRIBE_URL: undefined,
+    CODEXUI_OPENAI_API_KEY: undefined,
+    CODEXUI_OPENAI_TRANSCRIBE_MODEL: undefined,
+    CODEXUI_OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+    CODEXUI_OPENAI_TRANSCRIBE_URL: undefined,
+  }, () => {
+    assert.equal(getOpenAiTranscribeApiKey(), '')
+    assert.equal(getOpenAiTranscribeModel(), 'gpt-4o-transcribe')
+    assert.equal(getTranscribeRequestBodyLimitBytes(), 26 * 1024 * 1024)
+    assert.deepEqual(getTranscriptionProxyConfigSnapshot(), {
+      provider: 'chatgpt',
+      officialApiConfigured: false,
+      model: 'gpt-4o-transcribe',
+      responseFormat: 'json',
+      requestBodyLimitBytes: 26 * 1024 * 1024,
+      requestBodyLimitMiB: 26,
+      endpoint: {
+        isDefault: true,
+        host: 'api.openai.com',
+        path: '/v1/audio/transcriptions',
+      },
+    })
+  })
+
+  withTranscriptionEnv({
+    OPENAI_API_KEY: 'sk-default',
+    OPENAI_TRANSCRIBE_MODEL: 'whisper-1',
+    OPENAI_TRANSCRIBE_MAX_BYTES: '1024',
+    OPENAI_TRANSCRIBE_URL: 'https://ignored.example/v1/audio/transcriptions',
+    CX_CODEX_OPENAI_API_KEY: 'sk-prefixed',
+    CX_CODEX_OPENAI_TRANSCRIBE_MODEL: 'gpt-4o-mini-transcribe',
+    CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES: '2048',
+    CX_CODEX_OPENAI_TRANSCRIBE_URL: 'https://audio.example.test/v1/audio/transcriptions?token=secret',
+  }, () => {
+    assert.equal(getOpenAiTranscribeApiKey(), 'sk-prefixed')
+    assert.equal(getOpenAiTranscribeModel(), 'gpt-4o-mini-transcribe')
+    assert.equal(getTranscribeRequestBodyLimitBytes(), 2048)
+    assert.deepEqual(getTranscriptionProxyConfigSnapshot(), {
+      provider: 'openai',
+      officialApiConfigured: true,
+      model: 'gpt-4o-mini-transcribe',
+      responseFormat: 'json',
+      requestBodyLimitBytes: 2048,
+      requestBodyLimitMiB: 0,
+      endpoint: {
+        isDefault: false,
+        host: 'audio.example.test',
+        path: '/v1/audio/transcriptions',
+      },
+    })
+  })
 }
 
 async function smokeAppServerRpcCache(): Promise<void> {
@@ -1323,6 +1392,33 @@ function smokeRuntimeStateStore(): void {
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve()
   await Promise.resolve()
+}
+
+function withTranscriptionEnv(
+  values: Record<string, string | undefined>,
+  callback: () => void,
+): void {
+  const previous = new Map<string, string | undefined>()
+  for (const key of Object.keys(values)) {
+    previous.set(key, process.env[key])
+    const value = values[key]
+    if (value === undefined) {
+      delete process.env[key]
+    } else {
+      process.env[key] = value
+    }
+  }
+  try {
+    callback()
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = value
+      }
+    }
+  }
 }
 
 function readThreadIdFromPayload(payload: unknown): string {

@@ -43,6 +43,7 @@ import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import {
   getOpenAiTranscribeApiKey,
   getTranscribeRequestBodyLimitBytes,
+  getTranscriptionProxyConfigSnapshot,
   proxyChatGptTranscribe,
   proxyOpenAiTranscribe,
   type TranscriptionProxyResult,
@@ -2662,6 +2663,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           data: {
             appServer: appServer.getStatus(),
             notificationDiagnostics: notificationDiagnostics.snapshot(),
+            transcription: getTranscriptionProxyConfigSnapshot(),
             runtimeStore: runtimeStore.getHealth(),
             timestamp: new Date().toISOString(),
           },
@@ -2697,6 +2699,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           data: {
             appServer: appServer.getStatus(),
             notificationDiagnostics: notificationDiagnostics.snapshot(),
+            transcription: getTranscriptionProxyConfigSnapshot(),
             runtimeStore: runtimeHealth,
             runtime: {
               uncertainRequests,

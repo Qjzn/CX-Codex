@@ -177,6 +177,7 @@ npx cx-codex --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
 - `CX_CODEX_OPENAI_API_KEY` 或 `OPENAI_API_KEY`：配置后语音转写优先走 OpenAI 官方音频转写 API。
 - `CX_CODEX_OPENAI_TRANSCRIBE_MODEL` 或 `OPENAI_TRANSCRIBE_MODEL`：可覆盖默认转写模型，默认 `gpt-4o-transcribe`。
 - `CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES` 或 `OPENAI_TRANSCRIBE_MAX_BYTES`：可覆盖转写上传请求体上限，默认按官方 25MB 文件限制预留 multipart 开销。
+- 诊断页会显示当前转写 provider、模型、上传上限和 endpoint 主机/路径，但不会显示 API key、Authorization 或 URL query。
 - `CX_CODEX_JSON_BODY_MAX_BYTES` 或 `JSON_BODY_MAX_BYTES`：可覆盖普通 JSON API 请求体上限，默认 2MiB。
 - `CX_CODEX_FILE_UPLOAD_MAX_BYTES` 或 `FILE_UPLOAD_MAX_BYTES`：可覆盖普通文件上传请求体上限，默认 50MiB。
 - 未配置 API key 时，语音转写仍会回退到现有 Codex / ChatGPT 登录态代理链路。

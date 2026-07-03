@@ -1999,6 +1999,41 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: 语音转写安全诊断快照
+
+#### Prerequisites
+- 当前仓库包含 `src/server/transcriptionProxy.ts` 和诊断页 `src/components/content/DiagnosticsPanel.vue`。
+- 本机可运行 `npm.cmd run verify:server-modules` 和 `npm.cmd run build`。
+- 如需验证官方 API provider，可临时配置 `CX_CODEX_OPENAI_API_KEY` 或 `OPENAI_API_KEY`；不要把真实 key 写入仓库或截图。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`，确认 server smoke 覆盖默认转写配置、`CX_CODEX_` 环境变量优先级、请求体上限和 endpoint 脱敏。
+3. 执行 `npm.cmd run build`。
+4. 执行 `node dist-cli\index.js --help`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 手工检查 `/codex-api/health` 和 `/codex-api/diagnostics` 的 `data.transcription`，确认只包含 provider、officialApiConfigured、model、responseFormat、requestBodyLimitBytes、requestBodyLimitMiB、endpoint.host、endpoint.path 和 endpoint.isDefault。
+7. 打开诊断页，确认“语音转写”显示官方 API 或登录态回退、模型、响应格式、上传上限和脱敏 endpoint。
+
+#### Expected Results
+- 未配置官方 API key 时，`provider` 为 `chatgpt`，诊断页显示“登录态回退”，整体健康状态不因此变成告警。
+- 配置 `CX_CODEX_OPENAI_API_KEY` 或 `OPENAI_API_KEY` 后，`provider` 为 `openai`，诊断页显示“官方 API”。
+- 自定义 `CX_CODEX_OPENAI_TRANSCRIBE_URL` 时，诊断快照只展示 host 和 path，不展示 URL query、API key、Authorization、Cookie 或其他凭据。
+- 默认模型仍为 `gpt-4o-transcribe`，默认 `responseFormat` 为 `json`，默认上传上限仍按官方 25MB 文件限制预留 multipart 开销。
+
+#### Rollback/Cleanup
+- 如需回滚，移除诊断快照函数、health/diagnostics 中的 `transcription` 字段、诊断页“语音转写”区块，以及 server smoke 中的转写配置断言。
+- 临时设置过的 `CX_CODEX_OPENAI_API_KEY`、`OPENAI_API_KEY`、`CX_CODEX_OPENAI_TRANSCRIBE_URL` 等环境变量应在验证后清理。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CLI smoke：`node dist-cli\index.js --help` 通过并输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke 和 CLI smoke。
+
+---
+
 ### Feature: Composer file search 模块化
 
 #### Prerequisites
