@@ -148,7 +148,7 @@
             <tr v-for="request in pendingServerRequests" :key="request.id">
               <td class="diagnostics-mono">#{{ request.id }}</td>
               <td class="diagnostics-mono">{{ request.method }}</td>
-              <td>{{ formatServerRequestKind(request.method) }}</td>
+              <td>{{ formatServerRequestKind(request.kind) }}</td>
               <td>{{ formatAge(request.receivedAtIso) }}</td>
             </tr>
           </tbody>
@@ -318,6 +318,7 @@ type RuntimeEventDiagnostics = {
 type PendingServerRequestDiagnostics = {
   id: number
   method: string
+  kind: 'permission' | 'approval' | 'elicitation' | 'tool' | 'request'
   receivedAtIso: string
 }
 
@@ -617,12 +618,11 @@ function formatTime(value: string): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
-function formatServerRequestKind(method: string): string {
-  const normalized = method.toLowerCase()
-  if (normalized.includes('permission')) return '权限'
-  if (normalized.includes('approval')) return '审批'
-  if (normalized.includes('elicitation')) return '补充信息'
-  if (normalized.includes('tool')) return '工具'
+function formatServerRequestKind(kind: PendingServerRequestDiagnostics['kind']): string {
+  if (kind === 'permission') return '权限'
+  if (kind === 'approval') return '审批'
+  if (kind === 'elicitation') return '补充信息'
+  if (kind === 'tool') return '工具'
   return '请求'
 }
 

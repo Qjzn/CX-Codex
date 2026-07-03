@@ -114,6 +114,7 @@ import {
   evaluateServerRequestPolicy,
   type WebBridgeSettings,
 } from './serverRequestPolicy.js'
+import { toPendingServerRequestDiagnosticsList } from './serverRequestDiagnostics.js'
 import {
   DEFAULT_WEB_BRIDGE_SETTINGS,
   normalizeWebBridgeSettings,
@@ -2722,11 +2723,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
               uncertainRequests,
               recentEvents,
             },
-            pendingServerRequests: appServer.listPendingServerRequests().map((request) => ({
-              id: request.id,
-              method: request.method,
-              receivedAtIso: request.receivedAtIso,
-            })),
+            pendingServerRequests: toPendingServerRequestDiagnosticsList(appServer.listPendingServerRequests()),
             timestamp: new Date().toISOString(),
           },
         })

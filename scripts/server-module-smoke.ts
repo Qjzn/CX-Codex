@@ -49,6 +49,11 @@ import {
   shouldAutoApproveServerRequest,
 } from '../src/server/serverRequestPolicy.js'
 import {
+  classifyServerRequestMethod,
+  toPendingServerRequestDiagnostics,
+  toPendingServerRequestDiagnosticsList,
+} from '../src/server/serverRequestDiagnostics.js'
+import {
   DEFAULT_WEB_BRIDGE_SETTINGS,
   normalizePermissionDecision,
   normalizeWebBridgeSettings,
@@ -159,6 +164,7 @@ try {
   smokeAppServerStderrLogger()
   smokePlanModeTurnStore()
   smokeServerRequestPolicy()
+  smokeServerRequestDiagnostics()
   await smokeCommandRunner()
   await smokeFileUpload()
   await smokeComposerFileSearch()
@@ -213,6 +219,33 @@ function smokePendingServerRequests(): void {
   assert.equal(store.count, 1)
   store.clear()
   assert.equal(store.count, 0)
+}
+
+function smokeServerRequestDiagnostics(): void {
+  assert.equal(classifyServerRequestMethod('item/commandExecution/requestPermission'), 'permission')
+  assert.equal(classifyServerRequestMethod('item/fileChange/requestApproval'), 'approval')
+  assert.equal(classifyServerRequestMethod('mcp/server/elicitation/request'), 'elicitation')
+  assert.equal(classifyServerRequestMethod('item/tool/call'), 'tool')
+  assert.equal(classifyServerRequestMethod('server/unknown/request'), 'request')
+
+  const request = {
+    id: 9,
+    method: 'item/fileChange/requestApproval',
+    params: {
+      prompt: 'do not expose this',
+      path: 'C:\\secret\\file.txt',
+    },
+    receivedAtIso: '2026-07-03T00:00:00.000Z',
+  }
+  const diagnostics = toPendingServerRequestDiagnostics(request)
+  assert.deepEqual(diagnostics, {
+    id: 9,
+    method: 'item/fileChange/requestApproval',
+    kind: 'approval',
+    receivedAtIso: '2026-07-03T00:00:00.000Z',
+  })
+  assert.equal('params' in diagnostics, false)
+  assert.deepEqual(toPendingServerRequestDiagnosticsList([request]), [diagnostics])
 }
 
 function smokeAppServerJsonRpcWire(): void {

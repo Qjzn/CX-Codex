@@ -2567,15 +2567,15 @@ This file tracks manual regression and feature verification steps.
 3. 执行 `npm.cmd run build`。
 4. 执行 CJS 启动烟测：`node dist-cli\index.js --help`。
 5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
-6. 请求 `/codex-api/diagnostics`，确认 `data.pendingServerRequests` 只包含 `id`、`method`、`receivedAtIso`，不包含原始 `params`。
+6. 请求 `/codex-api/diagnostics`，确认 `data.pendingServerRequests` 只包含 `id`、`method`、`kind`、`receivedAtIso`，不包含原始 `params`。
 7. 打开诊断中心，确认存在“权限请求队列”区域。
 8. 当队列为空时，区域显示没有 App Server permission、approval 或 elicitation 请求；当存在 pending 请求时，表格展示 ID、方法、类型和等待时间。
 
 #### Expected Results
 - 诊断中心能直接看到 pending server request 数量，不需要查看日志或 Network payload。
 - pending 请求会让整体诊断状态进入 warning。
-- UI 仅展示脱敏字段，不显示原始 prompt、文件路径 payload、工具参数或凭据。
-- 方法名会按 permission、approval、elicitation、tool 做粗分类；未知方法显示为普通请求。
+- UI 仅展示服务端输出的脱敏字段，不显示原始 prompt、文件路径 payload、工具参数或凭据。
+- 服务端会按 permission、approval、elicitation、tool 做粗分类；未知方法显示为普通请求。
 - 不影响现有恢复队列、未知通知、未知状态和 schema audit 展示。
 
 #### Rollback/Cleanup Notes
@@ -2583,7 +2583,7 @@ This file tracks manual regression and feature verification steps.
 
 #### Regression Evidence
 - 2026-07-03 静态验证：`git diff --check` 通过。
-- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 pending server request 分类和脱敏输出不含 `params`。
 - 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
 - 2026-07-03 CJS 启动烟测：`node dist-cli\index.js --help` 通过，输出 `CX-Codex Web bridge for Codex app-server`。
 - 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace、package parse、governance docs、构建、server module smoke 和 CLI smoke。
