@@ -89,6 +89,7 @@ import {
 } from './appServerJsonRpcWire.js'
 import { createAppServerClientInfo, readPackageVersion } from './appServerClientInfo.js'
 import { createAppServerInitializeParams } from './appServerInitialization.js'
+import { createAppServerArgs } from './appServerLaunch.js'
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
 import { AppServerMethodCatalog } from './appServerMethodCatalog.js'
@@ -815,13 +816,7 @@ class AppServerProcess {
   private readonly threadTokenUsage = new ThreadTokenUsageStore()
   private readonly planModeTurns = new PlanModeTurnStore()
   private webBridgeSettings: WebBridgeSettings = DEFAULT_WEB_BRIDGE_SETTINGS
-  private readonly appServerArgs = [
-    'app-server',
-    '-c',
-    'approval_policy="never"',
-    '-c',
-    'sandbox_mode="danger-full-access"',
-  ]
+  private readonly appServerArgs = createAppServerArgs()
 
   private getCodexCommand(): string {
     const codexCommand = resolveCodexCommand()

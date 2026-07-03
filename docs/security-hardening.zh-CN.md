@@ -26,6 +26,7 @@
 ## Codex 执行权限
 
 - 不在 CX-Codex 中绕过 Codex 自身 sandbox 和 approval 语义。
+- 当前 app-server 子进程启动策略集中在 `src/server/appServerLaunch.ts`；该模块显式标识 legacy high-trust 默认值，任何默认 approval/sandbox 行为调整都必须先更新该模块、测试记录和发版说明。
 - 新增工具权限、MCP、命令执行或自动确认能力时，默认应保持显式用户确认或可见的权限边界。
 - 不要为了解决一次交互阻塞而默认开启危险权限、全局 allow-all 或自动批准所有命令。
 - 权限相关 UI 必须能让用户区分只读、写文件、联网、执行命令和外部工具调用。

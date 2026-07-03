@@ -9,6 +9,10 @@ import {
   readPackageVersion,
 } from '../src/server/appServerClientInfo.js'
 import { createAppServerInitializeParams } from '../src/server/appServerInitialization.js'
+import {
+  createAppServerArgs,
+  DEFAULT_APP_SERVER_LAUNCH_POLICY,
+} from '../src/server/appServerLaunch.js'
 import { AppServerLineBuffer } from '../src/server/appServerLineBuffer.js'
 import {
   AppServerNotificationDiagnostics,
@@ -178,6 +182,7 @@ try {
   smokePendingServerRequests()
   smokeAppServerJsonRpcWire()
   smokeAppServerInitialization()
+  smokeAppServerLaunch()
   smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
   smokeAppServerStatusDiagnostics()
@@ -356,6 +361,30 @@ function smokeAppServerInitialization(): void {
       optOutNotificationMethods: ['thread/started', 'item/agentMessage/delta'],
     },
   })
+}
+
+function smokeAppServerLaunch(): void {
+  assert.deepEqual(DEFAULT_APP_SERVER_LAUNCH_POLICY, {
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+  })
+  assert.deepEqual(createAppServerArgs(), [
+    'app-server',
+    '-c',
+    'approval_policy="never"',
+    '-c',
+    'sandbox_mode="danger-full-access"',
+  ])
+  assert.deepEqual(createAppServerArgs({
+    approvalPolicy: 'on-request',
+    sandboxMode: 'workspace-write',
+  }), [
+    'app-server',
+    '-c',
+    'approval_policy="on-request"',
+    '-c',
+    'sandbox_mode="workspace-write"',
+  ])
 }
 
 function smokeAppServerNotificationDiagnostics(): void {
