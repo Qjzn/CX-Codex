@@ -1600,3 +1600,31 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 故障注入验证：协议矩阵缺少完整 `Codex App Server` 术语时，`npm.cmd run verify:governance` 失败并指出缺失文本；补齐后通过。
 - 2026-07-03 治理门禁验证：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
 - 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `Governance docs check`、构建和 CLI smoke。
+
+---
+
+### Feature: Runtime payload helper 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/runtimePayload.ts`。
+- 本机可运行 `npm.cmd run build`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run build`。
+3. 执行 `node dist-cli/index.js --help`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 通过 `runtimePayload.ts` 导入 request id/hash、runtime payload summary、turn options 和 plan-mode fallback helper，不再内联这些纯函数。
+
+#### Expected Results
+- `src/server/runtimePayload.ts` 封装 runtime request id、prompt hash、turn options、payload summary 和 plan-mode 参数兼容逻辑。
+- `src/server/codexAppServerBridge.ts` 保留 runtime 状态机、HTTP 路由和 App Server RPC 编排，不再承载 runtime payload 纯函数实现。
+- 构建、CLI smoke、CJS 启动烟测和 release gate 均通过，证明拆分后的 ESM import 和 CLI 入口正常。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CLI smoke：`node dist-cli/index.js --help` 通过并输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建和 CLI smoke。
