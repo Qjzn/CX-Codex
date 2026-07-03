@@ -125,6 +125,22 @@ Assert-ContentIncludes "docs/security-hardening.zh-CN.md" @(
   "sandbox / approval"
 )
 
+Assert-ContentIncludes "docs/protocol-compatibility.zh-CN.md" @(
+  "Codex rich clients",
+  "wire 上省略",
+  "`"jsonrpc`":`"2.0`"",
+  "stdio",
+  "JSONL",
+  "experimental and unsupported",
+  "GET /readyz",
+  "GET /healthz",
+  "--ws-token-file",
+  "-32001",
+  "initialize",
+  "initialized",
+  "当前运行的 Codex 版本精确对应"
+)
+
 Assert-ContentIncludes "docs/app-server-protocol-matrix.zh-CN.md" @(
   "Codex App Server",
   "schema audit",

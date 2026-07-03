@@ -9,7 +9,20 @@
 - Codex 远程连接安全模型：`https://developers.openai.com/codex/remote-connections`
 - Codex 访问令牌说明：`https://developers.openai.com/codex/enterprise/access-tokens`
 
-App Server 使用 JSON-RPC 2.0，并提供认证、会话历史、审批和流式事件能力。官方文档同时提供协议 schema 生成命令：
+Codex App Server 是 Codex rich clients 使用的深度集成接口，覆盖认证、会话历史、审批和 streamed agent events。自动化作业或 CI 场景优先使用官方 Codex SDK，不把本项目的 Web/Android bridge 当作 CI runner 入口。
+
+App Server 协议基线：
+
+- 协议形态：JSON-RPC 2.0 message，但 wire 上省略 `"jsonrpc":"2.0"` 字段。
+- 默认 transport：`stdio` / JSONL，每行一个 JSON message。
+- 其他 transport：`ws://` WebSocket 为 experimental and unsupported；`unix://` 走 Unix socket 上的 WebSocket；`off` 表示不暴露本地 transport。
+- WebSocket health probes：`GET /readyz` 表示 listener 可接收连接；无 `Origin` 的 `GET /healthz` 返回健康；带 `Origin` 的请求应被拒绝。
+- WebSocket 远程暴露：非 loopback listener 在 rollout 阶段可能默认未鉴权，生产或公网场景必须先配置 WebSocket auth。
+- WebSocket auth：支持 capability token file/hash 和 signed bearer token；优先使用 `--ws-token-file`，不要把原始 bearer token 写进命令行、日志或文档。
+- 过载处理：bounded queue 满时可能返回 JSON-RPC error code `-32001`，客户端应使用指数退避和 jitter 重试。
+- 握手顺序：连接后先发 `initialize`，再发 `initialized` notification，然后才能启动 thread/turn 并持续读取通知。
+
+官方文档同时提供协议 schema 生成命令。生成结果与当前运行的 Codex 版本精确对应，因此每次升级 Codex CLI / App Server 后都必须重新生成到临时目录审计：
 
 ```powershell
 codex app-server generate-ts --out documentation/app-server-schemas/typescript

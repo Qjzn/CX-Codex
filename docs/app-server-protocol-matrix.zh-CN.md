@@ -26,6 +26,7 @@
 | 能力域 | 官方最新差异 | 当前项目状态 | 下一步门槛 |
 | --- | --- | --- | --- |
 | JSON-RPC / schema bundle | 新增 `codex_app_server_protocol.v2.schemas.json`，根 schema 与 v2 schema 均有大范围变化 | 部分覆盖。仓库已有 schema 基线、审计脚本和临时输出 | 将 `audit-summary.json` 纳入 release 检查；每次升级 Codex CLI 先生成临时 schema，再审计 |
+| Transport / handshake / auth | 官方 App Server wire format 省略 `"jsonrpc":"2.0"`；默认 `stdio` JSONL；WebSocket 为 experimental and unsupported，远程暴露必须配置 auth；过载可能返回 `-32001` | 部分覆盖。当前 bridge 使用 stdio JSONL 子进程通信，Web/Android 侧不直接暴露 app-server WebSocket | 继续默认走本地 stdio；如未来接入 WebSocket，必须先实现 auth、`/readyz`/`/healthz` 健康检查、Origin 拒绝和 overload retry |
 | Thread / Turn 核心 | `ThreadStatus`、`ThreadActiveFlag`、`ThreadSource`、`TurnItemsView`、`TurnEnvironmentParams`、`ThreadInjectItems*`、`ThreadShellCommand*`、`ThreadUnsubscribe*` 等新增 | 部分覆盖。现有代码覆盖 `thread/list`、`thread/read`、`thread/start`、`thread/resume`、`thread/fork`、`thread/rollback`、`thread/archive`、`thread/name/set`、`turn/start`、`turn/interrupt` | 扩展 normalizer 对 `thread.status`、`active flag`、`unsubscribe status` 的容错；不支持的 action 必须展示为 unhandled raw block |
 | Runtime 状态机 | 最新 schema 对 turn/thread 状态表达更细，新增 goal/status/realtime 通知 | 部分覆盖。当前已有 runtime store、reconcile、stop uncertain、notification replay | 增加未知状态 telemetry 计数；状态机只把明确状态映射为运行态，其余进入降级态 |
 | 审批与权限 | 新增 permission profile、guardian review、network/file-system permission、approval review 通知 | 部分覆盖。当前已有 command/file/mcp 基础审批和停止审计，但未覆盖 guardian/profile | 先做只读展示和拒绝/降级策略，避免默认放权；所有新增 approval 必须记录来源、scope、decision |

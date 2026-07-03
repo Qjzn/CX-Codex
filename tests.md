@@ -1345,6 +1345,38 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: 官方 App Server transport / handshake 对齐
+
+#### Prerequisites
+- 可访问 OpenAI 官方 Codex App Server 文档：`https://developers.openai.com/codex/app-server`。
+- 当前仓库包含 `docs/protocol-compatibility.zh-CN.md`、`docs/app-server-protocol-matrix.zh-CN.md` 和 `scripts/verify-governance.ps1`。
+
+#### Steps
+1. 打开官方 Codex App Server 文档，核对 App Server 用途、JSON-RPC wire format、transport、WebSocket auth、overload 和 schema generate 说明。
+2. 执行 `npm.cmd run verify:governance`。
+3. 执行 `git diff --check`。
+4. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit skip`。
+5. 代码审查确认 `docs/protocol-compatibility.zh-CN.md` 明确记录 `stdio` JSONL 默认 transport、WebSocket experimental/unsupported、`/readyz`/`/healthz`、`--ws-token-file`、`-32001`、`initialize`/`initialized` 和“schema 与当前 Codex 版本精确对应”。
+
+#### Expected Results
+- 协议兼容文档不再只泛称 JSON-RPC，而是记录官方 wire format 会省略 `"jsonrpc":"2.0"`。
+- 文档明确 CI/自动化作业优先使用 Codex SDK，本项目定位为 Web/Android rich-client bridge。
+- WebSocket 不被宣传为稳定生产 transport；如未来接入，必须先处理 auth、Origin、health probes 和 overload retry。
+- `verify-governance` 会检查上述官方约束文本，防止 release gate 放过弱化后的协议文档。
+- Release 快速门禁在跳过构建和 CLI smoke 时仍执行 governance docs check。
+
+#### Rollback / Cleanup
+- 若官方文档后续变更，先更新 `docs/protocol-compatibility.zh-CN.md` 和 `docs/app-server-protocol-matrix.zh-CN.md`，再同步调整 `verify-governance.ps1` 的必需文本。
+
+#### Regression Evidence
+- 2026-07-03 官方文档核对：对照 `https://developers.openai.com/codex/app-server`，补充 rich-client 用途、JSON-RPC wire format、transport、WebSocket auth、overload 和 schema generate 约束。
+- 2026-07-03 治理门禁验证：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 快速 release gate：`pwsh -NoProfile -File ./scripts/verify-release.ps1 -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit skip` 通过，包含 governance docs check 和 server module smoke。
+- 2026-07-03 完整 release gate：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke 和 CLI smoke。
+
+---
+
 ### Feature: App Server 协议差异矩阵和审计摘要
 
 #### Prerequisites
