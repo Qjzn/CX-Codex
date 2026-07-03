@@ -13,6 +13,7 @@ import { getDesktopAppRefreshStatus, requestDesktopAppRefresh } from './desktopA
 import { getTunnelStatus, updateTunnelConfig } from './tunnelStatus.js'
 import { readFavoriteRecords, readPinnedThreadIds, writeFavoriteRecords, writePinnedThreadIds } from './webUiState.js'
 import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } from './runtimeStore.js'
+import { logBridgeError, writeBridgeLog } from './bridgeLog.js'
 import {
   applyRuntimeTurnOptionsToInput,
   buildRuntimeRequestPayloadSummary,
@@ -1118,59 +1119,6 @@ function getRpcQueuePriority(method: string, params: unknown): number {
   }
 
   return 1
-}
-
-function redactSensitiveLogString(value: string): string {
-  return value
-    .replace(
-      /(["'])([^"']*(?:password|authorization|cookie|token|secret|api[-_]?key|auth)[^"']*)\1\s*:\s*(["'])([^"']*)\3/giu,
-      '$1$2$1:$3[REDACTED]$3',
-    )
-    .replace(/(password\s*[:=]\s*)([^\s"'`,;]+)/giu, '$1[REDACTED]')
-    .replace(/(authorization\s*[:=]\s*bearer\s+)([^\s"'`,;]+)/giu, '$1[REDACTED]')
-    .replace(/((?:access_token|auth_token|token|api_key|apikey|secret)=)([^&\s"'`,;]+)/giu, '$1[REDACTED]')
-}
-
-function sanitizeBridgeLogValue(value: unknown, depth = 0): unknown {
-  if (depth > 4) return '[DEPTH_LIMIT]'
-  if (typeof value === 'string') return redactSensitiveLogString(value)
-  if (typeof value !== 'object' || value === null) return value
-  if (Array.isArray(value)) {
-    return value.slice(0, 50).map((item) => sanitizeBridgeLogValue(item, depth + 1))
-  }
-
-  const record = value as Record<string, unknown>
-  const sanitized: Record<string, unknown> = {}
-  for (const [key, entryValue] of Object.entries(record)) {
-    if (/password|authorization|cookie|token|secret|api[-_]?key|auth/i.test(key)) {
-      sanitized[key] = '[REDACTED]'
-      continue
-    }
-    sanitized[key] = sanitizeBridgeLogValue(entryValue, depth + 1)
-  }
-  return sanitized
-}
-
-function writeBridgeLog(level: 'warn' | 'error', message: string, details: Record<string, unknown> = {}): void {
-  try {
-    const sanitizedDetails = sanitizeBridgeLogValue(details)
-    process.stderr.write(`${JSON.stringify({
-      atIso: new Date().toISOString(),
-      scope: 'codex-bridge',
-      level,
-      message: redactSensitiveLogString(message),
-      ...(asRecord(sanitizedDetails) ?? {}),
-    })}\n`)
-  } catch {
-    // Logging must never interfere with bridge traffic.
-  }
-}
-
-function logBridgeError(message: string, error: unknown, details: Record<string, unknown> = {}): void {
-  writeBridgeLog('error', message, {
-    ...details,
-    error: getErrorMessage(error, 'Unknown bridge error'),
-  })
 }
 
 function setJson(res: ServerResponse, statusCode: number, payload: unknown): void {
