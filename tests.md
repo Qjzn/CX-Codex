@@ -1897,7 +1897,7 @@ This file tracks manual regression and feature verification steps.
 #### Expected Results
 - 本地 release package smoke 生成的 `.sha256` 能被 `verify-release-artifacts.ps1` 成功校验。
 - Release workflow 在发布 GitHub Release 前会校验 Web zip 和 Android APK 的 `.sha256` 内容。
-- checksum 文件为空、格式错误、引用子路径、缺少目标文件或哈希不一致时，脚本会失败。
+- release 目录没有 `.zip` / `.apk`、artifact 缺少 `.sha256`、checksum 文件为空、格式错误、引用子路径、缺少目标文件或哈希不一致时，脚本会失败。
 - 治理门禁会阻止 artifact checksum 验证脚本或 release workflow 调用被删除。
 
 #### Rollback/Cleanup
@@ -1909,6 +1909,7 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 治理门禁验证：`npm.cmd run verify:governance` 通过，确认 artifact checksum 验证脚本和 Release workflow 调用已被 governance 锁定。
 - 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，生成 `output\release-package-smoke\CX-Codex-verify-smoke.zip` 和 `.sha256`。
 - 2026-07-04 Artifact checksum 验证：`pwsh -NoProfile -File ./scripts/verify-release-artifacts.ps1 -OutputDir output\release-package-smoke` 通过，输出 `checksum ok: CX-Codex-verify-smoke.zip` 和 `Release artifact checksum verification passed.`。
+- 2026-07-04 负向 smoke：构造 `output\artifact-negative-smoke\missing-checksum.zip` 且不生成 `.sha256`，执行 `verify-release-artifacts.ps1` 失败并输出 `Release artifact is missing checksum: missing-checksum.zip`；临时目录已删除。
 
 ---
 

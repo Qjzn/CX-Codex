@@ -66,7 +66,44 @@ function Assert-ChecksumFile {
   Write-Host "checksum ok: $artifactFileName"
 }
 
+function Get-ArtifactChecksumCandidates {
+  param(
+    [System.IO.FileInfo]$Artifact
+  )
+
+  return @(
+    "$($Artifact.FullName).sha256",
+    (Join-Path $Artifact.DirectoryName "$($Artifact.BaseName).sha256")
+  ) | Select-Object -Unique
+}
+
+function Assert-ArtifactHasChecksum {
+  param(
+    [System.IO.FileInfo]$Artifact
+  )
+
+  $candidatePaths = @(Get-ArtifactChecksumCandidates -Artifact $Artifact)
+  foreach ($candidatePath in $candidatePaths) {
+    if (Test-Path -LiteralPath $candidatePath -PathType Leaf) {
+      return
+    }
+  }
+
+  throw "Release artifact is missing checksum: $($Artifact.Name)"
+}
+
 $resolvedOutputDir = (Resolve-Path -LiteralPath $OutputDir).Path
+$releaseArtifacts = @(Get-ChildItem -LiteralPath $resolvedOutputDir -File | Where-Object {
+  $_.Extension -in @(".zip", ".apk")
+})
+if ($releaseArtifacts.Count -eq 0) {
+  throw "No release .zip or .apk artifacts found in $resolvedOutputDir"
+}
+
+foreach ($artifact in $releaseArtifacts) {
+  Assert-ArtifactHasChecksum -Artifact $artifact
+}
+
 $checksumFiles = @(Get-ChildItem -LiteralPath $resolvedOutputDir -Filter "*.sha256" -File)
 if ($checksumFiles.Count -eq 0) {
   throw "No .sha256 files found in $resolvedOutputDir"

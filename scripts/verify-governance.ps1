@@ -180,6 +180,8 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
 
 Assert-ContentIncludes "scripts/verify-release-artifacts.ps1" @(
   "Release artifact checksum verification passed.",
+  "No release .zip or .apk artifacts found",
+  "Release artifact is missing checksum",
   "No .sha256 files found",
   "Checksum hash does not match artifact",
   "Checksum file must reference an artifact file name only"
