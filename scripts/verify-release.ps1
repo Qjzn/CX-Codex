@@ -4,6 +4,7 @@ param(
   [string]$SchemaAudit = "warn",
   [switch]$SkipBuild,
   [switch]$SkipCliSmoke,
+  [switch]$SkipGovernance,
   [switch]$RequireCleanGit,
   [switch]$AllowDirty
 )
@@ -99,6 +100,14 @@ if ($RequireCleanGit -and -not $AllowDirty) {
 
 Invoke-CheckedCommand -Label "Whitespace check" -Command "git" -Arguments @("diff", "--check")
 Invoke-NodeInline -Label "package.json parse check" -Script "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json ok')"
+
+if (-not $SkipGovernance) {
+  $powerShellCommand = Get-PowerShellCommand
+  Invoke-CheckedCommand -Label "Governance docs check" -Command $powerShellCommand -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repoRoot "scripts/verify-governance.ps1"))
+} else {
+  Write-Host ""
+  Write-Host "==> Governance docs check skipped"
+}
 
 $npmCommand = Get-NpmCommand
 

@@ -1574,3 +1574,29 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 静态验证：`git diff --check` 通过。
 - 2026-07-03 文档入口审查：`README.md`、`SECURITY.md`、`RELEASE.md` 和 `.github/PULL_REQUEST_TEMPLATE.md` 均已串联 `docs/security-hardening.zh-CN.md` 或等价检查项。
 - 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace check、`package.json` 解析、前端/CLI 构建和 `node dist-cli/index.js --help`。
+
+---
+
+### Feature: 开源治理文档自动门禁
+
+#### Prerequisites
+- 仓库包含 `scripts/verify-governance.ps1`。
+- 本机可运行 PowerShell 7 (`pwsh`) 和 `npm.cmd`。
+
+#### Steps
+1. 执行 `npm.cmd run verify:governance`。
+2. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+3. 检查 `scripts/verify-release.ps1`，确认默认执行 `Governance docs check`，且仅在显式 `-SkipGovernance` 时跳过。
+4. 检查 `package.json`，确认暴露 `verify:governance`。
+5. 故障注入可选：临时移除 README 中的 `docs/app-server-protocol-matrix.zh-CN.md` 链接，确认 `verify:governance` 会失败；恢复后重新通过。
+
+#### Expected Results
+- `verify:governance` 能检查 README、SECURITY、RELEASE、SUPPORT、CONTRIBUTING、Issue 模板、CI/Release workflow、安全硬化文档和 App Server 协议矩阵的关键入口。
+- `verify:release` 默认包含治理文档检查，避免只构建成功但开源治理入口缺失。
+- 缺少关键文档、模板或官方协议/安全口径时，命令应失败并给出具体文件和缺失文本。
+
+#### Regression Evidence
+- 2026-07-03 故障注入验证：README 缺少 `docs/app-server-protocol-matrix.zh-CN.md` 时，`npm.cmd run verify:governance` 失败并指出缺失文本。
+- 2026-07-03 故障注入验证：协议矩阵缺少完整 `Codex App Server` 术语时，`npm.cmd run verify:governance` 失败并指出缺失文本；补齐后通过。
+- 2026-07-03 治理门禁验证：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `Governance docs check`、构建和 CLI smoke。

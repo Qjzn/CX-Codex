@@ -2,6 +2,8 @@
 
 本文把 `npm run audit:app-server-schemas` 发现的官方 schema 差异拆成可执行的兼容矩阵。它不是 release notes，而是后续升级、验收和开源治理的工作台。
 
+这里的 App Server 指官方 Codex App Server，即 Codex rich clients 使用的本机协议接口。
+
 ## 当前证据
 
 - 审计命令：`npm.cmd run audit:app-server-schemas`
