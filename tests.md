@@ -2515,3 +2515,40 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
 - 2026-07-03 CJS 启动烟测：`node dist-cli\index.js --help` 通过，输出 `CX-Codex Web bridge for Codex app-server`。
 - 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace、governance docs、build、server module smoke 和 CLI smoke。
+
+---
+
+### Feature: 诊断中心 schema audit 摘要
+
+#### Prerequisites
+- 当前仓库包含 `docs/app-server-schema-audit-summary.json`。
+- 当前仓库包含 `src/server/appServerSchemaAuditSummary.ts`。
+- 如需 UI 手工检查，本地 bridge 能访问 `/codex-api/diagnostics`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node dist-cli\index.js --help`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 请求 `/codex-api/diagnostics`，确认 `data.schemaAudit` 包含 `available`、`reviewStatus`、`generatedAtIso`、`officialDocsUrl`、`comparison` 和 `totals`。
+7. 手工打开诊断中心，确认顶部区域存在“协议审计”卡片，能展示审计状态、生成时间、新增/移除总数和四组 schema diff 计数。
+8. 检查 `package.json`，确认 npm `files` 包含 `docs/app-server-schema-audit-summary.json`。
+
+#### Expected Results
+- `docs/app-server-schema-audit-summary.json` 能被后端解析为脱敏诊断快照，不暴露本机绝对路径、Token 或用户 prompt。
+- 文件缺失或解析失败时，`schemaAudit.available` 为 `false`，诊断接口仍返回成功。
+- 诊断中心在 `reviewStatus` 为 `drift-recorded` 时显示 warning，提醒维护者当前官方 schema drift 已记录但未覆盖基线。
+- 发布包包含 schema audit 摘要文件，打包后 CLI 旁边的诊断接口仍有治理摘要来源。
+- Server module smoke 覆盖摘要归一化、总数计算、代表项裁剪和缺失文件 fallback。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，移除 `src/server/appServerSchemaAuditSummary.ts`，撤销 bridge、诊断面板、server module smoke、`package.json`、协议矩阵、changelog 和本节测试记录中的相关引用。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 schema audit 摘要归一化、总数计算、代表项裁剪和缺失文件 fallback。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CJS 启动烟测：`node dist-cli\index.js --help` 通过，输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace、package parse、governance docs、构建、server module smoke 和 CLI smoke。
+- 2026-07-03 打包清单验证：`npm.cmd pack --dry-run` 通过，Tarball Contents 包含 `docs/app-server-schema-audit-summary.json`。

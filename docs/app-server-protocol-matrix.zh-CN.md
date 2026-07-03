@@ -42,7 +42,7 @@
 | Windows Sandbox | 新增 readiness/setup/start/completed | 待接入 | 先在诊断中心展示 readiness；setup 需要显式用户确认 |
 | Models / Rate Limits / Account | 模型可用性、reroute、verification、service tier、rate limit 类型扩展 | 部分覆盖。当前已有模型列表和账户状态基础读取 | 将 reroute/verification 作为通知展示，不影响当前 thread 渲染 |
 | Notifications | 新增大量 notification 类型，部分旧 v1 event 移除 | 部分覆盖。当前 replay buffer 存储通知并按 threadId 触发刷新；未知 notification 不阻断 replay/runtime 流，并在 health/diagnostics 中按 method 聚合计数 | 继续扩展未知 notification 到诊断中心 UI；不能因为未知 notification 丢失当前线程刷新 |
-| Open-source release governance | 协议差异需要能被维护者和贡献者复核 | 部分覆盖。已有协议审计文档、脚本、已提交摘要快照、测试记录和 release/governance 门禁 | Release checklist 必须包含 schema audit、build、CJS smoke、README/changelog、安全说明；治理门禁必须校验摘要快照结构 |
+| Open-source release governance | 协议差异需要能被维护者和贡献者复核 | 部分覆盖。已有协议审计文档、脚本、已提交摘要快照、诊断中心摘要展示、测试记录和 release/governance 门禁 | Release checklist 必须包含 schema audit、build、CJS smoke、README/changelog、安全说明；治理门禁必须校验摘要快照结构 |
 
 ## 优先级
 
@@ -56,7 +56,7 @@
 ### P1：产品竞争力
 
 1. 插件、MCP、skills 的只读状态展示和刷新。
-2. 诊断中心展示 schema audit 摘要、未知通知、未知状态、权限请求队列。
+2. 诊断中心展示 schema audit 摘要、未知通知、未知状态、权限请求队列。（schema audit、未知通知、未知状态已接入）
 3. Windows sandbox readiness 和模型 reroute/verification 可见。
 
 ### P2：实验能力

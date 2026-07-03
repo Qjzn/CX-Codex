@@ -81,6 +81,7 @@ import {
 import { createAppServerJsonRpcError } from './appServerRpcErrors.js'
 import { AppServerNotificationDiagnostics } from './appServerNotificationDiagnostics.js'
 import { AppServerStatusDiagnostics } from './appServerStatusDiagnostics.js'
+import { readAppServerSchemaAuditSummary } from './appServerSchemaAuditSummary.js'
 import {
   createAppServerRpcErrorResponse,
   createAppServerRpcNotification,
@@ -2668,12 +2669,14 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/health') {
+        const schemaAudit = await readAppServerSchemaAuditSummary()
         setJson(res, 200, {
           status: 'ok',
           data: {
             appServer: appServer.getStatus(),
             notificationDiagnostics: notificationDiagnostics.snapshot(),
             statusDiagnostics: statusDiagnostics.snapshot(),
+            schemaAudit,
             transcription: getTranscriptionProxyConfigSnapshot(),
             runtimeStore: runtimeStore.getHealth(),
             timestamp: new Date().toISOString(),
@@ -2684,6 +2687,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'GET' && url.pathname === '/codex-api/diagnostics') {
         const runtimeHealth = runtimeStore.getHealth()
+        const schemaAudit = await readAppServerSchemaAuditSummary()
         const recentEvents = runtimeStore
           .listEventsAfter(Math.max(0, runtimeHealth.latestSeq - 20), 20)
           .notifications
@@ -2711,6 +2715,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             appServer: appServer.getStatus(),
             notificationDiagnostics: notificationDiagnostics.snapshot(),
             statusDiagnostics: statusDiagnostics.snapshot(),
+            schemaAudit,
             transcription: getTranscriptionProxyConfigSnapshot(),
             runtimeStore: runtimeHealth,
             runtime: {

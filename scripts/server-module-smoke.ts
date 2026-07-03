@@ -18,6 +18,10 @@ import {
   isKnownAppServerThreadStatus,
   readThreadStatusCandidates,
 } from '../src/server/appServerStatusDiagnostics.js'
+import {
+  normalizeAppServerSchemaAuditSummary,
+  readAppServerSchemaAuditSummary,
+} from '../src/server/appServerSchemaAuditSummary.js'
 import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheForRpc } from '../src/server/appServerRpcCache.js'
 import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.js'
 import {
@@ -146,6 +150,7 @@ try {
   smokeAppServerJsonRpcWire()
   smokeAppServerNotificationDiagnostics()
   smokeAppServerStatusDiagnostics()
+  await smokeAppServerSchemaAuditSummary()
   smokeTranscriptionProxyConfig()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
@@ -369,6 +374,81 @@ function smokeAppServerStatusDiagnostics(): void {
 
   diagnostics.clear()
   assert.equal(diagnostics.snapshot().unknownStatusCount, 0)
+}
+
+async function smokeAppServerSchemaAuditSummary(): Promise<void> {
+  const normalized = normalizeAppServerSchemaAuditSummary({
+    generatedAtIso: '2026-07-03T00:00:00.000Z',
+    officialDocsUrl: 'https://developers.openai.com/codex/app-server',
+    auditCommand: 'npm.cmd run audit:app-server-schemas',
+    auditOutput: 'output/app-server-schema-audit/example',
+    reviewStatus: 'drift-recorded',
+    comparison: {
+      typescriptRoot: {
+        baselineCount: 2,
+        generatedCount: 3,
+        addedCount: 1,
+        removedCount: 0,
+        representativeAdded: ['A', 'B', 'C', 'D', 'E', 'F'],
+        representativeRemoved: [],
+      },
+      typescriptV2: {
+        baselineCount: 4,
+        generatedCount: 7,
+        addedCount: 4,
+        removedCount: 1,
+      },
+      jsonRoot: {
+        baselineCount: 5,
+        generatedCount: 6,
+        addedCount: 2,
+        removedCount: 1,
+      },
+      jsonV2: {
+        baselineCount: 8,
+        generatedCount: 9,
+        addedCount: 3,
+        removedCount: 2,
+      },
+    },
+  })
+  assert.equal(normalized.available, true)
+  assert.equal(normalized.reviewStatus, 'drift-recorded')
+  assert.equal(normalized.comparison.typescriptRoot.representativeAdded.length, 5)
+  assert.deepEqual(normalized.totals, {
+    addedCount: 10,
+    removedCount: 4,
+  })
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-schema-audit-'))
+  try {
+    const summaryPath = join(tempDir, 'summary.json')
+    await writeFile(summaryPath, JSON.stringify({
+      generatedAtIso: '2026-07-03T00:00:00.000Z',
+      officialDocsUrl: 'https://developers.openai.com/codex/app-server',
+      auditCommand: 'npm.cmd run audit:app-server-schemas',
+      reviewStatus: 'drift-recorded',
+      comparison: {
+        typescriptRoot: { baselineCount: 1, generatedCount: 2, addedCount: 1, removedCount: 0 },
+        typescriptV2: { baselineCount: 1, generatedCount: 3, addedCount: 2, removedCount: 0 },
+        jsonRoot: { baselineCount: 1, generatedCount: 1, addedCount: 0, removedCount: 0 },
+        jsonV2: { baselineCount: 1, generatedCount: 4, addedCount: 3, removedCount: 0 },
+      },
+    }), 'utf8')
+    const loaded = await readAppServerSchemaAuditSummary(summaryPath)
+    assert.equal(loaded.available, true)
+    assert.deepEqual(loaded.totals, {
+      addedCount: 6,
+      removedCount: 0,
+    })
+
+    const missing = await readAppServerSchemaAuditSummary(join(tempDir, 'missing.json'))
+    assert.equal(missing.available, false)
+    assert.equal(missing.reviewStatus, 'unavailable')
+    assert.match(missing.error, /ENOENT/)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
 }
 
 function smokeTranscriptionProxyConfig(): void {

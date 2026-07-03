@@ -90,6 +90,38 @@
           </div>
         </dl>
       </section>
+
+      <section class="diagnostics-section">
+        <div class="diagnostics-section-header">
+          <h2>协议审计</h2>
+          <span class="diagnostics-badge" :data-tone="schemaAuditTone">{{ schemaAuditLabel }}</span>
+        </div>
+        <dl class="diagnostics-kv">
+          <div>
+            <dt>生成时间</dt>
+            <dd>{{ schemaAudit.generatedAtIso ? formatTime(schemaAudit.generatedAtIso) : '-' }}</dd>
+          </div>
+          <div>
+            <dt>新增 / 移除</dt>
+            <dd>{{ schemaAudit.totals.addedCount }} / {{ schemaAudit.totals.removedCount }}</dd>
+          </div>
+          <div>
+            <dt>命令</dt>
+            <dd class="diagnostics-mono">{{ schemaAudit.auditCommand || '-' }}</dd>
+          </div>
+          <div>
+            <dt>文档</dt>
+            <dd class="diagnostics-mono">{{ schemaAudit.officialDocsUrl || '-' }}</dd>
+          </div>
+        </dl>
+        <ul class="diagnostics-mini-list">
+          <li v-for="row in schemaAuditRows" :key="row.key">
+            <span>{{ row.label }}</span>
+            <strong>{{ row.generatedCount }}</strong>
+            <small>+{{ row.addedCount }} / -{{ row.removedCount }}</small>
+          </li>
+        </ul>
+      </section>
     </div>
 
     <section class="diagnostics-section diagnostics-section-wide">
@@ -284,6 +316,35 @@ type TranscriptionDiagnostics = {
   }
 }
 
+type SchemaAuditComparisonRecord = {
+  baselineCount: number
+  generatedCount: number
+  addedCount: number
+  removedCount: number
+  representativeAdded: string[]
+  representativeRemoved: string[]
+}
+
+type SchemaAuditDiagnostics = {
+  available: boolean
+  generatedAtIso: string
+  officialDocsUrl: string
+  auditCommand: string
+  auditOutput: string
+  reviewStatus: string
+  comparison: {
+    typescriptRoot: SchemaAuditComparisonRecord
+    typescriptV2: SchemaAuditComparisonRecord
+    jsonRoot: SchemaAuditComparisonRecord
+    jsonV2: SchemaAuditComparisonRecord
+  }
+  totals: {
+    addedCount: number
+    removedCount: number
+  }
+  error: string
+}
+
 type DiagnosticsData = {
   appServer: AppServerDiagnostics
   notificationDiagnostics?: {
@@ -294,6 +355,7 @@ type DiagnosticsData = {
     unknownStatusCount: number
     recentUnknownStatuses: UnknownStatusDiagnostics[]
   }
+  schemaAudit?: SchemaAuditDiagnostics
   transcription?: TranscriptionDiagnostics
   runtimeStore: RuntimeStoreDiagnostics
   runtime: {
@@ -337,6 +399,35 @@ const emptyTranscription: TranscriptionDiagnostics = {
   },
 }
 
+const emptySchemaAuditRecord: SchemaAuditComparisonRecord = {
+  baselineCount: 0,
+  generatedCount: 0,
+  addedCount: 0,
+  removedCount: 0,
+  representativeAdded: [],
+  representativeRemoved: [],
+}
+
+const emptySchemaAudit: SchemaAuditDiagnostics = {
+  available: false,
+  generatedAtIso: '',
+  officialDocsUrl: '',
+  auditCommand: '',
+  auditOutput: '',
+  reviewStatus: 'unavailable',
+  comparison: {
+    typescriptRoot: emptySchemaAuditRecord,
+    typescriptV2: emptySchemaAuditRecord,
+    jsonRoot: emptySchemaAuditRecord,
+    jsonV2: emptySchemaAuditRecord,
+  },
+  totals: {
+    addedCount: 0,
+    removedCount: 0,
+  },
+  error: '',
+}
+
 const diagnostics = ref<DiagnosticsData | null>(null)
 const error = ref('')
 const isLoading = ref(false)
@@ -345,6 +436,7 @@ let refreshTimer: number | null = null
 const appServer = computed(() => diagnostics.value?.appServer ?? emptyAppServer)
 const runtimeStore = computed(() => diagnostics.value?.runtimeStore ?? emptyRuntimeStore)
 const transcription = computed(() => diagnostics.value?.transcription ?? emptyTranscription)
+const schemaAudit = computed(() => diagnostics.value?.schemaAudit ?? emptySchemaAudit)
 const uncertainRequests = computed(() => diagnostics.value?.runtime.uncertainRequests ?? [])
 const recentEvents = computed(() => diagnostics.value?.runtime.recentEvents ?? [])
 const slowRpcCalls = computed(() => appServer.value.rpcDiagnostics?.recentSlowRpc ?? [])
@@ -368,11 +460,19 @@ const transcriptionTone = computed<Tone>(() => (
   transcription.value.officialApiConfigured ? 'ok' : 'neutral'
 ))
 
+const schemaAuditTone = computed<Tone>(() => {
+  if (!schemaAudit.value.available) return 'danger'
+  if (schemaAudit.value.reviewStatus === 'drift-recorded') return 'warning'
+  return 'ok'
+})
+
 const overallTone = computed<Tone>(() => {
   if (appServerTone.value === 'danger') return 'danger'
   if (
     appServerTone.value === 'warning'
     || runtimeTone.value === 'warning'
+    || schemaAuditTone.value === 'warning'
+    || schemaAuditTone.value === 'danger'
     || unknownNotificationCount.value > 0
     || unknownStatusCount.value > 0
   ) return 'warning'
@@ -407,6 +507,19 @@ const transcriptionEndpointLabel = computed(() => {
   const marker = endpoint.isDefault ? '默认' : '自定义'
   return `${marker} ${endpoint.host}${endpoint.path}`
 })
+
+const schemaAuditLabel = computed(() => {
+  if (!schemaAudit.value.available) return '不可用'
+  if (schemaAudit.value.reviewStatus === 'drift-recorded') return '差异已记录'
+  return schemaAudit.value.reviewStatus || '已记录'
+})
+
+const schemaAuditRows = computed(() => [
+  { key: 'typescriptRoot', label: 'TS root', ...schemaAudit.value.comparison.typescriptRoot },
+  { key: 'typescriptV2', label: 'TS v2', ...schemaAudit.value.comparison.typescriptV2 },
+  { key: 'jsonRoot', label: 'JSON root', ...schemaAudit.value.comparison.jsonRoot },
+  { key: 'jsonV2', label: 'JSON v2', ...schemaAudit.value.comparison.jsonV2 },
+])
 
 const lastLoadedLabel = computed(() => (
   diagnostics.value?.timestamp ? `更新于 ${formatTime(diagnostics.value.timestamp)}` : ''
@@ -617,6 +730,26 @@ function formatAge(value: string): string {
 
 .diagnostics-list small {
   @apply text-xs text-slate-500;
+}
+
+.diagnostics-mini-list {
+  @apply mt-3 grid gap-2;
+}
+
+.diagnostics-mini-list li {
+  @apply grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 rounded-md bg-stone-50 px-3 py-2 text-xs;
+}
+
+.diagnostics-mini-list span {
+  @apply min-w-0 truncate text-slate-700;
+}
+
+.diagnostics-mini-list strong {
+  @apply font-mono text-slate-950;
+}
+
+.diagnostics-mini-list small {
+  @apply font-mono text-slate-500;
 }
 
 @media (max-width: 640px) {

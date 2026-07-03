@@ -47,7 +47,8 @@
   },
   "files": [
     "dist/",
-    "dist-cli/"
+    "dist-cli/",
+    "docs/app-server-schema-audit-summary.json"
   ],
   "scripts": {
     "dev": "pnpm install && vite",
