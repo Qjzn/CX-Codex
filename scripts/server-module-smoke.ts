@@ -12,6 +12,12 @@ import {
   createAppServerJsonRpcError,
   isAppServerOverloadedError,
 } from '../src/server/appServerRpcErrors.js'
+import {
+  createAppServerRpcErrorResponse,
+  createAppServerRpcNotification,
+  createAppServerRpcRequest,
+  createAppServerRpcSuccessResponse,
+} from '../src/server/appServerJsonRpcWire.js'
 import { AppServerRpcQueue, getAppServerRpcQueuePriority } from '../src/server/appServerRpcQueue.js'
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
@@ -116,6 +122,7 @@ const originalNow = Date.now
 
 try {
   smokePendingServerRequests()
+  smokeAppServerJsonRpcWire()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
   await smokeAppServerRpcQueue()
@@ -153,6 +160,38 @@ function smokePendingServerRequests(): void {
   assert.equal(store.count, 1)
   store.clear()
   assert.equal(store.count, 0)
+}
+
+function smokeAppServerJsonRpcWire(): void {
+  const request = createAppServerRpcRequest(1, 'thread/start', { model: 'gpt-5.4' })
+  assert.deepEqual(request, {
+    id: 1,
+    method: 'thread/start',
+    params: { model: 'gpt-5.4' },
+  })
+  assert.equal('jsonrpc' in request, false)
+
+  const initialized = createAppServerRpcNotification('initialized')
+  assert.deepEqual(initialized, { method: 'initialized' })
+  assert.equal('jsonrpc' in initialized, false)
+
+  const notificationWithParams = createAppServerRpcNotification('turn/started', { turnId: 'turn-1' })
+  assert.deepEqual(notificationWithParams, {
+    method: 'turn/started',
+    params: { turnId: 'turn-1' },
+  })
+  assert.equal('jsonrpc' in notificationWithParams, false)
+
+  const success = createAppServerRpcSuccessResponse(2, { ok: true })
+  assert.deepEqual(success, { id: 2, result: { ok: true } })
+  assert.equal('jsonrpc' in success, false)
+
+  const emptySuccess = createAppServerRpcSuccessResponse(3)
+  assert.deepEqual(emptySuccess, { id: 3, result: {} })
+
+  const error = createAppServerRpcErrorResponse(4, { code: -32601, message: 'Unsupported' })
+  assert.deepEqual(error, { id: 4, error: { code: -32601, message: 'Unsupported' } })
+  assert.equal('jsonrpc' in error, false)
 }
 
 async function smokeAppServerRpcCache(): Promise<void> {

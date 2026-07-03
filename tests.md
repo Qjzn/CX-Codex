@@ -1441,6 +1441,41 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server official wire handshake
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerJsonRpcWire.ts` 和 `src/server/codexAppServerBridge.ts`。
+- 官方 Codex App Server 文档说明 JSON-RPC 2.0 message 在 wire 上省略 `"jsonrpc":"2.0"` header，连接后需先发送 `initialize` request，再发送 `initialized` notification。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 通过 `createAppServerRpcRequest()`、`createAppServerRpcNotification()`、`createAppServerRpcSuccessResponse()` 和 `createAppServerRpcErrorResponse()` 生成出站 App Server wire message，不再内联 `"jsonrpc":"2.0"` 字段。
+
+#### Expected Results
+- App Server request、server request reply 和 client notification 均按官方 wire 形态发送，不包含 `"jsonrpc":"2.0"` 字段。
+- `ensureInitialized()` 在 `initialize` 成功后发送 `initialized` notification，再把连接标记为 initialized。
+- `clientInfo` 包含 `name`、`title` 和当前 CX-Codex 版本，方便官方合规日志识别集成来源。
+- Server module smoke 覆盖 request、notification、success response、error response 均不含 `jsonrpc` 字段，并覆盖 `initialized` notification。
+- `docs/app-server-protocol-matrix.zh-CN.md` 中 Transport / handshake / auth 行反映当前实现状态。
+- 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Rollback / Cleanup
+- 若某个旧版 Codex App Server 只接受带 `"jsonrpc":"2.0"` 的消息，回滚 `src/server/appServerJsonRpcWire.ts`、bridge wire 调整、验证脚本和本测试章节，再考虑通过兼容开关按 Codex CLI 版本选择 wire 形态。
+
+#### Regression Evidence
+- 2026-07-03 官方文档核对：刷新 `https://developers.openai.com/codex/codex-manual.md` 后确认 Codex App Server 章节说明 wire 上省略 `"jsonrpc":"2.0"`，且 quickstart/lifecycle 要求 `initialize` 后发送 `initialized` notification。
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke 和 CLI smoke。
+
+---
+
 ### Feature: Release 验证脚本
 
 #### Prerequisites

@@ -78,6 +78,12 @@ import {
   getAppServerRpcQueuePriority,
 } from './appServerRpcQueue.js'
 import { createAppServerJsonRpcError } from './appServerRpcErrors.js'
+import {
+  createAppServerRpcErrorResponse,
+  createAppServerRpcNotification,
+  createAppServerRpcRequest,
+  createAppServerRpcSuccessResponse,
+} from './appServerJsonRpcWire.js'
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
 import { PlanModeTurnStore } from './planModeTurnStore.js'
@@ -124,13 +130,6 @@ import {
   resolveProjectRoot,
   suggestProjectRoot,
 } from './projectRoots.js'
-
-type JsonRpcCall = {
-  jsonrpc: '2.0'
-  id: number
-  method: string
-  params?: unknown
-}
 
 type JsonRpcResponse = {
   id?: number
@@ -1154,19 +1153,11 @@ class AppServerProcess {
 
   private sendServerRequestReply(requestId: number, reply: ServerRequestReply): void {
     if (reply.error) {
-      this.sendLine({
-        jsonrpc: '2.0',
-        id: requestId,
-        error: reply.error,
-      })
+      this.sendLine(createAppServerRpcErrorResponse(requestId, reply.error))
       return
     }
 
-    this.sendLine({
-      jsonrpc: '2.0',
-      id: requestId,
-      result: reply.result ?? {},
-    })
+    this.sendLine(createAppServerRpcSuccessResponse(requestId, reply.result ?? {}))
   }
 
   setWebBridgeSettings(settings: WebBridgeSettings): void {
@@ -1311,12 +1302,7 @@ class AppServerProcess {
         timeoutId,
       })
 
-      this.sendLine({
-        jsonrpc: '2.0',
-        id,
-        method,
-        params,
-      } satisfies JsonRpcCall)
+      this.sendLine(createAppServerRpcRequest(id, method, params))
     })
   }
 
@@ -1330,9 +1316,11 @@ class AppServerProcess {
     this.initializePromise = this.call('initialize', {
       clientInfo: {
         name: 'codex-web-local',
-        version: '0.1.0',
+        title: 'CX-Codex',
+        version: '2.2.7',
       },
     }).then(() => {
+      this.sendLine(createAppServerRpcNotification('initialized'))
       this.initialized = true
     }).finally(() => {
       this.initializePromise = null
