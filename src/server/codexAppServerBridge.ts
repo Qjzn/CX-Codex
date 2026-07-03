@@ -114,7 +114,7 @@ import {
   evaluateServerRequestPolicy,
   type WebBridgeSettings,
 } from './serverRequestPolicy.js'
-import { toPendingServerRequestDiagnosticsList } from './serverRequestDiagnostics.js'
+import { createServerRequestDiagnosticsSnapshot } from './serverRequestDiagnostics.js'
 import {
   DEFAULT_WEB_BRIDGE_SETTINGS,
   normalizeWebBridgeSettings,
@@ -2556,6 +2556,13 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
+      if (req.method === 'GET' && url.pathname === '/codex-api/server-requests/pending/diagnostics') {
+        setJson(res, 200, {
+          data: createServerRequestDiagnosticsSnapshot(appServer.listPendingServerRequests()),
+        })
+        return
+      }
+
       if (req.method === 'GET' && url.pathname === '/codex-api/events/replay') {
         const afterSeq = Number.parseInt((url.searchParams.get('after') ?? '0').trim(), 10)
         const limit = Number.parseInt((url.searchParams.get('limit') ?? '200').trim(), 10)
@@ -2671,12 +2678,14 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'GET' && url.pathname === '/codex-api/health') {
         const schemaAudit = await readAppServerSchemaAuditSummary()
+        const serverRequestDiagnostics = createServerRequestDiagnosticsSnapshot(appServer.listPendingServerRequests())
         setJson(res, 200, {
           status: 'ok',
           data: {
             appServer: appServer.getStatus(),
             notificationDiagnostics: notificationDiagnostics.snapshot(),
             statusDiagnostics: statusDiagnostics.snapshot(),
+            serverRequestDiagnostics,
             schemaAudit,
             transcription: getTranscriptionProxyConfigSnapshot(),
             runtimeStore: runtimeStore.getHealth(),
@@ -2689,6 +2698,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (req.method === 'GET' && url.pathname === '/codex-api/diagnostics') {
         const runtimeHealth = runtimeStore.getHealth()
         const schemaAudit = await readAppServerSchemaAuditSummary()
+        const serverRequestDiagnostics = createServerRequestDiagnosticsSnapshot(appServer.listPendingServerRequests())
         const recentEvents = runtimeStore
           .listEventsAfter(Math.max(0, runtimeHealth.latestSeq - 20), 20)
           .notifications
@@ -2716,6 +2726,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             appServer: appServer.getStatus(),
             notificationDiagnostics: notificationDiagnostics.snapshot(),
             statusDiagnostics: statusDiagnostics.snapshot(),
+            serverRequestDiagnostics,
             schemaAudit,
             transcription: getTranscriptionProxyConfigSnapshot(),
             runtimeStore: runtimeHealth,
@@ -2723,7 +2734,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
               uncertainRequests,
               recentEvents,
             },
-            pendingServerRequests: toPendingServerRequestDiagnosticsList(appServer.listPendingServerRequests()),
+            pendingServerRequests: serverRequestDiagnostics.pendingRequests,
             timestamp: new Date().toISOString(),
           },
         })

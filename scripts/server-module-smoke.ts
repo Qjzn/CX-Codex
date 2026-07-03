@@ -50,6 +50,7 @@ import {
 } from '../src/server/serverRequestPolicy.js'
 import {
   classifyServerRequestMethod,
+  createServerRequestDiagnosticsSnapshot,
   toPendingServerRequestDiagnostics,
   toPendingServerRequestDiagnosticsList,
 } from '../src/server/serverRequestDiagnostics.js'
@@ -246,6 +247,27 @@ function smokeServerRequestDiagnostics(): void {
   })
   assert.equal('params' in diagnostics, false)
   assert.deepEqual(toPendingServerRequestDiagnosticsList([request]), [diagnostics])
+
+  const snapshot = createServerRequestDiagnosticsSnapshot([
+    request,
+    {
+      id: 10,
+      method: 'mcp/server/elicitation/request',
+      params: { prompt: 'hidden' },
+      receivedAtIso: '2026-07-03T00:00:01.000Z',
+    },
+    {
+      id: 11,
+      method: 'server/unknown/request',
+      params: { prompt: 'hidden' },
+      receivedAtIso: '2026-07-03T00:00:02.000Z',
+    },
+  ])
+  assert.equal(snapshot.pendingRequestCount, 3)
+  assert.equal(snapshot.pendingByKind.approval, 1)
+  assert.equal(snapshot.pendingByKind.elicitation, 1)
+  assert.equal(snapshot.pendingByKind.request, 1)
+  assert.equal('params' in snapshot.pendingRequests[0], false)
 }
 
 function smokeAppServerJsonRpcWire(): void {

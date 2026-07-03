@@ -322,6 +322,12 @@ type PendingServerRequestDiagnostics = {
   receivedAtIso: string
 }
 
+type ServerRequestDiagnostics = {
+  pendingRequestCount: number
+  pendingByKind: Record<PendingServerRequestDiagnostics['kind'], number>
+  pendingRequests: PendingServerRequestDiagnostics[]
+}
+
 type UnknownNotificationDiagnostics = {
   method: string
   count: number
@@ -394,6 +400,7 @@ type DiagnosticsData = {
     unknownStatusCount: number
     recentUnknownStatuses: UnknownStatusDiagnostics[]
   }
+  serverRequestDiagnostics?: ServerRequestDiagnostics
   schemaAudit?: SchemaAuditDiagnostics
   transcription?: TranscriptionDiagnostics
   runtimeStore: RuntimeStoreDiagnostics
@@ -479,7 +486,11 @@ const transcription = computed(() => diagnostics.value?.transcription ?? emptyTr
 const schemaAudit = computed(() => diagnostics.value?.schemaAudit ?? emptySchemaAudit)
 const uncertainRequests = computed(() => diagnostics.value?.runtime.uncertainRequests ?? [])
 const recentEvents = computed(() => diagnostics.value?.runtime.recentEvents ?? [])
-const pendingServerRequests = computed(() => diagnostics.value?.pendingServerRequests ?? [])
+const pendingServerRequests = computed(() => (
+  diagnostics.value?.serverRequestDiagnostics?.pendingRequests
+  ?? diagnostics.value?.pendingServerRequests
+  ?? []
+))
 const slowRpcCalls = computed(() => appServer.value.rpcDiagnostics?.recentSlowRpc ?? [])
 const timeoutCount = computed(() => appServer.value.rpcDiagnostics?.recentTimeouts?.length ?? 0)
 const unknownNotifications = computed(() => diagnostics.value?.notificationDiagnostics?.recentUnknownNotifications ?? [])
