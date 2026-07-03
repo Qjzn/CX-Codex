@@ -150,6 +150,17 @@ import {
   runCommandWithOutput,
 } from '../src/server/commandRunner.js'
 import {
+  ensureLocalCodexGitignoreHasRollbacks,
+  ensureRepoHasInitialCommit,
+  ensureRollbackGitRepo,
+  findRollbackCommitByExactMessage,
+  getRollbackGitDirForCwd,
+  hasRollbackGitWorkingTreeChanges,
+  normalizeCommitMessage,
+  runRollbackGit,
+  runRollbackGitWithOutput,
+} from '../src/server/appServerRollbackGit.js'
+import {
   getCodexAuthPath,
   getCodexGlobalStatePath,
   getCodexHomeDir,
@@ -256,6 +267,7 @@ try {
   smokeServerRequestDiagnostics()
   smokeServerRequestReply()
   await smokeCommandRunner()
+  await smokeAppServerRollbackGit()
   await smokeFileUpload()
   smokeHttpJsonResponse()
   smokeErrorMessage()
@@ -1452,6 +1464,45 @@ async function smokeCommandRunner(): Promise<void> {
         && error.message.includes('stderr detail')
         && error.message.includes('stdout detail'),
     )
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function smokeAppServerRollbackGit(): Promise<void> {
+  assert.equal(normalizeCommitMessage(null), '')
+  assert.equal(normalizeCommitMessage(' first line \r\n\r\n second line '), 'first line\nsecond line')
+  assert.equal(normalizeCommitMessage(`x${'y'.repeat(2500)}`).length, 2000)
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-rollback-git-'))
+  try {
+    assert.equal(getRollbackGitDirForCwd(tempDir), join(tempDir, '.codex', 'rollbacks', '.git'))
+
+    await ensureLocalCodexGitignoreHasRollbacks(tempDir)
+    await ensureLocalCodexGitignoreHasRollbacks(tempDir)
+    assert.equal(await readFile(join(tempDir, '.codex', '.gitignore'), 'utf8'), 'rollbacks/\n')
+
+    const sourceRepo = join(tempDir, 'source')
+    await mkdir(sourceRepo, { recursive: true })
+    await runCommand('git', ['init'], { cwd: sourceRepo })
+    await ensureRepoHasInitialCommit(sourceRepo)
+    assert.equal(await readFile(join(sourceRepo, 'AGENTS.md'), 'utf8'), '')
+
+    const worktree = join(tempDir, 'worktree')
+    await mkdir(worktree, { recursive: true })
+    assert.equal(await ensureRollbackGitRepo(worktree), getRollbackGitDirForCwd(worktree))
+    assert.equal(await hasRollbackGitWorkingTreeChanges(worktree), true)
+
+    await writeFile(join(worktree, 'note.txt'), 'one\n', 'utf8')
+    await runRollbackGit(worktree, ['add', '-A'])
+    await runRollbackGit(worktree, ['commit', '-m', 'First line\n\nsecond line'])
+    assert.equal(await runRollbackGitWithOutput(worktree, ['status', '--porcelain']), '')
+
+    const commitSha = await findRollbackCommitByExactMessage(worktree, ' First line \n second line ')
+    assert.match(commitSha, /^[0-9a-f]{40}$/u)
+
+    await writeFile(join(worktree, 'note.txt'), 'two\n', 'utf8')
+    assert.equal(await hasRollbackGitWorkingTreeChanges(worktree), true)
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }

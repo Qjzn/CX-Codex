@@ -2318,6 +2318,36 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server rollback git helper 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRollbackGit.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 rollback git helper 的提交消息归一化、私有 rollback git 路径、`.codex/.gitignore` 幂等写入、rollback repo 初始化、提交查找和 dirty worktree 检测。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 从 `appServerRollbackGit.ts` 导入 `ensureRepoHasInitialCommit()`、`normalizeCommitMessage()`、`ensureRollbackGitRepo()`、`runRollbackGit*()`、`findRollbackCommitByExactMessage()` 和 `hasRollbackGitWorkingTreeChanges()`，不再内联 rollback git helper。
+5. 代码审查确认 `/codex-api/worktree/auto-commit` 和 `/codex-api/worktree/rollback-to-message` 的 HTTP 状态码、响应字段和错误处理逻辑未改变。
+
+#### Expected Results
+- `src/server/appServerRollbackGit.ts` 集中维护私有 `.codex/rollbacks/.git` 初始化、命令包装、提交消息归一化和 rollback commit 查找。
+- `.codex/.gitignore` 仍只追加 `rollbacks/` 且重复执行保持幂等。
+- rollback repo 初始化后仍配置本地提交身份，并保留 `Initialize rollback history` 空提交 fallback。
+- auto-commit 和 rollback-to-message 路由继续复用原有 helper 行为，不扩大主 bridge 的职责。
+- server module smoke 覆盖临时目录内的真实 git 初始化、commit、status 和 message lookup；release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/appServerRollbackGit.ts`，撤销 `scripts/server-module-smoke.ts` 中的 rollback git smoke，并把 rollback git helper 恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: App Server runtime bridge helper 模块化
 
 #### Prerequisites
