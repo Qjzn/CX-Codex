@@ -1310,3 +1310,35 @@ This file tracks manual regression and feature verification steps.
   - `/codex-api/diagnostics` 返回 `appServer`、`runtimeStore`、`runtime.uncertainRequests`、`runtime.recentEvents`，且不包含请求 payload。
   - `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:17424 -ThreadId 019e8166-4f20-7183-9c8a-f2fe56246e95` 通过。
   - 脚本验证了 `/#/`、`/#/skills`、`/#/github-trending`、`/#/diagnostics`、`local-preview.html` 和线程页，移动视口均无横向溢出。
+
+---
+
+### Feature: Codex App Server 协议兼容审计流程
+
+#### Prerequisites
+- 本机已安装可用的 Codex CLI，并能执行 `codex app-server generate-ts` 和 `codex app-server generate-json-schema`。
+- 当前仓库保留 `documentation/app-server-schemas/typescript/` 和 `documentation/app-server-schemas/json/` 基线目录。
+- 使用 PowerShell 运行命令。
+
+#### Steps
+1. 执行 `npm run audit:app-server-schemas`。
+2. 查看命令输出里的 `output/app-server-schema-audit/<timestamp>` 审计目录。
+3. 如果脚本返回退出码 `1`，使用输出中的差异统计定位变更，再按需运行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/audit-app-server-schemas.ps1 -FullDiff` 查看完整 diff。
+4. 对照 `docs/protocol-compatibility.zh-CN.md` 的兼容门槛，确认新增或变化的 method、event、field 是否需要更新 normalizer、runtime 状态机、停止/审批处理、README 或安全说明。
+5. 执行 `git diff --check`，确认新增文档和脚本无空白格式问题。
+
+#### Expected Results
+- 无协议差异时，脚本返回退出码 `0`，并显示 `No schema differences found.`。
+- 有协议差异时，脚本返回退出码 `1`，并显示审计目录和差异统计；这表示需要人工审计，不代表 schema 生成失败。
+- 生成失败、Codex CLI 不可用或基线目录缺失时，脚本以非 `0/1` 的错误状态结束。
+- 仓库基线不会被脚本直接覆盖，只有临时审计目录会新增输出。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 配置验证：`node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json ok')"` 输出 `package.json ok`。
+- 2026-07-03 脚本基础路径验证：`powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/audit-app-server-schemas.ps1 -SkipGenerate` 通过，确认基线目录、输出目录和 Codex CLI 解析路径正常。
+- 2026-07-03 完整审计验证：`npm.cmd run audit:app-server-schemas` 成功生成官方 schema，退出码 `1`，确认当前官方 schema 与仓库基线存在差异，需要进入协议差异审计阶段。
+
+#### Rollback / Cleanup
+- 审计完成后可删除 `output/app-server-schema-audit/<timestamp>` 临时目录。
+- 如果确认官方 schema 变化需要纳入仓库，先更新代码兼容层和文档，再有意覆盖 `documentation/app-server-schemas/` 基线并记录验证证据。
