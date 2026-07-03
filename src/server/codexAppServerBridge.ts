@@ -21,6 +21,7 @@ import {
 } from './runtimeState.js'
 import { PendingServerRequestStore, type PendingServerRequest } from './pendingServerRequests.js'
 import { logBridgeError, writeBridgeLog } from './bridgeLog.js'
+import { getErrorMessage } from './errorMessage.js'
 import {
   applyRuntimeTurnOptionsToInput,
   buildRuntimeRequestPayloadSummary,
@@ -240,25 +241,6 @@ function trimThreadTurnsInRpcResult(method: string, result: unknown): unknown {
       turns: turns.slice(-THREAD_RESPONSE_TURN_LIMIT),
     },
   }
-}
-
-function getErrorMessage(payload: unknown, fallback: string): string {
-  if (payload instanceof Error && payload.message.trim().length > 0) {
-    return payload.message
-  }
-
-  const record = asRecord(payload)
-  if (!record) return fallback
-
-  const error = record.error
-  if (typeof error === 'string' && error.length > 0) return error
-
-  const nestedError = asRecord(error)
-  if (nestedError && typeof nestedError.message === 'string' && nestedError.message.length > 0) {
-    return nestedError.message
-  }
-
-  return fallback
 }
 
 function toIsoFromUnixSeconds(value: unknown): string {

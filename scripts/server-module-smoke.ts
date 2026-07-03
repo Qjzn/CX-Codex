@@ -181,6 +181,7 @@ import {
   prepareOpenAiTranscribeBody,
 } from '../src/server/transcriptionProxy.js'
 import { setJson } from '../src/server/httpJsonResponse.js'
+import { getErrorMessage } from '../src/server/errorMessage.js'
 
 const originalNow = Date.now
 
@@ -209,6 +210,7 @@ try {
   await smokeCommandRunner()
   await smokeFileUpload()
   smokeHttpJsonResponse()
+  smokeErrorMessage()
   await smokeComposerFileSearch()
   await smokeGithubTrending()
   smokeCodexPaths()
@@ -1303,6 +1305,15 @@ function smokeHttpJsonResponse(): void {
   assert.equal(response.statusCode, 202)
   assert.equal(headers.get('Content-Type'), 'application/json; charset=utf-8')
   assert.equal(endedBody, '{"ok":true,"count":2}')
+}
+
+function smokeErrorMessage(): void {
+  assert.equal(getErrorMessage(new Error('direct failure'), 'fallback'), 'direct failure')
+  assert.equal(getErrorMessage({ error: 'plain failure' }, 'fallback'), 'plain failure')
+  assert.equal(getErrorMessage({ error: { message: 'nested failure' } }, 'fallback'), 'nested failure')
+  assert.equal(getErrorMessage({ message: 'ignored top-level message' }, 'fallback'), 'fallback')
+  assert.equal(getErrorMessage({ error: { message: '' } }, 'fallback'), 'fallback')
+  assert.equal(getErrorMessage(null, 'fallback'), 'fallback')
 }
 
 async function smokeComposerFileSearch(): Promise<void> {

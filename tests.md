@@ -2091,6 +2091,34 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Bridge error message helper 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/errorMessage.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 Error、`error` 字符串、嵌套 `error.message` 和 fallback 行为。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 从 `errorMessage.ts` 导入 `getErrorMessage()`，不再内联通用错误文案解析。
+5. 代码审查确认 `src/server/errorMessage.ts` 保留原有语义：优先使用非空 `Error.message`，其次使用 `payload.error` 字符串，再使用嵌套 `payload.error.message`，否则返回 fallback。
+
+#### Expected Results
+- `src/server/errorMessage.ts` 集中维护 bridge HTTP/runtime 错误文案解析 helper。
+- bridge 仍负责路由状态码、日志上下文和 runtime 状态处理。
+- server module smoke 直接覆盖 `getErrorMessage()` 输出；release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/errorMessage.ts`，撤销 `scripts/server-module-smoke.ts` 中的 error message smoke，并把 `getErrorMessage()` 恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: Codex App Server 兼容性 Issue 治理
 
 #### Prerequisites
