@@ -1910,6 +1910,32 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Multipart file upload 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/fileUpload.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 multipart boundary 读取、文件 part 解析、文件名净化、CRLF 裁剪、缺失文件错误和临时目录写入。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `/codex-api/upload-file` route 只负责调用 `handleMultipartFileUpload()` 和返回 JSON；multipart 解析、文件名净化和临时文件写入均来自 `src/server/fileUpload.ts`。
+
+#### Expected Results
+- 缺少 multipart boundary 时仍返回 400 和 `Missing multipart boundary`。
+- 请求中没有文件 part 时仍返回 400 和 `No file in request`。
+- 上传文件名中的 `/` 和 `\` 会替换为 `_`，避免路径穿越。
+- 上传文件仍写入系统临时目录下的 `codex-web-uploads/f-*` 子目录，并返回 `{ path }`。
+- 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Rollback/Cleanup
+- 如需回滚，移除 `src/server/fileUpload.ts`，将 bridge 重新改回内联 multipart upload helper，并从 `scripts/verify-server-modules.mjs` 与 `scripts/server-module-smoke.ts` 移除对应 smoke 覆盖。
+
+---
+
 ### Feature: App Server stdout line buffer 模块化
 
 #### Prerequisites

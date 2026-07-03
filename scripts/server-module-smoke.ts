@@ -25,6 +25,13 @@ import {
   writeWebBridgeSettings,
 } from '../src/server/webBridgeSettings.js'
 import {
+  FileUploadError,
+  bufferIndexOf,
+  parseMultipartFileUpload,
+  readMultipartBoundary,
+  writeUploadedFile,
+} from '../src/server/fileUpload.js'
+import {
   normalizeThreadTokenUsage,
   normalizeThreadTokenUsageFromSessionLogEntry,
   parseThreadTokenUsageFromSessionLog,
@@ -76,6 +83,7 @@ try {
   smokeAppServerStderrLogger()
   smokePlanModeTurnStore()
   smokeServerRequestPolicy()
+  await smokeFileUpload()
   await smokeWebBridgeSettings()
   await smokeThreadTokenUsage()
   await smokeThreadTitleCache()
@@ -392,6 +400,47 @@ function smokeServerRequestPolicy(): void {
   })
   assert.equal(unsupported.kind, 'reject-unsupported')
   assert.match(JSON.stringify(buildUnsupportedServerRequestResult('item/tool/call')), /不能代执行这个工具/)
+}
+
+async function smokeFileUpload(): Promise<void> {
+  assert.equal(bufferIndexOf(Buffer.from('abc--boundary'), Buffer.from('--')), 3)
+  assert.equal(bufferIndexOf(Buffer.from('abc'), Buffer.from('missing')), -1)
+  assert.equal(readMultipartBoundary('multipart/form-data; boundary=demo-boundary'), 'demo-boundary')
+  assert.throws(
+    () => readMultipartBoundary('multipart/form-data'),
+    (error) => error instanceof FileUploadError && error.statusCode === 400 && /Missing multipart boundary/.test(error.message),
+  )
+
+  const boundary = 'cx-boundary'
+  const body = Buffer.from([
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="meta"',
+    '',
+    'ignored',
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="file"; filename="nested/path\\demo.txt"',
+    'Content-Type: text/plain',
+    '',
+    'hello upload',
+    `--${boundary}--`,
+    '',
+  ].join('\r\n'), 'utf8')
+
+  const parsed = parseMultipartFileUpload(body, `multipart/form-data; boundary=${boundary}`)
+  assert.equal(parsed.fileName, 'nested_path_demo.txt')
+  assert.equal(parsed.fileData.toString('utf8'), 'hello upload')
+  assert.throws(
+    () => parseMultipartFileUpload(Buffer.from(`--${boundary}\r\n\r\nno file\r\n`, 'utf8'), `multipart/form-data; boundary=${boundary}`),
+    (error) => error instanceof FileUploadError && error.statusCode === 400 && /No file in request/.test(error.message),
+  )
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-upload-'))
+  try {
+    const destPath = await writeUploadedFile(parsed, tempDir)
+    assert.equal(await readFile(destPath, 'utf8'), 'hello upload')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
 }
 
 async function smokeWebBridgeSettings(): Promise<void> {
