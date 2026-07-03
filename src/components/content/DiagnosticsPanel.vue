@@ -175,6 +175,23 @@
           </li>
         </ul>
       </section>
+
+      <section class="diagnostics-section">
+        <div class="diagnostics-section-header">
+          <h2>未知状态</h2>
+          <span class="diagnostics-badge" :data-tone="unknownStatusCount > 0 ? 'warning' : 'ok'">
+            {{ unknownStatusCount }}
+          </span>
+        </div>
+        <div v-if="unknownStatuses.length === 0" class="diagnostics-empty">暂无未知 App Server status。</div>
+        <ul v-else class="diagnostics-list">
+          <li v-for="status in unknownStatuses" :key="`${status.source}-${status.normalizedValue}`">
+            <span>{{ status.source }}: {{ status.value }}</span>
+            <strong>{{ status.count }}</strong>
+            <small>{{ formatAge(status.lastSeenAtIso) }}</small>
+          </li>
+        </ul>
+      </section>
     </div>
   </div>
 </template>
@@ -243,6 +260,16 @@ type UnknownNotificationDiagnostics = {
   turnId: string
 }
 
+type UnknownStatusDiagnostics = {
+  source: string
+  value: string
+  normalizedValue: string
+  count: number
+  firstSeenAtIso: string
+  lastSeenAtIso: string
+  threadId: string
+}
+
 type TranscriptionDiagnostics = {
   provider: 'openai' | 'chatgpt'
   officialApiConfigured: boolean
@@ -262,6 +289,10 @@ type DiagnosticsData = {
   notificationDiagnostics?: {
     unknownNotificationCount: number
     recentUnknownNotifications: UnknownNotificationDiagnostics[]
+  }
+  statusDiagnostics?: {
+    unknownStatusCount: number
+    recentUnknownStatuses: UnknownStatusDiagnostics[]
   }
   transcription?: TranscriptionDiagnostics
   runtimeStore: RuntimeStoreDiagnostics
@@ -320,6 +351,8 @@ const slowRpcCalls = computed(() => appServer.value.rpcDiagnostics?.recentSlowRp
 const timeoutCount = computed(() => appServer.value.rpcDiagnostics?.recentTimeouts?.length ?? 0)
 const unknownNotifications = computed(() => diagnostics.value?.notificationDiagnostics?.recentUnknownNotifications ?? [])
 const unknownNotificationCount = computed(() => diagnostics.value?.notificationDiagnostics?.unknownNotificationCount ?? 0)
+const unknownStatuses = computed(() => diagnostics.value?.statusDiagnostics?.recentUnknownStatuses ?? [])
+const unknownStatusCount = computed(() => diagnostics.value?.statusDiagnostics?.unknownStatusCount ?? 0)
 
 const appServerTone = computed<Tone>(() => {
   if (!appServer.value.running || !appServer.value.initialized || appServer.value.stopping) return 'danger'
@@ -337,7 +370,12 @@ const transcriptionTone = computed<Tone>(() => (
 
 const overallTone = computed<Tone>(() => {
   if (appServerTone.value === 'danger') return 'danger'
-  if (appServerTone.value === 'warning' || runtimeTone.value === 'warning' || unknownNotificationCount.value > 0) return 'warning'
+  if (
+    appServerTone.value === 'warning'
+    || runtimeTone.value === 'warning'
+    || unknownNotificationCount.value > 0
+    || unknownStatusCount.value > 0
+  ) return 'warning'
   return 'ok'
 })
 

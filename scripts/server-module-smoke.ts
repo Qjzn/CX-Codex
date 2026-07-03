@@ -13,6 +13,11 @@ import {
   AppServerNotificationDiagnostics,
   isKnownAppServerNotificationMethod,
 } from '../src/server/appServerNotificationDiagnostics.js'
+import {
+  AppServerStatusDiagnostics,
+  isKnownAppServerThreadStatus,
+  readThreadStatusCandidates,
+} from '../src/server/appServerStatusDiagnostics.js'
 import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheForRpc } from '../src/server/appServerRpcCache.js'
 import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.js'
 import {
@@ -140,6 +145,7 @@ try {
   smokePendingServerRequests()
   smokeAppServerJsonRpcWire()
   smokeAppServerNotificationDiagnostics()
+  smokeAppServerStatusDiagnostics()
   smokeTranscriptionProxyConfig()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
@@ -284,6 +290,85 @@ function smokeAppServerNotificationDiagnostics(): void {
 
   diagnostics.clear()
   assert.equal(diagnostics.snapshot().unknownNotificationCount, 0)
+}
+
+function smokeAppServerStatusDiagnostics(): void {
+  assert.equal(isKnownAppServerThreadStatus('running'), true)
+  assert.equal(isKnownAppServerThreadStatus('completed'), true)
+  assert.equal(isKnownAppServerThreadStatus('inProgress'), true)
+  assert.equal(isKnownAppServerThreadStatus('awaiting_handoff'), false)
+  assert.deepEqual(readThreadStatusCandidates({
+    thread: {
+      status: { type: 'running' },
+      turnStatus: 'inProgress',
+      turns: [
+        { id: 'turn-a', status: 'completed' },
+        { id: 'turn-b', status: 'customTurnState' },
+      ],
+    },
+  }), [
+    { source: 'thread.status.type', value: 'running' },
+    { source: 'thread.turnStatus', value: 'inProgress' },
+    { source: 'thread.turns.status', value: 'customTurnState' },
+  ])
+
+  const diagnostics = new AppServerStatusDiagnostics({ maxRecentUnknown: 2 })
+  diagnostics.observeThreadRead({
+    threadId: 'thread-a',
+    atIso: '2026-07-03T00:00:00.000Z',
+    payload: {
+      thread: {
+        status: 'running',
+        turnStatus: 'inProgress',
+        turns: [{ status: 'completed' }],
+      },
+    },
+  })
+  assert.deepEqual(diagnostics.snapshot(), {
+    unknownStatusCount: 0,
+    recentUnknownStatuses: [],
+  })
+
+  diagnostics.observeThreadRead({
+    threadId: 'thread-a',
+    atIso: '2026-07-03T00:00:01.000Z',
+    payload: {
+      thread: {
+        status: { type: 'awaiting_handoff' },
+        turns: [{ status: 'customTurnState' }],
+      },
+    },
+  })
+  diagnostics.observeThreadRead({
+    threadId: 'thread-b',
+    atIso: '2026-07-03T00:00:02.000Z',
+    payload: {
+      thread: {
+        status: { type: 'awaiting_handoff' },
+      },
+    },
+  })
+  diagnostics.observeThreadRead({
+    threadId: 'thread-c',
+    atIso: '2026-07-03T00:00:03.000Z',
+    payload: {
+      thread: {
+        turnStatus: 'handoffQueued',
+      },
+    },
+  })
+
+  const snapshot = diagnostics.snapshot()
+  assert.equal(snapshot.unknownStatusCount, 4)
+  assert.deepEqual(snapshot.recentUnknownStatuses.map((item) => `${item.source}:${item.normalizedValue}`), [
+    'thread.turnStatus:handoffqueued',
+    'thread.status.type:awaiting_handoff',
+  ])
+  assert.equal(snapshot.recentUnknownStatuses[1]?.count, 2)
+  assert.equal(snapshot.recentUnknownStatuses[1]?.threadId, 'thread-b')
+
+  diagnostics.clear()
+  assert.equal(diagnostics.snapshot().unknownStatusCount, 0)
 }
 
 function smokeTranscriptionProxyConfig(): void {

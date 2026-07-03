@@ -80,6 +80,7 @@ import {
 } from './appServerRpcQueue.js'
 import { createAppServerJsonRpcError } from './appServerRpcErrors.js'
 import { AppServerNotificationDiagnostics } from './appServerNotificationDiagnostics.js'
+import { AppServerStatusDiagnostics } from './appServerStatusDiagnostics.js'
 import {
   createAppServerRpcErrorResponse,
   createAppServerRpcNotification,
@@ -1702,6 +1703,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   })
   const runtimeStore = new RuntimeStore()
   const notificationDiagnostics = new AppServerNotificationDiagnostics()
+  const statusDiagnostics = new AppServerStatusDiagnostics()
   const notificationReplayBuffer: BridgeNotificationEvent[] = []
   const bridgeNotificationListeners = new Set<(value: BridgeNotificationEvent) => void>()
   let notificationSeq = runtimeStore.getLatestEventSeq()
@@ -1840,6 +1842,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         threadId: normalizedThreadId,
         includeTurns: false,
       })
+      statusDiagnostics.observeThreadRead({
+        threadId: normalizedThreadId,
+        payload: lightThreadRead,
+      })
     } catch (error) {
       if (!isThreadMaterializingError(error) && !isRpcTimeoutError(error)) {
         throw error
@@ -1874,6 +1880,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           includeTurns: true,
         })
         threadRead = trimThreadTurnsInRpcResult('thread/read', rawThreadRead)
+        statusDiagnostics.observeThreadRead({
+          threadId: normalizedThreadId,
+          payload: threadRead,
+        })
         rememberCachedThreadRead(normalizedThreadId, threadRead)
         messageState = 'fresh'
       } catch (error) {
@@ -2663,6 +2673,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           data: {
             appServer: appServer.getStatus(),
             notificationDiagnostics: notificationDiagnostics.snapshot(),
+            statusDiagnostics: statusDiagnostics.snapshot(),
             transcription: getTranscriptionProxyConfigSnapshot(),
             runtimeStore: runtimeStore.getHealth(),
             timestamp: new Date().toISOString(),
@@ -2699,6 +2710,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           data: {
             appServer: appServer.getStatus(),
             notificationDiagnostics: notificationDiagnostics.snapshot(),
+            statusDiagnostics: statusDiagnostics.snapshot(),
             transcription: getTranscriptionProxyConfigSnapshot(),
             runtimeStore: runtimeHealth,
             runtime: {
@@ -3159,6 +3171,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     bridgeNotificationListeners.clear()
     unsubscribeAppServerNotifications()
     notificationDiagnostics.clear()
+    statusDiagnostics.clear()
     runtimeStore.close()
     appServer.dispose()
   }

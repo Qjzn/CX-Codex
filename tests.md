@@ -2481,3 +2481,37 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 代码审查：`rg` 确认 settings 默认值、归一化和读写 helper 已集中到 `src/server/webBridgeSettings.ts`。
 - 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
 - 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `Server module smoke`、构建和 CLI smoke。
+
+---
+
+### Feature: App Server 未知状态诊断
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerStatusDiagnostics.ts`。
+- 本地 Codex App Server 可通过 bridge 执行 `thread/read`，或至少可以运行 server module smoke。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node dist-cli\index.js --help`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 手工打开诊断中心，确认页面存在“未知状态”区域。
+7. 在本地 bridge 运行后请求 `/codex-api/diagnostics`，确认响应 `data.statusDiagnostics` 包含 `unknownStatusCount` 和 `recentUnknownStatuses`。
+
+#### Expected Results
+- `thread.status`、`thread.status.type`、`thread.turnStatus` 和最新 `thread.turns[].status` 中的已知状态不会增加未知状态计数。
+- 未知状态会按 `source + normalizedValue` 聚合，保留 count、first/last seen、threadId。
+- `/codex-api/health` 和 `/codex-api/diagnostics` 都返回 `statusDiagnostics`，不暴露用户 prompt 或敏感 payload。
+- 诊断中心在出现未知状态时整体进入 warning，并展示来源、原始值、计数和最近出现时间。
+- Runtime 状态机仍只把明确 active 状态映射为运行态；未知 status 不会因为名字存在就被当成 running。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，移除 `src/server/appServerStatusDiagnostics.ts`，并撤销 bridge、诊断面板、server module smoke、协议矩阵、changelog 和本测试说明中的相关引用。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖未知状态聚合与裁剪。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CJS 启动烟测：`node dist-cli\index.js --help` 通过，输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace、governance docs、build、server module smoke 和 CLI smoke。

@@ -29,7 +29,7 @@
 | JSON-RPC / schema bundle | 新增 `codex_app_server_protocol.v2.schemas.json`，根 schema 与 v2 schema 均有大范围变化 | 部分覆盖。仓库已有 schema 基线、审计脚本、临时输出和已提交的 `docs/app-server-schema-audit-summary.json` | 每次升级 Codex CLI 先生成临时 schema，再审计；如差异变化，更新摘要快照和矩阵后再进入 release |
 | Transport / handshake / auth | 官方 App Server wire format 省略 `"jsonrpc":"2.0"`；默认 `stdio` JSONL；连接后先 `initialize` 再发 `initialized` notification；WebSocket 为 experimental and unsupported，远程暴露必须配置 auth；过载可能返回 `-32001` | 已覆盖稳定 stdio 路径。当前 bridge 使用 stdio JSONL 子进程通信，出站 request/response/notification 统一省略 `"jsonrpc":"2.0"`，并在 `initialize` 成功后发送 `initialized`；Web/Android 侧不直接暴露 app-server WebSocket | 继续默认走本地 stdio；如未来接入 WebSocket，必须先实现 auth、`/readyz`/`/healthz` 健康检查、Origin 拒绝和 overload retry |
 | Thread / Turn 核心 | `ThreadStatus`、`ThreadActiveFlag`、`ThreadSource`、`TurnItemsView`、`TurnEnvironmentParams`、`ThreadInjectItems*`、`ThreadShellCommand*`、`ThreadUnsubscribe*` 等新增 | 部分覆盖。现有代码覆盖 `thread/list`、`thread/read`、`thread/start`、`thread/resume`、`thread/fork`、`thread/rollback`、`thread/archive`、`thread/name/set`、`turn/start`、`turn/interrupt` | 扩展 normalizer 对 `thread.status`、`active flag`、`unsubscribe status` 的容错；不支持的 action 必须展示为 unhandled raw block |
-| Runtime 状态机 | 最新 schema 对 turn/thread 状态表达更细，新增 goal/status/realtime 通知 | 部分覆盖。当前已有 runtime store、reconcile、stop uncertain、notification replay | 增加未知状态 telemetry 计数；状态机只把明确状态映射为运行态，其余进入降级态 |
+| Runtime 状态机 | 最新 schema 对 turn/thread 状态表达更细，新增 goal/status/realtime 通知 | 部分覆盖。当前已有 runtime store、reconcile、stop uncertain、notification replay；未知 thread/turn status 已在 health/diagnostics 与诊断中心按来源和值聚合计数 | 继续扩展具体新增状态的产品语义；状态机只把明确状态映射为运行态，其余保持非运行/降级路径 |
 | 审批与权限 | 新增 permission profile、guardian review、network/file-system permission、approval review 通知 | 部分覆盖。当前已有 command/file/mcp 基础审批和停止审计，但未覆盖 guardian/profile | 先做只读展示和拒绝/降级策略，避免默认放权；所有新增 approval 必须记录来源、scope、decision |
 | Command / Process / Terminal | 新增 command exec stream、resize、write、terminate、process output delta/exited、terminal size | 部分覆盖。当前 UI 能展示 commandExecution 聚合输出，但不支持交互式 terminal 流 | 保证新增 stream/delta item 不崩溃；后续再设计交互式终端 UI |
 | File System | 新增 fs read/write/copy/remove/watch/unwatch/metadata/directory 相关 schema | 待接入。当前项目没有把 App Server fs API 暴露为文件管理入口 | 默认不暴露写操作；如接入，必须绑定 workspace permission 和路径边界检查 |
@@ -56,7 +56,7 @@
 ### P1：产品竞争力
 
 1. 插件、MCP、skills 的只读状态展示和刷新。
-2. 诊断中心展示 schema audit 摘要、未知通知、权限请求队列。
+2. 诊断中心展示 schema audit 摘要、未知通知、未知状态、权限请求队列。
 3. Windows sandbox readiness 和模型 reroute/verification 可见。
 
 ### P2：实验能力
