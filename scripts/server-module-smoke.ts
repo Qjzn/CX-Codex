@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { AppServerLineBuffer } from '../src/server/appServerLineBuffer.js'
 import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheForRpc } from '../src/server/appServerRpcCache.js'
 import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.js'
@@ -6,6 +9,14 @@ import { AppServerRpcQueue, getAppServerRpcQueuePriority } from '../src/server/a
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
 import { PlanModeTurnStore } from '../src/server/planModeTurnStore.js'
+import {
+  normalizeThreadTokenUsage,
+  normalizeThreadTokenUsageFromSessionLogEntry,
+  parseThreadTokenUsageFromSessionLog,
+  readThreadTokenUsageFromSessionLog,
+  readThreadTokenUsageFromThreadReadPayload,
+  ThreadTokenUsageStore,
+} from '../src/server/threadTokenUsage.js'
 import {
   isRuntimeActiveState,
   RuntimeStateStore,
@@ -22,6 +33,7 @@ try {
   smokeAppServerLineBuffer()
   smokeAppServerStderrLogger()
   smokePlanModeTurnStore()
+  await smokeThreadTokenUsage()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
 } finally {
@@ -270,6 +282,116 @@ function smokePlanModeTurnStore(): void {
   assert.equal(store.count, 1)
   store.clearAll()
   assert.equal(store.count, 0)
+}
+
+async function smokeThreadTokenUsage(): Promise<void> {
+  const usage = normalizeThreadTokenUsage({
+    total_token_usage: {
+      total_tokens: -1,
+      input_tokens: 300,
+      cached_input_tokens: 25,
+      output_tokens: 70,
+      reasoning_output_tokens: 9,
+    },
+    last: {
+      totalTokens: 250,
+      inputTokens: 180,
+      cachedInputTokens: 10,
+      outputTokens: 60,
+      reasoningOutputTokens: 8,
+    },
+    model_context_window: 1000,
+  })
+  assert.ok(usage)
+  assert.equal(usage?.total.totalTokens, 0)
+  assert.equal(usage?.total.inputTokens, 300)
+  assert.equal(usage?.last.totalTokens, 250)
+  assert.equal(usage?.usedPercent, 25)
+  assert.equal(usage?.remainingTokens, 750)
+
+  const fromThreadRead = readThreadTokenUsageFromThreadReadPayload({
+    thread: {
+      tokenUsage: {
+        total: usage?.total,
+        last: usage?.last,
+        used_percent: 101,
+        remaining_tokens: -10,
+      },
+    },
+  })
+  assert.equal(fromThreadRead?.usedPercent, 100)
+  assert.equal(fromThreadRead?.remainingTokens, 0)
+
+  const fromSessionEntry = normalizeThreadTokenUsageFromSessionLogEntry({
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: {
+        total_token_usage: usage?.total,
+        last_token_usage: usage?.last,
+        model_context_window: 500,
+      },
+    },
+  })
+  assert.equal(fromSessionEntry?.modelContextWindow, 500)
+  assert.equal(fromSessionEntry?.usedPercent, 50)
+
+  const store = new ThreadTokenUsageStore()
+  store.observeUpdate({ threadId: ' thread-a ', tokenUsage: { total: usage?.total, last: usage?.last } })
+  assert.equal(store.count, 1)
+  assert.equal(store.get('thread-a')?.last.outputTokens, 60)
+  store.observeUpdate({ threadId: 'thread-a', tokenUsage: { invalid: true } })
+  assert.equal(store.get('thread-a'), null)
+  assert.equal(store.count, 0)
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-token-usage-'))
+  try {
+    const sessionPath = join(tempDir, 'session.jsonl')
+    await writeFile(sessionPath, [
+      '{malformed',
+      JSON.stringify({ type: 'event_msg', payload: { type: 'other' } }),
+      JSON.stringify({
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total: usage?.total,
+            last: { ...usage?.last, totalTokens: 100 },
+            modelContextWindow: 1000,
+          },
+        },
+      }),
+      JSON.stringify({
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: {
+              total_tokens: usage.total.totalTokens,
+              input_tokens: usage.total.inputTokens,
+              cached_input_tokens: usage.total.cachedInputTokens,
+              output_tokens: usage.total.outputTokens,
+              reasoning_output_tokens: usage.total.reasoningOutputTokens,
+            },
+            last_token_usage: {
+              total_tokens: 300,
+              input_tokens: usage.last.inputTokens,
+              cached_input_tokens: usage.last.cachedInputTokens,
+              output_tokens: usage.last.outputTokens,
+              reasoning_output_tokens: usage.last.reasoningOutputTokens,
+            },
+            model_context_window: 1000,
+          },
+        },
+      }),
+    ].join('\n'), 'utf8')
+
+    assert.equal((await parseThreadTokenUsageFromSessionLog(sessionPath))?.last.totalTokens, 300)
+    assert.equal((await readThreadTokenUsageFromSessionLog(sessionPath))?.remainingTokens, 700)
+    assert.equal(await readThreadTokenUsageFromSessionLog(join(tempDir, 'missing.jsonl')), null)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
 }
 
 function smokeRuntimeStateStore(): void {

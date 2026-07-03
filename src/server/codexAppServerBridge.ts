@@ -69,6 +69,12 @@ import {
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
 import { PlanModeTurnStore } from './planModeTurnStore.js'
+import {
+  readThreadTokenUsageFromSessionLog,
+  readThreadTokenUsageFromThreadReadPayload,
+  ThreadTokenUsageStore,
+  type ThreadTokenUsage,
+} from './threadTokenUsage.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -148,22 +154,6 @@ type PendingRpc = {
   params: unknown
   startedAtMs: number
   timeoutId: ReturnType<typeof setTimeout>
-}
-
-type TokenUsageBreakdown = {
-  totalTokens: number
-  inputTokens: number
-  cachedInputTokens: number
-  outputTokens: number
-  reasoningOutputTokens: number
-}
-
-type ThreadTokenUsage = {
-  total: TokenUsageBreakdown
-  last: TokenUsageBreakdown
-  modelContextWindow: number | null
-  usedPercent: number | null
-  remainingTokens: number | null
 }
 
 type ThreadSearchDocument = {
@@ -352,77 +342,6 @@ function readThreadUpdatedAtIsoFromThreadReadPayload(payload: unknown): string {
   const root = asRecord(payload)
   const thread = asRecord(root?.thread)
   return toIsoFromUnixSeconds(thread?.updatedAt)
-}
-
-function readNonNegativeNumber(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0
-}
-
-function readRecordNumberByAliases(record: Record<string, unknown>, ...keys: string[]): number {
-  for (const key of keys) {
-    if (key in record) {
-      return readNonNegativeNumber(record[key])
-    }
-  }
-  return 0
-}
-
-function normalizeTokenUsageBreakdown(value: unknown): TokenUsageBreakdown | null {
-  const record = asRecord(value)
-  if (!record) return null
-  return {
-    totalTokens: readRecordNumberByAliases(record, 'totalTokens', 'total_tokens'),
-    inputTokens: readRecordNumberByAliases(record, 'inputTokens', 'input_tokens'),
-    cachedInputTokens: readRecordNumberByAliases(record, 'cachedInputTokens', 'cached_input_tokens'),
-    outputTokens: readRecordNumberByAliases(record, 'outputTokens', 'output_tokens'),
-    reasoningOutputTokens: readRecordNumberByAliases(record, 'reasoningOutputTokens', 'reasoning_output_tokens'),
-  }
-}
-
-function normalizeThreadTokenUsage(value: unknown): ThreadTokenUsage | null {
-  const record = asRecord(value)
-  if (!record) return null
-  const total = normalizeTokenUsageBreakdown(record.total ?? record.total_token_usage)
-  const last = normalizeTokenUsageBreakdown(record.last ?? record.last_token_usage)
-  if (!total || !last) return null
-
-  const rawContextWindow = record.modelContextWindow ?? record.model_context_window
-  const modelContextWindow =
-    typeof rawContextWindow === 'number' && Number.isFinite(rawContextWindow) && rawContextWindow > 0
-      ? Math.max(0, rawContextWindow)
-      : null
-  const rawUsedPercent = record.usedPercent ?? record.used_percent
-  const derivedUsedTokens =
-    typeof modelContextWindow === 'number' && modelContextWindow > 0
-      ? Math.min(Math.max(last.totalTokens, 0), modelContextWindow)
-      : null
-  const usedPercent =
-    typeof rawUsedPercent === 'number' && Number.isFinite(rawUsedPercent)
-      ? Math.min(Math.max(rawUsedPercent, 0), 100)
-      : typeof derivedUsedTokens === 'number' && typeof modelContextWindow === 'number' && modelContextWindow > 0
-        ? Math.min(Math.max((derivedUsedTokens / modelContextWindow) * 100, 0), 100)
-        : null
-  const rawRemainingTokens = record.remainingTokens ?? record.remaining_tokens
-  const remainingTokens =
-    typeof rawRemainingTokens === 'number' && Number.isFinite(rawRemainingTokens)
-      ? Math.max(0, rawRemainingTokens)
-      : typeof derivedUsedTokens === 'number' && typeof modelContextWindow === 'number'
-        ? Math.max(modelContextWindow - derivedUsedTokens, 0)
-        : null
-
-  return {
-    total,
-    last,
-    modelContextWindow,
-    usedPercent,
-    remainingTokens,
-  }
-}
-
-function readThreadTokenUsageFromThreadReadPayload(payload: unknown): ThreadTokenUsage | null {
-  const root = asRecord(payload)
-  const thread = asRecord(root?.thread)
-  return normalizeThreadTokenUsage(root?.tokenUsage ?? thread?.tokenUsage)
 }
 
 function readThreadSessionPathFromThreadReadPayload(payload: unknown): string {
@@ -1188,29 +1107,6 @@ let sessionIndexThreadTitleCacheState: SessionIndexThreadTitleCacheState = {
   cache: EMPTY_THREAD_TITLE_CACHE,
 }
 
-type SessionLogThreadTokenUsageCacheState = {
-  fileSignature: string | null
-  tokenUsage: ThreadTokenUsage | null
-}
-
-const MAX_SESSION_LOG_TOKEN_USAGE_CACHE_ENTRIES = 400
-const sessionLogThreadTokenUsageCacheStateByPath = new Map<string, SessionLogThreadTokenUsageCacheState>()
-
-function writeSessionLogThreadTokenUsageCacheState(
-  sessionPath: string,
-  cacheState: SessionLogThreadTokenUsageCacheState,
-): void {
-  if (sessionLogThreadTokenUsageCacheStateByPath.has(sessionPath)) {
-    sessionLogThreadTokenUsageCacheStateByPath.delete(sessionPath)
-  }
-  sessionLogThreadTokenUsageCacheStateByPath.set(sessionPath, cacheState)
-  while (sessionLogThreadTokenUsageCacheStateByPath.size > MAX_SESSION_LOG_TOKEN_USAGE_CACHE_ENTRIES) {
-    const oldestKey = sessionLogThreadTokenUsageCacheStateByPath.keys().next().value
-    if (typeof oldestKey !== 'string') break
-    sessionLogThreadTokenUsageCacheStateByPath.delete(oldestKey)
-  }
-}
-
 function normalizeThreadTitleCache(value: unknown): ThreadTitleCache {
   const record = asRecord(value)
   if (!record) return EMPTY_THREAD_TITLE_CACHE
@@ -1323,77 +1219,6 @@ async function writeThreadTitleCache(cache: ThreadTitleCache): Promise<void> {
 
 function getSessionIndexFileSignature(stats: { mtimeMs: number; size: number }): string {
   return `${String(stats.mtimeMs)}:${String(stats.size)}`
-}
-
-function normalizeThreadTokenUsageFromSessionLogEntry(entry: unknown): ThreadTokenUsage | null {
-  const record = asRecord(entry)
-  if (record?.type !== 'event_msg') return null
-
-  const payload = asRecord(record.payload)
-  if (payload?.type !== 'token_count') return null
-
-  const info = asRecord(payload.info)
-  if (!info) return null
-
-  return normalizeThreadTokenUsage({
-    total: info.total ?? info.total_token_usage,
-    last: info.last ?? info.last_token_usage,
-    modelContextWindow: info.modelContextWindow ?? info.model_context_window,
-  })
-}
-
-async function parseThreadTokenUsageFromSessionLog(sessionPath: string): Promise<ThreadTokenUsage | null> {
-  let latestTokenUsage: ThreadTokenUsage | null = null
-  const input = createReadStream(sessionPath, { encoding: 'utf8' })
-  const lines = createInterface({
-    input,
-    crlfDelay: Infinity,
-  })
-
-  try {
-    for await (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-
-      try {
-        const tokenUsage = normalizeThreadTokenUsageFromSessionLogEntry(JSON.parse(trimmed) as unknown)
-        if (tokenUsage) {
-          latestTokenUsage = tokenUsage
-        }
-      } catch {
-        // Skip malformed lines and keep scanning the rest of the session log.
-      }
-    }
-  } finally {
-    lines.close()
-    input.close()
-  }
-
-  return latestTokenUsage
-}
-
-async function readThreadTokenUsageFromSessionLog(sessionPath: string): Promise<ThreadTokenUsage | null> {
-  const normalizedSessionPath = sessionPath.trim()
-  if (!normalizedSessionPath) return null
-
-  try {
-    const stats = await stat(normalizedSessionPath)
-    const fileSignature = getSessionIndexFileSignature(stats)
-    const cached = sessionLogThreadTokenUsageCacheStateByPath.get(normalizedSessionPath)
-    if (cached?.fileSignature === fileSignature) {
-      return cached.tokenUsage
-    }
-
-    const tokenUsage = await parseThreadTokenUsageFromSessionLog(normalizedSessionPath)
-    writeSessionLogThreadTokenUsageCacheState(normalizedSessionPath, { fileSignature, tokenUsage })
-    return tokenUsage
-  } catch {
-    writeSessionLogThreadTokenUsageCacheState(normalizedSessionPath, {
-      fileSignature: 'missing',
-      tokenUsage: null,
-    })
-    return null
-  }
 }
 
 async function parseThreadTitlesFromSessionIndex(sessionIndexPath: string): Promise<ThreadTitleCache> {
@@ -1790,7 +1615,7 @@ class AppServerProcess {
   private readonly notificationListeners = new Set<(value: { method: string; params: unknown }) => void>()
   private readonly pendingServerRequests = new PendingServerRequestStore()
   private readonly rpcCache = new AppServerRpcCache()
-  private readonly threadTokenUsageByThreadId = new Map<string, ThreadTokenUsage>()
+  private readonly threadTokenUsage = new ThreadTokenUsageStore()
   private readonly planModeTurns = new PlanModeTurnStore()
   private webBridgeSettings: WebBridgeSettings = DEFAULT_WEB_BRIDGE_SETTINGS
   private readonly appServerArgs = [
@@ -1844,7 +1669,7 @@ class AppServerProcess {
       this.pendingServerRequests.clear()
       this.rpcCache.clearSharedReads()
       this.rpcCache.clearThreadList()
-      this.threadTokenUsageByThreadId.clear()
+      this.threadTokenUsage.clear()
       this.planModeTurns.clearAll()
       this.process = null
       this.initialized = false
@@ -1868,7 +1693,7 @@ class AppServerProcess {
         this.pendingServerRequests.clear()
         this.rpcCache.clearSharedReads()
         this.rpcCache.clearThreadList()
-        this.threadTokenUsageByThreadId.clear()
+        this.threadTokenUsage.clear()
         this.planModeTurns.clearAll()
         this.process = null
         this.initialized = false
@@ -1966,7 +1791,7 @@ class AppServerProcess {
     this.pendingServerRequests.clear()
     this.rpcCache.clearSharedReads()
     this.rpcCache.clearThreadList()
-    this.threadTokenUsageByThreadId.clear()
+    this.threadTokenUsage.clear()
     this.planModeTurns.clearAll()
 
     try {
@@ -2050,17 +1875,7 @@ class AppServerProcess {
 
     if (notification.method !== 'thread/tokenUsage/updated') return
 
-    const params = asRecord(notification.params)
-    const threadId = typeof params?.threadId === 'string' ? params.threadId.trim() : ''
-    if (!threadId) return
-
-    const tokenUsage = normalizeThreadTokenUsage(params?.tokenUsage)
-    if (tokenUsage) {
-      this.threadTokenUsageByThreadId.set(threadId, tokenUsage)
-      return
-    }
-
-    this.threadTokenUsageByThreadId.delete(threadId)
+    this.threadTokenUsage.observeUpdate(notification.params)
   }
 
   private sendServerRequestReply(requestId: number, reply: ServerRequestReply): void {
@@ -2414,9 +2229,7 @@ class AppServerProcess {
   }
 
   getThreadTokenUsage(threadId: string): ThreadTokenUsage | null {
-    const normalizedThreadId = threadId.trim()
-    if (!normalizedThreadId) return null
-    return this.threadTokenUsageByThreadId.get(normalizedThreadId) ?? null
+    return this.threadTokenUsage.get(threadId)
   }
 
   getStatus(): AppServerHealth {
@@ -2453,7 +2266,7 @@ class AppServerProcess {
     this.pendingServerRequests.clear()
     this.rpcCache.clearSharedReads()
     this.rpcCache.clearThreadList()
-    this.threadTokenUsageByThreadId.clear()
+    this.threadTokenUsage.clear()
     this.planModeTurns.clearAll()
 
     try {
