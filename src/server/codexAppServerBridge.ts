@@ -92,12 +92,12 @@ import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
 import { AppServerMethodCatalog } from './appServerMethodCatalog.js'
 import {
-  getCodexAuthPath,
   getCodexGlobalStatePath,
   getCodexSessionIndexPath,
   getCodexWorktreesDir,
   getWebBridgeSettingsPath,
 } from './codexPaths.js'
+import { readCodexAuth } from './codexAuth.js'
 import {
   readMergedPinnedThreadIds,
   writeMergedPinnedThreadIds,
@@ -710,25 +710,6 @@ async function findRollbackCommitByExactMessage(cwd: string, message: string): P
     if (body === normalizedTarget) return sha
   }
   return ''
-}
-
-type CodexAuth = {
-  tokens?: {
-    access_token?: string
-    account_id?: string
-  }
-}
-
-async function readCodexAuth(): Promise<{ accessToken: string; accountId?: string } | null> {
-  try {
-    const raw = await readFile(getCodexAuthPath(), 'utf8')
-    const auth = JSON.parse(raw) as CodexAuth
-    const token = auth.tokens?.access_token
-    if (!token) return null
-    return { accessToken: token, accountId: auth.tokens?.account_id ?? undefined }
-  } catch {
-    return null
-  }
 }
 
 const supplementalThreadSummaryCacheById = new Map<string, { value: unknown | null; cachedAtMs: number; failed?: boolean }>()

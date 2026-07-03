@@ -115,6 +115,7 @@ import {
   getWebPinnedThreadIdsPath,
   getWebUiStatePath,
 } from '../src/server/codexPaths.js'
+import { readCodexAuth } from '../src/server/codexAuth.js'
 import {
   normalizeThreadTokenUsage,
   normalizeThreadTokenUsageFromSessionLogEntry,
@@ -194,6 +195,7 @@ try {
   await smokeComposerFileSearch()
   await smokeGithubTrending()
   smokeCodexPaths()
+  await smokeCodexAuth()
   await smokePinnedThreads()
   await smokeWebBridgeSettings()
   await smokeThreadTokenUsage()
@@ -1243,6 +1245,39 @@ function smokeCodexPaths(): void {
     } else {
       delete process.env.CODEX_HOME
     }
+  }
+}
+
+async function smokeCodexAuth(): Promise<void> {
+  const previous = process.env.CODEX_HOME
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-auth-'))
+  try {
+    process.env.CODEX_HOME = tempDir
+    assert.equal(await readCodexAuth(), null)
+
+    await writeFile(getCodexAuthPath(), '{invalid', 'utf8')
+    assert.equal(await readCodexAuth(), null)
+
+    await writeFile(getCodexAuthPath(), JSON.stringify({ tokens: { account_id: 'acct-only' } }), 'utf8')
+    assert.equal(await readCodexAuth(), null)
+
+    await writeFile(getCodexAuthPath(), JSON.stringify({
+      tokens: {
+        access_token: 'token-smoke',
+        account_id: 'account-smoke',
+      },
+    }), 'utf8')
+    assert.deepEqual(await readCodexAuth(), {
+      accessToken: 'token-smoke',
+      accountId: 'account-smoke',
+    })
+  } finally {
+    if (typeof previous === 'string') {
+      process.env.CODEX_HOME = previous
+    } else {
+      delete process.env.CODEX_HOME
+    }
+    await rm(tempDir, { recursive: true, force: true })
   }
 }
 

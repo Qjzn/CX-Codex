@@ -2553,6 +2553,39 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Codex auth 读取模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/codexAuth.ts` 和 `src/server/codexPaths.ts`。
+- 本机可运行 `npm.cmd run verify:server-modules` 和 `npm.cmd run build`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 `node dist-cli\index.js --help`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 不再内联 `auth.json` 读取和解析，只在语音转写 ChatGPT 回退路径调用 `readCodexAuth()`。
+
+#### Expected Results
+- `readCodexAuth()` 从 `codexPaths.ts` 的 `getCodexAuthPath()` 读取 `auth.json`。
+- 缺失文件、非法 JSON、缺少 `tokens.access_token` 时返回 `null`。
+- 有 access token 时只返回 `{ accessToken, accountId? }` 给调用方，不写日志、不进入 health/diagnostics。
+- 官方 OpenAI API key 未配置且本地 auth 不可用时，`/codex-api/transcribe` 继续返回 `401 No auth token available for transcription`。
+- Server module smoke 使用临时 `CODEX_HOME` 覆盖 missing、invalid、missing token 和 valid auth。
+
+#### Rollback / Cleanup
+- 如需回滚，撤销 `src/server/codexAuth.ts`、bridge import 调整、server module smoke、verify-server-modules、changelog 和本节测试记录。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 auth missing、invalid、missing token 和 valid token/account id。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CLI smoke：`node dist-cli\index.js --help` 通过并输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace、package parse、governance docs、构建、server module smoke 和 CLI smoke；schema audit 按本阶段命令跳过。
+
+---
+
 ### Feature: 置顶线程状态模块化
 
 #### Prerequisites
