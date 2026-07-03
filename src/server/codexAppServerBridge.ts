@@ -58,6 +58,10 @@ import {
   getShareableRpcKey,
   shouldInvalidateThreadListCacheForRpc,
 } from './appServerRpcCache.js'
+import {
+  AppServerRpcDiagnostics,
+  type RpcDiagnostics,
+} from './appServerRpcDiagnostics.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -119,24 +123,6 @@ type WebBridgePermissionSettings = {
 
 type WebBridgeSettings = {
   permissions: WebBridgePermissionSettings
-}
-
-type RpcDiagnosticRecord = {
-  method: string
-  atIso: string
-  durationMs: number
-  includeTurns?: boolean
-  outcome?: string
-}
-
-type RpcDiagnostics = {
-  activeRpcCalls: number
-  pendingRpcCount: number
-  queuedRpcCount: number
-  queuePeakCount: number
-  queuePeakAtIso: string | null
-  recentSlowRpc: RpcDiagnosticRecord[]
-  recentTimeouts: RpcDiagnosticRecord[]
 }
 
 type CachedThreadRead = {
@@ -228,7 +214,6 @@ const APP_SERVER_RPC_TIMEOUT_RESTART_WINDOW_MS = 45_000
 const APP_SERVER_RPC_TIMEOUT_RESTART_THRESHOLD = 3
 const APP_SERVER_RESTART_COOLDOWN_MS = 10_000
 const APP_SERVER_COLD_START_GRACE_MS = 60_000
-const APP_SERVER_RPC_DIAGNOSTIC_LIMIT = 20
 const SUPPLEMENTAL_THREAD_SUMMARY_CACHE_TTL_MS = 5 * 60_000
 const SUPPLEMENTAL_THREAD_SUMMARY_MAX_READS = 20
 const BRIDGE_HEARTBEAT_METHOD = 'bridge/heartbeat'
@@ -1811,13 +1796,18 @@ class AppServerProcess {
   private lastRestartAtMs = 0
   private lastAppServerStderrLogAtMs = 0
   private appServerStderrSuppressedCount = 0
-  private lastRpcQueueWarnAtMs = 0
-  private queuePeakCount = 0
-  private queuePeakAtIso: string | null = null
-  private activeRpcCalls = 0
-  private recentTimeoutsAtMs: number[] = []
-  private readonly recentSlowRpcRecords: RpcDiagnosticRecord[] = []
-  private readonly recentTimeoutRecords: RpcDiagnosticRecord[] = []
+  private readonly rpcDiagnostics = new AppServerRpcDiagnostics(
+    {
+      isHeavyThreadRead: (method, params) => method === 'thread/read' ? asRecord(params)?.includeTurns === true : undefined,
+    },
+    {
+      slowWarnMs: APP_SERVER_RPC_SLOW_WARN_MS,
+      queueWarnSize: APP_SERVER_RPC_QUEUE_WARN_SIZE,
+      queueWarnIntervalMs: APP_SERVER_RPC_QUEUE_WARN_INTERVAL_MS,
+      timeoutRestartWindowMs: APP_SERVER_RPC_TIMEOUT_RESTART_WINDOW_MS,
+      timeoutRestartThreshold: APP_SERVER_RPC_TIMEOUT_RESTART_THRESHOLD,
+    },
+  )
   private readonly pending = new Map<number, PendingRpc>()
   private readonly queuedRpcCalls: QueuedRpcTask[] = []
   private readonly expectedExitProcesses = new WeakSet<ChildProcessWithoutNullStreams>()
@@ -1960,25 +1950,6 @@ class AppServerProcess {
     return pendingRequest
   }
 
-  private logSlowRpc(method: string, startedAtMs: number, params: unknown, details: Record<string, unknown> = {}): void {
-    const durationMs = Date.now() - startedAtMs
-    if (durationMs < APP_SERVER_RPC_SLOW_WARN_MS) return
-    this.recentSlowRpcRecords.unshift({
-      method,
-      atIso: new Date().toISOString(),
-      durationMs,
-      includeTurns: method === 'thread/read' ? asRecord(params)?.includeTurns === true : undefined,
-      outcome: typeof details.outcome === 'string' ? details.outcome : undefined,
-    })
-    this.recentSlowRpcRecords.splice(APP_SERVER_RPC_DIAGNOSTIC_LIMIT)
-    writeBridgeLog('warn', 'Slow app-server RPC', {
-      method,
-      durationMs,
-      includeTurns: method === 'thread/read' ? asRecord(params)?.includeTurns === true : undefined,
-      ...details,
-    })
-  }
-
   private sendLine(payload: Record<string, unknown>): void {
     if (!this.process) {
       throw new Error('codex app-server is not running')
@@ -1994,14 +1965,7 @@ class AppServerProcess {
 
   private noteRpcTimeout(method: string, params: unknown, timeoutMs: number): void {
     const now = Date.now()
-    this.recentTimeoutRecords.unshift({
-      method,
-      atIso: new Date(now).toISOString(),
-      durationMs: timeoutMs,
-      includeTurns: method === 'thread/read' ? asRecord(params)?.includeTurns === true : undefined,
-      outcome: 'timeout',
-    })
-    this.recentTimeoutRecords.splice(APP_SERVER_RPC_DIAGNOSTIC_LIMIT)
+    this.rpcDiagnostics.recordTimeout(method, params, timeoutMs, now)
 
     const processAgeMs = this.startedAtMs > 0 ? now - this.startedAtMs : 0
     if (method !== 'initialize' && processAgeMs < APP_SERVER_COLD_START_GRACE_MS) {
@@ -2014,24 +1978,13 @@ class AppServerProcess {
       return
     }
 
-    if (method === 'thread/list' || method === 'thread/read') {
-      return
-    }
-
-    this.recentTimeoutsAtMs = [
-      ...this.recentTimeoutsAtMs.filter((timestamp) => now - timestamp <= APP_SERVER_RPC_TIMEOUT_RESTART_WINDOW_MS),
-      now,
-    ]
-    const shouldRestart =
-      method === 'initialize' ||
-      this.recentTimeoutsAtMs.length >= APP_SERVER_RPC_TIMEOUT_RESTART_THRESHOLD
-
+    const { shouldRestart, timeoutCount } = this.rpcDiagnostics.noteRestartableTimeout(method, now)
     if (!shouldRestart) return
 
     this.restartAppServer('repeated RPC timeouts', {
       method,
       timeoutMs,
-      timeoutCount: this.recentTimeoutsAtMs.length,
+      timeoutCount,
       includeTurns: method === 'thread/read' ? asRecord(params)?.includeTurns === true : undefined,
     })
   }
@@ -2045,7 +1998,7 @@ class AppServerProcess {
       return
     }
     this.lastRestartAtMs = now
-    this.recentTimeoutsAtMs = []
+    this.rpcDiagnostics.resetTimeoutWindow()
     this.expectedExitProcesses.add(proc)
 
     writeBridgeLog('warn', 'Restarting Codex app-server', {
@@ -2097,7 +2050,7 @@ class AppServerProcess {
       const pendingRequest = this.finalizePendingRpc(message.id)
       if (!pendingRequest) return
 
-      this.logSlowRpc(pendingRequest.method, pendingRequest.startedAtMs, pendingRequest.params, {
+      this.rpcDiagnostics.logSlowRpc(pendingRequest.method, pendingRequest.startedAtMs, pendingRequest.params, {
         outcome: message.error ? 'error' : 'success',
       })
       if (message.error) {
@@ -2387,38 +2340,23 @@ class AppServerProcess {
         if (left.priority !== right.priority) return left.priority - right.priority
         return left.queuedAtMs - right.queuedAtMs
       })
-      if (this.queuedRpcCalls.length > this.queuePeakCount) {
-        this.queuePeakCount = this.queuedRpcCalls.length
-        this.queuePeakAtIso = new Date(queuedAtMs).toISOString()
-      }
-
-      const shouldWarn =
-        this.queuedRpcCalls.length >= APP_SERVER_RPC_QUEUE_WARN_SIZE &&
-        queuedAtMs - this.lastRpcQueueWarnAtMs >= APP_SERVER_RPC_QUEUE_WARN_INTERVAL_MS
-      if (shouldWarn) {
-        this.lastRpcQueueWarnAtMs = queuedAtMs
-        writeBridgeLog('warn', 'App-server RPC queue is backing up', {
-          queuedRpcCount: this.queuedRpcCalls.length,
-          activeRpcCalls: this.activeRpcCalls,
-          method,
-          includeTurns: method === 'thread/read' ? asRecord(params)?.includeTurns === true : undefined,
-        })
-      }
+      this.rpcDiagnostics.recordQueueDepth(this.queuedRpcCalls.length, queuedAtMs)
+      this.rpcDiagnostics.maybeWarnQueueBacklog(method, params, this.queuedRpcCalls.length, queuedAtMs)
 
       this.drainRpcQueue()
     })
   }
 
   private drainRpcQueue(): void {
-    while (this.activeRpcCalls < APP_SERVER_RPC_MAX_IN_FLIGHT && this.queuedRpcCalls.length > 0) {
+    while (this.rpcDiagnostics.activeCount < APP_SERVER_RPC_MAX_IN_FLIGHT && this.queuedRpcCalls.length > 0) {
       const request = this.queuedRpcCalls.shift()
       if (!request) return
 
-      this.activeRpcCalls += 1
+      this.rpcDiagnostics.incrementActive()
       void this.call(request.method, request.params)
         .then(request.resolve, request.reject)
         .finally(() => {
-          this.activeRpcCalls = Math.max(0, this.activeRpcCalls - 1)
+          this.rpcDiagnostics.decrementActive()
           this.drainRpcQueue()
         })
     }
@@ -2603,15 +2541,7 @@ class AppServerProcess {
       queuedRpcCount: this.queuedRpcCalls.length,
       pendingServerRequestCount: this.pendingServerRequests.count,
       activePlanModeTurnCount: this.planModeTurnsByThreadId.size,
-      rpcDiagnostics: {
-        activeRpcCalls: this.activeRpcCalls,
-        pendingRpcCount: this.pending.size,
-        queuedRpcCount: this.queuedRpcCalls.length,
-        queuePeakCount: this.queuePeakCount,
-        queuePeakAtIso: this.queuePeakAtIso,
-        recentSlowRpc: [...this.recentSlowRpcRecords],
-        recentTimeouts: [...this.recentTimeoutRecords],
-      },
+      rpcDiagnostics: this.rpcDiagnostics.snapshot(this.pending.size, this.queuedRpcCalls.length),
     }
   }
 
