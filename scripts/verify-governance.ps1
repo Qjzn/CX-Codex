@@ -112,6 +112,7 @@ Assert-ContentIncludes "RELEASE.md" @(
   "npm.cmd run verify:release",
   "SchemaAudit warn",
   "CLI CJS launcher smoke",
+  "Release package smoke",
   "docs/security-hardening.zh-CN.md",
   "docs/release-template.zh-CN.md"
 )
@@ -119,13 +120,17 @@ Assert-ContentIncludes "RELEASE.md" @(
 Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "CLI CJS launcher smoke",
   "cli cjs launcher smoke ok",
-  "spawnSync(process.execPath"
+  "spawnSync(process.execPath",
+  "Release package smoke",
+  "release package smoke ok",
+  "Assert-ZipContains"
 )
 
 Assert-ContentIncludes "scripts/package-release.ps1" @(
   ".github\ISSUE_TEMPLATE\protocol_compatibility.yml",
   ".github\PULL_REQUEST_TEMPLATE.md",
   ".github\release-body.md",
+  ".github\workflows\release.yml",
   "CONTRIBUTING.md",
   "SECURITY.md",
   "SUPPORT.md"

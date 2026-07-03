@@ -80,6 +80,7 @@ $releaseItems = @(
   ".github\PULL_REQUEST_TEMPLATE.md",
   ".github\release-body.md",
   ".github\workflows\ci.yml",
+  ".github\workflows\release.yml",
   "CONTRIBUTING.md",
   "LICENSE",
   "README.md",

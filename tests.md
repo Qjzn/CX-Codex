@@ -1653,17 +1653,20 @@ This file tracks manual regression and feature verification steps.
 - 如需发版前 clean-git 门禁，当前工作树和 index 均无未提交改动。
 
 #### Steps
-1. 快速验证脚本路径：执行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1 -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit skip`。
+1. 快速验证脚本路径：执行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1 -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip`。
 2. 完整构建验证：执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
 3. CJS 启动器验证：执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`，确认 CLI smoke 后继续输出 `cli cjs launcher smoke ok`。
-4. 协议审计验证：执行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1 -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit warn`。
-5. 发版候选验证：在 clean worktree 上执行 `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn`。
-6. 已完成 schema 基线升级并要求严格阻断时，执行 `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit strict`。
+4. Release package smoke 验证：执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit skip`，确认输出 `Release package smoke` 和 `release package smoke ok`。
+5. 协议审计验证：执行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1 -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit warn`。
+6. 发版候选验证：在 clean worktree 上执行 `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn`。
+7. 已完成 schema 基线升级并要求严格阻断时，执行 `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit strict`。
 
 #### Expected Results
 - 快速验证执行 `git diff --check` 和 `package.json` 解析检查。
 - 完整构建验证执行 `npm.cmd run build`、`node dist-cli/index.js --help` CLI smoke 和 CommonJS `node -e` 启动器 smoke。
 - `-SkipCliSmoke` 会同时跳过普通 CLI help smoke 和 CLI CJS launcher smoke。
+- 默认 release gate 会生成 `output/release-package-smoke/CX-Codex-verify-smoke.zip` 和 `.sha256`，并检查包内 README、RELEASE、安全/支持/贡献文件、协议审计摘要、Release 正文、PR/Issue 模板、Release workflow、`dist/index.html` 和 `dist-cli/index.js`。
+- `-SkipPackageSmoke` 只用于快速脚本路径或排查构建问题；正式发版验证不应跳过。
 - `-SchemaAudit warn` 遇到 schema drift 时继续完成，但输出 warning 和最新 `audit-summary.json` 路径。
 - `-SchemaAudit strict` 遇到 schema drift 时失败，阻止未审计协议差异进入 release。
 - `-RequireCleanGit` 会在发版候选阶段阻止未提交 worktree 或 index。
@@ -1680,9 +1683,12 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 CJS 启动器验证：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `CLI CJS launcher smoke` 和 `cli cjs launcher smoke ok`。
 - 2026-07-04 完整 release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含构建、server module smoke、普通 CLI smoke 和 CLI CJS launcher smoke。
 - 2026-07-04 跳过路径验证：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit skip` 通过，输出 `CLI smoke skipped`，确认普通 CLI smoke 和 CJS launcher smoke 同步跳过。
+- 2026-07-04 快速跳过路径验证：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，输出 `CLI smoke skipped` 和 `Release package smoke skipped`。
+- 2026-07-04 Package smoke 验证：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit skip` 通过，输出 `Release package smoke` 和 `release package smoke ok`。
+- 2026-07-04 默认完整 release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含构建、server module smoke、普通 CLI smoke、CLI CJS launcher smoke、Release package smoke 和 schema audit skip。
 
 #### Rollback / Cleanup
-- 可删除 `output/app-server-schema-audit/<timestamp>` 临时输出。
+- 可删除 `output/app-server-schema-audit/<timestamp>` 和 `output/release-package-smoke` 临时输出。
 - 如验证步骤发生变化，同步更新 `RELEASE.md` 和本节证据。
 
 ---
@@ -1698,10 +1704,11 @@ This file tracks manual regression and feature verification steps.
 2. 执行 `npm.cmd run verify:governance`。
 3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
 4. 执行 `npm.cmd run package:release -- -Version governance-smoke -OutputDir output\package-release-smoke`。
-5. 打开 `output\package-release-smoke\CX-Codex-governance-smoke.zip`，确认包含 `SECURITY.md`、`SUPPORT.md`、`CONTRIBUTING.md`、`.github\release-body.md`、`.github\PULL_REQUEST_TEMPLATE.md` 和 `.github\ISSUE_TEMPLATE\protocol_compatibility.yml`。
+5. 打开 `output\package-release-smoke\CX-Codex-governance-smoke.zip`，确认包含 `SECURITY.md`、`SUPPORT.md`、`CONTRIBUTING.md`、`.github\release-body.md`、`.github\PULL_REQUEST_TEMPLATE.md`、`.github\ISSUE_TEMPLATE\protocol_compatibility.yml` 和 `.github\workflows\release.yml`。
 
 #### Expected Results
-- Web Release zip 除运行产物、源码和 docs 外，还包含贡献、支持、安全、Release 正文、PR 模板和协议兼容 Issue 模板。
+- Web Release zip 除运行产物、源码和 docs 外，还包含贡献、支持、安全、Release 正文、PR 模板、协议兼容 Issue 模板和 Release workflow。
+- 默认 `verify:release` 会执行 Release package smoke，生成 `output\release-package-smoke\CX-Codex-verify-smoke.zip` 并校验包内关键文件。
 - `verify:governance` 会校验 `scripts/package-release.ps1` 的必需开源治理打包清单，避免后续误删。
 - Release zip 和 `.sha256` 校验文件都生成在指定 `OutputDir`。
 
@@ -1715,6 +1722,7 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 完整 release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含构建、server module smoke、普通 CLI smoke 和 CLI CJS launcher smoke。
 - 2026-07-04 打包验证：`npm.cmd run package:release -- -Version governance-smoke -OutputDir output\package-release-smoke` 通过，生成 `CX-Codex-governance-smoke.zip` 和 `.sha256`。
 - 2026-07-04 Zip 清单验证：PowerShell `System.IO.Compression.ZipFile` 检查通过，确认 zip 包含 `SECURITY.md`、`SUPPORT.md`、`CONTRIBUTING.md`、`.github\release-body.md`、`.github\PULL_REQUEST_TEMPLATE.md` 和 `.github\ISSUE_TEMPLATE\protocol_compatibility.yml`。
+- 2026-07-04 Release workflow 打包清单验证：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit skip` 通过，Release package smoke 确认 zip 包含 `.github\workflows\release.yml`、`docs\app-server-schema-audit-summary.json`、`dist\index.html` 和 `dist-cli\index.js`。
 
 ---
 

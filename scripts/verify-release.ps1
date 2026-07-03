@@ -4,6 +4,7 @@ param(
   [string]$SchemaAudit = "warn",
   [switch]$SkipBuild,
   [switch]$SkipCliSmoke,
+  [switch]$SkipPackageSmoke,
   [switch]$SkipGovernance,
   [switch]$RequireCleanGit,
   [switch]$AllowDirty
@@ -81,6 +82,30 @@ function Get-PowerShellCommand {
   throw "PowerShell executable not found"
 }
 
+function Assert-ZipContains {
+  param(
+    [string]$ZipPath,
+    [string[]]$RequiredEntries
+  )
+
+  if (-not (Test-Path -LiteralPath $ZipPath -PathType Leaf)) {
+    throw "Release package smoke failed: missing $ZipPath"
+  }
+
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  $archive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+  try {
+    $entries = $archive.Entries | ForEach-Object { $_.FullName -replace '/', '\' }
+    foreach ($entry in $RequiredEntries) {
+      if ($entries -notcontains $entry) {
+        throw "Release package smoke failed: zip is missing $entry"
+      }
+    }
+  } finally {
+    $archive.Dispose()
+  }
+}
+
 Write-Host "CX-Codex release verification"
 Write-Host "Repository:  $repoRoot"
 Write-Host "SchemaAudit: $SchemaAudit"
@@ -146,6 +171,49 @@ console.log('cli cjs launcher smoke ok');
 } else {
   Write-Host ""
   Write-Host "==> CLI smoke skipped"
+}
+
+if (-not $SkipPackageSmoke) {
+  $powerShellCommand = Get-PowerShellCommand
+  $packageSmokeDir = Join-Path $repoRoot "output/release-package-smoke"
+  $packageVersion = "verify-smoke"
+  Invoke-CheckedCommand -Label "Release package smoke" -Command $powerShellCommand -Arguments @(
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    (Join-Path $repoRoot "scripts/package-release.ps1"),
+    "-Version",
+    $packageVersion,
+    "-OutputDir",
+    $packageSmokeDir
+  )
+
+  $bundleName = "CX-Codex-$packageVersion"
+  $zipPath = Join-Path $packageSmokeDir "$bundleName.zip"
+  $checksumPath = Join-Path $packageSmokeDir "$bundleName.sha256"
+  if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) {
+    throw "Release package smoke failed: missing $checksumPath"
+  }
+
+  Assert-ZipContains -ZipPath $zipPath -RequiredEntries @(
+    "README.md",
+    "RELEASE.md",
+    "SECURITY.md",
+    "SUPPORT.md",
+    "CONTRIBUTING.md",
+    "docs\app-server-schema-audit-summary.json",
+    ".github\release-body.md",
+    ".github\PULL_REQUEST_TEMPLATE.md",
+    ".github\ISSUE_TEMPLATE\protocol_compatibility.yml",
+    ".github\workflows\release.yml",
+    "dist\index.html",
+    "dist-cli\index.js"
+  )
+  Write-Host "release package smoke ok"
+} else {
+  Write-Host ""
+  Write-Host "==> Release package smoke skipped"
 }
 
 if ($SchemaAudit -ne "skip") {
