@@ -216,6 +216,10 @@ import {
 } from '../src/server/appServerRuntimeBridge.js'
 import { AppServerNotificationReplay } from '../src/server/appServerNotificationReplay.js'
 import {
+  createRuntimeRequestSnapshotPatch,
+  RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES,
+} from '../src/server/appServerRuntimeRequestReconciliation.js'
+import {
   normalizeWorkspaceRootsState,
   readWorkspaceRootsState,
   readWorkspaceRootsStateFromPayload,
@@ -287,6 +291,7 @@ try {
   await smokeProjectRoots()
   smokeAppServerNotificationReplay()
   smokeAppServerRuntimeBridge()
+  smokeAppServerRuntimeRequestReconciliation()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
 } finally {
@@ -2376,6 +2381,65 @@ function smokeAppServerRuntimeBridge(): void {
     method: 'turn/completed',
     params,
     atIso: '2026-01-01T00:00:00.000Z',
+  })
+}
+
+function smokeAppServerRuntimeRequestReconciliation(): void {
+  assert.deepEqual(RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES, [
+    'pending_start',
+    'start_uncertain',
+    'running',
+    'stopping',
+    'stop_uncertain',
+    'still_running',
+  ])
+
+  assert.deepEqual(createRuntimeRequestSnapshotPatch(
+    { status: 'running', turnId: 'old-turn' },
+    'thread-a',
+    {
+      executionState: 'completed',
+      inProgress: false,
+      activeTurnId: 'new-turn',
+      lastError: null,
+    },
+  ), {
+    status: 'completed',
+    threadId: 'thread-a',
+    turnId: 'new-turn',
+    lastError: null,
+  })
+
+  assert.deepEqual(createRuntimeRequestSnapshotPatch(
+    { status: 'stopping', turnId: 'old-turn' },
+    'thread-a',
+    {
+      executionState: 'running',
+      inProgress: true,
+      activeTurnId: '',
+      lastError: 'still active',
+    },
+  ), {
+    status: 'still_running',
+    threadId: 'thread-a',
+    turnId: 'old-turn',
+    lastError: 'still active',
+  })
+
+  assert.deepEqual(createRuntimeRequestSnapshotPatch(
+    { status: 'stop_uncertain', turnId: 'turn-b' },
+    'thread-b',
+    {
+      executionState: 'failed',
+      inProgress: false,
+      activeTurnId: '',
+      lastError: 'failed after interrupt',
+    },
+  ), {
+    status: 'failed',
+    threadId: 'thread-b',
+    turnId: 'turn-b',
+    lastError: 'failed after interrupt',
   })
 }
 

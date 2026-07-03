@@ -10,10 +10,13 @@ import { getTunnelStatus, updateTunnelConfig } from './tunnelStatus.js'
 import { readFavoriteRecords, writeFavoriteRecords } from './webUiState.js'
 import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } from './runtimeStore.js'
 import {
-  readRuntimeRequestStatusFromExecutionState,
   type BridgeNotificationEvent,
 } from './appServerRuntimeBridge.js'
 import { AppServerNotificationReplay } from './appServerNotificationReplay.js'
+import {
+  createRuntimeRequestSnapshotPatch,
+  RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES,
+} from './appServerRuntimeRequestReconciliation.js'
 import {
   isRuntimeActiveState,
   RUNTIME_SNAPSHOT_STALE_MS,
@@ -1210,27 +1213,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   }
 
   function updateRuntimeRequestsFromSnapshot(threadId: string, snapshot: ThreadRuntimeSnapshot): void {
-    const activeRequests = runtimeStore.listRequestsByThread(threadId, [
-      'pending_start',
-      'start_uncertain',
-      'running',
-      'stopping',
-      'stop_uncertain',
-      'still_running',
-    ])
+    const activeRequests = runtimeStore.listRequestsByThread(threadId, RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES)
     if (activeRequests.length === 0) return
 
     for (const request of activeRequests) {
-      const nextStatus =
-        snapshot.inProgress && (request.status === 'stopping' || request.status === 'stop_uncertain')
-          ? 'still_running'
-          : readRuntimeRequestStatusFromExecutionState(snapshot.executionState)
-      runtimeStore.updateRequest(request.requestId, {
-        status: nextStatus,
-        threadId,
-        turnId: snapshot.activeTurnId || request.turnId,
-        lastError: snapshot.lastError,
-      })
+      runtimeStore.updateRequest(request.requestId, createRuntimeRequestSnapshotPatch(request, threadId, snapshot))
     }
   }
 

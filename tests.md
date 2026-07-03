@@ -2318,6 +2318,36 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server runtime request reconciliation 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRuntimeRequestReconciliation.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 runtime request reconciliation 的 active status 列表、snapshot execution state 到 request status 的映射、stopping/stop_uncertain 仍运行时的 `still_running` 特例、activeTurnId fallback 和 lastError 传递。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 使用 `RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES` 查询待同步 request，并用 `createRuntimeRequestSnapshotPatch()` 生成 `runtimeStore.updateRequest()` patch。
+5. 代码审查确认 `stopping` / `stop_uncertain` 且 snapshot 仍 `inProgress` 时仍同步为 `still_running`，没有把真实仍运行任务误标为已停止。
+
+#### Expected Results
+- runtime request reconciliation 的状态规则集中在 `src/server/appServerRuntimeRequestReconciliation.ts`，主 bridge 只负责读取 active requests 和写回 patch。
+- active status 查询仍覆盖 `pending_start`、`start_uncertain`、`running`、`stopping`、`stop_uncertain` 和 `still_running`。
+- snapshot 已完成/失败/中断/降级时仍按 execution state 映射 request status。
+- snapshot 缺少 activeTurnId 时继续保留 request 原 turnId，避免同步过程丢失 turn 关联。
+- server module smoke 覆盖上述分支；release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/appServerRuntimeRequestReconciliation.ts`，撤销 `scripts/server-module-smoke.ts` 中的 reconciliation smoke，并把 active status 列表和 `updateRuntimeRequestsFromSnapshot()` 的 patch 生成逻辑恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: App Server notification replay 模块化
 
 #### Prerequisites
