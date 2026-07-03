@@ -135,6 +135,10 @@ import {
   evaluateServerRequestPolicy,
   type WebBridgeSettings,
 } from './serverRequestPolicy.js'
+import {
+  readServerRequestReplyPayload,
+  type ServerRequestReply,
+} from './serverRequestReply.js'
 import { createServerRequestDiagnosticsSnapshot } from './serverRequestDiagnostics.js'
 import {
   DEFAULT_WEB_BRIDGE_SETTINGS,
@@ -172,14 +176,6 @@ type JsonRpcResponse = {
 type RpcProxyRequest = {
   method: string
   params?: unknown
-}
-
-type ServerRequestReply = {
-  result?: unknown
-  error?: {
-    code: number
-    message: string
-  }
 }
 
 type CachedThreadRead = {
@@ -1308,34 +1304,8 @@ class AppServerProcess {
 
   async respondToServerRequest(payload: unknown): Promise<void> {
     await this.ensureInitialized()
-
-    const body = asRecord(payload)
-    if (!body) {
-      throw new Error('Invalid response payload: expected object')
-    }
-
-    const id = body.id
-    if (typeof id !== 'number' || !Number.isInteger(id)) {
-      throw new Error('Invalid response payload: "id" must be an integer')
-    }
-
-    const rawError = asRecord(body.error)
-    if (rawError) {
-      const message = typeof rawError.message === 'string' && rawError.message.trim().length > 0
-        ? rawError.message.trim()
-        : 'Server request rejected by client'
-      const code = typeof rawError.code === 'number' && Number.isFinite(rawError.code)
-        ? Math.trunc(rawError.code)
-        : -32000
-      this.resolvePendingServerRequest(id, { error: { code, message } })
-      return
-    }
-
-    if (!('result' in body)) {
-      throw new Error('Invalid response payload: expected "result" or "error"')
-    }
-
-    this.resolvePendingServerRequest(id, { result: body.result })
+    const { id, reply } = readServerRequestReplyPayload(payload)
+    this.resolvePendingServerRequest(id, reply)
   }
 
   listPendingServerRequests(): PendingServerRequest[] {

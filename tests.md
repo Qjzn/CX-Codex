@@ -2862,6 +2862,34 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Server request reply payload 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/serverRequestReply.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 server request reply payload 的成功、错误和非法输入行为。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 通过 `readServerRequestReplyPayload()` 解析 `/codex-api/server-requests/respond` payload，不再内联 response payload 校验。
+5. 代码审查确认 `src/server/serverRequestReply.ts` 保留原有语义：`id` 必须是整数、`error.message` 会 trim、无效 error code 默认 `-32000`、缺少 `result` 和 `error` 时失败。
+
+#### Expected Results
+- `src/server/serverRequestReply.ts` 集中维护手动 server request response payload 的 public parser 和 `ServerRequestReply` 类型。
+- bridge 仍负责确保 App Server 初始化、消费 pending request、发送 JSON-RPC reply 和发出 `server/request/resolved` 通知。
+- server module smoke 直接覆盖 result reply、error reply、默认拒绝错误和非法 payload；release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/serverRequestReply.ts`，撤销 `scripts/server-module-smoke.ts` 中的 reply payload smoke，并把 `ServerRequestReply` 类型和 `respondToServerRequest()` payload 校验恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: Web bridge settings 模块化
 
 #### Prerequisites

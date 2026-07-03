@@ -71,6 +71,7 @@ import {
   toPendingServerRequestDiagnostics,
   toPendingServerRequestDiagnosticsList,
 } from '../src/server/serverRequestDiagnostics.js'
+import { readServerRequestReplyPayload } from '../src/server/serverRequestReply.js'
 import {
   DEFAULT_WEB_BRIDGE_SETTINGS,
   normalizePermissionDecision,
@@ -203,6 +204,7 @@ try {
   smokePlanModeTurnStore()
   smokeServerRequestPolicy()
   smokeServerRequestDiagnostics()
+  smokeServerRequestReply()
   await smokeCommandRunner()
   await smokeFileUpload()
   await smokeComposerFileSearch()
@@ -308,6 +310,45 @@ function smokeServerRequestDiagnostics(): void {
   assert.equal(snapshot.pendingByKind.elicitation, 1)
   assert.equal(snapshot.pendingByKind.request, 1)
   assert.equal('params' in snapshot.pendingRequests[0], false)
+}
+
+function smokeServerRequestReply(): void {
+  assert.deepEqual(readServerRequestReplyPayload({
+    id: 7,
+    result: { action: 'approve' },
+  }), {
+    id: 7,
+    reply: { result: { action: 'approve' } },
+  })
+
+  assert.deepEqual(readServerRequestReplyPayload({
+    id: 8,
+    error: { code: -32602.7, message: '  Denied by user  ' },
+  }), {
+    id: 8,
+    reply: { error: { code: -32602, message: 'Denied by user' } },
+  })
+
+  assert.deepEqual(readServerRequestReplyPayload({
+    id: 9,
+    error: { code: 'bad', message: '  ' },
+  }), {
+    id: 9,
+    reply: { error: { code: -32000, message: 'Server request rejected by client' } },
+  })
+
+  assert.throws(
+    () => readServerRequestReplyPayload(null),
+    /Invalid response payload: expected object/,
+  )
+  assert.throws(
+    () => readServerRequestReplyPayload({ id: 1.2, result: true }),
+    /Invalid response payload: "id" must be an integer/,
+  )
+  assert.throws(
+    () => readServerRequestReplyPayload({ id: 10 }),
+    /Invalid response payload: expected "result" or "error"/,
+  )
 }
 
 function smokeAppServerJsonRpcWire(): void {
