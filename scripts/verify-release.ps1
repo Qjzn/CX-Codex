@@ -204,6 +204,7 @@ if (-not $SkipPackageSmoke) {
     "SUPPORT.md",
     "CONTRIBUTING.md",
     "docs\app-server-schema-audit-summary.json",
+    ".github\dependabot.yml",
     ".github\release-body.md",
     ".github\PULL_REQUEST_TEMPLATE.md",
     ".github\ISSUE_TEMPLATE\protocol_compatibility.yml",

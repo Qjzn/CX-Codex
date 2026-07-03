@@ -1726,6 +1726,38 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Dependabot 依赖维护治理
+
+#### Prerequisites
+- 仓库包含 `package.json`、`package-lock.json`、`.github/workflows/ci.yml` 和 `.github/workflows/release.yml`。
+- 本机可运行 `npm.cmd run verify:governance` 和 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:governance`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 检查 `.github/dependabot.yml`，确认包含 `npm` 和 `github-actions` 两个 ecosystem。
+5. 检查 `CONTRIBUTING.md`，确认依赖更新说明指向 `.github/dependabot.yml`。
+6. 检查 release package smoke 输出，确认 Web zip 包含 `.github\dependabot.yml`。
+
+#### Expected Results
+- Dependabot 每周检查 npm 依赖和 GitHub Actions 依赖。
+- minor/patch 更新按 ecosystem 分组，避免维护者被大量小 PR 打断。
+- `verify:governance` 会阻止 Dependabot 配置、贡献说明或发布包清单遗漏。
+- 默认 release gate 的 Release package smoke 会校验 Web zip 内包含 `.github\dependabot.yml`。
+
+#### Rollback / Cleanup
+- 如需回滚，删除 `.github/dependabot.yml`，并撤销 CONTRIBUTING、package release、governance、release smoke 和本测试章节中的相关引用。
+- 可删除 `output\release-package-smoke` 临时输出。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁验证：`npm.cmd run verify:governance` 通过，确认 Dependabot 配置、贡献说明、发布包清单和 release smoke 均已锁定 `.github/dependabot.yml`。
+- 2026-07-04 完整 release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含构建、server module smoke、普通 CLI smoke、CLI CJS launcher smoke、Release package smoke 和 schema audit skip。
+- 2026-07-04 Release package smoke：默认 release gate 输出 `release package smoke ok`，确认 Web zip 包内包含 `.github\dependabot.yml`。
+
+---
+
 ### Feature: 开源社区行为准则
 
 #### Prerequisites

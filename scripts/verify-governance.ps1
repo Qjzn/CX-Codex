@@ -64,6 +64,7 @@ $requiredFiles = @(
   "docs/roadmap.zh-CN.md",
   "docs/operations-plan.zh-CN.md",
   ".github/PULL_REQUEST_TEMPLATE.md",
+  ".github/dependabot.yml",
   ".github/ISSUE_TEMPLATE/config.yml",
   ".github/workflows/ci.yml",
   ".github/workflows/release.yml",
@@ -105,6 +106,7 @@ Assert-ContentIncludes "CODE_OF_CONDUCT.md" @(
 
 Assert-ContentIncludes "CONTRIBUTING.md" @(
   "CODE_OF_CONDUCT.md",
+  ".github/dependabot.yml",
   "Pull Request 要求"
 )
 
@@ -144,12 +146,22 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
 Assert-ContentIncludes "scripts/package-release.ps1" @(
   ".github\ISSUE_TEMPLATE\protocol_compatibility.yml",
   ".github\PULL_REQUEST_TEMPLATE.md",
+  ".github\dependabot.yml",
   ".github\release-body.md",
   ".github\workflows\release.yml",
   "CODE_OF_CONDUCT.md",
   "CONTRIBUTING.md",
   "SECURITY.md",
   "SUPPORT.md"
+)
+
+Assert-ContentIncludes ".github/dependabot.yml" @(
+  "version: 2",
+  'package-ecosystem: "npm"',
+  'package-ecosystem: "github-actions"',
+  'timezone: "Asia/Shanghai"',
+  "open-pull-requests-limit:",
+  "groups:"
 )
 
 Assert-ContentIncludes ".github/PULL_REQUEST_TEMPLATE.md" @(
