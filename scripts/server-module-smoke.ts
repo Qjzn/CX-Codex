@@ -34,6 +34,7 @@ import {
   readAppServerSchemaAuditSummary,
 } from '../src/server/appServerSchemaAuditSummary.js'
 import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheForRpc } from '../src/server/appServerRpcCache.js'
+import { trimThreadTurnsInRpcResult } from '../src/server/appServerRpcResult.js'
 import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.js'
 import {
   APP_SERVER_OVERLOADED_ERROR_CODE,
@@ -198,6 +199,7 @@ try {
   await smokeAppServerSchemaAuditSummary()
   smokeTranscriptionProxyConfig()
   smokeTranscriptionMultipartDefaults()
+  smokeAppServerRpcResult()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
   await smokeAppServerRpcQueue()
@@ -737,6 +739,40 @@ async function smokeAppServerSchemaAuditSummary(): Promise<void> {
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+}
+
+function smokeAppServerRpcResult(): void {
+  const original = {
+    thread: {
+      id: 'thread-a',
+      turns: Array.from({ length: 12 }, (_, index) => ({ id: `turn-${String(index + 1)}` })),
+    },
+    other: true,
+  }
+
+  assert.equal(trimThreadTurnsInRpcResult('model/list', original), original)
+  assert.deepEqual(trimThreadTurnsInRpcResult('thread/read', {
+    thread: { id: 'thread-a', turns: [{ id: 'turn-1' }] },
+  }), {
+    thread: { id: 'thread-a', turns: [{ id: 'turn-1' }] },
+  })
+
+  const trimmed = trimThreadTurnsInRpcResult('thread/read', original) as { thread: { turns: Array<{ id: string }> }; other?: boolean }
+  assert.deepEqual(trimmed.thread.turns.map((turn) => turn.id), [
+    'turn-3',
+    'turn-4',
+    'turn-5',
+    'turn-6',
+    'turn-7',
+    'turn-8',
+    'turn-9',
+    'turn-10',
+    'turn-11',
+    'turn-12',
+  ])
+  assert.equal(trimmed.other, true)
+  assert.equal(trimmed.thread.turns.length, 10)
+  assert.deepEqual(trimThreadTurnsInRpcResult('thread/resume', { thread: { turns: null } }), { thread: { turns: null } })
 }
 
 function smokeTranscriptionProxyConfig(): void {

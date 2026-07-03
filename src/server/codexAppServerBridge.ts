@@ -74,6 +74,7 @@ import {
 import {
   AppServerRpcDiagnostics,
 } from './appServerRpcDiagnostics.js'
+import { trimThreadTurnsInRpcResult } from './appServerRpcResult.js'
 import {
   AppServerRpcQueue,
   getAppServerRpcQueuePriority,
@@ -198,8 +199,6 @@ type PendingRpc = {
   timeoutId: ReturnType<typeof setTimeout>
 }
 
-const THREAD_RESPONSE_TURN_LIMIT = 10
-const THREAD_METHODS_WITH_TURNS = new Set(['thread/read', 'thread/resume', 'thread/fork', 'thread/rollback'])
 const APP_SERVER_RPC_TIMEOUT_MS = 60_000
 const APP_SERVER_RPC_INIT_TIMEOUT_MS = 60_000
 const APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS = 30_000
@@ -224,23 +223,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value : ''
-}
-
-function trimThreadTurnsInRpcResult(method: string, result: unknown): unknown {
-  if (!THREAD_METHODS_WITH_TURNS.has(method)) return result
-
-  const record = asRecord(result)
-  const thread = asRecord(record?.thread)
-  const turns = Array.isArray(thread?.turns) ? thread.turns : null
-  if (!record || !thread || !turns || turns.length <= THREAD_RESPONSE_TURN_LIMIT) return result
-
-  return {
-    ...record,
-    thread: {
-      ...thread,
-      turns: turns.slice(-THREAD_RESPONSE_TURN_LIMIT),
-    },
-  }
 }
 
 function toIsoFromUnixSeconds(value: unknown): string {

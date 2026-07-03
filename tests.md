@@ -2290,6 +2290,34 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server RPC result turns 裁剪模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRpcResult.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 thread turns 裁剪行为。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 从 `appServerRpcResult.ts` 导入 `trimThreadTurnsInRpcResult()`，不再内联 thread turns 裁剪常量和 helper。
+5. 代码审查确认 `src/server/appServerRpcResult.ts` 仍只对 `thread/read`、`thread/resume`、`thread/fork` 和 `thread/rollback` 裁剪 `thread.turns`，且最多保留最后 10 个 turn。
+
+#### Expected Results
+- `src/server/appServerRpcResult.ts` 集中维护 App Server RPC result 的 thread turns 裁剪逻辑。
+- 非 thread-turns RPC result 保持原对象返回，不改变其他 method 的 response shape。
+- server module smoke 直接覆盖非目标 method 不变、10 个以内不变、超过 10 个只保留最后 10 个；release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/appServerRpcResult.ts`，撤销 `scripts/server-module-smoke.ts` 中的 RPC result smoke，并把 thread turns 裁剪常量和 `trimThreadTurnsInRpcResult()` 恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: App Server RPC cache 模块化
 
 #### Prerequisites
