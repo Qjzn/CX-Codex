@@ -9,6 +9,10 @@ export type AppServerLaunchPolicy = {
   sandboxMode: AppServerSandboxMode
 }
 
+export type AppServerLaunchPolicySnapshot = AppServerLaunchPolicy & {
+  legacyHighTrust: boolean
+}
+
 export const DEFAULT_APP_SERVER_LAUNCH_POLICY: AppServerLaunchPolicy = {
   approvalPolicy: 'never',
   sandboxMode: 'danger-full-access',
@@ -33,6 +37,13 @@ export function createAppServerArgs(policy: AppServerLaunchPolicy = DEFAULT_APP_
     '-c',
     `sandbox_mode="${policy.sandboxMode}"`,
   ]
+}
+
+export function createAppServerLaunchPolicySnapshot(policy: AppServerLaunchPolicy): AppServerLaunchPolicySnapshot {
+  return {
+    ...policy,
+    legacyHighTrust: policy.approvalPolicy === 'never' && policy.sandboxMode === 'danger-full-access',
+  }
 }
 
 function normalizeApprovalPolicy(value: unknown): AppServerApprovalPolicy {

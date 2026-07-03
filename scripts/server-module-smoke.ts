@@ -13,6 +13,7 @@ import {
   APP_SERVER_APPROVAL_POLICIES,
   APP_SERVER_SANDBOX_MODES,
   createAppServerArgs,
+  createAppServerLaunchPolicySnapshot,
   DEFAULT_APP_SERVER_LAUNCH_POLICY,
   resolveAppServerLaunchPolicy,
 } from '../src/server/appServerLaunch.js'
@@ -393,6 +394,19 @@ function smokeAppServerLaunch(): void {
   }), {
     approvalPolicy: 'untrusted',
     sandboxMode: 'read-only',
+  })
+  assert.deepEqual(createAppServerLaunchPolicySnapshot(DEFAULT_APP_SERVER_LAUNCH_POLICY), {
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    legacyHighTrust: true,
+  })
+  assert.deepEqual(createAppServerLaunchPolicySnapshot({
+    approvalPolicy: 'on-request',
+    sandboxMode: 'workspace-write',
+  }), {
+    approvalPolicy: 'on-request',
+    sandboxMode: 'workspace-write',
+    legacyHighTrust: false,
   })
   assert.deepEqual(createAppServerArgs(), [
     'app-server',

@@ -1530,7 +1530,8 @@ This file tracks manual regression and feature verification steps.
 - `createAppServerArgs()` 生成与既有行为一致的 `codex app-server -c approval_policy="never" -c sandbox_mode="danger-full-access"` 参数。
 - `resolveAppServerLaunchPolicy()` 支持 `CX_CODEX_APP_SERVER_APPROVAL_POLICY` / `CODEXUI_APP_SERVER_APPROVAL_POLICY` 和 `CX_CODEX_APP_SERVER_SANDBOX_MODE` / `CODEXUI_APP_SERVER_SANDBOX_MODE`。
 - 只接受官方常见枚举值；非法值回退到 legacy 默认策略。
-- Server module smoke 覆盖默认策略、官方枚举、自定义策略参数生成、环境变量 trim、`CX_CODEX_` 优先级、`CODEXUI_` fallback 和非法值回退。
+- `/codex-api/health`、`/codex-api/diagnostics` 和诊断页的后端服务卡片展示有效 launch policy，只包含 `approvalPolicy`、`sandboxMode` 和 `legacyHighTrust`，不展示环境变量原文。
+- Server module smoke 覆盖默认策略、官方枚举、自定义策略参数生成、环境变量 trim、`CX_CODEX_` 优先级、`CODEXUI_` fallback、非法值回退和脱敏策略快照。
 - README 和安全文档记录更保守的 `on-request` + `workspace-write` 覆盖方式。
 
 #### Rollback / Cleanup

@@ -28,6 +28,7 @@
 - 不在 CX-Codex 中绕过 Codex 自身 sandbox 和 approval 语义。
 - 当前 app-server 子进程启动策略集中在 `src/server/appServerLaunch.ts`；该模块显式标识 legacy high-trust 默认值，并只接受官方常见 approval/sandbox 枚举值。任何默认 approval/sandbox 行为调整都必须先更新该模块、测试记录和发版说明。
 - 需要更保守的本机策略时，可通过 `CX_CODEX_APP_SERVER_APPROVAL_POLICY=on-request` 和 `CX_CODEX_APP_SERVER_SANDBOX_MODE=workspace-write` 覆盖；非法值会回退到默认策略。
+- Health、diagnostics 和诊断页只能展示有效 approval/sandbox 策略及 high-trust 标记，不展示原始环境变量值。
 - 新增工具权限、MCP、命令执行或自动确认能力时，默认应保持显式用户确认或可见的权限边界。
 - 不要为了解决一次交互阻塞而默认开启危险权限、全局 allow-all 或自动批准所有命令。
 - 权限相关 UI 必须能让用户区分只读、写文件、联网、执行命令和外部工具调用。

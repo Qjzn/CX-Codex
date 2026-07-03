@@ -38,6 +38,10 @@
             <dt>计划模式</dt>
             <dd>{{ appServer.activePlanModeTurnCount }}</dd>
           </div>
+          <div>
+            <dt>策略</dt>
+            <dd class="diagnostics-mono">{{ launchPolicyLabel }}</dd>
+          </div>
         </dl>
       </section>
 
@@ -281,6 +285,11 @@ type AppServerDiagnostics = {
   queuedRpcCount: number
   pendingServerRequestCount: number
   activePlanModeTurnCount: number
+  launchPolicy?: {
+    approvalPolicy: string
+    sandboxMode: string
+    legacyHighTrust: boolean
+  }
   rpcDiagnostics?: {
     recentSlowRpc?: SlowRpcRecord[]
     recentTimeouts?: Array<{ method?: string; atIso?: string }>
@@ -421,6 +430,11 @@ const emptyAppServer: AppServerDiagnostics = {
   queuedRpcCount: 0,
   pendingServerRequestCount: 0,
   activePlanModeTurnCount: 0,
+  launchPolicy: {
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    legacyHighTrust: true,
+  },
 }
 
 const emptyRuntimeStore: RuntimeStoreDiagnostics = {
@@ -497,6 +511,13 @@ const unknownNotifications = computed(() => diagnostics.value?.notificationDiagn
 const unknownNotificationCount = computed(() => diagnostics.value?.notificationDiagnostics?.unknownNotificationCount ?? 0)
 const unknownStatuses = computed(() => diagnostics.value?.statusDiagnostics?.recentUnknownStatuses ?? [])
 const unknownStatusCount = computed(() => diagnostics.value?.statusDiagnostics?.unknownStatusCount ?? 0)
+
+const launchPolicyLabel = computed(() => {
+  const policy = appServer.value.launchPolicy
+  if (!policy) return '-'
+  const suffix = policy.legacyHighTrust ? ' / high-trust' : ''
+  return `${policy.approvalPolicy} / ${policy.sandboxMode}${suffix}`
+})
 
 const appServerTone = computed<Tone>(() => {
   if (!appServer.value.running || !appServer.value.initialized || appServer.value.stopping) return 'danger'

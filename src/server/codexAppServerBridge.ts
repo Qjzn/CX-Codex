@@ -91,7 +91,9 @@ import { createAppServerClientInfo, readPackageVersion } from './appServerClient
 import { createAppServerInitializeParams } from './appServerInitialization.js'
 import {
   createAppServerArgs,
+  createAppServerLaunchPolicySnapshot,
   resolveAppServerLaunchPolicy,
+  type AppServerLaunchPolicySnapshot,
 } from './appServerLaunch.js'
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
@@ -186,6 +188,7 @@ type AppServerHealth = {
   queuedRpcCount: number
   pendingServerRequestCount: number
   activePlanModeTurnCount: number
+  launchPolicy: AppServerLaunchPolicySnapshot
   rpcDiagnostics?: RpcDiagnostics
 }
 
@@ -819,7 +822,8 @@ class AppServerProcess {
   private readonly threadTokenUsage = new ThreadTokenUsageStore()
   private readonly planModeTurns = new PlanModeTurnStore()
   private webBridgeSettings: WebBridgeSettings = DEFAULT_WEB_BRIDGE_SETTINGS
-  private readonly appServerArgs = createAppServerArgs(resolveAppServerLaunchPolicy())
+  private readonly appServerLaunchPolicy = resolveAppServerLaunchPolicy()
+  private readonly appServerArgs = createAppServerArgs(this.appServerLaunchPolicy)
 
   private getCodexCommand(): string {
     const codexCommand = resolveCodexCommand()
@@ -1366,6 +1370,7 @@ class AppServerProcess {
       queuedRpcCount: this.rpcQueue.count,
       pendingServerRequestCount: this.pendingServerRequests.count,
       activePlanModeTurnCount: this.planModeTurns.count,
+      launchPolicy: createAppServerLaunchPolicySnapshot(this.appServerLaunchPolicy),
       rpcDiagnostics: this.rpcDiagnostics.snapshot(this.pending.size, this.rpcQueue.count),
     }
   }
