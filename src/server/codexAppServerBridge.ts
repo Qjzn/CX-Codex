@@ -77,9 +77,14 @@ import {
 } from './threadTokenUsage.js'
 import {
   evaluateServerRequestPolicy,
-  type PermissionDecision,
   type WebBridgeSettings,
 } from './serverRequestPolicy.js'
+import {
+  DEFAULT_WEB_BRIDGE_SETTINGS,
+  normalizeWebBridgeSettings,
+  readWebBridgeSettings,
+  writeWebBridgeSettings,
+} from './webBridgeSettings.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -197,15 +202,6 @@ const APP_SERVER_COLD_START_GRACE_MS = 60_000
 const SUPPLEMENTAL_THREAD_SUMMARY_CACHE_TTL_MS = 5 * 60_000
 const SUPPLEMENTAL_THREAD_SUMMARY_MAX_READS = 20
 const BRIDGE_HEARTBEAT_METHOD = 'bridge/heartbeat'
-const DEFAULT_WEB_BRIDGE_SETTINGS: WebBridgeSettings = {
-  permissions: {
-    allowAllPermissionRequests: false,
-    commandExecution: 'allowForSession',
-    fileChange: 'allowForSession',
-    mcpTools: 'ask',
-  },
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -1433,39 +1429,6 @@ async function writeWorkspaceRootsState(nextState: WorkspaceRootsState): Promise
   await writeFile(statePath, JSON.stringify(payload), 'utf8')
 }
 
-function normalizePermissionDecision(value: unknown, fallback: PermissionDecision): PermissionDecision {
-  return value === 'ask' || value === 'allowForSession' ? value : fallback
-}
-
-function normalizeWebBridgeSettings(value: unknown): WebBridgeSettings {
-  const record = asRecord(value)
-  const permissions = asRecord(record?.permissions)
-  const defaultPermissions = DEFAULT_WEB_BRIDGE_SETTINGS.permissions
-  return {
-    permissions: {
-      allowAllPermissionRequests: permissions?.allowAllPermissionRequests === true,
-      commandExecution: normalizePermissionDecision(permissions?.commandExecution, defaultPermissions.commandExecution),
-      fileChange: normalizePermissionDecision(permissions?.fileChange, defaultPermissions.fileChange),
-      mcpTools: normalizePermissionDecision(permissions?.mcpTools, defaultPermissions.mcpTools),
-    },
-  }
-}
-
-async function readWebBridgeSettings(): Promise<WebBridgeSettings> {
-  try {
-    const raw = await readFile(getWebBridgeSettingsPath(), 'utf8')
-    return normalizeWebBridgeSettings(JSON.parse(raw) as unknown)
-  } catch {
-    return DEFAULT_WEB_BRIDGE_SETTINGS
-  }
-}
-
-async function writeWebBridgeSettings(settings: WebBridgeSettings): Promise<WebBridgeSettings> {
-  const normalized = normalizeWebBridgeSettings(settings)
-  await writeFile(getWebBridgeSettingsPath(), JSON.stringify(normalized, null, 2), 'utf8')
-  return normalized
-}
-
 function bufferIndexOf(buf: Buffer, needle: Buffer, start = 0): number {
   for (let i = start; i <= buf.length - needle.length; i++) {
     let match = true
@@ -2559,7 +2522,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     .catch((error) => {
       logBridgeError('App server warmup failed', error)
     })
-  void readWebBridgeSettings()
+  void readWebBridgeSettings(getWebBridgeSettingsPath())
     .then((settings) => {
       appServer.setWebBridgeSettings(settings)
     })
@@ -3060,7 +3023,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/web-settings') {
-        const settings = await readWebBridgeSettings()
+        const settings = await readWebBridgeSettings(getWebBridgeSettingsPath())
         appServer.setWebBridgeSettings(settings)
         setJson(res, 200, { data: settings })
         return
@@ -3068,7 +3031,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'PUT' && url.pathname === '/codex-api/web-settings') {
         const payload = await readJsonBody(req)
-        const settings = await writeWebBridgeSettings(normalizeWebBridgeSettings(payload))
+        const settings = await writeWebBridgeSettings(getWebBridgeSettingsPath(), payload)
         appServer.setWebBridgeSettings(settings)
         setJson(res, 200, { data: settings })
         return

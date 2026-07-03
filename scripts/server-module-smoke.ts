@@ -18,6 +18,13 @@ import {
   shouldAutoApproveServerRequest,
 } from '../src/server/serverRequestPolicy.js'
 import {
+  DEFAULT_WEB_BRIDGE_SETTINGS,
+  normalizePermissionDecision,
+  normalizeWebBridgeSettings,
+  readWebBridgeSettings,
+  writeWebBridgeSettings,
+} from '../src/server/webBridgeSettings.js'
+import {
   normalizeThreadTokenUsage,
   normalizeThreadTokenUsageFromSessionLogEntry,
   parseThreadTokenUsageFromSessionLog,
@@ -42,6 +49,7 @@ try {
   smokeAppServerStderrLogger()
   smokePlanModeTurnStore()
   smokeServerRequestPolicy()
+  await smokeWebBridgeSettings()
   await smokeThreadTokenUsage()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
@@ -354,6 +362,56 @@ function smokeServerRequestPolicy(): void {
   })
   assert.equal(unsupported.kind, 'reject-unsupported')
   assert.match(JSON.stringify(buildUnsupportedServerRequestResult('item/tool/call')), /不能代执行这个工具/)
+}
+
+async function smokeWebBridgeSettings(): Promise<void> {
+  assert.equal(normalizePermissionDecision('ask', 'allowForSession'), 'ask')
+  assert.equal(normalizePermissionDecision('deny', 'allowForSession'), 'allowForSession')
+  assert.deepEqual(normalizeWebBridgeSettings({
+    permissions: {
+      allowAllPermissionRequests: true,
+      commandExecution: 'ask',
+      fileChange: 'invalid',
+      mcpTools: 'allowForSession',
+    },
+  }), {
+    permissions: {
+      allowAllPermissionRequests: true,
+      commandExecution: 'ask',
+      fileChange: 'allowForSession',
+      mcpTools: 'allowForSession',
+    },
+  })
+  assert.deepEqual(normalizeWebBridgeSettings(null), DEFAULT_WEB_BRIDGE_SETTINGS)
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-web-settings-'))
+  try {
+    const settingsPath = join(tempDir, 'settings.json')
+    assert.deepEqual(await readWebBridgeSettings(settingsPath), DEFAULT_WEB_BRIDGE_SETTINGS)
+
+    await writeFile(settingsPath, '{invalid', 'utf8')
+    assert.deepEqual(await readWebBridgeSettings(settingsPath), DEFAULT_WEB_BRIDGE_SETTINGS)
+
+    const written = await writeWebBridgeSettings(settingsPath, {
+      permissions: {
+        allowAllPermissionRequests: true,
+        commandExecution: 'ask',
+        fileChange: 'ask',
+        mcpTools: 'bad',
+      },
+    })
+    assert.deepEqual(written, {
+      permissions: {
+        allowAllPermissionRequests: true,
+        commandExecution: 'ask',
+        fileChange: 'ask',
+        mcpTools: 'ask',
+      },
+    })
+    assert.deepEqual(await readWebBridgeSettings(settingsPath), written)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
 }
 
 async function smokeThreadTokenUsage(): Promise<void> {
