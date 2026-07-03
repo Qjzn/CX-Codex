@@ -1655,13 +1655,15 @@ This file tracks manual regression and feature verification steps.
 #### Steps
 1. 快速验证脚本路径：执行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1 -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit skip`。
 2. 完整构建验证：执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
-3. 协议审计验证：执行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1 -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit warn`。
-4. 发版候选验证：在 clean worktree 上执行 `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn`。
-5. 已完成 schema 基线升级并要求严格阻断时，执行 `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit strict`。
+3. CJS 启动器验证：执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`，确认 CLI smoke 后继续输出 `cli cjs launcher smoke ok`。
+4. 协议审计验证：执行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1 -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit warn`。
+5. 发版候选验证：在 clean worktree 上执行 `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn`。
+6. 已完成 schema 基线升级并要求严格阻断时，执行 `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit strict`。
 
 #### Expected Results
 - 快速验证执行 `git diff --check` 和 `package.json` 解析检查。
-- 完整构建验证执行 `npm.cmd run build` 并运行 `node dist-cli/index.js --help` CLI smoke。
+- 完整构建验证执行 `npm.cmd run build`、`node dist-cli/index.js --help` CLI smoke 和 CommonJS `node -e` 启动器 smoke。
+- `-SkipCliSmoke` 会同时跳过普通 CLI help smoke 和 CLI CJS launcher smoke。
 - `-SchemaAudit warn` 遇到 schema drift 时继续完成，但输出 warning 和最新 `audit-summary.json` 路径。
 - `-SchemaAudit strict` 遇到 schema drift 时失败，阻止未审计协议差异进入 release。
 - `-RequireCleanGit` 会在发版候选阶段阻止未提交 worktree 或 index。
@@ -1673,6 +1675,11 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 主路径验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `vue-tsc --noEmit`、`vite build`、`tsup` 和 `node dist-cli/index.js --help` CLI smoke。
 - 2026-07-03 schema warn 验证：`powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1 -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit warn` 通过，生成 `output/app-server-schema-audit/20260703-193751/audit-summary.json`，并将 schema drift 作为 warning 输出。
 - 2026-07-03 schema warn 摘要计数：TypeScript v2 新增 260、移除 14；JSON v2 新增 110、移除 10。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁验证：`npm.cmd run verify:governance` 通过，确认 release 文档和脚本已锁定 `CLI CJS launcher smoke`。
+- 2026-07-04 CJS 启动器验证：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `CLI CJS launcher smoke` 和 `cli cjs launcher smoke ok`。
+- 2026-07-04 完整 release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含构建、server module smoke、普通 CLI smoke 和 CLI CJS launcher smoke。
+- 2026-07-04 跳过路径验证：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SchemaAudit skip` 通过，输出 `CLI smoke skipped`，确认普通 CLI smoke 和 CJS launcher smoke 同步跳过。
 
 #### Rollback / Cleanup
 - 可删除 `output/app-server-schema-audit/<timestamp>` 临时输出。

@@ -126,6 +126,23 @@ if (-not $SkipCliSmoke) {
     throw "CLI smoke failed: missing $cliEntry. Run without -SkipBuild or build first."
   }
   Invoke-CheckedCommand -Label "CLI smoke" -Command "node" -Arguments @($cliEntry, "--help")
+
+  $cliCjsLauncherSmoke = @"
+const { spawnSync } = require('node:child_process');
+const cliEntry = process.argv[1];
+const result = spawnSync(process.execPath, [cliEntry, '--help'], { encoding: 'utf8' });
+if (result.error) {
+  throw result.error;
+}
+if (result.status !== 0) {
+  throw new Error(result.stderr || result.stdout || 'CLI CJS launcher smoke failed');
+}
+if (!result.stdout.includes('CX-Codex Web bridge for Codex app-server')) {
+  throw new Error('Unexpected CLI help output');
+}
+console.log('cli cjs launcher smoke ok');
+"@
+  Invoke-CheckedCommand -Label "CLI CJS launcher smoke" -Command "node" -Arguments @("-e", $cliCjsLauncherSmoke, $cliEntry)
 } else {
   Write-Host ""
   Write-Host "==> CLI smoke skipped"
