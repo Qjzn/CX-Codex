@@ -2,6 +2,12 @@ import {
   isRuntimeActiveState,
   type ThreadRuntimeSnapshot,
 } from './runtimeState.js'
+import {
+  readActiveTurnIdFromThreadReadPayload,
+  readThreadInProgressFromThreadReadPayload,
+  readThreadSessionPathFromThreadReadPayload,
+  readThreadUpdatedAtIsoFromThreadReadPayload,
+} from './appServerThreadPayload.js'
 
 export type CachedThreadRead = {
   threadRead: unknown
@@ -16,6 +22,20 @@ export function readIsoTimestampMs(value: string | null | undefined): number {
   if (!value) return 0
   const timestampMs = Date.parse(value)
   return Number.isFinite(timestampMs) ? timestampMs : 0
+}
+
+export function createCachedThreadRead(
+  threadRead: unknown,
+  nowIso: () => string = () => new Date().toISOString(),
+): CachedThreadRead {
+  return {
+    threadRead,
+    inProgress: readThreadInProgressFromThreadReadPayload(threadRead),
+    activeTurnId: readActiveTurnIdFromThreadReadPayload(threadRead),
+    updatedAtIso: readThreadUpdatedAtIsoFromThreadReadPayload(threadRead),
+    sessionPath: readThreadSessionPathFromThreadReadPayload(threadRead),
+    cachedAtIso: nowIso(),
+  }
 }
 
 export function isCachedThreadReadStaleForRuntime(

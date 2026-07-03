@@ -96,6 +96,7 @@ import {
 } from './appServerPayloadIds.js'
 import { getRpcTimeoutMs } from './appServerRpcTimeoutPolicy.js'
 import {
+  createCachedThreadRead,
   isCachedThreadReadStaleForRuntime,
   type CachedThreadRead,
 } from './appServerThreadReadCache.js'
@@ -953,14 +954,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   })
 
   function rememberCachedThreadRead(threadId: string, threadRead: unknown): CachedThreadRead {
-    const cachedThreadRead: CachedThreadRead = {
-      threadRead,
-      inProgress: readThreadInProgressFromThreadReadPayload(threadRead),
-      activeTurnId: readActiveTurnIdFromThreadReadPayload(threadRead),
-      updatedAtIso: readThreadUpdatedAtIsoFromThreadReadPayload(threadRead),
-      sessionPath: readThreadSessionPathFromThreadReadPayload(threadRead),
-      cachedAtIso: new Date().toISOString(),
-    }
+    const cachedThreadRead = createCachedThreadRead(threadRead)
     cachedThreadReadsByThreadId.set(threadId, cachedThreadRead)
     return cachedThreadRead
   }

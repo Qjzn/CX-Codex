@@ -80,6 +80,7 @@ import {
   readThreadUpdatedAtIsoFromThreadReadPayload,
 } from '../src/server/appServerThreadPayload.js'
 import {
+  createCachedThreadRead,
   isCachedThreadReadStaleForRuntime,
   readIsoTimestampMs,
   type CachedThreadRead,
@@ -987,6 +988,32 @@ function smokeAppServerThreadReadCache(): void {
   assert.equal(readIsoTimestampMs('2026-01-01T00:00:00.000Z'), Date.parse('2026-01-01T00:00:00.000Z'))
   assert.equal(readIsoTimestampMs('not-a-date'), 0)
   assert.equal(readIsoTimestampMs(null), 0)
+
+  const constructedThreadRead = createCachedThreadRead({
+    thread: {
+      id: 'thread-a',
+      updatedAt: 1767225600,
+      path: 'C:/sessions/thread-a.jsonl',
+      activeTurnId: 'turn-a',
+      status: 'running',
+    },
+  }, () => '2026-01-01T00:00:05.000Z')
+  assert.deepEqual(constructedThreadRead, {
+    threadRead: {
+      thread: {
+        id: 'thread-a',
+        updatedAt: 1767225600,
+        path: 'C:/sessions/thread-a.jsonl',
+        activeTurnId: 'turn-a',
+        status: 'running',
+      },
+    },
+    inProgress: true,
+    activeTurnId: 'turn-a',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    sessionPath: 'C:/sessions/thread-a.jsonl',
+    cachedAtIso: '2026-01-01T00:00:05.000Z',
+  })
 
   const cachedThreadRead: CachedThreadRead = {
     threadRead: { thread: { id: 'thread-a' } },

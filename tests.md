@@ -2318,6 +2318,35 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Thread read cache entry 构造模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerThreadReadCache.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 thread/read 缓存行构造和 runtime stale 判定。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 的 `rememberCachedThreadRead()` 只调用 `createCachedThreadRead()` 并写入本地 Map。
+5. 代码审查确认 `createCachedThreadRead()` 仍从 thread/read payload 中提取 `inProgress`、`activeTurnId`、`updatedAtIso`、`sessionPath` 和 `cachedAtIso`。
+
+#### Expected Results
+- thread/read 缓存行构造集中在 `appServerThreadReadCache.ts`，桥接主文件不再内联拼装 `CachedThreadRead` 字段。
+- 缓存命中、缓存过期、heavy thread/read 降级到缓存、runtime snapshot 持久化等分支语义保持不变。
+- server module smoke 能证明构造函数输出字段和既有 stale 判定分支正常。
+- release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `createCachedThreadRead()` 和对应 smoke 断言，并把 `CachedThreadRead` 字段构造恢复到 `src/server/codexAppServerBridge.ts` 的 `rememberCachedThreadRead()` 内。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: Runtime API payload parsing 模块化
 
 #### Prerequisites
