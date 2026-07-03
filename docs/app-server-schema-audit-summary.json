@@ -1,0 +1,82 @@
+{
+  "generatedAtIso": "2026-07-03T11:37:54.7619235Z",
+  "officialDocsUrl": "https://developers.openai.com/codex/app-server",
+  "auditCommand": "npm.cmd run audit:app-server-schemas",
+  "auditOutput": "output/app-server-schema-audit/20260703-193751",
+  "codexCommand": "codex",
+  "baseline": {
+    "typescript": "documentation/app-server-schemas/typescript",
+    "json": "documentation/app-server-schemas/json"
+  },
+  "comparison": {
+    "typescriptRoot": {
+      "baselineCount": 236,
+      "generatedCount": 77,
+      "addedCount": 15,
+      "removedCount": 174,
+      "representativeAdded": [
+        "RealtimeConversationVersion",
+        "ThreadMemoryMode",
+        "WebSearchToolConfig"
+      ],
+      "representativeRemoved": [
+        "AddConversationListenerParams",
+        "SendUserTurnParams",
+        "TurnStartedEvent"
+      ]
+    },
+    "typescriptV2": {
+      "baselineCount": 199,
+      "generatedCount": 445,
+      "addedCount": 260,
+      "removedCount": 14,
+      "representativeAdded": [
+        "ThreadStatus",
+        "ThreadRealtimeTranscriptDeltaNotification",
+        "WindowsSandboxReadiness"
+      ],
+      "representativeRemoved": [
+        "CollaborationModeListParams",
+        "SkillsRemoteReadParams",
+        "ThreadBackgroundTerminalsCleanParams"
+      ]
+    },
+    "jsonRoot": {
+      "baselineCount": 37,
+      "generatedCount": 35,
+      "addedCount": 5,
+      "removedCount": 7,
+      "representativeAdded": [
+        "codex_app_server_protocol.v2.schemas",
+        "PermissionsRequestApprovalParams",
+        "McpServerElicitationRequestParams"
+      ],
+      "representativeRemoved": [
+        "EventMsg",
+        "FuzzyFileSearchSessionStartParams",
+        "FuzzyFileSearchSessionUpdateParams"
+      ]
+    },
+    "jsonV2": {
+      "baselineCount": 102,
+      "generatedCount": 202,
+      "addedCount": 110,
+      "removedCount": 10,
+      "representativeAdded": [
+        "FsReadFileParams",
+        "PluginInstallParams",
+        "ThreadRealtimeTranscriptDeltaNotification"
+      ],
+      "representativeRemoved": [
+        "CollaborationModeListParams",
+        "SkillsRemoteReadParams",
+        "ThreadBackgroundTerminalsCleanParams"
+      ]
+    }
+  },
+  "reviewStatus": "drift-recorded",
+  "notes": [
+    "This committed summary is a release-governance checkpoint, not a schema baseline update.",
+    "Do not copy generated output directories into the repository; regenerate and review before updating documentation/app-server-schemas."
+  ]
+}

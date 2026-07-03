@@ -55,6 +55,7 @@ $requiredFiles = @(
   "SUPPORT.md",
   "RELEASE.md",
   "tests.md",
+  "docs/app-server-schema-audit-summary.json",
   "docs/security-hardening.zh-CN.md",
   "docs/protocol-compatibility.zh-CN.md",
   "docs/app-server-protocol-matrix.zh-CN.md",
@@ -144,9 +145,33 @@ Assert-ContentIncludes "docs/protocol-compatibility.zh-CN.md" @(
 Assert-ContentIncludes "docs/app-server-protocol-matrix.zh-CN.md" @(
   "Codex App Server",
   "schema audit",
+  "docs/app-server-schema-audit-summary.json",
   "thread",
   "MCP"
 )
+
+$schemaAuditSummaryPath = Resolve-RepoPath "docs/app-server-schema-audit-summary.json"
+$schemaAuditSummary = Get-Content -Raw -LiteralPath $schemaAuditSummaryPath | ConvertFrom-Json
+if ($schemaAuditSummary.officialDocsUrl -ne "https://developers.openai.com/codex/app-server") {
+  throw "docs/app-server-schema-audit-summary.json has an unexpected officialDocsUrl."
+}
+if ($schemaAuditSummary.reviewStatus -ne "drift-recorded") {
+  throw "docs/app-server-schema-audit-summary.json reviewStatus must be drift-recorded until the schema baseline is intentionally updated."
+}
+if ($schemaAuditSummary.auditCommand -ne "npm.cmd run audit:app-server-schemas") {
+  throw "docs/app-server-schema-audit-summary.json auditCommand must document the canonical audit command."
+}
+foreach ($key in @("typescriptRoot", "typescriptV2", "jsonRoot", "jsonV2")) {
+  $row = $schemaAuditSummary.comparison.$key
+  if (-not $row) {
+    throw "docs/app-server-schema-audit-summary.json missing comparison.$key."
+  }
+  foreach ($field in @("baselineCount", "generatedCount", "addedCount", "removedCount")) {
+    if ($null -eq $row.$field) {
+      throw "docs/app-server-schema-audit-summary.json missing comparison.$key.$field."
+    }
+  }
+}
 
 Assert-ContentIncludes ".github/workflows/ci.yml" @(
   "./scripts/verify-release.ps1 -SchemaAudit skip"

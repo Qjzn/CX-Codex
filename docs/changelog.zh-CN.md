@@ -10,6 +10,9 @@
 - 安全加固：
   - 普通 JSON API 请求体新增默认 2MiB 服务端保护，可通过 `CX_CODEX_JSON_BODY_MAX_BYTES` 或 `JSON_BODY_MAX_BYTES` 覆盖。
   - 普通文件上传请求体新增默认 50MiB 服务端保护，可通过 `CX_CODEX_FILE_UPLOAD_MAX_BYTES` 或 `FILE_UPLOAD_MAX_BYTES` 覆盖。
+- 协议治理：
+  - 新增 `docs/app-server-schema-audit-summary.json`，把最新 App Server schema drift 摘要从本地临时输出收口为可审查文档。
+  - Release/governance 门禁会校验 schema audit 摘要结构，避免协议差异记录丢失或无法复核。
 
 ## 2.2.7
 

@@ -2034,6 +2034,36 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server schema audit 摘要门禁
+
+#### Prerequisites
+- 当前仓库包含 `docs/app-server-schema-audit-summary.json`、`docs/app-server-protocol-matrix.zh-CN.md` 和 `scripts/verify-governance.ps1`。
+- 本机可运行 PowerShell 7 (`pwsh`) 和 `npm.cmd`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:governance`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 检查 `docs/app-server-schema-audit-summary.json`，确认不包含本机绝对路径、用户目录、Token 或未脱敏 URL query。
+5. 检查 `docs/app-server-protocol-matrix.zh-CN.md`，确认“当前证据”引用 `docs/app-server-schema-audit-summary.json`。
+6. 可选故障注入：临时删除 `docs/app-server-schema-audit-summary.json` 中的 `comparison.jsonV2.addedCount`，确认 `npm.cmd run verify:governance` 失败；恢复后重新通过。
+
+#### Expected Results
+- schema audit 摘要作为可提交文档存在，不依赖被 `.gitignore` 忽略的 `output/` 临时目录。
+- governance/release gate 能解析摘要 JSON，并校验官方文档链接、审计命令、`drift-recorded` 状态和四组 comparison 计数字段。
+- `-SchemaAudit skip` 仍可用于 CI 或快速本地预检，但 release 文档要求正式发版前重新执行 `warn` 或 `strict` 并同步摘要。
+
+#### Rollback/Cleanup
+- 如需回滚，移除 `docs/app-server-schema-audit-summary.json`，从 `scripts/verify-governance.ps1` 删除对应校验，并恢复协议矩阵、release 文档、changelog 和本节测试记录。
+- 如果做过故障注入，恢复 JSON 后重新运行 `npm.cmd run verify:governance`。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 治理门禁验证：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 schema audit summary 结构校验、governance docs check、构建、server module smoke 和 CLI smoke。
+
+---
+
 ### Feature: Composer file search 模块化
 
 #### Prerequisites

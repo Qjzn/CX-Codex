@@ -9,6 +9,7 @@
 - 审计命令：`npm.cmd run audit:app-server-schemas`
 - 审计时间：2026-07-03
 - 审计输出：`output/app-server-schema-audit/20260703-192708`
+- 已提交摘要：`docs/app-server-schema-audit-summary.json`
 - TypeScript schema diff：526 files changed，3038 insertions，2189 deletions
 - JSON schema diff：273 files changed，73005 insertions，61600 deletions
 - 结论：官方最新 schema 与仓库基线大范围不一致，不能直接覆盖基线，也不能声明已完全对齐最新 App Server。
@@ -25,7 +26,7 @@
 
 | 能力域 | 官方最新差异 | 当前项目状态 | 下一步门槛 |
 | --- | --- | --- | --- |
-| JSON-RPC / schema bundle | 新增 `codex_app_server_protocol.v2.schemas.json`，根 schema 与 v2 schema 均有大范围变化 | 部分覆盖。仓库已有 schema 基线、审计脚本和临时输出 | 将 `audit-summary.json` 纳入 release 检查；每次升级 Codex CLI 先生成临时 schema，再审计 |
+| JSON-RPC / schema bundle | 新增 `codex_app_server_protocol.v2.schemas.json`，根 schema 与 v2 schema 均有大范围变化 | 部分覆盖。仓库已有 schema 基线、审计脚本、临时输出和已提交的 `docs/app-server-schema-audit-summary.json` | 每次升级 Codex CLI 先生成临时 schema，再审计；如差异变化，更新摘要快照和矩阵后再进入 release |
 | Transport / handshake / auth | 官方 App Server wire format 省略 `"jsonrpc":"2.0"`；默认 `stdio` JSONL；连接后先 `initialize` 再发 `initialized` notification；WebSocket 为 experimental and unsupported，远程暴露必须配置 auth；过载可能返回 `-32001` | 已覆盖稳定 stdio 路径。当前 bridge 使用 stdio JSONL 子进程通信，出站 request/response/notification 统一省略 `"jsonrpc":"2.0"`，并在 `initialize` 成功后发送 `initialized`；Web/Android 侧不直接暴露 app-server WebSocket | 继续默认走本地 stdio；如未来接入 WebSocket，必须先实现 auth、`/readyz`/`/healthz` 健康检查、Origin 拒绝和 overload retry |
 | Thread / Turn 核心 | `ThreadStatus`、`ThreadActiveFlag`、`ThreadSource`、`TurnItemsView`、`TurnEnvironmentParams`、`ThreadInjectItems*`、`ThreadShellCommand*`、`ThreadUnsubscribe*` 等新增 | 部分覆盖。现有代码覆盖 `thread/list`、`thread/read`、`thread/start`、`thread/resume`、`thread/fork`、`thread/rollback`、`thread/archive`、`thread/name/set`、`turn/start`、`turn/interrupt` | 扩展 normalizer 对 `thread.status`、`active flag`、`unsubscribe status` 的容错；不支持的 action 必须展示为 unhandled raw block |
 | Runtime 状态机 | 最新 schema 对 turn/thread 状态表达更细，新增 goal/status/realtime 通知 | 部分覆盖。当前已有 runtime store、reconcile、stop uncertain、notification replay | 增加未知状态 telemetry 计数；状态机只把明确状态映射为运行态，其余进入降级态 |
@@ -41,7 +42,7 @@
 | Windows Sandbox | 新增 readiness/setup/start/completed | 待接入 | 先在诊断中心展示 readiness；setup 需要显式用户确认 |
 | Models / Rate Limits / Account | 模型可用性、reroute、verification、service tier、rate limit 类型扩展 | 部分覆盖。当前已有模型列表和账户状态基础读取 | 将 reroute/verification 作为通知展示，不影响当前 thread 渲染 |
 | Notifications | 新增大量 notification 类型，部分旧 v1 event 移除 | 部分覆盖。当前 replay buffer 存储通知并按 threadId 触发刷新；未知 notification 不阻断 replay/runtime 流，并在 health/diagnostics 中按 method 聚合计数 | 继续扩展未知 notification 到诊断中心 UI；不能因为未知 notification 丢失当前线程刷新 |
-| Open-source release governance | 协议差异目前只在本地审计输出中可见 | 部分覆盖。已有协议审计文档、脚本和测试记录 | Release checklist 必须包含 schema audit、build、CJS smoke、README/changelog、安全说明 |
+| Open-source release governance | 协议差异需要能被维护者和贡献者复核 | 部分覆盖。已有协议审计文档、脚本、已提交摘要快照、测试记录和 release/governance 门禁 | Release checklist 必须包含 schema audit、build、CJS smoke、README/changelog、安全说明；治理门禁必须校验摘要快照结构 |
 
 ## 优先级
 
