@@ -20,7 +20,7 @@
   - `/codex-api/health`、`/codex-api/diagnostics` 和 `/codex-api/server-requests/pending/diagnostics` 新增 `serverRequestDiagnostics` 快照，包含 pending 总数、按类型计数和脱敏请求列表；原始 `/codex-api/server-requests/pending` 保持给审批交互使用。
   - App Server method/notification catalog 生成逻辑从 bridge 主文件拆出，并清理临时 schema 输出目录，减少协议元数据读取的本地残留。
   - App Server `initialize` payload 生成逻辑从 bridge 主文件拆出，默认保持稳定 API 且不启用 `experimentalApi`，后续实验能力接入必须显式 opt-in。
-  - App Server 启动参数从 bridge 主文件拆出到 `appServerLaunch.ts`，集中标识当前 legacy high-trust approval/sandbox 策略，便于后续安全默认切换和审计。
+  - App Server 启动参数从 bridge 主文件拆出到 `appServerLaunch.ts`，集中标识当前 legacy high-trust approval/sandbox 策略，并支持通过环境变量选择官方支持的更保守策略。
   - Codex home、auth、global state、web settings、skills 和 worktrees 路径统一收口到 `codexPaths.ts`，让 bridge、Web UI state 和 skills 服务一致支持 `CODEX_HOME`。
   - Codex `auth.json` 读取逻辑从 bridge 主文件拆出到 `codexAuth.ts`，只向调用方返回 access token/account id，不进入诊断或日志输出。
   - 置顶线程的 Web 状态、桌面 global state 合并与双写逻辑从 bridge 主文件拆出，减少会话列表状态同步逻辑散落。

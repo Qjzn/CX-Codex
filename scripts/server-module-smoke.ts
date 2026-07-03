@@ -10,8 +10,11 @@ import {
 } from '../src/server/appServerClientInfo.js'
 import { createAppServerInitializeParams } from '../src/server/appServerInitialization.js'
 import {
+  APP_SERVER_APPROVAL_POLICIES,
+  APP_SERVER_SANDBOX_MODES,
   createAppServerArgs,
   DEFAULT_APP_SERVER_LAUNCH_POLICY,
+  resolveAppServerLaunchPolicy,
 } from '../src/server/appServerLaunch.js'
 import { AppServerLineBuffer } from '../src/server/appServerLineBuffer.js'
 import {
@@ -364,9 +367,32 @@ function smokeAppServerInitialization(): void {
 }
 
 function smokeAppServerLaunch(): void {
+  assert.deepEqual(APP_SERVER_APPROVAL_POLICIES, ['untrusted', 'on-request', 'never'])
+  assert.deepEqual(APP_SERVER_SANDBOX_MODES, ['read-only', 'workspace-write', 'danger-full-access'])
   assert.deepEqual(DEFAULT_APP_SERVER_LAUNCH_POLICY, {
     approvalPolicy: 'never',
     sandboxMode: 'danger-full-access',
+  })
+  assert.deepEqual(resolveAppServerLaunchPolicy({}), DEFAULT_APP_SERVER_LAUNCH_POLICY)
+  assert.deepEqual(resolveAppServerLaunchPolicy({
+    CX_CODEX_APP_SERVER_APPROVAL_POLICY: ' on-request ',
+    CX_CODEX_APP_SERVER_SANDBOX_MODE: ' workspace-write ',
+  }), {
+    approvalPolicy: 'on-request',
+    sandboxMode: 'workspace-write',
+  })
+  assert.deepEqual(resolveAppServerLaunchPolicy({
+    CX_CODEX_APP_SERVER_APPROVAL_POLICY: 'invalid',
+    CX_CODEX_APP_SERVER_SANDBOX_MODE: 'invalid',
+    CODEXUI_APP_SERVER_APPROVAL_POLICY: 'untrusted',
+    CODEXUI_APP_SERVER_SANDBOX_MODE: 'read-only',
+  }), DEFAULT_APP_SERVER_LAUNCH_POLICY)
+  assert.deepEqual(resolveAppServerLaunchPolicy({
+    CODEXUI_APP_SERVER_APPROVAL_POLICY: 'untrusted',
+    CODEXUI_APP_SERVER_SANDBOX_MODE: 'read-only',
+  }), {
+    approvalPolicy: 'untrusted',
+    sandboxMode: 'read-only',
   })
   assert.deepEqual(createAppServerArgs(), [
     'app-server',

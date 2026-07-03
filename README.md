@@ -183,6 +183,12 @@ npx cx-codex --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
 - `CX_CODEX_FILE_UPLOAD_MAX_BYTES` 或 `FILE_UPLOAD_MAX_BYTES`：可覆盖普通文件上传请求体上限，默认 50MiB。
 - 未配置 API key 时，语音转写仍会回退到现有 Codex / ChatGPT 登录态代理链路。
 
+App Server 权限策略可选配置：
+
+- `CX_CODEX_APP_SERVER_APPROVAL_POLICY` 或 `CODEXUI_APP_SERVER_APPROVAL_POLICY`：可选 `untrusted`、`on-request`、`never`，默认保留 legacy `never`。
+- `CX_CODEX_APP_SERVER_SANDBOX_MODE` 或 `CODEXUI_APP_SERVER_SANDBOX_MODE`：可选 `read-only`、`workspace-write`、`danger-full-access`，默认保留 legacy `danger-full-access`。
+- 更保守的本机策略可设置为 `CX_CODEX_APP_SERVER_APPROVAL_POLICY=on-request` 和 `CX_CODEX_APP_SERVER_SANDBOX_MODE=workspace-write`；非法值会回退到默认 legacy 策略。
+
 ## 远程访问
 
 本项目不强绑定某一种公网方案。推荐路径：

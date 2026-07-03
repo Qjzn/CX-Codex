@@ -1510,11 +1510,12 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
-### Feature: App Server 启动策略模块化
+### Feature: App Server 启动策略模块化与环境覆盖
 
 #### Prerequisites
 - 当前仓库包含 `src/server/appServerLaunch.ts` 和 `src/server/codexAppServerBridge.ts`。
 - `docs/security-hardening.zh-CN.md` 已记录 Codex sandbox / approval 的安全边界。
+- 官方 Codex 文档记录常见 sandbox 模式为 `read-only`、`workspace-write`、`danger-full-access`，常见 approval policy 为 `untrusted`、`on-request`、`never`。
 
 #### Steps
 1. 执行 `git diff --check`。
@@ -1522,19 +1523,21 @@ This file tracks manual regression and feature verification steps.
 3. 执行 `npm.cmd run build`。
 4. 执行 `node dist-cli\index.js --help`。
 5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
-6. 代码审查确认 `src/server/codexAppServerBridge.ts` 不再内联 app-server approval/sandbox 参数，只调用 `createAppServerArgs()`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 不再内联 app-server approval/sandbox 参数，只调用 `createAppServerArgs(resolveAppServerLaunchPolicy())`。
 
 #### Expected Results
 - `appServerLaunch.ts` 集中声明当前 legacy high-trust 默认策略：`approvalPolicy: never`、`sandboxMode: danger-full-access`。
 - `createAppServerArgs()` 生成与既有行为一致的 `codex app-server -c approval_policy="never" -c sandbox_mode="danger-full-access"` 参数。
-- 自定义策略输入可生成 `approval_policy` 和 `sandbox_mode` 对应 `-c` 参数，为后续安全默认切换保留单点入口。
-- Server module smoke 覆盖默认策略和自定义策略参数生成。
-- 安全文档提醒任何默认 approval/sandbox 行为调整必须同步更新模块、测试记录和发版说明。
+- `resolveAppServerLaunchPolicy()` 支持 `CX_CODEX_APP_SERVER_APPROVAL_POLICY` / `CODEXUI_APP_SERVER_APPROVAL_POLICY` 和 `CX_CODEX_APP_SERVER_SANDBOX_MODE` / `CODEXUI_APP_SERVER_SANDBOX_MODE`。
+- 只接受官方常见枚举值；非法值回退到 legacy 默认策略。
+- Server module smoke 覆盖默认策略、官方枚举、自定义策略参数生成、环境变量 trim、`CX_CODEX_` 优先级、`CODEXUI_` fallback 和非法值回退。
+- README 和安全文档记录更保守的 `on-request` + `workspace-write` 覆盖方式。
 
 #### Rollback / Cleanup
-- 如需回滚，撤销 `src/server/appServerLaunch.ts`、bridge import/call 调整、server module smoke、verify-server-modules、changelog、安全文档和本节测试记录。
+- 如需回滚，撤销 `src/server/appServerLaunch.ts`、bridge import/call 调整、server module smoke、verify-server-modules、README、changelog、安全文档和本节测试记录。
 
 #### Regression Evidence
+- 2026-07-04 官方文档核对：`node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` 返回 current manual，Codex sandbox/approval 章节记录常见 sandbox 和 approval policy 值。
 - 2026-07-04 静态验证：`git diff --check` 通过。
 - 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
 - 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
