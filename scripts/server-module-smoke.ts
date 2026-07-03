@@ -195,8 +195,13 @@ import {
   isRuntimeActiveState,
   RuntimeStateStore,
   toPersistableRuntimeSnapshot,
+  type RuntimeExecutionState,
   type ThreadRuntimeSnapshot,
 } from '../src/server/runtimeState.js'
+import {
+  normalizeRuntimeEventForReplay,
+  readRuntimeRequestStatusFromExecutionState,
+} from '../src/server/appServerRuntimeBridge.js'
 import {
   normalizeWorkspaceRootsState,
   readWorkspaceRootsState,
@@ -265,6 +270,7 @@ try {
   await smokeThreadSearchIndex()
   await smokeWorkspaceRootsState()
   await smokeProjectRoots()
+  smokeAppServerRuntimeBridge()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
 } finally {
@@ -2217,6 +2223,41 @@ function smokeRuntimeStateStore(): void {
   assert.equal(persistable.threadRead, null)
   assert.deepEqual(persistable.pendingServerRequests, [])
   assert.equal(persistable.tokenUsage, null)
+}
+
+function smokeAppServerRuntimeBridge(): void {
+  const expectedStatuses: Array<[RuntimeExecutionState, string]> = [
+    ['idle', 'stopped'],
+    ['queued', 'stopped'],
+    ['starting', 'running'],
+    ['start_uncertain', 'start_uncertain'],
+    ['running', 'running'],
+    ['waiting_permission', 'running'],
+    ['stopping', 'stopping'],
+    ['stop_uncertain', 'stop_uncertain'],
+    ['completed_pending_sync', 'completed'],
+    ['completed', 'completed'],
+    ['failed', 'failed'],
+    ['interrupted', 'interrupted'],
+    ['stopped', 'stopped'],
+    ['sync_degraded', 'sync_degraded'],
+  ]
+  for (const [executionState, requestStatus] of expectedStatuses) {
+    assert.equal(readRuntimeRequestStatusFromExecutionState(executionState), requestStatus)
+  }
+
+  const params = { threadId: 'thread-a' }
+  assert.deepEqual(normalizeRuntimeEventForReplay({
+    seq: 12,
+    method: 'turn/completed',
+    params,
+    atIso: '2026-01-01T00:00:00.000Z',
+  }), {
+    seq: 12,
+    method: 'turn/completed',
+    params,
+    atIso: '2026-01-01T00:00:00.000Z',
+  })
 }
 
 function createThreadRuntimeSnapshot(overrides: Partial<ThreadRuntimeSnapshot> = {}): ThreadRuntimeSnapshot {

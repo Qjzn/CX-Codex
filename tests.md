@@ -2318,6 +2318,35 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server runtime bridge helper 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRuntimeBridge.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 runtime execution state 到 runtime request status 的映射，以及 persisted runtime event replay 的响应形状。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 从 `appServerRuntimeBridge.ts` 导入 `BridgeNotificationEvent`、`readRuntimeRequestStatusFromExecutionState()` 和 `normalizeRuntimeEventForReplay()`，不再内联这些 runtime bridge helper。
+5. 代码审查确认 runtime request reconciliation 和 notification replay 调用点仍保持原有状态映射和 event shape。
+
+#### Expected Results
+- `src/server/appServerRuntimeBridge.ts` 集中维护 runtime execution state 到 runtime request status 的纯映射。
+- queued/idle/unknown settled fallback 仍映射为 `stopped`；running/starting/waiting_permission 仍映射为 `running`；uncertain、stopping、failed、interrupted、completed 和 sync_degraded 状态保持原映射。
+- notification replay 仍输出 `{ seq, method, params, atIso }`，不额外暴露 payload 或敏感字段。
+- server module smoke 覆盖全部 `RuntimeExecutionState` 分支和 replay event shape；release gate 通过，证明拆分后的 ESM import、runtime helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/appServerRuntimeBridge.ts`，撤销 `scripts/server-module-smoke.ts` 中的 runtime bridge smoke，并把 `BridgeNotificationEvent`、`readRuntimeRequestStatusFromExecutionState()` 和 `normalizeRuntimeEventForReplay()` 恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: App Server thread/read cache 新鲜度模块化
 
 #### Prerequisites

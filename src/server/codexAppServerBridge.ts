@@ -11,6 +11,11 @@ import { getTunnelStatus, updateTunnelConfig } from './tunnelStatus.js'
 import { readFavoriteRecords, writeFavoriteRecords } from './webUiState.js'
 import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } from './runtimeStore.js'
 import {
+  normalizeRuntimeEventForReplay,
+  readRuntimeRequestStatusFromExecutionState,
+  type BridgeNotificationEvent,
+} from './appServerRuntimeBridge.js'
+import {
   isRuntimeActiveState,
   RUNTIME_SNAPSHOT_STALE_MS,
   RuntimeStateStore,
@@ -237,32 +242,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value : ''
-}
-
-function readRuntimeRequestStatusFromExecutionState(state: RuntimeExecutionState): RuntimeRequestStatus {
-  if (state === 'start_uncertain') return 'start_uncertain'
-  if (state === 'stop_uncertain') return 'stop_uncertain'
-  if (state === 'stopping') return 'stopping'
-  if (state === 'interrupted') return 'interrupted'
-  if (state === 'failed') return 'failed'
-  if (state === 'completed' || state === 'completed_pending_sync') return 'completed'
-  if (state === 'running' || state === 'waiting_permission' || state === 'starting') return 'running'
-  if (state === 'sync_degraded') return 'sync_degraded'
-  return 'stopped'
-}
-
-function normalizeRuntimeEventForReplay(event: {
-  seq: number
-  method: string
-  params: unknown
-  atIso: string
-}): BridgeNotificationEvent {
-  return {
-    seq: event.seq,
-    method: event.method,
-    params: event.params,
-    atIso: event.atIso,
-  }
 }
 
 function isMissingHeadError(error: unknown): boolean {
@@ -1073,13 +1052,6 @@ type CodexBridgeMiddleware = ((req: IncomingMessage, res: ServerResponse, next: 
     latestSeq: number
     oldestSeq: number
   }
-}
-
-type BridgeNotificationEvent = {
-  method: string
-  params: unknown
-  atIso: string
-  seq: number
 }
 
 type SharedBridgeState = {
