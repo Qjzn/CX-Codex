@@ -1684,3 +1684,33 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 CLI smoke：`node dist-cli/index.js --help` 通过并输出 `CX-Codex Web bridge for Codex app-server`。
 - 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
 - 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建和 CLI smoke。
+
+---
+
+### Feature: App Server RPC cache 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRpcCache.ts`。
+- 本机可运行 `npm.cmd run build`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run build`。
+3. 执行 `node dist-cli/index.js --help`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 通过 `AppServerRpcCache` 管理 shareable RPC、`thread/list` 缓存、`model/list` 缓存和后台刷新，不再内联缓存 Map 与 TTL 逻辑。
+
+#### Expected Results
+- `src/server/appServerRpcCache.ts` 集中维护 `thread/list` / `model/list` fresh/stale TTL、后台刷新节流、共享 in-flight RPC Promise 和 `getShareableRpcKey`。
+- `src/server/codexAppServerBridge.ts` 保留 App Server 进程、RPC 队列、permission request、runtime 和 HTTP 编排，不再承载共享读缓存细节。
+- `thread/read` 仍只共享 in-flight Promise；`thread/list` 和 `model/list` 继续支持 stale cache 返回并触发后台刷新。
+- 构建、CLI smoke、CJS 启动烟测和 release gate 均通过，证明拆分后的 ESM import、CLI 入口和发版门禁正常。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 代码审查：`rg` 确认 `cachedThreadListRpcByKey`、`cachedModelListRpcByKey` 和 `sharedReadRpcByKey` 只存在于 `src/server/appServerRpcCache.ts`。
+- 2026-07-03 CLI smoke：`node dist-cli/index.js --help` 通过并输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建和 CLI smoke。
