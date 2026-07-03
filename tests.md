@@ -1884,6 +1884,32 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Thread search index 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/threadSearchIndex.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 thread search row 归一化、thread/list 翻页索引、session index 标题补充、搜索匹配和索引 store clear 行为。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 只负责提供 `appServer.rpc('thread/list')` 和 `readThreadTitlesFromSessionIndex(getCodexSessionIndexPath())`，thread search 索引构建、缓存、搜索和清理均来自 `src/server/threadSearchIndex.ts`。
+
+#### Expected Results
+- `src/server/threadSearchIndex.ts` 集中维护 thread search document、thread/list 翻页读取、归档/未归档合并、session index 标题补充和精确短语匹配。
+- `/codex-api/thread-search` 空查询仍返回空结果；非空查询返回 `{ threadIds, indexedThreadCount }`。
+- `thread/start`、`thread/archive`、`thread/name/set` 等会影响 thread list 的 RPC 成功后会清理 thread search index；`runtime/send` 新建 thread 成功后也会清理索引，下次搜索重新构建。
+- 重复 thread id 只保留 app-server thread/list 首次返回的记录，session index 只补充缺失 thread。
+- 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Rollback/Cleanup
+- 如需回滚，移除 `src/server/threadSearchIndex.ts`，将 bridge 重新改回内联 thread search helper，并从 `scripts/verify-server-modules.mjs` 与 `scripts/server-module-smoke.ts` 移除对应 smoke 覆盖。
+
+---
+
 ### Feature: App Server stdout line buffer 模块化
 
 #### Prerequisites

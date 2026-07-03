@@ -82,6 +82,10 @@ import {
   writeThreadTitleCache,
 } from './threadTitleCache.js'
 import {
+  buildThreadSearchIndex,
+  ThreadSearchIndexStore,
+} from './threadSearchIndex.js'
+import {
   evaluateServerRequestPolicy,
   type WebBridgeSettings,
 } from './serverRequestPolicy.js'
@@ -158,18 +162,6 @@ type PendingRpc = {
   params: unknown
   startedAtMs: number
   timeoutId: ReturnType<typeof setTimeout>
-}
-
-type ThreadSearchDocument = {
-  id: string
-  title: string
-  preview: string
-  messageText: string
-  searchableText: string
-}
-
-type ThreadSearchIndex = {
-  docsById: Map<string, ThreadSearchDocument>
 }
 
 type GithubTrendingItem = {
@@ -576,50 +568,6 @@ function setJson(res: ServerResponse, statusCode: number, payload: unknown): voi
   res.statusCode = statusCode
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
   res.end(JSON.stringify(payload))
-}
-
-function extractThreadMessageText(threadReadPayload: unknown): string {
-  const payload = asRecord(threadReadPayload)
-  const thread = asRecord(payload?.thread)
-  const turns = Array.isArray(thread?.turns) ? thread.turns : []
-  const parts: string[] = []
-
-  for (const turn of turns) {
-    const turnRecord = asRecord(turn)
-    const items = Array.isArray(turnRecord?.items) ? turnRecord.items : []
-    for (const item of items) {
-      const itemRecord = asRecord(item)
-      const type = typeof itemRecord?.type === 'string' ? itemRecord.type : ''
-      if (type === 'agentMessage' && typeof itemRecord?.text === 'string' && itemRecord.text.trim().length > 0) {
-        parts.push(itemRecord.text.trim())
-        continue
-      }
-      if (type === 'userMessage') {
-        const content = Array.isArray(itemRecord?.content) ? itemRecord.content : []
-        for (const block of content) {
-          const blockRecord = asRecord(block)
-          if (blockRecord?.type === 'text' && typeof blockRecord.text === 'string' && blockRecord.text.trim().length > 0) {
-            parts.push(blockRecord.text.trim())
-          }
-        }
-        continue
-      }
-      if (type === 'commandExecution') {
-        const command = typeof itemRecord?.command === 'string' ? itemRecord.command.trim() : ''
-        const output = typeof itemRecord?.aggregatedOutput === 'string' ? itemRecord.aggregatedOutput.trim() : ''
-        if (command) parts.push(command)
-        if (output) parts.push(output)
-      }
-    }
-  }
-
-  return parts.join('\n').trim()
-}
-
-function isExactPhraseMatch(query: string, doc: ThreadSearchDocument): boolean {
-  const q = query.trim().toLowerCase()
-  if (!q) return false
-  return doc.title.toLowerCase().includes(q)
 }
 
 function scoreFileCandidate(path: string, query: string): number {
@@ -2063,51 +2011,6 @@ function getSharedBridgeState(): SharedBridgeState {
   return created
 }
 
-async function loadAllThreadsForSearch(appServer: AppServerProcess): Promise<ThreadSearchDocument[]> {
-  const threadsById = new Map<string, { id: string; title: string; preview: string }>()
-
-  for (const archived of [false, true]) {
-    let cursor: string | null = null
-
-    do {
-      const response = asRecord(await appServer.rpc('thread/list', {
-        archived,
-        limit: 100,
-        sortKey: 'updated_at',
-        cursor,
-      }))
-      const data = Array.isArray(response?.data) ? response.data : []
-      for (const row of data) {
-        const record = asRecord(row)
-        const id = typeof record?.id === 'string' ? record.id : ''
-        if (!id || threadsById.has(id)) continue
-        const title = typeof record?.name === 'string' && record.name.trim().length > 0
-          ? record.name.trim()
-          : (typeof record?.preview === 'string' && record.preview.trim().length > 0 ? record.preview.trim() : 'Untitled thread')
-        const preview = typeof record?.preview === 'string' ? record.preview : ''
-        threadsById.set(id, { id, title, preview })
-      }
-      cursor = typeof response?.nextCursor === 'string' && response.nextCursor.length > 0 ? response.nextCursor : null
-    } while (cursor)
-  }
-
-  const sessionIndexCache = await readThreadTitlesFromSessionIndex(getCodexSessionIndexPath())
-  for (const id of sessionIndexCache.order) {
-    if (threadsById.has(id)) continue
-    const title = sessionIndexCache.titles[id]?.trim() ?? ''
-    if (!title) continue
-    threadsById.set(id, { id, title, preview: '' })
-  }
-
-  return Array.from(threadsById.values()).map((thread) => ({
-    id: thread.id,
-    title: thread.title,
-    preview: thread.preview,
-    messageText: '',
-    searchableText: thread.title,
-  }))
-}
-
 async function augmentThreadListRpcResult(
   appServer: AppServerProcess,
   params: unknown,
@@ -2140,16 +2043,12 @@ async function augmentThreadListRpcResult(
   }
 }
 
-async function buildThreadSearchIndex(appServer: AppServerProcess): Promise<ThreadSearchIndex> {
-  const docs = await loadAllThreadsForSearch(appServer)
-  const docsById = new Map<string, ThreadSearchDocument>(docs.map((doc) => [doc.id, doc]))
-  return { docsById }
-}
-
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const { appServer, methodCatalog } = getSharedBridgeState()
-  let threadSearchIndex: ThreadSearchIndex | null = null
-  let threadSearchIndexPromise: Promise<ThreadSearchIndex> | null = null
+  const threadSearchIndexStore = new ThreadSearchIndexStore(async () => buildThreadSearchIndex(
+    (params) => appServer.rpc('thread/list', params),
+    await readThreadTitlesFromSessionIndex(getCodexSessionIndexPath()),
+  ))
   const cachedThreadReadsByThreadId = new Map<string, CachedThreadRead>()
   const runtimeStateStore = new RuntimeStateStore({
     readThreadIdFromPayload,
@@ -2162,21 +2061,6 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const notificationReplayBuffer: BridgeNotificationEvent[] = []
   const bridgeNotificationListeners = new Set<(value: BridgeNotificationEvent) => void>()
   let notificationSeq = runtimeStore.getLatestEventSeq()
-
-  async function getThreadSearchIndex(): Promise<ThreadSearchIndex> {
-    if (threadSearchIndex) return threadSearchIndex
-    if (!threadSearchIndexPromise) {
-      threadSearchIndexPromise = buildThreadSearchIndex(appServer)
-        .then((index) => {
-          threadSearchIndex = index
-          return index
-        })
-        .finally(() => {
-          threadSearchIndexPromise = null
-        })
-    }
-    return threadSearchIndexPromise
-  }
 
   function rememberCachedThreadRead(threadId: string, threadRead: unknown): CachedThreadRead {
     const cachedThreadRead: CachedThreadRead = {
@@ -2534,6 +2418,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         const startedThread = await appServer.rpc('thread/start', threadParams)
         threadId = readThreadIdFromPayload(startedThread)
         if (!threadId) throw new Error('thread/start did not return a thread id')
+        threadSearchIndexStore.clear()
         runtimeStore.updateRequest(requestId, {
           threadId,
           status: 'pending_start',
@@ -2915,6 +2800,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           ? await augmentThreadListRpcResult(appServer, rpcParams, rpcResult)
           : rpcResult
         const result = trimThreadTurnsInRpcResult(body.method, enrichedRpcResult)
+        if (shouldInvalidateThreadListCacheForRpc(body.method)) {
+          threadSearchIndexStore.clear()
+        }
         if (
           body.method === 'thread/read' &&
           rpcThreadId &&
@@ -3539,13 +3427,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           return
         }
 
-        const index = await getThreadSearchIndex()
-        const matchedIds = Array.from(index.docsById.entries())
-          .filter(([, doc]) => isExactPhraseMatch(query, doc))
-          .slice(0, limit)
-          .map(([id]) => id)
-
-        setJson(res, 200, { data: { threadIds: matchedIds, indexedThreadCount: index.docsById.size } })
+        const searchResult = await threadSearchIndexStore.search(query, limit)
+        setJson(res, 200, { data: searchResult })
         return
       }
 
@@ -3664,7 +3547,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
   middleware.dispose = () => {
     clearInterval(runtimeReconcileTimer)
-    threadSearchIndex = null
+    threadSearchIndexStore.clear()
     bridgeNotificationListeners.clear()
     unsubscribeAppServerNotifications()
     runtimeStore.close()

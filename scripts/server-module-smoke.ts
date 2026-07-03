@@ -44,6 +44,15 @@ import {
   writeThreadTitleCache,
 } from '../src/server/threadTitleCache.js'
 import {
+  buildThreadSearchIndex,
+  isExactPhraseMatch,
+  loadAllThreadsForSearch,
+  normalizeThreadSearchRow,
+  searchThreadIndex,
+  ThreadSearchIndexStore,
+  type ThreadListParams,
+} from '../src/server/threadSearchIndex.js'
+import {
   isRuntimeActiveState,
   RuntimeStateStore,
   toPersistableRuntimeSnapshot,
@@ -70,6 +79,7 @@ try {
   await smokeWebBridgeSettings()
   await smokeThreadTokenUsage()
   await smokeThreadTitleCache()
+  await smokeThreadSearchIndex()
   await smokeWorkspaceRootsState()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
@@ -602,6 +612,102 @@ async function smokeThreadTitleCache(): Promise<void> {
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+}
+
+async function smokeThreadSearchIndex(): Promise<void> {
+  assert.deepEqual(normalizeThreadSearchRow({ id: '', name: 'Missing id' }), null)
+  assert.deepEqual(normalizeThreadSearchRow({ id: 'thread-a', name: '  Alpha  ', preview: 'Preview A' }), {
+    id: 'thread-a',
+    title: 'Alpha',
+    preview: 'Preview A',
+  })
+  assert.deepEqual(normalizeThreadSearchRow({ id: 'thread-b', preview: '  Preview B  ' }), {
+    id: 'thread-b',
+    title: 'Preview B',
+    preview: '  Preview B  ',
+  })
+  assert.deepEqual(normalizeThreadSearchRow({ id: 'thread-c' }), {
+    id: 'thread-c',
+    title: 'Untitled thread',
+    preview: '',
+  })
+
+  const requestedParams: ThreadListParams[] = []
+  const listThreads = async (params: ThreadListParams): Promise<unknown> => {
+    requestedParams.push(params)
+    if (!params.archived && params.cursor === null) {
+      return {
+        data: [
+          { id: 'thread-a', name: 'Alpha notes', preview: 'A preview' },
+          { id: 'thread-b', preview: 'Beta preview' },
+        ],
+        nextCursor: 'page-2',
+      }
+    }
+    if (!params.archived && params.cursor === 'page-2') {
+      return {
+        data: [
+          { id: 'thread-a', name: 'Duplicate Alpha' },
+          { id: 'thread-c', name: 'Gamma plan' },
+        ],
+      }
+    }
+    if (params.archived && params.cursor === null) {
+      return { data: [{ id: 'thread-d', name: 'Archived delta' }] }
+    }
+    throw new Error(`Unexpected thread/list params: ${JSON.stringify(params)}`)
+  }
+
+  const sessionIndexCache = {
+    titles: {
+      'thread-c': 'Ignored duplicate session title',
+      'thread-e': 'Session epsilon',
+    },
+    order: ['thread-c', 'thread-e'],
+  }
+  const docs = await loadAllThreadsForSearch(listThreads, sessionIndexCache)
+  assert.deepEqual(requestedParams, [
+    { archived: false, limit: 100, sortKey: 'updated_at', cursor: null },
+    { archived: false, limit: 100, sortKey: 'updated_at', cursor: 'page-2' },
+    { archived: true, limit: 100, sortKey: 'updated_at', cursor: null },
+  ])
+  assert.deepEqual(docs.map((doc) => [doc.id, doc.title]), [
+    ['thread-a', 'Alpha notes'],
+    ['thread-b', 'Beta preview'],
+    ['thread-c', 'Gamma plan'],
+    ['thread-d', 'Archived delta'],
+    ['thread-e', 'Session epsilon'],
+  ])
+
+  const index = await buildThreadSearchIndex(listThreads, sessionIndexCache)
+  assert.equal(index.docsById.size, 5)
+  assert.equal(isExactPhraseMatch('alpha', index.docsById.get('thread-a')!), true)
+  assert.equal(isExactPhraseMatch('missing', index.docsById.get('thread-a')!), false)
+  assert.deepEqual(searchThreadIndex(index, 'thread', 2), {
+    threadIds: [],
+    indexedThreadCount: 5,
+  })
+  assert.deepEqual(searchThreadIndex(index, 'a', 2), {
+    threadIds: ['thread-a', 'thread-b'],
+    indexedThreadCount: 5,
+  })
+
+  let buildCount = 0
+  const store = new ThreadSearchIndexStore(async () => {
+    buildCount += 1
+    return {
+      docsById: new Map([
+        ['thread-a', { id: 'thread-a', title: `Alpha ${String(buildCount)}`, preview: '', messageText: '', searchableText: '' }],
+      ]),
+    }
+  })
+  assert.deepEqual(await store.search('', 10), { threadIds: [], indexedThreadCount: 0 })
+  assert.deepEqual(await store.search('alpha', 10), { threadIds: ['thread-a'], indexedThreadCount: 1 })
+  assert.deepEqual(await store.search('alpha', 10), { threadIds: ['thread-a'], indexedThreadCount: 1 })
+  assert.equal(buildCount, 1)
+  store.clear()
+  assert.deepEqual(await store.search('alpha', 10), { threadIds: ['thread-a'], indexedThreadCount: 1 })
+  assert.equal(buildCount, 2)
 }
 
 async function smokeWorkspaceRootsState(): Promise<void> {
