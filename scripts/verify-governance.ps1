@@ -70,7 +70,8 @@ $requiredFiles = @(
   ".github/ISSUE_TEMPLATE/config.yml",
   ".github/workflows/ci.yml",
   ".github/workflows/release.yml",
-  ".github/release-body.md"
+  ".github/release-body.md",
+  "scripts/verify-release-artifacts.ps1"
 )
 
 foreach ($file in $requiredFiles) {
@@ -175,6 +176,13 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "docs\openai-docs-review.zh-CN.md",
   "docs\protocol-compatibility.zh-CN.md",
   "docs\security-hardening.zh-CN.md"
+)
+
+Assert-ContentIncludes "scripts/verify-release-artifacts.ps1" @(
+  "Release artifact checksum verification passed.",
+  "No .sha256 files found",
+  "Checksum hash does not match artifact",
+  "Checksum file must reference an artifact file name only"
 )
 
 Assert-ContentIncludes "scripts/package-release.ps1" @(
@@ -284,7 +292,8 @@ Assert-ContentIncludes ".github/workflows/ci.yml" @(
 )
 
 Assert-ContentIncludes ".github/workflows/release.yml" @(
-  "./scripts/verify-release.ps1 -RequireCleanGit -SchemaAudit skip"
+  "./scripts/verify-release.ps1 -RequireCleanGit -SchemaAudit skip",
+  "./scripts/verify-release-artifacts.ps1"
 )
 
 Write-Host "Governance docs check passed."

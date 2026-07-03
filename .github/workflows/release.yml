@@ -120,6 +120,10 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 $apkTarget).Hash.ToLowerInvariant()
           Set-Content -Path ($apkTarget + '.sha256') -Value "$hash  $(Split-Path -Leaf $apkTarget)" -Encoding ASCII
 
+      - name: Verify release artifact checksums
+        shell: pwsh
+        run: ./scripts/verify-release-artifacts.ps1 -OutputDir "${env:RUNNER_TEMP}\release"
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:

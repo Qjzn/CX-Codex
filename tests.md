@@ -1881,6 +1881,37 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: GitHub Release artifact checksum 验证
+
+#### Prerequisites
+- 当前仓库包含 `scripts/verify-release-artifacts.ps1`。
+- `output\release-package-smoke` 中已有 release package smoke 生成的 zip 和 `.sha256`，或可先运行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 生成。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:governance`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 执行 `pwsh -NoProfile -File ./scripts/verify-release-artifacts.ps1 -OutputDir output\release-package-smoke`。
+5. 检查 `.github/workflows/release.yml`，确认发布前调用 `./scripts/verify-release-artifacts.ps1` 验证 `${{ runner.temp }}/release` 下全部 `.sha256`。
+
+#### Expected Results
+- 本地 release package smoke 生成的 `.sha256` 能被 `verify-release-artifacts.ps1` 成功校验。
+- Release workflow 在发布 GitHub Release 前会校验 Web zip 和 Android APK 的 `.sha256` 内容。
+- checksum 文件为空、格式错误、引用子路径、缺少目标文件或哈希不一致时，脚本会失败。
+- 治理门禁会阻止 artifact checksum 验证脚本或 release workflow 调用被删除。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `scripts/verify-release-artifacts.ps1`，并撤销 `.github/workflows/release.yml`、`scripts/verify-governance.ps1` 和本测试章节中的相关引用。
+- 可删除 `output\release-package-smoke` 临时输出。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁验证：`npm.cmd run verify:governance` 通过，确认 artifact checksum 验证脚本和 Release workflow 调用已被 governance 锁定。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，生成 `output\release-package-smoke\CX-Codex-verify-smoke.zip` 和 `.sha256`。
+- 2026-07-04 Artifact checksum 验证：`pwsh -NoProfile -File ./scripts/verify-release-artifacts.ps1 -OutputDir output\release-package-smoke` 通过，输出 `checksum ok: CX-Codex-verify-smoke.zip` 和 `Release artifact checksum verification passed.`。
+
+---
+
 ### Feature: 开源社区行为准则
 
 #### Prerequisites
