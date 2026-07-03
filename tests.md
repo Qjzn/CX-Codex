@@ -1832,6 +1832,32 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Thread title cache 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/threadTitleCache.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 thread title cache 归一化、持久 state 读写和 `session_index.jsonl` 解析。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 只负责传入 `getCodexGlobalStatePath()` / `getCodexSessionIndexPath()`，标题缓存归一化、合并、读写和 session index 扫描均来自 `src/server/threadTitleCache.ts`。
+
+#### Expected Results
+- `src/server/threadTitleCache.ts` 集中维护 `thread-titles` state 归一化、最近标题顺序、删除、合并和 JSON 写回。
+- `session_index.jsonl` 解析会跳过坏行和空标题，同一 thread 保留最新 `updated_at` 标题，并按更新时间降序生成 order。
+- `/codex-api/thread-titles` GET 仍返回持久标题和 session index 标题的合并结果；PUT 仍只更新持久 `thread-titles`。
+- Thread 搜索索引仍能用 session index 标题补充 app-server 未返回的历史 thread。
+- 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Rollback/Cleanup
+- 如需回滚，移除 `src/server/threadTitleCache.ts`，将 bridge 重新改回内联 helper，并从 `scripts/verify-server-modules.mjs` 与 `scripts/server-module-smoke.ts` 移除对应 smoke 覆盖。
+
+---
+
 ### Feature: App Server stdout line buffer 模块化
 
 #### Prerequisites

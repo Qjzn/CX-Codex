@@ -33,6 +33,17 @@ import {
   ThreadTokenUsageStore,
 } from '../src/server/threadTokenUsage.js'
 import {
+  mergeThreadTitleCaches,
+  normalizeThreadTitleCache,
+  parseThreadTitlesFromSessionIndex,
+  readMergedThreadTitleCache,
+  readThreadTitleCache,
+  readThreadTitlesFromSessionIndex,
+  removeFromThreadTitleCache,
+  updateThreadTitleCache,
+  writeThreadTitleCache,
+} from '../src/server/threadTitleCache.js'
+import {
   isRuntimeActiveState,
   RuntimeStateStore,
   toPersistableRuntimeSnapshot,
@@ -51,6 +62,7 @@ try {
   smokeServerRequestPolicy()
   await smokeWebBridgeSettings()
   await smokeThreadTokenUsage()
+  await smokeThreadTitleCache()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
 } finally {
@@ -519,6 +531,66 @@ async function smokeThreadTokenUsage(): Promise<void> {
     assert.equal((await parseThreadTokenUsageFromSessionLog(sessionPath))?.last.totalTokens, 300)
     assert.equal((await readThreadTokenUsageFromSessionLog(sessionPath))?.remainingTokens, 700)
     assert.equal(await readThreadTokenUsageFromSessionLog(join(tempDir, 'missing.jsonl')), null)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function smokeThreadTitleCache(): Promise<void> {
+  assert.deepEqual(normalizeThreadTitleCache(null), { titles: {}, order: [] })
+  assert.deepEqual(normalizeThreadTitleCache({
+    titles: { a: 'Alpha', b: '', c: 7 },
+    order: ['a', 'missing', '', 9],
+  }), {
+    titles: { a: 'Alpha' },
+    order: ['a', 'missing'],
+  })
+
+  const updated = updateThreadTitleCache({ titles: { a: 'Alpha' }, order: ['a'] }, 'b', 'Beta')
+  assert.deepEqual(updated, { titles: { a: 'Alpha', b: 'Beta' }, order: ['b', 'a'] })
+  assert.deepEqual(removeFromThreadTitleCache(updated, 'a'), { titles: { b: 'Beta' }, order: ['b'] })
+  assert.deepEqual(mergeThreadTitleCaches(
+    { titles: { a: 'Alpha', b: 'Base Beta' }, order: ['a', 'b'] },
+    { titles: { b: 'Session Beta', c: 'Gamma' }, order: ['c', 'b'] },
+  ), {
+    titles: { a: 'Alpha', b: 'Session Beta', c: 'Gamma' },
+    order: ['c', 'b', 'a'],
+  })
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-thread-title-'))
+  try {
+    const statePath = join(tempDir, 'global-state.json')
+    const sessionIndexPath = join(tempDir, 'session_index.jsonl')
+
+    assert.deepEqual(await readThreadTitleCache(statePath), { titles: {}, order: [] })
+    await writeFile(statePath, JSON.stringify({ existing: true }), 'utf8')
+    await writeThreadTitleCache(statePath, { titles: { manual: 'Manual title' }, order: ['manual'] })
+    assert.deepEqual(await readThreadTitleCache(statePath), {
+      titles: { manual: 'Manual title' },
+      order: ['manual'],
+    })
+
+    await writeFile(sessionIndexPath, [
+      '{malformed',
+      JSON.stringify({ id: 'thread-a', thread_name: 'Old A', updated_at: '2026-01-01T00:00:00.000Z' }),
+      JSON.stringify({ id: 'thread-a', thread_name: 'New A', updated_at: '2026-01-02T00:00:00.000Z' }),
+      JSON.stringify({ id: 'thread-b', thread_name: 'Beta', updated_at: 'not-a-date' }),
+      JSON.stringify({ id: 'thread-c', thread_name: '  ', updated_at: '2026-01-03T00:00:00.000Z' }),
+    ].join('\n'), 'utf8')
+
+    assert.deepEqual(await parseThreadTitlesFromSessionIndex(sessionIndexPath), {
+      titles: { 'thread-a': 'New A', 'thread-b': 'Beta' },
+      order: ['thread-a', 'thread-b'],
+    })
+    assert.deepEqual(await readThreadTitlesFromSessionIndex(sessionIndexPath), {
+      titles: { 'thread-a': 'New A', 'thread-b': 'Beta' },
+      order: ['thread-a', 'thread-b'],
+    })
+    assert.deepEqual(await readThreadTitlesFromSessionIndex(join(tempDir, 'missing.jsonl')), { titles: {}, order: [] })
+    assert.deepEqual(await readMergedThreadTitleCache(statePath, sessionIndexPath), {
+      titles: { manual: 'Manual title', 'thread-a': 'New A', 'thread-b': 'Beta' },
+      order: ['thread-a', 'thread-b', 'manual'],
+    })
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
