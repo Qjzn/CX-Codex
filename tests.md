@@ -2318,6 +2318,36 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server notification replay 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerNotificationReplay.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 notification replay 的 seq 初始化、事件持久化形状、诊断观察、内存 buffer 裁剪、持久 replay 优先和内存 fallback。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 使用 `AppServerNotificationReplay` 管理 notification seq、runtimeStore event append、diagnostics observe 和 replay list，不再内联 notification replay buffer。
+5. 代码审查确认 `/codex-api/notifications`、`/codex-api/runtime/events` 和 SSE ready 事件仍返回相同的 `{ notifications, latestSeq, oldestSeq }` / `latestSeq` 语义。
+
+#### Expected Results
+- 新 notification 到达时仍写入 runtime event store，并继续为 diagnostics 提供 method、threadId、turnId 和 atIso。
+- 持久事件可覆盖页面恢复或重连后的 replay；当持久 store 无更新且内存 buffer 有新事件时，仍可从内存 buffer 返回。
+- 内存 buffer 仍按上限裁剪，避免长时间运行导致无界增长。
+- SSE ready 事件仍暴露当前最新 seq，前端可继续用 seq 做 catch-up。
+- server module smoke 覆盖上述 replay 分支；release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/appServerNotificationReplay.ts`，撤销 `scripts/server-module-smoke.ts` 中的 notification replay smoke，并把 notification seq、runtimeStore append、diagnostics observe、内存 replay buffer 和 `listNotificationEventsAfter()` 逻辑恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: App Server thread/list pinned summary augment 模块化
 
 #### Prerequisites

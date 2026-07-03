@@ -10,10 +10,10 @@ import { getTunnelStatus, updateTunnelConfig } from './tunnelStatus.js'
 import { readFavoriteRecords, writeFavoriteRecords } from './webUiState.js'
 import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } from './runtimeStore.js'
 import {
-  normalizeRuntimeEventForReplay,
   readRuntimeRequestStatusFromExecutionState,
   type BridgeNotificationEvent,
 } from './appServerRuntimeBridge.js'
+import { AppServerNotificationReplay } from './appServerNotificationReplay.js'
 import {
   isRuntimeActiveState,
   RUNTIME_SNAPSHOT_STALE_MS,
@@ -894,7 +894,6 @@ type SharedBridgeState = {
 }
 
 const SHARED_BRIDGE_KEY = '__codexRemoteSharedBridge__'
-const NOTIFICATION_REPLAY_BUFFER_LIMIT = 500
 
 function getSharedBridgeState(): SharedBridgeState {
   const globalScope = globalThis as typeof globalThis & {
@@ -946,9 +945,19 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const runtimeStore = new RuntimeStore()
   const notificationDiagnostics = new AppServerNotificationDiagnostics()
   const statusDiagnostics = new AppServerStatusDiagnostics()
-  const notificationReplayBuffer: BridgeNotificationEvent[] = []
   const bridgeNotificationListeners = new Set<(value: BridgeNotificationEvent) => void>()
-  let notificationSeq = runtimeStore.getLatestEventSeq()
+  const notificationReplay = new AppServerNotificationReplay({
+    initialSeq: runtimeStore.getLatestEventSeq(),
+    appendEvent: (event) => {
+      runtimeStore.appendEvent(event)
+    },
+    listEventsAfter: (afterSeq, limit) => runtimeStore.listEventsAfter(afterSeq, limit),
+    observeNotification: (observation) => {
+      notificationDiagnostics.observe(observation)
+    },
+    readThreadIdFromPayload,
+    readTurnIdFromPayload,
+  })
 
   function rememberCachedThreadRead(threadId: string, threadRead: unknown): CachedThreadRead {
     const cachedThreadRead: CachedThreadRead = {
@@ -983,34 +992,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   }
 
   function rememberNotificationEvent(notification: { method: string; params: unknown }): BridgeNotificationEvent {
-    notificationSeq += 1
-    const threadId = readThreadIdFromPayload(notification.params)
-    const turnId = readTurnIdFromPayload(notification.params)
-    const event: BridgeNotificationEvent = {
-      method: notification.method,
-      params: notification.params,
-      atIso: new Date().toISOString(),
-      seq: notificationSeq,
-    }
-    notificationDiagnostics.observe({
-      method: event.method,
-      atIso: event.atIso,
-      threadId,
-      turnId,
-    })
-    runtimeStore.appendEvent({
-      seq: event.seq,
-      method: event.method,
-      params: event.params,
-      atIso: event.atIso,
-      threadId,
-      turnId,
-    })
-    notificationReplayBuffer.push(event)
-    if (notificationReplayBuffer.length > NOTIFICATION_REPLAY_BUFFER_LIMIT) {
-      notificationReplayBuffer.splice(0, notificationReplayBuffer.length - NOTIFICATION_REPLAY_BUFFER_LIMIT)
-    }
-    return event
+    return notificationReplay.remember(notification)
   }
 
   function listNotificationEventsAfter(afterSeq: number, limit = 200): {
@@ -1018,23 +1000,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     latestSeq: number
     oldestSeq: number
   } {
-    const normalizedAfterSeq = Number.isFinite(afterSeq) ? Math.max(0, Math.trunc(afterSeq)) : 0
-    const normalizedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(Math.trunc(limit), NOTIFICATION_REPLAY_BUFFER_LIMIT)) : 200
-    const persistedReplay = runtimeStore.listEventsAfter(normalizedAfterSeq, normalizedLimit)
-    if (persistedReplay.notifications.length > 0 || normalizedAfterSeq < persistedReplay.latestSeq) {
-      return {
-        notifications: persistedReplay.notifications.map(normalizeRuntimeEventForReplay),
-        latestSeq: persistedReplay.latestSeq,
-        oldestSeq: persistedReplay.oldestSeq,
-      }
-    }
-    return {
-      notifications: notificationReplayBuffer
-        .filter((notification) => notification.seq > normalizedAfterSeq)
-        .slice(0, normalizedLimit),
-      latestSeq: notificationSeq,
-      oldestSeq: notificationReplayBuffer[0]?.seq ?? notificationSeq,
-    }
+    return notificationReplay.listAfter(afterSeq, limit)
   }
 
   const unsubscribeAppServerNotifications = appServer.onNotification((notification: { method: string; params: unknown }) => {
@@ -2389,7 +2355,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           writeSse(`data: ${JSON.stringify(notification)}\n\n`)
         })
 
-        writeSse(`event: ready\ndata: ${JSON.stringify({ ok: true, latestSeq: notificationSeq })}\n\n`)
+        writeSse(`event: ready\ndata: ${JSON.stringify({ ok: true, latestSeq: notificationReplay.latestSeq })}\n\n`)
         keepAlive = setInterval(() => {
           writeSse(`data: ${JSON.stringify({
             method: BRIDGE_HEARTBEAT_METHOD,

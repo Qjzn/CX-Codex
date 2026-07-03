@@ -214,6 +214,7 @@ import {
   normalizeRuntimeEventForReplay,
   readRuntimeRequestStatusFromExecutionState,
 } from '../src/server/appServerRuntimeBridge.js'
+import { AppServerNotificationReplay } from '../src/server/appServerNotificationReplay.js'
 import {
   normalizeWorkspaceRootsState,
   readWorkspaceRootsState,
@@ -284,6 +285,7 @@ try {
   await smokeThreadSearchIndex()
   await smokeWorkspaceRootsState()
   await smokeProjectRoots()
+  smokeAppServerNotificationReplay()
   smokeAppServerRuntimeBridge()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
@@ -2377,6 +2379,115 @@ function smokeAppServerRuntimeBridge(): void {
   })
 }
 
+function smokeAppServerNotificationReplay(): void {
+  const appended: unknown[] = []
+  const observations: unknown[] = []
+  let persisted = {
+    notifications: [] as Array<{ seq: number; method: string; params: unknown; atIso: string }>,
+    latestSeq: 10,
+    oldestSeq: 10,
+  }
+  const replay = new AppServerNotificationReplay({
+    initialSeq: 10.8,
+    bufferLimit: 2,
+    nowIso: () => '2026-01-01T00:00:00.000Z',
+    appendEvent: (event) => { appended.push(event) },
+    listEventsAfter: () => persisted,
+    observeNotification: (observation) => { observations.push(observation) },
+    readThreadIdFromPayload: (payload) => readStringProperty(payload, 'threadId'),
+    readTurnIdFromPayload: (payload) => readStringProperty(payload, 'turnId'),
+  })
+
+  const first = replay.remember({
+    method: 'turn/started',
+    params: { threadId: 'thread-a', turnId: 'turn-a' },
+  })
+  const second = replay.remember({
+    method: 'item/updated',
+    params: { threadId: 'thread-b' },
+  })
+  const third = replay.remember({
+    method: 'turn/completed',
+    params: { threadId: 'thread-c', turnId: 'turn-c' },
+  })
+
+  assert.equal(replay.latestSeq, 13)
+  assert.deepEqual([first.seq, second.seq, third.seq], [11, 12, 13])
+  assert.deepEqual(appended, [
+    {
+      seq: 11,
+      method: 'turn/started',
+      params: { threadId: 'thread-a', turnId: 'turn-a' },
+      atIso: '2026-01-01T00:00:00.000Z',
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+    },
+    {
+      seq: 12,
+      method: 'item/updated',
+      params: { threadId: 'thread-b' },
+      atIso: '2026-01-01T00:00:00.000Z',
+      threadId: 'thread-b',
+      turnId: '',
+    },
+    {
+      seq: 13,
+      method: 'turn/completed',
+      params: { threadId: 'thread-c', turnId: 'turn-c' },
+      atIso: '2026-01-01T00:00:00.000Z',
+      threadId: 'thread-c',
+      turnId: 'turn-c',
+    },
+  ])
+  assert.deepEqual(observations, [
+    {
+      method: 'turn/started',
+      atIso: '2026-01-01T00:00:00.000Z',
+      threadId: 'thread-a',
+      turnId: 'turn-a',
+    },
+    {
+      method: 'item/updated',
+      atIso: '2026-01-01T00:00:00.000Z',
+      threadId: 'thread-b',
+      turnId: '',
+    },
+    {
+      method: 'turn/completed',
+      atIso: '2026-01-01T00:00:00.000Z',
+      threadId: 'thread-c',
+      turnId: 'turn-c',
+    },
+  ])
+
+  assert.deepEqual(replay.listAfter(11, 10), {
+    notifications: [second, third],
+    latestSeq: 13,
+    oldestSeq: 12,
+  })
+
+  persisted = {
+    notifications: [{
+      seq: 12,
+      method: 'persisted/event',
+      params: { ok: true },
+      atIso: '2026-01-01T00:00:01.000Z',
+    }],
+    latestSeq: 13,
+    oldestSeq: 2,
+  }
+  assert.deepEqual(replay.listAfter(1, 100), {
+    notifications: [{
+      seq: 12,
+      method: 'persisted/event',
+      params: { ok: true },
+      atIso: '2026-01-01T00:00:01.000Z',
+    }],
+    latestSeq: 13,
+    oldestSeq: 2,
+  })
+}
+
 function createThreadRuntimeSnapshot(overrides: Partial<ThreadRuntimeSnapshot> = {}): ThreadRuntimeSnapshot {
   return {
     threadId: 'thread-a',
@@ -2442,6 +2553,11 @@ function readIncludeTurns(payload: unknown): boolean | undefined {
 
 function readBooleanProperty(payload: unknown, key: string): boolean {
   return asRecord(payload)?.[key] === true
+}
+
+function readStringProperty(payload: unknown, key: string): string {
+  const value = asRecord(payload)?.[key]
+  return typeof value === 'string' ? value : ''
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
