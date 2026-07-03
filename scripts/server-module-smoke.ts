@@ -84,6 +84,7 @@ import {
   readIsoTimestampMs,
   type CachedThreadRead,
 } from '../src/server/appServerThreadReadCache.js'
+import { AppServerThreadListAugmenter } from '../src/server/appServerThreadListAugment.js'
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
 import {
@@ -254,6 +255,7 @@ try {
   smokeAppServerRpcResult()
   smokeAppServerPayloadIds()
   smokeAppServerThreadPayload()
+  await smokeAppServerThreadListAugment()
   smokeAppServerThreadReadCache()
   smokeAppServerRpcTimeoutPolicy()
   await smokeAppServerRpcCache()
@@ -901,6 +903,70 @@ function smokeAppServerThreadPayload(): void {
   assert.equal(readThreadInProgressFromThreadReadPayload({ thread: { status: 'completed' } }), false)
   assert.equal(readThreadSessionPathFromThreadReadPayload({ path: ' C:/sessions/fallback.jsonl ', thread: {} }), 'C:/sessions/fallback.jsonl')
   assert.equal(readThreadUpdatedAtIsoFromThreadReadPayload({ thread: { updatedAt: 0 } }), '')
+}
+
+async function smokeAppServerThreadListAugment(): Promise<void> {
+  let nowMs = 1_000
+  const augmenter = new AppServerThreadListAugmenter({
+    ttlMs: 100,
+    maxReads: 2,
+    maxCacheEntries: 10,
+    nowMs: () => nowMs,
+  })
+
+  const baseResult = { data: [{ id: 'existing' }], marker: true }
+  const calls: string[] = []
+  const readThreadById = async (threadId: string): Promise<unknown> => {
+    calls.push(threadId)
+    if (threadId === 'missing') return { thread: { id: 'other' } }
+    if (threadId === 'throws') throw new Error('missing thread')
+    return { thread: { id: threadId, title: `Title ${threadId}` } }
+  }
+  const readPinnedThreadIds = async (): Promise<string[]> => [' existing ', 'pin-a', 'missing', 'pin-b', 'throws']
+
+  assert.equal(await augmenter.augmentThreadListRpcResult({
+    params: { archived: false },
+    result: baseResult,
+    readPinnedThreadIds,
+    readThreadById,
+  }), baseResult)
+  assert.equal(calls.length, 0)
+
+  assert.equal(await augmenter.augmentThreadListRpcResult({
+    params: { archived: true, cursor: 'next-page' },
+    result: baseResult,
+    readPinnedThreadIds,
+    readThreadById,
+  }), baseResult)
+  assert.equal(calls.length, 0)
+
+  const augmented = await augmenter.augmentThreadListRpcResult({
+    params: { archived: true },
+    result: baseResult,
+    readPinnedThreadIds,
+    readThreadById,
+  }) as { data: Array<{ id: string; title?: string }>; marker: boolean }
+  assert.deepEqual(calls, ['pin-a', 'missing'])
+  assert.deepEqual(augmented.data.map((thread) => thread.id), ['existing', 'pin-a'])
+  assert.equal(augmented.marker, true)
+
+  const cached = await augmenter.augmentThreadListRpcResult({
+    params: { archived: true },
+    result: baseResult,
+    readPinnedThreadIds,
+    readThreadById,
+  }) as { data: Array<{ id: string; title?: string }> }
+  assert.deepEqual(calls, ['pin-a', 'missing', 'pin-b', 'throws'])
+  assert.deepEqual(cached.data.map((thread) => thread.id), ['existing', 'pin-a', 'pin-b'])
+
+  nowMs += 101
+  await augmenter.augmentThreadListRpcResult({
+    params: { archived: true },
+    result: baseResult,
+    readPinnedThreadIds,
+    readThreadById,
+  })
+  assert.deepEqual(calls, ['pin-a', 'missing', 'pin-b', 'throws', 'pin-a', 'missing'])
 }
 
 function smokeAppServerThreadReadCache(): void {

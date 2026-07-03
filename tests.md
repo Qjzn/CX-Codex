@@ -2318,6 +2318,36 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server thread/list pinned summary augment 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerThreadListAugment.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 archived 首屏 pinned thread 补全、cursor 分页不补全、existing thread 去重、TTL 缓存、失败缓存和每轮最大补读数。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 使用 `AppServerThreadListAugmenter` 处理 `thread/list` 的 pinned summary 补全，不再内联 supplemental thread summary cache。
+5. 代码审查确认 `readThreadById` 仍调用 `thread/read` 且参数保持 `{ threadId, includeTurns: false }`。
+
+#### Expected Results
+- `thread/list` 只在 `archived === true` 且没有 cursor 的第一页结果中补充缺失 pinned thread。
+- 结果中已有的 thread id 不会被重复追加。
+- 单轮最多读取 `SUPPLEMENTAL_THREAD_SUMMARY_MAX_READS` 个未缓存 pinned thread，失败读取被短期缓存，避免缺失历史线程拖慢列表。
+- 补全结果保持原 result 字段，并在 `data` 尾部追加补到的 thread summary。
+- server module smoke 覆盖成功/失败缓存和 TTL 过期；release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/appServerThreadListAugment.ts`，撤销 `scripts/server-module-smoke.ts` 中的 thread list augment smoke，并把 supplemental thread summary cache 与 `augmentThreadListRpcResult()` 逻辑恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: App Server rollback git helper 模块化
 
 #### Prerequisites

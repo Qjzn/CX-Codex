@@ -194,6 +194,7 @@ import {
   resolveProjectRoot,
   suggestProjectRoot,
 } from './projectRoots.js'
+import { AppServerThreadListAugmenter } from './appServerThreadListAugment.js'
 import {
   ensureRepoHasInitialCommit,
   ensureRollbackGitRepo,
@@ -239,9 +240,9 @@ const APP_SERVER_RPC_TIMEOUT_RESTART_WINDOW_MS = 45_000
 const APP_SERVER_RPC_TIMEOUT_RESTART_THRESHOLD = 3
 const APP_SERVER_RESTART_COOLDOWN_MS = 10_000
 const APP_SERVER_COLD_START_GRACE_MS = 60_000
-const SUPPLEMENTAL_THREAD_SUMMARY_CACHE_TTL_MS = 5 * 60_000
-const SUPPLEMENTAL_THREAD_SUMMARY_MAX_READS = 20
 const BRIDGE_HEARTBEAT_METHOD = 'bridge/heartbeat'
+const supplementalThreadListAugmenter = new AppServerThreadListAugmenter()
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -264,72 +265,6 @@ function isMissingHeadError(error: unknown): boolean {
 function isNotGitRepositoryError(error: unknown): boolean {
   const message = getErrorMessage(error, '').toLowerCase()
   return message.includes('not a git repository') || message.includes('fatal: not a git repository')
-}
-
-const supplementalThreadSummaryCacheById = new Map<string, { value: unknown | null; cachedAtMs: number; failed?: boolean }>()
-
-async function loadThreadSummariesById(
-  appServer: AppServerProcess,
-  threadIds: string[],
-  excludedThreadIds: Set<string>,
-): Promise<unknown[]> {
-  const summaries: unknown[] = []
-  const seen = new Set<string>(excludedThreadIds)
-  let uncachedReadCount = 0
-
-  for (const rawThreadId of threadIds) {
-    const threadId = rawThreadId.trim()
-    if (!threadId || seen.has(threadId)) continue
-    seen.add(threadId)
-
-    const cached = supplementalThreadSummaryCacheById.get(threadId)
-    if (cached && Date.now() - cached.cachedAtMs <= SUPPLEMENTAL_THREAD_SUMMARY_CACHE_TTL_MS) {
-      if (!cached.failed && cached.value) {
-        summaries.push(cached.value)
-      }
-      continue
-    }
-
-    if (uncachedReadCount >= SUPPLEMENTAL_THREAD_SUMMARY_MAX_READS) continue
-    uncachedReadCount += 1
-
-    try {
-      const response = asRecord(await appServer.rpc('thread/read', {
-        threadId,
-        includeTurns: false,
-      }))
-      const thread = asRecord(response?.thread)
-      if (thread?.id === threadId) {
-        supplementalThreadSummaryCacheById.set(threadId, {
-          value: thread,
-          cachedAtMs: Date.now(),
-        })
-        summaries.push(thread)
-      } else {
-        supplementalThreadSummaryCacheById.set(threadId, {
-          value: null,
-          cachedAtMs: Date.now(),
-          failed: true,
-        })
-      }
-    } catch {
-      supplementalThreadSummaryCacheById.set(threadId, {
-        value: null,
-        cachedAtMs: Date.now(),
-        failed: true,
-      })
-      // Keep desktop/index parity best-effort; a missing historical thread must not break the list.
-    }
-  }
-
-  if (supplementalThreadSummaryCacheById.size > 100) {
-    const overflow = supplementalThreadSummaryCacheById.size - 100
-    for (const key of Array.from(supplementalThreadSummaryCacheById.keys()).slice(0, overflow)) {
-      supplementalThreadSummaryCacheById.delete(key)
-    }
-  }
-
-  return summaries
 }
 
 class AppServerProcess {
@@ -983,31 +918,15 @@ async function augmentThreadListRpcResult(
   params: unknown,
   result: unknown,
 ): Promise<unknown> {
-  const paramsRecord = asRecord(params)
-  if (paramsRecord?.archived !== true) return result
-  if (typeof paramsRecord?.cursor === 'string' && paramsRecord.cursor.length > 0) return result
-
-  const resultRecord = asRecord(result)
-  const data = Array.isArray(resultRecord?.data) ? resultRecord.data : null
-  if (!data) return result
-
-  const pinnedThreadIds = await readMergedPinnedThreadIds()
-  if (pinnedThreadIds.length === 0) return result
-
-  const existingThreadIds = new Set<string>()
-  for (const row of data) {
-    const record = asRecord(row)
-    const id = typeof record?.id === 'string' ? record.id : ''
-    if (id) existingThreadIds.add(id)
-  }
-
-  const supplementalThreads = await loadThreadSummariesById(appServer, pinnedThreadIds, existingThreadIds)
-  if (supplementalThreads.length === 0) return result
-
-  return {
-    ...resultRecord,
-    data: [...data, ...supplementalThreads],
-  }
+  return await supplementalThreadListAugmenter.augmentThreadListRpcResult({
+    params,
+    result,
+    readPinnedThreadIds: readMergedPinnedThreadIds,
+    readThreadById: (threadId) => appServer.rpc('thread/read', {
+      threadId,
+      includeTurns: false,
+    }),
+  })
 }
 
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
