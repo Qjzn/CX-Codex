@@ -102,10 +102,14 @@ import {
 import {
   normalizeWorkspaceRootsState,
   readWorkspaceRootsState,
-  upsertWorkspaceRootState,
   writeWorkspaceRootsState,
   type WorkspaceRootsState,
 } from './workspaceRootsState.js'
+import {
+  ProjectRootError,
+  resolveProjectRoot,
+  suggestProjectRoot,
+} from './projectRoots.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -3255,70 +3259,38 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         const rawPath = typeof payload?.path === 'string' ? payload.path.trim() : ''
         const createIfMissing = payload?.createIfMissing === true
         const label = typeof payload?.label === 'string' ? payload.label : ''
-        if (!rawPath) {
-          setJson(res, 400, { error: 'Missing path' })
-          return
-        }
-
-        const normalizedPath = isAbsolute(rawPath) ? rawPath : resolve(rawPath)
-        let pathExists = true
+        const statePath = getCodexGlobalStatePath()
         try {
-          const info = await stat(normalizedPath)
-          if (!info.isDirectory()) {
-            setJson(res, 400, { error: 'Path exists but is not a directory' })
+          const existingState = await readWorkspaceRootsState(statePath)
+          const result = await resolveProjectRoot(rawPath, {
+            createIfMissing,
+            label,
+            existingState,
+          })
+          await writeWorkspaceRootsState(statePath, result.workspaceState)
+          setJson(res, 200, { data: { path: result.path } })
+        } catch (error) {
+          if (error instanceof ProjectRootError) {
+            setJson(res, error.statusCode, { error: error.message })
             return
           }
-        } catch {
-          pathExists = false
+          throw error
         }
-
-        if (!pathExists && createIfMissing) {
-          await mkdir(normalizedPath, { recursive: true })
-        } else if (!pathExists) {
-          setJson(res, 404, { error: 'Directory does not exist' })
-          return
-        }
-
-        const statePath = getCodexGlobalStatePath()
-        const existingState = await readWorkspaceRootsState(statePath)
-        await writeWorkspaceRootsState(statePath, upsertWorkspaceRootState(existingState, normalizedPath, label))
-        setJson(res, 200, { data: { path: normalizedPath } })
         return
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/project-root-suggestion') {
         const basePath = url.searchParams.get('basePath')?.trim() ?? ''
-        if (!basePath) {
-          setJson(res, 400, { error: 'Missing basePath' })
-          return
-        }
-        const normalizedBasePath = isAbsolute(basePath) ? basePath : resolve(basePath)
         try {
-          const baseInfo = await stat(normalizedBasePath)
-          if (!baseInfo.isDirectory()) {
-            setJson(res, 400, { error: 'basePath is not a directory' })
+          const suggestion = await suggestProjectRoot(basePath)
+          setJson(res, 200, { data: suggestion })
+        } catch (error) {
+          if (error instanceof ProjectRootError) {
+            setJson(res, error.statusCode, { error: error.message })
             return
           }
-        } catch {
-          setJson(res, 404, { error: 'basePath does not exist' })
-          return
+          throw error
         }
-
-        let index = 1
-        while (index < 100000) {
-          const candidateName = `New Project (${String(index)})`
-          const candidatePath = join(normalizedBasePath, candidateName)
-          try {
-            await stat(candidatePath)
-            index += 1
-            continue
-          } catch {
-            setJson(res, 200, { data: { name: candidateName, path: candidatePath } })
-            return
-          }
-        }
-
-        setJson(res, 500, { error: 'Failed to compute project name suggestion' })
         return
       }
 

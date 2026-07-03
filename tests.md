@@ -1937,6 +1937,33 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Project root 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/projectRoots.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 project root 路径归一化、目录校验、缺失目录创建、workspace state upsert 和默认项目名 suggestion。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `/codex-api/project-root` 和 `/codex-api/project-root-suggestion` route 只负责读取请求参数、调用 `projectRoots.ts` 和写 JSON response；路径校验、创建和 suggestion 逻辑均来自 `src/server/projectRoots.ts`。
+
+#### Expected Results
+- 缺少 project path 时仍返回 400 和 `Missing path`。
+- path 存在但不是目录时仍返回 400 和 `Path exists but is not a directory`。
+- path 不存在且未设置 `createIfMissing` 时仍返回 404 和 `Directory does not exist`。
+- `createIfMissing=true` 时会创建目录，并通过 workspace roots state 将项目置顶到 order 和 active。
+- `project-root-suggestion` 会跳过已存在的 `New Project (n)`，返回第一个可用名称；basePath 缺失、不是目录或不存在时仍返回对应 400/404。
+- 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Rollback/Cleanup
+- 如需回滚，移除 `src/server/projectRoots.ts`，将 bridge 重新改回内联 project-root helper，并从 `scripts/verify-server-modules.mjs` 与 `scripts/server-module-smoke.ts` 移除对应 smoke 覆盖。
+
+---
+
 ### Feature: App Server stdout line buffer 模块化
 
 #### Prerequisites

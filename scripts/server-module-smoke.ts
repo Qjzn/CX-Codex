@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -74,6 +74,12 @@ import {
   upsertWorkspaceRootState,
   writeWorkspaceRootsState,
 } from '../src/server/workspaceRootsState.js'
+import {
+  ProjectRootError,
+  normalizeProjectPath,
+  resolveProjectRoot,
+  suggestProjectRoot,
+} from '../src/server/projectRoots.js'
 
 const originalNow = Date.now
 
@@ -92,6 +98,7 @@ try {
   await smokeThreadTitleCache()
   await smokeThreadSearchIndex()
   await smokeWorkspaceRootsState()
+  await smokeProjectRoots()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
 } finally {
@@ -829,6 +836,66 @@ async function smokeWorkspaceRootsState(): Promise<void> {
       active: ['C:\\work\\one'],
     })
     assert.equal(JSON.parse(await readFile(statePath, 'utf8')).existing, true)
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function smokeProjectRoots(): Promise<void> {
+  assert.equal(normalizeProjectPath('relative-project').endsWith('relative-project'), true)
+  await assert.rejects(
+    resolveProjectRoot('', { existingState: { order: [], labels: {}, active: [] } }),
+    (error) => error instanceof ProjectRootError && error.statusCode === 400 && error.message === 'Missing path',
+  )
+
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-project-roots-'))
+  try {
+    const existingDir = join(tempDir, 'existing')
+    const createdDir = join(tempDir, 'created')
+    const filePath = join(tempDir, 'file.txt')
+    await mkdir(existingDir)
+    await writeFile(filePath, 'not a directory', 'utf8')
+
+    await assert.rejects(
+      resolveProjectRoot(filePath, { existingState: { order: [], labels: {}, active: [] } }),
+      (error) => error instanceof ProjectRootError && error.statusCode === 400 && error.message === 'Path exists but is not a directory',
+    )
+    await assert.rejects(
+      resolveProjectRoot(createdDir, { existingState: { order: [], labels: {}, active: [] } }),
+      (error) => error instanceof ProjectRootError && error.statusCode === 404 && error.message === 'Directory does not exist',
+    )
+
+    const created = await resolveProjectRoot(createdDir, {
+      createIfMissing: true,
+      label: 'Created Project',
+      existingState: { order: [existingDir], labels: {}, active: [existingDir] },
+    })
+    assert.equal(created.path, createdDir)
+    assert.deepEqual(created.workspaceState, {
+      order: [createdDir, existingDir],
+      labels: { [createdDir]: 'Created Project' },
+      active: [createdDir, existingDir],
+    })
+
+    await mkdir(join(tempDir, 'New Project (1)'))
+    const suggestion = await suggestProjectRoot(tempDir)
+    assert.deepEqual(suggestion, {
+      name: 'New Project (2)',
+      path: join(tempDir, 'New Project (2)'),
+    })
+
+    await assert.rejects(
+      suggestProjectRoot(''),
+      (error) => error instanceof ProjectRootError && error.statusCode === 400 && error.message === 'Missing basePath',
+    )
+    await assert.rejects(
+      suggestProjectRoot(filePath),
+      (error) => error instanceof ProjectRootError && error.statusCode === 400 && error.message === 'basePath is not a directory',
+    )
+    await assert.rejects(
+      suggestProjectRoot(join(tempDir, 'missing-base')),
+      (error) => error instanceof ProjectRootError && error.statusCode === 404 && error.message === 'basePath does not exist',
+    )
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }

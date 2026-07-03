@@ -40,6 +40,7 @@ writeFileSync(tsconfigPath, `${JSON.stringify({
     join(repoRoot, 'src', 'server', 'httpBody.ts'),
     join(repoRoot, 'src', 'server', 'pendingServerRequests.ts'),
     join(repoRoot, 'src', 'server', 'planModeTurnStore.ts'),
+    join(repoRoot, 'src', 'server', 'projectRoots.ts'),
     join(repoRoot, 'src', 'server', 'runtimeState.ts'),
     join(repoRoot, 'src', 'server', 'serverRequestPolicy.ts'),
     join(repoRoot, 'src', 'server', 'threadSearchIndex.ts'),
