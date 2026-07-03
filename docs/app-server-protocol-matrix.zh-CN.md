@@ -40,7 +40,7 @@
 | Realtime / Audio | 新增 thread realtime audio/transcript/sdp/transport 等 | 暂缓。当前语音能力走 OpenAI 官方 audio transcription API，不接 App Server realtime | 不把 realtime 宣传为稳定能力；如接入，先隔离为实验入口 |
 | Windows Sandbox | 新增 readiness/setup/start/completed | 待接入 | 先在诊断中心展示 readiness；setup 需要显式用户确认 |
 | Models / Rate Limits / Account | 模型可用性、reroute、verification、service tier、rate limit 类型扩展 | 部分覆盖。当前已有模型列表和账户状态基础读取 | 将 reroute/verification 作为通知展示，不影响当前 thread 渲染 |
-| Notifications | 新增大量 notification 类型，部分旧 v1 event 移除 | 需容错。当前 replay buffer 存储通知并按 threadId 触发刷新 | 增加未知 notification 分类和诊断输出；不能因为未知 notification 丢失当前线程刷新 |
+| Notifications | 新增大量 notification 类型，部分旧 v1 event 移除 | 部分覆盖。当前 replay buffer 存储通知并按 threadId 触发刷新；未知 notification 不阻断 replay/runtime 流，并在 health/diagnostics 中按 method 聚合计数 | 继续扩展未知 notification 到诊断中心 UI；不能因为未知 notification 丢失当前线程刷新 |
 | Open-source release governance | 协议差异目前只在本地审计输出中可见 | 部分覆盖。已有协议审计文档、脚本和测试记录 | Release checklist 必须包含 schema audit、build、CJS smoke、README/changelog、安全说明 |
 
 ## 优先级

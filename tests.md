@@ -1508,6 +1508,40 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server 未知 notification 诊断
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerNotificationDiagnostics.ts`、`src/server/codexAppServerBridge.ts` 和 `src/components/content/DiagnosticsPanel.vue`。
+- `docs/app-server-protocol-matrix.zh-CN.md` 中 Notifications 行要求未知 notification 不阻断 replay/runtime 流，并能在诊断输出中被识别。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 notification replay 仍会调用 `runtimeStore.appendEvent()`、`runtimeStateStore.observeEvent()` 和 SSE listener；未知 notification 只新增聚合诊断，不会被丢弃或阻断当前线程刷新。
+
+#### Expected Results
+- 已知 notification 方法和 bridge 已处理的通配模式不会计入未知诊断。
+- 新增或暂未接入的 App Server notification 会按 method 聚合 `unknownNotificationCount` 和 `recentUnknownNotifications`。
+- `/codex-api/health` 与 `/codex-api/diagnostics` 返回 `notificationDiagnostics`。
+- 诊断中心展示“未知通知”卡片；有未知 notification 时整体状态进入 warning。
+- 协议矩阵 Notifications 行反映当前未知 notification 容错与诊断状态。
+- 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Rollback / Cleanup
+- 若某个官方 notification 被误判为未知且造成噪声，将对应 method 或通配规则加入 `isKnownAppServerNotificationMethod()`；不要删除 diagnostics store，因为它用于后续协议漂移审计。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Server module smoke：`node ./scripts/verify-server-modules.mjs` 通过，输出 `server module smoke ok`；该 smoke 覆盖已知 notification 判定、未知 notification 聚合计数、最近未知 method 裁剪和 clear。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CLI 启动烟测：`node dist-cli\index.js --help` 通过，输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke 和 CLI smoke。
+
+---
+
 ### Feature: Release 验证脚本
 
 #### Prerequisites

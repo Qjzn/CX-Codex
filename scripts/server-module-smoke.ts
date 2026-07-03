@@ -9,6 +9,10 @@ import {
   readPackageVersion,
 } from '../src/server/appServerClientInfo.js'
 import { AppServerLineBuffer } from '../src/server/appServerLineBuffer.js'
+import {
+  AppServerNotificationDiagnostics,
+  isKnownAppServerNotificationMethod,
+} from '../src/server/appServerNotificationDiagnostics.js'
 import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheForRpc } from '../src/server/appServerRpcCache.js'
 import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.js'
 import {
@@ -129,6 +133,7 @@ try {
   await smokeAppServerClientInfo()
   smokePendingServerRequests()
   smokeAppServerJsonRpcWire()
+  smokeAppServerNotificationDiagnostics()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
   await smokeAppServerRpcQueue()
@@ -222,6 +227,56 @@ function smokeAppServerJsonRpcWire(): void {
   const error = createAppServerRpcErrorResponse(4, { code: -32601, message: 'Unsupported' })
   assert.deepEqual(error, { id: 4, error: { code: -32601, message: 'Unsupported' } })
   assert.equal('jsonrpc' in error, false)
+}
+
+function smokeAppServerNotificationDiagnostics(): void {
+  assert.equal(isKnownAppServerNotificationMethod('turn/started'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/archived'), true)
+  assert.equal(isKnownAppServerNotificationMethod('item/tool/call/failed'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/realtime/transcript/delta'), false)
+
+  const diagnostics = new AppServerNotificationDiagnostics({ maxRecentUnknown: 2 })
+  diagnostics.observe({
+    method: 'turn/started',
+    atIso: '2026-07-03T00:00:00.000Z',
+    threadId: 'thread-a',
+  })
+  assert.deepEqual(diagnostics.snapshot(), {
+    unknownNotificationCount: 0,
+    recentUnknownNotifications: [],
+  })
+
+  diagnostics.observe({
+    method: 'thread/realtime/transcript/delta',
+    atIso: '2026-07-03T00:00:01.000Z',
+    threadId: 'thread-a',
+    turnId: 'turn-a',
+  })
+  diagnostics.observe({
+    method: 'thread/realtime/transcript/delta',
+    atIso: '2026-07-03T00:00:02.000Z',
+    threadId: 'thread-b',
+  })
+  diagnostics.observe({
+    method: 'plugin/marketplace/changed',
+    atIso: '2026-07-03T00:00:03.000Z',
+  })
+  diagnostics.observe({
+    method: 'hook/migration/completed',
+    atIso: '2026-07-03T00:00:04.000Z',
+  })
+
+  const snapshot = diagnostics.snapshot()
+  assert.equal(snapshot.unknownNotificationCount, 4)
+  assert.deepEqual(snapshot.recentUnknownNotifications.map((item) => item.method), [
+    'hook/migration/completed',
+    'plugin/marketplace/changed',
+  ])
+  assert.equal(snapshot.recentUnknownNotifications[0]?.count, 1)
+  assert.equal(snapshot.recentUnknownNotifications[1]?.count, 1)
+
+  diagnostics.clear()
+  assert.equal(diagnostics.snapshot().unknownNotificationCount, 0)
 }
 
 async function smokeAppServerRpcCache(): Promise<void> {

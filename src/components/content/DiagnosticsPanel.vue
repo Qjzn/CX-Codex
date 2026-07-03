@@ -133,6 +133,23 @@
           </li>
         </ul>
       </section>
+
+      <section class="diagnostics-section">
+        <div class="diagnostics-section-header">
+          <h2>未知通知</h2>
+          <span class="diagnostics-badge" :data-tone="unknownNotificationCount > 0 ? 'warning' : 'ok'">
+            {{ unknownNotificationCount }}
+          </span>
+        </div>
+        <div v-if="unknownNotifications.length === 0" class="diagnostics-empty">暂无未知 App Server notification。</div>
+        <ul v-else class="diagnostics-list">
+          <li v-for="notification in unknownNotifications" :key="notification.method">
+            <span>{{ notification.method }}</span>
+            <strong>{{ notification.count }}</strong>
+            <small>{{ formatAge(notification.lastSeenAtIso) }}</small>
+          </li>
+        </ul>
+      </section>
     </div>
   </div>
 </template>
@@ -192,8 +209,21 @@ type RuntimeEventDiagnostics = {
   turnId: string
 }
 
+type UnknownNotificationDiagnostics = {
+  method: string
+  count: number
+  firstSeenAtIso: string
+  lastSeenAtIso: string
+  threadId: string
+  turnId: string
+}
+
 type DiagnosticsData = {
   appServer: AppServerDiagnostics
+  notificationDiagnostics?: {
+    unknownNotificationCount: number
+    recentUnknownNotifications: UnknownNotificationDiagnostics[]
+  }
   runtimeStore: RuntimeStoreDiagnostics
   runtime: {
     uncertainRequests: RuntimeRequestDiagnostics[]
@@ -233,6 +263,8 @@ const uncertainRequests = computed(() => diagnostics.value?.runtime.uncertainReq
 const recentEvents = computed(() => diagnostics.value?.runtime.recentEvents ?? [])
 const slowRpcCalls = computed(() => appServer.value.rpcDiagnostics?.recentSlowRpc ?? [])
 const timeoutCount = computed(() => appServer.value.rpcDiagnostics?.recentTimeouts?.length ?? 0)
+const unknownNotifications = computed(() => diagnostics.value?.notificationDiagnostics?.recentUnknownNotifications ?? [])
+const unknownNotificationCount = computed(() => diagnostics.value?.notificationDiagnostics?.unknownNotificationCount ?? 0)
 
 const appServerTone = computed<Tone>(() => {
   if (!appServer.value.running || !appServer.value.initialized || appServer.value.stopping) return 'danger'
@@ -246,7 +278,7 @@ const runtimeTone = computed<Tone>(() => (
 
 const overallTone = computed<Tone>(() => {
   if (appServerTone.value === 'danger') return 'danger'
-  if (appServerTone.value === 'warning' || runtimeTone.value === 'warning') return 'warning'
+  if (appServerTone.value === 'warning' || runtimeTone.value === 'warning' || unknownNotificationCount.value > 0) return 'warning'
   return 'ok'
 })
 
