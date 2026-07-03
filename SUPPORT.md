@@ -57,3 +57,15 @@ Get-ChildItem "$env:USERPROFILE\.cx-codex\logs","$env:USERPROFILE\.codexui\logs"
 ```
 
 如果问题涉及“思考中卡住”或“发送后无回复”，请优先说明是否能通过顶部刷新恢复，以及刷新后 `/codex-api/health` 中是否仍有 pending、queued、uncertain 或 running 状态。
+
+## Codex App Server 兼容问题
+
+如果问题出现在 Codex CLI、Codex App 或 App Server 升级之后，请优先使用 GitHub 的 `Codex App Server 兼容性` Issue 模板，并补充：
+
+- CX-Codex 版本或 commit。
+- Codex CLI / App Server 版本。
+- 使用的 transport：`stdio`、`websocket`、Unix socket 或不确定。
+- 受影响的 method / event，例如 `initialize`、`thread/read`、`turn/start`、approval、tool request、interrupt。
+- 最小脱敏 JSON-RPC payload、error code、health 关键字段或行为差异。
+
+不要公开粘贴 Authorization header、Token、Cookie、真实公网地址、私人项目路径或完整业务日志。

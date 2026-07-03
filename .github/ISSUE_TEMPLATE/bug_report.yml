@@ -54,6 +54,13 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: codex_version
+    attributes:
+      label: Codex CLI / App Server 版本
+      description: 如果问题涉及线程、审批、状态同步、停止、工具调用或消息流，请填写脱敏后的 `codex --version` 或 Codex App 版本。
+      placeholder: codex 0.x.x / 不确定
+
   - type: dropdown
     id: access_mode
     attributes:
@@ -83,5 +90,7 @@ body:
       options:
         - label: 我已确认内容中不包含密码、Token、Cookie、私有 IP 或个人目录。
           required: true
+        - label: 如果这是 Codex App Server 协议升级后的兼容问题，我会优先使用 `Codex App Server 兼容性` 模板。
+          required: false
         - label: 我已尝试刷新页面或重启服务，问题仍存在。
           required: false

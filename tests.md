@@ -1521,3 +1521,30 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
 - 2026-07-03 CLI smoke：`node dist-cli/index.js --help` 通过并输出 `CX-Codex Web bridge for Codex app-server`。
 - 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
+
+---
+
+### Feature: Codex App Server 兼容性 Issue 治理
+
+#### Prerequisites
+- 仓库包含 `.github/ISSUE_TEMPLATE/`、`CONTRIBUTING.md`、`SUPPORT.md`。
+- 本机可运行 `git diff --check`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 检查 `.github/ISSUE_TEMPLATE/protocol_compatibility.yml`，确认包含 CX-Codex 版本、Codex CLI/App Server 版本、transport、受影响 method/event、脱敏 payload 和安全确认字段。
+3. 检查 `.github/ISSUE_TEMPLATE/bug_report.yml`，确认通用 Bug 模板收集 Codex CLI/App Server 版本，并提示协议升级问题使用兼容性模板。
+4. 检查 `.github/ISSUE_TEMPLATE/config.yml`，确认 contact links 包含官方 Codex App Server 文档。
+5. 检查 `CONTRIBUTING.md` 和 `SUPPORT.md`，确认协议兼容改动和反馈说明覆盖官方文档、版本、method/event、schema audit 或测试记录。
+
+#### Expected Results
+- App Server 协议漂移、审批、状态同步、工具请求、interrupt 等问题有独立 Issue 入口，不再混在普通 Bug 或安装求助里。
+- 维护者能从 Issue 中直接获得版本、transport、受影响 method/event 和最小脱敏 payload，便于复现和更新 schema audit。
+- 文档持续提醒贡献者不要公开敏感 header、Token、Cookie、真实公网地址、私人目录或业务日志。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Issue Form 烟测：Node 脚本确认所有 `.github/ISSUE_TEMPLATE/*.yml` 具备必需根字段，且各表单字段 id 无重复。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace check、`package.json` 解析、前端/CLI 构建和 `node dist-cli/index.js --help`。
+- 2026-07-03 模板审查：新增 `protocol_compatibility.yml` 覆盖版本、transport、method/event、脱敏 payload、期望兼容行为和安全确认。
+- 2026-07-03 文档审查：`CONTRIBUTING.md`、`SUPPORT.md` 和 Issue config 已指向 App Server 兼容问题的标准收集路径。

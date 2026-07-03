@@ -1,0 +1,93 @@
+name: Codex App Server 兼容性
+description: 官方 Codex/App Server 升级后出现的协议、事件、审批或状态同步差异
+title: "[Protocol] "
+labels:
+  - compatibility
+  - codex-app-server
+body:
+  - type: markdown
+    attributes:
+      value: |
+        用于反馈 Codex App Server、Codex CLI 或 Codex App 升级后出现的协议兼容问题。
+        请不要粘贴密码、Token、Cookie、Authorization header、真实公网地址或私人项目路径。
+
+  - type: input
+    id: cx_codex_version
+    attributes:
+      label: CX-Codex 版本
+      description: Release 版本、Git commit，或页面设置中显示的版本。
+      placeholder: 2.2.7 / 5eb02a6
+    validations:
+      required: true
+
+  - type: input
+    id: codex_version
+    attributes:
+      label: Codex CLI / App Server 版本
+      description: 粘贴脱敏后的 `codex --version`、Codex App 版本，或你能确认的 Codex 安装来源。
+      placeholder: codex 0.x.x
+    validations:
+      required: true
+
+  - type: dropdown
+    id: transport
+    attributes:
+      label: App Server transport
+      options:
+        - stdio
+        - websocket
+        - unix socket
+        - 不确定
+    validations:
+      required: true
+
+  - type: dropdown
+    id: affected_area
+    attributes:
+      label: 受影响区域
+      options:
+        - initialize / initialized
+        - thread/start 或 turn/start
+        - thread/read 或 conversation history
+        - streamed agent events
+        - approvals / permission requests
+        - tool / MCP / user input request
+        - running / queued / pending 状态
+        - interrupt / stop
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: 观察到的差异
+      description: 说明升级前后行为差异，以及 Web/Android 上看到的具体表现。
+      placeholder: 例如：升级 Codex CLI 后，turn/completed 已到达，但前端仍显示思考中。
+    validations:
+      required: true
+
+  - type: textarea
+    id: minimal_payload
+    attributes:
+      label: 最小脱敏 payload / 日志片段
+      description: 只粘贴必要 JSON-RPC message、method 名、error code 或 health 关键字段；请先删除敏感信息。
+      render: json
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望兼容行为
+      description: 说明 CX-Codex 应如何兼容、降级、提示或记录该差异。
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已确认内容中不包含密码、Token、Cookie、Authorization header、私有 IP、真实公网地址或个人目录。
+          required: true
+        - label: 我已尽量提供 Codex CLI / App Server 版本和最小脱敏 payload。
+          required: true

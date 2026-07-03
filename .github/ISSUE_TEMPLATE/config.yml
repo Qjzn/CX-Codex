@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: 官方 Codex App Server 文档
+    url: https://developers.openai.com/codex/app-server
+    about: 如果问题是 Codex CLI/App Server 升级后的协议差异，请先对照官方协议说明并使用兼容性模板。
   - name: 中文部署提示词
     url: https://github.com/Qjzn/CX-Codex/blob/main/docs/deploy-with-codex.zh-CN.md
     about: 如果你只是想部署，建议先复制这里的提示词给 Codex 执行。
