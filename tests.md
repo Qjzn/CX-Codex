@@ -1902,6 +1902,40 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Command runner 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/commandRunner.ts`。
+- 本机安装依赖已完成，`node_modules/typescript` 可用于 `verify:server-modules`。
+- 当前 Node 可执行文件可被子进程调用。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 不再内联 `runCommand()`、`runCommandCapture()` 和 `runCommandWithOutput()`，worktree/rollback/Git 初始化仍通过 `src/server/commandRunner.ts` 调用子进程。
+
+#### Expected Results
+- `src/server/commandRunner.ts` 集中维护 command spawn、`cwd`、`process.env`、stdout/stderr 收集、trim 输出和错误格式。
+- `runCommand()` 成功时不返回输出；`runCommandCapture()` 和 `runCommandWithOutput()` 成功时返回 trim 后的 stdout。
+- 命令失败时错误文案保持 `Command failed (<command> <args>)` 格式，并附带 stderr/stdout 细节。
+- Server module smoke 使用当前 Node 可执行文件覆盖成功退出、cwd 传递、输出 trim 和失败 stderr/stdout 拼接。
+- 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Rollback / Cleanup
+- 若验证失败，回滚 `src/server/commandRunner.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs` 和本测试章节，再重新运行相关门禁。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace、package parse、governance docs、构建、server module smoke 和 CLI smoke；schema audit 按本阶段命令跳过。
+
+---
+
 ### Feature: Thread title cache 模块化
 
 #### Prerequisites

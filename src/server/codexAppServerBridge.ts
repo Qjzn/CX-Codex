@@ -60,6 +60,11 @@ import {
   translateGithubDescriptionsToChinese,
 } from './githubTrending.js'
 import {
+  runCommand,
+  runCommandCapture,
+  runCommandWithOutput,
+} from './commandRunner.js'
+import {
   AppServerRpcCache,
   getShareableRpcKey,
   shouldInvalidateThreadListCacheForRpc,
@@ -572,30 +577,6 @@ function getCodexHomeDir(): string {
   return codexHome && codexHome.length > 0 ? codexHome : join(homedir(), '.codex')
 }
 
-async function runCommand(command: string, args: string[], options: { cwd?: string } = {}): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const proc = spawn(command, args, {
-      cwd: options.cwd,
-      env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let stdout = ''
-    let stderr = ''
-    proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
-    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
-    proc.on('error', reject)
-    proc.on('close', (code) => {
-      if (code === 0) {
-        resolve()
-        return
-      }
-      const details = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n')
-      const suffix = details.length > 0 ? `: ${details}` : ''
-      reject(new Error(`Command failed (${command} ${args.join(' ')})${suffix}`))
-    })
-  })
-}
-
 function isMissingHeadError(error: unknown): boolean {
   const message = getErrorMessage(error, '').toLowerCase()
   return (
@@ -625,55 +606,6 @@ async function ensureRepoHasInitialCommit(repoRoot: string): Promise<void> {
     { cwd: repoRoot },
   )
 }
-
-async function runCommandCapture(command: string, args: string[], options: { cwd?: string } = {}): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    const proc = spawn(command, args, {
-      cwd: options.cwd,
-      env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let stdout = ''
-    let stderr = ''
-    proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
-    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
-    proc.on('error', reject)
-    proc.on('close', (code) => {
-      if (code === 0) {
-        resolve(stdout.trim())
-        return
-      }
-      const details = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n')
-      const suffix = details.length > 0 ? `: ${details}` : ''
-      reject(new Error(`Command failed (${command} ${args.join(' ')})${suffix}`))
-    })
-  })
-}
-
-async function runCommandWithOutput(command: string, args: string[], options: { cwd?: string } = {}): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    const proc = spawn(command, args, {
-      cwd: options.cwd,
-      env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    let stdout = ''
-    let stderr = ''
-    proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
-    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
-    proc.on('error', reject)
-    proc.on('close', (code) => {
-      if (code === 0) {
-        resolve(stdout.trim())
-        return
-      }
-      const details = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n')
-      const suffix = details.length > 0 ? `: ${details}` : ''
-      reject(new Error(`Command failed (${command} ${args.join(' ')})${suffix}`))
-    })
-  })
-}
-
 
 function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return []

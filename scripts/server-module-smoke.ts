@@ -55,6 +55,11 @@ import {
   translateGithubDescriptionsToChinese,
 } from '../src/server/githubTrending.js'
 import {
+  runCommand,
+  runCommandCapture,
+  runCommandWithOutput,
+} from '../src/server/commandRunner.js'
+import {
   normalizeThreadTokenUsage,
   normalizeThreadTokenUsageFromSessionLogEntry,
   parseThreadTokenUsageFromSessionLog,
@@ -112,6 +117,7 @@ try {
   smokeAppServerStderrLogger()
   smokePlanModeTurnStore()
   smokeServerRequestPolicy()
+  await smokeCommandRunner()
   await smokeFileUpload()
   await smokeComposerFileSearch()
   await smokeGithubTrending()
@@ -432,6 +438,30 @@ function smokeServerRequestPolicy(): void {
   })
   assert.equal(unsupported.kind, 'reject-unsupported')
   assert.match(JSON.stringify(buildUnsupportedServerRequestResult('item/tool/call')), /不能代执行这个工具/)
+}
+
+async function smokeCommandRunner(): Promise<void> {
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-command-runner-'))
+  try {
+    await runCommand(process.execPath, ['-e', 'process.exit(0)'], { cwd: tempDir })
+    assert.equal(
+      await runCommandCapture(process.execPath, ['-e', 'console.log(process.cwd())'], { cwd: tempDir }),
+      tempDir,
+    )
+    assert.equal(
+      await runCommandWithOutput(process.execPath, ['-e', 'console.log("  output  ")']),
+      'output',
+    )
+    await assert.rejects(
+      runCommand(process.execPath, ['-e', 'console.error("stderr detail"); console.log("stdout detail"); process.exit(7)']),
+      (error) => error instanceof Error
+        && error.message.includes(`Command failed (${process.execPath} -e`)
+        && error.message.includes('stderr detail')
+        && error.message.includes('stdout detail'),
+    )
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
 }
 
 async function smokeFileUpload(): Promise<void> {
