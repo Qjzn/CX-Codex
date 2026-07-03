@@ -93,6 +93,15 @@ Assert-ContentIncludes "README.md" @(
   "SUPPORT.md"
 )
 
+Assert-ContentIncludes "README.md" @(
+  "CX_CODEX_APP_SERVER_APPROVAL_POLICY",
+  "CODEXUI_APP_SERVER_APPROVAL_POLICY",
+  "CX_CODEX_APP_SERVER_SANDBOX_MODE",
+  "CODEXUI_APP_SERVER_SANDBOX_MODE",
+  "CX_CODEX_APP_SERVER_APPROVAL_POLICY=on-request",
+  "CX_CODEX_APP_SERVER_SANDBOX_MODE=workspace-write"
+)
+
 Assert-ContentIncludes "SECURITY.md" @(
   "docs/security-hardening.zh-CN.md",
   "App Server transport",
@@ -124,6 +133,20 @@ Assert-ContentIncludes "docs/security-hardening.zh-CN.md" @(
   "https://developers.openai.com/codex/remote-connections",
   "App Server transport",
   "sandbox / approval"
+)
+
+Assert-ContentIncludes "docs/security-hardening.zh-CN.md" @(
+  "src/server/appServerLaunch.ts",
+  "legacy high-trust",
+  "CX_CODEX_APP_SERVER_APPROVAL_POLICY=on-request",
+  "CX_CODEX_APP_SERVER_SANDBOX_MODE=workspace-write",
+  "不展示原始环境变量值"
+)
+
+Assert-ContentIncludes "docs/changelog.zh-CN.md" @(
+  "appServerLaunch.ts",
+  "legacy high-trust approval/sandbox 策略",
+  "脱敏后的有效策略快照"
 )
 
 Assert-ContentIncludes "docs/protocol-compatibility.zh-CN.md" @(

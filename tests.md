@@ -1863,9 +1863,11 @@ This file tracks manual regression and feature verification steps.
 3. 检查 `scripts/verify-release.ps1`，确认默认执行 `Governance docs check`，且仅在显式 `-SkipGovernance` 时跳过。
 4. 检查 `package.json`，确认暴露 `verify:governance`。
 5. 故障注入可选：临时移除 README 中的 `docs/app-server-protocol-matrix.zh-CN.md` 链接，确认 `verify:governance` 会失败；恢复后重新通过。
+6. 故障注入可选：临时移除 README 中的 `CX_CODEX_APP_SERVER_APPROVAL_POLICY=on-request` 或安全文档中的 `src/server/appServerLaunch.ts`，确认 `verify:governance` 会失败；恢复后重新通过。
 
 #### Expected Results
 - `verify:governance` 能检查 README、SECURITY、RELEASE、SUPPORT、CONTRIBUTING、Issue 模板、CI/Release workflow、安全硬化文档和 App Server 协议矩阵的关键入口。
+- `verify:governance` 能检查 App Server launch policy 的公开说明，确保安全文档保留 `appServerLaunch.ts`、legacy high-trust 边界、`on-request` + `workspace-write` 覆盖方式和诊断脱敏要求。
 - `verify:release` 默认包含治理文档检查，避免只构建成功但开源治理入口缺失。
 - 缺少关键文档、模板或官方协议/安全口径时，命令应失败并给出具体文件和缺失文本。
 
@@ -1874,6 +1876,12 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 故障注入验证：协议矩阵缺少完整 `Codex App Server` 术语时，`npm.cmd run verify:governance` 失败并指出缺失文本；补齐后通过。
 - 2026-07-03 治理门禁验证：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
 - 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `Governance docs check`、构建和 CLI smoke。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁验证：`npm.cmd run verify:governance` 通过，确认 App Server launch policy 文档断言已纳入治理检查。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-04 CLI smoke：`node dist-cli\index.js --help` 通过并输出 `CX-Codex Web bridge for Codex app-server`；PowerShell CJS smoke 输出 `cli cjs launcher smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含新增 launch policy governance docs check、构建、server module smoke 和 CLI smoke。
 
 ---
 
