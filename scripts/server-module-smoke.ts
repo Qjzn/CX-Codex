@@ -17,6 +17,7 @@ import {
   DEFAULT_APP_SERVER_LAUNCH_POLICY,
   resolveAppServerLaunchPolicy,
 } from '../src/server/appServerLaunch.js'
+import { createAppServerHealthSnapshot } from '../src/server/appServerHealth.js'
 import { AppServerLineBuffer } from '../src/server/appServerLineBuffer.js'
 import {
   AppServerNotificationDiagnostics,
@@ -187,6 +188,7 @@ try {
   smokeAppServerJsonRpcWire()
   smokeAppServerInitialization()
   smokeAppServerLaunch()
+  smokeAppServerHealth()
   smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
   smokeAppServerStatusDiagnostics()
@@ -425,6 +427,54 @@ function smokeAppServerLaunch(): void {
     '-c',
     'sandbox_mode="workspace-write"',
   ])
+}
+
+function smokeAppServerHealth(): void {
+  const snapshot = createAppServerHealthSnapshot({
+    running: true,
+    initialized: true,
+    stopping: false,
+    pid: 7420,
+    pendingRpcCount: 2,
+    queuedRpcCount: 1,
+    pendingServerRequestCount: 3,
+    activePlanModeTurnCount: 4,
+    launchPolicy: createAppServerLaunchPolicySnapshot(DEFAULT_APP_SERVER_LAUNCH_POLICY),
+    rpcDiagnostics: {
+      activeRpcCalls: 1,
+      pendingRpcCount: 2,
+      queuedRpcCount: 1,
+      queuePeakCount: 5,
+      queuePeakAtIso: '2026-07-04T00:00:00.000Z',
+      recentSlowRpc: [],
+      recentTimeouts: [],
+    },
+  })
+
+  assert.deepEqual(snapshot, {
+    running: true,
+    initialized: true,
+    stopping: false,
+    pid: 7420,
+    pendingRpcCount: 2,
+    queuedRpcCount: 1,
+    pendingServerRequestCount: 3,
+    activePlanModeTurnCount: 4,
+    launchPolicy: {
+      approvalPolicy: 'never',
+      sandboxMode: 'danger-full-access',
+      legacyHighTrust: true,
+    },
+    rpcDiagnostics: {
+      activeRpcCalls: 1,
+      pendingRpcCount: 2,
+      queuedRpcCount: 1,
+      queuePeakCount: 5,
+      queuePeakAtIso: '2026-07-04T00:00:00.000Z',
+      recentSlowRpc: [],
+      recentTimeouts: [],
+    },
+  })
 }
 
 function smokeAppServerNotificationDiagnostics(): void {

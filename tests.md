@@ -2324,6 +2324,35 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server health snapshot 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerHealth.ts` 和 `src/server/codexAppServerBridge.ts`。
+- 本机可运行 `npm.cmd run verify:server-modules` 和 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `scripts/server-module-smoke.ts` 直接断言 `createAppServerHealthSnapshot()` 的字段结构。
+5. 代码审查确认 `src/server/codexAppServerBridge.ts` 通过 `createAppServerHealthSnapshot()` 生成 `getStatus()` 返回值，不再内联 `AppServerHealth` 类型和健康状态 object shape。
+6. 代码审查确认 `src/server/appServerHealth.ts` 保留原有字段：running、initialized、stopping、pid、pendingRpcCount、queuedRpcCount、pendingServerRequestCount、activePlanModeTurnCount、launchPolicy 和 rpcDiagnostics。
+
+#### Expected Results
+- `src/server/appServerHealth.ts` 集中维护 App Server health snapshot 的 public shape。
+- `getStatus()` 仍返回与原先一致的 running、initialized、stopping、pid、RPC/pending request/plan-mode 计数、launch policy 和 RPC diagnostics。
+- server module smoke 直接覆盖 health snapshot shape，release gate 证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/appServerHealth.ts`，撤销 `scripts/server-module-smoke.ts` 中的 health smoke，并把 `AppServerHealth` 类型和 `getStatus()` object literal 恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: Server module smoke 自动化门禁
 
 #### Prerequisites

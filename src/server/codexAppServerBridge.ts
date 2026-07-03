@@ -71,7 +71,6 @@ import {
 } from './appServerRpcCache.js'
 import {
   AppServerRpcDiagnostics,
-  type RpcDiagnostics,
 } from './appServerRpcDiagnostics.js'
 import {
   AppServerRpcQueue,
@@ -95,6 +94,10 @@ import {
   resolveAppServerLaunchPolicy,
   type AppServerLaunchPolicySnapshot,
 } from './appServerLaunch.js'
+import {
+  createAppServerHealthSnapshot,
+  type AppServerHealth,
+} from './appServerHealth.js'
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
 import { AppServerMethodCatalog } from './appServerMethodCatalog.js'
@@ -177,19 +180,6 @@ type ServerRequestReply = {
     code: number
     message: string
   }
-}
-
-type AppServerHealth = {
-  running: boolean
-  initialized: boolean
-  stopping: boolean
-  pid: number | null
-  pendingRpcCount: number
-  queuedRpcCount: number
-  pendingServerRequestCount: number
-  activePlanModeTurnCount: number
-  launchPolicy: AppServerLaunchPolicySnapshot
-  rpcDiagnostics?: RpcDiagnostics
 }
 
 type CachedThreadRead = {
@@ -1361,7 +1351,7 @@ class AppServerProcess {
   }
 
   getStatus(): AppServerHealth {
-    return {
+    return createAppServerHealthSnapshot({
       running: this.process !== null,
       initialized: this.initialized,
       stopping: this.stopping,
@@ -1372,7 +1362,7 @@ class AppServerProcess {
       activePlanModeTurnCount: this.planModeTurns.count,
       launchPolicy: createAppServerLaunchPolicySnapshot(this.appServerLaunchPolicy),
       rpcDiagnostics: this.rpcDiagnostics.snapshot(this.pending.size, this.rpcQueue.count),
-    }
+    })
   }
 
   getStartedAtMs(): number {
