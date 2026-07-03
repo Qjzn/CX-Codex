@@ -1,4 +1,5 @@
 import type { AppServerRpcDiagnostics } from './appServerRpcDiagnostics.js'
+import { isAppServerOverloadedError } from './appServerRpcErrors.js'
 
 type QueuedRpcTask = {
   method: string
@@ -14,6 +15,23 @@ type RpcQueueOptions = {
   maxInFlight: number
   diagnostics: AppServerRpcDiagnostics
   execute: (method: string, params: unknown) => Promise<unknown>
+  overloadRetry?: Partial<OverloadRetryOptions>
+}
+
+type OverloadRetryOptions = {
+  maxRetries: number
+  baseDelayMs: number
+  maxDelayMs: number
+  jitterMs: number
+  random: () => number
+}
+
+const DEFAULT_OVERLOAD_RETRY: OverloadRetryOptions = {
+  maxRetries: 3,
+  baseDelayMs: 120,
+  maxDelayMs: 1200,
+  jitterMs: 60,
+  random: Math.random,
 }
 
 export function getAppServerRpcQueuePriority(method: string, _params: unknown): number {
@@ -44,8 +62,14 @@ export function getAppServerRpcQueuePriority(method: string, _params: unknown): 
 
 export class AppServerRpcQueue {
   private readonly queuedRpcCalls: QueuedRpcTask[] = []
+  private readonly overloadRetry: OverloadRetryOptions
 
-  constructor(private readonly options: RpcQueueOptions) {}
+  constructor(private readonly options: RpcQueueOptions) {
+    this.overloadRetry = {
+      ...DEFAULT_OVERLOAD_RETRY,
+      ...options.overloadRetry,
+    }
+  }
 
   get count(): number {
     return this.queuedRpcCalls.length
@@ -91,7 +115,7 @@ export class AppServerRpcQueue {
       this.options.diagnostics.incrementActive()
       let execution: Promise<unknown>
       try {
-        execution = this.options.execute(request.method, request.params)
+        execution = this.executeWithOverloadRetry(request)
       } catch (error) {
         execution = Promise.reject(error)
       }
@@ -104,4 +128,37 @@ export class AppServerRpcQueue {
         })
     }
   }
+
+  private async executeWithOverloadRetry(request: QueuedRpcTask): Promise<unknown> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.options.execute(request.method, request.params)
+      } catch (error) {
+        if (!isAppServerOverloadedError(error) || attempt >= this.overloadRetry.maxRetries) {
+          throw error
+        }
+        await wait(this.getOverloadRetryDelayMs(attempt))
+      }
+    }
+  }
+
+  private getOverloadRetryDelayMs(attempt: number): number {
+    const exponentialDelay = this.overloadRetry.baseDelayMs * (2 ** attempt)
+    const boundedDelay = Math.min(this.overloadRetry.maxDelayMs, exponentialDelay)
+    const jitter = this.overloadRetry.jitterMs > 0
+      ? Math.floor(this.overloadRetry.random() * this.overloadRetry.jitterMs)
+      : 0
+    return boundedDelay + jitter
+  }
+}
+
+async function wait(delayMs: number): Promise<void> {
+  if (delayMs <= 0) {
+    await Promise.resolve()
+    return
+  }
+  await new Promise<void>((resolve) => {
+    const timeout = setTimeout(resolve, delayMs)
+    timeout.unref?.()
+  })
 }

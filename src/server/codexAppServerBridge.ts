@@ -77,6 +77,7 @@ import {
   AppServerRpcQueue,
   getAppServerRpcQueuePriority,
 } from './appServerRpcQueue.js'
+import { createAppServerJsonRpcError } from './appServerRpcErrors.js'
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
 import { PlanModeTurnStore } from './planModeTurnStore.js'
@@ -1101,7 +1102,7 @@ class AppServerProcess {
         outcome: message.error ? 'error' : 'success',
       })
       if (message.error) {
-        pendingRequest.reject(new Error(message.error.message))
+        pendingRequest.reject(createAppServerJsonRpcError(message.error))
       } else {
         pendingRequest.resolve(message.result)
       }

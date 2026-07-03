@@ -6,6 +6,12 @@ import { Readable } from 'node:stream'
 import { AppServerLineBuffer } from '../src/server/appServerLineBuffer.js'
 import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheForRpc } from '../src/server/appServerRpcCache.js'
 import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.js'
+import {
+  APP_SERVER_OVERLOADED_ERROR_CODE,
+  AppServerJsonRpcError,
+  createAppServerJsonRpcError,
+  isAppServerOverloadedError,
+} from '../src/server/appServerRpcErrors.js'
 import { AppServerRpcQueue, getAppServerRpcQueuePriority } from '../src/server/appServerRpcQueue.js'
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
@@ -229,6 +235,11 @@ async function smokeAppServerRpcQueue(): Promise<void> {
   assert.equal(getAppServerRpcQueuePriority('thread/read', {}), 1)
   assert.equal(getAppServerRpcQueuePriority('thread/list', {}), 4)
   assert.equal(getAppServerRpcQueuePriority('model/list', {}), 5)
+  assert.equal(isAppServerOverloadedError(createAppServerJsonRpcError({
+    code: APP_SERVER_OVERLOADED_ERROR_CODE,
+    message: 'Server overloaded; retry later.',
+  })), true)
+  assert.equal(isAppServerOverloadedError(new AppServerJsonRpcError(123, 'Other error')), false)
 
   let now = 9_000
   Date.now = () => now++
@@ -295,6 +306,80 @@ async function smokeAppServerRpcQueue(): Promise<void> {
   )
   stalledQueue.rejectAll(new Error('queue stopped'))
   await assert.rejects(pending, /queue stopped/)
+
+  const retryDiagnostics = new AppServerRpcDiagnostics(
+    {
+      isHeavyThreadRead: (method, params) => method === 'thread/read' && readIncludeTurns(params) === true,
+    },
+    {
+      slowWarnMs: 100,
+      queueWarnSize: 10,
+      queueWarnIntervalMs: 1_000,
+      timeoutRestartWindowMs: 10_000,
+      timeoutRestartThreshold: 2,
+    },
+  )
+  let overloadedAttempts = 0
+  const retryQueue = new AppServerRpcQueue({
+    maxSize: 3,
+    maxInFlight: 1,
+    diagnostics: retryDiagnostics,
+    overloadRetry: {
+      maxRetries: 3,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      jitterMs: 0,
+    },
+    execute: async () => {
+      overloadedAttempts += 1
+      if (overloadedAttempts < 3) {
+        throw createAppServerJsonRpcError({
+          code: APP_SERVER_OVERLOADED_ERROR_CODE,
+          message: 'Server overloaded; retry later.',
+        })
+      }
+      return 'retried:done'
+    },
+  })
+  assert.equal(await retryQueue.enqueue('thread/read', {}), 'retried:done')
+  assert.equal(overloadedAttempts, 3)
+
+  const exhaustedDiagnostics = new AppServerRpcDiagnostics(
+    {
+      isHeavyThreadRead: (method, params) => method === 'thread/read' && readIncludeTurns(params) === true,
+    },
+    {
+      slowWarnMs: 100,
+      queueWarnSize: 10,
+      queueWarnIntervalMs: 1_000,
+      timeoutRestartWindowMs: 10_000,
+      timeoutRestartThreshold: 2,
+    },
+  )
+  let exhaustedAttempts = 0
+  const exhaustedQueue = new AppServerRpcQueue({
+    maxSize: 3,
+    maxInFlight: 1,
+    diagnostics: exhaustedDiagnostics,
+    overloadRetry: {
+      maxRetries: 1,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      jitterMs: 0,
+    },
+    execute: async () => {
+      exhaustedAttempts += 1
+      throw createAppServerJsonRpcError({
+        code: APP_SERVER_OVERLOADED_ERROR_CODE,
+        message: 'Server overloaded; retry later.',
+      })
+    },
+  })
+  await assert.rejects(
+    exhaustedQueue.enqueue('thread/read', {}),
+    (error) => error instanceof AppServerJsonRpcError && error.code === APP_SERVER_OVERLOADED_ERROR_CODE,
+  )
+  assert.equal(exhaustedAttempts, 2)
 }
 
 function smokeAppServerLineBuffer(): void {

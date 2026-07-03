@@ -1407,6 +1407,40 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server overload retry
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRpcErrors.ts` 和 `src/server/appServerRpcQueue.ts`。
+- 官方 App Server 文档约定 bounded queue 满时可能返回 JSON-RPC error code `-32001`，客户端应使用指数退避和 jitter 重试。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 收到 JSON-RPC error 时保留 `code`，且 `AppServerRpcQueue` 只对 `-32001` 做有界重试。
+
+#### Expected Results
+- `AppServerJsonRpcError` 保留 app-server JSON-RPC error code 和 message。
+- `isAppServerOverloadedError()` 只把 code `-32001` 识别为 overload。
+- 队列中的普通 RPC 在 app-server overload 时最多重试 3 次，并使用指数退避和 jitter。
+- 高优先级直连 RPC 仍由 `AppServerProcess.rpc()` 原路径处理，不因队列重试隐藏用户交互错误。
+- Server module smoke 覆盖 overload 重试后成功、重试耗尽后抛回原 JSON-RPC error、以及非 overload 错误不被误判。
+- 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Rollback / Cleanup
+- 若重试导致交互延迟或错误可见性问题，回滚 `src/server/appServerRpcErrors.ts`、`src/server/appServerRpcQueue.ts`、`src/server/codexAppServerBridge.ts`、验证脚本和本测试章节，再重新评估是否只对后台读请求启用 retry。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 Server module smoke：首次运行暴露 retry smoke 与共享 diagnostics 的微任务时序问题；隔离 retry/exhausted diagnostics 后，`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke 和 CLI smoke。
+
+---
+
 ### Feature: Release 验证脚本
 
 #### Prerequisites
