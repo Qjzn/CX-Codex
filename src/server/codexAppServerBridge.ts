@@ -67,6 +67,7 @@ import {
   getAppServerRpcQueuePriority,
 } from './appServerRpcQueue.js'
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
+import { AppServerStderrLogger } from './appServerStderrLogger.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -1764,8 +1765,7 @@ class AppServerProcess {
   private stopping = false
   private startedAtMs = 0
   private lastRestartAtMs = 0
-  private lastAppServerStderrLogAtMs = 0
-  private appServerStderrSuppressedCount = 0
+  private readonly stderrLogger = new AppServerStderrLogger()
   private readonly rpcDiagnostics = new AppServerRpcDiagnostics(
     {
       isHeavyThreadRead: (method, params) => method === 'thread/read' ? asRecord(params)?.includeTurns === true : undefined,
@@ -1826,7 +1826,7 @@ class AppServerProcess {
     proc.stderr.on('data', (chunk: string) => {
       const message = chunk.trim()
       if (!message) return
-      this.logAppServerStderr(message)
+      this.stderrLogger.log(message)
     })
 
     proc.stdin.on('error', (error) => {
@@ -1872,22 +1872,6 @@ class AppServerProcess {
         this.initializePromise = null
         this.stdoutLineBuffer.clear()
       }
-    })
-  }
-
-  private logAppServerStderr(message: string): void {
-    const now = Date.now()
-    if (now - this.lastAppServerStderrLogAtMs < 30_000) {
-      this.appServerStderrSuppressedCount += 1
-      return
-    }
-
-    const suppressedCount = this.appServerStderrSuppressedCount
-    this.lastAppServerStderrLogAtMs = now
-    this.appServerStderrSuppressedCount = 0
-    writeBridgeLog('warn', 'Codex app-server stderr', {
-      message: message.slice(0, 1200),
-      suppressedCount: suppressedCount > 0 ? suppressedCount : undefined,
     })
   }
 

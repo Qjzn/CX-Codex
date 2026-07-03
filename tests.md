@@ -1859,3 +1859,33 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 代码审查：`rg` 确认旧 `readBuffer` 字段和直接字符串缓冲逻辑已从 `src/server/codexAppServerBridge.ts` 移除。
 - 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
 - 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `Server module smoke`、构建和 CLI smoke。
+
+---
+
+### Feature: App Server stderr logger 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerStderrLogger.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 stderr 日志节流行为。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run build`。
+3. 执行 `npm.cmd run verify:server-modules`。
+4. 执行 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 代码审查确认 `src/server/codexAppServerBridge.ts` 通过 `AppServerStderrLogger` 管理 App Server stderr 的 30 秒节流、suppressed count 和 1200 字符截断；bridge 仍只负责进程 stderr chunk trim 和空消息跳过。
+
+#### Expected Results
+- `src/server/appServerStderrLogger.ts` 集中维护 stderr warn 日志节流、压制计数、消息截断和默认 `writeBridgeLog('warn', 'Codex app-server stderr', ...)` 写入。
+- Server module smoke 使用注入时钟和写日志回调验证首条日志写入、窗口内消息压制、窗口后日志恢复并携带 `suppressedCount`。
+- bridge 中不再保留 `lastAppServerStderrLogAtMs`、`appServerStderrSuppressedCount` 或 `logAppServerStderr()`。
+- 构建、server module smoke、CJS 启动烟测和 release gate 均通过。
+
+#### Regression Evidence
+- 2026-07-03 静态验证：`git diff --check` 通过。
+- 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-03 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-03 代码审查：`rg` 确认旧 stderr 节流字段和 `logAppServerStderr()` 已从 `src/server/codexAppServerBridge.ts` 移除。
+- 2026-07-03 CJS 启动烟测：`node -e "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['dist-cli/index.js', '--help'], { encoding: 'utf8' }); if (r.status !== 0) { throw new Error(r.stderr || r.stdout || 'cli smoke failed') }; if (!r.stdout.includes('CX-Codex Web bridge for Codex app-server')) { throw new Error('unexpected cli help output') }; console.log('cli cjs launcher smoke ok')"` 输出 `cli cjs launcher smoke ok`。
+- 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `Server module smoke`、构建和 CLI smoke。

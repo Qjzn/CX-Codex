@@ -3,6 +3,7 @@ import { AppServerLineBuffer } from '../src/server/appServerLineBuffer.js'
 import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheForRpc } from '../src/server/appServerRpcCache.js'
 import { AppServerRpcDiagnostics } from '../src/server/appServerRpcDiagnostics.js'
 import { AppServerRpcQueue, getAppServerRpcQueuePriority } from '../src/server/appServerRpcQueue.js'
+import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
 import {
   isRuntimeActiveState,
@@ -18,6 +19,7 @@ try {
   smokeAppServerRpcDiagnostics()
   await smokeAppServerRpcQueue()
   smokeAppServerLineBuffer()
+  smokeAppServerStderrLogger()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
 } finally {
@@ -211,6 +213,32 @@ function smokeAppServerLineBuffer(): void {
   assert.equal(buffer.pendingLength, 7)
   buffer.clear()
   assert.equal(buffer.pendingLength, 0)
+}
+
+function smokeAppServerStderrLogger(): void {
+  let now = 60_000
+  const entries: AppServerStderrLogEntry[] = []
+  const logger = new AppServerStderrLogger({
+    intervalMs: 30_000,
+    maxMessageLength: 12,
+    now: () => now,
+    writeLog: (entry) => entries.push(entry),
+  })
+
+  assert.equal(logger.log('first warning message'), true)
+  assert.deepEqual(entries, [{ message: 'first warnin' }])
+  assert.equal(logger.pendingSuppressedCount, 0)
+
+  now += 1_000
+  assert.equal(logger.log('second warning message'), false)
+  assert.equal(logger.log('third warning message'), false)
+  assert.equal(logger.pendingSuppressedCount, 2)
+  assert.equal(entries.length, 1)
+
+  now += 30_000
+  assert.equal(logger.log('fourth warning message'), true)
+  assert.deepEqual(entries[1], { message: 'fourth warni', suppressedCount: 2 })
+  assert.equal(logger.pendingSuppressedCount, 0)
 }
 
 function smokeRuntimeStateStore(): void {
