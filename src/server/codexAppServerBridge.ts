@@ -28,6 +28,7 @@ import { writeCodexBridgeRequestError } from './codexBridgeRequestError.js'
 import { disposeCodexBridgeMiddlewareResources } from './codexBridgeMiddlewareDispose.js'
 import { createCodexBridgeRouteHandlers } from './codexBridgeRouteHandlers.js'
 import { runCodexBridgeRouteHandlers } from './codexBridgeRouteDispatch.js'
+import { getCodexBridgeSharedState } from './codexBridgeSharedState.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   AppServerRpcCache,
@@ -579,23 +580,11 @@ type SharedBridgeState = {
   methodCatalog: AppServerMethodCatalog
 }
 
-const SHARED_BRIDGE_KEY = '__codexRemoteSharedBridge__'
-
 function getSharedBridgeState(): SharedBridgeState {
-  const globalScope = globalThis as typeof globalThis & {
-    [SHARED_BRIDGE_KEY]?: SharedBridgeState
-  }
-
-  const existing = globalScope[SHARED_BRIDGE_KEY]
-  if (existing) return existing
-
-  const appServer = new AppServerProcess()
-  const created: SharedBridgeState = {
-    appServer,
-    methodCatalog: new AppServerMethodCatalog(),
-  }
-  globalScope[SHARED_BRIDGE_KEY] = created
-  return created
+  return getCodexBridgeSharedState({
+    createAppServer: () => new AppServerProcess(),
+    createMethodCatalog: () => new AppServerMethodCatalog(),
+  })
 }
 
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {

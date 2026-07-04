@@ -391,6 +391,7 @@ if (-not $SkipPackageSmoke) {
     "src\server\codexBridgeMiddlewareDispose.ts",
     "src\server\codexBridgeRouteHandlers.ts",
     "src\server\codexBridgeRouteDispatch.ts",
+    "src\server\codexBridgeSharedState.ts",
     "src\server\codexAppServerBridge.ts",
     "src\server\composerFileSearchRoutes.ts",
     "src\server\diagnosticsRoutes.ts",

@@ -395,6 +395,10 @@ import { writeCodexBridgeRequestError } from '../src/server/codexBridgeRequestEr
 import { disposeCodexBridgeMiddlewareResources } from '../src/server/codexBridgeMiddlewareDispose.js'
 import { createCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteHandlers.js'
 import { runCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteDispatch.js'
+import {
+  CODEX_BRIDGE_SHARED_STATE_KEY,
+  getCodexBridgeSharedState,
+} from '../src/server/codexBridgeSharedState.js'
 
 const originalNow = Date.now
 
@@ -457,6 +461,7 @@ try {
   smokeCodexBridgeMiddlewareDispose()
   await smokeCodexBridgeRouteHandlers()
   await smokeCodexBridgeRouteDispatch()
+  smokeCodexBridgeSharedState()
   smokeErrorMessage()
   await smokeComposerFileSearch()
   await smokeComposerFileSearchRoutes()
@@ -4468,6 +4473,37 @@ async function smokeCodexBridgeRouteDispatch(): Promise<void> {
   ])
   assert.equal(unhandled, false)
   assert.deepEqual(calls, ['fourth', 'fifth'])
+}
+
+function smokeCodexBridgeSharedState(): void {
+  const globalScope = {} as typeof globalThis & {
+    [CODEX_BRIDGE_SHARED_STATE_KEY]?: {
+      appServer: { id: number }
+      methodCatalog: { id: number }
+    }
+  }
+  let appServerCreateCount = 0
+  let methodCatalogCreateCount = 0
+
+  const first = getCodexBridgeSharedState({
+    globalScope,
+    createAppServer: () => ({ id: ++appServerCreateCount }),
+    createMethodCatalog: () => ({ id: ++methodCatalogCreateCount }),
+  })
+  const second = getCodexBridgeSharedState({
+    globalScope,
+    createAppServer: () => ({ id: ++appServerCreateCount }),
+    createMethodCatalog: () => ({ id: ++methodCatalogCreateCount }),
+  })
+
+  assert.equal(first, second)
+  assert.deepEqual(first, {
+    appServer: { id: 1 },
+    methodCatalog: { id: 1 },
+  })
+  assert.equal(appServerCreateCount, 1)
+  assert.equal(methodCatalogCreateCount, 1)
+  assert.equal(globalScope[CODEX_BRIDGE_SHARED_STATE_KEY], first)
 }
 
 function smokeErrorMessage(): void {
