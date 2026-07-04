@@ -322,6 +322,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "dist\index.html",
   "dist-cli\index.js",
   "src\server\appServerLocalRuntimeSnapshot.ts",
+  "src\server\appServerRpcTimeoutRecovery.ts",
   "src\server\appServerRuntimeInterrupt.ts",
   "src\server\appServerRuntimeStart.ts",
   "src\server\appServerNotificationRuntimeSync.ts",
@@ -351,6 +352,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
 
 Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
   "src', 'server', 'appServerLocalRuntimeSnapshot.ts'",
+  "src', 'server', 'appServerRpcTimeoutRecovery.ts'",
   "src', 'server', 'appServerRuntimeInterrupt.ts'",
   "src', 'server', 'appServerRuntimeStart.ts'",
   "src', 'server', 'appServerNotificationRuntimeSync.ts'",
@@ -429,7 +431,9 @@ Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "smokeLocalStateRoutes",
   "readNotificationReplayQuery",
   "handleNotificationReplayRoute",
-  "smokeNotificationReplayRoute"
+  "smokeNotificationReplayRoute",
+  "createAppServerRpcTimeoutRecoveryDecision",
+  "smokeAppServerRpcTimeoutRecovery"
 )
 
 Assert-ContentIncludes "scripts/verify-governance.ps1" @(

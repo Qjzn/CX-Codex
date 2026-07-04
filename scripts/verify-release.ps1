@@ -380,6 +380,7 @@ if (-not $SkipPackageSmoke) {
     "dist\index.html",
     "dist-cli\index.js",
     "src\server\appServerLocalRuntimeSnapshot.ts",
+    "src\server\appServerRpcTimeoutRecovery.ts",
     "src\server\appServerRuntimeInterrupt.ts",
     "src\server\appServerRuntimeStart.ts",
     "src\server\appServerNotificationRuntimeSync.ts",

@@ -68,6 +68,7 @@ import {
   readTurnIdFromPayload,
 } from './appServerPayloadIds.js'
 import { getRpcTimeoutMs } from './appServerRpcTimeoutPolicy.js'
+import { createAppServerRpcTimeoutRecoveryDecision } from './appServerRpcTimeoutRecovery.js'
 import {
   createCachedThreadRead,
   type CachedThreadRead,
@@ -335,28 +336,38 @@ class AppServerProcess {
   }
 
   private noteRpcTimeout(method: string, params: unknown, timeoutMs: number): void {
-    const now = Date.now()
-    this.rpcDiagnostics.recordTimeout(method, params, timeoutMs, now)
+    const decision = createAppServerRpcTimeoutRecoveryDecision({
+      method,
+      params,
+      timeoutMs,
+      startedAtMs: this.startedAtMs,
+      coldStartGraceMs: APP_SERVER_COLD_START_GRACE_MS,
+      dependencies: {
+        now: Date.now,
+        recordTimeout: (method, params, timeoutMs, nowMs) => {
+          this.rpcDiagnostics.recordTimeout(method, params, timeoutMs, nowMs)
+        },
+        noteRestartableTimeout: (method, nowMs) => this.rpcDiagnostics.noteRestartableTimeout(method, nowMs),
+      },
+    })
 
-    const processAgeMs = this.startedAtMs > 0 ? now - this.startedAtMs : 0
-    if (method !== 'initialize' && processAgeMs < APP_SERVER_COLD_START_GRACE_MS) {
+    if (decision.kind === 'startup-grace') {
       writeBridgeLog('warn', 'App-server RPC timed out during startup grace', {
         method,
         durationMs: timeoutMs,
-        processAgeMs,
-        includeTurns: method === 'thread/read' ? asRecord(params)?.includeTurns === true : undefined,
+        processAgeMs: decision.processAgeMs,
+        includeTurns: decision.includeTurns,
       })
       return
     }
 
-    const { shouldRestart, timeoutCount } = this.rpcDiagnostics.noteRestartableTimeout(method, now)
-    if (!shouldRestart) return
+    if (decision.kind !== 'restart') return
 
     this.restartAppServer('repeated RPC timeouts', {
       method,
       timeoutMs,
-      timeoutCount,
-      includeTurns: method === 'thread/read' ? asRecord(params)?.includeTurns === true : undefined,
+      timeoutCount: decision.timeoutCount,
+      includeTurns: decision.includeTurns,
     })
   }
 

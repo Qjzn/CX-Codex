@@ -66,6 +66,7 @@ import {
   APP_SERVER_RPC_TIMEOUT_MS,
   getRpcTimeoutMs,
 } from '../src/server/appServerRpcTimeoutPolicy.js'
+import { createAppServerRpcTimeoutRecoveryDecision } from '../src/server/appServerRpcTimeoutRecovery.js'
 import {
   APP_SERVER_OVERLOADED_ERROR_CODE,
   AppServerJsonRpcError,
@@ -353,6 +354,7 @@ try {
   await smokeAppServerThreadListAugment()
   smokeAppServerThreadReadCache()
   smokeAppServerRpcTimeoutPolicy()
+  smokeAppServerRpcTimeoutRecovery()
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
   smokeAppServerRpcErrors()
@@ -2022,6 +2024,77 @@ function smokeAppServerRpcTimeoutPolicy(): void {
   assert.equal(getRpcTimeoutMs('thread/resume', {}), APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('model/list', {}), APP_SERVER_RPC_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('turn/start', null), APP_SERVER_RPC_TIMEOUT_MS)
+}
+
+function smokeAppServerRpcTimeoutRecovery(): void {
+  const recordedTimeouts: Array<{ method: string; params: unknown; timeoutMs: number; nowMs: number }> = []
+  const restartableTimeouts: Array<{ method: string; nowMs: number }> = []
+  const startupGraceDecision = createAppServerRpcTimeoutRecoveryDecision({
+    method: 'thread/read',
+    params: { includeTurns: true },
+    timeoutMs: 30_000,
+    startedAtMs: 95_000,
+    coldStartGraceMs: 60_000,
+    dependencies: {
+      now: () => 100_000,
+      recordTimeout: (method, params, timeoutMs, nowMs) => {
+        recordedTimeouts.push({ method, params, timeoutMs, nowMs })
+      },
+      noteRestartableTimeout: (method, nowMs) => {
+        restartableTimeouts.push({ method, nowMs })
+        return { shouldRestart: true, timeoutCount: 99 }
+      },
+    },
+  })
+  assert.deepEqual(startupGraceDecision, {
+    kind: 'startup-grace',
+    processAgeMs: 5_000,
+    includeTurns: true,
+  })
+  assert.deepEqual(recordedTimeouts, [{
+    method: 'thread/read',
+    params: { includeTurns: true },
+    timeoutMs: 30_000,
+    nowMs: 100_000,
+  }])
+  assert.deepEqual(restartableTimeouts, [])
+
+  const initializeRestartableTimeouts: Array<{ method: string; nowMs: number }> = []
+  const initializeDecision = createAppServerRpcTimeoutRecoveryDecision({
+    method: 'initialize',
+    params: {},
+    timeoutMs: 20_000,
+    startedAtMs: 99_000,
+    coldStartGraceMs: 60_000,
+    dependencies: {
+      now: () => 100_000,
+      recordTimeout: () => {},
+      noteRestartableTimeout: (method, nowMs) => {
+        initializeRestartableTimeouts.push({ method, nowMs })
+        return { shouldRestart: false, timeoutCount: 1 }
+      },
+    },
+  })
+  assert.deepEqual(initializeDecision, { kind: 'none' })
+  assert.deepEqual(initializeRestartableTimeouts, [{ method: 'initialize', nowMs: 100_000 }])
+
+  const restartDecision = createAppServerRpcTimeoutRecoveryDecision({
+    method: 'thread/read',
+    params: { includeTurns: false },
+    timeoutMs: 30_000,
+    startedAtMs: 1,
+    coldStartGraceMs: 60_000,
+    dependencies: {
+      now: () => 100_000,
+      recordTimeout: () => {},
+      noteRestartableTimeout: () => ({ shouldRestart: true, timeoutCount: 3 }),
+    },
+  })
+  assert.deepEqual(restartDecision, {
+    kind: 'restart',
+    timeoutCount: 3,
+    includeTurns: false,
+  })
 }
 
 function smokeTranscriptionProxyConfig(): void {

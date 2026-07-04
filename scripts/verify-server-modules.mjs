@@ -43,6 +43,7 @@ writeFileSync(tsconfigPath, `${JSON.stringify({
     join(repoRoot, 'src', 'server', 'appServerRpcCache.ts'),
     join(repoRoot, 'src', 'server', 'appServerRpcDiagnostics.ts'),
     join(repoRoot, 'src', 'server', 'appServerRpcErrors.ts'),
+    join(repoRoot, 'src', 'server', 'appServerRpcTimeoutRecovery.ts'),
     join(repoRoot, 'src', 'server', 'appServerJsonRpcWire.ts'),
     join(repoRoot, 'src', 'server', 'appServerRpcQueue.ts'),
     join(repoRoot, 'src', 'server', 'appServerLocalRuntimeSnapshot.ts'),

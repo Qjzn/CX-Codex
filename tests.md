@@ -4272,6 +4272,35 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server RPC timeout recovery 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRpcTimeoutRecovery.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖启动宽限、initialize 超时和重复超时重启三个分支。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+4. 执行 `node_modules\.bin\vite.cmd build`。
+5. 执行 `node_modules\.bin\tsup.cmd`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+7. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+8. 代码审查确认 `src/server/codexAppServerBridge.ts` 的 `noteRpcTimeout()` 只负责写启动宽限日志或调用 `restartAppServer()`，不再内联恢复决策。
+
+#### Expected Results
+- RPC timeout 恢复决策集中在 `src/server/appServerRpcTimeoutRecovery.ts`。
+- 每次超时都会先调用 diagnostics `recordTimeout()`，保留最近超时诊断。
+- 非 `initialize` RPC 在 App Server cold start grace 内只写 `App-server RPC timed out during startup grace`，不计入重启窗口。
+- `initialize` 超时不走启动宽限，仍进入 restartable timeout 计数。
+- 达到重复超时阈值时返回 `restart` 决策，并保留 `thread/read` 的 `includeTurns` 诊断布尔值。
+- server module smoke、构建、治理门禁和 release gate 均通过。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `src/server/appServerRpcTimeoutRecovery.ts`，撤销 `scripts/server-module-smoke.ts` 中的 RPC timeout recovery smoke，并把 `recordTimeout()`、启动宽限判断和重复超时重启逻辑恢复到 `src/server/codexAppServerBridge.ts` 的 `noteRpcTimeout()` 内。
+
+---
+
 ### Feature: Workspace/meta 路由模块化
 
 #### Prerequisites
