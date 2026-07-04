@@ -2318,6 +2318,37 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Runtime reconcile scheduler 规则模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRuntimeRequestReconciliation.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 runtime reconcile 候选筛选、running/still_running 节流、批量限制和失败 patch。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 runtime reconcile 定时器使用 `selectRuntimeRequestsForReconcile()` 选择候选请求。
+5. 代码审查确认 reconcile 失败时使用 `createRuntimeReconcileFailurePatch()` 更新请求状态、lastError 和 retryCount。
+
+#### Expected Results
+- 空 threadId 的 runtime request 不会进入 reconcile 候选。
+- 非 running/still_running 的 uncertain request 仍可立即进入候选。
+- running 和 still_running request 仍按 10 秒 thread 级节流进入候选。
+- 每轮候选默认仍限制为 3 条。
+- stopping request reconcile 失败时仍转为 `stop_uncertain`，其他状态失败时保持原状态并递增 retry。
+- release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `selectRuntimeRequestsForReconcile()`、`createRuntimeReconcileFailurePatch()` 和对应 smoke 断言，并把定时器候选筛选和失败 patch 逻辑恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: Runtime request snapshot patch 应用模块化
 
 #### Prerequisites

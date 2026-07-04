@@ -13,12 +13,20 @@ export const RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES: RuntimeRequestStatus[] =
   'stop_uncertain',
   'still_running',
 ]
+export const RUNTIME_RECONCILE_RUNNING_THROTTLE_MS = 10_000
+export const RUNTIME_RECONCILE_BATCH_LIMIT = 3
 
 export type RuntimeRequestSnapshotPatch = {
   status: RuntimeRequestStatus
   threadId: string
   turnId: string
   lastError: string | null
+}
+
+export type RuntimeRequestReconcileFailurePatch = {
+  status: RuntimeRequestStatus
+  lastError: string
+  incrementRetry: true
 }
 
 export type RuntimeThreadStatePayload = {
@@ -55,6 +63,33 @@ export function updateRuntimeRequestsFromSnapshot(
     runtimeStore.updateRequest(request.requestId, createRuntimeRequestSnapshotPatch(request, threadId, snapshot))
   }
   return activeRequests.length
+}
+
+export function selectRuntimeRequestsForReconcile(
+  requests: RuntimeRequestRecord[],
+  lastReconciledAtMsByThreadId: ReadonlyMap<string, number>,
+  nowMs: number,
+  limit = RUNTIME_RECONCILE_BATCH_LIMIT,
+): RuntimeRequestRecord[] {
+  return requests
+    .filter((request) => {
+      if (!request.threadId) return false
+      if (request.status !== 'running' && request.status !== 'still_running') return true
+      const lastAtMs = lastReconciledAtMsByThreadId.get(request.threadId) ?? 0
+      return nowMs - lastAtMs >= RUNTIME_RECONCILE_RUNNING_THROTTLE_MS
+    })
+    .slice(0, Math.max(0, Math.trunc(limit)))
+}
+
+export function createRuntimeReconcileFailurePatch(
+  request: Pick<RuntimeRequestRecord, 'status'>,
+  lastError: string,
+): RuntimeRequestReconcileFailurePatch {
+  return {
+    status: request.status === 'stopping' ? 'stop_uncertain' : request.status,
+    lastError,
+    incrementRetry: true,
+  }
 }
 
 export function createRuntimeRequestSnapshotPatch(

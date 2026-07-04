@@ -14,7 +14,9 @@ import {
 } from './appServerRuntimeBridge.js'
 import { AppServerNotificationReplay } from './appServerNotificationReplay.js'
 import {
+  createRuntimeReconcileFailurePatch,
   createRuntimeThreadStatePayload,
+  selectRuntimeRequestsForReconcile,
   updateRuntimeRequestsFromSnapshot,
 } from './appServerRuntimeRequestReconciliation.js'
 import {
@@ -1361,15 +1363,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const runtimeReconcileTimer = setInterval(() => {
     if (runtimeReconcileInFlight) return
     const now = Date.now()
-    const candidates = runtimeStore
-      .listUncertainRequests(10)
-      .filter((request) => {
-        if (!request.threadId) return false
-        if (request.status !== 'running' && request.status !== 'still_running') return true
-        const lastAtMs = runtimeReconcileLastAtMsByThreadId.get(request.threadId) ?? 0
-        return now - lastAtMs >= 10_000
-      })
-      .slice(0, 3)
+    const candidates = selectRuntimeRequestsForReconcile(
+      runtimeStore.listUncertainRequests(10),
+      runtimeReconcileLastAtMsByThreadId,
+      now,
+    )
     if (candidates.length === 0) return
 
     runtimeReconcileInFlight = true
@@ -1379,16 +1377,13 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           await reconcileRuntimeThread(request.threadId)
           runtimeReconcileLastAtMsByThreadId.set(request.threadId, Date.now())
         } catch (error) {
-          runtimeStore.updateRequest(request.requestId, {
-            status: request.status === 'stopping' ? 'stop_uncertain' : request.status,
-            lastError: getErrorMessage(error, 'runtime reconcile failed'),
-            incrementRetry: true,
-          })
+          const lastError = getErrorMessage(error, 'runtime reconcile failed')
+          runtimeStore.updateRequest(request.requestId, createRuntimeReconcileFailurePatch(request, lastError))
           writeBridgeLog('warn', 'Runtime reconcile failed', {
             threadId: request.threadId,
             requestId: request.requestId,
             status: request.status,
-            error: getErrorMessage(error, 'runtime reconcile failed'),
+            error: lastError,
           })
         }
       }

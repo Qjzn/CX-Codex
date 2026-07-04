@@ -223,9 +223,13 @@ import {
 } from '../src/server/appServerRuntimeBridge.js'
 import { AppServerNotificationReplay } from '../src/server/appServerNotificationReplay.js'
 import {
+  createRuntimeReconcileFailurePatch,
   createRuntimeRequestSnapshotPatch,
   createRuntimeThreadStatePayload,
+  RUNTIME_RECONCILE_BATCH_LIMIT,
+  RUNTIME_RECONCILE_RUNNING_THROTTLE_MS,
   RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES,
+  selectRuntimeRequestsForReconcile,
   updateRuntimeRequestsFromSnapshot,
 } from '../src/server/appServerRuntimeRequestReconciliation.js'
 import { createLocalRuntimeSnapshotFromPersisted } from '../src/server/appServerRuntimeSnapshotRecovery.js'
@@ -2491,6 +2495,8 @@ function smokeAppServerRuntimeRequestReconciliation(): void {
     'stop_uncertain',
     'still_running',
   ])
+  assert.equal(RUNTIME_RECONCILE_RUNNING_THROTTLE_MS, 10_000)
+  assert.equal(RUNTIME_RECONCILE_BATCH_LIMIT, 3)
 
   const snapshot = createThreadRuntimeSnapshot({ executionState: 'running', activeTurnId: 'turn-a' })
   const statusFilters: unknown[] = []
@@ -2546,6 +2552,50 @@ function smokeAppServerRuntimeRequestReconciliation(): void {
       lastError: null,
     },
   }])
+
+  const makeRuntimeRequest = (requestId: string, status: RuntimeRequestRecord['status'], threadId: string): RuntimeRequestRecord => ({
+    ...runtimeRequests[0],
+    requestId,
+    status,
+    threadId,
+  })
+  const reconcileRequests = [
+    makeRuntimeRequest('missing-thread', 'start_uncertain', ''),
+    makeRuntimeRequest('stopping-a', 'stopping', 'thread-a'),
+    makeRuntimeRequest('running-fresh', 'running', 'thread-b'),
+    makeRuntimeRequest('still-stale', 'still_running', 'thread-c'),
+    makeRuntimeRequest('start-uncertain', 'start_uncertain', 'thread-d'),
+    makeRuntimeRequest('running-stale', 'running', 'thread-e'),
+  ]
+  const lastReconciledAtMs = new Map<string, number>([
+    ['thread-b', 9_500],
+    ['thread-c', 0],
+    ['thread-e', -1],
+  ])
+  assert.deepEqual(
+    selectRuntimeRequestsForReconcile(reconcileRequests, lastReconciledAtMs, 10_000).map((request) => request.requestId),
+    ['stopping-a', 'still-stale', 'start-uncertain'],
+  )
+  assert.deepEqual(
+    selectRuntimeRequestsForReconcile(reconcileRequests, lastReconciledAtMs, 10_000, 10).map((request) => request.requestId),
+    ['stopping-a', 'still-stale', 'start-uncertain', 'running-stale'],
+  )
+  assert.deepEqual(createRuntimeReconcileFailurePatch(
+    { status: 'stopping' },
+    'runtime reconcile failed',
+  ), {
+    status: 'stop_uncertain',
+    lastError: 'runtime reconcile failed',
+    incrementRetry: true,
+  })
+  assert.deepEqual(createRuntimeReconcileFailurePatch(
+    { status: 'running' },
+    'runtime reconcile failed',
+  ), {
+    status: 'running',
+    lastError: 'runtime reconcile failed',
+    incrementRetry: true,
+  })
 
   assert.deepEqual(createRuntimeRequestSnapshotPatch(
     { status: 'running', turnId: 'old-turn' },
