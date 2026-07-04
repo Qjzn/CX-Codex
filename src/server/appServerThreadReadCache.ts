@@ -38,6 +38,32 @@ export function createCachedThreadRead(
   }
 }
 
+export class AppServerThreadReadCacheStore {
+  private readonly cachedByThreadId = new Map<string, CachedThreadRead>()
+
+  get count(): number {
+    return this.cachedByThreadId.size
+  }
+
+  get(threadId: string): CachedThreadRead | null {
+    return this.cachedByThreadId.get(threadId) ?? null
+  }
+
+  remember(threadId: string, threadRead: unknown): CachedThreadRead {
+    const cachedThreadRead = createCachedThreadRead(threadRead)
+    this.cachedByThreadId.set(threadId, cachedThreadRead)
+    return cachedThreadRead
+  }
+
+  delete(threadId: string): boolean {
+    return this.cachedByThreadId.delete(threadId)
+  }
+
+  clear(): void {
+    this.cachedByThreadId.clear()
+  }
+}
+
 export function isCachedThreadReadStaleForRuntime(
   cachedThreadRead: CachedThreadRead,
   runtimeSnapshot: ThreadRuntimeSnapshot,

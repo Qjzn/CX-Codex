@@ -19,6 +19,40 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: App Server thread-read cache store
+
+#### Prerequisites
+- Current repository includes `src/server/appServerThreadReadCache.ts`, `src/server/codexAppServerBridge.ts`, and `scripts/server-module-smoke.ts`.
+- Dependencies are installed so TypeScript, Vite, tsup, and the server module smoke verifier can run.
+
+#### Steps
+1. Run `git diff --check`.
+2. Run `node scripts\verify-server-modules.mjs`.
+3. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+4. Run `node_modules\.bin\vite.cmd build`.
+5. Run `node_modules\.bin\tsup.cmd`.
+6. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+7. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Middleware thread-read cache behavior remains unchanged while bridge code uses `AppServerThreadReadCacheStore` instead of a local `Map`.
+- Fresh cached `thread/read` payloads are returned through `getCachedThreadRead()` for runtime snapshots and token usage recovery.
+- Runtime notification sync and RPC proxy invalidation still remove cached thread reads by thread id.
+- Remembering the same thread id replaces the cached payload without increasing cache size.
+- Clearing the cache removes all remembered thread reads without throwing.
+
+#### Rollback/Cleanup Notes
+- No runtime artifacts need cleanup beyond normal build output in `dist/`, `dist-cli/`, and `output/`.
+- To roll back, revert `src/server/appServerThreadReadCache.ts`, `src/server/codexAppServerBridge.ts`, `scripts/server-module-smoke.ts`, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed, including `AppServerThreadReadCacheStore` coverage for remember, get, replace, delete, idempotent delete, count, and clear behavior.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+---
+
 ### Feature: GitHub Issues #2 and #3 long prompt safety
 
 #### Prerequisites

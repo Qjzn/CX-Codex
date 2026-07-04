@@ -104,6 +104,7 @@ import {
   readThreadUpdatedAtIsoFromThreadReadPayload,
 } from '../src/server/appServerThreadPayload.js'
 import {
+  AppServerThreadReadCacheStore,
   createCachedThreadRead,
   isCachedThreadReadStaleForRuntime,
   readIsoTimestampMs,
@@ -2278,6 +2279,42 @@ function smokeAppServerThreadReadCache(): void {
     executionState: 'completed',
     lastCompletedAtIso: null,
   }), false), false)
+
+  const cacheStore = new AppServerThreadReadCacheStore()
+  assert.equal(cacheStore.count, 0)
+  assert.equal(cacheStore.get('thread-a'), null)
+  const remembered = cacheStore.remember('thread-a', {
+    thread: {
+      id: 'thread-a',
+      updatedAt: 1767225600,
+      path: 'C:/sessions/thread-a.jsonl',
+      activeTurnId: 'turn-a',
+      status: 'running',
+    },
+  })
+  assert.equal(cacheStore.count, 1)
+  assert.deepEqual(cacheStore.get('thread-a'), remembered)
+  const replaced = cacheStore.remember('thread-a', {
+    thread: {
+      id: 'thread-a',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+      path: 'C:/sessions/thread-a-new.jsonl',
+      activeTurnId: '',
+      status: 'completed',
+    },
+  })
+  assert.equal(cacheStore.count, 1)
+  assert.deepEqual(cacheStore.get('thread-a'), replaced)
+  assert.notDeepEqual(replaced, remembered)
+  assert.equal(cacheStore.delete('thread-a'), true)
+  assert.equal(cacheStore.delete('thread-a'), false)
+  assert.equal(cacheStore.count, 0)
+  cacheStore.remember('thread-b', { thread: { id: 'thread-b' } })
+  cacheStore.remember('thread-c', { thread: { id: 'thread-c' } })
+  assert.equal(cacheStore.count, 2)
+  cacheStore.clear()
+  assert.equal(cacheStore.count, 0)
+  assert.equal(cacheStore.get('thread-b'), null)
 }
 
 function smokeAppServerRpcTimeoutPolicy(): void {

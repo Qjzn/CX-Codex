@@ -75,8 +75,7 @@ import { readThreadReadIncludeTurnsForMethod } from './appServerThreadReadParams
 import { getRpcTimeoutMs } from './appServerRpcTimeoutPolicy.js'
 import { createAppServerRpcTimeoutRecoveryDecision } from './appServerRpcTimeoutRecovery.js'
 import {
-  createCachedThreadRead,
-  type CachedThreadRead,
+  AppServerThreadReadCacheStore,
 } from './appServerThreadReadCache.js'
 import { readAppServerThreadRuntimeSnapshot } from './appServerThreadRuntimeSnapshot.js'
 import { createLocalRuntimeSnapshot } from './appServerRuntimeSnapshotRecovery.js'
@@ -700,7 +699,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     (params) => appServer.rpc('thread/list', params),
     await readThreadTitlesFromSessionIndex(getCodexSessionIndexPath()),
   ))
-  const cachedThreadReadsByThreadId = new Map<string, CachedThreadRead>()
+  const threadReadCacheStore = new AppServerThreadReadCacheStore()
   const runtimeStateStore = new RuntimeStateStore({
     readThreadIdFromPayload,
     readTurnIdFromPayload,
@@ -726,12 +725,6 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     readThreadIdFromPayload,
     readTurnIdFromPayload,
   })
-
-  function rememberCachedThreadRead(threadId: string, threadRead: unknown): CachedThreadRead {
-    const cachedThreadRead = createCachedThreadRead(threadRead)
-    cachedThreadReadsByThreadId.set(threadId, cachedThreadRead)
-    return cachedThreadRead
-  }
 
   function persistRuntimeSnapshot(threadId: string, snapshot?: ThreadRuntimeSnapshot): ThreadRuntimeSnapshot {
     return persistAppServerRuntimeSnapshot(threadId, snapshot, {
@@ -772,7 +765,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       readThreadIdFromPayload,
       persistRuntimeSnapshot,
       runtimeStore,
-      deleteCachedThreadRead: (threadId) => cachedThreadReadsByThreadId.delete(threadId),
+      deleteCachedThreadRead: (threadId) => threadReadCacheStore.delete(threadId),
       emitNotification: (event) => {
         bridgeNotificationListeners.emit(event)
       },
@@ -799,8 +792,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     return await readAppServerThreadRuntimeSnapshot(threadId, {
       rpc: (method, params) => appServer.rpc(method, params),
       observeThreadRead: (details) => statusDiagnostics.observeThreadRead(details),
-      getCachedThreadRead: (normalizedThreadId) => cachedThreadReadsByThreadId.get(normalizedThreadId) ?? null,
-      rememberCachedThreadRead,
+      getCachedThreadRead: (normalizedThreadId) => threadReadCacheStore.get(normalizedThreadId),
+      rememberCachedThreadRead: (normalizedThreadId, threadRead) => threadReadCacheStore.remember(normalizedThreadId, threadRead),
       snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
       observeRuntimeThreadRead: (normalizedThreadId, inProgress, activeTurnId, updatedAtIso, source) => {
         runtimeStateStore.observeThreadRead(normalizedThreadId, inProgress, activeTurnId, updatedAtIso, source)
@@ -886,7 +879,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   async function readCachedThreadTokenUsage(threadId: string): Promise<ThreadTokenUsage | null> {
     return await resolveThreadTokenUsage(threadId, {
       getCachedTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
-      getCachedThreadRead: (normalizedThreadId) => cachedThreadReadsByThreadId.get(normalizedThreadId) ?? null,
+      getCachedThreadRead: (normalizedThreadId) => threadReadCacheStore.get(normalizedThreadId),
     })
   }
 
@@ -921,9 +914,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         persistRuntimeSnapshot,
         markPlanModeTurn: (threadId, turnId = '') => appServer.markPlanModeTurn(threadId, turnId),
         clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
-        deleteCachedThreadRead: (threadId) => cachedThreadReadsByThreadId.delete(threadId),
+        deleteCachedThreadRead: (threadId) => threadReadCacheStore.delete(threadId),
         rememberCachedThreadRead: (threadId, threadRead) => {
-          rememberCachedThreadRead(threadId, threadRead)
+          threadReadCacheStore.remember(threadId, threadRead)
         },
         augmentThreadListRpcResult: (params, result) => augmentThreadListRpcResult(appServer, params, result),
         clearThreadSearchIndex: () => threadSearchIndexStore.clear(),
