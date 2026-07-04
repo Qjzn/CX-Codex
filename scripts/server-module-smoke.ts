@@ -317,7 +317,10 @@ import {
   createLocalRuntimeSnapshot,
   createLocalRuntimeSnapshotFromPersisted,
 } from '../src/server/appServerRuntimeSnapshotRecovery.js'
-import { readAppServerLocalRuntimeSnapshot } from '../src/server/appServerLocalRuntimeSnapshot.js'
+import {
+  createAppServerLocalRuntimeSnapshotReader,
+  readAppServerLocalRuntimeSnapshot,
+} from '../src/server/appServerLocalRuntimeSnapshot.js'
 import {
   normalizeWorkspaceRootsState,
   readWorkspaceRootsState,
@@ -6363,6 +6366,49 @@ function smokeAppServerLocalRuntimeSnapshot(): void {
   assert.deepEqual(persistedSnapshots, [{
     threadId: 'thread-current',
     snapshot: currentSnapshot,
+  }])
+
+  const factoryCreatedOverlays: unknown[] = []
+  const factoryPersistedSnapshots: unknown[] = []
+  const factorySnapshot = createThreadRuntimeSnapshot({
+    threadId: 'thread-factory',
+    executionState: 'sync_degraded',
+    tokenUsage,
+  })
+  const readLocalRuntimeSnapshot = createAppServerLocalRuntimeSnapshotReader({
+    getSnapshot: (threadId) => {
+      assert.equal(threadId, 'thread-factory')
+      return null
+    },
+    listPendingServerRequestsForThread: (threadId) => {
+      assert.equal(threadId, 'thread-factory')
+      return pendingServerRequests
+    },
+    getThreadTokenUsage: (threadId) => {
+      assert.equal(threadId, 'thread-factory')
+      return tokenUsage
+    },
+    getAppServerStartedAtMs: () => Date.parse('2025-12-31T23:59:59.000Z'),
+    snapshotRuntime: (threadId, overlay) => {
+      factoryCreatedOverlays.push({ threadId, overlay })
+      return factorySnapshot
+    },
+    persistRuntimeSnapshot: (threadId, snapshot) => {
+      factoryPersistedSnapshots.push({ threadId, snapshot })
+      return snapshot
+    },
+  })
+  assert.equal(readLocalRuntimeSnapshot(' thread-factory '), factorySnapshot)
+  assert.deepEqual(factoryCreatedOverlays, [{
+    threadId: 'thread-factory',
+    overlay: {
+      pendingServerRequests,
+      tokenUsage,
+    },
+  }])
+  assert.deepEqual(factoryPersistedSnapshots, [{
+    threadId: 'thread-factory',
+    snapshot: factorySnapshot,
   }])
 }
 

@@ -156,7 +156,7 @@ import { AppServerThreadListAugmenter } from './appServerThreadListAugment.js'
 import { startRuntimeTurnWithAppServer } from './appServerRuntimeStart.js'
 import { interruptRuntimeTurnWithAppServer } from './appServerRuntimeInterrupt.js'
 import { createAppServerRuntimeSnapshotPersister } from './appServerRuntimeSnapshotPersistence.js'
-import { readAppServerLocalRuntimeSnapshot } from './appServerLocalRuntimeSnapshot.js'
+import { createAppServerLocalRuntimeSnapshotReader } from './appServerLocalRuntimeSnapshot.js'
 
 const APP_SERVER_RPC_SLOW_WARN_MS = 1_800
 const APP_SERVER_RPC_MAX_IN_FLIGHT = 2
@@ -805,16 +805,14 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     },
   })
 
-  function readLocalRuntimeSnapshot(threadId: string): ThreadRuntimeSnapshot {
-    return readAppServerLocalRuntimeSnapshot(threadId, {
-      getSnapshot: (normalizedThreadId) => runtimeStore.getSnapshot(normalizedThreadId),
-      listPendingServerRequestsForThread: (normalizedThreadId) => appServer.listPendingServerRequestsForThread(normalizedThreadId),
-      getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
-      getAppServerStartedAtMs: () => appServer.getStartedAtMs(),
-      snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
-      persistRuntimeSnapshot,
-    })
-  }
+  const readLocalRuntimeSnapshot = createAppServerLocalRuntimeSnapshotReader({
+    getSnapshot: (normalizedThreadId) => runtimeStore.getSnapshot(normalizedThreadId),
+    listPendingServerRequestsForThread: (normalizedThreadId) => appServer.listPendingServerRequestsForThread(normalizedThreadId),
+    getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
+    getAppServerStartedAtMs: () => appServer.getStartedAtMs(),
+    snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
+    persistRuntimeSnapshot,
+  })
 
   async function reconcileRuntimeThread(threadId: string): Promise<ThreadRuntimeSnapshot> {
     const snapshot = await readThreadRuntimeSnapshot(threadId)

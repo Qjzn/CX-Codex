@@ -33,3 +33,9 @@ export function readAppServerLocalRuntimeSnapshot(
     persistCurrentSnapshot: (snapshot) => dependencies.persistRuntimeSnapshot(normalizedThreadId, snapshot),
   })
 }
+
+export function createAppServerLocalRuntimeSnapshotReader(
+  dependencies: AppServerLocalRuntimeSnapshotDependencies,
+): (threadId: string) => ThreadRuntimeSnapshot {
+  return (threadId) => readAppServerLocalRuntimeSnapshot(threadId, dependencies)
+}
