@@ -6132,3 +6132,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server runtime turn interrupter factory
+
+#### Prerequisites
+- Current repository includes `src/server/appServerRuntimeInterrupt.ts`, `src/server/codexAppServerBridge.ts`, and `scripts/server-module-smoke.ts`.
+- Dependencies are installed so TypeScript, Vite, tsup, and the server module smoke verifier can run.
+
+#### Steps
+1. Open `src/server/appServerRuntimeInterrupt.ts` and confirm `createAppServerRuntimeTurnInterrupter(dependencies)` returns a payload handler backed by `interruptRuntimeTurnWithAppServer(payload, dependencies)`.
+2. Open `src/server/codexAppServerBridge.ts` and confirm `interruptRuntimeTurn` is created from `createAppServerRuntimeTurnInterrupter(...)` with the same runtime store, runtime state, App Server RPC, snapshot persist, and plan-mode cleanup dependencies.
+3. Run `git diff --check`.
+4. Run `node scripts\verify-server-modules.mjs`.
+5. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+6. Run `node_modules\.bin\vite.cmd build`.
+7. Run `node_modules\.bin\tsup.cmd`.
+8. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+9. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- The bridge no longer owns an inline `interruptRuntimeTurn(...)` wrapper; it only assembles dependencies for the factory-created interrupter.
+- Runtime interrupt behavior remains unchanged for success, already-settled, timeout `stop_uncertain`, and failed interrupt paths.
+- `scripts/server-module-smoke.ts` exercises the new factory-created interrupter as well as the existing lower-level `interruptRuntimeTurnWithAppServer()` paths.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifacts need cleanup beyond normal build output in `dist/`, `dist-cli/`, and `output/`.
+- To roll back, revert `src/server/appServerRuntimeInterrupt.ts`, `src/server/codexAppServerBridge.ts`, `scripts/server-module-smoke.ts`, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed, including coverage for `createAppServerRuntimeTurnInterrupter()` plus the existing runtime interrupt success, already-settled, timeout, and failure paths.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

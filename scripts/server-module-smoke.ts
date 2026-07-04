@@ -290,6 +290,7 @@ import {
   persistAppServerRuntimeSnapshot,
 } from '../src/server/appServerRuntimeSnapshotPersistence.js'
 import {
+  createAppServerRuntimeTurnInterrupter,
   interruptRuntimeTurnWithAppServer,
   type RuntimeInterruptDependencies,
 } from '../src/server/appServerRuntimeInterrupt.js'
@@ -5832,12 +5833,13 @@ async function smokeAppServerRuntimeInterrupt(): Promise<void> {
   }
 
   const success = createHarness(async () => ({ ok: true }))
-  assert.deepEqual(await interruptRuntimeTurnWithAppServer({
+  const interruptRuntimeTurn = createAppServerRuntimeTurnInterrupter(success.dependencies)
+  assert.deepEqual(await interruptRuntimeTurn({
     requestId: 'request-success',
     threadId: 'thread-success',
     turnId: 'turn-success',
     source: 'button',
-  }, success.dependencies), {
+  }), {
     requestId: 'request-success',
     threadId: 'thread-success',
     turnId: 'turn-success',

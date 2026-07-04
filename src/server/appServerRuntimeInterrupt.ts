@@ -42,6 +42,12 @@ export type RuntimeInterruptDependencies = {
   getErrorMessage(error: unknown, fallback: string): string
 }
 
+export function createAppServerRuntimeTurnInterrupter(
+  dependencies: RuntimeInterruptDependencies,
+): (payload: unknown) => Promise<RuntimeInterruptResult> {
+  return async (payload) => await interruptRuntimeTurnWithAppServer(payload, dependencies)
+}
+
 export async function interruptRuntimeTurnWithAppServer(
   payload: unknown,
   dependencies: RuntimeInterruptDependencies,

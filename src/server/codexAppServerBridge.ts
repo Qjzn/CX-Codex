@@ -154,7 +154,7 @@ import {
 } from './webBridgeSettings.js'
 import { AppServerThreadListAugmenter } from './appServerThreadListAugment.js'
 import { createAppServerRuntimeTurnStarter } from './appServerRuntimeStart.js'
-import { interruptRuntimeTurnWithAppServer } from './appServerRuntimeInterrupt.js'
+import { createAppServerRuntimeTurnInterrupter } from './appServerRuntimeInterrupt.js'
 import { createAppServerRuntimeSnapshotPersister } from './appServerRuntimeSnapshotPersistence.js'
 import { createAppServerLocalRuntimeSnapshotReader } from './appServerLocalRuntimeSnapshot.js'
 
@@ -833,24 +833,17 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     getErrorMessage,
   })
 
-  async function interruptRuntimeTurn(payload: unknown): Promise<{
-    requestId: string
-    threadId: string
-    turnId: string
-    status: RuntimeRequestStatus
-  }> {
-    return await interruptRuntimeTurnWithAppServer(payload, {
-      createRequest: (record) => runtimeStore.createRequest(record),
-      updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
-      rpc: (method, params) => appServer.rpc(method, params),
-      markStopping: (threadId) => runtimeStateStore.markStopping(threadId),
-      markInterrupted: (threadId, lastError = null) => runtimeStateStore.markInterrupted(threadId, lastError),
-      markStopUncertain: (threadId, lastError = null) => runtimeStateStore.markStopUncertain(threadId, lastError),
-      persistRuntimeSnapshot,
-      clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
-      getErrorMessage,
-    })
-  }
+  const interruptRuntimeTurn = createAppServerRuntimeTurnInterrupter({
+    createRequest: (record) => runtimeStore.createRequest(record),
+    updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
+    rpc: (method, params) => appServer.rpc(method, params),
+    markStopping: (threadId) => runtimeStateStore.markStopping(threadId),
+    markInterrupted: (threadId, lastError = null) => runtimeStateStore.markInterrupted(threadId, lastError),
+    markStopUncertain: (threadId, lastError = null) => runtimeStateStore.markStopUncertain(threadId, lastError),
+    persistRuntimeSnapshot,
+    clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
+    getErrorMessage,
+  })
 
   const runtimeReconcileScheduler = createRuntimeReconcileScheduler({
     listUncertainRequests: (limit) => runtimeStore.listUncertainRequests(limit),
