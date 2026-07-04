@@ -251,6 +251,7 @@ import {
   BRIDGE_HEARTBEAT_METHOD,
   handleNotificationSseRoute,
 } from '../src/server/notificationSseRoute.js'
+import { handleStatusRoutes } from '../src/server/statusRoutes.js'
 import { handleLocalStateRoutes } from '../src/server/localStateRoutes.js'
 import {
   createRuntimeReconcileFailurePatch,
@@ -349,6 +350,7 @@ try {
   await smokeThreadTitleCache()
   await smokeThreadSearchIndex()
   await smokeThreadRoutes()
+  await smokeStatusRoutes()
   await smokeWorkspaceRootsState()
   await smokeWorkspaceMetaRoutes()
   await smokeProjectRoots()
@@ -3367,6 +3369,125 @@ async function smokeThreadRoutes(): Promise<void> {
     { method: 'GET' } as never,
     createRouteTestResponse().response as never,
     new URL('http://127.0.0.1/codex-api/thread-search'),
+    dependencies,
+  ), false)
+}
+
+async function smokeStatusRoutes(): Promise<void> {
+  const desktopStatus = {
+    available: true,
+    platform: 'win32',
+    appInstalled: true,
+    appRunning: true,
+    appUserModelId: 'OpenAI.Codex!App',
+    reason: '',
+  }
+  const refreshResult = {
+    requested: true,
+    message: 'refresh requested',
+  }
+  const tunnelStatus = {
+    enabled: true,
+    active: true,
+    publicUrl: 'https://demo.trycloudflare.com',
+    configPath: 'config.json',
+    configuredCommand: 'cloudflared',
+    resolvedCommand: 'cloudflared',
+    cloudflaredAvailable: true,
+    logPath: 'cx-codex.out.log',
+    lastDetectedAtIso: '2026-01-01T00:00:00.000Z',
+    reason: 'ok',
+  }
+  const bodies: unknown[] = [
+    { enabled: false, cloudflaredCommand: ' C:\\tools\\cloudflared.exe ' },
+    ['bad'],
+  ]
+  const tunnelUpdates: unknown[] = []
+  let shouldFailRefresh = false
+  const dependencies = {
+    readJsonBody: async () => bodies.shift(),
+    getDesktopAppRefreshStatus: async () => desktopStatus,
+    requestDesktopAppRefresh: async () => {
+      if (shouldFailRefresh) throw new Error('refresh unavailable')
+      return refreshResult
+    },
+    getTunnelStatus: async () => tunnelStatus,
+    updateTunnelConfig: async (update: unknown) => {
+      tunnelUpdates.push(update)
+      return tunnelStatus
+    },
+    getErrorMessage: (error: unknown, fallback: string) => getErrorMessage(error, fallback),
+  }
+
+  const desktopStatusResponse = createRouteTestResponse()
+  assert.equal(await handleStatusRoutes(
+    { method: 'GET' } as never,
+    desktopStatusResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/desktop-app/status'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(desktopStatusResponse.body), { data: desktopStatus })
+
+  const refreshResponse = createRouteTestResponse()
+  assert.equal(await handleStatusRoutes(
+    { method: 'POST' } as never,
+    refreshResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/desktop-app/refresh'),
+    dependencies,
+  ), true)
+  assert.equal(refreshResponse.response.statusCode, 202)
+  assert.deepEqual(JSON.parse(refreshResponse.body), { data: refreshResult })
+
+  shouldFailRefresh = true
+  const refreshFailureResponse = createRouteTestResponse()
+  assert.equal(await handleStatusRoutes(
+    { method: 'POST' } as never,
+    refreshFailureResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/desktop-app/refresh'),
+    dependencies,
+  ), true)
+  assert.equal(refreshFailureResponse.response.statusCode, 409)
+  assert.deepEqual(JSON.parse(refreshFailureResponse.body), { error: 'refresh unavailable' })
+
+  const tunnelStatusResponse = createRouteTestResponse()
+  assert.equal(await handleStatusRoutes(
+    { method: 'GET' } as never,
+    tunnelStatusResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/tunnel-status'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(tunnelStatusResponse.body), { data: tunnelStatus })
+
+  const tunnelUpdateResponse = createRouteTestResponse()
+  assert.equal(await handleStatusRoutes(
+    { method: 'PUT' } as never,
+    tunnelUpdateResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/tunnel-status'),
+    dependencies,
+  ), true)
+  assert.deepEqual(tunnelUpdates, [{
+    enabled: false,
+    cloudflaredCommand: ' C:\\tools\\cloudflared.exe ',
+  }])
+  assert.deepEqual(JSON.parse(tunnelUpdateResponse.body), { data: tunnelStatus })
+
+  const invalidTunnelUpdateResponse = createRouteTestResponse()
+  assert.equal(await handleStatusRoutes(
+    { method: 'PUT' } as never,
+    invalidTunnelUpdateResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/tunnel-status'),
+    dependencies,
+  ), true)
+  assert.deepEqual(tunnelUpdates[1], {
+    enabled: null,
+    cloudflaredCommand: undefined,
+  })
+  assert.deepEqual(JSON.parse(invalidTunnelUpdateResponse.body), { data: tunnelStatus })
+
+  assert.equal(await handleStatusRoutes(
+    { method: 'GET' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/desktop-app/refresh'),
     dependencies,
   ), false)
 }

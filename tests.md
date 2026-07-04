@@ -4318,6 +4318,39 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Status routes 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/statusRoutes.ts`、`src/server/desktopAppRefresh.ts`、`src/server/tunnelStatus.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1` 和 `scripts/verify-release.ps1`。
+- `dist/` 与 `dist-cli/` 已存在，或可用完整 release gate 重新构建。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+4. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+5. 检查 release package smoke 输出，确认 zip 必检清单包含 `src\server\statusRoutes.ts`。
+
+#### Expected Results
+- `GET /codex-api/desktop-app/status` 继续返回官方 Codex 桌面端刷新状态。
+- `POST /codex-api/desktop-app/refresh` 成功时继续返回 202 和刷新请求结果；失败时继续返回 409 和错误文案。
+- `GET /codex-api/tunnel-status` 继续返回 Cloudflare Tunnel 状态。
+- `PUT /codex-api/tunnel-status` 继续从 JSON body 读取 `enabled` 和 `cloudflaredCommand`，并调用 `updateTunnelConfig`。
+- `codexAppServerBridge.ts` 不再内联 desktop/tunnel status route 分支，而是委托 `handleStatusRoutes`。
+- Server module smoke 覆盖桌面状态读取、刷新成功、刷新失败、隧道状态读取、隧道配置更新、非法 body 归一化和未命中方法。
+- Release package smoke 会在 zip 缺少 `src\server\statusRoutes.ts` 时失败。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/statusRoutes.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1`、`scripts/verify-release.ps1` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，输出 `server module smoke ok`，覆盖 status route 委托、刷新错误映射和 tunnel update body 归一化。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`。
+
+---
+
 ### Feature: Local state routes 模块化
 
 #### Prerequisites

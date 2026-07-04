@@ -5,8 +5,6 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoutes.js'
-import { getDesktopAppRefreshStatus, requestDesktopAppRefresh } from './desktopAppRefresh.js'
-import { getTunnelStatus, updateTunnelConfig } from './tunnelStatus.js'
 import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } from './runtimeStore.js'
 import {
   type BridgeNotificationEvent,
@@ -52,6 +50,7 @@ import { handleWorkspaceMetaRoutes } from './workspaceMetaRoutes.js'
 import { handleProjectRootRoutes } from './projectRootRoutes.js'
 import { handleComposerFileSearchRoutes } from './composerFileSearchRoutes.js'
 import { handleThreadRoutes } from './threadRoutes.js'
+import { handleStatusRoutes } from './statusRoutes.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   fetchGithubTrending,
@@ -1830,39 +1829,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'GET' && url.pathname === '/codex-api/desktop-app/status') {
-        const status = await getDesktopAppRefreshStatus()
-        setJson(res, 200, { data: status })
-        return
-      }
-
-      if (req.method === 'POST' && url.pathname === '/codex-api/desktop-app/refresh') {
-        try {
-          const result = await requestDesktopAppRefresh()
-          setJson(res, 202, { data: result })
-        } catch (error) {
-          setJson(res, 409, { error: getErrorMessage(error, 'Failed to refresh the official Codex desktop app') })
-        }
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/tunnel-status') {
-        const status = await getTunnelStatus()
-        setJson(res, 200, { data: status })
-        return
-      }
-
-      if (req.method === 'PUT' && url.pathname === '/codex-api/tunnel-status') {
-        const payload = await readJsonBody(req)
-        const record =
-          payload && typeof payload === 'object' && !Array.isArray(payload)
-            ? payload as Record<string, unknown>
-            : {}
-        const status = await updateTunnelConfig({
-          enabled: typeof record.enabled === 'boolean' ? record.enabled : null,
-          cloudflaredCommand: typeof record.cloudflaredCommand === 'string' ? record.cloudflaredCommand : undefined,
-        })
-        setJson(res, 200, { data: status })
+      if (await handleStatusRoutes(req, res, url, {
+        readJsonBody,
+      })) {
         return
       }
 
