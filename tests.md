@@ -4272,6 +4272,33 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server session store cleanup 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerSessionCleanup.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 pending server requests、shared RPC reads、thread list cache、thread token usage 和 plan mode turn store 的清理顺序。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+4. 执行 `node_modules\.bin\vite.cmd build`。
+5. 执行 `node_modules\.bin\tsup.cmd`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+7. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+8. 代码审查确认 `src/server/codexAppServerBridge.ts` 的 process error、exit、restart 和 dispose 路径均通过 `clearSessionStores()` 清理 session stores。
+
+#### Expected Results
+- App Server session store cleanup 集中在 `src/server/appServerSessionCleanup.ts`。
+- process error、unexpected exit、restart 和 dispose 仍清理 pending server requests、shared reads、thread list cache、thread token usage 和 plan mode turn store。
+- pending RPC reject、queued RPC reject、process 标志重置和 stdout line buffer 清理顺序保持在 bridge 主类内，不被 helper 隐藏。
+- server module smoke、构建、治理门禁和 release gate 均通过。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `src/server/appServerSessionCleanup.ts`，撤销 `scripts/server-module-smoke.ts` 中的 session cleanup smoke，并把 store 清理调用恢复到 `src/server/codexAppServerBridge.ts` 的 process error、exit、restart 和 dispose 路径。
+
+---
+
 ### Feature: App Server RPC timeout recovery 模块化
 
 #### Prerequisites

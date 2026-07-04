@@ -110,6 +110,7 @@ import { readAppServerThreadRuntimeSnapshot } from '../src/server/appServerThrea
 import { AppServerThreadListAugmenter } from '../src/server/appServerThreadListAugment.js'
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { AppServerPendingRpcStore } from '../src/server/appServerPendingRpcStore.js'
+import { clearAppServerSessionStores } from '../src/server/appServerSessionCleanup.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
 import {
   normalizePinnedThreadIds,
@@ -337,6 +338,7 @@ const originalNow = Date.now
 try {
   await smokeAppServerClientInfo()
   smokeAppServerPendingRpcStore()
+  smokeAppServerSessionCleanup()
   smokePendingServerRequests()
   smokeAppServerJsonRpcWire()
   smokeAppServerInitialization()
@@ -501,6 +503,32 @@ function smokeAppServerPendingRpcStore(): void {
   store.rejectAll(failure)
   assert.equal(store.count, 0)
   assert.deepEqual(rejected, [failure, failure])
+}
+
+function smokeAppServerSessionCleanup(): void {
+  const calls: string[] = []
+  clearAppServerSessionStores({
+    pendingServerRequests: {
+      clear: () => calls.push('pendingServerRequests.clear'),
+    },
+    rpcCache: {
+      clearSharedReads: () => calls.push('rpcCache.clearSharedReads'),
+      clearThreadList: () => calls.push('rpcCache.clearThreadList'),
+    },
+    threadTokenUsage: {
+      clear: () => calls.push('threadTokenUsage.clear'),
+    },
+    planModeTurns: {
+      clearAll: () => calls.push('planModeTurns.clearAll'),
+    },
+  })
+  assert.deepEqual(calls, [
+    'pendingServerRequests.clear',
+    'rpcCache.clearSharedReads',
+    'rpcCache.clearThreadList',
+    'threadTokenUsage.clear',
+    'planModeTurns.clearAll',
+  ])
 }
 
 function smokePendingServerRequests(): void {

@@ -113,6 +113,7 @@ import {
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
 import { AppServerPendingRpcStore } from './appServerPendingRpcStore.js'
+import { clearAppServerSessionStores } from './appServerSessionCleanup.js'
 import { AppServerMethodCatalog } from './appServerMethodCatalog.js'
 import { captureAppServerNotificationState } from './appServerNotificationState.js'
 import {
@@ -252,11 +253,7 @@ class AppServerProcess {
       logBridgeError('Codex app-server process error', error)
       this.pending.rejectAll(error)
       this.rejectQueuedRpcCalls(error)
-      this.pendingServerRequests.clear()
-      this.rpcCache.clearSharedReads()
-      this.rpcCache.clearThreadList()
-      this.threadTokenUsage.clear()
-      this.planModeTurns.clearAll()
+      this.clearSessionStores()
       this.process = null
       this.initialized = false
       this.initializePromise = null
@@ -276,11 +273,7 @@ class AppServerProcess {
       if (this.process === proc) {
         this.pending.rejectAll(failure)
         this.rejectQueuedRpcCalls(failure)
-        this.pendingServerRequests.clear()
-        this.rpcCache.clearSharedReads()
-        this.rpcCache.clearThreadList()
-        this.threadTokenUsage.clear()
-        this.planModeTurns.clearAll()
+        this.clearSessionStores()
         this.process = null
         this.initialized = false
         this.initializePromise = null
@@ -291,6 +284,15 @@ class AppServerProcess {
 
   private rejectQueuedRpcCalls(error: Error): void {
     this.rpcQueue.rejectAll(error)
+  }
+
+  private clearSessionStores(): void {
+    clearAppServerSessionStores({
+      pendingServerRequests: this.pendingServerRequests,
+      rpcCache: this.rpcCache,
+      threadTokenUsage: this.threadTokenUsage,
+      planModeTurns: this.planModeTurns,
+    })
   }
 
   private sendLine(payload: Record<string, unknown>): void {
@@ -368,11 +370,7 @@ class AppServerProcess {
     this.stdoutLineBuffer.clear()
     this.pending.rejectAll(new Error(`codex app-server restarted: ${reason}`))
     this.rejectQueuedRpcCalls(new Error(`codex app-server restarted: ${reason}`))
-    this.pendingServerRequests.clear()
-    this.rpcCache.clearSharedReads()
-    this.rpcCache.clearThreadList()
-    this.threadTokenUsage.clear()
-    this.planModeTurns.clearAll()
+    this.clearSessionStores()
 
     try {
       proc.stdin.end()
@@ -728,11 +726,7 @@ class AppServerProcess {
     this.stdoutLineBuffer.clear()
 
     this.pending.rejectAll(failure)
-    this.pendingServerRequests.clear()
-    this.rpcCache.clearSharedReads()
-    this.rpcCache.clearThreadList()
-    this.threadTokenUsage.clear()
-    this.planModeTurns.clearAll()
+    this.clearSessionStores()
 
     try {
       proc.stdin.end()
