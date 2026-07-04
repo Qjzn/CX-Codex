@@ -148,6 +148,7 @@ import {
   scoreFileCandidate,
   searchComposerFileCandidates,
 } from '../src/server/composerFileSearch.js'
+import { handleComposerFileSearchRoutes } from '../src/server/composerFileSearchRoutes.js'
 import {
   decodeHtmlEntities,
   normalizeGithubDescriptionTranslationText,
@@ -337,6 +338,7 @@ try {
   smokeHttpJsonResponse()
   smokeErrorMessage()
   await smokeComposerFileSearch()
+  await smokeComposerFileSearchRoutes()
   await smokeGithubTrending()
   smokeCodexPaths()
   await smokeCodexAuth()
@@ -2649,6 +2651,62 @@ async function smokeComposerFileSearch(): Promise<void> {
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+}
+
+async function smokeComposerFileSearchRoutes(): Promise<void> {
+  const bodies: unknown[] = [
+    { cwd: ' C:\\work ', query: ' app ', limit: 3 },
+    { cwd: '', query: 'app' },
+    { cwd: 'C:\\work', query: 'fail' },
+  ]
+  const searchCalls: Array<{ cwd: string; query: string; limit: unknown }> = []
+  const dependencies = {
+    readJsonBody: async () => bodies.shift(),
+    searchComposerFiles: async (args: { cwd: string; query: string; limit: unknown }) => {
+      searchCalls.push(args)
+      if (!args.cwd) throw new ComposerFileSearchError('Missing cwd', 400)
+      if (args.query === 'fail') throw new Error('backend failed')
+      return [{ path: 'src/App.vue' }]
+    },
+    getErrorMessage: (error: unknown, fallback: string) => getErrorMessage(error, fallback),
+  }
+
+  const success = createRouteTestResponse()
+  assert.equal(await handleComposerFileSearchRoutes(
+    { method: 'POST' } as never,
+    success.response as never,
+    new URL('http://127.0.0.1/codex-api/composer-file-search'),
+    dependencies,
+  ), true)
+  assert.deepEqual(searchCalls[0], { cwd: ' C:\\work ', query: 'app', limit: 3 })
+  assert.deepEqual(JSON.parse(success.body), { data: [{ path: 'src/App.vue' }] })
+
+  const missingCwd = createRouteTestResponse()
+  assert.equal(await handleComposerFileSearchRoutes(
+    { method: 'POST' } as never,
+    missingCwd.response as never,
+    new URL('http://127.0.0.1/codex-api/composer-file-search'),
+    dependencies,
+  ), true)
+  assert.equal(missingCwd.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(missingCwd.body), { error: 'Missing cwd' })
+
+  const genericFailure = createRouteTestResponse()
+  assert.equal(await handleComposerFileSearchRoutes(
+    { method: 'POST' } as never,
+    genericFailure.response as never,
+    new URL('http://127.0.0.1/codex-api/composer-file-search'),
+    dependencies,
+  ), true)
+  assert.equal(genericFailure.response.statusCode, 500)
+  assert.deepEqual(JSON.parse(genericFailure.body), { error: 'backend failed' })
+
+  assert.equal(await handleComposerFileSearchRoutes(
+    { method: 'GET' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/composer-file-search'),
+    dependencies,
+  ), false)
 }
 
 async function smokeGithubTrending(): Promise<void> {

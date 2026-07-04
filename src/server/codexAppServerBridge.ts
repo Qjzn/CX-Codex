@@ -50,11 +50,8 @@ import { handleRuntimeStateRoutes } from './runtimeStateRoutes.js'
 import { handleDiagnosticsRoutes } from './diagnosticsRoutes.js'
 import { handleWorkspaceMetaRoutes } from './workspaceMetaRoutes.js'
 import { handleProjectRootRoutes } from './projectRootRoutes.js'
+import { handleComposerFileSearchRoutes } from './composerFileSearchRoutes.js'
 import { resolveCodexCommand } from '../commandResolution.js'
-import {
-  ComposerFileSearchError,
-  searchComposerFiles,
-} from './composerFileSearch.js'
 import {
   fetchGithubTrending,
   normalizeGithubTrendingLimit,
@@ -1826,24 +1823,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'POST' && url.pathname === '/codex-api/composer-file-search') {
-        const payload = asRecord(await readJsonBody(req))
-        const rawCwd = typeof payload?.cwd === 'string' ? payload.cwd : ''
-        const query = typeof payload?.query === 'string' ? payload.query.trim() : ''
-        try {
-          const data = await searchComposerFiles({
-            cwd: rawCwd,
-            query,
-            limit: payload?.limit,
-          })
-          setJson(res, 200, { data })
-        } catch (error) {
-          if (error instanceof ComposerFileSearchError) {
-            setJson(res, error.statusCode, { error: error.message })
-            return
-          }
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to search files') })
-        }
+      if (await handleComposerFileSearchRoutes(req, res, url, {
+        readJsonBody,
+      })) {
         return
       }
 
