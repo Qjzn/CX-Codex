@@ -4385,6 +4385,39 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Server request routes 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/serverRequestRoutes.ts`、`src/server/serverRequestDiagnostics.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1` 和 `scripts/verify-release.ps1`。
+- 本机可运行 server module smoke、governance gate 和 release gate；route smoke 使用注入依赖，不需要启动真实 Codex App Server。
+
+#### Steps
+1. 打开 `src/server/codexAppServerBridge.ts`，确认 `/codex-api/server-requests/respond`、`/codex-api/server-requests/pending` 和 `/codex-api/server-requests/pending/diagnostics` 统一委托 `handleServerRequestRoutes(...)`。
+2. 打开 `src/server/serverRequestRoutes.ts`，确认 route 模块只通过注入依赖读取 JSON body、响应 server request、读取 pending request 列表，并复用 `createServerRequestDiagnosticsSnapshot(...)`。
+3. 执行 `git diff --check`。
+4. 执行 `node scripts\verify-server-modules.mjs`。
+5. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+7. 确认 release package smoke 必检 `src\server\serverRequestRoutes.ts`。
+
+#### Expected Results
+- `POST /codex-api/server-requests/respond` 继续读取 JSON body、调用 App Server request response 入口，并返回 `{ ok: true }`。
+- `GET /codex-api/server-requests/pending` 继续返回原始 pending request 列表。
+- `GET /codex-api/server-requests/pending/diagnostics` 继续返回脱敏 diagnostics snapshot，不包含 request params。
+- 未匹配 method/path 返回 `false`，不吞掉后续 route。
+- `serverRequestRoutes.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/serverRequestRoutes.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1`、`scripts/verify-release.ps1` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，输出 `server module smoke ok`，覆盖 server request respond、pending list、diagnostics snapshot 和未匹配 route 返回 `false`。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\serverRequestRoutes.ts`。
+
+---
+
 ### Feature: Local state routes 模块化
 
 #### Prerequisites

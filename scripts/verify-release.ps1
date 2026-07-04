@@ -388,6 +388,7 @@ if (-not $SkipPackageSmoke) {
     "src\server\notificationSseRoute.ts",
     "src\server\projectRootRoutes.ts",
     "src\server\runtimeStateRoutes.ts",
+    "src\server\serverRequestRoutes.ts",
     "src\server\statusRoutes.ts",
     "src\server\threadRoutes.ts",
     "src\server\transcriptionRoute.ts",

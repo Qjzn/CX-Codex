@@ -124,6 +124,7 @@ import {
   toPendingServerRequestDiagnosticsList,
 } from '../src/server/serverRequestDiagnostics.js'
 import { readServerRequestReplyPayload } from '../src/server/serverRequestReply.js'
+import { handleServerRequestRoutes } from '../src/server/serverRequestRoutes.js'
 import {
   DEFAULT_WEB_BRIDGE_SETTINGS,
   normalizePermissionDecision,
@@ -336,6 +337,7 @@ try {
   smokeServerRequestPolicy()
   smokeServerRequestDiagnostics()
   smokeServerRequestReply()
+  await smokeServerRequestRoutes()
   await smokeCommandRunner()
   await smokeAppServerRollbackGit()
   await smokeFileUpload()
@@ -499,6 +501,97 @@ function smokeServerRequestReply(): void {
     () => readServerRequestReplyPayload({ id: 10 }),
     /Invalid response payload: expected "result" or "error"/,
   )
+}
+
+async function smokeServerRequestRoutes(): Promise<void> {
+  const pendingRequests = [
+    {
+      id: 1,
+      method: 'item/fileChange/requestApproval',
+      params: { prompt: 'hidden' },
+      receivedAtIso: '2026-01-01T00:00:00.000Z',
+    },
+    {
+      id: 2,
+      method: 'mcp/server/elicitation/request',
+      params: { prompt: 'hidden' },
+      receivedAtIso: '2026-01-01T00:00:01.000Z',
+    },
+  ]
+  const bodies: unknown[] = [{ id: 1, result: { action: 'approve' } }]
+  const respondedPayloads: unknown[] = []
+  let listCount = 0
+  const dependencies = {
+    readJsonBody: async () => bodies.shift(),
+    respondToServerRequest: async (payload: unknown) => {
+      respondedPayloads.push(payload)
+    },
+    listPendingServerRequests: () => {
+      listCount += 1
+      return pendingRequests
+    },
+  }
+
+  const respond = createRouteTestResponse()
+  assert.equal(await handleServerRequestRoutes(
+    { method: 'POST' } as never,
+    respond.response as never,
+    new URL('http://127.0.0.1/codex-api/server-requests/respond'),
+    dependencies,
+  ), true)
+  assert.deepEqual(respondedPayloads, [{ id: 1, result: { action: 'approve' } }])
+  assert.deepEqual(JSON.parse(respond.body), { ok: true })
+
+  const pending = createRouteTestResponse()
+  assert.equal(await handleServerRequestRoutes(
+    { method: 'GET' } as never,
+    pending.response as never,
+    new URL('http://127.0.0.1/codex-api/server-requests/pending'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(pending.body), { data: pendingRequests })
+
+  const diagnostics = createRouteTestResponse()
+  assert.equal(await handleServerRequestRoutes(
+    { method: 'GET' } as never,
+    diagnostics.response as never,
+    new URL('http://127.0.0.1/codex-api/server-requests/pending/diagnostics'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(diagnostics.body), {
+    data: {
+      pendingRequestCount: 2,
+      pendingByKind: {
+        permission: 0,
+        approval: 1,
+        elicitation: 1,
+        tool: 0,
+        request: 0,
+      },
+      pendingRequests: [
+        {
+          id: 1,
+          method: 'item/fileChange/requestApproval',
+          kind: 'approval',
+          receivedAtIso: '2026-01-01T00:00:00.000Z',
+        },
+        {
+          id: 2,
+          method: 'mcp/server/elicitation/request',
+          kind: 'elicitation',
+          receivedAtIso: '2026-01-01T00:00:01.000Z',
+        },
+      ],
+    },
+  })
+  assert.equal(listCount, 2)
+
+  assert.equal(await handleServerRequestRoutes(
+    { method: 'POST' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/server-requests/pending'),
+    dependencies,
+  ), false)
 }
 
 function smokeAppServerJsonRpcWire(): void {

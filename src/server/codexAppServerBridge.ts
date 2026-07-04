@@ -52,6 +52,7 @@ import { handleComposerFileSearchRoutes } from './composerFileSearchRoutes.js'
 import { handleThreadRoutes } from './threadRoutes.js'
 import { handleStatusRoutes } from './statusRoutes.js'
 import { handleGithubTrendingRoutes } from './githubTrendingRoutes.js'
+import { handleServerRequestRoutes } from './serverRequestRoutes.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   runCommand,
@@ -157,7 +158,6 @@ import {
   readServerRequestReplyPayload,
   type ServerRequestReply,
 } from './serverRequestReply.js'
-import { createServerRequestDiagnosticsSnapshot } from './serverRequestDiagnostics.js'
 import {
   DEFAULT_WEB_BRIDGE_SETTINGS,
   normalizeWebBridgeSettings,
@@ -1539,22 +1539,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'POST' && url.pathname === '/codex-api/server-requests/respond') {
-        const payload = await readJsonBody(req)
-        await appServer.respondToServerRequest(payload)
-        setJson(res, 200, { ok: true })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/server-requests/pending') {
-        setJson(res, 200, { data: appServer.listPendingServerRequests() })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/server-requests/pending/diagnostics') {
-        setJson(res, 200, {
-          data: createServerRequestDiagnosticsSnapshot(appServer.listPendingServerRequests()),
-        })
+      if (await handleServerRequestRoutes(req, res, url, {
+        readJsonBody,
+        respondToServerRequest: (payload) => appServer.respondToServerRequest(payload),
+        listPendingServerRequests: () => appServer.listPendingServerRequests(),
+      })) {
         return
       }
 
