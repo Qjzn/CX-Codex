@@ -3915,3 +3915,34 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
 - 2026-07-04 静态验证：`git diff --check` 通过。
 - 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke。
+
+---
+
+### Feature: schema audit 摘要脱敏治理门禁
+
+#### Prerequisites
+- 当前仓库包含 `docs/app-server-schema-audit-summary.json`。
+- 当前仓库包含 `scripts/verify-governance.ps1`。
+- 本机可运行 `npm.cmd run verify:governance`。
+
+#### Steps
+1. 执行 `npm.cmd run verify:governance`，确认当前摘要通过治理门禁。
+2. 审查 `scripts/verify-governance.ps1`，确认门禁禁止摘要包含 raw audit 的 `repository`、`generated`、`comparison.*.added` 和 `comparison.*.removed` 字段。
+3. 审查 `scripts/verify-governance.ps1`，确认 `auditOutput`、`baseline.typescript` 和 `baseline.json` 必须是相对仓库路径。
+4. 审查 `scripts/verify-governance.ps1`，确认 `representativeAdded` 和 `representativeRemoved` 最多保留 3 个非空字符串。
+5. 执行 `git diff --check`。
+6. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip`。
+
+#### Expected Results
+- 未脱敏 raw audit 字段不会被允许进入已提交摘要。
+- 本机绝对路径不会被允许进入 `docs/app-server-schema-audit-summary.json`。
+- schema diff 代表项保持小列表，避免把完整 generated schema 名称集合提交为治理摘要。
+- release 快速门禁继续通过。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `scripts/verify-governance.ps1` 中的 schema audit 脱敏校验、changelog 和本节测试记录。
+
+#### Regression Evidence
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Using PowerShell: powershell.exe (5.1.26100.8655)` 和 `Governance docs check passed.`。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。

@@ -47,6 +47,65 @@ function Assert-IssueTemplate {
   )
 }
 
+function Get-JsonPropertyNames {
+  param([object]$Value)
+
+  if ($null -eq $Value) {
+    return @()
+  }
+  return @($Value.PSObject.Properties | ForEach-Object { $_.Name })
+}
+
+function Assert-JsonPropertyMissing {
+  param(
+    [object]$Value,
+    [string]$PropertyName,
+    [string]$Context
+  )
+
+  if ((Get-JsonPropertyNames $Value) -contains $PropertyName) {
+    throw "$Context must not include raw audit property '$PropertyName'."
+  }
+}
+
+function Assert-RelativeRepoPath {
+  param(
+    [string]$Value,
+    [string]$Context
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Value)) {
+    throw "$Context must be a non-empty relative repository path."
+  }
+  if ([System.IO.Path]::IsPathRooted($Value) -or $Value -match "^[A-Za-z]:") {
+    throw "$Context must not contain an absolute local path: $Value"
+  }
+}
+
+function Assert-RepresentativeList {
+  param(
+    [object]$Value,
+    [string]$Context
+  )
+
+  if ($null -eq $Value) {
+    throw "$Context is missing."
+  }
+  if ($Value -is [string]) {
+    $items = @($Value)
+  } else {
+    $items = @($Value)
+  }
+  if ($items.Count -gt 3) {
+    throw "$Context must contain at most 3 representative items."
+  }
+  foreach ($item in $items) {
+    if (-not ($item -is [string]) -or [string]::IsNullOrWhiteSpace($item)) {
+      throw "$Context must contain only non-empty strings."
+    }
+  }
+}
+
 $requiredFiles = @(
   "README.md",
   "README.zh-CN.md",
@@ -310,11 +369,20 @@ if ($schemaAuditSummary.reviewStatus -ne "drift-recorded") {
 if ($schemaAuditSummary.auditCommand -ne "npm.cmd run audit:app-server-schemas") {
   throw "docs/app-server-schema-audit-summary.json auditCommand must document the canonical audit command."
 }
+Assert-JsonPropertyMissing $schemaAuditSummary "repository" "docs/app-server-schema-audit-summary.json"
+Assert-JsonPropertyMissing $schemaAuditSummary "generated" "docs/app-server-schema-audit-summary.json"
+Assert-RelativeRepoPath $schemaAuditSummary.auditOutput "docs/app-server-schema-audit-summary.json auditOutput"
+Assert-RelativeRepoPath $schemaAuditSummary.baseline.typescript "docs/app-server-schema-audit-summary.json baseline.typescript"
+Assert-RelativeRepoPath $schemaAuditSummary.baseline.json "docs/app-server-schema-audit-summary.json baseline.json"
 foreach ($key in @("typescriptRoot", "typescriptV2", "jsonRoot", "jsonV2")) {
   $row = $schemaAuditSummary.comparison.$key
   if (-not $row) {
     throw "docs/app-server-schema-audit-summary.json missing comparison.$key."
   }
+  Assert-JsonPropertyMissing $row "added" "docs/app-server-schema-audit-summary.json comparison.$key"
+  Assert-JsonPropertyMissing $row "removed" "docs/app-server-schema-audit-summary.json comparison.$key"
+  Assert-RepresentativeList $row.representativeAdded "docs/app-server-schema-audit-summary.json comparison.$key.representativeAdded"
+  Assert-RepresentativeList $row.representativeRemoved "docs/app-server-schema-audit-summary.json comparison.$key.representativeRemoved"
   foreach ($field in @("baselineCount", "generatedCount", "addedCount", "removedCount")) {
     if ($null -eq $row.$field) {
       throw "docs/app-server-schema-audit-summary.json missing comparison.$key.$field."

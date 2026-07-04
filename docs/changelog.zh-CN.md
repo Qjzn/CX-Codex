@@ -17,7 +17,7 @@
   - 本地 `package:release`、`setup:windows`、`test:7420*` 和 `audit:app-server-schemas` 也统一走同一个 PowerShell 运行器，减少 Windows 机器上因单一 PowerShell 命令挂起或不可用导致的验证/打包中断。
   - 新增 `docs/app-server-schema-audit-summary.json`，把最新 App Server schema drift 摘要从本地临时输出收口为可审查文档。
   - 新增 `audit:app-server-schemas:update-summary`，可把最新 raw schema audit 转成脱敏、可提交的 `docs/app-server-schema-audit-summary.json`，避免把本机绝对路径或完整生成目录带入仓库。
-  - Release/governance 门禁会校验 schema audit 摘要结构，避免协议差异记录丢失或无法复核。
+  - Release/governance 门禁会校验 schema audit 摘要结构、相对路径、代表项列表和 raw audit 字段黑名单，避免协议差异记录丢失、无法复核或泄漏本机路径。
   - App Server `thread/read` 未知 thread/turn status 会在 health、diagnostics 和诊断中心按来源聚合计数，方便发现官方协议新增状态且不误判为运行态。
   - 诊断中心新增 schema audit 摘要卡片，展示审计状态、生成时间、官方文档入口和 TypeScript/JSON schema 差异计数。
   - 诊断中心新增权限请求队列，由服务端脱敏并分类展示 App Server pending permission、approval、elicitation 或 tool request，便于排查任务等待授权的原因。
