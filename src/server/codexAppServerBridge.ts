@@ -54,6 +54,7 @@ import { handleStatusRoutes } from './statusRoutes.js'
 import { handleGithubTrendingRoutes } from './githubTrendingRoutes.js'
 import { handleServerRequestRoutes } from './serverRequestRoutes.js'
 import { handleFileUploadRoute } from './fileUploadRoute.js'
+import { handleRuntimeActionRoutes } from './runtimeActionRoutes.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   runCommand,
@@ -1495,32 +1496,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'POST' && url.pathname === '/codex-api/runtime/send') {
-        const payload = await readJsonBody(req)
-        const result = await startRuntimeTurn(payload)
-        setJson(res, result.status === 'start_uncertain' ? 202 : 200, { data: result })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/runtime/request') {
-        const clientMessageId = url.searchParams.get('clientMessageId')?.trim() ?? ''
-        if (!clientMessageId) {
-          setJson(res, 400, { error: 'Missing clientMessageId' })
-          return
-        }
-        const request = runtimeStore.getLatestRequestByClientMessageId(clientMessageId)
-        if (!request) {
-          setJson(res, 404, { data: null })
-          return
-        }
-        setJson(res, 200, { data: request })
-        return
-      }
-
-      if (req.method === 'POST' && url.pathname === '/codex-api/runtime/interrupt') {
-        const payload = await readJsonBody(req)
-        const result = await interruptRuntimeTurn(payload)
-        setJson(res, result.status === 'stop_uncertain' ? 202 : 200, { data: result })
+      if (await handleRuntimeActionRoutes(req, res, url, {
+        readJsonBody,
+        startRuntimeTurn,
+        interruptRuntimeTurn,
+        getLatestRequestByClientMessageId: (clientMessageId) => runtimeStore.getLatestRequestByClientMessageId(clientMessageId),
+      })) {
         return
       }
 

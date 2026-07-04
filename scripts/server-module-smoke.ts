@@ -240,6 +240,7 @@ import {
   parseRuntimeInterruptPayload,
   parseRuntimeSendPayload,
 } from '../src/server/runtimePayload.js'
+import { handleRuntimeActionRoutes } from '../src/server/runtimeActionRoutes.js'
 import { handleDiagnosticsRoutes } from '../src/server/diagnosticsRoutes.js'
 import {
   normalizeRuntimeEventForReplay,
@@ -363,6 +364,7 @@ try {
   await smokeProjectRoots()
   await smokeProjectRootRoutes()
   smokeRuntimePayloadParsing()
+  await smokeRuntimeActionRoutes()
   await smokeDiagnosticsRoutes()
   smokeAppServerNotificationReplay()
   await smokeLocalStateRoutes()
@@ -4407,6 +4409,132 @@ function smokeRuntimePayloadParsing(): void {
     () => parseRuntimeInterruptPayload({ threadId: 'thread-a' }),
     /runtime\/interrupt requires turnId/,
   )
+}
+
+async function smokeRuntimeActionRoutes(): Promise<void> {
+  const bodies: unknown[] = [
+    { input: 'hello' },
+    { input: 'wait' },
+    { threadId: 'thread-a', turnId: 'turn-a' },
+    { threadId: 'thread-b', turnId: 'turn-b' },
+  ]
+  const startedPayloads: unknown[] = []
+  const interruptedPayloads: unknown[] = []
+  const knownRequest: RuntimeRequestRecord = {
+    requestId: 'request-a',
+    clientMessageId: 'client-a',
+    threadId: 'thread-a',
+    turnId: 'turn-a',
+    status: 'running',
+    promptHash: 'hash-a',
+    mode: 'execute',
+    payload: { input: 'hello' },
+    retryCount: 0,
+    createdAtIso: '2026-01-01T00:00:00.000Z',
+    updatedAtIso: '2026-01-01T00:00:01.000Z',
+    lastError: null,
+  }
+  const dependencies = {
+    readJsonBody: async () => bodies.shift(),
+    startRuntimeTurn: async (payload: unknown) => {
+      startedPayloads.push(payload)
+      return {
+        status: startedPayloads.length === 1 ? 'running' : 'start_uncertain',
+        requestId: `start-${startedPayloads.length}`,
+      }
+    },
+    interruptRuntimeTurn: async (payload: unknown) => {
+      interruptedPayloads.push(payload)
+      return {
+        status: interruptedPayloads.length === 1 ? 'stopped' : 'stop_uncertain',
+        requestId: `stop-${interruptedPayloads.length}`,
+      }
+    },
+    getLatestRequestByClientMessageId: (clientMessageId: string) => (
+      clientMessageId === 'client-a' ? knownRequest : null
+    ),
+  }
+
+  const sendRunning = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'POST' } as never,
+    sendRunning.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/send'),
+    dependencies,
+  ), true)
+  assert.equal(sendRunning.response.statusCode, 200)
+  assert.deepEqual(JSON.parse(sendRunning.body), { data: { status: 'running', requestId: 'start-1' } })
+
+  const sendUncertain = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'POST' } as never,
+    sendUncertain.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/send'),
+    dependencies,
+  ), true)
+  assert.equal(sendUncertain.response.statusCode, 202)
+  assert.deepEqual(startedPayloads, [{ input: 'hello' }, { input: 'wait' }])
+  assert.deepEqual(JSON.parse(sendUncertain.body), { data: { status: 'start_uncertain', requestId: 'start-2' } })
+
+  const missingRequestId = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'GET' } as never,
+    missingRequestId.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/request?clientMessageId=%20'),
+    dependencies,
+  ), true)
+  assert.equal(missingRequestId.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(missingRequestId.body), { error: 'Missing clientMessageId' })
+
+  const missingRequest = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'GET' } as never,
+    missingRequest.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/request?clientMessageId=missing'),
+    dependencies,
+  ), true)
+  assert.equal(missingRequest.response.statusCode, 404)
+  assert.deepEqual(JSON.parse(missingRequest.body), { data: null })
+
+  const foundRequest = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'GET' } as never,
+    foundRequest.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/request?clientMessageId=%20client-a%20'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(foundRequest.body), { data: knownRequest })
+
+  const stopped = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'POST' } as never,
+    stopped.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/interrupt'),
+    dependencies,
+  ), true)
+  assert.equal(stopped.response.statusCode, 200)
+  assert.deepEqual(JSON.parse(stopped.body), { data: { status: 'stopped', requestId: 'stop-1' } })
+
+  const stopUncertain = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'POST' } as never,
+    stopUncertain.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/interrupt'),
+    dependencies,
+  ), true)
+  assert.equal(stopUncertain.response.statusCode, 202)
+  assert.deepEqual(interruptedPayloads, [
+    { threadId: 'thread-a', turnId: 'turn-a' },
+    { threadId: 'thread-b', turnId: 'turn-b' },
+  ])
+  assert.deepEqual(JSON.parse(stopUncertain.body), { data: { status: 'stop_uncertain', requestId: 'stop-2' } })
+
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'GET' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/send'),
+    dependencies,
+  ), false)
 }
 
 function smokeAppServerRuntimeSnapshotRecovery(): void {
