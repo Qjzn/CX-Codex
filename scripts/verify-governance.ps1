@@ -339,6 +339,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "src\server\localStateRoutes.ts",
   "src\server\notificationReplayRoute.ts",
   "src\server\notificationSseRoute.ts",
+  "src\server\appServerPendingRpcStore.ts",
   "src\server\projectRootRoutes.ts",
   "src\server\rpcProxyRoute.ts",
   "src\server\runtimeActionRoutes.ts",
@@ -369,6 +370,7 @@ Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
   "src', 'server', 'localStateRoutes.ts'",
   "src', 'server', 'notificationReplayRoute.ts'",
   "src', 'server', 'notificationSseRoute.ts'",
+  "src', 'server', 'appServerPendingRpcStore.ts'",
   "src', 'server', 'projectRootRoutes.ts'",
   "src', 'server', 'rpcProxyRoute.ts'",
   "src', 'server', 'runtimeActionRoutes.ts'",
@@ -437,7 +439,9 @@ Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "createAppServerRpcTimeoutRecoveryDecision",
   "smokeAppServerRpcTimeoutRecovery",
   "readThreadReadIncludeTurnsForMethod",
-  "smokeAppServerThreadReadParams"
+  "smokeAppServerThreadReadParams",
+  "AppServerPendingRpcStore",
+  "smokeAppServerPendingRpcStore"
 )
 
 Assert-ContentIncludes "scripts/verify-governance.ps1" @(

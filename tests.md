@@ -4301,6 +4301,33 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server pending RPC store 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerPendingRpcStore.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 pending RPC 记录、命中判断、finalize 清理、missing finalize 和 rejectAll 分支。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+4. 执行 `node_modules\.bin\vite.cmd build`。
+5. 执行 `node_modules\.bin\tsup.cmd`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+7. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+8. 代码审查确认 `src/server/codexAppServerBridge.ts` 通过 `AppServerPendingRpcStore` 管理 pending RPC，不再内联 pending Map、finalize 或 rejectAll 逻辑。
+
+#### Expected Results
+- pending RPC 的记录、`has()`、`finalize()`、timeout 清理和批量 reject 集中在 `src/server/appServerPendingRpcStore.ts`。
+- App Server stdout 响应、RPC timeout、进程 error/exit、restart 和 dispose 仍按原语义清理 pending RPC。
+- `pendingRpcCount` 仍来自当前 pending RPC 数量，健康快照和重启/退出日志语义不变。
+- server module smoke、构建、治理门禁和 release gate 均通过。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `src/server/appServerPendingRpcStore.ts`，撤销 `scripts/server-module-smoke.ts` 中的 pending RPC store smoke，并把 pending Map、`finalizePendingRpc()` 和 `rejectAllPending()` 恢复到 `src/server/codexAppServerBridge.ts`。
+
+---
+
 ### Feature: App Server thread/read includeTurns 参数判定模块化
 
 #### Prerequisites

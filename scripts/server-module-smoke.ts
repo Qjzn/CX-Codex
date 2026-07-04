@@ -109,6 +109,7 @@ import {
 import { readAppServerThreadRuntimeSnapshot } from '../src/server/appServerThreadRuntimeSnapshot.js'
 import { AppServerThreadListAugmenter } from '../src/server/appServerThreadListAugment.js'
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
+import { AppServerPendingRpcStore } from '../src/server/appServerPendingRpcStore.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
 import {
   normalizePinnedThreadIds,
@@ -335,6 +336,7 @@ const originalNow = Date.now
 
 try {
   await smokeAppServerClientInfo()
+  smokeAppServerPendingRpcStore()
   smokePendingServerRequests()
   smokeAppServerJsonRpcWire()
   smokeAppServerInitialization()
@@ -442,6 +444,63 @@ async function smokeAppServerClientInfo(): Promise<void> {
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+}
+
+function smokeAppServerPendingRpcStore(): void {
+  const store = new AppServerPendingRpcStore()
+  const rejected: unknown[] = []
+  const firstTimeout = setTimeout(() => {}, 10_000)
+  firstTimeout.unref?.()
+  store.record(1, {
+    resolve: () => {},
+    reject: (error) => {
+      rejected.push(error)
+    },
+    method: 'thread/read',
+    params: { includeTurns: true },
+    startedAtMs: 100,
+    timeoutId: firstTimeout,
+  })
+
+  assert.equal(store.count, 1)
+  assert.equal(store.has(1), true)
+  assert.equal(store.has(2), false)
+
+  const finalized = store.finalize(1)
+  assert.equal(finalized?.method, 'thread/read')
+  assert.deepEqual(finalized?.params, { includeTurns: true })
+  assert.equal(store.count, 0)
+  assert.equal(store.finalize(1), null)
+
+  const secondTimeout = setTimeout(() => {}, 10_000)
+  const thirdTimeout = setTimeout(() => {}, 10_000)
+  secondTimeout.unref?.()
+  thirdTimeout.unref?.()
+  store.record(2, {
+    resolve: () => {},
+    reject: (error) => {
+      rejected.push(error)
+    },
+    method: 'model/list',
+    params: {},
+    startedAtMs: 200,
+    timeoutId: secondTimeout,
+  })
+  store.record(3, {
+    resolve: () => {},
+    reject: (error) => {
+      rejected.push(error)
+    },
+    method: 'thread/list',
+    params: {},
+    startedAtMs: 300,
+    timeoutId: thirdTimeout,
+  })
+
+  const failure = new Error('app-server stopped')
+  store.rejectAll(failure)
+  assert.equal(store.count, 0)
+  assert.deepEqual(rejected, [failure, failure])
 }
 
 function smokePendingServerRequests(): void {

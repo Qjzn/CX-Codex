@@ -112,6 +112,7 @@ import {
 } from './appServerHealth.js'
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
+import { AppServerPendingRpcStore } from './appServerPendingRpcStore.js'
 import { AppServerMethodCatalog } from './appServerMethodCatalog.js'
 import { captureAppServerNotificationState } from './appServerNotificationState.js'
 import {
@@ -161,15 +162,6 @@ type JsonRpcResponse = {
   params?: unknown
 }
 
-type PendingRpc = {
-  resolve: (value: unknown) => void
-  reject: (reason?: unknown) => void
-  method: string
-  params: unknown
-  startedAtMs: number
-  timeoutId: ReturnType<typeof setTimeout>
-}
-
 const APP_SERVER_RPC_SLOW_WARN_MS = 1_800
 const APP_SERVER_RPC_MAX_IN_FLIGHT = 2
 const APP_SERVER_RPC_QUEUE_WARN_SIZE = 6
@@ -203,7 +195,7 @@ class AppServerProcess {
       timeoutRestartThreshold: APP_SERVER_RPC_TIMEOUT_RESTART_THRESHOLD,
     },
   )
-  private readonly pending = new Map<number, PendingRpc>()
+  private readonly pending = new AppServerPendingRpcStore()
   private readonly rpcQueue = new AppServerRpcQueue({
     maxSize: APP_SERVER_RPC_QUEUE_MAX_SIZE,
     maxInFlight: APP_SERVER_RPC_MAX_IN_FLIGHT,
@@ -258,7 +250,7 @@ class AppServerProcess {
     proc.on('error', (error) => {
       if (this.process !== proc) return
       logBridgeError('Codex app-server process error', error)
-      this.rejectAllPending(error)
+      this.pending.rejectAll(error)
       this.rejectQueuedRpcCalls(error)
       this.pendingServerRequests.clear()
       this.rpcCache.clearSharedReads()
@@ -276,13 +268,13 @@ class AppServerProcess {
       const failure = new Error(this.stopping ? 'codex app-server stopped' : 'codex app-server exited unexpectedly')
       if (!expectedExit) {
         logBridgeError('Codex app-server exited unexpectedly', failure, {
-          pendingRpcCount: this.pending.size,
+          pendingRpcCount: this.pending.count,
           pendingServerRequestCount: this.pendingServerRequests.count,
         })
       }
 
       if (this.process === proc) {
-        this.rejectAllPending(failure)
+        this.pending.rejectAll(failure)
         this.rejectQueuedRpcCalls(failure)
         this.pendingServerRequests.clear()
         this.rpcCache.clearSharedReads()
@@ -297,24 +289,8 @@ class AppServerProcess {
     })
   }
 
-  private rejectAllPending(error: Error): void {
-    for (const request of this.pending.values()) {
-      clearTimeout(request.timeoutId)
-      request.reject(error)
-    }
-    this.pending.clear()
-  }
-
   private rejectQueuedRpcCalls(error: Error): void {
     this.rpcQueue.rejectAll(error)
-  }
-
-  private finalizePendingRpc(id: number): PendingRpc | null {
-    const pendingRequest = this.pending.get(id) ?? null
-    if (!pendingRequest) return null
-    this.pending.delete(id)
-    clearTimeout(pendingRequest.timeoutId)
-    return pendingRequest
   }
 
   private sendLine(payload: Record<string, unknown>): void {
@@ -381,7 +357,7 @@ class AppServerProcess {
     writeBridgeLog('warn', 'Restarting Codex app-server', {
       reason,
       pid: proc.pid,
-      pendingRpcCount: this.pending.size,
+      pendingRpcCount: this.pending.count,
       pendingServerRequestCount: this.pendingServerRequests.count,
       ...details,
     })
@@ -390,7 +366,7 @@ class AppServerProcess {
     this.initialized = false
     this.initializePromise = null
     this.stdoutLineBuffer.clear()
-    this.rejectAllPending(new Error(`codex app-server restarted: ${reason}`))
+    this.pending.rejectAll(new Error(`codex app-server restarted: ${reason}`))
     this.rejectQueuedRpcCalls(new Error(`codex app-server restarted: ${reason}`))
     this.pendingServerRequests.clear()
     this.rpcCache.clearSharedReads()
@@ -425,7 +401,7 @@ class AppServerProcess {
     }
 
     if (typeof message.id === 'number' && this.pending.has(message.id)) {
-      const pendingRequest = this.finalizePendingRpc(message.id)
+      const pendingRequest = this.pending.finalize(message.id)
       if (!pendingRequest) return
 
       this.rpcDiagnostics.logSlowRpc(pendingRequest.method, pendingRequest.startedAtMs, pendingRequest.params, {
@@ -593,7 +569,7 @@ class AppServerProcess {
 
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
-        const timedOutRequest = this.finalizePendingRpc(id)
+        const timedOutRequest = this.pending.finalize(id)
         if (!timedOutRequest) return
         writeBridgeLog('warn', 'App-server RPC timed out', {
           method,
@@ -605,7 +581,7 @@ class AppServerProcess {
       }, timeoutMs)
       timeoutId.unref?.()
 
-      this.pending.set(id, {
+      this.pending.record(id, {
         resolve,
         reject,
         method,
@@ -726,12 +702,12 @@ class AppServerProcess {
       initialized: this.initialized,
       stopping: this.stopping,
       pid: this.process?.pid ?? null,
-      pendingRpcCount: this.pending.size,
+      pendingRpcCount: this.pending.count,
       queuedRpcCount: this.rpcQueue.count,
       pendingServerRequestCount: this.pendingServerRequests.count,
       activePlanModeTurnCount: this.planModeTurns.count,
       launchPolicy: createAppServerLaunchPolicySnapshot(this.appServerLaunchPolicy),
-      rpcDiagnostics: this.rpcDiagnostics.snapshot(this.pending.size, this.rpcQueue.count),
+      rpcDiagnostics: this.rpcDiagnostics.snapshot(this.pending.count, this.rpcQueue.count),
     })
   }
 
@@ -751,7 +727,7 @@ class AppServerProcess {
     this.initializePromise = null
     this.stdoutLineBuffer.clear()
 
-    this.rejectAllPending(failure)
+    this.pending.rejectAll(failure)
     this.pendingServerRequests.clear()
     this.rpcCache.clearSharedReads()
     this.rpcCache.clearThreadList()
