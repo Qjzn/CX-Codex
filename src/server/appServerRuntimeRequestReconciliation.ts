@@ -42,6 +42,11 @@ type RuntimeRequestReconciliationStore = RuntimeThreadStateStore & {
   updateRequest(requestId: string, patch: RuntimeRequestSnapshotPatch): RuntimeRequestRecord | null
 }
 
+export type RuntimeThreadReconcilerDependencies = {
+  readThreadRuntimeSnapshot(threadId: string): Promise<ThreadRuntimeSnapshot>
+  runtimeStore: RuntimeRequestReconciliationStore
+}
+
 export function createRuntimeThreadStatePayload(
   threadId: string,
   snapshot: ThreadRuntimeSnapshot,
@@ -63,6 +68,16 @@ export function updateRuntimeRequestsFromSnapshot(
     runtimeStore.updateRequest(request.requestId, createRuntimeRequestSnapshotPatch(request, threadId, snapshot))
   }
   return activeRequests.length
+}
+
+export function createRuntimeThreadReconciler(
+  dependencies: RuntimeThreadReconcilerDependencies,
+): (threadId: string) => Promise<ThreadRuntimeSnapshot> {
+  return async (threadId) => {
+    const snapshot = await dependencies.readThreadRuntimeSnapshot(threadId)
+    updateRuntimeRequestsFromSnapshot(threadId, snapshot, dependencies.runtimeStore)
+    return snapshot
+  }
 }
 
 export function selectRuntimeRequestsForReconcile(

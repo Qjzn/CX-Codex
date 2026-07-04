@@ -9,7 +9,7 @@ import {
 import { syncBridgeNotificationRuntimeState } from './appServerNotificationRuntimeSync.js'
 import { AppServerNotificationReplay } from './appServerNotificationReplay.js'
 import {
-  updateRuntimeRequestsFromSnapshot,
+  createRuntimeThreadReconciler,
 } from './appServerRuntimeRequestReconciliation.js'
 import { createRuntimeReconcileScheduler } from './appServerRuntimeReconcileScheduler.js'
 import {
@@ -814,11 +814,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     persistRuntimeSnapshot,
   })
 
-  async function reconcileRuntimeThread(threadId: string): Promise<ThreadRuntimeSnapshot> {
-    const snapshot = await readThreadRuntimeSnapshot(threadId)
-    updateRuntimeRequestsFromSnapshot(threadId, snapshot, runtimeStore)
-    return snapshot
-  }
+  const reconcileRuntimeThread = createRuntimeThreadReconciler({
+    readThreadRuntimeSnapshot,
+    runtimeStore,
+  })
 
   async function startRuntimeTurn(payload: unknown): Promise<{
     request: RuntimeRequestRecord

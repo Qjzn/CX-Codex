@@ -307,6 +307,7 @@ import {
   createRuntimeReconcileFailurePatch,
   createRuntimeRequestSnapshotPatch,
   createRuntimeThreadStatePayload,
+  createRuntimeThreadReconciler,
   RUNTIME_RECONCILE_BATCH_LIMIT,
   RUNTIME_RECONCILE_RUNNING_THROTTLE_MS,
   RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES,
@@ -439,7 +440,7 @@ try {
   smokeNotificationSseRoute()
   smokeNotificationReplayRoute()
   smokeAppServerRuntimeBridge()
-  smokeAppServerRuntimeRequestReconciliation()
+  await smokeAppServerRuntimeRequestReconciliation()
   await smokeAppServerRuntimeReconcileScheduler()
   smokeAppServerLocalRuntimeSnapshot()
   smokeAppServerRuntimeSnapshotRecovery()
@@ -5227,7 +5228,7 @@ function smokeAppServerRuntimeBridge(): void {
   })
 }
 
-function smokeAppServerRuntimeRequestReconciliation(): void {
+async function smokeAppServerRuntimeRequestReconciliation(): Promise<void> {
   assert.deepEqual(RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES, [
     'pending_start',
     'start_uncertain',
@@ -5291,6 +5292,42 @@ function smokeAppServerRuntimeRequestReconciliation(): void {
       threadId: 'thread-a',
       turnId: 'turn-finished',
       lastError: null,
+    },
+  }])
+
+  const reconcilerSnapshot = createThreadRuntimeSnapshot({
+    executionState: 'failed',
+    activeTurnId: 'turn-reconciled',
+    lastError: 'turn failed',
+  })
+  const reconcilerReads: string[] = []
+  const reconcilerPatches: Array<{ requestId: string; patch: unknown }> = []
+  const reconcileRuntimeThread = createRuntimeThreadReconciler({
+    readThreadRuntimeSnapshot: async (threadId) => {
+      reconcilerReads.push(threadId)
+      return reconcilerSnapshot
+    },
+    runtimeStore: {
+      listRequestsByThread: (threadId, statuses) => {
+        assert.equal(threadId, 'thread-reconcile')
+        assert.equal(statuses, RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES)
+        return runtimeRequests
+      },
+      updateRequest: (requestId, patch) => {
+        reconcilerPatches.push({ requestId, patch })
+        return null
+      },
+    },
+  })
+  assert.equal(await reconcileRuntimeThread('thread-reconcile'), reconcilerSnapshot)
+  assert.deepEqual(reconcilerReads, ['thread-reconcile'])
+  assert.deepEqual(reconcilerPatches, [{
+    requestId: 'request-a',
+    patch: {
+      status: 'failed',
+      threadId: 'thread-reconcile',
+      turnId: 'turn-reconciled',
+      lastError: 'turn failed',
     },
   }])
 

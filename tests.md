@@ -19,6 +19,39 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: App Server runtime thread reconciler helper
+
+#### Prerequisites
+- Current repository includes `src/server/appServerRuntimeRequestReconciliation.ts`, `src/server/codexAppServerBridge.ts`, and `scripts/server-module-smoke.ts`.
+- Dependencies are installed so TypeScript, Vite, tsup, and the server module smoke verifier can run.
+
+#### Steps
+1. Run `git diff --check`.
+2. Run `node scripts\verify-server-modules.mjs`.
+3. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+4. Run `node_modules\.bin\vite.cmd build`.
+5. Run `node_modules\.bin\tsup.cmd`.
+6. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+7. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Runtime reconciliation still reads a fresh thread runtime snapshot before updating runtime requests.
+- Active runtime requests are still selected with `RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES`.
+- Runtime requests are still patched from the reconciled snapshot state, active turn id, and last error.
+- `codexAppServerBridge.ts` creates `reconcileRuntimeThread` through `createRuntimeThreadReconciler()` instead of owning the reconciliation closure body.
+
+#### Rollback/Cleanup Notes
+- No runtime artifacts need cleanup beyond normal build output in `dist/`, `dist-cli/`, and `output/`.
+- To roll back, revert `src/server/appServerRuntimeRequestReconciliation.ts`, `src/server/codexAppServerBridge.ts`, `scripts/server-module-smoke.ts`, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed, including `createRuntimeThreadReconciler()` coverage for reading a runtime snapshot, selecting active runtime requests, patching request state from the reconciled snapshot, and returning the same snapshot.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+---
+
 ### Feature: App Server local runtime snapshot reader helper
 
 #### Prerequisites
