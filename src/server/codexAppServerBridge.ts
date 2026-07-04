@@ -7,7 +7,6 @@ import { basename, isAbsolute, join, resolve } from 'node:path'
 import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoutes.js'
 import { getDesktopAppRefreshStatus, requestDesktopAppRefresh } from './desktopAppRefresh.js'
 import { getTunnelStatus, updateTunnelConfig } from './tunnelStatus.js'
-import { readFavoriteRecords, writeFavoriteRecords } from './webUiState.js'
 import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } from './runtimeStore.js'
 import {
   type BridgeNotificationEvent,
@@ -47,6 +46,7 @@ import {
 } from './transcriptionProxy.js'
 import { handleTranscriptionRoute } from './transcriptionRoute.js'
 import { handleNotificationReplayRoute } from './notificationReplayRoute.js'
+import { handleLocalStateRoutes } from './localStateRoutes.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   ComposerFileSearchError,
@@ -142,12 +142,7 @@ import {
   getCodexGlobalStatePath,
   getCodexSessionIndexPath,
   getCodexWorktreesDir,
-  getWebBridgeSettingsPath,
 } from './codexPaths.js'
-import {
-  readMergedPinnedThreadIds,
-  writeMergedPinnedThreadIds,
-} from './pinnedThreads.js'
 import { PlanModeTurnStore } from './planModeTurnStore.js'
 import {
   resolveThreadTokenUsage,
@@ -179,8 +174,6 @@ import { createServerRequestDiagnosticsSnapshot } from './serverRequestDiagnosti
 import {
   DEFAULT_WEB_BRIDGE_SETTINGS,
   normalizeWebBridgeSettings,
-  readWebBridgeSettings,
-  writeWebBridgeSettings,
 } from './webBridgeSettings.js'
 import {
   FileUploadError,
@@ -1435,54 +1428,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'GET' && url.pathname === '/codex-api/web-settings') {
-        const settings = await readWebBridgeSettings(getWebBridgeSettingsPath())
-        appServer.setWebBridgeSettings(settings)
-        setJson(res, 200, { data: settings })
-        return
-      }
-
-      if (req.method === 'PUT' && url.pathname === '/codex-api/web-settings') {
-        const payload = await readJsonBody(req)
-        const settings = await writeWebBridgeSettings(getWebBridgeSettingsPath(), payload)
-        appServer.setWebBridgeSettings(settings)
-        setJson(res, 200, { data: settings })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/favorites') {
-        const favorites = await readFavoriteRecords()
-        setJson(res, 200, { data: favorites })
-        return
-      }
-
-      if (req.method === 'PUT' && url.pathname === '/codex-api/favorites') {
-        const payload = await readJsonBody(req)
-        const record =
-          payload && typeof payload === 'object' && !Array.isArray(payload)
-            ? payload as Record<string, unknown>
-            : {}
-        const favorites = await writeFavoriteRecords(Array.isArray(record.favorites) ? record.favorites as never[] : [])
-        setJson(res, 200, { data: favorites })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/pinned-threads') {
-        const pinnedThreadIds = await readMergedPinnedThreadIds()
-        setJson(res, 200, { data: pinnedThreadIds })
-        return
-      }
-
-      if (req.method === 'PUT' && url.pathname === '/codex-api/pinned-threads') {
-        const payload = await readJsonBody(req)
-        const record =
-          payload && typeof payload === 'object' && !Array.isArray(payload)
-            ? payload as Record<string, unknown>
-            : {}
-        const pinnedThreadIds = await writeMergedPinnedThreadIds(
-          Array.isArray(record.pinnedThreadIds) ? record.pinnedThreadIds as never[] : [],
-        )
-        setJson(res, 200, { data: pinnedThreadIds })
+      if (await handleLocalStateRoutes(req, res, url, {
+        readJsonBody,
+        setWebBridgeSettings: (settings) => appServer.setWebBridgeSettings(settings),
+      })) {
         return
       }
 

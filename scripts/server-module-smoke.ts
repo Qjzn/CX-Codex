@@ -113,7 +113,9 @@ import {
   evaluateServerRequestPolicy,
   isMcpToolPermissionRequest,
   shouldAutoApproveServerRequest,
+  type WebBridgeSettings,
 } from '../src/server/serverRequestPolicy.js'
+import type { FavoriteRecord } from '../src/server/webUiState.js'
 import {
   classifyServerRequestMethod,
   createServerRequestDiagnosticsSnapshot,
@@ -237,6 +239,7 @@ import {
   handleNotificationReplayRoute,
   readNotificationReplayQuery,
 } from '../src/server/notificationReplayRoute.js'
+import { handleLocalStateRoutes } from '../src/server/localStateRoutes.js'
 import {
   createRuntimeReconcileFailurePatch,
   createRuntimeRequestSnapshotPatch,
@@ -334,6 +337,7 @@ try {
   await smokeProjectRoots()
   smokeRuntimePayloadParsing()
   smokeAppServerNotificationReplay()
+  await smokeLocalStateRoutes()
   smokeNotificationReplayRoute()
   smokeAppServerRuntimeBridge()
   smokeAppServerRuntimeRequestReconciliation()
@@ -3820,6 +3824,143 @@ function smokeAppServerNotificationReplay(): void {
     latestSeq: 13,
     oldestSeq: 2,
   })
+}
+
+async function smokeLocalStateRoutes(): Promise<void> {
+  const favoriteRecord: FavoriteRecord = {
+    id: 'favorite-a',
+    threadId: 'thread-a',
+    messageId: 'message-a',
+    threadTitle: 'Thread A',
+    threadCwd: 'E:/repo',
+    role: 'assistant' as const,
+    text: 'Favorite text',
+    preview: 'Favorite text',
+    turnIndex: 1,
+    favoritedAtIso: '2026-01-01T00:00:00.000Z',
+  }
+  const settings: WebBridgeSettings = {
+    permissions: {
+      allowAllPermissionRequests: true,
+      commandExecution: 'ask' as const,
+      fileChange: 'allowForSession' as const,
+      mcpTools: 'ask' as const,
+    },
+  }
+  const writtenSettings: WebBridgeSettings = {
+    permissions: {
+      allowAllPermissionRequests: false,
+      commandExecution: 'allowForSession' as const,
+      fileChange: 'ask' as const,
+      mcpTools: 'allowForSession' as const,
+    },
+  }
+  const bodies: unknown[] = [
+    { permissions: { commandExecution: 'allowForSession' } },
+    { favorites: [favoriteRecord] },
+    { pinnedThreadIds: ['thread-b'] },
+  ]
+  const settingsPaths: string[] = []
+  const settingsUpdates: unknown[] = []
+  const settingsWrites: unknown[] = []
+  const favoriteWrites: unknown[] = []
+  const pinnedWrites: unknown[] = []
+  const dependencies = {
+    readJsonBody: async () => bodies.shift(),
+    setWebBridgeSettings: (value: WebBridgeSettings) => {
+      settingsUpdates.push(value)
+    },
+    getWebBridgeSettingsPath: () => 'settings-path.json',
+    readWebBridgeSettings: async (path: string) => {
+      settingsPaths.push(path)
+      return settings
+    },
+    writeWebBridgeSettings: async (path: string, payload: unknown) => {
+      settingsWrites.push({ path, payload })
+      return writtenSettings
+    },
+    readFavoriteRecords: async () => [favoriteRecord],
+    writeFavoriteRecords: async (favorites: FavoriteRecord[]) => {
+      favoriteWrites.push(favorites)
+      return favorites
+    },
+    readMergedPinnedThreadIds: async () => ['thread-a'],
+    writeMergedPinnedThreadIds: async (pinnedThreadIds: string[]) => {
+      pinnedWrites.push(pinnedThreadIds)
+      return pinnedThreadIds
+    },
+  }
+
+  const webSettingsRead = createRouteTestResponse()
+  assert.equal(await handleLocalStateRoutes(
+    { method: 'GET' } as never,
+    webSettingsRead.response as never,
+    new URL('http://127.0.0.1/codex-api/web-settings'),
+    dependencies,
+  ), true)
+  assert.equal(webSettingsRead.response.statusCode, 200)
+  assert.deepEqual(JSON.parse(webSettingsRead.body), { data: settings })
+  assert.deepEqual(settingsPaths, ['settings-path.json'])
+  assert.deepEqual(settingsUpdates, [settings])
+
+  const webSettingsWrite = createRouteTestResponse()
+  assert.equal(await handleLocalStateRoutes(
+    { method: 'PUT' } as never,
+    webSettingsWrite.response as never,
+    new URL('http://127.0.0.1/codex-api/web-settings'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(webSettingsWrite.body), { data: writtenSettings })
+  assert.deepEqual(settingsWrites, [{
+    path: 'settings-path.json',
+    payload: { permissions: { commandExecution: 'allowForSession' } },
+  }])
+  assert.deepEqual(settingsUpdates, [settings, writtenSettings])
+
+  const favoritesRead = createRouteTestResponse()
+  assert.equal(await handleLocalStateRoutes(
+    { method: 'GET' } as never,
+    favoritesRead.response as never,
+    new URL('http://127.0.0.1/codex-api/favorites'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(favoritesRead.body), { data: [favoriteRecord] })
+
+  const favoritesWrite = createRouteTestResponse()
+  assert.equal(await handleLocalStateRoutes(
+    { method: 'PUT' } as never,
+    favoritesWrite.response as never,
+    new URL('http://127.0.0.1/codex-api/favorites'),
+    dependencies,
+  ), true)
+  assert.deepEqual(favoriteWrites, [[favoriteRecord]])
+  assert.deepEqual(JSON.parse(favoritesWrite.body), { data: [favoriteRecord] })
+
+  const pinnedRead = createRouteTestResponse()
+  assert.equal(await handleLocalStateRoutes(
+    { method: 'GET' } as never,
+    pinnedRead.response as never,
+    new URL('http://127.0.0.1/codex-api/pinned-threads'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(pinnedRead.body), { data: ['thread-a'] })
+
+  const pinnedWrite = createRouteTestResponse()
+  assert.equal(await handleLocalStateRoutes(
+    { method: 'PUT' } as never,
+    pinnedWrite.response as never,
+    new URL('http://127.0.0.1/codex-api/pinned-threads'),
+    dependencies,
+  ), true)
+  assert.deepEqual(pinnedWrites, [['thread-b']])
+  assert.deepEqual(JSON.parse(pinnedWrite.body), { data: ['thread-b'] })
+
+  assert.equal(await handleLocalStateRoutes(
+    { method: 'POST' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/favorites'),
+    dependencies,
+  ), false)
 }
 
 function smokeNotificationReplayRoute(): void {

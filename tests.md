@@ -4189,6 +4189,38 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Local state routes 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/localStateRoutes.ts`、`src/server/codexAppServerBridge.ts` 和 `scripts/server-module-smoke.ts`。
+- 本机可运行 server module smoke、governance gate 和 release gate。
+
+#### Steps
+1. 打开 `src/server/codexAppServerBridge.ts`，确认 `/codex-api/web-settings`、`/codex-api/favorites` 和 `/codex-api/pinned-threads` 统一委托 `handleLocalStateRoutes(...)`。
+2. 打开 `src/server/localStateRoutes.ts`，确认生产默认依赖仍使用 `webBridgeSettings.ts`、`webUiState.ts` 和 `pinnedThreads.ts` 的原有读写函数。
+3. 执行 `git diff --check`。
+4. 执行 `node scripts\verify-server-modules.mjs`。
+5. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+7. 确认 release package smoke 必检 `src\server\localStateRoutes.ts`。
+
+#### Expected Results
+- web settings、favorites 和 pinned threads 三组本地状态 HTTP 路由共用 `localStateRoutes.ts`，bridge 主文件减少内联状态读写逻辑。
+- GET/PUT 响应结构保持 `{ data: ... }`，web settings 读写后仍同步 `appServer.setWebBridgeSettings(...)`。
+- 非对象 PUT body 会按既有逻辑回退为空对象，未匹配 method/path 返回 `false`，不吞掉后续 route。
+- `localStateRoutes.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/localStateRoutes.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和本节测试记录。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，覆盖 local state route 的 web settings GET/PUT、favorites GET/PUT、pinned threads GET/PUT 和未匹配 route 返回 `false`。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\localStateRoutes.ts`。
+
+---
+
 ### Feature: Notification replay route 模块化
 
 #### Prerequisites
