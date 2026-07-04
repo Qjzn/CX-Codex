@@ -6700,3 +6700,42 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server thread status changed known notification
+
+#### Prerequisites
+- Current repository includes `src/server/appServerNotificationDiagnostics.ts`, `src/server/appServerStatusDiagnostics.ts`, `scripts/server-module-smoke.ts`, and `docs/app-server-protocol-matrix.zh-CN.md`.
+- Dependencies are installed so server module smoke, TypeScript, Vite, tsup, governance, and release verification can run.
+
+#### Steps
+1. Open `src/server/appServerNotificationDiagnostics.ts` and confirm `thread/status/changed` is listed in `KNOWN_NOTIFICATION_METHODS`.
+2. Open `src/server/codexAppServerBridge.ts` and confirm notification replay still forwards `thread/status/changed` payloads to `statusDiagnostics.observeStatusNotification(...)`.
+3. Open `scripts/server-module-smoke.ts` and confirm `isKnownAppServerNotificationMethod('thread/status/changed')` is asserted as true.
+4. Confirm the smoke observes a `thread/status/changed` notification and `unknownNotificationCount` remains driven only by genuinely unknown methods.
+5. Open `docs/app-server-protocol-matrix.zh-CN.md` and confirm the Notifications row documents `thread/status/changed` as an official known runtime notification whose field-level unknown values are handled by status diagnostics.
+6. Run `git diff --check`.
+7. Run `node scripts\verify-server-modules.mjs`.
+8. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+9. Run `node_modules\.bin\vite.cmd build`.
+10. Run `node_modules\.bin\tsup.cmd`.
+11. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+12. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- `thread/status/changed` no longer appears in `recentUnknownNotifications`.
+- Unknown status fields inside `thread/status/changed` still flow through status diagnostics.
+- Notification diagnostics still records genuinely unknown methods by method name.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `dist/`, `dist-cli/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, remove `thread/status/changed` from `KNOWN_NOTIFICATION_METHODS`, revert the smoke assertion and observation, revert the matrix note, and remove this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed, including coverage for `thread/status/changed` as a known notification that does not increment `unknownNotificationCount`.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

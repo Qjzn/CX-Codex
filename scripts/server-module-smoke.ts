@@ -1213,6 +1213,7 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('thread/realtime/sdp'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/realtime/error'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/realtime/closed'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/status/changed'), true)
 
   const diagnostics = new AppServerNotificationDiagnostics({ maxRecentUnknown: 2, maxRecentRealtimeNotifications: 4 })
   diagnostics.observe({
@@ -1665,6 +1666,15 @@ function smokeAppServerNotificationDiagnostics(): void {
     method: 'thread/realtime/transcript/delta',
     atIso: '2026-07-03T00:00:02.000Z',
     threadId: 'thread-b',
+  })
+  diagnostics.observe({
+    method: 'thread/status/changed',
+    atIso: '2026-07-03T00:00:02.500Z',
+    threadId: 'thread-status',
+    params: {
+      threadId: 'thread-status',
+      status: { type: 'active', activeFlags: ['waitingOnApproval'] },
+    },
   })
   diagnostics.observe({
     method: 'plugin/marketplace/changed',

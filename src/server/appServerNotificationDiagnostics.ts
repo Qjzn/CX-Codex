@@ -177,6 +177,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set([
   'thread/realtime/transcript/delta',
   'thread/realtime/transcript/done',
   'thread/started',
+  'thread/status/changed',
   'thread/tokenUsage/updated',
   'turn/completed',
   'turn/interrupted',
