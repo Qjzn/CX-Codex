@@ -47,6 +47,7 @@ import { handleNotificationReplayRoute } from './notificationReplayRoute.js'
 import { handleLocalStateRoutes } from './localStateRoutes.js'
 import { handleNotificationSseRoute } from './notificationSseRoute.js'
 import { handleRuntimeStateRoutes } from './runtimeStateRoutes.js'
+import { handleDiagnosticsRoutes } from './diagnosticsRoutes.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   ComposerFileSearchError,
@@ -1600,76 +1601,17 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'GET' && url.pathname === '/codex-api/health') {
-        const schemaAudit = await readAppServerSchemaAuditSummary()
-        const serverRequestDiagnostics = createServerRequestDiagnosticsSnapshot(appServer.listPendingServerRequests())
-        const hookDiagnostics = await readAppServerHookDiagnostics()
-        const windowsSandbox = await readWindowsSandboxReadinessDiagnostics()
-        setJson(res, 200, {
-          status: 'ok',
-          data: {
-            appServer: appServer.getStatus(),
-            notificationDiagnostics: notificationDiagnostics.snapshot(),
-            statusDiagnostics: statusDiagnostics.snapshot(),
-            serverRequestDiagnostics,
-            hookDiagnostics,
-            schemaAudit,
-            windowsSandbox,
-            transcription: getTranscriptionProxyConfigSnapshot(),
-            runtimeStore: runtimeStore.getHealth(),
-            timestamp: new Date().toISOString(),
-          },
-        })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/diagnostics') {
-        const runtimeHealth = runtimeStore.getHealth()
-        const schemaAudit = await readAppServerSchemaAuditSummary()
-        const serverRequestDiagnostics = createServerRequestDiagnosticsSnapshot(appServer.listPendingServerRequests())
-        const hookDiagnostics = await readAppServerHookDiagnostics()
-        const windowsSandbox = await readWindowsSandboxReadinessDiagnostics()
-        const recentEvents = runtimeStore
-          .listEventsAfter(Math.max(0, runtimeHealth.latestSeq - 20), 20)
-          .notifications
-          .slice(-10)
-          .map((event) => ({
-            seq: event.seq,
-            method: event.method,
-            atIso: event.atIso,
-            threadId: event.threadId,
-            turnId: event.turnId,
-          }))
-        const uncertainRequests = runtimeStore.listUncertainRequests(10).map((request) => ({
-          requestId: request.requestId,
-          clientMessageId: request.clientMessageId,
-          threadId: request.threadId,
-          turnId: request.turnId,
-          status: request.status,
-          retryCount: request.retryCount,
-          updatedAtIso: request.updatedAtIso,
-          lastError: request.lastError,
-        }))
-        setJson(res, 200, {
-          status: 'ok',
-          data: {
-            appServer: appServer.getStatus(),
-            notificationDiagnostics: notificationDiagnostics.snapshot(),
-            statusDiagnostics: statusDiagnostics.snapshot(),
-            serverRequestDiagnostics,
-            hookDiagnostics,
-            schemaAudit,
-            windowsSandbox,
-            transcription: getTranscriptionProxyConfigSnapshot(),
-            runtimeStore: runtimeHealth,
-            runtime: {
-              uncertainRequests,
-              recentEvents,
-            },
-            pendingServerRequests: serverRequestDiagnostics.pendingRequests,
-            timestamp: new Date().toISOString(),
-          },
-        })
+      if (await handleDiagnosticsRoutes(req, res, url, {
+        getAppServerStatus: () => appServer.getStatus(),
+        getNotificationDiagnostics: () => notificationDiagnostics.snapshot(),
+        getStatusDiagnostics: () => statusDiagnostics.snapshot(),
+        listPendingServerRequests: () => appServer.listPendingServerRequests(),
+        readHookDiagnostics: readAppServerHookDiagnostics,
+        readSchemaAuditSummary: readAppServerSchemaAuditSummary,
+        readWindowsSandboxDiagnostics: readWindowsSandboxReadinessDiagnostics,
+        getTranscriptionDiagnostics: getTranscriptionProxyConfigSnapshot,
+        runtimeStore,
+      })) {
         return
       }
 

@@ -18,7 +18,7 @@ import {
   DEFAULT_APP_SERVER_LAUNCH_POLICY,
   resolveAppServerLaunchPolicy,
 } from '../src/server/appServerLaunch.js'
-import { createAppServerHealthSnapshot } from '../src/server/appServerHealth.js'
+import { createAppServerHealthSnapshot, type AppServerHealth } from '../src/server/appServerHealth.js'
 import { AppServerLineBuffer } from '../src/server/appServerLineBuffer.js'
 import {
   AppServerNotificationDiagnostics,
@@ -229,10 +229,12 @@ import {
 } from '../src/server/runtimeState.js'
 import { handleRuntimeStateRoutes } from '../src/server/runtimeStateRoutes.js'
 import type { RuntimeRequestRecord } from '../src/server/runtimeStore.js'
+import type { RuntimeEventRecord } from '../src/server/runtimeStore.js'
 import {
   parseRuntimeInterruptPayload,
   parseRuntimeSendPayload,
 } from '../src/server/runtimePayload.js'
+import { handleDiagnosticsRoutes } from '../src/server/diagnosticsRoutes.js'
 import {
   normalizeRuntimeEventForReplay,
   readRuntimeRequestStatusFromExecutionState,
@@ -344,6 +346,7 @@ try {
   await smokeWorkspaceRootsState()
   await smokeProjectRoots()
   smokeRuntimePayloadParsing()
+  await smokeDiagnosticsRoutes()
   smokeAppServerNotificationReplay()
   await smokeLocalStateRoutes()
   await smokeRuntimeStateRoutes()
@@ -3834,6 +3837,159 @@ function smokeAppServerNotificationReplay(): void {
     latestSeq: 13,
     oldestSeq: 2,
   })
+}
+
+async function smokeDiagnosticsRoutes(): Promise<void> {
+  const appServerStatus: AppServerHealth = {
+    running: true,
+    initialized: true,
+    stopping: false,
+    pid: 1234,
+    pendingRpcCount: 1,
+    queuedRpcCount: 2,
+    pendingServerRequestCount: 1,
+    activePlanModeTurnCount: 0,
+    launchPolicy: createAppServerLaunchPolicySnapshot(DEFAULT_APP_SERVER_LAUNCH_POLICY),
+  }
+  const runtimeHealth = {
+    path: '~/.cx-codex/runtime.sqlite',
+    requestCount: 3,
+    uncertainRequestCount: 1,
+    latestSeq: 30,
+    oldestSeq: 10,
+    snapshotCount: 2,
+  }
+  const pendingServerRequest = {
+    id: 77,
+    method: 'item/fileChange/requestApproval',
+    params: { path: 'hidden.txt' },
+    receivedAtIso: '2026-01-01T00:00:00.000Z',
+  }
+  const runtimeEvent = (seq: number): RuntimeEventRecord => ({
+    seq,
+    method: `event/${seq}`,
+    params: { hidden: true },
+    atIso: `2026-01-01T00:00:${String(seq).padStart(2, '0')}.000Z`,
+    threadId: `thread-${seq}`,
+    turnId: `turn-${seq}`,
+  })
+  const uncertainRequest: RuntimeRequestRecord = {
+    requestId: 'request-a',
+    clientMessageId: 'client-a',
+    threadId: 'thread-a',
+    turnId: 'turn-a',
+    status: 'running',
+    promptHash: 'hash-a',
+    mode: 'plan',
+    payload: { hidden: true },
+    retryCount: 2,
+    createdAtIso: '2026-01-01T00:00:00.000Z',
+    updatedAtIso: '2026-01-01T00:00:01.000Z',
+    lastError: 'still running',
+  }
+  const listEventsCalls: Array<{ afterSeq: number; limit: number }> = []
+  const uncertainLimitCalls: number[] = []
+  const dependencies = {
+    getAppServerStatus: () => appServerStatus,
+    getNotificationDiagnostics: () => ({ unknownNotificationCount: 0 }),
+    getStatusDiagnostics: () => ({ unknownStatusCount: 0 }),
+    listPendingServerRequests: () => [pendingServerRequest],
+    readHookDiagnostics: async () => ({ available: true, hookCount: 0 }),
+    readSchemaAuditSummary: async () => ({ status: 'ok' }),
+    readWindowsSandboxDiagnostics: async () => ({ status: 'ready', available: true }),
+    getTranscriptionDiagnostics: () => ({ configured: true }),
+    nowIso: () => '2026-01-01T00:00:30.000Z',
+    runtimeStore: {
+      getHealth: () => runtimeHealth,
+      listEventsAfter: (afterSeq: number, limit: number) => {
+        listEventsCalls.push({ afterSeq, limit })
+        return {
+          notifications: Array.from({ length: 12 }, (_, index) => runtimeEvent(index + 1)),
+        }
+      },
+      listUncertainRequests: (limit: number) => {
+        uncertainLimitCalls.push(limit)
+        return [uncertainRequest]
+      },
+    },
+  }
+
+  const healthResponse = createRouteTestResponse()
+  assert.equal(await handleDiagnosticsRoutes(
+    { method: 'GET' } as never,
+    healthResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/health'),
+    dependencies,
+  ), true)
+  assert.equal(healthResponse.response.statusCode, 200)
+  assert.deepEqual(JSON.parse(healthResponse.body), {
+    status: 'ok',
+    data: {
+      appServer: appServerStatus,
+      notificationDiagnostics: { unknownNotificationCount: 0 },
+      statusDiagnostics: { unknownStatusCount: 0 },
+      serverRequestDiagnostics: {
+        pendingRequestCount: 1,
+        pendingByKind: {
+          permission: 0,
+          approval: 1,
+          elicitation: 0,
+          tool: 0,
+          request: 0,
+        },
+        pendingRequests: [{
+          id: 77,
+          method: 'item/fileChange/requestApproval',
+          kind: 'approval',
+          receivedAtIso: '2026-01-01T00:00:00.000Z',
+        }],
+      },
+      hookDiagnostics: { available: true, hookCount: 0 },
+      schemaAudit: { status: 'ok' },
+      windowsSandbox: { status: 'ready', available: true },
+      transcription: { configured: true },
+      runtimeStore: runtimeHealth,
+      timestamp: '2026-01-01T00:00:30.000Z',
+    },
+  })
+
+  const diagnosticsResponse = createRouteTestResponse()
+  assert.equal(await handleDiagnosticsRoutes(
+    { method: 'GET' } as never,
+    diagnosticsResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/diagnostics'),
+    dependencies,
+  ), true)
+  assert.deepEqual(listEventsCalls, [{ afterSeq: 10, limit: 20 }])
+  assert.deepEqual(uncertainLimitCalls, [10])
+  const diagnosticsPayload = JSON.parse(diagnosticsResponse.body)
+  assert.equal(diagnosticsPayload.status, 'ok')
+  assert.deepEqual(diagnosticsPayload.data.runtime.recentEvents.map((event: { seq: number }) => event.seq), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+  assert.equal('params' in diagnosticsPayload.data.runtime.recentEvents[0], false)
+  assert.deepEqual(diagnosticsPayload.data.runtime.uncertainRequests, [{
+    requestId: 'request-a',
+    clientMessageId: 'client-a',
+    threadId: 'thread-a',
+    turnId: 'turn-a',
+    status: 'running',
+    retryCount: 2,
+    updatedAtIso: '2026-01-01T00:00:01.000Z',
+    lastError: 'still running',
+  }])
+  assert.equal('payload' in diagnosticsPayload.data.runtime.uncertainRequests[0], false)
+  assert.deepEqual(diagnosticsPayload.data.pendingServerRequests, [{
+    id: 77,
+    method: 'item/fileChange/requestApproval',
+    kind: 'approval',
+    receivedAtIso: '2026-01-01T00:00:00.000Z',
+  }])
+
+  assert.equal(await handleDiagnosticsRoutes(
+    { method: 'POST' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/diagnostics'),
+    dependencies,
+  ), false)
 }
 
 async function smokeLocalStateRoutes(): Promise<void> {

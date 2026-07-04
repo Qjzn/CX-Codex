@@ -322,6 +322,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "dist\index.html",
   "dist-cli\index.js",
   "src\server\codexAppServerBridge.ts",
+  "src\server\diagnosticsRoutes.ts",
   "src\server\localStateRoutes.ts",
   "src\server\notificationReplayRoute.ts",
   "src\server\notificationSseRoute.ts",
@@ -330,6 +331,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
 )
 
 Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
+  "src', 'server', 'diagnosticsRoutes.ts'",
   "src', 'server', 'localStateRoutes.ts'",
   "src', 'server', 'notificationReplayRoute.ts'",
   "src', 'server', 'notificationSseRoute.ts'",
@@ -339,6 +341,8 @@ Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
 )
 
 Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
+  "handleDiagnosticsRoutes",
+  "smokeDiagnosticsRoutes",
   "handleNotificationSseRoute",
   "smokeNotificationSseRoute",
   "handleRuntimeStateRoutes",

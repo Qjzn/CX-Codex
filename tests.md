@@ -4286,6 +4286,39 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Diagnostics routes 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/diagnosticsRoutes.ts`、`src/server/codexAppServerBridge.ts` 和 `scripts/server-module-smoke.ts`。
+- 本机可运行 server module smoke、governance gate 和 release gate。
+
+#### Steps
+1. 打开 `src/server/codexAppServerBridge.ts`，确认 `/codex-api/health` 和 `/codex-api/diagnostics` 统一委托 `handleDiagnosticsRoutes(...)`。
+2. 打开 `src/server/diagnosticsRoutes.ts`，确认 route 模块通过注入依赖读取 app-server status、notification diagnostics、status diagnostics、server request diagnostics、hook diagnostics、schema audit、Windows sandbox readiness、transcription diagnostics 和 runtime store。
+3. 执行 `git diff --check`。
+4. 执行 `node scripts\verify-server-modules.mjs`。
+5. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+7. 确认 release package smoke 必检 `src\server\diagnosticsRoutes.ts`。
+
+#### Expected Results
+- health 和 diagnostics HTTP 路由从 bridge 主文件抽出，返回结构保持 `status: "ok"` 与既有 `data` 字段。
+- `/codex-api/diagnostics` 仍只返回 runtime recent event 的 seq/method/时间/threadId/turnId，不暴露 event params。
+- uncertain runtime requests 仍只返回 requestId/clientMessageId/threadId/turnId/status/retryCount/updatedAtIso/lastError，不暴露 payload。
+- pending server requests 继续使用脱敏后的 `createServerRequestDiagnosticsSnapshot(...)`。
+- 未匹配 method/path 返回 `false`，不吞掉后续 route。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/diagnosticsRoutes.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和本节测试记录。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，覆盖 health 响应、diagnostics 响应、pending request 脱敏分类、recent events 截断且不含 params、uncertain request 不含 payload 和未匹配 route 返回 `false`。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\diagnosticsRoutes.ts`。
+
+---
+
 ### Feature: Notification replay route 模块化
 
 #### Prerequisites
