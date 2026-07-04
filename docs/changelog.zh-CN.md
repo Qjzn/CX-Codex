@@ -30,6 +30,7 @@
   - 新增 `audit:app-server-schemas:update-summary`，可把最新 raw schema audit 转成脱敏、可提交的 `docs/app-server-schema-audit-summary.json`，避免把本机绝对路径或完整生成目录带入仓库。
   - Release/governance 门禁会校验 schema audit 摘要结构、相对路径、代表项列表和 raw audit 字段黑名单，避免协议差异记录丢失、无法复核或泄漏本机路径。
   - App Server method catalog smoke 会直接读取当前 raw JSON schema audit，确认 `ClientRequest.json` 抽取 75 个 request method、`ServerNotification.json` 抽取 63 个 notification method，并记录 `rawResponseItem/completed` 当前只由 TypeScript union 覆盖、未进入 JSON notification catalog 的边界。
+  - `verify:server-modules` 每次执行会使用独立的 `output/server-module-smoke/run-*` 临时编译目录，避免它与 release gate 内部 server smoke 并行运行时互相清理产物造成偶发失败。
   - App Server `thread/read` 未知 thread/turn status 会在 health、diagnostics 和诊断中心按来源聚合计数，方便发现官方协议新增状态且不误判为运行态。
   - App Server `Thread.source` 会在前端线程模型中保留为只读 `sourceKind` 元数据，兼容 `cli`、`appServer`、`subAgent` tagged union 和未来未知来源标签。
   - App Server `Turn.itemsView` 为 `notLoaded` 或 `summary` 且没有加载 items 时，会在前端保留为 `isUnhandled` raw message，避免新版协议返回部分 turn 视图时线程内容静默空白。

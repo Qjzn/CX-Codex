@@ -408,6 +408,41 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Isolated server module smoke output
+
+#### Prerequisites
+- Current repository includes `scripts/verify-server-modules.mjs`, `scripts/verify-release.ps1`, `scripts/server-module-smoke.ts`, and `docs/changelog.zh-CN.md`.
+- Dependencies are installed so the server module smoke verifier and release gate can run.
+
+#### Steps
+1. Open `scripts/verify-server-modules.mjs` and confirm it creates a unique `output/server-module-smoke/run-*` directory with `mkdtempSync()` for each invocation.
+2. Confirm the verifier does not recursively delete the shared `output/server-module-smoke` parent directory before compiling.
+3. Confirm the verifier removes only its own run directory by default, with `CX_CODEX_KEEP_SERVER_MODULE_SMOKE_OUTPUT=1` available for debugging.
+4. Run `git diff --check`.
+5. Run `node scripts\verify-server-modules.mjs`.
+6. Run two verification commands concurrently: one `node scripts\verify-server-modules.mjs` and one `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+7. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+8. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Concurrent server module smoke and release verification no longer fail with a missing `output\server-module-smoke\scripts\server-module-smoke.js` module.
+- Each server module smoke invocation compiles and runs from its own run directory, so one verifier cannot delete another verifier's compiled entry.
+- By default, completed run directories are cleaned up; setting `CX_CODEX_KEEP_SERVER_MODULE_SMOKE_OUTPUT=1` keeps the per-run output for debugging.
+- Governance and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `output/server-module-smoke/` and `output/release-package-smoke/`.
+- To roll back, restore the fixed `output/server-module-smoke` compile directory in `scripts/verify-server-modules.mjs` and remove this test section plus the changelog note.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 server module smoke: `node scripts\verify-server-modules.mjs` passed with `server module smoke ok`.
+- 2026-07-05 concurrent smoke/release verification: one `node scripts\verify-server-modules.mjs` process and one `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` process ran concurrently and both exited `0`; the release process completed its internal server smoke, CLI CJS launcher smoke, release package smoke, npm package smoke, and skipped schema audit as requested.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-05 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
 ### Feature: App Server local runtime snapshot reader helper
 
 #### Prerequisites
