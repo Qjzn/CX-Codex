@@ -26,6 +26,7 @@
   - App Server `windows/worldWritableWarning` 与 `windowsSandbox/setupCompleted` 通知会进入脱敏 Windows sandbox 诊断快照，并在诊断中心只读展示，不会暴露具体本机路径或自动触发 sandbox setup。
   - App Server `windowsSandbox/readiness` 会通过 TTL 缓存进入 health、diagnostics 和诊断中心 Windows 安全卡片，只读展示 ready、notConfigured 或 updateRequired，仍不会自动触发 setup/start。
   - App Server `hooks/list`、`hook/started` 与 `hook/completed` 会进入脱敏 Hooks 诊断快照和诊断中心 Hooks 卡片，只展示事件、来源、trust、启用状态和运行摘要，不暴露 hook 命令、sourcePath 或 hash，也不执行编辑/trust 操作。
+  - App Server `warning`、`guardianWarning`、`deprecationNotice`、`configWarning`、`fs/changed` 和 `externalAgentConfig/import/completed` 会进入脱敏协议告警诊断快照，只展示摘要、路径存在标记和 changed path 数量，不暴露本机路径，也不开放 App Server fs 或外部 agent import 操作。
   - 诊断中心新增 schema audit 摘要卡片，展示审计状态、生成时间、官方文档入口和 TypeScript/JSON schema 差异计数。
   - 诊断中心新增权限请求队列，由服务端脱敏并分类展示 App Server pending permission、approval、elicitation 或 tool request，便于排查任务等待授权的原因。
   - `/codex-api/health`、`/codex-api/diagnostics` 和 `/codex-api/server-requests/pending/diagnostics` 新增 `serverRequestDiagnostics` 快照，包含 pending 总数、按类型计数和脱敏请求列表；原始 `/codex-api/server-requests/pending` 保持给审批交互使用。

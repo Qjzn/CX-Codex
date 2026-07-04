@@ -320,6 +320,23 @@
 
       <section class="diagnostics-section">
         <div class="diagnostics-section-header">
+          <h2>协议告警</h2>
+          <span class="diagnostics-badge" :data-tone="protocolAlerts.length > 0 ? 'warning' : 'ok'">
+            {{ protocolAlerts.length }}
+          </span>
+        </div>
+        <div v-if="protocolAlerts.length === 0" class="diagnostics-empty">暂无 warning、config、fs 或 import 通知。</div>
+        <ul v-else class="diagnostics-list">
+          <li v-for="alert in protocolAlerts" :key="`${alert.method}-${alert.atIso}-${alert.watchId}`">
+            <span>{{ formatProtocolAlert(alert) }}</span>
+            <strong>{{ alert.changedPathCount || (alert.hasPath ? 'path' : '-') }}</strong>
+            <small>{{ formatAge(alert.atIso) }}</small>
+          </li>
+        </ul>
+      </section>
+
+      <section class="diagnostics-section">
+        <div class="diagnostics-section-header">
           <h2>未知通知</h2>
           <span class="diagnostics-badge" :data-tone="unknownNotificationCount > 0 ? 'warning' : 'ok'">
             {{ unknownNotificationCount }}
@@ -513,6 +530,23 @@ type HookDiagnostics = {
   error: string
 }
 
+type ProtocolAlertDiagnostics = {
+  method:
+    | 'warning'
+    | 'guardianWarning'
+    | 'deprecationNotice'
+    | 'configWarning'
+    | 'fs/changed'
+    | 'externalAgentConfig/import/completed'
+  atIso: string
+  threadId: string
+  summary: string
+  details: string
+  hasPath: boolean
+  changedPathCount: number
+  watchId: string
+}
+
 type UnknownStatusDiagnostics = {
   source: string
   value: string
@@ -574,6 +608,7 @@ type DiagnosticsData = {
     recentModelNotifications?: ModelNotificationDiagnostics[]
     recentWindowsSandboxNotifications?: WindowsSandboxNotificationDiagnostics[]
     recentHookNotifications?: HookNotificationDiagnostics[]
+    recentProtocolAlerts?: ProtocolAlertDiagnostics[]
   }
   statusDiagnostics?: {
     unknownStatusCount: number
@@ -715,6 +750,7 @@ const recentWindowsSandboxNotifications = computed(() => (
   diagnostics.value?.notificationDiagnostics?.recentWindowsSandboxNotifications ?? []
 ))
 const recentHookNotifications = computed(() => diagnostics.value?.notificationDiagnostics?.recentHookNotifications ?? [])
+const protocolAlerts = computed(() => diagnostics.value?.notificationDiagnostics?.recentProtocolAlerts ?? [])
 const unknownStatuses = computed(() => diagnostics.value?.statusDiagnostics?.recentUnknownStatuses ?? [])
 const unknownStatusCount = computed(() => diagnostics.value?.statusDiagnostics?.unknownStatusCount ?? 0)
 
@@ -751,6 +787,7 @@ const overallTone = computed<Tone>(() => {
     appServerTone.value === 'warning'
     || runtimeTone.value === 'warning'
     || hookDiagnosticsTone.value === 'warning'
+    || protocolAlerts.value.length > 0
     || schemaAuditTone.value === 'warning'
     || schemaAuditTone.value === 'danger'
     || windowsSandboxReadinessTone.value === 'warning'
@@ -937,6 +974,14 @@ function formatHookSummary(hook: HookSummaryDiagnostics): string {
   const managed = hook.isManaged ? ' / managed' : ''
   const matcher = hook.hasMatcher ? ' / matcher' : ''
   return `${hook.eventName} ${hook.handlerType} / ${source}${managed}${matcher}`
+}
+
+function formatProtocolAlert(alert: ProtocolAlertDiagnostics): string {
+  const detail = alert.summary || alert.details
+  if (detail) return `${alert.method}: ${detail}`
+  if (alert.method === 'fs/changed') return 'fs/changed'
+  if (alert.method === 'externalAgentConfig/import/completed') return 'external agent import completed'
+  return alert.method
 }
 
 function formatNullableBoolean(value: boolean | null): string {

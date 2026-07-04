@@ -4081,6 +4081,39 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server 协议告警通知脱敏诊断
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerNotificationDiagnostics.ts`、`src/components/content/DiagnosticsPanel.vue` 和最近 raw schema audit 输出 `output\app-server-schema-audit\20260703-193751`。
+- 本机 raw schema audit 已确认 `ServerNotification.ts` 包含 `warning`、`guardianWarning`、`deprecationNotice`、`configWarning`、`fs/changed` 和 `externalAgentConfig/import/completed`。
+
+#### Steps
+1. 执行官方 manual helper：`node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs`。
+2. 检查 raw schema audit，确认 warning/config/fs/import notification 字段，尤其是 `configWarning.path` 与 `fs/changed.changedPaths` 需要脱敏。
+3. 执行 `git diff --check`。
+4. 执行 `npm.cmd run verify:server-modules`。
+5. 执行 `npm.cmd run build`。
+6. 执行 `npm.cmd run verify:governance`。
+7. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip`。
+
+#### Expected Results
+- 服务端 notification diagnostics 把这些官方通知视为已知通知，不计入 unknown notification。
+- `/codex-api/health` 和 `/codex-api/diagnostics` 的 `notificationDiagnostics.recentProtocolAlerts` 只包含 method、时间、threadId、摘要、details、`hasPath`、`changedPathCount` 和 watchId 等脱敏字段。
+- 诊断中心展示“协议告警”卡片；不暴露 `configWarning.path`、`fs/changed.changedPaths`，也不开放 App Server fs API 或外部 agent import 操作。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/appServerNotificationDiagnostics.ts`、`src/components/content/DiagnosticsPanel.vue`、`scripts/server-module-smoke.ts`、`docs/app-server-protocol-matrix.zh-CN.md`、`docs/changelog.zh-CN.md` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 官方文档/Schema 核对：Codex manual helper 返回 `local manual was already current`；raw schema audit `output\app-server-schema-audit\20260703-193751\typescript\ServerNotification.ts` 显示 `warning`、`guardianWarning`、`deprecationNotice`、`configWarning`、`fs/changed` 和 `externalAgentConfig/import/completed` 为官方 notification；`ConfigWarningNotification.ts` 包含可选 `path`，`FsChangedNotification.ts` 包含 `changedPaths`，测试确认这些路径不进入诊断输出。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖协议告警通知已知分类、config path 脱敏、fs changed path 计数、external agent import completed 只读记录和 clear。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建；Vite 仍有既有 large chunk warning。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
+
+---
+
 ### Feature: App Server 模型通知诊断可见
 
 #### Prerequisites

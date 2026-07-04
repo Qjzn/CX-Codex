@@ -44,12 +44,30 @@ export type HookNotificationRecord = {
   outputEntryCount: number
 }
 
+export type ProtocolAlertNotificationRecord = {
+  method:
+    | 'warning'
+    | 'guardianWarning'
+    | 'deprecationNotice'
+    | 'configWarning'
+    | 'fs/changed'
+    | 'externalAgentConfig/import/completed'
+  atIso: string
+  threadId: string
+  summary: string
+  details: string
+  hasPath: boolean
+  changedPathCount: number
+  watchId: string
+}
+
 export type AppServerNotificationDiagnosticsSnapshot = {
   unknownNotificationCount: number
   recentUnknownNotifications: UnknownNotificationRecord[]
   recentModelNotifications: ModelNotificationRecord[]
   recentWindowsSandboxNotifications: WindowsSandboxNotificationRecord[]
   recentHookNotifications: HookNotificationRecord[]
+  recentProtocolAlerts: ProtocolAlertNotificationRecord[]
 }
 
 type NotificationObservation = {
@@ -65,6 +83,7 @@ type AppServerNotificationDiagnosticsOptions = {
   maxRecentModelNotifications?: number
   maxRecentWindowsSandboxNotifications?: number
   maxRecentHookNotifications?: number
+  maxRecentProtocolAlerts?: number
 }
 
 const KNOWN_NOTIFICATION_METHODS = new Set([
@@ -75,6 +94,11 @@ const KNOWN_NOTIFICATION_METHODS = new Set([
   'item/updated',
   'account/rateLimits/updated',
   'app/list/updated',
+  'configWarning',
+  'deprecationNotice',
+  'externalAgentConfig/import/completed',
+  'fs/changed',
+  'guardianWarning',
   'hook/completed',
   'hook/started',
   'mcpServer/oauthLogin/completed',
@@ -93,6 +117,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set([
   'turn/interrupted',
   'turn/start',
   'turn/started',
+  'warning',
   'windows/worldWritableWarning',
   'windowsSandbox/setupCompleted',
 ])
@@ -120,10 +145,12 @@ export class AppServerNotificationDiagnostics {
   private readonly maxRecentModelNotifications: number
   private readonly maxRecentWindowsSandboxNotifications: number
   private readonly maxRecentHookNotifications: number
+  private readonly maxRecentProtocolAlerts: number
   private readonly unknownByMethod = new Map<string, UnknownNotificationRecord>()
   private readonly recentModelNotifications: ModelNotificationRecord[] = []
   private readonly recentWindowsSandboxNotifications: WindowsSandboxNotificationRecord[] = []
   private readonly recentHookNotifications: HookNotificationRecord[] = []
+  private readonly recentProtocolAlerts: ProtocolAlertNotificationRecord[] = []
   private unknownNotificationCount = 0
 
   constructor(options: AppServerNotificationDiagnosticsOptions = {}) {
@@ -134,12 +161,14 @@ export class AppServerNotificationDiagnostics {
       Math.min(100, Math.floor(options.maxRecentWindowsSandboxNotifications ?? 20)),
     )
     this.maxRecentHookNotifications = Math.max(1, Math.min(100, Math.floor(options.maxRecentHookNotifications ?? 20)))
+    this.maxRecentProtocolAlerts = Math.max(1, Math.min(100, Math.floor(options.maxRecentProtocolAlerts ?? 20)))
   }
 
   observe(observation: NotificationObservation): void {
     this.observeModelNotification(observation)
     this.observeWindowsSandboxNotification(observation)
     this.observeHookNotification(observation)
+    this.observeProtocolAlertNotification(observation)
     if (isKnownAppServerNotificationMethod(observation.method)) return
 
     this.unknownNotificationCount += 1
@@ -178,6 +207,7 @@ export class AppServerNotificationDiagnostics {
       recentModelNotifications: [...this.recentModelNotifications],
       recentWindowsSandboxNotifications: [...this.recentWindowsSandboxNotifications],
       recentHookNotifications: [...this.recentHookNotifications],
+      recentProtocolAlerts: [...this.recentProtocolAlerts],
     }
   }
 
@@ -186,6 +216,7 @@ export class AppServerNotificationDiagnostics {
     this.recentModelNotifications.splice(0, this.recentModelNotifications.length)
     this.recentWindowsSandboxNotifications.splice(0, this.recentWindowsSandboxNotifications.length)
     this.recentHookNotifications.splice(0, this.recentHookNotifications.length)
+    this.recentProtocolAlerts.splice(0, this.recentProtocolAlerts.length)
     this.unknownNotificationCount = 0
   }
 
@@ -213,6 +244,15 @@ export class AppServerNotificationDiagnostics {
     this.recentHookNotifications.unshift(record)
     if (this.recentHookNotifications.length > this.maxRecentHookNotifications) {
       this.recentHookNotifications.splice(this.maxRecentHookNotifications)
+    }
+  }
+
+  private observeProtocolAlertNotification(observation: NotificationObservation): void {
+    const record = createProtocolAlertNotificationRecord(observation)
+    if (!record) return
+    this.recentProtocolAlerts.unshift(record)
+    if (this.recentProtocolAlerts.length > this.maxRecentProtocolAlerts) {
+      this.recentProtocolAlerts.splice(this.maxRecentProtocolAlerts)
     }
   }
 }
@@ -306,9 +346,63 @@ function createHookNotificationRecord(observation: NotificationObservation): Hoo
   }
 }
 
-function readString(record: Record<string, unknown> | null, key: string): string {
+function createProtocolAlertNotificationRecord(observation: NotificationObservation): ProtocolAlertNotificationRecord | null {
+  if (
+    observation.method !== 'warning' &&
+    observation.method !== 'guardianWarning' &&
+    observation.method !== 'deprecationNotice' &&
+    observation.method !== 'configWarning' &&
+    observation.method !== 'fs/changed' &&
+    observation.method !== 'externalAgentConfig/import/completed'
+  ) {
+    return null
+  }
+
+  const params = asRecord(observation.params)
+  if (observation.method === 'fs/changed') {
+    return {
+      method: 'fs/changed',
+      atIso: observation.atIso,
+      threadId: normalizeOptionalId(observation.threadId),
+      summary: 'Filesystem watch changed',
+      details: '',
+      hasPath: Array.isArray(params?.changedPaths) && params.changedPaths.length > 0,
+      changedPathCount: Array.isArray(params?.changedPaths) ? params.changedPaths.length : 0,
+      watchId: readString(params, 'watchId', 48),
+    }
+  }
+
+  if (observation.method === 'externalAgentConfig/import/completed') {
+    return {
+      method: 'externalAgentConfig/import/completed',
+      atIso: observation.atIso,
+      threadId: normalizeOptionalId(observation.threadId),
+      summary: 'External agent config import completed',
+      details: '',
+      hasPath: false,
+      changedPathCount: 0,
+      watchId: '',
+    }
+  }
+
+  const summary = observation.method === 'warning' || observation.method === 'guardianWarning'
+    ? readString(params, 'message', 160)
+    : readString(params, 'summary', 160)
+  return {
+    method: observation.method,
+    atIso: observation.atIso,
+    threadId: normalizeOptionalId(observation.threadId) || readString(params, 'threadId'),
+    summary,
+    details: readString(params, 'details', 160),
+    hasPath: typeof params?.path === 'string' && params.path.trim().length > 0,
+    changedPathCount: 0,
+    watchId: '',
+  }
+}
+
+function readString(record: Record<string, unknown> | null, key: string, maxLength = 120): string {
   const value = record?.[key]
-  return typeof value === 'string' ? value.trim().slice(0, 120) : ''
+  return typeof value === 'string' ? value.trim().slice(0, Math.max(1, maxLength)) : ''
 }
 
 function readNumber(record: Record<string, unknown> | null, key: string): number {

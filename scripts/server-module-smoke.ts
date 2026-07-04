@@ -680,6 +680,12 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('account/rateLimits/updated'), true)
   assert.equal(isKnownAppServerNotificationMethod('model/rerouted'), true)
   assert.equal(isKnownAppServerNotificationMethod('model/verification'), true)
+  assert.equal(isKnownAppServerNotificationMethod('warning'), true)
+  assert.equal(isKnownAppServerNotificationMethod('guardianWarning'), true)
+  assert.equal(isKnownAppServerNotificationMethod('deprecationNotice'), true)
+  assert.equal(isKnownAppServerNotificationMethod('configWarning'), true)
+  assert.equal(isKnownAppServerNotificationMethod('fs/changed'), true)
+  assert.equal(isKnownAppServerNotificationMethod('externalAgentConfig/import/completed'), true)
   assert.equal(isKnownAppServerNotificationMethod('hook/started'), true)
   assert.equal(isKnownAppServerNotificationMethod('hook/completed'), true)
   assert.equal(isKnownAppServerNotificationMethod('windows/worldWritableWarning'), true)
@@ -699,6 +705,7 @@ function smokeAppServerNotificationDiagnostics(): void {
     recentModelNotifications: [],
     recentWindowsSandboxNotifications: [],
     recentHookNotifications: [],
+    recentProtocolAlerts: [],
   })
 
   diagnostics.observe({
@@ -845,6 +852,51 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(JSON.stringify(hookNotificationSnapshot.recentHookNotifications).includes('secret'), false)
 
   diagnostics.observe({
+    method: 'warning',
+    atIso: '2026-07-03T00:00:00.960Z',
+    params: {
+      threadId: 'thread-warning',
+      message: 'general warning',
+    },
+  })
+  diagnostics.observe({
+    method: 'configWarning',
+    atIso: '2026-07-03T00:00:00.970Z',
+    params: {
+      summary: 'invalid config value',
+      details: 'use a supported option',
+      path: 'C:\\Users\\SW\\.codex\\config.toml',
+    },
+  })
+  diagnostics.observe({
+    method: 'fs/changed',
+    atIso: '2026-07-03T00:00:00.980Z',
+    params: {
+      watchId: 'watch-secret',
+      changedPaths: ['C:\\secret\\file-a.txt', 'C:\\secret\\file-b.txt'],
+    },
+  })
+  diagnostics.observe({
+    method: 'externalAgentConfig/import/completed',
+    atIso: '2026-07-03T00:00:00.990Z',
+    params: {},
+  })
+  const protocolAlertSnapshot = diagnostics.snapshot()
+  assert.equal(protocolAlertSnapshot.unknownNotificationCount, 0)
+  assert.deepEqual(protocolAlertSnapshot.recentProtocolAlerts.map((item) => item.method), [
+    'externalAgentConfig/import/completed',
+    'fs/changed',
+    'configWarning',
+    'warning',
+  ])
+  assert.equal(protocolAlertSnapshot.recentProtocolAlerts[1]?.changedPathCount, 2)
+  assert.equal(protocolAlertSnapshot.recentProtocolAlerts[1]?.hasPath, true)
+  assert.equal(protocolAlertSnapshot.recentProtocolAlerts[2]?.hasPath, true)
+  assert.equal(protocolAlertSnapshot.recentProtocolAlerts[2]?.summary, 'invalid config value')
+  assert.equal(JSON.stringify(protocolAlertSnapshot.recentProtocolAlerts).includes('C:\\'), false)
+  assert.equal(JSON.stringify(protocolAlertSnapshot.recentProtocolAlerts).includes('secret\\file'), false)
+
+  diagnostics.observe({
     method: 'thread/realtime/transcript/delta',
     atIso: '2026-07-03T00:00:01.000Z',
     threadId: 'thread-a',
@@ -878,6 +930,7 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(diagnostics.snapshot().recentModelNotifications.length, 0)
   assert.equal(diagnostics.snapshot().recentWindowsSandboxNotifications.length, 0)
   assert.equal(diagnostics.snapshot().recentHookNotifications.length, 0)
+  assert.equal(diagnostics.snapshot().recentProtocolAlerts.length, 0)
 }
 
 async function smokeAppServerHookDiagnostics(): Promise<void> {
