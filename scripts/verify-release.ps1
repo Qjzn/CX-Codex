@@ -69,6 +69,14 @@ function Get-NpmCommand {
 }
 
 function Get-PowerShellCommand {
+  $preferred = $env:CX_CODEX_POWERSHELL_COMMAND
+  if (-not [string]::IsNullOrWhiteSpace($preferred)) {
+    $preferredCommand = Get-Command $preferred -ErrorAction SilentlyContinue
+    if ($preferredCommand) {
+      return $preferredCommand.Source
+    }
+  }
+
   $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
   if ($pwsh) {
     return $pwsh.Source

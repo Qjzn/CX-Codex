@@ -3811,3 +3811,36 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
 - 2026-07-04 CLI 启动烟测：`node dist-cli\index.js --help` 通过，输出 `CX-Codex Web bridge for Codex app-server`。
 - 2026-07-04 Governance / release gate：`pwsh -NoLogo -NoProfile -Command "Write-Output ok"` 在本机执行层无输出并持续挂起，因此 `npm.cmd run verify:governance` 和 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 本轮未能可靠完成；代码路径已由 server smoke、前端 typecheck/build 和 CLI smoke 覆盖。
+
+---
+
+### Feature: PowerShell 验证入口自动回退
+
+#### Prerequisites
+- 当前仓库包含 `scripts/run-powershell-script.mjs`。
+- 当前仓库包含 `scripts/verify-governance.ps1`、`scripts/verify-release.ps1` 和 `scripts/verify-release-artifacts.ps1`。
+- 本机至少存在一个可用 PowerShell 命令，例如 Windows PowerShell `powershell.exe` 或 PowerShell 7 `pwsh`。
+
+#### Steps
+1. 执行 `node scripts/run-powershell-script.mjs scripts/verify-governance.ps1`，确认会先探测 PowerShell，然后运行治理检查。
+2. 执行 `npm.cmd run verify:governance`，确认 npm 入口走同一个运行器。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip`，确认 release gate 的快速路径可完成。
+4. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`，确认完整 release gate 可完成。
+5. 检查 `scripts/verify-release.ps1`，确认内部调用治理检查、打包 smoke 和 schema audit 时优先复用 `CX_CODEX_POWERSHELL_COMMAND`。
+6. 检查 `.github/PULL_REQUEST_TEMPLATE.md`，确认不再把本地验证硬绑定为必须使用 `pwsh`。
+
+#### Expected Results
+- `scripts/run-powershell-script.mjs` 会用 5 秒超时探测候选 PowerShell；`pwsh` 不可用、失败或挂起时会尝试下一个候选。
+- 选中的 PowerShell 会通过 `CX_CODEX_POWERSHELL_COMMAND` 传给 `verify-release.ps1`，避免 release gate 内部重新选择挂起的 `pwsh`。
+- `verify:governance`、`verify:release` 和 `verify:release-artifacts` npm 脚本都走同一个运行器。
+- CI / Release workflow 仍可直接使用 GitHub runner 的 `pwsh` 调用 `.ps1` 脚本；本地 npm 脚本获得更稳的 Windows 回退能力。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `scripts/run-powershell-script.mjs`，恢复 `package.json` 中三个验证脚本为直接 `pwsh` 调用，并撤销 `scripts/verify-release.ps1`、`scripts/verify-governance.ps1`、`.github/PULL_REQUEST_TEMPLATE.md`、`docs/changelog.zh-CN.md` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 运行器直连治理检查：`node scripts\run-powershell-script.mjs scripts\verify-governance.ps1` 通过，输出 `Using PowerShell: powershell.exe (5.1.26100.8655)` 和 `Governance docs check passed.`。
+- 2026-07-04 npm 治理入口：`npm.cmd run verify:governance` 通过，同样自动回退到 `powershell.exe`；仅出现 npm 本机 update config 权限提示，不影响验证结果。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
+- 2026-07-04 完整 Release gate：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `vue-tsc --noEmit`、`vite build`、`tsup`、server module smoke、CLI help smoke、CLI CJS launcher smoke 和 release package smoke；Vite 仍有既有 large chunk warning，schema audit 按命令跳过。

@@ -13,6 +13,7 @@
   - 普通 JSON API 请求体新增默认 2MiB 服务端保护，可通过 `CX_CODEX_JSON_BODY_MAX_BYTES` 或 `JSON_BODY_MAX_BYTES` 覆盖。
   - 普通文件上传请求体新增默认 50MiB 服务端保护，可通过 `CX_CODEX_FILE_UPLOAD_MAX_BYTES` 或 `FILE_UPLOAD_MAX_BYTES` 覆盖。
 - 协议治理：
+  - 本地 `verify:governance`、`verify:release` 和 `verify:release-artifacts` 新增 PowerShell 运行器，先探测 `pwsh`，不可用或挂起时自动回退到 Windows PowerShell，并把选中的命令传给 release gate 内部调用。
   - 新增 `docs/app-server-schema-audit-summary.json`，把最新 App Server schema drift 摘要从本地临时输出收口为可审查文档。
   - Release/governance 门禁会校验 schema audit 摘要结构，避免协议差异记录丢失或无法复核。
   - App Server `thread/read` 未知 thread/turn status 会在 health、diagnostics 和诊断中心按来源聚合计数，方便发现官方协议新增状态且不误判为运行态。

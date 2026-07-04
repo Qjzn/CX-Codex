@@ -5,7 +5,7 @@
 ## 验证结果
 
 - [ ] `npm run build`
-- [ ] `npm run verify:release -- -SchemaAudit skip`（需 PowerShell 7 / `pwsh`）或说明未运行原因
+- [ ] `npm run verify:release -- -SchemaAudit skip`（会自动选择可用的 PowerShell；如未运行请说明原因）
 - [ ] 如涉及 Android：已验证 `mobile:android:sync` 或 APK 构建
 - [ ] 如涉及安装脚本：已说明目标系统和回滚方式
 - [ ] 如涉及 UI：已附截图或说明移动端表现

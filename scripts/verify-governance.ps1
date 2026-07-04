@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param()
 
 $ErrorActionPreference = "Stop"
@@ -26,7 +26,7 @@ function Assert-ContentIncludes {
   )
 
   $path = Resolve-RepoPath $RelativePath
-  $content = Get-Content -Raw -LiteralPath $path
+  $content = Get-Content -Raw -Encoding UTF8 -LiteralPath $path
   foreach ($needle in $Needles) {
     if (-not $content.Contains($needle)) {
       throw "$RelativePath is missing required text: $needle"
@@ -71,6 +71,7 @@ $requiredFiles = @(
   ".github/workflows/ci.yml",
   ".github/workflows/release.yml",
   ".github/release-body.md",
+  "scripts/run-powershell-script.mjs",
   "scripts/verify-release-artifacts.ps1"
 )
 
@@ -126,7 +127,7 @@ Assert-ContentIncludes "docs/openai-docs-review.zh-CN.md" @(
   "npm.cmd run audit:app-server-schemas",
   "docs/app-server-schema-audit-summary.json",
   "docs/app-server-protocol-matrix.zh-CN.md",
-  "App Server transport"
+  "App Server transport",
   "gpt-4o-transcribe-diarize",
   "diarized_json"
 )
@@ -165,6 +166,7 @@ Assert-ContentIncludes "RELEASE.md" @(
 )
 
 Assert-ContentIncludes "scripts/verify-release.ps1" @(
+  "CX_CODEX_POWERSHELL_COMMAND",
   "CLI CJS launcher smoke",
   "cli cjs launcher smoke ok",
   "spawnSync(process.execPath",
@@ -190,7 +192,15 @@ Assert-ContentIncludes "scripts/verify-release-artifacts.ps1" @(
 )
 
 Assert-ContentIncludes "package.json" @(
-  '"verify:release-artifacts": "pwsh -NoProfile -File ./scripts/verify-release-artifacts.ps1"'
+  '"verify:governance": "node ./scripts/run-powershell-script.mjs ./scripts/verify-governance.ps1"',
+  '"verify:release": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release.ps1"',
+  '"verify:release-artifacts": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release-artifacts.ps1"'
+)
+
+Assert-ContentIncludes "scripts/run-powershell-script.mjs" @(
+  "PROBE_TIMEOUT_MS",
+  "CX_CODEX_POWERSHELL_COMMAND",
+  "Using PowerShell:"
 )
 
 Assert-ContentIncludes "scripts/package-release.ps1" @(
@@ -273,7 +283,7 @@ Assert-ContentIncludes "docs/app-server-protocol-matrix.zh-CN.md" @(
 )
 
 $schemaAuditSummaryPath = Resolve-RepoPath "docs/app-server-schema-audit-summary.json"
-$schemaAuditSummary = Get-Content -Raw -LiteralPath $schemaAuditSummaryPath | ConvertFrom-Json
+$schemaAuditSummary = Get-Content -Raw -Encoding UTF8 -LiteralPath $schemaAuditSummaryPath | ConvertFrom-Json
 if ($schemaAuditSummary.officialDocsUrl -ne "https://developers.openai.com/codex/app-server") {
   throw "docs/app-server-schema-audit-summary.json has an unexpected officialDocsUrl."
 }
