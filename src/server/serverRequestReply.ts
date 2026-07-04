@@ -1,3 +1,9 @@
+import {
+  createAppServerRpcErrorResponse,
+  createAppServerRpcSuccessResponse,
+  type AppServerJsonRpcResponse,
+} from './appServerJsonRpcWire.js'
+
 export type ServerRequestReply = {
   result?: unknown
   error?: {
@@ -38,6 +44,13 @@ export function readServerRequestReplyPayload(payload: unknown): ParsedServerReq
   }
 
   return { id, reply: { result: body.result } }
+}
+
+export function createServerRequestReplyResponse(requestId: number, reply: ServerRequestReply): AppServerJsonRpcResponse {
+  if (reply.error) {
+    return createAppServerRpcErrorResponse(requestId, reply.error)
+  }
+  return createAppServerRpcSuccessResponse(requestId, reply.result ?? {})
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

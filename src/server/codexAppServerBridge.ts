@@ -97,10 +97,8 @@ import {
   type WindowsSandboxReadinessDiagnostics,
 } from './windowsSandboxDiagnostics.js'
 import {
-  createAppServerRpcErrorResponse,
   createAppServerRpcNotification,
   createAppServerRpcRequest,
-  createAppServerRpcSuccessResponse,
   readAppServerJsonRpcLineEvent,
 } from './appServerJsonRpcWire.js'
 import { createAppServerClientInfo, readPackageVersion } from './appServerClientInfo.js'
@@ -145,6 +143,7 @@ import {
   type WebBridgeSettings,
 } from './serverRequestPolicy.js'
 import {
+  createServerRequestReplyResponse,
   readServerRequestReplyPayload,
   type ServerRequestReply,
 } from './serverRequestReply.js'
@@ -415,12 +414,7 @@ class AppServerProcess {
   }
 
   private sendServerRequestReply(requestId: number, reply: ServerRequestReply): void {
-    if (reply.error) {
-      this.sendLine(createAppServerRpcErrorResponse(requestId, reply.error))
-      return
-    }
-
-    this.sendLine(createAppServerRpcSuccessResponse(requestId, reply.result ?? {}))
+    this.sendLine(createServerRequestReplyResponse(requestId, reply))
   }
 
   setWebBridgeSettings(settings: WebBridgeSettings): void {

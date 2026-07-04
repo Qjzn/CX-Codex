@@ -142,7 +142,10 @@ import {
   toPendingServerRequestDiagnostics,
   toPendingServerRequestDiagnosticsList,
 } from '../src/server/serverRequestDiagnostics.js'
-import { readServerRequestReplyPayload } from '../src/server/serverRequestReply.js'
+import {
+  createServerRequestReplyResponse,
+  readServerRequestReplyPayload,
+} from '../src/server/serverRequestReply.js'
 import { handleServerRequestRoutes } from '../src/server/serverRequestRoutes.js'
 import {
   DEFAULT_WEB_BRIDGE_SETTINGS,
@@ -690,6 +693,23 @@ function smokeServerRequestReply(): void {
   }), {
     id: 9,
     reply: { error: { code: -32000, message: 'Server request rejected by client' } },
+  })
+
+  assert.deepEqual(createServerRequestReplyResponse(10, {
+    result: { action: 'approve' },
+  }), {
+    id: 10,
+    result: { action: 'approve' },
+  })
+  assert.deepEqual(createServerRequestReplyResponse(11, {
+    error: { code: -32603, message: 'Denied' },
+  }), {
+    id: 11,
+    error: { code: -32603, message: 'Denied' },
+  })
+  assert.deepEqual(createServerRequestReplyResponse(12, {}), {
+    id: 12,
+    result: {},
   })
 
   assert.throws(
