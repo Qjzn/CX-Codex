@@ -152,6 +152,9 @@ import {
   shouldAutoApproveServerRequest,
   type WebBridgeSettings,
 } from '../src/server/serverRequestPolicy.js'
+import {
+  handleAppServerServerRequest,
+} from '../src/server/appServerServerRequestHandler.js'
 import type { FavoriteRecord } from '../src/server/webUiState.js'
 import {
   classifyServerRequestMethod,
@@ -425,6 +428,7 @@ try {
   smokeAppServerStderrLogger()
   smokePlanModeTurnStore()
   smokeServerRequestPolicy()
+  smokeAppServerServerRequestHandler()
   smokeServerRequestDiagnostics()
   smokeServerRequestReply()
   await smokeServerRequestRoutes()
@@ -3676,6 +3680,106 @@ function smokeServerRequestPolicy(): void {
   assert.equal(unsupported.kind, 'reject-unsupported')
   assert.equal(isImmediateServerRequestPolicyDecision(unsupported), true)
   assert.match(JSON.stringify(buildUnsupportedServerRequestResult('item/tool/call')), /不能代执行这个工具/)
+}
+
+function smokeAppServerServerRequestHandler(): void {
+  const pendingStore = new PendingServerRequestStore()
+  const replies: Array<{ requestId: number; reply: unknown }> = []
+  const notifications: Array<{ method: string; params: unknown }> = []
+  const unsupportedWarnings: Array<{
+    requestId: number
+    method: string
+    threadId: string
+    turnId: string
+  }> = []
+  const askPermissions: WebBridgeSettings['permissions'] = {
+    allowAllPermissionRequests: false,
+    commandExecution: 'ask',
+    fileChange: 'ask',
+    mcpTools: 'ask',
+  }
+
+  const createDependencies = (overrides: Partial<Parameters<typeof handleAppServerServerRequest>[3]> = {}) => ({
+    permissions: askPermissions,
+    isPlanModeRequest: () => false,
+    readThreadIdFromPayload,
+    readTurnIdFromPayload,
+    sendServerRequestReply: (requestId: number, reply: unknown) => {
+      replies.push({ requestId, reply })
+    },
+    recordPendingServerRequest: (requestId: number, method: string, params: unknown) => (
+      pendingStore.record(requestId, method, params)
+    ),
+    emitNotification: (notification: { method: string; params: unknown }) => {
+      notifications.push(notification)
+    },
+    writeUnsupportedRequestWarning: (details: {
+      requestId: number
+      method: string
+      threadId: string
+      turnId: string
+    }) => {
+      unsupportedWarnings.push(details)
+    },
+    ...overrides,
+  })
+
+  handleAppServerServerRequest(
+    11,
+    'item/commandExecution/requestApproval',
+    { threadId: 'thread-auto', turnId: 'turn-auto' },
+    createDependencies({
+      permissions: {
+        ...askPermissions,
+        commandExecution: 'allowForSession',
+      },
+    }),
+  )
+
+  assert.deepEqual(replies.shift(), {
+    requestId: 11,
+    reply: { result: { decision: 'acceptForSession' } },
+  })
+  const autoResolved = notifications.shift()
+  assert.equal(autoResolved?.method, 'server/request/resolved')
+  assert.deepEqual(autoResolved?.params, {
+    id: 11,
+    method: 'item/commandExecution/requestApproval',
+    threadId: 'thread-auto',
+    mode: 'automatic',
+    resolvedAtIso: (autoResolved?.params as { resolvedAtIso: string }).resolvedAtIso,
+  })
+
+  handleAppServerServerRequest(
+    12,
+    'item/tool/call',
+    { threadId: 'thread-tool', turnId: 'turn-tool' },
+    createDependencies(),
+  )
+  assert.deepEqual(unsupportedWarnings, [{
+    requestId: 12,
+    method: 'item/tool/call',
+    threadId: 'thread-tool',
+    turnId: 'turn-tool',
+  }])
+  const unsupportedReply = replies.shift()
+  assert.equal(unsupportedReply?.requestId, 12)
+  assert.deepEqual(unsupportedReply?.reply, {
+    result: buildUnsupportedServerRequestResult('item/tool/call'),
+  })
+  assert.equal(notifications.shift()?.method, 'server/request/resolved')
+
+  handleAppServerServerRequest(
+    13,
+    'mcp/custom/request',
+    { threadId: 'thread-pending', turnId: 'turn-pending' },
+    createDependencies(),
+  )
+  assert.equal(pendingStore.count, 1)
+  const queued = notifications.shift()
+  assert.equal(queued?.method, 'server/request')
+  assert.deepEqual(queued?.params, pendingStore.list()[0])
+  assert.deepEqual(replies, [])
 }
 
 async function smokeCommandRunner(): Promise<void> {

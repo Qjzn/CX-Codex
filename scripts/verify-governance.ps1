@@ -363,6 +363,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "src\server\notificationSseRoute.ts",
   "src\server\appServerPendingRpcStore.ts",
   "src\server\appServerSessionCleanup.ts",
+  "src\server\appServerServerRequestHandler.ts",
   "src\server\appServerProcessTermination.ts",
   "src\server\projectRootRoutes.ts",
   "src\server\rpcProxyRoute.ts",

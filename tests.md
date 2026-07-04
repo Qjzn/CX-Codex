@@ -7464,3 +7464,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed; its internal `Release package smoke` ran `npm run package:release -- -Version verify-smoke -OutputDir ...`, its `Release artifact checksum smoke` ran `npm run verify:release-artifacts -- -OutputDir ...`, and the gate completed `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server server request handler extraction
+
+#### Prerequisites
+- Current repository includes `src/server/codexAppServerBridge.ts`, `src/server/appServerServerRequestHandler.ts`, `src/server/serverRequestPolicy.ts`, `src/server/pendingServerRequests.ts`, `scripts/server-module-smoke.ts`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
+- Dependencies are installed and `dist/` plus `dist-cli/` already exist, or run release verification without `-SkipBuild`.
+
+#### Steps
+1. Open `src/server/appServerServerRequestHandler.ts` and confirm it owns `handleAppServerServerRequest(...)` plus the resolved-notification helper.
+2. Open `src/server/codexAppServerBridge.ts` and confirm `AppServerProcess.handleServerRequest(...)` delegates policy resolution, automatic replies, pending queue creation, and `server/request` notification emission to the helper.
+3. Open `scripts/server-module-smoke.ts` and confirm `smokeAppServerServerRequestHandler()` covers command auto-approval, unsupported `item/tool/call` rejection, and ordinary pending queue emission.
+4. Open `scripts/verify-release.ps1` and confirm Release package smoke requires `src\server\appServerServerRequestHandler.ts` inside the release zip.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+8. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- `server/request` handling behavior stays unchanged while bridge main file no longer contains the policy/pending branching implementation.
+- Automatic permission approvals still send an immediate success reply and emit `server/request/resolved`.
+- Unsupported tool calls still send the unsupported result, emit a resolved notification, and record a sanitized warning path.
+- Non-immediate requests still enter `PendingServerRequestStore` and emit `server/request`.
+- Release package smoke fails if the new helper module is omitted from the Web source zip.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal output in `output/server-module-smoke/` and `output/release-package-smoke/`.
+- To roll back, move the helper logic back into `AppServerProcess.handleServerRequest(...)`, delete `src/server/appServerServerRequestHandler.ts`, remove smoke/governance/release package references, revert changelog updates, and remove this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 server module smoke: `node scripts\verify-server-modules.mjs` passed, including `smokeAppServerServerRequestHandler()` coverage for automatic command approval, unsupported `item/tool/call` rejection, and pending queue emission.
+- 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

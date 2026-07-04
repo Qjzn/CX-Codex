@@ -133,8 +133,6 @@ import {
   createThreadSearchIndexStore,
 } from './threadSearchIndex.js'
 import {
-  evaluateServerRequestPolicy,
-  isImmediateServerRequestPolicyDecision,
   type WebBridgeSettings,
 } from './serverRequestPolicy.js'
 import {
@@ -154,6 +152,9 @@ import {
 } from './appServerThreadListAugment.js'
 import { createAppServerRuntimeSnapshotPersister } from './appServerRuntimeSnapshotPersistence.js'
 import { createAppServerRuntimeActions } from './appServerRuntimeActions.js'
+import {
+  handleAppServerServerRequest,
+} from './appServerServerRequestHandler.js'
 
 const APP_SERVER_RPC_SLOW_WARN_MS = 1_800
 const APP_SERVER_RPC_MAX_IN_FLIGHT = 2
@@ -468,34 +469,22 @@ class AppServerProcess {
   }
 
   private handleServerRequest(requestId: number, method: string, params: unknown): void {
-    const policy = evaluateServerRequestPolicy({
-      method,
-      params,
+    handleAppServerServerRequest(requestId, method, params, {
       permissions: this.webBridgeSettings.permissions,
-      isPlanModeRequest: this.isPlanModeServerRequest(params),
-    })
-
-    if (isImmediateServerRequestPolicyDecision(policy)) {
-      if (policy.kind === 'reject-unsupported') {
+      isPlanModeRequest: (requestParams) => this.isPlanModeServerRequest(requestParams),
+      readThreadIdFromPayload: (payload) => this.readServerRequestThreadId(payload),
+      readTurnIdFromPayload,
+      sendServerRequestReply: (requestId, reply) => this.sendServerRequestReply(requestId, reply),
+      recordPendingServerRequest: (requestId, method, params) => this.pendingServerRequests.record(requestId, method, params),
+      emitNotification: (notification) => this.emitNotification(notification),
+      writeUnsupportedRequestWarning: (details) => {
         writeBridgeLog('warn', 'Declined unsupported app-server request', {
-          requestId,
-          method,
-          threadId: this.readServerRequestThreadId(params),
-          turnId: readTurnIdFromPayload(params),
+          requestId: details.requestId,
+          method: details.method,
+          threadId: details.threadId,
+          turnId: details.turnId,
         })
-      }
-      this.sendServerRequestReply(requestId, {
-        result: policy.result,
-      })
-      this.emitServerRequestResolved(requestId, method, params, 'automatic')
-      return
-    }
-
-    const pendingRequest = this.pendingServerRequests.record(requestId, method, params)
-
-    this.emitNotification({
-      method: 'server/request',
-      params: pendingRequest,
+      },
     })
   }
 
