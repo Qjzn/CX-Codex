@@ -310,6 +310,7 @@ import { createAppServerRuntimeActions } from '../src/server/appServerRuntimeAct
 import {
   AppServerNotificationReplay,
   createAppServerNotificationReplayAccessors,
+  createAppServerNotificationReplayBundle,
 } from '../src/server/appServerNotificationReplay.js'
 import {
   handleNotificationReplayRoute,
@@ -7536,6 +7537,42 @@ function smokeAppServerNotificationReplay(): void {
     latestSeq: 21,
     oldestSeq: 21,
   })
+
+  const bundledEvents: unknown[] = []
+  const bundle = createAppServerNotificationReplayBundle({
+    initialSeq: 30,
+    nowIso: () => '2026-01-01T00:00:03.000Z',
+    appendEvent: (event) => {
+      bundledEvents.push(event)
+    },
+    listEventsAfter: (afterSeq) => ({
+      notifications: [],
+      latestSeq: afterSeq,
+      oldestSeq: afterSeq,
+    }),
+    observeNotification: () => {},
+    readThreadIdFromPayload: (payload) => readStringProperty(payload, 'threadId'),
+    readTurnIdFromPayload: (payload) => readStringProperty(payload, 'turnId'),
+  })
+  const bundledEvent = bundle.rememberNotificationEvent({
+    method: 'turn/completed',
+    params: { threadId: 'thread-bundle', turnId: 'turn-bundle' },
+  })
+  assert.equal(bundle.notificationReplay.latestSeq, 31)
+  assert.equal(bundledEvent.seq, 31)
+  assert.deepEqual(bundle.listNotificationEventsAfter(30, 5), {
+    notifications: [bundledEvent],
+    latestSeq: 31,
+    oldestSeq: 31,
+  })
+  assert.deepEqual(bundledEvents, [{
+    seq: 31,
+    method: 'turn/completed',
+    params: { threadId: 'thread-bundle', turnId: 'turn-bundle' },
+    atIso: '2026-01-01T00:00:03.000Z',
+    threadId: 'thread-bundle',
+    turnId: 'turn-bundle',
+  }])
 }
 
 async function smokeDiagnosticsRoutes(): Promise<void> {

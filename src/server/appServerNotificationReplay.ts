@@ -32,7 +32,7 @@ export type AppServerNotificationReplayAccessors = {
   }
 }
 
-type AppServerNotificationReplayOptions = {
+export type AppServerNotificationReplayOptions = {
   initialSeq: number
   appendEvent: (event: RuntimeEventLike & { threadId: string; turnId: string }) => void
   listEventsAfter: (afterSeq: number, limit: number) => PersistedNotificationReplay
@@ -47,6 +47,10 @@ type AppServerNotificationReplayOptions = {
   readTurnIdFromPayload: (payload: unknown) => string
   nowIso?: () => string
   bufferLimit?: number
+}
+
+export type AppServerNotificationReplayBundle = AppServerNotificationReplayAccessors & {
+  notificationReplay: AppServerNotificationReplay
 }
 
 export class AppServerNotificationReplay {
@@ -138,5 +142,15 @@ export function createAppServerNotificationReplayAccessors(
   return {
     rememberNotificationEvent: (notification) => replay.remember(notification),
     listNotificationEventsAfter: (afterSeq, limit = 200) => replay.listAfter(afterSeq, limit),
+  }
+}
+
+export function createAppServerNotificationReplayBundle(
+  options: AppServerNotificationReplayOptions,
+): AppServerNotificationReplayBundle {
+  const notificationReplay = new AppServerNotificationReplay(options)
+  return {
+    notificationReplay,
+    ...createAppServerNotificationReplayAccessors(notificationReplay),
   }
 }

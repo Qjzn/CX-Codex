@@ -8,8 +8,7 @@ import {
 } from './appServerRuntimeBridge.js'
 import { subscribeBridgeNotificationRuntimeSync } from './appServerNotificationRuntimeSync.js'
 import {
-  AppServerNotificationReplay,
-  createAppServerNotificationReplayAccessors,
+  createAppServerNotificationReplayBundle,
 } from './appServerNotificationReplay.js'
 import { createAppServerRuntimeReconciliation } from './appServerRuntimeReconciliation.js'
 import {
@@ -701,7 +700,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const hookDiagnosticsCache = new AppServerHookDiagnosticsCache()
   const windowsSandboxReadinessCache = new WindowsSandboxReadinessCache()
   const bridgeNotificationListeners = new AppServerNotificationListeners<BridgeNotificationEvent>()
-  const notificationReplay = new AppServerNotificationReplay({
+  const {
+    notificationReplay,
+    rememberNotificationEvent,
+    listNotificationEventsAfter,
+  } = createAppServerNotificationReplayBundle({
     initialSeq: runtimeStore.getLatestEventSeq(),
     appendEvent: (event) => {
       runtimeStore.appendEvent(event)
@@ -720,11 +723,6 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
     upsertSnapshot: (nextSnapshot) => runtimeStore.upsertSnapshot(nextSnapshot),
   })
-
-  const {
-    rememberNotificationEvent,
-    listNotificationEventsAfter,
-  } = createAppServerNotificationReplayAccessors(notificationReplay)
 
   const {
     readAppServerHookDiagnostics,
