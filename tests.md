@@ -6622,3 +6622,40 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: OpenAI official docs alignment snapshot
+
+#### Prerequisites
+- Network access to official OpenAI documentation under `developers.openai.com`.
+- Current repository includes `docs/openai-docs-review.zh-CN.md` and `docs/protocol-compatibility.zh-CN.md`.
+
+#### Steps
+1. Run `node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` and confirm the manual is current or refreshed successfully.
+2. Open `https://developers.openai.com/codex/app-server` and confirm the page still documents `initialize` followed by `initialized`, version-specific schema generation, and `capabilities.experimentalApi` as the experimental API opt-in.
+3. Open `https://developers.openai.com/codex/remote-connections` and confirm remote Codex work still uses SSH/VPN/mesh style boundaries rather than direct public App Server exposure.
+4. Open `https://developers.openai.com/api/docs/guides/speech-to-text` and `https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create`; confirm ordinary transcription still supports JSON output and diarized transcription still uses `gpt-4o-transcribe-diarize`, `response_format=diarized_json`, and `chunking_strategy=auto`.
+5. Open `https://developers.openai.com/api/reference/responses/overview` and `https://developers.openai.com/api/docs/guides/migrate-to-responses`; confirm Responses is the recommended unified API for new general OpenAI applications, but has a different response/items object model from Codex App Server thread/turn/runtime/approval events.
+6. Check `docs/openai-docs-review.zh-CN.md` and confirm the official source list and current review conclusions include App Server, remote security, Speech to text, audio transcription reference, and Responses boundary.
+7. Check `docs/protocol-compatibility.zh-CN.md` and confirm the OpenAI API boundary section says Responses API is not a Codex App Server replacement.
+8. Run `git diff --check`.
+9. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+10. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Official docs review records the latest source URLs and the current 2026-07-04 review timestamp.
+- Project documentation keeps Codex App Server as the only source of truth for thread, turn, runtime, approval, restore, interrupt, and notification behavior.
+- Speech to text remains a separate server-side supplemental capability with service-side model/format/chunking normalization and no browser-exposed API key.
+- Responses API is documented as useful for general OpenAI integrations, not as a replacement for Codex rich-client App Server.
+- Governance and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required for this documentation-only change beyond normal release smoke output under `output\release-package-smoke`.
+- To roll back, revert the OpenAI docs snapshot additions in `docs/openai-docs-review.zh-CN.md`, `docs/protocol-compatibility.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 official Codex manual refresh: `node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` passed and reported `Manual status: local manual was already current.`
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
