@@ -165,7 +165,16 @@ Assert-ContentExcludes ".github/release-body.md" @(
   "2.2.7",
   "2.2.4",
   "这版适合谁升级",
-  "本次版本重点"
+  "本次版本重点",
+  "./scripts/verify-release.ps1 -RequireCleanGit -SchemaAudit skip",
+  "./scripts/package-release.ps1",
+  "./scripts/verify-release-artifacts.ps1"
+)
+
+Assert-ContentExcludes ".github/workflows/release.yml" @(
+  "./scripts/verify-release.ps1 -RequireCleanGit -SchemaAudit skip",
+  "./scripts/package-release.ps1",
+  "./scripts/verify-release-artifacts.ps1"
 )
 
 Assert-ContentExcludes ".github/FUNDING.yml" @(
@@ -539,8 +548,9 @@ Assert-ContentIncludes ".github/release-body.md" @(
   "CX-Codex-<tag>.zip",
   "cx-codex-android-<tag>.apk",
   "cx-codex-android-debug-<tag>.apk",
-  "./scripts/verify-release.ps1 -RequireCleanGit -SchemaAudit skip",
-  "./scripts/verify-release-artifacts.ps1",
+  "npm run verify:release -- -RequireCleanGit -SchemaAudit skip",
+  "npm run package:release -- -Version <tag> -OutputDir <release-dir>",
+  "npm run verify:release-artifacts -- -OutputDir <release-dir>",
   "npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn",
   "must not include private accounts"
 )
@@ -671,8 +681,9 @@ Assert-ContentIncludes ".github/workflows/ci.yml" @(
 )
 
 Assert-ContentIncludes ".github/workflows/release.yml" @(
-  "./scripts/verify-release.ps1 -RequireCleanGit -SchemaAudit skip",
-  "./scripts/verify-release-artifacts.ps1"
+  "npm run verify:release -- -RequireCleanGit -SchemaAudit skip",
+  "npm run package:release -- -Version",
+  "npm run verify:release-artifacts -- -OutputDir"
 )
 
 Write-Host "Governance docs check passed."

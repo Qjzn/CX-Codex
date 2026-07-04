@@ -33,15 +33,10 @@ jobs:
         run: npm ci
 
       - name: Run release verification
-        shell: pwsh
-        run: ./scripts/verify-release.ps1 -RequireCleanGit -SchemaAudit skip
+        run: npm run verify:release -- -RequireCleanGit -SchemaAudit skip
 
       - name: Package release bundle
-        shell: pwsh
-        run: |
-          ./scripts/package-release.ps1 `
-            -Version "${env:GITHUB_REF_NAME}" `
-            -OutputDir "${env:RUNNER_TEMP}\release"
+        run: npm run package:release -- -Version "${env:GITHUB_REF_NAME}" -OutputDir "${env:RUNNER_TEMP}\release"
 
       - name: Set up Java 24 for Android
         uses: actions/setup-java@v4
@@ -121,8 +116,7 @@ jobs:
           Set-Content -Path ($apkTarget + '.sha256') -Value "$hash  $(Split-Path -Leaf $apkTarget)" -Encoding ASCII
 
       - name: Verify release artifact checksums
-        shell: pwsh
-        run: ./scripts/verify-release-artifacts.ps1 -OutputDir "${env:RUNNER_TEMP}\release"
+        run: npm run verify:release-artifacts -- -OutputDir "${env:RUNNER_TEMP}\release"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2

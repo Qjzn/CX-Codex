@@ -18,6 +18,7 @@
 - 协议治理：
   - 本地 `verify:governance`、`verify:release` 和 `verify:release-artifacts` 新增 PowerShell 运行器，先探测 `pwsh`，不可用或挂起时自动回退到 Windows PowerShell，并把选中的命令传给 release gate 内部调用。
   - GitHub Actions CI 的 Release verification 改为调用 `npm run verify:release -- -SchemaAudit skip`，与本地 package script 共享同一个 PowerShell 运行器入口，避免 PR 验证路径与本地门禁分叉。
+  - GitHub Release workflow 的 release verification、源码包打包和 artifact checksum 验证统一改为 npm script 入口，避免正式发版路径绕过本地 PowerShell 运行器。
   - `.github/FUNDING.yml` 移除 GitHub 默认占位模板，改为明确声明暂未配置资金入口，并纳入 governance 与 Release package smoke，避免开源治理文件带着模板噪声发布。
   - `verify:governance` 会校验 OpenAI 官方文档审查手册必须保留审查时间、官方来源、Codex manual 刷新命令、当前结论和语音转写约束，避免长期项目在文档入口上漂移。
   - OpenAI 官方文档审查手册已刷新到 2026-07-05 复核结果，确认 Codex App Server handshake / `experimentalApi` 边界和 Speech to text diarize multipart 约束仍与当前实现策略一致。

@@ -23,10 +23,10 @@ This release is built from the tagged source in this repository. It is intended 
 
 The release workflow runs:
 
-- `./scripts/verify-release.ps1 -RequireCleanGit -SchemaAudit skip`
-- `./scripts/package-release.ps1`
+- `npm run verify:release -- -RequireCleanGit -SchemaAudit skip`
+- `npm run package:release -- -Version <tag> -OutputDir <release-dir>`
 - Android sync and APK build
-- `./scripts/verify-release-artifacts.ps1`
+- `npm run verify:release-artifacts -- -OutputDir <release-dir>`
 
 Maintainers should also run a local schema audit before final release when App Server or OpenAI API behavior changed:
 
