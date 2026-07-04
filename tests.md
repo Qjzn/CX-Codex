@@ -3946,3 +3946,36 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Using PowerShell: powershell.exe (5.1.26100.8655)` 和 `Governance docs check passed.`。
 - 2026-07-04 静态验证：`git diff --check` 通过。
 - 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
+
+---
+
+### Feature: Web 登录请求体大小限制
+
+#### Prerequisites
+- 当前仓库包含 `src/server/authMiddleware.ts` 和 `src/server/httpBody.ts`。
+- 本机可运行 `npm.cmd run verify:server-modules`、`npm.cmd run build` 和 release gate。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run build`。
+4. 执行 `npm.cmd run verify:governance`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip`。
+6. 代码审查确认 `/auth/login` 通过 `readJsonBody()` 读取登录 JSON，不再手动累加无限制 body。
+7. 代码审查确认默认登录请求体上限为 16KiB，并可通过 `CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES`、`CODEXUI_AUTH_LOGIN_BODY_MAX_BYTES` 或 `AUTH_LOGIN_BODY_MAX_BYTES` 覆盖。
+
+#### Expected Results
+- `readAuthLoginPassword()` 只返回字符串密码字段，非对象、数组或非字符串密码视为无效密码。
+- 超过登录请求体上限时抛出 `RequestBodyTooLargeError`，中间件返回 `413` 和可读错误。
+- JSON 格式错误返回 `400`，不会回显提交的密码、Cookie 或 token。
+- 登录请求体大小限制记录在 changelog、安全硬化手册和本测试章节中。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/authMiddleware.ts`、`scripts/server-module-smoke.ts`、`docs/changelog.zh-CN.md`、`docs/security-hardening.zh-CN.md` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖登录请求体默认 16KiB、`CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES` 覆盖、密码字段解析和超限 `RequestBodyTooLargeError`。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建；Vite 仍有既有 large chunk warning。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。

@@ -259,6 +259,11 @@ import {
 } from '../src/server/transcriptionProxy.js'
 import { setJson } from '../src/server/httpJsonResponse.js'
 import { getErrorMessage } from '../src/server/errorMessage.js'
+import {
+  getAuthLoginRequestBodyLimitBytes,
+  readAuthLoginPassword,
+} from '../src/server/authMiddleware.js'
+import { RequestBodyTooLargeError } from '../src/server/httpBody.js'
 
 const originalNow = Date.now
 
@@ -269,6 +274,7 @@ try {
   smokeAppServerInitialization()
   smokeAppServerLaunch()
   smokeAppServerHealth()
+  await smokeAuthMiddleware()
   smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
   smokeAppServerStatusDiagnostics()
@@ -610,6 +616,45 @@ function smokeAppServerHealth(): void {
       recentTimeouts: [],
     },
   })
+}
+
+async function smokeAuthMiddleware(): Promise<void> {
+  const originalLimit = process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES
+  try {
+    process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES = '321'
+    assert.equal(getAuthLoginRequestBodyLimitBytes(), 321)
+  } finally {
+    if (typeof originalLimit === 'string') {
+      process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES = originalLimit
+    } else {
+      delete process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES
+    }
+  }
+
+  assert.equal(getAuthLoginRequestBodyLimitBytes(), 16 * 1024)
+  assert.equal(
+    await readAuthLoginPassword(Readable.from([Buffer.from(JSON.stringify({ password: 'secret' }))]) as never),
+    'secret',
+  )
+  assert.equal(
+    await readAuthLoginPassword(Readable.from([Buffer.from(JSON.stringify({ password: 7 }))]) as never),
+    '',
+  )
+
+  const originalTinyLimit = process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES
+  try {
+    process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES = '5'
+    await assert.rejects(
+      readAuthLoginPassword(Readable.from([Buffer.from(JSON.stringify({ password: 'too-large' }))]) as never),
+      (error) => error instanceof RequestBodyTooLargeError && error.maxBytes === 5,
+    )
+  } finally {
+    if (typeof originalTinyLimit === 'string') {
+      process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES = originalTinyLimit
+    } else {
+      delete process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES
+    }
+  }
 }
 
 function smokeAppServerNotificationDiagnostics(): void {

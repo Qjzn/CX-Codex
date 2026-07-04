@@ -15,6 +15,12 @@
 - 如果使用 `--host 0.0.0.0`，必须同时确认防火墙、端口映射、访问密码和反代鉴权策略。
 - Release、README、截图、Issue、日志示例不得包含真实 Token、Cookie、Authorization header、真实公网地址、私有 IP、个人目录或业务文件内容。
 
+## Web 登录与请求体边界
+
+- `/auth/login` 只接受受限 JSON 请求体，默认最大 16KiB，避免远程入口被超大登录请求消耗内存。
+- 如确需调整登录请求体上限，可使用 `CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES`、`CODEXUI_AUTH_LOGIN_BODY_MAX_BYTES` 或 `AUTH_LOGIN_BODY_MAX_BYTES`；不要通过移除限制解决异常客户端问题。
+- 登录失败、登录请求体超限和 JSON 格式错误必须返回可读错误，但不得回显提交的密码、Cookie 或 token。
+
 ## Codex App Server
 
 - CX-Codex 应优先把 Codex App Server 当作本机控制面，不直接把 App Server transport 暴露给公网。

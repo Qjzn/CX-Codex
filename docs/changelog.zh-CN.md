@@ -10,6 +10,7 @@
   - 诊断中心新增语音转写状态，展示当前 provider、模型、响应格式、上传上限和脱敏 endpoint，便于排查是否走官方 API 或登录态回退。
   - 未配置 OpenAI API key 时仍保留原有 ChatGPT 登录态代理转写链路，避免破坏既有安装。
 - 安全加固：
+  - `/auth/login` 登录请求体新增默认 16KiB 服务端保护，可通过 `CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES`、`CODEXUI_AUTH_LOGIN_BODY_MAX_BYTES` 或 `AUTH_LOGIN_BODY_MAX_BYTES` 覆盖。
   - 普通 JSON API 请求体新增默认 2MiB 服务端保护，可通过 `CX_CODEX_JSON_BODY_MAX_BYTES` 或 `JSON_BODY_MAX_BYTES` 覆盖。
   - 普通文件上传请求体新增默认 50MiB 服务端保护，可通过 `CX_CODEX_FILE_UPLOAD_MAX_BYTES` 或 `FILE_UPLOAD_MAX_BYTES` 覆盖。
 - 协议治理：

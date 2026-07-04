@@ -12,11 +12,16 @@ import {
   WEB_AUTH_REQUIRED_HEADER,
   WEB_AUTH_REQUIRED_VALUE,
 } from '../shared/webAuth.js'
+import {
+  RequestBodyTooLargeError,
+  readJsonBody,
+} from './httpBody.js'
 
 const TOKEN_COOKIE = 'codex_web_local_token'
 const TOKEN_MAX_AGE_SECONDS = 31536000
 const TOKEN_MAX_AGE_MS = TOKEN_MAX_AGE_SECONDS * 1000
 const TOKEN_STORE_MAX_ENTRIES = 24
+const AUTH_LOGIN_REQUEST_BODY_LIMIT_BYTES = 16 * 1024
 
 type StoredAuthToken = {
   hash: string
@@ -48,6 +53,28 @@ function parseCookies(header: string | undefined): Record<string, string> {
     cookies[key] = value
   }
   return cookies
+}
+
+function readAuthEnv(name: string): string {
+  return (
+    process.env[`CX_CODEX_${name}`]?.trim() ||
+    process.env[`CODEXUI_${name}`]?.trim() ||
+    process.env[name]?.trim() ||
+    ''
+  )
+}
+
+export function getAuthLoginRequestBodyLimitBytes(): number {
+  const configured = Number.parseInt(readAuthEnv('AUTH_LOGIN_BODY_MAX_BYTES'), 10)
+  if (Number.isFinite(configured) && configured > 0) return configured
+  return AUTH_LOGIN_REQUEST_BODY_LIMIT_BYTES
+}
+
+export async function readAuthLoginPassword(req: IncomingMessage): Promise<string> {
+  const payload = await readJsonBody(req, { maxBytes: getAuthLoginRequestBodyLimitBytes() })
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return ''
+  const value = (payload as Record<string, unknown>).password
+  return typeof value === 'string' ? value : ''
 }
 
 function getAuthTokenStorePath(): string {
@@ -302,13 +329,9 @@ export function createAuthSession(password: string): AuthSession {
 
     // Handle login POST
     if (req.method === 'POST' && req.path === '/auth/login') {
-      let body = ''
-      req.setEncoding('utf8')
-      req.on('data', (chunk: string) => { body += chunk })
-      req.on('end', () => {
+      void (async () => {
         try {
-          const parsed = JSON.parse(body) as { password?: string }
-          const provided = typeof parsed.password === 'string' ? parsed.password : ''
+          const provided = await readAuthLoginPassword(req)
 
           if (!constantTimeCompare(provided, password)) {
             res.status(401).json({ error: '密码错误' })
@@ -327,10 +350,14 @@ export function createAuthSession(password: string): AuthSession {
 
           res.setHeader('Set-Cookie', `${TOKEN_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${TOKEN_MAX_AGE_SECONDS}`)
           res.json({ ok: true })
-        } catch {
+        } catch (error) {
+          if (error instanceof RequestBodyTooLargeError) {
+            res.status(413).json({ error: `登录请求体过大，最大允许 ${error.maxBytes} 字节。` })
+            return
+          }
           res.status(400).json({ error: '请求体格式无效' })
         }
-      })
+      })()
       return
     }
 
