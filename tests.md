@@ -2318,6 +2318,37 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Thread token usage fallback 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/threadTokenUsage.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 token usage 归一化、session log 解析缓存，以及 `resolveThreadTokenUsage()` 的三层读取优先级。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `/codex-api/thread-token-usage` 使用的桥接函数委托 `resolveThreadTokenUsage()`，而不是在 `src/server/codexAppServerBridge.ts` 内联三层 fallback。
+5. 代码审查确认 token usage 读取优先级仍为 App Server token usage cache、thread/read cached payload、session log fallback。
+
+#### Expected Results
+- thread token usage fallback 逻辑集中在 `threadTokenUsage.ts`。
+- 空 threadId 仍短路返回 `null`。
+- App Server token usage cache 命中时不读取 thread/read 缓存。
+- thread/read cached payload 命中时不读取 session log。
+- thread/read 无 token usage 但有 session path 时，继续从 session log 读取 token usage。
+- release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `resolveThreadTokenUsage()` 和对应 smoke 断言，并把 token usage 三层 fallback 恢复到 `src/server/codexAppServerBridge.ts` 的本地 helper 内。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: Runtime thread state payload 模块化
 
 #### Prerequisites

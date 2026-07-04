@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
+import type { CachedThreadRead } from './appServerThreadReadCache.js'
 
 export type TokenUsageBreakdown = {
   totalTokens: number
@@ -16,6 +17,12 @@ export type ThreadTokenUsage = {
   modelContextWindow: number | null
   usedPercent: number | null
   remainingTokens: number | null
+}
+
+export type ThreadTokenUsageSources = {
+  getCachedTokenUsage: (threadId: string) => ThreadTokenUsage | null
+  getCachedThreadRead: (threadId: string) => CachedThreadRead | null
+  readSessionLogTokenUsage?: (sessionPath: string) => Promise<ThreadTokenUsage | null>
 }
 
 type SessionLogThreadTokenUsageCacheState = {
@@ -191,6 +198,29 @@ export async function readThreadTokenUsageFromSessionLog(sessionPath: string): P
     })
     return null
   }
+}
+
+export async function resolveThreadTokenUsage(
+  threadId: string,
+  sources: ThreadTokenUsageSources,
+): Promise<ThreadTokenUsage | null> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return null
+
+  const cachedTokenUsage = sources.getCachedTokenUsage(normalizedThreadId)
+  if (cachedTokenUsage) return cachedTokenUsage
+
+  const cachedThreadRead = sources.getCachedThreadRead(normalizedThreadId)
+  const cachedPayloadTokenUsage = cachedThreadRead
+    ? readThreadTokenUsageFromThreadReadPayload(cachedThreadRead.threadRead)
+    : null
+  if (cachedPayloadTokenUsage) return cachedPayloadTokenUsage
+
+  const sessionPath = cachedThreadRead?.sessionPath?.trim() ?? ''
+  if (!sessionPath) return null
+
+  const readSessionLogTokenUsage = sources.readSessionLogTokenUsage ?? readThreadTokenUsageFromSessionLog
+  return await readSessionLogTokenUsage(sessionPath)
 }
 
 export class ThreadTokenUsageStore {

@@ -146,7 +146,7 @@ import {
 } from './pinnedThreads.js'
 import { PlanModeTurnStore } from './planModeTurnStore.js'
 import {
-  readThreadTokenUsageFromSessionLog,
+  resolveThreadTokenUsage,
   readThreadTokenUsageFromThreadReadPayload,
   ThreadTokenUsageStore,
   type ThreadTokenUsage,
@@ -1409,22 +1409,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   runtimeReconcileTimer.unref?.()
 
   async function readCachedThreadTokenUsage(threadId: string): Promise<ThreadTokenUsage | null> {
-    const normalizedThreadId = threadId.trim()
-    if (!normalizedThreadId) return null
-
-    const cachedTokenUsage = appServer.getThreadTokenUsage(normalizedThreadId)
-    if (cachedTokenUsage) return cachedTokenUsage
-
-    const cachedThreadRead = cachedThreadReadsByThreadId.get(normalizedThreadId) ?? null
-    const cachedPayloadTokenUsage = cachedThreadRead
-      ? readThreadTokenUsageFromThreadReadPayload(cachedThreadRead.threadRead)
-      : null
-    if (cachedPayloadTokenUsage) return cachedPayloadTokenUsage
-
-    const sessionPath = cachedThreadRead?.sessionPath?.trim() ?? ''
-    if (!sessionPath) return null
-
-    return await readThreadTokenUsageFromSessionLog(sessionPath)
+    return await resolveThreadTokenUsage(threadId, {
+      getCachedTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
+      getCachedThreadRead: (normalizedThreadId) => cachedThreadReadsByThreadId.get(normalizedThreadId) ?? null,
+    })
   }
 
   const middleware = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {

@@ -182,6 +182,7 @@ import {
   parseThreadTokenUsageFromSessionLog,
   readThreadTokenUsageFromSessionLog,
   readThreadTokenUsageFromThreadReadPayload,
+  resolveThreadTokenUsage,
   ThreadTokenUsageStore,
 } from '../src/server/threadTokenUsage.js'
 import {
@@ -2032,6 +2033,66 @@ async function smokeThreadTokenUsage(): Promise<void> {
   store.observeUpdate({ threadId: 'thread-a', tokenUsage: { invalid: true } })
   assert.equal(store.get('thread-a'), null)
   assert.equal(store.count, 0)
+
+  assert.equal(await resolveThreadTokenUsage(' ', {
+    getCachedTokenUsage: () => {
+      throw new Error('empty thread id should short-circuit')
+    },
+    getCachedThreadRead: () => null,
+  }), null)
+
+  assert.equal(await resolveThreadTokenUsage(' thread-a ', {
+    getCachedTokenUsage: (threadId) => {
+      assert.equal(threadId, 'thread-a')
+      return usage
+    },
+    getCachedThreadRead: () => {
+      throw new Error('thread read cache should not be consulted when token cache exists')
+    },
+  }), usage)
+
+  const threadReadTokenUsage = normalizeThreadTokenUsage({
+    total: usage.total,
+    last: { ...usage.last, totalTokens: 333 },
+  })
+  assert.ok(threadReadTokenUsage)
+  assert.equal((await resolveThreadTokenUsage('thread-a', {
+    getCachedTokenUsage: () => null,
+    getCachedThreadRead: () => ({
+      threadRead: { tokenUsage: threadReadTokenUsage },
+      inProgress: false,
+      activeTurnId: '',
+      updatedAtIso: '',
+      sessionPath: 'C:/sessions/thread-a.jsonl',
+      cachedAtIso: '2026-01-01T00:00:00.000Z',
+    }),
+    readSessionLogTokenUsage: async () => {
+      throw new Error('session log should not be consulted when thread read has token usage')
+    },
+  }))?.last.totalTokens, 333)
+
+  const sessionLogTokenUsage = normalizeThreadTokenUsage({
+    total: usage.total,
+    last: { ...usage.last, totalTokens: 444 },
+  })
+  assert.ok(sessionLogTokenUsage)
+  const requestedSessionPaths: string[] = []
+  assert.equal((await resolveThreadTokenUsage('thread-a', {
+    getCachedTokenUsage: () => null,
+    getCachedThreadRead: () => ({
+      threadRead: { thread: { id: 'thread-a' } },
+      inProgress: false,
+      activeTurnId: '',
+      updatedAtIso: '',
+      sessionPath: ' C:/sessions/thread-a.jsonl ',
+      cachedAtIso: '2026-01-01T00:00:00.000Z',
+    }),
+    readSessionLogTokenUsage: async (sessionPath) => {
+      requestedSessionPaths.push(sessionPath)
+      return sessionLogTokenUsage
+    },
+  }))?.last.totalTokens, 444)
+  assert.deepEqual(requestedSessionPaths, ['C:/sessions/thread-a.jsonl'])
 
   const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-token-usage-'))
   try {
