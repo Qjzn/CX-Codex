@@ -5,7 +5,6 @@ import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } fr
 import {
   type BridgeNotificationEvent,
 } from './appServerRuntimeBridge.js'
-import { createAppServerRuntimeReconciliation } from './appServerRuntimeReconciliation.js'
 import {
   RuntimeStateStore,
   type ThreadRuntimeSnapshot,
@@ -54,7 +53,6 @@ import { createAppServerRpcTimeoutRecoveryDecision } from './appServerRpcTimeout
 import {
   AppServerThreadReadCacheStore,
 } from './appServerThreadReadCache.js'
-import { createAppServerRuntimeReaders } from './appServerRuntimeReaders.js'
 import { createLocalRuntimeSnapshot } from './appServerRuntimeSnapshotRecovery.js'
 import {
   createRpcTimeoutError,
@@ -129,8 +127,7 @@ import {
   AppServerThreadListAugmenter,
   createAppServerThreadListRpcResultAugmenter,
 } from './appServerThreadListAugment.js'
-import { createAppServerRuntimeSnapshotPersister } from './appServerRuntimeSnapshotPersistence.js'
-import { createAppServerRuntimeActions } from './appServerRuntimeActions.js'
+import { createCodexBridgeRuntimeOperations } from './codexBridgeRuntimeOperations.js'
 import {
   handleAppServerServerRequest,
   resolveAppServerPendingServerRequest,
@@ -609,11 +606,29 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const statusDiagnostics = new AppServerStatusDiagnostics()
   const hookDiagnosticsCache = new AppServerHookDiagnosticsCache()
   const windowsSandboxReadinessCache = new WindowsSandboxReadinessCache()
-  const persistRuntimeSnapshot = createAppServerRuntimeSnapshotPersister({
-    snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
-    listPendingServerRequestsForThread: (normalizedThreadId) => appServer.listPendingServerRequestsForThread(normalizedThreadId),
-    getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
-    upsertSnapshot: (nextSnapshot) => runtimeStore.upsertSnapshot(nextSnapshot),
+  const {
+    persistRuntimeSnapshot,
+    readThreadRuntimeSnapshot,
+    readLocalRuntimeSnapshot,
+    readCachedThreadTokenUsage,
+    reconcileRuntimeThread,
+    runtimeReconcileScheduler,
+    startRuntimeTurn,
+    interruptRuntimeTurn,
+  } = createCodexBridgeRuntimeOperations({
+    appServer,
+    runtimeStore,
+    runtimeStateStore,
+    threadReadCacheStore,
+    threadSearchIndexStore,
+    statusDiagnostics,
+    getErrorMessage,
+    writeWarning: (message, details) => {
+      writeBridgeLog('warn', message, details)
+    },
+    writeReconcileFailure: (details) => {
+      writeBridgeLog('warn', 'Runtime reconcile failed', details)
+    },
   })
 
   const {
@@ -649,64 +664,6 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     readWebBridgeSettings,
     setWebBridgeSettings: (settings) => appServer.setWebBridgeSettings(settings),
     logError: logBridgeError,
-  })
-
-  const {
-    readThreadRuntimeSnapshot,
-    readLocalRuntimeSnapshot,
-    readCachedThreadTokenUsage,
-  } = createAppServerRuntimeReaders({
-    rpc: (method, params) => appServer.rpc(method, params),
-    observeThreadRead: (details) => statusDiagnostics.observeThreadRead(details),
-    getCachedThreadRead: (normalizedThreadId) => threadReadCacheStore.get(normalizedThreadId),
-    rememberCachedThreadRead: (normalizedThreadId, threadRead) => threadReadCacheStore.remember(normalizedThreadId, threadRead),
-    snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
-    observeRuntimeThreadRead: (normalizedThreadId, inProgress, activeTurnId, updatedAtIso, source) => {
-      runtimeStateStore.observeThreadRead(normalizedThreadId, inProgress, activeTurnId, updatedAtIso, source)
-    },
-    markRuntimeDegraded: (normalizedThreadId, reason) => runtimeStateStore.markDegraded(normalizedThreadId, reason),
-    persistRuntimeSnapshot,
-    listPendingServerRequestsForThread: (normalizedThreadId) => appServer.listPendingServerRequestsForThread(normalizedThreadId),
-    getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
-    getErrorMessage,
-    writeWarning: (message, details) => {
-      writeBridgeLog('warn', message, details)
-    },
-    getSnapshot: (normalizedThreadId) => runtimeStore.getSnapshot(normalizedThreadId),
-    getAppServerStartedAtMs: () => appServer.getStartedAtMs(),
-  })
-
-  const {
-    reconcileRuntimeThread,
-    runtimeReconcileScheduler,
-  } = createAppServerRuntimeReconciliation({
-    readThreadRuntimeSnapshot,
-    runtimeStore,
-    getErrorMessage,
-    writeReconcileFailure: (details) => {
-      writeBridgeLog('warn', 'Runtime reconcile failed', details)
-    },
-  })
-
-  const {
-    startRuntimeTurn,
-    interruptRuntimeTurn,
-  } = createAppServerRuntimeActions({
-    createRequest: (record) => runtimeStore.createRequest(record),
-    updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
-    getRequest: (requestId) => runtimeStore.getRequest(requestId),
-    rpc: (method, params) => appServer.rpc(method, params),
-    clearThreadSearchIndex: () => threadSearchIndexStore.clear(),
-    markStarting: (threadId) => runtimeStateStore.markStarting(threadId),
-    markRunning: (threadId, turnId = '') => runtimeStateStore.markRunning(threadId, turnId),
-    markStartUncertain: (threadId, lastError = null) => runtimeStateStore.markStartUncertain(threadId, lastError),
-    persistRuntimeSnapshot,
-    markPlanModeTurn: (threadId, turnId = '') => appServer.markPlanModeTurn(threadId, turnId),
-    markStopping: (threadId) => runtimeStateStore.markStopping(threadId),
-    markInterrupted: (threadId, lastError = null) => runtimeStateStore.markInterrupted(threadId, lastError),
-    markStopUncertain: (threadId, lastError = null) => runtimeStateStore.markStopUncertain(threadId, lastError),
-    clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
-    getErrorMessage,
   })
 
   const middleware = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {

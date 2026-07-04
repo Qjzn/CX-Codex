@@ -394,6 +394,7 @@ import { RequestBodyTooLargeError } from '../src/server/httpBody.js'
 import { writeCodexBridgeRequestError } from '../src/server/codexBridgeRequestError.js'
 import { disposeCodexBridgeMiddlewareResources } from '../src/server/codexBridgeMiddlewareDispose.js'
 import { createCodexBridgeNotificationRuntime } from '../src/server/codexBridgeNotificationRuntime.js'
+import { createCodexBridgeRuntimeOperations } from '../src/server/codexBridgeRuntimeOperations.js'
 import { createCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteHandlers.js'
 import { runCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteDispatch.js'
 import {
@@ -461,6 +462,7 @@ try {
   smokeCodexBridgeRequestError()
   smokeCodexBridgeMiddlewareDispose()
   smokeCodexBridgeNotificationRuntime()
+  smokeCodexBridgeRuntimeOperations()
   await smokeCodexBridgeRouteHandlers()
   await smokeCodexBridgeRouteDispatch()
   smokeCodexBridgeSharedState()
@@ -4430,6 +4432,77 @@ function smokeCodexBridgeNotificationRuntime(): void {
   assert.equal(runtime.bridgeNotificationListeners.count, 0)
   runtime.unsubscribeAppServerNotifications()
   assert.equal(unsubscribeCount, 1)
+}
+
+function smokeCodexBridgeRuntimeOperations(): void {
+  const upsertedSnapshots: unknown[] = []
+  const snapshot = createThreadRuntimeSnapshot({
+    threadId: 'thread-ops',
+    executionState: 'running',
+    pendingServerRequests: [{ id: 'pending-a', method: 'server/request', params: {} } as never],
+    tokenUsage: null,
+  })
+  const operations = createCodexBridgeRuntimeOperations({
+    appServer: {
+      rpc: async () => {
+        throw new Error('unexpected runtime operation rpc')
+      },
+      listPendingServerRequestsForThread: (threadId) => threadId === 'thread-ops'
+        ? [{ id: 'pending-a', method: 'server/request', params: {} } as never]
+        : [],
+      getThreadTokenUsage: () => null,
+      getStartedAtMs: () => 1_000,
+      markPlanModeTurn: () => {},
+      clearPlanModeTurn: () => {},
+    },
+    runtimeStore: {
+      createRequest: (record) => record as never,
+      updateRequest: () => null,
+      getRequest: () => null,
+      getSnapshot: () => null,
+      upsertSnapshot: (record) => {
+        upsertedSnapshots.push(record)
+        return record
+      },
+      listRequestsByThread: () => [],
+      listUncertainRequests: () => [],
+    },
+    runtimeStateStore: {
+      snapshot: () => snapshot,
+      observeThreadRead: () => {},
+      markDegraded: () => {},
+      markStarting: () => {},
+      markRunning: () => {},
+      markStartUncertain: () => {},
+      markStopping: () => {},
+      markInterrupted: () => {},
+      markStopUncertain: () => {},
+    },
+    threadReadCacheStore: {
+      get: () => null,
+      remember: () => null as never,
+    },
+    threadSearchIndexStore: {
+      clear: () => {},
+    },
+    statusDiagnostics: {
+      observeThreadRead: () => {},
+    },
+    getErrorMessage,
+    writeWarning: () => {},
+    writeReconcileFailure: () => {},
+  })
+
+  assert.equal(typeof operations.readThreadRuntimeSnapshot, 'function')
+  assert.equal(typeof operations.readLocalRuntimeSnapshot, 'function')
+  assert.equal(typeof operations.readCachedThreadTokenUsage, 'function')
+  assert.equal(typeof operations.reconcileRuntimeThread, 'function')
+  assert.equal(typeof operations.startRuntimeTurn, 'function')
+  assert.equal(typeof operations.interruptRuntimeTurn, 'function')
+  assert.equal(operations.persistRuntimeSnapshot('thread-ops'), snapshot)
+  assert.equal(upsertedSnapshots.length, 1)
+  assert.equal((upsertedSnapshots[0] as { threadId: string }).threadId, 'thread-ops')
+  operations.runtimeReconcileScheduler.dispose()
 }
 
 async function smokeCodexBridgeRouteHandlers(): Promise<void> {
