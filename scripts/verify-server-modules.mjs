@@ -45,6 +45,7 @@ writeFileSync(tsconfigPath, `${JSON.stringify({
     join(repoRoot, 'src', 'server', 'appServerRpcErrors.ts'),
     join(repoRoot, 'src', 'server', 'appServerJsonRpcWire.ts'),
     join(repoRoot, 'src', 'server', 'appServerRpcQueue.ts'),
+    join(repoRoot, 'src', 'server', 'appServerRuntimeInterrupt.ts'),
     join(repoRoot, 'src', 'server', 'appServerRuntimeReconcileScheduler.ts'),
     join(repoRoot, 'src', 'server', 'appServerThreadRuntimeSnapshot.ts'),
     join(repoRoot, 'src', 'server', 'appServerStderrLogger.ts'),

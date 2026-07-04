@@ -23,7 +23,6 @@ import { getErrorMessage } from './errorMessage.js'
 import {
   createRuntimePromptHash,
   normalizePlanModeTurnStartParams,
-  parseRuntimeInterruptPayload,
   parseRuntimeSendPayload,
   shouldRetryPlanModeWithoutNativeMode,
 } from './runtimePayload.js'
@@ -85,7 +84,6 @@ import { createLocalRuntimeSnapshot } from './appServerRuntimeSnapshotRecovery.j
 import {
   createAppServerJsonRpcError,
   createRpcTimeoutError,
-  isInterruptSettledError,
   isRpcTimeoutError,
 } from './appServerRpcErrors.js'
 import { AppServerNotificationDiagnostics } from './appServerNotificationDiagnostics.js'
@@ -153,6 +151,7 @@ import {
   readWebBridgeSettings,
 } from './webBridgeSettings.js'
 import { AppServerThreadListAugmenter } from './appServerThreadListAugment.js'
+import { interruptRuntimeTurnWithAppServer } from './appServerRuntimeInterrupt.js'
 
 type JsonRpcResponse = {
   id?: number
@@ -1104,64 +1103,17 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     turnId: string
     status: RuntimeRequestStatus
   }> {
-    const parsed = parseRuntimeInterruptPayload(payload)
-    runtimeStore.createRequest({
-      requestId: parsed.requestId,
-      threadId: parsed.threadId,
-      turnId: parsed.turnId,
-      status: 'stopping',
-      mode: 'interrupt',
-      payload: parsed.payloadSummary,
+    return await interruptRuntimeTurnWithAppServer(payload, {
+      createRequest: (record) => runtimeStore.createRequest(record),
+      updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
+      rpc: (method, params) => appServer.rpc(method, params),
+      markStopping: (threadId) => runtimeStateStore.markStopping(threadId),
+      markInterrupted: (threadId, lastError = null) => runtimeStateStore.markInterrupted(threadId, lastError),
+      markStopUncertain: (threadId, lastError = null) => runtimeStateStore.markStopUncertain(threadId, lastError),
+      persistRuntimeSnapshot,
+      clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
+      getErrorMessage,
     })
-    runtimeStateStore.markStopping(parsed.threadId)
-    persistRuntimeSnapshot(parsed.threadId)
-
-    try {
-      await appServer.rpc('turn/interrupt', { threadId: parsed.threadId, turnId: parsed.turnId })
-      appServer.clearPlanModeTurn(parsed.threadId, parsed.turnId)
-      runtimeStateStore.markInterrupted(parsed.threadId)
-      persistRuntimeSnapshot(parsed.threadId)
-      runtimeStore.updateRequest(parsed.requestId, {
-        status: 'stopped',
-        threadId: parsed.threadId,
-        turnId: parsed.turnId,
-        lastError: null,
-      })
-      return { requestId: parsed.requestId, threadId: parsed.threadId, turnId: parsed.turnId, status: 'stopped' }
-    } catch (error) {
-      if (isInterruptSettledError(error)) {
-        appServer.clearPlanModeTurn(parsed.threadId, parsed.turnId)
-        runtimeStateStore.markInterrupted(parsed.threadId, getErrorMessage(error, 'turn already settled'))
-        persistRuntimeSnapshot(parsed.threadId)
-        runtimeStore.updateRequest(parsed.requestId, {
-          status: 'stopped',
-          threadId: parsed.threadId,
-          turnId: parsed.turnId,
-          lastError: null,
-        })
-        return { requestId: parsed.requestId, threadId: parsed.threadId, turnId: parsed.turnId, status: 'stopped' }
-      }
-
-      if (isRpcTimeoutError(error)) {
-        runtimeStateStore.markStopUncertain(parsed.threadId, getErrorMessage(error, 'turn/interrupt timed out'))
-        persistRuntimeSnapshot(parsed.threadId)
-        runtimeStore.updateRequest(parsed.requestId, {
-          status: 'stop_uncertain',
-          threadId: parsed.threadId,
-          turnId: parsed.turnId,
-          lastError: getErrorMessage(error, 'turn/interrupt timed out'),
-        })
-        return { requestId: parsed.requestId, threadId: parsed.threadId, turnId: parsed.turnId, status: 'stop_uncertain' }
-      }
-
-      runtimeStore.updateRequest(parsed.requestId, {
-        status: 'failed',
-        threadId: parsed.threadId,
-        turnId: parsed.turnId,
-        lastError: getErrorMessage(error, 'runtime interrupt failed'),
-      })
-      throw error
-    }
   }
 
   const runtimeReconcileScheduler = createRuntimeReconcileScheduler({

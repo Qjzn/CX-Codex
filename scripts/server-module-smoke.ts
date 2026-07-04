@@ -256,6 +256,10 @@ import {
 } from '../src/server/appServerRuntimeBridge.js'
 import { syncBridgeNotificationRuntimeState } from '../src/server/appServerNotificationRuntimeSync.js'
 import { runRuntimeReconcileBatch } from '../src/server/appServerRuntimeReconcileScheduler.js'
+import {
+  interruptRuntimeTurnWithAppServer,
+  type RuntimeInterruptDependencies,
+} from '../src/server/appServerRuntimeInterrupt.js'
 import { AppServerNotificationReplay } from '../src/server/appServerNotificationReplay.js'
 import {
   handleNotificationReplayRoute,
@@ -380,6 +384,7 @@ try {
   await smokeProjectRoots()
   await smokeProjectRootRoutes()
   smokeRuntimePayloadParsing()
+  await smokeAppServerRuntimeInterrupt()
   smokeAppServerNotificationRuntimeSync()
   await smokeRuntimeActionRoutes()
   await smokeDiagnosticsRoutes()
@@ -4992,6 +4997,188 @@ function smokeRuntimePayloadParsing(): void {
     () => parseRuntimeInterruptPayload({ threadId: 'thread-a' }),
     /runtime\/interrupt requires turnId/,
   )
+}
+
+async function smokeAppServerRuntimeInterrupt(): Promise<void> {
+  const createHarness = (rpc: (method: string, params: unknown) => Promise<unknown>) => {
+    const created: unknown[] = []
+    const updates: Array<{ requestId: string; patch: unknown }> = []
+    const marks: Array<{ action: string; threadId: string; lastError?: string | null }> = []
+    const persisted: string[] = []
+    const clearedPlanTurns: Array<{ threadId: string; turnId?: string }> = []
+    const rpcCalls: Array<{ method: string; params: unknown }> = []
+    const dependencies: RuntimeInterruptDependencies = {
+      createRequest: (record) => {
+        created.push(record)
+        return {
+          requestId: record.requestId,
+          clientMessageId: '',
+          threadId: record.threadId,
+          turnId: record.turnId,
+          status: record.status,
+          promptHash: '',
+          mode: record.mode,
+          payload: record.payload,
+          retryCount: 0,
+          createdAtIso: '2026-01-01T00:00:00.000Z',
+          updatedAtIso: '2026-01-01T00:00:00.000Z',
+          lastError: null,
+        }
+      },
+      updateRequest: (requestId, patch) => {
+        updates.push({ requestId, patch })
+        return null
+      },
+      rpc: async (method, params) => {
+        rpcCalls.push({ method, params })
+        return await rpc(method, params)
+      },
+      markStopping: (threadId) => {
+        marks.push({ action: 'stopping', threadId })
+      },
+      markInterrupted: (threadId, lastError = null) => {
+        marks.push({ action: 'interrupted', threadId, lastError })
+      },
+      markStopUncertain: (threadId, lastError = null) => {
+        marks.push({ action: 'stop_uncertain', threadId, lastError })
+      },
+      persistRuntimeSnapshot: (threadId) => {
+        persisted.push(threadId)
+        return null
+      },
+      clearPlanModeTurn: (threadId, turnId = '') => {
+        clearedPlanTurns.push({ threadId, turnId })
+      },
+      getErrorMessage,
+    }
+
+    return {
+      created,
+      updates,
+      marks,
+      persisted,
+      clearedPlanTurns,
+      rpcCalls,
+      dependencies,
+    }
+  }
+
+  const success = createHarness(async () => ({ ok: true }))
+  assert.deepEqual(await interruptRuntimeTurnWithAppServer({
+    requestId: 'request-success',
+    threadId: 'thread-success',
+    turnId: 'turn-success',
+    source: 'button',
+  }, success.dependencies), {
+    requestId: 'request-success',
+    threadId: 'thread-success',
+    turnId: 'turn-success',
+    status: 'stopped',
+  })
+  assert.deepEqual(success.created, [{
+    requestId: 'request-success',
+    threadId: 'thread-success',
+    turnId: 'turn-success',
+    status: 'stopping',
+    mode: 'interrupt',
+    payload: {
+      threadId: 'thread-success',
+      turnId: 'turn-success',
+      source: 'button',
+      requestedAtIso: '',
+      clientElapsedMs: null,
+      userAgent: '',
+    },
+  }])
+  assert.deepEqual(success.rpcCalls, [{
+    method: 'turn/interrupt',
+    params: { threadId: 'thread-success', turnId: 'turn-success' },
+  }])
+  assert.deepEqual(success.marks, [
+    { action: 'stopping', threadId: 'thread-success' },
+    { action: 'interrupted', threadId: 'thread-success', lastError: null },
+  ])
+  assert.deepEqual(success.persisted, ['thread-success', 'thread-success'])
+  assert.deepEqual(success.clearedPlanTurns, [{ threadId: 'thread-success', turnId: 'turn-success' }])
+  assert.deepEqual(success.updates, [{
+    requestId: 'request-success',
+    patch: {
+      status: 'stopped',
+      threadId: 'thread-success',
+      turnId: 'turn-success',
+      lastError: null,
+    },
+  }])
+
+  const settled = createHarness(async () => {
+    throw new Error('no active turn')
+  })
+  assert.equal((await interruptRuntimeTurnWithAppServer({
+    requestId: 'request-settled',
+    threadId: 'thread-settled',
+    turnId: 'turn-settled',
+  }, settled.dependencies)).status, 'stopped')
+  assert.deepEqual(settled.marks, [
+    { action: 'stopping', threadId: 'thread-settled' },
+    { action: 'interrupted', threadId: 'thread-settled', lastError: 'no active turn' },
+  ])
+  assert.deepEqual(settled.updates.at(-1), {
+    requestId: 'request-settled',
+    patch: {
+      status: 'stopped',
+      threadId: 'thread-settled',
+      turnId: 'turn-settled',
+      lastError: null,
+    },
+  })
+
+  const timedOut = createHarness(async () => {
+    throw createRpcTimeoutError('turn/interrupt', 1000)
+  })
+  const timedOutResult = await interruptRuntimeTurnWithAppServer({
+    requestId: 'request-timeout',
+    threadId: 'thread-timeout',
+    turnId: 'turn-timeout',
+  }, timedOut.dependencies)
+  assert.equal(timedOutResult.status, 'stop_uncertain')
+  assert.deepEqual(timedOut.marks, [
+    { action: 'stopping', threadId: 'thread-timeout' },
+    { action: 'stop_uncertain', threadId: 'thread-timeout', lastError: 'turn/interrupt timed out after 1s' },
+  ])
+  assert.deepEqual(timedOut.persisted, ['thread-timeout', 'thread-timeout'])
+  assert.deepEqual(timedOut.updates.at(-1), {
+    requestId: 'request-timeout',
+    patch: {
+      status: 'stop_uncertain',
+      threadId: 'thread-timeout',
+      turnId: 'turn-timeout',
+      lastError: 'turn/interrupt timed out after 1s',
+    },
+  })
+
+  const failed = createHarness(async () => {
+    throw new Error('permission denied')
+  })
+  await assert.rejects(
+    () => interruptRuntimeTurnWithAppServer({
+      requestId: 'request-failed',
+      threadId: 'thread-failed',
+      turnId: 'turn-failed',
+    }, failed.dependencies),
+    /permission denied/,
+  )
+  assert.deepEqual(failed.marks, [
+    { action: 'stopping', threadId: 'thread-failed' },
+  ])
+  assert.deepEqual(failed.updates.at(-1), {
+    requestId: 'request-failed',
+    patch: {
+      status: 'failed',
+      threadId: 'thread-failed',
+      turnId: 'turn-failed',
+      lastError: 'permission denied',
+    },
+  })
 }
 
 function smokeAppServerNotificationRuntimeSync(): void {
