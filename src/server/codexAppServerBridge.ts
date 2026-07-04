@@ -95,6 +95,7 @@ import {
   createAppServerRpcNotification,
   createAppServerRpcRequest,
 } from './appServerJsonRpcWire.js'
+import { sendAppServerJsonRpcLine } from './appServerJsonRpcWriter.js'
 import { createAppServerClientInfo, readPackageVersion } from './appServerClientInfo.js'
 import { createAppServerInitializeParams } from './appServerInitialization.js'
 import {
@@ -283,16 +284,10 @@ class AppServerProcess {
   }
 
   private sendLine(payload: Record<string, unknown>): void {
-    if (!this.process) {
-      throw new Error('codex app-server is not running')
-    }
-
-    try {
-      this.process.stdin.write(`${JSON.stringify(payload)}\n`)
-    } catch (error) {
-      this.restartAppServer('stdin write failed')
-      throw error
-    }
+    sendAppServerJsonRpcLine(payload, {
+      getProcess: () => this.process,
+      handleWriteFailure: () => this.restartAppServer('stdin write failed'),
+    })
   }
 
   private noteRpcTimeout(method: string, params: unknown, timeoutMs: number): void {

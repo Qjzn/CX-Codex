@@ -7644,3 +7644,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server JSON-RPC writer extraction
+
+#### Prerequisites
+- Current repository includes `src/server/codexAppServerBridge.ts`, `src/server/appServerJsonRpcWriter.ts`, `scripts/server-module-smoke.ts`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
+- Dependencies are installed and `dist/` plus `dist-cli/` already exist, or run release verification without `-SkipBuild`.
+
+#### Steps
+1. Open `src/server/appServerJsonRpcWriter.ts` and confirm `sendAppServerJsonRpcLine(...)` owns process presence validation, JSON line serialization, stdin write, and write-failure callback dispatch.
+2. Open `src/server/codexAppServerBridge.ts` and confirm `AppServerProcess.sendLine(...)` delegates to `sendAppServerJsonRpcLine(...)` while retaining the `stdin write failed` restart reason.
+3. Open `scripts/server-module-smoke.ts` and confirm `smokeAppServerJsonRpcWriter()` covers normal JSON line writes, missing process errors, and write failures that invoke the recovery callback before rethrowing.
+4. Open `scripts/verify-release.ps1` and confirm Release package smoke requires `src\server\appServerJsonRpcWriter.ts` inside the release zip.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `npm.cmd run build`.
+8. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+9. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- App Server RPC requests, notifications, and server request replies still write as one JSON line ending with `\n`.
+- Calling the writer without a running process still throws `codex app-server is not running`.
+- A synchronous stdin write failure still calls the bridge recovery callback and rethrows the original error.
+- Release package smoke fails if the writer helper is omitted from the Web source zip.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal output in `output/server-module-smoke/` and `output/release-package-smoke/`.
+- To roll back, move the JSON stringify/stdin write logic back into `AppServerProcess.sendLine(...)`, delete `src/server/appServerJsonRpcWriter.ts`, remove smoke/governance/release package references, revert changelog updates, and remove this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 server module smoke: `node scripts\verify-server-modules.mjs` passed, including `smokeAppServerJsonRpcWriter()` coverage for normal JSON line writes, missing process errors, and stdin write failures that invoke the recovery callback before rethrowing.
+- 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

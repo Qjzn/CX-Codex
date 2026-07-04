@@ -98,6 +98,7 @@ import {
   createAppServerRpcSuccessResponse,
   readAppServerJsonRpcLineEvent,
 } from '../src/server/appServerJsonRpcWire.js'
+import { sendAppServerJsonRpcLine } from '../src/server/appServerJsonRpcWriter.js'
 import { AppServerRpcQueue, getAppServerRpcQueuePriority } from '../src/server/appServerRpcQueue.js'
 import {
   readItemIdFromPayload,
@@ -403,6 +404,7 @@ try {
   await smokeCodexBridgeStartupTasks()
   smokePendingServerRequests()
   smokeAppServerJsonRpcWire()
+  smokeAppServerJsonRpcWriter()
   smokeAppServerLineDispatcher()
   smokeAppServerInitialization()
   smokeAppServerLaunch()
@@ -1114,6 +1116,50 @@ function smokeAppServerJsonRpcWire(): void {
   assert.deepEqual(readAppServerJsonRpcLineEvent(JSON.stringify({ id: 101, result: { ignored: true } }), {
     isPendingResponseId: () => false,
   }), null)
+}
+
+function smokeAppServerJsonRpcWriter(): void {
+  const writes: string[] = []
+  const failures: unknown[] = []
+  sendAppServerJsonRpcLine({ id: 1, method: 'thread/read', params: { threadId: 'thread-a' } }, {
+    getProcess: () => ({
+      stdin: {
+        write: (chunk) => writes.push(chunk),
+      },
+    }),
+    handleWriteFailure: (error) => failures.push(error),
+  })
+  assert.deepEqual(writes, [`${JSON.stringify({
+    id: 1,
+    method: 'thread/read',
+    params: { threadId: 'thread-a' },
+  })}\n`])
+  assert.equal(failures.length, 0)
+
+  assert.throws(
+    () => sendAppServerJsonRpcLine({ method: 'initialized' }, {
+      getProcess: () => null,
+      handleWriteFailure: (error) => failures.push(error),
+    }),
+    /codex app-server is not running/,
+  )
+  assert.equal(failures.length, 0)
+
+  const writeFailure = new Error('write failed')
+  assert.throws(
+    () => sendAppServerJsonRpcLine({ method: 'initialized' }, {
+      getProcess: () => ({
+        stdin: {
+          write: () => {
+            throw writeFailure
+          },
+        },
+      }),
+      handleWriteFailure: (error) => failures.push(error),
+    }),
+    /write failed/,
+  )
+  assert.deepEqual(failures, [writeFailure])
 }
 
 function smokeAppServerLineDispatcher(): void {
