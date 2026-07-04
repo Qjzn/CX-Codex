@@ -324,6 +324,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "src\server\codexAppServerBridge.ts",
   "src\server\composerFileSearchRoutes.ts",
   "src\server\diagnosticsRoutes.ts",
+  "src\server\fileUploadRoute.ts",
   "src\server\githubTrendingRoutes.ts",
   "src\server\localStateRoutes.ts",
   "src\server\notificationReplayRoute.ts",
@@ -340,6 +341,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
 Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
   "src', 'server', 'composerFileSearchRoutes.ts'",
   "src', 'server', 'diagnosticsRoutes.ts'",
+  "src', 'server', 'fileUploadRoute.ts'",
   "src', 'server', 'githubTrendingRoutes.ts'",
   "src', 'server', 'localStateRoutes.ts'",
   "src', 'server', 'notificationReplayRoute.ts'",
@@ -357,6 +359,8 @@ Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
 Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "handleComposerFileSearchRoutes",
   "smokeComposerFileSearchRoutes",
+  "handleFileUploadRoute",
+  "smokeFileUploadRoute",
   "handleWorkspaceMetaRoutes",
   "smokeWorkspaceMetaRoutes",
   "handleProjectRootRoutes",

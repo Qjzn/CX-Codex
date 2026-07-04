@@ -3329,6 +3329,39 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Multipart file upload route 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/fileUploadRoute.ts`、`src/server/fileUpload.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1` 和 `scripts/verify-release.ps1`。
+- 本机可运行 server module smoke、governance gate 和 release gate；route smoke 使用注入依赖，不需要真实写入上传文件。
+
+#### Steps
+1. 打开 `src/server/codexAppServerBridge.ts`，确认 `/codex-api/upload-file` 统一委托 `handleFileUploadRoute(...)`。
+2. 打开 `src/server/fileUploadRoute.ts`，确认 route 模块只负责 method/path 匹配、调用 `handleMultipartFileUpload(...)`、映射 `FileUploadError.statusCode` 和返回 JSON。
+3. 执行 `git diff --check`。
+4. 执行 `node scripts\verify-server-modules.mjs`。
+5. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+7. 确认 release package smoke 必检 `src\server\fileUploadRoute.ts`。
+
+#### Expected Results
+- `POST /codex-api/upload-file` 成功时继续返回 `handleMultipartFileUpload(...)` 的 `{ path }`。
+- `FileUploadError` 仍按自身 `statusCode` 返回，例如 missing boundary/no file 为 400、body too large 为 413。
+- 非 `FileUploadError` 仍返回 500，并通过 `getErrorMessage(...)` 输出错误文案或 fallback。
+- 未匹配 method/path 返回 `false`，不吞掉后续 route。
+- `fileUploadRoute.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/fileUploadRoute.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1`、`scripts/verify-release.ps1` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，输出 `server module smoke ok`，覆盖 upload route 成功、`FileUploadError` status 映射、通用 500 fallback 和未匹配 route 返回 `false`。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\fileUploadRoute.ts`。
+
+---
+
 ### Feature: Project root 模块化
 
 #### Prerequisites

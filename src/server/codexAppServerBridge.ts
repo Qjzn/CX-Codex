@@ -53,6 +53,7 @@ import { handleThreadRoutes } from './threadRoutes.js'
 import { handleStatusRoutes } from './statusRoutes.js'
 import { handleGithubTrendingRoutes } from './githubTrendingRoutes.js'
 import { handleServerRequestRoutes } from './serverRequestRoutes.js'
+import { handleFileUploadRoute } from './fileUploadRoute.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   runCommand,
@@ -162,10 +163,6 @@ import {
   DEFAULT_WEB_BRIDGE_SETTINGS,
   normalizeWebBridgeSettings,
 } from './webBridgeSettings.js'
-import {
-  FileUploadError,
-  handleMultipartFileUpload,
-} from './fileUpload.js'
 import { AppServerThreadListAugmenter } from './appServerThreadListAugment.js'
 import {
   ensureRepoHasInitialCommit,
@@ -1392,14 +1389,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'POST' && url.pathname === '/codex-api/upload-file') {
-        try {
-          const result = await handleMultipartFileUpload(req)
-          setJson(res, 200, result)
-        } catch (error) {
-          const statusCode = error instanceof FileUploadError ? error.statusCode : 500
-          setJson(res, statusCode, { error: getErrorMessage(error, 'Upload failed') })
-        }
+      if (await handleFileUploadRoute(req, res, url)) {
         return
       }
 

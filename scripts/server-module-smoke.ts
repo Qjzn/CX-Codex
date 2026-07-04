@@ -141,6 +141,7 @@ import {
   readMultipartBoundary,
   writeUploadedFile,
 } from '../src/server/fileUpload.js'
+import { handleFileUploadRoute } from '../src/server/fileUploadRoute.js'
 import {
   ComposerFileSearchError,
   assertComposerFileSearchCwd,
@@ -341,6 +342,7 @@ try {
   await smokeCommandRunner()
   await smokeAppServerRollbackGit()
   await smokeFileUpload()
+  await smokeFileUploadRoute()
   smokeHttpJsonResponse()
   smokeErrorMessage()
   await smokeComposerFileSearch()
@@ -2668,6 +2670,58 @@ async function smokeFileUpload(): Promise<void> {
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+}
+
+async function smokeFileUploadRoute(): Promise<void> {
+  const uploadCalls: string[] = []
+  let nextError: unknown = null
+  const dependencies = {
+    handleMultipartFileUpload: async (req: { method?: string }) => {
+      uploadCalls.push(req.method ?? '')
+      if (nextError) throw nextError
+      return { path: 'C:\\tmp\\upload.txt' }
+    },
+    getErrorMessage: (error: unknown, fallback: string) => getErrorMessage(error, fallback),
+  }
+
+  const success = createRouteTestResponse()
+  assert.equal(await handleFileUploadRoute(
+    { method: 'POST' } as never,
+    success.response as never,
+    new URL('http://127.0.0.1/codex-api/upload-file'),
+    dependencies,
+  ), true)
+  assert.deepEqual(uploadCalls, ['POST'])
+  assert.deepEqual(JSON.parse(success.body), { path: 'C:\\tmp\\upload.txt' })
+
+  nextError = new FileUploadError('No file in request', 400)
+  const badUpload = createRouteTestResponse()
+  assert.equal(await handleFileUploadRoute(
+    { method: 'POST' } as never,
+    badUpload.response as never,
+    new URL('http://127.0.0.1/codex-api/upload-file'),
+    dependencies,
+  ), true)
+  assert.equal(badUpload.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(badUpload.body), { error: 'No file in request' })
+
+  nextError = new Error('disk denied')
+  const genericFailure = createRouteTestResponse()
+  assert.equal(await handleFileUploadRoute(
+    { method: 'POST' } as never,
+    genericFailure.response as never,
+    new URL('http://127.0.0.1/codex-api/upload-file'),
+    dependencies,
+  ), true)
+  assert.equal(genericFailure.response.statusCode, 500)
+  assert.deepEqual(JSON.parse(genericFailure.body), { error: 'disk denied' })
+
+  assert.equal(await handleFileUploadRoute(
+    { method: 'GET' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/upload-file'),
+    dependencies,
+  ), false)
 }
 
 function smokeHttpJsonResponse(): void {
