@@ -15,8 +15,7 @@ import {
 import { AppServerNotificationReplay } from './appServerNotificationReplay.js'
 import {
   createRuntimeThreadStatePayload,
-  createRuntimeRequestSnapshotPatch,
-  RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES,
+  updateRuntimeRequestsFromSnapshot,
 } from './appServerRuntimeRequestReconciliation.js'
 import {
   RuntimeStateStore,
@@ -997,7 +996,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     const eventThreadId = readThreadIdFromPayload(notification.params)
     if (eventThreadId) {
       const snapshot = persistRuntimeSnapshot(eventThreadId)
-      updateRuntimeRequestsFromSnapshot(eventThreadId, snapshot)
+      updateRuntimeRequestsFromSnapshot(eventThreadId, snapshot, runtimeStore)
     }
     if (shouldInvalidateThreadReadCacheForNotification(notification.method)) {
       if (eventThreadId) {
@@ -1174,18 +1173,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     }))
   }
 
-  function updateRuntimeRequestsFromSnapshot(threadId: string, snapshot: ThreadRuntimeSnapshot): void {
-    const activeRequests = runtimeStore.listRequestsByThread(threadId, RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES)
-    if (activeRequests.length === 0) return
-
-    for (const request of activeRequests) {
-      runtimeStore.updateRequest(request.requestId, createRuntimeRequestSnapshotPatch(request, threadId, snapshot))
-    }
-  }
-
   async function reconcileRuntimeThread(threadId: string): Promise<ThreadRuntimeSnapshot> {
     const snapshot = await readThreadRuntimeSnapshot(threadId)
-    updateRuntimeRequestsFromSnapshot(threadId, snapshot)
+    updateRuntimeRequestsFromSnapshot(threadId, snapshot, runtimeStore)
     return snapshot
   }
 

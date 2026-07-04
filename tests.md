@@ -2318,6 +2318,36 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Runtime request snapshot patch 应用模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRuntimeRequestReconciliation.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 active runtime request 查询、snapshot patch 生成和批量更新调用。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认通知事件持久化后和 `/codex-api/runtime/thread/:threadId/reconcile` 都调用 `updateRuntimeRequestsFromSnapshot(threadId, snapshot, runtimeStore)`。
+5. 代码审查确认 `src/server/codexAppServerBridge.ts` 不再内联遍历 active runtime requests 并逐条调用 `runtimeStore.updateRequest()`。
+
+#### Expected Results
+- active runtime request 的 snapshot patch 应用逻辑集中在 `appServerRuntimeRequestReconciliation.ts`。
+- active request 查询仍使用 `RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES`。
+- 每个 active request 仍通过 `createRuntimeRequestSnapshotPatch()` 生成状态、threadId、turnId 和 lastError patch。
+- server module smoke 能证明批量更新函数返回更新数量，并把统一状态集合传给 `runtimeStore.listRequestsByThread()`。
+- release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `updateRuntimeRequestsFromSnapshot()` 和对应 smoke 断言，并把 active request 遍历更新逻辑恢复到 `src/server/codexAppServerBridge.ts`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: Thread token usage fallback 模块化
 
 #### Prerequisites

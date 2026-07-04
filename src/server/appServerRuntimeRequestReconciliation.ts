@@ -30,6 +30,10 @@ type RuntimeThreadStateStore = {
   listRequestsByThread(threadId: string, statuses?: RuntimeRequestStatus[]): RuntimeRequestRecord[]
 }
 
+type RuntimeRequestReconciliationStore = RuntimeThreadStateStore & {
+  updateRequest(requestId: string, patch: RuntimeRequestSnapshotPatch): RuntimeRequestRecord | null
+}
+
 export function createRuntimeThreadStatePayload(
   threadId: string,
   snapshot: ThreadRuntimeSnapshot,
@@ -39,6 +43,18 @@ export function createRuntimeThreadStatePayload(
     snapshot,
     requests: runtimeStore.listRequestsByThread(threadId, RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES),
   }
+}
+
+export function updateRuntimeRequestsFromSnapshot(
+  threadId: string,
+  snapshot: ThreadRuntimeSnapshot,
+  runtimeStore: RuntimeRequestReconciliationStore,
+): number {
+  const activeRequests = runtimeStore.listRequestsByThread(threadId, RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES)
+  for (const request of activeRequests) {
+    runtimeStore.updateRequest(request.requestId, createRuntimeRequestSnapshotPatch(request, threadId, snapshot))
+  }
+  return activeRequests.length
 }
 
 export function createRuntimeRequestSnapshotPatch(
