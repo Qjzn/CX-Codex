@@ -665,6 +665,8 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('mcpServer/oauthLogin/completed'), true)
   assert.equal(isKnownAppServerNotificationMethod('mcpServer/startupStatus/updated'), true)
   assert.equal(isKnownAppServerNotificationMethod('account/rateLimits/updated'), true)
+  assert.equal(isKnownAppServerNotificationMethod('model/rerouted'), true)
+  assert.equal(isKnownAppServerNotificationMethod('model/verification'), true)
   assert.equal(isKnownAppServerNotificationMethod('item/tool/call/failed'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/realtime/transcript/delta'), false)
 
@@ -677,7 +679,51 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.deepEqual(diagnostics.snapshot(), {
     unknownNotificationCount: 0,
     recentUnknownNotifications: [],
+    recentModelNotifications: [],
   })
+
+  diagnostics.observe({
+    method: 'model/rerouted',
+    atIso: '2026-07-03T00:00:00.500Z',
+    threadId: 'thread-model',
+    turnId: 'turn-model',
+    params: {
+      threadId: 'thread-model',
+      turnId: 'turn-model',
+      fromModel: 'gpt-5.2-codex',
+      toModel: 'gpt-5.2-codex-fast',
+      reason: 'capacity',
+    },
+  })
+  diagnostics.observe({
+    method: 'model/verification',
+    atIso: '2026-07-03T00:00:00.600Z',
+    params: {
+      threadId: 'thread-model',
+      turnId: 'turn-model',
+      verifications: ['trustedAccessForCyber'],
+    },
+  })
+  const modelSnapshot = diagnostics.snapshot()
+  assert.equal(modelSnapshot.unknownNotificationCount, 0)
+  assert.deepEqual(modelSnapshot.recentModelNotifications.map((item) => item.method), [
+    'model/verification',
+    'model/rerouted',
+  ])
+  assert.deepEqual(modelSnapshot.recentModelNotifications[0], {
+    method: 'model/verification',
+    atIso: '2026-07-03T00:00:00.600Z',
+    threadId: 'thread-model',
+    turnId: 'turn-model',
+    fromModel: '',
+    toModel: '',
+    reason: '',
+    verificationCount: 1,
+    verifications: ['trustedAccessForCyber'],
+  })
+  assert.equal(modelSnapshot.recentModelNotifications[1]?.fromModel, 'gpt-5.2-codex')
+  assert.equal(modelSnapshot.recentModelNotifications[1]?.toModel, 'gpt-5.2-codex-fast')
+  assert.equal(modelSnapshot.recentModelNotifications[1]?.reason, 'capacity')
 
   diagnostics.observe({
     method: 'thread/realtime/transcript/delta',
@@ -710,6 +756,7 @@ function smokeAppServerNotificationDiagnostics(): void {
 
   diagnostics.clear()
   assert.equal(diagnostics.snapshot().unknownNotificationCount, 0)
+  assert.equal(diagnostics.snapshot().recentModelNotifications.length, 0)
 }
 
 function smokeAppServerMethodCatalog(): void {
@@ -3011,18 +3058,21 @@ function smokeAppServerNotificationReplay(): void {
       atIso: '2026-01-01T00:00:00.000Z',
       threadId: 'thread-a',
       turnId: 'turn-a',
+      params: { threadId: 'thread-a', turnId: 'turn-a' },
     },
     {
       method: 'item/updated',
       atIso: '2026-01-01T00:00:00.000Z',
       threadId: 'thread-b',
       turnId: '',
+      params: { threadId: 'thread-b' },
     },
     {
       method: 'turn/completed',
       atIso: '2026-01-01T00:00:00.000Z',
       threadId: 'thread-c',
       turnId: 'turn-c',
+      params: { threadId: 'thread-c', turnId: 'turn-c' },
     },
   ])
 

@@ -3982,6 +3982,38 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server 模型通知诊断可见
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerNotificationDiagnostics.ts`、`src/server/appServerNotificationReplay.ts`、`src/components/content/DiagnosticsPanel.vue` 和最近 raw schema audit 输出 `output\app-server-schema-audit\20260703-193751`。
+- 本机 raw schema audit 已确认 `model/rerouted` 和 `model/verification` 为官方 App Server notification methods。
+
+#### Steps
+1. 检查 raw schema audit，确认 `ServerNotification.ts` 包含 `model/rerouted` 和 `model/verification`，并确认对应 payload 字段只需要记录模型、reason、verification 数量等脱敏诊断字段。
+2. 执行 `git diff --check`。
+3. 执行 `npm.cmd run verify:server-modules`。
+4. 执行 `npm.cmd run build`。
+5. 执行 `npm.cmd run verify:governance`。
+6. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip`。
+
+#### Expected Results
+- 服务端 notification diagnostics 把 `model/rerouted` 和 `model/verification` 视为已知通知，不计入 unknown notification。
+- `/codex-api/health` 和 `/codex-api/diagnostics` 的 `notificationDiagnostics.recentModelNotifications` 只包含脱敏字段，不暴露完整 notification params。
+- 诊断中心展示“模型通知”卡片；模型 reroute/verification 只作为只读诊断信号，不改写线程内容、运行态或用户选择模型。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/appServerNotificationDiagnostics.ts`、`src/server/appServerNotificationReplay.ts`、`src/components/content/DiagnosticsPanel.vue`、`scripts/server-module-smoke.ts`、`docs/app-server-protocol-matrix.zh-CN.md`、`docs/changelog.zh-CN.md` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 官方文档/Schema 核对：OpenAI App Server 文档仍是当前对接入口；raw schema audit `output\app-server-schema-audit\20260703-193751\typescript\ServerNotification.ts` 显示 `model/rerouted` 和 `model/verification` 为官方 `ServerNotification` method，`ModelReroutedNotification.ts` 包含 `fromModel`、`toModel`、`reason`，`ModelVerificationNotification.ts` 包含 `verifications`。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖模型通知已知分类、脱敏 recent model notification 记录、clear 以及 replay params 传递。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建；Vite 仍有既有 large chunk warning。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
+
+---
+
 ### Feature: App/MCP/RateLimit 状态通知兼容
 
 #### Prerequisites

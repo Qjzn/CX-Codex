@@ -7,9 +7,22 @@ export type UnknownNotificationRecord = {
   turnId: string
 }
 
+export type ModelNotificationRecord = {
+  method: 'model/rerouted' | 'model/verification'
+  atIso: string
+  threadId: string
+  turnId: string
+  fromModel: string
+  toModel: string
+  reason: string
+  verificationCount: number
+  verifications: string[]
+}
+
 export type AppServerNotificationDiagnosticsSnapshot = {
   unknownNotificationCount: number
   recentUnknownNotifications: UnknownNotificationRecord[]
+  recentModelNotifications: ModelNotificationRecord[]
 }
 
 type NotificationObservation = {
@@ -17,10 +30,12 @@ type NotificationObservation = {
   atIso: string
   threadId?: string
   turnId?: string
+  params?: unknown
 }
 
 type AppServerNotificationDiagnosticsOptions = {
   maxRecentUnknown?: number
+  maxRecentModelNotifications?: number
 }
 
 const KNOWN_NOTIFICATION_METHODS = new Set([
@@ -33,6 +48,8 @@ const KNOWN_NOTIFICATION_METHODS = new Set([
   'app/list/updated',
   'mcpServer/oauthLogin/completed',
   'mcpServer/startupStatus/updated',
+  'model/rerouted',
+  'model/verification',
   'server/request',
   'server/request/resolved',
   'skills/changed',
@@ -67,14 +84,18 @@ export function isKnownAppServerNotificationMethod(method: string): boolean {
 
 export class AppServerNotificationDiagnostics {
   private readonly maxRecentUnknown: number
+  private readonly maxRecentModelNotifications: number
   private readonly unknownByMethod = new Map<string, UnknownNotificationRecord>()
+  private readonly recentModelNotifications: ModelNotificationRecord[] = []
   private unknownNotificationCount = 0
 
   constructor(options: AppServerNotificationDiagnosticsOptions = {}) {
     this.maxRecentUnknown = Math.max(1, Math.min(100, Math.floor(options.maxRecentUnknown ?? 20)))
+    this.maxRecentModelNotifications = Math.max(1, Math.min(100, Math.floor(options.maxRecentModelNotifications ?? 20)))
   }
 
   observe(observation: NotificationObservation): void {
+    this.observeModelNotification(observation)
     if (isKnownAppServerNotificationMethod(observation.method)) return
 
     this.unknownNotificationCount += 1
@@ -110,15 +131,74 @@ export class AppServerNotificationDiagnostics {
       unknownNotificationCount: this.unknownNotificationCount,
       recentUnknownNotifications: Array.from(this.unknownByMethod.values())
         .sort((left, right) => right.lastSeenAtIso.localeCompare(left.lastSeenAtIso)),
+      recentModelNotifications: [...this.recentModelNotifications],
     }
   }
 
   clear(): void {
     this.unknownByMethod.clear()
+    this.recentModelNotifications.splice(0, this.recentModelNotifications.length)
     this.unknownNotificationCount = 0
+  }
+
+  private observeModelNotification(observation: NotificationObservation): void {
+    const record = createModelNotificationRecord(observation)
+    if (!record) return
+    this.recentModelNotifications.unshift(record)
+    if (this.recentModelNotifications.length > this.maxRecentModelNotifications) {
+      this.recentModelNotifications.splice(this.maxRecentModelNotifications)
+    }
   }
 }
 
 function normalizeOptionalId(value: string | undefined): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function createModelNotificationRecord(observation: NotificationObservation): ModelNotificationRecord | null {
+  if (observation.method !== 'model/rerouted' && observation.method !== 'model/verification') return null
+  const params = asRecord(observation.params)
+  if (observation.method === 'model/rerouted') {
+    return {
+      method: 'model/rerouted',
+      atIso: observation.atIso,
+      threadId: normalizeOptionalId(observation.threadId) || readString(params, 'threadId'),
+      turnId: normalizeOptionalId(observation.turnId) || readString(params, 'turnId'),
+      fromModel: readString(params, 'fromModel'),
+      toModel: readString(params, 'toModel'),
+      reason: readString(params, 'reason'),
+      verificationCount: 0,
+      verifications: [],
+    }
+  }
+
+  const verifications = Array.isArray(params?.verifications)
+    ? params.verifications
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .slice(0, 5)
+    : []
+  return {
+    method: 'model/verification',
+    atIso: observation.atIso,
+    threadId: normalizeOptionalId(observation.threadId) || readString(params, 'threadId'),
+    turnId: normalizeOptionalId(observation.turnId) || readString(params, 'turnId'),
+    fromModel: '',
+    toModel: '',
+    reason: '',
+    verificationCount: Array.isArray(params?.verifications) ? params.verifications.length : 0,
+    verifications,
+  }
+}
+
+function readString(record: Record<string, unknown> | null, key: string): string {
+  const value = record?.[key]
+  return typeof value === 'string' ? value.trim().slice(0, 120) : ''
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
 }

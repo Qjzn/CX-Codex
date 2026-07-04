@@ -32,6 +32,7 @@ type AppServerNotificationReplayOptions = {
     atIso: string
     threadId?: string
     turnId?: string
+    params?: unknown
   }) => void
   readThreadIdFromPayload: (payload: unknown) => string
   readTurnIdFromPayload: (payload: unknown) => string
@@ -80,6 +81,7 @@ export class AppServerNotificationReplay {
       atIso: event.atIso,
       threadId,
       turnId,
+      params: event.params,
     })
     this.appendEvent({
       seq: event.seq,

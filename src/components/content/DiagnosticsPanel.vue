@@ -229,6 +229,21 @@
 
       <section class="diagnostics-section">
         <div class="diagnostics-section-header">
+          <h2>模型通知</h2>
+          <span class="diagnostics-badge" data-tone="neutral">{{ recentModelNotifications.length }}</span>
+        </div>
+        <div v-if="recentModelNotifications.length === 0" class="diagnostics-empty">暂无模型 reroute 或 verification 通知。</div>
+        <ul v-else class="diagnostics-list">
+          <li v-for="notification in recentModelNotifications" :key="`${notification.method}-${notification.atIso}-${notification.threadId}-${notification.turnId}`">
+            <span>{{ formatModelNotification(notification) }}</span>
+            <strong>{{ shortId(notification.turnId) || '-' }}</strong>
+            <small>{{ formatAge(notification.atIso) }}</small>
+          </li>
+        </ul>
+      </section>
+
+      <section class="diagnostics-section">
+        <div class="diagnostics-section-header">
           <h2>未知通知</h2>
           <span class="diagnostics-badge" :data-tone="unknownNotificationCount > 0 ? 'warning' : 'ok'">
             {{ unknownNotificationCount }}
@@ -346,6 +361,18 @@ type UnknownNotificationDiagnostics = {
   turnId: string
 }
 
+type ModelNotificationDiagnostics = {
+  method: 'model/rerouted' | 'model/verification'
+  atIso: string
+  threadId: string
+  turnId: string
+  fromModel: string
+  toModel: string
+  reason: string
+  verificationCount: number
+  verifications: string[]
+}
+
 type UnknownStatusDiagnostics = {
   source: string
   value: string
@@ -404,6 +431,7 @@ type DiagnosticsData = {
   notificationDiagnostics?: {
     unknownNotificationCount: number
     recentUnknownNotifications: UnknownNotificationDiagnostics[]
+    recentModelNotifications?: ModelNotificationDiagnostics[]
   }
   statusDiagnostics?: {
     unknownStatusCount: number
@@ -509,6 +537,7 @@ const slowRpcCalls = computed(() => appServer.value.rpcDiagnostics?.recentSlowRp
 const timeoutCount = computed(() => appServer.value.rpcDiagnostics?.recentTimeouts?.length ?? 0)
 const unknownNotifications = computed(() => diagnostics.value?.notificationDiagnostics?.recentUnknownNotifications ?? [])
 const unknownNotificationCount = computed(() => diagnostics.value?.notificationDiagnostics?.unknownNotificationCount ?? 0)
+const recentModelNotifications = computed(() => diagnostics.value?.notificationDiagnostics?.recentModelNotifications ?? [])
 const unknownStatuses = computed(() => diagnostics.value?.statusDiagnostics?.recentUnknownStatuses ?? [])
 const unknownStatusCount = computed(() => diagnostics.value?.statusDiagnostics?.unknownStatusCount ?? 0)
 
@@ -656,6 +685,19 @@ function formatServerRequestKind(kind: PendingServerRequestDiagnostics['kind']):
   if (kind === 'elicitation') return '补充信息'
   if (kind === 'tool') return '工具'
   return '请求'
+}
+
+function formatModelNotification(notification: ModelNotificationDiagnostics): string {
+  if (notification.method === 'model/rerouted') {
+    const fromModel = notification.fromModel || '-'
+    const toModel = notification.toModel || '-'
+    const reason = notification.reason ? ` (${notification.reason})` : ''
+    return `${fromModel} -> ${toModel}${reason}`
+  }
+  const verificationLabel = notification.verifications.length > 0
+    ? notification.verifications.join(', ')
+    : `${notification.verificationCount} checks`
+  return verificationLabel || 'verification'
 }
 
 function formatAge(value: string): string {
