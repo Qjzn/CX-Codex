@@ -1214,6 +1214,7 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('thread/realtime/error'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/realtime/closed'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/status/changed'), true)
+  assert.equal(isKnownAppServerNotificationMethod('remoteControl/status/changed'), true)
 
   const diagnostics = new AppServerNotificationDiagnostics({ maxRecentUnknown: 2, maxRecentRealtimeNotifications: 4 })
   diagnostics.observe({
@@ -1230,6 +1231,7 @@ function smokeAppServerNotificationDiagnostics(): void {
     recentGuardianReviewNotifications: [],
     recentProtocolAlerts: [],
     recentRealtimeNotifications: [],
+    recentRemoteControlNotifications: [],
   })
 
   diagnostics.observe({
@@ -1663,6 +1665,43 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(serializedRealtimeSnapshot.includes('secret-sdp-offer'), false)
 
   diagnostics.observe({
+    method: 'remoteControl/status/changed',
+    atIso: '2026-07-03T00:00:01.500Z',
+    params: {
+      status: 'connected',
+      environmentId: 'environment-live-id-1234567890',
+    },
+  })
+  diagnostics.observe({
+    method: 'remoteControl/status/changed',
+    atIso: '2026-07-03T00:00:01.600Z',
+    params: {
+      status: 'errored',
+      environmentId: null,
+      error: 'secret remote control failure detail',
+    },
+  })
+  const remoteControlSnapshot = diagnostics.snapshot()
+  assert.equal(remoteControlSnapshot.unknownNotificationCount, 0)
+  assert.deepEqual(remoteControlSnapshot.recentRemoteControlNotifications, [
+    {
+      method: 'remoteControl/status/changed',
+      atIso: '2026-07-03T00:00:01.600Z',
+      status: 'errored',
+      environmentId: '',
+      hasEnvironmentId: false,
+    },
+    {
+      method: 'remoteControl/status/changed',
+      atIso: '2026-07-03T00:00:01.500Z',
+      status: 'connected',
+      environmentId: 'environment-live-id-1234567890',
+      hasEnvironmentId: true,
+    },
+  ])
+  assert.equal(JSON.stringify(remoteControlSnapshot.recentRemoteControlNotifications).includes('failure detail'), false)
+
+  diagnostics.observe({
     method: 'thread/realtime/transcript/delta',
     atIso: '2026-07-03T00:00:02.000Z',
     threadId: 'thread-b',
@@ -1702,6 +1741,7 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(diagnostics.snapshot().recentGuardianReviewNotifications.length, 0)
   assert.equal(diagnostics.snapshot().recentProtocolAlerts.length, 0)
   assert.equal(diagnostics.snapshot().recentRealtimeNotifications.length, 0)
+  assert.equal(diagnostics.snapshot().recentRemoteControlNotifications.length, 0)
 }
 
 function smokeAppServerNotificationListeners(): void {

@@ -288,6 +288,46 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server remote control status diagnostics
+
+#### Prerequisites
+- Current repository includes `src/server/appServerNotificationDiagnostics.ts`, `src/components/content/DiagnosticsPanel.vue`, `scripts/server-module-smoke.ts`, `docs/app-server-protocol-matrix.zh-CN.md`, and the raw schema audit output for App Server remote control and turn environment types.
+- Dependencies are installed so TypeScript, Vite, tsup, server module smoke, governance, and release verification can run.
+
+#### Steps
+1. Open `output/app-server-schema-audit/20260704-141839/typescript/v2/RemoteControlStatusChangedNotification.ts` and confirm official App Server schema exposes `status` plus `environmentId`.
+2. Open `output/app-server-schema-audit/20260704-141839/typescript/v2/RemoteControlConnectionStatus.ts` and confirm known status values include `disabled`, `connecting`, `connected`, and `errored`.
+3. Open `output/app-server-schema-audit/20260704-141839/typescript/v2/TurnEnvironmentParams.ts`, `TurnStartParams.ts`, and `ThreadStartParams.ts` and confirm `TurnEnvironmentParams` exists as a type but is not referenced by current thread/turn start params.
+4. Open `src/server/appServerNotificationDiagnostics.ts` and confirm `remoteControl/status/changed` is a known notification that records only status and environment id fields in `recentRemoteControlNotifications`.
+5. Open `src/components/content/DiagnosticsPanel.vue` and confirm the Remote Control card reads the diagnostics snapshot without triggering connection, setup, or environment-switch actions.
+6. Run `git diff --check`.
+7. Run `node scripts\verify-server-modules.mjs`.
+8. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+9. Run `node_modules\.bin\vite.cmd build`.
+10. Run `node_modules\.bin\tsup.cmd`.
+11. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+12. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- `remoteControl/status/changed` no longer increments `unknownNotificationCount`.
+- `/codex-api/health` and `/codex-api/diagnostics` can expose `notificationDiagnostics.recentRemoteControlNotifications` with status, environment id, and `hasEnvironmentId`.
+- The diagnostics UI displays remote control status read-only and marks `errored` as warning without opening a remote-control or environment-switching workflow.
+- No `TurnEnvironmentParams` request payload is fabricated while the official start params do not reference it.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `dist/`, `dist-cli/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, remove the remote control diagnostics record/snapshot fields, remove the Remote Control diagnostics UI section, remove the server module smoke assertions, and revert the protocol matrix, changelog, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed with `server module smoke ok`, including `remoteControl/status/changed` as a known notification and sanitized `recentRemoteControlNotifications` snapshot coverage.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
 ### Feature: App Server local runtime snapshot reader helper
 
 #### Prerequisites

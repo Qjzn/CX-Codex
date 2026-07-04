@@ -101,6 +101,14 @@ export type RealtimeNotificationRecord = {
   errorMessage: string
 }
 
+export type RemoteControlNotificationRecord = {
+  method: 'remoteControl/status/changed'
+  atIso: string
+  status: string
+  environmentId: string
+  hasEnvironmentId: boolean
+}
+
 export type AppServerNotificationDiagnosticsSnapshot = {
   unknownNotificationCount: number
   recentUnknownNotifications: UnknownNotificationRecord[]
@@ -110,6 +118,7 @@ export type AppServerNotificationDiagnosticsSnapshot = {
   recentGuardianReviewNotifications: GuardianReviewNotificationRecord[]
   recentProtocolAlerts: ProtocolAlertNotificationRecord[]
   recentRealtimeNotifications: RealtimeNotificationRecord[]
+  recentRemoteControlNotifications: RemoteControlNotificationRecord[]
 }
 
 type NotificationObservation = {
@@ -128,6 +137,7 @@ type AppServerNotificationDiagnosticsOptions = {
   maxRecentGuardianReviewNotifications?: number
   maxRecentProtocolAlerts?: number
   maxRecentRealtimeNotifications?: number
+  maxRecentRemoteControlNotifications?: number
 }
 
 const REALTIME_NOTIFICATION_METHODS = new Set<RealtimeNotificationRecord['method']>([
@@ -162,6 +172,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set([
   'mcpServer/startupStatus/updated',
   'model/rerouted',
   'model/verification',
+  'remoteControl/status/changed',
   'server/request',
   'server/request/resolved',
   'skills/changed',
@@ -214,6 +225,7 @@ export class AppServerNotificationDiagnostics {
   private readonly maxRecentGuardianReviewNotifications: number
   private readonly maxRecentProtocolAlerts: number
   private readonly maxRecentRealtimeNotifications: number
+  private readonly maxRecentRemoteControlNotifications: number
   private readonly unknownByMethod = new Map<string, UnknownNotificationRecord>()
   private readonly recentModelNotifications: ModelNotificationRecord[] = []
   private readonly recentWindowsSandboxNotifications: WindowsSandboxNotificationRecord[] = []
@@ -221,6 +233,7 @@ export class AppServerNotificationDiagnostics {
   private readonly recentGuardianReviewNotifications: GuardianReviewNotificationRecord[] = []
   private readonly recentProtocolAlerts: ProtocolAlertNotificationRecord[] = []
   private readonly recentRealtimeNotifications: RealtimeNotificationRecord[] = []
+  private readonly recentRemoteControlNotifications: RemoteControlNotificationRecord[] = []
   private unknownNotificationCount = 0
 
   constructor(options: AppServerNotificationDiagnosticsOptions = {}) {
@@ -240,6 +253,10 @@ export class AppServerNotificationDiagnostics {
       1,
       Math.min(100, Math.floor(options.maxRecentRealtimeNotifications ?? 20)),
     )
+    this.maxRecentRemoteControlNotifications = Math.max(
+      1,
+      Math.min(100, Math.floor(options.maxRecentRemoteControlNotifications ?? 20)),
+    )
   }
 
   observe(observation: NotificationObservation): void {
@@ -249,6 +266,7 @@ export class AppServerNotificationDiagnostics {
     this.observeGuardianReviewNotification(observation)
     this.observeProtocolAlertNotification(observation)
     this.observeRealtimeNotification(observation)
+    this.observeRemoteControlNotification(observation)
     if (isKnownAppServerNotificationMethod(observation.method)) return
 
     this.unknownNotificationCount += 1
@@ -290,6 +308,7 @@ export class AppServerNotificationDiagnostics {
       recentGuardianReviewNotifications: [...this.recentGuardianReviewNotifications],
       recentProtocolAlerts: [...this.recentProtocolAlerts],
       recentRealtimeNotifications: [...this.recentRealtimeNotifications],
+      recentRemoteControlNotifications: [...this.recentRemoteControlNotifications],
     }
   }
 
@@ -301,6 +320,7 @@ export class AppServerNotificationDiagnostics {
     this.recentGuardianReviewNotifications.splice(0, this.recentGuardianReviewNotifications.length)
     this.recentProtocolAlerts.splice(0, this.recentProtocolAlerts.length)
     this.recentRealtimeNotifications.splice(0, this.recentRealtimeNotifications.length)
+    this.recentRemoteControlNotifications.splice(0, this.recentRemoteControlNotifications.length)
     this.unknownNotificationCount = 0
   }
 
@@ -355,6 +375,15 @@ export class AppServerNotificationDiagnostics {
     this.recentRealtimeNotifications.unshift(record)
     if (this.recentRealtimeNotifications.length > this.maxRecentRealtimeNotifications) {
       this.recentRealtimeNotifications.splice(this.maxRecentRealtimeNotifications)
+    }
+  }
+
+  private observeRemoteControlNotification(observation: NotificationObservation): void {
+    const record = createRemoteControlNotificationRecord(observation)
+    if (!record) return
+    this.recentRemoteControlNotifications.unshift(record)
+    if (this.recentRemoteControlNotifications.length > this.maxRecentRemoteControlNotifications) {
+      this.recentRemoteControlNotifications.splice(this.maxRecentRemoteControlNotifications)
     }
   }
 }
@@ -566,6 +595,19 @@ function createRealtimeNotificationRecord(observation: NotificationObservation):
     errorMessage: method === 'thread/realtime/error'
       ? readFirstString(params, ['message'], 160) || readFirstString(error, ['message'], 160)
       : '',
+  }
+}
+
+function createRemoteControlNotificationRecord(observation: NotificationObservation): RemoteControlNotificationRecord | null {
+  if (observation.method !== 'remoteControl/status/changed') return null
+  const params = asRecord(observation.params)
+  const environmentId = readString(params, 'environmentId', 80)
+  return {
+    method: 'remoteControl/status/changed',
+    atIso: observation.atIso,
+    status: readString(params, 'status', 40),
+    environmentId,
+    hasEnvironmentId: environmentId.length > 0,
   }
 }
 

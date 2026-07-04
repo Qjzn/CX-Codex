@@ -375,6 +375,25 @@
 
       <section class="diagnostics-section">
         <div class="diagnostics-section-header">
+          <h2>Remote Control</h2>
+          <span class="diagnostics-badge" :data-tone="remoteControlDiagnosticsTone">
+            {{ remoteControlDiagnosticsLabel }}
+          </span>
+        </div>
+        <div v-if="recentRemoteControlNotifications.length === 0" class="diagnostics-empty">
+          暂无 remote control 状态通知。
+        </div>
+        <ul v-else class="diagnostics-list">
+          <li v-for="notification in recentRemoteControlNotifications" :key="`${notification.atIso}-${notification.environmentId}`">
+            <span>{{ formatRemoteControlNotification(notification) }}</span>
+            <strong>{{ shortId(notification.environmentId) || '-' }}</strong>
+            <small>{{ formatAge(notification.atIso) }}</small>
+          </li>
+        </ul>
+      </section>
+
+      <section class="diagnostics-section">
+        <div class="diagnostics-section-header">
           <h2>未知通知</h2>
           <span class="diagnostics-badge" :data-tone="unknownNotificationCount > 0 ? 'warning' : 'ok'">
             {{ unknownNotificationCount }}
@@ -625,6 +644,14 @@ type RealtimeNotificationDiagnostics = {
   errorMessage: string
 }
 
+type RemoteControlNotificationDiagnostics = {
+  method: 'remoteControl/status/changed'
+  atIso: string
+  status: string
+  environmentId: string
+  hasEnvironmentId: boolean
+}
+
 type UnknownStatusDiagnostics = {
   source: string
   value: string
@@ -691,6 +718,7 @@ type DiagnosticsData = {
     recentGuardianReviewNotifications?: GuardianReviewNotificationDiagnostics[]
     recentProtocolAlerts?: ProtocolAlertDiagnostics[]
     recentRealtimeNotifications?: RealtimeNotificationDiagnostics[]
+    recentRemoteControlNotifications?: RemoteControlNotificationDiagnostics[]
   }
   statusDiagnostics?: {
     unknownStatusCount: number
@@ -841,6 +869,9 @@ const protocolAlerts = computed(() => diagnostics.value?.notificationDiagnostics
 const recentRealtimeNotifications = computed(() => (
   diagnostics.value?.notificationDiagnostics?.recentRealtimeNotifications ?? []
 ))
+const recentRemoteControlNotifications = computed(() => (
+  diagnostics.value?.notificationDiagnostics?.recentRemoteControlNotifications ?? []
+))
 const unknownStatuses = computed(() => diagnostics.value?.statusDiagnostics?.recentUnknownStatuses ?? [])
 const unknownStatusCount = computed(() => diagnostics.value?.statusDiagnostics?.unknownStatusCount ?? 0)
 
@@ -880,6 +911,7 @@ const overallTone = computed<Tone>(() => {
     || guardianReviewDiagnosticsTone.value === 'warning'
     || protocolAlerts.value.length > 0
     || realtimeDiagnosticsTone.value === 'warning'
+    || remoteControlDiagnosticsTone.value === 'warning'
     || schemaAuditTone.value === 'warning'
     || schemaAuditTone.value === 'danger'
     || windowsSandboxReadinessTone.value === 'warning'
@@ -962,6 +994,17 @@ const realtimeDiagnosticsTone = computed<Tone>(() => (
     ? 'warning'
     : 'neutral'
 ))
+
+const remoteControlDiagnosticsTone = computed<Tone>(() => (
+  recentRemoteControlNotifications.value.some((notification) => notification.status === 'errored')
+    ? 'warning'
+    : 'neutral'
+))
+
+const remoteControlDiagnosticsLabel = computed(() => {
+  const latest = recentRemoteControlNotifications.value[0]
+  return latest?.status || '无通知'
+})
 
 const windowsSandboxReadinessTone = computed<Tone>(() => {
   if (windowsSandboxReadiness.value.status === 'ready') return 'ok'
@@ -1115,6 +1158,11 @@ function formatRealtimeNotification(notification: RealtimeNotificationDiagnostic
     return `${notification.method}: ${message}${byteSuffix}${eventSuffix}`
   }
   return `${notification.method}${byteSuffix}${eventSuffix}`
+}
+
+function formatRemoteControlNotification(notification: RemoteControlNotificationDiagnostics): string {
+  const environment = notification.hasEnvironmentId ? ` / ${shortId(notification.environmentId)}` : ''
+  return `${notification.status || 'unknown'}${environment}`
 }
 
 function formatNullableBoolean(value: boolean | null): string {
