@@ -91,13 +91,12 @@ import { AppServerStatusDiagnostics } from './appServerStatusDiagnostics.js'
 import { readAppServerSchemaAuditSummary } from './appServerSchemaAuditSummary.js'
 import {
   AppServerHookDiagnosticsCache,
-  createAppServerHookDiagnosticsReader,
 } from './appServerHookDiagnostics.js'
 import { AppServerNotificationListeners } from './appServerNotificationListeners.js'
 import {
-  createWindowsSandboxReadinessReader,
   WindowsSandboxReadinessCache,
 } from './windowsSandboxDiagnostics.js'
+import { createAppServerDiagnosticsReaders } from './appServerDiagnosticsReaders.js'
 import {
   createAppServerRpcNotification,
   createAppServerRpcRequest,
@@ -730,16 +729,15 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     listNotificationEventsAfter,
   } = createAppServerNotificationReplayAccessors(notificationReplay)
 
-  const readWindowsSandboxReadinessDiagnostics = createWindowsSandboxReadinessReader({
-    cache: windowsSandboxReadinessCache,
-    rpc: (method, params) => appServer.rpc(method, params),
-    isWindows: () => process.platform === 'win32',
-  })
-
-  const readAppServerHookDiagnostics = createAppServerHookDiagnosticsReader({
-    cache: hookDiagnosticsCache,
+  const {
+    readAppServerHookDiagnostics,
+    readWindowsSandboxReadinessDiagnostics,
+  } = createAppServerDiagnosticsReaders({
+    hookDiagnosticsCache,
+    windowsSandboxReadinessCache,
     rpc: (method, params) => appServer.rpc(method, params),
     getCwds: () => [process.cwd()],
+    isWindows: () => process.platform === 'win32',
   })
 
   const unsubscribeAppServerNotifications = subscribeBridgeNotificationRuntimeSync({

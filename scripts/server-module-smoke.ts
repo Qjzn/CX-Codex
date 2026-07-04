@@ -35,6 +35,7 @@ import {
   createAppServerHookDiagnosticsUnavailable,
   normalizeAppServerHookDiagnostics,
 } from '../src/server/appServerHookDiagnostics.js'
+import { createAppServerDiagnosticsReaders } from '../src/server/appServerDiagnosticsReaders.js'
 import {
   createWindowsSandboxReadinessReader,
   createWindowsSandboxReadinessUnavailable,
@@ -394,6 +395,7 @@ try {
   smokeAppServerNotificationState()
   await smokeAppServerHookDiagnostics()
   await smokeWindowsSandboxReadinessDiagnostics()
+  await smokeAppServerDiagnosticsReaders()
   smokeAppServerStatusDiagnostics()
   await smokeAppServerSchemaAuditSummary()
   smokeTranscriptionProxyConfig()
@@ -2046,6 +2048,47 @@ async function smokeWindowsSandboxReadinessDiagnostics(): Promise<void> {
   const unsupportedReaderDiagnostics = await unsupportedReader()
   assert.equal(unsupportedReaderDiagnostics.status, 'unsupported')
   assert.equal(unsupportedReaderDiagnostics.source, 'platform')
+}
+
+async function smokeAppServerDiagnosticsReaders(): Promise<void> {
+  const rpcCalls: Array<{ method: string; params: unknown }> = []
+  const diagnosticsReaders = createAppServerDiagnosticsReaders({
+    hookDiagnosticsCache: new AppServerHookDiagnosticsCache({
+      ttlMs: 100,
+      nowMs: () => 30_000,
+      nowIso: () => '2026-07-04T00:00:07.000Z',
+    }),
+    windowsSandboxReadinessCache: new WindowsSandboxReadinessCache({
+      ttlMs: 100,
+      nowMs: () => 40_000,
+      nowIso: () => '2026-07-04T00:00:08.000Z',
+    }),
+    getCwds: () => ['E:/repo-combined'],
+    isWindows: () => true,
+    rpc: async (method, params) => {
+      rpcCalls.push({ method, params })
+      if (method === 'hooks/list') return { data: [] }
+      if (method === 'windowsSandbox/readiness') return { status: 'ready' }
+      throw new Error(`unexpected diagnostics method ${method}`)
+    },
+  })
+
+  const hookDiagnostics = await diagnosticsReaders.readAppServerHookDiagnostics()
+  const windowsSandboxDiagnostics = await diagnosticsReaders.readWindowsSandboxReadinessDiagnostics()
+  assert.equal(hookDiagnostics.available, true)
+  assert.equal(hookDiagnostics.checkedAtIso, '2026-07-04T00:00:07.000Z')
+  assert.equal(windowsSandboxDiagnostics.status, 'ready')
+  assert.equal(windowsSandboxDiagnostics.checkedAtIso, '2026-07-04T00:00:08.000Z')
+  assert.deepEqual(rpcCalls, [
+    {
+      method: 'hooks/list',
+      params: { cwds: ['E:/repo-combined'] },
+    },
+    {
+      method: 'windowsSandbox/readiness',
+      params: undefined,
+    },
+  ])
 }
 
 function smokeAppServerMethodCatalog(): void {
