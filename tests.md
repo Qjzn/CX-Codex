@@ -4838,6 +4838,44 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Runtime snapshot 持久化模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRuntimeSnapshotPersistence.ts`、`src/server/runtimeState.ts`、`src/server/runtimeStore.ts` 和 `src/server/codexAppServerBridge.ts`。
+- 本机可运行 server module smoke、governance gate、release gate 和直接构建命令。
+
+#### Steps
+1. 打开 `src/server/codexAppServerBridge.ts`，确认 `persistRuntimeSnapshot(...)` 只调用 `persistAppServerRuntimeSnapshot(...)` 并注入 runtime state、pending server request、token usage 和 runtime store upsert 依赖。
+2. 打开 `src/server/appServerRuntimeSnapshotPersistence.ts`，确认未传入 snapshot 时会读取 pending server requests 与 token usage 作为 overlay 创建当前 runtime snapshot。
+3. 确认传入 snapshot 时不会重新读取 pending request、token usage 或当前 runtime state。
+4. 确认写入 `runtimeStore.upsertSnapshot(...)` 前会调用 `toPersistableRuntimeSnapshot(...)`，避免把 `threadRead`、`pendingServerRequests` 和 `tokenUsage` 持久化进 snapshot JSON。
+5. 执行 `git diff --check`。
+6. 执行 `node scripts\verify-server-modules.mjs`。
+7. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+8. 执行 `node_modules\.bin\vite.cmd build`。
+9. 执行 `node_modules\.bin\tsup.cmd`。
+10. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+11. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+12. 确认 release package smoke 必检 `src\server\appServerRuntimeSnapshotPersistence.ts`。
+
+#### Expected Results
+- runtime snapshot 持久化字段仍包含 `threadId`、`executionState`、`activeTurnId`、`activeItemId`、`canStop`、`stopRequested`、`lastEventSeq` 和 `updatedAtIso`。
+- 返回值仍是完整的当前 snapshot，调用方可以继续读取非持久化的 overlay 字段。
+- 持久化 snapshot JSON 不包含 heavy `threadRead`、ephemeral `pendingServerRequests` 或 token usage。
+- `appServerRuntimeSnapshotPersistence.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `src/server/appServerRuntimeSnapshotPersistence.ts`，把 `persistRuntimeSnapshot(...)` 的 snapshot overlay、`runtimeStore.upsertSnapshot(...)` 字段拼装和 `toPersistableRuntimeSnapshot(...)` 调用恢复到 `src/server/codexAppServerBridge.ts` 内，并撤销 `scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和本测试章节。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，覆盖 `persistAppServerRuntimeSnapshot()` 的 overlay snapshot 生成、provided snapshot 直写、upsert 字段和 persistable snapshot 脱重字段。
+- 2026-07-04 构建验证：`node_modules\.bin\vue-tsc.cmd --noEmit`、`node_modules\.bin\vite.cmd build` 和 `node_modules\.bin\tsup.cmd` 通过。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\appServerRuntimeSnapshotPersistence.ts`。
+
+---
+
 ### Feature: Runtime interrupt 执行模块化
 
 #### Prerequisites

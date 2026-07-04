@@ -382,6 +382,7 @@ if (-not $SkipPackageSmoke) {
     "src\server\appServerRuntimeInterrupt.ts",
     "src\server\appServerRuntimeStart.ts",
     "src\server\appServerNotificationRuntimeSync.ts",
+    "src\server\appServerRuntimeSnapshotPersistence.ts",
     "src\server\appServerNotificationState.ts",
     "src\server\appServerRuntimeReconcileScheduler.ts",
     "src\server\appServerThreadRuntimeSnapshot.ts",

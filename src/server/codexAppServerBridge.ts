@@ -14,7 +14,6 @@ import {
 import { createRuntimeReconcileScheduler } from './appServerRuntimeReconcileScheduler.js'
 import {
   RuntimeStateStore,
-  toPersistableRuntimeSnapshot,
   type ThreadRuntimeSnapshot,
 } from './runtimeState.js'
 import { PendingServerRequestStore, type PendingServerRequest } from './pendingServerRequests.js'
@@ -146,6 +145,7 @@ import {
 import { AppServerThreadListAugmenter } from './appServerThreadListAugment.js'
 import { startRuntimeTurnWithAppServer } from './appServerRuntimeStart.js'
 import { interruptRuntimeTurnWithAppServer } from './appServerRuntimeInterrupt.js'
+import { persistAppServerRuntimeSnapshot } from './appServerRuntimeSnapshotPersistence.js'
 
 type JsonRpcResponse = {
   id?: number
@@ -866,22 +866,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   }
 
   function persistRuntimeSnapshot(threadId: string, snapshot?: ThreadRuntimeSnapshot): ThreadRuntimeSnapshot {
-    const nextSnapshot = snapshot ?? runtimeStateStore.snapshot(threadId, {
-      pendingServerRequests: appServer.listPendingServerRequestsForThread(threadId),
-      tokenUsage: appServer.getThreadTokenUsage(threadId),
+    return persistAppServerRuntimeSnapshot(threadId, snapshot, {
+      snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
+      listPendingServerRequestsForThread: (normalizedThreadId) => appServer.listPendingServerRequestsForThread(normalizedThreadId),
+      getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
+      upsertSnapshot: (nextSnapshot) => runtimeStore.upsertSnapshot(nextSnapshot),
     })
-    runtimeStore.upsertSnapshot({
-      threadId,
-      executionState: nextSnapshot.executionState,
-      activeTurnId: nextSnapshot.activeTurnId,
-      activeItemId: nextSnapshot.activeItemId,
-      canStop: nextSnapshot.canStop,
-      stopRequested: nextSnapshot.stopRequested,
-      lastEventSeq: nextSnapshot.lastEventSeq,
-      updatedAtIso: nextSnapshot.updatedAtIso,
-      snapshot: toPersistableRuntimeSnapshot(nextSnapshot),
-    })
-    return nextSnapshot
   }
 
   function rememberNotificationEvent(notification: { method: string; params: unknown }): BridgeNotificationEvent {

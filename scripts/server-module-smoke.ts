@@ -260,6 +260,7 @@ import {
   startRuntimeTurnWithAppServer,
   type RuntimeStartDependencies,
 } from '../src/server/appServerRuntimeStart.js'
+import { persistAppServerRuntimeSnapshot } from '../src/server/appServerRuntimeSnapshotPersistence.js'
 import {
   interruptRuntimeTurnWithAppServer,
   type RuntimeInterruptDependencies,
@@ -390,6 +391,7 @@ try {
   smokeRuntimePayloadParsing()
   await smokeAppServerRuntimeStart()
   await smokeAppServerRuntimeInterrupt()
+  smokeAppServerRuntimeSnapshotPersistence()
   smokeAppServerNotificationRuntimeSync()
   await smokeRuntimeActionRoutes()
   await smokeDiagnosticsRoutes()
@@ -5730,6 +5732,107 @@ function smokeAppServerRuntimeSnapshotRecovery(): void {
     tokenUsage: { total: 4 },
   }])
   assert.deepEqual(persistedSnapshots, [currentSnapshot])
+}
+
+function smokeAppServerRuntimeSnapshotPersistence(): void {
+  const pendingServerRequests = [{
+    id: 1,
+    method: 'server/request',
+    params: { threadId: 'thread-a' },
+    receivedAtIso: '2026-01-01T00:00:00.000Z',
+  }]
+  const tokenUsage = { total: { totalTokens: 7 } }
+  const generatedSnapshot = createThreadRuntimeSnapshot({
+    threadId: 'thread-a',
+    executionState: 'running',
+    activeTurnId: 'turn-a',
+    activeItemId: 'item-a',
+    canStop: true,
+    stopRequested: false,
+    lastEventSeq: 12,
+    updatedAtIso: '2026-01-01T00:00:01.000Z',
+    threadRead: { thread: { id: 'thread-a' } },
+    pendingServerRequests,
+    tokenUsage,
+  })
+  const snapshotCalls: Array<{ threadId: string; overlay?: RuntimeSnapshotOverlay }> = []
+  const upserts: unknown[] = []
+  const returnedGeneratedSnapshot = persistAppServerRuntimeSnapshot('thread-a', undefined, {
+    snapshotRuntime: (threadId, overlay) => {
+      snapshotCalls.push({ threadId, overlay })
+      return generatedSnapshot
+    },
+    listPendingServerRequestsForThread: (threadId) => {
+      assert.equal(threadId, 'thread-a')
+      return pendingServerRequests
+    },
+    getThreadTokenUsage: (threadId) => {
+      assert.equal(threadId, 'thread-a')
+      return tokenUsage
+    },
+    upsertSnapshot: (snapshot) => {
+      upserts.push(snapshot)
+      return snapshot
+    },
+  })
+  assert.equal(returnedGeneratedSnapshot, generatedSnapshot)
+  assert.deepEqual(snapshotCalls, [{
+    threadId: 'thread-a',
+    overlay: {
+      pendingServerRequests,
+      tokenUsage,
+    },
+  }])
+  assert.deepEqual(upserts, [{
+    threadId: 'thread-a',
+    executionState: 'running',
+    activeTurnId: 'turn-a',
+    activeItemId: 'item-a',
+    canStop: true,
+    stopRequested: false,
+    lastEventSeq: 12,
+    updatedAtIso: '2026-01-01T00:00:01.000Z',
+    snapshot: {
+      ...generatedSnapshot,
+      threadRead: null,
+      pendingServerRequests: [],
+      tokenUsage: null,
+    },
+  }])
+
+  const providedUpserts: unknown[] = []
+  const providedSnapshot = createThreadRuntimeSnapshot({
+    threadId: 'thread-provided',
+    executionState: 'completed',
+    activeTurnId: 'turn-provided',
+    lastEventSeq: 3,
+  })
+  assert.equal(persistAppServerRuntimeSnapshot('thread-provided', providedSnapshot, {
+    snapshotRuntime: () => {
+      throw new Error('provided snapshot should not create a current snapshot')
+    },
+    listPendingServerRequestsForThread: () => {
+      throw new Error('provided snapshot should not read pending requests')
+    },
+    getThreadTokenUsage: () => {
+      throw new Error('provided snapshot should not read token usage')
+    },
+    upsertSnapshot: (snapshot) => {
+      providedUpserts.push(snapshot)
+      return snapshot
+    },
+  }), providedSnapshot)
+  assert.deepEqual(providedUpserts, [{
+    threadId: 'thread-provided',
+    executionState: 'completed',
+    activeTurnId: 'turn-provided',
+    activeItemId: '',
+    canStop: false,
+    stopRequested: false,
+    lastEventSeq: 3,
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    snapshot: providedSnapshot,
+  }])
 }
 
 async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
