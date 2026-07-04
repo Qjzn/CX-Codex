@@ -4221,6 +4221,38 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Notification SSE route 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/notificationSseRoute.ts`、`src/server/codexAppServerBridge.ts` 和 `scripts/server-module-smoke.ts`。
+- 本机可运行 server module smoke、governance gate 和 release gate。
+
+#### Steps
+1. 打开 `src/server/codexAppServerBridge.ts`，确认 `/codex-api/events` 统一委托 `handleNotificationSseRoute(...)`。
+2. 打开 `src/server/notificationSseRoute.ts`，确认 SSE route 设置 `text/event-stream`、`Cache-Control: no-cache, no-transform`、`Connection: keep-alive` 和 `X-Accel-Buffering: no`。
+3. 确认 ready event 包含 `latestSeq`，notification listener 写入 `data: ...`，heartbeat 使用 `bridge/heartbeat`，`close`/`aborted` 会清理 interval、取消订阅并结束响应。
+4. 执行 `git diff --check`。
+5. 执行 `node scripts\verify-server-modules.mjs`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+7. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+8. 确认 release package smoke 必检 `src\server\notificationSseRoute.ts`。
+
+#### Expected Results
+- `/codex-api/events` SSE route 从 bridge 主文件抽出，保持 ready、notification、heartbeat 和连接关闭清理行为不变。
+- 未匹配 method/path 返回 `false`，不吞掉后续 route。
+- `notificationSseRoute.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/notificationSseRoute.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和本节测试记录。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，覆盖 SSE headers、ready event、notification 写入、heartbeat、close cleanup、unsubscribe 和未匹配 route 返回 `false`。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\notificationSseRoute.ts`。
+
+---
+
 ### Feature: Notification replay route 模块化
 
 #### Prerequisites

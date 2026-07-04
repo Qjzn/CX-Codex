@@ -382,6 +382,7 @@ if (-not $SkipPackageSmoke) {
     "src\server\codexAppServerBridge.ts",
     "src\server\localStateRoutes.ts",
     "src\server\notificationReplayRoute.ts",
+    "src\server\notificationSseRoute.ts",
     "src\server\transcriptionRoute.ts"
   )
   Write-Host "release package smoke ok"

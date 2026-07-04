@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -233,12 +234,17 @@ import {
 import {
   normalizeRuntimeEventForReplay,
   readRuntimeRequestStatusFromExecutionState,
+  type BridgeNotificationEvent,
 } from '../src/server/appServerRuntimeBridge.js'
 import { AppServerNotificationReplay } from '../src/server/appServerNotificationReplay.js'
 import {
   handleNotificationReplayRoute,
   readNotificationReplayQuery,
 } from '../src/server/notificationReplayRoute.js'
+import {
+  BRIDGE_HEARTBEAT_METHOD,
+  handleNotificationSseRoute,
+} from '../src/server/notificationSseRoute.js'
 import { handleLocalStateRoutes } from '../src/server/localStateRoutes.js'
 import {
   createRuntimeReconcileFailurePatch,
@@ -338,6 +344,7 @@ try {
   smokeRuntimePayloadParsing()
   smokeAppServerNotificationReplay()
   await smokeLocalStateRoutes()
+  smokeNotificationSseRoute()
   smokeNotificationReplayRoute()
   smokeAppServerRuntimeBridge()
   smokeAppServerRuntimeRequestReconciliation()
@@ -3963,6 +3970,84 @@ async function smokeLocalStateRoutes(): Promise<void> {
   ), false)
 }
 
+function smokeNotificationSseRoute(): void {
+  const request = Object.assign(new EventEmitter(), { method: 'GET' })
+  const response = createSseRouteTestResponse()
+  const timers: Array<() => void> = []
+  const clearedTimers: unknown[] = []
+  const unsubscribed: string[] = []
+  const listeners: Array<(value: BridgeNotificationEvent) => void> = []
+
+  const handled = handleNotificationSseRoute(
+    request as never,
+    response.response as never,
+    new URL('http://127.0.0.1/codex-api/events'),
+    {
+      latestSeq: () => 42,
+      nowIso: () => '2026-01-01T00:00:00.000Z',
+      heartbeatIntervalMs: 10,
+      setInterval: ((callback: () => void, intervalMs: number) => {
+        assert.equal(intervalMs, 10)
+        timers.push(callback)
+        return { timerId: timers.length } as never
+      }) as never,
+      clearInterval: ((timer: unknown) => {
+        clearedTimers.push(timer)
+      }) as never,
+      subscribeNotifications: (nextListener) => {
+        listeners.push(nextListener)
+        return () => {
+          unsubscribed.push('yes')
+        }
+      },
+    },
+  )
+
+  assert.equal(handled, true)
+  assert.equal(response.response.statusCode, 200)
+  assert.equal(response.headers.get('Content-Type'), 'text/event-stream; charset=utf-8')
+  assert.equal(response.headers.get('Cache-Control'), 'no-cache, no-transform')
+  assert.equal(response.headers.get('Connection'), 'keep-alive')
+  assert.equal(response.headers.get('X-Accel-Buffering'), 'no')
+  assert.equal(response.chunks[0], 'event: ready\ndata: {"ok":true,"latestSeq":42}\n\n')
+  assert.equal(timers.length, 1)
+  assert.equal(listeners.length, 1)
+
+  const notificationListener = listeners[0]
+  assert.equal(typeof notificationListener, 'function')
+  notificationListener({
+    seq: 43,
+    method: 'turn/completed',
+    params: { ok: true },
+    atIso: '2026-01-01T00:00:01.000Z',
+  })
+  assert.equal(response.chunks[1], 'data: {"seq":43,"method":"turn/completed","params":{"ok":true},"atIso":"2026-01-01T00:00:01.000Z"}\n\n')
+
+  timers[0]()
+  assert.equal(response.chunks[2], `data: ${JSON.stringify({
+    method: BRIDGE_HEARTBEAT_METHOD,
+    params: { ok: true },
+    atIso: '2026-01-01T00:00:00.000Z',
+  })}\n\n`)
+
+  request.emit('close')
+  assert.equal(response.ended, true)
+  assert.equal(clearedTimers.length, 1)
+  assert.deepEqual(unsubscribed, ['yes'])
+
+  assert.equal(handleNotificationSseRoute(
+    Object.assign(new EventEmitter(), { method: 'POST' }) as never,
+    createSseRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/events'),
+    {
+      latestSeq: 1,
+      subscribeNotifications: () => {
+        throw new Error('unexpected SSE subscription')
+      },
+    },
+  ), false)
+}
+
 function smokeNotificationReplayRoute(): void {
   assert.deepEqual(
     readNotificationReplayQuery(new URL('http://127.0.0.1/codex-api/events/replay?after=12&limit=5')),
@@ -4105,6 +4190,38 @@ function createTranscriptionRouteTestRequest(body: Buffer, contentType: string) 
 
 function createTranscriptionRouteTestResponse() {
   return createRouteTestResponse()
+}
+
+function createSseRouteTestResponse() {
+  const headers = new Map<string, string | number | readonly string[]>()
+  const chunks: string[] = []
+  let ended = false
+  const response = {
+    statusCode: 0,
+    destroyed: false,
+    get writableEnded() {
+      return ended
+    },
+    setHeader(name: string, value: string | number | readonly string[]) {
+      headers.set(name, value)
+    },
+    write(value: string | Buffer) {
+      chunks.push(Buffer.isBuffer(value) ? value.toString('utf8') : value)
+      return true
+    },
+    end() {
+      ended = true
+    },
+  }
+
+  return {
+    response,
+    headers,
+    chunks,
+    get ended() {
+      return ended
+    },
+  }
 }
 
 function createRouteTestResponse() {

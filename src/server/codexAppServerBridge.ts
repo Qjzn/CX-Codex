@@ -47,6 +47,7 @@ import {
 import { handleTranscriptionRoute } from './transcriptionRoute.js'
 import { handleNotificationReplayRoute } from './notificationReplayRoute.js'
 import { handleLocalStateRoutes } from './localStateRoutes.js'
+import { handleNotificationSseRoute } from './notificationSseRoute.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   ComposerFileSearchError,
@@ -236,7 +237,6 @@ const APP_SERVER_RPC_TIMEOUT_RESTART_WINDOW_MS = 45_000
 const APP_SERVER_RPC_TIMEOUT_RESTART_THRESHOLD = 3
 const APP_SERVER_RESTART_COOLDOWN_MS = 10_000
 const APP_SERVER_COLD_START_GRACE_MS = 60_000
-const BRIDGE_HEARTBEAT_METHOD = 'bridge/heartbeat'
 const supplementalThreadListAugmenter = new AppServerThreadListAugmenter()
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -2112,49 +2112,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'GET' && url.pathname === '/codex-api/events') {
-        res.statusCode = 200
-        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
-        res.setHeader('Cache-Control', 'no-cache, no-transform')
-        res.setHeader('Connection', 'keep-alive')
-        res.setHeader('X-Accel-Buffering', 'no')
-
-        let keepAlive: ReturnType<typeof setInterval> | null = null
-        let unsubscribe: (() => void) | null = null
-        const close = () => {
-          if (keepAlive !== null) {
-            clearInterval(keepAlive)
-            keepAlive = null
-          }
-          unsubscribe?.()
-          unsubscribe = null
-          if (!res.writableEnded) {
-            res.end()
-          }
-        }
-        const writeSse = (chunk: string): void => {
-          if (res.writableEnded || res.destroyed) return
-          try {
-            res.write(chunk)
-          } catch {
-            close()
-          }
-        }
-        unsubscribe = middleware.subscribeNotifications((notification: BridgeNotificationEvent) => {
-          writeSse(`data: ${JSON.stringify(notification)}\n\n`)
-        })
-
-        writeSse(`event: ready\ndata: ${JSON.stringify({ ok: true, latestSeq: notificationReplay.latestSeq })}\n\n`)
-        keepAlive = setInterval(() => {
-          writeSse(`data: ${JSON.stringify({
-            method: BRIDGE_HEARTBEAT_METHOD,
-            params: { ok: true },
-            atIso: new Date().toISOString(),
-          })}\n\n`)
-        }, 15000)
-
-        req.on('close', close)
-        req.on('aborted', close)
+      if (handleNotificationSseRoute(req, res, url, {
+        latestSeq: () => notificationReplay.latestSeq,
+        subscribeNotifications: middleware.subscribeNotifications,
+      })) {
         return
       }
 
