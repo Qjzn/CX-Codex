@@ -9,10 +9,9 @@ import {
 import { syncBridgeNotificationRuntimeState } from './appServerNotificationRuntimeSync.js'
 import { AppServerNotificationReplay } from './appServerNotificationReplay.js'
 import {
-  createRuntimeReconcileFailurePatch,
-  selectRuntimeRequestsForReconcile,
   updateRuntimeRequestsFromSnapshot,
 } from './appServerRuntimeRequestReconciliation.js'
+import { createRuntimeReconcileScheduler } from './appServerRuntimeReconcileScheduler.js'
 import {
   RuntimeStateStore,
   toPersistableRuntimeSnapshot,
@@ -1299,40 +1298,15 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     }
   }
 
-  let runtimeReconcileInFlight = false
-  const runtimeReconcileLastAtMsByThreadId = new Map<string, number>()
-  const runtimeReconcileTimer = setInterval(() => {
-    if (runtimeReconcileInFlight) return
-    const now = Date.now()
-    const candidates = selectRuntimeRequestsForReconcile(
-      runtimeStore.listUncertainRequests(10),
-      runtimeReconcileLastAtMsByThreadId,
-      now,
-    )
-    if (candidates.length === 0) return
-
-    runtimeReconcileInFlight = true
-    void (async () => {
-      for (const request of candidates) {
-        try {
-          await reconcileRuntimeThread(request.threadId)
-          runtimeReconcileLastAtMsByThreadId.set(request.threadId, Date.now())
-        } catch (error) {
-          const lastError = getErrorMessage(error, 'runtime reconcile failed')
-          runtimeStore.updateRequest(request.requestId, createRuntimeReconcileFailurePatch(request, lastError))
-          writeBridgeLog('warn', 'Runtime reconcile failed', {
-            threadId: request.threadId,
-            requestId: request.requestId,
-            status: request.status,
-            error: lastError,
-          })
-        }
-      }
-    })().finally(() => {
-      runtimeReconcileInFlight = false
-    })
-  }, 2000)
-  runtimeReconcileTimer.unref?.()
+  const runtimeReconcileScheduler = createRuntimeReconcileScheduler({
+    listUncertainRequests: (limit) => runtimeStore.listUncertainRequests(limit),
+    reconcileRuntimeThread,
+    updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
+    getErrorMessage,
+    writeReconcileFailure: (details) => {
+      writeBridgeLog('warn', 'Runtime reconcile failed', details)
+    },
+  })
 
   async function readCachedThreadTokenUsage(threadId: string): Promise<ThreadTokenUsage | null> {
     return await resolveThreadTokenUsage(threadId, {
@@ -1503,7 +1477,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   }
 
   middleware.dispose = () => {
-    clearInterval(runtimeReconcileTimer)
+    runtimeReconcileScheduler.dispose()
     threadSearchIndexStore.clear()
     bridgeNotificationListeners.clear()
     unsubscribeAppServerNotifications()

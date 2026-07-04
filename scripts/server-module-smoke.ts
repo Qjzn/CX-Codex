@@ -250,6 +250,7 @@ import {
   type BridgeNotificationEvent,
 } from '../src/server/appServerRuntimeBridge.js'
 import { syncBridgeNotificationRuntimeState } from '../src/server/appServerNotificationRuntimeSync.js'
+import { runRuntimeReconcileBatch } from '../src/server/appServerRuntimeReconcileScheduler.js'
 import { AppServerNotificationReplay } from '../src/server/appServerNotificationReplay.js'
 import {
   handleNotificationReplayRoute,
@@ -383,6 +384,7 @@ try {
   smokeNotificationReplayRoute()
   smokeAppServerRuntimeBridge()
   smokeAppServerRuntimeRequestReconciliation()
+  await smokeAppServerRuntimeReconcileScheduler()
   smokeAppServerRuntimeSnapshotRecovery()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
@@ -4766,6 +4768,72 @@ function smokeAppServerRuntimeRequestReconciliation(): void {
     turnId: 'turn-b',
     lastError: 'failed after interrupt',
   })
+}
+
+async function smokeAppServerRuntimeReconcileScheduler(): Promise<void> {
+  const baseRequest: RuntimeRequestRecord = {
+    requestId: 'request-a',
+    clientMessageId: 'client-a',
+    threadId: 'thread-a',
+    turnId: 'turn-a',
+    status: 'running',
+    mode: 'execute',
+    promptHash: 'hash-a',
+    payload: {},
+    retryCount: 0,
+    createdAtIso: '2026-01-01T00:00:00.000Z',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    lastError: null,
+  }
+  const reconciledThreadIds: string[] = []
+  const recordedReconciles: Array<{ threadId: string; atMs: number }> = []
+  const updates: Array<{ requestId: string; patch: unknown }> = []
+  const failures: Array<{ threadId: string; requestId: string; status: string; error: string }> = []
+  let now = 10_000
+
+  assert.equal(await runRuntimeReconcileBatch([
+    baseRequest,
+    {
+      ...baseRequest,
+      requestId: 'request-b',
+      threadId: 'thread-b',
+      status: 'stopping',
+    },
+  ], {
+    reconcileRuntimeThread: async (threadId) => {
+      reconciledThreadIds.push(threadId)
+      if (threadId === 'thread-b') throw new Error('thread-b failed')
+    },
+    updateRequest: (requestId, patch) => {
+      updates.push({ requestId, patch })
+      return null
+    },
+    getErrorMessage: (error, fallback) => error instanceof Error ? error.message : fallback,
+    writeReconcileFailure: (details) => {
+      failures.push(details)
+    },
+    nowMs: () => now++,
+    recordReconciled: (threadId, atMs) => {
+      recordedReconciles.push({ threadId, atMs })
+    },
+  }), 2)
+
+  assert.deepEqual(reconciledThreadIds, ['thread-a', 'thread-b'])
+  assert.deepEqual(recordedReconciles, [{ threadId: 'thread-a', atMs: 10_000 }])
+  assert.deepEqual(updates, [{
+    requestId: 'request-b',
+    patch: {
+      status: 'stop_uncertain',
+      lastError: 'thread-b failed',
+      incrementRetry: true,
+    },
+  }])
+  assert.deepEqual(failures, [{
+    threadId: 'thread-b',
+    requestId: 'request-b',
+    status: 'stopping',
+    error: 'thread-b failed',
+  }])
 }
 
 function smokeRuntimePayloadParsing(): void {

@@ -2347,34 +2347,42 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
-### Feature: Runtime reconcile scheduler 规则模块化
+### Feature: Runtime reconcile scheduler 模块化
 
 #### Prerequisites
-- 当前仓库包含 `src/server/appServerRuntimeRequestReconciliation.ts` 和 `src/server/codexAppServerBridge.ts`。
-- `scripts/server-module-smoke.ts` 已覆盖 runtime reconcile 候选筛选、running/still_running 节流、批量限制和失败 patch。
+- 当前仓库包含 `src/server/appServerRuntimeReconcileScheduler.ts`、`src/server/appServerRuntimeRequestReconciliation.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 runtime reconcile 候选筛选、running/still_running 节流、批量限制、批处理成功记录和失败 patch/log。
 
 #### Steps
 1. 执行 `git diff --check`。
-2. 执行 `npm.cmd run verify:server-modules`。
-3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
-4. 代码审查确认 runtime reconcile 定时器使用 `selectRuntimeRequestsForReconcile()` 选择候选请求。
-5. 代码审查确认 reconcile 失败时使用 `createRuntimeReconcileFailurePatch()` 更新请求状态、lastError 和 retryCount。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+4. 执行 `node_modules\.bin\vite.cmd build`。
+5. 执行 `node_modules\.bin\tsup.cmd`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+7. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+8. 代码审查确认 `src/server/codexAppServerBridge.ts` 只通过 `createRuntimeReconcileScheduler(...)` 组装依赖，不再内联 reconcile 定时器循环。
+9. 代码审查确认 `src/server/appServerRuntimeReconcileScheduler.ts` 使用 `selectRuntimeRequestsForReconcile()` 选择候选请求，并在失败时使用 `createRuntimeReconcileFailurePatch()` 更新请求状态、lastError 和 retryCount。
+10. 确认 release package smoke 必检 `src\server\appServerRuntimeReconcileScheduler.ts`。
 
 #### Expected Results
 - 空 threadId 的 runtime request 不会进入 reconcile 候选。
 - 非 running/still_running 的 uncertain request 仍可立即进入候选。
 - running 和 still_running request 仍按 10 秒 thread 级节流进入候选。
-- 每轮候选默认仍限制为 3 条。
+- scheduler tick 仍一次最多从 runtime store 读取 10 个 uncertain requests，并按既有批量限制选择候选。
+- reconcile 成功时记录 thread 级最近 reconcile 时间；reconcile 失败时写入统一 warn log detail。
 - stopping request reconcile 失败时仍转为 `stop_uncertain`，其他状态失败时保持原状态并递增 retry。
-- release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+- `appServerRuntimeReconcileScheduler.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
 
 #### Rollback/Cleanup
-- 如需回滚，删除 `selectRuntimeRequestsForReconcile()`、`createRuntimeReconcileFailurePatch()` 和对应 smoke 断言，并把定时器候选筛选和失败 patch 逻辑恢复到 `src/server/codexAppServerBridge.ts`。
+- 如需回滚，删除 `src/server/appServerRuntimeReconcileScheduler.ts`，把定时器候选筛选、批处理、失败 patch 和 warn log 逻辑恢复到 `src/server/codexAppServerBridge.ts`，并撤销 `scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和本测试章节。
 
 #### Regression Evidence
 - 2026-07-04 静态验证：`git diff --check` 通过。
-- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
-- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，输出 `server module smoke ok`，覆盖 `runRuntimeReconcileBatch()` 的成功记录、失败 patch、失败 warn detail 和处理数量。
+- 2026-07-04 构建验证：`node_modules\.bin\vue-tsc.cmd --noEmit`、`node_modules\.bin\vite.cmd build` 和 `node_modules\.bin\tsup.cmd` 通过。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\appServerRuntimeReconcileScheduler.ts`。
 
 ---
 
