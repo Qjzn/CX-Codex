@@ -244,6 +244,23 @@
 
       <section class="diagnostics-section">
         <div class="diagnostics-section-header">
+          <h2>Windows 安全</h2>
+          <span class="diagnostics-badge" :data-tone="recentWindowsSandboxNotifications.length > 0 ? 'warning' : 'ok'">
+            {{ recentWindowsSandboxNotifications.length }}
+          </span>
+        </div>
+        <div v-if="recentWindowsSandboxNotifications.length === 0" class="diagnostics-empty">暂无 Windows sandbox 或 world-writable 警告。</div>
+        <ul v-else class="diagnostics-list">
+          <li v-for="notification in recentWindowsSandboxNotifications" :key="`${notification.method}-${notification.atIso}`">
+            <span>{{ formatWindowsSandboxNotification(notification) }}</span>
+            <strong>{{ notification.method === 'windowsSandbox/setupCompleted' ? formatNullableBoolean(notification.success) : notification.samplePathCount }}</strong>
+            <small>{{ formatAge(notification.atIso) }}</small>
+          </li>
+        </ul>
+      </section>
+
+      <section class="diagnostics-section">
+        <div class="diagnostics-section-header">
           <h2>未知通知</h2>
           <span class="diagnostics-badge" :data-tone="unknownNotificationCount > 0 ? 'warning' : 'ok'">
             {{ unknownNotificationCount }}
@@ -373,6 +390,17 @@ type ModelNotificationDiagnostics = {
   verifications: string[]
 }
 
+type WindowsSandboxNotificationDiagnostics = {
+  method: 'windows/worldWritableWarning' | 'windowsSandbox/setupCompleted'
+  atIso: string
+  mode: string
+  success: boolean | null
+  error: string
+  samplePathCount: number
+  extraCount: number
+  failedScan: boolean | null
+}
+
 type UnknownStatusDiagnostics = {
   source: string
   value: string
@@ -432,6 +460,7 @@ type DiagnosticsData = {
     unknownNotificationCount: number
     recentUnknownNotifications: UnknownNotificationDiagnostics[]
     recentModelNotifications?: ModelNotificationDiagnostics[]
+    recentWindowsSandboxNotifications?: WindowsSandboxNotificationDiagnostics[]
   }
   statusDiagnostics?: {
     unknownStatusCount: number
@@ -538,6 +567,9 @@ const timeoutCount = computed(() => appServer.value.rpcDiagnostics?.recentTimeou
 const unknownNotifications = computed(() => diagnostics.value?.notificationDiagnostics?.recentUnknownNotifications ?? [])
 const unknownNotificationCount = computed(() => diagnostics.value?.notificationDiagnostics?.unknownNotificationCount ?? 0)
 const recentModelNotifications = computed(() => diagnostics.value?.notificationDiagnostics?.recentModelNotifications ?? [])
+const recentWindowsSandboxNotifications = computed(() => (
+  diagnostics.value?.notificationDiagnostics?.recentWindowsSandboxNotifications ?? []
+))
 const unknownStatuses = computed(() => diagnostics.value?.statusDiagnostics?.recentUnknownStatuses ?? [])
 const unknownStatusCount = computed(() => diagnostics.value?.statusDiagnostics?.unknownStatusCount ?? 0)
 
@@ -698,6 +730,24 @@ function formatModelNotification(notification: ModelNotificationDiagnostics): st
     ? notification.verifications.join(', ')
     : `${notification.verificationCount} checks`
   return verificationLabel || 'verification'
+}
+
+function formatWindowsSandboxNotification(notification: WindowsSandboxNotificationDiagnostics): string {
+  if (notification.method === 'windowsSandbox/setupCompleted') {
+    const mode = notification.mode || '-'
+    const status = notification.success === true ? 'success' : notification.success === false ? 'failed' : 'unknown'
+    const errorSuffix = notification.error ? `: ${notification.error}` : ''
+    return `setup ${mode} ${status}${errorSuffix}`
+  }
+  const failedSuffix = notification.failedScan === true ? ' / scan failed' : ''
+  const extraSuffix = notification.extraCount > 0 ? ` +${notification.extraCount}` : ''
+  return `world-writable paths ${notification.samplePathCount}${extraSuffix}${failedSuffix}`
+}
+
+function formatNullableBoolean(value: boolean | null): string {
+  if (value === true) return 'ok'
+  if (value === false) return 'fail'
+  return '-'
 }
 
 function formatAge(value: string): string {

@@ -667,6 +667,8 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('account/rateLimits/updated'), true)
   assert.equal(isKnownAppServerNotificationMethod('model/rerouted'), true)
   assert.equal(isKnownAppServerNotificationMethod('model/verification'), true)
+  assert.equal(isKnownAppServerNotificationMethod('windows/worldWritableWarning'), true)
+  assert.equal(isKnownAppServerNotificationMethod('windowsSandbox/setupCompleted'), true)
   assert.equal(isKnownAppServerNotificationMethod('item/tool/call/failed'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/realtime/transcript/delta'), false)
 
@@ -680,6 +682,7 @@ function smokeAppServerNotificationDiagnostics(): void {
     unknownNotificationCount: 0,
     recentUnknownNotifications: [],
     recentModelNotifications: [],
+    recentWindowsSandboxNotifications: [],
   })
 
   diagnostics.observe({
@@ -726,6 +729,50 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(modelSnapshot.recentModelNotifications[1]?.reason, 'capacity')
 
   diagnostics.observe({
+    method: 'windows/worldWritableWarning',
+    atIso: '2026-07-03T00:00:00.700Z',
+    params: {
+      samplePaths: ['C:\\Users\\SW\\unsafe-a', 'C:\\Users\\SW\\unsafe-b'],
+      extraCount: 3,
+      failedScan: false,
+    },
+  })
+  diagnostics.observe({
+    method: 'windowsSandbox/setupCompleted',
+    atIso: '2026-07-03T00:00:00.800Z',
+    params: {
+      mode: 'unelevated',
+      success: false,
+      error: 'setup denied by user',
+    },
+  })
+  const windowsSnapshot = diagnostics.snapshot()
+  assert.equal(windowsSnapshot.unknownNotificationCount, 0)
+  assert.deepEqual(windowsSnapshot.recentWindowsSandboxNotifications, [
+    {
+      method: 'windowsSandbox/setupCompleted',
+      atIso: '2026-07-03T00:00:00.800Z',
+      mode: 'unelevated',
+      success: false,
+      error: 'setup denied by user',
+      samplePathCount: 0,
+      extraCount: 0,
+      failedScan: null,
+    },
+    {
+      method: 'windows/worldWritableWarning',
+      atIso: '2026-07-03T00:00:00.700Z',
+      mode: '',
+      success: null,
+      error: '',
+      samplePathCount: 2,
+      extraCount: 3,
+      failedScan: false,
+    },
+  ])
+  assert.equal(JSON.stringify(windowsSnapshot.recentWindowsSandboxNotifications).includes('unsafe-a'), false)
+
+  diagnostics.observe({
     method: 'thread/realtime/transcript/delta',
     atIso: '2026-07-03T00:00:01.000Z',
     threadId: 'thread-a',
@@ -757,6 +804,7 @@ function smokeAppServerNotificationDiagnostics(): void {
   diagnostics.clear()
   assert.equal(diagnostics.snapshot().unknownNotificationCount, 0)
   assert.equal(diagnostics.snapshot().recentModelNotifications.length, 0)
+  assert.equal(diagnostics.snapshot().recentWindowsSandboxNotifications.length, 0)
 }
 
 function smokeAppServerMethodCatalog(): void {
