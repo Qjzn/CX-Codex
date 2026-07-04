@@ -3774,3 +3774,40 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-03 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
 - 2026-07-03 CJS 启动烟测：`node dist-cli\index.js --help` 通过，输出 `CX-Codex Web bridge for Codex app-server`。
 - 2026-07-03 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 whitespace、package parse、governance docs、构建、server module smoke 和 CLI smoke。
+
+---
+
+### Feature: OpenAI diarize 转写响应格式对齐
+
+#### Prerequisites
+- 当前仓库包含 `src/server/transcriptionProxy.ts`。
+- 本机可访问 OpenAI 官方 Speech to text 文档：`https://developers.openai.com/api/docs/guides/speech-to-text`。
+- 如需真实 API 验证，配置 `CX_CODEX_OPENAI_API_KEY` 或 `OPENAI_API_KEY`；不要把真实 key 写入仓库、日志或截图。
+
+#### Steps
+1. 打开官方 Speech to text 文档，确认 `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` 支持 `json` 或 `text`，`gpt-4o-transcribe-diarize` 使用 `diarized_json`。
+2. 执行 `git diff --check`。
+3. 执行 `npm.cmd run verify:server-modules`。
+4. 执行 `npm.cmd run verify:governance`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+6. 设置 `CX_CODEX_OPENAI_TRANSCRIBE_MODEL=gpt-4o-transcribe-diarize` 后请求 `/codex-api/diagnostics`，确认 `data.transcription.responseFormat` 为 `diarized_json`。
+7. 构造自带 `model=whisper-1` 和 `response_format=text` 的 multipart 请求，确认服务端转发前会按配置覆盖为 `gpt-4o-transcribe-diarize` 和 `diarized_json`。
+8. 前端收到 diarized JSON 且只有 `segments[].text` 时，确认语音输入能拼接段落文本并写入 composer。
+
+#### Expected Results
+- 默认模型仍为 `gpt-4o-transcribe`，默认响应格式仍为 `json`。
+- `gpt-4o-mini-transcribe` 仍使用 `json`，不改变既有语音输入链路。
+- `gpt-4o-transcribe-diarize` 使用官方要求的 `diarized_json`，不会被固定覆盖成 `json`。
+- 诊断接口只展示 provider、模型、响应格式、上传上限和 endpoint host/path，不展示 API key、Authorization、Cookie 或 URL query。
+- OpenAI API 仍只作为语音转写补充能力，不替代 Codex App Server 的线程、审批、恢复和事件协议。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/transcriptionProxy.ts`、`src/composables/useDictation.ts`、`src/components/content/DiagnosticsPanel.vue`、`scripts/server-module-smoke.ts`、`scripts/verify-governance.ps1`、README、OpenAI 文档审查手册、协议兼容文档和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 官方文档核对：确认 `https://developers.openai.com/api/docs/guides/speech-to-text` 中 `/v1/audio/transcriptions` 示例使用 `gpt-4o-transcribe`，默认 JSON 响应；文档说明 `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` 支持 `json` 或 `text`，`gpt-4o-transcribe-diarize` 使用 `diarized_json`。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖默认 `json`、`gpt-4o-mini-transcribe` 的 `json` 和 `gpt-4o-transcribe-diarize` 的 `diarized_json` multipart 规范化。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-04 CLI 启动烟测：`node dist-cli\index.js --help` 通过，输出 `CX-Codex Web bridge for Codex app-server`。
+- 2026-07-04 Governance / release gate：`pwsh -NoLogo -NoProfile -Command "Write-Output ok"` 在本机执行层无输出并持续挂起，因此 `npm.cmd run verify:governance` 和 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 本轮未能可靠完成；代码路径已由 server smoke、前端 typecheck/build 和 CLI smoke 覆盖。

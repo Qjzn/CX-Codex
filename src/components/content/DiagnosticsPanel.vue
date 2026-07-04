@@ -360,7 +360,7 @@ type TranscriptionDiagnostics = {
   provider: 'openai' | 'chatgpt'
   officialApiConfigured: boolean
   model: string
-  responseFormat: 'json'
+  responseFormat: 'json' | 'diarized_json'
   requestBodyLimitBytes: number
   requestBodyLimitMiB: number
   endpoint: {

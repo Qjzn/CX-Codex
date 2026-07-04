@@ -42,7 +42,7 @@ OpenAI API 补充能力相关 PR 必查：
 
 - API key 只来自服务端环境变量或用户本机配置。
 - 诊断接口只展示 provider、模型、endpoint host/path、上传上限等脱敏信息。
-- Speech to text 请求体保持官方模型和响应格式约束。
+- Speech to text 请求体保持官方模型和响应格式约束；普通转写模型使用 `json`，`gpt-4o-transcribe-diarize` 使用 `diarized_json`。
 - OpenAI API 不替代 Codex App Server 的线程、审批、恢复和事件协议。
 
 ## 审查流程

@@ -252,6 +252,7 @@ import {
 import {
   getOpenAiTranscribeApiKey,
   getOpenAiTranscribeModel,
+  getOpenAiTranscribeResponseFormat,
   getTranscribeRequestBodyLimitBytes,
   getTranscriptionProxyConfigSnapshot,
   prepareOpenAiTranscribeBody,
@@ -1085,6 +1086,7 @@ function smokeTranscriptionProxyConfig(): void {
   }, () => {
     assert.equal(getOpenAiTranscribeApiKey(), '')
     assert.equal(getOpenAiTranscribeModel(), 'gpt-4o-transcribe')
+    assert.equal(getOpenAiTranscribeResponseFormat(), 'json')
     assert.equal(getTranscribeRequestBodyLimitBytes(), 26 * 1024 * 1024)
     assert.deepEqual(getTranscriptionProxyConfigSnapshot(), {
       provider: 'chatgpt',
@@ -1128,6 +1130,37 @@ function smokeTranscriptionProxyConfig(): void {
       },
     })
   })
+
+  withTranscriptionEnv({
+    OPENAI_API_KEY: undefined,
+    OPENAI_TRANSCRIBE_MODEL: undefined,
+    OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+    OPENAI_TRANSCRIBE_URL: undefined,
+    CX_CODEX_OPENAI_API_KEY: 'sk-prefixed',
+    CX_CODEX_OPENAI_TRANSCRIBE_MODEL: 'gpt-4o-transcribe-diarize',
+    CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+    CX_CODEX_OPENAI_TRANSCRIBE_URL: undefined,
+    CODEXUI_OPENAI_API_KEY: undefined,
+    CODEXUI_OPENAI_TRANSCRIBE_MODEL: undefined,
+    CODEXUI_OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+    CODEXUI_OPENAI_TRANSCRIBE_URL: undefined,
+  }, () => {
+    assert.equal(getOpenAiTranscribeModel(), 'gpt-4o-transcribe-diarize')
+    assert.equal(getOpenAiTranscribeResponseFormat(), 'diarized_json')
+    assert.deepEqual(getTranscriptionProxyConfigSnapshot(), {
+      provider: 'openai',
+      officialApiConfigured: true,
+      model: 'gpt-4o-transcribe-diarize',
+      responseFormat: 'diarized_json',
+      requestBodyLimitBytes: 26 * 1024 * 1024,
+      requestBodyLimitMiB: 26,
+      endpoint: {
+        isDefault: true,
+        host: 'api.openai.com',
+        path: '/v1/audio/transcriptions',
+      },
+    })
+  })
 }
 
 function smokeTranscriptionMultipartDefaults(): void {
@@ -1160,6 +1193,21 @@ function smokeTranscriptionMultipartDefaults(): void {
     assert.match(prepared, /name="model"\r\n\r\ngpt-4o-mini-transcribe\r\n/)
     assert.match(prepared, /name="response_format"\r\n\r\njson\r\n/)
     assert.doesNotMatch(prepared, /name="model"\r\n\r\nwhisper-1\r\n/)
+    assert.doesNotMatch(prepared, /name="response_format"\r\n\r\ntext\r\n/)
+  })
+
+  withTranscriptionEnv({
+    OPENAI_TRANSCRIBE_MODEL: undefined,
+    CX_CODEX_OPENAI_TRANSCRIBE_MODEL: 'gpt-4o-transcribe-diarize',
+    CODEXUI_OPENAI_TRANSCRIBE_MODEL: undefined,
+  }, () => {
+    const prepared = prepareOpenAiTranscribeBody(
+      body,
+      `multipart/form-data; boundary=${boundary}`,
+    ).toString('utf8')
+    assert.match(prepared, /name="model"\r\n\r\ngpt-4o-transcribe-diarize\r\n/)
+    assert.match(prepared, /name="response_format"\r\n\r\ndiarized_json\r\n/)
+    assert.doesNotMatch(prepared, /name="response_format"\r\n\r\njson\r\n/)
     assert.doesNotMatch(prepared, /name="response_format"\r\n\r\ntext\r\n/)
   })
 }

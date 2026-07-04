@@ -59,12 +59,30 @@ export function useDictation(options: {
     const record = value as Record<string, unknown>
     const direct = record.text ?? record.transcript
     if (typeof direct === 'string') return direct.trim()
+    const segmentsText = extractTranscriptSegmentsText(record.segments)
+    if (segmentsText) return segmentsText
     const data = record.data
     if (data && typeof data === 'object' && !Array.isArray(data)) {
-      const nested = (data as Record<string, unknown>).text ?? (data as Record<string, unknown>).transcript
+      const dataRecord = data as Record<string, unknown>
+      const nested = dataRecord.text ?? dataRecord.transcript
       if (typeof nested === 'string') return nested.trim()
+      const nestedSegmentsText = extractTranscriptSegmentsText(dataRecord.segments)
+      if (nestedSegmentsText) return nestedSegmentsText
     }
     return ''
+  }
+
+  function extractTranscriptSegmentsText(value: unknown): string {
+    if (!Array.isArray(value)) return ''
+    return value
+      .map((segment) => {
+        if (!segment || typeof segment !== 'object' || Array.isArray(segment)) return ''
+        const text = (segment as Record<string, unknown>).text
+        return typeof text === 'string' ? text.trim() : ''
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim()
   }
 
   function cancelTranscription(): void {

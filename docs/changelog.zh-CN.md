@@ -4,7 +4,8 @@
 
 - 语音输入：
   - 后端转写支持优先使用 OpenAI 官方音频转写 API，配置 `CX_CODEX_OPENAI_API_KEY` 或 `OPENAI_API_KEY` 后不再依赖 ChatGPT 网页登录态。
-  - 官方转写 multipart 会由服务端规范化 `model` 和 `response_format=json`，避免客户端自带字段绕过官方模型的响应格式约束。
+  - 官方转写 multipart 会由服务端规范化 `model` 和 `response_format`，普通转写模型保持 `json`，`gpt-4o-transcribe-diarize` 按官方文档使用 `diarized_json`，避免客户端自带字段绕过官方模型的响应格式约束。
+  - 前端语音输入支持从 diarized JSON 的 `segments[].text` 兜底提取文本，避免上游没有顶层 `text` 字段时空转写。
   - 转写上传请求体新增默认 26MiB 服务端保护，可通过 `CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES` 或 `OPENAI_TRANSCRIBE_MAX_BYTES` 覆盖。
   - 诊断中心新增语音转写状态，展示当前 provider、模型、响应格式、上传上限和脱敏 endpoint，便于排查是否走官方 API 或登录态回退。
   - 未配置 OpenAI API key 时仍保留原有 ChatGPT 登录态代理转写链路，避免破坏既有安装。

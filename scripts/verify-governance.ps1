@@ -127,6 +127,8 @@ Assert-ContentIncludes "docs/openai-docs-review.zh-CN.md" @(
   "docs/app-server-schema-audit-summary.json",
   "docs/app-server-protocol-matrix.zh-CN.md",
   "App Server transport"
+  "gpt-4o-transcribe-diarize",
+  "diarized_json"
 )
 
 Assert-ContentIncludes "docs/dependency-maintenance.zh-CN.md" @(

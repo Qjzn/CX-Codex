@@ -7,6 +7,8 @@ export type TranscriptionProxyResult = {
   body: string
 }
 
+export type OpenAiTranscribeResponseFormat = 'json' | 'diarized_json'
+
 export type TranscriptionEndpointSnapshot = {
   isDefault: boolean
   host: string
@@ -17,7 +19,7 @@ export type TranscriptionProxyConfigSnapshot = {
   provider: 'openai' | 'chatgpt'
   officialApiConfigured: boolean
   model: string
-  responseFormat: 'json'
+  responseFormat: OpenAiTranscribeResponseFormat
   requestBodyLimitBytes: number
   requestBodyLimitMiB: number
   endpoint: TranscriptionEndpointSnapshot
@@ -27,6 +29,7 @@ const CHATGPT_TRANSCRIBE_URL = 'https://chatgpt.com/backend-api/transcribe'
 const OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions'
 const DEFAULT_OPENAI_TRANSCRIBE_MODEL = 'gpt-4o-transcribe'
 const DEFAULT_OPENAI_TRANSCRIBE_RESPONSE_FORMAT = 'json'
+const OPENAI_DIARIZE_TRANSCRIBE_RESPONSE_FORMAT = 'diarized_json'
 const TRANSCRIBE_REQUEST_BODY_LIMIT_BYTES = 26 * 1024 * 1024
 
 let curlImpersonateAvailable: boolean | null = null
@@ -103,6 +106,12 @@ export function getOpenAiTranscribeModel(): string {
   return readTranscribeEnv('OPENAI_TRANSCRIBE_MODEL') || DEFAULT_OPENAI_TRANSCRIBE_MODEL
 }
 
+export function getOpenAiTranscribeResponseFormat(model = getOpenAiTranscribeModel()): OpenAiTranscribeResponseFormat {
+  return model.trim().toLowerCase() === 'gpt-4o-transcribe-diarize'
+    ? OPENAI_DIARIZE_TRANSCRIBE_RESPONSE_FORMAT
+    : DEFAULT_OPENAI_TRANSCRIBE_RESPONSE_FORMAT
+}
+
 function getOpenAiTranscribeUrl(): string {
   return readTranscribeEnv('OPENAI_TRANSCRIBE_URL') || OPENAI_TRANSCRIBE_URL
 }
@@ -137,7 +146,7 @@ export function getTranscriptionProxyConfigSnapshot(): TranscriptionProxyConfigS
     provider: officialApiConfigured ? 'openai' : 'chatgpt',
     officialApiConfigured,
     model: getOpenAiTranscribeModel(),
-    responseFormat: DEFAULT_OPENAI_TRANSCRIBE_RESPONSE_FORMAT,
+    responseFormat: getOpenAiTranscribeResponseFormat(),
     requestBodyLimitBytes,
     requestBodyLimitMiB: Math.round((requestBodyLimitBytes / 1024 / 1024) * 10) / 10,
     endpoint: snapshotTranscribeEndpoint(getOpenAiTranscribeUrl()),
@@ -226,8 +235,9 @@ export function prepareOpenAiTranscribeBody(body: Buffer, contentType: string): 
   if (!boundary) return body
 
   let nextBody = removeMultipartTextFields(body, boundary, new Set(['model', 'response_format']))
-  nextBody = appendMultipartTextField(nextBody, boundary, 'model', getOpenAiTranscribeModel())
-  nextBody = appendMultipartTextField(nextBody, boundary, 'response_format', DEFAULT_OPENAI_TRANSCRIBE_RESPONSE_FORMAT)
+  const model = getOpenAiTranscribeModel()
+  nextBody = appendMultipartTextField(nextBody, boundary, 'model', model)
+  nextBody = appendMultipartTextField(nextBody, boundary, 'response_format', getOpenAiTranscribeResponseFormat(model))
   return nextBody
 }
 
