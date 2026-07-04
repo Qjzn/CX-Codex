@@ -6,7 +6,7 @@ import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } fr
 import {
   type BridgeNotificationEvent,
 } from './appServerRuntimeBridge.js'
-import { syncBridgeNotificationRuntimeState } from './appServerNotificationRuntimeSync.js'
+import { subscribeBridgeNotificationRuntimeSync } from './appServerNotificationRuntimeSync.js'
 import {
   AppServerNotificationReplay,
   createAppServerNotificationReplayAccessors,
@@ -745,18 +745,17 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     getCwds: () => [process.cwd()],
   })
 
-  const unsubscribeAppServerNotifications = appServer.onNotification((notification: { method: string; params: unknown }) => {
-    syncBridgeNotificationRuntimeState(notification, {
-      rememberNotificationEvent,
-      runtimeStateStore,
-      readThreadIdFromPayload,
-      persistRuntimeSnapshot,
-      runtimeStore,
-      deleteCachedThreadRead: (threadId) => threadReadCacheStore.delete(threadId),
-      emitNotification: (event) => {
-        bridgeNotificationListeners.emit(event)
-      },
-    })
+  const unsubscribeAppServerNotifications = subscribeBridgeNotificationRuntimeSync({
+    subscribeNotifications: (listener) => appServer.onNotification(listener),
+    rememberNotificationEvent,
+    runtimeStateStore,
+    readThreadIdFromPayload,
+    persistRuntimeSnapshot,
+    runtimeStore,
+    deleteCachedThreadRead: (threadId) => threadReadCacheStore.delete(threadId),
+    emitNotification: (event) => {
+      bridgeNotificationListeners.emit(event)
+    },
   })
 
   startCodexBridgeStartupTasks({

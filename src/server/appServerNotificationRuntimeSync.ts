@@ -32,6 +32,10 @@ export type BridgeNotificationRuntimeSyncDependencies = {
   emitNotification(event: BridgeNotificationEvent): void
 }
 
+export type BridgeNotificationRuntimeSyncSubscriberDependencies = BridgeNotificationRuntimeSyncDependencies & {
+  subscribeNotifications(listener: (notification: AppServerNotification) => void): () => void
+}
+
 export function syncBridgeNotificationRuntimeState(
   notification: AppServerNotification,
   dependencies: BridgeNotificationRuntimeSyncDependencies,
@@ -51,4 +55,12 @@ export function syncBridgeNotificationRuntimeState(
 
   dependencies.emitNotification(event)
   return event
+}
+
+export function subscribeBridgeNotificationRuntimeSync(
+  dependencies: BridgeNotificationRuntimeSyncSubscriberDependencies,
+): () => void {
+  return dependencies.subscribeNotifications((notification) => {
+    syncBridgeNotificationRuntimeState(notification, dependencies)
+  })
 }

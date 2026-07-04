@@ -285,7 +285,10 @@ import {
   readRuntimeRequestStatusFromExecutionState,
   type BridgeNotificationEvent,
 } from '../src/server/appServerRuntimeBridge.js'
-import { syncBridgeNotificationRuntimeState } from '../src/server/appServerNotificationRuntimeSync.js'
+import {
+  subscribeBridgeNotificationRuntimeSync,
+  syncBridgeNotificationRuntimeState,
+} from '../src/server/appServerNotificationRuntimeSync.js'
 import { runRuntimeReconcileBatch } from '../src/server/appServerRuntimeReconcileScheduler.js'
 import {
   createAppServerRuntimeTurnStarter,
@@ -6263,6 +6266,59 @@ function smokeAppServerNotificationRuntimeSync(): void {
     },
   }), noThreadEvent)
   assert.deepEqual(noThreadEmits, [noThreadEvent])
+
+  const subscribedListeners: Array<(notification: { method: string; params: unknown }) => void> = []
+  const subscriberObservedEvents: BridgeNotificationEvent[] = []
+  const subscriberEmits: BridgeNotificationEvent[] = []
+  const unsubscribed: string[] = []
+  const unsubscribe = subscribeBridgeNotificationRuntimeSync({
+    subscribeNotifications: (listener) => {
+      subscribedListeners.push(listener)
+      return () => {
+        unsubscribed.push('yes')
+      }
+    },
+    rememberNotificationEvent: (notification) => ({
+      seq: 9,
+      method: notification.method,
+      params: notification.params,
+      atIso: '2026-01-01T00:00:02.000Z',
+    }),
+    runtimeStateStore: {
+      observeEvent: (observedEvent) => {
+        subscriberObservedEvents.push(observedEvent)
+      },
+    },
+    readThreadIdFromPayload,
+    persistRuntimeSnapshot: () => {
+      throw new Error('subscriber notification without thread id should not persist a runtime snapshot')
+    },
+    runtimeStore: {
+      listRequestsByThread: () => {
+        throw new Error('subscriber notification without thread id should not reconcile runtime requests')
+      },
+      updateRequest: () => {
+        throw new Error('subscriber notification without thread id should not update runtime requests')
+      },
+    },
+    deleteCachedThreadRead: () => {
+      throw new Error('subscriber notification without thread id should not delete cached thread reads')
+    },
+    emitNotification: (emittedEvent) => {
+      subscriberEmits.push(emittedEvent)
+    },
+  })
+  assert.equal(subscribedListeners.length, 1)
+  subscribedListeners[0]({ method: 'app/list/updated', params: {} })
+  assert.deepEqual(subscriberObservedEvents, [{
+    seq: 9,
+    method: 'app/list/updated',
+    params: {},
+    atIso: '2026-01-01T00:00:02.000Z',
+  }])
+  assert.deepEqual(subscriberEmits, subscriberObservedEvents)
+  unsubscribe()
+  assert.deepEqual(unsubscribed, ['yes'])
 }
 
 async function smokeRuntimeActionRoutes(): Promise<void> {
