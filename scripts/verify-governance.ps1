@@ -341,6 +341,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "src\server\notificationSseRoute.ts",
   "src\server\appServerPendingRpcStore.ts",
   "src\server\appServerSessionCleanup.ts",
+  "src\server\appServerProcessTermination.ts",
   "src\server\projectRootRoutes.ts",
   "src\server\rpcProxyRoute.ts",
   "src\server\runtimeActionRoutes.ts",
@@ -373,6 +374,7 @@ Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
   "src', 'server', 'notificationSseRoute.ts'",
   "src', 'server', 'appServerPendingRpcStore.ts'",
   "src', 'server', 'appServerSessionCleanup.ts'",
+  "src', 'server', 'appServerProcessTermination.ts'",
   "src', 'server', 'projectRootRoutes.ts'",
   "src', 'server', 'rpcProxyRoute.ts'",
   "src', 'server', 'runtimeActionRoutes.ts'",
@@ -446,7 +448,9 @@ Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "AppServerPendingRpcStore",
   "smokeAppServerPendingRpcStore",
   "clearAppServerSessionStores",
-  "smokeAppServerSessionCleanup"
+  "smokeAppServerSessionCleanup",
+  "terminateAppServerProcess",
+  "smokeAppServerProcessTermination"
 )
 
 Assert-ContentIncludes "scripts/verify-governance.ps1" @(

@@ -399,6 +399,7 @@ if (-not $SkipPackageSmoke) {
     "src\server\notificationSseRoute.ts",
     "src\server\appServerPendingRpcStore.ts",
     "src\server\appServerSessionCleanup.ts",
+    "src\server\appServerProcessTermination.ts",
     "src\server\projectRootRoutes.ts",
     "src\server\rpcProxyRoute.ts",
     "src\server\runtimeActionRoutes.ts",

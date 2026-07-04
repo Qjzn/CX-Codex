@@ -112,6 +112,7 @@ import { AppServerThreadListAugmenter } from '../src/server/appServerThreadListA
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { AppServerPendingRpcStore } from '../src/server/appServerPendingRpcStore.js'
 import { clearAppServerSessionStores } from '../src/server/appServerSessionCleanup.js'
+import { terminateAppServerProcess } from '../src/server/appServerProcessTermination.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
 import {
   normalizePinnedThreadIds,
@@ -340,6 +341,7 @@ try {
   await smokeAppServerClientInfo()
   smokeAppServerPendingRpcStore()
   smokeAppServerSessionCleanup()
+  smokeAppServerProcessTermination()
   smokePendingServerRequests()
   smokeAppServerJsonRpcWire()
   smokeAppServerInitialization()
@@ -530,6 +532,51 @@ function smokeAppServerSessionCleanup(): void {
     'threadTokenUsage.clear',
     'planModeTurns.clearAll',
   ])
+}
+
+function smokeAppServerProcessTermination(): void {
+  const calls: string[] = []
+  const timers: Array<() => void> = []
+  const proc = {
+    stdin: {
+      end: () => calls.push('stdin.end'),
+    },
+    killed: false,
+    kill: (signal: 'SIGTERM' | 'SIGKILL') => {
+      calls.push(`kill.${signal}`)
+      return true
+    },
+  }
+
+  terminateAppServerProcess(proc, {
+    forceKillAfterMs: 25,
+    setTimeout: (callback, delayMs) => {
+      assert.equal(delayMs, 25)
+      timers.push(callback)
+      return {
+        unref: () => calls.push('timer.unref'),
+      }
+    },
+  })
+
+  assert.deepEqual(calls, ['stdin.end', 'kill.SIGTERM', 'timer.unref'])
+  assert.equal(timers.length, 1)
+  timers[0]()
+  assert.deepEqual(calls, ['stdin.end', 'kill.SIGTERM', 'timer.unref', 'kill.SIGKILL'])
+
+  calls.length = 0
+  timers.length = 0
+  terminateAppServerProcess({
+    ...proc,
+    killed: true,
+  }, {
+    setTimeout: (callback) => {
+      timers.push(callback)
+      return {}
+    },
+  })
+  timers[0]()
+  assert.deepEqual(calls, ['stdin.end', 'kill.SIGTERM'])
 }
 
 function smokePendingServerRequests(): void {

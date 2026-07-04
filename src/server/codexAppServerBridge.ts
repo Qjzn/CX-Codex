@@ -115,6 +115,7 @@ import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
 import { AppServerPendingRpcStore } from './appServerPendingRpcStore.js'
 import { clearAppServerSessionStores } from './appServerSessionCleanup.js'
+import { terminateAppServerProcess } from './appServerProcessTermination.js'
 import { AppServerMethodCatalog } from './appServerMethodCatalog.js'
 import { captureAppServerNotificationState } from './appServerNotificationState.js'
 import {
@@ -362,22 +363,7 @@ class AppServerProcess {
     this.rejectQueuedRpcCalls(new Error(`codex app-server restarted: ${reason}`))
     this.clearSessionStores()
 
-    try {
-      proc.stdin.end()
-    } catch {}
-
-    try {
-      proc.kill('SIGTERM')
-    } catch {}
-
-    const forceKillTimer = setTimeout(() => {
-      if (!proc.killed) {
-        try {
-          proc.kill('SIGKILL')
-        } catch {}
-      }
-    }, 1500)
-    forceKillTimer.unref()
+    terminateAppServerProcess(proc)
   }
 
   private handleLine(line: string): void {
@@ -713,28 +699,7 @@ class AppServerProcess {
     this.pending.rejectAll(failure)
     this.clearSessionStores()
 
-    try {
-      proc.stdin.end()
-    } catch {
-      // ignore close errors on shutdown
-    }
-
-    try {
-      proc.kill('SIGTERM')
-    } catch {
-      // ignore kill errors on shutdown
-    }
-
-    const forceKillTimer = setTimeout(() => {
-      if (!proc.killed) {
-        try {
-          proc.kill('SIGKILL')
-        } catch {
-          // ignore kill errors on shutdown
-        }
-      }
-    }, 1500)
-    forceKillTimer.unref()
+    terminateAppServerProcess(proc)
   }
 }
 

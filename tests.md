@@ -4299,6 +4299,33 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server process termination 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerProcessTermination.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 stdin close、SIGTERM、延迟 SIGKILL、timer unref 和已 killed 进程不再强制 kill。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+4. 执行 `node_modules\.bin\vite.cmd build`。
+5. 执行 `node_modules\.bin\tsup.cmd`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+7. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+8. 代码审查确认 `src/server/codexAppServerBridge.ts` 的 restart 和 dispose 路径均通过 `terminateAppServerProcess()` 关闭当前 app-server process。
+
+#### Expected Results
+- app-server process 终止细节集中在 `src/server/appServerProcessTermination.ts`。
+- restart 和 dispose 仍先完成 bridge 状态重置、pending RPC reject、queued RPC reject 和 session store 清理，再终止进程。
+- 进程终止仍按原顺序执行 `stdin.end()`、`SIGTERM`、1500ms 后按需 `SIGKILL`，并保留 timer `unref()` 行为。
+- server module smoke、构建、治理门禁和 release gate 均通过。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `src/server/appServerProcessTermination.ts`，撤销 `scripts/server-module-smoke.ts` 中的 process termination smoke，并把 `stdin.end()`、`SIGTERM`、延迟 `SIGKILL` 逻辑恢复到 `src/server/codexAppServerBridge.ts` 的 restart 和 dispose 路径。
+
+---
+
 ### Feature: App Server JSON-RPC line 分类模块化
 
 #### Prerequisites
