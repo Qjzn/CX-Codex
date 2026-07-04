@@ -443,6 +443,38 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Import-graph server module smoke compilation
+
+#### Prerequisites
+- Current repository includes `scripts/verify-server-modules.mjs`, `scripts/verify-governance.ps1`, `scripts/server-module-smoke.ts`, and `docs/changelog.zh-CN.md`.
+- Dependencies are installed so TypeScript, governance, and release verification can run.
+
+#### Steps
+1. Open `scripts/verify-server-modules.mjs` and confirm the generated `tsconfig.json` includes `scripts/server-module-smoke.ts` as the only explicit compile entry.
+2. Confirm `scripts/verify-server-modules.mjs` no longer contains any `join(repoRoot, 'src', 'server'...)` manual include entries.
+3. Open `scripts/verify-governance.ps1` and confirm it fails if `scripts/verify-server-modules.mjs` reintroduces a manual `src/server` include list.
+4. Run `git diff --check`.
+5. Run `node scripts\verify-server-modules.mjs`.
+6. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+7. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- TypeScript follows the import graph from `scripts/server-module-smoke.ts`, so adding a new smoke-covered helper does not require editing the verifier include list.
+- Governance keeps the verifier on the import-graph model and prevents the old hand-maintained `src/server` include list from returning.
+- Server module smoke, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `output/server-module-smoke/` and `output/release-package-smoke/`.
+- To roll back, restore the previous explicit `src/server` include entries in `scripts/verify-server-modules.mjs`, remove the governance guard, and remove this test section plus the changelog note.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 server module smoke: `node scripts\verify-server-modules.mjs` passed with `server module smoke ok`.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-05 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
 ### Feature: App Server local runtime snapshot reader helper
 
 #### Prerequisites

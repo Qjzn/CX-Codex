@@ -355,38 +355,16 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
 )
 
 Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
-  "src', 'server', 'appServerLocalRuntimeSnapshot.ts'",
-  "src', 'server', 'appServerRpcTimeoutRecovery.ts'",
-  "src', 'server', 'appServerRuntimeInterrupt.ts'",
-  "src', 'server', 'appServerRuntimeStart.ts'",
-  "src', 'server', 'appServerNotificationRuntimeSync.ts'",
-  "src', 'server', 'appServerRuntimeSnapshotPersistence.ts'",
-  "src', 'server', 'appServerNotificationState.ts'",
-  "src', 'server', 'appServerRuntimeReconcileScheduler.ts'",
-  "src', 'server', 'appServerThreadReadParams.ts'",
-  "src', 'server', 'appServerThreadRuntimeSnapshot.ts'",
-  "src', 'server', 'composerFileSearchRoutes.ts'",
-  "src', 'server', 'diagnosticsRoutes.ts'",
-  "src', 'server', 'fileUploadRoute.ts'",
-  "src', 'server', 'githubTrendingRoutes.ts'",
-  "src', 'server', 'localStateRoutes.ts'",
-  "src', 'server', 'notificationReplayRoute.ts'",
-  "src', 'server', 'notificationSseRoute.ts'",
-  "src', 'server', 'appServerPendingRpcStore.ts'",
-  "src', 'server', 'appServerSessionCleanup.ts'",
-  "src', 'server', 'appServerProcessTermination.ts'",
-  "src', 'server', 'projectRootRoutes.ts'",
-  "src', 'server', 'rpcProxyRoute.ts'",
-  "src', 'server', 'runtimeActionRoutes.ts'",
-  "src', 'server', 'runtimeStateRoutes.ts'",
-  "src', 'server', 'serverRequestRoutes.ts'",
-  "src', 'server', 'statusRoutes.ts'",
-  "src', 'server', 'threadRoutes.ts'",
-  "src', 'server', 'transcriptionProxy.ts'",
-  "src', 'server', 'transcriptionRoute.ts'",
-  "src', 'server', 'worktreeRoutes.ts'",
-  "src', 'server', 'workspaceMetaRoutes.ts'"
+  "mkdtempSync(join(outputBase, 'run-'))",
+  "CX_CODEX_KEEP_SERVER_MODULE_SMOKE_OUTPUT",
+  "join(repoRoot, 'scripts', 'server-module-smoke.ts')"
 )
+
+$verifyServerModules = Get-Content -Raw -Encoding UTF8 -LiteralPath (Resolve-RepoPath "scripts/verify-server-modules.mjs")
+$manualServerModuleIncludeCount = ([regex]::Matches($verifyServerModules, "join\(repoRoot, 'src', 'server'")).Count
+if ($manualServerModuleIncludeCount -ne 0) {
+  throw "scripts/verify-server-modules.mjs should compile from scripts/server-module-smoke.ts and follow its import graph, not maintain a manual src/server include list."
+}
 
 Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "handleComposerFileSearchRoutes",
