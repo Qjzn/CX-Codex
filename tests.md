@@ -475,6 +475,37 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Frontend normalizer release gate smoke
+
+#### Prerequisites
+- Current repository includes `scripts/verify-release.ps1`, `scripts/verify-frontend-normalizers.mjs`, `scripts/verify-governance.ps1`, `RELEASE.md`, and `docs/dependency-maintenance.zh-CN.md`.
+- Dependencies are installed so the frontend normalizer smoke, governance gate, and release gate can run.
+
+#### Steps
+1. Open `scripts/verify-release.ps1` and confirm it runs `scripts/verify-frontend-normalizers.mjs` with the label `Frontend normalizer smoke`.
+2. Open `scripts/verify-governance.ps1` and confirm it requires the release gate, `RELEASE.md`, and dependency maintenance docs to mention the frontend normalizer smoke.
+3. Run `git diff --check`.
+4. Run `node scripts\verify-frontend-normalizers.mjs`.
+5. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+6. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Release verification runs the frontend normalizer smoke before the server module smoke, so App Server thread/message normalizer compatibility is covered by local release checks and CI.
+- Governance fails if the release gate or release/dependency documentation drops the frontend normalizer smoke requirement.
+- Frontend normalizer smoke, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `output/frontend-normalizer-smoke/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, remove the frontend normalizer smoke invocation from `scripts/verify-release.ps1`, remove the governance assertions, and revert this test section plus the documentation/changelog notes.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend normalizer smoke: `node scripts\verify-frontend-normalizers.mjs` passed with `frontend normalizer smoke ok`.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-05 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `Frontend normalizer smoke`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
 ### Feature: App Server local runtime snapshot reader helper
 
 #### Prerequisites

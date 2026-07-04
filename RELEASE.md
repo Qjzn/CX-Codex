@@ -24,7 +24,7 @@
    npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn
    ```
 
-   该命令会执行治理文档检查、前端/CLI 构建、server module smoke、CLI help smoke、CLI CJS launcher smoke、Release package smoke 和 NPM package smoke。
+   该命令会执行治理文档检查、前端/CLI 构建、frontend normalizer smoke、server module smoke、CLI help smoke、CLI CJS launcher smoke、Release package smoke 和 NPM package smoke。
    - `-SchemaAudit warn` 会生成最新 App Server schema 审计摘要；如果发现 drift，命令继续完成但必须人工审计。
    - 已准备更新 schema 基线并要求严格阻断时，改用 `-SchemaAudit strict`。
    - 快速本地预检可用 `-SchemaAudit skip`，但不能作为最终发版证据。

@@ -287,6 +287,7 @@ if (-not $SkipBuild) {
   Write-Host "==> Build skipped"
 }
 
+Invoke-CheckedCommand -Label "Frontend normalizer smoke" -Command "node" -Arguments @((Join-Path $repoRoot "scripts/verify-frontend-normalizers.mjs"))
 Invoke-CheckedCommand -Label "Server module smoke" -Command "node" -Arguments @((Join-Path $repoRoot "scripts/verify-server-modules.mjs"))
 
 if (-not $SkipCliSmoke) {
