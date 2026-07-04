@@ -380,6 +380,7 @@ if (-not $SkipPackageSmoke) {
     "dist\index.html",
     "dist-cli\index.js",
     "src\server\appServerNotificationRuntimeSync.ts",
+    "src\server\appServerNotificationState.ts",
     "src\server\appServerRuntimeReconcileScheduler.ts",
     "src\server\codexAppServerBridge.ts",
     "src\server\composerFileSearchRoutes.ts",

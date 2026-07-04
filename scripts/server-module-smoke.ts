@@ -25,6 +25,10 @@ import {
   isKnownAppServerNotificationMethod,
 } from '../src/server/appServerNotificationDiagnostics.js'
 import {
+  captureAppServerNotificationState,
+  shouldClearPlanModeTurnForNotification,
+} from '../src/server/appServerNotificationState.js'
+import {
   AppServerHookDiagnosticsCache,
   createAppServerHookDiagnosticsUnavailable,
   normalizeAppServerHookDiagnostics,
@@ -323,6 +327,7 @@ try {
   await smokeAuthMiddleware()
   smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
+  smokeAppServerNotificationState()
   await smokeAppServerHookDiagnostics()
   await smokeWindowsSandboxReadinessDiagnostics()
   smokeAppServerStatusDiagnostics()
@@ -1326,6 +1331,68 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(diagnostics.snapshot().recentGuardianReviewNotifications.length, 0)
   assert.equal(diagnostics.snapshot().recentProtocolAlerts.length, 0)
   assert.equal(diagnostics.snapshot().recentRealtimeNotifications.length, 0)
+}
+
+function smokeAppServerNotificationState(): void {
+  assert.equal(shouldClearPlanModeTurnForNotification('turn/completed'), true)
+  assert.equal(shouldClearPlanModeTurnForNotification('thread/interrupted'), true)
+  assert.equal(shouldClearPlanModeTurnForNotification('item/tool/failed'), true)
+  assert.equal(shouldClearPlanModeTurnForNotification('thread/name/updated'), false)
+
+  let clearedThreadListCount = 0
+  const clearedPlanModeTurns: Array<{ threadId: string; turnId: string }> = []
+  const observedTokenUsageParams: unknown[] = []
+  const dependencies = {
+    clearThreadListCache: () => {
+      clearedThreadListCount += 1
+    },
+    clearPlanModeTurnByThreadOrTurn: (threadId: string, turnId: string) => {
+      clearedPlanModeTurns.push({ threadId, turnId })
+    },
+    observeThreadTokenUsage: (params: unknown) => {
+      observedTokenUsageParams.push(params)
+    },
+  }
+
+  captureAppServerNotificationState({
+    method: 'thread/name/updated',
+    params: { threadId: 'thread-cache' },
+  }, dependencies)
+  assert.equal(clearedThreadListCount, 1)
+  assert.deepEqual(clearedPlanModeTurns, [])
+  assert.deepEqual(observedTokenUsageParams, [])
+
+  captureAppServerNotificationState({
+    method: 'turn/completed',
+    params: { threadId: 'thread-plan', turn: { id: 'turn-plan' } },
+  }, dependencies)
+  assert.deepEqual(clearedPlanModeTurns, [{ threadId: 'thread-plan', turnId: 'turn-plan' }])
+
+  const tokenUsageParams = {
+    threadId: 'thread-token',
+    tokenUsage: {
+      total: {
+        totalTokens: 7,
+        inputTokens: 3,
+        cachedInputTokens: 1,
+        outputTokens: 4,
+        reasoningOutputTokens: 0,
+      },
+      last: {
+        totalTokens: 7,
+        inputTokens: 3,
+        cachedInputTokens: 1,
+        outputTokens: 4,
+        reasoningOutputTokens: 0,
+      },
+    },
+  }
+  captureAppServerNotificationState({
+    method: 'thread/tokenUsage/updated',
+    params: tokenUsageParams,
+  }, dependencies)
+  assert.deepEqual(observedTokenUsageParams, [tokenUsageParams])
+  assert.equal(clearedThreadListCount, 1)
 }
 
 async function smokeAppServerHookDiagnostics(): Promise<void> {

@@ -322,6 +322,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "dist\index.html",
   "dist-cli\index.js",
   "src\server\appServerNotificationRuntimeSync.ts",
+  "src\server\appServerNotificationState.ts",
   "src\server\appServerRuntimeReconcileScheduler.ts",
   "src\server\codexAppServerBridge.ts",
   "src\server\composerFileSearchRoutes.ts",
@@ -345,6 +346,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
 
 Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
   "src', 'server', 'appServerNotificationRuntimeSync.ts'",
+  "src', 'server', 'appServerNotificationState.ts'",
   "src', 'server', 'appServerRuntimeReconcileScheduler.ts'",
   "src', 'server', 'composerFileSearchRoutes.ts'",
   "src', 'server', 'diagnosticsRoutes.ts'",
@@ -393,6 +395,8 @@ Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "smokeRuntimeStateRoutes",
   "runRuntimeReconcileBatch",
   "smokeAppServerRuntimeReconcileScheduler",
+  "captureAppServerNotificationState",
+  "smokeAppServerNotificationState",
   "syncBridgeNotificationRuntimeState",
   "smokeAppServerNotificationRuntimeSync",
   "handleTranscriptionRoutes",

@@ -57,7 +57,6 @@ import { resolveCodexCommand } from '../commandResolution.js'
 import {
   AppServerRpcCache,
   getShareableRpcKey,
-  shouldInvalidateThreadListCacheForNotification,
   shouldInvalidateThreadListCacheForRpc,
 } from './appServerRpcCache.js'
 import {
@@ -127,6 +126,7 @@ import {
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
 import { AppServerMethodCatalog } from './appServerMethodCatalog.js'
+import { captureAppServerNotificationState } from './appServerNotificationState.js'
 import {
   getCodexGlobalStatePath,
   getCodexSessionIndexPath,
@@ -468,24 +468,11 @@ class AppServerProcess {
   }
 
   private captureNotificationState(notification: { method: string; params: unknown }): void {
-    if (shouldInvalidateThreadListCacheForNotification(notification.method)) {
-      this.rpcCache.clearThreadList()
-    }
-
-    if (
-      notification.method === 'turn/completed' ||
-      notification.method === 'thread/completed' ||
-      notification.method === 'turn/interrupted' ||
-      notification.method === 'thread/interrupted' ||
-      notification.method === 'error' ||
-      notification.method.endsWith('/failed')
-    ) {
-      this.clearPlanModeTurnByPayload(notification.params)
-    }
-
-    if (notification.method !== 'thread/tokenUsage/updated') return
-
-    this.threadTokenUsage.observeUpdate(notification.params)
+    captureAppServerNotificationState(notification, {
+      clearThreadListCache: () => this.rpcCache.clearThreadList(),
+      clearPlanModeTurnByThreadOrTurn: (threadId, turnId) => this.planModeTurns.clearByThreadOrTurn(threadId, turnId),
+      observeThreadTokenUsage: (params) => this.threadTokenUsage.observeUpdate(params),
+    })
   }
 
   private sendServerRequestReply(requestId: number, reply: ServerRequestReply): void {
@@ -511,12 +498,6 @@ class AppServerProcess {
 
   clearPlanModeTurn(threadId: string, turnId = ''): void {
     this.planModeTurns.clear(threadId, turnId)
-  }
-
-  clearPlanModeTurnByPayload(payload: unknown): void {
-    const threadId = readThreadIdFromPayload(payload)
-    const turnId = readTurnIdFromPayload(payload)
-    this.planModeTurns.clearByThreadOrTurn(threadId, turnId)
   }
 
   getActivePlanModeTurnCount(): number {

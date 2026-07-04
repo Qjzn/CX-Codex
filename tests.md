@@ -4762,6 +4762,43 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server notification state capture 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerNotificationState.ts`、`src/server/codexAppServerBridge.ts` 和 `scripts/server-module-smoke.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 thread-list cache 清理、plan-mode turn 清理和 token usage 更新三条 notification state capture 分支。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+4. 执行 `node_modules\.bin\vite.cmd build`。
+5. 执行 `node_modules\.bin\tsup.cmd`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+7. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+8. 代码审查确认 `src/server/codexAppServerBridge.ts` 的 `captureNotificationState(...)` 只调用 `captureAppServerNotificationState(...)` 并注入 store/cache 副作用。
+9. 代码审查确认 `src/server/appServerNotificationState.ts` 集中维护 notification method 到 thread-list cache、plan-mode turn 和 token usage 的状态捕获规则。
+10. 确认 release package smoke 必检 `src\server\appServerNotificationState.ts`。
+
+#### Expected Results
+- `thread/name/updated` 等 thread-list notification 仍会清理 thread-list cache。
+- `turn/completed`、`thread/interrupted`、`error` 和 `*/failed` notification 仍会按 threadId/turnId 清理 plan-mode turn。
+- `thread/tokenUsage/updated` 仍会更新 thread token usage cache。
+- `AppServerProcess` 不再内联 notification state capture 规则，只保留实际 store/cache 依赖。
+- `appServerNotificationState.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `src/server/appServerNotificationState.ts`，把 thread-list cache 清理、plan-mode turn 清理和 token usage 更新规则恢复到 `src/server/codexAppServerBridge.ts` 的 `captureNotificationState(...)` 内，并撤销 `scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和本测试章节。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，输出 `server module smoke ok`，覆盖 `captureAppServerNotificationState()` 的 thread-list cache 清理、plan-mode turn 清理、token usage 更新和结束/失败通知判定。
+- 2026-07-04 构建验证：`node_modules\.bin\vue-tsc.cmd --noEmit`、`node_modules\.bin\vite.cmd build` 和 `node_modules\.bin\tsup.cmd` 通过。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\appServerNotificationState.ts`。
+
+---
+
 ### Feature: App Server schema audit 摘要刷新
 
 #### Prerequisites
