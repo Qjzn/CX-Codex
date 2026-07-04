@@ -7536,3 +7536,38 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server pending server request resolution extraction
+
+#### Prerequisites
+- Current repository includes `src/server/codexAppServerBridge.ts`, `src/server/appServerServerRequestHandler.ts`, `src/server/pendingServerRequests.ts`, `src/server/serverRequestReply.ts`, `scripts/server-module-smoke.ts`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
+- Dependencies are installed and `dist/` plus `dist-cli/` already exist, or run release verification without `-SkipBuild`.
+
+#### Steps
+1. Open `src/server/appServerServerRequestHandler.ts` and confirm it exports `resolveAppServerPendingServerRequest(...)`.
+2. Open `src/server/codexAppServerBridge.ts` and confirm `AppServerProcess.resolvePendingServerRequest(...)` delegates pending consumption, reply writing, and `server/request/resolved` notification emission to `resolveAppServerPendingServerRequest(...)`.
+3. Open `scripts/server-module-smoke.ts` and confirm `smokeAppServerServerRequestHandler()` covers manual pending request resolution and the missing pending request error branch.
+4. Run `git diff --check`.
+5. Run `node scripts\verify-server-modules.mjs`.
+6. Run `npm.cmd run build`.
+7. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+8. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Manual approval responses still consume exactly one pending request and write the corresponding JSON-RPC reply.
+- A successful manual response emits `server/request/resolved` with `mode: "manual"` and the original request method/thread id.
+- Responding to an unknown or already consumed request id still throws `No pending server request found for id ...`.
+- Bridge main file no longer owns pending request resolution internals, reducing the surface that must change when request policy or notification behavior evolves.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal output in `output/server-module-smoke/` and `output/release-package-smoke/`.
+- To roll back, move the pending consume/reply/resolved-notification logic back into `AppServerProcess.resolvePendingServerRequest(...)`, remove `resolveAppServerPendingServerRequest(...)`, revert smoke/changelog updates, and remove this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 server module smoke: `node scripts\verify-server-modules.mjs` passed, including `smokeAppServerServerRequestHandler()` coverage for manual pending request resolution and the missing pending request error branch.
+- 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

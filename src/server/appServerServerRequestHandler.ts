@@ -30,6 +30,13 @@ export type HandleAppServerServerRequestDependencies = {
   }) => void
 }
 
+export type ResolveAppServerPendingServerRequestDependencies = {
+  consumePendingServerRequest: (requestId: number) => PendingServerRequest | null
+  sendServerRequestReply: (requestId: number, reply: ServerRequestReply) => void
+  emitNotification: (notification: AppServerServerRequestNotification) => void
+  readThreadIdFromPayload: (payload: unknown) => string
+}
+
 export function createAppServerRequestResolvedNotification(options: {
   requestId: number
   method: string
@@ -80,4 +87,24 @@ export function handleAppServerServerRequest(
     method: 'server/request',
     params: pendingRequest,
   })
+}
+
+export function resolveAppServerPendingServerRequest(
+  requestId: number,
+  reply: ServerRequestReply,
+  dependencies: ResolveAppServerPendingServerRequestDependencies,
+): void {
+  const pendingRequest = dependencies.consumePendingServerRequest(requestId)
+  if (!pendingRequest) {
+    throw new Error(`No pending server request found for id ${String(requestId)}`)
+  }
+
+  dependencies.sendServerRequestReply(requestId, reply)
+  dependencies.emitNotification(createAppServerRequestResolvedNotification({
+    requestId,
+    method: pendingRequest.method,
+    params: pendingRequest.params,
+    mode: 'manual',
+    readThreadIdFromPayload: dependencies.readThreadIdFromPayload,
+  }))
 }

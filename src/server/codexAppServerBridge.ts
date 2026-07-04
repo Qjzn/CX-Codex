@@ -16,7 +16,6 @@ import {
   type ThreadRuntimeSnapshot,
 } from './runtimeState.js'
 import {
-  createServerRequestResolvedNotification,
   PendingServerRequestStore,
   type PendingServerRequest,
 } from './pendingServerRequests.js'
@@ -152,6 +151,7 @@ import { createAppServerRuntimeSnapshotPersister } from './appServerRuntimeSnaps
 import { createAppServerRuntimeActions } from './appServerRuntimeActions.js'
 import {
   handleAppServerServerRequest,
+  resolveAppServerPendingServerRequest,
 } from './appServerServerRequestHandler.js'
 import { dispatchAppServerJsonRpcLine } from './appServerLineDispatcher.js'
 
@@ -426,29 +426,13 @@ class AppServerProcess {
     return readThreadIdFromPayload(params)
   }
 
-  private emitServerRequestResolved(
-    requestId: number,
-    method: string,
-    params: unknown,
-    mode: 'automatic' | 'manual',
-  ): void {
-    this.emitNotification(createServerRequestResolvedNotification({
-      requestId,
-      method,
-      params,
-      mode,
-      readThreadIdFromPayload: (payload) => this.readServerRequestThreadId(payload),
-    }))
-  }
-
   private resolvePendingServerRequest(requestId: number, reply: ServerRequestReply): void {
-    const pendingRequest = this.pendingServerRequests.consume(requestId)
-    if (!pendingRequest) {
-      throw new Error(`No pending server request found for id ${String(requestId)}`)
-    }
-
-    this.sendServerRequestReply(requestId, reply)
-    this.emitServerRequestResolved(requestId, pendingRequest.method, pendingRequest.params, 'manual')
+    resolveAppServerPendingServerRequest(requestId, reply, {
+      consumePendingServerRequest: (requestId) => this.pendingServerRequests.consume(requestId),
+      sendServerRequestReply: (requestId, reply) => this.sendServerRequestReply(requestId, reply),
+      emitNotification: (notification) => this.emitNotification(notification),
+      readThreadIdFromPayload: (payload) => this.readServerRequestThreadId(payload),
+    })
   }
 
   private handleServerRequest(requestId: number, method: string, params: unknown): void {

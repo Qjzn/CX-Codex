@@ -155,6 +155,7 @@ import {
 } from '../src/server/serverRequestPolicy.js'
 import {
   handleAppServerServerRequest,
+  resolveAppServerPendingServerRequest,
 } from '../src/server/appServerServerRequestHandler.js'
 import type { FavoriteRecord } from '../src/server/webUiState.js'
 import {
@@ -3801,6 +3802,19 @@ function smokeAppServerServerRequestHandler(): void {
     },
     ...overrides,
   })
+  const createResolveDependencies = (
+    overrides: Partial<Parameters<typeof resolveAppServerPendingServerRequest>[2]> = {},
+  ) => ({
+    consumePendingServerRequest: (requestId: number) => pendingStore.consume(requestId),
+    sendServerRequestReply: (requestId: number, reply: unknown) => {
+      replies.push({ requestId, reply })
+    },
+    emitNotification: (notification: { method: string; params: unknown }) => {
+      notifications.push(notification)
+    },
+    readThreadIdFromPayload,
+    ...overrides,
+  })
 
   handleAppServerServerRequest(
     11,
@@ -3858,6 +3872,30 @@ function smokeAppServerServerRequestHandler(): void {
   assert.equal(queued?.method, 'server/request')
   assert.deepEqual(queued?.params, pendingStore.list()[0])
   assert.deepEqual(replies, [])
+
+  resolveAppServerPendingServerRequest(13, { result: { decision: 'accept' } }, createResolveDependencies())
+
+  assert.equal(pendingStore.count, 0)
+  assert.deepEqual(replies.shift(), {
+    requestId: 13,
+    reply: { result: { decision: 'accept' } },
+  })
+  const manualResolved = notifications.shift()
+  assert.equal(manualResolved?.method, 'server/request/resolved')
+  assert.deepEqual(manualResolved?.params, {
+    id: 13,
+    method: 'mcp/custom/request',
+    threadId: 'thread-pending',
+    mode: 'manual',
+    resolvedAtIso: (manualResolved?.params as { resolvedAtIso: string }).resolvedAtIso,
+  })
+
+  assert.throws(
+    () => resolveAppServerPendingServerRequest(13, { result: {} }, createResolveDependencies({
+      consumePendingServerRequest: (requestId: number) => pendingStore.consume(requestId),
+    })),
+    /No pending server request found for id 13/,
+  )
 }
 
 async function smokeCommandRunner(): Promise<void> {

@@ -43,6 +43,7 @@
   - `verify:server-modules` 每次执行会使用独立的 `output/server-module-smoke/run-*` 临时编译目录，避免它与 release gate 内部 server smoke 并行运行时互相清理产物造成偶发失败。
   - App Server stdout JSON-RPC line 分流从 bridge 主文件抽离为独立 dispatcher，并由 server module smoke 覆盖 response 结算、notification 分发、server request 转交和无效行忽略。
   - App Server `server/request` 的自动策略、pending 入队和 resolved 通知发射从 bridge 主文件抽离为独立 helper，并由 server module smoke 覆盖自动批准、unsupported 自动拒绝和 pending queue 分支。
+  - App Server pending `server/request` 的手动响应消费、reply 写回和 resolved 通知发射从 bridge 主文件收口到 server request helper，并由 server module smoke 覆盖成功消费和缺失请求错误分支。
   - `verify:server-modules` 新增 thread search index 并发构建与 clear 中途失效 smoke，防止会话搜索在并发请求或索引清理后复用过期构建结果。
   - `verify:server-modules` 不再维护手写 `src/server` include 清单，而是只编译 `scripts/server-module-smoke.ts` 并让 TypeScript 跟随 import graph，减少 bridge 模块化后新增 helper 漏进 smoke 编译入口的风险。
   - App Server `thread/read` 未知 thread/turn status 会在 health、diagnostics 和诊断中心按来源聚合计数，方便发现官方协议新增状态且不误判为运行态。
