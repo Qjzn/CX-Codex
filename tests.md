@@ -7608,3 +7608,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server process runtime cleanup extraction
+
+#### Prerequisites
+- Current repository includes `src/server/codexAppServerBridge.ts`, `src/server/appServerProcessCleanup.ts`, `scripts/server-module-smoke.ts`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
+- Dependencies are installed and `dist/` plus `dist-cli/` already exist, or run release verification without `-SkipBuild`.
+
+#### Steps
+1. Open `src/server/appServerProcessCleanup.ts` and confirm `cleanupAppServerProcessRuntime(...)` owns pending RPC rejection, optional queued RPC rejection, and session store cleanup.
+2. Open `src/server/codexAppServerBridge.ts` and confirm process error, process exit, restart, and dispose flows delegate shared runtime cleanup to `cleanupProcessRuntime(...)` while keeping process identity, initialization flags, stdout buffer clearing, cooldown, and termination decisions in the bridge.
+3. Open `scripts/server-module-smoke.ts` and confirm `smokeAppServerProcessCleanup()` covers default pending/queued/session cleanup and the dispose-style `rejectQueuedRpcCalls: false` branch.
+4. Open `scripts/verify-release.ps1` and confirm Release package smoke requires `src\server\appServerProcessCleanup.ts` inside the release zip.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `npm.cmd run build`.
+8. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+9. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Process error, unexpected exit, and restart cleanup still reject pending RPCs, reject queued RPCs, and clear App Server session stores.
+- Dispose still reuses the shared cleanup while avoiding a second queued RPC rejection after its existing pre-check rejection.
+- Bridge lifecycle decisions stay local to `codexAppServerBridge.ts`; only repeated runtime cleanup moves out.
+- Release package smoke fails if the cleanup helper is omitted from the Web source zip.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal output in `output/server-module-smoke/` and `output/release-package-smoke/`.
+- To roll back, move the pending/queued/session cleanup calls back into `AppServerProcess` branches, delete `src/server/appServerProcessCleanup.ts`, remove smoke/governance/release package references, revert changelog updates, and remove this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 server module smoke: `node scripts\verify-server-modules.mjs` passed, including `smokeAppServerProcessCleanup()` coverage for default pending/queued/session cleanup and the dispose-style queued rejection skip branch.
+- 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

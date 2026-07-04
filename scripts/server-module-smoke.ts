@@ -129,6 +129,7 @@ import {
 } from '../src/server/appServerThreadListAugment.js'
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { AppServerPendingRpcStore } from '../src/server/appServerPendingRpcStore.js'
+import { cleanupAppServerProcessRuntime } from '../src/server/appServerProcessCleanup.js'
 import { clearAppServerSessionStores } from '../src/server/appServerSessionCleanup.js'
 import {
   attachAppServerProcessHandlers,
@@ -395,6 +396,7 @@ const originalNow = Date.now
 try {
   await smokeAppServerClientInfo()
   smokeAppServerPendingRpcStore()
+  smokeAppServerProcessCleanup()
   smokeAppServerSessionCleanup()
   smokeAppServerProcessHandlers()
   smokeAppServerProcessTermination()
@@ -571,6 +573,37 @@ function smokeAppServerPendingRpcStore(): void {
   store.rejectAll(failure)
   assert.equal(store.count, 0)
   assert.deepEqual(rejected, [failure, failure])
+}
+
+function smokeAppServerProcessCleanup(): void {
+  const calls: string[] = []
+  const failure = new Error('app-server failed')
+
+  cleanupAppServerProcessRuntime(failure, {
+    pendingRpcStore: {
+      rejectAll: (error) => calls.push(`pending:${error.message}`),
+    },
+    rejectQueuedRpcCalls: (error) => calls.push(`queue:${error.message}`),
+    clearSessionStores: () => calls.push('session.clear'),
+  })
+  assert.deepEqual(calls, [
+    'pending:app-server failed',
+    'queue:app-server failed',
+    'session.clear',
+  ])
+
+  calls.length = 0
+  cleanupAppServerProcessRuntime(failure, {
+    pendingRpcStore: {
+      rejectAll: (error) => calls.push(`pending:${error.message}`),
+    },
+    rejectQueuedRpcCalls: (error) => calls.push(`queue:${error.message}`),
+    clearSessionStores: () => calls.push('session.clear'),
+  }, { rejectQueuedRpcCalls: false })
+  assert.deepEqual(calls, [
+    'pending:app-server failed',
+    'session.clear',
+  ])
 }
 
 function smokeAppServerSessionCleanup(): void {
