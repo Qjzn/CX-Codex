@@ -35,7 +35,7 @@
 | Command / Process / Terminal | 新增 command exec stream、resize、write、terminate、process output delta/exited、terminal size | 部分覆盖。当前 UI 能展示 commandExecution 聚合输出，但不支持交互式 terminal 流 | 保证新增 stream/delta item 不崩溃；后续再设计交互式终端 UI |
 | File System | 新增 fs read/write/copy/remove/watch/unwatch/metadata/directory 相关 schema | 待接入。当前项目没有把 App Server fs API 暴露为文件管理入口 | 默认不暴露写操作；如接入，必须绑定 workspace permission 和路径边界检查 |
 | MCP | 新增 elicitation、resource read、server tool call/status/update、startup state 等 | 部分覆盖。当前 composer 插件列表读取 `mcpServerStatus/list`，OAuth 登录和 reload 可用 | 支持 elicitation/server request 的泛化展示；resource read 只在明确权限下接入 |
-| Plugins / Apps / Marketplace | 新增 plugin install/read/list/share/uninstall、marketplace add/remove/upgrade、app branding/summary/tool approval | 部分覆盖。当前支持 app/list 与 MCP 合并展示，但不管理 marketplace 生命周期 | 短期只读展示 install/accessibility 状态；安装/卸载/分享必须加确认和来源标识 |
+| Plugins / Apps / Marketplace | 新增 plugin install/read/list/share/uninstall、marketplace add/remove/upgrade、app branding/summary/tool approval | 部分覆盖。当前支持 app/list 与 MCP 合并展示，`app/list/updated` 和 `mcpServer/startupStatus/updated` 会触发 composer 插件/App 列表防抖刷新，但不管理 marketplace 生命周期 | 短期只读展示 install/accessibility 状态；安装/卸载/分享必须加确认和来源标识 |
 | Skills | `SkillSummary`、`SkillsChangedNotification`、skill read/config 相关变化 | 部分覆盖。当前 skills/list 已用于 composer；`skills/changed` 已作为官方 invalidation signal 处理，前端会按当前 cwd 参数防抖重跑 `skills/list`，诊断侧不再误记为未知通知 | 继续对新增 skill 字段做只读容错；后续如接入 skill read/config 写入能力，必须增加来源、权限和回滚说明 |
 | Hooks | 新增 hook list、started/completed、scope、trust、migration 等 | 待接入 | 先在诊断中心只读展示 hook 状态；不在普通用户流里执行或编辑 hook |
 | External Agent / Migration | 新增 external agent config detect/import、migration item | 暂缓 | 仅记录为未来迁移能力；不能默认导入外部 agent 配置 |

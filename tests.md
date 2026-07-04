@@ -3982,6 +3982,39 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App/MCP/RateLimit 状态通知兼容
+
+#### Prerequisites
+- 当前仓库包含 `src/composables/useDesktopState.ts`、`src/server/appServerNotificationDiagnostics.ts` 和最近 raw schema audit 输出 `output\app-server-schema-audit\20260703-193751`。
+- 本机 raw schema audit 已确认 `app/list/updated`、`mcpServer/startupStatus/updated` 和 `account/rateLimits/updated` 为官方 App Server notification methods。
+
+#### Steps
+1. 检查 raw schema audit，确认 `ServerNotification.ts` 包含 `app/list/updated`、`mcpServer/startupStatus/updated` 和 `account/rateLimits/updated`。
+2. 执行 `git diff --check`。
+3. 执行 `npm.cmd run verify:server-modules`。
+4. 执行 `npm.cmd run build`。
+5. 执行 `npm.cmd run verify:governance`。
+6. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip`。
+
+#### Expected Results
+- `app/list/updated` 和 `mcpServer/startupStatus/updated` 只触发 composer 插件/App 列表防抖刷新，不触发线程消息或线程列表同步。
+- `mcpServer/oauthLogin/completed` 继续刷新 composer 插件/App 列表，但走同一防抖路径。
+- `account/rateLimits/updated` 继续触发现有限额刷新，并在通知诊断中作为已知 method。
+- 服务端 notification diagnostics 不再把这些官方状态通知计入 unknown notification。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/composables/useDesktopState.ts`、`src/server/appServerNotificationDiagnostics.ts`、`scripts/server-module-smoke.ts`、`docs/app-server-protocol-matrix.zh-CN.md`、`docs/changelog.zh-CN.md` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 官方文档/Schema 核对：OpenAI App Server 文档确认 `app/list/updated` 会在 accessible apps 或 directory apps 加载完成后发送最新合并 App 列表；raw schema audit `output\app-server-schema-audit\20260703-193751\typescript\ServerNotification.ts` 显示 `mcpServer/startupStatus/updated`、`account/rateLimits/updated`、`app/list/updated` 和 `mcpServer/oauthLogin/completed` 都是官方 `ServerNotification` method。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖新增官方通知 method 的已知分类。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建；Vite 仍有既有 large chunk warning。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
+
+---
+
 ### Feature: App Server skills/changed 通知兼容
 
 #### Prerequisites

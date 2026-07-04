@@ -661,6 +661,10 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('turn/started'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/archived'), true)
   assert.equal(isKnownAppServerNotificationMethod('skills/changed'), true)
+  assert.equal(isKnownAppServerNotificationMethod('app/list/updated'), true)
+  assert.equal(isKnownAppServerNotificationMethod('mcpServer/oauthLogin/completed'), true)
+  assert.equal(isKnownAppServerNotificationMethod('mcpServer/startupStatus/updated'), true)
+  assert.equal(isKnownAppServerNotificationMethod('account/rateLimits/updated'), true)
   assert.equal(isKnownAppServerNotificationMethod('item/tool/call/failed'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/realtime/transcript/delta'), false)
 

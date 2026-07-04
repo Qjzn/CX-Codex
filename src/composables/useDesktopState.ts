@@ -157,11 +157,17 @@ const THREAD_LIST_REFRESH_INTERVAL_MS = 300000
 const THREAD_TOKEN_USAGE_REFRESH_RETRY_MS = 5 * 60 * 1000
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 1500
 const RATE_LIMIT_REFRESH_MIN_INTERVAL_MS = 300000
+const COMPOSER_PLUGINS_REFRESH_DEBOUNCE_MS = 450
 const SKILLS_CHANGED_REFRESH_DEBOUNCE_MS = 350
 const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
 const GLOBAL_SERVER_REQUEST_SCOPE = '__global__'
 const THREAD_TOKEN_USAGE_UPDATED_METHOD = 'thread/tokenUsage/updated'
 const SKILLS_CHANGED_METHOD = 'skills/changed'
+const COMPOSER_PLUGIN_INVALIDATING_NOTIFICATION_METHODS = new Set([
+  'app/list/updated',
+  'mcpServer/oauthLogin/completed',
+  'mcpServer/startupStatus/updated',
+])
 const MODEL_FALLBACK_ID = 'gpt-5.2-codex'
 const AUTO_COMMIT_MESSAGE_FALLBACK = 'Auto-commit from Codex rollback chat turn'
 const OPTIMISTIC_USER_MESSAGE_TYPE = 'userMessage.optimistic'
@@ -1228,6 +1234,7 @@ export function useDesktopState() {
   let threadSelectionAbortController: AbortController | null = null
   let foregroundMessageLoadId = 0
   let rateLimitRefreshTimer: number | null = null
+  let composerPluginsRefreshTimer: number | null = null
   let skillsChangedRefreshTimer: number | null = null
   let rateLimitRefreshPromise: Promise<void> | null = null
   let lastRateLimitRefreshStartedAtMs = 0
@@ -4427,8 +4434,8 @@ export function useDesktopState() {
       scheduleRateLimitRefresh()
     }
 
-    if (notification.method === 'mcpServer/oauthLogin/completed') {
-      void refreshComposerPlugins()
+    if (COMPOSER_PLUGIN_INVALIDATING_NOTIFICATION_METHODS.has(notification.method)) {
+      scheduleComposerPluginsRefreshFromNotification()
     }
 
     const threadTokenUsageUpdate = readThreadTokenUsageUpdate(notification)
@@ -5093,6 +5100,20 @@ export function useDesktopState() {
     } finally {
       isLoadingComposerPlugins.value = false
     }
+  }
+
+  function scheduleComposerPluginsRefreshFromNotification(): void {
+    if (typeof window === 'undefined') {
+      void refreshComposerPlugins()
+      return
+    }
+    if (composerPluginsRefreshTimer !== null) {
+      window.clearTimeout(composerPluginsRefreshTimer)
+    }
+    composerPluginsRefreshTimer = window.setTimeout(() => {
+      composerPluginsRefreshTimer = null
+      void refreshComposerPlugins()
+    }, COMPOSER_PLUGINS_REFRESH_DEBOUNCE_MS)
   }
 
   async function loginComposerPlugin(pluginId: string): Promise<string> {
@@ -6654,6 +6675,10 @@ export function useDesktopState() {
     if (rateLimitRefreshTimer !== null && typeof window !== 'undefined') {
       window.clearTimeout(rateLimitRefreshTimer)
       rateLimitRefreshTimer = null
+    }
+    if (composerPluginsRefreshTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(composerPluginsRefreshTimer)
+      composerPluginsRefreshTimer = null
     }
     if (skillsChangedRefreshTimer !== null && typeof window !== 'undefined') {
       window.clearTimeout(skillsChangedRefreshTimer)
