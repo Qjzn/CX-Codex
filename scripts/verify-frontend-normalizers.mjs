@@ -54,6 +54,33 @@ assert.equal(messages[1]?.rawPayload?.includes('secret command'), true)
 assert.equal(messages[2]?.messageType, 'unhandled.invalidItem')
 assert.equal(messages[2]?.isUnhandled, true)
 
+const unloadedTurnMessages = normalizeThreadMessagesV2({
+  thread: {
+    id: 'thread-items-view',
+    cwd: 'E:\\\\repo',
+    preview: '',
+    updatedAt: 1,
+    createdAt: 1,
+    turns: [
+      {
+        id: 'turn-summary',
+        status: 'completed',
+        itemsView: 'summary',
+        items: [],
+      },
+    ],
+  },
+})
+
+assert.equal(unloadedTurnMessages.length, 1)
+assert.equal(unloadedTurnMessages[0]?.id, 'turn-summary')
+assert.equal(unloadedTurnMessages[0]?.role, 'system')
+assert.equal(unloadedTurnMessages[0]?.messageType, 'unhandled.turnItemsView.summary')
+assert.equal(unloadedTurnMessages[0]?.text, 'App Server turn items not loaded: summary')
+assert.equal(unloadedTurnMessages[0]?.isUnhandled, true)
+assert.equal(unloadedTurnMessages[0]?.turnIndex, 0)
+assert.equal(unloadedTurnMessages[0]?.rawPayload?.includes('"itemsView": "summary"'), true)
+
 const groups = normalizeThreadGroupsV2({
   data: [
     {

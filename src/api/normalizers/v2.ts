@@ -441,7 +441,21 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse): UiMessag
   const messages: UiMessage[] = []
   for (let turnIndex = 0; turnIndex < turns.length; turnIndex++) {
     const turn = turns[turnIndex]
+    const rawTurn = turn as Record<string, unknown>
+    const itemsView = readTrimmedString(rawTurn.itemsView)
     const items = Array.isArray(turn.items) ? turn.items : []
+    if (items.length === 0 && itemsView && itemsView !== 'full') {
+      messages.push({
+        id: readTrimmedString(rawTurn.id) || `turn-${String(turnIndex)}:items-view`,
+        role: 'system',
+        text: `App Server turn items not loaded: ${itemsView}`,
+        messageType: `unhandled.turnItemsView.${itemsView}`,
+        rawPayload: toRawPayload(turn),
+        isUnhandled: true,
+        turnIndex,
+      })
+      continue
+    }
     for (const item of items) {
       const threadItem = (
         item && typeof item === 'object' && !Array.isArray(item)

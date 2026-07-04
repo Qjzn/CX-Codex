@@ -128,6 +128,46 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server turn items view fallback
+
+#### Prerequisites
+- Current repository includes `src/api/normalizers/v2.ts`, `scripts/verify-frontend-normalizers.mjs`, `docs/app-server-protocol-matrix.zh-CN.md`, and the raw schema audit output that records `Turn.itemsView`.
+- Dependencies are installed so esbuild, TypeScript, Vite, tsup, server module smoke, governance, and release verification can run.
+
+#### Steps
+1. Open `output/app-server-schema-audit/20260704-141839/typescript/v2/Turn.ts` and confirm raw App Server schema includes `itemsView: TurnItemsView`.
+2. Open `output/app-server-schema-audit/20260704-141839/typescript/v2/TurnItemsView.ts` and confirm values include `notLoaded`, `summary`, and `full`.
+3. Open `src/api/normalizers/v2.ts` and confirm a turn with non-`full` `itemsView` and no items becomes an `isUnhandled` raw system message.
+4. Run `node scripts\verify-frontend-normalizers.mjs`.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+8. Run `node_modules\.bin\vite.cmd build`.
+9. Run `node_modules\.bin\tsup.cmd`.
+10. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+11. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- `Turn.itemsView: full` keeps existing item rendering behavior.
+- `Turn.itemsView: summary` or `notLoaded` with an empty `items` array no longer silently produces an empty message list.
+- The fallback message includes `messageType: unhandled.turnItemsView.<value>`, `rawPayload`, `isUnhandled: true`, and the original `turnIndex`.
+- Existing unknown item and thread source normalizer coverage continues to pass.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `dist/`, `dist-cli/`, `output/frontend-normalizer-smoke/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, remove the `itemsView` fallback branch, remove the frontend normalizer smoke assertions, and revert the protocol matrix, changelog, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 frontend normalizer smoke: `node scripts\verify-frontend-normalizers.mjs` passed with `frontend normalizer smoke ok`, covering `itemsView: summary` fallback plus the existing unknown item and source metadata cases.
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed with `server module smoke ok`.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
 ---
 
 ### Feature: App Server local runtime snapshot reader helper
