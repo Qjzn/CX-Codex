@@ -26,6 +26,7 @@ import {
 } from './httpBody.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import { writeCodexBridgeRequestError } from './codexBridgeRequestError.js'
+import { runCodexBridgeRouteHandlers } from './codexBridgeRouteDispatch.js'
 import {
   getTranscriptionProxyConfigSnapshot,
 } from './transcriptionProxy.js'
@@ -772,141 +773,92 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       const url = new URL(req.url, 'http://localhost')
 
-      if (await handleSkillsRoutes(req, res, url, { appServer, readJsonBody })) {
-        return
-      }
-
-      if (await handleFileUploadRoute(req, res, url)) {
-        return
-      }
-
-      if (await handleLocalStateRoutes(req, res, url, {
-        readJsonBody,
-        setWebBridgeSettings: (settings) => appServer.setWebBridgeSettings(settings),
-      })) {
-        return
-      }
-
-      if (await handleRpcProxyRoute(req, res, url, {
-        readJsonBody,
-        rpc: (method, params) => appServer.rpc(method, params),
-        runtimeStateStore,
-        persistRuntimeSnapshot,
-        markPlanModeTurn: (threadId, turnId = '') => appServer.markPlanModeTurn(threadId, turnId),
-        clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
-        observeThreadUnsubscribeResponse: (details) => statusDiagnostics.observeThreadUnsubscribeResponse(details),
-        deleteCachedThreadRead: (threadId) => threadReadCacheStore.delete(threadId),
-        rememberCachedThreadRead: (threadId, threadRead) => {
-          threadReadCacheStore.remember(threadId, threadRead)
-        },
-        augmentThreadListRpcResult,
-        clearThreadSearchIndex: () => threadSearchIndexStore.clear(),
-      })) {
-        return
-      }
-
-      if (await handleRuntimeActionRoutes(req, res, url, {
-        readJsonBody,
-        startRuntimeTurn,
-        interruptRuntimeTurn,
-        getLatestRequestByClientMessageId: (clientMessageId) => runtimeStore.getLatestRequestByClientMessageId(clientMessageId),
-      })) {
-        return
-      }
-
-      if (await handleTranscriptionRoutes(req, res, url)) {
-        return
-      }
-
-      if (await handleServerRequestRoutes(req, res, url, {
-        readJsonBody,
-        respondToServerRequest: (payload) => appServer.respondToServerRequest(payload),
-        listPendingServerRequests: () => appServer.listPendingServerRequests(),
-      })) {
-        return
-      }
-
-      if (handleNotificationReplayRoute(req, res, url, middleware.listNotificationEventsAfter)) {
-        return
-      }
-
-      if (await handleRuntimeStateRoutes(req, res, url, {
-        runtimeRequestStore: runtimeStore,
-        runtimeStateStore,
-        reconcileRuntimeThread,
-        readLocalRuntimeSnapshot,
-        persistRuntimeSnapshot,
-        readThreadRuntimeSnapshot,
-        readCachedThreadTokenUsage,
-        listPendingServerRequestsForThread: (threadId) => appServer.listPendingServerRequestsForThread(threadId),
-        getThreadTokenUsage: (threadId) => appServer.getThreadTokenUsage(threadId),
-      })) {
-        return
-      }
-
-      if (await handleDiagnosticsRoutes(req, res, url, {
-        getAppServerStatus: () => appServer.getStatus(),
-        getNotificationDiagnostics: () => notificationDiagnostics.snapshot(),
-        getStatusDiagnostics: () => statusDiagnostics.snapshot(),
-        listPendingServerRequests: () => appServer.listPendingServerRequests(),
-        readHookDiagnostics: readAppServerHookDiagnostics,
-        readSchemaAuditSummary: readAppServerSchemaAuditSummary,
-        readWindowsSandboxDiagnostics: readWindowsSandboxReadinessDiagnostics,
-        getTranscriptionDiagnostics: getTranscriptionProxyConfigSnapshot,
-        runtimeStore,
-      })) {
-        return
-      }
-
-      if (await handleGithubTrendingRoutes(req, res, url, {
-        readJsonBody,
-      })) {
-        return
-      }
-
-      if (await handleWorktreeRoutes(req, res, url, {
-        readJsonBody,
-      })) {
-        return
-      }
-
-      if (await handleWorkspaceMetaRoutes(req, res, url, {
-        methodCatalog,
-        readJsonBody,
-        homeDirectory: homedir,
-      })) {
-        return
-      }
-
-      if (await handleProjectRootRoutes(req, res, url, {
-        readJsonBody,
-      })) {
-        return
-      }
-
-      if (await handleComposerFileSearchRoutes(req, res, url, {
-        readJsonBody,
-      })) {
-        return
-      }
-
-      if (await handleThreadRoutes(req, res, url, {
-        readJsonBody,
-        threadSearchIndexStore,
-      })) {
-        return
-      }
-
-      if (await handleStatusRoutes(req, res, url, {
-        readJsonBody,
-      })) {
-        return
-      }
-
-      if (handleNotificationSseRoute(req, res, url, {
-        latestSeq: () => notificationReplay.latestSeq,
-        subscribeNotifications: middleware.subscribeNotifications,
-      })) {
+      if (await runCodexBridgeRouteHandlers([
+        () => handleSkillsRoutes(req, res, url, { appServer, readJsonBody }),
+        () => handleFileUploadRoute(req, res, url),
+        () => handleLocalStateRoutes(req, res, url, {
+          readJsonBody,
+          setWebBridgeSettings: (settings) => appServer.setWebBridgeSettings(settings),
+        }),
+        () => handleRpcProxyRoute(req, res, url, {
+          readJsonBody,
+          rpc: (method, params) => appServer.rpc(method, params),
+          runtimeStateStore,
+          persistRuntimeSnapshot,
+          markPlanModeTurn: (threadId, turnId = '') => appServer.markPlanModeTurn(threadId, turnId),
+          clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
+          observeThreadUnsubscribeResponse: (details) => statusDiagnostics.observeThreadUnsubscribeResponse(details),
+          deleteCachedThreadRead: (threadId) => threadReadCacheStore.delete(threadId),
+          rememberCachedThreadRead: (threadId, threadRead) => {
+            threadReadCacheStore.remember(threadId, threadRead)
+          },
+          augmentThreadListRpcResult,
+          clearThreadSearchIndex: () => threadSearchIndexStore.clear(),
+        }),
+        () => handleRuntimeActionRoutes(req, res, url, {
+          readJsonBody,
+          startRuntimeTurn,
+          interruptRuntimeTurn,
+          getLatestRequestByClientMessageId: (clientMessageId) => runtimeStore.getLatestRequestByClientMessageId(clientMessageId),
+        }),
+        () => handleTranscriptionRoutes(req, res, url),
+        () => handleServerRequestRoutes(req, res, url, {
+          readJsonBody,
+          respondToServerRequest: (payload) => appServer.respondToServerRequest(payload),
+          listPendingServerRequests: () => appServer.listPendingServerRequests(),
+        }),
+        () => handleNotificationReplayRoute(req, res, url, middleware.listNotificationEventsAfter),
+        () => handleRuntimeStateRoutes(req, res, url, {
+          runtimeRequestStore: runtimeStore,
+          runtimeStateStore,
+          reconcileRuntimeThread,
+          readLocalRuntimeSnapshot,
+          persistRuntimeSnapshot,
+          readThreadRuntimeSnapshot,
+          readCachedThreadTokenUsage,
+          listPendingServerRequestsForThread: (threadId) => appServer.listPendingServerRequestsForThread(threadId),
+          getThreadTokenUsage: (threadId) => appServer.getThreadTokenUsage(threadId),
+        }),
+        () => handleDiagnosticsRoutes(req, res, url, {
+          getAppServerStatus: () => appServer.getStatus(),
+          getNotificationDiagnostics: () => notificationDiagnostics.snapshot(),
+          getStatusDiagnostics: () => statusDiagnostics.snapshot(),
+          listPendingServerRequests: () => appServer.listPendingServerRequests(),
+          readHookDiagnostics: readAppServerHookDiagnostics,
+          readSchemaAuditSummary: readAppServerSchemaAuditSummary,
+          readWindowsSandboxDiagnostics: readWindowsSandboxReadinessDiagnostics,
+          getTranscriptionDiagnostics: getTranscriptionProxyConfigSnapshot,
+          runtimeStore,
+        }),
+        () => handleGithubTrendingRoutes(req, res, url, {
+          readJsonBody,
+        }),
+        () => handleWorktreeRoutes(req, res, url, {
+          readJsonBody,
+        }),
+        () => handleWorkspaceMetaRoutes(req, res, url, {
+          methodCatalog,
+          readJsonBody,
+          homeDirectory: homedir,
+        }),
+        () => handleProjectRootRoutes(req, res, url, {
+          readJsonBody,
+        }),
+        () => handleComposerFileSearchRoutes(req, res, url, {
+          readJsonBody,
+        }),
+        () => handleThreadRoutes(req, res, url, {
+          readJsonBody,
+          threadSearchIndexStore,
+        }),
+        () => handleStatusRoutes(req, res, url, {
+          readJsonBody,
+        }),
+        () => handleNotificationSseRoute(req, res, url, {
+          latestSeq: () => notificationReplay.latestSeq,
+          subscribeNotifications: middleware.subscribeNotifications,
+        }),
+      ])) {
         return
       }
 

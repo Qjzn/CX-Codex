@@ -392,6 +392,7 @@ import {
 } from '../src/server/authMiddleware.js'
 import { RequestBodyTooLargeError } from '../src/server/httpBody.js'
 import { writeCodexBridgeRequestError } from '../src/server/codexBridgeRequestError.js'
+import { runCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteDispatch.js'
 
 const originalNow = Date.now
 
@@ -451,6 +452,7 @@ try {
   await smokeFileUploadRoute()
   smokeHttpJsonResponse()
   smokeCodexBridgeRequestError()
+  await smokeCodexBridgeRouteDispatch()
   smokeErrorMessage()
   await smokeComposerFileSearch()
   await smokeComposerFileSearchRoutes()
@@ -4272,6 +4274,40 @@ function smokeCodexBridgeRequestError(): void {
   )
   assert.equal(bridgeFailure.response.statusCode, 502)
   assert.deepEqual(JSON.parse(bridgeFailure.body), { error: 'bridge failed' })
+}
+
+async function smokeCodexBridgeRouteDispatch(): Promise<void> {
+  const calls: string[] = []
+  const handled = await runCodexBridgeRouteHandlers([
+    () => {
+      calls.push('first')
+      return false
+    },
+    async () => {
+      calls.push('second')
+      return true
+    },
+    () => {
+      calls.push('third')
+      return true
+    },
+  ])
+  assert.equal(handled, true)
+  assert.deepEqual(calls, ['first', 'second'])
+
+  calls.length = 0
+  const unhandled = await runCodexBridgeRouteHandlers([
+    () => {
+      calls.push('fourth')
+      return false
+    },
+    async () => {
+      calls.push('fifth')
+      return false
+    },
+  ])
+  assert.equal(unhandled, false)
+  assert.deepEqual(calls, ['fourth', 'fifth'])
 }
 
 function smokeErrorMessage(): void {

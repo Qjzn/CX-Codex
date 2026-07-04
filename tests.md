@@ -7716,3 +7716,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: Codex bridge route dispatch extraction
+
+#### Prerequisites
+- Current repository includes `src/server/codexAppServerBridge.ts`, `src/server/codexBridgeRouteDispatch.ts`, `scripts/server-module-smoke.ts`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
+- Dependencies are installed and `dist/` plus `dist-cli/` already exist, or run release verification without `-SkipBuild`.
+
+#### Steps
+1. Open `src/server/codexBridgeRouteDispatch.ts` and confirm `runCodexBridgeRouteHandlers(...)` owns ordered route handler execution and first-match stopping.
+2. Open `src/server/codexAppServerBridge.ts` and confirm the middleware still binds each route dependency locally, but delegates sequential route handling to `runCodexBridgeRouteHandlers(...)`.
+3. Open `scripts/server-module-smoke.ts` and confirm `smokeCodexBridgeRouteDispatch()` covers sync and async handlers, first true stopping, and all-false unhandled results.
+4. Open `scripts/verify-release.ps1` and confirm Release package smoke requires `src\server\codexBridgeRouteDispatch.ts` inside the release zip.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `npm.cmd run build`.
+8. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+9. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Route handlers still run in their existing order.
+- Dispatch stops after the first handler returns true, including async handlers.
+- If every handler returns false, middleware continues to `next()`.
+- Release package smoke fails if the route dispatch helper is omitted from the Web source zip.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal output in `output/server-module-smoke/` and `output/release-package-smoke/`.
+- To roll back, restore the explicit `if (await handleRoute(...)) return` sequence in `createCodexBridgeMiddleware()`, delete `src/server/codexBridgeRouteDispatch.ts`, remove smoke/governance/release package references, revert changelog updates, and remove this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 server module smoke: `node scripts\verify-server-modules.mjs` passed, including `smokeCodexBridgeRouteDispatch()` coverage for sync and async handlers, first true stopping, and all-false unhandled results.
+- 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
