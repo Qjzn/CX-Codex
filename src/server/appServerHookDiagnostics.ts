@@ -39,6 +39,12 @@ type AppServerHookDiagnosticsCacheOptions = {
   nowIso?: () => string
 }
 
+export type AppServerHookDiagnosticsReaderDependencies = {
+  cache: AppServerHookDiagnosticsCache
+  rpc(method: string, params: unknown): Promise<unknown>
+  getCwds: () => string[]
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -210,4 +216,12 @@ export class AppServerHookDiagnosticsCache {
     this.cachedAtMs = 0
     this.inFlight = null
   }
+}
+
+export function createAppServerHookDiagnosticsReader(
+  dependencies: AppServerHookDiagnosticsReaderDependencies,
+): () => Promise<AppServerHookDiagnostics> {
+  return async () => await dependencies.cache.read(() => dependencies.rpc('hooks/list', {
+    cwds: dependencies.getCwds(),
+  }))
 }

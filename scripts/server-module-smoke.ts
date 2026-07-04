@@ -31,6 +31,7 @@ import {
 } from '../src/server/appServerNotificationState.js'
 import {
   AppServerHookDiagnosticsCache,
+  createAppServerHookDiagnosticsReader,
   createAppServerHookDiagnosticsUnavailable,
   normalizeAppServerHookDiagnostics,
 } from '../src/server/appServerHookDiagnostics.js'
@@ -1830,6 +1831,27 @@ async function smokeAppServerHookDiagnostics(): Promise<void> {
   assert.equal(failed.available, false)
   assert.equal(failed.error, 'hooks/list failed')
   assert.equal(calls, 3)
+
+  const readerCalls: Array<{ method: string; params: unknown }> = []
+  const reader = createAppServerHookDiagnosticsReader({
+    cache: new AppServerHookDiagnosticsCache({
+      ttlMs: 100,
+      nowMs: () => 10_000,
+      nowIso: () => '2026-07-04T00:00:02.000Z',
+    }),
+    getCwds: () => ['E:/repo-a'],
+    rpc: async (method, params) => {
+      readerCalls.push({ method, params })
+      return { data: [] }
+    },
+  })
+  const readerDiagnostics = await reader()
+  assert.equal(readerDiagnostics.available, true)
+  assert.equal(readerDiagnostics.checkedAtIso, '2026-07-04T00:00:02.000Z')
+  assert.deepEqual(readerCalls, [{
+    method: 'hooks/list',
+    params: { cwds: ['E:/repo-a'] },
+  }])
 }
 
 async function smokeWindowsSandboxReadinessDiagnostics(): Promise<void> {

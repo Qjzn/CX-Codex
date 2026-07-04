@@ -88,7 +88,7 @@ import { AppServerStatusDiagnostics } from './appServerStatusDiagnostics.js'
 import { readAppServerSchemaAuditSummary } from './appServerSchemaAuditSummary.js'
 import {
   AppServerHookDiagnosticsCache,
-  type AppServerHookDiagnostics,
+  createAppServerHookDiagnosticsReader,
 } from './appServerHookDiagnostics.js'
 import { AppServerNotificationListeners } from './appServerNotificationListeners.js'
 import {
@@ -752,9 +752,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     return windowsSandboxReadinessCache.read(() => appServer.rpc('windowsSandbox/readiness', undefined))
   }
 
-  async function readAppServerHookDiagnostics(): Promise<AppServerHookDiagnostics> {
-    return hookDiagnosticsCache.read(() => appServer.rpc('hooks/list', { cwds: [process.cwd()] }))
-  }
+  const readAppServerHookDiagnostics = createAppServerHookDiagnosticsReader({
+    cache: hookDiagnosticsCache,
+    rpc: (method, params) => appServer.rpc(method, params),
+    getCwds: () => [process.cwd()],
+  })
 
   const unsubscribeAppServerNotifications = appServer.onNotification((notification: { method: string; params: unknown }) => {
     syncBridgeNotificationRuntimeState(notification, {
