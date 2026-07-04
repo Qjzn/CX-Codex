@@ -660,6 +660,7 @@ async function smokeAuthMiddleware(): Promise<void> {
 function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('turn/started'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/archived'), true)
+  assert.equal(isKnownAppServerNotificationMethod('skills/changed'), true)
   assert.equal(isKnownAppServerNotificationMethod('item/tool/call/failed'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/realtime/transcript/delta'), false)
 

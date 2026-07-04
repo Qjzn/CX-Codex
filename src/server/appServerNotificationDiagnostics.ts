@@ -31,6 +31,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set([
   'item/updated',
   'server/request',
   'server/request/resolved',
+  'skills/changed',
   'thread/completed',
   'thread/interrupted',
   'thread/name/updated',

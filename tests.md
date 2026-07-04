@@ -3979,3 +3979,37 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建；Vite 仍有既有 large chunk warning。
 - 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
 - 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
+
+---
+
+### Feature: App Server skills/changed 通知兼容
+
+#### Prerequisites
+- 当前仓库包含 `src/composables/useDesktopState.ts` 和 `src/server/appServerNotificationDiagnostics.ts`。
+- 本机已通过官方 Codex manual 或 raw schema audit 确认 `skills/changed` 是 `SkillsChangedNotification` 的 method。
+
+#### Steps
+1. 执行官方 manual helper：`node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs`。
+2. 检查 raw schema audit，确认 `SkillsChangedNotification` 的说明要求客户端把它作为 invalidation signal，并重新运行 `skills/list`。
+3. 执行 `git diff --check`。
+4. 执行 `npm.cmd run verify:server-modules`。
+5. 执行 `npm.cmd run build`。
+6. 执行 `npm.cmd run verify:governance`。
+7. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip`。
+
+#### Expected Results
+- 前端通知流收到 `skills/changed` 后防抖调用 `refreshSkills()`，按当前选中会话 cwd 重新请求 `skills/list`。
+- `skills/changed` 不触发线程消息或线程列表同步，不打断当前对话流。
+- 服务端通知诊断把 `skills/changed` 视为已知官方通知，不再计入 unknown notification。
+- 协议矩阵和 changelog 已记录该兼容行为。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/composables/useDesktopState.ts`、`src/server/appServerNotificationDiagnostics.ts`、`scripts/server-module-smoke.ts`、`docs/app-server-protocol-matrix.zh-CN.md`、`docs/changelog.zh-CN.md` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 官方文档/Schema 核对：`node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` 确认 Codex manual 当前；raw schema audit `output\app-server-schema-audit\20260703-193751` 显示 `skills/changed` 对应 `SkillsChangedNotification`，说明为 invalidation signal，客户端应重新运行 `skills/list`。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 `skills/changed` 已知通知分类。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建；Vite 仍有既有 large chunk warning。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。

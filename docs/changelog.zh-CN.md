@@ -20,6 +20,7 @@
   - 新增 `audit:app-server-schemas:update-summary`，可把最新 raw schema audit 转成脱敏、可提交的 `docs/app-server-schema-audit-summary.json`，避免把本机绝对路径或完整生成目录带入仓库。
   - Release/governance 门禁会校验 schema audit 摘要结构、相对路径、代表项列表和 raw audit 字段黑名单，避免协议差异记录丢失、无法复核或泄漏本机路径。
   - App Server `thread/read` 未知 thread/turn status 会在 health、diagnostics 和诊断中心按来源聚合计数，方便发现官方协议新增状态且不误判为运行态。
+  - App Server `skills/changed` 通知会按官方语义触发前端技能列表防抖刷新，并在通知诊断中作为已知 method 处理。
   - 诊断中心新增 schema audit 摘要卡片，展示审计状态、生成时间、官方文档入口和 TypeScript/JSON schema 差异计数。
   - 诊断中心新增权限请求队列，由服务端脱敏并分类展示 App Server pending permission、approval、elicitation 或 tool request，便于排查任务等待授权的原因。
   - `/codex-api/health`、`/codex-api/diagnostics` 和 `/codex-api/server-requests/pending/diagnostics` 新增 `serverRequestDiagnostics` 快照，包含 pending 总数、按类型计数和脱敏请求列表；原始 `/codex-api/server-requests/pending` 保持给审批交互使用。

@@ -157,9 +157,11 @@ const THREAD_LIST_REFRESH_INTERVAL_MS = 300000
 const THREAD_TOKEN_USAGE_REFRESH_RETRY_MS = 5 * 60 * 1000
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 1500
 const RATE_LIMIT_REFRESH_MIN_INTERVAL_MS = 300000
+const SKILLS_CHANGED_REFRESH_DEBOUNCE_MS = 350
 const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
 const GLOBAL_SERVER_REQUEST_SCOPE = '__global__'
 const THREAD_TOKEN_USAGE_UPDATED_METHOD = 'thread/tokenUsage/updated'
+const SKILLS_CHANGED_METHOD = 'skills/changed'
 const MODEL_FALLBACK_ID = 'gpt-5.2-codex'
 const AUTO_COMMIT_MESSAGE_FALLBACK = 'Auto-commit from Codex rollback chat turn'
 const OPTIMISTIC_USER_MESSAGE_TYPE = 'userMessage.optimistic'
@@ -1226,6 +1228,7 @@ export function useDesktopState() {
   let threadSelectionAbortController: AbortController | null = null
   let foregroundMessageLoadId = 0
   let rateLimitRefreshTimer: number | null = null
+  let skillsChangedRefreshTimer: number | null = null
   let rateLimitRefreshPromise: Promise<void> | null = null
   let lastRateLimitRefreshStartedAtMs = 0
   const resumePromiseByThreadId = new Map<string, Promise<void>>()
@@ -5067,6 +5070,20 @@ export function useDesktopState() {
     }
   }
 
+  function scheduleSkillsRefreshFromNotification(): void {
+    if (typeof window === 'undefined') {
+      void refreshSkills()
+      return
+    }
+    if (skillsChangedRefreshTimer !== null) {
+      window.clearTimeout(skillsChangedRefreshTimer)
+    }
+    skillsChangedRefreshTimer = window.setTimeout(() => {
+      skillsChangedRefreshTimer = null
+      void refreshSkills()
+    }, SKILLS_CHANGED_REFRESH_DEBOUNCE_MS)
+  }
+
   async function refreshComposerPlugins(): Promise<void> {
     isLoadingComposerPlugins.value = true
     try {
@@ -6561,6 +6578,9 @@ export function useDesktopState() {
 
   function processIncomingNotification(notification: RpcNotification): void {
     noteIncomingNotification(notification)
+    if (notification.method === SKILLS_CHANGED_METHOD) {
+      scheduleSkillsRefreshFromNotification()
+    }
     applyRealtimeUpdates(notification)
     queueEventDrivenSync(notification)
   }
@@ -6634,6 +6654,10 @@ export function useDesktopState() {
     if (rateLimitRefreshTimer !== null && typeof window !== 'undefined') {
       window.clearTimeout(rateLimitRefreshTimer)
       rateLimitRefreshTimer = null
+    }
+    if (skillsChangedRefreshTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(skillsChangedRefreshTimer)
+      skillsChangedRefreshTimer = null
     }
     clearVisibilitySyncTimer()
     stopVisibilitySync()
