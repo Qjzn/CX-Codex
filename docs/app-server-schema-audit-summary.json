@@ -1,8 +1,8 @@
 {
-  "generatedAtIso": "2026-07-03T11:37:54.7619235Z",
+  "generatedAtIso": "2026-07-04T06:18:43.6547821Z",
   "officialDocsUrl": "https://developers.openai.com/codex/app-server",
   "auditCommand": "npm.cmd run audit:app-server-schemas",
-  "auditOutput": "output/app-server-schema-audit/20260703-193751",
+  "auditOutput": "output/app-server-schema-audit/20260704-141839",
   "codexCommand": "codex",
   "baseline": {
     "typescript": "documentation/app-server-schemas/typescript",

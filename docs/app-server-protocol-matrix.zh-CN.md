@@ -8,8 +8,8 @@
 
 - 审计命令：`npm.cmd run audit:app-server-schemas`
 - 脱敏摘要更新命令：`npm.cmd run audit:app-server-schemas:update-summary`
-- 审计时间：2026-07-03
-- 审计输出：`output/app-server-schema-audit/20260703-192708`
+- 审计时间：2026-07-04
+- 审计输出：`output/app-server-schema-audit/20260704-141839`
 - 已提交摘要：`docs/app-server-schema-audit-summary.json`
 - TypeScript schema diff：526 files changed，3038 insertions，2189 deletions
 - JSON schema diff：273 files changed，73005 insertions，61600 deletions

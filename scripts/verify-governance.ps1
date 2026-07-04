@@ -287,6 +287,10 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "spawnSync(process.execPath",
   "Release package smoke",
   "release package smoke ok",
+  "scripts/verify-server-modules.mjs",
+  "Initialize-NpmVerificationEnvironment",
+  "output/npm-cache",
+  "npm_config_update_notifier",
   "Resolve-ReleasePackageSmokeDir",
   "Join-Path `$repoRoot `"output`"",
   "release-package-smoke",
@@ -319,6 +323,11 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "dist-cli\index.js",
   "src\server\codexAppServerBridge.ts",
   "src\server\transcriptionRoute.ts"
+)
+
+Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
+  "src', 'server', 'transcriptionProxy.ts'",
+  "src', 'server', 'transcriptionRoute.ts'"
 )
 
 Assert-ContentIncludes "scripts/verify-governance.ps1" @(

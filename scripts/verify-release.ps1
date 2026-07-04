@@ -68,6 +68,23 @@ function Get-NpmCommand {
   return "npm"
 }
 
+function Initialize-NpmVerificationEnvironment {
+  $npmCacheDir = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "output/npm-cache"))
+  $outputRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "output"))
+  $outputPrefix = $outputRoot.TrimEnd([char[]]@(
+    [System.IO.Path]::DirectorySeparatorChar,
+    [System.IO.Path]::AltDirectorySeparatorChar
+  )) + [System.IO.Path]::DirectorySeparatorChar
+  if (-not $npmCacheDir.StartsWith($outputPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "NPM verification cache escaped repository output directory: $npmCacheDir"
+  }
+  New-Item -ItemType Directory -Path $npmCacheDir -Force | Out-Null
+  $env:npm_config_cache = $npmCacheDir
+  $env:npm_config_update_notifier = "false"
+  $env:npm_config_fund = "false"
+  $env:npm_config_audit = "false"
+}
+
 function Get-PowerShellCommand {
   $preferred = $env:CX_CODEX_POWERSHELL_COMMAND
   if (-not [string]::IsNullOrWhiteSpace($preferred)) {
@@ -261,6 +278,7 @@ if (-not $SkipGovernance) {
 }
 
 $npmCommand = Get-NpmCommand
+Initialize-NpmVerificationEnvironment
 
 if (-not $SkipBuild) {
   Invoke-CheckedCommand -Label "Build frontend and CLI" -Command $npmCommand -Arguments @("run", "build")
@@ -269,7 +287,7 @@ if (-not $SkipBuild) {
   Write-Host "==> Build skipped"
 }
 
-Invoke-CheckedCommand -Label "Server module smoke" -Command $npmCommand -Arguments @("run", "verify:server-modules")
+Invoke-CheckedCommand -Label "Server module smoke" -Command "node" -Arguments @((Join-Path $repoRoot "scripts/verify-server-modules.mjs"))
 
 if (-not $SkipCliSmoke) {
   $cliEntry = Join-Path $repoRoot "dist-cli/index.js"

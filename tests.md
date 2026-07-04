@@ -4187,6 +4187,70 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup Notes
 - 如需回滚，撤销 `src/server/appServerNotificationDiagnostics.ts`、`src/components/content/DiagnosticsPanel.vue`、`scripts/server-module-smoke.ts`、`docs/app-server-protocol-matrix.zh-CN.md`、`docs/changelog.zh-CN.md` 和本节测试记录中的相关改动。
 
+---
+
+### Feature: App Server schema audit 摘要刷新
+
+#### Prerequisites
+- 本机可运行 Codex manual helper：`node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs`。
+- 本机可运行 App Server schema audit：`npm.cmd run audit:app-server-schemas`。
+- 当前仓库包含 `docs/app-server-schema-audit-summary.json`、`docs/app-server-protocol-matrix.zh-CN.md` 和 `docs/openai-docs-review.zh-CN.md`。
+
+#### Steps
+1. 执行官方 manual helper，确认 Codex manual 缓存状态和 App Server/Auto-review/Remote connections 等章节入口。
+2. 执行 `npm.cmd run audit:app-server-schemas`，生成新的 `output/app-server-schema-audit/<timestamp>/audit-summary.json`。
+3. 如果 audit 因 schema drift 返回 1，确认输出中包含 “Schema differences found. Exit code 1 means review is required, not that generation failed.”。
+4. 执行 `node scripts\update-app-server-schema-audit-summary.mjs`，刷新提交用脱敏摘要。
+5. 检查 `docs/app-server-schema-audit-summary.json` 只包含相对路径、计数和 representative 列表，不包含本机绝对路径或完整 generated/raw schema 列表。
+6. 更新协议矩阵和 OpenAI 文档审查手册中的审计时间、输出目录或最近审查时间。
+7. 执行 `git diff --check`、`npm.cmd run verify:governance` 和 release gate。
+
+#### Expected Results
+- Codex manual helper 返回可用 manual/outline 路径，并说明本地 manual 是否当前。
+- 新 schema audit 输出目录记录到 `docs/app-server-schema-audit-summary.json` 和协议矩阵。
+- 如果 schema drift 计数未变化，协议矩阵继续保持“不能声明已完全对齐最新 App Server”的结论。
+- `docs/app-server-schema-audit-summary.json` 不提交 raw schema diff，也不包含 `repository` 或 `generated` 绝对路径字段。
+
+#### Rollback/Cleanup Notes
+- 可删除 `output/app-server-schema-audit/` 下的本地生成目录；它不应提交。
+- 如需回滚，撤销 `docs/app-server-schema-audit-summary.json`、`docs/app-server-protocol-matrix.zh-CN.md`、`docs/openai-docs-review.zh-CN.md` 和本节测试记录。
+
+#### Regression Evidence
+- 2026-07-04 官方 manual helper：`node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` 通过，输出 `Manual status: local manual was already current.`，manual outline 仍包含 Codex App Server、Auto-review、Permissions、Remote connections 和 Open Source 等章节。
+- 2026-07-04 Schema audit：`npm.cmd run audit:app-server-schemas` 生成 `output\app-server-schema-audit\20260704-141839\audit-summary.json`；命令因已知 schema drift 返回 1，并输出 “Exit code 1 means review is required, not that generation failed.”。
+- 2026-07-04 摘要更新：`node scripts\update-app-server-schema-audit-summary.mjs` 通过，输出 `Schema audit summary updated: docs\app-server-schema-audit-summary.json`，来源为 `output\app-server-schema-audit\20260704-141839\audit-summary.json`。
+
+---
+
+### Feature: Release gate 直接执行 server module smoke
+
+#### Prerequisites
+- 当前仓库包含 `scripts/verify-release.ps1`、`scripts/verify-server-modules.mjs` 和 `src/server/transcriptionRoute.ts`。
+- 本机可运行 `node`、PowerShell 和已有构建产物 `dist-cli/index.js`。
+
+#### Steps
+1. 执行 `node scripts\verify-server-modules.mjs`。
+2. 确认 server module smoke 编译列表包含 `src/server/transcriptionRoute.ts`。
+3. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SkipPackageSmoke -SchemaAudit skip`。
+4. 确认 release gate 的 `Server module smoke` 阶段直接输出 `Compile server module smoke` 和 `Run server module smoke`，不再通过 `npm run verify:server-modules` 包装。
+5. 确认 release verifier 初始化 `output\npm-cache` 作为 npm verification cache，并关闭 npm update notifier/fund/audit 噪声。
+6. 确认后续 CLI smoke、CLI CJS launcher smoke 和 schema audit skip 正常完成。
+
+#### Expected Results
+- `transcriptionRoute.ts` 被 TypeScript server module smoke 覆盖，避免路由拆分后只被 release zip 清单覆盖、未被编译 smoke 覆盖。
+- Release gate 的 server module smoke 不依赖 npm 全局日志清理状态；即使 npm 包装层因旧日志 EPERM 失败，也不会污染这一阶段结果。
+- Release gate 中仍需调用 npm 的 build/package dry-run 阶段使用仓库内 `output\npm-cache`，不读取或清理全局 `D:\nvm\node_global\_logs`。
+- 快速 release gate 输出 `Release verification completed.`。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `scripts/verify-release.ps1`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1` 和本节测试记录。
+
+#### Regression Evidence
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，输出 `server module smoke ok`，并通过更新后的 include 列表编译 `src/server/transcriptionRoute.ts`。
+- 2026-07-04 Release gate 快速路径：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SkipPackageSmoke -SchemaAudit skip` 通过，输出 `server module smoke ok`、`cli cjs launcher smoke ok` 和 `Release verification completed.`。
+- 2026-07-04 Release package / npm smoke：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `Release artifact checksum verification passed.`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`，未再出现全局 npm 日志 EPERM。
+- 2026-07-04 完整 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SchemaAudit skip` 通过，包含 `vue-tsc --noEmit`、Vite build、`tsup` CLI 构建、server module smoke、CLI help smoke、CLI CJS launcher smoke、Release package smoke、artifact checksum smoke 和 NPM package smoke；Vite 仍有既有 large chunk warning。
+
 #### Regression Evidence
 - 2026-07-04 官方文档/Schema 核对：Codex manual helper 返回 `local manual was already current`；manual 的 Auto-review 章节确认 auto-review 只替换审批 reviewer，不扩大 sandbox、network 或 filesystem 权限；raw schema audit `output\app-server-schema-audit\20260703-193751` 显示 `item/autoApprovalReview/started` 和 `item/autoApprovalReview/completed` 为官方 notification，`GuardianApprovalReview` 与对应 notification payload 标注 `[UNSTABLE]`。
 - 2026-07-04 静态验证：`git diff --check` 通过。
