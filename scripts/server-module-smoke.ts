@@ -237,6 +237,7 @@ import {
 import { handleRuntimeStateRoutes } from '../src/server/runtimeStateRoutes.js'
 import type { RuntimeRequestRecord } from '../src/server/runtimeStore.js'
 import type { RuntimeEventRecord } from '../src/server/runtimeStore.js'
+import { handleRpcProxyRoute, type RpcProxyRouteDependencies } from '../src/server/rpcProxyRoute.js'
 import {
   parseRuntimeInterruptPayload,
   parseRuntimeSendPayload,
@@ -360,6 +361,7 @@ try {
   await smokeThreadTitleCache()
   await smokeThreadSearchIndex()
   await smokeThreadRoutes()
+  await smokeRpcProxyRoute()
   await smokeStatusRoutes()
   await smokeWorkspaceRootsState()
   await smokeWorkspaceMetaRoutes()
@@ -3829,6 +3831,184 @@ async function smokeThreadRoutes(): Promise<void> {
     { method: 'GET' } as never,
     createRouteTestResponse().response as never,
     new URL('http://127.0.0.1/codex-api/thread-search'),
+    dependencies,
+  ), false)
+}
+
+async function smokeRpcProxyRoute(): Promise<void> {
+  const readTurns = Array.from({ length: 11 }, (_, index) => ({ id: `turn-${String(index + 1)}` }))
+  const bodies: unknown[] = [
+    null,
+    {
+      method: 'turn/start',
+      params: {
+        threadId: 'thread-plan',
+        turnId: 'turn-initial',
+        collaborationMode: 'plan',
+        input: [{ type: 'text', text: 'Draft a plan' }],
+      },
+    },
+    {
+      method: 'turn/interrupt',
+      params: {
+        threadId: 'thread-stop',
+        turnId: 'turn-stop',
+      },
+    },
+    {
+      method: 'thread/resume',
+      params: {
+        threadId: 'thread-resume',
+      },
+    },
+    {
+      method: 'thread/list',
+      params: {
+        cursor: null,
+      },
+    },
+    {
+      method: 'thread/read',
+      params: {
+        threadId: 'thread-read',
+        includeTurns: true,
+      },
+    },
+  ]
+  const rpcCalls: Array<{ method: string; params: unknown }> = []
+  const runtimeMarks: Array<{ action: string; threadId: string; turnId?: string }> = []
+  const persistedThreads: string[] = []
+  const planMarks: Array<{ action: string; threadId: string; turnId?: string }> = []
+  const deletedCachedThreadReads: string[] = []
+  const rememberedCachedThreadReads: Array<{ threadId: string; threadRead: unknown }> = []
+  const augmentCalls: Array<{ params: unknown; result: unknown }> = []
+  const searchClears: string[] = []
+  let turnStartAttempts = 0
+
+  const dependencies: RpcProxyRouteDependencies = {
+    readJsonBody: async () => bodies.shift(),
+    rpc: async (method, params) => {
+      rpcCalls.push({ method, params })
+      if (method === 'turn/start') {
+        turnStartAttempts += 1
+        if (turnStartAttempts === 1) throw new Error('unknown field mode')
+        return { turnId: 'turn-started' }
+      }
+      if (method === 'turn/interrupt') throw new Error('no active turn')
+      if (method === 'thread/resume') throw new Error('thread is not materialized yet')
+      if (method === 'thread/list') return { data: [{ id: 'thread-a' }] }
+      if (method === 'thread/read') return { thread: { id: 'thread-read', turns: readTurns }, other: true }
+      throw new Error(`unexpected rpc method: ${method}`)
+    },
+    runtimeStateStore: {
+      markStarting: (threadId, turnId = '') => runtimeMarks.push({ action: 'starting', threadId, turnId }),
+      markStopping: (threadId) => runtimeMarks.push({ action: 'stopping', threadId }),
+      markQueued: (threadId) => runtimeMarks.push({ action: 'queued', threadId }),
+      markRunning: (threadId, turnId = '') => runtimeMarks.push({ action: 'running', threadId, turnId }),
+      markInterrupted: (threadId) => runtimeMarks.push({ action: 'interrupted', threadId }),
+    },
+    persistRuntimeSnapshot: (threadId) => {
+      persistedThreads.push(threadId)
+    },
+    markPlanModeTurn: (threadId, turnId = '') => planMarks.push({ action: 'mark', threadId, turnId }),
+    clearPlanModeTurn: (threadId, turnId = '') => planMarks.push({ action: 'clear', threadId, turnId }),
+    deleteCachedThreadRead: (threadId) => deletedCachedThreadReads.push(threadId),
+    rememberCachedThreadRead: (threadId, threadRead) => rememberedCachedThreadReads.push({ threadId, threadRead }),
+    augmentThreadListRpcResult: async (params, result) => {
+      augmentCalls.push({ params, result })
+      return { augmented: true, result }
+    },
+    clearThreadSearchIndex: () => searchClears.push('clear'),
+  }
+
+  const invalidBody = createRouteTestResponse()
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'POST' } as never,
+    invalidBody.response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
+    dependencies,
+  ), true)
+  assert.equal(invalidBody.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(invalidBody.body), { error: 'Invalid body: expected { method, params? }' })
+
+  const planStart = createRouteTestResponse()
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'POST' } as never,
+    planStart.response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(planStart.body), { result: { turnId: 'turn-started' } })
+  assert.equal(rpcCalls[0].method, 'turn/start')
+  assert.equal(readStringProperty(rpcCalls[0].params, 'mode'), 'plan')
+  assert.equal(rpcCalls[1].method, 'turn/start')
+  assert.equal(readStringProperty(rpcCalls[1].params, 'mode'), '')
+  assert.equal(readStringProperty(rpcCalls[1].params, 'collaborationMode'), '')
+  assert.deepEqual(runtimeMarks.slice(0, 2), [
+    { action: 'starting', threadId: 'thread-plan', turnId: 'turn-initial' },
+    { action: 'running', threadId: 'thread-plan', turnId: 'turn-started' },
+  ])
+  assert.deepEqual(planMarks.slice(0, 2), [
+    { action: 'mark', threadId: 'thread-plan', turnId: 'turn-initial' },
+    { action: 'mark', threadId: 'thread-plan', turnId: 'turn-started' },
+  ])
+  assert.deepEqual(persistedThreads.slice(0, 2), ['thread-plan', 'thread-plan'])
+  assert.deepEqual(deletedCachedThreadReads, ['thread-plan'])
+
+  const interruptSettled = createRouteTestResponse()
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'POST' } as never,
+    interruptSettled.response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(interruptSettled.body), {
+    result: null,
+    warning: 'turn/interrupt did not find an active turn; runtime state was settled locally',
+  })
+  assert.deepEqual(runtimeMarks.slice(2, 4), [
+    { action: 'stopping', threadId: 'thread-stop' },
+    { action: 'interrupted', threadId: 'thread-stop' },
+  ])
+  assert.deepEqual(planMarks[2], { action: 'clear', threadId: 'thread-stop', turnId: 'turn-stop' })
+
+  const resumeMaterializing = createRouteTestResponse()
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'POST' } as never,
+    resumeMaterializing.response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(resumeMaterializing.body), { result: null })
+  assert.deepEqual(runtimeMarks[4], { action: 'queued', threadId: 'thread-resume' })
+
+  const threadList = createRouteTestResponse()
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'POST' } as never,
+    threadList.response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
+    dependencies,
+  ), true)
+  assert.deepEqual(augmentCalls, [{ params: { cursor: null }, result: { data: [{ id: 'thread-a' }] } }])
+  assert.deepEqual(JSON.parse(threadList.body), { result: { augmented: true, result: { data: [{ id: 'thread-a' }] } } })
+
+  const threadRead = createRouteTestResponse()
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'POST' } as never,
+    threadRead.response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
+    dependencies,
+  ), true)
+  const threadReadResult = JSON.parse(threadRead.body) as { result: { thread: { turns: Array<{ id: string }> }; other: boolean } }
+  assert.equal(threadReadResult.result.thread.turns.length, 10)
+  assert.equal(threadReadResult.result.thread.turns[0].id, 'turn-2')
+  assert.deepEqual(rememberedCachedThreadReads, [{ threadId: 'thread-read', threadRead: threadReadResult.result }])
+
+  assert.deepEqual(searchClears, [])
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'GET' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
     dependencies,
   ), false)
 }

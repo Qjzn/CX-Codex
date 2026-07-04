@@ -25,7 +25,6 @@ import {
   normalizePlanModeTurnStartParams,
   parseRuntimeInterruptPayload,
   parseRuntimeSendPayload,
-  readCollaborationModeFromPayload,
   shouldRetryPlanModeWithoutNativeMode,
 } from './runtimePayload.js'
 import {
@@ -53,6 +52,7 @@ import { handleServerRequestRoutes } from './serverRequestRoutes.js'
 import { handleFileUploadRoute } from './fileUploadRoute.js'
 import { handleRuntimeActionRoutes } from './runtimeActionRoutes.js'
 import { handleWorktreeRoutes } from './worktreeRoutes.js'
+import { handleRpcProxyRoute } from './rpcProxyRoute.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   AppServerRpcCache,
@@ -60,7 +60,6 @@ import {
   shouldInvalidateThreadListCacheForNotification,
   shouldInvalidateThreadListCacheForRpc,
   shouldInvalidateThreadReadCacheForNotification,
-  shouldInvalidateThreadReadCacheForRpc,
 } from './appServerRpcCache.js'
 import {
   AppServerRpcDiagnostics,
@@ -170,11 +169,6 @@ type JsonRpcResponse = {
     message: string
   }
   method?: string
-  params?: unknown
-}
-
-type RpcProxyRequest = {
-  method: string
   params?: unknown
 }
 
@@ -1373,98 +1367,20 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'POST' && url.pathname === '/codex-api/rpc') {
-        const payload = await readJsonBody(req)
-        const body = asRecord(payload) as RpcProxyRequest | null
-
-        if (!body || typeof body.method !== 'string' || body.method.length === 0) {
-          setJson(res, 400, { error: 'Invalid body: expected { method, params? }' })
-          return
-        }
-
-        const collaborationMode = body.method === 'turn/start'
-          ? readCollaborationModeFromPayload(body.params)
-          : 'execute'
-        const rpcParams = body.method === 'turn/start'
-          ? normalizePlanModeTurnStartParams(body.params, { includeNativeMode: true })
-          : body.params
-        const rpcThreadId = readThreadIdFromPayload(rpcParams)
-        if (rpcThreadId && shouldInvalidateThreadReadCacheForRpc(body.method)) {
-          cachedThreadReadsByThreadId.delete(rpcThreadId)
-        }
-        if (body.method === 'turn/start' && rpcThreadId) {
-          const initialTurnId = readTurnIdFromPayload(rpcParams)
-          runtimeStateStore.markStarting(rpcThreadId, initialTurnId)
-          persistRuntimeSnapshot(rpcThreadId)
-          if (collaborationMode === 'plan') {
-            appServer.markPlanModeTurn(rpcThreadId, initialTurnId)
-          }
-        } else if (body.method === 'turn/interrupt' && rpcThreadId) {
-          runtimeStateStore.markStopping(rpcThreadId)
-          persistRuntimeSnapshot(rpcThreadId)
-        } else if (body.method === 'thread/resume' && rpcThreadId) {
-          runtimeStateStore.markQueued(rpcThreadId)
-          persistRuntimeSnapshot(rpcThreadId)
-        }
-
-        let rpcResult: unknown
-        try {
-          try {
-            rpcResult = await appServer.rpc(body.method, rpcParams ?? null)
-          } catch (error) {
-            if (body.method !== 'turn/start' || collaborationMode !== 'plan' || !shouldRetryPlanModeWithoutNativeMode(error)) {
-              throw error
-            }
-            const fallbackParams = normalizePlanModeTurnStartParams(body.params, { includeNativeMode: false })
-            rpcResult = await appServer.rpc(body.method, fallbackParams ?? null)
-          }
-          if (body.method === 'turn/start' && rpcThreadId) {
-            const startedTurnId = readTurnIdFromPayload(rpcResult)
-            runtimeStateStore.markRunning(rpcThreadId, startedTurnId)
-            persistRuntimeSnapshot(rpcThreadId)
-            if (collaborationMode === 'plan' && startedTurnId) {
-              appServer.markPlanModeTurn(rpcThreadId, startedTurnId)
-            }
-          } else if (body.method === 'turn/interrupt' && rpcThreadId) {
-            appServer.clearPlanModeTurn(rpcThreadId, readTurnIdFromPayload(rpcParams))
-          }
-        } catch (error) {
-          if (body.method === 'turn/interrupt' && rpcThreadId && isInterruptSettledError(error)) {
-            appServer.clearPlanModeTurn(rpcThreadId, readTurnIdFromPayload(rpcParams))
-            runtimeStateStore.markInterrupted(rpcThreadId)
-            persistRuntimeSnapshot(rpcThreadId)
-            setJson(res, 200, {
-              result: null,
-              warning: isRpcTimeoutError(error)
-                ? 'turn/interrupt timed out; runtime state was settled locally'
-                : 'turn/interrupt did not find an active turn; runtime state was settled locally',
-            })
-            return
-          }
-          if (
-            (body.method === 'thread/resume' || body.method === 'thread/archive')
-            && isThreadMaterializingError(error)
-          ) {
-            setJson(res, 200, { result: null })
-            return
-          }
-          throw error
-        }
-        const enrichedRpcResult = body.method === 'thread/list'
-          ? await augmentThreadListRpcResult(appServer, rpcParams, rpcResult)
-          : rpcResult
-        const result = trimThreadTurnsInRpcResult(body.method, enrichedRpcResult)
-        if (shouldInvalidateThreadListCacheForRpc(body.method)) {
-          threadSearchIndexStore.clear()
-        }
-        if (
-          body.method === 'thread/read' &&
-          rpcThreadId &&
-          asRecord(rpcParams)?.includeTurns === true
-        ) {
-          rememberCachedThreadRead(rpcThreadId, result)
-        }
-        setJson(res, 200, { result })
+      if (await handleRpcProxyRoute(req, res, url, {
+        readJsonBody,
+        rpc: (method, params) => appServer.rpc(method, params),
+        runtimeStateStore,
+        persistRuntimeSnapshot,
+        markPlanModeTurn: (threadId, turnId = '') => appServer.markPlanModeTurn(threadId, turnId),
+        clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
+        deleteCachedThreadRead: (threadId) => cachedThreadReadsByThreadId.delete(threadId),
+        rememberCachedThreadRead: (threadId, threadRead) => {
+          rememberCachedThreadRead(threadId, threadRead)
+        },
+        augmentThreadListRpcResult: (params, result) => augmentThreadListRpcResult(appServer, params, result),
+        clearThreadSearchIndex: () => threadSearchIndexStore.clear(),
+      })) {
         return
       }
 

@@ -4418,6 +4418,41 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: RPC proxy route 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/rpcProxyRoute.ts`、`src/server/codexAppServerBridge.ts`、`src/server/runtimePayload.ts`、`src/server/appServerRpcCache.ts`、`src/server/appServerRpcErrors.ts`、`src/server/appServerRpcResult.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1` 和 `scripts/verify-release.ps1`。
+- 本机可运行 server module smoke、governance gate 和 release gate；route smoke 使用注入依赖模拟 App Server RPC、runtime state store、thread cache 和搜索索引清理。
+
+#### Steps
+1. 打开 `src/server/codexAppServerBridge.ts`，确认 `/codex-api/rpc` 统一委托 `handleRpcProxyRoute(...)`，bridge 只注入 appServer/runtime/cache/search 副作用。
+2. 打开 `src/server/rpcProxyRoute.ts`，确认 route 模块保留 invalid body 400、plan-mode native/fallback、runtime mark/persist、interrupt settled local settle、thread materializing 容错、thread/list augment、thread/read turns trimming/cache 写入行为。
+3. 执行 `git diff --check`。
+4. 执行 `node scripts\verify-server-modules.mjs`。
+5. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+7. 确认 release package smoke 必检 `src\server\rpcProxyRoute.ts`。
+
+#### Expected Results
+- `POST /codex-api/rpc` body 不是对象或缺少非空 `method` 时返回 400 `{ error: "Invalid body: expected { method, params? }" }`。
+- `turn/start` plan mode 先带 `mode=plan` 调用；遇到 native mode 不兼容错误时，删除 native mode 并用 plan prompt fallback 重试。
+- `turn/start`、`turn/interrupt`、`thread/resume` 继续标记 runtime state 并持久化 snapshot；interrupt settled 错误继续返回 200、本地置为 interrupted。
+- `thread/resume` / `thread/archive` 的 thread materializing 错误继续返回 `{ result: null }`，避免首条消息前读取失败打断 UI。
+- `thread/list` 继续经过 supplemental augment；`thread/read includeTurns=true` 继续裁剪 turns 并写入 thread read cache。
+- 未匹配 method/path 返回 `false`，不吞掉后续 route。
+- `rpcProxyRoute.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/rpcProxyRoute.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1`、`scripts/verify-release.ps1` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，输出 `server module smoke ok`，覆盖 invalid body 400、plan mode fallback、interrupt settled local settle、thread materializing 容错、thread/list augment、thread/read trim/cache 和未匹配 route 返回 `false`。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\rpcProxyRoute.ts`。
+
+---
+
 ### Feature: Worktree routes 模块化
 
 #### Prerequisites
