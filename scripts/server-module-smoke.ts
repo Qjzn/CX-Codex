@@ -81,6 +81,7 @@ import {
   isRpcTimeoutError,
   isThreadMaterializingError,
 } from '../src/server/appServerRpcErrors.js'
+import { settleAppServerRpcResponse } from '../src/server/appServerRpcResponse.js'
 import {
   createAppServerRpcErrorResponse,
   createAppServerRpcNotification,
@@ -374,6 +375,7 @@ try {
   await smokeAppServerRpcCache()
   smokeAppServerRpcDiagnostics()
   smokeAppServerRpcErrors()
+  smokeAppServerRpcResponse()
   await smokeAppServerRpcQueue()
   smokeAppServerLineBuffer()
   smokeAppServerStderrLogger()
@@ -2704,6 +2706,81 @@ function smokeAppServerRpcErrors(): void {
   assert.equal(isInterruptSettledError(new Error('already completed')), true)
   assert.equal(isInterruptSettledError(new Error('cannot interrupt')), true)
   assert.equal(isInterruptSettledError(timeout), false)
+}
+
+function smokeAppServerRpcResponse(): void {
+  const store = new AppServerPendingRpcStore()
+  const resolved: unknown[] = []
+  const rejected: unknown[] = []
+  const slowRpcLogs: Array<{ method: string; startedAtMs: number; params: unknown; outcome: string }> = []
+  const dependencies = {
+    finalizePendingRpc: (id: number) => store.finalize(id),
+    logSlowRpc: (method: string, startedAtMs: number, params: unknown, details: { outcome: 'error' | 'success' }) => {
+      slowRpcLogs.push({ method, startedAtMs, params, outcome: details.outcome })
+    },
+  }
+
+  const successTimeout = setTimeout(() => {}, 10_000)
+  successTimeout.unref?.()
+  store.record(1, {
+    resolve: (value) => resolved.push(value),
+    reject: (error) => rejected.push(error),
+    method: 'thread/list',
+    params: { limit: 1 },
+    startedAtMs: 100,
+    timeoutId: successTimeout,
+  })
+
+  assert.equal(settleAppServerRpcResponse({
+    kind: 'response',
+    id: 1,
+    result: { ok: true },
+  }, dependencies), true)
+  assert.deepEqual(resolved, [{ ok: true }] as unknown[])
+  assert.deepEqual(rejected, [] as unknown[])
+  assert.deepEqual(slowRpcLogs, [{
+    method: 'thread/list',
+    startedAtMs: 100,
+    params: { limit: 1 },
+    outcome: 'success',
+  }])
+  assert.equal(store.count, 0)
+
+  const errorTimeout = setTimeout(() => {}, 10_000)
+  errorTimeout.unref?.()
+  store.record(2, {
+    resolve: (value) => resolved.push(value),
+    reject: (error) => rejected.push(error),
+    method: 'model/list',
+    params: {},
+    startedAtMs: 200,
+    timeoutId: errorTimeout,
+  })
+
+  assert.equal(settleAppServerRpcResponse({
+    kind: 'response',
+    id: 2,
+    error: { code: 123, message: 'RPC failed' },
+  }, dependencies), true)
+  assert.equal(rejected.length, 1)
+  const rejectedError = rejected[0]
+  assert.equal((rejectedError as object) instanceof AppServerJsonRpcError, true)
+  assert.equal((rejectedError as AppServerJsonRpcError).code, 123)
+  assert.equal((rejectedError as AppServerJsonRpcError).message, 'RPC failed')
+  assert.deepEqual(slowRpcLogs[1], {
+    method: 'model/list',
+    startedAtMs: 200,
+    params: {},
+    outcome: 'error',
+  })
+  assert.equal(store.count, 0)
+
+  assert.equal(settleAppServerRpcResponse({
+    kind: 'response',
+    id: 3,
+    result: { ignored: true },
+  }, dependencies), false)
+  assert.equal(slowRpcLogs.length, 2)
 }
 
 async function smokeAppServerRpcQueue(): Promise<void> {

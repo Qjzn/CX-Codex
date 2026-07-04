@@ -81,9 +81,9 @@ import {
 import { readAppServerThreadRuntimeSnapshot } from './appServerThreadRuntimeSnapshot.js'
 import { createLocalRuntimeSnapshot } from './appServerRuntimeSnapshotRecovery.js'
 import {
-  createAppServerJsonRpcError,
   createRpcTimeoutError,
 } from './appServerRpcErrors.js'
+import { settleAppServerRpcResponse } from './appServerRpcResponse.js'
 import { AppServerNotificationDiagnostics } from './appServerNotificationDiagnostics.js'
 import { AppServerStatusDiagnostics } from './appServerStatusDiagnostics.js'
 import { readAppServerSchemaAuditSummary } from './appServerSchemaAuditSummary.js'
@@ -378,17 +378,12 @@ class AppServerProcess {
     if (!message) return
 
     if (message.kind === 'response') {
-      const pendingRequest = this.pending.finalize(message.id)
-      if (!pendingRequest) return
-
-      this.rpcDiagnostics.logSlowRpc(pendingRequest.method, pendingRequest.startedAtMs, pendingRequest.params, {
-        outcome: message.error ? 'error' : 'success',
+      settleAppServerRpcResponse(message, {
+        finalizePendingRpc: (id) => this.pending.finalize(id),
+        logSlowRpc: (method, startedAtMs, params, details) => {
+          this.rpcDiagnostics.logSlowRpc(method, startedAtMs, params, details)
+        },
       })
-      if (message.error) {
-        pendingRequest.reject(createAppServerJsonRpcError(message.error))
-      } else {
-        pendingRequest.resolve(message.result)
-      }
       return
     }
 
