@@ -14,6 +14,38 @@ export type RuntimeSnapshotRecoveryOptions = {
   staleMs?: number
 }
 
+export type LocalRuntimeSnapshotOptions = RuntimeSnapshotRecoveryOptions & {
+  persistedSnapshot: unknown
+  createCurrentSnapshot: (overlay: {
+    pendingServerRequests: ThreadRuntimeSnapshot['pendingServerRequests']
+    tokenUsage: ThreadRuntimeSnapshot['tokenUsage']
+  }) => ThreadRuntimeSnapshot
+  persistCurrentSnapshot: (snapshot: ThreadRuntimeSnapshot) => ThreadRuntimeSnapshot
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+export function createLocalRuntimeSnapshot(options: LocalRuntimeSnapshotOptions): ThreadRuntimeSnapshot {
+  const persistedSnapshot = asRecord(options.persistedSnapshot) as ThreadRuntimeSnapshot | null
+  if (persistedSnapshot) {
+    return createLocalRuntimeSnapshotFromPersisted(persistedSnapshot, {
+      pendingServerRequests: options.pendingServerRequests,
+      tokenUsage: options.tokenUsage,
+      appServerStartedAtMs: options.appServerStartedAtMs,
+      nowMs: options.nowMs,
+      staleMs: options.staleMs,
+    })
+  }
+  return options.persistCurrentSnapshot(options.createCurrentSnapshot({
+    pendingServerRequests: options.pendingServerRequests,
+    tokenUsage: options.tokenUsage,
+  }))
+}
+
 export function createLocalRuntimeSnapshotFromPersisted(
   persistedSnapshot: ThreadRuntimeSnapshot,
   options: RuntimeSnapshotRecoveryOptions,

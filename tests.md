@@ -2318,6 +2318,35 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Local runtime snapshot 恢复分支模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRuntimeSnapshotRecovery.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 persisted runtime snapshot 恢复和无 persisted snapshot 时的当前 snapshot 创建/持久化回退分支。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:server-modules`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+4. 代码审查确认 `src/server/codexAppServerBridge.ts` 的 `readLocalRuntimeSnapshot()` 调用 `createLocalRuntimeSnapshot()`。
+5. 代码审查确认有 persisted snapshot 时不会创建/持久化当前 snapshot，无 persisted snapshot 时仍通过 `runtimeStateStore.snapshot()` 创建并通过 `persistRuntimeSnapshot()` 持久化。
+
+#### Expected Results
+- 本地 runtime snapshot 的 persisted 恢复和 current fallback 分支集中在 `appServerRuntimeSnapshotRecovery.ts`。
+- persisted snapshot 仍经过 `createLocalRuntimeSnapshotFromPersisted()` 处理 App Server 重启和 stale 降级逻辑。
+- 无 persisted snapshot 时仍返回已持久化的当前 runtime snapshot。
+- release gate 通过，证明拆分后的 ESM import、server helper 和 CLI/package 构建链路正常。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `createLocalRuntimeSnapshot()` 和对应 smoke 断言，并把 persisted/current 分支恢复到 `src/server/codexAppServerBridge.ts` 的 `readLocalRuntimeSnapshot()` 内。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`。
+- 2026-07-04 Release gate 验证：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 governance docs check、构建、server module smoke、CLI smoke、CJS launcher smoke 和 release package smoke。
+
+---
+
 ### Feature: Runtime reconcile scheduler 规则模块化
 
 #### Prerequisites

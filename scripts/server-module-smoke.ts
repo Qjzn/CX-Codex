@@ -232,7 +232,10 @@ import {
   selectRuntimeRequestsForReconcile,
   updateRuntimeRequestsFromSnapshot,
 } from '../src/server/appServerRuntimeRequestReconciliation.js'
-import { createLocalRuntimeSnapshotFromPersisted } from '../src/server/appServerRuntimeSnapshotRecovery.js'
+import {
+  createLocalRuntimeSnapshot,
+  createLocalRuntimeSnapshotFromPersisted,
+} from '../src/server/appServerRuntimeSnapshotRecovery.js'
 import {
   normalizeWorkspaceRootsState,
   readWorkspaceRootsState,
@@ -2797,6 +2800,51 @@ function smokeAppServerRuntimeSnapshotRecovery(): void {
   assert.equal(waitingPermission.executionState, 'running')
   assert.equal(waitingPermission.stale, false)
   assert.equal(waitingPermission.pendingServerRequests.length, 1)
+
+  const localFromPersisted = createLocalRuntimeSnapshot({
+    persistedSnapshot: activeSnapshot,
+    pendingServerRequests: [],
+    tokenUsage: { total: 3 },
+    appServerStartedAtMs: Date.parse('2025-12-31T23:59:59.000Z'),
+    nowMs: Date.parse('2026-01-01T00:00:30.000Z'),
+    staleMs: 90_000,
+    createCurrentSnapshot: () => {
+      throw new Error('current snapshot should not be created when persisted snapshot exists')
+    },
+    persistCurrentSnapshot: () => {
+      throw new Error('current snapshot should not be persisted when persisted snapshot exists')
+    },
+  })
+  assert.equal(localFromPersisted.executionState, 'running')
+  assert.deepEqual(localFromPersisted.tokenUsage, { total: 3 })
+
+  const currentSnapshot = createThreadRuntimeSnapshot({
+    executionState: 'completed',
+    pendingServerRequests: [],
+    tokenUsage: { total: 4 },
+  })
+  const createdOverlays: unknown[] = []
+  const persistedSnapshots: unknown[] = []
+  const localFromCurrent = createLocalRuntimeSnapshot({
+    persistedSnapshot: null,
+    pendingServerRequests: [{ id: 2, method: 'server/request', params: { threadId: 'thread-b' }, receivedAtIso: '2026-01-01T00:00:02.000Z' }],
+    tokenUsage: { total: 4 },
+    appServerStartedAtMs: Date.parse('2025-12-31T23:59:59.000Z'),
+    createCurrentSnapshot: (overlay) => {
+      createdOverlays.push(overlay)
+      return currentSnapshot
+    },
+    persistCurrentSnapshot: (snapshot) => {
+      persistedSnapshots.push(snapshot)
+      return snapshot
+    },
+  })
+  assert.equal(localFromCurrent, currentSnapshot)
+  assert.deepEqual(createdOverlays, [{
+    pendingServerRequests: [{ id: 2, method: 'server/request', params: { threadId: 'thread-b' }, receivedAtIso: '2026-01-01T00:00:02.000Z' }],
+    tokenUsage: { total: 4 },
+  }])
+  assert.deepEqual(persistedSnapshots, [currentSnapshot])
 }
 
 function smokeAppServerNotificationReplay(): void {

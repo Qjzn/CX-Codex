@@ -102,7 +102,7 @@ import {
   isCachedThreadReadStaleForRuntime,
   type CachedThreadRead,
 } from './appServerThreadReadCache.js'
-import { createLocalRuntimeSnapshotFromPersisted } from './appServerRuntimeSnapshotRecovery.js'
+import { createLocalRuntimeSnapshot } from './appServerRuntimeSnapshotRecovery.js'
 import {
   createAppServerJsonRpcError,
   createRpcTimeoutError,
@@ -1158,21 +1158,16 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
   function readLocalRuntimeSnapshot(threadId: string): ThreadRuntimeSnapshot {
     const normalizedThreadId = threadId.trim()
-    const persisted = runtimeStore.getSnapshot(normalizedThreadId)
-    const persistedSnapshot = asRecord(persisted?.snapshot) as ThreadRuntimeSnapshot | null
     const pendingServerRequests = appServer.listPendingServerRequestsForThread(normalizedThreadId)
     const tokenUsage = appServer.getThreadTokenUsage(normalizedThreadId)
-    if (persistedSnapshot) {
-      return createLocalRuntimeSnapshotFromPersisted(persistedSnapshot, {
-        pendingServerRequests,
-        tokenUsage,
-        appServerStartedAtMs: appServer.getStartedAtMs(),
-      })
-    }
-    return persistRuntimeSnapshot(normalizedThreadId, runtimeStateStore.snapshot(normalizedThreadId, {
+    return createLocalRuntimeSnapshot({
+      persistedSnapshot: runtimeStore.getSnapshot(normalizedThreadId)?.snapshot,
       pendingServerRequests,
       tokenUsage,
-    }))
+      appServerStartedAtMs: appServer.getStartedAtMs(),
+      createCurrentSnapshot: (overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
+      persistCurrentSnapshot: (snapshot) => persistRuntimeSnapshot(normalizedThreadId, snapshot),
+    })
   }
 
   async function reconcileRuntimeThread(threadId: string): Promise<ThreadRuntimeSnapshot> {
