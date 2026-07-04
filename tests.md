@@ -4221,6 +4221,38 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Project root routes 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/projectRootRoutes.ts`、`src/server/projectRoots.ts`、`src/server/workspaceRootsState.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1` 和 `scripts/verify-release.ps1`。
+- `dist/` 与 `dist-cli/` 已存在，或可用完整 release gate 重新构建。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+4. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+5. 检查 release package smoke 输出，确认 zip 必检清单包含 `src\server\projectRootRoutes.ts`。
+
+#### Expected Results
+- `POST /codex-api/project-root` 继续读取当前 workspace roots state，调用 `resolveProjectRoot`，写回新的 workspace roots state，并返回 `{ data: { path } }`。
+- `GET /codex-api/project-root-suggestion` 继续返回 `suggestProjectRoot` 的项目名和路径建议。
+- `ProjectRootError` 继续映射为其原始 HTTP status 和错误消息，未知错误继续交给 bridge 顶层错误处理。
+- `codexAppServerBridge.ts` 不再内联 project root route 分支，而是委托 `handleProjectRootRoutes`。
+- Server module smoke 覆盖 project root 创建、缺失 path、project root suggestion、缺失 basePath 和未命中方法。
+- Release package smoke 会在 zip 缺少 `src\server\projectRootRoutes.ts` 时失败。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/projectRootRoutes.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1`、`scripts/verify-release.ps1` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，输出 `server module smoke ok`，覆盖 project root route 委托、workspace state 写回和 `ProjectRootError` status 映射。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`。
+
+---
+
 ### Feature: Local state routes 模块化
 
 #### Prerequisites

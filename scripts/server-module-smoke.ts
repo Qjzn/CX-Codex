@@ -278,6 +278,7 @@ import {
   resolveProjectRoot,
   suggestProjectRoot,
 } from '../src/server/projectRoots.js'
+import { handleProjectRootRoutes } from '../src/server/projectRootRoutes.js'
 import {
   getOpenAiTranscribeApiKey,
   getOpenAiTranscribeModel,
@@ -347,6 +348,7 @@ try {
   await smokeWorkspaceRootsState()
   await smokeWorkspaceMetaRoutes()
   await smokeProjectRoots()
+  await smokeProjectRootRoutes()
   smokeRuntimePayloadParsing()
   await smokeDiagnosticsRoutes()
   smokeAppServerNotificationReplay()
@@ -3422,6 +3424,138 @@ async function smokeProjectRoots(): Promise<void> {
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+}
+
+async function smokeProjectRootRoutes(): Promise<void> {
+  const bodies: unknown[] = [
+    { path: ' C:\\work\\new ', createIfMissing: true, label: 'New Project' },
+    { path: ' ' },
+  ]
+  const readPaths: string[] = []
+  const writeCalls: Array<{ path: string; state: unknown }> = []
+  const resolveCalls: Array<{
+    path: string
+    createIfMissing?: boolean
+    label?: string
+    existingState: unknown
+  }> = []
+  const suggestCalls: string[] = []
+  const nextWorkspaceState = {
+    order: ['C:\\work\\new', 'C:\\work\\old'],
+    labels: { 'C:\\work\\new': 'New Project' },
+    active: ['C:\\work\\new', 'C:\\work\\old'],
+  }
+  const dependencies = {
+    readJsonBody: async () => bodies.shift(),
+    getCodexGlobalStatePath: () => 'global-state.json',
+    readWorkspaceRootsState: async (path: string) => {
+      readPaths.push(path)
+      return {
+        order: ['C:\\work\\old'],
+        labels: {},
+        active: ['C:\\work\\old'],
+      }
+    },
+    writeWorkspaceRootsState: async (path: string, state: unknown) => {
+      writeCalls.push({ path, state })
+    },
+    resolveProjectRoot: async (path: string, options: {
+      createIfMissing?: boolean
+      label?: string
+      existingState: {
+        order: string[]
+        labels: Record<string, string>
+        active: string[]
+      }
+    }) => {
+      resolveCalls.push({
+        path,
+        createIfMissing: options.createIfMissing,
+        label: options.label,
+        existingState: options.existingState,
+      })
+      if (!path) throw new ProjectRootError('Missing path', 400)
+      return {
+        path: 'C:\\work\\new',
+        workspaceState: nextWorkspaceState,
+      }
+    },
+    suggestProjectRoot: async (basePath: string) => {
+      suggestCalls.push(basePath)
+      if (!basePath) throw new ProjectRootError('Missing basePath', 400)
+      return {
+        name: 'New Project (1)',
+        path: 'C:\\work\\New Project (1)',
+      }
+    },
+  }
+
+  const createProject = createRouteTestResponse()
+  assert.equal(await handleProjectRootRoutes(
+    { method: 'POST' } as never,
+    createProject.response as never,
+    new URL('http://127.0.0.1/codex-api/project-root'),
+    dependencies,
+  ), true)
+  assert.deepEqual(readPaths, ['global-state.json'])
+  assert.deepEqual(resolveCalls, [{
+    path: 'C:\\work\\new',
+    createIfMissing: true,
+    label: 'New Project',
+    existingState: {
+      order: ['C:\\work\\old'],
+      labels: {},
+      active: ['C:\\work\\old'],
+    },
+  }])
+  assert.deepEqual(writeCalls, [{
+    path: 'global-state.json',
+    state: nextWorkspaceState,
+  }])
+  assert.deepEqual(JSON.parse(createProject.body), { data: { path: 'C:\\work\\new' } })
+
+  const missingProject = createRouteTestResponse()
+  assert.equal(await handleProjectRootRoutes(
+    { method: 'POST' } as never,
+    missingProject.response as never,
+    new URL('http://127.0.0.1/codex-api/project-root'),
+    dependencies,
+  ), true)
+  assert.equal(missingProject.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(missingProject.body), { error: 'Missing path' })
+  assert.equal(writeCalls.length, 1)
+
+  const suggestion = createRouteTestResponse()
+  assert.equal(await handleProjectRootRoutes(
+    { method: 'GET' } as never,
+    suggestion.response as never,
+    new URL('http://127.0.0.1/codex-api/project-root-suggestion?basePath=%20C%3A%5Cwork%20'),
+    dependencies,
+  ), true)
+  assert.deepEqual(suggestCalls, ['C:\\work'])
+  assert.deepEqual(JSON.parse(suggestion.body), {
+    data: {
+      name: 'New Project (1)',
+      path: 'C:\\work\\New Project (1)',
+    },
+  })
+
+  const missingBasePath = createRouteTestResponse()
+  assert.equal(await handleProjectRootRoutes(
+    { method: 'GET' } as never,
+    missingBasePath.response as never,
+    new URL('http://127.0.0.1/codex-api/project-root-suggestion?basePath=%20'),
+    dependencies,
+  ), true)
+  assert.equal(missingBasePath.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(missingBasePath.body), { error: 'Missing basePath' })
+
+  assert.equal(await handleProjectRootRoutes(
+    { method: 'PUT' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/project-root'),
+    dependencies,
+  ), false)
 }
 
 function smokeRuntimeStateStore(): void {

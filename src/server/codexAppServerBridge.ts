@@ -49,6 +49,7 @@ import { handleNotificationSseRoute } from './notificationSseRoute.js'
 import { handleRuntimeStateRoutes } from './runtimeStateRoutes.js'
 import { handleDiagnosticsRoutes } from './diagnosticsRoutes.js'
 import { handleWorkspaceMetaRoutes } from './workspaceMetaRoutes.js'
+import { handleProjectRootRoutes } from './projectRootRoutes.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   ComposerFileSearchError,
@@ -181,12 +182,6 @@ import {
   FileUploadError,
   handleMultipartFileUpload,
 } from './fileUpload.js'
-import { readWorkspaceRootsState, writeWorkspaceRootsState } from './workspaceRootsState.js'
-import {
-  ProjectRootError,
-  resolveProjectRoot,
-  suggestProjectRoot,
-} from './projectRoots.js'
 import { AppServerThreadListAugmenter } from './appServerThreadListAugment.js'
 import {
   ensureRepoHasInitialCommit,
@@ -1825,43 +1820,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'POST' && url.pathname === '/codex-api/project-root') {
-        const payload = asRecord(await readJsonBody(req))
-        const rawPath = typeof payload?.path === 'string' ? payload.path.trim() : ''
-        const createIfMissing = payload?.createIfMissing === true
-        const label = typeof payload?.label === 'string' ? payload.label : ''
-        const statePath = getCodexGlobalStatePath()
-        try {
-          const existingState = await readWorkspaceRootsState(statePath)
-          const result = await resolveProjectRoot(rawPath, {
-            createIfMissing,
-            label,
-            existingState,
-          })
-          await writeWorkspaceRootsState(statePath, result.workspaceState)
-          setJson(res, 200, { data: { path: result.path } })
-        } catch (error) {
-          if (error instanceof ProjectRootError) {
-            setJson(res, error.statusCode, { error: error.message })
-            return
-          }
-          throw error
-        }
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/project-root-suggestion') {
-        const basePath = url.searchParams.get('basePath')?.trim() ?? ''
-        try {
-          const suggestion = await suggestProjectRoot(basePath)
-          setJson(res, 200, { data: suggestion })
-        } catch (error) {
-          if (error instanceof ProjectRootError) {
-            setJson(res, error.statusCode, { error: error.message })
-            return
-          }
-          throw error
-        }
+      if (await handleProjectRootRoutes(req, res, url, {
+        readJsonBody,
+      })) {
         return
       }
 

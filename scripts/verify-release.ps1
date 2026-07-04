@@ -384,6 +384,7 @@ if (-not $SkipPackageSmoke) {
     "src\server\localStateRoutes.ts",
     "src\server\notificationReplayRoute.ts",
     "src\server\notificationSseRoute.ts",
+    "src\server\projectRootRoutes.ts",
     "src\server\runtimeStateRoutes.ts",
     "src\server\transcriptionRoute.ts",
     "src\server\workspaceMetaRoutes.ts"
