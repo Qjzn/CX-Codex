@@ -4047,6 +4047,40 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server Hooks 只读诊断可见
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerHookDiagnostics.ts`、`src/server/appServerNotificationDiagnostics.ts`、`src/server/codexAppServerBridge.ts`、`src/components/content/DiagnosticsPanel.vue` 和最近 raw schema audit 输出 `output\app-server-schema-audit\20260703-193751`。
+- 本机 raw schema audit 已确认 `ClientRequest.ts` 包含 `hooks/list`，`HooksListParams.ts` 的参数为 `cwds?: string[]`，`HooksListResponse.ts` 返回 `data: HooksListEntry[]`。
+- 官方 Codex manual 已确认 hooks 默认启用、非托管 command hooks 需要 review/trust，且 hook 配置可能来自用户、项目、系统或插件来源。
+
+#### Steps
+1. 执行官方 manual helper：`node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs`。
+2. 检查 raw schema audit，确认 `hooks/list`、`hook/started`、`hook/completed`、`HookMetadata` 和 `HookRunSummary` 字段。
+3. 执行 `git diff --check`。
+4. 执行 `npm.cmd run verify:server-modules`。
+5. 执行 `npm.cmd run build`。
+6. 执行 `npm.cmd run verify:governance`。
+7. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip`。
+
+#### Expected Results
+- `/codex-api/health` 和 `/codex-api/diagnostics` 返回 `hookDiagnostics` 只读快照，包含 hook 数量、启用/禁用、managed、untrusted/modified、warning/error 计数、按 event/source/trust 聚合和脱敏 recent hooks。
+- 服务端 notification diagnostics 把 `hook/started` 和 `hook/completed` 视为已知通知，不计入 unknown notification，并只记录 run id、event、handler、status、duration、source 和 output entry 数量。
+- 诊断中心展示 “Hooks” 卡片；不暴露 hook command、sourcePath、currentHash 或完整输出，也不执行、编辑、trust 或 disable hook。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/appServerHookDiagnostics.ts`、`src/server/appServerNotificationDiagnostics.ts`、`src/server/codexAppServerBridge.ts`、`src/components/content/DiagnosticsPanel.vue`、`scripts/server-module-smoke.ts`、`docs/app-server-protocol-matrix.zh-CN.md`、`docs/changelog.zh-CN.md` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 官方文档/Schema 核对：Codex manual helper 返回 `local manual was already current`；官方 manual 的 Hooks 章节说明 hooks 默认启用，非托管 command hooks 需 review/trust；raw schema audit `output\app-server-schema-audit\20260703-193751\typescript\ClientRequest.ts` 显示 `hooks/list` 为官方 client request，`HooksListParams.ts` 只有 `cwds?: string[]`，`HooksListResponse.ts` 返回 `{ data: HooksListEntry[] }`，`HookMetadata.ts` 包含 `command`、`sourcePath`、`currentHash` 等必须脱敏字段，`ServerNotification.ts` 包含 `hook/started` 与 `hook/completed`。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 `hooks/list` 汇总、command/sourcePath/currentHash/key 不外泄、hook started/completed 已知通知、运行通知脱敏、TTL 缓存命中、TTL 过期刷新和 RPC 失败降级。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建；Vite 仍有既有 large chunk warning。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
+
+---
+
 ### Feature: App Server 模型通知诊断可见
 
 #### Prerequisites

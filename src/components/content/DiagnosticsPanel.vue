@@ -279,6 +279,47 @@
 
       <section class="diagnostics-section">
         <div class="diagnostics-section-header">
+          <h2>Hooks</h2>
+          <span class="diagnostics-badge" :data-tone="hookDiagnosticsTone">{{ hookDiagnosticsLabel }}</span>
+        </div>
+        <dl class="diagnostics-kv">
+          <div>
+            <dt>配置</dt>
+            <dd>{{ hookDiagnostics.hookCount }} 个 / {{ hookDiagnostics.enabledCount }} 启用</dd>
+          </div>
+          <div>
+            <dt>Trust</dt>
+            <dd>{{ hookDiagnostics.untrustedCount }} 未信任 / {{ hookDiagnostics.modifiedCount }} 已变更</dd>
+          </div>
+          <div>
+            <dt>Managed</dt>
+            <dd>{{ hookDiagnostics.managedCount }}</dd>
+          </div>
+          <div>
+            <dt>警告/错误</dt>
+            <dd>{{ hookDiagnostics.warningCount }} / {{ hookDiagnostics.errorCount }}</dd>
+          </div>
+        </dl>
+        <div v-if="hookDiagnostics.error" class="diagnostics-empty diagnostics-section-gap">{{ hookDiagnostics.error }}</div>
+        <ul v-else-if="recentHookNotifications.length > 0" class="diagnostics-list diagnostics-section-gap">
+          <li v-for="notification in recentHookNotifications" :key="`${notification.method}-${notification.atIso}-${notification.runId}`">
+            <span>{{ formatHookNotification(notification) }}</span>
+            <strong>{{ notification.status || '-' }}</strong>
+            <small>{{ formatAge(notification.atIso) }}</small>
+          </li>
+        </ul>
+        <ul v-else-if="hookDiagnostics.recentHooks.length > 0" class="diagnostics-list diagnostics-section-gap">
+          <li v-for="hook in hookDiagnostics.recentHooks" :key="`${hook.eventName}-${hook.handlerType}-${hook.source}-${hook.trustStatus}`">
+            <span>{{ formatHookSummary(hook) }}</span>
+            <strong>{{ hook.trustStatus }}</strong>
+            <small>{{ hook.enabled ? 'on' : 'off' }}</small>
+          </li>
+        </ul>
+        <div v-else class="diagnostics-empty diagnostics-section-gap">暂无 hook 配置或运行通知。</div>
+      </section>
+
+      <section class="diagnostics-section">
+        <div class="diagnostics-section-header">
           <h2>未知通知</h2>
           <span class="diagnostics-badge" :data-tone="unknownNotificationCount > 0 ? 'warning' : 'ok'">
             {{ unknownNotificationCount }}
@@ -427,6 +468,51 @@ type WindowsSandboxReadinessDiagnostics = {
   error: string
 }
 
+type HookNotificationDiagnostics = {
+  method: 'hook/started' | 'hook/completed'
+  atIso: string
+  threadId: string
+  turnId: string
+  runId: string
+  eventName: string
+  handlerType: string
+  status: string
+  durationMs: number | null
+  source: string
+  outputEntryCount: number
+}
+
+type HookSummaryDiagnostics = {
+  eventName: string
+  handlerType: string
+  source: string
+  trustStatus: string
+  enabled: boolean
+  isManaged: boolean
+  hasMatcher: boolean
+  hasStatusMessage: boolean
+  pluginId: string
+}
+
+type HookDiagnostics = {
+  available: boolean
+  checkedAtIso: string
+  cwdCount: number
+  hookCount: number
+  enabledCount: number
+  disabledCount: number
+  managedCount: number
+  untrustedCount: number
+  modifiedCount: number
+  warningCount: number
+  errorCount: number
+  byEvent: Record<string, number>
+  bySource: Record<string, number>
+  byTrust: Record<string, number>
+  recentHooks: HookSummaryDiagnostics[]
+  error: string
+}
+
 type UnknownStatusDiagnostics = {
   source: string
   value: string
@@ -487,12 +573,14 @@ type DiagnosticsData = {
     recentUnknownNotifications: UnknownNotificationDiagnostics[]
     recentModelNotifications?: ModelNotificationDiagnostics[]
     recentWindowsSandboxNotifications?: WindowsSandboxNotificationDiagnostics[]
+    recentHookNotifications?: HookNotificationDiagnostics[]
   }
   statusDiagnostics?: {
     unknownStatusCount: number
     recentUnknownStatuses: UnknownStatusDiagnostics[]
   }
   serverRequestDiagnostics?: ServerRequestDiagnostics
+  hookDiagnostics?: HookDiagnostics
   schemaAudit?: SchemaAuditDiagnostics
   windowsSandbox?: WindowsSandboxReadinessDiagnostics
   transcription?: TranscriptionDiagnostics
@@ -581,6 +669,25 @@ const emptyWindowsSandboxReadiness: WindowsSandboxReadinessDiagnostics = {
   error: '',
 }
 
+const emptyHookDiagnostics: HookDiagnostics = {
+  available: false,
+  checkedAtIso: '',
+  cwdCount: 0,
+  hookCount: 0,
+  enabledCount: 0,
+  disabledCount: 0,
+  managedCount: 0,
+  untrustedCount: 0,
+  modifiedCount: 0,
+  warningCount: 0,
+  errorCount: 0,
+  byEvent: {},
+  bySource: {},
+  byTrust: {},
+  recentHooks: [],
+  error: '',
+}
+
 const diagnostics = ref<DiagnosticsData | null>(null)
 const error = ref('')
 const isLoading = ref(false)
@@ -590,6 +697,7 @@ const appServer = computed(() => diagnostics.value?.appServer ?? emptyAppServer)
 const runtimeStore = computed(() => diagnostics.value?.runtimeStore ?? emptyRuntimeStore)
 const transcription = computed(() => diagnostics.value?.transcription ?? emptyTranscription)
 const schemaAudit = computed(() => diagnostics.value?.schemaAudit ?? emptySchemaAudit)
+const hookDiagnostics = computed(() => diagnostics.value?.hookDiagnostics ?? emptyHookDiagnostics)
 const windowsSandboxReadiness = computed(() => diagnostics.value?.windowsSandbox ?? emptyWindowsSandboxReadiness)
 const uncertainRequests = computed(() => diagnostics.value?.runtime.uncertainRequests ?? [])
 const recentEvents = computed(() => diagnostics.value?.runtime.recentEvents ?? [])
@@ -606,6 +714,7 @@ const recentModelNotifications = computed(() => diagnostics.value?.notificationD
 const recentWindowsSandboxNotifications = computed(() => (
   diagnostics.value?.notificationDiagnostics?.recentWindowsSandboxNotifications ?? []
 ))
+const recentHookNotifications = computed(() => diagnostics.value?.notificationDiagnostics?.recentHookNotifications ?? [])
 const unknownStatuses = computed(() => diagnostics.value?.statusDiagnostics?.recentUnknownStatuses ?? [])
 const unknownStatusCount = computed(() => diagnostics.value?.statusDiagnostics?.unknownStatusCount ?? 0)
 
@@ -641,6 +750,7 @@ const overallTone = computed<Tone>(() => {
   if (
     appServerTone.value === 'warning'
     || runtimeTone.value === 'warning'
+    || hookDiagnosticsTone.value === 'warning'
     || schemaAuditTone.value === 'warning'
     || schemaAuditTone.value === 'danger'
     || windowsSandboxReadinessTone.value === 'warning'
@@ -684,6 +794,25 @@ const schemaAuditLabel = computed(() => {
   if (!schemaAudit.value.available) return '不可用'
   if (schemaAudit.value.reviewStatus === 'drift-recorded') return '差异已记录'
   return schemaAudit.value.reviewStatus || '已记录'
+})
+
+const hookDiagnosticsTone = computed<Tone>(() => {
+  if (!hookDiagnostics.value.available) return 'warning'
+  if (
+    hookDiagnostics.value.untrustedCount > 0
+    || hookDiagnostics.value.modifiedCount > 0
+    || hookDiagnostics.value.warningCount > 0
+    || hookDiagnostics.value.errorCount > 0
+  ) return 'warning'
+  return hookDiagnostics.value.hookCount > 0 ? 'ok' : 'neutral'
+})
+
+const hookDiagnosticsLabel = computed(() => {
+  if (!hookDiagnostics.value.available) return '不可用'
+  if (hookDiagnostics.value.untrustedCount > 0 || hookDiagnostics.value.modifiedCount > 0) return '需审核'
+  if (hookDiagnostics.value.warningCount > 0 || hookDiagnostics.value.errorCount > 0) return '有告警'
+  if (hookDiagnostics.value.hookCount === 0) return '无配置'
+  return '已记录'
 })
 
 const windowsSandboxReadinessTone = computed<Tone>(() => {
@@ -793,6 +922,21 @@ function formatWindowsSandboxNotification(notification: WindowsSandboxNotificati
   const failedSuffix = notification.failedScan === true ? ' / scan failed' : ''
   const extraSuffix = notification.extraCount > 0 ? ` +${notification.extraCount}` : ''
   return `world-writable paths ${notification.samplePathCount}${extraSuffix}${failedSuffix}`
+}
+
+function formatHookNotification(notification: HookNotificationDiagnostics): string {
+  const eventName = notification.eventName || 'hook'
+  const handlerType = notification.handlerType || 'handler'
+  const source = notification.source ? ` / ${notification.source}` : ''
+  const duration = notification.durationMs === null ? '' : ` / ${notification.durationMs}ms`
+  return `${eventName} ${handlerType}${source}${duration}`
+}
+
+function formatHookSummary(hook: HookSummaryDiagnostics): string {
+  const source = hook.pluginId ? `${hook.source}:${hook.pluginId}` : hook.source
+  const managed = hook.isManaged ? ' / managed' : ''
+  const matcher = hook.hasMatcher ? ' / matcher' : ''
+  return `${hook.eventName} ${hook.handlerType} / ${source}${managed}${matcher}`
 }
 
 function formatNullableBoolean(value: boolean | null): string {

@@ -24,6 +24,11 @@ import {
   isKnownAppServerNotificationMethod,
 } from '../src/server/appServerNotificationDiagnostics.js'
 import {
+  AppServerHookDiagnosticsCache,
+  createAppServerHookDiagnosticsUnavailable,
+  normalizeAppServerHookDiagnostics,
+} from '../src/server/appServerHookDiagnostics.js'
+import {
   createWindowsSandboxReadinessUnavailable,
   createWindowsSandboxReadinessUnsupported,
   normalizeWindowsSandboxReadiness,
@@ -283,6 +288,7 @@ try {
   await smokeAuthMiddleware()
   smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
+  await smokeAppServerHookDiagnostics()
   await smokeWindowsSandboxReadinessDiagnostics()
   smokeAppServerStatusDiagnostics()
   await smokeAppServerSchemaAuditSummary()
@@ -674,6 +680,8 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('account/rateLimits/updated'), true)
   assert.equal(isKnownAppServerNotificationMethod('model/rerouted'), true)
   assert.equal(isKnownAppServerNotificationMethod('model/verification'), true)
+  assert.equal(isKnownAppServerNotificationMethod('hook/started'), true)
+  assert.equal(isKnownAppServerNotificationMethod('hook/completed'), true)
   assert.equal(isKnownAppServerNotificationMethod('windows/worldWritableWarning'), true)
   assert.equal(isKnownAppServerNotificationMethod('windowsSandbox/setupCompleted'), true)
   assert.equal(isKnownAppServerNotificationMethod('item/tool/call/failed'), true)
@@ -690,6 +698,7 @@ function smokeAppServerNotificationDiagnostics(): void {
     recentUnknownNotifications: [],
     recentModelNotifications: [],
     recentWindowsSandboxNotifications: [],
+    recentHookNotifications: [],
   })
 
   diagnostics.observe({
@@ -780,6 +789,62 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(JSON.stringify(windowsSnapshot.recentWindowsSandboxNotifications).includes('unsafe-a'), false)
 
   diagnostics.observe({
+    method: 'hook/started',
+    atIso: '2026-07-03T00:00:00.900Z',
+    params: {
+      threadId: 'thread-hook',
+      turnId: 'turn-hook',
+      run: {
+        id: 'hook-run-a',
+        eventName: 'preToolUse',
+        handlerType: 'command',
+        status: 'running',
+        source: 'project',
+        sourcePath: 'C:\\secret\\.codex\\hooks.json',
+        entries: [{ kind: 'stdout' }],
+      },
+    },
+  })
+  diagnostics.observe({
+    method: 'hook/completed',
+    atIso: '2026-07-03T00:00:00.950Z',
+    params: {
+      threadId: 'thread-hook',
+      turnId: null,
+      run: {
+        id: 'hook-run-a',
+        eventName: 'preToolUse',
+        handlerType: 'command',
+        status: 'completed',
+        durationMs: 12,
+        source: 'project',
+        sourcePath: 'C:\\secret\\.codex\\hooks.json',
+        entries: [{ kind: 'stdout' }, { kind: 'stderr' }],
+      },
+    },
+  })
+  const hookNotificationSnapshot = diagnostics.snapshot()
+  assert.equal(hookNotificationSnapshot.unknownNotificationCount, 0)
+  assert.deepEqual(hookNotificationSnapshot.recentHookNotifications.map((item) => item.method), [
+    'hook/completed',
+    'hook/started',
+  ])
+  assert.deepEqual(hookNotificationSnapshot.recentHookNotifications[0], {
+    method: 'hook/completed',
+    atIso: '2026-07-03T00:00:00.950Z',
+    threadId: 'thread-hook',
+    turnId: '',
+    runId: 'hook-run-a',
+    eventName: 'preToolUse',
+    handlerType: 'command',
+    status: 'completed',
+    durationMs: 12,
+    source: 'project',
+    outputEntryCount: 2,
+  })
+  assert.equal(JSON.stringify(hookNotificationSnapshot.recentHookNotifications).includes('secret'), false)
+
+  diagnostics.observe({
     method: 'thread/realtime/transcript/delta',
     atIso: '2026-07-03T00:00:01.000Z',
     threadId: 'thread-a',
@@ -812,6 +877,134 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(diagnostics.snapshot().unknownNotificationCount, 0)
   assert.equal(diagnostics.snapshot().recentModelNotifications.length, 0)
   assert.equal(diagnostics.snapshot().recentWindowsSandboxNotifications.length, 0)
+  assert.equal(diagnostics.snapshot().recentHookNotifications.length, 0)
+}
+
+async function smokeAppServerHookDiagnostics(): Promise<void> {
+  const normalized = normalizeAppServerHookDiagnostics({
+    data: [
+      {
+        cwd: 'E:\\secret\\repo',
+        warnings: ['merge hooks.json and config.toml'],
+        errors: [{ message: 'bad hook' }],
+        hooks: [
+          {
+            key: 'hidden-key',
+            eventName: 'preToolUse',
+            handlerType: 'command',
+            matcher: 'Bash',
+            command: 'C:\\secret\\hook.ps1',
+            timeoutSec: 30,
+            statusMessage: 'Checking',
+            sourcePath: 'C:\\secret\\.codex\\hooks.json',
+            source: 'project',
+            pluginId: null,
+            displayOrder: 1,
+            enabled: true,
+            isManaged: false,
+            currentHash: 'secret-hash',
+            trustStatus: 'untrusted',
+          },
+          {
+            key: 'hidden-key-2',
+            eventName: 'stop',
+            handlerType: 'prompt',
+            matcher: null,
+            sourcePath: 'C:\\secret\\.codex\\hooks.json',
+            source: 'plugin',
+            pluginId: 'plugin-a',
+            enabled: false,
+            isManaged: true,
+            currentHash: 'secret-hash-2',
+            trustStatus: 'managed',
+          },
+        ],
+      },
+    ],
+  }, '2026-07-04T00:00:00.000Z')
+  assert.equal(normalized.available, true)
+  assert.equal(normalized.cwdCount, 1)
+  assert.equal(normalized.hookCount, 2)
+  assert.equal(normalized.enabledCount, 1)
+  assert.equal(normalized.disabledCount, 1)
+  assert.equal(normalized.managedCount, 1)
+  assert.equal(normalized.untrustedCount, 1)
+  assert.equal(normalized.warningCount, 1)
+  assert.equal(normalized.errorCount, 1)
+  assert.deepEqual(normalized.byEvent, { preToolUse: 1, stop: 1 })
+  assert.deepEqual(normalized.bySource, { project: 1, plugin: 1 })
+  assert.deepEqual(normalized.byTrust, { untrusted: 1, managed: 1 })
+  assert.deepEqual(normalized.recentHooks, [
+    {
+      eventName: 'preToolUse',
+      handlerType: 'command',
+      source: 'project',
+      trustStatus: 'untrusted',
+      enabled: true,
+      isManaged: false,
+      hasMatcher: true,
+      hasStatusMessage: true,
+      pluginId: '',
+    },
+    {
+      eventName: 'stop',
+      handlerType: 'prompt',
+      source: 'plugin',
+      trustStatus: 'managed',
+      enabled: false,
+      isManaged: true,
+      hasMatcher: false,
+      hasStatusMessage: false,
+      pluginId: 'plugin-a',
+    },
+  ])
+  const serialized = JSON.stringify(normalized)
+  assert.equal(serialized.includes('secret'), false)
+  assert.equal(serialized.includes('hook.ps1'), false)
+  assert.equal(serialized.includes('hidden-key'), false)
+
+  const unavailable = createAppServerHookDiagnosticsUnavailable(
+    new Error('x'.repeat(240)),
+    '2026-07-04T00:00:01.000Z',
+  )
+  assert.equal(unavailable.available, false)
+  assert.equal(unavailable.error.length, 160)
+
+  let nowMs = 1_000
+  let calls = 0
+  const cache = new AppServerHookDiagnosticsCache({
+    ttlMs: 100,
+    nowMs: () => nowMs,
+    nowIso: () => new Date(nowMs).toISOString(),
+  })
+  const first = await cache.read(async () => {
+    calls += 1
+    return { data: [{ hooks: [{ eventName: 'preToolUse', handlerType: 'command', source: 'project', trustStatus: 'trusted', enabled: true }] }] }
+  })
+  const cached = await cache.read(async () => {
+    calls += 1
+    return { data: [] }
+  })
+  assert.equal(first.hookCount, 1)
+  assert.equal(cached.hookCount, 1)
+  assert.equal(calls, 1)
+
+  nowMs += 101
+  const refreshed = await cache.read(async () => {
+    calls += 1
+    return { data: [] }
+  })
+  assert.equal(refreshed.hookCount, 0)
+  assert.equal(calls, 2)
+
+  cache.clear()
+  const failed = await cache.read(async () => {
+    calls += 1
+    throw new Error('hooks/list failed')
+  })
+  assert.equal(failed.available, false)
+  assert.equal(failed.error, 'hooks/list failed')
+  assert.equal(calls, 3)
 }
 
 async function smokeWindowsSandboxReadinessDiagnostics(): Promise<void> {

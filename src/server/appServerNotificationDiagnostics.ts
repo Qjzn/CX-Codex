@@ -30,11 +30,26 @@ export type WindowsSandboxNotificationRecord = {
   failedScan: boolean | null
 }
 
+export type HookNotificationRecord = {
+  method: 'hook/started' | 'hook/completed'
+  atIso: string
+  threadId: string
+  turnId: string
+  runId: string
+  eventName: string
+  handlerType: string
+  status: string
+  durationMs: number | null
+  source: string
+  outputEntryCount: number
+}
+
 export type AppServerNotificationDiagnosticsSnapshot = {
   unknownNotificationCount: number
   recentUnknownNotifications: UnknownNotificationRecord[]
   recentModelNotifications: ModelNotificationRecord[]
   recentWindowsSandboxNotifications: WindowsSandboxNotificationRecord[]
+  recentHookNotifications: HookNotificationRecord[]
 }
 
 type NotificationObservation = {
@@ -49,6 +64,7 @@ type AppServerNotificationDiagnosticsOptions = {
   maxRecentUnknown?: number
   maxRecentModelNotifications?: number
   maxRecentWindowsSandboxNotifications?: number
+  maxRecentHookNotifications?: number
 }
 
 const KNOWN_NOTIFICATION_METHODS = new Set([
@@ -59,6 +75,8 @@ const KNOWN_NOTIFICATION_METHODS = new Set([
   'item/updated',
   'account/rateLimits/updated',
   'app/list/updated',
+  'hook/completed',
+  'hook/started',
   'mcpServer/oauthLogin/completed',
   'mcpServer/startupStatus/updated',
   'model/rerouted',
@@ -101,9 +119,11 @@ export class AppServerNotificationDiagnostics {
   private readonly maxRecentUnknown: number
   private readonly maxRecentModelNotifications: number
   private readonly maxRecentWindowsSandboxNotifications: number
+  private readonly maxRecentHookNotifications: number
   private readonly unknownByMethod = new Map<string, UnknownNotificationRecord>()
   private readonly recentModelNotifications: ModelNotificationRecord[] = []
   private readonly recentWindowsSandboxNotifications: WindowsSandboxNotificationRecord[] = []
+  private readonly recentHookNotifications: HookNotificationRecord[] = []
   private unknownNotificationCount = 0
 
   constructor(options: AppServerNotificationDiagnosticsOptions = {}) {
@@ -113,11 +133,13 @@ export class AppServerNotificationDiagnostics {
       1,
       Math.min(100, Math.floor(options.maxRecentWindowsSandboxNotifications ?? 20)),
     )
+    this.maxRecentHookNotifications = Math.max(1, Math.min(100, Math.floor(options.maxRecentHookNotifications ?? 20)))
   }
 
   observe(observation: NotificationObservation): void {
     this.observeModelNotification(observation)
     this.observeWindowsSandboxNotification(observation)
+    this.observeHookNotification(observation)
     if (isKnownAppServerNotificationMethod(observation.method)) return
 
     this.unknownNotificationCount += 1
@@ -155,6 +177,7 @@ export class AppServerNotificationDiagnostics {
         .sort((left, right) => right.lastSeenAtIso.localeCompare(left.lastSeenAtIso)),
       recentModelNotifications: [...this.recentModelNotifications],
       recentWindowsSandboxNotifications: [...this.recentWindowsSandboxNotifications],
+      recentHookNotifications: [...this.recentHookNotifications],
     }
   }
 
@@ -162,6 +185,7 @@ export class AppServerNotificationDiagnostics {
     this.unknownByMethod.clear()
     this.recentModelNotifications.splice(0, this.recentModelNotifications.length)
     this.recentWindowsSandboxNotifications.splice(0, this.recentWindowsSandboxNotifications.length)
+    this.recentHookNotifications.splice(0, this.recentHookNotifications.length)
     this.unknownNotificationCount = 0
   }
 
@@ -180,6 +204,15 @@ export class AppServerNotificationDiagnostics {
     this.recentWindowsSandboxNotifications.unshift(record)
     if (this.recentWindowsSandboxNotifications.length > this.maxRecentWindowsSandboxNotifications) {
       this.recentWindowsSandboxNotifications.splice(this.maxRecentWindowsSandboxNotifications)
+    }
+  }
+
+  private observeHookNotification(observation: NotificationObservation): void {
+    const record = createHookNotificationRecord(observation)
+    if (!record) return
+    this.recentHookNotifications.unshift(record)
+    if (this.recentHookNotifications.length > this.maxRecentHookNotifications) {
+      this.recentHookNotifications.splice(this.maxRecentHookNotifications)
     }
   }
 }
@@ -254,6 +287,25 @@ function createWindowsSandboxNotificationRecord(observation: NotificationObserva
   }
 }
 
+function createHookNotificationRecord(observation: NotificationObservation): HookNotificationRecord | null {
+  if (observation.method !== 'hook/started' && observation.method !== 'hook/completed') return null
+  const params = asRecord(observation.params)
+  const run = asRecord(params?.run)
+  return {
+    method: observation.method,
+    atIso: observation.atIso,
+    threadId: normalizeOptionalId(observation.threadId) || readString(params, 'threadId'),
+    turnId: normalizeOptionalId(observation.turnId) || readString(params, 'turnId'),
+    runId: readString(run, 'id'),
+    eventName: readString(run, 'eventName'),
+    handlerType: readString(run, 'handlerType'),
+    status: readString(run, 'status'),
+    durationMs: readNullableNumber(run, 'durationMs'),
+    source: readString(run, 'source'),
+    outputEntryCount: Array.isArray(run?.entries) ? run.entries.length : 0,
+  }
+}
+
 function readString(record: Record<string, unknown> | null, key: string): string {
   const value = record?.[key]
   return typeof value === 'string' ? value.trim().slice(0, 120) : ''
@@ -262,6 +314,11 @@ function readString(record: Record<string, unknown> | null, key: string): string
 function readNumber(record: Record<string, unknown> | null, key: string): number {
   const value = record?.[key]
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0
+}
+
+function readNullableNumber(record: Record<string, unknown> | null, key: string): number | null {
+  const value = record?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : null
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
