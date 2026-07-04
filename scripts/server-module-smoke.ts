@@ -305,6 +305,7 @@ import {
   interruptRuntimeTurnWithAppServer,
   type RuntimeInterruptDependencies,
 } from '../src/server/appServerRuntimeInterrupt.js'
+import { createAppServerRuntimeActions } from '../src/server/appServerRuntimeActions.js'
 import {
   AppServerNotificationReplay,
   createAppServerNotificationReplayAccessors,
@@ -447,6 +448,7 @@ try {
   smokeRuntimePayloadParsing()
   await smokeAppServerRuntimeStart()
   await smokeAppServerRuntimeInterrupt()
+  await smokeAppServerRuntimeActions()
   smokeAppServerRuntimeSnapshotPersistence()
   smokeAppServerNotificationRuntimeSync()
   await smokeRuntimeActionRoutes()
@@ -6143,6 +6145,123 @@ async function smokeAppServerRuntimeInterrupt(): Promise<void> {
       lastError: 'permission denied',
     },
   })
+}
+
+async function smokeAppServerRuntimeActions(): Promise<void> {
+  let currentRequest: RuntimeRequestRecord | null = null
+  const created: unknown[] = []
+  const updates: Array<{ requestId: string; patch: unknown }> = []
+  const rpcCalls: Array<{ method: string; params: unknown }> = []
+  const marks: Array<{ action: string; threadId: string; turnId?: string; lastError?: string | null }> = []
+  const persisted: string[] = []
+  const clearedThreadSearchIndexes: string[] = []
+  const planModeTurns: Array<{ threadId: string; turnId?: string }> = []
+  const clearedPlanTurns: Array<{ threadId: string; turnId?: string }> = []
+  const actions = createAppServerRuntimeActions({
+    createRequest: (record) => {
+      created.push(record)
+      const recordRoot = asRecord(record)
+      currentRequest = {
+        requestId: readStringProperty(record, 'requestId'),
+        clientMessageId: readStringProperty(record, 'clientMessageId'),
+        threadId: readStringProperty(record, 'threadId'),
+        turnId: readStringProperty(record, 'turnId'),
+        status: readStringProperty(record, 'status') as RuntimeRequestRecord['status'],
+        promptHash: readStringProperty(record, 'promptHash'),
+        mode: readStringProperty(record, 'mode'),
+        payload: recordRoot?.payload ?? {},
+        retryCount: 0,
+        createdAtIso: '2026-01-01T00:00:00.000Z',
+        updatedAtIso: '2026-01-01T00:00:00.000Z',
+        lastError: null,
+      }
+      return currentRequest
+    },
+    updateRequest: (requestId, patch) => {
+      updates.push({ requestId, patch })
+      if (!currentRequest) return null
+      currentRequest = {
+        ...currentRequest,
+        ...patch,
+        updatedAtIso: '2026-01-01T00:00:01.000Z',
+        lastError: Object.prototype.hasOwnProperty.call(patch, 'lastError') ? patch.lastError ?? null : currentRequest.lastError,
+      }
+      return currentRequest
+    },
+    getRequest: () => currentRequest,
+    rpc: async (method, params) => {
+      rpcCalls.push({ method, params })
+      if (method === 'turn/start') return { turn: { id: 'turn-actions' } }
+      if (method === 'turn/interrupt') return { ok: true }
+      throw new Error(`unexpected runtime action method ${method}`)
+    },
+    clearThreadSearchIndex: () => {
+      clearedThreadSearchIndexes.push('clear')
+    },
+    markStarting: (threadId) => {
+      marks.push({ action: 'starting', threadId })
+    },
+    markRunning: (threadId, turnId = '') => {
+      marks.push({ action: 'running', threadId, turnId })
+    },
+    markStartUncertain: (threadId, lastError = null) => {
+      marks.push({ action: 'start_uncertain', threadId, lastError })
+    },
+    persistRuntimeSnapshot: (threadId) => {
+      persisted.push(threadId)
+      return { activeTurnId: `${threadId}-snapshot-turn` }
+    },
+    markPlanModeTurn: (threadId, turnId = '') => {
+      planModeTurns.push({ threadId, turnId })
+    },
+    markStopping: (threadId) => {
+      marks.push({ action: 'stopping', threadId })
+    },
+    markInterrupted: (threadId, lastError = null) => {
+      marks.push({ action: 'interrupted', threadId, lastError })
+    },
+    markStopUncertain: (threadId, lastError = null) => {
+      marks.push({ action: 'stop_uncertain', threadId, lastError })
+    },
+    clearPlanModeTurn: (threadId, turnId = '') => {
+      clearedPlanTurns.push({ threadId, turnId })
+    },
+    getErrorMessage,
+  })
+
+  const startResult = await actions.startRuntimeTurn({
+    requestId: 'request-actions-start',
+    clientMessageId: 'client-actions-start',
+    threadId: 'thread-actions',
+    input: [{ type: 'text', text: 'Run action' }],
+  })
+  assert.equal(startResult.status, 'running')
+  assert.equal(startResult.threadId, 'thread-actions')
+  assert.equal(startResult.turnId, 'turn-actions')
+
+  const interruptResult = await actions.interruptRuntimeTurn({
+    requestId: 'request-actions-interrupt',
+    threadId: 'thread-actions',
+    turnId: 'turn-actions',
+  })
+  assert.equal(interruptResult.status, 'stopped')
+  assert.deepEqual(rpcCalls.map((call) => call.method), ['turn/start', 'turn/interrupt'])
+  assert.deepEqual(clearedThreadSearchIndexes, [])
+  assert.deepEqual(planModeTurns, [])
+  assert.deepEqual(clearedPlanTurns, [{ threadId: 'thread-actions', turnId: 'turn-actions' }])
+  assert.deepEqual(marks, [
+    { action: 'starting', threadId: 'thread-actions' },
+    { action: 'running', threadId: 'thread-actions', turnId: 'turn-actions' },
+    { action: 'stopping', threadId: 'thread-actions' },
+    { action: 'interrupted', threadId: 'thread-actions', lastError: null },
+  ])
+  assert.deepEqual(persisted, ['thread-actions', 'thread-actions', 'thread-actions', 'thread-actions'])
+  assert.deepEqual(updates.map((call) => call.patch), [
+    { status: 'starting', threadId: 'thread-actions' },
+    { status: 'running', threadId: 'thread-actions', turnId: 'turn-actions', lastError: null },
+    { status: 'stopped', threadId: 'thread-actions', turnId: 'turn-actions', lastError: null },
+  ])
+  assert.equal(created.length, 2)
 }
 
 function smokeAppServerNotificationRuntimeSync(): void {

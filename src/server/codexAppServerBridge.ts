@@ -157,9 +157,8 @@ import {
   AppServerThreadListAugmenter,
   createAppServerThreadListRpcResultAugmenter,
 } from './appServerThreadListAugment.js'
-import { createAppServerRuntimeTurnStarter } from './appServerRuntimeStart.js'
-import { createAppServerRuntimeTurnInterrupter } from './appServerRuntimeInterrupt.js'
 import { createAppServerRuntimeSnapshotPersister } from './appServerRuntimeSnapshotPersistence.js'
+import { createAppServerRuntimeActions } from './appServerRuntimeActions.js'
 
 const APP_SERVER_RPC_SLOW_WARN_MS = 1_800
 const APP_SERVER_RPC_MAX_IN_FLIGHT = 2
@@ -795,7 +794,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     runtimeStore,
   })
 
-  const startRuntimeTurn = createAppServerRuntimeTurnStarter({
+  const {
+    startRuntimeTurn,
+    interruptRuntimeTurn,
+  } = createAppServerRuntimeActions({
     createRequest: (record) => runtimeStore.createRequest(record),
     updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
     getRequest: (requestId) => runtimeStore.getRequest(requestId),
@@ -806,17 +808,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     markStartUncertain: (threadId, lastError = null) => runtimeStateStore.markStartUncertain(threadId, lastError),
     persistRuntimeSnapshot,
     markPlanModeTurn: (threadId, turnId = '') => appServer.markPlanModeTurn(threadId, turnId),
-    getErrorMessage,
-  })
-
-  const interruptRuntimeTurn = createAppServerRuntimeTurnInterrupter({
-    createRequest: (record) => runtimeStore.createRequest(record),
-    updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
-    rpc: (method, params) => appServer.rpc(method, params),
     markStopping: (threadId) => runtimeStateStore.markStopping(threadId),
     markInterrupted: (threadId, lastError = null) => runtimeStateStore.markInterrupted(threadId, lastError),
     markStopUncertain: (threadId, lastError = null) => runtimeStateStore.markStopUncertain(threadId, lastError),
-    persistRuntimeSnapshot,
     clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
     getErrorMessage,
   })
