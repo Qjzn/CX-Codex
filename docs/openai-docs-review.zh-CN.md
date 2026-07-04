@@ -2,7 +2,7 @@
 
 本项目对接的是 OpenAI 官方 Codex App Server 和少量 OpenAI API 补充能力。任何协议、安全、远程访问、权限、语音转写或发布声明变更，都必须先确认官方文档入口和当前仓库基线是否一致。
 
-最近审查时间：2026-07-05 00:37 Asia/Shanghai。
+最近审查时间：2026-07-05 02:12 Asia/Shanghai。
 
 ## 官方来源清单
 
@@ -22,6 +22,12 @@
 
 ```powershell
 node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs
+```
+
+当前 Codex 线程如果没有暴露 OpenAI Docs MCP 工具，先注册官方 MCP server，重启 Codex 后再优先使用 MCP 搜索/抓取；本轮未重启前继续只使用官方 OpenAI 域名页面作为来源：
+
+```powershell
+codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp
 ```
 
 ## 必查主题
@@ -60,6 +66,7 @@ OpenAI API 补充能力相关 PR 必查：
 
 ## 当前审查结论
 
+- 2026-07-05 02:12 复核：已注册 OpenAI Docs MCP server；当前线程重启前仍未热加载 MCP 工具，因此本轮复核继续使用官方 OpenAI 域名页面。Codex manual helper 返回 `local manual was already current`；官方 App Server 页面仍要求客户端先发 `initialize`，服务端返回后再发 `initialized`，`capabilities.experimentalApi` 仍是实验 API opt-in；WebSocket transport 仍标注为 experimental / unsupported，远程暴露前必须配置 WebSocket auth。官方 Speech to text guide 仍记录 25 MB 文件上传限制和 diarize 示例，Audio transcription API reference 仍记录 `gpt-4o-transcribe-diarize`、`diarized_json`、`chunking_strategy` 及 diarize 长音频的 chunking 要求。Responses migration guide 仍把 Responses API 推荐给新通用 OpenAI 项目，但其 `Items` / `output` 对象模型不同于 Codex App Server 的 thread / turn / runtime / approval 协议。
 - 2026-07-05 00:37 复核：Codex manual helper 返回 `local manual was already current`；官方 App Server 页面仍要求先 `initialize` 再 `initialized`，并把 `experimentalApi` 作为实验方法/字段的显式 opt-in；官方 Speech to text 页面仍记录 `gpt-4o-transcribe-diarize` 使用 `diarized_json` 和 `chunking_strategy=auto`。
 - App Server 官方文档仍是协议审计的主入口；`experimentalApi` 相关能力不能被宣传为默认稳定能力。
 - Agent approvals & security 仍是 approval、sandbox、auto-review 和危险权限边界的主入口。

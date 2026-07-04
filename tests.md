@@ -7967,3 +7967,45 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: OpenAI official docs review MCP source refresh
+
+#### Prerequisites
+- Current repository includes `docs/openai-docs-review.zh-CN.md`, `docs/changelog.zh-CN.md`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
+- Network access is available for official OpenAI documentation checks.
+- The Codex manual helper can refresh or validate the local manual cache.
+
+#### Steps
+1. Run `codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp` and confirm the global OpenAI Docs MCP server is registered for the next Codex restart.
+2. Run `node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` and confirm the manual is current or refreshed successfully.
+3. Open `https://developers.openai.com/codex/app-server` and confirm the page still documents `initialize`, `initialized`, `capabilities.experimentalApi`, WebSocket transport as experimental / unsupported, and WebSocket auth requirements.
+4. Open `https://developers.openai.com/codex/remote-connections` and confirm remote project access still uses SSH with normal SSH security expectations rather than unauthenticated public listeners.
+5. Open `https://developers.openai.com/api/docs/guides/speech-to-text` and confirm file uploads are still limited to 25 MB and diarize examples still use `gpt-4o-transcribe-diarize`, `response_format=diarized_json`, and `chunking_strategy=auto`.
+6. Open `https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create` and confirm the API reference still lists `gpt-4o-transcribe-diarize`, `diarized_json`, and `chunking_strategy` requirements for diarized long audio.
+7. Open `https://developers.openai.com/api/docs/guides/migrate-to-responses` and confirm Responses is recommended for new general OpenAI projects while retaining a distinct `Items` / `output` object model.
+8. Run `git diff --check`.
+9. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+10. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- OpenAI Docs MCP is configured for future Codex sessions, while this no-restart session still treats official OpenAI web pages as the evidence source.
+- `docs/openai-docs-review.zh-CN.md` has an absolute 2026-07-05 02:12 Asia/Shanghai review timestamp and records the source boundary clearly.
+- The review still distinguishes Codex App Server protocol alignment from supplemental OpenAI API usage.
+- Speech to text remains server-side and constrained by official model, response format, chunking, and upload limit requirements.
+- Governance and release verification continue to package and enforce the review handbook.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal generated output in `output/frontend-normalizer-smoke/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back this documentation refresh, revert the `docs/openai-docs-review.zh-CN.md`, `docs/changelog.zh-CN.md`, and `tests.md` changes from the same commit.
+
+#### Regression Evidence
+- 2026-07-05 MCP setup: `codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp` passed with `Added global MCP server 'openaiDeveloperDocs'.`
+- 2026-07-05 Codex manual check: `node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` passed and reported `Manual status: local manual was already current.`
+- 2026-07-05 official docs check: official Codex App Server documentation still records `initialize`, `initialized`, `capabilities.experimentalApi`, WebSocket transport as experimental / unsupported, and WebSocket auth; official Remote connections documentation still records SSH remote access with normal SSH security expectations.
+- 2026-07-05 official API docs check: official Speech to text documentation still records the 25 MB upload limit and diarize multipart example; the audio transcription API reference still records `gpt-4o-transcribe-diarize`, `diarized_json`, and `chunking_strategy` requirements; the Responses migration guide still recommends Responses for new general OpenAI projects while documenting a distinct Items/output object model.
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
