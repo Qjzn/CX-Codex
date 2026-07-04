@@ -140,6 +140,32 @@ export class AppServerRpcCache {
     writeCachedRpc(this.cachedModelListRpcByKey, shareableKey, value, 4)
   }
 
+  executeShareableRead(method: string, params: unknown, shareableKey: string, enqueueRpc: EnqueueRpc): Promise<unknown> {
+    const cached = this.readShareableCache(method, shareableKey)
+    if (cached) {
+      if (cached.stale) {
+        this.refreshShareableCacheInBackground(method, shareableKey, params, enqueueRpc)
+      }
+      return Promise.resolve(cached.value)
+    }
+
+    const existingRequest = this.getSharedRead(shareableKey)
+    if (existingRequest) {
+      return existingRequest
+    }
+
+    const request = enqueueRpc(method, params)
+      .then((value) => {
+        this.writeShareableCache(method, shareableKey, value)
+        return value
+      })
+      .finally(() => {
+        this.deleteSharedRead(shareableKey)
+      })
+    this.setSharedRead(shareableKey, request)
+    return request
+  }
+
   refreshThreadListInBackground(shareableKey: string, params: unknown, enqueueRpc: EnqueueRpc): void {
     if (this.sharedReadRpcByKey.has(shareableKey)) return
 
@@ -208,6 +234,32 @@ export class AppServerRpcCache {
       })
 
     this.sharedReadRpcByKey.set(shareableKey, request)
+  }
+
+  private readShareableCache(method: string, shareableKey: string): CachedRpcRead | null {
+    if (method === 'thread/list') {
+      return this.readThreadList(shareableKey, true)
+    }
+    if (method === 'model/list') {
+      return this.readModelList(shareableKey, true)
+    }
+    return null
+  }
+
+  private writeShareableCache(method: string, shareableKey: string, value: unknown): void {
+    if (method === 'thread/list') {
+      this.writeThreadList(shareableKey, value)
+    } else if (method === 'model/list') {
+      this.writeModelList(shareableKey, value)
+    }
+  }
+
+  private refreshShareableCacheInBackground(method: string, shareableKey: string, params: unknown, enqueueRpc: EnqueueRpc): void {
+    if (method === 'thread/list') {
+      this.refreshThreadListInBackground(shareableKey, params, enqueueRpc)
+    } else if (method === 'model/list') {
+      this.refreshModelListInBackground(shareableKey, params, enqueueRpc)
+    }
   }
 }
 

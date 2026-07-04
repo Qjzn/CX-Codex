@@ -584,44 +584,12 @@ class AppServerProcess {
       return this.enqueueRpc(method, params)
     }
 
-    if (method === 'thread/list') {
-      const cached = this.rpcCache.readThreadList(shareableKey, true)
-      if (cached) {
-        if (cached.stale) {
-          this.rpcCache.refreshThreadListInBackground(shareableKey, params, (rpcMethod, rpcParams) => this.enqueueRpc(rpcMethod, rpcParams))
-        }
-        return cached.value
-      }
-    }
-    if (method === 'model/list') {
-      const cached = this.rpcCache.readModelList(shareableKey, true)
-      if (cached) {
-        if (cached.stale) {
-          this.rpcCache.refreshModelListInBackground(shareableKey, params, (rpcMethod, rpcParams) => this.enqueueRpc(rpcMethod, rpcParams))
-        }
-        return cached.value
-      }
-    }
-
-    const existingRequest = this.rpcCache.getSharedRead(shareableKey)
-    if (existingRequest) {
-      return existingRequest
-    }
-
-    const request = this.enqueueRpc(method, params)
-      .then((value) => {
-        if (method === 'thread/list') {
-          this.rpcCache.writeThreadList(shareableKey, value)
-        } else if (method === 'model/list') {
-          this.rpcCache.writeModelList(shareableKey, value)
-        }
-        return value
-      })
-      .finally(() => {
-        this.rpcCache.deleteSharedRead(shareableKey)
-      })
-    this.rpcCache.setSharedRead(shareableKey, request)
-    return request
+    return this.rpcCache.executeShareableRead(
+      method,
+      params,
+      shareableKey,
+      (rpcMethod, rpcParams) => this.enqueueRpc(rpcMethod, rpcParams),
+    )
   }
 
   async warmup(): Promise<void> {

@@ -2607,6 +2607,33 @@ async function smokeAppServerRpcCache(): Promise<void> {
   assert.equal(refreshCalls, 1)
   assert.deepEqual(cache.readThreadList(key, true), { value: { rows: ['refreshed'] }, stale: false })
 
+  const modelKey = getShareableRpcKey('model/list', {}) ?? ''
+  assert.deepEqual(await cache.executeShareableRead('model/list', {}, modelKey, async () => {
+    return { models: ['gpt-5'] }
+  }), { models: ['gpt-5'] })
+  assert.deepEqual(cache.readModelList(modelKey, true), { value: { models: ['gpt-5'] }, stale: false })
+
+  const readParams = { threadId: 'thread-a', includeTurns: false }
+  const readKey = getShareableRpcKey('thread/read', readParams) ?? ''
+  let sharedReadCalls = 0
+  const releaseSharedReads: Array<() => void> = []
+  const firstRead = cache.executeShareableRead('thread/read', readParams, readKey, async () => {
+    sharedReadCalls += 1
+    await new Promise<void>((resolve) => {
+      releaseSharedReads.push(resolve)
+    })
+    return { thread: 'thread-a' }
+  })
+  const secondRead = cache.executeShareableRead('thread/read', readParams, readKey, async () => {
+    throw new Error('duplicate shared read should not enqueue')
+  })
+  assert.equal(firstRead, secondRead)
+  assert.equal(sharedReadCalls, 1)
+  assert.equal(releaseSharedReads.length, 1)
+  releaseSharedReads[0]()
+  assert.deepEqual(await firstRead, { thread: 'thread-a' })
+  assert.equal(cache.getSharedRead(readKey), null)
+
   now += 21 * 60_000
   assert.equal(cache.readThreadList(key, false), null)
 }
