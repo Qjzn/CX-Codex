@@ -7,7 +7,10 @@ import {
   type BridgeNotificationEvent,
 } from './appServerRuntimeBridge.js'
 import { syncBridgeNotificationRuntimeState } from './appServerNotificationRuntimeSync.js'
-import { AppServerNotificationReplay } from './appServerNotificationReplay.js'
+import {
+  AppServerNotificationReplay,
+  createAppServerNotificationReplayAccessors,
+} from './appServerNotificationReplay.js'
 import {
   createRuntimeThreadReconciler,
 } from './appServerRuntimeRequestReconciliation.js'
@@ -724,17 +727,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     upsertSnapshot: (nextSnapshot) => runtimeStore.upsertSnapshot(nextSnapshot),
   })
 
-  function rememberNotificationEvent(notification: { method: string; params: unknown }): BridgeNotificationEvent {
-    return notificationReplay.remember(notification)
-  }
-
-  function listNotificationEventsAfter(afterSeq: number, limit = 200): {
-    notifications: BridgeNotificationEvent[]
-    latestSeq: number
-    oldestSeq: number
-  } {
-    return notificationReplay.listAfter(afterSeq, limit)
-  }
+  const {
+    rememberNotificationEvent,
+    listNotificationEventsAfter,
+  } = createAppServerNotificationReplayAccessors(notificationReplay)
 
   const readWindowsSandboxReadinessDiagnostics = createWindowsSandboxReadinessReader({
     cache: windowsSandboxReadinessCache,

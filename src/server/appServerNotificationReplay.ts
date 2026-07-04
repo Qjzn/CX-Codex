@@ -23,6 +23,15 @@ type PersistedNotificationReplay = {
   oldestSeq: number
 }
 
+export type AppServerNotificationReplayAccessors = {
+  rememberNotificationEvent: (notification: AppServerNotification) => BridgeNotificationEvent
+  listNotificationEventsAfter: (afterSeq: number, limit?: number) => {
+    notifications: BridgeNotificationEvent[]
+    latestSeq: number
+    oldestSeq: number
+  }
+}
+
 type AppServerNotificationReplayOptions = {
   initialSeq: number
   appendEvent: (event: RuntimeEventLike & { threadId: string; turnId: string }) => void
@@ -120,5 +129,14 @@ export class AppServerNotificationReplay {
       latestSeq: this.seq,
       oldestSeq: this.buffer[0]?.seq ?? this.seq,
     }
+  }
+}
+
+export function createAppServerNotificationReplayAccessors(
+  replay: AppServerNotificationReplay,
+): AppServerNotificationReplayAccessors {
+  return {
+    rememberNotificationEvent: (notification) => replay.remember(notification),
+    listNotificationEventsAfter: (afterSeq, limit = 200) => replay.listAfter(afterSeq, limit),
   }
 }

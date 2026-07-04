@@ -299,7 +299,10 @@ import {
   interruptRuntimeTurnWithAppServer,
   type RuntimeInterruptDependencies,
 } from '../src/server/appServerRuntimeInterrupt.js'
-import { AppServerNotificationReplay } from '../src/server/appServerNotificationReplay.js'
+import {
+  AppServerNotificationReplay,
+  createAppServerNotificationReplayAccessors,
+} from '../src/server/appServerNotificationReplay.js'
 import {
   handleNotificationReplayRoute,
   readNotificationReplayQuery,
@@ -6988,6 +6991,31 @@ function smokeAppServerNotificationReplay(): void {
     }],
     latestSeq: 13,
     oldestSeq: 2,
+  })
+
+  const accessorsReplay = new AppServerNotificationReplay({
+    initialSeq: 20,
+    nowIso: () => '2026-01-01T00:00:02.000Z',
+    appendEvent: () => {},
+    listEventsAfter: (afterSeq) => ({
+      notifications: [],
+      latestSeq: afterSeq,
+      oldestSeq: afterSeq,
+    }),
+    observeNotification: () => {},
+    readThreadIdFromPayload: (payload) => readStringProperty(payload, 'threadId'),
+    readTurnIdFromPayload: (payload) => readStringProperty(payload, 'turnId'),
+  })
+  const accessors = createAppServerNotificationReplayAccessors(accessorsReplay)
+  const accessorEvent = accessors.rememberNotificationEvent({
+    method: 'turn/started',
+    params: { threadId: 'thread-accessor', turnId: 'turn-accessor' },
+  })
+  assert.equal(accessorEvent.seq, 21)
+  assert.deepEqual(accessors.listNotificationEventsAfter(20, 5), {
+    notifications: [accessorEvent],
+    latestSeq: 21,
+    oldestSeq: 21,
   })
 }
 
