@@ -26,6 +26,7 @@ import {
 } from './httpBody.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import { writeCodexBridgeRequestError } from './codexBridgeRequestError.js'
+import { disposeCodexBridgeMiddlewareResources } from './codexBridgeMiddlewareDispose.js'
 import { runCodexBridgeRouteHandlers } from './codexBridgeRouteDispatch.js'
 import {
   getTranscriptionProxyConfigSnapshot,
@@ -872,16 +873,18 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   }
 
   middleware.dispose = () => {
-    runtimeReconcileScheduler.dispose()
-    threadSearchIndexStore.clear()
-    bridgeNotificationListeners.clear()
-    unsubscribeAppServerNotifications()
-    notificationDiagnostics.clear()
-    statusDiagnostics.clear()
-    hookDiagnosticsCache.clear()
-    windowsSandboxReadinessCache.clear()
-    runtimeStore.close()
-    appServer.dispose()
+    disposeCodexBridgeMiddlewareResources({
+      runtimeReconcileScheduler,
+      threadSearchIndexStore,
+      bridgeNotificationListeners,
+      unsubscribeAppServerNotifications,
+      notificationDiagnostics,
+      statusDiagnostics,
+      hookDiagnosticsCache,
+      windowsSandboxReadinessCache,
+      runtimeStore,
+      appServer,
+    })
   }
   middleware.subscribeNotifications = (
     listener: (value: BridgeNotificationEvent) => void,

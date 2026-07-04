@@ -392,6 +392,7 @@ import {
 } from '../src/server/authMiddleware.js'
 import { RequestBodyTooLargeError } from '../src/server/httpBody.js'
 import { writeCodexBridgeRequestError } from '../src/server/codexBridgeRequestError.js'
+import { disposeCodexBridgeMiddlewareResources } from '../src/server/codexBridgeMiddlewareDispose.js'
 import { runCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteDispatch.js'
 
 const originalNow = Date.now
@@ -452,6 +453,7 @@ try {
   await smokeFileUploadRoute()
   smokeHttpJsonResponse()
   smokeCodexBridgeRequestError()
+  smokeCodexBridgeMiddlewareDispose()
   await smokeCodexBridgeRouteDispatch()
   smokeErrorMessage()
   await smokeComposerFileSearch()
@@ -4274,6 +4276,53 @@ function smokeCodexBridgeRequestError(): void {
   )
   assert.equal(bridgeFailure.response.statusCode, 502)
   assert.deepEqual(JSON.parse(bridgeFailure.body), { error: 'bridge failed' })
+}
+
+function smokeCodexBridgeMiddlewareDispose(): void {
+  const calls: string[] = []
+  disposeCodexBridgeMiddlewareResources({
+    runtimeReconcileScheduler: {
+      dispose: () => calls.push('runtimeReconcileScheduler.dispose'),
+    },
+    threadSearchIndexStore: {
+      clear: () => calls.push('threadSearchIndexStore.clear'),
+    },
+    bridgeNotificationListeners: {
+      clear: () => calls.push('bridgeNotificationListeners.clear'),
+    },
+    unsubscribeAppServerNotifications: () => calls.push('unsubscribeAppServerNotifications'),
+    notificationDiagnostics: {
+      clear: () => calls.push('notificationDiagnostics.clear'),
+    },
+    statusDiagnostics: {
+      clear: () => calls.push('statusDiagnostics.clear'),
+    },
+    hookDiagnosticsCache: {
+      clear: () => calls.push('hookDiagnosticsCache.clear'),
+    },
+    windowsSandboxReadinessCache: {
+      clear: () => calls.push('windowsSandboxReadinessCache.clear'),
+    },
+    runtimeStore: {
+      close: () => calls.push('runtimeStore.close'),
+    },
+    appServer: {
+      dispose: () => calls.push('appServer.dispose'),
+    },
+  })
+
+  assert.deepEqual(calls, [
+    'runtimeReconcileScheduler.dispose',
+    'threadSearchIndexStore.clear',
+    'bridgeNotificationListeners.clear',
+    'unsubscribeAppServerNotifications',
+    'notificationDiagnostics.clear',
+    'statusDiagnostics.clear',
+    'hookDiagnosticsCache.clear',
+    'windowsSandboxReadinessCache.clear',
+    'runtimeStore.close',
+    'appServer.dispose',
+  ])
 }
 
 async function smokeCodexBridgeRouteDispatch(): Promise<void> {
