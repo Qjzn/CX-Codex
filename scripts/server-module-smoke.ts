@@ -101,6 +101,7 @@ import {
   readIsoTimestampMs,
   type CachedThreadRead,
 } from '../src/server/appServerThreadReadCache.js'
+import { readAppServerThreadRuntimeSnapshot } from '../src/server/appServerThreadRuntimeSnapshot.js'
 import { AppServerThreadListAugmenter } from '../src/server/appServerThreadListAugment.js'
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
@@ -391,6 +392,7 @@ try {
   smokeAppServerRuntimeRequestReconciliation()
   await smokeAppServerRuntimeReconcileScheduler()
   smokeAppServerRuntimeSnapshotRecovery()
+  await smokeAppServerThreadRuntimeSnapshot()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
 } finally {
@@ -5350,6 +5352,151 @@ function smokeAppServerRuntimeSnapshotRecovery(): void {
     tokenUsage: { total: 4 },
   }])
   assert.deepEqual(persistedSnapshots, [currentSnapshot])
+}
+
+async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
+  const updatedAtSeconds = Date.parse('2026-01-01T00:00:00.000Z') / 1000
+  const cachedThreadReadPayload = {
+    thread: {
+      updatedAt: updatedAtSeconds,
+      inProgress: false,
+      path: 'session-a.jsonl',
+    },
+  }
+  const cachedThreadRead = createCachedThreadRead(cachedThreadReadPayload, () => '2026-01-01T00:00:30.000Z')
+  const cacheHitRpcCalls: unknown[] = []
+  const cacheHitObservedThreadReads: unknown[] = []
+  const cacheHitRuntimeObservations: unknown[] = []
+  const cacheHitPersistedSnapshots: ThreadRuntimeSnapshot[] = []
+  const cacheHitSnapshot = await readAppServerThreadRuntimeSnapshot(' thread-cache ', {
+    rpc: async (_method, params) => {
+      cacheHitRpcCalls.push(params)
+      if (readIncludeTurns(params) === true) {
+        throw new Error('cache hit should not request a heavy thread read')
+      }
+      return {
+        thread: {
+          updatedAt: updatedAtSeconds,
+          inProgress: false,
+        },
+      }
+    },
+    observeThreadRead: (details) => {
+      cacheHitObservedThreadReads.push(details)
+    },
+    getCachedThreadRead: () => cachedThreadRead,
+    rememberCachedThreadRead: () => {
+      throw new Error('cache hit should not rewrite cached thread read')
+    },
+    snapshotRuntime: (threadId, overlay = {}) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'completed',
+      threadRead: overlay.threadRead ?? null,
+      messageState: overlay.messageState ?? 'unavailable',
+      pendingServerRequests: overlay.pendingServerRequests ?? [],
+      tokenUsage: overlay.tokenUsage ?? null,
+    }),
+    observeRuntimeThreadRead: (threadId, inProgress, activeTurnId, updatedAtIso, source) => {
+      cacheHitRuntimeObservations.push({ threadId, inProgress, activeTurnId, updatedAtIso, source })
+    },
+    markRuntimeDegraded: () => {
+      throw new Error('cache hit should not mark degraded')
+    },
+    persistRuntimeSnapshot: (_threadId, snapshot) => {
+      cacheHitPersistedSnapshots.push(snapshot)
+      return snapshot
+    },
+    listPendingServerRequestsForThread: () => [],
+    getThreadTokenUsage: () => null,
+    getErrorMessage,
+    writeWarning: () => {
+      throw new Error('cache hit should not warn')
+    },
+  })
+  assert.equal(cacheHitRpcCalls.length, 1)
+  assert.equal(readIncludeTurns(cacheHitRpcCalls[0]), false)
+  assert.deepEqual(cacheHitObservedThreadReads, [{
+    threadId: 'thread-cache',
+    payload: {
+      thread: {
+        updatedAt: updatedAtSeconds,
+        inProgress: false,
+      },
+    },
+  }])
+  assert.deepEqual(cacheHitRuntimeObservations, [{
+    threadId: 'thread-cache',
+    inProgress: false,
+    activeTurnId: '',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    source: 'thread-read',
+  }])
+  assert.equal(cacheHitSnapshot.threadId, 'thread-cache')
+  assert.equal(cacheHitSnapshot.threadRead, cachedThreadReadPayload)
+  assert.equal(cacheHitSnapshot.messageState, 'fresh')
+  assert.deepEqual(cacheHitPersistedSnapshots, [cacheHitSnapshot])
+
+  const fallbackThreadReadPayload = {
+    thread: {
+      updatedAt: updatedAtSeconds,
+      inProgress: true,
+      activeTurnId: 'turn-cached',
+      path: 'session-b.jsonl',
+    },
+  }
+  const fallbackCachedThreadRead = createCachedThreadRead(fallbackThreadReadPayload, () => '2026-01-01T00:00:30.000Z')
+  const fallbackRpcCalls: unknown[] = []
+  const fallbackRuntimeObservations: unknown[] = []
+  const fallbackWarnings: Array<{ message: string; details: Record<string, unknown> }> = []
+  const fallbackSnapshot = await readAppServerThreadRuntimeSnapshot('thread-fallback', {
+    rpc: async (_method, params) => {
+      fallbackRpcCalls.push(params)
+      throw createRpcTimeoutError('thread/read', 1000)
+    },
+    observeThreadRead: () => {
+      throw new Error('failed thread reads should not be observed')
+    },
+    getCachedThreadRead: () => fallbackCachedThreadRead,
+    rememberCachedThreadRead: () => {
+      throw new Error('fallback should not rewrite cached thread read')
+    },
+    snapshotRuntime: (threadId, overlay = {}) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'running',
+      threadRead: overlay.threadRead ?? null,
+      messageState: overlay.messageState ?? 'unavailable',
+      pendingServerRequests: overlay.pendingServerRequests ?? [],
+      tokenUsage: overlay.tokenUsage ?? null,
+    }),
+    observeRuntimeThreadRead: (threadId, inProgress, activeTurnId, updatedAtIso, source) => {
+      fallbackRuntimeObservations.push({ threadId, inProgress, activeTurnId, updatedAtIso, source })
+    },
+    markRuntimeDegraded: () => {
+      throw new Error('fallback with cache should not mark degraded')
+    },
+    persistRuntimeSnapshot: (_threadId, snapshot) => snapshot,
+    listPendingServerRequestsForThread: () => [],
+    getThreadTokenUsage: () => null,
+    getErrorMessage,
+    writeWarning: (message, details) => {
+      fallbackWarnings.push({ message, details })
+    },
+  })
+  assert.equal(fallbackRpcCalls.length, 2)
+  assert.deepEqual(fallbackRpcCalls.map(readIncludeTurns), [false, true])
+  assert.deepEqual(fallbackRuntimeObservations, [{
+    threadId: 'thread-fallback',
+    inProgress: true,
+    activeTurnId: 'turn-cached',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    source: 'cache',
+  }])
+  assert.equal(fallbackSnapshot.threadRead, fallbackThreadReadPayload)
+  assert.equal(fallbackSnapshot.messageState, 'cached')
+  assert.deepEqual(fallbackWarnings.map((warning) => warning.message), [
+    'Light thread snapshot unavailable',
+    'Heavy thread snapshot fell back to cached messages',
+  ])
 }
 
 function smokeAppServerNotificationReplay(): void {

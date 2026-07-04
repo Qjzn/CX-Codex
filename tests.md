@@ -2746,6 +2746,44 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server thread runtime snapshot reader 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerThreadRuntimeSnapshot.ts`、`src/server/appServerThreadReadCache.ts`、`src/server/runtimeState.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 light `thread/read`、heavy `thread/read` cache 命中、recoverable read 失败、cached message fallback 和 runtime snapshot 持久化。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+4. 执行 `node_modules\.bin\vite.cmd build`。
+5. 执行 `node_modules\.bin\tsup.cmd`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+7. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+8. 代码审查确认 `src/server/codexAppServerBridge.ts` 的 `readThreadRuntimeSnapshot(...)` 只调用 `readAppServerThreadRuntimeSnapshot(...)` 并注入 RPC、cache、runtime store、diagnostics 和日志依赖。
+9. 代码审查确认 `src/server/appServerThreadRuntimeSnapshot.ts` 负责 light/heavy thread read、cached message 复用、recoverable fallback、runtime observe 和 persisted snapshot 生成。
+10. 确认 release package smoke 必检 `src\server\appServerThreadRuntimeSnapshot.ts`。
+
+#### Expected Results
+- 空 threadId 仍抛出 `Missing thread id`。
+- light `thread/read(includeTurns:false)` 成功且 cached heavy read 新鲜时，不再额外请求 heavy `thread/read(includeTurns:true)`。
+- heavy `thread/read(includeTurns:true)` 成功时仍裁剪 turns、写入 cache，并以 `messageState=fresh` 持久化 snapshot。
+- light/heavy read 的 materializing 或 timeout 错误仍被视为可恢复；有 cached heavy read 时回落到 `messageState=cached`，没有 cache 时标记 degraded。
+- runtime observe 仍按 fresh thread read 使用 `source=thread-read`，cached fallback 使用 `source=cache`。
+- `appServerThreadRuntimeSnapshot.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup
+- 如需回滚，删除 `src/server/appServerThreadRuntimeSnapshot.ts`，把 light/heavy thread read、cache fallback、runtime observe 和 persisted snapshot 组装恢复到 `src/server/codexAppServerBridge.ts` 的 `readThreadRuntimeSnapshot(...)` 内，并撤销 `scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和本测试章节。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，输出 `server module smoke ok`，覆盖 `readAppServerThreadRuntimeSnapshot()` 的 cache hit 避免 heavy read、cached fallback、warning、runtime observe source 和 persisted snapshot。
+- 2026-07-04 构建验证：`node_modules\.bin\vue-tsc.cmd --noEmit`、`node_modules\.bin\vite.cmd build` 和 `node_modules\.bin\tsup.cmd` 通过。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\appServerThreadRuntimeSnapshot.ts`。
+
+---
+
 ### Feature: App Server RPC cache invalidation 模块化
 
 #### Prerequisites

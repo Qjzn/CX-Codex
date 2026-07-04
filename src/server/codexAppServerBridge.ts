@@ -62,16 +62,12 @@ import {
 import {
   AppServerRpcDiagnostics,
 } from './appServerRpcDiagnostics.js'
-import { trimThreadTurnsInRpcResult } from './appServerRpcResult.js'
 import {
   AppServerRpcQueue,
   getAppServerRpcQueuePriority,
 } from './appServerRpcQueue.js'
 import {
-  readActiveTurnIdFromThreadReadPayload,
   readThreadInProgressFromThreadReadPayload,
-  readThreadSessionPathFromThreadReadPayload,
-  readThreadUpdatedAtIsoFromThreadReadPayload,
 } from './appServerThreadPayload.js'
 import {
   readItemIdFromPayload,
@@ -82,16 +78,15 @@ import {
 import { getRpcTimeoutMs } from './appServerRpcTimeoutPolicy.js'
 import {
   createCachedThreadRead,
-  isCachedThreadReadStaleForRuntime,
   type CachedThreadRead,
 } from './appServerThreadReadCache.js'
+import { readAppServerThreadRuntimeSnapshot } from './appServerThreadRuntimeSnapshot.js'
 import { createLocalRuntimeSnapshot } from './appServerRuntimeSnapshotRecovery.js'
 import {
   createAppServerJsonRpcError,
   createRpcTimeoutError,
   isInterruptSettledError,
   isRpcTimeoutError,
-  isThreadMaterializingError,
 } from './appServerRpcErrors.js'
 import { AppServerNotificationDiagnostics } from './appServerNotificationDiagnostics.js'
 import { AppServerStatusDiagnostics } from './appServerStatusDiagnostics.js'
@@ -136,7 +131,6 @@ import { readMergedPinnedThreadIds } from './pinnedThreads.js'
 import { PlanModeTurnStore } from './planModeTurnStore.js'
 import {
   resolveThreadTokenUsage,
-  readThreadTokenUsageFromThreadReadPayload,
   ThreadTokenUsageStore,
   type ThreadTokenUsage,
 } from './threadTokenUsage.js'
@@ -953,133 +947,24 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     })
 
   async function readThreadRuntimeSnapshot(threadId: string): Promise<ThreadRuntimeSnapshot> {
-    const normalizedThreadId = threadId.trim()
-    if (!normalizedThreadId) {
-      throw new Error('Missing thread id')
-    }
-
-    const cachedThreadRead = cachedThreadReadsByThreadId.get(normalizedThreadId) ?? null
-    let lightThreadRead: unknown = null
-    try {
-      lightThreadRead = await appServer.rpc('thread/read', {
-        threadId: normalizedThreadId,
-        includeTurns: false,
-      })
-      statusDiagnostics.observeThreadRead({
-        threadId: normalizedThreadId,
-        payload: lightThreadRead,
-      })
-    } catch (error) {
-      if (!isThreadMaterializingError(error) && !isRpcTimeoutError(error)) {
-        throw error
-      }
-      writeBridgeLog('warn', 'Light thread snapshot unavailable', {
-        threadId: normalizedThreadId,
-        error: getErrorMessage(error, 'Light thread snapshot failed'),
-      })
-    }
-
-    const lightUpdatedAtIso = lightThreadRead ? readThreadUpdatedAtIsoFromThreadReadPayload(lightThreadRead) : ''
-    const lightInProgress = lightThreadRead ? readThreadInProgressFromThreadReadPayload(lightThreadRead) : false
-    const runtimeSnapshotBeforeMessageRead = runtimeStateStore.snapshot(normalizedThreadId, {
-      pendingServerRequests: appServer.listPendingServerRequestsForThread(normalizedThreadId),
-      tokenUsage: appServer.getThreadTokenUsage(normalizedThreadId),
+    return await readAppServerThreadRuntimeSnapshot(threadId, {
+      rpc: (method, params) => appServer.rpc(method, params),
+      observeThreadRead: (details) => statusDiagnostics.observeThreadRead(details),
+      getCachedThreadRead: (normalizedThreadId) => cachedThreadReadsByThreadId.get(normalizedThreadId) ?? null,
+      rememberCachedThreadRead,
+      snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
+      observeRuntimeThreadRead: (normalizedThreadId, inProgress, activeTurnId, updatedAtIso, source) => {
+        runtimeStateStore.observeThreadRead(normalizedThreadId, inProgress, activeTurnId, updatedAtIso, source)
+      },
+      markRuntimeDegraded: (normalizedThreadId, reason) => runtimeStateStore.markDegraded(normalizedThreadId, reason),
+      persistRuntimeSnapshot,
+      listPendingServerRequestsForThread: (normalizedThreadId) => appServer.listPendingServerRequestsForThread(normalizedThreadId),
+      getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
+      getErrorMessage,
+      writeWarning: (message, details) => {
+        writeBridgeLog('warn', message, details)
+      },
     })
-    let threadRead: unknown = null
-    let messageState: ThreadRuntimeSnapshot['messageState'] = 'unavailable'
-
-    if (
-      cachedThreadRead &&
-      lightUpdatedAtIso &&
-      cachedThreadRead.updatedAtIso === lightUpdatedAtIso &&
-      !isCachedThreadReadStaleForRuntime(cachedThreadRead, runtimeSnapshotBeforeMessageRead, lightInProgress)
-    ) {
-      threadRead = cachedThreadRead.threadRead
-      messageState = 'fresh'
-    } else {
-      try {
-        const rawThreadRead = await appServer.rpc('thread/read', {
-          threadId: normalizedThreadId,
-          includeTurns: true,
-        })
-        threadRead = trimThreadTurnsInRpcResult('thread/read', rawThreadRead)
-        statusDiagnostics.observeThreadRead({
-          threadId: normalizedThreadId,
-          payload: threadRead,
-        })
-        rememberCachedThreadRead(normalizedThreadId, threadRead)
-        messageState = 'fresh'
-      } catch (error) {
-        if (!isThreadMaterializingError(error) && !isRpcTimeoutError(error)) {
-          throw error
-        }
-        if (cachedThreadRead) {
-          threadRead = cachedThreadRead.threadRead
-          messageState = 'cached'
-          writeBridgeLog('warn', 'Heavy thread snapshot fell back to cached messages', {
-            threadId: normalizedThreadId,
-            lightUpdatedAtIso,
-            cachedUpdatedAtIso: cachedThreadRead.updatedAtIso,
-            error: getErrorMessage(error, 'Heavy thread snapshot failed'),
-          })
-        } else {
-          writeBridgeLog('warn', 'Heavy thread snapshot unavailable with no cache', {
-            threadId: normalizedThreadId,
-            lightUpdatedAtIso,
-            error: getErrorMessage(error, 'Heavy thread snapshot failed'),
-          })
-        }
-      }
-    }
-
-    const sessionPath =
-      (lightThreadRead ? readThreadSessionPathFromThreadReadPayload(lightThreadRead) : '')
-      || (threadRead ? readThreadSessionPathFromThreadReadPayload(threadRead) : '')
-      || cachedThreadRead?.sessionPath
-      || ''
-    const tokenUsage = appServer.getThreadTokenUsage(normalizedThreadId)
-      ?? (threadRead ? readThreadTokenUsageFromThreadReadPayload(threadRead) : null)
-      ?? (lightThreadRead ? readThreadTokenUsageFromThreadReadPayload(lightThreadRead) : null)
-
-    const updatedAtIso =
-      messageState === 'cached'
-        ? (cachedThreadRead?.updatedAtIso ?? lightUpdatedAtIso)
-        : lightThreadRead
-          ? readThreadUpdatedAtIsoFromThreadReadPayload(lightThreadRead)
-          : threadRead
-            ? readThreadUpdatedAtIsoFromThreadReadPayload(threadRead)
-            : ''
-    const freshThreadInProgress =
-      threadRead && messageState === 'fresh'
-        ? readThreadInProgressFromThreadReadPayload(threadRead)
-        : false
-    const inProgress =
-      lightInProgress
-      || freshThreadInProgress
-      || (!lightThreadRead && messageState === 'cached' ? (cachedThreadRead?.inProgress ?? false) : false)
-    const activeTurnId =
-      (lightThreadRead ? readActiveTurnIdFromThreadReadPayload(lightThreadRead) : '')
-      || (threadRead && messageState === 'fresh' ? readActiveTurnIdFromThreadReadPayload(threadRead) : '')
-      || (!lightThreadRead && messageState === 'cached' ? (cachedThreadRead?.activeTurnId ?? '') : '')
-
-    if (lightThreadRead || threadRead || cachedThreadRead) {
-      runtimeStateStore.observeThreadRead(
-        normalizedThreadId,
-        inProgress,
-        activeTurnId,
-        updatedAtIso,
-        messageState === 'cached' ? 'cache' : 'thread-read',
-      )
-    } else {
-      runtimeStateStore.markDegraded(normalizedThreadId, 'thread snapshot unavailable')
-    }
-
-    return persistRuntimeSnapshot(normalizedThreadId, runtimeStateStore.snapshot(normalizedThreadId, {
-      threadRead,
-      messageState,
-      pendingServerRequests: appServer.listPendingServerRequestsForThread(normalizedThreadId),
-      tokenUsage,
-    }))
   }
 
   function readLocalRuntimeSnapshot(threadId: string): ThreadRuntimeSnapshot {
