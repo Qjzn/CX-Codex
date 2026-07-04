@@ -31,7 +31,8 @@
    - 只验证脚本路径或排查构建问题时，可临时加 `-SkipPackageSmoke`；正式发版验证不要跳过。
    - `verify:release` 的治理门禁会校验 `docs/app-server-schema-audit-summary.json` 的结构；正式发版前如果重新审计发现计数变化，必须同步更新该摘要和 `docs/app-server-protocol-matrix.zh-CN.md`。
    - GitHub Actions Release workflow 默认执行 `-SchemaAudit skip`，因为 runner 不保证安装 Codex CLI；正式发版前应在维护者机器运行 `warn` 或 `strict` 并记录摘要。
-   - 本地 `npm run verify:release` 使用 PowerShell 7 (`pwsh`)；Windows PowerShell 5 用户可直接执行 `powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-release.ps1`。
+   - 本地 `npm.cmd run verify:release` 会自动选择可用的 PowerShell：优先探测 `pwsh`，不可用、失败或挂起时回退到 Windows PowerShell，并把选中的命令复用于 release gate 内部调用。
+   - CI / Release workflow 仍直接使用 GitHub runner 提供的 `pwsh` 调用 `.ps1` 脚本；本地 npm 脚本用于提升 Windows 机器上的验证稳定性。
 
 4. 安全边界复核：
 

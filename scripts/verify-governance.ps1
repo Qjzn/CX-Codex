@@ -158,6 +158,7 @@ Assert-ContentIncludes "SECURITY.md" @(
 
 Assert-ContentIncludes "RELEASE.md" @(
   "npm.cmd run verify:release",
+  "自动选择可用的 PowerShell",
   "SchemaAudit warn",
   "CLI CJS launcher smoke",
   "Release package smoke",
@@ -192,6 +193,12 @@ Assert-ContentIncludes "scripts/verify-release-artifacts.ps1" @(
 )
 
 Assert-ContentIncludes "package.json" @(
+  '"package:release": "node ./scripts/run-powershell-script.mjs ./scripts/package-release.ps1"',
+  '"setup:windows": "node ./scripts/run-powershell-script.mjs ./setup.ps1"',
+  '"test:7420": "node ./scripts/run-powershell-script.mjs ./scripts/regression-7420.ps1"',
+  '"test:7420:frontend": "node ./scripts/run-powershell-script.mjs ./scripts/regression-7420-frontend.ps1"',
+  '"test:7420:soak": "node ./scripts/run-powershell-script.mjs ./scripts/soak-7420.ps1"',
+  '"audit:app-server-schemas": "node ./scripts/run-powershell-script.mjs ./scripts/audit-app-server-schemas.ps1"',
   '"verify:governance": "node ./scripts/run-powershell-script.mjs ./scripts/verify-governance.ps1"',
   '"verify:release": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release.ps1"',
   '"verify:release-artifacts": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release-artifacts.ps1"'

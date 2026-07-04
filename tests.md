@@ -3844,3 +3844,38 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 npm 治理入口：`npm.cmd run verify:governance` 通过，同样自动回退到 `powershell.exe`；仅出现 npm 本机 update config 权限提示，不影响验证结果。
 - 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
 - 2026-07-04 完整 Release gate：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `vue-tsc --noEmit`、`vite build`、`tsup`、server module smoke、CLI help smoke、CLI CJS launcher smoke 和 release package smoke；Vite 仍有既有 large chunk warning，schema audit 按命令跳过。
+
+---
+
+### Feature: 本地 npm PowerShell 入口统一回退
+
+#### Prerequisites
+- 当前仓库包含 `scripts/run-powershell-script.mjs`。
+- 当前仓库的 `package.json` 包含 `package:release`、`setup:windows`、`test:7420`、`test:7420:frontend`、`test:7420:soak`、`audit:app-server-schemas`、`verify:governance`、`verify:release` 和 `verify:release-artifacts`。
+- 本机至少存在一个可用 PowerShell 命令，例如 Windows PowerShell `powershell.exe` 或 PowerShell 7 `pwsh`。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:governance`，确认治理门禁校验所有本地 npm PowerShell 入口都走统一运行器。
+3. 执行 `npm.cmd run package:release -- -Version local-wrapper-smoke -OutputDir output\package-wrapper-smoke`。
+4. 执行 `npm.cmd run verify:release-artifacts -- -OutputDir output\package-wrapper-smoke`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip`。
+6. 检查 `RELEASE.md`，确认本地 release 验证说明不再写死必须使用 `pwsh`。
+
+#### Expected Results
+- `package:release`、`setup:windows`、`test:7420*`、`audit:app-server-schemas` 和 release 验证脚本都通过 `node ./scripts/run-powershell-script.mjs` 启动。
+- 本地 npm 脚本会先探测 `pwsh`，不可用、失败或挂起时回退到 Windows PowerShell。
+- release 打包 smoke 会生成 zip 和 `.sha256`，checksum 验证通过。
+- CI / Release workflow 仍可直接使用 runner 的 `pwsh` 调用 `.ps1` 脚本。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，恢复 `package.json` 中相关 npm 脚本为直接 PowerShell 调用，并撤销 `scripts/verify-governance.ps1`、`RELEASE.md`、`docs/changelog.zh-CN.md` 和本节测试记录。
+- 验证后可删除 `output\package-wrapper-smoke`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Using PowerShell: powershell.exe (5.1.26100.8655)` 和 `Governance docs check passed.`，并校验所有本地 npm PowerShell 入口都走统一运行器。
+- 2026-07-04 打包入口 smoke：`npm.cmd run package:release -- -Version local-wrapper-smoke -OutputDir output\package-wrapper-smoke` 通过，生成 `CX-Codex-local-wrapper-smoke.zip` 和 `.sha256`；运行器自动回退到 `powershell.exe`。
+- 2026-07-04 Release artifact checksum：`npm.cmd run verify:release-artifacts -- -OutputDir output\package-wrapper-smoke` 通过，输出 `checksum ok: CX-Codex-local-wrapper-smoke.zip` 和 `Release artifact checksum verification passed.`。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
+- 2026-07-04 Cleanup：已删除验证产物目录 `output\package-wrapper-smoke`；npm 本机 update config 权限提示为非阻塞环境提示。
