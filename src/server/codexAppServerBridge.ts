@@ -146,6 +146,7 @@ import { AppServerThreadListAugmenter } from './appServerThreadListAugment.js'
 import { startRuntimeTurnWithAppServer } from './appServerRuntimeStart.js'
 import { interruptRuntimeTurnWithAppServer } from './appServerRuntimeInterrupt.js'
 import { persistAppServerRuntimeSnapshot } from './appServerRuntimeSnapshotPersistence.js'
+import { readAppServerLocalRuntimeSnapshot } from './appServerLocalRuntimeSnapshot.js'
 
 type JsonRpcResponse = {
   id?: number
@@ -951,16 +952,13 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   }
 
   function readLocalRuntimeSnapshot(threadId: string): ThreadRuntimeSnapshot {
-    const normalizedThreadId = threadId.trim()
-    const pendingServerRequests = appServer.listPendingServerRequestsForThread(normalizedThreadId)
-    const tokenUsage = appServer.getThreadTokenUsage(normalizedThreadId)
-    return createLocalRuntimeSnapshot({
-      persistedSnapshot: runtimeStore.getSnapshot(normalizedThreadId)?.snapshot,
-      pendingServerRequests,
-      tokenUsage,
-      appServerStartedAtMs: appServer.getStartedAtMs(),
-      createCurrentSnapshot: (overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
-      persistCurrentSnapshot: (snapshot) => persistRuntimeSnapshot(normalizedThreadId, snapshot),
+    return readAppServerLocalRuntimeSnapshot(threadId, {
+      getSnapshot: (normalizedThreadId) => runtimeStore.getSnapshot(normalizedThreadId),
+      listPendingServerRequestsForThread: (normalizedThreadId) => appServer.listPendingServerRequestsForThread(normalizedThreadId),
+      getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
+      getAppServerStartedAtMs: () => appServer.getStartedAtMs(),
+      snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
+      persistRuntimeSnapshot,
     })
   }
 

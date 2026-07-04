@@ -290,6 +290,7 @@ import {
   createLocalRuntimeSnapshot,
   createLocalRuntimeSnapshotFromPersisted,
 } from '../src/server/appServerRuntimeSnapshotRecovery.js'
+import { readAppServerLocalRuntimeSnapshot } from '../src/server/appServerLocalRuntimeSnapshot.js'
 import {
   normalizeWorkspaceRootsState,
   readWorkspaceRootsState,
@@ -403,6 +404,7 @@ try {
   smokeAppServerRuntimeBridge()
   smokeAppServerRuntimeRequestReconciliation()
   await smokeAppServerRuntimeReconcileScheduler()
+  smokeAppServerLocalRuntimeSnapshot()
   smokeAppServerRuntimeSnapshotRecovery()
   await smokeAppServerThreadRuntimeSnapshot()
   smokeRuntimeStateStore()
@@ -5732,6 +5734,105 @@ function smokeAppServerRuntimeSnapshotRecovery(): void {
     tokenUsage: { total: 4 },
   }])
   assert.deepEqual(persistedSnapshots, [currentSnapshot])
+}
+
+function smokeAppServerLocalRuntimeSnapshot(): void {
+  const pendingServerRequests = [{
+    id: 1,
+    method: 'server/request',
+    params: { threadId: 'thread-a' },
+    receivedAtIso: '2026-01-01T00:00:00.000Z',
+  }]
+  const tokenUsage = { total: 7 }
+  const persistedSnapshot = createThreadRuntimeSnapshot({
+    threadId: 'thread-a',
+    executionState: 'running',
+    activeTurnId: 'turn-a',
+    lastEventAtIso: '2026-01-01T00:00:00.000Z',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    threadRead: { should: 'drop' },
+    pendingServerRequests: [],
+    tokenUsage: null,
+  })
+  const persistedResult = readAppServerLocalRuntimeSnapshot(' thread-a ', {
+    getSnapshot: (threadId) => {
+      assert.equal(threadId, 'thread-a')
+      return {
+        threadId,
+        executionState: 'running',
+        activeTurnId: 'turn-a',
+        activeItemId: '',
+        canStop: true,
+        stopRequested: false,
+        lastEventSeq: 1,
+        updatedAtIso: '2026-01-01T00:00:00.000Z',
+        snapshot: persistedSnapshot,
+      }
+    },
+    listPendingServerRequestsForThread: (threadId) => {
+      assert.equal(threadId, 'thread-a')
+      return pendingServerRequests
+    },
+    getThreadTokenUsage: (threadId) => {
+      assert.equal(threadId, 'thread-a')
+      return tokenUsage
+    },
+    getAppServerStartedAtMs: () => Date.parse('2025-12-31T23:59:59.000Z'),
+    snapshotRuntime: () => {
+      throw new Error('persisted local snapshot should not create a current snapshot')
+    },
+    persistRuntimeSnapshot: () => {
+      throw new Error('persisted local snapshot should not persist a current snapshot')
+    },
+  })
+  assert.equal(persistedResult.threadId, 'thread-a')
+  assert.equal(persistedResult.threadRead, null)
+  assert.equal(persistedResult.messageState, 'unavailable')
+  assert.deepEqual(persistedResult.pendingServerRequests, pendingServerRequests)
+  assert.equal(persistedResult.tokenUsage, tokenUsage)
+
+  const createdOverlays: unknown[] = []
+  const persistedSnapshots: unknown[] = []
+  const currentSnapshot = createThreadRuntimeSnapshot({
+    threadId: 'thread-current',
+    executionState: 'completed',
+    tokenUsage,
+  })
+  const currentResult = readAppServerLocalRuntimeSnapshot(' thread-current ', {
+    getSnapshot: (threadId) => {
+      assert.equal(threadId, 'thread-current')
+      return null
+    },
+    listPendingServerRequestsForThread: (threadId) => {
+      assert.equal(threadId, 'thread-current')
+      return pendingServerRequests
+    },
+    getThreadTokenUsage: (threadId) => {
+      assert.equal(threadId, 'thread-current')
+      return tokenUsage
+    },
+    getAppServerStartedAtMs: () => Date.parse('2025-12-31T23:59:59.000Z'),
+    snapshotRuntime: (threadId, overlay) => {
+      createdOverlays.push({ threadId, overlay })
+      return currentSnapshot
+    },
+    persistRuntimeSnapshot: (threadId, snapshot) => {
+      persistedSnapshots.push({ threadId, snapshot })
+      return snapshot
+    },
+  })
+  assert.equal(currentResult, currentSnapshot)
+  assert.deepEqual(createdOverlays, [{
+    threadId: 'thread-current',
+    overlay: {
+      pendingServerRequests,
+      tokenUsage,
+    },
+  }])
+  assert.deepEqual(persistedSnapshots, [{
+    threadId: 'thread-current',
+    snapshot: currentSnapshot,
+  }])
 }
 
 function smokeAppServerRuntimeSnapshotPersistence(): void {
