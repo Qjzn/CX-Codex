@@ -130,6 +130,10 @@ import {
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { AppServerPendingRpcStore } from '../src/server/appServerPendingRpcStore.js'
 import { clearAppServerSessionStores } from '../src/server/appServerSessionCleanup.js'
+import {
+  attachAppServerProcessHandlers,
+  type AppServerProcessHandlerTarget,
+} from '../src/server/appServerProcessHandlers.js'
 import { terminateAppServerProcess } from '../src/server/appServerProcessTermination.js'
 import { startCodexBridgeStartupTasks } from '../src/server/codexBridgeStartupTasks.js'
 import {
@@ -392,6 +396,7 @@ try {
   await smokeAppServerClientInfo()
   smokeAppServerPendingRpcStore()
   smokeAppServerSessionCleanup()
+  smokeAppServerProcessHandlers()
   smokeAppServerProcessTermination()
   await smokeCodexBridgeStartupTasks()
   smokePendingServerRequests()
@@ -591,6 +596,81 @@ function smokeAppServerSessionCleanup(): void {
     'rpcCache.clearThreadList',
     'threadTokenUsage.clear',
     'planModeTurns.clearAll',
+  ])
+}
+
+function smokeAppServerProcessHandlers(): void {
+  const handlers: Record<string, Array<(...args: unknown[]) => void>> = {}
+  const encodings: string[] = []
+  function onProcess(event: 'error', listener: (error: Error) => void): unknown
+  function onProcess(event: 'exit', listener: () => void): unknown
+  function onProcess(event: 'error' | 'exit', listener: ((error: Error) => void) | (() => void)): unknown {
+    handlers[`process.${event}`] = [listener as (...args: unknown[]) => void]
+    return undefined
+  }
+
+  const proc: AppServerProcessHandlerTarget = {
+    stdout: {
+      setEncoding: (encoding: BufferEncoding) => {
+        encodings.push(`stdout.${encoding}`)
+      },
+      on: (event: 'data', listener: (chunk: string) => void) => {
+        handlers[`stdout.${event}`] = [listener as (...args: unknown[]) => void]
+      },
+    },
+    stderr: {
+      setEncoding: (encoding: BufferEncoding) => {
+        encodings.push(`stderr.${encoding}`)
+      },
+      on: (event: 'data', listener: (chunk: string) => void) => {
+        handlers[`stderr.${event}`] = [listener as (...args: unknown[]) => void]
+      },
+    },
+    stdin: {
+      on: (event: 'error', listener: (error: Error) => void) => {
+        handlers[`stdin.${event}`] = [listener as (...args: unknown[]) => void]
+      },
+    },
+    on: onProcess,
+  }
+  const calls: string[] = []
+  let currentProcess = true
+
+  attachAppServerProcessHandlers(proc, {
+    isCurrentProcess: (eventProc) => eventProc === proc && currentProcess,
+    handleStdoutChunk: (chunk) => calls.push(`stdout:${chunk}`),
+    handleStderrMessage: (message) => calls.push(`stderr:${message}`),
+    handleStdinError: (error) => calls.push(`stdin:${error.message}`),
+    handleProcessError: (error) => calls.push(`error:${error.message}`),
+    handleProcessExit: () => calls.push('exit'),
+  })
+
+  assert.deepEqual(encodings, ['stdout.utf8', 'stderr.utf8'])
+  handlers['stdout.data'][0]('{"jsonrpc":"2.0"}')
+  handlers['stderr.data'][0]('  warning text  ')
+  handlers['stderr.data'][0]('   ')
+  handlers['stdin.error'][0](new Error('stdin failed'))
+  handlers['process.error'][0](new Error('process failed'))
+  handlers['process.exit'][0]()
+  assert.deepEqual(calls, [
+    'stdout:{"jsonrpc":"2.0"}',
+    'stderr:warning text',
+    'stdin:stdin failed',
+    'error:process failed',
+    'exit',
+  ])
+
+  currentProcess = false
+  handlers['stdin.error'][0](new Error('stale stdin'))
+  handlers['process.error'][0](new Error('stale process'))
+  handlers['process.exit'][0]()
+  assert.deepEqual(calls, [
+    'stdout:{"jsonrpc":"2.0"}',
+    'stderr:warning text',
+    'stdin:stdin failed',
+    'error:process failed',
+    'exit',
+    'exit',
   ])
 }
 

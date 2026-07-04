@@ -109,6 +109,7 @@ import {
 } from './appServerHealth.js'
 import { AppServerLineBuffer } from './appServerLineBuffer.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
+import { attachAppServerProcessHandlers } from './appServerProcessHandlers.js'
 import { AppServerPendingRpcStore } from './appServerPendingRpcStore.js'
 import { clearAppServerSessionStores } from './appServerSessionCleanup.js'
 import { terminateAppServerProcess } from './appServerProcessTermination.js'
@@ -222,55 +223,44 @@ class AppServerProcess {
     const proc = spawn(invocation.command, invocation.args, { stdio: ['pipe', 'pipe', 'pipe'] })
     this.process = proc
 
-    proc.stdout.setEncoding('utf8')
-    proc.stdout.on('data', (chunk: string) => {
-      this.stdoutLineBuffer.push(chunk, (line) => this.handleLine(line))
-    })
-
-    proc.stderr.setEncoding('utf8')
-    proc.stderr.on('data', (chunk: string) => {
-      const message = chunk.trim()
-      if (!message) return
-      this.stderrLogger.log(message)
-    })
-
-    proc.stdin.on('error', (error) => {
-      if (this.process !== proc) return
-      logBridgeError('Codex app-server stdin failed', error)
-      this.restartAppServer('stdin error')
-    })
-
-    proc.on('error', (error) => {
-      if (this.process !== proc) return
-      logBridgeError('Codex app-server process error', error)
-      this.pending.rejectAll(error)
-      this.rejectQueuedRpcCalls(error)
-      this.clearSessionStores()
-      this.process = null
-      this.initialized = false
-      this.initializePromise = null
-      this.stdoutLineBuffer.clear()
-    })
-
-    proc.on('exit', () => {
-      const expectedExit = this.stopping || this.expectedExitProcesses.has(proc)
-      const failure = new Error(this.stopping ? 'codex app-server stopped' : 'codex app-server exited unexpectedly')
-      if (!expectedExit) {
-        logBridgeError('Codex app-server exited unexpectedly', failure, {
-          pendingRpcCount: this.pending.count,
-          pendingServerRequestCount: this.pendingServerRequests.count,
-        })
-      }
-
-      if (this.process === proc) {
-        this.pending.rejectAll(failure)
-        this.rejectQueuedRpcCalls(failure)
+    attachAppServerProcessHandlers(proc, {
+      isCurrentProcess: (eventProc) => this.process === eventProc,
+      handleStdoutChunk: (chunk) => this.stdoutLineBuffer.push(chunk, (line) => this.handleLine(line)),
+      handleStderrMessage: (message) => this.stderrLogger.log(message),
+      handleStdinError: (error) => {
+        logBridgeError('Codex app-server stdin failed', error)
+        this.restartAppServer('stdin error')
+      },
+      handleProcessError: (error) => {
+        logBridgeError('Codex app-server process error', error)
+        this.pending.rejectAll(error)
+        this.rejectQueuedRpcCalls(error)
         this.clearSessionStores()
         this.process = null
         this.initialized = false
         this.initializePromise = null
         this.stdoutLineBuffer.clear()
-      }
+      },
+      handleProcessExit: () => {
+        const expectedExit = this.stopping || this.expectedExitProcesses.has(proc)
+        const failure = new Error(this.stopping ? 'codex app-server stopped' : 'codex app-server exited unexpectedly')
+        if (!expectedExit) {
+          logBridgeError('Codex app-server exited unexpectedly', failure, {
+            pendingRpcCount: this.pending.count,
+            pendingServerRequestCount: this.pendingServerRequests.count,
+          })
+        }
+
+        if (this.process === proc) {
+          this.pending.rejectAll(failure)
+          this.rejectQueuedRpcCalls(failure)
+          this.clearSessionStores()
+          this.process = null
+          this.initialized = false
+          this.initializePromise = null
+          this.stdoutLineBuffer.clear()
+        }
+      },
     })
   }
 

@@ -397,6 +397,7 @@ if (-not $SkipPackageSmoke) {
     "src\server\notificationReplayRoute.ts",
     "src\server\notificationSseRoute.ts",
     "src\server\appServerPendingRpcStore.ts",
+    "src\server\appServerProcessHandlers.ts",
     "src\server\appServerSessionCleanup.ts",
     "src\server\appServerServerRequestHandler.ts",
     "src\server\appServerProcessTermination.ts",
