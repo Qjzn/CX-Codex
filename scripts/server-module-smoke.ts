@@ -257,6 +257,10 @@ import {
 import { syncBridgeNotificationRuntimeState } from '../src/server/appServerNotificationRuntimeSync.js'
 import { runRuntimeReconcileBatch } from '../src/server/appServerRuntimeReconcileScheduler.js'
 import {
+  startRuntimeTurnWithAppServer,
+  type RuntimeStartDependencies,
+} from '../src/server/appServerRuntimeStart.js'
+import {
   interruptRuntimeTurnWithAppServer,
   type RuntimeInterruptDependencies,
 } from '../src/server/appServerRuntimeInterrupt.js'
@@ -384,6 +388,7 @@ try {
   await smokeProjectRoots()
   await smokeProjectRootRoutes()
   smokeRuntimePayloadParsing()
+  await smokeAppServerRuntimeStart()
   await smokeAppServerRuntimeInterrupt()
   smokeAppServerNotificationRuntimeSync()
   await smokeRuntimeActionRoutes()
@@ -4997,6 +5002,192 @@ function smokeRuntimePayloadParsing(): void {
     () => parseRuntimeInterruptPayload({ threadId: 'thread-a' }),
     /runtime\/interrupt requires turnId/,
   )
+}
+
+async function smokeAppServerRuntimeStart(): Promise<void> {
+  const createHarness = (rpc: (method: string, params: unknown) => Promise<unknown>) => {
+    let currentRequest: RuntimeRequestRecord | null = null
+    const created: unknown[] = []
+    const updates: Array<{ requestId: string; patch: unknown }> = []
+    const marks: Array<{ action: string; threadId: string; turnId?: string; lastError?: string | null }> = []
+    const persisted: string[] = []
+    const rpcCalls: Array<{ method: string; params: unknown }> = []
+    const clearedThreadSearchIndexes: string[] = []
+    const planModeTurns: Array<{ threadId: string; turnId?: string }> = []
+    const dependencies: RuntimeStartDependencies = {
+      createRequest: (record) => {
+        created.push(record)
+        currentRequest = {
+          requestId: record.requestId,
+          clientMessageId: record.clientMessageId,
+          threadId: record.threadId,
+          turnId: '',
+          status: record.status,
+          promptHash: record.promptHash,
+          mode: record.mode,
+          payload: record.payload,
+          retryCount: 0,
+          createdAtIso: '2026-01-01T00:00:00.000Z',
+          updatedAtIso: '2026-01-01T00:00:00.000Z',
+          lastError: null,
+        }
+        return currentRequest
+      },
+      updateRequest: (requestId, patch) => {
+        updates.push({ requestId, patch })
+        if (!currentRequest) return null
+        currentRequest = {
+          ...currentRequest,
+          ...patch,
+          updatedAtIso: '2026-01-01T00:00:01.000Z',
+          lastError: Object.prototype.hasOwnProperty.call(patch, 'lastError') ? patch.lastError ?? null : currentRequest.lastError,
+        }
+        return currentRequest
+      },
+      getRequest: () => currentRequest,
+      rpc: async (method, params) => {
+        rpcCalls.push({ method, params })
+        return await rpc(method, params)
+      },
+      clearThreadSearchIndex: () => {
+        clearedThreadSearchIndexes.push('clear')
+      },
+      markStarting: (threadId) => {
+        marks.push({ action: 'starting', threadId })
+      },
+      markRunning: (threadId, turnId = '') => {
+        marks.push({ action: 'running', threadId, turnId })
+      },
+      markStartUncertain: (threadId, lastError = null) => {
+        marks.push({ action: 'start_uncertain', threadId, lastError })
+      },
+      persistRuntimeSnapshot: (threadId) => {
+        persisted.push(threadId)
+        return { activeTurnId: `${threadId}-snapshot-turn` }
+      },
+      markPlanModeTurn: (threadId, turnId = '') => {
+        planModeTurns.push({ threadId, turnId })
+      },
+      getErrorMessage,
+    }
+
+    return {
+      created,
+      updates,
+      marks,
+      persisted,
+      rpcCalls,
+      clearedThreadSearchIndexes,
+      planModeTurns,
+      dependencies,
+    }
+  }
+
+  let planStartCallCount = 0
+  const plan = createHarness(async (method, params) => {
+    if (method === 'thread/start') return { thread: { id: 'thread-plan' } }
+    if (method === 'turn/start') {
+      planStartCallCount += 1
+      const root = asRecord(params)
+      if (planStartCallCount === 1) {
+        assert.equal(root?.mode, 'plan')
+        throw new Error('unknown mode')
+      }
+      assert.equal(root?.mode, undefined)
+      assert.equal(root?.collaborationMode, undefined)
+      assert.match(JSON.stringify(root?.input), /Codex Plan Mode/)
+      return { turn: { id: 'turn-plan' } }
+    }
+    throw new Error(`unexpected rpc method ${method}`)
+  })
+  const planResult = await startRuntimeTurnWithAppServer({
+    requestId: 'request-plan',
+    clientMessageId: 'client-plan',
+    mode: 'plan',
+    model: 'gpt-test',
+    cwd: ' E:/project ',
+    effort: ' high ',
+    attachments: [{ path: 'a.txt' }],
+    input: [{ type: 'text', text: 'Draft a plan' }],
+  }, plan.dependencies)
+  assert.equal(planResult.status, 'running')
+  assert.equal(planResult.threadId, 'thread-plan')
+  assert.equal(planResult.turnId, 'turn-plan')
+  assert.deepEqual(plan.clearedThreadSearchIndexes, ['clear'])
+  assert.deepEqual(plan.planModeTurns, [{ threadId: 'thread-plan', turnId: 'turn-plan' }])
+  assert.deepEqual(plan.marks, [
+    { action: 'starting', threadId: 'thread-plan' },
+    { action: 'running', threadId: 'thread-plan', turnId: 'turn-plan' },
+  ])
+  assert.deepEqual(plan.persisted, ['thread-plan', 'thread-plan'])
+  assert.deepEqual(plan.rpcCalls.map((call) => call.method), ['thread/start', 'turn/start', 'turn/start'])
+  assert.deepEqual(plan.updates.map((call) => call.patch), [
+    { threadId: 'thread-plan', status: 'pending_start' },
+    { status: 'starting', threadId: 'thread-plan' },
+    { status: 'running', threadId: 'thread-plan', turnId: 'turn-plan', lastError: null },
+  ])
+  assert.equal(typeof asRecord(plan.created[0])?.promptHash, 'string')
+
+  const snapshotFallback = createHarness(async (method) => {
+    assert.equal(method, 'turn/start')
+    return {}
+  })
+  const snapshotFallbackResult = await startRuntimeTurnWithAppServer({
+    requestId: 'request-fallback',
+    threadId: 'thread-fallback',
+    input: [{ type: 'text', text: 'Continue' }],
+  }, snapshotFallback.dependencies)
+  assert.equal(snapshotFallbackResult.turnId, 'thread-fallback-snapshot-turn')
+  assert.deepEqual(snapshotFallback.rpcCalls, [{
+    method: 'turn/start',
+    params: {
+      threadId: 'thread-fallback',
+      input: [{ type: 'text', text: 'Continue' }],
+    },
+  }])
+
+  const timedOut = createHarness(async () => {
+    throw createRpcTimeoutError('turn/start', 1000)
+  })
+  const timedOutResult = await startRuntimeTurnWithAppServer({
+    requestId: 'request-timeout',
+    threadId: 'thread-timeout',
+    input: [{ type: 'text', text: 'Wait' }],
+  }, timedOut.dependencies)
+  assert.equal(timedOutResult.status, 'start_uncertain')
+  assert.deepEqual(timedOut.marks, [
+    { action: 'starting', threadId: 'thread-timeout' },
+    { action: 'start_uncertain', threadId: 'thread-timeout', lastError: 'turn/start timed out after 1s' },
+  ])
+  assert.deepEqual(timedOut.persisted, ['thread-timeout', 'thread-timeout'])
+  assert.deepEqual(timedOut.updates.at(-1), {
+    requestId: 'request-timeout',
+    patch: {
+      status: 'start_uncertain',
+      threadId: 'thread-timeout',
+      lastError: 'turn/start timed out after 1s',
+    },
+  })
+
+  const failed = createHarness(async () => {
+    throw new Error('permission denied')
+  })
+  await assert.rejects(
+    () => startRuntimeTurnWithAppServer({
+      requestId: 'request-failed',
+      threadId: 'thread-failed',
+      input: [{ type: 'text', text: 'Run' }],
+    }, failed.dependencies),
+    /permission denied/,
+  )
+  assert.deepEqual(failed.updates.at(-1), {
+    requestId: 'request-failed',
+    patch: {
+      status: 'failed',
+      threadId: 'thread-failed',
+      lastError: 'permission denied',
+    },
+  })
 }
 
 async function smokeAppServerRuntimeInterrupt(): Promise<void> {

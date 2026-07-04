@@ -322,6 +322,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "dist\index.html",
   "dist-cli\index.js",
   "src\server\appServerRuntimeInterrupt.ts",
+  "src\server\appServerRuntimeStart.ts",
   "src\server\appServerNotificationRuntimeSync.ts",
   "src\server\appServerNotificationState.ts",
   "src\server\appServerRuntimeReconcileScheduler.ts",
@@ -348,6 +349,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
 
 Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
   "src', 'server', 'appServerRuntimeInterrupt.ts'",
+  "src', 'server', 'appServerRuntimeStart.ts'",
   "src', 'server', 'appServerNotificationRuntimeSync.ts'",
   "src', 'server', 'appServerNotificationState.ts'",
   "src', 'server', 'appServerRuntimeReconcileScheduler.ts'",
@@ -395,6 +397,8 @@ Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "smokeNotificationSseRoute",
   "handleRuntimeActionRoutes",
   "smokeRuntimeActionRoutes",
+  "startRuntimeTurnWithAppServer",
+  "smokeAppServerRuntimeStart",
   "interruptRuntimeTurnWithAppServer",
   "smokeAppServerRuntimeInterrupt",
   "handleRuntimeStateRoutes",

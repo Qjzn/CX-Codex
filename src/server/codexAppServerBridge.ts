@@ -21,12 +21,6 @@ import { PendingServerRequestStore, type PendingServerRequest } from './pendingS
 import { logBridgeError, writeBridgeLog } from './bridgeLog.js'
 import { getErrorMessage } from './errorMessage.js'
 import {
-  createRuntimePromptHash,
-  normalizePlanModeTurnStartParams,
-  parseRuntimeSendPayload,
-  shouldRetryPlanModeWithoutNativeMode,
-} from './runtimePayload.js'
-import {
   readJsonBody,
   RequestBodyTooLargeError,
 } from './httpBody.js'
@@ -84,7 +78,6 @@ import { createLocalRuntimeSnapshot } from './appServerRuntimeSnapshotRecovery.j
 import {
   createAppServerJsonRpcError,
   createRpcTimeoutError,
-  isRpcTimeoutError,
 } from './appServerRpcErrors.js'
 import { AppServerNotificationDiagnostics } from './appServerNotificationDiagnostics.js'
 import { AppServerStatusDiagnostics } from './appServerStatusDiagnostics.js'
@@ -151,6 +144,7 @@ import {
   readWebBridgeSettings,
 } from './webBridgeSettings.js'
 import { AppServerThreadListAugmenter } from './appServerThreadListAugment.js'
+import { startRuntimeTurnWithAppServer } from './appServerRuntimeStart.js'
 import { interruptRuntimeTurnWithAppServer } from './appServerRuntimeInterrupt.js'
 
 type JsonRpcResponse = {
@@ -992,109 +986,19 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     turnId: string
     status: RuntimeRequestStatus
   }> {
-    const parsed = parseRuntimeSendPayload(payload)
-    let threadId = parsed.threadId
-
-    runtimeStore.createRequest({
-      requestId: parsed.requestId,
-      clientMessageId: parsed.clientMessageId,
-      threadId,
-      status: 'pending_start',
-      promptHash: createRuntimePromptHash(parsed.input),
-      mode: parsed.mode,
-      payload: parsed.payloadSummary,
+    return await startRuntimeTurnWithAppServer(payload, {
+      createRequest: (record) => runtimeStore.createRequest(record),
+      updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
+      getRequest: (requestId) => runtimeStore.getRequest(requestId),
+      rpc: (method, params) => appServer.rpc(method, params),
+      clearThreadSearchIndex: () => threadSearchIndexStore.clear(),
+      markStarting: (threadId) => runtimeStateStore.markStarting(threadId),
+      markRunning: (threadId, turnId = '') => runtimeStateStore.markRunning(threadId, turnId),
+      markStartUncertain: (threadId, lastError = null) => runtimeStateStore.markStartUncertain(threadId, lastError),
+      persistRuntimeSnapshot,
+      markPlanModeTurn: (threadId, turnId = '') => appServer.markPlanModeTurn(threadId, turnId),
+      getErrorMessage,
     })
-
-    try {
-      if (!threadId) {
-        const threadParams: Record<string, unknown> = {}
-        if (parsed.cwd) threadParams.cwd = parsed.cwd
-        if (parsed.model) threadParams.model = parsed.model
-        const startedThread = await appServer.rpc('thread/start', threadParams)
-        threadId = readThreadIdFromPayload(startedThread)
-        if (!threadId) throw new Error('thread/start did not return a thread id')
-        threadSearchIndexStore.clear()
-        runtimeStore.updateRequest(parsed.requestId, {
-          threadId,
-          status: 'pending_start',
-        })
-      }
-
-      const turnParams: Record<string, unknown> = {
-        threadId,
-        input: parsed.input,
-      }
-      if (Array.isArray(parsed.attachments) && parsed.attachments.length > 0) {
-        turnParams.attachments = parsed.attachments
-      }
-      if (parsed.model) turnParams.model = parsed.model
-      const effort = typeof parsed.effort === 'string' ? parsed.effort.trim() : ''
-      if (effort) turnParams.effort = effort
-      if (parsed.mode === 'plan') turnParams.collaborationMode = 'plan'
-
-      runtimeStateStore.markStarting(threadId)
-      persistRuntimeSnapshot(threadId)
-      runtimeStore.updateRequest(parsed.requestId, {
-        status: 'starting',
-        threadId,
-      })
-
-      let rpcParams: unknown = parsed.mode === 'plan'
-        ? normalizePlanModeTurnStartParams(turnParams, { includeNativeMode: true })
-        : turnParams
-      let rpcResult: unknown
-      try {
-        rpcResult = await appServer.rpc('turn/start', rpcParams)
-      } catch (error) {
-        if (parsed.mode !== 'plan' || !shouldRetryPlanModeWithoutNativeMode(error)) {
-          throw error
-        }
-        rpcParams = normalizePlanModeTurnStartParams(turnParams, { includeNativeMode: false })
-        rpcResult = await appServer.rpc('turn/start', rpcParams)
-      }
-
-      const turnId = readTurnIdFromPayload(rpcResult)
-      if (parsed.mode === 'plan') {
-        appServer.markPlanModeTurn(threadId, turnId)
-      }
-      runtimeStateStore.markRunning(threadId, turnId)
-      const snapshot = persistRuntimeSnapshot(threadId)
-      const request = runtimeStore.updateRequest(parsed.requestId, {
-        status: 'running',
-        threadId,
-        turnId: turnId || snapshot.activeTurnId,
-        lastError: null,
-      }) ?? runtimeStore.getRequest(parsed.requestId)
-      return {
-        request: request as RuntimeRequestRecord,
-        threadId,
-        turnId: turnId || snapshot.activeTurnId,
-        status: 'running',
-      }
-    } catch (error) {
-      if (threadId && isRpcTimeoutError(error)) {
-        runtimeStateStore.markStartUncertain(threadId, getErrorMessage(error, 'turn/start timed out'))
-        persistRuntimeSnapshot(threadId)
-        const request = runtimeStore.updateRequest(parsed.requestId, {
-          status: 'start_uncertain',
-          threadId,
-          lastError: getErrorMessage(error, 'turn/start timed out'),
-        }) ?? runtimeStore.getRequest(parsed.requestId)
-        return {
-          request: request as RuntimeRequestRecord,
-          threadId,
-          turnId: '',
-          status: 'start_uncertain',
-        }
-      }
-
-      runtimeStore.updateRequest(parsed.requestId, {
-        status: 'failed',
-        threadId,
-        lastError: getErrorMessage(error, 'runtime send failed'),
-      })
-      throw error
-    }
   }
 
   async function interruptRuntimeTurn(payload: unknown): Promise<{

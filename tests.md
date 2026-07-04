@@ -4800,6 +4800,44 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Runtime start 执行模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerRuntimeStart.ts`、`src/server/codexAppServerBridge.ts` 和 `scripts/server-module-smoke.ts`。
+- 本机可运行 server module smoke、governance gate、release gate 和直接构建命令。
+
+#### Steps
+1. 打开 `src/server/codexAppServerBridge.ts`，确认 `startRuntimeTurn(...)` 只组装 runtime store、runtime state、App Server RPC、thread search cache、snapshot persist 和 plan-mode mark 依赖，然后调用 `startRuntimeTurnWithAppServer(...)`。
+2. 打开 `src/server/appServerRuntimeStart.ts`，确认它负责解析 `/codex-api/runtime/send` payload、创建 `pending_start` request、必要时调用 `thread/start`、调用 `turn/start`、处理 plan-mode native/fallback 参数、更新 runtime state/request，并处理 timeout 和 failed 分支。
+3. 执行 `git diff --check`。
+4. 执行 `node scripts\verify-server-modules.mjs`。
+5. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+6. 执行 `node_modules\.bin\vite.cmd build`。
+7. 执行 `node_modules\.bin\tsup.cmd`。
+8. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+9. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+10. 确认 release package smoke 必检 `src\server\appServerRuntimeStart.ts`。
+
+#### Expected Results
+- 没有 `threadId` 的 runtime send 会先调用 `thread/start`，成功后清理 thread search index，并把 request 保持在 `pending_start` 后继续 `turn/start`。
+- plan mode `turn/start` 会先尝试官方 native `mode=plan` 参数；遇到 mode 兼容错误时会回退为 prompt wrapper，不误伤 execute 模式。
+- 成功启动时返回 `running`，标记 runtime running、持久化 snapshot，并使用 App Server 返回的 turnId 或 snapshot activeTurnId 更新 request。
+- `turn/start` 超时时返回 `start_uncertain`，标记 runtime start uncertain、持久化 snapshot，并把 request patch 为 `start_uncertain`。
+- 其他 RPC 失败会把 request patch 为 `failed` 并继续抛出原始错误。
+- `appServerRuntimeStart.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `src/server/appServerRuntimeStart.ts`，把 `startRuntimeTurn(...)` 的解析、thread/start、turn/start、plan fallback 和状态收敛逻辑恢复到 `src/server/codexAppServerBridge.ts` 内，并撤销 `scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和本测试章节。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，覆盖 `startRuntimeTurnWithAppServer()` 的 new-thread plan fallback success、snapshot activeTurnId fallback、timeout start_uncertain 和 failed 四条路径。
+- 2026-07-04 构建验证：`node_modules\.bin\vue-tsc.cmd --noEmit`、`node_modules\.bin\vite.cmd build` 和 `node_modules\.bin\tsup.cmd` 通过。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\appServerRuntimeStart.ts`。
+
+---
+
 ### Feature: Runtime interrupt 执行模块化
 
 #### Prerequisites
