@@ -234,6 +234,10 @@ import {
 } from '../src/server/appServerRuntimeBridge.js'
 import { AppServerNotificationReplay } from '../src/server/appServerNotificationReplay.js'
 import {
+  handleNotificationReplayRoute,
+  readNotificationReplayQuery,
+} from '../src/server/notificationReplayRoute.js'
+import {
   createRuntimeReconcileFailurePatch,
   createRuntimeRequestSnapshotPatch,
   createRuntimeThreadStatePayload,
@@ -330,6 +334,7 @@ try {
   await smokeProjectRoots()
   smokeRuntimePayloadParsing()
   smokeAppServerNotificationReplay()
+  smokeNotificationReplayRoute()
   smokeAppServerRuntimeBridge()
   smokeAppServerRuntimeRequestReconciliation()
   smokeAppServerRuntimeSnapshotRecovery()
@@ -3817,6 +3822,53 @@ function smokeAppServerNotificationReplay(): void {
   })
 }
 
+function smokeNotificationReplayRoute(): void {
+  assert.deepEqual(
+    readNotificationReplayQuery(new URL('http://127.0.0.1/codex-api/events/replay?after=12&limit=5')),
+    { afterSeq: 12, limit: 5 },
+  )
+  assert.deepEqual(
+    readNotificationReplayQuery(new URL('http://127.0.0.1/codex-api/runtime/events?afterSeq=bad&after=12&limit=bad')),
+    { afterSeq: 0, limit: 200 },
+  )
+
+  const calls: Array<{ afterSeq: number; limit: number }> = []
+  const response = createRouteTestResponse()
+  const handled = handleNotificationReplayRoute(
+    { method: 'GET' } as never,
+    response.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/events?afterSeq=7&limit=3'),
+    (afterSeq, limit) => {
+      calls.push({ afterSeq, limit })
+      return {
+        notifications: [{ seq: afterSeq + 1, method: 'turn/completed', params: {}, atIso: '2026-01-01T00:00:00.000Z' }],
+        latestSeq: afterSeq + 1,
+        oldestSeq: afterSeq + 1,
+      }
+    },
+  )
+  assert.equal(handled, true)
+  assert.deepEqual(calls, [{ afterSeq: 7, limit: 3 }])
+  assert.equal(response.response.statusCode, 200)
+  assert.equal(response.headers.get('Content-Type'), 'application/json; charset=utf-8')
+  assert.deepEqual(JSON.parse(response.body), {
+    data: {
+      notifications: [{ seq: 8, method: 'turn/completed', params: {}, atIso: '2026-01-01T00:00:00.000Z' }],
+      latestSeq: 8,
+      oldestSeq: 8,
+    },
+  })
+
+  assert.equal(handleNotificationReplayRoute(
+    { method: 'POST' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/events'),
+    () => {
+      throw new Error('unexpected replay call')
+    },
+  ), false)
+}
+
 function createThreadRuntimeSnapshot(overrides: Partial<ThreadRuntimeSnapshot> = {}): ThreadRuntimeSnapshot {
   return {
     threadId: 'thread-a',
@@ -3911,6 +3963,10 @@ function createTranscriptionRouteTestRequest(body: Buffer, contentType: string) 
 }
 
 function createTranscriptionRouteTestResponse() {
+  return createRouteTestResponse()
+}
+
+function createRouteTestResponse() {
   const headers = new Map<string, string | number | readonly string[]>()
   let endedBody = ''
   const response = {

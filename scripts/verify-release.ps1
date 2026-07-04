@@ -380,6 +380,7 @@ if (-not $SkipPackageSmoke) {
     "dist\index.html",
     "dist-cli\index.js",
     "src\server\codexAppServerBridge.ts",
+    "src\server\notificationReplayRoute.ts",
     "src\server\transcriptionRoute.ts"
   )
   Write-Host "release package smoke ok"

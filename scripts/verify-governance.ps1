@@ -322,12 +322,20 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "dist\index.html",
   "dist-cli\index.js",
   "src\server\codexAppServerBridge.ts",
+  "src\server\notificationReplayRoute.ts",
   "src\server\transcriptionRoute.ts"
 )
 
 Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
+  "src', 'server', 'notificationReplayRoute.ts'",
   "src', 'server', 'transcriptionProxy.ts'",
   "src', 'server', 'transcriptionRoute.ts'"
+)
+
+Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
+  "readNotificationReplayQuery",
+  "handleNotificationReplayRoute",
+  "smokeNotificationReplayRoute"
 )
 
 Assert-ContentIncludes "scripts/verify-governance.ps1" @(

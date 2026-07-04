@@ -46,6 +46,7 @@ import {
   getTranscriptionProxyConfigSnapshot,
 } from './transcriptionProxy.js'
 import { handleTranscriptionRoute } from './transcriptionRoute.js'
+import { handleNotificationReplayRoute } from './notificationReplayRoute.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   ComposerFileSearchError,
@@ -1633,17 +1634,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'GET' && url.pathname === '/codex-api/events/replay') {
-        const afterSeq = Number.parseInt((url.searchParams.get('after') ?? '0').trim(), 10)
-        const limit = Number.parseInt((url.searchParams.get('limit') ?? '200').trim(), 10)
-        setJson(res, 200, { data: middleware.listNotificationEventsAfter(afterSeq, limit) })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/runtime/events') {
-        const afterSeq = Number.parseInt((url.searchParams.get('afterSeq') ?? url.searchParams.get('after') ?? '0').trim(), 10)
-        const limit = Number.parseInt((url.searchParams.get('limit') ?? '200').trim(), 10)
-        setJson(res, 200, { data: middleware.listNotificationEventsAfter(afterSeq, limit) })
+      if (handleNotificationReplayRoute(req, res, url, middleware.listNotificationEventsAfter)) {
         return
       }
 

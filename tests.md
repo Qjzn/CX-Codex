@@ -4189,6 +4189,37 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Notification replay route 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/notificationReplayRoute.ts`、`src/server/codexAppServerBridge.ts` 和 `scripts/server-module-smoke.ts`。
+- 本机可运行 server module smoke、governance gate 和 release gate。
+
+#### Steps
+1. 打开 `src/server/codexAppServerBridge.ts`，确认 `/codex-api/events/replay` 与 `/codex-api/runtime/events` 统一委托 `handleNotificationReplayRoute(...)`。
+2. 打开 `src/server/notificationReplayRoute.ts`，确认 `afterSeq` 优先于 `after`，非法整数回退为 `0` 或 `200`，非 GET 或非 replay 路径返回 `false`。
+3. 执行 `git diff --check`。
+4. 执行 `node scripts\verify-server-modules.mjs`。
+5. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+7. 确认 release package smoke 必检 `src\server\notificationReplayRoute.ts`。
+
+#### Expected Results
+- 两个事件 replay HTTP 端点共用同一个 route 模块，bridge 主文件减少内联路由逻辑。
+- 非法 query 不会把 `NaN` 传入 replay lister。
+- `notificationReplayRoute.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/notificationReplayRoute.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和本节测试记录。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，覆盖 replay query 解析、GET handler 响应、POST 不处理和 `notificationReplayRoute.ts` 编译。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\notificationReplayRoute.ts`。
+
+---
+
 ### Feature: App Server schema audit 摘要刷新
 
 #### Prerequisites
