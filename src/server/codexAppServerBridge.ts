@@ -48,6 +48,7 @@ import { handleLocalStateRoutes } from './localStateRoutes.js'
 import { handleNotificationSseRoute } from './notificationSseRoute.js'
 import { handleRuntimeStateRoutes } from './runtimeStateRoutes.js'
 import { handleDiagnosticsRoutes } from './diagnosticsRoutes.js'
+import { handleWorkspaceMetaRoutes } from './workspaceMetaRoutes.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   ComposerFileSearchError,
@@ -180,12 +181,7 @@ import {
   FileUploadError,
   handleMultipartFileUpload,
 } from './fileUpload.js'
-import {
-  normalizeWorkspaceRootsState,
-  readWorkspaceRootsState,
-  writeWorkspaceRootsState,
-  type WorkspaceRootsState,
-} from './workspaceRootsState.js'
+import { readWorkspaceRootsState, writeWorkspaceRootsState } from './workspaceRootsState.js'
 import {
   ProjectRootError,
   resolveProjectRoot,
@@ -1615,29 +1611,6 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'GET' && url.pathname === '/codex-api/meta/methods') {
-        const methods = await methodCatalog.listMethods()
-        setJson(res, 200, { data: methods })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/meta/notifications') {
-        const methods = await methodCatalog.listNotificationMethods()
-        setJson(res, 200, { data: methods })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/workspace-roots-state') {
-        const state = await readWorkspaceRootsState(getCodexGlobalStatePath())
-        setJson(res, 200, { data: state })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/home-directory') {
-        setJson(res, 200, { data: { path: homedir() } })
-        return
-      }
-
       if (req.method === 'GET' && url.pathname === '/codex-api/github-trending') {
         const since = normalizeGithubTrendingSince(url.searchParams.get('since'))
         const limit = normalizeGithubTrendingLimit(url.searchParams.get('limit'))
@@ -1844,16 +1817,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'PUT' && url.pathname === '/codex-api/workspace-roots-state') {
-        const payload = await readJsonBody(req)
-        const record = asRecord(payload)
-        if (!record) {
-          setJson(res, 400, { error: 'Invalid body: expected object' })
-          return
-        }
-        const nextState: WorkspaceRootsState = normalizeWorkspaceRootsState(record)
-        await writeWorkspaceRootsState(getCodexGlobalStatePath(), nextState)
-        setJson(res, 200, { ok: true })
+      if (await handleWorkspaceMetaRoutes(req, res, url, {
+        methodCatalog,
+        readJsonBody,
+        homeDirectory: homedir,
+      })) {
         return
       }
 

@@ -385,7 +385,8 @@ if (-not $SkipPackageSmoke) {
     "src\server\notificationReplayRoute.ts",
     "src\server\notificationSseRoute.ts",
     "src\server\runtimeStateRoutes.ts",
-    "src\server\transcriptionRoute.ts"
+    "src\server\transcriptionRoute.ts",
+    "src\server\workspaceMetaRoutes.ts"
   )
   Write-Host "release package smoke ok"
 

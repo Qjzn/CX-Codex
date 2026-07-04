@@ -4189,6 +4189,38 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Workspace/meta 路由模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/workspaceMetaRoutes.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1` 和 `scripts/verify-release.ps1`。
+- `dist/` 与 `dist-cli/` 已存在，或可用完整 release gate 重新构建。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+4. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+5. 检查 release package smoke 输出，确认 zip 必检清单包含 `src\server\workspaceMetaRoutes.ts`。
+
+#### Expected Results
+- `/codex-api/meta/methods` 和 `/codex-api/meta/notifications` 继续返回 method catalog 数据。
+- `/codex-api/workspace-roots-state` 的 GET/PUT 继续读写 `~/.codex/global-state.json` 中的 workspace roots state，并保持既有归一化规则。
+- `/codex-api/home-directory` 继续返回当前用户 home directory。
+- `codexAppServerBridge.ts` 不再内联这些 meta/workspace/home route 分支，而是委托 `handleWorkspaceMetaRoutes`。
+- Server module smoke 覆盖 GET meta methods、GET notification methods、GET/PUT workspace roots state、非法 PUT body 和 home directory 未命中方法。
+- Release package smoke 会在 zip 缺少 `src\server\workspaceMetaRoutes.ts` 时失败。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/workspaceMetaRoutes.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1`、`scripts/verify-release.ps1` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，输出 `server module smoke ok`，覆盖 workspace/meta route 委托和状态写入归一化。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`。
+
+---
+
 ### Feature: Local state routes 模块化
 
 #### Prerequisites

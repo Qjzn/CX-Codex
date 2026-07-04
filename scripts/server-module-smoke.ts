@@ -271,6 +271,7 @@ import {
   upsertWorkspaceRootState,
   writeWorkspaceRootsState,
 } from '../src/server/workspaceRootsState.js'
+import { handleWorkspaceMetaRoutes } from '../src/server/workspaceMetaRoutes.js'
 import {
   ProjectRootError,
   normalizeProjectPath,
@@ -344,6 +345,7 @@ try {
   await smokeThreadTitleCache()
   await smokeThreadSearchIndex()
   await smokeWorkspaceRootsState()
+  await smokeWorkspaceMetaRoutes()
   await smokeProjectRoots()
   smokeRuntimePayloadParsing()
   await smokeDiagnosticsRoutes()
@@ -3241,6 +3243,125 @@ async function smokeWorkspaceRootsState(): Promise<void> {
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
+}
+
+async function smokeWorkspaceMetaRoutes(): Promise<void> {
+  const methodCalls: string[] = []
+  const readPaths: string[] = []
+  const writeCalls: Array<{ path: string; state: unknown }> = []
+  const bodies: unknown[] = [
+    {
+      order: ['C:\\work\\one', '', 'C:\\work\\one'],
+      labels: { 'C:\\work\\one': 'One', bad: 7 },
+      active: ['C:\\work\\one'],
+    },
+    ['bad'],
+  ]
+  const dependencies = {
+    methodCatalog: {
+      listMethods: async () => {
+        methodCalls.push('methods')
+        return ['thread/list']
+      },
+      listNotificationMethods: async () => {
+        methodCalls.push('notifications')
+        return ['turn/completed']
+      },
+    },
+    readJsonBody: async () => bodies.shift(),
+    homeDirectory: () => 'C:\\Users\\SW',
+    getCodexGlobalStatePath: () => 'global-state.json',
+    readWorkspaceRootsState: async (path: string) => {
+      readPaths.push(path)
+      return {
+        order: ['C:\\work\\one'],
+        labels: { 'C:\\work\\one': 'One' },
+        active: ['C:\\work\\one'],
+      }
+    },
+    writeWorkspaceRootsState: async (path: string, state: unknown) => {
+      writeCalls.push({ path, state })
+    },
+  }
+
+  const methods = createRouteTestResponse()
+  assert.equal(await handleWorkspaceMetaRoutes(
+    { method: 'GET' } as never,
+    methods.response as never,
+    new URL('http://127.0.0.1/codex-api/meta/methods'),
+    dependencies,
+  ), true)
+  assert.deepEqual(methodCalls, ['methods'])
+  assert.deepEqual(JSON.parse(methods.body), { data: ['thread/list'] })
+
+  const notifications = createRouteTestResponse()
+  assert.equal(await handleWorkspaceMetaRoutes(
+    { method: 'GET' } as never,
+    notifications.response as never,
+    new URL('http://127.0.0.1/codex-api/meta/notifications'),
+    dependencies,
+  ), true)
+  assert.deepEqual(methodCalls, ['methods', 'notifications'])
+  assert.deepEqual(JSON.parse(notifications.body), { data: ['turn/completed'] })
+
+  const workspaceRead = createRouteTestResponse()
+  assert.equal(await handleWorkspaceMetaRoutes(
+    { method: 'GET' } as never,
+    workspaceRead.response as never,
+    new URL('http://127.0.0.1/codex-api/workspace-roots-state'),
+    dependencies,
+  ), true)
+  assert.deepEqual(readPaths, ['global-state.json'])
+  assert.deepEqual(JSON.parse(workspaceRead.body), {
+    data: {
+      order: ['C:\\work\\one'],
+      labels: { 'C:\\work\\one': 'One' },
+      active: ['C:\\work\\one'],
+    },
+  })
+
+  const workspaceWrite = createRouteTestResponse()
+  assert.equal(await handleWorkspaceMetaRoutes(
+    { method: 'PUT' } as never,
+    workspaceWrite.response as never,
+    new URL('http://127.0.0.1/codex-api/workspace-roots-state'),
+    dependencies,
+  ), true)
+  assert.deepEqual(writeCalls, [{
+    path: 'global-state.json',
+    state: {
+      order: ['C:\\work\\one'],
+      labels: { 'C:\\work\\one': 'One' },
+      active: ['C:\\work\\one'],
+    },
+  }])
+  assert.deepEqual(JSON.parse(workspaceWrite.body), { ok: true })
+
+  const invalidWorkspaceWrite = createRouteTestResponse()
+  assert.equal(await handleWorkspaceMetaRoutes(
+    { method: 'PUT' } as never,
+    invalidWorkspaceWrite.response as never,
+    new URL('http://127.0.0.1/codex-api/workspace-roots-state'),
+    dependencies,
+  ), true)
+  assert.equal(invalidWorkspaceWrite.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(invalidWorkspaceWrite.body), { error: 'Invalid body: expected object' })
+
+  const homeDirectory = createRouteTestResponse()
+  assert.equal(await handleWorkspaceMetaRoutes(
+    { method: 'GET' } as never,
+    homeDirectory.response as never,
+    new URL('http://127.0.0.1/codex-api/home-directory'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(homeDirectory.body), { data: { path: 'C:\\Users\\SW' } })
+
+  assert.equal(await handleWorkspaceMetaRoutes(
+    { method: 'POST' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/home-directory'),
+    dependencies,
+  ), false)
 }
 
 async function smokeProjectRoots(): Promise<void> {
