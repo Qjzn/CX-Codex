@@ -3879,3 +3879,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 Release artifact checksum：`npm.cmd run verify:release-artifacts -- -OutputDir output\package-wrapper-smoke` 通过，输出 `checksum ok: CX-Codex-local-wrapper-smoke.zip` 和 `Release artifact checksum verification passed.`。
 - 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
 - 2026-07-04 Cleanup：已删除验证产物目录 `output\package-wrapper-smoke`；npm 本机 update config 权限提示为非阻塞环境提示。
+
+---
+
+### Feature: App Server schema audit 脱敏摘要更新
+
+#### Prerequisites
+- 当前仓库包含 `scripts/update-app-server-schema-audit-summary.mjs`。
+- 本机已经有至少一次 raw schema audit 输出，例如 `output\app-server-schema-audit\20260703-193751\audit-summary.json`。
+- 不要把 `output\app-server-schema-audit\` 下的原始生成目录提交到仓库。
+
+#### Steps
+1. 执行 `node --check scripts\update-app-server-schema-audit-summary.mjs`。
+2. 执行 `npm.cmd run audit:app-server-schemas:update-summary -- --input output\app-server-schema-audit\20260703-193751\audit-summary.json --output output\schema-summary-smoke.json`。
+3. 检查 `output\schema-summary-smoke.json`，确认 `repository`、`generated`、本机绝对路径和完整 added/removed 列表不会进入摘要。
+4. 执行 `npm.cmd run verify:governance`，确认治理门禁校验该脚本和 npm 入口。
+5. 执行 `git diff --check`。
+6. 验证结束后删除 `output\schema-summary-smoke.json`。
+
+#### Expected Results
+- 脚本能从 raw `audit-summary.json` 生成可提交摘要。
+- 输出摘要只保留官方文档 URL、规范化审计命令、相对路径、计数和 `representativeAdded` / `representativeRemoved`。
+- 输出摘要不包含本机绝对路径、完整 schema 生成目录、完整 added/removed 大列表或私有信息。
+- 治理门禁会阻止脚本、npm 入口或摘要更新规则丢失。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `scripts/update-app-server-schema-audit-summary.mjs`，移除 `package.json` 的 `audit:app-server-schemas:update-summary`，并撤销协议矩阵、依赖维护手册、changelog、governance 和本节测试记录。
+- 删除 smoke 输出：`output\schema-summary-smoke.json`。
+
+#### Regression Evidence
+- 2026-07-04 语法检查：`node --check scripts\update-app-server-schema-audit-summary.mjs` 通过。
+- 2026-07-04 摘要 smoke：`npm.cmd run audit:app-server-schemas:update-summary -- --input output\app-server-schema-audit\20260703-193751\audit-summary.json --output output\schema-summary-smoke.json` 通过，输出 `Schema audit summary updated: output\schema-summary-smoke.json` 和 `Review status: drift-recorded`。
+- 2026-07-04 脱敏检查：`output\schema-summary-smoke.json` 只包含相对路径、计数和 `representativeAdded` / `representativeRemoved`；`rg -n "E:" output\schema-summary-smoke.json`、`rg -n "repository|generated" output\schema-summary-smoke.json`、`findstr /n /c:"\"added\"" /c:"\"removed\"" output\schema-summary-smoke.json` 均无匹配。
+- 2026-07-04 正式摘要保护：同一 raw audit 写入 `docs\app-server-schema-audit-summary.json` 后，`git diff -- docs\app-server-schema-audit-summary.json` 无输出，说明计数不变时保留现有人工代表项。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke。

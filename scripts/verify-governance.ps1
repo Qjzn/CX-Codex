@@ -72,6 +72,7 @@ $requiredFiles = @(
   ".github/workflows/release.yml",
   ".github/release-body.md",
   "scripts/run-powershell-script.mjs",
+  "scripts/update-app-server-schema-audit-summary.mjs",
   "scripts/verify-release-artifacts.ps1"
 )
 
@@ -199,9 +200,18 @@ Assert-ContentIncludes "package.json" @(
   '"test:7420:frontend": "node ./scripts/run-powershell-script.mjs ./scripts/regression-7420-frontend.ps1"',
   '"test:7420:soak": "node ./scripts/run-powershell-script.mjs ./scripts/soak-7420.ps1"',
   '"audit:app-server-schemas": "node ./scripts/run-powershell-script.mjs ./scripts/audit-app-server-schemas.ps1"',
+  '"audit:app-server-schemas:update-summary": "node ./scripts/update-app-server-schema-audit-summary.mjs"',
   '"verify:governance": "node ./scripts/run-powershell-script.mjs ./scripts/verify-governance.ps1"',
   '"verify:release": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release.ps1"',
   '"verify:release-artifacts": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release-artifacts.ps1"'
+)
+
+Assert-ContentIncludes "scripts/update-app-server-schema-audit-summary.mjs" @(
+  "OFFICIAL_DOCS_URL",
+  "representativeAdded",
+  "drift-recorded",
+  "baseline-matched",
+  "Do not copy generated output directories"
 )
 
 Assert-ContentIncludes "scripts/run-powershell-script.mjs" @(
