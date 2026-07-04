@@ -336,6 +336,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "src\server\statusRoutes.ts",
   "src\server\threadRoutes.ts",
   "src\server\transcriptionRoute.ts",
+  "src\server\worktreeRoutes.ts",
   "src\server\workspaceMetaRoutes.ts"
 )
 
@@ -355,6 +356,7 @@ Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
   "src', 'server', 'threadRoutes.ts'",
   "src', 'server', 'transcriptionProxy.ts'",
   "src', 'server', 'transcriptionRoute.ts'",
+  "src', 'server', 'worktreeRoutes.ts'",
   "src', 'server', 'workspaceMetaRoutes.ts'"
 )
 
@@ -383,6 +385,8 @@ Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "smokeRuntimeStateRoutes",
   "handleServerRequestRoutes",
   "smokeServerRequestRoutes",
+  "handleWorktreeRoutes",
+  "smokeWorktreeRoutes",
   "handleLocalStateRoutes",
   "smokeLocalStateRoutes",
   "readNotificationReplayQuery",

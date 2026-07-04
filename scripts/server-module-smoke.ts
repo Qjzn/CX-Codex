@@ -165,6 +165,7 @@ import {
   translateGithubDescriptionsToChinese,
 } from '../src/server/githubTrending.js'
 import { handleGithubTrendingRoutes } from '../src/server/githubTrendingRoutes.js'
+import { handleWorktreeRoutes, type WorktreeRoutesDependencies } from '../src/server/worktreeRoutes.js'
 import {
   runCommand,
   runCommandCapture,
@@ -350,6 +351,7 @@ try {
   await smokeComposerFileSearchRoutes()
   await smokeGithubTrending()
   await smokeGithubTrendingRoutes()
+  await smokeWorktreeRoutes()
   smokeCodexPaths()
   await smokeCodexAuth()
   await smokePinnedThreads()
@@ -3020,6 +3022,226 @@ async function smokeGithubTrendingRoutes(): Promise<void> {
     { method: 'PUT' } as never,
     createRouteTestResponse().response as never,
     new URL('http://127.0.0.1/codex-api/github-trending'),
+    dependencies,
+  ), false)
+}
+
+async function smokeWorktreeRoutes(): Promise<void> {
+  const sourceCwd = join(tmpdir(), 'cx-codex-source')
+  const notDirectory = join(tmpdir(), 'cx-codex-not-directory')
+  const missingSource = join(tmpdir(), 'cx-codex-missing-source')
+  const cwd = join(tmpdir(), 'cx-codex-project')
+  const gitRoot = join(tmpdir(), 'repo')
+  const worktreesRoot = join(tmpdir(), 'cx-codex-worktrees')
+  const existingDirs = new Set([sourceCwd, cwd, join(worktreesRoot, 'used')])
+  const filePaths = new Set([notDirectory])
+  const bodies: unknown[] = [
+    { sourceCwd: ' ' },
+    { sourceCwd: notDirectory },
+    { sourceCwd: missingSource },
+    { sourceCwd },
+    { cwd, message: 'Commit rollback' },
+    { cwd, message: 'Commit rollback' },
+    { cwd, message: 'Missing rollback' },
+    { cwd, message: 'Root rollback' },
+    { cwd, message: 'Apply rollback' },
+  ]
+  const mkdirCalls: string[] = []
+  const commandCalls: Array<{ command: string; args: string[]; cwd?: string }> = []
+  const rollbackCommands: string[][] = []
+  const ensureRollbackCalls: string[] = []
+  const randomIds = ['used', 'free']
+  const rollbackOutputQueue = [' M file.txt\n', 'file.txt\n']
+  const findCommitQueue = ['', 'commit-root', 'commit-ok']
+  const captureRollbackQueue = [new Error('no parent'), 'parent-ok']
+  let revParseCalls = 0
+  let worktreeAddAttempts = 0
+  let ensuredInitialCommit = ''
+  let failEnsureRollback = false
+
+  const dependencies: WorktreeRoutesDependencies = {
+    readJsonBody: async () => bodies.shift(),
+    stat: async (path) => {
+      if (existingDirs.has(path)) return { isDirectory: () => true }
+      if (filePaths.has(path)) return { isDirectory: () => false }
+      throw new Error(`missing path: ${path}`)
+    },
+    mkdir: async (path) => {
+      mkdirCalls.push(path)
+      existingDirs.add(path)
+    },
+    randomWorktreeId: () => {
+      const value = randomIds.shift()
+      if (!value) throw new Error('missing random worktree id')
+      return value
+    },
+    getCodexWorktreesDir: () => worktreesRoot,
+    runCommandCapture: async (command, args, options) => {
+      commandCalls.push({ command, args, cwd: options?.cwd })
+      revParseCalls += 1
+      if (revParseCalls === 1) throw new Error('fatal: not a git repository')
+      return gitRoot
+    },
+    runCommand: async (command, args, options) => {
+      commandCalls.push({ command, args, cwd: options?.cwd })
+      if (args[0] === 'worktree') {
+        worktreeAddAttempts += 1
+        if (worktreeAddAttempts === 1) throw new Error('invalid reference: HEAD')
+      }
+    },
+    ensureRepoHasInitialCommit: async (repoRoot) => {
+      ensuredInitialCommit = repoRoot
+    },
+    ensureRollbackGitRepo: async (repoCwd) => {
+      ensureRollbackCalls.push(repoCwd)
+      if (failEnsureRollback) throw new Error('rollback unavailable')
+      return join(repoCwd, '.codex', 'rollbacks', '.git')
+    },
+    runRollbackGitWithOutput: async (_repoCwd, args) => {
+      return rollbackOutputQueue.shift() ?? ''
+    },
+    runRollbackGit: async (_repoCwd, args) => {
+      rollbackCommands.push(args)
+    },
+    findRollbackCommitByExactMessage: async () => {
+      return findCommitQueue.shift() ?? ''
+    },
+    runRollbackGitCapture: async () => {
+      const value = captureRollbackQueue.shift()
+      if (value instanceof Error) throw value
+      return value ?? ''
+    },
+    hasRollbackGitWorkingTreeChanges: async () => true,
+  }
+
+  const missingSourceCwd = createRouteTestResponse()
+  assert.equal(await handleWorktreeRoutes(
+    { method: 'POST' } as never,
+    missingSourceCwd.response as never,
+    new URL('http://127.0.0.1/codex-api/worktree/create'),
+    dependencies,
+  ), true)
+  assert.equal(missingSourceCwd.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(missingSourceCwd.body), { error: 'Missing sourceCwd' })
+
+  const sourceNotDirectory = createRouteTestResponse()
+  assert.equal(await handleWorktreeRoutes(
+    { method: 'POST' } as never,
+    sourceNotDirectory.response as never,
+    new URL('http://127.0.0.1/codex-api/worktree/create'),
+    dependencies,
+  ), true)
+  assert.equal(sourceNotDirectory.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(sourceNotDirectory.body), { error: 'sourceCwd is not a directory' })
+
+  const sourceMissing = createRouteTestResponse()
+  assert.equal(await handleWorktreeRoutes(
+    { method: 'POST' } as never,
+    sourceMissing.response as never,
+    new URL('http://127.0.0.1/codex-api/worktree/create'),
+    dependencies,
+  ), true)
+  assert.equal(sourceMissing.response.statusCode, 404)
+  assert.deepEqual(JSON.parse(sourceMissing.body), { error: 'sourceCwd does not exist' })
+
+  const createSuccess = createRouteTestResponse()
+  assert.equal(await handleWorktreeRoutes(
+    { method: 'POST' } as never,
+    createSuccess.response as never,
+    new URL('http://127.0.0.1/codex-api/worktree/create'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(createSuccess.body), {
+    data: {
+      cwd: join(worktreesRoot, 'free', 'repo'),
+      branch: 'codex/free',
+      gitRoot,
+    },
+  })
+  assert.equal(ensuredInitialCommit, gitRoot)
+  assert.equal(worktreeAddAttempts, 2)
+  assert.deepEqual(mkdirCalls, [worktreesRoot, join(worktreesRoot, 'free')])
+  assert.deepEqual(commandCalls.map((call) => call.args.join(' ')), [
+    'rev-parse --show-toplevel',
+    'init',
+    'rev-parse --show-toplevel',
+    `worktree add -b codex/free ${join(worktreesRoot, 'free', 'repo')} HEAD`,
+    `worktree add -b codex/free ${join(worktreesRoot, 'free', 'repo')} HEAD`,
+  ])
+
+  const autoCommit = createRouteTestResponse()
+  assert.equal(await handleWorktreeRoutes(
+    { method: 'POST' } as never,
+    autoCommit.response as never,
+    new URL('http://127.0.0.1/codex-api/worktree/auto-commit'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(autoCommit.body), { data: { committed: true } })
+  assert.deepEqual(rollbackCommands.slice(0, 2), [
+    ['add', '-A'],
+    ['commit', '-m', 'Commit rollback'],
+  ])
+
+  failEnsureRollback = true
+  const autoCommitFailure = createRouteTestResponse()
+  assert.equal(await handleWorktreeRoutes(
+    { method: 'POST' } as never,
+    autoCommitFailure.response as never,
+    new URL('http://127.0.0.1/codex-api/worktree/auto-commit'),
+    dependencies,
+  ), true)
+  assert.equal(autoCommitFailure.response.statusCode, 500)
+  assert.deepEqual(JSON.parse(autoCommitFailure.body), { error: 'rollback unavailable' })
+  failEnsureRollback = false
+
+  const rollbackMissingCommit = createRouteTestResponse()
+  assert.equal(await handleWorktreeRoutes(
+    { method: 'POST' } as never,
+    rollbackMissingCommit.response as never,
+    new URL('http://127.0.0.1/codex-api/worktree/rollback-to-message'),
+    dependencies,
+  ), true)
+  assert.equal(rollbackMissingCommit.response.statusCode, 404)
+  assert.deepEqual(JSON.parse(rollbackMissingCommit.body), { error: 'No matching commit found for this user message' })
+
+  const rollbackRootCommit = createRouteTestResponse()
+  assert.equal(await handleWorktreeRoutes(
+    { method: 'POST' } as never,
+    rollbackRootCommit.response as never,
+    new URL('http://127.0.0.1/codex-api/worktree/rollback-to-message'),
+    dependencies,
+  ), true)
+  assert.equal(rollbackRootCommit.response.statusCode, 409)
+  assert.deepEqual(JSON.parse(rollbackRootCommit.body), { error: 'Cannot rollback: matched commit has no parent commit' })
+
+  const rollbackSuccess = createRouteTestResponse()
+  assert.equal(await handleWorktreeRoutes(
+    { method: 'POST' } as never,
+    rollbackSuccess.response as never,
+    new URL('http://127.0.0.1/codex-api/worktree/rollback-to-message'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(rollbackSuccess.body), {
+    data: {
+      reset: true,
+      commitSha: 'commit-ok',
+      resetTargetSha: 'parent-ok',
+      stashed: true,
+    },
+  })
+  const rollbackTail = rollbackCommands.slice(-2)
+  const stashMessage = rollbackTail[0]?.[4] ?? ''
+  assert.deepEqual(rollbackTail, [
+    ['stash', 'push', '-u', '-m', stashMessage],
+    ['reset', '--hard', 'parent-ok'],
+  ])
+  assert.equal(stashMessage.startsWith('codex-auto-stash-before-rollback-'), true)
+  assert.equal(ensureRollbackCalls.length, 5)
+
+  assert.equal(await handleWorktreeRoutes(
+    { method: 'GET' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/worktree/create'),
     dependencies,
   ), false)
 }

@@ -78,6 +78,7 @@ writeFileSync(tsconfigPath, `${JSON.stringify({
     join(repoRoot, 'src', 'server', 'transcriptionProxy.ts'),
     join(repoRoot, 'src', 'server', 'transcriptionRoute.ts'),
     join(repoRoot, 'src', 'server', 'webBridgeSettings.ts'),
+    join(repoRoot, 'src', 'server', 'worktreeRoutes.ts'),
     join(repoRoot, 'src', 'server', 'workspaceMetaRoutes.ts'),
     join(repoRoot, 'src', 'server', 'workspaceRootsState.ts'),
   ],

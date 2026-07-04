@@ -1,9 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
-import { mkdir, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
-import { basename, isAbsolute, join, resolve } from 'node:path'
 import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoutes.js'
 import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } from './runtimeStore.js'
 import {
@@ -55,11 +52,8 @@ import { handleGithubTrendingRoutes } from './githubTrendingRoutes.js'
 import { handleServerRequestRoutes } from './serverRequestRoutes.js'
 import { handleFileUploadRoute } from './fileUploadRoute.js'
 import { handleRuntimeActionRoutes } from './runtimeActionRoutes.js'
+import { handleWorktreeRoutes } from './worktreeRoutes.js'
 import { resolveCodexCommand } from '../commandResolution.js'
-import {
-  runCommand,
-  runCommandCapture,
-} from './commandRunner.js'
 import {
   AppServerRpcCache,
   getShareableRpcKey,
@@ -138,8 +132,9 @@ import { AppServerMethodCatalog } from './appServerMethodCatalog.js'
 import {
   getCodexGlobalStatePath,
   getCodexSessionIndexPath,
-  getCodexWorktreesDir,
+  getWebBridgeSettingsPath,
 } from './codexPaths.js'
+import { readMergedPinnedThreadIds } from './pinnedThreads.js'
 import { PlanModeTurnStore } from './planModeTurnStore.js'
 import {
   resolveThreadTokenUsage,
@@ -163,18 +158,9 @@ import {
 import {
   DEFAULT_WEB_BRIDGE_SETTINGS,
   normalizeWebBridgeSettings,
+  readWebBridgeSettings,
 } from './webBridgeSettings.js'
 import { AppServerThreadListAugmenter } from './appServerThreadListAugment.js'
-import {
-  ensureRepoHasInitialCommit,
-  ensureRollbackGitRepo,
-  findRollbackCommitByExactMessage,
-  hasRollbackGitWorkingTreeChanges,
-  normalizeCommitMessage,
-  runRollbackGit,
-  runRollbackGitCapture,
-  runRollbackGitWithOutput,
-} from './appServerRollbackGit.js'
 
 type JsonRpcResponse = {
   id?: number
@@ -216,20 +202,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null
-}
-
-function isMissingHeadError(error: unknown): boolean {
-  const message = getErrorMessage(error, '').toLowerCase()
-  return (
-    message.includes("not a valid object name: 'head'") ||
-    message.includes('not a valid object name: head') ||
-    message.includes('invalid reference: head')
-  )
-}
-
-function isNotGitRepositoryError(error: unknown): boolean {
-  const message = getErrorMessage(error, '').toLowerCase()
-  return message.includes('not a git repository') || message.includes('fatal: not a git repository')
 }
 
 class AppServerProcess {
@@ -1556,184 +1528,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'POST' && url.pathname === '/codex-api/worktree/create') {
-        const payload = asRecord(await readJsonBody(req))
-        const rawSourceCwd = typeof payload?.sourceCwd === 'string' ? payload.sourceCwd.trim() : ''
-        if (!rawSourceCwd) {
-          setJson(res, 400, { error: 'Missing sourceCwd' })
-          return
-        }
-
-        const sourceCwd = isAbsolute(rawSourceCwd) ? rawSourceCwd : resolve(rawSourceCwd)
-        try {
-          const sourceInfo = await stat(sourceCwd)
-          if (!sourceInfo.isDirectory()) {
-            setJson(res, 400, { error: 'sourceCwd is not a directory' })
-            return
-          }
-        } catch {
-          setJson(res, 404, { error: 'sourceCwd does not exist' })
-          return
-        }
-
-        try {
-          let gitRoot = ''
-          try {
-            gitRoot = await runCommandCapture('git', ['rev-parse', '--show-toplevel'], { cwd: sourceCwd })
-          } catch (error) {
-            if (!isNotGitRepositoryError(error)) throw error
-            await runCommand('git', ['init'], { cwd: sourceCwd })
-            gitRoot = await runCommandCapture('git', ['rev-parse', '--show-toplevel'], { cwd: sourceCwd })
-          }
-          const repoName = basename(gitRoot) || 'repo'
-          const worktreesRoot = getCodexWorktreesDir()
-          await mkdir(worktreesRoot, { recursive: true })
-
-          // Match Codex desktop layout so project grouping resolves to repo name:
-          // ~/.codex/worktrees/<id>/<repoName>
-          let worktreeId = ''
-          let worktreeParent = ''
-          let worktreeCwd = ''
-          for (let attempt = 0; attempt < 12; attempt += 1) {
-            const candidate = randomBytes(2).toString('hex')
-            const parent = join(worktreesRoot, candidate)
-            try {
-              await stat(parent)
-              continue
-            } catch {
-              worktreeId = candidate
-              worktreeParent = parent
-              worktreeCwd = join(parent, repoName)
-              break
-            }
-          }
-          if (!worktreeId || !worktreeParent || !worktreeCwd) {
-            throw new Error('Failed to allocate a unique worktree id')
-          }
-          const branch = `codex/${worktreeId}`
-
-          await mkdir(worktreeParent, { recursive: true })
-          try {
-            await runCommand('git', ['worktree', 'add', '-b', branch, worktreeCwd, 'HEAD'], { cwd: gitRoot })
-          } catch (error) {
-            if (!isMissingHeadError(error)) throw error
-            await ensureRepoHasInitialCommit(gitRoot)
-            await runCommand('git', ['worktree', 'add', '-b', branch, worktreeCwd, 'HEAD'], { cwd: gitRoot })
-          }
-
-          setJson(res, 200, {
-            data: {
-              cwd: worktreeCwd,
-              branch,
-              gitRoot,
-            },
-          })
-        } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to create worktree') })
-        }
-        return
-      }
-
-      if (req.method === 'POST' && url.pathname === '/codex-api/worktree/auto-commit') {
-        const payload = asRecord(await readJsonBody(req))
-        const rawCwd = typeof payload?.cwd === 'string' ? payload.cwd.trim() : ''
-        const commitMessage = normalizeCommitMessage(payload?.message)
-        if (!rawCwd) {
-          setJson(res, 400, { error: 'Missing cwd' })
-          return
-        }
-        if (!commitMessage) {
-          setJson(res, 400, { error: 'Missing message' })
-          return
-        }
-
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
-        try {
-          const cwdInfo = await stat(cwd)
-          if (!cwdInfo.isDirectory()) {
-            setJson(res, 400, { error: 'cwd is not a directory' })
-            return
-          }
-        } catch {
-          setJson(res, 404, { error: 'cwd does not exist' })
-          return
-        }
-
-        try {
-          await ensureRollbackGitRepo(cwd)
-          const beforeStatus = await runRollbackGitWithOutput(cwd, ['status', '--porcelain'])
-          if (!beforeStatus.trim()) {
-            setJson(res, 200, { data: { committed: false } })
-            return
-          }
-
-          await runRollbackGit(cwd, ['add', '-A'])
-          const stagedStatus = await runRollbackGitWithOutput(cwd, ['diff', '--cached', '--name-only'])
-          if (!stagedStatus.trim()) {
-            setJson(res, 200, { data: { committed: false } })
-            return
-          }
-
-          await runRollbackGit(cwd, ['commit', '-m', commitMessage])
-          setJson(res, 200, { data: { committed: true } })
-        } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to auto-commit rollback changes') })
-        }
-        return
-      }
-
-      if (req.method === 'POST' && url.pathname === '/codex-api/worktree/rollback-to-message') {
-        const payload = asRecord(await readJsonBody(req))
-        const rawCwd = typeof payload?.cwd === 'string' ? payload.cwd.trim() : ''
-        const commitMessage = normalizeCommitMessage(payload?.message)
-        if (!rawCwd) {
-          setJson(res, 400, { error: 'Missing cwd' })
-          return
-        }
-        if (!commitMessage) {
-          setJson(res, 400, { error: 'Missing message' })
-          return
-        }
-
-        const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
-        try {
-          const cwdInfo = await stat(cwd)
-          if (!cwdInfo.isDirectory()) {
-            setJson(res, 400, { error: 'cwd is not a directory' })
-            return
-          }
-        } catch {
-          setJson(res, 404, { error: 'cwd does not exist' })
-          return
-        }
-
-        try {
-          await ensureRollbackGitRepo(cwd)
-          const commitSha = await findRollbackCommitByExactMessage(cwd, commitMessage)
-          if (!commitSha) {
-            setJson(res, 404, { error: 'No matching commit found for this user message' })
-            return
-          }
-          let resetTargetSha = ''
-          try {
-            resetTargetSha = await runRollbackGitCapture(cwd, ['rev-parse', `${commitSha}^`])
-          } catch {
-            setJson(res, 409, { error: 'Cannot rollback: matched commit has no parent commit' })
-            return
-          }
-
-          let stashed = false
-          if (await hasRollbackGitWorkingTreeChanges(cwd)) {
-            const stashMessage = `codex-auto-stash-before-rollback-${Date.now()}`
-            await runRollbackGit(cwd, ['stash', 'push', '-u', '-m', stashMessage])
-            stashed = true
-          }
-
-          await runRollbackGit(cwd, ['reset', '--hard', resetTargetSha])
-          setJson(res, 200, { data: { reset: true, commitSha, resetTargetSha, stashed } })
-        } catch (error) {
-          setJson(res, 500, { error: getErrorMessage(error, 'Failed to rollback project to user message commit') })
-        }
+      if (await handleWorktreeRoutes(req, res, url, {
+        readJsonBody,
+      })) {
         return
       }
 

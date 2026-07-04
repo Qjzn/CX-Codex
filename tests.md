@@ -4418,6 +4418,40 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Worktree routes 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/worktreeRoutes.ts`、`src/server/appServerRollbackGit.ts`、`src/server/codexPaths.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1` 和 `scripts/verify-release.ps1`。
+- 本机可运行 server module smoke、governance gate 和 release gate；route smoke 使用注入依赖模拟文件系统与 Git 命令，不创建真实 worktree。
+
+#### Steps
+1. 打开 `src/server/codexAppServerBridge.ts`，确认 `/codex-api/worktree/create`、`/codex-api/worktree/auto-commit` 和 `/codex-api/worktree/rollback-to-message` 统一委托 `handleWorktreeRoutes(...)`。
+2. 打开 `src/server/worktreeRoutes.ts`，确认 route 模块保留 Codex desktop worktree 布局 `~/.codex/worktrees/<id>/<repoName>`、`codex/<id>` 分支命名、非 Git 仓库初始化、空 HEAD 初始提交重试和 rollback stash/reset 行为。
+3. 执行 `git diff --check`。
+4. 执行 `node scripts\verify-server-modules.mjs`。
+5. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+7. 确认 release package smoke 必检 `src\server\worktreeRoutes.ts`。
+
+#### Expected Results
+- `POST /codex-api/worktree/create` 缺少 `sourceCwd` 返回 400，source 不存在返回 404，source 不是目录返回 400；成功时返回 `{ cwd, branch, gitRoot }`。
+- create worktree 对非 Git 目录继续执行 `git init`，对缺少 `HEAD` 的仓库继续调用 `ensureRepoHasInitialCommit(...)` 后重试 `git worktree add`。
+- `POST /codex-api/worktree/auto-commit` 继续对空变更返回 `{ committed: false }`，有 staged 变更时提交并返回 `{ committed: true }`，Git/rollback 异常返回 500。
+- `POST /codex-api/worktree/rollback-to-message` 找不到提交返回 404，匹配提交无 parent 返回 409，存在工作区变更时先 stash 再 reset，成功返回 `{ reset: true, commitSha, resetTargetSha, stashed }`。
+- 未匹配 method/path 返回 `false`，不吞掉后续 route。
+- `worktreeRoutes.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/worktreeRoutes.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1`、`scripts/verify-release.ps1` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，输出 `server module smoke ok`，覆盖 worktree create 400/404/200、非 Git 初始化、缺少 HEAD 初始提交重试、auto-commit 200/500、rollback 404/409/200/stash/reset 和未匹配 route 返回 `false`。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\worktreeRoutes.ts`。
+
+---
+
 ### Feature: Server request routes 模块化
 
 #### Prerequisites
