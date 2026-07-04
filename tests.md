@@ -7500,3 +7500,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server JSON-RPC line dispatcher extraction
+
+#### Prerequisites
+- Current repository includes `src/server/codexAppServerBridge.ts`, `src/server/appServerLineDispatcher.ts`, `src/server/appServerJsonRpcWire.ts`, `src/server/appServerRpcResponse.ts`, `scripts/server-module-smoke.ts`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
+- Dependencies are installed and `dist/` plus `dist-cli/` already exist, or run release verification without `-SkipBuild`.
+
+#### Steps
+1. Open `src/server/appServerLineDispatcher.ts` and confirm `dispatchAppServerJsonRpcLine(...)` parses a stdout JSON-RPC line and delegates response, notification, and server-request events through injected dependencies.
+2. Open `src/server/codexAppServerBridge.ts` and confirm `AppServerProcess.handleLine(...)` only binds bridge state dependencies into `dispatchAppServerJsonRpcLine(...)`.
+3. Open `scripts/server-module-smoke.ts` and confirm `smokeAppServerLineDispatcher()` covers invalid JSON, pending response settlement, notification capture/emit, and server-request forwarding.
+4. Open `scripts/verify-release.ps1` and confirm Release package smoke requires `src\server\appServerLineDispatcher.ts` inside the release zip.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+8. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Invalid stdout lines remain ignored.
+- Pending response lines still finalize pending RPC state and log slow-RPC outcome.
+- Notification lines still update notification-derived state before being emitted.
+- Server-request lines still forward to the bridge server-request handler.
+- Release package smoke fails if the new dispatcher module is omitted from the Web source zip.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal output in `output/server-module-smoke/` and `output/release-package-smoke/`.
+- To roll back, move the dispatcher logic back into `AppServerProcess.handleLine(...)`, delete `src/server/appServerLineDispatcher.ts`, remove smoke/governance/release package references, revert changelog updates, and remove this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 server module smoke: `node scripts\verify-server-modules.mjs` passed, including `smokeAppServerLineDispatcher()` coverage for invalid JSON, pending response settlement, notification capture/emit, and server-request forwarding.
+- 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

@@ -359,6 +359,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "src\server\fileUploadRoute.ts",
   "src\server\githubTrendingRoutes.ts",
   "src\server\localStateRoutes.ts",
+  "src\server\appServerLineDispatcher.ts",
   "src\server\notificationReplayRoute.ts",
   "src\server\notificationSseRoute.ts",
   "src\server\appServerPendingRpcStore.ts",

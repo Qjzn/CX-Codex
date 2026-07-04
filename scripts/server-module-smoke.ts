@@ -90,6 +90,7 @@ import {
   isThreadMaterializingError,
 } from '../src/server/appServerRpcErrors.js'
 import { settleAppServerRpcResponse } from '../src/server/appServerRpcResponse.js'
+import { dispatchAppServerJsonRpcLine } from '../src/server/appServerLineDispatcher.js'
 import {
   createAppServerRpcErrorResponse,
   createAppServerRpcNotification,
@@ -394,6 +395,7 @@ try {
   await smokeCodexBridgeStartupTasks()
   smokePendingServerRequests()
   smokeAppServerJsonRpcWire()
+  smokeAppServerLineDispatcher()
   smokeAppServerInitialization()
   smokeAppServerLaunch()
   smokeAppServerHealth()
@@ -998,6 +1000,82 @@ function smokeAppServerJsonRpcWire(): void {
   assert.deepEqual(readAppServerJsonRpcLineEvent(JSON.stringify({ id: 101, result: { ignored: true } }), {
     isPendingResponseId: () => false,
   }), null)
+}
+
+function smokeAppServerLineDispatcher(): void {
+  const timeoutId = setTimeout(() => undefined, 1_000)
+  clearTimeout(timeoutId)
+  const resolvedValues: unknown[] = []
+  const rejectedValues: unknown[] = []
+  const finalizedIds: number[] = []
+  const slowRpcLogs: unknown[] = []
+  const capturedNotifications: unknown[] = []
+  const emittedNotifications: unknown[] = []
+  const serverRequests: unknown[] = []
+  const pendingRpc = {
+    resolve: (value: unknown) => resolvedValues.push(value),
+    reject: (reason?: unknown) => rejectedValues.push(reason),
+    method: 'thread/read',
+    params: { threadId: 'thread-a' },
+    startedAtMs: 100,
+    timeoutId,
+  }
+
+  const createDependencies = () => ({
+    isPendingResponseId: (id: number) => id === 7,
+    finalizePendingRpc: (id: number) => {
+      finalizedIds.push(id)
+      return id === 7 ? pendingRpc : null
+    },
+    logSlowRpc: (...args: unknown[]) => {
+      slowRpcLogs.push(args)
+    },
+    captureNotificationState: (notification: unknown) => {
+      capturedNotifications.push(notification)
+    },
+    emitNotification: (notification: unknown) => {
+      emittedNotifications.push(notification)
+    },
+    handleServerRequest: (requestId: number, method: string, params: unknown) => {
+      serverRequests.push({ requestId, method, params })
+    },
+  })
+
+  assert.equal(dispatchAppServerJsonRpcLine('not-json', createDependencies()), false)
+
+  assert.equal(dispatchAppServerJsonRpcLine(
+    JSON.stringify({ id: 7, result: { ok: true } }),
+    createDependencies(),
+  ), true)
+  assert.deepEqual(finalizedIds, [7])
+  assert.deepEqual(resolvedValues, [{ ok: true }])
+  assert.deepEqual(rejectedValues, [])
+  assert.deepEqual(slowRpcLogs, [[
+    'thread/read',
+    100,
+    { threadId: 'thread-a' },
+    { outcome: 'success' },
+  ]])
+
+  assert.equal(dispatchAppServerJsonRpcLine(
+    JSON.stringify({ method: 'turn/completed', params: { threadId: 'thread-a' } }),
+    createDependencies(),
+  ), true)
+  assert.deepEqual(capturedNotifications, [{
+    method: 'turn/completed',
+    params: { threadId: 'thread-a' },
+  }])
+  assert.deepEqual(emittedNotifications, capturedNotifications)
+
+  assert.equal(dispatchAppServerJsonRpcLine(
+    JSON.stringify({ id: 8, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-b' } }),
+    createDependencies(),
+  ), true)
+  assert.deepEqual(serverRequests, [{
+    requestId: 8,
+    method: 'item/commandExecution/requestApproval',
+    params: { threadId: 'thread-b' },
+  }])
 }
 
 function smokeAppServerInitialization(): void {

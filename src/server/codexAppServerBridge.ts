@@ -81,7 +81,6 @@ import { createLocalRuntimeSnapshot } from './appServerRuntimeSnapshotRecovery.j
 import {
   createRpcTimeoutError,
 } from './appServerRpcErrors.js'
-import { settleAppServerRpcResponse } from './appServerRpcResponse.js'
 import { AppServerNotificationDiagnostics } from './appServerNotificationDiagnostics.js'
 import { AppServerStatusDiagnostics } from './appServerStatusDiagnostics.js'
 import { readAppServerSchemaAuditSummary } from './appServerSchemaAuditSummary.js'
@@ -96,7 +95,6 @@ import { createAppServerDiagnosticsReaders } from './appServerDiagnosticsReaders
 import {
   createAppServerRpcNotification,
   createAppServerRpcRequest,
-  readAppServerJsonRpcLineEvent,
 } from './appServerJsonRpcWire.js'
 import { createAppServerClientInfo, readPackageVersion } from './appServerClientInfo.js'
 import { createAppServerInitializeParams } from './appServerInitialization.js'
@@ -155,6 +153,7 @@ import { createAppServerRuntimeActions } from './appServerRuntimeActions.js'
 import {
   handleAppServerServerRequest,
 } from './appServerServerRequestHandler.js'
+import { dispatchAppServerJsonRpcLine } from './appServerLineDispatcher.js'
 
 const APP_SERVER_RPC_SLOW_WARN_MS = 1_800
 const APP_SERVER_RPC_MAX_IN_FLIGHT = 2
@@ -369,32 +368,16 @@ class AppServerProcess {
   }
 
   private handleLine(line: string): void {
-    const message = readAppServerJsonRpcLineEvent(line, {
+    dispatchAppServerJsonRpcLine(line, {
       isPendingResponseId: (id) => this.pending.has(id),
+      finalizePendingRpc: (id) => this.pending.finalize(id),
+      logSlowRpc: (method, startedAtMs, params, details) => {
+        this.rpcDiagnostics.logSlowRpc(method, startedAtMs, params, details)
+      },
+      captureNotificationState: (notification) => this.captureNotificationState(notification),
+      emitNotification: (notification) => this.emitNotification(notification),
+      handleServerRequest: (requestId, method, params) => this.handleServerRequest(requestId, method, params),
     })
-    if (!message) return
-
-    if (message.kind === 'response') {
-      settleAppServerRpcResponse(message, {
-        finalizePendingRpc: (id) => this.pending.finalize(id),
-        logSlowRpc: (method, startedAtMs, params, details) => {
-          this.rpcDiagnostics.logSlowRpc(method, startedAtMs, params, details)
-        },
-      })
-      return
-    }
-
-    if (message.kind === 'notification') {
-      const notification = {
-        method: message.method,
-        params: message.params,
-      }
-      this.captureNotificationState(notification)
-      this.emitNotification(notification)
-      return
-    }
-
-    this.handleServerRequest(message.id, message.method, message.params)
   }
 
   private emitNotification(notification: { method: string; params: unknown }): void {
