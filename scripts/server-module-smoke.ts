@@ -86,6 +86,7 @@ import {
   createAppServerRpcNotification,
   createAppServerRpcRequest,
   createAppServerRpcSuccessResponse,
+  readAppServerJsonRpcLineEvent,
 } from '../src/server/appServerJsonRpcWire.js'
 import { AppServerRpcQueue, getAppServerRpcQueuePriority } from '../src/server/appServerRpcQueue.js'
 import {
@@ -755,6 +756,43 @@ function smokeAppServerJsonRpcWire(): void {
   const error = createAppServerRpcErrorResponse(4, { code: -32601, message: 'Unsupported' })
   assert.deepEqual(error, { id: 4, error: { code: -32601, message: 'Unsupported' } })
   assert.equal('jsonrpc' in error, false)
+
+  assert.deepEqual(readAppServerJsonRpcLineEvent('not-json', {
+    isPendingResponseId: () => true,
+  }), null)
+  assert.deepEqual(readAppServerJsonRpcLineEvent(JSON.stringify({ id: 99, result: { ok: true } }), {
+    isPendingResponseId: (id) => id === 99,
+  }), {
+    kind: 'response',
+    id: 99,
+    result: { ok: true },
+    error: undefined,
+  })
+  assert.deepEqual(readAppServerJsonRpcLineEvent(JSON.stringify({
+    method: 'turn/started',
+    params: { threadId: 'thread-a' },
+  })), {
+    kind: 'notification',
+    method: 'turn/started',
+    params: { threadId: 'thread-a' },
+  })
+  assert.deepEqual(readAppServerJsonRpcLineEvent(JSON.stringify({ method: '' })), {
+    kind: 'notification',
+    method: '',
+    params: null,
+  })
+  assert.deepEqual(readAppServerJsonRpcLineEvent(JSON.stringify({
+    id: 100,
+    method: 'item/commandExecution/requestApproval',
+  })), {
+    kind: 'server-request',
+    id: 100,
+    method: 'item/commandExecution/requestApproval',
+    params: null,
+  })
+  assert.deepEqual(readAppServerJsonRpcLineEvent(JSON.stringify({ id: 101, result: { ignored: true } }), {
+    isPendingResponseId: () => false,
+  }), null)
 }
 
 function smokeAppServerInitialization(): void {

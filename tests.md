@@ -4299,6 +4299,34 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server JSON-RPC line 分类模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerJsonRpcWire.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 JSON-RPC response、notification、server request、非 pending response id 和非法 JSON line。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+4. 执行 `node_modules\.bin\vite.cmd build`。
+5. 执行 `node_modules\.bin\tsup.cmd`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+7. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+8. 代码审查确认 `src/server/codexAppServerBridge.ts` 的 `handleLine()` 只根据 `readAppServerJsonRpcLineEvent()` 的分类执行已有副作用。
+
+#### Expected Results
+- JSON-RPC line 解析和分类集中在 `src/server/appServerJsonRpcWire.ts`。
+- pending response id 仍优先走 pending RPC finalize、slow RPC 记录和 resolve/reject。
+- notification 仍先更新 notification-derived cache/runtime state，再广播给 listeners。
+- server-initiated request 仍进入 `handleServerRequest()`；非法 JSON 和非 pending response id 被忽略。
+- server module smoke、构建、治理门禁和 release gate 均通过。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，从 `src/server/appServerJsonRpcWire.ts` 删除 `readAppServerJsonRpcLineEvent()`，撤销 `scripts/server-module-smoke.ts` 中的 line 分类断言，并把 `src/server/codexAppServerBridge.ts` 的 `handleLine()` 恢复为内联 JSON.parse 和分支判断。
+
+---
+
 ### Feature: App Server RPC timeout recovery 模块化
 
 #### Prerequisites

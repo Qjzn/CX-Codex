@@ -97,6 +97,7 @@ import {
   createAppServerRpcNotification,
   createAppServerRpcRequest,
   createAppServerRpcSuccessResponse,
+  readAppServerJsonRpcLineEvent,
 } from './appServerJsonRpcWire.js'
 import { createAppServerClientInfo, readPackageVersion } from './appServerClientInfo.js'
 import { createAppServerInitializeParams } from './appServerInitialization.js'
@@ -151,17 +152,6 @@ import { startRuntimeTurnWithAppServer } from './appServerRuntimeStart.js'
 import { interruptRuntimeTurnWithAppServer } from './appServerRuntimeInterrupt.js'
 import { persistAppServerRuntimeSnapshot } from './appServerRuntimeSnapshotPersistence.js'
 import { readAppServerLocalRuntimeSnapshot } from './appServerLocalRuntimeSnapshot.js'
-
-type JsonRpcResponse = {
-  id?: number
-  result?: unknown
-  error?: {
-    code: number
-    message: string
-  }
-  method?: string
-  params?: unknown
-}
 
 const APP_SERVER_RPC_SLOW_WARN_MS = 1_800
 const APP_SERVER_RPC_MAX_IN_FLIGHT = 2
@@ -391,14 +381,12 @@ class AppServerProcess {
   }
 
   private handleLine(line: string): void {
-    let message: JsonRpcResponse
-    try {
-      message = JSON.parse(line) as JsonRpcResponse
-    } catch {
-      return
-    }
+    const message = readAppServerJsonRpcLineEvent(line, {
+      isPendingResponseId: (id) => this.pending.has(id),
+    })
+    if (!message) return
 
-    if (typeof message.id === 'number' && this.pending.has(message.id)) {
+    if (message.kind === 'response') {
       const pendingRequest = this.pending.finalize(message.id)
       if (!pendingRequest) return
 
@@ -413,20 +401,17 @@ class AppServerProcess {
       return
     }
 
-    if (typeof message.method === 'string' && typeof message.id !== 'number') {
+    if (message.kind === 'notification') {
       const notification = {
         method: message.method,
-        params: message.params ?? null,
+        params: message.params,
       }
       this.captureNotificationState(notification)
       this.emitNotification(notification)
       return
     }
 
-    // Handle server-initiated JSON-RPC requests (approvals, dynamic tool calls, etc.).
-    if (typeof message.id === 'number' && typeof message.method === 'string') {
-      this.handleServerRequest(message.id, message.method, message.params ?? null)
-    }
+    this.handleServerRequest(message.id, message.method, message.params)
   }
 
   private emitNotification(notification: { method: string; params: unknown }): void {
