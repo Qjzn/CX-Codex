@@ -155,7 +155,7 @@ import {
 import { AppServerThreadListAugmenter } from './appServerThreadListAugment.js'
 import { startRuntimeTurnWithAppServer } from './appServerRuntimeStart.js'
 import { interruptRuntimeTurnWithAppServer } from './appServerRuntimeInterrupt.js'
-import { persistAppServerRuntimeSnapshot } from './appServerRuntimeSnapshotPersistence.js'
+import { createAppServerRuntimeSnapshotPersister } from './appServerRuntimeSnapshotPersistence.js'
 import { readAppServerLocalRuntimeSnapshot } from './appServerLocalRuntimeSnapshot.js'
 
 const APP_SERVER_RPC_SLOW_WARN_MS = 1_800
@@ -726,14 +726,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     readTurnIdFromPayload,
   })
 
-  function persistRuntimeSnapshot(threadId: string, snapshot?: ThreadRuntimeSnapshot): ThreadRuntimeSnapshot {
-    return persistAppServerRuntimeSnapshot(threadId, snapshot, {
-      snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
-      listPendingServerRequestsForThread: (normalizedThreadId) => appServer.listPendingServerRequestsForThread(normalizedThreadId),
-      getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
-      upsertSnapshot: (nextSnapshot) => runtimeStore.upsertSnapshot(nextSnapshot),
-    })
-  }
+  const persistRuntimeSnapshot = createAppServerRuntimeSnapshotPersister({
+    snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
+    listPendingServerRequestsForThread: (normalizedThreadId) => appServer.listPendingServerRequestsForThread(normalizedThreadId),
+    getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
+    upsertSnapshot: (nextSnapshot) => runtimeStore.upsertSnapshot(nextSnapshot),
+  })
 
   function rememberNotificationEvent(notification: { method: string; params: unknown }): BridgeNotificationEvent {
     return notificationReplay.remember(notification)

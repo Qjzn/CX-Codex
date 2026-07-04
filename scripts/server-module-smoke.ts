@@ -280,7 +280,10 @@ import {
   startRuntimeTurnWithAppServer,
   type RuntimeStartDependencies,
 } from '../src/server/appServerRuntimeStart.js'
-import { persistAppServerRuntimeSnapshot } from '../src/server/appServerRuntimeSnapshotPersistence.js'
+import {
+  createAppServerRuntimeSnapshotPersister,
+  persistAppServerRuntimeSnapshot,
+} from '../src/server/appServerRuntimeSnapshotPersistence.js'
 import {
   interruptRuntimeTurnWithAppServer,
   type RuntimeInterruptDependencies,
@@ -6458,6 +6461,30 @@ function smokeAppServerRuntimeSnapshotPersistence(): void {
     updatedAtIso: '2026-01-01T00:00:00.000Z',
     snapshot: providedSnapshot,
   }])
+
+  const persisterUpserts: unknown[] = []
+  const persister = createAppServerRuntimeSnapshotPersister({
+    snapshotRuntime: (threadId, overlay) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'waiting_permission',
+      pendingServerRequests: overlay?.pendingServerRequests ?? [],
+      tokenUsage: overlay?.tokenUsage ?? null,
+    }),
+    listPendingServerRequestsForThread: () => pendingServerRequests,
+    getThreadTokenUsage: () => tokenUsage,
+    upsertSnapshot: (snapshot) => {
+      persisterUpserts.push(snapshot)
+      return snapshot
+    },
+  })
+  const persistedFromFactory = persister('thread-factory')
+  assert.equal(persistedFromFactory.threadId, 'thread-factory')
+  assert.equal(persistedFromFactory.executionState, 'waiting_permission')
+  assert.deepEqual(persistedFromFactory.pendingServerRequests, pendingServerRequests)
+  assert.equal(persistedFromFactory.tokenUsage, tokenUsage)
+  assert.equal(persisterUpserts.length, 1)
+  assert.deepEqual((persisterUpserts[0] as { snapshot: ThreadRuntimeSnapshot }).snapshot.pendingServerRequests, [])
+  assert.equal((persisterUpserts[0] as { snapshot: ThreadRuntimeSnapshot }).snapshot.tokenUsage, null)
 }
 
 async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {

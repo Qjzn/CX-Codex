@@ -37,3 +37,9 @@ export function persistAppServerRuntimeSnapshot(
 
   return nextSnapshot
 }
+
+export function createAppServerRuntimeSnapshotPersister(
+  dependencies: AppServerRuntimeSnapshotPersistenceDependencies,
+): (threadId: string, snapshot?: ThreadRuntimeSnapshot) => ThreadRuntimeSnapshot {
+  return (threadId, snapshot) => persistAppServerRuntimeSnapshot(threadId, snapshot, dependencies)
+}
