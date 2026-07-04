@@ -328,6 +328,46 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server official notification known classification
+
+#### Prerequisites
+- Current repository includes `src/server/appServerNotificationDiagnostics.ts`, `scripts/server-module-smoke.ts`, `docs/app-server-protocol-matrix.zh-CN.md`, and the raw schema audit output for App Server server notifications.
+- Dependencies are installed so TypeScript, Vite, tsup, server module smoke, governance, and release verification can run.
+
+#### Steps
+1. Open `output/app-server-schema-audit/20260704-141839/typescript/ServerNotification.ts` and confirm the current raw schema lists 64 official `ServerNotification` methods.
+2. Open `src/server/appServerNotificationDiagnostics.ts` and confirm `KNOWN_NOTIFICATION_METHODS` includes the official streaming, account, fuzzy file search, thread goal/compaction, raw response item, and server request resolved notifications.
+3. Run the one-off comparison command:
+   `node -e 'const fs=require("fs");const s=fs.readFileSync("output/app-server-schema-audit/20260704-141839/typescript/ServerNotification.ts","utf8");const official=Array.from(s.matchAll(/"method": "([^"]+)"/g)).map(m=>m[1]);const d=fs.readFileSync("src/server/appServerNotificationDiagnostics.ts","utf8");const setBlock=(d.match(/const KNOWN_NOTIFICATION_METHODS = new Set\(\[([\s\S]*?)\]\)/)||[])[1]||"";const known=Array.from(setBlock.matchAll(/\x27([^\x27]+)\x27/g)).map(m=>m[1]);const suffixes=["/archived","/created","/deleted","/forked","/moved","/removed","/unarchived"];const isKnown=m=>known.includes(m)||m.endsWith("/failed")||m.includes("error")||(m.startsWith("thread/")&&suffixes.some(s=>m.endsWith(s)));console.log(JSON.stringify({officialCount:official.length,knownCount:known.length,unknownOfficial:official.filter(m=>!isKnown(m))},null,2));'`
+4. Confirm the comparison reports `"officialCount": 64` and `"unknownOfficial": []`.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+8. Run `node_modules\.bin\vite.cmd build`.
+9. Run `node_modules\.bin\tsup.cmd`.
+10. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+11. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Every current official `ServerNotification` method from the raw schema audit is classified as known by `isKnownAppServerNotificationMethod()`.
+- `unknownNotificationCount` remains reserved for future schema drift or genuinely non-current methods rather than known official streaming/account/fuzzy-file-search notifications.
+- Existing specialized diagnostics for model, Windows sandbox, hooks, guardian review, protocol alerts, realtime, and remote control still record their sanitized snapshots.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `dist/`, `dist-cli/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, remove the added known notification methods, remove the server module smoke assertions, and revert the protocol matrix, changelog, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 schema comparison: the one-off Node comparison reported `officialCount: 64` and `unknownOfficial: []` for `output/app-server-schema-audit/20260704-141839/typescript/ServerNotification.ts` against `KNOWN_NOTIFICATION_METHODS`.
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed with `server module smoke ok`, including the full current official `ServerNotification` known-classification guard.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
 ### Feature: App Server local runtime snapshot reader helper
 
 #### Prerequisites

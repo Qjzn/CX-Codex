@@ -1215,6 +1215,99 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('thread/realtime/closed'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/status/changed'), true)
   assert.equal(isKnownAppServerNotificationMethod('remoteControl/status/changed'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/goal/updated'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/goal/cleared'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/closed'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/compacted'), true)
+  assert.equal(isKnownAppServerNotificationMethod('turn/diff/updated'), true)
+  assert.equal(isKnownAppServerNotificationMethod('turn/plan/updated'), true)
+  assert.equal(isKnownAppServerNotificationMethod('rawResponseItem/completed'), true)
+  assert.equal(isKnownAppServerNotificationMethod('item/agentMessage/delta'), true)
+  assert.equal(isKnownAppServerNotificationMethod('item/plan/delta'), true)
+  assert.equal(isKnownAppServerNotificationMethod('item/commandExecution/outputDelta'), true)
+  assert.equal(isKnownAppServerNotificationMethod('item/commandExecution/terminalInteraction'), true)
+  assert.equal(isKnownAppServerNotificationMethod('item/fileChange/outputDelta'), true)
+  assert.equal(isKnownAppServerNotificationMethod('item/fileChange/patchUpdated'), true)
+  assert.equal(isKnownAppServerNotificationMethod('item/mcpToolCall/progress'), true)
+  assert.equal(isKnownAppServerNotificationMethod('item/reasoning/summaryTextDelta'), true)
+  assert.equal(isKnownAppServerNotificationMethod('item/reasoning/summaryPartAdded'), true)
+  assert.equal(isKnownAppServerNotificationMethod('item/reasoning/textDelta'), true)
+  assert.equal(isKnownAppServerNotificationMethod('command/exec/outputDelta'), true)
+  assert.equal(isKnownAppServerNotificationMethod('process/outputDelta'), true)
+  assert.equal(isKnownAppServerNotificationMethod('process/exited'), true)
+  assert.equal(isKnownAppServerNotificationMethod('serverRequest/resolved'), true)
+  assert.equal(isKnownAppServerNotificationMethod('account/updated'), true)
+  assert.equal(isKnownAppServerNotificationMethod('account/login/completed'), true)
+  assert.equal(isKnownAppServerNotificationMethod('fuzzyFileSearch/sessionUpdated'), true)
+  assert.equal(isKnownAppServerNotificationMethod('fuzzyFileSearch/sessionCompleted'), true)
+
+  const officialServerNotifications = [
+    'error',
+    'thread/started',
+    'thread/status/changed',
+    'thread/archived',
+    'thread/unarchived',
+    'thread/closed',
+    'skills/changed',
+    'thread/name/updated',
+    'thread/goal/updated',
+    'thread/goal/cleared',
+    'thread/tokenUsage/updated',
+    'turn/started',
+    'hook/started',
+    'turn/completed',
+    'hook/completed',
+    'turn/diff/updated',
+    'turn/plan/updated',
+    'item/started',
+    'item/autoApprovalReview/started',
+    'item/autoApprovalReview/completed',
+    'item/completed',
+    'rawResponseItem/completed',
+    'item/agentMessage/delta',
+    'item/plan/delta',
+    'command/exec/outputDelta',
+    'process/outputDelta',
+    'process/exited',
+    'item/commandExecution/outputDelta',
+    'item/commandExecution/terminalInteraction',
+    'item/fileChange/outputDelta',
+    'item/fileChange/patchUpdated',
+    'serverRequest/resolved',
+    'item/mcpToolCall/progress',
+    'mcpServer/oauthLogin/completed',
+    'mcpServer/startupStatus/updated',
+    'account/updated',
+    'account/rateLimits/updated',
+    'app/list/updated',
+    'remoteControl/status/changed',
+    'externalAgentConfig/import/completed',
+    'fs/changed',
+    'item/reasoning/summaryTextDelta',
+    'item/reasoning/summaryPartAdded',
+    'item/reasoning/textDelta',
+    'thread/compacted',
+    'model/rerouted',
+    'model/verification',
+    'warning',
+    'guardianWarning',
+    'deprecationNotice',
+    'configWarning',
+    'fuzzyFileSearch/sessionUpdated',
+    'fuzzyFileSearch/sessionCompleted',
+    'thread/realtime/started',
+    'thread/realtime/itemAdded',
+    'thread/realtime/transcript/delta',
+    'thread/realtime/transcript/done',
+    'thread/realtime/outputAudio/delta',
+    'thread/realtime/sdp',
+    'thread/realtime/error',
+    'thread/realtime/closed',
+    'windows/worldWritableWarning',
+    'windowsSandbox/setupCompleted',
+    'account/login/completed',
+  ]
+  assert.deepEqual(officialServerNotifications.filter((method) => !isKnownAppServerNotificationMethod(method)), [])
 
   const diagnostics = new AppServerNotificationDiagnostics({ maxRecentUnknown: 2, maxRecentRealtimeNotifications: 4 })
   diagnostics.observe({

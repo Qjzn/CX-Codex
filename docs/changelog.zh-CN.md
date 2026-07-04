@@ -37,6 +37,7 @@
   - App Server `thread/metadata/update`、`thread/unarchive`、`thread/compact/start`、`thread/approveGuardianDeniedAction` 和 `turn/steer` 通过通用 RPC 触发时也会按影响范围清理线程缓存，减少新版官方写入方法造成的列表或详情陈旧。
   - App Server `thread/goal/*`、`thread/compacted`、`turn/diff/updated`、`turn/plan/updated`、`rawResponseItem/completed` 和官方 streaming delta/progress/output 通知会清理对应 thread/read 缓存，避免线程详情在流式更新或上下文压缩后继续读取旧快照；`thread/tokenUsage/updated` 仍只更新 token usage cache，不触发消息或列表重拉。
   - App Server `remoteControl/status/changed` 会作为已知官方通知进入只读 Remote Control 诊断，展示状态和 environmentId，避免被误报为未知协议漂移；当前 raw schema 中 `TurnEnvironmentParams` 尚未被 `thread/start` 或 `turn/start` 参数引用，因此不新增环境切换入口。
+  - 当前 raw schema 中的 64 个官方 App Server `ServerNotification` method 已全部纳入 known 分类，`unknownNotificationCount` 只用于未来协议漂移或非当前官方 method，避免官方 streaming、account、fuzzy file search 等通知被误报为未知。
   - App Server `skills/changed` 通知会按官方语义触发前端技能列表防抖刷新，并在通知诊断中作为已知 method 处理。
   - App Server `app/list/updated` 与 `mcpServer/startupStatus/updated` 通知会触发 composer 插件/App 列表防抖刷新；`account/rateLimits/updated` 和 MCP OAuth 完成通知纳入已知 method 诊断，减少官方状态通知被误判为未知漂移。
   - App Server `model/rerouted` 与 `model/verification` 通知会进入脱敏模型通知诊断快照，并在诊断中心只读展示，不会改写当前线程渲染或用户选择模型。
