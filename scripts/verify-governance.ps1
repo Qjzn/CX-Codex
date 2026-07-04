@@ -329,6 +329,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "src\server\notificationSseRoute.ts",
   "src\server\projectRootRoutes.ts",
   "src\server\runtimeStateRoutes.ts",
+  "src\server\threadRoutes.ts",
   "src\server\transcriptionRoute.ts",
   "src\server\workspaceMetaRoutes.ts"
 )
@@ -341,6 +342,7 @@ Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
   "src', 'server', 'notificationSseRoute.ts'",
   "src', 'server', 'projectRootRoutes.ts'",
   "src', 'server', 'runtimeStateRoutes.ts'",
+  "src', 'server', 'threadRoutes.ts'",
   "src', 'server', 'transcriptionProxy.ts'",
   "src', 'server', 'transcriptionRoute.ts'",
   "src', 'server', 'workspaceMetaRoutes.ts'"
@@ -353,6 +355,8 @@ Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "smokeWorkspaceMetaRoutes",
   "handleProjectRootRoutes",
   "smokeProjectRootRoutes",
+  "handleThreadRoutes",
+  "smokeThreadRoutes",
   "handleDiagnosticsRoutes",
   "smokeDiagnosticsRoutes",
   "handleNotificationSseRoute",

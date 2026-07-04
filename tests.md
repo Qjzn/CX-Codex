@@ -4286,6 +4286,38 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Thread routes 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/threadRoutes.ts`、`src/server/threadTitleCache.ts`、`src/server/threadSearchIndex.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1` 和 `scripts/verify-release.ps1`。
+- `dist/` 与 `dist-cli/` 已存在，或可用完整 release gate 重新构建。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+4. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+5. 检查 release package smoke 输出，确认 zip 必检清单包含 `src\server\threadRoutes.ts`。
+
+#### Expected Results
+- `GET /codex-api/thread-titles` 继续合并读取全局 state 和 session index 中的线程标题缓存，并返回 `{ data: cache }`。
+- `POST /codex-api/thread-search` 继续 trim `query`、将 `limit` 限制在 1 到 1000，空 query 直接返回空结果，非空 query 调用 `threadSearchIndexStore.search`。
+- `PUT /codex-api/thread-titles` 继续要求 `id`，有 `title` 时更新缓存，空 `title` 时移除缓存，并写回全局 state。
+- `codexAppServerBridge.ts` 不再内联 thread titles/search route 分支，而是委托 `handleThreadRoutes`。
+- Server module smoke 覆盖标题读取、搜索、空搜索、标题更新、标题移除、缺失 id 和未命中方法。
+- Release package smoke 会在 zip 缺少 `src\server\threadRoutes.ts` 时失败。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/threadRoutes.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1`、`scripts/verify-release.ps1` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，输出 `server module smoke ok`，覆盖 thread route 委托、标题缓存读写、搜索 limit 归一化和空搜索短路。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`。
+
+---
+
 ### Feature: Local state routes 模块化
 
 #### Prerequisites

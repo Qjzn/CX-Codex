@@ -51,6 +51,7 @@ import { handleDiagnosticsRoutes } from './diagnosticsRoutes.js'
 import { handleWorkspaceMetaRoutes } from './workspaceMetaRoutes.js'
 import { handleProjectRootRoutes } from './projectRootRoutes.js'
 import { handleComposerFileSearchRoutes } from './composerFileSearchRoutes.js'
+import { handleThreadRoutes } from './threadRoutes.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   fetchGithubTrending,
@@ -150,14 +151,7 @@ import {
   ThreadTokenUsageStore,
   type ThreadTokenUsage,
 } from './threadTokenUsage.js'
-import {
-  readMergedThreadTitleCache,
-  readThreadTitleCache,
-  readThreadTitlesFromSessionIndex,
-  removeFromThreadTitleCache,
-  updateThreadTitleCache,
-  writeThreadTitleCache,
-} from './threadTitleCache.js'
+import { readThreadTitlesFromSessionIndex } from './threadTitleCache.js'
 import {
   buildThreadSearchIndex,
   ThreadSearchIndexStore,
@@ -1829,40 +1823,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'GET' && url.pathname === '/codex-api/thread-titles') {
-        const cache = await readMergedThreadTitleCache(getCodexGlobalStatePath(), getCodexSessionIndexPath())
-        setJson(res, 200, { data: cache })
-        return
-      }
-
-      if (req.method === 'POST' && url.pathname === '/codex-api/thread-search') {
-        const payload = asRecord(await readJsonBody(req))
-        const query = typeof payload?.query === 'string' ? payload.query.trim() : ''
-        const limitRaw = typeof payload?.limit === 'number' ? payload.limit : 200
-        const limit = Math.max(1, Math.min(1000, Math.floor(limitRaw)))
-        if (!query) {
-          setJson(res, 200, { data: { threadIds: [], indexedThreadCount: 0 } })
-          return
-        }
-
-        const searchResult = await threadSearchIndexStore.search(query, limit)
-        setJson(res, 200, { data: searchResult })
-        return
-      }
-
-      if (req.method === 'PUT' && url.pathname === '/codex-api/thread-titles') {
-        const payload = asRecord(await readJsonBody(req))
-        const id = typeof payload?.id === 'string' ? payload.id : ''
-        const title = typeof payload?.title === 'string' ? payload.title : ''
-        if (!id) {
-          setJson(res, 400, { error: 'Missing id' })
-          return
-        }
-        const statePath = getCodexGlobalStatePath()
-        const cache = await readThreadTitleCache(statePath)
-        const next = title ? updateThreadTitleCache(cache, id, title) : removeFromThreadTitleCache(cache, id)
-        await writeThreadTitleCache(statePath, next)
-        setJson(res, 200, { ok: true })
+      if (await handleThreadRoutes(req, res, url, {
+        readJsonBody,
+        threadSearchIndexStore,
+      })) {
         return
       }
 

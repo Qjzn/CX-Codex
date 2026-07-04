@@ -220,6 +220,7 @@ import {
   ThreadSearchIndexStore,
   type ThreadListParams,
 } from '../src/server/threadSearchIndex.js'
+import { handleThreadRoutes } from '../src/server/threadRoutes.js'
 import {
   isRuntimeActiveState,
   RuntimeStateStore,
@@ -347,6 +348,7 @@ try {
   await smokeThreadTokenUsage()
   await smokeThreadTitleCache()
   await smokeThreadSearchIndex()
+  await smokeThreadRoutes()
   await smokeWorkspaceRootsState()
   await smokeWorkspaceMetaRoutes()
   await smokeProjectRoots()
@@ -3248,6 +3250,125 @@ async function smokeThreadSearchIndex(): Promise<void> {
   store.clear()
   assert.deepEqual(await store.search('alpha', 10), { threadIds: ['thread-a'], indexedThreadCount: 1 })
   assert.equal(buildCount, 2)
+}
+
+async function smokeThreadRoutes(): Promise<void> {
+  const bodies: unknown[] = [
+    { query: ' alpha ', limit: 2.8 },
+    { query: '   ', limit: 10 },
+    { id: 'thread-a', title: 'Alpha title' },
+    { id: 'thread-a', title: '' },
+    { title: 'Missing id' },
+  ]
+  const searchCalls: Array<{ query: string; limit: number }> = []
+  const readTitlePaths: string[] = []
+  const writeTitleCalls: Array<{ path: string; cache: unknown }> = []
+  const dependencies = {
+    readJsonBody: async () => bodies.shift(),
+    threadSearchIndexStore: {
+      search: async (query: string, limit: number) => {
+        searchCalls.push({ query, limit })
+        return { threadIds: ['thread-a'], indexedThreadCount: 3 }
+      },
+    },
+    getCodexGlobalStatePath: () => 'global-state.json',
+    getCodexSessionIndexPath: () => 'session-index.jsonl',
+    readMergedThreadTitleCache: async (statePath: string, sessionIndexPath: string) => ({
+      titles: { 'thread-a': `from:${statePath}:${sessionIndexPath}` },
+      order: ['thread-a'],
+    }),
+    readThreadTitleCache: async (path: string) => {
+      readTitlePaths.push(path)
+      return { titles: { 'thread-a': 'Old title' }, order: ['thread-a'] }
+    },
+    writeThreadTitleCache: async (path: string, cache: unknown) => {
+      writeTitleCalls.push({ path, cache })
+    },
+  }
+
+  const titles = createRouteTestResponse()
+  assert.equal(await handleThreadRoutes(
+    { method: 'GET' } as never,
+    titles.response as never,
+    new URL('http://127.0.0.1/codex-api/thread-titles'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(titles.body), {
+    data: {
+      titles: { 'thread-a': 'from:global-state.json:session-index.jsonl' },
+      order: ['thread-a'],
+    },
+  })
+
+  const search = createRouteTestResponse()
+  assert.equal(await handleThreadRoutes(
+    { method: 'POST' } as never,
+    search.response as never,
+    new URL('http://127.0.0.1/codex-api/thread-search'),
+    dependencies,
+  ), true)
+  assert.deepEqual(searchCalls, [{ query: 'alpha', limit: 2 }])
+  assert.deepEqual(JSON.parse(search.body), { data: { threadIds: ['thread-a'], indexedThreadCount: 3 } })
+
+  const emptySearch = createRouteTestResponse()
+  assert.equal(await handleThreadRoutes(
+    { method: 'POST' } as never,
+    emptySearch.response as never,
+    new URL('http://127.0.0.1/codex-api/thread-search'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(emptySearch.body), { data: { threadIds: [], indexedThreadCount: 0 } })
+  assert.equal(searchCalls.length, 1)
+
+  const updateTitle = createRouteTestResponse()
+  assert.equal(await handleThreadRoutes(
+    { method: 'PUT' } as never,
+    updateTitle.response as never,
+    new URL('http://127.0.0.1/codex-api/thread-titles'),
+    dependencies,
+  ), true)
+  assert.deepEqual(readTitlePaths, ['global-state.json'])
+  assert.deepEqual(writeTitleCalls[0], {
+    path: 'global-state.json',
+    cache: {
+      titles: { 'thread-a': 'Alpha title' },
+      order: ['thread-a'],
+    },
+  })
+  assert.deepEqual(JSON.parse(updateTitle.body), { ok: true })
+
+  const removeTitle = createRouteTestResponse()
+  assert.equal(await handleThreadRoutes(
+    { method: 'PUT' } as never,
+    removeTitle.response as never,
+    new URL('http://127.0.0.1/codex-api/thread-titles'),
+    dependencies,
+  ), true)
+  assert.deepEqual(writeTitleCalls[1], {
+    path: 'global-state.json',
+    cache: {
+      titles: {},
+      order: [],
+    },
+  })
+  assert.deepEqual(JSON.parse(removeTitle.body), { ok: true })
+
+  const missingId = createRouteTestResponse()
+  assert.equal(await handleThreadRoutes(
+    { method: 'PUT' } as never,
+    missingId.response as never,
+    new URL('http://127.0.0.1/codex-api/thread-titles'),
+    dependencies,
+  ), true)
+  assert.equal(missingId.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(missingId.body), { error: 'Missing id' })
+
+  assert.equal(await handleThreadRoutes(
+    { method: 'GET' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/thread-search'),
+    dependencies,
+  ), false)
 }
 
 async function smokeWorkspaceRootsState(): Promise<void> {
