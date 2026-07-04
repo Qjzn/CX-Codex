@@ -80,7 +80,7 @@ import { createAppServerRpcTimeoutRecoveryDecision } from './appServerRpcTimeout
 import {
   AppServerThreadReadCacheStore,
 } from './appServerThreadReadCache.js'
-import { createAppServerThreadRuntimeSnapshotReader } from './appServerThreadRuntimeSnapshot.js'
+import { createAppServerRuntimeReaders } from './appServerRuntimeReaders.js'
 import { createLocalRuntimeSnapshot } from './appServerRuntimeSnapshotRecovery.js'
 import {
   createRpcTimeoutError,
@@ -130,7 +130,6 @@ import {
 import { readMergedPinnedThreadIds } from './pinnedThreads.js'
 import { PlanModeTurnStore } from './planModeTurnStore.js'
 import {
-  createThreadTokenUsageResolver,
   ThreadTokenUsageStore,
   type ThreadTokenUsage,
 } from './threadTokenUsage.js'
@@ -161,7 +160,6 @@ import {
 import { createAppServerRuntimeTurnStarter } from './appServerRuntimeStart.js'
 import { createAppServerRuntimeTurnInterrupter } from './appServerRuntimeInterrupt.js'
 import { createAppServerRuntimeSnapshotPersister } from './appServerRuntimeSnapshotPersistence.js'
-import { createAppServerLocalRuntimeSnapshotReader } from './appServerLocalRuntimeSnapshot.js'
 
 const APP_SERVER_RPC_SLOW_WARN_MS = 1_800
 const APP_SERVER_RPC_MAX_IN_FLIGHT = 2
@@ -767,7 +765,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     logError: logBridgeError,
   })
 
-  const readThreadRuntimeSnapshot = createAppServerThreadRuntimeSnapshotReader({
+  const {
+    readThreadRuntimeSnapshot,
+    readLocalRuntimeSnapshot,
+    readCachedThreadTokenUsage,
+  } = createAppServerRuntimeReaders({
     rpc: (method, params) => appServer.rpc(method, params),
     observeThreadRead: (details) => statusDiagnostics.observeThreadRead(details),
     getCachedThreadRead: (normalizedThreadId) => threadReadCacheStore.get(normalizedThreadId),
@@ -784,15 +786,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     writeWarning: (message, details) => {
       writeBridgeLog('warn', message, details)
     },
-  })
-
-  const readLocalRuntimeSnapshot = createAppServerLocalRuntimeSnapshotReader({
     getSnapshot: (normalizedThreadId) => runtimeStore.getSnapshot(normalizedThreadId),
-    listPendingServerRequestsForThread: (normalizedThreadId) => appServer.listPendingServerRequestsForThread(normalizedThreadId),
-    getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
     getAppServerStartedAtMs: () => appServer.getStartedAtMs(),
-    snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
-    persistRuntimeSnapshot,
   })
 
   const reconcileRuntimeThread = createRuntimeThreadReconciler({
@@ -834,11 +829,6 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     writeReconcileFailure: (details) => {
       writeBridgeLog('warn', 'Runtime reconcile failed', details)
     },
-  })
-
-  const readCachedThreadTokenUsage = createThreadTokenUsageResolver({
-    getCachedTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
-    getCachedThreadRead: (normalizedThreadId) => threadReadCacheStore.get(normalizedThreadId),
   })
 
   const middleware = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {

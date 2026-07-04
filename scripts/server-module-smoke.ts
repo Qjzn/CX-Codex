@@ -116,6 +116,7 @@ import {
   createAppServerThreadRuntimeSnapshotReader,
   readAppServerThreadRuntimeSnapshot,
 } from '../src/server/appServerThreadRuntimeSnapshot.js'
+import { createAppServerRuntimeReaders } from '../src/server/appServerRuntimeReaders.js'
 import {
   AppServerThreadListAugmenter,
   createAppServerThreadListRpcResultAugmenter,
@@ -461,6 +462,7 @@ try {
   smokeAppServerLocalRuntimeSnapshot()
   smokeAppServerRuntimeSnapshotRecovery()
   await smokeAppServerThreadRuntimeSnapshot()
+  await smokeAppServerRuntimeReaders()
   smokeRuntimeStateStore()
   console.log('server module smoke ok')
 } finally {
@@ -7041,6 +7043,133 @@ async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
   assert.equal(factorySnapshot.messageState, 'fresh')
   assert.equal((factorySnapshot.tokenUsage as ThreadTokenUsage | null)?.last.totalTokens, 6)
   assert.deepEqual(factoryPersistedSnapshots, [factorySnapshot])
+}
+
+async function smokeAppServerRuntimeReaders(): Promise<void> {
+  const updatedAtSeconds = Date.parse('2026-01-01T00:00:00.000Z') / 1000
+  const pendingServerRequests = [{
+    id: 1,
+    method: 'server/request',
+    params: { threadId: 'thread-combined' },
+    receivedAtIso: '2026-01-01T00:00:00.000Z',
+  }]
+  const cachedThreadReads = new Map<string, CachedThreadRead>()
+  const rpcCalls: Array<{ method: string; params: unknown }> = []
+  const persistedSnapshots: ThreadRuntimeSnapshot[] = []
+  const runtimeObservations: unknown[] = []
+  const localTokenUsage = normalizeThreadTokenUsage({
+    total: {
+      totalTokens: 12,
+      inputTokens: 5,
+      cachedInputTokens: 1,
+      outputTokens: 7,
+      reasoningOutputTokens: 0,
+    },
+    last: {
+      totalTokens: 3,
+      inputTokens: 1,
+      cachedInputTokens: 0,
+      outputTokens: 2,
+      reasoningOutputTokens: 0,
+    },
+  })
+  if (!localTokenUsage) throw new Error('expected local token usage')
+
+  const readers = createAppServerRuntimeReaders({
+    rpc: async (method, params) => {
+      rpcCalls.push({ method, params })
+      if (readIncludeTurns(params) === true) {
+        return {
+          thread: {
+            updatedAt: updatedAtSeconds,
+            inProgress: false,
+            path: 'session-combined.jsonl',
+          },
+          tokenUsage: {
+            total: {
+              totalTokens: 9,
+              inputTokens: 4,
+              cachedInputTokens: 1,
+              outputTokens: 5,
+              reasoningOutputTokens: 0,
+            },
+            last: {
+              totalTokens: 6,
+              inputTokens: 3,
+              cachedInputTokens: 1,
+              outputTokens: 3,
+              reasoningOutputTokens: 0,
+            },
+          },
+        }
+      }
+      return {
+        thread: {
+          updatedAt: updatedAtSeconds,
+          inProgress: false,
+        },
+      }
+    },
+    observeThreadRead: () => {},
+    getCachedThreadRead: (threadId) => cachedThreadReads.get(threadId) ?? null,
+    rememberCachedThreadRead: (threadId, threadRead) => {
+      const cachedThreadRead = createCachedThreadRead(threadRead, () => '2026-01-01T00:00:30.000Z')
+      cachedThreadReads.set(threadId, cachedThreadRead)
+      return cachedThreadRead
+    },
+    snapshotRuntime: (threadId, overlay = {}) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'completed',
+      threadRead: overlay.threadRead ?? null,
+      messageState: overlay.messageState ?? 'unavailable',
+      pendingServerRequests: overlay.pendingServerRequests ?? [],
+      tokenUsage: overlay.tokenUsage ?? null,
+    }),
+    observeRuntimeThreadRead: (threadId, inProgress, activeTurnId, updatedAtIso, source) => {
+      runtimeObservations.push({ threadId, inProgress, activeTurnId, updatedAtIso, source })
+    },
+    markRuntimeDegraded: () => {
+      throw new Error('runtime readers factory should not mark degraded for fresh thread reads')
+    },
+    persistRuntimeSnapshot: (_threadId, snapshot) => {
+      persistedSnapshots.push(snapshot)
+      return snapshot
+    },
+    listPendingServerRequestsForThread: () => pendingServerRequests,
+    getThreadTokenUsage: (threadId) => threadId === 'thread-local' ? localTokenUsage : null,
+    getErrorMessage,
+    writeWarning: () => {
+      throw new Error('runtime readers factory should not warn for fresh thread reads')
+    },
+    getSnapshot: () => null,
+    getAppServerStartedAtMs: () => Date.parse('2025-12-31T23:59:59.000Z'),
+  })
+
+  const threadSnapshot = await readers.readThreadRuntimeSnapshot(' thread-combined ')
+  assert.deepEqual(rpcCalls.map((call) => [call.method, readIncludeTurns(call.params)]), [
+    ['thread/read', false],
+    ['thread/read', true],
+  ])
+  assert.equal(threadSnapshot.threadId, 'thread-combined')
+  assert.equal(threadSnapshot.messageState, 'fresh')
+  assert.equal((threadSnapshot.tokenUsage as ThreadTokenUsage | null)?.last.totalTokens, 6)
+  assert.equal(cachedThreadReads.has('thread-combined'), true)
+  assert.deepEqual(runtimeObservations, [{
+    threadId: 'thread-combined',
+    inProgress: false,
+    activeTurnId: '',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    source: 'thread-read',
+  }])
+
+  const cachedTokenUsage = await readers.readCachedThreadTokenUsage(' thread-combined ')
+  assert.equal(cachedTokenUsage?.last.totalTokens, 6)
+
+  const localSnapshot = readers.readLocalRuntimeSnapshot(' thread-local ')
+  assert.equal(localSnapshot.threadId, 'thread-local')
+  assert.deepEqual(localSnapshot.pendingServerRequests, pendingServerRequests)
+  assert.equal(localSnapshot.tokenUsage, localTokenUsage)
+  assert.equal(persistedSnapshots.at(-1), localSnapshot)
 }
 
 function smokeAppServerNotificationReplay(): void {

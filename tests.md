@@ -6432,3 +6432,42 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server runtime readers factory
+
+#### Prerequisites
+- Current repository includes `src/server/appServerRuntimeReaders.ts`, `src/server/codexAppServerBridge.ts`, and `scripts/server-module-smoke.ts`.
+- Dependencies are installed so TypeScript, Vite, tsup, and the server module smoke verifier can run.
+
+#### Steps
+1. Open `src/server/appServerRuntimeReaders.ts` and confirm `createAppServerRuntimeReaders(...)` returns `readThreadRuntimeSnapshot`, `readLocalRuntimeSnapshot`, and `readCachedThreadTokenUsage`.
+2. Open `src/server/codexAppServerBridge.ts` and confirm the bridge creates all three runtime readers through `createAppServerRuntimeReaders(...)`.
+3. Confirm the factory still wires App Server `thread/read`, thread-read cache access, runtime state snapshots, local runtime snapshots, pending server requests, token usage, and warning logging through the same dependencies.
+4. Run `git diff --check`.
+5. Run `node scripts\verify-server-modules.mjs`.
+6. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+7. Run `node_modules\.bin\vite.cmd build`.
+8. Run `node_modules\.bin\tsup.cmd`.
+9. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+10. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- `codexAppServerBridge.ts` no longer owns three separate runtime reader factory calls.
+- Thread runtime snapshots still perform light and heavy `thread/read` calls, persist snapshots, and remember cached thread reads.
+- Local runtime snapshots still merge pending server requests and cached token usage.
+- Cached token usage resolution still reads from cached App Server token usage first and cached thread-read payloads second.
+- `scripts/server-module-smoke.ts` covers the combined runtime readers factory across thread, local, and cached token usage readers.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifacts need cleanup beyond normal build output in `dist/`, `dist-cli/`, and `output/`.
+- To roll back, delete `src/server/appServerRuntimeReaders.ts`, restore the three separate reader factory calls in `src/server/codexAppServerBridge.ts`, and revert `scripts/server-module-smoke.ts` plus this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed, including coverage for `createAppServerRuntimeReaders()` thread runtime snapshot, local runtime snapshot, and cached token usage reader wiring.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
