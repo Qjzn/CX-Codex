@@ -126,6 +126,7 @@ import {
   buildPlanModeDeclineResult,
   buildUnsupportedServerRequestResult,
   evaluateServerRequestPolicy,
+  isImmediateServerRequestPolicyDecision,
   isMcpToolPermissionRequest,
   shouldAutoApproveServerRequest,
   type WebBridgeSettings,
@@ -2919,24 +2920,30 @@ function smokeServerRequestPolicy(): void {
 
   assert.deepEqual(buildPlanModeDeclineResult('item/fileChange/requestApproval', {}), { decision: 'decline' })
   assert.deepEqual(buildPlanModeDeclineResult('mcpserver/elicitation/request', mcpParams), { action: 'decline' })
-  assert.equal(evaluateServerRequestPolicy({
+  const planDeclined = evaluateServerRequestPolicy({
     method: 'item/fileChange/requestApproval',
     params: {},
     permissions: allowSessionPermissions,
     isPlanModeRequest: true,
-  }).kind, 'plan-decline')
-  assert.equal(evaluateServerRequestPolicy({
+  })
+  assert.equal(planDeclined.kind, 'plan-decline')
+  assert.equal(isImmediateServerRequestPolicyDecision(planDeclined), true)
+  const queued = evaluateServerRequestPolicy({
     method: 'mcpserver/elicitation/request',
     params: mcpParams,
     permissions: askPermissions,
     isPlanModeRequest: false,
-  }).kind, 'queue')
-  assert.equal(evaluateServerRequestPolicy({
+  })
+  assert.equal(queued.kind, 'queue')
+  assert.equal(isImmediateServerRequestPolicyDecision(queued), false)
+  const autoApproved = evaluateServerRequestPolicy({
     method: 'mcpserver/elicitation/request',
     params: mcpParams,
     permissions: allowSessionPermissions,
     isPlanModeRequest: false,
-  }).kind, 'auto-approve')
+  })
+  assert.equal(autoApproved.kind, 'auto-approve')
+  assert.equal(isImmediateServerRequestPolicyDecision(autoApproved), true)
   const unsupported = evaluateServerRequestPolicy({
     method: 'item/tool/call',
     params: {},
@@ -2944,6 +2951,7 @@ function smokeServerRequestPolicy(): void {
     isPlanModeRequest: false,
   })
   assert.equal(unsupported.kind, 'reject-unsupported')
+  assert.equal(isImmediateServerRequestPolicyDecision(unsupported), true)
   assert.match(JSON.stringify(buildUnsupportedServerRequestResult('item/tool/call')), /不能代执行这个工具/)
 }
 

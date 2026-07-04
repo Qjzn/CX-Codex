@@ -17,6 +17,8 @@ export type ServerRequestPolicyDecision =
   | { kind: 'reject-unsupported'; result: unknown }
   | { kind: 'queue' }
 
+export type ImmediateServerRequestPolicyDecision = Exclude<ServerRequestPolicyDecision, { kind: 'queue' }>
+
 type EvaluateServerRequestPolicyOptions = {
   method: string
   params: unknown
@@ -172,4 +174,10 @@ export function evaluateServerRequestPolicy(
   }
 
   return { kind: 'queue' }
+}
+
+export function isImmediateServerRequestPolicyDecision(
+  decision: ServerRequestPolicyDecision,
+): decision is ImmediateServerRequestPolicyDecision {
+  return decision.kind !== 'queue'
 }

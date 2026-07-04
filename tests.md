@@ -4326,6 +4326,34 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server server request immediate policy 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/serverRequestPolicy.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 queue policy、auto-approve policy 和 reject-unsupported policy 的 immediate-resolution 判断。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+4. 执行 `node_modules\.bin\vite.cmd build`。
+5. 执行 `node_modules\.bin\tsup.cmd`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+7. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+8. 代码审查确认 `src/server/codexAppServerBridge.ts` 的 `handleServerRequest()` 仅对 immediate policy 统一回包并发出 `server/request/resolved`，queue policy 仍记录 pending request 并发出 `server/request`。
+
+#### Expected Results
+- server request policy 的 immediate-resolution 判断集中在 `src/server/serverRequestPolicy.ts`。
+- plan-decline、auto-approve 和 reject-unsupported 仍自动回包并发出 `server/request/resolved`。
+- reject-unsupported 仍额外写入脱敏 warning log。
+- queue policy 仍保持人工处理路径，不被自动回包。
+- server module smoke、构建、治理门禁和 release gate 均通过。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `isImmediateServerRequestPolicyDecision()`，撤销 `scripts/server-module-smoke.ts` 中的 immediate policy 断言，并把 `src/server/codexAppServerBridge.ts` 的三个自动完成分支恢复为独立判断。
+
+---
+
 ### Feature: App Server JSON-RPC line 分类模块化
 
 #### Prerequisites

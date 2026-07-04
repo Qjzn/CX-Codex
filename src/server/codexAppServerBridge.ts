@@ -137,6 +137,7 @@ import {
 } from './threadSearchIndex.js'
 import {
   evaluateServerRequestPolicy,
+  isImmediateServerRequestPolicyDecision,
   type WebBridgeSettings,
 } from './serverRequestPolicy.js'
 import {
@@ -489,29 +490,15 @@ class AppServerProcess {
       isPlanModeRequest: this.isPlanModeServerRequest(params),
     })
 
-    if (policy.kind === 'plan-decline') {
-      this.sendServerRequestReply(requestId, {
-        result: policy.result,
-      })
-      this.emitServerRequestResolved(requestId, method, params, 'automatic')
-      return
-    }
-
-    if (policy.kind === 'auto-approve') {
-      this.sendServerRequestReply(requestId, {
-        result: policy.result,
-      })
-      this.emitServerRequestResolved(requestId, method, params, 'automatic')
-      return
-    }
-
-    if (policy.kind === 'reject-unsupported') {
-      writeBridgeLog('warn', 'Declined unsupported app-server request', {
-        requestId,
-        method,
-        threadId: this.readServerRequestThreadId(params),
-        turnId: readTurnIdFromPayload(params),
-      })
+    if (isImmediateServerRequestPolicyDecision(policy)) {
+      if (policy.kind === 'reject-unsupported') {
+        writeBridgeLog('warn', 'Declined unsupported app-server request', {
+          requestId,
+          method,
+          threadId: this.readServerRequestThreadId(params),
+          turnId: readTurnIdFromPayload(params),
+        })
+      }
       this.sendServerRequestReply(requestId, {
         result: policy.result,
       })
