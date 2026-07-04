@@ -128,7 +128,7 @@ import {
 import { readMergedPinnedThreadIds } from './pinnedThreads.js'
 import { PlanModeTurnStore } from './planModeTurnStore.js'
 import {
-  resolveThreadTokenUsage,
+  createThreadTokenUsageResolver,
   ThreadTokenUsageStore,
   type ThreadTokenUsage,
 } from './threadTokenUsage.js'
@@ -876,12 +876,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     },
   })
 
-  async function readCachedThreadTokenUsage(threadId: string): Promise<ThreadTokenUsage | null> {
-    return await resolveThreadTokenUsage(threadId, {
-      getCachedTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
-      getCachedThreadRead: (normalizedThreadId) => threadReadCacheStore.get(normalizedThreadId),
-    })
-  }
+  const readCachedThreadTokenUsage = createThreadTokenUsageResolver({
+    getCachedTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
+    getCachedThreadRead: (normalizedThreadId) => threadReadCacheStore.get(normalizedThreadId),
+  })
 
   const middleware = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     try {

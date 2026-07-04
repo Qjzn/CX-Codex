@@ -223,6 +223,12 @@ export async function resolveThreadTokenUsage(
   return await readSessionLogTokenUsage(sessionPath)
 }
 
+export function createThreadTokenUsageResolver(
+  sources: ThreadTokenUsageSources,
+): (threadId: string) => Promise<ThreadTokenUsage | null> {
+  return async (threadId) => await resolveThreadTokenUsage(threadId, sources)
+}
+
 export class ThreadTokenUsageStore {
   private readonly tokenUsageByThreadId = new Map<string, ThreadTokenUsage>()
 

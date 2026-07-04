@@ -221,6 +221,7 @@ import {
 } from '../src/server/codexPaths.js'
 import { readCodexAuth } from '../src/server/codexAuth.js'
 import {
+  createThreadTokenUsageResolver,
   normalizeThreadTokenUsage,
   normalizeThreadTokenUsageFromSessionLogEntry,
   parseThreadTokenUsageFromSessionLog,
@@ -4145,6 +4146,22 @@ async function smokeThreadTokenUsage(): Promise<void> {
     },
   }))?.last.totalTokens, 444)
   assert.deepEqual(requestedSessionPaths, ['C:/sessions/thread-a.jsonl'])
+
+  const resolverCalls: string[] = []
+  const readCachedThreadTokenUsage = createThreadTokenUsageResolver({
+    getCachedTokenUsage: (threadId) => {
+      resolverCalls.push(`token:${threadId}`)
+      return threadId === 'thread-a' ? usage : null
+    },
+    getCachedThreadRead: (threadId) => {
+      resolverCalls.push(`thread:${threadId}`)
+      return null
+    },
+  })
+  assert.equal(await readCachedThreadTokenUsage(' '), null)
+  assert.equal(await readCachedThreadTokenUsage(' thread-a '), usage)
+  assert.equal(await readCachedThreadTokenUsage('thread-b'), null)
+  assert.deepEqual(resolverCalls, ['token:thread-a', 'token:thread-b', 'thread:thread-b'])
 
   const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-token-usage-'))
   try {
