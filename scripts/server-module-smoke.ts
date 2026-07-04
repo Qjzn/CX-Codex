@@ -249,6 +249,7 @@ import {
   readRuntimeRequestStatusFromExecutionState,
   type BridgeNotificationEvent,
 } from '../src/server/appServerRuntimeBridge.js'
+import { syncBridgeNotificationRuntimeState } from '../src/server/appServerNotificationRuntimeSync.js'
 import { AppServerNotificationReplay } from '../src/server/appServerNotificationReplay.js'
 import {
   handleNotificationReplayRoute,
@@ -372,6 +373,7 @@ try {
   await smokeProjectRoots()
   await smokeProjectRootRoutes()
   smokeRuntimePayloadParsing()
+  smokeAppServerNotificationRuntimeSync()
   await smokeRuntimeActionRoutes()
   await smokeDiagnosticsRoutes()
   smokeAppServerNotificationReplay()
@@ -4853,6 +4855,131 @@ function smokeRuntimePayloadParsing(): void {
     () => parseRuntimeInterruptPayload({ threadId: 'thread-a' }),
     /runtime\/interrupt requires turnId/,
   )
+}
+
+function smokeAppServerNotificationRuntimeSync(): void {
+  const event: BridgeNotificationEvent = {
+    seq: 7,
+    method: 'turn/completed',
+    params: { threadId: 'thread-a', turnId: 'turn-a' },
+    atIso: '2026-01-01T00:00:00.000Z',
+  }
+  const observedEvents: BridgeNotificationEvent[] = []
+  const persistedThreadIds: string[] = []
+  const deletedCachedThreadIds: string[] = []
+  const emittedEvents: BridgeNotificationEvent[] = []
+  const listCalls: Array<{ threadId: string; statuses: unknown }> = []
+  const updateCalls: Array<{ requestId: string; patch: unknown }> = []
+  const runtimeRequest: RuntimeRequestRecord = {
+    requestId: 'request-a',
+    clientMessageId: 'client-a',
+    threadId: 'thread-a',
+    turnId: 'turn-a',
+    status: 'running',
+    mode: 'execute',
+    promptHash: 'hash-a',
+    payload: {},
+    retryCount: 0,
+    createdAtIso: '2026-01-01T00:00:00.000Z',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    lastError: null,
+  }
+
+  assert.equal(syncBridgeNotificationRuntimeState({
+    method: 'turn/completed',
+    params: event.params,
+  }, {
+    rememberNotificationEvent: (notification) => {
+      assert.deepEqual(notification, { method: 'turn/completed', params: event.params })
+      return event
+    },
+    runtimeStateStore: {
+      observeEvent: (observedEvent) => {
+        observedEvents.push(observedEvent)
+      },
+    },
+    readThreadIdFromPayload,
+    persistRuntimeSnapshot: (threadId) => {
+      persistedThreadIds.push(threadId)
+      return createThreadRuntimeSnapshot({
+        threadId,
+        executionState: 'completed',
+        activeTurnId: 'turn-finished',
+      })
+    },
+    runtimeStore: {
+      listRequestsByThread: (threadId, statuses) => {
+        listCalls.push({ threadId, statuses })
+        return [runtimeRequest]
+      },
+      updateRequest: (requestId, patch) => {
+        updateCalls.push({ requestId, patch })
+        return null
+      },
+    },
+    deleteCachedThreadRead: (threadId) => {
+      deletedCachedThreadIds.push(threadId)
+    },
+    emitNotification: (emittedEvent) => {
+      emittedEvents.push(emittedEvent)
+    },
+  }), event)
+
+  assert.deepEqual(observedEvents, [event])
+  assert.deepEqual(persistedThreadIds, ['thread-a'])
+  assert.deepEqual(deletedCachedThreadIds, ['thread-a'])
+  assert.deepEqual(emittedEvents, [event])
+  assert.deepEqual(listCalls, [{
+    threadId: 'thread-a',
+    statuses: RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES,
+  }])
+  assert.deepEqual(updateCalls, [{
+    requestId: 'request-a',
+    patch: {
+      status: 'completed',
+      threadId: 'thread-a',
+      turnId: 'turn-finished',
+      lastError: null,
+    },
+  }])
+
+  const noThreadEvent: BridgeNotificationEvent = {
+    seq: 8,
+    method: 'app/list/updated',
+    params: {},
+    atIso: '2026-01-01T00:00:01.000Z',
+  }
+  const noThreadEmits: BridgeNotificationEvent[] = []
+  assert.equal(syncBridgeNotificationRuntimeState({
+    method: 'app/list/updated',
+    params: {},
+  }, {
+    rememberNotificationEvent: () => noThreadEvent,
+    runtimeStateStore: {
+      observeEvent: (observedEvent) => {
+        assert.equal(observedEvent, noThreadEvent)
+      },
+    },
+    readThreadIdFromPayload,
+    persistRuntimeSnapshot: () => {
+      throw new Error('notification without thread id should not persist a runtime snapshot')
+    },
+    runtimeStore: {
+      listRequestsByThread: () => {
+        throw new Error('notification without thread id should not reconcile runtime requests')
+      },
+      updateRequest: () => {
+        throw new Error('notification without thread id should not update runtime requests')
+      },
+    },
+    deleteCachedThreadRead: () => {
+      throw new Error('notification without thread id should not delete cached thread reads')
+    },
+    emitNotification: (emittedEvent) => {
+      noThreadEmits.push(emittedEvent)
+    },
+  }), noThreadEvent)
+  assert.deepEqual(noThreadEmits, [noThreadEvent])
 }
 
 async function smokeRuntimeActionRoutes(): Promise<void> {

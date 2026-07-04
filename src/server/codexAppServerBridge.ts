@@ -6,6 +6,7 @@ import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } fr
 import {
   type BridgeNotificationEvent,
 } from './appServerRuntimeBridge.js'
+import { syncBridgeNotificationRuntimeState } from './appServerNotificationRuntimeSync.js'
 import { AppServerNotificationReplay } from './appServerNotificationReplay.js'
 import {
   createRuntimeReconcileFailurePatch,
@@ -59,7 +60,6 @@ import {
   getShareableRpcKey,
   shouldInvalidateThreadListCacheForNotification,
   shouldInvalidateThreadListCacheForRpc,
-  shouldInvalidateThreadReadCacheForNotification,
 } from './appServerRpcCache.js'
 import {
   AppServerRpcDiagnostics,
@@ -941,21 +941,19 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   }
 
   const unsubscribeAppServerNotifications = appServer.onNotification((notification: { method: string; params: unknown }) => {
-    const event = rememberNotificationEvent(notification)
-    runtimeStateStore.observeEvent(event)
-    const eventThreadId = readThreadIdFromPayload(notification.params)
-    if (eventThreadId) {
-      const snapshot = persistRuntimeSnapshot(eventThreadId)
-      updateRuntimeRequestsFromSnapshot(eventThreadId, snapshot, runtimeStore)
-    }
-    if (shouldInvalidateThreadReadCacheForNotification(notification.method)) {
-      if (eventThreadId) {
-        cachedThreadReadsByThreadId.delete(eventThreadId)
-      }
-    }
-    for (const listener of bridgeNotificationListeners) {
-      listener(event)
-    }
+    syncBridgeNotificationRuntimeState(notification, {
+      rememberNotificationEvent,
+      runtimeStateStore,
+      readThreadIdFromPayload,
+      persistRuntimeSnapshot,
+      runtimeStore,
+      deleteCachedThreadRead: (threadId) => cachedThreadReadsByThreadId.delete(threadId),
+      emitNotification: (event) => {
+        for (const listener of bridgeNotificationListeners) {
+          listener(event)
+        }
+      },
+    })
   })
 
   void initializeSkillsSyncOnStartup(appServer)

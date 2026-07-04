@@ -379,6 +379,7 @@ if (-not $SkipPackageSmoke) {
     ".github\workflows\release.yml",
     "dist\index.html",
     "dist-cli\index.js",
+    "src\server\appServerNotificationRuntimeSync.ts",
     "src\server\codexAppServerBridge.ts",
     "src\server\composerFileSearchRoutes.ts",
     "src\server\diagnosticsRoutes.ts",

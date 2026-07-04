@@ -4718,6 +4718,42 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server notification runtime sync 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerNotificationRuntimeSync.ts`、`src/server/codexAppServerBridge.ts` 和 `scripts/server-module-smoke.ts`。
+- 本机可运行 server module smoke、governance gate、release gate 和直接构建命令。
+
+#### Steps
+1. 打开 `src/server/codexAppServerBridge.ts`，确认 `appServer.onNotification(...)` 只组装依赖并调用 `syncBridgeNotificationRuntimeState(...)`。
+2. 打开 `src/server/appServerNotificationRuntimeSync.ts`，确认它负责记入 replay event、调用 `runtimeStateStore.observeEvent(...)`、按 threadId 持久化 runtime snapshot、reconcile runtime requests、按通知清理 thread read cache，并广播 bridge notification。
+3. 执行 `git diff --check`。
+4. 执行 `node scripts\verify-server-modules.mjs`。
+5. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+6. 执行 `node_modules\.bin\vite.cmd build`。
+7. 执行 `node_modules\.bin\tsup.cmd`。
+8. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+9. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+10. 确认 release package smoke 必检 `src\server\appServerNotificationRuntimeSync.ts`。
+
+#### Expected Results
+- notification replay、runtime state observe、runtime request reconcile、thread read cache invalidation 和前端 listener 广播仍按原顺序发生。
+- 带 `threadId` 的 `turn/completed` 通知会持久化 runtime snapshot、更新 active runtime request，并删除对应 cached thread read。
+- 不带 `threadId` 的通知仍会进入 replay/广播，但不会持久化 snapshot、不会 reconcile request，也不会误删 cached thread read。
+- `appServerNotificationRuntimeSync.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，把 `syncBridgeNotificationRuntimeState(...)` 的逻辑恢复到 `src/server/codexAppServerBridge.ts` 的 `appServer.onNotification(...)` 回调中，并撤销 `src/server/appServerNotificationRuntimeSync.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和本测试章节。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，覆盖 `syncBridgeNotificationRuntimeState()` 的 replay 记入、runtime observe、snapshot persist、runtime request reconcile、cache invalidation、listener emit 和无 threadId 不持久化/不清缓存分支。
+- 2026-07-04 构建验证：`node_modules\.bin\vue-tsc.cmd --noEmit`、`node_modules\.bin\vite.cmd build` 和 `node_modules\.bin\tsup.cmd` 通过。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\appServerNotificationRuntimeSync.ts`。
+
+---
+
 ### Feature: App Server schema audit 摘要刷新
 
 #### Prerequisites
