@@ -391,6 +391,7 @@ import {
   readAuthLoginPassword,
 } from '../src/server/authMiddleware.js'
 import { RequestBodyTooLargeError } from '../src/server/httpBody.js'
+import { AppServerProcess } from '../src/server/appServerProcess.js'
 import { writeCodexBridgeRequestError } from '../src/server/codexBridgeRequestError.js'
 import { disposeCodexBridgeMiddlewareResources } from '../src/server/codexBridgeMiddlewareDispose.js'
 import { createCodexBridgeMiddlewareState } from '../src/server/codexBridgeMiddlewareState.js'
@@ -409,6 +410,7 @@ try {
   await smokeAppServerClientInfo()
   smokeAppServerPendingRpcStore()
   smokeAppServerProcessCleanup()
+  smokeAppServerProcess()
   smokeAppServerSessionCleanup()
   smokeAppServerProcessHandlers()
   smokeAppServerProcessTermination()
@@ -4697,6 +4699,38 @@ function smokeCodexBridgeSharedState(): void {
   assert.equal(appServerCreateCount, 1)
   assert.equal(methodCatalogCreateCount, 1)
   assert.equal(globalScope[CODEX_BRIDGE_SHARED_STATE_KEY], first)
+}
+
+function smokeAppServerProcess(): void {
+  const appServer = new AppServerProcess()
+  const initialStatus = appServer.getStatus()
+
+  assert.equal(initialStatus.running, false)
+  assert.equal(initialStatus.initialized, false)
+  assert.equal(initialStatus.stopping, false)
+  assert.equal(initialStatus.pid, null)
+  assert.equal(initialStatus.pendingRpcCount, 0)
+  assert.equal(initialStatus.queuedRpcCount, 0)
+  assert.equal(initialStatus.pendingServerRequestCount, 0)
+  assert.equal(initialStatus.activePlanModeTurnCount, 0)
+  assert.equal(appServer.getStartedAtMs(), 0)
+  assert.deepEqual(appServer.listPendingServerRequests(), [])
+  assert.deepEqual(appServer.listPendingServerRequestsForThread('thread-1'), [])
+  assert.equal(appServer.getThreadTokenUsage('thread-1'), null)
+
+  appServer.markPlanModeTurn('thread-1', 'turn-1')
+  assert.equal(appServer.getActivePlanModeTurnCount(), 1)
+  assert.equal(appServer.getStatus().activePlanModeTurnCount, 1)
+
+  appServer.clearPlanModeTurn('thread-1', 'turn-1')
+  assert.equal(appServer.getActivePlanModeTurnCount(), 0)
+
+  const unsubscribe = appServer.onNotification(() => {
+    throw new Error('unexpected notification')
+  })
+  unsubscribe()
+  appServer.dispose()
+  assert.equal(appServer.getStatus().running, false)
 }
 
 function smokeErrorMessage(): void {
