@@ -393,6 +393,7 @@ import {
 import { RequestBodyTooLargeError } from '../src/server/httpBody.js'
 import { writeCodexBridgeRequestError } from '../src/server/codexBridgeRequestError.js'
 import { disposeCodexBridgeMiddlewareResources } from '../src/server/codexBridgeMiddlewareDispose.js'
+import { createCodexBridgeNotificationRuntime } from '../src/server/codexBridgeNotificationRuntime.js'
 import { createCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteHandlers.js'
 import { runCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteDispatch.js'
 import {
@@ -459,6 +460,7 @@ try {
   smokeHttpJsonResponse()
   smokeCodexBridgeRequestError()
   smokeCodexBridgeMiddlewareDispose()
+  smokeCodexBridgeNotificationRuntime()
   await smokeCodexBridgeRouteHandlers()
   await smokeCodexBridgeRouteDispatch()
   smokeCodexBridgeSharedState()
@@ -4330,6 +4332,104 @@ function smokeCodexBridgeMiddlewareDispose(): void {
     'runtimeStore.close',
     'appServer.dispose',
   ])
+}
+
+function smokeCodexBridgeNotificationRuntime(): void {
+  const sourceListeners: Array<(notification: { method: string; params: unknown }) => void> = []
+  let unsubscribeCount = 0
+  const appendedEvents: Array<{
+    seq: number
+    method: string
+    params: unknown
+    atIso: string
+    threadId: string
+    turnId: string
+  }> = []
+  const observedNotifications: unknown[] = []
+  const observedStatusNotifications: unknown[] = []
+  const observedRuntimeEvents: unknown[] = []
+  const deletedThreadReads: string[] = []
+  const emittedEvents: unknown[] = []
+
+  const runtime = createCodexBridgeNotificationRuntime({
+    subscribeAppServerNotifications: (listener) => {
+      sourceListeners.push(listener)
+      return () => {
+        unsubscribeCount += 1
+      }
+    },
+    runtimeStore: {
+      getLatestEventSeq: () => 10,
+      appendEvent: (event) => {
+        appendedEvents.push(event)
+        return event
+      },
+      listEventsAfter: (afterSeq, limit) => ({
+        notifications: appendedEvents.filter((event) => event.seq > afterSeq).slice(0, limit),
+        latestSeq: appendedEvents.at(-1)?.seq ?? 10,
+        oldestSeq: appendedEvents[0]?.seq ?? 10,
+      }),
+      listRequestsByThread: () => [],
+      updateRequest: () => null,
+    },
+    runtimeStateStore: {
+      observeEvent: (event) => {
+        observedRuntimeEvents.push(event)
+      },
+    },
+    threadReadCacheStore: {
+      delete: (threadId) => {
+        deletedThreadReads.push(threadId)
+      },
+    },
+    notificationDiagnostics: {
+      observe: (observation) => {
+        observedNotifications.push(observation)
+      },
+    },
+    statusDiagnostics: {
+      observeStatusNotification: (observation) => {
+        observedStatusNotifications.push(observation)
+      },
+    },
+    persistRuntimeSnapshot: () => ({} as never),
+  })
+
+  const unsubscribeBridgeListener = runtime.bridgeNotificationListeners.subscribe((event) => {
+    emittedEvents.push(event)
+  })
+  const sourceListener = sourceListeners[0]
+  if (!sourceListener) {
+    throw new Error('Expected app-server notification subscriber to be registered')
+  }
+  sourceListener({
+    method: 'turn/started',
+    params: { threadId: 'thread-a', turnId: 'turn-a' },
+  })
+
+  assert.equal(runtime.notificationReplay.latestSeq, 11)
+  assert.deepEqual(appendedEvents.map((event) => ({
+    seq: event.seq,
+    method: event.method,
+    threadId: event.threadId,
+    turnId: event.turnId,
+  })), [{
+    seq: 11,
+    method: 'turn/started',
+    threadId: 'thread-a',
+    turnId: 'turn-a',
+  }])
+  assert.equal(observedNotifications.length, 1)
+  assert.equal(observedStatusNotifications.length, 1)
+  assert.equal(observedRuntimeEvents.length, 1)
+  assert.deepEqual(deletedThreadReads, ['thread-a'])
+  assert.deepEqual(emittedEvents, [observedRuntimeEvents[0]])
+  assert.equal(runtime.listNotificationEventsAfter(10, 5).notifications.length, 1)
+
+  unsubscribeBridgeListener()
+  assert.equal(runtime.bridgeNotificationListeners.count, 0)
+  runtime.unsubscribeAppServerNotifications()
+  assert.equal(unsubscribeCount, 1)
 }
 
 async function smokeCodexBridgeRouteHandlers(): Promise<void> {

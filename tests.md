@@ -7859,3 +7859,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: Codex bridge notification runtime extraction
+
+#### Prerequisites
+- Current repository includes `src/server/codexAppServerBridge.ts`, `src/server/codexBridgeNotificationRuntime.ts`, `scripts/server-module-smoke.ts`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
+- Dependencies are installed and `dist/` plus `dist-cli/` already exist, or run release verification without `-SkipBuild`.
+
+#### Steps
+1. Open `src/server/codexBridgeNotificationRuntime.ts` and confirm `createCodexBridgeNotificationRuntime(...)` owns notification replay creation, App Server notification subscription, runtime state sync, thread/read cache invalidation, and bridge listener emission.
+2. Open `src/server/codexAppServerBridge.ts` and confirm `createCodexBridgeMiddleware()` delegates the notification replay/sync/listener setup to `createCodexBridgeNotificationRuntime(...)`.
+3. Open `scripts/server-module-smoke.ts` and confirm `smokeCodexBridgeNotificationRuntime()` covers one App Server notification flowing through persisted replay, diagnostics observers, runtime state observation, cache deletion, and bridge listener emission.
+4. Open `scripts/verify-release.ps1` and confirm Release package smoke requires `src\server\codexBridgeNotificationRuntime.ts` inside the release zip.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `npm.cmd run build`.
+8. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+9. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- App Server notifications are still remembered for replay with incrementing sequence numbers.
+- Runtime state observation, diagnostics snapshots, thread/read cache invalidation, and bridge notification listeners still receive the same event.
+- The App Server notification unsubscribe function is still exposed for middleware disposal.
+- Release package smoke fails if the notification runtime helper is omitted from the Web source zip.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal output in `output/server-module-smoke/` and `output/release-package-smoke/`.
+- To roll back, move the notification replay bundle, App Server notification subscription, runtime sync, and bridge listener setup back into `src/server/codexAppServerBridge.ts`, delete `src/server/codexBridgeNotificationRuntime.ts`, remove smoke/governance/release package references, revert changelog updates, and remove this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 server module smoke: `node scripts\verify-server-modules.mjs` passed, including `smokeCodexBridgeNotificationRuntime()` coverage for persisted replay, diagnostics observers, runtime observation, cache deletion, bridge listener emission, and unsubscribe.
+- 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

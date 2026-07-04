@@ -46,6 +46,7 @@
   - Codex bridge route handler 顺序调度从主 middleware 抽离为独立 helper，并由 server module smoke 覆盖同步/异步 handler、首个命中后停止和未命中继续 next 的分支。
   - Codex bridge route handler 列表构建从主 middleware 抽离为独立 helper，并由 server module smoke 覆盖 route 数量、replay accessor 绑定和未知 URL 未处理分支。
   - Codex bridge 共享 app-server/method catalog 单例状态从主文件抽离为独立 helper，并由 server module smoke 覆盖重复读取不重复创建实例。
+  - Codex bridge 通知 replay、runtime sync、cache invalidation 和 SSE listener 广播链路从主 middleware 抽离为独立 helper，并由 server module smoke 覆盖单次 App Server 通知的完整同步路径。
   - App Server stdout JSON-RPC line 分流从 bridge 主文件抽离为独立 dispatcher，并由 server module smoke 覆盖 response 结算、notification 分发、server request 转交和无效行忽略。
   - App Server JSON-RPC stdin 写入从 bridge 主文件抽离为独立 writer，并由 server module smoke 覆盖正常写入、未运行报错和写入失败触发恢复回调。
   - App Server 进程 stdout/stderr/stdin/error/exit 事件装配从 bridge 主文件抽离为独立 helper，并由 server module smoke 覆盖 stderr trim、stale process error 忽略和 exit 转交。

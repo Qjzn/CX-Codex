@@ -5,10 +5,6 @@ import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } fr
 import {
   type BridgeNotificationEvent,
 } from './appServerRuntimeBridge.js'
-import { subscribeBridgeNotificationRuntimeSync } from './appServerNotificationRuntimeSync.js'
-import {
-  createAppServerNotificationReplayBundle,
-} from './appServerNotificationReplay.js'
 import { createAppServerRuntimeReconciliation } from './appServerRuntimeReconciliation.js'
 import {
   RuntimeStateStore,
@@ -26,6 +22,7 @@ import {
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import { writeCodexBridgeRequestError } from './codexBridgeRequestError.js'
 import { disposeCodexBridgeMiddlewareResources } from './codexBridgeMiddlewareDispose.js'
+import { createCodexBridgeNotificationRuntime } from './codexBridgeNotificationRuntime.js'
 import { createCodexBridgeRouteHandlers } from './codexBridgeRouteHandlers.js'
 import { runCodexBridgeRouteHandlers } from './codexBridgeRouteDispatch.js'
 import { getCodexBridgeSharedState } from './codexBridgeSharedState.js'
@@ -612,35 +609,26 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const statusDiagnostics = new AppServerStatusDiagnostics()
   const hookDiagnosticsCache = new AppServerHookDiagnosticsCache()
   const windowsSandboxReadinessCache = new WindowsSandboxReadinessCache()
-  const bridgeNotificationListeners = new AppServerNotificationListeners<BridgeNotificationEvent>()
-  const {
-    notificationReplay,
-    rememberNotificationEvent,
-    listNotificationEventsAfter,
-  } = createAppServerNotificationReplayBundle({
-    initialSeq: runtimeStore.getLatestEventSeq(),
-    appendEvent: (event) => {
-      runtimeStore.appendEvent(event)
-    },
-    listEventsAfter: (afterSeq, limit) => runtimeStore.listEventsAfter(afterSeq, limit),
-    observeNotification: (observation) => {
-      notificationDiagnostics.observe(observation)
-      statusDiagnostics.observeStatusNotification({
-        method: observation.method,
-        atIso: observation.atIso,
-        threadId: observation.threadId,
-        payload: observation.params,
-      })
-    },
-    readThreadIdFromPayload,
-    readTurnIdFromPayload,
-  })
-
   const persistRuntimeSnapshot = createAppServerRuntimeSnapshotPersister({
     snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
     listPendingServerRequestsForThread: (normalizedThreadId) => appServer.listPendingServerRequestsForThread(normalizedThreadId),
     getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
     upsertSnapshot: (nextSnapshot) => runtimeStore.upsertSnapshot(nextSnapshot),
+  })
+
+  const {
+    notificationReplay,
+    listNotificationEventsAfter,
+    bridgeNotificationListeners,
+    unsubscribeAppServerNotifications,
+  } = createCodexBridgeNotificationRuntime({
+    subscribeAppServerNotifications: (listener) => appServer.onNotification(listener),
+    runtimeStore,
+    runtimeStateStore,
+    threadReadCacheStore,
+    notificationDiagnostics,
+    statusDiagnostics,
+    persistRuntimeSnapshot,
   })
 
   const {
@@ -652,19 +640,6 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     rpc: (method, params) => appServer.rpc(method, params),
     getCwds: () => [process.cwd()],
     isWindows: () => process.platform === 'win32',
-  })
-
-  const unsubscribeAppServerNotifications = subscribeBridgeNotificationRuntimeSync({
-    subscribeNotifications: (listener) => appServer.onNotification(listener),
-    rememberNotificationEvent,
-    runtimeStateStore,
-    readThreadIdFromPayload,
-    persistRuntimeSnapshot,
-    runtimeStore,
-    deleteCachedThreadRead: (threadId) => threadReadCacheStore.delete(threadId),
-    emitNotification: (event) => {
-      bridgeNotificationListeners.emit(event)
-    },
   })
 
   startCodexBridgeStartupTasks({
