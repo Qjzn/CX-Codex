@@ -52,6 +52,7 @@ writeFileSync(tsconfigPath, `${JSON.stringify({
     join(repoRoot, 'src', 'server', 'appServerRuntimeReconcileScheduler.ts'),
     join(repoRoot, 'src', 'server', 'appServerRuntimeSnapshotPersistence.ts'),
     join(repoRoot, 'src', 'server', 'appServerThreadRuntimeSnapshot.ts'),
+    join(repoRoot, 'src', 'server', 'appServerThreadReadParams.ts'),
     join(repoRoot, 'src', 'server', 'appServerStderrLogger.ts'),
     join(repoRoot, 'src', 'server', 'bridgeLog.ts'),
     join(repoRoot, 'src', 'server', 'codexAuth.ts'),

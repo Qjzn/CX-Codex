@@ -67,6 +67,7 @@ import {
   readThreadIdFromPayload,
   readTurnIdFromPayload,
 } from './appServerPayloadIds.js'
+import { readThreadReadIncludeTurnsForMethod } from './appServerThreadReadParams.js'
 import { getRpcTimeoutMs } from './appServerRpcTimeoutPolicy.js'
 import { createAppServerRpcTimeoutRecoveryDecision } from './appServerRpcTimeoutRecovery.js'
 import {
@@ -180,12 +181,6 @@ const APP_SERVER_RESTART_COOLDOWN_MS = 10_000
 const APP_SERVER_COLD_START_GRACE_MS = 60_000
 const supplementalThreadListAugmenter = new AppServerThreadListAugmenter()
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
-}
-
 class AppServerProcess {
   private process: ChildProcessWithoutNullStreams | null = null
   private initialized = false
@@ -198,7 +193,7 @@ class AppServerProcess {
   private readonly stderrLogger = new AppServerStderrLogger()
   private readonly rpcDiagnostics = new AppServerRpcDiagnostics(
     {
-      isHeavyThreadRead: (method, params) => method === 'thread/read' ? asRecord(params)?.includeTurns === true : undefined,
+      isHeavyThreadRead: readThreadReadIncludeTurnsForMethod,
     },
     {
       slowWarnMs: APP_SERVER_RPC_SLOW_WARN_MS,
@@ -603,7 +598,7 @@ class AppServerProcess {
         writeBridgeLog('warn', 'App-server RPC timed out', {
           method,
           durationMs: timeoutMs,
-          includeTurns: method === 'thread/read' ? asRecord(params)?.includeTurns === true : undefined,
+          includeTurns: readThreadReadIncludeTurnsForMethod(method, params),
         })
         this.noteRpcTimeout(method, params, timeoutMs)
         timedOutRequest.reject(createRpcTimeoutError(method, timeoutMs))

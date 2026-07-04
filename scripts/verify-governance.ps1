@@ -329,6 +329,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "src\server\appServerRuntimeSnapshotPersistence.ts",
   "src\server\appServerNotificationState.ts",
   "src\server\appServerRuntimeReconcileScheduler.ts",
+  "src\server\appServerThreadReadParams.ts",
   "src\server\appServerThreadRuntimeSnapshot.ts",
   "src\server\codexAppServerBridge.ts",
   "src\server\composerFileSearchRoutes.ts",
@@ -359,6 +360,7 @@ Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
   "src', 'server', 'appServerRuntimeSnapshotPersistence.ts'",
   "src', 'server', 'appServerNotificationState.ts'",
   "src', 'server', 'appServerRuntimeReconcileScheduler.ts'",
+  "src', 'server', 'appServerThreadReadParams.ts'",
   "src', 'server', 'appServerThreadRuntimeSnapshot.ts'",
   "src', 'server', 'composerFileSearchRoutes.ts'",
   "src', 'server', 'diagnosticsRoutes.ts'",
@@ -433,7 +435,9 @@ Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "handleNotificationReplayRoute",
   "smokeNotificationReplayRoute",
   "createAppServerRpcTimeoutRecoveryDecision",
-  "smokeAppServerRpcTimeoutRecovery"
+  "smokeAppServerRpcTimeoutRecovery",
+  "readThreadReadIncludeTurnsForMethod",
+  "smokeAppServerThreadReadParams"
 )
 
 Assert-ContentIncludes "scripts/verify-governance.ps1" @(

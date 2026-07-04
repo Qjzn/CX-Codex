@@ -66,6 +66,10 @@ import {
   APP_SERVER_RPC_TIMEOUT_MS,
   getRpcTimeoutMs,
 } from '../src/server/appServerRpcTimeoutPolicy.js'
+import {
+  readThreadReadIncludeTurns,
+  readThreadReadIncludeTurnsForMethod,
+} from '../src/server/appServerThreadReadParams.js'
 import { createAppServerRpcTimeoutRecoveryDecision } from '../src/server/appServerRpcTimeoutRecovery.js'
 import {
   APP_SERVER_OVERLOADED_ERROR_CODE,
@@ -353,6 +357,7 @@ try {
   smokeAppServerThreadPayload()
   await smokeAppServerThreadListAugment()
   smokeAppServerThreadReadCache()
+  smokeAppServerThreadReadParams()
   smokeAppServerRpcTimeoutPolicy()
   smokeAppServerRpcTimeoutRecovery()
   await smokeAppServerRpcCache()
@@ -2024,6 +2029,17 @@ function smokeAppServerRpcTimeoutPolicy(): void {
   assert.equal(getRpcTimeoutMs('thread/resume', {}), APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('model/list', {}), APP_SERVER_RPC_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('turn/start', null), APP_SERVER_RPC_TIMEOUT_MS)
+}
+
+function smokeAppServerThreadReadParams(): void {
+  assert.equal(readThreadReadIncludeTurns({ includeTurns: true }), true)
+  assert.equal(readThreadReadIncludeTurns({ includeTurns: false }), false)
+  assert.equal(readThreadReadIncludeTurns({}), false)
+  assert.equal(readThreadReadIncludeTurns(null), false)
+  assert.equal(readThreadReadIncludeTurns(['includeTurns']), false)
+  assert.equal(readThreadReadIncludeTurnsForMethod('thread/read', { includeTurns: true }), true)
+  assert.equal(readThreadReadIncludeTurnsForMethod('thread/read', { includeTurns: 'true' }), false)
+  assert.equal(readThreadReadIncludeTurnsForMethod('model/list', { includeTurns: true }), undefined)
 }
 
 function smokeAppServerRpcTimeoutRecovery(): void {

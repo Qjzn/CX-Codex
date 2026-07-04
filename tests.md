@@ -4301,6 +4301,34 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server thread/read includeTurns 参数判定模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerThreadReadParams.ts`、`src/server/appServerRpcTimeoutPolicy.ts`、`src/server/appServerRpcTimeoutRecovery.ts`、`src/server/rpcProxyRoute.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 `includeTurns: true`、`includeTurns: false`、缺失参数、非对象参数和非 `thread/read` method 分支。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+4. 执行 `node_modules\.bin\vite.cmd build`。
+5. 执行 `node_modules\.bin\tsup.cmd`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+7. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+8. 代码审查确认 `codexAppServerBridge.ts`、`appServerRpcTimeoutPolicy.ts`、`appServerRpcTimeoutRecovery.ts` 和 `rpcProxyRoute.ts` 均复用 `appServerThreadReadParams.ts`，不再各自内联 `includeTurns === true` 判定。
+
+#### Expected Results
+- `thread/read` heavy read 判定集中在 `src/server/appServerThreadReadParams.ts`。
+- `getRpcTimeoutMs('thread/read', { includeTurns: true })` 仍返回 heavy timeout，`false`、缺失和非对象参数仍返回 light timeout。
+- RPC timeout recovery 和 bridge slow/timeout 诊断仍对 `thread/read` 返回布尔 `includeTurns`，对非 `thread/read` 返回 `undefined`。
+- `rpcProxyRoute` 仍只在 `thread/read` 且 `includeTurns === true` 时记忆 cached thread/read。
+- server module smoke、构建、治理门禁和 release gate 均通过。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `src/server/appServerThreadReadParams.ts`，撤销 `scripts/server-module-smoke.ts` 中的 thread/read params smoke，并把 `includeTurns === true` 判定恢复到 `codexAppServerBridge.ts`、`appServerRpcTimeoutPolicy.ts`、`appServerRpcTimeoutRecovery.ts` 和 `rpcProxyRoute.ts` 的原调用点。
+
+---
+
 ### Feature: Workspace/meta 路由模块化
 
 #### Prerequisites

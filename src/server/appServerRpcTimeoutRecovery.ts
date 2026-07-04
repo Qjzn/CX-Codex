@@ -1,3 +1,5 @@
+import { readThreadReadIncludeTurnsForMethod } from './appServerThreadReadParams.js'
+
 export type AppServerRpcTimeoutRecoveryDecision =
   | {
     kind: 'startup-grace'
@@ -43,7 +45,7 @@ export function createAppServerRpcTimeoutRecoveryDecision({
   dependencies.recordTimeout(method, params, timeoutMs, nowMs)
 
   const processAgeMs = startedAtMs > 0 ? nowMs - startedAtMs : 0
-  const includeTurns = readThreadReadIncludeTurns(method, params)
+  const includeTurns = readThreadReadIncludeTurnsForMethod(method, params)
   if (method !== 'initialize' && processAgeMs < coldStartGraceMs) {
     return {
       kind: 'startup-grace',
@@ -64,12 +66,4 @@ export function createAppServerRpcTimeoutRecoveryDecision({
     timeoutCount,
     includeTurns,
   }
-}
-
-function readThreadReadIncludeTurns(method: string, params: unknown): boolean | undefined {
-  if (method !== 'thread/read') return undefined
-  const record = params !== null && typeof params === 'object' && !Array.isArray(params)
-    ? params as Record<string, unknown>
-    : null
-  return record?.includeTurns === true
 }

@@ -14,6 +14,7 @@ import {
   readThreadIdFromPayload,
   readTurnIdFromPayload,
 } from './appServerPayloadIds.js'
+import { readThreadReadIncludeTurns } from './appServerThreadReadParams.js'
 import { setJson } from './httpJsonResponse.js'
 import {
   normalizePlanModeTurnStartParams,
@@ -144,7 +145,7 @@ export async function handleRpcProxyRoute(
   if (
     body.method === 'thread/read' &&
     rpcThreadId &&
-    asRecord(rpcParams)?.includeTurns === true
+    readThreadReadIncludeTurns(rpcParams)
   ) {
     dependencies.rememberCachedThreadRead(rpcThreadId, result)
   }

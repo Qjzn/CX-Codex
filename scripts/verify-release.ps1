@@ -387,6 +387,7 @@ if (-not $SkipPackageSmoke) {
     "src\server\appServerRuntimeSnapshotPersistence.ts",
     "src\server\appServerNotificationState.ts",
     "src\server\appServerRuntimeReconcileScheduler.ts",
+    "src\server\appServerThreadReadParams.ts",
     "src\server\appServerThreadRuntimeSnapshot.ts",
     "src\server\codexAppServerBridge.ts",
     "src\server\composerFileSearchRoutes.ts",
