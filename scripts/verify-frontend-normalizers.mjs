@@ -1,19 +1,20 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as esbuild from 'esbuild'
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
-const outputRoot = join(repoRoot, 'output', 'frontend-normalizer-smoke')
+const outputBase = join(repoRoot, 'output', 'frontend-normalizer-smoke')
+mkdirSync(outputBase, { recursive: true })
+
+const outputRoot = mkdtempSync(join(outputBase, 'run-'))
 const entryPath = join(outputRoot, 'entry.ts')
 const bundledPath = join(outputRoot, 'entry.mjs')
 const normalizerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'normalizers', 'v2.ts')))
 
-rmSync(outputRoot, { recursive: true, force: true })
-mkdirSync(outputRoot, { recursive: true })
-
-writeFileSync(entryPath, `
+try {
+  writeFileSync(entryPath, `
 import assert from 'node:assert/strict'
 import { normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from '${normalizerImport}'
 
@@ -135,25 +136,30 @@ assert.equal(groups[0]?.threads[2]?.sourceKind, 'futureSource')
 console.log('frontend normalizer smoke ok')
 `, 'utf8')
 
-await esbuild.build({
-  bundle: true,
-  entryPoints: [entryPath],
-  format: 'esm',
-  logLevel: 'silent',
-  outfile: bundledPath,
-  platform: 'node',
-  target: 'node18',
-})
+  await esbuild.build({
+    bundle: true,
+    entryPoints: [entryPath],
+    format: 'esm',
+    logLevel: 'silent',
+    outfile: bundledPath,
+    platform: 'node',
+    target: 'node18',
+  })
 
-const result = spawnSync(process.execPath, [bundledPath], {
-  cwd: repoRoot,
-  stdio: 'inherit',
-  shell: false,
-})
+  const result = spawnSync(process.execPath, [bundledPath], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    shell: false,
+  })
 
-if (result.status !== 0) {
-  const reason = result.error ? `: ${result.error.message}` : ''
-  throw new Error(`Run frontend normalizer smoke failed with exit code ${String(result.status)}${reason}`)
+  if (result.status !== 0) {
+    const reason = result.error ? `: ${result.error.message}` : ''
+    throw new Error(`Run frontend normalizer smoke failed with exit code ${String(result.status)}${reason}`)
+  }
+} finally {
+  if (process.env.CX_CODEX_KEEP_FRONTEND_NORMALIZER_SMOKE_OUTPUT !== '1') {
+    rmSync(outputRoot, { recursive: true, force: true })
+  }
 }
 
 function toImportPath(value) {

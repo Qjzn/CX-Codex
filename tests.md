@@ -506,6 +506,41 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Isolated frontend normalizer smoke output
+
+#### Prerequisites
+- Current repository includes `scripts/verify-frontend-normalizers.mjs`, `scripts/verify-release.ps1`, `scripts/verify-governance.ps1`, and `docs/changelog.zh-CN.md`.
+- Dependencies are installed so the frontend normalizer smoke and release gate can run.
+
+#### Steps
+1. Open `scripts/verify-frontend-normalizers.mjs` and confirm it creates a unique `output/frontend-normalizer-smoke/run-*` directory with `mkdtempSync()` for each invocation.
+2. Confirm the verifier removes only its own run directory by default, with `CX_CODEX_KEEP_FRONTEND_NORMALIZER_SMOKE_OUTPUT=1` available for debugging.
+3. Open `scripts/verify-governance.ps1` and confirm it requires the isolated frontend normalizer smoke output behavior.
+4. Run `git diff --check`.
+5. Run `node scripts\verify-frontend-normalizers.mjs`.
+6. Run two verification commands concurrently: one `node scripts\verify-frontend-normalizers.mjs` and one `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+7. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+8. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Concurrent frontend normalizer smoke and release verification no longer share or delete the same `output/frontend-normalizer-smoke` bundle files.
+- Each frontend normalizer smoke invocation compiles and runs from its own run directory.
+- By default, completed run directories are cleaned up; setting `CX_CODEX_KEEP_FRONTEND_NORMALIZER_SMOKE_OUTPUT=1` keeps the per-run output for debugging.
+- Governance and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `output/frontend-normalizer-smoke/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, restore the fixed `output/frontend-normalizer-smoke` directory in `scripts/verify-frontend-normalizers.mjs`, remove the governance assertions, and revert this test section plus the changelog note.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend normalizer smoke: `node scripts\verify-frontend-normalizers.mjs` passed with `frontend normalizer smoke ok`.
+- 2026-07-05 concurrent frontend/release verification: one `node scripts\verify-frontend-normalizers.mjs` process and one `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` process ran concurrently and both exited `0`; the release process completed frontend normalizer smoke, server module smoke, CLI CJS launcher smoke, release package smoke, npm package smoke, and skipped schema audit as requested.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-05 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `Frontend normalizer smoke`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
 ### Feature: App Server local runtime snapshot reader helper
 
 #### Prerequisites

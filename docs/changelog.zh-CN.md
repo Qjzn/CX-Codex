@@ -20,6 +20,7 @@
   - `verify:governance` 会校验 OpenAI 官方文档审查手册必须保留审查时间、官方来源、Codex manual 刷新命令、当前结论和语音转写约束，避免长期项目在文档入口上漂移。
   - `verify:governance` 会阻止 `tests.md` 残留未完成验证证据占位文本，避免功能已经实现但测试记录仍是待补充状态。
   - `verify:release` 会运行 frontend normalizer smoke，把前端 App Server 线程/消息归一化兼容性纳入本地发版与 CI 门禁。
+  - `verify:frontend-normalizers` 每次执行会使用独立的 `output/frontend-normalizer-smoke/run-*` 临时编译目录，避免它与 release gate 内部 frontend normalizer smoke 并行运行时互相清理产物造成偶发失败。
   - Release package smoke 会强制校验测试手册、治理脚本、关键治理文档和 bridge/转写路由源码边界已进入 zip，避免可发布包缺少开源复核、手工验收入口或新抽出的服务端模块。
   - Release gate 新增 `npm pack --dry-run --json` smoke，校验 npm 发布包包含 Web/CLI 运行产物和 schema 摘要，同时不携带源码、治理脚本或手工测试手册。
   - GitHub Release 正文改为版本中性模板，并由 governance 阻止固定旧版本号或过期卖点残留，避免新 tag 继续发布旧版说明。

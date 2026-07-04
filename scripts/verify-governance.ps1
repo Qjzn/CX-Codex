@@ -358,6 +358,12 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "src\server\workspaceMetaRoutes.ts"
 )
 
+Assert-ContentIncludes "scripts/verify-frontend-normalizers.mjs" @(
+  "mkdtempSync(join(outputBase, 'run-'))",
+  "CX_CODEX_KEEP_FRONTEND_NORMALIZER_SMOKE_OUTPUT",
+  "frontend normalizer smoke ok"
+)
+
 Assert-ContentIncludes "scripts/verify-server-modules.mjs" @(
   "mkdtempSync(join(outputBase, 'run-'))",
   "CX_CODEX_KEEP_SERVER_MODULE_SMOKE_OUTPUT",
