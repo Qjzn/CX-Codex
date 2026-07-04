@@ -209,6 +209,47 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server additional thread mutation RPC cache invalidation
+
+#### Prerequisites
+- Current repository includes `src/server/appServerRpcCache.ts`, `scripts/server-module-smoke.ts`, `docs/app-server-protocol-matrix.zh-CN.md`, and the raw schema audit output for App Server thread mutation methods.
+- Dependencies are installed so TypeScript, Vite, tsup, server module smoke, governance, and release verification can run.
+
+#### Steps
+1. Open `output/app-server-schema-audit/20260704-141839/typescript/ClientRequest.ts` and confirm official App Server schema includes `thread/metadata/update`, `thread/unarchive`, `thread/compact/start`, `thread/approveGuardianDeniedAction`, and `turn/steer`.
+2. Open `output/app-server-schema-audit/20260704-141839/typescript/v2/ThreadMetadataUpdateParams.ts` and confirm it patches stored Git metadata for a `threadId`.
+3. Open `output/app-server-schema-audit/20260704-141839/typescript/v2/ThreadUnarchiveParams.ts` and `ThreadCompactStartParams.ts` and confirm both target a `threadId`.
+4. Open `output/app-server-schema-audit/20260704-141839/typescript/v2/ThreadApproveGuardianDeniedActionParams.ts` and confirm it submits a guardian assessment event for a `threadId`.
+5. Open `output/app-server-schema-audit/20260704-141839/typescript/v2/TurnSteerParams.ts` and confirm it sends additional user input against a required `expectedTurnId` active-turn precondition.
+6. Open `src/server/appServerRpcCache.ts` and confirm these write/mutation methods invalidate thread list/search cache or thread read cache according to their affected surface.
+7. Run `git diff --check`.
+8. Run `node scripts\verify-server-modules.mjs`.
+9. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+10. Run `node_modules\.bin\vite.cmd build`.
+11. Run `node_modules\.bin\tsup.cmd`.
+12. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+13. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Additional official write/mutation RPC methods are still non-shareable and never use cached read responses.
+- `thread/metadata/update`, `thread/unarchive`, and `thread/compact/start` invalidate thread list/search cache because they can affect list-visible thread metadata or archive/compaction state.
+- `thread/metadata/update`, `thread/unarchive`, `thread/compact/start`, `thread/approveGuardianDeniedAction`, and `turn/steer` invalidate cached thread reads so detail views can fetch updated thread state after a generic RPC call.
+- This change does not expose new metadata, compact, guardian approval, or steer UI actions; it only prevents stale caches when an existing explicit caller uses the generic RPC path.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `dist/`, `dist-cli/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, remove these additional methods from RPC cache invalidation helpers, remove the server module smoke assertions, and revert the protocol matrix, changelog, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed with `server module smoke ok`, including RPC cache invalidation assertions for `thread/metadata/update`, `thread/unarchive`, `thread/compact/start`, `thread/approveGuardianDeniedAction`, and `turn/steer`.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
 ### Feature: App Server local runtime snapshot reader helper
 
 #### Prerequisites
