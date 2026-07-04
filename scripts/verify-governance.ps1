@@ -320,6 +320,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "docs\roadmap.zh-CN.md",
   "docs\security-hardening.zh-CN.md",
   "scripts\package-release.ps1",
+  "scripts\verify-frontend-normalizers.mjs",
   "scripts\verify-governance.ps1",
   "scripts\verify-release.ps1",
   "tests.md",

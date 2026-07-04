@@ -541,6 +541,35 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Frontend normalizer release package smoke coverage
+
+#### Prerequisites
+- Current repository includes `scripts/verify-release.ps1`, `scripts/verify-governance.ps1`, `scripts/verify-frontend-normalizers.mjs`, and `docs/changelog.zh-CN.md`.
+- Dependencies are installed and build artifacts exist, or release verification is run with `-SkipBuild` after a previous successful build.
+
+#### Steps
+1. Open `scripts/verify-release.ps1` and confirm `Assert-ZipContains` requires `scripts\verify-frontend-normalizers.mjs`.
+2. Open `scripts/verify-governance.ps1` and confirm governance requires the same release package smoke entry.
+3. Run `git diff --check`.
+4. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+5. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Release package smoke fails if the source zip omits `scripts\verify-frontend-normalizers.mjs`.
+- Governance fails if the release package smoke stops requiring the frontend normalizer smoke script.
+- Release verification completes with `Frontend normalizer smoke`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `output/frontend-normalizer-smoke/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, remove `scripts\verify-frontend-normalizers.mjs` from the release package smoke required entries, remove the governance assertion, and revert this test section plus the changelog note.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-05 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `Frontend normalizer smoke`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
 ### Feature: App Server local runtime snapshot reader helper
 
 #### Prerequisites

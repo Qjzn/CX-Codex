@@ -371,6 +371,7 @@ if (-not $SkipPackageSmoke) {
     "docs\roadmap.zh-CN.md",
     "docs\security-hardening.zh-CN.md",
     "scripts\package-release.ps1",
+    "scripts\verify-frontend-normalizers.mjs",
     "scripts\verify-governance.ps1",
     "scripts\verify-release.ps1",
     ".github\dependabot.yml",
