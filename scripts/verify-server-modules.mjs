@@ -53,6 +53,7 @@ writeFileSync(tsconfigPath, `${JSON.stringify({
     join(repoRoot, 'src', 'server', 'diagnosticsRoutes.ts'),
     join(repoRoot, 'src', 'server', 'fileUpload.ts'),
     join(repoRoot, 'src', 'server', 'githubTrending.ts'),
+    join(repoRoot, 'src', 'server', 'githubTrendingRoutes.ts'),
     join(repoRoot, 'src', 'server', 'httpBody.ts'),
     join(repoRoot, 'src', 'server', 'localStateRoutes.ts'),
     join(repoRoot, 'src', 'server', 'notificationReplayRoute.ts'),

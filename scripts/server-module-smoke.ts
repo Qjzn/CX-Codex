@@ -151,6 +151,7 @@ import {
 import { handleComposerFileSearchRoutes } from '../src/server/composerFileSearchRoutes.js'
 import {
   decodeHtmlEntities,
+  type GithubTrendingSince,
   normalizeGithubDescriptionTranslationText,
   normalizeGithubTrendingLimit,
   normalizeGithubTrendingSince,
@@ -161,6 +162,7 @@ import {
   stripHtml,
   translateGithubDescriptionsToChinese,
 } from '../src/server/githubTrending.js'
+import { handleGithubTrendingRoutes } from '../src/server/githubTrendingRoutes.js'
 import {
   runCommand,
   runCommandCapture,
@@ -342,6 +344,7 @@ try {
   await smokeComposerFileSearch()
   await smokeComposerFileSearchRoutes()
   await smokeGithubTrending()
+  await smokeGithubTrendingRoutes()
   smokeCodexPaths()
   await smokeCodexAuth()
   await smokePinnedThreads()
@@ -2784,6 +2787,92 @@ async function smokeGithubTrending(): Promise<void> {
     '',
     '12345',
   ])
+}
+
+async function smokeGithubTrendingRoutes(): Promise<void> {
+  const trendingItem = {
+    id: 1,
+    fullName: 'owner/repo',
+    url: 'https://github.com/owner/repo',
+    description: 'Build tools',
+    language: 'TypeScript',
+    stars: 123,
+  }
+  const bodies: unknown[] = [
+    { descriptions: ['hello world', 7, '中文说明', 'extra 1', 'extra 2', 'extra 3', 'extra 4', 'extra 5', 'extra 6', 'extra 7', 'extra 8'] },
+    { descriptions: ['fallback text'] },
+  ]
+  const fetchCalls: Array<{ since: GithubTrendingSince; limit: number }> = []
+  const translateCalls: string[][] = []
+  let shouldFailFetch = false
+  let shouldFailTranslate = false
+  const dependencies = {
+    readJsonBody: async () => bodies.shift(),
+    fetchGithubTrending: async (since: GithubTrendingSince, limit: number) => {
+      fetchCalls.push({ since, limit })
+      if (shouldFailFetch) throw new Error('github unavailable')
+      return [trendingItem]
+    },
+    translateGithubDescriptionsToChinese: async (descriptions: string[]) => {
+      translateCalls.push(descriptions)
+      if (shouldFailTranslate) throw new Error('translate unavailable')
+      return descriptions.map((description) => `zh:${description}`)
+    },
+    getErrorMessage: (error: unknown, fallback: string) => getErrorMessage(error, fallback),
+  }
+
+  const trending = createRouteTestResponse()
+  assert.equal(await handleGithubTrendingRoutes(
+    { method: 'GET' } as never,
+    trending.response as never,
+    new URL('http://127.0.0.1/codex-api/github-trending?since=weekly&limit=3'),
+    dependencies,
+  ), true)
+  assert.deepEqual(fetchCalls, [{ since: 'weekly', limit: 3 }])
+  assert.deepEqual(JSON.parse(trending.body), { data: [trendingItem] })
+
+  shouldFailFetch = true
+  const trendingFailure = createRouteTestResponse()
+  assert.equal(await handleGithubTrendingRoutes(
+    { method: 'GET' } as never,
+    trendingFailure.response as never,
+    new URL('http://127.0.0.1/codex-api/github-trending?since=bad&limit=99'),
+    dependencies,
+  ), true)
+  assert.equal(trendingFailure.response.statusCode, 502)
+  assert.deepEqual(fetchCalls[1], { since: 'daily', limit: 10 })
+  assert.deepEqual(JSON.parse(trendingFailure.body), { error: 'github unavailable' })
+
+  const translation = createRouteTestResponse()
+  assert.equal(await handleGithubTrendingRoutes(
+    { method: 'POST' } as never,
+    translation.response as never,
+    new URL('http://127.0.0.1/codex-api/github-trending/translate'),
+    dependencies,
+  ), true)
+  assert.deepEqual(translateCalls[0], ['hello world', '', '中文说明', 'extra 1', 'extra 2', 'extra 3', 'extra 4', 'extra 5', 'extra 6', 'extra 7'])
+  assert.deepEqual(JSON.parse(translation.body), {
+    data: {
+      translations: ['zh:hello world', 'zh:', 'zh:中文说明', 'zh:extra 1', 'zh:extra 2', 'zh:extra 3', 'zh:extra 4', 'zh:extra 5', 'zh:extra 6', 'zh:extra 7'],
+    },
+  })
+
+  shouldFailTranslate = true
+  const translationFallback = createRouteTestResponse()
+  assert.equal(await handleGithubTrendingRoutes(
+    { method: 'POST' } as never,
+    translationFallback.response as never,
+    new URL('http://127.0.0.1/codex-api/github-trending/translate'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(translationFallback.body), { data: { translations: ['fallback text'] } })
+
+  assert.equal(await handleGithubTrendingRoutes(
+    { method: 'PUT' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/github-trending'),
+    dependencies,
+  ), false)
 }
 
 function smokeCodexPaths(): void {

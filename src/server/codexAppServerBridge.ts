@@ -51,14 +51,8 @@ import { handleProjectRootRoutes } from './projectRootRoutes.js'
 import { handleComposerFileSearchRoutes } from './composerFileSearchRoutes.js'
 import { handleThreadRoutes } from './threadRoutes.js'
 import { handleStatusRoutes } from './statusRoutes.js'
+import { handleGithubTrendingRoutes } from './githubTrendingRoutes.js'
 import { resolveCodexCommand } from '../commandResolution.js'
-import {
-  fetchGithubTrending,
-  normalizeGithubTrendingLimit,
-  normalizeGithubTrendingSince,
-  normalizeGithubTrendingTranslationDescriptions,
-  translateGithubDescriptionsToChinese,
-} from './githubTrending.js'
 import {
   runCommand,
   runCommandCapture,
@@ -1596,28 +1590,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'GET' && url.pathname === '/codex-api/github-trending') {
-        const since = normalizeGithubTrendingSince(url.searchParams.get('since'))
-        const limit = normalizeGithubTrendingLimit(url.searchParams.get('limit'))
-        try {
-          const data = await fetchGithubTrending(since, limit)
-          setJson(res, 200, { data })
-        } catch (error) {
-          setJson(res, 502, { error: getErrorMessage(error, 'Failed to fetch GitHub trending') })
-        }
-        return
-      }
-
-      if (req.method === 'POST' && url.pathname === '/codex-api/github-trending/translate') {
-        const payload = asRecord(await readJsonBody(req))
-        const descriptions = normalizeGithubTrendingTranslationDescriptions(payload?.descriptions)
-
-        try {
-          const translations = await translateGithubDescriptionsToChinese(descriptions)
-          setJson(res, 200, { data: { translations } })
-        } catch {
-          setJson(res, 200, { data: { translations: descriptions } })
-        }
+      if (await handleGithubTrendingRoutes(req, res, url, {
+        readJsonBody,
+      })) {
         return
       }
 

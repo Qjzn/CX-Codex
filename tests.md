@@ -4351,6 +4351,40 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: GitHub trending routes 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/githubTrendingRoutes.ts`、`src/server/githubTrending.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1` 和 `scripts/verify-release.ps1`。
+- 本机可运行 server module smoke、governance gate 和 release gate；route smoke 使用注入依赖，不需要真实访问 GitHub 或翻译服务。
+
+#### Steps
+1. 打开 `src/server/codexAppServerBridge.ts`，确认 `/codex-api/github-trending` 和 `/codex-api/github-trending/translate` 统一委托 `handleGithubTrendingRoutes(...)`。
+2. 打开 `src/server/githubTrendingRoutes.ts`，确认 route 模块只负责 query/body 归一化、调用 `githubTrending.ts` service、映射 502/fallback 响应和返回 JSON。
+3. 执行 `git diff --check`。
+4. 执行 `node scripts\verify-server-modules.mjs`。
+5. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+7. 确认 release package smoke 必检 `src\server\githubTrendingRoutes.ts`。
+
+#### Expected Results
+- `GET /codex-api/github-trending` 继续归一化 `since` 和 `limit`，成功时返回 `{ data: [...] }`。
+- GitHub trending fetch 失败时继续返回 502，错误文案来自 `getErrorMessage(...)`。
+- `POST /codex-api/github-trending/translate` 继续把 descriptions 归一化为最多 10 条，翻译成功时返回翻译结果。
+- 翻译服务失败时继续返回原始归一化 descriptions，不阻断热门项目列表展示。
+- 未匹配 method/path 返回 `false`，不吞掉后续 route。
+- `githubTrendingRoutes.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/githubTrendingRoutes.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-governance.ps1`、`scripts/verify-release.ps1` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，输出 `server module smoke ok`，覆盖 GitHub trending route 委托、query normalization、fetch 502、translation normalization/fallback 和未匹配 route 返回 `false`。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\githubTrendingRoutes.ts`。
+
+---
+
 ### Feature: Local state routes 模块化
 
 #### Prerequisites

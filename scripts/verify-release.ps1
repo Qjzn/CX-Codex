@@ -382,6 +382,7 @@ if (-not $SkipPackageSmoke) {
     "src\server\codexAppServerBridge.ts",
     "src\server\composerFileSearchRoutes.ts",
     "src\server\diagnosticsRoutes.ts",
+    "src\server\githubTrendingRoutes.ts",
     "src\server\localStateRoutes.ts",
     "src\server\notificationReplayRoute.ts",
     "src\server\notificationSseRoute.ts",
