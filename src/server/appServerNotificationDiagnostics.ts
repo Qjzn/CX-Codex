@@ -61,6 +61,26 @@ export type ProtocolAlertNotificationRecord = {
   watchId: string
 }
 
+export type RealtimeNotificationRecord = {
+  method:
+    | 'thread/realtime/started'
+    | 'thread/realtime/itemAdded'
+    | 'thread/realtime/transcript/delta'
+    | 'thread/realtime/transcript/done'
+    | 'thread/realtime/outputAudio/delta'
+    | 'thread/realtime/sdp'
+    | 'thread/realtime/error'
+    | 'thread/realtime/closed'
+  atIso: string
+  threadId: string
+  itemId: string
+  messageId: string
+  eventCount: number
+  byteCount: number
+  errorCode: string
+  errorMessage: string
+}
+
 export type AppServerNotificationDiagnosticsSnapshot = {
   unknownNotificationCount: number
   recentUnknownNotifications: UnknownNotificationRecord[]
@@ -68,6 +88,7 @@ export type AppServerNotificationDiagnosticsSnapshot = {
   recentWindowsSandboxNotifications: WindowsSandboxNotificationRecord[]
   recentHookNotifications: HookNotificationRecord[]
   recentProtocolAlerts: ProtocolAlertNotificationRecord[]
+  recentRealtimeNotifications: RealtimeNotificationRecord[]
 }
 
 type NotificationObservation = {
@@ -84,7 +105,19 @@ type AppServerNotificationDiagnosticsOptions = {
   maxRecentWindowsSandboxNotifications?: number
   maxRecentHookNotifications?: number
   maxRecentProtocolAlerts?: number
+  maxRecentRealtimeNotifications?: number
 }
+
+const REALTIME_NOTIFICATION_METHODS = new Set<RealtimeNotificationRecord['method']>([
+  'thread/realtime/started',
+  'thread/realtime/itemAdded',
+  'thread/realtime/transcript/delta',
+  'thread/realtime/transcript/done',
+  'thread/realtime/outputAudio/delta',
+  'thread/realtime/sdp',
+  'thread/realtime/error',
+  'thread/realtime/closed',
+])
 
 const KNOWN_NOTIFICATION_METHODS = new Set([
   'error',
@@ -111,6 +144,14 @@ const KNOWN_NOTIFICATION_METHODS = new Set([
   'thread/completed',
   'thread/interrupted',
   'thread/name/updated',
+  'thread/realtime/closed',
+  'thread/realtime/error',
+  'thread/realtime/itemAdded',
+  'thread/realtime/outputAudio/delta',
+  'thread/realtime/sdp',
+  'thread/realtime/started',
+  'thread/realtime/transcript/delta',
+  'thread/realtime/transcript/done',
   'thread/started',
   'thread/tokenUsage/updated',
   'turn/completed',
@@ -146,11 +187,13 @@ export class AppServerNotificationDiagnostics {
   private readonly maxRecentWindowsSandboxNotifications: number
   private readonly maxRecentHookNotifications: number
   private readonly maxRecentProtocolAlerts: number
+  private readonly maxRecentRealtimeNotifications: number
   private readonly unknownByMethod = new Map<string, UnknownNotificationRecord>()
   private readonly recentModelNotifications: ModelNotificationRecord[] = []
   private readonly recentWindowsSandboxNotifications: WindowsSandboxNotificationRecord[] = []
   private readonly recentHookNotifications: HookNotificationRecord[] = []
   private readonly recentProtocolAlerts: ProtocolAlertNotificationRecord[] = []
+  private readonly recentRealtimeNotifications: RealtimeNotificationRecord[] = []
   private unknownNotificationCount = 0
 
   constructor(options: AppServerNotificationDiagnosticsOptions = {}) {
@@ -162,6 +205,10 @@ export class AppServerNotificationDiagnostics {
     )
     this.maxRecentHookNotifications = Math.max(1, Math.min(100, Math.floor(options.maxRecentHookNotifications ?? 20)))
     this.maxRecentProtocolAlerts = Math.max(1, Math.min(100, Math.floor(options.maxRecentProtocolAlerts ?? 20)))
+    this.maxRecentRealtimeNotifications = Math.max(
+      1,
+      Math.min(100, Math.floor(options.maxRecentRealtimeNotifications ?? 20)),
+    )
   }
 
   observe(observation: NotificationObservation): void {
@@ -169,6 +216,7 @@ export class AppServerNotificationDiagnostics {
     this.observeWindowsSandboxNotification(observation)
     this.observeHookNotification(observation)
     this.observeProtocolAlertNotification(observation)
+    this.observeRealtimeNotification(observation)
     if (isKnownAppServerNotificationMethod(observation.method)) return
 
     this.unknownNotificationCount += 1
@@ -208,6 +256,7 @@ export class AppServerNotificationDiagnostics {
       recentWindowsSandboxNotifications: [...this.recentWindowsSandboxNotifications],
       recentHookNotifications: [...this.recentHookNotifications],
       recentProtocolAlerts: [...this.recentProtocolAlerts],
+      recentRealtimeNotifications: [...this.recentRealtimeNotifications],
     }
   }
 
@@ -217,6 +266,7 @@ export class AppServerNotificationDiagnostics {
     this.recentWindowsSandboxNotifications.splice(0, this.recentWindowsSandboxNotifications.length)
     this.recentHookNotifications.splice(0, this.recentHookNotifications.length)
     this.recentProtocolAlerts.splice(0, this.recentProtocolAlerts.length)
+    this.recentRealtimeNotifications.splice(0, this.recentRealtimeNotifications.length)
     this.unknownNotificationCount = 0
   }
 
@@ -253,6 +303,15 @@ export class AppServerNotificationDiagnostics {
     this.recentProtocolAlerts.unshift(record)
     if (this.recentProtocolAlerts.length > this.maxRecentProtocolAlerts) {
       this.recentProtocolAlerts.splice(this.maxRecentProtocolAlerts)
+    }
+  }
+
+  private observeRealtimeNotification(observation: NotificationObservation): void {
+    const record = createRealtimeNotificationRecord(observation)
+    if (!record) return
+    this.recentRealtimeNotifications.unshift(record)
+    if (this.recentRealtimeNotifications.length > this.maxRecentRealtimeNotifications) {
+      this.recentRealtimeNotifications.splice(this.maxRecentRealtimeNotifications)
     }
   }
 }
@@ -400,9 +459,44 @@ function createProtocolAlertNotificationRecord(observation: NotificationObservat
   }
 }
 
+function createRealtimeNotificationRecord(observation: NotificationObservation): RealtimeNotificationRecord | null {
+  if (!REALTIME_NOTIFICATION_METHODS.has(observation.method as RealtimeNotificationRecord['method'])) return null
+  const method = observation.method as RealtimeNotificationRecord['method']
+  const params = asRecord(observation.params)
+  const item = asRecord(params?.item)
+  const audio = asRecord(params?.audio)
+  const error = asRecord(params?.error)
+
+  return {
+    method,
+    atIso: observation.atIso,
+    threadId: normalizeOptionalId(observation.threadId)
+      || readFirstString(params, ['threadId', 'thread_id']),
+    itemId: readFirstString(params, ['itemId', 'item_id'])
+      || readFirstString(audio, ['itemId', 'item_id'])
+      || readFirstString(item, ['id', 'itemId', 'item_id']),
+    messageId: readFirstString(params, ['messageId', 'message_id', 'id'])
+      || readFirstString(item, ['messageId', 'message_id']),
+    eventCount: readRealtimeEventCount(params, item),
+    byteCount: readRealtimeByteCount(method, params, item, audio),
+    errorCode: method === 'thread/realtime/error' ? readFirstString(params, ['code'], 80) || readFirstString(error, ['code'], 80) : '',
+    errorMessage: method === 'thread/realtime/error'
+      ? readFirstString(params, ['message'], 160) || readFirstString(error, ['message'], 160)
+      : '',
+  }
+}
+
 function readString(record: Record<string, unknown> | null, key: string, maxLength = 120): string {
   const value = record?.[key]
   return typeof value === 'string' ? value.trim().slice(0, Math.max(1, maxLength)) : ''
+}
+
+function readFirstString(record: Record<string, unknown> | null, keys: string[], maxLength = 120): string {
+  for (const key of keys) {
+    const value = readString(record, key, maxLength)
+    if (value) return value
+  }
+  return ''
 }
 
 function readNumber(record: Record<string, unknown> | null, key: string): number {
@@ -413,6 +507,40 @@ function readNumber(record: Record<string, unknown> | null, key: string): number
 function readNullableNumber(record: Record<string, unknown> | null, key: string): number | null {
   const value = record?.[key]
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : null
+}
+
+function readRealtimeEventCount(
+  params: Record<string, unknown> | null,
+  item: Record<string, unknown> | null,
+): number {
+  if (Array.isArray(params?.events)) return params.events.length
+  if (Array.isArray(params?.items)) return params.items.length
+  if (Array.isArray(item?.content)) return item.content.length
+  if (Array.isArray(item?.events)) return item.events.length
+  return 1
+}
+
+function readRealtimeByteCount(
+  method: RealtimeNotificationRecord['method'],
+  params: Record<string, unknown> | null,
+  item: Record<string, unknown> | null,
+  audio: Record<string, unknown> | null,
+): number {
+  if (method === 'thread/realtime/transcript/delta') return readStringByteCount(params, 'delta')
+  if (method === 'thread/realtime/transcript/done') return readStringByteCount(params, 'text')
+  if (method === 'thread/realtime/outputAudio/delta') return readStringByteCount(audio, 'data')
+  if (method === 'thread/realtime/sdp') return readStringByteCount(params, 'sdp')
+  if (method === 'thread/realtime/itemAdded') return byteLength(JSON.stringify(item ?? {}))
+  return 0
+}
+
+function readStringByteCount(record: Record<string, unknown> | null, key: string): number {
+  const value = record?.[key]
+  return typeof value === 'string' ? byteLength(value) : 0
+}
+
+function byteLength(value: string): number {
+  return Buffer.byteLength(value, 'utf8')
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

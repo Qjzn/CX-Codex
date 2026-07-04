@@ -4005,6 +4005,14 @@ This file tracks manual regression and feature verification steps.
 - 如需回滚，撤销 `src/server/appServerNotificationDiagnostics.ts`、`src/components/content/DiagnosticsPanel.vue`、`scripts/server-module-smoke.ts`、`docs/app-server-protocol-matrix.zh-CN.md`、`docs/changelog.zh-CN.md` 和本节测试记录中的相关改动。
 
 #### Regression Evidence
+- 2026-07-04 官方文档/Schema 核对：Codex manual helper 返回 `local manual was already current`；raw schema audit `output\app-server-schema-audit\20260703-193751\typescript\v2` 显示 `ThreadRealtime*Notification` 均标注 EXPERIMENTAL，且 transcript `delta/text`、audio `data`、WebRTC `sdp` 为必须脱敏的 payload。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 realtime 通知已知分类、recent realtime notification 记录、transcript/audio/SDP 不外泄、错误摘要和 clear。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建；Vite 仍有既有 large chunk warning。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
+
+#### Regression Evidence
 - 2026-07-04 官方文档/Schema 核对：Codex manual helper 返回 `local manual was already current`；raw schema audit `output\app-server-schema-audit\20260703-193751\typescript\ServerNotification.ts` 显示 `windows/worldWritableWarning` 与 `windowsSandbox/setupCompleted` 为官方 `ServerNotification` method，`WindowsWorldWritableWarningNotification.ts` 包含 `samplePaths`、`extraCount`、`failedScan`，测试确认诊断输出不包含原始 sample path。
 - 2026-07-04 静态验证：`git diff --check` 通过。
 - 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 Windows sandbox 通知已知分类、脱敏 recent Windows sandbox notification 记录、路径不外泄和 clear。
@@ -4210,3 +4218,30 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建；Vite 仍有既有 large chunk warning。
 - 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
 - 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
+
+---
+
+### Feature: App Server realtime 实验通知脱敏诊断
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerNotificationDiagnostics.ts`、`src/components/content/DiagnosticsPanel.vue` 和最近 raw schema audit 输出 `output\app-server-schema-audit\20260703-193751`。
+- 本机 raw schema audit 已确认 `thread/realtime/started`、`thread/realtime/itemAdded`、`thread/realtime/transcript/delta`、`thread/realtime/transcript/done`、`thread/realtime/outputAudio/delta`、`thread/realtime/sdp`、`thread/realtime/error` 和 `thread/realtime/closed` 为 EXPERIMENTAL App Server notifications。
+- 当前语音能力仍走 OpenAI 官方 audio transcription API，不启用 App Server realtime 产品入口。
+
+#### Steps
+1. 执行官方 manual helper：`node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs`。
+2. 检查 raw schema audit，确认 realtime transcript 的 `delta/text`、audio 的 `data`、WebRTC 的 `sdp` 属于不能进入诊断快照的敏感 payload。
+3. 执行 `git diff --check`。
+4. 执行 `npm.cmd run verify:server-modules`。
+5. 执行 `npm.cmd run build`。
+6. 执行 `npm.cmd run verify:governance`。
+7. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip`。
+
+#### Expected Results
+- 服务端 notification diagnostics 把 `thread/realtime/*` 视为已知实验通知，不计入 unknown notification。
+- `/codex-api/health` 和 `/codex-api/diagnostics` 的 `notificationDiagnostics.recentRealtimeNotifications` 只包含 method、时间、threadId、itemId/messageId、eventCount、byteCount、errorCode 和 errorMessage。
+- transcript 原文、audio base64 和 WebRTC SDP 不会出现在诊断 JSON、诊断中心或测试快照中。
+- 诊断中心展示 “Realtime” 卡片，并明确标识为实验通知；不会提供 App Server realtime 入口或改变现有语音转写链路。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/appServerNotificationDiagnostics.ts`、`src/components/content/DiagnosticsPanel.vue`、`scripts/server-module-smoke.ts`、`docs/app-server-protocol-matrix.zh-CN.md`、`docs/changelog.zh-CN.md` 和本节测试记录中的相关改动。

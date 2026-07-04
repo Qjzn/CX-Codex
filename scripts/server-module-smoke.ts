@@ -691,9 +691,16 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('windows/worldWritableWarning'), true)
   assert.equal(isKnownAppServerNotificationMethod('windowsSandbox/setupCompleted'), true)
   assert.equal(isKnownAppServerNotificationMethod('item/tool/call/failed'), true)
-  assert.equal(isKnownAppServerNotificationMethod('thread/realtime/transcript/delta'), false)
+  assert.equal(isKnownAppServerNotificationMethod('thread/realtime/started'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/realtime/itemAdded'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/realtime/transcript/delta'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/realtime/transcript/done'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/realtime/outputAudio/delta'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/realtime/sdp'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/realtime/error'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/realtime/closed'), true)
 
-  const diagnostics = new AppServerNotificationDiagnostics({ maxRecentUnknown: 2 })
+  const diagnostics = new AppServerNotificationDiagnostics({ maxRecentUnknown: 2, maxRecentRealtimeNotifications: 4 })
   diagnostics.observe({
     method: 'turn/started',
     atIso: '2026-07-03T00:00:00.000Z',
@@ -706,6 +713,7 @@ function smokeAppServerNotificationDiagnostics(): void {
     recentWindowsSandboxNotifications: [],
     recentHookNotifications: [],
     recentProtocolAlerts: [],
+    recentRealtimeNotifications: [],
   })
 
   diagnostics.observe({
@@ -900,8 +908,69 @@ function smokeAppServerNotificationDiagnostics(): void {
     method: 'thread/realtime/transcript/delta',
     atIso: '2026-07-03T00:00:01.000Z',
     threadId: 'thread-a',
-    turnId: 'turn-a',
+    params: {
+      threadId: 'thread-a',
+      role: 'user',
+      delta: 'secret transcript delta',
+    },
   })
+  diagnostics.observe({
+    method: 'thread/realtime/transcript/done',
+    atIso: '2026-07-03T00:00:01.100Z',
+    params: {
+      threadId: 'thread-a',
+      role: 'assistant',
+      text: 'secret final transcript',
+    },
+  })
+  diagnostics.observe({
+    method: 'thread/realtime/outputAudio/delta',
+    atIso: '2026-07-03T00:00:01.200Z',
+    params: {
+      threadId: 'thread-a',
+      audio: {
+        data: 'base64-secret-audio',
+        sampleRate: 24000,
+        numChannels: 1,
+        samplesPerChannel: 320,
+        itemId: 'item-audio',
+      },
+    },
+  })
+  diagnostics.observe({
+    method: 'thread/realtime/sdp',
+    atIso: '2026-07-03T00:00:01.300Z',
+    params: {
+      threadId: 'thread-a',
+      sdp: 'v=0\r\nsecret-sdp-offer',
+    },
+  })
+  diagnostics.observe({
+    method: 'thread/realtime/error',
+    atIso: '2026-07-03T00:00:01.400Z',
+    params: {
+      threadId: 'thread-a',
+      code: 'realtime_failed',
+      message: 'safe error summary',
+    },
+  })
+  const realtimeSnapshot = diagnostics.snapshot()
+  assert.equal(realtimeSnapshot.unknownNotificationCount, 0)
+  assert.deepEqual(realtimeSnapshot.recentRealtimeNotifications.map((item) => item.method), [
+    'thread/realtime/error',
+    'thread/realtime/sdp',
+    'thread/realtime/outputAudio/delta',
+    'thread/realtime/transcript/done',
+  ])
+  assert.equal(realtimeSnapshot.recentRealtimeNotifications[1]?.byteCount, Buffer.byteLength('v=0\r\nsecret-sdp-offer', 'utf8'))
+  assert.equal(realtimeSnapshot.recentRealtimeNotifications[2]?.itemId, 'item-audio')
+  assert.equal(realtimeSnapshot.recentRealtimeNotifications[2]?.byteCount, Buffer.byteLength('base64-secret-audio', 'utf8'))
+  assert.equal(realtimeSnapshot.recentRealtimeNotifications[3]?.byteCount, Buffer.byteLength('secret final transcript', 'utf8'))
+  const serializedRealtimeSnapshot = JSON.stringify(realtimeSnapshot.recentRealtimeNotifications)
+  assert.equal(serializedRealtimeSnapshot.includes('secret transcript'), false)
+  assert.equal(serializedRealtimeSnapshot.includes('base64-secret-audio'), false)
+  assert.equal(serializedRealtimeSnapshot.includes('secret-sdp-offer'), false)
+
   diagnostics.observe({
     method: 'thread/realtime/transcript/delta',
     atIso: '2026-07-03T00:00:02.000Z',
@@ -917,7 +986,7 @@ function smokeAppServerNotificationDiagnostics(): void {
   })
 
   const snapshot = diagnostics.snapshot()
-  assert.equal(snapshot.unknownNotificationCount, 4)
+  assert.equal(snapshot.unknownNotificationCount, 2)
   assert.deepEqual(snapshot.recentUnknownNotifications.map((item) => item.method), [
     'hook/migration/completed',
     'plugin/marketplace/changed',
@@ -931,6 +1000,7 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(diagnostics.snapshot().recentWindowsSandboxNotifications.length, 0)
   assert.equal(diagnostics.snapshot().recentHookNotifications.length, 0)
   assert.equal(diagnostics.snapshot().recentProtocolAlerts.length, 0)
+  assert.equal(diagnostics.snapshot().recentRealtimeNotifications.length, 0)
 }
 
 async function smokeAppServerHookDiagnostics(): Promise<void> {

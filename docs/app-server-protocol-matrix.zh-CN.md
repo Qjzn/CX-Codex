@@ -39,7 +39,7 @@
 | Skills | `SkillSummary`、`SkillsChangedNotification`、skill read/config 相关变化 | 部分覆盖。当前 skills/list 已用于 composer；`skills/changed` 已作为官方 invalidation signal 处理，前端会按当前 cwd 参数防抖重跑 `skills/list`，诊断侧不再误记为未知通知 | 继续对新增 skill 字段做只读容错；后续如接入 skill read/config 写入能力，必须增加来源、权限和回滚说明 |
 | Hooks | 新增 hook list、started/completed、scope、trust、migration 等 | 部分覆盖。`hooks/list` 已通过 TTL 缓存进入 `/codex-api/health`、`/codex-api/diagnostics` 和诊断中心 Hooks 卡片；`hook/started` 与 `hook/completed` 已进入脱敏 notification diagnostics；不暴露 command、sourcePath 或 hash | 继续只读展示 hook 状态、trust 和告警；不在普通用户流里执行、编辑、trust 或 disable hook |
 | External Agent / Migration | 新增 external agent config detect/import、migration item | 暂缓。`externalAgentConfig/import/completed` notification 已作为只读协议告警诊断记录；仍不主动 detect/import 外部 agent 配置 | 仅记录为未来迁移能力；不能默认导入外部 agent 配置 |
-| Realtime / Audio | 新增 thread realtime audio/transcript/sdp/transport 等 | 暂缓。当前语音能力走 OpenAI 官方 audio transcription API，不接 App Server realtime | 不把 realtime 宣传为稳定能力；如接入，先隔离为实验入口 |
+| Realtime / Audio | 新增 thread realtime audio/transcript/sdp/transport 等，schema 标注为 EXPERIMENTAL | 暂缓正式接入。当前语音能力走 OpenAI 官方 audio transcription API，不接 App Server realtime；`thread/realtime/*` 通知仅进入脱敏只读诊断，记录 method、标识、字节数和错误摘要，不暴露 transcript、audio 或 SDP 内容 | 不把 realtime 宣传为稳定能力；如接入，先隔离为实验入口，并显式启用 experimental API、补齐权限和降级测试 |
 | Windows Sandbox | 新增 readiness/setup/start/completed | 部分覆盖。`windowsSandbox/readiness` 已通过 TTL 缓存进入 `/codex-api/health`、`/codex-api/diagnostics` 和诊断中心 Windows 安全卡片；`windows/worldWritableWarning` 与 `windowsSandbox/setupCompleted` 已进入脱敏 notification diagnostics；不会主动调用 `setupStart` | 继续保持只读展示；setup/start 仍需显式用户确认，不能在后台自动执行 |
 | Models / Rate Limits / Account | 模型可用性、reroute、verification、service tier、rate limit 类型扩展 | 部分覆盖。当前已有模型列表、账户状态和限额基础读取；`model/rerouted` 与 `model/verification` 已进入脱敏 notification diagnostics 和诊断中心模型通知卡片，不影响当前 thread 渲染 | 继续补 service tier / 模型可用性细节；模型通知只能作为只读诊断信号，不主动改写用户选择模型 |
 | Notifications | 新增大量 notification 类型，部分旧 v1 event 移除 | 部分覆盖。当前 replay buffer 存储通知并按 threadId 触发刷新；未知 notification 不阻断 replay/runtime 流，并在 health/diagnostics 中按 method 聚合计数；`warning`、`guardianWarning`、`deprecationNotice`、`configWarning`、`fs/changed` 与 `externalAgentConfig/import/completed` 已进入脱敏协议告警诊断 | 继续扩展未知 notification 到诊断中心 UI；不能因为未知 notification 丢失当前线程刷新 |
@@ -62,7 +62,7 @@
 
 ### P2：实验能力
 
-1. App Server realtime audio/transcript。
+1. App Server realtime audio/transcript。（当前仅识别实验通知并做脱敏只读诊断）
 2. Plugin marketplace 安装/分享。
 3. Hook 和 external agent 配置导入。
 4. App Server 文件系统写操作。

@@ -337,6 +337,25 @@
 
       <section class="diagnostics-section">
         <div class="diagnostics-section-header">
+          <h2>Realtime</h2>
+          <span class="diagnostics-badge" :data-tone="realtimeDiagnosticsTone">
+            {{ recentRealtimeNotifications.length }} 个实验通知
+          </span>
+        </div>
+        <div v-if="recentRealtimeNotifications.length === 0" class="diagnostics-empty">
+          暂无 App Server realtime 实验通知。
+        </div>
+        <ul v-else class="diagnostics-list">
+          <li v-for="notification in recentRealtimeNotifications" :key="`${notification.method}-${notification.atIso}-${notification.itemId}-${notification.messageId}`">
+            <span>{{ formatRealtimeNotification(notification) }}</span>
+            <strong>{{ shortId(notification.itemId || notification.messageId || notification.threadId) || '-' }}</strong>
+            <small>{{ formatAge(notification.atIso) }}</small>
+          </li>
+        </ul>
+      </section>
+
+      <section class="diagnostics-section">
+        <div class="diagnostics-section-header">
           <h2>未知通知</h2>
           <span class="diagnostics-badge" :data-tone="unknownNotificationCount > 0 ? 'warning' : 'ok'">
             {{ unknownNotificationCount }}
@@ -547,6 +566,26 @@ type ProtocolAlertDiagnostics = {
   watchId: string
 }
 
+type RealtimeNotificationDiagnostics = {
+  method:
+    | 'thread/realtime/started'
+    | 'thread/realtime/itemAdded'
+    | 'thread/realtime/transcript/delta'
+    | 'thread/realtime/transcript/done'
+    | 'thread/realtime/outputAudio/delta'
+    | 'thread/realtime/sdp'
+    | 'thread/realtime/error'
+    | 'thread/realtime/closed'
+  atIso: string
+  threadId: string
+  itemId: string
+  messageId: string
+  eventCount: number
+  byteCount: number
+  errorCode: string
+  errorMessage: string
+}
+
 type UnknownStatusDiagnostics = {
   source: string
   value: string
@@ -609,6 +648,7 @@ type DiagnosticsData = {
     recentWindowsSandboxNotifications?: WindowsSandboxNotificationDiagnostics[]
     recentHookNotifications?: HookNotificationDiagnostics[]
     recentProtocolAlerts?: ProtocolAlertDiagnostics[]
+    recentRealtimeNotifications?: RealtimeNotificationDiagnostics[]
   }
   statusDiagnostics?: {
     unknownStatusCount: number
@@ -751,6 +791,9 @@ const recentWindowsSandboxNotifications = computed(() => (
 ))
 const recentHookNotifications = computed(() => diagnostics.value?.notificationDiagnostics?.recentHookNotifications ?? [])
 const protocolAlerts = computed(() => diagnostics.value?.notificationDiagnostics?.recentProtocolAlerts ?? [])
+const recentRealtimeNotifications = computed(() => (
+  diagnostics.value?.notificationDiagnostics?.recentRealtimeNotifications ?? []
+))
 const unknownStatuses = computed(() => diagnostics.value?.statusDiagnostics?.recentUnknownStatuses ?? [])
 const unknownStatusCount = computed(() => diagnostics.value?.statusDiagnostics?.unknownStatusCount ?? 0)
 
@@ -788,6 +831,7 @@ const overallTone = computed<Tone>(() => {
     || runtimeTone.value === 'warning'
     || hookDiagnosticsTone.value === 'warning'
     || protocolAlerts.value.length > 0
+    || realtimeDiagnosticsTone.value === 'warning'
     || schemaAuditTone.value === 'warning'
     || schemaAuditTone.value === 'danger'
     || windowsSandboxReadinessTone.value === 'warning'
@@ -851,6 +895,12 @@ const hookDiagnosticsLabel = computed(() => {
   if (hookDiagnostics.value.hookCount === 0) return '无配置'
   return '已记录'
 })
+
+const realtimeDiagnosticsTone = computed<Tone>(() => (
+  recentRealtimeNotifications.value.some((notification) => notification.method === 'thread/realtime/error')
+    ? 'warning'
+    : 'neutral'
+))
 
 const windowsSandboxReadinessTone = computed<Tone>(() => {
   if (windowsSandboxReadiness.value.status === 'ready') return 'ok'
@@ -982,6 +1032,17 @@ function formatProtocolAlert(alert: ProtocolAlertDiagnostics): string {
   if (alert.method === 'fs/changed') return 'fs/changed'
   if (alert.method === 'externalAgentConfig/import/completed') return 'external agent import completed'
   return alert.method
+}
+
+function formatRealtimeNotification(notification: RealtimeNotificationDiagnostics): string {
+  const byteSuffix = notification.byteCount > 0 ? ` / ${notification.byteCount} bytes` : ''
+  const eventSuffix = notification.eventCount > 1 ? ` / ${notification.eventCount} events` : ''
+  if (notification.method === 'thread/realtime/error') {
+    const prefix = notification.errorCode ? `${notification.errorCode}: ` : ''
+    const message = notification.errorMessage ? `${prefix}${notification.errorMessage}` : 'error'
+    return `${notification.method}: ${message}${byteSuffix}${eventSuffix}`
+  }
+  return `${notification.method}${byteSuffix}${eventSuffix}`
 }
 
 function formatNullableBoolean(value: boolean | null): string {
