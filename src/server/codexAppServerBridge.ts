@@ -14,14 +14,12 @@ import {
 import { AppServerNotificationReplay } from './appServerNotificationReplay.js'
 import {
   createRuntimeReconcileFailurePatch,
-  createRuntimeThreadStatePayload,
   selectRuntimeRequestsForReconcile,
   updateRuntimeRequestsFromSnapshot,
 } from './appServerRuntimeRequestReconciliation.js'
 import {
   RuntimeStateStore,
   toPersistableRuntimeSnapshot,
-  type RuntimeSnapshotOverlay,
   type ThreadRuntimeSnapshot,
 } from './runtimeState.js'
 import { PendingServerRequestStore, type PendingServerRequest } from './pendingServerRequests.js'
@@ -48,6 +46,7 @@ import { handleTranscriptionRoute } from './transcriptionRoute.js'
 import { handleNotificationReplayRoute } from './notificationReplayRoute.js'
 import { handleLocalStateRoutes } from './localStateRoutes.js'
 import { handleNotificationSseRoute } from './notificationSseRoute.js'
+import { handleRuntimeStateRoutes } from './runtimeStateRoutes.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   ComposerFileSearchError,
@@ -1587,79 +1586,17 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (url.pathname.startsWith('/codex-api/runtime/thread/')) {
-        const suffix = url.pathname.slice('/codex-api/runtime/thread/'.length)
-        const isReconcile = suffix.endsWith('/reconcile')
-        const encodedThreadId = isReconcile ? suffix.slice(0, -'/reconcile'.length) : suffix
-        const threadId = decodeURIComponent(encodedThreadId).trim()
-        if (!threadId) {
-          setJson(res, 400, { error: 'Missing threadId' })
-          return
-        }
-        if (req.method === 'POST' && isReconcile) {
-          const snapshot = await reconcileRuntimeThread(threadId)
-          setJson(res, 200, { data: createRuntimeThreadStatePayload(threadId, snapshot, runtimeStore) })
-          return
-        }
-        if (req.method === 'GET' && !isReconcile) {
-          const snapshot = readLocalRuntimeSnapshot(threadId)
-          setJson(res, 200, { data: createRuntimeThreadStatePayload(threadId, snapshot, runtimeStore) })
-          return
-        }
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/runtime/snapshot') {
-        const threadId = (url.searchParams.get('threadId') ?? '').trim()
-        if (!threadId) {
-          setJson(res, 400, { error: 'Missing threadId' })
-          return
-        }
-        const snapshot = persistRuntimeSnapshot(threadId, runtimeStateStore.snapshot(threadId, {
-          pendingServerRequests: appServer.listPendingServerRequestsForThread(threadId),
-          tokenUsage: appServer.getThreadTokenUsage(threadId),
-        }))
-        setJson(res, 200, { data: snapshot })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/runtime/snapshots') {
-        const threadIds = (url.searchParams.get('threadIds') ?? '')
-          .split(',')
-          .map((threadId) => threadId.trim())
-          .filter((threadId) => threadId.length > 0)
-          .slice(0, 100)
-        const overlays = new Map<string, RuntimeSnapshotOverlay>()
-        for (const threadId of threadIds) {
-          overlays.set(threadId, {
-            pendingServerRequests: appServer.listPendingServerRequestsForThread(threadId),
-            tokenUsage: appServer.getThreadTokenUsage(threadId),
-          })
-        }
-        setJson(res, 200, { data: runtimeStateStore.snapshots(threadIds, overlays) })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname.startsWith('/codex-api/state/thread/')) {
-        const encodedThreadId = url.pathname.slice('/codex-api/state/thread/'.length)
-        const threadId = decodeURIComponent(encodedThreadId).trim()
-        if (!threadId) {
-          setJson(res, 400, { error: 'Missing thread id' })
-          return
-        }
-
-        const snapshot = await readThreadRuntimeSnapshot(threadId)
-        setJson(res, 200, { data: snapshot })
-        return
-      }
-
-      if (req.method === 'GET' && url.pathname === '/codex-api/thread-token-usage') {
-        const threadId = (url.searchParams.get('threadId') ?? '').trim()
-        if (!threadId) {
-          setJson(res, 400, { error: 'Missing threadId' })
-          return
-        }
-        const tokenUsage = await readCachedThreadTokenUsage(threadId)
-        setJson(res, 200, { data: { tokenUsage } })
+      if (await handleRuntimeStateRoutes(req, res, url, {
+        runtimeRequestStore: runtimeStore,
+        runtimeStateStore,
+        reconcileRuntimeThread,
+        readLocalRuntimeSnapshot,
+        persistRuntimeSnapshot,
+        readThreadRuntimeSnapshot,
+        readCachedThreadTokenUsage,
+        listPendingServerRequestsForThread: (threadId) => appServer.listPendingServerRequestsForThread(threadId),
+        getThreadTokenUsage: (threadId) => appServer.getThreadTokenUsage(threadId),
+      })) {
         return
       }
 

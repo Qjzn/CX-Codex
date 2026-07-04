@@ -223,9 +223,11 @@ import {
   isRuntimeActiveState,
   RuntimeStateStore,
   toPersistableRuntimeSnapshot,
+  type RuntimeSnapshotOverlay,
   type RuntimeExecutionState,
   type ThreadRuntimeSnapshot,
 } from '../src/server/runtimeState.js'
+import { handleRuntimeStateRoutes } from '../src/server/runtimeStateRoutes.js'
 import type { RuntimeRequestRecord } from '../src/server/runtimeStore.js'
 import {
   parseRuntimeInterruptPayload,
@@ -344,6 +346,7 @@ try {
   smokeRuntimePayloadParsing()
   smokeAppServerNotificationReplay()
   await smokeLocalStateRoutes()
+  await smokeRuntimeStateRoutes()
   smokeNotificationSseRoute()
   smokeNotificationReplayRoute()
   smokeAppServerRuntimeBridge()
@@ -3966,6 +3969,200 @@ async function smokeLocalStateRoutes(): Promise<void> {
     { method: 'POST' } as never,
     createRouteTestResponse().response as never,
     new URL('http://127.0.0.1/codex-api/favorites'),
+    dependencies,
+  ), false)
+}
+
+async function smokeRuntimeStateRoutes(): Promise<void> {
+  const localSnapshot = createThreadRuntimeSnapshot({ threadId: 'thread-local', executionState: 'running' })
+  const reconciledSnapshot = createThreadRuntimeSnapshot({ threadId: 'thread-reconciled', executionState: 'completed' })
+  const persistedSnapshot = createThreadRuntimeSnapshot({ threadId: 'thread-persisted', executionState: 'waiting_permission' })
+  const legacySnapshot = createThreadRuntimeSnapshot({ threadId: 'thread-legacy', executionState: 'sync_degraded' })
+  const tokenUsage = normalizeThreadTokenUsage({
+    total: {
+      totalTokens: 7,
+      inputTokens: 3,
+      cachedInputTokens: 1,
+      outputTokens: 4,
+      reasoningOutputTokens: 2,
+    },
+    last: {
+      totalTokens: 7,
+      inputTokens: 3,
+      cachedInputTokens: 1,
+      outputTokens: 4,
+      reasoningOutputTokens: 2,
+    },
+    modelContextWindow: 100,
+  })
+  if (!tokenUsage) throw new Error('expected normalized token usage')
+  const requestedThreads: string[] = []
+  const reconciledThreads: string[] = []
+  const persisted: Array<{ threadId: string; snapshot: ThreadRuntimeSnapshot }> = []
+  const overlays: Array<{ threadId: string; overlay: RuntimeSnapshotOverlay }> = []
+  const snapshotBatchCalls: Array<{ threadIds: string[]; overlays: Map<string, RuntimeSnapshotOverlay> }> = []
+  const legacyReads: string[] = []
+  const tokenUsageReads: string[] = []
+  const dependencies = {
+    runtimeRequestStore: {
+      listRequestsByThread: (threadId: string) => {
+        requestedThreads.push(threadId)
+        return []
+      },
+    },
+    runtimeStateStore: {
+      snapshot: (threadId: string, overlay?: RuntimeSnapshotOverlay) => {
+        overlays.push({ threadId, overlay: overlay ?? {} })
+        return createThreadRuntimeSnapshot({ threadId, executionState: 'running', pendingServerRequests: overlay?.pendingServerRequests ?? [] })
+      },
+      snapshots: (threadIds: string[], overlaysByThreadId?: Map<string, RuntimeSnapshotOverlay>) => {
+        snapshotBatchCalls.push({ threadIds, overlays: overlaysByThreadId ?? new Map() })
+        return threadIds.map((threadId) => createThreadRuntimeSnapshot({ threadId }))
+      },
+    },
+    reconcileRuntimeThread: async (threadId: string) => {
+      reconciledThreads.push(threadId)
+      return reconciledSnapshot
+    },
+    readLocalRuntimeSnapshot: (threadId: string) => ({ ...localSnapshot, threadId }),
+    persistRuntimeSnapshot: (threadId: string, snapshot: ThreadRuntimeSnapshot) => {
+      persisted.push({ threadId, snapshot })
+      return persistedSnapshot
+    },
+    readThreadRuntimeSnapshot: async (threadId: string) => {
+      legacyReads.push(threadId)
+      return legacySnapshot
+    },
+    readCachedThreadTokenUsage: async (threadId: string) => {
+      tokenUsageReads.push(threadId)
+      return tokenUsage
+    },
+    listPendingServerRequestsForThread: (threadId: string) => [{
+      id: 1,
+      method: 'server/request',
+      params: { threadId },
+      receivedAtIso: '2026-01-01T00:00:00.000Z',
+    }],
+    getThreadTokenUsage: () => tokenUsage,
+  }
+
+  const runtimeThreadRead = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    runtimeThreadRead.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/thread/thread%20A'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(runtimeThreadRead.body), {
+    data: {
+      snapshot: { ...localSnapshot, threadId: 'thread A' },
+      requests: [],
+    },
+  })
+  assert.deepEqual(requestedThreads, ['thread A'])
+
+  const runtimeThreadReconcile = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'POST' } as never,
+    runtimeThreadReconcile.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/thread/thread-r/reconcile'),
+    dependencies,
+  ), true)
+  assert.deepEqual(reconciledThreads, ['thread-r'])
+  assert.deepEqual(JSON.parse(runtimeThreadReconcile.body), {
+    data: {
+      snapshot: reconciledSnapshot,
+      requests: [],
+    },
+  })
+
+  const missingRuntimeThread = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    missingRuntimeThread.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/thread/%20'),
+    dependencies,
+  ), true)
+  assert.equal(missingRuntimeThread.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(missingRuntimeThread.body), { error: 'Missing threadId' })
+
+  const runtimeSnapshotMissing = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    runtimeSnapshotMissing.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/snapshot'),
+    dependencies,
+  ), true)
+  assert.equal(runtimeSnapshotMissing.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(runtimeSnapshotMissing.body), { error: 'Missing threadId' })
+
+  const runtimeSnapshot = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    runtimeSnapshot.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/snapshot?threadId=thread-one'),
+    dependencies,
+  ), true)
+  assert.deepEqual(persisted.map((item) => item.threadId), ['thread-one'])
+  assert.deepEqual(overlays.map((item) => item.threadId), ['thread-one'])
+  assert.deepEqual(JSON.parse(runtimeSnapshot.body), { data: persistedSnapshot })
+
+  const runtimeSnapshots = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    runtimeSnapshots.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/snapshots?threadIds=thread-a,, thread-b ,%20'),
+    dependencies,
+  ), true)
+  assert.deepEqual(snapshotBatchCalls[0].threadIds, ['thread-a', 'thread-b'])
+  assert.equal(snapshotBatchCalls[0].overlays.has('thread-a'), true)
+  assert.equal(snapshotBatchCalls[0].overlays.has('thread-b'), true)
+  assert.deepEqual(JSON.parse(runtimeSnapshots.body).data.map((snapshot: ThreadRuntimeSnapshot) => snapshot.threadId), ['thread-a', 'thread-b'])
+
+  const legacyState = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    legacyState.response as never,
+    new URL('http://127.0.0.1/codex-api/state/thread/thread%20legacy'),
+    dependencies,
+  ), true)
+  assert.deepEqual(legacyReads, ['thread legacy'])
+  assert.deepEqual(JSON.parse(legacyState.body), { data: legacySnapshot })
+
+  const missingLegacyState = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    missingLegacyState.response as never,
+    new URL('http://127.0.0.1/codex-api/state/thread/%20'),
+    dependencies,
+  ), true)
+  assert.equal(missingLegacyState.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(missingLegacyState.body), { error: 'Missing thread id' })
+
+  const tokenUsageResponse = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    tokenUsageResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/thread-token-usage?threadId=thread-token'),
+    dependencies,
+  ), true)
+  assert.deepEqual(tokenUsageReads, ['thread-token'])
+  assert.deepEqual(JSON.parse(tokenUsageResponse.body), { data: { tokenUsage } })
+
+  const tokenUsageMissing = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    tokenUsageMissing.response as never,
+    new URL('http://127.0.0.1/codex-api/thread-token-usage'),
+    dependencies,
+  ), true)
+  assert.equal(tokenUsageMissing.response.statusCode, 400)
+  assert.deepEqual(JSON.parse(tokenUsageMissing.body), { error: 'Missing threadId' })
+
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'POST' } as never,
+    createRouteTestResponse().response as never,
+    new URL('http://127.0.0.1/codex-api/thread-token-usage?threadId=thread-token'),
     dependencies,
   ), false)
 }

@@ -4253,6 +4253,39 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Runtime state routes 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/runtimeStateRoutes.ts`、`src/server/codexAppServerBridge.ts` 和 `scripts/server-module-smoke.ts`。
+- 本机可运行 server module smoke、governance gate 和 release gate。
+
+#### Steps
+1. 打开 `src/server/codexAppServerBridge.ts`，确认 `/codex-api/runtime/thread/*`、`/codex-api/runtime/snapshot`、`/codex-api/runtime/snapshots`、`/codex-api/state/thread/*` 和 `/codex-api/thread-token-usage` 统一委托 `handleRuntimeStateRoutes(...)`。
+2. 打开 `src/server/runtimeStateRoutes.ts`，确认 route 模块只通过注入依赖读取 runtime request store、runtime state store、pending server requests、token usage 和 legacy snapshot。
+3. 执行 `git diff --check`。
+4. 执行 `node scripts\verify-server-modules.mjs`。
+5. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+7. 确认 release package smoke 必检 `src\server\runtimeStateRoutes.ts`。
+
+#### Expected Results
+- runtime 状态查询和 reconcile HTTP 路由从 bridge 主文件抽出，返回结构保持 `{ data: ... }` 或既有 400 错误文案。
+- `/runtime/thread/:id` 和 `/runtime/thread/:id/reconcile` 仍通过 `createRuntimeThreadStatePayload(...)` 附带 active runtime requests。
+- `/runtime/snapshot(s)` 仍把 pending server requests 和 token usage 作为 overlay 注入 runtime snapshot。
+- 未匹配 method/path 返回 `false`，不吞掉后续 route。
+- `runtimeStateRoutes.ts` 被 TypeScript server smoke、governance gate 和 release zip 清单覆盖。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/runtimeStateRoutes.ts`、`src/server/codexAppServerBridge.ts`、`scripts/server-module-smoke.ts`、`scripts/verify-server-modules.mjs`、`scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和本节测试记录。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`node scripts\verify-server-modules.mjs` 通过，覆盖 runtime thread GET、runtime thread reconcile POST、runtime snapshot、runtime snapshots、legacy state/thread、thread token usage、缺失 threadId 400 和未匹配 route 返回 `false`。
+- 2026-07-04 治理门禁：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `server module smoke ok`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\runtimeStateRoutes.ts`。
+
+---
+
 ### Feature: Notification replay route 模块化
 
 #### Prerequisites
