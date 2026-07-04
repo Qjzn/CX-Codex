@@ -33,6 +33,7 @@
   - App Server `Thread.source` 会在前端线程模型中保留为只读 `sourceKind` 元数据，兼容 `cli`、`appServer`、`subAgent` tagged union 和未来未知来源标签。
   - App Server `Turn.itemsView` 为 `notLoaded` 或 `summary` 且没有加载 items 时，会在前端保留为 `isUnhandled` raw message，避免新版协议返回部分 turn 视图时线程内容静默空白。
   - App Server `thread/read` 中未知 top-level turn item 或非对象 item 会保留为 `isUnhandled` raw message，避免官方新增 `ThreadInjectItems*`、`ThreadShellCommand*` 等 item 时被静默丢弃或导致线程渲染中断。
+  - App Server `thread/shellCommand` 与 `thread/inject_items` 通过通用 RPC 触发时会清理 thread list/search/read 缓存，避免官方写入或命令方法执行后继续展示旧线程内容。
   - App Server `skills/changed` 通知会按官方语义触发前端技能列表防抖刷新，并在通知诊断中作为已知 method 处理。
   - App Server `app/list/updated` 与 `mcpServer/startupStatus/updated` 通知会触发 composer 插件/App 列表防抖刷新；`account/rateLimits/updated` 和 MCP OAuth 完成通知纳入已知 method 诊断，减少官方状态通知被误判为未知漂移。
   - App Server `model/rerouted` 与 `model/verification` 通知会进入脱敏模型通知诊断快照，并在诊断中心只读展示，不会改写当前线程渲染或用户选择模型。

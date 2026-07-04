@@ -168,6 +168,45 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server thread mutation RPC cache invalidation
+
+#### Prerequisites
+- Current repository includes `src/server/appServerRpcCache.ts`, `scripts/server-module-smoke.ts`, `docs/app-server-protocol-matrix.zh-CN.md`, and the raw schema audit output for App Server `thread/shellCommand` and `thread/inject_items`.
+- Dependencies are installed so TypeScript, Vite, tsup, server module smoke, governance, and release verification can run.
+
+#### Steps
+1. Open `output/app-server-schema-audit/20260704-141839/typescript/ClientRequest.ts` and confirm official App Server schema includes `thread/shellCommand` and `thread/inject_items` request methods.
+2. Open `output/app-server-schema-audit/20260704-141839/typescript/v2/ThreadShellCommandParams.ts` and confirm the command payload is tied to a `threadId` and the schema comment says it preserves shell syntax and runs unsandboxed with full access.
+3. Open `output/app-server-schema-audit/20260704-141839/typescript/v2/ThreadInjectItemsParams.ts` and confirm `items` are raw Responses API items appended to the thread model-visible history.
+4. Open `src/server/appServerRpcCache.ts` and confirm both methods invalidate thread list/search cache and thread read cache when called through the generic App Server RPC path.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+8. Run `node_modules\.bin\vite.cmd build`.
+9. Run `node_modules\.bin\tsup.cmd`.
+10. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+11. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- `thread/shellCommand` and `thread/inject_items` are still treated as non-shareable write/mutation RPC methods, not as cached read calls.
+- Calling either method through the generic RPC route invalidates cached thread list/search/read data so the UI can fetch the updated thread state.
+- This change does not expose a new shell-command UI, auto-approve unsandboxed shell commands, or append raw items without an explicit caller.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `dist/`, `dist-cli/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, remove the two methods from RPC cache invalidation helpers, remove the server module smoke assertions, and revert the protocol matrix, changelog, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed after removing trailing whitespace from this test section.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed with `server module smoke ok`, including RPC cache invalidation assertions for `thread/shellCommand` and `thread/inject_items`.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
 ---
 
 ### Feature: App Server local runtime snapshot reader helper

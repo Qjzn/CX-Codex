@@ -37,7 +37,9 @@ export function shouldInvalidateThreadListCacheForRpc(method: string): boolean {
     method === 'thread/start' ||
     method === 'thread/fork' ||
     method === 'thread/archive' ||
-    method === 'thread/name/set'
+    method === 'thread/name/set' ||
+    method === 'thread/shellCommand' ||
+    method === 'thread/inject_items'
   )
 }
 
@@ -62,7 +64,9 @@ export function shouldInvalidateThreadReadCacheForRpc(method: string): boolean {
     method === 'thread/resume' ||
     method === 'thread/rollback' ||
     method === 'thread/archive' ||
-    method === 'thread/name/set'
+    method === 'thread/name/set' ||
+    method === 'thread/shellCommand' ||
+    method === 'thread/inject_items'
   )
 }
 
