@@ -253,6 +253,7 @@ import {
 } from '../src/server/threadTitleCache.js'
 import {
   buildThreadSearchIndex,
+  createThreadSearchIndexStore,
   isExactPhraseMatch,
   loadAllThreadsForSearch,
   normalizeThreadSearchRow,
@@ -4532,6 +4533,42 @@ async function smokeThreadSearchIndex(): Promise<void> {
   store.clear()
   assert.deepEqual(await store.search('alpha', 10), { threadIds: ['thread-a'], indexedThreadCount: 1 })
   assert.equal(buildCount, 2)
+
+  const factoryListParams: ThreadListParams[] = []
+  const factorySessionIndexPaths: string[] = []
+  const factoryStore = createThreadSearchIndexStore({
+    listThreads: async (params) => {
+      factoryListParams.push(params)
+      if (!params.archived && params.cursor === null) {
+        return { data: [{ id: 'factory-thread', name: 'Factory title' }] }
+      }
+      if (params.archived && params.cursor === null) {
+        return { data: [] }
+      }
+      throw new Error(`Unexpected factory thread/list params: ${JSON.stringify(params)}`)
+    },
+    getSessionIndexPath: () => 'session-index.jsonl',
+    readThreadTitlesFromSessionIndex: async (sessionIndexPath) => {
+      factorySessionIndexPaths.push(sessionIndexPath)
+      return {
+        titles: { 'session-thread': 'Session title' },
+        order: ['session-thread'],
+      }
+    },
+  })
+  assert.deepEqual(await factoryStore.search('factory', 10), {
+    threadIds: ['factory-thread'],
+    indexedThreadCount: 2,
+  })
+  assert.deepEqual(await factoryStore.search('session', 10), {
+    threadIds: ['session-thread'],
+    indexedThreadCount: 2,
+  })
+  assert.deepEqual(factorySessionIndexPaths, ['session-index.jsonl'])
+  assert.deepEqual(factoryListParams, [
+    { archived: false, limit: 100, sortKey: 'updated_at', cursor: null },
+    { archived: true, limit: 100, sortKey: 'updated_at', cursor: null },
+  ])
 }
 
 async function smokeThreadRoutes(): Promise<void> {

@@ -21,6 +21,12 @@ export type ThreadListParams = {
 
 export type ThreadListRpc = (params: ThreadListParams) => Promise<unknown>
 
+export type ThreadSearchIndexStoreDependencies = {
+  listThreads: ThreadListRpc
+  getSessionIndexPath: () => string
+  readThreadTitlesFromSessionIndex: (sessionIndexPath: string) => Promise<ThreadTitleCache>
+}
+
 type ThreadListRow = {
   id: string
   title: string
@@ -161,4 +167,13 @@ export class ThreadSearchIndexStore {
 
     return this.indexPromise
   }
+}
+
+export function createThreadSearchIndexStore(
+  dependencies: ThreadSearchIndexStoreDependencies,
+): ThreadSearchIndexStore {
+  return new ThreadSearchIndexStore(async () => buildThreadSearchIndex(
+    dependencies.listThreads,
+    await dependencies.readThreadTitlesFromSessionIndex(dependencies.getSessionIndexPath()),
+  ))
 }

@@ -136,8 +136,7 @@ import {
 } from './threadTokenUsage.js'
 import { readThreadTitlesFromSessionIndex } from './threadTitleCache.js'
 import {
-  buildThreadSearchIndex,
-  ThreadSearchIndexStore,
+  createThreadSearchIndexStore,
 } from './threadSearchIndex.js'
 import {
   evaluateServerRequestPolicy,
@@ -685,10 +684,11 @@ function getSharedBridgeState(): SharedBridgeState {
 
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const { appServer, methodCatalog } = getSharedBridgeState()
-  const threadSearchIndexStore = new ThreadSearchIndexStore(async () => buildThreadSearchIndex(
-    (params) => appServer.rpc('thread/list', params),
-    await readThreadTitlesFromSessionIndex(getCodexSessionIndexPath()),
-  ))
+  const threadSearchIndexStore = createThreadSearchIndexStore({
+    listThreads: (params) => appServer.rpc('thread/list', params),
+    getSessionIndexPath: getCodexSessionIndexPath,
+    readThreadTitlesFromSessionIndex,
+  })
   const threadReadCacheStore = new AppServerThreadReadCacheStore()
   const augmentThreadListRpcResult = createAppServerThreadListRpcResultAugmenter({
     augmenter: supplementalThreadListAugmenter,
