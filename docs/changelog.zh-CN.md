@@ -41,6 +41,7 @@
   - App Server method catalog smoke 会直接读取当前 raw JSON schema audit，确认 `ClientRequest.json` 抽取 75 个 request method、`ServerNotification.json` 抽取 63 个 notification method，并记录 `rawResponseItem/completed` 当前只由 TypeScript union 覆盖、未进入 JSON notification catalog 的边界。
   - App Server method/notification catalog 共享一次 `generate-json-schema` 生成结果和并发 promise，避免诊断端点同时读取方法目录时重复启动 Codex schema 生成。
   - `verify:server-modules` 每次执行会使用独立的 `output/server-module-smoke/run-*` 临时编译目录，避免它与 release gate 内部 server smoke 并行运行时互相清理产物造成偶发失败。
+  - Codex bridge HTTP 请求错误响应从主 middleware 抽离为独立 helper，并由 server module smoke 覆盖 JSON body 过大 413 与普通 bridge 失败 502 分支。
   - App Server stdout JSON-RPC line 分流从 bridge 主文件抽离为独立 dispatcher，并由 server module smoke 覆盖 response 结算、notification 分发、server request 转交和无效行忽略。
   - App Server JSON-RPC stdin 写入从 bridge 主文件抽离为独立 writer，并由 server module smoke 覆盖正常写入、未运行报错和写入失败触发恢复回调。
   - App Server 进程 stdout/stderr/stdin/error/exit 事件装配从 bridge 主文件抽离为独立 helper，并由 server module smoke 覆盖 stderr trim、stale process error 忽略和 exit 转交。

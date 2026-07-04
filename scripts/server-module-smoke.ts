@@ -391,6 +391,7 @@ import {
   readAuthLoginPassword,
 } from '../src/server/authMiddleware.js'
 import { RequestBodyTooLargeError } from '../src/server/httpBody.js'
+import { writeCodexBridgeRequestError } from '../src/server/codexBridgeRequestError.js'
 
 const originalNow = Date.now
 
@@ -449,6 +450,7 @@ try {
   await smokeFileUpload()
   await smokeFileUploadRoute()
   smokeHttpJsonResponse()
+  smokeCodexBridgeRequestError()
   smokeErrorMessage()
   await smokeComposerFileSearch()
   await smokeComposerFileSearchRoutes()
@@ -4248,6 +4250,28 @@ function smokeHttpJsonResponse(): void {
   assert.equal(response.statusCode, 202)
   assert.equal(headers.get('Content-Type'), 'application/json; charset=utf-8')
   assert.equal(endedBody, '{"ok":true,"count":2}')
+}
+
+function smokeCodexBridgeRequestError(): void {
+  const tooLarge = createRouteTestResponse()
+  writeCodexBridgeRequestError(
+    tooLarge.response as never,
+    new RequestBodyTooLargeError(123),
+    { requestMethod: 'POST', requestPath: '/codex-api/rpc' },
+  )
+  assert.equal(tooLarge.response.statusCode, 413)
+  assert.deepEqual(JSON.parse(tooLarge.body), {
+    error: 'Request body is too large. Maximum request size is 123 bytes.',
+  })
+
+  const bridgeFailure = createRouteTestResponse()
+  writeCodexBridgeRequestError(
+    bridgeFailure.response as never,
+    new Error('bridge failed'),
+    { requestMethod: 'GET', requestPath: '/codex-api/health' },
+  )
+  assert.equal(bridgeFailure.response.statusCode, 502)
+  assert.deepEqual(JSON.parse(bridgeFailure.body), { error: 'bridge failed' })
 }
 
 function smokeErrorMessage(): void {

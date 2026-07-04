@@ -23,10 +23,9 @@ import { logBridgeError, writeBridgeLog } from './bridgeLog.js'
 import { getErrorMessage } from './errorMessage.js'
 import {
   readJsonBody,
-  RequestBodyTooLargeError,
 } from './httpBody.js'
-import { setJson } from './httpJsonResponse.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
+import { writeCodexBridgeRequestError } from './codexBridgeRequestError.js'
 import {
   getTranscriptionProxyConfigSnapshot,
 } from './transcriptionProxy.js'
@@ -913,16 +912,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       next()
     } catch (error) {
-      if (error instanceof RequestBodyTooLargeError) {
-        setJson(res, 413, { error: `Request body is too large. Maximum request size is ${error.maxBytes} bytes.` })
-        return
-      }
-      const message = getErrorMessage(error, 'Unknown bridge error')
-      logBridgeError('Bridge request failed', error, {
+      writeCodexBridgeRequestError(res, error, {
         requestMethod: req.method ?? '',
         requestPath: req.url ?? '',
       })
-      setJson(res, 502, { error: message })
     }
   }
 
