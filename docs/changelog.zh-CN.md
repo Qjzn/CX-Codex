@@ -43,6 +43,7 @@
   - `verify:server-modules` 每次执行会使用独立的 `output/server-module-smoke/run-*` 临时编译目录，避免它与 release gate 内部 server smoke 并行运行时互相清理产物造成偶发失败。
   - Codex bridge HTTP 请求错误响应从主 middleware 抽离为独立 helper，并由 server module smoke 覆盖 JSON body 过大 413 与普通 bridge 失败 502 分支。
   - Codex bridge middleware dispose 资源释放顺序从主文件抽离为独立 helper，并由 server module smoke 覆盖 runtime scheduler、索引、监听器、诊断缓存、runtime store 和 app-server 的清理顺序。
+  - Codex bridge middleware 基础 state 创建从主文件抽离为独立 helper，并由 server module smoke 覆盖 thread search/read cache、runtime store、诊断缓存和 sandbox readiness cache 的工厂出口。
   - Codex bridge route handler 顺序调度从主 middleware 抽离为独立 helper，并由 server module smoke 覆盖同步/异步 handler、首个命中后停止和未命中继续 next 的分支。
   - Codex bridge route handler 列表构建从主 middleware 抽离为独立 helper，并由 server module smoke 覆盖 route 数量、replay accessor 绑定和未知 URL 未处理分支。
   - Codex bridge 共享 app-server/method catalog 单例状态从主文件抽离为独立 helper，并由 server module smoke 覆盖重复读取不重复创建实例。

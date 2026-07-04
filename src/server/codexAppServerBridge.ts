@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { initializeSkillsSyncOnStartup } from './skillsRoutes.js'
-import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } from './runtimeStore.js'
+import type { RuntimeRequestRecord, RuntimeRequestStatus } from './runtimeStore.js'
 import {
   type BridgeNotificationEvent,
 } from './appServerRuntimeBridge.js'
@@ -39,10 +39,6 @@ import {
   getAppServerRpcQueuePriority,
 } from './appServerRpcQueue.js'
 import {
-  readThreadInProgressFromThreadReadPayload,
-} from './appServerThreadPayload.js'
-import {
-  readItemIdFromPayload,
   readStringByAliases,
   readThreadIdFromPayload,
   readTurnIdFromPayload,
@@ -50,23 +46,12 @@ import {
 import { readThreadReadIncludeTurnsForMethod } from './appServerThreadReadParams.js'
 import { getRpcTimeoutMs } from './appServerRpcTimeoutPolicy.js'
 import { createAppServerRpcTimeoutRecoveryDecision } from './appServerRpcTimeoutRecovery.js'
-import {
-  AppServerThreadReadCacheStore,
-} from './appServerThreadReadCache.js'
 import { createLocalRuntimeSnapshot } from './appServerRuntimeSnapshotRecovery.js'
 import {
   createRpcTimeoutError,
 } from './appServerRpcErrors.js'
-import { AppServerNotificationDiagnostics } from './appServerNotificationDiagnostics.js'
-import { AppServerStatusDiagnostics } from './appServerStatusDiagnostics.js'
 import { readAppServerSchemaAuditSummary } from './appServerSchemaAuditSummary.js'
-import {
-  AppServerHookDiagnosticsCache,
-} from './appServerHookDiagnostics.js'
 import { AppServerNotificationListeners } from './appServerNotificationListeners.js'
-import {
-  WindowsSandboxReadinessCache,
-} from './windowsSandboxDiagnostics.js'
 import { createAppServerDiagnosticsReaders } from './appServerDiagnosticsReaders.js'
 import {
   createAppServerRpcNotification,
@@ -95,20 +80,13 @@ import { terminateAppServerProcess } from './appServerProcessTermination.js'
 import { AppServerMethodCatalog } from './appServerMethodCatalog.js'
 import { captureAppServerNotificationState } from './appServerNotificationState.js'
 import {
-  getCodexGlobalStatePath,
-  getCodexSessionIndexPath,
   getWebBridgeSettingsPath,
 } from './codexPaths.js'
-import { readMergedPinnedThreadIds } from './pinnedThreads.js'
 import { PlanModeTurnStore } from './planModeTurnStore.js'
 import {
   ThreadTokenUsageStore,
   type ThreadTokenUsage,
 } from './threadTokenUsage.js'
-import { readThreadTitlesFromSessionIndex } from './threadTitleCache.js'
-import {
-  createThreadSearchIndexStore,
-} from './threadSearchIndex.js'
 import {
   type WebBridgeSettings,
 } from './serverRequestPolicy.js'
@@ -123,11 +101,8 @@ import {
   readWebBridgeSettings,
 } from './webBridgeSettings.js'
 import { startCodexBridgeStartupTasks } from './codexBridgeStartupTasks.js'
-import {
-  AppServerThreadListAugmenter,
-  createAppServerThreadListRpcResultAugmenter,
-} from './appServerThreadListAugment.js'
 import { createCodexBridgeRuntimeOperations } from './codexBridgeRuntimeOperations.js'
+import { createCodexBridgeMiddlewareState } from './codexBridgeMiddlewareState.js'
 import {
   handleAppServerServerRequest,
   resolveAppServerPendingServerRequest,
@@ -143,8 +118,6 @@ const APP_SERVER_RPC_TIMEOUT_RESTART_WINDOW_MS = 45_000
 const APP_SERVER_RPC_TIMEOUT_RESTART_THRESHOLD = 3
 const APP_SERVER_RESTART_COOLDOWN_MS = 10_000
 const APP_SERVER_COLD_START_GRACE_MS = 60_000
-const supplementalThreadListAugmenter = new AppServerThreadListAugmenter()
-
 class AppServerProcess {
   private process: ChildProcessWithoutNullStreams | null = null
   private initialized = false
@@ -583,29 +556,17 @@ function getSharedBridgeState(): SharedBridgeState {
 
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const { appServer, methodCatalog } = getSharedBridgeState()
-  const threadSearchIndexStore = createThreadSearchIndexStore({
-    listThreads: (params) => appServer.rpc('thread/list', params),
-    getSessionIndexPath: getCodexSessionIndexPath,
-    readThreadTitlesFromSessionIndex,
-  })
-  const threadReadCacheStore = new AppServerThreadReadCacheStore()
-  const augmentThreadListRpcResult = createAppServerThreadListRpcResultAugmenter({
-    augmenter: supplementalThreadListAugmenter,
-    readPinnedThreadIds: readMergedPinnedThreadIds,
-    rpc: (method, params) => appServer.rpc(method, params),
-  })
-  const runtimeStateStore = new RuntimeStateStore({
-    readThreadIdFromPayload,
-    readTurnIdFromPayload,
-    readItemIdFromPayload,
-    readThreadInProgressFromThreadReadPayload,
-    getErrorMessage,
-  })
-  const runtimeStore = new RuntimeStore()
-  const notificationDiagnostics = new AppServerNotificationDiagnostics()
-  const statusDiagnostics = new AppServerStatusDiagnostics()
-  const hookDiagnosticsCache = new AppServerHookDiagnosticsCache()
-  const windowsSandboxReadinessCache = new WindowsSandboxReadinessCache()
+  const {
+    threadSearchIndexStore,
+    threadReadCacheStore,
+    augmentThreadListRpcResult,
+    runtimeStateStore,
+    runtimeStore,
+    notificationDiagnostics,
+    statusDiagnostics,
+    hookDiagnosticsCache,
+    windowsSandboxReadinessCache,
+  } = createCodexBridgeMiddlewareState(appServer)
   const {
     persistRuntimeSnapshot,
     readThreadRuntimeSnapshot,

@@ -393,6 +393,7 @@ import {
 import { RequestBodyTooLargeError } from '../src/server/httpBody.js'
 import { writeCodexBridgeRequestError } from '../src/server/codexBridgeRequestError.js'
 import { disposeCodexBridgeMiddlewareResources } from '../src/server/codexBridgeMiddlewareDispose.js'
+import { createCodexBridgeMiddlewareState } from '../src/server/codexBridgeMiddlewareState.js'
 import { createCodexBridgeNotificationRuntime } from '../src/server/codexBridgeNotificationRuntime.js'
 import { createCodexBridgeRuntimeOperations } from '../src/server/codexBridgeRuntimeOperations.js'
 import { createCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteHandlers.js'
@@ -460,6 +461,7 @@ try {
   await smokeFileUploadRoute()
   smokeHttpJsonResponse()
   smokeCodexBridgeRequestError()
+  smokeCodexBridgeMiddlewareState()
   smokeCodexBridgeMiddlewareDispose()
   smokeCodexBridgeNotificationRuntime()
   smokeCodexBridgeRuntimeOperations()
@@ -4287,6 +4289,24 @@ function smokeCodexBridgeRequestError(): void {
   )
   assert.equal(bridgeFailure.response.statusCode, 502)
   assert.deepEqual(JSON.parse(bridgeFailure.body), { error: 'bridge failed' })
+}
+
+function smokeCodexBridgeMiddlewareState(): void {
+  const state = createCodexBridgeMiddlewareState({
+    rpc: async () => ({ data: [] }),
+  })
+
+  assert.equal(typeof state.threadSearchIndexStore.search, 'function')
+  assert.equal(typeof state.threadSearchIndexStore.clear, 'function')
+  assert.equal(typeof state.threadReadCacheStore.get, 'function')
+  assert.equal(typeof state.augmentThreadListRpcResult, 'function')
+  assert.equal(typeof state.runtimeStateStore.snapshot, 'function')
+  assert.equal(typeof state.runtimeStore.getHealth, 'function')
+  assert.equal(typeof state.notificationDiagnostics.snapshot, 'function')
+  assert.equal(typeof state.statusDiagnostics.snapshot, 'function')
+  assert.equal(typeof state.hookDiagnosticsCache.clear, 'function')
+  assert.equal(typeof state.windowsSandboxReadinessCache.clear, 'function')
+  state.runtimeStore.close()
 }
 
 function smokeCodexBridgeMiddlewareDispose(): void {

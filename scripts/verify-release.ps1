@@ -389,6 +389,7 @@ if (-not $SkipPackageSmoke) {
     "src\server\appServerThreadRuntimeSnapshot.ts",
     "src\server\codexBridgeRequestError.ts",
     "src\server\codexBridgeMiddlewareDispose.ts",
+    "src\server\codexBridgeMiddlewareState.ts",
     "src\server\codexBridgeNotificationRuntime.ts",
     "src\server\codexBridgeRuntimeOperations.ts",
     "src\server\codexBridgeRouteHandlers.ts",

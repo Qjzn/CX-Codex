@@ -7931,3 +7931,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: Codex bridge middleware state extraction
+
+#### Prerequisites
+- Current repository includes `src/server/codexAppServerBridge.ts`, `src/server/codexBridgeMiddlewareState.ts`, `scripts/server-module-smoke.ts`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
+- Dependencies are installed and `dist/` plus `dist-cli/` already exist, or run release verification without `-SkipBuild`.
+
+#### Steps
+1. Open `src/server/codexBridgeMiddlewareState.ts` and confirm `createCodexBridgeMiddlewareState(...)` owns the bridge middleware state creation for thread search/read cache, thread list augmentation, runtime state/store, notification/status diagnostics, hook diagnostics cache, and Windows sandbox readiness cache.
+2. Open `src/server/codexAppServerBridge.ts` and confirm `createCodexBridgeMiddleware()` delegates those base stores and diagnostics to `createCodexBridgeMiddlewareState(appServer)`.
+3. Open `scripts/server-module-smoke.ts` and confirm `smokeCodexBridgeMiddlewareState()` covers the factory outputs and closes the created runtime store.
+4. Open `scripts/verify-release.ps1` and confirm Release package smoke requires `src\server\codexBridgeMiddlewareState.ts` inside the release zip.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `npm.cmd run build`.
+8. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+9. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Bridge middleware still creates all state stores, caches, and diagnostics needed by route handlers, notification runtime, runtime operations, and disposal.
+- Thread search/list augmentation still uses the injected app-server RPC path.
+- The created runtime store remains closeable for middleware disposal and smoke cleanup.
+- Release package smoke fails if the middleware state helper is omitted from the Web source zip.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal output in `output/server-module-smoke/` and `output/release-package-smoke/`.
+- To roll back, move the middleware state creation back into `src/server/codexAppServerBridge.ts`, delete `src/server/codexBridgeMiddlewareState.ts`, remove smoke/governance/release package references, revert changelog updates, and remove this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 server module smoke: `node scripts\verify-server-modules.mjs` passed, including `smokeCodexBridgeMiddlewareState()` coverage for the middleware state factory outputs.
+- 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
