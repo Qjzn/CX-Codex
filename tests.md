@@ -50,6 +50,45 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server unknown thread item fallback
+
+#### Prerequisites
+- Current repository includes `src/api/normalizers/v2.ts`, `scripts/verify-frontend-normalizers.mjs`, `package.json`, and `docs/app-server-protocol-matrix.zh-CN.md`.
+- Dependencies are installed so esbuild, TypeScript, Vite, tsup, server module smoke, governance, and release verification can run.
+
+#### Steps
+1. Open `src/api/normalizers/v2.ts` and confirm unknown top-level `ThreadItem.type` values return a `UiMessage` with `role: 'system'`, `messageType: 'unhandled.<type>'`, `rawPayload`, and `isUnhandled: true`.
+2. Confirm invalid/non-object turn items are wrapped as `type: 'invalidItem'` before normalization instead of throwing or being silently skipped.
+3. Run `node scripts\verify-frontend-normalizers.mjs`.
+4. Run `git diff --check`.
+5. Run `node scripts\verify-server-modules.mjs`.
+6. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+7. Run `node_modules\.bin\vite.cmd build`.
+8. Run `node_modules\.bin\tsup.cmd`.
+9. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+10. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Known `agentMessage` items still render as assistant messages.
+- Unknown App Server turn items such as `threadShellCommandOutput` render as an unhandled system raw message with the original payload preserved for diagnostics.
+- Invalid items such as `null` do not crash normalization and become `unhandled.invalidItem`.
+- Server module smoke remains focused on server modules; frontend normalizer behavior is covered by `verify:frontend-normalizers`.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `dist/`, `dist-cli/`, `output/frontend-normalizer-smoke/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, restore the previous unknown item skip behavior in `src/api/normalizers/v2.ts`, remove `scripts/verify-frontend-normalizers.mjs` and its `package.json` script, then revert the protocol matrix, changelog, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 frontend normalizer smoke: `node scripts\verify-frontend-normalizers.mjs` passed with `frontend normalizer smoke ok`, covering known item, unknown `threadShellCommandOutput`, and invalid `null` item normalization.
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed with `server module smoke ok`.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
 ---
 
 ### Feature: App Server local runtime snapshot reader helper

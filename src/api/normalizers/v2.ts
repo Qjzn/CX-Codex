@@ -5,8 +5,8 @@ import type {
   ThreadListResponse,
   Turn,
   UserInput,
-} from '../appServerDtos'
-import type { CommandExecutionData, UiFileAttachment, UiMessage, UiProjectGroup, UiThread } from '../../types/codex'
+} from '../appServerDtos.js'
+import type { CommandExecutionData, UiFileAttachment, UiMessage, UiProjectGroup, UiThread } from '../../types/codex.js'
 import { normalizePathForComparison, normalizePathForUi, toProjectName } from '../../pathUtils.js'
 
 function toIso(seconds: number): string {
@@ -186,6 +186,10 @@ function extractAssistantImages(item: ThreadItem): string[] {
 }
 
 function toUiMessages(item: ThreadItem): UiMessage[] {
+  const rawItem = item as Record<string, unknown>
+  const itemId = readTrimmedString(rawItem.id) || `unhandled:${readTrimmedString(rawItem.type) || 'item'}`
+  const itemType = readTrimmedString(rawItem.type)
+
   if (item.type === 'agentMessage') {
     const text = typeof item.text === 'string' ? item.text : ''
     const images = extractAssistantImages(item)
@@ -201,7 +205,6 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
   }
 
   if (item.type === 'imageView') {
-    const rawItem = item as Record<string, unknown>
     const images: string[] = []
     pushImageCandidate(images, rawItem.path)
     pushImageCandidate(images, rawItem.url)
@@ -247,13 +250,12 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
   }
 
   if (item.type === 'commandExecution') {
-    const raw = item as Record<string, unknown>
-    const status = normalizeCommandStatus(raw.status)
-    const cmd = typeof raw.command === 'string' ? raw.command : ''
-    const cwd = typeof raw.cwd === 'string' ? raw.cwd : null
-    const aggregatedOutput = typeof raw.aggregatedOutput === 'string' ? raw.aggregatedOutput : ''
-    const exitCode = typeof raw.exitCode === 'number' ? raw.exitCode : null
-    const durationMs = typeof raw.durationMs === 'number' && Number.isFinite(raw.durationMs) ? Math.max(0, raw.durationMs) : null
+    const status = normalizeCommandStatus(rawItem.status)
+    const cmd = typeof rawItem.command === 'string' ? rawItem.command : ''
+    const cwd = typeof rawItem.cwd === 'string' ? rawItem.cwd : null
+    const aggregatedOutput = typeof rawItem.aggregatedOutput === 'string' ? rawItem.aggregatedOutput : ''
+    const exitCode = typeof rawItem.exitCode === 'number' ? rawItem.exitCode : null
+    const durationMs = typeof rawItem.durationMs === 'number' && Number.isFinite(rawItem.durationMs) ? Math.max(0, rawItem.durationMs) : null
     return [
       {
         id: item.id,
@@ -265,7 +267,16 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
     ]
   }
 
-  return []
+  return [
+    {
+      id: itemId,
+      role: 'system',
+      text: itemType ? `Unhandled App Server item: ${itemType}` : 'Unhandled App Server item',
+      messageType: itemType ? `unhandled.${itemType}` : 'unhandled.item',
+      rawPayload: toRawPayload(item),
+      isUnhandled: true,
+    },
+  ]
 }
 
 function normalizeCommandStatus(value: unknown): CommandExecutionData['status'] {
@@ -405,7 +416,12 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse): UiMessag
     const turn = turns[turnIndex]
     const items = Array.isArray(turn.items) ? turn.items : []
     for (const item of items) {
-      for (const msg of toUiMessages(item)) {
+      const threadItem = (
+        item && typeof item === 'object' && !Array.isArray(item)
+          ? item
+          : { id: `turn-${String(turnIndex)}:item-${String(messages.length)}`, type: 'invalidItem', content: item }
+      ) as ThreadItem
+      for (const msg of toUiMessages(threadItem)) {
         messages.push({ ...msg, turnIndex })
       }
     }

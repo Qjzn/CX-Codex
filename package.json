@@ -68,6 +68,7 @@
     "audit:app-server-schemas": "node ./scripts/run-powershell-script.mjs ./scripts/audit-app-server-schemas.ps1",
     "audit:app-server-schemas:update-summary": "node ./scripts/update-app-server-schema-audit-summary.mjs",
     "verify:governance": "node ./scripts/run-powershell-script.mjs ./scripts/verify-governance.ps1",
+    "verify:frontend-normalizers": "node ./scripts/verify-frontend-normalizers.mjs",
     "verify:server-modules": "node ./scripts/verify-server-modules.mjs",
     "verify:release": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release.ps1",
     "verify:release-artifacts": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release-artifacts.ps1",
