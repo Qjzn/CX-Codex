@@ -245,11 +245,29 @@
       <section class="diagnostics-section">
         <div class="diagnostics-section-header">
           <h2>Windows 安全</h2>
-          <span class="diagnostics-badge" :data-tone="recentWindowsSandboxNotifications.length > 0 ? 'warning' : 'ok'">
-            {{ recentWindowsSandboxNotifications.length }}
+          <span class="diagnostics-badge" :data-tone="windowsSandboxReadinessTone">
+            {{ windowsSandboxReadinessLabel }}
           </span>
         </div>
-        <div v-if="recentWindowsSandboxNotifications.length === 0" class="diagnostics-empty">暂无 Windows sandbox 或 world-writable 警告。</div>
+        <dl class="diagnostics-kv">
+          <div>
+            <dt>Readiness</dt>
+            <dd>{{ windowsSandboxReadiness.status }}</dd>
+          </div>
+          <div>
+            <dt>来源</dt>
+            <dd>{{ windowsSandboxReadiness.source }}</dd>
+          </div>
+          <div>
+            <dt>检查</dt>
+            <dd>{{ formatAge(windowsSandboxReadiness.checkedAtIso) }}</dd>
+          </div>
+          <div>
+            <dt>错误</dt>
+            <dd>{{ windowsSandboxReadiness.error || '-' }}</dd>
+          </div>
+        </dl>
+        <div v-if="recentWindowsSandboxNotifications.length === 0" class="diagnostics-empty diagnostics-section-gap">暂无 Windows sandbox 或 world-writable 警告。</div>
         <ul v-else class="diagnostics-list">
           <li v-for="notification in recentWindowsSandboxNotifications" :key="`${notification.method}-${notification.atIso}`">
             <span>{{ formatWindowsSandboxNotification(notification) }}</span>
@@ -401,6 +419,14 @@ type WindowsSandboxNotificationDiagnostics = {
   failedScan: boolean | null
 }
 
+type WindowsSandboxReadinessDiagnostics = {
+  status: 'ready' | 'notConfigured' | 'updateRequired' | 'unsupported' | 'unavailable'
+  available: boolean
+  checkedAtIso: string
+  source: 'app-server' | 'platform' | 'error'
+  error: string
+}
+
 type UnknownStatusDiagnostics = {
   source: string
   value: string
@@ -468,6 +494,7 @@ type DiagnosticsData = {
   }
   serverRequestDiagnostics?: ServerRequestDiagnostics
   schemaAudit?: SchemaAuditDiagnostics
+  windowsSandbox?: WindowsSandboxReadinessDiagnostics
   transcription?: TranscriptionDiagnostics
   runtimeStore: RuntimeStoreDiagnostics
   runtime: {
@@ -546,6 +573,14 @@ const emptySchemaAudit: SchemaAuditDiagnostics = {
   error: '',
 }
 
+const emptyWindowsSandboxReadiness: WindowsSandboxReadinessDiagnostics = {
+  status: 'unavailable',
+  available: false,
+  checkedAtIso: '',
+  source: 'error',
+  error: '',
+}
+
 const diagnostics = ref<DiagnosticsData | null>(null)
 const error = ref('')
 const isLoading = ref(false)
@@ -555,6 +590,7 @@ const appServer = computed(() => diagnostics.value?.appServer ?? emptyAppServer)
 const runtimeStore = computed(() => diagnostics.value?.runtimeStore ?? emptyRuntimeStore)
 const transcription = computed(() => diagnostics.value?.transcription ?? emptyTranscription)
 const schemaAudit = computed(() => diagnostics.value?.schemaAudit ?? emptySchemaAudit)
+const windowsSandboxReadiness = computed(() => diagnostics.value?.windowsSandbox ?? emptyWindowsSandboxReadiness)
 const uncertainRequests = computed(() => diagnostics.value?.runtime.uncertainRequests ?? [])
 const recentEvents = computed(() => diagnostics.value?.runtime.recentEvents ?? [])
 const pendingServerRequests = computed(() => (
@@ -607,6 +643,7 @@ const overallTone = computed<Tone>(() => {
     || runtimeTone.value === 'warning'
     || schemaAuditTone.value === 'warning'
     || schemaAuditTone.value === 'danger'
+    || windowsSandboxReadinessTone.value === 'warning'
     || pendingServerRequests.value.length > 0
     || unknownNotificationCount.value > 0
     || unknownStatusCount.value > 0
@@ -647,6 +684,20 @@ const schemaAuditLabel = computed(() => {
   if (!schemaAudit.value.available) return '不可用'
   if (schemaAudit.value.reviewStatus === 'drift-recorded') return '差异已记录'
   return schemaAudit.value.reviewStatus || '已记录'
+})
+
+const windowsSandboxReadinessTone = computed<Tone>(() => {
+  if (windowsSandboxReadiness.value.status === 'ready') return 'ok'
+  if (windowsSandboxReadiness.value.status === 'unsupported') return 'neutral'
+  return 'warning'
+})
+
+const windowsSandboxReadinessLabel = computed(() => {
+  if (windowsSandboxReadiness.value.status === 'ready') return '已就绪'
+  if (windowsSandboxReadiness.value.status === 'notConfigured') return '未配置'
+  if (windowsSandboxReadiness.value.status === 'updateRequired') return '需更新'
+  if (windowsSandboxReadiness.value.status === 'unsupported') return '不支持'
+  return '不可用'
 })
 
 const schemaAuditRows = computed(() => [
@@ -868,6 +919,10 @@ function formatAge(value: string): string {
 
 .diagnostics-empty {
   @apply rounded-md bg-stone-50 px-3 py-3 text-sm text-slate-500;
+}
+
+.diagnostics-section-gap {
+  @apply mt-3;
 }
 
 .diagnostics-table-wrap {

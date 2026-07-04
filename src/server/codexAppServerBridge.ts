@@ -114,6 +114,11 @@ import { AppServerNotificationDiagnostics } from './appServerNotificationDiagnos
 import { AppServerStatusDiagnostics } from './appServerStatusDiagnostics.js'
 import { readAppServerSchemaAuditSummary } from './appServerSchemaAuditSummary.js'
 import {
+  createWindowsSandboxReadinessUnsupported,
+  WindowsSandboxReadinessCache,
+  type WindowsSandboxReadinessDiagnostics,
+} from './windowsSandboxDiagnostics.js'
+import {
   createAppServerRpcErrorResponse,
   createAppServerRpcNotification,
   createAppServerRpcRequest,
@@ -941,6 +946,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const runtimeStore = new RuntimeStore()
   const notificationDiagnostics = new AppServerNotificationDiagnostics()
   const statusDiagnostics = new AppServerStatusDiagnostics()
+  const windowsSandboxReadinessCache = new WindowsSandboxReadinessCache()
   const bridgeNotificationListeners = new Set<(value: BridgeNotificationEvent) => void>()
   const notificationReplay = new AppServerNotificationReplay({
     initialSeq: runtimeStore.getLatestEventSeq(),
@@ -990,6 +996,13 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     oldestSeq: number
   } {
     return notificationReplay.listAfter(afterSeq, limit)
+  }
+
+  async function readWindowsSandboxReadinessDiagnostics(): Promise<WindowsSandboxReadinessDiagnostics> {
+    if (process.platform !== 'win32') {
+      return createWindowsSandboxReadinessUnsupported()
+    }
+    return windowsSandboxReadinessCache.read(() => appServer.rpc('windowsSandbox/readiness', undefined))
   }
 
   const unsubscribeAppServerNotifications = appServer.onNotification((notification: { method: string; params: unknown }) => {
@@ -1737,6 +1750,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (req.method === 'GET' && url.pathname === '/codex-api/health') {
         const schemaAudit = await readAppServerSchemaAuditSummary()
         const serverRequestDiagnostics = createServerRequestDiagnosticsSnapshot(appServer.listPendingServerRequests())
+        const windowsSandbox = await readWindowsSandboxReadinessDiagnostics()
         setJson(res, 200, {
           status: 'ok',
           data: {
@@ -1745,6 +1759,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             statusDiagnostics: statusDiagnostics.snapshot(),
             serverRequestDiagnostics,
             schemaAudit,
+            windowsSandbox,
             transcription: getTranscriptionProxyConfigSnapshot(),
             runtimeStore: runtimeStore.getHealth(),
             timestamp: new Date().toISOString(),
@@ -1757,6 +1772,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         const runtimeHealth = runtimeStore.getHealth()
         const schemaAudit = await readAppServerSchemaAuditSummary()
         const serverRequestDiagnostics = createServerRequestDiagnosticsSnapshot(appServer.listPendingServerRequests())
+        const windowsSandbox = await readWindowsSandboxReadinessDiagnostics()
         const recentEvents = runtimeStore
           .listEventsAfter(Math.max(0, runtimeHealth.latestSeq - 20), 20)
           .notifications
@@ -1786,6 +1802,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             statusDiagnostics: statusDiagnostics.snapshot(),
             serverRequestDiagnostics,
             schemaAudit,
+            windowsSandbox,
             transcription: getTranscriptionProxyConfigSnapshot(),
             runtimeStore: runtimeHealth,
             runtime: {
@@ -2243,6 +2260,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     unsubscribeAppServerNotifications()
     notificationDiagnostics.clear()
     statusDiagnostics.clear()
+    windowsSandboxReadinessCache.clear()
     runtimeStore.close()
     appServer.dispose()
   }

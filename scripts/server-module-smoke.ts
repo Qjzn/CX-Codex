@@ -23,6 +23,12 @@ import {
   AppServerNotificationDiagnostics,
   isKnownAppServerNotificationMethod,
 } from '../src/server/appServerNotificationDiagnostics.js'
+import {
+  createWindowsSandboxReadinessUnavailable,
+  createWindowsSandboxReadinessUnsupported,
+  normalizeWindowsSandboxReadiness,
+  WindowsSandboxReadinessCache,
+} from '../src/server/windowsSandboxDiagnostics.js'
 import { extractMethodCatalogFromSchema } from '../src/server/appServerMethodCatalog.js'
 import {
   AppServerStatusDiagnostics,
@@ -277,6 +283,7 @@ try {
   await smokeAuthMiddleware()
   smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
+  await smokeWindowsSandboxReadinessDiagnostics()
   smokeAppServerStatusDiagnostics()
   await smokeAppServerSchemaAuditSummary()
   smokeTranscriptionProxyConfig()
@@ -805,6 +812,85 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(diagnostics.snapshot().unknownNotificationCount, 0)
   assert.equal(diagnostics.snapshot().recentModelNotifications.length, 0)
   assert.equal(diagnostics.snapshot().recentWindowsSandboxNotifications.length, 0)
+}
+
+async function smokeWindowsSandboxReadinessDiagnostics(): Promise<void> {
+  assert.deepEqual(normalizeWindowsSandboxReadiness(
+    { status: 'ready' },
+    '2026-07-04T00:00:00.000Z',
+  ), {
+    status: 'ready',
+    available: true,
+    checkedAtIso: '2026-07-04T00:00:00.000Z',
+    source: 'app-server',
+    error: '',
+  })
+  assert.deepEqual(normalizeWindowsSandboxReadiness(
+    { status: 'notConfigured' },
+    '2026-07-04T00:00:01.000Z',
+  ).status, 'notConfigured')
+  assert.deepEqual(normalizeWindowsSandboxReadiness(
+    { status: 'updateRequired' },
+    '2026-07-04T00:00:02.000Z',
+  ).status, 'updateRequired')
+
+  const unknown = normalizeWindowsSandboxReadiness(
+    { status: 'needsElevatedSetup' },
+    '2026-07-04T00:00:03.000Z',
+  )
+  assert.equal(unknown.status, 'unavailable')
+  assert.equal(unknown.available, false)
+  assert.equal(unknown.source, 'error')
+  assert.match(unknown.error, /Unknown Windows sandbox readiness status/)
+
+  const longError = createWindowsSandboxReadinessUnavailable(
+    new Error('x'.repeat(240)),
+    '2026-07-04T00:00:04.000Z',
+  )
+  assert.equal(longError.status, 'unavailable')
+  assert.equal(longError.available, false)
+  assert.equal(longError.error.length, 160)
+
+  const unsupported = createWindowsSandboxReadinessUnsupported('2026-07-04T00:00:05.000Z')
+  assert.equal(unsupported.status, 'unsupported')
+  assert.equal(unsupported.available, false)
+  assert.equal(unsupported.source, 'platform')
+
+  let nowMs = 1_000
+  const cache = new WindowsSandboxReadinessCache({
+    ttlMs: 100,
+    nowMs: () => nowMs,
+    nowIso: () => new Date(nowMs).toISOString(),
+  })
+  let calls = 0
+  const first = await cache.read(async () => {
+    calls += 1
+    return { status: 'ready' }
+  })
+  const cached = await cache.read(async () => {
+    calls += 1
+    return { status: 'updateRequired' }
+  })
+  assert.equal(first.status, 'ready')
+  assert.equal(cached.status, 'ready')
+  assert.equal(calls, 1)
+
+  nowMs += 101
+  const refreshed = await cache.read(async () => {
+    calls += 1
+    return { status: 'updateRequired' }
+  })
+  assert.equal(refreshed.status, 'updateRequired')
+  assert.equal(calls, 2)
+
+  cache.clear()
+  const failed = await cache.read(async () => {
+    calls += 1
+    throw new Error('readiness rpc failed')
+  })
+  assert.equal(failed.status, 'unavailable')
+  assert.equal(failed.error, 'readiness rpc failed')
+  assert.equal(calls, 3)
 }
 
 function smokeAppServerMethodCatalog(): void {
