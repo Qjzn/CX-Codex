@@ -375,6 +375,7 @@ if (-not $SkipPackageSmoke) {
     "scripts\verify-governance.ps1",
     "scripts\verify-release.ps1",
     ".github\dependabot.yml",
+    ".github\FUNDING.yml",
     ".github\release-body.md",
     ".github\PULL_REQUEST_TEMPLATE.md",
     ".github\ISSUE_TEMPLATE\protocol_compatibility.yml",

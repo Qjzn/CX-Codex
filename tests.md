@@ -7366,3 +7366,35 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 package-script release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed through `node ./scripts/run-powershell-script.mjs ./scripts/verify-release.ps1`, completing `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: GitHub funding placeholder cleanup
+
+#### Prerequisites
+- Current repository includes `.github/FUNDING.yml`, `scripts/package-release.ps1`, `scripts/verify-release.ps1`, `scripts/verify-governance.ps1`, and `docs/changelog.zh-CN.md`.
+- Dependencies are installed so governance and release package smoke can run.
+
+#### Steps
+1. Open `.github/FUNDING.yml` and confirm it no longer contains GitHub default placeholder text such as `Replace with`.
+2. Confirm `.github/FUNDING.yml` explicitly says funding is not configured yet and keeps `custom: []`.
+3. Open `scripts/package-release.ps1` and confirm `.github\FUNDING.yml` is included in the release package source list.
+4. Open `scripts/verify-release.ps1` and confirm Release package smoke requires `.github\FUNDING.yml` inside the generated zip.
+5. Open `scripts/verify-governance.ps1` and confirm governance rejects Funding placeholder text and requires the intentional no-funding marker.
+6. Run `git diff --check`.
+7. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+8. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- The repository no longer ships the default GitHub Funding placeholder template.
+- Governance verification fails if placeholder funding text returns.
+- Release package smoke fails if `.github\FUNDING.yml` is omitted from the Web source zip.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal release smoke output in `output/release-package-smoke/`.
+- To roll back, revert `.github/FUNDING.yml`, package/release smoke assertions, governance checks, changelog note, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

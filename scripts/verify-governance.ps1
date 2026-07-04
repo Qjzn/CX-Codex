@@ -141,6 +141,7 @@ $requiredFiles = @(
   "docs/dependency-maintenance.zh-CN.md",
   ".github/PULL_REQUEST_TEMPLATE.md",
   ".github/dependabot.yml",
+  ".github/FUNDING.yml",
   ".github/ISSUE_TEMPLATE/config.yml",
   ".github/workflows/ci.yml",
   ".github/workflows/release.yml",
@@ -165,6 +166,11 @@ Assert-ContentExcludes ".github/release-body.md" @(
   "2.2.4",
   "这版适合谁升级",
   "本次版本重点"
+)
+
+Assert-ContentExcludes ".github/FUNDING.yml" @(
+  "These are supported funding model platforms",
+  "Replace with"
 )
 
 $issueTemplates = @(
@@ -494,6 +500,7 @@ Assert-ContentIncludes "scripts/package-release.ps1" @(
   ".github\ISSUE_TEMPLATE\protocol_compatibility.yml",
   ".github\PULL_REQUEST_TEMPLATE.md",
   ".github\dependabot.yml",
+  ".github\FUNDING.yml",
   ".github\release-body.md",
   ".github\workflows\release.yml",
   "CODE_OF_CONDUCT.md",
@@ -510,6 +517,11 @@ Assert-ContentIncludes ".github/dependabot.yml" @(
   'timezone: "Asia/Shanghai"',
   "open-pull-requests-limit:",
   "groups:"
+)
+
+Assert-ContentIncludes ".github/FUNDING.yml" @(
+  "Funding is intentionally not configured",
+  "custom: []"
 )
 
 Assert-ContentIncludes ".github/PULL_REQUEST_TEMPLATE.md" @(

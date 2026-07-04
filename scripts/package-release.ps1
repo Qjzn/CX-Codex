@@ -79,6 +79,7 @@ $releaseItems = @(
   ".github\ISSUE_TEMPLATE\protocol_compatibility.yml",
   ".github\PULL_REQUEST_TEMPLATE.md",
   ".github\dependabot.yml",
+  ".github\FUNDING.yml",
   ".github\release-body.md",
   ".github\workflows\ci.yml",
   ".github\workflows\release.yml",
