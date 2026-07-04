@@ -51,6 +51,12 @@ export type RuntimeStartDependencies = {
   getErrorMessage(error: unknown, fallback: string): string
 }
 
+export function createAppServerRuntimeTurnStarter(
+  dependencies: RuntimeStartDependencies,
+): (payload: unknown) => Promise<RuntimeStartResult> {
+  return async (payload) => await startRuntimeTurnWithAppServer(payload, dependencies)
+}
+
 export async function startRuntimeTurnWithAppServer(
   payload: unknown,
   dependencies: RuntimeStartDependencies,

@@ -153,7 +153,7 @@ import {
   readWebBridgeSettings,
 } from './webBridgeSettings.js'
 import { AppServerThreadListAugmenter } from './appServerThreadListAugment.js'
-import { startRuntimeTurnWithAppServer } from './appServerRuntimeStart.js'
+import { createAppServerRuntimeTurnStarter } from './appServerRuntimeStart.js'
 import { interruptRuntimeTurnWithAppServer } from './appServerRuntimeInterrupt.js'
 import { createAppServerRuntimeSnapshotPersister } from './appServerRuntimeSnapshotPersistence.js'
 import { createAppServerLocalRuntimeSnapshotReader } from './appServerLocalRuntimeSnapshot.js'
@@ -819,26 +819,19 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     runtimeStore,
   })
 
-  async function startRuntimeTurn(payload: unknown): Promise<{
-    request: RuntimeRequestRecord
-    threadId: string
-    turnId: string
-    status: RuntimeRequestStatus
-  }> {
-    return await startRuntimeTurnWithAppServer(payload, {
-      createRequest: (record) => runtimeStore.createRequest(record),
-      updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
-      getRequest: (requestId) => runtimeStore.getRequest(requestId),
-      rpc: (method, params) => appServer.rpc(method, params),
-      clearThreadSearchIndex: () => threadSearchIndexStore.clear(),
-      markStarting: (threadId) => runtimeStateStore.markStarting(threadId),
-      markRunning: (threadId, turnId = '') => runtimeStateStore.markRunning(threadId, turnId),
-      markStartUncertain: (threadId, lastError = null) => runtimeStateStore.markStartUncertain(threadId, lastError),
-      persistRuntimeSnapshot,
-      markPlanModeTurn: (threadId, turnId = '') => appServer.markPlanModeTurn(threadId, turnId),
-      getErrorMessage,
-    })
-  }
+  const startRuntimeTurn = createAppServerRuntimeTurnStarter({
+    createRequest: (record) => runtimeStore.createRequest(record),
+    updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
+    getRequest: (requestId) => runtimeStore.getRequest(requestId),
+    rpc: (method, params) => appServer.rpc(method, params),
+    clearThreadSearchIndex: () => threadSearchIndexStore.clear(),
+    markStarting: (threadId) => runtimeStateStore.markStarting(threadId),
+    markRunning: (threadId, turnId = '') => runtimeStateStore.markRunning(threadId, turnId),
+    markStartUncertain: (threadId, lastError = null) => runtimeStateStore.markStartUncertain(threadId, lastError),
+    persistRuntimeSnapshot,
+    markPlanModeTurn: (threadId, turnId = '') => appServer.markPlanModeTurn(threadId, turnId),
+    getErrorMessage,
+  })
 
   async function interruptRuntimeTurn(payload: unknown): Promise<{
     requestId: string

@@ -281,6 +281,7 @@ import {
 import { syncBridgeNotificationRuntimeState } from '../src/server/appServerNotificationRuntimeSync.js'
 import { runRuntimeReconcileBatch } from '../src/server/appServerRuntimeReconcileScheduler.js'
 import {
+  createAppServerRuntimeTurnStarter,
   startRuntimeTurnWithAppServer,
   type RuntimeStartDependencies,
 } from '../src/server/appServerRuntimeStart.js'
@@ -5675,7 +5676,8 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     }
     throw new Error(`unexpected rpc method ${method}`)
   })
-  const planResult = await startRuntimeTurnWithAppServer({
+  const startRuntimeTurn = createAppServerRuntimeTurnStarter(plan.dependencies)
+  const planResult = await startRuntimeTurn({
     requestId: 'request-plan',
     clientMessageId: 'client-plan',
     mode: 'plan',
@@ -5684,7 +5686,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     effort: ' high ',
     attachments: [{ path: 'a.txt' }],
     input: [{ type: 'text', text: 'Draft a plan' }],
-  }, plan.dependencies)
+  })
   assert.equal(planResult.status, 'running')
   assert.equal(planResult.threadId, 'thread-plan')
   assert.equal(planResult.turnId, 'turn-plan')
