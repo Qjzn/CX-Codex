@@ -712,6 +712,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     listEventsAfter: (afterSeq, limit) => runtimeStore.listEventsAfter(afterSeq, limit),
     observeNotification: (observation) => {
       notificationDiagnostics.observe(observation)
+      statusDiagnostics.observeStatusNotification({
+        method: observation.method,
+        atIso: observation.atIso,
+        threadId: observation.threadId,
+        payload: observation.params,
+      })
     },
     readThreadIdFromPayload,
     readTurnIdFromPayload,
@@ -846,6 +852,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         persistRuntimeSnapshot,
         markPlanModeTurn: (threadId, turnId = '') => appServer.markPlanModeTurn(threadId, turnId),
         clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
+        observeThreadUnsubscribeResponse: (details) => statusDiagnostics.observeThreadUnsubscribeResponse(details),
         deleteCachedThreadRead: (threadId) => threadReadCacheStore.delete(threadId),
         rememberCachedThreadRead: (threadId, threadRead) => {
           threadReadCacheStore.remember(threadId, threadRead)

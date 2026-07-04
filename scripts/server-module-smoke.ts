@@ -46,8 +46,12 @@ import {
 import { extractMethodCatalogFromSchema } from '../src/server/appServerMethodCatalog.js'
 import {
   AppServerStatusDiagnostics,
+  isKnownAppServerThreadActiveFlag,
   isKnownAppServerThreadStatus,
+  isKnownAppServerThreadUnsubscribeStatus,
+  readThreadStatusChangedCandidates,
   readThreadStatusCandidates,
+  readThreadUnsubscribeStatusCandidates,
 } from '../src/server/appServerStatusDiagnostics.js'
 import {
   normalizeAppServerSchemaAuditSummary,
@@ -2111,10 +2115,16 @@ function smokeAppServerStatusDiagnostics(): void {
   assert.equal(isKnownAppServerThreadStatus('running'), true)
   assert.equal(isKnownAppServerThreadStatus('completed'), true)
   assert.equal(isKnownAppServerThreadStatus('inProgress'), true)
+  assert.equal(isKnownAppServerThreadStatus('notLoaded'), true)
+  assert.equal(isKnownAppServerThreadStatus('systemError'), true)
+  assert.equal(isKnownAppServerThreadActiveFlag('waitingOnApproval'), true)
+  assert.equal(isKnownAppServerThreadActiveFlag('newWaitingFlag'), false)
+  assert.equal(isKnownAppServerThreadUnsubscribeStatus('notSubscribed'), true)
+  assert.equal(isKnownAppServerThreadUnsubscribeStatus('handoffDetached'), false)
   assert.equal(isKnownAppServerThreadStatus('awaiting_handoff'), false)
   assert.deepEqual(readThreadStatusCandidates({
     thread: {
-      status: { type: 'running' },
+      status: { type: 'running', activeFlags: ['waitingOnApproval', 'newWaitingFlag'] },
       turnStatus: 'inProgress',
       turns: [
         { id: 'turn-a', status: 'completed' },
@@ -2122,12 +2132,24 @@ function smokeAppServerStatusDiagnostics(): void {
       ],
     },
   }), [
-    { source: 'thread.status.type', value: 'running' },
-    { source: 'thread.turnStatus', value: 'inProgress' },
-    { source: 'thread.turns.status', value: 'customTurnState' },
+    { source: 'thread.status.type', value: 'running', kind: 'thread-status' },
+    { source: 'thread.status.activeFlags', value: 'waitingOnApproval', kind: 'thread-active-flag' },
+    { source: 'thread.status.activeFlags', value: 'newWaitingFlag', kind: 'thread-active-flag' },
+    { source: 'thread.turnStatus', value: 'inProgress', kind: 'thread-status' },
+    { source: 'thread.turns.status', value: 'customTurnState', kind: 'thread-status' },
+  ])
+  assert.deepEqual(readThreadStatusChangedCandidates({
+    threadId: 'thread-a',
+    status: { type: 'active', activeFlags: ['waitingOnUserInput'] },
+  }), [
+    { source: 'thread/status/changed.status.type', value: 'active', kind: 'thread-status' },
+    { source: 'thread/status/changed.status.activeFlags', value: 'waitingOnUserInput', kind: 'thread-active-flag' },
+  ])
+  assert.deepEqual(readThreadUnsubscribeStatusCandidates({ status: 'notSubscribed' }), [
+    { source: 'thread/unsubscribe.status', value: 'notSubscribed', kind: 'thread-unsubscribe-status' },
   ])
 
-  const diagnostics = new AppServerStatusDiagnostics({ maxRecentUnknown: 2 })
+  const diagnostics = new AppServerStatusDiagnostics({ maxRecentUnknown: 4 })
   diagnostics.observeThreadRead({
     threadId: 'thread-a',
     atIso: '2026-07-03T00:00:00.000Z',
@@ -2149,7 +2171,7 @@ function smokeAppServerStatusDiagnostics(): void {
     atIso: '2026-07-03T00:00:01.000Z',
     payload: {
       thread: {
-        status: { type: 'awaiting_handoff' },
+        status: { type: 'awaiting_handoff', activeFlags: ['newWaitingFlag'] },
         turns: [{ status: 'customTurnState' }],
       },
     },
@@ -2172,15 +2194,33 @@ function smokeAppServerStatusDiagnostics(): void {
       },
     },
   })
+  diagnostics.observeStatusNotification({
+    method: 'thread/status/changed',
+    threadId: 'thread-d',
+    atIso: '2026-07-03T00:00:04.000Z',
+    payload: {
+      threadId: 'thread-d',
+      status: { type: 'active', activeFlags: ['handoffRequested'] },
+    },
+  })
+  diagnostics.observeThreadUnsubscribeResponse({
+    threadId: 'thread-e',
+    atIso: '2026-07-03T00:00:05.000Z',
+    payload: {
+      status: 'handoffDetached',
+    },
+  })
 
   const snapshot = diagnostics.snapshot()
-  assert.equal(snapshot.unknownStatusCount, 4)
+  assert.equal(snapshot.unknownStatusCount, 7)
   assert.deepEqual(snapshot.recentUnknownStatuses.map((item) => `${item.source}:${item.normalizedValue}`), [
+    'thread/unsubscribe.status:handoffdetached',
+    'thread/status/changed.status.activeFlags:handoffrequested',
     'thread.turnStatus:handoffqueued',
     'thread.status.type:awaiting_handoff',
   ])
-  assert.equal(snapshot.recentUnknownStatuses[1]?.count, 2)
-  assert.equal(snapshot.recentUnknownStatuses[1]?.threadId, 'thread-b')
+  assert.equal(snapshot.recentUnknownStatuses[3]?.count, 2)
+  assert.equal(snapshot.recentUnknownStatuses[3]?.threadId, 'thread-b')
 
   diagnostics.clear()
   assert.equal(diagnostics.snapshot().unknownStatusCount, 0)
@@ -4782,6 +4822,12 @@ async function smokeRpcProxyRoute(): Promise<void> {
         includeTurns: true,
       },
     },
+    {
+      method: 'thread/unsubscribe',
+      params: {
+        threadId: 'thread-unsubscribe',
+      },
+    },
   ]
   const rpcCalls: Array<{ method: string; params: unknown }> = []
   const runtimeMarks: Array<{ action: string; threadId: string; turnId?: string }> = []
@@ -4789,6 +4835,7 @@ async function smokeRpcProxyRoute(): Promise<void> {
   const planMarks: Array<{ action: string; threadId: string; turnId?: string }> = []
   const deletedCachedThreadReads: string[] = []
   const rememberedCachedThreadReads: Array<{ threadId: string; threadRead: unknown }> = []
+  const observedThreadUnsubscribeResponses: Array<{ threadId?: string; payload: unknown }> = []
   const augmentCalls: Array<{ params: unknown; result: unknown }> = []
   const searchClears: string[] = []
   let turnStartAttempts = 0
@@ -4806,6 +4853,7 @@ async function smokeRpcProxyRoute(): Promise<void> {
       if (method === 'thread/resume') throw new Error('thread is not materialized yet')
       if (method === 'thread/list') return { data: [{ id: 'thread-a' }] }
       if (method === 'thread/read') return { thread: { id: 'thread-read', turns: readTurns }, other: true }
+      if (method === 'thread/unsubscribe') return { status: 'notSubscribed' }
       throw new Error(`unexpected rpc method: ${method}`)
     },
     runtimeStateStore: {
@@ -4820,6 +4868,7 @@ async function smokeRpcProxyRoute(): Promise<void> {
     },
     markPlanModeTurn: (threadId, turnId = '') => planMarks.push({ action: 'mark', threadId, turnId }),
     clearPlanModeTurn: (threadId, turnId = '') => planMarks.push({ action: 'clear', threadId, turnId }),
+    observeThreadUnsubscribeResponse: (details) => observedThreadUnsubscribeResponses.push(details),
     deleteCachedThreadRead: (threadId) => deletedCachedThreadReads.push(threadId),
     rememberCachedThreadRead: (threadId, threadRead) => rememberedCachedThreadReads.push({ threadId, threadRead }),
     augmentThreadListRpcResult: async (params, result) => {
@@ -4911,6 +4960,18 @@ async function smokeRpcProxyRoute(): Promise<void> {
   assert.equal(threadReadResult.result.thread.turns.length, 10)
   assert.equal(threadReadResult.result.thread.turns[0].id, 'turn-2')
   assert.deepEqual(rememberedCachedThreadReads, [{ threadId: 'thread-read', threadRead: threadReadResult.result }])
+
+  const threadUnsubscribe = createRouteTestResponse()
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'POST' } as never,
+    threadUnsubscribe.response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
+    dependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(threadUnsubscribe.body), { result: { status: 'notSubscribed' } })
+  assert.deepEqual(observedThreadUnsubscribeResponses, [
+    { threadId: 'thread-unsubscribe', payload: { status: 'notSubscribed' } },
+  ])
 
   assert.deepEqual(searchClears, [])
   assert.equal(await handleRpcProxyRoute(

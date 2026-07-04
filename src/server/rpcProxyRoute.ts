@@ -42,6 +42,7 @@ export type RpcProxyRouteDependencies = {
   persistRuntimeSnapshot: (threadId: string) => unknown
   markPlanModeTurn: (threadId: string, turnId?: string) => void
   clearPlanModeTurn: (threadId: string, turnId?: string) => void
+  observeThreadUnsubscribeResponse: (details: { threadId?: string; payload: unknown }) => void
   deleteCachedThreadRead: (threadId: string) => void
   rememberCachedThreadRead: (threadId: string, threadRead: unknown) => void
   augmentThreadListRpcResult: (params: unknown, result: unknown) => Promise<unknown>
@@ -111,6 +112,9 @@ export async function handleRpcProxyRoute(
       }
     } else if (body.method === 'turn/interrupt' && rpcThreadId) {
       dependencies.clearPlanModeTurn(rpcThreadId, readTurnIdFromPayload(rpcParams))
+    }
+    if (body.method === 'thread/unsubscribe') {
+      dependencies.observeThreadUnsubscribeResponse({ threadId: rpcThreadId, payload: rpcResult })
     }
   } catch (error) {
     if (body.method === 'turn/interrupt' && rpcThreadId && isInterruptSettledError(error)) {

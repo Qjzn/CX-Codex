@@ -6659,3 +6659,44 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 static verification: `git diff --check` passed.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server thread status diagnostics compatibility
+
+#### Prerequisites
+- Current repository includes `src/server/appServerStatusDiagnostics.ts`, `src/server/appServerNotificationReplay.ts`, `src/server/rpcProxyRoute.ts`, `src/server/codexAppServerBridge.ts`, and `scripts/server-module-smoke.ts`.
+- Dependencies are installed so server module smoke, TypeScript, Vite, tsup, governance, and release verification can run.
+
+#### Steps
+1. Open `src/server/appServerStatusDiagnostics.ts` and confirm status candidates are classified as thread status, thread active flag, or thread unsubscribe status.
+2. Confirm `notLoaded`, `systemError`, `waitingOnApproval`, `waitingOnUserInput`, `notSubscribed`, and `unsubscribed` are treated as known App Server v2 status values.
+3. Open `src/server/codexAppServerBridge.ts` and confirm notification replay observations forward `thread/status/changed` payloads into `statusDiagnostics.observeStatusNotification(...)`.
+4. Open `src/server/rpcProxyRoute.ts` and confirm successful `thread/unsubscribe` responses are sent to `observeThreadUnsubscribeResponse(...)`.
+5. Open `docs/app-server-protocol-matrix.zh-CN.md` and confirm the Thread / Turn row records status diagnostics coverage for `thread.status`, `thread/status/changed.status`, `activeFlags`, and `thread/unsubscribe` response status.
+6. Run `git diff --check`.
+7. Run `node scripts\verify-server-modules.mjs`.
+8. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+9. Run `node_modules\.bin\vite.cmd build`.
+10. Run `node_modules\.bin\tsup.cmd`.
+11. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+12. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Unknown App Server thread status values from `thread/read` still aggregate in `statusDiagnostics` without exposing user prompt or raw payload.
+- Known v2 thread status values and active flags do not inflate unknown status counters.
+- Unknown `thread/status/changed.status.activeFlags` values are recorded as sanitized status diagnostics instead of being lost as notification-only data.
+- `thread/unsubscribe` response status values are observed by diagnostics, including future unknown unsubscribe statuses.
+- Server module smoke covers the new candidate readers, known-value helpers, notification observation path, and RPC unsubscribe response observation path.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `dist/`, `dist-cli/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, revert `src/server/appServerStatusDiagnostics.ts`, `src/server/codexAppServerBridge.ts`, `src/server/rpcProxyRoute.ts`, `scripts/server-module-smoke.ts`, `docs/app-server-protocol-matrix.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed, including coverage for known v2 thread statuses, active flags, `thread/status/changed` status observation, and `thread/unsubscribe` response observation.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
