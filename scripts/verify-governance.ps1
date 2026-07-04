@@ -433,6 +433,7 @@ Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "smokeTranscriptionRoutes",
   "handleServerRequestRoutes",
   "smokeServerRequestRoutes",
+  "createServerRequestResolvedNotification",
   "isImmediateServerRequestPolicyDecision",
   "readAppServerJsonRpcLineEvent",
   "handleWorktreeRoutes",

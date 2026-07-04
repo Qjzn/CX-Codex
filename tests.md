@@ -4354,6 +4354,33 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server server/request/resolved notification 模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/pendingServerRequests.ts` 和 `src/server/codexAppServerBridge.ts`。
+- `scripts/server-module-smoke.ts` 已覆盖 `server/request/resolved` notification 的 method、id、method、threadId、mode 和 resolvedAtIso 字段。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `node scripts\verify-server-modules.mjs`。
+3. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+4. 执行 `node_modules\.bin\vite.cmd build`。
+5. 执行 `node_modules\.bin\tsup.cmd`。
+6. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+7. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+8. 代码审查确认 `src/server/codexAppServerBridge.ts` 的 automatic 和 manual server request resolution 均通过 `createServerRequestResolvedNotification()` 发出相同 payload。
+
+#### Expected Results
+- `server/request/resolved` notification payload 构造集中在 `src/server/pendingServerRequests.ts`。
+- automatic 和 manual resolution 仍发出 `server/request/resolved`，包含 request id、request method、threadId、mode 和 resolvedAtIso。
+- threadId 仍通过 bridge 当前的 `readServerRequestThreadId()` 读取，避免改变 payload 兼容性。
+- server module smoke、构建、治理门禁和 release gate 均通过。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `createServerRequestResolvedNotification()`，撤销 `scripts/server-module-smoke.ts` 中的 resolved notification 断言，并把 `src/server/codexAppServerBridge.ts` 的 `emitServerRequestResolved()` 恢复为内联 notification payload。
+
+---
+
 ### Feature: App Server JSON-RPC line 分类模块化
 
 #### Prerequisites

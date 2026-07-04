@@ -113,7 +113,10 @@ import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/serv
 import { AppServerPendingRpcStore } from '../src/server/appServerPendingRpcStore.js'
 import { clearAppServerSessionStores } from '../src/server/appServerSessionCleanup.js'
 import { terminateAppServerProcess } from '../src/server/appServerProcessTermination.js'
-import { PendingServerRequestStore } from '../src/server/pendingServerRequests.js'
+import {
+  createServerRequestResolvedNotification,
+  PendingServerRequestStore,
+} from '../src/server/pendingServerRequests.js'
 import {
   normalizePinnedThreadIds,
   readDesktopPinnedThreadIds,
@@ -594,6 +597,24 @@ function smokePendingServerRequests(): void {
   assert.equal(store.count, 1)
   store.clear()
   assert.equal(store.count, 0)
+
+  assert.deepEqual(createServerRequestResolvedNotification({
+    requestId: 9,
+    method: 'item/fileChange/requestApproval',
+    params: { threadId: 'thread-resolved' },
+    mode: 'automatic',
+    readThreadIdFromPayload,
+    resolvedAtIso: '2026-07-04T00:00:00.000Z',
+  }), {
+    method: 'server/request/resolved',
+    params: {
+      id: 9,
+      method: 'item/fileChange/requestApproval',
+      threadId: 'thread-resolved',
+      mode: 'automatic',
+      resolvedAtIso: '2026-07-04T00:00:00.000Z',
+    },
+  })
 }
 
 function smokeServerRequestDiagnostics(): void {

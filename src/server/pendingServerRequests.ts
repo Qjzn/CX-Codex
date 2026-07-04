@@ -5,6 +5,19 @@ export type PendingServerRequest = {
   receivedAtIso: string
 }
 
+export type ServerRequestResolutionMode = 'automatic' | 'manual'
+
+export type ServerRequestResolvedNotification = {
+  method: 'server/request/resolved'
+  params: {
+    id: number
+    method: string
+    threadId: string
+    mode: ServerRequestResolutionMode
+    resolvedAtIso: string
+  }
+}
+
 export class PendingServerRequestStore {
   private readonly pendingById = new Map<number, PendingServerRequest>()
 
@@ -44,5 +57,25 @@ export class PendingServerRequestStore {
     return this.list().filter((request) => (
       readThreadIdFromPayload(request.params) === normalizedThreadId
     ))
+  }
+}
+
+export function createServerRequestResolvedNotification(options: {
+  requestId: number
+  method: string
+  params: unknown
+  mode: ServerRequestResolutionMode
+  readThreadIdFromPayload: (payload: unknown) => string
+  resolvedAtIso?: string
+}): ServerRequestResolvedNotification {
+  return {
+    method: 'server/request/resolved',
+    params: {
+      id: options.requestId,
+      method: options.method,
+      threadId: options.readThreadIdFromPayload(options.params),
+      mode: options.mode,
+      resolvedAtIso: options.resolvedAtIso ?? new Date().toISOString(),
+    },
   }
 }

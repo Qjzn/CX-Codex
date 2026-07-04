@@ -16,7 +16,11 @@ import {
   RuntimeStateStore,
   type ThreadRuntimeSnapshot,
 } from './runtimeState.js'
-import { PendingServerRequestStore, type PendingServerRequest } from './pendingServerRequests.js'
+import {
+  createServerRequestResolvedNotification,
+  PendingServerRequestStore,
+  type PendingServerRequest,
+} from './pendingServerRequests.js'
 import { logBridgeError, writeBridgeLog } from './bridgeLog.js'
 import { getErrorMessage } from './errorMessage.js'
 import {
@@ -460,16 +464,13 @@ class AppServerProcess {
     params: unknown,
     mode: 'automatic' | 'manual',
   ): void {
-    this.emitNotification({
-      method: 'server/request/resolved',
-      params: {
-        id: requestId,
-        method,
-        threadId: this.readServerRequestThreadId(params),
-        mode,
-        resolvedAtIso: new Date().toISOString(),
-      },
-    })
+    this.emitNotification(createServerRequestResolvedNotification({
+      requestId,
+      method,
+      params,
+      mode,
+      readThreadIdFromPayload: (payload) => this.readServerRequestThreadId(payload),
+    }))
   }
 
   private resolvePendingServerRequest(requestId: number, reply: ServerRequestReply): void {
