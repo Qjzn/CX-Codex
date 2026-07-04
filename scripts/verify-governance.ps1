@@ -387,6 +387,8 @@ Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "smokeRuntimeActionRoutes",
   "handleRuntimeStateRoutes",
   "smokeRuntimeStateRoutes",
+  "handleTranscriptionRoutes",
+  "smokeTranscriptionRoutes",
   "handleServerRequestRoutes",
   "smokeServerRequestRoutes",
   "handleWorktreeRoutes",

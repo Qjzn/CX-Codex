@@ -36,7 +36,7 @@ import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import {
   getTranscriptionProxyConfigSnapshot,
 } from './transcriptionProxy.js'
-import { handleTranscriptionRoute } from './transcriptionRoute.js'
+import { handleTranscriptionRoutes } from './transcriptionRoute.js'
 import { handleNotificationReplayRoute } from './notificationReplayRoute.js'
 import { handleLocalStateRoutes } from './localStateRoutes.js'
 import { handleNotificationSseRoute } from './notificationSseRoute.js'
@@ -1393,8 +1393,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      if (req.method === 'POST' && url.pathname === '/codex-api/transcribe') {
-        await handleTranscriptionRoute(req, res)
+      if (await handleTranscriptionRoutes(req, res, url)) {
         return
       }
 

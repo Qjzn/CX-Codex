@@ -3852,7 +3852,7 @@ This file tracks manual regression and feature verification steps.
 #### Prerequisites
 - 当前仓库包含 `src/server/transcriptionProxy.ts`、`scripts/server-module-smoke.ts`、`README.md`、`docs/protocol-compatibility.zh-CN.md`、`docs/openai-docs-review.zh-CN.md` 和诊断页。
 - 本机可访问 OpenAI 官方 Speech to text 文档：`https://developers.openai.com/api/docs/guides/speech-to-text`。
-- 本机可运行 `npm.cmd run verify:server-modules`、`npm.cmd run build`、`npm.cmd run verify:governance` 和 release gate。
+- 本机可运行 server smoke、`vue-tsc`、`vite build`、`tsup`、governance 和 release gate。
 
 #### Steps
 1. 打开官方 Speech to text 文档，确认 `/v1/audio/transcriptions` 使用 multipart，`gpt-4o-transcribe-diarize` 使用 `diarized_json`，长音频需要 `chunking_strategy` 且推荐 `auto`，文件上传限制为 25 MB。
@@ -3898,17 +3898,21 @@ This file tracks manual regression and feature verification steps.
 - 本机可运行 `npm.cmd run verify:server-modules`、`npm.cmd run build`、`npm.cmd run verify:governance` 和 release gate。
 
 #### Steps
-1. 代码审查 `src/server/codexAppServerBridge.ts`，确认 `/codex-api/transcribe` 分支只调用 `handleTranscriptionRoute(req, res)`，不再内联 OpenAI/ChatGPT 转写代理细节。
-2. 代码审查 `src/server/transcriptionRoute.ts`，确认其保留原有行为：读取 body 上限、读取 content-type、优先 OpenAI API key、无 key 时读取 Codex auth 并走 ChatGPT 回退。
-3. 执行 `git diff --check`。
-4. 执行 `npm.cmd run verify:server-modules`。
-5. 执行 `npm.cmd run build`。
-6. 执行 `npm.cmd run verify:governance`。
-7. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`。
-8. 代码审查 `scripts/verify-release.ps1` 和 `scripts/verify-governance.ps1`，确认 release package smoke 会检查 `src\server\transcriptionRoute.ts`，且 governance 会保护该检查不被误删。
+1. 代码审查 `src/server/codexAppServerBridge.ts`，确认 `/codex-api/transcribe` 分支只调用 `handleTranscriptionRoutes(req, res, url)`，不再内联 route path/method 判断或 OpenAI/ChatGPT 转写代理细节。
+2. 代码审查 `src/server/transcriptionRoute.ts`，确认 `handleTranscriptionRoutes()` 只处理 `POST /codex-api/transcribe`，并把请求转交给 `handleTranscriptionRoute()`。
+3. 代码审查 `src/server/transcriptionRoute.ts`，确认 `handleTranscriptionRoute()` 保留原有行为：读取 body 上限、读取 content-type、优先 OpenAI API key、无 key 时读取 Codex auth 并走 ChatGPT 回退。
+4. 执行 `git diff --check`。
+5. 执行 `npm.cmd run verify:server-modules`。
+6. 执行 `node_modules\.bin\vue-tsc.cmd --noEmit`。
+7. 执行 `node_modules\.bin\vite.cmd build`。
+8. 执行 `node_modules\.bin\tsup.cmd`。
+9. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`。
+10. 执行 `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`。
+11. 代码审查 `scripts/verify-release.ps1` 和 `scripts/verify-governance.ps1`，确认 release package smoke 会检查 `src\server\transcriptionRoute.ts`，且 governance 会保护该检查不被误删。
 
 #### Expected Results
 - bridge 主文件不再直接 import `getOpenAiTranscribeApiKey`、`getTranscribeRequestBodyLimitBytes`、`proxyOpenAiTranscribe`、`proxyChatGptTranscribe` 或 `readCodexAuth`。
+- `handleTranscriptionRoutes()` 对 `POST /codex-api/transcribe` 返回 `true`，对非 POST 或非目标 path 返回 `false`，不会吞掉后续路由。
 - 未配置 OpenAI API key 且没有 Codex auth 时，route smoke 返回 `401 No auth token available for transcription`。
 - 超过转写请求体上限时，route smoke 返回 `413` 且包含最大请求体大小。
 - 通用 bridge 错误处理仍保留 `RequestBodyTooLargeError`，不影响其它 JSON/file upload 路由。
@@ -3920,10 +3924,10 @@ This file tracks manual regression and feature verification steps.
 
 #### Regression Evidence
 - 2026-07-04 静态验证：`git diff --check` 通过。
-- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 `handleTranscriptionRoute()` 的无 auth `401` 和超限 `413` 分支。
-- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
-- 2026-07-04 Governance 验证：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
-- 2026-07-04 Release package smoke：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs、server module smoke、CLI smoke、CLI CJS launcher smoke、Release package smoke、artifact checksum smoke 和 NPM package smoke；zip 必检清单包含 `src\server\transcriptionRoute.ts`。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 `handleTranscriptionRoute()` 的无 auth `401` 和超限 `413` 分支，以及 `handleTranscriptionRoutes()` 的 POST 命中和 GET 放行分支。
+- 2026-07-04 构建验证：`node_modules\.bin\vue-tsc.cmd --noEmit`、`node_modules\.bin\vite.cmd build` 和 `node_modules\.bin\tsup.cmd` 通过。
+- 2026-07-04 Governance 验证：`node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release package smoke：`node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs、server module smoke、CLI smoke、CLI CJS launcher smoke、Release package smoke、artifact checksum smoke 和 NPM package smoke；zip 必检清单包含 `src\server\transcriptionRoute.ts`。
 
 ---
 

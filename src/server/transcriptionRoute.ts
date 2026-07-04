@@ -48,3 +48,16 @@ export async function handleTranscriptionRoute(
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
   res.end(upstream.body)
 }
+
+export async function handleTranscriptionRoutes(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<boolean> {
+  if (req.method !== 'POST' || url.pathname !== '/codex-api/transcribe') {
+    return false
+  }
+
+  await handleTranscriptionRoute(req, res)
+  return true
+}

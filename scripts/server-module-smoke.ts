@@ -297,7 +297,10 @@ import {
   getTranscriptionProxyConfigSnapshot,
   prepareOpenAiTranscribeBody,
 } from '../src/server/transcriptionProxy.js'
-import { handleTranscriptionRoute } from '../src/server/transcriptionRoute.js'
+import {
+  handleTranscriptionRoute,
+  handleTranscriptionRoutes,
+} from '../src/server/transcriptionRoute.js'
 import { setJson } from '../src/server/httpJsonResponse.js'
 import { getErrorMessage } from '../src/server/errorMessage.js'
 import {
@@ -325,6 +328,7 @@ try {
   smokeTranscriptionProxyConfig()
   smokeTranscriptionMultipartDefaults()
   await smokeTranscriptionRoute()
+  await smokeTranscriptionRoutes()
   smokeAppServerRpcResult()
   smokeAppServerPayloadIds()
   smokeAppServerThreadPayload()
@@ -2147,6 +2151,44 @@ async function smokeTranscriptionRoute(): Promise<void> {
       )
       assert.equal(tooLarge.response.statusCode, 413)
       assert.match(tooLarge.body, /Maximum request size is 3 bytes/u)
+    })
+  } finally {
+    if (typeof previousCodexHome === 'string') {
+      process.env.CODEX_HOME = previousCodexHome
+    } else {
+      delete process.env.CODEX_HOME
+    }
+    await rm(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function smokeTranscriptionRoutes(): Promise<void> {
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-transcription-routes-'))
+  const previousCodexHome = process.env.CODEX_HOME
+  try {
+    process.env.CODEX_HOME = tempDir
+    await withTranscriptionEnvAsync({
+      OPENAI_API_KEY: undefined,
+      OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+      CX_CODEX_OPENAI_API_KEY: undefined,
+      CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+      CODEXUI_OPENAI_API_KEY: undefined,
+      CODEXUI_OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+    }, async () => {
+      const handled = createTranscriptionRouteTestResponse()
+      assert.equal(await handleTranscriptionRoutes(
+        createTranscriptionRouteTestRequest(Buffer.from('audio'), 'audio/wav'),
+        handled.response as never,
+        new URL('http://127.0.0.1/codex-api/transcribe'),
+      ), true)
+      assert.equal(handled.response.statusCode, 401)
+      assert.deepEqual(JSON.parse(handled.body), { error: 'No auth token available for transcription' })
+
+      assert.equal(await handleTranscriptionRoutes(
+        { method: 'GET' } as never,
+        createTranscriptionRouteTestResponse().response as never,
+        new URL('http://127.0.0.1/codex-api/transcribe'),
+      ), false)
     })
   } finally {
     if (typeof previousCodexHome === 'string') {
@@ -5856,6 +5898,7 @@ async function withTranscriptionEnvAsync(
 
 function createTranscriptionRouteTestRequest(body: Buffer, contentType: string) {
   return Object.assign(Readable.from([body]), {
+    method: 'POST',
     headers: {
       'content-type': contentType,
     },
