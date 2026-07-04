@@ -91,6 +91,7 @@ import {
   AppServerHookDiagnosticsCache,
   type AppServerHookDiagnostics,
 } from './appServerHookDiagnostics.js'
+import { AppServerNotificationListeners } from './appServerNotificationListeners.js'
 import {
   createWindowsSandboxReadinessUnsupported,
   WindowsSandboxReadinessCache,
@@ -199,7 +200,7 @@ class AppServerProcess {
     execute: (method, params) => this.call(method, params),
   })
   private readonly expectedExitProcesses = new WeakSet<ChildProcessWithoutNullStreams>()
-  private readonly notificationListeners = new Set<(value: { method: string; params: unknown }) => void>()
+  private readonly notificationListeners = new AppServerNotificationListeners<{ method: string; params: unknown }>()
   private readonly pendingServerRequests = new PendingServerRequestStore()
   private readonly rpcCache = new AppServerRpcCache()
   private readonly threadTokenUsage = new ThreadTokenUsageStore()
@@ -400,9 +401,7 @@ class AppServerProcess {
   }
 
   private emitNotification(notification: { method: string; params: unknown }): void {
-    for (const listener of this.notificationListeners) {
-      listener(notification)
-    }
+    this.notificationListeners.emit(notification)
   }
 
   private captureNotificationState(notification: { method: string; params: unknown }): void {
@@ -586,10 +585,7 @@ class AppServerProcess {
   }
 
   onNotification(listener: (value: { method: string; params: unknown }) => void): () => void {
-    this.notificationListeners.add(listener)
-    return () => {
-      this.notificationListeners.delete(listener)
-    }
+    return this.notificationListeners.subscribe(listener)
   }
 
   async respondToServerRequest(payload: unknown): Promise<void> {
@@ -717,7 +713,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const statusDiagnostics = new AppServerStatusDiagnostics()
   const hookDiagnosticsCache = new AppServerHookDiagnosticsCache()
   const windowsSandboxReadinessCache = new WindowsSandboxReadinessCache()
-  const bridgeNotificationListeners = new Set<(value: BridgeNotificationEvent) => void>()
+  const bridgeNotificationListeners = new AppServerNotificationListeners<BridgeNotificationEvent>()
   const notificationReplay = new AppServerNotificationReplay({
     initialSeq: runtimeStore.getLatestEventSeq(),
     appendEvent: (event) => {
@@ -778,9 +774,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       runtimeStore,
       deleteCachedThreadRead: (threadId) => cachedThreadReadsByThreadId.delete(threadId),
       emitNotification: (event) => {
-        for (const listener of bridgeNotificationListeners) {
-          listener(event)
-        }
+        bridgeNotificationListeners.emit(event)
       },
     })
   })
@@ -1072,10 +1066,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   middleware.subscribeNotifications = (
     listener: (value: BridgeNotificationEvent) => void,
   ) => {
-    bridgeNotificationListeners.add(listener)
-    return () => {
-      bridgeNotificationListeners.delete(listener)
-    }
+    return bridgeNotificationListeners.subscribe(listener)
   }
   middleware.listNotificationEventsAfter = listNotificationEventsAfter
 

@@ -24,6 +24,7 @@ import {
   AppServerNotificationDiagnostics,
   isKnownAppServerNotificationMethod,
 } from '../src/server/appServerNotificationDiagnostics.js'
+import { AppServerNotificationListeners } from '../src/server/appServerNotificationListeners.js'
 import {
   captureAppServerNotificationState,
   shouldClearPlanModeTurnForNotification,
@@ -358,6 +359,7 @@ try {
   await smokeAuthMiddleware()
   smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
+  smokeAppServerNotificationListeners()
   smokeAppServerNotificationState()
   await smokeAppServerHookDiagnostics()
   await smokeWindowsSandboxReadinessDiagnostics()
@@ -1570,6 +1572,48 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(diagnostics.snapshot().recentGuardianReviewNotifications.length, 0)
   assert.equal(diagnostics.snapshot().recentProtocolAlerts.length, 0)
   assert.equal(diagnostics.snapshot().recentRealtimeNotifications.length, 0)
+}
+
+function smokeAppServerNotificationListeners(): void {
+  type TestNotification = { method: string; params: unknown }
+  const listeners = new AppServerNotificationListeners<TestNotification>()
+  const firstReceived: TestNotification[] = []
+  const secondReceived: TestNotification[] = []
+  const unsubscribeFirst = listeners.subscribe((notification) => {
+    firstReceived.push(notification)
+  })
+  const unsubscribeSecond = listeners.subscribe((notification) => {
+    secondReceived.push(notification)
+  })
+
+  assert.equal(listeners.count, 2)
+  const started: TestNotification = { method: 'turn/started', params: { threadId: 'thread-a' } }
+  listeners.emit(started)
+  assert.deepEqual(firstReceived, [started])
+  assert.deepEqual(secondReceived, [started])
+
+  unsubscribeFirst()
+  assert.equal(listeners.count, 1)
+  const completed: TestNotification = { method: 'turn/completed', params: { threadId: 'thread-a' } }
+  listeners.emit(completed)
+  assert.deepEqual(firstReceived, [started])
+  assert.deepEqual(secondReceived, [started, completed])
+
+  unsubscribeFirst()
+  assert.equal(listeners.count, 1)
+  unsubscribeSecond()
+  assert.equal(listeners.count, 0)
+
+  const unsubscribeAgain = listeners.subscribe((notification) => {
+    firstReceived.push(notification)
+  })
+  assert.equal(listeners.count, 1)
+  listeners.clear()
+  assert.equal(listeners.count, 0)
+  listeners.emit({ method: 'ignored', params: null })
+  assert.deepEqual(firstReceived, [started])
+  unsubscribeAgain()
+  assert.equal(listeners.count, 0)
 }
 
 function smokeAppServerNotificationState(): void {
