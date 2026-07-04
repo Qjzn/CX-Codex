@@ -6318,3 +6318,41 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: Codex bridge startup task runner
+
+#### Prerequisites
+- Current repository includes `src/server/codexBridgeStartupTasks.ts`, `src/server/codexAppServerBridge.ts`, and `scripts/server-module-smoke.ts`.
+- Dependencies are installed so TypeScript, Vite, tsup, and the server module smoke verifier can run.
+
+#### Steps
+1. Open `src/server/codexBridgeStartupTasks.ts` and confirm `startCodexBridgeStartupTasks(...)` starts skills sync, App Server warmup, and web settings load as fire-and-forget tasks.
+2. Confirm failed startup tasks are logged with the same messages: `Startup skills sync failed`, `App server warmup failed`, and `Web settings load failed`.
+3. Open `src/server/codexAppServerBridge.ts` and confirm middleware creation delegates startup task scheduling to `startCodexBridgeStartupTasks(...)`.
+4. Run `git diff --check`.
+5. Run `node scripts\verify-server-modules.mjs`.
+6. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+7. Run `node_modules\.bin\vite.cmd build`.
+8. Run `node_modules\.bin\tsup.cmd`.
+9. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+10. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- `codexAppServerBridge.ts` no longer owns inline startup task scheduling for skills sync, warmup, and web settings load.
+- Startup behavior remains fire-and-forget and continues applying loaded web bridge settings to the App Server process.
+- Startup task failures continue to be logged without breaking middleware creation.
+- `scripts/server-module-smoke.ts` covers successful startup scheduling and all three failure log messages.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifacts need cleanup beyond normal build output in `dist/`, `dist-cli/`, and `output/`.
+- To roll back, delete `src/server/codexBridgeStartupTasks.ts`, restore the inline startup task scheduling in `src/server/codexAppServerBridge.ts`, and revert `scripts/server-module-smoke.ts` plus this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed, including coverage for `startCodexBridgeStartupTasks()` success scheduling and all three startup failure log messages.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

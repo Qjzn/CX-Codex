@@ -124,6 +124,7 @@ import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/serv
 import { AppServerPendingRpcStore } from '../src/server/appServerPendingRpcStore.js'
 import { clearAppServerSessionStores } from '../src/server/appServerSessionCleanup.js'
 import { terminateAppServerProcess } from '../src/server/appServerProcessTermination.js'
+import { startCodexBridgeStartupTasks } from '../src/server/codexBridgeStartupTasks.js'
 import {
   createServerRequestResolvedNotification,
   PendingServerRequestStore,
@@ -374,6 +375,7 @@ try {
   smokeAppServerPendingRpcStore()
   smokeAppServerSessionCleanup()
   smokeAppServerProcessTermination()
+  await smokeCodexBridgeStartupTasks()
   smokePendingServerRequests()
   smokeAppServerJsonRpcWire()
   smokeAppServerInitialization()
@@ -611,6 +613,72 @@ function smokeAppServerProcessTermination(): void {
   })
   timers[0]()
   assert.deepEqual(calls, ['stdin.end', 'kill.SIGTERM'])
+}
+
+async function smokeCodexBridgeStartupTasks(): Promise<void> {
+  const calls: string[] = []
+  const settings = {
+    permissions: {
+      allowAllPermissionRequests: true,
+      commandExecution: 'ask' as const,
+      fileChange: 'allowForSession' as const,
+      mcpTools: 'ask' as const,
+    },
+  }
+  startCodexBridgeStartupTasks({
+    initializeSkillsSyncOnStartup: async () => {
+      calls.push('skills')
+    },
+    warmupAppServer: async () => {
+      calls.push('warmup')
+    },
+    getWebBridgeSettingsPath: () => 'settings.json',
+    readWebBridgeSettings: async (settingsPath) => {
+      calls.push(`settings:${settingsPath}`)
+      return settings
+    },
+    setWebBridgeSettings: (value) => {
+      calls.push(`set:${value.permissions.commandExecution}`)
+    },
+    logError: (message, error) => {
+      calls.push(`error:${message}:${getErrorMessage(error, 'unknown')}`)
+    },
+  })
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.deepEqual(calls, [
+    'skills',
+    'warmup',
+    'settings:settings.json',
+    'set:ask',
+  ])
+
+  const errors: string[] = []
+  startCodexBridgeStartupTasks({
+    initializeSkillsSyncOnStartup: async () => {
+      throw new Error('skills failed')
+    },
+    warmupAppServer: async () => {
+      throw new Error('warmup failed')
+    },
+    getWebBridgeSettingsPath: () => 'bad-settings.json',
+    readWebBridgeSettings: async () => {
+      throw new Error('settings failed')
+    },
+    setWebBridgeSettings: () => {
+      throw new Error('settings should not apply')
+    },
+    logError: (message, error) => {
+      errors.push(`${message}:${getErrorMessage(error, 'unknown')}`)
+    },
+  })
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.deepEqual(errors, [
+    'Startup skills sync failed:skills failed',
+    'App server warmup failed:warmup failed',
+    'Web settings load failed:settings failed',
+  ])
 }
 
 function smokePendingServerRequests(): void {

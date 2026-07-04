@@ -154,6 +154,7 @@ import {
   normalizeWebBridgeSettings,
   readWebBridgeSettings,
 } from './webBridgeSettings.js'
+import { startCodexBridgeStartupTasks } from './codexBridgeStartupTasks.js'
 import {
   AppServerThreadListAugmenter,
   createAppServerThreadListRpcResultAugmenter,
@@ -758,21 +759,14 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     })
   })
 
-  void initializeSkillsSyncOnStartup(appServer)
-    .catch((error) => {
-      logBridgeError('Startup skills sync failed', error)
-    })
-  void appServer.warmup()
-    .catch((error) => {
-      logBridgeError('App server warmup failed', error)
-    })
-  void readWebBridgeSettings(getWebBridgeSettingsPath())
-    .then((settings) => {
-      appServer.setWebBridgeSettings(settings)
-    })
-    .catch((error) => {
-      logBridgeError('Web settings load failed', error)
-    })
+  startCodexBridgeStartupTasks({
+    initializeSkillsSyncOnStartup: () => initializeSkillsSyncOnStartup(appServer),
+    warmupAppServer: () => appServer.warmup(),
+    getWebBridgeSettingsPath,
+    readWebBridgeSettings,
+    setWebBridgeSettings: (settings) => appServer.setWebBridgeSettings(settings),
+    logError: logBridgeError,
+  })
 
   const readThreadRuntimeSnapshot = createAppServerThreadRuntimeSnapshotReader({
     rpc: (method, params) => appServer.rpc(method, params),
