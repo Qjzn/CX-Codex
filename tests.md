@@ -739,6 +739,40 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
 ---
 
+### Feature: OpenAI official docs review refresh
+
+#### Prerequisites
+- Current repository includes `docs/openai-docs-review.zh-CN.md`, `docs/changelog.zh-CN.md`, and `scripts/verify-governance.ps1`.
+- Network access is available for official OpenAI documentation checks, and the Codex manual helper can refresh the local manual cache.
+
+#### Steps
+1. Run `node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs`.
+2. Open the official Codex App Server page and confirm the App Server handshake, transport, and `experimentalApi` guidance still match the review handrail.
+3. Open the official OpenAI Speech to text page and confirm the diarize transcription example still uses `gpt-4o-transcribe-diarize`, `response_format=diarized_json`, and `chunking_strategy=auto`.
+4. Open `docs/openai-docs-review.zh-CN.md` and confirm the latest review timestamp and current conclusion reflect this check.
+5. Run `git diff --check`.
+6. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+7. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- The review handbook keeps a current absolute review timestamp.
+- The current conclusion still distinguishes Codex App Server protocol alignment from supplemental OpenAI API usage.
+- The Speech to text conclusion keeps the diarize multipart constraints tied to official docs.
+- Governance and release verification continue to package and enforce `docs/openai-docs-review.zh-CN.md`.
+
+#### Rollback/Cleanup Notes
+- No runtime cleanup is required beyond normal generated output in `output/frontend-normalizer-smoke/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, restore the previous review timestamp/conclusion and remove this test section plus the changelog note.
+
+#### Regression Evidence
+- 2026-07-05 official Codex manual check: `node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` returned `local manual was already current`.
+- 2026-07-05 official docs check: official Codex App Server documentation still records `initialize`/`initialized`, WebSocket experimental/auth guidance, and `capabilities.experimentalApi`; official Speech to text documentation still records `gpt-4o-transcribe-diarize`, `diarized_json`, and `chunking_strategy=auto`.
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-05 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `Frontend normalizer smoke`, `server module smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
 ### Feature: App Server initialize capabilities schema alignment
 
 #### Prerequisites

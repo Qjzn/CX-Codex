@@ -18,6 +18,7 @@
 - 协议治理：
   - 本地 `verify:governance`、`verify:release` 和 `verify:release-artifacts` 新增 PowerShell 运行器，先探测 `pwsh`，不可用或挂起时自动回退到 Windows PowerShell，并把选中的命令传给 release gate 内部调用。
   - `verify:governance` 会校验 OpenAI 官方文档审查手册必须保留审查时间、官方来源、Codex manual 刷新命令、当前结论和语音转写约束，避免长期项目在文档入口上漂移。
+  - OpenAI 官方文档审查手册已刷新到 2026-07-05 复核结果，确认 Codex App Server handshake / `experimentalApi` 边界和 Speech to text diarize multipart 约束仍与当前实现策略一致。
   - `verify:governance` 会阻止 `tests.md` 残留未完成验证证据占位文本，避免功能已经实现但测试记录仍是待补充状态。
   - `verify:release` 会运行 frontend normalizer smoke，把前端 App Server 线程/消息归一化兼容性纳入本地发版与 CI 门禁。
   - `verify:frontend-normalizers` 每次执行会使用独立的 `output/frontend-normalizer-smoke/run-*` 临时编译目录，避免它与 release gate 内部 frontend normalizer smoke 并行运行时互相清理产物造成偶发失败。

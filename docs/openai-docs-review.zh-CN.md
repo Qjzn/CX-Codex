@@ -2,7 +2,7 @@
 
 本项目对接的是 OpenAI 官方 Codex App Server 和少量 OpenAI API 补充能力。任何协议、安全、远程访问、权限、语音转写或发布声明变更，都必须先确认官方文档入口和当前仓库基线是否一致。
 
-最近审查时间：2026-07-04 23:11 Asia/Shanghai。
+最近审查时间：2026-07-05 00:37 Asia/Shanghai。
 
 ## 官方来源清单
 
@@ -60,7 +60,7 @@ OpenAI API 补充能力相关 PR 必查：
 
 ## 当前审查结论
 
-- 2026-07-04 23:11 复核：Codex manual helper 返回 `local manual was already current`；官方 App Server 页面仍要求先 `initialize` 再 `initialized`，并把 `experimentalApi` 作为实验方法/字段的显式 opt-in。
+- 2026-07-05 00:37 复核：Codex manual helper 返回 `local manual was already current`；官方 App Server 页面仍要求先 `initialize` 再 `initialized`，并把 `experimentalApi` 作为实验方法/字段的显式 opt-in；官方 Speech to text 页面仍记录 `gpt-4o-transcribe-diarize` 使用 `diarized_json` 和 `chunking_strategy=auto`。
 - App Server 官方文档仍是协议审计的主入口；`experimentalApi` 相关能力不能被宣传为默认稳定能力。
 - Agent approvals & security 仍是 approval、sandbox、auto-review 和危险权限边界的主入口。
 - Remote connections 仍明确远程连接应通过 SSH/受控网络边界，不应把 App Server transport 直接暴露到共享或公网网络。
