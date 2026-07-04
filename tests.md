@@ -19,6 +19,40 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: App Server thread runtime snapshot reader helper
+
+#### Prerequisites
+- Current repository includes `src/server/appServerThreadRuntimeSnapshot.ts`, `src/server/codexAppServerBridge.ts`, and `scripts/server-module-smoke.ts`.
+- Dependencies are installed so TypeScript, Vite, tsup, and the server module smoke verifier can run.
+
+#### Steps
+1. Run `git diff --check`.
+2. Run `node scripts\verify-server-modules.mjs`.
+3. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+4. Run `node_modules\.bin\vite.cmd build`.
+5. Run `node_modules\.bin\tsup.cmd`.
+6. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+7. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Thread runtime snapshot reads still perform light `thread/read` first and heavy `thread/read` only when the cached read is missing or stale.
+- Fresh cached thread reads still avoid the heavy `thread/read` request.
+- Recoverable light/heavy read failures still fall back to cached thread reads and write warnings without crashing.
+- Heavy read results are still cached through `rememberCachedThreadRead`.
+- `codexAppServerBridge.ts` creates `readThreadRuntimeSnapshot` through `createAppServerThreadRuntimeSnapshotReader()` instead of owning the reader closure body.
+
+#### Rollback/Cleanup Notes
+- No runtime artifacts need cleanup beyond normal build output in `dist/`, `dist-cli/`, and `output/`.
+- To roll back, revert `src/server/appServerThreadRuntimeSnapshot.ts`, `src/server/codexAppServerBridge.ts`, `scripts/server-module-smoke.ts`, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed, including `createAppServerThreadRuntimeSnapshotReader()` coverage for light/heavy `thread/read`, heavy-read caching, token usage extraction, and snapshot persistence.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+---
+
 ### Feature: App Server runtime snapshot persister helper
 
 #### Prerequisites

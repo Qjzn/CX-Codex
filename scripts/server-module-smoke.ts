@@ -110,7 +110,10 @@ import {
   readIsoTimestampMs,
   type CachedThreadRead,
 } from '../src/server/appServerThreadReadCache.js'
-import { readAppServerThreadRuntimeSnapshot } from '../src/server/appServerThreadRuntimeSnapshot.js'
+import {
+  createAppServerThreadRuntimeSnapshotReader,
+  readAppServerThreadRuntimeSnapshot,
+} from '../src/server/appServerThreadRuntimeSnapshot.js'
 import { AppServerThreadListAugmenter } from '../src/server/appServerThreadListAugment.js'
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { AppServerPendingRpcStore } from '../src/server/appServerPendingRpcStore.js'
@@ -229,6 +232,7 @@ import {
   readThreadTokenUsageFromThreadReadPayload,
   resolveThreadTokenUsage,
   ThreadTokenUsageStore,
+  type ThreadTokenUsage,
 } from '../src/server/threadTokenUsage.js'
 import {
   mergeThreadTitleCaches,
@@ -6630,6 +6634,81 @@ async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
     'Light thread snapshot unavailable',
     'Heavy thread snapshot fell back to cached messages',
   ])
+
+  const factoryRpcCalls: unknown[] = []
+  const factoryRememberedThreadReads: unknown[] = []
+  const factoryPersistedSnapshots: ThreadRuntimeSnapshot[] = []
+  const readThreadRuntimeSnapshot = createAppServerThreadRuntimeSnapshotReader({
+    rpc: async (_method, params) => {
+      factoryRpcCalls.push(params)
+      if (readIncludeTurns(params) === true) {
+        return {
+          thread: {
+            updatedAt: updatedAtSeconds,
+            inProgress: false,
+            path: 'session-factory.jsonl',
+          },
+          tokenUsage: {
+            total: {
+              totalTokens: 9,
+              inputTokens: 4,
+              cachedInputTokens: 1,
+              outputTokens: 5,
+              reasoningOutputTokens: 0,
+            },
+            last: {
+              totalTokens: 6,
+              inputTokens: 3,
+              cachedInputTokens: 1,
+              outputTokens: 3,
+              reasoningOutputTokens: 0,
+            },
+          },
+        }
+      }
+      return {
+        thread: {
+          updatedAt: updatedAtSeconds,
+          inProgress: false,
+        },
+      }
+    },
+    observeThreadRead: () => {},
+    getCachedThreadRead: () => null,
+    rememberCachedThreadRead: (_threadId, threadRead) => {
+      factoryRememberedThreadReads.push(threadRead)
+      return createCachedThreadRead(threadRead, () => '2026-01-01T00:00:30.000Z')
+    },
+    snapshotRuntime: (threadId, overlay = {}) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'completed',
+      threadRead: overlay.threadRead ?? null,
+      messageState: overlay.messageState ?? 'unavailable',
+      pendingServerRequests: overlay.pendingServerRequests ?? [],
+      tokenUsage: overlay.tokenUsage ?? null,
+    }),
+    observeRuntimeThreadRead: () => {},
+    markRuntimeDegraded: () => {
+      throw new Error('factory reader should not mark degraded')
+    },
+    persistRuntimeSnapshot: (_threadId, snapshot) => {
+      factoryPersistedSnapshots.push(snapshot)
+      return snapshot
+    },
+    listPendingServerRequestsForThread: () => [],
+    getThreadTokenUsage: () => null,
+    getErrorMessage,
+    writeWarning: () => {
+      throw new Error('factory reader should not warn')
+    },
+  })
+  const factorySnapshot = await readThreadRuntimeSnapshot(' thread-factory ')
+  assert.deepEqual(factoryRpcCalls.map(readIncludeTurns), [false, true])
+  assert.equal(factoryRememberedThreadReads.length, 1)
+  assert.equal(factorySnapshot.threadId, 'thread-factory')
+  assert.equal(factorySnapshot.messageState, 'fresh')
+  assert.equal((factorySnapshot.tokenUsage as ThreadTokenUsage | null)?.last.totalTokens, 6)
+  assert.deepEqual(factoryPersistedSnapshots, [factorySnapshot])
 }
 
 function smokeAppServerNotificationReplay(): void {

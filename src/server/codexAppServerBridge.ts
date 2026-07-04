@@ -77,7 +77,7 @@ import { createAppServerRpcTimeoutRecoveryDecision } from './appServerRpcTimeout
 import {
   AppServerThreadReadCacheStore,
 } from './appServerThreadReadCache.js'
-import { readAppServerThreadRuntimeSnapshot } from './appServerThreadRuntimeSnapshot.js'
+import { createAppServerThreadRuntimeSnapshotReader } from './appServerThreadRuntimeSnapshot.js'
 import { createLocalRuntimeSnapshot } from './appServerRuntimeSnapshotRecovery.js'
 import {
   createRpcTimeoutError,
@@ -786,26 +786,24 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       logBridgeError('Web settings load failed', error)
     })
 
-  async function readThreadRuntimeSnapshot(threadId: string): Promise<ThreadRuntimeSnapshot> {
-    return await readAppServerThreadRuntimeSnapshot(threadId, {
-      rpc: (method, params) => appServer.rpc(method, params),
-      observeThreadRead: (details) => statusDiagnostics.observeThreadRead(details),
-      getCachedThreadRead: (normalizedThreadId) => threadReadCacheStore.get(normalizedThreadId),
-      rememberCachedThreadRead: (normalizedThreadId, threadRead) => threadReadCacheStore.remember(normalizedThreadId, threadRead),
-      snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
-      observeRuntimeThreadRead: (normalizedThreadId, inProgress, activeTurnId, updatedAtIso, source) => {
-        runtimeStateStore.observeThreadRead(normalizedThreadId, inProgress, activeTurnId, updatedAtIso, source)
-      },
-      markRuntimeDegraded: (normalizedThreadId, reason) => runtimeStateStore.markDegraded(normalizedThreadId, reason),
-      persistRuntimeSnapshot,
-      listPendingServerRequestsForThread: (normalizedThreadId) => appServer.listPendingServerRequestsForThread(normalizedThreadId),
-      getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
-      getErrorMessage,
-      writeWarning: (message, details) => {
-        writeBridgeLog('warn', message, details)
-      },
-    })
-  }
+  const readThreadRuntimeSnapshot = createAppServerThreadRuntimeSnapshotReader({
+    rpc: (method, params) => appServer.rpc(method, params),
+    observeThreadRead: (details) => statusDiagnostics.observeThreadRead(details),
+    getCachedThreadRead: (normalizedThreadId) => threadReadCacheStore.get(normalizedThreadId),
+    rememberCachedThreadRead: (normalizedThreadId, threadRead) => threadReadCacheStore.remember(normalizedThreadId, threadRead),
+    snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
+    observeRuntimeThreadRead: (normalizedThreadId, inProgress, activeTurnId, updatedAtIso, source) => {
+      runtimeStateStore.observeThreadRead(normalizedThreadId, inProgress, activeTurnId, updatedAtIso, source)
+    },
+    markRuntimeDegraded: (normalizedThreadId, reason) => runtimeStateStore.markDegraded(normalizedThreadId, reason),
+    persistRuntimeSnapshot,
+    listPendingServerRequestsForThread: (normalizedThreadId) => appServer.listPendingServerRequestsForThread(normalizedThreadId),
+    getThreadTokenUsage: (normalizedThreadId) => appServer.getThreadTokenUsage(normalizedThreadId),
+    getErrorMessage,
+    writeWarning: (message, details) => {
+      writeBridgeLog('warn', message, details)
+    },
+  })
 
   function readLocalRuntimeSnapshot(threadId: string): ThreadRuntimeSnapshot {
     return readAppServerLocalRuntimeSnapshot(threadId, {

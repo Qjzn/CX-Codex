@@ -171,6 +171,12 @@ export async function readAppServerThreadRuntimeSnapshot(
   }))
 }
 
+export function createAppServerThreadRuntimeSnapshotReader(
+  dependencies: AppServerThreadRuntimeSnapshotDependencies,
+): (threadId: string) => Promise<ThreadRuntimeSnapshot> {
+  return async (threadId) => await readAppServerThreadRuntimeSnapshot(threadId, dependencies)
+}
+
 function isRecoverableThreadReadError(error: unknown): boolean {
   return isThreadMaterializingError(error) || isRpcTimeoutError(error)
 }
