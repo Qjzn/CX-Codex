@@ -24,11 +24,13 @@
    npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn
    ```
 
-   该命令会执行治理文档检查、前端/CLI 构建、server module smoke、CLI help smoke、CLI CJS launcher smoke 和 Release package smoke。
+   该命令会执行治理文档检查、前端/CLI 构建、server module smoke、CLI help smoke、CLI CJS launcher smoke、Release package smoke 和 NPM package smoke。
    - `-SchemaAudit warn` 会生成最新 App Server schema 审计摘要；如果发现 drift，命令继续完成但必须人工审计。
    - 已准备更新 schema 基线并要求严格阻断时，改用 `-SchemaAudit strict`。
    - 快速本地预检可用 `-SchemaAudit skip`，但不能作为最终发版证据。
-   - 只验证脚本路径或排查构建问题时，可临时加 `-SkipPackageSmoke`；正式发版验证不要跳过。
+   - Release package smoke 会生成 zip 与 sha256，并检查源码包内的 README、治理文档、测试手册、GitHub 模板、workflow、前端构建产物和 CLI 入口。
+   - NPM package smoke 会执行 `npm pack --dry-run --json`，确认 npm 运行包只包含 Web/CLI 运行产物和必要文档，不携带源码、治理脚本或手工测试手册。
+   - 只验证脚本路径或排查构建问题时，可临时加 `-SkipPackageSmoke`；正式发版验证不要跳过，因为它会同时跳过 Release package smoke 和 NPM package smoke。
    - `verify:release` 的治理门禁会校验 `docs/app-server-schema-audit-summary.json` 的结构；正式发版前如果重新审计发现计数变化，必须同步更新该摘要和 `docs/app-server-protocol-matrix.zh-CN.md`。
    - GitHub Actions Release workflow 默认执行 `-SchemaAudit skip`，因为 runner 不保证安装 Codex CLI；正式发版前应在维护者机器运行 `warn` 或 `strict` 并记录摘要。
    - 本地 `npm.cmd run verify:release` 会自动选择可用的 PowerShell：优先探测 `pwsh`，不可用、失败或挂起时回退到 Windows PowerShell，并把选中的命令复用于 release gate 内部调用。
@@ -57,6 +59,12 @@
    - `cx-codex-android-<version>.apk`
    - `cx-codex-android-<version>.apk.sha256`
 
+8. 校验最终发布资产 checksum：
+
+   ```powershell
+   npm.cmd run verify:release-artifacts -- -OutputDir artifacts
+   ```
+
 ## 发布方式
 
 推送主分支和标签：
@@ -73,7 +81,8 @@ Release 工作流会自动完成：
 2. 构建项目
 3. 打包 zip 与 sha256
 4. 如果仓库配置了 Android 签名 secrets，构建并上传 APK
-5. 发布 GitHub Release
+5. 校验 zip / APK 与 `.sha256`
+6. 发布 GitHub Release
 
 ## Release 包内容
 

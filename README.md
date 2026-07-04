@@ -175,11 +175,12 @@ npx cx-codex --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
 
 语音转写可选配置：
 
-- `CX_CODEX_OPENAI_API_KEY` 或 `OPENAI_API_KEY`：配置后语音转写优先走 OpenAI 官方音频转写 API。
-- `CX_CODEX_OPENAI_TRANSCRIBE_MODEL` 或 `OPENAI_TRANSCRIBE_MODEL`：可覆盖默认转写模型，默认 `gpt-4o-transcribe`；如配置 `gpt-4o-transcribe-diarize`，服务端会按官方要求改用 `response_format=diarized_json`。
-- `CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES` 或 `OPENAI_TRANSCRIBE_MAX_BYTES`：可覆盖转写上传请求体上限，默认按官方 25MB 文件限制预留 multipart 开销。
-- 官方 API 链路会由服务端规范化 multipart `model` 和 `response_format`，避免客户端字段把 `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` / `gpt-4o-transcribe-diarize` 带到不支持的响应格式。
-- 诊断页会显示当前转写 provider、模型、上传上限和 endpoint 主机/路径，但不会显示 API key、Authorization 或 URL query。
+- `CX_CODEX_OPENAI_API_KEY`、`CODEXUI_OPENAI_API_KEY` 或 `OPENAI_API_KEY`：配置后语音转写优先走 OpenAI 官方音频转写 API。
+- `CX_CODEX_OPENAI_TRANSCRIBE_MODEL`、`CODEXUI_OPENAI_TRANSCRIBE_MODEL` 或 `OPENAI_TRANSCRIBE_MODEL`：可覆盖默认转写模型，默认 `gpt-4o-transcribe`；如配置 `gpt-4o-transcribe-diarize`，服务端会按官方要求改用 `response_format=diarized_json` 并补齐 `chunking_strategy=auto`。
+- `CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES`、`CODEXUI_OPENAI_TRANSCRIBE_MAX_BYTES` 或 `OPENAI_TRANSCRIBE_MAX_BYTES`：可覆盖转写上传请求体上限，默认按官方 25 MB 文件限制收紧为 `25000000` bytes。
+- `CX_CODEX_OPENAI_TRANSCRIBE_URL`、`CODEXUI_OPENAI_TRANSCRIBE_URL` 或 `OPENAI_TRANSCRIBE_URL`：可配置兼容 OpenAI `/v1/audio/transcriptions` 的 HTTP(S) endpoint；非法或非 HTTP(S) URL 会回退官方默认 endpoint。
+- 官方 API 链路会由服务端规范化 multipart `model`、`response_format` 和 diarize-only 的 `chunking_strategy`，避免客户端字段把 `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` / `gpt-4o-transcribe-diarize` 带到不支持的响应格式。
+- 诊断页会显示当前转写 provider、模型、上传上限、endpoint 主机/路径和 endpoint 配置/有效性布尔值，但不会显示 API key、Authorization、URL query 或原始非法 URL。
 - `CX_CODEX_JSON_BODY_MAX_BYTES` 或 `JSON_BODY_MAX_BYTES`：可覆盖普通 JSON API 请求体上限，默认 2MiB。
 - `CX_CODEX_FILE_UPLOAD_MAX_BYTES` 或 `FILE_UPLOAD_MAX_BYTES`：可覆盖普通文件上传请求体上限，默认 50MiB。
 - 未配置 API key 时，语音转写仍会回退到现有 Codex / ChatGPT 登录态代理链路。

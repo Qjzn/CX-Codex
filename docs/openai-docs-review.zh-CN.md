@@ -41,8 +41,8 @@ node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.
 OpenAI API 补充能力相关 PR 必查：
 
 - API key 只来自服务端环境变量或用户本机配置。
-- 诊断接口只展示 provider、模型、endpoint host/path、上传上限等脱敏信息。
-- Speech to text 请求体保持官方模型和响应格式约束；普通转写模型使用 `json`，`gpt-4o-transcribe-diarize` 使用 `diarized_json`。
+- 诊断接口只展示 provider、模型、生效 endpoint host/path、endpoint 配置/有效性布尔值、上传上限等脱敏信息；自定义 endpoint 只接受 `http` / `https` URL，非法配置必须回退默认官方 endpoint，不能展示原始非法 URL。
+- Speech to text 请求体保持官方模型、响应格式和上传限制约束；普通转写模型使用 `json`，`gpt-4o-transcribe-diarize` 使用 `diarized_json` 并补齐 `chunking_strategy=auto`，默认上传上限按官方 25 MB 文件限制收紧。
 - OpenAI API 不替代 Codex App Server 的线程、审批、恢复和事件协议。
 
 ## 审查流程
@@ -59,4 +59,4 @@ OpenAI API 补充能力相关 PR 必查：
 - App Server 官方文档仍是协议审计的主入口；`experimentalApi` 相关能力不能被宣传为默认稳定能力。
 - Agent approvals & security 仍是 approval、sandbox、auto-review 和危险权限边界的主入口。
 - Remote connections 仍明确远程连接应通过 SSH/受控网络边界，不应把 App Server transport 直接暴露到共享或公网网络。
-- 当前仓库已有 schema drift 记录，正式声明“完全对齐最新 App Server”前仍必须完成 schema 差异分组和兼容实现。
+- 当前仓库已有 schema drift 记录，不能直接声明已经对齐最新 App Server 协议；正式声明“完全对齐最新 App Server”前仍必须完成 schema 差异分组和兼容实现。

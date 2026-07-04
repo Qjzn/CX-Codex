@@ -268,6 +268,7 @@ import {
   getTranscriptionProxyConfigSnapshot,
   prepareOpenAiTranscribeBody,
 } from '../src/server/transcriptionProxy.js'
+import { handleTranscriptionRoute } from '../src/server/transcriptionRoute.js'
 import { setJson } from '../src/server/httpJsonResponse.js'
 import { getErrorMessage } from '../src/server/errorMessage.js'
 import {
@@ -294,6 +295,7 @@ try {
   await smokeAppServerSchemaAuditSummary()
   smokeTranscriptionProxyConfig()
   smokeTranscriptionMultipartDefaults()
+  await smokeTranscriptionRoute()
   smokeAppServerRpcResult()
   smokeAppServerPayloadIds()
   smokeAppServerThreadPayload()
@@ -682,6 +684,8 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('model/verification'), true)
   assert.equal(isKnownAppServerNotificationMethod('warning'), true)
   assert.equal(isKnownAppServerNotificationMethod('guardianWarning'), true)
+  assert.equal(isKnownAppServerNotificationMethod('item/autoApprovalReview/started'), true)
+  assert.equal(isKnownAppServerNotificationMethod('item/autoApprovalReview/completed'), true)
   assert.equal(isKnownAppServerNotificationMethod('deprecationNotice'), true)
   assert.equal(isKnownAppServerNotificationMethod('configWarning'), true)
   assert.equal(isKnownAppServerNotificationMethod('fs/changed'), true)
@@ -712,6 +716,7 @@ function smokeAppServerNotificationDiagnostics(): void {
     recentModelNotifications: [],
     recentWindowsSandboxNotifications: [],
     recentHookNotifications: [],
+    recentGuardianReviewNotifications: [],
     recentProtocolAlerts: [],
     recentRealtimeNotifications: [],
   })
@@ -860,6 +865,181 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(JSON.stringify(hookNotificationSnapshot.recentHookNotifications).includes('secret'), false)
 
   diagnostics.observe({
+    method: 'item/autoApprovalReview/started',
+    atIso: '2026-07-03T00:00:00.955Z',
+    params: {
+      threadId: 'thread-guardian',
+      turnId: 'turn-guardian',
+      startedAtMs: 1_000,
+      reviewId: 'review-a',
+      targetItemId: 'item-a',
+      review: {
+        status: 'inProgress',
+        riskLevel: 'high',
+        userAuthorization: 'medium',
+        rationale: 'secret reviewer rationale',
+      },
+      action: {
+        type: 'command',
+        source: 'shell',
+        command: 'curl https://secret.example/token',
+        cwd: 'C:\\secret\\repo',
+      },
+    },
+  })
+  diagnostics.observe({
+    method: 'item/autoApprovalReview/completed',
+    atIso: '2026-07-03T00:00:00.956Z',
+    params: {
+      threadId: 'thread-guardian',
+      turnId: 'turn-guardian',
+      startedAtMs: 1_000,
+      completedAtMs: 1_125,
+      reviewId: 'review-b',
+      targetItemId: null,
+      decisionSource: 'agent',
+      review: {
+        status: 'denied',
+        riskLevel: 'critical',
+        userAuthorization: 'low',
+        rationale: 'do not expose this rationale',
+      },
+      action: {
+        type: 'requestPermissions',
+        reason: 'secret permission reason',
+        permissions: {
+          network: { domains: ['secret.example'] },
+          fileSystem: { writableRoots: ['C:\\secret\\repo'] },
+        },
+      },
+    },
+  })
+  diagnostics.observe({
+    method: 'item/autoApprovalReview/completed',
+    atIso: '2026-07-03T00:00:00.957Z',
+    params: {
+      threadId: 'thread-guardian',
+      turnId: 'turn-guardian',
+      startedAtMs: 1_200,
+      completedAtMs: 1_260,
+      reviewId: 'review-c',
+      targetItemId: null,
+      decisionSource: 'agent',
+      review: {
+        status: 'approved',
+        riskLevel: 'medium',
+        userAuthorization: 'high',
+        rationale: 'secret network rationale',
+      },
+      action: {
+        type: 'networkAccess',
+        target: 'https://api.secret.example/v1/audio',
+        host: 'api.secret.example',
+        protocol: 'https',
+        port: 443,
+      },
+    },
+  })
+  diagnostics.observe({
+    method: 'item/autoApprovalReview/completed',
+    atIso: '2026-07-03T00:00:00.958Z',
+    params: {
+      threadId: 'thread-guardian',
+      turnId: 'turn-guardian',
+      startedAtMs: 1_300,
+      completedAtMs: 1_340,
+      reviewId: 'review-d',
+      targetItemId: 'item-patch',
+      decisionSource: 'agent',
+      review: {
+        status: 'approved',
+        riskLevel: 'medium',
+        userAuthorization: 'high',
+        rationale: 'secret patch rationale',
+      },
+      action: {
+        type: 'applyPatch',
+        cwd: 'C:\\secret\\repo',
+        files: ['C:\\secret\\repo\\src\\secret.ts', 'C:\\secret\\repo\\README.md'],
+      },
+    },
+  })
+  const guardianSnapshot = diagnostics.snapshot()
+  assert.equal(guardianSnapshot.unknownNotificationCount, 0)
+  assert.deepEqual(guardianSnapshot.recentGuardianReviewNotifications.map((item) => item.method), [
+    'item/autoApprovalReview/completed',
+    'item/autoApprovalReview/completed',
+    'item/autoApprovalReview/completed',
+    'item/autoApprovalReview/started',
+  ])
+  assert.deepEqual(guardianSnapshot.recentGuardianReviewNotifications[0], {
+    method: 'item/autoApprovalReview/completed',
+    atIso: '2026-07-03T00:00:00.958Z',
+    threadId: 'thread-guardian',
+    turnId: 'turn-guardian',
+    reviewId: 'review-d',
+    targetItemId: 'item-patch',
+    status: 'approved',
+    riskLevel: 'medium',
+    userAuthorization: 'high',
+    actionType: 'applyPatch',
+    decisionSource: 'agent',
+    durationMs: 40,
+    hasRationale: true,
+    actionArgCount: 0,
+    actionFileCount: 2,
+    permissionNetworkRequested: false,
+    permissionFileSystemRequested: true,
+  })
+  assert.deepEqual(guardianSnapshot.recentGuardianReviewNotifications[1], {
+    method: 'item/autoApprovalReview/completed',
+    atIso: '2026-07-03T00:00:00.957Z',
+    threadId: 'thread-guardian',
+    turnId: 'turn-guardian',
+    reviewId: 'review-c',
+    targetItemId: '',
+    status: 'approved',
+    riskLevel: 'medium',
+    userAuthorization: 'high',
+    actionType: 'networkAccess',
+    decisionSource: 'agent',
+    durationMs: 60,
+    hasRationale: true,
+    actionArgCount: 0,
+    actionFileCount: 0,
+    permissionNetworkRequested: true,
+    permissionFileSystemRequested: false,
+  })
+  assert.deepEqual(guardianSnapshot.recentGuardianReviewNotifications[2], {
+    method: 'item/autoApprovalReview/completed',
+    atIso: '2026-07-03T00:00:00.956Z',
+    threadId: 'thread-guardian',
+    turnId: 'turn-guardian',
+    reviewId: 'review-b',
+    targetItemId: '',
+    status: 'denied',
+    riskLevel: 'critical',
+    userAuthorization: 'low',
+    actionType: 'requestPermissions',
+    decisionSource: 'agent',
+    durationMs: 125,
+    hasRationale: true,
+    actionArgCount: 0,
+    actionFileCount: 0,
+    permissionNetworkRequested: true,
+    permissionFileSystemRequested: true,
+  })
+  assert.equal(guardianSnapshot.recentGuardianReviewNotifications[3]?.actionType, 'command')
+  assert.equal(guardianSnapshot.recentGuardianReviewNotifications[3]?.hasRationale, true)
+  const serializedGuardianSnapshot = JSON.stringify(guardianSnapshot.recentGuardianReviewNotifications)
+  assert.equal(serializedGuardianSnapshot.includes('secret'), false)
+  assert.equal(serializedGuardianSnapshot.includes('curl'), false)
+  assert.equal(serializedGuardianSnapshot.includes('C:\\'), false)
+  assert.equal(serializedGuardianSnapshot.includes('api.secret.example'), false)
+  assert.equal(serializedGuardianSnapshot.includes('/v1/audio'), false)
+  assert.equal(serializedGuardianSnapshot.includes('rationale'), false)
+
+  diagnostics.observe({
     method: 'warning',
     atIso: '2026-07-03T00:00:00.960Z',
     params: {
@@ -999,6 +1179,7 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(diagnostics.snapshot().recentModelNotifications.length, 0)
   assert.equal(diagnostics.snapshot().recentWindowsSandboxNotifications.length, 0)
   assert.equal(diagnostics.snapshot().recentHookNotifications.length, 0)
+  assert.equal(diagnostics.snapshot().recentGuardianReviewNotifications.length, 0)
   assert.equal(diagnostics.snapshot().recentProtocolAlerts.length, 0)
   assert.equal(diagnostics.snapshot().recentRealtimeNotifications.length, 0)
 }
@@ -1634,16 +1815,18 @@ function smokeTranscriptionProxyConfig(): void {
     assert.equal(getOpenAiTranscribeApiKey(), '')
     assert.equal(getOpenAiTranscribeModel(), 'gpt-4o-transcribe')
     assert.equal(getOpenAiTranscribeResponseFormat(), 'json')
-    assert.equal(getTranscribeRequestBodyLimitBytes(), 26 * 1024 * 1024)
+    assert.equal(getTranscribeRequestBodyLimitBytes(), 25_000_000)
     assert.deepEqual(getTranscriptionProxyConfigSnapshot(), {
       provider: 'chatgpt',
       officialApiConfigured: false,
       model: 'gpt-4o-transcribe',
       responseFormat: 'json',
-      requestBodyLimitBytes: 26 * 1024 * 1024,
-      requestBodyLimitMiB: 26,
+      requestBodyLimitBytes: 25_000_000,
+      requestBodyLimitMiB: 23.8,
       endpoint: {
         isDefault: true,
+        configured: false,
+        valid: true,
         host: 'api.openai.com',
         path: '/v1/audio/transcriptions',
       },
@@ -1672,6 +1855,8 @@ function smokeTranscriptionProxyConfig(): void {
       requestBodyLimitMiB: 0,
       endpoint: {
         isDefault: false,
+        configured: true,
+        valid: true,
         host: 'audio.example.test',
         path: '/v1/audio/transcriptions',
       },
@@ -1699,13 +1884,38 @@ function smokeTranscriptionProxyConfig(): void {
       officialApiConfigured: true,
       model: 'gpt-4o-transcribe-diarize',
       responseFormat: 'diarized_json',
-      requestBodyLimitBytes: 26 * 1024 * 1024,
-      requestBodyLimitMiB: 26,
+      requestBodyLimitBytes: 25_000_000,
+      requestBodyLimitMiB: 23.8,
       endpoint: {
         isDefault: true,
+        configured: false,
+        valid: true,
         host: 'api.openai.com',
         path: '/v1/audio/transcriptions',
       },
+    })
+  })
+
+  withTranscriptionEnv({
+    OPENAI_API_KEY: undefined,
+    OPENAI_TRANSCRIBE_MODEL: undefined,
+    OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+    OPENAI_TRANSCRIBE_URL: undefined,
+    CX_CODEX_OPENAI_API_KEY: 'sk-prefixed',
+    CX_CODEX_OPENAI_TRANSCRIBE_MODEL: undefined,
+    CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+    CX_CODEX_OPENAI_TRANSCRIBE_URL: 'file:///tmp/audio',
+    CODEXUI_OPENAI_API_KEY: undefined,
+    CODEXUI_OPENAI_TRANSCRIBE_MODEL: undefined,
+    CODEXUI_OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+    CODEXUI_OPENAI_TRANSCRIBE_URL: undefined,
+  }, () => {
+    assert.deepEqual(getTranscriptionProxyConfigSnapshot().endpoint, {
+      isDefault: true,
+      configured: true,
+      valid: false,
+      host: 'api.openai.com',
+      path: '/v1/audio/transcriptions',
     })
   })
 }
@@ -1723,6 +1933,9 @@ function smokeTranscriptionMultipartDefaults(): void {
       `--${boundary}\r\n` +
       'Content-Disposition: form-data; name="response_format"\r\n\r\n' +
       'text\r\n' +
+      `--${boundary}\r\n` +
+      'Content-Disposition: form-data; name="chunking_strategy"\r\n\r\n' +
+      'manual\r\n' +
       `--${boundary}--\r\n`,
   )
 
@@ -1739,6 +1952,7 @@ function smokeTranscriptionMultipartDefaults(): void {
     assert.match(prepared, /RIFF_AUDIO_PAYLOAD/)
     assert.match(prepared, /name="model"\r\n\r\ngpt-4o-mini-transcribe\r\n/)
     assert.match(prepared, /name="response_format"\r\n\r\njson\r\n/)
+    assert.doesNotMatch(prepared, /name="chunking_strategy"/)
     assert.doesNotMatch(prepared, /name="model"\r\n\r\nwhisper-1\r\n/)
     assert.doesNotMatch(prepared, /name="response_format"\r\n\r\ntext\r\n/)
   })
@@ -1754,9 +1968,58 @@ function smokeTranscriptionMultipartDefaults(): void {
     ).toString('utf8')
     assert.match(prepared, /name="model"\r\n\r\ngpt-4o-transcribe-diarize\r\n/)
     assert.match(prepared, /name="response_format"\r\n\r\ndiarized_json\r\n/)
+    assert.match(prepared, /name="chunking_strategy"\r\n\r\nauto\r\n/)
     assert.doesNotMatch(prepared, /name="response_format"\r\n\r\njson\r\n/)
     assert.doesNotMatch(prepared, /name="response_format"\r\n\r\ntext\r\n/)
+    assert.doesNotMatch(prepared, /name="chunking_strategy"\r\n\r\nmanual\r\n/)
   })
+}
+
+async function smokeTranscriptionRoute(): Promise<void> {
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-transcription-route-'))
+  const previousCodexHome = process.env.CODEX_HOME
+  try {
+    process.env.CODEX_HOME = tempDir
+    await withTranscriptionEnvAsync({
+      OPENAI_API_KEY: undefined,
+      OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+      CX_CODEX_OPENAI_API_KEY: undefined,
+      CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+      CODEXUI_OPENAI_API_KEY: undefined,
+      CODEXUI_OPENAI_TRANSCRIBE_MAX_BYTES: undefined,
+    }, async () => {
+      const missingAuth = createTranscriptionRouteTestResponse()
+      await handleTranscriptionRoute(
+        createTranscriptionRouteTestRequest(Buffer.from('audio'), 'audio/wav'),
+        missingAuth.response as never,
+      )
+      assert.equal(missingAuth.response.statusCode, 401)
+      assert.equal(missingAuth.headers.get('Content-Type'), 'application/json; charset=utf-8')
+      assert.deepEqual(JSON.parse(missingAuth.body), { error: 'No auth token available for transcription' })
+    })
+
+    await withTranscriptionEnvAsync({
+      OPENAI_API_KEY: undefined,
+      CX_CODEX_OPENAI_API_KEY: undefined,
+      CODEXUI_OPENAI_API_KEY: undefined,
+      CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES: '3',
+    }, async () => {
+      const tooLarge = createTranscriptionRouteTestResponse()
+      await handleTranscriptionRoute(
+        createTranscriptionRouteTestRequest(Buffer.from('too-large'), 'audio/wav'),
+        tooLarge.response as never,
+      )
+      assert.equal(tooLarge.response.statusCode, 413)
+      assert.match(tooLarge.body, /Maximum request size is 3 bytes/u)
+    })
+  } finally {
+    if (typeof previousCodexHome === 'string') {
+      process.env.CODEX_HOME = previousCodexHome
+    } else {
+      delete process.env.CODEX_HOME
+    }
+    await rm(tempDir, { recursive: true, force: true })
+  }
 }
 
 async function smokeAppServerRpcCache(): Promise<void> {
@@ -3609,6 +3872,63 @@ function withTranscriptionEnv(
         process.env[key] = value
       }
     }
+  }
+}
+
+async function withTranscriptionEnvAsync(
+  values: Record<string, string | undefined>,
+  callback: () => Promise<void>,
+): Promise<void> {
+  const previous = new Map<string, string | undefined>()
+  for (const key of Object.keys(values)) {
+    previous.set(key, process.env[key])
+    const value = values[key]
+    if (value === undefined) {
+      delete process.env[key]
+    } else {
+      process.env[key] = value
+    }
+  }
+  try {
+    await callback()
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = value
+      }
+    }
+  }
+}
+
+function createTranscriptionRouteTestRequest(body: Buffer, contentType: string) {
+  return Object.assign(Readable.from([body]), {
+    headers: {
+      'content-type': contentType,
+    },
+  }) as never
+}
+
+function createTranscriptionRouteTestResponse() {
+  const headers = new Map<string, string | number | readonly string[]>()
+  let endedBody = ''
+  const response = {
+    statusCode: 0,
+    setHeader(name: string, value: string | number | readonly string[]) {
+      headers.set(name, value)
+    },
+    end(value?: string | Buffer) {
+      endedBody = Buffer.isBuffer(value) ? value.toString('utf8') : value ?? ''
+    },
+  }
+
+  return {
+    response,
+    headers,
+    get body() {
+      return endedBody
+    },
   }
 }
 

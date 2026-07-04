@@ -3,11 +3,13 @@
 ## 未发布
 
 - 语音输入：
-  - 后端转写支持优先使用 OpenAI 官方音频转写 API，配置 `CX_CODEX_OPENAI_API_KEY` 或 `OPENAI_API_KEY` 后不再依赖 ChatGPT 网页登录态。
-  - 官方转写 multipart 会由服务端规范化 `model` 和 `response_format`，普通转写模型保持 `json`，`gpt-4o-transcribe-diarize` 按官方文档使用 `diarized_json`，避免客户端自带字段绕过官方模型的响应格式约束。
+  - 后端转写支持优先使用 OpenAI 官方音频转写 API，配置 `CX_CODEX_OPENAI_API_KEY`、`CODEXUI_OPENAI_API_KEY` 或 `OPENAI_API_KEY` 后不再依赖 ChatGPT 网页登录态。
+  - 官方转写 multipart 会由服务端规范化 `model`、`response_format` 和 diarize 分段参数，普通转写模型保持 `json`，`gpt-4o-transcribe-diarize` 按官方文档使用 `diarized_json` 与 `chunking_strategy=auto`，避免客户端自带字段绕过官方模型的响应格式约束。
   - 前端语音输入支持从 diarized JSON 的 `segments[].text` 兜底提取文本，避免上游没有顶层 `text` 字段时空转写。
-  - 转写上传请求体新增默认 26MiB 服务端保护，可通过 `CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES` 或 `OPENAI_TRANSCRIBE_MAX_BYTES` 覆盖。
+  - 转写上传请求体默认按 OpenAI 官方 25 MB 文件限制收紧服务端保护，可通过 `CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES` 或 `OPENAI_TRANSCRIBE_MAX_BYTES` 覆盖。
   - 诊断中心新增语音转写状态，展示当前 provider、模型、响应格式、上传上限和脱敏 endpoint，便于排查是否走官方 API 或登录态回退。
+  - 自定义 OpenAI 转写 endpoint 仅接受 `http` / `https` URL；非法或非 HTTP(S) 配置会回退官方默认 endpoint，并在诊断快照中用布尔字段标识，不展示原始非法 URL。
+  - `/codex-api/transcribe` 路由从 bridge 主文件抽离为独立服务端模块，官方 API 与 ChatGPT 登录态回退行为保持不变，并新增无网络 route smoke 覆盖 401 与 413 分支。
   - 未配置 OpenAI API key 时仍保留原有 ChatGPT 登录态代理转写链路，避免破坏既有安装。
 - 安全加固：
   - `/auth/login` 登录请求体新增默认 16KiB 服务端保护，可通过 `CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES`、`CODEXUI_AUTH_LOGIN_BODY_MAX_BYTES` 或 `AUTH_LOGIN_BODY_MAX_BYTES` 覆盖。
@@ -15,6 +17,14 @@
   - 普通文件上传请求体新增默认 50MiB 服务端保护，可通过 `CX_CODEX_FILE_UPLOAD_MAX_BYTES` 或 `FILE_UPLOAD_MAX_BYTES` 覆盖。
 - 协议治理：
   - 本地 `verify:governance`、`verify:release` 和 `verify:release-artifacts` 新增 PowerShell 运行器，先探测 `pwsh`，不可用或挂起时自动回退到 Windows PowerShell，并把选中的命令传给 release gate 内部调用。
+  - `verify:governance` 会校验 OpenAI 官方文档审查手册必须保留审查时间、官方来源、Codex manual 刷新命令、当前结论和语音转写约束，避免长期项目在文档入口上漂移。
+  - `verify:governance` 会阻止 `tests.md` 残留未完成验证证据占位文本，避免功能已经实现但测试记录仍是待补充状态。
+  - Release package smoke 会强制校验测试手册、治理脚本、关键治理文档和 bridge/转写路由源码边界已进入 zip，避免可发布包缺少开源复核、手工验收入口或新抽出的服务端模块。
+  - Release gate 新增 `npm pack --dry-run --json` smoke，校验 npm 发布包包含 Web/CLI 运行产物和 schema 摘要，同时不携带源码、治理脚本或手工测试手册。
+  - GitHub Release 正文改为版本中性模板，并由 governance 阻止固定旧版本号或过期卖点残留，避免新 tag 继续发布旧版说明。
+  - `RELEASE.md` 发版手册补齐 NPM package smoke、Release package smoke 覆盖范围和最终 artifact checksum 验证步骤，避免本地发版流程与自动门禁漂移。
+  - `verify:release` 的 Release package smoke 会复用 `verify-release-artifacts.ps1` 校验生成的 zip 与 `.sha256`，确保本地 gate 和 GitHub Release workflow 使用同一套资产校验逻辑。
+  - Release package smoke 每次执行前会通过专用 helper 确认输出路径仍位于仓库 `output` 目录下，再清理固定的 `output/release-package-smoke` 目录，避免旧 zip/APK 残留污染 artifact checksum 验证，并降低后续维护时绕过路径护栏的风险。
   - 本地 `package:release`、`setup:windows`、`test:7420*` 和 `audit:app-server-schemas` 也统一走同一个 PowerShell 运行器，减少 Windows 机器上因单一 PowerShell 命令挂起或不可用导致的验证/打包中断。
   - 新增 `docs/app-server-schema-audit-summary.json`，把最新 App Server schema drift 摘要从本地临时输出收口为可审查文档。
   - 新增 `audit:app-server-schemas:update-summary`，可把最新 raw schema audit 转成脱敏、可提交的 `docs/app-server-schema-audit-summary.json`，避免把本机绝对路径或完整生成目录带入仓库。
@@ -26,6 +36,7 @@
   - App Server `windows/worldWritableWarning` 与 `windowsSandbox/setupCompleted` 通知会进入脱敏 Windows sandbox 诊断快照，并在诊断中心只读展示，不会暴露具体本机路径或自动触发 sandbox setup。
   - App Server `windowsSandbox/readiness` 会通过 TTL 缓存进入 health、diagnostics 和诊断中心 Windows 安全卡片，只读展示 ready、notConfigured 或 updateRequired，仍不会自动触发 setup/start。
   - App Server `hooks/list`、`hook/started` 与 `hook/completed` 会进入脱敏 Hooks 诊断快照和诊断中心 Hooks 卡片，只展示事件、来源、trust、启用状态和运行摘要，不暴露 hook 命令、sourcePath 或 hash，也不执行编辑/trust 操作。
+  - App Server `item/autoApprovalReview/started` 与 `item/autoApprovalReview/completed` 会进入脱敏 Auto-review 诊断快照和诊断中心 Auto-review 卡片，只展示 review/status/risk/action 类型、耗时、文件数量和 network/file-system 脱敏权限请求标记，不暴露 command、cwd、network target、文件路径、权限 reason 或 rationale，也不改变现有审批策略。
   - App Server `warning`、`guardianWarning`、`deprecationNotice`、`configWarning`、`fs/changed` 和 `externalAgentConfig/import/completed` 会进入脱敏协议告警诊断快照，只展示摘要、路径存在标记和 changed path 数量，不暴露本机路径，也不开放 App Server fs 或外部 agent import 操作。
   - App Server `thread/realtime/*` 实验通知会进入脱敏 Realtime 诊断快照和诊断中心 Realtime 卡片，只展示 method、标识、字节数和错误摘要，不暴露 transcript、audio 或 SDP 内容，也不把 realtime 当作稳定功能入口。
   - 诊断中心新增 schema audit 摘要卡片，展示审计状态、生成时间、官方文档入口和 TypeScript/JSON schema 差异计数。

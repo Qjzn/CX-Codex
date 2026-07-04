@@ -320,6 +320,25 @@
 
       <section class="diagnostics-section">
         <div class="diagnostics-section-header">
+          <h2>Auto-review</h2>
+          <span class="diagnostics-badge" :data-tone="guardianReviewDiagnosticsTone">
+            {{ recentGuardianReviewNotifications.length }}
+          </span>
+        </div>
+        <div v-if="recentGuardianReviewNotifications.length === 0" class="diagnostics-empty">
+          暂无自动审批复核通知。
+        </div>
+        <ul v-else class="diagnostics-list">
+          <li v-for="notification in recentGuardianReviewNotifications" :key="`${notification.method}-${notification.atIso}-${notification.reviewId}`">
+            <span>{{ formatGuardianReviewNotification(notification) }}</span>
+            <strong>{{ notification.riskLevel || notification.status || '-' }}</strong>
+            <small>{{ formatAge(notification.atIso) }}</small>
+          </li>
+        </ul>
+      </section>
+
+      <section class="diagnostics-section">
+        <div class="diagnostics-section-header">
           <h2>协议告警</h2>
           <span class="diagnostics-badge" :data-tone="protocolAlerts.length > 0 ? 'warning' : 'ok'">
             {{ protocolAlerts.length }}
@@ -518,6 +537,26 @@ type HookNotificationDiagnostics = {
   outputEntryCount: number
 }
 
+type GuardianReviewNotificationDiagnostics = {
+  method: 'item/autoApprovalReview/started' | 'item/autoApprovalReview/completed'
+  atIso: string
+  threadId: string
+  turnId: string
+  reviewId: string
+  targetItemId: string
+  status: string
+  riskLevel: string
+  userAuthorization: string
+  actionType: string
+  decisionSource: string
+  durationMs: number | null
+  hasRationale: boolean
+  actionArgCount: number
+  actionFileCount: number
+  permissionNetworkRequested: boolean
+  permissionFileSystemRequested: boolean
+}
+
 type HookSummaryDiagnostics = {
   eventName: string
   handlerType: string
@@ -605,6 +644,8 @@ type TranscriptionDiagnostics = {
   requestBodyLimitMiB: number
   endpoint: {
     isDefault: boolean
+    configured: boolean
+    valid: boolean
     host: string
     path: string
   }
@@ -647,6 +688,7 @@ type DiagnosticsData = {
     recentModelNotifications?: ModelNotificationDiagnostics[]
     recentWindowsSandboxNotifications?: WindowsSandboxNotificationDiagnostics[]
     recentHookNotifications?: HookNotificationDiagnostics[]
+    recentGuardianReviewNotifications?: GuardianReviewNotificationDiagnostics[]
     recentProtocolAlerts?: ProtocolAlertDiagnostics[]
     recentRealtimeNotifications?: RealtimeNotificationDiagnostics[]
   }
@@ -698,10 +740,12 @@ const emptyTranscription: TranscriptionDiagnostics = {
   officialApiConfigured: false,
   model: 'gpt-4o-transcribe',
   responseFormat: 'json',
-  requestBodyLimitBytes: 26 * 1024 * 1024,
-  requestBodyLimitMiB: 26,
+  requestBodyLimitBytes: 25_000_000,
+  requestBodyLimitMiB: 23.8,
   endpoint: {
     isDefault: true,
+    configured: false,
+    valid: true,
     host: 'api.openai.com',
     path: '/v1/audio/transcriptions',
   },
@@ -790,6 +834,9 @@ const recentWindowsSandboxNotifications = computed(() => (
   diagnostics.value?.notificationDiagnostics?.recentWindowsSandboxNotifications ?? []
 ))
 const recentHookNotifications = computed(() => diagnostics.value?.notificationDiagnostics?.recentHookNotifications ?? [])
+const recentGuardianReviewNotifications = computed(() => (
+  diagnostics.value?.notificationDiagnostics?.recentGuardianReviewNotifications ?? []
+))
 const protocolAlerts = computed(() => diagnostics.value?.notificationDiagnostics?.recentProtocolAlerts ?? [])
 const recentRealtimeNotifications = computed(() => (
   diagnostics.value?.notificationDiagnostics?.recentRealtimeNotifications ?? []
@@ -830,6 +877,7 @@ const overallTone = computed<Tone>(() => {
     appServerTone.value === 'warning'
     || runtimeTone.value === 'warning'
     || hookDiagnosticsTone.value === 'warning'
+    || guardianReviewDiagnosticsTone.value === 'warning'
     || protocolAlerts.value.length > 0
     || realtimeDiagnosticsTone.value === 'warning'
     || schemaAuditTone.value === 'warning'
@@ -867,7 +915,9 @@ const transcriptionLabel = computed(() => (
 
 const transcriptionEndpointLabel = computed(() => {
   const endpoint = transcription.value.endpoint
-  const marker = endpoint.isDefault ? '默认' : '自定义'
+  const marker = endpoint.valid
+    ? endpoint.isDefault ? '默认' : '自定义'
+    : '自定义无效，已回退'
   return `${marker} ${endpoint.host}${endpoint.path}`
 })
 
@@ -895,6 +945,17 @@ const hookDiagnosticsLabel = computed(() => {
   if (hookDiagnostics.value.hookCount === 0) return '无配置'
   return '已记录'
 })
+
+const guardianReviewDiagnosticsTone = computed<Tone>(() => (
+  recentGuardianReviewNotifications.value.some((notification) => (
+    notification.status === 'denied'
+    || notification.status === 'timedOut'
+    || notification.riskLevel === 'high'
+    || notification.riskLevel === 'critical'
+  ))
+    ? 'warning'
+    : 'neutral'
+))
 
 const realtimeDiagnosticsTone = computed<Tone>(() => (
   recentRealtimeNotifications.value.some((notification) => notification.method === 'thread/realtime/error')
@@ -1024,6 +1085,17 @@ function formatHookSummary(hook: HookSummaryDiagnostics): string {
   const managed = hook.isManaged ? ' / managed' : ''
   const matcher = hook.hasMatcher ? ' / matcher' : ''
   return `${hook.eventName} ${hook.handlerType} / ${source}${managed}${matcher}`
+}
+
+function formatGuardianReviewNotification(notification: GuardianReviewNotificationDiagnostics): string {
+  const phase = notification.method === 'item/autoApprovalReview/completed' ? 'completed' : 'started'
+  const action = notification.actionType || 'action'
+  const duration = notification.durationMs === null ? '' : ` / ${notification.durationMs}ms`
+  const source = notification.decisionSource ? ` / ${notification.decisionSource}` : ''
+  const permission = notification.permissionNetworkRequested || notification.permissionFileSystemRequested
+    ? ' / permission'
+    : ''
+  return `${phase} ${action}${permission}${source}${duration}`
 }
 
 function formatProtocolAlert(alert: ProtocolAlertDiagnostics): string {

@@ -34,6 +34,21 @@ function Assert-ContentIncludes {
   }
 }
 
+function Assert-ContentExcludes {
+  param(
+    [string]$RelativePath,
+    [string[]]$Needles
+  )
+
+  $path = Resolve-RepoPath $RelativePath
+  $content = Get-Content -Raw -Encoding UTF8 -LiteralPath $path
+  foreach ($needle in $Needles) {
+    if ($content.Contains($needle)) {
+      throw "$RelativePath contains unfinished placeholder text: $needle"
+    }
+  }
+}
+
 function Assert-IssueTemplate {
   param([string]$RelativePath)
 
@@ -139,6 +154,19 @@ foreach ($file in $requiredFiles) {
   Assert-FileExists $file
 }
 
+Assert-ContentExcludes "tests.md" @(
+  "待本轮验证后补充",
+  "待验证后补充",
+  "待补充验证"
+)
+
+Assert-ContentExcludes ".github/release-body.md" @(
+  "2.2.7",
+  "2.2.4",
+  "这版适合谁升级",
+  "本次版本重点"
+)
+
 $issueTemplates = @(
   ".github/ISSUE_TEMPLATE/bug_report.yml",
   ".github/ISSUE_TEMPLATE/feature_request.yml",
@@ -179,17 +207,29 @@ Assert-ContentIncludes "CONTRIBUTING.md" @(
 )
 
 Assert-ContentIncludes "docs/openai-docs-review.zh-CN.md" @(
+  "最近审查时间：",
+  "node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs",
+  "## 官方来源清单",
+  "## 当前审查结论",
   "https://developers.openai.com/codex/app-server",
   "https://developers.openai.com/codex/agent-approvals-security",
   "https://developers.openai.com/codex/remote-connections",
+  "https://developers.openai.com/codex/open-source",
+  "https://developers.openai.com/codex/enterprise/access-tokens",
   "https://developers.openai.com/api/docs/guides/speech-to-text",
   "experimentalApi",
   "npm.cmd run audit:app-server-schemas",
   "docs/app-server-schema-audit-summary.json",
   "docs/app-server-protocol-matrix.zh-CN.md",
   "App Server transport",
+  "auto-review",
+  "不能被宣传为默认稳定能力",
+  "不能展示原始非法 URL",
+  "不能直接声明已经对齐最新 App Server 协议",
   "gpt-4o-transcribe-diarize",
-  "diarized_json"
+  "diarized_json",
+  "chunking_strategy=auto",
+  "25 MB"
 )
 
 Assert-ContentIncludes "docs/dependency-maintenance.zh-CN.md" @(
@@ -207,7 +247,17 @@ Assert-ContentIncludes "README.md" @(
   "CX_CODEX_APP_SERVER_SANDBOX_MODE",
   "CODEXUI_APP_SERVER_SANDBOX_MODE",
   "CX_CODEX_APP_SERVER_APPROVAL_POLICY=on-request",
-  "CX_CODEX_APP_SERVER_SANDBOX_MODE=workspace-write"
+  "CX_CODEX_APP_SERVER_SANDBOX_MODE=workspace-write",
+  "CODEXUI_OPENAI_API_KEY",
+  "CODEXUI_OPENAI_TRANSCRIBE_MODEL",
+  "CODEXUI_OPENAI_TRANSCRIBE_MAX_BYTES",
+  "CX_CODEX_OPENAI_TRANSCRIBE_URL",
+  "CODEXUI_OPENAI_TRANSCRIBE_URL",
+  "OPENAI_TRANSCRIBE_URL",
+  "chunking_strategy=auto",
+  "25000000",
+  "endpoint 配置/有效性布尔值",
+  "原始非法 URL"
 )
 
 Assert-ContentIncludes "SECURITY.md" @(
@@ -222,6 +272,10 @@ Assert-ContentIncludes "RELEASE.md" @(
   "SchemaAudit warn",
   "CLI CJS launcher smoke",
   "Release package smoke",
+  "NPM package smoke",
+  "npm pack --dry-run --json",
+  "verify:release-artifacts",
+  'zip / APK 与 `.sha256`',
   "docs/security-hardening.zh-CN.md",
   "docs/release-template.zh-CN.md"
 )
@@ -233,14 +287,44 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "spawnSync(process.execPath",
   "Release package smoke",
   "release package smoke ok",
+  "Resolve-ReleasePackageSmokeDir",
+  "Join-Path `$repoRoot `"output`"",
+  "release-package-smoke",
+  "GetFullPath",
+  "StartsWith(`$outputPrefix",
+  "Release package smoke output escaped repository output directory",
+  "Remove-Item -LiteralPath `$packageSmokeDir -Recurse -Force",
+  "Release artifact checksum smoke",
+  "Release artifact checksum smoke skipped",
   "Assert-ChecksumMatches",
   "checksum hash does not match zip",
   "Assert-ZipContains",
+  "NPM package smoke",
+  "npm package smoke ok",
+  "Assert-NpmPackDryRun",
+  "npm pack dry-run",
   "docs\app-server-protocol-matrix.zh-CN.md",
+  "docs\changelog.zh-CN.md",
   "docs\dependency-maintenance.zh-CN.md",
   "docs\openai-docs-review.zh-CN.md",
+  "docs\operations-plan.zh-CN.md",
   "docs\protocol-compatibility.zh-CN.md",
-  "docs\security-hardening.zh-CN.md"
+  "docs\roadmap.zh-CN.md",
+  "docs\security-hardening.zh-CN.md",
+  "scripts\package-release.ps1",
+  "scripts\verify-governance.ps1",
+  "scripts\verify-release.ps1",
+  "tests.md",
+  "dist\index.html",
+  "dist-cli\index.js",
+  "src\server\codexAppServerBridge.ts",
+  "src\server\transcriptionRoute.ts"
+)
+
+Assert-ContentIncludes "scripts/verify-governance.ps1" @(
+  "Assert-ContentExcludes `"tests.md`"",
+  "unfinished placeholder text",
+  "待本轮验证后补充"
 )
 
 Assert-ContentIncludes "scripts/verify-release-artifacts.ps1" @(
@@ -288,7 +372,8 @@ Assert-ContentIncludes "scripts/package-release.ps1" @(
   "CODE_OF_CONDUCT.md",
   "CONTRIBUTING.md",
   "SECURITY.md",
-  "SUPPORT.md"
+  "SUPPORT.md",
+  "tests.md"
 )
 
 Assert-ContentIncludes ".github/dependabot.yml" @(
@@ -304,6 +389,21 @@ Assert-ContentIncludes ".github/PULL_REQUEST_TEMPLATE.md" @(
   "npm run verify:release",
   "docs/security-hardening.zh-CN.md",
   "隐私与安全"
+)
+
+Assert-ContentIncludes ".github/release-body.md" @(
+  "CX-Codex Release",
+  "docs/changelog.zh-CN.md",
+  "docs/security-hardening.zh-CN.md",
+  "docs/openai-docs-review.zh-CN.md",
+  "docs/app-server-protocol-matrix.zh-CN.md",
+  "CX-Codex-<tag>.zip",
+  "cx-codex-android-<tag>.apk",
+  "cx-codex-android-debug-<tag>.apk",
+  "./scripts/verify-release.ps1 -RequireCleanGit -SchemaAudit skip",
+  "./scripts/verify-release-artifacts.ps1",
+  "npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn",
+  "must not include private accounts"
 )
 
 Assert-ContentIncludes ".github/ISSUE_TEMPLATE/protocol_compatibility.yml" @(
@@ -331,7 +431,25 @@ Assert-ContentIncludes "docs/security-hardening.zh-CN.md" @(
 Assert-ContentIncludes "docs/changelog.zh-CN.md" @(
   "appServerLaunch.ts",
   "legacy high-trust approval/sandbox 策略",
+  "CODEXUI_OPENAI_API_KEY",
+  "chunking_strategy=auto",
+  "25 MB",
+  "原始非法 URL",
+  "item/autoApprovalReview/started",
+  "脱敏权限请求标记",
   "脱敏后的有效策略快照"
+)
+
+Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
+  "item/autoApprovalReview/started",
+  "item/autoApprovalReview/completed",
+  "networkAccess",
+  "applyPatch",
+  "permissionNetworkRequested: true",
+  "permissionFileSystemRequested: true",
+  "actionFileCount: 2",
+  "api.secret.example",
+  "serializedGuardianSnapshot.includes('api.secret.example')"
 )
 
 Assert-ContentIncludes "docs/protocol-compatibility.zh-CN.md" @(
@@ -347,7 +465,13 @@ Assert-ContentIncludes "docs/protocol-compatibility.zh-CN.md" @(
   "-32001",
   "initialize",
   "initialized",
-  "当前运行的 Codex 版本精确对应"
+  "当前运行的 Codex 版本精确对应",
+  "diarize-only 的",
+  "chunking_strategy",
+  "chunking_strategy=auto",
+  "25000000",
+  "endpoint 配置/有效性布尔值",
+  "原始非法 URL"
 )
 
 Assert-ContentIncludes "docs/app-server-protocol-matrix.zh-CN.md" @(
@@ -355,7 +479,11 @@ Assert-ContentIncludes "docs/app-server-protocol-matrix.zh-CN.md" @(
   "schema audit",
   "docs/app-server-schema-audit-summary.json",
   "thread",
-  "MCP"
+  "MCP",
+  "item/autoApprovalReview/started",
+  "脱敏权限请求标记",
+  "network target",
+  "permission profile 主动管理"
 )
 
 $schemaAuditSummaryPath = Resolve-RepoPath "docs/app-server-schema-audit-summary.json"

@@ -114,6 +114,19 @@ function Get-Sha256Hex {
   }
 }
 
+function Resolve-ReleasePackageSmokeDir {
+  $outputRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "output"))
+  $smokeDir = [System.IO.Path]::GetFullPath((Join-Path $outputRoot "release-package-smoke"))
+  $outputPrefix = $outputRoot.TrimEnd([char[]]@(
+    [System.IO.Path]::DirectorySeparatorChar,
+    [System.IO.Path]::AltDirectorySeparatorChar
+  )) + [System.IO.Path]::DirectorySeparatorChar
+  if (-not $smokeDir.StartsWith($outputPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Release package smoke output escaped repository output directory: $smokeDir"
+  }
+  return $smokeDir
+}
+
 function Assert-ChecksumMatches {
   param(
     [string]$ZipPath,
@@ -167,6 +180,55 @@ function Assert-ZipContains {
     }
   } finally {
     $archive.Dispose()
+  }
+}
+
+function Assert-NpmPackDryRun {
+  param(
+    [string]$NpmCommand,
+    [string[]]$RequiredEntries,
+    [string[]]$ForbiddenEntries = @()
+  )
+
+  $packOutput = & $NpmCommand @("pack", "--dry-run", "--json")
+  $exitCode = $LASTEXITCODE
+  if ($exitCode -ne 0) {
+    throw "NPM package smoke failed: npm pack dry-run exited with code $exitCode"
+  }
+
+  $packOutputLines = @($packOutput | ForEach-Object { "$_" })
+  $jsonStartIndex = -1
+  for ($i = 0; $i -lt $packOutputLines.Count; $i++) {
+    $line = $packOutputLines[$i].TrimStart()
+    if ($line.StartsWith("[") -or $line.StartsWith("{")) {
+      $jsonStartIndex = $i
+      break
+    }
+  }
+  if ($jsonStartIndex -lt 0) {
+    throw "NPM package smoke failed: npm pack dry-run returned no JSON payload"
+  }
+
+  $packJson = ($packOutputLines[$jsonStartIndex..($packOutputLines.Count - 1)] -join "`n").Trim()
+  if ([string]::IsNullOrWhiteSpace($packJson)) {
+    throw "NPM package smoke failed: npm pack dry-run returned no JSON"
+  }
+
+  $packEntries = @($packJson | ConvertFrom-Json)
+  if ($packEntries.Count -lt 1 -or -not $packEntries[0].files) {
+    throw "NPM package smoke failed: npm pack dry-run JSON has no files list"
+  }
+
+  $files = @($packEntries[0].files | ForEach-Object { $_.path -replace '/', '\' })
+  foreach ($entry in $RequiredEntries) {
+    if ($files -notcontains $entry) {
+      throw "NPM package smoke failed: package is missing $entry"
+    }
+  }
+  foreach ($entry in $ForbiddenEntries) {
+    if ($files -contains $entry) {
+      throw "NPM package smoke failed: package must not include $entry"
+    }
   }
 }
 
@@ -239,8 +301,13 @@ console.log('cli cjs launcher smoke ok');
 
 if (-not $SkipPackageSmoke) {
   $powerShellCommand = Get-PowerShellCommand
-  $packageSmokeDir = Join-Path $repoRoot "output/release-package-smoke"
+  $packageSmokeDir = Resolve-ReleasePackageSmokeDir
   $packageVersion = "verify-smoke"
+  if (Test-Path -LiteralPath $packageSmokeDir) {
+    Remove-Item -LiteralPath $packageSmokeDir -Recurse -Force
+  }
+  New-Item -ItemType Directory -Path $packageSmokeDir -Force | Out-Null
+
   Invoke-CheckedCommand -Label "Release package smoke" -Command $powerShellCommand -Arguments @(
     "-NoProfile",
     "-ExecutionPolicy",
@@ -257,6 +324,15 @@ if (-not $SkipPackageSmoke) {
   $zipPath = Join-Path $packageSmokeDir "$bundleName.zip"
   $checksumPath = Join-Path $packageSmokeDir "$bundleName.sha256"
   Assert-ChecksumMatches -ZipPath $zipPath -ChecksumPath $checksumPath
+  Invoke-CheckedCommand -Label "Release artifact checksum smoke" -Command $powerShellCommand -Arguments @(
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    (Join-Path $repoRoot "scripts/verify-release-artifacts.ps1"),
+    "-OutputDir",
+    $packageSmokeDir
+  )
 
   Assert-ZipContains -ZipPath $zipPath -RequiredEntries @(
     "README.md",
@@ -265,24 +341,51 @@ if (-not $SkipPackageSmoke) {
     "SECURITY.md",
     "SUPPORT.md",
     "CONTRIBUTING.md",
+    "tests.md",
     "docs\app-server-schema-audit-summary.json",
     "docs\app-server-protocol-matrix.zh-CN.md",
+    "docs\changelog.zh-CN.md",
     "docs\dependency-maintenance.zh-CN.md",
     "docs\openai-docs-review.zh-CN.md",
+    "docs\operations-plan.zh-CN.md",
     "docs\protocol-compatibility.zh-CN.md",
+    "docs\roadmap.zh-CN.md",
     "docs\security-hardening.zh-CN.md",
+    "scripts\package-release.ps1",
+    "scripts\verify-governance.ps1",
+    "scripts\verify-release.ps1",
     ".github\dependabot.yml",
     ".github\release-body.md",
     ".github\PULL_REQUEST_TEMPLATE.md",
     ".github\ISSUE_TEMPLATE\protocol_compatibility.yml",
     ".github\workflows\release.yml",
     "dist\index.html",
-    "dist-cli\index.js"
+    "dist-cli\index.js",
+    "src\server\codexAppServerBridge.ts",
+    "src\server\transcriptionRoute.ts"
   )
   Write-Host "release package smoke ok"
+
+  Write-Host ""
+  Write-Host "==> NPM package smoke"
+  Assert-NpmPackDryRun -NpmCommand $npmCommand -RequiredEntries @(
+    "package.json",
+    "README.md",
+    "LICENSE",
+    "dist\index.html",
+    "dist-cli\index.js",
+    "docs\app-server-schema-audit-summary.json"
+  ) -ForbiddenEntries @(
+    "src\server\codexAppServerBridge.ts",
+    "scripts\verify-release.ps1",
+    "tests.md"
+  )
+  Write-Host "npm package smoke ok"
 } else {
   Write-Host ""
   Write-Host "==> Release package smoke skipped"
+  Write-Host "==> Release artifact checksum smoke skipped"
+  Write-Host "==> NPM package smoke skipped"
 }
 
 if ($SchemaAudit -ne "skip") {

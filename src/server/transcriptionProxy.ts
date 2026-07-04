@@ -11,6 +11,8 @@ export type OpenAiTranscribeResponseFormat = 'json' | 'diarized_json'
 
 export type TranscriptionEndpointSnapshot = {
   isDefault: boolean
+  configured: boolean
+  valid: boolean
   host: string
   path: string
 }
@@ -30,7 +32,14 @@ const OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions'
 const DEFAULT_OPENAI_TRANSCRIBE_MODEL = 'gpt-4o-transcribe'
 const DEFAULT_OPENAI_TRANSCRIBE_RESPONSE_FORMAT = 'json'
 const OPENAI_DIARIZE_TRANSCRIBE_RESPONSE_FORMAT = 'diarized_json'
-const TRANSCRIBE_REQUEST_BODY_LIMIT_BYTES = 26 * 1024 * 1024
+const OPENAI_DIARIZE_CHUNKING_STRATEGY = 'auto'
+const TRANSCRIBE_REQUEST_BODY_LIMIT_BYTES = 25_000_000
+
+type TranscriptionEndpointResolution = {
+  url: string
+  configured: boolean
+  valid: boolean
+}
 
 let curlImpersonateAvailable: boolean | null = null
 
@@ -112,8 +121,20 @@ export function getOpenAiTranscribeResponseFormat(model = getOpenAiTranscribeMod
     : DEFAULT_OPENAI_TRANSCRIBE_RESPONSE_FORMAT
 }
 
-function getOpenAiTranscribeUrl(): string {
-  return readTranscribeEnv('OPENAI_TRANSCRIBE_URL') || OPENAI_TRANSCRIBE_URL
+function resolveOpenAiTranscribeEndpoint(): TranscriptionEndpointResolution {
+  const configuredUrl = readTranscribeEnv('OPENAI_TRANSCRIBE_URL')
+  if (!configuredUrl) {
+    return { url: OPENAI_TRANSCRIBE_URL, configured: false, valid: true }
+  }
+
+  try {
+    const parsed = new URL(configuredUrl)
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      return { url: parsed.toString(), configured: true, valid: true }
+    }
+  } catch {}
+
+  return { url: OPENAI_TRANSCRIBE_URL, configured: true, valid: false }
 }
 
 export function getTranscribeRequestBodyLimitBytes(): number {
@@ -122,20 +143,14 @@ export function getTranscribeRequestBodyLimitBytes(): number {
   return TRANSCRIBE_REQUEST_BODY_LIMIT_BYTES
 }
 
-function snapshotTranscribeEndpoint(url: string): TranscriptionEndpointSnapshot {
-  try {
-    const parsed = new URL(url)
-    return {
-      isDefault: url === OPENAI_TRANSCRIBE_URL,
-      host: parsed.host,
-      path: parsed.pathname,
-    }
-  } catch {
-    return {
-      isDefault: false,
-      host: 'invalid-url',
-      path: '',
-    }
+function snapshotTranscribeEndpoint(endpoint: TranscriptionEndpointResolution): TranscriptionEndpointSnapshot {
+  const parsed = new URL(endpoint.url)
+  return {
+    isDefault: endpoint.url === OPENAI_TRANSCRIBE_URL,
+    configured: endpoint.configured,
+    valid: endpoint.valid,
+    host: parsed.host,
+    path: parsed.pathname,
   }
 }
 
@@ -149,7 +164,7 @@ export function getTranscriptionProxyConfigSnapshot(): TranscriptionProxyConfigS
     responseFormat: getOpenAiTranscribeResponseFormat(),
     requestBodyLimitBytes,
     requestBodyLimitMiB: Math.round((requestBodyLimitBytes / 1024 / 1024) * 10) / 10,
-    endpoint: snapshotTranscribeEndpoint(getOpenAiTranscribeUrl()),
+    endpoint: snapshotTranscribeEndpoint(resolveOpenAiTranscribeEndpoint()),
   }
 }
 
@@ -234,10 +249,16 @@ export function prepareOpenAiTranscribeBody(body: Buffer, contentType: string): 
   const boundary = getMultipartBoundary(contentType)
   if (!boundary) return body
 
-  let nextBody = removeMultipartTextFields(body, boundary, new Set(['model', 'response_format']))
   const model = getOpenAiTranscribeModel()
+  const responseFormat = getOpenAiTranscribeResponseFormat(model)
+  const fieldsToReplace = new Set(['model', 'response_format', 'chunking_strategy'])
+
+  let nextBody = removeMultipartTextFields(body, boundary, fieldsToReplace)
   nextBody = appendMultipartTextField(nextBody, boundary, 'model', model)
-  nextBody = appendMultipartTextField(nextBody, boundary, 'response_format', getOpenAiTranscribeResponseFormat(model))
+  nextBody = appendMultipartTextField(nextBody, boundary, 'response_format', responseFormat)
+  if (responseFormat === OPENAI_DIARIZE_TRANSCRIBE_RESPONSE_FORMAT) {
+    nextBody = appendMultipartTextField(nextBody, boundary, 'chunking_strategy', OPENAI_DIARIZE_CHUNKING_STRATEGY)
+  }
   return nextBody
 }
 
@@ -247,7 +268,7 @@ export async function proxyOpenAiTranscribe(
   apiKey: string,
 ): Promise<TranscriptionProxyResult> {
   const upstreamBody = prepareOpenAiTranscribeBody(body, contentType)
-  return httpPost(getOpenAiTranscribeUrl(), {
+  return httpPost(resolveOpenAiTranscribeEndpoint().url, {
     'Content-Type': contentType,
     'Content-Length': upstreamBody.length,
     Authorization: `Bearer ${apiKey}`,

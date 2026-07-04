@@ -105,4 +105,4 @@ npm run audit:app-server-schemas
 
 ## 与其他 OpenAI API 的边界
 
-通用 OpenAI API 只用于补充能力。例如语音转写使用 `gpt-4o-transcribe` / `gpt-4o-mini-transcribe`，但不能替代 App Server 的线程协议。接入这些 API 时，应保持独立配置、独立错误处理和最小权限环境变量，避免把 Platform API key 与 Codex App Server 认证混用。官方转写 multipart 由服务端规范化 `model` 和 `response_format`：普通转写模型使用 `json`，`gpt-4o-transcribe-diarize` 使用官方要求的 `diarized_json`，避免客户端字段把官方模型带到不支持的响应格式。诊断接口可以展示转写 provider、模型、响应格式、上传上限和 endpoint host/path，但不得展示 API key、Authorization、Cookie 或 URL query。
+通用 OpenAI API 只用于补充能力。例如语音转写使用 `gpt-4o-transcribe` / `gpt-4o-mini-transcribe`，但不能替代 App Server 的线程协议。接入这些 API 时，应保持独立配置、独立错误处理和最小权限环境变量，避免把 Platform API key 与 Codex App Server 认证混用。官方转写 multipart 由服务端规范化 `model`、`response_format` 和 diarize-only 的 `chunking_strategy`：普通转写模型使用 `json` 并清理客户端自带 `chunking_strategy`，`gpt-4o-transcribe-diarize` 使用官方要求的 `diarized_json` 并补齐 `chunking_strategy=auto`，避免客户端字段把官方模型带到不支持的响应格式。默认上传上限按官方 25 MB 文件限制收紧为 `25000000` bytes。自定义转写 endpoint 只接受 `http` / `https` URL，非法或非 HTTP(S) 配置必须回退官方默认 endpoint。诊断接口可以展示转写 provider、模型、响应格式、上传上限、生效 endpoint host/path 和 endpoint 配置/有效性布尔值，但不得展示 API key、Authorization、Cookie、URL query 或原始非法 URL。

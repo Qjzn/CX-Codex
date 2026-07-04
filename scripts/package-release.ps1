@@ -89,6 +89,7 @@ $releaseItems = @(
   "RELEASE.md",
   "SECURITY.md",
   "SUPPORT.md",
+  "tests.md",
   "cx-codex.config.example.json",
   "docs",
   "index.html",
@@ -110,7 +111,6 @@ $optionalReleaseItems = @(
   "PROJECT_SPEC.md",
   "public",
   "publish.sh",
-  "tests.md",
   "tsconfig.node.json",
   "tsconfig.server.json",
   "vite.config.https.ts"

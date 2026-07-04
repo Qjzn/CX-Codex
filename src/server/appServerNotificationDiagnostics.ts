@@ -44,6 +44,26 @@ export type HookNotificationRecord = {
   outputEntryCount: number
 }
 
+export type GuardianReviewNotificationRecord = {
+  method: 'item/autoApprovalReview/started' | 'item/autoApprovalReview/completed'
+  atIso: string
+  threadId: string
+  turnId: string
+  reviewId: string
+  targetItemId: string
+  status: string
+  riskLevel: string
+  userAuthorization: string
+  actionType: string
+  decisionSource: string
+  durationMs: number | null
+  hasRationale: boolean
+  actionArgCount: number
+  actionFileCount: number
+  permissionNetworkRequested: boolean
+  permissionFileSystemRequested: boolean
+}
+
 export type ProtocolAlertNotificationRecord = {
   method:
     | 'warning'
@@ -87,6 +107,7 @@ export type AppServerNotificationDiagnosticsSnapshot = {
   recentModelNotifications: ModelNotificationRecord[]
   recentWindowsSandboxNotifications: WindowsSandboxNotificationRecord[]
   recentHookNotifications: HookNotificationRecord[]
+  recentGuardianReviewNotifications: GuardianReviewNotificationRecord[]
   recentProtocolAlerts: ProtocolAlertNotificationRecord[]
   recentRealtimeNotifications: RealtimeNotificationRecord[]
 }
@@ -104,6 +125,7 @@ type AppServerNotificationDiagnosticsOptions = {
   maxRecentModelNotifications?: number
   maxRecentWindowsSandboxNotifications?: number
   maxRecentHookNotifications?: number
+  maxRecentGuardianReviewNotifications?: number
   maxRecentProtocolAlerts?: number
   maxRecentRealtimeNotifications?: number
 }
@@ -134,6 +156,8 @@ const KNOWN_NOTIFICATION_METHODS = new Set([
   'guardianWarning',
   'hook/completed',
   'hook/started',
+  'item/autoApprovalReview/completed',
+  'item/autoApprovalReview/started',
   'mcpServer/oauthLogin/completed',
   'mcpServer/startupStatus/updated',
   'model/rerouted',
@@ -186,12 +210,14 @@ export class AppServerNotificationDiagnostics {
   private readonly maxRecentModelNotifications: number
   private readonly maxRecentWindowsSandboxNotifications: number
   private readonly maxRecentHookNotifications: number
+  private readonly maxRecentGuardianReviewNotifications: number
   private readonly maxRecentProtocolAlerts: number
   private readonly maxRecentRealtimeNotifications: number
   private readonly unknownByMethod = new Map<string, UnknownNotificationRecord>()
   private readonly recentModelNotifications: ModelNotificationRecord[] = []
   private readonly recentWindowsSandboxNotifications: WindowsSandboxNotificationRecord[] = []
   private readonly recentHookNotifications: HookNotificationRecord[] = []
+  private readonly recentGuardianReviewNotifications: GuardianReviewNotificationRecord[] = []
   private readonly recentProtocolAlerts: ProtocolAlertNotificationRecord[] = []
   private readonly recentRealtimeNotifications: RealtimeNotificationRecord[] = []
   private unknownNotificationCount = 0
@@ -204,6 +230,10 @@ export class AppServerNotificationDiagnostics {
       Math.min(100, Math.floor(options.maxRecentWindowsSandboxNotifications ?? 20)),
     )
     this.maxRecentHookNotifications = Math.max(1, Math.min(100, Math.floor(options.maxRecentHookNotifications ?? 20)))
+    this.maxRecentGuardianReviewNotifications = Math.max(
+      1,
+      Math.min(100, Math.floor(options.maxRecentGuardianReviewNotifications ?? 20)),
+    )
     this.maxRecentProtocolAlerts = Math.max(1, Math.min(100, Math.floor(options.maxRecentProtocolAlerts ?? 20)))
     this.maxRecentRealtimeNotifications = Math.max(
       1,
@@ -215,6 +245,7 @@ export class AppServerNotificationDiagnostics {
     this.observeModelNotification(observation)
     this.observeWindowsSandboxNotification(observation)
     this.observeHookNotification(observation)
+    this.observeGuardianReviewNotification(observation)
     this.observeProtocolAlertNotification(observation)
     this.observeRealtimeNotification(observation)
     if (isKnownAppServerNotificationMethod(observation.method)) return
@@ -255,6 +286,7 @@ export class AppServerNotificationDiagnostics {
       recentModelNotifications: [...this.recentModelNotifications],
       recentWindowsSandboxNotifications: [...this.recentWindowsSandboxNotifications],
       recentHookNotifications: [...this.recentHookNotifications],
+      recentGuardianReviewNotifications: [...this.recentGuardianReviewNotifications],
       recentProtocolAlerts: [...this.recentProtocolAlerts],
       recentRealtimeNotifications: [...this.recentRealtimeNotifications],
     }
@@ -265,6 +297,7 @@ export class AppServerNotificationDiagnostics {
     this.recentModelNotifications.splice(0, this.recentModelNotifications.length)
     this.recentWindowsSandboxNotifications.splice(0, this.recentWindowsSandboxNotifications.length)
     this.recentHookNotifications.splice(0, this.recentHookNotifications.length)
+    this.recentGuardianReviewNotifications.splice(0, this.recentGuardianReviewNotifications.length)
     this.recentProtocolAlerts.splice(0, this.recentProtocolAlerts.length)
     this.recentRealtimeNotifications.splice(0, this.recentRealtimeNotifications.length)
     this.unknownNotificationCount = 0
@@ -297,6 +330,15 @@ export class AppServerNotificationDiagnostics {
     }
   }
 
+  private observeGuardianReviewNotification(observation: NotificationObservation): void {
+    const record = createGuardianReviewNotificationRecord(observation)
+    if (!record) return
+    this.recentGuardianReviewNotifications.unshift(record)
+    if (this.recentGuardianReviewNotifications.length > this.maxRecentGuardianReviewNotifications) {
+      this.recentGuardianReviewNotifications.splice(this.maxRecentGuardianReviewNotifications)
+    }
+  }
+
   private observeProtocolAlertNotification(observation: NotificationObservation): void {
     const record = createProtocolAlertNotificationRecord(observation)
     if (!record) return
@@ -318,6 +360,46 @@ export class AppServerNotificationDiagnostics {
 
 function normalizeOptionalId(value: string | undefined): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function createGuardianReviewNotificationRecord(observation: NotificationObservation): GuardianReviewNotificationRecord | null {
+  if (
+    observation.method !== 'item/autoApprovalReview/started' &&
+    observation.method !== 'item/autoApprovalReview/completed'
+  ) {
+    return null
+  }
+
+  const params = asRecord(observation.params)
+  const review = asRecord(params?.review)
+  const action = asRecord(params?.action)
+  const permissions = asRecord(action?.permissions)
+  const network = asRecord(permissions?.network)
+  const fileSystem = asRecord(permissions?.fileSystem)
+  const actionType = readString(action, 'type', 60)
+  const startedAtMs = readNullableNumber(params, 'startedAtMs')
+  const completedAtMs = readNullableNumber(params, 'completedAtMs')
+  return {
+    method: observation.method,
+    atIso: observation.atIso,
+    threadId: normalizeOptionalId(observation.threadId) || readString(params, 'threadId'),
+    turnId: normalizeOptionalId(observation.turnId) || readString(params, 'turnId'),
+    reviewId: readString(params, 'reviewId', 80),
+    targetItemId: readString(params, 'targetItemId', 80),
+    status: readString(review, 'status', 40),
+    riskLevel: readString(review, 'riskLevel', 40),
+    userAuthorization: readString(review, 'userAuthorization', 40),
+    actionType,
+    decisionSource: readString(params, 'decisionSource', 60),
+    durationMs: typeof startedAtMs === 'number' && typeof completedAtMs === 'number' && completedAtMs >= startedAtMs
+      ? completedAtMs - startedAtMs
+      : null,
+    hasRationale: readString(review, 'rationale', 1).length > 0,
+    actionArgCount: Array.isArray(action?.argv) ? action.argv.length : 0,
+    actionFileCount: Array.isArray(action?.files) ? action.files.length : 0,
+    permissionNetworkRequested: actionType === 'networkAccess' || network !== null,
+    permissionFileSystemRequested: actionType === 'applyPatch' || fileSystem !== null,
+  }
 }
 
 function createModelNotificationRecord(observation: NotificationObservation): ModelNotificationRecord | null {

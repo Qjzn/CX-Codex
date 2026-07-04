@@ -1,47 +1,51 @@
-# CX-Codex 2.2.7
+# CX-Codex Release
 
 Self-hosted OpenAI Codex Web UI and Android client bridge.
 
-把本机 Codex 变成可从浏览器、手机和远程入口访问的稳定工作台，适合 Windows、Android、局域网和自托管远程访问。
+This release is built from the tagged source in this repository. It is intended for Windows, Android, LAN, and self-hosted remote access deployments.
 
-## 这版适合谁升级
+## Upgrade Notes
 
-- Android 端使用本地文件打开、下载或 APK 站内更新时遇到登录态、权限或安装流程问题的人。
-- 长任务、移动端回到前台、会话刷新后偶发状态不同步的人。
-- 需要更清晰的任务队列、会话状态和消息区交互反馈的人。
-- 希望设置页版本信息更聚焦，避免重复展示当前版本的人。
+- Read [docs/changelog.zh-CN.md](./docs/changelog.zh-CN.md) for the user-facing changes in this release.
+- Review [docs/security-hardening.zh-CN.md](./docs/security-hardening.zh-CN.md) before exposing the service beyond localhost or LAN.
+- Review [docs/openai-docs-review.zh-CN.md](./docs/openai-docs-review.zh-CN.md) and [docs/app-server-protocol-matrix.zh-CN.md](./docs/app-server-protocol-matrix.zh-CN.md) for Codex App Server / OpenAI API compatibility notes.
+- If Android assets include a debug APK instead of a signed release APK, the repository has not configured Android signing secrets for this run.
 
-## 本次版本重点
+## Assets
 
-- Android 文件与更新体验：本地文件打开 / 下载增加登录态续期，减少受保护文件被下载成登录页或 HTML 的情况。
-- APK 站内更新更顺滑：缺少“安装未知应用”权限时先保存待安装包，引导授权后继续安装。
-- 任务同步继续加固：优化会话刷新、任务状态和队列同步，降低移动端回到前台后的状态不一致。
-- 消息区与输入区交互优化：减少长任务和移动端场景下的误触、状态残留和刷新不及时。
-- 设置页版本展示优化：当前版本只在版本卡展示，更新区域改为状态表达，避免同一版本号重复出现。
-- 本地发布验证补强：重启脚本校验启动版本，前端回归脚本增加 agent-browser 超时保护，避免旧进程或卡住的浏览器检查影响发布判断。
+- `CX-Codex-<tag>.zip`: source, docs, scripts, and built Web / CLI assets for self-hosted deployment and audit.
+- `CX-Codex-<tag>.sha256`: checksum for the release zip.
+- `cx-codex-android-<tag>.apk`: signed Android APK, when signing secrets are configured.
+- `cx-codex-android-debug-<tag>.apk`: debug APK fallback for self-hosted testing when signing secrets are not configured.
+- `*.sha256`: checksum files for each uploaded zip or APK asset.
 
-## 快速安装
+## Verification
+
+The release workflow runs:
+
+- `./scripts/verify-release.ps1 -RequireCleanGit -SchemaAudit skip`
+- `./scripts/package-release.ps1`
+- Android sync and APK build
+- `./scripts/verify-release-artifacts.ps1`
+
+Maintainers should also run a local schema audit before final release when App Server or OpenAI API behavior changed:
+
+```powershell
+npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn
+```
+
+## Quick Install
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1 | iex
 ```
 
-## Android APK
+## Android Notes
 
-如果本 Release 资产包含 `cx-codex-android-v2.2.7.apk`，这是正式签名 APK。
+On first launch, enter your own CX-Codex service URL. The Android app does not ship with a private server address.
 
-如果只包含 `cx-codex-android-debug-v2.2.7.apk`，说明仓库尚未配置 Android 签名 secret；该包适合自托管测试和临时安装，后续正式签名 APK 可能需要先卸载 debug 包再安装。
+If you previously installed a debug APK and this release provides a signed APK, Android may require uninstalling the debug build before installing the signed build.
 
-首次启动需要输入你自己的 Codex Web 服务地址；项目默认不内置任何私人地址。密钥登录成功后会保存在设备本地，用于后续无感重登。
+## Privacy
 
-## 文档入口
-
-- README: [README.md](./README.md)
-- 更新日志: [docs/changelog.zh-CN.md](./docs/changelog.zh-CN.md)
-- Android 壳: [docs/android-shell.zh-CN.md](./docs/android-shell.zh-CN.md)
-- 路线图: [docs/roadmap.zh-CN.md](./docs/roadmap.zh-CN.md)
-- Cloudflare Tunnel: [docs/cloudflare-tunnel.zh-CN.md](./docs/cloudflare-tunnel.zh-CN.md)
-
-## 隐私说明
-
-Release 说明和截图只使用通用演示数据，不包含私人账号、本地密码、Token、私有 IP、个人目录、真实公网地址或私人会话内容。
+Release notes, docs, and screenshots must not include private accounts, passwords, tokens, private IPs, personal paths, real public tunnel URLs, or private conversation content.

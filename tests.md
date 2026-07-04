@@ -1994,7 +1994,7 @@ This file tracks manual regression and feature verification steps.
 
 #### Expected Results
 - 官方转写链路默认补齐 `model=gpt-4o-transcribe` 和 `response_format=json`，前端能继续从返回 JSON 中提取文本。
-- 官方转写链路会移除客户端 multipart 里已有的 `model` 和 `response_format` 字段，再追加服务端规范化字段，避免绕过官方模型格式约束。
+- 官方转写链路会移除客户端 multipart 里已有的 `model`、`response_format` 和 `chunking_strategy` 字段，再追加服务端规范化字段，避免绕过官方模型格式约束。
 - 未配置官方 API key 时，不破坏既有 Codex / ChatGPT 登录态转写。
 - 过大转写请求在本地服务端被拒绝，不继续代理到上游。
 - 停止请求带来源和耗时审计字段，便于定位误触、移动端重复点击和状态条停止行为。
@@ -2052,7 +2052,7 @@ This file tracks manual regression and feature verification steps.
 #### Expected Results
 - `src/server/codexAppServerBridge.ts` 不再内联通用 `readRawBody`、`readJsonBody`、`readHeaderValue` 和 `RequestBodyTooLargeError`。
 - 普通 JSON API 请求体默认限制为 2MiB，并可通过 `CX_CODEX_JSON_BODY_MAX_BYTES`、`CODEXUI_JSON_BODY_MAX_BYTES` 或 `JSON_BODY_MAX_BYTES` 覆盖。
-- 转写上传继续使用独立的 26MiB 上限，不受普通 JSON API 上限影响。
+- 转写上传继续使用独立的 25 MB 官方文件限制上限，不受普通 JSON API 上限影响。
 - 超限请求返回 `413`，不会落入通用 `502` bridge error。
 
 #### Regression Evidence
@@ -3068,14 +3068,14 @@ This file tracks manual regression and feature verification steps.
 3. 执行 `npm.cmd run build`。
 4. 执行 `node dist-cli\index.js --help`。
 5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
-6. 手工检查 `/codex-api/health` 和 `/codex-api/diagnostics` 的 `data.transcription`，确认只包含 provider、officialApiConfigured、model、responseFormat、requestBodyLimitBytes、requestBodyLimitMiB、endpoint.host、endpoint.path 和 endpoint.isDefault。
+6. 手工检查 `/codex-api/health` 和 `/codex-api/diagnostics` 的 `data.transcription`，确认只包含 provider、officialApiConfigured、model、responseFormat、requestBodyLimitBytes、requestBodyLimitMiB、endpoint.host、endpoint.path、endpoint.isDefault、endpoint.configured 和 endpoint.valid。
 7. 打开诊断页，确认“语音转写”显示官方 API 或登录态回退、模型、响应格式、上传上限和脱敏 endpoint。
 
 #### Expected Results
 - 未配置官方 API key 时，`provider` 为 `chatgpt`，诊断页显示“登录态回退”，整体健康状态不因此变成告警。
 - 配置 `CX_CODEX_OPENAI_API_KEY` 或 `OPENAI_API_KEY` 后，`provider` 为 `openai`，诊断页显示“官方 API”。
-- 自定义 `CX_CODEX_OPENAI_TRANSCRIBE_URL` 时，诊断快照只展示 host 和 path，不展示 URL query、API key、Authorization、Cookie 或其他凭据。
-- 默认模型仍为 `gpt-4o-transcribe`，默认 `responseFormat` 为 `json`，默认上传上限仍按官方 25MB 文件限制预留 multipart 开销。
+- 自定义 `CX_CODEX_OPENAI_TRANSCRIBE_URL` 时，诊断快照只展示生效 host/path 和配置有效性布尔值，不展示 URL query、API key、Authorization、Cookie、原始非法 URL 或其他凭据。
+- 默认模型仍为 `gpt-4o-transcribe`，默认 `responseFormat` 为 `json`，默认上传上限按官方 25 MB 文件限制收紧为 `25000000` bytes。
 
 #### Rollback/Cleanup
 - 如需回滚，移除诊断快照函数、health/diagnostics 中的 `transcription` 字段、诊断页“语音转写”区块，以及 server smoke 中的转写配置断言。
@@ -3785,19 +3785,19 @@ This file tracks manual regression and feature verification steps.
 - 如需真实 API 验证，配置 `CX_CODEX_OPENAI_API_KEY` 或 `OPENAI_API_KEY`；不要把真实 key 写入仓库、日志或截图。
 
 #### Steps
-1. 打开官方 Speech to text 文档，确认 `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` 支持 `json` 或 `text`，`gpt-4o-transcribe-diarize` 使用 `diarized_json`。
+1. 打开官方 Speech to text 文档，确认 `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` 支持 `json` 或 `text`，`gpt-4o-transcribe-diarize` 使用 `diarized_json`，长音频需要 `chunking_strategy` 且推荐 `auto`。
 2. 执行 `git diff --check`。
 3. 执行 `npm.cmd run verify:server-modules`。
 4. 执行 `npm.cmd run verify:governance`。
 5. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
 6. 设置 `CX_CODEX_OPENAI_TRANSCRIBE_MODEL=gpt-4o-transcribe-diarize` 后请求 `/codex-api/diagnostics`，确认 `data.transcription.responseFormat` 为 `diarized_json`。
-7. 构造自带 `model=whisper-1` 和 `response_format=text` 的 multipart 请求，确认服务端转发前会按配置覆盖为 `gpt-4o-transcribe-diarize` 和 `diarized_json`。
+7. 构造自带 `model=whisper-1`、`response_format=text` 和 `chunking_strategy=manual` 的 multipart 请求，确认服务端转发前会按配置覆盖为 `gpt-4o-transcribe-diarize`、`diarized_json` 和 `chunking_strategy=auto`。
 8. 前端收到 diarized JSON 且只有 `segments[].text` 时，确认语音输入能拼接段落文本并写入 composer。
 
 #### Expected Results
 - 默认模型仍为 `gpt-4o-transcribe`，默认响应格式仍为 `json`。
 - `gpt-4o-mini-transcribe` 仍使用 `json`，不改变既有语音输入链路。
-- `gpt-4o-transcribe-diarize` 使用官方要求的 `diarized_json`，不会被固定覆盖成 `json`。
+- `gpt-4o-transcribe-diarize` 使用官方要求的 `diarized_json`，并补齐官方推荐的 `chunking_strategy=auto`，不会被固定覆盖成 `json`。
 - 诊断接口只展示 provider、模型、响应格式、上传上限和 endpoint host/path，不展示 API key、Authorization、Cookie 或 URL query。
 - OpenAI API 仍只作为语音转写补充能力，不替代 Codex App Server 的线程、审批、恢复和事件协议。
 
@@ -3805,12 +3805,192 @@ This file tracks manual regression and feature verification steps.
 - 如需回滚，撤销 `src/server/transcriptionProxy.ts`、`src/composables/useDictation.ts`、`src/components/content/DiagnosticsPanel.vue`、`scripts/server-module-smoke.ts`、`scripts/verify-governance.ps1`、README、OpenAI 文档审查手册、协议兼容文档和本节测试记录中的相关改动。
 
 #### Regression Evidence
-- 2026-07-04 官方文档核对：确认 `https://developers.openai.com/api/docs/guides/speech-to-text` 中 `/v1/audio/transcriptions` 示例使用 `gpt-4o-transcribe`，默认 JSON 响应；文档说明 `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` 支持 `json` 或 `text`，`gpt-4o-transcribe-diarize` 使用 `diarized_json`。
+- 2026-07-04 官方文档核对：确认 `https://developers.openai.com/api/docs/guides/speech-to-text` 中 `/v1/audio/transcriptions` 示例使用 `gpt-4o-transcribe`；文档说明 `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` 支持 `json` 或 `text`，`gpt-4o-transcribe-diarize` 使用 `diarized_json`，长音频需要 `chunking_strategy` 且推荐 `auto`。
 - 2026-07-04 静态验证：`git diff --check` 通过。
-- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖默认 `json`、`gpt-4o-mini-transcribe` 的 `json` 和 `gpt-4o-transcribe-diarize` 的 `diarized_json` multipart 规范化。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖默认 `json`、`gpt-4o-mini-transcribe` 的 `json`、非 diarize 清理 `chunking_strategy` 和 `gpt-4o-transcribe-diarize` 的 `diarized_json` / `chunking_strategy=auto` multipart 规范化。
 - 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
 - 2026-07-04 CLI 启动烟测：`node dist-cli\index.js --help` 通过，输出 `CX-Codex Web bridge for Codex app-server`。
 - 2026-07-04 Governance / release gate：`pwsh -NoLogo -NoProfile -Command "Write-Output ok"` 在本机执行层无输出并持续挂起，因此 `npm.cmd run verify:governance` 和 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 本轮未能可靠完成；代码路径已由 server smoke、前端 typecheck/build 和 CLI smoke 覆盖。
+
+---
+
+### Feature: OpenAI 转写上传上限与 diarize chunking 对齐
+
+#### Prerequisites
+- 当前仓库包含 `src/server/transcriptionProxy.ts`、`scripts/server-module-smoke.ts`、`README.md`、`docs/protocol-compatibility.zh-CN.md`、`docs/openai-docs-review.zh-CN.md` 和诊断页。
+- 本机可访问 OpenAI 官方 Speech to text 文档：`https://developers.openai.com/api/docs/guides/speech-to-text`。
+- 本机可运行 `npm.cmd run verify:server-modules`、`npm.cmd run build`、`npm.cmd run verify:governance` 和 release gate。
+
+#### Steps
+1. 打开官方 Speech to text 文档，确认 `/v1/audio/transcriptions` 使用 multipart，`gpt-4o-transcribe-diarize` 使用 `diarized_json`，长音频需要 `chunking_strategy` 且推荐 `auto`，文件上传限制为 25 MB。
+2. 执行 `git diff --check`。
+3. 执行 `npm.cmd run verify:server-modules`。
+4. 执行 `npm.cmd run build`。
+5. 执行 `npm.cmd run verify:governance`。
+6. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip`。
+7. 代码审查 `prepareOpenAiTranscribeBody()`，确认普通模型清理客户端自带 `chunking_strategy`，diarize 模型写入 `chunking_strategy=auto`。
+8. 代码审查 `getTranscribeRequestBodyLimitBytes()` 和诊断快照，确认默认上限为 `25000000` bytes，诊断页按 MiB 展示约 `23.8 MiB`。
+9. 代码审查 `README.md` 和 `docs/protocol-compatibility.zh-CN.md`，确认公开说明包含三层 OpenAI 转写环境变量、25 MB / `25000000` bytes、`chunking_strategy=auto`、HTTP(S) endpoint 回退、endpoint 配置/有效性布尔值和不展示原始非法 URL。
+
+#### Expected Results
+- 默认转写模型仍为 `gpt-4o-transcribe`，响应格式仍为 `json`。
+- `gpt-4o-mini-transcribe` 不携带 diarize-only 的 `chunking_strategy`。
+- `gpt-4o-transcribe-diarize` 的 multipart 请求包含 `response_format=diarized_json` 和 `chunking_strategy=auto`。
+- 服务端默认上传上限不高于官方 25 MB 文件限制，避免把明显过大的音频继续代理到 OpenAI。
+- 诊断快照仍不展示 API key、Authorization、Cookie、URL query 或原始非法 URL。
+- README 公开说明完整列出 `CX_CODEX_`、`CODEXUI_` 和裸 OpenAI 转写环境变量前缀，与服务端 `readTranscribeEnv()` 解析顺序一致。
+- README 与协议兼容文档描述和实现一致，不再保留旧的 multipart 开销预留口径。
+- `verify:governance` 会阻止 README 或协议边界文档遗漏 `CODEXUI_` 转写变量、`chunking_strategy=auto`、`25000000`、endpoint 配置/有效性布尔值或原始非法 URL 脱敏约束。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，恢复 `src/server/transcriptionProxy.ts` 的旧上传上限和 multipart 字段规范化逻辑，并撤销 `scripts/server-module-smoke.ts`、`src/components/content/DiagnosticsPanel.vue`、`README.md`、`docs/protocol-compatibility.zh-CN.md`、`docs/changelog.zh-CN.md`、`docs/openai-docs-review.zh-CN.md` 和本测试章节中的相关改动。
+- 如验证时临时设置过 `CX_CODEX_OPENAI_TRANSCRIBE_MODEL`、`CODEXUI_OPENAI_TRANSCRIBE_MODEL`、`CX_CODEX_OPENAI_TRANSCRIBE_MAX_BYTES`、`CODEXUI_OPENAI_TRANSCRIBE_MAX_BYTES` 或 OpenAI API key，验证后清理本机环境变量。
+
+#### Regression Evidence
+- 2026-07-04 官方文档核对：确认 `https://developers.openai.com/api/docs/guides/speech-to-text` 说明文件上传限制为 25 MB；`gpt-4o-transcribe` / `gpt-4o-mini-transcribe` 支持 `json` 或 `text`；`gpt-4o-transcribe-diarize` 使用 `diarized_json`，长音频需要 `chunking_strategy` 且推荐 `auto`。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖默认上传上限 `25000000` bytes、非 diarize 清理 `chunking_strategy` 和 diarize 写入 `chunking_strategy=auto`。
+- 2026-07-04 README / 协议文档收口：`README.md` 和 `docs/protocol-compatibility.zh-CN.md` 已同步记录三层 OpenAI 转写环境变量、25 MB / `25000000` bytes、`chunking_strategy=auto`、HTTP(S) endpoint 回退、endpoint 配置/有效性布尔值和原始非法 URL 脱敏约束。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-04 Governance 验证：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Governance 自检验证：`scripts/verify-governance.ps1` 已要求自身保留 `Assert-ContentExcludes "tests.md"`、`unfinished placeholder text` 和占位符阻断文案。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs、server module smoke、CLI smoke 和 CLI CJS launcher smoke。
+
+---
+
+### Feature: 语音转写路由模块化
+
+#### Prerequisites
+- 当前仓库包含 `src/server/codexAppServerBridge.ts`、`src/server/transcriptionRoute.ts`、`src/server/transcriptionProxy.ts` 和 `scripts/server-module-smoke.ts`。
+- 本机可运行 `npm.cmd run verify:server-modules`、`npm.cmd run build`、`npm.cmd run verify:governance` 和 release gate。
+
+#### Steps
+1. 代码审查 `src/server/codexAppServerBridge.ts`，确认 `/codex-api/transcribe` 分支只调用 `handleTranscriptionRoute(req, res)`，不再内联 OpenAI/ChatGPT 转写代理细节。
+2. 代码审查 `src/server/transcriptionRoute.ts`，确认其保留原有行为：读取 body 上限、读取 content-type、优先 OpenAI API key、无 key 时读取 Codex auth 并走 ChatGPT 回退。
+3. 执行 `git diff --check`。
+4. 执行 `npm.cmd run verify:server-modules`。
+5. 执行 `npm.cmd run build`。
+6. 执行 `npm.cmd run verify:governance`。
+7. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`。
+8. 代码审查 `scripts/verify-release.ps1` 和 `scripts/verify-governance.ps1`，确认 release package smoke 会检查 `src\server\transcriptionRoute.ts`，且 governance 会保护该检查不被误删。
+
+#### Expected Results
+- bridge 主文件不再直接 import `getOpenAiTranscribeApiKey`、`getTranscribeRequestBodyLimitBytes`、`proxyOpenAiTranscribe`、`proxyChatGptTranscribe` 或 `readCodexAuth`。
+- 未配置 OpenAI API key 且没有 Codex auth 时，route smoke 返回 `401 No auth token available for transcription`。
+- 超过转写请求体上限时，route smoke 返回 `413` 且包含最大请求体大小。
+- 通用 bridge 错误处理仍保留 `RequestBodyTooLargeError`，不影响其它 JSON/file upload 路由。
+- Release package smoke 会在 zip 缺少 `src\server\transcriptionRoute.ts` 时失败，避免源码包遗漏新抽出的转写路由模块。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `src/server/transcriptionRoute.ts`，把 `handleTranscriptionRoute()` 的逻辑恢复到 `src/server/codexAppServerBridge.ts` 的 `/codex-api/transcribe` 分支，并撤销 `scripts/server-module-smoke.ts`、`docs/changelog.zh-CN.md` 和本测试章节中的相关改动。
+- 验证不需要真实 OpenAI API key；route smoke 使用临时 `CODEX_HOME` 和环境变量隔离。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 `handleTranscriptionRoute()` 的无 auth `401` 和超限 `413` 分支。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-04 Governance 验证：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release package smoke：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs、server module smoke、CLI smoke、CLI CJS launcher smoke、Release package smoke、artifact checksum smoke 和 NPM package smoke；zip 必检清单包含 `src\server\transcriptionRoute.ts`。
+
+---
+
+### Feature: OpenAI 转写自定义 endpoint 安全回退
+
+#### Prerequisites
+- 当前仓库包含 `src/server/transcriptionProxy.ts`、`src/components/content/DiagnosticsPanel.vue` 和 `scripts/server-module-smoke.ts`。
+- 本机可运行 `npm.cmd run verify:server-modules`、`npm.cmd run build`、`npm.cmd run verify:governance` 和 release gate 快速路径。
+
+#### Steps
+1. 代码审查 `resolveOpenAiTranscribeEndpoint()`，确认未配置 endpoint 时使用 `https://api.openai.com/v1/audio/transcriptions`。
+2. 设置合法 `CX_CODEX_OPENAI_TRANSCRIBE_URL=https://audio.example.test/v1/audio/transcriptions?token=secret`，执行 server smoke，确认诊断快照只保留 `host=audio.example.test`、`path=/v1/audio/transcriptions`、`configured=true` 和 `valid=true`。
+3. 设置非法或非 HTTP(S) endpoint，例如 `file:///tmp/audio`，执行 server smoke，确认代理回退默认 OpenAI endpoint，诊断快照为 `configured=true`、`valid=false`，且不保留原始非法 URL。
+4. 执行 `git diff --check`。
+5. 执行 `npm.cmd run verify:server-modules`。
+6. 执行 `npm.cmd run build`。
+7. 执行 `npm.cmd run verify:governance`。
+8. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipPackageSmoke -SchemaAudit skip`。
+
+#### Expected Results
+- 合法 `http` / `https` 自定义 endpoint 仍可用于本机代理或测试服务。
+- 非法 URL、`file:`、`ftp:` 等非 HTTP(S) endpoint 不会传给上游请求层，统一回退官方默认 endpoint。
+- 诊断页 endpoint 标签对非法自定义配置显示“自定义无效，已回退”，且仍只展示生效 host/path。
+- 诊断 JSON 不展示 API key、Authorization、Cookie、URL query 或原始非法 URL。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，恢复 `src/server/transcriptionProxy.ts` 直接读取 `OPENAI_TRANSCRIBE_URL` 的旧逻辑，并撤销诊断页 endpoint 字段、server smoke、changelog、OpenAI 文档审查手册和本测试章节中的相关改动。
+- 验证后清理临时设置的 `CX_CODEX_OPENAI_TRANSCRIBE_URL`、`OPENAI_TRANSCRIBE_URL` 或 `CODEXUI_OPENAI_TRANSCRIBE_URL`。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖合法自定义 endpoint 脱敏快照和非 HTTP(S) endpoint 回退默认 OpenAI endpoint。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建。
+- 2026-07-04 Governance 验证：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs、server module smoke、CLI smoke 和 CLI CJS launcher smoke。
+
+---
+
+### Feature: 测试证据占位符治理门禁
+
+#### Prerequisites
+- 当前仓库包含 `tests.md`、`scripts/verify-governance.ps1` 和 `scripts/verify-release.ps1`。
+- 本机可运行 `npm.cmd run verify:governance` 和 release gate 快速路径。
+
+#### Steps
+1. 检查 `scripts/verify-governance.ps1`，确认 `Assert-ContentExcludes "tests.md"` 覆盖未完成测试证据占位文本。
+2. 检查 `scripts/verify-governance.ps1`，确认 governance 自检会要求自身保留 `Assert-ContentExcludes` 和占位符阻断文案。
+3. 执行 `git diff --check`。
+4. 执行 `npm.cmd run verify:governance`。
+5. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipPackageSmoke -SchemaAudit skip`。
+6. 搜索 `tests.md`，确认不存在 governance 脚本列出的三类未完成测试证据占位文本。
+
+#### Expected Results
+- `verify:governance` 会在 `tests.md` 残留未完成测试证据占位文本时失败。
+- `verify:governance` 会自检 `Assert-ContentExcludes "tests.md"`，避免占位符阻断逻辑被无声删除。
+- `verify:release` 默认调用 governance check，因此发布前也会阻止不完整测试记录。
+- 当前 `tests.md` 不包含未完成测试证据占位文本。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，删除 `scripts/verify-governance.ps1` 中的 `Assert-ContentExcludes` 函数和针对 `tests.md` 的调用，并撤销 `docs/changelog.zh-CN.md` 与本测试章节。
+
+#### Regression Evidence
+- 2026-07-04 负向验证：首次执行 `npm.cmd run verify:governance` 时，因 `tests.md` 残留被阻断的未完成证据占位文本而失败，输出 `tests.md contains unfinished placeholder text`；随后已移除误伤文本。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 占位符搜索：分别执行 `rg -n` 检查 governance 脚本列出的三类未完成测试证据占位文本，均无命中。
+- 2026-07-04 Governance 验证：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs、server module smoke、CLI smoke 和 CLI CJS launcher smoke。
+
+---
+
+### Feature: OpenAI 官方文档审查手册治理门禁
+
+#### Prerequisites
+- 当前仓库包含 `docs/openai-docs-review.zh-CN.md` 和 `scripts/verify-governance.ps1`。
+- 本机可运行 OpenAI docs skill 的 Codex manual helper。
+- 本机可运行 `npm.cmd run verify:governance` 和 release gate 快速路径。
+
+#### Steps
+1. 执行 `node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs`，确认官方 Codex manual 可刷新或已为 current。
+2. 审查 `docs/openai-docs-review.zh-CN.md`，确认包含最近审查时间、官方来源清单、Codex manual helper 命令、必查主题、审查流程和当前审查结论。
+3. 审查 `scripts/verify-governance.ps1`，确认 governance 会校验 `docs/openai-docs-review.zh-CN.md` 中的官方来源 URL、manual helper、`experimentalApi`、auto-review、安全边界、speech-to-text 转写约束和“不能直接声明已经对齐最新 App Server 协议”的结论。
+4. 执行 `git diff --check`。
+5. 执行 `npm.cmd run verify:governance`。
+6. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipPackageSmoke -SchemaAudit skip`。
+
+#### Expected Results
+- 官方文档审查手册不会只剩链接列表；必须保留审查时间、刷新入口、来源范围、执行流程和当前结论。
+- governance 会阻止误删 Codex App Server、Agent approvals/security、Remote connections、Codex open source boundary、Codex access tokens 和 OpenAI speech-to-text 等官方入口。
+- governance 会阻止误删 `gpt-4o-transcribe-diarize`、`diarized_json`、`chunking_strategy=auto`、`25 MB`、非法 endpoint 回退和不展示原始非法 URL 等语音转写约束。
+- governance 会阻止把 `experimentalApi`、auto-review 或 schema drift 状态描述成默认稳定或完全对齐。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `scripts/verify-governance.ps1` 中针对 `docs/openai-docs-review.zh-CN.md` 的新增必需文本，并撤销 `docs/changelog.zh-CN.md` 和本测试章节。
+
+#### Regression Evidence
+- 2026-07-04 官方文档刷新：`node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` 通过，输出 `Manual status: local manual was already current.`。
+- 2026-07-04 官方 speech-to-text 核对：官方文档显示 `gpt-4o-transcribe`、`gpt-4o-mini-transcribe` 和 `gpt-4o-transcribe-diarize`，文件上传限制为 `25 MB`，diarize 支持 `diarized_json`，并要求长音频使用 `chunking_strategy`，推荐 `auto`。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Governance 验证：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs、server module smoke、CLI smoke 和 CLI CJS launcher smoke；Release package smoke、artifact checksum smoke 和 NPM package smoke 按命令显式跳过。
 
 ---
 
@@ -3982,6 +4162,41 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server Auto-review 审批复核通知脱敏诊断
+
+#### Prerequisites
+- 当前仓库包含 `src/server/appServerNotificationDiagnostics.ts`、`src/components/content/DiagnosticsPanel.vue` 和最近 raw schema audit 输出 `output\app-server-schema-audit\20260703-193751`。
+- 本机 raw schema audit 已确认 `item/autoApprovalReview/started` 与 `item/autoApprovalReview/completed` 为 App Server notification methods，且 `GuardianApprovalReview` 与对应 notification payload 标注 `[UNSTABLE]`。
+- 官方 Codex manual 已确认 auto-review 是审批边界上的 reviewer swap，不扩大 sandbox、network 或 filesystem 权限。
+
+#### Steps
+1. 执行官方 manual helper：`node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs`。
+2. 检查 raw schema audit，确认 `GuardianApprovalReviewAction` 中的 command、cwd、network target、request permission reason 和 review rationale 属于不能进入诊断快照的敏感 payload。
+3. 执行 `git diff --check`。
+4. 执行 `npm.cmd run verify:server-modules`。
+5. 执行 `npm.cmd run build`。
+6. 执行 `npm.cmd run verify:governance`。
+7. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip`。
+
+#### Expected Results
+- 服务端 notification diagnostics 把 `item/autoApprovalReview/started` 与 `item/autoApprovalReview/completed` 视为已知不稳定通知，不计入 unknown notification。
+- `/codex-api/health` 和 `/codex-api/diagnostics` 的 `notificationDiagnostics.recentGuardianReviewNotifications` 只包含 method、时间、threadId、turnId、reviewId、targetItemId、status、riskLevel、userAuthorization、actionType、decisionSource、durationMs、hasRationale 和少量计数字段。
+- command、cwd、本机路径、network host/target、request permission reason 和 rationale 不会出现在诊断 JSON、诊断中心或测试快照中；独立 `networkAccess` action 会被标记为网络权限请求，独立 `applyPatch` action 会被标记为文件系统权限请求且只记录文件数量。
+- 诊断中心展示 “Auto-review” 卡片；只读展示自动审批复核生命周期，不审批、不拒绝、不覆盖现有 permission policy。
+
+#### Rollback/Cleanup Notes
+- 如需回滚，撤销 `src/server/appServerNotificationDiagnostics.ts`、`src/components/content/DiagnosticsPanel.vue`、`scripts/server-module-smoke.ts`、`docs/app-server-protocol-matrix.zh-CN.md`、`docs/changelog.zh-CN.md` 和本节测试记录中的相关改动。
+
+#### Regression Evidence
+- 2026-07-04 官方文档/Schema 核对：Codex manual helper 返回 `local manual was already current`；manual 的 Auto-review 章节确认 auto-review 只替换审批 reviewer，不扩大 sandbox、network 或 filesystem 权限；raw schema audit `output\app-server-schema-audit\20260703-193751` 显示 `item/autoApprovalReview/started` 和 `item/autoApprovalReview/completed` 为官方 notification，`GuardianApprovalReview` 与对应 notification payload 标注 `[UNSTABLE]`。
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 Auto-review 通知已知分类、started/completed 记录、status/risk/action 类型、duration、`requestPermissions`、独立 `networkAccess` 与独立 `applyPatch` 的权限请求标记、文件数量统计、command/cwd/network target/reason/rationale 不外泄和 clear。
+- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建；Vite 仍有既有 large chunk warning。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
+
+---
+
 ### Feature: App Server Windows sandbox 通知诊断可见
 
 #### Prerequisites
@@ -4003,14 +4218,6 @@ This file tracks manual regression and feature verification steps.
 
 #### Rollback/Cleanup Notes
 - 如需回滚，撤销 `src/server/appServerNotificationDiagnostics.ts`、`src/components/content/DiagnosticsPanel.vue`、`scripts/server-module-smoke.ts`、`docs/app-server-protocol-matrix.zh-CN.md`、`docs/changelog.zh-CN.md` 和本节测试记录中的相关改动。
-
-#### Regression Evidence
-- 2026-07-04 官方文档/Schema 核对：Codex manual helper 返回 `local manual was already current`；raw schema audit `output\app-server-schema-audit\20260703-193751\typescript\v2` 显示 `ThreadRealtime*Notification` 均标注 EXPERIMENTAL，且 transcript `delta/text`、audio `data`、WebRTC `sdp` 为必须脱敏的 payload。
-- 2026-07-04 静态验证：`git diff --check` 通过。
-- 2026-07-04 Server module smoke：`npm.cmd run verify:server-modules` 通过，输出 `server module smoke ok`，覆盖 realtime 通知已知分类、recent realtime notification 记录、transcript/audio/SDP 不外泄、错误摘要和 clear。
-- 2026-07-04 构建验证：`npm.cmd run build` 通过，包含 `vue-tsc --noEmit`、`vite build` 和 `tsup` CLI 构建；Vite 仍有既有 large chunk warning。
-- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
-- 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
 
 #### Regression Evidence
 - 2026-07-04 官方文档/Schema 核对：Codex manual helper 返回 `local manual was already current`；raw schema audit `output\app-server-schema-audit\20260703-193751\typescript\ServerNotification.ts` 显示 `windows/worldWritableWarning` 与 `windowsSandbox/setupCompleted` 为官方 `ServerNotification` method，`WindowsWorldWritableWarningNotification.ts` 包含 `samplePaths`、`extraCount`、`failedScan`，测试确认诊断输出不包含原始 sample path。
@@ -4220,6 +4427,190 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 Release gate 快速路径：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SkipCliSmoke -SkipPackageSmoke -SchemaAudit skip` 通过，覆盖 whitespace、package parse、governance docs 和 server module smoke；server smoke 仍输出预期的合成 slow RPC / queue warning。
 
 ---
+
+### Feature: Release 包测试手册与治理资产强制校验
+
+#### Prerequisites
+- 仓库已完成前端和 CLI 构建，或可运行完整 `npm.cmd run verify:release` 触发构建。
+- `scripts/package-release.ps1`、`scripts/verify-release.ps1`、`scripts/verify-governance.ps1` 和 `tests.md` 均在当前工作区。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:governance`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`。
+4. 检查 release package smoke 阶段是否生成 `output/release-package-smoke/CX-Codex-verify-smoke.zip` 与 `.sha256`。
+5. 打开生成的 zip，确认包含 `tests.md`、`scripts/package-release.ps1`、`scripts/verify-governance.ps1`、`scripts/verify-release.ps1`、`docs/changelog.zh-CN.md`、`docs/operations-plan.zh-CN.md`、`docs/roadmap.zh-CN.md`、`src\server\codexAppServerBridge.ts` 和 `src\server\transcriptionRoute.ts`。
+
+#### Expected Results
+- `tests.md` 是 release 打包必备资产，缺失时 `package-release.ps1` 直接失败，而不是静默跳过。
+- `verify:release` 的 release package smoke 会在 zip 缺少测试手册、治理脚本或关键治理文档时失败。
+- `verify:release` 的 release package smoke 会在 zip 缺少 bridge 主入口或新抽出的转写路由模块时失败。
+- `verify:governance` 会校验 release smoke 的必检列表和打包清单，避免后续维护时误删这些开源复核入口。
+- checksum 文件引用生成的 zip 文件名，且 SHA256 与 zip 实际内容一致。
+
+#### Rollback/Cleanup Notes
+- 可删除 `output/release-package-smoke/` 下的本地 smoke 产物；不影响源码。
+- 如需回滚，撤销 `scripts/package-release.ps1`、`scripts/verify-release.ps1`、`scripts/verify-governance.ps1`、`docs/changelog.zh-CN.md` 和本节测试记录的改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release package smoke：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `release package smoke ok` 和 `Release verification completed.`；zip 必检清单包含 `src\server\codexAppServerBridge.ts` 和 `src\server\transcriptionRoute.ts`。
+
+---
+
+### Feature: Release gate 复用 artifact checksum verifier
+
+#### Prerequisites
+- `scripts/verify-release.ps1`、`scripts/package-release.ps1` 和 `scripts/verify-release-artifacts.ps1` 存在。
+- 本地已有构建产物，或可运行完整 `npm.cmd run verify:release` 生成构建产物。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:governance`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`。
+4. 在 release gate 输出中确认出现 `==> Release artifact checksum smoke`。
+5. 确认输出包含 `Release artifact checksum verification passed.`。
+6. 再次执行同一条 release gate，确认不会因上一次生成的 `output/release-package-smoke` 产物残留而失败。
+7. 确认后续仍输出 `release package smoke ok` 和 `npm package smoke ok`。
+
+#### Expected Results
+- `verify:release` 的 package smoke 生成 zip 与 `.sha256` 后，会调用 `scripts/verify-release-artifacts.ps1` 校验产物。
+- 本地 release gate 和 GitHub Release workflow 复用同一套 zip/APK checksum 校验逻辑。
+- 每次 package smoke 前会先通过 `Resolve-ReleasePackageSmokeDir` 将输出目录规范化，并确认目标仍位于仓库 `output` 目录下，然后再清理固定的 `output/release-package-smoke` 目录，避免旧 zip/APK 残留污染 artifact checksum 验证。
+- `-SkipPackageSmoke` 会同时跳过 Release package smoke、Release artifact checksum smoke 和 NPM package smoke。
+- `verify:governance` 会阻止 release verifier 漏掉 artifact checksum smoke、固定 smoke 输出目录 helper 和路径边界检查的关键文案。
+
+#### Rollback/Cleanup Notes
+- 可删除 `output/release-package-smoke/` 下的本地 smoke 产物；不影响源码。
+- 如需回滚，撤销 `scripts/verify-release.ps1`、`scripts/verify-governance.ps1`、`docs/changelog.zh-CN.md` 和本节测试记录的改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `Release artifact checksum verification passed.`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`；连续第二次执行同一命令仍通过，确认 smoke 目录会先通过 `Resolve-ReleasePackageSmokeDir` 完成路径边界检查，再清理并打包。
+
+---
+
+### Feature: 当前累计改动完整 Release gate 验证
+
+#### Prerequisites
+- 当前工作区包含 App Server 协议诊断、OpenAI 转写、release governance 和测试文档相关未提交改动。
+- `dist/` 与 `dist-cli/` 可由当前源码重新生成。
+
+#### Steps
+1. 执行 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+2. 确认输出包含 `Build frontend and CLI`。
+3. 确认前端构建执行 `vue-tsc --noEmit && vite build` 并成功生成 `dist/index.html`。
+4. 确认 CLI 构建执行 `tsup` 并成功生成 `dist-cli/index.js`。
+5. 确认后续输出包含 `server module smoke ok`、`cli cjs launcher smoke ok`、`Release artifact checksum verification passed.`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`。
+
+#### Expected Results
+- 当前累计改动可以通过完整 release gate，而不是只依赖 `-SkipBuild` 快速路径。
+- 构建后的 Web/CLI 产物可被 release package smoke 和 npm package smoke 识别。
+- Vite large chunk warning 仍属于现有体积提示，不阻断 release gate。
+- server module smoke 中的合成 slow RPC / queue warning 仍为预期测试场景，最终输出 `server module smoke ok`。
+
+#### Rollback/Cleanup Notes
+- 可删除 `output/release-package-smoke/` 下的本地 smoke 产物；`dist/` 和 `dist-cli/` 是构建输出，可按需重新生成。
+- 如需回滚，撤销本节测试记录；不涉及源码逻辑改动。
+
+#### Regression Evidence
+- 2026-07-04 完整 Release gate：`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过，包含 `vue-tsc --noEmit`、`vite build`、`tsup`、server module smoke、CLI help smoke、CLI CJS launcher smoke、Release package smoke、Release artifact checksum smoke、NPM package smoke 和 schema audit skip。
+- 2026-07-04 构建输出：Vite 生成 `dist/index.html`，tsup 生成 `dist-cli\index.js`；Vite 仍有既有 large chunk warning。
+- 2026-07-04 Release smoke 输出：`server module smoke ok`、`cli cjs launcher smoke ok`、`Release artifact checksum verification passed.`、`release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`。
+
+---
+
+### Feature: GitHub Release 正文版本中性治理
+
+#### Prerequisites
+- `.github/release-body.md` 存在，并被 `.github/workflows/release.yml` 的 `body_path` 使用。
+- 当前仓库包含 `docs/changelog.zh-CN.md`、`docs/security-hardening.zh-CN.md`、`docs/openai-docs-review.zh-CN.md` 和 `docs/app-server-protocol-matrix.zh-CN.md`。
+
+#### Steps
+1. 打开 `.github/release-body.md`。
+2. 确认标题为 `CX-Codex Release`，正文不包含固定旧版本号，例如 `2.2.7`。
+3. 确认正文说明 release zip、APK、debug APK fallback、checksum、release workflow 验证和本地 schema audit 建议。
+4. 执行 `git diff --check`。
+5. 执行 `npm.cmd run verify:governance`。
+6. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`。
+
+#### Expected Results
+- GitHub Release 正文可复用于任意 tag，不会把旧版本号或旧版本卖点发布到新 Release。
+- Release 正文包含 changelog、安全、OpenAI/Codex App Server 兼容文档入口。
+- Release 正文说明 zip/APK/checksum 资产用途、workflow 验证步骤和本地 schema audit 要求。
+- `verify:governance` 会阻止 `.github/release-body.md` 中残留固定旧版本号或旧版说明标题。
+
+#### Rollback/Cleanup Notes
+- 无运行产物需要清理。
+- 如需回滚，撤销 `.github/release-body.md`、`scripts/verify-governance.ps1`、`docs/changelog.zh-CN.md` 和本节测试记录的改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`。
+
+---
+
+### Feature: RELEASE.md 发版手册与自动门禁一致性
+
+#### Prerequisites
+- `RELEASE.md`、`scripts/verify-release.ps1`、`scripts/verify-release-artifacts.ps1` 和 `scripts/verify-governance.ps1` 存在。
+- 本地已有构建产物，或可运行完整 `npm.cmd run verify:release` 生成构建产物。
+
+#### Steps
+1. 打开 `RELEASE.md`。
+2. 确认本地检查清单说明 `verify:release` 会执行 Release package smoke 和 NPM package smoke。
+3. 确认 `RELEASE.md` 说明 `npm pack --dry-run --json` 的 npm 包 dry-run 校验边界。
+4. 确认最终资产检查步骤包含 `npm.cmd run verify:release-artifacts -- -OutputDir artifacts`。
+5. 执行 `git diff --check`。
+6. 执行 `npm.cmd run verify:governance`。
+7. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`。
+
+#### Expected Results
+- `RELEASE.md` 描述的本地发版步骤与 `verify-release.ps1` 当前真实门禁一致。
+- 手册明确 `-SkipPackageSmoke` 会同时跳过 Release package smoke 和 NPM package smoke，正式发版不能使用。
+- 手册要求最终发布前运行 artifact checksum 验证，覆盖 zip / APK 与 `.sha256`。
+- `verify:governance` 会阻止发版手册遗漏 NPM package smoke、npm dry-run 或 artifact checksum 验证说明。
+
+#### Rollback/Cleanup Notes
+- 无运行产物需要清理。
+- 如需回滚，撤销 `RELEASE.md`、`scripts/verify-governance.ps1`、`docs/changelog.zh-CN.md` 和本节测试记录的改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `release package smoke ok`、`npm package smoke ok` 和 `Release verification completed.`。
+
+---
+
+### Feature: npm 发布包 dry-run 内容门禁
+
+#### Prerequisites
+- 仓库已完成前端和 CLI 构建，确保 `dist/index.html` 与 `dist-cli/index.js` 存在。
+- `package.json` 的 `files` 字段仍用于限制 npm 发布包范围。
+
+#### Steps
+1. 执行 `git diff --check`。
+2. 执行 `npm.cmd run verify:governance`。
+3. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`。
+4. 在 release gate 输出中确认出现 `==> NPM package smoke` 和 `npm package smoke ok`。
+5. 如需单独复核，执行 `npm.cmd pack --dry-run --json`，检查文件列表。
+
+#### Expected Results
+- npm dry-run 文件列表包含 `package.json`、`README.md`、`LICENSE`、`dist/index.html`、`dist-cli/index.js` 和 `docs/app-server-schema-audit-summary.json`。
+- npm dry-run 文件列表不包含 `src/server/codexAppServerBridge.ts`、`scripts/verify-release.ps1` 或 `tests.md`。
+- `verify:governance` 会校验 release verifier 中保留 npm package smoke 的关键断言，避免发布包门禁被后续维护误删。
+
+#### Rollback/Cleanup Notes
+- `npm pack --dry-run --json` 不生成 `.tgz` 产物，无需清理。
+- 如需回滚，撤销 `scripts/verify-release.ps1`、`scripts/verify-governance.ps1`、`docs/changelog.zh-CN.md` 和本节测试记录的改动。
+
+#### Regression Evidence
+- 2026-07-04 静态验证：`git diff --check` 通过。
+- 2026-07-04 治理门禁：`npm.cmd run verify:governance` 通过，输出 `Governance docs check passed.`。
+- 2026-07-04 Release gate：`npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` 通过，输出 `npm package smoke ok` 和 `Release verification completed.`。
 
 ### Feature: App Server realtime 实验通知脱敏诊断
 
