@@ -7335,3 +7335,34 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: CI release verification package runner alignment
+
+#### Prerequisites
+- Current repository includes `.github/workflows/ci.yml`, `package.json`, `scripts/run-powershell-script.mjs`, `scripts/verify-release.ps1`, and `scripts/verify-governance.ps1`.
+- Dependencies are installed so the package-script release gate and governance verification can run.
+
+#### Steps
+1. Open `.github/workflows/ci.yml` and confirm the build job runs `npm run verify:release -- -SchemaAudit skip`.
+2. Open `package.json` and confirm `verify:release` invokes `node ./scripts/run-powershell-script.mjs ./scripts/verify-release.ps1`.
+3. Open `scripts/verify-governance.ps1` and confirm it requires the CI workflow to use `npm run verify:release -- -SchemaAudit skip`.
+4. Open `docs/changelog.zh-CN.md` and confirm the unpublished protocol governance section records the CI runner alignment.
+5. Run `git diff --check`.
+6. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+7. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- CI release verification uses the same package-script PowerShell runner path as local release verification.
+- Governance verification fails if `.github/workflows/ci.yml` regresses to a direct `verify-release.ps1` invocation for the build job.
+- Release verification still completes through the package script without requiring a direct PowerShell workflow command.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal release smoke output in `output/release-package-smoke/`.
+- To roll back, restore the direct CI `verify-release.ps1` invocation, revert the governance assertion, and remove this changelog/test record.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 package-script release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed through `node ./scripts/run-powershell-script.mjs ./scripts/verify-release.ps1`, completing `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

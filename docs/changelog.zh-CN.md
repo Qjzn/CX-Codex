@@ -17,6 +17,7 @@
   - 普通文件上传请求体新增默认 50MiB 服务端保护，可通过 `CX_CODEX_FILE_UPLOAD_MAX_BYTES` 或 `FILE_UPLOAD_MAX_BYTES` 覆盖。
 - 协议治理：
   - 本地 `verify:governance`、`verify:release` 和 `verify:release-artifacts` 新增 PowerShell 运行器，先探测 `pwsh`，不可用或挂起时自动回退到 Windows PowerShell，并把选中的命令传给 release gate 内部调用。
+  - GitHub Actions CI 的 Release verification 改为调用 `npm run verify:release -- -SchemaAudit skip`，与本地 package script 共享同一个 PowerShell 运行器入口，避免 PR 验证路径与本地门禁分叉。
   - `verify:governance` 会校验 OpenAI 官方文档审查手册必须保留审查时间、官方来源、Codex manual 刷新命令、当前结论和语音转写约束，避免长期项目在文档入口上漂移。
   - OpenAI 官方文档审查手册已刷新到 2026-07-05 复核结果，确认 Codex App Server handshake / `experimentalApi` 边界和 Speech to text diarize multipart 约束仍与当前实现策略一致。
   - `verify:governance` 会阻止 `tests.md` 残留未完成验证证据占位文本，避免功能已经实现但测试记录仍是待补充状态。

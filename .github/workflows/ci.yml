@@ -28,8 +28,7 @@ jobs:
         run: npm ci
 
       - name: Run release verification
-        shell: pwsh
-        run: ./scripts/verify-release.ps1 -SchemaAudit skip
+        run: npm run verify:release -- -SchemaAudit skip
 
   windows-bootstrap-smoke:
     runs-on: windows-latest

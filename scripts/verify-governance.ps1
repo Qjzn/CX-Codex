@@ -655,7 +655,7 @@ foreach ($key in @("typescriptRoot", "typescriptV2", "jsonRoot", "jsonV2")) {
 }
 
 Assert-ContentIncludes ".github/workflows/ci.yml" @(
-  "./scripts/verify-release.ps1 -SchemaAudit skip"
+  "npm run verify:release -- -SchemaAudit skip"
 )
 
 Assert-ContentIncludes ".github/workflows/release.yml" @(
