@@ -6244,3 +6244,41 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server thread-list RPC result augmenter factory
+
+#### Prerequisites
+- Current repository includes `src/server/appServerThreadListAugment.ts`, `src/server/codexAppServerBridge.ts`, and `scripts/server-module-smoke.ts`.
+- Dependencies are installed so TypeScript, Vite, tsup, and the server module smoke verifier can run.
+
+#### Steps
+1. Open `src/server/appServerThreadListAugment.ts` and confirm `createAppServerThreadListRpcResultAugmenter(...)` wraps `AppServerThreadListAugmenter.augmentThreadListRpcResult(...)`.
+2. Confirm the factory-created augmenter reads pinned thread ids from the injected dependency and reads supplemental thread summaries through App Server RPC method `thread/read` with `includeTurns: false`.
+3. Open `src/server/codexAppServerBridge.ts` and confirm `augmentThreadListRpcResult` is created from the factory with the shared supplemental augmenter, merged pinned thread id reader, and App Server RPC.
+4. Run `git diff --check`.
+5. Run `node scripts\verify-server-modules.mjs`.
+6. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+7. Run `node_modules\.bin\vite.cmd build`.
+8. Run `node_modules\.bin\tsup.cmd`.
+9. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+10. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- `codexAppServerBridge.ts` no longer owns the supplemental thread-list RPC wrapper details.
+- Archived first-page `thread/list` augmentation still uses merged pinned thread ids and best-effort `thread/read` summaries.
+- Supplemental summary reads still call `thread/read` with `includeTurns: false`.
+- `scripts/server-module-smoke.ts` covers the factory-created augmenter and verifies the RPC method and params.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifacts need cleanup beyond normal build output in `dist/`, `dist-cli/`, and `output/`.
+- To roll back, revert `src/server/appServerThreadListAugment.ts`, `src/server/codexAppServerBridge.ts`, `scripts/server-module-smoke.ts`, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed, including coverage for `createAppServerThreadListRpcResultAugmenter()` `thread/read` method/params wiring and existing thread-list augmentation behavior.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

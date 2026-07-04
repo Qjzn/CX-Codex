@@ -151,7 +151,10 @@ import {
   normalizeWebBridgeSettings,
   readWebBridgeSettings,
 } from './webBridgeSettings.js'
-import { AppServerThreadListAugmenter } from './appServerThreadListAugment.js'
+import {
+  AppServerThreadListAugmenter,
+  createAppServerThreadListRpcResultAugmenter,
+} from './appServerThreadListAugment.js'
 import { createAppServerRuntimeTurnStarter } from './appServerRuntimeStart.js'
 import { createAppServerRuntimeTurnInterrupter } from './appServerRuntimeInterrupt.js'
 import { createAppServerRuntimeSnapshotPersister } from './appServerRuntimeSnapshotPersistence.js'
@@ -676,22 +679,6 @@ function getSharedBridgeState(): SharedBridgeState {
   return created
 }
 
-async function augmentThreadListRpcResult(
-  appServer: AppServerProcess,
-  params: unknown,
-  result: unknown,
-): Promise<unknown> {
-  return await supplementalThreadListAugmenter.augmentThreadListRpcResult({
-    params,
-    result,
-    readPinnedThreadIds: readMergedPinnedThreadIds,
-    readThreadById: (threadId) => appServer.rpc('thread/read', {
-      threadId,
-      includeTurns: false,
-    }),
-  })
-}
-
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const { appServer, methodCatalog } = getSharedBridgeState()
   const threadSearchIndexStore = new ThreadSearchIndexStore(async () => buildThreadSearchIndex(
@@ -699,6 +686,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     await readThreadTitlesFromSessionIndex(getCodexSessionIndexPath()),
   ))
   const threadReadCacheStore = new AppServerThreadReadCacheStore()
+  const augmentThreadListRpcResult = createAppServerThreadListRpcResultAugmenter({
+    augmenter: supplementalThreadListAugmenter,
+    readPinnedThreadIds: readMergedPinnedThreadIds,
+    rpc: (method, params) => appServer.rpc(method, params),
+  })
   const runtimeStateStore = new RuntimeStateStore({
     readThreadIdFromPayload,
     readTurnIdFromPayload,
@@ -895,7 +887,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         rememberCachedThreadRead: (threadId, threadRead) => {
           threadReadCacheStore.remember(threadId, threadRead)
         },
-        augmentThreadListRpcResult: (params, result) => augmentThreadListRpcResult(appServer, params, result),
+        augmentThreadListRpcResult,
         clearThreadSearchIndex: () => threadSearchIndexStore.clear(),
       })) {
         return

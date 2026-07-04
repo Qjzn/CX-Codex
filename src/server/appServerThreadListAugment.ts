@@ -9,6 +9,12 @@ type ThreadListAugmentOptions = {
   readThreadById: (threadId: string) => Promise<unknown>
 }
 
+export type AppServerThreadListRpcResultAugmenterDependencies = {
+  augmenter: AppServerThreadListAugmenter
+  readPinnedThreadIds: () => Promise<string[]>
+  rpc(method: string, params: unknown): Promise<unknown>
+}
+
 type SupplementalThreadSummaryCacheEntry = {
   value: unknown | null
   cachedAtMs: number
@@ -136,4 +142,18 @@ export class AppServerThreadListAugmenter {
       this.cacheByThreadId.delete(key)
     }
   }
+}
+
+export function createAppServerThreadListRpcResultAugmenter(
+  dependencies: AppServerThreadListRpcResultAugmenterDependencies,
+): (params: unknown, result: unknown) => Promise<unknown> {
+  return async (params, result) => await dependencies.augmenter.augmentThreadListRpcResult({
+    params,
+    result,
+    readPinnedThreadIds: dependencies.readPinnedThreadIds,
+    readThreadById: (threadId) => dependencies.rpc('thread/read', {
+      threadId,
+      includeTurns: false,
+    }),
+  })
 }

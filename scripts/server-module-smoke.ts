@@ -116,7 +116,10 @@ import {
   createAppServerThreadRuntimeSnapshotReader,
   readAppServerThreadRuntimeSnapshot,
 } from '../src/server/appServerThreadRuntimeSnapshot.js'
-import { AppServerThreadListAugmenter } from '../src/server/appServerThreadListAugment.js'
+import {
+  AppServerThreadListAugmenter,
+  createAppServerThreadListRpcResultAugmenter,
+} from '../src/server/appServerThreadListAugment.js'
 import { AppServerStderrLogger, type AppServerStderrLogEntry } from '../src/server/appServerStderrLogger.js'
 import { AppServerPendingRpcStore } from '../src/server/appServerPendingRpcStore.js'
 import { clearAppServerSessionStores } from '../src/server/appServerSessionCleanup.js'
@@ -2298,6 +2301,29 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
     readThreadById,
   })
   assert.deepEqual(calls, ['pin-a', 'missing', 'pin-b', 'throws', 'pin-a', 'missing'])
+
+  const factoryRpcCalls: Array<{ method: string; params: unknown }> = []
+  const augmentThreadListRpcResult = createAppServerThreadListRpcResultAugmenter({
+    augmenter: new AppServerThreadListAugmenter({
+      ttlMs: 100,
+      maxReads: 2,
+      nowMs: () => 2_000,
+    }),
+    readPinnedThreadIds: async () => ['pin-factory'],
+    rpc: async (method, params) => {
+      factoryRpcCalls.push({ method, params })
+      return { thread: { id: 'pin-factory', title: 'Factory' } }
+    },
+  })
+  const factoryAugmented = await augmentThreadListRpcResult(
+    { archived: true },
+    { data: [] },
+  ) as { data: Array<{ id: string; title?: string }> }
+  assert.deepEqual(factoryAugmented.data, [{ id: 'pin-factory', title: 'Factory' }])
+  assert.deepEqual(factoryRpcCalls, [{
+    method: 'thread/read',
+    params: { threadId: 'pin-factory', includeTurns: false },
+  }])
 }
 
 function smokeAppServerThreadReadCache(): void {
