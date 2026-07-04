@@ -6547,3 +6547,41 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server runtime reconciliation factory
+
+#### Prerequisites
+- Current repository includes `src/server/appServerRuntimeReconciliation.ts`, `src/server/codexAppServerBridge.ts`, and `scripts/server-module-smoke.ts`.
+- Dependencies are installed so TypeScript, Vite, tsup, and the server module smoke verifier can run.
+
+#### Steps
+1. Open `src/server/appServerRuntimeReconciliation.ts` and confirm `createAppServerRuntimeReconciliation(...)` returns `reconcileRuntimeThread` and `runtimeReconcileScheduler`.
+2. Open `src/server/codexAppServerBridge.ts` and confirm the bridge creates runtime reconciliation through `createAppServerRuntimeReconciliation(...)`.
+3. Confirm the factory still wires thread runtime snapshot reads, runtime request reconciliation, uncertain-request scheduling, runtime request updates, and reconcile failure logging through the same dependencies.
+4. Run `git diff --check`.
+5. Run `node scripts\verify-server-modules.mjs`.
+6. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+7. Run `node_modules\.bin\vite.cmd build`.
+8. Run `node_modules\.bin\tsup.cmd`.
+9. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+10. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- `codexAppServerBridge.ts` no longer owns separate runtime reconciler and reconcile scheduler factory calls.
+- Runtime reconciliation still reads the App Server thread runtime snapshot and updates active runtime requests from the snapshot.
+- Runtime reconcile scheduling still uses uncertain runtime requests and logs reconcile failures through the injected warning writer.
+- `scripts/server-module-smoke.ts` covers the combined runtime reconciliation factory.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifacts need cleanup beyond normal build output in `dist/`, `dist-cli/`, and `output/`.
+- To roll back, delete `src/server/appServerRuntimeReconciliation.ts`, restore the separate runtime reconciler and scheduler factory calls in `src/server/codexAppServerBridge.ts`, and revert `scripts/server-module-smoke.ts` plus this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed, including coverage for `createAppServerRuntimeReconciliation()` reconciler and scheduler wiring.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

@@ -332,6 +332,7 @@ import {
   selectRuntimeRequestsForReconcile,
   updateRuntimeRequestsFromSnapshot,
 } from '../src/server/appServerRuntimeRequestReconciliation.js'
+import { createAppServerRuntimeReconciliation } from '../src/server/appServerRuntimeReconciliation.js'
 import {
   createLocalRuntimeSnapshot,
   createLocalRuntimeSnapshotFromPersisted,
@@ -463,6 +464,7 @@ try {
   smokeAppServerRuntimeBridge()
   await smokeAppServerRuntimeRequestReconciliation()
   await smokeAppServerRuntimeReconcileScheduler()
+  await smokeAppServerRuntimeReconciliation()
   smokeAppServerLocalRuntimeSnapshot()
   smokeAppServerRuntimeSnapshotRecovery()
   await smokeAppServerThreadRuntimeSnapshot()
@@ -5729,6 +5731,71 @@ async function smokeAppServerRuntimeReconcileScheduler(): Promise<void> {
     status: 'stopping',
     error: 'thread-b failed',
   }])
+}
+
+async function smokeAppServerRuntimeReconciliation(): Promise<void> {
+  const baseRequest: RuntimeRequestRecord = {
+    requestId: 'request-combined',
+    clientMessageId: 'client-combined',
+    threadId: 'thread-combined',
+    turnId: 'turn-combined',
+    status: 'running',
+    mode: 'execute',
+    promptHash: 'hash-combined',
+    payload: {},
+    retryCount: 0,
+    createdAtIso: '2026-01-01T00:00:00.000Z',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    lastError: null,
+  }
+  const readThreadIds: string[] = []
+  const uncertainLimits: number[] = []
+  const updates: Array<{ requestId: string; patch: unknown }> = []
+  const failures: unknown[] = []
+  const snapshot = createThreadRuntimeSnapshot({
+    threadId: 'thread-combined',
+    executionState: 'completed',
+    activeTurnId: 'turn-finished',
+  })
+  const reconciliation = createAppServerRuntimeReconciliation({
+    readThreadRuntimeSnapshot: async (threadId) => {
+      readThreadIds.push(threadId)
+      return snapshot
+    },
+    runtimeStore: {
+      listRequestsByThread: (threadId, statuses) => {
+        assert.equal(threadId, 'thread-combined')
+        assert.equal(statuses, RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES)
+        return [baseRequest]
+      },
+      listUncertainRequests: (limit) => {
+        uncertainLimits.push(limit)
+        return []
+      },
+      updateRequest: (requestId, patch) => {
+        updates.push({ requestId, patch })
+        return null
+      },
+    },
+    getErrorMessage,
+    writeReconcileFailure: (details) => {
+      failures.push(details)
+    },
+  })
+  assert.equal(await reconciliation.reconcileRuntimeThread('thread-combined'), snapshot)
+  reconciliation.runtimeReconcileScheduler.dispose()
+  assert.deepEqual(readThreadIds, ['thread-combined'])
+  assert.deepEqual(updates, [{
+    requestId: 'request-combined',
+    patch: {
+      status: 'completed',
+      threadId: 'thread-combined',
+      turnId: 'turn-finished',
+      lastError: null,
+    },
+  }])
+  assert.deepEqual(uncertainLimits, [])
+  assert.deepEqual(failures, [])
 }
 
 function smokeRuntimePayloadParsing(): void {

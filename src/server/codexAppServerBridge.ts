@@ -11,10 +11,7 @@ import {
   AppServerNotificationReplay,
   createAppServerNotificationReplayAccessors,
 } from './appServerNotificationReplay.js'
-import {
-  createRuntimeThreadReconciler,
-} from './appServerRuntimeRequestReconciliation.js'
-import { createRuntimeReconcileScheduler } from './appServerRuntimeReconcileScheduler.js'
+import { createAppServerRuntimeReconciliation } from './appServerRuntimeReconciliation.js'
 import {
   RuntimeStateStore,
   type ThreadRuntimeSnapshot,
@@ -787,9 +784,16 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     getAppServerStartedAtMs: () => appServer.getStartedAtMs(),
   })
 
-  const reconcileRuntimeThread = createRuntimeThreadReconciler({
+  const {
+    reconcileRuntimeThread,
+    runtimeReconcileScheduler,
+  } = createAppServerRuntimeReconciliation({
     readThreadRuntimeSnapshot,
     runtimeStore,
+    getErrorMessage,
+    writeReconcileFailure: (details) => {
+      writeBridgeLog('warn', 'Runtime reconcile failed', details)
+    },
   })
 
   const {
@@ -811,16 +815,6 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     markStopUncertain: (threadId, lastError = null) => runtimeStateStore.markStopUncertain(threadId, lastError),
     clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
     getErrorMessage,
-  })
-
-  const runtimeReconcileScheduler = createRuntimeReconcileScheduler({
-    listUncertainRequests: (limit) => runtimeStore.listUncertainRequests(limit),
-    reconcileRuntimeThread,
-    updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
-    getErrorMessage,
-    writeReconcileFailure: (details) => {
-      writeBridgeLog('warn', 'Runtime reconcile failed', details)
-    },
   })
 
   const middleware = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
