@@ -44,6 +44,7 @@
   - Codex bridge HTTP 请求错误响应从主 middleware 抽离为独立 helper，并由 server module smoke 覆盖 JSON body 过大 413 与普通 bridge 失败 502 分支。
   - Codex bridge middleware dispose 资源释放顺序从主文件抽离为独立 helper，并由 server module smoke 覆盖 runtime scheduler、索引、监听器、诊断缓存、runtime store 和 app-server 的清理顺序。
   - Codex bridge route handler 顺序调度从主 middleware 抽离为独立 helper，并由 server module smoke 覆盖同步/异步 handler、首个命中后停止和未命中继续 next 的分支。
+  - Codex bridge route handler 列表构建从主 middleware 抽离为独立 helper，并由 server module smoke 覆盖 route 数量、replay accessor 绑定和未知 URL 未处理分支。
   - App Server stdout JSON-RPC line 分流从 bridge 主文件抽离为独立 dispatcher，并由 server module smoke 覆盖 response 结算、notification 分发、server request 转交和无效行忽略。
   - App Server JSON-RPC stdin 写入从 bridge 主文件抽离为独立 writer，并由 server module smoke 覆盖正常写入、未运行报错和写入失败触发恢复回调。
   - App Server 进程 stdout/stderr/stdin/error/exit 事件装配从 bridge 主文件抽离为独立 helper，并由 server module smoke 覆盖 stderr trim、stale process error 忽略和 exit 转交。

@@ -393,6 +393,7 @@ import {
 import { RequestBodyTooLargeError } from '../src/server/httpBody.js'
 import { writeCodexBridgeRequestError } from '../src/server/codexBridgeRequestError.js'
 import { disposeCodexBridgeMiddlewareResources } from '../src/server/codexBridgeMiddlewareDispose.js'
+import { createCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteHandlers.js'
 import { runCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteDispatch.js'
 
 const originalNow = Date.now
@@ -454,6 +455,7 @@ try {
   smokeHttpJsonResponse()
   smokeCodexBridgeRequestError()
   smokeCodexBridgeMiddlewareDispose()
+  await smokeCodexBridgeRouteHandlers()
   await smokeCodexBridgeRouteDispatch()
   smokeErrorMessage()
   await smokeComposerFileSearch()
@@ -4323,6 +4325,115 @@ function smokeCodexBridgeMiddlewareDispose(): void {
     'runtimeStore.close',
     'appServer.dispose',
   ])
+}
+
+async function smokeCodexBridgeRouteHandlers(): Promise<void> {
+  const replayCalls: Array<{ afterSeq: number; limit: number }> = []
+  const dependencies = {
+    appServer: {
+      rpc: async () => {
+        throw new Error('unexpected app-server rpc')
+      },
+      setWebBridgeSettings: () => {},
+      markPlanModeTurn: () => {},
+      clearPlanModeTurn: () => {},
+      respondToServerRequest: async () => {},
+      listPendingServerRequests: () => [],
+      listPendingServerRequestsForThread: () => [],
+      getThreadTokenUsage: () => null,
+      getStatus: () => ({
+        running: false,
+        initialized: false,
+        pendingRpcCount: 0,
+        queuedRpcCount: 0,
+        uptimeMs: 0,
+        launchPolicy: createAppServerLaunchPolicySnapshot(DEFAULT_APP_SERVER_LAUNCH_POLICY),
+      }),
+    },
+    methodCatalog: {
+      listMethods: async () => [],
+      listNotificationMethods: async () => [],
+    },
+    readJsonBody: async () => {
+      throw new Error('unexpected body read')
+    },
+    runtimeStateStore: {
+      markStarting: () => {},
+      markStopping: () => {},
+      markQueued: () => {},
+      markRunning: () => {},
+      markInterrupted: () => {},
+      snapshot: () => ({}),
+      snapshots: () => [],
+    },
+    runtimeStore: {
+      listRequestsByThread: () => [],
+      getHealth: () => ({ latestSeq: 0 }),
+      listEventsAfter: () => ({ notifications: [] }),
+      listUncertainRequests: () => [],
+      getLatestRequestByClientMessageId: () => null,
+    },
+    threadSearchIndexStore: {
+      clear: () => {},
+      search: async () => ({ threadIds: [], indexedThreadCount: 0 }),
+    },
+    threadReadCacheStore: {
+      delete: () => {},
+      remember: () => {},
+    },
+    notificationDiagnostics: {
+      snapshot: () => ({}),
+    },
+    statusDiagnostics: {
+      observeThreadUnsubscribeResponse: () => {},
+      snapshot: () => ({}),
+    },
+    notificationReplay: {
+      latestSeq: 9,
+    },
+    listNotificationEventsAfter: (afterSeq: number, limit: number) => {
+      replayCalls.push({ afterSeq, limit })
+      return { notifications: [], latestSeq: 9, oldestSeq: 1 }
+    },
+    subscribeNotifications: () => () => {},
+    persistRuntimeSnapshot: () => ({}),
+    startRuntimeTurn: async () => ({ status: 'started' }),
+    interruptRuntimeTurn: async () => ({ status: 'interrupted' }),
+    augmentThreadListRpcResult: async (_params: unknown, result: unknown) => result,
+    reconcileRuntimeThread: async () => ({}),
+    readLocalRuntimeSnapshot: () => ({}),
+    readThreadRuntimeSnapshot: async () => null,
+    readCachedThreadTokenUsage: async () => null,
+    readAppServerHookDiagnostics: async () => ({}),
+    readAppServerSchemaAuditSummary: async () => ({}),
+    readWindowsSandboxReadinessDiagnostics: async () => ({}),
+  }
+
+  const replayResponse = createRouteTestResponse()
+  const replayRequest = { method: 'GET' }
+  const replayHandlers = createCodexBridgeRouteHandlers(
+    replayRequest as never,
+    replayResponse.response as never,
+    new URL('/codex-api/events/replay?after=5&limit=2', 'http://localhost'),
+    dependencies as never,
+  )
+
+  assert.equal(replayHandlers.length, 18)
+  assert.equal(await runCodexBridgeRouteHandlers(replayHandlers), true)
+  assert.deepEqual(replayCalls, [{ afterSeq: 5, limit: 2 }])
+  assert.deepEqual(JSON.parse(replayResponse.body), {
+    data: { notifications: [], latestSeq: 9, oldestSeq: 1 },
+  })
+
+  const unmatchedResponse = createRouteTestResponse()
+  const unmatchedHandlers = createCodexBridgeRouteHandlers(
+    { method: 'GET' } as never,
+    unmatchedResponse.response as never,
+    new URL('/codex-api/not-a-route', 'http://localhost'),
+    dependencies as never,
+  )
+  assert.equal(await runCodexBridgeRouteHandlers(unmatchedHandlers), false)
+  assert.equal(unmatchedResponse.body, '')
 }
 
 async function smokeCodexBridgeRouteDispatch(): Promise<void> {

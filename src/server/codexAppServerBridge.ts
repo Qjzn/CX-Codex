@@ -1,7 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { homedir } from 'node:os'
-import { handleSkillsRoutes, initializeSkillsSyncOnStartup } from './skillsRoutes.js'
+import { initializeSkillsSyncOnStartup } from './skillsRoutes.js'
 import { RuntimeStore, type RuntimeRequestRecord, type RuntimeRequestStatus } from './runtimeStore.js'
 import {
   type BridgeNotificationEvent,
@@ -27,27 +26,8 @@ import {
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import { writeCodexBridgeRequestError } from './codexBridgeRequestError.js'
 import { disposeCodexBridgeMiddlewareResources } from './codexBridgeMiddlewareDispose.js'
+import { createCodexBridgeRouteHandlers } from './codexBridgeRouteHandlers.js'
 import { runCodexBridgeRouteHandlers } from './codexBridgeRouteDispatch.js'
-import {
-  getTranscriptionProxyConfigSnapshot,
-} from './transcriptionProxy.js'
-import { handleTranscriptionRoutes } from './transcriptionRoute.js'
-import { handleNotificationReplayRoute } from './notificationReplayRoute.js'
-import { handleLocalStateRoutes } from './localStateRoutes.js'
-import { handleNotificationSseRoute } from './notificationSseRoute.js'
-import { handleRuntimeStateRoutes } from './runtimeStateRoutes.js'
-import { handleDiagnosticsRoutes } from './diagnosticsRoutes.js'
-import { handleWorkspaceMetaRoutes } from './workspaceMetaRoutes.js'
-import { handleProjectRootRoutes } from './projectRootRoutes.js'
-import { handleComposerFileSearchRoutes } from './composerFileSearchRoutes.js'
-import { handleThreadRoutes } from './threadRoutes.js'
-import { handleStatusRoutes } from './statusRoutes.js'
-import { handleGithubTrendingRoutes } from './githubTrendingRoutes.js'
-import { handleServerRequestRoutes } from './serverRequestRoutes.js'
-import { handleFileUploadRoute } from './fileUploadRoute.js'
-import { handleRuntimeActionRoutes } from './runtimeActionRoutes.js'
-import { handleWorktreeRoutes } from './worktreeRoutes.js'
-import { handleRpcProxyRoute } from './rpcProxyRoute.js'
 import { resolveCodexCommand } from '../commandResolution.js'
 import {
   AppServerRpcCache,
@@ -774,92 +754,31 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       const url = new URL(req.url, 'http://localhost')
 
-      if (await runCodexBridgeRouteHandlers([
-        () => handleSkillsRoutes(req, res, url, { appServer, readJsonBody }),
-        () => handleFileUploadRoute(req, res, url),
-        () => handleLocalStateRoutes(req, res, url, {
-          readJsonBody,
-          setWebBridgeSettings: (settings) => appServer.setWebBridgeSettings(settings),
-        }),
-        () => handleRpcProxyRoute(req, res, url, {
-          readJsonBody,
-          rpc: (method, params) => appServer.rpc(method, params),
-          runtimeStateStore,
-          persistRuntimeSnapshot,
-          markPlanModeTurn: (threadId, turnId = '') => appServer.markPlanModeTurn(threadId, turnId),
-          clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
-          observeThreadUnsubscribeResponse: (details) => statusDiagnostics.observeThreadUnsubscribeResponse(details),
-          deleteCachedThreadRead: (threadId) => threadReadCacheStore.delete(threadId),
-          rememberCachedThreadRead: (threadId, threadRead) => {
-            threadReadCacheStore.remember(threadId, threadRead)
-          },
-          augmentThreadListRpcResult,
-          clearThreadSearchIndex: () => threadSearchIndexStore.clear(),
-        }),
-        () => handleRuntimeActionRoutes(req, res, url, {
-          readJsonBody,
-          startRuntimeTurn,
-          interruptRuntimeTurn,
-          getLatestRequestByClientMessageId: (clientMessageId) => runtimeStore.getLatestRequestByClientMessageId(clientMessageId),
-        }),
-        () => handleTranscriptionRoutes(req, res, url),
-        () => handleServerRequestRoutes(req, res, url, {
-          readJsonBody,
-          respondToServerRequest: (payload) => appServer.respondToServerRequest(payload),
-          listPendingServerRequests: () => appServer.listPendingServerRequests(),
-        }),
-        () => handleNotificationReplayRoute(req, res, url, middleware.listNotificationEventsAfter),
-        () => handleRuntimeStateRoutes(req, res, url, {
-          runtimeRequestStore: runtimeStore,
-          runtimeStateStore,
-          reconcileRuntimeThread,
-          readLocalRuntimeSnapshot,
-          persistRuntimeSnapshot,
-          readThreadRuntimeSnapshot,
-          readCachedThreadTokenUsage,
-          listPendingServerRequestsForThread: (threadId) => appServer.listPendingServerRequestsForThread(threadId),
-          getThreadTokenUsage: (threadId) => appServer.getThreadTokenUsage(threadId),
-        }),
-        () => handleDiagnosticsRoutes(req, res, url, {
-          getAppServerStatus: () => appServer.getStatus(),
-          getNotificationDiagnostics: () => notificationDiagnostics.snapshot(),
-          getStatusDiagnostics: () => statusDiagnostics.snapshot(),
-          listPendingServerRequests: () => appServer.listPendingServerRequests(),
-          readHookDiagnostics: readAppServerHookDiagnostics,
-          readSchemaAuditSummary: readAppServerSchemaAuditSummary,
-          readWindowsSandboxDiagnostics: readWindowsSandboxReadinessDiagnostics,
-          getTranscriptionDiagnostics: getTranscriptionProxyConfigSnapshot,
-          runtimeStore,
-        }),
-        () => handleGithubTrendingRoutes(req, res, url, {
-          readJsonBody,
-        }),
-        () => handleWorktreeRoutes(req, res, url, {
-          readJsonBody,
-        }),
-        () => handleWorkspaceMetaRoutes(req, res, url, {
-          methodCatalog,
-          readJsonBody,
-          homeDirectory: homedir,
-        }),
-        () => handleProjectRootRoutes(req, res, url, {
-          readJsonBody,
-        }),
-        () => handleComposerFileSearchRoutes(req, res, url, {
-          readJsonBody,
-        }),
-        () => handleThreadRoutes(req, res, url, {
-          readJsonBody,
-          threadSearchIndexStore,
-        }),
-        () => handleStatusRoutes(req, res, url, {
-          readJsonBody,
-        }),
-        () => handleNotificationSseRoute(req, res, url, {
-          latestSeq: () => notificationReplay.latestSeq,
-          subscribeNotifications: middleware.subscribeNotifications,
-        }),
-      ])) {
+      if (await runCodexBridgeRouteHandlers(createCodexBridgeRouteHandlers(req, res, url, {
+        appServer,
+        methodCatalog,
+        readJsonBody,
+        runtimeStateStore,
+        runtimeStore,
+        threadSearchIndexStore,
+        threadReadCacheStore,
+        notificationDiagnostics,
+        statusDiagnostics,
+        notificationReplay,
+        listNotificationEventsAfter: middleware.listNotificationEventsAfter,
+        subscribeNotifications: middleware.subscribeNotifications,
+        persistRuntimeSnapshot,
+        startRuntimeTurn,
+        interruptRuntimeTurn,
+        augmentThreadListRpcResult,
+        reconcileRuntimeThread,
+        readLocalRuntimeSnapshot,
+        readThreadRuntimeSnapshot,
+        readCachedThreadTokenUsage,
+        readAppServerHookDiagnostics,
+        readAppServerSchemaAuditSummary,
+        readWindowsSandboxReadinessDiagnostics,
+      }))) {
         return
       }
 

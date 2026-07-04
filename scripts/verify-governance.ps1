@@ -355,6 +355,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "src\server\appServerThreadRuntimeSnapshot.ts",
   "src\server\codexBridgeRequestError.ts",
   "src\server\codexBridgeMiddlewareDispose.ts",
+  "src\server\codexBridgeRouteHandlers.ts",
   "src\server\codexBridgeRouteDispatch.ts",
   "src\server\codexAppServerBridge.ts",
   "src\server\composerFileSearchRoutes.ts",
@@ -481,7 +482,9 @@ Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "clearAppServerSessionStores",
   "smokeAppServerSessionCleanup",
   "terminateAppServerProcess",
-  "smokeAppServerProcessTermination"
+  "smokeAppServerProcessTermination",
+  "createCodexBridgeRouteHandlers",
+  "smokeCodexBridgeRouteHandlers"
 )
 
 Assert-ContentIncludes "scripts/verify-governance.ps1" @(
