@@ -6205,3 +6205,42 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: Windows Sandbox readiness reader factory
+
+#### Prerequisites
+- Current repository includes `src/server/windowsSandboxDiagnostics.ts`, `src/server/codexAppServerBridge.ts`, and `scripts/server-module-smoke.ts`.
+- Dependencies are installed so TypeScript, Vite, tsup, and the server module smoke verifier can run.
+
+#### Steps
+1. Open `src/server/windowsSandboxDiagnostics.ts` and confirm `createWindowsSandboxReadinessReader(...)` owns the platform check and cache-backed App Server readiness RPC call.
+2. Confirm the reader returns `createWindowsSandboxReadinessUnsupported()` without calling RPC when the injected platform check says Windows is unsupported.
+3. Confirm the reader invokes App Server RPC method `windowsSandbox/readiness` with `undefined` params when Windows support is available.
+4. Open `src/server/codexAppServerBridge.ts` and confirm `readWindowsSandboxReadinessDiagnostics` is created from the factory with the bridge's readiness cache, App Server RPC, and `process.platform === 'win32'` platform check.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+8. Run `node_modules\.bin\vite.cmd build`.
+9. Run `node_modules\.bin\tsup.cmd`.
+10. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+11. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- `codexAppServerBridge.ts` no longer owns the Windows Sandbox readiness platform/RPC wrapper details.
+- Windows Sandbox readiness still reports unsupported on non-Windows platforms without calling App Server RPC.
+- Windows Sandbox readiness still calls `windowsSandbox/readiness` and normalizes/caches results through `WindowsSandboxReadinessCache` on Windows.
+- `scripts/server-module-smoke.ts` covers both factory-created reader paths: supported RPC and unsupported no-RPC.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifacts need cleanup beyond normal build output in `dist/`, `dist-cli/`, and `output/`.
+- To roll back, revert `src/server/windowsSandboxDiagnostics.ts`, `src/server/codexAppServerBridge.ts`, `scripts/server-module-smoke.ts`, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed, including coverage for `createWindowsSandboxReadinessReader()` supported RPC wiring and unsupported no-RPC behavior.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

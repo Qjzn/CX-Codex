@@ -36,6 +36,7 @@ import {
   normalizeAppServerHookDiagnostics,
 } from '../src/server/appServerHookDiagnostics.js'
 import {
+  createWindowsSandboxReadinessReader,
   createWindowsSandboxReadinessUnavailable,
   createWindowsSandboxReadinessUnsupported,
   normalizeWindowsSandboxReadiness,
@@ -1931,6 +1932,38 @@ async function smokeWindowsSandboxReadinessDiagnostics(): Promise<void> {
   assert.equal(failed.status, 'unavailable')
   assert.equal(failed.error, 'readiness rpc failed')
   assert.equal(calls, 3)
+
+  const readerCalls: Array<{ method: string; params: unknown }> = []
+  const reader = createWindowsSandboxReadinessReader({
+    cache: new WindowsSandboxReadinessCache({
+      ttlMs: 100,
+      nowMs: () => 20_000,
+      nowIso: () => '2026-07-04T00:00:06.000Z',
+    }),
+    isWindows: () => true,
+    rpc: async (method, params) => {
+      readerCalls.push({ method, params })
+      return { status: 'ready' }
+    },
+  })
+  const readerDiagnostics = await reader()
+  assert.equal(readerDiagnostics.status, 'ready')
+  assert.equal(readerDiagnostics.checkedAtIso, '2026-07-04T00:00:06.000Z')
+  assert.deepEqual(readerCalls, [{
+    method: 'windowsSandbox/readiness',
+    params: undefined,
+  }])
+
+  const unsupportedReader = createWindowsSandboxReadinessReader({
+    cache: new WindowsSandboxReadinessCache(),
+    isWindows: () => false,
+    rpc: async () => {
+      throw new Error('unsupported platform should not call readiness rpc')
+    },
+  })
+  const unsupportedReaderDiagnostics = await unsupportedReader()
+  assert.equal(unsupportedReaderDiagnostics.status, 'unsupported')
+  assert.equal(unsupportedReaderDiagnostics.source, 'platform')
 }
 
 function smokeAppServerMethodCatalog(): void {

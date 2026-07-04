@@ -92,9 +92,8 @@ import {
 } from './appServerHookDiagnostics.js'
 import { AppServerNotificationListeners } from './appServerNotificationListeners.js'
 import {
-  createWindowsSandboxReadinessUnsupported,
+  createWindowsSandboxReadinessReader,
   WindowsSandboxReadinessCache,
-  type WindowsSandboxReadinessDiagnostics,
 } from './windowsSandboxDiagnostics.js'
 import {
   createAppServerRpcNotification,
@@ -745,12 +744,11 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     return notificationReplay.listAfter(afterSeq, limit)
   }
 
-  async function readWindowsSandboxReadinessDiagnostics(): Promise<WindowsSandboxReadinessDiagnostics> {
-    if (process.platform !== 'win32') {
-      return createWindowsSandboxReadinessUnsupported()
-    }
-    return windowsSandboxReadinessCache.read(() => appServer.rpc('windowsSandbox/readiness', undefined))
-  }
+  const readWindowsSandboxReadinessDiagnostics = createWindowsSandboxReadinessReader({
+    cache: windowsSandboxReadinessCache,
+    rpc: (method, params) => appServer.rpc(method, params),
+    isWindows: () => process.platform === 'win32',
+  })
 
   const readAppServerHookDiagnostics = createAppServerHookDiagnosticsReader({
     cache: hookDiagnosticsCache,

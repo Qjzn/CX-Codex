@@ -22,6 +22,12 @@ type WindowsSandboxReadinessCacheOptions = {
   nowIso?: () => string
 }
 
+export type WindowsSandboxReadinessReaderDependencies = {
+  cache: WindowsSandboxReadinessCache
+  rpc(method: string, params: unknown): Promise<unknown>
+  isWindows: () => boolean
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -135,5 +141,16 @@ export class WindowsSandboxReadinessCache {
     this.cached = null
     this.cachedAtMs = 0
     this.inFlight = null
+  }
+}
+
+export function createWindowsSandboxReadinessReader(
+  dependencies: WindowsSandboxReadinessReaderDependencies,
+): () => Promise<WindowsSandboxReadinessDiagnostics> {
+  return async () => {
+    if (!dependencies.isWindows()) {
+      return createWindowsSandboxReadinessUnsupported()
+    }
+    return await dependencies.cache.read(() => dependencies.rpc('windowsSandbox/readiness', undefined))
   }
 }
