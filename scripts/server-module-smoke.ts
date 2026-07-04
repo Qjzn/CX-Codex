@@ -4852,6 +4852,64 @@ async function smokeThreadSearchIndex(): Promise<void> {
   assert.deepEqual(await store.search('alpha', 10), { threadIds: ['thread-a'], indexedThreadCount: 1 })
   assert.equal(buildCount, 2)
 
+  const concurrentBuild = { release: null as (() => void) | null }
+  let concurrentBuildCount = 0
+  const concurrentStore = new ThreadSearchIndexStore(async () => {
+    concurrentBuildCount += 1
+    await new Promise<void>((resolve) => {
+      concurrentBuild.release = resolve
+    })
+    return {
+      docsById: new Map([
+        ['thread-concurrent', { id: 'thread-concurrent', title: 'Concurrent alpha', preview: '', messageText: '', searchableText: '' }],
+      ]),
+    }
+  })
+  const firstConcurrentSearch = concurrentStore.search('concurrent', 10)
+  const secondConcurrentSearch = concurrentStore.search('concurrent', 10)
+  await Promise.resolve()
+  assert.equal(concurrentBuildCount, 1)
+  const releaseBuild = concurrentBuild.release
+  if (typeof releaseBuild !== 'function') throw new Error('Concurrent thread search build did not start')
+  releaseBuild()
+  assert.deepEqual(await firstConcurrentSearch, { threadIds: ['thread-concurrent'], indexedThreadCount: 1 })
+  assert.deepEqual(await secondConcurrentSearch, { threadIds: ['thread-concurrent'], indexedThreadCount: 1 })
+  assert.equal(concurrentBuildCount, 1)
+
+  const clearDuringBuildResolvers: Array<() => void> = []
+  let clearDuringBuildCount = 0
+  const clearDuringBuildStore = new ThreadSearchIndexStore(async () => {
+    clearDuringBuildCount += 1
+    const buildNumber = clearDuringBuildCount
+    await new Promise<void>((resolve) => {
+      clearDuringBuildResolvers[buildNumber] = resolve
+    })
+    return {
+      docsById: new Map([
+        [`thread-build-${String(buildNumber)}`, {
+          id: `thread-build-${String(buildNumber)}`,
+          title: `Needle build ${String(buildNumber)}`,
+          preview: '',
+          messageText: '',
+          searchableText: '',
+        }],
+      ]),
+    }
+  })
+  const staleSearch = clearDuringBuildStore.search('needle', 10)
+  await Promise.resolve()
+  assert.equal(clearDuringBuildCount, 1)
+  clearDuringBuildStore.clear()
+  const freshSearch = clearDuringBuildStore.search('needle', 10)
+  await Promise.resolve()
+  assert.equal(clearDuringBuildCount, 2)
+  clearDuringBuildResolvers[1]?.()
+  assert.deepEqual(await staleSearch, { threadIds: ['thread-build-1'], indexedThreadCount: 1 })
+  clearDuringBuildResolvers[2]?.()
+  assert.deepEqual(await freshSearch, { threadIds: ['thread-build-2'], indexedThreadCount: 1 })
+  assert.deepEqual(await clearDuringBuildStore.search('needle', 10), { threadIds: ['thread-build-2'], indexedThreadCount: 1 })
+  assert.equal(clearDuringBuildCount, 2)
+
   const factoryListParams: ThreadListParams[] = []
   const factorySessionIndexPaths: string[] = []
   const factoryStore = createThreadSearchIndexStore({

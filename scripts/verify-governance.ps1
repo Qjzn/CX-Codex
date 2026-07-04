@@ -401,6 +401,8 @@ Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "smokeNotificationSseRoute",
   "handleRuntimeActionRoutes",
   "smokeRuntimeActionRoutes",
+  "concurrentStore.search('concurrent', 10)",
+  "clearDuringBuildStore.clear()",
   "startRuntimeTurnWithAppServer",
   "smokeAppServerRuntimeStart",
   "interruptRuntimeTurnWithAppServer",
