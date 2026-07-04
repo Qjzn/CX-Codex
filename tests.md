@@ -250,6 +250,44 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server thread detail notification cache invalidation
+
+#### Prerequisites
+- Current repository includes `src/server/appServerRpcCache.ts`, `scripts/server-module-smoke.ts`, `docs/app-server-protocol-matrix.zh-CN.md`, and the raw schema audit output for App Server thread/turn notifications.
+- Dependencies are installed so TypeScript, Vite, tsup, server module smoke, governance, and release verification can run.
+
+#### Steps
+1. Open `output/app-server-schema-audit/20260704-141839/typescript/ServerNotification.ts` and confirm official App Server schema includes `thread/goal/updated`, `thread/goal/cleared`, `thread/compacted`, `turn/diff/updated`, `turn/plan/updated`, `rawResponseItem/completed`, and streaming delta/progress/output notifications.
+2. Open `output/app-server-schema-audit/20260704-141839/typescript/v2/ThreadGoalUpdatedNotification.ts`, `TurnDiffUpdatedNotification.ts`, `TurnPlanUpdatedNotification.ts`, `RawResponseItemCompletedNotification.ts`, and `AgentMessageDeltaNotification.ts` and confirm these notifications carry `threadId` plus turn/item detail changes.
+3. Open `src/server/appServerRpcCache.ts` and confirm these thread-detail-changing notifications invalidate cached `thread/read` data.
+4. Confirm `thread/tokenUsage/updated` is intentionally not included in `shouldInvalidateThreadReadCacheForNotification()`, because token usage has a separate cache and should not trigger message/list reloads.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+8. Run `node_modules\.bin\vite.cmd build`.
+9. Run `node_modules\.bin\tsup.cmd`.
+10. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+11. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Goal, compaction, turn diff, turn plan, raw response item, message/reasoning/command/file/MCP/process streaming notifications delete the cached `thread/read` snapshot for the affected thread.
+- Existing frontend live delta handling remains unchanged; this server-side change only prevents later `thread/read` calls from reusing a stale cached detail snapshot.
+- `thread/tokenUsage/updated` still updates token usage through its dedicated path and does not trigger thread detail or list cache invalidation.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `dist/`, `dist-cli/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, remove the additional notification methods from `shouldInvalidateThreadReadCacheForNotification()`, remove the server module smoke assertions, and revert the protocol matrix, changelog, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed with `server module smoke ok`, including notification cache invalidation assertions for goal, compaction, turn diff/plan, raw response, message/reasoning/command/file/MCP/process streaming notifications, and the `thread/tokenUsage/updated` no-invalidation guard.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
 ### Feature: App Server local runtime snapshot reader helper
 
 #### Prerequisites

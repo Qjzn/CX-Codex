@@ -80,9 +80,14 @@ export function shouldInvalidateThreadReadCacheForRpc(method: string): boolean {
 
 export function shouldInvalidateThreadReadCacheForNotification(method: string): boolean {
   if (
+    method === 'thread/goal/updated' ||
+    method === 'thread/goal/cleared' ||
+    method === 'thread/compacted' ||
     method === 'turn/started' ||
     method === 'turn/start' ||
     method === 'turn/completed' ||
+    method === 'turn/diff/updated' ||
+    method === 'turn/plan/updated' ||
     method === 'thread/completed' ||
     method === 'turn/interrupted' ||
     method === 'thread/interrupted' ||
@@ -95,7 +100,21 @@ export function shouldInvalidateThreadReadCacheForNotification(method: string): 
   return (
     method === 'item/started' ||
     method === 'item/updated' ||
-    method === 'item/completed'
+    method === 'item/completed' ||
+    method === 'rawResponseItem/completed' ||
+    method === 'item/agentMessage/delta' ||
+    method === 'item/plan/delta' ||
+    method === 'item/reasoning/summaryTextDelta' ||
+    method === 'item/reasoning/summaryPartAdded' ||
+    method === 'item/reasoning/textDelta' ||
+    method === 'item/commandExecution/outputDelta' ||
+    method === 'item/commandExecution/terminalInteraction' ||
+    method === 'item/fileChange/outputDelta' ||
+    method === 'item/fileChange/patchUpdated' ||
+    method === 'item/mcpToolCall/progress' ||
+    method === 'command/exec/outputDelta' ||
+    method === 'process/outputDelta' ||
+    method === 'process/exited'
   )
 }
 
