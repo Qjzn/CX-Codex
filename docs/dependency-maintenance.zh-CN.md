@@ -28,7 +28,8 @@ Dependabot 当前覆盖：
    - Android/Capacitor 相关：`npm.cmd run mobile:android:sync`，必要时再执行 Android 构建。
    - Codex App Server 协议、schema 或 OpenAI 官方 API 行为相关：`npm.cmd run audit:app-server-schemas`；如差异变化，再运行 `npm.cmd run audit:app-server-schemas:update-summary` 更新脱敏的 `docs/app-server-schema-audit-summary.json`，并记录为什么暂不更新基线。
 4. 如果更新会改变 CLI 入口、CJS 加载、发布包内容、前端 App Server normalizer 或运行时模块加载，必须保留 release gate 的 frontend normalizer smoke、CLI CJS launcher smoke 和 Release package smoke。
-5. 在 PR 描述中写清楚：更新类型、风险、验证命令、是否影响 Android、是否影响 Codex App Server 协议或 OpenAI API。
+5. 如果验证脚本直接 `import` 或 `require` 构建/测试工具，例如 `esbuild`，该工具必须在 `package.json` 中显式声明为直接依赖或 devDependency，不能依赖 Vite、tsup 等包的间接依赖解析。
+6. 在 PR 描述中写清楚：更新类型、风险、验证命令、是否影响 Android、是否影响 Codex App Server 协议或 OpenAI API。
 
 ## 合并策略
 

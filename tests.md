@@ -570,6 +570,41 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Explicit frontend normalizer esbuild dependency
+
+#### Prerequisites
+- Current repository includes `package.json`, `package-lock.json`, `scripts/verify-frontend-normalizers.mjs`, `scripts/verify-governance.ps1`, and `docs/dependency-maintenance.zh-CN.md`.
+- Dependencies are installed so npm can resolve direct devDependencies and the frontend normalizer smoke can run.
+
+#### Steps
+1. Open `scripts/verify-frontend-normalizers.mjs` and confirm it directly imports `esbuild`.
+2. Open `package.json` and confirm `esbuild` is listed in `devDependencies`.
+3. Open `scripts/verify-governance.ps1` and confirm governance requires both the direct `esbuild` import and the `package.json` dependency entry.
+4. Run `npm ls esbuild --depth=0`.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-frontend-normalizers.mjs`.
+7. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+8. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- `npm ls esbuild --depth=0` shows `esbuild` as a top-level dev dependency, not only through `vite` or `tsup`.
+- Frontend normalizer smoke still prints `frontend normalizer smoke ok`.
+- Governance fails if the direct `esbuild` dependency declaration or the smoke script import is removed.
+- Release verification completes with the frontend normalizer smoke still included in the gate.
+
+#### Rollback/Cleanup Notes
+- No runtime cleanup is required beyond normal generated output in `output/frontend-normalizer-smoke/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, remove the direct `esbuild` devDependency, remove the governance assertions, and revert this test section plus the dependency maintenance and changelog notes.
+
+#### Regression Evidence
+- 2026-07-05 dependency tree: `npm ls esbuild --depth=0` passed and showed `esbuild@0.27.7` as a top-level dependency.
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend normalizer smoke: `node scripts\verify-frontend-normalizers.mjs` passed with `frontend normalizer smoke ok`.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-05 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `Frontend normalizer smoke`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
 ### Feature: App Server local runtime snapshot reader helper
 
 #### Prerequisites

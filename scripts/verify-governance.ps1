@@ -360,6 +360,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
 )
 
 Assert-ContentIncludes "scripts/verify-frontend-normalizers.mjs" @(
+  "import * as esbuild from 'esbuild'",
   "mkdtempSync(join(outputBase, 'run-'))",
   "CX_CODEX_KEEP_FRONTEND_NORMALIZER_SMOKE_OUTPUT",
   "frontend normalizer smoke ok"
@@ -469,7 +470,8 @@ Assert-ContentIncludes "package.json" @(
   '"audit:app-server-schemas:update-summary": "node ./scripts/update-app-server-schema-audit-summary.mjs"',
   '"verify:governance": "node ./scripts/run-powershell-script.mjs ./scripts/verify-governance.ps1"',
   '"verify:release": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release.ps1"',
-  '"verify:release-artifacts": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release-artifacts.ps1"'
+  '"verify:release-artifacts": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release-artifacts.ps1"',
+  '"esbuild":'
 )
 
 Assert-ContentIncludes "scripts/update-app-server-schema-audit-summary.mjs" @(
