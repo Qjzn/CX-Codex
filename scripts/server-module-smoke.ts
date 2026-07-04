@@ -911,7 +911,19 @@ function smokeAppServerInitialization(): void {
   }), {
     clientInfo,
     capabilities: {
+      experimentalApi: false,
       optOutNotificationMethods: ['thread/started', 'item/agentMessage/delta'],
+    },
+  })
+
+  assert.deepEqual(createAppServerInitializeParams(clientInfo, {
+    experimentalApi: true,
+    optOutNotificationMethods: ['thread/started'],
+  }), {
+    clientInfo,
+    capabilities: {
+      experimentalApi: true,
+      optOutNotificationMethods: ['thread/started'],
     },
   })
 }

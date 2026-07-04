@@ -19,6 +19,45 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: App Server initialize capabilities schema alignment
+
+#### Prerequisites
+- Current repository includes `src/server/appServerInitialization.ts`, `documentation/app-server-schemas/typescript/InitializeCapabilities.ts`, and `scripts/server-module-smoke.ts`.
+- Official Codex manual has been refreshed with `node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs`.
+- Dependencies are installed so TypeScript, Vite, tsup, and the server module smoke verifier can run.
+
+#### Steps
+1. Confirm the official Codex App Server manual says clients initialize first, then send `initialized`, and that `capabilities.experimentalApi` controls experimental API opt-in.
+2. Confirm `documentation/app-server-schemas/typescript/InitializeCapabilities.ts` declares `experimentalApi: boolean`.
+3. Run `git diff --check`.
+4. Run `node scripts\verify-server-modules.mjs`.
+5. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+6. Run `node_modules\.bin\vite.cmd build`.
+7. Run `node_modules\.bin\tsup.cmd`.
+8. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+9. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Default initialization still omits `capabilities`, keeping the bridge on the stable App Server API surface.
+- Explicit `experimentalApi: false` without other capabilities still omits `capabilities`, preserving the previous default payload.
+- Explicit `experimentalApi: true` sends `capabilities.experimentalApi: true`.
+- Notification opt-out payloads send `capabilities.experimentalApi: false` alongside `optOutNotificationMethods`, matching the generated official `InitializeCapabilities` schema.
+- Combining `experimentalApi: true` with notification opt-out sends both fields unchanged.
+
+#### Rollback/Cleanup Notes
+- No runtime artifacts need cleanup beyond normal build output in `dist/`, `dist-cli/`, and `output/`.
+- To roll back, revert `src/server/appServerInitialization.ts`, `scripts/server-module-smoke.ts`, `docs/app-server-protocol-matrix.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-04 official docs check: `node %USERPROFILE%\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` returned `local manual was already current`; the Codex App Server section documents initialize before `initialized` and `capabilities.experimentalApi` as the experimental API opt-in.
+- 2026-07-04 schema check: `documentation/app-server-schemas/typescript/InitializeCapabilities.ts` declares `experimentalApi: boolean` and optional `optOutNotificationMethods`.
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed, including default stable initialize payload, experimental opt-in payload, opt-out payload with `experimentalApi: false`, and combined experimental opt-in plus opt-out coverage.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+---
+
 ### Feature: App Server thread-read cache store
 
 #### Prerequisites

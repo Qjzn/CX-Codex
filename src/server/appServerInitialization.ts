@@ -1,7 +1,7 @@
 import type { AppServerClientInfo } from './appServerClientInfo.js'
 
 export type AppServerInitializeCapabilities = {
-  experimentalApi?: boolean
+  experimentalApi: boolean
   optOutNotificationMethods?: string[]
 }
 
@@ -21,20 +21,20 @@ export function createAppServerInitializeParams(
   clientInfo: AppServerClientInfo,
   options: AppServerInitializeOptions = {},
 ): AppServerInitializeParams {
-  const capabilities: AppServerInitializeCapabilities = {}
   const experimentalApi = options.experimentalApi ?? APP_SERVER_EXPERIMENTAL_API_ENABLED
-  if (experimentalApi === true) {
-    capabilities.experimentalApi = true
+  const optOutNotificationMethods = normalizeOptOutNotificationMethods(options.optOutNotificationMethods)
+
+  if (experimentalApi !== true && optOutNotificationMethods.length === 0) {
+    return { clientInfo }
   }
 
-  const optOutNotificationMethods = normalizeOptOutNotificationMethods(options.optOutNotificationMethods)
+  const capabilities: AppServerInitializeCapabilities = {
+    experimentalApi,
+  }
   if (optOutNotificationMethods.length > 0) {
     capabilities.optOutNotificationMethods = optOutNotificationMethods
   }
 
-  if (Object.keys(capabilities).length === 0) {
-    return { clientInfo }
-  }
   return { clientInfo, capabilities }
 }
 
