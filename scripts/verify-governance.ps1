@@ -603,12 +603,21 @@ Assert-ContentIncludes "docs/app-server-protocol-matrix.zh-CN.md" @(
   "Codex App Server",
   "schema audit",
   "docs/app-server-schema-audit-summary.json",
+  "共享一次生成结果",
   "thread",
   "MCP",
   "item/autoApprovalReview/started",
   "脱敏权限请求标记",
   "network target",
   "permission profile 主动管理"
+)
+
+Assert-ContentIncludes "src/server/appServerMethodCatalog.ts" @(
+  "catalogCache",
+  "catalogPromise",
+  "Promise.all",
+  "ClientRequest.json",
+  "ServerNotification.json"
 )
 
 $schemaAuditSummaryPath = Resolve-RepoPath "docs/app-server-schema-audit-summary.json"

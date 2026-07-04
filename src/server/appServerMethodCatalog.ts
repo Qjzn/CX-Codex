@@ -5,6 +5,12 @@ import { join } from 'node:path'
 import { resolveCodexCommand } from '../commandResolution.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 
+type SchemaGenerator = (outDir: string) => Promise<void>
+type MethodCatalogs = {
+  methods: string[]
+  notificationMethods: string[]
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -33,8 +39,10 @@ export function extractMethodCatalogFromSchema(payload: unknown): string[] {
 }
 
 export class AppServerMethodCatalog {
-  private methodCache: string[] | null = null
-  private notificationCache: string[] | null = null
+  private catalogCache: MethodCatalogs | null = null
+  private catalogPromise: Promise<MethodCatalogs> | null = null
+
+  constructor(private readonly generateSchemaCommand?: SchemaGenerator) {}
 
   private async runGenerateSchemaCommand(outDir: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
@@ -68,45 +76,51 @@ export class AppServerMethodCatalog {
     })
   }
 
-  async listMethods(): Promise<string[]> {
-    if (this.methodCache) {
-      return this.methodCache
+  private async loadCatalogs(): Promise<MethodCatalogs> {
+    if (this.catalogCache) {
+      return this.catalogCache
     }
 
+    if (this.catalogPromise) {
+      return this.catalogPromise
+    }
+
+    this.catalogPromise = this.readCatalogs().finally(() => {
+      this.catalogPromise = null
+    })
+
+    return this.catalogPromise
+  }
+
+  private async readCatalogs(): Promise<MethodCatalogs> {
     const outDir = await mkdtemp(join(tmpdir(), 'codex-web-local-schema-'))
     try {
-      await this.runGenerateSchemaCommand(outDir)
+      const generate = this.generateSchemaCommand ?? this.runGenerateSchemaCommand.bind(this)
+      await generate(outDir)
 
       const clientRequestPath = join(outDir, 'ClientRequest.json')
-      const raw = await readFile(clientRequestPath, 'utf8')
-      const parsed = JSON.parse(raw) as unknown
-      const methods = extractMethodCatalogFromSchema(parsed)
+      const serverNotificationPath = join(outDir, 'ServerNotification.json')
+      const [clientRequestRaw, serverNotificationRaw] = await Promise.all([
+        readFile(clientRequestPath, 'utf8'),
+        readFile(serverNotificationPath, 'utf8'),
+      ])
+      const catalogs = {
+        methods: extractMethodCatalogFromSchema(JSON.parse(clientRequestRaw) as unknown),
+        notificationMethods: extractMethodCatalogFromSchema(JSON.parse(serverNotificationRaw) as unknown),
+      }
 
-      this.methodCache = methods
-      return methods
+      this.catalogCache = catalogs
+      return catalogs
     } finally {
       await rm(outDir, { recursive: true, force: true })
     }
   }
 
+  async listMethods(): Promise<string[]> {
+    return (await this.loadCatalogs()).methods
+  }
+
   async listNotificationMethods(): Promise<string[]> {
-    if (this.notificationCache) {
-      return this.notificationCache
-    }
-
-    const outDir = await mkdtemp(join(tmpdir(), 'codex-web-local-schema-'))
-    try {
-      await this.runGenerateSchemaCommand(outDir)
-
-      const serverNotificationPath = join(outDir, 'ServerNotification.json')
-      const raw = await readFile(serverNotificationPath, 'utf8')
-      const parsed = JSON.parse(raw) as unknown
-      const methods = extractMethodCatalogFromSchema(parsed)
-
-      this.notificationCache = methods
-      return methods
-    } finally {
-      await rm(outDir, { recursive: true, force: true })
-    }
+    return (await this.loadCatalogs()).notificationMethods
   }
 }

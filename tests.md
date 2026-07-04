@@ -378,18 +378,21 @@ This file tracks manual regression and feature verification steps.
 1. Open `output/app-server-schema-audit/20260704-141839/json/ClientRequest.json` and confirm method enums are stored under `oneOf[].properties.method.enum`.
 2. Open `output/app-server-schema-audit/20260704-141839/json/ServerNotification.json` and confirm method enums use the same JSON schema shape.
 3. Open `src/server/appServerMethodCatalog.ts` and confirm `extractMethodCatalogFromSchema()` deduplicates and sorts non-empty string enum items.
-4. Open `scripts/server-module-smoke.ts` and confirm `smokeAppServerMethodCatalog()` reads both raw JSON schema files and asserts `ClientRequest` extracts 75 methods while `ServerNotification` extracts 63 methods.
-5. Confirm the smoke documents the current catalog boundary where `rawResponseItem/completed` is covered by the TypeScript union diagnostics path but is absent from `ServerNotification.json`.
-6. Run `git diff --check`.
-7. Run `node scripts\verify-server-modules.mjs`.
-8. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
-9. Run `node_modules\.bin\vite.cmd build`.
-10. Run `node_modules\.bin\tsup.cmd`.
-11. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
-12. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+4. Open `src/server/appServerMethodCatalog.ts` and confirm `listMethods()` plus `listNotificationMethods()` read from a shared catalog cache/promise instead of generating schema independently.
+5. Open `scripts/server-module-smoke.ts` and confirm `smokeAppServerMethodCatalog()` reads both raw JSON schema files and asserts `ClientRequest` extracts 75 methods while `ServerNotification` extracts 63 methods.
+6. Confirm the smoke documents the current catalog boundary where `rawResponseItem/completed` is covered by the TypeScript union diagnostics path but is absent from `ServerNotification.json`.
+7. Confirm the smoke instantiates `AppServerMethodCatalog` with a generated schema fixture and asserts concurrent method/notification reads call the generator once.
+8. Run `git diff --check`.
+9. Run `node scripts\verify-server-modules.mjs`.
+10. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+11. Run `node_modules\.bin\vite.cmd build`.
+12. Run `node_modules\.bin\tsup.cmd`.
+13. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+14. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
 
 #### Expected Results
 - The method catalog extractor remains schema-shape driven rather than maintaining a hardcoded client request list.
+- Method and notification catalog reads share one generated schema output and cache within the same `AppServerMethodCatalog` instance.
 - Current raw JSON schema audit extraction returns 75 client request methods and 63 server notification methods.
 - Catalog smoke covers recent official request and notification methods such as `thread/shellCommand`, `thread/inject_items`, `turn/steer`, `windowsSandbox/readiness`, `remoteControl/status/changed`, and fuzzy file search notifications.
 - `rawResponseItem/completed` remains covered by notification diagnostics but is not claimed as part of the JSON notification catalog until the upstream JSON schema includes it.
@@ -401,10 +404,10 @@ This file tracks manual regression and feature verification steps.
 
 #### Regression Evidence
 - 2026-07-05 static verification: `git diff --check` passed.
-- 2026-07-05 server module smoke: `node scripts\verify-server-modules.mjs` passed with `server module smoke ok`, including raw JSON schema catalog assertions for 75 `ClientRequest` methods and 63 `ServerNotification` methods.
+- 2026-07-05 server module smoke: `node scripts\verify-server-modules.mjs` passed with `server module smoke ok`, including raw JSON schema catalog assertions for 75 `ClientRequest` methods, 63 `ServerNotification` methods, and shared method/notification catalog generation/cache coverage.
 - 2026-07-05 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
-- 2026-07-05 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+- 2026-07-05 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `Frontend normalizer smoke`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
 
 ---
 

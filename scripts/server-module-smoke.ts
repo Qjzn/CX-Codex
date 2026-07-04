@@ -43,7 +43,7 @@ import {
   normalizeWindowsSandboxReadiness,
   WindowsSandboxReadinessCache,
 } from '../src/server/windowsSandboxDiagnostics.js'
-import { extractMethodCatalogFromSchema } from '../src/server/appServerMethodCatalog.js'
+import { AppServerMethodCatalog, extractMethodCatalogFromSchema } from '../src/server/appServerMethodCatalog.js'
 import {
   AppServerStatusDiagnostics,
   isKnownAppServerThreadActiveFlag,
@@ -2276,6 +2276,32 @@ async function smokeAppServerMethodCatalog(): Promise<void> {
   assert.equal(notificationMethods.includes('rawResponseItem/completed'), false)
   assert.equal(notificationMethods.includes('item/agentMessage/delta'), true)
   assert.equal(notificationMethods.includes('fuzzyFileSearch/sessionCompleted'), true)
+
+  let generateCount = 0
+  const catalog = new AppServerMethodCatalog(async (outDir) => {
+    generateCount += 1
+    await writeFile(join(outDir, 'ClientRequest.json'), JSON.stringify({
+      oneOf: [
+        { properties: { method: { enum: ['thread/start', 'thread/read'] } } },
+      ],
+    }), 'utf8')
+    await writeFile(join(outDir, 'ServerNotification.json'), JSON.stringify({
+      oneOf: [
+        { properties: { method: { enum: ['turn/started', 'turn/completed'] } } },
+      ],
+    }), 'utf8')
+  })
+
+  const [generatedMethods, generatedNotifications] = await Promise.all([
+    catalog.listMethods(),
+    catalog.listNotificationMethods(),
+  ])
+  assert.deepEqual(generatedMethods, ['thread/read', 'thread/start'])
+  assert.deepEqual(generatedNotifications, ['turn/completed', 'turn/started'])
+  assert.equal(generateCount, 1)
+  assert.deepEqual(await catalog.listMethods(), ['thread/read', 'thread/start'])
+  assert.deepEqual(await catalog.listNotificationMethods(), ['turn/completed', 'turn/started'])
+  assert.equal(generateCount, 1)
 }
 
 function smokeAppServerStatusDiagnostics(): void {
