@@ -321,6 +321,8 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "Release artifact checksum smoke skipped",
   "Assert-ChecksumMatches",
   "checksum hash does not match zip",
+  "package:release",
+  "verify:release-artifacts",
   "Assert-ZipContains",
   "NPM package smoke",
   "npm package smoke ok",

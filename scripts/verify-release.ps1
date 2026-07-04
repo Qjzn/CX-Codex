@@ -319,7 +319,6 @@ console.log('cli cjs launcher smoke ok');
 }
 
 if (-not $SkipPackageSmoke) {
-  $powerShellCommand = Get-PowerShellCommand
   $packageSmokeDir = Resolve-ReleasePackageSmokeDir
   $packageVersion = "verify-smoke"
   if (Test-Path -LiteralPath $packageSmokeDir) {
@@ -327,12 +326,10 @@ if (-not $SkipPackageSmoke) {
   }
   New-Item -ItemType Directory -Path $packageSmokeDir -Force | Out-Null
 
-  Invoke-CheckedCommand -Label "Release package smoke" -Command $powerShellCommand -Arguments @(
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    (Join-Path $repoRoot "scripts/package-release.ps1"),
+  Invoke-CheckedCommand -Label "Release package smoke" -Command $npmCommand -Arguments @(
+    "run",
+    "package:release",
+    "--",
     "-Version",
     $packageVersion,
     "-OutputDir",
@@ -343,12 +340,10 @@ if (-not $SkipPackageSmoke) {
   $zipPath = Join-Path $packageSmokeDir "$bundleName.zip"
   $checksumPath = Join-Path $packageSmokeDir "$bundleName.sha256"
   Assert-ChecksumMatches -ZipPath $zipPath -ChecksumPath $checksumPath
-  Invoke-CheckedCommand -Label "Release artifact checksum smoke" -Command $powerShellCommand -Arguments @(
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    (Join-Path $repoRoot "scripts/verify-release-artifacts.ps1"),
+  Invoke-CheckedCommand -Label "Release artifact checksum smoke" -Command $npmCommand -Arguments @(
+    "run",
+    "verify:release-artifacts",
+    "--",
     "-OutputDir",
     $packageSmokeDir
   )

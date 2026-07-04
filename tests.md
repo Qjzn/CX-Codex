@@ -7432,3 +7432,35 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 package wrapper smoke: `npm.cmd run package:release -- -Version workflow-runner-smoke -OutputDir output\release-workflow-runner-smoke` passed through `node ./scripts/run-powershell-script.mjs ./scripts/package-release.ps1`, producing `CX-Codex-workflow-runner-smoke.zip` and `.sha256`.
 - 2026-07-05 artifact wrapper smoke: `npm.cmd run verify:release-artifacts -- -OutputDir output\release-workflow-runner-smoke` passed through `node ./scripts/run-powershell-script.mjs ./scripts/verify-release-artifacts.ps1`, outputting `checksum ok: CX-Codex-workflow-runner-smoke.zip` and `Release artifact checksum verification passed.`
 - 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: Release gate package smoke npm runner alignment
+
+#### Prerequisites
+- Current repository includes `scripts/verify-release.ps1`, `package.json`, `scripts/run-powershell-script.mjs`, `scripts/package-release.ps1`, `scripts/verify-release-artifacts.ps1`, `scripts/verify-governance.ps1`, and `docs/changelog.zh-CN.md`.
+- Dependencies are installed and `dist/` plus `dist-cli/` already exist, or run release verification without `-SkipBuild`.
+
+#### Steps
+1. Open `scripts/verify-release.ps1` and confirm `Release package smoke` invokes `$npmCommand` with `run package:release -- -Version verify-smoke -OutputDir <smoke-dir>`.
+2. Confirm `Release artifact checksum smoke` invokes `$npmCommand` with `run verify:release-artifacts -- -OutputDir <smoke-dir>`.
+3. Confirm the existing zip entry assertions and NPM package dry-run smoke still run after the npm-script package and artifact smoke.
+4. Open `scripts/verify-governance.ps1` and confirm governance requires `package:release` and `verify:release-artifacts` references inside `scripts/verify-release.ps1`.
+5. Run `git diff --check`.
+6. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+7. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- The local release gate continuously verifies the same npm package-script entrypoints used by the GitHub Release workflow.
+- Release package smoke still generates `output/release-package-smoke/CX-Codex-verify-smoke.zip` and `.sha256`.
+- Artifact checksum smoke still validates the generated zip checksum before zip content assertions run.
+- Governance verification fails if `scripts/verify-release.ps1` no longer references the package and artifact npm scripts.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal release smoke output in `output/release-package-smoke/`.
+- To roll back, restore direct PowerShell script invocation inside `scripts/verify-release.ps1`, revert governance/changelog updates, and remove this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed; its internal `Release package smoke` ran `npm run package:release -- -Version verify-smoke -OutputDir ...`, its `Release artifact checksum smoke` ran `npm run verify:release-artifacts -- -OutputDir ...`, and the gate completed `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
