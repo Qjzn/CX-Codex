@@ -395,7 +395,7 @@ try {
   smokeAppServerLaunch()
   smokeAppServerHealth()
   await smokeAuthMiddleware()
-  smokeAppServerMethodCatalog()
+  await smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
   smokeAppServerNotificationListeners()
   smokeAppServerNotificationState()
@@ -2241,7 +2241,7 @@ async function smokeAppServerDiagnosticsReaders(): Promise<void> {
   ])
 }
 
-function smokeAppServerMethodCatalog(): void {
+async function smokeAppServerMethodCatalog(): Promise<void> {
   const methods = extractMethodCatalogFromSchema({
     oneOf: [
       { properties: { method: { enum: ['thread/list', 'turn/start'] } } },
@@ -2252,6 +2252,30 @@ function smokeAppServerMethodCatalog(): void {
   })
   assert.deepEqual(methods, ['mcp/list', 'thread/list', 'thread/read', 'turn/start'])
   assert.deepEqual(extractMethodCatalogFromSchema({ oneOf: null }), [])
+
+  const rawAuditSchemaDir = join(process.cwd(), 'output', 'app-server-schema-audit', '20260704-141839', 'json')
+  const rawClientRequestSchema = JSON.parse(
+    await readFile(join(rawAuditSchemaDir, 'ClientRequest.json'), 'utf8'),
+  ) as unknown
+  const rawServerNotificationSchema = JSON.parse(
+    await readFile(join(rawAuditSchemaDir, 'ServerNotification.json'), 'utf8'),
+  ) as unknown
+  const clientMethods = extractMethodCatalogFromSchema(rawClientRequestSchema)
+  const notificationMethods = extractMethodCatalogFromSchema(rawServerNotificationSchema)
+
+  assert.equal(clientMethods.length, 75)
+  assert.equal(notificationMethods.length, 63)
+  assert.equal(clientMethods.includes('thread/shellCommand'), true)
+  assert.equal(clientMethods.includes('thread/inject_items'), true)
+  assert.equal(clientMethods.includes('thread/metadata/update'), true)
+  assert.equal(clientMethods.includes('turn/steer'), true)
+  assert.equal(clientMethods.includes('windowsSandbox/readiness'), true)
+  assert.equal(clientMethods.includes('remoteControl/status/changed'), false)
+  assert.equal(notificationMethods.includes('remoteControl/status/changed'), true)
+  assert.equal(notificationMethods.includes('thread/goal/updated'), true)
+  assert.equal(notificationMethods.includes('rawResponseItem/completed'), false)
+  assert.equal(notificationMethods.includes('item/agentMessage/delta'), true)
+  assert.equal(notificationMethods.includes('fuzzyFileSearch/sessionCompleted'), true)
 }
 
 function smokeAppServerStatusDiagnostics(): void {
