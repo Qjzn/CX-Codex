@@ -1008,6 +1008,7 @@ function areThreadFieldsEqual(first: UiThread, second: UiThread): boolean {
     first.title === second.title &&
     first.projectName === second.projectName &&
     first.cwd === second.cwd &&
+    first.sourceKind === second.sourceKind &&
     first.createdAtIso === second.createdAtIso &&
     first.updatedAtIso === second.updatedAtIso &&
     first.preview === second.preview &&

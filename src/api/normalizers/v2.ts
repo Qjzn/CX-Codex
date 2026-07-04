@@ -105,6 +105,31 @@ function readTrimmedString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function readFirstRecordKey(value: Record<string, unknown>): string {
+  return Object.keys(value).find((key) => key.trim().length > 0)?.trim() ?? ''
+}
+
+function readSubAgentSourceKind(value: unknown): string {
+  const direct = readTrimmedString(value)
+  if (direct) return `subAgent.${direct}`
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'subAgent'
+
+  const tag = readFirstRecordKey(value as Record<string, unknown>)
+  return tag ? `subAgent.${tag}` : 'subAgent'
+}
+
+function readThreadSourceKind(value: unknown): string | undefined {
+  const direct = readTrimmedString(value)
+  if (direct) return direct
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+
+  const record = value as Record<string, unknown>
+  if (record.subAgent !== undefined) return readSubAgentSourceKind(record.subAgent)
+
+  const tag = readFirstRecordKey(record)
+  return tag || undefined
+}
+
 function pushImageCandidate(images: string[], value: unknown): void {
   const candidate = readTrimmedString(value)
   if (!candidate || images.includes(candidate)) return
@@ -360,6 +385,7 @@ function toUiThread(summary: Thread): UiThread {
   const rawSummary = summary as Record<string, unknown>
   const cwd = normalizePathForUi(typeof rawSummary.cwd === 'string' ? rawSummary.cwd : summary.cwd)
   const comparableCwd = normalizePathForComparison(cwd)
+  const sourceKind = readThreadSourceKind(rawSummary.source)
   const hasWorktree =
     rawSummary.isWorktree === true ||
     rawSummary.worktree === true ||
@@ -373,6 +399,7 @@ function toUiThread(summary: Thread): UiThread {
     title: toThreadTitle(summary),
     projectName: toProjectName(cwd),
     cwd,
+    sourceKind,
     hasWorktree,
     createdAtIso: toIso(summary.createdAt),
     updatedAtIso: toIso(summary.updatedAt),

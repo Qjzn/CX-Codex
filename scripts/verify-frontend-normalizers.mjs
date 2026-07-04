@@ -15,7 +15,7 @@ mkdirSync(outputRoot, { recursive: true })
 
 writeFileSync(entryPath, `
 import assert from 'node:assert/strict'
-import { normalizeThreadMessagesV2 } from '${normalizerImport}'
+import { normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from '${normalizerImport}'
 
 const messages = normalizeThreadMessagesV2({
   thread: {
@@ -53,6 +53,57 @@ assert.equal(messages[1]?.turnIndex, 0)
 assert.equal(messages[1]?.rawPayload?.includes('secret command'), true)
 assert.equal(messages[2]?.messageType, 'unhandled.invalidItem')
 assert.equal(messages[2]?.isUnhandled, true)
+
+const groups = normalizeThreadGroupsV2({
+  data: [
+    {
+      id: 'thread-cli',
+      cwd: 'E:\\\\repo',
+      preview: 'CLI thread',
+      modelProvider: 'openai',
+      cliVersion: '0.0.0',
+      createdAt: 1,
+      updatedAt: 3,
+      path: null,
+      source: 'cli',
+      gitInfo: null,
+      turns: [],
+    },
+    {
+      id: 'thread-sub-agent',
+      cwd: 'E:\\\\repo',
+      preview: 'Sub-agent thread',
+      modelProvider: 'openai',
+      cliVersion: '0.0.0',
+      createdAt: 1,
+      updatedAt: 2,
+      path: null,
+      source: { subAgent: { thread_spawn: { parent_thread_id: 'parent-thread', depth: 1 } } },
+      gitInfo: null,
+      turns: [],
+    },
+    {
+      id: 'thread-future-source',
+      cwd: 'E:\\\\repo',
+      preview: 'Future source thread',
+      modelProvider: 'openai',
+      cliVersion: '0.0.0',
+      createdAt: 1,
+      updatedAt: 1,
+      path: null,
+      source: { futureSource: { enabled: true } },
+      gitInfo: null,
+      turns: [],
+    },
+  ],
+  nextCursor: null,
+})
+
+assert.equal(groups.length, 1)
+assert.deepEqual(groups[0]?.threads.map((thread) => thread.id), ['thread-cli', 'thread-sub-agent', 'thread-future-source'])
+assert.equal(groups[0]?.threads[0]?.sourceKind, 'cli')
+assert.equal(groups[0]?.threads[1]?.sourceKind, 'subAgent.thread_spawn')
+assert.equal(groups[0]?.threads[2]?.sourceKind, 'futureSource')
 
 console.log('frontend normalizer smoke ok')
 `, 'utf8')

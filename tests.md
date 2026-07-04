@@ -89,6 +89,45 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: App Server thread source read-only metadata
+
+#### Prerequisites
+- Current repository includes `src/api/normalizers/v2.ts`, `src/types/codex.ts`, `src/composables/useDesktopState.ts`, `scripts/verify-frontend-normalizers.mjs`, and `docs/app-server-protocol-matrix.zh-CN.md`.
+- Dependencies are installed so esbuild, TypeScript, Vite, tsup, server module smoke, governance, and release verification can run.
+
+#### Steps
+1. Open `src/api/normalizers/v2.ts` and confirm `Thread.source` is normalized into `UiThread.sourceKind`.
+2. Confirm string sources such as `cli` stay unchanged, `subAgent` tagged union values become `subAgent.<variant>`, and future unknown tagged sources keep their tag name instead of throwing.
+3. Open `src/composables/useDesktopState.ts` and confirm `areThreadFieldsEqual(...)` compares `sourceKind`, so source changes are not hidden by object reuse.
+4. Run `node scripts\verify-frontend-normalizers.mjs`.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `node_modules\.bin\vue-tsc.cmd --noEmit`.
+8. Run `node_modules\.bin\vite.cmd build`.
+9. Run `node_modules\.bin\tsup.cmd`.
+10. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+11. Run `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Thread list normalization preserves App Server source metadata without adding a user-facing source filter or changing thread grouping.
+- `cli`, `subAgent.thread_spawn`, and future unknown tagged source values are retained as read-only `sourceKind`.
+- Existing unknown item fallback coverage in `verify-frontend-normalizers` continues to pass.
+- Typecheck, build, governance, and release verification complete without new errors.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal build output in `dist/`, `dist-cli/`, `output/frontend-normalizer-smoke/`, `output/server-module-smoke/`, and `output/release-package-smoke/`.
+- To roll back, remove `UiThread.sourceKind`, source normalization helpers, the equality comparison, the frontend normalizer smoke assertions, and the protocol matrix/changelog/test documentation updates.
+
+#### Regression Evidence
+- 2026-07-04 frontend normalizer smoke: `node scripts\verify-frontend-normalizers.mjs` passed with `frontend normalizer smoke ok`, covering `cli`, `subAgent.thread_spawn`, and future tagged source normalization.
+- 2026-07-04 static verification: `git diff --check` passed.
+- 2026-07-04 server module smoke: `node scripts\verify-server-modules.mjs` passed with `server module smoke ok`.
+- 2026-07-04 typecheck/build: `node_modules\.bin\vue-tsc.cmd --noEmit`, `node_modules\.bin\vite.cmd build`, and `node_modules\.bin\tsup.cmd` passed; Vite still reports the existing large chunk warning.
+- 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
+- 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
 ---
 
 ### Feature: App Server local runtime snapshot reader helper
