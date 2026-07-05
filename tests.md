@@ -8507,6 +8507,40 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, and the expanded `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 fixture tool call assertions: the built-in conversation fixture verified at least one unsupported tool call panel, service `chrome`, tool `browser_click`, tool call marker/summary, the action label `让 Codex 改用文字继续`, tool panel radius no larger than 10px, and no horizontal overflow.
 
+### Feature: P4 foldable viewport regression baseline
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Built-in regression fixture routes `/#/__regression/composer-shell` and `/#/__regression/conversation-blocks` are available.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/` at 884x1104.
+2. Confirm the sidebar is expanded with the default width and does not take over the content area.
+3. Confirm the main content grid and Composer remain readable and do not overflow horizontally.
+4. Open `http://127.0.0.1:7420/#/__regression/composer-shell?regression=frontend` at 884x1104 and confirm the Composer controls fit without overlap.
+5. Open `http://127.0.0.1:7420/#/__regression/conversation-blocks?regression=frontend` at 884x1104 and confirm structured conversation blocks fit without horizontal scrolling.
+6. Run `git diff --check`.
+7. Run `npm.cmd run build:frontend`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+
+#### Expected Results
+- `test:7420:frontend` resets sidebar collapsed/width layout preferences before the foldable home check.
+- Foldable home shell includes desktop layout, sidebar, main content, content grid, and Composer.
+- Sidebar width stays between 260px and 370px and uses no more than 42% of the 884px viewport.
+- Main content, content grid, Composer, composer fixture controls, and conversation fixture blocks fit inside the 884x1104 viewport.
+- Browser regression result table includes `home-foldable`, `composer-shell-fixture-foldable`, and `conversation-blocks-fixture-foldable`.
+
+#### Rollback/Cleanup Notes
+- No generated screenshots are required for this DOM-based foldable baseline.
+- To roll back, revert `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check -- scripts/regression-7420-frontend.ps1` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed and included `home-foldable`, `composer-shell-fixture-foldable`, and `conversation-blocks-fixture-foldable`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 foldable assertions: the built-in regression verified 884x1104 shell/sidebar/main/content-grid/Composer presence, sidebar width and ratio ceilings, minimum main/content/Composer widths, fixture fit checks, and no page-level horizontal overflow.
+
 ### Feature: P4 conversation chrome neutralization baseline
 
 #### Prerequisites

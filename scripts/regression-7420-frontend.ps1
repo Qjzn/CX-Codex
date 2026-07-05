@@ -6,6 +6,8 @@ param(
   [int]$DesktopHeight = 900,
   [int]$PhoneWidth = 393,
   [int]$PhoneHeight = 852,
+  [int]$FoldableWidth = 884,
+  [int]$FoldableHeight = 1104,
   [int]$AgentBrowserTimeoutSec = 25
 )
 
@@ -99,6 +101,19 @@ function Invoke-BrowserEvalJson {
     return ($parsed | ConvertFrom-Json)
   }
   return $parsed
+}
+
+function Reset-AppShellLayoutPreferences {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  window.localStorage.setItem('codex-web-local.sidebar-collapsed.v1', '0');
+  window.localStorage.removeItem('codex-web-local.sidebar-width.v1');
+  return { reset: true };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
 }
 
 function Test-HttpJson {
@@ -281,6 +296,77 @@ function Assert-SettingsPanel {
   Assert-True ($Metrics.maxSampleRadius -le 22) "settings sampled controls exceed radius ceiling: $($Metrics.maxSampleRadius)"
   Assert-True ($Metrics.fitFailure -eq $false) "settings panel overflows viewport horizontally"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "settings panel page has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+}
+
+function Read-FoldableShellMetrics {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const layout = document.querySelector('.desktop-layout');
+  const sidebar = document.querySelector('.desktop-sidebar');
+  const main = document.querySelector('.desktop-main');
+  const contentRoot = document.querySelector('.content-root');
+  const contentGrid = document.querySelector('.content-grid');
+  const composer = document.querySelector('.thread-composer-shell');
+  const viewportWidth = document.documentElement.clientWidth;
+  const layoutRect = layout?.getBoundingClientRect();
+  const sidebarRect = sidebar?.getBoundingClientRect();
+  const mainRect = main?.getBoundingClientRect();
+  const contentGridRect = contentGrid?.getBoundingClientRect();
+  const composerRect = composer?.getBoundingClientRect();
+  const fitTargets = [layout, sidebar, main, contentRoot, contentGrid, composer].filter(Boolean);
+  const fitFailures = fitTargets
+    .map((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        className: node.className || node.tagName,
+        left: Math.round(rect.left),
+        right: Math.round(rect.right),
+        width: Math.round(rect.width)
+      };
+    })
+    .filter((rect) => rect.left < -2 || rect.right > viewportWidth + 2);
+  return {
+    hasLayout: !!layout,
+    hasSidebar: !!sidebar,
+    hasMain: !!main,
+    hasContentGrid: !!contentGrid,
+    hasComposer: !!composer,
+    layoutWidth: layoutRect ? Math.round(layoutRect.width) : 0,
+    sidebarWidth: sidebarRect ? Math.round(sidebarRect.width) : 0,
+    mainWidth: mainRect ? Math.round(mainRect.width) : 0,
+    contentGridWidth: contentGridRect ? Math.round(contentGridRect.width) : 0,
+    composerWidth: composerRect ? Math.round(composerRect.width) : 0,
+    sidebarRatio: sidebarRect && layoutRect && layoutRect.width > 0 ? sidebarRect.width / layoutRect.width : 0,
+    fitFailureCount: fitFailures.length,
+    fitFailures: fitFailures.slice(0, 5),
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+    viewport: { width: window.innerWidth, height: window.innerHeight }
+  };
+})())
+'@
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-FoldableShell {
+  param([object]$Metrics)
+
+  Assert-True ($Metrics.hasLayout -eq $true) "foldable shell is missing desktop layout"
+  Assert-True ($Metrics.hasSidebar -eq $true) "foldable shell is missing sidebar"
+  Assert-True ($Metrics.hasMain -eq $true) "foldable shell is missing main content"
+  Assert-True ($Metrics.hasContentGrid -eq $true) "foldable shell is missing content grid"
+  Assert-True ($Metrics.hasComposer -eq $true) "foldable shell is missing composer"
+  Assert-True ($Metrics.sidebarWidth -ge 260) "foldable sidebar is too narrow: $($Metrics.sidebarWidth)"
+  Assert-True ($Metrics.sidebarWidth -le 370) "foldable sidebar is too wide: $($Metrics.sidebarWidth)"
+  Assert-True ($Metrics.sidebarRatio -le 0.42) "foldable sidebar takes too much width: $($Metrics.sidebarRatio)"
+  Assert-True ($Metrics.mainWidth -ge 500) "foldable main content is too narrow: $($Metrics.mainWidth)"
+  Assert-True ($Metrics.contentGridWidth -ge 430) "foldable content grid is too narrow: $($Metrics.contentGridWidth)"
+  Assert-True ($Metrics.composerWidth -ge 430) "foldable composer is too narrow: $($Metrics.composerWidth)"
+  Assert-True ($Metrics.fitFailureCount -eq 0) "foldable shell elements overflow viewport: $($Metrics.fitFailures | ConvertTo-Json -Compress)"
+  Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "foldable shell has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
 }
 
 function Read-ConversationFixtureMetrics {
@@ -743,6 +829,12 @@ try {
   Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "200") | Out-Null
   Assert-SettingsPanel -Metrics (Read-SettingsPanelMetrics -Session $session)
   Add-RegressionResult -Name "home-desktop" -Page $homePage
+  Reset-AppShellLayoutPreferences -Session $session
+
+  $homeFoldable = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $FoldableWidth -Height $FoldableHeight
+  Assert-Page -Page $homeFoldable -Name "home foldable" -RequireComposer
+  Assert-FoldableShell -Metrics (Read-FoldableShellMetrics -Session $session)
+  Add-RegressionResult -Name "home-foldable" -Page $homeFoldable
 
   $skills = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/skills?regression=frontend" -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $skills -Name "skills phone" -RequireSkillsHub
@@ -781,6 +873,11 @@ try {
   Assert-ComposerFixture -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "phone"
   Add-RegressionResult -Name "composer-shell-fixture-phone" -Page $composerFixturePhone
 
+  $composerFixtureFoldable = Open-And-ReadPage -Session $session -Url $composerFixtureUrl -Width $FoldableWidth -Height $FoldableHeight
+  Assert-Page -Page $composerFixtureFoldable -Name "composer shell fixture foldable" -RequireComposer
+  Assert-ComposerFixture -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "foldable"
+  Add-RegressionResult -Name "composer-shell-fixture-foldable" -Page $composerFixtureFoldable
+
   $fixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend"
   $fixture = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $DesktopWidth -Height $DesktopHeight
   Assert-Page -Page $fixture -Name "conversation blocks fixture desktop"
@@ -796,6 +893,13 @@ try {
   Expand-ConversationFixtureCommandOutput -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session)
   Add-RegressionResult -Name "conversation-blocks-fixture-phone" -Page $fixturePhone
+
+  $fixtureFoldable = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $FoldableWidth -Height $FoldableHeight
+  Assert-Page -Page $fixtureFoldable -Name "conversation blocks fixture foldable"
+  Expand-ConversationFixturePendingRequests -Session $session
+  Expand-ConversationFixtureCommandOutput -Session $session
+  Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session)
+  Add-RegressionResult -Name "conversation-blocks-fixture-foldable" -Page $fixtureFoldable
 
   if (-not [string]::IsNullOrWhiteSpace($ThreadId)) {
     $thread = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/thread/$ThreadId" -Width $PhoneWidth -Height $PhoneHeight
