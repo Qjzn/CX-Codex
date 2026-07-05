@@ -4290,22 +4290,22 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-scrollable {
-  @apply flex-1 min-h-0 overflow-y-auto py-3 px-2.5 flex flex-col gap-3;
+  @apply flex-1 min-h-0 overflow-y-auto py-2 px-2 flex flex-col gap-2;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
+  background: var(--ui-bg-sidebar);
 }
 
 .sidebar-top-shell {
-  @apply flex flex-col gap-2 rounded-[26px] border border-[#e7dece] bg-[#fffdf8] px-2.5 py-2.5;
-  box-shadow: 0 16px 30px -32px rgba(31, 41, 55, 0.18);
+  @apply flex flex-col gap-1.5 border border-transparent bg-transparent px-1 py-1;
+  border-radius: var(--ui-radius-card);
+  box-shadow: none;
 }
 
 .content-root {
   @apply h-full min-h-0 min-w-0 w-full flex flex-col overflow-y-hidden overflow-x-visible;
-  --content-shell-max-width: min(88rem, calc(100vw - 2.75rem));
-  background:
-    radial-gradient(circle at top right, rgba(13, 148, 136, 0.02), transparent 22%),
-    linear-gradient(180deg, rgba(255,255,255,0.975) 0%, rgba(250,247,240,0.99) 100%);
+  --content-shell-max-width: min(var(--ui-content-max), calc(100vw - 2.75rem));
+  background: var(--ui-bg-surface);
 }
 
 .content-root--dual-pane-touch {
@@ -4317,11 +4317,22 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-search-toggle {
-  @apply inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[#e4dac9] bg-[#fffdf8] text-[#6b6255] transition-colors duration-100 hover:border-[#cdbfa8] hover:bg-[#f7f1e5] hover:text-[#2d261f];
+  @apply inline-flex h-9 w-9 items-center justify-center border border-transparent bg-transparent transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-search-toggle[aria-pressed='true'] {
-  @apply border-[#cec2ad] bg-[#ece4d6] text-[#433b31];
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-primary);
+}
+
+.sidebar-search-toggle:hover,
+.sidebar-search-toggle:focus-visible {
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-search-toggle-icon {
@@ -4329,11 +4340,23 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-toolbar-icon-button {
-  @apply inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[#e4dac9] bg-[#fffdf8] text-[#6b6255] transition-colors duration-100 hover:border-[#cdbfa8] hover:bg-[#f7f1e5] hover:text-[#2d261f];
+  @apply inline-flex h-9 w-9 items-center justify-center border border-transparent bg-transparent transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-toolbar-icon-button:hover,
+.sidebar-toolbar-icon-button:focus-visible {
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-toolbar-icon-button:disabled {
-  @apply cursor-not-allowed border-[#ece4d6] bg-[#faf6ef] text-[#b1a89b] hover:border-[#ece4d6] hover:bg-[#faf6ef] hover:text-[#b1a89b];
+  @apply cursor-not-allowed;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-toolbar-icon {
@@ -4341,19 +4364,35 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-search-bar {
-  @apply z-10 flex items-center gap-1.5 px-3 py-2 rounded-2xl border border-[#e6dccb] bg-[#fcfaf4] transition-colors;
+  @apply z-10 flex items-center gap-1.5 px-3 py-2 border transition-colors;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
 }
 
 .sidebar-search-bar-icon {
-  @apply w-3.5 h-3.5 text-[#9a907f] shrink-0;
+  @apply w-3.5 h-3.5 shrink-0;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-search-input {
-  @apply flex-1 min-w-0 bg-transparent text-sm text-[#2d261f] placeholder-[#9f9484] outline-none border-none p-0;
+  @apply flex-1 min-w-0 bg-transparent text-sm outline-none border-none p-0;
+  color: var(--ui-text-primary);
+}
+
+.sidebar-search-input::placeholder {
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-search-clear {
-  @apply w-5 h-5 rounded-lg text-[#9a907f] flex items-center justify-center transition-colors duration-100 hover:bg-[#f1ebde] hover:text-[#544a3d];
+  @apply w-5 h-5 rounded-lg flex items-center justify-center transition-colors duration-100;
+  color: var(--ui-text-tertiary);
+}
+
+.sidebar-search-clear:hover,
+.sidebar-search-clear:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-search-clear-icon {
@@ -4365,7 +4404,9 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-skills-link {
-  @apply mx-0 flex items-center justify-center rounded-2xl border border-[#e8decd] bg-[#fcfaf4] px-3 py-2 text-[13px] font-medium text-[#5b5146] transition-[background-color,border-color,color,transform] duration-150 cursor-pointer;
+  @apply mx-0 flex items-center justify-center border border-transparent bg-transparent px-3 py-2 text-[13px] font-medium transition-[background-color,border-color,color] duration-150 cursor-pointer;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-explore-nav .sidebar-skills-link {
@@ -4373,12 +4414,17 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-skills-link.is-active {
-  @apply border-[#bde7df] bg-[#eef8f5] text-[#134e4a] font-semibold;
+  @apply font-semibold;
+  border-color: transparent;
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-skills-link:hover,
 .sidebar-skills-link:focus-visible {
-  @apply border-[#ddd3c2] bg-[#f7f4ed] text-[#2d261f];
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-thread-controls-header-host {
@@ -4386,9 +4432,18 @@ async function submitFirstMessageForNewThread(
 }
 
 .desktop-refresh-button {
-  @apply inline-flex items-center gap-1.5 rounded-full border border-[#ddd3c2] bg-[#fffdf8] px-3 py-1.5 text-[11px] font-semibold text-[#544a3d] transition-[background-color,border-color,color] duration-150 hover:border-[#c8b9a2] hover:bg-[#f6f2ea] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-60;
+  @apply inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-semibold transition-[background-color,border-color,color] duration-150 disabled:cursor-not-allowed disabled:opacity-60;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
   font-family: var(--font-sans-ui);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
+}
+
+.desktop-refresh-button:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .desktop-refresh-button[data-busy='true'] {
@@ -4405,9 +4460,10 @@ async function submitFirstMessageForNewThread(
 }
 
 .content-header-subtitle {
-  @apply m-0 text-[11px] leading-4 text-[#8f8577] truncate;
+  @apply m-0 text-[11px] leading-4 truncate;
+  color: var(--ui-text-tertiary);
   font-family: var(--font-sans-ui);
-  letter-spacing: -0.006em;
+  letter-spacing: 0;
 }
 
 .content-title-refresh-button {
@@ -4432,9 +4488,18 @@ async function submitFirstMessageForNewThread(
 }
 
 .content-favorites-button {
-  @apply inline-flex h-7 min-w-7 shrink-0 items-center justify-center gap-1 rounded-full border border-[#ddd3c2] bg-[#fffdf8] px-2 text-[11px] font-semibold text-[#544a3d] transition-[background-color,border-color,color] duration-150 hover:border-[#ccb89c] hover:bg-[#f7f1e5] hover:text-[#1f2937];
+  @apply inline-flex h-7 min-w-7 shrink-0 items-center justify-center gap-1 rounded-full border px-2 text-[11px] font-semibold transition-[background-color,border-color,color] duration-150;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
   font-family: var(--font-sans-ui);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
+}
+
+.content-favorites-button:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .content-favorites-button-icon {
@@ -4624,14 +4689,14 @@ async function submitFirstMessageForNewThread(
 .composer-with-queue {
   @apply w-full sticky bottom-0 z-10 pt-2;
   background:
-    linear-gradient(180deg, rgba(250,247,240,0) 0%, rgba(250,247,240,0.84) 18%, rgba(250,247,240,0.965) 100%);
+    linear-gradient(180deg, rgb(255 255 255 / 0) 0%, rgb(255 255 255 / 0.86) 20%, rgb(255 255 255 / 0.98) 100%);
   padding-bottom: max(0.35rem, env(safe-area-inset-bottom));
 }
 
 .quota-reminder {
   @apply mx-auto mb-1.5 flex w-full max-w-3xl items-center gap-2 rounded-full border px-3 py-1.5 text-xs leading-4 shadow-sm;
   font-family: var(--font-sans-ui);
-  background: rgba(255, 253, 248, 0.92);
+  background: color-mix(in srgb, var(--ui-bg-surface) 92%, transparent);
   backdrop-filter: blur(10px);
 }
 
@@ -4660,7 +4725,8 @@ async function submitFirstMessageForNewThread(
 }
 
 .quota-reminder-detail {
-  @apply min-w-0 truncate text-[#6d6354];
+  @apply min-w-0 truncate;
+  color: var(--ui-text-secondary);
 }
 
 .new-thread-empty {
@@ -4669,11 +4735,13 @@ async function submitFirstMessageForNewThread(
 }
 
 .new-thread-hero {
-  @apply m-0 text-[1.55rem] sm:text-[2.2rem] font-semibold leading-[1.06] text-[#1f2937];
+  @apply m-0 text-[1.55rem] sm:text-[2.05rem] font-semibold leading-[1.08];
+  color: var(--ui-text-primary);
 }
 
 .new-thread-folder-dropdown {
-  @apply text-xl sm:text-[2.2rem] text-[#73695d];
+  @apply text-xl sm:text-[2.05rem];
+  color: var(--ui-text-secondary);
 }
 
 .new-thread-folder-dropdown :deep(.composer-dropdown-trigger) {
@@ -4762,7 +4830,7 @@ async function submitFirstMessageForNewThread(
 }
 
 .worktree-init-status.is-running {
-  @apply border-[#ddd5c7] bg-[#f7f1e5] text-[#6d6354];
+  @apply border-zinc-200 bg-zinc-50 text-zinc-700;
 }
 
 .worktree-init-status.is-error {
@@ -4778,11 +4846,21 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-area {
-  @apply relative shrink-0 pt-2 px-2 pb-2 border-t border-[#e6dccb] bg-[#f7f4ed];
+  @apply relative shrink-0 pt-2 px-2 pb-2 border-t;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-sidebar);
 }
 
 .sidebar-settings-button {
-  @apply flex items-center gap-2 w-full rounded-2xl border border-transparent bg-transparent px-3 py-2 text-sm text-[#5b5146] transition-colors duration-100 hover:bg-[#ece4d6] hover:text-[#2d261f] cursor-pointer;
+  @apply flex items-center gap-2 w-full border border-transparent bg-transparent px-3 py-2 text-sm transition-colors duration-100 cursor-pointer;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-button:hover,
+.sidebar-settings-button:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-icon {
@@ -4790,7 +4868,11 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-panel {
-  @apply mb-1 rounded-[24px] border border-[#e5dbca] bg-[#fffdf8] overflow-hidden;
+  @apply mb-1 border overflow-hidden;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: var(--ui-shadow-float);
 }
 
 .sidebar-settings-mobile-backdrop {
@@ -4814,8 +4896,8 @@ async function submitFirstMessageForNewThread(
 
 .sidebar-settings-mobile-header {
   @apply sticky top-0 z-[1] flex items-center justify-between gap-3 px-4 pb-2 pt-3;
-  background: linear-gradient(180deg, rgba(255, 253, 248, 0.985) 0%, rgba(255, 253, 248, 0.95) 100%);
-  border-bottom: 1px solid #f1eadf;
+  background: color-mix(in srgb, var(--ui-bg-surface) 96%, transparent);
+  border-bottom: 1px solid var(--ui-border-subtle);
 }
 
 .sidebar-settings-mobile-copy {
@@ -4823,15 +4905,27 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-mobile-title {
-  @apply m-0 text-sm font-semibold text-[#2d261f];
+  @apply m-0 text-sm font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-mobile-subtitle {
-  @apply m-0 text-[11px] leading-4 text-[#8f8577];
+  @apply m-0 text-[11px] leading-4;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-mobile-close {
-  @apply inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#e4dac9] bg-[#fffdf8] text-[#5b5146] transition-colors duration-100 hover:bg-[#f7f1e5] hover:text-[#2d261f];
+  @apply inline-flex h-11 w-11 shrink-0 items-center justify-center border transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-mobile-close:hover,
+.sidebar-settings-mobile-close:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-mobile-close-icon {
@@ -4839,7 +4933,14 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-row {
-  @apply flex items-center justify-between w-full px-3 py-2.5 text-sm text-[#544a3d] border-0 bg-transparent transition-colors duration-150 hover:bg-[#f7f4ed] cursor-pointer;
+  @apply flex items-center justify-between w-full px-3 py-2.5 text-sm border-0 bg-transparent transition-colors duration-150 cursor-pointer;
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-row:hover,
+.sidebar-settings-row:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-row:disabled {

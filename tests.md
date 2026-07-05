@@ -8327,3 +8327,40 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\conversation-rendering-20260705 -AgentBrowserTimeoutSec 25` passed with notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
 - 2026-07-05 screenshot evidence: `output\regression-7420\conversation-rendering-20260705\desktop.png`, `phone.png`, and `fold.png` were generated; desktop screenshot confirms sidebar rows now show title, preview, source/status chips, and relative time.
 - 2026-07-05 limitation: no dedicated fixture thread with fenced code/raw payload was created in this pass, so those branches are covered by type/template build verification rather than a content-specific browser assertion.
+
+---
+
+### Feature: P0 desktop parity visual baseline
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Desktop visual reference is the user-provided Codex Desktop screenshot set from 2026-07-05.
+
+#### Steps
+1. Compare the home shell against the desktop reference and confirm the app uses a neutral white/gray surface, not the previous beige card-heavy shell.
+2. Inspect the left sidebar and confirm top actions, project rows, thread rows, active rows, hover rows, source/status chips, and the settings footer use the shared UI tokens.
+3. Inspect a populated thread list and confirm rows are compact, stable height, readable, and still show title, preview, relative time, and status/source metadata.
+4. Inspect the bottom composer and confirm it aligns to the content column, uses a light white surface, keeps attachment/runtime/mic controls visible, and uses a dark circular send button.
+5. Run `git diff --check`.
+6. Run `npm.cmd run build:frontend`.
+7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+8. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p0-desktop-parity-shell-20260705 -AgentBrowserTimeoutSec 25`.
+
+#### Expected Results
+- App Shell, sidebar, header, and composer share the same neutral token baseline.
+- Sidebar no longer reads as stacked warm cards; active and hover states match the quieter desktop-style gray treatment.
+- Composer remains usable on desktop, phone, and fold viewports without horizontal overflow.
+- Browser regression generates desktop 1440x900, phone 390x844, and fold 884x1104 screenshots with `pageErrors=0`.
+
+#### Rollback/Cleanup Notes
+- Generated screenshots under `output\regression-7420\p0-desktop-parity-shell-20260705\` can be deleted after review.
+- To roll back, revert the P0 token/App Shell/sidebar/composer style changes, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, and local preview phone; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p0-desktop-parity-shell-20260705 -AgentBrowserTimeoutSec 25` passed with local health, App Server health, event replay, public health, notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
+- 2026-07-05 screenshot evidence: `output\regression-7420\p0-desktop-parity-shell-20260705\desktop.png`, `phone.png`, and `fold.png` were generated.
+- 2026-07-05 visual sanity check: desktop screenshot confirms the warm card-heavy shell has been replaced by a neutral continuous sidebar, lighter header, centered content column, and desktop-style bottom composer; phone screenshot confirms no horizontal overflow, while empty composer action visibility remains a P1 state-specific follow-up.

@@ -1890,12 +1890,16 @@ watch(
 
 .thread-composer {
   @apply w-full mx-auto px-2 sm:px-6;
-  max-width: min(var(--content-shell-max-width, 88rem), 100%);
+  max-width: min(var(--ui-composer-max, var(--content-shell-max-width, 88rem)), 100%);
 }
 
 .thread-composer-shell {
-  @apply relative rounded-[20px] border border-[#e3d9c8] bg-[#fffdf8] p-2 sm:p-2.5;
-  box-shadow: 0 12px 26px -34px rgba(31, 41, 55, 0.16);
+  @apply relative border p-2 sm:p-2.5;
+  min-height: var(--ui-composer-min-height);
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: var(--ui-shadow-float);
 }
 
 .thread-composer-shell--no-top-radius {
@@ -1927,11 +1931,15 @@ watch(
 }
 
 .thread-composer-folder-chip {
-  @apply inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800;
+  @apply inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-folder-chip-icon {
-  @apply h-3.5 w-3.5 text-amber-600 shrink-0;
+  @apply h-3.5 w-3.5 shrink-0;
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-folder-chip-name {
@@ -1939,11 +1947,17 @@ watch(
 }
 
 .thread-composer-folder-chip-meta {
-  @apply text-amber-700/90;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-folder-chip-remove {
-  @apply ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border-0 bg-transparent text-amber-600 transition hover:bg-amber-200 hover:text-amber-800 text-xs leading-none p-0;
+  @apply ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border-0 bg-transparent transition text-xs leading-none p-0;
+  color: var(--ui-text-tertiary);
+}
+
+.thread-composer-folder-chip-remove:hover {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .thread-composer-file-chip {
@@ -1967,7 +1981,10 @@ watch(
 }
 
 .thread-composer-skill-chip {
-  @apply inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700;
+  @apply inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-accent);
 }
 
 .thread-composer-skill-chip-name {
@@ -1983,7 +2000,10 @@ watch(
 }
 
 .thread-composer-option-chip {
-  @apply inline-flex max-w-full items-center gap-1.5 rounded-md border border-[#d8cfc0] bg-[#f7f3ea] px-2 py-0.5 text-xs text-[#544a3d];
+  @apply inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-option-chip--goal {
@@ -2071,7 +2091,8 @@ watch(
 }
 
 .thread-composer-input {
-  @apply w-full min-w-0 min-h-9 sm:min-h-10 max-h-36 rounded-xl border-0 bg-transparent px-1 py-1.5 text-sm text-zinc-900 outline-none transition resize-none overflow-y-auto;
+  @apply w-full min-w-0 min-h-9 sm:min-h-10 max-h-36 rounded-xl border-0 bg-transparent px-1 py-1.5 text-sm outline-none transition resize-none overflow-y-auto;
+  color: var(--ui-text-primary);
   font-family: var(--font-sans-reading);
   font-size: var(--font-size-reading, 15px);
   line-height: 1.55;
@@ -2099,11 +2120,24 @@ watch(
 }
 
 .thread-composer-attach-trigger {
-  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-transparent bg-transparent text-xl leading-none text-zinc-700 transition hover:border-[#e3dacb] hover:bg-[#f5f0e6] hover:text-zinc-900 disabled:cursor-not-allowed disabled:text-zinc-400;
+  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center border border-transparent bg-transparent text-xl leading-none transition disabled:cursor-not-allowed disabled:text-zinc-400;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.thread-composer-attach-trigger:hover,
+.thread-composer-attach-trigger:focus-visible {
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .thread-composer-attach-menu {
-  @apply absolute bottom-11 left-0 z-20 w-72 max-w-[calc(100vw_-_1rem)] rounded-[18px] border border-[#ddd5c7] bg-[#fffdf8] p-1.5 shadow-xl shadow-[#1f2937]/10;
+  @apply absolute bottom-11 left-0 z-20 w-72 max-w-[calc(100vw_-_1rem)] border p-1.5;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: var(--ui-shadow-float);
 }
 
 .thread-composer-attach-menu--sheet {
@@ -2114,12 +2148,20 @@ watch(
 }
 
 .thread-composer-attach-item {
-  @apply flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[14px] border-0 bg-transparent px-2.5 py-2 text-left text-sm text-[#3b332a] transition hover:bg-[#f7f3ea] disabled:cursor-not-allowed disabled:text-zinc-400;
+  @apply flex min-h-11 w-full min-w-0 items-center gap-2.5 border-0 bg-transparent px-2.5 py-2 text-left text-sm transition disabled:cursor-not-allowed disabled:text-zinc-400;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-primary);
   font-family: var(--font-sans-ui);
 }
 
+.thread-composer-attach-item:hover,
+.thread-composer-attach-item:focus-visible {
+  background: var(--ui-bg-row-hover);
+}
+
 .thread-composer-attach-item-icon {
-  @apply h-5 w-5 shrink-0 text-[#6f6555];
+  @apply h-5 w-5 shrink-0;
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-attach-item-icon--text,
@@ -2132,11 +2174,13 @@ watch(
 }
 
 .thread-composer-attach-item-title {
-  @apply truncate text-sm font-semibold leading-snug text-[#2f281f];
+  @apply truncate text-sm font-semibold leading-snug;
+  color: var(--ui-text-primary);
 }
 
 .thread-composer-attach-item-subtitle {
-  @apply truncate text-xs font-normal leading-snug text-[#8a8173];
+  @apply truncate text-xs font-normal leading-snug;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-attach-item--toggle,
@@ -2309,13 +2353,26 @@ watch(
 }
 
 .thread-composer-runtime-trigger {
-  @apply inline-flex h-8 w-full min-w-0 items-center justify-center gap-1 rounded-[14px] border-0 bg-transparent px-2 text-[13px] font-semibold text-[#544a3d] transition hover:bg-[#f7f3ea] active:bg-[#efe8dc] disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex h-8 w-full min-w-0 items-center justify-center gap-1 border-0 bg-transparent px-2 text-[13px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-50;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
   font-family: var(--font-sans-ui);
   letter-spacing: 0;
 }
 
+.thread-composer-runtime-trigger:hover,
+.thread-composer-runtime-trigger:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+.thread-composer-runtime-trigger:active {
+  background: var(--ui-bg-row-active);
+}
+
 .thread-composer-runtime-bolt {
-  @apply h-4 w-4 shrink-0 text-[#6f6555];
+  @apply h-4 w-4 shrink-0;
+  color: currentColor;
 }
 
 .thread-composer-runtime-summary {
@@ -2331,7 +2388,11 @@ watch(
 }
 
 .thread-composer-runtime-panel {
-  @apply absolute bottom-[calc(100%+0.5rem)] left-0 z-[70] w-[20rem] max-w-[calc(100vw_-_1.5rem)] rounded-[22px] border border-[#ddd5c7] bg-[#fffdf8] p-2 shadow-xl shadow-[#1f2937]/10;
+  @apply absolute bottom-[calc(100%+0.5rem)] left-0 z-[70] w-[20rem] max-w-[calc(100vw_-_1.5rem)] border p-2;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: var(--ui-shadow-float);
 }
 
 .thread-composer-runtime-panel--sheet {
@@ -2363,9 +2424,16 @@ watch(
 }
 
 .thread-composer-runtime-option {
-  @apply relative flex min-h-9 min-w-0 items-center justify-between gap-2 rounded-[14px] border-0 bg-transparent px-2.5 py-2 text-left text-sm font-medium text-[#3b332a] transition hover:bg-[#f7f3ea] disabled:cursor-not-allowed disabled:opacity-50;
+  @apply relative flex min-h-9 min-w-0 items-center justify-between gap-2 border-0 bg-transparent px-2.5 py-2 text-left text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-primary);
   font-family: var(--font-sans-ui);
   letter-spacing: 0;
+}
+
+.thread-composer-runtime-option:hover,
+.thread-composer-runtime-option:focus-visible {
+  background: var(--ui-bg-row-hover);
 }
 
 .thread-composer-runtime-option span {
@@ -2381,7 +2449,9 @@ watch(
 }
 
 .thread-composer-runtime-option.is-selected {
-  @apply bg-[#f7f3ea] pr-7 text-[#0f766e];
+  @apply pr-7;
+  background: var(--ui-bg-row-active);
+  color: var(--ui-accent);
 }
 
 .thread-composer-runtime-option.is-selected::after {
@@ -2406,11 +2476,20 @@ watch(
 }
 
 .thread-composer-mic {
-  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#e2d8c8] bg-[#f7f3ea] text-zinc-600 transition hover:bg-[#efe8dc] hover:text-zinc-900 disabled:cursor-not-allowed disabled:text-zinc-400;
+  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:text-zinc-400;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+}
+
+.thread-composer-mic:hover,
+.thread-composer-mic:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .thread-composer-mic--active {
@@ -2442,8 +2521,8 @@ watch(
 }
 
 .thread-composer-submit {
-  @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-0 bg-[#0d9488] text-white transition hover:bg-[#0f766e] disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-500;
-  box-shadow: 0 12px 24px -20px rgba(13, 148, 136, 0.56);
+  @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-0 bg-[#1f1f1f] text-white transition hover:bg-black disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-500;
+  box-shadow: 0 12px 24px -22px rgba(0, 0, 0, 0.55);
 }
 
 .thread-composer-submit--queue {
@@ -2456,7 +2535,8 @@ watch(
   }
 
   .thread-composer-shell {
-    @apply px-4 py-3 rounded-[22px];
+    @apply px-4 py-3;
+    border-radius: var(--ui-radius-composer);
   }
 }
 
@@ -2482,7 +2562,9 @@ watch(
   }
 
   .thread-composer-shell {
-    @apply rounded-[16px] px-2.5 py-1.5;
+    @apply px-2.5 py-1.5;
+    min-height: 94px;
+    border-radius: 18px;
   }
 
   .thread-composer-input {
@@ -2511,7 +2593,10 @@ watch(
   }
 
   .thread-composer-runtime-trigger {
-    @apply h-9 gap-1 rounded-[14px] border border-[#e4dac9] bg-[#f7f3ea] px-2 text-[13px];
+    @apply h-9 gap-1 border px-2 text-[13px];
+    border-radius: var(--ui-radius-control);
+    border-color: var(--ui-border-subtle);
+    background: var(--ui-bg-surface-muted);
   }
 
   .thread-composer-actions {

@@ -43,18 +43,22 @@ const hasTitleSuffix = computed(() => Boolean(slots['title-suffix']))
 @reference "tailwindcss";
 
 .content-header {
-  @apply sticky top-0 z-20 w-full flex flex-col gap-1 px-3 sm:px-4 pt-2 sm:pt-2 pb-2 border-b border-[#e8dfcf] bg-[#fcfbf8]/96;
+  @apply sticky top-0 z-20 w-full flex flex-col gap-1 px-3 sm:px-4 pt-2 sm:pt-2 pb-2 border-b;
+  min-height: var(--ui-topbar-height);
+  border-color: var(--ui-border-subtle);
+  background: color-mix(in srgb, var(--ui-bg-surface) 94%, transparent);
   backdrop-filter: blur(10px);
 }
 
 .content-header-main {
   @apply w-full min-h-11 sm:min-h-12 flex items-center gap-2 sm:gap-3;
-  width: min(100%, var(--content-shell-max-width, 88rem));
+  width: min(100%, var(--content-shell-max-width, var(--ui-content-max)));
   margin-inline: auto;
 }
 
 .content-title {
-  @apply m-0 min-w-0 truncate text-[16px] sm:text-[17px] font-semibold leading-6 text-[#1f2937];
+  @apply m-0 min-w-0 truncate text-[16px] sm:text-[17px] font-semibold leading-6;
+  color: var(--ui-text-primary);
   font-family: var(--font-sans-reading);
   letter-spacing: var(--tracking-tight-soft);
 }
@@ -85,7 +89,7 @@ const hasTitleSuffix = computed(() => Boolean(slots['title-suffix']))
 
 .content-meta {
   @apply flex flex-wrap items-center gap-1.5 min-h-0;
-  width: min(100%, var(--content-shell-max-width, 88rem));
+  width: min(100%, var(--content-shell-max-width, var(--ui-content-max)));
   margin-inline: auto;
 }
 

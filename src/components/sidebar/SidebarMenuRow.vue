@@ -57,11 +57,12 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
 @reference "tailwindcss";
 
 .sidebar-menu-row {
-  @apply w-full min-w-0 rounded-[20px] px-3 py-2.5 text-left border border-transparent;
+  @apply w-full min-w-0 px-2 py-1.5 text-left border border-transparent;
+  border-radius: var(--ui-radius-row);
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  column-gap: 0.625rem;
+  align-items: center;
+  column-gap: 0.55rem;
   transition:
     background-color 160ms ease,
     border-color 160ms ease,
@@ -71,7 +72,7 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
 
 .sidebar-menu-row-left {
   @apply min-w-4 h-4 shrink-0 flex items-center justify-center text-zinc-500;
-  margin-top: 0.125rem;
+  margin-top: 0;
 }
 
 .sidebar-menu-row-main {
@@ -79,25 +80,26 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
 }
 
 .sidebar-menu-row-right {
-  @apply shrink-0 flex items-start justify-end;
+  @apply shrink-0 flex items-center justify-end;
   min-width: 2.4rem;
 }
 
 .sidebar-menu-row-right-default,
 .sidebar-menu-row-right-hover {
-  @apply transition duration-150 items-start justify-end;
+  @apply transition duration-150 items-center justify-end;
   display: inline-flex;
   width: 100%;
 }
 
 .sidebar-menu-row:hover,
 .sidebar-menu-row:focus-within {
-  box-shadow: 0 6px 16px -18px rgba(31, 41, 55, 0.12);
+  box-shadow: none;
 }
 
 @media (max-width: 767px) {
   .sidebar-menu-row {
-    @apply rounded-[14px] px-2.5 py-1.5;
+    @apply px-2.5 py-1.5;
+    border-radius: var(--ui-radius-row);
     column-gap: 0.5rem;
   }
 
