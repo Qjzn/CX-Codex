@@ -443,28 +443,19 @@ JSON.stringify((() => {
   const contentGrid = document.querySelector('.content-grid');
   const composer = document.querySelector('.thread-composer-shell');
   const settingsPanel = document.querySelector('.sidebar-settings-panel');
-  const primaryActions = document.querySelector('.sidebar-primary-actions');
-  const primaryActionRows = Array.from(document.querySelectorAll('.sidebar-primary-action'));
-  const primaryActionIcons = Array.from(document.querySelectorAll('.sidebar-primary-action-icon'));
-  const commandList = document.querySelector('.sidebar-command-list');
-  const commandLinks = Array.from(document.querySelectorAll('.sidebar-command-link'));
-  const commandIcons = Array.from(document.querySelectorAll('.sidebar-command-icon'));
-  const primaryActionsStyle = primaryActions ? window.getComputedStyle(primaryActions) : null;
-  const primaryActionStyles = primaryActionRows.map((node) => {
+  const actionGrid = document.querySelector('.sidebar-action-grid');
+  const actionTiles = Array.from(document.querySelectorAll('.sidebar-action-tile'));
+  const actionIcons = Array.from(document.querySelectorAll('.sidebar-action-icon'));
+  const actionGridStyle = actionGrid ? window.getComputedStyle(actionGrid) : null;
+  const actionTileStyles = actionTiles.map((node) => {
     const style = window.getComputedStyle(node);
     return {
       radius: Number.parseFloat(style.borderTopLeftRadius || '0'),
       height: node.getBoundingClientRect().height
     };
   });
-  const commandListStyle = commandList ? window.getComputedStyle(commandList) : null;
-  const commandLinkStyles = commandLinks.map((node) => {
-    const style = window.getComputedStyle(node);
-    return {
-      radius: Number.parseFloat(style.borderTopLeftRadius || '0'),
-      height: node.getBoundingClientRect().height
-    };
-  });
+  const actionGridRows = new Set(actionTiles.map((node) => Math.round(node.getBoundingClientRect().top))).size;
+  const actionGridRect = actionGrid?.getBoundingClientRect();
   const viewportWidth = document.documentElement.clientWidth;
   const layoutRect = layout?.getBoundingClientRect();
   const sidebarRect = sidebar?.getBoundingClientRect();
@@ -490,21 +481,15 @@ JSON.stringify((() => {
     hasContentGrid: !!contentGrid,
     hasComposer: !!composer,
     hasSettingsPanel: !!settingsPanel,
-    hasPrimaryActions: !!primaryActions,
-    primaryActionsDisplay: primaryActionsStyle?.display || '',
-    primaryActionsFlexDirection: primaryActionsStyle?.flexDirection || '',
-    primaryActionsGridTemplateColumns: primaryActionsStyle?.gridTemplateColumns || '',
-    primaryActionCount: primaryActionRows.length,
-    primaryActionIconCount: primaryActionIcons.length,
-    primaryActionMaxRadius: primaryActionStyles.length ? Math.max(...primaryActionStyles.map((item) => item.radius)) : 0,
-    primaryActionMinHeight: primaryActionStyles.length ? Math.min(...primaryActionStyles.map((item) => item.height)) : 0,
-    hasCommandList: !!commandList,
-    commandListDisplay: commandListStyle?.display || '',
-    commandListFlexDirection: commandListStyle?.flexDirection || '',
-    commandLinkCount: commandLinks.length,
-    commandIconCount: commandIcons.length,
-    commandLinkMaxRadius: commandLinkStyles.length ? Math.max(...commandLinkStyles.map((item) => item.radius)) : 0,
-    commandLinkMinHeight: commandLinkStyles.length ? Math.min(...commandLinkStyles.map((item) => item.height)) : 0,
+    hasActionGrid: !!actionGrid,
+    actionGridDisplay: actionGridStyle?.display || '',
+    actionGridTemplateColumns: actionGridStyle?.gridTemplateColumns || '',
+    actionGridHeight: actionGridRect ? Math.round(actionGridRect.height) : 0,
+    actionGridRowCount: actionGridRows,
+    actionTileCount: actionTiles.length,
+    actionIconCount: actionIcons.length,
+    actionTileMaxRadius: actionTileStyles.length ? Math.max(...actionTileStyles.map((item) => item.radius)) : 0,
+    actionTileMinHeight: actionTileStyles.length ? Math.min(...actionTileStyles.map((item) => item.height)) : 0,
     layoutWidth: layoutRect ? Math.round(layoutRect.width) : 0,
     sidebarWidth: sidebarRect ? Math.round(sidebarRect.width) : 0,
     mainWidth: mainRect ? Math.round(mainRect.width) : 0,
@@ -532,20 +517,15 @@ function Assert-FoldableShell {
   Assert-True ($Metrics.hasContentGrid -eq $true) "foldable shell is missing content grid"
   Assert-True ($Metrics.hasComposer -eq $true) "foldable shell is missing composer"
   Assert-True ($Metrics.hasSettingsPanel -eq $false) "foldable shell screenshot is polluted by an open settings panel"
-  Assert-True ($Metrics.hasPrimaryActions -eq $true) "foldable shell is missing sidebar primary actions"
-  Assert-True ($Metrics.primaryActionsDisplay -eq "grid") "foldable sidebar primary actions are not compact grid: $($Metrics.primaryActionsDisplay)"
-  Assert-True (-not [string]::IsNullOrWhiteSpace($Metrics.primaryActionsGridTemplateColumns)) "foldable sidebar primary actions are missing grid columns"
-  Assert-True ($Metrics.primaryActionCount -ge 2) "foldable sidebar primary actions are missing new/search entries"
-  Assert-True ($Metrics.primaryActionIconCount -ge 2) "foldable sidebar primary actions are missing icons"
-  Assert-True ($Metrics.primaryActionMaxRadius -le 10) "foldable sidebar primary actions are too rounded: $($Metrics.primaryActionMaxRadius)"
-  Assert-True ($Metrics.primaryActionMinHeight -ge 28) "foldable sidebar primary actions are too small: $($Metrics.primaryActionMinHeight)"
-  Assert-True ($Metrics.hasCommandList -eq $true) "foldable shell is missing sidebar command list"
-  Assert-True ($Metrics.commandListDisplay -eq "flex") "foldable sidebar command list is not flex: $($Metrics.commandListDisplay)"
-  Assert-True ($Metrics.commandListFlexDirection -eq "column") "foldable sidebar command list is not vertical: $($Metrics.commandListFlexDirection)"
-  Assert-True ($Metrics.commandLinkCount -ge 3) "foldable sidebar command list is missing entries"
-  Assert-True ($Metrics.commandIconCount -ge 3) "foldable sidebar command list is missing icons"
-  Assert-True ($Metrics.commandLinkMaxRadius -le 10) "foldable sidebar command rows are too rounded: $($Metrics.commandLinkMaxRadius)"
-  Assert-True ($Metrics.commandLinkMinHeight -ge 28) "foldable sidebar command rows are too small: $($Metrics.commandLinkMinHeight)"
+  Assert-True ($Metrics.hasActionGrid -eq $true) "foldable shell is missing compact sidebar action grid"
+  Assert-True ($Metrics.actionGridDisplay -eq "grid") "foldable sidebar action grid is not grid: $($Metrics.actionGridDisplay)"
+  Assert-True (-not [string]::IsNullOrWhiteSpace($Metrics.actionGridTemplateColumns)) "foldable sidebar action grid is missing columns"
+  Assert-True ($Metrics.actionGridRowCount -le 2) "foldable sidebar action grid uses too many rows: $($Metrics.actionGridRowCount)"
+  Assert-True ($Metrics.actionGridHeight -le 96) "foldable sidebar action grid is too tall: $($Metrics.actionGridHeight)"
+  Assert-True ($Metrics.actionTileCount -ge 5) "foldable sidebar action grid is missing entries"
+  Assert-True ($Metrics.actionIconCount -ge $Metrics.actionTileCount) "foldable sidebar action grid is missing icons"
+  Assert-True ($Metrics.actionTileMaxRadius -le 10) "foldable sidebar action tiles are too rounded: $($Metrics.actionTileMaxRadius)"
+  Assert-True ($Metrics.actionTileMinHeight -ge 42) "foldable sidebar action tiles are too small for touch: $($Metrics.actionTileMinHeight)"
   Assert-True ($Metrics.sidebarWidth -ge 260) "foldable sidebar is too narrow: $($Metrics.sidebarWidth)"
   Assert-True ($Metrics.sidebarWidth -le 370) "foldable sidebar is too wide: $($Metrics.sidebarWidth)"
   Assert-True ($Metrics.sidebarRatio -le 0.42) "foldable sidebar takes too much width: $($Metrics.sidebarRatio)"
@@ -821,6 +801,8 @@ function Read-SidebarFixtureMetrics {
 JSON.stringify((() => {
   const rows = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row'));
   const projectGroups = Array.from(document.querySelectorAll('.sidebar-regression-fixture .project-group'));
+  const firstProjectRows = Array.from(projectGroups[0]?.querySelectorAll('.thread-row') || []);
+  const showMoreButtons = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-show-more-button'));
   const sources = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row-source'));
   const indicators = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-status-indicator'));
   const countRowsByThreadId = (threadId) => rows.filter((node) => node.getAttribute('data-thread-id') === threadId).length;
@@ -869,6 +851,9 @@ JSON.stringify((() => {
   return {
     rowCount: rows.length,
     projectOrder: projectGroups.map((node) => node.getAttribute('data-project-name') || ''),
+    firstProjectThreadRowCount: firstProjectRows.length,
+    showMoreButtonCount: showMoreButtons.length,
+    firstShowMoreText: showMoreButtons[0]?.textContent?.trim() || '',
     runningThreadRowCount: countRowsByThreadId('fixture-thread-running'),
     runningThreadProjectRowCount: countProjectRowsByThreadId('fixture-thread-running'),
     pinnedThreadRowCount: countRowsByThreadId('fixture-thread-unread'),
@@ -896,6 +881,9 @@ function Assert-SidebarFixture {
   Assert-True ($Metrics.rowCount -ge 4) "sidebar fixture is missing thread rows"
   Assert-True ($Metrics.projectOrder.Count -ge 2) "sidebar fixture is missing project groups"
   Assert-True ([string]$Metrics.projectOrder[0] -eq "E:/javaword/CXCodex/codexui") "sidebar fixture project order no longer follows input/app-server order"
+  Assert-True ([int]$Metrics.firstProjectThreadRowCount -eq 5) "sidebar fixture first expanded project should show exactly 5 threads by default, got $($Metrics.firstProjectThreadRowCount)"
+  Assert-True ([int]$Metrics.showMoreButtonCount -ge 1) "sidebar fixture is missing show more control for long project thread list"
+  Assert-True ([string]$Metrics.firstShowMoreText -eq "显示更多 3 条") "sidebar fixture show more label is unexpected: $($Metrics.firstShowMoreText)"
   Assert-True ([int]$Metrics.runningThreadRowCount -ge 2) "sidebar fixture running thread is missing from either running section or project list"
   Assert-True ([int]$Metrics.runningThreadProjectRowCount -eq 1) "sidebar fixture running thread is not retained exactly once in project list"
   Assert-True ([int]$Metrics.pinnedThreadRowCount -ge 2) "sidebar fixture pinned thread is missing from either pinned section or project list"

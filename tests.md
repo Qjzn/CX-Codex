@@ -8967,3 +8967,40 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName sidebar-desktop-list-parity` passed for home desktop/foldable, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 fixture sidebar ordering assertions: `sidebar-rows` verified the first project group remains `E:/javaword/CXCodex/codexui`, the running thread appears in both the running shortcut and exactly once in its owning project list, and the pinned thread appears in both the pinned shortcut and exactly once in its owning project list.
 - 2026-07-05 screenshot artifact: `output/regression-7420/sidebar-desktop-list-parity/sidebar-rows-fixture-phone.png` shows the shortcut sections and project list coexisting without sidebar horizontal overflow.
+
+### Feature: P4 compact mobile sidebar action grid and project thread limit
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Built-in regression fixture route `/#/__regression/sidebar-rows` is available.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/` at a foldable/narrow tablet viewport such as 884x1104.
+2. Confirm the sidebar top actions render as a compact grid with icon and short label for 新会话, 搜索, 工作台, 技能, GitHub, and 诊断 when GitHub 热门 is enabled.
+3. Confirm the action grid uses no more than two rows and each action remains large enough for touch operation.
+4. Open `http://127.0.0.1:7420/#/__regression/sidebar-rows?regression=frontend` at 393x852.
+5. Confirm the first expanded project shows exactly 5 thread rows by default.
+6. Confirm long project lists show `显示更多 N 条`; clicking it expands the rest, and clicking `收起` returns to the 5-row preview.
+7. Run `git diff --check`.
+8. Run `npm.cmd run build:frontend`.
+9. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName compact-sidebar-action-grid`.
+
+#### Expected Results
+- Sidebar top actions consume less vertical space than the previous primary-action plus command-list layout.
+- Action buttons retain visible text labels and meet mobile touch-size expectations.
+- Project thread preview defaults to 5 rows in desktop-parity mode and normal project mode.
+- The show-more control displays the remaining count and does not create horizontal overflow.
+- Browser regression passes with no page-level horizontal overflow.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/compact-sidebar-action-grid/` when `-CaptureScreenshots` is used.
+- To roll back, revert `App.vue`, `SidebarThreadTree.vue`, `SidebarRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName compact-sidebar-action-grid` passed for home desktop/foldable, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 foldable sidebar action assertions: home foldable verified the compact sidebar action grid exists, uses CSS grid, renders in no more than two rows, stays no taller than 96px, has at least five labeled icon actions, keeps tile radius no larger than 10px, and keeps tile height at least 42px for touch.
+- 2026-07-05 sidebar project limit assertions: `sidebar-rows` verified the first expanded project renders exactly 5 thread rows by default and shows `显示更多 3 条` for the remaining project sessions.
+- 2026-07-05 screenshot artifacts: `output/regression-7420/compact-sidebar-action-grid/home-foldable.png` and `output/regression-7420/compact-sidebar-action-grid/sidebar-rows-fixture-phone.png`.

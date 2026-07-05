@@ -473,7 +473,7 @@
               <span class="thread-show-more-spacer" />
             </template>
             <button class="thread-show-more-button" type="button" @click="toggleProjectExpansion(group.projectName)">
-              {{ isExpanded(group.projectName) ? '收起' : '展开更多' }}
+              {{ getShowMoreLabel(group) }}
             </button>
           </SidebarMenuRow>
       </article>
@@ -604,6 +604,7 @@ type DragPointerSample = {
 
 const DRAG_START_THRESHOLD_PX = 4
 const PROJECT_GROUP_EXPANDED_GAP_PX = 6
+const PROJECT_THREAD_PREVIEW_LIMIT = 5
 const expandedProjects = ref<Record<string, boolean>>({})
 const collapsedProjects = ref<Record<string, boolean>>({})
 const PINNED_THREAD_STORAGE_KEY = 'codex-web-local.pinned-thread-ids.v1'
@@ -1680,16 +1681,23 @@ function projectThreads(group: UiProjectGroup): UiThread[] {
 function visibleThreads(group: UiProjectGroup): UiThread[] {
   if (isSearchActive.value) return projectThreads(group)
   if (isCollapsed(group.projectName)) return []
-  if (useDesktopListParity.value) return projectThreads(group)
 
   const rows = projectThreads(group)
-  return isExpanded(group.projectName) ? rows : rows.slice(0, 10)
+  return isExpanded(group.projectName) ? rows : rows.slice(0, PROJECT_THREAD_PREVIEW_LIMIT)
 }
 
 function hasHiddenThreads(group: UiProjectGroup): boolean {
   if (isSearchActive.value) return false
-  if (useDesktopListParity.value) return false
-  return !isCollapsed(group.projectName) && projectThreads(group).length > 10
+  return !isCollapsed(group.projectName) && hiddenThreadCount(group) > 0
+}
+
+function hiddenThreadCount(group: UiProjectGroup): number {
+  return Math.max(projectThreads(group).length - PROJECT_THREAD_PREVIEW_LIMIT, 0)
+}
+
+function getShowMoreLabel(group: UiProjectGroup): string {
+  if (isExpanded(group.projectName)) return '收起'
+  return `显示更多 ${hiddenThreadCount(group)} 条`
 }
 
 function hasThreads(group: UiProjectGroup): boolean {
@@ -2203,7 +2211,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-show-more-row {
-  @apply mt-1;
+  @apply mt-1 cursor-default;
 }
 
 .thread-show-more-spacer {
@@ -2211,8 +2219,9 @@ onBeforeUnmount(() => {
 }
 
 .thread-show-more-button {
-  @apply block mx-auto rounded-full px-3 py-1 text-sm font-medium transition-colors duration-100;
+  @apply flex min-h-8 w-full items-center justify-center rounded-lg px-3 py-1.5 text-[12px] font-medium transition-colors duration-100;
   color: var(--ui-text-secondary);
+  touch-action: manipulation;
 }
 
 .thread-show-more-button:hover,

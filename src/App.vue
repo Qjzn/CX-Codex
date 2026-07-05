@@ -74,27 +74,68 @@
               </button>
             </SidebarThreadControls>
 
-            <div class="sidebar-primary-actions">
+            <div class="sidebar-action-grid" aria-label="侧栏快捷操作">
               <button
-                class="sidebar-primary-action"
+                class="sidebar-action-tile"
                 type="button"
                 aria-label="新建会话"
                 title="新建会话"
                 @click="onStartNewThreadFromToolbar"
               >
-                <IconTablerFilePencil class="sidebar-primary-action-icon" />
-                <span class="sidebar-primary-action-label">新会话</span>
+                <IconTablerFilePencil class="sidebar-action-icon" />
+                <span class="sidebar-action-label">新会话</span>
               </button>
               <button
-                class="sidebar-primary-action"
+                class="sidebar-action-tile"
                 type="button"
                 :aria-pressed="isSidebarSearchVisible"
                 aria-label="搜索会话"
                 title="搜索会话"
                 @click="toggleSidebarSearch"
               >
-                <IconTablerSearch class="sidebar-primary-action-icon" />
-                <span class="sidebar-primary-action-label">搜索</span>
+                <IconTablerSearch class="sidebar-action-icon" />
+                <span class="sidebar-action-label">搜索</span>
+              </button>
+              <button
+                class="sidebar-action-tile"
+                :class="{ 'is-active': isWorkbenchRoute }"
+                type="button"
+                :aria-current="isWorkbenchRoute ? 'page' : undefined"
+                @click="router.push({ name: 'workbench' }); isMobile && setSidebarCollapsed(true)"
+              >
+                <IconTablerFolder class="sidebar-action-icon" />
+                <span class="sidebar-action-label">工作台</span>
+              </button>
+              <button
+                class="sidebar-action-tile"
+                :class="{ 'is-active': isSkillsRoute }"
+                type="button"
+                :aria-current="isSkillsRoute ? 'page' : undefined"
+                @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
+              >
+                <IconTablerBolt class="sidebar-action-icon" />
+                <span class="sidebar-action-label">技能</span>
+              </button>
+              <button
+                v-if="showGithubTrendingProjects"
+                class="sidebar-action-tile"
+                :class="{ 'is-active': isGithubTrendingRoute }"
+                type="button"
+                :aria-current="isGithubTrendingRoute ? 'page' : undefined"
+                @click="router.push({ name: 'github-trending' }); isMobile && setSidebarCollapsed(true)"
+              >
+                <IconTablerGitFork class="sidebar-action-icon" />
+                <span class="sidebar-action-label">GitHub</span>
+              </button>
+              <button
+                class="sidebar-action-tile"
+                :class="{ 'is-active': isDiagnosticsRoute }"
+                type="button"
+                :aria-current="isDiagnosticsRoute ? 'page' : undefined"
+                @click="router.push({ name: 'diagnostics' }); isMobile && setSidebarCollapsed(true)"
+              >
+                <IconTablerSettings class="sidebar-action-icon" />
+                <span class="sidebar-action-label">诊断</span>
               </button>
             </div>
 
@@ -116,46 +157,6 @@
                 @click="clearSidebarSearch"
               >
                 <IconTablerX class="sidebar-search-clear-icon" />
-              </button>
-            </div>
-
-            <div class="sidebar-explore-nav sidebar-command-list">
-              <button
-                class="sidebar-skills-link sidebar-command-link"
-                :class="{ 'is-active': isWorkbenchRoute }"
-                type="button"
-                @click="router.push({ name: 'workbench' }); isMobile && setSidebarCollapsed(true)"
-              >
-                <IconTablerFolder class="sidebar-command-icon" />
-                <span class="sidebar-command-label">工作台</span>
-              </button>
-              <button
-                class="sidebar-skills-link sidebar-command-link"
-                :class="{ 'is-active': isSkillsRoute }"
-                type="button"
-                @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
-              >
-                <IconTablerBolt class="sidebar-command-icon" />
-                <span class="sidebar-command-label">技能中心</span>
-              </button>
-              <button
-                v-if="showGithubTrendingProjects"
-                class="sidebar-skills-link sidebar-command-link"
-                :class="{ 'is-active': isGithubTrendingRoute }"
-                type="button"
-                @click="router.push({ name: 'github-trending' }); isMobile && setSidebarCollapsed(true)"
-              >
-                <IconTablerGitFork class="sidebar-command-icon" />
-                <span class="sidebar-command-label">GitHub 热门</span>
-              </button>
-              <button
-                class="sidebar-skills-link sidebar-command-link"
-                :class="{ 'is-active': isDiagnosticsRoute }"
-                type="button"
-                @click="router.push({ name: 'diagnostics' }); isMobile && setSidebarCollapsed(true)"
-              >
-                <IconTablerSettings class="sidebar-command-icon" />
-                <span class="sidebar-command-label">运行诊断</span>
               </button>
             </div>
           </div>
@@ -4355,43 +4356,48 @@ async function submitFirstMessageForNewThread(
   @apply mt-0 px-0 pb-0;
 }
 
-.sidebar-primary-actions {
-  @apply grid grid-cols-2 gap-1;
+.sidebar-action-grid {
+  @apply grid grid-cols-3 gap-1;
 }
 
-.sidebar-primary-action {
-  @apply flex min-h-7 items-center justify-center gap-1.5 border border-transparent bg-transparent px-2 py-1 text-[12px] font-medium transition-[background-color,border-color,color] duration-150;
+.sidebar-action-tile {
+  @apply flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 border border-transparent bg-transparent px-1.5 py-1 text-[11px] font-medium transition-[background-color,border-color,color] duration-150;
   border-radius: var(--ui-radius-control);
   color: var(--ui-text-secondary);
+  touch-action: manipulation;
 }
 
-.sidebar-primary-action[aria-pressed='true'] {
+.sidebar-action-tile[aria-pressed='true'],
+.sidebar-action-tile[aria-current='page'],
+.sidebar-action-tile.is-active {
   @apply font-semibold;
   border-color: transparent;
   background: var(--ui-bg-row-active);
   color: var(--ui-text-primary);
 }
 
-.sidebar-primary-action:hover,
-.sidebar-primary-action:focus-visible {
+.sidebar-action-tile:hover,
+.sidebar-action-tile:focus-visible {
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-row-hover);
   color: var(--ui-text-primary);
 }
 
-.sidebar-primary-action-icon {
+.sidebar-action-icon {
   @apply h-4 w-4 shrink-0;
   color: var(--ui-text-tertiary);
 }
 
-.sidebar-primary-action[aria-pressed='true'] .sidebar-primary-action-icon,
-.sidebar-primary-action:hover .sidebar-primary-action-icon,
-.sidebar-primary-action:focus-visible .sidebar-primary-action-icon {
+.sidebar-action-tile[aria-pressed='true'] .sidebar-action-icon,
+.sidebar-action-tile[aria-current='page'] .sidebar-action-icon,
+.sidebar-action-tile.is-active .sidebar-action-icon,
+.sidebar-action-tile:hover .sidebar-action-icon,
+.sidebar-action-tile:focus-visible .sidebar-action-icon {
   color: currentColor;
 }
 
-.sidebar-primary-action-label {
-  @apply min-w-0 truncate text-left;
+.sidebar-action-label {
+  @apply block max-w-full truncate text-center leading-4;
 }
 
 .sidebar-search-toggle {
