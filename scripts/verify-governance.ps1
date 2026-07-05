@@ -135,6 +135,7 @@ $requiredFiles = @(
   "docs/protocol-compatibility.zh-CN.md",
   "docs/app-server-protocol-matrix.zh-CN.md",
   "docs/openai-docs-review.zh-CN.md",
+  "docs/release-readiness-audit.zh-CN.md",
   "docs/changelog.zh-CN.md",
   "docs/roadmap.zh-CN.md",
   "docs/operations-plan.zh-CN.md",
@@ -334,6 +335,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "docs\openai-docs-review.zh-CN.md",
   "docs\operations-plan.zh-CN.md",
   "docs\protocol-compatibility.zh-CN.md",
+  "docs\release-readiness-audit.zh-CN.md",
   "docs\roadmap.zh-CN.md",
   "docs\security-hardening.zh-CN.md",
   "scripts\package-release.ps1",
@@ -677,6 +679,21 @@ Assert-ContentIncludes "docs/app-server-protocol-matrix.zh-CN.md" @(
   "脱敏权限请求标记",
   "network target",
   "permission profile 主动管理"
+)
+
+Assert-ContentIncludes "docs/release-readiness-audit.zh-CN.md" @(
+  "Release Readiness",
+  "main...origin/main [ahead",
+  "paused",
+  "19 小时 20 分钟",
+  "output/app-server-schema-audit/20260705-093004",
+  "drift-recorded",
+  "不能声明完全对齐最新官方协议",
+  "P0 稳定性保护",
+  "P1 协议能力补齐",
+  "P2 安全敏感能力",
+  "P3 实验能力",
+  "不建议继续让当前长目标连续自动运行"
 )
 
 Assert-ContentIncludes "src/server/appServerMethodCatalog.ts" @(

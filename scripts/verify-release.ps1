@@ -363,6 +363,7 @@ if (-not $SkipPackageSmoke) {
     "docs\openai-docs-review.zh-CN.md",
     "docs\operations-plan.zh-CN.md",
     "docs\protocol-compatibility.zh-CN.md",
+    "docs\release-readiness-audit.zh-CN.md",
     "docs\roadmap.zh-CN.md",
     "docs\security-hardening.zh-CN.md",
     "scripts\package-release.ps1",

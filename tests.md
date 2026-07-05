@@ -7401,6 +7401,43 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: Release readiness checkpoint audit
+
+#### Prerequisites
+- Current repository includes `docs/release-readiness-audit.zh-CN.md`, `docs/app-server-schema-audit-summary.json`, `docs/app-server-protocol-matrix.zh-CN.md`, `scripts/verify-governance.ps1`, `scripts/verify-release.ps1`, `README.md`, and `docs/changelog.zh-CN.md`.
+- Dependencies are installed, Codex CLI is available for App Server schema audit, and `dist/` plus `dist-cli/` already exist or can be rebuilt.
+
+#### Steps
+1. Run `git status --short --branch` and confirm the audit starts from a clean local `main` state.
+2. Run `npm.cmd run audit:app-server-schemas` and confirm schema drift still exits `1` with an audit output directory, not a generation failure.
+3. Open `output/app-server-schema-audit/<latest>/audit-summary.json` and confirm TypeScript/JSON root and v2 counts match the readiness audit summary.
+4. Open `docs/release-readiness-audit.zh-CN.md` and confirm it states the project is suitable for an internal checkpoint or candidate branch, but not for claiming complete latest App Server alignment.
+5. Open `README.md` and confirm the Release readiness audit is linked from quick entries and the documentation list.
+6. Open `scripts/verify-release.ps1` and confirm Release package smoke requires `docs\release-readiness-audit.zh-CN.md`.
+7. Run `git diff --check`.
+8. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+9. Run `npm.cmd run build`.
+10. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- The readiness audit records current repo state, long-goal pause status, schema drift grouping, and recommended short next goal.
+- The audit does not claim full latest App Server alignment while `docs/app-server-schema-audit-summary.json` remains `drift-recorded`.
+- Governance fails if the readiness audit loses the paused-goal judgment, schema audit output reference, P0/P1/P2/P3 grouping, or “do not continue unbounded” recommendation.
+- Release package smoke fails if the readiness audit is omitted from the Web source zip.
+
+#### Rollback/Cleanup Notes
+- Raw schema audit output under `output/app-server-schema-audit/` is generated evidence and should not be committed.
+- To roll back, remove `docs/release-readiness-audit.zh-CN.md`, README links, release/governance assertions, changelog entry, and this test section from the same commit.
+
+#### Regression Evidence
+- 2026-07-05 schema audit: `npm.cmd run audit:app-server-schemas` generated `output\app-server-schema-audit\20260705-093004` and exited `1` with `Schema differences found. Exit code 1 means review is required, not that generation failed.`
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
 ### Feature: App Server process server request runtime extraction
 
 #### Prerequisites
