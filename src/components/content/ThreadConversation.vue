@@ -4649,20 +4649,29 @@ onBeforeUnmount(() => {
 }
 
 .conversation-process-panel {
-  @apply w-full mx-auto mb-1 flex flex-col gap-1.5;
+  @apply w-full mx-auto mb-1 flex flex-col gap-2;
   max-width: min(var(--content-shell-max-width, 88rem), 100%);
 }
 
 .conversation-process-toggle {
-  @apply inline-flex w-full items-center justify-between rounded-xl border border-[#e6dccb] bg-[#fffdf8] px-3 py-1.5 text-left text-[11px] font-semibold text-[#6d6354] transition-colors hover:border-[#d6c8b2] hover:bg-[#fffaf0];
+  @apply inline-flex w-full items-center justify-between border px-3 py-1.5 text-left text-[11px] font-semibold transition-colors;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.conversation-process-toggle:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
 }
 
 .conversation-process-section {
-  @apply flex flex-col gap-1.5;
+  @apply flex flex-col gap-2;
 }
 
 .conversation-process-stack {
-  @apply flex flex-col gap-1.5;
+  @apply flex flex-col gap-2;
 }
 
 .conversation-empty-state {
@@ -4807,20 +4816,26 @@ onBeforeUnmount(() => {
 }
 
 .request-card {
-  @apply w-full rounded-[20px] border border-[#ead9b5] bg-[#fff9ee] px-3 sm:px-3.5 py-2.5 sm:py-3 flex flex-col gap-1.5;
+  @apply w-full border px-3 sm:px-3.5 py-2.5 sm:py-3 flex flex-col gap-2;
   max-width: min(60rem, 100%);
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
 }
 
 .request-title {
-  @apply m-0 text-sm leading-5 font-semibold text-[#8a4a0d];
+  @apply m-0 text-sm leading-5 font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .request-meta {
-  @apply m-0 text-xs leading-4 text-[#ad6b28];
+  @apply m-0 text-xs leading-4;
+  color: var(--ui-text-tertiary);
 }
 
 .request-reason {
-  @apply m-0 text-sm leading-5 text-[#6a3a0b] whitespace-pre-wrap;
+  @apply m-0 whitespace-pre-wrap text-sm leading-5;
+  color: var(--ui-text-secondary);
 }
 
 .request-actions {
@@ -4832,11 +4847,30 @@ onBeforeUnmount(() => {
 }
 
 .request-button {
-  @apply rounded-xl border border-[#e2c486] bg-white px-3 py-1.5 text-xs text-[#7d4911] hover:bg-[#fff0c9];
+  @apply border px-3 py-1.5 text-xs font-medium transition-colors;
+  min-height: 2rem;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.request-button:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .request-button-primary {
-  @apply border-[#c56a12] bg-[#c56a12] text-white hover:bg-[#ab5b0f];
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: #fff;
+}
+
+.request-button-primary:hover {
+  border-color: color-mix(in srgb, var(--ui-accent) 82%, #000);
+  background: color-mix(in srgb, var(--ui-accent) 88%, #000);
+  color: #fff;
 }
 
 .request-user-input {
@@ -4844,19 +4878,27 @@ onBeforeUnmount(() => {
 }
 
 .request-permission-panel {
-  @apply rounded-2xl border border-[#ead9b5] bg-white/70 px-3 py-3 flex flex-col gap-2;
+  @apply border px-3 py-3 flex flex-col gap-2;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
 }
 
 .request-permission-badge {
-  @apply w-fit rounded-full border border-[#cbe7e1] bg-[#f0fdfa] px-2 py-0.5 text-[10px] font-semibold tracking-[0.08em] text-[#0f766e];
+  @apply w-fit rounded-full border px-2 py-0.5 text-[10px] font-semibold;
+  border-color: color-mix(in srgb, var(--ui-danger) 26%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
+  color: var(--ui-danger);
 }
 
 .request-permission-title {
-  @apply m-0 text-base leading-6 font-semibold text-[#3a2a14];
+  @apply m-0 text-base leading-6 font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .request-permission-text {
-  @apply m-0 text-sm leading-5 text-[#6a3a0b];
+  @apply m-0 text-sm leading-5;
+  color: var(--ui-text-secondary);
 }
 
 .request-permission-grid {
@@ -4864,19 +4906,27 @@ onBeforeUnmount(() => {
 }
 
 .request-permission-item {
-  @apply rounded-xl border border-[#f1dfba] bg-[#fffaf0] px-2.5 py-2;
+  @apply border px-2.5 py-2;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
 }
 
 .request-permission-term {
-  @apply text-[11px] leading-4 text-[#ad6b28];
+  @apply text-[11px] leading-4;
+  color: var(--ui-text-tertiary);
 }
 
 .request-permission-value {
-  @apply m-0 break-all font-mono text-xs leading-5 text-[#3a2a14];
+  @apply m-0 break-all font-mono text-xs leading-5;
+  color: var(--ui-text-primary);
 }
 
 .request-permission-note {
-  @apply m-0 rounded-xl bg-[#f8edda] px-2.5 py-2 text-xs leading-5 text-[#7d4911];
+  @apply m-0 px-2.5 py-2 text-xs leading-5;
+  border-radius: var(--ui-radius-card);
+  background: color-mix(in srgb, var(--ui-danger) 6%, var(--ui-bg-surface));
+  color: color-mix(in srgb, var(--ui-danger) 78%, var(--ui-text-primary));
 }
 
 .request-question {

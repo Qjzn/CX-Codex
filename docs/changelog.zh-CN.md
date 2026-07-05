@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - `/#/__regression/conversation-blocks` 增加 MCP 权限确认 fixture，权限请求卡片收敛为中性薄边框工作台样式，并由 `test:7420:frontend` 自动断言服务/工具名、操作按钮、圆角上限和无横向溢出。
   - `test:7420:frontend` 的 conversation fixture 会通过真实点击代码块复制按钮并 stub `navigator.clipboard.writeText` 捕获复制内容，断言复制内容不包含 Markdown fence 且按钮显示“已复制”反馈。
   - 新增 `/#/__regression/conversation-blocks` 回归 fixture，并把 `test:7420:frontend` 扩展为自动断言 code block、diff block、复制按钮、文件卡片和 raw payload 卡片，避免 P1 结构化消息块只靠人工截图判断。
   - Conversation 代码/diff block 增加块级复制按钮和复制反馈，文件附件从 emoji chip 改为薄边框文件卡片，继续推进 P1 结构化工程输出；移动端空输入状态下 Composer 发送按钮保持可见 disabled，减少底部动作区跳变。

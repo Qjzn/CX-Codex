@@ -8409,3 +8409,35 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 screenshot evidence: `output\regression-7420\p1-conversation-block-polish-20260705\desktop.png`, `phone.png`, and `fold.png` were generated.
 - 2026-07-05 visual sanity check: phone screenshot confirms the empty composer keeps both mic and disabled send controls visible, reducing action-area layout jump.
 - 2026-07-05 remaining limitation: system clipboard read/write is not used because headless browser permission can deny it; the regression verifies the component passes the correct code body into `navigator.clipboard.writeText` and shows copied feedback.
+
+### Feature: P2 permission workbench fixture baseline
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Built-in regression fixture route `/#/__regression/conversation-blocks` is available.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/__regression/conversation-blocks?regression=frontend`.
+2. Confirm the top process panel shows `待处理请求` with one pending item.
+3. Expand the process panel if needed and confirm the MCP permission card shows service `chrome`, tool `browser_click`, and the marker text `fixture-permission-workbench`.
+4. Confirm the permission card uses neutral thin borders and compact 8px-style radius instead of warm oversized card styling.
+5. Confirm the action row shows `允许并继续`, `拒绝`, and `稍后处理`.
+6. Run `git diff --check`.
+7. Run `npm.cmd run build:frontend`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+
+#### Expected Results
+- Permission requests have a distinct structured workbench block rather than blending into generic chat Markdown or warm cards.
+- The fixture regression verifies the permission panel, service/tool labels, action labels, radius ceiling, and no horizontal overflow.
+- Browser regression passes with no page errors.
+
+#### Rollback/Cleanup Notes
+- No generated screenshots are required for this narrow fixture baseline.
+- To roll back, revert `ConversationRegressionFixture.vue`, `ThreadConversation.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, and the expanded `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 fixture permission assertions: the built-in conversation fixture verified at least one pending request card, one MCP permission panel, service `chrome`, tool `browser_click`, the marker `fixture-permission-workbench`, the action labels `允许并继续` / `拒绝` / `稍后处理`, request/permission radius no larger than 10px, and no horizontal overflow.

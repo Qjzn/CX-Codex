@@ -198,7 +198,14 @@ JSON.stringify((() => {
   const copyButtons = Array.from(document.querySelectorAll('.message-code-copy'));
   const fileCards = Array.from(document.querySelectorAll('.message-file-card'));
   const rawCards = Array.from(document.querySelectorAll('.message-structured-card'));
+  const requestCards = Array.from(document.querySelectorAll('.request-card'));
+  const permissionPanels = Array.from(document.querySelectorAll('.request-permission-panel'));
+  const requestButtons = Array.from(document.querySelectorAll('.request-button'));
   const firstCopyButton = copyButtons[0];
+  const firstRequestCard = requestCards[0];
+  const firstPermissionPanel = permissionPanels[0];
+  const requestCardRadius = firstRequestCard ? Number.parseFloat(window.getComputedStyle(firstRequestCard).borderTopLeftRadius || '0') : 0;
+  const permissionPanelRadius = firstPermissionPanel ? Number.parseFloat(window.getComputedStyle(firstPermissionPanel).borderTopLeftRadius || '0') : 0;
   const textContent = document.body.textContent || '';
   return {
     codeBlockCount: codeBlocks.length,
@@ -206,11 +213,20 @@ JSON.stringify((() => {
     copyButtonCount: copyButtons.length,
     fileCardCount: fileCards.length,
     rawPayloadCardCount: rawCards.length,
+    requestCardCount: requestCards.length,
+    permissionPanelCount: permissionPanels.length,
+    requestButtonCount: requestButtons.length,
+    requestCardRadius,
+    permissionPanelRadius,
     hasAddLine: !!document.querySelector('.message-code-line[data-kind="add"]'),
     hasDeleteLine: !!document.querySelector('.message-code-line[data-kind="delete"]'),
     hasMetaLine: !!document.querySelector('.message-code-line[data-kind="meta"]'),
     hasFixtureCodeText: textContent.includes('fixture-code-block'),
     hasFixtureRawText: textContent.includes('fixture-raw-payload'),
+    hasFixturePermissionText: textContent.includes('fixture-permission-workbench'),
+    hasPermissionServerText: textContent.includes('chrome'),
+    hasPermissionToolText: textContent.includes('browser_click'),
+    hasPermissionActionText: textContent.includes('允许并继续') && textContent.includes('拒绝') && textContent.includes('稍后处理'),
     firstCopyButtonText: firstCopyButton ? firstCopyButton.textContent.trim() : '',
     hasEmojiFileIcon: document.body.innerText.includes('📄'),
     hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
@@ -230,14 +246,30 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.copyButtonCount -ge 2) "conversation fixture is missing code copy buttons"
   Assert-True ($Metrics.fileCardCount -ge 2) "conversation fixture is missing file cards"
   Assert-True ($Metrics.rawPayloadCardCount -ge 1) "conversation fixture is missing raw payload card"
+  Assert-True ($Metrics.requestCardCount -ge 1) "conversation fixture is missing pending request card"
+  Assert-True ($Metrics.permissionPanelCount -ge 1) "conversation fixture is missing MCP permission panel"
+  Assert-True ($Metrics.requestButtonCount -ge 3) "conversation fixture is missing permission action buttons"
+  Assert-True ($Metrics.requestCardRadius -le 10) "conversation fixture request card radius is too large: $($Metrics.requestCardRadius)"
+  Assert-True ($Metrics.permissionPanelRadius -le 10) "conversation fixture permission panel radius is too large: $($Metrics.permissionPanelRadius)"
   Assert-True ($Metrics.hasAddLine -eq $true) "conversation fixture is missing diff add line styling"
   Assert-True ($Metrics.hasDeleteLine -eq $true) "conversation fixture is missing diff delete line styling"
   Assert-True ($Metrics.hasMetaLine -eq $true) "conversation fixture is missing diff metadata line styling"
   Assert-True ($Metrics.hasFixtureCodeText -eq $true) "conversation fixture is missing fixture code text"
   Assert-True ($Metrics.hasFixtureRawText -eq $true) "conversation fixture is missing raw payload marker"
+  Assert-True ($Metrics.hasFixturePermissionText -eq $true) "conversation fixture is missing permission workbench marker"
+  Assert-True ($Metrics.hasPermissionServerText -eq $true) "conversation fixture is missing MCP server label"
+  Assert-True ($Metrics.hasPermissionToolText -eq $true) "conversation fixture is missing MCP tool label"
+  Assert-True ($Metrics.hasPermissionActionText -eq $true) "conversation fixture is missing permission action labels"
   Assert-True ([string]$Metrics.firstCopyButtonText -like "*复制*") "conversation fixture first code block copy button is not visible"
   Assert-True ($Metrics.hasEmojiFileIcon -eq $false) "conversation fixture still renders emoji file icons"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "conversation fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+}
+
+function Expand-ConversationFixturePendingRequests {
+  param([string]$Session)
+
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "click", ".conversation-process-toggle") | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
 }
 
 function Assert-ConversationFixtureCopyInteraction {
@@ -340,6 +372,7 @@ try {
   $fixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend"
   $fixture = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $DesktopWidth -Height $DesktopHeight
   Assert-Page -Page $fixture -Name "conversation blocks fixture desktop"
+  Expand-ConversationFixturePendingRequests -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session)
   Assert-ConversationFixtureCopyInteraction -Session $session
   Add-RegressionResult -Name "conversation-blocks-fixture" -Page $fixture

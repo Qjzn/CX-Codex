@@ -8,7 +8,7 @@
       <ThreadConversation
         class="conversation-regression-thread"
         :messages="messages"
-        :pending-requests="[]"
+        :pending-requests="pendingRequests"
         :live-overlay="null"
         :is-loading="false"
         active-thread-id="regression-conversation-blocks"
@@ -28,7 +28,7 @@
 
 <script setup lang="ts">
 import ThreadConversation from './ThreadConversation.vue'
-import type { UiMessage } from '../../types/codex'
+import type { UiMessage, UiServerRequest } from '../../types/codex'
 
 const messages: UiMessage[] = [
   {
@@ -88,6 +88,23 @@ const messages: UiMessage[] = [
     }),
     isUnhandled: true,
     turnIndex: 1,
+  },
+]
+
+const pendingRequests: UiServerRequest[] = [
+  {
+    id: 742001,
+    method: 'elicitation/create',
+    threadId: 'regression-conversation-blocks',
+    turnId: 'fixture-turn-permission',
+    itemId: 'fixture-mcp-permission',
+    receivedAtIso: '2026-07-05T05:00:00.000Z',
+    params: {
+      message: 'Allow the chrome MCP server to run tool "browser_click"?',
+      serverName: 'chrome',
+      toolName: 'browser_click',
+      reason: 'fixture-permission-workbench',
+    },
   },
 ]
 
