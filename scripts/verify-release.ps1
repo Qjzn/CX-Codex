@@ -366,6 +366,8 @@ if (-not $SkipPackageSmoke) {
     "docs\release-readiness-audit.zh-CN.md",
     "docs\candidate-release-review.zh-CN.md",
     "docs\candidate-pr-review-pack.zh-CN.md",
+    "docs\local-regression-checklist.zh-CN.md",
+    "docs\local-regression-execution-20260705.zh-CN.md",
     "docs\roadmap.zh-CN.md",
     "docs\security-hardening.zh-CN.md",
     "scripts\package-release.ps1",

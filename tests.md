@@ -8204,3 +8204,49 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 package-level release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
 - 2026-07-05 PR preparation update: review pack was revised to make dynamic branch counts command-derived and to document remote push / `gh pr create` commands without executing them.
+
+---
+
+### Feature: Local full regression checklist and execution record
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 has been redeployed from `E:\javaword\CXCodex\codexui\dist-cli\index.js`.
+- Current repository includes `docs/local-regression-checklist.zh-CN.md`, `docs/local-regression-execution-20260705.zh-CN.md`, `README.md`, `docs/changelog.zh-CN.md`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
+- Browser automation and Android true-device checks are available only when explicitly scheduled for this regression pass.
+
+#### Steps
+1. Open `docs/local-regression-checklist.zh-CN.md` and confirm it covers P0 automation gates, P0 local 7420 service checks, P1 protocol/governance review, P1 browser automation, P2 manual/device checks, long soak, and failure handling rules.
+2. Open `docs/local-regression-execution-20260705.zh-CN.md` and confirm it records branch, deployment path, config path, local URL, public health URL, execution status, and current risks.
+3. Confirm `README.md` links both local regression documents.
+4. Confirm `docs/changelog.zh-CN.md` records the new local regression checklist and execution record.
+5. Run `git diff --check`.
+6. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+7. Run `npm.cmd run verify:frontend-normalizers`.
+8. Run `npm.cmd run verify:server-modules`.
+9. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+10. Run `npm.cmd run test:7420 -- -SkipBrowser -PublicHealthUrl http://116.62.234.104:17420/health`.
+11. Run `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://116.62.234.104:17420`.
+12. Append command results, soak report path, and any not-run browser/Android/manual scope to `docs/local-regression-execution-20260705.zh-CN.md`.
+
+#### Expected Results
+- The checklist gives a complete release-candidate regression map instead of only package-level smoke tests.
+- Governance fails if the local regression documents or required key phrases are removed.
+- Release package smoke fails if either local regression document is missing from the source zip.
+- Non-browser 7420 regression confirms local health, App Server health, public health, and event replay endpoints.
+- Short soak completes without consecutive health failures, new RPC timeouts, or pending/queued RPC threshold failures.
+- If browser automation or Android checks are not run, the execution record explicitly says visual/device regression cannot be claimed complete.
+
+#### Rollback/Cleanup Notes
+- Generated output under `output/regression-7420/`, `output/soak-7420/`, and `output/release-package-smoke/` can be deleted after review.
+- To roll back, remove the two local regression docs, remove README/changelog/governance/release package references, and remove this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 frontend normalizer smoke: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-05 server module smoke: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; the queue/slow/error log lines are expected synthetic coverage from the smoke script.
+- 2026-07-05 package-level release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with CLI, CJS launcher, release package, checksum, and NPM package smoke complete.
+- 2026-07-05 7420 HTTP regression: `npm.cmd run test:7420 -- -SkipBrowser -PublicHealthUrl http://116.62.234.104:17420/health` passed for local health, App Server health, event replay, and public health; browser regression was intentionally skipped.
+- 2026-07-05 short soak: `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://116.62.234.104:17420` passed with 4 healthy samples, `maxPending=0`, `maxQueued=0`, `timeouts=0`, and `slowThreadList=0`; report path is `output\soak-7420\soak-20260705-105723.json`.
+- 2026-07-05 residual risk: browser automation, Android true-device checks, voice transcription, and 2-hour soak were not executed, so visual/device/long-duration regression is not claimed complete.
