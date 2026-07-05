@@ -1919,6 +1919,7 @@ export function useDesktopState() {
     if (Object.keys(titles).length === 0) return groups
     return groups.map((group) => ({
       projectName: group.projectName,
+      workspaceRoot: group.workspaceRoot,
       threads: group.threads.map((thread) => {
         const cached = titles[thread.id]
         return cached ? { ...thread, title: cached } : thread
@@ -1930,6 +1931,7 @@ export function useDesktopState() {
     const withTitles = applyCachedTitlesToGroups(sourceGroups.value)
     const flaggedGroups: UiProjectGroup[] = withTitles.map((group) => ({
       projectName: group.projectName,
+      workspaceRoot: group.workspaceRoot,
       threads: group.threads.map((thread) => {
         const inProgress = isThreadExecutionActive(thread.id)
         const isSelected = selectedThreadId.value === thread.id

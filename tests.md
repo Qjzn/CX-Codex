@@ -9109,3 +9109,47 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName workspace-root-project-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 sidebar fixture assertions: `sidebar-rows` verified an empty workspace-root project is retained, renders `暂无会话`, keeps exactly one project-level new-thread action, preserves first project order, and still limits the first expanded project to 5 visible threads with `显示更多 3 条`.
 - 2026-07-05 screenshot artifact: `output/regression-7420/workspace-root-project-parity/sidebar-rows-fixture-phone.png`.
+
+### Feature: P0 real workspace root project sync acceptance
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from `E:\javaword\CXCodex\codexui`.
+- `C:\Users\SW\.codex\.codex-global-state.json` is the Codex Desktop workspace roots source for this Windows machine.
+
+#### Steps
+1. Call `GET http://127.0.0.1:7420/codex-api/workspace-roots-state`.
+2. Confirm the first workspace roots include `C:\Users\SW\Documents\Playground`, `E:\javaword\CXCodex\codexui`, and `E:\javaword\ZXSAAS\mini`.
+3. Call `thread/list` through `/codex-api/rpc` and confirm App Server thread rows may still omit `E:\javaword\CXCodex\codexui`.
+4. Open `http://127.0.0.1:7420/#/` in an automated browser and read `.project-group` DOM rows.
+5. Confirm the first project names are `Playground`, `codexui`, and `mini`, with `mini` displayed as `ZXSAAS-mini`.
+6. Confirm `codexui` and `ZXSAAS-mini` render `0个会话`, `暂无会话`, and one project-level new-thread button.
+7. Click the `codexui` project new-thread action and confirm the composer folder dropdown selects `codexui`.
+8. Refresh the page and confirm the same project order and empty project states remain.
+9. Restart local 7420 with `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+10. Confirm `/health`, `/codex-api/health`, and the automated browser DOM check still pass after restart.
+11. Run `git diff --check`.
+12. Run `npm.cmd run build:frontend`.
+13. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p0-real-workspace-root-sync`.
+
+#### Expected Results
+- 7420 real sidebar follows Codex Desktop workspace root ordering for roots that have no current App Server sessions.
+- Empty projects do not disappear after refresh or service restart.
+- Empty project new-thread actions select the workspace-root-backed project instead of falling back to the first folder.
+- App Server health remains clear after restart, with no pending or queued RPCs.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/p0-real-workspace-root-sync/` when `-CaptureScreenshots` is used.
+- To roll back, revert `src/composables/useDesktopState.ts`, `src/types/codex.ts`, `src\App.vue`, `src/components/sidebar/SidebarRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 real data evidence: `/codex-api/workspace-roots-state` returned first roots `C:\Users\SW\Documents\Playground`, `E:\javaword\CXCodex\codexui`, and `E:\javaword\ZXSAAS\mini`; labels included `E:\javaword\ZXSAAS\mini=ZXSAAS-mini`; active root was `E:\javaword\CXCodex\codexui`.
+- 2026-07-05 real App Server evidence: a `thread/list` sample showed current thread rows from `E:\javaword\CXCodex`, `E:\javaword\ZXSAAS`, `E:\javaword\FZYC\live`, and other roots, while `codexui` was supplied by workspace roots rather than current thread rows.
+- 2026-07-05 real DOM evidence: automated browser read 19 `.project-group` rows; the first names were `Playground`, `codexui`, `mini`, `MFDW_ZJ`, `MFDW`, `znjk`, `live`, and `live-service`; `codexui` rendered `0个会话` and `暂无会话` with one new-thread button; `mini` rendered as `ZXSAAS-mini` with the same empty state.
+- 2026-07-05 interaction evidence: after clicking the `codexui` empty project new-thread action, the composer folder dropdown selected `codexui`; the bug found during acceptance was that `workspaceRoot` was lost while mapping `sourceGroups` to `projectGroups`, and it was fixed by preserving `workspaceRoot` in `applyCachedTitlesToGroups` and `applyThreadFlags`.
+- 2026-07-05 refresh evidence: after reloading `http://127.0.0.1:7420/#/`, the first project names still read `Playground`, `codexui`, `mini`, `MFDW_ZJ`, `MFDW`, `znjk`, `live`, and `live-service`.
+- 2026-07-05 restart evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 43248; `/health` returned ok; `/codex-api/health` returned ok with App Server PID 57096, `pendingRpcCount: 0`, and `queuedRpcCount: 0`; post-restart DOM still showed 19 project groups with `Playground`, `codexui`, and `mini` first.
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p0-real-workspace-root-sync` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 screenshot artifact: `output/regression-7420/p0-real-workspace-root-sync/sidebar-rows-fixture-phone.png`.
