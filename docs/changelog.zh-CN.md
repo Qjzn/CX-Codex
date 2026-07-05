@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - 新增 `/#/__regression/composer-shell` 回归 fixture，覆盖桌面和手机视口下的底部 Composer；Composer 外壳、sheet、插件菜单和运行配置面板从暖色重卡片收敛为白灰 token 样式，并由 `test:7420:frontend` 自动断言高度、圆角、控件可见性和无横向溢出。
   - 新增 `/#/__regression/sidebar-rows` 回归 fixture，覆盖运行中、未读、不同来源和多项目线程行；Sidebar 线程来源/状态从 pill chip 收敛为轻量行内文本，菜单和重命名弹窗改为白灰 token 驱动样式，减少侧栏卡片化和暖色残留。
   - `test:7420:frontend` 增加手机宽度 `conversation-blocks` fixture 验证，逐个断言 request、tool、file、code、command 等结构化块不会越出视口；会话结构化块在窄屏下同步收敛为更紧凑的单列触控布局和桌面端风格小圆角。
   - `/#/__regression/conversation-blocks` 增加 unsupported tool call fixture，参考 `friuns2/codex-mobile` 的 pending request 类型边界，把 tool call 展示为独立工作台卡片，显示服务、工具、摘要和“让 Codex 改用文字继续”动作。

@@ -113,6 +113,37 @@ function Test-HttpJson {
   return ($response.Content | ConvertFrom-Json)
 }
 
+function Wait-CodexHealthIdle {
+  param([string]$Url)
+
+  $lastHealth = $null
+  for ($attempt = 1; $attempt -le 8; $attempt++) {
+    $lastHealth = Test-HttpJson -Name "codex health" -Url $Url
+    if (
+      $lastHealth.status -eq "ok" `
+      -and $lastHealth.data.appServer.pendingRpcCount -le 1 `
+      -and $lastHealth.data.appServer.queuedRpcCount -eq 0 `
+      -and $lastHealth.data.runtimeStore.uncertainRequestCount -eq 0
+    ) {
+      return $lastHealth
+    }
+
+    Write-Step "codex health not idle yet (attempt $attempt/8): pending=$($lastHealth.data.appServer.pendingRpcCount), queued=$($lastHealth.data.appServer.queuedRpcCount), uncertain=$($lastHealth.data.runtimeStore.uncertainRequestCount)"
+    Start-Sleep -Milliseconds 900
+  }
+
+  return $lastHealth
+}
+
+function Assert-CodexHealthReadyForFrontendRegression {
+  param([object]$Health)
+
+  Assert-True ($Health.status -eq "ok") "codex health status is not ok"
+  Assert-True ($Health.data.appServer.queuedRpcCount -eq 0) "queuedRpcCount is not zero"
+  Assert-True ($Health.data.appServer.pendingRpcCount -le 1) "pendingRpcCount is above the tolerated single background call: $($Health.data.appServer.pendingRpcCount)"
+  Assert-True ($Health.data.runtimeStore.uncertainRequestCount -eq 0) "uncertainRequestCount is not zero"
+}
+
 function Open-And-ReadPage {
   param(
     [string]$Session,
@@ -466,6 +497,96 @@ function Assert-SidebarFixture {
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "sidebar fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
 }
 
+function Read-ComposerFixtureMetrics {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const fixture = document.querySelector('.composer-regression-fixture');
+  const form = document.querySelector('.composer-regression-fixture .thread-composer');
+  const shell = document.querySelector('.composer-regression-fixture .thread-composer-shell');
+  const input = document.querySelector('.composer-regression-fixture .thread-composer-input');
+  const controls = document.querySelector('.composer-regression-fixture .thread-composer-controls');
+  const attach = document.querySelector('.composer-regression-fixture .thread-composer-attach-trigger');
+  const runtime = document.querySelector('.composer-regression-fixture .thread-composer-runtime-trigger');
+  const mic = document.querySelector('.composer-regression-fixture .thread-composer-mic');
+  const submit = document.querySelector('.composer-regression-fixture .thread-composer-submit');
+  const shellRect = shell?.getBoundingClientRect();
+  const formRect = form?.getBoundingClientRect();
+  const viewportWidth = document.documentElement.clientWidth;
+  const fitTargets = [form, shell, input, controls, attach, runtime, mic, submit].filter(Boolean);
+  const fitFailures = fitTargets
+    .map((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        className: node.className || node.tagName,
+        left: Math.round(rect.left),
+        right: Math.round(rect.right),
+        width: Math.round(rect.width)
+      };
+    })
+    .filter((rect) => rect.left < -2 || rect.right > viewportWidth + 2);
+  const style = shell ? window.getComputedStyle(shell) : null;
+  const bg = style?.backgroundColor || '';
+  return {
+    hasFixture: !!fixture,
+    hasForm: !!form,
+    hasShell: !!shell,
+    hasInput: !!input,
+    hasAttach: !!attach,
+    hasRuntime: !!runtime,
+    hasMic: !!mic,
+    hasSubmit: !!submit,
+    shellWidth: shellRect ? Math.round(shellRect.width) : 0,
+    formWidth: formRect ? Math.round(formRect.width) : 0,
+    shellHeight: shellRect ? Math.round(shellRect.height) : 0,
+    shellRadius: style ? Number.parseFloat(style.borderTopLeftRadius || '0') : 0,
+    shellBorderWidth: style ? Number.parseFloat(style.borderTopWidth || '0') : 0,
+    shellBackground: bg,
+    shellShadow: style?.boxShadow || '',
+    usesWarmShell: bg === 'rgb(255, 253, 248)' || bg === 'rgb(255, 250, 243)',
+    attachSize: attach ? Math.round(attach.getBoundingClientRect().width) : 0,
+    micSize: mic ? Math.round(mic.getBoundingClientRect().width) : 0,
+    submitSize: submit ? Math.round(submit.getBoundingClientRect().width) : 0,
+    runtimeWidth: runtime ? Math.round(runtime.getBoundingClientRect().width) : 0,
+    fitFailureCount: fitFailures.length,
+    fitFailures: fitFailures.slice(0, 5),
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth
+  };
+})())
+'@
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-ComposerFixture {
+  param(
+    [object]$Metrics,
+    [string]$ViewportName
+  )
+
+  Assert-True ($Metrics.hasFixture -eq $true) "$ViewportName composer fixture is missing fixture root"
+  Assert-True ($Metrics.hasForm -eq $true) "$ViewportName composer fixture is missing form"
+  Assert-True ($Metrics.hasShell -eq $true) "$ViewportName composer fixture is missing shell"
+  Assert-True ($Metrics.hasInput -eq $true) "$ViewportName composer fixture is missing input"
+  Assert-True ($Metrics.hasAttach -eq $true) "$ViewportName composer fixture is missing attach trigger"
+  Assert-True ($Metrics.hasRuntime -eq $true) "$ViewportName composer fixture is missing runtime trigger"
+  Assert-True ($Metrics.hasMic -eq $true) "$ViewportName composer fixture is missing dictation button"
+  Assert-True ($Metrics.hasSubmit -eq $true) "$ViewportName composer fixture is missing submit button"
+  Assert-True ($Metrics.shellHeight -ge 88) "$ViewportName composer shell is too short: $($Metrics.shellHeight)"
+  Assert-True ($Metrics.shellHeight -le 132) "$ViewportName composer shell is too tall: $($Metrics.shellHeight)"
+  Assert-True ($Metrics.shellRadius -le 22) "$ViewportName composer shell radius is too large: $($Metrics.shellRadius)"
+  Assert-True ($Metrics.shellBorderWidth -le 1) "$ViewportName composer shell border is too heavy: $($Metrics.shellBorderWidth)"
+  Assert-True ($Metrics.usesWarmShell -eq $false) "$ViewportName composer shell still uses warm beige background: $($Metrics.shellBackground)"
+  Assert-True ($Metrics.attachSize -ge 34) "$ViewportName composer attach button is too small: $($Metrics.attachSize)"
+  Assert-True ($Metrics.micSize -ge 34) "$ViewportName composer mic button is too small: $($Metrics.micSize)"
+  Assert-True ($Metrics.submitSize -ge 34) "$ViewportName composer submit button is too small: $($Metrics.submitSize)"
+  Assert-True ($Metrics.runtimeWidth -ge 112) "$ViewportName composer runtime trigger is too narrow: $($Metrics.runtimeWidth)"
+  Assert-True ($Metrics.fitFailureCount -eq 0) "$ViewportName composer controls overflow viewport: $($Metrics.fitFailures | ConvertTo-Json -Compress)"
+  Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "$ViewportName composer fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+}
+
 function Add-RegressionResult {
   param(
     [string]$Name,
@@ -491,11 +612,8 @@ try {
   $health = Test-HttpJson -Name "health" -Url "$($BaseUrl)/health"
   Assert-True ($health.status -eq "ok") "health status is not ok"
 
-  $codexHealth = Test-HttpJson -Name "codex health" -Url "$($BaseUrl)/codex-api/health"
-  Assert-True ($codexHealth.status -eq "ok") "codex health status is not ok"
-  Assert-True ($codexHealth.data.appServer.pendingRpcCount -eq 0) "pendingRpcCount is not zero"
-  Assert-True ($codexHealth.data.appServer.queuedRpcCount -eq 0) "queuedRpcCount is not zero"
-  Assert-True ($codexHealth.data.runtimeStore.uncertainRequestCount -eq 0) "uncertainRequestCount is not zero"
+  $codexHealth = Wait-CodexHealthIdle -Url "$($BaseUrl)/codex-api/health"
+  Assert-CodexHealthReadyForFrontendRegression -Health $codexHealth
 
   $diagnostics = Test-HttpJson -Name "diagnostics api" -Url "$($BaseUrl)/codex-api/diagnostics"
   Assert-True ($diagnostics.status -eq "ok") "diagnostics status is not ok"
@@ -530,6 +648,17 @@ try {
   Assert-Page -Page $sidebarFixture -Name "sidebar rows fixture phone"
   Assert-SidebarFixture -Metrics (Read-SidebarFixtureMetrics -Session $session)
   Add-RegressionResult -Name "sidebar-rows-fixture-phone" -Page $sidebarFixture
+
+  $composerFixtureUrl = $BaseUrl + "/#/__regression/composer-shell?regression=frontend"
+  $composerFixture = Open-And-ReadPage -Session $session -Url $composerFixtureUrl -Width $DesktopWidth -Height $DesktopHeight
+  Assert-Page -Page $composerFixture -Name "composer shell fixture desktop" -RequireComposer
+  Assert-ComposerFixture -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "desktop"
+  Add-RegressionResult -Name "composer-shell-fixture-desktop" -Page $composerFixture
+
+  $composerFixturePhone = Open-And-ReadPage -Session $session -Url $composerFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $composerFixturePhone -Name "composer shell fixture phone" -RequireComposer
+  Assert-ComposerFixture -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "phone"
+  Add-RegressionResult -Name "composer-shell-fixture-phone" -Page $composerFixturePhone
 
   $fixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend"
   $fixture = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $DesktopWidth -Height $DesktopHeight

@@ -1394,6 +1394,7 @@ const isDiagnosticsRoute = computed(() => route.name === 'diagnostics')
 const isStandaloneRoute = computed(() => (
   route.name === 'regression-conversation-blocks'
   || route.name === 'regression-sidebar-rows'
+  || route.name === 'regression-composer-shell'
 ))
 const isNonThreadRoute = computed(() => (
   isHomeRoute.value || isWorkbenchRoute.value || isSkillsRoute.value || isGithubTrendingRoute.value || isDiagnosticsRoute.value
@@ -5283,7 +5284,7 @@ async function submitFirstMessageForNewThread(
   .composer-with-queue {
     @apply pt-1.5;
     background:
-      linear-gradient(180deg, rgba(250,247,240,0) 0%, rgba(250,247,240,0.78) 30%, rgba(250,247,240,0.97) 100%);
+      linear-gradient(180deg, rgb(247 247 246 / 0) 0%, rgb(247 247 246 / 0.82) 30%, rgb(247 247 246 / 0.98) 100%);
   }
 
   .quota-reminder {

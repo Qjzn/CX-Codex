@@ -1898,7 +1898,7 @@ watch(
   border-radius: var(--ui-radius-composer);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
-  box-shadow: var(--ui-shadow-float);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.06);
 }
 
 .thread-composer-shell--no-top-radius {
@@ -2035,7 +2035,10 @@ watch(
 }
 
 .thread-composer-file-mentions--sheet {
-  @apply fixed left-3 right-3 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-[70] max-h-[min(40dvh,22rem)] rounded-[22px] border border-[#ddd5c7] bg-[#fffdf8] p-2;
+  @apply fixed left-3 right-3 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-[70] max-h-[min(40dvh,22rem)] border p-2;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
 }
 
 .thread-composer-file-mention-row {
@@ -2090,7 +2093,7 @@ watch(
 }
 
 .thread-composer-input {
-  @apply w-full min-w-0 min-h-9 sm:min-h-10 max-h-36 rounded-xl border-0 bg-transparent px-1 py-1.5 text-sm outline-none transition resize-none overflow-y-auto;
+  @apply w-full min-w-0 min-h-9 max-h-36 rounded-xl border-0 bg-transparent px-1 py-1.5 text-sm outline-none transition resize-none overflow-y-auto;
   color: var(--ui-text-primary);
   font-family: var(--font-sans-reading);
   font-size: var(--font-size-reading, 15px);
@@ -2107,7 +2110,7 @@ watch(
 }
 
 .thread-composer-controls {
-  @apply relative mt-1.5 sm:mt-2 flex items-center gap-2 sm:gap-2.5 overflow-visible;
+  @apply relative mt-1.5 flex items-center gap-2 sm:gap-2.5 overflow-visible;
 }
 
 .thread-composer-controls--recording {
@@ -2140,7 +2143,10 @@ watch(
 }
 
 .thread-composer-attach-menu--sheet {
-  @apply fixed left-3 right-3 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-[70] w-auto max-w-none rounded-[24px] border border-[#ddd5c7] bg-[#fffdf8] p-2;
+  @apply fixed left-3 right-3 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-[70] w-auto max-w-none border p-2;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
   max-height: min(82dvh, 46rem);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -2165,7 +2171,8 @@ watch(
 
 .thread-composer-attach-item-icon--text,
 .thread-composer-attach-item-icon--grid {
-  @apply inline-flex h-5 w-5 items-center justify-center rounded-md text-sm font-semibold text-[#6f6555];
+  @apply inline-flex h-5 w-5 items-center justify-center rounded-md text-sm font-semibold;
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-attach-item-body {
@@ -2188,7 +2195,8 @@ watch(
 }
 
 .thread-composer-switch {
-  @apply relative h-6 w-10 shrink-0 rounded-full bg-[#e5ded3] transition;
+  @apply relative h-6 w-10 shrink-0 rounded-full transition;
+  background: var(--ui-bg-row-active);
 }
 
 .thread-composer-switch::after {
@@ -2209,7 +2217,11 @@ watch(
 }
 
 .thread-composer-goal-input {
-  @apply w-full resize-none rounded-[14px] border border-[#e4dac9] bg-[#fffaf3] px-3 py-2 text-sm leading-relaxed text-[#3b332a] outline-none transition focus:border-[#0d9488] disabled:cursor-not-allowed disabled:opacity-60;
+  @apply w-full resize-none border px-3 py-2 text-sm leading-relaxed outline-none transition focus:border-[#0d9488] disabled:cursor-not-allowed disabled:opacity-60;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-primary);
   font-family: var(--font-sans-reading);
 }
 
@@ -2218,7 +2230,8 @@ watch(
 }
 
 .thread-composer-attach-chevron {
-  @apply h-4 w-4 shrink-0 text-[#8a8173] transition-transform;
+  @apply h-4 w-4 shrink-0 transition-transform;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-attach-chevron.is-open {
@@ -2226,19 +2239,27 @@ watch(
 }
 
 .thread-composer-plugin-menu {
-  @apply absolute bottom-0 left-[calc(100%+0.5rem)] z-[75] w-80 max-w-[calc(100vw_-_2rem)] rounded-[18px] border border-[#ddd5c7] bg-[#fffdf8] p-1.5 shadow-xl shadow-[#1f2937]/10;
+  @apply absolute bottom-0 left-[calc(100%+0.5rem)] z-[75] w-80 max-w-[calc(100vw_-_2rem)] border p-1.5;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.08);
   max-height: min(32rem, calc(100dvh - 10rem));
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
 .thread-composer-plugin-menu--inline {
-  @apply static mt-1 w-full max-w-none rounded-[16px] border-[#e4dac9] bg-[#fffaf3] shadow-none;
+  @apply static mt-1 w-full max-w-none shadow-none;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
   max-height: min(42dvh, 22rem);
 }
 
 .thread-composer-plugin-menu-header {
-  @apply flex items-center justify-between gap-2 px-2 py-1.5 text-xs font-semibold text-[#8a8173];
+  @apply flex items-center justify-between gap-2 px-2 py-1.5 text-xs font-semibold;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-plugin-menu-action {
@@ -2246,11 +2267,18 @@ watch(
 }
 
 .thread-composer-plugin-menu-empty {
-  @apply px-2 py-3 text-sm text-[#8a8173];
+  @apply px-2 py-3 text-sm;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-plugin-row {
-  @apply flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[14px] border-0 bg-transparent px-2 py-2 text-left transition hover:bg-[#f7f3ea];
+  @apply flex min-h-11 w-full min-w-0 items-center gap-2 border-0 bg-transparent px-2 py-2 text-left transition;
+  border-radius: var(--ui-radius-control);
+}
+
+.thread-composer-plugin-row:hover,
+.thread-composer-plugin-row:focus-visible {
+  background: var(--ui-bg-row-hover);
 }
 
 .thread-composer-plugin-row.is-selected {
@@ -2266,7 +2294,9 @@ watch(
 }
 
 .thread-composer-plugin-avatar {
-  @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#e9e4da] text-xs font-bold text-[#6f6555];
+  @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold;
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-plugin-row-body {
@@ -2274,11 +2304,13 @@ watch(
 }
 
 .thread-composer-plugin-row-title {
-  @apply truncate text-sm font-semibold text-[#2f281f];
+  @apply truncate text-sm font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .thread-composer-plugin-row-meta {
-  @apply truncate text-xs text-[#8a8173];
+  @apply truncate text-xs;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-plugin-check,
@@ -2291,11 +2323,21 @@ watch(
 }
 
 .thread-composer-plugin-login {
-  @apply bg-[#f0ede5] text-[#6f6555];
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-plugin-reload {
-  @apply mt-1 flex min-h-10 w-full items-center justify-center rounded-[14px] border border-[#e4dac9] bg-[#fffaf3] px-3 text-sm font-semibold text-[#544a3d] transition hover:bg-[#f7f3ea] disabled:cursor-not-allowed disabled:opacity-50;
+  @apply mt-1 flex min-h-10 w-full items-center justify-center border px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
+}
+
+.thread-composer-plugin-reload:hover,
+.thread-composer-plugin-reload:focus-visible {
+  background: var(--ui-bg-row-hover);
 }
 
 .thread-composer-attach-separator {
@@ -2307,7 +2349,8 @@ watch(
 }
 
 .thread-composer-attach-section-title {
-  @apply text-xs font-semibold text-[#8a8173];
+  @apply text-xs font-semibold;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-attach-mode-toggle {
@@ -2335,7 +2378,17 @@ watch(
 }
 
 .thread-composer-attach-skill-dropdown :deep(.search-dropdown-trigger) {
-  @apply h-10 w-full justify-between rounded-[16px] border border-[#e4dac9] bg-[#fffaf3] px-3 text-sm font-semibold text-[#544a3d] transition hover:border-[#d7ccb8] hover:bg-[#f7f3ea] disabled:cursor-not-allowed disabled:opacity-50;
+  @apply h-10 w-full justify-between border px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
+}
+
+.thread-composer-attach-skill-dropdown :deep(.search-dropdown-trigger:hover),
+.thread-composer-attach-skill-dropdown :deep(.search-dropdown-trigger:focus-visible) {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .thread-composer-attach-skill-dropdown :deep(.search-dropdown-value) {
@@ -2379,7 +2432,8 @@ watch(
 }
 
 .thread-composer-runtime-chevron {
-  @apply h-3 w-3 shrink-0 text-[#7a705f] transition-transform;
+  @apply h-3 w-3 shrink-0 transition-transform;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-runtime-chevron.is-open {
@@ -2399,7 +2453,8 @@ watch(
 }
 
 .thread-composer-runtime-handle {
-  @apply mx-auto mb-2 h-1 w-10 rounded-full bg-[#d8d0c2];
+  @apply mx-auto mb-2 h-1 w-10 rounded-full;
+  background: var(--ui-border-strong);
 }
 
 .thread-composer-runtime-section {
@@ -2407,11 +2462,12 @@ watch(
 }
 
 .thread-composer-runtime-section + .thread-composer-runtime-section {
-  @apply border-t border-[#eee7dc];
+  border-top: 1px solid var(--ui-border-subtle);
 }
 
 .thread-composer-runtime-section-title {
-  @apply px-2 pb-1 text-xs font-semibold text-[#8a8173];
+  @apply px-2 pb-1 text-xs font-semibold;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-runtime-options {
@@ -2440,7 +2496,8 @@ watch(
 }
 
 .thread-composer-runtime-option small {
-  @apply mt-0.5 block text-xs font-normal leading-snug text-[#8a8173];
+  @apply mt-0.5 block text-xs font-normal leading-snug;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-runtime-option--stacked {
@@ -2516,7 +2573,8 @@ watch(
 }
 
 .thread-composer-dictation-helper {
-  @apply mb-2 px-1 text-xs text-[#7a705f];
+  @apply mb-2 px-1 text-xs;
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-submit {
@@ -2534,7 +2592,7 @@ watch(
   }
 
   .thread-composer-shell {
-    @apply px-4 py-3;
+    @apply px-3 py-2;
     border-radius: var(--ui-radius-composer);
   }
 }
@@ -2564,6 +2622,7 @@ watch(
     @apply px-2.5 py-1.5;
     min-height: 94px;
     border-radius: 18px;
+    box-shadow: 0 8px 20px rgb(0 0 0 / 0.055);
   }
 
   .thread-composer-input {
@@ -2588,7 +2647,7 @@ watch(
   }
 
   .thread-composer-runtime {
-    width: min(10.75rem, 100%);
+    width: min(11.25rem, 100%);
   }
 
   .thread-composer-runtime-trigger {

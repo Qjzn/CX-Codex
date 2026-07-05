@@ -8575,3 +8575,38 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop `conversation-blocks-fixture`, and phone `conversation-blocks-fixture-phone`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 fixture sidebar assertions: the built-in sidebar fixture verified at least four thread rows, source/status metadata, unread/running indicators, row height between 40px and 52px, row radius no larger than 10px, source/status metadata without pill backgrounds/borders/padding, no spinner animation for the running indicator, rows fitting inside the 393x852 viewport, and no page-level horizontal overflow.
+
+### Feature: P4 composer shell visual weight baseline
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Built-in regression fixture route `/#/__regression/composer-shell` is available.
+- Public reference checked: `friuns2/codex-mobile` commit `fac2291`; use it for Composer structure and control grouping only, not for its theme.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/__regression/composer-shell?regression=frontend` at a desktop viewport such as 1440x900.
+2. Confirm the Composer reads as a lightweight bottom workbench control, with a thin neutral border, white surface, and reduced shadow.
+3. Confirm the textarea, attachment button, runtime trigger, dictation button, and submit button are visible and aligned without layout jumps.
+4. Reopen the same route at a phone viewport such as 393x852.
+5. Confirm the Composer fits the viewport with no horizontal scrolling and the runtime trigger remains readable.
+6. Run `git diff --check`.
+7. Run `npm.cmd run build:frontend`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+
+#### Expected Results
+- Composer shell height stays within the compact visual baseline and does not become a dominant card.
+- Composer radius stays no larger than the desktop parity composer token.
+- The shell background is neutral white/gray, not warm beige.
+- Attachment, runtime, dictation, and submit controls remain visible on desktop and phone.
+- Browser regression passes with no page-level horizontal overflow.
+
+#### Rollback/Cleanup Notes
+- No generated screenshots are required for this narrow fixture baseline.
+- To roll back, revert `ThreadComposer.vue`, `ComposerRegressionFixture.vue`, `router/index.ts`, `App.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop and phone `composer-shell-fixture`, desktop `conversation-blocks-fixture`, and phone `conversation-blocks-fixture-phone`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 fixture composer assertions: the built-in Composer fixture verified form/shell/input/attachment/runtime/dictation/submit controls, shell height between 88px and 132px, shell radius no larger than 22px, thin border, non-warm shell background, minimum control sizes, runtime trigger width, all target controls fitting inside the viewport, and no page-level horizontal overflow.

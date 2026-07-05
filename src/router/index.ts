@@ -10,6 +10,7 @@ function normalizeInitialHashRoute(): void {
     || pathname === '/diagnostics'
     || pathname === '/__regression/conversation-blocks'
     || pathname === '/__regression/sidebar-rows'
+    || pathname === '/__regression/composer-shell'
     || pathname.startsWith('/thread/')
   if (!isKnownCleanRoute) return
   if (hash && hash !== '#/') return
@@ -65,6 +66,11 @@ const router = createRouter({
       path: '/__regression/sidebar-rows',
       name: 'regression-sidebar-rows',
       component: () => import('../components/sidebar/SidebarRegressionFixture.vue'),
+    },
+    {
+      path: '/__regression/composer-shell',
+      name: 'regression-composer-shell',
+      component: () => import('../components/content/ComposerRegressionFixture.vue'),
     },
     {
       path: '/new-thread',
