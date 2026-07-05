@@ -71,6 +71,7 @@ import {
   APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS,
   APP_SERVER_RPC_INIT_TIMEOUT_MS,
   APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS,
+  APP_SERVER_RPC_THREAD_LIST_TIMEOUT_MS,
   APP_SERVER_RPC_TIMEOUT_MS,
   getRpcTimeoutMs,
 } from '../src/server/appServerRpcTimeoutPolicy.js'
@@ -3054,6 +3055,7 @@ function smokeAppServerRpcTimeoutPolicy(): void {
   assert.equal(getRpcTimeoutMs('thread/read', { includeTurns: true }), APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('thread/read', { includeTurns: 'true' }), APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('thread/resume', {}), APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS)
+  assert.equal(getRpcTimeoutMs('thread/list', {}), APP_SERVER_RPC_THREAD_LIST_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('model/list', {}), APP_SERVER_RPC_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('turn/start', null), APP_SERVER_RPC_TIMEOUT_MS)
 }
@@ -3101,6 +3103,25 @@ function smokeAppServerRpcTimeoutRecovery(): void {
     nowMs: 100_000,
   }])
   assert.deepEqual(restartableTimeouts, [])
+
+  const threadListRestartableTimeouts: Array<{ method: string; nowMs: number }> = []
+  const threadListDecision = createAppServerRpcTimeoutRecoveryDecision({
+    method: 'thread/list',
+    params: {},
+    timeoutMs: 15_000,
+    startedAtMs: 95_000,
+    coldStartGraceMs: 60_000,
+    dependencies: {
+      now: () => 100_000,
+      recordTimeout: () => {},
+      noteRestartableTimeout: (method, nowMs) => {
+        threadListRestartableTimeouts.push({ method, nowMs })
+        return { shouldRestart: false, timeoutCount: 1 }
+      },
+    },
+  })
+  assert.deepEqual(threadListDecision, { kind: 'none' })
+  assert.deepEqual(threadListRestartableTimeouts, [{ method: 'thread/list', nowMs: 100_000 }])
 
   const initializeRestartableTimeouts: Array<{ method: string; nowMs: number }> = []
   const initializeDecision = createAppServerRpcTimeoutRecoveryDecision({
@@ -8987,6 +9008,36 @@ async function smokeDiagnosticsRoutes(): Promise<void> {
     kind: 'approval',
     receivedAtIso: '2026-01-01T00:00:00.000Z',
   }])
+
+  const timeoutHealthResponse = createRouteTestResponse()
+  const timeoutStartedAtMs = Date.now()
+  assert.equal(await handleDiagnosticsRoutes(
+    { method: 'GET' } as never,
+    timeoutHealthResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/health'),
+    {
+      ...dependencies,
+      readHookDiagnostics: async () => await new Promise<never>(() => {}),
+      readWindowsSandboxDiagnostics: async () => await new Promise<never>(() => {}),
+      nowIso: () => '2026-01-01T00:00:40.000Z',
+    },
+  ), true)
+  assert.equal(timeoutHealthResponse.response.statusCode, 200)
+  assert.ok(Date.now() - timeoutStartedAtMs < 3_000)
+  const timeoutHealthPayload = JSON.parse(timeoutHealthResponse.body)
+  assert.equal(timeoutHealthPayload.status, 'ok')
+  assert.deepEqual(timeoutHealthPayload.data.hookDiagnostics, {
+    available: false,
+    status: 'timeout',
+    reason: 'hook diagnostics timed out after 2s',
+    checkedAtIso: '2026-01-01T00:00:40.000Z',
+  })
+  assert.deepEqual(timeoutHealthPayload.data.windowsSandbox, {
+    available: false,
+    status: 'timeout',
+    reason: 'Windows sandbox diagnostics timed out after 2s',
+    checkedAtIso: '2026-01-01T00:00:40.000Z',
+  })
 
   assert.equal(await handleDiagnosticsRoutes(
     { method: 'POST' } as never,

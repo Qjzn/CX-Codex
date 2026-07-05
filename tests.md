@@ -9039,3 +9039,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName mobile-drawer-thread-list-recovery` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 mobile drawer assertions: the phone home route opened the drawer and verified compact action grid, non-loading state, rendered thread rows, rendered project groups, no empty/error text when threads are available, drawer width within viewport, and no horizontal overflow.
 - 2026-07-05 screenshot artifact: `output/regression-7420/mobile-drawer-thread-list-recovery/home-mobile-drawer.png`.
+
+### Feature: P0 7420 App Server sync recovery
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Official Codex Desktop may be open, but this test focuses on the 7420 bridge staying responsive when App Server list/diagnostic RPCs stall.
+
+#### Steps
+1. Call `http://127.0.0.1:7420/health` and confirm the Node web service is alive.
+2. Call `http://127.0.0.1:7420/codex-api/health` and confirm it returns quickly even if hook or Windows sandbox diagnostics are unavailable.
+3. POST `/codex-api/rpc` with `{"jsonrpc":"2.0","id":1,"method":"thread/list","params":{"limit":5}}`.
+4. If `thread/list` is slow or stuck, confirm the server-side timeout is 15 seconds instead of 60 seconds and repeated list timeouts are eligible for App Server restart.
+5. Refresh the 7420 page and confirm the sidebar can recover after the App Server responds or restarts.
+6. Run `git diff --check`.
+7. Run `npm.cmd run verify:server-modules`.
+8. Run `npm.cmd run build`.
+9. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName app-server-sync-recovery`.
+
+#### Expected Results
+- `/codex-api/health` is no longer blocked indefinitely by App Server-backed diagnostic reads.
+- `thread/list` failures settle fast enough for the frontend to show recovery state instead of stale loading.
+- Two restartable RPC timeouts inside the restart window trigger App Server recovery instead of waiting for a third 60-second timeout.
+- 7420 sidebar and project/thread list recover without requiring a full machine restart.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/app-server-sync-recovery/` when `-CaptureScreenshots` is used.
+- To roll back, revert `appServerRpcTimeoutPolicy.ts`, `appServerRpcTimeoutRecovery.ts`, `appServerProcess.ts`, `diagnosticsRoutes.ts`, `server-module-smoke.ts`, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 root-cause evidence: before the fix, `/health` returned ok while `/codex-api/health`, `/codex-api/diagnostics`, and `/codex-api/rpc` `thread/list` timed out, so the Node web process was alive but App Server-backed sync was blocked.
+- 2026-07-05 server module verification: `npm.cmd run verify:server-modules` passed, including `thread/list` 15-second timeout policy, no startup-grace suppression for `thread/list`, and fast health timeout fallback for hook/sandbox diagnostics.
+- 2026-07-05 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
+- 2026-07-05 local service recovery: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted 7420 as PID 26612 with version 2.2.7.
+- 2026-07-05 post-restart smoke: `/codex-api/health` returned 200 in 363ms and `thread/list` with `limit=5` returned 200 in 879ms.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName app-server-sync-recovery` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.

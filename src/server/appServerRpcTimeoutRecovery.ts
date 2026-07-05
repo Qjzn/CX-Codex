@@ -46,7 +46,7 @@ export function createAppServerRpcTimeoutRecoveryDecision({
 
   const processAgeMs = startedAtMs > 0 ? nowMs - startedAtMs : 0
   const includeTurns = readThreadReadIncludeTurnsForMethod(method, params)
-  if (method !== 'initialize' && processAgeMs < coldStartGraceMs) {
+  if (method !== 'initialize' && method !== 'thread/list' && processAgeMs < coldStartGraceMs) {
     return {
       kind: 'startup-grace',
       processAgeMs,

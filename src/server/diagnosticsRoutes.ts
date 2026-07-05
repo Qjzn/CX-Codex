@@ -11,6 +11,9 @@ import {
   createServerRequestDiagnosticsSnapshot,
 } from './serverRequestDiagnostics.js'
 
+const HEALTH_DIAGNOSTICS_TIMEOUT_MS = 1_500
+const FULL_DIAGNOSTICS_TIMEOUT_MS = 5_000
+
 type RuntimeStoreHealthSnapshot = {
   latestSeq: number
   [key: string]: unknown
@@ -37,6 +40,34 @@ export type DiagnosticsRoutesDependencies = {
   nowIso?: () => string
 }
 
+async function readDiagnosticsWithTimeout<T>(
+  read: () => Promise<T>,
+  label: string,
+  timeoutMs: number,
+  timestamp: string,
+): Promise<T | { available: false; status: 'timeout'; reason: string; checkedAtIso: string }> {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      read(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${Math.ceil(timeoutMs / 1000)}s`))
+        }, timeoutMs)
+      }),
+    ])
+  } catch (error) {
+    return {
+      available: false,
+      status: 'timeout',
+      reason: error instanceof Error ? error.message : `${label} timed out`,
+      checkedAtIso: timestamp,
+    }
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
+
 export async function handleDiagnosticsRoutes(
   req: IncomingMessage,
   res: ServerResponse,
@@ -50,8 +81,23 @@ export async function handleDiagnosticsRoutes(
   const timestamp = (dependencies.nowIso ?? (() => new Date().toISOString()))()
   const schemaAudit = await dependencies.readSchemaAuditSummary()
   const serverRequestDiagnostics = createServerRequestDiagnosticsSnapshot(dependencies.listPendingServerRequests())
-  const hookDiagnostics = await dependencies.readHookDiagnostics()
-  const windowsSandbox = await dependencies.readWindowsSandboxDiagnostics()
+  const diagnosticsTimeoutMs = url.pathname === '/codex-api/health'
+    ? HEALTH_DIAGNOSTICS_TIMEOUT_MS
+    : FULL_DIAGNOSTICS_TIMEOUT_MS
+  const [hookDiagnostics, windowsSandbox] = await Promise.all([
+    readDiagnosticsWithTimeout(
+      dependencies.readHookDiagnostics,
+      'hook diagnostics',
+      diagnosticsTimeoutMs,
+      timestamp,
+    ),
+    readDiagnosticsWithTimeout(
+      dependencies.readWindowsSandboxDiagnostics,
+      'Windows sandbox diagnostics',
+      diagnosticsTimeoutMs,
+      timestamp,
+    ),
+  ])
   const runtimeHealth = dependencies.runtimeStore.getHealth()
 
   if (url.pathname === '/codex-api/health') {
