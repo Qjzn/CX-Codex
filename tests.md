@@ -9476,3 +9476,41 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 release package: `npm.cmd run package:release -- -Version 2.2.8 -OutputDir output\release-2.2.8` generated `output/release-2.2.8/CX-Codex-2.2.8.zip` and `output/release-2.2.8/CX-Codex-2.2.8.sha256`.
 - 2026-07-06 release artifact verification: `npm.cmd run verify:release-artifacts -- -OutputDir output\release-2.2.8` passed with `checksum ok: CX-Codex-2.2.8.zip`.
 - 2026-07-06 screenshot artifacts: `output/regression-7420/p1-session-index-sidebar-output-limit/home-desktop.png` and `output/regression-7420/p1-session-index-sidebar-output-limit/home-mobile-drawer.png`.
+
+### Feature: P1 Android voice-to-text draft insertion
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The browser regression agent is available through `agent-browser`.
+- For real audio verification, configure `CX_CODEX_OPENAI_API_KEY`, `CODEXUI_OPENAI_API_KEY`, or `OPENAI_API_KEY`; without a key, the existing ChatGPT login-state fallback may be used.
+
+#### Steps
+1. Open the Composer on desktop and mobile viewport.
+2. Use the microphone on a secure origin, or on Android WebView / HTTP use the system recorder or audio-file upload fallback.
+3. Finish recording or select an audio file and wait for transcription.
+4. Confirm the recognized text is inserted into the Composer input box.
+5. Confirm the message is not submitted automatically unless the user explicitly enables “转写后自动发送”.
+6. Run `npm.cmd run build`.
+7. Restart 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-android-dictation-draft`.
+9. Run Android sync or build checks after frontend changes are compiled, for example `npm.cmd run mobile:android:sync`.
+
+#### Expected Results
+- Transcribed text appears in the Composer input as editable draft text.
+- No submit event is emitted by the default dictation path or the regression fixture.
+- Android fallback opens system recording / audio upload when direct WebView recording is unavailable.
+- The Composer shows lightweight recording, transcribing, success, and error feedback without adding persistent helper text.
+- Desktop, phone, and foldable Composer regression fixtures pass with no horizontal overflow.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/p1-android-dictation-draft/` when `-CaptureScreenshots` is used.
+- To roll back, revert `src/components/content/ThreadComposer.vue`, `src/components/content/ComposerRegressionFixture.vue`, `src/App.vue`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-06 diff whitespace check: `git diff --check` passed.
+- 2026-07-06 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
+- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 18944 on version `2.2.8`; `/health` returned ok.
+- 2026-07-06 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-android-dictation-draft` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; Composer fixture additionally clicked the dictation probe and asserted `语音转文字回归测试` entered the input with submit count `0`.
+- 2026-07-06 Android sync: `npm.cmd run mobile:android:sync` passed; Capacitor copied current `dist` assets and found `@capacitor/app@8.1.0` plus `@capacitor/network@8.0.1`.
+- 2026-07-06 Android debug build: `android\gradlew.bat assembleDebug` passed with `BUILD SUCCESSFUL`; Gradle still reports existing flatDir/deprecation warnings.
+- 2026-07-06 screenshot artifacts: `output/regression-7420/p1-android-dictation-draft/composer-shell-fixture-desktop.png`, `output/regression-7420/p1-android-dictation-draft/composer-shell-fixture-phone.png`, and `output/regression-7420/p1-android-dictation-draft/composer-shell-fixture-foldable.png`.

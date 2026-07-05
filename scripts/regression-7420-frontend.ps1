@@ -1287,6 +1287,8 @@ JSON.stringify((() => {
   const mic = document.querySelector('.composer-regression-fixture .thread-composer-mic');
   const submit = document.querySelector('.composer-regression-fixture .thread-composer-submit');
   const dictationHelper = document.querySelector('.composer-regression-fixture .thread-composer-dictation-helper');
+  const dictationProbe = document.querySelector('.composer-regression-fixture .composer-regression-dictation-insert');
+  const submitCount = document.querySelector('.composer-regression-fixture .composer-regression-submit-count');
   const shellRect = shell?.getBoundingClientRect();
   const formRect = form?.getBoundingClientRect();
   const viewportWidth = document.documentElement.clientWidth;
@@ -1314,6 +1316,10 @@ JSON.stringify((() => {
     hasMic: !!mic,
     hasSubmit: !!submit,
     hasDictationHelper: !!dictationHelper,
+    hasDictationProbe: !!dictationProbe,
+    inputValue: input?.value || '',
+    submitCount: Number.parseInt(submitCount?.textContent || '0', 10),
+    dictationHelperText: dictationHelper?.textContent?.trim() || '',
     shellWidth: shellRect ? Math.round(shellRect.width) : 0,
     formWidth: formRect ? Math.round(formRect.width) : 0,
     shellHeight: shellRect ? Math.round(shellRect.height) : 0,
@@ -1352,6 +1358,7 @@ function Assert-ComposerFixture {
   Assert-True ($Metrics.hasMic -eq $true) "$ViewportName composer fixture is missing dictation button"
   Assert-True ($Metrics.hasSubmit -eq $true) "$ViewportName composer fixture is missing submit button"
   Assert-True ($Metrics.hasDictationHelper -eq $false) "$ViewportName composer fixture shows idle dictation helper text"
+  Assert-True ($Metrics.hasDictationProbe -eq $true) "$ViewportName composer fixture is missing dictation regression probe"
   Assert-True ($Metrics.shellHeight -ge 82) "$ViewportName composer shell is too short: $($Metrics.shellHeight)"
   Assert-True ($Metrics.shellHeight -le 112) "$ViewportName composer shell is too tall: $($Metrics.shellHeight)"
   Assert-True ($Metrics.shellRadius -le 22) "$ViewportName composer shell radius is too large: $($Metrics.shellRadius)"
@@ -1363,6 +1370,35 @@ function Assert-ComposerFixture {
   Assert-True ($Metrics.runtimeWidth -ge 112) "$ViewportName composer runtime trigger is too narrow: $($Metrics.runtimeWidth)"
   Assert-True ($Metrics.fitFailureCount -eq 0) "$ViewportName composer controls overflow viewport: $($Metrics.fitFailures | ConvertTo-Json -Compress)"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "$ViewportName composer fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+}
+
+function Invoke-ComposerDictationProbe {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const button = document.querySelector('.composer-regression-fixture .composer-regression-dictation-insert');
+  if (button instanceof HTMLElement) {
+    button.click();
+    return { clicked: true };
+  }
+  return { clicked: false };
+})())
+'@
+  $result = Invoke-BrowserEvalJson -Session $Session -Script $script
+  Assert-True ($result.clicked -eq $true) "composer dictation regression probe could not be clicked"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "200") | Out-Null
+}
+
+function Assert-ComposerDictationDraft {
+  param(
+    [object]$Metrics,
+    [string]$ViewportName
+  )
+
+  Assert-True ($Metrics.inputValue -like "*语音转文字回归测试*") "$ViewportName composer dictation text was not inserted into the input"
+  Assert-True ([int]$Metrics.submitCount -eq 0) "$ViewportName composer dictation auto-submitted unexpectedly"
+  Assert-True ($Metrics.dictationHelperText -eq "已转成文字，可编辑后发送。") "$ViewportName composer dictation success text drifted: $($Metrics.dictationHelperText)"
 }
 
 function Add-RegressionResult {
@@ -1469,16 +1505,22 @@ try {
   $composerFixture = Open-And-ReadPage -Session $session -Url $composerFixtureUrl -Width $DesktopWidth -Height $DesktopHeight
   Assert-Page -Page $composerFixture -Name "composer shell fixture desktop" -RequireComposer
   Assert-ComposerFixture -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "desktop"
+  Invoke-ComposerDictationProbe -Session $session
+  Assert-ComposerDictationDraft -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "desktop"
   Add-RegressionResult -Name "composer-shell-fixture-desktop" -Page $composerFixture
 
   $composerFixturePhone = Open-And-ReadPage -Session $session -Url $composerFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $composerFixturePhone -Name "composer shell fixture phone" -RequireComposer
   Assert-ComposerFixture -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "phone"
+  Invoke-ComposerDictationProbe -Session $session
+  Assert-ComposerDictationDraft -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "phone"
   Add-RegressionResult -Name "composer-shell-fixture-phone" -Page $composerFixturePhone
 
   $composerFixtureFoldable = Open-And-ReadPage -Session $session -Url $composerFixtureUrl -Width $FoldableWidth -Height $FoldableHeight
   Assert-Page -Page $composerFixtureFoldable -Name "composer shell fixture foldable" -RequireComposer
   Assert-ComposerFixture -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "foldable"
+  Invoke-ComposerDictationProbe -Session $session
+  Assert-ComposerDictationDraft -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "foldable"
   Add-RegressionResult -Name "composer-shell-fixture-foldable" -Page $composerFixtureFoldable
 
   $fixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend"

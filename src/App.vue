@@ -1007,7 +1007,7 @@ const SETTINGS_HELP = {
   sendWithEnter: '开启后直接按 Enter 发送，关闭后使用 Command + Enter 发送。',
   appearance: '在跟随系统、浅色和深色之间切换。',
   dictationButtonVisible: '控制输入框右侧是否显示语音按钮。',
-  dictationAutoSend: '录音结束后自动发送转写内容。',
+  dictationAutoSend: '转写后自动发送输入框内容；默认关闭，建议确认后手动发送。',
   rollbackCommits: '开启后每条消息都会生成回滚提交，回滚时会重置到该消息之前的提交。',
   githubTrendingProjects: '显示或隐藏侧栏里的 GitHub 热门页面入口。',
   dictationLanguage: '选择转写语言，或保持自动识别。',
@@ -1336,7 +1336,7 @@ const dictationClickToToggle = ref(loadBoolPref(DICTATION_CLICK_TO_TOGGLE_KEY, f
 const dictationButtonVisible = ref(loadBoolPref(DICTATION_BUTTON_VISIBLE_KEY, true))
 const rollbackDraftPrependRequest = ref<{ id: number; text: string } | null>(null)
 let rollbackDraftPrependRequestId = 0
-const dictationAutoSend = ref(loadBoolPref(DICTATION_AUTO_SEND_KEY, true))
+const dictationAutoSend = ref(loadBoolPref(DICTATION_AUTO_SEND_KEY, false))
 const dictationLanguage = ref(loadDictationLanguagePref())
 const dictationLanguageOptions = computed(() => buildDictationLanguageOptions())
 const worktreeGitAutomationEnabled = ref(loadBoolPref(WORKTREE_GIT_AUTOMATION_KEY, true))

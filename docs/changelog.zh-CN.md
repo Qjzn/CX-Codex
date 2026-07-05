@@ -37,6 +37,9 @@
   - 新增 `docs/desktop-parity-ui-plan.zh-CN.md`，把 Codex Desktop 高保真 UI 目标、GitHub 参考项目、视觉系统、P0/P1/P2/P3 实施批次和回归验收标准固化为后续前端重构基线。
   - 新增并优化 `docs/frontend-ui-remediation-plan.zh-CN.md`，把前端从稳定可用提升到美观、顺手、贴近 Codex Desktop 的整改目标拆成视觉 token、参考截图门禁、组件范围、体验目标、自动化/半自动化断言矩阵和 P0-P5 实施阶段。
 - 语音输入：
+  - Android / 移动端语音输入改为“先转成文字写入输入框，再由用户确认发送”；默认关闭转写后自动发送，设置中仍可手动开启。
+  - 不支持 WebView 直接录音的环境会走系统录音或音频上传 fallback，转写完成后同样只填入 Composer 草稿，并提供转写中和成功写入的轻量反馈。
+  - `test:7420:frontend` 的 Composer fixture 新增语音转文字回归探针，在桌面、手机和折叠屏视口自动断言转写文本进入输入框且未触发提交。
   - 后端转写支持优先使用 OpenAI 官方音频转写 API，配置 `CX_CODEX_OPENAI_API_KEY`、`CODEXUI_OPENAI_API_KEY` 或 `OPENAI_API_KEY` 后不再依赖 ChatGPT 网页登录态。
   - 官方转写 multipart 会由服务端规范化 `model`、`response_format` 和 diarize 分段参数，普通转写模型保持 `json`，`gpt-4o-transcribe-diarize` 按官方文档使用 `diarized_json` 与 `chunking_strategy=auto`，避免客户端自带字段绕过官方模型的响应格式约束。
   - 前端语音输入支持从 diarized JSON 的 `segments[].text` 兜底提取文本，避免上游没有顶层 `text` 字段时空转写。

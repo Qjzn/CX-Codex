@@ -3,11 +3,21 @@
     <p v-if="dictationErrorText" class="thread-composer-dictation-error">
       {{ dictationErrorText }}
     </p>
-    <p v-else-if="dictationHelperText" class="thread-composer-dictation-helper">
+    <p
+      v-else-if="dictationHelperText"
+      class="thread-composer-dictation-helper"
+      :class="{ 'thread-composer-dictation-helper--success': dictationFeedbackTone === 'success' }"
+    >
       {{ dictationHelperText }}
     </p>
 
-    <div class="thread-composer-shell" :class="{ 'thread-composer-shell--no-top-radius': hasQueueAbove }">
+    <div
+      class="thread-composer-shell"
+      :class="{
+        'thread-composer-shell--no-top-radius': hasQueueAbove,
+        'thread-composer-shell--dictation-inserted': dictationInsertFlash,
+      }"
+    >
       <div v-if="selectedImages.length > 0" class="thread-composer-attachments">
         <div v-for="image in selectedImages" :key="image.id" class="thread-composer-attachment">
           <img class="thread-composer-attachment-image" :src="image.previewUrl" :alt="image.name || '已选图片'" />
@@ -438,10 +448,15 @@
 
         <div
           class="thread-composer-actions"
-          :class="{ 'thread-composer-actions--recording': isDictationRecording }"
+          :class="{ 'thread-composer-actions--recording': isDictationRecording || dictationState === 'transcribing' }"
         >
           <div v-if="dictationState === 'recording'" class="thread-composer-dictation-waveform-wrap" aria-hidden="true">
             <canvas ref="dictationWaveformCanvasRef" class="thread-composer-dictation-waveform" />
+          </div>
+
+          <div v-else-if="dictationState === 'transcribing'" class="thread-composer-dictation-processing" aria-live="polite">
+            <span class="thread-composer-dictation-processing-dot" aria-hidden="true" />
+            <span class="thread-composer-dictation-processing-text">转文字中</span>
           </div>
 
           <span v-if="dictationState === 'recording'" class="thread-composer-dictation-timer">
@@ -453,6 +468,7 @@
             class="thread-composer-mic"
             :class="{
               'thread-composer-mic--active': dictationState === 'recording',
+              'thread-composer-mic--busy': dictationState === 'transcribing',
             }"
             type="button"
             :aria-label="dictationButtonLabel"
@@ -615,6 +631,7 @@ export type SubmitPayload = {
 export type ThreadComposerExposed = {
   hydrateDraft: (payload: ComposerDraftPayload) => void
   hasUnsavedDraft: () => boolean
+  insertDictationTranscriptForRegression: (text: string) => boolean
 }
 
 const emit = defineEmits<{
@@ -645,6 +662,8 @@ type FolderUploadGroup = {
   isUploading: boolean
 }
 
+type DictationFeedbackTone = 'neutral' | 'success' | 'error'
+
 const draft = ref('')
 const selectedImages = ref<SelectedImage[]>([])
 const selectedSkills = ref<SkillItem[]>([])
@@ -655,6 +674,9 @@ const fileAttachments = ref<FileAttachment[]>([])
 const folderUploadGroups = ref<FolderUploadGroup[]>([])
 
 const dictationFeedback = ref('')
+const dictationFeedbackTone = ref<DictationFeedbackTone>('neutral')
+const dictationInsertFlash = ref(false)
+let dictationInsertFlashTimer: ReturnType<typeof setTimeout> | null = null
 const {
   state: dictationState,
   isSupported: isDictationSupported,
@@ -669,9 +691,9 @@ const {
 } = useDictation({
   getLanguage: () => props.dictationLanguage ?? 'auto',
   onTranscript: (text) => {
-    draft.value = draft.value ? `${draft.value}\n${text}` : text
-    dictationFeedback.value = ''
-    if (props.dictationAutoSend !== false) {
+    if (!insertDictationTranscript(text)) return
+    if (props.dictationAutoSend === true) {
+      clearDictationFeedback()
       const mode = resolveSubmitMode()
       onSubmit(mode, {
         rollbackLatestUserTurn: mode === 'steer' && dictationShouldRollbackLatestUserTurn,
@@ -682,16 +704,16 @@ const {
     nextTick(() => inputRef.value?.focus())
   },
   onEmpty: () => {
-    dictationFeedback.value = props.dictationClickToToggle
+    setDictationFeedback(props.dictationClickToToggle
       ? '未识别到语音，请说完后再点一次。'
-      : '未识别到语音，请按住麦克风后再说话。'
+      : '未识别到语音，请按住麦克风后再说话。', 'error')
   },
   onError: (error) => {
     if (error instanceof DOMException && error.name === 'NotAllowedError') {
-      dictationFeedback.value = '麦克风权限被拒绝。'
+      setDictationFeedback('麦克风权限被拒绝。', 'error')
       return
     }
-    dictationFeedback.value = error instanceof Error ? error.message : '语音听写失败。'
+    setDictationFeedback(error instanceof Error ? error.message : '语音听写失败。', 'error')
   },
 })
 const attachMenuRootRef = ref<HTMLElement | null>(null)
@@ -850,7 +872,7 @@ const shouldShowDictationButton = computed(() => props.showDictationButton !== f
 const usesDictationUploadFallback = computed(() =>
   shouldShowDictationButton.value && !supportsLiveRecording.value,
 )
-const DICTATION_UPLOAD_FALLBACK_MESSAGE = '当前地址不支持直接长按录音，点按麦克风会打开系统录音或音频上传。切到 HTTPS 或 localhost 后可直接长按说话。'
+const DICTATION_UPLOAD_FALLBACK_MESSAGE = '将打开系统录音或音频上传；转写完成后会先填入输入框。'
 const dictationButtonLabel = computed(() => {
   if (dictationState.value === 'recording') return '停止听写'
   if (dictationState.value === 'transcribing') return '正在转写'
@@ -858,9 +880,15 @@ const dictationButtonLabel = computed(() => {
   return props.dictationClickToToggle ? '点击开始听写' : '按住开始听写'
 })
 const dictationErrorText = computed(() =>
-  dictationState.value === 'idle' ? dictationFeedback.value.trim() : '',
+  dictationState.value === 'idle' && dictationFeedbackTone.value === 'error'
+    ? dictationFeedback.value.trim()
+    : '',
 )
 const dictationHelperText = computed(() => {
+  if (dictationState.value === 'transcribing') return '正在把语音转成文字...'
+  if (dictationState.value === 'idle' && dictationFeedbackTone.value !== 'error') {
+    return dictationFeedback.value.trim()
+  }
   return ''
 })
 const dictationDurationLabel = computed(() => {
@@ -898,6 +926,43 @@ function armStopGuard(): void {
     isStopGuardActive.value = false
     stopGuardTimer = null
   }, MOBILE_STOP_GUARD_MS)
+}
+
+function clearDictationFeedback(): void {
+  dictationFeedback.value = ''
+  dictationFeedbackTone.value = 'neutral'
+}
+
+function setDictationFeedback(text: string, tone: DictationFeedbackTone = 'neutral'): void {
+  dictationFeedback.value = text
+  dictationFeedbackTone.value = tone
+}
+
+function syncDraftMenus(): void {
+  const text = draft.value
+  const shouldShowSlashMenu = text.startsWith('/')
+  if (shouldShowSlashMenu !== isSlashMenuOpen.value) {
+    isSlashMenuOpen.value = shouldShowSlashMenu
+  }
+  updateFileMentionState()
+}
+
+function insertDictationTranscript(text: string): boolean {
+  const normalized = text.trim()
+  if (!normalized) return false
+  const separator = draft.value.length > 0 && !/\s$/u.test(draft.value) ? '\n' : ''
+  draft.value = `${draft.value}${separator}${normalized}`
+  syncDraftMenus()
+  setDictationFeedback('已转成文字，可编辑后发送。', 'success')
+  dictationInsertFlash.value = true
+  if (dictationInsertFlashTimer) {
+    clearTimeout(dictationInsertFlashTimer)
+  }
+  dictationInsertFlashTimer = setTimeout(() => {
+    dictationInsertFlash.value = false
+    dictationInsertFlashTimer = null
+  }, 900)
+  return true
 }
 
 function onInterruptClick(): void {
@@ -1009,7 +1074,7 @@ function replaceDraftState(payload: ComposerDraftPayload): void {
   goalText.value = payload.goal?.text ?? ''
   fileAttachments.value = payload.fileAttachments.map((attachment) => ({ ...attachment }))
   folderUploadGroups.value = []
-  dictationFeedback.value = ''
+  clearDictationFeedback()
   isAttachMenuOpen.value = false
   isPluginSubmenuOpen.value = false
   isRuntimeSettingsOpen.value = false
@@ -1286,7 +1351,7 @@ function onDictationToggle(): void {
   }
   if (!props.dictationClickToToggle) return
   if (dictationFeedback.value) {
-    dictationFeedback.value = ''
+    clearDictationFeedback()
   }
   if (dictationState.value === 'idle') {
     dictationShouldRollbackLatestUserTurn = false
@@ -1309,7 +1374,7 @@ function onDictationPressStart(event: PointerEvent): void {
     }
   }
   if (dictationFeedback.value) {
-    dictationFeedback.value = ''
+    clearDictationFeedback()
   }
   dictationShouldRollbackLatestUserTurn = false
   window.addEventListener('pointerup', onDictationPressEnd)
@@ -1375,7 +1440,7 @@ function triggerCameraCapture(): void {
 
 function triggerAudioCapture(): void {
   if (isInteractionDisabled.value) return
-  dictationFeedback.value = DICTATION_UPLOAD_FALLBACK_MESSAGE
+  setDictationFeedback(DICTATION_UPLOAD_FALLBACK_MESSAGE, 'neutral')
   const input = audioCaptureInputRef.value
   if (!input) return
   input.value = ''
@@ -1395,11 +1460,11 @@ async function onAudioCaptureChange(event: Event): Promise<void> {
   }
   if (!file) return
   dictationShouldRollbackLatestUserTurn = false
-  dictationFeedback.value = ''
+  clearDictationFeedback()
   try {
     await transcribeFile(file)
   } catch (error) {
-    dictationFeedback.value = error instanceof Error ? error.message : '语音听写失败。'
+    setDictationFeedback(error instanceof Error ? error.message : '语音听写失败。', 'error')
   }
 }
 
@@ -1560,14 +1625,9 @@ function onFolderPickerChange(event: Event): void {
 
 function onInputChange(): void {
   if (dictationFeedback.value) {
-    dictationFeedback.value = ''
+    clearDictationFeedback()
   }
-  const text = draft.value
-  const shouldShowSlashMenu = text.startsWith('/')
-  if (shouldShowSlashMenu !== isSlashMenuOpen.value) {
-    isSlashMenuOpen.value = shouldShowSlashMenu
-  }
-  updateFileMentionState()
+  syncDraftMenus()
 }
 
 function onInputKeydown(event: KeyboardEvent): void {
@@ -1801,12 +1861,17 @@ onMounted(() => {
 defineExpose<ThreadComposerExposed>({
   hydrateDraft,
   hasUnsavedDraft: () => hasUnsavedDraft.value,
+  insertDictationTranscriptForRegression: insertDictationTranscript,
 })
 
 onBeforeUnmount(() => {
   if (stopGuardTimer) {
     clearTimeout(stopGuardTimer)
     stopGuardTimer = null
+  }
+  if (dictationInsertFlashTimer) {
+    clearTimeout(dictationInsertFlashTimer)
+    dictationInsertFlashTimer = null
   }
   document.removeEventListener('click', onDocumentClick)
   document.removeEventListener('visibilitychange', onDocumentVisibilityChange)
@@ -1892,6 +1957,17 @@ watch(
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
   box-shadow: 0 8px 20px rgb(0 0 0 / 0.045);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background-color 180ms ease;
+}
+
+.thread-composer-shell--dictation-inserted {
+  border-color: color-mix(in srgb, var(--ui-accent, #0f766e) 42%, var(--ui-border-subtle));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--ui-accent, #0f766e) 18%, transparent),
+    0 16px 34px -30px rgba(15, 118, 110, 0.55);
 }
 
 .thread-composer-shell--no-top-radius {
@@ -2545,6 +2621,10 @@ watch(
   @apply bg-red-100 text-red-600 hover:bg-red-200 hover:text-red-700;
 }
 
+.thread-composer-mic--busy {
+  color: var(--ui-accent);
+}
+
 .thread-composer-mic-icon {
   @apply h-5 w-5;
 }
@@ -2561,6 +2641,21 @@ watch(
   @apply shrink-0 text-sm text-zinc-500 tabular-nums;
 }
 
+.thread-composer-dictation-processing {
+  @apply flex min-w-0 flex-1 items-center gap-2 text-sm;
+  color: var(--ui-text-secondary);
+}
+
+.thread-composer-dictation-processing-dot {
+  @apply h-2.5 w-2.5 shrink-0 rounded-full;
+  animation: composer-dictation-pulse 900ms ease-in-out infinite;
+  background: var(--ui-accent);
+}
+
+.thread-composer-dictation-processing-text {
+  @apply truncate;
+}
+
 .thread-composer-dictation-error {
   @apply mb-2 px-1 text-xs text-amber-700;
 }
@@ -2568,6 +2663,29 @@ watch(
 .thread-composer-dictation-helper {
   @apply mb-2 px-1 text-xs;
   color: var(--ui-text-secondary);
+}
+
+.thread-composer-dictation-helper--success {
+  color: var(--ui-accent);
+}
+
+@keyframes composer-dictation-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-composer-dictation-processing-dot {
+    animation: none;
+  }
 }
 
 .thread-composer-submit {

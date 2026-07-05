@@ -5,7 +5,14 @@
         <p>Composer Regression</p>
         <h1>输入区视觉基线</h1>
       </div>
+      <div class="composer-regression-probes" aria-label="Composer regression probes">
+        <button class="composer-regression-dictation-insert" type="button" @click="insertMockDictation">
+          模拟语音转文字
+        </button>
+        <span class="composer-regression-submit-count">{{ submitCount }}</span>
+      </div>
       <ThreadComposer
+        ref="composerRef"
         active-thread-id="fixture-thread-composer"
         cwd="E:/javaword/CXCodex/codexui"
         :models="models"
@@ -24,7 +31,7 @@
         :dictation-auto-send="false"
         :show-dictation-button="true"
         dictation-language="zh"
-        @submit="noop"
+        @submit="onSubmit"
         @update:selected-model="noop"
         @update:selected-reasoning-effort="noop"
         @update:selected-speed-mode="noop"
@@ -39,10 +46,13 @@
 </template>
 
 <script setup lang="ts">
-import ThreadComposer from './ThreadComposer.vue'
+import { ref } from 'vue'
+import ThreadComposer, { type SubmitPayload, type ThreadComposerExposed } from './ThreadComposer.vue'
 import type { ComposerPluginInfo } from '../../types/codex'
 
 const models = ['gpt-5.5-codex', 'gpt-5.5', 'o3']
+const composerRef = ref<ThreadComposerExposed | null>(null)
+const submitCount = ref(0)
 
 const skills = [
   {
@@ -80,6 +90,14 @@ const plugins: ComposerPluginInfo[] = [
 function noop(): void {
   // Fixture route only needs rendered output for browser assertions.
 }
+
+function onSubmit(_payload: SubmitPayload): void {
+  submitCount.value += 1
+}
+
+function insertMockDictation(): void {
+  composerRef.value?.insertDictationTranscriptForRegression('语音转文字回归测试')
+}
 </script>
 
 <style scoped>
@@ -94,6 +112,20 @@ function noop(): void {
 .composer-regression-frame {
   @apply mx-auto flex w-full flex-col gap-4;
   max-width: var(--ui-composer-max);
+}
+
+.composer-regression-probes {
+  @apply flex items-center gap-2 px-5 text-xs;
+}
+
+.composer-regression-dictation-insert {
+  @apply rounded-md border px-2 py-1 text-xs;
+  border-color: var(--ui-border-subtle);
+  color: var(--ui-text-secondary);
+}
+
+.composer-regression-submit-count {
+  @apply sr-only;
 }
 
 .composer-regression-context {
