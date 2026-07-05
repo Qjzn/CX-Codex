@@ -19,6 +19,40 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Compact conversation and composer chrome
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Screenshot capture directory `output/regression-7420/compact-conversation-ui/` may be regenerated for visual confirmation.
+
+#### Steps
+1. Open a thread route at desktop width and confirm the runtime status strip is a compact single-row control, not a tall explanatory banner.
+2. Confirm normal settled/running states do not show low-value explanatory text such as "latest result landed" or microphone usage tutorials.
+3. Confirm guided turn summaries render as a compact `阶段回复` control with a short count.
+4. Open `http://127.0.0.1:7420/#/__regression/composer-shell?regression=frontend` at 1440x900, 393x852, and 884x1104.
+5. Confirm the empty Composer starts from one textarea row, has no idle dictation helper text, and keeps a lighter shadow.
+6. Run `git diff --check -- scripts/regression-7420-frontend.ps1 src/style.css src/components/content/RuntimeStatusBar.vue src/components/content/ThreadConversation.vue src/components/content/ThreadComposer.vue`.
+7. Run `npm.cmd run build:frontend`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName compact-conversation-ui`.
+
+#### Expected Results
+- Runtime status bar height is at most 40px on desktop conversation fixtures and at most 48px on phone fixtures.
+- Composer fixture does not render `.thread-composer-dictation-helper` while idle.
+- Composer shell height stays between 82px and 112px in the regression fixture.
+- `composer-shell-fixture-desktop.png`, `composer-shell-fixture-phone.png`, and `conversation-blocks-fixture.png` show less explanatory chrome and reduced vertical occupancy.
+- The 7420 frontend health precondition tolerates bounded read-only status polling backlog from `mcpServerStatus/list` / `account/rateLimits/read`, but still blocks pending server requests, active plan-mode turns, uncertain runtime requests, and non-status queued work.
+
+#### Rollback/Cleanup Notes
+- Screenshot files under `output/regression-7420/compact-conversation-ui/` are local verification artifacts and are not required in git.
+- To roll back, revert `src/components/content/RuntimeStatusBar.vue`, `src/components/content/ThreadConversation.vue`, `src/components/content/ThreadComposer.vue`, `src/style.css`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check -- scripts/regression-7420-frontend.ps1 src/style.css src/components/content/RuntimeStatusBar.vue src/components/content/ThreadConversation.vue src/components/content/ThreadComposer.vue` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 screenshot regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName compact-conversation-ui` passed.
+- 2026-07-05 visual evidence: regenerated `output/regression-7420/compact-conversation-ui/composer-shell-fixture-desktop.png` showed a shorter empty Composer with no dictation helper text, and `output/regression-7420/compact-conversation-ui/conversation-blocks-fixture.png` showed the runtime status as a compact single-row strip.
+
 ### Feature: P4 sidebar primary actions parity baseline
 
 #### Prerequisites

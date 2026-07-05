@@ -138,6 +138,7 @@
           ref="inputRef"
           v-model="draft"
           class="thread-composer-input"
+          rows="1"
           :placeholder="placeholderText"
           :disabled="isInteractionDisabled"
           @input="onInputChange"
@@ -860,15 +861,7 @@ const dictationErrorText = computed(() =>
   dictationState.value === 'idle' ? dictationFeedback.value.trim() : '',
 )
 const dictationHelperText = computed(() => {
-  if (!shouldShowDictationButton.value) return ''
-  if (dictationState.value !== 'idle') return ''
-  if (usesDictationUploadFallback.value) {
-    return ''
-  }
-  if (props.dictationClickToToggle) {
-    return '点击一次开始录音，再点击一次结束并转写。'
-  }
-  return '按住麦克风开始录音，松手后自动转写。'
+  return ''
 })
 const dictationDurationLabel = computed(() => {
   const totalSeconds = Math.max(0, Math.floor(recordingDurationMs.value / 1000))
@@ -1898,7 +1891,7 @@ watch(
   border-radius: var(--ui-radius-composer);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
-  box-shadow: 0 10px 28px rgb(0 0 0 / 0.06);
+  box-shadow: 0 8px 20px rgb(0 0 0 / 0.045);
 }
 
 .thread-composer-shell--no-top-radius {
@@ -2093,7 +2086,7 @@ watch(
 }
 
 .thread-composer-input {
-  @apply w-full min-w-0 min-h-9 max-h-36 rounded-xl border-0 bg-transparent px-1 py-1.5 text-sm outline-none transition resize-none overflow-y-auto;
+  @apply w-full min-w-0 min-h-8 max-h-32 rounded-xl border-0 bg-transparent px-1 py-1 text-sm outline-none transition resize-none overflow-y-auto;
   color: var(--ui-text-primary);
   font-family: var(--font-sans-reading);
   font-size: var(--font-size-reading, 15px);
@@ -2592,7 +2585,7 @@ watch(
   }
 
   .thread-composer-shell {
-    @apply px-3 py-2;
+    @apply px-3 py-1.5;
     border-radius: var(--ui-radius-composer);
   }
 }
@@ -2620,9 +2613,9 @@ watch(
 
   .thread-composer-shell {
     @apply px-2.5 py-1.5;
-    min-height: 94px;
+    min-height: 86px;
     border-radius: 18px;
-    box-shadow: 0 8px 20px rgb(0 0 0 / 0.055);
+    box-shadow: 0 6px 16px rgb(0 0 0 / 0.045);
   }
 
   .thread-composer-input {

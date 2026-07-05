@@ -448,10 +448,10 @@
               @click="onToggleGuidedTurn(entry.turnIndex)"
             >
               <span class="guided-turn-toggle-title">
-                {{ isGuidedTurnExpanded(entry.turnIndex) ? '收起引导式内容' : '查看引导式内容' }}
+                {{ isGuidedTurnExpanded(entry.turnIndex) ? '隐藏阶段回复' : '阶段回复' }}
               </span>
               <span class="guided-turn-toggle-meta">
-                {{ entry.hiddenCount }} 条阶段性回复<span v-if="guidedTurnDurationLabel(entry.turnIndex)"> · {{ guidedTurnDurationLabel(entry.turnIndex) }}</span>
+                {{ entry.hiddenCount }}条<span v-if="guidedTurnDurationLabel(entry.turnIndex)"> · {{ guidedTurnDurationLabel(entry.turnIndex) }}</span>
               </span>
             </button>
           </div>
@@ -5949,12 +5949,12 @@ onBeforeUnmount(() => {
 }
 
 .guided-turn-toggle {
-  @apply inline-flex max-w-full items-center gap-2 self-start border px-3 py-1.5 text-left transition-[background-color,border-color,color,box-shadow] duration-150;
+  @apply inline-flex max-w-full items-center gap-1.5 self-start border px-2 py-1 text-left transition-[background-color,border-color,color] duration-150;
   border-radius: var(--ui-radius-control);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
   color: var(--ui-text-secondary);
-  box-shadow: 0 8px 18px rgb(0 0 0 / 0.05);
+  box-shadow: none;
 }
 
 .guided-turn-toggle:hover {
@@ -6124,11 +6124,11 @@ onBeforeUnmount(() => {
 }
 
 .guided-turn-toggle-title {
-  @apply text-[12px] font-medium leading-none;
+  @apply text-[11px] font-medium leading-none;
 }
 
 .guided-turn-toggle-meta {
-  @apply rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none;
+  @apply rounded-full px-1 py-0.5 text-[10px] font-medium leading-none;
   background: var(--ui-bg-surface-muted);
   color: var(--ui-text-tertiary);
 }

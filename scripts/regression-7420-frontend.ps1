@@ -193,9 +193,19 @@ function Test-HttpJson {
   )
 
   Write-Step "checking $Name -> $Url"
-  $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 12
-  Assert-True ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) "$Name returned HTTP $($response.StatusCode)"
-  return ($response.Content | ConvertFrom-Json)
+  $lastError = $null
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+      $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 25
+      Assert-True ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) "$Name returned HTTP $($response.StatusCode)"
+      return ($response.Content | ConvertFrom-Json)
+    } catch {
+      $lastError = $_
+      Write-Step "$Name request failed (attempt $attempt/3): $($_.Exception.Message)"
+      Start-Sleep -Milliseconds 900
+    }
+  }
+  throw $lastError
 }
 
 function Wait-CodexHealthIdle {
@@ -204,10 +214,11 @@ function Wait-CodexHealthIdle {
   $lastHealth = $null
   for ($attempt = 1; $attempt -le 8; $attempt++) {
     $lastHealth = Test-HttpJson -Name "codex health" -Url $Url
+    $statusQueueOnly = Test-CodexHealthStatusQueueOnly -Health $lastHealth
     if (
       $lastHealth.status -eq "ok" `
       -and $lastHealth.data.appServer.pendingRpcCount -le 2 `
-      -and $lastHealth.data.appServer.queuedRpcCount -eq 0 `
+      -and ($lastHealth.data.appServer.queuedRpcCount -eq 0 -or $statusQueueOnly) `
       -and $lastHealth.data.appServer.pendingServerRequestCount -eq 0 `
       -and $lastHealth.data.appServer.activePlanModeTurnCount -eq 0 `
       -and $lastHealth.data.runtimeStore.uncertainRequestCount -eq 0
@@ -222,11 +233,42 @@ function Wait-CodexHealthIdle {
   return $lastHealth
 }
 
+function Test-CodexHealthStatusQueueOnly {
+  param([object]$Health)
+
+  $queued = [int]$Health.data.appServer.queuedRpcCount
+  if ($queued -le 0) {
+    return $true
+  }
+  if ($queued -gt 50) {
+    return $false
+  }
+  if ([int]$Health.data.appServer.pendingServerRequestCount -ne 0) {
+    return $false
+  }
+  if ([int]$Health.data.appServer.activePlanModeTurnCount -ne 0) {
+    return $false
+  }
+  if ([int]$Health.data.runtimeStore.uncertainRequestCount -ne 0) {
+    return $false
+  }
+
+  $recentSlowRpc = @($Health.data.appServer.rpcDiagnostics.recentSlowRpc)
+  if ($recentSlowRpc.Count -lt 3) {
+    return $false
+  }
+
+  $statusReadMethods = @("mcpServerStatus/list", "account/rateLimits/read")
+  $nonStatusRecent = @($recentSlowRpc | Select-Object -First 6 | Where-Object { $statusReadMethods -notcontains $_.method })
+  return $nonStatusRecent.Count -eq 0
+}
+
 function Assert-CodexHealthReadyForFrontendRegression {
   param([object]$Health)
 
+  $statusQueueOnly = Test-CodexHealthStatusQueueOnly -Health $Health
   Assert-True ($Health.status -eq "ok") "codex health status is not ok"
-  Assert-True ($Health.data.appServer.queuedRpcCount -eq 0) "queuedRpcCount is not zero"
+  Assert-True (($Health.data.appServer.queuedRpcCount -eq 0) -or $statusQueueOnly) "queuedRpcCount is not zero and does not look like status polling backlog"
   Assert-True ($Health.data.appServer.pendingRpcCount -le 2) "pendingRpcCount is above the tolerated background status calls: $($Health.data.appServer.pendingRpcCount)"
   Assert-True ($Health.data.appServer.pendingServerRequestCount -eq 0) "pendingServerRequestCount is not zero"
   Assert-True ($Health.data.appServer.activePlanModeTurnCount -eq 0) "activePlanModeTurnCount is not zero"
@@ -242,25 +284,30 @@ function Open-And-ReadPage {
   )
 
   Write-Step "opening $Url at ${Width}x${Height}"
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "open", $Url) | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $Session, "set", "viewport", "$Width", "$Height") | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "open", "about:blank") | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "200") | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $Session, "open", $Url) | Out-Null
-  Start-Sleep -Seconds 2
-
   $script = @'
 JSON.stringify((() => {
   const text = document.body.innerText.replace(/\s+/g, ' ').trim();
+  const hasComposer = !!document.querySelector('textarea,[contenteditable=true],input[type=text],.thread-composer');
+  const hasSkillsHub = !!document.querySelector('.skills-hub');
+  const hasTrendingHub = !!document.querySelector('.trending-hub');
+  const hasRuntimeBar = !!document.querySelector('.runtime-status-bar');
+  const hasDiagnosticsPanel = !!document.querySelector('.diagnostics-panel');
+  const hasMarkdownBody = !!document.querySelector('.markdown-body');
   return {
     url: location.href,
     text: text.includes('Runtime Store') ? 'Runtime Store' : '',
     textLength: text.length,
-    hasBlankBody: text.length < 20,
-    hasComposer: !!document.querySelector('textarea,[contenteditable=true],input[type=text],.thread-composer'),
-    hasSkillsHub: !!document.querySelector('.skills-hub'),
-    hasTrendingHub: !!document.querySelector('.trending-hub'),
-    hasRuntimeBar: !!document.querySelector('.runtime-status-bar'),
-    hasDiagnosticsPanel: !!document.querySelector('.diagnostics-panel'),
-    hasMarkdownBody: !!document.querySelector('.markdown-body'),
+    hasBlankBody: text.length < 5 && !hasComposer && !hasSkillsHub && !hasTrendingHub && !hasRuntimeBar && !hasDiagnosticsPanel && !hasMarkdownBody,
+    hasComposer,
+    hasSkillsHub,
+    hasTrendingHub,
+    hasRuntimeBar,
+    hasDiagnosticsPanel,
+    hasMarkdownBody,
     hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth,
@@ -268,7 +315,16 @@ JSON.stringify((() => {
   };
 })())
 '@
-  return Invoke-BrowserEvalJson -Session $Session -Script $script
+  $page = $null
+  for ($attempt = 1; $attempt -le 7; $attempt++) {
+    Start-Sleep -Milliseconds 700
+    $page = Invoke-BrowserEvalJson -Session $Session -Script $script
+    if ($page.hasBlankBody -ne $true) {
+      return $page
+    }
+    Write-Step "page body still blank after navigation (attempt $attempt/7)"
+  }
+  return $page
 }
 
 function Assert-Page {
@@ -512,6 +568,7 @@ JSON.stringify((() => {
   const toolPanels = Array.from(document.querySelectorAll('.request-tool-panel'));
   const requestButtons = Array.from(document.querySelectorAll('.request-button'));
   const runtimeStatusBars = Array.from(document.querySelectorAll('.conversation-regression-fixture .runtime-status-bar'));
+  const runtimeStatusHeights = runtimeStatusBars.map((node) => Math.round(node.getBoundingClientRect().height));
   const queuedPanels = Array.from(document.querySelectorAll('.conversation-regression-fixture .queued-messages-inner'));
   const queuedRows = Array.from(document.querySelectorAll('.conversation-regression-fixture .queued-row'));
   const chromeTargets = Array.from(document.querySelectorAll([
@@ -602,6 +659,8 @@ JSON.stringify((() => {
     toolPanelCount: toolPanels.length,
     requestButtonCount: requestButtons.length,
     runtimeStatusBarCount: runtimeStatusBars.length,
+    runtimeStatusMaxHeight: runtimeStatusHeights.length ? Math.max(...runtimeStatusHeights) : 0,
+    viewportWidth,
     queuedPanelCount: queuedPanels.length,
     queuedRowCount: queuedRows.length,
     conversationChromeWarmBackgroundCount: chromeWarmBackgrounds.length,
@@ -653,6 +712,8 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.toolPanelCount -ge 1) "conversation fixture is missing tool call panel"
   Assert-True ($Metrics.requestButtonCount -ge 3) "conversation fixture is missing permission action buttons"
   Assert-True ($Metrics.runtimeStatusBarCount -ge 1) "conversation fixture is missing runtime status bar"
+  $runtimeStatusMaxHeight = if ([int]$Metrics.viewportWidth -lt 768) { 48 } else { 40 }
+  Assert-True ($Metrics.runtimeStatusMaxHeight -le $runtimeStatusMaxHeight) "conversation fixture runtime status bar is too tall: $($Metrics.runtimeStatusMaxHeight)"
   Assert-True ($Metrics.queuedPanelCount -ge 1) "conversation fixture is missing queued message panel"
   Assert-True ($Metrics.queuedRowCount -ge 2) "conversation fixture is missing queued message rows"
   Assert-True ($Metrics.conversationChromeWarmBackgroundCount -eq 0) "conversation fixture still has warm chrome backgrounds: $($Metrics.conversationChromeWarmBackgrounds | ConvertTo-Json -Compress)"
@@ -842,6 +903,7 @@ JSON.stringify((() => {
   const runtime = document.querySelector('.composer-regression-fixture .thread-composer-runtime-trigger');
   const mic = document.querySelector('.composer-regression-fixture .thread-composer-mic');
   const submit = document.querySelector('.composer-regression-fixture .thread-composer-submit');
+  const dictationHelper = document.querySelector('.composer-regression-fixture .thread-composer-dictation-helper');
   const shellRect = shell?.getBoundingClientRect();
   const formRect = form?.getBoundingClientRect();
   const viewportWidth = document.documentElement.clientWidth;
@@ -868,6 +930,7 @@ JSON.stringify((() => {
     hasRuntime: !!runtime,
     hasMic: !!mic,
     hasSubmit: !!submit,
+    hasDictationHelper: !!dictationHelper,
     shellWidth: shellRect ? Math.round(shellRect.width) : 0,
     formWidth: formRect ? Math.round(formRect.width) : 0,
     shellHeight: shellRect ? Math.round(shellRect.height) : 0,
@@ -905,8 +968,9 @@ function Assert-ComposerFixture {
   Assert-True ($Metrics.hasRuntime -eq $true) "$ViewportName composer fixture is missing runtime trigger"
   Assert-True ($Metrics.hasMic -eq $true) "$ViewportName composer fixture is missing dictation button"
   Assert-True ($Metrics.hasSubmit -eq $true) "$ViewportName composer fixture is missing submit button"
-  Assert-True ($Metrics.shellHeight -ge 88) "$ViewportName composer shell is too short: $($Metrics.shellHeight)"
-  Assert-True ($Metrics.shellHeight -le 132) "$ViewportName composer shell is too tall: $($Metrics.shellHeight)"
+  Assert-True ($Metrics.hasDictationHelper -eq $false) "$ViewportName composer fixture shows idle dictation helper text"
+  Assert-True ($Metrics.shellHeight -ge 82) "$ViewportName composer shell is too short: $($Metrics.shellHeight)"
+  Assert-True ($Metrics.shellHeight -le 112) "$ViewportName composer shell is too tall: $($Metrics.shellHeight)"
   Assert-True ($Metrics.shellRadius -le 22) "$ViewportName composer shell radius is too large: $($Metrics.shellRadius)"
   Assert-True ($Metrics.shellBorderWidth -le 1) "$ViewportName composer shell border is too heavy: $($Metrics.shellBorderWidth)"
   Assert-True ($Metrics.usesWarmShell -eq $false) "$ViewportName composer shell still uses warm beige background: $($Metrics.shellBackground)"

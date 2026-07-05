@@ -10,7 +10,7 @@
       </div>
     </div>
 
-    <ol class="runtime-status-phases" aria-label="任务状态阶段">
+    <ol v-if="showPhaseRail" class="runtime-status-phases" aria-label="任务状态阶段">
       <li
         v-for="(phase, index) in phases"
         :key="phase.key"
@@ -26,7 +26,7 @@
     </ol>
 
     <div class="runtime-status-actions">
-      <span v-if="metaLabel" class="runtime-status-meta">{{ metaLabel }}</span>
+      <span v-if="showMetaLabel && metaLabel" class="runtime-status-meta">{{ metaLabel }}</span>
       <button
         class="runtime-status-action"
         type="button"
@@ -133,7 +133,7 @@ const title = computed(() => {
   if (props.summary.executionState === 'failed') return '任务失败'
   if (props.summary.executionState === 'sync_degraded') return '状态已降级'
   if (props.summary.executionState === 'interrupted' || props.summary.executionState === 'stopped') return '任务已停止'
-  return '状态已收敛'
+  return '已同步'
 })
 
 const detail = computed(() => {
@@ -146,11 +146,13 @@ const detail = computed(() => {
   if (props.summary.executionState === 'stop_uncertain') return '停止请求已发出，正在核验任务是否仍在运行。'
   if (props.syncLagging || props.notificationStale) return '实时事件可能有延迟，页面会自动补同步。'
   if (props.connectionState === 'reconnecting') return '实时通道正在重连，恢复后会补齐事件。'
-  if (props.liveOverlay?.activityDetails?.length) return props.liveOverlay.activityDetails[0]
   if (props.summary.messageState === 'cached') return '当前先展示缓存消息，后台会继续补齐最新内容。'
-  if (props.summary.lastCompletedAtIso) return '最新结果已经落到当前会话。'
-  return '7420 后端状态、消息快照和前端显示一致。'
+  return ''
 })
+
+const showPhaseRail = computed(() => tone.value !== 'live')
+
+const showMetaLabel = computed(() => tone.value !== 'live')
 
 const metaLabel = computed(() => {
   if (props.summary.activeTurnId) return `turn ${props.summary.activeTurnId.slice(0, 8)}`
@@ -163,7 +165,7 @@ const metaLabel = computed(() => {
 @reference "tailwindcss";
 
 .runtime-status-bar {
-  @apply mx-auto flex w-full max-w-[var(--content-shell-max-width)] items-center gap-2 border-y px-3 py-2;
+  @apply mx-auto flex w-full max-w-[var(--content-shell-max-width)] items-center gap-2 border-y px-3 py-1;
   font-family: var(--font-sans-ui);
   border-color: var(--ui-border-subtle);
   background: color-mix(in srgb, var(--ui-bg-surface) 94%, transparent);
@@ -172,17 +174,17 @@ const metaLabel = computed(() => {
 }
 
 .runtime-status-primary {
-  @apply flex min-w-0 flex-1 items-center gap-2;
+  @apply flex min-w-0 flex-1 items-center gap-1.5;
 }
 
 .runtime-status-orb {
-  @apply relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full border;
+  @apply relative flex h-5 w-5 shrink-0 items-center justify-center rounded-full border;
   border-color: color-mix(in srgb, currentColor 20%, transparent);
   background: color-mix(in srgb, var(--ui-bg-surface) 78%, transparent);
 }
 
 .runtime-status-orb-core {
-  @apply h-3 w-3 rounded-full bg-current;
+  @apply h-2 w-2 rounded-full bg-current;
   animation: runtimeStatusPulse 1.4s ease-in-out infinite;
 }
 
@@ -191,7 +193,7 @@ const metaLabel = computed(() => {
 }
 
 .runtime-status-title {
-  @apply m-0 truncate text-sm font-semibold;
+  @apply m-0 truncate text-xs font-semibold;
 }
 
 .runtime-status-detail {
@@ -239,7 +241,7 @@ const metaLabel = computed(() => {
 }
 
 .runtime-status-action {
-  @apply inline-flex min-h-8 items-center justify-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold transition-[background-color,border-color,color,transform] duration-150 disabled:cursor-not-allowed disabled:opacity-65;
+  @apply inline-flex min-h-7 items-center justify-center gap-1.5 rounded-full border px-2 text-xs font-semibold transition-[background-color,border-color,color,transform] duration-150 disabled:cursor-not-allowed disabled:opacity-65;
   border-color: var(--ui-border-subtle);
   background: color-mix(in srgb, var(--ui-bg-surface) 84%, transparent);
   color: var(--ui-text-secondary);
@@ -302,11 +304,11 @@ const metaLabel = computed(() => {
 
 @media (max-width: 767px) {
   .runtime-status-bar {
-    @apply gap-2 px-2.5 py-1.5;
+    @apply gap-1.5 px-2.5 py-1;
   }
 
   .runtime-status-title {
-    @apply text-[13px];
+    @apply text-[12px];
   }
 
   .runtime-status-action {
