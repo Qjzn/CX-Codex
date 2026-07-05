@@ -224,6 +224,72 @@ function Test-HttpJson {
   throw $lastError
 }
 
+function Get-WorkspaceProjectName {
+  param([string]$Path)
+
+  $normalized = ([string]$Path).Trim().TrimEnd("\", "/")
+  if ([string]::IsNullOrWhiteSpace($normalized)) {
+    return ""
+  }
+
+  $parts = $normalized -split '[\\/]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  if ($parts.Count -eq 0) {
+    return $normalized
+  }
+  return [string]$parts[$parts.Count - 1]
+}
+
+function Read-HomeWorkspaceProjectMetrics {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const groups = Array.from(document.querySelectorAll('.project-group')).map((node) => ({
+    projectName: node.getAttribute('data-project-name') || '',
+    text: (node.textContent || '').replace(/\s+/g, ' ').trim(),
+    threadRowCount: node.querySelectorAll('.thread-row').length,
+    newThreadButtonCount: node.querySelectorAll('.thread-start-button').length
+  }));
+  return { groupCount: groups.length, groups };
+})())
+'@
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-WorkspaceRootProjectParity {
+  param(
+    [object]$RootsState,
+    [object]$Metrics
+  )
+
+  $workspaceRoots = @($RootsState.data.order | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+  if ($workspaceRoots.Count -eq 0) {
+    return
+  }
+
+  $labelsByRoot = @{}
+  foreach ($property in @($RootsState.data.labels.PSObject.Properties)) {
+    $labelsByRoot[[string]$property.Name] = [string]$property.Value
+  }
+
+  $expectedRoots = @($workspaceRoots | Select-Object -First ([Math]::Min(3, $workspaceRoots.Count)))
+  Assert-True ($Metrics.groupCount -ge $expectedRoots.Count) "home sidebar project group count is below workspace root count sample"
+
+  for ($index = 0; $index -lt $expectedRoots.Count; $index++) {
+    $rootPath = [string]$expectedRoots[$index]
+    $expectedProjectName = Get-WorkspaceProjectName -Path $rootPath
+    $expectedLabel = if ($labelsByRoot.ContainsKey($rootPath)) { $labelsByRoot[$rootPath] } else { $expectedProjectName }
+    $group = $Metrics.groups[$index]
+
+    Assert-True ([string]$group.projectName -eq $expectedProjectName) "home sidebar project order drifted at index $index; expected $expectedProjectName from workspace root $rootPath, got $($group.projectName)"
+    Assert-True ([string]$group.text -like "*$expectedLabel*") "home sidebar project label drifted for $rootPath; expected label $expectedLabel"
+    Assert-True ([int]$group.newThreadButtonCount -eq 1) "home sidebar project $expectedProjectName is missing project-level new-thread action"
+    if ([int]$group.threadRowCount -eq 0) {
+      Assert-True ([string]$group.text -like "*暂无会话*") "home sidebar empty workspace project $expectedProjectName is missing empty-state text"
+    }
+  }
+}
+
 function Wait-CodexHealthIdle {
   param([string]$Url)
 
@@ -1148,9 +1214,11 @@ try {
   $diagnostics = Test-HttpJson -Name "diagnostics api" -Url "$($BaseUrl)/codex-api/diagnostics"
   Assert-True ($diagnostics.status -eq "ok") "diagnostics status is not ok"
   Assert-True ($null -ne $diagnostics.data.runtimeStore) "diagnostics is missing runtimeStore"
+  $workspaceRootsState = Test-HttpJson -Name "workspace roots state" -Url "$($BaseUrl)/codex-api/workspace-roots-state"
 
   $homePage = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $DesktopWidth -Height $DesktopHeight
   Assert-Page -Page $homePage -Name "home desktop" -RequireComposer
+  Assert-WorkspaceRootProjectParity -RootsState $workspaceRootsState -Metrics (Read-HomeWorkspaceProjectMetrics -Session $session)
   Add-RegressionResult -Name "home-desktop" -Page $homePage
   Invoke-AgentBrowser -Arguments @("--session", $session, "click", ".sidebar-settings-button") | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "200") | Out-Null

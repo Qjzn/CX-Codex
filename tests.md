@@ -9153,3 +9153,33 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p0-real-workspace-root-sync` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 screenshot artifact: `output/regression-7420/p0-real-workspace-root-sync/sidebar-rows-fixture-phone.png`.
+
+### Feature: Automated workspace root project parity regression
+
+#### Prerequisites
+- Local 7420 is running from `E:\javaword\CXCodex\codexui`.
+- `/codex-api/workspace-roots-state` returns the current Codex Desktop workspace root order and labels.
+- `agent-browser` is available in PATH.
+
+#### Steps
+1. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName automated-workspace-root-parity`.
+2. Confirm the script checks `/health`, `/codex-api/health`, `/codex-api/diagnostics`, and `/codex-api/workspace-roots-state`.
+3. Confirm the home desktop check reads `.project-group` rows from the real 7420 page.
+4. Confirm the first sampled project rows match the first workspace roots by project name.
+5. Confirm labeled roots such as `ZXSAAS-mini` match their workspace root label.
+6. Confirm each sampled project row has one project-level new-thread action.
+7. Confirm sampled empty workspace projects show `暂无会话`.
+
+#### Expected Results
+- The frontend regression fails if desktop workspace roots stop appearing at the top of the home sidebar in the same order.
+- The regression fails if an empty workspace-root project loses its empty-state text or new-thread action.
+- The assertion is dynamic and follows the current `/codex-api/workspace-roots-state` response instead of hard-coding `codexui`.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/automated-workspace-root-parity/` when `-CaptureScreenshots` is used.
+- To roll back, remove `Read-HomeWorkspaceProjectMetrics`, `Assert-WorkspaceRootProjectParity`, the `/codex-api/workspace-roots-state` check from `scripts/regression-7420-frontend.ps1`, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName automated-workspace-root-parity` passed. The run checked `/codex-api/workspace-roots-state` before home rendering, asserted the real home sidebar project rows match the first sampled workspace roots, then passed home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 screenshot artifact: `output/regression-7420/automated-workspace-root-parity/home-desktop.png`.
