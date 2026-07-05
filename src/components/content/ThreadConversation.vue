@@ -38,7 +38,7 @@
       >
       <section class="conversation-process-panel">
         <article
-          v-if="liveOverlay"
+          v-if="showInlineLiveOverlay && liveOverlay"
           class="live-overlay-inline"
           :class="{
             'live-overlay-inline-compact': !shouldRenderDetailedLiveOverlay,
@@ -1188,6 +1188,7 @@ const props = defineProps<{
   isRollingBack?: boolean
   showEmptyThreadActions?: boolean
   isThreadSwitching?: boolean
+  compactRuntimeChrome?: boolean
   favoriteMessageIds?: string[]
 }>()
 
@@ -1407,9 +1408,6 @@ const visibleMessageEntries = computed<ConversationMessageEntry[]>(() => (
 ))
 const hiddenEarlierMessageCount = computed(() => visibleMessageStartIndex.value)
 const hasHiddenEarlierMessages = computed(() => hiddenEarlierMessageCount.value > 0)
-const showProcessPanel = computed(() => (
-  !!props.liveOverlay || props.pendingRequests.length > 0
-))
 
 const liveOverlayCommandMessage = computed<UiMessage | null>(() => {
   const overlay = props.liveOverlay
@@ -1594,7 +1592,10 @@ const hasRenderableConversation = computed(() => (
   props.liveOverlay !== null
 ))
 const isThreadSwitchingState = computed(() => props.isThreadSwitching === true && hasRenderableConversation.value)
-const showLoadingIndicator = computed(() => props.isLoading)
+const showLoadingIndicator = computed(() => (
+  props.isLoading &&
+  !(props.compactRuntimeChrome === true && props.isThreadSwitching === true && hasRenderableConversation.value)
+))
 const loadingIndicatorText = computed(() => {
   if (props.isThreadSwitching === true) return '正在切换到这个会话...'
   return hasRenderableConversation.value ? '正在同步最新内容...' : '正在载入会话...'
@@ -1618,6 +1619,14 @@ const hasLiveOverlayDetail = computed<boolean>(() => {
     liveOverlayDetails(overlay).length > 0,
   )
 })
+const showInlineLiveOverlay = computed<boolean>(() => {
+  if (!props.liveOverlay) return false
+  if (props.compactRuntimeChrome !== true) return true
+  return hasLiveOverlayDetail.value
+})
+const showProcessPanel = computed(() => (
+  showInlineLiveOverlay.value || props.pendingRequests.length > 0
+))
 const shouldRenderDetailedLiveOverlay = computed<boolean>(() => {
   const overlay = props.liveOverlay
   if (!overlay) return false

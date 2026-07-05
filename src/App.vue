@@ -195,18 +195,15 @@
               aria-label="设置"
             >
               <div v-if="isSettingsSheetMode" class="sidebar-settings-mobile-handle" aria-hidden="true" />
-              <div v-if="isSettingsSheetMode" class="sidebar-settings-mobile-header">
-                <div class="sidebar-settings-mobile-copy">
-                  <p class="sidebar-settings-mobile-title">设置</p>
-                  <p class="sidebar-settings-mobile-subtitle">向上滑动查看全部内容</p>
-                </div>
+              <div class="sidebar-settings-panel-header">
+                <p class="sidebar-settings-panel-title">设置</p>
                 <button
-                  class="sidebar-settings-mobile-close"
+                  class="sidebar-settings-panel-close"
                   type="button"
                   aria-label="关闭设置"
                   @click="isSettingsOpen = false"
                 >
-                  <IconTablerX class="sidebar-settings-mobile-close-icon" />
+                  <IconTablerX class="sidebar-settings-panel-close-icon" />
                 </button>
               </div>
               <p class="sidebar-settings-section-title">基础设置</p>
@@ -565,7 +562,24 @@
               </span>
               <span class="content-context-badge-number">{{ contentContextPercentLabel }}</span>
             </span>
-              <div v-if="showHeaderStatusStrip" class="content-status-strip">
+              <RuntimeStatusBar
+                v-if="showRuntimeStatusBar"
+                class="content-runtime-status content-runtime-status--header"
+                variant="header"
+                :summary="selectedThreadRuntimeStatus"
+                :live-overlay="selectedLiveOverlay"
+                :pending-request-count="selectedThreadServerRequests.length"
+                :is-sending="isSendingMessage"
+                :is-loading="isLoadingMessages"
+                :is-refreshing="isManualThreadRefreshRunning"
+                :sync-lagging="syncLagging"
+                :sync-error="syncError"
+                :notification-stale="notificationStale"
+                :connection-state="realtimeConnectionState"
+                @refresh="onRefreshSelectedThreadContent"
+                @stop="onInterruptTurn('runtime-status-stop')"
+              />
+              <div v-else-if="showHeaderStatusStrip" class="content-status-strip">
                 <span class="content-status-pill" :data-tone="contentStatusTone">
                   <span class="content-status-pill-label">{{ contentStatusCaption }}</span>
                   <span>{{ contentStatusLabel }}</span>
@@ -598,23 +612,6 @@
             </div>
           </template>
         </ContentHeader>
-
-        <RuntimeStatusBar
-          v-if="showRuntimeStatusBar"
-          class="content-runtime-status"
-          :summary="selectedThreadRuntimeStatus"
-          :live-overlay="selectedLiveOverlay"
-          :pending-request-count="selectedThreadServerRequests.length"
-          :is-sending="isSendingMessage"
-          :is-loading="isLoadingMessages"
-          :is-refreshing="isManualThreadRefreshRunning"
-          :sync-lagging="syncLagging"
-          :sync-error="syncError"
-          :notification-stale="notificationStale"
-          :connection-state="realtimeConnectionState"
-          @refresh="onRefreshSelectedThreadContent"
-          @stop="onInterruptTurn('runtime-status-stop')"
-        />
 
         <section class="content-body">
           <template v-if="isWorkbenchRoute">
@@ -735,6 +732,7 @@
                   :pending-requests="displayedThreadPendingRequests"
                   :favorite-message-ids="favoriteMessageIdsForDisplayedThread"
                   :is-thread-switching="isThreadContentSwitching"
+                  :compact-runtime-chrome="showRuntimeStatusBar"
                   :show-empty-thread-actions="isRouteOnlyEmptyThread"
                   :is-turn-in-progress="isSelectedThreadInProgress"
                   :is-rolling-back="isRollingBack"
@@ -4338,7 +4336,7 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-top-shell {
-  @apply flex flex-col gap-1.5 border border-transparent bg-transparent px-1 py-1;
+  @apply flex flex-col gap-1 border border-transparent bg-transparent px-1 py-1;
   border-radius: var(--ui-radius-card);
   box-shadow: none;
 }
@@ -4358,12 +4356,12 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-primary-actions {
-  @apply flex flex-col gap-0.5;
+  @apply grid grid-cols-2 gap-1;
 }
 
 .sidebar-primary-action {
-  @apply flex min-h-8 items-center gap-2 border border-transparent bg-transparent px-2.5 py-1.5 text-[13px] font-medium transition-[background-color,border-color,color] duration-150;
-  border-radius: var(--ui-radius-card);
+  @apply flex min-h-7 items-center justify-center gap-1.5 border border-transparent bg-transparent px-2 py-1 text-[12px] font-medium transition-[background-color,border-color,color] duration-150;
+  border-radius: var(--ui-radius-control);
   color: var(--ui-text-secondary);
 }
 
@@ -4480,12 +4478,12 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-explore-nav {
-  @apply flex flex-col gap-0.5;
+  @apply flex flex-col gap-px;
 }
 
 .sidebar-skills-link {
-  @apply mx-0 flex min-h-8 items-center gap-2 border border-transparent bg-transparent px-2.5 py-1.5 text-[13px] font-medium transition-[background-color,border-color,color] duration-150 cursor-pointer;
-  border-radius: var(--ui-radius-card);
+  @apply mx-0 flex min-h-7 items-center gap-2 border border-transparent bg-transparent px-2.5 py-1 text-[13px] font-medium transition-[background-color,border-color,color] duration-150 cursor-pointer;
+  border-radius: var(--ui-radius-control);
   color: var(--ui-text-secondary);
 }
 
@@ -4589,7 +4587,11 @@ async function submitFirstMessageForNewThread(
 }
 
 .content-runtime-status {
-  @apply shrink-0;
+  @apply min-w-0 shrink-0;
+}
+
+.content-runtime-status--header {
+  @apply flex-1;
 }
 
 .content-favorites-button {
@@ -4626,7 +4628,7 @@ async function submitFirstMessageForNewThread(
 }
 
 .content-meta-row {
-  @apply flex w-full min-w-0 flex-nowrap items-center gap-2;
+  @apply flex w-full min-w-0 flex-nowrap items-center gap-1.5;
 }
 
 .content-context-badge {
@@ -4978,11 +4980,15 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-panel {
-  @apply mb-1 border overflow-hidden;
+  @apply mb-1 border;
   border-radius: var(--ui-radius-composer);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
   box-shadow: 0 10px 28px rgb(0 0 0 / 0.06);
+  max-height: min(72dvh, 38rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .sidebar-settings-mobile-backdrop {
@@ -5009,46 +5015,37 @@ async function submitFirstMessageForNewThread(
   background: var(--ui-border-strong);
 }
 
-.sidebar-settings-mobile-header {
-  @apply sticky top-0 z-[1] flex items-center justify-between gap-3 px-4 pb-2 pt-3;
+.sidebar-settings-panel-header {
+  @apply sticky top-0 z-[1] flex items-center justify-between gap-3 px-3 py-2;
   background: color-mix(in srgb, var(--ui-bg-surface) 96%, transparent);
   border-bottom: 1px solid var(--ui-border-subtle);
 }
 
-.sidebar-settings-mobile-copy {
-  @apply min-w-0 flex flex-col gap-0.5;
-}
-
-.sidebar-settings-mobile-title {
-  @apply m-0 text-sm font-semibold;
+.sidebar-settings-panel-title {
+  @apply m-0 min-w-0 truncate text-sm font-semibold;
   color: var(--ui-text-primary);
 }
 
-.sidebar-settings-mobile-subtitle {
-  @apply m-0 text-[11px] leading-4;
-  color: var(--ui-text-tertiary);
-}
-
-.sidebar-settings-mobile-close {
-  @apply inline-flex h-11 w-11 shrink-0 items-center justify-center border transition-colors duration-100;
+.sidebar-settings-panel-close {
+  @apply inline-flex h-7 w-7 shrink-0 items-center justify-center border transition-colors duration-100;
   border-radius: var(--ui-radius-control);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
   color: var(--ui-text-secondary);
 }
 
-.sidebar-settings-mobile-close:hover,
-.sidebar-settings-mobile-close:focus-visible {
+.sidebar-settings-panel-close:hover,
+.sidebar-settings-panel-close:focus-visible {
   background: var(--ui-bg-row-hover);
   color: var(--ui-text-primary);
 }
 
-.sidebar-settings-mobile-close-icon {
-  @apply h-4.5 w-4.5;
+.sidebar-settings-panel-close-icon {
+  @apply h-4 w-4;
 }
 
 .sidebar-settings-row {
-  @apply flex items-center justify-between w-full px-3 py-2.5 text-sm border-0 bg-transparent transition-colors duration-150 cursor-pointer;
+  @apply flex items-center justify-between w-full px-3 py-2 text-sm border-0 bg-transparent transition-colors duration-150 cursor-pointer;
   color: var(--ui-text-secondary);
 }
 
@@ -5080,17 +5077,17 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-section {
-  @apply border-t py-1;
+  @apply border-t py-0.5;
   border-color: var(--ui-border-subtle);
 }
 
 .sidebar-settings-section-title {
-  @apply m-0 px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-[0.12em];
+  @apply m-0 px-3 pt-1.5 pb-0.5 text-[11px] font-semibold uppercase tracking-[0.08em];
   color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-hint {
-  @apply m-0 px-3 py-1.5 text-[11px] leading-4;
+  @apply m-0 px-3 py-1 text-[11px] leading-4;
   color: var(--ui-text-tertiary);
 }
 
@@ -5100,6 +5097,10 @@ async function submitFirstMessageForNewThread(
 
 .sidebar-settings-hint-compact {
   @apply px-1 py-1;
+}
+
+.sidebar-settings-hint:not(.sidebar-settings-hint-status):not(.sidebar-settings-hint-compact) {
+  display: none;
 }
 
 .sidebar-settings-language-dropdown {
@@ -5259,12 +5260,12 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-about {
-  @apply border-t px-3 py-2.5 flex flex-col gap-2;
+  @apply border-t px-3 py-2 flex flex-col gap-1.5;
   border-color: var(--ui-border-subtle);
 }
 
 .sidebar-settings-brand-card {
-  @apply flex items-center gap-3 border px-3 py-3;
+  @apply flex items-center gap-2 border px-2.5 py-2;
   border-radius: var(--ui-radius-card);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface-muted);
@@ -5272,7 +5273,7 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-brand-logo {
-  @apply h-12 w-12 shrink-0 border object-cover;
+  @apply h-8 w-8 shrink-0 border object-cover;
   border-radius: var(--ui-radius-control);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
@@ -5284,17 +5285,17 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-brand-kicker {
-  @apply text-[10px] font-semibold uppercase tracking-[0.14em];
+  @apply text-[9px] font-semibold uppercase tracking-[0.08em];
   color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-brand-title {
-  @apply text-[15px] leading-5 font-semibold;
+  @apply text-[13px] leading-4 font-semibold;
   color: var(--ui-text-primary);
 }
 
 .sidebar-settings-brand-subtitle {
-  @apply text-[11px] leading-4;
+  @apply hidden text-[11px] leading-4;
   color: var(--ui-text-secondary);
 }
 
@@ -5303,7 +5304,7 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-about-trigger {
-  @apply min-w-0 flex flex-1 items-center justify-between gap-3 border px-3 py-2 text-left transition-colors duration-100 cursor-pointer;
+  @apply min-w-0 flex flex-1 items-center justify-between gap-2 border px-2.5 py-1.5 text-left transition-colors duration-100 cursor-pointer;
   border-radius: var(--ui-radius-control);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
@@ -5344,7 +5345,7 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-github-button {
-  @apply inline-flex min-h-9 shrink-0 items-center justify-center rounded-full border border-[#cbe7e1] bg-[#f0fdfa] px-3 text-xs font-semibold text-[#0f766e] transition-colors duration-100 hover:border-[#99f6e4] hover:bg-[#ccfbf1] hover:text-[#115e59] cursor-pointer;
+  @apply inline-flex min-h-8 shrink-0 items-center justify-center rounded-full border border-[#cbe7e1] bg-[#f0fdfa] px-3 text-xs font-semibold text-[#0f766e] transition-colors duration-100 hover:border-[#99f6e4] hover:bg-[#ccfbf1] hover:text-[#115e59] cursor-pointer;
 }
 
 .sidebar-settings-github-button:disabled {

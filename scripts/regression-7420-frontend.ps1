@@ -372,6 +372,7 @@ function Read-SettingsPanelMetrics {
 JSON.stringify((() => {
   const panel = document.querySelector('.sidebar-settings-panel');
   const brandCard = document.querySelector('.sidebar-settings-brand-card');
+  const closeButton = document.querySelector('.sidebar-settings-panel-close');
   const inputs = Array.from(document.querySelectorAll('.sidebar-settings-input, .sidebar-settings-code, .sidebar-settings-copy-button, .sidebar-settings-language-dropdown .composer-dropdown-trigger'));
   const panelRect = panel?.getBoundingClientRect();
   const panelStyle = panel ? window.getComputedStyle(panel) : null;
@@ -398,6 +399,7 @@ JSON.stringify((() => {
   return {
     hasPanel: !!panel,
     hasBrandCard: !!brandCard,
+    hasCloseButton: !!closeButton,
     panelBackground: panelStyle?.backgroundColor || '',
     panelRadius: panelStyle ? Number.parseFloat(panelStyle.borderTopLeftRadius || '0') : 0,
     panelBorderWidth: panelStyle ? Number.parseFloat(panelStyle.borderTopWidth || '0') : 0,
@@ -419,6 +421,7 @@ function Assert-SettingsPanel {
 
   Assert-True ($Metrics.hasPanel -eq $true) "settings panel did not open"
   Assert-True ($Metrics.hasBrandCard -eq $true) "settings panel is missing about/brand block"
+  Assert-True ($Metrics.hasCloseButton -eq $true) "settings panel is missing compact close button"
   Assert-True ($Metrics.panelRadius -le 22) "settings panel radius is too large: $($Metrics.panelRadius)"
   Assert-True ($Metrics.panelBorderWidth -le 1) "settings panel border is too heavy: $($Metrics.panelBorderWidth)"
   Assert-True ($Metrics.brandRadius -le 8) "settings brand block radius is too large: $($Metrics.brandRadius)"
@@ -490,6 +493,7 @@ JSON.stringify((() => {
     hasPrimaryActions: !!primaryActions,
     primaryActionsDisplay: primaryActionsStyle?.display || '',
     primaryActionsFlexDirection: primaryActionsStyle?.flexDirection || '',
+    primaryActionsGridTemplateColumns: primaryActionsStyle?.gridTemplateColumns || '',
     primaryActionCount: primaryActionRows.length,
     primaryActionIconCount: primaryActionIcons.length,
     primaryActionMaxRadius: primaryActionStyles.length ? Math.max(...primaryActionStyles.map((item) => item.radius)) : 0,
@@ -529,19 +533,19 @@ function Assert-FoldableShell {
   Assert-True ($Metrics.hasComposer -eq $true) "foldable shell is missing composer"
   Assert-True ($Metrics.hasSettingsPanel -eq $false) "foldable shell screenshot is polluted by an open settings panel"
   Assert-True ($Metrics.hasPrimaryActions -eq $true) "foldable shell is missing sidebar primary actions"
-  Assert-True ($Metrics.primaryActionsDisplay -eq "flex") "foldable sidebar primary actions are not flex: $($Metrics.primaryActionsDisplay)"
-  Assert-True ($Metrics.primaryActionsFlexDirection -eq "column") "foldable sidebar primary actions are not vertical: $($Metrics.primaryActionsFlexDirection)"
+  Assert-True ($Metrics.primaryActionsDisplay -eq "grid") "foldable sidebar primary actions are not compact grid: $($Metrics.primaryActionsDisplay)"
+  Assert-True (-not [string]::IsNullOrWhiteSpace($Metrics.primaryActionsGridTemplateColumns)) "foldable sidebar primary actions are missing grid columns"
   Assert-True ($Metrics.primaryActionCount -ge 2) "foldable sidebar primary actions are missing new/search entries"
   Assert-True ($Metrics.primaryActionIconCount -ge 2) "foldable sidebar primary actions are missing icons"
   Assert-True ($Metrics.primaryActionMaxRadius -le 10) "foldable sidebar primary actions are too rounded: $($Metrics.primaryActionMaxRadius)"
-  Assert-True ($Metrics.primaryActionMinHeight -ge 30) "foldable sidebar primary actions are too small: $($Metrics.primaryActionMinHeight)"
+  Assert-True ($Metrics.primaryActionMinHeight -ge 28) "foldable sidebar primary actions are too small: $($Metrics.primaryActionMinHeight)"
   Assert-True ($Metrics.hasCommandList -eq $true) "foldable shell is missing sidebar command list"
   Assert-True ($Metrics.commandListDisplay -eq "flex") "foldable sidebar command list is not flex: $($Metrics.commandListDisplay)"
   Assert-True ($Metrics.commandListFlexDirection -eq "column") "foldable sidebar command list is not vertical: $($Metrics.commandListFlexDirection)"
   Assert-True ($Metrics.commandLinkCount -ge 3) "foldable sidebar command list is missing entries"
   Assert-True ($Metrics.commandIconCount -ge 3) "foldable sidebar command list is missing icons"
   Assert-True ($Metrics.commandLinkMaxRadius -le 10) "foldable sidebar command rows are too rounded: $($Metrics.commandLinkMaxRadius)"
-  Assert-True ($Metrics.commandLinkMinHeight -ge 30) "foldable sidebar command rows are too small: $($Metrics.commandLinkMinHeight)"
+  Assert-True ($Metrics.commandLinkMinHeight -ge 28) "foldable sidebar command rows are too small: $($Metrics.commandLinkMinHeight)"
   Assert-True ($Metrics.sidebarWidth -ge 260) "foldable sidebar is too narrow: $($Metrics.sidebarWidth)"
   Assert-True ($Metrics.sidebarWidth -le 370) "foldable sidebar is too wide: $($Metrics.sidebarWidth)"
   Assert-True ($Metrics.sidebarRatio -le 0.42) "foldable sidebar takes too much width: $($Metrics.sidebarRatio)"

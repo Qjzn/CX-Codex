@@ -8862,3 +8862,44 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop with opened settings panel assertions, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop and phone `composer-shell-fixture`, desktop `conversation-blocks-fixture`, and phone `conversation-blocks-fixture-phone`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 fixture settings assertions: the home route opened the sidebar settings panel and verified panel/brand block presence, panel radius no larger than 22px, thin border, brand block radius no larger than 8px, zero sampled warm beige backgrounds, sampled control radius no larger than 22px, panel fitting inside the viewport, and no page-level horizontal overflow.
+
+### Feature: P4 compact app chrome layout
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The sidebar is visible on the desktop home route.
+- A real thread route can be opened for manual title/status inspection.
+
+#### Steps
+1. Open a thread page at a desktop viewport such as 1440x900.
+2. Confirm the thread title, cwd/context badge, runtime status, favorites, and recovery action share the top title/meta area.
+3. Confirm there is no second full-width runtime status strip between the header and conversation body.
+4. Confirm the header runtime status hides low-frequency phase, seq, and turn fields during normal synced/running states, while still exposing force recovery and stop when applicable.
+5. Confirm the conversation body does not duplicate simple thinking/writing/switching status cards when the header already shows the runtime state; detailed command output, permission requests, errors, and reasoning details may still render in the body.
+6. Open `http://127.0.0.1:7420/#/` at 884x1104 and confirm the left sidebar top actions use one compact two-column `新会话 / 搜索` row.
+7. Confirm 工作台、技能中心、GitHub 热门, and 运行诊断 remain visible but use compact continuous navigation rows.
+8. Click `设置`, confirm the panel opens with a visible close button in its title bar, then close it from that button.
+9. Confirm generic explanation text in settings is not visually competing with settings rows, while status feedback still appears when present.
+10. Run `git diff --check`.
+11. Run `npm.cmd run build:frontend`.
+12. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName compact-app-chrome-layout`.
+
+#### Expected Results
+- Thread status uses the existing title/header space instead of adding another row above the conversation.
+- Simple runtime progress is not duplicated in the conversation body when header runtime chrome is active.
+- Sidebar primary actions consume one compact row instead of two full navigation rows.
+- Settings panel can be closed from its own title bar on both desktop and mobile sheet layouts.
+- Browser regression passes with no page-level horizontal overflow.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/compact-app-chrome-layout/` when `-CaptureScreenshots` is used.
+- To roll back, revert `App.vue`, `RuntimeStatusBar.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 local service recovery: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted 7420 as PID 48492 after `/codex-api/health` timed out during one retry run; `/codex-api/health` then returned `status: ok`.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName compact-app-chrome-layout` passed for home desktop/foldable, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 manual thread DOM check: opened `http://127.0.0.1:7420/#/thread/019ea7cc-2558-7de2-a094-778c9268f3bc`; header runtime bars = 1, runtime bars outside header = 0, legacy header status strips = 0, body inline overlays/loading/process panels = 0.
+- 2026-07-05 screenshot artifacts: saved under `output/regression-7420/compact-app-chrome-layout/`, including `home-desktop.png`, `home-foldable.png`, and `thread-header-manual.png`.

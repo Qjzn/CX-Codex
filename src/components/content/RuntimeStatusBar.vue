@@ -1,5 +1,10 @@
 <template>
-  <section class="runtime-status-bar" :data-tone="tone" aria-live="polite">
+  <section
+    class="runtime-status-bar"
+    :class="{ 'runtime-status-bar--header': props.variant === 'header' }"
+    :data-tone="tone"
+    aria-live="polite"
+  >
     <div class="runtime-status-primary">
       <span class="runtime-status-orb" aria-hidden="true">
         <span class="runtime-status-orb-core" />
@@ -72,6 +77,7 @@ const props = defineProps<{
   syncError: string
   notificationStale: boolean
   connectionState: string
+  variant?: 'default' | 'header'
 }>()
 
 defineEmits<{
@@ -173,6 +179,14 @@ const metaLabel = computed(() => {
   box-shadow: 0 1px 0 color-mix(in srgb, var(--ui-bg-surface) 72%, transparent) inset;
 }
 
+.runtime-status-bar--header {
+  @apply mx-0 max-w-none border px-2 py-1;
+  border-radius: var(--ui-radius-control);
+  border-color: color-mix(in srgb, currentColor 16%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-bg-surface) 84%, transparent);
+  box-shadow: none;
+}
+
 .runtime-status-primary {
   @apply flex min-w-0 flex-1 items-center gap-1.5;
 }
@@ -199,6 +213,12 @@ const metaLabel = computed(() => {
 .runtime-status-detail {
   @apply m-0 hidden truncate text-xs leading-4 sm:block;
   color: var(--ui-text-tertiary);
+}
+
+.runtime-status-bar--header .runtime-status-detail,
+.runtime-status-bar--header .runtime-status-phases,
+.runtime-status-bar--header .runtime-status-meta {
+  display: none;
 }
 
 .runtime-status-phases {
@@ -246,6 +266,10 @@ const metaLabel = computed(() => {
   background: color-mix(in srgb, var(--ui-bg-surface) 84%, transparent);
   color: var(--ui-text-secondary);
   touch-action: manipulation;
+}
+
+.runtime-status-bar--header .runtime-status-action {
+  @apply min-h-6 px-2 text-[11px];
 }
 
 .runtime-status-action:hover {
@@ -317,6 +341,10 @@ const metaLabel = computed(() => {
 
   .runtime-status-action span {
     @apply sr-only;
+  }
+
+  .runtime-status-bar--header {
+    @apply px-1.5;
   }
 }
 
