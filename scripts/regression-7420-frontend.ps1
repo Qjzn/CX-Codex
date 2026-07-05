@@ -240,6 +240,44 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "conversation fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
 }
 
+function Assert-ConversationFixtureCopyInteraction {
+  param([string]$Session)
+
+  $stubScript = @'
+JSON.stringify((() => {
+  window.__cxCodexCopiedText = '';
+  const originalSetTimeout = window.setTimeout.bind(window);
+  window.setTimeout = (handler, timeout, ...args) => originalSetTimeout(handler, timeout === 1600 ? 10000 : timeout, ...args);
+  const existingClipboard = navigator.clipboard || {};
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      ...existingClipboard,
+      writeText: async (text) => {
+        window.__cxCodexCopiedText = String(text);
+      },
+    },
+  });
+  return { stubbed: true };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $stubScript | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "click", ".message-code-copy") | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "300") | Out-Null
+
+  $stateScript = @'
+JSON.stringify({
+  copiedText: window.__cxCodexCopiedText || '',
+  copiedButtonCount: Array.from(document.querySelectorAll('.message-code-copy')).filter((button) => button.textContent.includes('已复制')).length
+})
+'@
+  $state = Invoke-BrowserEvalJson -Session $Session -Script $stateScript
+  $copiedText = [string]$state.copiedText
+  Assert-True ($copiedText -like '*fixture-code-block*') "conversation fixture copy did not capture the code block body"
+  Assert-True ($copiedText -notlike '*```*') "conversation fixture copy included markdown fence markers"
+  Assert-True ([int]$state.copiedButtonCount -ge 1) "conversation fixture copy button did not show copied feedback"
+}
+
 function Add-RegressionResult {
   param(
     [string]$Name,
@@ -303,6 +341,7 @@ try {
   $fixture = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $DesktopWidth -Height $DesktopHeight
   Assert-Page -Page $fixture -Name "conversation blocks fixture desktop"
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session)
+  Assert-ConversationFixtureCopyInteraction -Session $session
   Add-RegressionResult -Name "conversation-blocks-fixture" -Page $fixture
 
   if (-not [string]::IsNullOrWhiteSpace($ThreadId)) {
