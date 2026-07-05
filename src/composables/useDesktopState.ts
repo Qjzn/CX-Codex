@@ -1146,7 +1146,7 @@ function createWorkspaceRootGroups(rootsState: WorkspaceRootsState): UiProjectGr
   const groups: UiProjectGroup[] = []
   const seen = new Set<string>()
 
-  for (const rootPath of rootsState.order) {
+  for (const rootPath of getOrderedWorkspaceRootPaths(rootsState)) {
     const projectName = toProjectNameFromWorkspaceRoot(rootPath)
     if (!projectName || seen.has(projectName)) continue
     seen.add(projectName)
@@ -1154,6 +1154,15 @@ function createWorkspaceRootGroups(rootsState: WorkspaceRootsState): UiProjectGr
   }
 
   return groups
+}
+
+function getOrderedWorkspaceRootPaths(rootsState: WorkspaceRootsState): string[] {
+  const ordered: string[] = []
+  for (const rootPath of [...rootsState.projectOrder, ...rootsState.order]) {
+    if (!rootPath || ordered.includes(rootPath)) continue
+    ordered.push(rootPath)
+  }
+  return ordered
 }
 
 function toOptimisticThreadTitle(message: string): string {
@@ -4787,7 +4796,7 @@ export function useDesktopState() {
       workspaceRootGroups.value = createWorkspaceRootGroups(rootsState)
       const groupsWithWorkspaceRoots = mergeWorkspaceRootGroups(groups)
       const hydratedOrder: string[] = []
-      for (const rootPath of rootsState.order) {
+      for (const rootPath of getOrderedWorkspaceRootPaths(rootsState)) {
         const projectName = toProjectNameFromWorkspaceRoot(rootPath)
         if (hydratedOrder.includes(projectName)) continue
         hydratedOrder.push(projectName)
@@ -6084,6 +6093,8 @@ export function useDesktopState() {
       order: nextOrder,
       labels: nextLabels,
       active: nextActive,
+      projectOrder: rootsState.projectOrder.filter((rootPath) => !shouldRemoveRoot(rootPath)),
+      pinnedProjectIds: rootsState.pinnedProjectIds.filter((rootPath) => !shouldRemoveRoot(rootPath)),
     })
   }
 
@@ -6161,6 +6172,8 @@ export function useDesktopState() {
         order: nextOrder,
         labels: rootsState.labels,
         active: nextActive,
+        projectOrder: nextOrder,
+        pinnedProjectIds: rootsState.pinnedProjectIds,
       })
     } catch {
       // Keep local project order when global state persistence is unavailable.

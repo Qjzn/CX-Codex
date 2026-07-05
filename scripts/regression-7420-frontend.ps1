@@ -262,7 +262,16 @@ function Assert-WorkspaceRootProjectParity {
     [object]$Metrics
   )
 
-  $workspaceRoots = @($RootsState.data.order | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+  $workspaceRoots = @()
+  foreach ($rootPath in @($RootsState.data.projectOrder) + @($RootsState.data.order)) {
+    $normalizedRootPath = [string]$rootPath
+    if ([string]::IsNullOrWhiteSpace($normalizedRootPath)) {
+      continue
+    }
+    if ($workspaceRoots -notcontains $normalizedRootPath) {
+      $workspaceRoots += $normalizedRootPath
+    }
+  }
   if ($workspaceRoots.Count -eq 0) {
     return
   }

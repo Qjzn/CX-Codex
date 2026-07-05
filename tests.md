@@ -9183,3 +9183,44 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName automated-workspace-root-parity` passed. The run checked `/codex-api/workspace-roots-state` before home rendering, asserted the real home sidebar project rows match the first sampled workspace roots, then passed home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 screenshot artifact: `output/regression-7420/automated-workspace-root-parity/home-desktop.png`.
+
+### Feature: P1 Codex Desktop project-order sidebar parity
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- `C:\Users\SW\.codex\.codex-global-state.json` contains Codex Desktop `project-order`, `pinned-project-ids`, and `pinned-thread-ids`.
+- Codex Desktop currently orders the sidebar project list with `E:\javaword\CXCodex\codexui` before `E:\javaword\ZXSAAS\mini`.
+
+#### Steps
+1. Call `GET http://127.0.0.1:7420/codex-api/workspace-roots-state`.
+2. Confirm the response includes `projectOrder` and `pinnedProjectIds` in addition to `order`, `labels`, and `active`.
+3. Confirm `projectOrder` starts with desktop project entries such as `E:\javaword\CXCodex\codexui`, `E:\javaword\ZXSAAS\mini`, and `E:\javaword\MFDW_ZJ`.
+4. Open `http://127.0.0.1:7420/#/` and read the first `.project-group` rows.
+5. Confirm the first project rows follow `projectOrder`; fall back to `order` only for roots missing from `projectOrder`.
+6. Confirm labeled roots such as `E:\javaword\ZXSAAS\mini` still render with the desktop label `ZXSAAS-mini`.
+7. Confirm pinned threads still appear in the pinned section and project rows, while pinned projects are preserved in state but not rendered as a new UI section.
+8. Run `git diff --check`.
+9. Run `npm.cmd run verify:server-modules`.
+10. Run `npm.cmd run build`.
+11. Restart local 7420 with `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+12. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-project-order-parity`.
+
+#### Expected Results
+- `/codex-api/workspace-roots-state` exposes desktop `project-order` and `pinned-project-ids` without losing existing workspace roots.
+- 7420 home sidebar follows Codex Desktop project ordering instead of the raw saved workspace root order.
+- Empty workspace-root projects remain visible with `暂无会话` and one project-level new-thread action.
+- Existing pinned thread behavior and 5-row project preview behavior do not regress.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/p1-project-order-parity/` when `-CaptureScreenshots` is used.
+- To roll back, revert `src/server/workspaceRootsState.ts`, `src/api/codexGateway.ts`, `src/composables/useDesktopState.ts`, `scripts/server-module-smoke.ts`, `scripts/regression-7420-frontend.ps1`, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 service evidence: after `npm.cmd run build`, `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 57748; `/health` returned ok.
+- 2026-07-05 workspace state evidence: `/codex-api/workspace-roots-state` returned raw `order` starting with `C:\Users\SW\Documents\Playground`, `E:\javaword\CXCodex\codexui`, and `E:\javaword\ZXSAAS\mini`; `projectOrder` started with `E:\javaword\CXCodex\codexui`, `E:\javaword\ZXSAAS\mini`, `E:\javaword\MFDW_ZJ`, `E:\javaword\MFDW`, and `C:\Users\SW\Documents\Playground`; `pinnedProjectIds` included `E:\javaword\ZXSAAS` and `E:\javaword\ZXSAAS\mini`.
+- 2026-07-05 health evidence: `/codex-api/health` returned `status: ok`, App Server PID 53684, `pendingRpcCount: 0`, `queuedRpcCount: 0`, `pendingServerRequestCount: 0`, and `uncertainRequestCount: 0`.
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 server module verification: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-05 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-project-order-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 screenshot artifact: `output/regression-7420/p1-project-order-parity/home-desktop.png`.

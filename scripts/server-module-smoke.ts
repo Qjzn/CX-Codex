@@ -6330,53 +6330,69 @@ async function smokeStatusRoutes(): Promise<void> {
 }
 
 async function smokeWorkspaceRootsState(): Promise<void> {
-  assert.deepEqual(normalizeWorkspaceRootsState(null), { order: [], labels: {}, active: [] })
+  assert.deepEqual(normalizeWorkspaceRootsState(null), { order: [], labels: {}, active: [], projectOrder: [], pinnedProjectIds: [] })
   assert.deepEqual(normalizeWorkspaceRootsState({
     order: ['C:\\work\\one', 'C:\\work\\one', '', 7],
     labels: { 'C:\\work\\one': 'One', empty: '', bad: 9 },
     active: ['C:\\work\\two', 'C:\\work\\two'],
+    projectOrder: ['C:\\work\\project', 'C:\\work\\project'],
+    pinnedProjectIds: ['C:\\work\\pin', 'C:\\work\\pin'],
   }), {
     order: ['C:\\work\\one'],
     labels: { 'C:\\work\\one': 'One', empty: '' },
     active: ['C:\\work\\two'],
+    projectOrder: ['C:\\work\\project'],
+    pinnedProjectIds: ['C:\\work\\pin'],
   })
   assert.deepEqual(readWorkspaceRootsStateFromPayload({
     'electron-saved-workspace-roots': ['C:\\work\\old', 'C:\\work\\old'],
     'electron-workspace-root-labels': { 'C:\\work\\old': 'Old' },
     'active-workspace-roots': ['C:\\work\\active'],
+    'project-order': ['C:\\work\\project'],
+    'pinned-project-ids': ['C:\\work\\pin'],
   }), {
     order: ['C:\\work\\old'],
     labels: { 'C:\\work\\old': 'Old' },
     active: ['C:\\work\\active'],
+    projectOrder: ['C:\\work\\project'],
+    pinnedProjectIds: ['C:\\work\\pin'],
   })
 
   const upserted = upsertWorkspaceRootState({
     order: ['C:\\work\\old', 'C:\\work\\new'],
     labels: { 'C:\\work\\old': 'Old' },
     active: ['C:\\work\\old'],
+    projectOrder: ['C:\\work\\old'],
+    pinnedProjectIds: ['C:\\work\\old'],
   }, 'C:\\work\\new', 'New')
   assert.deepEqual(upserted, {
     order: ['C:\\work\\new', 'C:\\work\\old'],
     labels: { 'C:\\work\\old': 'Old', 'C:\\work\\new': 'New' },
     active: ['C:\\work\\new', 'C:\\work\\old'],
+    projectOrder: ['C:\\work\\new', 'C:\\work\\old'],
+    pinnedProjectIds: ['C:\\work\\old'],
   })
 
   const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-workspace-roots-'))
   try {
     const statePath = join(tempDir, 'global-state.json')
-    assert.deepEqual(await readWorkspaceRootsState(statePath), { order: [], labels: {}, active: [] })
+    assert.deepEqual(await readWorkspaceRootsState(statePath), { order: [], labels: {}, active: [], projectOrder: [], pinnedProjectIds: [] })
 
     await writeFile(statePath, JSON.stringify({ existing: true }), 'utf8')
     await writeWorkspaceRootsState(statePath, {
       order: ['C:\\work\\one', 'C:\\work\\one'],
       labels: { 'C:\\work\\one': 'One' },
       active: ['C:\\work\\one'],
+      projectOrder: ['C:\\work\\two'],
+      pinnedProjectIds: ['C:\\work\\pin'],
     })
 
     assert.deepEqual(await readWorkspaceRootsState(statePath), {
       order: ['C:\\work\\one'],
       labels: { 'C:\\work\\one': 'One' },
       active: ['C:\\work\\one'],
+      projectOrder: ['C:\\work\\two'],
+      pinnedProjectIds: ['C:\\work\\pin'],
     })
     assert.equal(JSON.parse(await readFile(statePath, 'utf8')).existing, true)
   } finally {
@@ -6416,6 +6432,8 @@ async function smokeWorkspaceMetaRoutes(): Promise<void> {
         order: ['C:\\work\\one'],
         labels: { 'C:\\work\\one': 'One' },
         active: ['C:\\work\\one'],
+        projectOrder: ['C:\\work\\project'],
+        pinnedProjectIds: ['C:\\work\\pin'],
       }
     },
     writeWorkspaceRootsState: async (path: string, state: unknown) => {
@@ -6456,6 +6474,8 @@ async function smokeWorkspaceMetaRoutes(): Promise<void> {
       order: ['C:\\work\\one'],
       labels: { 'C:\\work\\one': 'One' },
       active: ['C:\\work\\one'],
+      projectOrder: ['C:\\work\\project'],
+      pinnedProjectIds: ['C:\\work\\pin'],
     },
   })
 
@@ -6472,6 +6492,8 @@ async function smokeWorkspaceMetaRoutes(): Promise<void> {
       order: ['C:\\work\\one'],
       labels: { 'C:\\work\\one': 'One' },
       active: ['C:\\work\\one'],
+      projectOrder: [],
+      pinnedProjectIds: [],
     },
   }])
   assert.deepEqual(JSON.parse(workspaceWrite.body), { ok: true })
@@ -6504,9 +6526,10 @@ async function smokeWorkspaceMetaRoutes(): Promise<void> {
 }
 
 async function smokeProjectRoots(): Promise<void> {
+  const emptyWorkspaceState = { order: [], labels: {}, active: [], projectOrder: [], pinnedProjectIds: [] }
   assert.equal(normalizeProjectPath('relative-project').endsWith('relative-project'), true)
   await assert.rejects(
-    resolveProjectRoot('', { existingState: { order: [], labels: {}, active: [] } }),
+    resolveProjectRoot('', { existingState: emptyWorkspaceState }),
     (error) => error instanceof ProjectRootError && error.statusCode === 400 && error.message === 'Missing path',
   )
 
@@ -6519,24 +6542,32 @@ async function smokeProjectRoots(): Promise<void> {
     await writeFile(filePath, 'not a directory', 'utf8')
 
     await assert.rejects(
-      resolveProjectRoot(filePath, { existingState: { order: [], labels: {}, active: [] } }),
+      resolveProjectRoot(filePath, { existingState: emptyWorkspaceState }),
       (error) => error instanceof ProjectRootError && error.statusCode === 400 && error.message === 'Path exists but is not a directory',
     )
     await assert.rejects(
-      resolveProjectRoot(createdDir, { existingState: { order: [], labels: {}, active: [] } }),
+      resolveProjectRoot(createdDir, { existingState: emptyWorkspaceState }),
       (error) => error instanceof ProjectRootError && error.statusCode === 404 && error.message === 'Directory does not exist',
     )
 
     const created = await resolveProjectRoot(createdDir, {
       createIfMissing: true,
       label: 'Created Project',
-      existingState: { order: [existingDir], labels: {}, active: [existingDir] },
+      existingState: {
+        order: [existingDir],
+        labels: {},
+        active: [existingDir],
+        projectOrder: [existingDir],
+        pinnedProjectIds: [],
+      },
     })
     assert.equal(created.path, createdDir)
     assert.deepEqual(created.workspaceState, {
       order: [createdDir, existingDir],
       labels: { [createdDir]: 'Created Project' },
       active: [createdDir, existingDir],
+      projectOrder: [createdDir, existingDir],
+      pinnedProjectIds: [],
     })
 
     await mkdir(join(tempDir, 'New Project (1)'))
@@ -6581,6 +6612,8 @@ async function smokeProjectRootRoutes(): Promise<void> {
     order: ['C:\\work\\new', 'C:\\work\\old'],
     labels: { 'C:\\work\\new': 'New Project' },
     active: ['C:\\work\\new', 'C:\\work\\old'],
+    projectOrder: ['C:\\work\\new', 'C:\\work\\old'],
+    pinnedProjectIds: ['C:\\work\\pin'],
   }
   const dependencies = {
     readJsonBody: async () => bodies.shift(),
@@ -6591,6 +6624,8 @@ async function smokeProjectRootRoutes(): Promise<void> {
         order: ['C:\\work\\old'],
         labels: {},
         active: ['C:\\work\\old'],
+        projectOrder: ['C:\\work\\old'],
+        pinnedProjectIds: ['C:\\work\\pin'],
       }
     },
     writeWorkspaceRootsState: async (path: string, state: unknown) => {
@@ -6603,6 +6638,8 @@ async function smokeProjectRootRoutes(): Promise<void> {
         order: string[]
         labels: Record<string, string>
         active: string[]
+        projectOrder: string[]
+        pinnedProjectIds: string[]
       }
     }) => {
       resolveCalls.push({
@@ -6643,6 +6680,8 @@ async function smokeProjectRootRoutes(): Promise<void> {
       order: ['C:\\work\\old'],
       labels: {},
       active: ['C:\\work\\old'],
+      projectOrder: ['C:\\work\\old'],
+      pinnedProjectIds: ['C:\\work\\pin'],
     },
   }])
   assert.deepEqual(writeCalls, [{
