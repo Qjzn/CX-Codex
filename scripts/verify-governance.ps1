@@ -137,6 +137,7 @@ $requiredFiles = @(
   "docs/openai-docs-review.zh-CN.md",
   "docs/release-readiness-audit.zh-CN.md",
   "docs/candidate-release-review.zh-CN.md",
+  "docs/candidate-pr-review-pack.zh-CN.md",
   "docs/changelog.zh-CN.md",
   "docs/roadmap.zh-CN.md",
   "docs/operations-plan.zh-CN.md",
@@ -201,6 +202,7 @@ Assert-ContentIncludes "README.md" @(
   "docs/app-server-protocol-matrix.zh-CN.md",
   "docs/openai-docs-review.zh-CN.md",
   "docs/candidate-release-review.zh-CN.md",
+  "docs/candidate-pr-review-pack.zh-CN.md",
   "drift-recorded",
   "docs/dependency-maintenance.zh-CN.md",
   "CODE_OF_CONDUCT.md",
@@ -345,6 +347,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "docs\protocol-compatibility.zh-CN.md",
   "docs\release-readiness-audit.zh-CN.md",
   "docs\candidate-release-review.zh-CN.md",
+  "docs\candidate-pr-review-pack.zh-CN.md",
   "docs\roadmap.zh-CN.md",
   "docs\security-hardening.zh-CN.md",
   "scripts\package-release.ps1",
@@ -709,6 +712,7 @@ Assert-ContentIncludes "docs/release-readiness-audit.zh-CN.md" @(
 
 Assert-ContentIncludes "docs/candidate-release-review.zh-CN.md" @(
   "Candidate Release Review",
+  "docs/candidate-pr-review-pack.zh-CN.md",
   "npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn",
   "output/app-server-schema-audit/20260705-102346",
   "drift-recorded",
@@ -720,6 +724,20 @@ Assert-ContentIncludes "docs/candidate-release-review.zh-CN.md" @(
   "不能直接宣布为最终公开稳定版",
   "WebSocket transport 仍是 experimental and unsupported",
   "gpt-4o-transcribe-diarize"
+)
+
+Assert-ContentIncludes "docs/candidate-pr-review-pack.zh-CN.md" @(
+  "Candidate Branch / PR Review Pack",
+  "codex/candidate-release-review",
+  "Prepare CX-Codex candidate release review and App Server governance",
+  "npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn",
+  "output/app-server-schema-audit/20260705-103138",
+  "P0: Preserve App Server drift tolerance",
+  "P1: Design controlled support",
+  "P2: Define security design",
+  "candidate-reviewed rather than fully aligned",
+  "git merge --no-ff codex/candidate-release-review",
+  "不要把 `output/app-server-schema-audit/` 原始生成目录提交进 PR"
 )
 
 Assert-ContentIncludes "src/server/appServerMethodCatalog.ts" @(

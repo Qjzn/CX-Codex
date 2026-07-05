@@ -8160,3 +8160,44 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 package-level release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: Candidate branch PR review pack
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Current repository includes `docs/candidate-release-review.zh-CN.md`, `docs/candidate-pr-review-pack.zh-CN.md`, `README.md`, `.github/release-body.md`, `RELEASE.md`, `SECURITY.md`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
+- Formal release gate evidence exists from a clean worktree run of `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn`.
+
+#### Steps
+1. Run `git branch --show-current` and confirm the branch is `codex/candidate-release-review`.
+2. Run `git rev-list --count origin/main..HEAD` and confirm the candidate branch includes the expected candidate review range.
+3. Open `docs/candidate-pr-review-pack.zh-CN.md`.
+4. Confirm the document includes the branch snapshot, PR title draft, PR body draft, candidate release notes draft, review checklist, schema drift P0/P1/P2 issue list, and local main merge / PR preparation notes.
+5. Confirm the PR body draft records release gate evidence, schema drift counts, public claims, and do-not-claim boundaries.
+6. Confirm the issue list includes separate P0 stability, P1 protocol completion, and P2 security-sensitive capability issues with acceptance checklists.
+7. Confirm `README.md` links `docs/candidate-pr-review-pack.zh-CN.md`.
+8. Confirm `scripts/verify-governance.ps1` requires the review pack file and key review pack phrases.
+9. Confirm `scripts/verify-release.ps1` requires `docs\candidate-pr-review-pack.zh-CN.md` in the release zip.
+10. Run `git diff --check`.
+11. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+12. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Candidate branch exists and is named with the repository default `codex/` prefix.
+- Review pack is copy-paste ready for PR preparation and candidate release review.
+- P0/P1/P2 schema drift follow-up work is represented as actionable issue drafts.
+- README and release package smoke expose the review pack as a maintained artifact.
+- Governance fails if the review pack or its key evidence/boundary text is removed.
+- Release package smoke fails if the review pack is missing from the source zip.
+
+#### Rollback/Cleanup Notes
+- No runtime cleanup is required.
+- To roll back, delete `docs/candidate-pr-review-pack.zh-CN.md`, remove README/governance/release package references, remove this test section, and switch back to the previous branch if needed.
+
+#### Regression Evidence
+- 2026-07-05 branch check: `git branch --show-current` returned `codex/candidate-release-review`.
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 package-level release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

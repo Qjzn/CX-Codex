@@ -34,6 +34,7 @@
   - OpenAI 官方文档审查手册刷新到 2026-07-05 02:12 复核结果，并记录 OpenAI Docs MCP 注册命令；当前线程重启前仍以官方 OpenAI 域名页面为证据来源，确认 App Server WebSocket auth、Speech to text 25 MB / diarize multipart 和 Responses API 边界没有放松。
   - 新增 `docs/release-readiness-audit.zh-CN.md` 阶段性收口审计，明确当前适合内部 checkpoint / 候选分支、不应声明完全对齐最新 App Server，并把 2026-07-05 schema audit drift 分组为 P0/P1/P2/P3 后续任务。
   - 新增 `docs/candidate-release-review.zh-CN.md` 候选发布审查，记录 `verify:release -- -RequireCleanGit -SchemaAudit warn` 正式门禁结果、OpenAI Docs MCP 复核证据、schema drift P0/P1/P2 任务清单，以及 README / Release / SECURITY 可公开宣传和必须标注实验或未完成的能力边界。
+  - 新增 `docs/candidate-pr-review-pack.zh-CN.md`，把候选分支快照、PR 正文草稿、候选发布说明、review checklist、schema drift P0/P1/P2 issue 草稿和本地 main 合并准备步骤收口为可复核交付物。
   - README、GitHub Release 正文、`RELEASE.md` 和 `SECURITY.md` 收紧 App Server 兼容宣传，明确当前仍是 `drift-recorded`，MCP/plugin/Realtime/WebSocket/fs/terminal/permission-profile 等能力不能被描述为完整稳定支持。
   - `RELEASE.md` 发版手册补齐 NPM package smoke、Release package smoke 覆盖范围和最终 artifact checksum 验证步骤，避免本地发版流程与自动门禁漂移。
   - `verify:release` 的 Release package smoke 会复用 `verify-release-artifacts.ps1` 校验生成的 zip 与 `.sha256`，确保本地 gate 和 GitHub Release workflow 使用同一套资产校验逻辑。
