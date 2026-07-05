@@ -4230,7 +4230,9 @@ async function submitFirstMessageForNewThread(
 }
 
 .mobile-shell-setup-page {
-  @apply min-h-dvh w-full bg-[#f8f6f0] px-5 py-8 text-[#2d261f];
+  @apply min-h-dvh w-full px-5 py-8;
+  background: var(--ui-bg-window);
+  color: var(--ui-text-primary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4239,8 +4241,11 @@ async function submitFirstMessageForNewThread(
 }
 
 .mobile-shell-setup-card {
-  @apply w-full max-w-md rounded-[28px] border border-[#e5dbca] bg-[#fffdf8] p-5;
-  box-shadow: 0 24px 54px -38px rgba(31, 41, 55, 0.34);
+  @apply w-full max-w-md border p-5;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 0.08);
 }
 
 .mobile-shell-setup-brand {
@@ -4264,11 +4269,16 @@ async function submitFirstMessageForNewThread(
 }
 
 .mobile-shell-setup-field {
-  @apply mt-6 flex flex-col gap-2 text-sm font-medium text-[#5b5146];
+  @apply mt-6 flex flex-col gap-2 text-sm font-medium;
+  color: var(--ui-text-secondary);
 }
 
 .mobile-shell-setup-field input {
-  @apply min-h-12 w-full rounded-2xl border border-[#ddd5c7] bg-white px-4 text-base text-[#2d261f] outline-none;
+  @apply min-h-12 w-full border px-4 text-base outline-none;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
 }
 
 .mobile-shell-setup-field input:focus {
@@ -4285,7 +4295,8 @@ async function submitFirstMessageForNewThread(
 }
 
 .mobile-shell-setup-status {
-  @apply m-0 mt-3 text-xs leading-5 text-[#7b7062];
+  @apply m-0 mt-3 text-xs leading-5;
+  color: var(--ui-text-secondary);
 }
 
 .mobile-shell-setup-status--boot {
@@ -4475,8 +4486,18 @@ async function submitFirstMessageForNewThread(
 }
 
 .content-title-refresh-button {
-  @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[#ddd3c2] bg-[#fffdf8] text-[#5a5144] transition-[background-color,border-color,color,transform] duration-150 hover:border-[#c8b9a2] hover:bg-[#f6f2ea] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-60;
-  box-shadow: 0 10px 20px -20px rgba(31, 41, 55, 0.24);
+  @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-[background-color,border-color,color,transform] duration-150 disabled:cursor-not-allowed disabled:opacity-60;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+  box-shadow: none;
+}
+
+.content-title-refresh-button:hover,
+.content-title-refresh-button:focus-visible {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .content-title-refresh-button[data-busy='true'] {
@@ -4646,9 +4667,14 @@ async function submitFirstMessageForNewThread(
 }
 
 .product-toast {
-  @apply fixed left-1/2 z-[70] max-w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 rounded-full border bg-[#fffdf8] px-4 py-2 text-sm font-medium text-[#544a3d] shadow-lg shadow-[#2d261f]/10;
+  @apply fixed left-1/2 z-[70] max-w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 border px-4 py-2 text-sm font-medium;
   bottom: max(1rem, env(safe-area-inset-bottom));
   font-family: var(--font-sans-ui);
+  border-radius: var(--ui-radius-pill);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.09);
 }
 
 .product-toast[data-tone='success'] {
@@ -4880,7 +4906,7 @@ async function submitFirstMessageForNewThread(
   border-radius: var(--ui-radius-composer);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
-  box-shadow: var(--ui-shadow-float);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.06);
 }
 
 .sidebar-settings-mobile-backdrop {
@@ -4889,7 +4915,11 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-panel-mobile {
-  @apply fixed inset-x-0 bottom-0 z-[69] m-0 rounded-t-[28px] rounded-b-none border-[#ddd5c7] shadow-2xl shadow-[#1f2937]/18;
+  @apply fixed inset-x-0 bottom-0 z-[69] m-0 rounded-b-none;
+  border-top-left-radius: var(--ui-radius-composer);
+  border-top-right-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  box-shadow: 0 -16px 36px rgb(0 0 0 / 0.14);
   max-height: min(78dvh, calc(100dvh - max(4rem, env(safe-area-inset-top) + 1rem)));
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -4899,7 +4929,8 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-mobile-handle {
-  @apply mx-auto mt-2 h-1.5 w-12 rounded-full bg-[#ddd5c7];
+  @apply mx-auto mt-2 h-1.5 w-12 rounded-full;
+  background: var(--ui-border-strong);
 }
 
 .sidebar-settings-mobile-header {
@@ -4952,7 +4983,8 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-row:disabled {
-  @apply cursor-not-allowed text-[#b1a89b] hover:bg-transparent;
+  @apply cursor-not-allowed hover:bg-transparent;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-row--select {
@@ -4972,15 +5004,18 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-section {
-  @apply border-t border-[#f1eadf] py-1;
+  @apply border-t py-1;
+  border-color: var(--ui-border-subtle);
 }
 
 .sidebar-settings-section-title {
-  @apply m-0 px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9a907f];
+  @apply m-0 px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-[0.12em];
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-hint {
-  @apply m-0 px-3 py-1.5 text-[11px] leading-4 text-[#8f8577];
+  @apply m-0 px-3 py-1.5 text-[11px] leading-4;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-hint-status {
@@ -4996,7 +5031,11 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-language-dropdown :deep(.composer-dropdown-trigger) {
-  @apply h-auto rounded-xl border border-[#ddd5c7] bg-white px-2 py-1 text-xs text-[#544a3d];
+  @apply h-auto border px-2 py-1 text-xs;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-settings-language-dropdown :deep(.composer-dropdown-value) {
@@ -5004,7 +5043,8 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-row + .sidebar-settings-row {
-  @apply border-t border-[#f1eadf];
+  @apply border-t;
+  border-color: var(--ui-border-subtle);
 }
 
 .sidebar-settings-label {
@@ -5016,12 +5056,16 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-input {
-  @apply w-full rounded-2xl border border-[#ddd5c7] bg-white px-3 py-2 text-sm text-[#2d261f] outline-none transition-[border-color,box-shadow] duration-100;
+  @apply w-full border px-3 py-2 text-sm outline-none transition-[border-color,box-shadow] duration-100;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
   box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
 .sidebar-settings-input::placeholder {
-  color: #9f9484;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-input:focus {
@@ -5030,15 +5074,23 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-input:disabled {
-  @apply cursor-not-allowed bg-[#f7f4ed] text-[#9f9484];
+  @apply cursor-not-allowed;
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-value {
-  @apply text-xs text-[#7b7062] bg-[#f1ebde] rounded-full px-2 py-0.5;
+  @apply rounded-full px-2 py-0.5 text-xs;
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-settings-code {
-  @apply block w-full rounded-2xl border border-[#e6dccb] bg-[#f7f4ed] px-3 py-2 text-[11px] leading-4 text-[#5f5446] break-all;
+  @apply block w-full border px-3 py-2 text-[11px] leading-4 break-all;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-settings-code-row {
@@ -5050,7 +5102,17 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-copy-button {
-  @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-[#ddd5c7] bg-[#fffdf8] text-[#5b5146] transition-colors duration-100 hover:border-[#cdbfa8] hover:bg-[#f7f1e5] disabled:cursor-not-allowed disabled:opacity-45;
+  @apply inline-flex h-10 w-10 shrink-0 items-center justify-center border transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-45;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-copy-button:hover,
+.sidebar-settings-copy-button:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-copy-icon {
@@ -5066,7 +5128,8 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-toggle {
-  @apply relative w-9 h-5 rounded-full bg-[#d8cfbf] transition-colors shrink-0;
+  @apply relative w-9 h-5 rounded-full transition-colors shrink-0;
+  background: var(--ui-bg-row-active);
 }
 
 .sidebar-settings-toggle::after {
@@ -5120,17 +5183,24 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-about {
-  @apply border-t border-[#f1eadf] px-3 py-2.5 flex flex-col gap-2;
+  @apply border-t px-3 py-2.5 flex flex-col gap-2;
+  border-color: var(--ui-border-subtle);
 }
 
 .sidebar-settings-brand-card {
-  @apply flex items-center gap-3 rounded-[24px] border border-[#d6e3ff] bg-[linear-gradient(135deg,rgba(236,244,255,0.96),rgba(255,255,255,0.98))] px-3 py-3;
-  box-shadow: 0 12px 24px -24px rgba(30, 99, 255, 0.42);
+  @apply flex items-center gap-3 border px-3 py-3;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  box-shadow: none;
 }
 
 .sidebar-settings-brand-logo {
-  @apply h-14 w-14 shrink-0 rounded-[18px] border border-white/60 bg-white/75 object-cover;
-  box-shadow: 0 12px 22px -20px rgba(30, 99, 255, 0.5);
+  @apply h-12 w-12 shrink-0 border object-cover;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: none;
 }
 
 .sidebar-settings-brand-copy {
@@ -5138,15 +5208,18 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-brand-kicker {
-  @apply text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5978c2];
+  @apply text-[10px] font-semibold uppercase tracking-[0.14em];
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-brand-title {
-  @apply text-[15px] leading-5 font-semibold text-[#16367e];
+  @apply text-[15px] leading-5 font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-brand-subtitle {
-  @apply text-[11px] leading-4 text-[#6a7cae];
+  @apply text-[11px] leading-4;
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-settings-about-main {
@@ -5154,11 +5227,21 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-about-trigger {
-  @apply min-w-0 flex flex-1 items-center justify-between gap-3 rounded-[22px] border border-[#d8e5ff] bg-white/78 px-3 py-2 text-left transition-colors duration-100 hover:bg-[#f4f8ff] hover:border-[#bcd3ff] cursor-pointer;
+  @apply min-w-0 flex flex-1 items-center justify-between gap-3 border px-3 py-2 text-left transition-colors duration-100 cursor-pointer;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-about-trigger:hover,
+.sidebar-settings-about-trigger:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-about-trigger:disabled {
-  @apply cursor-not-allowed opacity-65 hover:bg-white/78 hover:border-[#d8e5ff];
+  @apply cursor-not-allowed opacity-65;
 }
 
 .sidebar-settings-about-copy {
@@ -5166,15 +5249,18 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-about-label {
-  @apply text-[11px] leading-4 text-[#8f8577];
+  @apply text-[11px] leading-4;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-about-version {
-  @apply text-sm leading-5 font-semibold text-[#2d261f];
+  @apply text-sm leading-5 font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-about-action {
-  @apply text-[11px] leading-4 text-[#6a7cae];
+  @apply text-[11px] leading-4;
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-settings-about-update-badge {
@@ -5190,11 +5276,21 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-github-button--secondary {
-  @apply border-[#ddd5c7] bg-white text-[#6a6052] hover:border-[#d1c7b7] hover:bg-[#f7f4ed] hover:text-[#3f372d];
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-github-button--secondary:hover,
+.sidebar-settings-github-button--secondary:focus-visible {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-about-meta {
-  @apply flex items-center justify-between gap-2 text-[11px] leading-4 text-[#8f8577];
+  @apply flex items-center justify-between gap-2 text-[11px] leading-4;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-about-meta span:last-child {
@@ -5333,19 +5429,26 @@ async function submitFirstMessageForNewThread(
 }
 
 .desktop-refresh-confirm-dialog {
-  @apply w-full max-w-md rounded-[28px] border border-[#ddd5c7] bg-[#fffdf8] p-5 shadow-2xl shadow-[#1f2937]/15;
+  @apply w-full max-w-md border p-5;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: 0 16px 38px rgb(0 0 0 / 0.14);
 }
 
 .desktop-refresh-confirm-kicker {
-  @apply m-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8f8577];
+  @apply m-0 text-[11px] font-semibold uppercase tracking-[0.18em];
+  color: var(--ui-text-tertiary);
 }
 
 .desktop-refresh-confirm-title {
-  @apply mt-2 mb-0 text-lg font-semibold leading-7 text-[#1f2937];
+  @apply mt-2 mb-0 text-lg font-semibold leading-7;
+  color: var(--ui-text-primary);
 }
 
 .desktop-refresh-confirm-text {
-  @apply mt-2 mb-0 text-sm leading-6 text-[#5c5247];
+  @apply mt-2 mb-0 text-sm leading-6;
+  color: var(--ui-text-secondary);
 }
 
 .desktop-refresh-confirm-actions {
@@ -5353,7 +5456,18 @@ async function submitFirstMessageForNewThread(
 }
 
 .desktop-refresh-confirm-button {
-  @apply inline-flex items-center justify-center rounded-full border border-[#d8cfbf] bg-[#fffdf8] px-4 py-2 text-sm font-semibold text-[#544a3d] transition-colors duration-100 hover:border-[#bca98d] hover:bg-[#f7f1e5];
+  @apply inline-flex items-center justify-center border px-4 py-2 text-sm font-semibold transition-colors duration-100;
+  border-radius: var(--ui-radius-pill);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.desktop-refresh-confirm-button:not(.desktop-refresh-confirm-button-primary):not(.desktop-refresh-confirm-button-warning):hover,
+.desktop-refresh-confirm-button:not(.desktop-refresh-confirm-button-primary):not(.desktop-refresh-confirm-button-warning):focus-visible {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .desktop-refresh-confirm-button-primary {
@@ -5369,27 +5483,39 @@ async function submitFirstMessageForNewThread(
 }
 
 .mobile-update-confirm-dialog {
-  @apply w-full max-w-md rounded-[28px] border border-[#ddd5c7] bg-[#fffdf8] p-5 shadow-2xl shadow-[#1f2937]/15;
+  @apply w-full max-w-md border p-5;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: 0 16px 38px rgb(0 0 0 / 0.14);
 }
 
 .mobile-update-confirm-kicker {
-  @apply m-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#5978c2];
+  @apply m-0 text-[11px] font-semibold uppercase tracking-[0.18em];
+  color: var(--ui-text-tertiary);
 }
 
 .mobile-update-confirm-title {
-  @apply mt-2 mb-0 text-lg font-semibold leading-7 text-[#1f2937];
+  @apply mt-2 mb-0 text-lg font-semibold leading-7;
+  color: var(--ui-text-primary);
 }
 
 .mobile-update-confirm-text {
-  @apply mt-2 mb-0 text-sm leading-6 text-[#5c5247];
+  @apply mt-2 mb-0 text-sm leading-6;
+  color: var(--ui-text-secondary);
 }
 
 .mobile-update-confirm-meta {
-  @apply mt-3 flex items-center justify-between gap-3 rounded-2xl border border-[#ebe3d5] bg-[#fbf8f2] px-3 py-2 text-[12px] leading-5 text-[#6a6052];
+  @apply mt-3 flex items-center justify-between gap-3 border px-3 py-2 text-[12px] leading-5;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
 }
 
 .mobile-update-confirm-meta span:last-child {
-  @apply min-w-0 text-right break-all text-[#2d261f];
+  @apply min-w-0 text-right break-all;
+  color: var(--ui-text-primary);
 }
 
 .mobile-update-confirm-actions {
@@ -5397,7 +5523,18 @@ async function submitFirstMessageForNewThread(
 }
 
 .mobile-update-confirm-button {
-  @apply inline-flex items-center justify-center rounded-full border border-[#d8cfbf] bg-[#fffdf8] px-4 py-2 text-sm font-semibold text-[#544a3d] transition-colors duration-100 hover:border-[#bca98d] hover:bg-[#f7f1e5];
+  @apply inline-flex items-center justify-center border px-4 py-2 text-sm font-semibold transition-colors duration-100;
+  border-radius: var(--ui-radius-pill);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.mobile-update-confirm-button:not(.mobile-update-confirm-button-primary):hover,
+.mobile-update-confirm-button:not(.mobile-update-confirm-button-primary):focus-visible {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .mobile-update-confirm-button-primary {

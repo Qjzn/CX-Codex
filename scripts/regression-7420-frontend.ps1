@@ -220,6 +220,69 @@ function Assert-Page {
   }
 }
 
+function Read-SettingsPanelMetrics {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const panel = document.querySelector('.sidebar-settings-panel');
+  const brandCard = document.querySelector('.sidebar-settings-brand-card');
+  const inputs = Array.from(document.querySelectorAll('.sidebar-settings-input, .sidebar-settings-code, .sidebar-settings-copy-button, .sidebar-settings-language-dropdown .composer-dropdown-trigger'));
+  const panelRect = panel?.getBoundingClientRect();
+  const panelStyle = panel ? window.getComputedStyle(panel) : null;
+  const brandStyle = brandCard ? window.getComputedStyle(brandCard) : null;
+  const warmColors = new Set([
+    'rgb(255, 253, 248)',
+    'rgb(255, 250, 243)',
+    'rgb(247, 243, 234)',
+    'rgb(241, 235, 222)',
+    'rgb(251, 248, 242)'
+  ]);
+  const sampledStyles = [panel, brandCard, ...inputs].filter(Boolean).map((node) => {
+    const style = window.getComputedStyle(node);
+    return {
+      className: node.className || node.tagName,
+      backgroundColor: style.backgroundColor,
+      borderColor: style.borderTopColor,
+      borderWidth: Number.parseFloat(style.borderTopWidth || '0'),
+      radius: Number.parseFloat(style.borderTopLeftRadius || '0')
+    };
+  });
+  const viewportWidth = document.documentElement.clientWidth;
+  const fitFailure = panelRect ? (panelRect.left < -2 || panelRect.right > viewportWidth + 2) : true;
+  return {
+    hasPanel: !!panel,
+    hasBrandCard: !!brandCard,
+    panelBackground: panelStyle?.backgroundColor || '',
+    panelRadius: panelStyle ? Number.parseFloat(panelStyle.borderTopLeftRadius || '0') : 0,
+    panelBorderWidth: panelStyle ? Number.parseFloat(panelStyle.borderTopWidth || '0') : 0,
+    brandRadius: brandStyle ? Number.parseFloat(brandStyle.borderTopLeftRadius || '0') : 0,
+    sampledWarmBackgroundCount: sampledStyles.filter((item) => warmColors.has(item.backgroundColor)).length,
+    maxSampleRadius: sampledStyles.length ? Math.max(...sampledStyles.map((item) => item.radius)) : 0,
+    fitFailure,
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth
+  };
+})())
+'@
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-SettingsPanel {
+  param([object]$Metrics)
+
+  Assert-True ($Metrics.hasPanel -eq $true) "settings panel did not open"
+  Assert-True ($Metrics.hasBrandCard -eq $true) "settings panel is missing about/brand block"
+  Assert-True ($Metrics.panelRadius -le 22) "settings panel radius is too large: $($Metrics.panelRadius)"
+  Assert-True ($Metrics.panelBorderWidth -le 1) "settings panel border is too heavy: $($Metrics.panelBorderWidth)"
+  Assert-True ($Metrics.brandRadius -le 8) "settings brand block radius is too large: $($Metrics.brandRadius)"
+  Assert-True ($Metrics.sampledWarmBackgroundCount -eq 0) "settings panel still uses warm beige sampled backgrounds"
+  Assert-True ($Metrics.maxSampleRadius -le 22) "settings sampled controls exceed radius ceiling: $($Metrics.maxSampleRadius)"
+  Assert-True ($Metrics.fitFailure -eq $false) "settings panel overflows viewport horizontally"
+  Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "settings panel page has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+}
+
 function Read-ConversationFixtureMetrics {
   param([string]$Session)
 
@@ -621,6 +684,9 @@ try {
 
   $homePage = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $DesktopWidth -Height $DesktopHeight
   Assert-Page -Page $homePage -Name "home desktop" -RequireComposer
+  Invoke-AgentBrowser -Arguments @("--session", $session, "click", ".sidebar-settings-button") | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "200") | Out-Null
+  Assert-SettingsPanel -Metrics (Read-SettingsPanelMetrics -Session $session)
   Add-RegressionResult -Name "home-desktop" -Page $homePage
 
   $skills = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/skills?regression=frontend" -Width $PhoneWidth -Height $PhoneHeight

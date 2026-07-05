@@ -8610,3 +8610,37 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop and phone `composer-shell-fixture`, desktop `conversation-blocks-fixture`, and phone `conversation-blocks-fixture-phone`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 fixture composer assertions: the built-in Composer fixture verified form/shell/input/attachment/runtime/dictation/submit controls, shell height between 88px and 132px, shell radius no larger than 22px, thin border, non-warm shell background, minimum control sizes, runtime trigger width, all target controls fitting inside the viewport, and no page-level horizontal overflow.
+
+### Feature: P4 App Shell settings surface neutralization
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The sidebar is visible on the desktop home route.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/` at a desktop viewport such as 1440x900.
+2. Click the sidebar `设置` button.
+3. Confirm the settings panel uses a neutral white/gray surface, thin border, restrained shadow, and desktop-parity radius.
+4. Confirm the about/version block no longer appears as a blue gradient card and uses the same neutral component vocabulary as the rest of the sidebar.
+5. Confirm settings input, code, value, copy, secondary action, toast, mobile setup card, and confirmation dialog styles are token-driven rather than warm beige/paper colors.
+6. Run `git diff --check`.
+7. Run `npm.cmd run build:frontend`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+
+#### Expected Results
+- Settings panel radius stays no larger than the Composer/system floating token.
+- The about/brand block radius stays within the compact card token.
+- Sampled settings panel backgrounds do not use warm beige values such as `#fffdf8`, `#fffaf3`, `#f7f3ea`, `#f1ebde`, or `#fbf8f2`.
+- The opened settings panel fits the desktop viewport without horizontal overflow.
+- Browser regression passes with no page errors.
+
+#### Rollback/Cleanup Notes
+- No generated screenshots are required for this narrow App Shell baseline.
+- To roll back, revert `App.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop with opened settings panel assertions, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop and phone `composer-shell-fixture`, desktop `conversation-blocks-fixture`, and phone `conversation-blocks-fixture-phone`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 fixture settings assertions: the home route opened the sidebar settings panel and verified panel/brand block presence, panel radius no larger than 22px, thin border, brand block radius no larger than 8px, zero sampled warm beige backgrounds, sampled control radius no larger than 22px, panel fitting inside the viewport, and no page-level horizontal overflow.
