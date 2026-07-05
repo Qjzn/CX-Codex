@@ -115,6 +115,19 @@ const messages: UiMessage[] = [
     turnIndex: 1,
   },
   {
+    id: 'fixture-hidden-file-change-noise',
+    role: 'system',
+    text: 'Unhandled App Server item: fileChange',
+    messageType: 'unhandled.fileChange',
+    rawPayload: JSON.stringify({
+      type: 'fileChange',
+      marker: 'fixture-hidden-file-change-noise',
+      summary: 'This low-value system item should not render in the normal conversation flow.',
+    }),
+    isUnhandled: true,
+    turnIndex: 1,
+  },
+  {
     id: 'fixture-command-output',
     role: 'system',
     text: '',

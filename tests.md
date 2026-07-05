@@ -8903,3 +8903,33 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName compact-app-chrome-layout` passed for home desktop/foldable, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 manual thread DOM check: opened `http://127.0.0.1:7420/#/thread/019ea7cc-2558-7de2-a094-778c9268f3bc`; header runtime bars = 1, runtime bars outside header = 0, legacy header status strips = 0, body inline overlays/loading/process panels = 0.
 - 2026-07-05 screenshot artifacts: saved under `output/regression-7420/compact-app-chrome-layout/`, including `home-desktop.png`, `home-foldable.png`, and `thread-header-manual.png`.
+
+### Feature: P4 hide low-value App Server fileChange noise
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Built-in regression fixture route `/#/__regression/conversation-blocks` is available.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/__regression/conversation-blocks?regression=frontend` at a desktop viewport such as 1440x900.
+2. Confirm the fixture still shows the meaningful raw payload card with marker `fixture-raw-payload`.
+3. Confirm low-value system file-change noise is absent: `fixture-hidden-file-change-noise`, `Unhandled App Server item: fileChange`, and `unhandled.fileChange` should not appear in the visible page text.
+4. Run `git diff --check`.
+5. Run `npm.cmd run build:frontend`.
+6. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName hide-filechange-system-noise`.
+
+#### Expected Results
+- `unhandled.fileChange` system messages do not render in the normal conversation flow.
+- Other unhandled/raw payload content remains available as a folded diagnostic card.
+- Browser regression passes with no page-level horizontal overflow.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/hide-filechange-system-noise/` when `-CaptureScreenshots` is used.
+- To roll back, revert `ThreadConversation.vue`, `ConversationRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName hide-filechange-system-noise` passed for home desktop/foldable, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 fixture noise assertion: `conversation-blocks` includes a synthetic `unhandled.fileChange` message with marker `fixture-hidden-file-change-noise`, and the regression asserts that marker, `Unhandled App Server item: fileChange`, and `unhandled.fileChange` are absent from visible page text while `fixture-raw-payload` still renders.

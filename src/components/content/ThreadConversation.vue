@@ -1194,7 +1194,7 @@ const props = defineProps<{
 
 const MESSAGE_WINDOW_SIZE = 10
 const renderableMessages = computed<UiMessage[]>(() => (
-  props.messages.filter((message) => message.messageType !== 'worked')
+  props.messages.filter((message) => !shouldSuppressConversationMessage(message))
 ))
 const isRevealingOlderMessages = ref(false)
 const canAutoRevealOlderMessages = ref(true)
@@ -1218,6 +1218,17 @@ function isGuidedAssistantMessage(message: UiMessage): boolean {
     message.messageType !== 'worked' &&
     message.text.trim().length > 0
   )
+}
+
+function shouldSuppressConversationMessage(message: UiMessage): boolean {
+  if (message.messageType === 'worked') return true
+
+  const messageType = message.messageType?.trim() ?? ''
+  if (message.role === 'system' && message.isUnhandled && messageType === 'unhandled.fileChange') {
+    return true
+  }
+
+  return false
 }
 
 type GuidedTurnDescriptor = {

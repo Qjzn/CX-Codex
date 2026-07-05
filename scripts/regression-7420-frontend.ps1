@@ -678,6 +678,7 @@ JSON.stringify((() => {
     hasMetaLine: !!document.querySelector('.message-code-line[data-kind="meta"]'),
     hasFixtureCodeText: textContent.includes('fixture-code-block'),
     hasFixtureRawText: textContent.includes('fixture-raw-payload'),
+    hasHiddenFileChangeNoise: textContent.includes('fixture-hidden-file-change-noise') || textContent.includes('Unhandled App Server item: fileChange') || textContent.includes('unhandled.fileChange'),
     hasFixtureCommandText: textContent.includes('fixture-command-output: ok'),
     hasFixtureCommandLabel: textContent.includes('npm.cmd run test:7420:frontend'),
     hasFixturePermissionText: textContent.includes('fixture-permission-workbench'),
@@ -730,6 +731,7 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.hasMetaLine -eq $true) "conversation fixture is missing diff metadata line styling"
   Assert-True ($Metrics.hasFixtureCodeText -eq $true) "conversation fixture is missing fixture code text"
   Assert-True ($Metrics.hasFixtureRawText -eq $true) "conversation fixture is missing raw payload marker"
+  Assert-True ($Metrics.hasHiddenFileChangeNoise -eq $false) "conversation fixture rendered low-value unhandled.fileChange system noise"
   Assert-True ($Metrics.hasFixtureCommandText -eq $true) "conversation fixture is missing command output marker"
   Assert-True ($Metrics.hasFixtureCommandLabel -eq $true) "conversation fixture is missing command label"
   Assert-True ($Metrics.hasFixturePermissionText -eq $true) "conversation fixture is missing permission workbench marker"
