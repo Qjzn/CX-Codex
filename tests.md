@@ -9368,3 +9368,34 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 50220; `/health` returned ok.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-pinned-thread-supplement` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 screenshot artifact: `output/regression-7420/p1-pinned-thread-supplement/sidebar-rows-fixture-phone.png`.
+
+### Feature: P1 real 7420 sidebar data parity gate
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- `/codex-api/pinned-threads`, `/codex-api/workspace-roots-state`, and `/codex-api/rpc` are reachable.
+- The App Server can answer `thread/list` and `thread/read(includeTurns:false)`.
+
+#### Steps
+1. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420`.
+2. Confirm the script checks `/health` and `/codex-api/health`.
+3. Confirm pinned thread ids from `/codex-api/pinned-threads` are non-empty strings with no duplicates.
+4. Confirm readable pinned thread ids from the first 20 sampled pins are present in the active `thread/list` data source.
+5. Confirm the computed pinned section preserves `/codex-api/pinned-threads` order.
+6. Confirm the active first page does not exceed the requested limit plus the supplemental pinned read limit.
+7. Confirm archived first page and active cursor pages do not exceed the requested `thread/list` limit.
+8. Confirm workspace `pinnedProjectIds` are present in `projectOrder` or raw `order`, and the computed sidebar project order promotes pinned projects first.
+9. Confirm each real project group's latest 5 thread preview is newest-first.
+
+#### Expected Results
+- The real 7420 API responses can independently prove pinned thread supplement, pinned thread order, pinned project order, and project latest-5 ordering without relying only on frontend fixtures.
+- A single transient `thread/list` timeout is retried once and reported through `rpcRetryCount`; repeated timeouts still fail the gate.
+- The script prints a compact JSON summary containing pinned counts, active/archived first-page counts, retry count, project order sample, and latest-5 thread samples.
+
+#### Rollback/Cleanup Notes
+- No runtime state is written by this gate.
+- To roll back, remove `scripts/verify-7420-sidebar-data.mjs`, the `test:7420:sidebar-data` package script, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 first real-data run exposed a transient App Server `thread/list` timeout after 15s; `/codex-api/health` stayed ok with empty pending/queued RPC and recorded the timeout in `recentTimeouts`.
+- 2026-07-05 retry-capable gate verification: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420` passed with `pinnedThreadCount: 10`, `readablePinnedSampleCount: 10`, `unreadablePinnedSampleCount: 0`, `activeThreadCount: 162`, `activeFirstPageCount: 103`, `archivedFirstPageCount: 100`, `rpcRetryCount: 0`, and `projectGroupCount: 16`.

@@ -64,6 +64,7 @@
     "setup:windows": "node ./scripts/run-powershell-script.mjs ./setup.ps1",
     "test:7420": "node ./scripts/run-powershell-script.mjs ./scripts/regression-7420.ps1",
     "test:7420:frontend": "node ./scripts/run-powershell-script.mjs ./scripts/regression-7420-frontend.ps1",
+    "test:7420:sidebar-data": "node ./scripts/verify-7420-sidebar-data.mjs",
     "test:7420:soak": "node ./scripts/run-powershell-script.mjs ./scripts/soak-7420.ps1",
     "audit:app-server-schemas": "node ./scripts/run-powershell-script.mjs ./scripts/audit-app-server-schemas.ps1",
     "audit:app-server-schemas:update-summary": "node ./scripts/update-app-server-schema-audit-summary.mjs",
