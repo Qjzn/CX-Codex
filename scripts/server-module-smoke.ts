@@ -2883,7 +2883,7 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
   const readPinnedThreadIds = async (): Promise<string[]> => [' existing ', 'pin-a', 'missing', 'pin-b', 'throws']
 
   assert.equal(await augmenter.augmentThreadListRpcResult({
-    params: { archived: false },
+    params: { archived: true },
     result: baseResult,
     readPinnedThreadIds,
     readThreadById,
@@ -2891,7 +2891,7 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
   assert.equal(calls.length, 0)
 
   assert.equal(await augmenter.augmentThreadListRpcResult({
-    params: { archived: true, cursor: 'next-page' },
+    params: { archived: false, cursor: 'next-page' },
     result: baseResult,
     readPinnedThreadIds,
     readThreadById,
@@ -2899,7 +2899,7 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
   assert.equal(calls.length, 0)
 
   const augmented = await augmenter.augmentThreadListRpcResult({
-    params: { archived: true },
+    params: { archived: false },
     result: baseResult,
     readPinnedThreadIds,
     readThreadById,
@@ -2909,7 +2909,7 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
   assert.equal(augmented.marker, true)
 
   const cached = await augmenter.augmentThreadListRpcResult({
-    params: { archived: true },
+    params: {},
     result: baseResult,
     readPinnedThreadIds,
     readThreadById,
@@ -2919,7 +2919,7 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
 
   nowMs += 101
   await augmenter.augmentThreadListRpcResult({
-    params: { archived: true },
+    params: { archived: false },
     result: baseResult,
     readPinnedThreadIds,
     readThreadById,
@@ -2940,7 +2940,7 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
     },
   })
   const factoryAugmented = await augmentThreadListRpcResult(
-    { archived: true },
+    { archived: false },
     { data: [] },
   ) as { data: Array<{ id: string; title?: string }> }
   assert.deepEqual(factoryAugmented.data, [{ id: 'pin-factory', title: 'Factory' }])

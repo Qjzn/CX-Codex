@@ -50,7 +50,7 @@ export class AppServerThreadListAugmenter {
 
   async augmentThreadListRpcResult(options: ThreadListAugmentOptions): Promise<unknown> {
     const paramsRecord = asRecord(options.params)
-    if (paramsRecord?.archived !== true) return options.result
+    if (paramsRecord?.archived === true) return options.result
     if (typeof paramsRecord?.cursor === 'string' && paramsRecord.cursor.length > 0) return options.result
 
     const resultRecord = asRecord(options.result)

@@ -9332,3 +9332,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 34200; `/health` returned ok.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-pinned-thread-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 screenshot artifact: `output/regression-7420/p1-pinned-thread-parity/sidebar-rows-fixture-phone.png`.
+
+### Feature: P1 missing pinned thread supplemental hydration
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- `/codex-api/pinned-threads` returns merged Web + Codex Desktop pinned thread ids.
+- `getThreadGroupsV2` calls active `thread/list` with `archived: false`.
+
+#### Steps
+1. Confirm `AppServerThreadListAugmenter` supplements only active/default first-page `thread/list` results.
+2. Confirm archived `thread/list` results are returned unchanged.
+3. Confirm active `thread/list` cursor pages are returned unchanged.
+4. Confirm missing pinned ids are hydrated through `thread/read` with `includeTurns: false`.
+5. Confirm invalid or failed `thread/read` results do not break the original list response.
+6. Run `git diff --check`.
+7. Run `npm.cmd run verify:server-modules`.
+8. Run `npm.cmd run build`.
+9. Restart 7420 with `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-pinned-thread-supplement`.
+
+#### Expected Results
+- A pinned thread that is absent from the active first-page `thread/list` response is appended to the server data source before the sidebar groups are built.
+- Archived lists and cursor pages are not polluted with supplemental pinned threads.
+- Existing pinned section ordering, running-section de-duplication, pinned project order, and project preview latest-5 behavior do not regress.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/p1-pinned-thread-supplement/` when `-CaptureScreenshots` is used.
+- To roll back, revert `src/server/appServerThreadListAugment.ts`, `scripts/server-module-smoke.ts`, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 server module verification: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; the smoke now covers active/default first-page supplementation, archived list skip, active cursor-page skip, max-read behavior, failed read tolerance, and `thread/read` factory params.
+- 2026-07-05 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
+- 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 50220; `/health` returned ok.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-pinned-thread-supplement` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 screenshot artifact: `output/regression-7420/p1-pinned-thread-supplement/sidebar-rows-fixture-phone.png`.
