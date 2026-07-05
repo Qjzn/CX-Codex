@@ -3609,7 +3609,7 @@ This file tracks manual regression and feature verification steps.
 
 #### Prerequisites
 - 当前仓库包含 `src/server/appServerThreadListAugment.ts` 和 `src/server/codexAppServerBridge.ts`。
-- `scripts/server-module-smoke.ts` 已覆盖 archived 首屏 pinned thread 补全、cursor 分页不补全、existing thread 去重、TTL 缓存、失败缓存和每轮最大补读数。
+- `scripts/server-module-smoke.ts` 已覆盖 active/default 首屏 pinned thread 补全、archived 列表不补全、cursor 分页不补全、existing thread 去重、TTL 缓存、失败缓存和每轮最大补读数。
 
 #### Steps
 1. 执行 `git diff --check`。
@@ -3619,7 +3619,7 @@ This file tracks manual regression and feature verification steps.
 5. 代码审查确认 `readThreadById` 仍调用 `thread/read` 且参数保持 `{ threadId, includeTurns: false }`。
 
 #### Expected Results
-- `thread/list` 只在 `archived === true` 且没有 cursor 的第一页结果中补充缺失 pinned thread。
+- `thread/list` 只在 active/default 且没有 cursor 的第一页结果中补充缺失 pinned thread；archived 列表和 cursor 分页结果保持原样。
 - 结果中已有的 thread id 不会被重复追加。
 - 单轮最多读取 `SUPPLEMENTAL_THREAD_SUMMARY_MAX_READS` 个未缓存 pinned thread，失败读取被短期缓存，避免缺失历史线程拖慢列表。
 - 补全结果保持原 result 字段，并在 `data` 尾部追加补到的 thread summary。
@@ -7006,7 +7006,7 @@ This file tracks manual regression and feature verification steps.
 
 #### Expected Results
 - `codexAppServerBridge.ts` no longer owns the supplemental thread-list RPC wrapper details.
-- Archived first-page `thread/list` augmentation still uses merged pinned thread ids and best-effort `thread/read` summaries.
+- Active/default first-page `thread/list` augmentation uses merged pinned thread ids and best-effort `thread/read` summaries; archived and cursor pages stay unchanged.
 - Supplemental summary reads still call `thread/read` with `includeTurns: false`.
 - `scripts/server-module-smoke.ts` covers the factory-created augmenter and verifies the RPC method and params.
 - Typecheck, build, governance, and release verification complete without new errors.
