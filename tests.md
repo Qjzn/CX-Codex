@@ -9259,3 +9259,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 22316; `/health` returned ok.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-pinned-project-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 screenshot artifact: `output/regression-7420/p1-pinned-project-parity/home-desktop.png`.
+
+### Feature: P1 project thread preview ordering
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The sidebar regression fixture contains an intentionally unsorted first project thread array.
+- P1 workspace project order and pinned project behavior are already enabled.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/__regression/sidebar-rows?regression=frontend` at a phone-sized viewport such as 393x852.
+2. Confirm the first project renders exactly 5 thread rows by default.
+3. Confirm those 5 rows are sorted by `updatedAtIso`/`createdAtIso` descending, even though the fixture input array is not sorted.
+4. Confirm the first 5 thread ids are `fixture-thread-running`, `fixture-thread-unread`, `fixture-thread-idle`, `fixture-thread-four`, and `fixture-thread-five`.
+5. Confirm the show-more label remains `显示更多 3 条`.
+6. Confirm the running and pinned thread sections still keep their own rows while each matching project row appears exactly once inside the project list.
+7. Run `git diff --check`.
+8. Run `npm.cmd run build`.
+9. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-project-thread-order`.
+
+#### Expected Results
+- Project thread preview rows are deterministic and newest-first regardless of App Server or fixture input order.
+- The preview limit remains 5 rows, and the hidden count remains accurate.
+- Search mode still returns matching rows in newest-first order.
+- P1 project ordering and pinned project markers do not regress.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/p1-project-thread-order/` when `-CaptureScreenshots` is used.
+- To roll back, revert `src/components/sidebar/SidebarThreadTree.vue`, `src/components/sidebar/SidebarRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build verification: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
+- 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 42060; `/health` returned ok.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-project-thread-order` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 screenshot artifact: `output/regression-7420/p1-project-thread-order/sidebar-rows-fixture-phone.png`.

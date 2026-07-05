@@ -1680,10 +1680,11 @@ function projectGroupStyle(projectName: string): Record<string, string> | undefi
 }
 
 function projectThreads(group: UiProjectGroup): UiThread[] {
+  const sortedThreads = [...group.threads].sort(compareThreadByUpdatedAt)
   if (isSearchActive.value) {
-    return group.threads.filter((thread) => threadMatchesSearch(thread))
+    return sortedThreads.filter((thread) => threadMatchesSearch(thread))
   }
-  return group.threads
+  return sortedThreads
 }
 
 function visibleThreads(group: UiProjectGroup): UiThread[] {

@@ -998,6 +998,7 @@ JSON.stringify((() => {
   const rows = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row'));
   const projectGroups = Array.from(document.querySelectorAll('.sidebar-regression-fixture .project-group'));
   const firstProjectRows = Array.from(projectGroups[0]?.querySelectorAll('.thread-row') || []);
+  const firstProjectThreadIds = firstProjectRows.map((node) => node.getAttribute('data-thread-id') || '');
   const emptyProjectGroup = projectGroups.find((node) => node.getAttribute('data-project-name') === 'empty-root') || null;
   const pinnedProjectGroups = projectGroups.filter((node) => node.getAttribute('data-pinned-project') === 'true');
   const showMoreButtons = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-show-more-button'));
@@ -1055,6 +1056,7 @@ JSON.stringify((() => {
     emptyWorkspaceProjectText: emptyProjectGroup?.textContent?.trim() || '',
     emptyWorkspaceNewThreadButtonCount: emptyProjectGroup?.querySelectorAll('.thread-start-button').length || 0,
     firstProjectThreadRowCount: firstProjectRows.length,
+    firstProjectThreadIds,
     showMoreButtonCount: showMoreButtons.length,
     firstShowMoreText: showMoreButtons[0]?.textContent?.trim() || '',
     runningThreadRowCount: countRowsByThreadId('fixture-thread-running'),
@@ -1090,6 +1092,16 @@ function Assert-SidebarFixture {
   Assert-True ([string]$Metrics.emptyWorkspaceProjectText -like "*暂无会话*") "sidebar fixture empty workspace-root project does not show empty state"
   Assert-True ([int]$Metrics.emptyWorkspaceNewThreadButtonCount -eq 1) "sidebar fixture empty workspace-root project is missing new-thread action"
   Assert-True ([int]$Metrics.firstProjectThreadRowCount -eq 5) "sidebar fixture first expanded project should show exactly 5 threads by default, got $($Metrics.firstProjectThreadRowCount)"
+  $expectedFirstProjectThreadIds = @(
+    "fixture-thread-running",
+    "fixture-thread-unread",
+    "fixture-thread-idle",
+    "fixture-thread-four",
+    "fixture-thread-five"
+  )
+  for ($index = 0; $index -lt $expectedFirstProjectThreadIds.Count; $index++) {
+    Assert-True ([string]$Metrics.firstProjectThreadIds[$index] -eq $expectedFirstProjectThreadIds[$index]) "sidebar fixture project thread order drifted at index $index; expected $($expectedFirstProjectThreadIds[$index]), got $($Metrics.firstProjectThreadIds[$index])"
+  }
   Assert-True ([int]$Metrics.showMoreButtonCount -ge 1) "sidebar fixture is missing show more control for long project thread list"
   Assert-True ([string]$Metrics.firstShowMoreText -eq "显示更多 3 条") "sidebar fixture show more label is unexpected: $($Metrics.firstShowMoreText)"
   Assert-True ([int]$Metrics.runningThreadRowCount -ge 2) "sidebar fixture running thread is missing from either running section or project list"
