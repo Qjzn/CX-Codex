@@ -89,6 +89,26 @@ const messages: UiMessage[] = [
     isUnhandled: true,
     turnIndex: 1,
   },
+  {
+    id: 'fixture-command-output',
+    role: 'system',
+    text: '',
+    messageType: 'commandExecution',
+    commandExecution: {
+      command: 'npm.cmd run test:7420:frontend -- --fixture command-output',
+      cwd: 'E:/javaword/CXCodex/codexui',
+      status: 'completed',
+      aggregatedOutput: [
+        '> fixture command output',
+        'fixture-command-output: ok',
+        'checked structured command block rendering',
+      ].join('\n'),
+      exitCode: 0,
+      durationMs: 1450,
+      startedAtMs: 1783227600000,
+    },
+    turnIndex: 1,
+  },
 ]
 
 const pendingRequests: UiServerRequest[] = [

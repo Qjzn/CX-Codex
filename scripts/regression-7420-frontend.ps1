@@ -198,12 +198,16 @@ JSON.stringify((() => {
   const copyButtons = Array.from(document.querySelectorAll('.message-code-copy'));
   const fileCards = Array.from(document.querySelectorAll('.message-file-card'));
   const rawCards = Array.from(document.querySelectorAll('.message-structured-card'));
+  const commandRows = Array.from(document.querySelectorAll('.cmd-row'));
+  const commandOutputWraps = Array.from(document.querySelectorAll('.cmd-output-wrap'));
   const requestCards = Array.from(document.querySelectorAll('.request-card'));
   const permissionPanels = Array.from(document.querySelectorAll('.request-permission-panel'));
   const requestButtons = Array.from(document.querySelectorAll('.request-button'));
   const firstCopyButton = copyButtons[0];
+  const firstCommandRow = commandRows[0];
   const firstRequestCard = requestCards[0];
   const firstPermissionPanel = permissionPanels[0];
+  const commandRowRadius = firstCommandRow ? Number.parseFloat(window.getComputedStyle(firstCommandRow).borderTopLeftRadius || '0') : 0;
   const requestCardRadius = firstRequestCard ? Number.parseFloat(window.getComputedStyle(firstRequestCard).borderTopLeftRadius || '0') : 0;
   const permissionPanelRadius = firstPermissionPanel ? Number.parseFloat(window.getComputedStyle(firstPermissionPanel).borderTopLeftRadius || '0') : 0;
   const textContent = document.body.textContent || '';
@@ -213,6 +217,10 @@ JSON.stringify((() => {
     copyButtonCount: copyButtons.length,
     fileCardCount: fileCards.length,
     rawPayloadCardCount: rawCards.length,
+    commandRowCount: commandRows.length,
+    commandOutputWrapCount: commandOutputWraps.length,
+    expandedCommandOutputCount: commandOutputWraps.filter((node) => node.classList.contains('cmd-output-visible')).length,
+    commandRowRadius,
     requestCardCount: requestCards.length,
     permissionPanelCount: permissionPanels.length,
     requestButtonCount: requestButtons.length,
@@ -223,6 +231,8 @@ JSON.stringify((() => {
     hasMetaLine: !!document.querySelector('.message-code-line[data-kind="meta"]'),
     hasFixtureCodeText: textContent.includes('fixture-code-block'),
     hasFixtureRawText: textContent.includes('fixture-raw-payload'),
+    hasFixtureCommandText: textContent.includes('fixture-command-output: ok'),
+    hasFixtureCommandLabel: textContent.includes('npm.cmd run test:7420:frontend'),
     hasFixturePermissionText: textContent.includes('fixture-permission-workbench'),
     hasPermissionServerText: textContent.includes('chrome'),
     hasPermissionToolText: textContent.includes('browser_click'),
@@ -246,6 +256,10 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.copyButtonCount -ge 2) "conversation fixture is missing code copy buttons"
   Assert-True ($Metrics.fileCardCount -ge 2) "conversation fixture is missing file cards"
   Assert-True ($Metrics.rawPayloadCardCount -ge 1) "conversation fixture is missing raw payload card"
+  Assert-True ($Metrics.commandRowCount -ge 1) "conversation fixture is missing command row"
+  Assert-True ($Metrics.commandOutputWrapCount -ge 1) "conversation fixture is missing command output wrapper"
+  Assert-True ($Metrics.expandedCommandOutputCount -ge 1) "conversation fixture command output did not expand"
+  Assert-True ($Metrics.commandRowRadius -le 10) "conversation fixture command row radius is too large: $($Metrics.commandRowRadius)"
   Assert-True ($Metrics.requestCardCount -ge 1) "conversation fixture is missing pending request card"
   Assert-True ($Metrics.permissionPanelCount -ge 1) "conversation fixture is missing MCP permission panel"
   Assert-True ($Metrics.requestButtonCount -ge 3) "conversation fixture is missing permission action buttons"
@@ -256,6 +270,8 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.hasMetaLine -eq $true) "conversation fixture is missing diff metadata line styling"
   Assert-True ($Metrics.hasFixtureCodeText -eq $true) "conversation fixture is missing fixture code text"
   Assert-True ($Metrics.hasFixtureRawText -eq $true) "conversation fixture is missing raw payload marker"
+  Assert-True ($Metrics.hasFixtureCommandText -eq $true) "conversation fixture is missing command output marker"
+  Assert-True ($Metrics.hasFixtureCommandLabel -eq $true) "conversation fixture is missing command label"
   Assert-True ($Metrics.hasFixturePermissionText -eq $true) "conversation fixture is missing permission workbench marker"
   Assert-True ($Metrics.hasPermissionServerText -eq $true) "conversation fixture is missing MCP server label"
   Assert-True ($Metrics.hasPermissionToolText -eq $true) "conversation fixture is missing MCP tool label"
@@ -268,7 +284,30 @@ function Assert-ConversationFixture {
 function Expand-ConversationFixturePendingRequests {
   param([string]$Session)
 
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "click", ".conversation-process-toggle") | Out-Null
+  $script = @'
+JSON.stringify((() => {
+  if (!document.querySelector('.request-card')) {
+    document.querySelector('.conversation-process-toggle')?.click();
+  }
+  return { expanded: Boolean(document.querySelector('.request-card')) };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
+}
+
+function Expand-ConversationFixtureCommandOutput {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  if (!document.querySelector('.cmd-output-wrap.cmd-output-visible')) {
+    document.querySelector('.cmd-row')?.click();
+  }
+  return { expanded: Boolean(document.querySelector('.cmd-output-wrap.cmd-output-visible')) };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
 }
 
@@ -373,6 +412,7 @@ try {
   $fixture = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $DesktopWidth -Height $DesktopHeight
   Assert-Page -Page $fixture -Name "conversation blocks fixture desktop"
   Expand-ConversationFixturePendingRequests -Session $session
+  Expand-ConversationFixtureCommandOutput -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session)
   Assert-ConversationFixtureCopyInteraction -Session $session
   Add-RegressionResult -Name "conversation-blocks-fixture" -Page $fixture

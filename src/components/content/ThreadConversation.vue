@@ -1171,7 +1171,7 @@ const props = defineProps<{
 
 const MESSAGE_WINDOW_SIZE = 10
 const renderableMessages = computed<UiMessage[]>(() => (
-  props.messages.filter((message) => !isCommandMessage(message) && message.messageType !== 'worked')
+  props.messages.filter((message) => message.messageType !== 'worked')
 ))
 const isRevealingOlderMessages = ref(false)
 const canAutoRevealOlderMessages = ref(true)
@@ -5796,20 +5796,32 @@ onBeforeUnmount(() => {
 }
 
 .cmd-row {
-  @apply w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded-[14px] border border-[#ddd5c7] bg-[#f8f4ec] cursor-pointer transition-colors duration-150 text-left hover:bg-[#f1ebde];
+  @apply w-full flex items-center gap-1.5 border px-2.5 py-1.5 cursor-pointer transition-colors duration-150 text-left;
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-x;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.cmd-row:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
 }
 
 .cmd-row.cmd-expanded {
-  @apply rounded-b-none border-b-0;
+  border-bottom: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
 }
 
 .cmd-chevron {
-  @apply text-[10px] text-[#8f8577] transition-transform duration-100 flex-shrink-0;
+  @apply text-[10px] transition-transform duration-100 flex-shrink-0;
+  color: var(--ui-text-tertiary);
 }
 
 .cmd-chevron-open {
@@ -5817,9 +5829,10 @@ onBeforeUnmount(() => {
 }
 
 .cmd-label {
-  @apply text-xs font-mono text-[#544a3d];
+  @apply text-xs font-mono;
   flex: 0 0 auto;
   min-width: max-content;
+  color: var(--ui-text-primary);
 }
 
 .cmd-status {
@@ -5839,7 +5852,8 @@ onBeforeUnmount(() => {
 }
 
 .cmd-duration {
-  @apply text-[11px] text-[#7b7062] flex-shrink-0;
+  @apply text-[11px] flex-shrink-0;
+  color: var(--ui-text-tertiary);
 }
 
 .cmd-status-running .cmd-status {
@@ -5855,22 +5869,24 @@ onBeforeUnmount(() => {
 }
 
 .cmd-output-wrap {
-  @apply rounded-b-lg bg-zinc-900;
+  background: #18181b;
   display: grid;
   grid-template-rows: 0fr;
   transition: grid-template-rows 150ms ease-out;
   border: 1px solid transparent;
   border-top: none;
+  border-bottom-right-radius: var(--ui-radius-control);
+  border-bottom-left-radius: var(--ui-radius-control);
 }
 
 .cmd-output-wrap.cmd-output-visible {
   grid-template-rows: 1fr;
-  border-color: #d8cfbf;
+  border-color: var(--ui-border-subtle);
 }
 
 .cmd-output-wrap.cmd-output-collapsing {
   grid-template-rows: 1fr;
-  border-color: #d8cfbf;
+  border-color: var(--ui-border-subtle);
 }
 
 .cmd-output-inner {

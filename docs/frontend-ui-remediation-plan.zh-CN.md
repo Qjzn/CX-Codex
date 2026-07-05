@@ -30,6 +30,8 @@
 
 GitHub 上的 assistant-ui、Palot、OpenCode ChatUI、Cline 只能参考结构和交互，不直接参考视觉主题。
 
+2026-07-05 补充：`friuns2/codex-mobile` 可作为 Codex Web/Mobile 工作台实现参考，尤其是独立 `ThreadPendingRequestPanel`、`ThreadTerminalPanel`、移动 drawer sidebar 和 mobile sheet 的组件边界。它的深色大圆角 pending request 面板不作为本项目视觉参考；本项目继续以 Codex Desktop 截图的白灰中性工程工作台为视觉 source of truth。
+
 ### 稳定优先，但不能只追求稳
 
 稳定是底线，美观和体验是目标：

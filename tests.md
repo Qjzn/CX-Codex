@@ -8441,3 +8441,35 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, and the expanded `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 fixture permission assertions: the built-in conversation fixture verified at least one pending request card, one MCP permission panel, service `chrome`, tool `browser_click`, the marker `fixture-permission-workbench`, the action labels `允许并继续` / `拒绝` / `稍后处理`, request/permission radius no larger than 10px, and no horizontal overflow.
+
+### Feature: P3 command output fixture baseline
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Built-in regression fixture route `/#/__regression/conversation-blocks` is available.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/__regression/conversation-blocks?regression=frontend`.
+2. Confirm the fixture includes a completed command row for `npm.cmd run test:7420:frontend -- --fixture command-output`.
+3. Click the command row and confirm the command output expands below it.
+4. Confirm the expanded output includes `fixture-command-output: ok`.
+5. Confirm the command row uses neutral thin borders and compact control radius instead of warm oversized card styling.
+6. Run `git diff --check`.
+7. Run `npm.cmd run build:frontend`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+
+#### Expected Results
+- Command execution output has a distinct structured log block rather than blending into generic Markdown.
+- The fixture regression verifies the command row, output wrapper, expanded output state, command marker, radius ceiling, and no horizontal overflow.
+- Browser regression passes with no page errors.
+
+#### Rollback/Cleanup Notes
+- No generated screenshots are required for this narrow fixture baseline.
+- To roll back, revert `ConversationRegressionFixture.vue`, `ThreadConversation.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, and the expanded `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 fixture command assertions: the built-in conversation fixture verified at least one command row, command output wrapper, expanded command output state, command label containing `npm.cmd run test:7420:frontend`, output marker `fixture-command-output: ok`, command row radius no larger than 10px, and no horizontal overflow.
