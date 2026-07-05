@@ -39,6 +39,8 @@ const now = Date.parse('2026-07-05T10:00:00.000Z')
 const groups: UiProjectGroup[] = [
   {
     projectName: 'E:/javaword/CXCodex/codexui',
+    isPinnedProject: true,
+    pinnedProjectRank: 0,
     threads: [
       {
         id: 'fixture-thread-running',

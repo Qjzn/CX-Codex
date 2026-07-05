@@ -9224,3 +9224,38 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-project-order-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 screenshot artifact: `output/regression-7420/p1-project-order-parity/home-desktop.png`.
+
+### Feature: P1 Codex Desktop pinned project sidebar parity
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- `C:\Users\SW\.codex\.codex-global-state.json` contains Codex Desktop `pinned-project-ids`.
+- Current real pinned project ids include `E:\javaword\ZXSAAS` and `E:\javaword\ZXSAAS\mini`.
+
+#### Steps
+1. Call `GET http://127.0.0.1:7420/codex-api/workspace-roots-state`.
+2. Confirm `data.pinnedProjectIds` is non-empty and its entries are also present through `projectOrder` or raw workspace `order`.
+3. Open `http://127.0.0.1:7420/#/` and read the first `.project-group` rows.
+4. Confirm the first sampled project rows follow `pinnedProjectIds`, then `projectOrder`, then raw `order`, with duplicates removed.
+5. Confirm pinned project rows have `data-pinned-project="true"` and show the compact pin marker next to the project title.
+6. Confirm non-pinned projects keep their previous desktop `projectOrder` relative order.
+7. Confirm the `sidebar-rows` fixture still limits the first expanded project to 5 visible threads and now reports exactly one pinned project marker.
+8. Run `git diff --check`.
+9. Run `npm.cmd run build`.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-pinned-project-parity`.
+
+#### Expected Results
+- 7420 visually promotes desktop pinned projects before normal projects without duplicating the same project in the sidebar.
+- Pinned project display is compact: one pin icon beside the project title, no extra explanatory row or status block.
+- Existing pinned thread section, running thread section, empty workspace-root projects, project labels, and 5-row project preview behavior do not regress.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/p1-pinned-project-parity/` when `-CaptureScreenshots` is used.
+- To roll back, revert `src/types/codex.ts`, `src/composables/useDesktopState.ts`, `src/components/sidebar/SidebarThreadTree.vue`, `src/components/sidebar/SidebarRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
+- 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 22316; `/health` returned ok.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-pinned-project-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 screenshot artifact: `output/regression-7420/p1-pinned-project-parity/home-desktop.png`.

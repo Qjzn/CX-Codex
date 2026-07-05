@@ -654,7 +654,26 @@ function orderGroupsByProjectOrder(incoming: UiProjectGroup[], projectOrder: str
     }
   }
 
-  return ordered
+  return orderPinnedProjectGroupsFirst(ordered)
+}
+
+function getPinnedProjectRank(group: UiProjectGroup): number {
+  return group.isPinnedProject === true && typeof group.pinnedProjectRank === 'number'
+    ? group.pinnedProjectRank
+    : Number.MAX_SAFE_INTEGER
+}
+
+function orderPinnedProjectGroupsFirst(groups: UiProjectGroup[]): UiProjectGroup[] {
+  const pinnedGroups = groups
+    .filter((group) => group.isPinnedProject === true)
+    .sort((first, second) => getPinnedProjectRank(first) - getPinnedProjectRank(second))
+  if (pinnedGroups.length === 0) return groups
+
+  const pinnedProjectNames = new Set(pinnedGroups.map((group) => group.projectName))
+  return [
+    ...pinnedGroups,
+    ...groups.filter((group) => !pinnedProjectNames.has(group.projectName)),
+  ]
 }
 
 function areStringArraysEqual(first?: string[], second?: string[]): boolean {
@@ -1063,6 +1082,8 @@ function mergeThreadGroups(
       previousGroup &&
       previousGroup.projectName === incomingGroup.projectName &&
       previousGroup.workspaceRoot === incomingGroup.workspaceRoot &&
+      previousGroup.isPinnedProject === incomingGroup.isPinnedProject &&
+      previousGroup.pinnedProjectRank === incomingGroup.pinnedProjectRank &&
       areThreadArraysEqual(previousGroup.threads, mergedThreads)
     ) {
       return previousGroup
@@ -1071,6 +1092,8 @@ function mergeThreadGroups(
     return {
       projectName: incomingGroup.projectName,
       workspaceRoot: incomingGroup.workspaceRoot,
+      isPinnedProject: incomingGroup.isPinnedProject,
+      pinnedProjectRank: incomingGroup.pinnedProjectRank,
       threads: mergedThreads,
     }
   })
@@ -1096,6 +1119,8 @@ function mergeIncomingWithLocalInProgressThreads(
   const merged: UiProjectGroup[] = incoming.map((group) => ({
     projectName: group.projectName,
     workspaceRoot: group.workspaceRoot,
+    isPinnedProject: group.isPinnedProject,
+    pinnedProjectRank: group.pinnedProjectRank,
     threads: [...group.threads],
   }))
 
@@ -1107,6 +1132,8 @@ function mergeIncomingWithLocalInProgressThreads(
         merged[mergedGroupIndex] = {
           projectName: merged[mergedGroupIndex].projectName,
           workspaceRoot: merged[mergedGroupIndex].workspaceRoot,
+          isPinnedProject: merged[mergedGroupIndex].isPinnedProject,
+          pinnedProjectRank: merged[mergedGroupIndex].pinnedProjectRank,
           threads: [thread, ...merged[mergedGroupIndex].threads],
         }
       }
@@ -1145,12 +1172,33 @@ function isWorkspaceRootForProject(rootPath: string, projectName: string, projec
 function createWorkspaceRootGroups(rootsState: WorkspaceRootsState): UiProjectGroup[] {
   const groups: UiProjectGroup[] = []
   const seen = new Set<string>()
+  const pinnedProjectRankByRoot = new Map<string, number>()
+  const pinnedProjectRankByName = new Map<string, number>()
+  rootsState.pinnedProjectIds.forEach((rootPath, index) => {
+    const normalizedRoot = normalizeComparablePath(rootPath)
+    const projectName = toProjectNameFromWorkspaceRoot(rootPath)
+    if (normalizedRoot && !pinnedProjectRankByRoot.has(normalizedRoot)) {
+      pinnedProjectRankByRoot.set(normalizedRoot, index)
+    }
+    if (projectName && !pinnedProjectRankByName.has(projectName)) {
+      pinnedProjectRankByName.set(projectName, index)
+    }
+  })
 
   for (const rootPath of getOrderedWorkspaceRootPaths(rootsState)) {
     const projectName = toProjectNameFromWorkspaceRoot(rootPath)
     if (!projectName || seen.has(projectName)) continue
     seen.add(projectName)
-    groups.push({ projectName, workspaceRoot: rootPath, threads: [] })
+    const pinnedProjectRank =
+      pinnedProjectRankByRoot.get(normalizeComparablePath(rootPath)) ??
+      pinnedProjectRankByName.get(projectName)
+    groups.push({
+      projectName,
+      workspaceRoot: rootPath,
+      isPinnedProject: typeof pinnedProjectRank === 'number',
+      pinnedProjectRank,
+      threads: [],
+    })
   }
 
   return groups
@@ -1305,7 +1353,16 @@ export function useDesktopState() {
 
     for (const workspaceGroup of workspaceRootGroups.value) {
       const threadGroup = threadGroupByName.get(workspaceGroup.projectName)
-      merged.push(threadGroup ? { ...threadGroup, workspaceRoot: workspaceGroup.workspaceRoot } : workspaceGroup)
+      merged.push(
+        threadGroup
+          ? {
+              ...threadGroup,
+              workspaceRoot: workspaceGroup.workspaceRoot,
+              isPinnedProject: workspaceGroup.isPinnedProject,
+              pinnedProjectRank: workspaceGroup.pinnedProjectRank,
+            }
+          : workspaceGroup,
+      )
       seen.add(workspaceGroup.projectName)
     }
 
@@ -1929,6 +1986,8 @@ export function useDesktopState() {
     return groups.map((group) => ({
       projectName: group.projectName,
       workspaceRoot: group.workspaceRoot,
+      isPinnedProject: group.isPinnedProject,
+      pinnedProjectRank: group.pinnedProjectRank,
       threads: group.threads.map((thread) => {
         const cached = titles[thread.id]
         return cached ? { ...thread, title: cached } : thread
@@ -1941,6 +2000,8 @@ export function useDesktopState() {
     const flaggedGroups: UiProjectGroup[] = withTitles.map((group) => ({
       projectName: group.projectName,
       workspaceRoot: group.workspaceRoot,
+      isPinnedProject: group.isPinnedProject,
+      pinnedProjectRank: group.pinnedProjectRank,
       threads: group.threads.map((thread) => {
         const inProgress = isThreadExecutionActive(thread.id)
         const isSelected = selectedThreadId.value === thread.id
@@ -1989,6 +2050,9 @@ export function useDesktopState() {
       const remainingThreads = existingGroup.threads.filter((thread) => thread.id !== threadId)
       const nextGroup: UiProjectGroup = {
         projectName,
+        workspaceRoot: existingGroup.workspaceRoot,
+        isPinnedProject: existingGroup.isPinnedProject,
+        pinnedProjectRank: existingGroup.pinnedProjectRank,
         threads: [nextThread, ...remainingThreads],
       }
       const nextGroups = [...sourceGroups.value]

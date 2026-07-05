@@ -301,6 +301,7 @@
         :ref="(el) => setProjectGroupRef(group.projectName, el)"
         class="project-group"
         :data-project-name="group.projectName"
+        :data-pinned-project="group.isPinnedProject === true"
         :data-expanded="!isCollapsed(group.projectName)"
         :data-dragging="isDraggingProject(group.projectName)"
         :style="projectGroupStyle(group.projectName)"
@@ -333,7 +334,10 @@
               @mousedown.left="onProjectHandleMouseDown($event, group.projectName)"
             >
               <span class="project-title-wrap">
-                <span class="project-title">{{ getProjectDisplayName(group.projectName) }}</span>
+                <span class="project-title-line">
+                  <span class="project-title">{{ getProjectDisplayName(group.projectName) }}</span>
+                  <IconTablerPin v-if="group.isPinnedProject === true" class="project-pinned-icon" title="置顶项目" />
+                </span>
                 <span class="project-summary">{{ getProjectSummary(group) }}</span>
               </span>
             </span>
@@ -1958,6 +1962,15 @@ onBeforeUnmount(() => {
   font-family: var(--font-sans-reading);
   line-height: 1.25rem;
   letter-spacing: 0;
+}
+
+.project-title-line {
+  @apply min-w-0 inline-flex items-center gap-1.5;
+}
+
+.project-pinned-icon {
+  @apply h-3.5 w-3.5 shrink-0;
+  color: var(--ui-accent);
 }
 
 .project-title-wrap {

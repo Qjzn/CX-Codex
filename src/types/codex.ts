@@ -221,6 +221,8 @@ export type UiThreadTokenUsage = {
 export type UiProjectGroup = {
   projectName: string
   workspaceRoot?: string
+  isPinnedProject?: boolean
+  pinnedProjectRank?: number
   threads: UiThread[]
 }
 

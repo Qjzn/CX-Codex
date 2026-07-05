@@ -246,6 +246,7 @@ function Read-HomeWorkspaceProjectMetrics {
 JSON.stringify((() => {
   const groups = Array.from(document.querySelectorAll('.project-group')).map((node) => ({
     projectName: node.getAttribute('data-project-name') || '',
+    pinnedProject: node.getAttribute('data-pinned-project') === 'true',
     text: (node.textContent || '').replace(/\s+/g, ' ').trim(),
     threadRowCount: node.querySelectorAll('.thread-row').length,
     newThreadButtonCount: node.querySelectorAll('.thread-start-button').length
@@ -263,7 +264,15 @@ function Assert-WorkspaceRootProjectParity {
   )
 
   $workspaceRoots = @()
-  foreach ($rootPath in @($RootsState.data.projectOrder) + @($RootsState.data.order)) {
+  $pinnedRootSet = @{}
+  foreach ($rootPath in @($RootsState.data.pinnedProjectIds)) {
+    $normalizedPinnedRootPath = [string]$rootPath
+    if (-not [string]::IsNullOrWhiteSpace($normalizedPinnedRootPath)) {
+      $pinnedRootSet[$normalizedPinnedRootPath] = $true
+    }
+  }
+
+  foreach ($rootPath in @($RootsState.data.pinnedProjectIds) + @($RootsState.data.projectOrder) + @($RootsState.data.order)) {
     $normalizedRootPath = [string]$rootPath
     if ([string]::IsNullOrWhiteSpace($normalizedRootPath)) {
       continue
@@ -292,6 +301,9 @@ function Assert-WorkspaceRootProjectParity {
 
     Assert-True ([string]$group.projectName -eq $expectedProjectName) "home sidebar project order drifted at index $index; expected $expectedProjectName from workspace root $rootPath, got $($group.projectName)"
     Assert-True ([string]$group.text -like "*$expectedLabel*") "home sidebar project label drifted for $rootPath; expected label $expectedLabel"
+    if ($pinnedRootSet.ContainsKey($rootPath)) {
+      Assert-True ($group.pinnedProject -eq $true) "home sidebar pinned project $expectedProjectName is missing pinned marker"
+    }
     Assert-True ([int]$group.newThreadButtonCount -eq 1) "home sidebar project $expectedProjectName is missing project-level new-thread action"
     if ([int]$group.threadRowCount -eq 0) {
       Assert-True ([string]$group.text -like "*暂无会话*") "home sidebar empty workspace project $expectedProjectName is missing empty-state text"
@@ -987,6 +999,7 @@ JSON.stringify((() => {
   const projectGroups = Array.from(document.querySelectorAll('.sidebar-regression-fixture .project-group'));
   const firstProjectRows = Array.from(projectGroups[0]?.querySelectorAll('.thread-row') || []);
   const emptyProjectGroup = projectGroups.find((node) => node.getAttribute('data-project-name') === 'empty-root') || null;
+  const pinnedProjectGroups = projectGroups.filter((node) => node.getAttribute('data-pinned-project') === 'true');
   const showMoreButtons = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-show-more-button'));
   const sources = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row-source'));
   const indicators = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-status-indicator'));
@@ -1036,6 +1049,8 @@ JSON.stringify((() => {
   return {
     rowCount: rows.length,
     projectOrder: projectGroups.map((node) => node.getAttribute('data-project-name') || ''),
+    pinnedProjectCount: pinnedProjectGroups.length,
+    firstProjectPinned: projectGroups[0]?.getAttribute('data-pinned-project') === 'true',
     hasEmptyWorkspaceProject: !!emptyProjectGroup,
     emptyWorkspaceProjectText: emptyProjectGroup?.textContent?.trim() || '',
     emptyWorkspaceNewThreadButtonCount: emptyProjectGroup?.querySelectorAll('.thread-start-button').length || 0,
@@ -1069,6 +1084,8 @@ function Assert-SidebarFixture {
   Assert-True ($Metrics.rowCount -ge 4) "sidebar fixture is missing thread rows"
   Assert-True ($Metrics.projectOrder.Count -ge 3) "sidebar fixture is missing project groups"
   Assert-True ([string]$Metrics.projectOrder[0] -eq "E:/javaword/CXCodex/codexui") "sidebar fixture project order no longer follows input/app-server order"
+  Assert-True ([int]$Metrics.pinnedProjectCount -eq 1) "sidebar fixture pinned project marker count is unexpected: $($Metrics.pinnedProjectCount)"
+  Assert-True ($Metrics.firstProjectPinned -eq $true) "sidebar fixture first project is missing pinned project marker"
   Assert-True ($Metrics.hasEmptyWorkspaceProject -eq $true) "sidebar fixture filtered out empty workspace-root project"
   Assert-True ([string]$Metrics.emptyWorkspaceProjectText -like "*暂无会话*") "sidebar fixture empty workspace-root project does not show empty state"
   Assert-True ([int]$Metrics.emptyWorkspaceNewThreadButtonCount -eq 1) "sidebar fixture empty workspace-root project is missing new-thread action"
