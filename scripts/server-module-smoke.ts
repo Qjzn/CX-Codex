@@ -2880,12 +2880,12 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
     if (threadId === 'throws') throw new Error('missing thread')
     return { thread: { id: threadId, title: `Title ${threadId}` } }
   }
-  const readPinnedThreadIds = async (): Promise<string[]> => [' existing ', 'pin-a', 'missing', 'pin-b', 'throws']
+  const readSupplementalThreadIds = async (): Promise<string[]> => [' existing ', 'session-a', 'missing', 'pin-a', 'throws']
 
   assert.equal(await augmenter.augmentThreadListRpcResult({
     params: { archived: true },
     result: baseResult,
-    readPinnedThreadIds,
+    readSupplementalThreadIds,
     readThreadById,
   }), baseResult)
   assert.equal(calls.length, 0)
@@ -2893,7 +2893,7 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
   assert.equal(await augmenter.augmentThreadListRpcResult({
     params: { archived: false, cursor: 'next-page' },
     result: baseResult,
-    readPinnedThreadIds,
+    readSupplementalThreadIds,
     readThreadById,
   }), baseResult)
   assert.equal(calls.length, 0)
@@ -2901,30 +2901,30 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
   const augmented = await augmenter.augmentThreadListRpcResult({
     params: { archived: false },
     result: baseResult,
-    readPinnedThreadIds,
+    readSupplementalThreadIds,
     readThreadById,
   }) as { data: Array<{ id: string; title?: string }>; marker: boolean }
-  assert.deepEqual(calls, ['pin-a', 'missing'])
-  assert.deepEqual(augmented.data.map((thread) => thread.id), ['existing', 'pin-a'])
+  assert.deepEqual(calls, ['session-a', 'missing'])
+  assert.deepEqual(augmented.data.map((thread) => thread.id), ['existing', 'session-a'])
   assert.equal(augmented.marker, true)
 
   const cached = await augmenter.augmentThreadListRpcResult({
     params: {},
     result: baseResult,
-    readPinnedThreadIds,
+    readSupplementalThreadIds,
     readThreadById,
   }) as { data: Array<{ id: string; title?: string }> }
-  assert.deepEqual(calls, ['pin-a', 'missing', 'pin-b', 'throws'])
-  assert.deepEqual(cached.data.map((thread) => thread.id), ['existing', 'pin-a', 'pin-b'])
+  assert.deepEqual(calls, ['session-a', 'missing', 'pin-a', 'throws'])
+  assert.deepEqual(cached.data.map((thread) => thread.id), ['existing', 'session-a', 'pin-a'])
 
   nowMs += 101
   await augmenter.augmentThreadListRpcResult({
     params: { archived: false },
     result: baseResult,
-    readPinnedThreadIds,
+    readSupplementalThreadIds,
     readThreadById,
   })
-  assert.deepEqual(calls, ['pin-a', 'missing', 'pin-b', 'throws', 'pin-a', 'missing'])
+  assert.deepEqual(calls, ['session-a', 'missing', 'pin-a', 'throws', 'session-a', 'missing'])
 
   const factoryRpcCalls: Array<{ method: string; params: unknown }> = []
   const augmentThreadListRpcResult = createAppServerThreadListRpcResultAugmenter({
@@ -2933,18 +2933,24 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
       maxReads: 2,
       nowMs: () => 2_000,
     }),
-    readPinnedThreadIds: async () => ['pin-factory'],
+    readSupplementalThreadIds: async () => ['session-factory', 'pin-factory'],
     rpc: async (method, params) => {
       factoryRpcCalls.push({ method, params })
-      return { thread: { id: 'pin-factory', title: 'Factory' } }
+      return { thread: { id: method === 'thread/read' && (params as { threadId?: string }).threadId, title: 'Factory' } }
     },
   })
   const factoryAugmented = await augmentThreadListRpcResult(
     { archived: false },
     { data: [] },
   ) as { data: Array<{ id: string; title?: string }> }
-  assert.deepEqual(factoryAugmented.data, [{ id: 'pin-factory', title: 'Factory' }])
+  assert.deepEqual(factoryAugmented.data, [
+    { id: 'session-factory', title: 'Factory' },
+    { id: 'pin-factory', title: 'Factory' },
+  ])
   assert.deepEqual(factoryRpcCalls, [{
+    method: 'thread/read',
+    params: { threadId: 'session-factory', includeTurns: false },
+  }, {
     method: 'thread/read',
     params: { threadId: 'pin-factory', includeTurns: false },
   }])

@@ -11,6 +11,7 @@ param(
   [switch]$CaptureScreenshots,
   [string]$ScreenshotTaskName = "frontend-ui-regression",
   [string]$ScreenshotOutputDir = "",
+  [string]$RequireThreadTitle = "",
   [int]$AgentBrowserTimeoutSec = 25
 )
 
@@ -161,6 +162,8 @@ function Reset-AppShellLayoutPreferences {
 JSON.stringify((() => {
   window.localStorage.setItem('codex-web-local.sidebar-collapsed.v1', '0');
   window.localStorage.removeItem('codex-web-local.sidebar-width.v1');
+  window.localStorage.removeItem('codex-web-local.collapsed-projects.v1');
+  window.localStorage.setItem('codex-web-local.thread-view-mode.v1', 'project');
   return { reset: true };
 })())
 '@
@@ -224,6 +227,35 @@ function Test-HttpJson {
   throw $lastError
 }
 
+function Invoke-PostJson {
+  param(
+    [string]$Name,
+    [string]$Url,
+    [object]$Payload
+  )
+
+  Write-Step "posting $Name -> $Url"
+  $lastError = $null
+  for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+      $response = Invoke-WebRequest `
+        -Uri $Url `
+        -UseBasicParsing `
+        -Method Post `
+        -ContentType "application/json" `
+        -Body ($Payload | ConvertTo-Json -Depth 12 -Compress) `
+        -TimeoutSec 35
+      Assert-True ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) "$Name returned HTTP $($response.StatusCode)"
+      return ($response.Content | ConvertFrom-Json)
+    } catch {
+      $lastError = $_
+      Write-Step "$Name request failed (attempt $attempt/3): $($_.Exception.Message)"
+      Start-Sleep -Milliseconds 900
+    }
+  }
+  throw $lastError
+}
+
 function Get-WorkspaceProjectName {
   param([string]$Path)
 
@@ -237,6 +269,62 @@ function Get-WorkspaceProjectName {
     return $normalized
   }
   return [string]$parts[$parts.Count - 1]
+}
+
+function Get-ThreadDisplayTitle {
+  param([object]$Thread)
+
+  foreach ($propertyName in @("title", "name", "thread_name")) {
+    $value = [string]$Thread.$propertyName
+    if (-not [string]::IsNullOrWhiteSpace($value)) {
+      return $value.Trim()
+    }
+  }
+  return ""
+}
+
+function Resolve-RequiredSidebarThread {
+  param(
+    [string]$BaseUrl,
+    [string]$Title
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Title)) {
+    return $null
+  }
+
+  $search = Invoke-PostJson `
+    -Name "required thread search '$Title'" `
+    -Url "$($BaseUrl)/codex-api/thread-search" `
+    -Payload @{ query = $Title; limit = 20 }
+  $threadIds = @($search.data.threadIds | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+  Assert-True ($threadIds.Count -gt 0) "required thread title was not found in Desktop/session search index: $Title"
+
+  foreach ($threadId in $threadIds) {
+    try {
+      $read = Invoke-PostJson `
+        -Name "thread/read $threadId" `
+        -Url "$($BaseUrl)/codex-api/rpc" `
+        -Payload @{ method = "thread/read"; params = @{ threadId = [string]$threadId; includeTurns = $false } }
+      $thread = $read.result.thread
+      if ($null -eq $thread) {
+        continue
+      }
+      $threadTitle = Get-ThreadDisplayTitle -Thread $thread
+      if ($threadTitle -eq $Title -or $threadTitle.Contains($Title)) {
+        return [pscustomobject]@{
+          id = [string]$thread.id
+          title = $threadTitle
+          cwd = [string]$thread.cwd
+          projectName = Get-WorkspaceProjectName -Path ([string]$thread.cwd)
+        }
+      }
+    } catch {
+      Write-Step "candidate required thread $threadId was not readable: $($_.Exception.Message)"
+    }
+  }
+
+  throw "required thread title was found by search but no readable matching thread was returned: $Title"
 }
 
 function Read-HomeWorkspaceProjectMetrics {
@@ -255,6 +343,58 @@ JSON.stringify((() => {
 })())
 '@
   return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Read-RequiredSidebarThreadMetrics {
+  param(
+    [string]$Session,
+    [object]$Thread,
+    [string]$RootSelector = ""
+  )
+
+  $payload = @{
+    threadId = [string]$Thread.id
+    projectName = [string]$Thread.projectName
+    rootSelector = [string]$RootSelector
+  } | ConvertTo-Json -Depth 5 -Compress
+  $script = @"
+JSON.stringify((() => {
+  const target = $payload;
+  const root = target.rootSelector ? document.querySelector(target.rootSelector) : document;
+  if (!root) return { hasRoot: false, rowCount: 0, groupCount: 0, hasThreadId: false, hasProjectGroup: false, targetRowText: '', targetGroupText: '' };
+  const rows = Array.from(root.querySelectorAll('.thread-row'));
+  const groups = Array.from(root.querySelectorAll('.project-group'));
+  const targetRow = rows.find((row) => row.getAttribute('data-thread-id') === target.threadId) || null;
+  const targetGroup = groups.find((group) => group.getAttribute('data-project-name') === target.projectName) || null;
+  return {
+    hasRoot: true,
+    rowCount: rows.length,
+    groupCount: groups.length,
+    hasThreadId: !!targetRow,
+    hasProjectGroup: !!targetGroup,
+    targetRowText: (targetRow?.textContent || '').replace(/\s+/g, ' ').trim(),
+    targetGroupText: (targetGroup?.textContent || '').replace(/\s+/g, ' ').trim()
+  };
+})())
+"@
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-RequiredSidebarThreadDom {
+  param(
+    [object]$Thread,
+    [object]$Metrics,
+    [string]$Context
+  )
+
+  if ($null -eq $Thread) {
+    return
+  }
+
+  Assert-True ($Metrics.hasRoot -eq $true) "$Context sidebar root was not found while checking required thread"
+  Assert-True ($Metrics.hasProjectGroup -eq $true) "$Context sidebar is missing required thread project group: $($Thread.projectName)"
+  Assert-True ($Metrics.hasThreadId -eq $true) "$Context sidebar is missing Desktop/session thread '$($Thread.title)' ($($Thread.id))"
+  Assert-True ([string]$Metrics.targetRowText -like "*$($Thread.title)*") "$Context sidebar row text does not include required thread title: $($Thread.title)"
 }
 
 function Assert-WorkspaceRootProjectParity {
@@ -1266,10 +1406,17 @@ try {
   Assert-True ($diagnostics.status -eq "ok") "diagnostics status is not ok"
   Assert-True ($null -ne $diagnostics.data.runtimeStore) "diagnostics is missing runtimeStore"
   $workspaceRootsState = Test-HttpJson -Name "workspace roots state" -Url "$($BaseUrl)/codex-api/workspace-roots-state"
+  $requiredSidebarThread = Resolve-RequiredSidebarThread -BaseUrl $BaseUrl -Title $RequireThreadTitle
 
+  $homePage = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $DesktopWidth -Height $DesktopHeight
+  Reset-AppShellLayoutPreferences -Session $session
   $homePage = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $DesktopWidth -Height $DesktopHeight
   Assert-Page -Page $homePage -Name "home desktop" -RequireComposer
   Assert-WorkspaceRootProjectParity -RootsState $workspaceRootsState -Metrics (Read-HomeWorkspaceProjectMetrics -Session $session)
+  Assert-RequiredSidebarThreadDom `
+    -Thread $requiredSidebarThread `
+    -Metrics (Read-RequiredSidebarThreadMetrics -Session $session -Thread $requiredSidebarThread) `
+    -Context "home desktop"
   Add-RegressionResult -Name "home-desktop" -Page $homePage
   Invoke-AgentBrowser -Arguments @("--session", $session, "click", ".sidebar-settings-button") | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "200") | Out-Null
@@ -1286,6 +1433,10 @@ try {
   $homePhone = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $homePhone -Name "home phone" -RequireComposer
   Assert-MobileDrawerSidebar -Metrics (Open-MobileDrawerSidebar -Session $session)
+  Assert-RequiredSidebarThreadDom `
+    -Thread $requiredSidebarThread `
+    -Metrics (Read-RequiredSidebarThreadMetrics -Session $session -Thread $requiredSidebarThread -RootSelector ".mobile-drawer") `
+    -Context "home mobile drawer"
   Add-RegressionResult -Name "home-mobile-drawer" -Page $homePhone
 
   $skills = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/skills?regression=frontend" -Width $PhoneWidth -Height $PhoneHeight

@@ -9399,3 +9399,37 @@ This file tracks manual regression and feature verification steps.
 #### Regression Evidence
 - 2026-07-05 first real-data run exposed a transient App Server `thread/list` timeout after 15s; `/codex-api/health` stayed ok with empty pending/queued RPC and recorded the timeout in `recentTimeouts`.
 - 2026-07-05 retry-capable gate verification: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420` passed with `pinnedThreadCount: 10`, `readablePinnedSampleCount: 10`, `unreadablePinnedSampleCount: 0`, `activeThreadCount: 162`, `activeFirstPageCount: 103`, `archivedFirstPageCount: 100`, `rpcRetryCount: 0`, and `projectGroupCount: 16`.
+
+### Feature: P1 Desktop session-index sidebar parity
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The Codex Desktop/session search index can find the target thread title through `/codex-api/thread-search`.
+- The App Server can answer `thread/read(includeTurns:false)` for matching search results.
+
+#### Steps
+1. Run `npm.cmd run verify:server-modules`.
+2. Run `npm.cmd run build`.
+3. Restart 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+4. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+5. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-session-index-sidebar-parity`.
+6. Confirm the data gate reports `requiredThread.title` as `分析项目` and `requiredThread.projectName` as `codexui`.
+7. Confirm the frontend gate passes both `home desktop` and `home mobile drawer` required-thread DOM checks.
+
+#### Expected Results
+- Recent readable Desktop/session-index threads that are missing from active `thread/list` are supplemented into the 7420 sidebar data source.
+- Pinned thread supplementation still works after the session-index supplement.
+- Archived `thread/list` pages and active cursor pages remain unsupplemented.
+- The browser regression fails if a Desktop/session-index target such as `分析项目` is found by search but missing from the visible desktop sidebar or mobile drawer.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/p1-session-index-sidebar-parity/` when `-CaptureScreenshots` is used.
+- To roll back, revert `src/server/appServerThreadListAugment.ts`, `src/server/codexBridgeMiddlewareState.ts`, `scripts/server-module-smoke.ts`, `scripts/verify-7420-sidebar-data.mjs`, `scripts/regression-7420-frontend.ps1`, and this test section.
+
+#### Regression Evidence
+- 2026-07-06 server module verification: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; the smoke covers supplemental session-index ids before pinned ids, max-read behavior, archived list skip, active cursor-page skip, failed read tolerance, and `thread/read(includeTurns:false)` factory params.
+- 2026-07-06 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
+- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 35140; `/health` returned ok.
+- 2026-07-06 data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with required thread `019f27ae-0ecd-7c50-9701-8ec003e66447`, title `分析项目`, project `codexui`, `activeThreadCount: 172`, `activeFirstPageCount: 113`, `archivedFirstPageCount: 100`, and `projectGroupCount: 18`.
+- 2026-07-06 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-session-index-sidebar-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-06 screenshot artifacts: `output/regression-7420/p1-session-index-sidebar-parity/home-desktop.png` and `output/regression-7420/p1-session-index-sidebar-parity/home-mobile-drawer.png`.

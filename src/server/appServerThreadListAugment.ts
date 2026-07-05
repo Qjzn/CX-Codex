@@ -5,13 +5,13 @@ export const SUPPLEMENTAL_THREAD_SUMMARY_MAX_CACHE_ENTRIES = 100
 type ThreadListAugmentOptions = {
   params: unknown
   result: unknown
-  readPinnedThreadIds: () => Promise<string[]>
+  readSupplementalThreadIds: () => Promise<string[]>
   readThreadById: (threadId: string) => Promise<unknown>
 }
 
 export type AppServerThreadListRpcResultAugmenterDependencies = {
   augmenter: AppServerThreadListAugmenter
-  readPinnedThreadIds: () => Promise<string[]>
+  readSupplementalThreadIds: () => Promise<string[]>
   rpc(method: string, params: unknown): Promise<unknown>
 }
 
@@ -57,8 +57,8 @@ export class AppServerThreadListAugmenter {
     const data = Array.isArray(resultRecord?.data) ? resultRecord.data : null
     if (!data) return options.result
 
-    const pinnedThreadIds = await options.readPinnedThreadIds()
-    if (pinnedThreadIds.length === 0) return options.result
+    const supplementalThreadIds = await options.readSupplementalThreadIds()
+    if (supplementalThreadIds.length === 0) return options.result
 
     const existingThreadIds = new Set<string>()
     for (const row of data) {
@@ -68,7 +68,7 @@ export class AppServerThreadListAugmenter {
     }
 
     const supplementalThreads = await this.loadThreadSummariesById(
-      pinnedThreadIds,
+      supplementalThreadIds,
       existingThreadIds,
       options.readThreadById,
     )
@@ -150,7 +150,7 @@ export function createAppServerThreadListRpcResultAugmenter(
   return async (params, result) => await dependencies.augmenter.augmentThreadListRpcResult({
     params,
     result,
-    readPinnedThreadIds: dependencies.readPinnedThreadIds,
+    readSupplementalThreadIds: dependencies.readSupplementalThreadIds,
     readThreadById: (threadId) => dependencies.rpc('thread/read', {
       threadId,
       includeTurns: false,

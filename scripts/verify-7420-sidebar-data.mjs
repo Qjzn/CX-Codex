@@ -2,7 +2,8 @@
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:7420'
 const THREAD_LIST_LIMIT = 100
-const SUPPLEMENTAL_PINNED_READ_LIMIT = 20
+const SUPPLEMENTAL_THREAD_READ_LIMIT = 20
+const PINNED_THREAD_READ_SAMPLE_LIMIT = 20
 
 function readArgValue(names, fallback) {
   for (let index = 2; index < process.argv.length; index += 1) {
@@ -20,6 +21,7 @@ function readArgValue(names, fallback) {
 }
 
 const baseUrl = readArgValue(['--base-url', '-BaseUrl'], DEFAULT_BASE_URL).replace(/\/+$/u, '')
+const requiredThreadTitle = readArgValue(['--require-thread-title', '-RequireThreadTitle'], '').trim()
 let rpcRetryCount = 0
 
 function fail(message) {
@@ -70,6 +72,16 @@ async function readJson(url, options = {}) {
 
 async function getJson(path) {
   return await readJson(`${baseUrl}${path}`)
+}
+
+async function postJson(path, body) {
+  return await readJson(`${baseUrl}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
 }
 
 async function rpc(method, params) {
@@ -137,6 +149,15 @@ function readThreadTimestampSeconds(thread, key) {
 function readThreadId(thread) {
   const record = asRecord(thread)
   return typeof record?.id === 'string' ? record.id.trim() : ''
+}
+
+function readThreadTitle(thread) {
+  const record = asRecord(thread)
+  for (const key of ['title', 'name', 'thread_name']) {
+    const value = record?.[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
 }
 
 function readThreadProjectName(thread) {
@@ -241,7 +262,7 @@ async function readAllActiveThreads(firstPage) {
 async function readReadablePinnedThreadIds(pinnedThreadIds) {
   const readable = []
   const unreadable = []
-  for (const threadId of pinnedThreadIds.slice(0, SUPPLEMENTAL_PINNED_READ_LIMIT)) {
+  for (const threadId of pinnedThreadIds.slice(0, PINNED_THREAD_READ_SAMPLE_LIMIT)) {
     try {
       const result = await rpc('thread/read', {
         threadId,
@@ -255,6 +276,41 @@ async function readReadablePinnedThreadIds(pinnedThreadIds) {
     }
   }
   return { readable, unreadable }
+}
+
+async function readRequiredThreadFromSearch(title) {
+  if (!title) return null
+
+  const searchData = dataEnvelope(await postJson('/codex-api/thread-search', {
+    query: title,
+    limit: 20,
+  }), 'required thread search')
+  const searchRecord = asRecord(searchData)
+  const threadIds = normalizeStringArray(searchRecord?.threadIds ?? [], 'required thread search threadIds')
+  assert(threadIds.length > 0, `required thread title was not found in Desktop/session search index: ${title}`)
+
+  for (const threadId of threadIds) {
+    try {
+      const result = await rpc('thread/read', {
+        threadId,
+        includeTurns: false,
+      })
+      const thread = asRecord(asRecord(result)?.thread)
+      if (!thread || readThreadId(thread) !== threadId) continue
+      const threadTitle = readThreadTitle(thread)
+      if (threadTitle === title || threadTitle.includes(title)) {
+        return {
+          id: threadId,
+          title: threadTitle,
+          projectName: readThreadProjectName(thread),
+        }
+      }
+    } catch {
+      // Search indexes can temporarily include stale rows; try the next match.
+    }
+  }
+
+  fail(`required thread title was found by search but no readable matching thread was returned: ${title}`)
 }
 
 function assertProjectPreviewSort(groups) {
@@ -287,8 +343,8 @@ async function main() {
 
   const activeFirstPage = await readThreadListFirstPage(false)
   assert(
-    activeFirstPage.data.length <= THREAD_LIST_LIMIT + SUPPLEMENTAL_PINNED_READ_LIMIT,
-    'active first page exceeded thread/list limit plus supplemental pinned read limit',
+    activeFirstPage.data.length <= THREAD_LIST_LIMIT + SUPPLEMENTAL_THREAD_READ_LIMIT,
+    'active first page exceeded thread/list limit plus supplemental read limit',
   )
   const archivedFirstPage = await readThreadListFirstPage(true)
   assert(archivedFirstPage.data.length <= THREAD_LIST_LIMIT, 'archived first page was unexpectedly supplemented beyond the requested limit')
@@ -299,6 +355,14 @@ async function main() {
 
   const { readable, unreadable } = await readReadablePinnedThreadIds(pinnedThreadIds)
   const activeThreadIdSet = new Set(activeThreadIds)
+  const requiredThread = await readRequiredThreadFromSearch(requiredThreadTitle)
+  if (requiredThread) {
+    assert(
+      activeThreadIdSet.has(requiredThread.id),
+      `required Desktop/session thread is missing from active thread/list data source: ${requiredThread.title} (${requiredThread.id})`,
+    )
+  }
+
   for (const threadId of readable) {
     assert(activeThreadIdSet.has(threadId), `readable pinned thread is missing from active thread/list data source: ${threadId}`)
   }
@@ -334,6 +398,7 @@ async function main() {
     activeFirstPageCount: activeFirstPage.data.length,
     archivedFirstPageCount: archivedFirstPage.data.length,
     rpcRetryCount,
+    requiredThread,
     projectGroupCount: groups.length,
     expectedProjectOrderSample: computedSidebarProjectOrder.slice(0, 8),
     projectPreviewSample: groups.slice(0, 5).map((group) => ({
