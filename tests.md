@@ -8250,3 +8250,41 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 7420 HTTP regression: `npm.cmd run test:7420 -- -SkipBrowser -PublicHealthUrl http://116.62.234.104:17420/health` passed for local health, App Server health, event replay, and public health; browser regression was intentionally skipped.
 - 2026-07-05 short soak: `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://116.62.234.104:17420` passed with 4 healthy samples, `maxPending=0`, `maxQueued=0`, `timeouts=0`, and `slowThreadList=0`; report path is `output\soak-7420\soak-20260705-105723.json`.
 - 2026-07-05 residual risk: browser automation, Android true-device checks, voice transcription, and 2-hour soak were not executed, so visual/device/long-duration regression is not claimed complete.
+
+---
+
+### Feature: P1 browser regression hardening and execution
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from `E:\javaword\CXCodex\codexui\dist-cli\index.js`.
+- `agent-browser` is installed and `agent-browser doctor --offline --quick` reports no failures.
+- Current repository includes `scripts/regression-7420.ps1`, `scripts/regression-7420-frontend.ps1`, and `docs/local-regression-execution-20260705.zh-CN.md`.
+
+#### Steps
+1. Run `agent-browser doctor --offline --quick`.
+2. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+3. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-browser-20260705 -AgentBrowserTimeoutSec 25`.
+4. Confirm `output\regression-7420\p1-browser-20260705\desktop.png`, `phone.png`, and `fold.png` exist.
+5. Open `docs/local-regression-execution-20260705.zh-CN.md` and confirm it records the P1 browser pass, screenshot paths, optional thread page skip, and remaining P2 manual/device scope.
+6. Run `git diff --check`.
+7. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+8. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- `test:7420` fails within `-AgentBrowserTimeoutSec` if an `agent-browser` child command hangs instead of blocking indefinitely.
+- The three viewport checks reset `codex-web-local.sidebar-collapsed.v1` before measuring layout, so foldable sidebar assertions are not affected by previous collapsed sidebar state.
+- Desktop 1440x900, phone 390x844, and fold 884x1104 checks pass with composer visible, no horizontal overflow, and zero page errors.
+- Fold 884x1104 reports sidebar visible after reset.
+- Frontend page regression passes for home, skills, GitHub trending, diagnostics, and local README preview.
+- If no `-ThreadId` is passed, the thread page check is explicitly skipped as optional.
+
+#### Rollback/Cleanup Notes
+- Generated screenshots under `output\regression-7420\p1-browser-20260705\` can be deleted after review.
+- To roll back, remove `-AgentBrowserTimeoutSec`, restore direct `agent-browser` invocation in `scripts/regression-7420.ps1`, remove the sidebar reset, and revert this test section plus the local execution record/changelog entries.
+
+#### Regression Evidence
+- 2026-07-05 `agent-browser doctor --offline --quick` passed with CLI version `0.26.0` and 0 failures.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, and local preview phone; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-browser-20260705 -AgentBrowserTimeoutSec 25` passed with notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
+- 2026-07-05 screenshot evidence: `output\regression-7420\p1-browser-20260705\desktop.png`, `phone.png`, and `fold.png` were generated.

@@ -30,14 +30,14 @@
 | P0-13 事件回放端点 | 已通过 | `npm.cmd run test:7420 -- -SkipBrowser -PublicHealthUrl http://116.62.234.104:17420/health` 通过，本机健康、App Server 健康、event replay、公网健康均 ok |
 | P0-14 短时浸泡 | 已通过 | `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://116.62.234.104:17420` 通过；报告 `output\soak-7420\soak-20260705-105723.json` |
 | P1-1 至 P1-6 协议和治理文档 | 已通过 | README、changelog、governance/release package 校验已覆盖本地回归文档；candidate review / PR pack / release / security 边界延续上一轮审查结果 |
-| P1-7 至 P1-10 浏览器自动化 | 未执行 | 需要浏览器自动化；未在本阶段默认执行 |
+| P1-7 至 P1-10 浏览器自动化 | 已通过 | `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-browser-20260705 -AgentBrowserTimeoutSec 25` 和 `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` 通过；thread 页未传 `-ThreadId`，按脚本可选项跳过 |
 | P2 手工功能/Android/长时浸泡 | 未执行 | 需要人工交互、Android 真机或长时间窗口 |
 
 ## 当前风险
 
 - App Server schema 仍为 `drift-recorded`，不能宣称 fully aligned。
 - Vite large chunk warning 仍存在，当前不阻塞本地部署和候选审查。
-- 浏览器自动化和 Android 真机回归尚未执行，不能声明视觉/真机完全回归通过。
+- Android 真机回归、语音转写实测和 2 小时长浸泡尚未执行，不能声明真机/语音/长时完全回归通过。
 
 ## 后续执行日志
 
@@ -55,5 +55,16 @@
 
 ### 尚未执行范围
 
-- P1 浏览器自动化未执行：本轮没有调用 `agent-browser`，不能宣称桌面/手机/折叠屏视觉回归完成。
 - P2 Android 真机、语音转写、2 小时浸泡和外部人工路径未执行：当前只能声明代码、包级、HTTP、event replay 和短时稳定性通过。
+
+### 2026-07-05 11:00-11:09 Asia/Shanghai
+
+- 目标：补齐 P1 浏览器自动化回归。
+- 环境确认：`git status --short --branch` 返回 `## codex/candidate-release-review`；7420 进程 PID `42800`，命令行指向 `E:\javaword\CXCodex\codexui\dist-cli\index.js --config C:\Users\SW\.codexui\config.json`；本机 `/health` 和 `/codex-api/health` 均返回 200。
+- `agent-browser doctor --offline --quick`：通过，CLI version `0.26.0`，0 fail。
+- 初次执行 `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-browser-20260705`：HTTP / event replay / public health 已通过，但旧脚本的 `agent-browser` 调用没有超时保护，浏览器阶段长时间无输出后被终止。
+- 脚本修复：`scripts/regression-7420.ps1` 新增 `-AgentBrowserTimeoutSec`，`agent-browser` 子进程超时后会失败并清理；视口检查前重置 `codex-web-local.sidebar-collapsed.v1`，避免折叠屏因为历史折叠状态误报缺少侧栏。
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`：通过，覆盖首页桌面、skills 手机、GitHub trending 手机、diagnostics 手机、本地 README preview 手机；thread 页未传 `-ThreadId`，脚本按可选项跳过。
+- `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-browser-20260705 -AgentBrowserTimeoutSec 25`：通过，包含 notification cursor recovery、desktop 1440x900、phone 390x844、fold 884x1104；三视口 composer 可见、无横向溢出、pageErrors=0；fold 侧栏可见。
+- 截图证据：`output\regression-7420\p1-browser-20260705\desktop.png`、`phone.png`、`fold.png`。
+- 自动化副作用：执行 `agent-browser --session ... close --all` 时该 CLI 关闭了所有 agent-browser 自动化会话，包括历史 ZXSAAS 会话；这不影响真实 Chrome 登录态和 7420 服务。

@@ -767,7 +767,8 @@ Assert-ContentIncludes "docs/local-regression-execution-20260705.zh-CN.md" @(
   "E:\javaword\CXCodex\codexui\dist-cli\index.js",
   "P0-13 事件回放端点",
   "P0-14 短时浸泡",
-  "浏览器自动化和 Android 真机回归尚未执行"
+  "P1-7 至 P1-10 浏览器自动化",
+  "Android 真机回归、语音转写实测和 2 小时长浸泡尚未执行"
 )
 
 Assert-ContentIncludes "src/server/appServerMethodCatalog.ts" @(
