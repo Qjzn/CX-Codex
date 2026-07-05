@@ -298,6 +298,34 @@ JSON.stringify((() => {
   const permissionPanels = Array.from(document.querySelectorAll('.request-permission-panel'));
   const toolPanels = Array.from(document.querySelectorAll('.request-tool-panel'));
   const requestButtons = Array.from(document.querySelectorAll('.request-button'));
+  const runtimeStatusBars = Array.from(document.querySelectorAll('.conversation-regression-fixture .runtime-status-bar'));
+  const queuedPanels = Array.from(document.querySelectorAll('.conversation-regression-fixture .queued-messages-inner'));
+  const queuedRows = Array.from(document.querySelectorAll('.conversation-regression-fixture .queued-row'));
+  const chromeTargets = Array.from(document.querySelectorAll([
+    '.conversation-regression-fixture .runtime-status-bar',
+    '.conversation-regression-fixture .queued-messages-inner',
+    '.conversation-regression-fixture .queued-row',
+    '.conversation-regression-fixture .live-overlay-inline',
+    '.conversation-regression-fixture .message-card',
+    '.conversation-regression-fixture .message-table-scroll',
+    '.conversation-regression-fixture .message-table-card',
+    '.conversation-regression-fixture .message-structured-card',
+    '.conversation-regression-fixture .message-structured-pre',
+    '.conversation-regression-fixture .message-text-flow--long-collapsed',
+    '.conversation-regression-fixture .guided-turn-toggle'
+  ].join(',')));
+  const warmBackgrounds = new Set([
+    'rgb(255, 253, 248)',
+    'rgb(255, 252, 247)',
+    'rgb(255, 250, 243)',
+    'rgb(255, 250, 242)',
+    'rgb(255, 249, 238)',
+    'rgb(255, 248, 223)',
+    'rgb(247, 243, 234)',
+    'rgb(247, 241, 229)',
+    'rgb(248, 244, 236)',
+    'rgb(241, 235, 222)'
+  ]);
   const firstCopyButton = copyButtons[0];
   const firstCommandRow = commandRows[0];
   const firstRequestCard = requestCards[0];
@@ -307,6 +335,16 @@ JSON.stringify((() => {
   const requestCardRadius = firstRequestCard ? Number.parseFloat(window.getComputedStyle(firstRequestCard).borderTopLeftRadius || '0') : 0;
   const permissionPanelRadius = firstPermissionPanel ? Number.parseFloat(window.getComputedStyle(firstPermissionPanel).borderTopLeftRadius || '0') : 0;
   const toolPanelRadius = firstToolPanel ? Number.parseFloat(window.getComputedStyle(firstToolPanel).borderTopLeftRadius || '0') : 0;
+  const chromeStyles = chromeTargets.map((node) => {
+    const style = window.getComputedStyle(node);
+    return {
+      className: node.className || node.tagName,
+      backgroundColor: style.backgroundColor,
+      radius: Number.parseFloat(style.borderTopLeftRadius || '0')
+    };
+  });
+  const chromeWarmBackgrounds = chromeStyles.filter((style) => warmBackgrounds.has(style.backgroundColor));
+  const chromeMaxRadius = chromeStyles.length ? Math.max(...chromeStyles.map((style) => style.radius)) : 0;
   const fitTargets = Array.from(document.querySelectorAll([
     '.request-card',
     '.request-permission-panel',
@@ -314,6 +352,12 @@ JSON.stringify((() => {
     '.message-file-card',
     '.message-code-block',
     '.message-structured-card',
+    '.runtime-status-bar',
+    '.queued-messages-inner',
+    '.queued-row',
+    '.message-table-scroll',
+    '.message-table-card',
+    '.live-overlay-inline',
     '.cmd-row',
     '.cmd-output-wrap'
   ].join(',')));
@@ -344,6 +388,12 @@ JSON.stringify((() => {
     permissionPanelCount: permissionPanels.length,
     toolPanelCount: toolPanels.length,
     requestButtonCount: requestButtons.length,
+    runtimeStatusBarCount: runtimeStatusBars.length,
+    queuedPanelCount: queuedPanels.length,
+    queuedRowCount: queuedRows.length,
+    conversationChromeWarmBackgroundCount: chromeWarmBackgrounds.length,
+    conversationChromeWarmBackgrounds: chromeWarmBackgrounds.slice(0, 5),
+    conversationChromeMaxRadius: chromeMaxRadius,
     requestCardRadius,
     permissionPanelRadius,
     toolPanelRadius,
@@ -389,6 +439,11 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.permissionPanelCount -ge 1) "conversation fixture is missing MCP permission panel"
   Assert-True ($Metrics.toolPanelCount -ge 1) "conversation fixture is missing tool call panel"
   Assert-True ($Metrics.requestButtonCount -ge 3) "conversation fixture is missing permission action buttons"
+  Assert-True ($Metrics.runtimeStatusBarCount -ge 1) "conversation fixture is missing runtime status bar"
+  Assert-True ($Metrics.queuedPanelCount -ge 1) "conversation fixture is missing queued message panel"
+  Assert-True ($Metrics.queuedRowCount -ge 2) "conversation fixture is missing queued message rows"
+  Assert-True ($Metrics.conversationChromeWarmBackgroundCount -eq 0) "conversation fixture still has warm chrome backgrounds: $($Metrics.conversationChromeWarmBackgrounds | ConvertTo-Json -Compress)"
+  Assert-True ($Metrics.conversationChromeMaxRadius -le 18) "conversation fixture chrome radius is too large: $($Metrics.conversationChromeMaxRadius)"
   Assert-True ($Metrics.requestCardRadius -le 10) "conversation fixture request card radius is too large: $($Metrics.requestCardRadius)"
   Assert-True ($Metrics.permissionPanelRadius -le 10) "conversation fixture permission panel radius is too large: $($Metrics.permissionPanelRadius)"
   Assert-True ($Metrics.toolPanelRadius -le 10) "conversation fixture tool call panel radius is too large: $($Metrics.toolPanelRadius)"

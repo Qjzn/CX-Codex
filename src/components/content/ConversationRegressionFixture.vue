@@ -5,11 +5,26 @@
         <p class="conversation-regression-kicker">Regression Fixture</p>
         <h1>Conversation Blocks</h1>
       </header>
+      <RuntimeStatusBar
+        class="conversation-regression-runtime"
+        :summary="runtimeSummary"
+        :live-overlay="liveOverlay"
+        :pending-request-count="0"
+        :is-sending="false"
+        :is-loading="true"
+        :is-refreshing="false"
+        :sync-lagging="false"
+        sync-error=""
+        :notification-stale="false"
+        connection-state="connected"
+        @refresh="noop"
+        @stop="noop"
+      />
       <ThreadConversation
         class="conversation-regression-thread"
         :messages="messages"
         :pending-requests="pendingRequests"
-        :live-overlay="null"
+        :live-overlay="liveOverlay"
         :is-loading="false"
         active-thread-id="regression-conversation-blocks"
         cwd="E:/javaword/CXCodex/codexui"
@@ -22,13 +37,23 @@
         @return-to-new-thread="noop"
         @dismiss-empty-thread="noop"
       />
+      <QueuedMessages
+        class="conversation-regression-queue"
+        :messages="queuedMessages"
+        :is-processing="true"
+        @edit="noop"
+        @quote="noop"
+        @delete="noop"
+      />
     </section>
   </main>
 </template>
 
 <script setup lang="ts">
 import ThreadConversation from './ThreadConversation.vue'
-import type { UiMessage, UiServerRequest } from '../../types/codex'
+import RuntimeStatusBar from './RuntimeStatusBar.vue'
+import QueuedMessages from './QueuedMessages.vue'
+import type { UiLiveOverlay, UiMessage, UiRuntimeStatusSummary, UiServerRequest } from '../../types/codex'
 
 const messages: UiMessage[] = [
   {
@@ -142,6 +167,52 @@ const pendingRequests: UiServerRequest[] = [
   },
 ]
 
+const liveOverlay: UiLiveOverlay = {
+  activityLabel: 'fixture runtime activity',
+  activityDetails: ['fixture runtime detail should stay compact and neutral'],
+  reasoningText: 'fixture reasoning text',
+  errorText: '',
+}
+
+const runtimeSummary: UiRuntimeStatusSummary = {
+  threadId: 'regression-conversation-blocks',
+  executionState: 'running',
+  canStop: true,
+  stale: false,
+  stopRequested: false,
+  activeTurnId: 'fixture-turn-runtime',
+  lastError: null,
+  degradedReason: null,
+  messageState: 'fresh',
+  updatedAtIso: '2026-07-05T05:02:00.000Z',
+  lastEventSeq: 7420,
+  lastStartedAtIso: '2026-07-05T05:00:00.000Z',
+  lastCompletedAtIso: null,
+}
+
+const queuedMessages = [
+  {
+    id: 'fixture-queue-next',
+    text: 'fixture queued message keeps compact neutral styling',
+    imageUrls: [],
+    skills: [{ name: 'ui-ux-pro-max', path: 'C:/Users/SW/.agents/skills/ui-ux-pro-max/SKILL.md' }],
+    fileAttachments: [
+      {
+        label: 'PRODUCT.md',
+        path: 'E:/javaword/CXCodex/codexui/PRODUCT.md',
+        fsPath: 'E:/javaword/CXCodex/codexui/PRODUCT.md',
+      },
+    ],
+  },
+  {
+    id: 'fixture-queue-followup',
+    text: 'second queued item should not introduce warm panels',
+    imageUrls: [],
+    skills: [],
+    fileAttachments: [],
+  },
+]
+
 function noop(): void {
   // Fixture route only needs rendered output for browser assertions.
 }
@@ -180,5 +251,13 @@ function noop(): void {
 
 .conversation-regression-thread {
   @apply min-h-0 flex-1;
+}
+
+.conversation-regression-runtime {
+  @apply shrink-0;
+}
+
+.conversation-regression-queue {
+  @apply shrink-0 pb-3;
 }
 </style>

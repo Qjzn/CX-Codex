@@ -8507,6 +8507,41 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, and the expanded `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 fixture tool call assertions: the built-in conversation fixture verified at least one unsupported tool call panel, service `chrome`, tool `browser_click`, tool call marker/summary, the action label `让 Codex 改用文字继续`, tool panel radius no larger than 10px, and no horizontal overflow.
 
+### Feature: P4 conversation chrome neutralization baseline
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Built-in regression fixture route `/#/__regression/conversation-blocks` is available.
+- Public reference checked: `friuns2/codex-mobile` commit `fac2291`; use it for compact runtime/queue structure and desktop-app positioning only, not for copying its whole theme.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/__regression/conversation-blocks?regression=frontend` at a desktop viewport such as 1440x900.
+2. Confirm the fixture includes a runtime status bar above the conversation, visible conversation blocks, pending request panels, and a queued message panel below the conversation.
+3. Confirm runtime, queued rows, message cards, table wrappers, raw payload cards, long-text containers, guided-turn toggles, and file context menus use neutral white/gray token surfaces rather than warm beige/paper backgrounds.
+4. Reopen the same fixture at a phone viewport such as 393x852.
+5. Confirm the added runtime and queued-message samples do not introduce horizontal scrolling or oversized rounded cards.
+6. Run `git diff --check`.
+7. Run `npm.cmd run build:frontend`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+
+#### Expected Results
+- Runtime status, queued messages, message cards, tables, raw payload cards, long-text controls, and message action chrome use the shared `--ui-*` neutral token vocabulary.
+- `conversation-blocks` fixture contains at least one runtime status bar, one queued message panel, and two queued rows.
+- Sampled conversation chrome backgrounds do not match the blocked warm values such as `#fffdf8`, `#fffaf3`, `#fffaf2`, `#fff8df`, `#f7f1e5`, `#f8f4ec`, or `#f1ebde`.
+- Sampled conversation chrome radius stays within the desktop parity ceiling and the page has no horizontal overflow on desktop or phone.
+- Browser regression passes with no page errors.
+
+#### Rollback/Cleanup Notes
+- No generated screenshots are required for this narrow visual baseline.
+- To roll back, revert `src/style.css`, `RuntimeStatusBar.vue`, `QueuedMessages.vue`, `ThreadConversation.vue`, `ConversationRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check -- src/components/content/ConversationRegressionFixture.vue src/components/content/RuntimeStatusBar.vue src/components/content/QueuedMessages.vue src/components/content/ThreadConversation.vue scripts/regression-7420-frontend.ps1 src/style.css` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop and phone `composer-shell-fixture`, desktop `conversation-blocks-fixture`, and phone `conversation-blocks-fixture-phone`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 fixture conversation chrome assertions: the built-in conversation fixture verified runtime status bar, queued message panel, queued rows, zero sampled warm chrome backgrounds, chrome radius no larger than 18px, structured blocks fitting inside the viewport, and no page-level horizontal overflow.
+
 ### Feature: P4 conversation blocks mobile fit baseline
 
 #### Prerequisites

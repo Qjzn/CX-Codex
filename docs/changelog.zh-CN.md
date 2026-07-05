@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - 会话主区 runtime 状态条、消息队列、消息气泡、表格、raw payload、长文本展开、文件右键菜单和消息操作按钮继续收敛为白灰中性 token；`conversation-blocks` fixture 增加 runtime/queue 样本，并由 `test:7420:frontend` 自动断言会话辅助 chrome 不再出现暖色背景、圆角不超标且无横向溢出。
   - App Shell 设置面板、移动设置 sheet、启动配置卡片、toast 和确认弹窗继续收敛为白灰中性 token；设置面板去掉蓝色渐变卡片和暖色纸感控件，并由 `test:7420:frontend` 在首页自动打开设置面板断言背景、圆角、边框和无横向溢出。
   - 新增 `/#/__regression/composer-shell` 回归 fixture，覆盖桌面和手机视口下的底部 Composer；Composer 外壳、sheet、插件菜单和运行配置面板从暖色重卡片收敛为白灰 token 样式，并由 `test:7420:frontend` 自动断言高度、圆角、控件可见性和无横向溢出。
   - 新增 `/#/__regression/sidebar-rows` 回归 fixture，覆盖运行中、未读、不同来源和多项目线程行；Sidebar 线程来源/状态从 pill chip 收敛为轻量行内文本，菜单和重命名弹窗改为白灰 token 驱动样式，减少侧栏卡片化和暖色残留。

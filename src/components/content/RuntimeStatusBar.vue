@@ -163,9 +163,12 @@ const metaLabel = computed(() => {
 @reference "tailwindcss";
 
 .runtime-status-bar {
-  @apply mx-auto flex w-full max-w-[var(--content-shell-max-width)] items-center gap-2 border-y border-[#e7dfd2] bg-[#fffdf8]/92 px-3 py-2 text-[#5f5548];
+  @apply mx-auto flex w-full max-w-[var(--content-shell-max-width)] items-center gap-2 border-y px-3 py-2;
   font-family: var(--font-sans-ui);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72) inset;
+  border-color: var(--ui-border-subtle);
+  background: color-mix(in srgb, var(--ui-bg-surface) 94%, transparent);
+  color: var(--ui-text-secondary);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--ui-bg-surface) 72%, transparent) inset;
 }
 
 .runtime-status-primary {
@@ -173,7 +176,9 @@ const metaLabel = computed(() => {
 }
 
 .runtime-status-orb {
-  @apply relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-current/20 bg-white/78;
+  @apply relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full border;
+  border-color: color-mix(in srgb, currentColor 20%, transparent);
+  background: color-mix(in srgb, var(--ui-bg-surface) 78%, transparent);
 }
 
 .runtime-status-orb-core {
@@ -190,7 +195,8 @@ const metaLabel = computed(() => {
 }
 
 .runtime-status-detail {
-  @apply m-0 hidden truncate text-xs leading-4 text-[#887d70] sm:block;
+  @apply m-0 hidden truncate text-xs leading-4 sm:block;
+  color: var(--ui-text-tertiary);
 }
 
 .runtime-status-phases {
@@ -198,7 +204,8 @@ const metaLabel = computed(() => {
 }
 
 .runtime-status-phase {
-  @apply inline-flex items-center gap-1 rounded-full border border-transparent px-2 py-1 text-[11px] text-[#928779];
+  @apply inline-flex items-center gap-1 rounded-full border border-transparent px-2 py-1 text-[11px];
+  color: var(--ui-text-tertiary);
 }
 
 .runtime-status-phase-dot {
@@ -206,7 +213,7 @@ const metaLabel = computed(() => {
 }
 
 .runtime-status-phase.is-done {
-  @apply text-[#0f766e];
+  color: var(--ui-success);
 }
 
 .runtime-status-phase.is-done .runtime-status-phase-dot {
@@ -214,7 +221,9 @@ const metaLabel = computed(() => {
 }
 
 .runtime-status-phase.is-active {
-  @apply border-current/20 bg-white/75 text-current;
+  border-color: color-mix(in srgb, currentColor 20%, transparent);
+  background: color-mix(in srgb, var(--ui-bg-surface) 75%, transparent);
+  color: currentColor;
 }
 
 .runtime-status-actions {
@@ -222,13 +231,25 @@ const metaLabel = computed(() => {
 }
 
 .runtime-status-meta {
-  @apply hidden rounded-full border border-[#e4dac9] bg-white/72 px-2 py-1 text-[10px] font-medium text-[#8a7f72] lg:inline-flex;
+  @apply hidden rounded-full border px-2 py-1 text-[10px] font-medium lg:inline-flex;
+  border-color: var(--ui-border-subtle);
+  background: color-mix(in srgb, var(--ui-bg-surface) 76%, transparent);
+  color: var(--ui-text-tertiary);
   font-family: var(--font-mono-ui);
 }
 
 .runtime-status-action {
-  @apply inline-flex min-h-8 items-center justify-center gap-1.5 rounded-full border border-[#d9d0c2] bg-white/82 px-2.5 text-xs font-semibold text-[#5f5548] transition-[background-color,border-color,color,transform] duration-150 hover:border-[#bfae93] hover:bg-[#f7f1e5] disabled:cursor-not-allowed disabled:opacity-65;
+  @apply inline-flex min-h-8 items-center justify-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold transition-[background-color,border-color,color,transform] duration-150 disabled:cursor-not-allowed disabled:opacity-65;
+  border-color: var(--ui-border-subtle);
+  background: color-mix(in srgb, var(--ui-bg-surface) 84%, transparent);
+  color: var(--ui-text-secondary);
   touch-action: manipulation;
+}
+
+.runtime-status-action:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .runtime-status-action:active:not(:disabled) {
@@ -236,7 +257,15 @@ const metaLabel = computed(() => {
 }
 
 .runtime-status-action-danger {
-  @apply border-[#efc7bf] bg-[#fff4f1] text-[#a23f2c] hover:border-[#df9e90] hover:bg-[#ffe8e2] hover:text-[#7f2e20];
+  border-color: color-mix(in srgb, var(--ui-danger) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
+  color: var(--ui-danger);
+}
+
+.runtime-status-action-danger:hover {
+  border-color: color-mix(in srgb, var(--ui-danger) 42%, var(--ui-border-strong));
+  background: color-mix(in srgb, var(--ui-danger) 10%, var(--ui-bg-surface));
+  color: color-mix(in srgb, var(--ui-danger) 86%, var(--ui-text-primary));
 }
 
 .runtime-status-action-icon {
@@ -244,19 +273,27 @@ const metaLabel = computed(() => {
 }
 
 .runtime-status-bar[data-tone='live'] {
-  @apply border-[#cbe7e1] bg-[#f2fbf8] text-[#0f766e];
+  border-color: color-mix(in srgb, var(--ui-success) 24%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-success) 6%, var(--ui-bg-surface));
+  color: var(--ui-success);
 }
 
 .runtime-status-bar[data-tone='syncing'] {
-  @apply border-[#d9d0c2] bg-[#fffaf2] text-[#6d6354];
+  border-color: color-mix(in srgb, var(--ui-accent) 20%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-accent) 5%, var(--ui-bg-surface));
+  color: var(--ui-text-secondary);
 }
 
 .runtime-status-bar[data-tone='warning'] {
-  @apply border-[#ead9a2] bg-[#fff8df] text-[#80600c];
+  border-color: color-mix(in srgb, var(--ui-warning) 32%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-warning) 7%, var(--ui-bg-surface));
+  color: color-mix(in srgb, var(--ui-warning) 78%, var(--ui-text-primary));
 }
 
 .runtime-status-bar[data-tone='danger'] {
-  @apply border-[#f0c1b8] bg-[#fff1ed] text-[#b13f2b];
+  border-color: color-mix(in srgb, var(--ui-danger) 32%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
+  color: var(--ui-danger);
 }
 
 .runtime-status-bar[data-tone='live'] .runtime-status-orb-core {
