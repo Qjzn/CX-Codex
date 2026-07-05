@@ -9295,3 +9295,40 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 42060; `/health` returned ok.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-project-thread-order` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 screenshot artifact: `output/regression-7420/p1-project-thread-order/sidebar-rows-fixture-phone.png`.
+
+### Feature: P1 pinned thread sidebar ordering and de-duplication
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- `/codex-api/pinned-threads` returns the merged Web + Codex Desktop pinned thread ids.
+- The sidebar regression fixture pins `fixture-thread-unread` first and `fixture-thread-running` second.
+
+#### Steps
+1. Call `GET http://127.0.0.1:7420/codex-api/pinned-threads` and confirm it returns a de-duplicated ordered array.
+2. Open `http://127.0.0.1:7420/#/__regression/sidebar-rows?regression=frontend` at a phone-sized viewport such as 393x852.
+3. Confirm the `置顶` section shows exactly 2 rows in override order: `fixture-thread-unread`, then `fixture-thread-running`.
+4. Confirm the `正在运行` section is absent or empty when the only running fixture thread is already pinned.
+5. Confirm the pinned running thread appears exactly twice in the full fixture: once in `置顶`, once in its project list.
+6. Confirm the pinned unread thread appears exactly twice in the full fixture: once in `置顶`, once in its project list.
+7. Confirm project preview ordering and the 5-row limit still match the P1 project thread preview test.
+8. Run `git diff --check`.
+9. Run `npm.cmd run build`.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-pinned-thread-parity`.
+
+#### Expected Results
+- The pinned section follows pinned id order, not updated time.
+- Pinned running threads do not duplicate into the running section.
+- Pinned threads remain visible inside their project list exactly once.
+- Existing pinned project, project order, empty project, and project preview behavior do not regress.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/p1-pinned-thread-parity/` when `-CaptureScreenshots` is used.
+- To roll back, revert `src/components/sidebar/SidebarRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build verification: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
+- 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 34200; `/health` returned ok.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-pinned-thread-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 screenshot artifact: `output/regression-7420/p1-pinned-thread-parity/sidebar-rows-fixture-phone.png`.

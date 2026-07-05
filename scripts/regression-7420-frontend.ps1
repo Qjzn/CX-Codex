@@ -1002,6 +1002,13 @@ JSON.stringify((() => {
   const emptyProjectGroup = projectGroups.find((node) => node.getAttribute('data-project-name') === 'empty-root') || null;
   const pinnedProjectGroups = projectGroups.filter((node) => node.getAttribute('data-pinned-project') === 'true');
   const showMoreButtons = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-show-more-button'));
+  const sections = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-section'));
+  const getSectionThreadIds = (label) => {
+    const section = sections.find((node) => (node.querySelector('.thread-section-label')?.textContent || '').trim() === label);
+    return Array.from(section?.querySelectorAll('.thread-row') || []).map((node) => node.getAttribute('data-thread-id') || '');
+  };
+  const pinnedSectionThreadIds = getSectionThreadIds('置顶');
+  const runningSectionThreadIds = getSectionThreadIds('正在运行');
   const sources = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row-source'));
   const indicators = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-status-indicator'));
   const countRowsByThreadId = (threadId) => rows.filter((node) => node.getAttribute('data-thread-id') === threadId).length;
@@ -1059,6 +1066,8 @@ JSON.stringify((() => {
     firstProjectThreadIds,
     showMoreButtonCount: showMoreButtons.length,
     firstShowMoreText: showMoreButtons[0]?.textContent?.trim() || '',
+    pinnedSectionThreadIds,
+    runningSectionThreadIds,
     runningThreadRowCount: countRowsByThreadId('fixture-thread-running'),
     runningThreadProjectRowCount: countProjectRowsByThreadId('fixture-thread-running'),
     pinnedThreadRowCount: countRowsByThreadId('fixture-thread-unread'),
@@ -1104,9 +1113,13 @@ function Assert-SidebarFixture {
   }
   Assert-True ([int]$Metrics.showMoreButtonCount -ge 1) "sidebar fixture is missing show more control for long project thread list"
   Assert-True ([string]$Metrics.firstShowMoreText -eq "显示更多 3 条") "sidebar fixture show more label is unexpected: $($Metrics.firstShowMoreText)"
-  Assert-True ([int]$Metrics.runningThreadRowCount -ge 2) "sidebar fixture running thread is missing from either running section or project list"
+  Assert-True ([int]$Metrics.pinnedSectionThreadIds.Count -eq 2) "sidebar fixture pinned section should show exactly 2 pinned threads, got $($Metrics.pinnedSectionThreadIds.Count)"
+  Assert-True ([string]$Metrics.pinnedSectionThreadIds[0] -eq "fixture-thread-unread") "sidebar fixture pinned section order drifted at index 0"
+  Assert-True ([string]$Metrics.pinnedSectionThreadIds[1] -eq "fixture-thread-running") "sidebar fixture pinned section order drifted at index 1"
+  Assert-True ([int]$Metrics.runningSectionThreadIds.Count -eq 0) "sidebar fixture running section should not duplicate a pinned running thread"
+  Assert-True ([int]$Metrics.runningThreadRowCount -eq 2) "sidebar fixture pinned running thread should appear only in pinned section and project list"
   Assert-True ([int]$Metrics.runningThreadProjectRowCount -eq 1) "sidebar fixture running thread is not retained exactly once in project list"
-  Assert-True ([int]$Metrics.pinnedThreadRowCount -ge 2) "sidebar fixture pinned thread is missing from either pinned section or project list"
+  Assert-True ([int]$Metrics.pinnedThreadRowCount -eq 2) "sidebar fixture pinned thread should appear only in pinned section and project list"
   Assert-True ([int]$Metrics.pinnedThreadProjectRowCount -eq 1) "sidebar fixture pinned thread is not retained exactly once in project list"
   Assert-True ($Metrics.sourceCount -ge 4) "sidebar fixture is missing source/status metadata"
   Assert-True ($Metrics.indicatorCount -ge 2) "sidebar fixture is missing unread/running indicators"

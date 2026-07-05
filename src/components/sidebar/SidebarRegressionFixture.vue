@@ -13,7 +13,7 @@
         :is-loading="false"
         search-query=""
         :search-matched-thread-ids="null"
-        :pinned-thread-ids-override="['fixture-thread-unread']"
+        :pinned-thread-ids-override="['fixture-thread-unread', 'fixture-thread-running']"
         desktop-list-parity
         @select="noop"
         @archive="noop"
