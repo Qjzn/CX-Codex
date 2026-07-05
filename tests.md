@@ -37,6 +37,7 @@ This file tracks manual regression and feature verification steps.
 #### Expected Results
 - The script creates `output/regression-7420/p5-screenshot-baseline/` when `-CaptureScreenshots` is supplied.
 - Screenshot filenames are stable and sanitized from regression result names.
+- The home foldable screenshot is captured after the settings panel is closed, and the foldable shell assertion fails if `.sidebar-settings-panel` is still open.
 - The screenshot matrix includes:
   - `home-desktop.png`
   - `home-foldable.png`
@@ -62,6 +63,7 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 static verification: `git diff --check -- scripts/regression-7420-frontend.ps1` passed.
 - 2026-07-05 screenshot regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p5-screenshot-baseline` passed.
 - 2026-07-05 generated screenshots: `output/regression-7420/p5-screenshot-baseline/` contained 13 PNG files: `home-desktop.png`, `home-foldable.png`, `skills-phone.png`, `github-trending-phone.png`, `diagnostics-phone.png`, `local-preview-phone.png`, `sidebar-rows-fixture-phone.png`, `composer-shell-fixture-desktop.png`, `composer-shell-fixture-phone.png`, `composer-shell-fixture-foldable.png`, `conversation-blocks-fixture.png`, `conversation-blocks-fixture-phone.png`, and `conversation-blocks-fixture-foldable.png`.
+- 2026-07-05 screenshot pollution guard: regenerated `home-foldable.png` showed the normal home shell instead of the settings panel, and the foldable shell assertion now checks that `.sidebar-settings-panel` is absent.
 - 2026-07-05 screenshot capture note: screenshots are produced by `agent-browser screenshot`, not Playwright, so this remains compatible with the project rule that Playwright runs only when explicitly requested.
 
 ### Feature: App Server runtime thread reconciler helper

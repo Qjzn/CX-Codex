@@ -167,6 +167,25 @@ JSON.stringify((() => {
   Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
 }
 
+function Close-SettingsPanelIfOpen {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const panel = document.querySelector('.sidebar-settings-panel');
+  if (!panel) return { hadPanel: false, closed: false };
+  const button = document.querySelector('.sidebar-settings-button');
+  if (button instanceof HTMLElement) {
+    button.click();
+    return { hadPanel: true, closed: true };
+  }
+  return { hadPanel: true, closed: false };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "200") | Out-Null
+}
+
 function Test-HttpJson {
   param(
     [string]$Name,
@@ -360,6 +379,7 @@ JSON.stringify((() => {
   const contentRoot = document.querySelector('.content-root');
   const contentGrid = document.querySelector('.content-grid');
   const composer = document.querySelector('.thread-composer-shell');
+  const settingsPanel = document.querySelector('.sidebar-settings-panel');
   const viewportWidth = document.documentElement.clientWidth;
   const layoutRect = layout?.getBoundingClientRect();
   const sidebarRect = sidebar?.getBoundingClientRect();
@@ -384,6 +404,7 @@ JSON.stringify((() => {
     hasMain: !!main,
     hasContentGrid: !!contentGrid,
     hasComposer: !!composer,
+    hasSettingsPanel: !!settingsPanel,
     layoutWidth: layoutRect ? Math.round(layoutRect.width) : 0,
     sidebarWidth: sidebarRect ? Math.round(sidebarRect.width) : 0,
     mainWidth: mainRect ? Math.round(mainRect.width) : 0,
@@ -410,6 +431,7 @@ function Assert-FoldableShell {
   Assert-True ($Metrics.hasMain -eq $true) "foldable shell is missing main content"
   Assert-True ($Metrics.hasContentGrid -eq $true) "foldable shell is missing content grid"
   Assert-True ($Metrics.hasComposer -eq $true) "foldable shell is missing composer"
+  Assert-True ($Metrics.hasSettingsPanel -eq $false) "foldable shell screenshot is polluted by an open settings panel"
   Assert-True ($Metrics.sidebarWidth -ge 260) "foldable sidebar is too narrow: $($Metrics.sidebarWidth)"
   Assert-True ($Metrics.sidebarWidth -le 370) "foldable sidebar is too wide: $($Metrics.sidebarWidth)"
   Assert-True ($Metrics.sidebarRatio -le 0.42) "foldable sidebar takes too much width: $($Metrics.sidebarRatio)"
@@ -889,6 +911,7 @@ try {
   Invoke-AgentBrowser -Arguments @("--session", $session, "click", ".sidebar-settings-button") | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "200") | Out-Null
   Assert-SettingsPanel -Metrics (Read-SettingsPanelMetrics -Session $session)
+  Close-SettingsPanelIfOpen -Session $session
   Reset-AppShellLayoutPreferences -Session $session
 
   $homeFoldable = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $FoldableWidth -Height $FoldableHeight

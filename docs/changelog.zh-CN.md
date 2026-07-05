@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - 截图回归在完成首页设置面板断言后会自动关闭设置面板，并在 884x1104 首页 shell 断言中禁止设置面板残留，避免 `home-foldable.png` 被上一步设置面板状态污染。
   - `test:7420:frontend` 新增显式截图回归参数 `-CaptureScreenshots`、`-ScreenshotTaskName` 和 `-ScreenshotOutputDir`，可用 `agent-browser` 在现有 DOM 回归矩阵通过时把页面截图保存到 `output/regression-7420/<task-name>/`，覆盖桌面、手机和折叠屏视口。
   - `test:7420:frontend` 新增 884x1104 折叠屏/窄平板回归视口，覆盖首页 shell、Composer fixture 和 conversation fixture；首页会先重置侧栏折叠/宽度偏好，再断言侧栏比例、主内容宽度、Composer 宽度、元素贴合和无横向溢出。
   - 会话主区 runtime 状态条、消息队列、消息气泡、表格、raw payload、长文本展开、文件右键菜单和消息操作按钮继续收敛为白灰中性 token；`conversation-blocks` fixture 增加 runtime/queue 样本，并由 `test:7420:frontend` 自动断言会话辅助 chrome 不再出现暖色背景、圆角不超标且无横向溢出。
