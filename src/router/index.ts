@@ -9,6 +9,7 @@ function normalizeInitialHashRoute(): void {
     || pathname === '/github-trending'
     || pathname === '/diagnostics'
     || pathname === '/__regression/conversation-blocks'
+    || pathname === '/__regression/sidebar-rows'
     || pathname.startsWith('/thread/')
   if (!isKnownCleanRoute) return
   if (hash && hash !== '#/') return
@@ -59,6 +60,11 @@ const router = createRouter({
       path: '/__regression/conversation-blocks',
       name: 'regression-conversation-blocks',
       component: () => import('../components/content/ConversationRegressionFixture.vue'),
+    },
+    {
+      path: '/__regression/sidebar-rows',
+      name: 'regression-sidebar-rows',
+      component: () => import('../components/sidebar/SidebarRegressionFixture.vue'),
     },
     {
       path: '/new-thread',

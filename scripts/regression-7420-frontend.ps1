@@ -385,6 +385,87 @@ JSON.stringify({
   Assert-True ([int]$state.copiedButtonCount -ge 1) "conversation fixture copy button did not show copied feedback"
 }
 
+function Read-SidebarFixtureMetrics {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const rows = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row'));
+  const sources = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row-source'));
+  const indicators = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-status-indicator'));
+  const rowRects = rows.map((node) => {
+    const rect = node.getBoundingClientRect();
+    const style = window.getComputedStyle(node);
+    return {
+      height: rect.height,
+      left: rect.left,
+      right: rect.right,
+      radius: Number.parseFloat(style.borderTopLeftRadius || '0')
+    };
+  });
+  const sourceStyles = sources.map((node) => {
+    const style = window.getComputedStyle(node);
+    return {
+      backgroundColor: style.backgroundColor,
+      borderTopWidth: Number.parseFloat(style.borderTopWidth || '0'),
+      borderRadius: Number.parseFloat(style.borderTopLeftRadius || '0'),
+      paddingLeft: Number.parseFloat(style.paddingLeft || '0'),
+      paddingRight: Number.parseFloat(style.paddingRight || '0')
+    };
+  });
+  const indicatorStyles = indicators.map((node) => {
+    const style = window.getComputedStyle(node);
+    return {
+      state: node.getAttribute('data-state') || '',
+      animationName: style.animationName || 'none',
+      width: Number.parseFloat(style.width || '0'),
+      height: Number.parseFloat(style.height || '0')
+    };
+  });
+  const viewportWidth = document.documentElement.clientWidth;
+  const rowFitFailures = rowRects.filter((rect) => rect.left < -2 || rect.right > viewportWidth + 2);
+  const hasPillSourceStyle = sourceStyles.some((style) => (
+    style.borderTopWidth > 0
+    || style.borderRadius > 0
+    || style.paddingLeft > 0
+    || style.paddingRight > 0
+    || (style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent')
+  ));
+  const workingIndicator = indicatorStyles.find((style) => style.state === 'working') || null;
+  return {
+    rowCount: rows.length,
+    sourceCount: sources.length,
+    indicatorCount: indicators.length,
+    maxRowHeight: rowRects.length ? Math.max(...rowRects.map((rect) => rect.height)) : 0,
+    minRowHeight: rowRects.length ? Math.min(...rowRects.map((rect) => rect.height)) : 0,
+    maxRowRadius: rowRects.length ? Math.max(...rowRects.map((rect) => rect.radius)) : 0,
+    hasPillSourceStyle,
+    workingIndicator,
+    rowFitFailureCount: rowFitFailures.length,
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth
+  };
+})())
+'@
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-SidebarFixture {
+  param([object]$Metrics)
+
+  Assert-True ($Metrics.rowCount -ge 4) "sidebar fixture is missing thread rows"
+  Assert-True ($Metrics.sourceCount -ge 4) "sidebar fixture is missing source/status metadata"
+  Assert-True ($Metrics.indicatorCount -ge 2) "sidebar fixture is missing unread/running indicators"
+  Assert-True ($Metrics.minRowHeight -ge 40) "sidebar fixture row height is too small: $($Metrics.minRowHeight)"
+  Assert-True ($Metrics.maxRowHeight -le 52) "sidebar fixture row height is too large: $($Metrics.maxRowHeight)"
+  Assert-True ($Metrics.maxRowRadius -le 10) "sidebar fixture row radius is too large: $($Metrics.maxRowRadius)"
+  Assert-True ($Metrics.hasPillSourceStyle -eq $false) "sidebar fixture still renders source/status as pill chips"
+  Assert-True ($Metrics.workingIndicator.animationName -notlike "*spin*") "sidebar fixture running indicator still uses spinner animation"
+  Assert-True ($Metrics.rowFitFailureCount -eq 0) "sidebar fixture rows overflow viewport"
+  Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "sidebar fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+}
+
 function Add-RegressionResult {
   param(
     [string]$Name,
@@ -443,6 +524,12 @@ try {
   $preview = Open-And-ReadPage -Session $session -Url $previewUrl -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $preview -Name "local preview phone" -RequireMarkdown
   Add-RegressionResult -Name "local-preview-phone" -Page $preview
+
+  $sidebarFixtureUrl = $BaseUrl + "/#/__regression/sidebar-rows?regression=frontend"
+  $sidebarFixture = Open-And-ReadPage -Session $session -Url $sidebarFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $sidebarFixture -Name "sidebar rows fixture phone"
+  Assert-SidebarFixture -Metrics (Read-SidebarFixtureMetrics -Session $session)
+  Add-RegressionResult -Name "sidebar-rows-fixture-phone" -Page $sidebarFixture
 
   $fixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend"
   $fixture = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $DesktopWidth -Height $DesktopHeight

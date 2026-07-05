@@ -1391,7 +1391,10 @@ const isWorkbenchRoute = computed(() => route.name === 'workbench')
 const isSkillsRoute = computed(() => route.name === 'skills')
 const isGithubTrendingRoute = computed(() => route.name === 'github-trending')
 const isDiagnosticsRoute = computed(() => route.name === 'diagnostics')
-const isStandaloneRoute = computed(() => route.name === 'regression-conversation-blocks')
+const isStandaloneRoute = computed(() => (
+  route.name === 'regression-conversation-blocks'
+  || route.name === 'regression-sidebar-rows'
+))
 const isNonThreadRoute = computed(() => (
   isHomeRoute.value || isWorkbenchRoute.value || isSkillsRoute.value || isGithubTrendingRoute.value || isDiagnosticsRoute.value
 ))

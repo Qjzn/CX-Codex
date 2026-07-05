@@ -8540,3 +8540,38 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, desktop `conversation-blocks-fixture`, and phone `conversation-blocks-fixture-phone`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 fixture mobile fit assertions: the built-in conversation fixture verified request cards, permission/tool panels, file cards, code blocks, raw payload cards, command rows, and command output wrappers fit inside the 393x852 viewport with no page-level horizontal overflow.
+
+### Feature: P4 sidebar row scannability baseline
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Built-in regression fixture route `/#/__regression/sidebar-rows` is available.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/__regression/sidebar-rows?regression=frontend` at a phone-sized viewport such as 393x852.
+2. Confirm the fixture includes running, unread, idle, and multi-project thread rows.
+3. Confirm each row reads as a continuous sidebar list row: title first, preview second, time/status weakly on the side.
+4. Confirm source/status metadata appears as lightweight inline text rather than rounded pill chips.
+5. Confirm running status uses a small stable indicator, not a spinning loader in the row.
+6. Open thread/project menus manually and confirm they use neutral white/gray token styling, not warm beige panels.
+7. Run `git diff --check`.
+8. Run `npm.cmd run build:frontend`.
+9. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+
+#### Expected Results
+- Sidebar rows remain compact and scannable with stable row height between 40px and 52px.
+- Source/status metadata does not render as chips with pill backgrounds or borders.
+- Row radius stays within the desktop parity row token ceiling.
+- The fixture has no page-level horizontal overflow.
+- Browser regression passes with no page errors.
+
+#### Rollback/Cleanup Notes
+- No generated screenshots are required for this narrow fixture baseline.
+- To roll back, revert `SidebarThreadTree.vue`, `SidebarRegressionFixture.vue`, `router/index.ts`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop `conversation-blocks-fixture`, and phone `conversation-blocks-fixture-phone`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 fixture sidebar assertions: the built-in sidebar fixture verified at least four thread rows, source/status metadata, unread/running indicators, row height between 40px and 52px, row radius no larger than 10px, source/status metadata without pill backgrounds/borders/padding, no spinner animation for the running indicator, rows fitting inside the 393x852 viewport, and no page-level horizontal overflow.

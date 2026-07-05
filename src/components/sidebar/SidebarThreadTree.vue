@@ -1976,23 +1976,44 @@ onBeforeUnmount(() => {
 }
 
 .project-menu-panel {
-  @apply absolute right-0 top-full mt-2 z-20 min-w-40 rounded-2xl border border-[#ddd5c7] bg-[#fffcf7] p-1.5 shadow-lg flex flex-col gap-0.5;
+  @apply absolute right-0 top-full mt-2 z-20 min-w-40 border p-1.5 flex flex-col gap-0.5;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: var(--ui-shadow-float);
 }
 
 .project-menu-item {
-  @apply rounded-xl px-2.5 py-1.5 text-left text-sm text-[#544a3d] hover:bg-[#f1ebde];
+  @apply px-2.5 py-1.5 text-left text-sm transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.project-menu-item:hover,
+.project-menu-item:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .project-menu-item-danger {
-  @apply text-rose-700 hover:bg-rose-50;
+  color: var(--ui-danger);
+}
+
+.project-menu-item-danger:hover,
+.project-menu-item-danger:focus-visible {
+  background: color-mix(in srgb, var(--ui-danger) 8%, var(--ui-bg-surface));
+  color: var(--ui-danger);
 }
 
 .project-menu-label {
-  @apply px-2 pt-1 text-[11px] uppercase tracking-[0.14em] text-[#948a7b];
+  @apply px-2 pt-1 text-[11px] font-medium;
+  color: var(--ui-text-tertiary);
+  letter-spacing: 0;
 }
 
 .project-menu-input {
-  @apply px-2 py-1 text-sm text-[#2b241d] bg-transparent border-none outline-none;
+  @apply px-2 py-1 text-sm bg-transparent border-none outline-none;
+  color: var(--ui-text-primary);
 }
 
 .project-empty-row {
@@ -2100,19 +2121,25 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-source {
-  @apply shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none;
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
+  @apply inline-flex shrink-0 items-center gap-1 text-[11px] font-medium leading-none;
+  border: 0;
+  padding: 0;
+  background: transparent;
   color: var(--ui-text-secondary);
   font-family: var(--font-sans-ui);
 }
 
+.thread-row-source::before {
+  content: '·';
+  color: var(--ui-text-tertiary);
+}
+
 .thread-row-source--working {
-  @apply border-[#9fd7ca] bg-[#eaf9f5] text-[#0f766e];
+  color: var(--ui-accent);
 }
 
 .thread-row-source--unread {
-  @apply border-[#c8d8ff] bg-[#eef4ff] text-[#315f9f];
+  color: var(--ui-focus);
 }
 
 .thread-row-time {
@@ -2144,15 +2171,33 @@ onBeforeUnmount(() => {
 }
 
 .thread-menu-panel {
-  @apply absolute right-0 top-full mt-2 z-20 min-w-40 rounded-2xl border border-[#ddd5c7] bg-[#fffcf7] p-1.5 shadow-lg flex flex-col gap-0.5;
+  @apply absolute right-0 top-full mt-2 z-20 min-w-40 border p-1.5 flex flex-col gap-0.5;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: var(--ui-shadow-float);
 }
 
 .thread-menu-item {
-  @apply rounded-xl px-2.5 py-1.5 text-left text-sm text-[#544a3d] hover:bg-[#f1ebde];
+  @apply px-2.5 py-1.5 text-left text-sm transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.thread-menu-item:hover,
+.thread-menu-item:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .thread-menu-item-danger {
-  @apply text-rose-700 hover:bg-rose-50;
+  color: var(--ui-danger);
+}
+
+.thread-menu-item-danger:hover,
+.thread-menu-item-danger:focus-visible {
+  background: color-mix(in srgb, var(--ui-danger) 8%, var(--ui-bg-surface));
+  color: var(--ui-danger);
 }
 
 .thread-icon {
@@ -2220,13 +2265,16 @@ onBeforeUnmount(() => {
 }
 
 .thread-status-indicator[data-state='unread'] {
-  width: 6.6667px;
-  height: 6.6667px;
-  @apply bg-[#0f766e];
+  width: 7px;
+  height: 7px;
+  background: var(--ui-accent);
 }
 
 .thread-status-indicator[data-state='working'] {
-  @apply border-2 border-[#0f766e] border-t-transparent bg-transparent animate-spin;
+  width: 7px;
+  height: 7px;
+  background: var(--ui-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent) 14%, transparent);
 }
 
 .thread-row:hover .thread-status-indicator[data-state='unread'],
@@ -2241,19 +2289,34 @@ onBeforeUnmount(() => {
 }
 
 .rename-thread-panel {
-  @apply w-full max-w-sm rounded-3xl border border-[#ddd5c7] bg-[#fffdf8] p-4 shadow-xl;
+  @apply w-full max-w-sm border p-4;
+  border-radius: 14px;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: var(--ui-shadow-float);
 }
 
 .rename-thread-title {
-  @apply m-0 text-base font-semibold text-[#2d261f];
+  @apply m-0 text-base font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .rename-thread-subtitle {
-  @apply mt-1 mb-3 text-sm text-[#8d8273];
+  @apply mt-1 mb-3 text-sm;
+  color: var(--ui-text-secondary);
 }
 
 .rename-thread-input {
-  @apply w-full rounded-2xl border border-[#d8cfbf] bg-white px-3 py-2 text-sm text-[#2d261f] outline-none focus:border-[#9f8d74];
+  @apply w-full border px-3 py-2 text-sm outline-none;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
+}
+
+.rename-thread-input:focus {
+  border-color: var(--ui-focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-focus) 14%, transparent);
 }
 
 .rename-thread-actions {
@@ -2261,15 +2324,37 @@ onBeforeUnmount(() => {
 }
 
 .rename-thread-button {
-  @apply rounded-xl px-3 py-1.5 text-sm text-[#544a3d] hover:bg-[#f1ebde];
+  @apply px-3 py-1.5 text-sm transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.rename-thread-button:hover,
+.rename-thread-button:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .rename-thread-button-primary {
-  @apply bg-[#1f2937] text-white hover:bg-[#111827];
+  background: var(--ui-text-primary);
+  color: var(--ui-bg-surface);
+}
+
+.rename-thread-button-primary:hover,
+.rename-thread-button-primary:focus-visible {
+  background: color-mix(in srgb, var(--ui-text-primary) 88%, #000);
+  color: var(--ui-bg-surface);
 }
 
 .rename-thread-button-danger {
-  @apply bg-rose-600 text-white hover:bg-rose-700;
+  background: var(--ui-danger);
+  color: #fff;
+}
+
+.rename-thread-button-danger:hover,
+.rename-thread-button-danger:focus-visible {
+  background: color-mix(in srgb, var(--ui-danger) 88%, #000);
+  color: #fff;
 }
 
 @media (prefers-reduced-motion: reduce) {
