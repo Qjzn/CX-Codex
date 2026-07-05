@@ -508,6 +508,17 @@
                 </span>
               </div>
 
+              <details
+                v-if="shouldRenderRawPayloadCard(entry.message)"
+                class="message-structured-card"
+              >
+                <summary class="message-structured-summary">
+                  <span class="message-structured-title">{{ rawPayloadTitle(entry.message) }}</span>
+                  <span class="message-structured-meta">{{ rawPayloadMeta(entry.message) }}</span>
+                </summary>
+                <pre class="message-structured-pre">{{ rawPayloadPreview(entry.message) }}</pre>
+              </details>
+
               <article
                 v-if="entry.message.text.length > 0"
                 class="message-card"
@@ -685,6 +696,22 @@
                             </div>
                           </article>
                         </div>
+                      </div>
+                      <div
+                        v-else-if="block.kind === 'code'"
+                        class="message-code-block"
+                        :data-diff="block.isDiff"
+                      >
+                        <div class="message-code-header">
+                          <span class="message-code-language">{{ block.language || (block.isDiff ? 'diff' : 'text') }}</span>
+                          <span class="message-code-count">{{ block.lines.length }} 行</span>
+                        </div>
+                        <pre class="message-code-pre"><code><span
+                          v-for="(line, lineIndex) in block.lines"
+                          :key="`code-line-${blockIndex}-${lineIndex}`"
+                          class="message-code-line"
+                          :data-kind="line.kind"
+                        >{{ line.value || ' ' }}</span></code></pre>
                       </div>
                       <p v-else-if="isMarkdownImageFailed(entry.message.id, blockIndex)" class="message-text">{{ block.markdown }}</p>
                       <button
@@ -1415,14 +1442,20 @@ type InlineSegment =
 type MessageBlock =
   | { kind: 'text'; value: string }
   | { kind: 'table'; headers: string[]; rows: string[][] }
+  | { kind: 'code'; language: string; code: string; isDiff: boolean }
   | { kind: 'image'; url: string; alt: string; markdown: string }
 type PreparedMessageBlock =
   | { kind: 'text'; value: string; segments: InlineSegment[] }
   | { kind: 'table'; headers: PreparedTableCell[]; rows: PreparedTableCell[][] }
+  | { kind: 'code'; language: string; lines: PreparedCodeLine[]; isDiff: boolean }
   | { kind: 'image'; url: string; alt: string; markdown: string }
 type PreparedTableCell = {
   value: string
   segments: InlineSegment[]
+}
+type PreparedCodeLine = {
+  value: string
+  kind: 'add' | 'delete' | 'meta' | 'context'
 }
 type MeasureRefTarget = Element | ComponentPublicInstance | null
 type ScrollAnchorSnapshot = {
@@ -2768,6 +2801,29 @@ function pushTextWithImages(blocks: MessageBlock[], text: string): void {
   }
 }
 
+function parseFenceStart(line: string): { marker: string; language: string } | null {
+  const match = line.match(/^ {0,3}(```+|~~~+)\s*([^`]*)$/u)
+  if (!match) return null
+  const marker = match[1] ?? ''
+  const info = (match[2] ?? '').trim()
+  const language = info.split(/\s+/u)[0]?.replace(/[^\w.+#-]/gu, '') ?? ''
+  return { marker, language }
+}
+
+function isFenceEnd(line: string, marker: string): boolean {
+  const trimmed = line.trim()
+  if (!trimmed.startsWith(marker[0] ?? '`')) return false
+  const sameChar = marker[0] ?? '`'
+  let count = 0
+  while (count < trimmed.length && trimmed[count] === sameChar) count += 1
+  return count >= marker.length && trimmed.slice(count).trim().length === 0
+}
+
+function isDiffLanguage(language: string): boolean {
+  const normalized = language.trim().toLowerCase()
+  return normalized === 'diff' || normalized === 'patch' || normalized === 'udiff'
+}
+
 function parseMessageBlocks(text: string): MessageBlock[] {
   const blocks: MessageBlock[] = []
   const lines = text.split('\n')
@@ -2780,6 +2836,35 @@ function parseMessageBlocks(text: string): MessageBlock[] {
   }
 
   for (let index = 0; index < lines.length; index += 1) {
+    const fence = parseFenceStart(lines[index] ?? '')
+    if (fence) {
+      const codeLines: string[] = []
+      let cursor = index + 1
+      let closed = false
+      while (cursor < lines.length) {
+        const line = lines[cursor] ?? ''
+        if (isFenceEnd(line, fence.marker)) {
+          closed = true
+          break
+        }
+        codeLines.push(line)
+        cursor += 1
+      }
+
+      if (closed) {
+        flushText()
+        const code = codeLines.join('\n')
+        blocks.push({
+          kind: 'code',
+          language: fence.language,
+          code,
+          isDiff: isDiffLanguage(fence.language) || codeLines.some((line) => /^(diff --git|@@ |\+\+\+ |--- )/u.test(line)),
+        })
+        index = cursor
+        continue
+      }
+    }
+
     const headerCells = splitMarkdownTableRow(lines[index] ?? '')
     const separatorLine = lines[index + 1] ?? ''
     if (headerCells.length >= 2 && isMarkdownTableSeparator(separatorLine)) {
@@ -2819,6 +2904,26 @@ function prepareTableCell(value: string): PreparedTableCell {
   }
 }
 
+function prepareCodeLine(value: string, isDiff: boolean): PreparedCodeLine {
+  if (!isDiff) return { value, kind: 'context' }
+  if (value.startsWith('+') && !value.startsWith('+++')) return { value, kind: 'add' }
+  if (value.startsWith('-') && !value.startsWith('---')) return { value, kind: 'delete' }
+  if (value.startsWith('@@') || value.startsWith('diff --git') || value.startsWith('+++') || value.startsWith('---')) {
+    return { value, kind: 'meta' }
+  }
+  return { value, kind: 'context' }
+}
+
+function prepareCodeBlock(block: Extract<MessageBlock, { kind: 'code' }>): Extract<PreparedMessageBlock, { kind: 'code' }> {
+  const lines = block.code.split('\n').map((line) => prepareCodeLine(line, block.isDiff))
+  return {
+    kind: 'code',
+    language: block.language,
+    lines: lines.length > 0 ? lines : [{ value: '', kind: 'context' }],
+    isDiff: block.isDiff,
+  }
+}
+
 function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
   const cached = preparedMessageBlocksById.get(message.id)
   if (cached && cached.text === message.text) {
@@ -2840,11 +2945,41 @@ function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
         rows: block.rows.map((row) => row.map(prepareTableCell)),
       }
     }
+    if (block.kind === 'code') {
+      return prepareCodeBlock(block)
+    }
     return block
   })
 
   preparedMessageBlocksById.set(message.id, { text: message.text, blocks })
   return blocks
+}
+
+function shouldRenderRawPayloadCard(message: UiMessage): boolean {
+  return typeof message.rawPayload === 'string' && message.rawPayload.trim().length > 0
+}
+
+function rawPayloadTitle(message: UiMessage): string {
+  if (message.isUnhandled) return '未适配的 App Server 内容'
+  return '原始结构内容'
+}
+
+function rawPayloadMeta(message: UiMessage): string {
+  const type = message.messageType?.trim() || 'payload'
+  const raw = message.rawPayload?.trim() ?? ''
+  return `${type} · ${formatCharacterCount(raw.length)} 字符`
+}
+
+function rawPayloadPreview(message: UiMessage): string {
+  const raw = message.rawPayload?.trim() ?? ''
+  if (!raw) return ''
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    const pretty = JSON.stringify(parsed, null, 2)
+    return pretty.length > 6000 ? `${pretty.slice(0, 6000).trimEnd()}\n...` : pretty
+  } catch {
+    return raw.length > 6000 ? `${raw.slice(0, 6000).trimEnd()}\n...` : raw
+  }
 }
 
 function isLongUserMessage(message: UiMessage): boolean {
@@ -5139,6 +5274,74 @@ onBeforeUnmount(() => {
 
 .message-table-card-value {
   @apply text-sm leading-relaxed text-[#29241e];
+  overflow-wrap: anywhere;
+}
+
+.message-code-block {
+  @apply my-1 max-w-full overflow-hidden rounded-2xl border border-[#d8d1c6] bg-[#191816];
+}
+
+.message-code-header {
+  @apply flex items-center justify-between gap-3 border-b border-white/10 bg-[#24211d] px-3 py-1.5;
+}
+
+.message-code-language,
+.message-code-count {
+  @apply text-[11px] font-medium leading-none text-[#d8d0c3];
+  font-family: var(--font-sans-ui);
+}
+
+.message-code-count {
+  @apply text-[#a69c8d];
+}
+
+.message-code-pre {
+  @apply m-0 max-w-full overflow-x-auto p-0 text-[12.5px] leading-5 text-[#ece7de];
+  font-family: var(--font-mono-ui);
+  tab-size: 2;
+}
+
+.message-code-pre code {
+  @apply block min-w-full py-2;
+}
+
+.message-code-line {
+  @apply block min-h-5 px-3 whitespace-pre;
+}
+
+.message-code-line[data-kind='add'] {
+  @apply bg-emerald-500/12 text-emerald-100;
+}
+
+.message-code-line[data-kind='delete'] {
+  @apply bg-rose-500/12 text-rose-100;
+}
+
+.message-code-line[data-kind='meta'] {
+  @apply bg-sky-500/10 text-sky-100;
+}
+
+.message-structured-card {
+  @apply mb-1.5 max-w-full overflow-hidden rounded-2xl border border-[#ded4c5] bg-[#fffaf2];
+}
+
+.message-structured-summary {
+  @apply flex cursor-pointer items-center justify-between gap-3 px-3 py-2 text-xs text-[#665c50];
+  font-family: var(--font-sans-ui);
+}
+
+.message-structured-title {
+  @apply font-semibold text-[#3d342b];
+}
+
+.message-structured-meta {
+  @apply shrink-0 text-[#8c806f];
+}
+
+.message-structured-pre {
+  @apply m-0 max-h-72 overflow-auto border-t border-[#eadfce] bg-[#fffdf8] p-3 text-[12px] leading-5 text-[#3a332b];
+  font-family: var(--font-mono-ui);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 

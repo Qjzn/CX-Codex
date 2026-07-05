@@ -2,6 +2,11 @@
 
 ## 未发布
 
+- 界面体验：
+  - 会话栏现在显示会话预览、来源和运行/未读状态，减少只看标题时无法判断上下文的问题，同时保持桌面、手机和折叠屏固定行高。
+  - 对话消息新增 fenced code block / diff block 结构化渲染，代码和补丁输出不再只作为普通 Markdown 文本显示。
+  - 未适配的 App Server item / raw payload 会以折叠结构化卡片展示，保留诊断可见性但避免原始 JSON 干扰正常阅读。
+  - 新增 `PRODUCT.md`，把项目定位、用户、设计原则和桌面端 parity 目标沉淀为后续 UI 迭代上下文。
 - 语音输入：
   - 后端转写支持优先使用 OpenAI 官方音频转写 API，配置 `CX_CODEX_OPENAI_API_KEY`、`CODEXUI_OPENAI_API_KEY` 或 `OPENAI_API_KEY` 后不再依赖 ChatGPT 网页登录态。
   - 官方转写 multipart 会由服务端规范化 `model`、`response_format` 和 diarize 分段参数，普通转写模型保持 `json`，`gpt-4o-transcribe-diarize` 按官方文档使用 `diarized_json` 与 `chunking_strategy=auto`，避免客户端自带字段绕过官方模型的响应格式约束。

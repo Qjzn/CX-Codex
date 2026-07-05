@@ -8288,3 +8288,42 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, and local preview phone; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-browser-20260705 -AgentBrowserTimeoutSec 25` passed with notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
 - 2026-07-05 screenshot evidence: `output\regression-7420\p1-browser-20260705\desktop.png`, `phone.png`, and `fold.png` were generated.
+
+---
+
+### Feature: Conversation rendering and sidebar content polish
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from `E:\javaword\CXCodex\codexui\dist-cli\index.js`.
+- Current repository includes `PRODUCT.md`, `src/components/content/ThreadConversation.vue`, `src/components/sidebar/SidebarThreadTree.vue`, and `docs/changelog.zh-CN.md`.
+
+#### Steps
+1. Open a thread list with several historical sessions and confirm each row shows title, preview, relative time, and source/status chips when available.
+2. Open a thread that contains Markdown fenced code blocks such as ```` ```ts ```` and confirm they render as a code panel with language and line count.
+3. Open or create a thread that contains a fenced `diff` block and confirm added/deleted/meta lines have distinct treatment.
+4. Open a thread containing an unhandled App Server item or raw user content fallback and confirm the raw payload is behind a structured expandable card, not only dumped into normal text flow.
+5. Verify desktop, phone, and foldable viewports have no horizontal overflow in the sidebar or conversation.
+6. Run `git diff --check`.
+7. Run `npm.cmd run build:frontend`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+9. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\conversation-rendering-20260705 -AgentBrowserTimeoutSec 25`.
+
+#### Expected Results
+- Sidebar rows remain compact but provide enough preview content to identify a session without opening it.
+- Code fences are rendered as structured code panels instead of plain paragraph text.
+- Diff fences make patch additions, deletions, and hunk metadata visually scannable.
+- Raw payload fallback remains available for diagnostics while normal conversation reading stays clean.
+- Browser regression passes with no page errors and no horizontal overflow.
+
+#### Rollback/Cleanup Notes
+- Generated screenshots under `output\regression-7420\conversation-rendering-20260705\` can be deleted after review.
+- To roll back, revert `PRODUCT.md`, `ThreadConversation.vue`, `SidebarThreadTree.vue`, changelog updates, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, and local preview phone; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\conversation-rendering-20260705 -AgentBrowserTimeoutSec 25` passed with notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
+- 2026-07-05 screenshot evidence: `output\regression-7420\conversation-rendering-20260705\desktop.png`, `phone.png`, and `fold.png` were generated; desktop screenshot confirms sidebar rows now show title, preview, source/status chips, and relative time.
+- 2026-07-05 limitation: no dedicated fixture thread with fenced code/raw payload was created in this pass, so those branches are covered by type/template build verification rather than a content-specific browser assertion.

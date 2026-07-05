@@ -29,6 +29,12 @@
                   <span class="thread-row-title">{{ thread.title }}</span>
                   <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
                 </span>
+                <span class="thread-row-meta">
+                  <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
+                  <span v-if="thread.sourceKind" class="thread-row-source">{{ formatThreadSource(thread) }}</span>
+                  <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
+                  <span v-else-if="thread.unread" class="thread-row-source thread-row-source--unread">未读</span>
+                </span>
               </span>
             </button>
             <template #right>
@@ -104,6 +110,12 @@
                 <span class="thread-row-title-wrap">
                   <span class="thread-row-title">{{ thread.title }}</span>
                   <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
+                </span>
+                <span class="thread-row-meta">
+                  <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
+                  <span v-if="thread.sourceKind" class="thread-row-source">{{ formatThreadSource(thread) }}</span>
+                  <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
+                  <span v-else-if="thread.unread" class="thread-row-source thread-row-source--unread">未读</span>
                 </span>
               </span>
             </button>
@@ -227,6 +239,12 @@
               <span class="thread-row-title-wrap">
                 <span class="thread-row-title">{{ thread.title }}</span>
                 <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
+              </span>
+              <span class="thread-row-meta">
+                <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
+                <span v-if="thread.sourceKind" class="thread-row-source">{{ formatThreadSource(thread) }}</span>
+                <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
+                <span v-else-if="thread.unread" class="thread-row-source thread-row-source--unread">未读</span>
               </span>
             </span>
           </button>
@@ -391,6 +409,12 @@
                     <span class="thread-row-title-wrap">
                       <span class="thread-row-title">{{ thread.title }}</span>
                       <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
+                    </span>
+                    <span class="thread-row-meta">
+                      <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
+                      <span v-if="thread.sourceKind" class="thread-row-source">{{ formatThreadSource(thread) }}</span>
+                      <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
+                      <span v-else-if="thread.unread" class="thread-row-source thread-row-source--unread">未读</span>
                     </span>
                   </span>
                 </button>
@@ -996,6 +1020,15 @@ function getThreadStatusLabel(thread: UiThread): string {
   if (thread.inProgress) return '执行中'
   if (thread.unread) return '未读'
   return thread.hasWorktree ? '工作树' : '就绪'
+}
+
+function formatThreadSource(thread: UiThread): string {
+  const source = thread.sourceKind?.trim()
+  if (!source) return ''
+  if (source === 'cli') return 'CLI'
+  if (source.startsWith('subAgent.')) return '子任务'
+  if (source === 'app' || source === 'desktop') return '桌面端'
+  return source
 }
 
 function getProjectSummary(group: UiProjectGroup): string {
@@ -1939,7 +1972,7 @@ onBeforeUnmount(() => {
 
 .thread-row {
   @apply border border-[#e2d4bf] bg-[#fffdfa];
-  min-height: 3.55rem;
+  min-height: 4.15rem;
   align-items: center;
   transition:
     background-color 160ms ease,
@@ -1968,7 +2001,8 @@ onBeforeUnmount(() => {
 
 .thread-row-content {
   @apply min-w-0 flex flex-col justify-center;
-  min-height: 1.7rem;
+  min-height: 2.45rem;
+  gap: 0.18rem;
 }
 
 .thread-row-title-wrap {
@@ -1992,11 +2026,11 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-meta {
-  @apply min-w-0 flex flex-wrap items-start gap-x-1.5 gap-y-1;
+  @apply min-w-0 flex items-center gap-1.5;
 }
 
 .thread-row-preview {
-  @apply block min-w-0 text-[12px] text-[#685b4b];
+  @apply block min-w-0 flex-1 text-[12px] text-[#685b4b];
   font-family: var(--font-sans-ui);
   line-height: 1rem;
   letter-spacing: 0;
@@ -2004,6 +2038,19 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
   text-shadow: none;
+}
+
+.thread-row-source {
+  @apply shrink-0 rounded-full border border-[#e3d7c6] bg-[#f8f2e8] px-1.5 py-0.5 text-[10px] font-medium leading-none text-[#746858];
+  font-family: var(--font-sans-ui);
+}
+
+.thread-row-source--working {
+  @apply border-[#9fd7ca] bg-[#eaf9f5] text-[#0f766e];
+}
+
+.thread-row-source--unread {
+  @apply border-[#c8d8ff] bg-[#eef4ff] text-[#315f9f];
 }
 
 .thread-row-time {
@@ -2178,11 +2225,11 @@ onBeforeUnmount(() => {
   }
 
   .thread-row {
-    min-height: 2.45rem;
+    min-height: 3.35rem;
   }
 
   .thread-row-content {
-    min-height: 1.55rem;
+    min-height: 2.15rem;
   }
 
   .thread-row-title {
@@ -2193,6 +2240,10 @@ onBeforeUnmount(() => {
   .thread-row-preview {
     @apply text-[11px];
     line-height: 0.9rem;
+  }
+
+  .thread-row-source {
+    @apply hidden;
   }
 
   .project-title {
@@ -2223,7 +2274,7 @@ onBeforeUnmount(() => {
   }
 
   .thread-row {
-    min-height: 2.65rem;
+    min-height: 3.85rem;
   }
 }
 
