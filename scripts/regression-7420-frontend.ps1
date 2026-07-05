@@ -167,6 +167,22 @@ JSON.stringify((() => {
   Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
 }
 
+function Set-SidebarCollapsedPreference {
+  param(
+    [string]$Session,
+    [bool]$Collapsed
+  )
+
+  $collapsedValue = if ($Collapsed) { "1" } else { "0" }
+  $script = @"
+JSON.stringify((() => {
+  window.localStorage.setItem('codex-web-local.sidebar-collapsed.v1', '$collapsedValue');
+  return { collapsed: '$collapsedValue' };
+})())
+"@
+  Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
+}
+
 function Close-SettingsPanelIfOpen {
   param([string]$Session)
 
@@ -534,6 +550,99 @@ function Assert-FoldableShell {
   Assert-True ($Metrics.composerWidth -ge 430) "foldable composer is too narrow: $($Metrics.composerWidth)"
   Assert-True ($Metrics.fitFailureCount -eq 0) "foldable shell elements overflow viewport: $($Metrics.fitFailures | ConvertTo-Json -Compress)"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "foldable shell has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+}
+
+function Read-MobileDrawerSidebarMetrics {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const drawer = document.querySelector('.mobile-drawer');
+  const actionGrid = drawer?.querySelector('.sidebar-action-grid') || null;
+  const rows = Array.from(drawer?.querySelectorAll('.thread-row') || []);
+  const groups = Array.from(drawer?.querySelectorAll('.project-group') || []);
+  const loading = drawer?.querySelector('.thread-tree-loading') || null;
+  const emptyText = drawer?.querySelector('.thread-tree-empty-text') || null;
+  const drawerRect = drawer?.getBoundingClientRect();
+  const viewportWidth = document.documentElement.clientWidth;
+  const fitFailures = [drawer, actionGrid].filter(Boolean)
+    .map((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        className: node.className || node.tagName,
+        left: Math.round(rect.left),
+        right: Math.round(rect.right),
+        width: Math.round(rect.width)
+      };
+    })
+    .filter((rect) => rect.left < -2 || rect.right > viewportWidth + 2);
+  return {
+    hasDrawer: !!drawer,
+    hasActionGrid: !!actionGrid,
+    rowCount: rows.length,
+    groupCount: groups.length,
+    isLoading: !!loading,
+    hasEmptyText: !!emptyText,
+    drawerWidth: drawerRect ? Math.round(drawerRect.width) : 0,
+    fitFailureCount: fitFailures.length,
+    fitFailures: fitFailures.slice(0, 5),
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth
+  };
+})())
+'@
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-MobileDrawerSidebar {
+  param([object]$Metrics)
+
+  Assert-True ($Metrics.hasDrawer -eq $true) "mobile home did not open sidebar drawer"
+  Assert-True ($Metrics.hasActionGrid -eq $true) "mobile drawer is missing compact action grid"
+  Assert-True ($Metrics.isLoading -eq $false) "mobile drawer sidebar is still showing loading skeletons"
+  Assert-True ([int]$Metrics.rowCount -gt 0) "mobile drawer sidebar did not render thread rows"
+  Assert-True ([int]$Metrics.groupCount -gt 0) "mobile drawer sidebar did not render project groups"
+  Assert-True ($Metrics.hasEmptyText -eq $false) "mobile drawer sidebar rendered empty/error text despite available threads"
+  Assert-True ($Metrics.drawerWidth -le $Metrics.clientWidth) "mobile drawer is wider than viewport: $($Metrics.drawerWidth) > $($Metrics.clientWidth)"
+  Assert-True ($Metrics.fitFailureCount -eq 0) "mobile drawer elements overflow viewport: $($Metrics.fitFailures | ConvertTo-Json -Compress)"
+  Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "mobile drawer has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+}
+
+function Open-MobileDrawerSidebar {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  if (document.querySelector('.mobile-drawer')) return { alreadyOpen: true, clicked: false };
+  const buttons = Array.from(document.querySelectorAll('.sidebar-thread-controls-header-host .sidebar-thread-controls-button'));
+  const visibleButtons = buttons.filter((button) => {
+    const rect = button.getBoundingClientRect();
+    const style = window.getComputedStyle(button);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+  });
+  const button = visibleButtons.find((node) => node.getAttribute('aria-label') === 'Expand sidebar')
+    || visibleButtons.find((node) => (node.getAttribute('title') || '').toLowerCase().includes('sidebar'))
+    || visibleButtons[0]
+    || null;
+  if (button instanceof HTMLElement) {
+    button.click();
+    return { alreadyOpen: false, clicked: true, label: button.getAttribute('aria-label') || '' };
+  }
+  return { alreadyOpen: false, clicked: false, label: '' };
+})())
+'@
+
+  for ($attempt = 1; $attempt -le 5; $attempt++) {
+    Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
+    Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "350") | Out-Null
+    $metrics = Read-MobileDrawerSidebarMetrics -Session $Session
+    if ($metrics.hasDrawer -eq $true) {
+      return $metrics
+    }
+  }
+
+  return Read-MobileDrawerSidebarMetrics -Session $Session
 }
 
 function Read-ConversationFixtureMetrics {
@@ -1046,6 +1155,12 @@ try {
   Assert-Page -Page $homeFoldable -Name "home foldable" -RequireComposer
   Assert-FoldableShell -Metrics (Read-FoldableShellMetrics -Session $session)
   Add-RegressionResult -Name "home-foldable" -Page $homeFoldable
+
+  Set-SidebarCollapsedPreference -Session $session -Collapsed $true
+  $homePhone = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $homePhone -Name "home phone" -RequireComposer
+  Assert-MobileDrawerSidebar -Metrics (Open-MobileDrawerSidebar -Session $session)
+  Add-RegressionResult -Name "home-mobile-drawer" -Page $homePhone
 
   $skills = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/skills?regression=frontend" -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $skills -Name "skills phone" -RequireSkillsHub

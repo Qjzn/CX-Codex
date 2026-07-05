@@ -9004,3 +9004,38 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 foldable sidebar action assertions: home foldable verified the compact sidebar action grid exists, uses CSS grid, renders in no more than two rows, stays no taller than 96px, has at least five labeled icon actions, keeps tile radius no larger than 10px, and keeps tile height at least 42px for touch.
 - 2026-07-05 sidebar project limit assertions: `sidebar-rows` verified the first expanded project renders exactly 5 thread rows by default and shows `显示更多 3 条` for the remaining project sessions.
 - 2026-07-05 screenshot artifacts: `output/regression-7420/compact-sidebar-action-grid/home-foldable.png` and `output/regression-7420/compact-sidebar-action-grid/sidebar-rows-fixture-phone.png`.
+
+### Feature: P0 mobile drawer thread list recovery
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- App Server `thread/list` is expected to respond through `/codex-api/rpc`.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/` at 393x852.
+2. Tap the leading sidebar button in the header.
+3. Confirm the mobile drawer opens and shows the compact action grid.
+4. Confirm the drawer renders pinned/project thread rows and at least one project group instead of staying on loading skeletons.
+5. Confirm the drawer has no horizontal overflow.
+6. Run `git diff --check`.
+7. Run `npm.cmd run build:frontend`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName mobile-drawer-thread-list-recovery`.
+
+#### Expected Results
+- `thread/list` failures do not leave the mobile drawer in an indefinite skeleton state.
+- If no groups are available after loading, the sidebar shows a visible empty/retry hint instead of blank space.
+- The automated 7420 regression opens the phone home drawer and asserts thread rows and project groups are present.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/mobile-drawer-thread-list-recovery/` when `-CaptureScreenshots` is used.
+- To roll back, revert `codexRpcClient.ts`, `SidebarThreadTree.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 root-cause evidence: before restart, `/health` returned ok but `/codex-api/health`, `/codex-api/diagnostics`, and direct `/codex-api/rpc` `thread/list` timed out; mobile drawer stayed on `thread-tree-loading` with zero `.thread-row` and zero `.project-group`.
+- 2026-07-05 local service recovery: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted 7420 as PID 41572; direct `thread/list` then returned 20 rows and `/codex-api/health` returned `status: ok`.
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName mobile-drawer-thread-list-recovery` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 mobile drawer assertions: the phone home route opened the drawer and verified compact action grid, non-loading state, rendered thread rows, rendered project groups, no empty/error text when threads are available, drawer width within viewport, and no horizontal overflow.
+- 2026-07-05 screenshot artifact: `output/regression-7420/mobile-drawer-thread-list-recovery/home-mobile-drawer.png`.

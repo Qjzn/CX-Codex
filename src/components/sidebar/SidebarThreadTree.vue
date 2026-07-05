@@ -213,6 +213,10 @@
       <span v-for="index in 5" :key="`thread-skeleton-${index}`" class="thread-loading-skeleton" />
     </div>
 
+    <SidebarMenuRow v-else-if="groups.length === 0" as="p" class="thread-tree-empty-row">
+      <span class="thread-tree-empty-text">会话列表暂未加载，稍后重试或刷新页面。</span>
+    </SidebarMenuRow>
+
     <ul v-else-if="isChronologicalView" class="thread-list thread-list-global">
       <li v-for="thread in globalThreads" :key="thread.id" class="thread-row-item">
         <SidebarMenuRow
@@ -1892,6 +1896,15 @@ onBeforeUnmount(() => {
 .thread-tree-no-results {
   @apply px-3 py-3 text-sm;
   color: var(--ui-text-secondary);
+}
+
+.thread-tree-empty-row {
+  @apply cursor-default;
+}
+
+.thread-tree-empty-text {
+  @apply text-[12px] leading-5;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-tree-groups {
