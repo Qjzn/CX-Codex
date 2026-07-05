@@ -8933,3 +8933,37 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName hide-filechange-system-noise` passed for home desktop/foldable, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 fixture noise assertion: `conversation-blocks` includes a synthetic `unhandled.fileChange` message with marker `fixture-hidden-file-change-noise`, and the regression asserts that marker, `Unhandled App Server item: fileChange`, and `unhandled.fileChange` are absent from visible page text while `fixture-raw-payload` still renders.
+
+### Feature: P4 sidebar desktop list ordering parity
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Built-in regression fixture route `/#/__regression/sidebar-rows` is available.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/__regression/sidebar-rows?regression=frontend` at a phone-sized viewport such as 393x852.
+2. Confirm the first project group follows the fixture input/app-server order instead of being re-sorted by sidebar display code.
+3. Confirm the running thread appears in the `正在运行` shortcut section and also remains exactly once inside its owning project list.
+4. Confirm the pinned thread appears in the `置顶` shortcut section and also remains exactly once inside its owning project list.
+5. Confirm project thread rows keep the upstream thread order within each project.
+6. Run `git diff --check`.
+7. Run `npm.cmd run build:frontend`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName sidebar-desktop-list-parity`.
+
+#### Expected Results
+- Sidebar project groups preserve the normalized App Server / workspace order passed into the component.
+- Pinned and running shortcut sections do not remove those threads from project browsing.
+- Project view remains the forced desktop-parity view when `desktop-list-parity` is enabled.
+- Browser regression passes with no page-level horizontal overflow.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/sidebar-desktop-list-parity/` when `-CaptureScreenshots` is used.
+- To roll back, revert `SidebarThreadTree.vue`, `SidebarRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName sidebar-desktop-list-parity` passed for home desktop/foldable, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 fixture sidebar ordering assertions: `sidebar-rows` verified the first project group remains `E:/javaword/CXCodex/codexui`, the running thread appears in both the running shortcut and exactly once in its owning project list, and the pinned thread appears in both the pinned shortcut and exactly once in its owning project list.
+- 2026-07-05 screenshot artifact: `output/regression-7420/sidebar-desktop-list-parity/sidebar-rows-fixture-phone.png` shows the shortcut sections and project list coexisting without sidebar horizontal overflow.

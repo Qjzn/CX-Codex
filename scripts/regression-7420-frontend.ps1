@@ -820,8 +820,13 @@ function Read-SidebarFixtureMetrics {
   $script = @'
 JSON.stringify((() => {
   const rows = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row'));
+  const projectGroups = Array.from(document.querySelectorAll('.sidebar-regression-fixture .project-group'));
   const sources = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row-source'));
   const indicators = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-status-indicator'));
+  const countRowsByThreadId = (threadId) => rows.filter((node) => node.getAttribute('data-thread-id') === threadId).length;
+  const countProjectRowsByThreadId = (threadId) => projectGroups.reduce((count, group) => (
+    count + group.querySelectorAll(`.thread-row[data-thread-id="${threadId}"]`).length
+  ), 0);
   const rowRects = rows.map((node) => {
     const rect = node.getBoundingClientRect();
     const style = window.getComputedStyle(node);
@@ -863,6 +868,11 @@ JSON.stringify((() => {
   const workingIndicator = indicatorStyles.find((style) => style.state === 'working') || null;
   return {
     rowCount: rows.length,
+    projectOrder: projectGroups.map((node) => node.getAttribute('data-project-name') || ''),
+    runningThreadRowCount: countRowsByThreadId('fixture-thread-running'),
+    runningThreadProjectRowCount: countProjectRowsByThreadId('fixture-thread-running'),
+    pinnedThreadRowCount: countRowsByThreadId('fixture-thread-unread'),
+    pinnedThreadProjectRowCount: countProjectRowsByThreadId('fixture-thread-unread'),
     sourceCount: sources.length,
     indicatorCount: indicators.length,
     maxRowHeight: rowRects.length ? Math.max(...rowRects.map((rect) => rect.height)) : 0,
@@ -884,6 +894,12 @@ function Assert-SidebarFixture {
   param([object]$Metrics)
 
   Assert-True ($Metrics.rowCount -ge 4) "sidebar fixture is missing thread rows"
+  Assert-True ($Metrics.projectOrder.Count -ge 2) "sidebar fixture is missing project groups"
+  Assert-True ([string]$Metrics.projectOrder[0] -eq "E:/javaword/CXCodex/codexui") "sidebar fixture project order no longer follows input/app-server order"
+  Assert-True ([int]$Metrics.runningThreadRowCount -ge 2) "sidebar fixture running thread is missing from either running section or project list"
+  Assert-True ([int]$Metrics.runningThreadProjectRowCount -eq 1) "sidebar fixture running thread is not retained exactly once in project list"
+  Assert-True ([int]$Metrics.pinnedThreadRowCount -ge 2) "sidebar fixture pinned thread is missing from either pinned section or project list"
+  Assert-True ([int]$Metrics.pinnedThreadProjectRowCount -eq 1) "sidebar fixture pinned thread is not retained exactly once in project list"
   Assert-True ($Metrics.sourceCount -ge 4) "sidebar fixture is missing source/status metadata"
   Assert-True ($Metrics.indicatorCount -ge 2) "sidebar fixture is missing unread/running indicators"
   Assert-True ($Metrics.minRowHeight -ge 40) "sidebar fixture row height is too small: $($Metrics.minRowHeight)"

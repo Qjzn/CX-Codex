@@ -9,6 +9,7 @@
         <li v-for="thread in runningThreads" :key="thread.id" class="thread-row-item">
           <SidebarMenuRow
             class="thread-row thread-row-priority"
+            :data-thread-id="thread.id"
             :data-active="thread.id === selectedThreadId"
             :data-pinned="isPinned(thread.id)"
             :force-right-hover="isThreadMenuOpen(thread.id)"
@@ -86,6 +87,7 @@
         <li v-for="thread in pinnedThreads" :key="thread.id" class="thread-row-item">
           <SidebarMenuRow
             class="thread-row"
+            :data-thread-id="thread.id"
             :data-active="thread.id === selectedThreadId"
             :data-pinned="isPinned(thread.id)"
             :force-right-hover="isThreadMenuOpen(thread.id)"
@@ -215,6 +217,7 @@
       <li v-for="thread in globalThreads" :key="thread.id" class="thread-row-item">
         <SidebarMenuRow
           class="thread-row"
+          :data-thread-id="thread.id"
           :data-active="thread.id === selectedThreadId"
           :data-pinned="isPinned(thread.id)"
           :force-right-hover="isThreadMenuOpen(thread.id)"
@@ -385,6 +388,7 @@
             <li v-for="thread in visibleThreads(group)" :key="thread.id" class="thread-row-item">
               <SidebarMenuRow
                 class="thread-row"
+                :data-thread-id="thread.id"
                 :data-active="thread.id === selectedThreadId"
                 :data-pinned="isPinned(thread.id)"
                 :force-right-hover="isThreadMenuOpen(thread.id)"
@@ -553,6 +557,7 @@ const props = defineProps<{
   searchQuery: string
   searchMatchedThreadIds: string[] | null
   desktopListParity?: boolean
+  pinnedThreadIdsOverride?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -602,7 +607,7 @@ const PROJECT_GROUP_EXPANDED_GAP_PX = 6
 const expandedProjects = ref<Record<string, boolean>>({})
 const collapsedProjects = ref<Record<string, boolean>>({})
 const PINNED_THREAD_STORAGE_KEY = 'codex-web-local.pinned-thread-ids.v1'
-const pinnedThreadIds = ref<string[]>(loadPinnedThreadIds())
+const pinnedThreadIds = ref<string[]>(normalizePinnedThreadIds(props.pinnedThreadIdsOverride ?? loadPinnedThreadIds()))
 const hasPinnedThreadIdsHydrated = ref(false)
 let pinnedThreadIdsSequence = 0
 let pinnedThreadIdsHydrationPromise: Promise<void> | null = null
@@ -710,6 +715,7 @@ function setPinnedThreadIds(value: string[]): void {
   if (areStringArraysEqual(pinnedThreadIds.value, normalized)) return
   const previousPinnedThreadIds = pinnedThreadIds.value
   pinnedThreadIds.value = normalized
+  if (hasPinnedThreadIdsOverride.value) return
   savePinnedThreadIds(normalized)
   if (!hasPinnedThreadIdsHydrated.value) return
   void persistPinnedThreadIds(normalized, previousPinnedThreadIds)
@@ -723,6 +729,7 @@ async function hydratePinnedThreadIds(): Promise<void> {
 
   const hydrationPromise = (async () => {
     try {
+      if (hasPinnedThreadIdsOverride.value) return
       const hydrationSequence = pinnedThreadIdsSequence
       const serverPinnedThreadIds = await getPinnedThreadIds()
       if (pinnedThreadIdsSequence !== hydrationSequence) return
@@ -773,10 +780,13 @@ collapsedProjects.value = loadCollapsedState()
 
 onMounted(() => {
   window.addEventListener('focus', onWindowFocusRefreshPinned)
-  void hydratePinnedThreadIds()
+  if (!hasPinnedThreadIdsOverride.value) {
+    void hydratePinnedThreadIds()
+  }
 })
 
 function onWindowFocusRefreshPinned(): void {
+  if (hasPinnedThreadIdsOverride.value) return
   void hydratePinnedThreadIds()
 }
 
@@ -798,11 +808,17 @@ const normalizedSearchQuery = computed(() => props.searchQuery.trim().toLowerCas
 
 const isSearchActive = computed(() => normalizedSearchQuery.value.length > 0)
 const useDesktopListParity = computed(() => props.desktopListParity === true)
+const hasPinnedThreadIdsOverride = computed(() => Array.isArray(props.pinnedThreadIdsOverride))
+const effectivePinnedThreadIds = computed(() => (
+  hasPinnedThreadIdsOverride.value
+    ? normalizePinnedThreadIds(props.pinnedThreadIdsOverride)
+    : pinnedThreadIds.value
+))
 const matchedThreadIdSet = computed(() => {
   if (!props.searchMatchedThreadIds) return null
   return new Set(props.searchMatchedThreadIds)
 })
-const pinnedThreadIdSet = computed(() => new Set(pinnedThreadIds.value))
+const pinnedThreadIdSet = computed(() => new Set(effectivePinnedThreadIds.value))
 
 function matchesThreadSearch(
   thread: UiThread,
@@ -822,16 +838,10 @@ function compareThreadByUpdatedAt(first: UiThread, second: UiThread): number {
   return secondTimestamp - firstTimestamp
 }
 
-function compareProjectGroupByUpdatedAt(first: UiProjectGroup, second: UiProjectGroup): number {
-  const firstTimestamp = new Date(first.threads[0]?.updatedAtIso || first.threads[0]?.createdAtIso || 0).getTime()
-  const secondTimestamp = new Date(second.threads[0]?.updatedAtIso || second.threads[0]?.createdAtIso || 0).getTime()
-  return secondTimestamp - firstTimestamp
-}
-
 const threadCollections = computed(() => {
   const query = normalizedSearchQuery.value
   const matchedIds = matchedThreadIdSet.value
-  const pinnedIds = pinnedThreadIds.value
+  const pinnedIds = effectivePinnedThreadIds.value
   const pinnedSet = new Set(pinnedIds)
   const threadById = new Map<string, UiThread>()
   const threadProjectNameById = new Map<string, string>()
@@ -883,19 +893,12 @@ const threadCollections = computed(() => {
   }
   globalThreads.sort(compareThreadByUpdatedAt)
 
-  const unpinnedThreadsByProjectName = new Map<string, UiThread[]>()
-  for (const group of props.groups) {
-    const rows = group.threads.filter((thread) => !prioritizedThreadIdSet.has(thread.id))
-    unpinnedThreadsByProjectName.set(group.projectName, rows)
-  }
-
   return {
     filteredGroups,
     globalThreads,
     threadById,
     threadProjectNameById,
     threadTimestampById,
-    unpinnedThreadsByProjectName,
     pinnedThreads,
     runningThreads,
     prioritizedThreadIdSet,
@@ -907,11 +910,7 @@ function threadMatchesSearch(thread: UiThread): boolean {
 }
 
 const filteredGroups = computed<UiProjectGroup[]>(() => threadCollections.value.filteredGroups)
-const displayedGroups = computed<UiProjectGroup[]>(() => (
-  useDesktopListParity.value
-    ? [...filteredGroups.value].sort(compareProjectGroupByUpdatedAt)
-    : filteredGroups.value
-))
+const displayedGroups = computed<UiProjectGroup[]>(() => filteredGroups.value)
 const effectiveThreadViewMode = computed<'project' | 'chronological'>(() => (
   useDesktopListParity.value ? 'project' : threadViewMode.value
 ))
@@ -923,11 +922,9 @@ const threadTreeHeaderSubtitle = computed(() => (
 const globalThreads = computed<UiThread[]>(() => threadCollections.value.globalThreads)
 const threadById = computed(() => threadCollections.value.threadById)
 const threadProjectNameById = computed(() => threadCollections.value.threadProjectNameById)
-const unpinnedThreadsByProjectName = computed(() => threadCollections.value.unpinnedThreadsByProjectName)
 const threadTimestampById = computed(() => threadCollections.value.threadTimestampById)
 const pinnedThreads = computed(() => threadCollections.value.pinnedThreads)
 const runningThreads = computed<UiThread[]>(() => threadCollections.value.runningThreads)
-const prioritizedThreadIdSet = computed(() => threadCollections.value.prioritizedThreadIdSet)
 
 const projectedDropProjectIndex = computed<number | null>(() => {
   const drag = activeProjectDrag.value
@@ -1046,12 +1043,13 @@ function isPinned(threadId: string): boolean {
 }
 
 function togglePin(threadId: string): void {
+  const currentPinnedThreadIds = effectivePinnedThreadIds.value
   if (isPinned(threadId)) {
-    setPinnedThreadIds(pinnedThreadIds.value.filter((id) => id !== threadId))
+    setPinnedThreadIds(currentPinnedThreadIds.filter((id) => id !== threadId))
     return
   }
 
-  setPinnedThreadIds([threadId, ...pinnedThreadIds.value])
+  setPinnedThreadIds([threadId, ...currentPinnedThreadIds])
 }
 
 function onToggleThreadPin(threadId: string): void {
@@ -1674,9 +1672,9 @@ function projectGroupStyle(projectName: string): Record<string, string> | undefi
 
 function projectThreads(group: UiProjectGroup): UiThread[] {
   if (isSearchActive.value) {
-    return group.threads.filter((thread) => !prioritizedThreadIdSet.value.has(thread.id))
+    return group.threads.filter((thread) => threadMatchesSearch(thread))
   }
-  return unpinnedThreadsByProjectName.value.get(group.projectName) ?? []
+  return group.threads
 }
 
 function visibleThreads(group: UiProjectGroup): UiThread[] {
