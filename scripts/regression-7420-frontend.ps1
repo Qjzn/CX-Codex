@@ -8,6 +8,9 @@ param(
   [int]$PhoneHeight = 852,
   [int]$FoldableWidth = 884,
   [int]$FoldableHeight = 1104,
+  [switch]$CaptureScreenshots,
+  [string]$ScreenshotTaskName = "frontend-ui-regression",
+  [string]$ScreenshotOutputDir = "",
   [int]$AgentBrowserTimeoutSec = 25
 )
 
@@ -26,6 +29,17 @@ function Assert-True {
   if (-not $Condition) {
     throw $Message
   }
+}
+
+function Convert-ToSafeFileName {
+  param([string]$Name)
+
+  $safe = $Name -replace '[^A-Za-z0-9_.-]+', '-'
+  $safe = $safe.Trim('-')
+  if ([string]::IsNullOrWhiteSpace($safe)) {
+    return "screenshot"
+  }
+  return $safe
 }
 
 function Invoke-AgentBrowser {
@@ -74,6 +88,43 @@ function Invoke-AgentBrowser {
   } finally {
     Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
   }
+}
+
+function Initialize-ScreenshotOutputDir {
+  if (-not $CaptureScreenshots) {
+    return $null
+  }
+
+  $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
+  $outputRoot = if ([string]::IsNullOrWhiteSpace($ScreenshotOutputDir)) {
+    Join-Path $repoRoot (Join-Path "output" (Join-Path "regression-7420" (Convert-ToSafeFileName -Name $ScreenshotTaskName)))
+  } else {
+    $ScreenshotOutputDir
+  }
+  $resolvedParent = Split-Path -Parent $outputRoot
+  if (-not [string]::IsNullOrWhiteSpace($resolvedParent)) {
+    New-Item -ItemType Directory -Force -Path $resolvedParent | Out-Null
+  }
+  New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
+  return (Resolve-Path -LiteralPath $outputRoot).Path
+}
+
+function Save-RegressionScreenshot {
+  param(
+    [string]$Session,
+    [string]$Name
+  )
+
+  if ([string]::IsNullOrWhiteSpace($script:screenshotOutputDir)) {
+    return $null
+  }
+
+  $fileName = (Convert-ToSafeFileName -Name $Name) + ".png"
+  $path = Join-Path $script:screenshotOutputDir $fileName
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "screenshot", $path) | Out-Null
+  $resolved = (Resolve-Path -LiteralPath $path).Path
+  Write-Step "screenshot saved -> $resolved"
+  return $resolved
 }
 
 function Invoke-BrowserEvalJson {
@@ -797,10 +848,16 @@ function Add-RegressionResult {
     [object]$Page
   )
 
+  $screenshotPath = $null
+  if ($script:captureScreenshots -and -not [string]::IsNullOrWhiteSpace($script:activeSession)) {
+    $screenshotPath = Save-RegressionScreenshot -Session $script:activeSession -Name $Name
+  }
+
   $script:results += [PSCustomObject]@{
     name = $Name
     url = [string]$Page.url
     overflow = [bool]$Page.hasHorizontalOverflow
+    screenshot = $screenshotPath
   }
 }
 
@@ -810,6 +867,9 @@ if (-not (Get-Command agent-browser -ErrorAction SilentlyContinue)) {
 
 $BaseUrl = $BaseUrl.TrimEnd("/")
 $session = "cx-codex-frontend-regression"
+$script:activeSession = $session
+$script:captureScreenshots = [bool]$CaptureScreenshots
+$script:screenshotOutputDir = Initialize-ScreenshotOutputDir
 $results = @()
 
 try {
@@ -825,10 +885,10 @@ try {
 
   $homePage = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $DesktopWidth -Height $DesktopHeight
   Assert-Page -Page $homePage -Name "home desktop" -RequireComposer
+  Add-RegressionResult -Name "home-desktop" -Page $homePage
   Invoke-AgentBrowser -Arguments @("--session", $session, "click", ".sidebar-settings-button") | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "200") | Out-Null
   Assert-SettingsPanel -Metrics (Read-SettingsPanelMetrics -Session $session)
-  Add-RegressionResult -Name "home-desktop" -Page $homePage
   Reset-AppShellLayoutPreferences -Session $session
 
   $homeFoldable = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $FoldableWidth -Height $FoldableHeight

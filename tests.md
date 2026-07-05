@@ -19,6 +19,51 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: P5 frontend screenshot regression capture
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- `agent-browser` is available in `PATH`.
+- Built-in regression fixture routes `/#/__regression/sidebar-rows`, `/#/__regression/composer-shell`, and `/#/__regression/conversation-blocks` are available.
+
+#### Steps
+1. Run `git diff --check -- scripts/regression-7420-frontend.ps1`.
+2. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p5-screenshot-baseline`.
+3. Open `output/regression-7420/p5-screenshot-baseline/`.
+4. Confirm the directory contains screenshots for home desktop/foldable, phone utility pages, sidebar fixture, Composer desktop/phone/foldable, and conversation desktop/phone/foldable.
+5. Confirm screenshot capture remains opt-in; running `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` should still perform DOM assertions without writing screenshots.
+
+#### Expected Results
+- The script creates `output/regression-7420/p5-screenshot-baseline/` when `-CaptureScreenshots` is supplied.
+- Screenshot filenames are stable and sanitized from regression result names.
+- The screenshot matrix includes:
+  - `home-desktop.png`
+  - `home-foldable.png`
+  - `skills-phone.png`
+  - `github-trending-phone.png`
+  - `diagnostics-phone.png`
+  - `local-preview-phone.png`
+  - `sidebar-rows-fixture-phone.png`
+  - `composer-shell-fixture-desktop.png`
+  - `composer-shell-fixture-phone.png`
+  - `composer-shell-fixture-foldable.png`
+  - `conversation-blocks-fixture.png`
+  - `conversation-blocks-fixture-phone.png`
+  - `conversation-blocks-fixture-foldable.png`
+- The regression still runs all DOM assertions before or alongside screenshot capture, including desktop, phone, and 884x1104 foldable checks.
+
+#### Rollback/Cleanup Notes
+- Screenshot files under `output/regression-7420/p5-screenshot-baseline/` are local verification artifacts and are not required in git.
+- To clean local artifacts, delete `output/regression-7420/p5-screenshot-baseline/`.
+- To roll back the feature, revert `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check -- scripts/regression-7420-frontend.ps1` passed.
+- 2026-07-05 screenshot regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p5-screenshot-baseline` passed.
+- 2026-07-05 generated screenshots: `output/regression-7420/p5-screenshot-baseline/` contained 13 PNG files: `home-desktop.png`, `home-foldable.png`, `skills-phone.png`, `github-trending-phone.png`, `diagnostics-phone.png`, `local-preview-phone.png`, `sidebar-rows-fixture-phone.png`, `composer-shell-fixture-desktop.png`, `composer-shell-fixture-phone.png`, `composer-shell-fixture-foldable.png`, `conversation-blocks-fixture.png`, `conversation-blocks-fixture-phone.png`, and `conversation-blocks-fixture-foldable.png`.
+- 2026-07-05 screenshot capture note: screenshots are produced by `agent-browser screenshot`, not Playwright, so this remains compatible with the project rule that Playwright runs only when explicitly requested.
+
 ### Feature: App Server runtime thread reconciler helper
 
 #### Prerequisites
