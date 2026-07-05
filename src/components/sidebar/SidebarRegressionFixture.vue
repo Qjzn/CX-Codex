@@ -147,6 +147,11 @@ const groups: UiProjectGroup[] = [
     ],
   },
   {
+    projectName: 'empty-root',
+    workspaceRoot: 'E:/javaword/CXCodex/empty-root',
+    threads: [],
+  },
+  {
     projectName: 'E:/javaword/CXCodex/playground',
     threads: [
       {
@@ -168,6 +173,7 @@ const groups: UiProjectGroup[] = [
 
 const projectDisplayNameById: Record<string, string> = {
   'E:/javaword/CXCodex/codexui': 'codexui',
+  'empty-root': 'Empty Workspace',
   'E:/javaword/CXCodex/playground': 'Playground',
 }
 

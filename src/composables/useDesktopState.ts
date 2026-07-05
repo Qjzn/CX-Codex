@@ -40,6 +40,7 @@ import {
   type RpcNotification,
   type SkillInfo,
   type ThreadRuntimeSnapshot,
+  type WorkspaceRootsState,
 } from '../api/codexGateway'
 import type {
   CollaborationMode,
@@ -645,7 +646,7 @@ function orderGroupsByProjectOrder(incoming: UiProjectGroup[], projectOrder: str
   const incomingByName = new Map(incoming.map((group) => [group.projectName, group]))
   const ordered: UiProjectGroup[] = projectOrder
     .map((projectName) => incomingByName.get(projectName) ?? null)
-    .filter((group): group is UiProjectGroup => group !== null && group.threads.length > 0)
+    .filter((group): group is UiProjectGroup => group !== null)
 
   for (const group of incoming) {
     if (!projectOrder.includes(group.projectName)) {
@@ -1061,6 +1062,7 @@ function mergeThreadGroups(
     if (
       previousGroup &&
       previousGroup.projectName === incomingGroup.projectName &&
+      previousGroup.workspaceRoot === incomingGroup.workspaceRoot &&
       areThreadArraysEqual(previousGroup.threads, mergedThreads)
     ) {
       return previousGroup
@@ -1068,6 +1070,7 @@ function mergeThreadGroups(
 
     return {
       projectName: incomingGroup.projectName,
+      workspaceRoot: incomingGroup.workspaceRoot,
       threads: mergedThreads,
     }
   })
@@ -1092,6 +1095,7 @@ function mergeIncomingWithLocalInProgressThreads(
   const incomingByProjectName = new Map(incoming.map((group) => [group.projectName, group]))
   const merged: UiProjectGroup[] = incoming.map((group) => ({
     projectName: group.projectName,
+    workspaceRoot: group.workspaceRoot,
     threads: [...group.threads],
   }))
 
@@ -1102,6 +1106,7 @@ function mergeIncomingWithLocalInProgressThreads(
       if (mergedGroupIndex >= 0) {
         merged[mergedGroupIndex] = {
           projectName: merged[mergedGroupIndex].projectName,
+          workspaceRoot: merged[mergedGroupIndex].workspaceRoot,
           threads: [thread, ...merged[mergedGroupIndex].threads],
         }
       }
@@ -1137,6 +1142,20 @@ function isWorkspaceRootForProject(rootPath: string, projectName: string, projec
   })
 }
 
+function createWorkspaceRootGroups(rootsState: WorkspaceRootsState): UiProjectGroup[] {
+  const groups: UiProjectGroup[] = []
+  const seen = new Set<string>()
+
+  for (const rootPath of rootsState.order) {
+    const projectName = toProjectNameFromWorkspaceRoot(rootPath)
+    if (!projectName || seen.has(projectName)) continue
+    seen.add(projectName)
+    groups.push({ projectName, workspaceRoot: rootPath, threads: [] })
+  }
+
+  return groups
+}
+
 function toOptimisticThreadTitle(message: string): string {
   const firstLine = message
     .split('\n')
@@ -1150,6 +1169,7 @@ function toOptimisticThreadTitle(message: string): string {
 export function useDesktopState() {
   const projectGroups = ref<UiProjectGroup[]>([])
   const sourceGroups = ref<UiProjectGroup[]>([])
+  const workspaceRootGroups = ref<UiProjectGroup[]>([])
   const selectedThreadId = ref(loadSelectedThreadId())
   const persistedMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
   const optimisticUserMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
@@ -1266,6 +1286,27 @@ export function useDesktopState() {
   const bufferedAgentDeltaByKey = new Map<string, BufferedAgentDelta>()
   const bufferedCommandDeltaByKey = new Map<string, BufferedCommandDelta>()
   const bufferedReasoningDeltaByThreadId = new Map<string, string>()
+
+  function mergeWorkspaceRootGroups(threadGroups: UiProjectGroup[]): UiProjectGroup[] {
+    if (workspaceRootGroups.value.length === 0) return threadGroups
+
+    const threadGroupByName = new Map(threadGroups.map((group) => [group.projectName, group]))
+    const merged: UiProjectGroup[] = []
+    const seen = new Set<string>()
+
+    for (const workspaceGroup of workspaceRootGroups.value) {
+      const threadGroup = threadGroupByName.get(workspaceGroup.projectName)
+      merged.push(threadGroup ? { ...threadGroup, workspaceRoot: workspaceGroup.workspaceRoot } : workspaceGroup)
+      seen.add(workspaceGroup.projectName)
+    }
+
+    for (const group of threadGroups) {
+      if (seen.has(group.projectName)) continue
+      merged.push(group)
+    }
+
+    return merged
+  }
 
   const sourceThreads = computed(() => flattenThreads(sourceGroups.value))
   const sourceThreadById = computed<Record<string, UiThread>>(() => {
@@ -4741,6 +4782,8 @@ export function useDesktopState() {
 
     try {
       const rootsState = await getWorkspaceRootsState()
+      workspaceRootGroups.value = createWorkspaceRootGroups(rootsState)
+      const groupsWithWorkspaceRoots = mergeWorkspaceRootGroups(groups)
       const hydratedOrder: string[] = []
       for (const rootPath of rootsState.order) {
         const projectName = toProjectNameFromWorkspaceRoot(rootPath)
@@ -4749,7 +4792,7 @@ export function useDesktopState() {
       }
 
       if (hydratedOrder.length > 0) {
-        const mergedOrder = mergeProjectOrder(hydratedOrder, groups)
+        const mergedOrder = mergeProjectOrder(hydratedOrder, groupsWithWorkspaceRoots)
         if (!areStringArraysEqual(projectOrder.value, mergedOrder)) {
           projectOrder.value = mergedOrder
           saveProjectOrder(projectOrder.value)
@@ -4818,14 +4861,15 @@ export function useDesktopState() {
         }))
         .filter((group) => group.threads.length > 0)
       await hydrateWorkspaceRootsStateIfNeeded(visibleGroups)
+      const groupsWithWorkspaceRoots = mergeWorkspaceRootGroups(visibleGroups)
 
-      const nextProjectOrder = mergeProjectOrder(projectOrder.value, visibleGroups)
+      const nextProjectOrder = mergeProjectOrder(projectOrder.value, groupsWithWorkspaceRoots)
       if (!areStringArraysEqual(projectOrder.value, nextProjectOrder)) {
         projectOrder.value = nextProjectOrder
         saveProjectOrder(projectOrder.value)
       }
 
-      const orderedGroups = orderGroupsByProjectOrder(visibleGroups, projectOrder.value)
+      const orderedGroups = orderGroupsByProjectOrder(groupsWithWorkspaceRoots, projectOrder.value)
       const executionStateByThreadId = Object.fromEntries(
         sourceThreads.value.map((thread) => [thread.id, isThreadExecutionActive(thread.id)]),
       ) as Record<string, boolean>

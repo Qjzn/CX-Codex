@@ -1986,7 +1986,7 @@ const newThreadFolderOptions = computed(() => {
   }
 
   for (const group of projectGroups.value) {
-    const cwd = group.threads[0]?.cwd?.trim() ?? ''
+    const cwd = group.threads[0]?.cwd?.trim() || group.workspaceRoot?.trim() || ''
     if (!cwd || seenCwds.has(cwd)) continue
     seenCwds.add(cwd)
     options.push({
@@ -3020,7 +3020,7 @@ function resolvePreferredLocalCwd(projectName: string, fallbackCwd = ''): string
   if (!group) return fallbackCwd.trim()
   const nonWorktreeThread = group.threads.find((thread) => !isWorktreePath(thread.cwd))
   const candidate = nonWorktreeThread?.cwd?.trim() ?? group.threads[0]?.cwd?.trim() ?? ''
-  return candidate || fallbackCwd.trim()
+  return candidate || fallbackCwd.trim() || group.workspaceRoot?.trim() || ''
 }
 
 function onStartNewThread(projectName: string): void {

@@ -911,6 +911,7 @@ JSON.stringify((() => {
   const rows = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row'));
   const projectGroups = Array.from(document.querySelectorAll('.sidebar-regression-fixture .project-group'));
   const firstProjectRows = Array.from(projectGroups[0]?.querySelectorAll('.thread-row') || []);
+  const emptyProjectGroup = projectGroups.find((node) => node.getAttribute('data-project-name') === 'empty-root') || null;
   const showMoreButtons = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-show-more-button'));
   const sources = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row-source'));
   const indicators = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-status-indicator'));
@@ -960,6 +961,9 @@ JSON.stringify((() => {
   return {
     rowCount: rows.length,
     projectOrder: projectGroups.map((node) => node.getAttribute('data-project-name') || ''),
+    hasEmptyWorkspaceProject: !!emptyProjectGroup,
+    emptyWorkspaceProjectText: emptyProjectGroup?.textContent?.trim() || '',
+    emptyWorkspaceNewThreadButtonCount: emptyProjectGroup?.querySelectorAll('.thread-start-button').length || 0,
     firstProjectThreadRowCount: firstProjectRows.length,
     showMoreButtonCount: showMoreButtons.length,
     firstShowMoreText: showMoreButtons[0]?.textContent?.trim() || '',
@@ -988,8 +992,11 @@ function Assert-SidebarFixture {
   param([object]$Metrics)
 
   Assert-True ($Metrics.rowCount -ge 4) "sidebar fixture is missing thread rows"
-  Assert-True ($Metrics.projectOrder.Count -ge 2) "sidebar fixture is missing project groups"
+  Assert-True ($Metrics.projectOrder.Count -ge 3) "sidebar fixture is missing project groups"
   Assert-True ([string]$Metrics.projectOrder[0] -eq "E:/javaword/CXCodex/codexui") "sidebar fixture project order no longer follows input/app-server order"
+  Assert-True ($Metrics.hasEmptyWorkspaceProject -eq $true) "sidebar fixture filtered out empty workspace-root project"
+  Assert-True ([string]$Metrics.emptyWorkspaceProjectText -like "*暂无会话*") "sidebar fixture empty workspace-root project does not show empty state"
+  Assert-True ([int]$Metrics.emptyWorkspaceNewThreadButtonCount -eq 1) "sidebar fixture empty workspace-root project is missing new-thread action"
   Assert-True ([int]$Metrics.firstProjectThreadRowCount -eq 5) "sidebar fixture first expanded project should show exactly 5 threads by default, got $($Metrics.firstProjectThreadRowCount)"
   Assert-True ([int]$Metrics.showMoreButtonCount -ge 1) "sidebar fixture is missing show more control for long project thread list"
   Assert-True ([string]$Metrics.firstShowMoreText -eq "显示更多 3 条") "sidebar fixture show more label is unexpected: $($Metrics.firstShowMoreText)"

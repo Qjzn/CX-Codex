@@ -9075,3 +9075,37 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 local service recovery: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted 7420 as PID 26612 with version 2.2.7.
 - 2026-07-05 post-restart smoke: `/codex-api/health` returned 200 in 363ms and `thread/list` with `limit=5` returned 200 in 879ms.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName app-server-sync-recovery` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+
+### Feature: P0 Codex Desktop workspace root project parity
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- `C:\Users\SW\.codex\.codex-global-state.json` contains Codex Desktop workspace roots, including at least one root that has no current `thread/list` session.
+
+#### Steps
+1. Call `http://127.0.0.1:7420/codex-api/workspace-roots-state` and confirm the response includes desktop roots such as `E:\javaword\CXCodex\codexui`.
+2. POST `/codex-api/rpc` with `{"jsonrpc":"2.0","id":1,"method":"thread/list","params":{"limit":200}}` and confirm the missing project can be absent from App Server thread rows.
+3. Open `http://127.0.0.1:7420/#/` and inspect the sidebar project list.
+4. Confirm desktop workspace roots are displayed in desktop order even when a root has no sessions.
+5. Click the new-thread action on an empty workspace-root project and confirm the home composer selects that root as the local project folder.
+6. Run `git diff --check`.
+7. Run `npm.cmd run build:frontend`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName workspace-root-project-parity`.
+
+#### Expected Results
+- 7420 project groups merge Codex Desktop workspace roots with App Server `thread/list` groups instead of filtering to thread-backed projects only.
+- Empty workspace-root projects render a `暂无会话` state and keep a visible project-level new-thread action.
+- Existing thread-backed project ordering, labels, pinned threads, and 5-row project preview behavior remain unchanged.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/workspace-root-project-parity/` when `-CaptureScreenshots` is used.
+- To roll back, revert `src/composables/useDesktopState.ts`, `src/types/codex.ts`, `src/App.vue`, `src/components/sidebar/SidebarRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 root-cause evidence: `/codex-api/workspace-roots-state` returned desktop roots including `E:\javaword\CXCodex\codexui`, while `/codex-api/rpc` `thread/list` with `limit=200` returned no current thread whose `cwd` contained `codexui`.
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName workspace-root-project-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 sidebar fixture assertions: `sidebar-rows` verified an empty workspace-root project is retained, renders `暂无会话`, keeps exactly one project-level new-thread action, preserves first project order, and still limits the first expanded project to 5 visible threads with `显示更多 3 条`.
+- 2026-07-05 screenshot artifact: `output/regression-7420/workspace-root-project-parity/sidebar-rows-fixture-phone.png`.

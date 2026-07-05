@@ -220,6 +220,7 @@ export type UiThreadTokenUsage = {
 
 export type UiProjectGroup = {
   projectName: string
+  workspaceRoot?: string
   threads: UiThread[]
 }
 
