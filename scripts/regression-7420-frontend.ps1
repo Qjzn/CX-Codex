@@ -380,6 +380,17 @@ JSON.stringify((() => {
   const contentGrid = document.querySelector('.content-grid');
   const composer = document.querySelector('.thread-composer-shell');
   const settingsPanel = document.querySelector('.sidebar-settings-panel');
+  const commandList = document.querySelector('.sidebar-command-list');
+  const commandLinks = Array.from(document.querySelectorAll('.sidebar-command-link'));
+  const commandIcons = Array.from(document.querySelectorAll('.sidebar-command-icon'));
+  const commandListStyle = commandList ? window.getComputedStyle(commandList) : null;
+  const commandLinkStyles = commandLinks.map((node) => {
+    const style = window.getComputedStyle(node);
+    return {
+      radius: Number.parseFloat(style.borderTopLeftRadius || '0'),
+      height: node.getBoundingClientRect().height
+    };
+  });
   const viewportWidth = document.documentElement.clientWidth;
   const layoutRect = layout?.getBoundingClientRect();
   const sidebarRect = sidebar?.getBoundingClientRect();
@@ -405,6 +416,13 @@ JSON.stringify((() => {
     hasContentGrid: !!contentGrid,
     hasComposer: !!composer,
     hasSettingsPanel: !!settingsPanel,
+    hasCommandList: !!commandList,
+    commandListDisplay: commandListStyle?.display || '',
+    commandListFlexDirection: commandListStyle?.flexDirection || '',
+    commandLinkCount: commandLinks.length,
+    commandIconCount: commandIcons.length,
+    commandLinkMaxRadius: commandLinkStyles.length ? Math.max(...commandLinkStyles.map((item) => item.radius)) : 0,
+    commandLinkMinHeight: commandLinkStyles.length ? Math.min(...commandLinkStyles.map((item) => item.height)) : 0,
     layoutWidth: layoutRect ? Math.round(layoutRect.width) : 0,
     sidebarWidth: sidebarRect ? Math.round(sidebarRect.width) : 0,
     mainWidth: mainRect ? Math.round(mainRect.width) : 0,
@@ -432,6 +450,13 @@ function Assert-FoldableShell {
   Assert-True ($Metrics.hasContentGrid -eq $true) "foldable shell is missing content grid"
   Assert-True ($Metrics.hasComposer -eq $true) "foldable shell is missing composer"
   Assert-True ($Metrics.hasSettingsPanel -eq $false) "foldable shell screenshot is polluted by an open settings panel"
+  Assert-True ($Metrics.hasCommandList -eq $true) "foldable shell is missing sidebar command list"
+  Assert-True ($Metrics.commandListDisplay -eq "flex") "foldable sidebar command list is not flex: $($Metrics.commandListDisplay)"
+  Assert-True ($Metrics.commandListFlexDirection -eq "column") "foldable sidebar command list is not vertical: $($Metrics.commandListFlexDirection)"
+  Assert-True ($Metrics.commandLinkCount -ge 3) "foldable sidebar command list is missing entries"
+  Assert-True ($Metrics.commandIconCount -ge 3) "foldable sidebar command list is missing icons"
+  Assert-True ($Metrics.commandLinkMaxRadius -le 10) "foldable sidebar command rows are too rounded: $($Metrics.commandLinkMaxRadius)"
+  Assert-True ($Metrics.commandLinkMinHeight -ge 30) "foldable sidebar command rows are too small: $($Metrics.commandLinkMinHeight)"
   Assert-True ($Metrics.sidebarWidth -ge 260) "foldable sidebar is too narrow: $($Metrics.sidebarWidth)"
   Assert-True ($Metrics.sidebarWidth -le 370) "foldable sidebar is too wide: $($Metrics.sidebarWidth)"
   Assert-True ($Metrics.sidebarRatio -le 0.42) "foldable sidebar takes too much width: $($Metrics.sidebarRatio)"

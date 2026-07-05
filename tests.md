@@ -19,6 +19,39 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: P4 sidebar command list parity baseline
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Screenshot capture directory `output/regression-7420/p5-screenshot-baseline/` may be regenerated for visual confirmation.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/` at 1440x900.
+2. Confirm the sidebar top navigation renders as a vertical icon + label command list instead of a 2x2 button grid.
+3. Confirm command rows use compact neutral styling, small radius, left-aligned labels, and a consistent icon style.
+4. Reopen the home route at 884x1104 and confirm the command list remains vertical without pushing the main content too narrow.
+5. Run `git diff --check -- src/App.vue scripts/regression-7420-frontend.ps1`.
+6. Run `npm.cmd run build:frontend`.
+7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p5-screenshot-baseline`.
+
+#### Expected Results
+- Sidebar top navigation contains at least three `.sidebar-command-link` rows and matching `.sidebar-command-icon` icons.
+- The command list uses `display: flex` with `flex-direction: column`, not a two-column grid.
+- Command row radius stays no larger than 10px and minimum row height stays at least 30px.
+- `home-desktop.png` shows a continuous left command list above thread groups.
+- `home-foldable.png` keeps the same command-list layout with no horizontal overflow.
+
+#### Rollback/Cleanup Notes
+- Screenshot files under `output/regression-7420/p5-screenshot-baseline/` are local verification artifacts and are not required in git.
+- To roll back, revert `src/App.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check -- src/App.vue scripts/regression-7420-frontend.ps1` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 screenshot regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p5-screenshot-baseline` passed.
+- 2026-07-05 visual evidence: regenerated `output/regression-7420/p5-screenshot-baseline/home-desktop.png` showed the sidebar command area as vertical icon + label rows instead of the previous 2x2 entry grid.
+
 ### Feature: P5 frontend screenshot regression capture
 
 #### Prerequisites

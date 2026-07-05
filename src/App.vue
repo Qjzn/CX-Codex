@@ -105,39 +105,43 @@
               </button>
             </div>
 
-            <div class="sidebar-explore-nav">
+            <div class="sidebar-explore-nav sidebar-command-list">
               <button
-                class="sidebar-skills-link"
+                class="sidebar-skills-link sidebar-command-link"
                 :class="{ 'is-active': isWorkbenchRoute }"
                 type="button"
                 @click="router.push({ name: 'workbench' }); isMobile && setSidebarCollapsed(true)"
               >
-                工作台
+                <IconTablerFolder class="sidebar-command-icon" />
+                <span class="sidebar-command-label">工作台</span>
               </button>
               <button
-                class="sidebar-skills-link"
+                class="sidebar-skills-link sidebar-command-link"
                 :class="{ 'is-active': isSkillsRoute }"
                 type="button"
                 @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
               >
-                技能中心
+                <IconTablerBolt class="sidebar-command-icon" />
+                <span class="sidebar-command-label">技能中心</span>
               </button>
               <button
                 v-if="showGithubTrendingProjects"
-                class="sidebar-skills-link"
+                class="sidebar-skills-link sidebar-command-link"
                 :class="{ 'is-active': isGithubTrendingRoute }"
                 type="button"
                 @click="router.push({ name: 'github-trending' }); isMobile && setSidebarCollapsed(true)"
               >
-                GitHub 热门
+                <IconTablerGitFork class="sidebar-command-icon" />
+                <span class="sidebar-command-label">GitHub 热门</span>
               </button>
               <button
-                class="sidebar-skills-link"
+                class="sidebar-skills-link sidebar-command-link"
                 :class="{ 'is-active': isDiagnosticsRoute }"
                 type="button"
                 @click="router.push({ name: 'diagnostics' }); isMobile && setSidebarCollapsed(true)"
               >
-                运行诊断
+                <IconTablerSettings class="sidebar-command-icon" />
+                <span class="sidebar-command-label">运行诊断</span>
               </button>
             </div>
           </div>
@@ -890,8 +894,11 @@ import RuntimeStatusBar from './components/content/RuntimeStatusBar.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import FavoritesModal from './components/content/FavoritesModal.vue'
+import IconTablerBolt from './components/icons/IconTablerBolt.vue'
 import IconTablerBroom from './components/icons/IconTablerBroom.vue'
 import IconTablerBookmark from './components/icons/IconTablerBookmark.vue'
+import IconTablerFolder from './components/icons/IconTablerFolder.vue'
+import IconTablerGitFork from './components/icons/IconTablerGitFork.vue'
 import IconTablerMicrophone from './components/icons/IconTablerMicrophone.vue'
 import IconTablerRefresh from './components/icons/IconTablerRefresh.vue'
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
@@ -4419,17 +4426,17 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-explore-nav {
-  @apply grid grid-cols-2 gap-1.5;
+  @apply flex flex-col gap-0.5;
 }
 
 .sidebar-skills-link {
-  @apply mx-0 flex items-center justify-center border border-transparent bg-transparent px-3 py-2 text-[13px] font-medium transition-[background-color,border-color,color] duration-150 cursor-pointer;
-  border-radius: var(--ui-radius-control);
+  @apply mx-0 flex min-h-8 items-center gap-2 border border-transparent bg-transparent px-2.5 py-1.5 text-[13px] font-medium transition-[background-color,border-color,color] duration-150 cursor-pointer;
+  border-radius: var(--ui-radius-card);
   color: var(--ui-text-secondary);
 }
 
 .sidebar-explore-nav .sidebar-skills-link {
-  @apply mx-0 justify-center;
+  @apply mx-0 justify-start;
 }
 
 .sidebar-skills-link.is-active {
@@ -4437,6 +4444,21 @@ async function submitFirstMessageForNewThread(
   border-color: transparent;
   background: var(--ui-bg-row-active);
   color: var(--ui-text-primary);
+}
+
+.sidebar-command-icon {
+  @apply h-4 w-4 shrink-0;
+  color: var(--ui-text-tertiary);
+}
+
+.sidebar-skills-link.is-active .sidebar-command-icon,
+.sidebar-skills-link:hover .sidebar-command-icon,
+.sidebar-skills-link:focus-visible .sidebar-command-icon {
+  color: currentColor;
+}
+
+.sidebar-command-label {
+  @apply min-w-0 truncate text-left;
 }
 
 .sidebar-skills-link:hover,
