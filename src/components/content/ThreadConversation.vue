@@ -5510,7 +5510,8 @@ onBeforeUnmount(() => {
 }
 
 .message-code-block {
-  @apply my-1 max-w-full overflow-hidden rounded-2xl border border-[#d8d1c6] bg-[#191816];
+  @apply my-1 max-w-full overflow-hidden border border-[#d8d1c6] bg-[#191816];
+  border-radius: var(--ui-radius-card);
 }
 
 .message-code-header {
@@ -5567,7 +5568,8 @@ onBeforeUnmount(() => {
 }
 
 .message-structured-card {
-  @apply mb-1.5 max-w-full overflow-hidden rounded-2xl border border-[#ded4c5] bg-[#fffaf2];
+  @apply mb-1.5 max-w-full overflow-hidden border border-[#ded4c5] bg-[#fffaf2];
+  border-radius: var(--ui-radius-card);
 }
 
 .message-structured-summary {
@@ -5869,6 +5871,66 @@ onBeforeUnmount(() => {
 
   .message-table-cards {
     @apply flex;
+  }
+
+  .request-card {
+    @apply gap-1.5 px-2.5 py-2;
+    max-width: 100%;
+  }
+
+  .request-tool-panel,
+  .request-permission-panel {
+    @apply gap-1.5 px-2.5 py-2;
+  }
+
+  .request-tool-title,
+  .request-permission-title {
+    @apply text-sm leading-5;
+  }
+
+  .request-tool-text,
+  .request-permission-text {
+    @apply text-xs leading-5;
+  }
+
+  .request-tool-grid,
+  .request-permission-grid {
+    @apply gap-1.5;
+  }
+
+  .request-tool-item,
+  .request-permission-item {
+    @apply px-2 py-1.5;
+  }
+
+  .request-actions {
+    @apply grid grid-cols-1 gap-1.5;
+  }
+
+  .request-button {
+    @apply w-full justify-center;
+    min-height: 2.25rem;
+  }
+
+  .message-file-attachments {
+    @apply gap-1;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .message-file-card {
+    @apply gap-1.5 px-2 py-1.5;
+  }
+
+  .message-file-card-icon {
+    @apply h-7 w-7;
+  }
+
+  .message-file-card-title {
+    @apply text-xs;
+  }
+
+  .message-file-card-path {
+    @apply text-[11px];
   }
 
   .message-card[data-role='assistant'],

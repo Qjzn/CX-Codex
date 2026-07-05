@@ -8506,3 +8506,37 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, and the expanded `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 fixture tool call assertions: the built-in conversation fixture verified at least one unsupported tool call panel, service `chrome`, tool `browser_click`, tool call marker/summary, the action label `让 Codex 改用文字继续`, tool panel radius no larger than 10px, and no horizontal overflow.
+
+### Feature: P4 conversation blocks mobile fit baseline
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Built-in regression fixture route `/#/__regression/conversation-blocks` is available.
+- Public reference checked: `friuns2/codex-mobile` commit `fac2291`; use it for pending-request component boundaries and mobile drawer/sheet structure only, not for its dark large-radius visual theme.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/__regression/conversation-blocks?regression=frontend` at a phone-sized viewport such as 393x852.
+2. Expand the `待处理请求` panel if needed.
+3. Expand the command row and confirm the command output remains inside the viewport.
+4. Confirm file cards, code blocks, raw payload cards, MCP permission cards, unsupported tool call cards, and request buttons fit the phone viewport without horizontal scrolling.
+5. Confirm narrow-screen request actions become easy-to-tap single-column buttons and compact workbench panels, while retaining the neutral desktop-style thin borders and small radius.
+6. Run `git diff --check`.
+7. Run `npm.cmd run build:frontend`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+
+#### Expected Results
+- Phone-width conversation blocks remain readable and do not require page-level horizontal scrolling.
+- `test:7420:frontend` opens the `conversation-blocks` fixture on both desktop and phone viewports.
+- The fixture regression checks that request cards, permission/tool panels, file cards, code blocks, raw payload cards, command rows, and command output wrappers fit within the viewport.
+- Browser regression passes with no page errors.
+
+#### Rollback/Cleanup Notes
+- No generated screenshots are required for this narrow fixture baseline.
+- To roll back, revert `ThreadConversation.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, desktop `conversation-blocks-fixture`, and phone `conversation-blocks-fixture-phone`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 fixture mobile fit assertions: the built-in conversation fixture verified request cards, permission/tool panels, file cards, code blocks, raw payload cards, command rows, and command output wrappers fit inside the 393x852 viewport with no page-level horizontal overflow.

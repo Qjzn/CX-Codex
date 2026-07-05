@@ -213,6 +213,28 @@ JSON.stringify((() => {
   const requestCardRadius = firstRequestCard ? Number.parseFloat(window.getComputedStyle(firstRequestCard).borderTopLeftRadius || '0') : 0;
   const permissionPanelRadius = firstPermissionPanel ? Number.parseFloat(window.getComputedStyle(firstPermissionPanel).borderTopLeftRadius || '0') : 0;
   const toolPanelRadius = firstToolPanel ? Number.parseFloat(window.getComputedStyle(firstToolPanel).borderTopLeftRadius || '0') : 0;
+  const fitTargets = Array.from(document.querySelectorAll([
+    '.request-card',
+    '.request-permission-panel',
+    '.request-tool-panel',
+    '.message-file-card',
+    '.message-code-block',
+    '.message-structured-card',
+    '.cmd-row',
+    '.cmd-output-wrap'
+  ].join(',')));
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportFitFailures = fitTargets
+    .map((node) => {
+      const rect = node.getBoundingClientRect();
+      return {
+        className: node.className || node.tagName,
+        left: Math.round(rect.left),
+        right: Math.round(rect.right),
+        width: Math.round(rect.width)
+      };
+    })
+    .filter((rect) => rect.left < -2 || rect.right > viewportWidth + 2);
   const textContent = document.body.textContent || '';
   return {
     codeBlockCount: codeBlocks.length,
@@ -247,6 +269,8 @@ JSON.stringify((() => {
     firstCopyButtonText: firstCopyButton ? firstCopyButton.textContent.trim() : '',
     hasEmojiFileIcon: document.body.innerText.includes('📄'),
     hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+    structuredViewportFitFailureCount: viewportFitFailures.length,
+    structuredViewportFitFailures: viewportFitFailures.slice(0, 5),
     scrollWidth: document.documentElement.scrollWidth,
     clientWidth: document.documentElement.clientWidth
   };
@@ -290,6 +314,7 @@ function Assert-ConversationFixture {
   Assert-True ([string]$Metrics.firstCopyButtonText -like "*复制*") "conversation fixture first code block copy button is not visible"
   Assert-True ($Metrics.hasEmojiFileIcon -eq $false) "conversation fixture still renders emoji file icons"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "conversation fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+  Assert-True ($Metrics.structuredViewportFitFailureCount -eq 0) "conversation fixture structured blocks overflow viewport: $($Metrics.structuredViewportFitFailures | ConvertTo-Json -Compress)"
 }
 
 function Expand-ConversationFixturePendingRequests {
@@ -427,6 +452,13 @@ try {
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session)
   Assert-ConversationFixtureCopyInteraction -Session $session
   Add-RegressionResult -Name "conversation-blocks-fixture" -Page $fixture
+
+  $fixturePhone = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $fixturePhone -Name "conversation blocks fixture phone"
+  Expand-ConversationFixturePendingRequests -Session $session
+  Expand-ConversationFixtureCommandOutput -Session $session
+  Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session)
+  Add-RegressionResult -Name "conversation-blocks-fixture-phone" -Page $fixturePhone
 
   if (-not [string]::IsNullOrWhiteSpace($ThreadId)) {
     $thread = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/thread/$ThreadId" -Width $PhoneWidth -Height $PhoneHeight

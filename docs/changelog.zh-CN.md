@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - `test:7420:frontend` 增加手机宽度 `conversation-blocks` fixture 验证，逐个断言 request、tool、file、code、command 等结构化块不会越出视口；会话结构化块在窄屏下同步收敛为更紧凑的单列触控布局和桌面端风格小圆角。
   - `/#/__regression/conversation-blocks` 增加 unsupported tool call fixture，参考 `friuns2/codex-mobile` 的 pending request 类型边界，把 tool call 展示为独立工作台卡片，显示服务、工具、摘要和“让 Codex 改用文字继续”动作。
   - `/#/__regression/conversation-blocks` 增加命令执行输出 fixture，命令行收敛为中性薄边框结构化日志块，并由 `test:7420:frontend` 自动断言命令 label、输出展开、marker、圆角上限和无横向溢出。
   - `/#/__regression/conversation-blocks` 增加 MCP 权限确认 fixture，权限请求卡片收敛为中性薄边框工作台样式，并由 `test:7420:frontend` 自动断言服务/工具名、操作按钮、圆角上限和无横向溢出。
