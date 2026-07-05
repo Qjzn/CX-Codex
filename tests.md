@@ -19,6 +19,41 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: P4 sidebar primary actions parity baseline
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Screenshot capture directory `output/regression-7420/p5-screenshot-baseline/` may be regenerated for visual confirmation.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/` at 1440x900.
+2. Confirm the sidebar starts with small auxiliary toolbar icons only for shell controls, followed by textual `新会话` and `搜索` rows.
+3. Confirm `新会话` and `搜索` align with the command-list rhythm below them instead of rendering as round icon-only buttons.
+4. Reopen the home route at 884x1104 and confirm the primary action rows stay vertical without horizontal overflow.
+5. Run `git diff --check -- src/App.vue scripts/regression-7420-frontend.ps1`.
+6. Run `npm.cmd run build:frontend`.
+7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p5-screenshot-baseline`.
+
+#### Expected Results
+- Sidebar primary actions contain at least two `.sidebar-primary-action` rows and matching `.sidebar-primary-action-icon` icons.
+- The primary action group uses `display: flex` with `flex-direction: column`.
+- Primary action row radius stays no larger than 10px and minimum row height stays at least 30px.
+- `home-desktop.png` shows `新会话` and `搜索` as left-aligned icon + label rows above `工作台`.
+- `home-foldable.png` keeps the same primary-action layout with no horizontal overflow.
+- The 7420 frontend health precondition still blocks queued RPC, pending server requests, active plan turns, and uncertain runtime requests, while tolerating up to two background status RPC calls.
+
+#### Rollback/Cleanup Notes
+- Screenshot files under `output/regression-7420/p5-screenshot-baseline/` are local verification artifacts and are not required in git.
+- To roll back, revert `src/App.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check -- src/App.vue scripts/regression-7420-frontend.ps1` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 screenshot regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p5-screenshot-baseline` passed.
+- 2026-07-05 health note: `/codex-api/health` reported `pendingRpcCount=2`, `queuedRpcCount=0`, `pendingServerRequestCount=0`, `activePlanModeTurnCount=0`, and `uncertainRequestCount=0`; the persistent pending calls matched background `mcpServerStatus/list` polling, so the frontend regression gate now tolerates that background condition while still blocking real queued or uncertain work.
+- 2026-07-05 visual evidence: regenerated `output/regression-7420/p5-screenshot-baseline/home-desktop.png` and `home-foldable.png` showed `新会话` and `搜索` as vertical icon + label primary rows above the command list.
+
 ### Feature: P4 sidebar command list parity baseline
 
 #### Prerequisites

@@ -206,14 +206,16 @@ function Wait-CodexHealthIdle {
     $lastHealth = Test-HttpJson -Name "codex health" -Url $Url
     if (
       $lastHealth.status -eq "ok" `
-      -and $lastHealth.data.appServer.pendingRpcCount -le 1 `
+      -and $lastHealth.data.appServer.pendingRpcCount -le 2 `
       -and $lastHealth.data.appServer.queuedRpcCount -eq 0 `
+      -and $lastHealth.data.appServer.pendingServerRequestCount -eq 0 `
+      -and $lastHealth.data.appServer.activePlanModeTurnCount -eq 0 `
       -and $lastHealth.data.runtimeStore.uncertainRequestCount -eq 0
     ) {
       return $lastHealth
     }
 
-    Write-Step "codex health not idle yet (attempt $attempt/8): pending=$($lastHealth.data.appServer.pendingRpcCount), queued=$($lastHealth.data.appServer.queuedRpcCount), uncertain=$($lastHealth.data.runtimeStore.uncertainRequestCount)"
+    Write-Step "codex health not idle yet (attempt $attempt/8): pending=$($lastHealth.data.appServer.pendingRpcCount), queued=$($lastHealth.data.appServer.queuedRpcCount), serverRequests=$($lastHealth.data.appServer.pendingServerRequestCount), planTurns=$($lastHealth.data.appServer.activePlanModeTurnCount), uncertain=$($lastHealth.data.runtimeStore.uncertainRequestCount)"
     Start-Sleep -Milliseconds 900
   }
 
@@ -225,7 +227,9 @@ function Assert-CodexHealthReadyForFrontendRegression {
 
   Assert-True ($Health.status -eq "ok") "codex health status is not ok"
   Assert-True ($Health.data.appServer.queuedRpcCount -eq 0) "queuedRpcCount is not zero"
-  Assert-True ($Health.data.appServer.pendingRpcCount -le 1) "pendingRpcCount is above the tolerated single background call: $($Health.data.appServer.pendingRpcCount)"
+  Assert-True ($Health.data.appServer.pendingRpcCount -le 2) "pendingRpcCount is above the tolerated background status calls: $($Health.data.appServer.pendingRpcCount)"
+  Assert-True ($Health.data.appServer.pendingServerRequestCount -eq 0) "pendingServerRequestCount is not zero"
+  Assert-True ($Health.data.appServer.activePlanModeTurnCount -eq 0) "activePlanModeTurnCount is not zero"
   Assert-True ($Health.data.runtimeStore.uncertainRequestCount -eq 0) "uncertainRequestCount is not zero"
 }
 
@@ -380,9 +384,20 @@ JSON.stringify((() => {
   const contentGrid = document.querySelector('.content-grid');
   const composer = document.querySelector('.thread-composer-shell');
   const settingsPanel = document.querySelector('.sidebar-settings-panel');
+  const primaryActions = document.querySelector('.sidebar-primary-actions');
+  const primaryActionRows = Array.from(document.querySelectorAll('.sidebar-primary-action'));
+  const primaryActionIcons = Array.from(document.querySelectorAll('.sidebar-primary-action-icon'));
   const commandList = document.querySelector('.sidebar-command-list');
   const commandLinks = Array.from(document.querySelectorAll('.sidebar-command-link'));
   const commandIcons = Array.from(document.querySelectorAll('.sidebar-command-icon'));
+  const primaryActionsStyle = primaryActions ? window.getComputedStyle(primaryActions) : null;
+  const primaryActionStyles = primaryActionRows.map((node) => {
+    const style = window.getComputedStyle(node);
+    return {
+      radius: Number.parseFloat(style.borderTopLeftRadius || '0'),
+      height: node.getBoundingClientRect().height
+    };
+  });
   const commandListStyle = commandList ? window.getComputedStyle(commandList) : null;
   const commandLinkStyles = commandLinks.map((node) => {
     const style = window.getComputedStyle(node);
@@ -416,6 +431,13 @@ JSON.stringify((() => {
     hasContentGrid: !!contentGrid,
     hasComposer: !!composer,
     hasSettingsPanel: !!settingsPanel,
+    hasPrimaryActions: !!primaryActions,
+    primaryActionsDisplay: primaryActionsStyle?.display || '',
+    primaryActionsFlexDirection: primaryActionsStyle?.flexDirection || '',
+    primaryActionCount: primaryActionRows.length,
+    primaryActionIconCount: primaryActionIcons.length,
+    primaryActionMaxRadius: primaryActionStyles.length ? Math.max(...primaryActionStyles.map((item) => item.radius)) : 0,
+    primaryActionMinHeight: primaryActionStyles.length ? Math.min(...primaryActionStyles.map((item) => item.height)) : 0,
     hasCommandList: !!commandList,
     commandListDisplay: commandListStyle?.display || '',
     commandListFlexDirection: commandListStyle?.flexDirection || '',
@@ -450,6 +472,13 @@ function Assert-FoldableShell {
   Assert-True ($Metrics.hasContentGrid -eq $true) "foldable shell is missing content grid"
   Assert-True ($Metrics.hasComposer -eq $true) "foldable shell is missing composer"
   Assert-True ($Metrics.hasSettingsPanel -eq $false) "foldable shell screenshot is polluted by an open settings panel"
+  Assert-True ($Metrics.hasPrimaryActions -eq $true) "foldable shell is missing sidebar primary actions"
+  Assert-True ($Metrics.primaryActionsDisplay -eq "flex") "foldable sidebar primary actions are not flex: $($Metrics.primaryActionsDisplay)"
+  Assert-True ($Metrics.primaryActionsFlexDirection -eq "column") "foldable sidebar primary actions are not vertical: $($Metrics.primaryActionsFlexDirection)"
+  Assert-True ($Metrics.primaryActionCount -ge 2) "foldable sidebar primary actions are missing new/search entries"
+  Assert-True ($Metrics.primaryActionIconCount -ge 2) "foldable sidebar primary actions are missing icons"
+  Assert-True ($Metrics.primaryActionMaxRadius -le 10) "foldable sidebar primary actions are too rounded: $($Metrics.primaryActionMaxRadius)"
+  Assert-True ($Metrics.primaryActionMinHeight -ge 30) "foldable sidebar primary actions are too small: $($Metrics.primaryActionMinHeight)"
   Assert-True ($Metrics.hasCommandList -eq $true) "foldable shell is missing sidebar command list"
   Assert-True ($Metrics.commandListDisplay -eq "flex") "foldable sidebar command list is not flex: $($Metrics.commandListDisplay)"
   Assert-True ($Metrics.commandListFlexDirection -eq "column") "foldable sidebar command list is not vertical: $($Metrics.commandListFlexDirection)"

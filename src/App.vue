@@ -57,20 +57,10 @@
             <SidebarThreadControls
               class="sidebar-thread-controls-host"
               :is-sidebar-collapsed="isSidebarCollapsed"
-              :show-new-thread-button="true"
+              :show-new-thread-button="false"
               @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
               @start-new-thread="onStartNewThreadFromToolbar"
             >
-              <button
-                class="sidebar-search-toggle"
-                type="button"
-                :aria-pressed="isSidebarSearchVisible"
-                aria-label="搜索会话"
-                title="搜索会话"
-                @click="toggleSidebarSearch"
-              >
-                <IconTablerSearch class="sidebar-search-toggle-icon" />
-              </button>
               <button
                 class="sidebar-toolbar-icon-button"
                 type="button"
@@ -83,6 +73,30 @@
                 <IconTablerBroom class="sidebar-toolbar-icon" />
               </button>
             </SidebarThreadControls>
+
+            <div class="sidebar-primary-actions">
+              <button
+                class="sidebar-primary-action"
+                type="button"
+                aria-label="新建会话"
+                title="新建会话"
+                @click="onStartNewThreadFromToolbar"
+              >
+                <IconTablerFilePencil class="sidebar-primary-action-icon" />
+                <span class="sidebar-primary-action-label">新会话</span>
+              </button>
+              <button
+                class="sidebar-primary-action"
+                type="button"
+                :aria-pressed="isSidebarSearchVisible"
+                aria-label="搜索会话"
+                title="搜索会话"
+                @click="toggleSidebarSearch"
+              >
+                <IconTablerSearch class="sidebar-primary-action-icon" />
+                <span class="sidebar-primary-action-label">搜索</span>
+              </button>
+            </div>
 
             <div v-if="isSidebarSearchVisible" class="sidebar-search-bar">
               <IconTablerSearch class="sidebar-search-bar-icon" />
@@ -897,6 +911,7 @@ import FavoritesModal from './components/content/FavoritesModal.vue'
 import IconTablerBolt from './components/icons/IconTablerBolt.vue'
 import IconTablerBroom from './components/icons/IconTablerBroom.vue'
 import IconTablerBookmark from './components/icons/IconTablerBookmark.vue'
+import IconTablerFilePencil from './components/icons/IconTablerFilePencil.vue'
 import IconTablerFolder from './components/icons/IconTablerFolder.vue'
 import IconTablerGitFork from './components/icons/IconTablerGitFork.vue'
 import IconTablerMicrophone from './components/icons/IconTablerMicrophone.vue'
@@ -4340,6 +4355,45 @@ async function submitFirstMessageForNewThread(
 
 .sidebar-thread-controls-host {
   @apply mt-0 px-0 pb-0;
+}
+
+.sidebar-primary-actions {
+  @apply flex flex-col gap-0.5;
+}
+
+.sidebar-primary-action {
+  @apply flex min-h-8 items-center gap-2 border border-transparent bg-transparent px-2.5 py-1.5 text-[13px] font-medium transition-[background-color,border-color,color] duration-150;
+  border-radius: var(--ui-radius-card);
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-primary-action[aria-pressed='true'] {
+  @apply font-semibold;
+  border-color: transparent;
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-primary);
+}
+
+.sidebar-primary-action:hover,
+.sidebar-primary-action:focus-visible {
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+.sidebar-primary-action-icon {
+  @apply h-4 w-4 shrink-0;
+  color: var(--ui-text-tertiary);
+}
+
+.sidebar-primary-action[aria-pressed='true'] .sidebar-primary-action-icon,
+.sidebar-primary-action:hover .sidebar-primary-action-icon,
+.sidebar-primary-action:focus-visible .sidebar-primary-action-icon {
+  color: currentColor;
+}
+
+.sidebar-primary-action-label {
+  @apply min-w-0 truncate text-left;
 }
 
 .sidebar-search-toggle {

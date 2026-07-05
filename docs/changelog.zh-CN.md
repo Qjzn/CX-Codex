@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - 侧栏顶部“新会话 / 搜索”从 icon-only 工具按钮提升为纵向 icon + label 主操作行，和下方工作台/技能中心/GitHub/诊断命令入口形成连续 Desktop 风格导航；折叠屏首页回归新增 primary action 行数、图标数、圆角和触控高度断言，并将 `mcpServerStatus/list` 后台状态轮询从前端截图回归的误拦截中排除。
   - 侧栏顶部快捷入口从 2x2 按钮区收敛为纵向 icon + label command list，减少工具盘感，更接近 Codex Desktop 的连续左侧命令列表；折叠屏首页回归新增 command list 纵向布局、图标数量、圆角和触控高度断言。
   - 截图回归在完成首页设置面板断言后会自动关闭设置面板，并在 884x1104 首页 shell 断言中禁止设置面板残留，避免 `home-foldable.png` 被上一步设置面板状态污染。
   - `test:7420:frontend` 新增显式截图回归参数 `-CaptureScreenshots`、`-ScreenshotTaskName` 和 `-ScreenshotOutputDir`，可用 `agent-browser` 在现有 DOM 回归矩阵通过时把页面截图保存到 `output/regression-7420/<task-name>/`，覆盖桌面、手机和折叠屏视口。
