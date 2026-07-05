@@ -1,6 +1,6 @@
 {
   "name": "cx-codex",
-  "version": "2.2.7",
+  "version": "2.2.8",
   "description": "CX-Codex Web UI and browser bridge for Windows, Linux, Android, LAN, and remote self-hosted access",
   "type": "module",
   "license": "MIT",

@@ -17,6 +17,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 ## 快速入口
 
 - 最新 Release: [github.com/Qjzn/CX-Codex/releases/latest](https://github.com/Qjzn/CX-Codex/releases/latest)
+- 2.2.8 发布说明: [docs/release-notes-2.2.8.zh-CN.md](./docs/release-notes-2.2.8.zh-CN.md)
 - Windows 一条命令安装: [快速安装](#快速安装)
 - Android 客户端说明: [docs/android-shell.zh-CN.md](./docs/android-shell.zh-CN.md)
 - 平台兼容与 Slash Command 支持: [docs/platform-and-commands.zh-CN.md](./docs/platform-and-commands.zh-CN.md)

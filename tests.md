@@ -9433,3 +9433,46 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with required thread `019f27ae-0ecd-7c50-9701-8ec003e66447`, title `分析项目`, project `codexui`, `activeThreadCount: 172`, `activeFirstPageCount: 113`, `archivedFirstPageCount: 100`, and `projectGroupCount: 18`.
 - 2026-07-06 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-session-index-sidebar-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-06 screenshot artifacts: `output/regression-7420/p1-session-index-sidebar-parity/home-desktop.png` and `output/regression-7420/p1-session-index-sidebar-parity/home-mobile-drawer.png`.
+
+### Feature: P1 bounded Desktop session-index sidebar supplement
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- `package.json` and `package-lock.json` are on version `2.2.8`.
+- The Codex Desktop/session search index can find `分析项目` through `/codex-api/thread-search`.
+
+#### Steps
+1. Confirm `AppServerThreadListAugmenter` has both a read limit and an output limit for supplemental thread summaries.
+2. Confirm cached supplemental summaries do not allow active first-page output to grow beyond `thread/list` limit plus the supplemental output limit.
+3. Run `npm.cmd run verify:server-modules`.
+4. Run `npm.cmd run build`.
+5. Restart 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-session-index-sidebar-output-limit`.
+8. Run `npm.cmd run verify:release -- -SchemaAudit warn -AllowDirty`.
+9. Package the release with `npm.cmd run package:release -- -Version 2.2.8 -OutputDir output\release-2.2.8`.
+
+#### Expected Results
+- Active first-page `thread/list` remains bounded at the requested limit plus 20 supplemental rows, even after supplemental summaries are cached.
+- `分析项目` remains visible in the active data source, desktop sidebar, and mobile drawer.
+- Archived lists and active cursor pages remain unsupplemented.
+- Release verification completes; schema drift may warn in `warn` mode but must not fail the gate.
+- Release zip and `.sha256` are generated and pass checksum verification.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/p1-session-index-sidebar-output-limit/` when `-CaptureScreenshots` is used.
+- Release package artifacts are saved under `output/release-2.2.8/`.
+- To roll back, revert `src/server/appServerThreadListAugment.ts`, `scripts/server-module-smoke.ts`, `docs/changelog.zh-CN.md`, `docs/release-notes-2.2.8.zh-CN.md`, `README.md`, `package.json`, `package-lock.json`, and this test section.
+
+#### Regression Evidence
+- 2026-07-06 pre-fix data gate exposed the bounded-output bug: active first page reached `160+` after supplemental cache warm-up, while `分析项目` was still present.
+- 2026-07-06 server module verification: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; the smoke now covers cold and cached supplemental output limiting.
+- 2026-07-06 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
+- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 56392 on version `2.2.8`; `/health` returned ok.
+- 2026-07-06 data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount: 120`, required thread `019f27ae-0ecd-7c50-9701-8ec003e66447`, title `分析项目`, project `codexui`, `archivedFirstPageCount: 100`, and `projectGroupCount: 18`.
+- 2026-07-06 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-session-index-sidebar-output-limit` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-06 release gate: `npm.cmd run verify:release -- -SchemaAudit warn -AllowDirty` completed successfully; schema audit drift remained a warning and wrote raw output to `output/app-server-schema-audit/20260706-021030/`.
+- 2026-07-06 clean release gate: after committing, `npm.cmd run verify:release -- -SchemaAudit warn -RequireCleanGit -SkipBuild` completed successfully on a clean worktree; schema audit drift remained a warning and wrote raw output to `output/app-server-schema-audit/20260706-021415/`.
+- 2026-07-06 release package: `npm.cmd run package:release -- -Version 2.2.8 -OutputDir output\release-2.2.8` generated `output/release-2.2.8/CX-Codex-2.2.8.zip` and `output/release-2.2.8/CX-Codex-2.2.8.sha256`.
+- 2026-07-06 release artifact verification: `npm.cmd run verify:release-artifacts -- -OutputDir output\release-2.2.8` passed with `checksum ok: CX-Codex-2.2.8.zip`.
+- 2026-07-06 screenshot artifacts: `output/regression-7420/p1-session-index-sidebar-output-limit/home-desktop.png` and `output/regression-7420/p1-session-index-sidebar-output-limit/home-mobile-drawer.png`.

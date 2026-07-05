@@ -1,5 +1,6 @@
 export const SUPPLEMENTAL_THREAD_SUMMARY_CACHE_TTL_MS = 5 * 60_000
 export const SUPPLEMENTAL_THREAD_SUMMARY_MAX_READS = 20
+export const SUPPLEMENTAL_THREAD_SUMMARY_MAX_OUTPUT = 20
 export const SUPPLEMENTAL_THREAD_SUMMARY_MAX_CACHE_ENTRIES = 100
 
 type ThreadListAugmentOptions = {
@@ -24,6 +25,7 @@ type SupplementalThreadSummaryCacheEntry = {
 type AppServerThreadListAugmenterOptions = {
   ttlMs?: number
   maxReads?: number
+  maxOutput?: number
   maxCacheEntries?: number
   nowMs?: () => number
 }
@@ -38,12 +40,14 @@ export class AppServerThreadListAugmenter {
   private readonly cacheByThreadId = new Map<string, SupplementalThreadSummaryCacheEntry>()
   private readonly ttlMs: number
   private readonly maxReads: number
+  private readonly maxOutput: number
   private readonly maxCacheEntries: number
   private readonly nowMs: () => number
 
   constructor(options: AppServerThreadListAugmenterOptions = {}) {
     this.ttlMs = options.ttlMs ?? SUPPLEMENTAL_THREAD_SUMMARY_CACHE_TTL_MS
     this.maxReads = options.maxReads ?? SUPPLEMENTAL_THREAD_SUMMARY_MAX_READS
+    this.maxOutput = options.maxOutput ?? SUPPLEMENTAL_THREAD_SUMMARY_MAX_OUTPUT
     this.maxCacheEntries = options.maxCacheEntries ?? SUPPLEMENTAL_THREAD_SUMMARY_MAX_CACHE_ENTRIES
     this.nowMs = options.nowMs ?? (() => Date.now())
   }
@@ -90,6 +94,7 @@ export class AppServerThreadListAugmenter {
     let uncachedReadCount = 0
 
     for (const rawThreadId of threadIds) {
+      if (summaries.length >= this.maxOutput) break
       const threadId = rawThreadId.trim()
       if (!threadId || seen.has(threadId)) continue
       seen.add(threadId)

@@ -2926,6 +2926,36 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
   })
   assert.deepEqual(calls, ['session-a', 'missing', 'pin-a', 'throws', 'session-a', 'missing'])
 
+  const outputLimitedAugmenter = new AppServerThreadListAugmenter({
+    ttlMs: 1_000,
+    maxReads: 4,
+    maxOutput: 2,
+    nowMs: () => 3_000,
+  })
+  const outputLimitedCalls: string[] = []
+  const outputLimitedRead = async (threadId: string): Promise<unknown> => {
+    outputLimitedCalls.push(threadId)
+    return { thread: { id: threadId, title: `Output ${threadId}` } }
+  }
+  const outputLimitedIds = async (): Promise<string[]> => ['out-a', 'out-b', 'out-c', 'out-d']
+  const outputLimitedFirst = await outputLimitedAugmenter.augmentThreadListRpcResult({
+    params: { archived: false },
+    result: { data: [] },
+    readSupplementalThreadIds: outputLimitedIds,
+    readThreadById: outputLimitedRead,
+  }) as { data: Array<{ id: string; title?: string }> }
+  assert.deepEqual(outputLimitedCalls, ['out-a', 'out-b'])
+  assert.deepEqual(outputLimitedFirst.data.map((thread) => thread.id), ['out-a', 'out-b'])
+
+  const outputLimitedCached = await outputLimitedAugmenter.augmentThreadListRpcResult({
+    params: { archived: false },
+    result: { data: [] },
+    readSupplementalThreadIds: outputLimitedIds,
+    readThreadById: outputLimitedRead,
+  }) as { data: Array<{ id: string; title?: string }> }
+  assert.deepEqual(outputLimitedCalls, ['out-a', 'out-b'])
+  assert.deepEqual(outputLimitedCached.data.map((thread) => thread.id), ['out-a', 'out-b'])
+
   const factoryRpcCalls: Array<{ method: string; params: unknown }> = []
   const augmentThreadListRpcResult = createAppServerThreadListRpcResultAugmenter({
     augmenter: new AppServerThreadListAugmenter({
