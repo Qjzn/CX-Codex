@@ -26,22 +26,17 @@ import { AppServerRpcQueue, getAppServerRpcQueuePriority } from './appServerRpcQ
 import { createAppServerRpcTimeoutRecoveryDecision } from './appServerRpcTimeoutRecovery.js'
 import { getRpcTimeoutMs } from './appServerRpcTimeoutPolicy.js'
 import { clearAppServerSessionStores } from './appServerSessionCleanup.js'
-import { readTurnIdFromPayload, readThreadIdFromPayload } from './appServerPayloadIds.js'
 import { readThreadReadIncludeTurnsForMethod } from './appServerThreadReadParams.js'
 import { logBridgeError, writeBridgeLog } from './bridgeLog.js'
-import { PendingServerRequestStore, type PendingServerRequest } from './pendingServerRequests.js'
-import { PlanModeTurnStore } from './planModeTurnStore.js'
+import type { PendingServerRequest } from './pendingServerRequests.js'
 import {
   createServerRequestReplyResponse,
   readServerRequestReplyPayload,
   type ServerRequestReply,
 } from './serverRequestReply.js'
-import {
-  handleAppServerServerRequest,
-  resolveAppServerPendingServerRequest,
-} from './appServerServerRequestHandler.js'
 import type { WebBridgeSettings } from './serverRequestPolicy.js'
 import { AppServerStderrLogger } from './appServerStderrLogger.js'
+import { AppServerProcessServerRequests } from './appServerProcessServerRequests.js'
 import { ThreadTokenUsageStore, type ThreadTokenUsage } from './threadTokenUsage.js'
 import { DEFAULT_WEB_BRIDGE_SETTINGS, normalizeWebBridgeSettings } from './webBridgeSettings.js'
 
@@ -86,10 +81,9 @@ export class AppServerProcess {
   })
   private readonly expectedExitProcesses = new WeakSet<ChildProcessWithoutNullStreams>()
   private readonly notificationListeners = new AppServerNotificationListeners<{ method: string; params: unknown }>()
-  private readonly pendingServerRequests = new PendingServerRequestStore()
+  private readonly serverRequests = new AppServerProcessServerRequests()
   private readonly rpcCache = new AppServerRpcCache()
   private readonly threadTokenUsage = new ThreadTokenUsageStore()
-  private readonly planModeTurns = new PlanModeTurnStore()
   private webBridgeSettings: WebBridgeSettings = DEFAULT_WEB_BRIDGE_SETTINGS
   private readonly appServerLaunchPolicy = resolveAppServerLaunchPolicy()
   private readonly appServerArgs = createAppServerArgs(this.appServerLaunchPolicy)
@@ -133,7 +127,7 @@ export class AppServerProcess {
         if (!expectedExit) {
           logBridgeError('Codex app-server exited unexpectedly', failure, {
             pendingRpcCount: this.pending.count,
-            pendingServerRequestCount: this.pendingServerRequests.count,
+            pendingServerRequestCount: this.serverRequests.pendingCount,
           })
         }
 
@@ -154,10 +148,10 @@ export class AppServerProcess {
 
   private clearSessionStores(): void {
     clearAppServerSessionStores({
-      pendingServerRequests: this.pendingServerRequests,
+      pendingServerRequests: this.serverRequests.pendingServerRequests,
       rpcCache: this.rpcCache,
       threadTokenUsage: this.threadTokenUsage,
-      planModeTurns: this.planModeTurns,
+      planModeTurns: this.serverRequests.planModeTurns,
     })
   }
 
@@ -228,7 +222,7 @@ export class AppServerProcess {
       reason,
       pid: proc.pid,
       pendingRpcCount: this.pending.count,
-      pendingServerRequestCount: this.pendingServerRequests.count,
+      pendingServerRequestCount: this.serverRequests.pendingCount,
       ...details,
     })
 
@@ -261,7 +255,9 @@ export class AppServerProcess {
   private captureNotificationState(notification: { method: string; params: unknown }): void {
     captureAppServerNotificationState(notification, {
       clearThreadListCache: () => this.rpcCache.clearThreadList(),
-      clearPlanModeTurnByThreadOrTurn: (threadId, turnId) => this.planModeTurns.clearByThreadOrTurn(threadId, turnId),
+      clearPlanModeTurnByThreadOrTurn: (threadId, turnId) => {
+        this.serverRequests.clearPlanModeTurnByThreadOrTurn(threadId, turnId)
+      },
       observeThreadTokenUsage: (params) => this.threadTokenUsage.observeUpdate(params),
     })
   }
@@ -279,44 +275,28 @@ export class AppServerProcess {
   }
 
   markPlanModeTurn(threadId: string, turnId = ''): void {
-    this.planModeTurns.mark(threadId, turnId)
+    this.serverRequests.markPlanModeTurn(threadId, turnId)
   }
 
   clearPlanModeTurn(threadId: string, turnId = ''): void {
-    this.planModeTurns.clear(threadId, turnId)
+    this.serverRequests.clearPlanModeTurn(threadId, turnId)
   }
 
   getActivePlanModeTurnCount(): number {
-    return this.planModeTurns.count
-  }
-
-  private isPlanModeServerRequest(params: unknown): boolean {
-    const threadId = this.readServerRequestThreadId(params)
-    const turnId = readTurnIdFromPayload(params)
-    return this.planModeTurns.isActiveRequest(threadId, turnId)
-  }
-
-  private readServerRequestThreadId(params: unknown): string {
-    return readThreadIdFromPayload(params)
+    return this.serverRequests.getActivePlanModeTurnCount()
   }
 
   private resolvePendingServerRequest(requestId: number, reply: ServerRequestReply): void {
-    resolveAppServerPendingServerRequest(requestId, reply, {
-      consumePendingServerRequest: (requestId) => this.pendingServerRequests.consume(requestId),
+    this.serverRequests.resolvePendingServerRequest(requestId, reply, {
       sendServerRequestReply: (requestId, reply) => this.sendServerRequestReply(requestId, reply),
       emitNotification: (notification) => this.emitNotification(notification),
-      readThreadIdFromPayload: (payload) => this.readServerRequestThreadId(payload),
     })
   }
 
   private handleServerRequest(requestId: number, method: string, params: unknown): void {
-    handleAppServerServerRequest(requestId, method, params, {
+    this.serverRequests.handleServerRequest(requestId, method, params, {
       permissions: this.webBridgeSettings.permissions,
-      isPlanModeRequest: (requestParams) => this.isPlanModeServerRequest(requestParams),
-      readThreadIdFromPayload: (payload) => this.readServerRequestThreadId(payload),
-      readTurnIdFromPayload,
       sendServerRequestReply: (requestId, reply) => this.sendServerRequestReply(requestId, reply),
-      recordPendingServerRequest: (requestId, method, params) => this.pendingServerRequests.record(requestId, method, params),
       emitNotification: (notification) => this.emitNotification(notification),
       writeUnsupportedRequestWarning: (details) => {
         writeBridgeLog('warn', 'Declined unsupported app-server request', {
@@ -421,11 +401,11 @@ export class AppServerProcess {
   }
 
   listPendingServerRequests(): PendingServerRequest[] {
-    return this.pendingServerRequests.list()
+    return this.serverRequests.listPendingServerRequests()
   }
 
   listPendingServerRequestsForThread(threadId: string): PendingServerRequest[] {
-    return this.pendingServerRequests.listForThread(threadId, (params) => this.readServerRequestThreadId(params))
+    return this.serverRequests.listPendingServerRequestsForThread(threadId)
   }
 
   getThreadTokenUsage(threadId: string): ThreadTokenUsage | null {
@@ -440,8 +420,8 @@ export class AppServerProcess {
       pid: this.process?.pid ?? null,
       pendingRpcCount: this.pending.count,
       queuedRpcCount: this.rpcQueue.count,
-      pendingServerRequestCount: this.pendingServerRequests.count,
-      activePlanModeTurnCount: this.planModeTurns.count,
+      pendingServerRequestCount: this.serverRequests.pendingCount,
+      activePlanModeTurnCount: this.serverRequests.activePlanModeTurnCount,
       launchPolicy: createAppServerLaunchPolicySnapshot(this.appServerLaunchPolicy),
       rpcDiagnostics: this.rpcDiagnostics.snapshot(this.pending.count, this.rpcQueue.count),
     })

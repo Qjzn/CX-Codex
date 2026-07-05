@@ -7401,6 +7401,42 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Feature: App Server process server request runtime extraction
+
+#### Prerequisites
+- Current repository includes `src/server/appServerProcess.ts`, `src/server/appServerProcessServerRequests.ts`, `src/server/appServerServerRequestHandler.ts`, `scripts/server-module-smoke.ts`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
+- Dependencies are installed and `dist/` plus `dist-cli/` already exist, or run release verification without `-SkipBuild`.
+
+#### Steps
+1. Open `src/server/appServerProcessServerRequests.ts` and confirm `AppServerProcessServerRequests` owns pending server request storage, plan-mode turn bookkeeping, thread-id reading, request enqueueing, and manual request resolution.
+2. Open `src/server/appServerProcess.ts` and confirm `AppServerProcess` delegates `handleServerRequest(...)`, `resolvePendingServerRequest(...)`, plan-mode count changes, pending request listing, and health pending/plan counts to `AppServerProcessServerRequests`.
+3. Open `scripts/server-module-smoke.ts` and confirm `smokeAppServerProcessServerRequests()` covers plan-mode turn marking/clearing, pending request enqueue/listing by thread, manual resolution, notification emission, and reply forwarding without starting Codex CLI.
+4. Open `scripts/verify-release.ps1` and confirm Release package smoke requires `src\server\appServerProcessServerRequests.ts` inside the release zip.
+5. Run `git diff --check`.
+6. Run `node scripts\verify-server-modules.mjs`.
+7. Run `npm.cmd run build`.
+8. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+9. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- `AppServerProcess` no longer owns the pending server request store or plan-mode turn store directly.
+- Server request policy evaluation remains in `appServerServerRequestHandler.ts`; this extraction only moves process-level bookkeeping and dependency wiring.
+- Server module smoke validates the extracted runtime without requiring app-server startup.
+- Release package smoke fails if the new process server request runtime module is omitted from the Web source zip.
+
+#### Rollback/Cleanup Notes
+- No runtime artifact cleanup is required beyond normal output in `output/server-module-smoke/` and `output/release-package-smoke/`.
+- To roll back, move `AppServerProcessServerRequests` methods and stores back into `src/server/appServerProcess.ts`, delete `src/server/appServerProcessServerRequests.ts`, remove smoke/governance/release package references, revert changelog updates, and remove this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 server module smoke: `node scripts\verify-server-modules.mjs` passed, including `smokeAppServerProcessServerRequests()` coverage for plan-mode bookkeeping, pending request enqueue/listing, manual resolution, notification emission, and reply forwarding.
+- 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
 ### Feature: GitHub Release workflow npm runner alignment
 
 #### Prerequisites

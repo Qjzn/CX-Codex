@@ -392,6 +392,7 @@ import {
 } from '../src/server/authMiddleware.js'
 import { RequestBodyTooLargeError } from '../src/server/httpBody.js'
 import { AppServerProcess } from '../src/server/appServerProcess.js'
+import { AppServerProcessServerRequests } from '../src/server/appServerProcessServerRequests.js'
 import { writeCodexBridgeRequestError } from '../src/server/codexBridgeRequestError.js'
 import { disposeCodexBridgeMiddlewareResources } from '../src/server/codexBridgeMiddlewareDispose.js'
 import { createCodexBridgeMiddlewareState } from '../src/server/codexBridgeMiddlewareState.js'
@@ -411,6 +412,7 @@ try {
   smokeAppServerPendingRpcStore()
   smokeAppServerProcessCleanup()
   smokeAppServerProcess()
+  smokeAppServerProcessServerRequests()
   smokeAppServerSessionCleanup()
   smokeAppServerProcessHandlers()
   smokeAppServerProcessTermination()
@@ -4731,6 +4733,66 @@ function smokeAppServerProcess(): void {
   unsubscribe()
   appServer.dispose()
   assert.equal(appServer.getStatus().running, false)
+}
+
+function smokeAppServerProcessServerRequests(): void {
+  const runtime = new AppServerProcessServerRequests()
+  const replies: Array<{ requestId: number; reply: unknown }> = []
+  const notifications: Array<{ method: string; params: unknown }> = []
+  const unsupportedWarnings: Array<{
+    requestId: number
+    method: string
+    threadId: string
+    turnId: string
+  }> = []
+  const permissions: WebBridgeSettings['permissions'] = {
+    allowAllPermissionRequests: false,
+    commandExecution: 'ask',
+    fileChange: 'ask',
+    mcpTools: 'ask',
+  }
+  const dependencies = {
+    permissions,
+    sendServerRequestReply: (requestId: number, reply: unknown) => {
+      replies.push({ requestId, reply })
+    },
+    emitNotification: (notification: { method: string; params: unknown }) => {
+      notifications.push(notification)
+    },
+    writeUnsupportedRequestWarning: (details: {
+      requestId: number
+      method: string
+      threadId: string
+      turnId: string
+    }) => {
+      unsupportedWarnings.push(details)
+    },
+  }
+
+  runtime.markPlanModeTurn('thread-plan', 'turn-plan')
+  assert.equal(runtime.getActivePlanModeTurnCount(), 1)
+  runtime.clearPlanModeTurnByThreadOrTurn('', 'turn-plan')
+  assert.equal(runtime.activePlanModeTurnCount, 0)
+
+  runtime.handleServerRequest(
+    31,
+    'mcp/custom/request',
+    { threadId: 'thread-pending', turnId: 'turn-pending' },
+    dependencies,
+  )
+  assert.equal(runtime.pendingCount, 1)
+  assert.deepEqual(runtime.listPendingServerRequestsForThread('thread-pending'), runtime.listPendingServerRequests())
+  assert.equal(notifications.shift()?.method, 'server/request')
+  assert.deepEqual(replies, [])
+
+  runtime.resolvePendingServerRequest(31, { result: { decision: 'accept' } }, dependencies)
+  assert.equal(runtime.pendingCount, 0)
+  assert.deepEqual(replies.shift(), {
+    requestId: 31,
+    reply: { result: { decision: 'accept' } },
+  })
+  assert.equal(notifications.shift()?.method, 'server/request/resolved')
+  assert.deepEqual(unsupportedWarnings, [])
 }
 
 function smokeErrorMessage(): void {
