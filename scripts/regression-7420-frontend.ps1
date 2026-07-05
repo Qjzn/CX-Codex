@@ -202,14 +202,17 @@ JSON.stringify((() => {
   const commandOutputWraps = Array.from(document.querySelectorAll('.cmd-output-wrap'));
   const requestCards = Array.from(document.querySelectorAll('.request-card'));
   const permissionPanels = Array.from(document.querySelectorAll('.request-permission-panel'));
+  const toolPanels = Array.from(document.querySelectorAll('.request-tool-panel'));
   const requestButtons = Array.from(document.querySelectorAll('.request-button'));
   const firstCopyButton = copyButtons[0];
   const firstCommandRow = commandRows[0];
   const firstRequestCard = requestCards[0];
   const firstPermissionPanel = permissionPanels[0];
+  const firstToolPanel = toolPanels[0];
   const commandRowRadius = firstCommandRow ? Number.parseFloat(window.getComputedStyle(firstCommandRow).borderTopLeftRadius || '0') : 0;
   const requestCardRadius = firstRequestCard ? Number.parseFloat(window.getComputedStyle(firstRequestCard).borderTopLeftRadius || '0') : 0;
   const permissionPanelRadius = firstPermissionPanel ? Number.parseFloat(window.getComputedStyle(firstPermissionPanel).borderTopLeftRadius || '0') : 0;
+  const toolPanelRadius = firstToolPanel ? Number.parseFloat(window.getComputedStyle(firstToolPanel).borderTopLeftRadius || '0') : 0;
   const textContent = document.body.textContent || '';
   return {
     codeBlockCount: codeBlocks.length,
@@ -223,9 +226,11 @@ JSON.stringify((() => {
     commandRowRadius,
     requestCardCount: requestCards.length,
     permissionPanelCount: permissionPanels.length,
+    toolPanelCount: toolPanels.length,
     requestButtonCount: requestButtons.length,
     requestCardRadius,
     permissionPanelRadius,
+    toolPanelRadius,
     hasAddLine: !!document.querySelector('.message-code-line[data-kind="add"]'),
     hasDeleteLine: !!document.querySelector('.message-code-line[data-kind="delete"]'),
     hasMetaLine: !!document.querySelector('.message-code-line[data-kind="meta"]'),
@@ -234,8 +239,10 @@ JSON.stringify((() => {
     hasFixtureCommandText: textContent.includes('fixture-command-output: ok'),
     hasFixtureCommandLabel: textContent.includes('npm.cmd run test:7420:frontend'),
     hasFixturePermissionText: textContent.includes('fixture-permission-workbench'),
+    hasFixtureToolCallText: textContent.includes('fixture-tool-call-workbench') || textContent.includes('Browser tool call cannot be executed directly'),
     hasPermissionServerText: textContent.includes('chrome'),
     hasPermissionToolText: textContent.includes('browser_click'),
+    hasToolCallActionText: textContent.includes('让 Codex 改用文字继续'),
     hasPermissionActionText: textContent.includes('允许并继续') && textContent.includes('拒绝') && textContent.includes('稍后处理'),
     firstCopyButtonText: firstCopyButton ? firstCopyButton.textContent.trim() : '',
     hasEmojiFileIcon: document.body.innerText.includes('📄'),
@@ -262,9 +269,11 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.commandRowRadius -le 10) "conversation fixture command row radius is too large: $($Metrics.commandRowRadius)"
   Assert-True ($Metrics.requestCardCount -ge 1) "conversation fixture is missing pending request card"
   Assert-True ($Metrics.permissionPanelCount -ge 1) "conversation fixture is missing MCP permission panel"
+  Assert-True ($Metrics.toolPanelCount -ge 1) "conversation fixture is missing tool call panel"
   Assert-True ($Metrics.requestButtonCount -ge 3) "conversation fixture is missing permission action buttons"
   Assert-True ($Metrics.requestCardRadius -le 10) "conversation fixture request card radius is too large: $($Metrics.requestCardRadius)"
   Assert-True ($Metrics.permissionPanelRadius -le 10) "conversation fixture permission panel radius is too large: $($Metrics.permissionPanelRadius)"
+  Assert-True ($Metrics.toolPanelRadius -le 10) "conversation fixture tool call panel radius is too large: $($Metrics.toolPanelRadius)"
   Assert-True ($Metrics.hasAddLine -eq $true) "conversation fixture is missing diff add line styling"
   Assert-True ($Metrics.hasDeleteLine -eq $true) "conversation fixture is missing diff delete line styling"
   Assert-True ($Metrics.hasMetaLine -eq $true) "conversation fixture is missing diff metadata line styling"
@@ -273,8 +282,10 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.hasFixtureCommandText -eq $true) "conversation fixture is missing command output marker"
   Assert-True ($Metrics.hasFixtureCommandLabel -eq $true) "conversation fixture is missing command label"
   Assert-True ($Metrics.hasFixturePermissionText -eq $true) "conversation fixture is missing permission workbench marker"
+  Assert-True ($Metrics.hasFixtureToolCallText -eq $true) "conversation fixture is missing tool call workbench marker"
   Assert-True ($Metrics.hasPermissionServerText -eq $true) "conversation fixture is missing MCP server label"
   Assert-True ($Metrics.hasPermissionToolText -eq $true) "conversation fixture is missing MCP tool label"
+  Assert-True ($Metrics.hasToolCallActionText -eq $true) "conversation fixture is missing tool call action label"
   Assert-True ($Metrics.hasPermissionActionText -eq $true) "conversation fixture is missing permission action labels"
   Assert-True ([string]$Metrics.firstCopyButtonText -like "*复制*") "conversation fixture first code block copy button is not visible"
   Assert-True ($Metrics.hasEmojiFileIcon -eq $false) "conversation fixture still renders emoji file icons"

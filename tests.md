@@ -8419,7 +8419,7 @@ This file tracks manual regression and feature verification steps.
 
 #### Steps
 1. Open `http://127.0.0.1:7420/#/__regression/conversation-blocks?regression=frontend`.
-2. Confirm the top process panel shows `待处理请求` with one pending item.
+2. Confirm the top process panel shows `待处理请求` with pending items.
 3. Expand the process panel if needed and confirm the MCP permission card shows service `chrome`, tool `browser_click`, and the marker text `fixture-permission-workbench`.
 4. Confirm the permission card uses neutral thin borders and compact 8px-style radius instead of warm oversized card styling.
 5. Confirm the action row shows `允许并继续`, `拒绝`, and `稍后处理`.
@@ -8473,3 +8473,36 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, and the expanded `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 fixture command assertions: the built-in conversation fixture verified at least one command row, command output wrapper, expanded command output state, command label containing `npm.cmd run test:7420:frontend`, output marker `fixture-command-output: ok`, command row radius no larger than 10px, and no horizontal overflow.
+
+### Feature: P3 unsupported tool call fixture baseline
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Built-in regression fixture route `/#/__regression/conversation-blocks` is available.
+- Public reference checked: `friuns2/codex-mobile` commit `fac2291`, specifically the `ThreadPendingRequestPanel.vue` `item/tool/call` branch.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/__regression/conversation-blocks?regression=frontend`.
+2. Expand the `待处理请求` panel if needed.
+3. Confirm the unsupported tool call card shows service `chrome`, tool `browser_click`, and the marker text or summary for `fixture-tool-call-workbench`.
+4. Confirm the card exposes the action `让 Codex 改用文字继续`.
+5. Confirm the tool call card uses neutral thin borders and compact 8px-style radius instead of the dark oversized reference styling.
+6. Run `git diff --check`.
+7. Run `npm.cmd run build:frontend`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+
+#### Expected Results
+- Unsupported tool calls have a distinct structured workbench block rather than appearing as a single generic pending request button.
+- The fixture regression verifies the tool call panel, service/tool labels, action label, radius ceiling, and no horizontal overflow.
+- Browser regression passes with no page errors.
+
+#### Rollback/Cleanup Notes
+- No generated screenshots are required for this narrow fixture baseline.
+- To roll back, revert `ConversationRegressionFixture.vue`, `ThreadConversation.vue`, `scripts/regression-7420-frontend.ps1`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, and the expanded `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 fixture tool call assertions: the built-in conversation fixture verified at least one unsupported tool call panel, service `chrome`, tool `browser_click`, tool call marker/summary, the action label `让 Codex 改用文字继续`, tool panel radius no larger than 10px, and no horizontal overflow.

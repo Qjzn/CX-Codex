@@ -202,7 +202,12 @@
             <span>{{ pendingRequests.length }} 项</span>
           </button>
           <div v-if="isRequestPanelExpanded" class="conversation-process-stack">
-            <article v-for="request in pendingRequests" :key="`panel-request:${request.id}`" class="request-card">
+            <article
+              v-for="request in pendingRequests"
+              :key="`panel-request:${request.id}`"
+              class="request-card"
+              :class="requestCardClass(request)"
+            >
               <p class="request-title">{{ requestTitleLabel(request) }}</p>
               <p class="request-meta">请求 #{{ request.id }} · {{ formatIsoTime(request.receivedAtIso) }}</p>
 
@@ -369,8 +374,25 @@
                 </template>
               </section>
 
-              <section v-else-if="request.method === 'item/tool/call'" class="request-actions">
-                <button type="button" class="request-button request-button-primary" @click="onRespondToolCallFailure(request.id)">让 Codex 改用文字继续</button>
+              <section v-else-if="request.method === 'item/tool/call'" class="request-tool-call">
+                <div class="request-tool-panel">
+                  <span class="request-tool-badge">工具调用</span>
+                  <p class="request-tool-title">{{ readToolCallTitle(request) }}</p>
+                  <p class="request-tool-text">{{ readToolCallSummary(request) }}</p>
+                  <dl class="request-tool-grid">
+                    <div class="request-tool-item">
+                      <dt class="request-tool-term">服务</dt>
+                      <dd class="request-tool-value">{{ readToolCallServerName(request) }}</dd>
+                    </div>
+                    <div class="request-tool-item">
+                      <dt class="request-tool-term">工具</dt>
+                      <dd class="request-tool-value">{{ readToolCallName(request) }}</dd>
+                    </div>
+                  </dl>
+                </div>
+                <section class="request-actions request-actions-prominent">
+                  <button type="button" class="request-button request-button-primary" @click="onRespondToolCallFailure(request.id)">让 Codex 改用文字继续</button>
+                </section>
               </section>
 
               <section v-else class="request-actions">
@@ -3115,6 +3137,38 @@ function readRequestReason(request: UiServerRequest): string {
   return typeof reason === 'string' ? reason.trim() : ''
 }
 
+function requestCardClass(request: UiServerRequest): string {
+  if (request.method === 'item/tool/call') return 'request-card--tool-call'
+  return ''
+}
+
+function readToolCallPayload(request: UiServerRequest): Record<string, unknown> {
+  return asRecord(request.params) ?? {}
+}
+
+function readToolCallServerName(request: UiServerRequest): string {
+  const payload = readToolCallPayload(request)
+  const value = payload.serverName ?? payload.server ?? payload.mcpServer
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : '未知服务'
+}
+
+function readToolCallName(request: UiServerRequest): string {
+  const payload = readToolCallPayload(request)
+  const value = payload.toolName ?? payload.tool ?? payload.name
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : '未知工具'
+}
+
+function readToolCallTitle(request: UiServerRequest): string {
+  return `${readToolCallName(request)} 等待处理`
+}
+
+function readToolCallSummary(request: UiServerRequest): string {
+  const payload = readToolCallPayload(request)
+  const summary = payload.summary ?? payload.message ?? payload.reason
+  if (typeof summary === 'string' && summary.trim().length > 0) return summary.trim()
+  return '当前 Web 端不能代执行这个工具调用，可让 Codex 改用文字方式继续。'
+}
+
 function isMcpElicitationRequest(method: string): boolean {
   const normalized = method.trim().toLowerCase()
   return (
@@ -4823,6 +4877,10 @@ onBeforeUnmount(() => {
   background: var(--ui-bg-surface);
 }
 
+.request-card--tool-call {
+  border-color: color-mix(in srgb, var(--ui-danger) 20%, var(--ui-border-subtle));
+}
+
 .request-title {
   @apply m-0 text-sm leading-5 font-semibold;
   color: var(--ui-text-primary);
@@ -4875,6 +4933,55 @@ onBeforeUnmount(() => {
 
 .request-user-input {
   @apply flex flex-col gap-2.5;
+}
+
+.request-tool-call {
+  @apply flex flex-col gap-2.5;
+}
+
+.request-tool-panel {
+  @apply border px-3 py-3 flex flex-col gap-2;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+}
+
+.request-tool-badge {
+  @apply w-fit rounded-full border px-2 py-0.5 text-[10px] font-semibold;
+  border-color: color-mix(in srgb, var(--ui-danger) 26%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
+  color: var(--ui-danger);
+}
+
+.request-tool-title {
+  @apply m-0 text-base leading-6 font-semibold;
+  color: var(--ui-text-primary);
+}
+
+.request-tool-text {
+  @apply m-0 text-sm leading-5;
+  color: var(--ui-text-secondary);
+}
+
+.request-tool-grid {
+  @apply m-0 grid grid-cols-1 sm:grid-cols-2 gap-2;
+}
+
+.request-tool-item {
+  @apply border px-2.5 py-2;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+}
+
+.request-tool-term {
+  @apply text-[11px] leading-4;
+  color: var(--ui-text-tertiary);
+}
+
+.request-tool-value {
+  @apply m-0 break-all font-mono text-xs leading-5;
+  color: var(--ui-text-primary);
 }
 
 .request-permission-panel {

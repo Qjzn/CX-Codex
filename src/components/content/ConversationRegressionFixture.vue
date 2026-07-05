@@ -126,6 +126,20 @@ const pendingRequests: UiServerRequest[] = [
       reason: 'fixture-permission-workbench',
     },
   },
+  {
+    id: 742002,
+    method: 'item/tool/call',
+    threadId: 'regression-conversation-blocks',
+    turnId: 'fixture-turn-tool-call',
+    itemId: 'fixture-tool-call',
+    receivedAtIso: '2026-07-05T05:01:00.000Z',
+    params: {
+      toolName: 'browser_click',
+      serverName: 'chrome',
+      reason: 'fixture-tool-call-workbench',
+      summary: 'Browser tool call cannot be executed directly in this web surface.',
+    },
+  },
 ]
 
 function noop(): void {
