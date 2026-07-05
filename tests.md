@@ -8372,19 +8372,20 @@ This file tracks manual regression and feature verification steps.
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
 - Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
-- A manual fixture thread with at least one fenced code or diff block and at least one file attachment is available for full content-specific verification.
+- Built-in regression fixture route `/#/__regression/conversation-blocks` is available for deterministic content-specific verification.
 
 #### Steps
-1. Open a thread containing a fenced code block and confirm the code header shows language, line count, and a `复制` button.
-2. Click the code block `复制` button and confirm it changes to `已复制` briefly without shifting code layout.
-3. Paste the clipboard contents into a scratch editor and confirm it contains only the code block body, not surrounding Markdown fences.
-4. Open a thread containing a `diff` fenced block and confirm the same copy control appears while addition/deletion/meta line coloring remains intact.
-5. Open a user message with file attachments and confirm attachments render as thin bordered file cards with an icon, filename/label, and truncated path.
-6. In a 390x844 viewport with an empty composer, confirm the send button remains visible but disabled instead of disappearing.
-7. Run `git diff --check`.
-8. Run `npm.cmd run build:frontend`.
-9. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
-10. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-conversation-block-polish-20260705 -AgentBrowserTimeoutSec 25`.
+1. Open `http://127.0.0.1:7420/#/__regression/conversation-blocks?regression=frontend` and confirm the fixture renders a real `ThreadConversation`.
+2. Confirm fenced code blocks show language, line count, and a `复制` button.
+3. Click the code block `复制` button and confirm it changes to `已复制` briefly without shifting code layout.
+4. Paste the clipboard contents into a scratch editor and confirm it contains only the code block body, not surrounding Markdown fences.
+5. Open a thread containing a `diff` fenced block and confirm the same copy control appears while addition/deletion/meta line coloring remains intact.
+6. Open a user message with file attachments and confirm attachments render as thin bordered file cards with an icon, filename/label, and truncated path.
+7. In a 390x844 viewport with an empty composer, confirm the send button remains visible but disabled instead of disappearing.
+8. Run `git diff --check`.
+9. Run `npm.cmd run build:frontend`.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+11. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-conversation-block-polish-20260705 -AgentBrowserTimeoutSec 25`.
 
 #### Expected Results
 - Code and diff blocks support block-level copy with visible feedback and no layout jump.
@@ -8399,8 +8400,11 @@ This file tracks manual regression and feature verification steps.
 #### Regression Evidence
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
-- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, and local preview phone; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, and the `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 fixture DOM assertions: the built-in conversation fixture verified at least two code/diff blocks, diff add/delete/meta line styling, code copy buttons, file cards without emoji file icons, raw payload card, fixture marker text, and no horizontal overflow.
+- 2026-07-05 post-fixture three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-conversation-fixture-20260705 -AgentBrowserTimeoutSec 25` passed with desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
+- 2026-07-05 post-fixture screenshot evidence: `output\regression-7420\p1-conversation-fixture-20260705\desktop.png`, `phone.png`, and `fold.png` were generated.
 - 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-conversation-block-polish-20260705 -AgentBrowserTimeoutSec 25` passed with local health, App Server health, event replay, public health, notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
 - 2026-07-05 screenshot evidence: `output\regression-7420\p1-conversation-block-polish-20260705\desktop.png`, `phone.png`, and `fold.png` were generated.
 - 2026-07-05 visual sanity check: phone screenshot confirms the empty composer keeps both mic and disabled send controls visible, reducing action-area layout jump.
-- 2026-07-05 limitation before fixture work: current automated 7420 regression verifies shell/page health and responsive overflow, but does not yet create a dedicated thread fixture that asserts code-copy clipboard contents or file-card DOM.
+- 2026-07-05 remaining limitation: fixture DOM assertions verify copy controls exist, but clipboard contents still require manual browser verification or a future user-gesture-safe clipboard test.

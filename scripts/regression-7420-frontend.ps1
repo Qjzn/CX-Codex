@@ -189,6 +189,57 @@ function Assert-Page {
   }
 }
 
+function Read-ConversationFixtureMetrics {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const codeBlocks = Array.from(document.querySelectorAll('.message-code-block'));
+  const copyButtons = Array.from(document.querySelectorAll('.message-code-copy'));
+  const fileCards = Array.from(document.querySelectorAll('.message-file-card'));
+  const rawCards = Array.from(document.querySelectorAll('.message-structured-card'));
+  const firstCopyButton = copyButtons[0];
+  const textContent = document.body.textContent || '';
+  return {
+    codeBlockCount: codeBlocks.length,
+    diffBlockCount: codeBlocks.filter((node) => node.getAttribute('data-diff') === 'true').length,
+    copyButtonCount: copyButtons.length,
+    fileCardCount: fileCards.length,
+    rawPayloadCardCount: rawCards.length,
+    hasAddLine: !!document.querySelector('.message-code-line[data-kind="add"]'),
+    hasDeleteLine: !!document.querySelector('.message-code-line[data-kind="delete"]'),
+    hasMetaLine: !!document.querySelector('.message-code-line[data-kind="meta"]'),
+    hasFixtureCodeText: textContent.includes('fixture-code-block'),
+    hasFixtureRawText: textContent.includes('fixture-raw-payload'),
+    firstCopyButtonText: firstCopyButton ? firstCopyButton.textContent.trim() : '',
+    hasEmojiFileIcon: document.body.innerText.includes('📄'),
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth
+  };
+})())
+'@
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-ConversationFixture {
+  param([object]$Metrics)
+
+  Assert-True ($Metrics.codeBlockCount -ge 2) "conversation fixture is missing code/diff blocks"
+  Assert-True ($Metrics.diffBlockCount -ge 1) "conversation fixture is missing diff block"
+  Assert-True ($Metrics.copyButtonCount -ge 2) "conversation fixture is missing code copy buttons"
+  Assert-True ($Metrics.fileCardCount -ge 2) "conversation fixture is missing file cards"
+  Assert-True ($Metrics.rawPayloadCardCount -ge 1) "conversation fixture is missing raw payload card"
+  Assert-True ($Metrics.hasAddLine -eq $true) "conversation fixture is missing diff add line styling"
+  Assert-True ($Metrics.hasDeleteLine -eq $true) "conversation fixture is missing diff delete line styling"
+  Assert-True ($Metrics.hasMetaLine -eq $true) "conversation fixture is missing diff metadata line styling"
+  Assert-True ($Metrics.hasFixtureCodeText -eq $true) "conversation fixture is missing fixture code text"
+  Assert-True ($Metrics.hasFixtureRawText -eq $true) "conversation fixture is missing raw payload marker"
+  Assert-True ([string]$Metrics.firstCopyButtonText -like "*复制*") "conversation fixture first code block copy button is not visible"
+  Assert-True ($Metrics.hasEmojiFileIcon -eq $false) "conversation fixture still renders emoji file icons"
+  Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "conversation fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+}
+
 function Add-RegressionResult {
   param(
     [string]$Name,
@@ -247,6 +298,12 @@ try {
   $preview = Open-And-ReadPage -Session $session -Url $previewUrl -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $preview -Name "local preview phone" -RequireMarkdown
   Add-RegressionResult -Name "local-preview-phone" -Page $preview
+
+  $fixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend"
+  $fixture = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $DesktopWidth -Height $DesktopHeight
+  Assert-Page -Page $fixture -Name "conversation blocks fixture desktop"
+  Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session)
+  Add-RegressionResult -Name "conversation-blocks-fixture" -Page $fixture
 
   if (-not [string]::IsNullOrWhiteSpace($ThreadId)) {
     $thread = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/thread/$ThreadId" -Width $PhoneWidth -Height $PhoneHeight

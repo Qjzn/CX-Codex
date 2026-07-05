@@ -1,4 +1,6 @@
 <template>
+  <RouterView v-if="isStandaloneRoute" />
+  <template v-else>
   <a class="skip-to-content" href="#main-content">跳到主要内容</a>
   <section v-if="isMobileShellConfigBooting" class="mobile-shell-setup-page" aria-label="读取连接配置">
     <div class="mobile-shell-setup-card">
@@ -871,11 +873,12 @@
     @open="onOpenFavorite"
     @remove="onRemoveFavorite"
   />
+  </template>
 </template>
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterView, useRoute, useRouter } from 'vue-router'
 import DesktopLayout from './components/layout/DesktopLayout.vue'
 import SidebarThreadTree from './components/sidebar/SidebarThreadTree.vue'
 import ContentHeader from './components/content/ContentHeader.vue'
@@ -1388,6 +1391,7 @@ const isWorkbenchRoute = computed(() => route.name === 'workbench')
 const isSkillsRoute = computed(() => route.name === 'skills')
 const isGithubTrendingRoute = computed(() => route.name === 'github-trending')
 const isDiagnosticsRoute = computed(() => route.name === 'diagnostics')
+const isStandaloneRoute = computed(() => route.name === 'regression-conversation-blocks')
 const isNonThreadRoute = computed(() => (
   isHomeRoute.value || isWorkbenchRoute.value || isSkillsRoute.value || isGithubTrendingRoute.value || isDiagnosticsRoute.value
 ))
