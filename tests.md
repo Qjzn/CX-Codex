@@ -8364,3 +8364,43 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p0-desktop-parity-shell-20260705 -AgentBrowserTimeoutSec 25` passed with local health, App Server health, event replay, public health, notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
 - 2026-07-05 screenshot evidence: `output\regression-7420\p0-desktop-parity-shell-20260705\desktop.png`, `phone.png`, and `fold.png` were generated.
 - 2026-07-05 visual sanity check: desktop screenshot confirms the warm card-heavy shell has been replaced by a neutral continuous sidebar, lighter header, centered content column, and desktop-style bottom composer; phone screenshot confirms no horizontal overflow, while empty composer action visibility remains a P1 state-specific follow-up.
+
+---
+
+### Feature: P1 conversation code and file block polish
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- A manual fixture thread with at least one fenced code or diff block and at least one file attachment is available for full content-specific verification.
+
+#### Steps
+1. Open a thread containing a fenced code block and confirm the code header shows language, line count, and a `复制` button.
+2. Click the code block `复制` button and confirm it changes to `已复制` briefly without shifting code layout.
+3. Paste the clipboard contents into a scratch editor and confirm it contains only the code block body, not surrounding Markdown fences.
+4. Open a thread containing a `diff` fenced block and confirm the same copy control appears while addition/deletion/meta line coloring remains intact.
+5. Open a user message with file attachments and confirm attachments render as thin bordered file cards with an icon, filename/label, and truncated path.
+6. In a 390x844 viewport with an empty composer, confirm the send button remains visible but disabled instead of disappearing.
+7. Run `git diff --check`.
+8. Run `npm.cmd run build:frontend`.
+9. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
+10. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-conversation-block-polish-20260705 -AgentBrowserTimeoutSec 25`.
+
+#### Expected Results
+- Code and diff blocks support block-level copy with visible feedback and no layout jump.
+- File attachments no longer use emoji or dense chips; they read as structured workbench file cards.
+- Mobile composer action layout remains stable in empty and filled states.
+- Browser regression passes with no page errors and no horizontal overflow.
+
+#### Rollback/Cleanup Notes
+- Generated screenshots under `output\regression-7420\p1-conversation-block-polish-20260705\` can be deleted after review.
+- To roll back, revert `ThreadConversation.vue`, `ThreadComposer.vue`, changelog entry, and this test section.
+
+#### Regression Evidence
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
+- 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, and local preview phone; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-conversation-block-polish-20260705 -AgentBrowserTimeoutSec 25` passed with local health, App Server health, event replay, public health, notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
+- 2026-07-05 screenshot evidence: `output\regression-7420\p1-conversation-block-polish-20260705\desktop.png`, `phone.png`, and `fold.png` were generated.
+- 2026-07-05 visual sanity check: phone screenshot confirms the empty composer keeps both mic and disabled send controls visible, reducing action-area layout jump.
+- 2026-07-05 limitation before fixture work: current automated 7420 regression verifies shell/page health and responsive overflow, but does not yet create a dedicated thread fixture that asserts code-copy clipboard contents or file-card DOM.

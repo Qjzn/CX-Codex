@@ -490,11 +490,13 @@
                 v-if="entry.message.fileAttachments && entry.message.fileAttachments.length > 0"
                 class="message-file-attachments"
               >
-                <span v-for="att in entry.message.fileAttachments" :key="att.path" class="message-file-chip">
-                  <span class="message-file-chip-icon">📄</span>
-                  <span class="message-file-link-wrap">
+                <article v-for="att in entry.message.fileAttachments" :key="att.path" class="message-file-card">
+                  <span class="message-file-card-icon" aria-hidden="true">
+                    <IconTablerFilePencil class="message-file-card-icon-svg" />
+                  </span>
+                  <span class="message-file-card-copy">
                     <a
-                      class="message-file-link message-file-chip-name"
+                      class="message-file-link message-file-card-title"
                       :href="toBrowseUrl(att.path)"
                       target="_blank"
                       rel="noopener noreferrer"
@@ -502,10 +504,11 @@
                       @click="onHyperlinkClick($event, toBrowseUrl(att.path))"
                       @contextmenu.prevent="onFileLinkContextMenu($event, att.path)"
                     >
-                      {{ att.path }}
+                      {{ att.label || getBasename(att.path) }}
                     </a>
+                    <span class="message-file-card-path">{{ att.path }}</span>
                   </span>
-                </span>
+                </article>
               </div>
 
               <details
@@ -703,8 +706,19 @@
                         :data-diff="block.isDiff"
                       >
                         <div class="message-code-header">
-                          <span class="message-code-language">{{ block.language || (block.isDiff ? 'diff' : 'text') }}</span>
-                          <span class="message-code-count">{{ block.lines.length }} 行</span>
+                          <span class="message-code-meta">
+                            <span class="message-code-language">{{ block.language || (block.isDiff ? 'diff' : 'text') }}</span>
+                            <span class="message-code-count">{{ block.lines.length }} 行</span>
+                          </span>
+                          <button
+                            class="message-code-copy"
+                            type="button"
+                            :aria-label="isCodeBlockCopied(entry.message.id, blockIndex) ? '代码已复制' : '复制代码块'"
+                            @click.stop="onCopyCodeBlock(entry.message.id, blockIndex, block)"
+                          >
+                            <IconTablerCopy class="message-code-copy-icon" />
+                            <span>{{ isCodeBlockCopied(entry.message.id, blockIndex) ? '已复制' : '复制' }}</span>
+                          </button>
                         </div>
                         <pre class="message-code-pre"><code><span
                           v-for="(line, lineIndex) in block.lines"
@@ -947,6 +961,7 @@ import IconTablerArrowBackUp from '../icons/IconTablerArrowBackUp.vue'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerBookmark from '../icons/IconTablerBookmark.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'
+import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import LoadingInline from './LoadingInline.vue'
 import { isNativeAndroidShell, openMobileShellUrl } from '../../mobile/mobileShell'
 
@@ -1433,6 +1448,8 @@ let highlightedMessageTimer: number | null = null
 const pendingRollbackMessageId = ref('')
 let rollbackConfirmTimer: number | null = null
 let previousBodyOverflow = ''
+const copiedCodeBlockKey = ref('')
+let copiedCodeBlockTimer: number | null = null
 type InlineSegment =
   | { kind: 'text'; value: string }
   | { kind: 'bold'; value: string }
@@ -2982,6 +2999,50 @@ function rawPayloadPreview(message: UiMessage): string {
   }
 }
 
+function codeBlockKey(messageId: string, blockIndex: number): string {
+  return `${messageId}:${String(blockIndex)}`
+}
+
+function isCodeBlockCopied(messageId: string, blockIndex: number): boolean {
+  return copiedCodeBlockKey.value === codeBlockKey(messageId, blockIndex)
+}
+
+function codeBlockText(block: Extract<PreparedMessageBlock, { kind: 'code' }>): string {
+  return block.lines.map((line) => line.value).join('\n')
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.setAttribute('readonly', 'true')
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+  }
+}
+
+async function onCopyCodeBlock(messageId: string, blockIndex: number, block: Extract<PreparedMessageBlock, { kind: 'code' }>): Promise<void> {
+  await copyTextToClipboard(codeBlockText(block))
+  copiedCodeBlockKey.value = codeBlockKey(messageId, blockIndex)
+  if (copiedCodeBlockTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(copiedCodeBlockTimer)
+  }
+  if (typeof window !== 'undefined') {
+    copiedCodeBlockTimer = window.setTimeout(() => {
+      copiedCodeBlockTimer = null
+      if (copiedCodeBlockKey.value === codeBlockKey(messageId, blockIndex)) {
+        copiedCodeBlockKey.value = ''
+      }
+    }, 1600)
+  }
+}
+
 function isLongUserMessage(message: UiMessage): boolean {
   return message.role === 'user' && message.text.trim().length >= LONG_USER_MESSAGE_COLLAPSE_THRESHOLD
 }
@@ -3668,19 +3729,7 @@ function goToPendingRequestsFromDetail(): void {
 async function onCopyMessage(message: UiMessage): Promise<void> {
   if (!canCopyMessage(message)) return
   const text = message.text.trim()
-  try {
-    await navigator.clipboard.writeText(text)
-  } catch {
-    const textarea = document.createElement('textarea')
-    textarea.value = text
-    textarea.setAttribute('readonly', 'true')
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    document.body.appendChild(textarea)
-    textarea.select()
-    document.execCommand('copy')
-    document.body.removeChild(textarea)
-  }
+  await copyTextToClipboard(text)
 }
 
 function clearRollbackConfirmation(): void {
@@ -4524,6 +4573,10 @@ onBeforeUnmount(() => {
   stopCommandElapsedTimer()
   clearHighlightedMessage()
   clearRollbackConfirmation()
+  if (copiedCodeBlockTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(copiedCodeBlockTimer)
+    copiedCodeBlockTimer = null
+  }
   if (scrollRestoreFrame) {
     cancelAnimationFrame(scrollRestoreFrame)
   }
@@ -5164,19 +5217,41 @@ onBeforeUnmount(() => {
 }
 
 .message-file-attachments {
-  @apply mb-1.5 flex flex-wrap gap-1.5;
+  @apply mb-2 grid max-w-full gap-1.5;
+  grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
 }
 
-.message-file-chip {
-  @apply inline-flex items-center gap-1 rounded-full border border-[#ddd5c7] bg-[#f7f1e5] px-2.5 py-1 text-xs text-[#6d6354];
+.message-file-card {
+  @apply flex min-w-0 items-center gap-2 border px-2.5 py-2;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
 }
 
-.message-file-chip-icon {
-  @apply text-[10px] leading-none;
+.message-file-card-icon {
+  @apply inline-flex h-8 w-8 shrink-0 items-center justify-center;
+  border-radius: var(--ui-radius-control);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
 }
 
-.message-file-chip-name {
-  @apply truncate max-w-40 font-mono;
+.message-file-card-icon-svg {
+  @apply h-4 w-4;
+}
+
+.message-file-card-copy {
+  @apply flex min-w-0 flex-1 flex-col gap-0.5;
+}
+
+.message-file-card-title {
+  @apply block max-w-full truncate text-sm font-medium;
+  color: var(--ui-text-primary);
+}
+
+.message-file-card-path {
+  @apply block max-w-full truncate text-xs;
+  color: var(--ui-text-tertiary);
+  font-family: var(--font-mono-ui);
 }
 
 .message-card {
@@ -5285,6 +5360,10 @@ onBeforeUnmount(() => {
   @apply flex items-center justify-between gap-3 border-b border-white/10 bg-[#24211d] px-3 py-1.5;
 }
 
+.message-code-meta {
+  @apply flex min-w-0 items-center gap-2;
+}
+
 .message-code-language,
 .message-code-count {
   @apply text-[11px] font-medium leading-none text-[#d8d0c3];
@@ -5293,6 +5372,15 @@ onBeforeUnmount(() => {
 
 .message-code-count {
   @apply text-[#a69c8d];
+}
+
+.message-code-copy {
+  @apply inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 text-[11px] font-medium text-[#d8d0c3] transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30;
+  font-family: var(--font-sans-ui);
+}
+
+.message-code-copy-icon {
+  @apply h-3.5 w-3.5;
 }
 
 .message-code-pre {

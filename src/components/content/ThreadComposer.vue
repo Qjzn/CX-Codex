@@ -486,7 +486,6 @@
           </button>
           <button
             v-else
-            v-show="!isCompactViewport || hasSubmitContent || isTurnInProgress"
             class="thread-composer-submit"
             :class="{ 'thread-composer-submit--queue': isTurnInProgress }"
             type="button"
