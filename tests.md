@@ -9545,3 +9545,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -CaptureScreenshots -ScreenshotTaskName p1-thread-store-read-error` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, desktop/phone/foldable `conversation-blocks-fixture`, and the target `thread-phone` page; every page asserted that internal thread-store read errors were not exposed.
 - 2026-07-06 service log evidence: the malformed `019f27ae-0ecd-7c50-9701-8ec003e66447` session read is logged server-side as `Heavy thread snapshot unavailable with no cache`, confirming the error is contained as a degraded snapshot instead of being thrown to the UI.
 - 2026-07-06 screenshot artifact: `output/regression-7420/p1-thread-store-read-error/thread-phone.png`.
+
+### Feature: Android settings update entry consolidation
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Android shell assets have been synced after the frontend build.
+- For the native download prompt branch, GitHub latest release must have an Android APK asset and a version greater than the installed app version.
+
+#### Steps
+1. Run `git diff --check`.
+2. Run `npm.cmd run build`.
+3. Run `npm.cmd run mobile:android:sync`.
+4. Restart local 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+5. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-settings-mobile-update-entry`.
+6. On Android, open Settings and confirm there is no separate `APP 更新`, `版本状态`, `更新包`, or `重新安装` block.
+7. Tap the `当前版本` card and confirm it shows a checking/loading state while reading GitHub release metadata.
+8. If GitHub latest version is greater than the installed app version and has an Android APK asset, confirm the settings sheet closes and the download confirmation dialog appears.
+9. If the installed version is current, confirm the card settles to `已是最新` and no download dialog appears.
+
+#### Expected Results
+- Settings keeps a single update entry under the app/version card: `当前版本` plus the current check/update action.
+- The old App update section, repeated update package field, release page button, and same-version reinstall path are no longer shown.
+- Loading feedback appears inline while checking or downloading.
+- Download confirmation appears only when GitHub latest Android release is newer than the installed version and has an installable APK asset.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/p1-settings-mobile-update-entry/` when `-CaptureScreenshots` is used.
+- To roll back, revert `src/App.vue`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-06 diff whitespace check: `git diff --check` passed.
+- 2026-07-06 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
+- 2026-07-06 Android sync: `npm.cmd run mobile:android:sync` passed; Capacitor copied current `dist` assets and found `@capacitor/app@8.1.0` plus `@capacitor/network@8.0.1`.
+- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 47264 on version `2.2.8`; `/health` returned ok.
+- 2026-07-06 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-settings-mobile-update-entry` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
+- 2026-07-06 screenshot artifacts: `output/regression-7420/p1-settings-mobile-update-entry/home-desktop.png`, `output/regression-7420/p1-settings-mobile-update-entry/home-mobile-drawer.png`, and `output/regression-7420/p1-settings-mobile-update-entry/composer-shell-fixture-phone.png`.

@@ -378,49 +378,6 @@
                   {{ mobileShellStatus }}
                 </p>
               </section>
-              <section v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="App 更新">
-                <p class="sidebar-settings-section-title">App 更新</p>
-                <div class="sidebar-settings-row sidebar-settings-row--static">
-                  <span class="sidebar-settings-label">版本状态</span>
-                  <span class="sidebar-settings-value">{{ mobileShellUpdateVersionStatusLabel }}</span>
-                </div>
-                <div class="sidebar-settings-row sidebar-settings-row--static sidebar-settings-row--stacked">
-                  <span class="sidebar-settings-label">更新包</span>
-                  <span class="sidebar-settings-code">{{ mobileShellLatestAssetLabel }}</span>
-                </div>
-                <div class="sidebar-settings-actions">
-                  <button
-                    class="sidebar-settings-github-button"
-                    type="button"
-                    :disabled="!canRunMobileShellUpdatePrimaryAction"
-                    @click="runMobileShellUpdatePrimaryAction"
-                  >
-                    {{ mobileShellUpdatePrimaryButtonLabel }}
-                  </button>
-                  <button
-                    class="sidebar-settings-github-button sidebar-settings-github-button--secondary"
-                    type="button"
-                    :disabled="isMobileShellUpdateLoading || isMobileShellInstalling"
-                    @click="checkMobileShellUpdate({ showSuccessMessage: true, promptOnUpdate: true })"
-                  >
-                    重新检查
-                  </button>
-                  <button
-                    class="sidebar-settings-github-button sidebar-settings-github-button--secondary"
-                    type="button"
-                    :disabled="!canOpenLatestMobileShellReleasePage"
-                    @click="openLatestMobileShellReleasePage"
-                  >
-                    打开发布页
-                  </button>
-                </div>
-                <p class="sidebar-settings-hint">
-                  {{ mobileShellUpdateHint }}
-                </p>
-                <p v-if="mobileShellUpdateStatus" class="sidebar-settings-hint sidebar-settings-hint-status">
-                  {{ mobileShellUpdateStatus }}
-                </p>
-              </section>
               <section class="sidebar-settings-section" aria-label="语音输入">
                 <p class="sidebar-settings-section-title">语音输入</p>
               <div class="sidebar-settings-row sidebar-settings-row--select" :title="SETTINGS_HELP.dictationLanguage">
@@ -462,13 +419,20 @@
                     class="sidebar-settings-about-trigger"
                     type="button"
                     :disabled="isMobileShellUpdateLoading || isMobileShellInstalling"
-                    :title="isMobileShellAvailable ? '点击检查 GitHub 新版本' : '打开 GitHub 发布页'"
+                    :title="isMobileShellAvailable ? '检查 GitHub 新版本' : '打开 GitHub 发布页'"
                     @click="onOpenAppVersionDetails"
                   >
                     <div class="sidebar-settings-about-copy">
                       <span class="sidebar-settings-about-label">当前版本</span>
                       <strong class="sidebar-settings-about-version">{{ aboutAppVersionLabel }}</strong>
-                      <span class="sidebar-settings-about-action">{{ mobileShellVersionActionLabel }}</span>
+                      <span class="sidebar-settings-about-action">
+                        <span
+                          v-if="isMobileShellUpdateLoading || isMobileShellInstalling"
+                          class="sidebar-settings-about-spinner"
+                          aria-hidden="true"
+                        />
+                        {{ mobileShellVersionActionLabel }}
+                      </span>
                     </div>
                     <span
                       v-if="isMobileShellAvailable && hasMobileShellUpdate"
@@ -477,15 +441,10 @@
                       新版本
                     </span>
                   </button>
-                  <button
-                    class="sidebar-settings-github-button"
-                    type="button"
-                    :title="SETTINGS_HELP.projectGithub"
-                    @click="openProjectGithub"
-                  >
-                    打开 GitHub
-                  </button>
                 </div>
+                <p v-if="mobileShellUpdateStatus" class="sidebar-settings-hint sidebar-settings-hint-status">
+                  {{ mobileShellUpdateStatus }}
+                </p>
                 <div class="sidebar-settings-about-meta">
                   <span>工作区</span>
                   <span>{{ displayWorktreeName }}</span>
@@ -856,7 +815,7 @@
           <span>{{ mobileShellUpdatePublishedAtLabel }}</span>
         </div>
         <div class="mobile-update-confirm-meta">
-          <span>更新包</span>
+          <span>安装文件</span>
           <span>{{ mobileShellLatestAssetLabel }}</span>
         </div>
         <div class="mobile-update-confirm-meta">
@@ -990,7 +949,6 @@ const DiagnosticsPanel = defineAsyncComponent(() => import('./components/content
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
-const PROJECT_GITHUB_URL = 'https://github.com/Qjzn/CX-Codex'
 const MOBILE_SHELL_BRAND_NAME = 'CX-Codex'
 const MOBILE_SHELL_BRANDING_LOGO_URL = '/branding/cx-codex-logo.png'
 const CONTEXT_RING_RADIUS = 16
@@ -1015,7 +973,6 @@ const SETTINGS_HELP = {
   commandExecutionPermission: '控制 Codex 请求运行命令时是否自动允许。',
   fileChangePermission: '控制 Codex 请求写入文件时是否自动允许。',
   mcpToolPermission: '控制 MCP 服务请求运行工具时是否自动允许，例如浏览器自动化工具。',
-  projectGithub: '在新标签页打开当前项目的 GitHub 仓库。',
 } as const
 const WHISPER_LANGUAGES: Record<string, string> = {
   en: 'english',
@@ -1521,13 +1478,6 @@ const mobileShellLatestVersionLabel = computed(() => {
   if (!tagName) return isMobileShellUpdateLoading.value ? '检查中' : '未检测到'
   return tagName
 })
-const mobileShellUpdateVersionStatusLabel = computed(() => {
-  if (isMobileShellUpdateLoading.value) return '检查中'
-  if (hasMobileShellUpdate.value) return `可更新至 ${mobileShellLatestVersionLabel.value}`
-  if (!mobileShellLatestRelease.value?.tagName.trim()) return '未检测到'
-  if (mobileShellReleaseComparison.value > 0) return '本机版本较新'
-  return '已是最新'
-})
 const mobileShellLatestAssetLabel = computed(() => (
   mobileShellLatestRelease.value?.asset?.name.trim()
   || '当前发布页还没有 Android APK'
@@ -1546,11 +1496,12 @@ const mobileShellReleaseComparison = computed(() => {
 })
 const mobileShellVersionActionLabel = computed(() => {
   if (!isMobileShellAvailable.value) return '打开 GitHub 发布页'
-  if (isMobileShellInstalling.value) return '正在下载安装...'
-  if (isMobileShellUpdateLoading.value) return '正在检查新版本...'
-  if (hasMobileShellUpdate.value) return '发现新版本，点击更新'
+  if (isMobileShellInstalling.value) return '正在下载更新...'
+  if (isMobileShellUpdateLoading.value) return '检查中...'
+  if (hasMobileShellUpdate.value) return `下载 ${mobileShellLatestVersionLabel.value}`
   if (mobileShellReleaseComparison.value > 0) return '当前安装包比 GitHub 更新'
-  return '点击检查 GitHub 更新'
+  if (mobileShellLatestRelease.value?.tagName.trim()) return '已是最新'
+  return '检查更新'
 })
 const canInstallLatestMobileShellRelease = computed(() => (
   isMobileShellAvailable.value
@@ -1563,20 +1514,10 @@ const canRunMobileShellUpdatePrimaryAction = computed(() => (
   && !isMobileShellInstalling.value
   && !isMobileShellUpdateLoading.value
 ))
-const canOpenLatestMobileShellReleasePage = computed(() => (
-  (mobileShellLatestRelease.value?.htmlUrl.trim() || getMobileReleasesPageUrl()).length > 0
-))
-const mobileShellUpdatePrimaryButtonLabel = computed(() => {
-  if (isMobileShellInstalling.value) return '下载安装中...'
-  if (isMobileShellUpdateLoading.value) return '检查中...'
-  if (!mobileShellLatestRelease.value?.tagName.trim()) return '检查更新'
-  if (!mobileShellLatestRelease.value?.asset?.downloadUrl) return '重新检查'
-  return hasMobileShellUpdate.value ? '下载并安装' : '重新安装'
-})
 const mobileShellInstallButtonLabel = computed(() => {
-  if (isMobileShellInstalling.value) return '下载安装中...'
+  if (isMobileShellInstalling.value) return '下载中...'
   if (!mobileShellLatestRelease.value?.asset?.downloadUrl) return '暂无安装包'
-  return hasMobileShellUpdate.value ? '下载并安装' : '重新安装'
+  return '下载更新'
 })
 const mobileShellUpdatePromptTitle = computed(() => {
   if (mobileShellLatestRelease.value?.releaseName.trim()) {
@@ -1603,13 +1544,6 @@ const mobileShellUpdatePromptText = computed(() => {
     return `检测到 ${mobileShellLatestVersionLabel.value}，确认后会直接下载 ${mobileShellLatestRelease.value.asset.name.trim()} 并拉起系统安装界面。`
   }
   return `检测到 ${mobileShellLatestVersionLabel.value}，确认后会直接下载并打开系统安装界面。`
-})
-const mobileShellUpdateHint = computed(() => {
-  if (isMobileShellUpdateLoading.value) return '正在读取 GitHub 最新发布信息...'
-  if (!mobileShellLatestRelease.value?.asset) return '发布页还没有可直接安装的 Android APK。'
-  if (hasMobileShellUpdate.value) return '检测到新版本后，可直接下载并拉起系统安装界面。'
-  if (mobileShellReleaseComparison.value > 0) return '当前安装版比 GitHub 最新发布更高，通常说明你还没有把新 APK 发到 Release。'
-  return '当前安装版已与最新发布一致，如需覆盖安装也可以直接重新安装。'
 })
 const isRouteOnlyEmptyThread = computed(() => (
   route.name === 'thread'
@@ -2660,7 +2594,7 @@ async function refreshMobileShellUpdateState(showSuccessMessage = false): Promis
       }
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : '读取 App 更新状态失败'
+    const message = error instanceof Error ? error.message : '检查版本失败'
     setMobileShellUpdateStatus(message)
   } finally {
     isMobileShellUpdateLoading.value = false
@@ -2683,20 +2617,18 @@ async function checkMobileShellUpdate(options: { showSuccessMessage?: boolean; p
 async function runMobileShellUpdatePrimaryAction(): Promise<void> {
   if (!canRunMobileShellUpdatePrimaryAction.value) return
 
-  const hasReleaseInfo = mobileShellLatestRelease.value?.tagName.trim().length
-  if (!hasReleaseInfo || !mobileShellLatestRelease.value?.asset?.downloadUrl) {
+  if (!mobileShellLatestRelease.value?.tagName.trim() || !hasMobileShellUpdate.value) {
     await checkMobileShellUpdate({ showSuccessMessage: true, promptOnUpdate: true })
     return
   }
 
-  if (hasMobileShellUpdate.value) {
+  if (mobileShellLatestRelease.value?.asset?.downloadUrl) {
     isSettingsOpen.value = false
     isMobileShellUpdatePromptVisible.value = true
     return
   }
 
-  isSettingsOpen.value = false
-  await installLatestMobileShellRelease()
+  await checkMobileShellUpdate({ showSuccessMessage: true, promptOnUpdate: true })
 }
 
 async function refreshDesktopAppAvailability(): Promise<void> {
@@ -2804,18 +2736,18 @@ async function installLatestMobileShellRelease(): Promise<boolean> {
 
   const asset = mobileShellLatestRelease.value?.asset
   if (!asset?.downloadUrl) {
-    setMobileShellUpdateStatus('当前没有可下载安装的 Android 更新包')
+    setMobileShellUpdateStatus('当前没有可下载安装的 Android 文件')
     return false
   }
 
   isMobileShellInstalling.value = true
-  setMobileShellUpdateStatus('正在下载更新包并准备安装...')
+  setMobileShellUpdateStatus('正在下载更新并准备安装...')
   try {
     const result = await installMobileShellApk(asset.downloadUrl, asset.name)
     if (result.status === 'permission_required') {
-      setMobileShellUpdateStatus('更新包已下载；请允许安装未知应用，返回后会自动打开安装界面')
+      setMobileShellUpdateStatus('安装文件已下载；请允许安装未知应用，返回后会自动打开安装界面')
     } else {
-      setMobileShellUpdateStatus('更新包已下载，系统安装界面正在打开')
+      setMobileShellUpdateStatus('安装文件已下载，系统安装界面正在打开')
     }
     return true
   } catch (error) {
@@ -3045,11 +2977,6 @@ function onBrowseThreadFiles(threadId: string): void {
   }
   if (!targetCwd || typeof window === 'undefined') return
   window.open(`/codex-local-browse${encodeURI(targetCwd)}`, '_blank', 'noopener,noreferrer')
-}
-
-function openProjectGithub(): void {
-  if (typeof window === 'undefined') return
-  window.open(PROJECT_GITHUB_URL, '_blank', 'noopener,noreferrer')
 }
 
 function onStartNewThreadFromToolbar(): void {
@@ -5342,12 +5269,25 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-about-action {
-  @apply text-[11px] leading-4;
+  @apply inline-flex items-center gap-1 text-[11px] leading-4;
   color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-about-spinner {
+  @apply inline-block h-3 w-3 shrink-0 rounded-full border;
+  animation: settings-version-spin 820ms linear infinite;
+  border-color: color-mix(in srgb, var(--ui-accent) 28%, transparent);
+  border-top-color: var(--ui-accent);
 }
 
 .sidebar-settings-about-update-badge {
   @apply inline-flex shrink-0 items-center rounded-full border border-[#bfdbfe] bg-[#e8f1ff] px-2 py-0.5 text-[10px] font-semibold text-[#1d4ed8];
+}
+
+@keyframes settings-version-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .sidebar-settings-github-button {
@@ -5646,6 +5586,10 @@ async function submitFirstMessageForNewThread(
   }
 
   .content-title-refresh-button[data-busy='true'] .content-title-refresh-button-icon {
+    animation: none !important;
+  }
+
+  .sidebar-settings-about-spinner {
     animation: none !important;
   }
 }
