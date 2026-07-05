@@ -4,6 +4,7 @@
 
 - 界面体验：
   - 7420 侧栏会话数据源新增 Desktop/session-index 有界补充：当 Codex Desktop 能看到但 App Server `thread/list` 首屏遗漏的近期线程存在时，会通过 `thread/read(includeTurns:false)` 补入侧栏，避免 `codexui / 分析项目` 这类真实会话在浏览器端缺失；补充输出保持固定上限，防止缓存命中后首屏线程数量持续膨胀。
+  - 损坏或非标准 session jsonl 导致 App Server 返回 `thread-store internal error` / `does not start with session metadata` 时，7420 会按可恢复线程读取失败处理，不再把本机 session 路径和内部错误直接显示到会话页。
   - `test:7420:sidebar-data` 和 `test:7420:frontend` 增加 `分析项目` 这类 Desktop/session-index 目标线程回归断言，数据门禁会校验目标线程进入 active `thread/list`，浏览器门禁会校验桌面侧栏和手机抽屉 DOM 都包含同一线程。
   - 手机端首页回归新增打开侧栏 drawer 后必须渲染会话行和项目组的断言；`thread/list` RPC 单次等待从 45 秒收紧到 15 秒，并为侧栏空列表提供明确提示，避免 App Server 卡住时手机端长期停留在无信息骨架屏。
   - 侧栏顶部操作入口从“主操作 + 纵向命令列表”压缩为 3 列手机友好的快捷操作网格，保留图标和短标签，减少首屏高度占用；项目展开后默认只显示最新 5 条会话，超出部分通过 `显示更多 N 条` 继续展开。

@@ -9514,3 +9514,34 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 Android sync: `npm.cmd run mobile:android:sync` passed; Capacitor copied current `dist` assets and found `@capacitor/app@8.1.0` plus `@capacitor/network@8.0.1`.
 - 2026-07-06 Android debug build: `android\gradlew.bat assembleDebug` passed with `BUILD SUCCESSFUL`; Gradle still reports existing flatDir/deprecation warnings.
 - 2026-07-06 screenshot artifacts: `output/regression-7420/p1-android-dictation-draft/composer-shell-fixture-desktop.png`, `output/regression-7420/p1-android-dictation-draft/composer-shell-fixture-phone.png`, and `output/regression-7420/p1-android-dictation-draft/composer-shell-fixture-foldable.png`.
+
+### Feature: Thread-store session metadata read failure containment
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- A thread may reference a malformed or legacy session jsonl that App Server reports as `thread-store internal error` or `does not start with session metadata`.
+
+#### Steps
+1. Run `npm.cmd run verify:server-modules`.
+2. Run `npm.cmd run build`.
+3. Restart 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+4. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -CaptureScreenshots -ScreenshotTaskName p1-thread-store-read-error`.
+5. Open the affected thread on mobile and confirm the status card does not show the local `C:\Users\SW\.codex\sessions\...jsonl` path or internal thread-store read error.
+
+#### Expected Results
+- Server-side runtime snapshots treat malformed session metadata read failures as recoverable thread-read failures, using cache or degraded snapshot behavior instead of throwing to the page.
+- Frontend selected-thread refresh treats the same error as recoverable and does not set the global sync error.
+- Browser regression fails if any checked page exposes `thread-store internal error`, `does not start with session metadata`, or a `failed to read thread C:\...` local path.
+
+#### Rollback/Cleanup Notes
+- Screenshot artifacts are saved under `output/regression-7420/p1-thread-store-read-error/` when `-CaptureScreenshots` is used.
+- To roll back, revert `src/server/appServerRpcErrors.ts`, `src/composables/useDesktopState.ts`, `scripts/server-module-smoke.ts`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-06 diff whitespace check: `git diff --check` passed.
+- 2026-07-06 server module verification: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; the smoke now covers `does not start with session metadata` and `thread-store internal error: failed to read thread` as recoverable thread-read failures.
+- 2026-07-06 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
+- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 31768 on version `2.2.8`; `/health` returned ok.
+- 2026-07-06 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -CaptureScreenshots -ScreenshotTaskName p1-thread-store-read-error` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, desktop/phone/foldable `conversation-blocks-fixture`, and the target `thread-phone` page; every page asserted that internal thread-store read errors were not exposed.
+- 2026-07-06 service log evidence: the malformed `019f27ae-0ecd-7c50-9701-8ec003e66447` session read is logged server-side as `Heavy thread snapshot unavailable with no cache`, confirming the error is contained as a degraded snapshot instead of being thrown to the UI.
+- 2026-07-06 screenshot artifact: `output/regression-7420/p1-thread-store-read-error/thread-phone.png`.

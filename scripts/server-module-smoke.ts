@@ -3614,6 +3614,8 @@ function smokeAppServerRpcErrors(): void {
   assert.equal(isThreadMaterializingError(new Error('includeTurns is unavailable before first user message')), true)
   assert.equal(isThreadMaterializingError(new Error('no rollout found for thread id')), true)
   assert.equal(isThreadMaterializingError(new Error('rollout is empty')), true)
+  assert.equal(isThreadMaterializingError(new Error('failed to read thread C:\\Users\\SW\\.codex\\sessions\\2026\\07\\03\\rollout.jsonl: rollout at C:\\Users\\SW\\.codex\\sessions\\2026\\07\\03\\rollout.jsonl does not start with session metadata')), true)
+  assert.equal(isThreadMaterializingError(new Error('thread-store internal error: failed to read thread C:\\Users\\SW\\.codex\\sessions\\broken.jsonl')), true)
   assert.equal(isThreadMaterializingError(new Error('permission denied')), false)
 
   const timeout = createRpcTimeoutError('thread/read', 30_000)
