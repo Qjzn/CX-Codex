@@ -136,6 +136,7 @@ $requiredFiles = @(
   "docs/app-server-protocol-matrix.zh-CN.md",
   "docs/openai-docs-review.zh-CN.md",
   "docs/release-readiness-audit.zh-CN.md",
+  "docs/candidate-release-review.zh-CN.md",
   "docs/changelog.zh-CN.md",
   "docs/roadmap.zh-CN.md",
   "docs/operations-plan.zh-CN.md",
@@ -199,6 +200,8 @@ Assert-ContentIncludes "README.md" @(
   "docs/security-hardening.zh-CN.md",
   "docs/app-server-protocol-matrix.zh-CN.md",
   "docs/openai-docs-review.zh-CN.md",
+  "docs/candidate-release-review.zh-CN.md",
+  "drift-recorded",
   "docs/dependency-maintenance.zh-CN.md",
   "CODE_OF_CONDUCT.md",
   "SECURITY.md",
@@ -242,6 +245,8 @@ Assert-ContentIncludes "docs/openai-docs-review.zh-CN.md" @(
   "不能被宣传为默认稳定能力",
   "不能展示原始非法 URL",
   "不能直接声明已经对齐最新 App Server 协议",
+  "OpenAI Docs MCP",
+  "不适用于 Realtime API",
   "gpt-4o-transcribe-diarize",
   "diarized_json",
   "chunking_strategy=auto",
@@ -280,6 +285,7 @@ Assert-ContentIncludes "README.md" @(
 Assert-ContentIncludes "SECURITY.md" @(
   "docs/security-hardening.zh-CN.md",
   "App Server transport",
+  "experimental / unsupported",
   "sandbox / approval"
 )
 
@@ -292,6 +298,8 @@ Assert-ContentIncludes "RELEASE.md" @(
   "Release package smoke",
   "NPM package smoke",
   "npm pack --dry-run --json",
+  "docs/candidate-release-review.zh-CN.md",
+  "candidate-reviewed",
   "verify:release-artifacts",
   'zip / APK 与 `.sha256`',
   "docs/security-hardening.zh-CN.md",
@@ -336,6 +344,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "docs\operations-plan.zh-CN.md",
   "docs\protocol-compatibility.zh-CN.md",
   "docs\release-readiness-audit.zh-CN.md",
+  "docs\candidate-release-review.zh-CN.md",
   "docs\roadmap.zh-CN.md",
   "docs\security-hardening.zh-CN.md",
   "scripts\package-release.ps1",
@@ -590,6 +599,7 @@ Assert-ContentIncludes ".github/release-body.md" @(
   "docs/security-hardening.zh-CN.md",
   "docs/openai-docs-review.zh-CN.md",
   "docs/app-server-protocol-matrix.zh-CN.md",
+  "docs/candidate-release-review.zh-CN.md",
   "CX-Codex-<tag>.zip",
   "cx-codex-android-<tag>.apk",
   "cx-codex-android-debug-<tag>.apk",
@@ -597,6 +607,7 @@ Assert-ContentIncludes ".github/release-body.md" @(
   "npm run package:release -- -Version <tag> -OutputDir <release-dir>",
   "npm run verify:release-artifacts -- -OutputDir <release-dir>",
   "npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn",
+  "candidate-reviewed rather than fully aligned",
   "must not include private accounts"
 )
 
@@ -694,6 +705,21 @@ Assert-ContentIncludes "docs/release-readiness-audit.zh-CN.md" @(
   "P2 安全敏感能力",
   "P3 实验能力",
   "不建议继续让当前长目标连续自动运行"
+)
+
+Assert-ContentIncludes "docs/candidate-release-review.zh-CN.md" @(
+  "Candidate Release Review",
+  "npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn",
+  "output/app-server-schema-audit/20260705-102346",
+  "drift-recorded",
+  "P0：候选发布前必须保持的稳定性保护",
+  "P1：下一轮应补齐的协议能力",
+  "P2：安全敏感能力，不能作为默认稳定入口",
+  "可以公开宣传",
+  "必须标注实验、只读诊断或未完成",
+  "不能直接宣布为最终公开稳定版",
+  "WebSocket transport 仍是 experimental and unsupported",
+  "gpt-4o-transcribe-diarize"
 )
 
 Assert-ContentIncludes "src/server/appServerMethodCatalog.ts" @(

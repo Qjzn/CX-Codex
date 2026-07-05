@@ -32,6 +32,7 @@
    - NPM package smoke 会执行 `npm pack --dry-run --json`，确认 npm 运行包只包含 Web/CLI 运行产物和必要文档，不携带源码、治理脚本或手工测试手册。
    - 只验证脚本路径或排查构建问题时，可临时加 `-SkipPackageSmoke`；正式发版验证不要跳过，因为它会同时跳过 Release package smoke 和 NPM package smoke。
    - `verify:release` 的治理门禁会校验 `docs/app-server-schema-audit-summary.json` 的结构；正式发版前如果重新审计发现计数变化，必须同步更新该摘要和 `docs/app-server-protocol-matrix.zh-CN.md`。
+   - 如果 `warn` 模式完成但输出 schema drift warning，本次只能视为 candidate-reviewed；正式宣传前必须对照 [docs/candidate-release-review.zh-CN.md](./docs/candidate-release-review.zh-CN.md) 明确哪些能力可公开宣传，哪些仍是实验、只读诊断或未完成。
    - GitHub Actions Release workflow 默认执行 `-SchemaAudit skip`，因为 runner 不保证安装 Codex CLI；正式发版前应在维护者机器运行 `warn` 或 `strict` 并记录摘要。
    - 本地 `npm.cmd run verify:release` 会自动选择可用的 PowerShell：优先探测 `pwsh`，不可用、失败或挂起时回退到 Windows PowerShell，并把选中的命令复用于 release gate 内部调用。
    - CI / Release workflow 仍直接使用 GitHub runner 提供的 `pwsh` 调用 `.ps1` 脚本；本地 npm 脚本用于提升 Windows 机器上的验证稳定性。
@@ -39,6 +40,7 @@
 4. 安全边界复核：
 
    - 对照 [docs/security-hardening.zh-CN.md](./docs/security-hardening.zh-CN.md) 检查默认绑定地址、密码、远程访问、App Server transport、权限确认、语音转写 API key、日志和截图。
+   - 对照 [docs/candidate-release-review.zh-CN.md](./docs/candidate-release-review.zh-CN.md) 检查 README、Release 正文和安全声明，避免宣称完全对齐最新 App Server、完整插件市场、稳定 Realtime、默认文件系统写入或交互式终端能力。
    - 涉及远程访问、App Server transport、权限确认或转写代理的版本，Release 正文必须说明安全边界和回滚方式。
 
 5. 打包 Release：

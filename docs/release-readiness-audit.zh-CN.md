@@ -31,7 +31,7 @@
 - App Server schema drift 仍是 `drift-recorded`，不能声明完全对齐最新官方协议。
 - 本地 release gate 使用 `-SchemaAudit skip` 只是快速预检；正式发版前应运行 `-SchemaAudit warn` 或 `strict` 并记录结果。
 - Vite 仍有既有 large chunk warning，当前不是阻塞项，但需要作为后续前端性能任务处理。
-- OpenAI Docs MCP 已注册，但当前 Codex 线程重启前不会热加载 MCP 工具；后续官方文档复核应在新线程或重启后优先使用 MCP。
+- OpenAI Docs MCP 本轮后续已可用；候选发布审查已通过 MCP 复核 App Server protocol 与 Speech to text diarize 页面。
 
 ## Schema Drift 分组
 

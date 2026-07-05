@@ -24,6 +24,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 - 协议能力矩阵: [docs/app-server-protocol-matrix.zh-CN.md](./docs/app-server-protocol-matrix.zh-CN.md)
 - OpenAI 官方文档审查: [docs/openai-docs-review.zh-CN.md](./docs/openai-docs-review.zh-CN.md)
 - Release readiness 审计: [docs/release-readiness-audit.zh-CN.md](./docs/release-readiness-audit.zh-CN.md)
+- Candidate release 审查: [docs/candidate-release-review.zh-CN.md](./docs/candidate-release-review.zh-CN.md)
 - 远程访问方案: [docs/cloudflare-tunnel.zh-CN.md](./docs/cloudflare-tunnel.zh-CN.md)
 - 安全硬化清单: [docs/security-hardening.zh-CN.md](./docs/security-hardening.zh-CN.md)
 - 问题反馈前排查: [SUPPORT.md](./SUPPORT.md)
@@ -220,13 +221,13 @@ Cloudflare Tunnel 一条命令：
 - 消息收藏、置顶、复制和跳转
 - 本地文件链接、图片 / Markdown / PDF / DOCX 预览
 - GitHub 热门项目模块
-- MCP / 工具权限控制
+- MCP / 工具权限状态、审批边界和只读诊断
 - Windows bootstrap 和发布包
 - 健康检查、回归脚本和浸泡脚本
 
 ## 项目边界
 
-这个项目不是官方 Codex 替代品，也不是多用户 SaaS。当前优先级是：
+这个项目不是官方 Codex 替代品，也不是多用户 SaaS。当前已有 App Server schema audit 和兼容矩阵，但仍处于 `drift-recorded` 状态，不能声明完全对齐最新 Codex App Server。当前优先级是：
 
 1. 本地 Codex 浏览器入口稳定。
 2. Android / 手机体验接近桌面端。
@@ -242,6 +243,7 @@ Cloudflare Tunnel 一条命令：
 - App Server 协议能力矩阵: [docs/app-server-protocol-matrix.zh-CN.md](./docs/app-server-protocol-matrix.zh-CN.md)
 - OpenAI 官方文档审查: [docs/openai-docs-review.zh-CN.md](./docs/openai-docs-review.zh-CN.md)
 - Release readiness 审计: [docs/release-readiness-audit.zh-CN.md](./docs/release-readiness-audit.zh-CN.md)
+- Candidate release 审查: [docs/candidate-release-review.zh-CN.md](./docs/candidate-release-review.zh-CN.md)
 - 路线图: [docs/roadmap.zh-CN.md](./docs/roadmap.zh-CN.md)
 - 运营规划: [docs/operations-plan.zh-CN.md](./docs/operations-plan.zh-CN.md)
 - 依赖维护手册: [docs/dependency-maintenance.zh-CN.md](./docs/dependency-maintenance.zh-CN.md)

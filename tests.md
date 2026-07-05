@@ -8118,3 +8118,45 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 build: `npm.cmd run build` passed, including `vue-tsc --noEmit`, Vite production build, and `tsup` CLI build; Vite still reports the existing large chunk warning.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+
+---
+
+### Feature: Candidate release review
+
+#### Prerequisites
+- Current repository includes `README.md`, `.github/release-body.md`, `RELEASE.md`, `SECURITY.md`, `docs/openai-docs-review.zh-CN.md`, `docs/app-server-protocol-matrix.zh-CN.md`, `docs/release-readiness-audit.zh-CN.md`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
+- OpenAI Docs MCP is available for official documentation lookup.
+- Codex CLI is installed and can run `codex app-server generate-ts` plus `codex app-server generate-json-schema`.
+- Working tree is clean before running the formal `-RequireCleanGit` release gate.
+
+#### Steps
+1. Run `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn`.
+2. Confirm the command completes successfully even when schema drift warnings are emitted in warn mode.
+3. Open `output/app-server-schema-audit/20260705-102346/audit-summary.json` and confirm the drift counts remain TypeScript root `236/77/15/174`, TypeScript v2 `199/445/260/14`, JSON root `37/35/5/7`, and JSON v2 `102/202/110/10`.
+4. Use OpenAI Docs MCP to fetch `https://developers.openai.com/codex/app-server#protocol` and confirm WebSocket transport is still experimental / unsupported and requires auth before remote exposure.
+5. Use OpenAI Docs MCP to fetch `https://developers.openai.com/api/docs/guides/speech-to-text#speaker-diarization` and confirm `gpt-4o-transcribe-diarize` requires `diarized_json`, needs `chunking_strategy` for long audio, and is not supported in Realtime API.
+6. Open `docs/candidate-release-review.zh-CN.md` and confirm it records formal release gate evidence, P0/P1/P2 schema drift tasks, public claims, and experimental/incomplete capabilities.
+7. Open `README.md`, `.github/release-body.md`, `RELEASE.md`, and `SECURITY.md` and confirm they do not claim full latest App Server alignment, complete plugin marketplace support, stable App Server Realtime, default fs write/remove/watch, interactive terminal stream, or complete permission-profile management.
+8. Run `git diff --check`.
+9. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+10. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+
+#### Expected Results
+- Formal release gate passes with `SchemaAudit: warn` and produces `output/app-server-schema-audit/20260705-102346`.
+- Schema drift remains `drift-recorded`, not `fully-aligned`.
+- Candidate release review clearly separates P0 stability protections, P1 protocol capabilities, and P2 security-sensitive capabilities.
+- README, Release body, release manual, and security policy keep public marketing claims conservative.
+- Governance gate fails if `docs/candidate-release-review.zh-CN.md` or its required release boundary text is removed.
+- Release package smoke fails if `docs/candidate-release-review.zh-CN.md` is missing from the source zip.
+
+#### Rollback/Cleanup Notes
+- Generated output under `output/app-server-schema-audit/20260705-102346` and `output/release-package-smoke/` can be deleted after review; do not commit raw generated schema output.
+- To roll back this review, remove `docs/candidate-release-review.zh-CN.md`, revert README / Release / SECURITY wording, remove governance/release package requirements for the candidate review document, and remove this test section.
+
+#### Regression Evidence
+- 2026-07-05 formal release gate: `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn` passed, including build, frontend normalizer smoke, server module smoke, CLI smoke, CLI CJS launcher smoke, release package smoke, NPM package smoke, and App Server schema audit warn.
+- 2026-07-05 schema audit output: `output/app-server-schema-audit/20260705-102346/audit-summary.json` was generated; schema drift warnings were expected and treated as review-required evidence.
+- 2026-07-05 OpenAI Docs MCP check: Codex App Server protocol page confirmed WebSocket transport remains experimental / unsupported and remote use needs WebSocket auth; Speech to text speaker diarization page confirmed `gpt-4o-transcribe-diarize`, `diarized_json`, `chunking_strategy`, and no Realtime API support for diarize.
+- 2026-07-05 static verification: `git diff --check` passed.
+- 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
+- 2026-07-05 package-level release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`

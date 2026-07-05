@@ -10,7 +10,7 @@
 
 - 不要把服务无密码暴露到公网。
 - 公网访问建议放在 Cloudflare Tunnel、Tailscale、VPN、反向代理鉴权或其他受控入口之后。
-- Codex App Server transport 不应直接裸露到公网；如需 WebSocket transport，必须使用官方支持的 WebSocket auth 或受控内网/SSH/VPN 边界。
+- Codex App Server transport 不应直接裸露到公网；官方 WebSocket transport 仍是 experimental / unsupported，若必须使用，必须配置官方支持的 WebSocket auth 或受控内网/SSH/VPN 边界。
 - CX-Codex 不应绕过 Codex sandbox / approval 语义；权限确认、工具调用和远程访问能力必须保持用户可见边界。
 - 不要在 Issue、日志或截图里泄露密码、Token、Cookie、私有 IP、个人目录和业务文件内容。
 - 如果使用 `--host 0.0.0.0`，请确认防火墙、端口映射和访问密码符合预期。
