@@ -8,10 +8,10 @@
 
 - 候选分支：`codex/candidate-release-review`
 - 对比基线：`origin/main`
-- 提交数量：210
-- 变更规模：156 files changed，33262 insertions，6416 deletions
+- 提交数量：以 `git rev-list --count origin/main..HEAD` 为准；本 review pack 创建时为 211。
+- 变更规模：以 `git diff --shortstat origin/main..HEAD` 为准；本 review pack 创建时为 157 files changed，33533 insertions，6416 deletions。
 - 首个候选提交：`c11af9b Add App Server schema audit workflow`
-- 最新候选提交：`ba1d903 docs-add-candidate-release-review`
+- 当前 review pack 提交：`a1f5e20 docs-add-candidate-pr-review-pack`
 - 当前状态：适合进入 candidate PR / review pack；不建议直接宣称最终公开稳定版。
 
 主题统计：
@@ -204,3 +204,25 @@ Acceptance checklist:
 如果要走 GitHub PR，建议先推送候选分支，再使用上方 PR 正文草稿。不要把 `output/app-server-schema-audit/` 原始生成目录提交进 PR。
 
 纯文本校验句：不要把 output/app-server-schema-audit/ 原始生成目录提交进 PR。
+
+## 远程 PR 准备命令
+
+以下命令仅作为维护者手动执行清单；本 review pack 不代表已经推送远程分支或创建 GitHub PR。
+
+推送候选分支：
+
+```powershell
+git push -u origin codex/candidate-release-review
+```
+
+创建 PR 时，复制本文“PR 正文草稿”部分作为正文；如果使用 GitHub CLI，可先把正文整理到临时文件再执行：
+
+```powershell
+gh pr create --base main --head codex/candidate-release-review --title "Prepare CX-Codex candidate release review and App Server governance" --body-file <pr-body.md>
+```
+
+远程 PR 创建前最后确认：
+
+- `git status --short --branch` 是 clean。
+- `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn` 已在维护者机器跑通或明确记录最新一次 warn 输出。
+- Release 正文只描述 candidate-reviewed / drift-recorded，不宣称 fully aligned。

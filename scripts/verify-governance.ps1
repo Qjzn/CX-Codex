@@ -736,6 +736,8 @@ Assert-ContentIncludes "docs/candidate-pr-review-pack.zh-CN.md" @(
   "P1: Design controlled support",
   "P2: Define security design",
   "candidate-reviewed rather than fully aligned",
+  "git push -u origin codex/candidate-release-review",
+  "gh pr create --base main --head codex/candidate-release-review",
   "git merge --no-ff codex/candidate-release-review",
   "不要把 `output/app-server-schema-audit/` 原始生成目录提交进 PR"
 )

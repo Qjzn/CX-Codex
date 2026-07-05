@@ -8177,16 +8177,18 @@ This file tracks manual regression and feature verification steps.
 4. Confirm the document includes the branch snapshot, PR title draft, PR body draft, candidate release notes draft, review checklist, schema drift P0/P1/P2 issue list, and local main merge / PR preparation notes.
 5. Confirm the PR body draft records release gate evidence, schema drift counts, public claims, and do-not-claim boundaries.
 6. Confirm the issue list includes separate P0 stability, P1 protocol completion, and P2 security-sensitive capability issues with acceptance checklists.
-7. Confirm `README.md` links `docs/candidate-pr-review-pack.zh-CN.md`.
-8. Confirm `scripts/verify-governance.ps1` requires the review pack file and key review pack phrases.
-9. Confirm `scripts/verify-release.ps1` requires `docs\candidate-pr-review-pack.zh-CN.md` in the release zip.
-10. Run `git diff --check`.
-11. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
-12. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
+7. Confirm the remote PR preparation section includes `git push -u origin codex/candidate-release-review` and a `gh pr create --base main --head codex/candidate-release-review` template, while making clear those commands are not already executed.
+8. Confirm `README.md` links `docs/candidate-pr-review-pack.zh-CN.md`.
+9. Confirm `scripts/verify-governance.ps1` requires the review pack file and key review pack phrases.
+10. Confirm `scripts/verify-release.ps1` requires `docs\candidate-pr-review-pack.zh-CN.md` in the release zip.
+11. Run `git diff --check`.
+12. Run `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1`.
+13. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
 
 #### Expected Results
 - Candidate branch exists and is named with the repository default `codex/` prefix.
 - Review pack is copy-paste ready for PR preparation and candidate release review.
+- Remote PR preparation commands are documented but not executed unless a maintainer explicitly chooses to push/create PR.
 - P0/P1/P2 schema drift follow-up work is represented as actionable issue drafts.
 - README and release package smoke expose the review pack as a maintained artifact.
 - Governance fails if the review pack or its key evidence/boundary text is removed.
@@ -8201,3 +8203,4 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Using PowerShell: pwsh (7.5.5)` and `Governance docs check passed.`
 - 2026-07-05 package-level release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with `frontend normalizer smoke ok`, `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
+- 2026-07-05 PR preparation update: review pack was revised to make dynamic branch counts command-derived and to document remote push / `gh pr create` commands without executing them.
