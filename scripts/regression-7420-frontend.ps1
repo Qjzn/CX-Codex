@@ -550,7 +550,7 @@ JSON.stringify((() => {
     url: location.href,
     text: text.includes('Runtime Store') ? 'Runtime Store' : '',
     textLength: text.length,
-    hasInternalCodexContext: text.includes('<codex_internal_context'),
+    hasInternalCodexContext: /<codex_internal_context\s+source=/i.test(text),
     hasInternalThreadReadError: /thread-store internal error|failed to read thread\s+[A-Za-z]:\\/i.test(text),
     hasBlankBody: text.length < 5 && !hasComposer && !hasSkillsHub && !hasTrendingHub && !hasRuntimeBar && !hasDiagnosticsPanel && !hasMarkdownBody,
     hasComposer,
@@ -1548,6 +1548,13 @@ JSON.stringify((() => {
   const firstScreenDesktopAppStatusCount = resources
     .filter((entry) => entry.startTime <= 1500 && entry.name === '/codex-api/desktop-app/status')
     .length;
+  const visibleConversationItems = Array.from(document.querySelectorAll('.conversation-item[data-role]'));
+  const visibleUserMessageCount = visibleConversationItems
+    .filter((node) => node.getAttribute('data-role') === 'user')
+    .length;
+  const visibleAssistantMessageCount = visibleConversationItems
+    .filter((node) => node.getAttribute('data-role') === 'assistant')
+    .length;
   return {
     apiCount: resources.length,
     stateThreadRequestCount: countByPath(statePath),
@@ -1556,6 +1563,8 @@ JSON.stringify((() => {
     firstScreenProjectRootSuggestionMaxDuplicateCount,
     firstScreenWorkspaceRootsStateCount,
     firstScreenDesktopAppStatusCount,
+    visibleUserMessageCount,
+    visibleAssistantMessageCount,
     totalTransferSize: resources.reduce((sum, entry) => sum + entry.transferSize, 0),
     slowRequestCount: resources.filter((entry) => entry.duration >= 1500).length,
   };
@@ -1577,6 +1586,8 @@ function Assert-ThreadPageLoadMetrics {
   Assert-True ([int]$Metrics.firstScreenProjectRootSuggestionMaxDuplicateCount -le 1) "thread page repeated the same project-root-suggestion request $($Metrics.firstScreenProjectRootSuggestionMaxDuplicateCount) times during first-screen load for $ThreadId"
   Assert-True ([int]$Metrics.firstScreenWorkspaceRootsStateCount -le 1) "thread page loaded workspace-roots-state $($Metrics.firstScreenWorkspaceRootsStateCount) times during first-screen load for $ThreadId"
   Assert-True ([int]$Metrics.firstScreenDesktopAppStatusCount -eq 0) "thread page loaded desktop-app/status during first-screen load for $ThreadId"
+  Assert-True ([int]$Metrics.visibleUserMessageCount -ge 1) "thread page first visible window has no user context for $ThreadId"
+  Assert-True ([int]$Metrics.visibleAssistantMessageCount -ge 1) "thread page first visible window has no assistant response for $ThreadId"
 }
 
 function Add-RegressionResult {

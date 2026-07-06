@@ -19,6 +19,35 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Backfill visible user context in latest conversation window
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` at a phone viewport.
+2. Wait about 3 seconds and inspect the visible conversation window.
+3. Confirm the visible window contains either a real user message or a lightweight previous-user context preview, and at least one Codex/assistant response.
+4. Confirm the page still does not expose an actual internal context block such as `<codex_internal_context source=...>`.
+5. Confirm entering the thread does not trigger `/codex-api/rpc` `thread/list` during the first visible-window check.
+6. Run `npm.cmd run build`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+8. Run `npm.cmd run verify:server-modules`.
+9. Run `npm.cmd run verify:frontend-normalizers`.
+10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+11. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- The latest conversation window is no longer assistant-only when a previous user message can provide context.
+- Context backfill uses a lightweight preview when the previous user message is too far away, so it does not expand the full history.
+- The frontend regression fails if the real thread first visible window lacks either user context or an assistant response.
+- The real thread remains nonblank, keeps the correct title, and does not show internal context.
+
+#### Rollback/Cleanup
+- To roll back, revert `src/components/content/ThreadConversation.vue`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
 ### Feature: Hide internal Codex context messages from conversation UI
 
 #### Prerequisites

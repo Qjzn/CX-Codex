@@ -421,6 +421,23 @@
         </button>
       </li>
       <li
+        v-if="visibleContextPreview"
+        class="conversation-item conversation-item-context-preview"
+        data-role="user"
+        data-message-type="contextPreview"
+      >
+        <div class="message-row" data-role="user" data-message-type="contextPreview">
+          <div class="message-stack" data-role="user">
+            <p class="message-eyebrow" data-role="user">{{ visibleContextPreview.label }}</p>
+            <article class="message-body" data-role="user">
+              <article class="message-card message-card-context-preview" data-role="user">
+                <p class="message-text">{{ visibleContextPreview.text }}</p>
+              </article>
+            </article>
+          </div>
+        </div>
+      </li>
+      <li
         v-if="virtualTopSpacerHeight > 0"
         class="conversation-spacer"
         aria-hidden="true"
@@ -1263,6 +1280,7 @@ const props = defineProps<{
 }>()
 
 const MESSAGE_WINDOW_SIZE = 10
+const MESSAGE_WINDOW_CONTEXT_BACKFILL_LIMIT = 24
 const RECENT_DERIVED_UI_MESSAGE_LIMIT = 120
 const REACTIVE_WATCH_MESSAGE_LIMIT = RECENT_DERIVED_UI_MESSAGE_LIMIT * 2
 const PREPARED_MESSAGE_BLOCK_CACHE_LIMIT = 80
@@ -1299,7 +1317,17 @@ function latestVisibleStartIndex(messages: UiMessage[]): number {
     if (latestTurnStart < messageCount) break
   }
 
-  return Math.min(latestWindowStart, latestTurnStart)
+  const windowStart = Math.min(latestWindowStart, latestTurnStart)
+  if (messages.slice(windowStart).some((message) => message.role === 'user')) {
+    return windowStart
+  }
+
+  const contextSearchStart = Math.max(windowStart - MESSAGE_WINDOW_CONTEXT_BACKFILL_LIMIT, 0)
+  for (let index = windowStart - 1; index >= contextSearchStart; index -= 1) {
+    if (messages[index]?.role === 'user') return index
+  }
+
+  return windowStart
 }
 
 function readTurnIndex(message: UiMessage): number | null {
@@ -1344,16 +1372,17 @@ function isGuidedAssistantMessage(message: UiMessage): boolean {
   )
 }
 
+function isInternalCodexContextMessage(message: UiMessage): boolean {
+  if (message.role !== 'user') return false
+  const text = message.text.trim()
+  return /^<codex_internal_context\b/iu.test(text) && /<\/codex_internal_context>\s*$/iu.test(text)
+}
+
 function shouldSuppressConversationMessage(message: UiMessage): boolean {
   if (message.messageType === 'worked') return true
 
   const messageType = message.messageType?.trim() ?? ''
-  const text = message.text.trim()
-  if (
-    message.role === 'user' &&
-    /^<codex_internal_context\b/iu.test(text) &&
-    /<\/codex_internal_context>\s*$/iu.test(text)
-  ) {
+  if (isInternalCodexContextMessage(message)) {
     return true
   }
 
@@ -1384,6 +1413,11 @@ type GuidedSummaryEntry = {
   measureId: string
   turnIndex: number
   hiddenCount: number
+}
+
+type ContextPreviewEntry = {
+  label: string
+  text: string
 }
 
 type ConversationRenderEntry = ConversationMessageEntry | GuidedSummaryEntry
@@ -1492,6 +1526,48 @@ const hiddenGuidedMessageTurnIndexById = computed<Record<string, number>>(() => 
     }
   }
   return next
+})
+
+function compactContextPreviewText(text: string): string {
+  const normalized = text.replace(/\s+/gu, ' ').trim()
+  if (normalized.length <= 140) return normalized
+  return `${normalized.slice(0, 140)}...`
+}
+
+const visibleContextPreview = computed<ContextPreviewEntry | null>(() => {
+  const visibleMessages = visibleRenderableMessages.value
+  const renderedMessageEntries = virtualizedMessages.value.filter((entry): entry is ConversationMessageEntry => entry.kind === 'message')
+  const hasRenderedUserContent = renderedMessageEntries.some((entry) => (
+    entry.message.role === 'user' &&
+    (
+      entry.message.text.trim().length > 0 ||
+      (entry.message.images?.length ?? 0) > 0 ||
+      (entry.message.fileAttachments?.length ?? 0) > 0
+    )
+  ))
+  if (visibleMessages.length === 0 || hasRenderedUserContent) return null
+
+  const firstRenderedMessageIndex = renderedMessageEntries[0]?.messageIndex ?? visibleMessages.length
+  const firstRenderedAbsoluteIndex = visibleMessageStartIndex.value + firstRenderedMessageIndex
+  for (let index = firstRenderedAbsoluteIndex - 1; index >= 0; index -= 1) {
+    const message = renderableMessages.value[index]
+    if (message?.role !== 'user') continue
+    const text = compactContextPreviewText(message.text)
+    if (!text) continue
+    return {
+      label: '折叠上下文',
+      text,
+    }
+  }
+
+  if (hasHiddenEarlierMessages.value) {
+    return {
+      label: '当前任务',
+      text: '持续目标自动推进中，相关上下文已折叠。',
+    }
+  }
+
+  return null
 })
 
 function isGuidedTurnExpanded(turnIndex: number): boolean {
@@ -6150,6 +6226,11 @@ onBeforeUnmount(() => {
   border-radius: var(--ui-radius-card);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-row-active);
+}
+
+.message-card-context-preview[data-role='user'] {
+  opacity: 0.78;
+  border-style: dashed;
 }
 
 .message-card[data-role='assistant'] {
