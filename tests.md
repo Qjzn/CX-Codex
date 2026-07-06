@@ -10460,3 +10460,40 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
+### Feature: Filter fileChange before message normalization
+
+#### Prerequisites
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- The frontend normalizer smoke can run through `npm.cmd run verify:frontend-normalizers`.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+
+#### Steps
+1. Open or synthesize a thread payload that includes App Server `fileChange` turn items.
+2. Normalize the payload with `normalizeThreadMessagesV2()`.
+3. Confirm `fileChange` items do not produce `unhandled.fileChange` messages and do not leave large raw payload text in normalized messages.
+4. Confirm other unknown App Server items still produce structured `unhandled.<type>` raw payload fallback messages.
+5. Run `npm.cmd run build`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Run `npm.cmd run verify:frontend-normalizers`.
+8. Run `npm.cmd run verify:server-modules`.
+9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- `fileChange` items are filtered in `src/api/normalizers/v2.ts` before raw payload serialization.
+- The existing unknown-item fallback remains intact for unsupported useful App Server item types.
+- Long mobile thread detail loads have less normalized-message and raw JSON payload pressure when tasks generate many file change events.
+- The real `分析项目` phone thread page and conversation fixture remain nonblank.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/api/normalizers/v2.ts`, `scripts/verify-frontend-normalizers.mjs`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement before fix: `fileChange` items were eventually hidden by `ThreadConversation.vue`, but `normalizeThreadMessagesV2()` still converted them into `unhandled.fileChange` messages and serialized the full item into `rawPayload` first.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`; the smoke now asserts `fileChange` does not produce `unhandled.fileChange` or retain the synthetic raw patch marker, while another unknown item still keeps raw payload fallback.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `54540`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.

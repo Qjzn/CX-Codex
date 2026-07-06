@@ -43,6 +43,15 @@ const messages = normalizeThreadMessagesV2({
             durationMs: 123,
           },
           {
+            id: 'item-file-change',
+            type: 'fileChange',
+            changes: Array.from({ length: 4 }, (_, index) => ({
+              path: \`src/generated-\${index}.ts\`,
+              status: 'modified',
+              diff: 'large internal patch details',
+            })),
+          },
+          {
             id: 'item-new',
             type: 'threadShellCommandOutput',
             command: 'secret command',
@@ -65,6 +74,8 @@ assert.equal(messages[1]?.turnIndex, 0)
 assert.equal(messages[1]?.rawPayload?.includes('secret command'), true)
 assert.equal(messages[2]?.messageType, 'unhandled.invalidItem')
 assert.equal(messages[2]?.isUnhandled, true)
+assert.equal(messages.some((message) => message.messageType === 'unhandled.fileChange'), false)
+assert.equal(messages.some((message) => message.rawPayload?.includes('large internal patch details')), false)
 
 const unloadedTurnMessages = normalizeThreadMessagesV2({
   thread: {
