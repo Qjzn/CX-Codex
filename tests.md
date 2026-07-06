@@ -58,6 +58,46 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
 
+### Feature: Defer selected thread skills after first background window
+
+#### Prerequisites
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- A browser context can open the thread route at phone width and capture `/codex-api/rpc` requests.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` at phone width.
+2. Capture `/codex-api/rpc` requests for the first 5 seconds after navigation.
+3. Confirm the thread title and message cards render without a selected cwd `skills/list` request.
+4. Continue capturing until at least 9 seconds after navigation.
+5. Confirm the selected cwd `skills/list` runs as delayed background work if the same thread is still selected.
+6. Confirm skills changed notifications and explicit skill-center refresh paths still use their existing immediate or short-debounce refresh behavior.
+7. Run `npm.cmd run build`.
+8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+9. Run `npm.cmd run verify:server-modules`.
+10. Run `npm.cmd run verify:frontend-normalizers`.
+11. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+12. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- The real `分析项目` thread page remains nonblank and usable at phone width.
+- Selected cwd `skills/list` no longer runs in the first 5 seconds of real thread entry.
+- The selected cwd skills refresh still happens later as background work for the active thread.
+- Sidebar data and real thread browser regression continue to pass.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/composables/useDesktopState.ts`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement before fix: phone-width open of the real `分析项目` thread rendered content, but selected cwd `skills/list` still appeared in the first 5 second request window.
+- 2026-07-07 measurement after fix: phone-width open of the same real thread rendered `分析项目` with visible message cards; the first 5 second RPC window contained only `thread/list`, and selected cwd `skills/list` appeared later in the background window.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `55128`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
 ### Feature: Defer model preferences past thread first screen
 
 #### Prerequisites
