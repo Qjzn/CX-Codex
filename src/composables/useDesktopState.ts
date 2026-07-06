@@ -148,7 +148,7 @@ const THREAD_MESSAGE_CACHE_MAX_THREADS = 12
 const THREAD_MESSAGE_CACHE_MAX_MESSAGES_PER_THREAD = 40
 const THREAD_MESSAGE_CACHE_TEXT_LIMIT = 12_000
 const THREAD_MESSAGE_CACHE_COMMAND_OUTPUT_LIMIT = 8_000
-const THREAD_LIST_CACHED_BACKGROUND_DELAY_MS = 3600
+const THREAD_LIST_CACHED_BACKGROUND_DELAY_MS = 9500
 const EVENT_SYNC_DEBOUNCE_MS = 350
 const BACKGROUND_SYNC_INTERVAL_MS = 9000
 const ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS = 12000
@@ -3856,7 +3856,7 @@ export function useDesktopState() {
   }
 
   function shouldRefreshThreadListForActiveBoost(now = Date.now()): boolean {
-    if (!hasLoadedThreads.value) return true
+    if (!hasLoadedThreads.value) return !selectedThreadId.value
     if (pendingThreadsRefresh) return true
     return !selectedThreadId.value && now - lastThreadListSyncAtMs >= ACTIVE_SYNC_THREAD_LIST_INTERVAL_MS
   }
@@ -7422,7 +7422,7 @@ export function useDesktopState() {
                 return
               }
               runForegroundRecoverySync({
-                includeThreadList: !hasLoadedThreads.value || pendingThreadsRefresh,
+                includeThreadList: pendingThreadsRefresh || (!activeThreadId && !hasLoadedThreads.value),
                 forceMessageRefresh: true,
                 urgent: true,
               })

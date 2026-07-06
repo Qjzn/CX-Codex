@@ -954,6 +954,7 @@ const MOBILE_SHELL_BRAND_NAME = 'CX-Codex'
 const MOBILE_SHELL_BRANDING_LOGO_URL = '/branding/cx-codex-logo.png'
 const CONTEXT_RING_RADIUS = 16
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS
+const THREAD_ROUTE_BACKGROUND_REFRESH_DELAY_MS = 6500
 const DEFAULT_WEB_BRIDGE_SETTINGS: WebBridgeSettings = {
   permissions: {
     allowAllPermissionRequests: false,
@@ -3874,6 +3875,20 @@ function rememberRoutableThreadId(threadId: string): void {
   routeWarmThreadIds.value = [...routeWarmThreadIds.value, normalized]
 }
 
+function readStartupRouteThreadId(): string {
+  const normalizedRouteThreadId = routeThreadId.value.trim()
+  if (normalizedRouteThreadId) return normalizedRouteThreadId
+  if (typeof window === 'undefined') return ''
+  const hashPath = window.location.hash.replace(/^#/u, '')
+  const match = hashPath.match(/^\/thread\/([^/?#]+)/u)
+  if (!match) return ''
+  try {
+    return decodeURIComponent(match[1]).trim()
+  } catch {
+    return match[1].trim()
+  }
+}
+
 async function initializeRuntime(): Promise<void> {
   if (isMobileShellAvailable.value) {
     await refreshMobileShellServerConfig()
@@ -3901,6 +3916,23 @@ function scheduleInitialBackgroundTasks(): void {
 }
 
 async function initialize(): Promise<void> {
+  const startupThreadId = isThreadRouteLike.value ? readStartupRouteThreadId() : ''
+  if (startupThreadId) {
+    hasInitialized.value = true
+    rememberRoutableThreadId(startupThreadId)
+    await selectThread(startupThreadId)
+    queueDelayedIdleTask(() => {
+      void refreshAll({
+        loadMessages: false,
+        loadSkills: false,
+        deferModelPreferences: true,
+        deferThreadListNetworkIfCached: true,
+      })
+    }, THREAD_ROUTE_BACKGROUND_REFRESH_DELAY_MS, 1200)
+    startPolling()
+    return
+  }
+
   await refreshAll({
     loadMessages: false,
     loadSkills: false,
