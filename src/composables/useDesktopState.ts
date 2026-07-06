@@ -148,6 +148,7 @@ const THREAD_MESSAGE_CACHE_MAX_THREADS = 12
 const THREAD_MESSAGE_CACHE_MAX_MESSAGES_PER_THREAD = 40
 const THREAD_MESSAGE_CACHE_TEXT_LIMIT = 12_000
 const THREAD_MESSAGE_CACHE_COMMAND_OUTPUT_LIMIT = 8_000
+const THREAD_LIST_CACHED_BACKGROUND_DELAY_MS = 3600
 const EVENT_SYNC_DEBOUNCE_MS = 350
 const BACKGROUND_SYNC_INTERVAL_MS = 9000
 const ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS = 12000
@@ -1639,6 +1640,7 @@ export function useDesktopState() {
   let composerPluginsRefreshTimer: number | null = null
   let skillsChangedRefreshTimer: number | null = null
   let selectedThreadSkillsRefreshTimer: number | null = null
+  let cachedThreadListRefreshTimer: number | null = null
   let rateLimitRefreshPromise: Promise<void> | null = null
   let lastRateLimitRefreshStartedAtMs = 0
   const resumePromiseByThreadId = new Map<string, Promise<void>>()
@@ -5389,7 +5391,13 @@ export function useDesktopState() {
     return true
   }
 
-  function scheduleCachedThreadListRefresh(options: { signal?: AbortSignal; preserveMissingSelected?: boolean } = {}): void {
+  function clearCachedThreadListRefreshTimer(): void {
+    if (cachedThreadListRefreshTimer === null || typeof window === 'undefined') return
+    window.clearTimeout(cachedThreadListRefreshTimer)
+    cachedThreadListRefreshTimer = null
+  }
+
+  function runCachedThreadListRefresh(options: { signal?: AbortSignal; preserveMissingSelected?: boolean } = {}): void {
     if (cachedThreadListRefreshInFlight) return
 
     cachedThreadListRefreshInFlight = loadThreads({
@@ -5406,6 +5414,19 @@ export function useDesktopState() {
       .finally(() => {
         cachedThreadListRefreshInFlight = null
       })
+  }
+
+  function scheduleCachedThreadListRefresh(options: { signal?: AbortSignal; preserveMissingSelected?: boolean } = {}): void {
+    if (cachedThreadListRefreshInFlight || cachedThreadListRefreshTimer !== null) return
+    if (typeof window === 'undefined') {
+      runCachedThreadListRefresh(options)
+      return
+    }
+
+    cachedThreadListRefreshTimer = window.setTimeout(() => {
+      cachedThreadListRefreshTimer = null
+      runCachedThreadListRefresh(options)
+    }, THREAD_LIST_CACHED_BACKGROUND_DELAY_MS)
   }
 
   async function loadThreads(
@@ -5425,6 +5446,8 @@ export function useDesktopState() {
       scheduleCachedThreadListRefresh({ signal: options.signal, preserveMissingSelected: true })
       return
     }
+
+    clearCachedThreadListRefreshTimer()
 
     if (!hasLoadedThreads.value) {
       isLoadingThreads.value = true
@@ -7538,6 +7561,7 @@ export function useDesktopState() {
     pendingTurnStartsById.clear()
     clearNonFreshThreadDetailRetries()
     clearEventSyncTimer()
+    clearCachedThreadListRefreshTimer()
     abortCurrentSync()
     isPolling.value = false
     if (rateLimitRefreshTimer !== null && typeof window !== 'undefined') {
