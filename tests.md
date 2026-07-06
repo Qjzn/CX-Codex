@@ -116,6 +116,27 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - To roll back, revert `src/server/appServerSessionLogThreadRead.ts`, `scripts/server-module-smoke.ts`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
 
+### Feature: Thread detail first usable performance gate
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+
+#### Steps
+1. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+2. In the `thread-phone` phase, confirm the script opens the real phone route.
+3. Confirm the script waits for both visible user context and visible Codex/assistant response before checking settled request counts.
+4. Confirm the route still passes the 9 second settle checks for duplicate state/runtime/token/root/status requests.
+
+#### Expected Results
+- The real thread becomes usable within 12 seconds, where usable means at least one user-context row and one Codex/assistant row are visible.
+- The settled request-count checks still pass after the first usable content appears.
+- The same run continues into the repeated `继续查看更多` bounded-progress assertions.
+
+#### Rollback/Cleanup
+- To roll back, revert `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
 ### Feature: Backfill visible user context in latest conversation window
 
 #### Prerequisites

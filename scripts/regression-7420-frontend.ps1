@@ -1605,6 +1605,9 @@ function Assert-ThreadPageLoadMetrics {
     [string]$ThreadId
   )
 
+  if ($null -ne $Metrics.firstUsableMs) {
+    Assert-True ([int]$Metrics.firstUsableMs -le 12000) "thread page first usable content took $($Metrics.firstUsableMs)ms for $ThreadId; expected <= 12000ms"
+  }
   Assert-True ([int]$Metrics.stateThreadRequestCount -le 8) "thread page loaded $($Metrics.stateThreadRequestCount) state snapshots for $ThreadId; expected no more than 8 during initial settle"
   Assert-True ([int]$Metrics.runtimeThreadRequestCount -le 8) "thread page loaded $($Metrics.runtimeThreadRequestCount) runtime snapshots for $ThreadId; expected no more than 8 during initial settle"
   Assert-True ([int]$Metrics.tokenUsageRequestCount -le 1) "thread page loaded $($Metrics.tokenUsageRequestCount) token usage snapshots for $ThreadId; expected at most 1 throttled background read during initial settle"
@@ -1613,6 +1616,29 @@ function Assert-ThreadPageLoadMetrics {
   Assert-True ([int]$Metrics.firstScreenDesktopAppStatusCount -eq 0) "thread page loaded desktop-app/status during first-screen load for $ThreadId"
   Assert-True ([int]$Metrics.visibleUserMessageCount -ge 1) "thread page first visible window has no user context for $ThreadId"
   Assert-True ([int]$Metrics.visibleAssistantMessageCount -ge 1) "thread page first visible window has no assistant response for $ThreadId"
+}
+
+function Wait-ThreadUsableMetrics {
+  param(
+    [string]$Session,
+    [string]$ThreadId,
+    [Diagnostics.Stopwatch]$Stopwatch,
+    [int]$TimeoutMs = 12000
+  )
+
+  $lastMetrics = $null
+  while ($Stopwatch.ElapsedMilliseconds -le $TimeoutMs) {
+    $lastMetrics = Read-ThreadPageLoadMetrics -Session $Session -ThreadId $ThreadId
+    if ([int]$lastMetrics.visibleUserMessageCount -ge 1 -and [int]$lastMetrics.visibleAssistantMessageCount -ge 1) {
+      $lastMetrics | Add-Member -NotePropertyName "firstUsableMs" -NotePropertyValue ([int]$Stopwatch.ElapsedMilliseconds) -Force
+      return $lastMetrics
+    }
+    Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "250") | Out-Null
+  }
+
+  $lastUserCount = if ($null -ne $lastMetrics) { [int]$lastMetrics.visibleUserMessageCount } else { 0 }
+  $lastAssistantCount = if ($null -ne $lastMetrics) { [int]$lastMetrics.visibleAssistantMessageCount } else { 0 }
+  throw "thread page did not become usable within ${TimeoutMs}ms for $ThreadId; userCount=$lastUserCount assistantCount=$lastAssistantCount"
 }
 
 function Read-ThreadWindowMetrics {
@@ -1847,10 +1873,16 @@ try {
   Add-RegressionResult -Name "conversation-blocks-fixture-foldable" -Page $fixtureFoldable
 
   if (-not [string]::IsNullOrWhiteSpace($ThreadId)) {
+    $threadLoadStopwatch = [Diagnostics.Stopwatch]::StartNew()
     $thread = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/thread/$ThreadId" -Width $PhoneWidth -Height $PhoneHeight
     Assert-Page -Page $thread -Name "thread phone" -RequireComposer
-    Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "9000") | Out-Null
+    $threadUsableMetrics = Wait-ThreadUsableMetrics -Session $session -ThreadId $ThreadId -Stopwatch $threadLoadStopwatch
+    $remainingSettleMs = [Math]::Max(0, 9000 - [int]$threadLoadStopwatch.ElapsedMilliseconds)
+    if ($remainingSettleMs -gt 0) {
+      Invoke-AgentBrowser -Arguments @("--session", $session, "wait", ([string]$remainingSettleMs)) | Out-Null
+    }
     $threadPageLoadMetrics = Read-ThreadPageLoadMetrics -Session $session -ThreadId $ThreadId
+    $threadPageLoadMetrics | Add-Member -NotePropertyName "firstUsableMs" -NotePropertyValue ([int]$threadUsableMetrics.firstUsableMs) -Force
     Assert-ThreadPageLoadMetrics -Metrics $threadPageLoadMetrics -ThreadId $ThreadId
     Assert-ThreadLoadMoreWindow -Session $session -ThreadId $ThreadId
     Add-RegressionResult -Name "thread-phone" -Page $thread
