@@ -52,6 +52,16 @@ type ThreadDetailOptions = RpcCallOptions & {
   beforeTurnIndex?: number
   turnLimit?: number
 }
+type ProjectRootSuggestion = { name: string; path: string }
+type CachedProjectRootSuggestion = {
+  value: ProjectRootSuggestion
+  cachedAtMs: number
+}
+
+const PROJECT_ROOT_SUGGESTION_CACHE_TTL_MS = 2000
+const projectRootSuggestionCacheByBasePath = new Map<string, CachedProjectRootSuggestion>()
+const projectRootSuggestionInFlightByBasePath = new Map<string, Promise<ProjectRootSuggestion>>()
+let projectRootSuggestionCacheGeneration = 0
 
 export type RuntimeExecutionState =
   | 'idle'
@@ -1378,6 +1388,7 @@ export async function createWorktree(sourceCwd: string): Promise<WorktreeCreateR
   if (!response.ok || !payload.data) {
     throw new Error(payload.error || 'Failed to create worktree')
   }
+  clearProjectRootSuggestionCache()
   return {
     ...payload.data,
     cwd: normalizePathForUi(payload.data.cwd),
@@ -1473,10 +1484,45 @@ export async function openProjectRoot(path: string, options?: { createIfMissing?
       ? (record.data as Record<string, unknown>)
       : {}
   const normalizedPath = typeof data.path === 'string' ? normalizePathForUi(data.path) : ''
+  if (normalizedPath) {
+    clearProjectRootSuggestionCache()
+  }
   return normalizedPath
 }
 
-export async function getProjectRootSuggestion(basePath: string): Promise<{ name: string; path: string }> {
+export async function getProjectRootSuggestion(basePath: string): Promise<ProjectRootSuggestion> {
+  const normalizedBasePath = normalizePathForUi(basePath).trim()
+  if (!normalizedBasePath) {
+    return { name: '', path: '' }
+  }
+
+  const cached = projectRootSuggestionCacheByBasePath.get(normalizedBasePath)
+  if (cached && Date.now() - cached.cachedAtMs < PROJECT_ROOT_SUGGESTION_CACHE_TTL_MS) {
+    return cached.value
+  }
+
+  const inFlight = projectRootSuggestionInFlightByBasePath.get(normalizedBasePath)
+  if (inFlight) return await inFlight
+
+  const cacheGeneration = projectRootSuggestionCacheGeneration
+  const request = fetchProjectRootSuggestion(normalizedBasePath)
+    .then((suggestion) => {
+      if (projectRootSuggestionCacheGeneration === cacheGeneration) {
+        projectRootSuggestionCacheByBasePath.set(normalizedBasePath, {
+          value: suggestion,
+          cachedAtMs: Date.now(),
+        })
+      }
+      return suggestion
+    })
+    .finally(() => {
+      projectRootSuggestionInFlightByBasePath.delete(normalizedBasePath)
+    })
+  projectRootSuggestionInFlightByBasePath.set(normalizedBasePath, request)
+  return await request
+}
+
+async function fetchProjectRootSuggestion(basePath: string): Promise<ProjectRootSuggestion> {
   const query = new URLSearchParams({ basePath })
   const response = await fetchWithTimeout(`/codex-api/project-root-suggestion?${query.toString()}`, {}, {
     label: 'Project root suggestion request',
@@ -1498,6 +1544,12 @@ export async function getProjectRootSuggestion(basePath: string): Promise<{ name
     name: typeof data.name === 'string' ? data.name.trim() : '',
     path: typeof data.path === 'string' ? normalizePathForUi(data.path) : '',
   }
+}
+
+function clearProjectRootSuggestionCache(): void {
+  projectRootSuggestionCacheGeneration += 1
+  projectRootSuggestionCacheByBasePath.clear()
+  projectRootSuggestionInFlightByBasePath.clear()
 }
 
 export async function searchComposerFiles(cwd: string, query: string, limit = 20): Promise<ComposerFileSuggestion[]> {

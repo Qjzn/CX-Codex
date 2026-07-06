@@ -1530,11 +1530,20 @@ JSON.stringify((() => {
   const runtimePath = `/codex-api/runtime/thread/${encodeURIComponent(threadId)}`;
   const tokenPath = `/codex-api/thread-token-usage?threadId=${encodeURIComponent(threadId)}`;
   const countByPath = (path) => resources.filter((entry) => entry.name === path).length;
+  const firstScreenProjectRootSuggestionCounts = resources
+    .filter((entry) => entry.startTime <= 1500 && entry.name.startsWith('/codex-api/project-root-suggestion?'))
+    .reduce((counts, entry) => {
+      counts[entry.name] = (counts[entry.name] || 0) + 1;
+      return counts;
+    }, {});
+  const firstScreenProjectRootSuggestionMaxDuplicateCount = Object.values(firstScreenProjectRootSuggestionCounts)
+    .reduce((max, count) => Math.max(max, count), 0);
   return {
     apiCount: resources.length,
     stateThreadRequestCount: countByPath(statePath),
     runtimeThreadRequestCount: countByPath(runtimePath),
     tokenUsageRequestCount: countByPath(tokenPath),
+    firstScreenProjectRootSuggestionMaxDuplicateCount,
     totalTransferSize: resources.reduce((sum, entry) => sum + entry.transferSize, 0),
     slowRequestCount: resources.filter((entry) => entry.duration >= 1500).length,
   };
@@ -1553,6 +1562,7 @@ function Assert-ThreadPageLoadMetrics {
   Assert-True ([int]$Metrics.stateThreadRequestCount -le 8) "thread page loaded $($Metrics.stateThreadRequestCount) state snapshots for $ThreadId; expected no more than 8 during initial settle"
   Assert-True ([int]$Metrics.runtimeThreadRequestCount -le 8) "thread page loaded $($Metrics.runtimeThreadRequestCount) runtime snapshots for $ThreadId; expected no more than 8 during initial settle"
   Assert-True ([int]$Metrics.tokenUsageRequestCount -le 1) "thread page loaded $($Metrics.tokenUsageRequestCount) token usage snapshots for $ThreadId; expected at most 1 throttled background read during initial settle"
+  Assert-True ([int]$Metrics.firstScreenProjectRootSuggestionMaxDuplicateCount -le 1) "thread page repeated the same project-root-suggestion request $($Metrics.firstScreenProjectRootSuggestionMaxDuplicateCount) times during first-screen load for $ThreadId"
 }
 
 function Add-RegressionResult {

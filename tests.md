@@ -10200,6 +10200,45 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
 
+### Feature: Deduplicate first-screen project root suggestions
+
+#### Prerequisites
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- Browser automation can open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447`.
+
+#### Steps
+1. Open the real `分析项目` thread on a phone viewport.
+2. Inspect `performance.getEntriesByType('resource')` during the first 1.2-1.5 seconds after navigation.
+3. Confirm duplicate `/codex-api/project-root-suggestion?basePath=<same path>` requests are collapsed to a single request during first-screen load.
+4. Confirm `getProjectRootSuggestion()` reuses the same in-flight promise for the same normalized `basePath`.
+5. Confirm successful `openProjectRoot()` and `createWorktree()` clear the short suggestion cache.
+6. Run `npm.cmd run build`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+8. Run `npm.cmd run verify:frontend-normalizers`.
+9. Run `npm.cmd run verify:server-modules`.
+10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+11. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- The same project-root suggestion URL is requested at most once during first-screen thread load.
+- New project default-name suggestions remain available after the initial screen settles.
+- Opening or creating a project root clears the short suggestion cache so newly used project names are not held stale.
+- The real `分析项目` phone thread page and conversation fixture remain nonblank.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/api/codexGateway.ts`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement before fix: opening the real `分析项目` phone thread page produced `7` identical `/codex-api/project-root-suggestion?basePath=E%3A%5Cjavaword` requests within `1200ms`.
+- 2026-07-07 post-fix measurement: after rebuilding and restarting local 7420, the same phone thread page produced `1` `/codex-api/project-root-suggestion?basePath=E%3A%5Cjavaword` request within `1200ms`.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; npm also printed a non-fatal update-check permission warning after exit code `0`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `60560`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, the real phone thread page, and the new first-screen project-root-suggestion duplicate assertion.
+
 ### Feature: Defer thread token usage refresh after first screen
 
 #### Prerequisites
