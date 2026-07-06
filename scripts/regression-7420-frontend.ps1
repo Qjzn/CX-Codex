@@ -1559,6 +1559,9 @@ JSON.stringify((() => {
   const runtimePath = `/codex-api/runtime/thread/${encodeURIComponent(threadId)}`;
   const tokenPath = `/codex-api/thread-token-usage?threadId=${encodeURIComponent(threadId)}`;
   const countByPath = (path) => resources.filter((entry) => entry.name === path).length;
+  const earlyRpcRequestCount = resources
+    .filter((entry) => entry.startTime <= 650 && entry.name === '/codex-api/rpc')
+    .length;
   const firstScreenProjectRootSuggestionCounts = resources
     .filter((entry) => entry.startTime <= 1500 && entry.name.startsWith('/codex-api/project-root-suggestion?'))
     .reduce((counts, entry) => {
@@ -1582,6 +1585,7 @@ JSON.stringify((() => {
     .length;
   return {
     apiCount: resources.length,
+    earlyRpcRequestCount,
     stateThreadRequestCount: countByPath(statePath),
     runtimeThreadRequestCount: countByPath(runtimePath),
     tokenUsageRequestCount: countByPath(tokenPath),
@@ -1608,6 +1612,7 @@ function Assert-ThreadPageLoadMetrics {
   if ($null -ne $Metrics.firstUsableMs) {
     Assert-True ([int]$Metrics.firstUsableMs -le 12000) "thread page first usable content took $($Metrics.firstUsableMs)ms for $ThreadId; expected <= 12000ms"
   }
+  Assert-True ([int]$Metrics.earlyRpcRequestCount -le 1) "thread page issued $($Metrics.earlyRpcRequestCount) early RPC requests for $ThreadId; expected cache-first first screen to avoid duplicate RPC within 650ms"
   Assert-True ([int]$Metrics.stateThreadRequestCount -le 8) "thread page loaded $($Metrics.stateThreadRequestCount) state snapshots for $ThreadId; expected no more than 8 during initial settle"
   Assert-True ([int]$Metrics.runtimeThreadRequestCount -le 8) "thread page loaded $($Metrics.runtimeThreadRequestCount) runtime snapshots for $ThreadId; expected no more than 8 during initial settle"
   Assert-True ([int]$Metrics.tokenUsageRequestCount -le 1) "thread page loaded $($Metrics.tokenUsageRequestCount) token usage snapshots for $ThreadId; expected at most 1 throttled background read during initial settle"

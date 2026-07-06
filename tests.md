@@ -160,6 +160,29 @@ This file tracks manual regression and feature verification steps.
 - To roll back, revert `src/composables/useDesktopState.ts`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
 - To clear only local message snapshots during manual testing, remove `codex-web-local.thread-message-cache.v1` from localStorage.
 
+### Feature: Defer non-urgent cached thread refresh
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- The browser has a message cache entry for the target thread, or the first run is allowed to create one.
+
+#### Steps
+1. Open the target thread once and wait for the first usable content.
+2. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+3. In the `thread-phone` phase, confirm the first usable content still appears within 12 seconds.
+4. Confirm early `/codex-api/rpc` count is at most one in the first 650ms of the real thread page.
+5. Confirm the 9 second settle checks and repeated `继续查看更多` checks still pass.
+
+#### Expected Results
+- Cached thread selection renders the local message snapshot before non-urgent background refresh competes for the first screen.
+- Non-urgent cached refresh waits briefly; running/stale/sync-lagging/explicit refresh cases still refresh immediately.
+- The real phone-thread regression allows at most one early RPC and still catches up after settle.
+
+#### Rollback/Cleanup
+- To roll back, revert `src/composables/useDesktopState.ts`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
 ### Feature: Backfill visible user context in latest conversation window
 
 #### Prerequisites

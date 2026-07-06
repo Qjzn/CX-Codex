@@ -155,6 +155,7 @@ const ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS = 12000
 const ACTIVE_THREAD_DETAIL_SYNC_IDLE_MS = 18000
 const FOREGROUND_RECOVERY_DETAIL_REFRESH_MIN_INTERVAL_MS = ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS
 const THREAD_SELECTION_RECOVERY_SUPPRESS_MS = 5000
+const THREAD_SELECTION_CACHED_REFRESH_DELAY_MS = 650
 const ACTIVE_SYNC_BOOST_INTERVAL_MS = 2500
 const ACTIVE_SYNC_BOOST_WINDOW_MS = 18000
 const RESUME_SYNC_RETRY_DELAYS_MS = [0, 1200, 4500, 12000]
@@ -6101,7 +6102,25 @@ export function useDesktopState() {
 
       completeThreadSelection()
       if (shouldRefreshInBackground) {
-        void runThreadLoad(true)
+        const shouldRefreshImmediately =
+          pendingThreadMessageRefresh.has(normalizedThreadId) ||
+          notificationStale.value ||
+          syncLagging.value ||
+          isThreadExecutionActive(normalizedThreadId)
+        if (hydratedFromCache && !shouldRefreshImmediately && typeof window !== 'undefined') {
+          window.setTimeout(() => {
+            if (
+              threadSelectionAbortController !== abortController ||
+              abortController.signal.aborted ||
+              selectedThreadId.value !== normalizedThreadId
+            ) {
+              return
+            }
+            void runThreadLoad(true)
+          }, THREAD_SELECTION_CACHED_REFRESH_DELAY_MS)
+        } else {
+          void runThreadLoad(true)
+        }
       } else if (threadSelectionAbortController === abortController) {
         threadSelectionAbortController = null
       }
