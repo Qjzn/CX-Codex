@@ -1192,6 +1192,7 @@ const {
   availableComposerPlugins,
   isLoadingComposerPlugins,
   accountRateLimitSnapshots,
+  threadTitleById,
   messages,
   isLoadingThreads,
   isLoadingMessages,
@@ -1203,6 +1204,7 @@ const {
   syncLagging,
   syncError,
   refreshAll,
+  loadThreadTitleCache,
   refreshSelectedThreadContent,
   loadOlderHistoryForSelectedThread,
   refreshSkills,
@@ -1561,13 +1563,24 @@ const isRouteOnlyEmptyThread = computed(() => (
   && filteredMessages.value.length === 0
   && selectedThreadServerRequests.value.length === 0
 ))
+const routeThreadCachedTitle = computed(() => {
+  if (route.name !== 'thread' || selectedThread.value) return ''
+  const threadId = routeThreadId.value.trim()
+  if (!threadId) return ''
+  return threadTitleById.value[threadId]?.trim() ?? ''
+})
+function isInternalThreadTitleCandidate(line: string): boolean {
+  return /^<codex_internal_context\b/iu.test(line.trim())
+}
 const routeThreadFallbackTitle = computed(() => {
   if (route.name !== 'thread' || selectedThread.value) return ''
+  const cachedTitle = routeThreadCachedTitle.value
+  if (cachedTitle) return cachedTitle
   const userMessage = messages.value.find((message) => message.role === 'user' && message.text.trim())
   const firstLine = userMessage?.text
     .split('\n')
     .map((line) => line.trim())
-    .find((line) => line.length > 0) ?? ''
+    .find((line) => line.length > 0 && !isInternalThreadTitleCandidate(line)) ?? ''
   return firstLine ? firstLine.slice(0, 48) : ''
 })
 const contentTitle = computed(() => {
@@ -1585,7 +1598,7 @@ const browserHostName =
     : 'cx-codex'
 const pageTitle = computed(() => {
   const threadTitle = selectedThread.value?.title?.trim() ?? ''
-  return threadTitle || browserHostName
+  return threadTitle || routeThreadCachedTitle.value || browserHostName
 })
 const headerSubtitle = computed(() => {
   if (isWorkbenchRoute.value) return '集中查看状态、复用项目配置，并一键发起标准化任务。'
@@ -1706,6 +1719,7 @@ const threadById = computed<Record<string, UiThread>>(() => {
 const displayedThreadTitle = computed(() => (
   threadById.value[displayedThreadConversationId.value]?.title
   ?? selectedThread.value?.title
+  ?? routeThreadCachedTitle.value
   ?? ''
 ))
 const hasActiveSyncDemand = computed(() => {
@@ -3920,6 +3934,7 @@ async function initialize(): Promise<void> {
   if (startupThreadId) {
     hasInitialized.value = true
     rememberRoutableThreadId(startupThreadId)
+    void loadThreadTitleCache()
     await selectThread(startupThreadId)
     queueDelayedIdleTask(() => {
       void refreshAll({

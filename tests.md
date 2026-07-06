@@ -19,6 +19,37 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Use cached title for route-only thread header
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- Browser request capture can inspect `/codex-api/rpc` calls during startup.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` at a 390x844 phone viewport.
+2. Wait about 2.5 seconds and inspect the header title.
+3. Confirm visible content is from the target conversation, not an empty page.
+4. Capture `/codex-api/rpc` requests for the first 5 seconds after navigation.
+5. Confirm no `thread/list` RPC runs in the first 5 seconds.
+6. Run `npm.cmd run build`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+8. Run `npm.cmd run verify:server-modules`.
+9. Run `npm.cmd run verify:frontend-normalizers`.
+10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+11. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- The route-only thread header shows `分析项目` from the lightweight title cache instead of the first message fallback.
+- Internal context such as `<codex_internal_context ...>` never appears as the visible title.
+- The current thread content still renders before the delayed full thread-list refresh.
+- The first 5 second `/codex-api/rpc` window does not include `thread/list`.
+- The 7420 sidebar and frontend regression gates still pass with the required `分析项目` thread.
+
+#### Rollback/Cleanup
+- To roll back, revert `src/App.vue`, `src/composables/useDesktopState.ts`, `docs/changelog.zh-CN.md`, and this test section.
+
 ### Feature: Defer startup model preference refresh after first screen
 
 #### Prerequisites
