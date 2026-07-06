@@ -74,20 +74,47 @@ This file tracks manual regression and feature verification steps.
 3. Record visible conversation item count, scrollTop, and scrollHeight.
 4. Click `继续查看更多`.
 5. Wait about 1.4 seconds.
-6. Confirm visible items increased by a small bounded amount, not a full-history expansion.
-7. Confirm visible user context and Codex response are still present.
-8. Confirm scrollTop shifted roughly with scrollHeight so the reading anchor remains stable.
-9. Treat unrelated background `thread/list` refreshes as allowed; the load-more assertion is based on bounded DOM reveal and scroll stability.
-10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+6. Click `继续查看更多` again.
+7. Wait about 1.4 seconds.
+8. Confirm each step increases visible items or decreases the `剩余 N 条` counter by a small bounded amount, not a full-history expansion.
+9. Confirm visible user context and Codex response are still present after each step.
+10. Confirm scrollTop shifted roughly with scrollHeight so the reading anchor remains stable after each step.
+11. Treat unrelated background `thread/list` refreshes as allowed; the load-more assertion is based on bounded DOM reveal and scroll stability.
+12. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
 
 #### Expected Results
-- `继续查看更多` reveals only a bounded local window of earlier rendered items.
+- `继续查看更多` advances only a bounded local window of earlier rendered items; virtualized DOM may reuse rows, so `剩余 N 条` decreasing is also valid progress.
 - The visible window remains useful: at least one user-context item and one Codex/assistant item.
 - If the currently loaded server slice contains no ordinary user message after internal context is hidden, a lightweight `当前任务` context preview remains visible after load-more.
+- Repeating load-more twice on the real `分析项目` phone thread keeps each reveal bounded and preserves the reading anchor.
 - The reading anchor remains stable enough that the page does not jump unexpectedly.
 
 #### Rollback/Cleanup
 - To roll back, revert `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
+### Feature: Large session-log fallback history recovery
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+
+#### Steps
+1. Run `npm.cmd run verify:server-modules`.
+2. Restart 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+3. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` at a phone viewport.
+4. Wait until the route background refresh has settled.
+5. Confirm the recovered conversation is not limited to only the current run's assistant status messages.
+6. Confirm `继续查看更多` is visible when the recovered fallback history has more than one visible window.
+7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Server smoke confirms response message lines are parsed while reasoning/compaction lines are skipped.
+- Large fallback sessions retain up to 40 recent turns before frontend trimming.
+- The browser shows a usable latest window and can reveal earlier recovered messages through bounded `继续查看更多` steps.
+
+#### Rollback/Cleanup
+- To roll back, revert `src/server/appServerSessionLogThreadRead.ts`, `scripts/server-module-smoke.ts`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
 
 ### Feature: Backfill visible user context in latest conversation window
 

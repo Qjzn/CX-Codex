@@ -1626,9 +1626,12 @@ JSON.stringify((() => {
   const items = Array.from(document.querySelectorAll('.conversation-item[data-role]'));
   const roleCount = (role) => items.filter((node) => node.getAttribute('data-role') === role).length;
   const loadButton = document.querySelector('.conversation-load-more-button');
+  const loadText = loadButton?.textContent?.replace(/\s+/g, ' ').trim() || '';
+  const remainingMatch = loadText.match(/剩余\s+(\d+)\s+条/);
   return {
     hasLoadMore: !!loadButton,
-    loadText: loadButton?.textContent?.trim() || '',
+    loadText,
+    hiddenRemaining: remainingMatch ? Number(remainingMatch[1]) : null,
     itemCount: items.length,
     userCount: roleCount('user'),
     assistantCount: roleCount('assistant'),
@@ -1660,27 +1663,38 @@ JSON.stringify((() => {
 function Assert-ThreadLoadMoreWindow {
   param(
     [string]$Session,
-    [string]$ThreadId
+    [string]$ThreadId,
+    [int]$Iterations = 2
   )
 
-  $before = Read-ThreadWindowMetrics -Session $Session
-  Assert-True ($before.hasLoadMore -eq $true) "thread page has no load-more affordance for $ThreadId"
-  $clickResult = Click-ThreadLoadMore -Session $Session
-  Assert-True ($clickResult.clicked -eq $true) "thread page load-more click did not execute for $ThreadId"
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "1400") | Out-Null
-  $after = Read-ThreadWindowMetrics -Session $Session
+  $totalItemDelta = 0
+  for ($step = 1; $step -le $Iterations; $step++) {
+    $before = Read-ThreadWindowMetrics -Session $Session
+    Assert-True ($before.hasLoadMore -eq $true) "thread page has no load-more affordance before step $step for $ThreadId"
+    $clickResult = Click-ThreadLoadMore -Session $Session
+    Assert-True ($clickResult.clicked -eq $true) "thread page load-more click did not execute at step $step for $ThreadId"
+    Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "1400") | Out-Null
+    $after = Read-ThreadWindowMetrics -Session $Session
 
-  $itemDelta = [int]$after.itemCount - [int]$before.itemCount
-  $heightDelta = [int]$after.scrollHeight - [int]$before.scrollHeight
-  $scrollDelta = [int]$after.scrollTop - [int]$before.scrollTop
-  $anchorDrift = [Math]::Abs($scrollDelta - $heightDelta)
+    $itemDelta = [int]$after.itemCount - [int]$before.itemCount
+    $remainingDelta = 0
+    if ($null -ne $before.hiddenRemaining -and $null -ne $after.hiddenRemaining) {
+      $remainingDelta = [int]$before.hiddenRemaining - [int]$after.hiddenRemaining
+    }
+    $progressDelta = [Math]::Max($itemDelta, $remainingDelta)
+    $heightDelta = [int]$after.scrollHeight - [int]$before.scrollHeight
+    $scrollDelta = [int]$after.scrollTop - [int]$before.scrollTop
+    $anchorDrift = [Math]::Abs($scrollDelta - $heightDelta)
+    $totalItemDelta += $progressDelta
 
-  Assert-True ($after.hasInternalCodexContext -ne $true) "thread page exposed internal codex context after load-more for $ThreadId"
-  Assert-True ([int]$after.userCount -ge 1) "thread page has no user context after load-more for $ThreadId"
-  Assert-True ([int]$after.assistantCount -ge 1) "thread page has no assistant response after load-more for $ThreadId"
-  Assert-True ($itemDelta -ge 1) "thread page load-more did not reveal additional items for $ThreadId"
-  Assert-True ($itemDelta -le 16) "thread page load-more revealed too many items for $ThreadId; delta=$itemDelta"
-  Assert-True ($anchorDrift -le 180) "thread page load-more shifted reading anchor too much for $ThreadId; drift=$anchorDrift"
+    Assert-True ($after.hasInternalCodexContext -ne $true) "thread page exposed internal codex context after load-more step $step for $ThreadId"
+    Assert-True ([int]$after.userCount -ge 1) "thread page has no user context after load-more step $step for $ThreadId"
+    Assert-True ([int]$after.assistantCount -ge 1) "thread page has no assistant response after load-more step $step for $ThreadId"
+    Assert-True ($progressDelta -ge 1) "thread page load-more step $step did not advance visible history for $ThreadId; beforeItems=$($before.itemCount), afterItems=$($after.itemCount), beforeRpc=$($before.rpcCount), afterRpc=$($after.rpcCount), beforeLoad='$($before.loadText)', afterLoad='$($after.loadText)'"
+    Assert-True ($progressDelta -le 16) "thread page load-more step $step advanced too much history for $ThreadId; delta=$progressDelta"
+    Assert-True ($anchorDrift -le 180) "thread page load-more step $step shifted reading anchor too much for $ThreadId; drift=$anchorDrift"
+  }
+  Assert-True ($totalItemDelta -le ($Iterations * 16)) "thread page repeated load-more revealed too many items for $ThreadId; totalDelta=$totalItemDelta"
 }
 
 function Add-RegressionResult {

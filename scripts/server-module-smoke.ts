@@ -8669,9 +8669,12 @@ function smokeAppServerRuntimeSnapshotPersistence(): void {
 async function smokeAppServerSessionLogThreadRead(): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'codex-session-log-thread-read-'))
   try {
-    assert.equal(isSessionLogThreadReadCandidateLine('{"type":"response_item","payload":{}}'), true)
+    assert.equal(isSessionLogThreadReadCandidateLine('{"type":"response_item","payload":{"type":"message","role":"user"}}'), true)
+    assert.equal(isSessionLogThreadReadCandidateLine('{"type":"response_item","payload":{}}'), false)
     assert.equal(isSessionLogThreadReadCandidateLine('{"type":"event_msg","payload":{}}'), true)
     assert.equal(isSessionLogThreadReadCandidateLine('{"type":"session_meta","payload":{}}'), true)
+    assert.equal(isSessionLogThreadReadCandidateLine('{"timestamp":"2026-07-06T10:00:00.000Z","type":"response_item","payload":{"type":"reasoning","encrypted_content":"x"}}'), false)
+    assert.equal(isSessionLogThreadReadCandidateLine('{"timestamp":"2026-07-06T10:00:00.000Z","type":"compaction","payload":{"text":"\\"type\\":\\"response_item\\",\\"role\\":\\"user\\""}}'), false)
     assert.equal(isSessionLogThreadReadCandidateLine('{"type":"fileChange","payload":{"path":"src/a.ts"}}'), false)
     assert.equal(isSessionLogThreadReadCandidateLine('{malformed'), false)
 
@@ -8847,6 +8850,55 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
     assert.equal(largeThreadRead?.thread.turns.length, 1)
     assert.equal(largeThreadRead?.thread.turns[0]?.items[0]?.content?.[0]?.text, 'Tail restore request')
     assert.equal(largeThreadRead?.thread.turns[0]?.items[1]?.text, 'Tail restored answer')
+
+    const longTailSessionPath = join(dir, 'rollout-2026-07-06T10-10-00-thread-long-tail-fallback.jsonl')
+    await writeFile(longTailSessionPath, [
+      'x'.repeat(2_100_000),
+      ...Array.from({ length: 45 }, (_, index) => [
+        JSON.stringify({
+          timestamp: `2026-07-06T10:10:${String(index).padStart(2, '0')}.000Z`,
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            id: `long-user-${String(index)}`,
+            role: 'user',
+            content: [{ type: 'input_text', text: `Tail request ${String(index)}` }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: `2026-07-06T10:10:${String(index).padStart(2, '0')}.500Z`,
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            id: `long-agent-${String(index)}`,
+            role: 'assistant',
+            content: [{ type: 'output_text', text: `Tail answer ${String(index)}` }],
+          },
+        }),
+      ]).flat(),
+    ].join('\n'), 'utf8')
+
+    const longTailThreadRead = await parseThreadReadFromSessionLog(longTailSessionPath, {
+      thread: {
+        id: 'thread-long-tail-fallback',
+        preview: '',
+        createdAt: 0,
+        updatedAt: 0,
+        path: longTailSessionPath,
+        cwd: 'E:/workspace/from-light-read',
+        turns: [],
+      },
+    }) as {
+      thread: {
+        id: string
+        turns: Array<{ items: Array<{ type: string; text?: string; content?: Array<{ text: string }> }> }>
+      }
+    } | null
+
+    assert.equal(longTailThreadRead?.thread.id, 'thread-long-tail-fallback')
+    assert.equal(longTailThreadRead?.thread.turns.length, 40)
+    assert.equal(longTailThreadRead?.thread.turns[0]?.items[0]?.content?.[0]?.text, 'Tail request 5')
+    assert.equal(longTailThreadRead?.thread.turns[39]?.items[1]?.text, 'Tail answer 44')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

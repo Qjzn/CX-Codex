@@ -2,10 +2,13 @@ import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 
-const FALLBACK_TURN_LIMIT = 10
+const FALLBACK_TURN_LIMIT = 40
 const FALLBACK_ITEM_TEXT_LIMIT = 20_000
-const FALLBACK_READ_BYTE_LIMIT = 2_000_000
+const FALLBACK_READ_BYTE_LIMIT = 24_000_000
 const FALLBACK_CACHE_LIMIT = 40
+const TOP_LEVEL_RESPONSE_ITEM_PATTERN = /^\s*\{(?:\s*"timestamp"\s*:\s*"[^"]*"\s*,)?\s*"type"\s*:\s*"response_item"/
+const TOP_LEVEL_EVENT_MESSAGE_PATTERN = /^\s*\{(?:\s*"timestamp"\s*:\s*"[^"]*"\s*,)?\s*"type"\s*:\s*"event_msg"/
+const TOP_LEVEL_SESSION_META_PATTERN = /^\s*\{(?:\s*"timestamp"\s*:\s*"[^"]*"\s*,)?\s*"type"\s*:\s*"session_meta"/
 
 type FallbackItem = {
   type: 'userMessage' | 'agentMessage'
@@ -28,11 +31,9 @@ type SessionLogThreadReadCacheState = {
 const sessionLogThreadReadCacheStateByPath = new Map<string, SessionLogThreadReadCacheState>()
 
 export function isSessionLogThreadReadCandidateLine(line: string): boolean {
-  return (
-    line.includes('"response_item"') ||
-    line.includes('"event_msg"') ||
-    line.includes('"session_meta"')
-  )
+  if (TOP_LEVEL_SESSION_META_PATTERN.test(line) || TOP_LEVEL_EVENT_MESSAGE_PATTERN.test(line)) return true
+  if (!TOP_LEVEL_RESPONSE_ITEM_PATTERN.test(line)) return false
+  return line.includes('"role":"user"') || line.includes('"role":"assistant"')
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
