@@ -157,6 +157,7 @@ const ACTIVE_SYNC_BOOST_WINDOW_MS = 18000
 const RESUME_SYNC_RETRY_DELAYS_MS = [0, 1200, 4500, 12000]
 const ANDROID_RESUME_SYNC_RETRY_DELAYS_MS = [0, 4500, 12000]
 const ANDROID_RESUME_SYNC_DEBOUNCE_MS = 2500
+const NON_FRESH_THREAD_DETAIL_RETRY_DELAYS_MS = [2500, 9000, 20000]
 const ACTIVE_SYNC_THREAD_LIST_INTERVAL_MS = 120000
 const ACTIVE_SYNC_STALE_MS = 14000
 const STALE_THREAD_ACTIVE_TURN_TTL_MS = 5 * 60 * 1000
@@ -1609,6 +1610,8 @@ export function useDesktopState() {
   const settledRuntimeMessageRefreshKeyByThreadId = new Map<string, string>()
   const settledRuntimeRpcRefreshKeyByThreadId = new Map<string, string>()
   const fallbackRetryInFlightThreadIds = new Set<string>()
+  const nonFreshThreadDetailRetryTimersByThreadId = new Map<string, number>()
+  const nonFreshThreadDetailRetryAttemptByThreadId = new Map<string, number>()
   let cachedThreadListRefreshInFlight: Promise<void> | null = null
   const isWorktreeGitAutomationEnabled = ref(true)
   const bufferedAgentDeltaByKey = new Map<string, BufferedAgentDelta>()
@@ -3675,6 +3678,44 @@ export function useDesktopState() {
     }
   }
 
+  function clearNonFreshThreadDetailRetry(threadId: string): void {
+    const retryTimer = nonFreshThreadDetailRetryTimersByThreadId.get(threadId)
+    if (typeof retryTimer !== 'number' || typeof window === 'undefined') {
+      nonFreshThreadDetailRetryTimersByThreadId.delete(threadId)
+      nonFreshThreadDetailRetryAttemptByThreadId.delete(threadId)
+      return
+    }
+    window.clearTimeout(retryTimer)
+    nonFreshThreadDetailRetryTimersByThreadId.delete(threadId)
+    nonFreshThreadDetailRetryAttemptByThreadId.delete(threadId)
+  }
+
+  function clearNonFreshThreadDetailRetries(): void {
+    if (typeof window !== 'undefined') {
+      for (const timer of nonFreshThreadDetailRetryTimersByThreadId.values()) {
+        window.clearTimeout(timer)
+      }
+    }
+    nonFreshThreadDetailRetryTimersByThreadId.clear()
+    nonFreshThreadDetailRetryAttemptByThreadId.clear()
+  }
+
+  function scheduleNonFreshThreadDetailRetry(threadId: string): void {
+    if (typeof window === 'undefined') return
+    if (!threadId || nonFreshThreadDetailRetryTimersByThreadId.has(threadId)) return
+    const attempt = nonFreshThreadDetailRetryAttemptByThreadId.get(threadId) ?? 0
+    const delayMs = NON_FRESH_THREAD_DETAIL_RETRY_DELAYS_MS[attempt]
+    if (typeof delayMs !== 'number') return
+    nonFreshThreadDetailRetryAttemptByThreadId.set(threadId, attempt + 1)
+    const retryTimer = window.setTimeout(() => {
+      nonFreshThreadDetailRetryTimersByThreadId.delete(threadId)
+      if (selectedThreadId.value !== threadId) return
+      pendingThreadMessageRefresh.add(threadId)
+      scheduleEventSync(0)
+    }, delayMs)
+    nonFreshThreadDetailRetryTimersByThreadId.set(threadId, retryTimer)
+  }
+
   function abortCurrentSync(): void {
     const controller = syncAbortController
     if (!controller) return
@@ -5454,6 +5495,11 @@ export function useDesktopState() {
         preserveMissing: shouldPreserveMissingMessages,
       })
       setPersistedMessagesForThread(threadId, mergedMessages)
+      if (snapshot.messageState === 'fresh') {
+        clearNonFreshThreadDetailRetry(threadId)
+      } else {
+        scheduleNonFreshThreadDetailRetry(threadId)
+      }
       if (inProgress && !snapshot.stale && hasPersistedRunningCommand(threadId)) {
         markThreadLiveExecutionSignal(threadId)
       }
@@ -7159,6 +7205,7 @@ export function useDesktopState() {
     pendingThreadsRefresh = false
     pendingThreadMessageRefresh.clear()
     pendingTurnStartsById.clear()
+    clearNonFreshThreadDetailRetries()
     clearEventSyncTimer()
     abortCurrentSync()
     isPolling.value = false
