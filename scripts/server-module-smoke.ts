@@ -124,6 +124,7 @@ import {
   createAppServerThreadRuntimeSnapshotReader,
   readAppServerThreadRuntimeSnapshot,
 } from '../src/server/appServerThreadRuntimeSnapshot.js'
+import { parseThreadReadFromSessionLog } from '../src/server/appServerSessionLogThreadRead.js'
 import { createAppServerRuntimeReaders } from '../src/server/appServerRuntimeReaders.js'
 import {
   AppServerThreadListAugmenter,
@@ -512,6 +513,7 @@ try {
   await smokeAppServerRuntimeReconciliation()
   smokeAppServerLocalRuntimeSnapshot()
   smokeAppServerRuntimeSnapshotRecovery()
+  await smokeAppServerSessionLogThreadRead()
   await smokeAppServerThreadRuntimeSnapshot()
   await smokeAppServerRuntimeReaders()
   smokeRuntimeStateStore()
@@ -2984,6 +2986,27 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
     method: 'thread/read',
     params: { threadId: 'pin-factory', includeTurns: false },
   }])
+
+  const timeoutAugmenter = new AppServerThreadListAugmenter({
+    ttlMs: 1_000,
+    maxReads: 4,
+    maxOutput: 4,
+    budgetMs: 20,
+    readTimeoutMs: 5,
+  })
+  const timeoutCalls: string[] = []
+  const timeoutResult = await timeoutAugmenter.augmentThreadListRpcResult({
+    params: { archived: false },
+    result: { data: [] },
+    readSupplementalThreadIds: async () => ['slow-a', 'slow-b'],
+    readThreadById: async (threadId) => {
+      timeoutCalls.push(threadId)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      return { thread: { id: threadId, title: `Slow ${threadId}` } }
+    },
+  }) as { data: Array<{ id: string; title?: string }> }
+  assert.deepEqual(timeoutCalls, ['slow-a'])
+  assert.deepEqual(timeoutResult.data, [])
 }
 
 function smokeAppServerThreadReadCache(): void {
@@ -6089,6 +6112,13 @@ async function smokeRpcProxyRoute(): Promise<void> {
       },
     },
     {
+      method: 'thread/read',
+      params: {
+        threadId: 'thread-fallback',
+        includeTurns: true,
+      },
+    },
+    {
       method: 'thread/unsubscribe',
       params: {
         threadId: 'thread-unsubscribe',
@@ -6104,6 +6134,7 @@ async function smokeRpcProxyRoute(): Promise<void> {
   const observedThreadUnsubscribeResponses: Array<{ threadId?: string; payload: unknown }> = []
   const augmentCalls: Array<{ params: unknown; result: unknown }> = []
   const searchClears: string[] = []
+  const sessionLogThreadReads: Array<{ sessionPath: string; fallbackThreadRead: unknown }> = []
   let turnStartAttempts = 0
 
   const dependencies: RpcProxyRouteDependencies = {
@@ -6118,6 +6149,12 @@ async function smokeRpcProxyRoute(): Promise<void> {
       if (method === 'turn/interrupt') throw new Error('no active turn')
       if (method === 'thread/resume') throw new Error('thread is not materialized yet')
       if (method === 'thread/list') return { data: [{ id: 'thread-a' }] }
+      if (method === 'thread/read' && readStringProperty(params, 'threadId') === 'thread-fallback') {
+        if (readBooleanProperty(params, 'includeTurns')) {
+          throw new Error('thread-store internal error: failed to read thread C:\\sessions\\thread-fallback.jsonl: rollout does not start with session metadata')
+        }
+        return { thread: { id: 'thread-fallback', path: 'C:/sessions/thread-fallback.jsonl' } }
+      }
       if (method === 'thread/read') return { thread: { id: 'thread-read', turns: readTurns }, other: true }
       if (method === 'thread/unsubscribe') return { status: 'notSubscribed' }
       throw new Error(`unexpected rpc method: ${method}`)
@@ -6137,6 +6174,16 @@ async function smokeRpcProxyRoute(): Promise<void> {
     observeThreadUnsubscribeResponse: (details) => observedThreadUnsubscribeResponses.push(details),
     deleteCachedThreadRead: (threadId) => deletedCachedThreadReads.push(threadId),
     rememberCachedThreadRead: (threadId, threadRead) => rememberedCachedThreadReads.push({ threadId, threadRead }),
+    readSessionLogThreadRead: async (sessionPath, fallbackThreadRead) => {
+      sessionLogThreadReads.push({ sessionPath, fallbackThreadRead })
+      return {
+        thread: {
+          id: 'thread-fallback',
+          path: sessionPath,
+          turns: [{ id: 'fallback-turn', items: [{ type: 'agentMessage', id: 'fallback-agent', text: 'Recovered' }] }],
+        },
+      }
+    },
     augmentThreadListRpcResult: async (params, result) => {
       augmentCalls.push({ params, result })
       return { augmented: true, result }
@@ -6226,6 +6273,23 @@ async function smokeRpcProxyRoute(): Promise<void> {
   assert.equal(threadReadResult.result.thread.turns.length, 10)
   assert.equal(threadReadResult.result.thread.turns[0].id, 'turn-2')
   assert.deepEqual(rememberedCachedThreadReads, [{ threadId: 'thread-read', threadRead: threadReadResult.result }])
+
+  const threadReadFallback = createRouteTestResponse()
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'POST' } as never,
+    threadReadFallback.response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
+    dependencies,
+  ), true)
+  const threadReadFallbackBody = JSON.parse(threadReadFallback.body) as {
+    result: { thread: { id: string; turns: Array<{ id: string }> } }
+    warning: string
+  }
+  assert.equal(threadReadFallbackBody.result.thread.id, 'thread-fallback')
+  assert.equal(threadReadFallbackBody.result.thread.turns[0]?.id, 'fallback-turn')
+  assert.equal(threadReadFallbackBody.warning, 'thread/read fell back to local session log messages')
+  assert.deepEqual(sessionLogThreadReads.map((read) => read.sessionPath), ['C:/sessions/thread-fallback.jsonl'])
+  assert.equal(rememberedCachedThreadReads[1]?.threadId, 'thread-fallback')
 
   const threadUnsubscribe = createRouteTestResponse()
   assert.equal(await handleRpcProxyRoute(
@@ -8421,6 +8485,125 @@ function smokeAppServerRuntimeSnapshotPersistence(): void {
   assert.equal((persisterUpserts[0] as { snapshot: ThreadRuntimeSnapshot }).snapshot.tokenUsage, null)
 }
 
+async function smokeAppServerSessionLogThreadRead(): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), 'codex-session-log-thread-read-'))
+  try {
+    const sessionPath = join(dir, 'rollout-2026-07-06T10-00-00-thread-fallback.jsonl')
+    await writeFile(sessionPath, [
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: 'thread-fallback',
+          cwd: 'E:/workspace/project',
+          timestamp: '2026-07-06T10:00:00.000Z',
+          source: 'vscode',
+        },
+      }),
+      '{malformed',
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:01.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'user-1',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Restore this session' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:02.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'agent_message',
+          message: 'Recovered answer',
+        },
+      }),
+    ].join('\n'), 'utf8')
+
+    const threadRead = await parseThreadReadFromSessionLog(sessionPath, {
+      thread: {
+        id: 'thread-fallback',
+        preview: '',
+        createdAt: 0,
+        updatedAt: 0,
+        path: sessionPath,
+        cwd: '',
+        turns: [],
+      },
+    }) as {
+      thread: {
+        id: string
+        cwd: string
+        preview: string
+        turns: Array<{ items: Array<{ type: string; text?: string; content?: Array<{ text: string }> }> }>
+      }
+    } | null
+
+    assert.equal(threadRead?.thread.id, 'thread-fallback')
+    assert.equal(threadRead?.thread.cwd, 'E:/workspace/project')
+    assert.equal(threadRead?.thread.preview, 'Restore this session')
+    assert.equal(threadRead?.thread.turns.length, 1)
+    assert.equal(threadRead?.thread.turns[0]?.items[0]?.type, 'userMessage')
+    assert.equal(threadRead?.thread.turns[0]?.items[0]?.content?.[0]?.text, 'Restore this session')
+    assert.equal(threadRead?.thread.turns[0]?.items[1]?.type, 'agentMessage')
+    assert.equal(threadRead?.thread.turns[0]?.items[1]?.text, 'Recovered answer')
+
+    const largeSessionPath = join(dir, 'rollout-2026-07-06T10-05-00-thread-large-fallback.jsonl')
+    await writeFile(largeSessionPath, [
+      'x'.repeat(2_100_000),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:05:01.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'large-user-1',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Tail restore request' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:05:02.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'large-agent-1',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Tail restored answer' }],
+        },
+      }),
+    ].join('\n'), 'utf8')
+
+    const largeThreadRead = await parseThreadReadFromSessionLog(largeSessionPath, {
+      thread: {
+        id: 'thread-large-fallback',
+        preview: '',
+        createdAt: 0,
+        updatedAt: 0,
+        path: largeSessionPath,
+        cwd: 'E:/workspace/from-light-read',
+        turns: [],
+      },
+    }) as {
+      thread: {
+        id: string
+        cwd: string
+        preview: string
+        turns: Array<{ items: Array<{ type: string; text?: string; content?: Array<{ text: string }> }> }>
+      }
+    } | null
+
+    assert.equal(largeThreadRead?.thread.id, 'thread-large-fallback')
+    assert.equal(largeThreadRead?.thread.cwd, 'E:/workspace/from-light-read')
+    assert.equal(largeThreadRead?.thread.preview, 'Tail restore request')
+    assert.equal(largeThreadRead?.thread.turns.length, 1)
+    assert.equal(largeThreadRead?.thread.turns[0]?.items[0]?.content?.[0]?.text, 'Tail restore request')
+    assert.equal(largeThreadRead?.thread.turns[0]?.items[1]?.text, 'Tail restored answer')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
 async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
   const updatedAtSeconds = Date.parse('2026-01-01T00:00:00.000Z') / 1000
   const cachedThreadReadPayload = {
@@ -8563,6 +8746,75 @@ async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
   assert.deepEqual(fallbackWarnings.map((warning) => warning.message), [
     'Light thread snapshot unavailable',
     'Heavy thread snapshot fell back to cached messages',
+  ])
+
+  const sessionFallbackThreadReadPayload = {
+    thread: {
+      updatedAt: updatedAtSeconds,
+      inProgress: false,
+      path: 'session-fallback.jsonl',
+      turns: [{
+        id: 'turn-session',
+        status: 'completed',
+        items: [{ type: 'agentMessage', id: 'agent-session', text: 'Recovered from session log' }],
+      }],
+    },
+  }
+  const sessionFallbackRpcCalls: unknown[] = []
+  const sessionFallbackRemembered: unknown[] = []
+  const sessionFallbackWarnings: Array<{ message: string; details: Record<string, unknown> }> = []
+  const sessionFallbackSnapshot = await readAppServerThreadRuntimeSnapshot('thread-session-fallback', {
+    rpc: async (_method, params) => {
+      sessionFallbackRpcCalls.push(params)
+      if (readIncludeTurns(params) === true) {
+        throw new Error('does not start with session metadata')
+      }
+      return {
+        thread: {
+          id: 'thread-session-fallback',
+          updatedAt: updatedAtSeconds,
+          inProgress: false,
+          path: 'session-fallback.jsonl',
+        },
+      }
+    },
+    observeThreadRead: () => {},
+    getCachedThreadRead: () => null,
+    rememberCachedThreadRead: (_threadId, threadRead) => {
+      sessionFallbackRemembered.push(threadRead)
+      return createCachedThreadRead(threadRead, () => '2026-01-01T00:00:30.000Z')
+    },
+    snapshotRuntime: (threadId, overlay = {}) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'completed',
+      threadRead: overlay.threadRead ?? null,
+      messageState: overlay.messageState ?? 'unavailable',
+      pendingServerRequests: overlay.pendingServerRequests ?? [],
+      tokenUsage: overlay.tokenUsage ?? null,
+    }),
+    observeRuntimeThreadRead: () => {},
+    markRuntimeDegraded: () => {
+      throw new Error('session fallback should avoid degraded runtime state')
+    },
+    persistRuntimeSnapshot: (_threadId, snapshot) => snapshot,
+    listPendingServerRequestsForThread: () => [],
+    getThreadTokenUsage: () => null,
+    readSessionLogThreadRead: async (sessionPath, fallbackThreadRead) => {
+      assert.equal(sessionPath, 'session-fallback.jsonl')
+      assert.equal(readThreadSessionPathFromThreadReadPayload(fallbackThreadRead), 'session-fallback.jsonl')
+      return sessionFallbackThreadReadPayload
+    },
+    getErrorMessage,
+    writeWarning: (message, details) => {
+      sessionFallbackWarnings.push({ message, details })
+    },
+  })
+  assert.deepEqual(sessionFallbackRpcCalls.map(readIncludeTurns), [false, true])
+  assert.deepEqual(sessionFallbackRemembered, [sessionFallbackThreadReadPayload])
+  assert.equal(sessionFallbackSnapshot.threadRead, sessionFallbackThreadReadPayload)
+  assert.equal(sessionFallbackSnapshot.messageState, 'cached')
+  assert.deepEqual(sessionFallbackWarnings.map((warning) => warning.message), [
+    'Heavy thread snapshot fell back to session log messages',
   ])
 
   const factoryRpcCalls: unknown[] = []

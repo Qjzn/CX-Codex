@@ -519,12 +519,21 @@ async function listThreadsByArchiveState(
   let cursor: string | null = null
 
   do {
-    const payload: ThreadListResponse = await callRpc<ThreadListResponse>('thread/list', {
-      archived,
-      limit: 100,
-      sortKey: 'updated_at',
-      cursor,
-    }, options)
+    let payload: ThreadListResponse
+    try {
+      payload = await callRpc<ThreadListResponse>('thread/list', {
+        archived,
+        limit: 100,
+        sortKey: 'updated_at',
+        cursor,
+      }, options)
+    } catch (error) {
+      if (cursor && data.length > 0 && !isAbortLikeError(error)) {
+        console.warn('Stopped thread/list pagination after a cursor error', error)
+        break
+      }
+      throw error
+    }
     data.push(...payload.data)
     cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.length > 0
       ? payload.nextCursor

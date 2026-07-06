@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - 移动端会话稳定性回收：`thread/list` 的 Desktop/session-index 补读改为小批量、总预算和单次超时控制，避免为了补齐少数缺失会话拖慢首屏列表；`thread/read(includeTurns:true)` 遇到 malformed session jsonl / `does not start with session metadata` 时，会从本地 session log 尾部有界恢复最近用户/助手消息，避免会话页空白或暴露内部路径。
   - 设置里的 Android App 更新入口收敛为单一卡片：只保留“当前版本 / 检查更新”，检查时显示轻量加载动画；只有 GitHub 最新发布版本高于当前安装版本且存在 Android 安装文件时，才弹出下载确认。
   - 7420 侧栏会话数据源新增 Desktop/session-index 有界补充：当 Codex Desktop 能看到但 App Server `thread/list` 首屏遗漏的近期线程存在时，会通过 `thread/read(includeTurns:false)` 补入侧栏，避免 `codexui / 分析项目` 这类真实会话在浏览器端缺失；补充输出保持固定上限，防止缓存命中后首屏线程数量持续膨胀。
   - 损坏或非标准 session jsonl 导致 App Server 返回 `thread-store internal error` / `does not start with session metadata` 时，7420 会按可恢复线程读取失败处理，不再把本机 session 路径和内部错误直接显示到会话页。

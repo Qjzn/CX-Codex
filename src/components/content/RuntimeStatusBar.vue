@@ -117,6 +117,7 @@ const tone = computed<Tone>(() => {
     props.summary.executionState === 'sync_degraded' ||
     props.summary.executionState === 'start_uncertain' ||
     props.summary.executionState === 'stop_uncertain' ||
+    props.summary.messageState === 'unavailable' ||
     props.pendingRequestCount > 0 ||
     props.syncLagging ||
     props.notificationStale ||
@@ -138,6 +139,7 @@ const title = computed(() => {
   if (props.summary.executionState === 'running') return props.liveOverlay?.activityLabel || '任务执行中'
   if (props.summary.executionState === 'failed') return '任务失败'
   if (props.summary.executionState === 'sync_degraded') return '状态已降级'
+  if (props.summary.messageState === 'unavailable') return '历史暂不可用'
   if (props.summary.executionState === 'interrupted' || props.summary.executionState === 'stopped') return '任务已停止'
   return '已同步'
 })
@@ -153,6 +155,7 @@ const detail = computed(() => {
   if (props.syncLagging || props.notificationStale) return '实时事件可能有延迟，页面会自动补同步。'
   if (props.connectionState === 'reconnecting') return '实时通道正在重连，恢复后会补齐事件。'
   if (props.summary.messageState === 'cached') return '当前先展示缓存消息，后台会继续补齐最新内容。'
+  if (props.summary.messageState === 'unavailable') return '未能读取此会话历史，点击强制恢复会重新尝试。'
   return ''
 })
 

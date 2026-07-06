@@ -32,6 +32,17 @@ const messages = normalizeThreadMessagesV2({
         items: [
           { id: 'item-known', type: 'agentMessage', text: 'Known message' },
           {
+            id: 'item-mcp',
+            type: 'mcpToolCall',
+            server: 'browser',
+            tool: 'snapshot',
+            status: 'completed',
+            arguments: { page: 'mobile' },
+            result: { text: 'internal details' },
+            error: null,
+            durationMs: 123,
+          },
+          {
             id: 'item-new',
             type: 'threadShellCommandOutput',
             command: 'secret command',

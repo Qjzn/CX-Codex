@@ -2,6 +2,8 @@ export const SUPPLEMENTAL_THREAD_SUMMARY_CACHE_TTL_MS = 5 * 60_000
 export const SUPPLEMENTAL_THREAD_SUMMARY_MAX_READS = 20
 export const SUPPLEMENTAL_THREAD_SUMMARY_MAX_OUTPUT = 20
 export const SUPPLEMENTAL_THREAD_SUMMARY_MAX_CACHE_ENTRIES = 100
+export const SUPPLEMENTAL_THREAD_SUMMARY_BUDGET_MS = 1_200
+export const SUPPLEMENTAL_THREAD_SUMMARY_READ_TIMEOUT_MS = 600
 
 type ThreadListAugmentOptions = {
   params: unknown
@@ -27,6 +29,8 @@ type AppServerThreadListAugmenterOptions = {
   maxReads?: number
   maxOutput?: number
   maxCacheEntries?: number
+  budgetMs?: number
+  readTimeoutMs?: number
   nowMs?: () => number
 }
 
@@ -42,6 +46,8 @@ export class AppServerThreadListAugmenter {
   private readonly maxReads: number
   private readonly maxOutput: number
   private readonly maxCacheEntries: number
+  private readonly budgetMs: number
+  private readonly readTimeoutMs: number
   private readonly nowMs: () => number
 
   constructor(options: AppServerThreadListAugmenterOptions = {}) {
@@ -49,6 +55,8 @@ export class AppServerThreadListAugmenter {
     this.maxReads = options.maxReads ?? SUPPLEMENTAL_THREAD_SUMMARY_MAX_READS
     this.maxOutput = options.maxOutput ?? SUPPLEMENTAL_THREAD_SUMMARY_MAX_OUTPUT
     this.maxCacheEntries = options.maxCacheEntries ?? SUPPLEMENTAL_THREAD_SUMMARY_MAX_CACHE_ENTRIES
+    this.budgetMs = options.budgetMs ?? SUPPLEMENTAL_THREAD_SUMMARY_BUDGET_MS
+    this.readTimeoutMs = options.readTimeoutMs ?? SUPPLEMENTAL_THREAD_SUMMARY_READ_TIMEOUT_MS
     this.nowMs = options.nowMs ?? (() => Date.now())
   }
 
@@ -91,10 +99,12 @@ export class AppServerThreadListAugmenter {
   ): Promise<unknown[]> {
     const summaries: unknown[] = []
     const seen = new Set<string>(excludedThreadIds)
+    const startedAtMs = this.nowMs()
     let uncachedReadCount = 0
 
     for (const rawThreadId of threadIds) {
       if (summaries.length >= this.maxOutput) break
+      if (this.nowMs() - startedAtMs >= this.budgetMs) break
       const threadId = rawThreadId.trim()
       if (!threadId || seen.has(threadId)) continue
       seen.add(threadId)
@@ -110,30 +120,14 @@ export class AppServerThreadListAugmenter {
       if (uncachedReadCount >= this.maxReads) continue
       uncachedReadCount += 1
 
-      try {
-        const response = asRecord(await readThreadById(threadId))
-        const thread = asRecord(response?.thread)
-        if (thread?.id === threadId) {
-          this.cacheByThreadId.set(threadId, {
-            value: thread,
-            cachedAtMs: this.nowMs(),
-          })
-          summaries.push(thread)
-        } else {
-          this.cacheByThreadId.set(threadId, {
-            value: null,
-            cachedAtMs: this.nowMs(),
-            failed: true,
-          })
-        }
-      } catch {
-        this.cacheByThreadId.set(threadId, {
-          value: null,
-          cachedAtMs: this.nowMs(),
-          failed: true,
-        })
-        // Keep desktop/index parity best-effort; a missing historical thread must not break the list.
-      }
+      const remainingBudgetMs = Math.max(0, this.budgetMs - (this.nowMs() - startedAtMs))
+      const readResult = await this.readThreadSummaryWithinBudget(
+        threadId,
+        readThreadById,
+        Math.min(this.readTimeoutMs, remainingBudgetMs),
+      )
+      if (readResult.timedOut) break
+      if (readResult.value) summaries.push(readResult.value)
     }
 
     this.trimCache()
@@ -146,6 +140,58 @@ export class AppServerThreadListAugmenter {
     for (const key of Array.from(this.cacheByThreadId.keys()).slice(0, overflow)) {
       this.cacheByThreadId.delete(key)
     }
+  }
+
+  private async readThreadSummaryWithinBudget(
+    threadId: string,
+    readThreadById: (threadId: string) => Promise<unknown>,
+    timeoutMs: number,
+  ): Promise<{ value: unknown | null; timedOut: boolean }> {
+    if (timeoutMs <= 0) return { value: null, timedOut: true }
+
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    const timeout = new Promise<{ value: null; timedOut: true }>((resolve) => {
+      timeoutId = setTimeout(() => resolve({ value: null, timedOut: true }), timeoutMs)
+    })
+
+    const read = Promise.resolve()
+      .then(() => readThreadById(threadId))
+      .then((response) => {
+        const thread = this.cacheThreadSummaryResponse(threadId, response)
+        return { value: thread, timedOut: false as const }
+      })
+      .catch(() => {
+        this.cacheByThreadId.set(threadId, {
+          value: null,
+          cachedAtMs: this.nowMs(),
+          failed: true,
+        })
+        // Keep desktop/index parity best-effort; a missing historical thread must not break the list.
+        return { value: null, timedOut: false as const }
+      })
+
+    const result = await Promise.race([read, timeout])
+    if (timeoutId !== null) clearTimeout(timeoutId)
+    return result
+  }
+
+  private cacheThreadSummaryResponse(threadId: string, response: unknown): unknown | null {
+    const responseRecord = asRecord(response)
+    const thread = asRecord(responseRecord?.thread)
+    if (thread?.id === threadId) {
+      this.cacheByThreadId.set(threadId, {
+        value: thread,
+        cachedAtMs: this.nowMs(),
+      })
+      return thread
+    }
+
+    this.cacheByThreadId.set(threadId, {
+      value: null,
+      cachedAtMs: this.nowMs(),
+      failed: true,
+    })
+    return null
   }
 }
 

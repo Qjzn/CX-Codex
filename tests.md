@@ -9581,3 +9581,70 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 47264 on version `2.2.8`; `/health` returned ok.
 - 2026-07-06 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-settings-mobile-update-entry` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-06 screenshot artifacts: `output/regression-7420/p1-settings-mobile-update-entry/home-desktop.png`, `output/regression-7420/p1-settings-mobile-update-entry/home-mobile-drawer.png`, and `output/regression-7420/p1-settings-mobile-update-entry/composer-shell-fixture-phone.png`.
+
+### Feature: Mobile thread list and history stability recovery
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The Codex account has enough sessions to exercise `thread/list` pagination.
+- At least one legacy or malformed session jsonl exists where App Server heavy `thread/read` can fail with `does not start with session metadata` or `thread-store internal error`.
+
+#### Steps
+1. Run `npm.cmd run verify:server-modules`.
+2. Run `npm.cmd run build`.
+3. Restart local 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+4. Call `thread/list` through `/codex-api/rpc` and confirm the first page returns without waiting for all supplemental session-index reads to finish.
+5. Open the mobile page and confirm the sidebar/session list renders even if a later `nextCursor` request fails with `invalid cursor`.
+6. Open a normal recent thread and confirm messages appear without a long blank loading state.
+7. Open a legacy malformed thread such as `019f27ae-0ecd-7c50-9701-8ec003e66447` and confirm recent user/assistant history is shown from the local session-log fallback when App Server heavy read fails.
+8. If a thread still has no recoverable messages, confirm the runtime status bar says `历史暂不可用` and offers `强制恢复` instead of silently showing an empty synced state.
+
+#### Expected Results
+- `AppServerThreadListAugmenter` keeps supplemental thread reads best-effort with a small read count, per-read timeout, and total time budget.
+- Pinned threads are attempted before session-index-only supplemental threads.
+- Frontend `thread/list` pagination keeps already loaded pages when a later cursor is rejected.
+- Runtime snapshot reads fall back from failed heavy `thread/read` to cached messages or a bounded local session-log parse.
+- Mobile users see either recovered recent history or an explicit unavailable-history state, not a misleading empty conversation.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/server/appServerThreadListAugment.ts`, `src/server/codexBridgeMiddlewareState.ts`, `src/server/appServerThreadRuntimeSnapshot.ts`, `src/server/appServerSessionLogThreadRead.ts`, `src/server/rpcProxyRoute.ts`, `src/api/codexGateway.ts`, `src/components/content/RuntimeStatusBar.vue`, `scripts/server-module-smoke.ts`, and this test section.
+
+#### Regression Evidence
+- 2026-07-06 pre-fix evidence: local `/codex-api/rpc` `thread/list` with `limit=20` returned 40 rows but took about `4163ms` on the first uncached call because supplemental reads were synchronous; repeated cached calls dropped to `23ms` and `13ms`.
+- 2026-07-06 pre-fix evidence: full pagination hit App Server `invalid cursor: 05/15/2026 09:06:24`, proving list loading must preserve already loaded pages on cursor failure.
+- 2026-07-06 pre-fix evidence: `/codex-api/state/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` returned `messageState=unavailable` and zero turns while the local session jsonl existed at `C:\Users\SW\.codex\sessions\2026\07\03\rollout-2026-07-03T19-12-31-019f27ae-0ecd-7c50-9701-8ec003e66447.jsonl`.
+- 2026-07-06 server module verification: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; coverage includes supplemental-read timeout, session-log thread-read parsing, and runtime snapshot fallback from failed heavy `thread/read` to session-log messages.
+- 2026-07-06 root-cause measurement before deploying the fallback to the main RPC path: uncached `/codex-api/rpc thread/list` took `11714ms`, cached repeat took `102ms`, and malformed `thread/read(includeTurns:true)` for `019f27ae-0ecd-7c50-9701-8ec003e66447` returned `502`.
+- 2026-07-06 post-budget measurement after deploying the supplemental-read budget: uncached `/codex-api/rpc thread/list` dropped to `4491ms`, cached repeat took `47ms`, and service logs showed the remaining cold latency was App Server `thread/list` itself at `4273ms`.
+- 2026-07-06 post-fallback measurement after wiring session-log fallback into `/codex-api/rpc`: malformed `thread/read(includeTurns:true)` for `019f27ae-0ecd-7c50-9701-8ec003e66447` returned `10` turns in `1670ms` with warning `thread/read fell back to local session log messages` instead of `502`.
+- 2026-07-06 final P0 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; coverage includes supplemental-read timeout, tail-bounded session-log fallback, runtime snapshot fallback, and `/codex-api/rpc thread/read` session-log recovery.
+- 2026-07-06 final P0 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`; `npm.cmd run build` passed for frontend and CLI with only the existing large chunk warning.
+- 2026-07-06 final deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `29528`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 final sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` appeared as title `分析项目` under project `codexui`, with `activeThreadCount=180` and `projectGroupCount=18`.
+- 2026-07-06 final malformed thread-read gate: direct `/codex-api/rpc thread/read(includeTurns:true)` for `019f27ae-0ecd-7c50-9701-8ec003e66447` returned warning `thread/read fell back to local session log messages`, `threadId=019f27ae-0ecd-7c50-9701-8ec003e66447`, `turnCount=1`, and `elapsedMs=196`; this confirms the tail-bounded local fallback avoids the previous 502 while recovering recent history.
+- 2026-07-06 final browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed; it opened the real thread page at `393x852` after desktop, foldable, phone drawer, fixture, and content-block checks.
+
+### Feature: Hide low-value MCP tool call fallback messages
+
+#### Prerequisites
+- The frontend is built from the latest `E:\javaword\CXCodex\codexui` source.
+- A conversation contains App Server `mcpToolCall` thread items, such as browser/tool automation metadata.
+
+#### Steps
+1. Run `npm.cmd run verify:frontend-normalizers`.
+2. Run `npm.cmd run build:frontend`.
+3. Open a mobile conversation that previously showed `未适配的 App Server 内容`, `unhandled.mcpToolCall`, or `Unhandled App Server item: mcpToolCall`.
+4. Confirm the visible conversation contains the user message, assistant response, and useful command execution content, but not the internal MCP tool call fallback cards.
+
+#### Expected Results
+- `mcpToolCall` items are filtered during message normalization and do not render as system fallback messages.
+- Other unknown App Server item types still produce fallback diagnostics, so genuinely new unsupported content remains visible for future adaptation.
+- `commandExecution` messages still render normally.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/api/normalizers/v2.ts`, `scripts/verify-frontend-normalizers.mjs`, and this test section.
+
+#### Regression Evidence
+- 2026-07-06 frontend normalizer smoke: `npm.cmd run verify:frontend-normalizers` passed and asserts `mcpToolCall` items do not add `unhandled.mcpToolCall` messages.
+- 2026-07-06 frontend build: `npm.cmd run build:frontend` passed; Vite still reports the existing large chunk warning.
+- 2026-07-06 final frontend gate: `npm.cmd run verify:frontend-normalizers` and full `npm.cmd run build` passed; `test:7420:frontend` also passed against the live 7420 service and the `conversation-blocks` fixture across desktop, phone, and foldable viewports.

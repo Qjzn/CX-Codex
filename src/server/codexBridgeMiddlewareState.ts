@@ -42,8 +42,8 @@ export function createCodexBridgeMiddlewareState(
     const seen = new Set<string>()
     const result: string[] = []
     for (const rawThreadId of [
-      ...sessionIndexCache.order.slice(0, SIDEBAR_SESSION_INDEX_SUPPLEMENT_LIMIT),
       ...pinnedThreadIds,
+      ...sessionIndexCache.order.slice(0, SIDEBAR_SESSION_INDEX_SUPPLEMENT_LIMIT),
     ]) {
       const threadId = rawThreadId.trim()
       if (!threadId || seen.has(threadId)) continue

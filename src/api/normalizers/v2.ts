@@ -215,6 +215,10 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
   const itemId = readTrimmedString(rawItem.id) || `unhandled:${readTrimmedString(rawItem.type) || 'item'}`
   const itemType = readTrimmedString(rawItem.type)
 
+  if (itemType === 'mcpToolCall') {
+    return []
+  }
+
   if (item.type === 'agentMessage') {
     const text = typeof item.text === 'string' ? item.text : ''
     const images = extractAssistantImages(item)

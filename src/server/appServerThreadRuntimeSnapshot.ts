@@ -6,8 +6,10 @@ import {
 import {
   readActiveTurnIdFromThreadReadPayload,
   readThreadInProgressFromThreadReadPayload,
+  readThreadSessionPathFromThreadReadPayload,
   readThreadUpdatedAtIsoFromThreadReadPayload,
 } from './appServerThreadPayload.js'
+import { readThreadReadFromSessionLog } from './appServerSessionLogThreadRead.js'
 import {
   isRpcTimeoutError,
   isThreadMaterializingError,
@@ -39,6 +41,7 @@ export type AppServerThreadRuntimeSnapshotDependencies = {
   persistRuntimeSnapshot(threadId: string, snapshot: ThreadRuntimeSnapshot): ThreadRuntimeSnapshot
   listPendingServerRequestsForThread(threadId: string): PendingServerRequest[]
   getThreadTokenUsage(threadId: string): ThreadTokenUsage | null
+  readSessionLogThreadRead?: (sessionPath: string, fallbackThreadRead: unknown) => Promise<unknown | null>
   getErrorMessage(error: unknown, fallback: string): string
   writeWarning(message: string, details: Record<string, unknown>): void
 }
@@ -117,11 +120,28 @@ export async function readAppServerThreadRuntimeSnapshot(
           error: dependencies.getErrorMessage(error, 'Heavy thread snapshot failed'),
         })
       } else {
-        dependencies.writeWarning('Heavy thread snapshot unavailable with no cache', {
-          threadId: normalizedThreadId,
-          lightUpdatedAtIso,
-          error: dependencies.getErrorMessage(error, 'Heavy thread snapshot failed'),
-        })
+        const sessionPath = lightThreadRead ? readThreadSessionPathFromThreadReadPayload(lightThreadRead) : ''
+        const fallbackThreadRead = sessionPath
+          ? await (dependencies.readSessionLogThreadRead ?? readThreadReadFromSessionLog)(sessionPath, lightThreadRead)
+          : null
+        if (fallbackThreadRead) {
+          threadRead = fallbackThreadRead
+          messageState = 'cached'
+          dependencies.rememberCachedThreadRead(normalizedThreadId, fallbackThreadRead)
+          dependencies.writeWarning('Heavy thread snapshot fell back to session log messages', {
+            threadId: normalizedThreadId,
+            lightUpdatedAtIso,
+            sessionPath,
+            error: dependencies.getErrorMessage(error, 'Heavy thread snapshot failed'),
+          })
+        } else {
+          dependencies.writeWarning('Heavy thread snapshot unavailable with no cache', {
+            threadId: normalizedThreadId,
+            lightUpdatedAtIso,
+            sessionPath,
+            error: dependencies.getErrorMessage(error, 'Heavy thread snapshot failed'),
+          })
+        }
       }
     }
   }
@@ -132,7 +152,9 @@ export async function readAppServerThreadRuntimeSnapshot(
 
   const updatedAtIso =
     messageState === 'cached'
-      ? (cachedThreadRead?.updatedAtIso ?? lightUpdatedAtIso)
+      ? (threadRead
+        ? readThreadUpdatedAtIsoFromThreadReadPayload(threadRead)
+        : cachedThreadRead?.updatedAtIso ?? lightUpdatedAtIso)
       : lightThreadRead
         ? readThreadUpdatedAtIsoFromThreadReadPayload(lightThreadRead)
         : threadRead
@@ -142,14 +164,18 @@ export async function readAppServerThreadRuntimeSnapshot(
     threadRead && messageState === 'fresh'
       ? readThreadInProgressFromThreadReadPayload(threadRead)
       : false
+  const cachedThreadInProgress =
+    threadRead && messageState === 'cached'
+      ? readThreadInProgressFromThreadReadPayload(threadRead)
+      : (cachedThreadRead?.inProgress ?? false)
   const inProgress =
     lightInProgress
     || freshThreadInProgress
-    || (!lightThreadRead && messageState === 'cached' ? (cachedThreadRead?.inProgress ?? false) : false)
+    || (!lightThreadRead && messageState === 'cached' ? cachedThreadInProgress : false)
   const activeTurnId =
     (lightThreadRead ? readActiveTurnIdFromThreadReadPayload(lightThreadRead) : '')
     || (threadRead && messageState === 'fresh' ? readActiveTurnIdFromThreadReadPayload(threadRead) : '')
-    || (!lightThreadRead && messageState === 'cached' ? (cachedThreadRead?.activeTurnId ?? '') : '')
+    || (!lightThreadRead && messageState === 'cached' ? (cachedThreadRead?.activeTurnId ?? readActiveTurnIdFromThreadReadPayload(threadRead)) : '')
 
   if (lightThreadRead || threadRead || cachedThreadRead) {
     dependencies.observeRuntimeThreadRead(
@@ -159,6 +185,9 @@ export async function readAppServerThreadRuntimeSnapshot(
       updatedAtIso,
       messageState === 'cached' ? 'cache' : 'thread-read',
     )
+    if (messageState === 'unavailable' && !threadRead) {
+      dependencies.markRuntimeDegraded(normalizedThreadId, 'thread messages unavailable')
+    }
   } else {
     dependencies.markRuntimeDegraded(normalizedThreadId, 'thread snapshot unavailable')
   }
