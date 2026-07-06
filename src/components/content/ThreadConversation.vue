@@ -731,6 +731,12 @@
                           <span class="message-code-meta">
                             <span class="message-code-language">{{ block.language || (block.isDiff ? 'diff' : 'text') }}</span>
                             <span class="message-code-count">{{ block.lines.length }} 行</span>
+                            <span
+                              v-if="isLongCodeBlock(block) && !isCodeBlockExpanded(entry.message.id, blockIndex)"
+                              class="message-code-count"
+                            >
+                              预览 {{ CODE_BLOCK_PREVIEW_LINE_COUNT }} 行
+                            </span>
                           </span>
                           <button
                             class="message-code-copy"
@@ -743,11 +749,24 @@
                           </button>
                         </div>
                         <pre class="message-code-pre"><code><span
-                          v-for="(line, lineIndex) in block.lines"
+                          v-for="(line, lineIndex) in visibleCodeBlockLines(entry.message.id, blockIndex, block)"
                           :key="`code-line-${blockIndex}-${lineIndex}`"
                           class="message-code-line"
                           :data-kind="line.kind"
                         >{{ line.value || ' ' }}</span></code></pre>
+                        <div v-if="isLongCodeBlock(block)" class="message-code-footer">
+                          <button
+                            class="message-code-expand"
+                            type="button"
+                            @click.stop="toggleCodeBlockExpand(entry.message.id, blockIndex)"
+                          >
+                            {{
+                              isCodeBlockExpanded(entry.message.id, blockIndex)
+                                ? '收起代码'
+                                : `展开剩余 ${hiddenCodeBlockLineCount(block)} 行`
+                            }}
+                          </button>
+                        </div>
                       </div>
                       <p v-else-if="isMarkdownImageFailed(entry.message.id, blockIndex)" class="message-text">{{ block.markdown }}</p>
                       <button
@@ -1467,6 +1486,7 @@ const LONG_RESPONSE_MIN_HEIGHT_PX = 260
 const LONG_USER_MESSAGE_COLLAPSE_THRESHOLD = 3000
 const LONG_USER_MESSAGE_PREVIEW_LENGTH = 1600
 const LONG_USER_MESSAGE_EXPANDED_MAX_HEIGHT_PX = 760
+const CODE_BLOCK_PREVIEW_LINE_COUNT = 120
 const IMAGE_MODAL_MIN_SCALE = 1
 const IMAGE_MODAL_MAX_SCALE = 4
 const IMAGE_MODAL_SCALE_STEP = 0.25
@@ -1533,6 +1553,7 @@ const trackedPendingImages = new WeakSet<HTMLImageElement>()
 const failedMarkdownImageKeys = ref<Set<string>>(new Set())
 const preparedMessageBlocksById = new Map<string, { text: string; blocks: PreparedMessageBlock[] }>()
 const expandedLongUserMessageIds = ref<Set<string>>(new Set())
+const expandedCodeBlockKeys = ref<Set<string>>(new Set())
 const isFileLinkContextMenuVisible = ref(false)
 const fileLinkContextMenuX = ref(0)
 const fileLinkContextMenuY = ref(0)
@@ -3049,6 +3070,37 @@ function isCodeBlockCopied(messageId: string, blockIndex: number): boolean {
   return copiedCodeBlockKey.value === codeBlockKey(messageId, blockIndex)
 }
 
+function isLongCodeBlock(block: Extract<PreparedMessageBlock, { kind: 'code' }>): boolean {
+  return block.lines.length > CODE_BLOCK_PREVIEW_LINE_COUNT
+}
+
+function isCodeBlockExpanded(messageId: string, blockIndex: number): boolean {
+  return expandedCodeBlockKeys.value.has(codeBlockKey(messageId, blockIndex))
+}
+
+function visibleCodeBlockLines(
+  messageId: string,
+  blockIndex: number,
+  block: Extract<PreparedMessageBlock, { kind: 'code' }>,
+): PreparedCodeLine[] {
+  if (!isLongCodeBlock(block) || isCodeBlockExpanded(messageId, blockIndex)) {
+    return block.lines
+  }
+  return block.lines.slice(0, CODE_BLOCK_PREVIEW_LINE_COUNT)
+}
+
+function hiddenCodeBlockLineCount(block: Extract<PreparedMessageBlock, { kind: 'code' }>): number {
+  return Math.max(block.lines.length - CODE_BLOCK_PREVIEW_LINE_COUNT, 0)
+}
+
+function toggleCodeBlockExpand(messageId: string, blockIndex: number): void {
+  const key = codeBlockKey(messageId, blockIndex)
+  const next = new Set(expandedCodeBlockKeys.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expandedCodeBlockKeys.value = next
+}
+
 function codeBlockText(block: Extract<PreparedMessageBlock, { kind: 'code' }>): string {
   return block.lines.map((line) => line.value).join('\n')
 }
@@ -3136,6 +3188,21 @@ function prunePreparedMessageBlockCache(messages: UiMessage[]): void {
   }
   if (hasExpandedIdChange) {
     expandedLongUserMessageIds.value = nextExpandedIds
+  }
+
+  let nextExpandedCodeBlockKeys = expandedCodeBlockKeys.value
+  let hasExpandedCodeBlockChange = false
+  for (const key of expandedCodeBlockKeys.value) {
+    const messageId = key.slice(0, key.lastIndexOf(':'))
+    if (keepIds.has(messageId)) continue
+    if (!hasExpandedCodeBlockChange) {
+      nextExpandedCodeBlockKeys = new Set(expandedCodeBlockKeys.value)
+      hasExpandedCodeBlockChange = true
+    }
+    nextExpandedCodeBlockKeys.delete(key)
+  }
+  if (hasExpandedCodeBlockChange) {
+    expandedCodeBlockKeys.value = nextExpandedCodeBlockKeys
   }
 }
 
@@ -4343,6 +4410,7 @@ watch(
     disconnectAllObservedElements(observedMessageElementsById)
     measuredMessageHeightById.value = {}
     expandedGuidedTurnIndexes.value = new Set()
+    expandedCodeBlockKeys.value = new Set()
     conversationScrollTop.value = 0
     lastGapMeasuredContainer = null
     lastGapMeasuredViewportHeight = -1
@@ -4634,6 +4702,7 @@ watch(() => props.activeThreadId, () => {
   clearHighlightedMessage()
   clearRollbackConfirmation()
   activeMessageActionId.value = ''
+  expandedCodeBlockKeys.value = new Set()
   closeLiveOverlayDetail()
 })
 
@@ -5660,6 +5729,15 @@ onBeforeUnmount(() => {
 
 .message-code-pre code {
   @apply block min-w-full py-2;
+}
+
+.message-code-footer {
+  @apply flex justify-center border-t border-white/10 bg-[#24211d] px-3 py-1.5;
+}
+
+.message-code-expand {
+  @apply rounded-md px-2 py-1 text-[11px] font-medium text-[#d8d0c3] transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30;
+  font-family: var(--font-sans-ui);
 }
 
 .message-code-line {

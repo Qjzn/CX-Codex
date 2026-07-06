@@ -9720,3 +9720,41 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `60888`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 page evidence after waiting for background sync: target route `#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` rendered the P0 completion content, wrote `codex-web-local.thread-message-cache.v1` at about `8857` characters, and stored `40` cached messages for the target thread.
 - 2026-07-06 final P1 message-cache gate: `npm.cmd run verify:server-modules`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build`, `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`, and `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` all passed; local 7420 final restart used PID `21308`.
+
+### Feature: Lazy render long conversation code blocks
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- A conversation or regression fixture contains a fenced code block or diff block longer than 120 lines.
+- The browser viewport is set to a phone-sized width such as `393x852` for the primary mobile check.
+
+#### Steps
+1. Run `npm.cmd run verify:frontend-normalizers`.
+2. Run `npm.cmd run build`.
+3. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+4. Open the target conversation or `/#/__regression/conversation-blocks`.
+5. Locate a code/diff block longer than 120 lines.
+6. Confirm the block initially renders the first 120 lines plus an `展开剩余 N 行` action.
+7. Tap `展开剩余 N 行` and confirm the full block renders.
+8. Tap `收起代码` and confirm the block returns to the 120-line preview.
+9. Tap the code block copy button and confirm clipboard copy still contains the full code block, not only the preview.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Long code/diff blocks do not render every line into the DOM until the user explicitly expands them.
+- Short code/diff blocks render exactly as before.
+- Copy still uses the complete code block content.
+- Switching threads clears expanded-code state, so a newly opened long conversation starts from the lightweight preview.
+- Existing conversation block regression checks still pass, including code block copy, file cards, raw payload, command blocks, and mobile overflow checks.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/components/content/ThreadConversation.vue`, `docs/changelog.zh-CN.md`, and this test section.
+- No localStorage or server data cleanup is required; the expanded-code state is in-memory only.
+
+#### Regression Evidence
+- 2026-07-06 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-06 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-06 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `44504`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
+- 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
