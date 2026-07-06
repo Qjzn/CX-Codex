@@ -2,6 +2,7 @@ const THREAD_RESPONSE_TURN_LIMIT = 10
 const THREAD_RESPONSE_TURN_ITEM_LIMIT = 160
 const THREAD_RESPONSE_TURN_HEAD_ITEM_LIMIT = 1
 const THREAD_METHODS_WITH_TURNS = new Set(['thread/read', 'thread/resume', 'thread/fork', 'thread/rollback'])
+const LOW_VALUE_THREAD_ITEM_TYPES = new Set(['fileChange', 'mcpToolCall'])
 
 export function trimThreadTurnsInRpcResult(method: string, result: unknown): unknown {
   if (!THREAD_METHODS_WITH_TURNS.has(method)) return result
@@ -57,7 +58,7 @@ function trimTurnItems(turn: unknown): unknown {
 
 function isLowValueThreadItem(item: unknown): boolean {
   const record = asRecord(item)
-  return record?.type === 'fileChange'
+  return typeof record?.type === 'string' && LOW_VALUE_THREAD_ITEM_TYPES.has(record.type)
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

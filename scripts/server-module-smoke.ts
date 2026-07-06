@@ -2824,6 +2824,7 @@ function smokeAppServerRpcResult(): void {
           id: 'turn-filtered',
           items: [
             { id: 'file-change-1', type: 'fileChange', patch: 'large ignored patch' },
+            { id: 'mcp-tool-1', type: 'mcpToolCall', result: { text: 'internal mcp result' } },
             { id: 'unknown-1', type: 'threadShellCommandOutput', output: 'diagnostic payload stays available' },
             { id: 'agent-1', type: 'agentMessage', text: 'Visible answer' },
           ],
@@ -2837,6 +2838,7 @@ function smokeAppServerRpcResult(): void {
   ])
   assert.equal(filteredLowValueItems.thread.turns[0]?.items[0]?.output, 'diagnostic payload stays available')
   assert.equal(JSON.stringify(filteredLowValueItems).includes('large ignored patch'), false)
+  assert.equal(JSON.stringify(filteredLowValueItems).includes('internal mcp result'), false)
   assert.deepEqual(trimThreadTurnsInRpcResult('thread/resume', { thread: { turns: null } }), { thread: { turns: null } })
 }
 
