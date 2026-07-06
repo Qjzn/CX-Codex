@@ -2253,6 +2253,22 @@ function queueIdleTask(task: () => void, timeoutMs = 1200): void {
   idleTaskCancels.push(scheduleIdleTask(task, timeoutMs))
 }
 
+function queueDelayedIdleTask(task: () => void, delayMs: number, timeoutMs = 1200): void {
+  if (typeof window === 'undefined') {
+    task()
+    return
+  }
+
+  let cancelIdle: (() => void) | null = null
+  const delayHandle = window.setTimeout(() => {
+    cancelIdle = scheduleIdleTask(task, timeoutMs)
+  }, delayMs)
+  idleTaskCancels.push(() => {
+    window.clearTimeout(delayHandle)
+    cancelIdle?.()
+  })
+}
+
 function clearQueuedIdleTasks(): void {
   for (const cancel of idleTaskCancels) {
     cancel()
@@ -3873,7 +3889,7 @@ function scheduleInitialBackgroundTasks(): void {
   queueIdleTask(() => { void refreshMobileShellRuntimeInfo() }, 1625)
   queueIdleTask(() => { void refreshMobileShellNotificationPermission() }, 1640)
   if (!isMobileShellAvailable.value) {
-    queueIdleTask(() => { void refreshDesktopAppAvailability() }, 1700)
+    queueDelayedIdleTask(() => { void refreshDesktopAppAvailability() }, 3200, 1200)
   }
   scheduleTrendingProjectsLoad()
 }
