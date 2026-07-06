@@ -1236,6 +1236,9 @@ const recentRenderableMessagesForDerivedUi = computed<UiMessage[]>(() => {
   if (messages.length <= RECENT_DERIVED_UI_MESSAGE_LIMIT) return messages
   return messages.slice(-RECENT_DERIVED_UI_MESSAGE_LIMIT)
 })
+const visibleRenderableMessages = computed<UiMessage[]>(() => (
+  renderableMessages.value.slice(visibleMessageStartIndex.value)
+))
 
 function isGuidedAssistantMessage(message: UiMessage): boolean {
   return (
@@ -1409,7 +1412,7 @@ const renderableConversationEntries = computed<ConversationRenderEntry[]>(() => 
   const entries: ConversationRenderEntry[] = []
   let visibleMessageIndex = 0
 
-  for (const message of renderableMessages.value) {
+  for (const message of visibleRenderableMessages.value) {
     const turnIndex = readTurnIndex(message)
     const descriptor =
       typeof turnIndex === 'number' ? (collapsibleGuidedTurnDescriptors.value.get(turnIndex) ?? null) : null
@@ -1441,7 +1444,7 @@ const renderableConversationEntries = computed<ConversationRenderEntry[]>(() => 
 })
 
 const visibleRenderableEntries = computed<ConversationRenderEntry[]>(() => (
-  renderableConversationEntries.value.slice(visibleMessageStartIndex.value)
+  renderableConversationEntries.value
 ))
 const visibleMessageEntries = computed<ConversationMessageEntry[]>(() => (
   visibleRenderableEntries.value.filter((entry): entry is ConversationMessageEntry => entry.kind === 'message')
@@ -3951,13 +3954,12 @@ async function focusMessage(messageId: string): Promise<boolean> {
     await nextTick()
   }
 
-  const targetIndex = renderableConversationEntries.value.findIndex((entry) => (
-    entry.kind === 'message' && entry.message.id === normalizedMessageId
-  ))
+  const targetIndex = renderableMessages.value.findIndex((message) => message.id === normalizedMessageId)
   if (targetIndex < 0) return false
 
   if (visibleMessageStartIndex.value > targetIndex) {
     visibleMessageStartIndex.value = Math.max(targetIndex - 2, 0)
+    await nextTick()
   }
 
   const container = conversationListRef.value
@@ -3968,7 +3970,10 @@ async function focusMessage(messageId: string): Promise<boolean> {
   }
 
   syncConversationViewport(container)
-  const targetVisibleIndex = Math.max(targetIndex - visibleMessageStartIndex.value, 0)
+  const targetVisibleIndex = renderableConversationEntries.value.findIndex((entry) => (
+    entry.kind === 'message' && entry.message.id === normalizedMessageId
+  ))
+  if (targetVisibleIndex < 0) return false
   const topOffset = entryHeightMetrics.value.cumulativeHeights[targetVisibleIndex] ?? 0
   const maxScrollTop = Math.max(container.scrollHeight - container.clientHeight, 0)
   autoFollowBottom.value = false
@@ -4119,7 +4124,7 @@ function renderableMessageSignature(messages: UiMessage[]): string {
 }
 
 watch(
-  () => renderableConversationEntries.value.length,
+  () => renderableMessages.value.length,
   (nextLength, previousLength) => {
     const nextLatestStartIndex = latestVisibleStartIndex(nextLength)
     if (previousLength == null) {
@@ -4428,7 +4433,7 @@ watch(
     lastEmittedScrollStateSignature.value = ''
     isRevealingOlderMessages.value = false
     canAutoRevealOlderMessages.value = true
-    visibleMessageStartIndex.value = latestVisibleStartIndex(renderableConversationEntries.value.length)
+    visibleMessageStartIndex.value = latestVisibleStartIndex(renderableMessages.value.length)
     clearBelowFoldUpdates()
     autoAnchoredLongResponseId.value = ''
     autoFollowBottom.value = props.scrollState?.isAtBottom !== false

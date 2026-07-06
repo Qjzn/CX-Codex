@@ -9797,3 +9797,40 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `64740`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
+
+### Feature: Visible-window conversation render entries
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The account has a long enough conversation to show `继续查看更多`, or the standard `分析项目` real-thread route is available for regression.
+- The browser viewport is set to a phone-sized width such as `393x852` for the primary mobile check.
+
+#### Steps
+1. Run `npm.cmd run verify:frontend-normalizers`.
+2. Run `npm.cmd run build`.
+3. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+4. Open a long conversation on the phone viewport.
+5. Confirm the latest message window appears first and older history is behind `继续查看更多`.
+6. Tap `继续查看更多` and confirm older messages are added without jumping away from the current reading position.
+7. Use message/favorite jump if available and confirm hidden older target messages expand the visible window before scrolling, instead of scrolling to the top.
+8. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+9. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- `ThreadConversation` only builds conversation render entries for `renderableMessages.slice(visibleMessageStartIndex)`, not for the entire historical message array.
+- Initial entry preparation is bounded to the newest window.
+- Revealing older history lowers `visibleMessageStartIndex` and intentionally expands the prepared window.
+- Favorite/message focus still finds the target in the full renderable message list first, expands the visible window if needed, and then scrolls only when the target entry exists.
+- Existing virtualized rendering, long code block preview, guided reply folding, and mobile overflow checks continue to pass.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/components/content/ThreadConversation.vue`, `docs/changelog.zh-CN.md`, and this test section.
+- No localStorage or server data cleanup is required; this change only affects in-memory render entry preparation.
+
+#### Regression Evidence
+- 2026-07-06 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-06 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-06 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `63872`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
+- 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
