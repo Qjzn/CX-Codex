@@ -1213,6 +1213,7 @@ const props = defineProps<{
 
 const MESSAGE_WINDOW_SIZE = 10
 const RECENT_DERIVED_UI_MESSAGE_LIMIT = 120
+const REACTIVE_WATCH_MESSAGE_LIMIT = RECENT_DERIVED_UI_MESSAGE_LIMIT * 2
 const renderableMessages = computed<UiMessage[]>(() => (
   props.messages.filter((message) => !shouldSuppressConversationMessage(message))
 ))
@@ -1239,6 +1240,26 @@ const recentRenderableMessagesForDerivedUi = computed<UiMessage[]>(() => {
 const visibleRenderableMessages = computed<UiMessage[]>(() => (
   renderableMessages.value.slice(visibleMessageStartIndex.value)
 ))
+
+function recentMessagesForReactiveWatch(messages: UiMessage[]): UiMessage[] {
+  if (messages.length <= REACTIVE_WATCH_MESSAGE_LIMIT) return messages
+  return messages.slice(-REACTIVE_WATCH_MESSAGE_LIMIT)
+}
+
+function messagesForReactiveWatch(messages: UiMessage[]): UiMessage[] {
+  const recentMessages = recentMessagesForReactiveWatch(messages)
+  const visibleMessages = visibleRenderableMessages.value
+  if (visibleMessages.length === 0) return recentMessages
+
+  const watchedById = new Map<string, UiMessage>()
+  for (const message of recentMessages) {
+    watchedById.set(message.id, message)
+  }
+  for (const message of visibleMessages) {
+    watchedById.set(message.id, message)
+  }
+  return Array.from(watchedById.values())
+}
 
 function isGuidedAssistantMessage(message: UiMessage): boolean {
   return (
@@ -4112,7 +4133,7 @@ function clearBelowFoldUpdates(): void {
 }
 
 function renderableMessageSignature(messages: UiMessage[]): string {
-  return messages
+  return recentMessagesForReactiveWatch(messages)
     .filter((message) => !isCommandMessage(message) && message.messageType !== 'worked')
     .map((message) => [
       message.id,
@@ -4329,12 +4350,13 @@ async function scheduleScrollRestore(forceBottom = shouldLockToBottom()): Promis
 watch(
   () => props.messages,
   async (next, previous) => {
-    syncObservedCommandStartTimes(next)
+    const watchedMessages = messagesForReactiveWatch(next)
+    syncObservedCommandStartTimes(watchedMessages)
     if (props.isLoading) return
     const previousMessages = previous ?? EMPTY_MESSAGES
     const shouldFollowBottom = shouldLockToBottom()
 
-    for (const m of next) {
+    for (const m of watchedMessages) {
       if (m.messageType !== 'commandExecution' || !m.commandExecution) continue
       const prev = prevCommandStatuses.value[m.id]
       const cur = m.commandExecution.status
