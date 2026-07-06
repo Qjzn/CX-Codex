@@ -34,6 +34,10 @@ export function getWebPinnedThreadIdsPath(): string {
   return join(getCodexHomeDir(), 'web-pinned-thread-ids.json')
 }
 
+export function getWebThreadListCachePath(): string {
+  return join(getCodexHomeDir(), 'web-thread-list-cache.json')
+}
+
 export function getSkillsInstallDir(): string {
   return join(getCodexHomeDir(), 'skills')
 }

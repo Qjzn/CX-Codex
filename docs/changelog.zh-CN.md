@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - 会话列表冷启动继续减负：服务端 `thread/list` 缓存新增磁盘快照，7420 重启后可先返回最近列表并后台刷新真实 App Server 数据；RPC 缓存 key 改为稳定字段排序，避免同一列表参数因对象字段顺序不同而错过缓存。
   - 会话页初始同步继续减负：线程详情正在加载或刚完成加载时，通知流首次连接不再强制重复 foreground recovery；`thread-token-usage` 辅助读数改为短时间节流并保留已有值，避免运行中会话每轮同步都触发 2 秒级 token usage 请求拖慢手机端。
   - Session-log fallback 不再误删重复短消息：恢复本地 session log 时改为按 message id 去重，只有无 id 的相邻重复事件才会折叠，避免多次发送“继续”等相同内容时后续 turn 被当作重复内容丢掉。
   - Session-log fallback 会话详情补齐标题元数据：当 `thread/read` 只能从本地 session log 恢复消息时，会用原始线程名或首条用户消息 preview 回填 `name/title`，减少直接打开恢复线程时标题空白的问题。

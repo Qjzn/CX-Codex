@@ -3505,6 +3505,10 @@ async function smokeTranscriptionRoutes(): Promise<void> {
 async function smokeAppServerRpcCache(): Promise<void> {
   assert.equal(getShareableRpcKey('thread/start', {}), null)
   assert.equal(getShareableRpcKey('thread/list', { limit: 1 }), 'thread/list:{"limit":1}')
+  assert.equal(
+    getShareableRpcKey('thread/list', { archived: false, limit: 100, sortKey: 'updated_at', cursor: null }),
+    getShareableRpcKey('thread/list', { cursor: null, sortKey: 'updated_at', limit: 100, archived: false }),
+  )
   assert.equal(shouldInvalidateThreadListCacheForRpc('thread/name/set'), true)
   assert.equal(shouldInvalidateThreadListCacheForRpc('thread/metadata/update'), true)
   assert.equal(shouldInvalidateThreadListCacheForRpc('thread/unarchive'), true)
@@ -3560,6 +3564,25 @@ async function smokeAppServerRpcCache(): Promise<void> {
 
   now += 4 * 60_000
   assert.deepEqual(cache.readThreadList(key, true), { value: { rows: ['fresh'] }, stale: true })
+
+  const persistentCacheDir = await mkdtemp(join(tmpdir(), 'cx-codex-rpc-cache-'))
+  try {
+    const persistentCachePath = join(persistentCacheDir, 'thread-list-cache.json')
+    const persistentCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
+    persistentCache.writeThreadList(key, { rows: ['persisted'] })
+
+    const reloadedPersistentCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
+    assert.deepEqual(reloadedPersistentCache.readThreadList(key, true), {
+      value: { rows: ['persisted'] },
+      stale: false,
+    })
+    reloadedPersistentCache.clearThreadList()
+
+    const clearedPersistentCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
+    assert.equal(clearedPersistentCache.readThreadList(key, true), null)
+  } finally {
+    await rm(persistentCacheDir, { recursive: true, force: true })
+  }
 
   let refreshCalls = 0
   cache.refreshThreadListInBackground(key, {}, async () => {
