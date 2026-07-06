@@ -215,6 +215,10 @@ type ThreadMessageCachePayload = {
   version: number
   threads: Record<string, ThreadMessageCacheEntry>
 }
+type ThreadMessageCacheSnapshot = {
+  messages: UiMessage[]
+  signature: string
+}
 
 function createClientMessageId(): string {
   const randomPart =
@@ -699,6 +703,14 @@ function normalizeMessagesForCache(messages: UiMessage[]): UiMessage[] {
     .filter((message): message is UiMessage => message !== null)
 }
 
+function createThreadMessageCacheSnapshot(messages: UiMessage[]): ThreadMessageCacheSnapshot {
+  const cacheMessages = normalizeMessagesForCache(messages)
+  return {
+    messages: cacheMessages,
+    signature: cacheMessages.length > 0 ? JSON.stringify(cacheMessages) : '',
+  }
+}
+
 function loadThreadMessageCachePayload(): ThreadMessageCachePayload {
   if (typeof window === 'undefined') return { version: THREAD_MESSAGE_CACHE_VERSION, threads: {} }
 
@@ -747,16 +759,17 @@ function loadCachedThreadMessages(threadId: string): UiMessage[] {
 }
 
 function saveCachedThreadMessages(threadId: string, messages: UiMessage[]): void {
-  const normalizedThreadId = threadId.trim()
-  if (!normalizedThreadId || messages.length === 0) return
+  saveCachedThreadMessagesSnapshot(threadId, createThreadMessageCacheSnapshot(messages))
+}
 
-  const cacheMessages = normalizeMessagesForCache(messages)
-  if (cacheMessages.length === 0) return
+function saveCachedThreadMessagesSnapshot(threadId: string, snapshot: ThreadMessageCacheSnapshot): void {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId || snapshot.messages.length === 0) return
 
   const payload = loadThreadMessageCachePayload()
   payload.threads[normalizedThreadId] = {
     savedAtMs: Date.now(),
-    messages: cacheMessages,
+    messages: snapshot.messages,
   }
 
   const orderedEntries = Object.entries(payload.threads)
@@ -767,9 +780,7 @@ function saveCachedThreadMessages(threadId: string, messages: UiMessage[]): void
 }
 
 function getCachedThreadMessagesSignature(messages: UiMessage[]): string {
-  const cacheMessages = normalizeMessagesForCache(messages)
-  if (cacheMessages.length === 0) return ''
-  return JSON.stringify(cacheMessages)
+  return createThreadMessageCacheSnapshot(messages).signature
 }
 
 function loadHiddenThreadIds(): string[] {
@@ -4051,10 +4062,10 @@ export function useDesktopState() {
         [threadId]: nextMessages,
       }
     }
-    const cacheSignature = getCachedThreadMessagesSignature(nextMessages)
-    if (cacheSignature && cachedThreadMessageSignatureByThreadId.get(threadId) !== cacheSignature) {
-      cachedThreadMessageSignatureByThreadId.set(threadId, cacheSignature)
-      saveCachedThreadMessages(threadId, nextMessages)
+    const cacheSnapshot = createThreadMessageCacheSnapshot(nextMessages)
+    if (cacheSnapshot.signature && cachedThreadMessageSignatureByThreadId.get(threadId) !== cacheSnapshot.signature) {
+      cachedThreadMessageSignatureByThreadId.set(threadId, cacheSnapshot.signature)
+      saveCachedThreadMessagesSnapshot(threadId, cacheSnapshot)
     }
 
     const previousOptimistic = optimisticUserMessagesByThreadId.value[threadId] ?? []
