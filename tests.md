@@ -11114,3 +11114,42 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 deploy: latest build was restarted on local 7420 as PID `57988`, version `2.2.8`, with `/health` returning `ok`.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
+### Feature: Keep latest turn context in recent message window
+
+#### Prerequisites
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- The conversation fixture route `/#/__regression/conversation-blocks?regression=frontend` is available.
+
+#### Steps
+1. Open a long thread whose latest turn contains more than 10 normalized messages.
+2. Confirm the recent message window keeps the latest turn's user prompt together with the latest assistant output.
+3. Confirm old turns are still hidden behind the existing `继续查看更多` mechanism.
+4. Open the conversation fixture route and confirm the fixture still renders code/diff/file/raw/command/request blocks.
+5. Confirm the fixture text includes the original latest-turn user prompt `请审查这些文件`.
+6. Run `npm.cmd run build`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+8. Run `npm.cmd run verify:server-modules`.
+9. Run `npm.cmd run verify:frontend-normalizers`.
+10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+11. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Recent-first rendering remains lightweight.
+- The latest turn is not clipped from the middle when it contains many intermediate messages.
+- Users can see the latest question context near the final answer instead of only seeing folded stage output.
+- The real `分析项目` phone thread page and conversation fixture remain nonblank.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/components/content/ThreadConversation.vue`, `src/components/content/ConversationRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement before fix: real `thread/read(includeTurns:true)` for `分析项目` returned 3 recent turns and about 80 raw items in about 109 ms, but the phone DOM only showed a final-looking single message card because the 10-message window could start inside the latest turn.
+- 2026-07-07 measurement after fix: real phone-width CDP render of `分析项目` showed `messageCards=2`, `guidedToggles=1`, `hasLatestUserQuestion=true`, and `hasOnlyFinalLookingScreen=false`.
+- 2026-07-07 gate: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `36648`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.

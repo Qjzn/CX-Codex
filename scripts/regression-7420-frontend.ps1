@@ -1006,6 +1006,7 @@ JSON.stringify((() => {
     hasAddLine: !!document.querySelector('.message-code-line[data-kind="add"]'),
     hasDeleteLine: !!document.querySelector('.message-code-line[data-kind="delete"]'),
     hasMetaLine: !!document.querySelector('.message-code-line[data-kind="meta"]'),
+    hasLatestTurnPromptContext: textContent.includes('请审查这些文件，并说明代码块'),
     hasFixtureCodeText: textContent.includes('fixture-code-block'),
     hasFixtureRawText: textContent.includes('fixture-raw-payload'),
     hasHiddenFileChangeNoise: textContent.includes('fixture-hidden-file-change-noise') || textContent.includes('Unhandled App Server item: fileChange') || textContent.includes('unhandled.fileChange'),
@@ -1070,6 +1071,7 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.hasAddLine -eq $true) "conversation fixture is missing diff add line styling"
   Assert-True ($Metrics.hasDeleteLine -eq $true) "conversation fixture is missing diff delete line styling"
   Assert-True ($Metrics.hasMetaLine -eq $true) "conversation fixture is missing diff metadata line styling"
+  Assert-True ($Metrics.hasLatestTurnPromptContext -eq $true) "conversation fixture lost the latest turn user prompt context"
   Assert-True ($Metrics.hasFixtureCodeText -eq $true) "conversation fixture is missing fixture code text"
   Assert-True ($Metrics.hasFixtureRawText -eq $true) "conversation fixture is missing raw payload marker"
   Assert-True ($Metrics.hasHiddenFileChangeNoise -eq $false) "conversation fixture rendered low-value unhandled.fileChange system noise"

@@ -1278,8 +1278,28 @@ const isLiveOverlayDetailOpen = ref(false)
 const expandedGuidedTurnIndexes = ref<Set<number>>(new Set())
 const expandedRawPayloadMessageIds = ref<Set<string>>(new Set())
 
-function latestVisibleStartIndex(messageCount: number): number {
-  return Math.max(messageCount - MESSAGE_WINDOW_SIZE, 0)
+function latestVisibleStartIndex(messages: UiMessage[]): number {
+  const messageCount = messages.length
+  const latestWindowStart = Math.max(messageCount - MESSAGE_WINDOW_SIZE, 0)
+  let latestTurnIndex: number | null = null
+
+  for (let index = messageCount - 1; index >= 0; index -= 1) {
+    latestTurnIndex = readTurnIndex(messages[index])
+    if (latestTurnIndex !== null) break
+  }
+
+  if (latestTurnIndex === null) return latestWindowStart
+
+  let latestTurnStart = latestWindowStart
+  for (let index = messageCount - 1; index >= 0; index -= 1) {
+    if (readTurnIndex(messages[index]) === latestTurnIndex) {
+      latestTurnStart = index
+      continue
+    }
+    if (latestTurnStart < messageCount) break
+  }
+
+  return Math.min(latestWindowStart, latestTurnStart)
 }
 
 function readTurnIndex(message: UiMessage): number | null {
@@ -4336,7 +4356,7 @@ function renderableMessageSignature(messages: UiMessage[]): string {
 watch(
   () => renderableMessages.value.length,
   (nextLength, previousLength) => {
-    const nextLatestStartIndex = latestVisibleStartIndex(nextLength)
+    const nextLatestStartIndex = latestVisibleStartIndex(renderableMessages.value)
     if (previousLength == null) {
       visibleMessageStartIndex.value = nextLatestStartIndex
       return
@@ -4646,7 +4666,7 @@ watch(
     lastEmittedScrollStateSignature.value = ''
     isRevealingOlderMessages.value = false
     canAutoRevealOlderMessages.value = true
-    visibleMessageStartIndex.value = latestVisibleStartIndex(renderableMessages.value.length)
+    visibleMessageStartIndex.value = latestVisibleStartIndex(renderableMessages.value)
     clearBelowFoldUpdates()
     autoAnchoredLongResponseId.value = ''
     autoFollowBottom.value = props.scrollState?.isAtBottom !== false

@@ -147,6 +147,13 @@ const messages: UiMessage[] = [
     },
     turnIndex: 1,
   },
+  ...Array.from({ length: 8 }, (_, index): UiMessage => ({
+    id: `fixture-latest-turn-progress-${String(index + 1)}`,
+    role: 'system',
+    text: `fixture latest turn progress ${String(index + 1)}`,
+    messageType: 'fixture.progress',
+    turnIndex: 1,
+  })),
 ]
 
 const pendingRequests: UiServerRequest[] = [
