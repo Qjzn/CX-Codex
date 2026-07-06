@@ -10015,3 +10015,42 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `20580`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
+
+### Feature: Thread page token usage sync throttling
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The standard real-thread regression target `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- The target thread can be running; active state/runtime refreshes are allowed, but token usage must not be repeatedly polled during the initial settle window.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` in a phone viewport.
+2. Wait until the title `分析项目` and composer render.
+3. Keep the page open for at least 9 seconds.
+4. Inspect `performance.getEntriesByType('resource')` for `/codex-api/state/thread/<threadId>`, `/codex-api/runtime/thread/<threadId>`, and `/codex-api/thread-token-usage?threadId=<threadId>`.
+5. Run `npm.cmd run verify:server-modules`.
+6. Run `npm.cmd run verify:frontend-normalizers`.
+7. Run `npm.cmd run build`.
+8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- If thread details are already loading or were just loaded, the notification stream first-connect path does not force an extra foreground recovery.
+- Missing token usage in a thread snapshot does not clear existing token usage UI state.
+- Background token usage fallback is throttled; the real thread page should issue at most one `/codex-api/thread-token-usage` request during the initial 9-second settle window.
+- Running threads may continue lightweight state/runtime refreshes, but they should not trigger repeated slow token usage reads.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/composables/useDesktopState.ts`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+- No browser storage cleanup is required; token usage throttling is in-memory and resets on page reload.
+
+#### Regression Evidence
+- 2026-07-07 measurement before fix: the running real `分析项目` thread issued `6` `/codex-api/thread-token-usage` requests in the measured page window, with repeated requests around 2 seconds.
+- 2026-07-07 measurement after fix: the same running real thread issued `1` `/codex-api/thread-token-usage` request in a 12-second page window while state/runtime refreshes continued.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `30008`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-07 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
+- 2026-07-07 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route with the token usage request throttle assertion enabled.

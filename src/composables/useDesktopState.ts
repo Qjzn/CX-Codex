@@ -152,6 +152,7 @@ const EVENT_SYNC_DEBOUNCE_MS = 350
 const BACKGROUND_SYNC_INTERVAL_MS = 9000
 const ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS = 12000
 const ACTIVE_THREAD_DETAIL_SYNC_IDLE_MS = 18000
+const THREAD_SELECTION_RECOVERY_SUPPRESS_MS = 5000
 const ACTIVE_SYNC_BOOST_INTERVAL_MS = 2500
 const ACTIVE_SYNC_BOOST_WINDOW_MS = 18000
 const RESUME_SYNC_RETRY_DELAYS_MS = [0, 1200, 4500, 12000]
@@ -1890,6 +1891,19 @@ export function useDesktopState() {
     if ((pendingServerRequestsByThreadId.value[GLOBAL_SERVER_REQUEST_SCOPE] ?? []).length > 0) return true
     return false
   })
+
+  function shouldSuppressInitialConnectionRecovery(threadId: string, now = Date.now()): boolean {
+    if (!threadId) return false
+    if (messageLoadInFlightByThreadId.has(threadId)) return true
+    if (pendingThreadMessageRefresh.has(threadId)) return false
+    if (eventUnreadByThreadId.value[threadId] === true) return false
+    if (isThreadExecutionActive(threadId)) return false
+    if (isRuntimeExecutionStale(threadId)) return false
+    if ((pendingServerRequestsByThreadId.value[threadId] ?? []).length > 0) return false
+    const lastDetailSyncAt = lastThreadDetailSyncAtById.value[threadId] ?? 0
+    return lastDetailSyncAt > 0 && now - lastDetailSyncAt < THREAD_SELECTION_RECOVERY_SUPPRESS_MS
+  }
+
   const syncLagging = computed(() => {
     notificationHealthTick.value
     if (!hasSyncDemand.value) return false
@@ -2575,7 +2589,6 @@ export function useDesktopState() {
       .then((tokenUsage) => {
         if (tokenUsage) {
           setThreadTokenUsage(normalizedThreadId, tokenUsage)
-          tokenUsageRefreshAttemptedAtByThreadId.delete(normalizedThreadId)
         }
       })
       .catch(() => {
@@ -5472,8 +5485,10 @@ export function useDesktopState() {
       const nextMessages = snapshot.messages
       const inProgress = snapshot.inProgress
       const activeTurnId = snapshot.activeTurnId
-      setThreadTokenUsage(threadId, snapshot.tokenUsage)
-      if (!snapshot.tokenUsage && typeof window !== 'undefined') {
+      if (snapshot.tokenUsage) {
+        setThreadTokenUsage(threadId, snapshot.tokenUsage)
+      }
+      if (!snapshot.tokenUsage && !threadTokenUsageByThreadId.value[threadId] && typeof window !== 'undefined') {
         window.setTimeout(() => refreshThreadTokenUsageInBackground(threadId), 0)
       }
       const normalizedPendingRequests = snapshot.pendingServerRequests
@@ -7059,6 +7074,11 @@ export function useDesktopState() {
           }
           if (state === 'connected' && previousState !== 'connected') {
             if (androidShellAvailable) {
+              const activeThreadId = selectedThreadId.value
+              if (activeThreadId && shouldSuppressInitialConnectionRecovery(activeThreadId)) {
+                void replayMissedNotifications()
+                return
+              }
               runForegroundRecoverySync({
                 includeThreadList: false,
                 forceMessageRefresh: true,
@@ -7067,6 +7087,11 @@ export function useDesktopState() {
               return
             }
             if (hasSyncDemand.value) {
+              const activeThreadId = selectedThreadId.value
+              if (activeThreadId && shouldSuppressInitialConnectionRecovery(activeThreadId)) {
+                void replayMissedNotifications()
+                return
+              }
               runForegroundRecoverySync({
                 includeThreadList: !hasLoadedThreads.value || pendingThreadsRefresh,
                 forceMessageRefresh: true,

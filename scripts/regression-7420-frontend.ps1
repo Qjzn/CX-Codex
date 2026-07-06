@@ -1409,6 +1409,53 @@ function Assert-ComposerDictationDraft {
   Assert-True ($Metrics.dictationHelperText -eq "已转成文字，可编辑后发送。") "$ViewportName composer dictation success text drifted: $($Metrics.dictationHelperText)"
 }
 
+function Read-ThreadPageLoadMetrics {
+  param(
+    [string]$Session,
+    [string]$ThreadId
+  )
+
+  $script = @'
+JSON.stringify((() => {
+  const threadId = '__THREAD_ID__';
+  const resources = performance.getEntriesByType('resource')
+    .filter((entry) => entry.name.includes('/codex-api/'))
+    .map((entry) => ({
+      name: entry.name.replace(location.origin, ''),
+      duration: Math.round(entry.duration),
+      startTime: Math.round(entry.startTime),
+      transferSize: entry.transferSize || 0,
+      encodedBodySize: entry.encodedBodySize || 0,
+    }));
+  const statePath = `/codex-api/state/thread/${encodeURIComponent(threadId)}`;
+  const runtimePath = `/codex-api/runtime/thread/${encodeURIComponent(threadId)}`;
+  const tokenPath = `/codex-api/thread-token-usage?threadId=${encodeURIComponent(threadId)}`;
+  const countByPath = (path) => resources.filter((entry) => entry.name === path).length;
+  return {
+    apiCount: resources.length,
+    stateThreadRequestCount: countByPath(statePath),
+    runtimeThreadRequestCount: countByPath(runtimePath),
+    tokenUsageRequestCount: countByPath(tokenPath),
+    totalTransferSize: resources.reduce((sum, entry) => sum + entry.transferSize, 0),
+    slowRequestCount: resources.filter((entry) => entry.duration >= 1500).length,
+  };
+})())
+'@
+  $script = $script.Replace('__THREAD_ID__', $ThreadId.Replace('\', '\\').Replace("'", "\'"))
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-ThreadPageLoadMetrics {
+  param(
+    [object]$Metrics,
+    [string]$ThreadId
+  )
+
+  Assert-True ([int]$Metrics.stateThreadRequestCount -le 8) "thread page loaded $($Metrics.stateThreadRequestCount) state snapshots for $ThreadId; expected no more than 8 during initial settle"
+  Assert-True ([int]$Metrics.runtimeThreadRequestCount -le 8) "thread page loaded $($Metrics.runtimeThreadRequestCount) runtime snapshots for $ThreadId; expected no more than 8 during initial settle"
+  Assert-True ([int]$Metrics.tokenUsageRequestCount -le 1) "thread page loaded $($Metrics.tokenUsageRequestCount) token usage snapshots for $ThreadId; expected at most 1 throttled background read during initial settle"
+}
+
 function Add-RegressionResult {
   param(
     [string]$Name,
@@ -1557,6 +1604,9 @@ try {
   if (-not [string]::IsNullOrWhiteSpace($ThreadId)) {
     $thread = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/thread/$ThreadId" -Width $PhoneWidth -Height $PhoneHeight
     Assert-Page -Page $thread -Name "thread phone" -RequireComposer
+    Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "9000") | Out-Null
+    $threadPageLoadMetrics = Read-ThreadPageLoadMetrics -Session $session -ThreadId $ThreadId
+    Assert-ThreadPageLoadMetrics -Metrics $threadPageLoadMetrics -ThreadId $ThreadId
     Add-RegressionResult -Name "thread-phone" -Page $thread
   } else {
     Write-Step "thread page check skipped; pass -ThreadId to enable it"
