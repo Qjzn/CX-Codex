@@ -171,6 +171,7 @@ const LIVE_DELTA_BATCH_MS = 48
 const NOTIFICATION_STALE_MS = 30000
 const THREAD_LIST_REFRESH_INTERVAL_MS = 300000
 const THREAD_TOKEN_USAGE_REFRESH_RETRY_MS = 5 * 60 * 1000
+const THREAD_TOKEN_USAGE_IDLE_DELAY_MS = 1600
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 1500
 const RATE_LIMIT_REFRESH_MIN_INTERVAL_MS = 300000
 const COMPOSER_PLUGINS_REFRESH_DEBOUNCE_MS = 450
@@ -1555,6 +1556,7 @@ export function useDesktopState() {
   const threadTokenUsageByThreadId = ref<Record<string, UiThreadTokenUsage>>({})
   const tokenUsageRefreshInFlightByThreadId = new Map<string, Promise<void>>()
   const tokenUsageRefreshAttemptedAtByThreadId = new Map<string, number>()
+  const tokenUsageRefreshTimerByThreadId = new Map<string, number>()
   const messageLoadInFlightByThreadId = new Map<string, Promise<void>>()
   const inProgressById = ref<Record<string, boolean>>({})
   type PendingTurnRequest = {
@@ -2647,6 +2649,20 @@ export function useDesktopState() {
         tokenUsageRefreshInFlightByThreadId.delete(normalizedThreadId)
       })
     tokenUsageRefreshInFlightByThreadId.set(normalizedThreadId, request)
+  }
+
+  function scheduleThreadTokenUsageRefresh(threadId: string): void {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId || typeof window === 'undefined') return
+    if (threadTokenUsageByThreadId.value[normalizedThreadId]) return
+    if (tokenUsageRefreshInFlightByThreadId.has(normalizedThreadId)) return
+    if (tokenUsageRefreshTimerByThreadId.has(normalizedThreadId)) return
+
+    const timer = window.setTimeout(() => {
+      tokenUsageRefreshTimerByThreadId.delete(normalizedThreadId)
+      refreshThreadTokenUsageInBackground(normalizedThreadId)
+    }, THREAD_TOKEN_USAGE_IDLE_DELAY_MS)
+    tokenUsageRefreshTimerByThreadId.set(normalizedThreadId, timer)
   }
 
   function markThreadUnreadByEvent(threadId: string): void {
@@ -5615,8 +5631,8 @@ export function useDesktopState() {
       if (snapshot.tokenUsage) {
         setThreadTokenUsage(threadId, snapshot.tokenUsage)
       }
-      if (!snapshot.tokenUsage && !threadTokenUsageByThreadId.value[threadId] && typeof window !== 'undefined') {
-        window.setTimeout(() => refreshThreadTokenUsageInBackground(threadId), 0)
+      if (!snapshot.tokenUsage && !threadTokenUsageByThreadId.value[threadId]) {
+        scheduleThreadTokenUsageRefresh(threadId)
       }
       const normalizedPendingRequests = snapshot.pendingServerRequests
         .map((row) => normalizeServerRequest(row))
@@ -7489,6 +7505,12 @@ export function useDesktopState() {
     liveReasoningTextByThreadId.value = {}
     liveCommandsByThreadId.value = {}
     threadTokenUsageByThreadId.value = {}
+    if (typeof window !== 'undefined') {
+      for (const timer of tokenUsageRefreshTimerByThreadId.values()) {
+        window.clearTimeout(timer)
+      }
+    }
+    tokenUsageRefreshTimerByThreadId.clear()
     tokenUsageRefreshInFlightByThreadId.clear()
     tokenUsageRefreshAttemptedAtByThreadId.clear()
     messageLoadInFlightByThreadId.clear()
