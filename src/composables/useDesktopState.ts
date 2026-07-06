@@ -1610,6 +1610,7 @@ export function useDesktopState() {
   const pendingTurnStartsById = new Map<string, TurnStartedInfo>()
   const settledRuntimeMessageRefreshKeyByThreadId = new Map<string, string>()
   const settledRuntimeRpcRefreshKeyByThreadId = new Map<string, string>()
+  const settledRuntimeRpcRefreshInFlightByThreadId = new Map<string, string>()
   const fallbackRetryInFlightThreadIds = new Set<string>()
   const nonFreshThreadDetailRetryTimersByThreadId = new Map<string, number>()
   const nonFreshThreadDetailRetryAttemptByThreadId = new Map<string, number>()
@@ -5389,22 +5390,58 @@ export function useDesktopState() {
     }
   }
 
-  async function refreshSettledSnapshotMessagesFromRpc(
+  function shouldFetchSettledSnapshotMessagesFromRpc(
     threadId: string,
     snapshot: ThreadRuntimeSnapshot,
     previousMessages: UiMessage[],
-    signal?: AbortSignal,
-  ): Promise<ThreadRuntimeSnapshot> {
+  ): boolean {
     const refreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
-    if (!refreshKey) return snapshot
+    if (!refreshKey) return false
+    if ((snapshot.pendingServerRequests ?? []).length > 0) return false
+
     const nextMessageIds = new Set(snapshot.messages.map((message) => message.id))
     const snapshotMissesPreviousMessages = previousMessages.some((message) => !nextMessageIds.has(message.id))
     if (
       settledRuntimeRpcRefreshKeyByThreadId.get(threadId) === refreshKey &&
       !snapshotMissesPreviousMessages
     ) {
+      return false
+    }
+    return true
+  }
+
+  function scheduleSettledSnapshotMessagesRpcRefresh(threadId: string, refreshKey: string): void {
+    if (!threadId || !refreshKey) return
+    if (settledRuntimeRpcRefreshInFlightByThreadId.get(threadId) === refreshKey) return
+
+    settledRuntimeRpcRefreshInFlightByThreadId.set(threadId, refreshKey)
+    const runRefresh = () => {
+      void loadMessages(threadId, { silent: true, forceSettledRpcRefresh: true }).finally(() => {
+        if (settledRuntimeRpcRefreshInFlightByThreadId.get(threadId) === refreshKey) {
+          settledRuntimeRpcRefreshInFlightByThreadId.delete(threadId)
+        }
+      })
+    }
+
+    if (typeof window === 'undefined') {
+      runRefresh()
+      return
+    }
+    window.setTimeout(runRefresh, 80)
+  }
+
+  async function refreshSettledSnapshotMessagesFromRpc(
+    threadId: string,
+    snapshot: ThreadRuntimeSnapshot,
+    previousMessages: UiMessage[],
+    signal?: AbortSignal,
+    options: { force?: boolean } = {},
+  ): Promise<ThreadRuntimeSnapshot> {
+    if (options.force !== true && !shouldFetchSettledSnapshotMessagesFromRpc(threadId, snapshot, previousMessages)) {
       return snapshot
     }
+    const refreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
+    if (!refreshKey) return snapshot
     if ((snapshot.pendingServerRequests ?? []).length > 0) return snapshot
 
     try {
@@ -5441,7 +5478,10 @@ export function useDesktopState() {
     return previousMessages.some((message) => !nextMessageIds.has(message.id))
   }
 
-  async function loadMessages(threadId: string, options: { silent?: boolean; signal?: AbortSignal } = {}) {
+  async function loadMessages(
+    threadId: string,
+    options: { silent?: boolean; signal?: AbortSignal; forceSettledRpcRefresh?: boolean } = {},
+  ) {
     if (!threadId) {
       return
     }
@@ -5464,7 +5504,9 @@ export function useDesktopState() {
           isLoadingMessages.value = false
         }
       }
-      return
+      if (options.forceSettledRpcRefresh !== true) {
+        return
+      }
     }
 
     const runLoad = (async (): Promise<void> => {
@@ -5479,7 +5521,19 @@ export function useDesktopState() {
         snapshot = await getThreadRuntimeSnapshot(threadId, { signal: options.signal })
       }
       const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
-      snapshot = await refreshSettledSnapshotMessagesFromRpc(threadId, snapshot, previousPersisted, options.signal)
+      const settledRefreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
+      const shouldDeferSettledRpcRefresh =
+        options.forceSettledRpcRefresh !== true &&
+        shouldShowLoading &&
+        (snapshot.messages.length > 0 || previousPersisted.length > 0) &&
+        shouldFetchSettledSnapshotMessagesFromRpc(threadId, snapshot, previousPersisted)
+      if (shouldDeferSettledRpcRefresh && settledRefreshKey) {
+        scheduleSettledSnapshotMessagesRpcRefresh(threadId, settledRefreshKey)
+      } else {
+        snapshot = await refreshSettledSnapshotMessagesFromRpc(threadId, snapshot, previousPersisted, options.signal, {
+          force: options.forceSettledRpcRefresh === true,
+        })
+      }
 
       applyRuntimeSnapshotState(threadId, snapshot)
       const nextMessages = snapshot.messages

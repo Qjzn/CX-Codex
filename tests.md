@@ -10095,3 +10095,37 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, fixtures, and the real phone thread page.
+
+### Feature: Defer settled thread detail refresh from first paint
+
+#### Prerequisites
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- Browser local storage may contain cached messages for recently opened threads.
+
+#### Steps
+1. Open a real thread that has either runtime snapshot messages or cached browser messages.
+2. Confirm the conversation renders those available messages before any settled-state supplemental `thread/read(includeTurns:true)` finishes.
+3. Keep the page open briefly and confirm the background refresh can still merge newer/fresher messages without dropping existing cached messages.
+4. Run `npm.cmd run build`.
+5. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Run `npm.cmd run verify:frontend-normalizers`.
+7. Run `npm.cmd run verify:server-modules`.
+8. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+9. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Initial non-silent thread loads do not block first paint on the settled-state supplemental RPC when snapshot/cache messages are already available.
+- Silent/background refresh still performs the supplemental RPC and preserves prior messages if the returned fresh payload is shorter.
+- The real `分析项目` phone thread page still renders without blank state or missing required thread data.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/composables/useDesktopState.ts`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `62184`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, fixtures, and the real phone thread page.
