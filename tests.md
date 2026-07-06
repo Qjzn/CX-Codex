@@ -9944,3 +9944,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `43452`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
+
+### Feature: Session-log fallback thread title metadata
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The standard real-thread regression target `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- A malformed or non-standard session log can trigger local session-log fallback, or the server module smoke fixture can validate the parser directly.
+
+#### Steps
+1. Run `npm.cmd run verify:server-modules`.
+2. Confirm `smokeAppServerSessionLogThreadRead` verifies fallback `thread.name` and `thread.title` are recovered from the original thread metadata or first user preview.
+3. Run `npm.cmd run verify:frontend-normalizers`.
+4. Run `npm.cmd run build`.
+5. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+6. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Session-log fallback still recovers recent user/assistant messages from malformed or non-standard jsonl logs.
+- Fallback `thread.name` and `thread.title` are non-empty when the original light thread has a title/name or the recovered preview contains a first user message.
+- Direct thread detail consumers do not receive a blank title when fallback has enough metadata to infer one.
+- The real `分析项目` thread remains present in the sidebar data gate and readable in the browser/mobile regression gate.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/server/appServerSessionLogThreadRead.ts`, `scripts/server-module-smoke.ts`, `docs/changelog.zh-CN.md`, and this test section.
+- No session files, browser storage, or server state need cleanup; this only changes fallback payload metadata.
+
+#### Regression Evidence
+- 2026-07-06 measurement before fix: real `分析项目` `thread/read(includeTurns:true)` fell back to local session-log messages, returned about `45KB`, `4` turns, and `95` items, but the fallback thread title was empty.
+- 2026-07-06 measurement after fix: real `分析项目` fallback still returned local session-log messages and now included `thread.name` / `thread.title` as `分析项目`, with preview `分析此项目`.
+- 2026-07-06 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-06 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-06 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `69172`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
+- 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.

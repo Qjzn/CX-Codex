@@ -8553,6 +8553,8 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
     }) as {
       thread: {
         id: string
+        name: string
+        title: string
         cwd: string
         preview: string
         turns: Array<{ items: Array<{ type: string; text?: string; content?: Array<{ text: string }> }> }>
@@ -8560,6 +8562,8 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
     } | null
 
     assert.equal(threadRead?.thread.id, 'thread-fallback')
+    assert.equal(threadRead?.thread.name, 'Restore this session')
+    assert.equal(threadRead?.thread.title, 'Restore this session')
     assert.equal(threadRead?.thread.cwd, 'E:/workspace/project')
     assert.equal(threadRead?.thread.preview, 'Restore this session')
     assert.equal(threadRead?.thread.turns.length, 1)

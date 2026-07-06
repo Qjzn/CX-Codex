@@ -55,6 +55,15 @@ function limitText(value: string): string {
     : value
 }
 
+function readFallbackThreadTitle(thread: Record<string, unknown>, preview: string): string {
+  return (
+    readTrimmedString(thread.name) ||
+    readTrimmedString(thread.title) ||
+    preview.split('\n')[0]?.trim() ||
+    ''
+  )
+}
+
 function readTextContent(content: unknown): string {
   if (typeof content === 'string') return content.trim()
   if (!Array.isArray(content)) return ''
@@ -155,7 +164,8 @@ export async function parseThreadReadFromSessionLog(
 ): Promise<unknown | null> {
   const fallbackRoot = asRecord(fallbackThreadRead)
   const fallbackThread = asRecord(fallbackRoot?.thread)
-  const fallbackThreadId = readTrimmedString(fallbackThread?.id)
+  if (!fallbackThread) return null
+  const fallbackThreadId = readTrimmedString(fallbackThread.id)
   if (!fallbackThreadId) return null
 
   let cwd = readTrimmedString(fallbackThread?.cwd)
@@ -219,11 +229,13 @@ export async function parseThreadReadFromSessionLog(
   }
 
   if (turns.length === 0) return null
+  const title = readFallbackThreadTitle(fallbackThread, preview)
 
   return {
     thread: {
       ...fallbackThread,
       id: fallbackThreadId,
+      ...(title ? { name: title, title } : {}),
       preview,
       modelProvider: readTrimmedString(fallbackThread?.modelProvider),
       createdAt,
