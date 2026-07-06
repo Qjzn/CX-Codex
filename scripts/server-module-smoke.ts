@@ -124,7 +124,10 @@ import {
   createAppServerThreadRuntimeSnapshotReader,
   readAppServerThreadRuntimeSnapshot,
 } from '../src/server/appServerThreadRuntimeSnapshot.js'
-import { parseThreadReadFromSessionLog } from '../src/server/appServerSessionLogThreadRead.js'
+import {
+  isSessionLogThreadReadCandidateLine,
+  parseThreadReadFromSessionLog,
+} from '../src/server/appServerSessionLogThreadRead.js'
 import { createAppServerRuntimeReaders } from '../src/server/appServerRuntimeReaders.js'
 import {
   AppServerThreadListAugmenter,
@@ -8530,6 +8533,12 @@ function smokeAppServerRuntimeSnapshotPersistence(): void {
 async function smokeAppServerSessionLogThreadRead(): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'codex-session-log-thread-read-'))
   try {
+    assert.equal(isSessionLogThreadReadCandidateLine('{"type":"response_item","payload":{}}'), true)
+    assert.equal(isSessionLogThreadReadCandidateLine('{"type":"event_msg","payload":{}}'), true)
+    assert.equal(isSessionLogThreadReadCandidateLine('{"type":"session_meta","payload":{}}'), true)
+    assert.equal(isSessionLogThreadReadCandidateLine('{"type":"fileChange","payload":{"path":"src/a.ts"}}'), false)
+    assert.equal(isSessionLogThreadReadCandidateLine('{malformed'), false)
+
     const sessionPath = join(dir, 'rollout-2026-07-06T10-00-00-thread-fallback.jsonl')
     await writeFile(sessionPath, [
       JSON.stringify({
@@ -8542,6 +8551,14 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
           source: 'vscode',
         },
       }),
+      ...Array.from({ length: 40 }, (_, index) => JSON.stringify({
+        timestamp: `2026-07-06T10:00:00.${String(index).padStart(3, '0')}Z`,
+        type: 'fileChange',
+        payload: {
+          path: `src/generated-${String(index)}.ts`,
+          diff: 'internal file change details that should not enter fallback parsing',
+        },
+      })),
       '{malformed',
       JSON.stringify({
         timestamp: '2026-07-06T10:00:01.000Z',

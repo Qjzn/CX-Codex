@@ -27,6 +27,14 @@ type SessionLogThreadReadCacheState = {
 
 const sessionLogThreadReadCacheStateByPath = new Map<string, SessionLogThreadReadCacheState>()
 
+export function isSessionLogThreadReadCandidateLine(line: string): boolean {
+  return (
+    line.includes('"response_item"') ||
+    line.includes('"event_msg"') ||
+    line.includes('"session_meta"')
+  )
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -202,6 +210,7 @@ export async function parseThreadReadFromSessionLog(
 
       const trimmed = line.trim()
       if (!trimmed) continue
+      if (!isSessionLogThreadReadCandidateLine(trimmed)) continue
 
       try {
         const entry = asRecord(JSON.parse(trimmed) as unknown)
