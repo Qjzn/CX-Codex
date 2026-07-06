@@ -9686,3 +9686,37 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate hardening: `scripts/regression-7420-frontend.ps1` now treats exact `thread-store internal error` and `failed to read thread C:\...` output as internal read-error exposure, while allowing normal chat text to discuss `does not start with session metadata`.
 - 2026-07-06 final P1 gate: `npm.cmd run verify:server-modules`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build`, `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`, and `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` all passed; local 7420 final restart used PID `47504`.
+
+### Feature: Cache-first thread message startup
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- A target conversation such as `019f27ae-0ecd-7c50-9701-8ec003e66447` has been opened once after this change, so `codex-web-local.thread-message-cache.v1` can be populated.
+- The same browser session or Android WebView can retain localStorage between page opens.
+
+#### Steps
+1. Run `npm.cmd run build:frontend`.
+2. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+3. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` and wait until messages render.
+4. Confirm `localStorage.getItem('codex-web-local.thread-message-cache.v1')` exists and contains an entry for the target thread.
+5. Reopen the same thread route and confirm cached messages appear before a full network refresh is required.
+6. Confirm the page still refreshes in the background and does not show stale running state after the real runtime snapshot arrives.
+7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- `setPersistedMessagesForThread` writes a bounded local message snapshot for recently opened threads.
+- `selectThread` hydrates cached messages only when the thread is not already loaded in memory, then performs the existing silent background refresh path.
+- Cache entries are limited by thread count, message count, text length, and command output length.
+- Cache hydration does not overwrite running status, pending requests, queued messages, or final runtime state from the background refresh.
+- If the project/thread list has not caught up yet, a route thread with cached messages uses a first-user-message title fallback instead of showing `选择会话`.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/composables/useDesktopState.ts`, `src/App.vue`, `docs/changelog.zh-CN.md`, and this test section.
+- To clear only local message snapshots during manual testing, remove `codex-web-local.thread-message-cache.v1` from localStorage.
+
+#### Regression Evidence
+- 2026-07-06 pre-change API measurement: target `thread/read(includeTurns:true)` returned in `181ms` cold and `67ms` warm through local fallback; runtime snapshot returned in `13ms`, so this cache primarily protects larger/colder/weak-network conversations rather than the already-small target thread.
+- 2026-07-06 post-change frontend build: `npm.cmd run build:frontend` passed; Vite still reports the existing large chunk warning.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `60888`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 page evidence after waiting for background sync: target route `#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` rendered the P0 completion content, wrote `codex-web-local.thread-message-cache.v1` at about `8857` characters, and stored `40` cached messages for the target thread.
+- 2026-07-06 final P1 message-cache gate: `npm.cmd run verify:server-modules`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build`, `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`, and `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` all passed; local 7420 final restart used PID `21308`.

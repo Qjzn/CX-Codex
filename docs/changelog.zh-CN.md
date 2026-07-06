@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - 会话内容进入速度继续优化：最近打开过的会话会写入轻量消息快照缓存，重新进入时先显示缓存内容，再静默刷新真实 runtime/thread 数据；缓存按线程数、消息数和文本长度裁剪，避免移动端反复等待空白会话页。
   - 移动端/浏览器首屏会话列表增加缓存优先启动：最近一次归一化后的项目/线程列表会以小窗口写入本地缓存，重新打开时先渲染缓存侧栏，再后台刷新真实 `thread/list`，减少 App Server 冷列表 4-6 秒时的空白等待。
   - 移动端会话稳定性回收：`thread/list` 的 Desktop/session-index 补读改为小批量、总预算和单次超时控制，避免为了补齐少数缺失会话拖慢首屏列表；`thread/read(includeTurns:true)` 遇到 malformed session jsonl / `does not start with session metadata` 时，会从本地 session log 尾部有界恢复最近用户/助手消息，避免会话页空白或暴露内部路径。
   - 设置里的 Android App 更新入口收敛为单一卡片：只保留“当前版本 / 检查更新”，检查时显示轻量加载动画；只有 GitHub 最新发布版本高于当前安装版本且存在 Android 安装文件时，才弹出下载确认。

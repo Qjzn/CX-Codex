@@ -134,6 +134,7 @@ const SELECTED_COLLABORATION_MODE_STORAGE_KEY = 'codex-web-local.selected-collab
 const PROJECT_ORDER_STORAGE_KEY = 'codex-web-local.project-order.v1'
 const PROJECT_DISPLAY_NAME_STORAGE_KEY = 'codex-web-local.project-display-name.v1'
 const THREAD_GROUP_CACHE_STORAGE_KEY = 'codex-web-local.thread-groups-cache.v1'
+const THREAD_MESSAGE_CACHE_STORAGE_KEY = 'codex-web-local.thread-message-cache.v1'
 const HIDDEN_THREAD_IDS_STORAGE_KEY = 'codex-web-local.hidden-thread-ids.v1'
 const QUEUED_MESSAGES_STORAGE_KEY = 'codex-web-local.queued-messages.v1'
 const NOTIFICATION_SEQ_STORAGE_KEY = 'codex-web-local.notification-seq.v1'
@@ -141,6 +142,12 @@ const THREAD_GROUP_CACHE_VERSION = 1
 const THREAD_GROUP_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const THREAD_GROUP_CACHE_MAX_GROUPS = 18
 const THREAD_GROUP_CACHE_MAX_THREADS_PER_GROUP = 30
+const THREAD_MESSAGE_CACHE_VERSION = 1
+const THREAD_MESSAGE_CACHE_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
+const THREAD_MESSAGE_CACHE_MAX_THREADS = 12
+const THREAD_MESSAGE_CACHE_MAX_MESSAGES_PER_THREAD = 40
+const THREAD_MESSAGE_CACHE_TEXT_LIMIT = 12_000
+const THREAD_MESSAGE_CACHE_COMMAND_OUTPUT_LIMIT = 8_000
 const EVENT_SYNC_DEBOUNCE_MS = 350
 const BACKGROUND_SYNC_INTERVAL_MS = 9000
 const ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS = 12000
@@ -197,6 +204,14 @@ type ThreadGroupCachePayload = {
   version: number
   savedAtMs: number
   groups: UiProjectGroup[]
+}
+type ThreadMessageCacheEntry = {
+  savedAtMs: number
+  messages: UiMessage[]
+}
+type ThreadMessageCachePayload = {
+  version: number
+  threads: Record<string, ThreadMessageCacheEntry>
 }
 
 function createClientMessageId(): string {
@@ -600,6 +615,153 @@ function saveCachedThreadGroups(groups: UiProjectGroup[]): void {
   } catch {
     // Cache-first boot is an optimization; quota or privacy failures must not affect sync.
   }
+}
+
+function truncateCacheText(value: string, limit: number): string {
+  return value.length > limit ? `${value.slice(0, limit)}\n\n[内容已截断，正在后台刷新完整消息]` : value
+}
+
+function normalizeCachedMessage(value: unknown): UiMessage | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  const id = readCachedString(row.id)
+  const role = row.role === 'user' || row.role === 'assistant' || row.role === 'system' ? row.role : null
+  if (!id || !role) return null
+
+  const images = Array.isArray(row.images)
+    ? row.images.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 12)
+    : undefined
+  const fileAttachments = Array.isArray(row.fileAttachments)
+    ? row.fileAttachments
+      .filter((item): item is { label: string; path: string } => (
+        Boolean(item) &&
+        typeof item === 'object' &&
+        typeof (item as Record<string, unknown>).label === 'string' &&
+        typeof (item as Record<string, unknown>).path === 'string'
+      ))
+      .map((item) => ({ label: item.label, path: item.path }))
+      .slice(0, 12)
+    : undefined
+
+  const commandExecutionRow = row.commandExecution && typeof row.commandExecution === 'object' && !Array.isArray(row.commandExecution)
+    ? row.commandExecution as Record<string, unknown>
+    : null
+  const commandStatus: CommandExecutionData['status'] | null =
+    commandExecutionRow?.status === 'inProgress' ||
+    commandExecutionRow?.status === 'completed' ||
+    commandExecutionRow?.status === 'failed' ||
+    commandExecutionRow?.status === 'declined' ||
+    commandExecutionRow?.status === 'interrupted'
+      ? commandExecutionRow.status
+      : null
+  const commandExecution = commandExecutionRow &&
+    typeof commandExecutionRow.command === 'string' &&
+    commandStatus
+    ? {
+        command: commandExecutionRow.command,
+        cwd: typeof commandExecutionRow.cwd === 'string' ? commandExecutionRow.cwd : null,
+        status: commandStatus,
+        aggregatedOutput: truncateCacheText(
+          typeof commandExecutionRow.aggregatedOutput === 'string' ? commandExecutionRow.aggregatedOutput : '',
+          THREAD_MESSAGE_CACHE_COMMAND_OUTPUT_LIMIT,
+        ),
+        exitCode: typeof commandExecutionRow.exitCode === 'number' && Number.isFinite(commandExecutionRow.exitCode)
+          ? commandExecutionRow.exitCode
+          : null,
+        durationMs: typeof commandExecutionRow.durationMs === 'number' && Number.isFinite(commandExecutionRow.durationMs)
+          ? commandExecutionRow.durationMs
+          : null,
+        startedAtMs: typeof commandExecutionRow.startedAtMs === 'number' && Number.isFinite(commandExecutionRow.startedAtMs)
+          ? commandExecutionRow.startedAtMs
+          : null,
+      }
+    : undefined
+
+  return {
+    id,
+    role,
+    text: truncateCacheText(readCachedString(row.text), THREAD_MESSAGE_CACHE_TEXT_LIMIT),
+    ...(images && images.length > 0 ? { images } : {}),
+    ...(fileAttachments && fileAttachments.length > 0 ? { fileAttachments } : {}),
+    messageType: readCachedString(row.messageType) || undefined,
+    isUnhandled: row.isUnhandled === true,
+    ...(commandExecution ? { commandExecution } : {}),
+    turnIndex: typeof row.turnIndex === 'number' && Number.isFinite(row.turnIndex) ? row.turnIndex : undefined,
+  }
+}
+
+function normalizeMessagesForCache(messages: UiMessage[]): UiMessage[] {
+  return messages
+    .slice(-THREAD_MESSAGE_CACHE_MAX_MESSAGES_PER_THREAD)
+    .map((message) => normalizeCachedMessage(message))
+    .filter((message): message is UiMessage => message !== null)
+}
+
+function loadThreadMessageCachePayload(): ThreadMessageCachePayload {
+  if (typeof window === 'undefined') return { version: THREAD_MESSAGE_CACHE_VERSION, threads: {} }
+
+  try {
+    const raw = window.localStorage.getItem(THREAD_MESSAGE_CACHE_STORAGE_KEY)
+    if (!raw) return { version: THREAD_MESSAGE_CACHE_VERSION, threads: {} }
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { version: THREAD_MESSAGE_CACHE_VERSION, threads: {} }
+    }
+    const payload = parsed as Partial<ThreadMessageCachePayload>
+    if (payload.version !== THREAD_MESSAGE_CACHE_VERSION || !payload.threads || typeof payload.threads !== 'object') {
+      return { version: THREAD_MESSAGE_CACHE_VERSION, threads: {} }
+    }
+
+    const threads: Record<string, ThreadMessageCacheEntry> = {}
+    for (const [threadId, entry] of Object.entries(payload.threads)) {
+      if (!threadId || !entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+      const row = entry as Partial<ThreadMessageCacheEntry>
+      if (typeof row.savedAtMs !== 'number' || !Number.isFinite(row.savedAtMs)) continue
+      if (Date.now() - row.savedAtMs > THREAD_MESSAGE_CACHE_MAX_AGE_MS) continue
+      if (!Array.isArray(row.messages)) continue
+      const messages = normalizeMessagesForCache(row.messages)
+      if (messages.length === 0) continue
+      threads[threadId] = { savedAtMs: row.savedAtMs, messages }
+    }
+    return { version: THREAD_MESSAGE_CACHE_VERSION, threads }
+  } catch {
+    return { version: THREAD_MESSAGE_CACHE_VERSION, threads: {} }
+  }
+}
+
+function saveThreadMessageCachePayload(payload: ThreadMessageCachePayload): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(THREAD_MESSAGE_CACHE_STORAGE_KEY, JSON.stringify(payload))
+  } catch {
+    // Message snapshots are a startup optimization; storage quota failures should not affect chat.
+  }
+}
+
+function loadCachedThreadMessages(threadId: string): UiMessage[] {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return []
+  return loadThreadMessageCachePayload().threads[normalizedThreadId]?.messages ?? []
+}
+
+function saveCachedThreadMessages(threadId: string, messages: UiMessage[]): void {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId || messages.length === 0) return
+
+  const cacheMessages = normalizeMessagesForCache(messages)
+  if (cacheMessages.length === 0) return
+
+  const payload = loadThreadMessageCachePayload()
+  payload.threads[normalizedThreadId] = {
+    savedAtMs: Date.now(),
+    messages: cacheMessages,
+  }
+
+  const orderedEntries = Object.entries(payload.threads)
+    .sort((first, second) => second[1].savedAtMs - first[1].savedAtMs)
+    .slice(0, THREAD_MESSAGE_CACHE_MAX_THREADS)
+  payload.threads = Object.fromEntries(orderedEntries)
+  saveThreadMessageCachePayload(payload)
 }
 
 function loadHiddenThreadIds(): string[] {
@@ -3827,6 +3989,7 @@ export function useDesktopState() {
         [threadId]: nextMessages,
       }
     }
+    saveCachedThreadMessages(threadId, nextMessages)
 
     const previousOptimistic = optimisticUserMessagesByThreadId.value[threadId] ?? []
     const nextOptimistic = filterVisibleOptimisticUserMessages(nextMessages, previousOptimistic)
@@ -3892,6 +4055,24 @@ export function useDesktopState() {
       ...optimisticUserMessagesByThreadId.value,
       [threadId]: next,
     }
+  }
+
+  function hydrateCachedMessagesForThread(threadId: string): boolean {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId || loadedMessagesByThreadId.value[normalizedThreadId] === true) return false
+
+    const cachedMessages = loadCachedThreadMessages(normalizedThreadId)
+    if (cachedMessages.length === 0) return false
+
+    persistedMessagesByThreadId.value = {
+      ...persistedMessagesByThreadId.value,
+      [normalizedThreadId]: cachedMessages,
+    }
+    loadedMessagesByThreadId.value = {
+      ...loadedMessagesByThreadId.value,
+      [normalizedThreadId]: true,
+    }
+    return true
   }
 
   function setLiveAgentMessagesForThread(threadId: string, nextMessages: UiMessage[]): void {
@@ -5550,6 +5731,7 @@ export function useDesktopState() {
       }
     }
 
+    const hydratedFromCache = hydrateCachedMessagesForThread(normalizedThreadId)
     const alreadyLoaded = loadedMessagesByThreadId.value[normalizedThreadId] === true
     if (alreadyLoaded) {
       const currentVersion = currentThreadVersion(normalizedThreadId)
@@ -5561,6 +5743,7 @@ export function useDesktopState() {
         syncLagging.value ||
         isThreadExecutionActive(normalizedThreadId) ||
         (currentVersion.length > 0 && currentVersion !== loadedVersion) ||
+        hydratedFromCache ||
         lastDetailSyncAt <= 0 ||
         Date.now() - lastDetailSyncAt >= ACTIVE_THREAD_DETAIL_SYNC_IDLE_MS
 

@@ -1552,6 +1552,15 @@ const isRouteOnlyEmptyThread = computed(() => (
   && filteredMessages.value.length === 0
   && selectedThreadServerRequests.value.length === 0
 ))
+const routeThreadFallbackTitle = computed(() => {
+  if (route.name !== 'thread' || selectedThread.value) return ''
+  const userMessage = messages.value.find((message) => message.role === 'user' && message.text.trim())
+  const firstLine = userMessage?.text
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0) ?? ''
+  return firstLine ? firstLine.slice(0, 48) : ''
+})
 const contentTitle = computed(() => {
   if (isWorkbenchRoute.value) return '工作台'
   if (isDiagnosticsRoute.value) return '运行诊断'
@@ -1559,7 +1568,7 @@ const contentTitle = computed(() => {
   if (isGithubTrendingRoute.value) return 'GitHub 热门'
   if (isHomeRoute.value) return '新会话'
   if (isRouteOnlyEmptyThread.value) return '空会话'
-  return selectedThread.value?.title ?? '选择会话'
+  return selectedThread.value?.title ?? (routeThreadFallbackTitle.value || '选择会话')
 })
 const browserHostName =
   typeof window !== 'undefined'
