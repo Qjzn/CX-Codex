@@ -1734,6 +1734,20 @@ function estimateConversationEntryHeight(entry: ConversationRenderEntry): number
   return estimateMessageHeight(entry.message)
 }
 
+function lowerBoundNumber(values: number[], target: number): number {
+  let low = 0
+  let high = values.length
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if ((values[mid] ?? 0) < target) {
+      low = mid + 1
+    } else {
+      high = mid
+    }
+  }
+  return low
+}
+
 const entryHeightMetrics = computed(() => {
   const cumulativeHeights: number[] = [0]
   for (const entry of visibleRenderableEntries.value) {
@@ -1766,23 +1780,12 @@ const virtualizedMessageRange = computed(() => {
   const visibleStart = Math.max(relativeScrollTop - VIRTUAL_OVERSCAN_PX, 0)
   const visibleEnd = relativeScrollTop + viewportHeight + VIRTUAL_OVERSCAN_PX
 
-  let startIndex = 0
-  while (
-    startIndex < visibleRenderableEntries.value.length &&
-    cumulativeHeights[startIndex + 1] < visibleStart
-  ) {
-    startIndex += 1
-  }
-
-  let endIndex = startIndex
-  while (
-    endIndex < visibleRenderableEntries.value.length &&
-    cumulativeHeights[endIndex] < visibleEnd
-  ) {
-    endIndex += 1
-  }
-
-  endIndex = Math.min(visibleRenderableEntries.value.length, Math.max(endIndex + 1, startIndex + 1))
+  const startIndex = Math.max(lowerBoundNumber(cumulativeHeights, visibleStart) - 1, 0)
+  const visibleEndIndex = lowerBoundNumber(cumulativeHeights, visibleEnd)
+  const endIndex = Math.min(
+    visibleRenderableEntries.value.length,
+    Math.max(visibleEndIndex + 1, startIndex + 1),
+  )
 
   return {
     startIndex,

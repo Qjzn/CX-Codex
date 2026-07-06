@@ -10164,3 +10164,38 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, fixtures, and the real phone thread page.
+
+### Feature: Binary search virtual conversation range
+
+#### Prerequisites
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- The conversation regression fixture can render at desktop, phone, and foldable viewports.
+
+#### Steps
+1. Open a long conversation or the conversation regression fixture.
+2. Scroll through the message list and reveal older messages.
+3. Confirm the same messages remain visible as before, with no blank rows, jumpy spacer height, or broken return-to-bottom behavior.
+4. Run `npm.cmd run build`.
+5. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Run `npm.cmd run verify:frontend-normalizers`.
+7. Run `npm.cmd run verify:server-modules`.
+8. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+9. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Virtualized conversation range lookup uses binary search over cumulative heights instead of linear scanning.
+- Desktop, phone, and foldable fixture pages still render nonblank conversation content.
+- The real `分析项目` phone thread page still renders without missing messages or blank states.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/components/content/ThreadConversation.vue`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement before fix: `ThreadConversation.vue` already virtualized long conversations at `80` entries, but visible-range start/end were found with linear scans over cumulative heights during scroll.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `66164`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
