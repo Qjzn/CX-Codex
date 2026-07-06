@@ -113,6 +113,7 @@ const recentTurnMessages = normalizeThreadMessagesV2({
     createdAt: 1,
     turnsView: 'recent',
     originalTurnsCount: 4,
+    turnsStartIndex: 2,
     turns: [
       {
         id: 'turn-3',
@@ -135,6 +136,39 @@ assert.equal(recentTurnMessages[0]?.text, '已优先显示最近 2 轮，较早 
 assert.equal(recentTurnMessages[0]?.isUnhandled, undefined)
 assert.equal(recentTurnMessages[0]?.rawPayload, undefined)
 assert.equal(recentTurnMessages[1]?.messageType, 'agentMessage')
+assert.equal(recentTurnMessages[1]?.turnIndex, 2)
+assert.equal(recentTurnMessages[2]?.turnIndex, 3)
+
+const olderTurnMessages = normalizeThreadMessagesV2({
+  thread: {
+    id: 'thread-recent-view',
+    cwd: 'E:\\\\repo',
+    preview: '',
+    updatedAt: 1,
+    createdAt: 1,
+    turnsView: 'older',
+    originalTurnsCount: 8,
+    turnsStartIndex: 2,
+    turns: [
+      {
+        id: 'turn-3',
+        status: 'completed',
+        items: [{ id: 'agent-3-old', type: 'agentMessage', text: 'Older answer 3' }],
+      },
+      {
+        id: 'turn-4',
+        status: 'completed',
+        items: [{ id: 'agent-4-old', type: 'agentMessage', text: 'Older answer 4' }],
+      },
+    ],
+  },
+})
+
+assert.equal(olderTurnMessages[0]?.id, 'thread-recent-view:history-window-notice')
+assert.equal(olderTurnMessages[0]?.messageType, 'history.notice')
+assert.equal(olderTurnMessages[0]?.text, '已加载较早 2 轮，前面还有 2 轮可继续加载。')
+assert.equal(olderTurnMessages[1]?.turnIndex, 2)
+assert.equal(olderTurnMessages[2]?.turnIndex, 3)
 
 const groups = normalizeThreadGroupsV2({
   data: [

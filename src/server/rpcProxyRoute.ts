@@ -73,7 +73,9 @@ export async function handleRpcProxyRoute(
   const collaborationMode = body.method === 'turn/start'
     ? readCollaborationModeFromPayload(body.params)
     : 'execute'
-  const requestedFullThreadRead = shouldReturnFullThreadRead(body.method, body.params)
+  const threadReadResponseView = readThreadReadResponseView(body.method, body.params)
+  const requestedFullThreadRead = threadReadResponseView === 'full'
+  const requestedTurnWindow = readThreadReadTurnWindow(body.method, body.params)
   const forwardedParams = stripLocalThreadReadParams(body.method, body.params)
   const rpcParams = body.method === 'turn/start'
     ? normalizePlanModeTurnStartParams(forwardedParams, { includeNativeMode: true })
@@ -132,6 +134,7 @@ export async function handleRpcProxyRoute(
       if (fallbackThreadRead) {
         const result = trimThreadTurnsInRpcResult(body.method, fallbackThreadRead, {
           preserveFullTurns: requestedFullThreadRead,
+          turnWindow: requestedTurnWindow,
         })
         if (!requestedFullThreadRead) {
           dependencies.rememberCachedThreadRead(rpcThreadId, result)
@@ -170,6 +173,7 @@ export async function handleRpcProxyRoute(
     : rpcResult
   const result = trimThreadTurnsInRpcResult(body.method, enrichedRpcResult, {
     preserveFullTurns: requestedFullThreadRead,
+    turnWindow: requestedTurnWindow,
   })
   if (shouldInvalidateThreadListCacheForRpc(body.method)) {
     dependencies.clearThreadSearchIndex()
@@ -178,7 +182,8 @@ export async function handleRpcProxyRoute(
     body.method === 'thread/read' &&
     rpcThreadId &&
     readThreadReadIncludeTurns(rpcParams) &&
-    !requestedFullThreadRead
+    !requestedFullThreadRead &&
+    !requestedTurnWindow
   ) {
     dependencies.rememberCachedThreadRead(rpcThreadId, result)
   }
@@ -192,18 +197,55 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
-function shouldReturnFullThreadRead(method: string, params: unknown): boolean {
+function readThreadReadResponseView(method: string, params: unknown): '' | 'full' | 'older' {
   const record = asRecord(params)
-  return method === 'thread/read' &&
-    record?.responseView === 'full' &&
-    readThreadReadIncludeTurns(record)
+  if (method !== 'thread/read' || !readThreadReadIncludeTurns(record)) return ''
+  return record?.responseView === 'full'
+    ? 'full'
+    : record?.responseView === 'older'
+      ? 'older'
+      : ''
+}
+
+function readThreadReadTurnWindow(method: string, params: unknown): { view: 'older'; beforeTurnIndex: number; limit?: number } | undefined {
+  const record = asRecord(params)
+  if (readThreadReadResponseView(method, record) !== 'older') return undefined
+  const beforeTurnIndex = readNonNegativeInteger(record?.beforeTurnIndex)
+  if (beforeTurnIndex === null) return undefined
+  const limit = readNonNegativeInteger(record?.turnLimit)
+  return {
+    view: 'older',
+    beforeTurnIndex,
+    ...(limit !== null ? { limit } : {}),
+  }
 }
 
 function stripLocalThreadReadParams(method: string, params: unknown): unknown {
   const record = asRecord(params)
-  if (method !== 'thread/read' || !record || record.responseView === undefined) return params
-  const { responseView: _responseView, ...forwarded } = record
+  if (
+    method !== 'thread/read' ||
+    !record ||
+    (
+      record.responseView === undefined &&
+      record.beforeTurnIndex === undefined &&
+      record.turnLimit === undefined
+    )
+  ) {
+    return params
+  }
+  const {
+    responseView: _responseView,
+    beforeTurnIndex: _beforeTurnIndex,
+    turnLimit: _turnLimit,
+    ...forwarded
+  } = record
   return forwarded
+}
+
+function readNonNegativeInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : null
 }
 
 async function readSessionLogFallbackThreadRead(

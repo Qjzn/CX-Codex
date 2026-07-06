@@ -2782,7 +2782,7 @@ function smokeAppServerRpcResult(): void {
   })
 
   const trimmed = trimThreadTurnsInRpcResult('thread/read', original) as {
-    thread: { turns: Array<{ id: string }>; turnsView?: string; originalTurnsCount?: number }
+    thread: { turns: Array<{ id: string }>; turnsView?: string; originalTurnsCount?: number; turnsStartIndex?: number }
     other?: boolean
   }
   assert.deepEqual(trimmed.thread.turns.map((turn) => turn.id), [
@@ -2801,11 +2801,19 @@ function smokeAppServerRpcResult(): void {
   assert.equal(trimmed.thread.turns.length, 10)
   assert.equal(trimmed.thread.turnsView, 'recent')
   assert.equal(trimmed.thread.originalTurnsCount, 12)
+  assert.equal(trimmed.thread.turnsStartIndex, 2)
   assert.equal(
     (trimThreadTurnsInRpcResult('thread/read', original, { preserveFullTurns: true }) as { thread: { turns: unknown[] } })
       .thread.turns.length,
     12,
   )
+  const olderWindow = trimThreadTurnsInRpcResult('thread/read', original, {
+    turnWindow: { view: 'older', beforeTurnIndex: 2, limit: 10 },
+  }) as { thread: { turns: Array<{ id: string }>; turnsView?: string; originalTurnsCount?: number; turnsStartIndex?: number } }
+  assert.deepEqual(olderWindow.thread.turns.map((turn) => turn.id), ['turn-1', 'turn-2'])
+  assert.equal(olderWindow.thread.turnsView, 'older')
+  assert.equal(olderWindow.thread.originalTurnsCount, 12)
+  assert.equal(olderWindow.thread.turnsStartIndex, 0)
 
   const itemHeavy = trimThreadTurnsInRpcResult('thread/read', {
     thread: {

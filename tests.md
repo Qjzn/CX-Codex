@@ -10764,3 +10764,44 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 deploy: latest build was restarted on local 7420 as PID `26500`, version `2.2.8`, with `/health` returning `ok`.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
+### Feature: Load older history in bounded turn windows
+
+#### Prerequisites
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- A long thread can return `turnsView: recent` / `turnsStartIndex` from service-side trimming.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+
+#### Steps
+1. Open a long thread whose current recent window starts after turn 0.
+2. Click `加载较早历史`.
+3. Confirm the frontend requests `thread/read` with local `responseView: older`, `beforeTurnIndex`, and optional `turnLimit`.
+4. Confirm the bridge strips those local fields before forwarding to App Server.
+5. Confirm the bridge returns only the older turn window before the current earliest loaded turn, not the full thread.
+6. Confirm normalized messages use absolute `turnIndex`, so older messages are merged before the recent window.
+7. Confirm default thread switching and background sync still use recent-window loading.
+8. Run `npm.cmd run build`.
+9. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+10. Run `npm.cmd run verify:frontend-normalizers`.
+11. Run `npm.cmd run verify:server-modules`.
+12. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+13. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- `加载较早历史` retrieves one bounded older turn window at a time.
+- Older-window requests do not pollute the service-side thread-read cache.
+- The history notice remains at the top and updates as earlier windows are loaded.
+- Existing full-history support remains available internally, but the user-facing action avoids full browser payload by default.
+- The real `分析项目` phone thread page and conversation fixture remain nonblank.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/server/appServerRpcResult.ts`, `src/server/rpcProxyRoute.ts`, `src/api/normalizers/v2.ts`, `src/api/codexGateway.ts`, `src/composables/useDesktopState.ts`, `src/App.vue`, `src/components/content/ThreadConversation.vue`, `scripts/server-module-smoke.ts`, `scripts/verify-frontend-normalizers.mjs`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement before fix: `加载较早历史` used a full-history path, so clicking it could push the entire long thread payload to the browser at once.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; coverage confirms recent windows expose `turnsStartIndex` and older-window requests return only the bounded preceding turn slice.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`; coverage confirms recent and older notices keep stable ids and absolute `turnIndex` values.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `55320`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.

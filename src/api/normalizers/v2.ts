@@ -111,6 +111,12 @@ function readPositiveInteger(value: unknown): number {
     : 0
 }
 
+function readNonNegativeInteger(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : 0
+}
+
 function readFirstRecordKey(value: Record<string, unknown>): string {
   return Object.keys(value).find((key) => key.trim().length > 0)?.trim() ?? ''
 }
@@ -456,17 +462,21 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse): UiMessag
   const rawThread = payload.thread as Record<string, unknown>
   const turnsView = readTrimmedString(rawThread.turnsView)
   const originalTurnsCount = readPositiveInteger(rawThread.originalTurnsCount)
-  const hiddenTurnsCount = Math.max(0, originalTurnsCount - turns.length)
-  if (turnsView === 'recent' && hiddenTurnsCount > 0) {
+  const turnsStartIndex = readNonNegativeInteger(rawThread.turnsStartIndex)
+  const hiddenBeforeCount = Math.max(0, turnsStartIndex)
+  if ((turnsView === 'recent' || turnsView === 'older') && hiddenBeforeCount > 0) {
     const threadId = readTrimmedString(rawThread.id) || 'thread'
     messages.push({
-      id: `${threadId}:turns-view:recent`,
+      id: `${threadId}:history-window-notice`,
       role: 'system',
-      text: `已优先显示最近 ${turns.length} 轮，较早 ${hiddenTurnsCount} 轮已折叠以保持流畅。`,
+      text: turnsView === 'older'
+        ? `已加载较早 ${turns.length} 轮，前面还有 ${hiddenBeforeCount} 轮可继续加载。`
+        : `已优先显示最近 ${turns.length} 轮，较早 ${hiddenBeforeCount} 轮已折叠以保持流畅。`,
       messageType: 'history.notice',
     })
   }
   for (let turnIndex = 0; turnIndex < turns.length; turnIndex++) {
+    const absoluteTurnIndex = turnsStartIndex + turnIndex
     const turn = turns[turnIndex]
     const rawTurn = turn as Record<string, unknown>
     const itemsView = readTrimmedString(rawTurn.itemsView)
@@ -479,7 +489,7 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse): UiMessag
         messageType: `unhandled.turnItemsView.${itemsView}`,
         rawPayload: toRawPayload(turn),
         isUnhandled: true,
-        turnIndex,
+        turnIndex: absoluteTurnIndex,
       })
       continue
     }
@@ -490,7 +500,7 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse): UiMessag
           : { id: `turn-${String(turnIndex)}:item-${String(messages.length)}`, type: 'invalidItem', content: item }
       ) as ThreadItem
       for (const msg of toUiMessages(threadItem)) {
-        messages.push({ ...msg, turnIndex })
+        messages.push({ ...msg, turnIndex: absoluteTurnIndex })
       }
     }
   }

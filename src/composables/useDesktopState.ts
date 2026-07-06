@@ -1037,10 +1037,11 @@ function areMessageArraysEqual(first: UiMessage[], second: UiMessage[]): boolean
 function mergeMessages(
   previous: UiMessage[],
   incoming: UiMessage[],
-  options: { preserveMissing?: boolean } = {},
+  options: { preserveMissing?: boolean; sortByTurnIndex?: boolean; replaceHistoryNotice?: boolean } = {},
 ): UiMessage[] {
   const previousById = new Map(previous.map((message) => [message.id, message]))
   const incomingById = new Map(incoming.map((message) => [message.id, message]))
+  const incomingHasHistoryNotice = incoming.some((message) => message.messageType === 'history.notice')
 
   const mergedIncoming = incoming.map((incomingMessage) => {
     const previousMessage = previousById.get(incomingMessage.id)
@@ -1054,22 +1055,50 @@ function mergeMessages(
     return areMessageArraysEqual(previous, mergedIncoming) ? previous : mergedIncoming
   }
 
-  const mergedFromPrevious = previous.map((previousMessage) => {
-    const nextMessage = incomingById.get(previousMessage.id)
-    if (!nextMessage) {
-      return previousMessage
-    }
-    if (areMessageFieldsEqual(previousMessage, nextMessage)) {
-      return previousMessage
-    }
-    return nextMessage
-  })
+  const mergedFromPrevious = previous
+    .filter((previousMessage) => {
+      return !(
+        options.replaceHistoryNotice === true &&
+        previousMessage.messageType === 'history.notice' &&
+        !incomingHasHistoryNotice
+      )
+    })
+    .map((previousMessage) => {
+      const nextMessage = incomingById.get(previousMessage.id)
+      if (!nextMessage) {
+        return previousMessage
+      }
+      if (areMessageFieldsEqual(previousMessage, nextMessage)) {
+        return previousMessage
+      }
+      return nextMessage
+    })
 
   const previousIdSet = new Set(previous.map((message) => message.id))
   const appended = mergedIncoming.filter((message) => !previousIdSet.has(message.id))
-  const merged = [...mergedFromPrevious, ...appended]
+  const merged = options.sortByTurnIndex === true
+    ? sortMessagesByTurnIndex([...mergedFromPrevious, ...appended])
+    : [...mergedFromPrevious, ...appended]
 
   return areMessageArraysEqual(previous, merged) ? previous : merged
+}
+
+function sortMessagesByTurnIndex(messages: UiMessage[]): UiMessage[] {
+  const originalIndexById = new Map(messages.map((message, index) => [message.id, index]))
+  return [...messages].sort((first, second) => {
+    if (first.messageType === 'history.notice' && second.messageType !== 'history.notice') return -1
+    if (second.messageType === 'history.notice' && first.messageType !== 'history.notice') return 1
+
+    const firstTurnIndex = typeof first.turnIndex === 'number' ? first.turnIndex : null
+    const secondTurnIndex = typeof second.turnIndex === 'number' ? second.turnIndex : null
+    if (firstTurnIndex !== null && secondTurnIndex !== null && firstTurnIndex !== secondTurnIndex) {
+      return firstTurnIndex - secondTurnIndex
+    }
+    if (firstTurnIndex !== null && secondTurnIndex === null) return -1
+    if (firstTurnIndex === null && secondTurnIndex !== null) return 1
+
+    return (originalIndexById.get(first.id) ?? 0) - (originalIndexById.get(second.id) ?? 0)
+  })
 }
 
 function normalizeMessageSignatureList(values: string[] | undefined): string {
@@ -5458,7 +5487,7 @@ export function useDesktopState() {
     snapshot: ThreadRuntimeSnapshot,
     previousMessages: UiMessage[],
     signal?: AbortSignal,
-    options: { force?: boolean; fullHistory?: boolean } = {},
+    options: { force?: boolean; fullHistory?: boolean; olderHistory?: { beforeTurnIndex: number; limit?: number } } = {},
   ): Promise<ThreadRuntimeSnapshot> {
     if (options.force !== true && !shouldFetchSettledSnapshotMessagesFromRpc(threadId, snapshot, previousMessages)) {
       return snapshot
@@ -5471,6 +5500,13 @@ export function useDesktopState() {
       const detail = await getThreadDetail(threadId, {
         signal,
         ...(options.fullHistory === true ? { responseView: 'full' } : {}),
+        ...(options.olderHistory
+          ? {
+              responseView: 'older' as const,
+              beforeTurnIndex: options.olderHistory.beforeTurnIndex,
+              ...(typeof options.olderHistory.limit === 'number' ? { turnLimit: options.olderHistory.limit } : {}),
+            }
+          : {}),
       })
       if (detail.messages.length === 0 && snapshot.messages.length > 0) {
         return snapshot
@@ -5508,7 +5544,13 @@ export function useDesktopState() {
 
   async function loadMessages(
     threadId: string,
-    options: { silent?: boolean; signal?: AbortSignal; forceSettledRpcRefresh?: boolean; fullHistory?: boolean } = {},
+    options: {
+      silent?: boolean
+      signal?: AbortSignal
+      forceSettledRpcRefresh?: boolean
+      fullHistory?: boolean
+      olderHistory?: { beforeTurnIndex: number; limit?: number }
+    } = {},
   ) {
     if (!threadId) {
       return
@@ -5560,8 +5602,9 @@ export function useDesktopState() {
         scheduleSettledSnapshotMessagesRpcRefresh(threadId, settledRefreshKey)
       } else {
         snapshot = await refreshSettledSnapshotMessagesFromRpc(threadId, snapshot, previousPersisted, options.signal, {
-          force: options.forceSettledRpcRefresh === true || options.fullHistory === true,
+          force: options.forceSettledRpcRefresh === true || options.fullHistory === true || Boolean(options.olderHistory),
           fullHistory: options.fullHistory === true,
+          olderHistory: options.olderHistory,
         })
       }
 
@@ -5588,10 +5631,13 @@ export function useDesktopState() {
       const shouldPreserveMissingMessages =
         shouldPreserveSettledRpcMessages ||
         (options.silent === true && inProgress) ||
-        snapshot.messageState !== 'fresh'
+        snapshot.messageState !== 'fresh' ||
+        Boolean(options.olderHistory)
       const mergedMessages = mergeMessages(previousPersisted, nextMessages, {
         // Preserve previous content when the server only returns partial or stale message state.
         preserveMissing: shouldPreserveMissingMessages,
+        sortByTurnIndex: Boolean(options.olderHistory),
+        replaceHistoryNotice: Boolean(options.olderHistory),
       })
       setPersistedMessagesForThread(threadId, mergedMessages)
       if (snapshot.messageState === 'fresh') {
@@ -5847,6 +5893,41 @@ export function useDesktopState() {
         silent: true,
         forceSettledRpcRefresh: true,
         fullHistory: true,
+      })
+    } catch (unknownError) {
+      error.value = unknownError instanceof Error ? unknownError.message : '加载较早历史失败'
+      throw unknownError
+    }
+  }
+
+  function earliestLoadedTurnIndex(threadId: string): number | null {
+    const messages = persistedMessagesByThreadId.value[threadId] ?? []
+    let earliest: number | null = null
+    for (const message of messages) {
+      if (message.messageType === 'history.notice') continue
+      if (typeof message.turnIndex !== 'number' || !Number.isFinite(message.turnIndex)) continue
+      earliest = earliest === null ? message.turnIndex : Math.min(earliest, message.turnIndex)
+    }
+    return earliest
+  }
+
+  async function loadOlderHistoryForSelectedThread(): Promise<void> {
+    error.value = ''
+
+    const threadId = selectedThreadId.value.trim()
+    if (!threadId) return
+
+    const beforeTurnIndex = earliestLoadedTurnIndex(threadId)
+    if (beforeTurnIndex === null || beforeTurnIndex <= 0) return
+
+    try {
+      abortCurrentSync()
+      clearBufferedLiveDeltas()
+      pendingThreadMessageRefresh.delete(threadId)
+      await loadMessages(threadId, {
+        silent: true,
+        forceSettledRpcRefresh: true,
+        olderHistory: { beforeTurnIndex },
       })
     } catch (unknownError) {
       error.value = unknownError instanceof Error ? unknownError.message : '加载较早历史失败'
@@ -7502,6 +7583,7 @@ export function useDesktopState() {
     refreshAll,
     refreshSelectedThreadContent,
     loadFullHistoryForSelectedThread,
+    loadOlderHistoryForSelectedThread,
     refreshSkills,
     refreshComposerPlugins,
     loginComposerPlugin,

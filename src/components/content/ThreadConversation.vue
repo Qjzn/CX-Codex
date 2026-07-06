@@ -798,7 +798,7 @@
                     <button
                       type="button"
                       class="history-notice-action"
-                      @click.stop="emit('loadFullHistory')"
+                      @click.stop="emit('loadOlderHistory')"
                     >
                       加载较早历史
                     </button>
@@ -1546,7 +1546,7 @@ const emit = defineEmits<{
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
   rollback: [payload: { turnIndex: number; prependText?: string }]
   toggleFavorite: [message: UiMessage]
-  loadFullHistory: []
+  loadOlderHistory: []
   returnToNewThread: []
   dismissEmptyThread: []
 }>()

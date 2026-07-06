@@ -47,7 +47,11 @@ type CurrentModelConfig = {
 }
 
 type RpcCallOptions = { signal?: AbortSignal }
-type ThreadDetailOptions = RpcCallOptions & { responseView?: 'full' }
+type ThreadDetailOptions = RpcCallOptions & {
+  responseView?: 'full' | 'older'
+  beforeTurnIndex?: number
+  turnLimit?: number
+}
 
 export type RuntimeExecutionState =
   | 'idle'
@@ -565,6 +569,9 @@ async function getThreadDetailV2(
     threadId,
     includeTurns: true,
     ...(options.responseView === 'full' ? { responseView: 'full' } : {}),
+    ...(options.responseView === 'older' ? { responseView: 'older' } : {}),
+    ...(typeof options.beforeTurnIndex === 'number' ? { beforeTurnIndex: options.beforeTurnIndex } : {}),
+    ...(typeof options.turnLimit === 'number' ? { turnLimit: options.turnLimit } : {}),
   }, options)
   return {
     messages: normalizeThreadMessagesV2(payload),
