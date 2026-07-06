@@ -50,13 +50,13 @@ This file tracks manual regression and feature verification steps.
 1. Open `http://127.0.0.1:7420/#/__regression/conversation-blocks?regression=frontend`.
 2. Confirm the fixture contains a `history.notice` message but no locally hidden message window.
 3. Confirm the main conversation load-more affordance is visible and reads `继续加载较早历史`.
-4. Click the main load-more affordance.
+4. Click the main load-more affordance twice in quick succession.
 5. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
 
 #### Expected Results
 - The same load-more button handles both local window reveal and remote older-history retrieval.
-- When only `history.notice` remains, clicking the button emits `loadOlderHistory` instead of doing nothing.
-- The frontend regression fails if the remote older-history affordance disappears or stops emitting.
+- When only `history.notice` remains, clicking the button emits exactly one `loadOlderHistory` request and stays disabled while the remote older-history request is in flight.
+- The frontend regression fails if the remote older-history affordance disappears, stops emitting, or emits duplicate requests on rapid taps.
 
 #### Rollback/Cleanup
 - To roll back, revert `src/components/content/ThreadConversation.vue`, `src/components/content/ConversationRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.

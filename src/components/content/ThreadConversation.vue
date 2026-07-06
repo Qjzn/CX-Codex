@@ -1281,6 +1281,7 @@ const props = defineProps<{
 
 const MESSAGE_WINDOW_SIZE = 10
 const MESSAGE_WINDOW_CONTEXT_BACKFILL_LIMIT = 24
+const REMOTE_OLDER_HISTORY_REQUEST_TIMEOUT_MS = 8000
 const RECENT_DERIVED_UI_MESSAGE_LIMIT = 120
 const REACTIVE_WATCH_MESSAGE_LIMIT = RECENT_DERIVED_UI_MESSAGE_LIMIT * 2
 const PREPARED_MESSAGE_BLOCK_CACHE_LIMIT = 80
@@ -1715,6 +1716,7 @@ let rollbackConfirmTimer: number | null = null
 let previousBodyOverflow = ''
 const copiedCodeBlockKey = ref('')
 let copiedCodeBlockTimer: number | null = null
+let remoteOlderHistoryRequestTimer: number | null = null
 type InlineSegment =
   | { kind: 'text'; value: string }
   | { kind: 'bold'; value: string }
@@ -2188,9 +2190,28 @@ async function revealOlderMessages(): Promise<void> {
     return
   }
 
+  markRemoteOlderHistoryRequestInFlight()
   emit('loadOlderHistory')
   await nextTick()
   await scheduleScrollAnchorRestore(anchorSnapshot)
+}
+
+function markRemoteOlderHistoryRequestInFlight(): void {
+  if (remoteOlderHistoryRequestTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(remoteOlderHistoryRequestTimer)
+  }
+  if (typeof window === 'undefined') return
+  remoteOlderHistoryRequestTimer = window.setTimeout(() => {
+    remoteOlderHistoryRequestTimer = null
+    isRevealingOlderMessages.value = false
+  }, REMOTE_OLDER_HISTORY_REQUEST_TIMEOUT_MS)
+}
+
+function clearRemoteOlderHistoryRequestInFlight(): void {
+  if (remoteOlderHistoryRequestTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(remoteOlderHistoryRequestTimer)
+    remoteOlderHistoryRequestTimer = null
+  }
   isRevealingOlderMessages.value = false
 }
 
@@ -4742,6 +4763,14 @@ watch(
 )
 
 watch(
+  () => props.messages.length,
+  () => {
+    if (remoteOlderHistoryRequestTimer === null) return
+    clearRemoteOlderHistoryRequestInFlight()
+  },
+)
+
+watch(
   collapsibleGuidedTurnDescriptors,
   (nextDescriptors) => {
     const keepTurnIndexes = new Set(nextDescriptors.keys())
@@ -4777,7 +4806,7 @@ watch(
     lastGapMeasuredViewportHeight = -1
     lastScrollStateEmitAt = 0
     lastEmittedScrollStateSignature.value = ''
-    isRevealingOlderMessages.value = false
+    clearRemoteOlderHistoryRequestInFlight()
     canAutoRevealOlderMessages.value = true
     visibleMessageStartIndex.value = latestVisibleStartIndex(renderableMessages.value)
     clearBelowFoldUpdates()
@@ -5100,6 +5129,7 @@ onBeforeUnmount(() => {
     window.clearTimeout(scrollStateIdleTimer)
     scrollStateIdleTimer = null
   }
+  clearRemoteOlderHistoryRequestInFlight()
   if (observedConversationListElement) {
     observedConversationListElement.removeEventListener('scroll', onConversationScroll, { passive: true } as AddEventListenerOptions)
     observedConversationListElement = null

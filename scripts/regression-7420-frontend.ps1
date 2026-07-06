@@ -1021,6 +1021,7 @@ JSON.stringify((() => {
     hasToolCallActionText: textContent.includes('让 Codex 改用文字继续'),
     hasPermissionActionText: textContent.includes('允许并继续') && textContent.includes('拒绝') && textContent.includes('稍后处理'),
     loadMoreButtonText: document.querySelector('.conversation-load-more-button')?.textContent?.replace(/\s+/g, ' ').trim() || '',
+    loadMoreButtonDisabled: document.querySelector('.conversation-load-more-button')?.disabled === true,
     olderHistoryRequestCount: Number(document.querySelector('.conversation-regression-older-history-count')?.getAttribute('data-count') || '0'),
     firstCopyButtonText: firstCopyButton ? firstCopyButton.textContent.trim() : '',
     hasEmojiFileIcon: document.body.innerText.includes('📄'),
@@ -1099,10 +1100,20 @@ function Assert-ConversationOlderHistoryAffordance {
 
   $before = Read-ConversationFixtureMetrics -Session $Session
   Assert-True ([int]$before.olderHistoryRequestCount -eq 0) "conversation fixture older-history request count should start at 0"
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "click", ".conversation-load-more-button") | Out-Null
+  $clickScript = @'
+JSON.stringify((() => {
+  const button = document.querySelector('.conversation-load-more-button');
+  if (!(button instanceof HTMLButtonElement)) return { clicked: 0 };
+  button.click();
+  button.click();
+  return { clicked: 2 };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $clickScript | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "200") | Out-Null
   $after = Read-ConversationFixtureMetrics -Session $Session
-  Assert-True ([int]$after.olderHistoryRequestCount -eq 1) "conversation fixture load-more button did not emit remote older-history request"
+  Assert-True ([int]$after.olderHistoryRequestCount -eq 1) "conversation fixture load-more button emitted duplicate remote older-history requests"
+  Assert-True ($after.loadMoreButtonDisabled -eq $true) "conversation fixture load-more button did not stay disabled while remote older-history request was in flight"
 }
 
 function Expand-ConversationFixturePendingRequests {
