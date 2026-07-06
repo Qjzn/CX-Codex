@@ -9980,3 +9980,38 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `69172`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
+
+### Feature: Session-log fallback repeated message recovery
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The standard real-thread regression target `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- Server module smoke can validate the parser with repeated recovered messages.
+
+#### Steps
+1. Run `npm.cmd run verify:server-modules`.
+2. Confirm `smokeAppServerSessionLogThreadRead` includes two separated user messages with identical text `继续`.
+3. Confirm adjacent duplicate no-id agent events are still collapsed to one recovered item.
+4. Run `npm.cmd run verify:frontend-normalizers`.
+5. Run `npm.cmd run build`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+7. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Session-log fallback preserves repeated user turns with the same text when they have distinct message ids or are separated by other recovered messages.
+- Adjacent duplicate no-id event messages are still folded to avoid double-rendering response/event duplicates.
+- Recovered turns remain capped by the existing fallback turn limit and continue to prefer recent history.
+- The real `分析项目` thread remains present in the sidebar data gate and readable in the browser/mobile regression gate.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/server/appServerSessionLogThreadRead.ts`, `scripts/server-module-smoke.ts`, `docs/changelog.zh-CN.md`, and this test section.
+- No session files, browser storage, or server state need cleanup; this only changes fallback duplicate suppression.
+
+#### Regression Evidence
+- 2026-07-06 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-06 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-06 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `20580`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
+- 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.

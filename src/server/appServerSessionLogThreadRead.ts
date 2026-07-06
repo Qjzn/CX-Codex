@@ -146,6 +146,13 @@ function appendMessageTurn(turns: FallbackTurn[], message: { role: 'user' | 'ass
   }
 }
 
+function isSameRecoveredMessage(
+  first: { role: 'user' | 'assistant'; text: string } | null,
+  second: { role: 'user' | 'assistant'; text: string },
+): boolean {
+  return Boolean(first && first.role === second.role && first.text === second.text)
+}
+
 function writeCacheState(sessionPath: string, cacheState: SessionLogThreadReadCacheState): void {
   if (sessionLogThreadReadCacheStateByPath.has(sessionPath)) {
     sessionLogThreadReadCacheStateByPath.delete(sessionPath)
@@ -174,7 +181,8 @@ export async function parseThreadReadFromSessionLog(
   let createdAt = readUnixSeconds(fallbackThread?.createdAt)
   let updatedAt = readUnixSeconds(fallbackThread?.updatedAt)
   const turns: FallbackTurn[] = []
-  const seenMessages = new Set<string>()
+  const seenMessageIds = new Set<string>()
+  let lastRecoveredMessage: { role: 'user' | 'assistant'; text: string } | null = null
   const stats = await stat(sessionPath)
   const startOffset = Math.max(0, stats.size - FALLBACK_READ_BYTE_LIMIT)
 
@@ -212,10 +220,14 @@ export async function parseThreadReadFromSessionLog(
         const message = readResponseItemMessage(entry) ?? readEventMessage(entry)
         if (!message) continue
 
-        const key = `${message.role}\n${message.text}`
-        if (seenMessages.has(key)) continue
-        seenMessages.add(key)
+        if (message.id) {
+          if (seenMessageIds.has(message.id)) continue
+          seenMessageIds.add(message.id)
+        } else if (isSameRecoveredMessage(lastRecoveredMessage, message)) {
+          continue
+        }
         appendMessageTurn(turns, message)
+        lastRecoveredMessage = { role: message.role, text: message.text }
         if (!preview && message.role === 'user') {
           preview = message.text.split('\n')[0]?.trim() ?? ''
         }

@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - Session-log fallback 不再误删重复短消息：恢复本地 session log 时改为按 message id 去重，只有无 id 的相邻重复事件才会折叠，避免多次发送“继续”等相同内容时后续 turn 被当作重复内容丢掉。
   - Session-log fallback 会话详情补齐标题元数据：当 `thread/read` 只能从本地 session log 恢复消息时，会用原始线程名或首条用户消息 preview 回填 `name/title`，减少直接打开恢复线程时标题空白的问题。
   - 会话详情恢复更稳：当选中线程的详情读取只能拿到 `cached` / `unavailable` 非 fresh 消息状态时，前端会保留已有内容并安排最多 3 次轻量退避重试，避免一次 App Server 短暂失败后长期停留在旧缓存或缺历史状态。
   - 长会话服务端 payload 继续减负：`thread/read` / resume / rollback 这类带 turns 的 App Server RPC 结果除了保留最近 10 个 turn，现在还会限制单个 turn 内 item 数，保留首个 item 和最近 item，避免单轮长任务把数百条工具/日志 item 一次性推给移动端。

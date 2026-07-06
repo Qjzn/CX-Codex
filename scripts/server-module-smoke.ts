@@ -8538,6 +8538,50 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
           message: 'Recovered answer',
         },
       }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:02.500Z',
+        type: 'event_msg',
+        payload: {
+          type: 'agent_message',
+          message: 'Recovered answer',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:03.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'user-continue-1',
+          role: 'user',
+          content: [{ type: 'input_text', text: '继续' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:04.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'agent_message',
+          message: 'Second recovered answer',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:05.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'user-continue-2',
+          role: 'user',
+          content: [{ type: 'input_text', text: '继续' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:06.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'agent_message',
+          message: 'Third recovered answer',
+        },
+      }),
     ].join('\n'), 'utf8')
 
     const threadRead = await parseThreadReadFromSessionLog(sessionPath, {
@@ -8566,11 +8610,16 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
     assert.equal(threadRead?.thread.title, 'Restore this session')
     assert.equal(threadRead?.thread.cwd, 'E:/workspace/project')
     assert.equal(threadRead?.thread.preview, 'Restore this session')
-    assert.equal(threadRead?.thread.turns.length, 1)
+    assert.equal(threadRead?.thread.turns.length, 3)
     assert.equal(threadRead?.thread.turns[0]?.items[0]?.type, 'userMessage')
     assert.equal(threadRead?.thread.turns[0]?.items[0]?.content?.[0]?.text, 'Restore this session')
     assert.equal(threadRead?.thread.turns[0]?.items[1]?.type, 'agentMessage')
     assert.equal(threadRead?.thread.turns[0]?.items[1]?.text, 'Recovered answer')
+    assert.equal(threadRead?.thread.turns[0]?.items.length, 2)
+    assert.equal(threadRead?.thread.turns[1]?.items[0]?.content?.[0]?.text, '继续')
+    assert.equal(threadRead?.thread.turns[1]?.items[1]?.text, 'Second recovered answer')
+    assert.equal(threadRead?.thread.turns[2]?.items[0]?.content?.[0]?.text, '继续')
+    assert.equal(threadRead?.thread.turns[2]?.items[1]?.text, 'Third recovered answer')
 
     const largeSessionPath = join(dir, 'rollout-2026-07-06T10-05-00-thread-large-fallback.jsonl')
     await writeFile(largeSessionPath, [
