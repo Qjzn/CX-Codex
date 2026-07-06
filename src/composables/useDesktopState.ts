@@ -172,6 +172,7 @@ const NOTIFICATION_STALE_MS = 30000
 const THREAD_LIST_REFRESH_INTERVAL_MS = 300000
 const THREAD_TOKEN_USAGE_REFRESH_RETRY_MS = 5 * 60 * 1000
 const THREAD_TOKEN_USAGE_IDLE_DELAY_MS = 1600
+const THREAD_SELECTION_SKILLS_IDLE_DELAY_MS = 1800
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 1500
 const RATE_LIMIT_REFRESH_MIN_INTERVAL_MS = 300000
 const COMPOSER_PLUGINS_REFRESH_DEBOUNCE_MS = 450
@@ -1635,6 +1636,7 @@ export function useDesktopState() {
   let rateLimitRefreshTimer: number | null = null
   let composerPluginsRefreshTimer: number | null = null
   let skillsChangedRefreshTimer: number | null = null
+  let selectedThreadSkillsRefreshTimer: number | null = null
   let rateLimitRefreshPromise: Promise<void> | null = null
   let lastRateLimitRefreshStartedAtMs = 0
   const resumePromiseByThreadId = new Map<string, Promise<void>>()
@@ -5780,6 +5782,27 @@ export function useDesktopState() {
     }
   }
 
+  function clearSelectedThreadSkillsRefreshTimer(): void {
+    if (selectedThreadSkillsRefreshTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(selectedThreadSkillsRefreshTimer)
+    }
+    selectedThreadSkillsRefreshTimer = null
+  }
+
+  function scheduleSelectedThreadSkillsRefresh(threadId: string): void {
+    if (!threadId) return
+    if (typeof window === 'undefined') {
+      void refreshSkills()
+      return
+    }
+    clearSelectedThreadSkillsRefreshTimer()
+    selectedThreadSkillsRefreshTimer = window.setTimeout(() => {
+      selectedThreadSkillsRefreshTimer = null
+      if (selectedThreadId.value !== threadId) return
+      void refreshSkills()
+    }, THREAD_SELECTION_SKILLS_IDLE_DELAY_MS)
+  }
+
   function scheduleSkillsRefreshFromNotification(): void {
     if (typeof window === 'undefined') {
       void refreshSkills()
@@ -5988,7 +6011,7 @@ export function useDesktopState() {
 
     const completeThreadSelection = (): void => {
       if (threadSelectionAbortController !== abortController) return
-      void refreshSkills()
+      scheduleSelectedThreadSkillsRefresh(normalizedThreadId)
       if (normalizedThreadId && isThreadExecutionActive(normalizedThreadId)) {
         markActiveSyncBoost()
       }
