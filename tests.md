@@ -19,6 +19,44 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Skip duplicate settled thread/read after fresh state snapshot
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` at a phone viewport.
+2. Inspect the first few seconds of `/codex-api/` requests.
+3. Confirm `/codex-api/state/thread/<threadId>` can provide the fresh message snapshot.
+4. Confirm the frontend does not immediately issue an extra settled `thread/read` RPC when that fresh snapshot has not dropped existing messages.
+5. Run `npm.cmd run verify:server-modules`.
+6. Run `npm.cmd run verify:frontend-normalizers`.
+7. Run `npm.cmd run build`.
+8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Fresh settled `/codex-api/state/thread` responses mark their refresh key as already synced for message补齐.
+- The duplicate settled `thread/read`补读 is skipped when the state snapshot already contains fresh messages and does not miss previously retained messages.
+- If older history has already been loaded or a snapshot drops previous messages, the existing protection still allows补读/preserve behavior.
+- The 7420 frontend regression continues to pass the path-specific thread state/runtime/token usage guards for the real thread page.
+
+#### Rollback/Cleanup
+- To roll back, revert `src/composables/useDesktopState.ts`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement before fix: opening the real `分析项目` phone thread produced `/codex-api/state/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` at about `299ms` with about `2653ms` duration, followed by another `/codex-api/rpc` at about `3016ms` with about `582ms` duration.
+- 2026-07-07 post-fix CDP measurement: opening the same real phone thread produced RPC methods `thread/list`, `thread/list`, `model/list`, `config/read`, and `skills/list`; no immediate settled `thread/read`补读 appeared after the fresh `/state/thread` snapshot.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `11416`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
 ### Feature: Compact conversation and composer chrome
 
 #### Prerequisites

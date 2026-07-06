@@ -5478,6 +5478,22 @@ export function useDesktopState() {
     return true
   }
 
+  function markFreshSettledSnapshotMessagesSynced(
+    threadId: string,
+    snapshot: ThreadRuntimeSnapshot,
+    previousMessages: UiMessage[],
+  ): void {
+    const refreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
+    if (!threadId || !refreshKey) return
+    if (snapshot.messageState !== 'fresh' || snapshot.messages.length === 0) return
+
+    const nextMessageIds = new Set(snapshot.messages.map((message) => message.id))
+    const snapshotMissesPreviousMessages = previousMessages.some((message) => !nextMessageIds.has(message.id))
+    if (snapshotMissesPreviousMessages) return
+
+    settledRuntimeRpcRefreshKeyByThreadId.set(threadId, refreshKey)
+  }
+
   function scheduleSettledSnapshotMessagesRpcRefresh(threadId: string, refreshKey: string): void {
     if (!threadId || !refreshKey) return
     if (settledRuntimeRpcRefreshInFlightByThreadId.get(threadId) === refreshKey) return
@@ -5608,6 +5624,7 @@ export function useDesktopState() {
       }
       const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
       const settledRefreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
+      markFreshSettledSnapshotMessagesSynced(threadId, snapshot, previousPersisted)
       const shouldDeferSettledRpcRefresh =
         options.fullHistory !== true &&
         options.forceSettledRpcRefresh !== true &&
