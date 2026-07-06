@@ -730,7 +730,7 @@
                         <div class="message-code-header">
                           <span class="message-code-meta">
                             <span class="message-code-language">{{ block.language || (block.isDiff ? 'diff' : 'text') }}</span>
-                            <span class="message-code-count">{{ block.lines.length }} 行</span>
+                            <span class="message-code-count">{{ block.lineCount }} 行</span>
                             <span
                               v-if="isLongCodeBlock(block) && !isCodeBlockExpanded(entry.message.id, blockIndex)"
                               class="message-code-count"
@@ -1549,7 +1549,7 @@ type MessageBlock =
 type PreparedMessageBlock =
   | { kind: 'text'; value: string; segments: InlineSegment[] }
   | { kind: 'table'; headers: PreparedTableCell[]; rows: PreparedTableCell[][] }
-  | { kind: 'code'; language: string; lines: PreparedCodeLine[]; isDiff: boolean }
+  | { kind: 'code'; language: string; code: string; lines: PreparedCodeLine[]; lineCount: number; linesView: 'preview' | 'full'; isDiff: boolean }
   | { kind: 'image'; url: string; alt: string; markdown: string }
 type PreparedTableCell = {
   value: string
@@ -3031,12 +3031,35 @@ function prepareCodeLine(value: string, isDiff: boolean): PreparedCodeLine {
   return { value, kind: 'context' }
 }
 
+function readCodePreviewLines(code: string, lineLimit: number): { lines: string[]; lineCount: number } {
+  if (!code) return { lines: [''], lineCount: 1 }
+
+  const lines: string[] = []
+  let lineCount = 1
+  let lineStart = 0
+  for (let index = 0; index < code.length; index += 1) {
+    if (code.charCodeAt(index) !== 10) continue
+    if (lines.length < lineLimit) {
+      lines.push(code.slice(lineStart, index))
+    }
+    lineCount += 1
+    lineStart = index + 1
+  }
+  if (lines.length < lineLimit) {
+    lines.push(code.slice(lineStart))
+  }
+  return { lines: lines.length > 0 ? lines : [''], lineCount }
+}
+
 function prepareCodeBlock(block: Extract<MessageBlock, { kind: 'code' }>): Extract<PreparedMessageBlock, { kind: 'code' }> {
-  const lines = block.code.split('\n').map((line) => prepareCodeLine(line, block.isDiff))
+  const preview = readCodePreviewLines(block.code, CODE_BLOCK_PREVIEW_LINE_COUNT)
   return {
     kind: 'code',
     language: block.language,
-    lines: lines.length > 0 ? lines : [{ value: '', kind: 'context' }],
+    code: block.code,
+    lines: preview.lines.map((line) => prepareCodeLine(line, block.isDiff)),
+    lineCount: preview.lineCount,
+    linesView: preview.lineCount > CODE_BLOCK_PREVIEW_LINE_COUNT ? 'preview' : 'full',
     isDiff: block.isDiff,
   }
 }
@@ -3108,7 +3131,7 @@ function isCodeBlockCopied(messageId: string, blockIndex: number): boolean {
 }
 
 function isLongCodeBlock(block: Extract<PreparedMessageBlock, { kind: 'code' }>): boolean {
-  return block.lines.length > CODE_BLOCK_PREVIEW_LINE_COUNT
+  return block.lineCount > CODE_BLOCK_PREVIEW_LINE_COUNT
 }
 
 function isCodeBlockExpanded(messageId: string, blockIndex: number): boolean {
@@ -3121,13 +3144,17 @@ function visibleCodeBlockLines(
   block: Extract<PreparedMessageBlock, { kind: 'code' }>,
 ): PreparedCodeLine[] {
   if (!isLongCodeBlock(block) || isCodeBlockExpanded(messageId, blockIndex)) {
+    if (block.linesView !== 'full') {
+      block.lines = block.code.split('\n').map((line) => prepareCodeLine(line, block.isDiff))
+      block.linesView = 'full'
+    }
     return block.lines
   }
   return block.lines.slice(0, CODE_BLOCK_PREVIEW_LINE_COUNT)
 }
 
 function hiddenCodeBlockLineCount(block: Extract<PreparedMessageBlock, { kind: 'code' }>): number {
-  return Math.max(block.lines.length - CODE_BLOCK_PREVIEW_LINE_COUNT, 0)
+  return Math.max(block.lineCount - CODE_BLOCK_PREVIEW_LINE_COUNT, 0)
 }
 
 function toggleCodeBlockExpand(messageId: string, blockIndex: number): void {
@@ -3139,7 +3166,7 @@ function toggleCodeBlockExpand(messageId: string, blockIndex: number): void {
 }
 
 function codeBlockText(block: Extract<PreparedMessageBlock, { kind: 'code' }>): string {
-  return block.lines.map((line) => line.value).join('\n')
+  return block.code
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {
