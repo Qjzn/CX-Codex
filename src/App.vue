@@ -1348,6 +1348,12 @@ const routeThreadId = computed(() => {
   const rawThreadId = route.params.threadId
   return typeof rawThreadId === 'string' ? rawThreadId : ''
 })
+const isThreadRouteLike = computed(() => {
+  if (route.name === 'thread' || routeThreadId.value.trim().length > 0) return true
+  if (typeof window === 'undefined') return false
+  const hashPath = window.location.hash.replace(/^#/u, '')
+  return route.path.startsWith('/thread/') || hashPath.startsWith('/thread/')
+})
 
 const knownThreadIdSet = computed(() => {
   const ids = new Set<string>()
@@ -3908,8 +3914,8 @@ async function initialize(): Promise<void> {
     await selectThread(selectedThreadId.value)
   }
   startPolling()
-  if (route.name !== 'thread') {
-    queueIdleTask(() => { void refreshSkills() }, 220)
+  if (!isThreadRouteLike.value) {
+    queueIdleTask(() => { void refreshSkills() }, 1800)
   }
 }
 

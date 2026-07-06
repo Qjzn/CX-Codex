@@ -11153,3 +11153,44 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
+### Feature: Avoid early skills refresh on thread reload
+
+#### Prerequisites
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- A browser context can warm the cached thread/sidebar state, then reload the thread route.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` at phone width.
+2. Wait for the initial thread page to settle and cache the sidebar/thread state.
+3. Reload the same thread route in the same browser context.
+4. Capture `/codex-api/rpc` request timing for at least 10 seconds.
+5. Confirm `skills/list` does not start in the first second of the cached thread reload.
+6. Confirm non-thread pages can still refresh skills after startup idle time.
+7. Run `npm.cmd run build`.
+8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+9. Run `npm.cmd run verify:server-modules`.
+10. Run `npm.cmd run verify:frontend-normalizers`.
+11. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+12. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Thread deep-link reload no longer misclassifies as a non-thread route during initialization.
+- Cached thread reload does not trigger the home-page fallback `skills/list` refresh at roughly 200 ms.
+- Thread selection and explicit skill-center refresh behavior still work.
+- The real `分析项目` phone thread page and conversation fixture remain nonblank.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/App.vue`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement before fix: warm thread reload still triggered `skills/list` at about `252ms`, before the delayed `thread/list`, because the initialization fallback briefly treated the reload as a non-thread route.
+- 2026-07-07 measurement after fix: warm thread reload had no `skills/list` in the first 10 seconds; the reload phase only showed delayed model/config at about `2344ms` and delayed `thread/list` at about `3745ms`.
+- 2026-07-07 measurement after fix: the same real phone-width thread remained nonblank with `messageCards=2`, `guidedToggles=1`, and `hasLatestUserQuestion=true`.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `46596`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
