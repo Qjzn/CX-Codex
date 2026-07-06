@@ -1117,6 +1117,54 @@ JSON.stringify((() => {
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
 }
 
+function Assert-ConversationRawPayloadLazy {
+  param([string]$Session)
+
+  $beforeScript = @'
+JSON.stringify((() => {
+  const rawCards = Array.from(document.querySelectorAll('.message-structured-card'));
+  const rawPres = Array.from(document.querySelectorAll('.message-structured-pre'));
+  const textContent = document.body.textContent || '';
+  return {
+    rawPayloadCardCount: rawCards.length,
+    rawPayloadPreCount: rawPres.length,
+    hasFixtureRawText: textContent.includes('fixture-raw-payload')
+  };
+})())
+'@
+  $before = Invoke-BrowserEvalJson -Session $Session -Script $beforeScript
+  Assert-True ($before.rawPayloadCardCount -ge 1) "conversation fixture is missing raw payload card"
+  Assert-True ([int]$before.rawPayloadPreCount -eq 0) "conversation fixture raw payload preview should be lazy before expand"
+  Assert-True ($before.hasFixtureRawText -eq $false) "conversation fixture raw payload marker rendered before card expand"
+
+  $expandScript = @'
+JSON.stringify((() => {
+  const summary = document.querySelector('.message-structured-summary');
+  if (summary instanceof HTMLElement) {
+    summary.click();
+  }
+  return { clicked: summary instanceof HTMLElement };
+})())
+'@
+  $expanded = Invoke-BrowserEvalJson -Session $Session -Script $expandScript
+  Assert-True ($expanded.clicked -eq $true) "conversation fixture raw payload summary could not be clicked"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "300") | Out-Null
+
+  $afterScript = @'
+JSON.stringify((() => {
+  const rawPres = Array.from(document.querySelectorAll('.message-structured-pre'));
+  const textContent = document.body.textContent || '';
+  return {
+    rawPayloadPreCount: rawPres.length,
+    hasFixtureRawText: textContent.includes('fixture-raw-payload')
+  };
+})())
+'@
+  $after = Invoke-BrowserEvalJson -Session $Session -Script $afterScript
+  Assert-True ([int]$after.rawPayloadPreCount -ge 1) "conversation fixture raw payload preview did not render after expand"
+  Assert-True ($after.hasFixtureRawText -eq $true) "conversation fixture raw payload marker missing after card expand"
+}
+
 function Assert-ConversationFixtureCopyInteraction {
   param([string]$Session)
 
@@ -1598,6 +1646,7 @@ try {
   $fixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend"
   $fixture = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $DesktopWidth -Height $DesktopHeight
   Assert-Page -Page $fixture -Name "conversation blocks fixture desktop"
+  Assert-ConversationRawPayloadLazy -Session $session
   Expand-ConversationFixturePendingRequests -Session $session
   Expand-ConversationFixtureCommandOutput -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "desktop"
@@ -1606,6 +1655,7 @@ try {
 
   $fixturePhone = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $fixturePhone -Name "conversation blocks fixture phone"
+  Assert-ConversationRawPayloadLazy -Session $session
   Expand-ConversationFixturePendingRequests -Session $session
   Expand-ConversationFixtureCommandOutput -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "phone"
@@ -1613,6 +1663,7 @@ try {
 
   $fixtureFoldable = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $FoldableWidth -Height $FoldableHeight
   Assert-Page -Page $fixtureFoldable -Name "conversation blocks fixture foldable"
+  Assert-ConversationRawPayloadLazy -Session $session
   Expand-ConversationFixturePendingRequests -Session $session
   Expand-ConversationFixtureCommandOutput -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "foldable"

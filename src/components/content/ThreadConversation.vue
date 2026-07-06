@@ -536,12 +536,13 @@
               <details
                 v-if="shouldRenderRawPayloadCard(entry.message)"
                 class="message-structured-card"
+                @toggle="onRawPayloadToggle($event, entry.message.id)"
               >
                 <summary class="message-structured-summary">
                   <span class="message-structured-title">{{ rawPayloadTitle(entry.message) }}</span>
                   <span class="message-structured-meta">{{ rawPayloadMeta(entry.message) }}</span>
                 </summary>
-                <pre class="message-structured-pre">{{ rawPayloadPreview(entry.message) }}</pre>
+                <pre v-if="isRawPayloadExpanded(entry.message.id)" class="message-structured-pre">{{ rawPayloadPreview(entry.message) }}</pre>
               </details>
 
               <article
@@ -1260,6 +1261,7 @@ const visibleMessageStartIndex = ref(0)
 const isRequestPanelExpanded = ref(false)
 const isLiveOverlayDetailOpen = ref(false)
 const expandedGuidedTurnIndexes = ref<Set<number>>(new Set())
+const expandedRawPayloadMessageIds = ref<Set<string>>(new Set())
 
 function latestVisibleStartIndex(messageCount: number): number {
   return Math.max(messageCount - MESSAGE_WINDOW_SIZE, 0)
@@ -3162,6 +3164,19 @@ function rawPayloadPreview(message: UiMessage): string {
   }
 }
 
+function isRawPayloadExpanded(messageId: string): boolean {
+  return expandedRawPayloadMessageIds.value.has(messageId)
+}
+
+function onRawPayloadToggle(event: Event, messageId: string): void {
+  const details = event.currentTarget instanceof HTMLDetailsElement ? event.currentTarget : null
+  if (!details) return
+  const nextIds = new Set(expandedRawPayloadMessageIds.value)
+  if (details.open) nextIds.add(messageId)
+  else nextIds.delete(messageId)
+  expandedRawPayloadMessageIds.value = nextIds
+}
+
 function codeBlockKey(messageId: string, blockIndex: number): string {
   return `${messageId}:${String(blockIndex)}`
 }
@@ -3316,6 +3331,20 @@ function prunePreparedMessageBlockCache(messages: UiMessage[]): void {
   }
   if (hasExpandedCodeBlockChange) {
     expandedCodeBlockKeys.value = nextExpandedCodeBlockKeys
+  }
+
+  let nextExpandedRawPayloadMessageIds = expandedRawPayloadMessageIds.value
+  let hasExpandedRawPayloadChange = false
+  for (const messageId of expandedRawPayloadMessageIds.value) {
+    if (keepIds.has(messageId)) continue
+    if (!hasExpandedRawPayloadChange) {
+      nextExpandedRawPayloadMessageIds = new Set(expandedRawPayloadMessageIds.value)
+      hasExpandedRawPayloadChange = true
+    }
+    nextExpandedRawPayloadMessageIds.delete(messageId)
+  }
+  if (hasExpandedRawPayloadChange) {
+    expandedRawPayloadMessageIds.value = nextExpandedRawPayloadMessageIds
   }
 }
 
@@ -4527,6 +4556,7 @@ watch(
     measuredMessageHeightById.value = {}
     expandedGuidedTurnIndexes.value = new Set()
     expandedCodeBlockKeys.value = new Set()
+    expandedRawPayloadMessageIds.value = new Set()
     conversationScrollTop.value = 0
     lastGapMeasuredContainer = null
     lastGapMeasuredViewportHeight = -1
