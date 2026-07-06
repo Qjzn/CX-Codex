@@ -173,6 +173,7 @@ const THREAD_LIST_REFRESH_INTERVAL_MS = 300000
 const THREAD_TOKEN_USAGE_REFRESH_RETRY_MS = 5 * 60 * 1000
 const THREAD_TOKEN_USAGE_IDLE_DELAY_MS = 1600
 const THREAD_SELECTION_SKILLS_IDLE_DELAY_MS = 1800
+const MODEL_PREFERENCES_IDLE_DELAY_MS = 2200
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 1500
 const RATE_LIMIT_REFRESH_MIN_INTERVAL_MS = 300000
 const COMPOSER_PLUGINS_REFRESH_DEBOUNCE_MS = 450
@@ -1634,6 +1635,7 @@ export function useDesktopState() {
   let threadSelectionAbortController: AbortController | null = null
   let foregroundMessageLoadId = 0
   let rateLimitRefreshTimer: number | null = null
+  let modelPreferencesRefreshTimer: number | null = null
   let composerPluginsRefreshTimer: number | null = null
   let skillsChangedRefreshTimer: number | null = null
   let selectedThreadSkillsRefreshTimer: number | null = null
@@ -2269,6 +2271,25 @@ export function useDesktopState() {
     } catch {
       // Keep chat UI usable even if model metadata is temporarily unavailable.
     }
+  }
+
+  function clearModelPreferencesRefreshTimer(): void {
+    if (modelPreferencesRefreshTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(modelPreferencesRefreshTimer)
+    }
+    modelPreferencesRefreshTimer = null
+  }
+
+  function scheduleModelPreferencesRefresh(): void {
+    if (typeof window === 'undefined') {
+      void refreshModelPreferences()
+      return
+    }
+    clearModelPreferencesRefreshTimer()
+    modelPreferencesRefreshTimer = window.setTimeout(() => {
+      modelPreferencesRefreshTimer = null
+      void refreshModelPreferences()
+    }, MODEL_PREFERENCES_IDLE_DELAY_MS)
   }
 
   async function refreshRateLimits(options: { force?: boolean } = {}): Promise<void> {
@@ -5869,6 +5890,7 @@ export function useDesktopState() {
       loadMessages?: boolean
       loadSkills?: boolean
       refreshModelPreferences?: boolean
+      deferModelPreferences?: boolean
       deferThreadListNetworkIfCached?: boolean
     } = {},
   ) {
@@ -5877,7 +5899,11 @@ export function useDesktopState() {
     try {
       await loadThreads({ backgroundIfCached: options.deferThreadListNetworkIfCached === true })
       if (options.refreshModelPreferences !== false) {
-        void refreshModelPreferences()
+        if (options.deferModelPreferences === true) {
+          scheduleModelPreferencesRefresh()
+        } else {
+          void refreshModelPreferences()
+        }
       }
       if (options.loadSkills !== false) {
         await refreshSkills()

@@ -3895,7 +3895,12 @@ function scheduleInitialBackgroundTasks(): void {
 }
 
 async function initialize(): Promise<void> {
-  await refreshAll({ loadMessages: false, loadSkills: false, deferThreadListNetworkIfCached: true })
+  await refreshAll({
+    loadMessages: false,
+    loadSkills: false,
+    deferModelPreferences: true,
+    deferThreadListNetworkIfCached: true,
+  })
   hasInitialized.value = true
   const selectedThreadIdBeforeRouteSync = selectedThreadId.value
   await syncThreadSelectionWithRoute()

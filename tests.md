@@ -19,6 +19,45 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Defer startup model preference refresh after first screen
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` at a phone viewport.
+2. Inspect `/codex-api/rpc` request bodies and timings during startup.
+3. Confirm startup `model/list` and `config/read` do not start in the initial thread message load window.
+4. Confirm the Composer still renders the locally saved selected model before model metadata refresh finishes.
+5. Confirm explicit `refreshAll()` paths that do not request deferral still refresh model preferences immediately.
+6. Run `npm.cmd run verify:server-modules`.
+7. Run `npm.cmd run verify:frontend-normalizers`.
+8. Run `npm.cmd run build`.
+9. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+11. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Startup initialization schedules model preference refresh after the short idle delay instead of immediately racing the real thread first screen.
+- Local selected model state remains available for Composer before metadata refresh completes.
+- Workbench/manual refresh paths that call `refreshAll()` without deferral still trigger immediate model preference refresh.
+- The real `分析项目` phone thread page and conversation fixtures remain nonblank.
+
+#### Rollback/Cleanup
+- To roll back, revert `src/App.vue`, `src/composables/useDesktopState.ts`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement before fix: opening the real `分析项目` phone thread produced `model/list` and `config/read` at about `267ms`; `config/read` took about `242ms` in that run, while another run showed `model/list` can take more than 2 seconds.
+- 2026-07-07 post-fix CDP measurement: opening the same real phone thread produced only `thread/list` in the first startup RPC window; `skills/list`, `config/read`, and `model/list` all started around `2537ms` or later, while the page still rendered one message card and local selected model text.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `52272`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
 ### Feature: Defer thread selection skills refresh after first screen
 
 #### Prerequisites
