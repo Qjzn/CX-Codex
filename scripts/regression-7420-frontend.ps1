@@ -1590,6 +1590,74 @@ function Assert-ThreadPageLoadMetrics {
   Assert-True ([int]$Metrics.visibleAssistantMessageCount -ge 1) "thread page first visible window has no assistant response for $ThreadId"
 }
 
+function Read-ThreadWindowMetrics {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const resources = performance.getEntriesByType('resource')
+    .filter((entry) => entry.name.includes('/codex-api/rpc'));
+  const list = document.querySelector('.conversation-list');
+  const items = Array.from(document.querySelectorAll('.conversation-item[data-role]'));
+  const roleCount = (role) => items.filter((node) => node.getAttribute('data-role') === role).length;
+  const loadButton = document.querySelector('.conversation-load-more-button');
+  return {
+    hasLoadMore: !!loadButton,
+    loadText: loadButton?.textContent?.trim() || '',
+    itemCount: items.length,
+    userCount: roleCount('user'),
+    assistantCount: roleCount('assistant'),
+    scrollTop: list?.scrollTop ?? 0,
+    scrollHeight: list?.scrollHeight ?? 0,
+    clientHeight: list?.clientHeight ?? 0,
+    rpcCount: resources.length,
+    hasInternalCodexContext: /<codex_internal_context\s+source=/i.test(document.body.innerText),
+  };
+})())
+'@
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Click-ThreadLoadMore {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const button = document.querySelector('.conversation-load-more-button');
+  if (!button || button.disabled) return { clicked: false };
+  button.click();
+  return { clicked: true };
+})())
+'@
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-ThreadLoadMoreWindow {
+  param(
+    [string]$Session,
+    [string]$ThreadId
+  )
+
+  $before = Read-ThreadWindowMetrics -Session $Session
+  Assert-True ($before.hasLoadMore -eq $true) "thread page has no load-more affordance for $ThreadId"
+  $clickResult = Click-ThreadLoadMore -Session $Session
+  Assert-True ($clickResult.clicked -eq $true) "thread page load-more click did not execute for $ThreadId"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "1400") | Out-Null
+  $after = Read-ThreadWindowMetrics -Session $Session
+
+  $itemDelta = [int]$after.itemCount - [int]$before.itemCount
+  $heightDelta = [int]$after.scrollHeight - [int]$before.scrollHeight
+  $scrollDelta = [int]$after.scrollTop - [int]$before.scrollTop
+  $anchorDrift = [Math]::Abs($scrollDelta - $heightDelta)
+
+  Assert-True ($after.hasInternalCodexContext -ne $true) "thread page exposed internal codex context after load-more for $ThreadId"
+  Assert-True ([int]$after.userCount -ge 1) "thread page has no user context after load-more for $ThreadId"
+  Assert-True ([int]$after.assistantCount -ge 1) "thread page has no assistant response after load-more for $ThreadId"
+  Assert-True ($itemDelta -ge 1) "thread page load-more did not reveal additional items for $ThreadId"
+  Assert-True ($itemDelta -le 16) "thread page load-more revealed too many items for $ThreadId; delta=$itemDelta"
+  Assert-True ($anchorDrift -le 180) "thread page load-more shifted reading anchor too much for $ThreadId; drift=$anchorDrift"
+}
+
 function Add-RegressionResult {
   param(
     [string]$Name,
@@ -1744,6 +1812,7 @@ try {
     Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "9000") | Out-Null
     $threadPageLoadMetrics = Read-ThreadPageLoadMetrics -Session $session -ThreadId $ThreadId
     Assert-ThreadPageLoadMetrics -Metrics $threadPageLoadMetrics -ThreadId $ThreadId
+    Assert-ThreadLoadMoreWindow -Session $session -ThreadId $ThreadId
     Add-RegressionResult -Name "thread-phone" -Page $thread
   } else {
     Write-Step "thread page check skipped; pass -ThreadId to enable it"

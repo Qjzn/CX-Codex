@@ -19,6 +19,33 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Regression gate for lightweight load-more window reveal
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available and shows `继续查看更多`.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` at a phone viewport.
+2. Wait until the route background refresh window has settled.
+3. Record visible conversation item count, scrollTop, and scrollHeight.
+4. Click `继续查看更多`.
+5. Wait about 1.4 seconds.
+6. Confirm visible items increased by a small bounded amount, not a full-history expansion.
+7. Confirm visible user context and Codex response are still present.
+8. Confirm scrollTop shifted roughly with scrollHeight so the reading anchor remains stable.
+9. Treat unrelated background `thread/list` refreshes as allowed; the load-more assertion is based on bounded DOM reveal and scroll stability.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- `继续查看更多` reveals only a bounded local window of earlier rendered items.
+- The visible window remains useful: at least one user-context item and one Codex/assistant item.
+- The reading anchor remains stable enough that the page does not jump unexpectedly.
+
+#### Rollback/Cleanup
+- To roll back, revert `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
 ### Feature: Backfill visible user context in latest conversation window
 
 #### Prerequisites
