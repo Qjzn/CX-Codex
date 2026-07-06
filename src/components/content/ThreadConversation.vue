@@ -474,7 +474,7 @@
               class="cmd-output-wrap"
               :class="{ 'cmd-output-visible': isCommandExpanded(entry.message), 'cmd-output-collapsing': isCommandCollapsing(entry.message) }"
             >
-              <div class="cmd-output-inner">
+              <div v-if="shouldMountCommandOutput(entry.message)" class="cmd-output-inner">
                 <pre class="cmd-output">{{ entry.message.commandExecution?.aggregatedOutput || '（无输出）' }}</pre>
               </div>
             </div>
@@ -1071,6 +1071,10 @@ function isCommandExpanded(message: UiMessage): boolean {
 
 function isCommandCollapsing(message: UiMessage): boolean {
   return collapsingCommandIds.value.has(message.id)
+}
+
+function shouldMountCommandOutput(message: UiMessage): boolean {
+  return isCommandExpanded(message) || isCommandCollapsing(message)
 }
 
 function toggleCommandExpand(message: UiMessage): void {

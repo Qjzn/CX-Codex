@@ -1117,6 +1117,40 @@ JSON.stringify((() => {
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
 }
 
+function Assert-ConversationCommandOutputLazy {
+  param([string]$Session)
+
+  $beforeScript = @'
+JSON.stringify((() => {
+  const commandOutputs = Array.from(document.querySelectorAll('.conversation-regression-fixture .cmd-output-wrap .cmd-output'));
+  const textContent = document.body.textContent || '';
+  return {
+    commandOutputCount: commandOutputs.length,
+    hasFixtureCommandOutputText: textContent.includes('fixture-command-output: ok')
+  };
+})())
+'@
+  $before = Invoke-BrowserEvalJson -Session $Session -Script $beforeScript
+  Assert-True ([int]$before.commandOutputCount -eq 0) "conversation fixture command output should be lazy before expand"
+  Assert-True ($before.hasFixtureCommandOutputText -eq $false) "conversation fixture command output marker rendered before expand"
+
+  Expand-ConversationFixtureCommandOutput -Session $Session
+
+  $afterScript = @'
+JSON.stringify((() => {
+  const commandOutputs = Array.from(document.querySelectorAll('.conversation-regression-fixture .cmd-output-wrap .cmd-output'));
+  const textContent = document.body.textContent || '';
+  return {
+    commandOutputCount: commandOutputs.length,
+    hasFixtureCommandOutputText: textContent.includes('fixture-command-output: ok')
+  };
+})())
+'@
+  $after = Invoke-BrowserEvalJson -Session $Session -Script $afterScript
+  Assert-True ([int]$after.commandOutputCount -ge 1) "conversation fixture command output did not render after expand"
+  Assert-True ($after.hasFixtureCommandOutputText -eq $true) "conversation fixture command output marker missing after expand"
+}
+
 function Assert-ConversationRawPayloadLazy {
   param([string]$Session)
 
@@ -1648,7 +1682,7 @@ try {
   Assert-Page -Page $fixture -Name "conversation blocks fixture desktop"
   Assert-ConversationRawPayloadLazy -Session $session
   Expand-ConversationFixturePendingRequests -Session $session
-  Expand-ConversationFixtureCommandOutput -Session $session
+  Assert-ConversationCommandOutputLazy -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "desktop"
   Assert-ConversationFixtureCopyInteraction -Session $session
   Add-RegressionResult -Name "conversation-blocks-fixture" -Page $fixture
@@ -1657,7 +1691,7 @@ try {
   Assert-Page -Page $fixturePhone -Name "conversation blocks fixture phone"
   Assert-ConversationRawPayloadLazy -Session $session
   Expand-ConversationFixturePendingRequests -Session $session
-  Expand-ConversationFixtureCommandOutput -Session $session
+  Assert-ConversationCommandOutputLazy -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "phone"
   Add-RegressionResult -Name "conversation-blocks-fixture-phone" -Page $fixturePhone
 
@@ -1665,7 +1699,7 @@ try {
   Assert-Page -Page $fixtureFoldable -Name "conversation blocks fixture foldable"
   Assert-ConversationRawPayloadLazy -Session $session
   Expand-ConversationFixturePendingRequests -Session $session
-  Expand-ConversationFixtureCommandOutput -Session $session
+  Assert-ConversationCommandOutputLazy -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "foldable"
   Add-RegressionResult -Name "conversation-blocks-fixture-foldable" -Page $fixtureFoldable
 
