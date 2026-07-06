@@ -1250,6 +1250,7 @@ const props = defineProps<{
 const MESSAGE_WINDOW_SIZE = 10
 const RECENT_DERIVED_UI_MESSAGE_LIMIT = 120
 const REACTIVE_WATCH_MESSAGE_LIMIT = RECENT_DERIVED_UI_MESSAGE_LIMIT * 2
+const PREPARED_MESSAGE_BLOCK_CACHE_LIMIT = 80
 const renderableMessages = computed<UiMessage[]>(() => (
   props.messages.filter((message) => !shouldSuppressConversationMessage(message))
 ))
@@ -3103,6 +3104,8 @@ function prepareCodeBlock(block: Extract<MessageBlock, { kind: 'code' }>): Extra
 function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
   const cached = preparedMessageBlocksById.get(message.id)
   if (cached && cached.text === message.text) {
+    preparedMessageBlocksById.delete(message.id)
+    preparedMessageBlocksById.set(message.id, cached)
     return cached.blocks
   }
 
@@ -3128,6 +3131,7 @@ function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
   })
 
   preparedMessageBlocksById.set(message.id, { text: message.text, blocks })
+  trimPreparedMessageBlockCache()
   return blocks
 }
 
@@ -3269,6 +3273,14 @@ function toggleLongUserMessage(message: UiMessage): void {
   expandedLongUserMessageIds.value = nextIds
 }
 
+function trimPreparedMessageBlockCache(): void {
+  while (preparedMessageBlocksById.size > PREPARED_MESSAGE_BLOCK_CACHE_LIMIT) {
+    const oldestMessageId = preparedMessageBlocksById.keys().next().value
+    if (typeof oldestMessageId !== 'string') return
+    preparedMessageBlocksById.delete(oldestMessageId)
+  }
+}
+
 function prunePreparedMessageBlockCache(messages: UiMessage[]): void {
   const keepIds = new Set(messages.map((message) => message.id))
   for (const messageId of preparedMessageBlocksById.keys()) {
@@ -3276,6 +3288,7 @@ function prunePreparedMessageBlockCache(messages: UiMessage[]): void {
       preparedMessageBlocksById.delete(messageId)
     }
   }
+  trimPreparedMessageBlockCache()
   let nextExpandedIds = expandedLongUserMessageIds.value
   let hasExpandedIdChange = false
   for (const messageId of expandedLongUserMessageIds.value) {
