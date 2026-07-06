@@ -10609,3 +10609,41 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 deploy: latest build was restarted on local 7420 as PID `29176`, version `2.2.8`, with `/health` returning `ok`.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
+### Feature: Filter reasoning from thread/read RPC payload
+
+#### Prerequisites
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Server module smoke can exercise `trimThreadTurnsInRpcResult()`.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+
+#### Steps
+1. Prepare a `thread/read` style payload whose turn items include a historical `reasoning` item, another unknown item, and a normal assistant message.
+2. Pass the payload through `trimThreadTurnsInRpcResult('thread/read', payload)`.
+3. Confirm the `reasoning` item and its internal text are absent from the trimmed result.
+4. Confirm other unknown item types still remain in the result for diagnostic fallback.
+5. Run `npm.cmd run build`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Run `npm.cmd run verify:frontend-normalizers`.
+8. Run `npm.cmd run verify:server-modules`.
+9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- `thread/read`, `thread/resume`, `thread/fork`, and `thread/rollback` results remove historical `reasoning` turn items before being returned to the frontend.
+- Existing low-value `fileChange` / `mcpToolCall` filtering and turn/item limits remain in effect.
+- Unknown useful items still survive so raw payload fallback can expose new App Server protocol content.
+- Realtime running state and visible assistant/user messages are unchanged because this only trims completed thread payloads.
+- The real `分析项目` phone thread page and conversation fixture remain nonblank.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/server/appServerRpcResult.ts`, `scripts/server-module-smoke.ts`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement before fix: frontend normalization already discarded historical `reasoning`, but 69 sampled July session logs all contained reasoning records with 11238 matching lines, making it a common payload pressure source before server-side trimming.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; coverage confirms `reasoning` internal text is absent after `trimThreadTurnsInRpcResult()` while an unknown `threadShellCommandOutput` item remains.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `36876`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.

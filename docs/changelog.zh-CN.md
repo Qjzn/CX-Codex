@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - 历史 reasoning payload 继续减负：`thread/read` / resume / rollback 这类带 turns 的服务端结果会在返回浏览器前移除前端已不展示的 `reasoning` item，减少长会话打开时的网络、缓存和归一化压力；实时运行状态、可见消息和未知 item 诊断兜底不变。
   - 历史 MCP 工具调用 payload 继续减负：`thread/read` 这类带 turns 的服务端结果会在返回浏览器前移除已不展示的 `mcpToolCall` item，减少移动端打开工具密集型长会话时的网络、缓存和归一化压力；实时运行状态和其他未知 item 诊断兜底不变。
   - `thread/read` 服务端 payload 继续减负：带 turns 的 RPC 结果在返回浏览器和写入缓存前会移除低价值 `fileChange` item，避免长任务线程把不会展示的文件变更补丁继续传给移动端；其他未知 item 仍保留 raw payload 诊断兜底。
   - Session-log fallback 解析继续减负：从本地 session jsonl 恢复会话详情时，先用轻量字符串候选过滤跳过 `fileChange` 等无关行，再解析用户/助手消息和 session_meta，减少损坏/长任务线程恢复时的 JSON.parse 开销。
