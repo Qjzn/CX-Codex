@@ -137,6 +137,29 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - To roll back, revert `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
 
+### Feature: Lightweight thread message cache for first screen
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+
+#### Steps
+1. Open the real thread once so `codex-web-local.thread-message-cache.v1` can be written.
+2. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+3. In the `thread-phone` phase, confirm the cache assertions run after the first usable content and settled request checks.
+4. Inspect localStorage only if debugging: the target thread entry should be a compact recent snapshot, not a full-history dump.
+
+#### Expected Results
+- The target thread message cache entry exists after loading the real thread.
+- The cached target thread keeps no more than 24 messages.
+- Cached message text is bounded around the 6k limit, and cached command output is bounded around the 3k limit.
+- The target thread cache entry remains bounded while the full thread still refreshes from the backend in the background.
+
+#### Rollback/Cleanup
+- To roll back, revert `src/composables/useDesktopState.ts`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+- To clear only local message snapshots during manual testing, remove `codex-web-local.thread-message-cache.v1` from localStorage.
+
 ### Feature: Backfill visible user context in latest conversation window
 
 #### Prerequisites

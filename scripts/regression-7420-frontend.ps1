@@ -1618,6 +1618,49 @@ function Assert-ThreadPageLoadMetrics {
   Assert-True ([int]$Metrics.visibleAssistantMessageCount -ge 1) "thread page first visible window has no assistant response for $ThreadId"
 }
 
+function Read-ThreadMessageCacheMetrics {
+  param(
+    [string]$Session,
+    [string]$ThreadId
+  )
+
+  $script = @'
+JSON.stringify((() => {
+  const threadId = '__THREAD_ID__';
+  const raw = window.localStorage.getItem('codex-web-local.thread-message-cache.v1') || '';
+  let entry = null;
+  try {
+    entry = JSON.parse(raw).threads?.[threadId] || null;
+  } catch {}
+  const messages = Array.isArray(entry?.messages) ? entry.messages : [];
+  const maxTextLength = messages.reduce((max, row) => Math.max(max, String(row?.text || '').length), 0);
+  const maxCommandOutputLength = messages.reduce((max, row) => Math.max(max, String(row?.commandExecution?.aggregatedOutput || '').length), 0);
+  return {
+    hasEntry: !!entry,
+    messageCount: messages.length,
+    entryJsonLength: entry ? JSON.stringify(entry).length : 0,
+    maxTextLength,
+    maxCommandOutputLength,
+  };
+})())
+'@
+  $script = $script.Replace('__THREAD_ID__', $ThreadId.Replace('\', '\\').Replace("'", "\'"))
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-ThreadMessageCacheMetrics {
+  param(
+    [object]$Metrics,
+    [string]$ThreadId
+  )
+
+  Assert-True ($Metrics.hasEntry -eq $true) "thread message cache has no entry for $ThreadId"
+  Assert-True ([int]$Metrics.messageCount -le 24) "thread message cache kept $($Metrics.messageCount) messages for $ThreadId; expected <= 24"
+  Assert-True ([int]$Metrics.maxTextLength -le 6100) "thread message cache text is too large for $ThreadId; maxTextLength=$($Metrics.maxTextLength)"
+  Assert-True ([int]$Metrics.maxCommandOutputLength -le 3100) "thread message cache command output is too large for $ThreadId; maxCommandOutputLength=$($Metrics.maxCommandOutputLength)"
+  Assert-True ([int]$Metrics.entryJsonLength -le 280000) "thread message cache entry is too large for $ThreadId; entryJsonLength=$($Metrics.entryJsonLength)"
+}
+
 function Wait-ThreadUsableMetrics {
   param(
     [string]$Session,
@@ -1884,6 +1927,7 @@ try {
     $threadPageLoadMetrics = Read-ThreadPageLoadMetrics -Session $session -ThreadId $ThreadId
     $threadPageLoadMetrics | Add-Member -NotePropertyName "firstUsableMs" -NotePropertyValue ([int]$threadUsableMetrics.firstUsableMs) -Force
     Assert-ThreadPageLoadMetrics -Metrics $threadPageLoadMetrics -ThreadId $ThreadId
+    Assert-ThreadMessageCacheMetrics -Metrics (Read-ThreadMessageCacheMetrics -Session $session -ThreadId $ThreadId) -ThreadId $ThreadId
     Assert-ThreadLoadMoreWindow -Session $session -ThreadId $ThreadId
     Add-RegressionResult -Name "thread-phone" -Page $thread
   } else {
