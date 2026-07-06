@@ -794,6 +794,15 @@
                       复制全文
                     </button>
                   </div>
+                  <div v-if="isHistoryNoticeMessage(entry.message)" class="history-notice-actions">
+                    <button
+                      type="button"
+                      class="history-notice-action"
+                      @click.stop="emit('loadFullHistory')"
+                    >
+                      加载较早历史
+                    </button>
+                  </div>
                 </div>
               </article>
             </article>
@@ -1537,6 +1546,7 @@ const emit = defineEmits<{
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
   rollback: [payload: { turnIndex: number; prependText?: string }]
   toggleFavorite: [message: UiMessage]
+  loadFullHistory: []
   returnToNewThread: []
   dismissEmptyThread: []
 }>()
@@ -3205,6 +3215,10 @@ function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
 
 function shouldRenderRawPayloadCard(message: UiMessage): boolean {
   return typeof message.rawPayload === 'string' && message.rawPayload.trim().length > 0
+}
+
+function isHistoryNoticeMessage(message: UiMessage): boolean {
+  return message.role === 'system' && message.messageType === 'history.notice'
 }
 
 function rawPayloadTitle(message: UiMessage): string {
@@ -6022,6 +6036,24 @@ onBeforeUnmount(() => {
 }
 
 .message-long-action:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+.history-notice-actions {
+  @apply mt-2 flex flex-wrap gap-1.5;
+}
+
+.history-notice-action {
+  @apply inline-flex min-h-7 items-center border px-2.5 py-1 text-xs font-medium transition-[background-color,border-color,color] duration-150;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.history-notice-action:hover {
   border-color: var(--ui-border-strong);
   background: var(--ui-bg-row-hover);
   color: var(--ui-text-primary);

@@ -699,6 +699,7 @@
                   @update-scroll-state="onUpdateThreadScrollState"
                   @respond-server-request="onRespondServerRequest"
                   @toggle-favorite="onToggleFavoriteMessage"
+                  @load-full-history="loadFullHistoryForSelectedThread"
                   @return-to-new-thread="onReturnToNewThreadFromEmptyThread"
                   @dismiss-empty-thread="onDismissEmptyThread"
                   @rollback="onRollback" />
@@ -1202,6 +1203,7 @@ const {
   syncError,
   refreshAll,
   refreshSelectedThreadContent,
+  loadFullHistoryForSelectedThread,
   refreshSkills,
   refreshComposerPlugins,
   loginComposerPlugin,

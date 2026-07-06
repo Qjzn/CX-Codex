@@ -47,6 +47,7 @@ type CurrentModelConfig = {
 }
 
 type RpcCallOptions = { signal?: AbortSignal }
+type ThreadDetailOptions = RpcCallOptions & { responseView?: 'full' }
 
 export type RuntimeExecutionState =
   | 'idle'
@@ -558,11 +559,12 @@ async function getThreadMessagesV2(threadId: string, options: RpcCallOptions = {
 
 async function getThreadDetailV2(
   threadId: string,
-  options: RpcCallOptions = {},
+  options: ThreadDetailOptions = {},
 ): Promise<{ messages: UiMessage[]; inProgress: boolean; activeTurnId: string }> {
   const payload = await callRpc<ThreadReadResponse>('thread/read', {
     threadId,
     includeTurns: true,
+    ...(options.responseView === 'full' ? { responseView: 'full' } : {}),
   }, options)
   return {
     messages: normalizeThreadMessagesV2(payload),
@@ -785,7 +787,7 @@ export async function getThreadMessages(threadId: string, options: RpcCallOption
 
 export async function getThreadDetail(
   threadId: string,
-  options: RpcCallOptions = {},
+  options: ThreadDetailOptions = {},
 ): Promise<{ messages: UiMessage[]; inProgress: boolean; activeTurnId: string }> {
   try {
     return await getThreadDetailV2(threadId, options)

@@ -4,7 +4,12 @@ const THREAD_RESPONSE_TURN_HEAD_ITEM_LIMIT = 1
 const THREAD_METHODS_WITH_TURNS = new Set(['thread/read', 'thread/resume', 'thread/fork', 'thread/rollback'])
 const LOW_VALUE_THREAD_ITEM_TYPES = new Set(['fileChange', 'mcpToolCall', 'reasoning'])
 
-export function trimThreadTurnsInRpcResult(method: string, result: unknown): unknown {
+export function trimThreadTurnsInRpcResult(
+  method: string,
+  result: unknown,
+  options: { preserveFullTurns?: boolean } = {},
+): unknown {
+  if (options.preserveFullTurns === true) return result
   if (!THREAD_METHODS_WITH_TURNS.has(method)) return result
 
   const record = asRecord(result)

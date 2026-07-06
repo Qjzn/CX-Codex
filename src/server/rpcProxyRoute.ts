@@ -73,9 +73,11 @@ export async function handleRpcProxyRoute(
   const collaborationMode = body.method === 'turn/start'
     ? readCollaborationModeFromPayload(body.params)
     : 'execute'
+  const requestedFullThreadRead = shouldReturnFullThreadRead(body.method, body.params)
+  const forwardedParams = stripLocalThreadReadParams(body.method, body.params)
   const rpcParams = body.method === 'turn/start'
-    ? normalizePlanModeTurnStartParams(body.params, { includeNativeMode: true })
-    : body.params
+    ? normalizePlanModeTurnStartParams(forwardedParams, { includeNativeMode: true })
+    : forwardedParams
   const rpcThreadId = readThreadIdFromPayload(rpcParams)
   if (rpcThreadId && shouldInvalidateThreadReadCacheForRpc(body.method)) {
     dependencies.deleteCachedThreadRead(rpcThreadId)
@@ -128,8 +130,12 @@ export async function handleRpcProxyRoute(
     ) {
       const fallbackThreadRead = await readSessionLogFallbackThreadRead(rpcThreadId, rpcParams, dependencies)
       if (fallbackThreadRead) {
-        const result = trimThreadTurnsInRpcResult(body.method, fallbackThreadRead)
-        dependencies.rememberCachedThreadRead(rpcThreadId, result)
+        const result = trimThreadTurnsInRpcResult(body.method, fallbackThreadRead, {
+          preserveFullTurns: requestedFullThreadRead,
+        })
+        if (!requestedFullThreadRead) {
+          dependencies.rememberCachedThreadRead(rpcThreadId, result)
+        }
         setJson(res, 200, {
           result,
           warning: 'thread/read fell back to local session log messages',
@@ -162,14 +168,17 @@ export async function handleRpcProxyRoute(
   const enrichedRpcResult = body.method === 'thread/list'
     ? await dependencies.augmentThreadListRpcResult(rpcParams, rpcResult)
     : rpcResult
-  const result = trimThreadTurnsInRpcResult(body.method, enrichedRpcResult)
+  const result = trimThreadTurnsInRpcResult(body.method, enrichedRpcResult, {
+    preserveFullTurns: requestedFullThreadRead,
+  })
   if (shouldInvalidateThreadListCacheForRpc(body.method)) {
     dependencies.clearThreadSearchIndex()
   }
   if (
     body.method === 'thread/read' &&
     rpcThreadId &&
-    readThreadReadIncludeTurns(rpcParams)
+    readThreadReadIncludeTurns(rpcParams) &&
+    !requestedFullThreadRead
   ) {
     dependencies.rememberCachedThreadRead(rpcThreadId, result)
   }
@@ -181,6 +190,20 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null
+}
+
+function shouldReturnFullThreadRead(method: string, params: unknown): boolean {
+  const record = asRecord(params)
+  return method === 'thread/read' &&
+    record?.responseView === 'full' &&
+    readThreadReadIncludeTurns(record)
+}
+
+function stripLocalThreadReadParams(method: string, params: unknown): unknown {
+  const record = asRecord(params)
+  if (method !== 'thread/read' || !record || record.responseView === undefined) return params
+  const { responseView: _responseView, ...forwarded } = record
+  return forwarded
 }
 
 async function readSessionLogFallbackThreadRead(

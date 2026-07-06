@@ -5458,21 +5458,26 @@ export function useDesktopState() {
     snapshot: ThreadRuntimeSnapshot,
     previousMessages: UiMessage[],
     signal?: AbortSignal,
-    options: { force?: boolean } = {},
+    options: { force?: boolean; fullHistory?: boolean } = {},
   ): Promise<ThreadRuntimeSnapshot> {
     if (options.force !== true && !shouldFetchSettledSnapshotMessagesFromRpc(threadId, snapshot, previousMessages)) {
       return snapshot
     }
     const refreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
-    if (!refreshKey) return snapshot
+    if (!refreshKey && options.fullHistory !== true) return snapshot
     if ((snapshot.pendingServerRequests ?? []).length > 0) return snapshot
 
     try {
-      const detail = await getThreadDetail(threadId, { signal })
+      const detail = await getThreadDetail(threadId, {
+        signal,
+        ...(options.fullHistory === true ? { responseView: 'full' } : {}),
+      })
       if (detail.messages.length === 0 && snapshot.messages.length > 0) {
         return snapshot
       }
-      settledRuntimeRpcRefreshKeyByThreadId.set(threadId, refreshKey)
+      if (refreshKey) {
+        settledRuntimeRpcRefreshKeyByThreadId.set(threadId, refreshKey)
+      }
       return {
         ...snapshot,
         messages: detail.messages,
@@ -5503,7 +5508,7 @@ export function useDesktopState() {
 
   async function loadMessages(
     threadId: string,
-    options: { silent?: boolean; signal?: AbortSignal; forceSettledRpcRefresh?: boolean } = {},
+    options: { silent?: boolean; signal?: AbortSignal; forceSettledRpcRefresh?: boolean; fullHistory?: boolean } = {},
   ) {
     if (!threadId) {
       return
@@ -5546,6 +5551,7 @@ export function useDesktopState() {
       const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
       const settledRefreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
       const shouldDeferSettledRpcRefresh =
+        options.fullHistory !== true &&
         options.forceSettledRpcRefresh !== true &&
         shouldShowLoading &&
         (snapshot.messages.length > 0 || previousPersisted.length > 0) &&
@@ -5554,7 +5560,8 @@ export function useDesktopState() {
         scheduleSettledSnapshotMessagesRpcRefresh(threadId, settledRefreshKey)
       } else {
         snapshot = await refreshSettledSnapshotMessagesFromRpc(threadId, snapshot, previousPersisted, options.signal, {
-          force: options.forceSettledRpcRefresh === true,
+          force: options.forceSettledRpcRefresh === true || options.fullHistory === true,
+          fullHistory: options.fullHistory === true,
         })
       }
 
@@ -5822,6 +5829,27 @@ export function useDesktopState() {
       }
     } catch (unknownError) {
       error.value = unknownError instanceof Error ? unknownError.message : '手动刷新当前会话失败'
+      throw unknownError
+    }
+  }
+
+  async function loadFullHistoryForSelectedThread(): Promise<void> {
+    error.value = ''
+
+    const threadId = selectedThreadId.value.trim()
+    if (!threadId) return
+
+    try {
+      abortCurrentSync()
+      clearBufferedLiveDeltas()
+      pendingThreadMessageRefresh.delete(threadId)
+      await loadMessages(threadId, {
+        silent: true,
+        forceSettledRpcRefresh: true,
+        fullHistory: true,
+      })
+    } catch (unknownError) {
+      error.value = unknownError instanceof Error ? unknownError.message : '加载较早历史失败'
       throw unknownError
     }
   }
@@ -7473,6 +7501,7 @@ export function useDesktopState() {
     error,
     refreshAll,
     refreshSelectedThreadContent,
+    loadFullHistoryForSelectedThread,
     refreshSkills,
     refreshComposerPlugins,
     loginComposerPlugin,

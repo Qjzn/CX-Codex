@@ -2801,6 +2801,11 @@ function smokeAppServerRpcResult(): void {
   assert.equal(trimmed.thread.turns.length, 10)
   assert.equal(trimmed.thread.turnsView, 'recent')
   assert.equal(trimmed.thread.originalTurnsCount, 12)
+  assert.equal(
+    (trimThreadTurnsInRpcResult('thread/read', original, { preserveFullTurns: true }) as { thread: { turns: unknown[] } })
+      .thread.turns.length,
+    12,
+  )
 
   const itemHeavy = trimThreadTurnsInRpcResult('thread/read', {
     thread: {
