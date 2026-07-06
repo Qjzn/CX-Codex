@@ -9648,3 +9648,41 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 frontend normalizer smoke: `npm.cmd run verify:frontend-normalizers` passed and asserts `mcpToolCall` items do not add `unhandled.mcpToolCall` messages.
 - 2026-07-06 frontend build: `npm.cmd run build:frontend` passed; Vite still reports the existing large chunk warning.
 - 2026-07-06 final frontend gate: `npm.cmd run verify:frontend-normalizers` and full `npm.cmd run build` passed; `test:7420:frontend` also passed against the live 7420 service and the `conversation-blocks` fixture across desktop, phone, and foldable viewports.
+
+### Feature: Cache-first thread list startup
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The browser has loaded the home page once after this change, so `codex-web-local.thread-groups-cache.v1` can be populated.
+- The account has a non-empty thread list and includes the `分析项目` thread used by the standard sidebar data gate.
+
+#### Steps
+1. Run `npm.cmd run build:frontend`.
+2. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+3. Open `http://127.0.0.1:7420/#/` once in a browser session and wait until sidebar thread rows render.
+4. Confirm `localStorage.getItem('codex-web-local.thread-groups-cache.v1')` is present and reasonably bounded.
+5. Navigate the same browser session to `about:blank`, then reopen `http://127.0.0.1:7420/#/`.
+6. Confirm sidebar thread rows render from cache quickly, before the cold App Server `thread/list` request would normally finish.
+7. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- First load after no cache still performs the normal App Server `thread/list` flow and writes a bounded cache.
+- Subsequent startup renders cached project/thread groups first, then refreshes the real list in the background.
+- Cached startup does not clear read/scroll state for older threads outside the cache window.
+- Cached startup does not replace a saved selected thread just because that thread is outside the cache window.
+- The standard sidebar data gate still finds `分析项目`, proving the background refresh preserves the Desktop/session-index parity fix.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/composables/useDesktopState.ts`, `src/App.vue`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+- To clear only the local browser cache during manual testing, remove `codex-web-local.thread-groups-cache.v1` from localStorage.
+
+#### Regression Evidence
+- 2026-07-06 baseline measurement before this change: direct `/codex-api/rpc thread/list` cold call took `5387ms`; repeated cached backend call took `44ms`; target `thread/read` light/heavy recovery was not the bottleneck (`11ms` / `82ms`).
+- 2026-07-06 post-change frontend build: `npm.cmd run build:frontend` passed; Vite still reports the existing large chunk warning.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `63832`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 cache measurement with agent-browser desktop viewport: first page load populated `codex-web-local.thread-groups-cache.v1` at about `119831` characters with `65` rendered sidebar rows; reopening from `about:blank` rendered rows in `1058ms`.
+- 2026-07-06 backend cold-list check after deploy: direct `/codex-api/rpc thread/list` still took `4167ms`, confirming the optimization improves perceived startup by rendering cached rows while preserving the real background sync path.
+- 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
+- 2026-07-06 browser gate hardening: `scripts/regression-7420-frontend.ps1` now treats exact `thread-store internal error` and `failed to read thread C:\...` output as internal read-error exposure, while allowing normal chat text to discuss `does not start with session metadata`.
+- 2026-07-06 final P1 gate: `npm.cmd run verify:server-modules`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build`, `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`, and `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` all passed; local 7420 final restart used PID `47504`.

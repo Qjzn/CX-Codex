@@ -133,9 +133,14 @@ const SELECTED_REASONING_EFFORT_STORAGE_KEY = 'codex-web-local.selected-reasonin
 const SELECTED_COLLABORATION_MODE_STORAGE_KEY = 'codex-web-local.selected-collaboration-mode.v1'
 const PROJECT_ORDER_STORAGE_KEY = 'codex-web-local.project-order.v1'
 const PROJECT_DISPLAY_NAME_STORAGE_KEY = 'codex-web-local.project-display-name.v1'
+const THREAD_GROUP_CACHE_STORAGE_KEY = 'codex-web-local.thread-groups-cache.v1'
 const HIDDEN_THREAD_IDS_STORAGE_KEY = 'codex-web-local.hidden-thread-ids.v1'
 const QUEUED_MESSAGES_STORAGE_KEY = 'codex-web-local.queued-messages.v1'
 const NOTIFICATION_SEQ_STORAGE_KEY = 'codex-web-local.notification-seq.v1'
+const THREAD_GROUP_CACHE_VERSION = 1
+const THREAD_GROUP_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+const THREAD_GROUP_CACHE_MAX_GROUPS = 18
+const THREAD_GROUP_CACHE_MAX_THREADS_PER_GROUP = 30
 const EVENT_SYNC_DEBOUNCE_MS = 350
 const BACKGROUND_SYNC_INTERVAL_MS = 9000
 const ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS = 12000
@@ -188,6 +193,11 @@ type QueuedMessage = {
 }
 
 type RealtimeConnectionState = RpcConnectionState
+type ThreadGroupCachePayload = {
+  version: number
+  savedAtMs: number
+  groups: UiProjectGroup[]
+}
 
 function createClientMessageId(): string {
   const randomPart =
@@ -492,6 +502,104 @@ function loadProjectDisplayNames(): Record<string, string> {
 function saveProjectDisplayNames(displayNames: Record<string, string>): void {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(PROJECT_DISPLAY_NAME_STORAGE_KEY, JSON.stringify(displayNames))
+}
+
+function readCachedString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value.trim() : fallback
+}
+
+function normalizeCachedThread(value: unknown, fallbackProjectName: string): UiThread | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  const id = readCachedString(row.id)
+  if (!id) return null
+
+  const title = readCachedString(row.title) || 'Untitled thread'
+  const projectName = toProjectName(readCachedString(row.projectName) || fallbackProjectName)
+  if (!projectName) return null
+
+  return {
+    id,
+    title,
+    projectName,
+    cwd: normalizePathForUi(readCachedString(row.cwd)),
+    sourceKind: readCachedString(row.sourceKind) || undefined,
+    hasWorktree: row.hasWorktree === true,
+    createdAtIso: readCachedString(row.createdAtIso),
+    updatedAtIso: readCachedString(row.updatedAtIso),
+    preview: readCachedString(row.preview),
+    unread: false,
+    inProgress: false,
+  }
+}
+
+function normalizeCachedThreadGroup(value: unknown): UiProjectGroup | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  const projectName = toProjectName(readCachedString(row.projectName))
+  if (!projectName || !Array.isArray(row.threads)) return null
+
+  const threads = row.threads
+    .map((thread) => normalizeCachedThread(thread, projectName))
+    .filter((thread): thread is UiThread => thread !== null)
+    .slice(0, THREAD_GROUP_CACHE_MAX_THREADS_PER_GROUP)
+
+  if (threads.length === 0) return null
+
+  const group: UiProjectGroup = {
+    projectName,
+    threads,
+  }
+  const workspaceRoot = readCachedString(row.workspaceRoot)
+  if (workspaceRoot) group.workspaceRoot = workspaceRoot
+  if (row.isPinnedProject === true) group.isPinnedProject = true
+  if (typeof row.pinnedProjectRank === 'number' && Number.isFinite(row.pinnedProjectRank)) {
+    group.pinnedProjectRank = row.pinnedProjectRank
+  }
+  return group
+}
+
+function loadCachedThreadGroups(): UiProjectGroup[] {
+  if (typeof window === 'undefined') return []
+
+  try {
+    const raw = window.localStorage.getItem(THREAD_GROUP_CACHE_STORAGE_KEY)
+    if (!raw) return []
+
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return []
+    const payload = parsed as Partial<ThreadGroupCachePayload>
+    if (payload.version !== THREAD_GROUP_CACHE_VERSION) return []
+    if (typeof payload.savedAtMs !== 'number' || !Number.isFinite(payload.savedAtMs)) return []
+    if (Date.now() - payload.savedAtMs > THREAD_GROUP_CACHE_MAX_AGE_MS) return []
+    if (!Array.isArray(payload.groups)) return []
+
+    return payload.groups
+      .map((group) => normalizeCachedThreadGroup(group))
+      .filter((group): group is UiProjectGroup => group !== null)
+      .slice(0, THREAD_GROUP_CACHE_MAX_GROUPS)
+  } catch {
+    return []
+  }
+}
+
+function saveCachedThreadGroups(groups: UiProjectGroup[]): void {
+  if (typeof window === 'undefined') return
+
+  try {
+    const payload: ThreadGroupCachePayload = {
+      version: THREAD_GROUP_CACHE_VERSION,
+      savedAtMs: Date.now(),
+      groups: groups
+        .map((group) => normalizeCachedThreadGroup(group))
+        .filter((group): group is UiProjectGroup => group !== null)
+        .slice(0, THREAD_GROUP_CACHE_MAX_GROUPS),
+    }
+    if (payload.groups.length === 0) return
+    window.localStorage.setItem(THREAD_GROUP_CACHE_STORAGE_KEY, JSON.stringify(payload))
+  } catch {
+    // Cache-first boot is an optimization; quota or privacy failures must not affect sync.
+  }
 }
 
 function loadHiddenThreadIds(): string[] {
@@ -1339,6 +1447,7 @@ export function useDesktopState() {
   const settledRuntimeMessageRefreshKeyByThreadId = new Map<string, string>()
   const settledRuntimeRpcRefreshKeyByThreadId = new Map<string, string>()
   const fallbackRetryInFlightThreadIds = new Set<string>()
+  let cachedThreadListRefreshInFlight: Promise<void> | null = null
   const isWorktreeGitAutomationEnabled = ref(true)
   const bufferedAgentDeltaByKey = new Map<string, BufferedAgentDelta>()
   const bufferedCommandDeltaByKey = new Map<string, BufferedCommandDelta>()
@@ -4923,7 +5032,73 @@ export function useDesktopState() {
     }
   }
 
-  async function loadThreads(options: { signal?: AbortSignal; preserveMissingSelected?: boolean } = {}) {
+  function hydrateCachedThreads(options: { preserveMissingSelected?: boolean } = {}): boolean {
+    if (hasLoadedThreads.value) return false
+
+    const hiddenThreadIdSet = new Set(hiddenThreadIds.value)
+    const cachedGroups = loadCachedThreadGroups()
+      .map((group) => ({
+        ...group,
+        threads: group.threads.filter((thread) => !hiddenThreadIdSet.has(thread.id)),
+      }))
+      .filter((group) => group.threads.length > 0)
+    if (cachedGroups.length === 0) return false
+
+    sourceGroups.value = cachedGroups
+    const nextProjectOrder = mergeProjectOrder(projectOrder.value, cachedGroups)
+    if (!areStringArraysEqual(projectOrder.value, nextProjectOrder)) {
+      projectOrder.value = nextProjectOrder
+      saveProjectOrder(projectOrder.value)
+    }
+
+    applyThreadFlags()
+    hasLoadedThreads.value = true
+    const flatThreads = flattenThreads(projectGroups.value)
+
+    const currentExists = flatThreads.some((thread) => thread.id === selectedThreadId.value)
+    if (!currentExists && !selectedThreadId.value && options.preserveMissingSelected !== true) {
+      setSelectedThreadId(flatThreads[0]?.id ?? '')
+    }
+    return true
+  }
+
+  function scheduleCachedThreadListRefresh(options: { signal?: AbortSignal; preserveMissingSelected?: boolean } = {}): void {
+    if (cachedThreadListRefreshInFlight) return
+
+    cachedThreadListRefreshInFlight = loadThreads({
+      signal: options.signal,
+      preserveMissingSelected: options.preserveMissingSelected,
+      useCachedFirst: false,
+      backgroundIfCached: false,
+    })
+      .catch((unknownError) => {
+        if (!isAbortLikeError(unknownError)) {
+          setSyncErrorFromUnknown(unknownError)
+        }
+      })
+      .finally(() => {
+        cachedThreadListRefreshInFlight = null
+      })
+  }
+
+  async function loadThreads(
+    options: {
+      signal?: AbortSignal
+      preserveMissingSelected?: boolean
+      useCachedFirst?: boolean
+      backgroundIfCached?: boolean
+    } = {},
+  ) {
+    const hydratedFromCache = options.useCachedFirst !== false
+      ? hydrateCachedThreads({ preserveMissingSelected: options.preserveMissingSelected })
+      : false
+
+    if (hydratedFromCache && options.backgroundIfCached === true) {
+      isLoadingThreads.value = false
+      scheduleCachedThreadListRefresh({ signal: options.signal, preserveMissingSelected: true })
+      return
+    }
+
     if (!hasLoadedThreads.value) {
       isLoadingThreads.value = true
     }
@@ -4956,6 +5131,7 @@ export function useDesktopState() {
         executionStateByThreadId,
       )
       sourceGroups.value = mergeThreadGroups(sourceGroups.value, mergedWithInProgress)
+      saveCachedThreadGroups(sourceGroups.value)
       inProgressById.value = pruneThreadStateMap(
         inProgressById.value,
         new Set(flattenThreads(sourceGroups.value).map((thread) => thread.id)),
@@ -5261,12 +5437,17 @@ export function useDesktopState() {
   }
 
   async function refreshAll(
-    options: { loadMessages?: boolean; loadSkills?: boolean; refreshModelPreferences?: boolean } = {},
+    options: {
+      loadMessages?: boolean
+      loadSkills?: boolean
+      refreshModelPreferences?: boolean
+      deferThreadListNetworkIfCached?: boolean
+    } = {},
   ) {
     error.value = ''
 
     try {
-      await loadThreads()
+      await loadThreads({ backgroundIfCached: options.deferThreadListNetworkIfCached === true })
       if (options.refreshModelPreferences !== false) {
         void refreshModelPreferences()
       }

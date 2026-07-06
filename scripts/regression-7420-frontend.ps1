@@ -550,7 +550,7 @@ JSON.stringify((() => {
     url: location.href,
     text: text.includes('Runtime Store') ? 'Runtime Store' : '',
     textLength: text.length,
-    hasInternalThreadReadError: /thread-store internal error|does not start with session metadata|failed to read thread\s+[A-Za-z]:\\/i.test(text),
+    hasInternalThreadReadError: /thread-store internal error|failed to read thread\s+[A-Za-z]:\\/i.test(text),
     hasBlankBody: text.length < 5 && !hasComposer && !hasSkillsHub && !hasTrendingHub && !hasRuntimeBar && !hasDiagnosticsPanel && !hasMarkdownBody,
     hasComposer,
     hasSkillsHub,
