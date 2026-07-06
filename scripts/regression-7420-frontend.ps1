@@ -1538,12 +1538,16 @@ JSON.stringify((() => {
     }, {});
   const firstScreenProjectRootSuggestionMaxDuplicateCount = Object.values(firstScreenProjectRootSuggestionCounts)
     .reduce((max, count) => Math.max(max, count), 0);
+  const firstScreenWorkspaceRootsStateCount = resources
+    .filter((entry) => entry.startTime <= 1500 && entry.name === '/codex-api/workspace-roots-state')
+    .length;
   return {
     apiCount: resources.length,
     stateThreadRequestCount: countByPath(statePath),
     runtimeThreadRequestCount: countByPath(runtimePath),
     tokenUsageRequestCount: countByPath(tokenPath),
     firstScreenProjectRootSuggestionMaxDuplicateCount,
+    firstScreenWorkspaceRootsStateCount,
     totalTransferSize: resources.reduce((sum, entry) => sum + entry.transferSize, 0),
     slowRequestCount: resources.filter((entry) => entry.duration >= 1500).length,
   };
@@ -1563,6 +1567,7 @@ function Assert-ThreadPageLoadMetrics {
   Assert-True ([int]$Metrics.runtimeThreadRequestCount -le 8) "thread page loaded $($Metrics.runtimeThreadRequestCount) runtime snapshots for $ThreadId; expected no more than 8 during initial settle"
   Assert-True ([int]$Metrics.tokenUsageRequestCount -le 1) "thread page loaded $($Metrics.tokenUsageRequestCount) token usage snapshots for $ThreadId; expected at most 1 throttled background read during initial settle"
   Assert-True ([int]$Metrics.firstScreenProjectRootSuggestionMaxDuplicateCount -le 1) "thread page repeated the same project-root-suggestion request $($Metrics.firstScreenProjectRootSuggestionMaxDuplicateCount) times during first-screen load for $ThreadId"
+  Assert-True ([int]$Metrics.firstScreenWorkspaceRootsStateCount -le 1) "thread page loaded workspace-roots-state $($Metrics.firstScreenWorkspaceRootsStateCount) times during first-screen load for $ThreadId"
 }
 
 function Add-RegressionResult {

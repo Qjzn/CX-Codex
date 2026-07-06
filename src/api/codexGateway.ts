@@ -57,11 +57,19 @@ type CachedProjectRootSuggestion = {
   value: ProjectRootSuggestion
   cachedAtMs: number
 }
+type CachedWorkspaceRootsState = {
+  value: WorkspaceRootsState
+  cachedAtMs: number
+}
 
 const PROJECT_ROOT_SUGGESTION_CACHE_TTL_MS = 2000
+const WORKSPACE_ROOTS_STATE_CACHE_TTL_MS = 2000
 const projectRootSuggestionCacheByBasePath = new Map<string, CachedProjectRootSuggestion>()
 const projectRootSuggestionInFlightByBasePath = new Map<string, Promise<ProjectRootSuggestion>>()
+let workspaceRootsStateCache: CachedWorkspaceRootsState | null = null
+let workspaceRootsStateInFlight: Promise<WorkspaceRootsState> | null = null
 let projectRootSuggestionCacheGeneration = 0
+let workspaceRootsStateCacheGeneration = 0
 
 export type RuntimeExecutionState =
   | 'idle'
@@ -1362,6 +1370,35 @@ function normalizeWorkspaceRootsState(payload: unknown): WorkspaceRootsState {
 }
 
 export async function getWorkspaceRootsState(): Promise<WorkspaceRootsState> {
+  if (workspaceRootsStateCache && Date.now() - workspaceRootsStateCache.cachedAtMs < WORKSPACE_ROOTS_STATE_CACHE_TTL_MS) {
+    return cloneWorkspaceRootsState(workspaceRootsStateCache.value)
+  }
+  if (workspaceRootsStateInFlight) {
+    return cloneWorkspaceRootsState(await workspaceRootsStateInFlight)
+  }
+
+  const cacheGeneration = workspaceRootsStateCacheGeneration
+  const request = fetchWorkspaceRootsState()
+    .then((state) => {
+      if (workspaceRootsStateCacheGeneration === cacheGeneration) {
+        workspaceRootsStateCache = {
+          value: cloneWorkspaceRootsState(state),
+          cachedAtMs: Date.now(),
+        }
+      }
+      return state
+    })
+    .finally(() => {
+      if (workspaceRootsStateInFlight === request) {
+        workspaceRootsStateInFlight = null
+      }
+    })
+  workspaceRootsStateInFlight = request
+
+  return cloneWorkspaceRootsState(await request)
+}
+
+async function fetchWorkspaceRootsState(): Promise<WorkspaceRootsState> {
   const response = await fetchWithTimeout('/codex-api/workspace-roots-state', {}, {
     label: 'Workspace roots request',
   })
@@ -1376,6 +1413,16 @@ export async function getWorkspaceRootsState(): Promise<WorkspaceRootsState> {
   return normalizeWorkspaceRootsState(envelope.data)
 }
 
+function cloneWorkspaceRootsState(state: WorkspaceRootsState): WorkspaceRootsState {
+  return {
+    order: [...state.order],
+    labels: { ...state.labels },
+    active: [...state.active],
+    projectOrder: [...state.projectOrder],
+    pinnedProjectIds: [...state.pinnedProjectIds],
+  }
+}
+
 export async function createWorktree(sourceCwd: string): Promise<WorktreeCreateResult> {
   const response = await fetchWithTimeout('/codex-api/worktree/create', {
     method: 'POST',
@@ -1388,6 +1435,7 @@ export async function createWorktree(sourceCwd: string): Promise<WorktreeCreateR
   if (!response.ok || !payload.data) {
     throw new Error(payload.error || 'Failed to create worktree')
   }
+  clearWorkspaceRootsStateCache()
   clearProjectRootSuggestionCache()
   return {
     ...payload.data,
@@ -1456,6 +1504,7 @@ export async function setWorkspaceRootsState(nextState: WorkspaceRootsState): Pr
   if (!response.ok) {
     throw new Error('Failed to save workspace roots state')
   }
+  clearWorkspaceRootsStateCache()
 }
 
 export async function openProjectRoot(path: string, options?: { createIfMissing?: boolean; label?: string }): Promise<string> {
@@ -1485,6 +1534,7 @@ export async function openProjectRoot(path: string, options?: { createIfMissing?
       : {}
   const normalizedPath = typeof data.path === 'string' ? normalizePathForUi(data.path) : ''
   if (normalizedPath) {
+    clearWorkspaceRootsStateCache()
     clearProjectRootSuggestionCache()
   }
   return normalizedPath
@@ -1516,7 +1566,9 @@ export async function getProjectRootSuggestion(basePath: string): Promise<Projec
       return suggestion
     })
     .finally(() => {
-      projectRootSuggestionInFlightByBasePath.delete(normalizedBasePath)
+      if (projectRootSuggestionInFlightByBasePath.get(normalizedBasePath) === request) {
+        projectRootSuggestionInFlightByBasePath.delete(normalizedBasePath)
+      }
     })
   projectRootSuggestionInFlightByBasePath.set(normalizedBasePath, request)
   return await request
@@ -1550,6 +1602,12 @@ function clearProjectRootSuggestionCache(): void {
   projectRootSuggestionCacheGeneration += 1
   projectRootSuggestionCacheByBasePath.clear()
   projectRootSuggestionInFlightByBasePath.clear()
+}
+
+function clearWorkspaceRootsStateCache(): void {
+  workspaceRootsStateCacheGeneration += 1
+  workspaceRootsStateCache = null
+  workspaceRootsStateInFlight = null
 }
 
 export async function searchComposerFiles(cwd: string, query: string, limit = 20): Promise<ComposerFileSuggestion[]> {
