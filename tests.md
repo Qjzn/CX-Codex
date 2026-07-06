@@ -40,6 +40,27 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - To roll back, revert `src/server/rpcProxyRoute.ts`, `scripts/server-module-smoke.ts`, `docs/changelog.zh-CN.md`, and this test section.
 
+### Feature: Unified load-more affordance for remote older history
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/__regression/conversation-blocks?regression=frontend`.
+2. Confirm the fixture contains a `history.notice` message but no locally hidden message window.
+3. Confirm the main conversation load-more affordance is visible and reads `继续加载较早历史`.
+4. Click the main load-more affordance.
+5. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- The same load-more button handles both local window reveal and remote older-history retrieval.
+- When only `history.notice` remains, clicking the button emits `loadOlderHistory` instead of doing nothing.
+- The frontend regression fails if the remote older-history affordance disappears or stops emitting.
+
+#### Rollback/Cleanup
+- To roll back, revert `src/components/content/ThreadConversation.vue`, `src/components/content/ConversationRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
 ### Feature: Regression gate for lightweight load-more window reveal
 
 #### Prerequisites

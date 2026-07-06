@@ -1020,6 +1020,8 @@ JSON.stringify((() => {
     hasPermissionToolText: textContent.includes('browser_click'),
     hasToolCallActionText: textContent.includes('让 Codex 改用文字继续'),
     hasPermissionActionText: textContent.includes('允许并继续') && textContent.includes('拒绝') && textContent.includes('稍后处理'),
+    loadMoreButtonText: document.querySelector('.conversation-load-more-button')?.textContent?.replace(/\s+/g, ' ').trim() || '',
+    olderHistoryRequestCount: Number(document.querySelector('.conversation-regression-older-history-count')?.getAttribute('data-count') || '0'),
     firstCopyButtonText: firstCopyButton ? firstCopyButton.textContent.trim() : '',
     hasEmojiFileIcon: document.body.innerText.includes('📄'),
     hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
@@ -1085,10 +1087,22 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.hasPermissionToolText -eq $true) "conversation fixture is missing MCP tool label"
   Assert-True ($Metrics.hasToolCallActionText -eq $true) "conversation fixture is missing tool call action label"
   Assert-True ($Metrics.hasPermissionActionText -eq $true) "conversation fixture is missing permission action labels"
+  Assert-True ([string]$Metrics.loadMoreButtonText -like "*继续加载较早历史*") "conversation fixture remote older-history affordance is missing unified load-more button"
   Assert-True ([string]$Metrics.firstCopyButtonText -like "*复制*") "conversation fixture first code block copy button is not visible"
   Assert-True ($Metrics.hasEmojiFileIcon -eq $false) "conversation fixture still renders emoji file icons"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "conversation fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
   Assert-True ($Metrics.structuredViewportFitFailureCount -eq 0) "conversation fixture structured blocks overflow viewport: $($Metrics.structuredViewportFitFailures | ConvertTo-Json -Compress)"
+}
+
+function Assert-ConversationOlderHistoryAffordance {
+  param([string]$Session)
+
+  $before = Read-ConversationFixtureMetrics -Session $Session
+  Assert-True ([int]$before.olderHistoryRequestCount -eq 0) "conversation fixture older-history request count should start at 0"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "click", ".conversation-load-more-button") | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "200") | Out-Null
+  $after = Read-ConversationFixtureMetrics -Session $Session
+  Assert-True ([int]$after.olderHistoryRequestCount -eq 1) "conversation fixture load-more button did not emit remote older-history request"
 }
 
 function Expand-ConversationFixturePendingRequests {
@@ -1787,6 +1801,7 @@ try {
   Expand-ConversationFixturePendingRequests -Session $session
   Assert-ConversationCommandOutputLazy -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "desktop"
+  Assert-ConversationOlderHistoryAffordance -Session $session
   Assert-ConversationFixtureCopyInteraction -Session $session
   Add-RegressionResult -Name "conversation-blocks-fixture" -Page $fixture
 

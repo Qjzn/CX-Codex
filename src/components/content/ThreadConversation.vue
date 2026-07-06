@@ -405,7 +405,7 @@
       </section>
       </li>
       <li
-        v-if="hasHiddenEarlierMessages"
+        v-if="hasOlderMessagesAffordance"
         class="conversation-item conversation-item-load-more"
       >
         <button
@@ -415,7 +415,7 @@
           @click="onRevealOlderMessages"
         >
           <span class="conversation-load-more-title">
-            {{ isRevealingOlderMessages ? '正在加载更早消息...' : `继续查看更多（剩余 ${hiddenEarlierMessageCount} 条）` }}
+            {{ olderMessagesAffordanceTitle }}
           </span>
           <span class="conversation-load-more-hint">滑到顶部也会继续加载</span>
         </button>
@@ -1640,6 +1640,17 @@ const visibleMessageEntries = computed<ConversationMessageEntry[]>(() => (
 ))
 const hiddenEarlierMessageCount = computed(() => visibleMessageStartIndex.value)
 const hasHiddenEarlierMessages = computed(() => hiddenEarlierMessageCount.value > 0)
+const hasRemoteOlderHistoryNotice = computed(() => (
+  renderableMessages.value.some(isHistoryNoticeMessage)
+))
+const hasOlderMessagesAffordance = computed(() => (
+  hasHiddenEarlierMessages.value || hasRemoteOlderHistoryNotice.value
+))
+const olderMessagesAffordanceTitle = computed(() => {
+  if (isRevealingOlderMessages.value) return '正在加载更早消息...'
+  if (hasHiddenEarlierMessages.value) return `继续查看更多（剩余 ${hiddenEarlierMessageCount.value} 条）`
+  return '继续加载较早历史'
+})
 
 const liveOverlayCommandMessage = computed<UiMessage | null>(() => {
   const overlay = props.liveOverlay
@@ -2165,11 +2176,19 @@ async function scheduleScrollAnchorRestore(snapshot: ScrollAnchorSnapshot | null
 }
 
 async function revealOlderMessages(): Promise<void> {
-  if (!hasHiddenEarlierMessages.value || isRevealingOlderMessages.value) return
+  if (!hasOlderMessagesAffordance.value || isRevealingOlderMessages.value) return
   const anchorSnapshot = captureVisibleConversationAnchor()
   isRevealingOlderMessages.value = true
   canAutoRevealOlderMessages.value = false
-  visibleMessageStartIndex.value = Math.max(visibleMessageStartIndex.value - MESSAGE_WINDOW_SIZE, 0)
+  if (hasHiddenEarlierMessages.value) {
+    visibleMessageStartIndex.value = Math.max(visibleMessageStartIndex.value - MESSAGE_WINDOW_SIZE, 0)
+    await nextTick()
+    await scheduleScrollAnchorRestore(anchorSnapshot)
+    isRevealingOlderMessages.value = false
+    return
+  }
+
+  emit('loadOlderHistory')
   await nextTick()
   await scheduleScrollAnchorRestore(anchorSnapshot)
   isRevealingOlderMessages.value = false
@@ -4413,7 +4432,7 @@ function flushConversationScrollInteraction(): void {
   }
   if (
     container.scrollTop <= 96 &&
-    hasHiddenEarlierMessages.value &&
+    hasOlderMessagesAffordance.value &&
     canAutoRevealOlderMessages.value &&
     !isRevealingOlderMessages.value
   ) {

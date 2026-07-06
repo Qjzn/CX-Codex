@@ -34,9 +34,11 @@
         @respond-server-request="noop"
         @rollback="noop"
         @toggle-favorite="noop"
+        @load-older-history="onLoadOlderHistory"
         @return-to-new-thread="noop"
         @dismiss-empty-thread="noop"
       />
+      <span class="conversation-regression-older-history-count" :data-count="olderHistoryRequestCount" aria-hidden="true" />
       <QueuedMessages
         class="conversation-regression-queue"
         :messages="queuedMessages"
@@ -50,12 +52,20 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import ThreadConversation from './ThreadConversation.vue'
 import RuntimeStatusBar from './RuntimeStatusBar.vue'
 import QueuedMessages from './QueuedMessages.vue'
 import type { UiLiveOverlay, UiMessage, UiRuntimeStatusSummary, UiServerRequest } from '../../types/codex'
 
 const messages: UiMessage[] = [
+  {
+    id: 'fixture-history-window-notice',
+    role: 'system',
+    text: '已优先显示最近 10 轮，较早 8 轮已折叠以保持流畅。',
+    messageType: 'history.notice',
+    turnIndex: 1,
+  },
   {
     id: 'fixture-user-files',
     role: 'user',
@@ -156,6 +166,8 @@ const messages: UiMessage[] = [
   })),
 ]
 
+const olderHistoryRequestCount = ref(0)
+
 const pendingRequests: UiServerRequest[] = [
   {
     id: 742001,
@@ -235,6 +247,10 @@ const queuedMessages = [
 
 function noop(): void {
   // Fixture route only needs rendered output for browser assertions.
+}
+
+function onLoadOlderHistory(): void {
+  olderHistoryRequestCount.value += 1
 }
 </script>
 
