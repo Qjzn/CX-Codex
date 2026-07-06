@@ -152,6 +152,7 @@ const EVENT_SYNC_DEBOUNCE_MS = 350
 const BACKGROUND_SYNC_INTERVAL_MS = 9000
 const ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS = 12000
 const ACTIVE_THREAD_DETAIL_SYNC_IDLE_MS = 18000
+const FOREGROUND_RECOVERY_DETAIL_REFRESH_MIN_INTERVAL_MS = ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS
 const THREAD_SELECTION_RECOVERY_SUPPRESS_MS = 5000
 const ACTIVE_SYNC_BOOST_INTERVAL_MS = 2500
 const ACTIVE_SYNC_BOOST_WINDOW_MS = 18000
@@ -6883,21 +6884,59 @@ export function useDesktopState() {
     }, BACKGROUND_SYNC_INTERVAL_MS)
   }
 
+  function shouldRefreshSelectedMessagesForForegroundRecovery(
+    threadId: string,
+    requestedForceRefresh: boolean,
+  ): boolean {
+    if (!threadId) return false
+    if (pendingThreadMessageRefresh.has(threadId)) return true
+    if (eventUnreadByThreadId.value[threadId] === true) return true
+    if (isThreadExecutionActive(threadId)) return true
+    if (isRuntimeExecutionStale(threadId)) return true
+    if (!hasLoadedThreadDetail(threadId)) return true
+    if (hasPendingServerRequestSignal(threadId)) return true
+    if (hasQueuedThreadWork(threadId)) return true
+    if (notificationStale.value || syncLagging.value) return true
+    if (!requestedForceRefresh) return false
+
+    const lastDetailSyncAt = lastThreadDetailSyncAtById.value[threadId] ?? 0
+    return lastDetailSyncAt <= 0 ||
+      Date.now() - lastDetailSyncAt >= FOREGROUND_RECOVERY_DETAIL_REFRESH_MIN_INTERVAL_MS
+  }
+
   function runForegroundRecoverySync(
     options: { includeThreadList?: boolean; forceMessageRefresh?: boolean; urgent?: boolean } = {},
   ): void {
     const activeThreadId = selectedThreadId.value
+    const shouldRefreshMessages = shouldRefreshSelectedMessagesForForegroundRecovery(
+      activeThreadId,
+      options.forceMessageRefresh === true,
+    )
     if (activeThreadId) {
       clearBufferedLiveDeltas()
-      pendingThreadMessageRefresh.add(activeThreadId)
+      if (shouldRefreshMessages) {
+        pendingThreadMessageRefresh.add(activeThreadId)
+      }
     }
     markActiveSyncBoost()
     void replayMissedNotifications()
-      .finally(() => syncThreadStatus({
-        includeThreadList: options.includeThreadList ?? false,
-        forceMessageRefresh: options.forceMessageRefresh === true || Boolean(activeThreadId),
-        urgent: options.urgent === true,
-      }))
+      .finally(() => {
+        const refreshedActiveThreadId = selectedThreadId.value
+        const shouldRefreshMessagesAfterReplay =
+          (shouldRefreshMessages && activeThreadId === refreshedActiveThreadId) ||
+          shouldRefreshSelectedMessagesForForegroundRecovery(
+            refreshedActiveThreadId,
+            options.forceMessageRefresh === true,
+          )
+        if (refreshedActiveThreadId && shouldRefreshMessagesAfterReplay) {
+          pendingThreadMessageRefresh.add(refreshedActiveThreadId)
+        }
+        return syncThreadStatus({
+          includeThreadList: options.includeThreadList ?? false,
+          forceMessageRefresh: shouldRefreshMessagesAfterReplay,
+          urgent: options.urgent === true,
+        })
+      })
   }
 
   function scheduleVisibilitySync(): void {

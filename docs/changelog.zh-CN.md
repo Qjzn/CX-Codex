@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - 前台/Android 恢复同步继续减负：页面回到前台或 Android shell resume 时，若当前线程刚在短时间内完成 fresh 详情同步且没有未读、运行中、stale、队列或权限请求信号，后续恢复重试不再重复触发重型消息刷新；真正需要 catch-up 的线程仍会立即刷新。
   - 历史 reasoning payload 继续减负：`thread/read` / resume / rollback 这类带 turns 的服务端结果会在返回浏览器前移除前端已不展示的 `reasoning` item，减少长会话打开时的网络、缓存和归一化压力；实时运行状态、可见消息和未知 item 诊断兜底不变。
   - 历史 MCP 工具调用 payload 继续减负：`thread/read` 这类带 turns 的服务端结果会在返回浏览器前移除已不展示的 `mcpToolCall` item，减少移动端打开工具密集型长会话时的网络、缓存和归一化压力；实时运行状态和其他未知 item 诊断兜底不变。
   - `thread/read` 服务端 payload 继续减负：带 turns 的 RPC 结果在返回浏览器和写入缓存前会移除低价值 `fileChange` item，避免长任务线程把不会展示的文件变更补丁继续传给移动端；其他未知 item 仍保留 raw payload 诊断兜底。
