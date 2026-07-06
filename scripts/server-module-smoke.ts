@@ -2793,6 +2793,25 @@ function smokeAppServerRpcResult(): void {
   ])
   assert.equal(trimmed.other, true)
   assert.equal(trimmed.thread.turns.length, 10)
+
+  const itemHeavy = trimThreadTurnsInRpcResult('thread/read', {
+    thread: {
+      id: 'thread-items',
+      turns: [
+        {
+          id: 'turn-heavy',
+          items: Array.from({ length: 200 }, (_, index) => ({ id: `item-${String(index + 1)}` })),
+        },
+      ],
+    },
+  }) as { thread: { turns: Array<{ items: Array<{ id: string }>; itemsView?: string; originalItemsCount?: number }> } }
+  const heavyTurn = itemHeavy.thread.turns[0]
+  assert.equal(heavyTurn.items.length, 160)
+  assert.equal(heavyTurn.items[0]?.id, 'item-1')
+  assert.equal(heavyTurn.items[1]?.id, 'item-42')
+  assert.equal(heavyTurn.items.at(-1)?.id, 'item-200')
+  assert.equal(heavyTurn.itemsView, 'recent')
+  assert.equal(heavyTurn.originalItemsCount, 200)
   assert.deepEqual(trimThreadTurnsInRpcResult('thread/resume', { thread: { turns: null } }), { thread: { turns: null } })
 }
 

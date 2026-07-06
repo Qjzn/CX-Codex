@@ -1,4 +1,6 @@
 const THREAD_RESPONSE_TURN_LIMIT = 10
+const THREAD_RESPONSE_TURN_ITEM_LIMIT = 160
+const THREAD_RESPONSE_TURN_HEAD_ITEM_LIMIT = 1
 const THREAD_METHODS_WITH_TURNS = new Set(['thread/read', 'thread/resume', 'thread/fork', 'thread/rollback'])
 
 export function trimThreadTurnsInRpcResult(method: string, result: unknown): unknown {
@@ -7,14 +9,39 @@ export function trimThreadTurnsInRpcResult(method: string, result: unknown): unk
   const record = asRecord(result)
   const thread = asRecord(record?.thread)
   const turns = Array.isArray(thread?.turns) ? thread.turns : null
-  if (!record || !thread || !turns || turns.length <= THREAD_RESPONSE_TURN_LIMIT) return result
+  if (!record || !thread || !turns) return result
+
+  const recentTurns = turns.length > THREAD_RESPONSE_TURN_LIMIT
+    ? turns.slice(-THREAD_RESPONSE_TURN_LIMIT)
+    : turns
+  const trimmedTurns = recentTurns.map(trimTurnItems)
+  const didTrimTurns = recentTurns !== turns
+  const didTrimItems = trimmedTurns.some((turn, index) => turn !== recentTurns[index])
+  if (!didTrimTurns && !didTrimItems) return result
 
   return {
     ...record,
     thread: {
       ...thread,
-      turns: turns.slice(-THREAD_RESPONSE_TURN_LIMIT),
+      turns: trimmedTurns,
     },
+  }
+}
+
+function trimTurnItems(turn: unknown): unknown {
+  const record = asRecord(turn)
+  const items = Array.isArray(record?.items) ? record.items : null
+  if (!record || !items || items.length <= THREAD_RESPONSE_TURN_ITEM_LIMIT) return turn
+
+  const tailItemLimit = THREAD_RESPONSE_TURN_ITEM_LIMIT - THREAD_RESPONSE_TURN_HEAD_ITEM_LIMIT
+  return {
+    ...record,
+    items: [
+      ...items.slice(0, THREAD_RESPONSE_TURN_HEAD_ITEM_LIMIT),
+      ...items.slice(-tailItemLimit),
+    ],
+    itemsView: 'recent',
+    originalItemsCount: items.length,
   }
 }
 
