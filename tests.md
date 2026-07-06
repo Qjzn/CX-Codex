@@ -19,6 +19,27 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Regression gate for older history fallback cache isolation
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Node dependencies are installed.
+
+#### Steps
+1. Run `npm.cmd run verify:server-modules`.
+2. Confirm the RPC proxy smoke covers a normal `thread/read` recent request.
+3. Confirm the smoke covers `thread/read` with `responseView=older`, `beforeTurnIndex`, and `turnLimit`.
+4. Confirm the smoke covers malformed-session fallback for both recent and older-history reads.
+
+#### Expected Results
+- Local-only history window parameters are stripped before forwarding to Codex app-server.
+- Normal older-history reads return the requested older turn window and do not update the recent thread-read cache.
+- Malformed-session fallback older-history reads are still sliced as an older window and do not update the recent thread-read cache.
+- Recent fallback reads can still be cached, so corrupted session recovery remains fast without polluting the cache with an older slice.
+
+#### Rollback/Cleanup
+- To roll back, revert `src/server/rpcProxyRoute.ts`, `scripts/server-module-smoke.ts`, `docs/changelog.zh-CN.md`, and this test section.
+
 ### Feature: Regression gate for lightweight load-more window reveal
 
 #### Prerequisites
@@ -41,6 +62,7 @@ This file tracks manual regression and feature verification steps.
 #### Expected Results
 - `继续查看更多` reveals only a bounded local window of earlier rendered items.
 - The visible window remains useful: at least one user-context item and one Codex/assistant item.
+- If the currently loaded server slice contains no ordinary user message after internal context is hidden, a lightweight `当前任务` context preview remains visible after load-more.
 - The reading anchor remains stable enough that the page does not jump unexpectedly.
 
 #### Rollback/Cleanup

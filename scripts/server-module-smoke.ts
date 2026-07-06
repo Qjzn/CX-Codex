@@ -6203,8 +6203,28 @@ async function smokeRpcProxyRoute(): Promise<void> {
     {
       method: 'thread/read',
       params: {
+        threadId: 'thread-read',
+        includeTurns: true,
+        responseView: 'older',
+        beforeTurnIndex: 5,
+        turnLimit: 3,
+      },
+    },
+    {
+      method: 'thread/read',
+      params: {
         threadId: 'thread-fallback',
         includeTurns: true,
+      },
+    },
+    {
+      method: 'thread/read',
+      params: {
+        threadId: 'thread-fallback-older',
+        includeTurns: true,
+        responseView: 'older',
+        beforeTurnIndex: 5,
+        turnLimit: 2,
       },
     },
     {
@@ -6238,11 +6258,16 @@ async function smokeRpcProxyRoute(): Promise<void> {
       if (method === 'turn/interrupt') throw new Error('no active turn')
       if (method === 'thread/resume') throw new Error('thread is not materialized yet')
       if (method === 'thread/list') return { data: [{ id: 'thread-a' }] }
-      if (method === 'thread/read' && readStringProperty(params, 'threadId') === 'thread-fallback') {
+      if (method === 'thread/read' && readStringProperty(params, 'threadId').startsWith('thread-fallback')) {
         if (readBooleanProperty(params, 'includeTurns')) {
           throw new Error('thread-store internal error: failed to read thread C:\\sessions\\thread-fallback.jsonl: rollout does not start with session metadata')
         }
-        return { thread: { id: 'thread-fallback', path: 'C:/sessions/thread-fallback.jsonl' } }
+        return {
+          thread: {
+            id: readStringProperty(params, 'threadId'),
+            path: `C:/sessions/${readStringProperty(params, 'threadId')}.jsonl`,
+          },
+        }
       }
       if (method === 'thread/read') return { thread: { id: 'thread-read', turns: readTurns }, other: true }
       if (method === 'thread/unsubscribe') return { status: 'notSubscribed' }
@@ -6362,6 +6387,39 @@ async function smokeRpcProxyRoute(): Promise<void> {
   assert.equal(threadReadResult.result.thread.turns.length, 10)
   assert.equal(threadReadResult.result.thread.turns[0].id, 'turn-2')
   assert.deepEqual(rememberedCachedThreadReads, [{ threadId: 'thread-read', threadRead: threadReadResult.result }])
+  assert.deepEqual(rpcCalls[5], {
+    method: 'thread/read',
+    params: {
+      threadId: 'thread-read',
+      includeTurns: true,
+    },
+  })
+
+  const olderThreadRead = createRouteTestResponse()
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'POST' } as never,
+    olderThreadRead.response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
+    dependencies,
+  ), true)
+  const olderThreadReadResult = JSON.parse(olderThreadRead.body) as {
+    result: { thread: { turns: Array<{ id: string }>; turnsView?: string; originalTurnsCount?: number; turnsStartIndex?: number } }
+  }
+  assert.deepEqual(olderThreadReadResult.result.thread.turns.map((turn) => turn.id), ['turn-3', 'turn-4', 'turn-5'])
+  assert.equal(olderThreadReadResult.result.thread.turnsView, 'older')
+  assert.equal(olderThreadReadResult.result.thread.originalTurnsCount, 11)
+  assert.equal(olderThreadReadResult.result.thread.turnsStartIndex, 2)
+  assert.deepEqual(rpcCalls[6], {
+    method: 'thread/read',
+    params: {
+      threadId: 'thread-read',
+      includeTurns: true,
+    },
+  })
+  assert.equal(asRecord(rpcCalls[6].params)?.responseView, undefined)
+  assert.equal(asRecord(rpcCalls[6].params)?.beforeTurnIndex, undefined)
+  assert.equal(asRecord(rpcCalls[6].params)?.turnLimit, undefined)
+  assert.equal(rememberedCachedThreadReads.length, 1)
 
   const threadReadFallback = createRouteTestResponse()
   assert.equal(await handleRpcProxyRoute(
@@ -6379,6 +6437,40 @@ async function smokeRpcProxyRoute(): Promise<void> {
   assert.equal(threadReadFallbackBody.warning, 'thread/read fell back to local session log messages')
   assert.deepEqual(sessionLogThreadReads.map((read) => read.sessionPath), ['C:/sessions/thread-fallback.jsonl'])
   assert.equal(rememberedCachedThreadReads[1]?.threadId, 'thread-fallback')
+
+  const olderThreadReadFallback = createRouteTestResponse()
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'POST' } as never,
+    olderThreadReadFallback.response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
+    dependencies,
+  ), true)
+  const olderThreadReadFallbackBody = JSON.parse(olderThreadReadFallback.body) as {
+    result: { thread: { id: string; turns: Array<{ id: string }>; turnsView?: string; originalTurnsCount?: number; turnsStartIndex?: number } }
+    warning: string
+  }
+  assert.equal(olderThreadReadFallbackBody.result.thread.id, 'thread-fallback')
+  assert.deepEqual(olderThreadReadFallbackBody.result.thread.turns.map((turn) => turn.id), ['fallback-turn'])
+  assert.equal(olderThreadReadFallbackBody.result.thread.turnsView, 'older')
+  assert.equal(olderThreadReadFallbackBody.warning, 'thread/read fell back to local session log messages')
+  assert.deepEqual(rpcCalls[9], {
+    method: 'thread/read',
+    params: {
+      threadId: 'thread-fallback-older',
+      includeTurns: true,
+    },
+  })
+  assert.deepEqual(rpcCalls[10], {
+    method: 'thread/read',
+    params: {
+      threadId: 'thread-fallback-older',
+      includeTurns: false,
+    },
+  })
+  assert.equal(asRecord(rpcCalls[9].params)?.responseView, undefined)
+  assert.equal(asRecord(rpcCalls[9].params)?.beforeTurnIndex, undefined)
+  assert.equal(asRecord(rpcCalls[9].params)?.turnLimit, undefined)
+  assert.equal(rememberedCachedThreadReads.length, 2)
 
   const threadUnsubscribe = createRouteTestResponse()
   assert.equal(await handleRpcProxyRoute(

@@ -1560,7 +1560,16 @@ const visibleContextPreview = computed<ContextPreviewEntry | null>(() => {
     }
   }
 
-  if (hasHiddenEarlierMessages.value) {
+  const hasAssistantContent = visibleMessages.some((message) => (
+    message.role === 'assistant' &&
+    (
+      message.text.trim().length > 0 ||
+      (message.images?.length ?? 0) > 0 ||
+      (message.fileAttachments?.length ?? 0) > 0
+    )
+  ))
+
+  if (hasHiddenEarlierMessages.value || hasAssistantContent) {
     return {
       label: '当前任务',
       text: '持续目标自动推进中，相关上下文已折叠。',

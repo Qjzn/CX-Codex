@@ -136,7 +136,7 @@ export async function handleRpcProxyRoute(
           preserveFullTurns: requestedFullThreadRead,
           turnWindow: requestedTurnWindow,
         })
-        if (!requestedFullThreadRead) {
+        if (!requestedFullThreadRead && !requestedTurnWindow) {
           dependencies.rememberCachedThreadRead(rpcThreadId, result)
         }
         setJson(res, 200, {
