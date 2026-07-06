@@ -550,6 +550,7 @@ JSON.stringify((() => {
     url: location.href,
     text: text.includes('Runtime Store') ? 'Runtime Store' : '',
     textLength: text.length,
+    hasInternalCodexContext: text.includes('<codex_internal_context'),
     hasInternalThreadReadError: /thread-store internal error|failed to read thread\s+[A-Za-z]:\\/i.test(text),
     hasBlankBody: text.length < 5 && !hasComposer && !hasSkillsHub && !hasTrendingHub && !hasRuntimeBar && !hasDiagnosticsPanel && !hasMarkdownBody,
     hasComposer,
@@ -592,6 +593,7 @@ function Assert-Page {
 
   Assert-True (-not $Page.hasBlankBody) "$Name rendered a blank body"
   Assert-True (-not $Page.hasHorizontalOverflow) "$Name has horizontal overflow: $($Page.scrollWidth) > $($Page.clientWidth)"
+  Assert-True (-not $Page.hasInternalCodexContext) "$Name exposed internal codex context"
   Assert-True (-not $Page.hasInternalThreadReadError) "$Name exposed an internal thread-store read error"
   if ($RequireComposer) {
     Assert-True ($Page.hasComposer -eq $true) "$Name is missing composer controls"

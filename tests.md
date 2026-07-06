@@ -19,6 +19,34 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Hide internal Codex context messages from conversation UI
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available and contains an internal goal/context message.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` at a phone viewport.
+2. Wait about 2.5 seconds and inspect the visible conversation body.
+3. Confirm the page title still shows `分析项目`.
+4. Confirm `document.body.innerText` does not include `<codex_internal_context`.
+5. Run `npm.cmd run build`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Run `npm.cmd run verify:server-modules`.
+8. Run `npm.cmd run verify:frontend-normalizers`.
+9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Internal Codex context messages are hidden from the normal conversation UI.
+- The real `分析项目` thread remains nonblank and keeps the correct title.
+- The frontend regression fails if any checked page exposes `<codex_internal_context` in visible text.
+- Sidebar data and frontend gates still pass with the required `分析项目` thread.
+
+#### Rollback/Cleanup
+- To roll back, revert `src/App.vue`, `src/components/content/ThreadConversation.vue`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
 ### Feature: Use cached title for route-only thread header
 
 #### Prerequisites

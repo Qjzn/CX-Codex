@@ -1348,6 +1348,15 @@ function shouldSuppressConversationMessage(message: UiMessage): boolean {
   if (message.messageType === 'worked') return true
 
   const messageType = message.messageType?.trim() ?? ''
+  const text = message.text.trim()
+  if (
+    message.role === 'user' &&
+    /^<codex_internal_context\b/iu.test(text) &&
+    /<\/codex_internal_context>\s*$/iu.test(text)
+  ) {
+    return true
+  }
+
   if (message.role === 'system' && message.isUnhandled && messageType === 'unhandled.fileChange') {
     return true
   }

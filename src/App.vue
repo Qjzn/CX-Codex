@@ -1572,6 +1572,11 @@ const routeThreadCachedTitle = computed(() => {
 function isInternalThreadTitleCandidate(line: string): boolean {
   return /^<codex_internal_context\b/iu.test(line.trim())
 }
+function isInternalCodexContextMessage(message: UiMessage): boolean {
+  if (message.role !== 'user') return false
+  const text = message.text.trim()
+  return /^<codex_internal_context\b/iu.test(text) && /<\/codex_internal_context>\s*$/iu.test(text)
+}
 const routeThreadFallbackTitle = computed(() => {
   if (route.name !== 'thread' || selectedThread.value) return ''
   const cachedTitle = routeThreadCachedTitle.value
@@ -1766,6 +1771,7 @@ const serviceStatusDetail = computed(() => {
 })
 const filteredMessages = computed(() =>
   messages.value.filter((message) => {
+    if (isInternalCodexContextMessage(message)) return false
     const type = normalizeMessageType(message.messageType, message.role)
     if (type === 'worked') return true
     if (type === 'commandExecution') return message.commandExecution?.status === 'inProgress'
@@ -1775,7 +1781,7 @@ const filteredMessages = computed(() =>
 )
 const latestUserTurnIndex = computed(() => {
   let latest = -1
-  for (const message of messages.value) {
+  for (const message of filteredMessages.value) {
     if (message.role !== 'user') continue
     if (typeof message.turnIndex !== 'number') continue
     if (message.turnIndex > latest) latest = message.turnIndex
