@@ -10385,3 +10385,41 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page; the conversation fixture now asserts command output marker/pre content is absent before command expansion and present after expansion.
+
+### Feature: Cache estimated message heights
+
+#### Prerequisites
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- A long real thread such as `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- Conversation regression fixture includes normal messages, command execution, Markdown images or text blocks, and collapsible content.
+
+#### Steps
+1. Open a long conversation on phone width.
+2. Reveal older messages in multiple chunks with `继续查看更多`.
+3. Scroll through the revealed history and back to the latest messages.
+4. Expand and collapse a long prompt or command output, then scroll again.
+5. Confirm the virtual list keeps stable spacer heights, no blank rows appear, and scroll anchoring remains stable.
+6. Run `npm.cmd run build`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+8. Run `npm.cmd run verify:frontend-normalizers`.
+9. Run `npm.cmd run verify:server-modules`.
+10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+11. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Unmeasured message height estimates are reused by message id, source content, and relevant expanded/collapsed state.
+- The estimate cache is bounded and pruned when messages leave the thread or the active thread changes.
+- Expanding commands or long prompts invalidates the relevant estimate signature and updates layout normally.
+- The real `分析项目` phone thread page and conversation fixture remain nonblank.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/components/content/ThreadConversation.vue`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement before fix: `estimateConversationEntryHeight()` called `estimateMessageHeight()` directly for every unmeasured visible entry, which re-trimmed/split long text and re-scanned Markdown image syntax when older history was revealed before real DOM heights were measured.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `19872`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.

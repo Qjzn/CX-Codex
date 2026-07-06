@@ -1018,6 +1018,7 @@ const commandElapsedNowMs = ref(Date.now())
 const observedCommandStartedAtById = ref<Record<string, number>>({})
 const liveOverlayObservedAtMs = ref(0)
 let commandElapsedTimer: number | null = null
+const estimatedMessageHeightById = new Map<string, { sourceText: string; signature: string; height: number }>()
 const COMPACT_TABLE_VIEWPORT_QUERY = '(max-width: 767px)'
 const isCompactTableViewport = ref(false)
 let compactTableViewportMql: MediaQueryList | null = null
@@ -1256,6 +1257,7 @@ const MESSAGE_WINDOW_SIZE = 10
 const RECENT_DERIVED_UI_MESSAGE_LIMIT = 120
 const REACTIVE_WATCH_MESSAGE_LIMIT = RECENT_DERIVED_UI_MESSAGE_LIMIT * 2
 const PREPARED_MESSAGE_BLOCK_CACHE_LIMIT = 80
+const ESTIMATED_MESSAGE_HEIGHT_CACHE_LIMIT = 240
 const renderableMessages = computed<UiMessage[]>(() => (
   props.messages.filter((message) => !shouldSuppressConversationMessage(message))
 ))
@@ -1774,7 +1776,7 @@ function estimateConversationEntryHeight(entry: ConversationRenderEntry): number
   if (entry.kind === 'guidedSummary') {
     return 52
   }
-  return estimateMessageHeight(entry.message)
+  return getEstimatedMessageHeight(entry.message)
 }
 
 function lowerBoundNumber(values: number[], target: number): number {
@@ -2094,6 +2096,66 @@ function estimateMessageHeight(message: UiMessage): number {
   }
 
   return Math.min(Math.max(height, 72), isLongUserMessage(message) ? 1120 : 980)
+}
+
+function estimatedMessageHeightSourceText(message: UiMessage): string {
+  if (isCommandMessage(message)) return message.commandExecution?.aggregatedOutput ?? ''
+  return message.text
+}
+
+function estimatedMessageHeightSignature(message: UiMessage): string {
+  if (isCommandMessage(message)) {
+    const command = message.commandExecution
+    return [
+      message.role,
+      message.messageType ?? '',
+      command?.status ?? '',
+      command?.exitCode ?? '',
+      isCommandExpanded(message) ? 'expanded' : 'collapsed',
+    ].join('|')
+  }
+
+  return [
+    message.role,
+    message.messageType ?? '',
+    isLongUserMessageCollapsed(message) ? 'long-collapsed' : isLongUserMessage(message) ? 'long-expanded' : 'normal',
+    String(message.fileAttachments?.length ?? 0),
+    String(message.images?.length ?? 0),
+    canShowMessageActionBar(message) ? 'actions' : 'no-actions',
+  ].join('|')
+}
+
+function trimEstimatedMessageHeightCache(): void {
+  while (estimatedMessageHeightById.size > ESTIMATED_MESSAGE_HEIGHT_CACHE_LIMIT) {
+    const oldestMessageId = estimatedMessageHeightById.keys().next().value
+    if (typeof oldestMessageId !== 'string') return
+    estimatedMessageHeightById.delete(oldestMessageId)
+  }
+}
+
+function pruneEstimatedMessageHeightCache(keepIds: Set<string>): void {
+  for (const messageId of estimatedMessageHeightById.keys()) {
+    if (!keepIds.has(messageId)) {
+      estimatedMessageHeightById.delete(messageId)
+    }
+  }
+  trimEstimatedMessageHeightCache()
+}
+
+function getEstimatedMessageHeight(message: UiMessage): number {
+  const sourceText = estimatedMessageHeightSourceText(message)
+  const signature = estimatedMessageHeightSignature(message)
+  const cached = estimatedMessageHeightById.get(message.id)
+  if (cached && cached.sourceText === sourceText && cached.signature === signature) {
+    estimatedMessageHeightById.delete(message.id)
+    estimatedMessageHeightById.set(message.id, cached)
+    return cached.height
+  }
+
+  const height = estimateMessageHeight(message)
+  estimatedMessageHeightById.set(message.id, { sourceText, signature, height })
+  trimEstimatedMessageHeightCache()
+  return height
 }
 
 type ParsedToolQuestion = {
@@ -3302,6 +3364,7 @@ function trimPreparedMessageBlockCache(): void {
 
 function prunePreparedMessageBlockCache(messages: UiMessage[]): void {
   const keepIds = new Set(messages.map((message) => message.id))
+  pruneEstimatedMessageHeightCache(keepIds)
   for (const messageId of preparedMessageBlocksById.keys()) {
     if (!keepIds.has(messageId)) {
       preparedMessageBlocksById.delete(messageId)
@@ -4556,6 +4619,7 @@ watch(
     closeFileLinkContextMenu()
     failedMarkdownImageKeys.value = new Set()
     preparedMessageBlocksById.clear()
+    estimatedMessageHeightById.clear()
     disconnectAllObservedElements(observedMessageElementsById)
     measuredMessageHeightById.value = {}
     expandedGuidedTurnIndexes.value = new Set()
