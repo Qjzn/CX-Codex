@@ -1212,6 +1212,7 @@ const props = defineProps<{
 }>()
 
 const MESSAGE_WINDOW_SIZE = 10
+const RECENT_DERIVED_UI_MESSAGE_LIMIT = 120
 const renderableMessages = computed<UiMessage[]>(() => (
   props.messages.filter((message) => !shouldSuppressConversationMessage(message))
 ))
@@ -1229,6 +1230,12 @@ function latestVisibleStartIndex(messageCount: number): number {
 function readTurnIndex(message: UiMessage): number | null {
   return typeof message.turnIndex === 'number' ? message.turnIndex : null
 }
+
+const recentRenderableMessagesForDerivedUi = computed<UiMessage[]>(() => {
+  const messages = renderableMessages.value
+  if (messages.length <= RECENT_DERIVED_UI_MESSAGE_LIMIT) return messages
+  return messages.slice(-RECENT_DERIVED_UI_MESSAGE_LIMIT)
+})
 
 function isGuidedAssistantMessage(message: UiMessage): boolean {
   return (
@@ -1295,7 +1302,7 @@ function isTurnCompleted(turnIndex: number): boolean {
 const collapsibleGuidedTurnDescriptors = computed<Map<number, GuidedTurnDescriptor>>(() => {
   const groupedMessages = new Map<number, UiMessage[]>()
 
-  for (const message of renderableMessages.value) {
+  for (const message of recentRenderableMessagesForDerivedUi.value) {
     const turnIndex = readTurnIndex(message)
     if (typeof turnIndex !== 'number') continue
     const messages = groupedMessages.get(turnIndex) ?? []
@@ -1323,8 +1330,10 @@ const collapsibleGuidedTurnDescriptors = computed<Map<number, GuidedTurnDescript
 
 const workedSummaryDurationByTurnIndex = computed<Record<number, number>>(() => {
   const next: Record<number, number> = {}
+  const derivedMessageIds = new Set(recentRenderableMessagesForDerivedUi.value.map((message) => message.id))
+  const scanStartIndex = Math.max(0, props.messages.length - RECENT_DERIVED_UI_MESSAGE_LIMIT * 2)
 
-  for (let index = 0; index < props.messages.length; index += 1) {
+  for (let index = scanStartIndex; index < props.messages.length; index += 1) {
     const message = props.messages[index]
     if (message.messageType !== 'worked') continue
     const durationMs = parseWorkedMessageDurationMs(message.text)
@@ -1333,6 +1342,7 @@ const workedSummaryDurationByTurnIndex = computed<Record<number, number>>(() => 
     for (let nextIndex = index + 1; nextIndex < props.messages.length; nextIndex += 1) {
       const candidate = props.messages[nextIndex]
       if (candidate.role !== 'assistant' || candidate.messageType === 'worked') continue
+      if (!derivedMessageIds.has(candidate.id)) break
       const turnIndex = readTurnIndex(candidate)
       if (typeof turnIndex !== 'number') break
       next[turnIndex] = durationMs
@@ -1346,7 +1356,7 @@ const workedSummaryDurationByTurnIndex = computed<Record<number, number>>(() => 
 const guidedTurnDurationLabelByTurnIndex = computed<Record<number, string>>(() => {
   const commandDurationByTurnIndex: Record<number, number> = {}
 
-  for (const message of props.messages) {
+  for (const message of recentRenderableMessagesForDerivedUi.value) {
     if (!isCommandMessage(message)) continue
     const turnIndex = readTurnIndex(message)
     if (typeof turnIndex !== 'number') continue

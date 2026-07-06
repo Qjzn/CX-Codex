@@ -9758,3 +9758,42 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `44504`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
+
+### Feature: Recent-window conversation derived UI metadata
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The account has at least one real thread with a large recovered or App Server `thread/read(includeTurns:true)` payload.
+- The standard real-thread check can still use `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目`.
+
+#### Steps
+1. Measure representative threads with `/codex-api/rpc` `thread/read(includeTurns:true)` and record elapsed time, JSON size, turn count, and item count.
+2. Run `npm.cmd run verify:frontend-normalizers`.
+3. Run `npm.cmd run build`.
+4. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+5. Open a phone-sized conversation route such as `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447`.
+6. Confirm the latest messages render first without a blank page.
+7. Use `继续查看更多` to reveal older messages and confirm older history still appears on demand.
+8. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+9. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- `ThreadConversation` still defaults to the newest visible window and keeps old history behind the existing reveal control.
+- Guided-reply collapse descriptors, guided duration labels, and worked-summary duration metadata are derived from the recent message window instead of scanning all historical messages.
+- Recent/current turns keep the same guided reply folding behavior as before.
+- Older history remains available when explicitly revealed, even if some old guided assistant steps no longer get recent-window folding metadata.
+- The real `分析项目` thread remains readable on phone view and does not regress to an empty or internal-error page.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/components/content/ThreadConversation.vue`, `docs/changelog.zh-CN.md`, and this test section.
+- No browser storage cleanup is required; this change only affects in-memory derived UI metadata.
+
+#### Regression Evidence
+- 2026-07-06 baseline measurement: real `分析项目` `thread/read(includeTurns:true)` returned through local session-log fallback in about `81ms` with a roughly `15KB` payload, confirming that specific thread is not currently backend-bound.
+- 2026-07-06 representative-thread sampling: the largest recent sampled thread was `上传知识库并验证问答` with about `414KB`, `10` turns, `373` items, and `319ms` heavy read time; this is the current best local evidence for long-history frontend derived-metadata pressure.
+- 2026-07-06 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-06 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-06 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `64740`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
+- 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
