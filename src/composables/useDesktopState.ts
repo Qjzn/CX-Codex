@@ -766,6 +766,12 @@ function saveCachedThreadMessages(threadId: string, messages: UiMessage[]): void
   saveThreadMessageCachePayload(payload)
 }
 
+function getCachedThreadMessagesSignature(messages: UiMessage[]): string {
+  const cacheMessages = normalizeMessagesForCache(messages)
+  if (cacheMessages.length === 0) return ''
+  return JSON.stringify(cacheMessages)
+}
+
 function loadHiddenThreadIds(): string[] {
   if (typeof window === 'undefined') return []
 
@@ -1611,6 +1617,7 @@ export function useDesktopState() {
   const settledRuntimeMessageRefreshKeyByThreadId = new Map<string, string>()
   const settledRuntimeRpcRefreshKeyByThreadId = new Map<string, string>()
   const settledRuntimeRpcRefreshInFlightByThreadId = new Map<string, string>()
+  const cachedThreadMessageSignatureByThreadId = new Map<string, string>()
   const fallbackRetryInFlightThreadIds = new Set<string>()
   const nonFreshThreadDetailRetryTimersByThreadId = new Map<string, number>()
   const nonFreshThreadDetailRetryAttemptByThreadId = new Map<string, number>()
@@ -4044,7 +4051,11 @@ export function useDesktopState() {
         [threadId]: nextMessages,
       }
     }
-    saveCachedThreadMessages(threadId, nextMessages)
+    const cacheSignature = getCachedThreadMessagesSignature(nextMessages)
+    if (cacheSignature && cachedThreadMessageSignatureByThreadId.get(threadId) !== cacheSignature) {
+      cachedThreadMessageSignatureByThreadId.set(threadId, cacheSignature)
+      saveCachedThreadMessages(threadId, nextMessages)
+    }
 
     const previousOptimistic = optimisticUserMessagesByThreadId.value[threadId] ?? []
     const nextOptimistic = filterVisibleOptimisticUserMessages(nextMessages, previousOptimistic)
