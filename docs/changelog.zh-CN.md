@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - `thread/read` 服务端 payload 继续减负：带 turns 的 RPC 结果在返回浏览器和写入缓存前会移除低价值 `fileChange` item，避免长任务线程把不会展示的文件变更补丁继续传给移动端；其他未知 item 仍保留 raw payload 诊断兜底。
   - Session-log fallback 解析继续减负：从本地 session jsonl 恢复会话详情时，先用轻量字符串候选过滤跳过 `fileChange` 等无关行，再解析用户/助手消息和 session_meta，减少损坏/长任务线程恢复时的 JSON.parse 开销。
   - 会话详情 fileChange 噪声继续前移过滤：`fileChange` 这类普通用户不会阅读的 App Server 文件变更事件现在在消息归一化阶段直接丢弃，不再先生成 raw payload 再由会话组件隐藏，减少长任务线程打开时的 JSON 序列化和消息数组压力。
   - 会话消息缓存写入继续减负：同一次线程同步中，消息缓存的归一化 snapshot 现在同时用于签名比对和实际写入，避免长会话同步时对最近消息重复执行截断、映射和 JSON 序列化前准备。

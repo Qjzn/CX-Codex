@@ -2815,6 +2815,28 @@ function smokeAppServerRpcResult(): void {
   assert.equal(heavyTurn.items.at(-1)?.id, 'item-200')
   assert.equal(heavyTurn.itemsView, 'recent')
   assert.equal(heavyTurn.originalItemsCount, 200)
+
+  const filteredLowValueItems = trimThreadTurnsInRpcResult('thread/read', {
+    thread: {
+      id: 'thread-filtered-items',
+      turns: [
+        {
+          id: 'turn-filtered',
+          items: [
+            { id: 'file-change-1', type: 'fileChange', patch: 'large ignored patch' },
+            { id: 'unknown-1', type: 'threadShellCommandOutput', output: 'diagnostic payload stays available' },
+            { id: 'agent-1', type: 'agentMessage', text: 'Visible answer' },
+          ],
+        },
+      ],
+    },
+  }) as { thread: { turns: Array<{ items: Array<{ id: string; type?: string; output?: string; text?: string }> }> } }
+  assert.deepEqual(filteredLowValueItems.thread.turns[0]?.items.map((item) => item.id), [
+    'unknown-1',
+    'agent-1',
+  ])
+  assert.equal(filteredLowValueItems.thread.turns[0]?.items[0]?.output, 'diagnostic payload stays available')
+  assert.equal(JSON.stringify(filteredLowValueItems).includes('large ignored patch'), false)
   assert.deepEqual(trimThreadTurnsInRpcResult('thread/resume', { thread: { turns: null } }), { thread: { turns: null } })
 }
 

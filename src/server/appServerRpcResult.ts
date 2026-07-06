@@ -31,18 +31,33 @@ export function trimThreadTurnsInRpcResult(method: string, result: unknown): unk
 function trimTurnItems(turn: unknown): unknown {
   const record = asRecord(turn)
   const items = Array.isArray(record?.items) ? record.items : null
-  if (!record || !items || items.length <= THREAD_RESPONSE_TURN_ITEM_LIMIT) return turn
+  if (!record || !items) return turn
+
+  const filteredItems = items.filter((item) => !isLowValueThreadItem(item))
+  if (filteredItems.length <= THREAD_RESPONSE_TURN_ITEM_LIMIT) {
+    return filteredItems.length === items.length
+      ? turn
+      : {
+          ...record,
+          items: filteredItems,
+        }
+  }
 
   const tailItemLimit = THREAD_RESPONSE_TURN_ITEM_LIMIT - THREAD_RESPONSE_TURN_HEAD_ITEM_LIMIT
   return {
     ...record,
     items: [
-      ...items.slice(0, THREAD_RESPONSE_TURN_HEAD_ITEM_LIMIT),
-      ...items.slice(-tailItemLimit),
+      ...filteredItems.slice(0, THREAD_RESPONSE_TURN_HEAD_ITEM_LIMIT),
+      ...filteredItems.slice(-tailItemLimit),
     ],
     itemsView: 'recent',
     originalItemsCount: items.length,
   }
+}
+
+function isLowValueThreadItem(item: unknown): boolean {
+  const record = asRecord(item)
+  return record?.type === 'fileChange'
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
