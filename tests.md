@@ -10200,6 +10200,46 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
 
+### Feature: Explain recent-only long thread payloads
+
+#### Prerequisites
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Server module smoke can exercise `trimThreadTurnsInRpcResult()`.
+- Frontend normalizer smoke can exercise `normalizeThreadMessagesV2()`.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+
+#### Steps
+1. Prepare a `thread/read` style payload with more than the service-side turn limit.
+2. Pass it through `trimThreadTurnsInRpcResult('thread/read', payload)`.
+3. Confirm the trimmed thread keeps the latest turns and includes `turnsView: 'recent'` plus `originalTurnsCount`.
+4. Pass a recent-view thread payload through `normalizeThreadMessagesV2()`.
+5. Confirm the first rendered message is a lightweight `history.notice` system message, not an unhandled raw payload card.
+6. Run `npm.cmd run build`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+8. Run `npm.cmd run verify:frontend-normalizers`.
+9. Run `npm.cmd run verify:server-modules`.
+10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+11. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Long `thread/read`, `thread/resume`, `thread/fork`, and `thread/rollback` results still return only the recent turn window for performance.
+- Trimmed thread payloads expose enough metadata for the UI to explain that older turns were folded for smoothness.
+- The UI notice uses `messageType: history.notice` without `rawPayload` or `isUnhandled`.
+- Existing per-turn item trimming, low-value item filtering, visible messages, and unknown item raw payload fallback remain unchanged.
+- The real `分析项目` phone thread page and conversation fixture remain nonblank.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/server/appServerRpcResult.ts`, `src/api/normalizers/v2.ts`, `scripts/server-module-smoke.ts`, `scripts/verify-frontend-normalizers.mjs`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement before fix: server-side turn trimming kept only recent turns but did not expose `turnsView` / `originalTurnsCount`, so the frontend could not distinguish performance folding from missing history.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; coverage confirms turn-level trimming now returns `turnsView: recent` and `originalTurnsCount`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`; coverage confirms `history.notice` is inserted without `rawPayload` or `isUnhandled`.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `68004`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
 ### Feature: Lazy prepare long code block lines
 
 #### Prerequisites

@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - 长会话最近内容视图增加轻量说明：服务端裁剪旧 turn 时会带上 `turnsView/originalTurnsCount` 元数据，前端在会话顶部显示一条 `history.notice`，说明已优先显示最近内容并折叠更早轮次，避免减负策略被误判为历史丢失。
   - 前台/Android 恢复同步继续减负：页面回到前台或 Android shell resume 时，若当前线程刚在短时间内完成 fresh 详情同步且没有未读、运行中、stale、队列或权限请求信号，后续恢复重试不再重复触发重型消息刷新；真正需要 catch-up 的线程仍会立即刷新。
   - 历史 reasoning payload 继续减负：`thread/read` / resume / rollback 这类带 turns 的服务端结果会在返回浏览器前移除前端已不展示的 `reasoning` item，减少长会话打开时的网络、缓存和归一化压力；实时运行状态、可见消息和未知 item 诊断兜底不变。
   - 历史 MCP 工具调用 payload 继续减负：`thread/read` 这类带 turns 的服务端结果会在返回浏览器前移除已不展示的 `mcpToolCall` item，减少移动端打开工具密集型长会话时的网络、缓存和归一化压力；实时运行状态和其他未知 item 诊断兜底不变。

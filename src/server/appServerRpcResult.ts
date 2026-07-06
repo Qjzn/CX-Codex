@@ -25,6 +25,12 @@ export function trimThreadTurnsInRpcResult(method: string, result: unknown): unk
     thread: {
       ...thread,
       turns: trimmedTurns,
+      ...(didTrimTurns
+        ? {
+            turnsView: 'recent',
+            originalTurnsCount: turns.length,
+          }
+        : {}),
     },
   }
 }

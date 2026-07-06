@@ -105,6 +105,12 @@ function readTrimmedString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function readPositiveInteger(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : 0
+}
+
 function readFirstRecordKey(value: Record<string, unknown>): string {
   return Object.keys(value).find((key) => key.trim().length > 0)?.trim() ?? ''
 }
@@ -447,6 +453,19 @@ export function normalizeThreadGroupsV2(payload: ThreadListResponse): UiProjectG
 export function normalizeThreadMessagesV2(payload: ThreadReadResponse): UiMessage[] {
   const turns = Array.isArray(payload.thread.turns) ? payload.thread.turns : []
   const messages: UiMessage[] = []
+  const rawThread = payload.thread as Record<string, unknown>
+  const turnsView = readTrimmedString(rawThread.turnsView)
+  const originalTurnsCount = readPositiveInteger(rawThread.originalTurnsCount)
+  const hiddenTurnsCount = Math.max(0, originalTurnsCount - turns.length)
+  if (turnsView === 'recent' && hiddenTurnsCount > 0) {
+    const threadId = readTrimmedString(rawThread.id) || 'thread'
+    messages.push({
+      id: `${threadId}:turns-view:recent`,
+      role: 'system',
+      text: `已优先显示最近 ${turns.length} 轮，较早 ${hiddenTurnsCount} 轮已折叠以保持流畅。`,
+      messageType: 'history.notice',
+    })
+  }
   for (let turnIndex = 0; turnIndex < turns.length; turnIndex++) {
     const turn = turns[turnIndex]
     const rawTurn = turn as Record<string, unknown>

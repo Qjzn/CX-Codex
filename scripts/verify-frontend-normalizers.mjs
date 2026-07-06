@@ -104,6 +104,38 @@ assert.equal(unloadedTurnMessages[0]?.isUnhandled, true)
 assert.equal(unloadedTurnMessages[0]?.turnIndex, 0)
 assert.equal(unloadedTurnMessages[0]?.rawPayload?.includes('"itemsView": "summary"'), true)
 
+const recentTurnMessages = normalizeThreadMessagesV2({
+  thread: {
+    id: 'thread-recent-view',
+    cwd: 'E:\\\\repo',
+    preview: '',
+    updatedAt: 1,
+    createdAt: 1,
+    turnsView: 'recent',
+    originalTurnsCount: 4,
+    turns: [
+      {
+        id: 'turn-3',
+        status: 'completed',
+        items: [{ id: 'agent-3', type: 'agentMessage', text: 'Recent answer 3' }],
+      },
+      {
+        id: 'turn-4',
+        status: 'completed',
+        items: [{ id: 'agent-4', type: 'agentMessage', text: 'Recent answer 4' }],
+      },
+    ],
+  },
+})
+
+assert.equal(recentTurnMessages.length, 3)
+assert.equal(recentTurnMessages[0]?.role, 'system')
+assert.equal(recentTurnMessages[0]?.messageType, 'history.notice')
+assert.equal(recentTurnMessages[0]?.text, '已优先显示最近 2 轮，较早 2 轮已折叠以保持流畅。')
+assert.equal(recentTurnMessages[0]?.isUnhandled, undefined)
+assert.equal(recentTurnMessages[0]?.rawPayload, undefined)
+assert.equal(recentTurnMessages[1]?.messageType, 'agentMessage')
+
 const groups = normalizeThreadGroupsV2({
   data: [
     {

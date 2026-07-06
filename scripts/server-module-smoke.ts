@@ -2781,7 +2781,10 @@ function smokeAppServerRpcResult(): void {
     thread: { id: 'thread-a', turns: [{ id: 'turn-1' }] },
   })
 
-  const trimmed = trimThreadTurnsInRpcResult('thread/read', original) as { thread: { turns: Array<{ id: string }> }; other?: boolean }
+  const trimmed = trimThreadTurnsInRpcResult('thread/read', original) as {
+    thread: { turns: Array<{ id: string }>; turnsView?: string; originalTurnsCount?: number }
+    other?: boolean
+  }
   assert.deepEqual(trimmed.thread.turns.map((turn) => turn.id), [
     'turn-3',
     'turn-4',
@@ -2796,6 +2799,8 @@ function smokeAppServerRpcResult(): void {
   ])
   assert.equal(trimmed.other, true)
   assert.equal(trimmed.thread.turns.length, 10)
+  assert.equal(trimmed.thread.turnsView, 'recent')
+  assert.equal(trimmed.thread.originalTurnsCount, 12)
 
   const itemHeavy = trimThreadTurnsInRpcResult('thread/read', {
     thread: {
