@@ -895,6 +895,9 @@ JSON.stringify((() => {
   const permissionPanels = Array.from(document.querySelectorAll('.request-permission-panel'));
   const toolPanels = Array.from(document.querySelectorAll('.request-tool-panel'));
   const requestButtons = Array.from(document.querySelectorAll('.request-button'));
+  const tableScrolls = Array.from(document.querySelectorAll('.message-table-scroll'));
+  const tableCardGroups = Array.from(document.querySelectorAll('.message-table-cards'));
+  const tableCards = Array.from(document.querySelectorAll('.message-table-card'));
   const runtimeStatusBars = Array.from(document.querySelectorAll('.conversation-regression-fixture .runtime-status-bar'));
   const runtimeStatusHeights = runtimeStatusBars.map((node) => Math.round(node.getBoundingClientRect().height));
   const queuedPanels = Array.from(document.querySelectorAll('.conversation-regression-fixture .queued-messages-inner'));
@@ -986,6 +989,9 @@ JSON.stringify((() => {
     permissionPanelCount: permissionPanels.length,
     toolPanelCount: toolPanels.length,
     requestButtonCount: requestButtons.length,
+    tableScrollCount: tableScrolls.length,
+    tableCardGroupCount: tableCardGroups.length,
+    tableCardCount: tableCards.length,
     runtimeStatusBarCount: runtimeStatusBars.length,
     runtimeStatusMaxHeight: runtimeStatusHeights.length ? Math.max(...runtimeStatusHeights) : 0,
     viewportWidth,
@@ -1025,7 +1031,10 @@ JSON.stringify((() => {
 }
 
 function Assert-ConversationFixture {
-  param([object]$Metrics)
+  param(
+    [object]$Metrics,
+    [string]$ViewportName = ""
+  )
 
   Assert-True ($Metrics.codeBlockCount -ge 2) "conversation fixture is missing code/diff blocks"
   Assert-True ($Metrics.diffBlockCount -ge 1) "conversation fixture is missing diff block"
@@ -1040,6 +1049,14 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.permissionPanelCount -ge 1) "conversation fixture is missing MCP permission panel"
   Assert-True ($Metrics.toolPanelCount -ge 1) "conversation fixture is missing tool call panel"
   Assert-True ($Metrics.requestButtonCount -ge 3) "conversation fixture is missing permission action buttons"
+  if ([int]$Metrics.viewportWidth -lt 768) {
+    Assert-True ([int]$Metrics.tableScrollCount -eq 0) "conversation fixture phone viewport mounted desktop table DOM: $($Metrics.tableScrollCount)"
+    Assert-True ([int]$Metrics.tableCardGroupCount -ge 1) "conversation fixture phone viewport is missing mobile table card group"
+    Assert-True ([int]$Metrics.tableCardCount -ge 1) "conversation fixture phone viewport is missing mobile table cards"
+  } else {
+    Assert-True ([int]$Metrics.tableScrollCount -ge 1) "conversation fixture $ViewportName viewport is missing desktop table DOM"
+    Assert-True ([int]$Metrics.tableCardGroupCount -eq 0) "conversation fixture $ViewportName viewport mounted mobile table DOM: $($Metrics.tableCardGroupCount)"
+  }
   Assert-True ($Metrics.runtimeStatusBarCount -ge 1) "conversation fixture is missing runtime status bar"
   $runtimeStatusMaxHeight = if ([int]$Metrics.viewportWidth -lt 768) { 48 } else { 40 }
   Assert-True ($Metrics.runtimeStatusMaxHeight -le $runtimeStatusMaxHeight) "conversation fixture runtime status bar is too tall: $($Metrics.runtimeStatusMaxHeight)"
@@ -1583,7 +1600,7 @@ try {
   Assert-Page -Page $fixture -Name "conversation blocks fixture desktop"
   Expand-ConversationFixturePendingRequests -Session $session
   Expand-ConversationFixtureCommandOutput -Session $session
-  Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session)
+  Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "desktop"
   Assert-ConversationFixtureCopyInteraction -Session $session
   Add-RegressionResult -Name "conversation-blocks-fixture" -Page $fixture
 
@@ -1591,14 +1608,14 @@ try {
   Assert-Page -Page $fixturePhone -Name "conversation blocks fixture phone"
   Expand-ConversationFixturePendingRequests -Session $session
   Expand-ConversationFixtureCommandOutput -Session $session
-  Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session)
+  Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "phone"
   Add-RegressionResult -Name "conversation-blocks-fixture-phone" -Page $fixturePhone
 
   $fixtureFoldable = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $FoldableWidth -Height $FoldableHeight
   Assert-Page -Page $fixtureFoldable -Name "conversation blocks fixture foldable"
   Expand-ConversationFixturePendingRequests -Session $session
   Expand-ConversationFixtureCommandOutput -Session $session
-  Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session)
+  Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "foldable"
   Add-RegressionResult -Name "conversation-blocks-fixture-foldable" -Page $fixtureFoldable
 
   if (-not [string]::IsNullOrWhiteSpace($ThreadId)) {

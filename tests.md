@@ -10236,3 +10236,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
+### Feature: Render one table layout per viewport
+
+#### Prerequisites
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Conversation regression fixture includes Markdown table content.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+
+#### Steps
+1. Open a conversation containing a Markdown table on desktop width.
+2. Confirm the table renders as a horizontal table and no mobile table-card DOM is mounted for that table.
+3. Open the same content on phone width.
+4. Confirm the table renders as stacked mobile cards and no desktop table-scroll DOM is mounted for that table.
+5. Run `npm.cmd run build`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Run `npm.cmd run verify:frontend-normalizers`.
+8. Run `npm.cmd run verify:server-modules`.
+9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Desktop viewport mounts only `.message-table-scroll` for table blocks.
+- Phone viewport mounts only `.message-table-cards` for table blocks.
+- Switching viewport updates the rendered table representation without breaking the conversation.
+- The real `分析项目` phone thread page and conversation fixture remain nonblank.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/components/content/ThreadConversation.vue`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `66608`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page; the conversation fixture now asserts desktop/foldable viewports mount only table-scroll DOM and phone viewport mounts only table-card DOM.

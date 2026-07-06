@@ -606,7 +606,7 @@
                         </template>
                       </p>
                       <div v-else-if="block.kind === 'table'" class="message-table-block">
-                        <div class="message-table-scroll" role="region" aria-label="表格内容">
+                        <div v-if="!isCompactTableViewport" class="message-table-scroll" role="region" aria-label="表格内容">
                           <table class="message-table">
                             <thead>
                               <tr>
@@ -682,7 +682,7 @@
                             </tbody>
                           </table>
                         </div>
-                        <div class="message-table-cards" aria-label="表格内容">
+                        <div v-else class="message-table-cards" aria-label="表格内容">
                           <article v-for="(row, rowIndex) in block.rows" :key="`table-card-${blockIndex}-${rowIndex}`" class="message-table-card">
                             <div v-for="(cell, cellIndex) in row" :key="`table-card-cell-${blockIndex}-${rowIndex}-${cellIndex}`" class="message-table-card-row">
                               <span class="message-table-card-label">{{ block.headers[cellIndex]?.value || `列 ${cellIndex + 1}` }}</span>
@@ -1017,6 +1017,42 @@ const commandElapsedNowMs = ref(Date.now())
 const observedCommandStartedAtById = ref<Record<string, number>>({})
 const liveOverlayObservedAtMs = ref(0)
 let commandElapsedTimer: number | null = null
+const COMPACT_TABLE_VIEWPORT_QUERY = '(max-width: 767px)'
+const isCompactTableViewport = ref(false)
+let compactTableViewportMql: MediaQueryList | null = null
+
+type LegacyMediaQueryList = MediaQueryList & {
+  addListener?: (listener: () => void) => void
+  removeListener?: (listener: () => void) => void
+}
+
+function updateCompactTableViewport(): void {
+  isCompactTableViewport.value = compactTableViewportMql?.matches === true
+}
+
+function addCompactTableViewportListener(): void {
+  if (!compactTableViewportMql) return
+  if (typeof compactTableViewportMql.addEventListener === 'function') {
+    compactTableViewportMql.addEventListener('change', updateCompactTableViewport)
+    return
+  }
+  ;(compactTableViewportMql as LegacyMediaQueryList).addListener?.(updateCompactTableViewport)
+}
+
+function removeCompactTableViewportListener(): void {
+  if (!compactTableViewportMql) return
+  if (typeof compactTableViewportMql.removeEventListener === 'function') {
+    compactTableViewportMql.removeEventListener('change', updateCompactTableViewport)
+    return
+  }
+  ;(compactTableViewportMql as LegacyMediaQueryList).removeListener?.(updateCompactTableViewport)
+}
+
+if (typeof window !== 'undefined') {
+  compactTableViewportMql = window.matchMedia(COMPACT_TABLE_VIEWPORT_QUERY)
+  updateCompactTableViewport()
+  addCompactTableViewportListener()
+}
 
 function isCommandMessage(message: UiMessage): boolean {
   return message.messageType === 'commandExecution' && !!message.commandExecution
@@ -4818,6 +4854,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydownForFileLinkContextMenu)
   window.removeEventListener('keydown', onWindowKeydownForImageModal)
   window.removeEventListener('resize', onWindowResizeForImageModal)
+  removeCompactTableViewportListener()
   if (typeof document !== 'undefined') {
     document.body.style.overflow = previousBodyOverflow
   }
