@@ -10,7 +10,7 @@ export type AppServerLineDispatcherNotification = {
 export type DispatchAppServerJsonRpcLineDependencies = {
   isPendingResponseId: (id: number) => boolean
   finalizePendingRpc: (id: number) => PendingAppServerRpc | null
-  logSlowRpc: (
+  recordRpcCompletion: (
     method: string,
     startedAtMs: number,
     params: unknown,
@@ -33,7 +33,7 @@ export function dispatchAppServerJsonRpcLine(
   if (message.kind === 'response') {
     settleAppServerRpcResponse(message, {
       finalizePendingRpc: dependencies.finalizePendingRpc,
-      logSlowRpc: dependencies.logSlowRpc,
+      recordRpcCompletion: dependencies.recordRpcCompletion,
     })
     return true
   }

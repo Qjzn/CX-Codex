@@ -1216,7 +1216,7 @@ function smokeAppServerLineDispatcher(): void {
       finalizedIds.push(id)
       return id === 7 ? pendingRpc : null
     },
-    logSlowRpc: (...args: unknown[]) => {
+    recordRpcCompletion: (...args: unknown[]) => {
       slowRpcLogs.push(args)
     },
     captureNotificationState: (notification: unknown) => {
@@ -1383,6 +1383,7 @@ function smokeAppServerHealth(): void {
       queuedRpcCount: 1,
       queuePeakCount: 5,
       queuePeakAtIso: '2026-07-04T00:00:00.000Z',
+      recentRpc: [],
       recentSlowRpc: [],
       recentTimeouts: [],
     },
@@ -1408,6 +1409,7 @@ function smokeAppServerHealth(): void {
       queuedRpcCount: 1,
       queuePeakCount: 5,
       queuePeakAtIso: '2026-07-04T00:00:00.000Z',
+      recentRpc: [],
       recentSlowRpc: [],
       recentTimeouts: [],
     },
@@ -3691,7 +3693,8 @@ function smokeAppServerRpcDiagnostics(): void {
   diagnostics.incrementActive()
   diagnostics.recordQueueDepth(2, now)
   diagnostics.maybeWarnQueueBacklog('thread/read', { includeTurns: true }, 2, now)
-  diagnostics.logSlowRpc('thread/read', now - 150, { includeTurns: true }, { outcome: 'success' })
+  diagnostics.recordRpcCompletion('model/list', now - 50, {}, { outcome: 'success' })
+  diagnostics.recordRpcCompletion('thread/read', now - 150, { includeTurns: true }, { outcome: 'success' })
   diagnostics.recordTimeout('thread/read', { includeTurns: true }, 30_000, now)
 
   const threadReadTimeout = diagnostics.noteRestartableTimeout('thread/read', now)
@@ -3709,6 +3712,9 @@ function smokeAppServerRpcDiagnostics(): void {
   assert.equal(snapshot.pendingRpcCount, 1)
   assert.equal(snapshot.queuedRpcCount, 2)
   assert.equal(snapshot.queuePeakCount, 2)
+  assert.equal(snapshot.recentRpc[0]?.method, 'thread/read')
+  assert.equal(snapshot.recentRpc[0]?.includeTurns, true)
+  assert.equal(snapshot.recentRpc[1]?.method, 'model/list')
   assert.equal(snapshot.recentSlowRpc[0]?.includeTurns, true)
   assert.equal(snapshot.recentTimeouts[0]?.outcome, 'timeout')
 
@@ -3749,7 +3755,7 @@ function smokeAppServerRpcResponse(): void {
   const slowRpcLogs: Array<{ method: string; startedAtMs: number; params: unknown; outcome: string }> = []
   const dependencies = {
     finalizePendingRpc: (id: number) => store.finalize(id),
-    logSlowRpc: (method: string, startedAtMs: number, params: unknown, details: { outcome: 'error' | 'success' }) => {
+    recordRpcCompletion: (method: string, startedAtMs: number, params: unknown, details: { outcome: 'error' | 'success' }) => {
       slowRpcLogs.push({ method, startedAtMs, params, outcome: details.outcome })
     },
   }

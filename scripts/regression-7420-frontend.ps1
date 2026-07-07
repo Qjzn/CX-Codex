@@ -1569,6 +1569,16 @@ JSON.stringify((() => {
   const runtimePath = `/codex-api/runtime/thread/${encodeURIComponent(threadId)}`;
   const tokenPath = `/codex-api/thread-token-usage?threadId=${encodeURIComponent(threadId)}`;
   const countByPath = (path) => resources.filter((entry) => entry.name === path).length;
+  const summarizePath = (predicate) => {
+    const matches = resources.filter(predicate);
+    return {
+      count: matches.length,
+      firstStartMs: matches.length ? Math.min(...matches.map((entry) => entry.startTime)) : null,
+      maxDurationMs: matches.length ? Math.max(...matches.map((entry) => entry.duration)) : 0,
+      totalDurationMs: matches.reduce((sum, entry) => sum + entry.duration, 0),
+      transferSize: matches.reduce((sum, entry) => sum + entry.transferSize, 0),
+    };
+  };
   const earlyRpcRequestCount = resources
     .filter((entry) => entry.startTime <= 650 && entry.name === '/codex-api/rpc')
     .length;
@@ -1620,6 +1630,14 @@ JSON.stringify((() => {
     expandedRawPayloadCount: expandedRawPayloads.length,
     conversationDomNodeCount: conversationList ? conversationList.querySelectorAll('*').length : 0,
     bodyDomNodeCount: document.body.querySelectorAll('*').length,
+    endpointTiming: {
+      rpc: summarizePath((entry) => entry.name === '/codex-api/rpc'),
+      stateThread: summarizePath((entry) => entry.name === statePath),
+      runtimeThread: summarizePath((entry) => entry.name === runtimePath),
+      tokenUsage: summarizePath((entry) => entry.name === tokenPath),
+      workspaceRootsState: summarizePath((entry) => entry.name === '/codex-api/workspace-roots-state'),
+      projectRootSuggestion: summarizePath((entry) => entry.name.startsWith('/codex-api/project-root-suggestion?')),
+    },
     totalTransferSize: resources.reduce((sum, entry) => sum + entry.transferSize, 0),
     slowRequestCount: resources.filter((entry) => entry.duration >= 1500).length,
   };
@@ -1654,6 +1672,29 @@ function Assert-ThreadPageLoadMetrics {
   Assert-True ([int]$Metrics.expandedCommandOutputCount -le 1) "thread page expanded $($Metrics.expandedCommandOutputCount) command outputs for $ThreadId; expected at most one visible output on first screen"
   Assert-True ([int]$Metrics.expandedRawPayloadCount -eq 0) "thread page expanded raw payload cards during first-screen load for $ThreadId"
   Assert-True ([int]$Metrics.conversationDomNodeCount -le 5000) "thread page mounted $($Metrics.conversationDomNodeCount) conversation DOM nodes for $ThreadId; expected <= 5000"
+  Assert-True ($null -ne $Metrics.endpointTiming.rpc) "thread page metrics are missing rpc endpoint timing breakdown for $ThreadId"
+}
+
+function Read-AppServerRecentRpcMetrics {
+  param([string]$BaseUrl)
+
+  $health = Test-HttpJson -Name "post-thread health rpc diagnostics" -Url "$($BaseUrl)/codex-api/health"
+  $recentRpc = @($health.data.appServer.rpcDiagnostics.recentRpc)
+  $threadReads = @($recentRpc | Where-Object { $_.method -eq "thread/read" })
+  $heavyThreadReads = @($threadReads | Where-Object { $_.includeTurns -eq $true })
+  $lightThreadReads = @($threadReads | Where-Object { $_.includeTurns -ne $true })
+  $maxDuration = 0
+  foreach ($record in $recentRpc) {
+    $maxDuration = [Math]::Max($maxDuration, [int]$record.durationMs)
+  }
+  return [pscustomobject]@{
+    recentRpcCount = $recentRpc.Count
+    threadReadCount = $threadReads.Count
+    heavyThreadReadCount = $heavyThreadReads.Count
+    lightThreadReadCount = $lightThreadReads.Count
+    maxDurationMs = $maxDuration
+    recentRpc = @($recentRpc | Select-Object -First 8 method, includeTurns, durationMs, outcome)
+  }
 }
 
 function Read-ThreadMessageCacheMetrics {
@@ -1974,6 +2015,8 @@ try {
       commandOutputs = [int]$threadPageLoadMetrics.mountedCommandOutputCount
       conversationDomNodes = [int]$threadPageLoadMetrics.conversationDomNodeCount
     } | ConvertTo-Json -Compress))
+    Write-Step ("thread endpoint timing -> " + ($threadPageLoadMetrics.endpointTiming | ConvertTo-Json -Compress))
+    Write-Step ("app-server recent rpc -> " + ((Read-AppServerRecentRpcMetrics -BaseUrl $BaseUrl) | ConvertTo-Json -Depth 4 -Compress))
     Assert-ThreadPageLoadMetrics -Metrics $threadPageLoadMetrics -ThreadId $ThreadId
     Assert-ThreadMessageCacheMetrics -Metrics (Read-ThreadMessageCacheMetrics -Session $session -ThreadId $ThreadId) -ThreadId $ThreadId
     Assert-ThreadLoadMoreWindow -Session $session -ThreadId $ThreadId

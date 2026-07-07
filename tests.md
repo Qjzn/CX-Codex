@@ -381,6 +381,38 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 measurement: `thread DOM pressure -> {"conversationDomNodes":45,"cards":2,"commandOutputs":0,"firstUsableMs":4779,"codeLines":0,"items":3}`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
 
+### Feature: Thread entry timing breakdown regression output
+
+#### Prerequisites
+- Local 7420 is running from the latest build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- `/codex-api/health` exposes `data.appServer.rpcDiagnostics`.
+
+#### Steps
+1. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+2. Confirm the output includes `thread endpoint timing -> ...`.
+3. Confirm the output includes `app-server recent rpc -> ...`.
+4. Confirm `app-server recent rpc` reports total recent RPC count plus heavy/light `thread/read` counts.
+5. Confirm the real phone thread still passes the existing first usable, DOM pressure, cache size, and load-more window checks.
+
+#### Expected Results
+- Regression output shows browser endpoint timings for `/codex-api/rpc`, state snapshot, runtime snapshot, token usage, workspace roots, and project-root suggestion requests.
+- Regression output shows recent App Server RPC methods, `includeTurns`, duration, and outcome.
+- Future slow-entry investigations can distinguish browser resource wait, heavy `thread/read`, light metadata reads, and non-core auxiliary requests without adding ad hoc instrumentation.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/server/appServerRpcDiagnostics.ts`, `src/server/appServerRpcResponse.ts`, `src/server/appServerLineDispatcher.ts`, `src/server/appServerProcess.ts`, `scripts/regression-7420-frontend.ps1`, `scripts/server-module-smoke.ts`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement: `thread endpoint timing -> {"rpc":{"count":0,"firstStartMs":null,"maxDurationMs":0,"totalDurationMs":0,"transferSize":0},"stateThread":{"count":2,"firstStartMs":118,"maxDurationMs":311,"totalDurationMs":356,"transferSize":608595},"runtimeThread":{"count":1,"firstStartMs":2954,"maxDurationMs":5,"totalDurationMs":5,"transferSize":802},"tokenUsage":{"count":1,"firstStartMs":2046,"maxDurationMs":3016,"totalDurationMs":3016,"transferSize":677},"workspaceRootsState":{"count":1,"firstStartMs":527,"maxDurationMs":7,"totalDurationMs":7,"transferSize":1633},"projectRootSuggestion":{"count":3,"firstStartMs":528,"maxDurationMs":7,"totalDurationMs":15,"transferSize":1147}}`.
+- 2026-07-07 measurement: `app-server recent rpc -> {"recentRpcCount":20,"threadReadCount":13,"heavyThreadReadCount":1,"lightThreadReadCount":12,"maxDurationMs":573}` with the visible recent sample showing light `thread/read` around 8-10 ms and one heavy `thread/read` error around 53 ms.
+- 2026-07-07 gate: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `71556`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `activeFirstPageMs=245`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
 ### Feature: Defer thread route list refresh past first screen
 
 #### Prerequisites

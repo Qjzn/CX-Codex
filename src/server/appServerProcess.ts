@@ -239,8 +239,8 @@ export class AppServerProcess {
     dispatchAppServerJsonRpcLine(line, {
       isPendingResponseId: (id) => this.pending.has(id),
       finalizePendingRpc: (id) => this.pending.finalize(id),
-      logSlowRpc: (method, startedAtMs, params, details) => {
-        this.rpcDiagnostics.logSlowRpc(method, startedAtMs, params, details)
+      recordRpcCompletion: (method, startedAtMs, params, details) => {
+        this.rpcDiagnostics.recordRpcCompletion(method, startedAtMs, params, details)
       },
       captureNotificationState: (notification) => this.captureNotificationState(notification),
       emitNotification: (notification) => this.emitNotification(notification),

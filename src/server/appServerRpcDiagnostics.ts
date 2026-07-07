@@ -14,6 +14,7 @@ export type RpcDiagnostics = {
   queuedRpcCount: number
   queuePeakCount: number
   queuePeakAtIso: string | null
+  recentRpc: RpcDiagnosticRecord[]
   recentSlowRpc: RpcDiagnosticRecord[]
   recentTimeouts: RpcDiagnosticRecord[]
 }
@@ -35,6 +36,7 @@ export class AppServerRpcDiagnostics {
   private queuePeakCount = 0
   private queuePeakAtIso: string | null = null
   private recentTimeoutsAtMs: number[] = []
+  private readonly recentRpcRecords: RpcDiagnosticRecord[] = []
   private readonly recentSlowRpcRecords: RpcDiagnosticRecord[] = []
   private readonly recentTimeoutRecords: RpcDiagnosticRecord[] = []
 
@@ -86,17 +88,21 @@ export class AppServerRpcDiagnostics {
     })
   }
 
-  logSlowRpc(method: string, startedAtMs: number, params: unknown, details: SlowRpcDetails = {}): void {
+  recordRpcCompletion(method: string, startedAtMs: number, params: unknown, details: SlowRpcDetails = {}): void {
     const durationMs = Date.now() - startedAtMs
-    if (durationMs < this.options.slowWarnMs) return
-
-    this.recentSlowRpcRecords.unshift({
+    const record = {
       method,
       atIso: new Date().toISOString(),
       durationMs,
       includeTurns: this.reader.isHeavyThreadRead(method, params),
       outcome: typeof details.outcome === 'string' ? details.outcome : undefined,
-    })
+    }
+    this.recentRpcRecords.unshift(record)
+    this.recentRpcRecords.splice(APP_SERVER_RPC_DIAGNOSTIC_LIMIT)
+
+    if (durationMs < this.options.slowWarnMs) return
+
+    this.recentSlowRpcRecords.unshift(record)
     this.recentSlowRpcRecords.splice(APP_SERVER_RPC_DIAGNOSTIC_LIMIT)
 
     writeBridgeLog('warn', 'Slow app-server RPC', {
@@ -140,6 +146,7 @@ export class AppServerRpcDiagnostics {
       queuedRpcCount,
       queuePeakCount: this.queuePeakCount,
       queuePeakAtIso: this.queuePeakAtIso,
+      recentRpc: [...this.recentRpcRecords],
       recentSlowRpc: [...this.recentSlowRpcRecords],
       recentTimeouts: [...this.recentTimeoutRecords],
     }
