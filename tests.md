@@ -41,6 +41,29 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - To roll back, revert `src/api/codexGateway.ts`, `src/composables/useDesktopState.ts`, `scripts/verify-7420-sidebar-data.mjs`, `docs/changelog.zh-CN.md`, and this test section.
 
+### Feature: Android resume refreshes sidebar thread list
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- For manual Android verification, CX Codex is installed and points to the current 7420 server.
+
+#### Steps
+1. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+2. Confirm the frontend gate passes the Android resume thread-list source guard before browser pages run.
+3. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+4. On Android, open a thread, send the app to background or lock the screen, then create or update a thread from desktop.
+5. Return to CX Codex and open the sidebar after a few seconds.
+
+#### Expected Results
+- Android resume first attempt includes a thread-list refresh instead of skipping list sync when a selected thread exists.
+- The sidebar catches up with desktop-created or reordered threads without requiring manual reload.
+- Current-thread message recovery still runs on resume, so task output and sidebar state recover together.
+
+#### Rollback/Cleanup
+- To roll back, revert `src/composables/useDesktopState.ts`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
 ### Feature: Regression gate for older history fallback cache isolation
 
 #### Prerequisites

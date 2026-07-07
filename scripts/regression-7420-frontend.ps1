@@ -43,6 +43,16 @@ function Convert-ToSafeFileName {
   return $safe
 }
 
+function Assert-AndroidResumeThreadListRecoverySource {
+  $sourcePath = Join-Path (Get-Location) "src\composables\useDesktopState.ts"
+  $source = Get-Content -Raw -Encoding UTF8 -LiteralPath $sourcePath
+  $functionMatch = [regex]::Match($source, "function\s+shouldRefreshThreadListForResume[\s\S]*?\n\s*}")
+  Assert-True ($functionMatch.Success) "could not find shouldRefreshThreadListForResume source"
+  $functionSource = $functionMatch.Value
+  Assert-True ($functionSource -notmatch "if\s*\(\s*androidShellAvailable\s*\)\s*return\s+false") "Android resume thread-list recovery is disabled"
+  Assert-True ($functionSource -match "if\s*\(\s*androidShellAvailable\s*\)\s*return\s+isFirstAttempt") "Android resume must refresh the thread list on the first resume attempt"
+}
+
 function Invoke-AgentBrowser {
   param([string[]]$Arguments)
 
@@ -1802,6 +1812,8 @@ $script:screenshotOutputDir = Initialize-ScreenshotOutputDir
 $results = @()
 
 try {
+  Assert-AndroidResumeThreadListRecoverySource
+
   $health = Test-HttpJson -Name "health" -Url "$($BaseUrl)/health"
   Assert-True ($health.status -eq "ok") "health status is not ok"
 

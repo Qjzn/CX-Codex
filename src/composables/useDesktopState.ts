@@ -3866,7 +3866,7 @@ export function useDesktopState() {
   function shouldRefreshThreadListForResume(isFirstAttempt: boolean, now = Date.now()): boolean {
     if (!hasLoadedThreads.value) return true
     if (pendingThreadsRefresh) return true
-    if (androidShellAvailable) return false
+    if (androidShellAvailable) return isFirstAttempt
     return isFirstAttempt && !selectedThreadId.value && now - lastThreadListSyncAtMs >= THREAD_LIST_REFRESH_INTERVAL_MS
   }
 
