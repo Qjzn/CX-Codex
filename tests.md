@@ -19,6 +19,45 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Preserve session-log fallback cache source
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- The thread can exercise `thread/read(includeTurns:true)` fallback from local session log.
+
+#### Steps
+1. Run `npm.cmd run verify:server-modules`.
+2. Call `POST http://127.0.0.1:7420/codex-api/rpc` with `{"method":"thread/read","params":{"threadId":"019f27ae-0ecd-7c50-9701-8ec003e66447","includeTurns":true}}`.
+3. Confirm the response can return local session-log fallback history instead of failing the request.
+4. Call `GET http://127.0.0.1:7420/codex-api/state/thread/019f27ae-0ecd-7c50-9701-8ec003e66447`.
+5. Confirm a session-log fallback cache hit remains `messageState: "cached"` rather than being upgraded to `fresh`.
+6. Run `npm.cmd run build`.
+7. Restart local 7420.
+8. Run `npm.cmd run verify:frontend-normalizers`.
+9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Session-log fallback history is cached with source `session-log`.
+- Reusing that cache returns usable messages but keeps `messageState` as `cached`.
+- App Server successful heavy reads still cache as `app-server` and can be treated as `fresh`.
+- The real `分析项目` phone thread page remains nonblank and does not lose recent history.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/server/appServerThreadReadCache.ts`, `src/server/appServerThreadRuntimeSnapshot.ts`, source type plumbing, `scripts/server-module-smoke.ts`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- `npm.cmd run build` passed; Vite reported only the existing large chunk warning.
+- Local 7420 was rebuilt and restarted, then `/health` returned `{"status":"ok","service":"cx-codex"}`.
+- Real `thread/read(includeTurns:true)` for `019f27ae-0ecd-7c50-9701-8ec003e66447` returned the expected warning `thread/read fell back to local session log messages`, with `turns=10`, `turnsView=recent`, and `originalTurnsCount=12`.
+- Follow-up `GET /codex-api/state/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` returned cached history with `messageState="cached"`, `source="cache"`, `turns=10`, and `turnsView="recent"`.
+- `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread was found under project `codexui`.
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed; the phone thread page reported `items=3`, `conversationDomNodes=47`, `firstUsableMs=4949`, and all frontend checks passed.
+
 ### Feature: Fast first-page sidebar thread load
 
 #### Prerequisites

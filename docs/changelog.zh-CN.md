@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - 长会话 fallback 状态更准确：当 `thread/read(includeTurns:true)` 只能从本地 session log 恢复历史时，thread-read cache 会保留 `session-log` 来源；后续 state snapshot 命中该缓存仍标记为 `cached`，避免前端误判为 App Server fresh 历史并降低历史缺失排查难度。
   - 会话详情首屏 state snapshot 去重：前端对稳定、非 stale、非运行中、无 pending request 的 `/codex-api/state/thread` 完整快照增加亚秒级短缓存，并跳过刚完成详情同步后的无强信号静默二刷；真实 `分析项目` 手机回归收紧为初始 settle 期间最多 1 次 state snapshot，避免初始化/恢复链路重复传输同一大块会话状态。
   - 长会话继续加载较早历史时，前端会在本地展开隐藏消息后连续几帧恢复阅读锚点，减少二次加载时内容突然跳动。
   - 会话详情首屏继续减负：缺少上下文用量缓存时，`thread-token-usage` 自动补齐从首屏后约 1.6 秒延后到约 11 秒，并且只在该线程仍为当前选中线程时执行；真实 `分析项目` 手机回归收紧为初始 settle 期间不得发起 token usage 请求，避免非核心统计读取拖慢进入会话。

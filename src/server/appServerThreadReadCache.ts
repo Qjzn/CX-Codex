@@ -16,7 +16,10 @@ export type CachedThreadRead = {
   updatedAtIso: string
   sessionPath: string
   cachedAtIso: string
+  source: ThreadReadCacheSource
 }
+
+export type ThreadReadCacheSource = 'app-server' | 'session-log'
 
 export function readIsoTimestampMs(value: string | null | undefined): number {
   if (!value) return 0
@@ -27,6 +30,7 @@ export function readIsoTimestampMs(value: string | null | undefined): number {
 export function createCachedThreadRead(
   threadRead: unknown,
   nowIso: () => string = () => new Date().toISOString(),
+  source: ThreadReadCacheSource = 'app-server',
 ): CachedThreadRead {
   return {
     threadRead,
@@ -35,6 +39,7 @@ export function createCachedThreadRead(
     updatedAtIso: readThreadUpdatedAtIsoFromThreadReadPayload(threadRead),
     sessionPath: readThreadSessionPathFromThreadReadPayload(threadRead),
     cachedAtIso: nowIso(),
+    source,
   }
 }
 
@@ -49,8 +54,8 @@ export class AppServerThreadReadCacheStore {
     return this.cachedByThreadId.get(threadId) ?? null
   }
 
-  remember(threadId: string, threadRead: unknown): CachedThreadRead {
-    const cachedThreadRead = createCachedThreadRead(threadRead)
+  remember(threadId: string, threadRead: unknown, source: ThreadReadCacheSource = 'app-server'): CachedThreadRead {
+    const cachedThreadRead = createCachedThreadRead(threadRead, () => new Date().toISOString(), source)
     this.cachedByThreadId.set(threadId, cachedThreadRead)
     return cachedThreadRead
   }

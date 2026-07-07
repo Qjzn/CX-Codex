@@ -17,6 +17,7 @@ import {
 import { readThreadSessionPathFromThreadReadPayload } from './appServerThreadPayload.js'
 import { readThreadReadIncludeTurns } from './appServerThreadReadParams.js'
 import { readThreadReadFromSessionLog } from './appServerSessionLogThreadRead.js'
+import type { ThreadReadCacheSource } from './appServerThreadReadCache.js'
 import { setJson } from './httpJsonResponse.js'
 import {
   normalizePlanModeTurnStartParams,
@@ -46,7 +47,7 @@ export type RpcProxyRouteDependencies = {
   clearPlanModeTurn: (threadId: string, turnId?: string) => void
   observeThreadUnsubscribeResponse: (details: { threadId?: string; payload: unknown }) => void
   deleteCachedThreadRead: (threadId: string) => void
-  rememberCachedThreadRead: (threadId: string, threadRead: unknown) => void
+  rememberCachedThreadRead: (threadId: string, threadRead: unknown, source?: ThreadReadCacheSource) => void
   readSessionLogThreadRead?: (sessionPath: string, fallbackThreadRead: unknown) => Promise<unknown | null>
   augmentThreadListRpcResult: (params: unknown, result: unknown) => Promise<unknown>
   clearThreadSearchIndex: () => void
@@ -137,7 +138,7 @@ export async function handleRpcProxyRoute(
           turnWindow: requestedTurnWindow,
         })
         if (!requestedFullThreadRead && !requestedTurnWindow) {
-          dependencies.rememberCachedThreadRead(rpcThreadId, result)
+          dependencies.rememberCachedThreadRead(rpcThreadId, result, 'session-log')
         }
         setJson(res, 200, {
           result,

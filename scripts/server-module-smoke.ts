@@ -3106,6 +3106,7 @@ function smokeAppServerThreadReadCache(): void {
     updatedAtIso: '2026-01-01T00:00:00.000Z',
     sessionPath: 'C:/sessions/thread-a.jsonl',
     cachedAtIso: '2026-01-01T00:00:05.000Z',
+    source: 'app-server',
   })
 
   const cachedThreadRead: CachedThreadRead = {
@@ -3115,6 +3116,7 @@ function smokeAppServerThreadReadCache(): void {
     updatedAtIso: '2026-01-01T00:00:00.000Z',
     sessionPath: 'C:/sessions/thread-a.jsonl',
     cachedAtIso: '2026-01-01T00:00:05.000Z',
+    source: 'app-server',
   }
   const baseSnapshot = createThreadRuntimeSnapshot({
     executionState: 'completed',
@@ -5703,6 +5705,7 @@ async function smokeThreadTokenUsage(): Promise<void> {
       updatedAtIso: '',
       sessionPath: 'C:/sessions/thread-a.jsonl',
       cachedAtIso: '2026-01-01T00:00:00.000Z',
+      source: 'app-server',
     }),
     readSessionLogTokenUsage: async () => {
       throw new Error('session log should not be consulted when thread read has token usage')
@@ -5724,6 +5727,7 @@ async function smokeThreadTokenUsage(): Promise<void> {
       updatedAtIso: '',
       sessionPath: ' C:/sessions/thread-a.jsonl ',
       cachedAtIso: '2026-01-01T00:00:00.000Z',
+      source: 'app-server',
     }),
     readSessionLogTokenUsage: async (sessionPath) => {
       requestedSessionPaths.push(sessionPath)
@@ -9122,6 +9126,53 @@ async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
   assert.deepEqual(sessionFallbackWarnings.map((warning) => warning.message), [
     'Heavy thread snapshot fell back to session log messages',
   ])
+
+  const sessionFallbackCacheHit = createCachedThreadRead(
+    sessionFallbackThreadReadPayload,
+    () => '2026-01-01T00:00:30.000Z',
+    'session-log',
+  )
+  const sessionFallbackCacheHitSnapshot = await readAppServerThreadRuntimeSnapshot('thread-session-fallback', {
+    rpc: async (_method, params) => {
+      if (readIncludeTurns(params) === true) {
+        throw new Error('session-log cache hit should not request a heavy thread read')
+      }
+      return {
+        thread: {
+          id: 'thread-session-fallback',
+          updatedAt: updatedAtSeconds,
+          inProgress: false,
+          path: 'session-fallback.jsonl',
+        },
+      }
+    },
+    observeThreadRead: () => {},
+    getCachedThreadRead: () => sessionFallbackCacheHit,
+    rememberCachedThreadRead: () => {
+      throw new Error('session-log cache hit should not rewrite cached thread read')
+    },
+    snapshotRuntime: (threadId, overlay = {}) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'completed',
+      threadRead: overlay.threadRead ?? null,
+      messageState: overlay.messageState ?? 'unavailable',
+      pendingServerRequests: overlay.pendingServerRequests ?? [],
+      tokenUsage: overlay.tokenUsage ?? null,
+    }),
+    observeRuntimeThreadRead: () => {},
+    markRuntimeDegraded: () => {
+      throw new Error('session-log cache hit should avoid degraded runtime state')
+    },
+    persistRuntimeSnapshot: (_threadId, snapshot) => snapshot,
+    listPendingServerRequestsForThread: () => [],
+    getThreadTokenUsage: () => null,
+    getErrorMessage,
+    writeWarning: () => {
+      throw new Error('session-log cache hit should not warn')
+    },
+  })
+  assert.equal(sessionFallbackCacheHitSnapshot.threadRead, sessionFallbackThreadReadPayload)
+  assert.equal(sessionFallbackCacheHitSnapshot.messageState, 'cached')
 
   const factoryRpcCalls: unknown[] = []
   const factoryRememberedThreadReads: unknown[] = []

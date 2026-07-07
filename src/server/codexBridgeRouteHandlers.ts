@@ -8,6 +8,7 @@ import type { ThreadRuntimeSnapshot } from './runtimeState.js'
 import type { PendingServerRequest } from './pendingServerRequests.js'
 import type { ThreadTokenUsage } from './threadTokenUsage.js'
 import type { WebBridgeSettings } from './serverRequestPolicy.js'
+import type { ThreadReadCacheSource } from './appServerThreadReadCache.js'
 import { getTranscriptionProxyConfigSnapshot } from './transcriptionProxy.js'
 import { handleSkillsRoutes } from './skillsRoutes.js'
 import { handleFileUploadRoute } from './fileUploadRoute.js'
@@ -86,7 +87,7 @@ type ThreadSearchIndexStoreForRoutes = ThreadRoutesDependencies['threadSearchInd
 
 type ThreadReadCacheStoreForRoutes = {
   delete(threadId: string): void
-  remember(threadId: string, threadRead: unknown): void
+  remember(threadId: string, threadRead: unknown, source?: ThreadReadCacheSource): void
 }
 
 type StatusDiagnosticsForRoutes = {
@@ -161,8 +162,8 @@ export function createCodexBridgeRouteHandlers(
       clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
       observeThreadUnsubscribeResponse: statusDiagnostics.observeThreadUnsubscribeResponse,
       deleteCachedThreadRead: (threadId) => threadReadCacheStore.delete(threadId),
-      rememberCachedThreadRead: (threadId, threadRead) => {
-        threadReadCacheStore.remember(threadId, threadRead)
+      rememberCachedThreadRead: (threadId, threadRead, source) => {
+        threadReadCacheStore.remember(threadId, threadRead, source)
       },
       augmentThreadListRpcResult: dependencies.augmentThreadListRpcResult,
       clearThreadSearchIndex: () => threadSearchIndexStore.clear(),

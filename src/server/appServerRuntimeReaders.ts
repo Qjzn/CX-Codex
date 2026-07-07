@@ -5,6 +5,7 @@ import {
   createAppServerThreadRuntimeSnapshotReader,
 } from './appServerThreadRuntimeSnapshot.js'
 import type { CachedThreadRead } from './appServerThreadReadCache.js'
+import type { ThreadReadCacheSource } from './appServerThreadReadCache.js'
 import type { PendingServerRequest } from './pendingServerRequests.js'
 import type {
   RuntimeSnapshotOverlay,
@@ -20,7 +21,7 @@ export type AppServerRuntimeReadersDependencies = {
   rpc(method: string, params: unknown): Promise<unknown>
   observeThreadRead(details: { threadId: string; payload: unknown }): void
   getCachedThreadRead(threadId: string): CachedThreadRead | null
-  rememberCachedThreadRead(threadId: string, threadRead: unknown): CachedThreadRead
+  rememberCachedThreadRead(threadId: string, threadRead: unknown, source?: ThreadReadCacheSource): CachedThreadRead
   snapshotRuntime(threadId: string, overlay?: RuntimeSnapshotOverlay): ThreadRuntimeSnapshot
   observeRuntimeThreadRead(
     threadId: string,

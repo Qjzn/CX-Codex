@@ -2,6 +2,7 @@ import { trimThreadTurnsInRpcResult } from './appServerRpcResult.js'
 import {
   isCachedThreadReadStaleForRuntime,
   type CachedThreadRead,
+  type ThreadReadCacheSource,
 } from './appServerThreadReadCache.js'
 import {
   readActiveTurnIdFromThreadReadPayload,
@@ -28,7 +29,7 @@ export type AppServerThreadRuntimeSnapshotDependencies = {
   rpc(method: string, params: unknown): Promise<unknown>
   observeThreadRead(details: { threadId: string; payload: unknown }): void
   getCachedThreadRead(threadId: string): CachedThreadRead | null
-  rememberCachedThreadRead(threadId: string, threadRead: unknown): CachedThreadRead
+  rememberCachedThreadRead(threadId: string, threadRead: unknown, source?: ThreadReadCacheSource): CachedThreadRead
   snapshotRuntime(threadId: string, overlay?: RuntimeSnapshotOverlay): ThreadRuntimeSnapshot
   observeRuntimeThreadRead(
     threadId: string,
@@ -92,7 +93,7 @@ export async function readAppServerThreadRuntimeSnapshot(
     !isCachedThreadReadStaleForRuntime(cachedThreadRead, runtimeSnapshotBeforeMessageRead, lightInProgress)
   ) {
     threadRead = cachedThreadRead.threadRead
-    messageState = 'fresh'
+    messageState = cachedThreadRead.source === 'session-log' ? 'cached' : 'fresh'
   } else {
     try {
       const rawThreadRead = await dependencies.rpc('thread/read', {
@@ -127,7 +128,7 @@ export async function readAppServerThreadRuntimeSnapshot(
         if (fallbackThreadRead) {
           threadRead = fallbackThreadRead
           messageState = 'cached'
-          dependencies.rememberCachedThreadRead(normalizedThreadId, fallbackThreadRead)
+          dependencies.rememberCachedThreadRead(normalizedThreadId, fallbackThreadRead, 'session-log')
           dependencies.writeWarning('Heavy thread snapshot fell back to session log messages', {
             threadId: normalizedThreadId,
             lightUpdatedAtIso,
