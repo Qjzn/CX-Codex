@@ -1825,7 +1825,10 @@ function Assert-ThreadLoadMoreWindow {
   $totalItemDelta = 0
   for ($step = 1; $step -le $Iterations; $step++) {
     $before = Read-ThreadWindowMetrics -Session $Session
-    Assert-True ($before.hasLoadMore -eq $true) "thread page has no load-more affordance before step $step for $ThreadId"
+    if ($before.hasLoadMore -ne $true) {
+      Assert-True ($step -gt 1 -and $totalItemDelta -ge 1) "thread page has no load-more affordance before step $step for $ThreadId"
+      break
+    }
     $clickResult = Click-ThreadLoadMore -Session $Session
     Assert-True ($clickResult.clicked -eq $true) "thread page load-more click did not execute at step $step for $ThreadId"
     Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "1400") | Out-Null
@@ -1849,6 +1852,7 @@ function Assert-ThreadLoadMoreWindow {
     Assert-True ($progressDelta -le 16) "thread page load-more step $step advanced too much history for $ThreadId; delta=$progressDelta"
     Assert-True ($anchorDrift -le 180) "thread page load-more step $step shifted reading anchor too much for $ThreadId; drift=$anchorDrift"
   }
+  Assert-True ($totalItemDelta -ge 1) "thread page load-more did not reveal any older history for $ThreadId"
   Assert-True ($totalItemDelta -le ($Iterations * 16)) "thread page repeated load-more revealed too many items for $ThreadId; totalDelta=$totalItemDelta"
 }
 

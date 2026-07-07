@@ -17,6 +17,13 @@ type FallbackItem = {
   text?: string
 }
 
+type RecoveredMessage = {
+  role: 'user' | 'assistant'
+  text: string
+  id: string
+  hidden?: boolean
+}
+
 type FallbackTurn = {
   id: string
   status: 'completed'
@@ -97,19 +104,32 @@ function readTextContent(content: unknown): string {
   return chunks.join('\n').trim()
 }
 
-function readResponseItemMessage(entry: Record<string, unknown>): { role: 'user' | 'assistant'; text: string; id: string } | null {
+function isInternalContextMessageText(text: string): boolean {
+  return (
+    text.startsWith('<codex_internal_context') ||
+    text.startsWith('<environment_context') ||
+    text.startsWith('<developer_context') ||
+    text.startsWith('<system_context')
+  )
+}
+
+function readResponseItemMessage(entry: Record<string, unknown>): RecoveredMessage | null {
   if (entry.type !== 'response_item') return null
   const payload = asRecord(entry.payload)
   if (payload?.type !== 'message') return null
   const role = payload.role === 'user' || payload.role === 'assistant' ? payload.role : null
   if (!role) return null
+  if (role === 'assistant' && readTrimmedString(payload.phase) === 'commentary') return null
   const text = readTextContent(payload.content)
   if (!text) return null
   const id = readTrimmedString(payload.id)
+  if (isInternalContextMessageText(text)) {
+    return role === 'user' ? { role, text: '', id, hidden: true } : null
+  }
   return { role, text, id }
 }
 
-function readEventMessage(entry: Record<string, unknown>): { role: 'user' | 'assistant'; text: string; id: string } | null {
+function readEventMessage(entry: Record<string, unknown>): RecoveredMessage | null {
   if (entry.type !== 'event_msg') return null
   const payload = asRecord(entry.payload)
   const type = readTrimmedString(payload?.type)
@@ -120,12 +140,16 @@ function readEventMessage(entry: Record<string, unknown>): { role: 'user' | 'ass
         ? 'assistant'
         : null
   if (!role) return null
+  if (role === 'assistant' && readTrimmedString(payload?.phase) === 'commentary') return null
   const text = readTrimmedString(payload?.message)
   if (!text) return null
+  if (isInternalContextMessageText(text)) {
+    return role === 'user' ? { role, text: '', id: '', hidden: true } : null
+  }
   return { role, text, id: '' }
 }
 
-function appendMessageTurn(turns: FallbackTurn[], message: { role: 'user' | 'assistant'; text: string; id: string }): void {
+function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): void {
   const text = limitText(message.text)
   const turn = message.role === 'user' || turns.length === 0
     ? null
@@ -136,6 +160,8 @@ function appendMessageTurn(turns: FallbackTurn[], message: { role: 'user' | 'ass
     items: [],
   }
   if (!turn) turns.push(targetTurn)
+
+  if (message.hidden) return
 
   const itemId = message.id || `${targetTurn.id}:${message.role}:${String(targetTurn.items.length + 1)}`
   targetTurn.items.push(message.role === 'user'
@@ -155,11 +181,13 @@ function appendMessageTurn(turns: FallbackTurn[], message: { role: 'user' | 'ass
   }
 }
 
-function isSameRecoveredMessage(
-  first: { role: 'user' | 'assistant'; text: string } | null,
-  second: { role: 'user' | 'assistant'; text: string },
+function isDuplicateRecoveredMessage(
+  first: RecoveredMessage | null,
+  second: RecoveredMessage,
 ): boolean {
-  return Boolean(first && first.role === second.role && first.text === second.text)
+  if (second.hidden) return false
+  if (!first || first.role !== second.role || first.text !== second.text) return false
+  return !first.id || !second.id
 }
 
 function writeCacheState(sessionPath: string, cacheState: SessionLogThreadReadCacheState): void {
@@ -191,7 +219,7 @@ export async function parseThreadReadFromSessionLog(
   let updatedAt = readUnixSeconds(fallbackThread?.updatedAt)
   const turns: FallbackTurn[] = []
   const seenMessageIds = new Set<string>()
-  let lastRecoveredMessage: { role: 'user' | 'assistant'; text: string } | null = null
+  let lastRecoveredMessage: RecoveredMessage | null = null
   const stats = await stat(sessionPath)
   const startOffset = Math.max(0, stats.size - FALLBACK_READ_BYTE_LIMIT)
 
@@ -230,14 +258,20 @@ export async function parseThreadReadFromSessionLog(
         const message = readResponseItemMessage(entry) ?? readEventMessage(entry)
         if (!message) continue
 
+        if (isDuplicateRecoveredMessage(lastRecoveredMessage, message)) {
+          continue
+        }
         if (message.id) {
           if (seenMessageIds.has(message.id)) continue
           seenMessageIds.add(message.id)
-        } else if (isSameRecoveredMessage(lastRecoveredMessage, message)) {
+        }
+        if (message.hidden && turns.length === 0) {
           continue
         }
         appendMessageTurn(turns, message)
-        lastRecoveredMessage = { role: message.role, text: message.text }
+        if (!message.hidden) {
+          lastRecoveredMessage = { role: message.role, text: message.text, id: message.id }
+        }
         if (!preview && message.role === 'user') {
           preview = message.text.split('\n')[0]?.trim() ?? ''
         }

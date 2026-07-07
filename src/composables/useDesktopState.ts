@@ -1107,6 +1107,23 @@ function sortMessagesByTurnIndex(messages: UiMessage[]): UiMessage[] {
   })
 }
 
+function earliestTurnIndexFromMessages(messages: UiMessage[]): number | null {
+  let earliest: number | null = null
+  for (const message of messages) {
+    if (message.messageType === 'history.notice') continue
+    if (typeof message.turnIndex !== 'number' || !Number.isFinite(message.turnIndex)) continue
+    earliest = earliest === null ? message.turnIndex : Math.min(earliest, message.turnIndex)
+  }
+  return earliest
+}
+
+function removeStaleHistoryNoticeAfterOlderMerge(messages: UiMessage[]): UiMessage[] {
+  const earliest = earliestTurnIndexFromMessages(messages)
+  if (earliest === null || earliest > 0) return messages
+  const nextMessages = messages.filter((message) => message.messageType !== 'history.notice')
+  return nextMessages.length === messages.length ? messages : nextMessages
+}
+
 function normalizeMessageSignatureList(values: string[] | undefined): string {
   return (values ?? [])
     .map((value) => value.trim())
@@ -5759,7 +5776,10 @@ export function useDesktopState() {
         sortByTurnIndex: Boolean(options.olderHistory),
         replaceHistoryNotice: Boolean(options.olderHistory),
       })
-      setPersistedMessagesForThread(threadId, mergedMessages)
+      setPersistedMessagesForThread(
+        threadId,
+        options.olderHistory ? removeStaleHistoryNoticeAfterOlderMerge(mergedMessages) : mergedMessages,
+      )
       if (snapshot.messageState === 'fresh') {
         clearNonFreshThreadDetailRetry(threadId)
       } else {
@@ -6047,14 +6067,7 @@ export function useDesktopState() {
   }
 
   function earliestLoadedTurnIndex(threadId: string): number | null {
-    const messages = persistedMessagesByThreadId.value[threadId] ?? []
-    let earliest: number | null = null
-    for (const message of messages) {
-      if (message.messageType === 'history.notice') continue
-      if (typeof message.turnIndex !== 'number' || !Number.isFinite(message.turnIndex)) continue
-      earliest = earliest === null ? message.turnIndex : Math.min(earliest, message.turnIndex)
-    }
-    return earliest
+    return earliestTurnIndexFromMessages(persistedMessagesByThreadId.value[threadId] ?? [])
   }
 
   async function loadOlderHistoryForSelectedThread(): Promise<void> {

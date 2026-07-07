@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - 长会话 fallback 历史更轻：本地 session-log 恢复会跳过 Codex 内部 context 和 assistant commentary 过程提示，并折叠 `event_msg`/`response_item` 相邻重复消息；真实 `分析项目` fallback state payload 从约 238KB 降到约 31KB，避免移动端为不可见过程噪音下载和归一化大块历史，同时旧历史加载到最早 turn 后会清理过期 `history.notice`，不再残留无效加载入口。
   - 长会话 fallback 状态更准确：当 `thread/read(includeTurns:true)` 只能从本地 session log 恢复历史时，thread-read cache 会保留 `session-log` 来源；后续 state snapshot 命中该缓存仍标记为 `cached`，避免前端误判为 App Server fresh 历史并降低历史缺失排查难度。
   - 会话详情首屏 state snapshot 去重：前端对稳定、非 stale、非运行中、无 pending request 的 `/codex-api/state/thread` 完整快照增加亚秒级短缓存，并跳过刚完成详情同步后的无强信号静默二刷；真实 `分析项目` 手机回归收紧为初始 settle 期间最多 1 次 state snapshot，避免初始化/恢复链路重复传输同一大块会话状态。
   - 长会话继续加载较早历史时，前端会在本地展开隐藏消息后连续几帧恢复阅读锚点，减少二次加载时内容突然跳动。

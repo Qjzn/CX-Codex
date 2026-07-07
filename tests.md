@@ -19,6 +19,49 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Slim session-log fallback history
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- The thread can exercise `thread/read(includeTurns:true)` fallback from local session log.
+
+#### Steps
+1. Run `npm.cmd run verify:server-modules`.
+2. Run `npm.cmd run build`.
+3. Restart local 7420 from the rebuilt `dist-cli/index.js`.
+4. Call `POST http://127.0.0.1:7420/codex-api/rpc` with `{"method":"thread/read","params":{"threadId":"019f27ae-0ecd-7c50-9701-8ec003e66447","includeTurns":true}}`.
+5. Confirm the fallback response still returns recent usable history.
+6. Call `GET http://127.0.0.1:7420/codex-api/state/thread/019f27ae-0ecd-7c50-9701-8ec003e66447`.
+7. Confirm recovered history no longer includes assistant `phase: "commentary"` progress messages or `<codex_internal_context...>` user items.
+8. Run `npm.cmd run verify:frontend-normalizers`.
+9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Session-log fallback still recovers final/user-visible messages when App Server cannot read a malformed rollout JSONL directly.
+- Assistant commentary progress messages are not restored as chat history.
+- Codex internal context payloads are not restored as user messages.
+- Adjacent duplicate `event_msg` / `response_item` copies are folded when one side lacks a stable message id.
+- The real `分析项目` fallback state payload is substantially smaller than the pre-fix ~238KB state payload.
+- The phone thread page remains nonblank and keeps recent usable history.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/server/appServerSessionLogThreadRead.ts`, `src/composables/useDesktopState.ts`, `scripts/server-module-smoke.ts`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- `npm.cmd run build` passed; Vite reported only the existing large chunk warning.
+- Local 7420 was rebuilt and restarted as PID `64112`, then `/health` returned `{"status":"ok","service":"cx-codex"}`.
+- Before this fix, real `GET /codex-api/state/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` measured `stateBytes=238440`; after duplicate folding alone it measured `stateBytes=176076`; after commentary/internal-context filtering with hidden turn boundaries it measured `stateBytes=31247`.
+- Final real `thread/read(includeTurns:true)` fallback returned warning `thread/read fell back to local session log messages`, `rpcBytes=30856`, `rpcTurns=10`, `rpcItems=18`, `turnsView="recent"`, `originalTurnsCount=11`, and `turnsStartIndex=1`.
+- Final real state snapshot returned `messageState="cached"`, `stateBytes=31247`, `turns=10`, `items=18`, `emptyTurns=1`, and `largestTurnBytes=3935`.
+- Older-history direct RPC with `responseView="older"` and `beforeTurnIndex=1` returned `turns=1`, `items=2`, `emptyTurns=0`, and `turnsStartIndex=0`, proving the first remote older window reaches the earliest turn with visible content.
+- `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread was found under project `codexui`, `activeFirstPageMs=262`, and `activeFullListMs=291`.
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed; phone thread page reported `items=11`, `cards=6`, `conversationDomNodes=449`, `firstUsableMs=4849`, `stateThread.count=1`, `stateThread.transferSize=31487`, and all frontend checks passed.
+
 ### Feature: Preserve session-log fallback cache source
 
 #### Prerequisites

@@ -8700,6 +8700,16 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
           source: 'vscode',
         },
       }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:00.500Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'internal-context-1',
+          role: 'user',
+          content: [{ type: 'input_text', text: '<codex_internal_context source="goal">hidden</codex_internal_context>' }],
+        },
+      }),
       ...Array.from({ length: 40 }, (_, index) => JSON.stringify({
         timestamp: `2026-07-06T10:00:00.${String(index).padStart(3, '0')}Z`,
         type: 'fileChange',
@@ -8720,6 +8730,26 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
         },
       }),
       JSON.stringify({
+        timestamp: '2026-07-06T10:00:01.500Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'agent-commentary-1',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Intermediate progress should not be restored' }],
+          phase: 'commentary',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:01.750Z',
+        type: 'event_msg',
+        payload: {
+          type: 'agent_message',
+          message: 'Intermediate event progress should not be restored',
+          phase: 'commentary',
+        },
+      }),
+      JSON.stringify({
         timestamp: '2026-07-06T10:00:02.000Z',
         type: 'event_msg',
         payload: {
@@ -8733,6 +8763,16 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
         payload: {
           type: 'agent_message',
           message: 'Recovered answer',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:02.500Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'agent-1',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Recovered answer' }],
         },
       }),
       JSON.stringify({
@@ -8761,6 +8801,16 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
           id: 'user-continue-2',
           role: 'user',
           content: [{ type: 'input_text', text: '继续' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:05.500Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'agent-3',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Third recovered answer' }],
         },
       }),
       JSON.stringify({
