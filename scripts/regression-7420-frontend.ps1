@@ -1659,7 +1659,7 @@ function Assert-ThreadPageLoadMetrics {
   Assert-True ([int]$Metrics.earlyRpcRequestCount -le 1) "thread page issued $($Metrics.earlyRpcRequestCount) early RPC requests for $ThreadId; expected cache-first first screen to avoid duplicate RPC within 650ms"
   Assert-True ([int]$Metrics.stateThreadRequestCount -le 8) "thread page loaded $($Metrics.stateThreadRequestCount) state snapshots for $ThreadId; expected no more than 8 during initial settle"
   Assert-True ([int]$Metrics.runtimeThreadRequestCount -le 8) "thread page loaded $($Metrics.runtimeThreadRequestCount) runtime snapshots for $ThreadId; expected no more than 8 during initial settle"
-  Assert-True ([int]$Metrics.tokenUsageRequestCount -le 1) "thread page loaded $($Metrics.tokenUsageRequestCount) token usage snapshots for $ThreadId; expected at most 1 throttled background read during initial settle"
+  Assert-True ([int]$Metrics.tokenUsageRequestCount -eq 0) "thread page loaded $($Metrics.tokenUsageRequestCount) token usage snapshots for $ThreadId during initial settle; expected non-core token usage reads to wait until after first-screen regression"
   Assert-True ([int]$Metrics.firstScreenProjectRootSuggestionMaxDuplicateCount -le 1) "thread page repeated the same project-root-suggestion request $($Metrics.firstScreenProjectRootSuggestionMaxDuplicateCount) times during first-screen load for $ThreadId"
   Assert-True ([int]$Metrics.firstScreenWorkspaceRootsStateCount -le 1) "thread page loaded workspace-roots-state $($Metrics.firstScreenWorkspaceRootsStateCount) times during first-screen load for $ThreadId"
   Assert-True ([int]$Metrics.firstScreenDesktopAppStatusCount -eq 0) "thread page loaded desktop-app/status during first-screen load for $ThreadId"

@@ -413,6 +413,39 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `activeFirstPageMs=245`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
 
+### Feature: Defer token usage refresh beyond thread first screen
+
+#### Prerequisites
+- Local 7420 is running from the latest build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- The selected thread has no immediately available token usage snapshot, or the browser context is fresh enough to exercise the fallback timer.
+
+#### Steps
+1. Open the real thread route at phone width.
+2. Capture network entries for at least the initial 9 second settle window used by `test:7420:frontend`.
+3. Confirm `/codex-api/thread-token-usage?threadId=...` is not requested during that initial settle window.
+4. Switch away from the thread before the token usage idle timer fires and confirm the stale timer does not fetch token usage for the old thread.
+5. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- The real thread first screen can become readable without waiting for token usage fallback parsing.
+- The context usage badge can remain in its existing "暂未就绪" state until the delayed informational refresh runs.
+- Token usage notifications and token usage already present in runtime snapshots still populate the badge immediately.
+- Switching threads does not leave an old token usage timer that reads a no-longer-selected thread.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/composables/useDesktopState.ts`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement after fix: `thread endpoint timing -> {"rpc":{"count":0,"firstStartMs":null,"maxDurationMs":0,"totalDurationMs":0,"transferSize":0},"stateThread":{"count":2,"firstStartMs":118,"maxDurationMs":318,"totalDurationMs":366,"transferSize":620261},"runtimeThread":{"count":1,"firstStartMs":2954,"maxDurationMs":4,"totalDurationMs":4,"transferSize":802},"tokenUsage":{"count":0,"firstStartMs":null,"maxDurationMs":0,"totalDurationMs":0,"transferSize":0},"workspaceRootsState":{"count":1,"firstStartMs":532,"maxDurationMs":9,"totalDurationMs":9,"transferSize":1633},"projectRootSuggestion":{"count":3,"firstStartMs":532,"maxDurationMs":5,"totalDurationMs":12,"transferSize":1147}}`.
+- 2026-07-07 measurement after fix: `thread DOM pressure -> {"commandOutputs":0,"codeLines":0,"firstUsableMs":4781,"cards":2,"items":3,"conversationDomNodes":41}`.
+- 2026-07-07 gate: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `61444`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`; npm also printed a non-fatal update-check permission notice after the successful smoke.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `activeFirstPageMs=241`, and required thread project `codexui`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
 ### Feature: Defer thread route list refresh past first screen
 
 #### Prerequisites

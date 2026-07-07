@@ -174,7 +174,7 @@ const LIVE_DELTA_BATCH_MS = 48
 const NOTIFICATION_STALE_MS = 30000
 const THREAD_LIST_REFRESH_INTERVAL_MS = 300000
 const THREAD_TOKEN_USAGE_REFRESH_RETRY_MS = 5 * 60 * 1000
-const THREAD_TOKEN_USAGE_IDLE_DELAY_MS = 1600
+const THREAD_TOKEN_USAGE_IDLE_DELAY_MS = 11000
 const THREAD_SELECTION_SKILLS_IDLE_DELAY_MS = 8000
 const MODEL_PREFERENCES_IDLE_DELAY_MS = 6500
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 1500
@@ -2687,6 +2687,7 @@ export function useDesktopState() {
 
     const timer = window.setTimeout(() => {
       tokenUsageRefreshTimerByThreadId.delete(normalizedThreadId)
+      if (selectedThreadId.value !== normalizedThreadId) return
       refreshThreadTokenUsageInBackground(normalizedThreadId)
     }, THREAD_TOKEN_USAGE_IDLE_DELAY_MS)
     tokenUsageRefreshTimerByThreadId.set(normalizedThreadId, timer)

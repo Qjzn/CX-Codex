@@ -3,6 +3,7 @@
 ## 未发布
 
 - 界面体验：
+  - 会话详情首屏继续减负：缺少上下文用量缓存时，`thread-token-usage` 自动补齐从首屏后约 1.6 秒延后到约 11 秒，并且只在该线程仍为当前选中线程时执行；真实 `分析项目` 手机回归收紧为初始 settle 期间不得发起 token usage 请求，避免非核心统计读取拖慢进入会话。
   - 会话详情进入耗时更可观测：`/codex-api/health` 的 RPC diagnostics 现在保留最近 RPC 记录，`test:7420:frontend` 会在真实 `分析项目` 手机线程页输出浏览器 endpoint timing 和 App Server recent RPC 摘要，方便持续定位 `thread/read`、state/runtime snapshot、token usage 或其他非核心请求是否拖慢首屏。
   - 长会话首屏 DOM 压力纳入回归门禁：`test:7420:frontend` 现在会在真实 `分析项目` 手机线程页输出并断言首屏挂载的会话项、消息卡、代码行、命令输出、raw payload 和会话 DOM 节点上限，避免后续改动把长会话重新变成一次性重渲染。
   - Android 恢复同步更可靠：CX Codex Android 从后台/锁屏返回时，首个恢复同步会同时刷新线程列表和当前会话，避免桌面端新增线程、置顶/项目排序变化在手机侧栏里长期不追上；frontend 回归新增 Android resume 列表刷新源码护栏。
