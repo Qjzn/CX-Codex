@@ -3,6 +3,8 @@
 ## 未发布
 
 - 界面体验：
+  - 会话详情首屏 state snapshot 去重：前端对稳定、非 stale、非运行中、无 pending request 的 `/codex-api/state/thread` 完整快照增加亚秒级短缓存，并跳过刚完成详情同步后的无强信号静默二刷；真实 `分析项目` 手机回归收紧为初始 settle 期间最多 1 次 state snapshot，避免初始化/恢复链路重复传输同一大块会话状态。
+  - 长会话继续加载较早历史时，前端会在本地展开隐藏消息后连续几帧恢复阅读锚点，减少二次加载时内容突然跳动。
   - 会话详情首屏继续减负：缺少上下文用量缓存时，`thread-token-usage` 自动补齐从首屏后约 1.6 秒延后到约 11 秒，并且只在该线程仍为当前选中线程时执行；真实 `分析项目` 手机回归收紧为初始 settle 期间不得发起 token usage 请求，避免非核心统计读取拖慢进入会话。
   - 会话详情进入耗时更可观测：`/codex-api/health` 的 RPC diagnostics 现在保留最近 RPC 记录，`test:7420:frontend` 会在真实 `分析项目` 手机线程页输出浏览器 endpoint timing 和 App Server recent RPC 摘要，方便持续定位 `thread/read`、state/runtime snapshot、token usage 或其他非核心请求是否拖慢首屏。
   - 长会话首屏 DOM 压力纳入回归门禁：`test:7420:frontend` 现在会在真实 `分析项目` 手机线程页输出并断言首屏挂载的会话项、消息卡、代码行、命令输出、raw payload 和会话 DOM 节点上限，避免后续改动把长会话重新变成一次性重渲染。

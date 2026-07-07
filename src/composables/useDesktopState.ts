@@ -5659,6 +5659,25 @@ export function useDesktopState() {
     flushBufferedLiveDeltas()
 
     const alreadyLoaded = loadedMessagesByThreadId.value[threadId] === true
+    const recentlySyncedDetail =
+      (lastThreadDetailSyncAtById.value[threadId] ?? 0) > 0 &&
+      Date.now() - (lastThreadDetailSyncAtById.value[threadId] ?? 0) < ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS
+    if (
+      options.silent === true &&
+      options.forceSettledRpcRefresh !== true &&
+      options.fullHistory !== true &&
+      !options.olderHistory &&
+      alreadyLoaded &&
+      recentlySyncedDetail &&
+      !pendingThreadMessageRefresh.has(threadId) &&
+      eventUnreadByThreadId.value[threadId] !== true &&
+      !isThreadExecutionActive(threadId) &&
+      !isRuntimeExecutionStale(threadId) &&
+      !hasPendingServerRequestSignal(threadId) &&
+      !hasQueuedThreadWork(threadId)
+    ) {
+      return
+    }
     const shouldShowLoading = options.silent !== true && !alreadyLoaded
     const loadId = shouldShowLoading ? ++foregroundMessageLoadId : 0
     if (shouldShowLoading) {
@@ -7081,9 +7100,13 @@ export function useDesktopState() {
       const threadId = selectedThreadId.value
       const currentVersion = currentThreadVersion(threadId)
       const loadedVersion = loadedVersionByThreadId.value[threadId] ?? ''
+      const lastDetailSyncAt = lastThreadDetailSyncAtById.value[threadId] ?? 0
+      const recentlySyncedDetail =
+        lastDetailSyncAt > 0 &&
+        Date.now() - lastDetailSyncAt < ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS
       const hasVersionChange = currentVersion.length > 0 && currentVersion !== loadedVersion
 
-      if ((forceMessageRefresh || hasVersionChange) && refreshedMessageThreadId !== threadId) {
+      if ((forceMessageRefresh || (hasVersionChange && !recentlySyncedDetail)) && refreshedMessageThreadId !== threadId) {
         await refreshSelectedMessagesNow(threadId)
       }
     } catch (error) {

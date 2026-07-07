@@ -2177,15 +2177,22 @@ async function scheduleScrollAnchorRestore(snapshot: ScrollAnchorSnapshot | null
   })
 }
 
+async function restoreScrollAnchorOverFrames(snapshot: ScrollAnchorSnapshot | null, frames = 4): Promise<void> {
+  if (!snapshot) return
+  for (let remaining = Math.max(frames, 1); remaining > 0; remaining -= 1) {
+    await scheduleScrollAnchorRestore(snapshot)
+  }
+}
+
 async function revealOlderMessages(): Promise<void> {
   if (!hasOlderMessagesAffordance.value || isRevealingOlderMessages.value) return
+  autoFollowBottom.value = false
   const anchorSnapshot = captureVisibleConversationAnchor()
   isRevealingOlderMessages.value = true
   canAutoRevealOlderMessages.value = false
   if (hasHiddenEarlierMessages.value) {
     visibleMessageStartIndex.value = Math.max(visibleMessageStartIndex.value - MESSAGE_WINDOW_SIZE, 0)
-    await nextTick()
-    await scheduleScrollAnchorRestore(anchorSnapshot)
+    await restoreScrollAnchorOverFrames(anchorSnapshot)
     isRevealingOlderMessages.value = false
     return
   }

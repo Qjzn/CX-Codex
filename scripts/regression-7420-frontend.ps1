@@ -1638,6 +1638,13 @@ JSON.stringify((() => {
       workspaceRootsState: summarizePath((entry) => entry.name === '/codex-api/workspace-roots-state'),
       projectRootSuggestion: summarizePath((entry) => entry.name.startsWith('/codex-api/project-root-suggestion?')),
     },
+    stateThreadEntries: resources
+      .filter((entry) => entry.name === statePath)
+      .map((entry) => ({
+        startTime: entry.startTime,
+        duration: entry.duration,
+        transferSize: entry.transferSize,
+      })),
     totalTransferSize: resources.reduce((sum, entry) => sum + entry.transferSize, 0),
     slowRequestCount: resources.filter((entry) => entry.duration >= 1500).length,
   };
@@ -1657,7 +1664,7 @@ function Assert-ThreadPageLoadMetrics {
     Assert-True ([int]$Metrics.firstUsableMs -le 12000) "thread page first usable content took $($Metrics.firstUsableMs)ms for $ThreadId; expected <= 12000ms"
   }
   Assert-True ([int]$Metrics.earlyRpcRequestCount -le 1) "thread page issued $($Metrics.earlyRpcRequestCount) early RPC requests for $ThreadId; expected cache-first first screen to avoid duplicate RPC within 650ms"
-  Assert-True ([int]$Metrics.stateThreadRequestCount -le 8) "thread page loaded $($Metrics.stateThreadRequestCount) state snapshots for $ThreadId; expected no more than 8 during initial settle"
+  Assert-True ([int]$Metrics.stateThreadRequestCount -le 1) "thread page loaded $($Metrics.stateThreadRequestCount) state snapshots for $ThreadId; expected short snapshot reuse to avoid duplicate full state reads during initial settle"
   Assert-True ([int]$Metrics.runtimeThreadRequestCount -le 8) "thread page loaded $($Metrics.runtimeThreadRequestCount) runtime snapshots for $ThreadId; expected no more than 8 during initial settle"
   Assert-True ([int]$Metrics.tokenUsageRequestCount -eq 0) "thread page loaded $($Metrics.tokenUsageRequestCount) token usage snapshots for $ThreadId during initial settle; expected non-core token usage reads to wait until after first-screen regression"
   Assert-True ([int]$Metrics.firstScreenProjectRootSuggestionMaxDuplicateCount -le 1) "thread page repeated the same project-root-suggestion request $($Metrics.firstScreenProjectRootSuggestionMaxDuplicateCount) times during first-screen load for $ThreadId"
@@ -2016,6 +2023,7 @@ try {
       conversationDomNodes = [int]$threadPageLoadMetrics.conversationDomNodeCount
     } | ConvertTo-Json -Compress))
     Write-Step ("thread endpoint timing -> " + ($threadPageLoadMetrics.endpointTiming | ConvertTo-Json -Compress))
+    Write-Step ("thread state entries -> " + ($threadPageLoadMetrics.stateThreadEntries | ConvertTo-Json -Compress))
     Write-Step ("app-server recent rpc -> " + ((Read-AppServerRecentRpcMetrics -BaseUrl $BaseUrl) | ConvertTo-Json -Depth 4 -Compress))
     Assert-ThreadPageLoadMetrics -Metrics $threadPageLoadMetrics -ThreadId $ThreadId
     Assert-ThreadMessageCacheMetrics -Metrics (Read-ThreadMessageCacheMetrics -Session $session -ThreadId $ThreadId) -ThreadId $ThreadId

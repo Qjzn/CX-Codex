@@ -446,6 +446,59 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `activeFirstPageMs=241`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
 
+### Feature: Reuse settled thread state snapshot during first-screen settle
+
+#### Prerequisites
+- Local 7420 is running from the latest build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- The selected thread can return a stable non-running snapshot with no pending server requests.
+
+#### Steps
+1. Open the real thread route at phone width.
+2. Capture network entries for the initial 9 second settle window used by `test:7420:frontend`.
+3. Confirm `/codex-api/state/thread/<threadId>` is requested at most once during that initial settle window.
+4. Confirm running, queued, stopping, pending-sync, stale, or pending-request snapshots are not cached by code review or targeted tests.
+5. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- The real thread first screen no longer transfers the same full state snapshot twice during the initial settle window.
+- Running and recovery-sensitive thread states still bypass the short snapshot cache.
+- The real thread remains readable, retains user context, and keeps load-more behavior working.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/api/codexGateway.ts`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 investigation: before the final fix, the real phone thread page loaded 2 state snapshots at `118ms` and `3007ms`, transferring about `602KB` total.
+- 2026-07-07 gate: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `76484`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed with real phone thread `stateThread.count=1`, `stateThread.transferSize=284721`, `runtimeThread.count=1`, `tokenUsage.count=0`, `visibleConversationItemCount=15`, `conversationDomNodes=313`, and `firstUsableMs=4772`.
+
+### Feature: Stabilize load-more reading anchor across repeated local reveals
+
+#### Prerequisites
+- Local 7420 is running from the latest build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` has enough cached or loaded history to show the `继续加载较早历史` affordance.
+
+#### Steps
+1. Open the real thread route at phone width.
+2. Click `继续加载较早历史`.
+3. Wait for the history window to expand.
+4. Click `继续加载较早历史` again.
+5. Compare `scrollTop` and `scrollHeight` before and after each reveal.
+6. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- Each reveal advances visible history by no more than the configured page size.
+- Reading anchor drift remains within the regression threshold.
+- User and assistant context remain visible after repeated reveals.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/components/content/ThreadConversation.vue`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed after repeated load-more anchor checks on the real phone thread page.
+
 ### Feature: Defer thread route list refresh past first screen
 
 #### Prerequisites

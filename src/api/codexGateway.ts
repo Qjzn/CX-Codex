@@ -64,11 +64,18 @@ type CachedWorkspaceRootsState = {
   value: WorkspaceRootsState
   cachedAtMs: number
 }
+type CachedThreadRuntimeSnapshot = {
+  value: ThreadRuntimeSnapshot
+  cachedAtMs: number
+}
 
 const PROJECT_ROOT_SUGGESTION_CACHE_TTL_MS = 2000
 const WORKSPACE_ROOTS_STATE_CACHE_TTL_MS = 2000
+const THREAD_RUNTIME_SNAPSHOT_CACHE_TTL_MS = 900
 const projectRootSuggestionCacheByBasePath = new Map<string, CachedProjectRootSuggestion>()
 const projectRootSuggestionInFlightByBasePath = new Map<string, Promise<ProjectRootSuggestion>>()
+const threadRuntimeSnapshotCacheByThreadId = new Map<string, CachedThreadRuntimeSnapshot>()
+const threadRuntimeSnapshotInFlightByThreadId = new Map<string, Promise<ThreadRuntimeSnapshot>>()
 let workspaceRootsStateCache: CachedWorkspaceRootsState | null = null
 let workspaceRootsStateInFlight: Promise<WorkspaceRootsState> | null = null
 let projectRootSuggestionCacheGeneration = 0
@@ -109,6 +116,53 @@ export type ThreadRuntimeSnapshot = {
   messageState: 'fresh' | 'cached' | 'unavailable'
   pendingServerRequests: unknown[]
   tokenUsage: UiThreadTokenUsage | null
+}
+
+function isRuntimeSnapshotCacheable(snapshot: ThreadRuntimeSnapshot): boolean {
+  return (
+    snapshot.stale !== true &&
+    snapshot.inProgress !== true &&
+    snapshot.executionState !== 'queued' &&
+    snapshot.executionState !== 'starting' &&
+    snapshot.executionState !== 'start_uncertain' &&
+    snapshot.executionState !== 'running' &&
+    snapshot.executionState !== 'waiting_permission' &&
+    snapshot.executionState !== 'stopping' &&
+    snapshot.executionState !== 'stop_uncertain' &&
+    snapshot.executionState !== 'completed_pending_sync' &&
+    snapshot.pendingServerRequests.length === 0
+  )
+}
+
+function readCachedThreadRuntimeSnapshot(threadId: string): ThreadRuntimeSnapshot | null {
+  const cached = threadRuntimeSnapshotCacheByThreadId.get(threadId)
+  if (!cached) return null
+  if (Date.now() - cached.cachedAtMs > THREAD_RUNTIME_SNAPSHOT_CACHE_TTL_MS) {
+    threadRuntimeSnapshotCacheByThreadId.delete(threadId)
+    return null
+  }
+  return cached.value
+}
+
+function writeCachedThreadRuntimeSnapshot(threadId: string, snapshot: ThreadRuntimeSnapshot): void {
+  if (!isRuntimeSnapshotCacheable(snapshot)) {
+    threadRuntimeSnapshotCacheByThreadId.delete(threadId)
+    return
+  }
+  threadRuntimeSnapshotCacheByThreadId.set(threadId, {
+    value: snapshot,
+    cachedAtMs: Date.now(),
+  })
+  while (threadRuntimeSnapshotCacheByThreadId.size > 20) {
+    const oldestKey = threadRuntimeSnapshotCacheByThreadId.keys().next().value
+    if (typeof oldestKey !== 'string') break
+    threadRuntimeSnapshotCacheByThreadId.delete(oldestKey)
+  }
+}
+
+function throwIfSignalAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted !== true) return
+  throw new DOMException('Aborted', 'AbortError')
 }
 
 export type RuntimeRequestStatus =
@@ -610,16 +664,44 @@ export async function getThreadRuntimeSnapshot(
   threadId: string,
   options: RpcCallOptions = {},
 ): Promise<ThreadRuntimeSnapshot> {
-  const response = await fetchWithTimeout(`/codex-api/state/thread/${encodeURIComponent(threadId)}`, {
-    signal: options.signal,
+  const normalizedThreadId = threadId.trim()
+  throwIfSignalAborted(options.signal)
+
+  const cachedSnapshot = readCachedThreadRuntimeSnapshot(normalizedThreadId)
+  if (cachedSnapshot) {
+    return cachedSnapshot
+  }
+
+  const inFlightSnapshot = threadRuntimeSnapshotInFlightByThreadId.get(normalizedThreadId)
+  if (inFlightSnapshot) {
+    const snapshot = await inFlightSnapshot
+    throwIfSignalAborted(options.signal)
+    return snapshot
+  }
+
+  const request = fetchThreadRuntimeSnapshot(normalizedThreadId)
+  threadRuntimeSnapshotInFlightByThreadId.set(normalizedThreadId, request)
+  try {
+    const snapshot = await request
+    throwIfSignalAborted(options.signal)
+    return snapshot
+  } finally {
+    if (threadRuntimeSnapshotInFlightByThreadId.get(normalizedThreadId) === request) {
+      threadRuntimeSnapshotInFlightByThreadId.delete(normalizedThreadId)
+    }
+  }
+}
+
+async function fetchThreadRuntimeSnapshot(normalizedThreadId: string): Promise<ThreadRuntimeSnapshot> {
+  const response = await fetchWithTimeout(`/codex-api/state/thread/${encodeURIComponent(normalizedThreadId)}`, {
   }, {
     timeoutMs: GATEWAY_BACKGROUND_FETCH_TIMEOUT_MS,
-    label: `Thread state snapshot request for ${threadId}`,
+    label: `Thread state snapshot request for ${normalizedThreadId}`,
   })
 
   const payload = (await response.json()) as unknown
   if (!response.ok) {
-    throw new Error(getErrorMessageFromPayload(payload, `Failed to load thread snapshot ${threadId}`))
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to load thread snapshot ${normalizedThreadId}`))
   }
 
   const record =
@@ -664,7 +746,7 @@ export async function getThreadRuntimeSnapshot(
     typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
   )
 
-  return {
+  const snapshot: ThreadRuntimeSnapshot = {
     messages: threadRead ? normalizeThreadMessagesV2(threadRead) : [],
     executionState,
     inProgress:
@@ -689,6 +771,8 @@ export async function getThreadRuntimeSnapshot(
     pendingServerRequests,
     tokenUsage,
   }
+  writeCachedThreadRuntimeSnapshot(normalizedThreadId, snapshot)
+  return snapshot
 }
 
 export async function getThreadRuntimeStatusSnapshot(
