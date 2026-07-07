@@ -355,6 +355,32 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
 
+### Feature: Long thread first-screen DOM pressure regression guard
+
+#### Prerequisites
+- Local 7420 is running from the latest build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- `agent-browser` is available in `PATH`.
+
+#### Steps
+1. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+2. Confirm the output includes `thread DOM pressure -> ...`.
+3. Confirm the real phone thread first screen becomes usable within 12 seconds.
+4. Confirm the DOM pressure values stay within the scripted limits for visible conversation items, message cards, code lines, mounted command outputs, expanded raw payload cards, and conversation DOM nodes.
+5. Confirm the existing load-more check still expands older history in small windows without losing user context or assistant response.
+
+#### Expected Results
+- The real `分析项目` phone thread remains readable without blank first screen.
+- Long-thread first-screen DOM stays bounded instead of mounting a full historical conversation.
+- Folded command output, raw payload, and code preview behavior remain lazy by default.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 measurement: `thread DOM pressure -> {"conversationDomNodes":45,"cards":2,"commandOutputs":0,"firstUsableMs":4779,"codeLines":0,"items":3}`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
 ### Feature: Defer thread route list refresh past first screen
 
 #### Prerequisites

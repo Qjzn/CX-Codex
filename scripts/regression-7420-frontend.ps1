@@ -1587,6 +1587,13 @@ JSON.stringify((() => {
     .filter((entry) => entry.startTime <= 1500 && entry.name === '/codex-api/desktop-app/status')
     .length;
   const visibleConversationItems = Array.from(document.querySelectorAll('.conversation-item[data-role]'));
+  const conversationList = document.querySelector('.conversation-list');
+  const messageCards = Array.from(document.querySelectorAll('.message-card'));
+  const codeBlocks = Array.from(document.querySelectorAll('.message-code-block'));
+  const codeLines = Array.from(document.querySelectorAll('.message-code-line'));
+  const commandOutputWraps = Array.from(document.querySelectorAll('.cmd-output-wrap'));
+  const mountedCommandOutputs = Array.from(document.querySelectorAll('.cmd-output-wrap .cmd-output'));
+  const expandedRawPayloads = Array.from(document.querySelectorAll('.raw-payload-card[open], .message-raw-payload[open]'));
   const visibleUserMessageCount = visibleConversationItems
     .filter((node) => node.getAttribute('data-role') === 'user')
     .length;
@@ -1602,8 +1609,17 @@ JSON.stringify((() => {
     firstScreenProjectRootSuggestionMaxDuplicateCount,
     firstScreenWorkspaceRootsStateCount,
     firstScreenDesktopAppStatusCount,
+    visibleConversationItemCount: visibleConversationItems.length,
     visibleUserMessageCount,
     visibleAssistantMessageCount,
+    messageCardCount: messageCards.length,
+    codeBlockCount: codeBlocks.length,
+    codeLineCount: codeLines.length,
+    expandedCommandOutputCount: commandOutputWraps.filter((node) => node.classList.contains('cmd-output-visible')).length,
+    mountedCommandOutputCount: mountedCommandOutputs.length,
+    expandedRawPayloadCount: expandedRawPayloads.length,
+    conversationDomNodeCount: conversationList ? conversationList.querySelectorAll('*').length : 0,
+    bodyDomNodeCount: document.body.querySelectorAll('*').length,
     totalTransferSize: resources.reduce((sum, entry) => sum + entry.transferSize, 0),
     slowRequestCount: resources.filter((entry) => entry.duration >= 1500).length,
   };
@@ -1631,6 +1647,13 @@ function Assert-ThreadPageLoadMetrics {
   Assert-True ([int]$Metrics.firstScreenDesktopAppStatusCount -eq 0) "thread page loaded desktop-app/status during first-screen load for $ThreadId"
   Assert-True ([int]$Metrics.visibleUserMessageCount -ge 1) "thread page first visible window has no user context for $ThreadId"
   Assert-True ([int]$Metrics.visibleAssistantMessageCount -ge 1) "thread page first visible window has no assistant response for $ThreadId"
+  Assert-True ([int]$Metrics.visibleConversationItemCount -le 80) "thread page mounted $($Metrics.visibleConversationItemCount) visible conversation items for $ThreadId; expected long threads to keep first-screen DOM window <= 80"
+  Assert-True ([int]$Metrics.messageCardCount -le 90) "thread page mounted $($Metrics.messageCardCount) message cards for $ThreadId; expected compact first-screen render <= 90"
+  Assert-True ([int]$Metrics.codeLineCount -le 1200) "thread page mounted $($Metrics.codeLineCount) code lines for $ThreadId; expected folded code preview <= 1200 lines"
+  Assert-True ([int]$Metrics.mountedCommandOutputCount -le 4) "thread page mounted $($Metrics.mountedCommandOutputCount) command outputs for $ThreadId; expected command output to stay collapsed/lazy"
+  Assert-True ([int]$Metrics.expandedCommandOutputCount -le 1) "thread page expanded $($Metrics.expandedCommandOutputCount) command outputs for $ThreadId; expected at most one visible output on first screen"
+  Assert-True ([int]$Metrics.expandedRawPayloadCount -eq 0) "thread page expanded raw payload cards during first-screen load for $ThreadId"
+  Assert-True ([int]$Metrics.conversationDomNodeCount -le 5000) "thread page mounted $($Metrics.conversationDomNodeCount) conversation DOM nodes for $ThreadId; expected <= 5000"
 }
 
 function Read-ThreadMessageCacheMetrics {
@@ -1943,6 +1966,14 @@ try {
     }
     $threadPageLoadMetrics = Read-ThreadPageLoadMetrics -Session $session -ThreadId $ThreadId
     $threadPageLoadMetrics | Add-Member -NotePropertyName "firstUsableMs" -NotePropertyValue ([int]$threadUsableMetrics.firstUsableMs) -Force
+    Write-Step ("thread DOM pressure -> " + (@{
+      firstUsableMs = [int]$threadPageLoadMetrics.firstUsableMs
+      items = [int]$threadPageLoadMetrics.visibleConversationItemCount
+      cards = [int]$threadPageLoadMetrics.messageCardCount
+      codeLines = [int]$threadPageLoadMetrics.codeLineCount
+      commandOutputs = [int]$threadPageLoadMetrics.mountedCommandOutputCount
+      conversationDomNodes = [int]$threadPageLoadMetrics.conversationDomNodeCount
+    } | ConvertTo-Json -Compress))
     Assert-ThreadPageLoadMetrics -Metrics $threadPageLoadMetrics -ThreadId $ThreadId
     Assert-ThreadMessageCacheMetrics -Metrics (Read-ThreadMessageCacheMetrics -Session $session -ThreadId $ThreadId) -ThreadId $ThreadId
     Assert-ThreadLoadMoreWindow -Session $session -ThreadId $ThreadId
