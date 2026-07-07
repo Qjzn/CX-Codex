@@ -1049,6 +1049,13 @@ const COMPACT_TABLE_VIEWPORT_QUERY = '(max-width: 767px)'
 const isCompactTableViewport = ref(false)
 let compactTableViewportMql: MediaQueryList | null = null
 
+type ThreadFirstScreenReadyMetric = {
+  readyAtMs: number
+  itemCount: number
+  userCount: number
+  assistantCount: number
+}
+
 type LegacyMediaQueryList = MediaQueryList & {
   addListener?: (listener: () => void) => void
   removeListener?: (listener: () => void) => void
@@ -1638,6 +1645,9 @@ const visibleRenderableEntries = computed<ConversationRenderEntry[]>(() => (
 ))
 const visibleMessageEntries = computed<ConversationMessageEntry[]>(() => (
   visibleRenderableEntries.value.filter((entry): entry is ConversationMessageEntry => entry.kind === 'message')
+))
+const hasVisibleConversationContent = computed(() => (
+  visibleRenderableEntries.value.length > 0 || visibleContextPreview.value !== null
 ))
 const hiddenEarlierMessageCount = computed(() => visibleMessageStartIndex.value)
 const hasHiddenEarlierMessages = computed(() => hiddenEarlierMessageCount.value > 0)
@@ -4433,6 +4443,36 @@ function scheduleEmitScrollState(container: HTMLElement, force = false): void {
   scrollStateEmitFrame = requestAnimationFrame(flushScrollState)
 }
 
+function markThreadFirstScreenReadyIfPossible(): void {
+  if (typeof window === 'undefined') return
+  const threadId = props.activeThreadId.trim()
+  if (!threadId) return
+  const host = window as Window & {
+    __cxCodexThreadFirstScreenReady?: Record<string, ThreadFirstScreenReadyMetric>
+  }
+  if (host.__cxCodexThreadFirstScreenReady?.[threadId]) return
+
+  const list = conversationListRef.value
+  if (!list) return
+  const items = Array.from(list.querySelectorAll<HTMLElement>('.conversation-item[data-role]'))
+  const userCount = items.filter((item) => item.getAttribute('data-role') === 'user').length
+  const assistantCount = items.filter((item) => item.getAttribute('data-role') === 'assistant').length
+  if (userCount < 1 || assistantCount < 1) return
+
+  host.__cxCodexThreadFirstScreenReady = {
+    ...(host.__cxCodexThreadFirstScreenReady ?? {}),
+    [threadId]: {
+      readyAtMs:
+        typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? Math.round(performance.now())
+          : Date.now(),
+      itemCount: items.length,
+      userCount,
+      assistantCount,
+    },
+  }
+}
+
 function scheduleIdleScrollStateEmit(container: HTMLElement, force = false): void {
   pendingScrollStateContainer = container
   pendingScrollStateForce = pendingScrollStateForce || force
@@ -4702,7 +4742,7 @@ watch(
   async (next, previous) => {
     const watchedMessages = messagesForReactiveWatch(next)
     syncObservedCommandStartTimes(watchedMessages)
-    if (props.isLoading) return
+    if (props.isLoading && !hasVisibleConversationContent.value) return
     const previousMessages = previous ?? EMPTY_MESSAGES
     const shouldFollowBottom = shouldLockToBottom()
 
@@ -4729,6 +4769,19 @@ watch(
     await scheduleScrollRestore(shouldFollowBottom)
   },
   { immediate: true },
+)
+
+watch(
+  () => [
+    props.activeThreadId,
+    visibleRenderableEntries.value.length,
+    visibleContextPreview.value?.text ?? '',
+  ] as const,
+  async () => {
+    await nextTick()
+    markThreadFirstScreenReadyIfPossible()
+  },
+  { immediate: true, flush: 'post' },
 )
 
 watch(

@@ -1610,6 +1610,7 @@ JSON.stringify((() => {
   const visibleAssistantMessageCount = visibleConversationItems
     .filter((node) => node.getAttribute('data-role') === 'assistant')
     .length;
+  const firstScreenReadyMetric = window.__cxCodexThreadFirstScreenReady?.[threadId] ?? null;
   return {
     apiCount: resources.length,
     earlyRpcRequestCount,
@@ -1622,6 +1623,10 @@ JSON.stringify((() => {
     visibleConversationItemCount: visibleConversationItems.length,
     visibleUserMessageCount,
     visibleAssistantMessageCount,
+    firstScreenReadyMs: firstScreenReadyMetric?.readyAtMs ?? null,
+    firstScreenReadyItemCount: firstScreenReadyMetric?.itemCount ?? 0,
+    firstScreenReadyUserCount: firstScreenReadyMetric?.userCount ?? 0,
+    firstScreenReadyAssistantCount: firstScreenReadyMetric?.assistantCount ?? 0,
     messageCardCount: messageCards.length,
     codeBlockCount: codeBlocks.length,
     codeLineCount: codeLines.length,
@@ -1759,7 +1764,13 @@ function Wait-ThreadUsableMetrics {
   while ($Stopwatch.ElapsedMilliseconds -le $TimeoutMs) {
     $lastMetrics = Read-ThreadPageLoadMetrics -Session $Session -ThreadId $ThreadId
     if ([int]$lastMetrics.visibleUserMessageCount -ge 1 -and [int]$lastMetrics.visibleAssistantMessageCount -ge 1) {
-      $lastMetrics | Add-Member -NotePropertyName "firstUsableMs" -NotePropertyValue ([int]$Stopwatch.ElapsedMilliseconds) -Force
+      $firstScreenReadyMs = if ($null -ne $lastMetrics.firstScreenReadyMs -and [int]$lastMetrics.firstScreenReadyMs -gt 0) {
+        [int]$lastMetrics.firstScreenReadyMs
+      } else {
+        [int]$Stopwatch.ElapsedMilliseconds
+      }
+      $lastMetrics | Add-Member -NotePropertyName "firstUsableMs" -NotePropertyValue $firstScreenReadyMs -Force
+      $lastMetrics | Add-Member -NotePropertyName "browserObservedUsableMs" -NotePropertyValue ([int]$Stopwatch.ElapsedMilliseconds) -Force
       return $lastMetrics
     }
     Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "250") | Out-Null
@@ -2018,8 +2029,10 @@ try {
     }
     $threadPageLoadMetrics = Read-ThreadPageLoadMetrics -Session $session -ThreadId $ThreadId
     $threadPageLoadMetrics | Add-Member -NotePropertyName "firstUsableMs" -NotePropertyValue ([int]$threadUsableMetrics.firstUsableMs) -Force
+    $threadPageLoadMetrics | Add-Member -NotePropertyName "browserObservedUsableMs" -NotePropertyValue ([int]$threadUsableMetrics.browserObservedUsableMs) -Force
     Write-Step ("thread DOM pressure -> " + (@{
       firstUsableMs = [int]$threadPageLoadMetrics.firstUsableMs
+      browserObservedUsableMs = [int]$threadPageLoadMetrics.browserObservedUsableMs
       items = [int]$threadPageLoadMetrics.visibleConversationItemCount
       cards = [int]$threadPageLoadMetrics.messageCardCount
       codeLines = [int]$threadPageLoadMetrics.codeLineCount

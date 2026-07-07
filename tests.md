@@ -437,6 +437,43 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
 
+### Feature: Measure and restore thread first-screen ready state
+
+#### Prerequisites
+- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+- A browser context can open the phone-width thread route.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` at a phone viewport.
+2. Confirm the first visible window contains at least one user/context item and one assistant item.
+3. In the page, inspect `window.__cxCodexThreadFirstScreenReady['019f27ae-0ecd-7c50-9701-8ec003e66447']`.
+4. Confirm `readyAtMs`, `itemCount`, `userCount`, and `assistantCount` are recorded once the DOM becomes readable.
+5. Confirm messages that arrive while loading is still true still restore the first-screen scroll/bottom state.
+6. Run `npm.cmd run build`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+8. Run `npm.cmd run verify:server-modules`.
+9. Run `npm.cmd run verify:frontend-normalizers`.
+10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+11. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+
+#### Expected Results
+- The page records product-side first-screen ready time independently from external browser polling overhead.
+- Real thread first-screen layout is restored as soon as readable content exists, even if the loading flag has not fully settled.
+- The regression output includes both `firstUsableMs` and `browserObservedUsableMs`.
+- The real `分析项目` phone thread page remains nonblank and keeps the latest user context plus assistant response.
+
+#### Rollback/Cleanup Notes
+- To roll back, revert `src/components/content/ThreadConversation.vue`, `scripts/regression-7420-frontend.ps1`, `docs/changelog.zh-CN.md`, and this test section.
+
+#### Regression Evidence
+- 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
+- 2026-07-07 deploy: latest build was restarted on local 7420 as PID `32472`, version `2.2.8`, with `/health` returning `ok`.
+- 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
+- 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with required thread project `codexui`, active first page `192ms`, and active full list `202ms`.
+- 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed. Real phone thread metrics: `firstUsableMs=568`, `browserObservedUsableMs=4893`, `stateThread.count=1`, `stateThread.transferSize=26786`, `tokenUsage.count=0`, `items=11`, `cards=7`, `conversationDomNodes=475`.
+
 ### Feature: Long thread first-screen DOM pressure regression guard
 
 #### Prerequisites
