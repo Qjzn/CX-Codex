@@ -47,6 +47,9 @@ type CurrentModelConfig = {
 }
 
 type RpcCallOptions = { signal?: AbortSignal }
+type ThreadListOptions = RpcCallOptions & {
+  maxPages?: number
+}
 type ThreadDetailOptions = RpcCallOptions & {
   responseView?: 'full' | 'older'
   beforeTurnIndex?: number
@@ -536,12 +539,17 @@ function normalizeThreadTokenUsage(value: unknown): UiThreadTokenUsage | null {
 
 async function listThreadsByArchiveState(
   archived: boolean,
-  options: RpcCallOptions = {},
+  options: ThreadListOptions = {},
 ): Promise<ThreadListResponse['data']> {
   const data: ThreadListResponse['data'] = []
   let cursor: string | null = null
+  const maxPages = typeof options.maxPages === 'number' && Number.isFinite(options.maxPages) && options.maxPages > 0
+    ? Math.trunc(options.maxPages)
+    : Number.POSITIVE_INFINITY
+  let pageCount = 0
 
   do {
+    pageCount += 1
     let payload: ThreadListResponse
     try {
       payload = await callRpc<ThreadListResponse>('thread/list', {
@@ -561,12 +569,12 @@ async function listThreadsByArchiveState(
     cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.length > 0
       ? payload.nextCursor
       : null
-  } while (cursor)
+  } while (cursor && pageCount < maxPages)
 
   return data
 }
 
-async function getThreadGroupsV2(options: RpcCallOptions = {}): Promise<UiProjectGroup[]> {
+async function getThreadGroupsV2(options: ThreadListOptions = {}): Promise<UiProjectGroup[]> {
   const data = await listThreadsByArchiveState(false, options)
   return normalizeThreadGroupsV2({ data, nextCursor: null })
 }
@@ -788,7 +796,7 @@ export async function getThreadTokenUsage(
   return normalizeThreadTokenUsage(data.tokenUsage)
 }
 
-export async function getThreadGroups(options: RpcCallOptions = {}): Promise<UiProjectGroup[]> {
+export async function getThreadGroups(options: ThreadListOptions = {}): Promise<UiProjectGroup[]> {
   try {
     return await getThreadGroupsV2(options)
   } catch (error) {

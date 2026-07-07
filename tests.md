@@ -19,6 +19,28 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Fast first-page sidebar thread load
+
+#### Prerequisites
+- Current branch is `codex/candidate-release-review`.
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
+
+#### Steps
+1. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+2. Confirm the output includes `activeFirstPageMs`, `activeFullListMs`, and `archivedFirstPageMs`.
+3. Confirm `activeFirstPageMs` is at or below 15000ms.
+4. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
+5. On the home desktop and mobile drawer phases, confirm the required `分析项目` sidebar row is still visible.
+
+#### Expected Results
+- Startup thread-list loading can render from the active first page before full active pagination completes.
+- Background refresh still fills the complete active thread list after the first screen.
+- Sidebar data parity remains intact for pinned threads, pinned projects, project preview ordering, and the required `分析项目` thread.
+
+#### Rollback/Cleanup
+- To roll back, revert `src/api/codexGateway.ts`, `src/composables/useDesktopState.ts`, `scripts/verify-7420-sidebar-data.mjs`, `docs/changelog.zh-CN.md`, and this test section.
+
 ### Feature: Regression gate for older history fallback cache isolation
 
 #### Prerequisites

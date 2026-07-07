@@ -4,6 +4,7 @@ const DEFAULT_BASE_URL = 'http://127.0.0.1:7420'
 const THREAD_LIST_LIMIT = 100
 const SUPPLEMENTAL_THREAD_READ_LIMIT = 20
 const PINNED_THREAD_READ_SAMPLE_LIMIT = 20
+const ACTIVE_FIRST_PAGE_MAX_MS = 15_000
 
 function readArgValue(names, fallback) {
   for (let index = 2; index < process.argv.length; index += 1) {
@@ -313,6 +314,15 @@ async function readRequiredThreadFromSearch(title) {
   fail(`required thread title was found by search but no readable matching thread was returned: ${title}`)
 }
 
+async function measureAsync(fn) {
+  const startedAtMs = Date.now()
+  const value = await fn()
+  return {
+    value,
+    durationMs: Date.now() - startedAtMs,
+  }
+}
+
 function assertProjectPreviewSort(groups) {
   for (const group of groups) {
     const preview = group.threads.slice(0, 5)
@@ -341,15 +351,22 @@ async function main() {
   const expectedProjectOrder = computeWorkspaceProjectOrder(workspaceRecord)
   assert(expectedProjectOrder.length > 0, 'workspace project order is empty')
 
-  const activeFirstPage = await readThreadListFirstPage(false)
+  const activeFirstPageRead = await measureAsync(() => readThreadListFirstPage(false))
+  const activeFirstPage = activeFirstPageRead.value
+  assert(
+    activeFirstPageRead.durationMs <= ACTIVE_FIRST_PAGE_MAX_MS,
+    `active thread/list first page took ${activeFirstPageRead.durationMs}ms; expected <= ${ACTIVE_FIRST_PAGE_MAX_MS}ms for sidebar first screen`,
+  )
   assert(
     activeFirstPage.data.length <= THREAD_LIST_LIMIT + SUPPLEMENTAL_THREAD_READ_LIMIT,
     'active first page exceeded thread/list limit plus supplemental read limit',
   )
-  const archivedFirstPage = await readThreadListFirstPage(true)
+  const archivedFirstPageRead = await measureAsync(() => readThreadListFirstPage(true))
+  const archivedFirstPage = archivedFirstPageRead.value
   assert(archivedFirstPage.data.length <= THREAD_LIST_LIMIT, 'archived first page was unexpectedly supplemented beyond the requested limit')
 
-  const activeThreads = await readAllActiveThreads(activeFirstPage)
+  const activeThreadsRead = await measureAsync(() => readAllActiveThreads(activeFirstPage))
+  const activeThreads = activeThreadsRead.value
   const activeThreadIds = activeThreads.map(readThreadId).filter(Boolean)
   assertUnique(activeThreadIds, 'active thread/list result')
 
@@ -397,6 +414,9 @@ async function main() {
     activeThreadCount: activeThreads.length,
     activeFirstPageCount: activeFirstPage.data.length,
     archivedFirstPageCount: archivedFirstPage.data.length,
+    activeFirstPageMs: activeFirstPageRead.durationMs,
+    activeFullListMs: activeFirstPageRead.durationMs + activeThreadsRead.durationMs,
+    archivedFirstPageMs: archivedFirstPageRead.durationMs,
     rpcRetryCount,
     requiredThread,
     projectGroupCount: groups.length,

@@ -149,6 +149,7 @@ const THREAD_MESSAGE_CACHE_MAX_MESSAGES_PER_THREAD = 24
 const THREAD_MESSAGE_CACHE_TEXT_LIMIT = 6_000
 const THREAD_MESSAGE_CACHE_COMMAND_OUTPUT_LIMIT = 3_000
 const THREAD_LIST_CACHED_BACKGROUND_DELAY_MS = 9500
+const THREAD_LIST_INITIAL_BACKGROUND_DELAY_MS = 1800
 const EVENT_SYNC_DEBOUNCE_MS = 350
 const BACKGROUND_SYNC_INTERVAL_MS = 9000
 const ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS = 12000
@@ -5417,17 +5418,22 @@ export function useDesktopState() {
       })
   }
 
-  function scheduleCachedThreadListRefresh(options: { signal?: AbortSignal; preserveMissingSelected?: boolean } = {}): void {
+  function scheduleCachedThreadListRefresh(
+    options: { signal?: AbortSignal; preserveMissingSelected?: boolean; delayMs?: number } = {},
+  ): void {
     if (cachedThreadListRefreshInFlight || cachedThreadListRefreshTimer !== null) return
     if (typeof window === 'undefined') {
       runCachedThreadListRefresh(options)
       return
     }
 
+    const delayMs = typeof options.delayMs === 'number' && Number.isFinite(options.delayMs)
+      ? Math.max(0, options.delayMs)
+      : THREAD_LIST_CACHED_BACKGROUND_DELAY_MS
     cachedThreadListRefreshTimer = window.setTimeout(() => {
       cachedThreadListRefreshTimer = null
       runCachedThreadListRefresh(options)
-    }, THREAD_LIST_CACHED_BACKGROUND_DELAY_MS)
+    }, delayMs)
   }
 
   async function loadThreads(
@@ -5455,7 +5461,14 @@ export function useDesktopState() {
     }
 
     try {
-      const [groups] = await Promise.all([getThreadGroups({ signal: options.signal }), loadThreadTitleCacheIfNeeded()])
+      const shouldLoadInitialPageFirst = options.backgroundIfCached === true
+      const [groups] = await Promise.all([
+        getThreadGroups({
+          signal: options.signal,
+          maxPages: shouldLoadInitialPageFirst ? 1 : undefined,
+        }),
+        loadThreadTitleCacheIfNeeded(),
+      ])
       const hiddenThreadIdSet = new Set(hiddenThreadIds.value)
       const visibleGroups = groups
         .map((group) => ({
@@ -5499,6 +5512,13 @@ export function useDesktopState() {
 
       if (!currentExists && options.preserveMissingSelected !== true) {
         setSelectedThreadId(flatThreads[0]?.id ?? '')
+      }
+      if (shouldLoadInitialPageFirst) {
+        scheduleCachedThreadListRefresh({
+          signal: options.signal,
+          preserveMissingSelected: true,
+          delayMs: THREAD_LIST_INITIAL_BACKGROUND_DELAY_MS,
+        })
       }
     } finally {
       isLoadingThreads.value = false
