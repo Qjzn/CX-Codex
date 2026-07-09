@@ -10393,12 +10393,14 @@ This file tracks manual regression and feature verification steps.
 6. Open a normal recent thread and confirm messages appear without a long blank loading state.
 7. Open a legacy malformed thread such as `019f27ae-0ecd-7c50-9701-8ec003e66447` and confirm recent user/assistant history is shown from the local session-log fallback when App Server heavy read fails.
 8. If a thread still has no recoverable messages, confirm the runtime status bar says `历史暂不可用` and offers `强制恢复` instead of silently showing an empty synced state.
+9. Rapidly switch between two threads on mobile, then return to the first thread and confirm the page does not stay in the foreground loading state while waiting for a stale snapshot request.
 
 #### Expected Results
 - `AppServerThreadListAugmenter` keeps supplemental thread reads best-effort with a small read count, per-read timeout, and total time budget.
 - Pinned threads are attempted before session-index-only supplemental threads.
 - Frontend `thread/list` pagination keeps already loaded pages when a later cursor is rejected.
 - Runtime snapshot reads fall back from failed heavy `thread/read` to cached messages or a bounded local session-log parse.
+- Foreground thread selection snapshot requests follow their `AbortSignal` and do not reuse stale in-flight requests from an earlier selection.
 - Mobile users see either recovered recent history or an explicit unavailable-history state, not a misleading empty conversation.
 
 #### Rollback/Cleanup Notes
@@ -10409,6 +10411,8 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-06 pre-fix evidence: full pagination hit App Server `invalid cursor: 05/15/2026 09:06:24`, proving list loading must preserve already loaded pages on cursor failure.
 - 2026-07-06 pre-fix evidence: `/codex-api/state/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` returned `messageState=unavailable` and zero turns while the local session jsonl existed at `C:\Users\SW\.codex\sessions\2026\07\03\rollout-2026-07-03T19-12-31-019f27ae-0ecd-7c50-9701-8ec003e66447.jsonl`.
 - 2026-07-06 server module verification: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; coverage includes supplemental-read timeout, session-log thread-read parsing, and runtime snapshot fallback from failed heavy `thread/read` to session-log messages.
+- 2026-07-09 source inspection: foreground `getThreadRuntimeSnapshot(...)` accepted an `AbortSignal`, but the underlying `/codex-api/state/thread/...` fetch did not pass it into `fetchWithTimeout`, and signal-bound callers could still await a stale shared in-flight snapshot.
+- 2026-07-09 frontend build: `npm.cmd run build:frontend` passed after making foreground snapshot requests signal-bound and non-shared; Vite still reports the existing large chunk warning.
 - 2026-07-06 root-cause measurement before deploying the fallback to the main RPC path: uncached `/codex-api/rpc thread/list` took `11714ms`, cached repeat took `102ms`, and malformed `thread/read(includeTurns:true)` for `019f27ae-0ecd-7c50-9701-8ec003e66447` returned `502`.
 - 2026-07-06 post-budget measurement after deploying the supplemental-read budget: uncached `/codex-api/rpc thread/list` dropped to `4491ms`, cached repeat took `47ms`, and service logs showed the remaining cold latency was App Server `thread/list` itself at `4273ms`.
 - 2026-07-06 post-fallback measurement after wiring session-log fallback into `/codex-api/rpc`: malformed `thread/read(includeTurns:true)` for `019f27ae-0ecd-7c50-9701-8ec003e66447` returned `10` turns in `1670ms` with warning `thread/read fell back to local session log messages` instead of `502`.

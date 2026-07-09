@@ -672,6 +672,12 @@ export async function getThreadRuntimeSnapshot(
     return cachedSnapshot
   }
 
+  if (options.signal) {
+    const snapshot = await fetchThreadRuntimeSnapshot(normalizedThreadId, options.signal)
+    throwIfSignalAborted(options.signal)
+    return snapshot
+  }
+
   const inFlightSnapshot = threadRuntimeSnapshotInFlightByThreadId.get(normalizedThreadId)
   if (inFlightSnapshot) {
     const snapshot = await inFlightSnapshot
@@ -692,8 +698,12 @@ export async function getThreadRuntimeSnapshot(
   }
 }
 
-async function fetchThreadRuntimeSnapshot(normalizedThreadId: string): Promise<ThreadRuntimeSnapshot> {
+async function fetchThreadRuntimeSnapshot(
+  normalizedThreadId: string,
+  signal?: AbortSignal,
+): Promise<ThreadRuntimeSnapshot> {
   const response = await fetchWithTimeout(`/codex-api/state/thread/${encodeURIComponent(normalizedThreadId)}`, {
+    signal,
   }, {
     timeoutMs: GATEWAY_BACKGROUND_FETCH_TIMEOUT_MS,
     label: `Thread state snapshot request for ${normalizedThreadId}`,
