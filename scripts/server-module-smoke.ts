@@ -26,6 +26,10 @@ import {
 } from '../src/server/appServerNotificationDiagnostics.js'
 import { AppServerNotificationListeners } from '../src/server/appServerNotificationListeners.js'
 import {
+  sendBoundedWebSocketJson,
+  subscribeBoundedWebSocketNotifications,
+} from '../src/server/notificationWebSocketBackpressure.js'
+import {
   captureAppServerNotificationState,
   shouldClearPlanModeTurnForNotification,
 } from '../src/server/appServerNotificationState.js'
@@ -437,6 +441,7 @@ try {
   await smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
   smokeAppServerNotificationListeners()
+  smokeNotificationWebSocketBackpressure()
   smokeAppServerNotificationState()
   await smokeAppServerHookDiagnostics()
   await smokeWindowsSandboxReadinessDiagnostics()
@@ -2166,6 +2171,43 @@ function smokeAppServerNotificationListeners(): void {
   listeners.emit({ method: 'ignored', params: null })
   assert.deepEqual(firstReceived, [started])
   unsubscribeAgain()
+  assert.equal(listeners.count, 0)
+}
+
+function smokeNotificationWebSocketBackpressure(): void {
+  type TestNotification = { seq: number; method: string }
+  const listeners = new AppServerNotificationListeners<TestNotification>()
+  const slow = createNotificationSocketTestDouble(64)
+  const fast = createNotificationSocketTestDouble()
+  const stopSlow = subscribeBoundedWebSocketNotifications(
+    slow.socket,
+    (listener) => listeners.subscribe(listener),
+    64,
+  )
+  const stopFast = subscribeBoundedWebSocketNotifications(
+    fast.socket,
+    (listener) => listeners.subscribe(listener),
+    1024,
+  )
+
+  const first = { seq: 101, method: 'turn/started' }
+  listeners.emit(first)
+  assert.equal(slow.terminated, 1)
+  assert.deepEqual(slow.sent, [])
+  assert.deepEqual(fast.sent.map((value) => JSON.parse(value)), [first])
+  assert.equal(listeners.count, 1)
+
+  const second = { seq: 102, method: 'turn/completed' }
+  listeners.emit(second)
+  assert.deepEqual(fast.sent.map((value) => JSON.parse(value)), [first, second])
+  assert.equal(slow.terminated, 1)
+
+  const failedSend = createNotificationSocketTestDouble(0, new Error('send failed'))
+  assert.equal(sendBoundedWebSocketJson(failedSend.socket, first), true)
+  assert.equal(failedSend.terminated, 1)
+
+  stopSlow()
+  stopFast()
   assert.equal(listeners.count, 0)
 }
 
@@ -10262,6 +10304,115 @@ function smokeNotificationSseRoute(): void {
   assert.equal(clearedTimers.length, 1)
   assert.deepEqual(unsubscribed, ['yes'])
 
+  const drainingRequest = Object.assign(new EventEmitter(), { method: 'GET' })
+  const drainingResponse = createSseRouteTestResponse({ backpressureAtWrite: 2 })
+  const drainingTimers: Array<() => void> = []
+  const drainingClearedTimers: unknown[] = []
+  const drainingUnsubscribed: string[] = []
+  const drainingListeners: Array<(value: BridgeNotificationEvent) => void> = []
+  assert.equal(handleNotificationSseRoute(
+    drainingRequest as never,
+    drainingResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/events'),
+    {
+      latestSeq: 100,
+      heartbeatIntervalMs: 10,
+      setInterval: ((callback: () => void) => {
+        drainingTimers.push(callback)
+        return { timerId: drainingTimers.length } as never
+      }) as never,
+      clearInterval: ((timer: unknown) => {
+        drainingClearedTimers.push(timer)
+      }) as never,
+      subscribeNotifications: (listener) => {
+        drainingListeners.push(listener)
+        return () => { drainingUnsubscribed.push('yes') }
+      },
+    },
+  ), true)
+  const drainingListener = drainingListeners[0]
+  assert.equal(typeof drainingListener, 'function')
+  drainingListener?.({ seq: 101, method: 'turn/started', params: {}, atIso: '2026-01-01T00:00:01.000Z' })
+  assert.equal(drainingResponse.chunks.length, 2)
+  drainingTimers[0]?.()
+  assert.equal(drainingResponse.chunks.length, 2)
+  drainingListener?.({ seq: 102, method: 'turn/completed', params: {}, atIso: '2026-01-01T00:00:02.000Z' })
+  drainingListener?.({ seq: 103, method: 'thread/name/updated', params: {}, atIso: '2026-01-01T00:00:03.000Z' })
+  assert.equal(drainingResponse.chunks.length, 2)
+  drainingResponse.response.emit('drain')
+  assert.deepEqual(
+    drainingResponse.chunks.slice(1).map((chunk) => JSON.parse(chunk.slice(6).trim()).seq),
+    [101, 102, 103],
+  )
+  drainingRequest.emit('close')
+  assert.equal(drainingResponse.ended, true)
+  assert.equal(drainingClearedTimers.length, 1)
+  assert.deepEqual(drainingUnsubscribed, ['yes'])
+
+  const overflowRequest = Object.assign(new EventEmitter(), { method: 'GET' })
+  const overflowResponse = createSseRouteTestResponse({ backpressureAtWrite: 2 })
+  const overflowTimers: Array<() => void> = []
+  const overflowClearedTimers: unknown[] = []
+  const overflowUnsubscribed: string[] = []
+  const overflowListeners: Array<(value: BridgeNotificationEvent) => void> = []
+  assert.equal(handleNotificationSseRoute(
+    overflowRequest as never,
+    overflowResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/events'),
+    {
+      latestSeq: 200,
+      maxBufferedEvents: 1,
+      setInterval: ((callback: () => void) => {
+        overflowTimers.push(callback)
+        return { timerId: overflowTimers.length } as never
+      }) as never,
+      clearInterval: ((timer: unknown) => {
+        overflowClearedTimers.push(timer)
+      }) as never,
+      subscribeNotifications: (listener) => {
+        overflowListeners.push(listener)
+        return () => { overflowUnsubscribed.push('yes') }
+      },
+    },
+  ), true)
+  const overflowListener = overflowListeners[0]
+  assert.equal(typeof overflowListener, 'function')
+  overflowListener?.({ seq: 201, method: 'turn/started', params: {}, atIso: '2026-01-01T00:00:01.000Z' })
+  overflowListener?.({ seq: 202, method: 'item/started', params: {}, atIso: '2026-01-01T00:00:02.000Z' })
+  overflowListener?.({ seq: 203, method: 'item/completed', params: {}, atIso: '2026-01-01T00:00:03.000Z' })
+  assert.equal(overflowResponse.destroyed, true)
+  assert.equal(overflowClearedTimers.length, 1)
+  assert.deepEqual(overflowUnsubscribed, ['yes'])
+  const overflowChunkCount = overflowResponse.chunks.length
+  overflowListener?.({ seq: 204, method: 'turn/completed', params: {}, atIso: '2026-01-01T00:00:04.000Z' })
+  assert.equal(overflowResponse.chunks.length, overflowChunkCount)
+
+  const synchronousRequest = Object.assign(new EventEmitter(), { method: 'GET' })
+  const synchronousResponse = createSseRouteTestResponse()
+  let synchronousUnsubscribeCount = 0
+  assert.equal(handleNotificationSseRoute(
+    synchronousRequest as never,
+    synchronousResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/events'),
+    {
+      latestSeq: 300,
+      maxEventBytes: 64,
+      setInterval: (() => { throw new Error('closed SSE must not start a heartbeat') }) as never,
+      subscribeNotifications: (listener) => {
+        listener({
+          seq: 301,
+          method: 'turn/diff/updated',
+          params: { diff: 'x'.repeat(100) },
+          atIso: '2026-01-01T00:00:05.000Z',
+        })
+        return () => { synchronousUnsubscribeCount += 1 }
+      },
+    },
+  ), true)
+  assert.equal(synchronousResponse.destroyed, true)
+  assert.equal(synchronousResponse.chunks.length, 0)
+  assert.equal(synchronousUnsubscribeCount, 1)
+
   assert.equal(handleNotificationSseRoute(
     Object.assign(new EventEmitter(), { method: 'POST' }) as never,
     createSseRouteTestResponse().response as never,
@@ -10420,27 +10571,32 @@ function createTranscriptionRouteTestResponse() {
   return createRouteTestResponse()
 }
 
-function createSseRouteTestResponse() {
+function createSseRouteTestResponse(options: { backpressureAtWrite?: number } = {}) {
   const headers = new Map<string, string | number | readonly string[]>()
   const chunks: string[] = []
   let ended = false
-  const response = {
+  let destroyed = false
+  let writeCount = 0
+  const response = Object.assign(new EventEmitter(), {
     statusCode: 0,
-    destroyed: false,
-    get writableEnded() {
-      return ended
-    },
     setHeader(name: string, value: string | number | readonly string[]) {
       headers.set(name, value)
     },
     write(value: string | Buffer) {
       chunks.push(Buffer.isBuffer(value) ? value.toString('utf8') : value)
-      return true
+      writeCount += 1
+      return writeCount !== options.backpressureAtWrite
     },
     end() {
       ended = true
     },
-  }
+    destroy() {
+      destroyed = true
+      response.emit('close')
+    },
+  })
+  Object.defineProperty(response, 'writableEnded', { get: () => ended })
+  Object.defineProperty(response, 'destroyed', { get: () => destroyed })
 
   return {
     response,
@@ -10448,6 +10604,32 @@ function createSseRouteTestResponse() {
     chunks,
     get ended() {
       return ended
+    },
+    get destroyed() {
+      return destroyed
+    },
+  }
+}
+
+function createNotificationSocketTestDouble(bufferedAmount = 0, sendError: Error | null = null) {
+  const sent: string[] = []
+  let terminated = 0
+  const socket = {
+    readyState: 1,
+    bufferedAmount,
+    send(value: string, callback?: (error?: Error) => void) {
+      sent.push(value)
+      callback?.(sendError ?? undefined)
+    },
+    terminate() {
+      terminated += 1
+    },
+  }
+  return {
+    socket,
+    sent,
+    get terminated() {
+      return terminated
     },
   }
 }

@@ -19,6 +19,40 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Bounded notification transport backpressure
+
+#### Prerequisites
+- Node.js `22.13.0+` and repository dependencies are installed.
+- Notification replay recovery is enabled so a disconnected slow client can catch up from its persisted sequence cursor.
+
+#### Steps
+1. Run `npm.cmd run verify:server-modules`.
+2. Confirm the WebSocket smoke attaches one slow and one fast fake client, then emits two ordered notifications.
+3. Confirm the slow socket exceeds its injected byte limit, is terminated and unsubscribed immediately, while the fast socket receives both notifications.
+4. Confirm an asynchronous WebSocket send error terminates the affected socket.
+5. Confirm the SSE smoke makes the second write return `false`, queues later notifications, drops heartbeats while draining, emits `drain`, and flushes queued notifications in sequence order.
+6. Confirm a second SSE client exceeds an injected one-event queue limit, is destroyed, clears its heartbeat timer, unsubscribes once, and ignores later notifications.
+7. Run `npm.cmd run build:cli`, restart local 7420, and run the existing frontend/sidebar regression gates.
+
+#### Expected Results
+- WebSocket output has a hard 1 MiB per-client buffered-byte ceiling; one slow client cannot block or retain the fast client's subscription.
+- WebSocket inbound payloads are capped at 16 KiB for the read-only notification channel.
+- SSE honors Node stream backpressure, preserves notification order across `drain`, and does not consume queue space with keepalive heartbeats.
+- SSE retains at most 256 notifications / 512 KiB after the accepted backpressured write; overflow destroys only that response so reconnect plus replay can recover it.
+- Request close, response close/error, overflow, and repeated cleanup paths clear timers and subscriptions idempotently.
+
+#### Rollback/Cleanup Notes
+- The smoke uses in-memory fake sockets/responses and creates no persistent data.
+- To roll back, revert `src/server/notificationWebSocketBackpressure.ts`, the integration in `src/server/httpServer.ts`, `src/server/notificationSseRoute.ts`, the server smoke cases, changelog entry, and this test section together.
+
+#### Regression Evidence
+- `npm.cmd run verify:server-modules` passed bounded WS delivery, async send failure, SSE backpressure/drain ordering, heartbeat dropping, queue overflow cleanup, and synchronous oversize-event cleanup cases.
+- `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` passed build, frontend/server smoke, CLI/CJS launcher, release archive/checksum, and npm package gates.
+- Local 7420 restarted from the rebuilt CLI as PID `32668`; `/health` and `/codex-api/health` returned `ok`, and the current error log remained `0` bytes.
+- A live Node transport probe received WebSocket `ready`, SSE `ready`, and the next SSE `bridge/heartbeat` after roughly 15 seconds.
+- `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420` passed with `180` active threads, `7/7` readable pinned samples, `activeFirstPageMs=183`, `activeFullListMs=216`, and `rpcRetryCount=0`.
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed desktop `1440x900`, foldable `884x1104`, and phone `393x852` checks without screenshots.
+
 ### Feature: Ordered paginated notification replay recovery
 
 #### Prerequisites
