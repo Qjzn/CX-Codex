@@ -9,6 +9,8 @@
 - 安全：
   - 本机免登录判断不再信任可由客户端伪造的 `Host` 请求头。只有 TCP 来源地址和请求 Host 同时为 `localhost`、`127.0.0.1` 或 `::1` 时才允许本机直连；远端请求即使伪造 `Host: localhost` 也必须完成密码登录。
 - 稳定性与轻量化：
+  - 通知 replay 改为固定首页 high-water 后按页末 `seq` 逐页追赶，不再只取 200 条就把游标跳到全局最新序号；replay 期间的实时通知会暂存、排序并去重，避免高序号 live 事件先到导致中间页永久跳过。
+  - 首次启动、服务端序号重置或 `oldestSeq` 已超过本地游标时，先通过会话列表、pending request 和当前会话 snapshot 建立权威基线；历史 replay 只更新轻量运行态与刷新需求，不再重触发队列发送、worktree 自动提交或 Android 通知，页面退出时也会取消尚未完成的 snapshot，避免晚到结果回写已卸载界面。
   - `app/list/updated` 通知在实时推送和持久 replay 中只保留“应用列表已失效”信号，不再重复保存和传输完整 App 目录；旧 runtime 库会在打开时轻量清理已有大 payload。
   - runtime health 新增数据库占用、空闲页比例和 auto-vacuum 状态；新库启用 incremental vacuum，旧库可在停服后运行 `cx-codex runtime-compact` 显式压缩，避免把 full `VACUUM` 放进启动热路径。
 - 界面体验：

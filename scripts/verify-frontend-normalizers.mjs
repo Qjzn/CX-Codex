@@ -12,11 +12,13 @@ const outputRoot = mkdtempSync(join(outputBase, 'run-'))
 const entryPath = join(outputRoot, 'entry.ts')
 const bundledPath = join(outputRoot, 'entry.mjs')
 const normalizerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'normalizers', 'v2.ts')))
+const notificationReplayImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'notificationReplayCoordinator.ts')))
 
 try {
   writeFileSync(entryPath, `
 import assert from 'node:assert/strict'
 import { normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from '${normalizerImport}'
+import { createNotificationReplayCoordinator } from '${notificationReplayImport}'
 
 const messages = normalizeThreadMessagesV2({
   thread: {
@@ -220,6 +222,202 @@ assert.deepEqual(groups[0]?.threads.map((thread) => thread.id), ['thread-cli', '
 assert.equal(groups[0]?.threads[0]?.sourceKind, 'cli')
 assert.equal(groups[0]?.threads[1]?.sourceKind, 'subAgent.thread_spawn')
 assert.equal(groups[0]?.threads[2]?.sourceKind, 'futureSource')
+
+const makeReplayNotification = (seq: number) => ({
+  method: 'turn/completed',
+  params: { threadId: 'thread-replay', turnId: 'turn-' + seq },
+  atIso: '2026-01-01T00:00:00.000Z',
+  seq,
+})
+
+const replayRows = Array.from({ length: 450 }, (_, index) => makeReplayNotification(index + 11))
+const replayPageCalls: number[] = []
+const replayApplied: Array<{ seq: number | undefined; source: string }> = []
+const replayPersisted: number[] = []
+let replaySnapshotCount = 0
+const replayCoordinator = createNotificationReplayCoordinator({
+  initialCursor: 10,
+  fetchPage: async (afterSeq, limit) => {
+    replayPageCalls.push(afterSeq)
+    return {
+      notifications: replayRows.filter((row) => row.seq > afterSeq).slice(0, limit),
+      latestSeq: 460,
+      oldestSeq: 11,
+    }
+  },
+  applyNotification: (notification, source) => {
+    replayApplied.push({ seq: notification.seq, source })
+  },
+  recoverSnapshot: async () => { replaySnapshotCount += 1 },
+  persistCursor: (cursor) => { replayPersisted.push(cursor) },
+})
+const replayResult = await replayCoordinator.recover()
+assert.deepEqual(replayPageCalls, [10, 210, 410])
+assert.deepEqual(replayApplied.map((row) => row.seq), replayRows.map((row) => row.seq))
+assert.equal(replayApplied.every((row) => row.source === 'replay'), true)
+assert.deepEqual(replayPersisted, [210, 410, 460])
+assert.equal(replaySnapshotCount, 0)
+assert.deepEqual(replayResult, {
+  completed: true,
+  cursor: 460,
+  replayedCount: 450,
+  snapshotRecovered: false,
+})
+
+const gapApplied: number[] = []
+const gapPersisted: number[] = []
+let gapSnapshotCount = 0
+const gapCoordinator = createNotificationReplayCoordinator({
+  initialCursor: 100,
+  fetchPage: async () => ({
+    notifications: Array.from({ length: 200 }, (_, index) => makeReplayNotification(index + 251)),
+    latestSeq: 450,
+    oldestSeq: 251,
+  }),
+  applyNotification: (notification) => { gapApplied.push(notification.seq ?? 0) },
+  recoverSnapshot: async () => { gapSnapshotCount += 1 },
+  persistCursor: (cursor) => { gapPersisted.push(cursor) },
+})
+const gapResult = await gapCoordinator.recover()
+assert.deepEqual(gapApplied, [])
+assert.deepEqual(gapPersisted, [450])
+assert.equal(gapSnapshotCount, 1)
+assert.equal(gapResult.snapshotRecovered, true)
+assert.equal(gapResult.cursor, 450)
+
+const bootstrapApplied: number[] = []
+let bootstrapSnapshotCount = 0
+const bootstrapCoordinator = createNotificationReplayCoordinator({
+  initialCursor: 0,
+  fetchPage: async () => ({
+    notifications: [makeReplayNotification(1), makeReplayNotification(2), makeReplayNotification(3)],
+    latestSeq: 3,
+    oldestSeq: 1,
+  }),
+  applyNotification: (notification) => { bootstrapApplied.push(notification.seq ?? 0) },
+  recoverSnapshot: async () => { bootstrapSnapshotCount += 1 },
+  persistCursor: () => {},
+})
+const bootstrapResult = await bootstrapCoordinator.recover()
+assert.deepEqual(bootstrapApplied, [])
+assert.equal(bootstrapSnapshotCount, 1)
+assert.equal(bootstrapResult.cursor, 3)
+assert.equal(bootstrapResult.snapshotRecovered, true)
+
+const resetPersisted: number[] = []
+let resetSnapshotCount = 0
+const resetCoordinator = createNotificationReplayCoordinator({
+  initialCursor: 500,
+  fetchPage: async () => ({ notifications: [], latestSeq: 20, oldestSeq: 1 }),
+  applyNotification: () => { throw new Error('reset replay must not apply historical notifications') },
+  recoverSnapshot: async () => { resetSnapshotCount += 1 },
+  persistCursor: (cursor) => { resetPersisted.push(cursor) },
+})
+const resetResult = await resetCoordinator.recover()
+assert.equal(resetSnapshotCount, 1)
+assert.deepEqual(resetPersisted, [20])
+assert.equal(resetResult.cursor, 20)
+
+let releaseResetRacePage: ((page: { notifications: ReturnType<typeof makeReplayNotification>[]; latestSeq: number; oldestSeq: number }) => void) | null = null
+const resetRaceApplied: Array<{ seq: number | undefined; source: string }> = []
+const resetRacePersisted: number[] = []
+const resetRaceCoordinator = createNotificationReplayCoordinator({
+  initialCursor: 500,
+  fetchPage: async () => await new Promise((resolve) => { releaseResetRacePage = resolve }),
+  applyNotification: (notification, source) => { resetRaceApplied.push({ seq: notification.seq, source }) },
+  recoverSnapshot: async () => {},
+  persistCursor: (cursor) => { resetRacePersisted.push(cursor) },
+})
+const resetRaceRecovery = resetRaceCoordinator.recover()
+resetRaceCoordinator.receiveLive(makeReplayNotification(21))
+releaseResetRacePage?.({ notifications: [], latestSeq: 20, oldestSeq: 1 })
+const resetRaceResult = await resetRaceRecovery
+assert.deepEqual(resetRaceApplied, [{ seq: 21, source: 'live' }])
+assert.deepEqual(resetRacePersisted, [20, 21])
+assert.equal(resetRaceResult.cursor, 21)
+
+const raceRows = Array.from({ length: 451 }, (_, index) => makeReplayNotification(index + 11))
+const racePageCalls: number[] = []
+const raceApplied: Array<{ seq: number | undefined; source: string }> = []
+const racePersisted: number[] = []
+let releaseRaceFirstPage: ((page: { notifications: typeof raceRows; latestSeq: number; oldestSeq: number }) => void) | null = null
+let isRaceFirstPage = true
+const raceCoordinator = createNotificationReplayCoordinator({
+  initialCursor: 10,
+  fetchPage: async (afterSeq, limit) => {
+    racePageCalls.push(afterSeq)
+    if (isRaceFirstPage) {
+      isRaceFirstPage = false
+      return await new Promise((resolve) => { releaseRaceFirstPage = resolve })
+    }
+    return {
+      notifications: raceRows.filter((row) => row.seq > afterSeq).slice(0, limit),
+      latestSeq: 461,
+      oldestSeq: 11,
+    }
+  },
+  applyNotification: (notification, source) => {
+    raceApplied.push({ seq: notification.seq, source })
+  },
+  recoverSnapshot: async () => { throw new Error('race replay must not require snapshot recovery') },
+  persistCursor: (cursor) => { racePersisted.push(cursor) },
+})
+const raceRecovery = raceCoordinator.recover()
+raceCoordinator.receiveLive(makeReplayNotification(461))
+releaseRaceFirstPage?.({
+  notifications: raceRows.slice(0, 200),
+  latestSeq: 460,
+  oldestSeq: 11,
+})
+const raceResult = await raceRecovery
+assert.deepEqual(racePageCalls, [10, 210, 410])
+assert.deepEqual(raceApplied.map((row) => row.seq), raceRows.map((row) => row.seq))
+assert.equal(raceApplied.slice(0, 450).every((row) => row.source === 'replay'), true)
+assert.deepEqual(raceApplied.at(-1), { seq: 461, source: 'live' })
+assert.deepEqual(racePersisted, [210, 410, 460, 461])
+assert.equal(raceResult.cursor, 461)
+assert.equal(raceResult.replayedCount, 450)
+
+let releaseStoppedPage: ((page: { notifications: ReturnType<typeof makeReplayNotification>[]; latestSeq: number; oldestSeq: number }) => void) | null = null
+const stoppedApplied: number[] = []
+const stoppedPersisted: number[] = []
+const stoppedCoordinator = createNotificationReplayCoordinator({
+  initialCursor: 10,
+  fetchPage: async () => await new Promise((resolve) => { releaseStoppedPage = resolve }),
+  applyNotification: (notification) => { stoppedApplied.push(notification.seq ?? 0) },
+  recoverSnapshot: async () => {},
+  persistCursor: (cursor) => { stoppedPersisted.push(cursor) },
+})
+const stoppedRecovery = stoppedCoordinator.recover()
+stoppedCoordinator.stop()
+releaseStoppedPage?.({ notifications: [makeReplayNotification(11)], latestSeq: 11, oldestSeq: 11 })
+const stoppedResult = await stoppedRecovery
+assert.equal(stoppedResult.completed, false)
+assert.deepEqual(stoppedApplied, [])
+assert.deepEqual(stoppedPersisted, [])
+
+let snapshotSignal: AbortSignal | null = null
+let releaseStoppedSnapshot: (() => void) | null = null
+const stoppedSnapshotPersisted: number[] = []
+const stoppedSnapshotCoordinator = createNotificationReplayCoordinator({
+  initialCursor: 0,
+  fetchPage: async () => ({ notifications: [], latestSeq: 20, oldestSeq: 1 }),
+  applyNotification: () => { throw new Error('stopped snapshot must not apply notifications') },
+  recoverSnapshot: async (signal) => {
+    snapshotSignal = signal
+    await new Promise<void>((resolve) => { releaseStoppedSnapshot = resolve })
+    if (signal.aborted) throw new DOMException('Snapshot recovery aborted', 'AbortError')
+  },
+  persistCursor: (cursor) => { stoppedSnapshotPersisted.push(cursor) },
+})
+const stoppedSnapshotRecovery = stoppedSnapshotCoordinator.recover()
+await Promise.resolve()
+stoppedSnapshotCoordinator.stop()
+assert.equal(snapshotSignal?.aborted, true)
+releaseStoppedSnapshot?.()
+const stoppedSnapshotResult = await stoppedSnapshotRecovery
+assert.equal(stoppedSnapshotResult.completed, false)
+assert.deepEqual(stoppedSnapshotPersisted, [])
 
 console.log('frontend normalizer smoke ok')
 `, 'utf8')

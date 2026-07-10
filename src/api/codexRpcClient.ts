@@ -609,10 +609,10 @@ export async function respondServerRequest(body: ServerRequestReplyBody): Promis
   }
 }
 
-export async function fetchPendingServerRequests(): Promise<unknown[]> {
+export async function fetchPendingServerRequests(options: { signal?: AbortSignal } = {}): Promise<unknown[]> {
   const response = await fetchWithTimeout(
     '/codex-api/server-requests/pending',
-    {},
+    { signal: options.signal },
     SERVER_REQUEST_FETCH_TIMEOUT_MS,
     'Pending server requests',
   )

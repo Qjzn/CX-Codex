@@ -957,8 +957,8 @@ export async function replyToServerRequest(
   })
 }
 
-export async function getPendingServerRequests(): Promise<unknown[]> {
-  return fetchPendingServerRequests()
+export async function getPendingServerRequests(options: RpcCallOptions = {}): Promise<unknown[]> {
+  return fetchPendingServerRequests(options)
 }
 
 export async function resumeThread(threadId: string, options: RpcCallOptions = {}): Promise<void> {

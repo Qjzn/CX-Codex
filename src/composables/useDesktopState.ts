@@ -77,6 +77,10 @@ import {
   type MobileShellHapticStyle,
   type MobileShellNotificationType,
 } from '../mobile/mobileShell'
+import {
+  createNotificationReplayCoordinator,
+  type NotificationReplaySource,
+} from './notificationReplayCoordinator'
 
 function flattenThreads(groups: UiProjectGroup[]): UiThread[] {
   return groups.flatMap((group) => group.threads)
@@ -1665,7 +1669,6 @@ export function useDesktopState() {
   const resumePromiseByThreadId = new Map<string, Promise<void>>()
   let hasRateLimitTrackingEnabled = false
   let lastNotificationAtMs = Date.now()
-  let lastNotificationSeq = loadLastNotificationSeq()
   let lastThreadListSyncAtMs = 0
   let activeSyncBoostUntilMs = 0
   let pendingThreadsRefresh = false
@@ -1680,7 +1683,6 @@ export function useDesktopState() {
   let androidAppPaused = false
   let lastAndroidNotificationKey = ''
   let lastAndroidNotificationAtMs = 0
-  let replayNotificationsPromise: Promise<void> | null = null
   const pendingTurnStartsById = new Map<string, TurnStartedInfo>()
   const settledRuntimeMessageRefreshKeyByThreadId = new Map<string, string>()
   const settledRuntimeRpcRefreshKeyByThreadId = new Map<string, string>()
@@ -1694,6 +1696,21 @@ export function useDesktopState() {
   const bufferedAgentDeltaByKey = new Map<string, BufferedAgentDelta>()
   const bufferedCommandDeltaByKey = new Map<string, BufferedCommandDelta>()
   const bufferedReasoningDeltaByThreadId = new Map<string, string>()
+  const notificationReplayCoordinator = createNotificationReplayCoordinator({
+    initialCursor: loadLastNotificationSeq(),
+    fetchPage: getNotificationReplay,
+    applyNotification: applyIncomingNotification,
+    recoverSnapshot: recoverNotificationSnapshot,
+    persistCursor: saveLastNotificationSeq,
+    onRecoveryError: () => {
+      pendingThreadsRefresh = true
+      const activeThreadId = selectedThreadId.value
+      if (activeThreadId) {
+        pendingThreadMessageRefresh.add(activeThreadId)
+      }
+      scheduleEventSync(0)
+    },
+  })
 
   function mergeWorkspaceRootGroups(threadGroups: UiProjectGroup[]): UiProjectGroup[] {
     if (workspaceRootGroups.value.length === 0) return threadGroups
@@ -4612,17 +4629,22 @@ export function useDesktopState() {
     }
   }
 
-  function handleServerRequestNotification(notification: RpcNotification): boolean {
+  function handleServerRequestNotification(
+    notification: RpcNotification,
+    options: { notifyAndroid?: boolean } = {},
+  ): boolean {
     if (notification.method === 'server/request') {
       const request = normalizeServerRequest(notification.params)
       if (!request) return true
       upsertPendingServerRequest(request)
-      showAndroidTaskNotification(
-        'request',
-        '需要确认',
-        `${getThreadDisplayTitle(request.threadId)} 等待你的处理`,
-        request.threadId,
-      )
+      if (options.notifyAndroid !== false) {
+        showAndroidTaskNotification(
+          'request',
+          '需要确认',
+          `${getThreadDisplayTitle(request.threadId)} 等待你的处理`,
+          request.threadId,
+        )
+      }
       return true
     }
 
@@ -5278,7 +5300,10 @@ export function useDesktopState() {
 
   }
 
-  function queueEventDrivenSync(notification: RpcNotification): void {
+  function queueEventDrivenSync(
+    notification: RpcNotification,
+    options: { deferSchedule?: boolean } = {},
+  ): void {
     const threadId = extractThreadIdFromNotification(notification)
     const method = notification.method
     const urgentRefresh = shouldUrgentlyRefreshFromNotification(method)
@@ -5305,18 +5330,26 @@ export function useDesktopState() {
     }
 
     if (!shouldRefreshMessages && !shouldRefreshThreads) return
+    if (options.deferSchedule === true) return
     if (urgentRefresh && isPolling.value) {
       abortCurrentSync()
     }
     scheduleEventSync(urgentRefresh ? 0 : EVENT_SYNC_DEBOUNCE_MS)
   }
 
-  async function hydrateWorkspaceRootsStateIfNeeded(groups: UiProjectGroup[]): Promise<void> {
+  async function hydrateWorkspaceRootsStateIfNeeded(
+    groups: UiProjectGroup[],
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (hasHydratedWorkspaceRootsState) return
     hasHydratedWorkspaceRootsState = true
 
     try {
       const rootsState = await getWorkspaceRootsState()
+      if (signal?.aborted) {
+        hasHydratedWorkspaceRootsState = false
+        return
+      }
       workspaceRootGroups.value = createWorkspaceRootGroups(rootsState)
       const groupsWithWorkspaceRoots = mergeWorkspaceRootGroups(groups)
       const hydratedOrder: string[] = []
@@ -5353,10 +5386,11 @@ export function useDesktopState() {
     }
   }
 
-  async function loadThreadTitleCacheIfNeeded(): Promise<void> {
+  async function loadThreadTitleCacheIfNeeded(signal?: AbortSignal): Promise<void> {
     if (Object.keys(threadTitleById.value).length > 0) return
     try {
       const cache = await getThreadTitleCache()
+      if (signal?.aborted) return
       if (Object.keys(cache.titles).length > 0) {
         threadTitleById.value = cache.titles
       }
@@ -5462,6 +5496,7 @@ export function useDesktopState() {
       backgroundIfCached?: boolean
     } = {},
   ) {
+    if (options.signal?.aborted) return
     const hydratedFromCache = options.useCachedFirst !== false
       ? hydrateCachedThreads({ preserveMissingSelected: options.preserveMissingSelected })
       : false
@@ -5485,8 +5520,9 @@ export function useDesktopState() {
           signal: options.signal,
           maxPages: shouldLoadInitialPageFirst ? 1 : undefined,
         }),
-        loadThreadTitleCacheIfNeeded(),
+        loadThreadTitleCacheIfNeeded(options.signal),
       ])
+      if (options.signal?.aborted) return
       const hiddenThreadIdSet = new Set(hiddenThreadIds.value)
       const visibleGroups = groups
         .map((group) => ({
@@ -5494,7 +5530,8 @@ export function useDesktopState() {
           threads: group.threads.filter((thread) => !hiddenThreadIdSet.has(thread.id)),
         }))
         .filter((group) => group.threads.length > 0)
-      await hydrateWorkspaceRootsStateIfNeeded(visibleGroups)
+      await hydrateWorkspaceRootsStateIfNeeded(visibleGroups, options.signal)
+      if (options.signal?.aborted) return
       const groupsWithWorkspaceRoots = mergeWorkspaceRootGroups(visibleGroups)
 
       const nextProjectOrder = mergeProjectOrder(projectOrder.value, groupsWithWorkspaceRoots)
@@ -5640,7 +5677,8 @@ export function useDesktopState() {
         executionState: detail.inProgress ? 'running' : snapshot.executionState,
         messageState: 'fresh',
       }
-    } catch {
+    } catch (error) {
+      if (isAbortLikeError(error)) throw error
       return snapshot
     }
   }
@@ -5669,7 +5707,7 @@ export function useDesktopState() {
       olderHistory?: { beforeTurnIndex: number; limit?: number }
     } = {},
   ) {
-    if (!threadId) {
+    if (!threadId || options.signal?.aborted) {
       return
     }
 
@@ -5710,6 +5748,7 @@ export function useDesktopState() {
           isLoadingMessages.value = false
         }
       }
+      if (options.signal?.aborted) return
       if (options.forceSettledRpcRefresh !== true) {
         return
       }
@@ -5726,6 +5765,7 @@ export function useDesktopState() {
         await ensureThreadResumed(threadId, { signal: options.signal })
         snapshot = await getThreadRuntimeSnapshot(threadId, { signal: options.signal })
       }
+      if (options.signal?.aborted) return
       const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
       const settledRefreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
       markFreshSettledSnapshotMessagesSynced(threadId, snapshot, previousPersisted)
@@ -5744,6 +5784,7 @@ export function useDesktopState() {
           olderHistory: options.olderHistory,
         })
       }
+      if (options.signal?.aborted) return
 
       applyRuntimeSnapshotState(threadId, snapshot)
       const nextMessages = snapshot.messages
@@ -7530,9 +7571,10 @@ export function useDesktopState() {
     openNotificationStream()
   }
 
-  async function loadPendingServerRequestsFromBridge(): Promise<void> {
+  async function loadPendingServerRequestsFromBridge(signal?: AbortSignal): Promise<void> {
     try {
-      const rows = await getPendingServerRequests()
+      const rows = await getPendingServerRequests({ signal })
+      if (signal?.aborted) return
       const nextPending: Record<string, UiServerRequest[]> = {}
       for (const row of rows) {
         const request = normalizeServerRequest(row)
@@ -7545,65 +7587,79 @@ export function useDesktopState() {
       pendingServerRequestsByThreadId.value = nextPending
       applyThreadFlags()
     } catch {
+      if (signal?.aborted) return
       // The backend auto-resolves unsupported tool calls; stale local copies should not keep
       // the conversation in an artificial waiting state if pending request sync misses once.
       pruneAutoResolvedPendingServerRequests()
     }
   }
 
-  function noteIncomingNotification(notification: RpcNotification): void {
+  function noteIncomingNotificationActivity(): void {
     lastNotificationAtMs = Date.now()
     notificationHealthTick.value = lastNotificationAtMs
-    if (typeof notification.seq === 'number' && Number.isFinite(notification.seq)) {
-      const nextSeq = Math.max(lastNotificationSeq, Math.trunc(notification.seq))
-      if (nextSeq !== lastNotificationSeq) {
-        lastNotificationSeq = nextSeq
-        saveLastNotificationSeq(lastNotificationSeq)
-      }
-    }
   }
 
-  function processIncomingNotification(notification: RpcNotification): void {
-    noteIncomingNotification(notification)
+  function applyIncomingNotification(
+    notification: RpcNotification,
+    source: NotificationReplaySource,
+  ): void {
     if (notification.method === SKILLS_CHANGED_METHOD) {
       scheduleSkillsRefreshFromNotification()
+    }
+    if (source === 'replay') {
+      applyRuntimeNotificationState(notification)
+      handleServerRequestNotification(notification, { notifyAndroid: false })
+      if (notification.method === 'account/rateLimits/updated') {
+        scheduleRateLimitRefresh()
+      }
+      if (COMPOSER_PLUGIN_INVALIDATING_NOTIFICATION_METHODS.has(notification.method)) {
+        scheduleComposerPluginsRefreshFromNotification()
+      }
+      queueEventDrivenSync(notification, { deferSchedule: true })
+      return
     }
     applyRealtimeUpdates(notification)
     queueEventDrivenSync(notification)
   }
 
-  async function replayMissedNotifications(): Promise<void> {
-    if (replayNotificationsPromise) return replayNotificationsPromise
+  function processIncomingNotification(notification: RpcNotification): void {
+    noteIncomingNotificationActivity()
+    notificationReplayCoordinator.receiveLive(notification)
+  }
 
-    const replayAfterSeq = Math.max(0, lastNotificationSeq)
-    replayNotificationsPromise = getNotificationReplay(replayAfterSeq, 200)
-      .then((result) => {
-        if (replayAfterSeq > 0 && result.latestSeq < replayAfterSeq) {
-          lastNotificationSeq = 0
-          saveLastNotificationSeq(0)
-          return getNotificationReplay(0, 200).then((resetResult) => {
-            for (const notification of resetResult.notifications) {
-              if (typeof notification.seq === 'number' && notification.seq <= lastNotificationSeq) continue
-              processIncomingNotification(notification)
-            }
-            lastNotificationSeq = Math.max(lastNotificationSeq, resetResult.latestSeq)
-            saveLastNotificationSeq(lastNotificationSeq)
-          })
-        }
-        for (const notification of result.notifications) {
-          if (typeof notification.seq === 'number' && notification.seq <= lastNotificationSeq) continue
-          processIncomingNotification(notification)
-        }
-        lastNotificationSeq = Math.max(lastNotificationSeq, result.latestSeq)
-        saveLastNotificationSeq(lastNotificationSeq)
+  async function recoverNotificationSnapshot(signal: AbortSignal): Promise<void> {
+    abortCurrentSync()
+    clearBufferedLiveDeltas()
+    if (signal.aborted) return
+
+    const initialThreadId = selectedThreadId.value
+    await loadThreads({
+      signal,
+      preserveMissingSelected: Boolean(initialThreadId),
+      useCachedFirst: false,
+    })
+    if (signal.aborted) return
+    await loadPendingServerRequestsFromBridge(signal)
+    if (signal.aborted) return
+
+    const activeThreadId = selectedThreadId.value
+    if (activeThreadId) {
+      await loadMessages(activeThreadId, {
+        silent: true,
+        signal,
+        forceSettledRpcRefresh: true,
       })
-      .catch(() => {
-        // Snapshot sync below still catches up when replay is unavailable.
-      })
-      .finally(() => {
-        replayNotificationsPromise = null
-      })
-    return replayNotificationsPromise
+      if (signal.aborted) return
+      pendingThreadMessageRefresh.delete(activeThreadId)
+    }
+    pendingThreadsRefresh = false
+  }
+
+  async function replayMissedNotifications(): Promise<void> {
+    const result = await notificationReplayCoordinator.recover()
+    if (result.completed && result.replayedCount > 0 && !result.snapshotRecovered) {
+      scheduleEventSync(0)
+    }
   }
 
   async function respondToPendingServerRequest(reply: UiServerRequestReply): Promise<void> {
@@ -7621,6 +7677,7 @@ export function useDesktopState() {
   function stopPolling(): void {
     setAndroidKeepAwake(false)
     stopAndroidKeepAwakeWatch?.()
+    notificationReplayCoordinator.stop()
     if (stopNotificationStream) {
       stopNotificationStream()
       stopNotificationStream = null

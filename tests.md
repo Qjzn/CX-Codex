@@ -19,6 +19,43 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Ordered paginated notification replay recovery
+
+#### Prerequisites
+- Node.js `22.13.0+` and repository dependencies are installed.
+- Local 7420 exposes `/codex-api/events/replay` with `notifications`, `latestSeq`, and `oldestSeq`.
+- The runtime store contains more than one 200-event replay page for the live-data measurement.
+
+#### Steps
+1. Query `/codex-api/health` and record runtime `oldestSeq` / `latestSeq`.
+2. Request `/codex-api/events/replay?after=<oldestSeq-1>&limit=200` and confirm the first page ends before `latestSeq` when more than 200 events are retained.
+3. Run `npm.cmd run verify:frontend-normalizers`.
+4. Confirm the coordinator smoke requests a 450-event backlog with cursors `10`, `210`, and `410`, then applies sequence `11..460` exactly once.
+5. Confirm a live `seq=461` arriving while the first replay page is pending is buffered and applied after replay `11..460` without duplication.
+6. Confirm `oldestSeq > cursor + 1`, `cursor=0`, and server sequence rollback each use snapshot recovery without applying retained historical notifications; during rollback recovery, a new low-sequence live event remains buffered and is applied after the reset baseline.
+7. Confirm stopping the coordinator while either a replay request or snapshot recovery is pending aborts the snapshot signal and prevents the late result from mutating state or persisting a cursor.
+8. Run `npm.cmd run build`, restart local 7420, and run the existing frontend/server regression gates.
+
+#### Expected Results
+- Replay advances from the last notification actually applied, never directly from a partial page to the response-wide `latestSeq`.
+- The first replay response fixes a high-water target; live notifications received during catch-up are released afterward in sequence order.
+- Retention gaps and sequence resets refresh authoritative thread/pending/current-message state instead of replaying stale side effects.
+- Historical replay updates pending/resolved approval state but cannot resend queued prompts, auto-commit a worktree, retry an old failed turn, or emit an old Android completion/approval notification.
+- `stopPolling()` invalidates an in-flight replay so an unmounted page cannot receive late state changes.
+
+#### Rollback/Cleanup Notes
+- No persistent test data is created by the coordinator smoke.
+- To roll back, revert `src/composables/notificationReplayCoordinator.ts`, the integration in `src/composables/useDesktopState.ts`, the replay smoke assertions, changelog entry, and this test section together.
+
+#### Regression Evidence
+- Before the fix, the live store retained `5000` notifications (`1752020..1757019`), while the first `limit=200` page ended at `1752219`; advancing directly to `latestSeq` would have skipped the remaining `4800` notifications.
+- `npm.cmd run verify:frontend-normalizers` passed pagination (`200/200/50`), live/replay merge, retention gap, first-run snapshot, sequence reset with a low-sequence live arrival, fetch stop, and snapshot abort cases.
+- `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` passed build, frontend normalizer, server module, CLI, CJS launcher, release archive/checksum, and npm package smoke gates.
+- Local 7420 restarted from the rebuilt artifact as PID `45188` on Node `22.19.0`; `/health` and `/codex-api/health` both returned `ok`, the current error log remained `0` bytes, and the served index referenced the new `app-CirTMKNC.js` bundle.
+- A live fixed-high-water walk verified all `5001` retained notifications (`1752020..1757020`) in `26` pages with no gap or duplicate and ended exactly at cursor `1757020`.
+- `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420` passed with `180` active threads, `7/7` readable pinned samples, `activeFirstPageMs=221`, and `rpcRetryCount=0`.
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed desktop `1440x900`, foldable `884x1104`, and phone `393x852` checks without screenshots.
+
 ### Feature: Slim session-log fallback history
 
 #### Prerequisites
