@@ -437,6 +437,30 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
 
+### Feature: Reject remote localhost Host spoofing
+
+#### Prerequisites
+- Configure CX-Codex with a non-empty Web password.
+- Use request fixtures that can set the TCP peer address and `Host` header independently.
+
+#### Steps
+1. Create an auth session with `createAuthSession(...)`.
+2. Check a request from `127.0.0.1` with `Host: localhost:7420`.
+3. Check an IPv6 loopback request from `::1` with `Host: [::1]:7420`.
+4. Check a request from `203.0.113.10` with `Host: localhost:7420` and no auth cookie.
+5. Check a request from `203.0.113.10` with `Host: 127.0.0.1:7420` and no auth cookie.
+6. Check a loopback TCP request whose Host is an external domain.
+7. Run `npm.cmd run verify:server-modules`.
+
+#### Expected Results
+- Only requests whose TCP peer and Host are both loopback addresses receive the local convenience bypass.
+- A remote peer cannot bypass the configured password by spoofing a localhost Host header.
+- A loopback reverse-proxy connection with an external Host still requires normal authentication.
+- Existing login body-size limits and password parsing checks continue to pass.
+
+#### Rollback/Cleanup Notes
+- Revert `src/server/authMiddleware.ts`, the auth smoke assertions in `scripts/server-module-smoke.ts`, the security hardening note, and this test section.
+
 ### Feature: Measure and restore thread first-screen ready state
 
 #### Prerequisites

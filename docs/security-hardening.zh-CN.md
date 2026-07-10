@@ -17,6 +17,8 @@
 
 ## Web 登录与请求体边界
 
+- 本机免登录只适用于 TCP 对端和请求 Host 同时为回环地址的直连请求；`Host` 是客户端可控输入，不能单独作为本机来源证明。
+- 通过 Nginx、Caddy、frp、Cloudflare Tunnel 或其他反向代理访问时，应保留外部 Host，并由 CX-Codex 密码或代理层鉴权保护；不要把所有代理请求重写成 `Host: localhost`。
 - `/auth/login` 只接受受限 JSON 请求体，默认最大 16KiB，避免远程入口被超大登录请求消耗内存。
 - 如确需调整登录请求体上限，可使用 `CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES`、`CODEXUI_AUTH_LOGIN_BODY_MAX_BYTES` 或 `AUTH_LOGIN_BODY_MAX_BYTES`；不要通过移除限制解决异常客户端问题。
 - 登录失败、登录请求体超限和 JSON 格式错误必须返回可读错误，但不得回显提交的密码、Cookie 或 token。

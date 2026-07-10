@@ -2,6 +2,8 @@
 
 ## 未发布
 
+- 安全：
+  - 本机免登录判断不再信任可由客户端伪造的 `Host` 请求头。只有 TCP 来源地址和请求 Host 同时为 `localhost`、`127.0.0.1` 或 `::1` 时才允许本机直连；远端请求即使伪造 `Host: localhost` 也必须完成密码登录。
 - 界面体验：
   - 会话详情首屏可读时间更准确且更跟手：长会话消息已到达但 loading 状态尚未完全落下时，会话页也会先完成首屏布局/底部锚定；真实线程回归新增页面内 `firstScreenReady` 指标，区分产品 DOM ready 时间和外部浏览器轮询开销，避免后续性能判断被测试脚本等待放大。
   - 长会话 fallback 历史更轻：本地 session-log 恢复会跳过 Codex 内部 context 和 assistant commentary 过程提示，并折叠 `event_msg`/`response_item` 相邻重复消息；真实 `分析项目` fallback state payload 从约 238KB 降到约 31KB，避免移动端为不可见过程噪音下载和归一化大块历史，同时旧历史加载到最早 turn 后会清理过期 `history.notice`，不再残留无效加载入口。

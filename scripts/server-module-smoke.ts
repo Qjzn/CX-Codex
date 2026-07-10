@@ -392,6 +392,7 @@ import {
 import { setJson } from '../src/server/httpJsonResponse.js'
 import { getErrorMessage } from '../src/server/errorMessage.js'
 import {
+  createAuthSession,
   getAuthLoginRequestBodyLimitBytes,
   readAuthLoginPassword,
 } from '../src/server/authMiddleware.js'
@@ -1417,6 +1418,18 @@ function smokeAppServerHealth(): void {
 }
 
 async function smokeAuthMiddleware(): Promise<void> {
+  const authSession = createAuthSession('server-module-smoke-password')
+  const requestLike = (remoteAddress: string, host: string) => ({
+    socket: { remoteAddress },
+    headers: { host },
+  }) as never
+
+  assert.equal(authSession.isRequestAuthorized(requestLike('127.0.0.1', 'localhost:7420')), true)
+  assert.equal(authSession.isRequestAuthorized(requestLike('::1', '[::1]:7420')), true)
+  assert.equal(authSession.isRequestAuthorized(requestLike('127.0.0.1', 'remote.example.com')), false)
+  assert.equal(authSession.isRequestAuthorized(requestLike('203.0.113.10', 'localhost:7420')), false)
+  assert.equal(authSession.isRequestAuthorized(requestLike('203.0.113.10', '127.0.0.1:7420')), false)
+
   const originalLimit = process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES
   try {
     process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES = '321'

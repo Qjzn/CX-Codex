@@ -142,8 +142,15 @@ function isLocalhostRemote(remote: string): boolean {
 }
 
 function isLocalhostHost(host: string): boolean {
-  const normalized = host.toLowerCase()
-  return normalized.startsWith('localhost:') || normalized === 'localhost' || normalized.startsWith('127.0.0.1:')
+  const normalized = host.trim().toLowerCase()
+  return (
+    normalized === 'localhost' ||
+    normalized.startsWith('localhost:') ||
+    normalized === '127.0.0.1' ||
+    normalized.startsWith('127.0.0.1:') ||
+    normalized === '[::1]' ||
+    normalized.startsWith('[::1]:')
+  )
 }
 
 function isCodexApiPath(path: string): boolean {
@@ -167,7 +174,9 @@ function isAuthorizedByRequestLike(
   passwordFingerprint: string,
 ): boolean {
   const remote = remoteAddress ?? ''
-  if (isLocalhostRemote(remote) || isLocalhostHost(hostHeader ?? '')) {
+  // Host is fully client-controlled. Keep the local convenience bypass only
+  // when both the TCP peer and the requested host are loopback addresses.
+  if (isLocalhostRemote(remote) && isLocalhostHost(hostHeader ?? '')) {
     return true
   }
 
