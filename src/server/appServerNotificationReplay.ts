@@ -53,6 +53,11 @@ export type AppServerNotificationReplayBundle = AppServerNotificationReplayAcces
   notificationReplay: AppServerNotificationReplay
 }
 
+export function projectNotificationParamsForReplay(method: string, params: unknown): unknown {
+  if (method === 'app/list/updated') return {}
+  return params
+}
+
 export class AppServerNotificationReplay {
   private seq: number
   private readonly buffer: BridgeNotificationEvent[] = []
@@ -85,7 +90,7 @@ export class AppServerNotificationReplay {
     const turnId = this.readTurnIdFromPayload(notification.params)
     const event: BridgeNotificationEvent = {
       method: notification.method,
-      params: notification.params,
+      params: projectNotificationParamsForReplay(notification.method, notification.params),
       atIso: this.nowIso(),
       seq: this.seq,
     }

@@ -180,6 +180,14 @@ npx cx-codex --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
 }
 ```
 
+运行库会保留有限的恢复事件。若长期运行后 `~/.cx-codex/runtime.sqlite` 明显膨胀，可先停止 CX-Codex，再执行：
+
+```bash
+cx-codex runtime-compact
+```
+
+命令会在仍有未收敛任务时拒绝压缩；正常完成后会输出压缩前后体积和回收空间。完整 `VACUUM` 不会自动占用正常启动时间。
+
 语音转写可选配置：
 
 - `CX_CODEX_OPENAI_API_KEY`、`CODEXUI_OPENAI_API_KEY` 或 `OPENAI_API_KEY`：配置后语音转写优先走 OpenAI 官方音频转写 API。

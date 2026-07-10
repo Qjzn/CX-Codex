@@ -437,6 +437,35 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
 
+### Feature: Bound runtime App catalog replay and compact the runtime database
+
+#### Prerequisites
+- Stop the CX-Codex process before compacting the real runtime database.
+- Keep a backup of `~/.cx-codex/runtime.sqlite` when validating against long-lived data.
+- Ensure no runtime request remains in a running, uncertain, or stopping state.
+
+#### Steps
+1. Create a fresh `RuntimeStore` and confirm `auto_vacuum` is incremental.
+2. Record an `app/list/updated` notification containing a large fake App catalog.
+3. Reopen the store and confirm the legacy payload was projected to an empty invalidation marker.
+4. Send the same notification through `AppServerNotificationReplay` and confirm both the emitted event and persisted event use `{}` params.
+5. Inspect `/codex-api/health` and confirm it reports `databaseBytes`, `freeBytes`, `freePageRatio`, and `autoVacuumMode`.
+6. With the service stopped, run `node dist-cli/index.js runtime-compact` or `cx-codex runtime-compact`.
+7. Create a running runtime request and confirm the compact operation refuses to run.
+8. Run `npm.cmd run verify:server-modules`.
+9. Run `npm.cmd run build`.
+
+#### Expected Results
+- `app/list/updated` remains a functional plugin-list invalidation signal without carrying the full App directory through SSE or replay.
+- Historical large App catalog payloads are replaced by lightweight markers when the runtime store opens.
+- New databases reclaim free pages incrementally after retention pruning.
+- Full compaction only runs explicitly while no active or uncertain request exists.
+- Health output makes runtime database growth visible without exposing event payloads.
+
+#### Rollback/Cleanup Notes
+- Revert `src/server/runtimeStore.ts`, `src/server/appServerNotificationReplay.ts`, the `runtime-compact` CLI command, documentation, smoke assertions, and this test section.
+- Restore the backed-up runtime database only if the explicit maintenance verification fails; normal compaction preserves live rows.
+
 ### Feature: Reject remote localhost Host spoofing
 
 #### Prerequisites

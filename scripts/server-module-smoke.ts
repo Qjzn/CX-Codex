@@ -293,8 +293,11 @@ import {
   type ThreadRuntimeSnapshot,
 } from '../src/server/runtimeState.js'
 import { handleRuntimeStateRoutes } from '../src/server/runtimeStateRoutes.js'
-import type { RuntimeRequestRecord } from '../src/server/runtimeStore.js'
-import type { RuntimeEventRecord } from '../src/server/runtimeStore.js'
+import {
+  RuntimeStore,
+  type RuntimeEventRecord,
+  type RuntimeRequestRecord,
+} from '../src/server/runtimeStore.js'
 import { handleRpcProxyRoute, type RpcProxyRouteDependencies } from '../src/server/rpcProxyRoute.js'
 import {
   parseRuntimeInterruptPayload,
@@ -506,6 +509,7 @@ try {
   smokeAppServerNotificationRuntimeSync()
   await smokeRuntimeActionRoutes()
   await smokeDiagnosticsRoutes()
+  await smokeRuntimeStoreMaintenance()
   smokeAppServerNotificationReplay()
   await smokeLocalStateRoutes()
   await smokeRuntimeStateRoutes()
@@ -9611,6 +9615,72 @@ function smokeAppServerNotificationReplay(): void {
     threadId: 'thread-bundle',
     turnId: 'turn-bundle',
   }])
+
+  const projectedEvents: unknown[] = []
+  const projectionReplay = new AppServerNotificationReplay({
+    initialSeq: 40,
+    nowIso: () => '2026-01-01T00:00:04.000Z',
+    appendEvent: (event) => { projectedEvents.push(event) },
+    listEventsAfter: (afterSeq) => ({
+      notifications: [],
+      latestSeq: afterSeq,
+      oldestSeq: afterSeq,
+    }),
+    observeNotification: () => {},
+    readThreadIdFromPayload: (payload) => readStringProperty(payload, 'threadId'),
+    readTurnIdFromPayload: (payload) => readStringProperty(payload, 'turnId'),
+  })
+  const projectedEvent = projectionReplay.remember({
+    method: 'app/list/updated',
+    params: { data: [{ id: 'large-app-catalog-entry' }] },
+  })
+  assert.deepEqual(projectedEvent.params, {})
+  assert.deepEqual(projectedEvents, [{
+    seq: 41,
+    method: 'app/list/updated',
+    params: {},
+    atIso: '2026-01-01T00:00:04.000Z',
+    threadId: '',
+    turnId: '',
+  }])
+}
+
+async function smokeRuntimeStoreMaintenance(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'cx-codex-runtime-store-'))
+  const dbPath = join(root, 'runtime.sqlite')
+  let runtimeStore: RuntimeStore | null = null
+  try {
+    runtimeStore = new RuntimeStore(dbPath)
+    assert.equal(runtimeStore.getStorageStats().autoVacuumMode, 2)
+    runtimeStore.appendEvent({
+      seq: 1,
+      method: 'app/list/updated',
+      params: { data: [{ id: 'legacy-large-app-catalog' }] },
+      atIso: '2026-01-01T00:00:00.000Z',
+      threadId: '',
+      turnId: '',
+    })
+    runtimeStore.close()
+    runtimeStore = null
+
+    runtimeStore = new RuntimeStore(dbPath)
+    assert.deepEqual(runtimeStore.listEventsAfter(0, 10).notifications[0]?.params, {})
+    const compacted = runtimeStore.compact()
+    assert.equal(compacted.status, 'compacted')
+    assert.equal(compacted.after.autoVacuumMode, 2)
+    assert.equal(compacted.reclaimedBytes >= 0, true)
+
+    runtimeStore.createRequest({
+      requestId: 'active-request',
+      status: 'running',
+    })
+    const skipped = runtimeStore.compact()
+    assert.equal(skipped.status, 'skipped-active-requests')
+    assert.equal(skipped.activeRequestCount, 1)
+  } finally {
+    runtimeStore?.close()
+    await rm(root, { recursive: true, force: true })
+  }
 }
 
 async function smokeDiagnosticsRoutes(): Promise<void> {
