@@ -437,6 +437,32 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
 
+### Feature: Show compact mobile connection status and recovery action
+
+#### Prerequisites
+- Run the current CX-Codex build with at least one selectable thread.
+- Use a 375x812 phone viewport and a desktop viewport.
+- Keep the notification stream connected for the baseline, then test reconnecting or disconnected state.
+
+#### Steps
+1. Open a thread at 375x812 and inspect the control beside the thread title.
+2. Confirm the connected state uses a compact success dot and refresh icon without an always-visible text label.
+3. Interrupt or delay the notification connection and confirm the control changes tone and shows the short recovery label.
+4. Tap the control and confirm it invokes the existing current-thread force recovery action.
+5. Confirm the control exposes the current status, recovery detail, and action through its title and accessible name.
+6. Open the same thread on desktop and confirm the compact control does not duplicate a long status label beside the existing runtime status bar.
+7. Enable reduced motion and confirm connection/refresh rotation stops.
+8. Run `npm.cmd run build`.
+
+#### Expected Results
+- Mobile users can distinguish connected, syncing, warning, and error states without opening diagnostics.
+- A healthy thread header stays compact; only non-live states reveal a short text label on touch layouts.
+- The recovery action remains reachable in one tap and is disabled while already running.
+- The title does not overflow at 375px and desktop header density does not regress.
+
+#### Rollback/Cleanup Notes
+- Revert the connection-status markup, computed labels, styles in `src/App.vue`, the parity finding, changelog entry, and this test section.
+
 ### Feature: Bound runtime App catalog replay and compact the runtime database
 
 #### Prerequisites

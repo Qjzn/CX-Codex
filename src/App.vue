@@ -475,12 +475,17 @@
               v-if="showMobileThreadRefreshButton"
               class="content-title-refresh-button"
               type="button"
+              :data-tone="serviceStatusTone"
               :data-busy="isManualThreadRefreshRunning ? 'true' : 'false'"
               :disabled="isManualThreadRefreshRunning"
               :title="mobileThreadRefreshButtonTitle"
               :aria-label="mobileThreadRefreshButtonTitle"
               @click="onRefreshSelectedThreadContent"
             >
+              <span class="content-title-connection-dot" aria-hidden="true" />
+              <span v-if="mobileThreadConnectionLabel" class="content-title-connection-label">
+                {{ mobileThreadConnectionLabel }}
+              </span>
               <IconTablerRefresh class="content-title-refresh-button-icon" />
             </button>
           </template>
@@ -1631,8 +1636,15 @@ const showRuntimeStatusBar = computed(() => (
   && !isRouteOnlyEmptyThread.value
   && !isCompactTouchContent.value
 ))
+const mobileThreadConnectionLabel = computed(() => {
+  if (!isCompactTouchContent.value) return ''
+  if (isManualThreadRefreshRunning.value) return '恢复中'
+  return serviceStatusTone.value === 'live' ? '' : serviceStatusLabel.value
+})
 const mobileThreadRefreshButtonTitle = computed(() => (
-  isManualThreadRefreshRunning.value ? '正在强制恢复当前会话状态...' : '强制恢复当前会话状态'
+  isManualThreadRefreshRunning.value
+    ? '正在强制恢复当前会话状态...'
+    : `${serviceStatusLabel.value}。${serviceStatusDetail.value} 点击可强制恢复当前会话状态。`
 ))
 const contentContextUsage = computed(() => {
   if (isNonThreadRoute.value || isRouteOnlyEmptyThread.value) return null
@@ -4584,11 +4596,35 @@ async function submitFirstMessageForNewThread(
 }
 
 .content-title-refresh-button {
-  @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition-[background-color,border-color,color,transform] duration-150 disabled:cursor-not-allowed disabled:opacity-60;
+  @apply relative inline-flex h-7 min-w-7 shrink-0 items-center justify-center gap-1 rounded-full border px-1.5 transition-[background-color,border-color,color,transform] duration-150 disabled:cursor-not-allowed disabled:opacity-60;
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
   color: var(--ui-text-secondary);
   box-shadow: none;
+}
+
+.content-title-refresh-button[data-tone='live'] {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ui-text-secondary);
+}
+
+.content-title-refresh-button[data-tone='syncing'] {
+  border-color: color-mix(in srgb, var(--ui-accent) 24%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-bg-surface));
+  color: var(--ui-accent);
+}
+
+.content-title-refresh-button[data-tone='warning'] {
+  border-color: color-mix(in srgb, var(--ui-warning) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-warning) 7%, var(--ui-bg-surface));
+  color: var(--ui-warning);
+}
+
+.content-title-refresh-button[data-tone='danger'] {
+  border-color: color-mix(in srgb, var(--ui-danger) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
+  color: var(--ui-danger);
 }
 
 .content-title-refresh-button:hover,
@@ -4599,7 +4635,22 @@ async function submitFirstMessageForNewThread(
 }
 
 .content-title-refresh-button[data-busy='true'] {
-  @apply border-[#e7d9b0] bg-[#fcf7e8] text-[#8a6a11];
+  border-color: color-mix(in srgb, var(--ui-warning) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-warning) 7%, var(--ui-bg-surface));
+  color: var(--ui-warning);
+}
+
+.content-title-connection-dot {
+  @apply h-1.5 w-1.5 shrink-0 rounded-full;
+  background: currentColor;
+}
+
+.content-title-refresh-button[data-tone='live'] .content-title-connection-dot {
+  background: var(--ui-success);
+}
+
+.content-title-connection-label {
+  @apply max-w-20 truncate text-[10px] font-semibold leading-none;
 }
 
 .content-title-refresh-button-icon {
@@ -4608,6 +4659,10 @@ async function submitFirstMessageForNewThread(
 
 .content-title-refresh-button[data-busy='true'] .content-title-refresh-button-icon {
   animation: content-title-refresh-spin 0.9s linear infinite;
+}
+
+.content-title-refresh-button[data-tone='syncing'] .content-title-refresh-button-icon {
+  animation: content-title-refresh-spin 1.1s linear infinite;
 }
 
 .content-runtime-status {
@@ -5472,7 +5527,7 @@ async function submitFirstMessageForNewThread(
   }
 
   .content-title-refresh-button {
-    @apply h-6.5 w-6.5;
+    @apply h-7 min-w-7 px-1.5;
   }
 
   .content-title-refresh-button-icon {
@@ -5677,6 +5732,10 @@ async function submitFirstMessageForNewThread(
   }
 
   .content-title-refresh-button[data-busy='true'] .content-title-refresh-button-icon {
+    animation: none !important;
+  }
+
+  .content-title-refresh-button[data-tone='syncing'] .content-title-refresh-button-icon {
     animation: none !important;
   }
 

@@ -8,6 +8,7 @@
   - `app/list/updated` 通知在实时推送和持久 replay 中只保留“应用列表已失效”信号，不再重复保存和传输完整 App 目录；旧 runtime 库会在打开时轻量清理已有大 payload。
   - runtime health 新增数据库占用、空闲页比例和 auto-vacuum 状态；新库启用 incremental vacuum，旧库可在停服后运行 `cx-codex runtime-compact` 显式压缩，避免把 full `VACUUM` 放进启动热路径。
 - 界面体验：
+  - 手机会话标题栏新增 Codex.app 风格的紧凑连接状态：正常为绿点，连接/同步中显示旋转状态，恢复异常使用警告或错误色并显示短标签；同一控件仍可一键强制恢复当前会话，避免只剩一个无语义刷新图标。
   - 会话详情首屏可读时间更准确且更跟手：长会话消息已到达但 loading 状态尚未完全落下时，会话页也会先完成首屏布局/底部锚定；真实线程回归新增页面内 `firstScreenReady` 指标，区分产品 DOM ready 时间和外部浏览器轮询开销，避免后续性能判断被测试脚本等待放大。
   - 长会话 fallback 历史更轻：本地 session-log 恢复会跳过 Codex 内部 context 和 assistant commentary 过程提示，并折叠 `event_msg`/`response_item` 相邻重复消息；真实 `分析项目` fallback state payload 从约 238KB 降到约 31KB，避免移动端为不可见过程噪音下载和归一化大块历史，同时旧历史加载到最早 turn 后会清理过期 `history.notice`，不再残留无效加载入口。
   - 长会话 fallback 状态更准确：当 `thread/read(includeTurns:true)` 只能从本地 session log 恢复历史时，thread-read cache 会保留 `session-log` 来源；后续 state snapshot 命中该缓存仍标记为 `cached`，避免前端误判为 App Server fresh 历史并降低历史缺失排查难度。
