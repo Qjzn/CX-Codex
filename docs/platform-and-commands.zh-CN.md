@@ -19,7 +19,9 @@
 建议启动方式：
 
 ```bash
-npx cx-codex --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
+npm ci
+npm run build
+node dist-cli/index.js --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
 ```
 
 需要注意：

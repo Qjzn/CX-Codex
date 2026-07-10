@@ -2096,25 +2096,42 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - Return appearance and runtime selection to the previous user preference.
 
-### Feature: pnpm dev script installs dependencies and starts Vite
+### Feature: Consistent Node and npm development contract
 
 #### Prerequisites
-- `pnpm` is installed globally (`npm i -g pnpm` or via corepack).
+- Node.js `22.13.0` or newer and npm are installed.
 - Repository is cloned and `node_modules/` does not exist (or may be stale).
 
 #### Steps
-1. Remove `node_modules/` if present: `rm -rf node_modules`.
-2. Run `pnpm run dev`.
-3. Wait for Vite dev server to start and display the local URL.
-4. Open the displayed URL in a browser.
+1. Run `node --version` and confirm it is at least `v22.13.0`.
+2. Run `npm ci`.
+3. Run `npm run dev`.
+4. Wait for Vite dev server to display the local URL, then open it in a browser.
+5. Run `npm run build`.
+6. Run `npm run verify:release -- -AllowDirty -SchemaAudit skip`.
+7. Run `scripts/install-windows-server.ps1` with temporary `-ConfigPath` / `-LauncherPath`, `-SkipNpmInstall`, and `-SkipBuild`.
+8. Run `bash -n publish.sh` in Git Bash.
+9. On a Windows test user whose PATH exposes Node 18 or 20, run `bootstrap-windows.ps1` and confirm repository acquisition completes before the portable Node 22.13+ runtime is created.
 
 #### Expected Results
-- `pnpm install` runs automatically before Vite starts (dependencies are installed).
+- `npm ci` installs exactly the dependency graph recorded by `package-lock.json`.
 - Vite dev server starts successfully and serves the app.
-- No `npm` commands are invoked.
+- The frontend and CLI build for Node 22 without runtime syntax errors.
+- Windows bootstrap accepts Node `22.13.0+` and generates the install files without changing the global Node version.
+- Replacing an existing install cannot delete the portable Node runtime during the same bootstrap run.
+- README does not advertise `npx cx-codex` until the npm package is actually published.
+- Release and publish automation use npm consistently.
 
 #### Rollback/Cleanup
-- None.
+- Stop the Vite server and remove the temporary bootstrap install directory.
+- To roll back the contract, revert `package.json`, Node build targets, Windows install scripts, npm publish automation, contributor/deployment documentation, changelog, and this test section together.
+
+#### Regression Evidence
+- 2026-07-10: `npm ci` completed under Node `v22.19.0` and installed 430 locked packages, including the native `better-sqlite3` module.
+- 2026-07-10: `npm run dev -- --host 127.0.0.1 --port 4174` started Vite in about 1.5 seconds and returned HTTP 200.
+- 2026-07-10: `npm run verify:release -- -AllowDirty -SchemaAudit skip` passed the production build, frontend/server smokes, CLI smoke, CJS launcher smoke, Release archive/checksum smoke, and npm package smoke.
+- 2026-07-10: the isolated Windows installer smoke generated a config and launcher under `output/install-contract-smoke-20260710-2325`; Git Bash `bash -n publish.sh` passed.
+- 2026-07-10: the full source bootstrap smoke ran with an isolated `USERPROFILE`, Node `v22.19.0`, port `7442`, and `-NoStart`; it completed `npm ci`, the Node 22 build, and generated isolated config/launcher artifacts under `output/bootstrap-contract-smoke-20260710-2330`.
 
 ### Feature: Stop button interrupts active turn without missing turnId
 

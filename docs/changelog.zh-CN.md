@@ -2,6 +2,10 @@
 
 ## 未发布
 
+- 开源开发契约：
+  - 统一要求 Node.js `22.13.0+` 与 npm，与 `pdfjs-dist` / Capacitor 的实际运行时要求保持一致；Windows bootstrap 会先更新仓库再准备运行时，本机 Node 过旧时使用安装目录内的便携式 LTS，避免仓库替换误删刚下载的 Node。
+  - 本地开发收敛为显式 `npm ci` 后运行 `npm run dev`，移除会在 Windows 失败的 pnpm / Unix `sh` 混用脚本；README 在 npm 包真正发布前不再宣称可用 `npx`。
+
 - 安全：
   - 本机免登录判断不再信任可由客户端伪造的 `Host` 请求头。只有 TCP 来源地址和请求 Host 同时为 `localhost`、`127.0.0.1` 或 `::1` 时才允许本机直连；远端请求即使伪造 `Host: localhost` 也必须完成密码登录。
 - 稳定性与轻量化：

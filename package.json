@@ -39,7 +39,7 @@
     "ai-coding-agent"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13.0"
   },
   "bin": {
     "cx-codex": "dist-cli/index.js",
@@ -51,8 +51,7 @@
     "docs/app-server-schema-audit-summary.json"
   ],
   "scripts": {
-    "dev": "pnpm install && vite",
-    "dev:open": "pnpm run build:cli && sh -c 'pnpm run dev & VPID=$!; node dist-cli/index.js --open-project \"${1:-.}\"; wait $VPID' --",
+    "dev": "vite",
     "build:frontend": "vue-tsc --noEmit && vite build",
     "build:cli": "tsup",
     "build": "npm run build:frontend && npm run build:cli",

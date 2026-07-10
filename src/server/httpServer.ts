@@ -313,8 +313,8 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
         .send(
           renderFrontendMissingHtml('CX-Codex 前端资源缺失。', [
             `期望文件：${spaEntryFile}`,
-            '如果是源码运行，请先执行：pnpm run build:frontend',
-            '如果使用 npx 运行，请清理 npx 缓存后重新安装 cx-codex。',
+            '如果是源码运行，请先执行：npm run build:frontend',
+            '如果使用发布包，请重新解压完整产物；不要单独复制 CLI。',
           ]),
         )
       return

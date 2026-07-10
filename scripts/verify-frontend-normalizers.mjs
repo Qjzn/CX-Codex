@@ -231,7 +231,7 @@ console.log('frontend normalizer smoke ok')
     logLevel: 'silent',
     outfile: bundledPath,
     platform: 'node',
-    target: 'node18',
+    target: 'node22',
   })
 
   const result = spawnSync(process.execPath, [bundledPath], {

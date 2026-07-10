@@ -85,6 +85,8 @@ GitHub 热门项目：
 
 ## 快速安装
 
+Windows bootstrap 会复用 Node.js `22.13.0+`；当本机版本过旧时，会在安装目录内下载便携式 LTS 运行时，不切换系统全局 Node 版本。
+
 Windows 一条命令：
 
 ```powershell
@@ -148,16 +150,22 @@ Release 页面会发布 Android APK：
 
 - [docs/android-shell.zh-CN.md](./docs/android-shell.zh-CN.md)
 
-## 手动运行
+## 源码手动运行
+
+需要 Node.js `22.13.0+` 和 npm。当前可验证的发布入口是 GitHub 源码与 Release；npm 包尚未发布，因此不把 `npx` 作为安装承诺。
 
 ```bash
-npx cx-codex
+git clone https://github.com/Qjzn/CX-Codex.git
+cd CX-Codex
+npm ci
+npm run build
+node dist-cli/index.js
 ```
 
 固定到 `7420`：
 
 ```powershell
-npx cx-codex --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
+node dist-cli/index.js --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
 ```
 
 配置文件优先级：
