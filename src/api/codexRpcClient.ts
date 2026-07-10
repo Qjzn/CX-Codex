@@ -282,7 +282,10 @@ export async function fetchRpcNotificationReplay(afterSeq: number, limit = 200):
 
 export function subscribeRpcNotifications(
   onNotification: (value: RpcNotification) => void,
-  options: { onConnectionStateChange?: (state: RpcConnectionState) => void } = {},
+  options: {
+    onConnectionStateChange?: (state: RpcConnectionState) => void
+    onTransportActivity?: () => void
+  } = {},
 ): () => void {
   if (typeof window === 'undefined') {
     return () => {}
@@ -326,6 +329,7 @@ export function subscribeRpcNotifications(
 
   const noteTransportActivity = () => {
     lastTransportActivityAtMs = Date.now()
+    options.onTransportActivity?.()
   }
 
   const clearActiveTransport = () => {
@@ -479,7 +483,8 @@ export function subscribeRpcNotifications(
 
     socket.onopen = () => {
       if (isStaleAttempt(attemptId)) {
-        cleanup?.()
+        clearFallbackTimer()
+        if (socket.readyState < 2) socket.close()
         return
       }
       noteTransportActivity()
@@ -527,8 +532,9 @@ export function subscribeRpcNotifications(
     activeAttempt += 1
     const attemptId = activeAttempt
     clearActiveTransport()
-    noteTransportActivity()
+    lastTransportActivityAtMs = Date.now()
     setConnectionState(hasEverConnected || reconnectAttempt > 0 ? 'reconnecting' : 'connecting')
+    startTransportWatchdog()
 
     if (transport === 'ws') {
       attachWebSocketTransport(attemptId)

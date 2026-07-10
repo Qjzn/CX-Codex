@@ -940,7 +940,10 @@ export async function getNotificationReplay(afterSeq: number, limit = 200): Prom
 
 export function subscribeCodexNotifications(
   onNotification: (value: RpcNotification) => void,
-  options: { onConnectionStateChange?: (state: RpcConnectionState) => void } = {},
+  options: {
+    onConnectionStateChange?: (state: RpcConnectionState) => void
+    onTransportActivity?: () => void
+  } = {},
 ): () => void {
   return subscribeRpcNotifications(onNotification, options)
 }

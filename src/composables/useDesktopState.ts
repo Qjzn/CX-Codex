@@ -7294,8 +7294,13 @@ export function useDesktopState() {
         lastAndroidResumeSyncScheduledAtMs = now
       }
       const shouldRestartNotifications =
-        realtimeConnectionState.value !== 'connected' ||
-        (notificationStale.value && (hasSyncDemand.value || Boolean(selectedThreadId.value)))
+        realtimeConnectionState.value === 'reconnecting' ||
+        realtimeConnectionState.value === 'disconnected' ||
+        (
+          realtimeConnectionState.value === 'connected' &&
+          notificationStale.value &&
+          (hasSyncDemand.value || Boolean(selectedThreadId.value))
+        )
       if (shouldRestartNotifications) {
         restartNotificationStream()
       }
@@ -7505,6 +7510,7 @@ export function useDesktopState() {
         processIncomingNotification(notification)
       },
       {
+        onTransportActivity: noteIncomingNotificationActivity,
         onConnectionStateChange: (state) => {
           const previousState = realtimeConnectionState.value
           realtimeConnectionState.value = state

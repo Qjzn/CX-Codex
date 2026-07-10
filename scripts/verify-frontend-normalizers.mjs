@@ -13,12 +13,14 @@ const entryPath = join(outputRoot, 'entry.ts')
 const bundledPath = join(outputRoot, 'entry.mjs')
 const normalizerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'normalizers', 'v2.ts')))
 const notificationReplayImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'notificationReplayCoordinator.ts')))
+const rpcClientImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'codexRpcClient.ts')))
 
 try {
   writeFileSync(entryPath, `
 import assert from 'node:assert/strict'
 import { normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from '${normalizerImport}'
 import { createNotificationReplayCoordinator } from '${notificationReplayImport}'
+import { subscribeRpcNotifications } from '${rpcClientImport}'
 
 const messages = normalizeThreadMessagesV2({
   thread: {
@@ -418,6 +420,186 @@ releaseStoppedSnapshot?.()
 const stoppedSnapshotResult = await stoppedSnapshotRecovery
 assert.equal(stoppedSnapshotResult.completed, false)
 assert.deepEqual(stoppedSnapshotPersisted, [])
+
+const transportTimeouts = new Map<number, () => void>()
+const transportIntervals = new Map<number, () => void>()
+let nextTransportTimerId = 1
+const runTransportTimeout = (id: number) => {
+  const callback = transportTimeouts.get(id)
+  assert.equal(typeof callback, 'function')
+  transportTimeouts.delete(id)
+  callback?.()
+}
+class FakeNotificationWebSocket {
+  static instances: FakeNotificationWebSocket[] = []
+  readyState = 0
+  closeCount = 0
+  onopen: (() => void) | null = null
+  onmessage: ((event: { data: string }) => void) | null = null
+  onerror: (() => void) | null = null
+  onclose: (() => void) | null = null
+
+  constructor(readonly url: string) {
+    FakeNotificationWebSocket.instances.push(this)
+  }
+
+  close() {
+    this.closeCount += 1
+    this.readyState = 3
+  }
+}
+class FakeNotificationEventSource {
+  static CLOSED = 2
+  static instances: FakeNotificationEventSource[] = []
+  readyState = 0
+  closeCount = 0
+  onopen: (() => void) | null = null
+  onmessage: ((event: { data: string }) => void) | null = null
+  onerror: (() => void) | null = null
+  readyListener: (() => void) | null = null
+
+  constructor(readonly url: string) {
+    FakeNotificationEventSource.instances.push(this)
+  }
+
+  addEventListener(name: string, listener: () => void) {
+    if (name === 'ready') this.readyListener = listener
+  }
+
+  close() {
+    this.closeCount += 1
+    this.readyState = FakeNotificationEventSource.CLOSED
+  }
+}
+const fakeWindow = {
+  location: { protocol: 'http:', host: '127.0.0.1:7420' },
+  setTimeout: (callback: () => void) => {
+    const id = nextTransportTimerId++
+    transportTimeouts.set(id, callback)
+    return id
+  },
+  clearTimeout: (id: number) => { transportTimeouts.delete(id) },
+  setInterval: (callback: () => void) => {
+    const id = nextTransportTimerId++
+    transportIntervals.set(id, callback)
+    return id
+  },
+  clearInterval: (id: number) => { transportIntervals.delete(id) },
+  addEventListener: () => {},
+  removeEventListener: () => {},
+}
+const fakeDocument = {
+  hidden: false,
+  addEventListener: () => {},
+  removeEventListener: () => {},
+}
+const globals = globalThis as Record<string, unknown>
+globals.window = fakeWindow
+globals.document = fakeDocument
+globals.WebSocket = FakeNotificationWebSocket
+globals.EventSource = FakeNotificationEventSource
+const transportActivity: string[] = []
+const transportNotifications: string[] = []
+const transportStates: string[] = []
+const stopTransport = subscribeRpcNotifications(
+  (notification) => { transportNotifications.push(notification.method) },
+  {
+    onTransportActivity: () => { transportActivity.push('activity') },
+    onConnectionStateChange: (state) => { transportStates.push(state) },
+  },
+)
+assert.equal(FakeNotificationWebSocket.instances.length, 1)
+assert.equal(transportActivity.length, 0)
+assert.equal(transportIntervals.size, 1)
+assert.equal(transportTimeouts.size, 1)
+const transportSocket = FakeNotificationWebSocket.instances[0]
+transportSocket.readyState = 1
+transportSocket.onopen?.()
+assert.equal(transportActivity.length, 1)
+assert.deepEqual(transportStates, ['connected'])
+assert.equal(transportIntervals.size, 1)
+assert.equal(transportTimeouts.size, 0)
+transportSocket.onmessage?.({
+  data: JSON.stringify({ method: 'bridge/heartbeat', params: { ok: true }, atIso: '2026-01-01T00:00:00.000Z' }),
+})
+assert.equal(transportActivity.length, 2)
+assert.deepEqual(transportNotifications, [])
+transportSocket.onmessage?.({
+  data: JSON.stringify({ method: 'turn/started', params: { threadId: 'thread-transport' }, atIso: '2026-01-01T00:00:01.000Z', seq: 1 }),
+})
+assert.equal(transportActivity.length, 3)
+assert.deepEqual(transportNotifications, ['turn/started'])
+stopTransport()
+assert.deepEqual(transportStates, ['connected', 'disconnected'])
+transportSocket.onmessage?.({
+  data: JSON.stringify({ method: 'bridge/heartbeat', params: { ok: true }, atIso: '2026-01-01T00:00:02.000Z' }),
+})
+assert.equal(transportActivity.length, 3)
+assert.equal(transportIntervals.size, 0)
+assert.equal(transportTimeouts.size, 0)
+
+FakeNotificationWebSocket.instances = []
+FakeNotificationEventSource.instances = []
+const staleAttemptActivity: string[] = []
+const stopStaleAttempt = subscribeRpcNotifications(
+  () => {},
+  { onTransportActivity: () => { staleAttemptActivity.push('activity') } },
+)
+assert.equal(FakeNotificationWebSocket.instances.length, 1)
+const staleSocket = FakeNotificationWebSocket.instances[0]
+const fallbackTimerId = [...transportTimeouts.keys()][0]
+runTransportTimeout(fallbackTimerId)
+assert.equal(staleSocket.closeCount, 1)
+assert.equal(FakeNotificationEventSource.instances.length, 1)
+const activeEventSource = FakeNotificationEventSource.instances[0]
+staleSocket.readyState = 1
+staleSocket.onopen?.()
+assert.equal(staleSocket.closeCount, 2)
+assert.equal(activeEventSource.closeCount, 0)
+assert.deepEqual(staleAttemptActivity, [])
+stopStaleAttempt()
+assert.equal(activeEventSource.closeCount, 1)
+assert.equal(transportIntervals.size, 0)
+assert.equal(transportTimeouts.size, 0)
+
+FakeNotificationWebSocket.instances = []
+FakeNotificationEventSource.instances = []
+const originalDateNow = Date.now
+let transportNow = 1_000
+Date.now = () => transportNow
+const watchdogActivity: string[] = []
+const watchdogStates: string[] = []
+const stopWatchdog = subscribeRpcNotifications(
+  () => {},
+  {
+    onTransportActivity: () => { watchdogActivity.push('activity') },
+    onConnectionStateChange: (state) => { watchdogStates.push(state) },
+  },
+)
+assert.equal(FakeNotificationWebSocket.instances.length, 1)
+assert.equal(transportIntervals.size, 1)
+transportNow += 45_000
+const watchdogTick = [...transportIntervals.values()][0]
+watchdogTick?.()
+assert.deepEqual(watchdogStates, ['reconnecting'])
+assert.deepEqual(watchdogActivity, [])
+assert.equal(transportIntervals.size, 0)
+assert.equal(transportTimeouts.size, 1)
+const reconnectTimerId = [...transportTimeouts.keys()][0]
+runTransportTimeout(reconnectTimerId)
+assert.equal(FakeNotificationWebSocket.instances.length, 2)
+assert.equal(transportIntervals.size, 1)
+assert.equal(transportTimeouts.size, 1)
+const recoveredSocket = FakeNotificationWebSocket.instances[1]
+recoveredSocket.readyState = 1
+recoveredSocket.onopen?.()
+assert.deepEqual(watchdogStates, ['reconnecting', 'connected'])
+assert.deepEqual(watchdogActivity, ['activity'])
+stopWatchdog()
+Date.now = originalDateNow
+assert.deepEqual(watchdogStates, ['reconnecting', 'connected', 'disconnected'])
+assert.equal(transportIntervals.size, 0)
+assert.equal(transportTimeouts.size, 0)
 
 console.log('frontend normalizer smoke ok')
 `, 'utf8')

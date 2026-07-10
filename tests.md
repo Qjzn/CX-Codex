@@ -19,6 +19,42 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Heartbeat-backed notification health
+
+#### Prerequisites
+- Node.js `22.13.0+` and repository dependencies are installed.
+- The notification server emits `bridge/heartbeat` every 15 seconds on healthy WS/SSE transports.
+
+#### Steps
+1. Run `npm.cmd run verify:frontend-normalizers`.
+2. Confirm the fake WebSocket connection attempt itself does not invoke `onTransportActivity`.
+3. Open the fake socket and confirm verified `open` activity changes the state to `connected`.
+4. Deliver a `bridge/heartbeat` frame and confirm transport activity advances while the business-notification callback remains empty.
+5. Deliver one normal notification and confirm both activity and notification callbacks advance exactly once at the RPC-client boundary.
+6. Force the first WS open timeout to fall back to SSE, then fire the old WS `onopen`; confirm only the old socket closes and the active SSE remains open.
+7. Advance an unopened transport by 45 seconds, confirm its connection-stage watchdog schedules one reconnect, then open the replacement and confirm `reconnecting -> connected` with no false activity from either connection attempt.
+8. Stop the subscription, deliver a late heartbeat, and confirm activity does not advance and all watchdog/fallback timers are cleared.
+9. Run `npm.cmd run build`, restart local 7420, wait for a live heartbeat, and run the existing frontend/sidebar regression gates.
+
+#### Expected Results
+- Verified WS/SSE open, ready, heartbeat, and message activity refreshes the page-level notification health clock.
+- A healthy idle connection remains fresh beyond the old 30-second business-notification-only threshold.
+- Starting a connection is not reported as verified transport activity.
+- Foreground resume does not immediately replace a transport whose state is still `connecting`; genuinely reconnecting, disconnected, or stale demanded transports still recover.
+- Late events after unsubscribe cannot mutate connection health.
+
+#### Rollback/Cleanup Notes
+- The transport smoke uses in-memory browser/WebSocket doubles and creates no persistent data.
+- To roll back, revert the `onTransportActivity` option in `src/api/codexRpcClient.ts` and `src/api/codexGateway.ts`, its integration in `src/composables/useDesktopState.ts`, the frontend smoke case, changelog entry, and this test section together.
+
+#### Regression Evidence
+- `npm.cmd run verify:frontend-normalizers` passed verified-open activity, heartbeat filtering/activity, normal notification delivery, stop/late-event isolation, old-WS/new-SSE late-open isolation, and 45-second connection-stage watchdog recovery.
+- `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` passed build, frontend/server smoke, CLI/CJS launcher, release archive/checksum, and npm package gates.
+- Local 7420 restarted from the rebuilt artifact as PID `32264`; both health endpoints returned `ok`, the error log remained `0` bytes, and the served index referenced the new `app-D-IFbz9b.js` bundle.
+- A live transport probe received WebSocket `ready`, SSE `ready`, and a subsequent SSE `bridge/heartbeat` after roughly 15 seconds.
+- `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420` passed with `180` active threads, `7/7` readable pinned samples, `activeFirstPageMs=169`, `activeFullListMs=177`, and `rpcRetryCount=0`.
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed desktop `1440x900`, foldable `884x1104`, and phone `393x852` checks without screenshots.
+
 ### Feature: Bounded notification transport backpressure
 
 #### Prerequisites
