@@ -12133,3 +12133,20 @@ This file tracks manual regression and feature verification steps.
 - 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
 - 2026-07-07 gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount=120`, `archivedFirstPageCount=100`, and required thread project `codexui`.
 - 2026-07-07 gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation fixtures, and the real phone thread page.
+
+### Feature: CI release verification does not require a local schema-audit directory
+
+#### Prerequisites
+- Dependencies are installed in `E:\javaword\CXCodex\codexui`.
+- No generated `output/app-server-schema-audit/<timestamp>` directory is required.
+
+#### Steps
+1. Run `npm.cmd run verify:server-modules`.
+2. Run `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit skip` on a clean checkout.
+
+#### Expected Results
+- The server-module smoke test constructs its method-catalog schema input in memory.
+- Both commands pass without reading a timestamped path under `output/app-server-schema-audit/`.
+
+#### Rollback/Cleanup Notes
+- Revert `scripts/server-module-smoke.ts` and this test section. Generated `output/` directories remain disposable.

@@ -2585,18 +2585,44 @@ async function smokeAppServerMethodCatalog(): Promise<void> {
   assert.deepEqual(methods, ['mcp/list', 'thread/list', 'thread/read', 'turn/start'])
   assert.deepEqual(extractMethodCatalogFromSchema({ oneOf: null }), [])
 
-  const rawAuditSchemaDir = join(process.cwd(), 'output', 'app-server-schema-audit', '20260704-141839', 'json')
-  const rawClientRequestSchema = JSON.parse(
-    await readFile(join(rawAuditSchemaDir, 'ClientRequest.json'), 'utf8'),
-  ) as unknown
-  const rawServerNotificationSchema = JSON.parse(
-    await readFile(join(rawAuditSchemaDir, 'ServerNotification.json'), 'utf8'),
-  ) as unknown
+  const rawClientRequestSchema = {
+    oneOf: [
+      {
+        properties: {
+          method: {
+            enum: [
+              'thread/shellCommand',
+              'thread/inject_items',
+              'thread/metadata/update',
+              'turn/steer',
+              'windowsSandbox/readiness',
+            ],
+          },
+        },
+      },
+    ],
+  }
+  const rawServerNotificationSchema = {
+    oneOf: [
+      {
+        properties: {
+          method: {
+            enum: [
+              'remoteControl/status/changed',
+              'thread/goal/updated',
+              'item/agentMessage/delta',
+              'fuzzyFileSearch/sessionCompleted',
+            ],
+          },
+        },
+      },
+    ],
+  }
   const clientMethods = extractMethodCatalogFromSchema(rawClientRequestSchema)
   const notificationMethods = extractMethodCatalogFromSchema(rawServerNotificationSchema)
 
-  assert.equal(clientMethods.length, 75)
-  assert.equal(notificationMethods.length, 63)
+  assert.equal(clientMethods.length, 5)
+  assert.equal(notificationMethods.length, 4)
   assert.equal(clientMethods.includes('thread/shellCommand'), true)
   assert.equal(clientMethods.includes('thread/inject_items'), true)
   assert.equal(clientMethods.includes('thread/metadata/update'), true)
