@@ -103,7 +103,7 @@
     "esbuild": "^0.28.1",
     "tailwindcss": "^4.1.18",
     "tsup": "^8.4.0",
-    "typescript": "^5.7.3",
+    "typescript": "^7.0.2",
     "vite": "^6.1.0",
     "vue": "^3.5.39",
     "vue-router": "^4.6.4",
