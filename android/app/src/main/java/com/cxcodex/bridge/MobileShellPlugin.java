@@ -224,6 +224,19 @@ public class MobileShellPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getDictationStatus(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("available", SpeechRecognizer.isRecognitionAvailable(getContext()));
+        result.put("permissionGranted", getPermissionState("microphone") == PermissionState.GRANTED);
+        result.put(
+            "onDeviceAvailable",
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                && SpeechRecognizer.isOnDeviceRecognitionAvailable(getContext())
+        );
+        call.resolve(result);
+    }
+
+    @PluginMethod
     public void startDictation(PluginCall call) {
         if (!SpeechRecognizer.isRecognitionAvailable(getContext())) {
             call.reject("此设备没有可用的系统语音服务，请改用上传语音。");

@@ -12166,6 +12166,9 @@ This file tracks manual regression and feature verification steps.
 6. Choose or record an audio file from the fallback picker and wait for server-side transcription.
 7. On a 390px-wide mobile browser, tap the microphone button once and confirm it starts dictation instead of requiring a long press; tap again to stop.
 8. Deny or leave the browser microphone permission prompt pending and confirm the composer shows `正在请求麦克风权限` rather than remaining idle.
+9. In a real mobile browser opened over plain HTTP, tap the microphone once and confirm the system recorder/file picker opens from that same tap.
+10. After denying browser microphone permission, confirm the inline status bar exposes `选择音频`; choose a short audio file and confirm the transcript enters the composer.
+11. Install an older Android shell that lacks `getDictationStatus`, reload the page, and confirm the first microphone tap uses the audio picker instead of a dead native call.
 
 #### Expected Results
 - Android system dictation works over HTTP and does not depend on WebView `getUserMedia`.
@@ -12173,6 +12176,9 @@ This file tracks manual regression and feature verification steps.
 - A missing speech service or denied permission gives a short actionable error; the audio-upload fallback remains available.
 - The compact browser composer exposes click-to-toggle dictation and shows upload fallback feedback before opening the system picker.
 - A pending browser permission prompt has a visible, cancellable state instead of appearing as a no-op tap.
+- Mobile touch handling does not suppress the click event, and the plain-HTTP picker is invoked synchronously while user activation is still valid.
+- Recording, permission, transcription, success, and error states appear in a compact status bar with explicit finish, cancel, or audio fallback actions.
+- Android probes native speech availability before the first tap and falls back cleanly when the installed shell or speech service is unavailable.
 
 #### Rollback/Cleanup Notes
 - Revert `MobileShellPlugin.java`, `AndroidManifest.xml`, `src/mobile/mobileShell.ts`, `src/composables/useDictation.ts`, `ThreadComposer.vue`, the Android documentation, changelog, and this test section.

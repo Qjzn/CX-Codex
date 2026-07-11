@@ -1,15 +1,43 @@
 <template>
   <form class="thread-composer" @submit.prevent="onSubmit(resolveSubmitMode())">
-    <p v-if="dictationErrorText" class="thread-composer-dictation-error">
-      {{ dictationErrorText }}
-    </p>
-    <p
-      v-else-if="dictationHelperText"
-      class="thread-composer-dictation-helper"
-      :class="{ 'thread-composer-dictation-helper--success': dictationFeedbackTone === 'success' }"
+    <div
+      v-if="dictationStatusText"
+      class="thread-composer-dictation-statusbar"
+      :class="`thread-composer-dictation-statusbar--${dictationStatusTone}`"
+      role="status"
+      aria-live="polite"
     >
-      {{ dictationHelperText }}
-    </p>
+      <span
+        v-if="dictationState !== 'idle'"
+        class="thread-composer-dictation-processing-dot"
+        aria-hidden="true"
+      />
+      <span class="thread-composer-dictation-statusbar-text">{{ dictationStatusText }}</span>
+      <button
+        v-if="dictationState === 'recording' || dictationState === 'requesting'"
+        class="thread-composer-dictation-statusbar-action"
+        type="button"
+        @click="stopRecording"
+      >
+        完成
+      </button>
+      <button
+        v-else-if="dictationState === 'idle' && dictationFeedbackTone === 'error'"
+        class="thread-composer-dictation-statusbar-action"
+        type="button"
+        @click="triggerAudioCapture"
+      >
+        选择音频
+      </button>
+      <button
+        v-if="dictationState === 'recording' || dictationState === 'requesting' || dictationState === 'transcribing'"
+        class="thread-composer-dictation-statusbar-cancel"
+        type="button"
+        @click="cancelDictation"
+      >
+        取消
+      </button>
+    </div>
 
     <div
       class="thread-composer-shell"
@@ -536,9 +564,6 @@
             @pointerup="onDictationPressEnd"
             @pointercancel="onDictationPressEnd"
             @lostpointercapture="onDictationPressEnd"
-            @touchstart.prevent="onDictationTouchStart"
-            @touchend.prevent="onDictationTouchEnd"
-            @touchcancel.prevent="onDictationTouchEnd"
             @contextmenu.prevent
           >
             <IconTablerPlayerStopFilled
@@ -1018,18 +1043,16 @@ const dictationButtonLabel = computed(() => {
   if (usesDictationUploadFallback.value) return '上传语音或录音'
   return shouldToggleDictationOnTap.value ? '点击开始听写' : '按住开始听写'
 })
-const dictationErrorText = computed(() =>
-  dictationState.value === 'idle' && dictationFeedbackTone.value === 'error'
-    ? dictationFeedback.value.trim()
-    : '',
-)
-const dictationHelperText = computed(() => {
-  if (dictationState.value === 'requesting') return '正在请求麦克风权限...'
-  if (dictationState.value === 'transcribing') return '正在把语音转成文字...'
-  if (dictationState.value === 'idle' && dictationFeedbackTone.value !== 'error') {
-    return dictationFeedback.value.trim()
-  }
-  return ''
+const dictationStatusText = computed(() => {
+  if (dictationState.value === 'requesting') return '等待麦克风权限，请在浏览器提示中选择允许'
+  if (dictationState.value === 'recording') return `正在听写 ${dictationDurationLabel.value}`
+  if (dictationState.value === 'transcribing') return '正在把语音转成文字…'
+  return dictationFeedback.value.trim()
+})
+const dictationStatusTone = computed(() => {
+  if (dictationState.value === 'recording') return 'recording'
+  if (dictationState.value !== 'idle') return 'working'
+  return dictationFeedbackTone.value
 })
 const dictationDurationLabel = computed(() => {
   const totalSeconds = Math.max(0, Math.floor(recordingDurationMs.value / 1000))
@@ -1604,18 +1627,6 @@ function onDictationPressEnd(): void {
   stopRecording()
 }
 
-function onDictationTouchStart(event: TouchEvent): void {
-  if (shouldToggleDictationOnTap.value) return
-  if (!supportsLiveRecording.value) return
-  onDictationPressStart(event as unknown as PointerEvent)
-}
-
-function onDictationTouchEnd(): void {
-  if (shouldToggleDictationOnTap.value) return
-  if (!supportsLiveRecording.value) return
-  onDictationPressEnd()
-}
-
 function onDocumentVisibilityChange(): void {
   if (document.hidden) {
     onDictationPressEnd()
@@ -1684,7 +1695,7 @@ function triggerAudioCapture(): void {
   const input = audioCaptureInputRef.value
   if (!input) return
   input.value = ''
-  window.setTimeout(() => input.click(), 0)
+  input.click()
 }
 
 function triggerFolderPicker(): void {
@@ -2939,17 +2950,42 @@ watch(
   @apply truncate;
 }
 
-.thread-composer-dictation-error {
-  @apply mb-2 px-1 text-xs text-amber-700;
-}
-
-.thread-composer-dictation-helper {
-  @apply mb-2 px-1 text-xs;
+.thread-composer-dictation-statusbar {
+  @apply mb-2 flex min-h-9 items-center gap-2 rounded-xl border px-3 py-1.5 text-sm;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
   color: var(--ui-text-secondary);
 }
 
-.thread-composer-dictation-helper--success {
-  color: var(--ui-accent);
+.thread-composer-dictation-statusbar--recording {
+  @apply border-red-200 bg-red-50 text-red-700;
+}
+
+.thread-composer-dictation-statusbar--error {
+  @apply border-amber-200 bg-amber-50 text-amber-800;
+}
+
+.thread-composer-dictation-statusbar--success {
+  @apply border-emerald-200 bg-emerald-50 text-emerald-800;
+}
+
+.thread-composer-dictation-statusbar-text {
+  @apply min-w-0 flex-1;
+}
+
+.thread-composer-dictation-statusbar-action,
+.thread-composer-dictation-statusbar-cancel {
+  @apply shrink-0 rounded-lg border-0 bg-transparent px-2 py-1 text-xs font-semibold;
+  color: inherit;
+}
+
+.thread-composer-dictation-statusbar-action {
+  @apply bg-white/80;
+}
+
+.thread-composer-dictation-statusbar-action:focus-visible,
+.thread-composer-dictation-statusbar-cancel:focus-visible {
+  @apply outline-none ring-2 ring-current ring-offset-1;
 }
 
 @keyframes composer-dictation-pulse {

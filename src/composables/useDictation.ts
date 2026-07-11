@@ -1,6 +1,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import {
   cancelMobileShellDictation,
+  getMobileShellDictationStatus,
   isNativeAndroidShell,
   startMobileShellDictation,
   stopMobileShellDictation,
@@ -29,7 +30,8 @@ export function useDictation(options: {
     typeof fetch !== 'undefined' &&
     typeof FormData !== 'undefined' &&
     typeof File !== 'undefined'
-  const nativeDictationSupported = ref(isNativeAndroidShell())
+  const nativeShell = isNativeAndroidShell()
+  const nativeDictationSupported = ref(false)
   const state = ref<DictationState>('idle')
   const isSupported = computed(() => nativeDictationSupported.value || liveRecordingSupported || fileUploadSupported)
   const supportsLiveRecording = ref(liveRecordingSupported)
@@ -52,6 +54,20 @@ export function useDictation(options: {
   let nativeRecordingStartedAt: number | null = null
   let nativeRecordingTimer: ReturnType<typeof setInterval> | null = null
   let nativeCancellationRequested = false
+
+  async function detectNativeDictationSupport(): Promise<void> {
+    if (!nativeShell) return
+    try {
+      const status = await getMobileShellDictationStatus()
+      nativeDictationSupported.value = status.available
+    } catch {
+      // Older Android shells do not expose native dictation. The composer keeps
+      // the synchronous audio picker fallback available on the first tap.
+      nativeDictationSupported.value = false
+    }
+  }
+
+  void detectNativeDictationSupport()
 
   function pickSupportedMimeType(): string {
     const candidates = [
