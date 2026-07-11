@@ -50,22 +50,28 @@ defineEmits<{
 }
 
 .sidebar-thread-controls-button {
-  @apply h-9 w-9 rounded-2xl border border-[#e4dac9] bg-[#fffdf8] text-[#6b6255] flex items-center justify-center transition;
+  @apply h-9 w-9 border border-transparent bg-transparent flex items-center justify-center transition;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
   transition:
     background-color 140ms ease,
     border-color 140ms ease,
     color 140ms ease;
-  box-shadow: 0 8px 18px -22px rgba(31, 41, 55, 0.16);
+  box-shadow: none;
 }
 
 .sidebar-thread-controls-button:hover,
 .sidebar-thread-controls-button:focus-visible {
-  @apply border-[#cdbfa8] bg-[#f7f1e5] text-[#2d261f];
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-thread-controls-button:active {
-  @apply border-[#c7b79b] bg-[#f2eadb] text-[#2d261f];
-  box-shadow: inset 0 1px 2px rgba(77, 67, 50, 0.12);
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-primary);
+  box-shadow: none;
 }
 
 .sidebar-thread-controls-icon {

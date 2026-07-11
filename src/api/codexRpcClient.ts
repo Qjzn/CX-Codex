@@ -41,7 +41,7 @@ const BRIDGE_HEARTBEAT_METHOD = 'bridge/heartbeat'
 const RPC_FETCH_TIMEOUT_MS = 20000
 const RPC_INTERACTIVE_FETCH_TIMEOUT_MS = 90000
 const RPC_LONG_FETCH_TIMEOUT_MS = 75000
-const RPC_LIST_FETCH_TIMEOUT_MS = 45000
+const RPC_LIST_FETCH_TIMEOUT_MS = 15000
 const RPC_LIGHT_READ_FETCH_TIMEOUT_MS = 40000
 const META_FETCH_TIMEOUT_MS = 12000
 const SERVER_REQUEST_FETCH_TIMEOUT_MS = 15000
@@ -282,7 +282,10 @@ export async function fetchRpcNotificationReplay(afterSeq: number, limit = 200):
 
 export function subscribeRpcNotifications(
   onNotification: (value: RpcNotification) => void,
-  options: { onConnectionStateChange?: (state: RpcConnectionState) => void } = {},
+  options: {
+    onConnectionStateChange?: (state: RpcConnectionState) => void
+    onTransportActivity?: () => void
+  } = {},
 ): () => void {
   if (typeof window === 'undefined') {
     return () => {}
@@ -326,6 +329,7 @@ export function subscribeRpcNotifications(
 
   const noteTransportActivity = () => {
     lastTransportActivityAtMs = Date.now()
+    options.onTransportActivity?.()
   }
 
   const clearActiveTransport = () => {
@@ -479,7 +483,8 @@ export function subscribeRpcNotifications(
 
     socket.onopen = () => {
       if (isStaleAttempt(attemptId)) {
-        cleanup?.()
+        clearFallbackTimer()
+        if (socket.readyState < 2) socket.close()
         return
       }
       noteTransportActivity()
@@ -527,8 +532,9 @@ export function subscribeRpcNotifications(
     activeAttempt += 1
     const attemptId = activeAttempt
     clearActiveTransport()
-    noteTransportActivity()
+    lastTransportActivityAtMs = Date.now()
     setConnectionState(hasEverConnected || reconnectAttempt > 0 ? 'reconnecting' : 'connecting')
+    startTransportWatchdog()
 
     if (transport === 'ws') {
       attachWebSocketTransport(attemptId)
@@ -609,10 +615,10 @@ export async function respondServerRequest(body: ServerRequestReplyBody): Promis
   }
 }
 
-export async function fetchPendingServerRequests(): Promise<unknown[]> {
+export async function fetchPendingServerRequests(options: { signal?: AbortSignal } = {}): Promise<unknown[]> {
   const response = await fetchWithTimeout(
     '/codex-api/server-requests/pending',
-    {},
+    { signal: options.signal },
     SERVER_REQUEST_FETCH_TIMEOUT_MS,
     'Pending server requests',
   )

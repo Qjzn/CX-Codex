@@ -2,7 +2,131 @@
 
 ## 未发布
 
+## 2.3.0 - 2026-07-11
+
+- 开源开发契约：
+  - 统一要求 Node.js `22.13.0+` 与 npm，与 `pdfjs-dist` / Capacitor 的实际运行时要求保持一致；Windows bootstrap 会先更新仓库再准备运行时，本机 Node 过旧时使用安装目录内的便携式 LTS，避免仓库替换误删刚下载的 Node。
+  - 本地开发收敛为显式 `npm ci` 后运行 `npm run dev`，移除会在 Windows 失败的 pnpm / Unix `sh` 混用脚本；README 在 npm 包真正发布前不再宣称可用 `npx`。
+
+- 安全：
+  - 本机免登录判断不再信任可由客户端伪造的 `Host` 请求头。只有 TCP 来源地址和请求 Host 同时为 `localhost`、`127.0.0.1` 或 `::1` 时才允许本机直连；远端请求即使伪造 `Host: localhost` 也必须完成密码登录。
+- 稳定性与轻量化：
+  - WS/SSE 的 `open`、`ready` 和心跳现在会同步更新页面连接健康时间；长时间没有业务消息时不再被误判为通知陈旧，也不会在手机回到前台时反复重建仍然健康或刚开始连接的通道。
+  - 慢速 WebSocket 客户端的待发送数据限制为 1 MiB，SSE 在写缓冲拥塞时最多暂存 256 条 / 512 KiB 并按 `drain` 顺序续传；超过上限会只断开该慢连接，由持久 replay 补齐，避免弱网手机长期占用服务端内存。
+  - 通知 replay 改为固定首页 high-water 后按页末 `seq` 逐页追赶，不再只取 200 条就把游标跳到全局最新序号；replay 期间的实时通知会暂存、排序并去重，避免高序号 live 事件先到导致中间页永久跳过。
+  - 首次启动、服务端序号重置或 `oldestSeq` 已超过本地游标时，先通过会话列表、pending request 和当前会话 snapshot 建立权威基线；历史 replay 只更新轻量运行态与刷新需求，不再重触发队列发送、worktree 自动提交或 Android 通知，页面退出时也会取消尚未完成的 snapshot，避免晚到结果回写已卸载界面。
+  - `app/list/updated` 通知在实时推送和持久 replay 中只保留“应用列表已失效”信号，不再重复保存和传输完整 App 目录；旧 runtime 库会在打开时轻量清理已有大 payload。
+  - runtime health 新增数据库占用、空闲页比例和 auto-vacuum 状态；新库启用 incremental vacuum，旧库可在停服后运行 `cx-codex runtime-compact` 显式压缩，避免把 full `VACUUM` 放进启动热路径。
+- 界面体验：
+  - 移动端会话与操作栏进一步对齐最新 Codex 能力：手机正文改为更宽的无边框阅读流，压缩标题噪音并隐藏内部插件提示、记忆引用和应用指令；真实流式首字立即落屏、持续增量合批、完成后再做完整 Markdown，同时降低高频运行态写入和重复消息重渲染。模型/推理档位改为 `model/list` 元数据驱动，运行时后续开放 GPT-5.6 等型号时可自动出现；`+` 菜单仅展示已安装启用的原生插件、可用 MCP、启用技能及明确的一次性计划/本轮要求，原生插件先落屏，慢速 MCP 元数据在后台补齐。
+  - 手机会话标题栏新增 Codex.app 风格的紧凑连接状态：正常为绿点，连接/同步中显示旋转状态，恢复异常使用警告或错误色并显示短标签；同一控件仍可一键强制恢复当前会话，避免只剩一个无语义刷新图标。
+  - 会话详情首屏可读时间更准确且更跟手：长会话消息已到达但 loading 状态尚未完全落下时，会话页也会先完成首屏布局/底部锚定；真实线程回归新增页面内 `firstScreenReady` 指标，区分产品 DOM ready 时间和外部浏览器轮询开销，避免后续性能判断被测试脚本等待放大。
+  - 长会话 fallback 历史更轻：本地 session-log 恢复会跳过 Codex 内部 context 和 assistant commentary 过程提示，并折叠 `event_msg`/`response_item` 相邻重复消息；真实 `分析项目` fallback state payload 从约 238KB 降到约 31KB，避免移动端为不可见过程噪音下载和归一化大块历史，同时旧历史加载到最早 turn 后会清理过期 `history.notice`，不再残留无效加载入口。
+  - 长会话 fallback 状态更准确：当 `thread/read(includeTurns:true)` 只能从本地 session log 恢复历史时，thread-read cache 会保留 `session-log` 来源；后续 state snapshot 命中该缓存仍标记为 `cached`，避免前端误判为 App Server fresh 历史并降低历史缺失排查难度。
+  - 会话详情首屏 state snapshot 去重：前端对稳定、非 stale、非运行中、无 pending request 的 `/codex-api/state/thread` 完整快照增加亚秒级短缓存，并跳过刚完成详情同步后的无强信号静默二刷；真实 `分析项目` 手机回归收紧为初始 settle 期间最多 1 次 state snapshot，避免初始化/恢复链路重复传输同一大块会话状态。
+  - 长会话继续加载较早历史时，前端会在本地展开隐藏消息后连续几帧恢复阅读锚点，减少二次加载时内容突然跳动。
+  - 会话详情首屏继续减负：缺少上下文用量缓存时，`thread-token-usage` 自动补齐从首屏后约 1.6 秒延后到约 11 秒，并且只在该线程仍为当前选中线程时执行；真实 `分析项目` 手机回归收紧为初始 settle 期间不得发起 token usage 请求，避免非核心统计读取拖慢进入会话。
+  - 会话详情进入耗时更可观测：`/codex-api/health` 的 RPC diagnostics 现在保留最近 RPC 记录，`test:7420:frontend` 会在真实 `分析项目` 手机线程页输出浏览器 endpoint timing 和 App Server recent RPC 摘要，方便持续定位 `thread/read`、state/runtime snapshot、token usage 或其他非核心请求是否拖慢首屏。
+  - 长会话首屏 DOM 压力纳入回归门禁：`test:7420:frontend` 现在会在真实 `分析项目` 手机线程页输出并断言首屏挂载的会话项、消息卡、代码行、命令输出、raw payload 和会话 DOM 节点上限，避免后续改动把长会话重新变成一次性重渲染。
+  - Android 恢复同步更可靠：CX Codex Android 从后台/锁屏返回时，首个恢复同步会同时刷新线程列表和当前会话，避免桌面端新增线程、置顶/项目排序变化在手机侧栏里长期不追上；frontend 回归新增 Android resume 列表刷新源码护栏。
+  - 会话列表冷启动更轻：启动/路由后台刷新在没有可用本地侧栏缓存时，先读取 active `thread/list` 第一页渲染首屏，再延迟补齐完整 active 分页；`sidebar-data` 回归新增 active 第一页耗时指标和 15 秒上限，防止移动端侧栏再次被全量分页阻塞。
+  - Cache-first 会话切换更跟手：当线程消息从本地缓存命中且没有运行中、通知陈旧、同步落后或显式刷新信号时，后台消息刷新会延迟 650ms 再启动，让手机端先稳定渲染首屏；真实 `分析项目` 手机回归新增前 650ms 内最多一次 RPC 的断言，防止缓存首屏被重复 heavy refresh 抢占。
+  - 会话详情本地缓存继续轻量化：浏览器 message cache 现在只保留每个线程最近 24 条轻量消息，正文和命令输出分别压到 6k/3k 上限，完整历史仍由后台刷新恢复；真实 `分析项目` 手机回归新增缓存条数、文本长度和缓存体积断言，降低进入长会话时 localStorage 解析和首屏 hydrate 压力。
+  - 会话详情首屏性能回归加严：`test:7420:frontend` 现在会测真实 `分析项目` 手机线程从打开到“用户上下文 + Codex 回复”同时可见的时间，要求 12 秒内可读，并继续保留 9 秒 settle 后的重复请求数检查，避免后续改动让会话详情重新变慢或首屏空白。
+  - 长会话 fallback 历史恢复增强：当 Codex app-server 因 `rollout does not start with session metadata` 无法直接读取超大线程时，7420 会从更大的 session-log 尾部窗口恢复最近 40 个 turn，并过滤 reasoning/compaction 等非消息大行，避免真实 `分析项目` 这类长线程只剩当前回合、没有 `继续查看更多` 的退化。
+  - 真实长会话加载更多回归加严：`test:7420:frontend` 现在会在真实 `分析项目` 手机线程里连续点击两次 `继续查看更多`，每一步都断言只展开小窗口、保留用户上下文和 Codex 回复，并保持滚动锚点稳定，避免长会话重复加载重新退化为大块展开或跳动。
+  - 长会话旧历史远端加载增加防重复触发：当 `继续查看更多` 已进入远端 `loadOlderHistory` 分段取回时，按钮会保持轻量 loading/disabled，直到消息回填或 8 秒兜底超时，避免手机端连续点击或触顶滚动重复发起重型旧历史请求；前端回归新增连续点击只触发一次的断言。
+  - 长会话旧历史入口合并：`继续查看更多` 现在不只展开本地已加载窗口；当本地窗口已经到头但 `history.notice` 仍提示还有更早 turn 时，同一个按钮会继续触发远端 `loadOlderHistory` 分段取回，避免手机端把真正的旧历史入口藏在提示卡片里；前端回归 fixture 新增按钮文本和事件触发断言。
+  - 长会话加载更多后继续保留上下文：当服务端最近切片里没有普通用户消息、且 `<codex_internal_context>` 已被隐藏时，本地 `继续查看更多` 展开到已加载切片起点后仍会保留轻量“当前任务”上下文预览，避免真实 `分析项目` 手机线程加载更多后再次变成助手内容孤岛。
+  - 长会话旧历史 fallback 缓存隔离：当 `thread/read` 因损坏/非标准 session jsonl 走本地 session-log fallback 时，`responseView=older` 的旧历史窗口不再写入最近会话详情缓存，避免后续打开会话被旧历史切片污染；server module smoke 新增本地参数剥离、older 窗口裁剪和 fallback 不缓存的回归断言。
+  - 长会话“继续查看更多”增加真实线程回归门禁：7420 前端回归现在会在 `分析项目` 手机线程页点击一次加载更多，断言只展开一小段本地窗口、保留用户上下文和 Codex 回复，并保持滚动锚点稳定；正常后台 `thread/list` 刷新不会被误判为加载更多失败。
+  - 长会话最近窗口继续补上下文：当内部 goal/context 消息被隐藏后，如果最新可见窗口只剩 Codex 回复和阶段回复，会在不展开中间历史的前提下补一条轻量上下文预览；没有普通用户消息可引用时，仅显示短的“当前任务”折叠提示，避免手机端首屏进入真实线程时缺少上下文；7420 前端回归新增真实线程首屏必须同时有用户上下文和 Codex 消息的断言。
+  - 会话详情噪声继续收敛：`<codex_internal_context>` 这类 Codex 目标/系统上下文不再作为普通“你”的消息显示，也不会参与最近用户 turn 判断；7420 前端回归新增页面正文不得暴露 internal context 的断言。
+  - 会话详情首屏标题修复：直接打开真实线程 route 时会并行读取轻量标题缓存，优先显示桌面端一致的线程标题；缓存未命中时也不会再把 `<codex_internal_context>` 这类内部上下文当作会话标题展示。
+  - 会话详情首屏继续减负：直接打开真实线程 route 时先读取当前线程内容，首次通知恢复和 active sync boost 不再因列表未加载而拉取 `thread/list`，全量分页刷新改为延迟后台任务；手动刷新和发布数据门禁仍保持全量分页，减少真实线程进入前 5 秒的列表 RPC。
+  - 会话详情首屏继续减负：选中真实线程后用于技能选择器的 `skills/list` 自动刷新进一步延后到首屏、侧栏后台刷新和模型偏好后台刷新之后执行；技能变更通知、技能中心和显式刷新仍保持原有即时路径，减少手机端进入会话前 5 秒的非核心 RPC。
+  - 会话详情首屏继续减负：启动初始化时的 `model/list` 与 `config/read` 模型偏好读取进一步延后到首屏和缓存侧栏后台刷新之后执行；Composer 继续优先使用本地已选模型，减少真实线程 reload 后 2 秒左右的非核心 RPC 竞争。
+  - 会话详情首屏继续减负：修复线程 deep link / reload 时路由名短暂未稳定导致误触发首页技能刷新兜底的问题，避免缓存 reload 场景在 200ms 左右提前请求 `skills/list` 抢占真实会话首屏。
+  - 长会话最近窗口继续优化：会话页默认仍只显示最近内容，但窗口起点不再切到最新 turn 中间，避免工具/阶段输出较多时把本轮用户问题裁掉，只剩“阶段回复 + 最终消息”的缺上下文首屏。
+  - 会话详情首屏继续减负：缓存侧栏已可立即显示时，真实 `thread/list` 后台刷新改为首屏后短延迟执行；手动刷新、无缓存启动和显式线程列表读取仍保持即时网络刷新，减少手机端进入真实会话时的首屏 RPC 竞争。
+  - 会话详情首屏继续减负：启动初始化时的 `model/list` 与 `config/read` 模型偏好读取改为首屏后短延迟后台执行，保留本地已选模型先渲染 Composer；工作台手动刷新和显式模型配置刷新仍即时执行。
+  - 会话详情首屏继续减负：线程选择完成后不再立即请求 `skills/list`，改为首屏后短延迟后台刷新当前 cwd 的技能列表；技能变更通知、显式刷新和技能中心页面仍保持原有即时刷新路径，减少手机端打开真实会话时的非核心 RPC 竞争。
+  - 会话详情首屏继续减负：当 `/codex-api/state/thread` 已返回 fresh 消息快照且没有丢失当前已保留消息时，前端会直接登记本轮 settled 消息已同步，不再立刻补打一轮重型 `thread/read`；旧历史分段展开、运行中 catch-up 和缺消息保护逻辑保持不变。
+  - 会话详情首屏继续减负：官方 Codex 桌面端可刷新状态检测改为首屏后延迟空闲执行，避免 `/codex-api/desktop-app/status` 这类非会话核心慢请求在手机端打开真实线程时抢占首屏资源；手动刷新桌面端后的状态检测仍会立即执行。
+  - 会话详情首屏继续减负：`workspace-roots-state` 启动只读状态按 2 秒短缓存和 in-flight 请求复用，多个初始化入口同时读取工作区根时只打一次后端；写入工作区根、打开项目根或创建工作树后会清缓存，避免项目列表状态滞后。
+  - 会话详情首屏继续减负：新项目默认名称的 `project-root-suggestion` 请求按 `basePath` 复用 in-flight 结果并保留 2 秒短缓存，打开真实线程时同一 `E:\javaword` 建议不再在首屏连续请求多次；创建/打开项目根后会清空缓存，避免新建项目后沿用旧建议。
+  - 会话详情首屏继续减负：`thread-token-usage` 这类上下文用量辅助读数不再在线程消息落屏后立即抢占请求，而是延迟到短暂空闲后后台刷新；已有用量、in-flight 请求和重试节流仍会复用，减少手机端进入会话时的非核心慢请求干扰。
+  - 长会话旧历史按需取回升级为分段窗口：`加载较早历史` 现在请求当前最早 turn 之前的一段旧窗口，桥层用 `responseView=older` / `beforeTurnIndex` / `turnLimit` 在本地切片返回，避免用户点击后把完整历史一次性推给浏览器。
+  - 长会话旧历史支持按需取回：`history.notice` 增加“加载较早历史”操作，并保留本地完整历史读取能力；桥层会在转发 App Server 前剥离本地参数，默认同步仍保持最近窗口且大历史请求不写入服务端 thread-read 缓存。
+  - 长会话最近内容视图增加轻量说明：服务端裁剪旧 turn 时会带上 `turnsView/originalTurnsCount` 元数据，前端在会话顶部显示一条 `history.notice`，说明已优先显示最近内容并折叠更早轮次，避免减负策略被误判为历史丢失。
+  - 前台/Android 恢复同步继续减负：页面回到前台或 Android shell resume 时，若当前线程刚在短时间内完成 fresh 详情同步且没有未读、运行中、stale、队列或权限请求信号，后续恢复重试不再重复触发重型消息刷新；真正需要 catch-up 的线程仍会立即刷新。
+  - 历史 reasoning payload 继续减负：`thread/read` / resume / rollback 这类带 turns 的服务端结果会在返回浏览器前移除前端已不展示的 `reasoning` item，减少长会话打开时的网络、缓存和归一化压力；实时运行状态、可见消息和未知 item 诊断兜底不变。
+  - 历史 MCP 工具调用 payload 继续减负：`thread/read` 这类带 turns 的服务端结果会在返回浏览器前移除已不展示的 `mcpToolCall` item，减少移动端打开工具密集型长会话时的网络、缓存和归一化压力；实时运行状态和其他未知 item 诊断兜底不变。
+  - `thread/read` 服务端 payload 继续减负：带 turns 的 RPC 结果在返回浏览器和写入缓存前会移除低价值 `fileChange` item，避免长任务线程把不会展示的文件变更补丁继续传给移动端；其他未知 item 仍保留 raw payload 诊断兜底。
+  - Session-log fallback 解析继续减负：从本地 session jsonl 恢复会话详情时，先用轻量字符串候选过滤跳过 `fileChange` 等无关行，再解析用户/助手消息和 session_meta，减少损坏/长任务线程恢复时的 JSON.parse 开销。
+  - 会话详情 fileChange 噪声继续前移过滤：`fileChange` 这类普通用户不会阅读的 App Server 文件变更事件现在在消息归一化阶段直接丢弃，不再先生成 raw payload 再由会话组件隐藏，减少长任务线程打开时的 JSON 序列化和消息数组压力。
+  - 会话消息缓存写入继续减负：同一次线程同步中，消息缓存的归一化 snapshot 现在同时用于签名比对和实际写入，避免长会话同步时对最近消息重复执行截断、映射和 JSON 序列化前准备。
+  - 长会话虚拟高度估算继续减负：未测量消息的高度估算新增 LRU 缓存，按消息内容和展开状态失效，减少分段展开旧历史时对长文本、Markdown 图片和命令输出的重复扫描。
+  - 命令输出块改为按需渲染：已完成命令默认折叠时只保留状态摘要，不再提前挂载大段 `<pre>` 输出；展开命令或运行中命令仍正常显示输出，减少长会话里历史命令日志的 DOM 和文本布局成本。
+  - Raw payload 诊断卡片改为按需渲染：结构化 raw payload 卡片折叠时只保留摘要，不再提前生成 JSON pretty 预览；用户展开后再渲染完整预览，减少长会话首屏和滚动时的无效解析成本。
+  - 长会话消息块缓存继续减负：会话页解析 Markdown / 表格 / 代码块的缓存改为 LRU 小缓存，长会话反复查看旧历史后不再把所有已解析消息块常驻内存，降低移动端长期阅读时的内存和 GC 压力。
+  - 表格消息渲染继续减负：Markdown 表格在桌面只渲染横向表格，在手机只渲染卡片布局，不再同时生成两套 DOM，减少移动端长会话里的节点数量和布局压力。
+  - 长代码块渲染更轻：消息里的大型代码块默认只准备预览行，用户展开时再生成全量高亮行；复制仍保留完整代码，降低手机端打开含大量代码输出会话时的首屏计算压力。
+  - 长会话滚动更轻：消息虚拟列表的可见范围查找从线性扫描改为二分查找，长会话滚动时减少重复高度计算，保持原有可见窗口和交互不变。
+  - 会话详情同步更轻：线程消息本地缓存新增内容签名，后台同步拿到相同消息快照时不再重复写入 `localStorage`，降低手机端频繁 silent sync 的主线程存储开销。
+  - 会话详情首屏更快显示：线程 runtime snapshot 或本地缓存已有消息时，先渲染当前可用内容，settled 状态下用于补齐最新消息的重型 `thread/read` 改为后台静默刷新，减少手机端打开长会话时的空白等待。
+  - 会话列表冷启动继续减负：服务端 `thread/list` 缓存新增磁盘快照，7420 重启后可先返回最近列表并后台刷新真实 App Server 数据；RPC 缓存 key 改为稳定字段排序，避免同一列表参数因对象字段顺序不同而错过缓存。
+  - 会话页初始同步继续减负：线程详情正在加载或刚完成加载时，通知流首次连接不再强制重复 foreground recovery；`thread-token-usage` 辅助读数改为短时间节流并保留已有值，避免运行中会话每轮同步都触发 2 秒级 token usage 请求拖慢手机端。
+  - Session-log fallback 不再误删重复短消息：恢复本地 session log 时改为按 message id 去重，只有无 id 的相邻重复事件才会折叠，避免多次发送“继续”等相同内容时后续 turn 被当作重复内容丢掉。
+  - Session-log fallback 会话详情补齐标题元数据：当 `thread/read` 只能从本地 session log 恢复消息时，会用原始线程名或首条用户消息 preview 回填 `name/title`，减少直接打开恢复线程时标题空白的问题。
+  - 会话详情恢复更稳：当选中线程的详情读取只能拿到 `cached` / `unavailable` 非 fresh 消息状态时，前端会保留已有内容并安排最多 3 次轻量退避重试，避免一次 App Server 短暂失败后长期停留在旧缓存或缺历史状态。
+  - 长会话服务端 payload 继续减负：`thread/read` / resume / rollback 这类带 turns 的 App Server RPC 结果除了保留最近 10 个 turn，现在还会限制单个 turn 内 item 数，保留首个 item 和最近 item，避免单轮长任务把数百条工具/日志 item 一次性推给移动端。
+  - 长会话响应式 watcher 继续减负：会话页的运行命令计时、命令完成折叠和新输出签名检测改为只观察最近消息窗口，并合并当前已展开可见窗口；默认进入超长会话时不再随每次消息变化扫描完整历史。
+  - 长会话主渲染窗口继续前移：会话页现在只为当前可见历史窗口构建消息 render entries，进入超长会话时默认只准备最新窗口；旧历史仍通过“继续查看更多”逐段加入，减少移动端首屏进入时的历史消息准备成本。
+  - 长会话进入继续减负：会话页的引导回复折叠、阶段耗时等辅助 UI 派生计算只围绕最近消息窗口执行，旧历史仍可通过“继续查看更多”展开，避免进入超长会话时为全部历史 turn 构建辅助元数据。
+  - 长会话渲染继续轻量化：超长 fenced code / diff block 默认只渲染前 120 行，保留“展开剩余行”和“复制全文”，减少移动端进入历史长回复时一次性 DOM 节点和代码行渲染压力。
+  - 会话内容进入速度继续优化：最近打开过的会话会写入轻量消息快照缓存，重新进入时先显示缓存内容，再静默刷新真实 runtime/thread 数据；缓存按线程数、消息数和文本长度裁剪，避免移动端反复等待空白会话页。
+  - 移动端/浏览器首屏会话列表增加缓存优先启动：最近一次归一化后的项目/线程列表会以小窗口写入本地缓存，重新打开时先渲染缓存侧栏，再后台刷新真实 `thread/list`，减少 App Server 冷列表 4-6 秒时的空白等待。
+  - 移动端会话稳定性回收：`thread/list` 的 Desktop/session-index 补读改为小批量、总预算和单次超时控制，避免为了补齐少数缺失会话拖慢首屏列表；`thread/read(includeTurns:true)` 遇到 malformed session jsonl / `does not start with session metadata` 时，会从本地 session log 尾部有界恢复最近用户/助手消息，避免会话页空白或暴露内部路径。
+  - 设置里的 Android App 更新入口收敛为单一卡片：只保留“当前版本 / 检查更新”，检查时显示轻量加载动画；只有 GitHub 最新发布版本高于当前安装版本且存在 Android 安装文件时，才弹出下载确认。
+  - 7420 侧栏会话数据源新增 Desktop/session-index 有界补充：当 Codex Desktop 能看到但 App Server `thread/list` 首屏遗漏的近期线程存在时，会通过 `thread/read(includeTurns:false)` 补入侧栏，避免 `codexui / 分析项目` 这类真实会话在浏览器端缺失；补充输出保持固定上限，防止缓存命中后首屏线程数量持续膨胀。
+  - 损坏或非标准 session jsonl 导致 App Server 返回 `thread-store internal error` / `does not start with session metadata` 时，7420 会按可恢复线程读取失败处理，不再把本机 session 路径和内部错误直接显示到会话页。
+  - `test:7420:sidebar-data` 和 `test:7420:frontend` 增加 `分析项目` 这类 Desktop/session-index 目标线程回归断言，数据门禁会校验目标线程进入 active `thread/list`，浏览器门禁会校验桌面侧栏和手机抽屉 DOM 都包含同一线程。
+  - 手机端首页回归新增打开侧栏 drawer 后必须渲染会话行和项目组的断言；`thread/list` RPC 单次等待从 45 秒收紧到 15 秒，并为侧栏空列表提供明确提示，避免 App Server 卡住时手机端长期停留在无信息骨架屏。
+  - 侧栏顶部操作入口从“主操作 + 纵向命令列表”压缩为 3 列手机友好的快捷操作网格，保留图标和短标签，减少首屏高度占用；项目展开后默认只显示最新 5 条会话，超出部分通过 `显示更多 N 条` 继续展开。
+  - 侧栏项目目录和项目内线程列表改为保留上游 App Server / 工作区归一化后的顺序，不再在侧栏层按最近更新时间二次重排项目；置顶和正在运行线程会继续出现在快捷区，同时保留在所属项目线程列表中，避免与 Codex Desktop 的项目浏览模型不一致。
+  - 会话阅读流默认隐藏 `unhandled.fileChange` 这类低价值系统噪声，不再把“未适配的 App Server 内容 / fileChange / 字符数”诊断块直接暴露给普通用户；其他未知协议内容仍保留结构化 raw payload 兜底。
+  - 会话页标题区重新排版：线程运行状态合并进顶部标题 meta 行，正文区不再重复显示独立状态栏；状态条在标题区隐藏阶段轨道、seq/turn 等低频字段，只保留当前状态和必要恢复/停止动作，正文里的简单“思考/写回复”提示也会在 header 已承载状态时自动收起。
+  - 侧栏顶部操作进一步压缩：`新会话 / 搜索` 改为两列紧凑主操作，工作台/技能中心/GitHub/诊断入口降低行高，减少左侧导航占用的首屏高度。
+  - 设置面板新增桌面/移动统一标题栏和关闭按钮，去掉移动端“向上滑动”等解释性小字，普通设置说明默认收起，仅保留状态反馈，面板行距和品牌块同步压缩。
+  - 会话页进入紧凑化整理：运行状态条不再为正常收敛/运行状态显示解释性第二行，`已同步` 和运行活动以单行轻量状态呈现；引导式内容入口缩短为 `阶段回复`；Composer 默认移除听写教学提示、单行起步并降低最小高度与阴影，减少首屏空间占用。
+  - 侧栏顶部“新会话 / 搜索”从 icon-only 工具按钮提升为纵向 icon + label 主操作行，和下方工作台/技能中心/GitHub/诊断命令入口形成连续 Desktop 风格导航；折叠屏首页回归新增 primary action 行数、图标数、圆角和触控高度断言，并将 `mcpServerStatus/list` 后台状态轮询从前端截图回归的误拦截中排除。
+  - 侧栏顶部快捷入口从 2x2 按钮区收敛为纵向 icon + label command list，减少工具盘感，更接近 Codex Desktop 的连续左侧命令列表；折叠屏首页回归新增 command list 纵向布局、图标数量、圆角和触控高度断言。
+  - 截图回归在完成首页设置面板断言后会自动关闭设置面板，并在 884x1104 首页 shell 断言中禁止设置面板残留，避免 `home-foldable.png` 被上一步设置面板状态污染。
+  - `test:7420:frontend` 新增显式截图回归参数 `-CaptureScreenshots`、`-ScreenshotTaskName` 和 `-ScreenshotOutputDir`，可用 `agent-browser` 在现有 DOM 回归矩阵通过时把页面截图保存到 `output/regression-7420/<task-name>/`，覆盖桌面、手机和折叠屏视口。
+  - `test:7420:frontend` 新增 884x1104 折叠屏/窄平板回归视口，覆盖首页 shell、Composer fixture 和 conversation fixture；首页会先重置侧栏折叠/宽度偏好，再断言侧栏比例、主内容宽度、Composer 宽度、元素贴合和无横向溢出。
+  - 会话主区 runtime 状态条、消息队列、消息气泡、表格、raw payload、长文本展开、文件右键菜单和消息操作按钮继续收敛为白灰中性 token；`conversation-blocks` fixture 增加 runtime/queue 样本，并由 `test:7420:frontend` 自动断言会话辅助 chrome 不再出现暖色背景、圆角不超标且无横向溢出。
+  - App Shell 设置面板、移动设置 sheet、启动配置卡片、toast 和确认弹窗继续收敛为白灰中性 token；设置面板去掉蓝色渐变卡片和暖色纸感控件，并由 `test:7420:frontend` 在首页自动打开设置面板断言背景、圆角、边框和无横向溢出。
+  - 新增 `/#/__regression/composer-shell` 回归 fixture，覆盖桌面和手机视口下的底部 Composer；Composer 外壳、sheet、插件菜单和运行配置面板从暖色重卡片收敛为白灰 token 样式，并由 `test:7420:frontend` 自动断言高度、圆角、控件可见性和无横向溢出。
+  - 新增 `/#/__regression/sidebar-rows` 回归 fixture，覆盖运行中、未读、不同来源和多项目线程行；Sidebar 线程来源/状态从 pill chip 收敛为轻量行内文本，菜单和重命名弹窗改为白灰 token 驱动样式，减少侧栏卡片化和暖色残留。
+  - `test:7420:frontend` 增加手机宽度 `conversation-blocks` fixture 验证，逐个断言 request、tool、file、code、command 等结构化块不会越出视口；会话结构化块在窄屏下同步收敛为更紧凑的单列触控布局和桌面端风格小圆角。
+  - `/#/__regression/conversation-blocks` 增加 unsupported tool call fixture，参考 `friuns2/codex-mobile` 的 pending request 类型边界，把 tool call 展示为独立工作台卡片，显示服务、工具、摘要和“让 Codex 改用文字继续”动作。
+  - `/#/__regression/conversation-blocks` 增加命令执行输出 fixture，命令行收敛为中性薄边框结构化日志块，并由 `test:7420:frontend` 自动断言命令 label、输出展开、marker、圆角上限和无横向溢出。
+  - `/#/__regression/conversation-blocks` 增加 MCP 权限确认 fixture，权限请求卡片收敛为中性薄边框工作台样式，并由 `test:7420:frontend` 自动断言服务/工具名、操作按钮、圆角上限和无横向溢出。
+  - `test:7420:frontend` 的 conversation fixture 会通过真实点击代码块复制按钮并 stub `navigator.clipboard.writeText` 捕获复制内容，断言复制内容不包含 Markdown fence 且按钮显示“已复制”反馈。
+  - 新增 `/#/__regression/conversation-blocks` 回归 fixture，并把 `test:7420:frontend` 扩展为自动断言 code block、diff block、复制按钮、文件卡片和 raw payload 卡片，避免 P1 结构化消息块只靠人工截图判断。
+  - Conversation 代码/diff block 增加块级复制按钮和复制反馈，文件附件从 emoji chip 改为薄边框文件卡片，继续推进 P1 结构化工程输出；移动端空输入状态下 Composer 发送按钮保持可见 disabled，减少底部动作区跳变。
+  - 建立 P0 桌面端 parity 视觉基线：App Shell、侧栏入口、会话行、顶部栏和底部输入框统一使用中性白灰 token、连续侧栏、紧凑列表行和更接近 Codex Desktop 的主操作样式，减少暖色卡片化和过重阴影。
+  - 会话栏现在显示会话预览、来源和运行/未读状态，减少只看标题时无法判断上下文的问题，同时保持桌面、手机和折叠屏固定行高。
+  - 对话消息新增 fenced code block / diff block 结构化渲染，代码和补丁输出不再只作为普通 Markdown 文本显示。
+  - 未适配的 App Server item / raw payload 会以折叠结构化卡片展示，保留诊断可见性但避免原始 JSON 干扰正常阅读。
+  - 新增 `PRODUCT.md`，把项目定位、用户、设计原则和桌面端 parity 目标沉淀为后续 UI 迭代上下文。
+  - 新增 `docs/desktop-parity-ui-plan.zh-CN.md`，把 Codex Desktop 高保真 UI 目标、GitHub 参考项目、视觉系统、P0/P1/P2/P3 实施批次和回归验收标准固化为后续前端重构基线。
+  - 新增并优化 `docs/frontend-ui-remediation-plan.zh-CN.md`，把前端从稳定可用提升到美观、顺手、贴近 Codex Desktop 的整改目标拆成视觉 token、参考截图门禁、组件范围、体验目标、自动化/半自动化断言矩阵和 P0-P5 实施阶段。
 - 语音输入：
+  - Android / 移动端语音输入改为“先转成文字写入输入框，再由用户确认发送”；默认关闭转写后自动发送，设置中仍可手动开启。
+  - 不支持 WebView 直接录音的环境会走系统录音或音频上传 fallback，转写完成后同样只填入 Composer 草稿，并提供转写中和成功写入的轻量反馈。
+  - `test:7420:frontend` 的 Composer fixture 新增语音转文字回归探针，在桌面、手机和折叠屏视口自动断言转写文本进入输入框且未触发提交。
   - 后端转写支持优先使用 OpenAI 官方音频转写 API，配置 `CX_CODEX_OPENAI_API_KEY`、`CODEXUI_OPENAI_API_KEY` 或 `OPENAI_API_KEY` 后不再依赖 ChatGPT 网页登录态。
   - 官方转写 multipart 会由服务端规范化 `model`、`response_format` 和 diarize 分段参数，普通转写模型保持 `json`，`gpt-4o-transcribe-diarize` 按官方文档使用 `diarized_json` 与 `chunking_strategy=auto`，避免客户端自带字段绕过官方模型的响应格式约束。
   - 前端语音输入支持从 diarized JSON 的 `segments[].text` 兜底提取文本，避免上游没有顶层 `text` 字段时空转写。
@@ -34,6 +158,9 @@
   - OpenAI 官方文档审查手册刷新到 2026-07-05 02:12 复核结果，并记录 OpenAI Docs MCP 注册命令；当前线程重启前仍以官方 OpenAI 域名页面为证据来源，确认 App Server WebSocket auth、Speech to text 25 MB / diarize multipart 和 Responses API 边界没有放松。
   - 新增 `docs/release-readiness-audit.zh-CN.md` 阶段性收口审计，明确当前适合内部 checkpoint / 候选分支、不应声明完全对齐最新 App Server，并把 2026-07-05 schema audit drift 分组为 P0/P1/P2/P3 后续任务。
   - 新增 `docs/candidate-release-review.zh-CN.md` 候选发布审查，记录 `verify:release -- -RequireCleanGit -SchemaAudit warn` 正式门禁结果、OpenAI Docs MCP 复核证据、schema drift P0/P1/P2 任务清单，以及 README / Release / SECURITY 可公开宣传和必须标注实验或未完成的能力边界。
+  - 新增 `docs/candidate-pr-review-pack.zh-CN.md`，把候选分支快照、PR 正文草稿、候选发布说明、review checklist、schema drift P0/P1/P2 issue 草稿和本地 main 合并准备步骤收口为可复核交付物。
+  - 新增 `docs/local-regression-checklist.zh-CN.md` 和 `docs/local-regression-execution-20260705.zh-CN.md`，把本地 7420、release gate、schema drift、发布治理、浏览器自动化、Android 真机和长时浸泡拆成 P0/P1/P2 回归清单并开始记录本轮执行证据。
+  - `test:7420` 浏览器回归新增 `-AgentBrowserTimeoutSec` 超时保护，并在三视口检查前重置侧栏折叠状态，避免 agent-browser 挂起或历史折叠偏好导致折叠屏侧栏误报。
   - README、GitHub Release 正文、`RELEASE.md` 和 `SECURITY.md` 收紧 App Server 兼容宣传，明确当前仍是 `drift-recorded`，MCP/plugin/Realtime/WebSocket/fs/terminal/permission-profile 等能力不能被描述为完整稳定支持。
   - `RELEASE.md` 发版手册补齐 NPM package smoke、Release package smoke 覆盖范围和最终 artifact checksum 验证步骤，避免本地发版流程与自动门禁漂移。
   - `verify:release` 的 Release package smoke 会复用 `verify-release-artifacts.ps1` 校验生成的 zip 与 `.sha256`，确保本地 gate 和 GitHub Release workflow 使用同一套资产校验逻辑。

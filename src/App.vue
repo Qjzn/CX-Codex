@@ -1,4 +1,6 @@
 <template>
+  <RouterView v-if="isStandaloneRoute" />
+  <template v-else>
   <a class="skip-to-content" href="#main-content">跳到主要内容</a>
   <section v-if="isMobileShellConfigBooting" class="mobile-shell-setup-page" aria-label="读取连接配置">
     <div class="mobile-shell-setup-card">
@@ -55,20 +57,10 @@
             <SidebarThreadControls
               class="sidebar-thread-controls-host"
               :is-sidebar-collapsed="isSidebarCollapsed"
-              :show-new-thread-button="true"
+              :show-new-thread-button="false"
               @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
               @start-new-thread="onStartNewThreadFromToolbar"
             >
-              <button
-                class="sidebar-search-toggle"
-                type="button"
-                :aria-pressed="isSidebarSearchVisible"
-                aria-label="搜索会话"
-                title="搜索会话"
-                @click="toggleSidebarSearch"
-              >
-                <IconTablerSearch class="sidebar-search-toggle-icon" />
-              </button>
               <button
                 class="sidebar-toolbar-icon-button"
                 type="button"
@@ -81,6 +73,71 @@
                 <IconTablerBroom class="sidebar-toolbar-icon" />
               </button>
             </SidebarThreadControls>
+
+            <div class="sidebar-action-grid" aria-label="侧栏快捷操作">
+              <button
+                class="sidebar-action-tile"
+                type="button"
+                aria-label="新建会话"
+                title="新建会话"
+                @click="onStartNewThreadFromToolbar"
+              >
+                <IconTablerFilePencil class="sidebar-action-icon" />
+                <span class="sidebar-action-label">新会话</span>
+              </button>
+              <button
+                class="sidebar-action-tile"
+                type="button"
+                :aria-pressed="isSidebarSearchVisible"
+                aria-label="搜索会话"
+                title="搜索会话"
+                @click="toggleSidebarSearch"
+              >
+                <IconTablerSearch class="sidebar-action-icon" />
+                <span class="sidebar-action-label">搜索</span>
+              </button>
+              <button
+                class="sidebar-action-tile"
+                :class="{ 'is-active': isWorkbenchRoute }"
+                type="button"
+                :aria-current="isWorkbenchRoute ? 'page' : undefined"
+                @click="router.push({ name: 'workbench' }); isMobile && setSidebarCollapsed(true)"
+              >
+                <IconTablerFolder class="sidebar-action-icon" />
+                <span class="sidebar-action-label">工作台</span>
+              </button>
+              <button
+                class="sidebar-action-tile"
+                :class="{ 'is-active': isSkillsRoute }"
+                type="button"
+                :aria-current="isSkillsRoute ? 'page' : undefined"
+                @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
+              >
+                <IconTablerBolt class="sidebar-action-icon" />
+                <span class="sidebar-action-label">技能</span>
+              </button>
+              <button
+                v-if="showGithubTrendingProjects"
+                class="sidebar-action-tile"
+                :class="{ 'is-active': isGithubTrendingRoute }"
+                type="button"
+                :aria-current="isGithubTrendingRoute ? 'page' : undefined"
+                @click="router.push({ name: 'github-trending' }); isMobile && setSidebarCollapsed(true)"
+              >
+                <IconTablerGitFork class="sidebar-action-icon" />
+                <span class="sidebar-action-label">GitHub</span>
+              </button>
+              <button
+                class="sidebar-action-tile"
+                :class="{ 'is-active': isDiagnosticsRoute }"
+                type="button"
+                :aria-current="isDiagnosticsRoute ? 'page' : undefined"
+                @click="router.push({ name: 'diagnostics' }); isMobile && setSidebarCollapsed(true)"
+              >
+                <IconTablerSettings class="sidebar-action-icon" />
+                <span class="sidebar-action-label">诊断</span>
+              </button>
+            </div>
 
             <div v-if="isSidebarSearchVisible" class="sidebar-search-bar">
               <IconTablerSearch class="sidebar-search-bar-icon" />
@@ -100,42 +157,6 @@
                 @click="clearSidebarSearch"
               >
                 <IconTablerX class="sidebar-search-clear-icon" />
-              </button>
-            </div>
-
-            <div class="sidebar-explore-nav">
-              <button
-                class="sidebar-skills-link"
-                :class="{ 'is-active': isWorkbenchRoute }"
-                type="button"
-                @click="router.push({ name: 'workbench' }); isMobile && setSidebarCollapsed(true)"
-              >
-                工作台
-              </button>
-              <button
-                class="sidebar-skills-link"
-                :class="{ 'is-active': isSkillsRoute }"
-                type="button"
-                @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
-              >
-                技能中心
-              </button>
-              <button
-                v-if="showGithubTrendingProjects"
-                class="sidebar-skills-link"
-                :class="{ 'is-active': isGithubTrendingRoute }"
-                type="button"
-                @click="router.push({ name: 'github-trending' }); isMobile && setSidebarCollapsed(true)"
-              >
-                GitHub 热门
-              </button>
-              <button
-                class="sidebar-skills-link"
-                :class="{ 'is-active': isDiagnosticsRoute }"
-                type="button"
-                @click="router.push({ name: 'diagnostics' }); isMobile && setSidebarCollapsed(true)"
-              >
-                运行诊断
               </button>
             </div>
           </div>
@@ -175,18 +196,15 @@
               aria-label="设置"
             >
               <div v-if="isSettingsSheetMode" class="sidebar-settings-mobile-handle" aria-hidden="true" />
-              <div v-if="isSettingsSheetMode" class="sidebar-settings-mobile-header">
-                <div class="sidebar-settings-mobile-copy">
-                  <p class="sidebar-settings-mobile-title">设置</p>
-                  <p class="sidebar-settings-mobile-subtitle">向上滑动查看全部内容</p>
-                </div>
+              <div class="sidebar-settings-panel-header">
+                <p class="sidebar-settings-panel-title">设置</p>
                 <button
-                  class="sidebar-settings-mobile-close"
+                  class="sidebar-settings-panel-close"
                   type="button"
                   aria-label="关闭设置"
                   @click="isSettingsOpen = false"
                 >
-                  <IconTablerX class="sidebar-settings-mobile-close-icon" />
+                  <IconTablerX class="sidebar-settings-panel-close-icon" />
                 </button>
               </div>
               <p class="sidebar-settings-section-title">基础设置</p>
@@ -360,49 +378,6 @@
                   {{ mobileShellStatus }}
                 </p>
               </section>
-              <section v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="App 更新">
-                <p class="sidebar-settings-section-title">App 更新</p>
-                <div class="sidebar-settings-row sidebar-settings-row--static">
-                  <span class="sidebar-settings-label">版本状态</span>
-                  <span class="sidebar-settings-value">{{ mobileShellUpdateVersionStatusLabel }}</span>
-                </div>
-                <div class="sidebar-settings-row sidebar-settings-row--static sidebar-settings-row--stacked">
-                  <span class="sidebar-settings-label">更新包</span>
-                  <span class="sidebar-settings-code">{{ mobileShellLatestAssetLabel }}</span>
-                </div>
-                <div class="sidebar-settings-actions">
-                  <button
-                    class="sidebar-settings-github-button"
-                    type="button"
-                    :disabled="!canRunMobileShellUpdatePrimaryAction"
-                    @click="runMobileShellUpdatePrimaryAction"
-                  >
-                    {{ mobileShellUpdatePrimaryButtonLabel }}
-                  </button>
-                  <button
-                    class="sidebar-settings-github-button sidebar-settings-github-button--secondary"
-                    type="button"
-                    :disabled="isMobileShellUpdateLoading || isMobileShellInstalling"
-                    @click="checkMobileShellUpdate({ showSuccessMessage: true, promptOnUpdate: true })"
-                  >
-                    重新检查
-                  </button>
-                  <button
-                    class="sidebar-settings-github-button sidebar-settings-github-button--secondary"
-                    type="button"
-                    :disabled="!canOpenLatestMobileShellReleasePage"
-                    @click="openLatestMobileShellReleasePage"
-                  >
-                    打开发布页
-                  </button>
-                </div>
-                <p class="sidebar-settings-hint">
-                  {{ mobileShellUpdateHint }}
-                </p>
-                <p v-if="mobileShellUpdateStatus" class="sidebar-settings-hint sidebar-settings-hint-status">
-                  {{ mobileShellUpdateStatus }}
-                </p>
-              </section>
               <section class="sidebar-settings-section" aria-label="语音输入">
                 <p class="sidebar-settings-section-title">语音输入</p>
               <div class="sidebar-settings-row sidebar-settings-row--select" :title="SETTINGS_HELP.dictationLanguage">
@@ -444,13 +419,20 @@
                     class="sidebar-settings-about-trigger"
                     type="button"
                     :disabled="isMobileShellUpdateLoading || isMobileShellInstalling"
-                    :title="isMobileShellAvailable ? '点击检查 GitHub 新版本' : '打开 GitHub 发布页'"
+                    :title="isMobileShellAvailable ? '检查 GitHub 新版本' : '打开 GitHub 发布页'"
                     @click="onOpenAppVersionDetails"
                   >
                     <div class="sidebar-settings-about-copy">
                       <span class="sidebar-settings-about-label">当前版本</span>
                       <strong class="sidebar-settings-about-version">{{ aboutAppVersionLabel }}</strong>
-                      <span class="sidebar-settings-about-action">{{ mobileShellVersionActionLabel }}</span>
+                      <span class="sidebar-settings-about-action">
+                        <span
+                          v-if="isMobileShellUpdateLoading || isMobileShellInstalling"
+                          class="sidebar-settings-about-spinner"
+                          aria-hidden="true"
+                        />
+                        {{ mobileShellVersionActionLabel }}
+                      </span>
                     </div>
                     <span
                       v-if="isMobileShellAvailable && hasMobileShellUpdate"
@@ -459,15 +441,10 @@
                       新版本
                     </span>
                   </button>
-                  <button
-                    class="sidebar-settings-github-button"
-                    type="button"
-                    :title="SETTINGS_HELP.projectGithub"
-                    @click="openProjectGithub"
-                  >
-                    打开 GitHub
-                  </button>
                 </div>
+                <p v-if="mobileShellUpdateStatus" class="sidebar-settings-hint sidebar-settings-hint-status">
+                  {{ mobileShellUpdateStatus }}
+                </p>
                 <div class="sidebar-settings-about-meta">
                   <span>工作区</span>
                   <span>{{ displayWorktreeName }}</span>
@@ -498,13 +475,29 @@
               v-if="showMobileThreadRefreshButton"
               class="content-title-refresh-button"
               type="button"
+              :data-tone="serviceStatusTone"
               :data-busy="isManualThreadRefreshRunning ? 'true' : 'false'"
               :disabled="isManualThreadRefreshRunning"
               :title="mobileThreadRefreshButtonTitle"
               :aria-label="mobileThreadRefreshButtonTitle"
               @click="onRefreshSelectedThreadContent"
             >
+              <span class="content-title-connection-dot" aria-hidden="true" />
+              <span v-if="mobileThreadConnectionLabel" class="content-title-connection-label">
+                {{ mobileThreadConnectionLabel }}
+              </span>
               <IconTablerRefresh class="content-title-refresh-button-icon" />
+            </button>
+            <button
+              v-if="isCompactTouchContent"
+              class="content-favorites-button"
+              type="button"
+              title="查看收藏"
+              aria-label="查看全局收藏内容"
+              @click="isFavoritesModalVisible = true"
+            >
+              <IconTablerBookmark class="content-favorites-button-icon" :filled="favoriteCount > 0" />
+              <span v-if="favoriteCount > 0" class="content-favorites-button-badge">{{ favoriteCount }}</span>
             </button>
           </template>
           <template #subtitle>
@@ -545,7 +538,24 @@
               </span>
               <span class="content-context-badge-number">{{ contentContextPercentLabel }}</span>
             </span>
-              <div v-if="showHeaderStatusStrip" class="content-status-strip">
+              <RuntimeStatusBar
+                v-if="showRuntimeStatusBar"
+                class="content-runtime-status content-runtime-status--header"
+                variant="header"
+                :summary="selectedThreadRuntimeStatus"
+                :live-overlay="selectedLiveOverlay"
+                :pending-request-count="selectedThreadServerRequests.length"
+                :is-sending="isSendingMessage"
+                :is-loading="isLoadingMessages"
+                :is-refreshing="isManualThreadRefreshRunning"
+                :sync-lagging="syncLagging"
+                :sync-error="syncError"
+                :notification-stale="notificationStale"
+                :connection-state="realtimeConnectionState"
+                @refresh="onRefreshSelectedThreadContent"
+                @stop="onInterruptTurn('runtime-status-stop')"
+              />
+              <div v-else-if="showHeaderStatusStrip" class="content-status-strip">
                 <span class="content-status-pill" :data-tone="contentStatusTone">
                   <span class="content-status-pill-label">{{ contentStatusCaption }}</span>
                   <span>{{ contentStatusLabel }}</span>
@@ -566,6 +576,7 @@
                 <span>{{ desktopSyncNoticeLabel }}</span>
               </button>
               <button
+                v-if="!isCompactTouchContent"
                 class="content-favorites-button"
                 type="button"
                 title="查看全局收藏内容"
@@ -578,23 +589,6 @@
             </div>
           </template>
         </ContentHeader>
-
-        <RuntimeStatusBar
-          v-if="showRuntimeStatusBar"
-          class="content-runtime-status"
-          :summary="selectedThreadRuntimeStatus"
-          :live-overlay="selectedLiveOverlay"
-          :pending-request-count="selectedThreadServerRequests.length"
-          :is-sending="isSendingMessage"
-          :is-loading="isLoadingMessages"
-          :is-refreshing="isManualThreadRefreshRunning"
-          :sync-lagging="syncLagging"
-          :sync-error="syncError"
-          :notification-stale="notificationStale"
-          :connection-state="realtimeConnectionState"
-          @refresh="onRefreshSelectedThreadContent"
-          @stop="onInterruptTurn('runtime-status-stop')"
-        />
 
         <section class="content-body">
           <template v-if="isWorkbenchRoute">
@@ -682,14 +676,16 @@
 
                 <ThreadComposer ref="homeThreadComposerRef" :active-thread-id="composerThreadContextId"
                 :cwd="composerCwd"
-                :models="availableModelIds" :selected-model="selectedModelId"
+                :models="availableModelIds" :available-models="availableModels" :selected-model="selectedModelId"
                 :selected-reasoning-effort="selectedReasoningEffort"
                 :selected-speed-mode="selectedSpeedMode"
                 :selected-collaboration-mode="selectedCollaborationMode"
                 :is-updating-speed-mode="isUpdatingSpeedMode"
-                :skills="installedSkills"
+                :skills="enabledComposerSkills"
+                :has-loaded-skills="hasLoadedSkills"
                 :plugins="availableComposerPlugins"
                 :is-loading-plugins="isLoadingComposerPlugins"
+                :has-loaded-plugins="hasLoadedComposerPlugins"
                 :is-turn-in-progress="false"
                 :is-interrupting-turn="false" :send-with-enter="sendWithEnter"
                 :dictation-click-to-toggle="dictationClickToToggle" :dictation-auto-send="dictationAutoSend"
@@ -715,12 +711,14 @@
                   :pending-requests="displayedThreadPendingRequests"
                   :favorite-message-ids="favoriteMessageIdsForDisplayedThread"
                   :is-thread-switching="isThreadContentSwitching"
+                  :compact-runtime-chrome="showRuntimeStatusBar"
                   :show-empty-thread-actions="isRouteOnlyEmptyThread"
                   :is-turn-in-progress="isSelectedThreadInProgress"
                   :is-rolling-back="isRollingBack"
                   @update-scroll-state="onUpdateThreadScrollState"
                   @respond-server-request="onRespondServerRequest"
                   @toggle-favorite="onToggleFavoriteMessage"
+                  @load-older-history="loadOlderHistoryForSelectedThread"
                   @return-to-new-thread="onReturnToNewThreadFromEmptyThread"
                   @dismiss-empty-thread="onDismissEmptyThread"
                   @rollback="onRollback" />
@@ -748,14 +746,17 @@
                 <ThreadComposer ref="threadComposerRef" :active-thread-id="composerThreadContextId"
                   :cwd="composerCwd"
                   :models="availableModelIds"
+                  :available-models="availableModels"
                   :selected-model="selectedModelId"
                   :selected-reasoning-effort="selectedReasoningEffort"
                   :selected-speed-mode="selectedSpeedMode"
                   :selected-collaboration-mode="selectedCollaborationMode"
                   :is-updating-speed-mode="isUpdatingSpeedMode"
-                  :skills="installedSkills"
+                  :skills="enabledComposerSkills"
+                  :has-loaded-skills="hasLoadedSkills"
                   :plugins="availableComposerPlugins"
                   :is-loading-plugins="isLoadingComposerPlugins"
+                  :has-loaded-plugins="hasLoadedComposerPlugins"
                   :is-turn-in-progress="isSelectedThreadInterruptible" :is-interrupting-turn="isInterruptingTurn"
                   :has-queue-above="selectedThreadQueuedMessages.length > 0"
                   :send-with-enter="sendWithEnter"
@@ -837,7 +838,7 @@
           <span>{{ mobileShellUpdatePublishedAtLabel }}</span>
         </div>
         <div class="mobile-update-confirm-meta">
-          <span>更新包</span>
+          <span>安装文件</span>
           <span>{{ mobileShellLatestAssetLabel }}</span>
         </div>
         <div class="mobile-update-confirm-meta">
@@ -871,11 +872,12 @@
     @open="onOpenFavorite"
     @remove="onRemoveFavorite"
   />
+  </template>
 </template>
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterView, useRoute, useRouter } from 'vue-router'
 import DesktopLayout from './components/layout/DesktopLayout.vue'
 import SidebarThreadTree from './components/sidebar/SidebarThreadTree.vue'
 import ContentHeader from './components/content/ContentHeader.vue'
@@ -887,8 +889,12 @@ import RuntimeStatusBar from './components/content/RuntimeStatusBar.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import FavoritesModal from './components/content/FavoritesModal.vue'
+import IconTablerBolt from './components/icons/IconTablerBolt.vue'
 import IconTablerBroom from './components/icons/IconTablerBroom.vue'
 import IconTablerBookmark from './components/icons/IconTablerBookmark.vue'
+import IconTablerFilePencil from './components/icons/IconTablerFilePencil.vue'
+import IconTablerFolder from './components/icons/IconTablerFolder.vue'
+import IconTablerGitFork from './components/icons/IconTablerGitFork.vue'
 import IconTablerMicrophone from './components/icons/IconTablerMicrophone.vue'
 import IconTablerRefresh from './components/icons/IconTablerRefresh.vue'
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
@@ -966,11 +972,11 @@ const DiagnosticsPanel = defineAsyncComponent(() => import('./components/content
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
-const PROJECT_GITHUB_URL = 'https://github.com/Qjzn/CX-Codex'
 const MOBILE_SHELL_BRAND_NAME = 'CX-Codex'
 const MOBILE_SHELL_BRANDING_LOGO_URL = '/branding/cx-codex-logo.png'
 const CONTEXT_RING_RADIUS = 16
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS
+const THREAD_ROUTE_BACKGROUND_REFRESH_DELAY_MS = 6500
 const DEFAULT_WEB_BRIDGE_SETTINGS: WebBridgeSettings = {
   permissions: {
     allowAllPermissionRequests: false,
@@ -983,7 +989,7 @@ const SETTINGS_HELP = {
   sendWithEnter: '开启后直接按 Enter 发送，关闭后使用 Command + Enter 发送。',
   appearance: '在跟随系统、浅色和深色之间切换。',
   dictationButtonVisible: '控制输入框右侧是否显示语音按钮。',
-  dictationAutoSend: '录音结束后自动发送转写内容。',
+  dictationAutoSend: '转写后自动发送输入框内容；默认关闭，建议确认后手动发送。',
   rollbackCommits: '开启后每条消息都会生成回滚提交，回滚时会重置到该消息之前的提交。',
   githubTrendingProjects: '显示或隐藏侧栏里的 GitHub 热门页面入口。',
   dictationLanguage: '选择转写语言，或保持自动识别。',
@@ -991,7 +997,6 @@ const SETTINGS_HELP = {
   commandExecutionPermission: '控制 Codex 请求运行命令时是否自动允许。',
   fileChangePermission: '控制 Codex 请求写入文件时是否自动允许。',
   mcpToolPermission: '控制 MCP 服务请求运行工具时是否自动允许，例如浏览器自动化工具。',
-  projectGithub: '在新标签页打开当前项目的 GitHub 仓库。',
 } as const
 const WHISPER_LANGUAGES: Record<string, string> = {
   en: 'english',
@@ -1200,15 +1205,19 @@ const {
   selectedThreadRuntimeStatus,
   selectedThreadTokenUsage,
   selectedThreadId,
+  availableModels,
   availableModelIds,
   selectedModelId,
   selectedReasoningEffort,
   selectedSpeedMode,
   selectedCollaborationMode,
   installedSkills,
+  hasLoadedSkills,
   availableComposerPlugins,
   isLoadingComposerPlugins,
+  hasLoadedComposerPlugins,
   accountRateLimitSnapshots,
+  threadTitleById,
   messages,
   isLoadingThreads,
   isLoadingMessages,
@@ -1220,7 +1229,9 @@ const {
   syncLagging,
   syncError,
   refreshAll,
+  loadThreadTitleCache,
   refreshSelectedThreadContent,
+  loadOlderHistoryForSelectedThread,
   refreshSkills,
   refreshComposerPlugins,
   loginComposerPlugin,
@@ -1257,6 +1268,7 @@ const {
   startPolling,
   stopPolling,
 } = useDesktopState()
+const enabledComposerSkills = computed(() => installedSkills.value.filter((skill) => skill.enabled !== false))
 
 const route = useRoute()
 const router = useRouter()
@@ -1312,7 +1324,7 @@ const dictationClickToToggle = ref(loadBoolPref(DICTATION_CLICK_TO_TOGGLE_KEY, f
 const dictationButtonVisible = ref(loadBoolPref(DICTATION_BUTTON_VISIBLE_KEY, true))
 const rollbackDraftPrependRequest = ref<{ id: number; text: string } | null>(null)
 let rollbackDraftPrependRequestId = 0
-const dictationAutoSend = ref(loadBoolPref(DICTATION_AUTO_SEND_KEY, true))
+const dictationAutoSend = ref(loadBoolPref(DICTATION_AUTO_SEND_KEY, false))
 const dictationLanguage = ref(loadDictationLanguagePref())
 const dictationLanguageOptions = computed(() => buildDictationLanguageOptions())
 const worktreeGitAutomationEnabled = ref(loadBoolPref(WORKTREE_GIT_AUTOMATION_KEY, true))
@@ -1365,6 +1377,12 @@ const routeThreadId = computed(() => {
   const rawThreadId = route.params.threadId
   return typeof rawThreadId === 'string' ? rawThreadId : ''
 })
+const isThreadRouteLike = computed(() => {
+  if (route.name === 'thread' || routeThreadId.value.trim().length > 0) return true
+  if (typeof window === 'undefined') return false
+  const hashPath = window.location.hash.replace(/^#/u, '')
+  return route.path.startsWith('/thread/') || hashPath.startsWith('/thread/')
+})
 
 const knownThreadIdSet = computed(() => {
   const ids = new Set<string>()
@@ -1388,6 +1406,11 @@ const isWorkbenchRoute = computed(() => route.name === 'workbench')
 const isSkillsRoute = computed(() => route.name === 'skills')
 const isGithubTrendingRoute = computed(() => route.name === 'github-trending')
 const isDiagnosticsRoute = computed(() => route.name === 'diagnostics')
+const isStandaloneRoute = computed(() => (
+  route.name === 'regression-conversation-blocks'
+  || route.name === 'regression-sidebar-rows'
+  || route.name === 'regression-composer-shell'
+))
 const isNonThreadRoute = computed(() => (
   isHomeRoute.value || isWorkbenchRoute.value || isSkillsRoute.value || isGithubTrendingRoute.value || isDiagnosticsRoute.value
 ))
@@ -1492,13 +1515,6 @@ const mobileShellLatestVersionLabel = computed(() => {
   if (!tagName) return isMobileShellUpdateLoading.value ? '检查中' : '未检测到'
   return tagName
 })
-const mobileShellUpdateVersionStatusLabel = computed(() => {
-  if (isMobileShellUpdateLoading.value) return '检查中'
-  if (hasMobileShellUpdate.value) return `可更新至 ${mobileShellLatestVersionLabel.value}`
-  if (!mobileShellLatestRelease.value?.tagName.trim()) return '未检测到'
-  if (mobileShellReleaseComparison.value > 0) return '本机版本较新'
-  return '已是最新'
-})
 const mobileShellLatestAssetLabel = computed(() => (
   mobileShellLatestRelease.value?.asset?.name.trim()
   || '当前发布页还没有 Android APK'
@@ -1517,11 +1533,12 @@ const mobileShellReleaseComparison = computed(() => {
 })
 const mobileShellVersionActionLabel = computed(() => {
   if (!isMobileShellAvailable.value) return '打开 GitHub 发布页'
-  if (isMobileShellInstalling.value) return '正在下载安装...'
-  if (isMobileShellUpdateLoading.value) return '正在检查新版本...'
-  if (hasMobileShellUpdate.value) return '发现新版本，点击更新'
+  if (isMobileShellInstalling.value) return '正在下载更新...'
+  if (isMobileShellUpdateLoading.value) return '检查中...'
+  if (hasMobileShellUpdate.value) return `下载 ${mobileShellLatestVersionLabel.value}`
   if (mobileShellReleaseComparison.value > 0) return '当前安装包比 GitHub 更新'
-  return '点击检查 GitHub 更新'
+  if (mobileShellLatestRelease.value?.tagName.trim()) return '已是最新'
+  return '检查更新'
 })
 const canInstallLatestMobileShellRelease = computed(() => (
   isMobileShellAvailable.value
@@ -1534,20 +1551,10 @@ const canRunMobileShellUpdatePrimaryAction = computed(() => (
   && !isMobileShellInstalling.value
   && !isMobileShellUpdateLoading.value
 ))
-const canOpenLatestMobileShellReleasePage = computed(() => (
-  (mobileShellLatestRelease.value?.htmlUrl.trim() || getMobileReleasesPageUrl()).length > 0
-))
-const mobileShellUpdatePrimaryButtonLabel = computed(() => {
-  if (isMobileShellInstalling.value) return '下载安装中...'
-  if (isMobileShellUpdateLoading.value) return '检查中...'
-  if (!mobileShellLatestRelease.value?.tagName.trim()) return '检查更新'
-  if (!mobileShellLatestRelease.value?.asset?.downloadUrl) return '重新检查'
-  return hasMobileShellUpdate.value ? '下载并安装' : '重新安装'
-})
 const mobileShellInstallButtonLabel = computed(() => {
-  if (isMobileShellInstalling.value) return '下载安装中...'
+  if (isMobileShellInstalling.value) return '下载中...'
   if (!mobileShellLatestRelease.value?.asset?.downloadUrl) return '暂无安装包'
-  return hasMobileShellUpdate.value ? '下载并安装' : '重新安装'
+  return '下载更新'
 })
 const mobileShellUpdatePromptTitle = computed(() => {
   if (mobileShellLatestRelease.value?.releaseName.trim()) {
@@ -1575,13 +1582,6 @@ const mobileShellUpdatePromptText = computed(() => {
   }
   return `检测到 ${mobileShellLatestVersionLabel.value}，确认后会直接下载并打开系统安装界面。`
 })
-const mobileShellUpdateHint = computed(() => {
-  if (isMobileShellUpdateLoading.value) return '正在读取 GitHub 最新发布信息...'
-  if (!mobileShellLatestRelease.value?.asset) return '发布页还没有可直接安装的 Android APK。'
-  if (hasMobileShellUpdate.value) return '检测到新版本后，可直接下载并拉起系统安装界面。'
-  if (mobileShellReleaseComparison.value > 0) return '当前安装版比 GitHub 最新发布更高，通常说明你还没有把新 APK 发到 Release。'
-  return '当前安装版已与最新发布一致，如需覆盖安装也可以直接重新安装。'
-})
 const isRouteOnlyEmptyThread = computed(() => (
   route.name === 'thread'
   && !!routeThreadId.value
@@ -1589,6 +1589,48 @@ const isRouteOnlyEmptyThread = computed(() => (
   && filteredMessages.value.length === 0
   && selectedThreadServerRequests.value.length === 0
 ))
+const routeThreadCachedTitle = computed(() => {
+  if (route.name !== 'thread' || selectedThread.value) return ''
+  const threadId = routeThreadId.value.trim()
+  if (!threadId) return ''
+  return threadTitleById.value[threadId]?.trim() ?? ''
+})
+function isInternalThreadTitleCandidate(line: string): boolean {
+  return /^<(?:codex_internal_context|recommended_plugins|permissions|app-context|collaboration_mode|skills_instructions|apps_instructions|plugins_instructions|environment_context)\b/iu.test(line.trim())
+}
+function isInternalCodexContextMessage(message: UiMessage): boolean {
+  if (message.role !== 'user') return false
+  const text = message.text.trim()
+  return /^<(?:codex_internal_context|recommended_plugins|permissions|app-context|collaboration_mode|skills_instructions|apps_instructions|plugins_instructions|environment_context)\b/iu.test(text)
+}
+function stripAssistantTransportMetadata(text: string): string {
+  return text
+    .replace(/(?:^|\n)::(?:git-(?:stage|commit|create-branch|push|create-pr)|created-thread|code-comment)\{[^\n]*\}(?=\n|$)/gu, '\n')
+    .replace(/\s*<oai-mem-citation>[\s\S]*?<\/oai-mem-citation>\s*$/iu, '')
+    .replace(/\n{3,}/gu, '\n\n')
+    .trimEnd()
+}
+function toVisibleConversationMessage(message: UiMessage): UiMessage {
+  if (
+    message.role !== 'assistant' ||
+    (!message.text.includes('<oai-mem-citation>') && !/(?:^|\n)::(?:git-|created-thread|code-comment)/u.test(message.text))
+  ) return message
+  const text = stripAssistantTransportMetadata(message.text)
+  return text === message.text ? message : { ...message, text }
+}
+const routeThreadFallbackTitle = computed(() => {
+  if (route.name !== 'thread' || selectedThread.value) return ''
+  const cachedTitle = routeThreadCachedTitle.value
+  if (cachedTitle) return cachedTitle
+  const userMessage = messages.value.find((message) => (
+    message.role === 'user' && message.text.trim() && !isInternalCodexContextMessage(message)
+  ))
+  const firstLine = userMessage?.text
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0 && !isInternalThreadTitleCandidate(line)) ?? ''
+  return firstLine ? firstLine.slice(0, 48) : ''
+})
 const contentTitle = computed(() => {
   if (isWorkbenchRoute.value) return '工作台'
   if (isDiagnosticsRoute.value) return '运行诊断'
@@ -1596,7 +1638,7 @@ const contentTitle = computed(() => {
   if (isGithubTrendingRoute.value) return 'GitHub 热门'
   if (isHomeRoute.value) return '新会话'
   if (isRouteOnlyEmptyThread.value) return '空会话'
-  return selectedThread.value?.title ?? '选择会话'
+  return selectedThread.value?.title ?? (routeThreadFallbackTitle.value || '选择会话')
 })
 const browserHostName =
   typeof window !== 'undefined'
@@ -1604,7 +1646,7 @@ const browserHostName =
     : 'cx-codex'
 const pageTitle = computed(() => {
   const threadTitle = selectedThread.value?.title?.trim() ?? ''
-  return threadTitle || browserHostName
+  return threadTitle || routeThreadCachedTitle.value || browserHostName
 })
 const headerSubtitle = computed(() => {
   if (isWorkbenchRoute.value) return '集中查看状态、复用项目配置，并一键发起标准化任务。'
@@ -1613,6 +1655,7 @@ const headerSubtitle = computed(() => {
   if (isGithubTrendingRoute.value) return '浏览热门仓库、查看介绍，并直接带着项目链接发起提问。'
   if (isHomeRoute.value) return '从已配置工作区快速发起新的 Codex 任务。'
   if (isRouteOnlyEmptyThread.value) return '这个会话还没有消息，你可以直接发送第一条消息，或将它移除。'
+  if (isCompactTouchContent.value) return ''
   const cwd = selectedThread.value?.cwd?.trim() ?? ''
   return cwd || ''
 })
@@ -1632,8 +1675,15 @@ const showRuntimeStatusBar = computed(() => (
   && !isRouteOnlyEmptyThread.value
   && !isCompactTouchContent.value
 ))
+const mobileThreadConnectionLabel = computed(() => {
+  if (!isCompactTouchContent.value) return ''
+  if (isManualThreadRefreshRunning.value) return '恢复中'
+  return serviceStatusTone.value === 'live' ? '' : serviceStatusLabel.value
+})
 const mobileThreadRefreshButtonTitle = computed(() => (
-  isManualThreadRefreshRunning.value ? '正在强制恢复当前会话状态...' : '强制恢复当前会话状态'
+  isManualThreadRefreshRunning.value
+    ? '正在强制恢复当前会话状态...'
+    : `${serviceStatusLabel.value}。${serviceStatusDetail.value} 点击可强制恢复当前会话状态。`
 ))
 const contentContextUsage = computed(() => {
   if (isNonThreadRoute.value || isRouteOnlyEmptyThread.value) return null
@@ -1643,7 +1693,8 @@ const contentContextUsage = computed(() => {
 const showContentContextBadge = computed(() => (
   !isNonThreadRoute.value &&
   !isRouteOnlyEmptyThread.value &&
-  Boolean(selectedThread.value)
+  Boolean(selectedThread.value) &&
+  (!isCompactTouchContent.value || contentContextHasReliablePercent.value)
 ))
 const contentContextHasReliablePercent = computed(() => (
   typeof contentContextUsage.value?.usedPercent === 'number'
@@ -1725,6 +1776,7 @@ const threadById = computed<Record<string, UiThread>>(() => {
 const displayedThreadTitle = computed(() => (
   threadById.value[displayedThreadConversationId.value]?.title
   ?? selectedThread.value?.title
+  ?? routeThreadCachedTitle.value
   ?? ''
 ))
 const hasActiveSyncDemand = computed(() => {
@@ -1770,17 +1822,26 @@ const serviceStatusDetail = computed(() => {
   return '实时连接正常。'
 })
 const filteredMessages = computed(() =>
-  messages.value.filter((message) => {
+  messages.value.flatMap((message) => {
+    if (isInternalCodexContextMessage(message)) return []
     const type = normalizeMessageType(message.messageType, message.role)
-    if (type === 'worked') return true
-    if (type === 'commandExecution') return message.commandExecution?.status === 'inProgress'
-    if (type === 'turnActivity.live' || type === 'turnError.live' || type === 'agentReasoning.live') return false
-    return true
+    if (type === 'commandExecution' && message.commandExecution?.status !== 'inProgress') return []
+    if (type === 'turnActivity.live' || type === 'turnError.live' || type === 'agentReasoning.live') return []
+    const visibleMessage = toVisibleConversationMessage(message)
+    if (
+      visibleMessage !== message &&
+      !visibleMessage.text.trim() &&
+      (visibleMessage.images?.length ?? 0) === 0 &&
+      (visibleMessage.fileAttachments?.length ?? 0) === 0 &&
+      !visibleMessage.commandExecution &&
+      !visibleMessage.rawPayload
+    ) return []
+    return [visibleMessage]
   }),
 )
 const latestUserTurnIndex = computed(() => {
   let latest = -1
-  for (const message of messages.value) {
+  for (const message of filteredMessages.value) {
     if (message.role !== 'user') continue
     if (typeof message.turnIndex !== 'number') continue
     if (message.turnIndex > latest) latest = message.turnIndex
@@ -1957,7 +2018,7 @@ const newThreadFolderOptions = computed(() => {
   }
 
   for (const group of projectGroups.value) {
-    const cwd = group.threads[0]?.cwd?.trim() ?? ''
+    const cwd = group.threads[0]?.cwd?.trim() || group.workspaceRoot?.trim() || ''
     if (!cwd || seenCwds.has(cwd)) continue
     seenCwds.add(cwd)
     options.push({
@@ -2068,7 +2129,7 @@ const workbenchStatusItems = computed<WorkbenchStatusItem[]>(() => {
     },
     {
       label: '能力',
-      value: `${String(installedSkills.value.length)} 技能 · ${String(availableComposerPlugins.value.length)} 插件`,
+      value: `${String(enabledComposerSkills.value.length)} 技能 · ${String(availableComposerPlugins.value.length)} 插件`,
       detail: isLoadingComposerPlugins.value ? '正在读取插件状态。' : '插件会作为本轮偏好传给 Codex。',
       tone: 'neutral',
     },
@@ -2156,8 +2217,8 @@ watch(
       isThreadContentSwitching.value = false
       displayedThreadConversationId.value = nextThreadId
       displayedThreadCwd.value = nextCwd
-      displayedThreadMessages.value = [...nextMessages]
-      displayedThreadPendingRequests.value = [...nextPendingRequests]
+      displayedThreadMessages.value = nextMessages
+      displayedThreadPendingRequests.value = nextPendingRequests
       displayedThreadLiveOverlay.value = nextLiveOverlay
       displayedThreadScrollState.value = nextScrollState
       return
@@ -2181,8 +2242,8 @@ watch(
 
     displayedThreadConversationId.value = nextThreadId
     displayedThreadCwd.value = nextCwd
-    displayedThreadMessages.value = [...nextMessages]
-    displayedThreadPendingRequests.value = [...nextPendingRequests]
+    displayedThreadMessages.value = nextMessages
+    displayedThreadPendingRequests.value = nextPendingRequests
     displayedThreadLiveOverlay.value = nextLiveOverlay
     displayedThreadScrollState.value = nextScrollState
     isThreadContentSwitching.value = false
@@ -2277,6 +2338,22 @@ function scheduleIdleTask(task: () => void, timeoutMs = 1200): (() => void) {
 
 function queueIdleTask(task: () => void, timeoutMs = 1200): void {
   idleTaskCancels.push(scheduleIdleTask(task, timeoutMs))
+}
+
+function queueDelayedIdleTask(task: () => void, delayMs: number, timeoutMs = 1200): void {
+  if (typeof window === 'undefined') {
+    task()
+    return
+  }
+
+  let cancelIdle: (() => void) | null = null
+  const delayHandle = window.setTimeout(() => {
+    cancelIdle = scheduleIdleTask(task, timeoutMs)
+  }, delayMs)
+  idleTaskCancels.push(() => {
+    window.clearTimeout(delayHandle)
+    cancelIdle?.()
+  })
 }
 
 function clearQueuedIdleTasks(): void {
@@ -2631,7 +2708,7 @@ async function refreshMobileShellUpdateState(showSuccessMessage = false): Promis
       }
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : '读取 App 更新状态失败'
+    const message = error instanceof Error ? error.message : '检查版本失败'
     setMobileShellUpdateStatus(message)
   } finally {
     isMobileShellUpdateLoading.value = false
@@ -2654,20 +2731,18 @@ async function checkMobileShellUpdate(options: { showSuccessMessage?: boolean; p
 async function runMobileShellUpdatePrimaryAction(): Promise<void> {
   if (!canRunMobileShellUpdatePrimaryAction.value) return
 
-  const hasReleaseInfo = mobileShellLatestRelease.value?.tagName.trim().length
-  if (!hasReleaseInfo || !mobileShellLatestRelease.value?.asset?.downloadUrl) {
+  if (!mobileShellLatestRelease.value?.tagName.trim() || !hasMobileShellUpdate.value) {
     await checkMobileShellUpdate({ showSuccessMessage: true, promptOnUpdate: true })
     return
   }
 
-  if (hasMobileShellUpdate.value) {
+  if (mobileShellLatestRelease.value?.asset?.downloadUrl) {
     isSettingsOpen.value = false
     isMobileShellUpdatePromptVisible.value = true
     return
   }
 
-  isSettingsOpen.value = false
-  await installLatestMobileShellRelease()
+  await checkMobileShellUpdate({ showSuccessMessage: true, promptOnUpdate: true })
 }
 
 async function refreshDesktopAppAvailability(): Promise<void> {
@@ -2775,18 +2850,18 @@ async function installLatestMobileShellRelease(): Promise<boolean> {
 
   const asset = mobileShellLatestRelease.value?.asset
   if (!asset?.downloadUrl) {
-    setMobileShellUpdateStatus('当前没有可下载安装的 Android 更新包')
+    setMobileShellUpdateStatus('当前没有可下载安装的 Android 文件')
     return false
   }
 
   isMobileShellInstalling.value = true
-  setMobileShellUpdateStatus('正在下载更新包并准备安装...')
+  setMobileShellUpdateStatus('正在下载更新并准备安装...')
   try {
     const result = await installMobileShellApk(asset.downloadUrl, asset.name)
     if (result.status === 'permission_required') {
-      setMobileShellUpdateStatus('更新包已下载；请允许安装未知应用，返回后会自动打开安装界面')
+      setMobileShellUpdateStatus('安装文件已下载；请允许安装未知应用，返回后会自动打开安装界面')
     } else {
-      setMobileShellUpdateStatus('更新包已下载，系统安装界面正在打开')
+      setMobileShellUpdateStatus('安装文件已下载，系统安装界面正在打开')
     }
     return true
   } catch (error) {
@@ -2991,7 +3066,7 @@ function resolvePreferredLocalCwd(projectName: string, fallbackCwd = ''): string
   if (!group) return fallbackCwd.trim()
   const nonWorktreeThread = group.threads.find((thread) => !isWorktreePath(thread.cwd))
   const candidate = nonWorktreeThread?.cwd?.trim() ?? group.threads[0]?.cwd?.trim() ?? ''
-  return candidate || fallbackCwd.trim()
+  return candidate || fallbackCwd.trim() || group.workspaceRoot?.trim() || ''
 }
 
 function onStartNewThread(projectName: string): void {
@@ -3016,11 +3091,6 @@ function onBrowseThreadFiles(threadId: string): void {
   }
   if (!targetCwd || typeof window === 'undefined') return
   window.open(`/codex-local-browse${encodeURI(targetCwd)}`, '_blank', 'noopener,noreferrer')
-}
-
-function openProjectGithub(): void {
-  if (typeof window === 'undefined') return
-  window.open(PROJECT_GITHUB_URL, '_blank', 'noopener,noreferrer')
 }
 
 function onStartNewThreadFromToolbar(): void {
@@ -3885,6 +3955,20 @@ function rememberRoutableThreadId(threadId: string): void {
   routeWarmThreadIds.value = [...routeWarmThreadIds.value, normalized]
 }
 
+function readStartupRouteThreadId(): string {
+  const normalizedRouteThreadId = routeThreadId.value.trim()
+  if (normalizedRouteThreadId) return normalizedRouteThreadId
+  if (typeof window === 'undefined') return ''
+  const hashPath = window.location.hash.replace(/^#/u, '')
+  const match = hashPath.match(/^\/thread\/([^/?#]+)/u)
+  if (!match) return ''
+  try {
+    return decodeURIComponent(match[1]).trim()
+  } catch {
+    return match[1].trim()
+  }
+}
+
 async function initializeRuntime(): Promise<void> {
   if (isMobileShellAvailable.value) {
     await refreshMobileShellServerConfig()
@@ -3906,13 +3990,36 @@ function scheduleInitialBackgroundTasks(): void {
   queueIdleTask(() => { void refreshMobileShellRuntimeInfo() }, 1625)
   queueIdleTask(() => { void refreshMobileShellNotificationPermission() }, 1640)
   if (!isMobileShellAvailable.value) {
-    queueIdleTask(() => { void refreshDesktopAppAvailability() }, 1700)
+    queueDelayedIdleTask(() => { void refreshDesktopAppAvailability() }, 3200, 1200)
   }
   scheduleTrendingProjectsLoad()
 }
 
 async function initialize(): Promise<void> {
-  await refreshAll({ loadMessages: false, loadSkills: false })
+  const startupThreadId = isThreadRouteLike.value ? readStartupRouteThreadId() : ''
+  if (startupThreadId) {
+    hasInitialized.value = true
+    rememberRoutableThreadId(startupThreadId)
+    void loadThreadTitleCache()
+    await selectThread(startupThreadId)
+    queueDelayedIdleTask(() => {
+      void refreshAll({
+        loadMessages: false,
+        loadSkills: false,
+        deferModelPreferences: true,
+        deferThreadListNetworkIfCached: true,
+      })
+    }, THREAD_ROUTE_BACKGROUND_REFRESH_DELAY_MS, 1200)
+    startPolling()
+    return
+  }
+
+  await refreshAll({
+    loadMessages: false,
+    loadSkills: false,
+    deferModelPreferences: true,
+    deferThreadListNetworkIfCached: true,
+  })
   hasInitialized.value = true
   const selectedThreadIdBeforeRouteSync = selectedThreadId.value
   await syncThreadSelectionWithRoute()
@@ -3920,8 +4027,8 @@ async function initialize(): Promise<void> {
     await selectThread(selectedThreadId.value)
   }
   startPolling()
-  if (route.name !== 'thread') {
-    queueIdleTask(() => { void refreshSkills() }, 220)
+  if (!isThreadRouteLike.value) {
+    queueIdleTask(() => { void refreshSkills() }, 1800)
   }
 }
 
@@ -4222,7 +4329,9 @@ async function submitFirstMessageForNewThread(
 }
 
 .mobile-shell-setup-page {
-  @apply min-h-dvh w-full bg-[#f8f6f0] px-5 py-8 text-[#2d261f];
+  @apply min-h-dvh w-full px-5 py-8;
+  background: var(--ui-bg-window);
+  color: var(--ui-text-primary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4231,8 +4340,11 @@ async function submitFirstMessageForNewThread(
 }
 
 .mobile-shell-setup-card {
-  @apply w-full max-w-md rounded-[28px] border border-[#e5dbca] bg-[#fffdf8] p-5;
-  box-shadow: 0 24px 54px -38px rgba(31, 41, 55, 0.34);
+  @apply w-full max-w-md border p-5;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 0.08);
 }
 
 .mobile-shell-setup-brand {
@@ -4256,11 +4368,16 @@ async function submitFirstMessageForNewThread(
 }
 
 .mobile-shell-setup-field {
-  @apply mt-6 flex flex-col gap-2 text-sm font-medium text-[#5b5146];
+  @apply mt-6 flex flex-col gap-2 text-sm font-medium;
+  color: var(--ui-text-secondary);
 }
 
 .mobile-shell-setup-field input {
-  @apply min-h-12 w-full rounded-2xl border border-[#ddd5c7] bg-white px-4 text-base text-[#2d261f] outline-none;
+  @apply min-h-12 w-full border px-4 text-base outline-none;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
 }
 
 .mobile-shell-setup-field input:focus {
@@ -4277,7 +4394,8 @@ async function submitFirstMessageForNewThread(
 }
 
 .mobile-shell-setup-status {
-  @apply m-0 mt-3 text-xs leading-5 text-[#7b7062];
+  @apply m-0 mt-3 text-xs leading-5;
+  color: var(--ui-text-secondary);
 }
 
 .mobile-shell-setup-status--boot {
@@ -4290,22 +4408,22 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-scrollable {
-  @apply flex-1 min-h-0 overflow-y-auto py-3 px-2.5 flex flex-col gap-3;
+  @apply flex-1 min-h-0 overflow-y-auto py-2 px-2 flex flex-col gap-2;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
+  background: var(--ui-bg-sidebar);
 }
 
 .sidebar-top-shell {
-  @apply flex flex-col gap-2 rounded-[26px] border border-[#e7dece] bg-[#fffdf8] px-2.5 py-2.5;
-  box-shadow: 0 16px 30px -32px rgba(31, 41, 55, 0.18);
+  @apply flex flex-col gap-1 border border-transparent bg-transparent px-1 py-1;
+  border-radius: var(--ui-radius-card);
+  box-shadow: none;
 }
 
 .content-root {
   @apply h-full min-h-0 min-w-0 w-full flex flex-col overflow-y-hidden overflow-x-visible;
-  --content-shell-max-width: min(88rem, calc(100vw - 2.75rem));
-  background:
-    radial-gradient(circle at top right, rgba(13, 148, 136, 0.02), transparent 22%),
-    linear-gradient(180deg, rgba(255,255,255,0.975) 0%, rgba(250,247,240,0.99) 100%);
+  --content-shell-max-width: min(var(--ui-content-max), calc(100vw - 2.75rem));
+  background: var(--ui-bg-surface);
 }
 
 .content-root--dual-pane-touch {
@@ -4316,12 +4434,67 @@ async function submitFirstMessageForNewThread(
   @apply mt-0 px-0 pb-0;
 }
 
+.sidebar-action-grid {
+  @apply grid grid-cols-3 gap-1;
+}
+
+.sidebar-action-tile {
+  @apply flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 border border-transparent bg-transparent px-1.5 py-1 text-[11px] font-medium transition-[background-color,border-color,color] duration-150;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+  touch-action: manipulation;
+}
+
+.sidebar-action-tile[aria-pressed='true'],
+.sidebar-action-tile[aria-current='page'],
+.sidebar-action-tile.is-active {
+  @apply font-semibold;
+  border-color: transparent;
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-primary);
+}
+
+.sidebar-action-tile:hover,
+.sidebar-action-tile:focus-visible {
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+.sidebar-action-icon {
+  @apply h-4 w-4 shrink-0;
+  color: var(--ui-text-tertiary);
+}
+
+.sidebar-action-tile[aria-pressed='true'] .sidebar-action-icon,
+.sidebar-action-tile[aria-current='page'] .sidebar-action-icon,
+.sidebar-action-tile.is-active .sidebar-action-icon,
+.sidebar-action-tile:hover .sidebar-action-icon,
+.sidebar-action-tile:focus-visible .sidebar-action-icon {
+  color: currentColor;
+}
+
+.sidebar-action-label {
+  @apply block max-w-full truncate text-center leading-4;
+}
+
 .sidebar-search-toggle {
-  @apply inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[#e4dac9] bg-[#fffdf8] text-[#6b6255] transition-colors duration-100 hover:border-[#cdbfa8] hover:bg-[#f7f1e5] hover:text-[#2d261f];
+  @apply inline-flex h-9 w-9 items-center justify-center border border-transparent bg-transparent transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-search-toggle[aria-pressed='true'] {
-  @apply border-[#cec2ad] bg-[#ece4d6] text-[#433b31];
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-primary);
+}
+
+.sidebar-search-toggle:hover,
+.sidebar-search-toggle:focus-visible {
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-search-toggle-icon {
@@ -4329,11 +4502,23 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-toolbar-icon-button {
-  @apply inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-[#e4dac9] bg-[#fffdf8] text-[#6b6255] transition-colors duration-100 hover:border-[#cdbfa8] hover:bg-[#f7f1e5] hover:text-[#2d261f];
+  @apply inline-flex h-9 w-9 items-center justify-center border border-transparent bg-transparent transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-toolbar-icon-button:hover,
+.sidebar-toolbar-icon-button:focus-visible {
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-toolbar-icon-button:disabled {
-  @apply cursor-not-allowed border-[#ece4d6] bg-[#faf6ef] text-[#b1a89b] hover:border-[#ece4d6] hover:bg-[#faf6ef] hover:text-[#b1a89b];
+  @apply cursor-not-allowed;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-toolbar-icon {
@@ -4341,19 +4526,35 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-search-bar {
-  @apply z-10 flex items-center gap-1.5 px-3 py-2 rounded-2xl border border-[#e6dccb] bg-[#fcfaf4] transition-colors;
+  @apply z-10 flex items-center gap-1.5 px-3 py-2 border transition-colors;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
 }
 
 .sidebar-search-bar-icon {
-  @apply w-3.5 h-3.5 text-[#9a907f] shrink-0;
+  @apply w-3.5 h-3.5 shrink-0;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-search-input {
-  @apply flex-1 min-w-0 bg-transparent text-sm text-[#2d261f] placeholder-[#9f9484] outline-none border-none p-0;
+  @apply flex-1 min-w-0 bg-transparent text-sm outline-none border-none p-0;
+  color: var(--ui-text-primary);
+}
+
+.sidebar-search-input::placeholder {
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-search-clear {
-  @apply w-5 h-5 rounded-lg text-[#9a907f] flex items-center justify-center transition-colors duration-100 hover:bg-[#f1ebde] hover:text-[#544a3d];
+  @apply w-5 h-5 rounded-lg flex items-center justify-center transition-colors duration-100;
+  color: var(--ui-text-tertiary);
+}
+
+.sidebar-search-clear:hover,
+.sidebar-search-clear:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-search-clear-icon {
@@ -4361,24 +4562,46 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-explore-nav {
-  @apply grid grid-cols-2 gap-1.5;
+  @apply flex flex-col gap-px;
 }
 
 .sidebar-skills-link {
-  @apply mx-0 flex items-center justify-center rounded-2xl border border-[#e8decd] bg-[#fcfaf4] px-3 py-2 text-[13px] font-medium text-[#5b5146] transition-[background-color,border-color,color,transform] duration-150 cursor-pointer;
+  @apply mx-0 flex min-h-7 items-center gap-2 border border-transparent bg-transparent px-2.5 py-1 text-[13px] font-medium transition-[background-color,border-color,color] duration-150 cursor-pointer;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-explore-nav .sidebar-skills-link {
-  @apply mx-0 justify-center;
+  @apply mx-0 justify-start;
 }
 
 .sidebar-skills-link.is-active {
-  @apply border-[#bde7df] bg-[#eef8f5] text-[#134e4a] font-semibold;
+  @apply font-semibold;
+  border-color: transparent;
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-primary);
+}
+
+.sidebar-command-icon {
+  @apply h-4 w-4 shrink-0;
+  color: var(--ui-text-tertiary);
+}
+
+.sidebar-skills-link.is-active .sidebar-command-icon,
+.sidebar-skills-link:hover .sidebar-command-icon,
+.sidebar-skills-link:focus-visible .sidebar-command-icon {
+  color: currentColor;
+}
+
+.sidebar-command-label {
+  @apply min-w-0 truncate text-left;
 }
 
 .sidebar-skills-link:hover,
 .sidebar-skills-link:focus-visible {
-  @apply border-[#ddd3c2] bg-[#f7f4ed] text-[#2d261f];
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-thread-controls-header-host {
@@ -4386,9 +4609,18 @@ async function submitFirstMessageForNewThread(
 }
 
 .desktop-refresh-button {
-  @apply inline-flex items-center gap-1.5 rounded-full border border-[#ddd3c2] bg-[#fffdf8] px-3 py-1.5 text-[11px] font-semibold text-[#544a3d] transition-[background-color,border-color,color] duration-150 hover:border-[#c8b9a2] hover:bg-[#f6f2ea] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-60;
+  @apply inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-semibold transition-[background-color,border-color,color] duration-150 disabled:cursor-not-allowed disabled:opacity-60;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
   font-family: var(--font-sans-ui);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
+}
+
+.desktop-refresh-button:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .desktop-refresh-button[data-busy='true'] {
@@ -4405,18 +4637,68 @@ async function submitFirstMessageForNewThread(
 }
 
 .content-header-subtitle {
-  @apply m-0 text-[11px] leading-4 text-[#8f8577] truncate;
+  @apply m-0 text-[11px] leading-4 truncate;
+  color: var(--ui-text-tertiary);
   font-family: var(--font-sans-ui);
-  letter-spacing: -0.006em;
+  letter-spacing: 0;
 }
 
 .content-title-refresh-button {
-  @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[#ddd3c2] bg-[#fffdf8] text-[#5a5144] transition-[background-color,border-color,color,transform] duration-150 hover:border-[#c8b9a2] hover:bg-[#f6f2ea] hover:text-[#1f2937] disabled:cursor-not-allowed disabled:opacity-60;
-  box-shadow: 0 10px 20px -20px rgba(31, 41, 55, 0.24);
+  @apply relative inline-flex h-7 min-w-7 shrink-0 items-center justify-center gap-1 rounded-full border px-1.5 transition-[background-color,border-color,color,transform] duration-150 disabled:cursor-not-allowed disabled:opacity-60;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+  box-shadow: none;
+}
+
+.content-title-refresh-button[data-tone='live'] {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ui-text-secondary);
+}
+
+.content-title-refresh-button[data-tone='syncing'] {
+  border-color: color-mix(in srgb, var(--ui-accent) 24%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-bg-surface));
+  color: var(--ui-accent);
+}
+
+.content-title-refresh-button[data-tone='warning'] {
+  border-color: color-mix(in srgb, var(--ui-warning) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-warning) 7%, var(--ui-bg-surface));
+  color: var(--ui-warning);
+}
+
+.content-title-refresh-button[data-tone='danger'] {
+  border-color: color-mix(in srgb, var(--ui-danger) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
+  color: var(--ui-danger);
+}
+
+.content-title-refresh-button:hover,
+.content-title-refresh-button:focus-visible {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .content-title-refresh-button[data-busy='true'] {
-  @apply border-[#e7d9b0] bg-[#fcf7e8] text-[#8a6a11];
+  border-color: color-mix(in srgb, var(--ui-warning) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-warning) 7%, var(--ui-bg-surface));
+  color: var(--ui-warning);
+}
+
+.content-title-connection-dot {
+  @apply h-1.5 w-1.5 shrink-0 rounded-full;
+  background: currentColor;
+}
+
+.content-title-refresh-button[data-tone='live'] .content-title-connection-dot {
+  background: var(--ui-success);
+}
+
+.content-title-connection-label {
+  @apply max-w-20 truncate text-[10px] font-semibold leading-none;
 }
 
 .content-title-refresh-button-icon {
@@ -4427,14 +4709,31 @@ async function submitFirstMessageForNewThread(
   animation: content-title-refresh-spin 0.9s linear infinite;
 }
 
+.content-title-refresh-button[data-tone='syncing'] .content-title-refresh-button-icon {
+  animation: content-title-refresh-spin 1.1s linear infinite;
+}
+
 .content-runtime-status {
-  @apply shrink-0;
+  @apply min-w-0 shrink-0;
+}
+
+.content-runtime-status--header {
+  @apply flex-1;
 }
 
 .content-favorites-button {
-  @apply inline-flex h-7 min-w-7 shrink-0 items-center justify-center gap-1 rounded-full border border-[#ddd3c2] bg-[#fffdf8] px-2 text-[11px] font-semibold text-[#544a3d] transition-[background-color,border-color,color] duration-150 hover:border-[#ccb89c] hover:bg-[#f7f1e5] hover:text-[#1f2937];
+  @apply inline-flex h-7 min-w-7 shrink-0 items-center justify-center gap-1 rounded-full border px-2 text-[11px] font-semibold transition-[background-color,border-color,color] duration-150;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
   font-family: var(--font-sans-ui);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
+}
+
+.content-favorites-button:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .content-favorites-button-icon {
@@ -4456,7 +4755,7 @@ async function submitFirstMessageForNewThread(
 }
 
 .content-meta-row {
-  @apply flex w-full min-w-0 flex-nowrap items-center gap-2;
+  @apply flex w-full min-w-0 flex-nowrap items-center gap-1.5;
 }
 
 .content-context-badge {
@@ -4573,9 +4872,14 @@ async function submitFirstMessageForNewThread(
 }
 
 .product-toast {
-  @apply fixed left-1/2 z-[70] max-w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 rounded-full border bg-[#fffdf8] px-4 py-2 text-sm font-medium text-[#544a3d] shadow-lg shadow-[#2d261f]/10;
+  @apply fixed left-1/2 z-[70] max-w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 border px-4 py-2 text-sm font-medium;
   bottom: max(1rem, env(safe-area-inset-bottom));
   font-family: var(--font-sans-ui);
+  border-radius: var(--ui-radius-pill);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.09);
 }
 
 .product-toast[data-tone='success'] {
@@ -4624,14 +4928,14 @@ async function submitFirstMessageForNewThread(
 .composer-with-queue {
   @apply w-full sticky bottom-0 z-10 pt-2;
   background:
-    linear-gradient(180deg, rgba(250,247,240,0) 0%, rgba(250,247,240,0.84) 18%, rgba(250,247,240,0.965) 100%);
+    linear-gradient(180deg, rgb(255 255 255 / 0) 0%, rgb(255 255 255 / 0.86) 20%, rgb(255 255 255 / 0.98) 100%);
   padding-bottom: max(0.35rem, env(safe-area-inset-bottom));
 }
 
 .quota-reminder {
   @apply mx-auto mb-1.5 flex w-full max-w-3xl items-center gap-2 rounded-full border px-3 py-1.5 text-xs leading-4 shadow-sm;
   font-family: var(--font-sans-ui);
-  background: rgba(255, 253, 248, 0.92);
+  background: color-mix(in srgb, var(--ui-bg-surface) 92%, transparent);
   backdrop-filter: blur(10px);
 }
 
@@ -4660,7 +4964,8 @@ async function submitFirstMessageForNewThread(
 }
 
 .quota-reminder-detail {
-  @apply min-w-0 truncate text-[#6d6354];
+  @apply min-w-0 truncate;
+  color: var(--ui-text-secondary);
 }
 
 .new-thread-empty {
@@ -4669,11 +4974,13 @@ async function submitFirstMessageForNewThread(
 }
 
 .new-thread-hero {
-  @apply m-0 text-[1.55rem] sm:text-[2.2rem] font-semibold leading-[1.06] text-[#1f2937];
+  @apply m-0 text-[1.55rem] sm:text-[2.05rem] font-semibold leading-[1.08];
+  color: var(--ui-text-primary);
 }
 
 .new-thread-folder-dropdown {
-  @apply text-xl sm:text-[2.2rem] text-[#73695d];
+  @apply text-xl sm:text-[2.05rem];
+  color: var(--ui-text-secondary);
 }
 
 .new-thread-folder-dropdown :deep(.composer-dropdown-trigger) {
@@ -4762,7 +5069,7 @@ async function submitFirstMessageForNewThread(
 }
 
 .worktree-init-status.is-running {
-  @apply border-[#ddd5c7] bg-[#f7f1e5] text-[#6d6354];
+  @apply border-zinc-200 bg-zinc-50 text-zinc-700;
 }
 
 .worktree-init-status.is-error {
@@ -4778,11 +5085,21 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-area {
-  @apply relative shrink-0 pt-2 px-2 pb-2 border-t border-[#e6dccb] bg-[#f7f4ed];
+  @apply relative shrink-0 pt-2 px-2 pb-2 border-t;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-sidebar);
 }
 
 .sidebar-settings-button {
-  @apply flex items-center gap-2 w-full rounded-2xl border border-transparent bg-transparent px-3 py-2 text-sm text-[#5b5146] transition-colors duration-100 hover:bg-[#ece4d6] hover:text-[#2d261f] cursor-pointer;
+  @apply flex items-center gap-2 w-full border border-transparent bg-transparent px-3 py-2 text-sm transition-colors duration-100 cursor-pointer;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-button:hover,
+.sidebar-settings-button:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-icon {
@@ -4790,7 +5107,15 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-panel {
-  @apply mb-1 rounded-[24px] border border-[#e5dbca] bg-[#fffdf8] overflow-hidden;
+  @apply mb-1 border;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.06);
+  max-height: min(72dvh, 38rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .sidebar-settings-mobile-backdrop {
@@ -4799,7 +5124,11 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-panel-mobile {
-  @apply fixed inset-x-0 bottom-0 z-[69] m-0 rounded-t-[28px] rounded-b-none border-[#ddd5c7] shadow-2xl shadow-[#1f2937]/18;
+  @apply fixed inset-x-0 bottom-0 z-[69] m-0 rounded-b-none;
+  border-top-left-radius: var(--ui-radius-composer);
+  border-top-right-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  box-shadow: 0 -16px 36px rgb(0 0 0 / 0.14);
   max-height: min(78dvh, calc(100dvh - max(4rem, env(safe-area-inset-top) + 1rem)));
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -4809,41 +5138,53 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-mobile-handle {
-  @apply mx-auto mt-2 h-1.5 w-12 rounded-full bg-[#ddd5c7];
+  @apply mx-auto mt-2 h-1.5 w-12 rounded-full;
+  background: var(--ui-border-strong);
 }
 
-.sidebar-settings-mobile-header {
-  @apply sticky top-0 z-[1] flex items-center justify-between gap-3 px-4 pb-2 pt-3;
-  background: linear-gradient(180deg, rgba(255, 253, 248, 0.985) 0%, rgba(255, 253, 248, 0.95) 100%);
-  border-bottom: 1px solid #f1eadf;
+.sidebar-settings-panel-header {
+  @apply sticky top-0 z-[1] flex items-center justify-between gap-3 px-3 py-2;
+  background: color-mix(in srgb, var(--ui-bg-surface) 96%, transparent);
+  border-bottom: 1px solid var(--ui-border-subtle);
 }
 
-.sidebar-settings-mobile-copy {
-  @apply min-w-0 flex flex-col gap-0.5;
+.sidebar-settings-panel-title {
+  @apply m-0 min-w-0 truncate text-sm font-semibold;
+  color: var(--ui-text-primary);
 }
 
-.sidebar-settings-mobile-title {
-  @apply m-0 text-sm font-semibold text-[#2d261f];
+.sidebar-settings-panel-close {
+  @apply inline-flex h-7 w-7 shrink-0 items-center justify-center border transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
 }
 
-.sidebar-settings-mobile-subtitle {
-  @apply m-0 text-[11px] leading-4 text-[#8f8577];
+.sidebar-settings-panel-close:hover,
+.sidebar-settings-panel-close:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
-.sidebar-settings-mobile-close {
-  @apply inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#e4dac9] bg-[#fffdf8] text-[#5b5146] transition-colors duration-100 hover:bg-[#f7f1e5] hover:text-[#2d261f];
-}
-
-.sidebar-settings-mobile-close-icon {
-  @apply h-4.5 w-4.5;
+.sidebar-settings-panel-close-icon {
+  @apply h-4 w-4;
 }
 
 .sidebar-settings-row {
-  @apply flex items-center justify-between w-full px-3 py-2.5 text-sm text-[#544a3d] border-0 bg-transparent transition-colors duration-150 hover:bg-[#f7f4ed] cursor-pointer;
+  @apply flex items-center justify-between w-full px-3 py-2 text-sm border-0 bg-transparent transition-colors duration-150 cursor-pointer;
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-row:hover,
+.sidebar-settings-row:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-row:disabled {
-  @apply cursor-not-allowed text-[#b1a89b] hover:bg-transparent;
+  @apply cursor-not-allowed hover:bg-transparent;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-row--select {
@@ -4863,15 +5204,18 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-section {
-  @apply border-t border-[#f1eadf] py-1;
+  @apply border-t py-0.5;
+  border-color: var(--ui-border-subtle);
 }
 
 .sidebar-settings-section-title {
-  @apply m-0 px-3 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9a907f];
+  @apply m-0 px-3 pt-1.5 pb-0.5 text-[11px] font-semibold uppercase tracking-[0.08em];
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-hint {
-  @apply m-0 px-3 py-1.5 text-[11px] leading-4 text-[#8f8577];
+  @apply m-0 px-3 py-1 text-[11px] leading-4;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-hint-status {
@@ -4882,12 +5226,20 @@ async function submitFirstMessageForNewThread(
   @apply px-1 py-1;
 }
 
+.sidebar-settings-hint:not(.sidebar-settings-hint-status):not(.sidebar-settings-hint-compact) {
+  display: none;
+}
+
 .sidebar-settings-language-dropdown {
   @apply min-w-0 max-w-52;
 }
 
 .sidebar-settings-language-dropdown :deep(.composer-dropdown-trigger) {
-  @apply h-auto rounded-xl border border-[#ddd5c7] bg-white px-2 py-1 text-xs text-[#544a3d];
+  @apply h-auto border px-2 py-1 text-xs;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-settings-language-dropdown :deep(.composer-dropdown-value) {
@@ -4895,7 +5247,8 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-row + .sidebar-settings-row {
-  @apply border-t border-[#f1eadf];
+  @apply border-t;
+  border-color: var(--ui-border-subtle);
 }
 
 .sidebar-settings-label {
@@ -4907,12 +5260,16 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-input {
-  @apply w-full rounded-2xl border border-[#ddd5c7] bg-white px-3 py-2 text-sm text-[#2d261f] outline-none transition-[border-color,box-shadow] duration-100;
+  @apply w-full border px-3 py-2 text-sm outline-none transition-[border-color,box-shadow] duration-100;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
   box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
 .sidebar-settings-input::placeholder {
-  color: #9f9484;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-input:focus {
@@ -4921,15 +5278,23 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-input:disabled {
-  @apply cursor-not-allowed bg-[#f7f4ed] text-[#9f9484];
+  @apply cursor-not-allowed;
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-value {
-  @apply text-xs text-[#7b7062] bg-[#f1ebde] rounded-full px-2 py-0.5;
+  @apply rounded-full px-2 py-0.5 text-xs;
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-settings-code {
-  @apply block w-full rounded-2xl border border-[#e6dccb] bg-[#f7f4ed] px-3 py-2 text-[11px] leading-4 text-[#5f5446] break-all;
+  @apply block w-full border px-3 py-2 text-[11px] leading-4 break-all;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-settings-code-row {
@@ -4941,7 +5306,17 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-copy-button {
-  @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-[#ddd5c7] bg-[#fffdf8] text-[#5b5146] transition-colors duration-100 hover:border-[#cdbfa8] hover:bg-[#f7f1e5] disabled:cursor-not-allowed disabled:opacity-45;
+  @apply inline-flex h-10 w-10 shrink-0 items-center justify-center border transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-45;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-copy-button:hover,
+.sidebar-settings-copy-button:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-copy-icon {
@@ -4957,7 +5332,8 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-toggle {
-  @apply relative w-9 h-5 rounded-full bg-[#d8cfbf] transition-colors shrink-0;
+  @apply relative w-9 h-5 rounded-full transition-colors shrink-0;
+  background: var(--ui-bg-row-active);
 }
 
 .sidebar-settings-toggle::after {
@@ -5011,17 +5387,24 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-about {
-  @apply border-t border-[#f1eadf] px-3 py-2.5 flex flex-col gap-2;
+  @apply border-t px-3 py-2 flex flex-col gap-1.5;
+  border-color: var(--ui-border-subtle);
 }
 
 .sidebar-settings-brand-card {
-  @apply flex items-center gap-3 rounded-[24px] border border-[#d6e3ff] bg-[linear-gradient(135deg,rgba(236,244,255,0.96),rgba(255,255,255,0.98))] px-3 py-3;
-  box-shadow: 0 12px 24px -24px rgba(30, 99, 255, 0.42);
+  @apply flex items-center gap-2 border px-2.5 py-2;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  box-shadow: none;
 }
 
 .sidebar-settings-brand-logo {
-  @apply h-14 w-14 shrink-0 rounded-[18px] border border-white/60 bg-white/75 object-cover;
-  box-shadow: 0 12px 22px -20px rgba(30, 99, 255, 0.5);
+  @apply h-8 w-8 shrink-0 border object-cover;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: none;
 }
 
 .sidebar-settings-brand-copy {
@@ -5029,15 +5412,18 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-brand-kicker {
-  @apply text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5978c2];
+  @apply text-[9px] font-semibold uppercase tracking-[0.08em];
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-brand-title {
-  @apply text-[15px] leading-5 font-semibold text-[#16367e];
+  @apply text-[13px] leading-4 font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-brand-subtitle {
-  @apply text-[11px] leading-4 text-[#6a7cae];
+  @apply hidden text-[11px] leading-4;
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-settings-about-main {
@@ -5045,11 +5431,21 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-about-trigger {
-  @apply min-w-0 flex flex-1 items-center justify-between gap-3 rounded-[22px] border border-[#d8e5ff] bg-white/78 px-3 py-2 text-left transition-colors duration-100 hover:bg-[#f4f8ff] hover:border-[#bcd3ff] cursor-pointer;
+  @apply min-w-0 flex flex-1 items-center justify-between gap-2 border px-2.5 py-1.5 text-left transition-colors duration-100 cursor-pointer;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-about-trigger:hover,
+.sidebar-settings-about-trigger:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-about-trigger:disabled {
-  @apply cursor-not-allowed opacity-65 hover:bg-white/78 hover:border-[#d8e5ff];
+  @apply cursor-not-allowed opacity-65;
 }
 
 .sidebar-settings-about-copy {
@@ -5057,23 +5453,39 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-about-label {
-  @apply text-[11px] leading-4 text-[#8f8577];
+  @apply text-[11px] leading-4;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-about-version {
-  @apply text-sm leading-5 font-semibold text-[#2d261f];
+  @apply text-sm leading-5 font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-about-action {
-  @apply text-[11px] leading-4 text-[#6a7cae];
+  @apply inline-flex items-center gap-1 text-[11px] leading-4;
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-about-spinner {
+  @apply inline-block h-3 w-3 shrink-0 rounded-full border;
+  animation: settings-version-spin 820ms linear infinite;
+  border-color: color-mix(in srgb, var(--ui-accent) 28%, transparent);
+  border-top-color: var(--ui-accent);
 }
 
 .sidebar-settings-about-update-badge {
   @apply inline-flex shrink-0 items-center rounded-full border border-[#bfdbfe] bg-[#e8f1ff] px-2 py-0.5 text-[10px] font-semibold text-[#1d4ed8];
 }
 
+@keyframes settings-version-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .sidebar-settings-github-button {
-  @apply inline-flex min-h-9 shrink-0 items-center justify-center rounded-full border border-[#cbe7e1] bg-[#f0fdfa] px-3 text-xs font-semibold text-[#0f766e] transition-colors duration-100 hover:border-[#99f6e4] hover:bg-[#ccfbf1] hover:text-[#115e59] cursor-pointer;
+  @apply inline-flex min-h-8 shrink-0 items-center justify-center rounded-full border border-[#cbe7e1] bg-[#f0fdfa] px-3 text-xs font-semibold text-[#0f766e] transition-colors duration-100 hover:border-[#99f6e4] hover:bg-[#ccfbf1] hover:text-[#115e59] cursor-pointer;
 }
 
 .sidebar-settings-github-button:disabled {
@@ -5081,11 +5493,21 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-settings-github-button--secondary {
-  @apply border-[#ddd5c7] bg-white text-[#6a6052] hover:border-[#d1c7b7] hover:bg-[#f7f4ed] hover:text-[#3f372d];
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-github-button--secondary:hover,
+.sidebar-settings-github-button--secondary:focus-visible {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .sidebar-settings-about-meta {
-  @apply flex items-center justify-between gap-2 text-[11px] leading-4 text-[#8f8577];
+  @apply flex items-center justify-between gap-2 text-[11px] leading-4;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-settings-about-meta span:last-child {
@@ -5093,6 +5515,10 @@ async function submitFirstMessageForNewThread(
 }
 
 @media (max-width: 767px) {
+  .content-root {
+    --content-shell-max-width: 100%;
+  }
+
   .sidebar-scrollable {
     @apply gap-1.5 px-1.5 pt-2 pb-1.5;
     padding-top: max(0.5rem, env(safe-area-inset-top));
@@ -5148,12 +5574,16 @@ async function submitFirstMessageForNewThread(
     @apply gap-1.5;
   }
 
+  .content-meta-row:empty {
+    display: none;
+  }
+
   .content-context-badge {
     @apply gap-1 px-1 py-0.5 text-[10px];
   }
 
   .content-title-refresh-button {
-    @apply h-6.5 w-6.5;
+    @apply h-7 min-w-7 px-1.5;
   }
 
   .content-title-refresh-button-icon {
@@ -5175,7 +5605,7 @@ async function submitFirstMessageForNewThread(
   .composer-with-queue {
     @apply pt-1.5;
     background:
-      linear-gradient(180deg, rgba(250,247,240,0) 0%, rgba(250,247,240,0.78) 30%, rgba(250,247,240,0.97) 100%);
+      linear-gradient(180deg, rgb(247 247 246 / 0) 0%, rgb(247 247 246 / 0.82) 30%, rgb(247 247 246 / 0.98) 100%);
   }
 
   .quota-reminder {
@@ -5224,19 +5654,26 @@ async function submitFirstMessageForNewThread(
 }
 
 .desktop-refresh-confirm-dialog {
-  @apply w-full max-w-md rounded-[28px] border border-[#ddd5c7] bg-[#fffdf8] p-5 shadow-2xl shadow-[#1f2937]/15;
+  @apply w-full max-w-md border p-5;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: 0 16px 38px rgb(0 0 0 / 0.14);
 }
 
 .desktop-refresh-confirm-kicker {
-  @apply m-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8f8577];
+  @apply m-0 text-[11px] font-semibold uppercase tracking-[0.18em];
+  color: var(--ui-text-tertiary);
 }
 
 .desktop-refresh-confirm-title {
-  @apply mt-2 mb-0 text-lg font-semibold leading-7 text-[#1f2937];
+  @apply mt-2 mb-0 text-lg font-semibold leading-7;
+  color: var(--ui-text-primary);
 }
 
 .desktop-refresh-confirm-text {
-  @apply mt-2 mb-0 text-sm leading-6 text-[#5c5247];
+  @apply mt-2 mb-0 text-sm leading-6;
+  color: var(--ui-text-secondary);
 }
 
 .desktop-refresh-confirm-actions {
@@ -5244,7 +5681,18 @@ async function submitFirstMessageForNewThread(
 }
 
 .desktop-refresh-confirm-button {
-  @apply inline-flex items-center justify-center rounded-full border border-[#d8cfbf] bg-[#fffdf8] px-4 py-2 text-sm font-semibold text-[#544a3d] transition-colors duration-100 hover:border-[#bca98d] hover:bg-[#f7f1e5];
+  @apply inline-flex items-center justify-center border px-4 py-2 text-sm font-semibold transition-colors duration-100;
+  border-radius: var(--ui-radius-pill);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.desktop-refresh-confirm-button:not(.desktop-refresh-confirm-button-primary):not(.desktop-refresh-confirm-button-warning):hover,
+.desktop-refresh-confirm-button:not(.desktop-refresh-confirm-button-primary):not(.desktop-refresh-confirm-button-warning):focus-visible {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .desktop-refresh-confirm-button-primary {
@@ -5260,27 +5708,39 @@ async function submitFirstMessageForNewThread(
 }
 
 .mobile-update-confirm-dialog {
-  @apply w-full max-w-md rounded-[28px] border border-[#ddd5c7] bg-[#fffdf8] p-5 shadow-2xl shadow-[#1f2937]/15;
+  @apply w-full max-w-md border p-5;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: 0 16px 38px rgb(0 0 0 / 0.14);
 }
 
 .mobile-update-confirm-kicker {
-  @apply m-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#5978c2];
+  @apply m-0 text-[11px] font-semibold uppercase tracking-[0.18em];
+  color: var(--ui-text-tertiary);
 }
 
 .mobile-update-confirm-title {
-  @apply mt-2 mb-0 text-lg font-semibold leading-7 text-[#1f2937];
+  @apply mt-2 mb-0 text-lg font-semibold leading-7;
+  color: var(--ui-text-primary);
 }
 
 .mobile-update-confirm-text {
-  @apply mt-2 mb-0 text-sm leading-6 text-[#5c5247];
+  @apply mt-2 mb-0 text-sm leading-6;
+  color: var(--ui-text-secondary);
 }
 
 .mobile-update-confirm-meta {
-  @apply mt-3 flex items-center justify-between gap-3 rounded-2xl border border-[#ebe3d5] bg-[#fbf8f2] px-3 py-2 text-[12px] leading-5 text-[#6a6052];
+  @apply mt-3 flex items-center justify-between gap-3 border px-3 py-2 text-[12px] leading-5;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
 }
 
 .mobile-update-confirm-meta span:last-child {
-  @apply min-w-0 text-right break-all text-[#2d261f];
+  @apply min-w-0 text-right break-all;
+  color: var(--ui-text-primary);
 }
 
 .mobile-update-confirm-actions {
@@ -5288,7 +5748,18 @@ async function submitFirstMessageForNewThread(
 }
 
 .mobile-update-confirm-button {
-  @apply inline-flex items-center justify-center rounded-full border border-[#d8cfbf] bg-[#fffdf8] px-4 py-2 text-sm font-semibold text-[#544a3d] transition-colors duration-100 hover:border-[#bca98d] hover:bg-[#f7f1e5];
+  @apply inline-flex items-center justify-center border px-4 py-2 text-sm font-semibold transition-colors duration-100;
+  border-radius: var(--ui-radius-pill);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.mobile-update-confirm-button:not(.mobile-update-confirm-button-primary):hover,
+.mobile-update-confirm-button:not(.mobile-update-confirm-button-primary):focus-visible {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .mobile-update-confirm-button-primary {
@@ -5317,6 +5788,14 @@ async function submitFirstMessageForNewThread(
   }
 
   .content-title-refresh-button[data-busy='true'] .content-title-refresh-button-icon {
+    animation: none !important;
+  }
+
+  .content-title-refresh-button[data-tone='syncing'] .content-title-refresh-button-icon {
+    animation: none !important;
+  }
+
+  .sidebar-settings-about-spinner {
     animation: none !important;
   }
 }

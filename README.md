@@ -17,6 +17,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 ## 快速入口
 
 - 最新 Release: [github.com/Qjzn/CX-Codex/releases/latest](https://github.com/Qjzn/CX-Codex/releases/latest)
+- 2.3.0 发布说明: [docs/release-notes-2.3.0.zh-CN.md](./docs/release-notes-2.3.0.zh-CN.md)
 - Windows 一条命令安装: [快速安装](#快速安装)
 - Android 客户端说明: [docs/android-shell.zh-CN.md](./docs/android-shell.zh-CN.md)
 - 平台兼容与 Slash Command 支持: [docs/platform-and-commands.zh-CN.md](./docs/platform-and-commands.zh-CN.md)
@@ -25,6 +26,10 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 - OpenAI 官方文档审查: [docs/openai-docs-review.zh-CN.md](./docs/openai-docs-review.zh-CN.md)
 - Release readiness 审计: [docs/release-readiness-audit.zh-CN.md](./docs/release-readiness-audit.zh-CN.md)
 - Candidate release 审查: [docs/candidate-release-review.zh-CN.md](./docs/candidate-release-review.zh-CN.md)
+- Candidate PR review pack: [docs/candidate-pr-review-pack.zh-CN.md](./docs/candidate-pr-review-pack.zh-CN.md)
+- Desktop parity UI 规划: [docs/desktop-parity-ui-plan.zh-CN.md](./docs/desktop-parity-ui-plan.zh-CN.md)
+- 前端 UI 整改方案: [docs/frontend-ui-remediation-plan.zh-CN.md](./docs/frontend-ui-remediation-plan.zh-CN.md)
+- 本地完整回归测试清单: [docs/local-regression-checklist.zh-CN.md](./docs/local-regression-checklist.zh-CN.md)
 - 远程访问方案: [docs/cloudflare-tunnel.zh-CN.md](./docs/cloudflare-tunnel.zh-CN.md)
 - 安全硬化清单: [docs/security-hardening.zh-CN.md](./docs/security-hardening.zh-CN.md)
 - 问题反馈前排查: [SUPPORT.md](./SUPPORT.md)
@@ -70,6 +75,14 @@ Android / 手机会话：
 
 ![Mobile conversation](./docs/screenshots/chat-mobile.png)
 
+移动端操作栏：
+
+![Mobile composer add menu](./docs/screenshots/mobile-composer-plus.png)
+
+模型、质量与速度：
+
+![Mobile model settings](./docs/screenshots/mobile-model-settings.png)
+
 Android 首次连接：
 
 ![Android first connection](./docs/screenshots/android-setup.png)
@@ -79,6 +92,8 @@ GitHub 热门项目：
 ![GitHub trending module](./docs/screenshots/github-trending.png)
 
 ## 快速安装
+
+Windows bootstrap 会复用 Node.js `22.13.0+`；当本机版本过旧时，会在安装目录内下载便携式 LTS 运行时，不切换系统全局 Node 版本。
 
 Windows 一条命令：
 
@@ -143,16 +158,22 @@ Release 页面会发布 Android APK：
 
 - [docs/android-shell.zh-CN.md](./docs/android-shell.zh-CN.md)
 
-## 手动运行
+## 源码手动运行
+
+需要 Node.js `22.13.0+` 和 npm。当前可验证的发布入口是 GitHub 源码与 Release；npm 包尚未发布，因此不把 `npx` 作为安装承诺。
 
 ```bash
-npx cx-codex
+git clone https://github.com/Qjzn/CX-Codex.git
+cd CX-Codex
+npm ci
+npm run build
+node dist-cli/index.js
 ```
 
 固定到 `7420`：
 
 ```powershell
-npx cx-codex --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
+node dist-cli/index.js --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
 ```
 
 配置文件优先级：
@@ -174,6 +195,14 @@ npx cx-codex --host 0.0.0.0 --port 7420 --no-tunnel --password "change-me"
   "projectPath": "C:\\Users\\your-user\\Documents\\Playground"
 }
 ```
+
+运行库会保留有限的恢复事件。若长期运行后 `~/.cx-codex/runtime.sqlite` 明显膨胀，可先停止 CX-Codex，再执行：
+
+```bash
+cx-codex runtime-compact
+```
+
+命令会在仍有未收敛任务时拒绝压缩；正常完成后会输出压缩前后体积和回收空间。完整 `VACUUM` 不会自动占用正常启动时间。
 
 语音转写可选配置：
 
@@ -222,6 +251,7 @@ Cloudflare Tunnel 一条命令：
 - 本地文件链接、图片 / Markdown / PDF / DOCX 预览
 - GitHub 热门项目模块
 - MCP / 工具权限状态、审批边界和只读诊断
+- 模型、推理档位、已连接插件与一次性计划 / 本轮要求操作栏
 - Windows bootstrap 和发布包
 - 健康检查、回归脚本和浸泡脚本
 
@@ -244,6 +274,11 @@ Cloudflare Tunnel 一条命令：
 - OpenAI 官方文档审查: [docs/openai-docs-review.zh-CN.md](./docs/openai-docs-review.zh-CN.md)
 - Release readiness 审计: [docs/release-readiness-audit.zh-CN.md](./docs/release-readiness-audit.zh-CN.md)
 - Candidate release 审查: [docs/candidate-release-review.zh-CN.md](./docs/candidate-release-review.zh-CN.md)
+- Candidate PR review pack: [docs/candidate-pr-review-pack.zh-CN.md](./docs/candidate-pr-review-pack.zh-CN.md)
+- Desktop parity UI 规划: [docs/desktop-parity-ui-plan.zh-CN.md](./docs/desktop-parity-ui-plan.zh-CN.md)
+- 前端 UI 整改方案: [docs/frontend-ui-remediation-plan.zh-CN.md](./docs/frontend-ui-remediation-plan.zh-CN.md)
+- 本地完整回归测试清单: [docs/local-regression-checklist.zh-CN.md](./docs/local-regression-checklist.zh-CN.md)
+- 本地回归执行记录: [docs/local-regression-execution-20260705.zh-CN.md](./docs/local-regression-execution-20260705.zh-CN.md)
 - 路线图: [docs/roadmap.zh-CN.md](./docs/roadmap.zh-CN.md)
 - 运营规划: [docs/operations-plan.zh-CN.md](./docs/operations-plan.zh-CN.md)
 - 依赖维护手册: [docs/dependency-maintenance.zh-CN.md](./docs/dependency-maintenance.zh-CN.md)

@@ -20,6 +20,7 @@ import {
 import { resolveLaunchOptions, type LaunchCliOptions } from './config.js'
 import { createServer as createApp } from '../server/httpServer.js'
 import { generatePassword } from '../server/password.js'
+import { RuntimeStore } from '../server/runtimeStore.js'
 import { spawnSyncCommand } from '../utils/commandInvocation.js'
 
 const program = new Command().name('cx-codex').description('CX-Codex Web bridge for Codex app-server')
@@ -694,6 +695,30 @@ async function runLogin() {
   runOrFail(codexCommand, ['login'], 'Codex login')
 }
 
+function formatMegabytes(bytes: number): string {
+  return `${(Math.max(0, bytes) / (1024 * 1024)).toFixed(1)} MiB`
+}
+
+async function runRuntimeCompact(options: { database?: string }): Promise<void> {
+  const databasePath = options.database?.trim()
+  const runtimeStore = new RuntimeStore(databasePath ? resolve(databasePath) : undefined)
+  try {
+    const result = runtimeStore.compact()
+    if (result.status === 'skipped-active-requests') {
+      throw new Error(`Runtime database still has ${String(result.activeRequestCount)} active request(s). Stop CX-Codex after the task settles, then retry.`)
+    }
+    console.log([
+      'Runtime database compacted.',
+      `  Before:    ${formatMegabytes(result.before.databaseBytes)}`,
+      `  After:     ${formatMegabytes(result.after.databaseBytes)}`,
+      `  Reclaimed: ${formatMegabytes(result.reclaimedBytes)}`,
+      `  Duration:  ${String(result.durationMs)} ms`,
+    ].join('\n'))
+  } finally {
+    runtimeStore.close()
+  }
+}
+
 program
   .argument('[projectPath]', 'project directory to open on launch')
   .option('-c, --config <path>', 'read launch options from a JSON config file')
@@ -734,6 +759,12 @@ program
   })
 
 program.command('login').description('Install/check Codex CLI and run `codex login`').action(runLogin)
+
+program
+  .command('runtime-compact')
+  .description('Compact the runtime replay database while CX-Codex is stopped')
+  .option('--database <path>', 'override the runtime database path')
+  .action(runRuntimeCompact)
 
 program.command('help').description('Show CX-Codex command help').action(() => {
   program.outputHelp()

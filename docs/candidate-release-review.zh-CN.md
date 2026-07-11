@@ -9,6 +9,8 @@
 3. README、Release 正文和安全声明是否存在过度宣传。
 4. 哪些能力可以公开宣传，哪些必须标注为实验、只读诊断或未完成。
 
+PR / review pack 草稿见 `docs/candidate-pr-review-pack.zh-CN.md`。
+
 ## 正式 Release Gate
 
 本轮运行：
@@ -163,7 +165,7 @@ SECURITY：
 
 下一步建议：
 
-1. 创建候选分支或 PR 审查包。
+1. 创建候选分支或 PR 审查包；当前候选分支为 `codex/candidate-release-review`，review pack 见 `docs/candidate-pr-review-pack.zh-CN.md`。
 2. 将本文 P0/P1/P2 转成 issue 或 checklist。
 3. 若 schema audit 计数变化，先更新摘要和矩阵，再考虑发布。
 4. 发布正文避免使用“完全对齐最新 App Server”“完整插件市场”“稳定 Realtime”等表述。

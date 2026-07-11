@@ -6,7 +6,8 @@ param(
   [string]$ConfigPath = "$env:USERPROFILE\.cx-codex\config.json",
   [switch]$RestartIfUnhealthy,
   [switch]$SkipBrowser,
-  [string]$ScreenshotDir = ""
+  [string]$ScreenshotDir = "",
+  [int]$AgentBrowserTimeoutSec = 25
 )
 
 $ErrorActionPreference = "Stop"
@@ -78,17 +79,49 @@ function Assert-ReplayEndpoint {
 function Invoke-AgentBrowser {
   param([string[]]$Arguments)
 
-  $previousErrorActionPreference = $ErrorActionPreference
-  $ErrorActionPreference = "Continue"
+  $command = Get-Command agent-browser -ErrorAction Stop
+  $stdoutPath = [IO.Path]::GetTempFileName()
+  $stderrPath = [IO.Path]::GetTempFileName()
+  $process = $null
   try {
-    $output = & agent-browser @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
+    if ($command.CommandType -eq "ExternalScript") {
+      $fileName = "powershell"
+      $argumentList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $command.Source) + $Arguments
+    } else {
+      $fileName = $command.Source
+      $argumentList = $Arguments
+    }
+
+    $process = Start-Process `
+      -FilePath $fileName `
+      -ArgumentList $argumentList `
+      -NoNewWindow `
+      -RedirectStandardOutput $stdoutPath `
+      -RedirectStandardError $stderrPath `
+      -PassThru
+
+    if (-not $process.WaitForExit($AgentBrowserTimeoutSec * 1000)) {
+      try {
+        Stop-Process -Id $process.Id -Force -ErrorAction Stop
+      } catch {}
+      throw "agent-browser $($Arguments -join ' ') timed out after $AgentBrowserTimeoutSec seconds"
+    }
+
+    $output = @()
+    if (Test-Path -LiteralPath $stdoutPath) {
+      $output += Get-Content -LiteralPath $stdoutPath -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $stderrPath) {
+      $output += Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue
+    }
+
+    $exitCode = if ($null -eq $process.ExitCode) { 0 } else { [int]$process.ExitCode }
     if ($exitCode -ne 0) {
       throw "agent-browser $($Arguments -join ' ') failed with exit code $exitCode`n$($output -join "`n")"
     }
     return @($output)
   } finally {
-    $ErrorActionPreference = $previousErrorActionPreference
+    Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
   }
 }
 
@@ -123,6 +156,13 @@ function Get-PageMetrics {
   )
 
   Invoke-AgentBrowser -Arguments @("--session", $Session, "set", "viewport", "$Width", "$Height") | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "open", $BaseUrl) | Out-Null
+  Invoke-AgentBrowser -Arguments @(
+    "--session",
+    $Session,
+    "eval",
+    "localStorage.removeItem('codex-web-local.sidebar-collapsed.v1'); JSON.stringify({ sidebarReset: true })"
+  ) | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $Session, "open", $BaseUrl) | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "700") | Out-Null
 

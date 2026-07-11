@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "pnpm is required" >&2
+if ! command -v npm >/dev/null 2>&1; then
+  echo "npm is required" >&2
   exit 1
 fi
 
 package_name=$(node -p "require('./package.json').name")
 current_version=$(node -p "require('./package.json').version")
-published_version=$(pnpm view "$package_name" dist-tags.latest 2>/dev/null || true)
+published_version=$(npm view "$package_name" dist-tags.latest 2>/dev/null || true)
 
 next_version=$(node -e "
 const parse = (v) => v.split('.').map((n) => Number(n));
@@ -27,8 +27,8 @@ console.log(base.join('.'));
 " "$current_version" "$published_version")
 
 if [[ "$next_version" != "$current_version" ]]; then
-  pnpm version "$next_version" --no-git-tag-version
+  npm version "$next_version" --no-git-tag-version
 fi
 
-pnpm run build
-pnpm publish --access public --no-git-checks
+npm run build
+npm publish --access public

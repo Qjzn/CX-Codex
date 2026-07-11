@@ -1,4 +1,8 @@
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
+
 import { logBridgeError } from './bridgeLog.js'
+import { getWebThreadListCachePath } from './codexPaths.js'
 
 type CachedRpcResponse = {
   value: unknown
@@ -12,6 +16,18 @@ export type CachedRpcRead = {
 }
 
 type EnqueueRpc = (method: string, params: unknown) => Promise<unknown>
+type AppServerRpcCacheOptions = {
+  threadListCachePath?: string
+}
+type PersistedThreadListCachePayload = {
+  version?: number
+  entries?: Array<{
+    key?: unknown
+    value?: unknown
+    cachedAtMs?: unknown
+  }>
+}
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 const APP_SERVER_THREAD_LIST_FRESH_CACHE_TTL_MS = 3 * 60_000
 const APP_SERVER_THREAD_LIST_STALE_CACHE_TTL_MS = 20 * 60_000
@@ -26,10 +42,31 @@ export function getShareableRpcKey(method: string, params: unknown): string | nu
   }
 
   try {
-    return `${method}:${JSON.stringify(params ?? null)}`
+    return `${method}:${stableJsonStringify(params ?? null)}`
   } catch {
     return null
   }
+}
+
+function stableJsonStringify(value: unknown): string {
+  return JSON.stringify(toStableJsonValue(value))
+}
+
+function toStableJsonValue(value: unknown): JsonValue {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (Array.isArray(value)) return value.map((item) => toStableJsonValue(item))
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const normalized: { [key: string]: JsonValue } = {}
+    for (const key of Object.keys(record).sort()) {
+      const item = record[key]
+      if (typeof item === 'undefined' || typeof item === 'function' || typeof item === 'symbol') continue
+      normalized[key] = toStableJsonValue(item)
+    }
+    return normalized
+  }
+  return null
 }
 
 export function shouldInvalidateThreadListCacheForRpc(method: string): boolean {
@@ -122,6 +159,12 @@ export class AppServerRpcCache {
   private readonly sharedReadRpcByKey = new Map<string, Promise<unknown>>()
   private readonly cachedThreadListRpcByKey = new Map<string, CachedRpcResponse>()
   private readonly cachedModelListRpcByKey = new Map<string, CachedRpcResponse>()
+  private readonly threadListCachePath: string
+
+  constructor(options: AppServerRpcCacheOptions = {}) {
+    this.threadListCachePath = options.threadListCachePath ?? getWebThreadListCachePath()
+    this.loadPersistedThreadListCache()
+  }
 
   clearSharedReads(): void {
     this.sharedReadRpcByKey.clear()
@@ -129,6 +172,7 @@ export class AppServerRpcCache {
 
   clearThreadList(): void {
     this.cachedThreadListRpcByKey.clear()
+    this.persistThreadListCache()
   }
 
   getSharedRead(shareableKey: string): Promise<unknown> | null {
@@ -155,6 +199,7 @@ export class AppServerRpcCache {
 
   writeThreadList(shareableKey: string, value: unknown): void {
     writeCachedRpc(this.cachedThreadListRpcByKey, shareableKey, value)
+    this.persistThreadListCache()
   }
 
   readModelList(shareableKey: string, allowStale = false): CachedRpcRead | null {
@@ -290,6 +335,40 @@ export class AppServerRpcCache {
       this.refreshThreadListInBackground(shareableKey, params, enqueueRpc)
     } else if (method === 'model/list') {
       this.refreshModelListInBackground(shareableKey, params, enqueueRpc)
+    }
+  }
+
+  private loadPersistedThreadListCache(): void {
+    if (!this.threadListCachePath) return
+    try {
+      const payload = JSON.parse(readFileSync(this.threadListCachePath, 'utf8')) as PersistedThreadListCachePayload
+      if (payload?.version !== 1 || !Array.isArray(payload.entries)) return
+      for (const entry of payload.entries) {
+        if (!entry || typeof entry.key !== 'string') continue
+        if (typeof entry.cachedAtMs !== 'number' || !Number.isFinite(entry.cachedAtMs)) continue
+        this.cachedThreadListRpcByKey.set(entry.key, {
+          value: entry.value,
+          cachedAtMs: entry.cachedAtMs,
+          refreshStartedAtMs: 0,
+        })
+      }
+    } catch {
+      // Persistent list cache is only a startup accelerator; malformed or missing files are ignored.
+    }
+  }
+
+  private persistThreadListCache(): void {
+    if (!this.threadListCachePath) return
+    try {
+      const entries = Array.from(this.cachedThreadListRpcByKey.entries()).map(([key, entry]) => ({
+        key,
+        value: entry.value,
+        cachedAtMs: entry.cachedAtMs,
+      }))
+      mkdirSync(dirname(this.threadListCachePath), { recursive: true })
+      writeFileSync(this.threadListCachePath, JSON.stringify({ version: 1, entries }), 'utf8')
+    } catch {
+      // List caching must never break app-server RPC handling.
     }
   }
 }

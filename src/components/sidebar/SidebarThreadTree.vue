@@ -9,6 +9,7 @@
         <li v-for="thread in runningThreads" :key="thread.id" class="thread-row-item">
           <SidebarMenuRow
             class="thread-row thread-row-priority"
+            :data-thread-id="thread.id"
             :data-active="thread.id === selectedThreadId"
             :data-pinned="isPinned(thread.id)"
             :force-right-hover="isThreadMenuOpen(thread.id)"
@@ -28,6 +29,12 @@
                 <span class="thread-row-title-wrap">
                   <span class="thread-row-title">{{ thread.title }}</span>
                   <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
+                </span>
+                <span class="thread-row-meta">
+                  <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
+                  <span v-if="thread.sourceKind" class="thread-row-source">{{ formatThreadSource(thread) }}</span>
+                  <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
+                  <span v-else-if="thread.unread" class="thread-row-source thread-row-source--unread">未读</span>
                 </span>
               </span>
             </button>
@@ -80,6 +87,7 @@
         <li v-for="thread in pinnedThreads" :key="thread.id" class="thread-row-item">
           <SidebarMenuRow
             class="thread-row"
+            :data-thread-id="thread.id"
             :data-active="thread.id === selectedThreadId"
             :data-pinned="isPinned(thread.id)"
             :force-right-hover="isThreadMenuOpen(thread.id)"
@@ -104,6 +112,12 @@
                 <span class="thread-row-title-wrap">
                   <span class="thread-row-title">{{ thread.title }}</span>
                   <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
+                </span>
+                <span class="thread-row-meta">
+                  <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
+                  <span v-if="thread.sourceKind" class="thread-row-source">{{ formatThreadSource(thread) }}</span>
+                  <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
+                  <span v-else-if="thread.unread" class="thread-row-source thread-row-source--unread">未读</span>
                 </span>
               </span>
             </button>
@@ -199,10 +213,15 @@
       <span v-for="index in 5" :key="`thread-skeleton-${index}`" class="thread-loading-skeleton" />
     </div>
 
+    <SidebarMenuRow v-else-if="groups.length === 0" as="p" class="thread-tree-empty-row">
+      <span class="thread-tree-empty-text">会话列表暂未加载，稍后重试或刷新页面。</span>
+    </SidebarMenuRow>
+
     <ul v-else-if="isChronologicalView" class="thread-list thread-list-global">
       <li v-for="thread in globalThreads" :key="thread.id" class="thread-row-item">
         <SidebarMenuRow
           class="thread-row"
+          :data-thread-id="thread.id"
           :data-active="thread.id === selectedThreadId"
           :data-pinned="isPinned(thread.id)"
           :force-right-hover="isThreadMenuOpen(thread.id)"
@@ -227,6 +246,12 @@
               <span class="thread-row-title-wrap">
                 <span class="thread-row-title">{{ thread.title }}</span>
                 <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
+              </span>
+              <span class="thread-row-meta">
+                <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
+                <span v-if="thread.sourceKind" class="thread-row-source">{{ formatThreadSource(thread) }}</span>
+                <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
+                <span v-else-if="thread.unread" class="thread-row-source thread-row-source--unread">未读</span>
               </span>
             </span>
           </button>
@@ -276,6 +301,7 @@
         :ref="(el) => setProjectGroupRef(group.projectName, el)"
         class="project-group"
         :data-project-name="group.projectName"
+        :data-pinned-project="group.isPinnedProject === true"
         :data-expanded="!isCollapsed(group.projectName)"
         :data-dragging="isDraggingProject(group.projectName)"
         :style="projectGroupStyle(group.projectName)"
@@ -308,7 +334,10 @@
               @mousedown.left="onProjectHandleMouseDown($event, group.projectName)"
             >
               <span class="project-title-wrap">
-                <span class="project-title">{{ getProjectDisplayName(group.projectName) }}</span>
+                <span class="project-title-line">
+                  <span class="project-title">{{ getProjectDisplayName(group.projectName) }}</span>
+                  <IconTablerPin v-if="group.isPinnedProject === true" class="project-pinned-icon" title="置顶项目" />
+                </span>
                 <span class="project-summary">{{ getProjectSummary(group) }}</span>
               </span>
             </span>
@@ -367,6 +396,7 @@
             <li v-for="thread in visibleThreads(group)" :key="thread.id" class="thread-row-item">
               <SidebarMenuRow
                 class="thread-row"
+                :data-thread-id="thread.id"
                 :data-active="thread.id === selectedThreadId"
                 :data-pinned="isPinned(thread.id)"
                 :force-right-hover="isThreadMenuOpen(thread.id)"
@@ -391,6 +421,12 @@
                     <span class="thread-row-title-wrap">
                       <span class="thread-row-title">{{ thread.title }}</span>
                       <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
+                    </span>
+                    <span class="thread-row-meta">
+                      <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
+                      <span v-if="thread.sourceKind" class="thread-row-source">{{ formatThreadSource(thread) }}</span>
+                      <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
+                      <span v-else-if="thread.unread" class="thread-row-source thread-row-source--unread">未读</span>
                     </span>
                   </span>
                 </button>
@@ -445,7 +481,7 @@
               <span class="thread-show-more-spacer" />
             </template>
             <button class="thread-show-more-button" type="button" @click="toggleProjectExpansion(group.projectName)">
-              {{ isExpanded(group.projectName) ? '收起' : '展开更多' }}
+              {{ getShowMoreLabel(group) }}
             </button>
           </SidebarMenuRow>
       </article>
@@ -529,6 +565,7 @@ const props = defineProps<{
   searchQuery: string
   searchMatchedThreadIds: string[] | null
   desktopListParity?: boolean
+  pinnedThreadIdsOverride?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -575,10 +612,11 @@ type DragPointerSample = {
 
 const DRAG_START_THRESHOLD_PX = 4
 const PROJECT_GROUP_EXPANDED_GAP_PX = 6
+const PROJECT_THREAD_PREVIEW_LIMIT = 5
 const expandedProjects = ref<Record<string, boolean>>({})
 const collapsedProjects = ref<Record<string, boolean>>({})
 const PINNED_THREAD_STORAGE_KEY = 'codex-web-local.pinned-thread-ids.v1'
-const pinnedThreadIds = ref<string[]>(loadPinnedThreadIds())
+const pinnedThreadIds = ref<string[]>(normalizePinnedThreadIds(props.pinnedThreadIdsOverride ?? loadPinnedThreadIds()))
 const hasPinnedThreadIdsHydrated = ref(false)
 let pinnedThreadIdsSequence = 0
 let pinnedThreadIdsHydrationPromise: Promise<void> | null = null
@@ -686,6 +724,7 @@ function setPinnedThreadIds(value: string[]): void {
   if (areStringArraysEqual(pinnedThreadIds.value, normalized)) return
   const previousPinnedThreadIds = pinnedThreadIds.value
   pinnedThreadIds.value = normalized
+  if (hasPinnedThreadIdsOverride.value) return
   savePinnedThreadIds(normalized)
   if (!hasPinnedThreadIdsHydrated.value) return
   void persistPinnedThreadIds(normalized, previousPinnedThreadIds)
@@ -699,6 +738,7 @@ async function hydratePinnedThreadIds(): Promise<void> {
 
   const hydrationPromise = (async () => {
     try {
+      if (hasPinnedThreadIdsOverride.value) return
       const hydrationSequence = pinnedThreadIdsSequence
       const serverPinnedThreadIds = await getPinnedThreadIds()
       if (pinnedThreadIdsSequence !== hydrationSequence) return
@@ -749,10 +789,13 @@ collapsedProjects.value = loadCollapsedState()
 
 onMounted(() => {
   window.addEventListener('focus', onWindowFocusRefreshPinned)
-  void hydratePinnedThreadIds()
+  if (!hasPinnedThreadIdsOverride.value) {
+    void hydratePinnedThreadIds()
+  }
 })
 
 function onWindowFocusRefreshPinned(): void {
+  if (hasPinnedThreadIdsOverride.value) return
   void hydratePinnedThreadIds()
 }
 
@@ -774,11 +817,17 @@ const normalizedSearchQuery = computed(() => props.searchQuery.trim().toLowerCas
 
 const isSearchActive = computed(() => normalizedSearchQuery.value.length > 0)
 const useDesktopListParity = computed(() => props.desktopListParity === true)
+const hasPinnedThreadIdsOverride = computed(() => Array.isArray(props.pinnedThreadIdsOverride))
+const effectivePinnedThreadIds = computed(() => (
+  hasPinnedThreadIdsOverride.value
+    ? normalizePinnedThreadIds(props.pinnedThreadIdsOverride)
+    : pinnedThreadIds.value
+))
 const matchedThreadIdSet = computed(() => {
   if (!props.searchMatchedThreadIds) return null
   return new Set(props.searchMatchedThreadIds)
 })
-const pinnedThreadIdSet = computed(() => new Set(pinnedThreadIds.value))
+const pinnedThreadIdSet = computed(() => new Set(effectivePinnedThreadIds.value))
 
 function matchesThreadSearch(
   thread: UiThread,
@@ -798,16 +847,10 @@ function compareThreadByUpdatedAt(first: UiThread, second: UiThread): number {
   return secondTimestamp - firstTimestamp
 }
 
-function compareProjectGroupByUpdatedAt(first: UiProjectGroup, second: UiProjectGroup): number {
-  const firstTimestamp = new Date(first.threads[0]?.updatedAtIso || first.threads[0]?.createdAtIso || 0).getTime()
-  const secondTimestamp = new Date(second.threads[0]?.updatedAtIso || second.threads[0]?.createdAtIso || 0).getTime()
-  return secondTimestamp - firstTimestamp
-}
-
 const threadCollections = computed(() => {
   const query = normalizedSearchQuery.value
   const matchedIds = matchedThreadIdSet.value
-  const pinnedIds = pinnedThreadIds.value
+  const pinnedIds = effectivePinnedThreadIds.value
   const pinnedSet = new Set(pinnedIds)
   const threadById = new Map<string, UiThread>()
   const threadProjectNameById = new Map<string, string>()
@@ -859,19 +902,12 @@ const threadCollections = computed(() => {
   }
   globalThreads.sort(compareThreadByUpdatedAt)
 
-  const unpinnedThreadsByProjectName = new Map<string, UiThread[]>()
-  for (const group of props.groups) {
-    const rows = group.threads.filter((thread) => !prioritizedThreadIdSet.has(thread.id))
-    unpinnedThreadsByProjectName.set(group.projectName, rows)
-  }
-
   return {
     filteredGroups,
     globalThreads,
     threadById,
     threadProjectNameById,
     threadTimestampById,
-    unpinnedThreadsByProjectName,
     pinnedThreads,
     runningThreads,
     prioritizedThreadIdSet,
@@ -883,11 +919,7 @@ function threadMatchesSearch(thread: UiThread): boolean {
 }
 
 const filteredGroups = computed<UiProjectGroup[]>(() => threadCollections.value.filteredGroups)
-const displayedGroups = computed<UiProjectGroup[]>(() => (
-  useDesktopListParity.value
-    ? [...filteredGroups.value].sort(compareProjectGroupByUpdatedAt)
-    : filteredGroups.value
-))
+const displayedGroups = computed<UiProjectGroup[]>(() => filteredGroups.value)
 const effectiveThreadViewMode = computed<'project' | 'chronological'>(() => (
   useDesktopListParity.value ? 'project' : threadViewMode.value
 ))
@@ -899,11 +931,9 @@ const threadTreeHeaderSubtitle = computed(() => (
 const globalThreads = computed<UiThread[]>(() => threadCollections.value.globalThreads)
 const threadById = computed(() => threadCollections.value.threadById)
 const threadProjectNameById = computed(() => threadCollections.value.threadProjectNameById)
-const unpinnedThreadsByProjectName = computed(() => threadCollections.value.unpinnedThreadsByProjectName)
 const threadTimestampById = computed(() => threadCollections.value.threadTimestampById)
 const pinnedThreads = computed(() => threadCollections.value.pinnedThreads)
 const runningThreads = computed<UiThread[]>(() => threadCollections.value.runningThreads)
-const prioritizedThreadIdSet = computed(() => threadCollections.value.prioritizedThreadIdSet)
 
 const projectedDropProjectIndex = computed<number | null>(() => {
   const drag = activeProjectDrag.value
@@ -998,6 +1028,15 @@ function getThreadStatusLabel(thread: UiThread): string {
   return thread.hasWorktree ? '工作树' : '就绪'
 }
 
+function formatThreadSource(thread: UiThread): string {
+  const source = thread.sourceKind?.trim()
+  if (!source) return ''
+  if (source === 'cli') return 'CLI'
+  if (source.startsWith('subAgent.')) return '子任务'
+  if (source === 'app' || source === 'desktop') return '桌面端'
+  return source
+}
+
 function getProjectSummary(group: UiProjectGroup): string {
   const total = group.threads.length
   const running = group.threads.filter((thread) => thread.inProgress).length
@@ -1013,12 +1052,13 @@ function isPinned(threadId: string): boolean {
 }
 
 function togglePin(threadId: string): void {
+  const currentPinnedThreadIds = effectivePinnedThreadIds.value
   if (isPinned(threadId)) {
-    setPinnedThreadIds(pinnedThreadIds.value.filter((id) => id !== threadId))
+    setPinnedThreadIds(currentPinnedThreadIds.filter((id) => id !== threadId))
     return
   }
 
-  setPinnedThreadIds([threadId, ...pinnedThreadIds.value])
+  setPinnedThreadIds([threadId, ...currentPinnedThreadIds])
 }
 
 function onToggleThreadPin(threadId: string): void {
@@ -1640,25 +1680,33 @@ function projectGroupStyle(projectName: string): Record<string, string> | undefi
 }
 
 function projectThreads(group: UiProjectGroup): UiThread[] {
+  const sortedThreads = [...group.threads].sort(compareThreadByUpdatedAt)
   if (isSearchActive.value) {
-    return group.threads.filter((thread) => !prioritizedThreadIdSet.value.has(thread.id))
+    return sortedThreads.filter((thread) => threadMatchesSearch(thread))
   }
-  return unpinnedThreadsByProjectName.value.get(group.projectName) ?? []
+  return sortedThreads
 }
 
 function visibleThreads(group: UiProjectGroup): UiThread[] {
   if (isSearchActive.value) return projectThreads(group)
   if (isCollapsed(group.projectName)) return []
-  if (useDesktopListParity.value) return projectThreads(group)
 
   const rows = projectThreads(group)
-  return isExpanded(group.projectName) ? rows : rows.slice(0, 10)
+  return isExpanded(group.projectName) ? rows : rows.slice(0, PROJECT_THREAD_PREVIEW_LIMIT)
 }
 
 function hasHiddenThreads(group: UiProjectGroup): boolean {
   if (isSearchActive.value) return false
-  if (useDesktopListParity.value) return false
-  return !isCollapsed(group.projectName) && projectThreads(group).length > 10
+  return !isCollapsed(group.projectName) && hiddenThreadCount(group) > 0
+}
+
+function hiddenThreadCount(group: UiProjectGroup): number {
+  return Math.max(projectThreads(group).length - PROJECT_THREAD_PREVIEW_LIMIT, 0)
+}
+
+function getShowMoreLabel(group: UiProjectGroup): string {
+  if (isExpanded(group.projectName)) return '收起'
+  return `显示更多 ${hiddenThreadCount(group)} 条`
 }
 
 function hasThreads(group: UiProjectGroup): boolean {
@@ -1720,14 +1768,14 @@ onBeforeUnmount(() => {
 @reference "tailwindcss";
 
 .thread-tree-root {
-  @apply flex flex-col gap-3;
+  @apply flex flex-col gap-2;
   text-rendering: auto;
   -webkit-font-smoothing: auto;
   -moz-osx-font-smoothing: auto;
 }
 
 .thread-section {
-  @apply flex flex-col gap-2;
+  @apply flex flex-col gap-1.5;
 }
 
 .pinned-section {
@@ -1739,11 +1787,15 @@ onBeforeUnmount(() => {
 }
 
 .thread-section-label {
-  @apply text-[11px] font-semibold uppercase tracking-[0.18em] text-[#7a705f];
+  @apply text-[11px] font-semibold;
+  color: var(--ui-text-secondary);
+  letter-spacing: 0;
 }
 
 .thread-section-count {
-  @apply inline-flex min-w-5 items-center justify-center rounded-full bg-[#e7decd] px-1.5 py-0.5 text-[11px] font-semibold text-[#6d6354];
+  @apply inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-semibold;
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
 }
 
 .thread-tree-header-row {
@@ -1755,12 +1807,14 @@ onBeforeUnmount(() => {
 }
 
 .thread-tree-header {
-  @apply text-[13px] font-semibold text-[#433b31] select-none;
+  @apply text-[13px] font-semibold select-none;
+  color: var(--ui-text-primary);
   letter-spacing: 0;
 }
 
 .thread-tree-header-subtitle {
-  @apply text-[11px] text-[#8f8577] select-none;
+  @apply text-[11px] select-none;
+  color: var(--ui-text-tertiary);
 }
 
 .organize-menu-wrap {
@@ -1768,27 +1822,58 @@ onBeforeUnmount(() => {
 }
 
 .organize-menu-trigger {
-  @apply h-8 w-8 rounded-xl text-[#73695d] flex items-center justify-center transition-colors duration-100 hover:bg-[#ece4d6] hover:text-[#433b31];
+  @apply h-8 w-8 flex items-center justify-center transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.organize-menu-trigger:hover,
+.organize-menu-trigger:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .organize-menu-panel {
-  @apply absolute right-0 top-full mt-2 z-30 min-w-48 rounded-2xl border border-[#ddd5c7] bg-[#fffcf7]/96 p-1.5 shadow-xl shadow-[#1f2937]/10 backdrop-blur-sm;
+  @apply absolute right-0 top-full mt-2 z-30 min-w-48 border p-1.5 backdrop-blur-sm;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: color-mix(in srgb, var(--ui-bg-surface) 96%, transparent);
+  box-shadow: var(--ui-shadow-float);
 }
 
 .organize-menu-title {
-  @apply px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-[#9a907f];
+  @apply px-2 py-1 text-[11px];
+  color: var(--ui-text-tertiary);
+  letter-spacing: 0;
 }
 
 .organize-menu-item {
-  @apply w-full rounded-xl px-2.5 py-2 text-sm text-[#544a3d] flex items-center justify-between hover:bg-[#f1ebde];
+  @apply w-full px-2.5 py-2 text-sm flex items-center justify-between;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.organize-menu-item:hover,
+.organize-menu-item:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .organize-menu-item[data-active='true'] {
-  @apply bg-[#ece4d6] text-[#1f2937];
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-primary);
 }
 
 .thread-start-button {
-  @apply h-8 w-8 rounded-xl text-[#73695d] flex items-center justify-center transition-colors duration-100 hover:bg-[#ece4d6] hover:text-[#433b31];
+  @apply h-8 w-8 flex items-center justify-center transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.thread-start-button:hover,
+.thread-start-button:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .thread-tree-loading {
@@ -1796,7 +1881,10 @@ onBeforeUnmount(() => {
 }
 
 .thread-loading-skeleton {
-  @apply block h-16 rounded-2xl border border-[#ece4d6] bg-[#f7f3ea];
+  @apply block h-11 border;
+  border-radius: var(--ui-radius-row);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
   position: relative;
   overflow: hidden;
 }
@@ -1811,7 +1899,17 @@ onBeforeUnmount(() => {
 }
 
 .thread-tree-no-results {
-  @apply px-3 py-3 text-sm text-[#938878];
+  @apply px-3 py-3 text-sm;
+  color: var(--ui-text-secondary);
+}
+
+.thread-tree-empty-row {
+  @apply cursor-default;
+}
+
+.thread-tree-empty-text {
+  @apply text-[12px] leading-5;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-tree-groups {
@@ -1819,21 +1917,23 @@ onBeforeUnmount(() => {
 }
 
 .project-group {
-  @apply m-0 rounded-[22px] border border-[#d7c7ad] bg-[#fcf8ef];
-  box-shadow: 0 10px 24px -26px rgba(31, 41, 55, 0.12);
+  @apply m-0 border border-transparent bg-transparent;
+  border-radius: var(--ui-radius-card);
+  box-shadow: none;
 }
 
 .project-group[data-dragging='true'] {
-  @apply shadow-lg shadow-[#1f2937]/10 border-[#ddd5c7];
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  box-shadow: none;
 }
 
 .project-header-row {
-  @apply cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b8a98d];
-  background: linear-gradient(180deg, rgba(247, 238, 221, 0.98) 0%, rgba(241, 230, 209, 1) 100%);
+  @apply cursor-pointer bg-transparent focus-visible:outline-none;
 }
 
 .project-header-row:hover {
-  background: linear-gradient(180deg, rgba(243, 232, 212, 0.98) 0%, rgba(237, 224, 199, 1) 100%);
+  background: var(--ui-bg-row-hover);
 }
 
 .project-main-button {
@@ -1845,7 +1945,8 @@ onBeforeUnmount(() => {
 }
 
 .project-icon-stack {
-  @apply relative w-4 h-4 flex items-center justify-center text-[#73695d];
+  @apply relative w-4 h-4 flex items-center justify-center;
+  color: var(--ui-text-secondary);
 }
 
 .project-icon-folder {
@@ -1857,10 +1958,20 @@ onBeforeUnmount(() => {
 }
 
 .project-title {
-  @apply text-[14px] font-semibold text-[#352c22] truncate select-none;
+  @apply text-[14px] font-semibold truncate select-none;
+  color: var(--ui-text-primary);
   font-family: var(--font-sans-reading);
   line-height: 1.25rem;
   letter-spacing: 0;
+}
+
+.project-title-line {
+  @apply min-w-0 inline-flex items-center gap-1.5;
+}
+
+.project-pinned-icon {
+  @apply h-3.5 w-3.5 shrink-0;
+  color: var(--ui-accent);
 }
 
 .project-title-wrap {
@@ -1868,7 +1979,8 @@ onBeforeUnmount(() => {
 }
 
 .project-summary {
-  @apply text-[11px] font-medium text-[#625545];
+  @apply text-[11px] font-medium;
+  color: var(--ui-text-tertiary);
   font-family: var(--font-sans-ui);
   line-height: 1.05rem;
   letter-spacing: 0;
@@ -1886,27 +1998,55 @@ onBeforeUnmount(() => {
 }
 
 .project-menu-trigger {
-  @apply h-6 w-6 rounded-lg p-0 text-[#73695d] flex items-center justify-center hover:bg-[#ece4d6];
+  @apply h-6 w-6 rounded-lg p-0 flex items-center justify-center;
+  color: var(--ui-text-secondary);
+}
+
+.project-menu-trigger:hover,
+.project-menu-trigger:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .project-menu-panel {
-  @apply absolute right-0 top-full mt-2 z-20 min-w-40 rounded-2xl border border-[#ddd5c7] bg-[#fffcf7] p-1.5 shadow-lg flex flex-col gap-0.5;
+  @apply absolute right-0 top-full mt-2 z-20 min-w-40 border p-1.5 flex flex-col gap-0.5;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: var(--ui-shadow-float);
 }
 
 .project-menu-item {
-  @apply rounded-xl px-2.5 py-1.5 text-left text-sm text-[#544a3d] hover:bg-[#f1ebde];
+  @apply px-2.5 py-1.5 text-left text-sm transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.project-menu-item:hover,
+.project-menu-item:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .project-menu-item-danger {
-  @apply text-rose-700 hover:bg-rose-50;
+  color: var(--ui-danger);
+}
+
+.project-menu-item-danger:hover,
+.project-menu-item-danger:focus-visible {
+  background: color-mix(in srgb, var(--ui-danger) 8%, var(--ui-bg-surface));
+  color: var(--ui-danger);
 }
 
 .project-menu-label {
-  @apply px-2 pt-1 text-[11px] uppercase tracking-[0.14em] text-[#948a7b];
+  @apply px-2 pt-1 text-[11px] font-medium;
+  color: var(--ui-text-tertiary);
+  letter-spacing: 0;
 }
 
 .project-menu-input {
-  @apply px-2 py-1 text-sm text-[#2b241d] bg-transparent border-none outline-none;
+  @apply px-2 py-1 text-sm bg-transparent border-none outline-none;
+  color: var(--ui-text-primary);
 }
 
 .project-empty-row {
@@ -1918,11 +2058,12 @@ onBeforeUnmount(() => {
 }
 
 .project-empty {
-  @apply text-sm text-[#998e7e];
+  @apply text-sm;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-list {
-  @apply list-none m-0 p-0 flex flex-col gap-1;
+  @apply list-none m-0 p-0 flex flex-col gap-0.5;
 }
 
 .thread-list-global {
@@ -1930,7 +2071,7 @@ onBeforeUnmount(() => {
 }
 
 .project-group > .thread-list {
-  @apply mt-1 px-1.25 pb-1.25;
+  @apply mt-0.5 px-0.5 pb-0.5;
 }
 
 .thread-row-item {
@@ -1938,8 +2079,8 @@ onBeforeUnmount(() => {
 }
 
 .thread-row {
-  @apply border border-[#e2d4bf] bg-[#fffdfa];
-  min-height: 3.55rem;
+  @apply border border-transparent bg-transparent;
+  min-height: var(--ui-row-height);
   align-items: center;
   transition:
     background-color 160ms ease,
@@ -1949,7 +2090,8 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-priority {
-  @apply border-[#d1bea0] bg-[#fff5e3];
+  border-color: transparent;
+  background: var(--ui-bg-surface-muted);
 }
 
 .thread-left-stack {
@@ -1959,7 +2101,8 @@ onBeforeUnmount(() => {
 }
 
 .thread-pin-button {
-  @apply absolute inset-[-1px] z-[1] w-5 h-5 rounded-md text-[#6e6458] opacity-0 pointer-events-none transition-colors duration-100 flex items-center justify-center;
+  @apply absolute inset-[-1px] z-[1] w-5 h-5 rounded-md opacity-0 pointer-events-none transition-colors duration-100 flex items-center justify-center;
+  color: var(--ui-text-secondary);
 }
 
 .thread-main-button {
@@ -1968,7 +2111,8 @@ onBeforeUnmount(() => {
 
 .thread-row-content {
   @apply min-w-0 flex flex-col justify-center;
-  min-height: 1.7rem;
+  min-height: 2.05rem;
+  gap: 0.08rem;
 }
 
 .thread-row-title-wrap {
@@ -1976,7 +2120,8 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-title {
-  @apply block text-[14px] font-semibold text-[#2c241c] truncate whitespace-nowrap;
+  @apply block text-[14px] font-medium truncate whitespace-nowrap;
+  color: var(--ui-text-primary);
   font-family: var(--font-sans-reading);
   line-height: 1.12rem;
   letter-spacing: 0;
@@ -1984,7 +2129,8 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-worktree-icon {
-  @apply w-3.5 h-3.5 text-[#807565] shrink-0;
+  @apply w-3.5 h-3.5 shrink-0;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-status-indicator {
@@ -1992,11 +2138,12 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-meta {
-  @apply min-w-0 flex flex-wrap items-start gap-x-1.5 gap-y-1;
+  @apply min-w-0 flex items-center gap-1.5;
 }
 
 .thread-row-preview {
-  @apply block min-w-0 text-[12px] text-[#685b4b];
+  @apply block min-w-0 flex-1 text-[12px];
+  color: var(--ui-text-secondary);
   font-family: var(--font-sans-ui);
   line-height: 1rem;
   letter-spacing: 0;
@@ -2006,8 +2153,31 @@ onBeforeUnmount(() => {
   text-shadow: none;
 }
 
+.thread-row-source {
+  @apply inline-flex shrink-0 items-center gap-1 text-[11px] font-medium leading-none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--ui-text-secondary);
+  font-family: var(--font-sans-ui);
+}
+
+.thread-row-source::before {
+  content: '·';
+  color: var(--ui-text-tertiary);
+}
+
+.thread-row-source--working {
+  color: var(--ui-accent);
+}
+
+.thread-row-source--unread {
+  color: var(--ui-focus);
+}
+
 .thread-row-time {
-  @apply block self-center text-[10px] font-medium text-[#8d806f];
+  @apply block self-center text-[10px] font-medium;
+  color: var(--ui-text-tertiary);
   font-family: var(--font-sans-ui);
   font-variant-numeric: tabular-nums;
   line-height: 1rem;
@@ -2022,19 +2192,45 @@ onBeforeUnmount(() => {
 }
 
 .thread-menu-trigger {
-  @apply h-7 w-7 rounded-xl p-0 text-xs text-[#8b8173] flex items-center justify-center hover:bg-[#f1ebde] hover:text-[#433b31];
+  @apply h-7 w-7 p-0 text-xs flex items-center justify-center;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.thread-menu-trigger:hover,
+.thread-menu-trigger:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .thread-menu-panel {
-  @apply absolute right-0 top-full mt-2 z-20 min-w-40 rounded-2xl border border-[#ddd5c7] bg-[#fffcf7] p-1.5 shadow-lg flex flex-col gap-0.5;
+  @apply absolute right-0 top-full mt-2 z-20 min-w-40 border p-1.5 flex flex-col gap-0.5;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: var(--ui-shadow-float);
 }
 
 .thread-menu-item {
-  @apply rounded-xl px-2.5 py-1.5 text-left text-sm text-[#544a3d] hover:bg-[#f1ebde];
+  @apply px-2.5 py-1.5 text-left text-sm transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.thread-menu-item:hover,
+.thread-menu-item:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .thread-menu-item-danger {
-  @apply text-rose-700 hover:bg-rose-50;
+  color: var(--ui-danger);
+}
+
+.thread-menu-item-danger:hover,
+.thread-menu-item-danger:focus-visible {
+  background: color-mix(in srgb, var(--ui-danger) 8%, var(--ui-bg-surface));
+  color: var(--ui-danger);
 }
 
 .thread-icon {
@@ -2042,7 +2238,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-show-more-row {
-  @apply mt-1;
+  @apply mt-1 cursor-default;
 }
 
 .thread-show-more-spacer {
@@ -2050,7 +2246,15 @@ onBeforeUnmount(() => {
 }
 
 .thread-show-more-button {
-  @apply block mx-auto rounded-full px-3 py-1 text-sm font-medium text-[#6f6558] transition-colors duration-100 hover:text-[#2d261f] hover:bg-[#ece4d6];
+  @apply flex min-h-8 w-full items-center justify-center rounded-lg px-3 py-1.5 text-[12px] font-medium transition-colors duration-100;
+  color: var(--ui-text-secondary);
+  touch-action: manipulation;
+}
+
+.thread-show-more-button:hover,
+.thread-show-more-button:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .project-header-row:hover .project-icon-folder {
@@ -2062,22 +2266,24 @@ onBeforeUnmount(() => {
 }
 
 .thread-row[data-active='true'] {
-  @apply border-[#4fb39f] bg-[#eefaf7];
-  box-shadow: 0 12px 24px -28px rgba(15, 118, 110, 0.18);
+  border-color: transparent;
+  background: var(--ui-bg-row-active);
+  box-shadow: none;
 }
 
 .thread-row[data-active='true'] .thread-row-title {
-  @apply text-[#0b4d43];
+  color: var(--ui-text-primary);
 }
 
 .thread-row[data-active='true'] .thread-row-preview {
-  @apply text-[#44675f];
+  color: var(--ui-text-secondary);
 }
 
 .thread-row:hover,
 .thread-row:focus-within {
-  @apply border-[#d7c5a9] bg-[#fbf5e8];
-  box-shadow: 0 10px 20px -28px rgba(31, 41, 55, 0.14);
+  border-color: transparent;
+  background: var(--ui-bg-row-hover);
+  box-shadow: none;
 }
 
 .thread-row:hover .thread-pin-button,
@@ -2087,17 +2293,22 @@ onBeforeUnmount(() => {
 
 .thread-pin-button:hover,
 .thread-pin-button:focus-visible {
-  @apply bg-[#efe7d9] text-[#433b31] outline-none;
+  @apply outline-none;
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .thread-status-indicator[data-state='unread'] {
-  width: 6.6667px;
-  height: 6.6667px;
-  @apply bg-[#0f766e];
+  width: 7px;
+  height: 7px;
+  background: var(--ui-accent);
 }
 
 .thread-status-indicator[data-state='working'] {
-  @apply border-2 border-[#0f766e] border-t-transparent bg-transparent animate-spin;
+  width: 7px;
+  height: 7px;
+  background: var(--ui-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent) 14%, transparent);
 }
 
 .thread-row:hover .thread-status-indicator[data-state='unread'],
@@ -2112,19 +2323,34 @@ onBeforeUnmount(() => {
 }
 
 .rename-thread-panel {
-  @apply w-full max-w-sm rounded-3xl border border-[#ddd5c7] bg-[#fffdf8] p-4 shadow-xl;
+  @apply w-full max-w-sm border p-4;
+  border-radius: 14px;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: var(--ui-shadow-float);
 }
 
 .rename-thread-title {
-  @apply m-0 text-base font-semibold text-[#2d261f];
+  @apply m-0 text-base font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .rename-thread-subtitle {
-  @apply mt-1 mb-3 text-sm text-[#8d8273];
+  @apply mt-1 mb-3 text-sm;
+  color: var(--ui-text-secondary);
 }
 
 .rename-thread-input {
-  @apply w-full rounded-2xl border border-[#d8cfbf] bg-white px-3 py-2 text-sm text-[#2d261f] outline-none focus:border-[#9f8d74];
+  @apply w-full border px-3 py-2 text-sm outline-none;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
+}
+
+.rename-thread-input:focus {
+  border-color: var(--ui-focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-focus) 14%, transparent);
 }
 
 .rename-thread-actions {
@@ -2132,15 +2358,37 @@ onBeforeUnmount(() => {
 }
 
 .rename-thread-button {
-  @apply rounded-xl px-3 py-1.5 text-sm text-[#544a3d] hover:bg-[#f1ebde];
+  @apply px-3 py-1.5 text-sm transition-colors duration-100;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.rename-thread-button:hover,
+.rename-thread-button:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .rename-thread-button-primary {
-  @apply bg-[#1f2937] text-white hover:bg-[#111827];
+  background: var(--ui-text-primary);
+  color: var(--ui-bg-surface);
+}
+
+.rename-thread-button-primary:hover,
+.rename-thread-button-primary:focus-visible {
+  background: color-mix(in srgb, var(--ui-text-primary) 88%, #000);
+  color: var(--ui-bg-surface);
 }
 
 .rename-thread-button-danger {
-  @apply bg-rose-600 text-white hover:bg-rose-700;
+  background: var(--ui-danger);
+  color: #fff;
+}
+
+.rename-thread-button-danger:hover,
+.rename-thread-button-danger:focus-visible {
+  background: color-mix(in srgb, var(--ui-danger) 88%, #000);
+  color: #fff;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2166,7 +2414,7 @@ onBeforeUnmount(() => {
   }
 
   .project-group {
-    @apply rounded-[16px];
+    border-radius: var(--ui-radius-card);
   }
 
   .project-group > .thread-list {
@@ -2178,11 +2426,11 @@ onBeforeUnmount(() => {
   }
 
   .thread-row {
-    min-height: 2.45rem;
+    min-height: 44px;
   }
 
   .thread-row-content {
-    min-height: 1.55rem;
+    min-height: 2rem;
   }
 
   .thread-row-title {
@@ -2193,6 +2441,10 @@ onBeforeUnmount(() => {
   .thread-row-preview {
     @apply text-[11px];
     line-height: 0.9rem;
+  }
+
+  .thread-row-source {
+    @apply hidden;
   }
 
   .project-title {
@@ -2211,7 +2463,7 @@ onBeforeUnmount(() => {
 
 @media (min-width: 1024px) {
   .thread-tree-root {
-    @apply gap-3;
+    @apply gap-2;
   }
 
   .thread-section-heading {
@@ -2223,7 +2475,7 @@ onBeforeUnmount(() => {
   }
 
   .thread-row {
-    min-height: 2.65rem;
+    min-height: 44px;
   }
 }
 

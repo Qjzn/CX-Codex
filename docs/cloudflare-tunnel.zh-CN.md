@@ -31,10 +31,10 @@ Cloudflare Tunnel 适合想从手机或外网访问家里电脑 / Windows Server
 - 开启 `tunnel: true`
 - 启动服务并在日志里输出 `https://*.trycloudflare.com`
 
-现在直接用 CLI 启动也支持这条链路：
+从源码执行 `npm ci` 和 `npm run build` 后，也可直接用 CLI 开启这条链路：
 
 ```powershell
-npx cx-codex --host 0.0.0.0 --port 7420 --tunnel
+node dist-cli/index.js --host 0.0.0.0 --port 7420 --tunnel
 ```
 
 如果本机还没有 `cloudflared`，交互终端会提示是否自动安装到：
@@ -46,7 +46,7 @@ npx cx-codex --host 0.0.0.0 --port 7420 --tunnel
 如果你已经有单独安装的 `cloudflared.exe`，也可以显式指定：
 
 ```powershell
-npx cx-codex --host 0.0.0.0 --port 7420 --tunnel --cloudflared-command "C:\Users\your-user\.local\bin\cloudflared.exe"
+node dist-cli/index.js --host 0.0.0.0 --port 7420 --tunnel --cloudflared-command "C:\Users\your-user\.local\bin\cloudflared.exe"
 ```
 
 如果你只想配置本地服务，不想自动下载 `cloudflared`：

@@ -26,6 +26,10 @@ import {
 } from '../src/server/appServerNotificationDiagnostics.js'
 import { AppServerNotificationListeners } from '../src/server/appServerNotificationListeners.js'
 import {
+  sendBoundedWebSocketJson,
+  subscribeBoundedWebSocketNotifications,
+} from '../src/server/notificationWebSocketBackpressure.js'
+import {
   captureAppServerNotificationState,
   shouldClearPlanModeTurnForNotification,
 } from '../src/server/appServerNotificationState.js'
@@ -71,6 +75,7 @@ import {
   APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS,
   APP_SERVER_RPC_INIT_TIMEOUT_MS,
   APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS,
+  APP_SERVER_RPC_THREAD_LIST_TIMEOUT_MS,
   APP_SERVER_RPC_TIMEOUT_MS,
   getRpcTimeoutMs,
 } from '../src/server/appServerRpcTimeoutPolicy.js'
@@ -123,6 +128,10 @@ import {
   createAppServerThreadRuntimeSnapshotReader,
   readAppServerThreadRuntimeSnapshot,
 } from '../src/server/appServerThreadRuntimeSnapshot.js'
+import {
+  isSessionLogThreadReadCandidateLine,
+  parseThreadReadFromSessionLog,
+} from '../src/server/appServerSessionLogThreadRead.js'
 import { createAppServerRuntimeReaders } from '../src/server/appServerRuntimeReaders.js'
 import {
   AppServerThreadListAugmenter,
@@ -288,8 +297,11 @@ import {
   type ThreadRuntimeSnapshot,
 } from '../src/server/runtimeState.js'
 import { handleRuntimeStateRoutes } from '../src/server/runtimeStateRoutes.js'
-import type { RuntimeRequestRecord } from '../src/server/runtimeStore.js'
-import type { RuntimeEventRecord } from '../src/server/runtimeStore.js'
+import {
+  RuntimeStore,
+  type RuntimeEventRecord,
+  type RuntimeRequestRecord,
+} from '../src/server/runtimeStore.js'
 import { handleRpcProxyRoute, type RpcProxyRouteDependencies } from '../src/server/rpcProxyRoute.js'
 import {
   parseRuntimeInterruptPayload,
@@ -387,6 +399,7 @@ import {
 import { setJson } from '../src/server/httpJsonResponse.js'
 import { getErrorMessage } from '../src/server/errorMessage.js'
 import {
+  createAuthSession,
   getAuthLoginRequestBodyLimitBytes,
   readAuthLoginPassword,
 } from '../src/server/authMiddleware.js'
@@ -428,6 +441,7 @@ try {
   await smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
   smokeAppServerNotificationListeners()
+  smokeNotificationWebSocketBackpressure()
   smokeAppServerNotificationState()
   await smokeAppServerHookDiagnostics()
   await smokeWindowsSandboxReadinessDiagnostics()
@@ -500,6 +514,7 @@ try {
   smokeAppServerNotificationRuntimeSync()
   await smokeRuntimeActionRoutes()
   await smokeDiagnosticsRoutes()
+  await smokeRuntimeStoreMaintenance()
   smokeAppServerNotificationReplay()
   await smokeLocalStateRoutes()
   await smokeRuntimeStateRoutes()
@@ -511,6 +526,7 @@ try {
   await smokeAppServerRuntimeReconciliation()
   smokeAppServerLocalRuntimeSnapshot()
   smokeAppServerRuntimeSnapshotRecovery()
+  await smokeAppServerSessionLogThreadRead()
   await smokeAppServerThreadRuntimeSnapshot()
   await smokeAppServerRuntimeReaders()
   smokeRuntimeStateStore()
@@ -1210,7 +1226,7 @@ function smokeAppServerLineDispatcher(): void {
       finalizedIds.push(id)
       return id === 7 ? pendingRpc : null
     },
-    logSlowRpc: (...args: unknown[]) => {
+    recordRpcCompletion: (...args: unknown[]) => {
       slowRpcLogs.push(args)
     },
     captureNotificationState: (notification: unknown) => {
@@ -1377,6 +1393,7 @@ function smokeAppServerHealth(): void {
       queuedRpcCount: 1,
       queuePeakCount: 5,
       queuePeakAtIso: '2026-07-04T00:00:00.000Z',
+      recentRpc: [],
       recentSlowRpc: [],
       recentTimeouts: [],
     },
@@ -1402,6 +1419,7 @@ function smokeAppServerHealth(): void {
       queuedRpcCount: 1,
       queuePeakCount: 5,
       queuePeakAtIso: '2026-07-04T00:00:00.000Z',
+      recentRpc: [],
       recentSlowRpc: [],
       recentTimeouts: [],
     },
@@ -1409,6 +1427,18 @@ function smokeAppServerHealth(): void {
 }
 
 async function smokeAuthMiddleware(): Promise<void> {
+  const authSession = createAuthSession('server-module-smoke-password')
+  const requestLike = (remoteAddress: string, host: string) => ({
+    socket: { remoteAddress },
+    headers: { host },
+  }) as never
+
+  assert.equal(authSession.isRequestAuthorized(requestLike('127.0.0.1', 'localhost:7420')), true)
+  assert.equal(authSession.isRequestAuthorized(requestLike('::1', '[::1]:7420')), true)
+  assert.equal(authSession.isRequestAuthorized(requestLike('127.0.0.1', 'remote.example.com')), false)
+  assert.equal(authSession.isRequestAuthorized(requestLike('203.0.113.10', 'localhost:7420')), false)
+  assert.equal(authSession.isRequestAuthorized(requestLike('203.0.113.10', '127.0.0.1:7420')), false)
+
   const originalLimit = process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES
   try {
     process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES = '321'
@@ -2144,6 +2174,43 @@ function smokeAppServerNotificationListeners(): void {
   assert.equal(listeners.count, 0)
 }
 
+function smokeNotificationWebSocketBackpressure(): void {
+  type TestNotification = { seq: number; method: string }
+  const listeners = new AppServerNotificationListeners<TestNotification>()
+  const slow = createNotificationSocketTestDouble(64)
+  const fast = createNotificationSocketTestDouble()
+  const stopSlow = subscribeBoundedWebSocketNotifications(
+    slow.socket,
+    (listener) => listeners.subscribe(listener),
+    64,
+  )
+  const stopFast = subscribeBoundedWebSocketNotifications(
+    fast.socket,
+    (listener) => listeners.subscribe(listener),
+    1024,
+  )
+
+  const first = { seq: 101, method: 'turn/started' }
+  listeners.emit(first)
+  assert.equal(slow.terminated, 1)
+  assert.deepEqual(slow.sent, [])
+  assert.deepEqual(fast.sent.map((value) => JSON.parse(value)), [first])
+  assert.equal(listeners.count, 1)
+
+  const second = { seq: 102, method: 'turn/completed' }
+  listeners.emit(second)
+  assert.deepEqual(fast.sent.map((value) => JSON.parse(value)), [first, second])
+  assert.equal(slow.terminated, 1)
+
+  const failedSend = createNotificationSocketTestDouble(0, new Error('send failed'))
+  assert.equal(sendBoundedWebSocketJson(failedSend.socket, first), true)
+  assert.equal(failedSend.terminated, 1)
+
+  stopSlow()
+  stopFast()
+  assert.equal(listeners.count, 0)
+}
+
 function smokeAppServerNotificationState(): void {
   assert.equal(shouldClearPlanModeTurnForNotification('turn/completed'), true)
   assert.equal(shouldClearPlanModeTurnForNotification('thread/interrupted'), true)
@@ -2775,7 +2842,10 @@ function smokeAppServerRpcResult(): void {
     thread: { id: 'thread-a', turns: [{ id: 'turn-1' }] },
   })
 
-  const trimmed = trimThreadTurnsInRpcResult('thread/read', original) as { thread: { turns: Array<{ id: string }> }; other?: boolean }
+  const trimmed = trimThreadTurnsInRpcResult('thread/read', original) as {
+    thread: { turns: Array<{ id: string }>; turnsView?: string; originalTurnsCount?: number; turnsStartIndex?: number }
+    other?: boolean
+  }
   assert.deepEqual(trimmed.thread.turns.map((turn) => turn.id), [
     'turn-3',
     'turn-4',
@@ -2790,6 +2860,66 @@ function smokeAppServerRpcResult(): void {
   ])
   assert.equal(trimmed.other, true)
   assert.equal(trimmed.thread.turns.length, 10)
+  assert.equal(trimmed.thread.turnsView, 'recent')
+  assert.equal(trimmed.thread.originalTurnsCount, 12)
+  assert.equal(trimmed.thread.turnsStartIndex, 2)
+  assert.equal(
+    (trimThreadTurnsInRpcResult('thread/read', original, { preserveFullTurns: true }) as { thread: { turns: unknown[] } })
+      .thread.turns.length,
+    12,
+  )
+  const olderWindow = trimThreadTurnsInRpcResult('thread/read', original, {
+    turnWindow: { view: 'older', beforeTurnIndex: 2, limit: 10 },
+  }) as { thread: { turns: Array<{ id: string }>; turnsView?: string; originalTurnsCount?: number; turnsStartIndex?: number } }
+  assert.deepEqual(olderWindow.thread.turns.map((turn) => turn.id), ['turn-1', 'turn-2'])
+  assert.equal(olderWindow.thread.turnsView, 'older')
+  assert.equal(olderWindow.thread.originalTurnsCount, 12)
+  assert.equal(olderWindow.thread.turnsStartIndex, 0)
+
+  const itemHeavy = trimThreadTurnsInRpcResult('thread/read', {
+    thread: {
+      id: 'thread-items',
+      turns: [
+        {
+          id: 'turn-heavy',
+          items: Array.from({ length: 200 }, (_, index) => ({ id: `item-${String(index + 1)}` })),
+        },
+      ],
+    },
+  }) as { thread: { turns: Array<{ items: Array<{ id: string }>; itemsView?: string; originalItemsCount?: number }> } }
+  const heavyTurn = itemHeavy.thread.turns[0]
+  assert.equal(heavyTurn.items.length, 160)
+  assert.equal(heavyTurn.items[0]?.id, 'item-1')
+  assert.equal(heavyTurn.items[1]?.id, 'item-42')
+  assert.equal(heavyTurn.items.at(-1)?.id, 'item-200')
+  assert.equal(heavyTurn.itemsView, 'recent')
+  assert.equal(heavyTurn.originalItemsCount, 200)
+
+  const filteredLowValueItems = trimThreadTurnsInRpcResult('thread/read', {
+    thread: {
+      id: 'thread-filtered-items',
+      turns: [
+        {
+          id: 'turn-filtered',
+          items: [
+            { id: 'file-change-1', type: 'fileChange', patch: 'large ignored patch' },
+            { id: 'mcp-tool-1', type: 'mcpToolCall', result: { text: 'internal mcp result' } },
+            { id: 'reasoning-1', type: 'reasoning', text: 'internal chain of thought' },
+            { id: 'unknown-1', type: 'threadShellCommandOutput', output: 'diagnostic payload stays available' },
+            { id: 'agent-1', type: 'agentMessage', text: 'Visible answer' },
+          ],
+        },
+      ],
+    },
+  }) as { thread: { turns: Array<{ items: Array<{ id: string; type?: string; output?: string; text?: string }> }> } }
+  assert.deepEqual(filteredLowValueItems.thread.turns[0]?.items.map((item) => item.id), [
+    'unknown-1',
+    'agent-1',
+  ])
+  assert.equal(filteredLowValueItems.thread.turns[0]?.items[0]?.output, 'diagnostic payload stays available')
+  assert.equal(JSON.stringify(filteredLowValueItems).includes('large ignored patch'), false)
+  assert.equal(JSON.stringify(filteredLowValueItems).includes('internal mcp result'), false)
+  assert.equal(JSON.stringify(filteredLowValueItems).includes('internal chain of thought'), false)
   assert.deepEqual(trimThreadTurnsInRpcResult('thread/resume', { thread: { turns: null } }), { thread: { turns: null } })
 }
 
@@ -2879,51 +3009,81 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
     if (threadId === 'throws') throw new Error('missing thread')
     return { thread: { id: threadId, title: `Title ${threadId}` } }
   }
-  const readPinnedThreadIds = async (): Promise<string[]> => [' existing ', 'pin-a', 'missing', 'pin-b', 'throws']
+  const readSupplementalThreadIds = async (): Promise<string[]> => [' existing ', 'session-a', 'missing', 'pin-a', 'throws']
 
   assert.equal(await augmenter.augmentThreadListRpcResult({
-    params: { archived: false },
+    params: { archived: true },
     result: baseResult,
-    readPinnedThreadIds,
+    readSupplementalThreadIds,
     readThreadById,
   }), baseResult)
   assert.equal(calls.length, 0)
 
   assert.equal(await augmenter.augmentThreadListRpcResult({
-    params: { archived: true, cursor: 'next-page' },
+    params: { archived: false, cursor: 'next-page' },
     result: baseResult,
-    readPinnedThreadIds,
+    readSupplementalThreadIds,
     readThreadById,
   }), baseResult)
   assert.equal(calls.length, 0)
 
   const augmented = await augmenter.augmentThreadListRpcResult({
-    params: { archived: true },
+    params: { archived: false },
     result: baseResult,
-    readPinnedThreadIds,
+    readSupplementalThreadIds,
     readThreadById,
   }) as { data: Array<{ id: string; title?: string }>; marker: boolean }
-  assert.deepEqual(calls, ['pin-a', 'missing'])
-  assert.deepEqual(augmented.data.map((thread) => thread.id), ['existing', 'pin-a'])
+  assert.deepEqual(calls, ['session-a', 'missing'])
+  assert.deepEqual(augmented.data.map((thread) => thread.id), ['existing', 'session-a'])
   assert.equal(augmented.marker, true)
 
   const cached = await augmenter.augmentThreadListRpcResult({
-    params: { archived: true },
+    params: {},
     result: baseResult,
-    readPinnedThreadIds,
+    readSupplementalThreadIds,
     readThreadById,
   }) as { data: Array<{ id: string; title?: string }> }
-  assert.deepEqual(calls, ['pin-a', 'missing', 'pin-b', 'throws'])
-  assert.deepEqual(cached.data.map((thread) => thread.id), ['existing', 'pin-a', 'pin-b'])
+  assert.deepEqual(calls, ['session-a', 'missing', 'pin-a', 'throws'])
+  assert.deepEqual(cached.data.map((thread) => thread.id), ['existing', 'session-a', 'pin-a'])
 
   nowMs += 101
   await augmenter.augmentThreadListRpcResult({
-    params: { archived: true },
+    params: { archived: false },
     result: baseResult,
-    readPinnedThreadIds,
+    readSupplementalThreadIds,
     readThreadById,
   })
-  assert.deepEqual(calls, ['pin-a', 'missing', 'pin-b', 'throws', 'pin-a', 'missing'])
+  assert.deepEqual(calls, ['session-a', 'missing', 'pin-a', 'throws', 'session-a', 'missing'])
+
+  const outputLimitedAugmenter = new AppServerThreadListAugmenter({
+    ttlMs: 1_000,
+    maxReads: 4,
+    maxOutput: 2,
+    nowMs: () => 3_000,
+  })
+  const outputLimitedCalls: string[] = []
+  const outputLimitedRead = async (threadId: string): Promise<unknown> => {
+    outputLimitedCalls.push(threadId)
+    return { thread: { id: threadId, title: `Output ${threadId}` } }
+  }
+  const outputLimitedIds = async (): Promise<string[]> => ['out-a', 'out-b', 'out-c', 'out-d']
+  const outputLimitedFirst = await outputLimitedAugmenter.augmentThreadListRpcResult({
+    params: { archived: false },
+    result: { data: [] },
+    readSupplementalThreadIds: outputLimitedIds,
+    readThreadById: outputLimitedRead,
+  }) as { data: Array<{ id: string; title?: string }> }
+  assert.deepEqual(outputLimitedCalls, ['out-a', 'out-b'])
+  assert.deepEqual(outputLimitedFirst.data.map((thread) => thread.id), ['out-a', 'out-b'])
+
+  const outputLimitedCached = await outputLimitedAugmenter.augmentThreadListRpcResult({
+    params: { archived: false },
+    result: { data: [] },
+    readSupplementalThreadIds: outputLimitedIds,
+    readThreadById: outputLimitedRead,
+  }) as { data: Array<{ id: string; title?: string }> }
+  assert.deepEqual(outputLimitedCalls, ['out-a', 'out-b'])
+  assert.deepEqual(outputLimitedCached.data.map((thread) => thread.id), ['out-a', 'out-b'])
 
   const factoryRpcCalls: Array<{ method: string; params: unknown }> = []
   const augmentThreadListRpcResult = createAppServerThreadListRpcResultAugmenter({
@@ -2932,21 +3092,48 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
       maxReads: 2,
       nowMs: () => 2_000,
     }),
-    readPinnedThreadIds: async () => ['pin-factory'],
+    readSupplementalThreadIds: async () => ['session-factory', 'pin-factory'],
     rpc: async (method, params) => {
       factoryRpcCalls.push({ method, params })
-      return { thread: { id: 'pin-factory', title: 'Factory' } }
+      return { thread: { id: method === 'thread/read' && (params as { threadId?: string }).threadId, title: 'Factory' } }
     },
   })
   const factoryAugmented = await augmentThreadListRpcResult(
-    { archived: true },
+    { archived: false },
     { data: [] },
   ) as { data: Array<{ id: string; title?: string }> }
-  assert.deepEqual(factoryAugmented.data, [{ id: 'pin-factory', title: 'Factory' }])
+  assert.deepEqual(factoryAugmented.data, [
+    { id: 'session-factory', title: 'Factory' },
+    { id: 'pin-factory', title: 'Factory' },
+  ])
   assert.deepEqual(factoryRpcCalls, [{
+    method: 'thread/read',
+    params: { threadId: 'session-factory', includeTurns: false },
+  }, {
     method: 'thread/read',
     params: { threadId: 'pin-factory', includeTurns: false },
   }])
+
+  const timeoutAugmenter = new AppServerThreadListAugmenter({
+    ttlMs: 1_000,
+    maxReads: 4,
+    maxOutput: 4,
+    budgetMs: 20,
+    readTimeoutMs: 5,
+  })
+  const timeoutCalls: string[] = []
+  const timeoutResult = await timeoutAugmenter.augmentThreadListRpcResult({
+    params: { archived: false },
+    result: { data: [] },
+    readSupplementalThreadIds: async () => ['slow-a', 'slow-b'],
+    readThreadById: async (threadId) => {
+      timeoutCalls.push(threadId)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      return { thread: { id: threadId, title: `Slow ${threadId}` } }
+    },
+  }) as { data: Array<{ id: string; title?: string }> }
+  assert.deepEqual(timeoutCalls, ['slow-a'])
+  assert.deepEqual(timeoutResult.data, [])
 }
 
 function smokeAppServerThreadReadCache(): void {
@@ -2978,6 +3165,7 @@ function smokeAppServerThreadReadCache(): void {
     updatedAtIso: '2026-01-01T00:00:00.000Z',
     sessionPath: 'C:/sessions/thread-a.jsonl',
     cachedAtIso: '2026-01-01T00:00:05.000Z',
+    source: 'app-server',
   })
 
   const cachedThreadRead: CachedThreadRead = {
@@ -2987,6 +3175,7 @@ function smokeAppServerThreadReadCache(): void {
     updatedAtIso: '2026-01-01T00:00:00.000Z',
     sessionPath: 'C:/sessions/thread-a.jsonl',
     cachedAtIso: '2026-01-01T00:00:05.000Z',
+    source: 'app-server',
   }
   const baseSnapshot = createThreadRuntimeSnapshot({
     executionState: 'completed',
@@ -3054,6 +3243,7 @@ function smokeAppServerRpcTimeoutPolicy(): void {
   assert.equal(getRpcTimeoutMs('thread/read', { includeTurns: true }), APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('thread/read', { includeTurns: 'true' }), APP_SERVER_RPC_LIGHT_THREAD_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('thread/resume', {}), APP_SERVER_RPC_HEAVY_THREAD_TIMEOUT_MS)
+  assert.equal(getRpcTimeoutMs('thread/list', {}), APP_SERVER_RPC_THREAD_LIST_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('model/list', {}), APP_SERVER_RPC_TIMEOUT_MS)
   assert.equal(getRpcTimeoutMs('turn/start', null), APP_SERVER_RPC_TIMEOUT_MS)
 }
@@ -3101,6 +3291,25 @@ function smokeAppServerRpcTimeoutRecovery(): void {
     nowMs: 100_000,
   }])
   assert.deepEqual(restartableTimeouts, [])
+
+  const threadListRestartableTimeouts: Array<{ method: string; nowMs: number }> = []
+  const threadListDecision = createAppServerRpcTimeoutRecoveryDecision({
+    method: 'thread/list',
+    params: {},
+    timeoutMs: 15_000,
+    startedAtMs: 95_000,
+    coldStartGraceMs: 60_000,
+    dependencies: {
+      now: () => 100_000,
+      recordTimeout: () => {},
+      noteRestartableTimeout: (method, nowMs) => {
+        threadListRestartableTimeouts.push({ method, nowMs })
+        return { shouldRestart: false, timeoutCount: 1 }
+      },
+    },
+  })
+  assert.deepEqual(threadListDecision, { kind: 'none' })
+  assert.deepEqual(threadListRestartableTimeouts, [{ method: 'thread/list', nowMs: 100_000 }])
 
   const initializeRestartableTimeouts: Array<{ method: string; nowMs: number }> = []
   const initializeDecision = createAppServerRpcTimeoutRecoveryDecision({
@@ -3406,6 +3615,10 @@ async function smokeTranscriptionRoutes(): Promise<void> {
 async function smokeAppServerRpcCache(): Promise<void> {
   assert.equal(getShareableRpcKey('thread/start', {}), null)
   assert.equal(getShareableRpcKey('thread/list', { limit: 1 }), 'thread/list:{"limit":1}')
+  assert.equal(
+    getShareableRpcKey('thread/list', { archived: false, limit: 100, sortKey: 'updated_at', cursor: null }),
+    getShareableRpcKey('thread/list', { cursor: null, sortKey: 'updated_at', limit: 100, archived: false }),
+  )
   assert.equal(shouldInvalidateThreadListCacheForRpc('thread/name/set'), true)
   assert.equal(shouldInvalidateThreadListCacheForRpc('thread/metadata/update'), true)
   assert.equal(shouldInvalidateThreadListCacheForRpc('thread/unarchive'), true)
@@ -3461,6 +3674,25 @@ async function smokeAppServerRpcCache(): Promise<void> {
 
   now += 4 * 60_000
   assert.deepEqual(cache.readThreadList(key, true), { value: { rows: ['fresh'] }, stale: true })
+
+  const persistentCacheDir = await mkdtemp(join(tmpdir(), 'cx-codex-rpc-cache-'))
+  try {
+    const persistentCachePath = join(persistentCacheDir, 'thread-list-cache.json')
+    const persistentCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
+    persistentCache.writeThreadList(key, { rows: ['persisted'] })
+
+    const reloadedPersistentCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
+    assert.deepEqual(reloadedPersistentCache.readThreadList(key, true), {
+      value: { rows: ['persisted'] },
+      stale: false,
+    })
+    reloadedPersistentCache.clearThreadList()
+
+    const clearedPersistentCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
+    assert.equal(clearedPersistentCache.readThreadList(key, true), null)
+  } finally {
+    await rm(persistentCacheDir, { recursive: true, force: true })
+  }
 
   let refreshCalls = 0
   cache.refreshThreadListInBackground(key, {}, async () => {
@@ -3522,7 +3754,8 @@ function smokeAppServerRpcDiagnostics(): void {
   diagnostics.incrementActive()
   diagnostics.recordQueueDepth(2, now)
   diagnostics.maybeWarnQueueBacklog('thread/read', { includeTurns: true }, 2, now)
-  diagnostics.logSlowRpc('thread/read', now - 150, { includeTurns: true }, { outcome: 'success' })
+  diagnostics.recordRpcCompletion('model/list', now - 50, {}, { outcome: 'success' })
+  diagnostics.recordRpcCompletion('thread/read', now - 150, { includeTurns: true }, { outcome: 'success' })
   diagnostics.recordTimeout('thread/read', { includeTurns: true }, 30_000, now)
 
   const threadReadTimeout = diagnostics.noteRestartableTimeout('thread/read', now)
@@ -3540,6 +3773,9 @@ function smokeAppServerRpcDiagnostics(): void {
   assert.equal(snapshot.pendingRpcCount, 1)
   assert.equal(snapshot.queuedRpcCount, 2)
   assert.equal(snapshot.queuePeakCount, 2)
+  assert.equal(snapshot.recentRpc[0]?.method, 'thread/read')
+  assert.equal(snapshot.recentRpc[0]?.includeTurns, true)
+  assert.equal(snapshot.recentRpc[1]?.method, 'model/list')
   assert.equal(snapshot.recentSlowRpc[0]?.includeTurns, true)
   assert.equal(snapshot.recentTimeouts[0]?.outcome, 'timeout')
 
@@ -3557,6 +3793,8 @@ function smokeAppServerRpcErrors(): void {
   assert.equal(isThreadMaterializingError(new Error('includeTurns is unavailable before first user message')), true)
   assert.equal(isThreadMaterializingError(new Error('no rollout found for thread id')), true)
   assert.equal(isThreadMaterializingError(new Error('rollout is empty')), true)
+  assert.equal(isThreadMaterializingError(new Error('failed to read thread C:\\Users\\SW\\.codex\\sessions\\2026\\07\\03\\rollout.jsonl: rollout at C:\\Users\\SW\\.codex\\sessions\\2026\\07\\03\\rollout.jsonl does not start with session metadata')), true)
+  assert.equal(isThreadMaterializingError(new Error('thread-store internal error: failed to read thread C:\\Users\\SW\\.codex\\sessions\\broken.jsonl')), true)
   assert.equal(isThreadMaterializingError(new Error('permission denied')), false)
 
   const timeout = createRpcTimeoutError('thread/read', 30_000)
@@ -3578,7 +3816,7 @@ function smokeAppServerRpcResponse(): void {
   const slowRpcLogs: Array<{ method: string; startedAtMs: number; params: unknown; outcome: string }> = []
   const dependencies = {
     finalizePendingRpc: (id: number) => store.finalize(id),
-    logSlowRpc: (method: string, startedAtMs: number, params: unknown, details: { outcome: 'error' | 'success' }) => {
+    recordRpcCompletion: (method: string, startedAtMs: number, params: unknown, details: { outcome: 'error' | 'success' }) => {
       slowRpcLogs.push({ method, startedAtMs, params, outcome: details.outcome })
     },
   }
@@ -5526,6 +5764,7 @@ async function smokeThreadTokenUsage(): Promise<void> {
       updatedAtIso: '',
       sessionPath: 'C:/sessions/thread-a.jsonl',
       cachedAtIso: '2026-01-01T00:00:00.000Z',
+      source: 'app-server',
     }),
     readSessionLogTokenUsage: async () => {
       throw new Error('session log should not be consulted when thread read has token usage')
@@ -5547,6 +5786,7 @@ async function smokeThreadTokenUsage(): Promise<void> {
       updatedAtIso: '',
       sessionPath: ' C:/sessions/thread-a.jsonl ',
       cachedAtIso: '2026-01-01T00:00:00.000Z',
+      source: 'app-server',
     }),
     readSessionLogTokenUsage: async (sessionPath) => {
       requestedSessionPaths.push(sessionPath)
@@ -6030,6 +6270,33 @@ async function smokeRpcProxyRoute(): Promise<void> {
       },
     },
     {
+      method: 'thread/read',
+      params: {
+        threadId: 'thread-read',
+        includeTurns: true,
+        responseView: 'older',
+        beforeTurnIndex: 5,
+        turnLimit: 3,
+      },
+    },
+    {
+      method: 'thread/read',
+      params: {
+        threadId: 'thread-fallback',
+        includeTurns: true,
+      },
+    },
+    {
+      method: 'thread/read',
+      params: {
+        threadId: 'thread-fallback-older',
+        includeTurns: true,
+        responseView: 'older',
+        beforeTurnIndex: 5,
+        turnLimit: 2,
+      },
+    },
+    {
       method: 'thread/unsubscribe',
       params: {
         threadId: 'thread-unsubscribe',
@@ -6045,6 +6312,7 @@ async function smokeRpcProxyRoute(): Promise<void> {
   const observedThreadUnsubscribeResponses: Array<{ threadId?: string; payload: unknown }> = []
   const augmentCalls: Array<{ params: unknown; result: unknown }> = []
   const searchClears: string[] = []
+  const sessionLogThreadReads: Array<{ sessionPath: string; fallbackThreadRead: unknown }> = []
   let turnStartAttempts = 0
 
   const dependencies: RpcProxyRouteDependencies = {
@@ -6059,6 +6327,17 @@ async function smokeRpcProxyRoute(): Promise<void> {
       if (method === 'turn/interrupt') throw new Error('no active turn')
       if (method === 'thread/resume') throw new Error('thread is not materialized yet')
       if (method === 'thread/list') return { data: [{ id: 'thread-a' }] }
+      if (method === 'thread/read' && readStringProperty(params, 'threadId').startsWith('thread-fallback')) {
+        if (readBooleanProperty(params, 'includeTurns')) {
+          throw new Error('thread-store internal error: failed to read thread C:\\sessions\\thread-fallback.jsonl: rollout does not start with session metadata')
+        }
+        return {
+          thread: {
+            id: readStringProperty(params, 'threadId'),
+            path: `C:/sessions/${readStringProperty(params, 'threadId')}.jsonl`,
+          },
+        }
+      }
       if (method === 'thread/read') return { thread: { id: 'thread-read', turns: readTurns }, other: true }
       if (method === 'thread/unsubscribe') return { status: 'notSubscribed' }
       throw new Error(`unexpected rpc method: ${method}`)
@@ -6078,6 +6357,16 @@ async function smokeRpcProxyRoute(): Promise<void> {
     observeThreadUnsubscribeResponse: (details) => observedThreadUnsubscribeResponses.push(details),
     deleteCachedThreadRead: (threadId) => deletedCachedThreadReads.push(threadId),
     rememberCachedThreadRead: (threadId, threadRead) => rememberedCachedThreadReads.push({ threadId, threadRead }),
+    readSessionLogThreadRead: async (sessionPath, fallbackThreadRead) => {
+      sessionLogThreadReads.push({ sessionPath, fallbackThreadRead })
+      return {
+        thread: {
+          id: 'thread-fallback',
+          path: sessionPath,
+          turns: [{ id: 'fallback-turn', items: [{ type: 'agentMessage', id: 'fallback-agent', text: 'Recovered' }] }],
+        },
+      }
+    },
     augmentThreadListRpcResult: async (params, result) => {
       augmentCalls.push({ params, result })
       return { augmented: true, result }
@@ -6167,6 +6456,90 @@ async function smokeRpcProxyRoute(): Promise<void> {
   assert.equal(threadReadResult.result.thread.turns.length, 10)
   assert.equal(threadReadResult.result.thread.turns[0].id, 'turn-2')
   assert.deepEqual(rememberedCachedThreadReads, [{ threadId: 'thread-read', threadRead: threadReadResult.result }])
+  assert.deepEqual(rpcCalls[5], {
+    method: 'thread/read',
+    params: {
+      threadId: 'thread-read',
+      includeTurns: true,
+    },
+  })
+
+  const olderThreadRead = createRouteTestResponse()
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'POST' } as never,
+    olderThreadRead.response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
+    dependencies,
+  ), true)
+  const olderThreadReadResult = JSON.parse(olderThreadRead.body) as {
+    result: { thread: { turns: Array<{ id: string }>; turnsView?: string; originalTurnsCount?: number; turnsStartIndex?: number } }
+  }
+  assert.deepEqual(olderThreadReadResult.result.thread.turns.map((turn) => turn.id), ['turn-3', 'turn-4', 'turn-5'])
+  assert.equal(olderThreadReadResult.result.thread.turnsView, 'older')
+  assert.equal(olderThreadReadResult.result.thread.originalTurnsCount, 11)
+  assert.equal(olderThreadReadResult.result.thread.turnsStartIndex, 2)
+  assert.deepEqual(rpcCalls[6], {
+    method: 'thread/read',
+    params: {
+      threadId: 'thread-read',
+      includeTurns: true,
+    },
+  })
+  assert.equal(asRecord(rpcCalls[6].params)?.responseView, undefined)
+  assert.equal(asRecord(rpcCalls[6].params)?.beforeTurnIndex, undefined)
+  assert.equal(asRecord(rpcCalls[6].params)?.turnLimit, undefined)
+  assert.equal(rememberedCachedThreadReads.length, 1)
+
+  const threadReadFallback = createRouteTestResponse()
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'POST' } as never,
+    threadReadFallback.response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
+    dependencies,
+  ), true)
+  const threadReadFallbackBody = JSON.parse(threadReadFallback.body) as {
+    result: { thread: { id: string; turns: Array<{ id: string }> } }
+    warning: string
+  }
+  assert.equal(threadReadFallbackBody.result.thread.id, 'thread-fallback')
+  assert.equal(threadReadFallbackBody.result.thread.turns[0]?.id, 'fallback-turn')
+  assert.equal(threadReadFallbackBody.warning, 'thread/read fell back to local session log messages')
+  assert.deepEqual(sessionLogThreadReads.map((read) => read.sessionPath), ['C:/sessions/thread-fallback.jsonl'])
+  assert.equal(rememberedCachedThreadReads[1]?.threadId, 'thread-fallback')
+
+  const olderThreadReadFallback = createRouteTestResponse()
+  assert.equal(await handleRpcProxyRoute(
+    { method: 'POST' } as never,
+    olderThreadReadFallback.response as never,
+    new URL('http://127.0.0.1/codex-api/rpc'),
+    dependencies,
+  ), true)
+  const olderThreadReadFallbackBody = JSON.parse(olderThreadReadFallback.body) as {
+    result: { thread: { id: string; turns: Array<{ id: string }>; turnsView?: string; originalTurnsCount?: number; turnsStartIndex?: number } }
+    warning: string
+  }
+  assert.equal(olderThreadReadFallbackBody.result.thread.id, 'thread-fallback')
+  assert.deepEqual(olderThreadReadFallbackBody.result.thread.turns.map((turn) => turn.id), ['fallback-turn'])
+  assert.equal(olderThreadReadFallbackBody.result.thread.turnsView, 'older')
+  assert.equal(olderThreadReadFallbackBody.warning, 'thread/read fell back to local session log messages')
+  assert.deepEqual(rpcCalls[9], {
+    method: 'thread/read',
+    params: {
+      threadId: 'thread-fallback-older',
+      includeTurns: true,
+    },
+  })
+  assert.deepEqual(rpcCalls[10], {
+    method: 'thread/read',
+    params: {
+      threadId: 'thread-fallback-older',
+      includeTurns: false,
+    },
+  })
+  assert.equal(asRecord(rpcCalls[9].params)?.responseView, undefined)
+  assert.equal(asRecord(rpcCalls[9].params)?.beforeTurnIndex, undefined)
+  assert.equal(asRecord(rpcCalls[9].params)?.turnLimit, undefined)
+  assert.equal(rememberedCachedThreadReads.length, 2)
 
   const threadUnsubscribe = createRouteTestResponse()
   assert.equal(await handleRpcProxyRoute(
@@ -6309,53 +6682,69 @@ async function smokeStatusRoutes(): Promise<void> {
 }
 
 async function smokeWorkspaceRootsState(): Promise<void> {
-  assert.deepEqual(normalizeWorkspaceRootsState(null), { order: [], labels: {}, active: [] })
+  assert.deepEqual(normalizeWorkspaceRootsState(null), { order: [], labels: {}, active: [], projectOrder: [], pinnedProjectIds: [] })
   assert.deepEqual(normalizeWorkspaceRootsState({
     order: ['C:\\work\\one', 'C:\\work\\one', '', 7],
     labels: { 'C:\\work\\one': 'One', empty: '', bad: 9 },
     active: ['C:\\work\\two', 'C:\\work\\two'],
+    projectOrder: ['C:\\work\\project', 'C:\\work\\project'],
+    pinnedProjectIds: ['C:\\work\\pin', 'C:\\work\\pin'],
   }), {
     order: ['C:\\work\\one'],
     labels: { 'C:\\work\\one': 'One', empty: '' },
     active: ['C:\\work\\two'],
+    projectOrder: ['C:\\work\\project'],
+    pinnedProjectIds: ['C:\\work\\pin'],
   })
   assert.deepEqual(readWorkspaceRootsStateFromPayload({
     'electron-saved-workspace-roots': ['C:\\work\\old', 'C:\\work\\old'],
     'electron-workspace-root-labels': { 'C:\\work\\old': 'Old' },
     'active-workspace-roots': ['C:\\work\\active'],
+    'project-order': ['C:\\work\\project'],
+    'pinned-project-ids': ['C:\\work\\pin'],
   }), {
     order: ['C:\\work\\old'],
     labels: { 'C:\\work\\old': 'Old' },
     active: ['C:\\work\\active'],
+    projectOrder: ['C:\\work\\project'],
+    pinnedProjectIds: ['C:\\work\\pin'],
   })
 
   const upserted = upsertWorkspaceRootState({
     order: ['C:\\work\\old', 'C:\\work\\new'],
     labels: { 'C:\\work\\old': 'Old' },
     active: ['C:\\work\\old'],
+    projectOrder: ['C:\\work\\old'],
+    pinnedProjectIds: ['C:\\work\\old'],
   }, 'C:\\work\\new', 'New')
   assert.deepEqual(upserted, {
     order: ['C:\\work\\new', 'C:\\work\\old'],
     labels: { 'C:\\work\\old': 'Old', 'C:\\work\\new': 'New' },
     active: ['C:\\work\\new', 'C:\\work\\old'],
+    projectOrder: ['C:\\work\\new', 'C:\\work\\old'],
+    pinnedProjectIds: ['C:\\work\\old'],
   })
 
   const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-workspace-roots-'))
   try {
     const statePath = join(tempDir, 'global-state.json')
-    assert.deepEqual(await readWorkspaceRootsState(statePath), { order: [], labels: {}, active: [] })
+    assert.deepEqual(await readWorkspaceRootsState(statePath), { order: [], labels: {}, active: [], projectOrder: [], pinnedProjectIds: [] })
 
     await writeFile(statePath, JSON.stringify({ existing: true }), 'utf8')
     await writeWorkspaceRootsState(statePath, {
       order: ['C:\\work\\one', 'C:\\work\\one'],
       labels: { 'C:\\work\\one': 'One' },
       active: ['C:\\work\\one'],
+      projectOrder: ['C:\\work\\two'],
+      pinnedProjectIds: ['C:\\work\\pin'],
     })
 
     assert.deepEqual(await readWorkspaceRootsState(statePath), {
       order: ['C:\\work\\one'],
       labels: { 'C:\\work\\one': 'One' },
       active: ['C:\\work\\one'],
+      projectOrder: ['C:\\work\\two'],
+      pinnedProjectIds: ['C:\\work\\pin'],
     })
     assert.equal(JSON.parse(await readFile(statePath, 'utf8')).existing, true)
   } finally {
@@ -6395,6 +6784,8 @@ async function smokeWorkspaceMetaRoutes(): Promise<void> {
         order: ['C:\\work\\one'],
         labels: { 'C:\\work\\one': 'One' },
         active: ['C:\\work\\one'],
+        projectOrder: ['C:\\work\\project'],
+        pinnedProjectIds: ['C:\\work\\pin'],
       }
     },
     writeWorkspaceRootsState: async (path: string, state: unknown) => {
@@ -6435,6 +6826,8 @@ async function smokeWorkspaceMetaRoutes(): Promise<void> {
       order: ['C:\\work\\one'],
       labels: { 'C:\\work\\one': 'One' },
       active: ['C:\\work\\one'],
+      projectOrder: ['C:\\work\\project'],
+      pinnedProjectIds: ['C:\\work\\pin'],
     },
   })
 
@@ -6451,6 +6844,8 @@ async function smokeWorkspaceMetaRoutes(): Promise<void> {
       order: ['C:\\work\\one'],
       labels: { 'C:\\work\\one': 'One' },
       active: ['C:\\work\\one'],
+      projectOrder: [],
+      pinnedProjectIds: [],
     },
   }])
   assert.deepEqual(JSON.parse(workspaceWrite.body), { ok: true })
@@ -6483,9 +6878,10 @@ async function smokeWorkspaceMetaRoutes(): Promise<void> {
 }
 
 async function smokeProjectRoots(): Promise<void> {
+  const emptyWorkspaceState = { order: [], labels: {}, active: [], projectOrder: [], pinnedProjectIds: [] }
   assert.equal(normalizeProjectPath('relative-project').endsWith('relative-project'), true)
   await assert.rejects(
-    resolveProjectRoot('', { existingState: { order: [], labels: {}, active: [] } }),
+    resolveProjectRoot('', { existingState: emptyWorkspaceState }),
     (error) => error instanceof ProjectRootError && error.statusCode === 400 && error.message === 'Missing path',
   )
 
@@ -6498,24 +6894,32 @@ async function smokeProjectRoots(): Promise<void> {
     await writeFile(filePath, 'not a directory', 'utf8')
 
     await assert.rejects(
-      resolveProjectRoot(filePath, { existingState: { order: [], labels: {}, active: [] } }),
+      resolveProjectRoot(filePath, { existingState: emptyWorkspaceState }),
       (error) => error instanceof ProjectRootError && error.statusCode === 400 && error.message === 'Path exists but is not a directory',
     )
     await assert.rejects(
-      resolveProjectRoot(createdDir, { existingState: { order: [], labels: {}, active: [] } }),
+      resolveProjectRoot(createdDir, { existingState: emptyWorkspaceState }),
       (error) => error instanceof ProjectRootError && error.statusCode === 404 && error.message === 'Directory does not exist',
     )
 
     const created = await resolveProjectRoot(createdDir, {
       createIfMissing: true,
       label: 'Created Project',
-      existingState: { order: [existingDir], labels: {}, active: [existingDir] },
+      existingState: {
+        order: [existingDir],
+        labels: {},
+        active: [existingDir],
+        projectOrder: [existingDir],
+        pinnedProjectIds: [],
+      },
     })
     assert.equal(created.path, createdDir)
     assert.deepEqual(created.workspaceState, {
       order: [createdDir, existingDir],
       labels: { [createdDir]: 'Created Project' },
       active: [createdDir, existingDir],
+      projectOrder: [createdDir, existingDir],
+      pinnedProjectIds: [],
     })
 
     await mkdir(join(tempDir, 'New Project (1)'))
@@ -6560,6 +6964,8 @@ async function smokeProjectRootRoutes(): Promise<void> {
     order: ['C:\\work\\new', 'C:\\work\\old'],
     labels: { 'C:\\work\\new': 'New Project' },
     active: ['C:\\work\\new', 'C:\\work\\old'],
+    projectOrder: ['C:\\work\\new', 'C:\\work\\old'],
+    pinnedProjectIds: ['C:\\work\\pin'],
   }
   const dependencies = {
     readJsonBody: async () => bodies.shift(),
@@ -6570,6 +6976,8 @@ async function smokeProjectRootRoutes(): Promise<void> {
         order: ['C:\\work\\old'],
         labels: {},
         active: ['C:\\work\\old'],
+        projectOrder: ['C:\\work\\old'],
+        pinnedProjectIds: ['C:\\work\\pin'],
       }
     },
     writeWorkspaceRootsState: async (path: string, state: unknown) => {
@@ -6582,6 +6990,8 @@ async function smokeProjectRootRoutes(): Promise<void> {
         order: string[]
         labels: Record<string, string>
         active: string[]
+        projectOrder: string[]
+        pinnedProjectIds: string[]
       }
     }) => {
       resolveCalls.push({
@@ -6622,6 +7032,8 @@ async function smokeProjectRootRoutes(): Promise<void> {
       order: ['C:\\work\\old'],
       labels: {},
       active: ['C:\\work\\old'],
+      projectOrder: ['C:\\work\\old'],
+      pinnedProjectIds: ['C:\\work\\pin'],
     },
   }])
   assert.deepEqual(writeCalls, [{
@@ -8323,6 +8735,294 @@ function smokeAppServerRuntimeSnapshotPersistence(): void {
   assert.equal((persisterUpserts[0] as { snapshot: ThreadRuntimeSnapshot }).snapshot.tokenUsage, null)
 }
 
+async function smokeAppServerSessionLogThreadRead(): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), 'codex-session-log-thread-read-'))
+  try {
+    assert.equal(isSessionLogThreadReadCandidateLine('{"type":"response_item","payload":{"type":"message","role":"user"}}'), true)
+    assert.equal(isSessionLogThreadReadCandidateLine('{"type":"response_item","payload":{}}'), false)
+    assert.equal(isSessionLogThreadReadCandidateLine('{"type":"event_msg","payload":{}}'), true)
+    assert.equal(isSessionLogThreadReadCandidateLine('{"type":"session_meta","payload":{}}'), true)
+    assert.equal(isSessionLogThreadReadCandidateLine('{"timestamp":"2026-07-06T10:00:00.000Z","type":"response_item","payload":{"type":"reasoning","encrypted_content":"x"}}'), false)
+    assert.equal(isSessionLogThreadReadCandidateLine('{"timestamp":"2026-07-06T10:00:00.000Z","type":"compaction","payload":{"text":"\\"type\\":\\"response_item\\",\\"role\\":\\"user\\""}}'), false)
+    assert.equal(isSessionLogThreadReadCandidateLine('{"type":"fileChange","payload":{"path":"src/a.ts"}}'), false)
+    assert.equal(isSessionLogThreadReadCandidateLine('{malformed'), false)
+
+    const sessionPath = join(dir, 'rollout-2026-07-06T10-00-00-thread-fallback.jsonl')
+    await writeFile(sessionPath, [
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: 'thread-fallback',
+          cwd: 'E:/workspace/project',
+          timestamp: '2026-07-06T10:00:00.000Z',
+          source: 'vscode',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:00.500Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'internal-context-1',
+          role: 'user',
+          content: [{ type: 'input_text', text: '<codex_internal_context source="goal">hidden</codex_internal_context>' }],
+        },
+      }),
+      ...Array.from({ length: 40 }, (_, index) => JSON.stringify({
+        timestamp: `2026-07-06T10:00:00.${String(index).padStart(3, '0')}Z`,
+        type: 'fileChange',
+        payload: {
+          path: `src/generated-${String(index)}.ts`,
+          diff: 'internal file change details that should not enter fallback parsing',
+        },
+      })),
+      '{malformed',
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:01.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'user-1',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Restore this session' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:01.500Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'agent-commentary-1',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Intermediate progress should not be restored' }],
+          phase: 'commentary',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:01.750Z',
+        type: 'event_msg',
+        payload: {
+          type: 'agent_message',
+          message: 'Intermediate event progress should not be restored',
+          phase: 'commentary',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:02.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'agent_message',
+          message: 'Recovered answer',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:02.500Z',
+        type: 'event_msg',
+        payload: {
+          type: 'agent_message',
+          message: 'Recovered answer',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:02.500Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'agent-1',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Recovered answer' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:03.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'user-continue-1',
+          role: 'user',
+          content: [{ type: 'input_text', text: '继续' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:04.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'agent_message',
+          message: 'Second recovered answer',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:05.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'user-continue-2',
+          role: 'user',
+          content: [{ type: 'input_text', text: '继续' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:05.500Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'agent-3',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Third recovered answer' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:06.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'agent_message',
+          message: 'Third recovered answer',
+        },
+      }),
+    ].join('\n'), 'utf8')
+
+    const threadRead = await parseThreadReadFromSessionLog(sessionPath, {
+      thread: {
+        id: 'thread-fallback',
+        preview: '',
+        createdAt: 0,
+        updatedAt: 0,
+        path: sessionPath,
+        cwd: '',
+        turns: [],
+      },
+    }) as {
+      thread: {
+        id: string
+        name: string
+        title: string
+        cwd: string
+        preview: string
+        turns: Array<{ items: Array<{ type: string; text?: string; content?: Array<{ text: string }> }> }>
+      }
+    } | null
+
+    assert.equal(threadRead?.thread.id, 'thread-fallback')
+    assert.equal(threadRead?.thread.name, 'Restore this session')
+    assert.equal(threadRead?.thread.title, 'Restore this session')
+    assert.equal(threadRead?.thread.cwd, 'E:/workspace/project')
+    assert.equal(threadRead?.thread.preview, 'Restore this session')
+    assert.equal(threadRead?.thread.turns.length, 3)
+    assert.equal(threadRead?.thread.turns[0]?.items[0]?.type, 'userMessage')
+    assert.equal(threadRead?.thread.turns[0]?.items[0]?.content?.[0]?.text, 'Restore this session')
+    assert.equal(threadRead?.thread.turns[0]?.items[1]?.type, 'agentMessage')
+    assert.equal(threadRead?.thread.turns[0]?.items[1]?.text, 'Recovered answer')
+    assert.equal(threadRead?.thread.turns[0]?.items.length, 2)
+    assert.equal(threadRead?.thread.turns[1]?.items[0]?.content?.[0]?.text, '继续')
+    assert.equal(threadRead?.thread.turns[1]?.items[1]?.text, 'Second recovered answer')
+    assert.equal(threadRead?.thread.turns[2]?.items[0]?.content?.[0]?.text, '继续')
+    assert.equal(threadRead?.thread.turns[2]?.items[1]?.text, 'Third recovered answer')
+
+    const largeSessionPath = join(dir, 'rollout-2026-07-06T10-05-00-thread-large-fallback.jsonl')
+    await writeFile(largeSessionPath, [
+      'x'.repeat(2_100_000),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:05:01.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'large-user-1',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Tail restore request' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:05:02.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'large-agent-1',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Tail restored answer' }],
+        },
+      }),
+    ].join('\n'), 'utf8')
+
+    const largeThreadRead = await parseThreadReadFromSessionLog(largeSessionPath, {
+      thread: {
+        id: 'thread-large-fallback',
+        preview: '',
+        createdAt: 0,
+        updatedAt: 0,
+        path: largeSessionPath,
+        cwd: 'E:/workspace/from-light-read',
+        turns: [],
+      },
+    }) as {
+      thread: {
+        id: string
+        cwd: string
+        preview: string
+        turns: Array<{ items: Array<{ type: string; text?: string; content?: Array<{ text: string }> }> }>
+      }
+    } | null
+
+    assert.equal(largeThreadRead?.thread.id, 'thread-large-fallback')
+    assert.equal(largeThreadRead?.thread.cwd, 'E:/workspace/from-light-read')
+    assert.equal(largeThreadRead?.thread.preview, 'Tail restore request')
+    assert.equal(largeThreadRead?.thread.turns.length, 1)
+    assert.equal(largeThreadRead?.thread.turns[0]?.items[0]?.content?.[0]?.text, 'Tail restore request')
+    assert.equal(largeThreadRead?.thread.turns[0]?.items[1]?.text, 'Tail restored answer')
+
+    const longTailSessionPath = join(dir, 'rollout-2026-07-06T10-10-00-thread-long-tail-fallback.jsonl')
+    await writeFile(longTailSessionPath, [
+      'x'.repeat(2_100_000),
+      ...Array.from({ length: 45 }, (_, index) => [
+        JSON.stringify({
+          timestamp: `2026-07-06T10:10:${String(index).padStart(2, '0')}.000Z`,
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            id: `long-user-${String(index)}`,
+            role: 'user',
+            content: [{ type: 'input_text', text: `Tail request ${String(index)}` }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: `2026-07-06T10:10:${String(index).padStart(2, '0')}.500Z`,
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            id: `long-agent-${String(index)}`,
+            role: 'assistant',
+            content: [{ type: 'output_text', text: `Tail answer ${String(index)}` }],
+          },
+        }),
+      ]).flat(),
+    ].join('\n'), 'utf8')
+
+    const longTailThreadRead = await parseThreadReadFromSessionLog(longTailSessionPath, {
+      thread: {
+        id: 'thread-long-tail-fallback',
+        preview: '',
+        createdAt: 0,
+        updatedAt: 0,
+        path: longTailSessionPath,
+        cwd: 'E:/workspace/from-light-read',
+        turns: [],
+      },
+    }) as {
+      thread: {
+        id: string
+        turns: Array<{ items: Array<{ type: string; text?: string; content?: Array<{ text: string }> }> }>
+      }
+    } | null
+
+    assert.equal(longTailThreadRead?.thread.id, 'thread-long-tail-fallback')
+    assert.equal(longTailThreadRead?.thread.turns.length, 40)
+    assert.equal(longTailThreadRead?.thread.turns[0]?.items[0]?.content?.[0]?.text, 'Tail request 5')
+    assert.equal(longTailThreadRead?.thread.turns[39]?.items[1]?.text, 'Tail answer 44')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
 async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
   const updatedAtSeconds = Date.parse('2026-01-01T00:00:00.000Z') / 1000
   const cachedThreadReadPayload = {
@@ -8466,6 +9166,122 @@ async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
     'Light thread snapshot unavailable',
     'Heavy thread snapshot fell back to cached messages',
   ])
+
+  const sessionFallbackThreadReadPayload = {
+    thread: {
+      updatedAt: updatedAtSeconds,
+      inProgress: false,
+      path: 'session-fallback.jsonl',
+      turns: [{
+        id: 'turn-session',
+        status: 'completed',
+        items: [{ type: 'agentMessage', id: 'agent-session', text: 'Recovered from session log' }],
+      }],
+    },
+  }
+  const sessionFallbackRpcCalls: unknown[] = []
+  const sessionFallbackRemembered: unknown[] = []
+  const sessionFallbackWarnings: Array<{ message: string; details: Record<string, unknown> }> = []
+  const sessionFallbackSnapshot = await readAppServerThreadRuntimeSnapshot('thread-session-fallback', {
+    rpc: async (_method, params) => {
+      sessionFallbackRpcCalls.push(params)
+      if (readIncludeTurns(params) === true) {
+        throw new Error('does not start with session metadata')
+      }
+      return {
+        thread: {
+          id: 'thread-session-fallback',
+          updatedAt: updatedAtSeconds,
+          inProgress: false,
+          path: 'session-fallback.jsonl',
+        },
+      }
+    },
+    observeThreadRead: () => {},
+    getCachedThreadRead: () => null,
+    rememberCachedThreadRead: (_threadId, threadRead) => {
+      sessionFallbackRemembered.push(threadRead)
+      return createCachedThreadRead(threadRead, () => '2026-01-01T00:00:30.000Z')
+    },
+    snapshotRuntime: (threadId, overlay = {}) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'completed',
+      threadRead: overlay.threadRead ?? null,
+      messageState: overlay.messageState ?? 'unavailable',
+      pendingServerRequests: overlay.pendingServerRequests ?? [],
+      tokenUsage: overlay.tokenUsage ?? null,
+    }),
+    observeRuntimeThreadRead: () => {},
+    markRuntimeDegraded: () => {
+      throw new Error('session fallback should avoid degraded runtime state')
+    },
+    persistRuntimeSnapshot: (_threadId, snapshot) => snapshot,
+    listPendingServerRequestsForThread: () => [],
+    getThreadTokenUsage: () => null,
+    readSessionLogThreadRead: async (sessionPath, fallbackThreadRead) => {
+      assert.equal(sessionPath, 'session-fallback.jsonl')
+      assert.equal(readThreadSessionPathFromThreadReadPayload(fallbackThreadRead), 'session-fallback.jsonl')
+      return sessionFallbackThreadReadPayload
+    },
+    getErrorMessage,
+    writeWarning: (message, details) => {
+      sessionFallbackWarnings.push({ message, details })
+    },
+  })
+  assert.deepEqual(sessionFallbackRpcCalls.map(readIncludeTurns), [false, true])
+  assert.deepEqual(sessionFallbackRemembered, [sessionFallbackThreadReadPayload])
+  assert.equal(sessionFallbackSnapshot.threadRead, sessionFallbackThreadReadPayload)
+  assert.equal(sessionFallbackSnapshot.messageState, 'cached')
+  assert.deepEqual(sessionFallbackWarnings.map((warning) => warning.message), [
+    'Heavy thread snapshot fell back to session log messages',
+  ])
+
+  const sessionFallbackCacheHit = createCachedThreadRead(
+    sessionFallbackThreadReadPayload,
+    () => '2026-01-01T00:00:30.000Z',
+    'session-log',
+  )
+  const sessionFallbackCacheHitSnapshot = await readAppServerThreadRuntimeSnapshot('thread-session-fallback', {
+    rpc: async (_method, params) => {
+      if (readIncludeTurns(params) === true) {
+        throw new Error('session-log cache hit should not request a heavy thread read')
+      }
+      return {
+        thread: {
+          id: 'thread-session-fallback',
+          updatedAt: updatedAtSeconds,
+          inProgress: false,
+          path: 'session-fallback.jsonl',
+        },
+      }
+    },
+    observeThreadRead: () => {},
+    getCachedThreadRead: () => sessionFallbackCacheHit,
+    rememberCachedThreadRead: () => {
+      throw new Error('session-log cache hit should not rewrite cached thread read')
+    },
+    snapshotRuntime: (threadId, overlay = {}) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'completed',
+      threadRead: overlay.threadRead ?? null,
+      messageState: overlay.messageState ?? 'unavailable',
+      pendingServerRequests: overlay.pendingServerRequests ?? [],
+      tokenUsage: overlay.tokenUsage ?? null,
+    }),
+    observeRuntimeThreadRead: () => {},
+    markRuntimeDegraded: () => {
+      throw new Error('session-log cache hit should avoid degraded runtime state')
+    },
+    persistRuntimeSnapshot: (_threadId, snapshot) => snapshot,
+    listPendingServerRequestsForThread: () => [],
+    getThreadTokenUsage: () => null,
+    getErrorMessage,
+    writeWarning: () => {
+      throw new Error('session-log cache hit should not warn')
+    },
+  })
+  assert.equal(sessionFallbackCacheHitSnapshot.threadRead, sessionFallbackThreadReadPayload)
+  assert.equal(sessionFallbackCacheHitSnapshot.messageState, 'cached')
 
   const factoryRpcCalls: unknown[] = []
   const factoryRememberedThreadReads: unknown[] = []
@@ -8841,6 +9657,72 @@ function smokeAppServerNotificationReplay(): void {
     threadId: 'thread-bundle',
     turnId: 'turn-bundle',
   }])
+
+  const projectedEvents: unknown[] = []
+  const projectionReplay = new AppServerNotificationReplay({
+    initialSeq: 40,
+    nowIso: () => '2026-01-01T00:00:04.000Z',
+    appendEvent: (event) => { projectedEvents.push(event) },
+    listEventsAfter: (afterSeq) => ({
+      notifications: [],
+      latestSeq: afterSeq,
+      oldestSeq: afterSeq,
+    }),
+    observeNotification: () => {},
+    readThreadIdFromPayload: (payload) => readStringProperty(payload, 'threadId'),
+    readTurnIdFromPayload: (payload) => readStringProperty(payload, 'turnId'),
+  })
+  const projectedEvent = projectionReplay.remember({
+    method: 'app/list/updated',
+    params: { data: [{ id: 'large-app-catalog-entry' }] },
+  })
+  assert.deepEqual(projectedEvent.params, {})
+  assert.deepEqual(projectedEvents, [{
+    seq: 41,
+    method: 'app/list/updated',
+    params: {},
+    atIso: '2026-01-01T00:00:04.000Z',
+    threadId: '',
+    turnId: '',
+  }])
+}
+
+async function smokeRuntimeStoreMaintenance(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'cx-codex-runtime-store-'))
+  const dbPath = join(root, 'runtime.sqlite')
+  let runtimeStore: RuntimeStore | null = null
+  try {
+    runtimeStore = new RuntimeStore(dbPath)
+    assert.equal(runtimeStore.getStorageStats().autoVacuumMode, 2)
+    runtimeStore.appendEvent({
+      seq: 1,
+      method: 'app/list/updated',
+      params: { data: [{ id: 'legacy-large-app-catalog' }] },
+      atIso: '2026-01-01T00:00:00.000Z',
+      threadId: '',
+      turnId: '',
+    })
+    runtimeStore.close()
+    runtimeStore = null
+
+    runtimeStore = new RuntimeStore(dbPath)
+    assert.deepEqual(runtimeStore.listEventsAfter(0, 10).notifications[0]?.params, {})
+    const compacted = runtimeStore.compact()
+    assert.equal(compacted.status, 'compacted')
+    assert.equal(compacted.after.autoVacuumMode, 2)
+    assert.equal(compacted.reclaimedBytes >= 0, true)
+
+    runtimeStore.createRequest({
+      requestId: 'active-request',
+      status: 'running',
+    })
+    const skipped = runtimeStore.compact()
+    assert.equal(skipped.status, 'skipped-active-requests')
+    assert.equal(skipped.activeRequestCount, 1)
+  } finally {
+    runtimeStore?.close()
+    await rm(root, { recursive: true, force: true })
+  }
 }
 
 async function smokeDiagnosticsRoutes(): Promise<void> {
@@ -8987,6 +9869,36 @@ async function smokeDiagnosticsRoutes(): Promise<void> {
     kind: 'approval',
     receivedAtIso: '2026-01-01T00:00:00.000Z',
   }])
+
+  const timeoutHealthResponse = createRouteTestResponse()
+  const timeoutStartedAtMs = Date.now()
+  assert.equal(await handleDiagnosticsRoutes(
+    { method: 'GET' } as never,
+    timeoutHealthResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/health'),
+    {
+      ...dependencies,
+      readHookDiagnostics: async () => await new Promise<never>(() => {}),
+      readWindowsSandboxDiagnostics: async () => await new Promise<never>(() => {}),
+      nowIso: () => '2026-01-01T00:00:40.000Z',
+    },
+  ), true)
+  assert.equal(timeoutHealthResponse.response.statusCode, 200)
+  assert.ok(Date.now() - timeoutStartedAtMs < 3_000)
+  const timeoutHealthPayload = JSON.parse(timeoutHealthResponse.body)
+  assert.equal(timeoutHealthPayload.status, 'ok')
+  assert.deepEqual(timeoutHealthPayload.data.hookDiagnostics, {
+    available: false,
+    status: 'timeout',
+    reason: 'hook diagnostics timed out after 2s',
+    checkedAtIso: '2026-01-01T00:00:40.000Z',
+  })
+  assert.deepEqual(timeoutHealthPayload.data.windowsSandbox, {
+    available: false,
+    status: 'timeout',
+    reason: 'Windows sandbox diagnostics timed out after 2s',
+    checkedAtIso: '2026-01-01T00:00:40.000Z',
+  })
 
   assert.equal(await handleDiagnosticsRoutes(
     { method: 'POST' } as never,
@@ -9392,6 +10304,115 @@ function smokeNotificationSseRoute(): void {
   assert.equal(clearedTimers.length, 1)
   assert.deepEqual(unsubscribed, ['yes'])
 
+  const drainingRequest = Object.assign(new EventEmitter(), { method: 'GET' })
+  const drainingResponse = createSseRouteTestResponse({ backpressureAtWrite: 2 })
+  const drainingTimers: Array<() => void> = []
+  const drainingClearedTimers: unknown[] = []
+  const drainingUnsubscribed: string[] = []
+  const drainingListeners: Array<(value: BridgeNotificationEvent) => void> = []
+  assert.equal(handleNotificationSseRoute(
+    drainingRequest as never,
+    drainingResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/events'),
+    {
+      latestSeq: 100,
+      heartbeatIntervalMs: 10,
+      setInterval: ((callback: () => void) => {
+        drainingTimers.push(callback)
+        return { timerId: drainingTimers.length } as never
+      }) as never,
+      clearInterval: ((timer: unknown) => {
+        drainingClearedTimers.push(timer)
+      }) as never,
+      subscribeNotifications: (listener) => {
+        drainingListeners.push(listener)
+        return () => { drainingUnsubscribed.push('yes') }
+      },
+    },
+  ), true)
+  const drainingListener = drainingListeners[0]
+  assert.equal(typeof drainingListener, 'function')
+  drainingListener?.({ seq: 101, method: 'turn/started', params: {}, atIso: '2026-01-01T00:00:01.000Z' })
+  assert.equal(drainingResponse.chunks.length, 2)
+  drainingTimers[0]?.()
+  assert.equal(drainingResponse.chunks.length, 2)
+  drainingListener?.({ seq: 102, method: 'turn/completed', params: {}, atIso: '2026-01-01T00:00:02.000Z' })
+  drainingListener?.({ seq: 103, method: 'thread/name/updated', params: {}, atIso: '2026-01-01T00:00:03.000Z' })
+  assert.equal(drainingResponse.chunks.length, 2)
+  drainingResponse.response.emit('drain')
+  assert.deepEqual(
+    drainingResponse.chunks.slice(1).map((chunk) => JSON.parse(chunk.slice(6).trim()).seq),
+    [101, 102, 103],
+  )
+  drainingRequest.emit('close')
+  assert.equal(drainingResponse.ended, true)
+  assert.equal(drainingClearedTimers.length, 1)
+  assert.deepEqual(drainingUnsubscribed, ['yes'])
+
+  const overflowRequest = Object.assign(new EventEmitter(), { method: 'GET' })
+  const overflowResponse = createSseRouteTestResponse({ backpressureAtWrite: 2 })
+  const overflowTimers: Array<() => void> = []
+  const overflowClearedTimers: unknown[] = []
+  const overflowUnsubscribed: string[] = []
+  const overflowListeners: Array<(value: BridgeNotificationEvent) => void> = []
+  assert.equal(handleNotificationSseRoute(
+    overflowRequest as never,
+    overflowResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/events'),
+    {
+      latestSeq: 200,
+      maxBufferedEvents: 1,
+      setInterval: ((callback: () => void) => {
+        overflowTimers.push(callback)
+        return { timerId: overflowTimers.length } as never
+      }) as never,
+      clearInterval: ((timer: unknown) => {
+        overflowClearedTimers.push(timer)
+      }) as never,
+      subscribeNotifications: (listener) => {
+        overflowListeners.push(listener)
+        return () => { overflowUnsubscribed.push('yes') }
+      },
+    },
+  ), true)
+  const overflowListener = overflowListeners[0]
+  assert.equal(typeof overflowListener, 'function')
+  overflowListener?.({ seq: 201, method: 'turn/started', params: {}, atIso: '2026-01-01T00:00:01.000Z' })
+  overflowListener?.({ seq: 202, method: 'item/started', params: {}, atIso: '2026-01-01T00:00:02.000Z' })
+  overflowListener?.({ seq: 203, method: 'item/completed', params: {}, atIso: '2026-01-01T00:00:03.000Z' })
+  assert.equal(overflowResponse.destroyed, true)
+  assert.equal(overflowClearedTimers.length, 1)
+  assert.deepEqual(overflowUnsubscribed, ['yes'])
+  const overflowChunkCount = overflowResponse.chunks.length
+  overflowListener?.({ seq: 204, method: 'turn/completed', params: {}, atIso: '2026-01-01T00:00:04.000Z' })
+  assert.equal(overflowResponse.chunks.length, overflowChunkCount)
+
+  const synchronousRequest = Object.assign(new EventEmitter(), { method: 'GET' })
+  const synchronousResponse = createSseRouteTestResponse()
+  let synchronousUnsubscribeCount = 0
+  assert.equal(handleNotificationSseRoute(
+    synchronousRequest as never,
+    synchronousResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/events'),
+    {
+      latestSeq: 300,
+      maxEventBytes: 64,
+      setInterval: (() => { throw new Error('closed SSE must not start a heartbeat') }) as never,
+      subscribeNotifications: (listener) => {
+        listener({
+          seq: 301,
+          method: 'turn/diff/updated',
+          params: { diff: 'x'.repeat(100) },
+          atIso: '2026-01-01T00:00:05.000Z',
+        })
+        return () => { synchronousUnsubscribeCount += 1 }
+      },
+    },
+  ), true)
+  assert.equal(synchronousResponse.destroyed, true)
+  assert.equal(synchronousResponse.chunks.length, 0)
+  assert.equal(synchronousUnsubscribeCount, 1)
+
   assert.equal(handleNotificationSseRoute(
     Object.assign(new EventEmitter(), { method: 'POST' }) as never,
     createSseRouteTestResponse().response as never,
@@ -9550,27 +10571,32 @@ function createTranscriptionRouteTestResponse() {
   return createRouteTestResponse()
 }
 
-function createSseRouteTestResponse() {
+function createSseRouteTestResponse(options: { backpressureAtWrite?: number } = {}) {
   const headers = new Map<string, string | number | readonly string[]>()
   const chunks: string[] = []
   let ended = false
-  const response = {
+  let destroyed = false
+  let writeCount = 0
+  const response = Object.assign(new EventEmitter(), {
     statusCode: 0,
-    destroyed: false,
-    get writableEnded() {
-      return ended
-    },
     setHeader(name: string, value: string | number | readonly string[]) {
       headers.set(name, value)
     },
     write(value: string | Buffer) {
       chunks.push(Buffer.isBuffer(value) ? value.toString('utf8') : value)
-      return true
+      writeCount += 1
+      return writeCount !== options.backpressureAtWrite
     },
     end() {
       ended = true
     },
-  }
+    destroy() {
+      destroyed = true
+      response.emit('close')
+    },
+  })
+  Object.defineProperty(response, 'writableEnded', { get: () => ended })
+  Object.defineProperty(response, 'destroyed', { get: () => destroyed })
 
   return {
     response,
@@ -9578,6 +10604,32 @@ function createSseRouteTestResponse() {
     chunks,
     get ended() {
       return ended
+    },
+    get destroyed() {
+      return destroyed
+    },
+  }
+}
+
+function createNotificationSocketTestDouble(bufferedAmount = 0, sendError: Error | null = null) {
+  const sent: string[] = []
+  let terminated = 0
+  const socket = {
+    readyState: 1,
+    bufferedAmount,
+    send(value: string, callback?: (error?: Error) => void) {
+      sent.push(value)
+      callback?.(sendError ?? undefined)
+    },
+    terminate() {
+      terminated += 1
+    },
+  }
+  return {
+    socket,
+    sent,
+    get terminated() {
+      return terminated
     },
   }
 }

@@ -6,7 +6,7 @@ export type AppServerRpcResponseEvent = Extract<AppServerJsonRpcLineEvent, { kin
 
 type AppServerRpcResponseDependencies = {
   finalizePendingRpc: (id: number) => PendingAppServerRpc | null
-  logSlowRpc: (
+  recordRpcCompletion: (
     method: string,
     startedAtMs: number,
     params: unknown,
@@ -21,7 +21,7 @@ export function settleAppServerRpcResponse(
   const pendingRequest = dependencies.finalizePendingRpc(response.id)
   if (!pendingRequest) return false
 
-  dependencies.logSlowRpc(pendingRequest.method, pendingRequest.startedAtMs, pendingRequest.params, {
+  dependencies.recordRpcCompletion(pendingRequest.method, pendingRequest.startedAtMs, pendingRequest.params, {
     outcome: response.error ? 'error' : 'success',
   })
   if (response.error) {

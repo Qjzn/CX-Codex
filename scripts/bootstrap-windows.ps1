@@ -21,6 +21,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$MinimumNodeVersion = [Version]"22.13.0"
 
 function Write-Step {
   param([string]$Message)
@@ -40,7 +41,11 @@ function Get-PortableNodeRuntime {
   Write-Step "Installing portable Node.js"
   $index = Invoke-RestMethod -Uri "https://nodejs.org/dist/index.json" -Headers @{ "User-Agent" = "cx-codex-bootstrap" }
   $release = $index |
-    Where-Object { $_.lts -and ($_.files -contains "win-x64-zip") } |
+    Where-Object {
+      $_.lts -and
+      ($_.files -contains "win-x64-zip") -and
+      ((Get-NodeVersionObject -VersionText ([string]$_.version)) -ge $MinimumNodeVersion)
+    } |
     Select-Object -First 1
 
   if (-not $release) {
@@ -80,7 +85,7 @@ function Ensure-NodeRuntime {
     $nodeCommand = Get-Command node -ErrorAction Stop
     $versionText = & $nodeCommand.Source --version
     $version = Get-NodeVersionObject -VersionText $versionText
-    if ($version.Major -ge 18) {
+    if ($version -ge $MinimumNodeVersion) {
       $npmCommand = Get-Command npm -ErrorAction Stop
       return @{
         Node = $nodeCommand.Source
@@ -131,13 +136,13 @@ function Acquire-Repository {
   return (Resolve-Path -LiteralPath $InstallDir).Path
 }
 
+$repoRoot = Acquire-Repository
 $runtime = Ensure-NodeRuntime
 $env:PATH = "$($runtime.Root);$env:PATH"
 
 Write-Host "Using node: $($runtime.Node)"
 Write-Host "Using npm:  $($runtime.Npm)"
 
-$repoRoot = Acquire-Repository
 $installScript = Join-Path $repoRoot "scripts\install-windows-server.ps1"
 if (-not (Test-Path -LiteralPath $installScript)) {
   throw "Install script not found: $installScript"

@@ -6,7 +6,21 @@ export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | '
 export type SpeedMode = 'standard' | 'fast'
 export type CollaborationMode = 'execute' | 'plan'
 export type PluginAuthStatus = 'unsupported' | 'notLoggedIn' | 'bearerToken' | 'oAuth' | 'unknown'
-export type ComposerPluginSource = 'mcp' | 'app'
+export type ComposerPluginSource = 'plugin' | 'mcp' | 'app'
+
+export type ComposerModelInfo = {
+  id: string
+  model: string
+  displayName: string
+  description: string
+  hidden: boolean
+  isDefault: boolean
+  defaultReasoningEffort: ReasoningEffort
+  supportedReasoningEfforts: Array<{
+    value: ReasoningEffort
+    description: string
+  }>
+}
 
 export type ComposerPluginSelection = {
   id: string
@@ -220,6 +234,9 @@ export type UiThreadTokenUsage = {
 
 export type UiProjectGroup = {
   projectName: string
+  workspaceRoot?: string
+  isPinnedProject?: boolean
+  pinnedProjectRank?: number
   threads: UiThread[]
 }
 

@@ -46,7 +46,7 @@ const APP_SERVER_RPC_QUEUE_WARN_SIZE = 6
 const APP_SERVER_RPC_QUEUE_MAX_SIZE = 60
 const APP_SERVER_RPC_QUEUE_WARN_INTERVAL_MS = 10_000
 const APP_SERVER_RPC_TIMEOUT_RESTART_WINDOW_MS = 45_000
-const APP_SERVER_RPC_TIMEOUT_RESTART_THRESHOLD = 3
+const APP_SERVER_RPC_TIMEOUT_RESTART_THRESHOLD = 2
 const APP_SERVER_RESTART_COOLDOWN_MS = 10_000
 const APP_SERVER_COLD_START_GRACE_MS = 60_000
 
@@ -239,8 +239,8 @@ export class AppServerProcess {
     dispatchAppServerJsonRpcLine(line, {
       isPendingResponseId: (id) => this.pending.has(id),
       finalizePendingRpc: (id) => this.pending.finalize(id),
-      logSlowRpc: (method, startedAtMs, params, details) => {
-        this.rpcDiagnostics.logSlowRpc(method, startedAtMs, params, details)
+      recordRpcCompletion: (method, startedAtMs, params, details) => {
+        this.rpcDiagnostics.recordRpcCompletion(method, startedAtMs, params, details)
       },
       captureNotificationState: (notification) => this.captureNotificationState(notification),
       emitNotification: (notification) => this.emitNotification(notification),

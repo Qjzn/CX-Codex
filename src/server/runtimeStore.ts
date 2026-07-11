@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -93,6 +93,28 @@ const SENSITIVE_KEY_PATTERN = /^(?:authorization|authHeader|accessToken|refreshT
 const RUNTIME_DB_BUSY_TIMEOUT_MS = 5000
 const RUNTIME_EVENT_RETENTION_LIMIT = 5000
 const RUNTIME_EVENT_PRUNE_INTERVAL = 100
+const RUNTIME_DB_INCREMENTAL_VACUUM_PAGES = 256
+const RUNTIME_DB_AUTO_VACUUM_INCREMENTAL = 2
+const APP_LIST_UPDATED_METHOD = 'app/list/updated'
+
+export type RuntimeDatabaseStorageStats = {
+  databaseBytes: number
+  freeBytes: number
+  freePageRatio: number
+  pageCount: number
+  freePageCount: number
+  pageSizeBytes: number
+  autoVacuumMode: number
+}
+
+export type RuntimeStoreCompactionResult = {
+  status: 'compacted' | 'skipped-active-requests'
+  activeRequestCount: number
+  before: RuntimeDatabaseStorageStats
+  after: RuntimeDatabaseStorageStats
+  reclaimedBytes: number
+  durationMs: number
+}
 
 function defaultRuntimeDatabasePath(): string {
   return join(homedir(), '.cx-codex', 'runtime.sqlite')
@@ -187,7 +209,11 @@ export class RuntimeStore {
 
   constructor(dbPath = defaultRuntimeDatabasePath()) {
     mkdirSync(dirname(dbPath), { recursive: true })
+    const isNewDatabase = !existsSync(dbPath)
     this.db = new Database(dbPath)
+    if (isNewDatabase) {
+      this.db.pragma('auto_vacuum = INCREMENTAL')
+    }
     this.db.pragma('journal_mode = WAL')
     this.db.pragma(`busy_timeout = ${RUNTIME_DB_BUSY_TIMEOUT_MS}`)
     this.db.exec(`
@@ -233,6 +259,7 @@ export class RuntimeStore {
         snapshot_json TEXT NOT NULL DEFAULT '{}'
       );
     `)
+    this.runLightweightStartupMaintenance()
   }
 
   getLatestEventSeq(): number {
@@ -379,8 +406,55 @@ export class RuntimeStore {
     this.appendEventCount += 1
     if (this.appendEventCount % RUNTIME_EVENT_PRUNE_INTERVAL === 0) {
       this.db.prepare('DELETE FROM runtime_events WHERE seq <= ?').run(Math.max(0, event.seq - RUNTIME_EVENT_RETENTION_LIMIT))
+      this.runIncrementalVacuum()
     }
     return event
+  }
+
+  getStorageStats(): RuntimeDatabaseStorageStats {
+    const pageCount = this.readPragmaNumber('page_count')
+    const freePageCount = this.readPragmaNumber('freelist_count')
+    const pageSizeBytes = this.readPragmaNumber('page_size')
+    const databaseBytes = pageCount * pageSizeBytes
+    const freeBytes = freePageCount * pageSizeBytes
+    return {
+      databaseBytes,
+      freeBytes,
+      freePageRatio: pageCount > 0 ? freePageCount / pageCount : 0,
+      pageCount,
+      freePageCount,
+      pageSizeBytes,
+      autoVacuumMode: this.readPragmaNumber('auto_vacuum'),
+    }
+  }
+
+  compact(): RuntimeStoreCompactionResult {
+    const startedAt = Date.now()
+    const activeRequestCount = this.countActiveRequests()
+    const before = this.getStorageStats()
+    if (activeRequestCount > 0) {
+      return {
+        status: 'skipped-active-requests',
+        activeRequestCount,
+        before,
+        after: before,
+        reclaimedBytes: 0,
+        durationMs: Date.now() - startedAt,
+      }
+    }
+
+    this.db.pragma('wal_checkpoint(TRUNCATE)')
+    this.db.pragma('auto_vacuum = INCREMENTAL')
+    this.db.exec('VACUUM')
+    const after = this.getStorageStats()
+    return {
+      status: 'compacted',
+      activeRequestCount,
+      before,
+      after,
+      reclaimedBytes: Math.max(0, before.databaseBytes - after.databaseBytes),
+      durationMs: Date.now() - startedAt,
+    }
   }
 
   listEventsAfter(afterSeq: number, limit = 200): {
@@ -447,6 +521,10 @@ export class RuntimeStore {
     latestSeq: number
     oldestSeq: number
     snapshotCount: number
+    databaseBytes: number
+    freeBytes: number
+    freePageRatio: number
+    autoVacuumMode: number
   } {
     const scalar = (sql: string): number => {
       const row = this.db.prepare(sql).get() as { value?: number } | undefined
@@ -456,6 +534,7 @@ export class RuntimeStore {
     const displayPath = this.db.name.startsWith(home)
       ? `~${this.db.name.slice(home.length)}`
       : this.db.name
+    const storage = this.getStorageStats()
     return {
       path: displayPath,
       requestCount: scalar('SELECT COUNT(*) AS value FROM runtime_requests'),
@@ -466,7 +545,42 @@ export class RuntimeStore {
       latestSeq: this.getLatestEventSeq(),
       oldestSeq: this.getOldestEventSeq(),
       snapshotCount: scalar('SELECT COUNT(*) AS value FROM thread_runtime_snapshots'),
+      databaseBytes: storage.databaseBytes,
+      freeBytes: storage.freeBytes,
+      freePageRatio: storage.freePageRatio,
+      autoVacuumMode: storage.autoVacuumMode,
     }
+  }
+
+  private runLightweightStartupMaintenance(): void {
+    const latestSeq = this.getLatestEventSeq()
+    if (latestSeq > 0) {
+      this.db.prepare('DELETE FROM runtime_events WHERE seq <= ?').run(Math.max(0, latestSeq - RUNTIME_EVENT_RETENTION_LIMIT))
+    }
+    this.db.prepare(`
+      UPDATE runtime_events
+      SET params_json = '{}'
+      WHERE method = ? AND params_json <> '{}'
+    `).run(APP_LIST_UPDATED_METHOD)
+    this.runIncrementalVacuum()
+  }
+
+  private runIncrementalVacuum(): void {
+    if (this.readPragmaNumber('auto_vacuum') !== RUNTIME_DB_AUTO_VACUUM_INCREMENTAL) return
+    this.db.pragma(`incremental_vacuum(${RUNTIME_DB_INCREMENTAL_VACUUM_PAGES})`)
+  }
+
+  private countActiveRequests(): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS value FROM runtime_requests
+      WHERE status IN ('pending_start', 'start_uncertain', 'running', 'stopping', 'stop_uncertain', 'still_running')
+    `).get() as { value?: number } | undefined
+    return typeof row?.value === 'number' && Number.isFinite(row.value) ? Math.max(0, Math.trunc(row.value)) : 0
+  }
+
+  private readPragmaNumber(name: 'page_count' | 'freelist_count' | 'page_size' | 'auto_vacuum'): number {
+    const value = this.db.pragma(name, { simple: true }) as unknown
+    return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0
   }
 
   close(): void {

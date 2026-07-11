@@ -7,6 +7,11 @@ import express, { type Express } from 'express'
 import { createCodexBridgeMiddleware } from './codexAppServerBridge.js'
 import { createAuthSession } from './authMiddleware.js'
 import { createDirectoryListingHtml, createLocalFileActionHtml, createTextEditorHtml, decodeBrowsePath, isPreviewableLocalPath, isTextEditableFile, normalizeLocalPath, toLocalFilePreviewHref } from './localBrowseUi.js'
+import {
+  NOTIFICATION_WEBSOCKET_MAX_INBOUND_BYTES,
+  sendBoundedWebSocketJson,
+  subscribeBoundedWebSocketNotifications,
+} from './notificationWebSocketBackpressure.js'
 import { WebSocketServer, type WebSocket } from 'ws'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -313,8 +318,8 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
         .send(
           renderFrontendMissingHtml('CX-Codex 前端资源缺失。', [
             `期望文件：${spaEntryFile}`,
-            '如果是源码运行，请先执行：pnpm run build:frontend',
-            '如果使用 npx 运行，请清理 npx 缓存后重新安装 cx-codex。',
+            '如果是源码运行，请先执行：npm run build:frontend',
+            '如果使用发布包，请重新解压完整产物；不要单独复制 CLI。',
           ]),
         )
       return
@@ -332,18 +337,11 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
     app,
     dispose: () => bridge.dispose(),
     attachWebSocket: (server: HttpServer) => {
-      const wss = new WebSocketServer({ noServer: true })
+      const wss = new WebSocketServer({
+        noServer: true,
+        maxPayload: NOTIFICATION_WEBSOCKET_MAX_INBOUND_BYTES,
+      })
       const heartbeatState = new WeakMap<WebSocket, boolean>()
-      const sendSocketJson = (ws: WebSocket, payload: unknown): boolean => {
-        if (ws.readyState !== 1) return false
-        try {
-          ws.send(JSON.stringify(payload))
-          return true
-        } catch {
-          ws.terminate()
-          return false
-        }
-      }
       const heartbeat = setInterval(() => {
         for (const ws of wss.clients) {
           if (heartbeatState.get(ws) === false) {
@@ -355,7 +353,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
           if (ws.readyState === 1) {
             try {
               ws.ping()
-              sendSocketJson(ws, {
+              sendBoundedWebSocketJson(ws, {
                 method: BRIDGE_HEARTBEAT_METHOD,
                 params: { ok: true },
                 atIso: new Date().toISOString(),
@@ -386,10 +384,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
 
       wss.on('connection', (ws: WebSocket) => {
         heartbeatState.set(ws, true)
-        sendSocketJson(ws, { method: 'ready', params: { ok: true }, atIso: new Date().toISOString() })
-        const unsubscribe = bridge.subscribeNotifications((notification) => {
-          sendSocketJson(ws, notification)
-        })
+        let unsubscribe = () => {}
 
         ws.on('pong', () => {
           heartbeatState.set(ws, true)
@@ -402,6 +397,12 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
           heartbeatState.delete(ws)
           unsubscribe()
         })
+        if (!sendBoundedWebSocketJson(ws, {
+          method: 'ready',
+          params: { ok: true },
+          atIso: new Date().toISOString(),
+        })) return
+        unsubscribe = subscribeBoundedWebSocketNotifications(ws, bridge.subscribeNotifications)
       })
 
       server.on('close', () => {

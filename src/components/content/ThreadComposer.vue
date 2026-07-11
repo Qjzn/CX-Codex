@@ -3,11 +3,21 @@
     <p v-if="dictationErrorText" class="thread-composer-dictation-error">
       {{ dictationErrorText }}
     </p>
-    <p v-else-if="dictationHelperText" class="thread-composer-dictation-helper">
+    <p
+      v-else-if="dictationHelperText"
+      class="thread-composer-dictation-helper"
+      :class="{ 'thread-composer-dictation-helper--success': dictationFeedbackTone === 'success' }"
+    >
       {{ dictationHelperText }}
     </p>
 
-    <div class="thread-composer-shell" :class="{ 'thread-composer-shell--no-top-radius': hasQueueAbove }">
+    <div
+      class="thread-composer-shell"
+      :class="{
+        'thread-composer-shell--no-top-radius': hasQueueAbove,
+        'thread-composer-shell--dictation-inserted': dictationInsertFlash,
+      }"
+    >
       <div v-if="selectedImages.length > 0" class="thread-composer-attachments">
         <div v-for="image in selectedImages" :key="image.id" class="thread-composer-attachment">
           <img class="thread-composer-attachment-image" :src="image.previewUrl" :alt="image.name || '已选图片'" />
@@ -71,7 +81,17 @@
         </span>
       </div>
 
-      <div v-if="selectedPlugins.length > 0 || goalModeEnabled" class="thread-composer-option-chips">
+      <div v-if="selectedPlugins.length > 0 || goalModeEnabled || pendingCapabilityCount > 0" class="thread-composer-option-chips">
+        <span
+          v-if="pendingCapabilityCount > 0"
+          class="thread-composer-option-chip"
+          role="status"
+          aria-live="polite"
+          title="能力列表加载完成后自动恢复"
+        >
+          <span class="thread-composer-option-chip-dot" aria-hidden="true" />
+          <span class="thread-composer-option-chip-name">正在恢复 {{ pendingCapabilityCount }} 项能力</span>
+        </span>
         <span v-for="plugin in selectedPlugins" :key="getSelectedPluginKey(plugin)" class="thread-composer-option-chip">
           <span class="thread-composer-option-chip-dot" aria-hidden="true" />
           <span class="thread-composer-option-chip-name">{{ plugin.name }}</span>
@@ -88,7 +108,7 @@
           <button
             class="thread-composer-option-chip-remove"
             type="button"
-            aria-label="关闭追求目标"
+            aria-label="移除本轮要求"
             @click="disableGoalMode"
           >×</button>
         </span>
@@ -138,6 +158,7 @@
           ref="inputRef"
           v-model="draft"
           class="thread-composer-input"
+          rows="1"
           :placeholder="placeholderText"
           :disabled="isInteractionDisabled"
           @input="onInputChange"
@@ -159,9 +180,10 @@
       >
         <div ref="attachMenuRootRef" class="thread-composer-attach">
           <button
+            ref="attachTriggerRef"
             class="thread-composer-attach-trigger"
             type="button"
-            aria-label="添加图片和文件"
+            aria-label="添加内容和功能"
             :disabled="isInteractionDisabled"
             @click="toggleAttachMenu"
           >
@@ -173,14 +195,20 @@
             class="thread-composer-mobile-backdrop"
             type="button"
             aria-label="关闭附件菜单"
-            @pointerdown.stop.prevent="closeAttachMenu"
-            @click="closeAttachMenu"
+            @pointerdown.stop.prevent="closeAttachMenu()"
+            @click="closeAttachMenu()"
           />
           <div
             v-if="isAttachMenuOpen"
+            ref="attachMenuRef"
             class="thread-composer-attach-menu"
             :class="{ 'thread-composer-attach-menu--sheet': isCompactViewport }"
+            role="dialog"
+            aria-label="添加内容和功能"
+            :aria-modal="isCompactViewport ? 'true' : undefined"
+            @keydown="onAttachMenuKeydown"
           >
+            <div v-show="!isCompactViewport || !isPluginSubmenuOpen" class="thread-composer-attach-main">
             <button
               class="thread-composer-attach-item"
               type="button"
@@ -227,9 +255,9 @@
             >
               <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--text">✓</span>
               <span class="thread-composer-attach-item-body">
-                <span class="thread-composer-attach-item-title">计划模式</span>
+                <span class="thread-composer-attach-item-title">仅生成计划</span>
                 <span class="thread-composer-attach-item-subtitle">
-                  {{ selectedCollaborationMode === 'plan' ? '只制定计划，发送后回到执行' : '先规划，不执行文件和命令' }}
+                  {{ selectedCollaborationMode === 'plan' ? '本次只生成计划，发送后回到执行' : '仅规划一次，不执行文件和命令' }}
                 </span>
               </span>
               <span class="thread-composer-switch" :class="{ 'is-on': selectedCollaborationMode === 'plan' }" aria-hidden="true" />
@@ -243,7 +271,7 @@
             >
               <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--text">◎</span>
               <span class="thread-composer-attach-item-body">
-                <span class="thread-composer-attach-item-title">追求目标</span>
+                <span class="thread-composer-attach-item-title">本轮要求</span>
                 <span class="thread-composer-attach-item-subtitle">{{ activeGoalLabel }}</span>
               </span>
               <span class="thread-composer-switch" :class="{ 'is-on': goalModeEnabled }" aria-hidden="true" />
@@ -252,10 +280,12 @@
               <textarea
                 v-model="goalText"
                 class="thread-composer-goal-input"
-                placeholder="输入本轮要持续追求的目标，例如：给出可执行方案并主动补齐风险"
+                aria-label="本轮要求内容"
+                placeholder="输入本次消息的额外要求，例如：给出可执行方案并主动补齐风险"
                 :disabled="isInteractionDisabled"
                 rows="2"
               />
+            </div>
             </div>
             <div class="thread-composer-attach-submenu-wrap">
               <button
@@ -267,7 +297,9 @@
               >
                 <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--grid">⌘</span>
                 <span class="thread-composer-attach-item-body">
-                  <span class="thread-composer-attach-item-title">插件</span>
+                  <span class="thread-composer-attach-item-title">
+                    {{ isCompactViewport && isPluginSubmenuOpen ? '返回添加菜单' : '插件' }}
+                  </span>
                   <span class="thread-composer-attach-item-subtitle">{{ pluginMenuSummary }}</span>
                 </span>
                 <IconTablerChevronRight
@@ -291,9 +323,20 @@
                     刷新
                   </button>
                 </div>
-                <div v-if="props.isLoadingPlugins" class="thread-composer-plugin-menu-empty">正在读取插件...</div>
+                <input
+                  v-if="allPluginOptions.length > 6"
+                  v-model="pluginSearchQuery"
+                  class="thread-composer-plugin-search"
+                  type="search"
+                  aria-label="搜索插件"
+                  placeholder="搜索已连接插件"
+                />
+                <div
+                  v-if="props.isLoadingPlugins && pluginOptions.length === 0"
+                  class="thread-composer-plugin-menu-empty"
+                >正在读取已安装插件...</div>
                 <div v-else-if="pluginOptions.length === 0" class="thread-composer-plugin-menu-empty">
-                  当前 app-server 没有返回可用插件
+                  {{ pluginSearchQuery.trim() ? '没有匹配的已连接插件' : '当前没有已连接插件' }}
                 </div>
                 <template v-else>
                   <button
@@ -305,6 +348,7 @@
                       'is-disabled': !isPluginSelectable(plugin),
                     }"
                     type="button"
+                    :aria-pressed="isPluginSelected(plugin)"
                     :disabled="!isPluginSelectable(plugin)"
                     @click="onPluginRowClick(plugin)"
                   >
@@ -317,18 +361,13 @@
                     <span v-else-if="plugin.source === 'mcp' && plugin.authStatus === 'notLoggedIn'" class="thread-composer-plugin-login">登录</span>
                   </button>
                 </template>
-                <button
-                  class="thread-composer-plugin-reload"
-                  type="button"
-                  :disabled="props.isLoadingPlugins"
-                  @click="onReloadPlugins"
-                >
-                  重新加载插件配置
-                </button>
               </div>
             </div>
-            <div class="thread-composer-attach-section" aria-label="技能">
-              <span class="thread-composer-attach-section-title">技能</span>
+            <div
+              v-show="!isCompactViewport || !isPluginSubmenuOpen"
+              class="thread-composer-attach-section"
+              aria-label="技能"
+            >
               <ComposerSearchDropdown
                 class="thread-composer-attach-skill-dropdown"
                 :options="skillDropdownOptions"
@@ -349,9 +388,10 @@
         <div v-if="!isDictationRecording" class="thread-composer-control-strip" aria-label="发送设置">
           <div ref="runtimeSettingsRootRef" class="thread-composer-runtime">
             <button
+              ref="runtimeTriggerRef"
               class="thread-composer-runtime-trigger"
               type="button"
-              :disabled="isInteractionDisabled || models.length === 0"
+              :disabled="isInteractionDisabled || (models.length === 0 && !selectedModel)"
               :aria-expanded="isRuntimeSettingsOpen"
               aria-label="配置模型、质量和速度"
               @click="toggleRuntimeSettings"
@@ -371,15 +411,18 @@
               class="thread-composer-mobile-backdrop"
               type="button"
               aria-label="关闭配置菜单"
-              @pointerdown.stop.prevent="closeRuntimeSettings"
-              @click="closeRuntimeSettings"
+              @pointerdown.stop.prevent="closeRuntimeSettings()"
+              @click="closeRuntimeSettings()"
             />
             <div
               v-if="isRuntimeSettingsOpen"
+              ref="runtimePanelRef"
               class="thread-composer-runtime-panel"
               :class="{ 'thread-composer-runtime-panel--sheet': isCompactViewport }"
               role="dialog"
               aria-label="模型、质量和速度"
+              :aria-modal="isCompactViewport ? 'true' : undefined"
+              @keydown="onRuntimePanelKeydown"
             >
               <div v-if="isCompactViewport" class="thread-composer-runtime-handle" aria-hidden="true" />
               <div class="thread-composer-runtime-section">
@@ -388,13 +431,17 @@
                   <button
                     v-for="option in modelOptions"
                     :key="option.value"
-                    class="thread-composer-runtime-option"
+                    class="thread-composer-runtime-option thread-composer-runtime-option--stacked"
                     :class="{ 'is-selected': option.value === selectedModel }"
                     type="button"
-                    :disabled="disabled || !activeThreadId"
+                    :aria-pressed="option.value === selectedModel"
+                    :disabled="disabled || !activeThreadId || isModelMetadataPending"
                     @click="onRuntimeModelSelect(option.value)"
                   >
                     <span>{{ option.label }}</span>
+                    <small v-if="option.description">
+                      {{ option.isDefault ? '默认 · ' + option.description : option.description }}
+                    </small>
                   </button>
                 </div>
               </div>
@@ -407,7 +454,8 @@
                     class="thread-composer-runtime-option"
                     :class="{ 'is-selected': option.value === selectedReasoningEffort }"
                     type="button"
-                    :disabled="disabled || !activeThreadId"
+                    :aria-pressed="option.value === selectedReasoningEffort"
+                    :disabled="disabled || !activeThreadId || isModelMetadataPending"
                     @click="onRuntimeReasoningEffortSelect(option.value)"
                   >
                     <span>{{ option.label }}</span>
@@ -423,6 +471,7 @@
                     class="thread-composer-runtime-option thread-composer-runtime-option--stacked"
                     :class="{ 'is-selected': option.value === selectedSpeedMode }"
                     type="button"
+                    :aria-pressed="option.value === selectedSpeedMode"
                     :disabled="isSpeedToggleDisabled"
                     @click="onRuntimeSpeedModeSelect(option.value)"
                   >
@@ -437,10 +486,15 @@
 
         <div
           class="thread-composer-actions"
-          :class="{ 'thread-composer-actions--recording': isDictationRecording }"
+          :class="{ 'thread-composer-actions--recording': isDictationRecording || dictationState === 'transcribing' }"
         >
           <div v-if="dictationState === 'recording'" class="thread-composer-dictation-waveform-wrap" aria-hidden="true">
             <canvas ref="dictationWaveformCanvasRef" class="thread-composer-dictation-waveform" />
+          </div>
+
+          <div v-else-if="dictationState === 'transcribing'" class="thread-composer-dictation-processing" aria-live="polite">
+            <span class="thread-composer-dictation-processing-dot" aria-hidden="true" />
+            <span class="thread-composer-dictation-processing-text">转文字中</span>
           </div>
 
           <span v-if="dictationState === 'recording'" class="thread-composer-dictation-timer">
@@ -452,6 +506,7 @@
             class="thread-composer-mic"
             :class="{
               'thread-composer-mic--active': dictationState === 'recording',
+              'thread-composer-mic--busy': dictationState === 'transcribing',
             }"
             type="button"
             :aria-label="dictationButtonLabel"
@@ -486,7 +541,6 @@
           </button>
           <button
             v-else
-            v-show="!isCompactViewport || hasSubmitContent || isTurnInProgress"
             class="thread-composer-submit"
             :class="{ 'thread-composer-submit--queue': isTurnInProgress }"
             type="button"
@@ -544,6 +598,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type {
   CollaborationMode,
+  ComposerModelInfo,
   ComposerPluginInfo,
   ComposerPluginSelection,
   ComposerTurnOptions,
@@ -570,13 +625,16 @@ const props = defineProps<{
   activeThreadId: string
   cwd?: string
   models: string[]
+  availableModels?: ComposerModelInfo[]
   selectedModel: string
   selectedReasoningEffort: ReasoningEffort | ''
   selectedSpeedMode: SpeedMode
   selectedCollaborationMode: CollaborationMode
   skills?: SkillItem[]
+  hasLoadedSkills?: boolean
   plugins?: ComposerPluginInfo[]
   isLoadingPlugins?: boolean
+  hasLoadedPlugins?: boolean
   isTurnInProgress?: boolean
   isInterruptingTurn?: boolean
   isUpdatingSpeedMode?: boolean
@@ -615,6 +673,7 @@ export type SubmitPayload = {
 export type ThreadComposerExposed = {
   hydrateDraft: (payload: ComposerDraftPayload) => void
   hasUnsavedDraft: () => boolean
+  insertDictationTranscriptForRegression: (text: string) => boolean
 }
 
 const emit = defineEmits<{
@@ -645,16 +704,24 @@ type FolderUploadGroup = {
   isUploading: boolean
 }
 
+type DictationFeedbackTone = 'neutral' | 'success' | 'error'
+
 const draft = ref('')
 const selectedImages = ref<SelectedImage[]>([])
 const selectedSkills = ref<SkillItem[]>([])
 const selectedPlugins = ref<ComposerPluginSelection[]>([])
+const pendingRestoredSkills = ref<Array<{ name: string; path: string }>>([])
+const pendingRestoredPlugins = ref<ComposerPluginSelection[]>([])
 const goalModeEnabled = ref(false)
 const goalText = ref('')
+const pluginSearchQuery = ref('')
 const fileAttachments = ref<FileAttachment[]>([])
 const folderUploadGroups = ref<FolderUploadGroup[]>([])
 
 const dictationFeedback = ref('')
+const dictationFeedbackTone = ref<DictationFeedbackTone>('neutral')
+const dictationInsertFlash = ref(false)
+let dictationInsertFlashTimer: ReturnType<typeof setTimeout> | null = null
 const {
   state: dictationState,
   isSupported: isDictationSupported,
@@ -669,9 +736,9 @@ const {
 } = useDictation({
   getLanguage: () => props.dictationLanguage ?? 'auto',
   onTranscript: (text) => {
-    draft.value = draft.value ? `${draft.value}\n${text}` : text
-    dictationFeedback.value = ''
-    if (props.dictationAutoSend !== false) {
+    if (!insertDictationTranscript(text)) return
+    if (props.dictationAutoSend === true) {
+      clearDictationFeedback()
       const mode = resolveSubmitMode()
       onSubmit(mode, {
         rollbackLatestUserTurn: mode === 'steer' && dictationShouldRollbackLatestUserTurn,
@@ -682,20 +749,24 @@ const {
     nextTick(() => inputRef.value?.focus())
   },
   onEmpty: () => {
-    dictationFeedback.value = props.dictationClickToToggle
+    setDictationFeedback(props.dictationClickToToggle
       ? '未识别到语音，请说完后再点一次。'
-      : '未识别到语音，请按住麦克风后再说话。'
+      : '未识别到语音，请按住麦克风后再说话。', 'error')
   },
   onError: (error) => {
     if (error instanceof DOMException && error.name === 'NotAllowedError') {
-      dictationFeedback.value = '麦克风权限被拒绝。'
+      setDictationFeedback('麦克风权限被拒绝。', 'error')
       return
     }
-    dictationFeedback.value = error instanceof Error ? error.message : '语音听写失败。'
+    setDictationFeedback(error instanceof Error ? error.message : '语音听写失败。', 'error')
   },
 })
 const attachMenuRootRef = ref<HTMLElement | null>(null)
+const attachMenuRef = ref<HTMLElement | null>(null)
+const attachTriggerRef = ref<HTMLButtonElement | null>(null)
 const runtimeSettingsRootRef = ref<HTMLElement | null>(null)
+const runtimePanelRef = ref<HTMLElement | null>(null)
+const runtimeTriggerRef = ref<HTMLButtonElement | null>(null)
 const photoLibraryInputRef = ref<HTMLInputElement | null>(null)
 const cameraCaptureInputRef = ref<HTMLInputElement | null>(null)
 const audioCaptureInputRef = ref<HTMLInputElement | null>(null)
@@ -722,19 +793,23 @@ const MOBILE_STOP_GUARD_MS = 2500
 let lastActiveThreadId = ''
 let stopGuardTimer: ReturnType<typeof setTimeout> | null = null
 
-const reasoningOptions: Array<{ value: ReasoningEffort; label: string }> = [
-  { value: 'none', label: '智能' },
-  { value: 'minimal', label: '极低' },
-  { value: 'low', label: '低' },
-  { value: 'medium', label: '中' },
-  { value: 'high', label: '高' },
-  { value: 'xhigh', label: '超高' },
+const fallbackReasoningOptions: Array<{ value: ReasoningEffort; label: string; description: string }> = [
+  { value: 'none', label: '智能', description: '' },
+  { value: 'minimal', label: '极低', description: '' },
+  { value: 'low', label: '低', description: '' },
+  { value: 'medium', label: '中', description: '' },
+  { value: 'high', label: '高', description: '' },
+  { value: 'xhigh', label: '超高', description: '' },
 ]
 
 const speedModeOptions: Array<{ value: SpeedMode; label: string; description: string }> = [
   { value: 'standard', label: '标准', description: '默认速度，常规用量' },
   { value: 'fast', label: '快速', description: '约 1.5 倍速，用量增加' },
 ]
+
+const isModelMetadataPending = computed(() => (
+  props.models.length === 0 && (props.availableModels?.length ?? 0) === 0
+))
 
 function formatModelLabel(modelId: string): string {
   return modelId.trim().replace(/^gpt/i, 'GPT')
@@ -751,14 +826,57 @@ function formatModelTriggerLabel(modelId: string): string {
   return formatModelLabel(modelId).replace(/^GPT-?/i, '').trim()
 }
 
-const modelOptions = computed(() =>
-  props.models.map((modelId) => ({ value: modelId, label: formatModelLabel(modelId) })),
-)
+const modelOptions = computed(() => {
+  if ((props.availableModels?.length ?? 0) > 0) {
+    return (props.availableModels ?? []).map((model) => ({
+      value: model.model,
+      label: model.displayName || formatModelLabel(model.model),
+      description: model.description,
+      isDefault: model.isDefault,
+    }))
+  }
+  const fallbackModels = props.models.length > 0
+    ? props.models
+    : props.selectedModel.trim()
+      ? [props.selectedModel]
+      : []
+  return fallbackModels.map((modelId) => ({
+    value: modelId,
+    label: formatModelLabel(modelId),
+    description: isModelMetadataPending.value ? '正在读取可用模型…' : '',
+    isDefault: false,
+  }))
+})
+const selectedModelInfo = computed(() => (
+  (props.availableModels ?? []).find((model) => model.model === props.selectedModel || model.id === props.selectedModel)
+))
+const reasoningOptions = computed(() => {
+  const options = selectedModelInfo.value?.supportedReasoningEfforts ?? []
+  if (options.length === 0) {
+    if (isModelMetadataPending.value && props.selectedReasoningEffort) {
+      return fallbackReasoningOptions.filter((option) => option.value === props.selectedReasoningEffort)
+    }
+    return fallbackReasoningOptions
+  }
+  const labels: Record<ReasoningEffort, string> = {
+    none: '无',
+    minimal: '极低',
+    low: '低',
+    medium: '中',
+    high: '高',
+    xhigh: '超高',
+  }
+  return options.map((option) => ({
+    value: option.value,
+    label: labels[option.value],
+    description: option.description,
+  }))
+})
 const selectedModelTriggerLabel = computed(() =>
   formatModelTriggerLabel(props.selectedModel) || '模型',
 )
 const selectedReasoningEffortTriggerLabel = computed(() => {
-  const selected = reasoningOptions.find((option) => option.value === props.selectedReasoningEffort)
+  const selected = reasoningOptions.value.find((option) => option.value === props.selectedReasoningEffort)
   return selected?.label ?? '智能'
 })
 const selectedSpeedModeTriggerLabel = computed(() =>
@@ -774,7 +892,15 @@ const runtimeSettingsSummary = computed(() => {
 })
 
 const skillOptions = computed<SkillItem[]>(() => props.skills ?? [])
-const pluginOptions = computed<ComposerPluginInfo[]>(() => props.plugins ?? [])
+const allPluginOptions = computed<ComposerPluginInfo[]>(() => props.plugins ?? [])
+const pluginOptions = computed<ComposerPluginInfo[]>(() => {
+  const query = pluginSearchQuery.value.trim().toLocaleLowerCase()
+  if (!query) return allPluginOptions.value
+  return allPluginOptions.value.filter((plugin) => (
+    plugin.name.toLocaleLowerCase().includes(query) ||
+    plugin.description.toLocaleLowerCase().includes(query)
+  ))
+})
 const selectedSkillPaths = computed(() => selectedSkills.value.map((s) => s.path))
 const skillTriggerLabel = computed(() => (
   selectedSkills.value.length > 0
@@ -784,16 +910,18 @@ const skillTriggerLabel = computed(() => (
 const activeGoalLabel = computed(() => {
   const text = goalText.value.trim()
   if (goalModeEnabled.value && text) return text
-  return goalModeEnabled.value ? '持续追求当前任务目标' : '保持默认单轮回复'
+  return goalModeEnabled.value ? '随本次消息发送，不会持续运行' : '添加一次性任务要求'
 })
 const pluginMenuTitle = computed(() =>
-  pluginOptions.value.length > 0 ? `${pluginOptions.value.length} 个可用插件` : '插件',
+  allPluginOptions.value.length > 0 ? `${allPluginOptions.value.length} 个已连接插件` : '插件',
 )
 const pluginMenuSummary = computed(() => {
-  if (props.isLoadingPlugins) return '正在读取插件'
+  if (props.isLoadingPlugins && allPluginOptions.value.length === 0) return '正在读取已安装插件'
   if (selectedPlugins.value.length > 0) return `已选 ${selectedPlugins.value.length} 个插件`
-  if (pluginOptions.value.length > 0) return `${pluginOptions.value.length} 个插件`
-  return '读取插件'
+  if (allPluginOptions.value.length > 0) {
+    return `${allPluginOptions.value.length} 个已连接${props.isLoadingPlugins ? ' · 正在补充' : ''}`
+  }
+  return '查看已连接插件'
 })
 const skillDropdownOptions = computed(() =>
   (props.skills ?? []).map((s) => ({
@@ -802,11 +930,15 @@ const skillDropdownOptions = computed(() =>
     description: s.description,
   })),
 )
+const pendingCapabilityCount = computed(() => (
+  pendingRestoredSkills.value.length + pendingRestoredPlugins.value.length
+))
 
 const canSubmit = computed(() => {
   if (props.disabled) return false
   if (props.isUpdatingSpeedMode) return false
   if (!props.activeThreadId) return false
+  if (pendingCapabilityCount.value > 0) return false
   return draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0
 })
 const hasUnsavedDraft = computed(() =>
@@ -814,6 +946,7 @@ const hasUnsavedDraft = computed(() =>
   || selectedImages.value.length > 0
   || selectedSkills.value.length > 0
   || selectedPlugins.value.length > 0
+  || pendingCapabilityCount.value > 0
   || goalModeEnabled.value
   || fileAttachments.value.length > 0
   || folderUploadGroups.value.length > 0,
@@ -850,7 +983,7 @@ const shouldShowDictationButton = computed(() => props.showDictationButton !== f
 const usesDictationUploadFallback = computed(() =>
   shouldShowDictationButton.value && !supportsLiveRecording.value,
 )
-const DICTATION_UPLOAD_FALLBACK_MESSAGE = '当前地址不支持直接长按录音，点按麦克风会打开系统录音或音频上传。切到 HTTPS 或 localhost 后可直接长按说话。'
+const DICTATION_UPLOAD_FALLBACK_MESSAGE = '将打开系统录音或音频上传；转写完成后会先填入输入框。'
 const dictationButtonLabel = computed(() => {
   if (dictationState.value === 'recording') return '停止听写'
   if (dictationState.value === 'transcribing') return '正在转写'
@@ -858,18 +991,16 @@ const dictationButtonLabel = computed(() => {
   return props.dictationClickToToggle ? '点击开始听写' : '按住开始听写'
 })
 const dictationErrorText = computed(() =>
-  dictationState.value === 'idle' ? dictationFeedback.value.trim() : '',
+  dictationState.value === 'idle' && dictationFeedbackTone.value === 'error'
+    ? dictationFeedback.value.trim()
+    : '',
 )
 const dictationHelperText = computed(() => {
-  if (!shouldShowDictationButton.value) return ''
-  if (dictationState.value !== 'idle') return ''
-  if (usesDictationUploadFallback.value) {
-    return ''
+  if (dictationState.value === 'transcribing') return '正在把语音转成文字...'
+  if (dictationState.value === 'idle' && dictationFeedbackTone.value !== 'error') {
+    return dictationFeedback.value.trim()
   }
-  if (props.dictationClickToToggle) {
-    return '点击一次开始录音，再点击一次结束并转写。'
-  }
-  return '按住麦克风开始录音，松手后自动转写。'
+  return ''
 })
 const dictationDurationLabel = computed(() => {
   const totalSeconds = Math.max(0, Math.floor(recordingDurationMs.value / 1000))
@@ -879,7 +1010,7 @@ const dictationDurationLabel = computed(() => {
 })
 
 const placeholderText = computed(() =>
-  props.activeThreadId ? '输入消息...（@ 引用文件，/ 选择技能）' : '请先选择一个会话再发送消息',
+  props.activeThreadId ? '向 Codex 提问，+ 添加功能' : '请先选择一个会话再发送消息',
 )
 const hasSubmitContent = computed(() =>
   draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0,
@@ -906,6 +1037,43 @@ function armStopGuard(): void {
     isStopGuardActive.value = false
     stopGuardTimer = null
   }, MOBILE_STOP_GUARD_MS)
+}
+
+function clearDictationFeedback(): void {
+  dictationFeedback.value = ''
+  dictationFeedbackTone.value = 'neutral'
+}
+
+function setDictationFeedback(text: string, tone: DictationFeedbackTone = 'neutral'): void {
+  dictationFeedback.value = text
+  dictationFeedbackTone.value = tone
+}
+
+function syncDraftMenus(): void {
+  const text = draft.value
+  const shouldShowSlashMenu = text.startsWith('/')
+  if (shouldShowSlashMenu !== isSlashMenuOpen.value) {
+    isSlashMenuOpen.value = shouldShowSlashMenu
+  }
+  updateFileMentionState()
+}
+
+function insertDictationTranscript(text: string): boolean {
+  const normalized = text.trim()
+  if (!normalized) return false
+  const separator = draft.value.length > 0 && !/\s$/u.test(draft.value) ? '\n' : ''
+  draft.value = `${draft.value}${separator}${normalized}`
+  syncDraftMenus()
+  setDictationFeedback('已转成文字，可编辑后发送。', 'success')
+  dictationInsertFlash.value = true
+  if (dictationInsertFlashTimer) {
+    clearTimeout(dictationInsertFlashTimer)
+  }
+  dictationInsertFlashTimer = setTimeout(() => {
+    dictationInsertFlash.value = false
+    dictationInsertFlashTimer = null
+  }, 900)
+  return true
 }
 
 function onInterruptClick(): void {
@@ -940,9 +1108,12 @@ function normalizePluginSelection(plugin: ComposerPluginSelection): ComposerPlug
 }
 
 function buildTurnOptions(): ComposerTurnOptions | undefined {
-  const plugins = selectedPlugins.value.map((plugin) => normalizePluginSelection(plugin))
+  const availablePluginKeys = new Set((props.plugins ?? []).map((plugin) => plugin.mentionPath))
+  const plugins = selectedPlugins.value
+    .filter((plugin) => availablePluginKeys.has(getSelectedPluginKey(plugin)))
+    .map((plugin) => normalizePluginSelection(plugin))
   const goal = goalModeEnabled.value
-    ? { enabled: true, text: activeGoalLabel.value.trim() || '持续追求当前任务目标' }
+    ? { enabled: true, text: goalText.value.trim() || '主动给出可执行的下一步，并补齐关键风险。' }
     : undefined
   if (plugins.length === 0 && !goal) return undefined
   return {
@@ -961,7 +1132,9 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer', options?: { rollbackLatestU
     text,
     imageUrls: selectedImages.value.map((image) => image.url),
     fileAttachments: [...fileAttachments.value],
-    skills: selectedSkills.value.map((s) => ({ name: s.name, path: s.path })),
+    skills: selectedSkills.value
+      .filter((skill) => (props.skills ?? []).some((available) => available.path === skill.path))
+      .map((skill) => ({ name: skill.name, path: skill.path })),
     turnOptions: buildTurnOptions(),
     collaborationMode: props.selectedCollaborationMode,
     mode,
@@ -997,6 +1170,37 @@ function toRenderableImageUrl(value: string): string {
   return normalized
 }
 
+function reconcilePendingRestoredSkills(): void {
+  if (!props.hasLoadedSkills) {
+    return
+  }
+  const restoredSkills = pendingRestoredSkills.value.flatMap((skill) => {
+    const matched = (props.skills ?? []).find((item) => item.path === skill.path)
+    return matched ? [matched] : []
+  })
+  const mergedSkills = new Map(selectedSkills.value.map((skill) => [skill.path, skill]))
+  for (const skill of restoredSkills) mergedSkills.set(skill.path, skill)
+  selectedSkills.value = Array.from(mergedSkills.values())
+  pendingRestoredSkills.value = []
+}
+
+function reconcilePendingRestoredPlugins(): void {
+  if (!props.hasLoadedPlugins || props.isLoadingPlugins) {
+    return
+  }
+  const restoredPlugins = pendingRestoredPlugins.value.flatMap((plugin) => {
+    const normalized = normalizePluginSelection(plugin)
+    const matched = (props.plugins ?? []).find((item) => item.mentionPath === getSelectedPluginKey(normalized))
+    return matched
+      ? [{ id: matched.id, name: matched.name, path: matched.mentionPath, source: matched.source }]
+      : []
+  })
+  const mergedPlugins = new Map(selectedPlugins.value.map((plugin) => [getSelectedPluginKey(plugin), plugin]))
+  for (const plugin of restoredPlugins) mergedPlugins.set(getSelectedPluginKey(plugin), plugin)
+  selectedPlugins.value = Array.from(mergedPlugins.values())
+  pendingRestoredPlugins.value = []
+}
+
 function replaceDraftState(payload: ComposerDraftPayload): void {
   draftGeneration.value += 1
   draft.value = payload.text
@@ -1006,18 +1210,17 @@ function replaceDraftState(payload: ComposerDraftPayload): void {
     url,
     previewUrl: toRenderableImageUrl(url),
   }))
-  selectedSkills.value = payload.skills.map((skill) => (
-    (props.skills ?? []).find((item) => item.path === skill.path)
-    ?? { name: skill.name, description: '', path: skill.path }
-  ))
-  selectedPlugins.value = (payload.plugins ?? []).map((plugin) => {
-    return normalizePluginSelection(plugin)
-  })
+  selectedSkills.value = []
+  selectedPlugins.value = []
+  pendingRestoredSkills.value = payload.skills.map((skill) => ({ ...skill }))
+  pendingRestoredPlugins.value = (payload.plugins ?? []).map((plugin) => ({ ...plugin }))
+  reconcilePendingRestoredSkills()
+  reconcilePendingRestoredPlugins()
   goalModeEnabled.value = payload.goal?.enabled === true
   goalText.value = payload.goal?.text ?? ''
   fileAttachments.value = payload.fileAttachments.map((attachment) => ({ ...attachment }))
   folderUploadGroups.value = []
-  dictationFeedback.value = ''
+  clearDictationFeedback()
   isAttachMenuOpen.value = false
   isPluginSubmenuOpen.value = false
   isRuntimeSettingsOpen.value = false
@@ -1087,6 +1290,7 @@ function loadPersistedDraftForThread(threadId: string): ComposerDraftPayload | n
           )
           && (
             typeof (plugin as Partial<ComposerPluginSelection>).source === 'undefined'
+            || (plugin as Partial<ComposerPluginSelection>).source === 'plugin'
             || (plugin as Partial<ComposerPluginSelection>).source === 'mcp'
             || (plugin as Partial<ComposerPluginSelection>).source === 'app'
           )
@@ -1147,8 +1351,10 @@ function getCurrentDraftPayload(): ComposerDraftPayload {
     text: draft.value,
     imageUrls: selectedImages.value.map((image) => image.url),
     fileAttachments: fileAttachments.value.map((attachment) => ({ ...attachment })),
-    skills: selectedSkills.value.map((skill) => ({ name: skill.name, path: skill.path })),
-    plugins: selectedPlugins.value.map((plugin) => ({ ...plugin })),
+    skills: (pendingRestoredSkills.value.length > 0 ? pendingRestoredSkills.value : selectedSkills.value)
+      .map((skill) => ({ name: skill.name, path: skill.path })),
+    plugins: (pendingRestoredPlugins.value.length > 0 ? pendingRestoredPlugins.value : selectedPlugins.value)
+      .map((plugin) => ({ ...plugin })),
     goal: { enabled: goalModeEnabled.value, text: goalText.value.trim() },
   }
 }
@@ -1183,15 +1389,44 @@ function onRuntimeSpeedModeSelect(value: SpeedMode): void {
 }
 
 function toggleRuntimeSettings(): void {
-  if (isInteractionDisabled.value || props.models.length === 0) return
+  if (isInteractionDisabled.value || (props.models.length === 0 && !props.selectedModel)) return
   isRuntimeSettingsOpen.value = !isRuntimeSettingsOpen.value
   if (isRuntimeSettingsOpen.value) {
     isAttachMenuOpen.value = false
+    void nextTick(() => {
+      getRuntimePanelFocusableElements()[0]?.focus()
+    })
   }
 }
 
-function closeRuntimeSettings(): void {
+function closeRuntimeSettings(restoreFocus = true): void {
   isRuntimeSettingsOpen.value = false
+  if (restoreFocus) {
+    void nextTick(() => runtimeTriggerRef.value?.focus())
+  }
+}
+
+function getRuntimePanelFocusableElements(): HTMLElement[] {
+  const panel = runtimePanelRef.value
+  if (!panel) return []
+  return Array.from(panel.querySelectorAll<HTMLElement>('button:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+    .filter((element) => element.getClientRects().length > 0)
+}
+
+function onRuntimePanelKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Tab') return
+  const focusable = getRuntimePanelFocusableElements()
+  if (focusable.length === 0) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (!first || !last) return
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
 }
 
 function togglePlanMode(): void {
@@ -1203,7 +1438,7 @@ function toggleGoalMode(): void {
   if (isInteractionDisabled.value) return
   goalModeEnabled.value = !goalModeEnabled.value
   if (goalModeEnabled.value && !goalText.value.trim()) {
-    goalText.value = '持续追求当前任务目标，主动给出可执行的下一步。'
+    goalText.value = '主动给出可执行的下一步，并补齐关键风险。'
   }
 }
 
@@ -1214,7 +1449,7 @@ function disableGoalMode(): void {
 function togglePluginSubmenu(): void {
   if (isInteractionDisabled.value) return
   isPluginSubmenuOpen.value = !isPluginSubmenuOpen.value
-  if (isPluginSubmenuOpen.value && pluginOptions.value.length === 0 && !props.isLoadingPlugins) {
+  if (isPluginSubmenuOpen.value && allPluginOptions.value.length === 0 && !props.isLoadingPlugins) {
     emit('refresh-plugins')
   }
 }
@@ -1224,6 +1459,7 @@ function isPluginSelected(plugin: ComposerPluginInfo): boolean {
 }
 
 function isPluginSelectable(plugin: ComposerPluginInfo): boolean {
+  if (plugin.source === 'plugin') return plugin.isEnabled !== false
   if (plugin.source === 'app') {
     return plugin.isAccessible !== false && plugin.isEnabled !== false
   }
@@ -1271,6 +1507,7 @@ function getPluginAvatar(name: string): string {
 }
 
 function getPluginMeta(plugin: ComposerPluginInfo): string {
+  if (plugin.source === 'plugin') return plugin.description || '已安装插件'
   if (plugin.source === 'app') {
     if (plugin.isAccessible === false) return '当前不可访问'
     if (plugin.isEnabled === false) return '未启用'
@@ -1294,7 +1531,7 @@ function onDictationToggle(): void {
   }
   if (!props.dictationClickToToggle) return
   if (dictationFeedback.value) {
-    dictationFeedback.value = ''
+    clearDictationFeedback()
   }
   if (dictationState.value === 'idle') {
     dictationShouldRollbackLatestUserTurn = false
@@ -1317,7 +1554,7 @@ function onDictationPressStart(event: PointerEvent): void {
     }
   }
   if (dictationFeedback.value) {
-    dictationFeedback.value = ''
+    clearDictationFeedback()
   }
   dictationShouldRollbackLatestUserTurn = false
   window.addEventListener('pointerup', onDictationPressEnd)
@@ -1361,14 +1598,45 @@ function toggleAttachMenu(): void {
   isAttachMenuOpen.value = !isAttachMenuOpen.value
   if (isAttachMenuOpen.value) {
     isRuntimeSettingsOpen.value = false
+    void nextTick(() => {
+      getAttachMenuFocusableElements()[0]?.focus()
+    })
   } else {
     isPluginSubmenuOpen.value = false
   }
 }
 
-function closeAttachMenu(): void {
+function closeAttachMenu(restoreFocus = true): void {
   isAttachMenuOpen.value = false
   isPluginSubmenuOpen.value = false
+  pluginSearchQuery.value = ''
+  if (restoreFocus) {
+    void nextTick(() => attachTriggerRef.value?.focus())
+  }
+}
+
+function getAttachMenuFocusableElements(): HTMLElement[] {
+  const menu = attachMenuRef.value
+  if (!menu) return []
+  return Array.from(menu.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter((element) => element.getClientRects().length > 0)
+}
+
+function onAttachMenuKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Tab') return
+  const focusable = getAttachMenuFocusableElements()
+  if (focusable.length === 0) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (!first || !last) return
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
 }
 
 function triggerPhotoLibrary(): void {
@@ -1383,7 +1651,7 @@ function triggerCameraCapture(): void {
 
 function triggerAudioCapture(): void {
   if (isInteractionDisabled.value) return
-  dictationFeedback.value = DICTATION_UPLOAD_FALLBACK_MESSAGE
+  setDictationFeedback(DICTATION_UPLOAD_FALLBACK_MESSAGE, 'neutral')
   const input = audioCaptureInputRef.value
   if (!input) return
   input.value = ''
@@ -1403,11 +1671,11 @@ async function onAudioCaptureChange(event: Event): Promise<void> {
   }
   if (!file) return
   dictationShouldRollbackLatestUserTurn = false
-  dictationFeedback.value = ''
+  clearDictationFeedback()
   try {
     await transcribeFile(file)
   } catch (error) {
-    dictationFeedback.value = error instanceof Error ? error.message : '语音听写失败。'
+    setDictationFeedback(error instanceof Error ? error.message : '语音听写失败。', 'error')
   }
 }
 
@@ -1568,14 +1836,9 @@ function onFolderPickerChange(event: Event): void {
 
 function onInputChange(): void {
   if (dictationFeedback.value) {
-    dictationFeedback.value = ''
+    clearDictationFeedback()
   }
-  const text = draft.value
-  const shouldShowSlashMenu = text.startsWith('/')
-  if (shouldShowSlashMenu !== isSlashMenuOpen.value) {
-    isSlashMenuOpen.value = shouldShowSlashMenu
-  }
-  updateFileMentionState()
+  syncDraftMenus()
 }
 
 function onInputKeydown(event: KeyboardEvent): void {
@@ -1782,16 +2045,22 @@ function onDocumentClick(event: MouseEvent): void {
   if (isAttachMenuOpen.value) {
     const attachRoot = attachMenuRootRef.value
     if (attachRoot && !attachRoot.contains(target)) {
-      closeAttachMenu()
+      closeAttachMenu(false)
     }
   }
 
   if (isRuntimeSettingsOpen.value) {
     const runtimeRoot = runtimeSettingsRootRef.value
     if (runtimeRoot && !runtimeRoot.contains(target)) {
-      isRuntimeSettingsOpen.value = false
+      closeRuntimeSettings(false)
     }
   }
+}
+
+function onDocumentKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return
+  if (isAttachMenuOpen.value) closeAttachMenu()
+  if (isRuntimeSettingsOpen.value) closeRuntimeSettings()
 }
 
 function syncCompactViewport(): void {
@@ -1802,6 +2071,7 @@ function syncCompactViewport(): void {
 onMounted(() => {
   syncCompactViewport()
   document.addEventListener('click', onDocumentClick)
+  document.addEventListener('keydown', onDocumentKeydown)
   window.addEventListener('resize', syncCompactViewport)
   window.visualViewport?.addEventListener('resize', syncCompactViewport)
 })
@@ -1809,6 +2079,7 @@ onMounted(() => {
 defineExpose<ThreadComposerExposed>({
   hydrateDraft,
   hasUnsavedDraft: () => hasUnsavedDraft.value,
+  insertDictationTranscriptForRegression: insertDictationTranscript,
 })
 
 onBeforeUnmount(() => {
@@ -1816,7 +2087,12 @@ onBeforeUnmount(() => {
     clearTimeout(stopGuardTimer)
     stopGuardTimer = null
   }
+  if (dictationInsertFlashTimer) {
+    clearTimeout(dictationInsertFlashTimer)
+    dictationInsertFlashTimer = null
+  }
   document.removeEventListener('click', onDocumentClick)
+  document.removeEventListener('keydown', onDocumentKeydown)
   document.removeEventListener('visibilitychange', onDocumentVisibilityChange)
   window.removeEventListener('resize', syncCompactViewport)
   window.visualViewport?.removeEventListener('resize', syncCompactViewport)
@@ -1846,7 +2122,17 @@ watch(
   { immediate: true },
 )
 
-watch([draft, selectedImages, fileAttachments, selectedSkills, selectedPlugins, goalModeEnabled, goalText], () => {
+watch([
+  draft,
+  selectedImages,
+  fileAttachments,
+  selectedSkills,
+  selectedPlugins,
+  pendingRestoredSkills,
+  pendingRestoredPlugins,
+  goalModeEnabled,
+  goalText,
+], () => {
   if (!lastActiveThreadId) return
   persistDraftForThread(lastActiveThreadId, getCurrentDraftPayload())
 }, { deep: true })
@@ -1861,14 +2147,35 @@ watch(
 )
 
 watch(
-  () => props.plugins,
+  [() => props.plugins, () => props.isLoadingPlugins, () => props.hasLoadedPlugins],
   () => {
+    if (pendingRestoredPlugins.value.length > 0) {
+      reconcilePendingRestoredPlugins()
+      if (pendingRestoredPlugins.value.length > 0) return
+    }
     if (selectedPlugins.value.length === 0) return
-    selectedPlugins.value = selectedPlugins.value.map((plugin) => {
+    if (!props.hasLoadedPlugins || props.isLoadingPlugins) return
+    selectedPlugins.value = selectedPlugins.value.flatMap((plugin) => {
       const matched = (props.plugins ?? []).find((item) => item.mentionPath === getSelectedPluginKey(plugin))
       return matched
-        ? { id: matched.id, name: matched.name, path: matched.mentionPath, source: matched.source }
-        : normalizePluginSelection(plugin)
+        ? [{ id: matched.id, name: matched.name, path: matched.mentionPath, source: matched.source }]
+        : []
+    })
+  },
+)
+
+watch(
+  [() => props.skills, () => props.hasLoadedSkills],
+  () => {
+    if (pendingRestoredSkills.value.length > 0) {
+      reconcilePendingRestoredSkills()
+      if (pendingRestoredSkills.value.length > 0) return
+    }
+    if (selectedSkills.value.length === 0) return
+    if (!props.hasLoadedSkills) return
+    selectedSkills.value = selectedSkills.value.flatMap((skill) => {
+      const matched = (props.skills ?? []).find((item) => item.path === skill.path)
+      return matched ? [matched] : []
     })
   },
 )
@@ -1890,12 +2197,27 @@ watch(
 
 .thread-composer {
   @apply w-full mx-auto px-2 sm:px-6;
-  max-width: min(var(--content-shell-max-width, 88rem), 100%);
+  max-width: min(var(--ui-composer-max, var(--content-shell-max-width, 88rem)), 100%);
 }
 
 .thread-composer-shell {
-  @apply relative rounded-[20px] border border-[#e3d9c8] bg-[#fffdf8] p-2 sm:p-2.5;
-  box-shadow: 0 12px 26px -34px rgba(31, 41, 55, 0.16);
+  @apply relative border p-2 sm:p-2.5;
+  min-height: var(--ui-composer-min-height);
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: 0 8px 20px rgb(0 0 0 / 0.045);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background-color 180ms ease;
+}
+
+.thread-composer-shell--dictation-inserted {
+  border-color: color-mix(in srgb, var(--ui-accent, #0f766e) 42%, var(--ui-border-subtle));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--ui-accent, #0f766e) 18%, transparent),
+    0 16px 34px -30px rgba(15, 118, 110, 0.55);
 }
 
 .thread-composer-shell--no-top-radius {
@@ -1927,11 +2249,15 @@ watch(
 }
 
 .thread-composer-folder-chip {
-  @apply inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800;
+  @apply inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-folder-chip-icon {
-  @apply h-3.5 w-3.5 text-amber-600 shrink-0;
+  @apply h-3.5 w-3.5 shrink-0;
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-folder-chip-name {
@@ -1939,11 +2265,17 @@ watch(
 }
 
 .thread-composer-folder-chip-meta {
-  @apply text-amber-700/90;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-folder-chip-remove {
-  @apply ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border-0 bg-transparent text-amber-600 transition hover:bg-amber-200 hover:text-amber-800 text-xs leading-none p-0;
+  @apply ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border-0 bg-transparent transition text-xs leading-none p-0;
+  color: var(--ui-text-tertiary);
+}
+
+.thread-composer-folder-chip-remove:hover {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .thread-composer-file-chip {
@@ -1967,7 +2299,10 @@ watch(
 }
 
 .thread-composer-skill-chip {
-  @apply inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700;
+  @apply inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-accent);
 }
 
 .thread-composer-skill-chip-name {
@@ -1983,7 +2318,10 @@ watch(
 }
 
 .thread-composer-option-chip {
-  @apply inline-flex max-w-full items-center gap-1.5 rounded-md border border-[#d8cfc0] bg-[#f7f3ea] px-2 py-0.5 text-xs text-[#544a3d];
+  @apply inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-option-chip--goal {
@@ -2016,7 +2354,10 @@ watch(
 }
 
 .thread-composer-file-mentions--sheet {
-  @apply fixed left-3 right-3 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-[70] max-h-[min(40dvh,22rem)] rounded-[22px] border border-[#ddd5c7] bg-[#fffdf8] p-2;
+  @apply fixed left-3 right-3 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-[70] max-h-[min(40dvh,22rem)] border p-2;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
 }
 
 .thread-composer-file-mention-row {
@@ -2071,7 +2412,8 @@ watch(
 }
 
 .thread-composer-input {
-  @apply w-full min-w-0 min-h-9 sm:min-h-10 max-h-36 rounded-xl border-0 bg-transparent px-1 py-1.5 text-sm text-zinc-900 outline-none transition resize-none overflow-y-auto;
+  @apply w-full min-w-0 min-h-8 max-h-32 rounded-xl border-0 bg-transparent px-1 py-1 text-sm outline-none transition resize-none overflow-y-auto;
+  color: var(--ui-text-primary);
   font-family: var(--font-sans-reading);
   font-size: var(--font-size-reading, 15px);
   line-height: 1.55;
@@ -2087,7 +2429,7 @@ watch(
 }
 
 .thread-composer-controls {
-  @apply relative mt-1.5 sm:mt-2 flex items-center gap-2 sm:gap-2.5 overflow-visible;
+  @apply relative mt-1.5 flex items-center gap-2 sm:gap-2.5 overflow-visible;
 }
 
 .thread-composer-controls--recording {
@@ -2099,32 +2441,57 @@ watch(
 }
 
 .thread-composer-attach-trigger {
-  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-transparent bg-transparent text-xl leading-none text-zinc-700 transition hover:border-[#e3dacb] hover:bg-[#f5f0e6] hover:text-zinc-900 disabled:cursor-not-allowed disabled:text-zinc-400;
+  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center border border-transparent bg-transparent text-xl leading-none transition disabled:cursor-not-allowed disabled:text-zinc-400;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.thread-composer-attach-trigger:hover,
+.thread-composer-attach-trigger:focus-visible {
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .thread-composer-attach-menu {
-  @apply absolute bottom-11 left-0 z-20 w-72 max-w-[calc(100vw_-_1rem)] rounded-[18px] border border-[#ddd5c7] bg-[#fffdf8] p-1.5 shadow-xl shadow-[#1f2937]/10;
+  @apply absolute bottom-11 left-0 z-20 w-72 max-w-[calc(100vw_-_1rem)] border p-1.5;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: var(--ui-shadow-float);
 }
 
 .thread-composer-attach-menu--sheet {
-  @apply fixed left-3 right-3 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-[70] w-auto max-w-none rounded-[24px] border border-[#ddd5c7] bg-[#fffdf8] p-2;
+  @apply fixed left-3 right-3 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-[70] w-auto max-w-none border p-2;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
   max-height: min(82dvh, 46rem);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
 .thread-composer-attach-item {
-  @apply flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[14px] border-0 bg-transparent px-2.5 py-2 text-left text-sm text-[#3b332a] transition hover:bg-[#f7f3ea] disabled:cursor-not-allowed disabled:text-zinc-400;
+  @apply flex min-h-11 w-full min-w-0 items-center gap-2.5 border-0 bg-transparent px-2.5 py-2 text-left text-sm transition disabled:cursor-not-allowed disabled:text-zinc-400;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-primary);
   font-family: var(--font-sans-ui);
 }
 
+.thread-composer-attach-item:hover,
+.thread-composer-attach-item:focus-visible {
+  background: var(--ui-bg-row-hover);
+}
+
 .thread-composer-attach-item-icon {
-  @apply h-5 w-5 shrink-0 text-[#6f6555];
+  @apply h-5 w-5 shrink-0;
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-attach-item-icon--text,
 .thread-composer-attach-item-icon--grid {
-  @apply inline-flex h-5 w-5 items-center justify-center rounded-md text-sm font-semibold text-[#6f6555];
+  @apply inline-flex h-5 w-5 items-center justify-center rounded-md text-sm font-semibold;
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-attach-item-body {
@@ -2132,11 +2499,13 @@ watch(
 }
 
 .thread-composer-attach-item-title {
-  @apply truncate text-sm font-semibold leading-snug text-[#2f281f];
+  @apply truncate text-sm font-semibold leading-snug;
+  color: var(--ui-text-primary);
 }
 
 .thread-composer-attach-item-subtitle {
-  @apply truncate text-xs font-normal leading-snug text-[#8a8173];
+  @apply truncate text-xs font-normal leading-snug;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-attach-item--toggle,
@@ -2145,7 +2514,8 @@ watch(
 }
 
 .thread-composer-switch {
-  @apply relative h-6 w-10 shrink-0 rounded-full bg-[#e5ded3] transition;
+  @apply relative h-6 w-10 shrink-0 rounded-full transition;
+  background: var(--ui-bg-row-active);
 }
 
 .thread-composer-switch::after {
@@ -2166,7 +2536,11 @@ watch(
 }
 
 .thread-composer-goal-input {
-  @apply w-full resize-none rounded-[14px] border border-[#e4dac9] bg-[#fffaf3] px-3 py-2 text-sm leading-relaxed text-[#3b332a] outline-none transition focus:border-[#0d9488] disabled:cursor-not-allowed disabled:opacity-60;
+  @apply w-full resize-none border px-3 py-2 text-sm leading-relaxed outline-none transition focus:border-[#0d9488] disabled:cursor-not-allowed disabled:opacity-60;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-primary);
   font-family: var(--font-sans-reading);
 }
 
@@ -2175,7 +2549,8 @@ watch(
 }
 
 .thread-composer-attach-chevron {
-  @apply h-4 w-4 shrink-0 text-[#8a8173] transition-transform;
+  @apply h-4 w-4 shrink-0 transition-transform;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-attach-chevron.is-open {
@@ -2183,19 +2558,39 @@ watch(
 }
 
 .thread-composer-plugin-menu {
-  @apply absolute bottom-0 left-[calc(100%+0.5rem)] z-[75] w-80 max-w-[calc(100vw_-_2rem)] rounded-[18px] border border-[#ddd5c7] bg-[#fffdf8] p-1.5 shadow-xl shadow-[#1f2937]/10;
+  @apply absolute bottom-0 left-[calc(100%+0.5rem)] z-[75] w-80 max-w-[calc(100vw_-_2rem)] border p-1.5;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.08);
   max-height: min(32rem, calc(100dvh - 10rem));
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
 .thread-composer-plugin-menu--inline {
-  @apply static mt-1 w-full max-w-none rounded-[16px] border-[#e4dac9] bg-[#fffaf3] shadow-none;
+  @apply static mt-1 w-full max-w-none shadow-none;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
   max-height: min(42dvh, 22rem);
 }
 
 .thread-composer-plugin-menu-header {
-  @apply flex items-center justify-between gap-2 px-2 py-1.5 text-xs font-semibold text-[#8a8173];
+  @apply flex items-center justify-between gap-2 px-2 py-1.5 text-xs font-semibold;
+  color: var(--ui-text-secondary);
+}
+
+.thread-composer-plugin-search {
+  @apply mb-1 h-9 w-full border px-2.5 text-sm outline-none transition;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
+}
+
+.thread-composer-plugin-search:focus {
+  border-color: color-mix(in srgb, var(--ui-accent) 48%, var(--ui-border-strong));
 }
 
 .thread-composer-plugin-menu-action {
@@ -2203,11 +2598,18 @@ watch(
 }
 
 .thread-composer-plugin-menu-empty {
-  @apply px-2 py-3 text-sm text-[#8a8173];
+  @apply px-2 py-3 text-sm;
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-plugin-row {
-  @apply flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[14px] border-0 bg-transparent px-2 py-2 text-left transition hover:bg-[#f7f3ea];
+  @apply flex min-h-11 w-full min-w-0 items-center gap-2 border-0 bg-transparent px-2 py-2 text-left transition;
+  border-radius: var(--ui-radius-control);
+}
+
+.thread-composer-plugin-row:hover,
+.thread-composer-plugin-row:focus-visible {
+  background: var(--ui-bg-row-hover);
 }
 
 .thread-composer-plugin-row.is-selected {
@@ -2223,7 +2625,9 @@ watch(
 }
 
 .thread-composer-plugin-avatar {
-  @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#e9e4da] text-xs font-bold text-[#6f6555];
+  @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold;
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-plugin-row-body {
@@ -2231,11 +2635,13 @@ watch(
 }
 
 .thread-composer-plugin-row-title {
-  @apply truncate text-sm font-semibold text-[#2f281f];
+  @apply truncate text-sm font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .thread-composer-plugin-row-meta {
-  @apply truncate text-xs text-[#8a8173];
+  @apply truncate text-xs;
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-plugin-check,
@@ -2248,11 +2654,8 @@ watch(
 }
 
 .thread-composer-plugin-login {
-  @apply bg-[#f0ede5] text-[#6f6555];
-}
-
-.thread-composer-plugin-reload {
-  @apply mt-1 flex min-h-10 w-full items-center justify-center rounded-[14px] border border-[#e4dac9] bg-[#fffaf3] px-3 text-sm font-semibold text-[#544a3d] transition hover:bg-[#f7f3ea] disabled:cursor-not-allowed disabled:opacity-50;
+  background: var(--ui-bg-row-active);
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-attach-separator {
@@ -2264,7 +2667,8 @@ watch(
 }
 
 .thread-composer-attach-section-title {
-  @apply text-xs font-semibold text-[#8a8173];
+  @apply text-xs font-semibold;
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-attach-mode-toggle {
@@ -2292,7 +2696,17 @@ watch(
 }
 
 .thread-composer-attach-skill-dropdown :deep(.search-dropdown-trigger) {
-  @apply h-10 w-full justify-between rounded-[16px] border border-[#e4dac9] bg-[#fffaf3] px-3 text-sm font-semibold text-[#544a3d] transition hover:border-[#d7ccb8] hover:bg-[#f7f3ea] disabled:cursor-not-allowed disabled:opacity-50;
+  @apply h-10 w-full justify-between border px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
+}
+
+.thread-composer-attach-skill-dropdown :deep(.search-dropdown-trigger:hover),
+.thread-composer-attach-skill-dropdown :deep(.search-dropdown-trigger:focus-visible) {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .thread-composer-attach-skill-dropdown :deep(.search-dropdown-value) {
@@ -2309,13 +2723,26 @@ watch(
 }
 
 .thread-composer-runtime-trigger {
-  @apply inline-flex h-8 w-full min-w-0 items-center justify-center gap-1 rounded-[14px] border-0 bg-transparent px-2 text-[13px] font-semibold text-[#544a3d] transition hover:bg-[#f7f3ea] active:bg-[#efe8dc] disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex h-8 w-full min-w-0 items-center justify-center gap-1 border-0 bg-transparent px-2 text-[13px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-50;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
   font-family: var(--font-sans-ui);
   letter-spacing: 0;
 }
 
+.thread-composer-runtime-trigger:hover,
+.thread-composer-runtime-trigger:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+.thread-composer-runtime-trigger:active {
+  background: var(--ui-bg-row-active);
+}
+
 .thread-composer-runtime-bolt {
-  @apply h-4 w-4 shrink-0 text-[#6f6555];
+  @apply h-4 w-4 shrink-0;
+  color: currentColor;
 }
 
 .thread-composer-runtime-summary {
@@ -2323,7 +2750,8 @@ watch(
 }
 
 .thread-composer-runtime-chevron {
-  @apply h-3 w-3 shrink-0 text-[#7a705f] transition-transform;
+  @apply h-3 w-3 shrink-0 transition-transform;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-runtime-chevron.is-open {
@@ -2331,7 +2759,11 @@ watch(
 }
 
 .thread-composer-runtime-panel {
-  @apply absolute bottom-[calc(100%+0.5rem)] left-0 z-[70] w-[20rem] max-w-[calc(100vw_-_1.5rem)] rounded-[22px] border border-[#ddd5c7] bg-[#fffdf8] p-2 shadow-xl shadow-[#1f2937]/10;
+  @apply absolute bottom-[calc(100%+0.5rem)] left-0 z-[70] w-[20rem] max-w-[calc(100vw_-_1.5rem)] border p-2;
+  border-radius: var(--ui-radius-composer);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: var(--ui-shadow-float);
 }
 
 .thread-composer-runtime-panel--sheet {
@@ -2339,7 +2771,8 @@ watch(
 }
 
 .thread-composer-runtime-handle {
-  @apply mx-auto mb-2 h-1 w-10 rounded-full bg-[#d8d0c2];
+  @apply mx-auto mb-2 h-1 w-10 rounded-full;
+  background: var(--ui-border-strong);
 }
 
 .thread-composer-runtime-section {
@@ -2347,11 +2780,12 @@ watch(
 }
 
 .thread-composer-runtime-section + .thread-composer-runtime-section {
-  @apply border-t border-[#eee7dc];
+  border-top: 1px solid var(--ui-border-subtle);
 }
 
 .thread-composer-runtime-section-title {
-  @apply px-2 pb-1 text-xs font-semibold text-[#8a8173];
+  @apply px-2 pb-1 text-xs font-semibold;
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-runtime-options {
@@ -2363,9 +2797,16 @@ watch(
 }
 
 .thread-composer-runtime-option {
-  @apply relative flex min-h-9 min-w-0 items-center justify-between gap-2 rounded-[14px] border-0 bg-transparent px-2.5 py-2 text-left text-sm font-medium text-[#3b332a] transition hover:bg-[#f7f3ea] disabled:cursor-not-allowed disabled:opacity-50;
+  @apply relative flex min-h-9 min-w-0 items-center justify-between gap-2 border-0 bg-transparent px-2.5 py-2 text-left text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-primary);
   font-family: var(--font-sans-ui);
   letter-spacing: 0;
+}
+
+.thread-composer-runtime-option:hover,
+.thread-composer-runtime-option:focus-visible {
+  background: var(--ui-bg-row-hover);
 }
 
 .thread-composer-runtime-option span {
@@ -2373,7 +2814,8 @@ watch(
 }
 
 .thread-composer-runtime-option small {
-  @apply mt-0.5 block text-xs font-normal leading-snug text-[#8a8173];
+  @apply mt-0.5 block text-xs font-normal leading-snug;
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-runtime-option--stacked {
@@ -2381,7 +2823,9 @@ watch(
 }
 
 .thread-composer-runtime-option.is-selected {
-  @apply bg-[#f7f3ea] pr-7 text-[#0f766e];
+  @apply pr-7;
+  background: var(--ui-bg-row-active);
+  color: var(--ui-accent);
 }
 
 .thread-composer-runtime-option.is-selected::after {
@@ -2406,15 +2850,28 @@ watch(
 }
 
 .thread-composer-mic {
-  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#e2d8c8] bg-[#f7f3ea] text-zinc-600 transition hover:bg-[#efe8dc] hover:text-zinc-900 disabled:cursor-not-allowed disabled:text-zinc-400;
+  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:text-zinc-400;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
 
+.thread-composer-mic:hover,
+.thread-composer-mic:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
 .thread-composer-mic--active {
   @apply bg-red-100 text-red-600 hover:bg-red-200 hover:text-red-700;
+}
+
+.thread-composer-mic--busy {
+  color: var(--ui-accent);
 }
 
 .thread-composer-mic-icon {
@@ -2433,17 +2890,56 @@ watch(
   @apply shrink-0 text-sm text-zinc-500 tabular-nums;
 }
 
+.thread-composer-dictation-processing {
+  @apply flex min-w-0 flex-1 items-center gap-2 text-sm;
+  color: var(--ui-text-secondary);
+}
+
+.thread-composer-dictation-processing-dot {
+  @apply h-2.5 w-2.5 shrink-0 rounded-full;
+  animation: composer-dictation-pulse 900ms ease-in-out infinite;
+  background: var(--ui-accent);
+}
+
+.thread-composer-dictation-processing-text {
+  @apply truncate;
+}
+
 .thread-composer-dictation-error {
   @apply mb-2 px-1 text-xs text-amber-700;
 }
 
 .thread-composer-dictation-helper {
-  @apply mb-2 px-1 text-xs text-[#7a705f];
+  @apply mb-2 px-1 text-xs;
+  color: var(--ui-text-secondary);
+}
+
+.thread-composer-dictation-helper--success {
+  color: var(--ui-accent);
+}
+
+@keyframes composer-dictation-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-composer-dictation-processing-dot {
+    animation: none;
+  }
 }
 
 .thread-composer-submit {
-  @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-0 bg-[#0d9488] text-white transition hover:bg-[#0f766e] disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-500;
-  box-shadow: 0 12px 24px -20px rgba(13, 148, 136, 0.56);
+  @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-0 bg-[#1f1f1f] text-white transition hover:bg-black disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-500;
+  box-shadow: 0 12px 24px -22px rgba(0, 0, 0, 0.55);
 }
 
 .thread-composer-submit--queue {
@@ -2456,7 +2952,8 @@ watch(
   }
 
   .thread-composer-shell {
-    @apply px-4 py-3 rounded-[22px];
+    @apply px-3 py-1.5;
+    border-radius: var(--ui-radius-composer);
   }
 }
 
@@ -2482,7 +2979,10 @@ watch(
   }
 
   .thread-composer-shell {
-    @apply rounded-[16px] px-2.5 py-1.5;
+    @apply px-2.5 py-1.5;
+    min-height: 86px;
+    border-radius: 18px;
+    box-shadow: 0 6px 16px rgb(0 0 0 / 0.045);
   }
 
   .thread-composer-input {
@@ -2507,11 +3007,14 @@ watch(
   }
 
   .thread-composer-runtime {
-    width: min(10.75rem, 100%);
+    width: min(11.25rem, 100%);
   }
 
   .thread-composer-runtime-trigger {
-    @apply h-9 gap-1 rounded-[14px] border border-[#e4dac9] bg-[#f7f3ea] px-2 text-[13px];
+    @apply h-9 gap-1 border px-2 text-[13px];
+    border-radius: var(--ui-radius-control);
+    border-color: var(--ui-border-subtle);
+    background: var(--ui-bg-surface-muted);
   }
 
   .thread-composer-actions {

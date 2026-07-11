@@ -102,7 +102,10 @@ function getMessageMeta(message: QueuedMessageRow): string {
 }
 
 .queued-messages-inner {
-  @apply flex max-h-[34dvh] flex-col gap-1 overflow-y-auto rounded-[22px] border border-[#ddd5c7] bg-[#fffdf8] px-3 py-2.5;
+  @apply flex max-h-[34dvh] flex-col gap-1 overflow-y-auto border px-3 py-2.5;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: color-mix(in srgb, var(--ui-bg-surface) 94%, transparent);
 }
 
 .queued-messages-header {
@@ -110,35 +113,47 @@ function getMessageMeta(message: QueuedMessageRow): string {
 }
 
 .queued-messages-title {
-  @apply m-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8f8577];
+  @apply m-0 text-[11px] font-semibold uppercase;
+  color: var(--ui-text-tertiary);
 }
 
 .queued-messages-count {
-  @apply inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#f1ebde] px-1.5 text-[11px] font-semibold text-[#5b5146];
+  @apply inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-semibold;
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-secondary);
 }
 
 .queued-messages-caption {
-  @apply m-0 text-xs leading-4 text-[#8a7f72];
+  @apply m-0 text-xs leading-4;
+  color: var(--ui-text-tertiary);
 }
 
 .queued-messages-caption-loading {
-  @apply flex items-center text-[#0f766e];
+  @apply flex items-center;
+  color: var(--ui-accent);
 }
 
 .queued-row {
-  @apply flex min-w-0 items-start gap-2 rounded-2xl border border-[#ece5d8] bg-white/96 px-2.5 py-2;
+  @apply flex min-w-0 items-start gap-2 border px-2.5 py-2;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
 }
 
 .queued-row-main {
-  @apply flex min-w-0 flex-1 items-start gap-2 rounded-xl border-0 bg-transparent p-0 text-left;
+  @apply flex min-w-0 flex-1 items-start gap-2 border-0 bg-transparent p-0 text-left;
+  border-radius: var(--ui-radius-card);
 }
 
 .queued-row-order {
-  @apply inline-flex h-6 shrink-0 items-center justify-center rounded-full bg-[#f1ebde] px-2 text-[11px] font-semibold text-[#6d6354];
+  @apply inline-flex h-6 shrink-0 items-center justify-center rounded-full px-2 text-[11px] font-semibold;
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
 }
 
 .queued-row-order.is-next {
-  @apply bg-[#edf9f6] text-[#0f766e];
+  background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-bg-surface));
+  color: var(--ui-accent);
 }
 
 .queued-row-copy {
@@ -146,7 +161,8 @@ function getMessageMeta(message: QueuedMessageRow): string {
 }
 
 .queued-row-text {
-  @apply min-w-0 text-sm leading-5 text-[#2b241d];
+  @apply min-w-0 text-sm leading-5;
+  color: var(--ui-text-primary);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -154,7 +170,8 @@ function getMessageMeta(message: QueuedMessageRow): string {
 }
 
 .queued-row-meta {
-  @apply text-[11px] leading-4 text-[#8a7f72];
+  @apply text-[11px] leading-4;
+  color: var(--ui-text-tertiary);
 }
 
 .queued-row-actions {
@@ -162,11 +179,27 @@ function getMessageMeta(message: QueuedMessageRow): string {
 }
 
 .queued-row-quote {
-  @apply rounded-full border border-[#c8ddd8] bg-[#f6fbfa] px-2.5 py-1 text-xs font-medium text-[#0f766e] transition hover:border-[#97c2b8] hover:bg-[#edf9f6];
+  @apply border px-2.5 py-1 text-xs font-medium transition;
+  border-radius: var(--ui-radius-control);
+  border-color: color-mix(in srgb, var(--ui-accent) 24%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-accent) 5%, var(--ui-bg-surface));
+  color: var(--ui-accent);
+}
+
+.queued-row-quote:hover {
+  border-color: color-mix(in srgb, var(--ui-accent) 36%, var(--ui-border-strong));
+  background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-bg-surface));
 }
 
 .queued-row-delete {
-  @apply inline-flex h-7 w-7 items-center justify-center rounded-full border-0 bg-transparent text-[#9a907f] transition hover:bg-[#f1ebde] hover:text-[#544a3d];
+  @apply inline-flex h-7 w-7 items-center justify-center border-0 bg-transparent transition;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-tertiary);
+}
+
+.queued-row-delete:hover {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 @media (max-width: 767px) {

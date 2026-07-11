@@ -38,7 +38,7 @@
       >
       <section class="conversation-process-panel">
         <article
-          v-if="liveOverlay"
+          v-if="showInlineLiveOverlay && liveOverlay"
           class="live-overlay-inline"
           :class="{
             'live-overlay-inline-compact': !shouldRenderDetailedLiveOverlay,
@@ -202,7 +202,12 @@
             <span>{{ pendingRequests.length }} 项</span>
           </button>
           <div v-if="isRequestPanelExpanded" class="conversation-process-stack">
-            <article v-for="request in pendingRequests" :key="`panel-request:${request.id}`" class="request-card">
+            <article
+              v-for="request in pendingRequests"
+              :key="`panel-request:${request.id}`"
+              class="request-card"
+              :class="requestCardClass(request)"
+            >
               <p class="request-title">{{ requestTitleLabel(request) }}</p>
               <p class="request-meta">请求 #{{ request.id }} · {{ formatIsoTime(request.receivedAtIso) }}</p>
 
@@ -369,8 +374,25 @@
                 </template>
               </section>
 
-              <section v-else-if="request.method === 'item/tool/call'" class="request-actions">
-                <button type="button" class="request-button request-button-primary" @click="onRespondToolCallFailure(request.id)">让 Codex 改用文字继续</button>
+              <section v-else-if="request.method === 'item/tool/call'" class="request-tool-call">
+                <div class="request-tool-panel">
+                  <span class="request-tool-badge">工具调用</span>
+                  <p class="request-tool-title">{{ readToolCallTitle(request) }}</p>
+                  <p class="request-tool-text">{{ readToolCallSummary(request) }}</p>
+                  <dl class="request-tool-grid">
+                    <div class="request-tool-item">
+                      <dt class="request-tool-term">服务</dt>
+                      <dd class="request-tool-value">{{ readToolCallServerName(request) }}</dd>
+                    </div>
+                    <div class="request-tool-item">
+                      <dt class="request-tool-term">工具</dt>
+                      <dd class="request-tool-value">{{ readToolCallName(request) }}</dd>
+                    </div>
+                  </dl>
+                </div>
+                <section class="request-actions request-actions-prominent">
+                  <button type="button" class="request-button request-button-primary" @click="onRespondToolCallFailure(request.id)">让 Codex 改用文字继续</button>
+                </section>
               </section>
 
               <section v-else class="request-actions">
@@ -383,7 +405,7 @@
       </section>
       </li>
       <li
-        v-if="hasHiddenEarlierMessages"
+        v-if="hasOlderMessagesAffordance"
         class="conversation-item conversation-item-load-more"
       >
         <button
@@ -393,10 +415,27 @@
           @click="onRevealOlderMessages"
         >
           <span class="conversation-load-more-title">
-            {{ isRevealingOlderMessages ? '正在加载更早消息...' : `继续查看更多（剩余 ${hiddenEarlierMessageCount} 条）` }}
+            {{ olderMessagesAffordanceTitle }}
           </span>
           <span class="conversation-load-more-hint">滑到顶部也会继续加载</span>
         </button>
+      </li>
+      <li
+        v-if="visibleContextPreview"
+        class="conversation-item conversation-item-context-preview"
+        data-role="user"
+        data-message-type="contextPreview"
+      >
+        <div class="message-row" data-role="user" data-message-type="contextPreview">
+          <div class="message-stack" data-role="user">
+            <p class="message-eyebrow" data-role="user">{{ visibleContextPreview.label }}</p>
+            <article class="message-body" data-role="user">
+              <article class="message-card message-card-context-preview" data-role="user">
+                <p class="message-text">{{ visibleContextPreview.text }}</p>
+              </article>
+            </article>
+          </div>
+        </div>
       </li>
       <li
         v-if="virtualTopSpacerHeight > 0"
@@ -426,10 +465,10 @@
               @click="onToggleGuidedTurn(entry.turnIndex)"
             >
               <span class="guided-turn-toggle-title">
-                {{ isGuidedTurnExpanded(entry.turnIndex) ? '收起引导式内容' : '查看引导式内容' }}
+                {{ isGuidedTurnExpanded(entry.turnIndex) ? '隐藏阶段回复' : '阶段回复' }}
               </span>
               <span class="guided-turn-toggle-meta">
-                {{ entry.hiddenCount }} 条阶段性回复<span v-if="guidedTurnDurationLabel(entry.turnIndex)"> · {{ guidedTurnDurationLabel(entry.turnIndex) }}</span>
+                {{ entry.hiddenCount }}条<span v-if="guidedTurnDurationLabel(entry.turnIndex)"> · {{ guidedTurnDurationLabel(entry.turnIndex) }}</span>
               </span>
             </button>
           </div>
@@ -452,7 +491,7 @@
               class="cmd-output-wrap"
               :class="{ 'cmd-output-visible': isCommandExpanded(entry.message), 'cmd-output-collapsing': isCommandCollapsing(entry.message) }"
             >
-              <div class="cmd-output-inner">
+              <div v-if="shouldMountCommandOutput(entry.message)" class="cmd-output-inner">
                 <pre class="cmd-output">{{ entry.message.commandExecution?.aggregatedOutput || '（无输出）' }}</pre>
               </div>
             </div>
@@ -490,11 +529,13 @@
                 v-if="entry.message.fileAttachments && entry.message.fileAttachments.length > 0"
                 class="message-file-attachments"
               >
-                <span v-for="att in entry.message.fileAttachments" :key="att.path" class="message-file-chip">
-                  <span class="message-file-chip-icon">📄</span>
-                  <span class="message-file-link-wrap">
+                <article v-for="att in entry.message.fileAttachments" :key="att.path" class="message-file-card">
+                  <span class="message-file-card-icon" aria-hidden="true">
+                    <IconTablerFilePencil class="message-file-card-icon-svg" />
+                  </span>
+                  <span class="message-file-card-copy">
                     <a
-                      class="message-file-link message-file-chip-name"
+                      class="message-file-link message-file-card-title"
                       :href="toBrowseUrl(att.path)"
                       target="_blank"
                       rel="noopener noreferrer"
@@ -502,11 +543,24 @@
                       @click="onHyperlinkClick($event, toBrowseUrl(att.path))"
                       @contextmenu.prevent="onFileLinkContextMenu($event, att.path)"
                     >
-                      {{ att.path }}
+                      {{ att.label || getBasename(att.path) }}
                     </a>
+                    <span class="message-file-card-path">{{ att.path }}</span>
                   </span>
-                </span>
+                </article>
               </div>
+
+              <details
+                v-if="shouldRenderRawPayloadCard(entry.message)"
+                class="message-structured-card"
+                @toggle="onRawPayloadToggle($event, entry.message.id)"
+              >
+                <summary class="message-structured-summary">
+                  <span class="message-structured-title">{{ rawPayloadTitle(entry.message) }}</span>
+                  <span class="message-structured-meta">{{ rawPayloadMeta(entry.message) }}</span>
+                </summary>
+                <pre v-if="isRawPayloadExpanded(entry.message.id)" class="message-structured-pre">{{ rawPayloadPreview(entry.message) }}</pre>
+              </details>
 
               <article
                 v-if="entry.message.text.length > 0"
@@ -531,6 +585,9 @@
                     <p class="message-long-summary">
                       当前为折叠预览，完整 Prompt 已发送 · {{ formatCharacterCount(entry.message.text.length) }} 字
                     </p>
+                  </template>
+                  <template v-else-if="isStreamingAgentMessage(entry.message)">
+                    <p class="message-text message-streaming-text">{{ entry.message.text }}</p>
                   </template>
                   <template v-else>
                     <template
@@ -570,7 +627,7 @@
                         </template>
                       </p>
                       <div v-else-if="block.kind === 'table'" class="message-table-block">
-                        <div class="message-table-scroll" role="region" aria-label="表格内容">
+                        <div v-if="!isCompactTableViewport" class="message-table-scroll" role="region" aria-label="表格内容">
                           <table class="message-table">
                             <thead>
                               <tr>
@@ -646,7 +703,7 @@
                             </tbody>
                           </table>
                         </div>
-                        <div class="message-table-cards" aria-label="表格内容">
+                        <div v-else class="message-table-cards" aria-label="表格内容">
                           <article v-for="(row, rowIndex) in block.rows" :key="`table-card-${blockIndex}-${rowIndex}`" class="message-table-card">
                             <div v-for="(cell, cellIndex) in row" :key="`table-card-cell-${blockIndex}-${rowIndex}-${cellIndex}`" class="message-table-card-row">
                               <span class="message-table-card-label">{{ block.headers[cellIndex]?.value || `列 ${cellIndex + 1}` }}</span>
@@ -686,6 +743,52 @@
                           </article>
                         </div>
                       </div>
+                      <div
+                        v-else-if="block.kind === 'code'"
+                        class="message-code-block"
+                        :data-diff="block.isDiff"
+                      >
+                        <div class="message-code-header">
+                          <span class="message-code-meta">
+                            <span class="message-code-language">{{ block.language || (block.isDiff ? 'diff' : 'text') }}</span>
+                            <span class="message-code-count">{{ block.lineCount }} 行</span>
+                            <span
+                              v-if="isLongCodeBlock(block) && !isCodeBlockExpanded(entry.message.id, blockIndex)"
+                              class="message-code-count"
+                            >
+                              预览 {{ CODE_BLOCK_PREVIEW_LINE_COUNT }} 行
+                            </span>
+                          </span>
+                          <button
+                            class="message-code-copy"
+                            type="button"
+                            :aria-label="isCodeBlockCopied(entry.message.id, blockIndex) ? '代码已复制' : '复制代码块'"
+                            @click.stop="onCopyCodeBlock(entry.message.id, blockIndex, block)"
+                          >
+                            <IconTablerCopy class="message-code-copy-icon" />
+                            <span>{{ isCodeBlockCopied(entry.message.id, blockIndex) ? '已复制' : '复制' }}</span>
+                          </button>
+                        </div>
+                        <pre class="message-code-pre"><code><span
+                          v-for="(line, lineIndex) in visibleCodeBlockLines(entry.message.id, blockIndex, block)"
+                          :key="`code-line-${blockIndex}-${lineIndex}`"
+                          class="message-code-line"
+                          :data-kind="line.kind"
+                        >{{ line.value || ' ' }}</span></code></pre>
+                        <div v-if="isLongCodeBlock(block)" class="message-code-footer">
+                          <button
+                            class="message-code-expand"
+                            type="button"
+                            @click.stop="toggleCodeBlockExpand(entry.message.id, blockIndex)"
+                          >
+                            {{
+                              isCodeBlockExpanded(entry.message.id, blockIndex)
+                                ? '收起代码'
+                                : `展开剩余 ${hiddenCodeBlockLineCount(block)} 行`
+                            }}
+                          </button>
+                        </div>
+                      </div>
                       <p v-else-if="isMarkdownImageFailed(entry.message.id, blockIndex)" class="message-text">{{ block.markdown }}</p>
                       <button
                         v-else
@@ -709,6 +812,15 @@
                     </button>
                     <button type="button" class="message-long-action" @click.stop="onCopyMessage(entry.message)">
                       复制全文
+                    </button>
+                  </div>
+                  <div v-if="isHistoryNoticeMessage(entry.message)" class="history-notice-actions">
+                    <button
+                      type="button"
+                      class="history-notice-action"
+                      @click.stop="emit('loadOlderHistory')"
+                    >
+                      加载较早历史
                     </button>
                   </div>
                 </div>
@@ -920,6 +1032,7 @@ import IconTablerArrowBackUp from '../icons/IconTablerArrowBackUp.vue'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerBookmark from '../icons/IconTablerBookmark.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'
+import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import LoadingInline from './LoadingInline.vue'
 import { isNativeAndroidShell, openMobileShellUrl } from '../../mobile/mobileShell'
 
@@ -934,6 +1047,50 @@ const commandElapsedNowMs = ref(Date.now())
 const observedCommandStartedAtById = ref<Record<string, number>>({})
 const liveOverlayObservedAtMs = ref(0)
 let commandElapsedTimer: number | null = null
+const estimatedMessageHeightById = new Map<string, { sourceText: string; signature: string; height: number }>()
+const COMPACT_TABLE_VIEWPORT_QUERY = '(max-width: 767px)'
+const isCompactTableViewport = ref(false)
+let compactTableViewportMql: MediaQueryList | null = null
+
+type ThreadFirstScreenReadyMetric = {
+  readyAtMs: number
+  itemCount: number
+  userCount: number
+  assistantCount: number
+}
+
+type LegacyMediaQueryList = MediaQueryList & {
+  addListener?: (listener: () => void) => void
+  removeListener?: (listener: () => void) => void
+}
+
+function updateCompactTableViewport(): void {
+  isCompactTableViewport.value = compactTableViewportMql?.matches === true
+}
+
+function addCompactTableViewportListener(): void {
+  if (!compactTableViewportMql) return
+  if (typeof compactTableViewportMql.addEventListener === 'function') {
+    compactTableViewportMql.addEventListener('change', updateCompactTableViewport)
+    return
+  }
+  ;(compactTableViewportMql as LegacyMediaQueryList).addListener?.(updateCompactTableViewport)
+}
+
+function removeCompactTableViewportListener(): void {
+  if (!compactTableViewportMql) return
+  if (typeof compactTableViewportMql.removeEventListener === 'function') {
+    compactTableViewportMql.removeEventListener('change', updateCompactTableViewport)
+    return
+  }
+  ;(compactTableViewportMql as LegacyMediaQueryList).removeListener?.(updateCompactTableViewport)
+}
+
+if (typeof window !== 'undefined') {
+  compactTableViewportMql = window.matchMedia(COMPACT_TABLE_VIEWPORT_QUERY)
+  updateCompactTableViewport()
+  addCompactTableViewportListener()
+}
 
 function isCommandMessage(message: UiMessage): boolean {
   return message.messageType === 'commandExecution' && !!message.commandExecution
@@ -951,6 +1108,10 @@ function isCommandExpanded(message: UiMessage): boolean {
 
 function isCommandCollapsing(message: UiMessage): boolean {
   return collapsingCommandIds.value.has(message.id)
+}
+
+function shouldMountCommandOutput(message: UiMessage): boolean {
+  return isCommandExpanded(message) || isCommandCollapsing(message)
 }
 
 function toggleCommandExpand(message: UiMessage): void {
@@ -1124,12 +1285,19 @@ const props = defineProps<{
   isRollingBack?: boolean
   showEmptyThreadActions?: boolean
   isThreadSwitching?: boolean
+  compactRuntimeChrome?: boolean
   favoriteMessageIds?: string[]
 }>()
 
 const MESSAGE_WINDOW_SIZE = 10
+const MESSAGE_WINDOW_CONTEXT_BACKFILL_LIMIT = 24
+const REMOTE_OLDER_HISTORY_REQUEST_TIMEOUT_MS = 8000
+const RECENT_DERIVED_UI_MESSAGE_LIMIT = 120
+const REACTIVE_WATCH_MESSAGE_LIMIT = RECENT_DERIVED_UI_MESSAGE_LIMIT * 2
+const PREPARED_MESSAGE_BLOCK_CACHE_LIMIT = 80
+const ESTIMATED_MESSAGE_HEIGHT_CACHE_LIMIT = 240
 const renderableMessages = computed<UiMessage[]>(() => (
-  props.messages.filter((message) => !isCommandMessage(message) && message.messageType !== 'worked')
+  props.messages.filter((message) => !shouldSuppressConversationMessage(message))
 ))
 const isRevealingOlderMessages = ref(false)
 const canAutoRevealOlderMessages = ref(true)
@@ -1137,13 +1305,73 @@ const visibleMessageStartIndex = ref(0)
 const isRequestPanelExpanded = ref(false)
 const isLiveOverlayDetailOpen = ref(false)
 const expandedGuidedTurnIndexes = ref<Set<number>>(new Set())
+const expandedRawPayloadMessageIds = ref<Set<string>>(new Set())
 
-function latestVisibleStartIndex(messageCount: number): number {
-  return Math.max(messageCount - MESSAGE_WINDOW_SIZE, 0)
+function latestVisibleStartIndex(messages: UiMessage[]): number {
+  const messageCount = messages.length
+  const latestWindowStart = Math.max(messageCount - MESSAGE_WINDOW_SIZE, 0)
+  let latestTurnIndex: number | null = null
+
+  for (let index = messageCount - 1; index >= 0; index -= 1) {
+    latestTurnIndex = readTurnIndex(messages[index])
+    if (latestTurnIndex !== null) break
+  }
+
+  if (latestTurnIndex === null) return latestWindowStart
+
+  let latestTurnStart = latestWindowStart
+  for (let index = messageCount - 1; index >= 0; index -= 1) {
+    if (readTurnIndex(messages[index]) === latestTurnIndex) {
+      latestTurnStart = index
+      continue
+    }
+    if (latestTurnStart < messageCount) break
+  }
+
+  const windowStart = Math.min(latestWindowStart, latestTurnStart)
+  if (messages.slice(windowStart).some((message) => message.role === 'user')) {
+    return windowStart
+  }
+
+  const contextSearchStart = Math.max(windowStart - MESSAGE_WINDOW_CONTEXT_BACKFILL_LIMIT, 0)
+  for (let index = windowStart - 1; index >= contextSearchStart; index -= 1) {
+    if (messages[index]?.role === 'user') return index
+  }
+
+  return windowStart
 }
 
 function readTurnIndex(message: UiMessage): number | null {
   return typeof message.turnIndex === 'number' ? message.turnIndex : null
+}
+
+const recentRenderableMessagesForDerivedUi = computed<UiMessage[]>(() => {
+  const messages = renderableMessages.value
+  if (messages.length <= RECENT_DERIVED_UI_MESSAGE_LIMIT) return messages
+  return messages.slice(-RECENT_DERIVED_UI_MESSAGE_LIMIT)
+})
+const visibleRenderableMessages = computed<UiMessage[]>(() => (
+  renderableMessages.value.slice(visibleMessageStartIndex.value)
+))
+
+function recentMessagesForReactiveWatch(messages: UiMessage[]): UiMessage[] {
+  if (messages.length <= REACTIVE_WATCH_MESSAGE_LIMIT) return messages
+  return messages.slice(-REACTIVE_WATCH_MESSAGE_LIMIT)
+}
+
+function messagesForReactiveWatch(messages: UiMessage[]): UiMessage[] {
+  const recentMessages = recentMessagesForReactiveWatch(messages)
+  const visibleMessages = visibleRenderableMessages.value
+  if (visibleMessages.length === 0) return recentMessages
+
+  const watchedById = new Map<string, UiMessage>()
+  for (const message of recentMessages) {
+    watchedById.set(message.id, message)
+  }
+  for (const message of visibleMessages) {
+    watchedById.set(message.id, message)
+  }
+  return Array.from(watchedById.values())
 }
 
 function isGuidedAssistantMessage(message: UiMessage): boolean {
@@ -1153,6 +1381,36 @@ function isGuidedAssistantMessage(message: UiMessage): boolean {
     message.messageType !== 'worked' &&
     message.text.trim().length > 0
   )
+}
+
+function isStreamingAgentMessage(message: UiMessage): boolean {
+  return (
+    props.isTurnInProgress === true &&
+    message.role === 'assistant' &&
+    message.messageType === 'agentMessage.live' &&
+    message.text.length > 0
+  )
+}
+
+function isInternalCodexContextMessage(message: UiMessage): boolean {
+  if (message.role !== 'user') return false
+  const text = message.text.trim()
+  return /^<(?:codex_internal_context|recommended_plugins|permissions|app-context|collaboration_mode|skills_instructions|apps_instructions|plugins_instructions|environment_context)\b/iu.test(text)
+}
+
+function shouldSuppressConversationMessage(message: UiMessage): boolean {
+  if (message.messageType === 'worked') return true
+
+  const messageType = message.messageType?.trim() ?? ''
+  if (isInternalCodexContextMessage(message)) {
+    return true
+  }
+
+  if (message.role === 'system' && message.isUnhandled && messageType === 'unhandled.fileChange') {
+    return true
+  }
+
+  return false
 }
 
 type GuidedTurnDescriptor = {
@@ -1175,6 +1433,11 @@ type GuidedSummaryEntry = {
   measureId: string
   turnIndex: number
   hiddenCount: number
+}
+
+type ContextPreviewEntry = {
+  label: string
+  text: string
 }
 
 type ConversationRenderEntry = ConversationMessageEntry | GuidedSummaryEntry
@@ -1200,7 +1463,7 @@ function isTurnCompleted(turnIndex: number): boolean {
 const collapsibleGuidedTurnDescriptors = computed<Map<number, GuidedTurnDescriptor>>(() => {
   const groupedMessages = new Map<number, UiMessage[]>()
 
-  for (const message of renderableMessages.value) {
+  for (const message of recentRenderableMessagesForDerivedUi.value) {
     const turnIndex = readTurnIndex(message)
     if (typeof turnIndex !== 'number') continue
     const messages = groupedMessages.get(turnIndex) ?? []
@@ -1228,8 +1491,10 @@ const collapsibleGuidedTurnDescriptors = computed<Map<number, GuidedTurnDescript
 
 const workedSummaryDurationByTurnIndex = computed<Record<number, number>>(() => {
   const next: Record<number, number> = {}
+  const derivedMessageIds = new Set(recentRenderableMessagesForDerivedUi.value.map((message) => message.id))
+  const scanStartIndex = Math.max(0, props.messages.length - RECENT_DERIVED_UI_MESSAGE_LIMIT * 2)
 
-  for (let index = 0; index < props.messages.length; index += 1) {
+  for (let index = scanStartIndex; index < props.messages.length; index += 1) {
     const message = props.messages[index]
     if (message.messageType !== 'worked') continue
     const durationMs = parseWorkedMessageDurationMs(message.text)
@@ -1238,6 +1503,7 @@ const workedSummaryDurationByTurnIndex = computed<Record<number, number>>(() => 
     for (let nextIndex = index + 1; nextIndex < props.messages.length; nextIndex += 1) {
       const candidate = props.messages[nextIndex]
       if (candidate.role !== 'assistant' || candidate.messageType === 'worked') continue
+      if (!derivedMessageIds.has(candidate.id)) break
       const turnIndex = readTurnIndex(candidate)
       if (typeof turnIndex !== 'number') break
       next[turnIndex] = durationMs
@@ -1251,7 +1517,7 @@ const workedSummaryDurationByTurnIndex = computed<Record<number, number>>(() => 
 const guidedTurnDurationLabelByTurnIndex = computed<Record<number, string>>(() => {
   const commandDurationByTurnIndex: Record<number, number> = {}
 
-  for (const message of props.messages) {
+  for (const message of recentRenderableMessagesForDerivedUi.value) {
     if (!isCommandMessage(message)) continue
     const turnIndex = readTurnIndex(message)
     if (typeof turnIndex !== 'number') continue
@@ -1282,6 +1548,57 @@ const hiddenGuidedMessageTurnIndexById = computed<Record<string, number>>(() => 
   return next
 })
 
+function compactContextPreviewText(text: string): string {
+  const normalized = text.replace(/\s+/gu, ' ').trim()
+  if (normalized.length <= 140) return normalized
+  return `${normalized.slice(0, 140)}...`
+}
+
+const visibleContextPreview = computed<ContextPreviewEntry | null>(() => {
+  const visibleMessages = visibleRenderableMessages.value
+  const renderedMessageEntries = virtualizedMessages.value.filter((entry): entry is ConversationMessageEntry => entry.kind === 'message')
+  const hasRenderedUserContent = renderedMessageEntries.some((entry) => (
+    entry.message.role === 'user' &&
+    (
+      entry.message.text.trim().length > 0 ||
+      (entry.message.images?.length ?? 0) > 0 ||
+      (entry.message.fileAttachments?.length ?? 0) > 0
+    )
+  ))
+  if (visibleMessages.length === 0 || hasRenderedUserContent) return null
+
+  const firstRenderedMessageIndex = renderedMessageEntries[0]?.messageIndex ?? visibleMessages.length
+  const firstRenderedAbsoluteIndex = visibleMessageStartIndex.value + firstRenderedMessageIndex
+  for (let index = firstRenderedAbsoluteIndex - 1; index >= 0; index -= 1) {
+    const message = renderableMessages.value[index]
+    if (message?.role !== 'user') continue
+    const text = compactContextPreviewText(message.text)
+    if (!text) continue
+    return {
+      label: '折叠上下文',
+      text,
+    }
+  }
+
+  const hasAssistantContent = visibleMessages.some((message) => (
+    message.role === 'assistant' &&
+    (
+      message.text.trim().length > 0 ||
+      (message.images?.length ?? 0) > 0 ||
+      (message.fileAttachments?.length ?? 0) > 0
+    )
+  ))
+
+  if (hasHiddenEarlierMessages.value || hasAssistantContent) {
+    return {
+      label: '当前任务',
+      text: '持续目标自动推进中，相关上下文已折叠。',
+    }
+  }
+
+  return null
+})
+
 function isGuidedTurnExpanded(turnIndex: number): boolean {
   return expandedGuidedTurnIndexes.value.has(turnIndex)
 }
@@ -1304,7 +1621,7 @@ const renderableConversationEntries = computed<ConversationRenderEntry[]>(() => 
   const entries: ConversationRenderEntry[] = []
   let visibleMessageIndex = 0
 
-  for (const message of renderableMessages.value) {
+  for (const message of visibleRenderableMessages.value) {
     const turnIndex = readTurnIndex(message)
     const descriptor =
       typeof turnIndex === 'number' ? (collapsibleGuidedTurnDescriptors.value.get(turnIndex) ?? null) : null
@@ -1336,16 +1653,27 @@ const renderableConversationEntries = computed<ConversationRenderEntry[]>(() => 
 })
 
 const visibleRenderableEntries = computed<ConversationRenderEntry[]>(() => (
-  renderableConversationEntries.value.slice(visibleMessageStartIndex.value)
+  renderableConversationEntries.value
 ))
 const visibleMessageEntries = computed<ConversationMessageEntry[]>(() => (
   visibleRenderableEntries.value.filter((entry): entry is ConversationMessageEntry => entry.kind === 'message')
 ))
+const hasVisibleConversationContent = computed(() => (
+  visibleRenderableEntries.value.length > 0 || visibleContextPreview.value !== null
+))
 const hiddenEarlierMessageCount = computed(() => visibleMessageStartIndex.value)
 const hasHiddenEarlierMessages = computed(() => hiddenEarlierMessageCount.value > 0)
-const showProcessPanel = computed(() => (
-  !!props.liveOverlay || props.pendingRequests.length > 0
+const hasRemoteOlderHistoryNotice = computed(() => (
+  renderableMessages.value.some(isHistoryNoticeMessage)
 ))
+const hasOlderMessagesAffordance = computed(() => (
+  hasHiddenEarlierMessages.value || hasRemoteOlderHistoryNotice.value
+))
+const olderMessagesAffordanceTitle = computed(() => {
+  if (isRevealingOlderMessages.value) return '正在加载更早消息...'
+  if (hasHiddenEarlierMessages.value) return `继续查看更多（剩余 ${hiddenEarlierMessageCount.value} 条）`
+  return '继续加载较早历史'
+})
 
 const liveOverlayCommandMessage = computed<UiMessage | null>(() => {
   const overlay = props.liveOverlay
@@ -1366,6 +1694,7 @@ const emit = defineEmits<{
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
   rollback: [payload: { turnIndex: number; prependText?: string }]
   toggleFavorite: [message: UiMessage]
+  loadOlderHistory: []
   returnToNewThread: []
   dismissEmptyThread: []
 }>()
@@ -1394,6 +1723,7 @@ const LONG_RESPONSE_MIN_HEIGHT_PX = 260
 const LONG_USER_MESSAGE_COLLAPSE_THRESHOLD = 3000
 const LONG_USER_MESSAGE_PREVIEW_LENGTH = 1600
 const LONG_USER_MESSAGE_EXPANDED_MAX_HEIGHT_PX = 760
+const CODE_BLOCK_PREVIEW_LINE_COUNT = 120
 const IMAGE_MODAL_MIN_SCALE = 1
 const IMAGE_MODAL_MAX_SCALE = 4
 const IMAGE_MODAL_SCALE_STEP = 0.25
@@ -1406,6 +1736,9 @@ let highlightedMessageTimer: number | null = null
 const pendingRollbackMessageId = ref('')
 let rollbackConfirmTimer: number | null = null
 let previousBodyOverflow = ''
+const copiedCodeBlockKey = ref('')
+let copiedCodeBlockTimer: number | null = null
+let remoteOlderHistoryRequestTimer: number | null = null
 type InlineSegment =
   | { kind: 'text'; value: string }
   | { kind: 'bold'; value: string }
@@ -1415,14 +1748,20 @@ type InlineSegment =
 type MessageBlock =
   | { kind: 'text'; value: string }
   | { kind: 'table'; headers: string[]; rows: string[][] }
+  | { kind: 'code'; language: string; code: string; isDiff: boolean }
   | { kind: 'image'; url: string; alt: string; markdown: string }
 type PreparedMessageBlock =
   | { kind: 'text'; value: string; segments: InlineSegment[] }
   | { kind: 'table'; headers: PreparedTableCell[]; rows: PreparedTableCell[][] }
+  | { kind: 'code'; language: string; code: string; lines: PreparedCodeLine[]; lineCount: number; linesView: 'preview' | 'full'; isDiff: boolean }
   | { kind: 'image'; url: string; alt: string; markdown: string }
 type PreparedTableCell = {
   value: string
   segments: InlineSegment[]
+}
+type PreparedCodeLine = {
+  value: string
+  kind: 'add' | 'delete' | 'meta' | 'context'
 }
 type MeasureRefTarget = Element | ComponentPublicInstance | null
 type ScrollAnchorSnapshot = {
@@ -1452,6 +1791,7 @@ const trackedPendingImages = new WeakSet<HTMLImageElement>()
 const failedMarkdownImageKeys = ref<Set<string>>(new Set())
 const preparedMessageBlocksById = new Map<string, { text: string; blocks: PreparedMessageBlock[] }>()
 const expandedLongUserMessageIds = ref<Set<string>>(new Set())
+const expandedCodeBlockKeys = ref<Set<string>>(new Set())
 const isFileLinkContextMenuVisible = ref(false)
 const fileLinkContextMenuX = ref(0)
 const fileLinkContextMenuY = ref(0)
@@ -1511,7 +1851,7 @@ const conversationListResizeObserver =
         if (!(target instanceof HTMLElement)) continue
         syncConversationViewport(target)
         if (shouldLockToBottom()) {
-          scheduleBottomLock(2)
+          scheduleBottomLock(1)
         }
       }
     })
@@ -1522,7 +1862,10 @@ const hasRenderableConversation = computed(() => (
   props.liveOverlay !== null
 ))
 const isThreadSwitchingState = computed(() => props.isThreadSwitching === true && hasRenderableConversation.value)
-const showLoadingIndicator = computed(() => props.isLoading)
+const showLoadingIndicator = computed(() => (
+  props.isLoading &&
+  !(props.compactRuntimeChrome === true && props.isThreadSwitching === true && hasRenderableConversation.value)
+))
 const loadingIndicatorText = computed(() => {
   if (props.isThreadSwitching === true) return '正在切换到这个会话...'
   return hasRenderableConversation.value ? '正在同步最新内容...' : '正在载入会话...'
@@ -1534,6 +1877,7 @@ const showJumpToLatestButton = computed(() => (
 ))
 const overlayPrimaryPendingRequest = computed<UiServerRequest | null>(() => props.pendingRequests[0] ?? null)
 const favoriteMessageIdSet = computed(() => new Set(props.favoriteMessageIds ?? []))
+const hasVisibleLiveAgentText = computed(() => props.messages.some(isStreamingAgentMessage))
 const hasLiveOverlayDetail = computed<boolean>(() => {
   const overlay = props.liveOverlay
   if (!overlay) return false
@@ -1546,6 +1890,23 @@ const hasLiveOverlayDetail = computed<boolean>(() => {
     liveOverlayDetails(overlay).length > 0,
   )
 })
+const showInlineLiveOverlay = computed<boolean>(() => {
+  const overlay = props.liveOverlay
+  if (!overlay) return false
+  if (
+    hasVisibleLiveAgentText.value &&
+    !overlayPrimaryPendingRequest.value &&
+    !liveOverlayCommandMessage.value &&
+    !overlay.errorText.trim()
+  ) {
+    return false
+  }
+  if (props.compactRuntimeChrome !== true) return true
+  return hasLiveOverlayDetail.value
+})
+const showProcessPanel = computed(() => (
+  showInlineLiveOverlay.value || props.pendingRequests.length > 0
+))
 const shouldRenderDetailedLiveOverlay = computed<boolean>(() => {
   const overlay = props.liveOverlay
   if (!overlay) return false
@@ -1584,7 +1945,21 @@ function estimateConversationEntryHeight(entry: ConversationRenderEntry): number
   if (entry.kind === 'guidedSummary') {
     return 52
   }
-  return estimateMessageHeight(entry.message)
+  return getEstimatedMessageHeight(entry.message)
+}
+
+function lowerBoundNumber(values: number[], target: number): number {
+  let low = 0
+  let high = values.length
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if ((values[mid] ?? 0) < target) {
+      low = mid + 1
+    } else {
+      high = mid
+    }
+  }
+  return low
 }
 
 const entryHeightMetrics = computed(() => {
@@ -1619,23 +1994,12 @@ const virtualizedMessageRange = computed(() => {
   const visibleStart = Math.max(relativeScrollTop - VIRTUAL_OVERSCAN_PX, 0)
   const visibleEnd = relativeScrollTop + viewportHeight + VIRTUAL_OVERSCAN_PX
 
-  let startIndex = 0
-  while (
-    startIndex < visibleRenderableEntries.value.length &&
-    cumulativeHeights[startIndex + 1] < visibleStart
-  ) {
-    startIndex += 1
-  }
-
-  let endIndex = startIndex
-  while (
-    endIndex < visibleRenderableEntries.value.length &&
-    cumulativeHeights[endIndex] < visibleEnd
-  ) {
-    endIndex += 1
-  }
-
-  endIndex = Math.min(visibleRenderableEntries.value.length, Math.max(endIndex + 1, startIndex + 1))
+  const startIndex = Math.max(lowerBoundNumber(cumulativeHeights, visibleStart) - 1, 0)
+  const visibleEndIndex = lowerBoundNumber(cumulativeHeights, visibleEnd)
+  const endIndex = Math.min(
+    visibleRenderableEntries.value.length,
+    Math.max(visibleEndIndex + 1, startIndex + 1),
+  )
 
   return {
     startIndex,
@@ -1845,14 +2209,48 @@ async function scheduleScrollAnchorRestore(snapshot: ScrollAnchorSnapshot | null
   })
 }
 
+async function restoreScrollAnchorOverFrames(snapshot: ScrollAnchorSnapshot | null, frames = 4): Promise<void> {
+  if (!snapshot) return
+  for (let remaining = Math.max(frames, 1); remaining > 0; remaining -= 1) {
+    await scheduleScrollAnchorRestore(snapshot)
+  }
+}
+
 async function revealOlderMessages(): Promise<void> {
-  if (!hasHiddenEarlierMessages.value || isRevealingOlderMessages.value) return
+  if (!hasOlderMessagesAffordance.value || isRevealingOlderMessages.value) return
+  autoFollowBottom.value = false
   const anchorSnapshot = captureVisibleConversationAnchor()
   isRevealingOlderMessages.value = true
   canAutoRevealOlderMessages.value = false
-  visibleMessageStartIndex.value = Math.max(visibleMessageStartIndex.value - MESSAGE_WINDOW_SIZE, 0)
+  if (hasHiddenEarlierMessages.value) {
+    visibleMessageStartIndex.value = Math.max(visibleMessageStartIndex.value - MESSAGE_WINDOW_SIZE, 0)
+    await restoreScrollAnchorOverFrames(anchorSnapshot)
+    isRevealingOlderMessages.value = false
+    return
+  }
+
+  markRemoteOlderHistoryRequestInFlight()
+  emit('loadOlderHistory')
   await nextTick()
   await scheduleScrollAnchorRestore(anchorSnapshot)
+}
+
+function markRemoteOlderHistoryRequestInFlight(): void {
+  if (remoteOlderHistoryRequestTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(remoteOlderHistoryRequestTimer)
+  }
+  if (typeof window === 'undefined') return
+  remoteOlderHistoryRequestTimer = window.setTimeout(() => {
+    remoteOlderHistoryRequestTimer = null
+    isRevealingOlderMessages.value = false
+  }, REMOTE_OLDER_HISTORY_REQUEST_TIMEOUT_MS)
+}
+
+function clearRemoteOlderHistoryRequestInFlight(): void {
+  if (remoteOlderHistoryRequestTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(remoteOlderHistoryRequestTimer)
+    remoteOlderHistoryRequestTimer = null
+  }
   isRevealingOlderMessages.value = false
 }
 
@@ -1901,6 +2299,66 @@ function estimateMessageHeight(message: UiMessage): number {
   }
 
   return Math.min(Math.max(height, 72), isLongUserMessage(message) ? 1120 : 980)
+}
+
+function estimatedMessageHeightSourceText(message: UiMessage): string {
+  if (isCommandMessage(message)) return message.commandExecution?.aggregatedOutput ?? ''
+  return message.text
+}
+
+function estimatedMessageHeightSignature(message: UiMessage): string {
+  if (isCommandMessage(message)) {
+    const command = message.commandExecution
+    return [
+      message.role,
+      message.messageType ?? '',
+      command?.status ?? '',
+      command?.exitCode ?? '',
+      isCommandExpanded(message) ? 'expanded' : 'collapsed',
+    ].join('|')
+  }
+
+  return [
+    message.role,
+    message.messageType ?? '',
+    isLongUserMessageCollapsed(message) ? 'long-collapsed' : isLongUserMessage(message) ? 'long-expanded' : 'normal',
+    String(message.fileAttachments?.length ?? 0),
+    String(message.images?.length ?? 0),
+    canShowMessageActionBar(message) ? 'actions' : 'no-actions',
+  ].join('|')
+}
+
+function trimEstimatedMessageHeightCache(): void {
+  while (estimatedMessageHeightById.size > ESTIMATED_MESSAGE_HEIGHT_CACHE_LIMIT) {
+    const oldestMessageId = estimatedMessageHeightById.keys().next().value
+    if (typeof oldestMessageId !== 'string') return
+    estimatedMessageHeightById.delete(oldestMessageId)
+  }
+}
+
+function pruneEstimatedMessageHeightCache(keepIds: Set<string>): void {
+  for (const messageId of estimatedMessageHeightById.keys()) {
+    if (!keepIds.has(messageId)) {
+      estimatedMessageHeightById.delete(messageId)
+    }
+  }
+  trimEstimatedMessageHeightCache()
+}
+
+function getEstimatedMessageHeight(message: UiMessage): number {
+  const sourceText = estimatedMessageHeightSourceText(message)
+  const signature = estimatedMessageHeightSignature(message)
+  const cached = estimatedMessageHeightById.get(message.id)
+  if (cached && cached.sourceText === sourceText && cached.signature === signature) {
+    estimatedMessageHeightById.delete(message.id)
+    estimatedMessageHeightById.set(message.id, cached)
+    return cached.height
+  }
+
+  const height = estimateMessageHeight(message)
+  estimatedMessageHeightById.set(message.id, { sourceText, signature, height })
+  trimEstimatedMessageHeightCache()
+  return height
 }
 
 type ParsedToolQuestion = {
@@ -2768,6 +3226,29 @@ function pushTextWithImages(blocks: MessageBlock[], text: string): void {
   }
 }
 
+function parseFenceStart(line: string): { marker: string; language: string } | null {
+  const match = line.match(/^ {0,3}(```+|~~~+)\s*([^`]*)$/u)
+  if (!match) return null
+  const marker = match[1] ?? ''
+  const info = (match[2] ?? '').trim()
+  const language = info.split(/\s+/u)[0]?.replace(/[^\w.+#-]/gu, '') ?? ''
+  return { marker, language }
+}
+
+function isFenceEnd(line: string, marker: string): boolean {
+  const trimmed = line.trim()
+  if (!trimmed.startsWith(marker[0] ?? '`')) return false
+  const sameChar = marker[0] ?? '`'
+  let count = 0
+  while (count < trimmed.length && trimmed[count] === sameChar) count += 1
+  return count >= marker.length && trimmed.slice(count).trim().length === 0
+}
+
+function isDiffLanguage(language: string): boolean {
+  const normalized = language.trim().toLowerCase()
+  return normalized === 'diff' || normalized === 'patch' || normalized === 'udiff'
+}
+
 function parseMessageBlocks(text: string): MessageBlock[] {
   const blocks: MessageBlock[] = []
   const lines = text.split('\n')
@@ -2780,6 +3261,35 @@ function parseMessageBlocks(text: string): MessageBlock[] {
   }
 
   for (let index = 0; index < lines.length; index += 1) {
+    const fence = parseFenceStart(lines[index] ?? '')
+    if (fence) {
+      const codeLines: string[] = []
+      let cursor = index + 1
+      let closed = false
+      while (cursor < lines.length) {
+        const line = lines[cursor] ?? ''
+        if (isFenceEnd(line, fence.marker)) {
+          closed = true
+          break
+        }
+        codeLines.push(line)
+        cursor += 1
+      }
+
+      if (closed) {
+        flushText()
+        const code = codeLines.join('\n')
+        blocks.push({
+          kind: 'code',
+          language: fence.language,
+          code,
+          isDiff: isDiffLanguage(fence.language) || codeLines.some((line) => /^(diff --git|@@ |\+\+\+ |--- )/u.test(line)),
+        })
+        index = cursor
+        continue
+      }
+    }
+
     const headerCells = splitMarkdownTableRow(lines[index] ?? '')
     const separatorLine = lines[index + 1] ?? ''
     if (headerCells.length >= 2 && isMarkdownTableSeparator(separatorLine)) {
@@ -2819,9 +3329,54 @@ function prepareTableCell(value: string): PreparedTableCell {
   }
 }
 
+function prepareCodeLine(value: string, isDiff: boolean): PreparedCodeLine {
+  if (!isDiff) return { value, kind: 'context' }
+  if (value.startsWith('+') && !value.startsWith('+++')) return { value, kind: 'add' }
+  if (value.startsWith('-') && !value.startsWith('---')) return { value, kind: 'delete' }
+  if (value.startsWith('@@') || value.startsWith('diff --git') || value.startsWith('+++') || value.startsWith('---')) {
+    return { value, kind: 'meta' }
+  }
+  return { value, kind: 'context' }
+}
+
+function readCodePreviewLines(code: string, lineLimit: number): { lines: string[]; lineCount: number } {
+  if (!code) return { lines: [''], lineCount: 1 }
+
+  const lines: string[] = []
+  let lineCount = 1
+  let lineStart = 0
+  for (let index = 0; index < code.length; index += 1) {
+    if (code.charCodeAt(index) !== 10) continue
+    if (lines.length < lineLimit) {
+      lines.push(code.slice(lineStart, index))
+    }
+    lineCount += 1
+    lineStart = index + 1
+  }
+  if (lines.length < lineLimit) {
+    lines.push(code.slice(lineStart))
+  }
+  return { lines: lines.length > 0 ? lines : [''], lineCount }
+}
+
+function prepareCodeBlock(block: Extract<MessageBlock, { kind: 'code' }>): Extract<PreparedMessageBlock, { kind: 'code' }> {
+  const preview = readCodePreviewLines(block.code, CODE_BLOCK_PREVIEW_LINE_COUNT)
+  return {
+    kind: 'code',
+    language: block.language,
+    code: block.code,
+    lines: preview.lines.map((line) => prepareCodeLine(line, block.isDiff)),
+    lineCount: preview.lineCount,
+    linesView: preview.lineCount > CODE_BLOCK_PREVIEW_LINE_COUNT ? 'preview' : 'full',
+    isDiff: block.isDiff,
+  }
+}
+
 function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
   const cached = preparedMessageBlocksById.get(message.id)
   if (cached && cached.text === message.text) {
+    preparedMessageBlocksById.delete(message.id)
+    preparedMessageBlocksById.set(message.id, cached)
     return cached.blocks
   }
 
@@ -2840,11 +3395,138 @@ function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
         rows: block.rows.map((row) => row.map(prepareTableCell)),
       }
     }
+    if (block.kind === 'code') {
+      return prepareCodeBlock(block)
+    }
     return block
   })
 
   preparedMessageBlocksById.set(message.id, { text: message.text, blocks })
+  trimPreparedMessageBlockCache()
   return blocks
+}
+
+function shouldRenderRawPayloadCard(message: UiMessage): boolean {
+  return typeof message.rawPayload === 'string' && message.rawPayload.trim().length > 0
+}
+
+function isHistoryNoticeMessage(message: UiMessage): boolean {
+  return message.role === 'system' && message.messageType === 'history.notice'
+}
+
+function rawPayloadTitle(message: UiMessage): string {
+  if (message.isUnhandled) return '未适配的 App Server 内容'
+  return '原始结构内容'
+}
+
+function rawPayloadMeta(message: UiMessage): string {
+  const type = message.messageType?.trim() || 'payload'
+  const raw = message.rawPayload?.trim() ?? ''
+  return `${type} · ${formatCharacterCount(raw.length)} 字符`
+}
+
+function rawPayloadPreview(message: UiMessage): string {
+  const raw = message.rawPayload?.trim() ?? ''
+  if (!raw) return ''
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    const pretty = JSON.stringify(parsed, null, 2)
+    return pretty.length > 6000 ? `${pretty.slice(0, 6000).trimEnd()}\n...` : pretty
+  } catch {
+    return raw.length > 6000 ? `${raw.slice(0, 6000).trimEnd()}\n...` : raw
+  }
+}
+
+function isRawPayloadExpanded(messageId: string): boolean {
+  return expandedRawPayloadMessageIds.value.has(messageId)
+}
+
+function onRawPayloadToggle(event: Event, messageId: string): void {
+  const details = event.currentTarget instanceof HTMLDetailsElement ? event.currentTarget : null
+  if (!details) return
+  const nextIds = new Set(expandedRawPayloadMessageIds.value)
+  if (details.open) nextIds.add(messageId)
+  else nextIds.delete(messageId)
+  expandedRawPayloadMessageIds.value = nextIds
+}
+
+function codeBlockKey(messageId: string, blockIndex: number): string {
+  return `${messageId}:${String(blockIndex)}`
+}
+
+function isCodeBlockCopied(messageId: string, blockIndex: number): boolean {
+  return copiedCodeBlockKey.value === codeBlockKey(messageId, blockIndex)
+}
+
+function isLongCodeBlock(block: Extract<PreparedMessageBlock, { kind: 'code' }>): boolean {
+  return block.lineCount > CODE_BLOCK_PREVIEW_LINE_COUNT
+}
+
+function isCodeBlockExpanded(messageId: string, blockIndex: number): boolean {
+  return expandedCodeBlockKeys.value.has(codeBlockKey(messageId, blockIndex))
+}
+
+function visibleCodeBlockLines(
+  messageId: string,
+  blockIndex: number,
+  block: Extract<PreparedMessageBlock, { kind: 'code' }>,
+): PreparedCodeLine[] {
+  if (!isLongCodeBlock(block) || isCodeBlockExpanded(messageId, blockIndex)) {
+    if (block.linesView !== 'full') {
+      block.lines = block.code.split('\n').map((line) => prepareCodeLine(line, block.isDiff))
+      block.linesView = 'full'
+    }
+    return block.lines
+  }
+  return block.lines.slice(0, CODE_BLOCK_PREVIEW_LINE_COUNT)
+}
+
+function hiddenCodeBlockLineCount(block: Extract<PreparedMessageBlock, { kind: 'code' }>): number {
+  return Math.max(block.lineCount - CODE_BLOCK_PREVIEW_LINE_COUNT, 0)
+}
+
+function toggleCodeBlockExpand(messageId: string, blockIndex: number): void {
+  const key = codeBlockKey(messageId, blockIndex)
+  const next = new Set(expandedCodeBlockKeys.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expandedCodeBlockKeys.value = next
+}
+
+function codeBlockText(block: Extract<PreparedMessageBlock, { kind: 'code' }>): string {
+  return block.code
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.setAttribute('readonly', 'true')
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+  }
+}
+
+async function onCopyCodeBlock(messageId: string, blockIndex: number, block: Extract<PreparedMessageBlock, { kind: 'code' }>): Promise<void> {
+  await copyTextToClipboard(codeBlockText(block))
+  copiedCodeBlockKey.value = codeBlockKey(messageId, blockIndex)
+  if (copiedCodeBlockTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(copiedCodeBlockTimer)
+  }
+  if (typeof window !== 'undefined') {
+    copiedCodeBlockTimer = window.setTimeout(() => {
+      copiedCodeBlockTimer = null
+      if (copiedCodeBlockKey.value === codeBlockKey(messageId, blockIndex)) {
+        copiedCodeBlockKey.value = ''
+      }
+    }, 1600)
+  }
 }
 
 function isLongUserMessage(message: UiMessage): boolean {
@@ -2879,13 +3561,23 @@ function toggleLongUserMessage(message: UiMessage): void {
   expandedLongUserMessageIds.value = nextIds
 }
 
+function trimPreparedMessageBlockCache(): void {
+  while (preparedMessageBlocksById.size > PREPARED_MESSAGE_BLOCK_CACHE_LIMIT) {
+    const oldestMessageId = preparedMessageBlocksById.keys().next().value
+    if (typeof oldestMessageId !== 'string') return
+    preparedMessageBlocksById.delete(oldestMessageId)
+  }
+}
+
 function prunePreparedMessageBlockCache(messages: UiMessage[]): void {
   const keepIds = new Set(messages.map((message) => message.id))
+  pruneEstimatedMessageHeightCache(keepIds)
   for (const messageId of preparedMessageBlocksById.keys()) {
     if (!keepIds.has(messageId)) {
       preparedMessageBlocksById.delete(messageId)
     }
   }
+  trimPreparedMessageBlockCache()
   let nextExpandedIds = expandedLongUserMessageIds.value
   let hasExpandedIdChange = false
   for (const messageId of expandedLongUserMessageIds.value) {
@@ -2898,6 +3590,35 @@ function prunePreparedMessageBlockCache(messages: UiMessage[]): void {
   }
   if (hasExpandedIdChange) {
     expandedLongUserMessageIds.value = nextExpandedIds
+  }
+
+  let nextExpandedCodeBlockKeys = expandedCodeBlockKeys.value
+  let hasExpandedCodeBlockChange = false
+  for (const key of expandedCodeBlockKeys.value) {
+    const messageId = key.slice(0, key.lastIndexOf(':'))
+    if (keepIds.has(messageId)) continue
+    if (!hasExpandedCodeBlockChange) {
+      nextExpandedCodeBlockKeys = new Set(expandedCodeBlockKeys.value)
+      hasExpandedCodeBlockChange = true
+    }
+    nextExpandedCodeBlockKeys.delete(key)
+  }
+  if (hasExpandedCodeBlockChange) {
+    expandedCodeBlockKeys.value = nextExpandedCodeBlockKeys
+  }
+
+  let nextExpandedRawPayloadMessageIds = expandedRawPayloadMessageIds.value
+  let hasExpandedRawPayloadChange = false
+  for (const messageId of expandedRawPayloadMessageIds.value) {
+    if (keepIds.has(messageId)) continue
+    if (!hasExpandedRawPayloadChange) {
+      nextExpandedRawPayloadMessageIds = new Set(expandedRawPayloadMessageIds.value)
+      hasExpandedRawPayloadChange = true
+    }
+    nextExpandedRawPayloadMessageIds.delete(messageId)
+  }
+  if (hasExpandedRawPayloadChange) {
+    expandedRawPayloadMessageIds.value = nextExpandedRawPayloadMessageIds
   }
 }
 
@@ -2917,6 +3638,38 @@ function readRequestReason(request: UiServerRequest): string {
   const params = asRecord(request.params)
   const reason = params?.reason
   return typeof reason === 'string' ? reason.trim() : ''
+}
+
+function requestCardClass(request: UiServerRequest): string {
+  if (request.method === 'item/tool/call') return 'request-card--tool-call'
+  return ''
+}
+
+function readToolCallPayload(request: UiServerRequest): Record<string, unknown> {
+  return asRecord(request.params) ?? {}
+}
+
+function readToolCallServerName(request: UiServerRequest): string {
+  const payload = readToolCallPayload(request)
+  const value = payload.serverName ?? payload.server ?? payload.mcpServer
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : '未知服务'
+}
+
+function readToolCallName(request: UiServerRequest): string {
+  const payload = readToolCallPayload(request)
+  const value = payload.toolName ?? payload.tool ?? payload.name
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : '未知工具'
+}
+
+function readToolCallTitle(request: UiServerRequest): string {
+  return `${readToolCallName(request)} 等待处理`
+}
+
+function readToolCallSummary(request: UiServerRequest): string {
+  const payload = readToolCallPayload(request)
+  const summary = payload.summary ?? payload.message ?? payload.reason
+  if (typeof summary === 'string' && summary.trim().length > 0) return summary.trim()
+  return '当前 Web 端不能代执行这个工具调用，可让 Codex 改用文字方式继续。'
 }
 
 function isMcpElicitationRequest(method: string): boolean {
@@ -3533,19 +4286,7 @@ function goToPendingRequestsFromDetail(): void {
 async function onCopyMessage(message: UiMessage): Promise<void> {
   if (!canCopyMessage(message)) return
   const text = message.text.trim()
-  try {
-    await navigator.clipboard.writeText(text)
-  } catch {
-    const textarea = document.createElement('textarea')
-    textarea.value = text
-    textarea.setAttribute('readonly', 'true')
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    document.body.appendChild(textarea)
-    textarea.select()
-    document.execCommand('copy')
-    document.body.removeChild(textarea)
-  }
+  await copyTextToClipboard(text)
 }
 
 function clearRollbackConfirmation(): void {
@@ -3616,13 +4357,12 @@ async function focusMessage(messageId: string): Promise<boolean> {
     await nextTick()
   }
 
-  const targetIndex = renderableConversationEntries.value.findIndex((entry) => (
-    entry.kind === 'message' && entry.message.id === normalizedMessageId
-  ))
+  const targetIndex = renderableMessages.value.findIndex((message) => message.id === normalizedMessageId)
   if (targetIndex < 0) return false
 
   if (visibleMessageStartIndex.value > targetIndex) {
     visibleMessageStartIndex.value = Math.max(targetIndex - 2, 0)
+    await nextTick()
   }
 
   const container = conversationListRef.value
@@ -3633,7 +4373,10 @@ async function focusMessage(messageId: string): Promise<boolean> {
   }
 
   syncConversationViewport(container)
-  const targetVisibleIndex = Math.max(targetIndex - visibleMessageStartIndex.value, 0)
+  const targetVisibleIndex = renderableConversationEntries.value.findIndex((entry) => (
+    entry.kind === 'message' && entry.message.id === normalizedMessageId
+  ))
+  if (targetVisibleIndex < 0) return false
   const topOffset = entryHeightMetrics.value.cumulativeHeights[targetVisibleIndex] ?? 0
   const maxScrollTop = Math.max(container.scrollHeight - container.clientHeight, 0)
   autoFollowBottom.value = false
@@ -3722,6 +4465,36 @@ function scheduleEmitScrollState(container: HTMLElement, force = false): void {
   scrollStateEmitFrame = requestAnimationFrame(flushScrollState)
 }
 
+function markThreadFirstScreenReadyIfPossible(): void {
+  if (typeof window === 'undefined') return
+  const threadId = props.activeThreadId.trim()
+  if (!threadId) return
+  const host = window as Window & {
+    __cxCodexThreadFirstScreenReady?: Record<string, ThreadFirstScreenReadyMetric>
+  }
+  if (host.__cxCodexThreadFirstScreenReady?.[threadId]) return
+
+  const list = conversationListRef.value
+  if (!list) return
+  const items = Array.from(list.querySelectorAll<HTMLElement>('.conversation-item[data-role]'))
+  const userCount = items.filter((item) => item.getAttribute('data-role') === 'user').length
+  const assistantCount = items.filter((item) => item.getAttribute('data-role') === 'assistant').length
+  if (userCount < 1 || assistantCount < 1) return
+
+  host.__cxCodexThreadFirstScreenReady = {
+    ...(host.__cxCodexThreadFirstScreenReady ?? {}),
+    [threadId]: {
+      readyAtMs:
+        typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? Math.round(performance.now())
+          : Date.now(),
+      itemCount: items.length,
+      userCount,
+      assistantCount,
+    },
+  }
+}
+
 function scheduleIdleScrollStateEmit(container: HTMLElement, force = false): void {
   pendingScrollStateContainer = container
   pendingScrollStateForce = pendingScrollStateForce || force
@@ -3749,7 +4522,7 @@ function flushConversationScrollInteraction(): void {
   }
   if (
     container.scrollTop <= 96 &&
-    hasHiddenEarlierMessages.value &&
+    hasOlderMessagesAffordance.value &&
     canAutoRevealOlderMessages.value &&
     !isRevealingOlderMessages.value
   ) {
@@ -3772,7 +4545,7 @@ function clearBelowFoldUpdates(): void {
 }
 
 function renderableMessageSignature(messages: UiMessage[]): string {
-  return messages
+  return recentMessagesForReactiveWatch(messages)
     .filter((message) => !isCommandMessage(message) && message.messageType !== 'worked')
     .map((message) => [
       message.id,
@@ -3784,9 +4557,9 @@ function renderableMessageSignature(messages: UiMessage[]): string {
 }
 
 watch(
-  () => renderableConversationEntries.value.length,
+  () => renderableMessages.value.length,
   (nextLength, previousLength) => {
-    const nextLatestStartIndex = latestVisibleStartIndex(nextLength)
+    const nextLatestStartIndex = latestVisibleStartIndex(renderableMessages.value)
     if (previousLength == null) {
       visibleMessageStartIndex.value = nextLatestStartIndex
       return
@@ -3864,6 +4637,7 @@ function findLatestAssistantResponseEntryAfterUser(): ConversationMessageEntry |
 }
 
 function maybeAnchorLongAssistantResponse(allowActualBottom = false): boolean {
+  if (props.isTurnInProgress === true) return false
   const container = conversationListRef.value
   if (!container) return false
   if (!shouldLockToBottom() && !(allowActualBottom && isAtBottom(container))) return false
@@ -3935,7 +4709,7 @@ function runBottomLockFrame(): void {
   bottomLockFrame = requestAnimationFrame(runBottomLockFrame)
 }
 
-function scheduleBottomLock(frames = 6): void {
+function scheduleBottomLock(frames = 1): void {
   if (!shouldLockToBottom()) return
   if (bottomLockFrame) {
     cancelAnimationFrame(bottomLockFrame)
@@ -3989,12 +4763,13 @@ async function scheduleScrollRestore(forceBottom = shouldLockToBottom()): Promis
 watch(
   () => props.messages,
   async (next, previous) => {
-    syncObservedCommandStartTimes(next)
-    if (props.isLoading) return
+    const watchedMessages = messagesForReactiveWatch(next)
+    syncObservedCommandStartTimes(watchedMessages)
+    if (props.isLoading && !hasVisibleConversationContent.value) return
     const previousMessages = previous ?? EMPTY_MESSAGES
     const shouldFollowBottom = shouldLockToBottom()
 
-    for (const m of next) {
+    for (const m of watchedMessages) {
       if (m.messageType !== 'commandExecution' || !m.commandExecution) continue
       const prev = prevCommandStatuses.value[m.id]
       const cur = m.commandExecution.status
@@ -4020,6 +4795,19 @@ watch(
 )
 
 watch(
+  () => [
+    props.activeThreadId,
+    visibleRenderableEntries.value.length,
+    visibleContextPreview.value?.text ?? '',
+  ] as const,
+  async () => {
+    await nextTick()
+    markThreadFirstScreenReadyIfPossible()
+  },
+  { immediate: true, flush: 'post' },
+)
+
+watch(
   liveOverlayBehaviorSignature,
   async (signature) => {
     if (!signature) return
@@ -4027,7 +4815,7 @@ watch(
     await nextTick()
     if (!shouldFollowBottom) return
     enforceBottomState()
-    scheduleBottomLock(8)
+    scheduleBottomLock(1)
   },
 )
 
@@ -4058,6 +4846,14 @@ watch(
 )
 
 watch(
+  () => props.messages.length,
+  () => {
+    if (remoteOlderHistoryRequestTimer === null) return
+    clearRemoteOlderHistoryRequestInFlight()
+  },
+)
+
+watch(
   collapsibleGuidedTurnDescriptors,
   (nextDescriptors) => {
     const keepTurnIndexes = new Set(nextDescriptors.keys())
@@ -4082,17 +4878,20 @@ watch(
     closeFileLinkContextMenu()
     failedMarkdownImageKeys.value = new Set()
     preparedMessageBlocksById.clear()
+    estimatedMessageHeightById.clear()
     disconnectAllObservedElements(observedMessageElementsById)
     measuredMessageHeightById.value = {}
     expandedGuidedTurnIndexes.value = new Set()
+    expandedCodeBlockKeys.value = new Set()
+    expandedRawPayloadMessageIds.value = new Set()
     conversationScrollTop.value = 0
     lastGapMeasuredContainer = null
     lastGapMeasuredViewportHeight = -1
     lastScrollStateEmitAt = 0
     lastEmittedScrollStateSignature.value = ''
-    isRevealingOlderMessages.value = false
+    clearRemoteOlderHistoryRequestInFlight()
     canAutoRevealOlderMessages.value = true
-    visibleMessageStartIndex.value = latestVisibleStartIndex(renderableConversationEntries.value.length)
+    visibleMessageStartIndex.value = latestVisibleStartIndex(renderableMessages.value)
     clearBelowFoldUpdates()
     autoAnchoredLongResponseId.value = ''
     autoFollowBottom.value = props.scrollState?.isAtBottom !== false
@@ -4376,6 +5175,7 @@ watch(() => props.activeThreadId, () => {
   clearHighlightedMessage()
   clearRollbackConfirmation()
   activeMessageActionId.value = ''
+  expandedCodeBlockKeys.value = new Set()
   closeLiveOverlayDetail()
 })
 
@@ -4389,6 +5189,10 @@ onBeforeUnmount(() => {
   stopCommandElapsedTimer()
   clearHighlightedMessage()
   clearRollbackConfirmation()
+  if (copiedCodeBlockTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(copiedCodeBlockTimer)
+    copiedCodeBlockTimer = null
+  }
   if (scrollRestoreFrame) {
     cancelAnimationFrame(scrollRestoreFrame)
   }
@@ -4408,6 +5212,7 @@ onBeforeUnmount(() => {
     window.clearTimeout(scrollStateIdleTimer)
     scrollStateIdleTimer = null
   }
+  clearRemoteOlderHistoryRequestInFlight()
   if (observedConversationListElement) {
     observedConversationListElement.removeEventListener('scroll', onConversationScroll, { passive: true } as AddEventListenerOptions)
     observedConversationListElement = null
@@ -4420,6 +5225,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydownForFileLinkContextMenu)
   window.removeEventListener('keydown', onWindowKeydownForImageModal)
   window.removeEventListener('resize', onWindowResizeForImageModal)
+  removeCompactTableViewportListener()
   if (typeof document !== 'undefined') {
     document.body.style.overflow = previousBodyOverflow
   }
@@ -4438,17 +5244,22 @@ onBeforeUnmount(() => {
 }
 
 .conversation-status-loading {
-  @apply sticky top-0 z-10 mb-1.5 mt-1.5 flex items-center gap-2 rounded-full border border-[#e5dbca] bg-[#fffdf8]/96 px-3 py-1.5 text-xs text-[#7b7062];
+  @apply sticky top-0 z-10 mb-1.5 mt-1.5 flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs;
   width: fit-content;
   max-width: min(32rem, calc(100% - 1rem));
   margin-inline: auto;
+  border-color: var(--ui-border-subtle);
+  background: color-mix(in srgb, var(--ui-bg-surface) 96%, transparent);
+  color: var(--ui-text-secondary);
   backdrop-filter: blur(6px);
   animation: conversationFadeIn 160ms ease-out;
-  box-shadow: 0 10px 24px -22px rgba(31, 41, 55, 0.16);
+  box-shadow: 0 10px 24px -22px rgb(31 41 55 / 0.16);
 }
 
 .conversation-status-loading--switching {
-  @apply border-[#ead9b5] bg-[#fff9ee]/96 text-[#8a6a11];
+  border-color: color-mix(in srgb, var(--ui-warning) 24%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-warning) 6%, var(--ui-bg-surface));
+  color: color-mix(in srgb, var(--ui-warning) 72%, var(--ui-text-primary));
 }
 
 .conversation-status-loading-inline {
@@ -4461,20 +5272,29 @@ onBeforeUnmount(() => {
 }
 
 .conversation-process-panel {
-  @apply w-full mx-auto mb-1 flex flex-col gap-1.5;
+  @apply w-full mx-auto mb-1 flex flex-col gap-2;
   max-width: min(var(--content-shell-max-width, 88rem), 100%);
 }
 
 .conversation-process-toggle {
-  @apply inline-flex w-full items-center justify-between rounded-xl border border-[#e6dccb] bg-[#fffdf8] px-3 py-1.5 text-left text-[11px] font-semibold text-[#6d6354] transition-colors hover:border-[#d6c8b2] hover:bg-[#fffaf0];
+  @apply inline-flex w-full items-center justify-between border px-3 py-1.5 text-left text-[11px] font-semibold transition-colors;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.conversation-process-toggle:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
 }
 
 .conversation-process-section {
-  @apply flex flex-col gap-1.5;
+  @apply flex flex-col gap-2;
 }
 
 .conversation-process-stack {
-  @apply flex flex-col gap-1.5;
+  @apply flex flex-col gap-2;
 }
 
 .conversation-empty-state {
@@ -4482,7 +5302,8 @@ onBeforeUnmount(() => {
 }
 
 .conversation-empty {
-  @apply m-0 text-sm text-[#8f8577];
+  @apply m-0 text-sm;
+  color: var(--ui-text-tertiary);
 }
 
 .conversation-empty-actions {
@@ -4490,19 +5311,28 @@ onBeforeUnmount(() => {
 }
 
 .conversation-empty-action {
-  @apply inline-flex items-center justify-center rounded-full border border-[#d9d1c5] bg-[#fffaf2] px-3.5 py-1.5 text-xs font-medium text-[#6d5f4f] transition-colors;
+  @apply inline-flex items-center justify-center border px-3.5 py-1.5 text-xs font-medium transition-colors;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
 }
 
 .conversation-empty-action:hover {
-  @apply border-[#c8bca9] bg-[#f7efe2];
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .conversation-empty-action-primary {
-  @apply border-[#d7c27a] bg-[#f8efd2] text-[#725b12];
+  border-color: color-mix(in srgb, var(--ui-accent) 26%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-bg-surface));
+  color: var(--ui-accent);
 }
 
 .conversation-empty-action-primary:hover {
-  @apply border-[#c7af5d] bg-[#f2e4b6];
+  border-color: color-mix(in srgb, var(--ui-accent) 42%, var(--ui-border-strong));
+  background: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-bg-surface));
 }
 
 .conversation-list {
@@ -4512,7 +5342,7 @@ onBeforeUnmount(() => {
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
   scrollbar-width: thin;
-  scrollbar-color: rgba(143, 133, 119, 0.42) transparent;
+  scrollbar-color: color-mix(in srgb, var(--ui-text-tertiary) 42%, transparent) transparent;
   transition: opacity 140ms ease, transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -4529,11 +5359,11 @@ onBeforeUnmount(() => {
   min-height: 3rem;
   border: 0;
   border-radius: 999px;
-  background: rgba(143, 133, 119, 0.32);
+  background: color-mix(in srgb, var(--ui-text-tertiary) 32%, transparent);
 }
 
 .conversation-list::-webkit-scrollbar-thumb:hover {
-  background: rgba(91, 81, 70, 0.42);
+  background: color-mix(in srgb, var(--ui-text-secondary) 42%, transparent);
 }
 
 .conversation-list--switching {
@@ -4542,12 +5372,23 @@ onBeforeUnmount(() => {
 }
 
 .conversation-jump-to-latest {
-  @apply absolute bottom-4 right-4 z-20 inline-flex items-center gap-2 rounded-full border border-[#ddd3c2] bg-[#fffdf8] px-3 py-2 text-xs font-semibold text-[#544a3d] hover:border-[#bca98d] hover:text-[#1f2937];
+  @apply absolute bottom-4 right-4 z-20 inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold;
   bottom: max(1rem, calc(env(safe-area-inset-bottom) + 0.5rem));
+  border-color: var(--ui-border-subtle);
+  background: color-mix(in srgb, var(--ui-bg-surface) 96%, transparent);
+  color: var(--ui-text-secondary);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.08);
+}
+
+.conversation-jump-to-latest:hover {
+  border-color: var(--ui-border-strong);
+  color: var(--ui-text-primary);
 }
 
 .conversation-jump-to-latest.has-pending-updates {
-  @apply border-[#b8ddd6] bg-[#eef8f5]/95 text-[#0f766e];
+  border-color: color-mix(in srgb, var(--ui-accent) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-bg-surface));
+  color: var(--ui-accent);
 }
 
 .conversation-jump-to-latest-icon {
@@ -4582,16 +5423,26 @@ onBeforeUnmount(() => {
 }
 
 .conversation-load-more-button {
-  @apply mx-auto flex w-full flex-col items-center gap-0.5 rounded-2xl border border-dashed border-[#ddd3c2] bg-[#fffdf8] px-3 py-2 text-center transition-colors hover:border-[#cbb89b] hover:bg-[#fffaf0] disabled:cursor-default disabled:opacity-70;
+  @apply mx-auto flex w-full flex-col items-center gap-0.5 border border-dashed px-3 py-2 text-center transition-colors disabled:cursor-default disabled:opacity-70;
   max-width: min(var(--content-shell-max-width, 88rem), 100%);
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+}
+
+.conversation-load-more-button:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
 }
 
 .conversation-load-more-title {
-  @apply text-xs font-semibold text-[#544a3d];
+  @apply text-xs font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .conversation-load-more-hint {
-  @apply text-[11px] text-[#8f8577];
+  @apply text-[11px];
+  color: var(--ui-text-tertiary);
 }
 
 .message-row {
@@ -4619,20 +5470,30 @@ onBeforeUnmount(() => {
 }
 
 .request-card {
-  @apply w-full rounded-[20px] border border-[#ead9b5] bg-[#fff9ee] px-3 sm:px-3.5 py-2.5 sm:py-3 flex flex-col gap-1.5;
+  @apply w-full border px-3 sm:px-3.5 py-2.5 sm:py-3 flex flex-col gap-2;
   max-width: min(60rem, 100%);
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+}
+
+.request-card--tool-call {
+  border-color: color-mix(in srgb, var(--ui-danger) 20%, var(--ui-border-subtle));
 }
 
 .request-title {
-  @apply m-0 text-sm leading-5 font-semibold text-[#8a4a0d];
+  @apply m-0 text-sm leading-5 font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .request-meta {
-  @apply m-0 text-xs leading-4 text-[#ad6b28];
+  @apply m-0 text-xs leading-4;
+  color: var(--ui-text-tertiary);
 }
 
 .request-reason {
-  @apply m-0 text-sm leading-5 text-[#6a3a0b] whitespace-pre-wrap;
+  @apply m-0 whitespace-pre-wrap text-sm leading-5;
+  color: var(--ui-text-secondary);
 }
 
 .request-actions {
@@ -4644,31 +5505,107 @@ onBeforeUnmount(() => {
 }
 
 .request-button {
-  @apply rounded-xl border border-[#e2c486] bg-white px-3 py-1.5 text-xs text-[#7d4911] hover:bg-[#fff0c9];
+  @apply border px-3 py-1.5 text-xs font-medium transition-colors;
+  min-height: 2rem;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.request-button:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .request-button-primary {
-  @apply border-[#c56a12] bg-[#c56a12] text-white hover:bg-[#ab5b0f];
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: #fff;
+}
+
+.request-button-primary:hover {
+  border-color: color-mix(in srgb, var(--ui-accent) 82%, #000);
+  background: color-mix(in srgb, var(--ui-accent) 88%, #000);
+  color: #fff;
 }
 
 .request-user-input {
   @apply flex flex-col gap-2.5;
 }
 
+.request-tool-call {
+  @apply flex flex-col gap-2.5;
+}
+
+.request-tool-panel {
+  @apply border px-3 py-3 flex flex-col gap-2;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+}
+
+.request-tool-badge {
+  @apply w-fit rounded-full border px-2 py-0.5 text-[10px] font-semibold;
+  border-color: color-mix(in srgb, var(--ui-danger) 26%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
+  color: var(--ui-danger);
+}
+
+.request-tool-title {
+  @apply m-0 text-base leading-6 font-semibold;
+  color: var(--ui-text-primary);
+}
+
+.request-tool-text {
+  @apply m-0 text-sm leading-5;
+  color: var(--ui-text-secondary);
+}
+
+.request-tool-grid {
+  @apply m-0 grid grid-cols-1 sm:grid-cols-2 gap-2;
+}
+
+.request-tool-item {
+  @apply border px-2.5 py-2;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+}
+
+.request-tool-term {
+  @apply text-[11px] leading-4;
+  color: var(--ui-text-tertiary);
+}
+
+.request-tool-value {
+  @apply m-0 break-all font-mono text-xs leading-5;
+  color: var(--ui-text-primary);
+}
+
 .request-permission-panel {
-  @apply rounded-2xl border border-[#ead9b5] bg-white/70 px-3 py-3 flex flex-col gap-2;
+  @apply border px-3 py-3 flex flex-col gap-2;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
 }
 
 .request-permission-badge {
-  @apply w-fit rounded-full border border-[#cbe7e1] bg-[#f0fdfa] px-2 py-0.5 text-[10px] font-semibold tracking-[0.08em] text-[#0f766e];
+  @apply w-fit rounded-full border px-2 py-0.5 text-[10px] font-semibold;
+  border-color: color-mix(in srgb, var(--ui-danger) 26%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
+  color: var(--ui-danger);
 }
 
 .request-permission-title {
-  @apply m-0 text-base leading-6 font-semibold text-[#3a2a14];
+  @apply m-0 text-base leading-6 font-semibold;
+  color: var(--ui-text-primary);
 }
 
 .request-permission-text {
-  @apply m-0 text-sm leading-5 text-[#6a3a0b];
+  @apply m-0 text-sm leading-5;
+  color: var(--ui-text-secondary);
 }
 
 .request-permission-grid {
@@ -4676,19 +5613,27 @@ onBeforeUnmount(() => {
 }
 
 .request-permission-item {
-  @apply rounded-xl border border-[#f1dfba] bg-[#fffaf0] px-2.5 py-2;
+  @apply border px-2.5 py-2;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
 }
 
 .request-permission-term {
-  @apply text-[11px] leading-4 text-[#ad6b28];
+  @apply text-[11px] leading-4;
+  color: var(--ui-text-tertiary);
 }
 
 .request-permission-value {
-  @apply m-0 break-all font-mono text-xs leading-5 text-[#3a2a14];
+  @apply m-0 break-all font-mono text-xs leading-5;
+  color: var(--ui-text-primary);
 }
 
 .request-permission-note {
-  @apply m-0 rounded-xl bg-[#f8edda] px-2.5 py-2 text-xs leading-5 text-[#7d4911];
+  @apply m-0 px-2.5 py-2 text-xs leading-5;
+  border-radius: var(--ui-radius-card);
+  background: color-mix(in srgb, var(--ui-danger) 6%, var(--ui-bg-surface));
+  color: color-mix(in srgb, var(--ui-danger) 78%, var(--ui-text-primary));
 }
 
 .request-question {
@@ -4732,11 +5677,14 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-inline {
-  @apply w-full rounded-2xl border border-[#d7ebe7] bg-[#f9fcfb] px-3 py-2 flex flex-col gap-1.5;
+  @apply w-full border px-3 py-2 flex flex-col gap-1.5;
   max-width: min(60rem, 100%);
   position: relative;
   overflow: hidden;
-  box-shadow: 0 10px 24px -24px rgba(15, 118, 110, 0.42);
+  border-radius: var(--ui-radius-card);
+  border-color: color-mix(in srgb, var(--ui-accent) 24%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-accent) 5%, var(--ui-bg-surface));
+  box-shadow: 0 10px 24px -24px color-mix(in srgb, var(--ui-accent) 42%, transparent);
 }
 
 .live-overlay-inline-compact {
@@ -4854,7 +5802,11 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-command-row {
-  @apply cursor-default hover:bg-[#f8f4ec];
+  @apply cursor-default;
+}
+
+.live-overlay-command-row:hover {
+  background: var(--ui-bg-row-hover);
 }
 
 .live-overlay-command-output-wrap {
@@ -4887,11 +5839,15 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-detail-sheet {
-  @apply w-full max-w-3xl rounded-t-[26px] border border-[#d8eee9] bg-[#fffdf8] px-4 pb-4 pt-2 text-[#1f2937] shadow-2xl shadow-[#1f2937]/20;
+  @apply w-full max-w-3xl border px-4 pb-4 pt-2 shadow-2xl shadow-[#1f2937]/20;
   max-height: min(74dvh, 40rem);
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  border-radius: 18px 18px 0 0;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
 }
 
 .live-overlay-detail-handle {
@@ -4899,7 +5855,9 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-detail-header {
-  @apply sticky top-0 z-[1] -mx-4 flex items-start justify-between gap-3 border-b border-[#eee6d8] bg-[#fffdf8]/96 px-4 pb-3 pt-1 backdrop-blur;
+  @apply sticky top-0 z-[1] -mx-4 flex items-start justify-between gap-3 border-b px-4 pb-3 pt-1 backdrop-blur;
+  border-color: var(--ui-border-subtle);
+  background: color-mix(in srgb, var(--ui-bg-surface) 96%, transparent);
 }
 
 .live-overlay-detail-title-group {
@@ -4932,19 +5890,26 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-detail-command-row {
-  @apply cursor-default hover:bg-[#f8f4ec];
+  @apply cursor-default;
+}
+
+.live-overlay-detail-command-row:hover {
+  background: var(--ui-bg-row-hover);
 }
 
 .live-overlay-detail-output,
 .live-overlay-detail-reasoning {
-  @apply mt-2 max-h-[44dvh] overflow-auto rounded-2xl border border-[#d8cfbf] bg-[#111827] px-3 py-2 text-xs leading-5 text-[#f8fafc];
+  @apply mt-2 max-h-[44dvh] overflow-auto border bg-[#111827] px-3 py-2 text-xs leading-5 text-[#f8fafc];
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   -webkit-overflow-scrolling: touch;
 }
 
 .live-overlay-detail-reasoning {
-  @apply bg-[#f8f4ec] text-[#34413d];
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-primary);
 }
 
 .live-overlay-detail-empty,
@@ -4957,7 +5922,11 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-detail-error {
-  @apply m-0 rounded-2xl border border-[#f1cbc3] bg-[#fff0ec] px-3 py-2 text-sm leading-5 text-[#c2410c];
+  @apply m-0 border px-3 py-2 text-sm leading-5;
+  border-radius: var(--ui-radius-card);
+  border-color: color-mix(in srgb, var(--ui-danger) 26%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
+  color: var(--ui-danger);
 }
 
 .live-overlay-request-link {
@@ -5021,7 +5990,14 @@ onBeforeUnmount(() => {
 }
 
 .message-image-button {
-  @apply block rounded-2xl overflow-hidden border border-[#ddd5c7] bg-white p-0 hover:border-[#bca98d];
+  @apply block overflow-hidden border p-0;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+}
+
+.message-image-button:hover {
+  border-color: var(--ui-border-strong);
 }
 
 .message-image-preview {
@@ -5029,19 +6005,41 @@ onBeforeUnmount(() => {
 }
 
 .message-file-attachments {
-  @apply mb-1.5 flex flex-wrap gap-1.5;
+  @apply mb-2 grid max-w-full gap-1.5;
+  grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
 }
 
-.message-file-chip {
-  @apply inline-flex items-center gap-1 rounded-full border border-[#ddd5c7] bg-[#f7f1e5] px-2.5 py-1 text-xs text-[#6d6354];
+.message-file-card {
+  @apply flex min-w-0 items-center gap-2 border px-2.5 py-2;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
 }
 
-.message-file-chip-icon {
-  @apply text-[10px] leading-none;
+.message-file-card-icon {
+  @apply inline-flex h-8 w-8 shrink-0 items-center justify-center;
+  border-radius: var(--ui-radius-control);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
 }
 
-.message-file-chip-name {
-  @apply truncate max-w-40 font-mono;
+.message-file-card-icon-svg {
+  @apply h-4 w-4;
+}
+
+.message-file-card-copy {
+  @apply flex min-w-0 flex-1 flex-col gap-0.5;
+}
+
+.message-file-card-title {
+  @apply block max-w-full truncate text-sm font-medium;
+  color: var(--ui-text-primary);
+}
+
+.message-file-card-path {
+  @apply block max-w-full truncate text-xs;
+  color: var(--ui-text-tertiary);
+  font-family: var(--font-mono-ui);
 }
 
 .message-card {
@@ -5055,11 +6053,17 @@ onBeforeUnmount(() => {
 }
 
 .message-text-flow--long-collapsed {
-  @apply rounded-2xl border border-[#e7ddcf] bg-[#fffaf2]/65 p-3;
+  @apply border p-3;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
 }
 
 .message-text-flow--long-expanded {
-  @apply max-h-[760px] overflow-auto rounded-2xl border border-[#e7ddcf] bg-[#fffaf2]/65 p-2.5;
+  @apply max-h-[760px] overflow-auto border p-2.5;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
   overscroll-behavior: contain;
 }
 
@@ -5071,6 +6075,18 @@ onBeforeUnmount(() => {
   letter-spacing: var(--tracking-body-soft);
 }
 
+.message-streaming-text::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 0.18rem;
+  border-radius: 999px;
+  background: var(--ui-accent);
+  vertical-align: -0.12em;
+  animation: streamingCaretPulse 900ms ease-in-out infinite;
+}
+
 .message-bold-text {
   @apply font-semibold text-[#1f2937];
 }
@@ -5080,7 +6096,11 @@ onBeforeUnmount(() => {
 }
 
 .message-inline-code {
-  @apply rounded-xl border border-[#dfd7ca] bg-[#f5f1e8] px-1.5 py-0.5 text-[0.875em] leading-[1.4] text-[#2d261f] font-mono;
+  @apply border px-1.5 py-0.5 text-[0.875em] leading-[1.4] font-mono;
+  border-radius: calc(var(--ui-radius-card) - 2px);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-primary);
   font-family: var(--font-mono-ui);
 }
 
@@ -5089,7 +6109,10 @@ onBeforeUnmount(() => {
 }
 
 .message-table-scroll {
-  @apply max-w-full overflow-x-auto rounded-2xl border border-[#e6ddcf] bg-[#fffdf8];
+  @apply max-w-full overflow-x-auto border;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
   overscroll-behavior-x: contain;
 }
 
@@ -5102,12 +6125,17 @@ onBeforeUnmount(() => {
 }
 
 .message-table th {
-  @apply border-b border-[#e5dccd] bg-[#f8f2e8] px-3 py-2 text-xs font-semibold text-[#5c5144];
+  @apply border-b px-3 py-2 text-xs font-semibold;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
   vertical-align: top;
 }
 
 .message-table td {
-  @apply border-b border-[#eee6db] px-3 py-2 text-sm text-[#2b261f];
+  @apply border-b px-3 py-2 text-sm;
+  border-color: var(--ui-border-subtle);
+  color: var(--ui-text-primary);
   vertical-align: top;
 }
 
@@ -5125,25 +6153,132 @@ onBeforeUnmount(() => {
 }
 
 .message-table-card {
-  @apply rounded-2xl border border-[#e8dfd1] bg-[#fffdf8] p-2.5;
+  @apply border p-2.5;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
 }
 
 .message-table-card-row {
-  @apply grid gap-1 border-b border-[#eee6db] py-2 first:pt-0 last:border-b-0 last:pb-0;
+  @apply grid gap-1 border-b py-2 first:pt-0 last:border-b-0 last:pb-0;
   grid-template-columns: minmax(5.5rem, 34%) minmax(0, 1fr);
+  border-color: var(--ui-border-subtle);
 }
 
 .message-table-card-label {
-  @apply text-xs font-semibold leading-relaxed text-[#7a6d5e];
+  @apply text-xs font-semibold leading-relaxed;
+  color: var(--ui-text-secondary);
 }
 
 .message-table-card-value {
-  @apply text-sm leading-relaxed text-[#29241e];
+  @apply text-sm leading-relaxed;
+  color: var(--ui-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.message-code-block {
+  @apply my-1 max-w-full overflow-hidden border border-[#d8d1c6] bg-[#191816];
+  border-radius: var(--ui-radius-card);
+}
+
+.message-code-header {
+  @apply flex items-center justify-between gap-3 border-b border-white/10 bg-[#24211d] px-3 py-1.5;
+}
+
+.message-code-meta {
+  @apply flex min-w-0 items-center gap-2;
+}
+
+.message-code-language,
+.message-code-count {
+  @apply text-[11px] font-medium leading-none text-[#d8d0c3];
+  font-family: var(--font-sans-ui);
+}
+
+.message-code-count {
+  @apply text-[#a69c8d];
+}
+
+.message-code-copy {
+  @apply inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 text-[11px] font-medium text-[#d8d0c3] transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30;
+  font-family: var(--font-sans-ui);
+}
+
+.message-code-copy-icon {
+  @apply h-3.5 w-3.5;
+}
+
+.message-code-pre {
+  @apply m-0 max-w-full overflow-x-auto p-0 text-[12.5px] leading-5 text-[#ece7de];
+  font-family: var(--font-mono-ui);
+  tab-size: 2;
+}
+
+.message-code-pre code {
+  @apply block min-w-full py-2;
+}
+
+.message-code-footer {
+  @apply flex justify-center border-t border-white/10 bg-[#24211d] px-3 py-1.5;
+}
+
+.message-code-expand {
+  @apply rounded-md px-2 py-1 text-[11px] font-medium text-[#d8d0c3] transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30;
+  font-family: var(--font-sans-ui);
+}
+
+.message-code-line {
+  @apply block min-h-5 px-3 whitespace-pre;
+}
+
+.message-code-line[data-kind='add'] {
+  @apply bg-emerald-500/12 text-emerald-100;
+}
+
+.message-code-line[data-kind='delete'] {
+  @apply bg-rose-500/12 text-rose-100;
+}
+
+.message-code-line[data-kind='meta'] {
+  @apply bg-sky-500/10 text-sky-100;
+}
+
+.message-structured-card {
+  @apply mb-1.5 max-w-full overflow-hidden border;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
+}
+
+.message-structured-summary {
+  @apply flex cursor-pointer items-center justify-between gap-3 px-3 py-2 text-xs;
+  color: var(--ui-text-secondary);
+  font-family: var(--font-sans-ui);
+}
+
+.message-structured-title {
+  @apply font-semibold;
+  color: var(--ui-text-primary);
+}
+
+.message-structured-meta {
+  @apply shrink-0;
+  color: var(--ui-text-tertiary);
+}
+
+.message-structured-pre {
+  @apply m-0 max-h-72 overflow-auto border-t p-3 text-[12px] leading-5;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
+  font-family: var(--font-mono-ui);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .message-long-summary {
-  @apply m-0 text-xs leading-snug text-[#776d60];
+  @apply m-0 text-xs leading-snug;
+  color: var(--ui-text-secondary);
 }
 
 .message-long-actions {
@@ -5151,7 +6286,35 @@ onBeforeUnmount(() => {
 }
 
 .message-long-action {
-  @apply inline-flex min-h-7 items-center rounded-full border border-[#d8cfbf] bg-[#fffdf8] px-2.5 py-1 text-xs font-medium text-[#62584b] transition-[background-color,border-color,color] duration-150 hover:border-[#bfae93] hover:bg-[#f7f1e5] hover:text-[#322b24];
+  @apply inline-flex min-h-7 items-center border px-2.5 py-1 text-xs font-medium transition-[background-color,border-color,color] duration-150;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.message-long-action:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+.history-notice-actions {
+  @apply mt-2 flex flex-wrap gap-1.5;
+}
+
+.history-notice-action {
+  @apply inline-flex min-h-7 items-center border px-2.5 py-1 text-xs font-medium transition-[background-color,border-color,color] duration-150;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.history-notice-action:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .message-file-link {
@@ -5163,11 +6326,21 @@ onBeforeUnmount(() => {
 }
 
 .file-link-context-menu {
-  @apply fixed z-50 min-w-28 rounded-2xl border border-[#ddd5c7] bg-[#fffcf7] p-1.5 shadow-lg;
+  @apply fixed z-50 min-w-28 border p-1.5 shadow-lg;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
 }
 
 .file-link-context-menu-item {
-  @apply block w-full rounded-xl px-2.5 py-1.5 text-left text-xs text-[#544a3d] hover:bg-[#f1ebde];
+  @apply block w-full px-2.5 py-1.5 text-left text-xs;
+  border-radius: calc(var(--ui-radius-card) - 2px);
+  color: var(--ui-text-secondary);
+}
+
+.file-link-context-menu-item:hover {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .message-stack[data-role='user'] {
@@ -5180,39 +6353,54 @@ onBeforeUnmount(() => {
 }
 
 .message-eyebrow {
-  @apply mb-0.5 px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8f8577];
+  @apply mb-0.5 px-1 text-[10px] font-semibold uppercase;
+  color: var(--ui-text-tertiary);
   font-family: var(--font-sans-ui);
 }
 
 .message-eyebrow[data-role='user'] {
-  @apply text-[#73695d];
+  color: var(--ui-text-secondary);
 }
 
 .message-eyebrow[data-role='assistant'] {
-  @apply text-[#0f766e];
+  color: var(--ui-accent);
 }
 
 .message-eyebrow[data-role='system'] {
-  @apply text-[#8a6a11];
+  color: var(--ui-warning);
 }
 
 .message-card[data-role='user'] {
-  @apply rounded-[18px] border border-[#e0d6c6] bg-[#f0e8dc] px-3 py-2;
+  @apply border px-3 py-2;
   max-width: min(36rem, 86vw);
   width: fit-content;
   margin-left: auto;
   align-self: flex-end;
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-active);
+}
+
+.message-card-context-preview[data-role='user'] {
+  opacity: 0.78;
+  border-style: dashed;
 }
 
 .message-card[data-role='assistant'] {
-  @apply rounded-[18px] border border-[#ece4d8] bg-white px-3.5 py-2.5;
+  @apply border px-3.5 py-2.5;
   max-width: min(62rem, calc(100% - 0.5rem));
-  box-shadow: 0 10px 20px -28px rgba(31, 41, 55, 0.14);
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: 0 10px 20px -28px rgb(31 41 55 / 0.14);
 }
 
 .message-card[data-role='system'] {
-  @apply rounded-[16px] border border-[#e8dfcf] bg-[#f8f4ec] px-3.5 py-2.5;
+  @apply border px-3.5 py-2.5;
   max-width: min(62rem, 100%);
+  border-radius: var(--ui-radius-card);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
 }
 
 .sr-only {
@@ -5319,21 +6507,45 @@ onBeforeUnmount(() => {
 }
 
 .message-action-button {
-  @apply opacity-0 inline-flex min-h-8 items-center gap-1 self-start rounded-full border border-transparent bg-[#fffdf8]/88 px-2 py-0.5 text-[11px] text-[#82786b] shadow-sm shadow-[#2d261f]/5 transition-[background-color,border-color,color,opacity] duration-150 hover:border-[#d8cfbf] hover:bg-[#f7f1e5] hover:text-[#544a3d];
+  @apply opacity-0 inline-flex min-h-8 items-center gap-1 self-start border border-transparent px-2 py-0.5 text-[11px] shadow-sm transition-[background-color,border-color,color,opacity] duration-150;
+  border-radius: var(--ui-radius-control);
+  background: color-mix(in srgb, var(--ui-bg-surface) 88%, transparent);
+  color: var(--ui-text-tertiary);
+  box-shadow: 0 6px 14px rgb(0 0 0 / 0.05);
   pointer-events: auto;
 }
 
+.message-action-button:hover {
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-secondary);
+}
+
 .message-action-button--favorite.is-favorited {
-  @apply border-[#d8c5a6] bg-[#f5ecdd] text-[#8a5b17] opacity-100;
+  @apply opacity-100;
+  border-color: color-mix(in srgb, var(--ui-warning) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-warning) 8%, var(--ui-bg-surface));
+  color: var(--ui-warning);
 }
 
 .message-action-button--rollback {
-  @apply border-[#ead1c8] bg-[#fff7f4]/92 text-[#9f4a35] hover:border-[#ddb2a3] hover:bg-[#fff1ec] hover:text-[#7f3325];
+  border-color: color-mix(in srgb, var(--ui-danger) 22%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 6%, var(--ui-bg-surface));
+  color: var(--ui-danger);
+}
+
+.message-action-button--rollback:hover {
+  border-color: color-mix(in srgb, var(--ui-danger) 34%, var(--ui-border-strong));
+  background: color-mix(in srgb, var(--ui-danger) 9%, var(--ui-bg-surface));
+  color: color-mix(in srgb, var(--ui-danger) 84%, var(--ui-text-primary));
 }
 
 .message-action-button--rollback.is-confirming {
-  @apply border-[#dc8f78] bg-[#fff1ec] text-[#7f3325] opacity-100;
-  box-shadow: 0 0 0 2px rgba(220, 143, 120, 0.18);
+  @apply opacity-100;
+  border-color: color-mix(in srgb, var(--ui-danger) 46%, var(--ui-border-strong));
+  background: color-mix(in srgb, var(--ui-danger) 10%, var(--ui-bg-surface));
+  color: color-mix(in srgb, var(--ui-danger) 84%, var(--ui-text-primary));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-danger) 18%, transparent);
 }
 
 .message-action-icon {
@@ -5345,7 +6557,18 @@ onBeforeUnmount(() => {
 }
 
 .guided-turn-toggle {
-  @apply inline-flex max-w-full items-center gap-2 self-start rounded-full border border-[#e4dac9] bg-[#fffdf8] px-3 py-1.5 text-left text-[#74695a] shadow-[0_8px_18px_rgba(114,92,63,0.06)] transition-[background-color,border-color,color,box-shadow] duration-150 hover:border-[#d3c4ad] hover:bg-[#fbf5ea] hover:text-[#564c40];
+  @apply inline-flex max-w-full items-center gap-1.5 self-start border px-2 py-1 text-left transition-[background-color,border-color,color] duration-150;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+  box-shadow: none;
+}
+
+.guided-turn-toggle:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 @media (min-width: 1024px) {
@@ -5411,8 +6634,8 @@ onBeforeUnmount(() => {
   }
 
   .message-text {
-    font-size: 14px;
-    line-height: 1.52;
+    font-size: 15px;
+    line-height: 1.58;
   }
 
   .message-table-scroll {
@@ -5423,9 +6646,83 @@ onBeforeUnmount(() => {
     @apply flex;
   }
 
+  .request-card {
+    @apply gap-1.5 px-2.5 py-2;
+    max-width: 100%;
+  }
+
+  .request-tool-panel,
+  .request-permission-panel {
+    @apply gap-1.5 px-2.5 py-2;
+  }
+
+  .request-tool-title,
+  .request-permission-title {
+    @apply text-sm leading-5;
+  }
+
+  .request-tool-text,
+  .request-permission-text {
+    @apply text-xs leading-5;
+  }
+
+  .request-tool-grid,
+  .request-permission-grid {
+    @apply gap-1.5;
+  }
+
+  .request-tool-item,
+  .request-permission-item {
+    @apply px-2 py-1.5;
+  }
+
+  .request-actions {
+    @apply grid grid-cols-1 gap-1.5;
+  }
+
+  .request-button {
+    @apply w-full justify-center;
+    min-height: 2.25rem;
+  }
+
+  .message-file-attachments {
+    @apply gap-1;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .message-file-card {
+    @apply gap-1.5 px-2 py-1.5;
+  }
+
+  .message-file-card-icon {
+    @apply h-7 w-7;
+  }
+
+  .message-file-card-title {
+    @apply text-xs;
+  }
+
+  .message-file-card-path {
+    @apply text-[11px];
+  }
+
   .message-card[data-role='assistant'],
   .message-card[data-role='system'] {
     @apply rounded-[14px] px-2.5 py-2;
+  }
+
+  .message-body[data-role='assistant'] {
+    width: 100%;
+  }
+
+  .message-card[data-role='assistant'] {
+    @apply rounded-none border-0 bg-transparent px-0.5 py-1 shadow-none;
+    max-width: 100%;
+  }
+
+  .message-eyebrow[data-role='user'],
+  .message-eyebrow[data-role='assistant'] {
+    display: none;
   }
 
   .message-card[data-role='user'] {
@@ -5443,32 +6740,48 @@ onBeforeUnmount(() => {
 }
 
 .guided-turn-toggle[aria-expanded='true'] {
-  @apply border-[#cfc4af] bg-[#f7f1e5] text-[#544a3d];
+  border-color: color-mix(in srgb, var(--ui-accent) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-bg-surface));
+  color: var(--ui-accent);
 }
 
 .guided-turn-toggle-title {
-  @apply text-[12px] font-medium leading-none;
+  @apply text-[11px] font-medium leading-none;
 }
 
 .guided-turn-toggle-meta {
-  @apply rounded-full bg-[#f4eee2] px-1.5 py-0.5 text-[10px] font-medium leading-none text-[#8b7f70];
+  @apply rounded-full px-1 py-0.5 text-[10px] font-medium leading-none;
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-tertiary);
 }
 
 .cmd-row {
-  @apply w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded-[14px] border border-[#ddd5c7] bg-[#f8f4ec] cursor-pointer transition-colors duration-150 text-left hover:bg-[#f1ebde];
+  @apply w-full flex items-center gap-1.5 border px-2.5 py-1.5 cursor-pointer transition-colors duration-150 text-left;
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-x;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.cmd-row:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
 }
 
 .cmd-row.cmd-expanded {
-  @apply rounded-b-none border-b-0;
+  border-bottom: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
 }
 
 .cmd-chevron {
-  @apply text-[10px] text-[#8f8577] transition-transform duration-100 flex-shrink-0;
+  @apply text-[10px] transition-transform duration-100 flex-shrink-0;
+  color: var(--ui-text-tertiary);
 }
 
 .cmd-chevron-open {
@@ -5476,9 +6789,10 @@ onBeforeUnmount(() => {
 }
 
 .cmd-label {
-  @apply text-xs font-mono text-[#544a3d];
+  @apply text-xs font-mono;
   flex: 0 0 auto;
   min-width: max-content;
+  color: var(--ui-text-primary);
 }
 
 .cmd-status {
@@ -5498,7 +6812,8 @@ onBeforeUnmount(() => {
 }
 
 .cmd-duration {
-  @apply text-[11px] text-[#7b7062] flex-shrink-0;
+  @apply text-[11px] flex-shrink-0;
+  color: var(--ui-text-tertiary);
 }
 
 .cmd-status-running .cmd-status {
@@ -5514,22 +6829,24 @@ onBeforeUnmount(() => {
 }
 
 .cmd-output-wrap {
-  @apply rounded-b-lg bg-zinc-900;
+  background: #18181b;
   display: grid;
   grid-template-rows: 0fr;
   transition: grid-template-rows 150ms ease-out;
   border: 1px solid transparent;
   border-top: none;
+  border-bottom-right-radius: var(--ui-radius-control);
+  border-bottom-left-radius: var(--ui-radius-control);
 }
 
 .cmd-output-wrap.cmd-output-visible {
   grid-template-rows: 1fr;
-  border-color: #d8cfbf;
+  border-color: var(--ui-border-subtle);
 }
 
 .cmd-output-wrap.cmd-output-collapsing {
   grid-template-rows: 1fr;
-  border-color: #d8cfbf;
+  border-color: var(--ui-border-subtle);
 }
 
 .cmd-output-inner {
@@ -5560,6 +6877,20 @@ onBeforeUnmount(() => {
   .cmd-output-wrap {
     animation: none !important;
     transition: none !important;
+  }
+
+  .message-streaming-text::after {
+    animation: none !important;
+  }
+}
+
+@keyframes streamingCaretPulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
   }
 }
 

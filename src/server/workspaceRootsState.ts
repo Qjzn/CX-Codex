@@ -4,12 +4,16 @@ export type WorkspaceRootsState = {
   order: string[]
   labels: Record<string, string>
   active: string[]
+  projectOrder: string[]
+  pinnedProjectIds: string[]
 }
 
 const EMPTY_WORKSPACE_ROOTS_STATE: WorkspaceRootsState = {
   order: [],
   labels: {},
   active: [],
+  projectOrder: [],
+  pinnedProjectIds: [],
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -48,6 +52,8 @@ export function normalizeWorkspaceRootsState(value: unknown): WorkspaceRootsStat
     order: normalizeStringArray(record.order),
     labels: normalizeStringRecord(record.labels),
     active: normalizeStringArray(record.active),
+    projectOrder: normalizeStringArray(record.projectOrder),
+    pinnedProjectIds: normalizeStringArray(record.pinnedProjectIds),
   }
 }
 
@@ -57,6 +63,8 @@ export function readWorkspaceRootsStateFromPayload(payload: unknown): WorkspaceR
     order: normalizeStringArray(record['electron-saved-workspace-roots']),
     labels: normalizeStringRecord(record['electron-workspace-root-labels']),
     active: normalizeStringArray(record['active-workspace-roots']),
+    projectOrder: normalizeStringArray(record['project-order']),
+    pinnedProjectIds: normalizeStringArray(record['pinned-project-ids']),
   }
 }
 
@@ -84,6 +92,8 @@ export async function writeWorkspaceRootsState(
   payload['electron-saved-workspace-roots'] = normalizeStringArray(nextState.order)
   payload['electron-workspace-root-labels'] = normalizeStringRecord(nextState.labels)
   payload['active-workspace-roots'] = normalizeStringArray(nextState.active)
+  payload['project-order'] = normalizeStringArray(nextState.projectOrder)
+  payload['pinned-project-ids'] = normalizeStringArray(nextState.pinnedProjectIds)
 
   await writeFile(statePath, JSON.stringify(payload), 'utf8')
 }
@@ -97,6 +107,7 @@ export function upsertWorkspaceRootState(
   if (!normalizedPath) return normalizeWorkspaceRootsState(state)
 
   const order = [normalizedPath, ...state.order.filter((item) => item !== normalizedPath)]
+  const projectOrder = [normalizedPath, ...(state.projectOrder ?? []).filter((item) => item !== normalizedPath)]
   const active = [normalizedPath, ...state.active.filter((item) => item !== normalizedPath)]
   const labels = { ...state.labels }
   const normalizedLabel = label.trim()
@@ -104,5 +115,5 @@ export function upsertWorkspaceRootState(
     labels[normalizedPath] = normalizedLabel
   }
 
-  return { order, labels, active }
+  return { order, labels, active, projectOrder, pinnedProjectIds: [...(state.pinnedProjectIds ?? [])] }
 }

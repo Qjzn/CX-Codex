@@ -1,6 +1,34 @@
 @import "tailwindcss";
 
 :root {
+  --ui-bg-window: #f7f7f6;
+  --ui-bg-sidebar: #f3f3f2;
+  --ui-bg-surface: #ffffff;
+  --ui-bg-surface-muted: #f8f8f7;
+  --ui-bg-row-hover: #ededeb;
+  --ui-bg-row-active: #e9e9e7;
+  --ui-border-subtle: #e3e3df;
+  --ui-border-strong: #d6d6d0;
+  --ui-text-primary: #1f1f1f;
+  --ui-text-secondary: #6f6f6c;
+  --ui-text-tertiary: #92928d;
+  --ui-accent: #0f766e;
+  --ui-success: #0f766e;
+  --ui-warning: #9a6700;
+  --ui-danger: #c2410c;
+  --ui-focus: #2563eb;
+  --ui-sidebar-width: 356px;
+  --ui-topbar-height: 54px;
+  --ui-content-max: 900px;
+  --ui-composer-max: 900px;
+  --ui-composer-min-height: 92px;
+  --ui-row-height: 40px;
+  --ui-radius-row: 10px;
+  --ui-radius-card: 8px;
+  --ui-radius-control: 10px;
+  --ui-radius-pill: 999px;
+  --ui-radius-composer: 22px;
+  --ui-shadow-float: 0 14px 40px rgb(0 0 0 / 0.08);
   --font-sans-ui: "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei UI", "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-sans-reading: "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-mono-ui: "JetBrains Mono", "SFMono-Regular", "Cascadia Code", "Fira Code", "Consolas", "Liberation Mono", monospace;
@@ -36,8 +64,8 @@ body {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #fcfbf8;
-  color: #2d261f;
+  background: var(--ui-bg-window);
+  color: var(--ui-text-primary);
 }
 
 @media (max-width: 767px) {

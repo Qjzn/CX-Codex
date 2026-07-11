@@ -47,9 +47,11 @@ If you prefer a downloadable bundle, grab the latest zip from [GitHub Releases](
 
 ## 2. Build from source
 
+Source builds require Node.js `22.13.0` or newer and npm.
+
 ```powershell
 cd .\CX-Codex
-npm install
+npm ci
 npm run build
 ```
 

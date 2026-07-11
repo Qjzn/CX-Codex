@@ -1,6 +1,6 @@
 {
   "name": "cx-codex",
-  "version": "2.2.7",
+  "version": "2.3.0",
   "description": "CX-Codex Web UI and browser bridge for Windows, Linux, Android, LAN, and remote self-hosted access",
   "type": "module",
   "license": "MIT",
@@ -39,7 +39,7 @@
     "ai-coding-agent"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13.0"
   },
   "bin": {
     "cx-codex": "dist-cli/index.js",
@@ -51,8 +51,7 @@
     "docs/app-server-schema-audit-summary.json"
   ],
   "scripts": {
-    "dev": "pnpm install && vite",
-    "dev:open": "pnpm run build:cli && sh -c 'pnpm run dev & VPID=$!; node dist-cli/index.js --open-project \"${1:-.}\"; wait $VPID' --",
+    "dev": "vite",
     "build:frontend": "vue-tsc --noEmit && vite build",
     "build:cli": "tsup",
     "build": "npm run build:frontend && npm run build:cli",
@@ -64,6 +63,7 @@
     "setup:windows": "node ./scripts/run-powershell-script.mjs ./setup.ps1",
     "test:7420": "node ./scripts/run-powershell-script.mjs ./scripts/regression-7420.ps1",
     "test:7420:frontend": "node ./scripts/run-powershell-script.mjs ./scripts/regression-7420-frontend.ps1",
+    "test:7420:sidebar-data": "node ./scripts/verify-7420-sidebar-data.mjs",
     "test:7420:soak": "node ./scripts/run-powershell-script.mjs ./scripts/soak-7420.ps1",
     "audit:app-server-schemas": "node ./scripts/run-powershell-script.mjs ./scripts/audit-app-server-schemas.ps1",
     "audit:app-server-schemas:update-summary": "node ./scripts/update-app-server-schema-audit-summary.mjs",

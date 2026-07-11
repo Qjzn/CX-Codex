@@ -27,6 +27,7 @@ import {
 } from './normalizers/v2'
 import type {
   CollaborationMode,
+  ComposerModelInfo,
   ComposerPluginInfo,
   ComposerPluginSelection,
   ComposerTurnOptions,
@@ -47,6 +48,39 @@ type CurrentModelConfig = {
 }
 
 type RpcCallOptions = { signal?: AbortSignal }
+type ThreadListOptions = RpcCallOptions & {
+  maxPages?: number
+}
+type ThreadDetailOptions = RpcCallOptions & {
+  responseView?: 'full' | 'older'
+  beforeTurnIndex?: number
+  turnLimit?: number
+}
+type ProjectRootSuggestion = { name: string; path: string }
+type CachedProjectRootSuggestion = {
+  value: ProjectRootSuggestion
+  cachedAtMs: number
+}
+type CachedWorkspaceRootsState = {
+  value: WorkspaceRootsState
+  cachedAtMs: number
+}
+type CachedThreadRuntimeSnapshot = {
+  value: ThreadRuntimeSnapshot
+  cachedAtMs: number
+}
+
+const PROJECT_ROOT_SUGGESTION_CACHE_TTL_MS = 2000
+const WORKSPACE_ROOTS_STATE_CACHE_TTL_MS = 2000
+const THREAD_RUNTIME_SNAPSHOT_CACHE_TTL_MS = 900
+const projectRootSuggestionCacheByBasePath = new Map<string, CachedProjectRootSuggestion>()
+const projectRootSuggestionInFlightByBasePath = new Map<string, Promise<ProjectRootSuggestion>>()
+const threadRuntimeSnapshotCacheByThreadId = new Map<string, CachedThreadRuntimeSnapshot>()
+const threadRuntimeSnapshotInFlightByThreadId = new Map<string, Promise<ThreadRuntimeSnapshot>>()
+let workspaceRootsStateCache: CachedWorkspaceRootsState | null = null
+let workspaceRootsStateInFlight: Promise<WorkspaceRootsState> | null = null
+let projectRootSuggestionCacheGeneration = 0
+let workspaceRootsStateCacheGeneration = 0
 
 export type RuntimeExecutionState =
   | 'idle'
@@ -85,6 +119,53 @@ export type ThreadRuntimeSnapshot = {
   tokenUsage: UiThreadTokenUsage | null
 }
 
+function isRuntimeSnapshotCacheable(snapshot: ThreadRuntimeSnapshot): boolean {
+  return (
+    snapshot.stale !== true &&
+    snapshot.inProgress !== true &&
+    snapshot.executionState !== 'queued' &&
+    snapshot.executionState !== 'starting' &&
+    snapshot.executionState !== 'start_uncertain' &&
+    snapshot.executionState !== 'running' &&
+    snapshot.executionState !== 'waiting_permission' &&
+    snapshot.executionState !== 'stopping' &&
+    snapshot.executionState !== 'stop_uncertain' &&
+    snapshot.executionState !== 'completed_pending_sync' &&
+    snapshot.pendingServerRequests.length === 0
+  )
+}
+
+function readCachedThreadRuntimeSnapshot(threadId: string): ThreadRuntimeSnapshot | null {
+  const cached = threadRuntimeSnapshotCacheByThreadId.get(threadId)
+  if (!cached) return null
+  if (Date.now() - cached.cachedAtMs > THREAD_RUNTIME_SNAPSHOT_CACHE_TTL_MS) {
+    threadRuntimeSnapshotCacheByThreadId.delete(threadId)
+    return null
+  }
+  return cached.value
+}
+
+function writeCachedThreadRuntimeSnapshot(threadId: string, snapshot: ThreadRuntimeSnapshot): void {
+  if (!isRuntimeSnapshotCacheable(snapshot)) {
+    threadRuntimeSnapshotCacheByThreadId.delete(threadId)
+    return
+  }
+  threadRuntimeSnapshotCacheByThreadId.set(threadId, {
+    value: snapshot,
+    cachedAtMs: Date.now(),
+  })
+  while (threadRuntimeSnapshotCacheByThreadId.size > 20) {
+    const oldestKey = threadRuntimeSnapshotCacheByThreadId.keys().next().value
+    if (typeof oldestKey !== 'string') break
+    threadRuntimeSnapshotCacheByThreadId.delete(oldestKey)
+  }
+}
+
+function throwIfSignalAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted !== true) return
+  throw new DOMException('Aborted', 'AbortError')
+}
+
 export type RuntimeRequestStatus =
   | 'pending_start'
   | 'starting'
@@ -119,6 +200,8 @@ export type WorkspaceRootsState = {
   order: string[]
   labels: Record<string, string>
   active: string[]
+  projectOrder: string[]
+  pinnedProjectIds: string[]
 }
 
 export type ComposerFileSuggestion = {
@@ -511,28 +594,42 @@ function normalizeThreadTokenUsage(value: unknown): UiThreadTokenUsage | null {
 
 async function listThreadsByArchiveState(
   archived: boolean,
-  options: RpcCallOptions = {},
+  options: ThreadListOptions = {},
 ): Promise<ThreadListResponse['data']> {
   const data: ThreadListResponse['data'] = []
   let cursor: string | null = null
+  const maxPages = typeof options.maxPages === 'number' && Number.isFinite(options.maxPages) && options.maxPages > 0
+    ? Math.trunc(options.maxPages)
+    : Number.POSITIVE_INFINITY
+  let pageCount = 0
 
   do {
-    const payload: ThreadListResponse = await callRpc<ThreadListResponse>('thread/list', {
-      archived,
-      limit: 100,
-      sortKey: 'updated_at',
-      cursor,
-    }, options)
+    pageCount += 1
+    let payload: ThreadListResponse
+    try {
+      payload = await callRpc<ThreadListResponse>('thread/list', {
+        archived,
+        limit: 100,
+        sortKey: 'updated_at',
+        cursor,
+      }, options)
+    } catch (error) {
+      if (cursor && data.length > 0 && !isAbortLikeError(error)) {
+        console.warn('Stopped thread/list pagination after a cursor error', error)
+        break
+      }
+      throw error
+    }
     data.push(...payload.data)
     cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.length > 0
       ? payload.nextCursor
       : null
-  } while (cursor)
+  } while (cursor && pageCount < maxPages)
 
   return data
 }
 
-async function getThreadGroupsV2(options: RpcCallOptions = {}): Promise<UiProjectGroup[]> {
+async function getThreadGroupsV2(options: ThreadListOptions = {}): Promise<UiProjectGroup[]> {
   const data = await listThreadsByArchiveState(false, options)
   return normalizeThreadGroupsV2({ data, nextCursor: null })
 }
@@ -547,11 +644,15 @@ async function getThreadMessagesV2(threadId: string, options: RpcCallOptions = {
 
 async function getThreadDetailV2(
   threadId: string,
-  options: RpcCallOptions = {},
+  options: ThreadDetailOptions = {},
 ): Promise<{ messages: UiMessage[]; inProgress: boolean; activeTurnId: string }> {
   const payload = await callRpc<ThreadReadResponse>('thread/read', {
     threadId,
     includeTurns: true,
+    ...(options.responseView === 'full' ? { responseView: 'full' } : {}),
+    ...(options.responseView === 'older' ? { responseView: 'older' } : {}),
+    ...(typeof options.beforeTurnIndex === 'number' ? { beforeTurnIndex: options.beforeTurnIndex } : {}),
+    ...(typeof options.turnLimit === 'number' ? { turnLimit: options.turnLimit } : {}),
   }, options)
   return {
     messages: normalizeThreadMessagesV2(payload),
@@ -564,16 +665,54 @@ export async function getThreadRuntimeSnapshot(
   threadId: string,
   options: RpcCallOptions = {},
 ): Promise<ThreadRuntimeSnapshot> {
-  const response = await fetchWithTimeout(`/codex-api/state/thread/${encodeURIComponent(threadId)}`, {
-    signal: options.signal,
+  const normalizedThreadId = threadId.trim()
+  throwIfSignalAborted(options.signal)
+
+  const cachedSnapshot = readCachedThreadRuntimeSnapshot(normalizedThreadId)
+  if (cachedSnapshot) {
+    return cachedSnapshot
+  }
+
+  if (options.signal) {
+    const snapshot = await fetchThreadRuntimeSnapshot(normalizedThreadId, options.signal)
+    throwIfSignalAborted(options.signal)
+    return snapshot
+  }
+
+  const inFlightSnapshot = threadRuntimeSnapshotInFlightByThreadId.get(normalizedThreadId)
+  if (inFlightSnapshot) {
+    const snapshot = await inFlightSnapshot
+    throwIfSignalAborted(options.signal)
+    return snapshot
+  }
+
+  const request = fetchThreadRuntimeSnapshot(normalizedThreadId)
+  threadRuntimeSnapshotInFlightByThreadId.set(normalizedThreadId, request)
+  try {
+    const snapshot = await request
+    throwIfSignalAborted(options.signal)
+    return snapshot
+  } finally {
+    if (threadRuntimeSnapshotInFlightByThreadId.get(normalizedThreadId) === request) {
+      threadRuntimeSnapshotInFlightByThreadId.delete(normalizedThreadId)
+    }
+  }
+}
+
+async function fetchThreadRuntimeSnapshot(
+  normalizedThreadId: string,
+  signal?: AbortSignal,
+): Promise<ThreadRuntimeSnapshot> {
+  const response = await fetchWithTimeout(`/codex-api/state/thread/${encodeURIComponent(normalizedThreadId)}`, {
+    signal,
   }, {
     timeoutMs: GATEWAY_BACKGROUND_FETCH_TIMEOUT_MS,
-    label: `Thread state snapshot request for ${threadId}`,
+    label: `Thread state snapshot request for ${normalizedThreadId}`,
   })
 
   const payload = (await response.json()) as unknown
   if (!response.ok) {
-    throw new Error(getErrorMessageFromPayload(payload, `Failed to load thread snapshot ${threadId}`))
+    throw new Error(getErrorMessageFromPayload(payload, `Failed to load thread snapshot ${normalizedThreadId}`))
   }
 
   const record =
@@ -618,7 +757,7 @@ export async function getThreadRuntimeSnapshot(
     typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
   )
 
-  return {
+  const snapshot: ThreadRuntimeSnapshot = {
     messages: threadRead ? normalizeThreadMessagesV2(threadRead) : [],
     executionState,
     inProgress:
@@ -643,6 +782,8 @@ export async function getThreadRuntimeSnapshot(
     pendingServerRequests,
     tokenUsage,
   }
+  writeCachedThreadRuntimeSnapshot(normalizedThreadId, snapshot)
+  return snapshot
 }
 
 export async function getThreadRuntimeStatusSnapshot(
@@ -750,7 +891,7 @@ export async function getThreadTokenUsage(
   return normalizeThreadTokenUsage(data.tokenUsage)
 }
 
-export async function getThreadGroups(options: RpcCallOptions = {}): Promise<UiProjectGroup[]> {
+export async function getThreadGroups(options: ThreadListOptions = {}): Promise<UiProjectGroup[]> {
   try {
     return await getThreadGroupsV2(options)
   } catch (error) {
@@ -774,7 +915,7 @@ export async function getThreadMessages(threadId: string, options: RpcCallOption
 
 export async function getThreadDetail(
   threadId: string,
-  options: RpcCallOptions = {},
+  options: ThreadDetailOptions = {},
 ): Promise<{ messages: UiMessage[]; inProgress: boolean; activeTurnId: string }> {
   try {
     return await getThreadDetailV2(threadId, options)
@@ -800,7 +941,10 @@ export async function getNotificationReplay(afterSeq: number, limit = 200): Prom
 
 export function subscribeCodexNotifications(
   onNotification: (value: RpcNotification) => void,
-  options: { onConnectionStateChange?: (state: RpcConnectionState) => void } = {},
+  options: {
+    onConnectionStateChange?: (state: RpcConnectionState) => void
+    onTransportActivity?: () => void
+  } = {},
 ): () => void {
   return subscribeRpcNotifications(onNotification, options)
 }
@@ -817,8 +961,8 @@ export async function replyToServerRequest(
   })
 }
 
-export async function getPendingServerRequests(): Promise<unknown[]> {
-  return fetchPendingServerRequests()
+export async function getPendingServerRequests(options: RpcCallOptions = {}): Promise<unknown[]> {
+  return fetchPendingServerRequests(options)
 }
 
 export async function resumeThread(threadId: string, options: RpcCallOptions = {}): Promise<void> {
@@ -1272,15 +1416,45 @@ export async function setCodexSpeedMode(mode: SpeedMode): Promise<void> {
   })
 }
 
+export async function getAvailableModels(): Promise<ComposerModelInfo[]> {
+  const models: ComposerModelInfo[] = []
+  const seen = new Set<string>()
+  let cursor: string | null = null
+
+  do {
+    const payload: ModelListResponse = await callRpc<ModelListResponse>('model/list', {
+      ...(cursor ? { cursor } : {}),
+      includeHidden: false,
+    })
+    for (const row of payload.data) {
+      const model = (row.model || row.id).trim()
+      const id = (row.id || model).trim()
+      if (!model || row.hidden || seen.has(model)) continue
+      seen.add(model)
+      models.push({
+        id,
+        model,
+        displayName: row.displayName.trim() || model,
+        description: row.description.trim(),
+        hidden: row.hidden,
+        isDefault: row.isDefault,
+        defaultReasoningEffort: row.defaultReasoningEffort,
+        supportedReasoningEfforts: row.supportedReasoningEfforts.map((option) => ({
+          value: option.reasoningEffort,
+          description: option.description.trim(),
+        })),
+      })
+    }
+    cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.trim()
+      ? payload.nextCursor.trim()
+      : null
+  } while (cursor)
+
+  return models
+}
+
 export async function getAvailableModelIds(): Promise<string[]> {
-  const payload = await callRpc<ModelListResponse>('model/list', {})
-  const ids: string[] = []
-  for (const row of payload.data) {
-    const candidate = row.id || row.model
-    if (!candidate || ids.includes(candidate)) continue
-    ids.push(candidate)
-  }
-  return ids
+  return (await getAvailableModels()).map((model) => model.model)
 }
 
 export async function getCurrentModelConfig(): Promise<CurrentModelConfig> {
@@ -1326,10 +1500,41 @@ function normalizeWorkspaceRootsState(payload: unknown): WorkspaceRootsState {
     order: normalizeArray(record.order).map((value) => normalizePathForUi(value)),
     labels,
     active: normalizeArray(record.active).map((value) => normalizePathForUi(value)),
+    projectOrder: normalizeArray(record.projectOrder).map((value) => normalizePathForUi(value)),
+    pinnedProjectIds: normalizeArray(record.pinnedProjectIds).map((value) => normalizePathForUi(value)),
   }
 }
 
 export async function getWorkspaceRootsState(): Promise<WorkspaceRootsState> {
+  if (workspaceRootsStateCache && Date.now() - workspaceRootsStateCache.cachedAtMs < WORKSPACE_ROOTS_STATE_CACHE_TTL_MS) {
+    return cloneWorkspaceRootsState(workspaceRootsStateCache.value)
+  }
+  if (workspaceRootsStateInFlight) {
+    return cloneWorkspaceRootsState(await workspaceRootsStateInFlight)
+  }
+
+  const cacheGeneration = workspaceRootsStateCacheGeneration
+  const request = fetchWorkspaceRootsState()
+    .then((state) => {
+      if (workspaceRootsStateCacheGeneration === cacheGeneration) {
+        workspaceRootsStateCache = {
+          value: cloneWorkspaceRootsState(state),
+          cachedAtMs: Date.now(),
+        }
+      }
+      return state
+    })
+    .finally(() => {
+      if (workspaceRootsStateInFlight === request) {
+        workspaceRootsStateInFlight = null
+      }
+    })
+  workspaceRootsStateInFlight = request
+
+  return cloneWorkspaceRootsState(await request)
+}
+
+async function fetchWorkspaceRootsState(): Promise<WorkspaceRootsState> {
   const response = await fetchWithTimeout('/codex-api/workspace-roots-state', {}, {
     label: 'Workspace roots request',
   })
@@ -1344,6 +1549,16 @@ export async function getWorkspaceRootsState(): Promise<WorkspaceRootsState> {
   return normalizeWorkspaceRootsState(envelope.data)
 }
 
+function cloneWorkspaceRootsState(state: WorkspaceRootsState): WorkspaceRootsState {
+  return {
+    order: [...state.order],
+    labels: { ...state.labels },
+    active: [...state.active],
+    projectOrder: [...state.projectOrder],
+    pinnedProjectIds: [...state.pinnedProjectIds],
+  }
+}
+
 export async function createWorktree(sourceCwd: string): Promise<WorktreeCreateResult> {
   const response = await fetchWithTimeout('/codex-api/worktree/create', {
     method: 'POST',
@@ -1356,6 +1571,8 @@ export async function createWorktree(sourceCwd: string): Promise<WorktreeCreateR
   if (!response.ok || !payload.data) {
     throw new Error(payload.error || 'Failed to create worktree')
   }
+  clearWorkspaceRootsStateCache()
+  clearProjectRootSuggestionCache()
   return {
     ...payload.data,
     cwd: normalizePathForUi(payload.data.cwd),
@@ -1423,6 +1640,7 @@ export async function setWorkspaceRootsState(nextState: WorkspaceRootsState): Pr
   if (!response.ok) {
     throw new Error('Failed to save workspace roots state')
   }
+  clearWorkspaceRootsStateCache()
 }
 
 export async function openProjectRoot(path: string, options?: { createIfMissing?: boolean; label?: string }): Promise<string> {
@@ -1451,10 +1669,48 @@ export async function openProjectRoot(path: string, options?: { createIfMissing?
       ? (record.data as Record<string, unknown>)
       : {}
   const normalizedPath = typeof data.path === 'string' ? normalizePathForUi(data.path) : ''
+  if (normalizedPath) {
+    clearWorkspaceRootsStateCache()
+    clearProjectRootSuggestionCache()
+  }
   return normalizedPath
 }
 
-export async function getProjectRootSuggestion(basePath: string): Promise<{ name: string; path: string }> {
+export async function getProjectRootSuggestion(basePath: string): Promise<ProjectRootSuggestion> {
+  const normalizedBasePath = normalizePathForUi(basePath).trim()
+  if (!normalizedBasePath) {
+    return { name: '', path: '' }
+  }
+
+  const cached = projectRootSuggestionCacheByBasePath.get(normalizedBasePath)
+  if (cached && Date.now() - cached.cachedAtMs < PROJECT_ROOT_SUGGESTION_CACHE_TTL_MS) {
+    return cached.value
+  }
+
+  const inFlight = projectRootSuggestionInFlightByBasePath.get(normalizedBasePath)
+  if (inFlight) return await inFlight
+
+  const cacheGeneration = projectRootSuggestionCacheGeneration
+  const request = fetchProjectRootSuggestion(normalizedBasePath)
+    .then((suggestion) => {
+      if (projectRootSuggestionCacheGeneration === cacheGeneration) {
+        projectRootSuggestionCacheByBasePath.set(normalizedBasePath, {
+          value: suggestion,
+          cachedAtMs: Date.now(),
+        })
+      }
+      return suggestion
+    })
+    .finally(() => {
+      if (projectRootSuggestionInFlightByBasePath.get(normalizedBasePath) === request) {
+        projectRootSuggestionInFlightByBasePath.delete(normalizedBasePath)
+      }
+    })
+  projectRootSuggestionInFlightByBasePath.set(normalizedBasePath, request)
+  return await request
+}
+
+async function fetchProjectRootSuggestion(basePath: string): Promise<ProjectRootSuggestion> {
   const query = new URLSearchParams({ basePath })
   const response = await fetchWithTimeout(`/codex-api/project-root-suggestion?${query.toString()}`, {}, {
     label: 'Project root suggestion request',
@@ -1476,6 +1732,18 @@ export async function getProjectRootSuggestion(basePath: string): Promise<{ name
     name: typeof data.name === 'string' ? data.name.trim() : '',
     path: typeof data.path === 'string' ? normalizePathForUi(data.path) : '',
   }
+}
+
+function clearProjectRootSuggestionCache(): void {
+  projectRootSuggestionCacheGeneration += 1
+  projectRootSuggestionCacheByBasePath.clear()
+  projectRootSuggestionInFlightByBasePath.clear()
+}
+
+function clearWorkspaceRootsStateCache(): void {
+  workspaceRootsStateCacheGeneration += 1
+  workspaceRootsStateCache = null
+  workspaceRootsStateInFlight = null
 }
 
 export async function searchComposerFiles(cwd: string, query: string, limit = 20): Promise<ComposerFileSuggestion[]> {
@@ -2096,16 +2364,20 @@ type McpServerStatusResponseEntry = {
   authStatus?: string
 }
 
-type AppListResponseEntry = {
+type NativePluginListEntry = {
   id?: string
   name?: string
-  description?: string | null
-  logoUrl?: string | null
-  logoUrlDark?: string | null
-  distributionChannel?: string | null
-  installUrl?: string | null
-  isAccessible?: boolean
-  isEnabled?: boolean
+  installed?: boolean
+  enabled?: boolean
+  availability?: string
+  interface?: {
+    displayName?: string | null
+    shortDescription?: string | null
+  } | null
+}
+
+type NativePluginMarketplace = {
+  plugins?: NativePluginListEntry[]
 }
 
 function normalizePluginAuthStatus(value: unknown): PluginAuthStatus {
@@ -2143,8 +2415,44 @@ function normalizePluginDisplayName(name: string): string {
     .join(' ')
 }
 
-function normalizePluginListKey(source: 'mcp' | 'app', id: string): string {
+function normalizePluginListKey(source: ComposerPluginInfo['source'], id: string): string {
   return `${source}:${id.trim().toLowerCase()}`
+}
+
+function normalizeNativePluginInfo(entry: NativePluginListEntry): ComposerPluginInfo | null {
+  const id = typeof entry.id === 'string' ? entry.id.trim() : ''
+  if (
+    !id ||
+    entry.installed !== true ||
+    entry.enabled !== true ||
+    (typeof entry.availability === 'string' && entry.availability !== 'AVAILABLE')
+  ) {
+    return null
+  }
+  const rawName = typeof entry.interface?.displayName === 'string'
+    ? entry.interface.displayName.trim()
+    : ''
+  const fallbackName = typeof entry.name === 'string' ? entry.name.trim() : ''
+  const description = typeof entry.interface?.shortDescription === 'string'
+    ? entry.interface.shortDescription.trim()
+    : ''
+
+  return {
+    id,
+    name: rawName || normalizePluginDisplayName(fallbackName || id.split('@')[0] || id),
+    description,
+    source: 'plugin',
+    mentionPath: `plugin://${id}`,
+    authStatus: 'unknown',
+    isAccessible: true,
+    isEnabled: true,
+    distributionChannel: null,
+    installUrl: null,
+    toolCount: 0,
+    resourceCount: 0,
+    resourceTemplateCount: 0,
+    tools: [],
+  }
 }
 
 function normalizeMcpServerStatus(entry: McpServerStatusResponseEntry): ComposerPluginInfo | null {
@@ -2163,103 +2471,91 @@ function normalizeMcpServerStatus(entry: McpServerStatusResponseEntry): Composer
     .filter((tool): tool is { name: string; title: string; description: string } => tool !== null)
     .sort((first, second) => first.title.localeCompare(second.title))
 
+  const authStatus = normalizePluginAuthStatus(entry.authStatus)
+  const resourceCount = Array.isArray(entry.resources) ? entry.resources.length : 0
+  const resourceTemplateCount = Array.isArray(entry.resourceTemplates) ? entry.resourceTemplates.length : 0
+  if (tools.length === 0 && resourceCount === 0 && resourceTemplateCount === 0 && authStatus !== 'notLoggedIn') {
+    return null
+  }
+
   return {
     id: rawName,
     name: normalizePluginDisplayName(rawName),
     description: tools[0]?.description || '',
     source: 'mcp',
     mentionPath: `plugin://${rawName}`,
-    authStatus: normalizePluginAuthStatus(entry.authStatus),
+    authStatus,
     toolCount: tools.length,
-    resourceCount: Array.isArray(entry.resources) ? entry.resources.length : 0,
-    resourceTemplateCount: Array.isArray(entry.resourceTemplates) ? entry.resourceTemplates.length : 0,
+    resourceCount,
+    resourceTemplateCount,
     tools,
   }
 }
 
-function normalizeAppPluginInfo(entry: AppListResponseEntry): ComposerPluginInfo | null {
-  const id = typeof entry.id === 'string' ? entry.id.trim() : ''
-  if (!id) return null
-  const rawName = typeof entry.name === 'string' ? entry.name.trim() : ''
-  const description = typeof entry.description === 'string' ? entry.description.trim() : ''
-  const distributionChannel = typeof entry.distributionChannel === 'string'
-    ? entry.distributionChannel.trim()
-    : null
-  const installUrl = typeof entry.installUrl === 'string' ? entry.installUrl.trim() : null
+function sortComposerPlugins(plugins: ComposerPluginInfo[]): ComposerPluginInfo[] {
+  const priority: Record<ComposerPluginInfo['source'], number> = { plugin: 0, mcp: 1, app: 2 }
+  return plugins.sort((first, second) => {
+    if (first.source !== second.source) return priority[first.source] - priority[second.source]
+    return first.name.localeCompare(second.name)
+  })
+}
 
-  return {
-    id,
-    name: rawName || normalizePluginDisplayName(id),
-    description,
-    source: 'app',
-    mentionPath: `app://${id}`,
-    authStatus: 'unknown',
-    isAccessible: entry.isAccessible !== false,
-    isEnabled: entry.isEnabled !== false,
-    distributionChannel: distributionChannel || null,
-    installUrl: installUrl || null,
-    toolCount: 0,
-    resourceCount: 0,
-    resourceTemplateCount: 0,
-    tools: [],
+function mergeComposerPluginLists(...lists: ComposerPluginInfo[][]): ComposerPluginInfo[] {
+  const plugins: ComposerPluginInfo[] = []
+  const seen = new Set<string>()
+  for (const list of lists) {
+    for (const plugin of list) {
+      const key = normalizePluginListKey(plugin.source, plugin.id)
+      if (seen.has(key)) continue
+      seen.add(key)
+      plugins.push(plugin)
+    }
   }
+  return sortComposerPlugins(plugins)
+}
+
+export async function getNativeComposerPluginsList(): Promise<ComposerPluginInfo[]> {
+  const payload = await callRpc<{ marketplaces?: NativePluginMarketplace[] }>('plugin/list', {})
+  const plugins: ComposerPluginInfo[] = []
+  for (const marketplace of payload.marketplaces ?? []) {
+    for (const entry of marketplace.plugins ?? []) {
+      const plugin = normalizeNativePluginInfo(entry)
+      if (plugin) plugins.push(plugin)
+    }
+  }
+  return mergeComposerPluginLists(plugins)
+}
+
+export async function getMcpComposerPluginsList(): Promise<ComposerPluginInfo[]> {
+  const plugins: ComposerPluginInfo[] = []
+  let cursor: string | null = null
+  do {
+    const params: Record<string, unknown> = {}
+    if (cursor) params.cursor = cursor
+    const payload = await callRpc<{ data?: McpServerStatusResponseEntry[]; nextCursor?: string | null }>(
+      'mcpServerStatus/list',
+      params,
+    )
+    for (const entry of payload.data ?? []) {
+      const plugin = normalizeMcpServerStatus(entry)
+      if (plugin) plugins.push(plugin)
+    }
+    cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.trim()
+      ? payload.nextCursor.trim()
+      : null
+  } while (cursor)
+  return mergeComposerPluginLists(plugins)
 }
 
 export async function getComposerPluginsList(): Promise<ComposerPluginInfo[]> {
-  const plugins: ComposerPluginInfo[] = []
-  const seen = new Set<string>()
-
-  try {
-    let cursor: string | null = null
-    do {
-      const params: Record<string, unknown> = {}
-      if (cursor) params.cursor = cursor
-      const payload = await callRpc<{ data?: McpServerStatusResponseEntry[]; nextCursor?: string | null }>(
-        'mcpServerStatus/list',
-        params,
-      )
-      for (const entry of payload.data ?? []) {
-        const plugin = normalizeMcpServerStatus(entry)
-        if (!plugin) continue
-        const key = normalizePluginListKey(plugin.source, plugin.id)
-        if (seen.has(key)) continue
-        seen.add(key)
-        plugins.push(plugin)
-      }
-      cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.trim()
-        ? payload.nextCursor.trim()
-        : null
-    } while (cursor)
-  } catch {
-    // Older app-server builds may not expose MCP status. Keep app-list fallback below.
-  }
-
-  try {
-    let cursor: string | null = null
-    do {
-      const params: Record<string, unknown> = {}
-      if (cursor) params.cursor = cursor
-      const payload = await callRpc<{ data?: AppListResponseEntry[]; nextCursor?: string | null }>('app/list', params)
-      for (const entry of payload.data ?? []) {
-        const plugin = normalizeAppPluginInfo(entry)
-        if (!plugin) continue
-        const key = normalizePluginListKey(plugin.source, plugin.id)
-        if (seen.has(key)) continue
-        seen.add(key)
-        plugins.push(plugin)
-      }
-      cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.trim()
-        ? payload.nextCursor.trim()
-        : null
-    } while (cursor)
-  } catch {
-    // App list is optional. MCP plugins remain usable without it.
-  }
-
-  return plugins.sort((first, second) => {
-    if (first.source !== second.source) return first.source === 'mcp' ? -1 : 1
-    return first.name.localeCompare(second.name)
-  })
+  const [nativeResult, mcpResult] = await Promise.allSettled([
+    getNativeComposerPluginsList(),
+    getMcpComposerPluginsList(),
+  ])
+  return mergeComposerPluginLists(
+    nativeResult.status === 'fulfilled' ? nativeResult.value : [],
+    mcpResult.status === 'fulfilled' ? mcpResult.value : [],
+  )
 }
 
 export async function startComposerPluginOauthLogin(pluginId: string): Promise<string> {

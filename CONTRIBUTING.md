@@ -23,8 +23,16 @@
 
 ## 本地开发
 
+需要 Node.js `22.13.0` 或更高版本，依赖和脚本统一使用仓库内的 `package-lock.json` 与 npm。
+
 ```powershell
 npm ci
+npm run dev
+```
+
+提交前构建：
+
+```powershell
 npm run build
 ```
 

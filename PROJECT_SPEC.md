@@ -56,7 +56,7 @@
 | Type checking | TypeScript 5, vue-tsc 2 | ^5.7 / ^2.2 |
 | Server | Express 5 | ^5.1 |
 | CLI framework | Commander 13 | ^13.1 |
-| Runtime | Node.js >= 18 | — |
+| Runtime | Node.js >= 22.13.0 | — |
 
 ## Project Structure
 
@@ -302,27 +302,30 @@ Bidirectional sync between `selectedThreadId` state and URL is handled via Vue `
 
 ### Prerequisites
 
-- Node.js >= 18
+- Node.js >= 22.13.0
 - `codex` CLI installed and in PATH
 
 ### Scripts
 
 | Command | Description |
 |---|---|
-| `pnpm run dev` | Install deps + start Vite dev server (port 5173) |
-| `pnpm run build` | Type-check + build frontend + build CLI |
-| `pnpm run build:frontend` | `vue-tsc --noEmit && vite build` |
-| `pnpm run build:cli` | `tsup` (builds CLI to `dist-cli/`) |
-| `pnpm run preview` | Preview production build |
+| `npm ci` | Install the locked dependency graph |
+| `npm run dev` | Start Vite dev server (port 5173) |
+| `npm run build` | Type-check + build frontend + build CLI |
+| `npm run build:frontend` | `vue-tsc --noEmit && vite build` |
+| `npm run build:cli` | `tsup` (builds CLI to `dist-cli/`) |
+| `npm run preview` | Preview production build |
 
 ### Dev Mode
 
-`pnpm run dev` installs dependencies and starts a Vite dev server that includes the codex bridge as middleware. The bridge spawns `codex app-server` as a child process. The frontend calls `/codex-api/*` endpoints on the same origin.
+Run `npm ci` once, then use `npm run dev` to start a Vite dev server that includes the codex bridge as middleware. The bridge spawns `codex app-server` as a child process. The frontend calls `/codex-api/*` endpoints on the same origin.
 
 ### Production Mode
 
 ```bash
-npx codex-web-local [--port 5999] [--password mypass] [--no-password]
+npm ci
+npm run build
+node dist-cli/index.js [--port 5999] [--password mypass] [--no-password]
 ```
 
 The CLI starts an Express server that serves the built frontend from `dist/` and uses the same bridge middleware. Password authentication is enabled by default with an auto-generated password printed to the console.

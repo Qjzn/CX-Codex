@@ -34,7 +34,9 @@ export function isThreadMaterializingError(error: unknown): boolean {
     message.includes('is not materialized yet') ||
     message.includes('includeturns is unavailable before first user message') ||
     message.includes('no rollout found for thread id') ||
-    (message.includes('rollout') && message.includes('is empty'))
+    (message.includes('rollout') && message.includes('is empty')) ||
+    message.includes('does not start with session metadata') ||
+    (message.includes('thread-store internal error') && message.includes('failed to read thread'))
   )
 }
 

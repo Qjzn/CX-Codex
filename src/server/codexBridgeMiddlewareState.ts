@@ -24,6 +24,7 @@ import { readThreadTitlesFromSessionIndex } from './threadTitleCache.js'
 import { WindowsSandboxReadinessCache } from './windowsSandboxDiagnostics.js'
 
 const supplementalThreadListAugmenter = new AppServerThreadListAugmenter()
+const SIDEBAR_SESSION_INDEX_SUPPLEMENT_LIMIT = 80
 
 type CodexBridgeMiddlewareStateAppServer = {
   rpc(method: string, params: unknown): Promise<unknown>
@@ -32,6 +33,26 @@ type CodexBridgeMiddlewareStateAppServer = {
 export function createCodexBridgeMiddlewareState(
   appServer: CodexBridgeMiddlewareStateAppServer,
 ) {
+  const readSupplementalThreadIds = async (): Promise<string[]> => {
+    const [sessionIndexCache, pinnedThreadIds] = await Promise.all([
+      readThreadTitlesFromSessionIndex(getCodexSessionIndexPath()),
+      readMergedPinnedThreadIds(),
+    ])
+
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const rawThreadId of [
+      ...pinnedThreadIds,
+      ...sessionIndexCache.order.slice(0, SIDEBAR_SESSION_INDEX_SUPPLEMENT_LIMIT),
+    ]) {
+      const threadId = rawThreadId.trim()
+      if (!threadId || seen.has(threadId)) continue
+      seen.add(threadId)
+      result.push(threadId)
+    }
+    return result
+  }
+
   const threadSearchIndexStore = createThreadSearchIndexStore({
     listThreads: (params) => appServer.rpc('thread/list', params),
     getSessionIndexPath: getCodexSessionIndexPath,
@@ -40,7 +61,7 @@ export function createCodexBridgeMiddlewareState(
   const threadReadCacheStore = new AppServerThreadReadCacheStore()
   const augmentThreadListRpcResult = createAppServerThreadListRpcResultAugmenter({
     augmenter: supplementalThreadListAugmenter,
-    readPinnedThreadIds: readMergedPinnedThreadIds,
+    readSupplementalThreadIds,
     rpc: (method, params) => appServer.rpc(method, params),
   })
   const runtimeStateStore = new RuntimeStateStore({

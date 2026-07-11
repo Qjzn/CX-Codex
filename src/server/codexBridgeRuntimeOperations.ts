@@ -13,6 +13,7 @@ import {
 } from './appServerRuntimeReconciliation.js'
 import { createAppServerRuntimeSnapshotPersister } from './appServerRuntimeSnapshotPersistence.js'
 import type { CachedThreadRead } from './appServerThreadReadCache.js'
+import type { ThreadReadCacheSource } from './appServerThreadReadCache.js'
 import type { PendingServerRequest } from './pendingServerRequests.js'
 import type {
   RuntimeSnapshotOverlay,
@@ -61,7 +62,7 @@ type RuntimeStateStoreForOperations = {
 
 type ThreadReadCacheStoreForOperations = {
   get(threadId: string): CachedThreadRead | null
-  remember(threadId: string, threadRead: unknown): CachedThreadRead
+  remember(threadId: string, threadRead: unknown, source?: ThreadReadCacheSource): CachedThreadRead
 }
 
 export type CodexBridgeRuntimeOperationsDependencies = {
@@ -108,7 +109,7 @@ export function createCodexBridgeRuntimeOperations(
     rpc: (method, params) => appServer.rpc(method, params),
     observeThreadRead: (details) => dependencies.statusDiagnostics.observeThreadRead(details),
     getCachedThreadRead: (normalizedThreadId) => threadReadCacheStore.get(normalizedThreadId),
-    rememberCachedThreadRead: (normalizedThreadId, threadRead) => threadReadCacheStore.remember(normalizedThreadId, threadRead),
+    rememberCachedThreadRead: (normalizedThreadId, threadRead, source) => threadReadCacheStore.remember(normalizedThreadId, threadRead, source),
     snapshotRuntime: (normalizedThreadId, overlay) => runtimeStateStore.snapshot(normalizedThreadId, overlay),
     observeRuntimeThreadRead: (normalizedThreadId, inProgress, activeTurnId, updatedAtIso, source) => {
       runtimeStateStore.observeThreadRead(normalizedThreadId, inProgress, activeTurnId, updatedAtIso, source)

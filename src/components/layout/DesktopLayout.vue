@@ -54,8 +54,8 @@ const { isMobile, isDualPaneMobile, viewportWidth } = useMobile()
 
 const SIDEBAR_WIDTH_KEY = 'codex-web-local.sidebar-width.v1'
 const MIN_SIDEBAR_WIDTH = 260
-const MAX_SIDEBAR_WIDTH = 620
-const DEFAULT_SIDEBAR_WIDTH = 320
+const MAX_SIDEBAR_WIDTH = 420
+const DEFAULT_SIDEBAR_WIDTH = 356
 const TOUCH_DUAL_PANE_MIN_SIDEBAR_WIDTH = 236
 const TOUCH_DUAL_PANE_MAX_SIDEBAR_WIDTH = 340
 const TOUCH_DUAL_PANE_SIDEBAR_RATIO = 0.31
@@ -172,19 +172,18 @@ function onResizeHandlePointerDown(event: PointerEvent): void {
   height: 100vh;
   height: 100dvh;
   grid-template-columns: var(--layout-columns);
-  background:
-    radial-gradient(circle at top left, rgba(13, 148, 136, 0.03), transparent 18%),
-    linear-gradient(180deg, #fbf8f2 0%, #f6f1e7 100%);
+  background: var(--ui-bg-window);
 }
 
 .desktop-sidebar {
-  @apply min-h-0 overflow-hidden border-r border-[#e6dccb] bg-[#faf7f0];
+  @apply min-h-0 overflow-hidden border-r;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-sidebar);
 }
 
 .desktop-layout.is-dual-pane-touch .desktop-sidebar {
-  background:
-    linear-gradient(180deg, rgba(251, 247, 239, 0.995) 0%, rgba(246, 241, 232, 0.995) 100%);
-  box-shadow: 10px 0 28px -28px rgba(31, 41, 55, 0.22);
+  background: var(--ui-bg-sidebar);
+  box-shadow: none;
 }
 
 .desktop-resize-handle {
@@ -194,18 +193,19 @@ function onResizeHandlePointerDown(event: PointerEvent): void {
 
 .desktop-resize-handle::before {
   content: '';
-  @apply absolute left-1/2 top-0 bottom-0 w-px -translate-x-1/2 bg-[#d6cfc0] transition-colors;
+  @apply absolute left-1/2 top-0 bottom-0 w-px -translate-x-1/2 transition-colors;
+  background: var(--ui-border-subtle);
 }
 
 .desktop-resize-handle:hover::before,
 .desktop-resize-handle:focus-visible::before,
 .desktop-resize-handle:active::before {
-  @apply bg-[#8f826a];
+  background: var(--ui-border-strong);
 }
 
 .desktop-main {
   @apply relative min-h-0 min-w-0 overflow-y-hidden overflow-x-visible;
-  background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(250,247,240,0.985) 100%);
+  background: var(--ui-bg-surface);
   touch-action: pan-y;
   overscroll-behavior: contain;
 }
@@ -216,15 +216,16 @@ function onResizeHandlePointerDown(event: PointerEvent): void {
 }
 
 .mobile-drawer {
-  @apply absolute top-0 left-0 bottom-0 w-full max-w-none overflow-hidden border-r border-[#e4dac9];
+  @apply absolute top-0 left-0 bottom-0 w-full max-w-none overflow-hidden border-r;
+  border-color: var(--ui-border-subtle);
   width: 100vw;
   max-width: 100vw;
   border-top-right-radius: 1.5rem;
   border-bottom-right-radius: 1.5rem;
   padding-left: max(0px, env(safe-area-inset-left));
   isolation: isolate;
-  background: linear-gradient(180deg, rgba(251,247,239,0.995) 0%, rgba(246,241,232,0.995) 100%);
-  box-shadow: 0 16px 36px -32px rgba(31, 41, 55, 0.28);
+  background: var(--ui-bg-sidebar);
+  box-shadow: 0 16px 36px -34px rgba(31, 31, 31, 0.24);
 }
 
 @media (min-width: 768px) {

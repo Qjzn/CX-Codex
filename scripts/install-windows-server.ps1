@@ -413,6 +413,12 @@ function Wait-ForTunnelUrlFromLog {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $nodeCommand = Get-Command node -ErrorAction Stop
+$minimumNodeVersion = [Version]"22.13.0"
+$nodeVersionText = (& $nodeCommand.Source --version).Trim().TrimStart('v')
+$nodeVersion = [Version]$nodeVersionText
+if ($nodeVersion -lt $minimumNodeVersion) {
+  throw "Node.js $minimumNodeVersion or newer is required (found $nodeVersion). Run scripts/bootstrap-windows.ps1 to use a compatible portable LTS runtime."
+}
 $npmCommandInfo = Get-Command npm -ErrorAction Stop
 $npmExecutable = Resolve-NpmExecutable -CommandInfo $npmCommandInfo
 
