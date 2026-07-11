@@ -86,6 +86,14 @@ export type MobileShellDownloadFileResult = {
   bytes?: number
 }
 
+export type MobileShellDictationResult = {
+  text: string
+}
+
+export type MobileShellDictationStopResult = {
+  stopping: boolean
+}
+
 type MobileShellPlugin = {
   getServerConfig(): Promise<MobileShellServerConfig>
   setServerUrl(options: { serverUrl: string }): Promise<MobileShellServerConfig>
@@ -109,6 +117,9 @@ type MobileShellPlugin = {
   openUrl(options: { url: string }): Promise<MobileShellOpenUrlResult>
   openFileFromUrl(options: { url: string; fileName?: string; mimeType?: string }): Promise<MobileShellOpenFileResult>
   downloadFileFromUrl(options: { url: string; fileName?: string; mimeType?: string }): Promise<MobileShellDownloadFileResult>
+  startDictation(options: { language?: string }): Promise<MobileShellDictationResult>
+  stopDictation(): Promise<MobileShellDictationStopResult>
+  cancelDictation(): Promise<void>
 }
 
 const MobileShell = registerPlugin<MobileShellPlugin>('MobileShell')
@@ -198,4 +209,16 @@ export async function downloadMobileShellFileFromUrl(
   mimeType = '',
 ): Promise<MobileShellDownloadFileResult> {
   return await MobileShell.downloadFileFromUrl({ url, fileName, mimeType })
+}
+
+export async function startMobileShellDictation(language = ''): Promise<MobileShellDictationResult> {
+  return await MobileShell.startDictation({ language })
+}
+
+export async function stopMobileShellDictation(): Promise<MobileShellDictationStopResult> {
+  return await MobileShell.stopDictation()
+}
+
+export async function cancelMobileShellDictation(): Promise<void> {
+  await MobileShell.cancelDictation()
 }

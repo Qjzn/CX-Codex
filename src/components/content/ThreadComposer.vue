@@ -488,8 +488,17 @@
           class="thread-composer-actions"
           :class="{ 'thread-composer-actions--recording': isDictationRecording || dictationState === 'transcribing' }"
         >
-          <div v-if="dictationState === 'recording'" class="thread-composer-dictation-waveform-wrap" aria-hidden="true">
+          <div
+            v-if="dictationState === 'recording' && !usesNativeDictation"
+            class="thread-composer-dictation-waveform-wrap"
+            aria-hidden="true"
+          >
             <canvas ref="dictationWaveformCanvasRef" class="thread-composer-dictation-waveform" />
+          </div>
+
+          <div v-else-if="dictationState === 'recording'" class="thread-composer-dictation-native-status" aria-live="polite">
+            <span class="thread-composer-dictation-processing-dot" aria-hidden="true" />
+            <span>正在听写</span>
           </div>
 
           <div v-else-if="dictationState === 'transcribing'" class="thread-composer-dictation-processing" aria-live="polite">
@@ -726,6 +735,7 @@ const {
   state: dictationState,
   isSupported: isDictationSupported,
   supportsLiveRecording,
+  supportsNativeDictation,
   recordingDurationMs,
   waveformCanvasRef: dictationWaveformCanvasRef,
   startRecording,
@@ -981,12 +991,14 @@ const submitActionLabel = computed(() => {
 const isDictationRecording = computed(() => dictationState.value === 'recording')
 const shouldShowDictationButton = computed(() => props.showDictationButton !== false && isDictationSupported.value)
 const usesDictationUploadFallback = computed(() =>
-  shouldShowDictationButton.value && !supportsLiveRecording.value,
+  shouldShowDictationButton.value && !supportsLiveRecording.value && !supportsNativeDictation.value,
 )
+const usesNativeDictation = computed(() => supportsNativeDictation.value)
 const DICTATION_UPLOAD_FALLBACK_MESSAGE = '将打开系统录音或音频上传；转写完成后会先填入输入框。'
 const dictationButtonLabel = computed(() => {
   if (dictationState.value === 'recording') return '停止听写'
   if (dictationState.value === 'transcribing') return '正在转写'
+  if (usesNativeDictation.value) return '点击开始听写'
   if (usesDictationUploadFallback.value) return '上传语音或录音'
   return props.dictationClickToToggle ? '点击开始听写' : '按住开始听写'
 })
@@ -1529,6 +1541,16 @@ function onDictationToggle(): void {
     triggerAudioCapture()
     return
   }
+  if (usesNativeDictation.value) {
+    if (dictationFeedback.value) {
+      clearDictationFeedback()
+    }
+    if (dictationState.value === 'idle') {
+      dictationShouldRollbackLatestUserTurn = false
+    }
+    toggleRecording()
+    return
+  }
   if (!props.dictationClickToToggle) return
   if (dictationFeedback.value) {
     clearDictationFeedback()
@@ -1540,6 +1562,7 @@ function onDictationToggle(): void {
 }
 
 function onDictationPressStart(event: PointerEvent): void {
+  if (usesNativeDictation.value) return
   if (!supportsLiveRecording.value) return
   if (props.dictationClickToToggle) return
   event.preventDefault()
@@ -1576,12 +1599,14 @@ function onDictationPressEnd(): void {
 }
 
 function onDictationTouchStart(event: TouchEvent): void {
+  if (usesNativeDictation.value) return
   if (!supportsLiveRecording.value) return
   if (props.dictationClickToToggle) return
   onDictationPressStart(event as unknown as PointerEvent)
 }
 
 function onDictationTouchEnd(): void {
+  if (usesNativeDictation.value) return
   if (!supportsLiveRecording.value) return
   if (props.dictationClickToToggle) return
   onDictationPressEnd()
@@ -2891,6 +2916,11 @@ watch(
 }
 
 .thread-composer-dictation-processing {
+  @apply flex min-w-0 flex-1 items-center gap-2 text-sm;
+  color: var(--ui-text-secondary);
+}
+
+.thread-composer-dictation-native-status {
   @apply flex min-w-0 flex-1 items-center gap-2 text-sm;
   color: var(--ui-text-secondary);
 }

@@ -18,12 +18,16 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.provider.MediaStore;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.Window;
@@ -37,10 +41,13 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.FileProvider;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -53,8 +60,14 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
+import java.util.ArrayList;
 
-@CapacitorPlugin(name = "MobileShell")
+@CapacitorPlugin(
+    name = "MobileShell",
+    permissions = {
+        @Permission(alias = "microphone", strings = { Manifest.permission.RECORD_AUDIO })
+    }
+)
 public class MobileShellPlugin extends Plugin {
 
     private static final int CONNECT_TIMEOUT_MS = 20_000;
@@ -65,6 +78,8 @@ public class MobileShellPlugin extends Plugin {
     private static final String PREF_PENDING_APK_INSTALL_PATH = "pending_apk_install_path";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private SpeechRecognizer dictationRecognizer;
+    private PluginCall activeDictationCall;
 
     @PluginMethod
     public void getServerConfig(PluginCall call) {
@@ -206,6 +221,167 @@ public class MobileShellPlugin extends Plugin {
         result.put("webViewPackage", webViewPackage == null ? "" : webViewPackage.packageName);
         result.put("webViewVersion", webViewPackage == null || webViewPackage.versionName == null ? "" : webViewPackage.versionName);
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void startDictation(PluginCall call) {
+        if (!SpeechRecognizer.isRecognitionAvailable(getContext())) {
+            call.reject("此设备没有可用的系统语音服务，请改用上传语音。");
+            return;
+        }
+        if (activeDictationCall != null) {
+            call.reject("语音听写正在进行中");
+            return;
+        }
+        if (getPermissionState("microphone") != PermissionState.GRANTED) {
+            requestPermissionForAlias("microphone", call, "startDictationAfterPermission");
+            return;
+        }
+        beginDictation(call);
+    }
+
+    @PermissionCallback
+    private void startDictationAfterPermission(PluginCall call) {
+        if (getPermissionState("microphone") != PermissionState.GRANTED) {
+            call.reject("麦克风权限被拒绝");
+            return;
+        }
+        beginDictation(call);
+    }
+
+    @PluginMethod
+    public void stopDictation(PluginCall call) {
+        mainHandler.post(() -> {
+            if (dictationRecognizer == null || activeDictationCall == null) {
+                JSObject result = new JSObject();
+                result.put("stopping", false);
+                call.resolve(result);
+                return;
+            }
+            dictationRecognizer.stopListening();
+            JSObject result = new JSObject();
+            result.put("stopping", true);
+            call.resolve(result);
+        });
+    }
+
+    @PluginMethod
+    public void cancelDictation(PluginCall call) {
+        mainHandler.post(() -> {
+            rejectActiveDictation("已取消听写");
+            call.resolve();
+        });
+    }
+
+    private void beginDictation(PluginCall call) {
+        mainHandler.post(() -> {
+            if (activeDictationCall != null) {
+                call.reject("语音听写正在进行中");
+                return;
+            }
+            if (!SpeechRecognizer.isRecognitionAvailable(getContext())) {
+                call.reject("此设备没有可用的系统语音服务，请改用上传语音。");
+                return;
+            }
+
+            try {
+                dictationRecognizer = SpeechRecognizer.createSpeechRecognizer(getContext());
+                activeDictationCall = call;
+                dictationRecognizer.setRecognitionListener(new RecognitionListener() {
+                    @Override public void onReadyForSpeech(Bundle params) {}
+                    @Override public void onBeginningOfSpeech() {}
+                    @Override public void onRmsChanged(float rmsdB) {}
+                    @Override public void onBufferReceived(byte[] buffer) {}
+                    @Override public void onEndOfSpeech() {}
+                    @Override public void onPartialResults(Bundle partialResults) {}
+                    @Override public void onEvent(int eventType, Bundle params) {}
+
+                    @Override
+                    public void onResults(Bundle results) {
+                        resolveActiveDictation(readRecognitionText(results));
+                    }
+
+                    @Override
+                    public void onError(int error) {
+                        if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                            resolveActiveDictation("");
+                            return;
+                        }
+                        rejectActiveDictation(describeDictationError(error));
+                    }
+                });
+
+                Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+                intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+                intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+                intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+                String language = call.getString("language", "");
+                if (language != null && !language.trim().isEmpty() && !"auto".equalsIgnoreCase(language.trim())) {
+                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language.trim());
+                }
+                dictationRecognizer.startListening(intent);
+            } catch (Exception exception) {
+                rejectActiveDictation("系统听写启动失败：" + exception.getMessage());
+            }
+        });
+    }
+
+    private void resolveActiveDictation(String text) {
+        PluginCall call = activeDictationCall;
+        releaseDictationRecognizer();
+        if (call == null) return;
+        JSObject result = new JSObject();
+        result.put("text", text == null ? "" : text.trim());
+        call.resolve(result);
+    }
+
+    private void rejectActiveDictation(String message) {
+        PluginCall call = activeDictationCall;
+        releaseDictationRecognizer();
+        if (call != null) {
+            call.reject(message);
+        }
+    }
+
+    private void releaseDictationRecognizer() {
+        activeDictationCall = null;
+        if (dictationRecognizer != null) {
+            dictationRecognizer.cancel();
+            dictationRecognizer.destroy();
+            dictationRecognizer = null;
+        }
+    }
+
+    private static String readRecognitionText(Bundle results) {
+        ArrayList<String> values = results == null
+            ? null
+            : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+        if (values == null) return "";
+        for (String value : values) {
+            if (value != null && !value.trim().isEmpty()) {
+                return value.trim();
+            }
+        }
+        return "";
+    }
+
+    private static String describeDictationError(int error) {
+        switch (error) {
+            case SpeechRecognizer.ERROR_AUDIO:
+                return "麦克风录音异常，请重试";
+            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS:
+                return "麦克风权限不足";
+            case SpeechRecognizer.ERROR_NETWORK:
+            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
+                return "系统语音服务网络不可用";
+            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:
+                return "系统语音服务正忙，请稍后重试";
+            case SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED:
+            case SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE:
+                return "当前系统语音服务不支持所选语言";
+            default:
+                return "系统听写失败，请重试或改用上传语音";
+        }
     }
 
     @PluginMethod

@@ -12150,3 +12150,25 @@ This file tracks manual regression and feature verification steps.
 
 #### Rollback/Cleanup Notes
 - Revert `scripts/server-module-smoke.ts` and this test section. Generated `output/` directories remain disposable.
+
+### Feature: Android HTTP voice dictation
+
+#### Prerequisites
+- Install an APK built after this feature on an Android device with a system speech-recognition service.
+- Configure the app to connect to an `http://` CX-Codex address.
+
+#### Steps
+1. Open a thread and tap the microphone button.
+2. Grant microphone permission when Android requests it.
+3. Speak a short sentence, then tap the stop button.
+4. Edit the returned text and send it manually.
+5. Temporarily disable the system speech service and tap the microphone again.
+6. Choose or record an audio file from the fallback picker and wait for server-side transcription.
+
+#### Expected Results
+- Android system dictation works over HTTP and does not depend on WebView `getUserMedia`.
+- Recognized text is inserted into the composer as an editable draft and is not auto-sent with the default dictation setting.
+- A missing speech service or denied permission gives a short actionable error; the audio-upload fallback remains available.
+
+#### Rollback/Cleanup Notes
+- Revert `MobileShellPlugin.java`, `AndroidManifest.xml`, `src/mobile/mobileShell.ts`, `src/composables/useDictation.ts`, `ThreadComposer.vue`, the Android documentation, changelog, and this test section.

@@ -1,4 +1,10 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
+import {
+  cancelMobileShellDictation,
+  isNativeAndroidShell,
+  startMobileShellDictation,
+  stopMobileShellDictation,
+} from '../mobile/mobileShell'
 
 export type DictationState = 'idle' | 'recording' | 'transcribing'
 const DICTATION_SILENCE_THRESHOLD = 0.0025
@@ -23,10 +29,12 @@ export function useDictation(options: {
     typeof fetch !== 'undefined' &&
     typeof FormData !== 'undefined' &&
     typeof File !== 'undefined'
+  const nativeDictationSupported = ref(isNativeAndroidShell())
   const state = ref<DictationState>('idle')
-  const isSupported = computed(() => liveRecordingSupported || fileUploadSupported)
+  const isSupported = computed(() => nativeDictationSupported.value || liveRecordingSupported || fileUploadSupported)
   const supportsLiveRecording = ref(liveRecordingSupported)
   const supportsFileUpload = ref(fileUploadSupported)
+  const supportsNativeDictation = computed(() => nativeDictationSupported.value)
   const recordingDurationMs = ref(0)
   const waveformCanvasRef = ref<HTMLCanvasElement | null>(null)
 
@@ -41,6 +49,9 @@ export function useDictation(options: {
   let isStartingRecording = false
   let stopRequestedBeforeStart = false
   let transcribeAbortController: AbortController | null = null
+  let nativeRecordingStartedAt: number | null = null
+  let nativeRecordingTimer: ReturnType<typeof setInterval> | null = null
+  let nativeCancellationRequested = false
 
   function pickSupportedMimeType(): string {
     const candidates = [
@@ -92,6 +103,62 @@ export function useDictation(options: {
     }
     if (state.value === 'transcribing') {
       state.value = 'idle'
+    }
+  }
+
+  function stopNativeRecordingTimer(): void {
+    if (nativeRecordingTimer) {
+      clearInterval(nativeRecordingTimer)
+      nativeRecordingTimer = null
+    }
+    nativeRecordingStartedAt = null
+  }
+
+  function startNativeRecordingTimer(): void {
+    stopNativeRecordingTimer()
+    resetWaveformDisplay()
+    nativeRecordingStartedAt = performance.now()
+    nativeRecordingTimer = setInterval(() => {
+      if (nativeRecordingStartedAt !== null) {
+        recordingDurationMs.value = Math.max(0, performance.now() - nativeRecordingStartedAt)
+      }
+    }, 250)
+  }
+
+  function isNativePluginUnavailable(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error ?? '')
+    return /unimplemented|not implemented|plugin.*not found/iu.test(message)
+  }
+
+  async function startNativeDictation(): Promise<void> {
+    if (state.value !== 'idle') return
+    nativeCancellationRequested = false
+    startNativeRecordingTimer()
+    state.value = 'recording'
+
+    try {
+      const result = await startMobileShellDictation(options.getLanguage?.().trim() ?? '')
+      if (nativeCancellationRequested) return
+      const text = result.text.trim()
+      if (text) {
+        options.onTranscript(text)
+      } else {
+        options.onEmpty?.()
+      }
+    } catch (error) {
+      if (!nativeCancellationRequested) {
+        if (isNativePluginUnavailable(error)) {
+          nativeDictationSupported.value = false
+          options.onError?.(new Error('系统听写暂不可用，请改用上传语音或更新 CX-Codex。'))
+        } else {
+          options.onError?.(error)
+        }
+      }
+    } finally {
+      stopNativeRecordingTimer()
+      if (state.value === 'recording' || state.value === 'transcribing') {
+        state.value = 'idle'
+      }
     }
   }
 
@@ -202,7 +269,12 @@ export function useDictation(options: {
     if (state.value === 'transcribing') {
       cancelTranscription()
     }
-    if (state.value !== 'idle' || !supportsLiveRecording.value || isStartingRecording) return
+    if (state.value !== 'idle' || isStartingRecording) return
+    if (nativeDictationSupported.value) {
+      await startNativeDictation()
+      return
+    }
+    if (!supportsLiveRecording.value) return
     isStartingRecording = true
     stopRequestedBeforeStart = false
 
@@ -240,6 +312,13 @@ export function useDictation(options: {
       stopRequestedBeforeStart = true
       return
     }
+    if (nativeDictationSupported.value && state.value === 'recording') {
+      state.value = 'transcribing'
+      void stopMobileShellDictation().catch((error: unknown) => {
+        options.onError?.(error)
+      })
+      return
+    }
     if (state.value !== 'recording' || !mediaRecorder) return
     if (mediaRecorder.state !== 'inactive') {
       state.value = 'transcribing'
@@ -254,6 +333,13 @@ export function useDictation(options: {
 
   function cancel() {
     stopRequestedBeforeStart = false
+    nativeCancellationRequested = true
+    if (nativeDictationSupported.value) {
+      void cancelMobileShellDictation().catch(() => {
+        // The native plugin may be unavailable in an older installed shell.
+      })
+    }
+    stopNativeRecordingTimer()
     cancelTranscription()
     cleanup()
     state.value = 'idle'
@@ -395,6 +481,7 @@ export function useDictation(options: {
     isSupported,
     supportsLiveRecording,
     supportsFileUpload,
+    supportsNativeDictation,
     recordingDurationMs,
     waveformCanvasRef,
     startRecording,
