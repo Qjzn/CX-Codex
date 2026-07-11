@@ -12164,11 +12164,15 @@ This file tracks manual regression and feature verification steps.
 4. Edit the returned text and send it manually.
 5. Temporarily disable the system speech service and tap the microphone again.
 6. Choose or record an audio file from the fallback picker and wait for server-side transcription.
+7. On a 390px-wide mobile browser, tap the microphone button once and confirm it starts dictation instead of requiring a long press; tap again to stop.
+8. Deny or leave the browser microphone permission prompt pending and confirm the composer shows `正在请求麦克风权限` rather than remaining idle.
 
 #### Expected Results
 - Android system dictation works over HTTP and does not depend on WebView `getUserMedia`.
 - Recognized text is inserted into the composer as an editable draft and is not auto-sent with the default dictation setting.
 - A missing speech service or denied permission gives a short actionable error; the audio-upload fallback remains available.
+- The compact browser composer exposes click-to-toggle dictation and shows upload fallback feedback before opening the system picker.
+- A pending browser permission prompt has a visible, cancellable state instead of appearing as a no-op tap.
 
 #### Rollback/Cleanup Notes
 - Revert `MobileShellPlugin.java`, `AndroidManifest.xml`, `src/mobile/mobileShell.ts`, `src/composables/useDictation.ts`, `ThreadComposer.vue`, the Android documentation, changelog, and this test section.

@@ -486,7 +486,11 @@
 
         <div
           class="thread-composer-actions"
-          :class="{ 'thread-composer-actions--recording': isDictationRecording || dictationState === 'transcribing' }"
+          :class="{
+            'thread-composer-actions--recording': isDictationRecording
+              || dictationState === 'requesting'
+              || dictationState === 'transcribing',
+          }"
         >
           <div
             v-if="dictationState === 'recording' && !usesNativeDictation"
@@ -501,9 +505,15 @@
             <span>正在听写</span>
           </div>
 
-          <div v-else-if="dictationState === 'transcribing'" class="thread-composer-dictation-processing" aria-live="polite">
+          <div
+            v-else-if="dictationState === 'requesting' || dictationState === 'transcribing'"
+            class="thread-composer-dictation-processing"
+            aria-live="polite"
+          >
             <span class="thread-composer-dictation-processing-dot" aria-hidden="true" />
-            <span class="thread-composer-dictation-processing-text">转文字中</span>
+            <span class="thread-composer-dictation-processing-text">
+              {{ dictationState === 'requesting' ? '正在请求麦克风权限' : '转文字中' }}
+            </span>
           </div>
 
           <span v-if="dictationState === 'recording'" class="thread-composer-dictation-timer">
@@ -515,7 +525,7 @@
             class="thread-composer-mic"
             :class="{
               'thread-composer-mic--active': dictationState === 'recording',
-              'thread-composer-mic--busy': dictationState === 'transcribing',
+              'thread-composer-mic--busy': dictationState === 'requesting' || dictationState === 'transcribing',
             }"
             type="button"
             :aria-label="dictationButtonLabel"
@@ -532,7 +542,7 @@
             @contextmenu.prevent
           >
             <IconTablerPlayerStopFilled
-              v-if="dictationState === 'recording'"
+              v-if="dictationState === 'recording' || dictationState === 'requesting'"
               class="thread-composer-mic-icon thread-composer-mic-icon--stop"
             />
             <IconTablerMicrophone v-else class="thread-composer-mic-icon" />
@@ -791,7 +801,9 @@ const mentionQuery = ref('')
 const fileMentionSuggestions = ref<ComposerFileSuggestion[]>([])
 const isFileMentionOpen = ref(false)
 const fileMentionHighlightedIndex = ref(0)
-const isCompactViewport = ref(false)
+const isCompactViewport = ref(
+  typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
+)
 const draftGeneration = ref(0)
 let fileMentionSearchToken = 0
 let fileMentionDebounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -994,13 +1006,17 @@ const usesDictationUploadFallback = computed(() =>
   shouldShowDictationButton.value && !supportsLiveRecording.value && !supportsNativeDictation.value,
 )
 const usesNativeDictation = computed(() => supportsNativeDictation.value)
+const shouldToggleDictationOnTap = computed(() =>
+  props.dictationClickToToggle === true || isCompactViewport.value || usesNativeDictation.value,
+)
 const DICTATION_UPLOAD_FALLBACK_MESSAGE = '将打开系统录音或音频上传；转写完成后会先填入输入框。'
 const dictationButtonLabel = computed(() => {
   if (dictationState.value === 'recording') return '停止听写'
+  if (dictationState.value === 'requesting') return '正在请求麦克风权限，点击取消'
   if (dictationState.value === 'transcribing') return '正在转写'
   if (usesNativeDictation.value) return '点击开始听写'
   if (usesDictationUploadFallback.value) return '上传语音或录音'
-  return props.dictationClickToToggle ? '点击开始听写' : '按住开始听写'
+  return shouldToggleDictationOnTap.value ? '点击开始听写' : '按住开始听写'
 })
 const dictationErrorText = computed(() =>
   dictationState.value === 'idle' && dictationFeedbackTone.value === 'error'
@@ -1008,6 +1024,7 @@ const dictationErrorText = computed(() =>
     : '',
 )
 const dictationHelperText = computed(() => {
+  if (dictationState.value === 'requesting') return '正在请求麦克风权限...'
   if (dictationState.value === 'transcribing') return '正在把语音转成文字...'
   if (dictationState.value === 'idle' && dictationFeedbackTone.value !== 'error') {
     return dictationFeedback.value.trim()
@@ -1541,17 +1558,7 @@ function onDictationToggle(): void {
     triggerAudioCapture()
     return
   }
-  if (usesNativeDictation.value) {
-    if (dictationFeedback.value) {
-      clearDictationFeedback()
-    }
-    if (dictationState.value === 'idle') {
-      dictationShouldRollbackLatestUserTurn = false
-    }
-    toggleRecording()
-    return
-  }
-  if (!props.dictationClickToToggle) return
+  if (!shouldToggleDictationOnTap.value) return
   if (dictationFeedback.value) {
     clearDictationFeedback()
   }
@@ -1562,9 +1569,8 @@ function onDictationToggle(): void {
 }
 
 function onDictationPressStart(event: PointerEvent): void {
-  if (usesNativeDictation.value) return
+  if (shouldToggleDictationOnTap.value) return
   if (!supportsLiveRecording.value) return
-  if (props.dictationClickToToggle) return
   event.preventDefault()
   if (isHoldPressActive) return
   isHoldPressActive = true
@@ -1588,7 +1594,7 @@ function onDictationPressStart(event: PointerEvent): void {
 }
 
 function onDictationPressEnd(): void {
-  if (props.dictationClickToToggle) return
+  if (shouldToggleDictationOnTap.value) return
   if (!isHoldPressActive) return
   isHoldPressActive = false
   window.removeEventListener('pointerup', onDictationPressEnd)
@@ -1599,16 +1605,14 @@ function onDictationPressEnd(): void {
 }
 
 function onDictationTouchStart(event: TouchEvent): void {
-  if (usesNativeDictation.value) return
+  if (shouldToggleDictationOnTap.value) return
   if (!supportsLiveRecording.value) return
-  if (props.dictationClickToToggle) return
   onDictationPressStart(event as unknown as PointerEvent)
 }
 
 function onDictationTouchEnd(): void {
-  if (usesNativeDictation.value) return
+  if (shouldToggleDictationOnTap.value) return
   if (!supportsLiveRecording.value) return
-  if (props.dictationClickToToggle) return
   onDictationPressEnd()
 }
 
@@ -1680,7 +1684,7 @@ function triggerAudioCapture(): void {
   const input = audioCaptureInputRef.value
   if (!input) return
   input.value = ''
-  input.click()
+  window.setTimeout(() => input.click(), 0)
 }
 
 function triggerFolderPicker(): void {

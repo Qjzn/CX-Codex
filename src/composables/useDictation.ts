@@ -6,7 +6,7 @@ import {
   stopMobileShellDictation,
 } from '../mobile/mobileShell'
 
-export type DictationState = 'idle' | 'recording' | 'transcribing'
+export type DictationState = 'idle' | 'requesting' | 'recording' | 'transcribing'
 const DICTATION_SILENCE_THRESHOLD = 0.0025
 const DICTATION_BAR_WIDTH = 3
 const DICTATION_BAR_GAP = 2
@@ -277,6 +277,7 @@ export function useDictation(options: {
     if (!supportsLiveRecording.value) return
     isStartingRecording = true
     stopRequestedBeforeStart = false
+    state.value = 'requesting'
 
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } })
@@ -308,7 +309,7 @@ export function useDictation(options: {
   }
 
   function stopRecording() {
-    if (isStartingRecording && state.value === 'idle') {
+    if (isStartingRecording && state.value === 'requesting') {
       stopRequestedBeforeStart = true
       return
     }
@@ -467,7 +468,7 @@ export function useDictation(options: {
   })
 
   function toggleRecording() {
-    if (state.value === 'recording') {
+    if (state.value === 'recording' || state.value === 'requesting') {
       stopRecording()
       return
     }
