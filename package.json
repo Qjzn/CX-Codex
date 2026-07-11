@@ -99,7 +99,7 @@
     "@types/node": "^22.13.2",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@vitejs/plugin-vue": "^5.2.1",
+    "@vitejs/plugin-vue": "^6.0.7",
     "esbuild": "^0.27.7",
     "tailwindcss": "^4.1.18",
     "tsup": "^8.4.0",
