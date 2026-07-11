@@ -256,8 +256,8 @@ export function buildRuntimeTurnOptionsPrompt(options: RuntimeTurnOptions | null
   if (!options) return ''
   const lines: string[] = []
   if (options.goal?.enabled === true) {
-    const goalText = options.goal.text || '持续追求当前任务目标'
-    lines.push(`追求目标: ${goalText}。请围绕这个目标主动推进，不只停留在解释。`)
+    const goalText = options.goal.text || '主动给出可执行的下一步，并补齐关键风险。'
+    lines.push(`本轮要求: ${goalText}。仅应用于这次消息，请据此主动推进，不只停留在解释。`)
   }
   if (lines.length === 0) return ''
   return `<!-- CX-Codex turn options\n${lines.join('\n')}\n-->`

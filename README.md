@@ -17,7 +17,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 ## 快速入口
 
 - 最新 Release: [github.com/Qjzn/CX-Codex/releases/latest](https://github.com/Qjzn/CX-Codex/releases/latest)
-- 2.2.8 发布说明: [docs/release-notes-2.2.8.zh-CN.md](./docs/release-notes-2.2.8.zh-CN.md)
+- 2.3.0 发布说明: [docs/release-notes-2.3.0.zh-CN.md](./docs/release-notes-2.3.0.zh-CN.md)
 - Windows 一条命令安装: [快速安装](#快速安装)
 - Android 客户端说明: [docs/android-shell.zh-CN.md](./docs/android-shell.zh-CN.md)
 - 平台兼容与 Slash Command 支持: [docs/platform-and-commands.zh-CN.md](./docs/platform-and-commands.zh-CN.md)
@@ -74,6 +74,14 @@ Android 实机对话：
 Android / 手机会话：
 
 ![Mobile conversation](./docs/screenshots/chat-mobile.png)
+
+移动端操作栏：
+
+![Mobile composer add menu](./docs/screenshots/mobile-composer-plus.png)
+
+模型、质量与速度：
+
+![Mobile model settings](./docs/screenshots/mobile-model-settings.png)
 
 Android 首次连接：
 
@@ -243,6 +251,7 @@ Cloudflare Tunnel 一条命令：
 - 本地文件链接、图片 / Markdown / PDF / DOCX 预览
 - GitHub 热门项目模块
 - MCP / 工具权限状态、审批边界和只读诊断
+- 模型、推理档位、已连接插件与一次性计划 / 本轮要求操作栏
 - Windows bootstrap 和发布包
 - 健康检查、回归脚本和浸泡脚本
 

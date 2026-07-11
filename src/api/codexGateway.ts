@@ -27,6 +27,7 @@ import {
 } from './normalizers/v2'
 import type {
   CollaborationMode,
+  ComposerModelInfo,
   ComposerPluginInfo,
   ComposerPluginSelection,
   ComposerTurnOptions,
@@ -1415,15 +1416,45 @@ export async function setCodexSpeedMode(mode: SpeedMode): Promise<void> {
   })
 }
 
+export async function getAvailableModels(): Promise<ComposerModelInfo[]> {
+  const models: ComposerModelInfo[] = []
+  const seen = new Set<string>()
+  let cursor: string | null = null
+
+  do {
+    const payload: ModelListResponse = await callRpc<ModelListResponse>('model/list', {
+      ...(cursor ? { cursor } : {}),
+      includeHidden: false,
+    })
+    for (const row of payload.data) {
+      const model = (row.model || row.id).trim()
+      const id = (row.id || model).trim()
+      if (!model || row.hidden || seen.has(model)) continue
+      seen.add(model)
+      models.push({
+        id,
+        model,
+        displayName: row.displayName.trim() || model,
+        description: row.description.trim(),
+        hidden: row.hidden,
+        isDefault: row.isDefault,
+        defaultReasoningEffort: row.defaultReasoningEffort,
+        supportedReasoningEfforts: row.supportedReasoningEfforts.map((option) => ({
+          value: option.reasoningEffort,
+          description: option.description.trim(),
+        })),
+      })
+    }
+    cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.trim()
+      ? payload.nextCursor.trim()
+      : null
+  } while (cursor)
+
+  return models
+}
+
 export async function getAvailableModelIds(): Promise<string[]> {
-  const payload = await callRpc<ModelListResponse>('model/list', {})
-  const ids: string[] = []
-  for (const row of payload.data) {
-    const candidate = row.id || row.model
-    if (!candidate || ids.includes(candidate)) continue
-    ids.push(candidate)
-  }
-  return ids
+  return (await getAvailableModels()).map((model) => model.model)
 }
 
 export async function getCurrentModelConfig(): Promise<CurrentModelConfig> {
@@ -2333,16 +2364,20 @@ type McpServerStatusResponseEntry = {
   authStatus?: string
 }
 
-type AppListResponseEntry = {
+type NativePluginListEntry = {
   id?: string
   name?: string
-  description?: string | null
-  logoUrl?: string | null
-  logoUrlDark?: string | null
-  distributionChannel?: string | null
-  installUrl?: string | null
-  isAccessible?: boolean
-  isEnabled?: boolean
+  installed?: boolean
+  enabled?: boolean
+  availability?: string
+  interface?: {
+    displayName?: string | null
+    shortDescription?: string | null
+  } | null
+}
+
+type NativePluginMarketplace = {
+  plugins?: NativePluginListEntry[]
 }
 
 function normalizePluginAuthStatus(value: unknown): PluginAuthStatus {
@@ -2380,8 +2415,44 @@ function normalizePluginDisplayName(name: string): string {
     .join(' ')
 }
 
-function normalizePluginListKey(source: 'mcp' | 'app', id: string): string {
+function normalizePluginListKey(source: ComposerPluginInfo['source'], id: string): string {
   return `${source}:${id.trim().toLowerCase()}`
+}
+
+function normalizeNativePluginInfo(entry: NativePluginListEntry): ComposerPluginInfo | null {
+  const id = typeof entry.id === 'string' ? entry.id.trim() : ''
+  if (
+    !id ||
+    entry.installed !== true ||
+    entry.enabled !== true ||
+    (typeof entry.availability === 'string' && entry.availability !== 'AVAILABLE')
+  ) {
+    return null
+  }
+  const rawName = typeof entry.interface?.displayName === 'string'
+    ? entry.interface.displayName.trim()
+    : ''
+  const fallbackName = typeof entry.name === 'string' ? entry.name.trim() : ''
+  const description = typeof entry.interface?.shortDescription === 'string'
+    ? entry.interface.shortDescription.trim()
+    : ''
+
+  return {
+    id,
+    name: rawName || normalizePluginDisplayName(fallbackName || id.split('@')[0] || id),
+    description,
+    source: 'plugin',
+    mentionPath: `plugin://${id}`,
+    authStatus: 'unknown',
+    isAccessible: true,
+    isEnabled: true,
+    distributionChannel: null,
+    installUrl: null,
+    toolCount: 0,
+    resourceCount: 0,
+    resourceTemplateCount: 0,
+    tools: [],
+  }
 }
 
 function normalizeMcpServerStatus(entry: McpServerStatusResponseEntry): ComposerPluginInfo | null {
@@ -2400,103 +2471,91 @@ function normalizeMcpServerStatus(entry: McpServerStatusResponseEntry): Composer
     .filter((tool): tool is { name: string; title: string; description: string } => tool !== null)
     .sort((first, second) => first.title.localeCompare(second.title))
 
+  const authStatus = normalizePluginAuthStatus(entry.authStatus)
+  const resourceCount = Array.isArray(entry.resources) ? entry.resources.length : 0
+  const resourceTemplateCount = Array.isArray(entry.resourceTemplates) ? entry.resourceTemplates.length : 0
+  if (tools.length === 0 && resourceCount === 0 && resourceTemplateCount === 0 && authStatus !== 'notLoggedIn') {
+    return null
+  }
+
   return {
     id: rawName,
     name: normalizePluginDisplayName(rawName),
     description: tools[0]?.description || '',
     source: 'mcp',
     mentionPath: `plugin://${rawName}`,
-    authStatus: normalizePluginAuthStatus(entry.authStatus),
+    authStatus,
     toolCount: tools.length,
-    resourceCount: Array.isArray(entry.resources) ? entry.resources.length : 0,
-    resourceTemplateCount: Array.isArray(entry.resourceTemplates) ? entry.resourceTemplates.length : 0,
+    resourceCount,
+    resourceTemplateCount,
     tools,
   }
 }
 
-function normalizeAppPluginInfo(entry: AppListResponseEntry): ComposerPluginInfo | null {
-  const id = typeof entry.id === 'string' ? entry.id.trim() : ''
-  if (!id) return null
-  const rawName = typeof entry.name === 'string' ? entry.name.trim() : ''
-  const description = typeof entry.description === 'string' ? entry.description.trim() : ''
-  const distributionChannel = typeof entry.distributionChannel === 'string'
-    ? entry.distributionChannel.trim()
-    : null
-  const installUrl = typeof entry.installUrl === 'string' ? entry.installUrl.trim() : null
+function sortComposerPlugins(plugins: ComposerPluginInfo[]): ComposerPluginInfo[] {
+  const priority: Record<ComposerPluginInfo['source'], number> = { plugin: 0, mcp: 1, app: 2 }
+  return plugins.sort((first, second) => {
+    if (first.source !== second.source) return priority[first.source] - priority[second.source]
+    return first.name.localeCompare(second.name)
+  })
+}
 
-  return {
-    id,
-    name: rawName || normalizePluginDisplayName(id),
-    description,
-    source: 'app',
-    mentionPath: `app://${id}`,
-    authStatus: 'unknown',
-    isAccessible: entry.isAccessible !== false,
-    isEnabled: entry.isEnabled !== false,
-    distributionChannel: distributionChannel || null,
-    installUrl: installUrl || null,
-    toolCount: 0,
-    resourceCount: 0,
-    resourceTemplateCount: 0,
-    tools: [],
+function mergeComposerPluginLists(...lists: ComposerPluginInfo[][]): ComposerPluginInfo[] {
+  const plugins: ComposerPluginInfo[] = []
+  const seen = new Set<string>()
+  for (const list of lists) {
+    for (const plugin of list) {
+      const key = normalizePluginListKey(plugin.source, plugin.id)
+      if (seen.has(key)) continue
+      seen.add(key)
+      plugins.push(plugin)
+    }
   }
+  return sortComposerPlugins(plugins)
+}
+
+export async function getNativeComposerPluginsList(): Promise<ComposerPluginInfo[]> {
+  const payload = await callRpc<{ marketplaces?: NativePluginMarketplace[] }>('plugin/list', {})
+  const plugins: ComposerPluginInfo[] = []
+  for (const marketplace of payload.marketplaces ?? []) {
+    for (const entry of marketplace.plugins ?? []) {
+      const plugin = normalizeNativePluginInfo(entry)
+      if (plugin) plugins.push(plugin)
+    }
+  }
+  return mergeComposerPluginLists(plugins)
+}
+
+export async function getMcpComposerPluginsList(): Promise<ComposerPluginInfo[]> {
+  const plugins: ComposerPluginInfo[] = []
+  let cursor: string | null = null
+  do {
+    const params: Record<string, unknown> = {}
+    if (cursor) params.cursor = cursor
+    const payload = await callRpc<{ data?: McpServerStatusResponseEntry[]; nextCursor?: string | null }>(
+      'mcpServerStatus/list',
+      params,
+    )
+    for (const entry of payload.data ?? []) {
+      const plugin = normalizeMcpServerStatus(entry)
+      if (plugin) plugins.push(plugin)
+    }
+    cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.trim()
+      ? payload.nextCursor.trim()
+      : null
+  } while (cursor)
+  return mergeComposerPluginLists(plugins)
 }
 
 export async function getComposerPluginsList(): Promise<ComposerPluginInfo[]> {
-  const plugins: ComposerPluginInfo[] = []
-  const seen = new Set<string>()
-
-  try {
-    let cursor: string | null = null
-    do {
-      const params: Record<string, unknown> = {}
-      if (cursor) params.cursor = cursor
-      const payload = await callRpc<{ data?: McpServerStatusResponseEntry[]; nextCursor?: string | null }>(
-        'mcpServerStatus/list',
-        params,
-      )
-      for (const entry of payload.data ?? []) {
-        const plugin = normalizeMcpServerStatus(entry)
-        if (!plugin) continue
-        const key = normalizePluginListKey(plugin.source, plugin.id)
-        if (seen.has(key)) continue
-        seen.add(key)
-        plugins.push(plugin)
-      }
-      cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.trim()
-        ? payload.nextCursor.trim()
-        : null
-    } while (cursor)
-  } catch {
-    // Older app-server builds may not expose MCP status. Keep app-list fallback below.
-  }
-
-  try {
-    let cursor: string | null = null
-    do {
-      const params: Record<string, unknown> = {}
-      if (cursor) params.cursor = cursor
-      const payload = await callRpc<{ data?: AppListResponseEntry[]; nextCursor?: string | null }>('app/list', params)
-      for (const entry of payload.data ?? []) {
-        const plugin = normalizeAppPluginInfo(entry)
-        if (!plugin) continue
-        const key = normalizePluginListKey(plugin.source, plugin.id)
-        if (seen.has(key)) continue
-        seen.add(key)
-        plugins.push(plugin)
-      }
-      cursor = typeof payload.nextCursor === 'string' && payload.nextCursor.trim()
-        ? payload.nextCursor.trim()
-        : null
-    } while (cursor)
-  } catch {
-    // App list is optional. MCP plugins remain usable without it.
-  }
-
-  return plugins.sort((first, second) => {
-    if (first.source !== second.source) return first.source === 'mcp' ? -1 : 1
-    return first.name.localeCompare(second.name)
-  })
+  const [nativeResult, mcpResult] = await Promise.allSettled([
+    getNativeComposerPluginsList(),
+    getMcpComposerPluginsList(),
+  ])
+  return mergeComposerPluginLists(
+    nativeResult.status === 'fulfilled' ? nativeResult.value : [],
+    mcpResult.status === 'fulfilled' ? mcpResult.value : [],
+  )
 }
 
 export async function startComposerPluginOauthLogin(pluginId: string): Promise<string> {

@@ -5,8 +5,9 @@ import {
   forkThread,
   getAccountRateLimits,
   renameThread,
-  getAvailableModelIds,
-  getComposerPluginsList,
+  getAvailableModels,
+  getMcpComposerPluginsList,
+  getNativeComposerPluginsList,
   getCurrentModelConfig,
   getPendingServerRequests,
   getSkillsList,
@@ -44,6 +45,7 @@ import {
 } from '../api/codexGateway'
 import type {
   CollaborationMode,
+  ComposerModelInfo,
   ComposerPluginInfo,
   ComposerPluginSource,
   ComposerTurnOptions,
@@ -180,7 +182,7 @@ const THREAD_LIST_REFRESH_INTERVAL_MS = 300000
 const THREAD_TOKEN_USAGE_REFRESH_RETRY_MS = 5 * 60 * 1000
 const THREAD_TOKEN_USAGE_IDLE_DELAY_MS = 11000
 const THREAD_SELECTION_SKILLS_IDLE_DELAY_MS = 8000
-const MODEL_PREFERENCES_IDLE_DELAY_MS = 6500
+const MODEL_PREFERENCES_IDLE_DELAY_MS = 1200
 const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 1500
 const RATE_LIMIT_REFRESH_MIN_INTERVAL_MS = 300000
 const COMPOSER_PLUGINS_REFRESH_DEBOUNCE_MS = 450
@@ -244,7 +246,7 @@ function normalizeTurnOptions(value: unknown): ComposerTurnOptions | undefined {
   const row = value as Record<string, unknown>
   const plugins = Array.isArray(row.plugins)
     ? row.plugins
-      .filter((item): item is { id: string; name: string; path?: string; source?: 'mcp' | 'app' } => (
+      .filter((item): item is { id: string; name: string; path?: string; source?: ComposerPluginSource } => (
         Boolean(item)
         && typeof item === 'object'
         && typeof (item as Record<string, unknown>).id === 'string'
@@ -253,7 +255,11 @@ function normalizeTurnOptions(value: unknown): ComposerTurnOptions | undefined {
       .map((item) => {
         const id = item.id.trim()
         const name = item.name.trim()
-        const source: ComposerPluginSource = item.source === 'app' ? 'app' : 'mcp'
+        const source: ComposerPluginSource = item.source === 'app'
+          ? 'app'
+          : item.source === 'plugin'
+            ? 'plugin'
+            : 'mcp'
         const path = typeof item.path === 'string' && item.path.trim()
           ? item.path.trim()
           : (source === 'app' ? `app://${id}` : `plugin://${id}`)
@@ -1601,6 +1607,7 @@ export function useDesktopState() {
   const queuedMessagesByThreadId = ref<Record<string, QueuedMessage[]>>(loadQueuedMessagesMap())
   const queueProcessingByThreadId = ref<Record<string, boolean>>({})
   const eventUnreadByThreadId = ref<Record<string, boolean>>({})
+  const availableModels = ref<ComposerModelInfo[]>([])
   const availableModelIds = ref<string[]>([])
   const selectedModelId = ref(loadSelectedModelId())
   const selectedReasoningEffort = ref<ReasoningEffort | ''>(loadSelectedReasoningEffort())
@@ -1632,8 +1639,10 @@ export function useDesktopState() {
   const threadTitleById = ref<Record<string, string>>({})
 
   const installedSkills = ref<SkillInfo[]>([])
+  const hasLoadedSkills = ref(false)
   const availableComposerPlugins = ref<ComposerPluginInfo[]>([])
   const isLoadingComposerPlugins = ref(false)
+  const hasLoadedComposerPlugins = ref(false)
   const accountRateLimitSnapshots = ref<UiRateLimitSnapshot[]>([])
 
   const isLoadingThreads = ref(false)
@@ -1661,14 +1670,18 @@ export function useDesktopState() {
   let rateLimitRefreshTimer: number | null = null
   let modelPreferencesRefreshTimer: number | null = null
   let composerPluginsRefreshTimer: number | null = null
+  let composerPluginsRefreshGeneration = 0
+  let mcpComposerPluginsRefreshPromise: Promise<ComposerPluginInfo[]> | null = null
   let skillsChangedRefreshTimer: number | null = null
   let selectedThreadSkillsRefreshTimer: number | null = null
+  let skillsRefreshGeneration = 0
   let cachedThreadListRefreshTimer: number | null = null
   let rateLimitRefreshPromise: Promise<void> | null = null
   let lastRateLimitRefreshStartedAtMs = 0
   const resumePromiseByThreadId = new Map<string, Promise<void>>()
   let hasRateLimitTrackingEnabled = false
   let lastNotificationAtMs = Date.now()
+  let lastNotificationHealthPublishedAtMs = lastNotificationAtMs
   let lastThreadListSyncAtMs = 0
   let activeSyncBoostUntilMs = 0
   let pendingThreadsRefresh = false
@@ -1688,6 +1701,7 @@ export function useDesktopState() {
   const settledRuntimeRpcRefreshKeyByThreadId = new Map<string, string>()
   const settledRuntimeRpcRefreshInFlightByThreadId = new Map<string, string>()
   const cachedThreadMessageSignatureByThreadId = new Map<string, string>()
+  const lastExecutionSignalPublishedAtByThreadId = new Map<string, number>()
   const fallbackRetryInFlightThreadIds = new Set<string>()
   const nonFreshThreadDetailRetryTimersByThreadId = new Map<string, number>()
   const nonFreshThreadDetailRetryAttemptByThreadId = new Map<string, number>()
@@ -2063,7 +2077,20 @@ export function useDesktopState() {
     )
     const liveAgent = liveAgentMessagesByThreadId.value[threadId] ?? []
     const liveCommands = liveCommandsByThreadId.value[threadId] ?? []
-    const combined = [...persisted, ...optimisticUser, ...liveCommands, ...liveAgent]
+    const combined = [...persisted, ...optimisticUser]
+    for (const liveMessage of [...liveCommands, ...liveAgent]) {
+      const existingIndex = combined.findIndex((message) => message.id === liveMessage.id)
+      if (existingIndex < 0) {
+        combined.push(liveMessage)
+        continue
+      }
+      const existing = combined[existingIndex]
+      const shouldPreferLive = liveMessage.commandExecution?.status === 'inProgress'
+        || liveMessage.text.length >= (existing?.text.length ?? 0)
+      if (shouldPreferLive) {
+        combined[existingIndex] = liveMessage
+      }
+    }
 
     const summary = turnSummaryByThreadId.value[threadId]
     if (!summary) return combined
@@ -2081,6 +2108,20 @@ export function useDesktopState() {
   function setSelectedModelId(modelId: string): void {
     selectedModelId.value = modelId.trim()
     saveSelectedModelId(selectedModelId.value)
+    const nextEffort = resolveReasoningEffortForModel(selectedModelId.value, selectedReasoningEffort.value)
+    if (nextEffort !== selectedReasoningEffort.value) {
+      setSelectedReasoningEffort(nextEffort)
+    }
+  }
+
+  function resolveReasoningEffortForModel(modelId: string, effort: ReasoningEffort | ''): ReasoningEffort | '' {
+    const model = availableModels.value.find((item) => item.model === modelId || item.id === modelId)
+    if (!model || model.supportedReasoningEfforts.length === 0) return effort
+    const supported = model.supportedReasoningEfforts.map((option) => option.value)
+    if (effort && supported.includes(effort)) return effort
+    if (supported.includes(model.defaultReasoningEffort)) return model.defaultReasoningEffort
+    if (supported.includes('medium')) return 'medium'
+    return supported[0] ?? ''
   }
 
   function setWorktreeGitAutomationEnabled(enabled: boolean): void {
@@ -2092,6 +2133,19 @@ export function useDesktopState() {
     saveSelectedModelId(selectedModelId.value)
     if (!availableModelIds.value.includes(MODEL_FALLBACK_ID)) {
       availableModelIds.value = [...availableModelIds.value, MODEL_FALLBACK_ID]
+      availableModels.value = [
+        ...availableModels.value,
+        {
+          id: MODEL_FALLBACK_ID,
+          model: MODEL_FALLBACK_ID,
+          displayName: MODEL_FALLBACK_ID,
+          description: '兼容回退模型',
+          hidden: false,
+          isDefault: false,
+          defaultReasoningEffort: 'medium',
+          supportedReasoningEfforts: REASONING_EFFORT_OPTIONS.map((value) => ({ value, description: '' })),
+        },
+      ]
     }
     try {
       await setDefaultModel(MODEL_FALLBACK_ID)
@@ -2228,8 +2282,11 @@ export function useDesktopState() {
     if (effort && !REASONING_EFFORT_OPTIONS.includes(effort)) {
       return
     }
-    selectedReasoningEffort.value = effort
-    saveSelectedReasoningEffort(effort)
+    const compatibleEffort = effort
+      ? resolveReasoningEffortForModel(selectedModelId.value, effort)
+      : ''
+    selectedReasoningEffort.value = compatibleEffort
+    saveSelectedReasoningEffort(compatibleEffort)
   }
 
   function setSelectedCollaborationMode(mode: CollaborationMode): void {
@@ -2279,19 +2336,21 @@ export function useDesktopState() {
 
   async function refreshModelPreferences(): Promise<void> {
     try {
-      const [modelIds, currentConfig] = await Promise.all([
-        getAvailableModelIds(),
+      const [models, currentConfig] = await Promise.all([
+        getAvailableModels(),
         getCurrentModelConfig(),
       ])
 
+      const modelIds = models.map((model) => model.model)
+      availableModels.value = models
       availableModelIds.value = modelIds
 
       const hasSelectedModel = selectedModelId.value.length > 0 && modelIds.includes(selectedModelId.value)
       if (!hasSelectedModel) {
         if (currentConfig.model && modelIds.includes(currentConfig.model)) {
           selectedModelId.value = currentConfig.model
-        } else if (modelIds.length > 0) {
-          selectedModelId.value = modelIds[0]
+        } else if (models.length > 0) {
+          selectedModelId.value = models.find((model) => model.isDefault)?.model ?? models[0]?.model ?? ''
         } else {
           selectedModelId.value = ''
         }
@@ -2304,6 +2363,11 @@ export function useDesktopState() {
         REASONING_EFFORT_OPTIONS.includes(currentConfig.reasoningEffort)
       ) {
         selectedReasoningEffort.value = currentConfig.reasoningEffort
+      }
+      const compatibleEffort = resolveReasoningEffortForModel(selectedModelId.value, selectedReasoningEffort.value)
+      if (compatibleEffort !== selectedReasoningEffort.value) {
+        selectedReasoningEffort.value = compatibleEffort
+        saveSelectedReasoningEffort(compatibleEffort)
       }
       selectedSpeedMode.value = currentConfig.speedMode
     } catch {
@@ -2969,8 +3033,9 @@ export function useDesktopState() {
   function markThreadLiveExecutionSignal(threadId: string): void {
     if (!threadId) return
     const now = Date.now()
-    const previous = lastExecutionSignalAtByThreadId.value[threadId] ?? 0
-    if (now > previous) {
+    const lastPublishedAt = lastExecutionSignalPublishedAtByThreadId.get(threadId) ?? 0
+    if (now - lastPublishedAt >= 250) {
+      lastExecutionSignalPublishedAtByThreadId.set(threadId, now)
       lastExecutionSignalAtByThreadId.value = {
         ...lastExecutionSignalAtByThreadId.value,
         [threadId]: now,
@@ -2982,6 +3047,7 @@ export function useDesktopState() {
 
   function clearThreadExecutionTracking(threadId: string): void {
     if (!threadId) return
+    lastExecutionSignalPublishedAtByThreadId.delete(threadId)
     setThreadReadActiveState(threadId, null)
     clearIgnoredStaleActiveTurn(threadId)
     settlePersistedRunningCommandsForThread(threadId)
@@ -3267,6 +3333,22 @@ export function useDesktopState() {
     options: { canStop?: boolean; activeTurnId?: string } = {},
   ): void {
     if (!threadId) return
+    const previousState = runtimeExecutionStateByThreadId.value[threadId]
+    const previousCanStop = runtimeCanStopByThreadId.value[threadId] === true
+    const nextCanStop = options.canStop === true
+    const requestedTurnId = options.activeTurnId?.trim() ?? ''
+    const activeTurnMatches = !requestedTurnId || activeTurnIdByThreadId.value[threadId] === requestedTurnId
+    if (
+      previousState === state &&
+      previousCanStop === nextCanStop &&
+      activeTurnMatches &&
+      runtimeStaleByThreadId.value[threadId] !== true
+    ) {
+      if (isRuntimeExecutionActiveState(state)) {
+        markThreadLiveExecutionSignal(threadId)
+      }
+      return
+    }
     rememberRuntimeLocalStateSummary(threadId, state, options)
     runtimeExecutionStateByThreadId.value = {
       ...runtimeExecutionStateByThreadId.value,
@@ -4083,10 +4165,16 @@ export function useDesktopState() {
     if (!threadId || !messageId || !delta) return
     const key = `${threadId}:${messageId}`
     const current = bufferedAgentDeltaByKey.get(key)
+    const isFirstVisibleDelta = !current && !(liveAgentMessagesByThreadId.value[threadId] ?? [])
+      .some((message) => message.id === messageId && message.text.length > 0)
     if (current) {
       current.delta += delta
     } else {
       bufferedAgentDeltaByKey.set(key, { threadId, messageId, delta })
+    }
+    if (isFirstVisibleDelta) {
+      flushBufferedLiveDeltas()
+      return
     }
     scheduleLiveDeltaFlush()
   }
@@ -5274,6 +5362,7 @@ export function useDesktopState() {
           isAtBottom: true,
           scrollRatio: 1,
         })
+        shouldAutoScrollOnNextAgentEvent = false
       }
       activeReasoningItemId = ''
       clearLiveReasoningForThread(notificationThreadId)
@@ -5920,11 +6009,20 @@ export function useDesktopState() {
   }
 
   async function refreshSkills(): Promise<void> {
+    const generation = ++skillsRefreshGeneration
+    const selectedCwd = selectedThread.value?.cwd?.trim() ?? ''
     try {
-      const selectedCwd = selectedThread.value?.cwd?.trim() ?? ''
-      installedSkills.value = await getSkillsList(selectedCwd ? [selectedCwd] : undefined)
+      const skills = await getSkillsList(selectedCwd ? [selectedCwd] : undefined)
+      const currentCwd = selectedThread.value?.cwd?.trim() ?? ''
+      if (generation !== skillsRefreshGeneration || currentCwd !== selectedCwd) return
+      installedSkills.value = skills
     } catch {
       // keep previous skills on failure
+    } finally {
+      const currentCwd = selectedThread.value?.cwd?.trim() ?? ''
+      if (generation === skillsRefreshGeneration && currentCwd === selectedCwd) {
+        hasLoadedSkills.value = true
+      }
     }
   }
 
@@ -5963,15 +6061,61 @@ export function useDesktopState() {
     }, SKILLS_CHANGED_REFRESH_DEBOUNCE_MS)
   }
 
+  function mergeAvailableComposerPlugins(...lists: ComposerPluginInfo[][]): ComposerPluginInfo[] {
+    const byKey = new Map<string, ComposerPluginInfo>()
+    for (const list of lists) {
+      for (const plugin of list) {
+        byKey.set(`${plugin.source}:${plugin.id.trim().toLowerCase()}`, plugin)
+      }
+    }
+    const priority: Record<ComposerPluginSource, number> = { plugin: 0, mcp: 1, app: 2 }
+    return Array.from(byKey.values()).sort((first, second) => {
+      if (first.source !== second.source) return priority[first.source] - priority[second.source]
+      return first.name.localeCompare(second.name)
+    })
+  }
+
+  function getSharedMcpComposerPluginsRefresh(): Promise<ComposerPluginInfo[]> {
+    if (mcpComposerPluginsRefreshPromise) return mcpComposerPluginsRefreshPromise
+    mcpComposerPluginsRefreshPromise = getMcpComposerPluginsList()
+      .finally(() => {
+        mcpComposerPluginsRefreshPromise = null
+      })
+    return mcpComposerPluginsRefreshPromise
+  }
+
   async function refreshComposerPlugins(): Promise<void> {
+    const generation = ++composerPluginsRefreshGeneration
     isLoadingComposerPlugins.value = true
     try {
-      availableComposerPlugins.value = await getComposerPluginsList()
+      const nativePlugins = await getNativeComposerPluginsList()
+      if (generation !== composerPluginsRefreshGeneration) return
+      availableComposerPlugins.value = mergeAvailableComposerPlugins(
+        nativePlugins,
+        availableComposerPlugins.value.filter((plugin) => plugin.source !== 'plugin'),
+      )
     } catch {
-      // Keep previous plugins on failure; plugin state must not block chat.
-    } finally {
-      isLoadingComposerPlugins.value = false
+      // Older app-server builds may not expose plugin/list; MCP remains a background fallback.
     }
+    if (generation !== composerPluginsRefreshGeneration) return
+
+    void getSharedMcpComposerPluginsRefresh()
+      .then((mcpPlugins) => {
+        if (generation !== composerPluginsRefreshGeneration) return
+        availableComposerPlugins.value = mergeAvailableComposerPlugins(
+          availableComposerPlugins.value.filter((plugin) => plugin.source !== 'mcp'),
+          mcpPlugins,
+        )
+      })
+      .catch(() => {
+        // Slow or unavailable MCP metadata must not hide installed native plugins.
+      })
+      .finally(() => {
+        if (generation === composerPluginsRefreshGeneration) {
+          isLoadingComposerPlugins.value = false
+          hasLoadedComposerPlugins.value = true
+        }
+      })
   }
 
   function scheduleComposerPluginsRefreshFromNotification(): void {
@@ -6137,6 +6281,15 @@ export function useDesktopState() {
 
   async function selectThread(threadId: string) {
     const normalizedThreadId = threadId.trim()
+    const previousSkillCwd = selectedThread.value?.cwd?.trim() ?? ''
+    const nextSkillThread = allThreads.value.find((thread) => thread.id === normalizedThreadId)
+    const nextSkillCwd = nextSkillThread?.cwd?.trim() ?? ''
+    if (normalizedThreadId && (!hasLoadedSkills.value || !nextSkillThread || previousSkillCwd !== nextSkillCwd)) {
+      clearSelectedThreadSkillsRefreshTimer()
+      skillsRefreshGeneration += 1
+      hasLoadedSkills.value = false
+      installedSkills.value = []
+    }
     setSelectedThreadId(normalizedThreadId)
 
     threadSelectionAbortController?.abort()
@@ -7601,8 +7754,12 @@ export function useDesktopState() {
   }
 
   function noteIncomingNotificationActivity(): void {
-    lastNotificationAtMs = Date.now()
-    notificationHealthTick.value = lastNotificationAtMs
+    const now = Date.now()
+    lastNotificationAtMs = now
+    if (now - lastNotificationHealthPublishedAtMs >= 250) {
+      lastNotificationHealthPublishedAtMs = now
+      notificationHealthTick.value = now
+    }
   }
 
   function applyIncomingNotification(
@@ -7811,14 +7968,17 @@ export function useDesktopState() {
     selectedThreadRuntimeStatus,
     selectedThreadTokenUsage,
     selectedThreadId,
+    availableModels,
     availableModelIds,
     selectedModelId,
     selectedReasoningEffort,
     selectedSpeedMode,
     selectedCollaborationMode,
     installedSkills,
+    hasLoadedSkills,
     availableComposerPlugins,
     isLoadingComposerPlugins,
+    hasLoadedComposerPlugins,
     accountRateLimitSnapshots,
     threadTitleById,
     messages,

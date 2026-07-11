@@ -81,7 +81,17 @@
         </span>
       </div>
 
-      <div v-if="selectedPlugins.length > 0 || goalModeEnabled" class="thread-composer-option-chips">
+      <div v-if="selectedPlugins.length > 0 || goalModeEnabled || pendingCapabilityCount > 0" class="thread-composer-option-chips">
+        <span
+          v-if="pendingCapabilityCount > 0"
+          class="thread-composer-option-chip"
+          role="status"
+          aria-live="polite"
+          title="能力列表加载完成后自动恢复"
+        >
+          <span class="thread-composer-option-chip-dot" aria-hidden="true" />
+          <span class="thread-composer-option-chip-name">正在恢复 {{ pendingCapabilityCount }} 项能力</span>
+        </span>
         <span v-for="plugin in selectedPlugins" :key="getSelectedPluginKey(plugin)" class="thread-composer-option-chip">
           <span class="thread-composer-option-chip-dot" aria-hidden="true" />
           <span class="thread-composer-option-chip-name">{{ plugin.name }}</span>
@@ -98,7 +108,7 @@
           <button
             class="thread-composer-option-chip-remove"
             type="button"
-            aria-label="关闭追求目标"
+            aria-label="移除本轮要求"
             @click="disableGoalMode"
           >×</button>
         </span>
@@ -170,9 +180,10 @@
       >
         <div ref="attachMenuRootRef" class="thread-composer-attach">
           <button
+            ref="attachTriggerRef"
             class="thread-composer-attach-trigger"
             type="button"
-            aria-label="添加图片和文件"
+            aria-label="添加内容和功能"
             :disabled="isInteractionDisabled"
             @click="toggleAttachMenu"
           >
@@ -184,14 +195,20 @@
             class="thread-composer-mobile-backdrop"
             type="button"
             aria-label="关闭附件菜单"
-            @pointerdown.stop.prevent="closeAttachMenu"
-            @click="closeAttachMenu"
+            @pointerdown.stop.prevent="closeAttachMenu()"
+            @click="closeAttachMenu()"
           />
           <div
             v-if="isAttachMenuOpen"
+            ref="attachMenuRef"
             class="thread-composer-attach-menu"
             :class="{ 'thread-composer-attach-menu--sheet': isCompactViewport }"
+            role="dialog"
+            aria-label="添加内容和功能"
+            :aria-modal="isCompactViewport ? 'true' : undefined"
+            @keydown="onAttachMenuKeydown"
           >
+            <div v-show="!isCompactViewport || !isPluginSubmenuOpen" class="thread-composer-attach-main">
             <button
               class="thread-composer-attach-item"
               type="button"
@@ -238,9 +255,9 @@
             >
               <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--text">✓</span>
               <span class="thread-composer-attach-item-body">
-                <span class="thread-composer-attach-item-title">计划模式</span>
+                <span class="thread-composer-attach-item-title">仅生成计划</span>
                 <span class="thread-composer-attach-item-subtitle">
-                  {{ selectedCollaborationMode === 'plan' ? '只制定计划，发送后回到执行' : '先规划，不执行文件和命令' }}
+                  {{ selectedCollaborationMode === 'plan' ? '本次只生成计划，发送后回到执行' : '仅规划一次，不执行文件和命令' }}
                 </span>
               </span>
               <span class="thread-composer-switch" :class="{ 'is-on': selectedCollaborationMode === 'plan' }" aria-hidden="true" />
@@ -254,7 +271,7 @@
             >
               <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--text">◎</span>
               <span class="thread-composer-attach-item-body">
-                <span class="thread-composer-attach-item-title">追求目标</span>
+                <span class="thread-composer-attach-item-title">本轮要求</span>
                 <span class="thread-composer-attach-item-subtitle">{{ activeGoalLabel }}</span>
               </span>
               <span class="thread-composer-switch" :class="{ 'is-on': goalModeEnabled }" aria-hidden="true" />
@@ -263,10 +280,12 @@
               <textarea
                 v-model="goalText"
                 class="thread-composer-goal-input"
-                placeholder="输入本轮要持续追求的目标，例如：给出可执行方案并主动补齐风险"
+                aria-label="本轮要求内容"
+                placeholder="输入本次消息的额外要求，例如：给出可执行方案并主动补齐风险"
                 :disabled="isInteractionDisabled"
                 rows="2"
               />
+            </div>
             </div>
             <div class="thread-composer-attach-submenu-wrap">
               <button
@@ -278,7 +297,9 @@
               >
                 <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--grid">⌘</span>
                 <span class="thread-composer-attach-item-body">
-                  <span class="thread-composer-attach-item-title">插件</span>
+                  <span class="thread-composer-attach-item-title">
+                    {{ isCompactViewport && isPluginSubmenuOpen ? '返回添加菜单' : '插件' }}
+                  </span>
                   <span class="thread-composer-attach-item-subtitle">{{ pluginMenuSummary }}</span>
                 </span>
                 <IconTablerChevronRight
@@ -302,9 +323,20 @@
                     刷新
                   </button>
                 </div>
-                <div v-if="props.isLoadingPlugins" class="thread-composer-plugin-menu-empty">正在读取插件...</div>
+                <input
+                  v-if="allPluginOptions.length > 6"
+                  v-model="pluginSearchQuery"
+                  class="thread-composer-plugin-search"
+                  type="search"
+                  aria-label="搜索插件"
+                  placeholder="搜索已连接插件"
+                />
+                <div
+                  v-if="props.isLoadingPlugins && pluginOptions.length === 0"
+                  class="thread-composer-plugin-menu-empty"
+                >正在读取已安装插件...</div>
                 <div v-else-if="pluginOptions.length === 0" class="thread-composer-plugin-menu-empty">
-                  当前 app-server 没有返回可用插件
+                  {{ pluginSearchQuery.trim() ? '没有匹配的已连接插件' : '当前没有已连接插件' }}
                 </div>
                 <template v-else>
                   <button
@@ -316,6 +348,7 @@
                       'is-disabled': !isPluginSelectable(plugin),
                     }"
                     type="button"
+                    :aria-pressed="isPluginSelected(plugin)"
                     :disabled="!isPluginSelectable(plugin)"
                     @click="onPluginRowClick(plugin)"
                   >
@@ -328,18 +361,13 @@
                     <span v-else-if="plugin.source === 'mcp' && plugin.authStatus === 'notLoggedIn'" class="thread-composer-plugin-login">登录</span>
                   </button>
                 </template>
-                <button
-                  class="thread-composer-plugin-reload"
-                  type="button"
-                  :disabled="props.isLoadingPlugins"
-                  @click="onReloadPlugins"
-                >
-                  重新加载插件配置
-                </button>
               </div>
             </div>
-            <div class="thread-composer-attach-section" aria-label="技能">
-              <span class="thread-composer-attach-section-title">技能</span>
+            <div
+              v-show="!isCompactViewport || !isPluginSubmenuOpen"
+              class="thread-composer-attach-section"
+              aria-label="技能"
+            >
               <ComposerSearchDropdown
                 class="thread-composer-attach-skill-dropdown"
                 :options="skillDropdownOptions"
@@ -360,9 +388,10 @@
         <div v-if="!isDictationRecording" class="thread-composer-control-strip" aria-label="发送设置">
           <div ref="runtimeSettingsRootRef" class="thread-composer-runtime">
             <button
+              ref="runtimeTriggerRef"
               class="thread-composer-runtime-trigger"
               type="button"
-              :disabled="isInteractionDisabled || models.length === 0"
+              :disabled="isInteractionDisabled || (models.length === 0 && !selectedModel)"
               :aria-expanded="isRuntimeSettingsOpen"
               aria-label="配置模型、质量和速度"
               @click="toggleRuntimeSettings"
@@ -382,15 +411,18 @@
               class="thread-composer-mobile-backdrop"
               type="button"
               aria-label="关闭配置菜单"
-              @pointerdown.stop.prevent="closeRuntimeSettings"
-              @click="closeRuntimeSettings"
+              @pointerdown.stop.prevent="closeRuntimeSettings()"
+              @click="closeRuntimeSettings()"
             />
             <div
               v-if="isRuntimeSettingsOpen"
+              ref="runtimePanelRef"
               class="thread-composer-runtime-panel"
               :class="{ 'thread-composer-runtime-panel--sheet': isCompactViewport }"
               role="dialog"
               aria-label="模型、质量和速度"
+              :aria-modal="isCompactViewport ? 'true' : undefined"
+              @keydown="onRuntimePanelKeydown"
             >
               <div v-if="isCompactViewport" class="thread-composer-runtime-handle" aria-hidden="true" />
               <div class="thread-composer-runtime-section">
@@ -399,13 +431,17 @@
                   <button
                     v-for="option in modelOptions"
                     :key="option.value"
-                    class="thread-composer-runtime-option"
+                    class="thread-composer-runtime-option thread-composer-runtime-option--stacked"
                     :class="{ 'is-selected': option.value === selectedModel }"
                     type="button"
-                    :disabled="disabled || !activeThreadId"
+                    :aria-pressed="option.value === selectedModel"
+                    :disabled="disabled || !activeThreadId || isModelMetadataPending"
                     @click="onRuntimeModelSelect(option.value)"
                   >
                     <span>{{ option.label }}</span>
+                    <small v-if="option.description">
+                      {{ option.isDefault ? '默认 · ' + option.description : option.description }}
+                    </small>
                   </button>
                 </div>
               </div>
@@ -418,7 +454,8 @@
                     class="thread-composer-runtime-option"
                     :class="{ 'is-selected': option.value === selectedReasoningEffort }"
                     type="button"
-                    :disabled="disabled || !activeThreadId"
+                    :aria-pressed="option.value === selectedReasoningEffort"
+                    :disabled="disabled || !activeThreadId || isModelMetadataPending"
                     @click="onRuntimeReasoningEffortSelect(option.value)"
                   >
                     <span>{{ option.label }}</span>
@@ -434,6 +471,7 @@
                     class="thread-composer-runtime-option thread-composer-runtime-option--stacked"
                     :class="{ 'is-selected': option.value === selectedSpeedMode }"
                     type="button"
+                    :aria-pressed="option.value === selectedSpeedMode"
                     :disabled="isSpeedToggleDisabled"
                     @click="onRuntimeSpeedModeSelect(option.value)"
                   >
@@ -560,6 +598,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type {
   CollaborationMode,
+  ComposerModelInfo,
   ComposerPluginInfo,
   ComposerPluginSelection,
   ComposerTurnOptions,
@@ -586,13 +625,16 @@ const props = defineProps<{
   activeThreadId: string
   cwd?: string
   models: string[]
+  availableModels?: ComposerModelInfo[]
   selectedModel: string
   selectedReasoningEffort: ReasoningEffort | ''
   selectedSpeedMode: SpeedMode
   selectedCollaborationMode: CollaborationMode
   skills?: SkillItem[]
+  hasLoadedSkills?: boolean
   plugins?: ComposerPluginInfo[]
   isLoadingPlugins?: boolean
+  hasLoadedPlugins?: boolean
   isTurnInProgress?: boolean
   isInterruptingTurn?: boolean
   isUpdatingSpeedMode?: boolean
@@ -668,8 +710,11 @@ const draft = ref('')
 const selectedImages = ref<SelectedImage[]>([])
 const selectedSkills = ref<SkillItem[]>([])
 const selectedPlugins = ref<ComposerPluginSelection[]>([])
+const pendingRestoredSkills = ref<Array<{ name: string; path: string }>>([])
+const pendingRestoredPlugins = ref<ComposerPluginSelection[]>([])
 const goalModeEnabled = ref(false)
 const goalText = ref('')
+const pluginSearchQuery = ref('')
 const fileAttachments = ref<FileAttachment[]>([])
 const folderUploadGroups = ref<FolderUploadGroup[]>([])
 
@@ -717,7 +762,11 @@ const {
   },
 })
 const attachMenuRootRef = ref<HTMLElement | null>(null)
+const attachMenuRef = ref<HTMLElement | null>(null)
+const attachTriggerRef = ref<HTMLButtonElement | null>(null)
 const runtimeSettingsRootRef = ref<HTMLElement | null>(null)
+const runtimePanelRef = ref<HTMLElement | null>(null)
+const runtimeTriggerRef = ref<HTMLButtonElement | null>(null)
 const photoLibraryInputRef = ref<HTMLInputElement | null>(null)
 const cameraCaptureInputRef = ref<HTMLInputElement | null>(null)
 const audioCaptureInputRef = ref<HTMLInputElement | null>(null)
@@ -744,19 +793,23 @@ const MOBILE_STOP_GUARD_MS = 2500
 let lastActiveThreadId = ''
 let stopGuardTimer: ReturnType<typeof setTimeout> | null = null
 
-const reasoningOptions: Array<{ value: ReasoningEffort; label: string }> = [
-  { value: 'none', label: '智能' },
-  { value: 'minimal', label: '极低' },
-  { value: 'low', label: '低' },
-  { value: 'medium', label: '中' },
-  { value: 'high', label: '高' },
-  { value: 'xhigh', label: '超高' },
+const fallbackReasoningOptions: Array<{ value: ReasoningEffort; label: string; description: string }> = [
+  { value: 'none', label: '智能', description: '' },
+  { value: 'minimal', label: '极低', description: '' },
+  { value: 'low', label: '低', description: '' },
+  { value: 'medium', label: '中', description: '' },
+  { value: 'high', label: '高', description: '' },
+  { value: 'xhigh', label: '超高', description: '' },
 ]
 
 const speedModeOptions: Array<{ value: SpeedMode; label: string; description: string }> = [
   { value: 'standard', label: '标准', description: '默认速度，常规用量' },
   { value: 'fast', label: '快速', description: '约 1.5 倍速，用量增加' },
 ]
+
+const isModelMetadataPending = computed(() => (
+  props.models.length === 0 && (props.availableModels?.length ?? 0) === 0
+))
 
 function formatModelLabel(modelId: string): string {
   return modelId.trim().replace(/^gpt/i, 'GPT')
@@ -773,14 +826,57 @@ function formatModelTriggerLabel(modelId: string): string {
   return formatModelLabel(modelId).replace(/^GPT-?/i, '').trim()
 }
 
-const modelOptions = computed(() =>
-  props.models.map((modelId) => ({ value: modelId, label: formatModelLabel(modelId) })),
-)
+const modelOptions = computed(() => {
+  if ((props.availableModels?.length ?? 0) > 0) {
+    return (props.availableModels ?? []).map((model) => ({
+      value: model.model,
+      label: model.displayName || formatModelLabel(model.model),
+      description: model.description,
+      isDefault: model.isDefault,
+    }))
+  }
+  const fallbackModels = props.models.length > 0
+    ? props.models
+    : props.selectedModel.trim()
+      ? [props.selectedModel]
+      : []
+  return fallbackModels.map((modelId) => ({
+    value: modelId,
+    label: formatModelLabel(modelId),
+    description: isModelMetadataPending.value ? '正在读取可用模型…' : '',
+    isDefault: false,
+  }))
+})
+const selectedModelInfo = computed(() => (
+  (props.availableModels ?? []).find((model) => model.model === props.selectedModel || model.id === props.selectedModel)
+))
+const reasoningOptions = computed(() => {
+  const options = selectedModelInfo.value?.supportedReasoningEfforts ?? []
+  if (options.length === 0) {
+    if (isModelMetadataPending.value && props.selectedReasoningEffort) {
+      return fallbackReasoningOptions.filter((option) => option.value === props.selectedReasoningEffort)
+    }
+    return fallbackReasoningOptions
+  }
+  const labels: Record<ReasoningEffort, string> = {
+    none: '无',
+    minimal: '极低',
+    low: '低',
+    medium: '中',
+    high: '高',
+    xhigh: '超高',
+  }
+  return options.map((option) => ({
+    value: option.value,
+    label: labels[option.value],
+    description: option.description,
+  }))
+})
 const selectedModelTriggerLabel = computed(() =>
   formatModelTriggerLabel(props.selectedModel) || '模型',
 )
 const selectedReasoningEffortTriggerLabel = computed(() => {
-  const selected = reasoningOptions.find((option) => option.value === props.selectedReasoningEffort)
+  const selected = reasoningOptions.value.find((option) => option.value === props.selectedReasoningEffort)
   return selected?.label ?? '智能'
 })
 const selectedSpeedModeTriggerLabel = computed(() =>
@@ -796,7 +892,15 @@ const runtimeSettingsSummary = computed(() => {
 })
 
 const skillOptions = computed<SkillItem[]>(() => props.skills ?? [])
-const pluginOptions = computed<ComposerPluginInfo[]>(() => props.plugins ?? [])
+const allPluginOptions = computed<ComposerPluginInfo[]>(() => props.plugins ?? [])
+const pluginOptions = computed<ComposerPluginInfo[]>(() => {
+  const query = pluginSearchQuery.value.trim().toLocaleLowerCase()
+  if (!query) return allPluginOptions.value
+  return allPluginOptions.value.filter((plugin) => (
+    plugin.name.toLocaleLowerCase().includes(query) ||
+    plugin.description.toLocaleLowerCase().includes(query)
+  ))
+})
 const selectedSkillPaths = computed(() => selectedSkills.value.map((s) => s.path))
 const skillTriggerLabel = computed(() => (
   selectedSkills.value.length > 0
@@ -806,16 +910,18 @@ const skillTriggerLabel = computed(() => (
 const activeGoalLabel = computed(() => {
   const text = goalText.value.trim()
   if (goalModeEnabled.value && text) return text
-  return goalModeEnabled.value ? '持续追求当前任务目标' : '保持默认单轮回复'
+  return goalModeEnabled.value ? '随本次消息发送，不会持续运行' : '添加一次性任务要求'
 })
 const pluginMenuTitle = computed(() =>
-  pluginOptions.value.length > 0 ? `${pluginOptions.value.length} 个可用插件` : '插件',
+  allPluginOptions.value.length > 0 ? `${allPluginOptions.value.length} 个已连接插件` : '插件',
 )
 const pluginMenuSummary = computed(() => {
-  if (props.isLoadingPlugins) return '正在读取插件'
+  if (props.isLoadingPlugins && allPluginOptions.value.length === 0) return '正在读取已安装插件'
   if (selectedPlugins.value.length > 0) return `已选 ${selectedPlugins.value.length} 个插件`
-  if (pluginOptions.value.length > 0) return `${pluginOptions.value.length} 个插件`
-  return '读取插件'
+  if (allPluginOptions.value.length > 0) {
+    return `${allPluginOptions.value.length} 个已连接${props.isLoadingPlugins ? ' · 正在补充' : ''}`
+  }
+  return '查看已连接插件'
 })
 const skillDropdownOptions = computed(() =>
   (props.skills ?? []).map((s) => ({
@@ -824,11 +930,15 @@ const skillDropdownOptions = computed(() =>
     description: s.description,
   })),
 )
+const pendingCapabilityCount = computed(() => (
+  pendingRestoredSkills.value.length + pendingRestoredPlugins.value.length
+))
 
 const canSubmit = computed(() => {
   if (props.disabled) return false
   if (props.isUpdatingSpeedMode) return false
   if (!props.activeThreadId) return false
+  if (pendingCapabilityCount.value > 0) return false
   return draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0
 })
 const hasUnsavedDraft = computed(() =>
@@ -836,6 +946,7 @@ const hasUnsavedDraft = computed(() =>
   || selectedImages.value.length > 0
   || selectedSkills.value.length > 0
   || selectedPlugins.value.length > 0
+  || pendingCapabilityCount.value > 0
   || goalModeEnabled.value
   || fileAttachments.value.length > 0
   || folderUploadGroups.value.length > 0,
@@ -899,7 +1010,7 @@ const dictationDurationLabel = computed(() => {
 })
 
 const placeholderText = computed(() =>
-  props.activeThreadId ? '输入消息...（@ 引用文件，/ 选择技能）' : '请先选择一个会话再发送消息',
+  props.activeThreadId ? '向 Codex 提问，+ 添加功能' : '请先选择一个会话再发送消息',
 )
 const hasSubmitContent = computed(() =>
   draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0,
@@ -997,9 +1108,12 @@ function normalizePluginSelection(plugin: ComposerPluginSelection): ComposerPlug
 }
 
 function buildTurnOptions(): ComposerTurnOptions | undefined {
-  const plugins = selectedPlugins.value.map((plugin) => normalizePluginSelection(plugin))
+  const availablePluginKeys = new Set((props.plugins ?? []).map((plugin) => plugin.mentionPath))
+  const plugins = selectedPlugins.value
+    .filter((plugin) => availablePluginKeys.has(getSelectedPluginKey(plugin)))
+    .map((plugin) => normalizePluginSelection(plugin))
   const goal = goalModeEnabled.value
-    ? { enabled: true, text: activeGoalLabel.value.trim() || '持续追求当前任务目标' }
+    ? { enabled: true, text: goalText.value.trim() || '主动给出可执行的下一步，并补齐关键风险。' }
     : undefined
   if (plugins.length === 0 && !goal) return undefined
   return {
@@ -1018,7 +1132,9 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer', options?: { rollbackLatestU
     text,
     imageUrls: selectedImages.value.map((image) => image.url),
     fileAttachments: [...fileAttachments.value],
-    skills: selectedSkills.value.map((s) => ({ name: s.name, path: s.path })),
+    skills: selectedSkills.value
+      .filter((skill) => (props.skills ?? []).some((available) => available.path === skill.path))
+      .map((skill) => ({ name: skill.name, path: skill.path })),
     turnOptions: buildTurnOptions(),
     collaborationMode: props.selectedCollaborationMode,
     mode,
@@ -1054,6 +1170,37 @@ function toRenderableImageUrl(value: string): string {
   return normalized
 }
 
+function reconcilePendingRestoredSkills(): void {
+  if (!props.hasLoadedSkills) {
+    return
+  }
+  const restoredSkills = pendingRestoredSkills.value.flatMap((skill) => {
+    const matched = (props.skills ?? []).find((item) => item.path === skill.path)
+    return matched ? [matched] : []
+  })
+  const mergedSkills = new Map(selectedSkills.value.map((skill) => [skill.path, skill]))
+  for (const skill of restoredSkills) mergedSkills.set(skill.path, skill)
+  selectedSkills.value = Array.from(mergedSkills.values())
+  pendingRestoredSkills.value = []
+}
+
+function reconcilePendingRestoredPlugins(): void {
+  if (!props.hasLoadedPlugins || props.isLoadingPlugins) {
+    return
+  }
+  const restoredPlugins = pendingRestoredPlugins.value.flatMap((plugin) => {
+    const normalized = normalizePluginSelection(plugin)
+    const matched = (props.plugins ?? []).find((item) => item.mentionPath === getSelectedPluginKey(normalized))
+    return matched
+      ? [{ id: matched.id, name: matched.name, path: matched.mentionPath, source: matched.source }]
+      : []
+  })
+  const mergedPlugins = new Map(selectedPlugins.value.map((plugin) => [getSelectedPluginKey(plugin), plugin]))
+  for (const plugin of restoredPlugins) mergedPlugins.set(getSelectedPluginKey(plugin), plugin)
+  selectedPlugins.value = Array.from(mergedPlugins.values())
+  pendingRestoredPlugins.value = []
+}
+
 function replaceDraftState(payload: ComposerDraftPayload): void {
   draftGeneration.value += 1
   draft.value = payload.text
@@ -1063,13 +1210,12 @@ function replaceDraftState(payload: ComposerDraftPayload): void {
     url,
     previewUrl: toRenderableImageUrl(url),
   }))
-  selectedSkills.value = payload.skills.map((skill) => (
-    (props.skills ?? []).find((item) => item.path === skill.path)
-    ?? { name: skill.name, description: '', path: skill.path }
-  ))
-  selectedPlugins.value = (payload.plugins ?? []).map((plugin) => {
-    return normalizePluginSelection(plugin)
-  })
+  selectedSkills.value = []
+  selectedPlugins.value = []
+  pendingRestoredSkills.value = payload.skills.map((skill) => ({ ...skill }))
+  pendingRestoredPlugins.value = (payload.plugins ?? []).map((plugin) => ({ ...plugin }))
+  reconcilePendingRestoredSkills()
+  reconcilePendingRestoredPlugins()
   goalModeEnabled.value = payload.goal?.enabled === true
   goalText.value = payload.goal?.text ?? ''
   fileAttachments.value = payload.fileAttachments.map((attachment) => ({ ...attachment }))
@@ -1144,6 +1290,7 @@ function loadPersistedDraftForThread(threadId: string): ComposerDraftPayload | n
           )
           && (
             typeof (plugin as Partial<ComposerPluginSelection>).source === 'undefined'
+            || (plugin as Partial<ComposerPluginSelection>).source === 'plugin'
             || (plugin as Partial<ComposerPluginSelection>).source === 'mcp'
             || (plugin as Partial<ComposerPluginSelection>).source === 'app'
           )
@@ -1204,8 +1351,10 @@ function getCurrentDraftPayload(): ComposerDraftPayload {
     text: draft.value,
     imageUrls: selectedImages.value.map((image) => image.url),
     fileAttachments: fileAttachments.value.map((attachment) => ({ ...attachment })),
-    skills: selectedSkills.value.map((skill) => ({ name: skill.name, path: skill.path })),
-    plugins: selectedPlugins.value.map((plugin) => ({ ...plugin })),
+    skills: (pendingRestoredSkills.value.length > 0 ? pendingRestoredSkills.value : selectedSkills.value)
+      .map((skill) => ({ name: skill.name, path: skill.path })),
+    plugins: (pendingRestoredPlugins.value.length > 0 ? pendingRestoredPlugins.value : selectedPlugins.value)
+      .map((plugin) => ({ ...plugin })),
     goal: { enabled: goalModeEnabled.value, text: goalText.value.trim() },
   }
 }
@@ -1240,15 +1389,44 @@ function onRuntimeSpeedModeSelect(value: SpeedMode): void {
 }
 
 function toggleRuntimeSettings(): void {
-  if (isInteractionDisabled.value || props.models.length === 0) return
+  if (isInteractionDisabled.value || (props.models.length === 0 && !props.selectedModel)) return
   isRuntimeSettingsOpen.value = !isRuntimeSettingsOpen.value
   if (isRuntimeSettingsOpen.value) {
     isAttachMenuOpen.value = false
+    void nextTick(() => {
+      getRuntimePanelFocusableElements()[0]?.focus()
+    })
   }
 }
 
-function closeRuntimeSettings(): void {
+function closeRuntimeSettings(restoreFocus = true): void {
   isRuntimeSettingsOpen.value = false
+  if (restoreFocus) {
+    void nextTick(() => runtimeTriggerRef.value?.focus())
+  }
+}
+
+function getRuntimePanelFocusableElements(): HTMLElement[] {
+  const panel = runtimePanelRef.value
+  if (!panel) return []
+  return Array.from(panel.querySelectorAll<HTMLElement>('button:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+    .filter((element) => element.getClientRects().length > 0)
+}
+
+function onRuntimePanelKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Tab') return
+  const focusable = getRuntimePanelFocusableElements()
+  if (focusable.length === 0) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (!first || !last) return
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
 }
 
 function togglePlanMode(): void {
@@ -1260,7 +1438,7 @@ function toggleGoalMode(): void {
   if (isInteractionDisabled.value) return
   goalModeEnabled.value = !goalModeEnabled.value
   if (goalModeEnabled.value && !goalText.value.trim()) {
-    goalText.value = '持续追求当前任务目标，主动给出可执行的下一步。'
+    goalText.value = '主动给出可执行的下一步，并补齐关键风险。'
   }
 }
 
@@ -1271,7 +1449,7 @@ function disableGoalMode(): void {
 function togglePluginSubmenu(): void {
   if (isInteractionDisabled.value) return
   isPluginSubmenuOpen.value = !isPluginSubmenuOpen.value
-  if (isPluginSubmenuOpen.value && pluginOptions.value.length === 0 && !props.isLoadingPlugins) {
+  if (isPluginSubmenuOpen.value && allPluginOptions.value.length === 0 && !props.isLoadingPlugins) {
     emit('refresh-plugins')
   }
 }
@@ -1281,6 +1459,7 @@ function isPluginSelected(plugin: ComposerPluginInfo): boolean {
 }
 
 function isPluginSelectable(plugin: ComposerPluginInfo): boolean {
+  if (plugin.source === 'plugin') return plugin.isEnabled !== false
   if (plugin.source === 'app') {
     return plugin.isAccessible !== false && plugin.isEnabled !== false
   }
@@ -1328,6 +1507,7 @@ function getPluginAvatar(name: string): string {
 }
 
 function getPluginMeta(plugin: ComposerPluginInfo): string {
+  if (plugin.source === 'plugin') return plugin.description || '已安装插件'
   if (plugin.source === 'app') {
     if (plugin.isAccessible === false) return '当前不可访问'
     if (plugin.isEnabled === false) return '未启用'
@@ -1418,14 +1598,45 @@ function toggleAttachMenu(): void {
   isAttachMenuOpen.value = !isAttachMenuOpen.value
   if (isAttachMenuOpen.value) {
     isRuntimeSettingsOpen.value = false
+    void nextTick(() => {
+      getAttachMenuFocusableElements()[0]?.focus()
+    })
   } else {
     isPluginSubmenuOpen.value = false
   }
 }
 
-function closeAttachMenu(): void {
+function closeAttachMenu(restoreFocus = true): void {
   isAttachMenuOpen.value = false
   isPluginSubmenuOpen.value = false
+  pluginSearchQuery.value = ''
+  if (restoreFocus) {
+    void nextTick(() => attachTriggerRef.value?.focus())
+  }
+}
+
+function getAttachMenuFocusableElements(): HTMLElement[] {
+  const menu = attachMenuRef.value
+  if (!menu) return []
+  return Array.from(menu.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter((element) => element.getClientRects().length > 0)
+}
+
+function onAttachMenuKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Tab') return
+  const focusable = getAttachMenuFocusableElements()
+  if (focusable.length === 0) return
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (!first || !last) return
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
 }
 
 function triggerPhotoLibrary(): void {
@@ -1834,16 +2045,22 @@ function onDocumentClick(event: MouseEvent): void {
   if (isAttachMenuOpen.value) {
     const attachRoot = attachMenuRootRef.value
     if (attachRoot && !attachRoot.contains(target)) {
-      closeAttachMenu()
+      closeAttachMenu(false)
     }
   }
 
   if (isRuntimeSettingsOpen.value) {
     const runtimeRoot = runtimeSettingsRootRef.value
     if (runtimeRoot && !runtimeRoot.contains(target)) {
-      isRuntimeSettingsOpen.value = false
+      closeRuntimeSettings(false)
     }
   }
+}
+
+function onDocumentKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return
+  if (isAttachMenuOpen.value) closeAttachMenu()
+  if (isRuntimeSettingsOpen.value) closeRuntimeSettings()
 }
 
 function syncCompactViewport(): void {
@@ -1854,6 +2071,7 @@ function syncCompactViewport(): void {
 onMounted(() => {
   syncCompactViewport()
   document.addEventListener('click', onDocumentClick)
+  document.addEventListener('keydown', onDocumentKeydown)
   window.addEventListener('resize', syncCompactViewport)
   window.visualViewport?.addEventListener('resize', syncCompactViewport)
 })
@@ -1874,6 +2092,7 @@ onBeforeUnmount(() => {
     dictationInsertFlashTimer = null
   }
   document.removeEventListener('click', onDocumentClick)
+  document.removeEventListener('keydown', onDocumentKeydown)
   document.removeEventListener('visibilitychange', onDocumentVisibilityChange)
   window.removeEventListener('resize', syncCompactViewport)
   window.visualViewport?.removeEventListener('resize', syncCompactViewport)
@@ -1903,7 +2122,17 @@ watch(
   { immediate: true },
 )
 
-watch([draft, selectedImages, fileAttachments, selectedSkills, selectedPlugins, goalModeEnabled, goalText], () => {
+watch([
+  draft,
+  selectedImages,
+  fileAttachments,
+  selectedSkills,
+  selectedPlugins,
+  pendingRestoredSkills,
+  pendingRestoredPlugins,
+  goalModeEnabled,
+  goalText,
+], () => {
   if (!lastActiveThreadId) return
   persistDraftForThread(lastActiveThreadId, getCurrentDraftPayload())
 }, { deep: true })
@@ -1918,14 +2147,35 @@ watch(
 )
 
 watch(
-  () => props.plugins,
+  [() => props.plugins, () => props.isLoadingPlugins, () => props.hasLoadedPlugins],
   () => {
+    if (pendingRestoredPlugins.value.length > 0) {
+      reconcilePendingRestoredPlugins()
+      if (pendingRestoredPlugins.value.length > 0) return
+    }
     if (selectedPlugins.value.length === 0) return
-    selectedPlugins.value = selectedPlugins.value.map((plugin) => {
+    if (!props.hasLoadedPlugins || props.isLoadingPlugins) return
+    selectedPlugins.value = selectedPlugins.value.flatMap((plugin) => {
       const matched = (props.plugins ?? []).find((item) => item.mentionPath === getSelectedPluginKey(plugin))
       return matched
-        ? { id: matched.id, name: matched.name, path: matched.mentionPath, source: matched.source }
-        : normalizePluginSelection(plugin)
+        ? [{ id: matched.id, name: matched.name, path: matched.mentionPath, source: matched.source }]
+        : []
+    })
+  },
+)
+
+watch(
+  [() => props.skills, () => props.hasLoadedSkills],
+  () => {
+    if (pendingRestoredSkills.value.length > 0) {
+      reconcilePendingRestoredSkills()
+      if (pendingRestoredSkills.value.length > 0) return
+    }
+    if (selectedSkills.value.length === 0) return
+    if (!props.hasLoadedSkills) return
+    selectedSkills.value = selectedSkills.value.flatMap((skill) => {
+      const matched = (props.skills ?? []).find((item) => item.path === skill.path)
+      return matched ? [matched] : []
     })
   },
 )
@@ -2328,7 +2578,19 @@ watch(
 
 .thread-composer-plugin-menu-header {
   @apply flex items-center justify-between gap-2 px-2 py-1.5 text-xs font-semibold;
-  color: var(--ui-text-tertiary);
+  color: var(--ui-text-secondary);
+}
+
+.thread-composer-plugin-search {
+  @apply mb-1 h-9 w-full border px-2.5 text-sm outline-none transition;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
+}
+
+.thread-composer-plugin-search:focus {
+  border-color: color-mix(in srgb, var(--ui-accent) 48%, var(--ui-border-strong));
 }
 
 .thread-composer-plugin-menu-action {
@@ -2337,7 +2599,7 @@ watch(
 
 .thread-composer-plugin-menu-empty {
   @apply px-2 py-3 text-sm;
-  color: var(--ui-text-tertiary);
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-plugin-row {
@@ -2379,7 +2641,7 @@ watch(
 
 .thread-composer-plugin-row-meta {
   @apply truncate text-xs;
-  color: var(--ui-text-tertiary);
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-plugin-check,
@@ -2396,19 +2658,6 @@ watch(
   color: var(--ui-text-secondary);
 }
 
-.thread-composer-plugin-reload {
-  @apply mt-1 flex min-h-10 w-full items-center justify-center border px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50;
-  border-radius: var(--ui-radius-control);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
-  color: var(--ui-text-secondary);
-}
-
-.thread-composer-plugin-reload:hover,
-.thread-composer-plugin-reload:focus-visible {
-  background: var(--ui-bg-row-hover);
-}
-
 .thread-composer-attach-separator {
   @apply my-1 h-px bg-zinc-100;
 }
@@ -2419,7 +2668,7 @@ watch(
 
 .thread-composer-attach-section-title {
   @apply text-xs font-semibold;
-  color: var(--ui-text-tertiary);
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-attach-mode-toggle {
@@ -2536,7 +2785,7 @@ watch(
 
 .thread-composer-runtime-section-title {
   @apply px-2 pb-1 text-xs font-semibold;
-  color: var(--ui-text-tertiary);
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-runtime-options {
@@ -2566,7 +2815,7 @@ watch(
 
 .thread-composer-runtime-option small {
   @apply mt-0.5 block text-xs font-normal leading-snug;
-  color: var(--ui-text-tertiary);
+  color: var(--ui-text-secondary);
 }
 
 .thread-composer-runtime-option--stacked {

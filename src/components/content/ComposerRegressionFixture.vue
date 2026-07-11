@@ -16,7 +16,8 @@
         active-thread-id="fixture-thread-composer"
         cwd="E:/javaword/CXCodex/codexui"
         :models="models"
-        selected-model="gpt-5.5-codex"
+        :available-models="availableModels"
+        selected-model="gpt-5.5"
         selected-reasoning-effort="high"
         selected-speed-mode="fast"
         selected-collaboration-mode="execute"
@@ -48,9 +49,42 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import ThreadComposer, { type SubmitPayload, type ThreadComposerExposed } from './ThreadComposer.vue'
-import type { ComposerPluginInfo } from '../../types/codex'
+import type { ComposerModelInfo, ComposerPluginInfo, ReasoningEffort } from '../../types/codex'
 
-const models = ['gpt-5.5-codex', 'gpt-5.5', 'o3']
+const models = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']
+const reasoningOptions = (values: ReasoningEffort[]) => values.map((value) => ({ value, description: '' }))
+const availableModels: ComposerModelInfo[] = [
+  {
+    id: 'gpt-5.5',
+    model: 'gpt-5.5',
+    displayName: 'GPT-5.5',
+    description: '适合复杂编码与长任务。',
+    hidden: false,
+    isDefault: true,
+    defaultReasoningEffort: 'high',
+    supportedReasoningEfforts: reasoningOptions(['low', 'medium', 'high', 'xhigh']),
+  },
+  {
+    id: 'gpt-5.4',
+    model: 'gpt-5.4',
+    displayName: 'GPT-5.4',
+    description: '适合日常编码与协作。',
+    hidden: false,
+    isDefault: false,
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: reasoningOptions(['low', 'medium', 'high', 'xhigh']),
+  },
+  {
+    id: 'gpt-5.4-mini',
+    model: 'gpt-5.4-mini',
+    displayName: 'GPT-5.4 Mini',
+    description: '轻量快速，适合简单任务。',
+    hidden: false,
+    isDefault: false,
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: reasoningOptions(['low', 'medium', 'high']),
+  },
+]
 const composerRef = ref<ThreadComposerExposed | null>(null)
 const submitCount = ref(0)
 
@@ -64,24 +98,24 @@ const skills = [
 
 const plugins: ComposerPluginInfo[] = [
   {
-    id: 'github',
-    name: 'GitHub',
-    description: 'GitHub repository context',
-    source: 'app',
-    mentionPath: 'app:github',
+    id: 'browser@openai-bundled',
+    name: 'Browser',
+    description: '控制 Codex 内置浏览器。',
+    source: 'plugin',
+    mentionPath: 'plugin://browser@openai-bundled',
     authStatus: 'unknown',
     isAccessible: true,
     isEnabled: true,
     distributionChannel: null,
     installUrl: null,
-    toolCount: 3,
+    toolCount: 0,
     resourceCount: 0,
     resourceTemplateCount: 0,
     tools: [
       {
-        name: 'search_issues',
-        title: 'Search issues',
-        description: 'Search repository issues',
+        name: 'browser_open',
+        title: '打开页面',
+        description: '在内置浏览器中打开页面',
       },
     ],
   },

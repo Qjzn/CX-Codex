@@ -69,6 +69,16 @@ Run Codex locally, use it from your phone or browser, and expose it through your
 - [chat-mobile.png](./screenshots/chat-mobile.png): 手机会话
 - [android-setup.png](./screenshots/android-setup.png): Android 首次连接
 - [github-trending.png](./screenshots/github-trending.png): GitHub 热门项目模块
+- [mobile-composer-plus.png](./screenshots/mobile-composer-plus.png): 手机端附件、一次性计划、任务要求与插件入口
+- [mobile-model-settings.png](./screenshots/mobile-model-settings.png): 手机端模型、推理档位与速度设置
+
+新截图必须在 regression fixture 或脱敏演示数据上采集；禁止使用真实会话、个人路径、账号、密钥、内网或公网地址。
+
+## 发布分支约定
+
+- GitHub Release 对应的 tag 必须指向 `main` 已包含的提交；发布后，`main` 应立即反映该版本源码，避免 Release 比默认分支更新。
+- 提交 Release 前先更新 README、更新日志、版本说明和脱敏截图，再运行发布验证。
+- Issue 回复优先给出版本、文档链接、验证方式和已知边界；不要用“已优化”替代可复现的说明。
 
 截图必须使用演示数据。
 

@@ -586,6 +586,9 @@
                       当前为折叠预览，完整 Prompt 已发送 · {{ formatCharacterCount(entry.message.text.length) }} 字
                     </p>
                   </template>
+                  <template v-else-if="isStreamingAgentMessage(entry.message)">
+                    <p class="message-text message-streaming-text">{{ entry.message.text }}</p>
+                  </template>
                   <template v-else>
                     <template
                       v-for="(block, blockIndex) in getPreparedMessageBlocks(entry.message)"
@@ -1380,10 +1383,19 @@ function isGuidedAssistantMessage(message: UiMessage): boolean {
   )
 }
 
+function isStreamingAgentMessage(message: UiMessage): boolean {
+  return (
+    props.isTurnInProgress === true &&
+    message.role === 'assistant' &&
+    message.messageType === 'agentMessage.live' &&
+    message.text.length > 0
+  )
+}
+
 function isInternalCodexContextMessage(message: UiMessage): boolean {
   if (message.role !== 'user') return false
   const text = message.text.trim()
-  return /^<codex_internal_context\b/iu.test(text) && /<\/codex_internal_context>\s*$/iu.test(text)
+  return /^<(?:codex_internal_context|recommended_plugins|permissions|app-context|collaboration_mode|skills_instructions|apps_instructions|plugins_instructions|environment_context)\b/iu.test(text)
 }
 
 function shouldSuppressConversationMessage(message: UiMessage): boolean {
@@ -1839,7 +1851,7 @@ const conversationListResizeObserver =
         if (!(target instanceof HTMLElement)) continue
         syncConversationViewport(target)
         if (shouldLockToBottom()) {
-          scheduleBottomLock(2)
+          scheduleBottomLock(1)
         }
       }
     })
@@ -1865,6 +1877,7 @@ const showJumpToLatestButton = computed(() => (
 ))
 const overlayPrimaryPendingRequest = computed<UiServerRequest | null>(() => props.pendingRequests[0] ?? null)
 const favoriteMessageIdSet = computed(() => new Set(props.favoriteMessageIds ?? []))
+const hasVisibleLiveAgentText = computed(() => props.messages.some(isStreamingAgentMessage))
 const hasLiveOverlayDetail = computed<boolean>(() => {
   const overlay = props.liveOverlay
   if (!overlay) return false
@@ -1878,7 +1891,16 @@ const hasLiveOverlayDetail = computed<boolean>(() => {
   )
 })
 const showInlineLiveOverlay = computed<boolean>(() => {
-  if (!props.liveOverlay) return false
+  const overlay = props.liveOverlay
+  if (!overlay) return false
+  if (
+    hasVisibleLiveAgentText.value &&
+    !overlayPrimaryPendingRequest.value &&
+    !liveOverlayCommandMessage.value &&
+    !overlay.errorText.trim()
+  ) {
+    return false
+  }
   if (props.compactRuntimeChrome !== true) return true
   return hasLiveOverlayDetail.value
 })
@@ -4615,6 +4637,7 @@ function findLatestAssistantResponseEntryAfterUser(): ConversationMessageEntry |
 }
 
 function maybeAnchorLongAssistantResponse(allowActualBottom = false): boolean {
+  if (props.isTurnInProgress === true) return false
   const container = conversationListRef.value
   if (!container) return false
   if (!shouldLockToBottom() && !(allowActualBottom && isAtBottom(container))) return false
@@ -4686,7 +4709,7 @@ function runBottomLockFrame(): void {
   bottomLockFrame = requestAnimationFrame(runBottomLockFrame)
 }
 
-function scheduleBottomLock(frames = 6): void {
+function scheduleBottomLock(frames = 1): void {
   if (!shouldLockToBottom()) return
   if (bottomLockFrame) {
     cancelAnimationFrame(bottomLockFrame)
@@ -4792,7 +4815,7 @@ watch(
     await nextTick()
     if (!shouldFollowBottom) return
     enforceBottomState()
-    scheduleBottomLock(8)
+    scheduleBottomLock(1)
   },
 )
 
@@ -6052,6 +6075,18 @@ onBeforeUnmount(() => {
   letter-spacing: var(--tracking-body-soft);
 }
 
+.message-streaming-text::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 0.18rem;
+  border-radius: 999px;
+  background: var(--ui-accent);
+  vertical-align: -0.12em;
+  animation: streamingCaretPulse 900ms ease-in-out infinite;
+}
+
 .message-bold-text {
   @apply font-semibold text-[#1f2937];
 }
@@ -6599,8 +6634,8 @@ onBeforeUnmount(() => {
   }
 
   .message-text {
-    font-size: 14px;
-    line-height: 1.52;
+    font-size: 15px;
+    line-height: 1.58;
   }
 
   .message-table-scroll {
@@ -6674,6 +6709,20 @@ onBeforeUnmount(() => {
   .message-card[data-role='assistant'],
   .message-card[data-role='system'] {
     @apply rounded-[14px] px-2.5 py-2;
+  }
+
+  .message-body[data-role='assistant'] {
+    width: 100%;
+  }
+
+  .message-card[data-role='assistant'] {
+    @apply rounded-none border-0 bg-transparent px-0.5 py-1 shadow-none;
+    max-width: 100%;
+  }
+
+  .message-eyebrow[data-role='user'],
+  .message-eyebrow[data-role='assistant'] {
+    display: none;
   }
 
   .message-card[data-role='user'] {
@@ -6828,6 +6877,20 @@ onBeforeUnmount(() => {
   .cmd-output-wrap {
     animation: none !important;
     transition: none !important;
+  }
+
+  .message-streaming-text::after {
+    animation: none !important;
+  }
+}
+
+@keyframes streamingCaretPulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
   }
 }
 

@@ -2,6 +2,8 @@
 
 ## 未发布
 
+## 2.3.0 - 2026-07-11
+
 - 开源开发契约：
   - 统一要求 Node.js `22.13.0+` 与 npm，与 `pdfjs-dist` / Capacitor 的实际运行时要求保持一致；Windows bootstrap 会先更新仓库再准备运行时，本机 Node 过旧时使用安装目录内的便携式 LTS，避免仓库替换误删刚下载的 Node。
   - 本地开发收敛为显式 `npm ci` 后运行 `npm run dev`，移除会在 Windows 失败的 pnpm / Unix `sh` 混用脚本；README 在 npm 包真正发布前不再宣称可用 `npx`。
@@ -16,6 +18,7 @@
   - `app/list/updated` 通知在实时推送和持久 replay 中只保留“应用列表已失效”信号，不再重复保存和传输完整 App 目录；旧 runtime 库会在打开时轻量清理已有大 payload。
   - runtime health 新增数据库占用、空闲页比例和 auto-vacuum 状态；新库启用 incremental vacuum，旧库可在停服后运行 `cx-codex runtime-compact` 显式压缩，避免把 full `VACUUM` 放进启动热路径。
 - 界面体验：
+  - 移动端会话与操作栏进一步对齐最新 Codex 能力：手机正文改为更宽的无边框阅读流，压缩标题噪音并隐藏内部插件提示、记忆引用和应用指令；真实流式首字立即落屏、持续增量合批、完成后再做完整 Markdown，同时降低高频运行态写入和重复消息重渲染。模型/推理档位改为 `model/list` 元数据驱动，运行时后续开放 GPT-5.6 等型号时可自动出现；`+` 菜单仅展示已安装启用的原生插件、可用 MCP、启用技能及明确的一次性计划/本轮要求，原生插件先落屏，慢速 MCP 元数据在后台补齐。
   - 手机会话标题栏新增 Codex.app 风格的紧凑连接状态：正常为绿点，连接/同步中显示旋转状态，恢复异常使用警告或错误色并显示短标签；同一控件仍可一键强制恢复当前会话，避免只剩一个无语义刷新图标。
   - 会话详情首屏可读时间更准确且更跟手：长会话消息已到达但 loading 状态尚未完全落下时，会话页也会先完成首屏布局/底部锚定；真实线程回归新增页面内 `firstScreenReady` 指标，区分产品 DOM ready 时间和外部浏览器轮询开销，避免后续性能判断被测试脚本等待放大。
   - 长会话 fallback 历史更轻：本地 session-log 恢复会跳过 Codex 内部 context 和 assistant commentary 过程提示，并折叠 `event_msg`/`response_item` 相邻重复消息；真实 `分析项目` fallback state payload 从约 238KB 降到约 31KB，避免移动端为不可见过程噪音下载和归一化大块历史，同时旧历史加载到最早 turn 后会清理过期 `history.notice`，不再残留无效加载入口。

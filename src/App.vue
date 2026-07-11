@@ -488,6 +488,17 @@
               </span>
               <IconTablerRefresh class="content-title-refresh-button-icon" />
             </button>
+            <button
+              v-if="isCompactTouchContent"
+              class="content-favorites-button"
+              type="button"
+              title="查看收藏"
+              aria-label="查看全局收藏内容"
+              @click="isFavoritesModalVisible = true"
+            >
+              <IconTablerBookmark class="content-favorites-button-icon" :filled="favoriteCount > 0" />
+              <span v-if="favoriteCount > 0" class="content-favorites-button-badge">{{ favoriteCount }}</span>
+            </button>
           </template>
           <template #subtitle>
             <p v-if="headerSubtitle" class="content-header-subtitle">{{ headerSubtitle }}</p>
@@ -565,6 +576,7 @@
                 <span>{{ desktopSyncNoticeLabel }}</span>
               </button>
               <button
+                v-if="!isCompactTouchContent"
                 class="content-favorites-button"
                 type="button"
                 title="查看全局收藏内容"
@@ -664,14 +676,16 @@
 
                 <ThreadComposer ref="homeThreadComposerRef" :active-thread-id="composerThreadContextId"
                 :cwd="composerCwd"
-                :models="availableModelIds" :selected-model="selectedModelId"
+                :models="availableModelIds" :available-models="availableModels" :selected-model="selectedModelId"
                 :selected-reasoning-effort="selectedReasoningEffort"
                 :selected-speed-mode="selectedSpeedMode"
                 :selected-collaboration-mode="selectedCollaborationMode"
                 :is-updating-speed-mode="isUpdatingSpeedMode"
-                :skills="installedSkills"
+                :skills="enabledComposerSkills"
+                :has-loaded-skills="hasLoadedSkills"
                 :plugins="availableComposerPlugins"
                 :is-loading-plugins="isLoadingComposerPlugins"
+                :has-loaded-plugins="hasLoadedComposerPlugins"
                 :is-turn-in-progress="false"
                 :is-interrupting-turn="false" :send-with-enter="sendWithEnter"
                 :dictation-click-to-toggle="dictationClickToToggle" :dictation-auto-send="dictationAutoSend"
@@ -732,14 +746,17 @@
                 <ThreadComposer ref="threadComposerRef" :active-thread-id="composerThreadContextId"
                   :cwd="composerCwd"
                   :models="availableModelIds"
+                  :available-models="availableModels"
                   :selected-model="selectedModelId"
                   :selected-reasoning-effort="selectedReasoningEffort"
                   :selected-speed-mode="selectedSpeedMode"
                   :selected-collaboration-mode="selectedCollaborationMode"
                   :is-updating-speed-mode="isUpdatingSpeedMode"
-                  :skills="installedSkills"
+                  :skills="enabledComposerSkills"
+                  :has-loaded-skills="hasLoadedSkills"
                   :plugins="availableComposerPlugins"
                   :is-loading-plugins="isLoadingComposerPlugins"
+                  :has-loaded-plugins="hasLoadedComposerPlugins"
                   :is-turn-in-progress="isSelectedThreadInterruptible" :is-interrupting-turn="isInterruptingTurn"
                   :has-queue-above="selectedThreadQueuedMessages.length > 0"
                   :send-with-enter="sendWithEnter"
@@ -1188,14 +1205,17 @@ const {
   selectedThreadRuntimeStatus,
   selectedThreadTokenUsage,
   selectedThreadId,
+  availableModels,
   availableModelIds,
   selectedModelId,
   selectedReasoningEffort,
   selectedSpeedMode,
   selectedCollaborationMode,
   installedSkills,
+  hasLoadedSkills,
   availableComposerPlugins,
   isLoadingComposerPlugins,
+  hasLoadedComposerPlugins,
   accountRateLimitSnapshots,
   threadTitleById,
   messages,
@@ -1248,6 +1268,7 @@ const {
   startPolling,
   stopPolling,
 } = useDesktopState()
+const enabledComposerSkills = computed(() => installedSkills.value.filter((skill) => skill.enabled !== false))
 
 const route = useRoute()
 const router = useRouter()
@@ -1575,18 +1596,35 @@ const routeThreadCachedTitle = computed(() => {
   return threadTitleById.value[threadId]?.trim() ?? ''
 })
 function isInternalThreadTitleCandidate(line: string): boolean {
-  return /^<codex_internal_context\b/iu.test(line.trim())
+  return /^<(?:codex_internal_context|recommended_plugins|permissions|app-context|collaboration_mode|skills_instructions|apps_instructions|plugins_instructions|environment_context)\b/iu.test(line.trim())
 }
 function isInternalCodexContextMessage(message: UiMessage): boolean {
   if (message.role !== 'user') return false
   const text = message.text.trim()
-  return /^<codex_internal_context\b/iu.test(text) && /<\/codex_internal_context>\s*$/iu.test(text)
+  return /^<(?:codex_internal_context|recommended_plugins|permissions|app-context|collaboration_mode|skills_instructions|apps_instructions|plugins_instructions|environment_context)\b/iu.test(text)
+}
+function stripAssistantTransportMetadata(text: string): string {
+  return text
+    .replace(/(?:^|\n)::(?:git-(?:stage|commit|create-branch|push|create-pr)|created-thread|code-comment)\{[^\n]*\}(?=\n|$)/gu, '\n')
+    .replace(/\s*<oai-mem-citation>[\s\S]*?<\/oai-mem-citation>\s*$/iu, '')
+    .replace(/\n{3,}/gu, '\n\n')
+    .trimEnd()
+}
+function toVisibleConversationMessage(message: UiMessage): UiMessage {
+  if (
+    message.role !== 'assistant' ||
+    (!message.text.includes('<oai-mem-citation>') && !/(?:^|\n)::(?:git-|created-thread|code-comment)/u.test(message.text))
+  ) return message
+  const text = stripAssistantTransportMetadata(message.text)
+  return text === message.text ? message : { ...message, text }
 }
 const routeThreadFallbackTitle = computed(() => {
   if (route.name !== 'thread' || selectedThread.value) return ''
   const cachedTitle = routeThreadCachedTitle.value
   if (cachedTitle) return cachedTitle
-  const userMessage = messages.value.find((message) => message.role === 'user' && message.text.trim())
+  const userMessage = messages.value.find((message) => (
+    message.role === 'user' && message.text.trim() && !isInternalCodexContextMessage(message)
+  ))
   const firstLine = userMessage?.text
     .split('\n')
     .map((line) => line.trim())
@@ -1617,6 +1655,7 @@ const headerSubtitle = computed(() => {
   if (isGithubTrendingRoute.value) return '浏览热门仓库、查看介绍，并直接带着项目链接发起提问。'
   if (isHomeRoute.value) return '从已配置工作区快速发起新的 Codex 任务。'
   if (isRouteOnlyEmptyThread.value) return '这个会话还没有消息，你可以直接发送第一条消息，或将它移除。'
+  if (isCompactTouchContent.value) return ''
   const cwd = selectedThread.value?.cwd?.trim() ?? ''
   return cwd || ''
 })
@@ -1654,7 +1693,8 @@ const contentContextUsage = computed(() => {
 const showContentContextBadge = computed(() => (
   !isNonThreadRoute.value &&
   !isRouteOnlyEmptyThread.value &&
-  Boolean(selectedThread.value)
+  Boolean(selectedThread.value) &&
+  (!isCompactTouchContent.value || contentContextHasReliablePercent.value)
 ))
 const contentContextHasReliablePercent = computed(() => (
   typeof contentContextUsage.value?.usedPercent === 'number'
@@ -1782,13 +1822,21 @@ const serviceStatusDetail = computed(() => {
   return '实时连接正常。'
 })
 const filteredMessages = computed(() =>
-  messages.value.filter((message) => {
-    if (isInternalCodexContextMessage(message)) return false
+  messages.value.flatMap((message) => {
+    if (isInternalCodexContextMessage(message)) return []
     const type = normalizeMessageType(message.messageType, message.role)
-    if (type === 'worked') return true
-    if (type === 'commandExecution') return message.commandExecution?.status === 'inProgress'
-    if (type === 'turnActivity.live' || type === 'turnError.live' || type === 'agentReasoning.live') return false
-    return true
+    if (type === 'commandExecution' && message.commandExecution?.status !== 'inProgress') return []
+    if (type === 'turnActivity.live' || type === 'turnError.live' || type === 'agentReasoning.live') return []
+    const visibleMessage = toVisibleConversationMessage(message)
+    if (
+      visibleMessage !== message &&
+      !visibleMessage.text.trim() &&
+      (visibleMessage.images?.length ?? 0) === 0 &&
+      (visibleMessage.fileAttachments?.length ?? 0) === 0 &&
+      !visibleMessage.commandExecution &&
+      !visibleMessage.rawPayload
+    ) return []
+    return [visibleMessage]
   }),
 )
 const latestUserTurnIndex = computed(() => {
@@ -2081,7 +2129,7 @@ const workbenchStatusItems = computed<WorkbenchStatusItem[]>(() => {
     },
     {
       label: '能力',
-      value: `${String(installedSkills.value.length)} 技能 · ${String(availableComposerPlugins.value.length)} 插件`,
+      value: `${String(enabledComposerSkills.value.length)} 技能 · ${String(availableComposerPlugins.value.length)} 插件`,
       detail: isLoadingComposerPlugins.value ? '正在读取插件状态。' : '插件会作为本轮偏好传给 Codex。',
       tone: 'neutral',
     },
@@ -2169,8 +2217,8 @@ watch(
       isThreadContentSwitching.value = false
       displayedThreadConversationId.value = nextThreadId
       displayedThreadCwd.value = nextCwd
-      displayedThreadMessages.value = [...nextMessages]
-      displayedThreadPendingRequests.value = [...nextPendingRequests]
+      displayedThreadMessages.value = nextMessages
+      displayedThreadPendingRequests.value = nextPendingRequests
       displayedThreadLiveOverlay.value = nextLiveOverlay
       displayedThreadScrollState.value = nextScrollState
       return
@@ -2194,8 +2242,8 @@ watch(
 
     displayedThreadConversationId.value = nextThreadId
     displayedThreadCwd.value = nextCwd
-    displayedThreadMessages.value = [...nextMessages]
-    displayedThreadPendingRequests.value = [...nextPendingRequests]
+    displayedThreadMessages.value = nextMessages
+    displayedThreadPendingRequests.value = nextPendingRequests
     displayedThreadLiveOverlay.value = nextLiveOverlay
     displayedThreadScrollState.value = nextScrollState
     isThreadContentSwitching.value = false
@@ -5467,6 +5515,10 @@ async function submitFirstMessageForNewThread(
 }
 
 @media (max-width: 767px) {
+  .content-root {
+    --content-shell-max-width: 100%;
+  }
+
   .sidebar-scrollable {
     @apply gap-1.5 px-1.5 pt-2 pb-1.5;
     padding-top: max(0.5rem, env(safe-area-inset-top));
@@ -5520,6 +5572,10 @@ async function submitFirstMessageForNewThread(
 
   .content-meta-row {
     @apply gap-1.5;
+  }
+
+  .content-meta-row:empty {
+    display: none;
   }
 
   .content-context-badge {

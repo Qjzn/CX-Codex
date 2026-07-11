@@ -19,6 +19,58 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - <cleanup action, if any>
 
+### Feature: Mobile conversation stream and Codex capability composer
+
+#### Prerequisites
+- Node.js `22.13.0+` and repository dependencies are installed.
+- Local 7420 is running and exposes working `model/list`, `plugin/list`, and notification transport endpoints.
+- Use a real thread containing user messages, completed assistant replies, and at least one long reply; keep one second client available to produce a live streaming reply if needed.
+
+#### Steps
+1. Run `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, and `npm.cmd run verify:server-modules`.
+2. Open the real thread at `http://127.0.0.1:7420` with a `393x852` viewport, then repeat the layout check at `768x1024`.
+3. Confirm the phone header stays on one compact row, the conversation uses the available width, the page has no horizontal overflow, user turns remain visually grouped, and assistant replies use a borderless reading flow.
+4. Confirm internal `<recommended_plugins>` / Codex context messages, trailing `<oai-mem-citation>` blocks, and supported `::git-*` / task directives do not appear as chat content.
+5. Reload the thread and confirm the existing conversation is readable before deferred capability metadata completes; after the background refresh, open the model control.
+6. Confirm the model list matches visible `model/list` entries, uses server display names/descriptions/default markers, and only offers reasoning levels supported by the selected model. If the runtime later exposes GPT-5.6 variants, confirm they appear without a frontend code change.
+7. Open `+`, verify `添加照片和文件`, `添加文件夹`, `拍照`, `仅生成计划`, `本轮要求`, `插件`, and enabled skills remain available with concise one-shot descriptions.
+8. Open the plugin subview and confirm installed/enabled native plugins appear as soon as `plugin/list` returns without waiting for the slower MCP scan; after background completion, search by name and confirm only usable ready/login-required MCP servers are merged. Use Tab/Shift+Tab to confirm focus stays inside the mobile sheet, then close it with Escape or the close control and confirm focus returns to `+`.
+9. Save a draft with one skill/plugin selected and reload. Before capability metadata completes, confirm a compact `正在恢复 N 项能力` state is shown and Send is disabled; after loading, confirm valid selections are restored, unavailable selections are removed, and the draft text is preserved.
+10. Start a reply from the second client. Confirm the first assistant text appears immediately, subsequent text remains smooth, only one copy of the live answer is visible, and the compact activity overlay yields to the answer text.
+11. Keep the conversation at the bottom and confirm it follows the live reply. Scroll upward manually and confirm further deltas do not steal the reading position; return to the bottom and confirm following resumes.
+
+#### Expected Results
+- Phone and foldable layouts remain readable, compact, touch-friendly, and free of horizontal overflow.
+- Protocol/context metadata is filtered without removing normal user or assistant prose.
+- Live text prioritizes first-character latency, batches sustained deltas, avoids duplicate persisted/live cards, and performs full Markdown rendering after completion.
+- Model and reasoning controls are capability-driven; unavailable or hidden models and unsupported reasoning levels are not fabricated by the frontend.
+- The `+` menu exposes practical one-shot planning/requirements, attachments, connected plugins, and enabled skills without the old full application-catalog noise; installed native plugins become usable before slow MCP metadata completes.
+
+#### Rollback/Cleanup Notes
+- The manual checks do not create files unless an attachment is explicitly selected; delete any test attachment or test turn if one was created.
+- To roll back, revert the conversation/composer changes in `src/App.vue`, `src/components/content/ThreadConversation.vue`, `src/components/content/ThreadComposer.vue`, `src/composables/useDesktopState.ts`, `src/api/codexGateway.ts`, `src/types/codex.ts`, and `src/server/runtimePayload.ts` together.
+
+### Feature: 2.3.0 release documentation and mobile composer images
+
+#### Prerequisites
+- The regression route `/#/__regression/composer-shell` is available from local 7420.
+- Release documentation and screenshot assets are checked out with the repository.
+
+#### Steps
+1. Open `http://127.0.0.1:7420/#/__regression/composer-shell` at `393x852` and open the `+` menu.
+2. Capture only the fixture/demo state to `docs/screenshots/mobile-composer-plus.png`; do not use a real conversation, private path, account, key, or remote URL.
+3. Confirm `README.md` renders the new image and links to `docs/release-notes-2.3.0.zh-CN.md`.
+4. Confirm `package.json` and `package-lock.json` both report `2.3.0`.
+5. Run `npm.cmd run build:frontend` and inspect the generated README and release-note links before tagging.
+
+#### Expected Results
+- The project documentation shows the actual mobile `+` workflow with sanitized fixture data.
+- Release notes explain user-visible changes, upgrade steps, safety boundaries, and verification without promising unavailable Codex features.
+- The default branch release policy keeps GitHub Release tags and `main` source aligned.
+
+#### Rollback/Cleanup Notes
+- To roll back, remove the 2.3.0 release note, its README/launch-kit references, the fixture image, and restore the package versions together.
+
 ### Feature: Heartbeat-backed notification health
 
 #### Prerequisites
