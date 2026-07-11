@@ -88,12 +88,16 @@ export type MobileShellDownloadFileResult = {
 
 export type MobileShellDictationResult = {
   text: string
+  audioBase64?: string
+  mimeType?: string
+  fileName?: string
 }
 
 export type MobileShellDictationStatus = {
   available: boolean
   permissionGranted: boolean
   onDeviceAvailable: boolean
+  speechServiceAvailable?: boolean
 }
 
 export type MobileShellDictationStopResult = {

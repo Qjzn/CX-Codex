@@ -155,6 +155,18 @@ export function useDictation(options: {
     try {
       const result = await startMobileShellDictation(options.getLanguage?.().trim() ?? '')
       if (nativeCancellationRequested) return
+      if (result.audioBase64) {
+        const binary = window.atob(result.audioBase64)
+        const bytes = new Uint8Array(binary.length)
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index)
+        }
+        await transcribeBlob(new Blob([bytes], { type: result.mimeType || 'audio/mp4' }), {
+          mimeType: result.mimeType || 'audio/mp4',
+          fileName: result.fileName || 'dictation.m4a',
+        })
+        return
+      }
       const text = result.text.trim()
       if (text) {
         options.onTranscript(text)
@@ -165,7 +177,7 @@ export function useDictation(options: {
       if (!nativeCancellationRequested) {
         if (isNativePluginUnavailable(error)) {
           nativeDictationSupported.value = false
-          options.onError?.(new Error('系统听写暂不可用，请改用上传语音或更新 CX-Codex。'))
+          options.onError?.(new Error('当前安卓版本不支持自动语音转文字，请更新 CX-Codex。'))
         } else {
           options.onError?.(error)
         }

@@ -12182,3 +12182,26 @@ This file tracks manual regression and feature verification steps.
 
 #### Rollback/Cleanup Notes
 - Revert `MobileShellPlugin.java`, `AndroidManifest.xml`, `src/mobile/mobileShell.ts`, `src/composables/useDictation.ts`, `ThreadComposer.vue`, the Android documentation, changelog, and this test section.
+
+### Feature: Android automatic native voice transcription fallback
+
+#### Prerequisites
+- Install the newly built APK on an Android device and grant microphone permission.
+- Connect the app to a reachable CX-Codex HTTP or HTTPS service whose `/codex-api/transcribe` route is healthy.
+
+#### Steps
+1. Open a thread, tap the microphone, speak a short Chinese sentence, and tap `完成`.
+2. Confirm no system speech-service dialog or audio-file picker appears.
+3. Wait for the `正在把语音转成文字…` state to finish.
+4. Confirm the recognized text enters the composer and remains editable without being sent automatically.
+5. Disable or remove the device system speech-recognition service and repeat steps 1–4.
+6. Start recording and immediately cancel; confirm the temporary recording is discarded and no text is inserted.
+
+#### Expected Results
+- Android records AAC audio inside the app and automatically submits it to the existing transcription endpoint.
+- Dictation works over plain HTTP and does not depend on the device vendor's `SpeechRecognizer` implementation.
+- The user never needs to manually select or upload an audio file during the normal Android flow.
+- Missing microphone permission and recording failures show an actionable retry message without losing the existing draft.
+
+#### Rollback/Cleanup Notes
+- Revert the native recorder implementation in `MobileShellPlugin.java`, the audio payload handling in `src/mobile/mobileShell.ts` and `src/composables/useDictation.ts`, plus this test section and the matching changelog entry.

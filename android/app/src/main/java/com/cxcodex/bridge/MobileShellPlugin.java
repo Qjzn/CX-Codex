@@ -17,17 +17,16 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.media.MediaRecorder;
 import android.os.Build;
-import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.provider.MediaStore;
-import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
+import android.util.Base64;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.Window;
@@ -60,7 +59,6 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
-import java.util.ArrayList;
 
 @CapacitorPlugin(
     name = "MobileShell",
@@ -76,9 +74,11 @@ public class MobileShellPlugin extends Plugin {
     private static final String TASK_NOTIFICATION_CHANNEL_ID = "cx_codex_tasks";
     private static final String TASK_NOTIFICATION_CHANNEL_NAME = "CX-Codex 任务";
     private static final String PREF_PENDING_APK_INSTALL_PATH = "pending_apk_install_path";
+    private static final int DICTATION_MAX_DURATION_MS = 120_000;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private SpeechRecognizer dictationRecognizer;
+    private MediaRecorder dictationRecorder;
+    private File dictationAudioFile;
     private PluginCall activeDictationCall;
 
     @PluginMethod
@@ -226,8 +226,9 @@ public class MobileShellPlugin extends Plugin {
     @PluginMethod
     public void getDictationStatus(PluginCall call) {
         JSObject result = new JSObject();
-        result.put("available", SpeechRecognizer.isRecognitionAvailable(getContext()));
+        result.put("available", getContext().getPackageManager().hasSystemFeature(PackageManager.FEATURE_MICROPHONE));
         result.put("permissionGranted", getPermissionState("microphone") == PermissionState.GRANTED);
+        result.put("speechServiceAvailable", SpeechRecognizer.isRecognitionAvailable(getContext()));
         result.put(
             "onDeviceAvailable",
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
@@ -238,8 +239,8 @@ public class MobileShellPlugin extends Plugin {
 
     @PluginMethod
     public void startDictation(PluginCall call) {
-        if (!SpeechRecognizer.isRecognitionAvailable(getContext())) {
-            call.reject("此设备没有可用的系统语音服务，请改用上传语音。");
+        if (!getContext().getPackageManager().hasSystemFeature(PackageManager.FEATURE_MICROPHONE)) {
+            call.reject("此设备没有可用的麦克风");
             return;
         }
         if (activeDictationCall != null) {
@@ -265,16 +266,16 @@ public class MobileShellPlugin extends Plugin {
     @PluginMethod
     public void stopDictation(PluginCall call) {
         mainHandler.post(() -> {
-            if (dictationRecognizer == null || activeDictationCall == null) {
+            if (dictationRecorder == null || activeDictationCall == null) {
                 JSObject result = new JSObject();
                 result.put("stopping", false);
                 call.resolve(result);
                 return;
             }
-            dictationRecognizer.stopListening();
             JSObject result = new JSObject();
             result.put("stopping", true);
             call.resolve(result);
+            finishDictationRecording();
         });
     }
 
@@ -292,109 +293,116 @@ public class MobileShellPlugin extends Plugin {
                 call.reject("语音听写正在进行中");
                 return;
             }
-            if (!SpeechRecognizer.isRecognitionAvailable(getContext())) {
-                call.reject("此设备没有可用的系统语音服务，请改用上传语音。");
+            if (!getContext().getPackageManager().hasSystemFeature(PackageManager.FEATURE_MICROPHONE)) {
+                call.reject("此设备没有可用的麦克风");
                 return;
             }
 
             try {
-                dictationRecognizer = SpeechRecognizer.createSpeechRecognizer(getContext());
-                activeDictationCall = call;
-                dictationRecognizer.setRecognitionListener(new RecognitionListener() {
-                    @Override public void onReadyForSpeech(Bundle params) {}
-                    @Override public void onBeginningOfSpeech() {}
-                    @Override public void onRmsChanged(float rmsdB) {}
-                    @Override public void onBufferReceived(byte[] buffer) {}
-                    @Override public void onEndOfSpeech() {}
-                    @Override public void onPartialResults(Bundle partialResults) {}
-                    @Override public void onEvent(int eventType, Bundle params) {}
-
-                    @Override
-                    public void onResults(Bundle results) {
-                        resolveActiveDictation(readRecognitionText(results));
-                    }
-
-                    @Override
-                    public void onError(int error) {
-                        if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                            resolveActiveDictation("");
-                            return;
-                        }
-                        rejectActiveDictation(describeDictationError(error));
+                File audioFile = File.createTempFile("cx-codex-dictation-", ".m4a", getContext().getCacheDir());
+                MediaRecorder recorder = new MediaRecorder();
+                recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+                recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+                recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+                recorder.setAudioEncodingBitRate(64_000);
+                recorder.setMaxDuration(DICTATION_MAX_DURATION_MS);
+                recorder.setOutputFile(audioFile.getAbsolutePath());
+                recorder.setOnInfoListener((ignored, what, extra) -> {
+                    if (what == MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED) {
+                        mainHandler.post(this::finishDictationRecording);
                     }
                 });
+                dictationRecorder = recorder;
+                dictationAudioFile = audioFile;
+                recorder.prepare();
+                recorder.start();
 
-                Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-                intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-                intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-                intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
-                String language = call.getString("language", "");
-                if (language != null && !language.trim().isEmpty() && !"auto".equalsIgnoreCase(language.trim())) {
-                    intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language.trim());
-                }
-                dictationRecognizer.startListening(intent);
+                activeDictationCall = call;
             } catch (Exception exception) {
-                rejectActiveDictation("系统听写启动失败：" + exception.getMessage());
+                releaseDictationRecorder(false);
+                call.reject("麦克风录音启动失败：" + exception.getMessage(), exception);
             }
         });
     }
 
-    private void resolveActiveDictation(String text) {
+    private void finishDictationRecording() {
         PluginCall call = activeDictationCall;
-        releaseDictationRecognizer();
         if (call == null) return;
-        JSObject result = new JSObject();
-        result.put("text", text == null ? "" : text.trim());
-        call.resolve(result);
+
+        File audioFile = dictationAudioFile;
+        try {
+            if (dictationRecorder == null || audioFile == null) {
+                throw new IOException("录音文件不可用");
+            }
+            dictationRecorder.stop();
+            releaseDictationRecorder(true);
+            if (!audioFile.isFile() || audioFile.length() <= 0) {
+                throw new IOException("没有录到有效语音");
+            }
+
+            byte[] bytes = readFileBytes(audioFile);
+            JSObject result = new JSObject();
+            result.put("text", "");
+            result.put("audioBase64", Base64.encodeToString(bytes, Base64.NO_WRAP));
+            result.put("mimeType", "audio/mp4");
+            result.put("fileName", "dictation.m4a");
+            call.resolve(result);
+        } catch (Exception exception) {
+            releaseDictationRecorder(false);
+            call.reject("录音结束失败，请重新说一次：" + exception.getMessage(), exception);
+        } finally {
+            activeDictationCall = null;
+            if (audioFile != null) {
+                audioFile.delete();
+            }
+        }
     }
 
     private void rejectActiveDictation(String message) {
         PluginCall call = activeDictationCall;
-        releaseDictationRecognizer();
+        activeDictationCall = null;
+        releaseDictationRecorder(false);
         if (call != null) {
             call.reject(message);
         }
     }
 
-    private void releaseDictationRecognizer() {
-        activeDictationCall = null;
-        if (dictationRecognizer != null) {
-            dictationRecognizer.cancel();
-            dictationRecognizer.destroy();
-            dictationRecognizer = null;
+    private void releaseDictationRecorder(boolean alreadyStopped) {
+        if (dictationRecorder != null) {
+            if (!alreadyStopped) {
+                try {
+                    dictationRecorder.reset();
+                } catch (Exception ignored) {
+                    // Best-effort cleanup for a recorder that failed during startup.
+                }
+            }
+            dictationRecorder.release();
+            dictationRecorder = null;
         }
+        if (dictationAudioFile != null && dictationAudioFile.isFile() && !alreadyStopped) {
+            dictationAudioFile.delete();
+        }
+        dictationAudioFile = null;
     }
 
-    private static String readRecognitionText(Bundle results) {
-        ArrayList<String> values = results == null
-            ? null
-            : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-        if (values == null) return "";
-        for (String value : values) {
-            if (value != null && !value.trim().isEmpty()) {
-                return value.trim();
+    private static byte[] readFileBytes(File file) throws IOException {
+        long length = file.length();
+        if (length <= 0 || length > Integer.MAX_VALUE) {
+            throw new IOException("录音文件大小异常");
+        }
+        byte[] bytes = new byte[(int) length];
+        try (InputStream input = new java.io.FileInputStream(file)) {
+            int offset = 0;
+            while (offset < bytes.length) {
+                int read = input.read(bytes, offset, bytes.length - offset);
+                if (read < 0) break;
+                offset += read;
+            }
+            if (offset != bytes.length) {
+                throw new IOException("录音文件读取不完整");
             }
         }
-        return "";
-    }
-
-    private static String describeDictationError(int error) {
-        switch (error) {
-            case SpeechRecognizer.ERROR_AUDIO:
-                return "麦克风录音异常，请重试";
-            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS:
-                return "麦克风权限不足";
-            case SpeechRecognizer.ERROR_NETWORK:
-            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
-                return "系统语音服务网络不可用";
-            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:
-                return "系统语音服务正忙，请稍后重试";
-            case SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED:
-            case SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE:
-                return "当前系统语音服务不支持所选语言";
-            default:
-                return "系统听写失败，请重试或改用上传语音";
-        }
+        return bytes;
     }
 
     @PluginMethod
