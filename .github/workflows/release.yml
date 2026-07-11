@@ -119,7 +119,7 @@ jobs:
         run: npm run verify:release-artifacts -- -OutputDir "${env:RUNNER_TEMP}\release"
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body_path: .github/release-body.md
           files: |
