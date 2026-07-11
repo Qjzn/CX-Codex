@@ -12205,3 +12205,24 @@ This file tracks manual regression and feature verification steps.
 
 #### Rollback/Cleanup Notes
 - Revert the native recorder implementation in `MobileShellPlugin.java`, the audio payload handling in `src/mobile/mobileShell.ts` and `src/composables/useDictation.ts`, plus this test section and the matching changelog entry.
+
+### Feature: Cross-platform release ZIP hidden-file packaging
+
+#### Prerequisites
+- Run from a clean checkout containing the repository `.github` directory.
+- Have PowerShell 7 and Node.js dependencies installed.
+
+#### Steps
+1. Run `npm run package:release -- -Version verify-hidden-files -OutputDir output/release-hidden-files`.
+2. Run `npm run verify:release-artifacts -- -OutputDir output/release-hidden-files`.
+3. Open `CX-Codex-verify-hidden-files.zip` and inspect its entries.
+4. Confirm `.github/dependabot.yml`, `.github/workflows/ci.yml`, and `.github/workflows/release.yml` are present.
+5. Repeat the package smoke on a Linux runner.
+
+#### Expected Results
+- The release ZIP includes dot-prefixed directories on Windows and Linux.
+- Release checksum verification passes without reporting a missing `.github/dependabot.yml` entry.
+- ZIP contents remain rooted at repository files rather than adding an extra staging-directory level.
+
+#### Rollback/Cleanup Notes
+- Remove `output/release-hidden-files` after verification. Revert the `ZipFile.CreateFromDirectory` packaging change and this section to roll back.

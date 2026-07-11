@@ -135,7 +135,13 @@ foreach ($relativePath in $optionalReleaseItems) {
   Copy-ReleaseItem -SourcePath $sourcePath -DestinationPath $destinationPath
 }
 
-Compress-Archive -Path (Join-Path $stagingRoot "*") -DestinationPath $zipPath -Force
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory(
+  $stagingRoot,
+  $zipPath,
+  [System.IO.Compression.CompressionLevel]::Optimal,
+  $false
+)
 
 $hash = Get-Sha256Hex -Path $zipPath
 "$hash  $([System.IO.Path]::GetFileName($zipPath))" | Set-Content -LiteralPath $checksumPath -Encoding ASCII
