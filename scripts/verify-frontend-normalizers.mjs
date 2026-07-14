@@ -56,6 +56,12 @@ const messages = normalizeThreadMessagesV2({
             })),
           },
           {
+            id: 'item-web-search',
+            type: 'webSearch',
+            query: 'Codex desktop parity',
+            action: { type: 'search', query: 'Codex desktop parity' },
+          },
+          {
             id: 'item-new',
             type: 'threadShellCommandOutput',
             command: 'secret command',
@@ -79,6 +85,7 @@ assert.equal(messages[1]?.rawPayload?.includes('secret command'), true)
 assert.equal(messages[2]?.messageType, 'unhandled.invalidItem')
 assert.equal(messages[2]?.isUnhandled, true)
 assert.equal(messages.some((message) => message.messageType === 'unhandled.fileChange'), false)
+assert.equal(messages.some((message) => message.messageType === 'unhandled.webSearch'), false)
 assert.equal(messages.some((message) => message.rawPayload?.includes('large internal patch details')), false)
 
 const unloadedTurnMessages = normalizeThreadMessagesV2({

@@ -1021,15 +1021,16 @@ JSON.stringify((() => {
     hasLatestTurnPromptContext: textContent.includes('请审查这些文件，并说明代码块'),
     hasFixtureCodeText: textContent.includes('fixture-code-block'),
     hasFixtureRawText: textContent.includes('fixture-raw-payload'),
-    hasHiddenFileChangeNoise: textContent.includes('fixture-hidden-file-change-noise') || textContent.includes('Unhandled App Server item: fileChange') || textContent.includes('unhandled.fileChange'),
+    hasHiddenUnhandledNoise: textContent.includes('fixture-hidden-file-change-noise') || textContent.includes('Unhandled App Server item: fileChange') || textContent.includes('unhandled.fileChange') || textContent.includes('fixture-hidden-web-search-noise') || textContent.includes('Unhandled App Server item: webSearch') || textContent.includes('unhandled.webSearch') || textContent.includes('未适配的 App Server 内容'),
     hasFixtureCommandText: textContent.includes('fixture-command-output: ok'),
     hasFixtureCommandLabel: textContent.includes('npm.cmd run test:7420:frontend'),
     hasFixturePermissionText: textContent.includes('fixture-permission-workbench'),
     hasFixtureToolCallText: textContent.includes('fixture-tool-call-workbench') || textContent.includes('Browser tool call cannot be executed directly'),
-    hasPermissionServerText: textContent.includes('chrome'),
-    hasPermissionToolText: textContent.includes('browser_click'),
+    hasPermissionServerText: textContent.includes('GitHub'),
+    hasPermissionToolText: textContent.includes('github_update_pull_request'),
+    hasPermissionTargetText: textContent.includes('Qjzn/CX-Codex') && textContent.includes('关闭'),
     hasToolCallActionText: textContent.includes('让 Codex 改用文字继续'),
-    hasPermissionActionText: textContent.includes('允许并继续') && textContent.includes('拒绝') && textContent.includes('稍后处理'),
+    hasPermissionActionText: textContent.includes('仅本次允许') && textContent.includes('本会话允许') && textContent.includes('始终允许此工具') && textContent.includes('拒绝'),
     loadMoreButtonText: document.querySelector('.conversation-load-more-button')?.textContent?.replace(/\s+/g, ' ').trim() || '',
     loadMoreButtonDisabled: document.querySelector('.conversation-load-more-button')?.disabled === true,
     olderHistoryRequestCount: Number(document.querySelector('.conversation-regression-older-history-count')?.getAttribute('data-count') || '0'),
@@ -1089,13 +1090,14 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.hasLatestTurnPromptContext -eq $true) "conversation fixture lost the latest turn user prompt context"
   Assert-True ($Metrics.hasFixtureCodeText -eq $true) "conversation fixture is missing fixture code text"
   Assert-True ($Metrics.hasFixtureRawText -eq $true) "conversation fixture is missing raw payload marker"
-  Assert-True ($Metrics.hasHiddenFileChangeNoise -eq $false) "conversation fixture rendered low-value unhandled.fileChange system noise"
+  Assert-True ($Metrics.hasHiddenUnhandledNoise -eq $false) "conversation fixture rendered unhandled App Server system noise"
   Assert-True ($Metrics.hasFixtureCommandText -eq $true) "conversation fixture is missing command output marker"
   Assert-True ($Metrics.hasFixtureCommandLabel -eq $true) "conversation fixture is missing command label"
   Assert-True ($Metrics.hasFixturePermissionText -eq $true) "conversation fixture is missing permission workbench marker"
   Assert-True ($Metrics.hasFixtureToolCallText -eq $true) "conversation fixture is missing tool call workbench marker"
   Assert-True ($Metrics.hasPermissionServerText -eq $true) "conversation fixture is missing MCP server label"
   Assert-True ($Metrics.hasPermissionToolText -eq $true) "conversation fixture is missing MCP tool label"
+  Assert-True ($Metrics.hasPermissionTargetText -eq $true) "conversation fixture is missing MCP permission target details"
   Assert-True ($Metrics.hasToolCallActionText -eq $true) "conversation fixture is missing tool call action label"
   Assert-True ($Metrics.hasPermissionActionText -eq $true) "conversation fixture is missing permission action labels"
   Assert-True ([string]$Metrics.loadMoreButtonText -like "*继续加载较早历史*") "conversation fixture remote older-history affordance is missing unified load-more button"

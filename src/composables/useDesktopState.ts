@@ -1840,9 +1840,11 @@ export function useDesktopState() {
   function isMcpPermissionPrompt(request: UiServerRequest): boolean {
     if (!isMcpElicitationRequestMethod(request.method)) return false
     const message = readMcpElicitationMessage(request.params)
-    const promptMatch = message.match(/^Allow\s+the\s+(.+?)\s+MCP\s+server\s+to\s+run\s+tool\s+["“]([^"”]+)["”]\??$/iu)
+    const promptMatch = message.match(/^Allow\s+(?:the\s+(.+?)\s+MCP\s+server|(.+?))\s+to\s+run\s+tool\s+["'“”‘’]([^"'“”‘’]+)["'“”‘’]\??$/iu)
     if (promptMatch) return true
     const payload = readMcpElicitationPayload(request.params)
+    const metadata = asRecord(payload?._meta)
+    if (metadata?.codex_approval_kind === 'mcp_tool_call') return true
     const serverName = readString(payload?.serverName || payload?.server).trim()
     const toolName = readString(payload?.toolName || payload?.tool).trim()
     return serverName.length > 0 && toolName.length > 0
@@ -4798,6 +4800,16 @@ export function useDesktopState() {
           },
         }
       }
+      if (itemType === 'websearch') {
+        const query = readString(item?.query)
+        return {
+          threadId,
+          activity: {
+            label: '正在搜索网页',
+            details: query ? [query] : [],
+          },
+        }
+      }
     }
 
     if (notification.method === 'item/commandExecution/outputDelta') {
@@ -6469,20 +6481,7 @@ export function useDesktopState() {
     if (!threadId || (!nextText && imageUrls.length === 0 && fileAttachments.length === 0)) return
     triggerAndroidHaptic(mode === 'queue' ? 'light' : 'medium')
 
-    const optimisticMessageId = mode === 'queue'
-      ? ''
-      : addOptimisticUserMessage(threadId, nextText, imageUrls, fileAttachments)
-
-    try {
-      await recoverThreadExecutionState(threadId)
-    } catch (unknownError) {
-      removeOptimisticUserMessage(threadId, optimisticMessageId)
-      throw unknownError
-    }
-
-    const isInProgress = inProgressById.value[threadId] === true
-
-    if (isInProgress && mode === 'queue') {
+    if (mode === 'queue') {
       const queue = queuedMessagesByThreadId.value[threadId] ?? []
       const id = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const nextQueue = [...queue]
@@ -6502,9 +6501,25 @@ export function useDesktopState() {
         turnOptions: cloneTurnOptions(turnOptions),
       })
       setQueuedMessagesForThread(threadId, nextQueue)
+
+      await recoverThreadExecutionState(threadId)
       consumePlanModeAfterSubmit(collaborationMode)
+      if (inProgressById.value[threadId] !== true) {
+        void processQueuedMessages(threadId)
+      }
       return
     }
+
+    const optimisticMessageId = addOptimisticUserMessage(threadId, nextText, imageUrls, fileAttachments)
+
+    try {
+      await recoverThreadExecutionState(threadId)
+    } catch (unknownError) {
+      removeOptimisticUserMessage(threadId, optimisticMessageId)
+      throw unknownError
+    }
+
+    const isInProgress = inProgressById.value[threadId] === true
 
     if (isInProgress) {
       shouldAutoScrollOnNextAgentEvent = true

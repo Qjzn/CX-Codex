@@ -243,3 +243,16 @@ After each feature implementation session that uses this skill:
 - Connected and disconnected states render compact green/gray dots; connecting and restarting use a spinner; errors use the error icon/color. The compact badge exposes the full state through an accessible label and tooltip.
 - Error presentation maps actionable causes such as login, install, update, restart, or settings to a focused recovery action instead of displaying raw transport details.
 - CX-Codex mobile parity intentionally keeps the same compact state vocabulary but makes the badge trigger current-thread recovery, because a suspended mobile WebView needs a direct catch-up affordance that the desktop host does not.
+
+## Findings: Queued Messages and Web Search Activity (2026-07-13)
+
+- Windows Codex `26.707.31428` maps App Server `webSearch` thread items into a structured `web-search` tool activity. While active it shows `Searching the web` with the query when available; completed searches contribute to the collapsed tool-activity summary instead of rendering an unsupported/raw fallback card.
+- The desktop queued-message list renders in the above-composer queue portal, not as a committed conversation bubble. A submitted follow-up appears there immediately with edit, delete, reorder, and `Steer` actions while runtime reconciliation continues in the background.
+- For CX-Codex parity, queue state must be written before the first awaited recovery call. If recovery discovers the thread is already idle, the normal queue processor should submit the existing row once rather than moving it through a second optimistic representation.
+
+## Findings: MCP Tool Approval Cards (2026-07-13)
+
+- Windows Codex `26.707.31428` parses `mcpServer/elicitation/request` metadata with `_meta.codex_approval_kind = "mcp_tool_call"` as a dedicated approval request, even when `mode` is `form` and `requestedSchema.properties` is empty. It must not fall back to a freeform text field.
+- The desktop approval card defaults to `Allow once` and `Deny`. When `_meta.persist` advertises support, it adds scoped approval actions for the current conversation and `Always allow` rather than exposing persistence for every request.
+- MCP approval replies use `{ action: "accept", content: {}, _meta: { persist: "session" | "always" } }`; one-time approval omits persistence. Decline uses `{ action: "decline" }`.
+- The approval surface shows tool identity and meaningful target details, enters a loading state immediately after submission, and disables duplicate actions while the reply is in flight.

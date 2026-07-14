@@ -12226,3 +12226,58 @@ This file tracks manual regression and feature verification steps.
 
 #### Rollback/Cleanup Notes
 - Remove `output/release-hidden-files` after verification. Revert the `ZipFile.CreateFromDirectory` packaging change and this section to roll back.
+
+### Feature: Chat-like immediate send feedback and App Server noise suppression
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The conversation regression fixture route `/#/__regression/conversation-blocks?regression=frontend` is available.
+
+#### Steps
+1. While a thread is running, submit a follow-up message and confirm it appears in the queue above the composer immediately, before runtime recovery or network refresh finishes.
+2. Let the current turn finish and confirm the queued message starts once, remains editable/deletable before execution, and does not duplicate in the conversation.
+3. Open the conversation fixture and confirm `unhandled.webSearch`, `Unhandled App Server item: webSearch`, `未适配的 App Server 内容`, and the synthetic file-change fallback are absent from visible text.
+4. Confirm the handled raw-payload fixture, assistant Markdown, command output, and permission cards remain available.
+5. Run `npm.cmd run verify:frontend-normalizers`.
+6. Run `npm.cmd run build:frontend`.
+7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName chat-feedback-noise-suppression`.
+
+#### Expected Results
+- Queue feedback is committed synchronously before the first awaited runtime recovery call, so sending feels immediate even when state recovery is slow.
+- Historical `webSearch` items do not become fallback message cards; active web search is represented by the compact `正在搜索网页` activity state.
+- Unsupported App Server items remain normalized with their raw payload for diagnostics but do not pollute the normal conversation surface.
+- First assistant text delta still flushes immediately and subsequent deltas retain the existing 48 ms render batching for stable streaming.
+
+#### Rollback/Cleanup Notes
+- Revert `src/composables/useDesktopState.ts`, `src/api/normalizers/v2.ts`, `src/components/content/ThreadConversation.vue`, `src/components/content/ConversationRegressionFixture.vue`, `scripts/verify-frontend-normalizers.mjs`, `scripts/regression-7420-frontend.ps1`, and this section.
+
+### Feature: Non-blocking MCP tool approval experience
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The conversation regression fixture route `/#/__regression/conversation-blocks?regression=frontend` is available.
+
+#### Steps
+1. Open the conversation fixture on a 390 x 844 viewport and expand `待处理请求`.
+2. Confirm the GitHub `github_update_pull_request` request renders as `MCP 工具权限确认`, not as `MCP 服务需要补充信息`.
+3. Confirm the card shows repository `Qjzn/CX-Codex`, PR `18`, and change `关闭`, with no textarea.
+4. Confirm the actions are `仅本次允许`, `本会话允许`, `始终允许此工具`, and `拒绝`; no `稍后处理` action is shown.
+5. Click `仅本次允许` in the fixture and confirm it immediately becomes `正在处理…` while all approval buttons are disabled.
+6. Run `npm.cmd run verify:server-modules` and `npm.cmd run build:frontend`.
+7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` after all real pending server requests have been answered.
+
+#### Expected Results
+- Connector approval metadata is classified as an approval even when the request uses form mode with an empty schema.
+- Permission requests never force meaningless freeform input; target and side effect are readable before approval.
+- Persistence choices appear only when the MCP request advertises `session` or `always`, and replies carry the matching `_meta.persist` value.
+- Submitting an approval gives immediate progress feedback and prevents duplicate replies.
+- The 390px viewport has no horizontal overflow or page errors.
+
+#### Regression Evidence
+- 2026-07-13 `npm.cmd run verify:server-modules` passed, including real connector-style permission recognition and session-persistence reply coverage.
+- 2026-07-13 `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; the existing large-chunk warning remains.
+- 2026-07-13 targeted 390 x 844 browser regression passed with zero permission textareas, no horizontal overflow, no page errors, and immediate disabled `正在处理…` feedback.
+- Full `test:7420:frontend` stopped at its idle-health prerequisite because the user's real request #74 intentionally remains pending; no approval or rejection was sent during this implementation.
+
+#### Rollback/Cleanup Notes
+- Remove `output/regression-7420/mcp-permission-ux-20260713` after review. Revert `ThreadConversation.vue`, `useDesktopState.ts`, `serverRequestPolicy.ts`, the fixture and regression assertions, parity findings, and this section.

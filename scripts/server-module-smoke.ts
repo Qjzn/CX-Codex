@@ -4163,12 +4163,28 @@ function smokeServerRequestPolicy(): void {
     serverName: 'demo',
     toolName: 'lookup',
   }), true)
+  const connectorMcpParams = {
+    serverName: 'codex_apps',
+    message: 'Allow GitHub to run tool "github_update_pull_request"?',
+    requestedSchema: { type: 'object', properties: {} },
+    _meta: {
+      codex_approval_kind: 'mcp_tool_call',
+      connector_name: 'GitHub',
+      persist: ['session', 'always'],
+    },
+  }
+  assert.equal(isMcpToolPermissionRequest('mcpServer/elicitation/request', connectorMcpParams), true)
   assert.equal(isMcpToolPermissionRequest('elicitation/create', { params: { message: 'Choose a value' } }), false)
 
   assert.equal(shouldAutoApproveServerRequest('item/commandExecution/requestApproval', {}, askPermissions), false)
   assert.equal(shouldAutoApproveServerRequest('item/commandExecution/requestApproval', {}, allowSessionPermissions), true)
   assert.deepEqual(buildAutoApprovalResult('item/commandExecution/requestApproval', {}), { decision: 'acceptForSession' })
-  assert.deepEqual(buildAutoApprovalResult('mcpserver/elicitation/request', mcpParams), { action: 'accept' })
+  assert.deepEqual(buildAutoApprovalResult('mcpserver/elicitation/request', mcpParams), { action: 'accept', content: {} })
+  assert.deepEqual(buildAutoApprovalResult('mcpServer/elicitation/request', connectorMcpParams), {
+    action: 'accept',
+    content: {},
+    _meta: { persist: 'session' },
+  })
 
   assert.deepEqual(buildPlanModeDeclineResult('item/fileChange/requestApproval', {}), { decision: 'decline' })
   assert.deepEqual(buildPlanModeDeclineResult('mcpserver/elicitation/request', mcpParams), { action: 'decline' })

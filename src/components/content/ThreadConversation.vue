@@ -275,17 +275,59 @@
                         <dd class="request-permission-value">{{ readMcpPermissionToolName(request) }}</dd>
                       </div>
                     </dl>
+                    <dl
+                      v-if="readMcpPermissionParams(request).length > 0"
+                      class="request-permission-params"
+                    >
+                      <div
+                        v-for="param in readMcpPermissionParams(request)"
+                        :key="`${request.id}:permission:${param.label}`"
+                        class="request-permission-param"
+                      >
+                        <dt>{{ param.label }}</dt>
+                        <dd>{{ param.value }}</dd>
+                      </div>
+                    </dl>
                     <p class="request-permission-note">
-                      允许后 Codex 会继续本次自动化操作；拒绝后相关浏览器操作可能中止。
+                      {{ readMcpPermissionNote(request) }}
                     </p>
                   </div>
 
                   <section class="request-actions request-actions-prominent">
-                    <button type="button" class="request-button request-button-primary" @click="onRespondMcpElicitation(request, 'accept')">
-                      允许并继续
+                    <button
+                      type="button"
+                      class="request-button request-button-primary"
+                      :disabled="isRequestResponding(request.id)"
+                      @click="onRespondMcpElicitation(request, 'accept')"
+                    >
+                      {{ isRequestResponding(request.id) ? '正在处理…' : '仅本次允许' }}
                     </button>
-                    <button type="button" class="request-button" @click="onRespondMcpElicitation(request, 'decline')">拒绝</button>
-                    <button type="button" class="request-button" @click="onRespondMcpElicitation(request, 'cancel')">稍后处理</button>
+                    <button
+                      v-if="supportsMcpPermissionPersistence(request, 'session')"
+                      type="button"
+                      class="request-button"
+                      :disabled="isRequestResponding(request.id)"
+                      @click="onRespondMcpElicitation(request, 'accept', 'session')"
+                    >
+                      本会话允许
+                    </button>
+                    <button
+                      v-if="supportsMcpPermissionPersistence(request, 'always')"
+                      type="button"
+                      class="request-button request-button-subtle"
+                      :disabled="isRequestResponding(request.id)"
+                      @click="onRespondMcpElicitation(request, 'accept', 'always')"
+                    >
+                      始终允许此工具
+                    </button>
+                    <button
+                      type="button"
+                      class="request-button"
+                      :disabled="isRequestResponding(request.id)"
+                      @click="onRespondMcpElicitation(request, 'decline')"
+                    >
+                      拒绝
+                    </button>
                   </section>
                 </template>
 
@@ -369,7 +411,7 @@
                     {{ readMcpElicitationUrl(request) ? '已处理，继续' : '提交并继续' }}
                   </button>
                   <button type="button" class="request-button" @click="onRespondMcpElicitation(request, 'decline')">拒绝</button>
-                  <button type="button" class="request-button" @click="onRespondMcpElicitation(request, 'cancel')">稍后处理</button>
+                  <button type="button" class="request-button" @click="onRespondMcpElicitation(request, 'cancel')">取消本次请求</button>
                 </section>
                 </template>
               </section>
@@ -1401,12 +1443,11 @@ function isInternalCodexContextMessage(message: UiMessage): boolean {
 function shouldSuppressConversationMessage(message: UiMessage): boolean {
   if (message.messageType === 'worked') return true
 
-  const messageType = message.messageType?.trim() ?? ''
   if (isInternalCodexContextMessage(message)) {
     return true
   }
 
-  if (message.role === 'system' && message.isUnhandled && messageType === 'unhandled.fileChange') {
+  if (message.isUnhandled) {
     return true
   }
 
@@ -1714,6 +1755,8 @@ const fileLinkContextMenuRef = ref<HTMLElement | null>(null)
 const toolQuestionAnswers = ref<Record<string, string>>({})
 const toolQuestionOtherAnswers = ref<Record<string, string>>({})
 const mcpElicitationAnswers = ref<Record<string, string | boolean>>({})
+const respondingRequestIds = ref<Set<number>>(new Set())
+const requestResponseResetTimers = new Map<number, number>()
 const hasPendingBelowFoldUpdates = ref(false)
 const autoFollowBottom = ref(props.scrollState?.isAtBottom !== false)
 const autoAnchoredLongResponseId = ref('')
@@ -2390,6 +2433,13 @@ type ParsedMcpPermissionPrompt = {
   serverName: string
   toolName: string
 }
+
+type ParsedMcpPermissionParam = {
+  label: string
+  value: string
+}
+
+type McpPermissionPersistence = 'session' | 'always'
 
 type TextRange = {
   start: number
@@ -3642,6 +3692,7 @@ function readRequestReason(request: UiServerRequest): string {
 
 function requestCardClass(request: UiServerRequest): string {
   if (request.method === 'item/tool/call') return 'request-card--tool-call'
+  if (isMcpPermissionElicitationRequest(request)) return 'request-card--permission'
   return ''
 }
 
@@ -3722,22 +3773,30 @@ function readMcpElicitationIntro(request: UiServerRequest): string {
 function readMcpPermissionPrompt(request: UiServerRequest): ParsedMcpPermissionPrompt | null {
   const payload = readMcpElicitationPayload(request)
   const message = readMcpElicitationIntro(request)
+  const metadata = asRecord(payload?._meta)
+  const isPermissionMetadata = metadata?.codex_approval_kind === 'mcp_tool_call'
   const serverNameFromPayload = typeof payload?.serverName === 'string'
     ? payload.serverName.trim()
     : typeof payload?.server === 'string'
       ? payload.server.trim()
       : ''
+  const connectorName = typeof metadata?.connector_name === 'string' ? metadata.connector_name.trim() : ''
   const toolNameFromPayload = typeof payload?.toolName === 'string'
     ? payload.toolName.trim()
     : typeof payload?.tool === 'string'
       ? payload.tool.trim()
       : ''
+  const toolNameFromMetadata = typeof metadata?.tool_name === 'string'
+    ? metadata.tool_name.trim()
+    : typeof metadata?.tool_title === 'string'
+      ? metadata.tool_title.trim()
+      : ''
 
-  const promptMatch = message.match(/^Allow\s+the\s+(.+?)\s+MCP\s+server\s+to\s+run\s+tool\s+["“]([^"”]+)["”]\??$/iu)
-  const serverName = (promptMatch?.[1] ?? serverNameFromPayload).trim()
-  const toolName = (promptMatch?.[2] ?? toolNameFromPayload).trim()
+  const promptMatch = message.match(/^Allow\s+(?:the\s+(.+?)\s+MCP\s+server|(.+?))\s+to\s+run\s+tool\s+["'“”‘’]([^"'“”‘’]+)["'“”‘’]\??$/iu)
+  const serverName = (connectorName || promptMatch?.[1] || promptMatch?.[2] || serverNameFromPayload).trim()
+  const toolName = (promptMatch?.[3] || toolNameFromPayload || toolNameFromMetadata).trim()
 
-  if (!serverName || !toolName) return null
+  if (!serverName || !toolName || (!promptMatch && !isPermissionMetadata)) return null
   return {
     serverName,
     toolName,
@@ -3766,6 +3825,51 @@ function readMcpPermissionSummary(request: UiServerRequest): string {
   const prompt = readMcpPermissionPrompt(request)
   if (!prompt) return '外部 MCP 服务正在请求运行工具。'
   return `${prompt.serverName} 想运行 ${prompt.toolName}，用于继续当前任务。`
+}
+
+function readMcpPermissionNote(request: UiServerRequest): string {
+  const toolName = readMcpPermissionToolName(request)
+  const writeLike = /(?:^|_)(?:add|archive|close|create|delete|edit|merge|move|publish|remove|rename|send|set|submit|update|upload)(?:_|$)/iu.test(toolName)
+  return writeLike
+    ? '这是外部写操作。选择允许后任务会立即继续；拒绝后只会取消这次工具操作。'
+    : '这是外部工具操作。选择允许后任务会立即继续；拒绝后只会取消这次工具操作。'
+}
+
+function readMcpPermissionParams(request: UiServerRequest): ParsedMcpPermissionParam[] {
+  const metadata = asRecord(readMcpElicitationPayload(request)?._meta)
+  const displayRows = Array.isArray(metadata?.tool_params_display) ? metadata.tool_params_display : []
+  const labelMap: Record<string, string> = {
+    repository_full_name: '仓库',
+    pr_number: 'PR',
+    state: '变更',
+  }
+  const valueMap: Record<string, string> = {
+    closed: '关闭',
+    open: '重新打开',
+  }
+
+  return displayRows.flatMap((rawRow) => {
+    const row = asRecord(rawRow)
+    if (!row) return []
+    const name = typeof row.name === 'string' ? row.name.trim() : ''
+    const displayName = typeof row.display_name === 'string' ? row.display_name.trim() : ''
+    if (!name && !displayName) return []
+    const rawValue = row.value
+    const serializedValue = typeof rawValue === 'string'
+      ? rawValue
+      : rawValue === null || rawValue === undefined
+        ? ''
+        : JSON.stringify(rawValue)
+    const value = valueMap[serializedValue] || serializedValue
+    if (!value) return []
+    return [{ label: labelMap[name] || displayName || name, value }]
+  }).slice(0, 6)
+}
+
+function supportsMcpPermissionPersistence(request: UiServerRequest, persistence: McpPermissionPersistence): boolean {
+  const metadata = asRecord(readMcpElicitationPayload(request)?._meta)
+  const values = Array.isArray(metadata?.persist) ? metadata.persist : [metadata?.persist]
+  return values.includes(persistence)
 }
 
 function readMcpElicitationUrl(request: UiServerRequest): string {
@@ -4024,10 +4128,41 @@ function onRespondToolRequestUserInput(request: UiServerRequest): void {
   })
 }
 
-function onRespondMcpElicitation(request: UiServerRequest, action: 'accept' | 'decline' | 'cancel'): void {
+function isRequestResponding(requestId: number): boolean {
+  return respondingRequestIds.value.has(requestId)
+}
+
+function clearRequestResponding(requestId: number): void {
+  const timer = requestResponseResetTimers.get(requestId)
+  if (timer !== undefined && typeof window !== 'undefined') window.clearTimeout(timer)
+  requestResponseResetTimers.delete(requestId)
+  if (!respondingRequestIds.value.has(requestId)) return
+  const next = new Set(respondingRequestIds.value)
+  next.delete(requestId)
+  respondingRequestIds.value = next
+}
+
+function beginRequestResponse(requestId: number): boolean {
+  if (isRequestResponding(requestId)) return false
+  respondingRequestIds.value = new Set(respondingRequestIds.value).add(requestId)
+  if (typeof window !== 'undefined') {
+    requestResponseResetTimers.set(requestId, window.setTimeout(() => clearRequestResponding(requestId), 10000))
+  }
+  return true
+}
+
+function onRespondMcpElicitation(
+  request: UiServerRequest,
+  action: 'accept' | 'decline' | 'cancel',
+  persistence?: McpPermissionPersistence,
+): void {
+  if (!beginRequestResponse(request.id)) return
   const result: Record<string, unknown> = { action }
   if (action === 'accept' && !readMcpElicitationUrl(request)) {
     result.content = buildMcpElicitationContent(request)
+  }
+  if (action === 'accept' && persistence) {
+    result._meta = { persist: persistence }
   }
 
   emit('respondServerRequest', {
@@ -4838,6 +4973,16 @@ watch(
 )
 
 watch(
+  () => props.pendingRequests.map((request) => request.id),
+  (pendingRequestIds) => {
+    const pendingIdSet = new Set(pendingRequestIds)
+    for (const requestId of respondingRequestIds.value) {
+      if (!pendingIdSet.has(requestId)) clearRequestResponding(requestId)
+    }
+  },
+)
+
+watch(
   () => props.isLoading,
   async (loading) => {
     if (loading) return
@@ -5186,6 +5331,7 @@ defineExpose<{
 })
 
 onBeforeUnmount(() => {
+  for (const requestId of requestResponseResetTimers.keys()) clearRequestResponding(requestId)
   stopCommandElapsedTimer()
   clearHighlightedMessage()
   clearRollbackConfirmation()
@@ -5481,6 +5627,10 @@ onBeforeUnmount(() => {
   border-color: color-mix(in srgb, var(--ui-danger) 20%, var(--ui-border-subtle));
 }
 
+.request-card--permission {
+  border-color: color-mix(in srgb, var(--ui-accent) 34%, var(--ui-border-subtle));
+}
+
 .request-title {
   @apply m-0 text-sm leading-5 font-semibold;
   color: var(--ui-text-primary);
@@ -5517,6 +5667,15 @@ onBeforeUnmount(() => {
   border-color: var(--ui-border-strong);
   background: var(--ui-bg-row-hover);
   color: var(--ui-text-primary);
+}
+
+.request-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.request-button-subtle {
+  color: var(--ui-text-tertiary);
 }
 
 .request-button-primary {
@@ -5626,6 +5785,25 @@ onBeforeUnmount(() => {
 
 .request-permission-value {
   @apply m-0 break-all font-mono text-xs leading-5;
+  color: var(--ui-text-primary);
+}
+
+.request-permission-params {
+  @apply m-0 flex flex-col divide-y;
+  border-color: var(--ui-border-subtle);
+}
+
+.request-permission-param {
+  @apply grid grid-cols-[5rem_minmax(0,1fr)] gap-2 py-1.5 text-xs leading-5;
+  border-color: var(--ui-border-subtle);
+}
+
+.request-permission-param dt {
+  color: var(--ui-text-tertiary);
+}
+
+.request-permission-param dd {
+  @apply m-0 break-all font-mono;
   color: var(--ui-text-primary);
 }
 
