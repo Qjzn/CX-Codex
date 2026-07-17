@@ -128,6 +128,16 @@ export type UiThread = {
   inProgress: boolean
 }
 
+export type UiTaskPetItem = {
+  threadId: string
+  title: string
+  projectName: string
+  detail: string
+  latestActivity: string
+  state: 'running' | 'waiting'
+  updatedAtIso: string
+}
+
 export type CommandExecutionData = {
   command: string
   cwd: string | null

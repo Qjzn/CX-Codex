@@ -83,6 +83,19 @@ const messages: UiMessage[] = [
     turnIndex: 1,
   },
   {
+    id: 'optimistic-user:fixture:plain-echo',
+    role: 'user',
+    text: '这是一条立即回显的用户消息；内容会立刻出现，不暴露内部状态。',
+    turnIndex: 2,
+  },
+  {
+    id: 'fixture-interrupted-turn',
+    role: 'system',
+    text: '已在 12 秒后停止',
+    messageType: 'turn.interrupted',
+    turnIndex: 2,
+  },
+  {
     id: 'fixture-assistant-blocks',
     role: 'assistant',
     text: [

@@ -32,9 +32,7 @@
                 </span>
                 <span class="thread-row-meta">
                   <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
-                  <span v-if="thread.sourceKind" class="thread-row-source">{{ formatThreadSource(thread) }}</span>
                   <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
-                  <span v-else-if="thread.unread" class="thread-row-source thread-row-source--unread">未读</span>
                 </span>
               </span>
             </button>
@@ -84,7 +82,7 @@
         <span class="thread-section-count">{{ pinnedThreads.length }}</span>
       </div>
       <ul class="thread-list">
-        <li v-for="thread in pinnedThreads" :key="thread.id" class="thread-row-item">
+        <li v-for="thread in visiblePinnedThreads" :key="thread.id" class="thread-row-item">
           <SidebarMenuRow
             class="thread-row"
             :data-thread-id="thread.id"
@@ -115,9 +113,7 @@
                 </span>
                 <span class="thread-row-meta">
                   <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
-                  <span v-if="thread.sourceKind" class="thread-row-source">{{ formatThreadSource(thread) }}</span>
                   <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
-                  <span v-else-if="thread.unread" class="thread-row-source thread-row-source--unread">未读</span>
                 </span>
               </span>
             </button>
@@ -159,6 +155,15 @@
           </SidebarMenuRow>
         </li>
       </ul>
+      <button
+        v-if="hasCollapsedPinnedThreads"
+        class="thread-show-more-button pinned-show-more-button"
+        type="button"
+        :aria-expanded="isPinnedSectionExpanded"
+        @click="isPinnedSectionExpanded = !isPinnedSectionExpanded"
+      >
+        {{ isPinnedSectionExpanded ? '收起置顶' : `显示其余 ${hiddenPinnedThreadCount} 条` }}
+      </button>
     </section>
 
     <SidebarMenuRow as="header" class="thread-tree-header-row">
@@ -249,9 +254,7 @@
               </span>
               <span class="thread-row-meta">
                 <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
-                <span v-if="thread.sourceKind" class="thread-row-source">{{ formatThreadSource(thread) }}</span>
                 <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
-                <span v-else-if="thread.unread" class="thread-row-source thread-row-source--unread">未读</span>
               </span>
             </span>
           </button>
@@ -355,6 +358,15 @@
 
                   <div v-if="isProjectMenuOpen(group.projectName)" class="project-menu-panel" @pointerdown.stop @click.stop>
                     <template v-if="projectMenuMode === 'actions'">
+                      <button
+                        v-if="useDesktopListParity"
+                        class="project-menu-item"
+                        type="button"
+                        @pointerdown.stop
+                        @click.stop.prevent="onStartNewThread(group.projectName)"
+                      >
+                        新建任务
+                      </button>
                       <button class="project-menu-item" type="button" @pointerdown.stop @click.stop.prevent="openRenameProjectMenu(group.projectName)">
                         修改名称
                       </button>
@@ -380,6 +392,7 @@
                 </div>
 
                 <button
+                  v-if="!useDesktopListParity"
                   class="thread-start-button"
                   type="button"
                   :aria-label="getNewThreadButtonAriaLabel(group.projectName)"
@@ -424,9 +437,7 @@
                     </span>
                     <span class="thread-row-meta">
                       <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
-                      <span v-if="thread.sourceKind" class="thread-row-source">{{ formatThreadSource(thread) }}</span>
                       <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
-                      <span v-else-if="thread.unread" class="thread-row-source thread-row-source--unread">未读</span>
                     </span>
                   </span>
                 </button>
@@ -613,13 +624,17 @@ type DragPointerSample = {
 const DRAG_START_THRESHOLD_PX = 4
 const PROJECT_GROUP_EXPANDED_GAP_PX = 6
 const PROJECT_THREAD_PREVIEW_LIMIT = 5
+const PINNED_THREAD_PREVIEW_LIMIT = 3
+const PINNED_REFRESH_MIN_INTERVAL_MS = 60_000
 const expandedProjects = ref<Record<string, boolean>>({})
 const collapsedProjects = ref<Record<string, boolean>>({})
+const isPinnedSectionExpanded = ref(false)
 const PINNED_THREAD_STORAGE_KEY = 'codex-web-local.pinned-thread-ids.v1'
 const pinnedThreadIds = ref<string[]>(normalizePinnedThreadIds(props.pinnedThreadIdsOverride ?? loadPinnedThreadIds()))
 const hasPinnedThreadIdsHydrated = ref(false)
 let pinnedThreadIdsSequence = 0
 let pinnedThreadIdsHydrationPromise: Promise<void> | null = null
+let lastPinnedThreadIdsRefreshAttemptAt = 0
 const openProjectMenuId = ref('')
 const openThreadMenuId = ref('')
 const projectMenuMode = ref<'actions' | 'rename'>('actions')
@@ -736,6 +751,7 @@ async function hydratePinnedThreadIds(): Promise<void> {
     return
   }
 
+  lastPinnedThreadIdsRefreshAttemptAt = Date.now()
   const hydrationPromise = (async () => {
     try {
       if (hasPinnedThreadIdsOverride.value) return
@@ -796,6 +812,8 @@ onMounted(() => {
 
 function onWindowFocusRefreshPinned(): void {
   if (hasPinnedThreadIdsOverride.value) return
+  if (document.visibilityState === 'hidden') return
+  if (Date.now() - lastPinnedThreadIdsRefreshAttemptAt < PINNED_REFRESH_MIN_INTERVAL_MS) return
   void hydratePinnedThreadIds()
 }
 
@@ -934,6 +952,29 @@ const threadProjectNameById = computed(() => threadCollections.value.threadProje
 const threadTimestampById = computed(() => threadCollections.value.threadTimestampById)
 const pinnedThreads = computed(() => threadCollections.value.pinnedThreads)
 const runningThreads = computed<UiThread[]>(() => threadCollections.value.runningThreads)
+const pinnedThreadsAlwaysVisible = computed(() => new Set(
+  pinnedThreads.value
+    .filter((thread) => thread.id === props.selectedThreadId || thread.inProgress)
+    .map((thread) => thread.id),
+))
+const visiblePinnedThreads = computed(() => {
+  if (!useDesktopListParity.value || isSearchActive.value || isPinnedSectionExpanded.value) {
+    return pinnedThreads.value
+  }
+
+  return pinnedThreads.value.filter((thread, index) => (
+    index < PINNED_THREAD_PREVIEW_LIMIT || pinnedThreadsAlwaysVisible.value.has(thread.id)
+  ))
+})
+const hasCollapsedPinnedThreads = computed(() => (
+  useDesktopListParity.value &&
+  !isSearchActive.value &&
+  pinnedThreads.value.length > PINNED_THREAD_PREVIEW_LIMIT
+))
+const hiddenPinnedThreadCount = computed(() => Math.max(
+  pinnedThreads.value.length - visiblePinnedThreads.value.length,
+  0,
+))
 
 const projectedDropProjectIndex = computed<number | null>(() => {
   const drag = activeProjectDrag.value
@@ -1028,15 +1069,6 @@ function getThreadStatusLabel(thread: UiThread): string {
   return thread.hasWorktree ? '工作树' : '就绪'
 }
 
-function formatThreadSource(thread: UiThread): string {
-  const source = thread.sourceKind?.trim()
-  if (!source) return ''
-  if (source === 'cli') return 'CLI'
-  if (source.startsWith('subAgent.')) return '子任务'
-  if (source === 'app' || source === 'desktop') return '桌面端'
-  return source
-}
-
 function getProjectSummary(group: UiProjectGroup): string {
   const total = group.threads.length
   const running = group.threads.filter((thread) => thread.inProgress).length
@@ -1086,6 +1118,7 @@ function getNewThreadButtonAriaLabel(projectName: string): string {
 
 function onStartNewThread(projectName: string): void {
   emit('start-new-thread', projectName)
+  closeProjectMenu()
 }
 
 function onBrowseThreadFiles(threadId: string): void {
@@ -1895,7 +1928,7 @@ onBeforeUnmount(() => {
   inset: 0;
   transform: translateX(-100%);
   background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.42) 50%, transparent 100%);
-  animation: thread-skeleton-sheen 1.4s ease-in-out infinite;
+  animation: thread-skeleton-sheen 900ms var(--motion-ease-out) 1 both;
 }
 
 .thread-tree-no-results {
@@ -2083,10 +2116,10 @@ onBeforeUnmount(() => {
   min-height: var(--ui-row-height);
   align-items: center;
   transition:
-    background-color 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease,
-    box-shadow 160ms ease;
+    background-color var(--motion-duration-fast) var(--motion-ease-standard),
+    border-color var(--motion-duration-fast) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard),
+    box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
 .thread-row-priority {
@@ -2107,6 +2140,11 @@ onBeforeUnmount(() => {
 
 .thread-main-button {
   @apply min-w-0 w-full text-left rounded px-0 py-0 flex items-center min-h-0;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.thread-main-button:active {
+  opacity: 0.72;
 }
 
 .thread-row-content {
@@ -2169,10 +2207,6 @@ onBeforeUnmount(() => {
 
 .thread-row-source--working {
   color: var(--ui-accent);
-}
-
-.thread-row-source--unread {
-  color: var(--ui-focus);
 }
 
 .thread-row-time {

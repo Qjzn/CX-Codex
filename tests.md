@@ -282,6 +282,46 @@ This file tracks manual regression and feature verification steps.
 #### Rollback/Cleanup
 - To roll back, revert `src/api/codexGateway.ts`, `src/composables/useDesktopState.ts`, `scripts/verify-7420-sidebar-data.mjs`, `docs/changelog.zh-CN.md`, and this test section.
 
+### Feature: Cached sidebar list reconciles promptly
+
+#### Steps
+
+1. Open the app once so `codex-web-local.thread-groups-cache.v1` is present in localStorage, then reload the home page.
+2. Confirm cached project rows become usable immediately without waiting for a new `thread/list` response.
+3. Keep the page open for about 2 seconds and confirm the complete background list refresh starts without replacing the cached rows with an empty state.
+4. Run `npm.cmd run build:frontend` and `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+
+#### Expected Results
+
+- Cached sidebar content remains clickable during startup.
+- A cached startup starts full-list reconciliation after roughly 1.8 seconds instead of waiting 9.5 seconds, so older projects become searchable sooner.
+- The refresh preserves the selected thread and does not cause sidebar layout flashing.
+
+#### Rollback/Cleanup
+
+- Revert `src/composables/useDesktopState.ts`, this test section, and the staged-sidebar parity finding.
+
+### Feature: Quieter startup and compact sidebar tools
+
+#### Steps
+
+1. Open a new conversation in a browser-only environment where the official desktop app is unavailable.
+2. Confirm the header does not show a desktop-app unavailable state; open Settings and confirm desktop status is checked there.
+3. Open Favorites and confirm the current favorites still load.
+4. Open the sidebar Tools menu and visit Skills, GitHub, and Diagnostics.
+5. Inspect unread and running thread rows in the sidebar.
+
+#### Expected Results
+
+- Desktop-app status appears in the header only while an explicit desktop refresh is running.
+- Favorites refresh when their panel opens, not during startup or every window-focus event.
+- The sidebar keeps four primary actions: new conversation, search, workbench, and tools; the tools menu retains access to skills, GitHub, and diagnostics.
+- Unread threads retain their status dot and running threads retain the `执行中` label; redundant source and `未读` text no longer take row space.
+
+#### Rollback/Cleanup
+
+- Revert `src/App.vue`, `src/components/sidebar/SidebarThreadTree.vue`, `scripts/regression-7420-frontend.ps1`, and this test section.
+
 ### Feature: Android resume refreshes sidebar thread list
 
 #### Prerequisites
@@ -12281,3 +12321,156 @@ This file tracks manual regression and feature verification steps.
 
 #### Rollback/Cleanup Notes
 - Remove `output/regression-7420/mcp-permission-ux-20260713` after review. Revert `ThreadConversation.vue`, `useDesktopState.ts`, `serverRequestPolicy.ts`, the fixture and regression assertions, parity findings, and this section.
+
+### Feature: Chat composer and runtime feedback polish
+
+#### Steps
+
+1. Open Settings and switch `Enter 键行为` between `发送` and `换行`.
+2. In `发送` mode, confirm Enter sends, Shift + Enter inserts a line break, and Ctrl / Command + Enter also sends. In `换行` mode, confirm Enter inserts a line break and Ctrl / Command + Enter sends.
+3. Type with a Chinese IME in either mode and confirm a composition-confirming Enter does not send prematurely.
+4. Click the composer expand icon and confirm the input area grows to no more than half the viewport; click its collapse icon or press Escape to return to normal size.
+5. While a turn is running, confirm the compact status reads `正在运行 X 秒`, has only a subtle pulse, and clicking the row opens the runtime detail sheet.
+6. Stop a turn and confirm the conversation keeps `已在 X 后停止` plus the `编辑继续` action. Click it twice to confirm the prior user instruction is restored to the composer and the current turn is rolled back.
+7. Hover, focus, or tap a user/assistant message and confirm the action rail uses icon buttons with accessible labels; user messages expose an edit-and-continue icon.
+8. Send a message and confirm the immediate echo contains only the message content, never `userMessage.optimistic` or its internal JSON metadata.
+9. Run `npm.cmd run build:frontend` and the conversation/composer fixture regression checks.
+
+#### Expected Results
+
+- Keyboard preference persists locally and works consistently across desktop and mobile layouts.
+- Long-form input is available without losing the current thread context or composer controls.
+- Runtime feedback remains compact during normal work, while full reasoning, command, or approval detail remains one click away.
+- A confirmed stop leaves a clear duration and a safe edit-and-continue route instead of a dead-end partial response.
+- Optimistic rendering stays instant but protocol bookkeeping is not exposed in the conversation UI.
+
+### Feature: Mobile sidebar progressive disclosure and startup request reduction
+
+#### Steps
+
+1. Open the sidebar at a phone-width viewport with more than three pinned tasks.
+2. Confirm only the first three pinned tasks are shown initially, while the selected or running pinned task remains visible even when it is outside the first three.
+3. Use `显示其余 N 条` and `收起置顶` to expand and collapse the pinned section.
+4. Confirm each project row exposes one overflow menu on mobile; `新建任务`, `修改名称`, and `移除` remain available inside it.
+5. Repeatedly background and foreground the page within one minute and confirm pinned-thread hydration is not requested on every focus event.
+6. Run `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, and the mobile 7420 sidebar smoke check.
+
+#### Expected Results
+
+- Pinned tasks no longer occupy most of the first mobile sidebar viewport by default.
+- Current and running tasks are never hidden by the compact preview.
+- Project actions use one stable touch target instead of two adjacent controls on mobile.
+- Pinned state refreshes at most once per minute on focus, while initial hydration and explicit pin changes remain immediate.
+- Browser startup does not enqueue Android-only runtime, notification, or task-pet reads; native Android startup avoids the duplicate server-config read.
+
+### Feature: Desktop and 7420 stale-list catch-up consistency
+
+#### Steps
+
+1. Start with a `thread/list` bridge cache older than the fresh TTL but still inside the stale fallback window.
+2. Request the list once and confirm cached rows return immediately while one background refresh starts.
+3. Request the same list again before that refresh completes and confirm the request reuses the active refresh instead of returning the stale rows again or starting another App Server RPC.
+4. Start with an archived `thread/list` cache older than 20 minutes but younger than 24 hours; confirm archived rows return immediately and refresh in the background.
+5. On Android, background and foreground the app repeatedly within two minutes while no structural thread notification is pending.
+6. Run `npm.cmd run verify:server-modules`, `npm.cmd run build:cli`, and `npm.cmd run build:frontend`.
+
+#### Expected Results
+
+- Cached sidebar rows remain instant on the first request.
+- Archived rows can reuse a day-old snapshot for the first paint while archive/unarchive notifications still invalidate it.
+- The next reconciliation receives the fresh App Server result, so another 7420 page or device does not remain on the same stale snapshot.
+- Identical catch-up requests share one in-flight `thread/list` operation.
+- Android foreground recovery continues to replay notifications and refresh the selected thread immediately, but avoids an unconditional full list refresh on every quick app switch.
+- Structural notifications and list state older than two minutes still trigger a full list reconciliation.
+
+### Feature: Desktop-created threads remain resumable in 7420
+
+#### Steps
+
+1. Start 7420 on Windows with Codex desktop installed and with an outdated or missing `codexCommand` path in the launch config.
+2. Confirm the bridge App Server process uses the newest runnable executable under `%LOCALAPPDATA%\OpenAI\Codex\bin\<build>\codex.exe` before falling back to an older PATH or npm CLI.
+3. Open a conversation recently created by Codex desktop, then send a short prompt from 7420.
+4. For a deliberately non-materialized test thread, call `thread/resume` and confirm a null bridge result is not cached by the frontend as a successful resume.
+5. Run `npm.cmd run verify:server-modules`, `npm.cmd run build:cli`, and `npm.cmd run build:frontend`.
+
+#### Expected Results
+
+- Desktop and 7420 use a protocol-compatible Codex CLI when the desktop-managed binary is available.
+- A desktop-created session can be listed, opened, resumed, and continued from 7420 instead of failing only at `turn/start`.
+- Missing stale configured paths self-heal through discovery; an explicitly configured runnable path still keeps priority.
+- A null `thread/resume` result does not create a false `resumed` state or leave the composer in a fake running state.
+
+#### Rollback/Cleanup
+
+- Revert `src/commandResolution.ts`, `src/api/codexGateway.ts`, `src/composables/useDesktopState.ts`, `scripts/server-module-smoke.ts`, and this test section.
+
+### Feature: Android task pet system overlay
+
+#### Prerequisites
+
+- Install an APK built after the task-pet native service was added.
+- Configure a reachable 7420 server and allow Android's “display over other apps” permission.
+- Keep at least one conversation running; optionally leave another waiting for an approval or user input.
+
+#### Steps
+
+1. Open Settings, find `任务宠物`, and enable `系统悬浮窗`.
+2. If Android opens the overlay-permission page, grant permission and return to CX-Codex.
+3. Confirm the pet remains visible after switching to another app. Press and drag it across the screen, verify the initial press responds immediately, dragging tracks the finger, and release settles against the nearest edge without leaving the screen.
+4. Confirm the badge shows the known active-task count; a waiting task uses the amber `待处理` state.
+5. Tap the pet and confirm the progress panel opens with a short reveal transition without moving the pet away from its screen position. Repeat from both screen edges and rapidly toggle twice to check interruption safety.
+6. Tap a task row and confirm CX-Codex returns to the exact `/thread/:threadId` conversation.
+7. Leave the WebView in the background until a running task completes; on a healthy connection, confirm the row becomes completed after the next roughly 3-second snapshot poll and, when notification permission is available, a completion notification appears.
+8. Keep the WebView active while a task changes from thinking to a command or file operation; confirm the row updates its current phase and latest activity line without first falling back to the generic `任务进行中` copy.
+9. Rotate the device or change the fold state with the pet near an edge; confirm the panel closes safely, the mascot settles inside the new bounds, and a short landscape viewport shows at most three task rows.
+10. Disable the setting, then confirm the overlay and its ongoing foreground-service notification disappear.
+11. Run `npm.cmd run mobile:android:sync`, then run `android\gradlew.bat assembleDebug` with the documented JDK and Android SDK environment.
+12. Open `/#/__regression/task-pet` at 390 x 844 in headless Playwright, verify expand/collapse accessibility state, latest-activity text, reduced motion, and capture the expanded screenshot.
+
+#### Expected Results
+
+- The overlay is opt-in and never blocks normal app use when permission is denied.
+- Task state remains useful while the WebView is backgrounded: running, waiting, completed, and failed outcomes remain distinguishable.
+- Pet position persists across service restarts; expanding the progress panel does not cause a large position jump.
+- The 4 dp tap/drag threshold prevents accidental expansion, drag writes are frame-coalesced, and the 220 ms edge settle uses a non-bouncing deceleration curve.
+- A right-edge pet keeps the mascot anchored on the right so the expanded panel grows inward and remains readable.
+- Foreground activity summaries reach the native row through the coalesced bridge update; background polling preserves that useful copy while updating state and event freshness.
+- Every task row carries its thread id through the Android launch intent and opens the matching conversation.
+- One poll batches all known active thread ids through `/codex-api/runtime/snapshots`; it does not issue one reconcile POST per task.
+- The native service keeps the last good state during transient network failures, retries at the slower 7.5-second interval, and stops network polling when no active task remains.
+- Drag updates are coalesced to display frames, and the collapsed overlay does not rebuild task-row views or rewrite the foreground notification unless its active count changes.
+
+#### Regression Evidence (2026-07-17)
+
+- `npm.cmd run mobile:android:sync`, `android\gradlew.bat assembleDebug`, and `npm.cmd run verify:server-modules` passed.
+- A local 8-thread `/codex-api/runtime/snapshots` batch completed with a 2.63 ms median over 12 samples after warm-up; the first cold sample was 308.52 ms.
+- Headless Playwright at 390 x 844 reported 48 ms to collapse and 26 ms to expand, with 0 console errors and 0 warnings.
+- The debug APK upgraded successfully on a connected Android 16 device, launched in 941 ms, and produced no fatal runtime log. Cross-app overlay behavior remains a manual check because the system overlay permission was intentionally not granted automatically.
+- After the touch-motion and configuration-change pass, frontend build, Android Java compilation, asset sync, and `assembleDebug` passed again. The final rebuilt APK upgraded successfully and cold-launched on the Android 16 device in 643 ms without an AndroidRuntime failure.
+- Updated headless Playwright at 390 x 844 measured 52 ms to reach collapsed state and 44 ms to reach expanded state, confirmed both live activity summaries, reported 0 console errors/warnings, and reduced transition duration to `0s` under `prefers-reduced-motion`.
+
+#### Rollback/Cleanup Notes
+
+- Disable `系统悬浮窗` before uninstalling a development APK.
+- Revert `TaskPetOverlayService.java`, the task-pet methods in `MobileShellPlugin.java` and `mobileShell.ts`, the manifest permissions/service, App settings UI, regression fixture, Android documentation, parity findings, and this test section.
+
+### Feature: Lightweight mobile interaction motion
+
+#### Steps
+
+1. Open 7420 at a 393 x 852 viewport and repeatedly open and close the sidebar and Settings sheet.
+2. Tap composer attachment, runtime, expand, microphone, send, and stop controls; verify every enabled control acknowledges the press immediately.
+3. Switch between cached conversations and confirm the history only fades briefly without vertical movement or scroll-position changes.
+4. Start a task and inspect the compact running state; expand runtime details and command rows.
+5. Reload with an empty sidebar cache, then observe the cold-start skeleton.
+6. Enable reduced motion at the operating-system or browser level and repeat the interactions.
+7. Run `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, and the targeted 7420 frontend regression.
+
+#### Expected Results
+
+- High-frequency feedback uses the shared 80 / 120 / 180 / 220 ms motion scale and does not block repeated input.
+- Touch controls provide a restrained press state without a ripple, bounce, or new animation dependency.
+- Mobile drawer and Settings use opacity plus a short transform; the Settings backdrop does not use blur.
+- The running surface keeps one calm pulse and no longer combines sweep, spinner, and jumping-dot animations.
+- Sidebar skeleton sheen runs once instead of indefinitely.
+- Reduced-motion mode removes transforms and continuous status animation while preserving all content and actions.

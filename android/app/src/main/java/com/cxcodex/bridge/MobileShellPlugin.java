@@ -224,6 +224,79 @@ public class MobileShellPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void getTaskPetStatus(PluginCall call) {
+        boolean enabled = MobileShellConfig.getPreferences(getContext())
+            .getBoolean(MobileShellConfig.PREF_TASK_PET_ENABLED, false);
+        boolean canDrawOverlays = Settings.canDrawOverlays(getContext());
+        if (enabled && canDrawOverlays && !TaskPetOverlayService.isRunning()) {
+            TaskPetOverlayService.startOrUpdate(getContext(), null, null);
+        }
+        call.resolve(buildTaskPetStatus(enabled, canDrawOverlays));
+    }
+
+    @PluginMethod
+    public void setTaskPetEnabled(PluginCall call) {
+        boolean enabled = call.getBoolean("enabled", false);
+        String serverUrl = MobileShellConfig.normalizeServerUrl(call.getString("serverUrl", ""));
+        String tasksJson = call.getString("tasksJson", "[]");
+        if (tasksJson == null) tasksJson = "[]";
+
+        MobileShellConfig.getPreferences(getContext()).edit()
+            .putBoolean(MobileShellConfig.PREF_TASK_PET_ENABLED, enabled)
+            .putString(MobileShellConfig.PREF_TASK_PET_SERVER_URL, serverUrl)
+            .putString(MobileShellConfig.PREF_TASK_PET_TASKS_JSON, tasksJson)
+            .apply();
+
+        boolean canDrawOverlays = Settings.canDrawOverlays(getContext());
+        if (!enabled) {
+            TaskPetOverlayService.stop(getContext());
+        } else if (canDrawOverlays) {
+            TaskPetOverlayService.startOrUpdate(getContext(), serverUrl, tasksJson);
+        } else {
+            try {
+                Intent settingsIntent = new Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getContext().getPackageName())
+                );
+                settingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(settingsIntent);
+            } catch (Exception exception) {
+                call.reject("无法打开悬浮窗权限设置", exception);
+                return;
+            }
+        }
+        call.resolve(buildTaskPetStatus(enabled, canDrawOverlays));
+    }
+
+    @PluginMethod
+    public void updateTaskPet(PluginCall call) {
+        String serverUrl = MobileShellConfig.normalizeServerUrl(call.getString("serverUrl", ""));
+        String tasksJson = call.getString("tasksJson", "[]");
+        if (tasksJson == null) tasksJson = "[]";
+        MobileShellConfig.getPreferences(getContext()).edit()
+            .putString(MobileShellConfig.PREF_TASK_PET_SERVER_URL, serverUrl)
+            .putString(MobileShellConfig.PREF_TASK_PET_TASKS_JSON, tasksJson)
+            .apply();
+
+        boolean enabled = MobileShellConfig.getPreferences(getContext())
+            .getBoolean(MobileShellConfig.PREF_TASK_PET_ENABLED, false);
+        boolean canDrawOverlays = Settings.canDrawOverlays(getContext());
+        if (enabled && canDrawOverlays) {
+            TaskPetOverlayService.startOrUpdate(getContext(), serverUrl, tasksJson);
+        }
+        call.resolve(buildTaskPetStatus(enabled, canDrawOverlays));
+    }
+
+    private JSObject buildTaskPetStatus(boolean enabled, boolean canDrawOverlays) {
+        JSObject result = new JSObject();
+        result.put("enabled", enabled);
+        result.put("showing", enabled && canDrawOverlays && TaskPetOverlayService.isRunning());
+        result.put("canDrawOverlays", canDrawOverlays);
+        result.put("permissionRequired", enabled && !canDrawOverlays);
+        return result;
+    }
+
+    @PluginMethod
     public void getDictationStatus(PluginCall call) {
         JSObject result = new JSObject();
         result.put("available", getContext().getPackageManager().hasSystemFeature(PackageManager.FEATURE_MICROPHONE));

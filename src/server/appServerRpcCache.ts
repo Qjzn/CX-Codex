@@ -31,6 +31,7 @@ type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string
 
 const APP_SERVER_THREAD_LIST_FRESH_CACHE_TTL_MS = 3 * 60_000
 const APP_SERVER_THREAD_LIST_STALE_CACHE_TTL_MS = 20 * 60_000
+const APP_SERVER_ARCHIVED_THREAD_LIST_STALE_CACHE_TTL_MS = 24 * 60 * 60_000
 const APP_SERVER_THREAD_LIST_BACKGROUND_REFRESH_MIN_INTERVAL_MS = 30_000
 const APP_SERVER_MODEL_LIST_FRESH_CACHE_TTL_MS = 10 * 60_000
 const APP_SERVER_MODEL_LIST_STALE_CACHE_TTL_MS = 60 * 60_000
@@ -188,11 +189,14 @@ export class AppServerRpcCache {
   }
 
   readThreadList(shareableKey: string, allowStale = false): CachedRpcRead | null {
+    const staleTtlMs = shareableKey.includes('"archived":true')
+      ? APP_SERVER_ARCHIVED_THREAD_LIST_STALE_CACHE_TTL_MS
+      : APP_SERVER_THREAD_LIST_STALE_CACHE_TTL_MS
     return readCachedRpc(
       this.cachedThreadListRpcByKey,
       shareableKey,
       APP_SERVER_THREAD_LIST_FRESH_CACHE_TTL_MS,
-      APP_SERVER_THREAD_LIST_STALE_CACHE_TTL_MS,
+      staleTtlMs,
       allowStale,
     )
   }
@@ -220,6 +224,10 @@ export class AppServerRpcCache {
     const cached = this.readShareableCache(method, shareableKey)
     if (cached) {
       if (cached.stale) {
+        const existingRefresh = method === 'thread/list' ? this.getSharedRead(shareableKey) : null
+        if (existingRefresh) {
+          return existingRefresh
+        }
         this.refreshShareableCacheInBackground(method, shareableKey, params, enqueueRpc)
       }
       return Promise.resolve(cached.value)

@@ -202,7 +202,7 @@ const metaLabel = computed(() => {
 
 .runtime-status-orb-core {
   @apply h-2 w-2 rounded-full bg-current;
-  animation: runtimeStatusPulse 1.4s ease-in-out infinite;
+  animation: runtimeStatusPulse 1.4s var(--motion-ease-standard) infinite;
 }
 
 .runtime-status-copy {
@@ -264,11 +264,16 @@ const metaLabel = computed(() => {
 }
 
 .runtime-status-action {
-  @apply inline-flex min-h-7 items-center justify-center gap-1.5 rounded-full border px-2 text-xs font-semibold transition-[background-color,border-color,color,transform] duration-150 disabled:cursor-not-allowed disabled:opacity-65;
+  @apply inline-flex min-h-7 items-center justify-center gap-1.5 rounded-full border px-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-65;
   border-color: var(--ui-border-subtle);
   background: color-mix(in srgb, var(--ui-bg-surface) 84%, transparent);
   color: var(--ui-text-secondary);
   touch-action: manipulation;
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-ease-standard),
+    border-color var(--motion-duration-fast) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard),
+    transform var(--motion-duration-fast) var(--motion-ease-out);
 }
 
 .runtime-status-bar--header .runtime-status-action {
@@ -282,7 +287,7 @@ const metaLabel = computed(() => {
 }
 
 .runtime-status-action:active:not(:disabled) {
-  transform: translateY(1px);
+  transform: scale(0.96);
 }
 
 .runtime-status-action-danger {

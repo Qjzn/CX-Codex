@@ -965,8 +965,9 @@ export async function getPendingServerRequests(options: RpcCallOptions = {}): Pr
   return fetchPendingServerRequests(options)
 }
 
-export async function resumeThread(threadId: string, options: RpcCallOptions = {}): Promise<void> {
-  await callRpc('thread/resume', { threadId }, options)
+export async function resumeThread(threadId: string, options: RpcCallOptions = {}): Promise<boolean> {
+  const payload = await callRpc<unknown>('thread/resume', { threadId }, options)
+  return payload !== null && payload !== undefined
 }
 
 export async function archiveThread(threadId: string): Promise<void> {

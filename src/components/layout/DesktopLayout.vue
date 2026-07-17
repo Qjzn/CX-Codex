@@ -244,14 +244,19 @@ function onResizeHandlePointerDown(event: PointerEvent): void {
 
 .drawer-enter-active,
 .drawer-leave-active {
-  @apply transition-opacity duration-150;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
-.drawer-enter-active .mobile-drawer,
+.drawer-enter-active .mobile-drawer {
+  transition:
+    transform var(--motion-duration-panel) var(--motion-ease-out),
+    opacity var(--motion-duration-base) var(--motion-ease-standard);
+}
+
 .drawer-leave-active .mobile-drawer {
   transition:
-    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 140ms ease;
+    transform var(--motion-duration-base) var(--motion-ease-standard),
+    opacity var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
 .drawer-enter-from {
@@ -259,8 +264,8 @@ function onResizeHandlePointerDown(event: PointerEvent): void {
 }
 
 .drawer-enter-from .mobile-drawer {
-  transform: translateX(-100%);
-  opacity: 0.86;
+  transform: translateX(-1rem);
+  opacity: 0;
 }
 
 .drawer-leave-to {
@@ -268,7 +273,14 @@ function onResizeHandlePointerDown(event: PointerEvent): void {
 }
 
 .drawer-leave-to .mobile-drawer {
-  transform: translateX(-100%);
-  opacity: 0.9;
+  transform: translateX(-0.75rem);
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drawer-enter-from .mobile-drawer,
+  .drawer-leave-to .mobile-drawer {
+    transform: none;
+  }
 }
 </style>

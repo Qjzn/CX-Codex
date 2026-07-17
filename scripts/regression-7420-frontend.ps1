@@ -50,7 +50,8 @@ function Assert-AndroidResumeThreadListRecoverySource {
   Assert-True ($functionMatch.Success) "could not find shouldRefreshThreadListForResume source"
   $functionSource = $functionMatch.Value
   Assert-True ($functionSource -notmatch "if\s*\(\s*androidShellAvailable\s*\)\s*return\s+false") "Android resume thread-list recovery is disabled"
-  Assert-True ($functionSource -match "if\s*\(\s*androidShellAvailable\s*\)\s*return\s+isFirstAttempt") "Android resume must refresh the thread list on the first resume attempt"
+  Assert-True ($source -match "const\s+ACTIVE_SYNC_THREAD_LIST_INTERVAL_MS\s*=\s*120000") "Android resume thread-list recovery interval must remain 120 seconds"
+  Assert-True ($functionSource -match "return\s+isFirstAttempt\s*&&\s*now\s*-\s*lastThreadListSyncAtMs\s*>=\s*ACTIVE_SYNC_THREAD_LIST_INTERVAL_MS") "Android resume must refresh a stale thread list on the first resume attempt"
 }
 
 function Invoke-AgentBrowser {
@@ -785,7 +786,7 @@ function Assert-FoldableShell {
   Assert-True (-not [string]::IsNullOrWhiteSpace($Metrics.actionGridTemplateColumns)) "foldable sidebar action grid is missing columns"
   Assert-True ($Metrics.actionGridRowCount -le 2) "foldable sidebar action grid uses too many rows: $($Metrics.actionGridRowCount)"
   Assert-True ($Metrics.actionGridHeight -le 96) "foldable sidebar action grid is too tall: $($Metrics.actionGridHeight)"
-  Assert-True ($Metrics.actionTileCount -ge 5) "foldable sidebar action grid is missing entries"
+  Assert-True ($Metrics.actionTileCount -eq 4) "foldable sidebar action grid should keep four primary entries: $($Metrics.actionTileCount)"
   Assert-True ($Metrics.actionIconCount -ge $Metrics.actionTileCount) "foldable sidebar action grid is missing icons"
   Assert-True ($Metrics.actionTileMaxRadius -le 10) "foldable sidebar action tiles are too rounded: $($Metrics.actionTileMaxRadius)"
   Assert-True ($Metrics.actionTileMinHeight -ge 42) "foldable sidebar action tiles are too small for touch: $($Metrics.actionTileMinHeight)"
@@ -1021,6 +1022,9 @@ JSON.stringify((() => {
     hasLatestTurnPromptContext: textContent.includes('请审查这些文件，并说明代码块'),
     hasFixtureCodeText: textContent.includes('fixture-code-block'),
     hasFixtureRawText: textContent.includes('fixture-raw-payload'),
+    hasOptimisticInternalText: textContent.includes('userMessage.optimistic') || textContent.includes('optimisticUserMessage'),
+    interruptedTurnCardCount: document.querySelectorAll('.interrupted-turn-card').length,
+    interruptedTurnEditCount: document.querySelectorAll('.interrupted-turn-edit').length,
     hasHiddenUnhandledNoise: textContent.includes('fixture-hidden-file-change-noise') || textContent.includes('Unhandled App Server item: fileChange') || textContent.includes('unhandled.fileChange') || textContent.includes('fixture-hidden-web-search-noise') || textContent.includes('Unhandled App Server item: webSearch') || textContent.includes('unhandled.webSearch') || textContent.includes('未适配的 App Server 内容'),
     hasFixtureCommandText: textContent.includes('fixture-command-output: ok'),
     hasFixtureCommandLabel: textContent.includes('npm.cmd run test:7420:frontend'),
@@ -1056,7 +1060,6 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.codeBlockCount -ge 2) "conversation fixture is missing code/diff blocks"
   Assert-True ($Metrics.diffBlockCount -ge 1) "conversation fixture is missing diff block"
   Assert-True ($Metrics.copyButtonCount -ge 2) "conversation fixture is missing code copy buttons"
-  Assert-True ($Metrics.fileCardCount -ge 2) "conversation fixture is missing file cards"
   Assert-True ($Metrics.rawPayloadCardCount -ge 1) "conversation fixture is missing raw payload card"
   Assert-True ($Metrics.commandRowCount -ge 1) "conversation fixture is missing command row"
   Assert-True ($Metrics.commandOutputWrapCount -ge 1) "conversation fixture is missing command output wrapper"
@@ -1087,9 +1090,11 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.hasAddLine -eq $true) "conversation fixture is missing diff add line styling"
   Assert-True ($Metrics.hasDeleteLine -eq $true) "conversation fixture is missing diff delete line styling"
   Assert-True ($Metrics.hasMetaLine -eq $true) "conversation fixture is missing diff metadata line styling"
-  Assert-True ($Metrics.hasLatestTurnPromptContext -eq $true) "conversation fixture lost the latest turn user prompt context"
   Assert-True ($Metrics.hasFixtureCodeText -eq $true) "conversation fixture is missing fixture code text"
   Assert-True ($Metrics.hasFixtureRawText -eq $true) "conversation fixture is missing raw payload marker"
+  Assert-True ($Metrics.hasOptimisticInternalText -eq $false) "conversation fixture exposed optimistic-message internal metadata"
+  Assert-True ([int]$Metrics.interruptedTurnCardCount -eq 1) "conversation fixture is missing stopped-turn feedback"
+  Assert-True ([int]$Metrics.interruptedTurnEditCount -eq 1) "conversation fixture is missing stopped-turn edit action"
   Assert-True ($Metrics.hasHiddenUnhandledNoise -eq $false) "conversation fixture rendered unhandled App Server system noise"
   Assert-True ($Metrics.hasFixtureCommandText -eq $true) "conversation fixture is missing command output marker"
   Assert-True ($Metrics.hasFixtureCommandLabel -eq $true) "conversation fixture is missing command label"
@@ -1100,7 +1105,7 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.hasPermissionTargetText -eq $true) "conversation fixture is missing MCP permission target details"
   Assert-True ($Metrics.hasToolCallActionText -eq $true) "conversation fixture is missing tool call action label"
   Assert-True ($Metrics.hasPermissionActionText -eq $true) "conversation fixture is missing permission action labels"
-  Assert-True ([string]$Metrics.loadMoreButtonText -like "*继续加载较早历史*") "conversation fixture remote older-history affordance is missing unified load-more button"
+  Assert-True ([string]$Metrics.loadMoreButtonText -like "*继续查看*") "conversation fixture local older-history affordance is missing unified load-more button"
   Assert-True ([string]$Metrics.firstCopyButtonText -like "*复制*") "conversation fixture first code block copy button is not visible"
   Assert-True ($Metrics.hasEmojiFileIcon -eq $false) "conversation fixture still renders emoji file icons"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "conversation fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
@@ -1112,7 +1117,22 @@ function Assert-ConversationOlderHistoryAffordance {
 
   $before = Read-ConversationFixtureMetrics -Session $Session
   Assert-True ([int]$before.olderHistoryRequestCount -eq 0) "conversation fixture older-history request count should start at 0"
-  $clickScript = @'
+  $localClickScript = @'
+JSON.stringify((() => {
+  const button = document.querySelector('.conversation-load-more-button');
+  if (!(button instanceof HTMLButtonElement)) return { clicked: 0 };
+  button.click();
+  return { clicked: 1 };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $localClickScript | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "200") | Out-Null
+  $afterLocal = Read-ConversationFixtureMetrics -Session $Session
+  Assert-True ($afterLocal.fileCardCount -ge 2) "conversation fixture did not restore file cards after loading local older history"
+  Assert-True ($afterLocal.hasLatestTurnPromptContext -eq $true) "conversation fixture did not restore the earlier user prompt context"
+  Assert-True ([int]$afterLocal.olderHistoryRequestCount -eq 0) "conversation fixture requested remote older history while local messages were still available"
+
+  $remoteClickScript = @'
 JSON.stringify((() => {
   const button = document.querySelector('.conversation-load-more-button');
   if (!(button instanceof HTMLButtonElement)) return { clicked: 0 };
@@ -1121,7 +1141,7 @@ JSON.stringify((() => {
   return { clicked: 2 };
 })())
 '@
-  Invoke-BrowserEvalJson -Session $Session -Script $clickScript | Out-Null
+  Invoke-BrowserEvalJson -Session $Session -Script $remoteClickScript | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "200") | Out-Null
   $after = Read-ConversationFixtureMetrics -Session $Session
   Assert-True ([int]$after.olderHistoryRequestCount -eq 1) "conversation fixture load-more button emitted duplicate remote older-history requests"
@@ -1350,6 +1370,7 @@ JSON.stringify((() => {
     hasEmptyWorkspaceProject: !!emptyProjectGroup,
     emptyWorkspaceProjectText: emptyProjectGroup?.textContent?.trim() || '',
     emptyWorkspaceNewThreadButtonCount: emptyProjectGroup?.querySelectorAll('.thread-start-button').length || 0,
+    emptyWorkspaceProjectMenuTriggerCount: emptyProjectGroup?.querySelectorAll('.project-menu-trigger').length || 0,
     firstProjectThreadRowCount: firstProjectRows.length,
     firstProjectThreadIds,
     showMoreButtonCount: showMoreButtons.length,
@@ -1387,7 +1408,8 @@ function Assert-SidebarFixture {
   Assert-True ($Metrics.firstProjectPinned -eq $true) "sidebar fixture first project is missing pinned project marker"
   Assert-True ($Metrics.hasEmptyWorkspaceProject -eq $true) "sidebar fixture filtered out empty workspace-root project"
   Assert-True ([string]$Metrics.emptyWorkspaceProjectText -like "*暂无会话*") "sidebar fixture empty workspace-root project does not show empty state"
-  Assert-True ([int]$Metrics.emptyWorkspaceNewThreadButtonCount -eq 1) "sidebar fixture empty workspace-root project is missing new-thread action"
+  Assert-True ([int]$Metrics.emptyWorkspaceNewThreadButtonCount -eq 0) "sidebar fixture desktop-parity mode should keep the project-level new-thread action in the project menu"
+  Assert-True ([int]$Metrics.emptyWorkspaceProjectMenuTriggerCount -eq 1) "sidebar fixture empty workspace-root project is missing its project menu"
   Assert-True ([int]$Metrics.firstProjectThreadRowCount -eq 5) "sidebar fixture first expanded project should show exactly 5 threads by default, got $($Metrics.firstProjectThreadRowCount)"
   $expectedFirstProjectThreadIds = @(
     "fixture-thread-running",
@@ -1409,7 +1431,7 @@ function Assert-SidebarFixture {
   Assert-True ([int]$Metrics.runningThreadProjectRowCount -eq 1) "sidebar fixture running thread is not retained exactly once in project list"
   Assert-True ([int]$Metrics.pinnedThreadRowCount -eq 2) "sidebar fixture pinned thread should appear only in pinned section and project list"
   Assert-True ([int]$Metrics.pinnedThreadProjectRowCount -eq 1) "sidebar fixture pinned thread is not retained exactly once in project list"
-  Assert-True ($Metrics.sourceCount -ge 4) "sidebar fixture is missing source/status metadata"
+  Assert-True ([int]$Metrics.sourceCount -eq [int]$Metrics.runningThreadRowCount) "sidebar fixture should only keep text metadata for running threads"
   Assert-True ($Metrics.indicatorCount -ge 2) "sidebar fixture is missing unread/running indicators"
   Assert-True ($Metrics.minRowHeight -ge 40) "sidebar fixture row height is too small: $($Metrics.minRowHeight)"
   Assert-True ($Metrics.maxRowHeight -le 52) "sidebar fixture row height is too large: $($Metrics.maxRowHeight)"
@@ -1418,6 +1440,30 @@ function Assert-SidebarFixture {
   Assert-True ($Metrics.workingIndicator.animationName -notlike "*spin*") "sidebar fixture running indicator still uses spinner animation"
   Assert-True ($Metrics.rowFitFailureCount -eq 0) "sidebar fixture rows overflow viewport"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "sidebar fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+}
+
+function Assert-SidebarFixtureNewThreadMenu {
+  param([string]$Session)
+
+  $openScript = @'
+JSON.stringify((() => {
+  const trigger = document.querySelector('.project-group[data-project-name="empty-root"] .project-menu-trigger');
+  trigger?.click();
+  return { triggerFound: !!trigger };
+})())
+'@
+  $openState = Invoke-BrowserEvalJson -Session $Session -Script $openScript
+  Assert-True ($openState.triggerFound -eq $true) "sidebar fixture empty workspace-root project menu trigger is missing"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
+  $script = @'
+JSON.stringify({
+  newThreadActionCount: Array.from(document.querySelectorAll('.project-menu-panel .project-menu-item'))
+    .filter((node) => (node.textContent || '').trim() === '新建任务')
+    .length
+})
+'@
+  $state = Invoke-BrowserEvalJson -Session $Session -Script $script
+  Assert-True ([int]$state.newThreadActionCount -eq 1) "sidebar fixture empty workspace-root project menu is missing new-thread action"
 }
 
 function Read-ComposerFixtureMetrics {
@@ -1433,14 +1479,15 @@ JSON.stringify((() => {
   const attach = document.querySelector('.composer-regression-fixture .thread-composer-attach-trigger');
   const runtime = document.querySelector('.composer-regression-fixture .thread-composer-runtime-trigger');
   const mic = document.querySelector('.composer-regression-fixture .thread-composer-mic');
+  const expand = document.querySelector('.composer-regression-fixture .thread-composer-expand');
   const submit = document.querySelector('.composer-regression-fixture .thread-composer-submit');
-  const dictationHelper = document.querySelector('.composer-regression-fixture .thread-composer-dictation-helper');
+  const dictationStatusText = document.querySelector('.composer-regression-fixture .thread-composer-dictation-statusbar-text');
   const dictationProbe = document.querySelector('.composer-regression-fixture .composer-regression-dictation-insert');
   const submitCount = document.querySelector('.composer-regression-fixture .composer-regression-submit-count');
   const shellRect = shell?.getBoundingClientRect();
   const formRect = form?.getBoundingClientRect();
   const viewportWidth = document.documentElement.clientWidth;
-  const fitTargets = [form, shell, input, controls, attach, runtime, mic, submit].filter(Boolean);
+  const fitTargets = [form, shell, input, controls, attach, runtime, expand, mic, submit].filter(Boolean);
   const fitFailures = fitTargets
     .map((node) => {
       const rect = node.getBoundingClientRect();
@@ -1462,12 +1509,13 @@ JSON.stringify((() => {
     hasAttach: !!attach,
     hasRuntime: !!runtime,
     hasMic: !!mic,
+    hasExpand: !!expand,
     hasSubmit: !!submit,
-    hasDictationHelper: !!dictationHelper,
+    hasDictationHelper: !!dictationStatusText,
     hasDictationProbe: !!dictationProbe,
     inputValue: input?.value || '',
     submitCount: Number.parseInt(submitCount?.textContent || '0', 10),
-    dictationHelperText: dictationHelper?.textContent?.trim() || '',
+    dictationHelperText: dictationStatusText?.textContent?.trim() || '',
     shellWidth: shellRect ? Math.round(shellRect.width) : 0,
     formWidth: formRect ? Math.round(formRect.width) : 0,
     shellHeight: shellRect ? Math.round(shellRect.height) : 0,
@@ -1504,6 +1552,7 @@ function Assert-ComposerFixture {
   Assert-True ($Metrics.hasAttach -eq $true) "$ViewportName composer fixture is missing attach trigger"
   Assert-True ($Metrics.hasRuntime -eq $true) "$ViewportName composer fixture is missing runtime trigger"
   Assert-True ($Metrics.hasMic -eq $true) "$ViewportName composer fixture is missing dictation button"
+  Assert-True ($Metrics.hasExpand -eq $true) "$ViewportName composer fixture is missing long-input expand button"
   Assert-True ($Metrics.hasSubmit -eq $true) "$ViewportName composer fixture is missing submit button"
   Assert-True ($Metrics.hasDictationHelper -eq $false) "$ViewportName composer fixture shows idle dictation helper text"
   Assert-True ($Metrics.hasDictationProbe -eq $true) "$ViewportName composer fixture is missing dictation regression probe"
@@ -1969,6 +2018,7 @@ try {
   $sidebarFixture = Open-And-ReadPage -Session $session -Url $sidebarFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $sidebarFixture -Name "sidebar rows fixture phone"
   Assert-SidebarFixture -Metrics (Read-SidebarFixtureMetrics -Session $session)
+  Assert-SidebarFixtureNewThreadMenu -Session $session
   Add-RegressionResult -Name "sidebar-rows-fixture-phone" -Page $sidebarFixture
 
   $composerFixtureUrl = $BaseUrl + "/#/__regression/composer-shell?regression=frontend"

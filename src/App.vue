@@ -80,7 +80,7 @@
                 type="button"
                 aria-label="新建会话"
                 title="新建会话"
-                @click="onStartNewThreadFromToolbar"
+                @click="isSidebarToolsOpen = false; onStartNewThreadFromToolbar()"
               >
                 <IconTablerFilePencil class="sidebar-action-icon" />
                 <span class="sidebar-action-label">新会话</span>
@@ -91,7 +91,7 @@
                 :aria-pressed="isSidebarSearchVisible"
                 aria-label="搜索会话"
                 title="搜索会话"
-                @click="toggleSidebarSearch"
+                @click="isSidebarToolsOpen = false; toggleSidebarSearch()"
               >
                 <IconTablerSearch class="sidebar-action-icon" />
                 <span class="sidebar-action-label">搜索</span>
@@ -101,42 +101,46 @@
                 :class="{ 'is-active': isWorkbenchRoute }"
                 type="button"
                 :aria-current="isWorkbenchRoute ? 'page' : undefined"
-                @click="router.push({ name: 'workbench' }); isMobile && setSidebarCollapsed(true)"
+                @click="isSidebarToolsOpen = false; router.push({ name: 'workbench' }); isMobile && setSidebarCollapsed(true)"
               >
                 <IconTablerFolder class="sidebar-action-icon" />
                 <span class="sidebar-action-label">工作台</span>
               </button>
-              <button
-                class="sidebar-action-tile"
-                :class="{ 'is-active': isSkillsRoute }"
-                type="button"
-                :aria-current="isSkillsRoute ? 'page' : undefined"
-                @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
-              >
-                <IconTablerBolt class="sidebar-action-icon" />
-                <span class="sidebar-action-label">技能</span>
-              </button>
-              <button
-                v-if="showGithubTrendingProjects"
-                class="sidebar-action-tile"
-                :class="{ 'is-active': isGithubTrendingRoute }"
-                type="button"
-                :aria-current="isGithubTrendingRoute ? 'page' : undefined"
-                @click="router.push({ name: 'github-trending' }); isMobile && setSidebarCollapsed(true)"
-              >
-                <IconTablerGitFork class="sidebar-action-icon" />
-                <span class="sidebar-action-label">GitHub</span>
-              </button>
-              <button
-                class="sidebar-action-tile"
-                :class="{ 'is-active': isDiagnosticsRoute }"
-                type="button"
-                :aria-current="isDiagnosticsRoute ? 'page' : undefined"
-                @click="router.push({ name: 'diagnostics' }); isMobile && setSidebarCollapsed(true)"
-              >
-                <IconTablerSettings class="sidebar-action-icon" />
-                <span class="sidebar-action-label">诊断</span>
-              </button>
+              <div class="sidebar-tools-menu">
+                <button
+                  class="sidebar-action-tile"
+                  :class="{ 'is-active': isSidebarToolsActive }"
+                  type="button"
+                  aria-label="更多工具"
+                  aria-haspopup="menu"
+                  :aria-expanded="isSidebarToolsOpen"
+                  @click="isSidebarToolsOpen = !isSidebarToolsOpen"
+                  @keydown.esc="isSidebarToolsOpen = false"
+                >
+                  <IconTablerDots class="sidebar-action-icon" />
+                  <span class="sidebar-action-label">工具</span>
+                </button>
+                <div v-if="isSidebarToolsOpen" class="sidebar-tools-menu-panel" role="menu" aria-label="更多工具">
+                  <button class="sidebar-tools-menu-item" type="button" role="menuitem" @click="onOpenSidebarTool('skills')">
+                    <IconTablerBolt class="sidebar-tools-menu-icon" />
+                    技能
+                  </button>
+                  <button
+                    v-if="showGithubTrendingProjects"
+                    class="sidebar-tools-menu-item"
+                    type="button"
+                    role="menuitem"
+                    @click="onOpenSidebarTool('github-trending')"
+                  >
+                    <IconTablerGitFork class="sidebar-tools-menu-icon" />
+                    GitHub
+                  </button>
+                  <button class="sidebar-tools-menu-item" type="button" role="menuitem" @click="onOpenSidebarTool('diagnostics')">
+                    <IconTablerSettings class="sidebar-tools-menu-icon" />
+                    诊断
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div v-if="isSidebarSearchVisible" class="sidebar-search-bar">
@@ -209,8 +213,8 @@
               </div>
               <p class="sidebar-settings-section-title">基础设置</p>
               <button class="sidebar-settings-row" type="button" :title="SETTINGS_HELP.sendWithEnter" @click="toggleSendWithEnter">
-                <span class="sidebar-settings-label">发送需按 ⌘ + Enter</span>
-                <span class="sidebar-settings-toggle" :class="{ 'is-on': !sendWithEnter }" />
+                <span class="sidebar-settings-label">Enter 键行为</span>
+                <span class="sidebar-settings-value">{{ sendWithEnter ? '发送' : '换行' }}</span>
               </button>
               <button class="sidebar-settings-row" type="button" :title="SETTINGS_HELP.appearance" @click="cycleDarkMode">
                 <span class="sidebar-settings-label">外观</span>
@@ -376,6 +380,29 @@
                 </div>
                 <p v-if="mobileShellStatus" class="sidebar-settings-hint sidebar-settings-hint-status">
                   {{ mobileShellStatus }}
+                </p>
+              </section>
+              <section v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="任务宠物">
+                <p class="sidebar-settings-section-title">任务宠物</p>
+                <TaskPetPreview :items="activeTaskPetItems" @open="openTaskPetThread" />
+                <button
+                  class="sidebar-settings-row"
+                  type="button"
+                  :disabled="isMobileShellTaskPetUpdating"
+                  @click="toggleMobileShellTaskPet"
+                >
+                  <span class="sidebar-settings-label">系统悬浮窗</span>
+                  <span class="sidebar-settings-toggle" :class="{ 'is-on': mobileShellTaskPetStatus?.enabled }" />
+                </button>
+                <div class="sidebar-settings-row sidebar-settings-row--static">
+                  <span class="sidebar-settings-label">浮窗状态</span>
+                  <span class="sidebar-settings-value">{{ mobileShellTaskPetStatusLabel }}</span>
+                </div>
+                <p class="sidebar-settings-hint">
+                  切到其他 App 后仍显示任务数量；点宠物展开进展，点任务直接回到对应会话。首次开启需要系统悬浮窗权限。
+                </p>
+                <p v-if="mobileShellTaskPetMessage" class="sidebar-settings-hint sidebar-settings-hint-status">
+                  {{ mobileShellTaskPetMessage }}
                 </p>
               </section>
               <section class="sidebar-settings-section" aria-label="语音输入">
@@ -889,9 +916,11 @@ import RuntimeStatusBar from './components/content/RuntimeStatusBar.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import FavoritesModal from './components/content/FavoritesModal.vue'
+import TaskPetPreview from './components/mobile/TaskPetPreview.vue'
 import IconTablerBolt from './components/icons/IconTablerBolt.vue'
 import IconTablerBroom from './components/icons/IconTablerBroom.vue'
 import IconTablerBookmark from './components/icons/IconTablerBookmark.vue'
+import IconTablerDots from './components/icons/IconTablerDots.vue'
 import IconTablerFilePencil from './components/icons/IconTablerFilePencil.vue'
 import IconTablerFolder from './components/icons/IconTablerFolder.vue'
 import IconTablerGitFork from './components/icons/IconTablerGitFork.vue'
@@ -944,16 +973,20 @@ import {
   getMobileShellNotificationPermissionStatus,
   getMobileShellRuntimeInfo,
   getMobileShellServerConfig,
+  getMobileShellTaskPetStatus,
   installMobileShellApk,
   isNativeAndroidShell,
   openMobileShellUrl,
   requestMobileShellNotificationPermission,
   resetMobileShellServerUrl,
   setMobileShellServerUrl,
+  setMobileShellTaskPetEnabled,
+  updateMobileShellTaskPet,
   type MobileShellAppInfo,
   type MobileShellNotificationPermissionStatus,
   type MobileShellRuntimeInfo,
   type MobileShellServerConfig,
+  type MobileShellTaskPetStatus,
 } from './mobile/mobileShell'
 import {
   compareMobileReleaseVersions,
@@ -986,7 +1019,7 @@ const DEFAULT_WEB_BRIDGE_SETTINGS: WebBridgeSettings = {
   },
 }
 const SETTINGS_HELP = {
-  sendWithEnter: '开启后直接按 Enter 发送，关闭后使用 Command + Enter 发送。',
+  sendWithEnter: '在“发送”和“换行”之间切换。Enter 发送时，Shift + Enter 换行；Enter 换行时，Ctrl / Command + Enter 发送。',
   appearance: '在跟随系统、浅色和深色之间切换。',
   dictationButtonVisible: '控制输入框右侧是否显示语音按钮。',
   dictationAutoSend: '转写后自动发送输入框内容；默认关闭，建议确认后手动发送。',
@@ -1199,6 +1232,7 @@ const {
   projectGroups,
   projectDisplayNameById,
   selectedThread,
+  activeTaskPetItems,
   selectedThreadScrollState,
   selectedThreadServerRequests,
   selectedLiveOverlay,
@@ -1303,6 +1337,7 @@ const productToast = ref<{ id: number; message: string; tone: 'success' | 'info'
 const pendingFavoriteJump = ref<{ threadId: string; messageId: string } | null>(null)
 const sidebarSearchQuery = ref('')
 const isSidebarSearchVisible = ref(false)
+const isSidebarToolsOpen = ref(false)
 const sidebarSearchInputRef = ref<HTMLInputElement | null>(null)
 const serverMatchedThreadIds = ref<string[] | null>(null)
 let threadSearchTimer: ReturnType<typeof setTimeout> | null = null
@@ -1348,6 +1383,7 @@ const mobileShellServerConfig = ref<MobileShellServerConfig | null>(null)
 const mobileShellAppInfo = ref<MobileShellAppInfo | null>(null)
 const mobileShellRuntimeInfo = ref<MobileShellRuntimeInfo | null>(null)
 const mobileShellNotificationPermission = ref<MobileShellNotificationPermissionStatus | null>(null)
+const mobileShellTaskPetStatus = ref<MobileShellTaskPetStatus | null>(null)
 const mobileShellLatestRelease = ref<MobileLatestRelease | null>(null)
 const mobileShellServerInput = ref('')
 const mobileShellStatus = ref('')
@@ -1357,9 +1393,15 @@ const isMobileShellSaving = ref(false)
 const isMobileShellUpdateLoading = ref(false)
 const isMobileShellInstalling = ref(false)
 const isMobileShellNotificationRequesting = ref(false)
+const isMobileShellTaskPetUpdating = ref(false)
+const mobileShellTaskPetMessage = ref('')
 const isMobileShellUpdatePromptVisible = ref(false)
 let mobileShellStatusTimer: ReturnType<typeof setTimeout> | null = null
 let mobileShellUpdateStatusTimer: ReturnType<typeof setTimeout> | null = null
+let mobileShellTaskPetSyncTimer: ReturnType<typeof setTimeout> | null = null
+let mobileShellTaskPetLastPayload = ''
+let mobileShellTaskPetSyncInFlight = false
+let mobileShellTaskPetSyncPending = false
 const desktopAppStatus = ref<DesktopAppStatus>({
   available: false,
   platform: '',
@@ -1406,10 +1448,16 @@ const isWorkbenchRoute = computed(() => route.name === 'workbench')
 const isSkillsRoute = computed(() => route.name === 'skills')
 const isGithubTrendingRoute = computed(() => route.name === 'github-trending')
 const isDiagnosticsRoute = computed(() => route.name === 'diagnostics')
-const isStandaloneRoute = computed(() => (
-  route.name === 'regression-conversation-blocks'
-  || route.name === 'regression-sidebar-rows'
-  || route.name === 'regression-composer-shell'
+const isStandaloneRoute = computed(() => {
+  const isNamedFixture = route.name === 'regression-conversation-blocks'
+    || route.name === 'regression-sidebar-rows'
+    || route.name === 'regression-composer-shell'
+    || route.name === 'regression-task-pet'
+  if (isNamedFixture || typeof window === 'undefined') return isNamedFixture
+  return window.location.hash.startsWith('#/__regression/')
+})
+const isSidebarToolsActive = computed(() => (
+  isSkillsRoute.value || isGithubTrendingRoute.value || isDiagnosticsRoute.value
 ))
 const isNonThreadRoute = computed(() => (
   isHomeRoute.value || isWorkbenchRoute.value || isSkillsRoute.value || isGithubTrendingRoute.value || isDiagnosticsRoute.value
@@ -1477,6 +1525,13 @@ const mobileShellNotificationPermissionLabel = computed(() => {
   if (permission.granted) return '已允许'
   if (!permission.notificationsEnabled) return '系统已关闭'
   return permission.requiresRuntimePermission ? '待授权' : '未允许'
+})
+const mobileShellTaskPetStatusLabel = computed(() => {
+  const status = mobileShellTaskPetStatus.value
+  if (!status) return '未读取'
+  if (status.permissionRequired) return '等待悬浮窗授权'
+  if (status.showing) return `${activeTaskPetItems.value.length} 个任务 · 已显示`
+  return status.enabled && status.canDrawOverlays ? '已开启' : '已关闭'
 })
 const canRequestMobileShellNotifications = computed(() => (
   isMobileShellAvailable.value
@@ -1918,11 +1973,7 @@ const desktopStatusLabel = computed(() => {
 })
 const showDesktopStatusPill = computed(() => (
   !isMobileShellAvailable.value &&
-  (
-    isDesktopRefreshRunning.value ||
-    !desktopAppStatus.value.available ||
-    !desktopAppStatus.value.appRunning
-  )
+  isDesktopRefreshRunning.value
 ))
 const showServiceStatusDetail = computed(() => (
   serviceStatusDetail.value.trim().length > 0 &&
@@ -2398,7 +2449,9 @@ onMounted(() => {
   window.addEventListener('focus', onWindowFocusRefreshAccountState)
   applyDarkMode()
   darkModeMediaQuery?.addEventListener('change', applyDarkMode)
-  void initializeRuntime()
+  if (!isStandaloneRoute.value) {
+    void initializeRuntime()
+  }
 })
 
 onUnmounted(() => {
@@ -2424,6 +2477,10 @@ onUnmounted(() => {
     clearTimeout(mobileShellUpdateStatusTimer)
     mobileShellUpdateStatusTimer = null
   }
+  if (mobileShellTaskPetSyncTimer) {
+    clearTimeout(mobileShellTaskPetSyncTimer)
+    mobileShellTaskPetSyncTimer = null
+  }
   if (favoritesStatusTimer) {
     clearTimeout(favoritesStatusTimer)
     favoritesStatusTimer = null
@@ -2437,7 +2494,9 @@ onUnmounted(() => {
 
 function onWindowFocusRefreshAccountState(): void {
   if (requiresMobileShellServerSetup.value) return
-  void refreshFavorites()
+  if (isMobileShellAvailable.value) {
+    void refreshMobileShellTaskPetStatus(true)
+  }
   if (isSettingsOpen.value) {
     void refreshRateLimits()
   }
@@ -2475,9 +2534,11 @@ watch(isSettingsOpen, (open) => {
   if (open) {
     void refreshWebBridgeSettings()
     void refreshRateLimits({ force: true })
+    void refreshDesktopAppAvailability()
     void refreshMobileShellServerConfig({ preserveInput: true })
     void refreshMobileShellRuntimeInfo()
     void refreshMobileShellNotificationPermission()
+    void refreshMobileShellTaskPetStatus(true)
     void refreshMobileShellUpdateState()
     window.addEventListener('pointerdown', onWindowPointerDownForSettings, { capture: true })
     return
@@ -2646,6 +2707,95 @@ async function refreshMobileShellNotificationPermission(): Promise<void> {
   } catch {
     mobileShellNotificationPermission.value = null
   }
+}
+
+async function refreshMobileShellTaskPetStatus(syncAfterRefresh = false): Promise<void> {
+  if (!isMobileShellAvailable.value) return
+  try {
+    mobileShellTaskPetStatus.value = await getMobileShellTaskPetStatus()
+    if (
+      syncAfterRefresh
+      && mobileShellTaskPetStatus.value.enabled
+      && mobileShellTaskPetStatus.value.canDrawOverlays
+    ) {
+      await syncMobileShellTaskPet()
+    }
+  } catch {
+    mobileShellTaskPetStatus.value = null
+  }
+}
+
+async function toggleMobileShellTaskPet(): Promise<void> {
+  if (!isMobileShellAvailable.value || isMobileShellTaskPetUpdating.value) return
+  isMobileShellTaskPetUpdating.value = true
+  mobileShellTaskPetMessage.value = ''
+  try {
+    const enable = mobileShellTaskPetStatus.value?.enabled !== true
+    mobileShellTaskPetStatus.value = await setMobileShellTaskPetEnabled(
+      enable,
+      mobileShellServerConfig.value?.serverUrl.trim() || window.location.origin,
+      activeTaskPetItems.value,
+    )
+    mobileShellTaskPetLastPayload = enable ? currentMobileShellTaskPetPayload() : ''
+    mobileShellTaskPetMessage.value = enable
+      ? mobileShellTaskPetStatus.value.permissionRequired
+        ? '请在系统页面允许悬浮窗，返回后会自动开启。'
+        : '任务宠物已开启，可拖动到顺手的位置。'
+      : '任务宠物已关闭。'
+  } catch (error) {
+    mobileShellTaskPetMessage.value = error instanceof Error ? error.message : '更新任务宠物失败'
+  } finally {
+    isMobileShellTaskPetUpdating.value = false
+  }
+}
+
+async function syncMobileShellTaskPet(): Promise<void> {
+  if (!isMobileShellAvailable.value || mobileShellTaskPetStatus.value?.enabled !== true) return
+  const payload = currentMobileShellTaskPetPayload()
+  if (payload === mobileShellTaskPetLastPayload) return
+  if (mobileShellTaskPetSyncInFlight) {
+    mobileShellTaskPetSyncPending = true
+    return
+  }
+  mobileShellTaskPetSyncInFlight = true
+  try {
+    mobileShellTaskPetStatus.value = await updateMobileShellTaskPet(
+      mobileShellServerConfig.value?.serverUrl.trim() || window.location.origin,
+      activeTaskPetItems.value,
+    )
+    mobileShellTaskPetLastPayload = payload
+  } catch {
+    // The native service retains its last good snapshot and keeps polling it.
+  } finally {
+    mobileShellTaskPetSyncInFlight = false
+    if (mobileShellTaskPetSyncPending) {
+      mobileShellTaskPetSyncPending = false
+      void syncMobileShellTaskPet()
+    }
+  }
+}
+
+function currentMobileShellTaskPetPayload(): string {
+  return JSON.stringify({
+    serverUrl: mobileShellServerConfig.value?.serverUrl.trim() || window.location.origin,
+    tasks: activeTaskPetItems.value.map((item) => ({
+      threadId: item.threadId,
+      title: item.title,
+      projectName: item.projectName,
+      detail: item.detail,
+      latestActivity: item.latestActivity,
+      state: item.state,
+    })),
+  })
+}
+
+async function openTaskPetThread(threadId: string): Promise<void> {
+  const normalized = threadId.trim()
+  if (!normalized) return
+  rememberRoutableThreadId(normalized)
+  if (selectedThreadId.value !== normalized) await selectThread(normalized)
+  await router.push({ name: 'thread', params: { threadId: normalized } })
+  isSettingsOpen.value = false
 }
 
 async function requestMobileShellNotifications(): Promise<void> {
@@ -2935,6 +3085,12 @@ function toggleSidebarSearch(): void {
   } else {
     sidebarSearchQuery.value = ''
   }
+}
+
+function onOpenSidebarTool(routeName: 'skills' | 'github-trending' | 'diagnostics'): void {
+  isSidebarToolsOpen.value = false
+  void router.push({ name: routeName })
+  if (isMobile.value) setSidebarCollapsed(true)
 }
 
 function clearSidebarSearch(): void {
@@ -3985,12 +4141,10 @@ function scheduleInitialBackgroundTasks(): void {
   queueIdleTask(() => { void loadWorkspaceRootOptionsState() }, 950)
   queueIdleTask(() => { void refreshDefaultProjectName() }, 1200)
   queueIdleTask(() => { void refreshWebBridgeSettings() }, 1400)
-  queueIdleTask(() => { void refreshFavorites() }, 1500)
-  queueIdleTask(() => { void refreshMobileShellServerConfig() }, 1600)
-  queueIdleTask(() => { void refreshMobileShellRuntimeInfo() }, 1625)
-  queueIdleTask(() => { void refreshMobileShellNotificationPermission() }, 1640)
-  if (!isMobileShellAvailable.value) {
-    queueDelayedIdleTask(() => { void refreshDesktopAppAvailability() }, 3200, 1200)
+  if (isMobileShellAvailable.value) {
+    queueIdleTask(() => { void refreshMobileShellRuntimeInfo() }, 1625)
+    queueIdleTask(() => { void refreshMobileShellNotificationPermission() }, 1640)
+    queueIdleTask(() => { void refreshMobileShellTaskPetStatus(true) }, 1660)
   }
   scheduleTrendingProjectsLoad()
 }
@@ -4096,6 +4250,18 @@ watch(
 
     if (route.name === 'thread' && routeThreadId.value === threadId) return
     await router.replace({ name: 'thread', params: { threadId } })
+  },
+)
+
+watch(
+  activeTaskPetItems,
+  () => {
+    if (!isMobileShellAvailable.value || mobileShellTaskPetStatus.value?.enabled !== true) return
+    if (mobileShellTaskPetSyncTimer) clearTimeout(mobileShellTaskPetSyncTimer)
+    mobileShellTaskPetSyncTimer = setTimeout(() => {
+      mobileShellTaskPetSyncTimer = null
+      void syncMobileShellTaskPet()
+    }, 180)
   },
 )
 
@@ -4435,7 +4601,39 @@ async function submitFirstMessageForNewThread(
 }
 
 .sidebar-action-grid {
-  @apply grid grid-cols-3 gap-1;
+  @apply grid grid-cols-4 gap-1;
+}
+
+.sidebar-tools-menu {
+  @apply relative min-w-0;
+}
+
+.sidebar-tools-menu > .sidebar-action-tile {
+  @apply w-full;
+}
+
+.sidebar-tools-menu-panel {
+  @apply absolute left-0 top-[calc(100%+0.25rem)] z-20 flex min-w-32 flex-col gap-0.5 border p-1;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  box-shadow: 0 4px 8px -6px rgba(31, 41, 55, 0.28);
+}
+
+.sidebar-tools-menu-item {
+  @apply flex min-h-8 items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors duration-150;
+  color: var(--ui-text-secondary);
+}
+
+.sidebar-tools-menu-item:hover,
+.sidebar-tools-menu-item:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+.sidebar-tools-menu-icon {
+  @apply h-3.5 w-3.5 shrink-0;
+  color: var(--ui-text-tertiary);
 }
 
 .sidebar-action-tile {
@@ -5120,7 +5318,6 @@ async function submitFirstMessageForNewThread(
 
 .sidebar-settings-mobile-backdrop {
   @apply fixed inset-0 z-[68] border-0 bg-[#1f2937]/32 p-0;
-  backdrop-filter: blur(2px);
 }
 
 .sidebar-settings-panel-mobile {
@@ -5351,7 +5548,7 @@ async function submitFirstMessageForNewThread(
 
 .settings-panel-enter-active,
 .settings-panel-leave-active {
-  transition: opacity 90ms ease;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
 .settings-panel-enter-from,
@@ -5361,7 +5558,7 @@ async function submitFirstMessageForNewThread(
 
 .settings-mobile-backdrop-enter-active,
 .settings-mobile-backdrop-leave-active {
-  transition: opacity 160ms ease;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
 .settings-mobile-backdrop-enter-from,
@@ -5372,14 +5569,14 @@ async function submitFirstMessageForNewThread(
 .settings-mobile-panel-enter-active,
 .settings-mobile-panel-leave-active {
   transition:
-    opacity 180ms ease,
-    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    opacity var(--motion-duration-base) var(--motion-ease-standard),
+    transform var(--motion-duration-panel) var(--motion-ease-out);
 }
 
 .settings-mobile-panel-enter-from,
 .settings-mobile-panel-leave-to {
   opacity: 0;
-  transform: translateY(1.5rem);
+  transform: translateY(1rem);
 }
 
 .sidebar-settings-rate-limits {

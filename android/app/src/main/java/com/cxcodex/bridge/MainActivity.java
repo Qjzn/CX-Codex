@@ -33,7 +33,15 @@ public class MainActivity extends BridgeActivity {
             showServerSetupScreen();
         } else {
             configureWebViewDownloadListener();
+            openTaskPetThreadFromIntent(getIntent());
         }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        openTaskPetThreadFromIntent(intent);
     }
 
     @Override
@@ -41,6 +49,26 @@ public class MainActivity extends BridgeActivity {
         super.onResume();
         configureWebViewDownloadListener();
         MobileShellPlugin.retryPendingApkInstall(this);
+        openTaskPetThreadFromIntent(getIntent());
+    }
+
+    private void openTaskPetThreadFromIntent(Intent intent) {
+        if (intent == null || !intent.hasExtra(TaskPetOverlayService.EXTRA_THREAD_ID)) {
+            return;
+        }
+        String threadId = intent.getStringExtra(TaskPetOverlayService.EXTRA_THREAD_ID);
+        intent.removeExtra(TaskPetOverlayService.EXTRA_THREAD_ID);
+        if (threadId == null || threadId.trim().isEmpty()) {
+            return;
+        }
+        String serverUrl = MobileShellConfig.getStoredServerUrl(this);
+        if (serverUrl.isEmpty()) {
+            return;
+        }
+        String targetUrl = serverUrl + "/#/thread/" + Uri.encode(threadId.trim());
+        if (bridge != null && bridge.getWebView() != null) {
+            bridge.getWebView().post(() -> bridge.getWebView().loadUrl(targetUrl));
+        }
     }
 
     private void configureWebViewDownloadListener() {

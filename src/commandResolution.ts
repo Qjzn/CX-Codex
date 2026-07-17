@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 
@@ -85,6 +85,36 @@ function getPotentialRipgrepExecutables(prefix: string): string[] {
   ))
 }
 
+export function getWindowsDesktopCodexExecutables(localAppData = process.env.LOCALAPPDATA): string[] {
+  const normalizedLocalAppData = localAppData?.trim()
+  if (!normalizedLocalAppData) return []
+
+  const binDir = join(normalizedLocalAppData, 'OpenAI', 'Codex', 'bin')
+  if (!existsSync(binDir)) return []
+
+  const versionedExecutables: Array<{ path: string; modifiedAtMs: number }> = []
+  try {
+    for (const entry of readdirSync(binDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const executable = join(binDir, entry.name, 'codex.exe')
+      if (!existsSync(executable)) continue
+      versionedExecutables.push({
+        path: executable,
+        modifiedAtMs: statSync(executable).mtimeMs,
+      })
+    }
+  } catch {
+    return []
+  }
+
+  versionedExecutables.sort((first, second) => second.modifiedAtMs - first.modifiedAtMs)
+  const stableExecutable = join(binDir, 'codex.exe')
+  return uniqueStrings([
+    ...versionedExecutables.map((entry) => entry.path),
+    existsSync(stableExecutable) ? stableExecutable : null,
+  ])
+}
+
 export function canRunCommand(command: string, args: string[] = []): boolean {
   const result = spawnSync(command, args, {
     stdio: 'ignore',
@@ -120,8 +150,11 @@ export function prependPathEntry(existingPath: string, entry: string): string {
 export function resolveCodexCommand(): string | null {
   const explicit = process.env.CX_CODEX_CODEX_COMMAND?.trim() || process.env.CODEXUI_CODEX_COMMAND?.trim()
   const packageCandidates = getPotentialNpmPrefixes().flatMap(getPotentialCodexExecutables)
+  const desktopCandidates = process.platform === 'win32'
+    ? getWindowsDesktopCodexExecutables()
+    : []
   const fallbackCandidates = process.platform === 'win32'
-    ? [...packageCandidates, 'codex']
+    ? [...desktopCandidates, ...packageCandidates, 'codex']
     : ['codex', ...packageCandidates]
 
   for (const candidate of uniqueStrings([explicit, ...fallbackCandidates])) {

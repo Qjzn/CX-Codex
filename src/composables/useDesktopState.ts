@@ -60,6 +60,7 @@ import type {
   UiRuntimeStatusSummary,
   UiServerRequest,
   UiServerRequestReply,
+  UiTaskPetItem,
   UiThreadTokenUsage,
   UiThread,
 } from '../types/codex'
@@ -154,7 +155,9 @@ const THREAD_MESSAGE_CACHE_MAX_THREADS = 12
 const THREAD_MESSAGE_CACHE_MAX_MESSAGES_PER_THREAD = 24
 const THREAD_MESSAGE_CACHE_TEXT_LIMIT = 6_000
 const THREAD_MESSAGE_CACHE_COMMAND_OUTPUT_LIMIT = 3_000
-const THREAD_LIST_CACHED_BACKGROUND_DELAY_MS = 9500
+// Keep cached rows interactive first, then reconcile the complete project list soon after
+// initial paint. A long wait leaves older projects temporarily undiscoverable.
+const THREAD_LIST_CACHED_BACKGROUND_DELAY_MS = 1800
 const THREAD_LIST_INITIAL_BACKGROUND_DELAY_MS = 1800
 const EVENT_SYNC_DEBOUNCE_MS = 350
 const BACKGROUND_SYNC_INTERVAL_MS = 9000
@@ -198,7 +201,8 @@ const COMPOSER_PLUGIN_INVALIDATING_NOTIFICATION_METHODS = new Set([
 ])
 const MODEL_FALLBACK_ID = 'gpt-5.2-codex'
 const AUTO_COMMIT_MESSAGE_FALLBACK = 'Auto-commit from Codex rollback chat turn'
-const OPTIMISTIC_USER_MESSAGE_TYPE = 'userMessage.optimistic'
+const OPTIMISTIC_USER_MESSAGE_PREFIX = 'optimistic-user:'
+const optimisticUserMessageMetaById = new Map<string, OptimisticUserMessageMeta>()
 
 type FileAttachment = { label: string; path: string; fsPath: string }
 type QueuedMessage = {
@@ -1155,7 +1159,9 @@ function userMessageSignature(message: UiMessage): string {
 }
 
 function parseOptimisticUserMessageMeta(message: UiMessage): OptimisticUserMessageMeta | null {
-  if (message.messageType !== OPTIMISTIC_USER_MESSAGE_TYPE) return null
+  if (!message.id.startsWith(OPTIMISTIC_USER_MESSAGE_PREFIX)) return null
+  const inMemoryMeta = optimisticUserMessageMetaById.get(message.id)
+  if (inMemoryMeta) return inMemoryMeta
   if (!message.rawPayload) return null
 
   try {
@@ -1181,7 +1187,7 @@ function countPersistedUserMessageSignatures(messages: UiMessage[]): Map<string,
   const counts = new Map<string, number>()
   for (const message of messages) {
     if (message.role !== 'user') continue
-    if (message.messageType === OPTIMISTIC_USER_MESSAGE_TYPE) continue
+    if (message.id.startsWith(OPTIMISTIC_USER_MESSAGE_PREFIX)) continue
     const signature = userMessageSignature(message)
     counts.set(signature, (counts.get(signature) ?? 0) + 1)
   }
@@ -1251,6 +1257,7 @@ function upsertMessage(previous: UiMessage[], nextMessage: UiMessage): UiMessage
 type TurnSummaryState = {
   turnId: string
   durationMs: number
+  outcome?: 'completed' | 'interrupted'
 }
 
 type TurnActivityState = {
@@ -1320,10 +1327,20 @@ function formatTurnDuration(durationMs: number): string {
   return parts.join(' ')
 }
 
+function formatInterruptedTurnDuration(durationMs: number): string {
+  if (!Number.isFinite(durationMs) || durationMs < 1000) return '<1 秒'
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes > 0 && seconds > 0) return `${minutes} 分 ${seconds} 秒`
+  if (minutes > 0) return `${minutes} 分`
+  return `${seconds} 秒`
+}
+
 function areTurnSummariesEqual(first?: TurnSummaryState, second?: TurnSummaryState): boolean {
   if (!first && !second) return true
   if (!first || !second) return false
-  return first.turnId === second.turnId && first.durationMs === second.durationMs
+  return first.turnId === second.turnId && first.durationMs === second.durationMs && first.outcome === second.outcome
 }
 
 function areTurnActivitiesEqual(first?: TurnActivityState, second?: TurnActivityState): boolean {
@@ -1338,11 +1355,14 @@ function areTurnActivitiesEqual(first?: TurnActivityState, second?: TurnActivity
 }
 
 function buildTurnSummaryMessage(summary: TurnSummaryState): UiMessage {
+  const wasInterrupted = summary.outcome === 'interrupted'
   return {
     id: `turn-summary:${summary.turnId}`,
     role: 'system',
-    text: `Worked for ${formatTurnDuration(summary.durationMs)}`,
-    messageType: WORKED_MESSAGE_TYPE,
+    text: wasInterrupted
+      ? `已在 ${formatInterruptedTurnDuration(summary.durationMs)} 后停止`
+      : `Worked for ${formatTurnDuration(summary.durationMs)}`,
+    messageType: wasInterrupted ? 'turn.interrupted' : WORKED_MESSAGE_TYPE,
   }
 }
 
@@ -1768,6 +1788,31 @@ export function useDesktopState() {
   const selectedThread = computed(() =>
     allThreads.value.find((thread) => thread.id === selectedThreadId.value) ?? null,
   )
+  const activeTaskPetItems = computed<UiTaskPetItem[]>(() => sourceThreads.value
+    .filter((thread) => (
+      isThreadExecutionActive(thread.id)
+      || (pendingServerRequestsByThreadId.value[thread.id] ?? []).length > 0
+    ))
+    .map((thread) => {
+      const pendingRequest = (pendingServerRequestsByThreadId.value[thread.id] ?? [])[0]
+      const activity = turnActivityByThreadId.value[thread.id]
+      const detail = pendingRequest
+        ? pendingServerRequestStatusLabel(pendingRequest)
+        : localizeActivityText(activity?.label || 'Thinking')
+      const latestActivity = activity?.details.at(-1)?.trim() || ''
+      const state: UiTaskPetItem['state'] = pendingRequest ? 'waiting' : 'running'
+      return {
+        threadId: thread.id,
+        title: thread.title.trim() || thread.preview.trim() || '未命名会话',
+        projectName: thread.projectName.trim(),
+        detail,
+        latestActivity: latestActivity === detail ? '' : latestActivity,
+        state,
+        updatedAtIso: thread.updatedAtIso,
+      }
+    })
+    .sort((first, second) => second.updatedAtIso.localeCompare(first.updatedAtIso))
+    .slice(0, 8))
   const selectedThreadScrollState = computed<ThreadScrollState | null>(
     () => scrollStateByThreadId.value[selectedThreadId.value] ?? null,
   )
@@ -2980,8 +3025,11 @@ export function useDesktopState() {
     }
 
     const nextPromise = resumeThread(normalizedThreadId, { signal: options.signal })
-      .then(() => {
-        markThreadResumed(normalizedThreadId)
+      .then((resumed) => {
+        // The bridge can intentionally return null for a not-yet-materialized thread.
+        // Do not cache that as a successful resume: a later send still needs the live
+        // App Server to prove that this file-backed thread is actionable.
+        if (resumed) markThreadResumed(normalizedThreadId)
       })
       .finally(() => {
         if (resumePromiseByThreadId.get(normalizedThreadId) === nextPromise) {
@@ -3825,8 +3873,9 @@ export function useDesktopState() {
     reconcileLiveThreadState(threadId, false)
   }
 
-  function settleInterruptedThreadState(threadId: string): void {
+  function settleInterruptedThreadState(threadId: string, summary?: TurnSummaryState): void {
     if (!threadId) return
+    if (summary) setTurnSummaryForThread(threadId, summary)
     clearPendingTurnRequest(threadId)
     clearThreadExecutionTracking(threadId)
     setThreadInProgress(threadId, false)
@@ -3985,7 +4034,9 @@ export function useDesktopState() {
   function shouldRefreshThreadListForResume(isFirstAttempt: boolean, now = Date.now()): boolean {
     if (!hasLoadedThreads.value) return true
     if (pendingThreadsRefresh) return true
-    if (androidShellAvailable) return isFirstAttempt
+    if (androidShellAvailable) {
+      return isFirstAttempt && now - lastThreadListSyncAtMs >= ACTIVE_SYNC_THREAD_LIST_INTERVAL_MS
+    }
     return isFirstAttempt && !selectedThreadId.value && now - lastThreadListSyncAtMs >= THREAD_LIST_REFRESH_INTERVAL_MS
   }
 
@@ -4302,7 +4353,6 @@ export function useDesktopState() {
       text: normalizedText,
       images: normalizedImages.length > 0 ? normalizedImages : undefined,
       fileAttachments: normalizedFileAttachments.length > 0 ? normalizedFileAttachments : undefined,
-      messageType: OPTIMISTIC_USER_MESSAGE_TYPE,
     }
     const signature = userMessageSignature(optimisticMessage)
     const persistedCounts = countPersistedUserMessageSignatures(persistedMessagesByThreadId.value[threadId] ?? [])
@@ -4312,7 +4362,7 @@ export function useDesktopState() {
       baselineMatchCount: persistedCounts.get(signature) ?? 0,
       createdAtMs: Date.now(),
     }
-    optimisticMessage.rawPayload = JSON.stringify(meta)
+    optimisticUserMessageMetaById.set(optimisticMessage.id, meta)
 
     optimisticUserMessagesByThreadId.value = {
       ...optimisticUserMessagesByThreadId.value,
@@ -4326,6 +4376,7 @@ export function useDesktopState() {
     const previous = optimisticUserMessagesByThreadId.value[threadId] ?? []
     const next = previous.filter((message) => message.id !== messageId)
     if (next.length === previous.length) return
+    optimisticUserMessageMetaById.delete(messageId)
     optimisticUserMessagesByThreadId.value = {
       ...optimisticUserMessagesByThreadId.value,
       [threadId]: next,
@@ -6974,8 +7025,8 @@ export function useDesktopState() {
     setTurnActivityForThread(threadId, { label: 'Stopping', details: [] })
     pendingThreadMessageRefresh.add(threadId)
     pendingThreadsRefresh = true
+    const startedAtMs = parseIsoTimestamp(runtimeStatusSummaryByThreadId.value[threadId]?.lastStartedAtIso ?? '')
     try {
-      const startedAtMs = parseIsoTimestamp(runtimeStatusSummaryByThreadId.value[threadId]?.lastStartedAtIso ?? '')
       const result = await interruptRuntimeThreadTurn(threadId, turnId, {
         source,
         requestedAtIso: new Date().toISOString(),
@@ -6991,7 +7042,11 @@ export function useDesktopState() {
       } else if (result.status === 'still_running') {
         setRuntimeExecutionState(threadId, 'running', { canStop: true, activeTurnId: turnId })
       } else {
-        settleInterruptedThreadState(threadId)
+        settleInterruptedThreadState(threadId, {
+          turnId,
+          durationMs: startedAtMs ? Math.max(0, Date.now() - startedAtMs) : 0,
+          outcome: 'interrupted',
+        })
       }
       pendingThreadMessageRefresh.add(threadId)
       pendingThreadsRefresh = true
@@ -7005,7 +7060,11 @@ export function useDesktopState() {
         if (isTerminalExecutionError(unknownError)) {
           settleTerminalExecutionError(threadId, unknownError)
         } else {
-          settleInterruptedThreadState(threadId)
+          settleInterruptedThreadState(threadId, {
+            turnId,
+            durationMs: startedAtMs ? Math.max(0, Date.now() - startedAtMs) : 0,
+            outcome: 'interrupted',
+          })
         }
         try {
           await loadMessages(threadId, { silent: true })
@@ -7975,6 +8034,7 @@ export function useDesktopState() {
     projectGroups,
     projectDisplayNameById,
     selectedThread,
+    activeTaskPetItems,
     selectedThreadScrollState,
     selectedThreadServerRequests,
     selectedLiveOverlay,

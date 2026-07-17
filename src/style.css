@@ -29,6 +29,12 @@
   --ui-radius-pill: 999px;
   --ui-radius-composer: 22px;
   --ui-shadow-float: 0 14px 40px rgb(0 0 0 / 0.08);
+  --motion-duration-press: 80ms;
+  --motion-duration-fast: 120ms;
+  --motion-duration-base: 180ms;
+  --motion-duration-panel: 220ms;
+  --motion-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --font-sans-ui: "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei UI", "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-sans-reading: "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-mono-ui: "JetBrains Mono", "SFMono-Regular", "Cascadia Code", "Fira Code", "Consolas", "Liberation Mono", monospace;
@@ -82,6 +88,32 @@ textarea,
 select {
   font: inherit;
   letter-spacing: inherit;
+}
+
+button,
+[role='button'] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (pointer: coarse) {
+  button:not(:disabled):active,
+  [role='button']:not([aria-disabled='true']):active {
+    scale: 0.98;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration-press: 1ms;
+    --motion-duration-fast: 1ms;
+    --motion-duration-base: 1ms;
+    --motion-duration-panel: 1ms;
+  }
+
+  button:not(:disabled):active,
+  [role='button']:not([aria-disabled='true']):active {
+    scale: 1;
+  }
 }
 
 code,

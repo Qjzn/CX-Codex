@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
+import { getWindowsDesktopCodexExecutables } from '../src/commandResolution.js'
 import {
   createAppServerClientInfo,
   normalizePackageVersion,
@@ -474,6 +475,7 @@ try {
   smokeServerRequestReply()
   await smokeServerRequestRoutes()
   await smokeCommandRunner()
+  await smokeWindowsDesktopCodexResolution()
   await smokeAppServerRollbackGit()
   await smokeFileUpload()
   await smokeFileUploadRoute()
@@ -3730,6 +3732,34 @@ async function smokeAppServerRpcCache(): Promise<void> {
   assert.equal(refreshCalls, 1)
   assert.deepEqual(cache.readThreadList(key, true), { value: { rows: ['refreshed'] }, stale: false })
 
+  const staleCatchupCache = new AppServerRpcCache({ threadListCachePath: '' })
+  staleCatchupCache.writeThreadList(key, { rows: ['stale'] })
+  now += 4 * 60_000
+  let catchupCalls = 0
+  let releaseCatchup = (): void => {}
+  const catchupGate = new Promise<void>((resolve) => {
+    releaseCatchup = resolve
+  })
+  const enqueueCatchup = async () => {
+    catchupCalls += 1
+    await catchupGate
+    return { rows: ['caught-up'] }
+  }
+  assert.deepEqual(
+    await staleCatchupCache.executeShareableRead('thread/list', {}, key, enqueueCatchup),
+    { rows: ['stale'] },
+  )
+  const catchupRead = staleCatchupCache.executeShareableRead('thread/list', {}, key, async () => {
+    throw new Error('stale thread/list catch-up should reuse the active refresh')
+  })
+  assert.equal(catchupCalls, 1)
+  releaseCatchup()
+  assert.deepEqual(await catchupRead, { rows: ['caught-up'] })
+  assert.deepEqual(staleCatchupCache.readThreadList(key, true), {
+    value: { rows: ['caught-up'] },
+    stale: false,
+  })
+
   const modelKey = getShareableRpcKey('model/list', {}) ?? ''
   assert.deepEqual(await cache.executeShareableRead('model/list', {}, modelKey, async () => {
     return { models: ['gpt-5'] }
@@ -3759,6 +3789,16 @@ async function smokeAppServerRpcCache(): Promise<void> {
 
   now += 21 * 60_000
   assert.equal(cache.readThreadList(key, false), null)
+
+  const archivedCache = new AppServerRpcCache({ threadListCachePath: '' })
+  const archivedKey = getShareableRpcKey('thread/list', { archived: true, cursor: null, limit: 100 }) ?? ''
+  archivedCache.writeThreadList(archivedKey, { rows: ['archived'] })
+  now += 21 * 60_000
+  assert.equal(archivedCache.readThreadList(archivedKey, false), null)
+  assert.deepEqual(archivedCache.readThreadList(archivedKey, true), {
+    value: { rows: ['archived'] },
+    stale: true,
+  })
 }
 
 function smokeAppServerRpcDiagnostics(): void {
@@ -4379,6 +4419,33 @@ async function smokeCommandRunner(): Promise<void> {
         && error.message.includes('stderr detail')
         && error.message.includes('stdout detail'),
     )
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+}
+
+async function smokeWindowsDesktopCodexResolution(): Promise<void> {
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-desktop-bin-'))
+  try {
+    const binDir = join(tempDir, 'OpenAI', 'Codex', 'bin')
+    const olderDir = join(binDir, 'older-build')
+    const currentDir = join(binDir, 'current-build')
+    await mkdir(olderDir, { recursive: true })
+    await mkdir(currentDir, { recursive: true })
+    const olderExecutable = join(olderDir, 'codex.exe')
+    const currentExecutable = join(currentDir, 'codex.exe')
+    const stableExecutable = join(binDir, 'codex.exe')
+    await writeFile(olderExecutable, 'older')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await writeFile(currentExecutable, 'current')
+    await writeFile(stableExecutable, 'stable')
+
+    assert.deepEqual(getWindowsDesktopCodexExecutables(tempDir), [
+      currentExecutable,
+      olderExecutable,
+      stableExecutable,
+    ])
+    assert.deepEqual(getWindowsDesktopCodexExecutables(join(tempDir, 'missing')), [])
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }

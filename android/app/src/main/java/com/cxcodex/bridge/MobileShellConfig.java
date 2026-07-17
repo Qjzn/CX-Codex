@@ -12,6 +12,11 @@ public final class MobileShellConfig {
     public static final String PREFS_NAME = "CxCodexMobileShell";
     public static final String PREF_SERVER_URL = "serverUrl";
     public static final String PREF_AUTH_KEY = "authKey";
+    public static final String PREF_TASK_PET_ENABLED = "taskPetEnabled";
+    public static final String PREF_TASK_PET_SERVER_URL = "taskPetServerUrl";
+    public static final String PREF_TASK_PET_TASKS_JSON = "taskPetTasksJson";
+    public static final String PREF_TASK_PET_X = "taskPetX";
+    public static final String PREF_TASK_PET_Y = "taskPetY";
 
     private MobileShellConfig() {}
 

@@ -168,31 +168,21 @@
             <p v-if="liveOverlay.errorText" class="live-overlay-error">{{ liveOverlay.errorText }}</p>
           </template>
           <template v-else>
-            <div class="live-overlay-compact-main">
+            <button
+              class="live-overlay-compact-main"
+              type="button"
+              :aria-label="`${liveOverlayCompactLabel}，点击展开运行内容`"
+              @click="openLiveOverlayDetail"
+            >
               <span class="live-overlay-indicator" aria-hidden="true">
                 <span class="live-overlay-indicator-ring" />
                 <span class="live-overlay-indicator-core" />
               </span>
               <div class="live-overlay-compact-copy">
-                <div class="live-overlay-compact-head">
-                  <p class="live-overlay-compact-label">{{ liveOverlayPrimaryLabel(liveOverlay) }}</p>
-                  <span class="live-overlay-dots" aria-hidden="true">
-                    <span class="live-overlay-dot" />
-                    <span class="live-overlay-dot" />
-                    <span class="live-overlay-dot" />
-                  </span>
-                </div>
-                <p class="live-overlay-compact-hint">{{ liveOverlayCompactHint(liveOverlay) }}</p>
+                <p class="live-overlay-compact-label">{{ liveOverlayCompactLabel }}</p>
+                <p class="live-overlay-compact-hint">{{ liveOverlayPrimaryLabel(liveOverlay) }} · 点击展开运行内容</p>
               </div>
-              <button
-                v-if="hasLiveOverlayDetail"
-                class="live-overlay-detail-button"
-                type="button"
-                @click="openLiveOverlayDetail"
-              >
-                详情
-              </button>
-            </div>
+            </button>
           </template>
         </article>
 
@@ -540,6 +530,26 @@
           </div>
         </div>
 
+        <div v-else-if="isInterruptedTurnMessage(entry.message)" class="message-row" data-role="system" data-message-type="turn.interrupted">
+          <div class="message-stack" data-role="system">
+            <section class="interrupted-turn-card" aria-live="polite">
+              <span class="interrupted-turn-dot" aria-hidden="true" />
+              <p class="interrupted-turn-copy">{{ entry.message.text }}</p>
+              <button
+                v-if="interruptedTurnUserMessage"
+                class="interrupted-turn-edit"
+                type="button"
+                :title="isRollbackConfirming(interruptedTurnUserMessage) ? '再次点击确认：将此前指令放回输入框并从此处继续' : '编辑上条指令并从此处继续'"
+                :aria-label="isRollbackConfirming(interruptedTurnUserMessage) ? '确认编辑上条指令并继续' : '编辑上条指令并继续'"
+                @click="onRollback(interruptedTurnUserMessage)"
+              >
+                <IconTablerPencil class="message-action-icon" />
+                <span>{{ isRollbackConfirming(interruptedTurnUserMessage) ? '确认编辑' : '编辑继续' }}</span>
+              </button>
+            </section>
+          </div>
+        </div>
+
         <div
           v-else
           class="message-row"
@@ -872,14 +882,19 @@
             <div v-if="canShowMessageActionBar(entry.message)" class="message-actions">
               <button
                 v-if="canRollbackMessage(entry.message)"
-                class="message-action-button message-action-button--rollback"
-                :class="{ 'is-confirming': isRollbackConfirming(entry.message) }"
+                class="message-action-button"
+                :class="[
+                  entry.message.role === 'user' ? 'message-action-button--edit' : 'message-action-button--rollback',
+                  { 'is-confirming': isRollbackConfirming(entry.message) },
+                ]"
                 type="button"
-                :title="isRollbackConfirming(entry.message) ? '再次点击确认回滚' : '回滚到这条消息，并移除其后的当前轮次内容'"
+                :title="isRollbackConfirming(entry.message) ? '再次点击确认操作' : entry.message.role === 'user' ? '编辑这条指令并从此处继续' : '回滚到这条消息，并移除其后的当前轮次内容'"
+                :aria-label="isRollbackConfirming(entry.message) ? '确认操作' : entry.message.role === 'user' ? '编辑并从此处继续' : '回滚到这条消息'"
                 @click.stop="onRollback(entry.message)"
               >
-                <IconTablerArrowBackUp class="message-action-icon" />
-                <span class="message-action-label">{{ isRollbackConfirming(entry.message) ? '确认回滚' : '回滚' }}</span>
+                <IconTablerPencil v-if="entry.message.role === 'user'" class="message-action-icon" />
+                <IconTablerArrowBackUp v-else class="message-action-icon" />
+                <span class="message-action-label">{{ isRollbackConfirming(entry.message) ? '确认操作' : entry.message.role === 'user' ? '编辑继续' : '回滚' }}</span>
               </button>
               <div v-if="canFavoriteMessage(entry.message) || canCopyMessage(entry.message)" class="message-actions-main">
                 <button
@@ -888,6 +903,7 @@
                   :class="{ 'is-favorited': isFavoriteMessage(entry.message) }"
                   type="button"
                   :title="isFavoriteMessage(entry.message) ? '取消收藏这条消息' : '收藏这条消息'"
+                  :aria-label="isFavoriteMessage(entry.message) ? '取消收藏这条消息' : '收藏这条消息'"
                   @click.stop="onToggleFavorite(entry.message)"
                 >
                   <IconTablerBookmark class="message-action-icon" :filled="isFavoriteMessage(entry.message)" />
@@ -898,6 +914,7 @@
                   class="message-action-button"
                   type="button"
                   title="复制消息内容"
+                  aria-label="复制消息内容"
                   @click.stop="onCopyMessage(entry.message)"
                 >
                   <IconTablerCopy class="message-action-icon" />
@@ -1075,6 +1092,7 @@ import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerBookmark from '../icons/IconTablerBookmark.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
+import IconTablerPencil from '../icons/IconTablerPencil.vue'
 import LoadingInline from './LoadingInline.vue'
 import { isNativeAndroidShell, openMobileShellUrl } from '../../mobile/mobileShell'
 
@@ -1136,6 +1154,10 @@ if (typeof window !== 'undefined') {
 
 function isCommandMessage(message: UiMessage): boolean {
   return message.messageType === 'commandExecution' && !!message.commandExecution
+}
+
+function isInterruptedTurnMessage(message: UiMessage): boolean {
+  return message.messageType === 'turn.interrupted'
 }
 
 function isRunningCommandMessage(message: UiMessage): boolean {
@@ -1924,14 +1946,7 @@ const hasVisibleLiveAgentText = computed(() => props.messages.some(isStreamingAg
 const hasLiveOverlayDetail = computed<boolean>(() => {
   const overlay = props.liveOverlay
   if (!overlay) return false
-  return Boolean(
-    overlayPrimaryPendingRequest.value ||
-    liveOverlayCommandMessage.value ||
-    liveOverlayCommandOutput.value ||
-    overlay.reasoningText.trim().length > 0 ||
-    overlay.errorText.trim().length > 0 ||
-    liveOverlayDetails(overlay).length > 0,
-  )
+  return true
 })
 const showInlineLiveOverlay = computed<boolean>(() => {
   const overlay = props.liveOverlay
@@ -1971,6 +1986,14 @@ const liveOverlayBehaviorSignature = computed<string>(() => {
 const liveOverlayElapsedLabel = computed(() => {
   if (!props.liveOverlay || liveOverlayObservedAtMs.value <= 0) return ''
   return formatHandledDuration(Math.max(0, commandElapsedNowMs.value - liveOverlayObservedAtMs.value))
+})
+const liveOverlayCompactLabel = computed(() => `正在运行 ${liveOverlayElapsedLabel.value || '<1 秒'}`)
+const interruptedTurnUserMessage = computed<UiMessage | null>(() => {
+  for (let index = props.messages.length - 1; index >= 0; index -= 1) {
+    const message = props.messages[index]
+    if (message.role === 'user' && message.text.trim().length > 0) return message
+  }
+  return null
 })
 const jumpToLatestTitle = computed(() => (
   hasPendingBelowFoldUpdates.value ? '跳到最新输出' : '回到底部'
@@ -5489,7 +5512,7 @@ onBeforeUnmount(() => {
   touch-action: pan-y;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--ui-text-tertiary) 42%, transparent) transparent;
-  transition: opacity 140ms ease, transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
 .conversation-list::-webkit-scrollbar {
@@ -5514,7 +5537,6 @@ onBeforeUnmount(() => {
 
 .conversation-list--switching {
   opacity: 0.9;
-  transform: translateY(1px);
 }
 
 .conversation-jump-to-latest {
@@ -5870,24 +5892,12 @@ onBeforeUnmount(() => {
   max-width: min(38rem, 100%);
 }
 
+.live-overlay-inline-compact::after {
+  display: none;
+}
+
 .live-overlay-inline::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(110deg, transparent 0%, rgba(255, 255, 255, 0.34) 46%, transparent 100%);
-  transform: translateX(-130%);
-  opacity: 0;
-}
-
-.live-overlay-inline-thinking::after {
-  opacity: 1;
-  animation: liveOverlaySweep 2.8s ease-in-out infinite;
-}
-
-.live-overlay-inline-command::after {
-  opacity: 1;
-  animation: liveOverlaySweep 1.9s ease-in-out infinite;
+  display: none;
 }
 
 .live-overlay-head {
@@ -5900,16 +5910,12 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-indicator-ring {
-  @apply absolute inset-[3px] rounded-full border;
-  display: block;
-  border-color: rgba(15, 118, 110, 0.18);
-  border-top-color: rgba(15, 118, 110, 0.88);
-  animation: liveOverlaySpin 1.2s linear infinite;
+  display: none;
 }
 
 .live-overlay-indicator-core {
   @apply block h-2 w-2 rounded-full bg-[#0f766e];
-  animation: liveOverlayCorePulse 1.35s ease-in-out infinite;
+  animation: liveOverlayCorePulse 1.4s var(--motion-ease-standard) infinite;
 }
 
 .live-overlay-heading {
@@ -5917,7 +5923,19 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-compact-main {
-  @apply flex items-center gap-2;
+  @apply flex w-full items-center gap-2 border-0 bg-transparent p-0 text-left;
+  color: inherit;
+}
+
+.live-overlay-compact-main:hover .live-overlay-compact-label,
+.live-overlay-compact-main:focus-visible .live-overlay-compact-label {
+  color: var(--ui-accent);
+}
+
+.live-overlay-compact-main:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ui-accent) 35%, transparent);
+  outline-offset: 3px;
+  border-radius: var(--ui-radius-control);
 }
 
 .live-overlay-compact-copy {
@@ -5929,7 +5947,16 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-inline-compact .live-overlay-indicator {
-  @apply h-6 w-6;
+  @apply h-5 w-5 border-0 bg-transparent;
+}
+
+.live-overlay-inline-compact .live-overlay-indicator-ring {
+  display: none;
+}
+
+.live-overlay-inline-compact .live-overlay-indicator-core {
+  @apply h-2 w-2;
+  animation: liveOverlayCorePulse 1.4s var(--motion-ease-standard) infinite;
 }
 
 .live-overlay-label {
@@ -5947,17 +5974,14 @@ onBeforeUnmount(() => {
 .live-overlay-dot {
   @apply h-1.5 w-1.5 rounded-full bg-[#0f766e];
   opacity: 0.28;
-  animation: liveOverlayDotPulse 1.05s ease-in-out infinite;
 }
 
 .live-overlay-dot:nth-child(2) {
   opacity: 0.52;
-  animation-delay: 0.14s;
 }
 
 .live-overlay-dot:nth-child(3) {
   opacity: 0.78;
-  animation-delay: 0.28s;
 }
 
 .live-overlay-detail-list {
@@ -6685,12 +6709,22 @@ onBeforeUnmount(() => {
 }
 
 .message-action-button {
-  @apply opacity-0 inline-flex min-h-8 items-center gap-1 self-start border border-transparent px-2 py-0.5 text-[11px] shadow-sm transition-[background-color,border-color,color,opacity] duration-150;
+  @apply opacity-0 inline-flex h-8 w-8 items-center justify-center self-start border border-transparent p-0 text-[11px] shadow-sm;
   border-radius: var(--ui-radius-control);
   background: color-mix(in srgb, var(--ui-bg-surface) 88%, transparent);
   color: var(--ui-text-tertiary);
   box-shadow: 0 6px 14px rgb(0 0 0 / 0.05);
   pointer-events: auto;
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-ease-standard),
+    border-color var(--motion-duration-fast) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard),
+    opacity var(--motion-duration-fast) var(--motion-ease-standard),
+    transform var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+.message-action-button:active {
+  transform: scale(0.96);
 }
 
 .message-action-button:hover {
@@ -6712,6 +6746,12 @@ onBeforeUnmount(() => {
   color: var(--ui-danger);
 }
 
+.message-action-button--edit {
+  border-color: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-accent) 5%, var(--ui-bg-surface));
+  color: var(--ui-accent);
+}
+
 .message-action-button--rollback:hover {
   border-color: color-mix(in srgb, var(--ui-danger) 34%, var(--ui-border-strong));
   background: color-mix(in srgb, var(--ui-danger) 9%, var(--ui-bg-surface));
@@ -6731,7 +6771,38 @@ onBeforeUnmount(() => {
 }
 
 .message-action-label {
-  @apply leading-none;
+  @apply sr-only;
+}
+
+.interrupted-turn-card {
+  @apply flex w-full items-center gap-2 border px-3 py-2;
+  max-width: min(38rem, 100%);
+  border-radius: var(--ui-radius-card);
+  border-color: color-mix(in srgb, var(--ui-warning) 26%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-warning) 6%, var(--ui-bg-surface));
+}
+
+.interrupted-turn-dot {
+  @apply h-2 w-2 shrink-0 rounded-full;
+  background: var(--ui-warning);
+}
+
+.interrupted-turn-copy {
+  @apply m-0 min-w-0 flex-1 text-xs font-medium;
+  color: var(--ui-text-secondary);
+}
+
+.interrupted-turn-edit {
+  @apply inline-flex h-8 shrink-0 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold transition;
+  border-color: color-mix(in srgb, var(--ui-accent) 22%, var(--ui-border-subtle));
+  background: var(--ui-bg-surface);
+  color: var(--ui-accent);
+}
+
+.interrupted-turn-edit:hover,
+.interrupted-turn-edit:focus-visible {
+  border-color: color-mix(in srgb, var(--ui-accent) 40%, var(--ui-border-strong));
+  background: var(--ui-bg-row-hover);
 }
 
 .guided-turn-toggle {
@@ -6985,7 +7056,6 @@ onBeforeUnmount(() => {
   margin-right: 0.35rem;
   border-radius: 9999px;
   background: currentColor;
-  animation: liveOverlayCorePulse 1.15s ease-in-out infinite;
   vertical-align: middle;
 }
 
@@ -7094,21 +7164,6 @@ onBeforeUnmount(() => {
   }
 }
 
-@keyframes liveOverlaySweep {
-  0% {
-    transform: translateX(-130%);
-  }
-  100% {
-    transform: translateX(130%);
-  }
-}
-
-@keyframes liveOverlaySpin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @keyframes liveOverlayCorePulse {
   0%,
   100% {
@@ -7121,15 +7176,4 @@ onBeforeUnmount(() => {
   }
 }
 
-@keyframes liveOverlayDotPulse {
-  0%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.24;
-  }
-  45% {
-    transform: translateY(-2px);
-    opacity: 0.96;
-  }
-}
 </style>
