@@ -77,7 +77,8 @@ const skillDirPath = computed(() => {
 function onBrowse(): void {
   const dir = skillDirPath.value
   if (!dir) return
-  window.open(`/codex-local-browse${encodeURI(dir)}`, '_blank', 'noopener,noreferrer')
+  const browsePath = dir.startsWith('/') ? dir : `/${dir}`
+  window.open(`/codex-local-browse${encodeURI(browsePath)}`, '_blank', 'noopener,noreferrer')
 }
 
 const publishedLabel = computed(() => {

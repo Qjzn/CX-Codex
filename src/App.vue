@@ -3389,7 +3389,8 @@ function onBrowseThreadFiles(threadId: string): void {
     }
   }
   if (!targetCwd || typeof window === 'undefined') return
-  window.open(`/codex-local-browse${encodeURI(targetCwd)}`, '_blank', 'noopener,noreferrer')
+  const browsePath = targetCwd.startsWith('/') ? targetCwd : `/${targetCwd}`
+  window.open(`/codex-local-browse${encodeURI(browsePath)}`, '_blank', 'noopener,noreferrer')
 }
 
 function onStartNewThreadFromToolbar(): void {

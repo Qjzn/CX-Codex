@@ -12884,3 +12884,31 @@ This file tracks manual regression and feature verification steps.
 - The running surface keeps one calm pulse and no longer combines sweep, spinner, and jumping-dot animations.
 - Sidebar skeleton sheen runs once instead of indefinitely.
 - Reduced-motion mode removes transforms and continuous status animation while preserving all content and actions.
+
+### Feature: Windows local browse paths
+
+#### Prerequisites
+
+- Build and start CX-Codex from Windows.
+- Keep an existing thread and an installed skill under a drive-letter path such as `D:\Workspaces\Example Project`.
+- Include a directory whose name contains spaces or Chinese characters.
+
+#### Steps
+
+1. Open the existing thread and use its toolbar action to browse the working directory.
+2. Open the Skills view and browse files from a skill card.
+3. Open the same skill's detail modal and browse its files again.
+4. Inspect each opened URL and confirm `/codex-local-browse/` appears before the encoded drive-letter path.
+5. Navigate through the directory containing spaces or Chinese characters.
+
+#### Expected Results
+
+- Thread and skill browse actions open the intended Windows directory.
+- The drive letter remains part of the route path instead of being interpreted as a URL route name.
+- Spaces and Chinese path segments remain intact after URL encoding and server-side decoding.
+- Existing POSIX absolute-path browsing remains unchanged.
+
+#### Rollback/Cleanup Notes
+
+- No data cleanup is required.
+- Revert the browse-path normalization in `src/App.vue`, `src/components/content/SkillCard.vue`, and `src/components/content/SkillDetailModal.vue`, then remove this test section to roll back.
