@@ -12912,3 +12912,32 @@ This file tracks manual regression and feature verification steps.
 
 - No data cleanup is required.
 - Revert the browse-path normalization in `src/App.vue`, `src/components/content/SkillCard.vue`, and `src/components/content/SkillDetailModal.vue`, then remove this test section to roll back.
+
+### Feature: Source and configuration file preview
+
+#### Prerequisites
+
+- Build and start CX-Codex.
+- Prepare representative source and configuration files, including `.ts`, `.vue`, `.java`, `.py`, `.go`, `.ps1`, and `.sql`.
+- Keep at least one existing Markdown, PDF, Word, and image file available for regression checks.
+
+#### Steps
+
+1. Open the local file browser and navigate to the prepared files.
+2. Confirm each supported source or configuration file exposes the preview action.
+3. Open each file and inspect the rendered text preview.
+4. Repeat with a file whose path contains spaces or Chinese characters.
+5. Open the existing Markdown, PDF, Word, and image files and verify their original preview modes.
+6. Open a text-editable file and confirm its existing edit and save actions remain available.
+
+#### Expected Results
+
+- Supported source and configuration extensions open in the text preview page.
+- File content remains readable and the full path survives URL encoding and decoding.
+- Existing Markdown, PDF, Word, image, download, edit, and save behavior remains unchanged.
+- Unsupported binary files do not incorrectly expose a text preview action.
+
+#### Rollback/Cleanup Notes
+
+- No generated data requires cleanup.
+- Revert the source-extension additions in `src/localPreview.ts` and `src/server/localBrowseUi.ts`, then remove this test section to roll back.
