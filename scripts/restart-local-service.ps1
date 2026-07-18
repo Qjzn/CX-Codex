@@ -128,10 +128,12 @@ foreach ($listenerProcessId in $remainingListeners) {
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $outLog = Join-Path $logDir "cx-codex-$Port-$timestamp.out.log"
 $errLog = Join-Path $logDir "cx-codex-$Port-$timestamp.err.log"
+$quotedDistCliPath = '"' + $distCliPath + '"'
+$quotedConfigPath = '"' + $ConfigPath + '"'
 
 $process = Start-Process `
   -FilePath $NodePath `
-  -ArgumentList @($distCliPath, "--config", $ConfigPath) `
+  -ArgumentList @($quotedDistCliPath, "--config", $quotedConfigPath) `
   -WorkingDirectory $repoRoot `
   -WindowStyle Hidden `
   -RedirectStandardOutput $outLog `
