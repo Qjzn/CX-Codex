@@ -44,6 +44,7 @@
       :class="{
         'thread-composer-shell--no-top-radius': hasQueueAbove,
         'thread-composer-shell--dictation-inserted': dictationInsertFlash,
+        'thread-composer-shell--expanded': isComposerExpanded,
       }"
     >
       <div v-if="selectedImages.length > 0" class="thread-composer-attachments">
@@ -186,6 +187,7 @@
           ref="inputRef"
           v-model="draft"
           class="thread-composer-input"
+          :class="{ 'thread-composer-input--expanded': isComposerExpanded }"
           rows="1"
           :placeholder="placeholderText"
           :disabled="isInteractionDisabled"
@@ -520,6 +522,17 @@
               || dictationState === 'transcribing',
           }"
         >
+          <button
+            class="thread-composer-expand"
+            type="button"
+            :aria-label="isComposerExpanded ? '收起长文输入框' : '展开为半屏长文输入框'"
+            :title="isComposerExpanded ? '收起输入框' : '展开长文输入框'"
+            :disabled="isInteractionDisabled"
+            @click="toggleComposerExpanded"
+          >
+            <IconTablerArrowsMinimize v-if="isComposerExpanded" class="thread-composer-expand-icon" />
+            <IconTablerArrowsMaximize v-else class="thread-composer-expand-icon" />
+          </button>
           <div
             v-if="dictationState === 'recording' && !usesNativeDictation"
             class="thread-composer-dictation-waveform-wrap"
@@ -653,6 +666,8 @@ import type {
 import { useDictation } from '../../composables/useDictation'
 import { searchComposerFiles, uploadFile, type ComposerFileSuggestion } from '../../api/codexGateway'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
+import IconTablerArrowsMaximize from '../icons/IconTablerArrowsMaximize.vue'
+import IconTablerArrowsMinimize from '../icons/IconTablerArrowsMinimize.vue'
 import IconTablerBolt from '../icons/IconTablerBolt.vue'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
@@ -751,6 +766,7 @@ type FolderUploadGroup = {
 type DictationFeedbackTone = 'neutral' | 'success' | 'error'
 
 const draft = ref('')
+const isComposerExpanded = ref(false)
 const selectedImages = ref<SelectedImage[]>([])
 const selectedSkills = ref<SkillItem[]>([])
 const selectedPlugins = ref<ComposerPluginSelection[]>([])
@@ -1916,9 +1932,13 @@ function onInputKeydown(event: KeyboardEvent): void {
     }
   }
 
-  const shouldSend = props.sendWithEnter !== false
-    ? event.key === 'Enter' && !event.shiftKey
-    : event.key === 'Enter' && (event.metaKey || event.ctrlKey)
+  if (event.isComposing || event.keyCode === 229) return
+
+  const shouldSend = event.key === 'Enter' && (
+    event.metaKey ||
+    event.ctrlKey ||
+    (props.sendWithEnter !== false && !event.shiftKey)
+  )
   if (shouldSend) {
     event.preventDefault()
     onSubmit(resolveSubmitMode())
@@ -1936,6 +1956,11 @@ function onInputKeydown(event: KeyboardEvent): void {
       return
     }
   }
+}
+
+function toggleComposerExpanded(): void {
+  isComposerExpanded.value = !isComposerExpanded.value
+  nextTick(() => inputRef.value?.focus())
 }
 
 function closeSlashMenu(): void {
@@ -2099,8 +2124,18 @@ function onDocumentClick(event: MouseEvent): void {
 
 function onDocumentKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return
-  if (isAttachMenuOpen.value) closeAttachMenu()
-  if (isRuntimeSettingsOpen.value) closeRuntimeSettings()
+  if (isAttachMenuOpen.value) {
+    closeAttachMenu()
+    return
+  }
+  if (isRuntimeSettingsOpen.value) {
+    closeRuntimeSettings()
+    return
+  }
+  if (isComposerExpanded.value) {
+    isComposerExpanded.value = false
+    inputRef.value?.focus()
+  }
 }
 
 function syncCompactViewport(): void {
@@ -2262,6 +2297,22 @@ watch(
 
 .thread-composer-shell--no-top-radius {
   @apply rounded-t-none border-t-0;
+}
+
+.thread-composer-shell--expanded {
+  display: flex;
+  height: min(50dvh, 36rem);
+  flex-direction: column;
+}
+
+.thread-composer-shell--expanded .thread-composer-input-wrap {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.thread-composer-shell--expanded .thread-composer-controls {
+  margin-top: auto;
 }
 
 .thread-composer-attachments {
@@ -2468,12 +2519,34 @@ watch(
   @apply bg-zinc-100 text-zinc-500 cursor-not-allowed;
 }
 
+.thread-composer-input--expanded {
+  height: 100%;
+  max-height: none;
+}
+
 .thread-composer-controls {
   @apply relative mt-1.5 flex items-center gap-2 sm:gap-2.5 overflow-visible;
 }
 
 .thread-composer-controls--recording {
   @apply gap-1 sm:gap-2;
+}
+
+.thread-composer-expand {
+  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center border border-transparent bg-transparent transition disabled:cursor-not-allowed disabled:opacity-50;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-secondary);
+}
+
+.thread-composer-expand:hover,
+.thread-composer-expand:focus-visible {
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+.thread-composer-expand-icon {
+  @apply h-4 w-4;
 }
 
 .thread-composer-attach {
@@ -3005,6 +3078,15 @@ watch(
   .thread-composer-dictation-processing-dot {
     animation: none;
   }
+
+  .thread-composer-expand,
+  .thread-composer-attach-trigger,
+  .thread-composer-runtime-trigger,
+  .thread-composer-mic,
+  .thread-composer-submit,
+  .thread-composer-stop {
+    transform: none !important;
+  }
 }
 
 .thread-composer-submit {
@@ -3039,6 +3121,39 @@ watch(
   @apply h-5 w-5;
 }
 
+.thread-composer-expand,
+.thread-composer-attach-trigger,
+.thread-composer-mic,
+.thread-composer-submit,
+.thread-composer-stop {
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-ease-standard),
+    border-color var(--motion-duration-fast) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard),
+    opacity var(--motion-duration-fast) var(--motion-ease-standard),
+    transform var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+.thread-composer-expand:active:not(:disabled),
+.thread-composer-attach-trigger:active:not(:disabled),
+.thread-composer-mic:active:not(:disabled),
+.thread-composer-submit:active:not(:disabled),
+.thread-composer-stop:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.thread-composer-runtime-trigger {
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard),
+    opacity var(--motion-duration-fast) var(--motion-ease-standard),
+    transform var(--motion-duration-fast) var(--motion-ease-out);
+}
+
+.thread-composer-runtime-trigger:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
 .thread-composer-hidden-input {
   @apply hidden;
 }
@@ -3063,7 +3178,16 @@ watch(
   .thread-composer-controls {
     @apply mt-1 items-center gap-1.5;
     display: grid;
-    grid-template-columns: 2.25rem minmax(0, 1fr) auto;
+    grid-template-columns: 2.75rem minmax(0, 1fr) auto;
+  }
+
+  .thread-composer-expand,
+  .thread-composer-attach-trigger,
+  .thread-composer-mic,
+  .thread-composer-submit,
+  .thread-composer-stop {
+    width: 2.75rem;
+    height: 2.75rem;
   }
 
   .thread-composer-attach {
@@ -3096,7 +3220,7 @@ watch(
   .thread-composer-mic,
   .thread-composer-submit,
   .thread-composer-stop {
-    @apply h-9 w-9;
+    @apply h-11 w-11;
   }
 
   .thread-composer-attach-menu {

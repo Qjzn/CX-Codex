@@ -17,6 +17,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 ## 快速入口
 
 - 最新 Release: [github.com/Qjzn/CX-Codex/releases/latest](https://github.com/Qjzn/CX-Codex/releases/latest)
+- 2.4.0 发布说明: [docs/release-notes-2.4.0.zh-CN.md](./docs/release-notes-2.4.0.zh-CN.md)
 - 2.3.1 发布说明: [docs/release-notes-2.3.1.zh-CN.md](./docs/release-notes-2.3.1.zh-CN.md)
 - 2.3.0 发布说明: [docs/release-notes-2.3.0.zh-CN.md](./docs/release-notes-2.3.0.zh-CN.md)
 - Windows 一条命令安装: [快速安装](#快速安装)
@@ -46,6 +47,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 
 - 本机 Codex 浏览器入口：复用本机 Codex、项目目录和登录态，不重建复杂云端账号体系。
 - Android / 手机友好：支持移动端连接地址持久化、密钥持久化、无感重登、前台恢复补同步。
+- CX 电子宠物浮窗：在其他 App 上层查看真实任务进展、快速进入最近会话或直接回复；待命自动缩成小气泡，完成记录读后再清理。
 - 状态更可靠：减少任务结束后仍显示“思考中”、任务执行中无状态、线程切换慢和移动端恢复卡顿。
 - Windows 友好部署：提供 Windows bootstrap、固定端口、服务脚本、发布包和常见排障文档。
 - 自托管远程访问：可用于局域网、VPN、Tailscale、frp、Nginx、Caddy 或 Cloudflare Tunnel。

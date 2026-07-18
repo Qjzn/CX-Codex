@@ -23,17 +23,31 @@ import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
 
+    private boolean initialCreateComplete;
+    private String pendingTaskPetThreadId = "";
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(MobileShellPlugin.class);
         config = buildConfig();
         super.onCreate(savedInstanceState);
+        initialCreateComplete = true;
 
         if (MobileShellConfig.getStoredServerUrl(this).isEmpty()) {
             showServerSetupScreen();
         } else {
             configureWebViewDownloadListener();
+            captureTaskPetThreadFromIntent(getIntent());
+            openPendingTaskPetThread();
         }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        captureTaskPetThreadFromIntent(intent);
+        if (initialCreateComplete) openPendingTaskPetThread();
     }
 
     @Override
@@ -41,6 +55,34 @@ public class MainActivity extends BridgeActivity {
         super.onResume();
         configureWebViewDownloadListener();
         MobileShellPlugin.retryPendingApkInstall(this);
+        captureTaskPetThreadFromIntent(getIntent());
+        openPendingTaskPetThread();
+    }
+
+    private void captureTaskPetThreadFromIntent(Intent intent) {
+        if (intent == null || !intent.hasExtra(TaskPetOverlayService.EXTRA_THREAD_ID)) {
+            return;
+        }
+        String threadId = intent.getStringExtra(TaskPetOverlayService.EXTRA_THREAD_ID);
+        intent.removeExtra(TaskPetOverlayService.EXTRA_THREAD_ID);
+        if (threadId == null || threadId.trim().isEmpty()) {
+            return;
+        }
+        pendingTaskPetThreadId = threadId.trim();
+    }
+
+    private void openPendingTaskPetThread() {
+        if (!initialCreateComplete || pendingTaskPetThreadId.isEmpty()) return;
+        String serverUrl = MobileShellConfig.getStoredServerUrl(this);
+        if (serverUrl.isEmpty()) {
+            return;
+        }
+        String threadId = pendingTaskPetThreadId;
+        String targetUrl = serverUrl + "/#/thread/" + Uri.encode(threadId);
+        if (bridge != null && bridge.getWebView() != null) {
+            pendingTaskPetThreadId = "";
+            bridge.getWebView().post(() -> bridge.getWebView().loadUrl(targetUrl));
+        }
     }
 
     private void configureWebViewDownloadListener() {

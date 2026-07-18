@@ -78,9 +78,11 @@ export function isMcpToolPermissionRequest(method: string, params: unknown): boo
   if (!isMcpElicitationRequestMethod(method)) return false
   const payload = readMcpElicitationPayload(params)
   const message = readString(payload?.message).trim()
-  if (/^Allow\s+the\s+.+?\s+MCP\s+server\s+to\s+run\s+tool\s+["“][^"”]+["”]\??$/iu.test(message)) {
+  if (/^Allow\s+(?:the\s+.+?\s+MCP\s+server|.+?)\s+to\s+run\s+tool\s+["'“”‘’][^"'“”‘’]+["'“”‘’]\??$/iu.test(message)) {
     return true
   }
+  const metadata = asRecord(payload?._meta)
+  if (metadata?.codex_approval_kind === 'mcp_tool_call') return true
   const serverName = readString(payload?.serverName || payload?.server).trim()
   const toolName = readString(payload?.toolName || payload?.tool).trim()
   return serverName.length > 0 && toolName.length > 0
@@ -132,7 +134,12 @@ export function shouldAutoApproveServerRequest(
 
 export function buildAutoApprovalResult(method: string, params: unknown): unknown {
   if (isMcpToolPermissionRequest(method, params)) {
-    return { action: 'accept' }
+    const payload = readMcpElicitationPayload(params)
+    const metadata = asRecord(payload?._meta)
+    const persistValues = Array.isArray(metadata?.persist) ? metadata.persist : [metadata?.persist]
+    return persistValues.includes('session')
+      ? { action: 'accept', content: {}, _meta: { persist: 'session' } }
+      : { action: 'accept', content: {} }
   }
   return { decision: 'acceptForSession' }
 }

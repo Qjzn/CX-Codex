@@ -2,6 +2,383 @@
 
 This file tracks manual regression and feature verification steps.
 
+## New-conversation first-turn feedback budget (2026-07-17)
+
+### Automated verification
+
+1. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -MeasureNewThreadFeedback -CaptureScreenshots`.
+2. The optional gate opens the 393 x 852 home composer, isolates that browser session offline, submits a unique probe, and verifies that the empty home state is immediately replaced by one provisional conversation bubble plus the stable running timeline.
+3. The provisional view is memory-only. The existing durable outbox remains the recovery authority, and the real thread adopts the same optimistic message id after `thread/start` succeeds.
+
+### Performance budgets
+
+- Composer submit handler to provisional conversation state: at most 50 ms.
+- Composer submit handler to first visible user bubble: at most 200 ms.
+- Composer submit handler to first visible running feedback: at most 200 ms.
+- While the first thread is being established, the composer is disabled to prevent accidental duplicate submission; no provisional row is inserted into the sidebar.
+
+### Regression evidence (2026-07-17)
+
+- The full captured 7420 frontend regression passed with `stateCommitMs=1`, `bubbleVisibleMs=41`, and `runningVisibleMs=41` while the browser session was offline.
+- The probe rendered exactly one user bubble, retained a continuous elapsed-time row, converged to one durable `发送失败 / 编辑 / 重试` state, and reused the same DOM message id through a second bounded offline retry. Choosing `编辑` restored the exact content to the composer and cleared only the known-failed attempt.
+- A separate delayed-runtime probe created a real thread, entered its route while the first `/runtime/send` was still pending, preserved one bubble and one running timeline, then archived the synthetic thread after verification.
+- Screenshot evidence: `output/regression-7420/frontend-ui-regression/new-thread-feedback-budget-phone.png`, `new-thread-failed-retry-phone.png`, and `new-thread-authoritative-handoff-phone.png`.
+- `npm.cmd run build:frontend` passed before the captured regression.
+
+## Mobile response round-trip latency budget (2026-07-17)
+
+### Automated verification
+
+1. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -ThreadId <idle-regression-thread-id> -MeasureResponseFeedback -CaptureScreenshots`.
+2. This optional gate sends one real, uniquely labelled `请只回复：7420-ACK-...` turn into the supplied thread. Use a regression thread because the authoritative user and assistant messages remain in its history.
+3. The page-side metric correlates the composer submit, first runtime dispatch, accepted `clientMessageId` / `turnId`, `turn/started`, first assistant data, and first visible assistant frame without storing prompt or response text.
+
+### Performance budgets
+
+- Submit to first `/runtime/send` dispatch: at most 500 ms.
+- Submit to authoritative server acknowledgement: at most 5000 ms.
+- Submit to first assistant data: at most 45000 ms; this broad stability ceiling includes model latency.
+- First assistant data to the first rendered response frame: at most 250 ms.
+
+### Regression evidence (2026-07-17)
+
+- The first live probe exposed an unnecessary idle-send preflight and failed the 500 ms dispatch budget. The optimistic state created by the current send was being mistaken for an older execution that required message and pending-request recovery.
+- Restricting that recovery to threads that were already running before submit reduced dispatch to `111 ms`. The final message-id-correlated full 7420 phone run measured server acknowledgement at `119 ms`, `turn/started` at `188 ms`, first assistant data at `2722 ms`, first visible response at `2755 ms`, and data-to-paint overhead at `33 ms`.
+- Screenshot evidence: `output/regression-7420/frontend-ui-regression/response-feedback-budget-phone.png`.
+- `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the complete frontend regression, PowerShell parser validation, and `git diff --check` passed.
+
+## Mobile send-feedback latency budget (2026-07-17)
+
+### Automated verification
+
+1. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -ThreadId <idle-thread-id> -MeasureSendFeedback -CaptureScreenshots`.
+2. The optional gate opens the real thread at 393 x 852, switches only that isolated browser session offline, submits a unique local probe, reads `window.__cxCodexChatFeedbackMetrics`, and cleans the outbox before restoring the network.
+3. Confirm the probe creates exactly one optimistic bubble and no `/runtime/send` request can reach 7420 while the browser context is offline.
+
+### Performance budgets
+
+- Composer submit handler to committed optimistic message plus running state: at most 50 ms.
+- Composer submit handler to the first rendered user bubble frame: at most 200 ms.
+- Composer submit handler to the first rendered running-feedback frame: at most 200 ms.
+- Metrics retain only the latest 20 rows and record thread/request/message ids plus timings; message text and attachments are never copied into the diagnostics surface.
+
+### Regression evidence (2026-07-17)
+
+- Four manual offline phone samples measured state commit at `8, 8, 8, 10 ms`, bubble visibility at `69, 70, 71, 111 ms`, and running visibility at the same `69, 70, 71, 111 ms`.
+- The final automated full 7420 run passed with `stateCommitMs=9`, `bubbleVisibleMs=120`, and `runningVisibleMs=120`; the real thread first screen remained `317 ms` page-side while the external observer reported `5132 ms`.
+- After removing the redundant idle-send recovery preflight, the same offline gate passed again with `stateCommitMs=9`, `bubbleVisibleMs=52`, and `runningVisibleMs=52`.
+- Screenshot evidence: `output/regression-7420/frontend-ui-regression/send-feedback-budget-phone.png`.
+- `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, and `git diff --check` passed for the timing implementation.
+
+## Background plugin RPC contention control (2026-07-17)
+
+### Expected results
+
+- `turn/start`, `thread/start`, `thread/resume`, interrupt, and approval responses retain the highest queue priority.
+- Slow metadata reads `plugin/list` and `mcpServerStatus/list` use background priority 5, behind interactive thread reads and task control.
+- Concurrent requests with identical method and params share one in-flight App Server read. Results are not persistently cached, so plugin reload behavior remains unchanged.
+
+### Regression evidence (2026-07-17)
+
+- `npm.cmd run build:cli` and `npm.cmd run verify:server-modules` passed priority and shareable-key assertions.
+- After restarting local 7420 with the rebuilt CLI, three simultaneous HTTP `plugin/list` calls produced exactly one App Server RPC (`3139 ms`) and returned with `pendingRpcCount=0`, `queuedRpcCount=0`.
+- This removes duplicate slow metadata work across parallel/reloaded clients without increasing App Server concurrency or changing plugin data freshness.
+
+## Confirmed delivery and restart convergence (2026-07-17)
+
+### Manual verification
+
+1. Delay or time out `turn/start` after the message reaches 7420. Confirm the optimistic bubble changes to `确认中`, retains its original content, and remains in the durable outbox across a WebView reload.
+2. Let reconciliation find the turn running or completed. Confirm the same bubble converges to `已发送` or is replaced by authoritative history without duplication.
+3. Restart the 7420 bridge after a request is persisted as `starting` but before a turn is confirmed. Confirm an idle or stopped thread snapshot turns the request into a retryable failure instead of leaving it permanently active.
+4. Repeat with a snapshot that already reports running or completed. Confirm the request converges to that authoritative state and is not replayed automatically.
+
+### Expected results
+
+- `pending_start`, `starting`, and `start_uncertain` never remove the browser outbox or claim delivery success.
+- Live turn start/completion/error events trigger immediate plus one delayed outbox reconciliation, without recurring message polling.
+- Server restart reconciliation includes `starting`; ambiguous pre-turn work fails safely with the exact local prompt still available for retry.
+- The conversation regression fixture contains one restrained `确认中` delivery state and reduced motion disables its pulse.
+
+### Regression evidence (2026-07-17)
+
+- `npm.cmd run build:frontend`, `npm.cmd run build:cli`, `npm.cmd run verify:server-modules`, and `npm.cmd run verify:frontend-normalizers` passed.
+- The rebuilt local 7420 service started as PID `3092`; `/health` returned `ok`.
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots` passed desktop, 393 x 852 phone, and foldable checks, including the confirming-delivery state and persistent outbox source contract.
+
+## Foreground and parallel-page outbox recovery (2026-07-17)
+
+### Manual verification
+
+1. Leave a message in `确认中`, background the Android app without forcing the notification stream to disconnect, then return to the app.
+2. Confirm the first foreground recovery attempt reloads and reconciles the durable outbox; the message converges without manual refresh.
+3. Open two 7420 pages on the same origin. Send different messages from both pages in close succession and confirm neither local outbox entry overwrites the other.
+4. Let one page reconcile an entry. Confirm the other page observes the storage change and catches up from the authoritative runtime request or conversation history.
+5. Suspend storage-event handling in one page, let the other page confirm and remove the same entry, then resume a stale write from the first page. Confirm the removed entry is not recreated.
+
+### Expected results
+
+- Foreground recovery does not depend on a disconnected/reconnecting transport transition.
+- Every put, update, and remove merges the latest persisted outbox entries before writing the bounded payload.
+- For the same client message id, the newest `updatedAtMs` state wins; unrelated entries from another page are preserved.
+- Confirmed removals retain bounded seven-day deletion markers, so a delayed page cannot revive an already-settled send from its stale memory.
+- A stale new-conversation preview clears when its entry was removed elsewhere; if another page replaced it with the same retry payload under a fresh id, the existing bubble rebinds instead of duplicating.
+- Runtime lookup/resume results are applied only if the same outbox entry is still current after the await; a late failure response cannot recreate a message that another page already settled or discarded.
+- Storage-event recovery is event-driven and bounded; no background polling or cross-page message replay is introduced.
+
+### Regression evidence (2026-07-17)
+
+- `npm.cmd run verify:frontend-normalizers` passed a three-entry merge case where the newer state for one client id won and unrelated entries from both page snapshots survived.
+- The normalizer smoke also passed a deletion-convergence case: an entry older than its removal marker was discarded, while an entry newer than its marker survived.
+- A two-tab headless Chrome probe wrote a `confirming` entry in tab A. Tab B received the real storage event, queried the authoritative request endpoint, and changed the missing thread-bound request to `failed` while preserving its text and client id.
+- A deliberate two-tab last-writer race then overwrote storage with an older threadless entry after a removal. Both tabs converged to `entries=0`, one retained removal marker, zero pending previews, and no stale prompt text; the late runtime lookup result was ignored after the entry disappeared.
+- `npm.cmd run build:frontend` and the full captured 7420 frontend regression passed desktop, 393 x 852 phone, and foldable viewports after foreground and storage-event recovery were enabled.
+- The final full captured regression passed again after deletion-marker and post-await revalidation changes; Playwright Chrome also rendered the phone conversation fixture with delivery-state UI present.
+
+## Deterministic bounded-send recovery (2026-07-17)
+
+### Automated fault cases
+
+1. First `runtime/send` attempt throws a transport error, lookup finds nothing, and the second attempt succeeds after the 650 ms retry slot.
+2. The send response is lost but lookup by the same client message id returns `start_uncertain`; the coordinator accepts that result without replaying the prompt.
+3. All attempts fail with transport errors; exactly three total attempts and two waits occur before the original error is returned.
+4. A definitive application error such as permission denial performs one attempt and no wait.
+5. Authoritative request lookup reports rejection; recovery stops immediately rather than masking it with another transport retry.
+
+### Expected results
+
+- Production `startRuntimeTurnWithBoundedRecovery` uses the same coordinator exercised by fault injection.
+- Retry UI remains bounded to `1/2` and `2/2`, and successful recovery restores the normal thinking label.
+- Every automatic retry reuses the original `clientMessageId`; manual retry remains the only path that creates a new id after a known failure.
+
+## Android foreground outbox recovery (2026-07-17)
+
+### Automated lifecycle case
+
+1. Load the mobile home composer with no unsaved draft.
+2. Insert a threadless `confirming` outbox entry after the page has already initialized, so startup recovery cannot see it.
+3. Dispatch the same `codex-mobile-resume` event emitted by the Capacitor app lifecycle bridge.
+4. Confirm the first zero-delay foreground attempt merges localStorage, reconciles the request, restores the exact prompt as one failed new-conversation bubble, and retains the outbox until explicit retry or discard.
+
+### Expected results
+
+- A suspended Android WebView catches up even when its notification stream never emitted a disconnect state.
+- Resume recovery is immediate on the first attempt and retains the existing bounded 0 / 4500 / 12000 ms Android fallback schedule.
+- Repeated Capacitor `appStateChange` and `resume` events remain protected by the existing 2500 ms Android debounce.
+
+## Offline send preflight recovery (2026-07-17)
+
+### Fault case
+
+1. Load an existing idle thread at 393 x 852, then switch the browser context to fully offline before submission.
+2. Send a unique prompt and confirm it appears immediately with the running timeline.
+3. Confirm thread-state recovery and thread-resume preflights use the same bounded retry policy as `runtime/send`, showing visible reconnect progress instead of failing before the send coordinator is reached.
+4. Keep the browser offline through both delays and confirm the original prompt remains as one failed bubble with one retry action and a durable failed outbox entry.
+
+### Expected results
+
+- A transport failure at any network-dependent stage of the send path receives consistent `1/2` and `2/2` feedback.
+- Definitive resume or permission failures remain immediate and are not retried.
+- No request reaches 7420 while the browser context is offline, so the failed local bubble cannot represent a duplicated server turn.
+- An idle-thread failure clears the temporary running/reconnecting card. If the thread was already running before submission, failed steering restores its previous activity instead of falsely stopping the existing task.
+- Local transport errors remain attached to the failed message bubble and global connection state; they never populate the thread-level turn error used for authoritative task failures.
+
+### Regression evidence (2026-07-17)
+
+- A real 393 x 852 Chromium session loaded idle thread `019edbc7-0933-7292-b612-89fd4d4fdae1`, switched the browser context fully offline, and submitted a unique prompt. The prompt was visible immediately and remained in the durable outbox as `failed` after bounded recovery exhausted.
+- The final DOM contained exactly one `发送失败 / 重试` delivery action, zero `.live-overlay-inline` elements, and zero runtime status bars. This proves a local transport failure no longer creates a false authoritative `思考中` or task-error card.
+- Screenshot evidence: `output/regression-7420/frontend-ui-regression/offline-phone-failed-retry.png`.
+- `npm.cmd run build:frontend` and `npm.cmd run verify:frontend-normalizers` passed after the local-error ownership change.
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots` passed the full desktop, 393 x 852 phone, foldable, persistent-outbox, composer, and conversation fixture suite.
+
+### Online recovery and manual retry evidence (2026-07-17)
+
+- A second real phone session submitted `7420-retry-probe-20260717-h` while fully offline, reached one failed bubble, then reloaded the page. The durable outbox restored exactly one copy of the same prompt.
+- After network recovery, retry reused that visible bubble during submission and created a fresh idempotency key for the known-failed attempt. The outbox then cleared, authoritative history contained exactly one matching user turn, and the assistant returned `retry-ok-20260717-h` without running a command or changing a file.
+- Failed-outbox recovery now matches the current optimistic bubble by `clientMessageId` before creating a reload replacement. Manual retry also reconstructs its request from the durable outbox if the volatile request map was lost, and targets the message's own thread instead of transient route selection.
+- Screenshot evidence: `output/regression-7420/frontend-ui-regression/offline-retry-recovered-phone.png`.
+- The final `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, `git diff --check`, and captured full 7420 frontend regression all passed after the in-place retry hardening.
+
+## Conversation immediate feedback and stable running timer (2026-07-17)
+
+### Manual verification
+
+1. On a mobile viewport, send a message in an existing idle conversation and confirm the user bubble appears immediately, before runtime recovery or network completion.
+2. Confirm the running row appears in the same interaction frame and begins at `正在运行 <1 秒`, then continues counting upward once per second.
+3. While the turn is active, trigger a message refresh, briefly background and foreground the Android WebView, and let the activity change from thinking to a command or permission request.
+4. Confirm the running row remains visible and its elapsed time never returns to zero during those transitions.
+5. Stop the turn or let it complete, and confirm the live row disappears only after the authoritative settled event.
+6. Simulate an offline or rejected send. Confirm the original bubble remains in place as `发送失败`, exposes one `重试` action, and a retry immediately replaces it with a new `发送中` bubble without duplicating content.
+
+### Expected results
+
+- Optimistic user content and the thinking state are committed before the first awaited recovery call.
+- A fresh local turn temporarily wins over an older settled runtime snapshot, preventing flicker while the App Server acknowledges the new turn.
+- All labels within one turn reuse one thread-level `startedAtMs`; component remounts and activity-label changes cannot reset elapsed time.
+- Sending failures preserve the user's exact text and attachments locally; retry reuses the original request context and guards against repeated taps.
+- A fresh settled runtime snapshot newer than the local request is authoritative even when an older App Server omits `lastCompletedAtIso`, so the running row cannot remain indefinitely.
+- The 7420 frontend fixture starts its overlay more than six seconds in the past and fails if the UI measures from component observation time instead.
+- The fixture independently checks `发送中`, `发送失败`, and the retry affordance while continuing to reject internal optimistic-state labels.
+
+### Regression evidence (2026-07-17)
+
+- `npm.cmd run build:frontend` passed with Vue type checking and a production Vite build.
+- The rebuilt local 7420 service started as PID `41808`; `/health` returned `ok`.
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots` passed desktop, phone, and foldable checks, including delivery states, retry affordance, stable elapsed time, hidden App Server noise, structured blocks, older-history loading, and horizontal-overflow guards.
+- Mobile visual review at 393 x 852 confirmed the compact delivery labels remain attached to their user bubbles and do not compete with the running timeline or pending-request workbench.
+
+## Reliable send acknowledgement and bounded reconnect (2026-07-17)
+
+### Manual verification
+
+1. Send a message in an existing conversation and confirm its local state moves from `发送中` to `已发送` after 7420 acknowledges `runtime/send`.
+2. Interrupt the browser-to-7420 connection before the first response. Confirm the same bubble shows `正在重连 1/2`, then at most `正在重连 2/2`; its running timer must continue instead of restarting.
+3. Restore the connection and confirm only one user turn is created even if the same request reaches `/codex-api/runtime/send` repeatedly.
+4. Keep the connection unavailable through both retries. Confirm the original content remains as `发送失败` with a single `重试` action.
+5. Click `重试` and confirm it creates a new client message id while preserving the original text, images, files, skills, collaboration mode, and turn options.
+
+### Expected results
+
+- Each selected-thread send carries a generated `clientMessageId`; every automatic transport retry reuses that id.
+- 7420 reuses the original runtime request for repeated ids and never calls `turn/start` twice. A reused id with different content is rejected.
+- Only transport failures such as fetch/network/connection-reset/runtime timeout are retried. Definite server, validation, permission, and model errors fail immediately or follow the existing model-fallback path.
+- Server acknowledgement changes the optimistic bubble to `已发送`; authoritative history still replaces it by signature.
+- Concurrent duplicate POSTs share the same in-flight start promise, while sequential duplicate POSTs reuse the persisted runtime request and increment its retry count.
+
+### Regression evidence (2026-07-17)
+
+- `npm.cmd run build:cli` passed and produced the updated Node 22 bridge bundle.
+- `npm.cmd run verify:server-modules` passed; its runtime-start smoke proves sequential and concurrent duplicate client ids each execute `turn/start` only once, while conflicting content is rejected.
+- `npm.cmd run build:frontend` passed with Vue type checking and a production Vite build.
+- Local 7420 restarted from the final rebuilt CLI as PID `36656` and returned healthy status.
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots` passed desktop, 393 x 852 phone, and foldable checks, including `发送中`, `正在重连 1/2`, `已发送`, `发送失败`, retry, timer continuity, history loading, and overflow guards.
+- Mobile visual review confirmed all four delivery states remain compact beneath the matching user bubble and do not add a modal, toast, or second spinner.
+
+## New-conversation first-message reliability parity (2026-07-17)
+
+### Manual verification
+
+1. From the new-conversation screen, submit a first message and confirm a provisional bubble and running timeline appear before `thread/start` returns.
+2. Confirm the app enters the authoritative thread as soon as `thread/start` returns, while the first `/runtime/send` remains pending in the background.
+3. Interrupt the first `/codex-api/runtime/send` response after the thread exists. Confirm the first bubble follows the same `发送中 → 正在重连 1/2 → 已发送` path as an existing conversation.
+4. Keep the connection unavailable through both retries. Confirm the newly created thread remains selected and the first bubble becomes `发送失败` with `重试`; it must not disappear or return to the empty composer.
+5. Click `重试` and confirm the first message is submitted into that existing thread exactly once.
+6. Simulate a transport failure during the preliminary `thread/start`. Confirm the client falls through to idempotent `runtime/send`, which may safely create and recover the thread instead of blindly retrying `thread/start`.
+
+### Expected results
+
+- New and existing conversations share one bounded runtime-send recovery implementation and one delivery-state vocabulary.
+- The provisional home view is memory-only; the real thread adopts the same optimistic message id and the route changes before first-turn completion.
+- Preliminary `thread/start` is never automatically replayed because it has no client idempotency key; transport uncertainty falls through to the idempotent runtime endpoint.
+- Once a thread id exists, a failed first message retains the complete request context and uses the same in-bubble retry action as any other failed message.
+- A recovered or acknowledged first send is marked `已发送` until authoritative history replaces the optimistic bubble.
+
+### Regression evidence (2026-07-17)
+
+- `npm.cmd run build:frontend` passed with Vue type checking and a production Vite build.
+- The rebuilt local 7420 service started as PID `38132`; `/health` returned `ok`.
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots` passed desktop, phone, and foldable checks, including bounded reconnect states, retry affordance, stable running time, history loading, and overflow guards.
+- Mobile visual review confirmed that delivery feedback remains inline and compact, with no blocking dialog or additional loading layer.
+- The delayed-runtime handoff probe entered authoritative thread `019f7081-1e38-7731-ac15-7a997d0e1dbf` with the bubble still `sending`, captured the route state, then archived the probe thread. The measured route time was `5773 ms`, dominated by the real `thread/start`; it did not include the simulated 1200 ms runtime response or bounded retry completion.
+
+## Persistent message outbox recovery (2026-07-17)
+
+### Manual verification
+
+1. On mobile, submit a message and terminate or reload the WebView after the composer clears but before `/codex-api/runtime/send` is acknowledged.
+2. Reopen 7420 and confirm the client looks up the original `clientMessageId` before deciding how to present the message.
+3. If the runtime request was accepted, confirm the outbox entry is removed and normal thread synchronization supplies the authoritative message.
+4. If the request is missing or failed and has a thread id, confirm the original content returns as one `发送失败` bubble with `重试`.
+5. If no thread id was ever obtained, return to the new-conversation page and confirm the original text and attachments remain as one failed bubble with `重试`; the complete request context remains in the outbox.
+6. Keep the network unavailable during startup and confirm the entry remains stored for the next connection recovery instead of being discarded or automatically resent.
+
+### Expected results
+
+- The outbox is written synchronously before the first network wait for both existing-thread sends and new-thread first messages.
+- Startup reconciliation only queries by the original id; it never blindly replays an unknown request.
+- Accepted requests are removed; failed thread-bound and threadless requests both remain actionable bubbles backed by the existing outbox.
+- Explicit edit/removal deletes the request payload but may retain a bounded metadata-only deletion marker so another stale page cannot recreate it.
+- Entries are versioned, limited to 12, and expire after seven days so local storage cannot grow without bound.
+- Storage failure does not block sending; it only disables process-death recovery for that request.
+
+### Regression evidence (2026-07-17)
+
+- `npm.cmd run build:frontend` passed with Vue type checking and a production Vite build.
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots` passed all desktop, phone, and foldable checks.
+- The frontend regression seeded a synthetic threadless outbox request, reloaded the real 7420 home page, and proved that the exact content returned as one failed bubble with one retry action while the durable outbox remained `failed`.
+- The foreground-resume probe proved the same behavior without a reload, and mobile screenshot review at 393 x 852 confirmed the failed bubble remains compact without a modal or layout overflow.
+
+## Cross-client new-thread list catch-up (2026-07-17)
+
+### Manual verification
+
+1. Keep two 7420 clients open against the same server, with the conversation list visible on the second client.
+2. Create a new conversation and send its first message from the first client.
+3. Confirm the second client receives the App Server `thread/started` notification and the new conversation appears without a manual refresh or a two-minute foreground recovery wait.
+4. Disconnect and reconnect the second client while a new conversation is created, then confirm notification replay produces the same list catch-up.
+5. Let an active conversation emit status and token-usage updates and confirm the sidebar does not repeatedly reload.
+
+### Expected results
+
+- `thread/started` is treated as a structural thread-list invalidation and uses the existing debounced list reconciliation.
+- The sending client keeps its optimistic list insertion; other clients converge through the authoritative notification stream and list API.
+- `thread/status/changed` and `thread/tokenUsage/updated` do not trigger thread-list refresh storms.
+- No new polling loop, proprietary event, or second synchronization store is introduced.
+
+### Regression evidence (2026-07-17)
+
+- `npm.cmd run build:frontend` passed with Vue type checking and a production Vite build.
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots` passed all desktop, phone, and foldable checks; its source guard proves `thread/started` remains a structural invalidation while token-usage events remain excluded.
+- The live local 7420 `/health` endpoint returned `ok`, and mobile screenshot review at 393 x 852 found no new layout, loading, or navigation noise.
+
+## Durable threadless pending-start recovery (2026-07-17)
+
+### Manual verification
+
+1. Submit the first message of a new conversation, then terminate 7420 after its runtime request is persisted as `pending_start` but before a thread id is attached.
+2. Restart 7420 and reopen the mobile client with the original outbox entry intact.
+3. Confirm recovery reuses the original `clientMessageId` and persisted request id, then completes `thread/start` and `turn/start` once.
+4. Confirm the outbox entry is removed only after the resumed request returns a real thread id; the new conversation and message then converge through normal list/message synchronization.
+5. Repeat the same request while the original process is still active and confirm the in-flight request is coalesced instead of duplicated.
+
+### Expected results
+
+- A threadless `pending_start` row is treated as incomplete acknowledgement, not as proof that the outgoing message can be discarded.
+- Recovery never creates a second runtime request row for the same `clientMessageId` and never changes its content or turn options.
+- Existing running/completed requests remain lookup-only, while definite failures return the original content to the retryable mobile flow.
+- No recurring polling loop, new database, or user-facing protocol error is added.
+
+### Regression evidence (2026-07-17)
+
+- `npm.cmd run build:cli` passed against the rebuilt Node 22 bridge.
+- `npm.cmd run verify:server-modules` passed; its restart harness seeds a threadless `pending_start`, resumes it with the same client id, asserts no second request is created, and observes exactly one `thread/start` and one `turn/start`.
+- `npm.cmd run build:frontend` passed with Vue type checking and a production Vite build.
+- The rebuilt local 7420 restarted as PID `39108`, `/health` returned `ok`, and the complete screenshot-backed frontend regression passed on desktop, phone, and foldable viewports.
+
+## Monotonic runtime notification and snapshot ordering (2026-07-17)
+
+### Manual verification
+
+1. Start a turn and delay a runtime snapshot response while allowing the notification stream to continue.
+2. Deliver `turn/completed` with event sequence 42, then release an older running snapshot with `lastEventSeq` 41.
+3. Confirm the conversation remains completed: the running row does not reappear, its elapsed timer does not restart, and the stop action remains unavailable.
+4. Repeat with snapshot sequence 42 and then 43; confirm equal/newer authoritative snapshots still apply normally.
+5. Repeat while the client is reconnecting and notification replay supplies the completion event before the delayed snapshot returns.
+
+### Expected results
+
+- Live and replayed runtime notifications advance the per-thread authoritative event sequence even when the visible execution state itself did not change.
+- A non-zero snapshot sequence lower than the applied notification sequence cannot overwrite execution state, active turn, pending requests, token usage, or loaded-version state.
+- Messages from a rejected snapshot are merged only in preserve-missing mode so delayed partial history cannot remove newer content.
+- Sequence-free snapshots remain supported for older bridge versions; no client-clock comparison or recurring timer is introduced.
+
+### Regression evidence (2026-07-17)
+
+- `npm.cmd run verify:frontend-normalizers` passed explicit ordering cases: 42 rejects 41, while 42 accepts 42 and 43.
+- `npm.cmd run build:frontend` passed with Vue type checking and a production Vite build.
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots` passed its integration guards and all desktop, phone, and foldable browser checks.
+- Mobile conversation screenshot review confirmed the running surface, stop control, message blocks, and horizontal layout remain intact after the ordering change.
+
 ## Template
 
 ### Feature: <name>
@@ -281,6 +658,46 @@ This file tracks manual regression and feature verification steps.
 
 #### Rollback/Cleanup
 - To roll back, revert `src/api/codexGateway.ts`, `src/composables/useDesktopState.ts`, `scripts/verify-7420-sidebar-data.mjs`, `docs/changelog.zh-CN.md`, and this test section.
+
+### Feature: Cached sidebar list reconciles promptly
+
+#### Steps
+
+1. Open the app once so `codex-web-local.thread-groups-cache.v1` is present in localStorage, then reload the home page.
+2. Confirm cached project rows become usable immediately without waiting for a new `thread/list` response.
+3. Keep the page open for about 2 seconds and confirm the complete background list refresh starts without replacing the cached rows with an empty state.
+4. Run `npm.cmd run build:frontend` and `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
+
+#### Expected Results
+
+- Cached sidebar content remains clickable during startup.
+- A cached startup starts full-list reconciliation after roughly 1.8 seconds instead of waiting 9.5 seconds, so older projects become searchable sooner.
+- The refresh preserves the selected thread and does not cause sidebar layout flashing.
+
+#### Rollback/Cleanup
+
+- Revert `src/composables/useDesktopState.ts`, this test section, and the staged-sidebar parity finding.
+
+### Feature: Quieter startup and compact sidebar tools
+
+#### Steps
+
+1. Open a new conversation in a browser-only environment where the official desktop app is unavailable.
+2. Confirm the header does not show a desktop-app unavailable state; open Settings and confirm desktop status is checked there.
+3. Open Favorites and confirm the current favorites still load.
+4. Open the sidebar Tools menu and visit Skills, GitHub, and Diagnostics.
+5. Inspect unread and running thread rows in the sidebar.
+
+#### Expected Results
+
+- Desktop-app status appears in the header only while an explicit desktop refresh is running.
+- Favorites refresh when their panel opens, not during startup or every window-focus event.
+- The sidebar keeps four primary actions: new conversation, search, workbench, and tools; the tools menu retains access to skills, GitHub, and diagnostics.
+- Unread threads retain their status dot and running threads retain the `执行中` label; redundant source and `未读` text no longer take row space.
+
+#### Rollback/Cleanup
+
+- Revert `src/App.vue`, `src/components/sidebar/SidebarThreadTree.vue`, `scripts/regression-7420-frontend.ps1`, and this test section.
 
 ### Feature: Android resume refreshes sidebar thread list
 
@@ -12226,3 +12643,244 @@ This file tracks manual regression and feature verification steps.
 
 #### Rollback/Cleanup Notes
 - Remove `output/release-hidden-files` after verification. Revert the `ZipFile.CreateFromDirectory` packaging change and this section to roll back.
+
+### Feature: Chat-like immediate send feedback and App Server noise suppression
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The conversation regression fixture route `/#/__regression/conversation-blocks?regression=frontend` is available.
+
+#### Steps
+1. While a thread is running, submit a follow-up message and confirm it appears in the queue above the composer immediately, before runtime recovery or network refresh finishes.
+2. Let the current turn finish and confirm the queued message starts once, remains editable/deletable before execution, and does not duplicate in the conversation.
+3. Open the conversation fixture and confirm `unhandled.webSearch`, `Unhandled App Server item: webSearch`, `未适配的 App Server 内容`, and the synthetic file-change fallback are absent from visible text.
+4. Confirm the handled raw-payload fixture, assistant Markdown, command output, and permission cards remain available.
+5. Run `npm.cmd run verify:frontend-normalizers`.
+6. Run `npm.cmd run build:frontend`.
+7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName chat-feedback-noise-suppression`.
+
+#### Expected Results
+- Queue feedback is committed synchronously before the first awaited runtime recovery call, so sending feels immediate even when state recovery is slow.
+- Historical `webSearch` items do not become fallback message cards; active web search is represented by the compact `正在搜索网页` activity state.
+- Unsupported App Server items remain normalized with their raw payload for diagnostics but do not pollute the normal conversation surface.
+- First assistant text delta still flushes immediately and subsequent deltas retain the existing 48 ms render batching for stable streaming.
+
+#### Rollback/Cleanup Notes
+- Revert `src/composables/useDesktopState.ts`, `src/api/normalizers/v2.ts`, `src/components/content/ThreadConversation.vue`, `src/components/content/ConversationRegressionFixture.vue`, `scripts/verify-frontend-normalizers.mjs`, `scripts/regression-7420-frontend.ps1`, and this section.
+
+### Feature: Non-blocking MCP tool approval experience
+
+#### Prerequisites
+- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- The conversation regression fixture route `/#/__regression/conversation-blocks?regression=frontend` is available.
+
+#### Steps
+1. Open the conversation fixture on a 390 x 844 viewport and expand `待处理请求`.
+2. Confirm the GitHub `github_update_pull_request` request renders as `MCP 工具权限确认`, not as `MCP 服务需要补充信息`.
+3. Confirm the card shows repository `Qjzn/CX-Codex`, PR `18`, and change `关闭`, with no textarea.
+4. Confirm the actions are `仅本次允许`, `本会话允许`, `始终允许此工具`, and `拒绝`; no `稍后处理` action is shown.
+5. Click `仅本次允许` in the fixture and confirm it immediately becomes `正在处理…` while all approval buttons are disabled.
+6. Run `npm.cmd run verify:server-modules` and `npm.cmd run build:frontend`.
+7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` after all real pending server requests have been answered.
+
+#### Expected Results
+- Connector approval metadata is classified as an approval even when the request uses form mode with an empty schema.
+- Permission requests never force meaningless freeform input; target and side effect are readable before approval.
+- Persistence choices appear only when the MCP request advertises `session` or `always`, and replies carry the matching `_meta.persist` value.
+- Submitting an approval gives immediate progress feedback and prevents duplicate replies.
+- The 390px viewport has no horizontal overflow or page errors.
+
+#### Regression Evidence
+- 2026-07-13 `npm.cmd run verify:server-modules` passed, including real connector-style permission recognition and session-persistence reply coverage.
+- 2026-07-13 `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; the existing large-chunk warning remains.
+- 2026-07-13 targeted 390 x 844 browser regression passed with zero permission textareas, no horizontal overflow, no page errors, and immediate disabled `正在处理…` feedback.
+- Full `test:7420:frontend` stopped at its idle-health prerequisite because the user's real request #74 intentionally remains pending; no approval or rejection was sent during this implementation.
+
+#### Rollback/Cleanup Notes
+- Remove `output/regression-7420/mcp-permission-ux-20260713` after review. Revert `ThreadConversation.vue`, `useDesktopState.ts`, `serverRequestPolicy.ts`, the fixture and regression assertions, parity findings, and this section.
+
+### Feature: Chat composer and runtime feedback polish
+
+#### Steps
+
+1. Open Settings and switch `Enter 键行为` between `发送` and `换行`.
+2. In `发送` mode, confirm Enter sends, Shift + Enter inserts a line break, and Ctrl / Command + Enter also sends. In `换行` mode, confirm Enter inserts a line break and Ctrl / Command + Enter sends.
+3. Type with a Chinese IME in either mode and confirm a composition-confirming Enter does not send prematurely.
+4. Click the composer expand icon and confirm the input area grows to no more than half the viewport; click its collapse icon or press Escape to return to normal size.
+5. While a turn is running, confirm exactly one tail status reads `正在处理 · X 秒`, has only a subtle pulse, and clicking the row opens the latest runtime detail sheet.
+6. Let an assistant reply begin streaming and confirm the same tail status remains below the partial reply, changes its hint without remounting, and keeps the original elapsed time.
+7. Start a command and confirm the active command is not duplicated in message history; its latest output is available from the tail status, while the completed command later returns as a collapsed history row.
+8. Stop a turn and confirm the conversation keeps `已在 X 后停止` plus the `编辑继续` action. Click it twice to confirm the prior user instruction is restored to the composer and the current turn is rolled back.
+9. Hover, focus, or tap a user/assistant message and confirm the action rail uses icon buttons with accessible labels; user messages expose an edit-and-continue icon.
+10. Send a message and confirm the immediate echo contains only the message content, never `userMessage.optimistic` or its internal JSON metadata.
+11. On a phone-width viewport, confirm attach, expand, microphone, and send/stop controls are at least 44 x 44 px.
+12. Trigger a warning or error and confirm its dismissible feedback stays above the composer instead of covering input controls.
+13. With unsent draft text, edit a queued message and confirm the in-app prompt can preserve the draft or replace it without a browser-native dialog.
+14. Open the mobile sidebar and confirm the primary row contains only New, Search, and Tools; Workbench remains available inside Tools. If the list fails to load, use the inline `重新加载` action.
+15. Run `npm.cmd run build:frontend` and the conversation/composer fixture regression checks, including `tailStatus=1&tailGap=1`.
+
+#### Expected Results
+
+- Keyboard preference persists locally and works consistently across desktop and mobile layouts.
+- Long-form input is available without losing the current thread context or composer controls.
+- Thinking, execution, and reply generation share one stable tail status during normal work; partial text never makes it disappear or reset its timer.
+- The tail status is collapsed by default and exposes only the latest active detail; historical completed commands remain separately inspectable and collapsed.
+- The tail status follows the streaming reply in both visual and DOM reading order.
+- A confirmed stop leaves a clear duration and a safe edit-and-continue route instead of a dead-end partial response.
+- Optimistic rendering stays instant but protocol bookkeeping is not exposed in the conversation UI.
+- Mobile controls meet the 44 px touch-target baseline, transient feedback does not block the composer, and sidebar recovery stays inline.
+
+### Feature: Mobile sidebar progressive disclosure and startup request reduction
+
+#### Steps
+
+1. Open the sidebar at a phone-width viewport with more than three pinned tasks.
+2. Confirm only the first three pinned tasks are shown initially, while the selected or running pinned task remains visible even when it is outside the first three.
+3. Use `显示其余 N 条` and `收起置顶` to expand and collapse the pinned section.
+4. Confirm each project row exposes one overflow menu on mobile; `新建任务`, `修改名称`, and `移除` remain available inside it.
+5. Repeatedly background and foreground the page within one minute and confirm pinned-thread hydration is not requested on every focus event.
+6. Run `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, and the mobile 7420 sidebar smoke check.
+
+#### Expected Results
+
+- Pinned tasks no longer occupy most of the first mobile sidebar viewport by default.
+- Current and running tasks are never hidden by the compact preview.
+- Project actions use one stable touch target instead of two adjacent controls on mobile.
+- Pinned state refreshes at most once per minute on focus, while initial hydration and explicit pin changes remain immediate.
+- Browser startup does not enqueue Android-only runtime, notification, or task-pet reads; native Android startup avoids the duplicate server-config read.
+
+### Feature: Desktop and 7420 stale-list catch-up consistency
+
+#### Steps
+
+1. Start with a `thread/list` bridge cache older than the fresh TTL but still inside the stale fallback window.
+2. Request the list once and confirm cached rows return immediately while one background refresh starts.
+3. Request the same list again before that refresh completes and confirm the request reuses the active refresh instead of returning the stale rows again or starting another App Server RPC.
+4. Start with an archived `thread/list` cache older than 20 minutes but younger than 24 hours; confirm archived rows return immediately and refresh in the background.
+5. On Android, background and foreground the app repeatedly within two minutes while no structural thread notification is pending.
+6. Run `npm.cmd run verify:server-modules`, `npm.cmd run build:cli`, and `npm.cmd run build:frontend`.
+
+#### Expected Results
+
+- Cached sidebar rows remain instant on the first request.
+- Archived rows can reuse a day-old snapshot for the first paint while archive/unarchive notifications still invalidate it.
+- The next reconciliation receives the fresh App Server result, so another 7420 page or device does not remain on the same stale snapshot.
+- Identical catch-up requests share one in-flight `thread/list` operation.
+- Android foreground recovery continues to replay notifications and refresh the selected thread immediately, but avoids an unconditional full list refresh on every quick app switch.
+- Structural notifications and list state older than two minutes still trigger a full list reconciliation.
+
+### Feature: Desktop-created threads remain resumable in 7420
+
+#### Steps
+
+1. Start 7420 on Windows with Codex desktop installed and with an outdated or missing `codexCommand` path in the launch config.
+2. Confirm the bridge App Server process uses the newest runnable executable under `%LOCALAPPDATA%\OpenAI\Codex\bin\<build>\codex.exe` before falling back to an older PATH or npm CLI.
+3. Open a conversation recently created by Codex desktop, then send a short prompt from 7420.
+4. For a deliberately non-materialized test thread, call `thread/resume` and confirm a null bridge result is not cached by the frontend as a successful resume.
+5. Run `npm.cmd run verify:server-modules`, `npm.cmd run build:cli`, and `npm.cmd run build:frontend`.
+
+#### Expected Results
+
+- Desktop and 7420 use a protocol-compatible Codex CLI when the desktop-managed binary is available.
+- A desktop-created session can be listed, opened, resumed, and continued from 7420 instead of failing only at `turn/start`.
+- Missing stale configured paths self-heal through discovery; an explicitly configured runnable path still keeps priority.
+- A null `thread/resume` result does not create a false `resumed` state or leave the composer in a fake running state.
+
+#### Rollback/Cleanup
+
+- Revert `src/commandResolution.ts`, `src/api/codexGateway.ts`, `src/composables/useDesktopState.ts`, `scripts/server-module-smoke.ts`, and this test section.
+
+### Feature: Android task pet system overlay
+
+#### Prerequisites
+
+- Install an APK built after the task-pet native service was added.
+- Configure a reachable 7420 server and allow Android's “display over other apps” permission.
+- Keep at least one conversation running; optionally leave another waiting for an approval or user input.
+
+#### Steps
+
+1. Open Settings, find `任务宠物`, and enable `系统悬浮窗`.
+2. If Android opens the overlay-permission page, grant permission and return to CX-Codex.
+3. Confirm the pet remains visible after switching to another app. Press and drag it across the screen, verify the initial press responds immediately, the CX companion changes to its forward-leaning dragging pose, dragging tracks the finger, and release settles against the nearest edge without leaving the screen before restoring the current task pose.
+4. With no records, confirm the idle companion defaults to a 48 dp bubble with a 36 dp visual. Start work and confirm it restores as a proportionally smaller 72 x 79 dp companion; verify coding, amber waiting, completed, and dragging artwork still follows the real state.
+5. Tap the pet and confirm the progress panel opens with a short reveal transition without moving the pet away from its screen position. Repeat from both screen edges and rapidly toggle twice to check interruption safety.
+6. Confirm the header shows a 48 dp CX Logo action and a 48 dp × action instead of text buttons, plus no more than two `最近会话` rows. Tap each recent row with CX-Codex already running and confirm it opens the exact thread. Force-stop the Activity while keeping the service scenario reproducible, then repeat from a cold Activity launch and confirm the pending thread id survives bridge creation and opens the same exact chat instead of the platform home page. Tap the CX Logo and confirm CX-Codex comes to the foreground without changing the selected conversation.
+7. Tap `关闭浮窗`, confirm an inline confirmation explains that the feature can be reopened from Settings, then cancel once. Open it again, confirm close, and verify the overlay plus foreground notification disappear and the Settings switch reads off; enable it again from Settings.
+8. Confirm no manual `最小化` action remains. Clear all read records and verify the idle pet automatically becomes the 48 dp bubble; tap it to inspect the idle panel, collapse it, and confirm it returns to the bubble. Start another task and confirm the 72 x 79 dp pet restores automatically without an edge-position jump.
+9. Restart the foreground service and confirm the last screen position persists while idle/full presentation is derived from current records instead of stale minimized preferences.
+10. Tap a task row and confirm CX-Codex returns to the exact `/thread/:threadId` conversation. For a completed row, confirm tapping alone does not clear it; it is removed only after that exact conversation finishes loading and the frontend sends the native read acknowledgement. Simulate an unavailable target once and confirm the completed record remains.
+11. Tap `回复` on a task row, confirm the overlay becomes keyboard-focusable, enter a short message, and send it. Then long-press either recent-conversation row for roughly half a second; confirm the normal open action is suppressed, the same reply input appears for that exact conversation, and a successful send promotes it into the running task list. Drop the first HTTP response after the server accepts it, retry the unchanged reply, and confirm the same `clientMessageId` is reused so only one turn exists. Verify rejected/busy/network responses leave the draft visible with an inline error instead of pretending success.
+12. Leave the WebView in the background until a running task completes; on a healthy connection, confirm the row becomes completed after the next roughly 3-second snapshot poll and, when notification permission is available, a completion notification appears. Send an empty active-task snapshot and restart the foreground service; verify the unread completed row remains until step 10 is performed.
+13. Keep the WebView active while assistant text streams. Confirm the latest assistant reply is the task row's two-line primary content and updates during streaming; phase, project, and conversation title remain compact secondary context. Background the WebView and confirm the batch snapshot continues updating the latest reply from server-side agent-message events. Deliver an older non-zero `lastEventSeq` poll after a newer completed snapshot and confirm the row cannot return to running.
+14. Disconnect the server for two consecutive poll attempts and confirm active rows change to amber `网络中断，等待同步` instead of continuing a false running timer. Restore the server and confirm the next authoritative snapshot restores running, waiting, or completed state. Return a partial snapshot once and confirm omitted rows show `暂时无法确认状态` while polling continues.
+15. Rotate the device or change the fold state with the pet near an edge; confirm the panel closes safely, the mascot or minimized bubble settles inside the new bounds, and a short landscape viewport shows at most three task rows.
+16. Disable the setting, then confirm the overlay and its ongoing foreground-service notification disappear; this remains the full-close action, unlike minimization.
+17. Run `npm.cmd run mobile:android:sync`, then run `android\gradlew.bat assembleDebug` with the documented JDK and Android SDK environment.
+18. Open `/#/__regression/task-pet` at 390 x 844 in headless Playwright, verify latest-reply copy, 48 dp icon actions, absence of the minimize control, 66 x 78 Web companion, 48 dp idle bubble with 36 dp PNG, reduced-motion PNG fallback, and capture expanded plus idle screenshots.
+
+#### Expected Results
+
+- The overlay is opt-in and never blocks normal app use when permission is denied.
+- Task state remains useful while the WebView is backgrounded: running, waiting, completed, and failed outcomes remain distinguishable.
+- Pet position persists across service restarts; expanding the progress panel does not cause a large position jump.
+- The full mascot is smaller than the previous overlay while controls remain touch friendly; idle auto-minimization keeps normal phone use unobstructed without exposing another persistent mode for the user to manage.
+- The 4 dp tap/drag threshold prevents accidental expansion, drag writes are frame-coalesced, and the 220 ms edge settle uses a non-bouncing deceleration curve.
+- A right-edge pet keeps the mascot anchored on the right so the expanded panel grows inward and remains readable.
+- Foreground assistant replies reach the native row through the coalesced bridge update; server-side agent-message deltas keep the same bounded reply summary current for background batch polling.
+- Every task row carries its thread id through the Android launch intent and opens the matching conversation; the row's direct-reply action posts to `/codex-api/runtime/send` with the same thread id.
+- The panel exposes CX Logo and × icon actions with 48 dp targets plus exactly two newest known conversations. Recent rows use the same exact-thread launch intent without being mixed into task records.
+- Exact-thread navigation stores the incoming id until `BridgeActivity.onCreate()` has completed, so Capacitor's early `onNewIntent()` callback cannot consume the target before the WebView is ready.
+- Recent rows advertise and support a 520 ms long press. The gesture consumes the trailing click, opens the existing keyboard-focusable reply composer, and sends through the same idempotent runtime endpoint as task-row replies.
+- Full close is protected by an in-overlay confirmation, persists `taskPetEnabled=false`, and remains reversible from Settings; idle compaction is automatic and non-destructive.
+- Completed records are persisted across incoming active-only snapshots and service restarts. A row tap only launches the target; native removal waits for the matching loaded conversation's read acknowledgement. Sending a reply converts that same record back to an active task.
+- One poll batches all known active thread ids through `/codex-api/runtime/snapshots`; it does not issue one reconcile POST per task.
+- The native service preserves content during a single transient poll failure, changes active rows to an explicit waiting state after two consecutive failures, retries at the slower 7.5-second interval, and stops network polling when no active task remains.
+- Non-zero event sequences are monotonic across foreground updates and background polls; degraded, partial, and disconnected snapshots cannot present themselves as confirmed running work.
+- Native direct reply persists one idempotency key for the same thread and message until the server confirms a running or settled state; transport retries cannot create duplicate turns.
+- Drag updates are coalesced to display frames, and the collapsed overlay does not rebuild task-row views or rewrite the foreground notification unless its active count changes.
+- Idle, working, waiting, completed, and dragging states use matching four-frame Animated WebP artwork on the visible full pet in Web and Android 9+. Android 8, reduced-motion Web rendering, and the minimized bubble use matching transparent PNG stills.
+- Idle compaction stops the hidden full native drawable; a new task restores the current animation automatically without losing the badge or its state-aware accessibility label.
+
+#### Regression Evidence (2026-07-17)
+
+- `npm.cmd run mobile:android:sync`, `android\gradlew.bat assembleDebug`, and `npm.cmd run verify:server-modules` passed.
+- A local 8-thread `/codex-api/runtime/snapshots` batch completed with a 2.63 ms median over 12 samples after warm-up; the first cold sample was 308.52 ms.
+- Headless Playwright at 390 x 844 reported 48 ms to collapse and 26 ms to expand, with 0 console errors and 0 warnings.
+- The debug APK upgraded successfully on a connected Android 16 device, launched in 941 ms, and produced no fatal runtime log. Cross-app overlay behavior remains a manual check because the system overlay permission was intentionally not granted automatically.
+- After the touch-motion and configuration-change pass, frontend build, Android Java compilation, asset sync, and `assembleDebug` passed again. The final rebuilt APK upgraded successfully and cold-launched on the Android 16 device in 643 ms without an AndroidRuntime failure.
+- Updated headless Playwright at 390 x 844 measured 52 ms to reach collapsed state and 44 ms to reach expanded state, confirmed both live activity summaries, reported 0 console errors/warnings, and reduced transition duration to `0s` under `prefers-reduced-motion`.
+- Compact/minimize pass: `npm.cmd run mobile:android:sync`, Android Java compilation, and `android\gradlew.bat assembleDebug` passed. Headless Playwright at 390 x 844 measured the minimize control at 58 x 48 px and the minimized bubble at 48 x 48 px, verified minimize -> restore -> collapsed -> expand behavior, found no horizontal overflow and 0 console errors/warnings, and reported `0s` transition/animation duration under reduced motion. The final debug APK is 7,086,276 bytes with SHA-256 `F671A090021764D3AD0A738882F7BE209724EBDF1DF9CCB1949F6927B75C1B89`. No Android device was connected for this final install pass, so cross-app minimize/restore remains part of the permission-enabled manual check.
+- Animation-efficiency pass: frontend build, Android Java compilation, `mobile:android:sync`, and `assembleDebug` passed. Headless Playwright at 390 x 844 confirmed the full waiting mascot selected `sparkbot-waiting-animated.webp`, the 48 x 48 minimized bubble selected `sparkbot-waiting.png`, and reduced motion switched the full mascot to the same PNG with `0s` CSS animation/transition. The page had no horizontal overflow and 0 console errors/warnings. The rebuilt APK is 9,610,318 bytes with SHA-256 `3AE84AE741A7656F75E3766CA43006E16A14AF229E1F802B02AF3A67391604BC`; no Android device was connected for this install pass.
+- CX-brand companion pass: five 512 x 512 transparent state assets replaced the runtime mascot on Web and Android. `npm.cmd run build:frontend`, Android `compileDebugJavaWithJavac`, `npm.cmd run mobile:android:sync`, and Android `assembleDebug` passed. Headless Chrome/Playwright at 390 x 844 loaded `cx-pet-waiting.png` at 512 x 512, measured the full target at 80 x 94 px, the minimize control at 58 x 48 px, and the settled minimized bubble at 48 x 48 px; horizontal overflow was 0, console errors/warnings were 0, and reduced-motion animation/transition durations were both `0s`. The rebuilt APK is 16,437,218 bytes with SHA-256 `6A1B3F32729045A85FD7356DE064453D080F1C8E17029EA63C38702FBE08A5E2`. ADB was available but no device was connected, so cross-app overlay installation and touch/drag verification remain the device-only check.
+- Animated-record lifecycle pass: five image-generated sprite sheets produced 512 x 512, four-frame Animated WebP assets; Pillow confirmed all Web, Android resource, and Capacitor-synced copies report `n_frames=4` and `is_animated=true`. Frontend build, Android Java compilation, `mobile:android:sync`, and `assembleDebug` passed. Headless Chrome/Playwright at 390 x 844 selected `cx-pet-waiting-animated.webp` for the full pet, `cx-pet-waiting.png` for the 48 x 48 minimized bubble, and the same PNG under reduced motion; overflow remained 0 with 0 console errors/warnings. Completed-row launch now leaves the record intact until the matching loaded, non-running Vue conversation calls `markTaskPetThreadRead`; direct reply still converts the record to running. The rebuilt APK is 12,253,062 bytes with SHA-256 `CF6FA7FA836489CC165D7724C4BC5E8344813F51E4707E7B4FB0A26D791424DA`. ADB was available but no device was connected, so native decode playback, cross-app reply, and read acknowledgement remain the device-only checks.
+- Platform-entry and confirmed-close pass: `npm.cmd run build:frontend`, Android Java compilation, `npm.cmd run mobile:android:sync`, and Android `assembleDebug` passed. Headless Chrome/Playwright at 390 x 844 found `进入平台`, `关闭浮窗`, and exactly two recent-conversation rows; platform entry, exact recent-thread emission, and confirmed close all fired their intended actions. The platform, close, and confirm controls measured 104 x 48, 104 x 48, and 93 x 48 px; horizontal overflow was 0, console errors/warnings were 0, and reduced motion retained `0s` transitions while switching the full pet to its PNG still. The rebuilt APK is 12,429,632 bytes with SHA-256 `0A0313167CF453A5CF43062691FEF16FFA7832FB7ED46A542CEF9FA623D3CC80`. ADB was available but no device was connected, so the native cross-app launch, Settings switch refresh after service-owned close, and permission-enabled reopen remain device-only checks.
+- Exact-navigation and long-press-reply pass: source inspection confirmed Capacitor invokes the overridden `onNewIntent()` from inside `BridgeActivity.load()` before the subclass's `super.onCreate()` returns; `MainActivity` now stores the target until `initialCreateComplete` and only then posts the exact `/#/thread/:threadId` load. Frontend build, Android Java compilation, `mobile:android:sync`, and `assembleDebug` passed. Headless Playwright held a recent row for 560 ms, opened the exact reply form, entered `继续处理并同步结果`, emitted the reply for `fixture-recent-one`, and separately confirmed ordinary click still emits the exact open action. The input measured 194 x 58 px, send measured 94 x 44 px, horizontal overflow stayed 0, and console errors/warnings were 0. The rebuilt APK is 12,432,351 bytes with SHA-256 `79248DE138084739C0671369B4A66EEB8C3BCC395D992E85554D619393DB4957`. No ADB device was connected, so warm/cold native Activity routing, IME focus, and real cross-app reply remain device-only checks.
+- Glanceable-progress and idle-compaction pass: `npm.cmd run build:frontend`, `npm.cmd run verify:server-modules`, `npm.cmd run mobile:android:sync`, and Android `assembleDebug` passed. The server smoke covers live agent delta plus completed-reply replacement in the batch runtime snapshot. Headless Playwright at 390 x 844 found the two real latest-reply snippets as primary card content, no manual minimize button, 48 x 48 Logo/× actions, a 66 x 78 full Web companion, and a 48 x 48 idle bubble with a 36 x 36 image. Horizontal overflow and console errors/warnings were 0; reduced motion reported `0s` animation/transition. Screenshots are `cx-pet-glanceable-progress.png` and `cx-pet-idle-mini.png`. The final rebuilt APK is 12,433,697 bytes with SHA-256 `5DF51CE5C90901C1A75260FC7AC5CE2D5FF883A4FA4E348E8830969DE33C96F9`. ADB found no connected device, so permission-enabled native overlay touch, automatic idle/full switching, and background streamed-reply visibility remain device-only checks.
+- Runtime-convergence and reply-idempotency pass (2026-07-18): `npm.cmd run verify:server-modules`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build:frontend`, `npm.cmd run build:cli`, `npm.cmd run test:7420:frontend`, and Android `testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest` passed. Coverage now includes `sync_degraded` reconciliation, terminal replay cleanup, monotonic native snapshot application, stale-running eviction, and stable client-message IDs across uncertain reply retries. Headless Chrome at 393 x 852 rendered two task rows, two recent conversations, and the direct-reply form with 0 console errors/warnings; evidence is `output/regression-7420/task-pet-runtime-convergence-20260718/task-pet-expanded-reply.png`. Local `/health` and `/codex-api/health` returned 200 before the restart attempt. The execution policy rejected the automated restart before any process change, so the existing 7420 process stayed available and the rebuilt CLI will load on the next normal restart. Android APK packaging/install was intentionally not performed in this pass.
+
+#### Rollback/Cleanup Notes
+
+- Disable `系统悬浮窗` before uninstalling a development APK.
+- Revert `TaskPetOverlayService.java`, the task-pet methods in `MobileShellPlugin.java` and `mobileShell.ts`, the manifest permissions/service, App settings UI, regression fixture, Android documentation, parity findings, and this test section.
+
+### Feature: Lightweight mobile interaction motion
+
+#### Steps
+
+1. Open 7420 at a 393 x 852 viewport and repeatedly open and close the sidebar and Settings sheet.
+2. Tap composer attachment, runtime, expand, microphone, send, and stop controls; verify every enabled control acknowledges the press immediately.
+3. Switch between cached conversations and confirm the history only fades briefly without vertical movement or scroll-position changes.
+4. Start a task and inspect the compact running state; expand runtime details and command rows.
+5. Reload with an empty sidebar cache, then observe the cold-start skeleton.
+6. Enable reduced motion at the operating-system or browser level and repeat the interactions.
+7. Run `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, and the targeted 7420 frontend regression.
+
+#### Expected Results
+
+- High-frequency feedback uses the shared 80 / 120 / 180 / 220 ms motion scale and does not block repeated input.
+- Touch controls provide a restrained press state without a ripple, bounce, or new animation dependency.
+- Mobile drawer and Settings use opacity plus a short transform; the Settings backdrop does not use blur.
+- The running surface keeps one calm pulse and no longer combines sweep, spinner, and jumping-dot animations.
+- Sidebar skeleton sheen runs once instead of indefinitely.
+- Reduced-motion mode removes transforms and continuous status animation while preserving all content and actions.

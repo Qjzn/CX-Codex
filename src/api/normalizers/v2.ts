@@ -235,6 +235,10 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
     return []
   }
 
+  if (itemType === 'webSearch') {
+    return []
+  }
+
   if (item.type === 'agentMessage') {
     const text = typeof item.text === 'string' ? item.text : ''
     const images = extractAssistantImages(item)

@@ -11,6 +11,7 @@ function normalizeInitialHashRoute(): void {
     || pathname === '/__regression/conversation-blocks'
     || pathname === '/__regression/sidebar-rows'
     || pathname === '/__regression/composer-shell'
+    || pathname === '/__regression/task-pet'
     || pathname.startsWith('/thread/')
   if (!isKnownCleanRoute) return
   if (hash && hash !== '#/') return
@@ -71,6 +72,11 @@ const router = createRouter({
       path: '/__regression/composer-shell',
       name: 'regression-composer-shell',
       component: () => import('../components/content/ComposerRegressionFixture.vue'),
+    },
+    {
+      path: '/__regression/task-pet',
+      name: 'regression-task-pet',
+      component: () => import('../components/mobile/TaskPetRegressionFixture.vue'),
     },
     {
       path: '/new-thread',

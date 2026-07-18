@@ -13,6 +13,11 @@ const entryPath = join(outputRoot, 'entry.ts')
 const bundledPath = join(outputRoot, 'entry.mjs')
 const normalizerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'normalizers', 'v2.ts')))
 const notificationReplayImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'notificationReplayCoordinator.ts')))
+const runtimeSnapshotOrderingImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'runtimeSnapshotOrdering.ts')))
+const messageOutboxMergeImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'messageOutboxMerge.ts')))
+const boundedAsyncRecoveryImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'boundedAsyncRecovery.ts')))
+const chatFeedbackMetricsImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'chatFeedbackMetrics.ts')))
+const runtimeRequestDeliveryImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'runtimeRequestDelivery.ts')))
 const rpcClientImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'codexRpcClient.ts')))
 
 try {
@@ -20,7 +25,184 @@ try {
 import assert from 'node:assert/strict'
 import { normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from '${normalizerImport}'
 import { createNotificationReplayCoordinator } from '${notificationReplayImport}'
+import { shouldApplyRuntimeSnapshotVersion } from '${runtimeSnapshotOrderingImport}'
+import { mergeMessageOutboxEntries, mergeMessageOutboxState } from '${messageOutboxMergeImport}'
+import { runWithBoundedRecovery } from '${boundedAsyncRecoveryImport}'
+import {
+  beginChatFeedbackMetric,
+  markChatFeedbackFirstAssistantData,
+  markChatFeedbackFirstAssistantVisible,
+  markChatFeedbackRendered,
+  markChatFeedbackRequestDispatched,
+  markChatFeedbackServerAcknowledged,
+} from '${chatFeedbackMetricsImport}'
+import { isRuntimeRequestAwaitingDeliveryConfirmation } from '${runtimeRequestDeliveryImport}'
 import { subscribeRpcNotifications } from '${rpcClientImport}'
+
+const originalWindow = globalThis.window
+assert.equal(isRuntimeRequestAwaitingDeliveryConfirmation('pending_start'), true)
+assert.equal(isRuntimeRequestAwaitingDeliveryConfirmation('start_uncertain'), true)
+assert.equal(isRuntimeRequestAwaitingDeliveryConfirmation('sync_degraded'), true)
+assert.equal(isRuntimeRequestAwaitingDeliveryConfirmation('running'), false)
+assert.equal(isRuntimeRequestAwaitingDeliveryConfirmation('completed'), false)
+
+globalThis.window = globalThis
+delete globalThis.__cxCodexChatFeedbackMetrics
+const feedbackStartedAtMs = performance.now() - 8
+beginChatFeedbackMetric({
+  threadId: 'thread-feedback',
+  clientMessageId: 'client-feedback',
+  optimisticMessageId: 'optimistic-feedback',
+  submitStartedAtMs: feedbackStartedAtMs,
+})
+markChatFeedbackRequestDispatched('client-feedback')
+markChatFeedbackServerAcknowledged({
+  clientMessageId: 'client-feedback',
+  threadId: 'thread-feedback',
+  turnId: 'turn-feedback',
+})
+markChatFeedbackServerAcknowledged({
+  threadId: 'thread-feedback',
+  turnId: 'turn-feedback',
+  turnStarted: true,
+})
+markChatFeedbackFirstAssistantData({
+  threadId: 'thread-feedback',
+  turnId: 'turn-feedback',
+  messageId: 'assistant-feedback',
+})
+markChatFeedbackFirstAssistantVisible({
+  threadId: 'thread-feedback',
+  visibleMessageIds: new Set(['assistant-feedback']),
+})
+markChatFeedbackRendered({
+  threadId: 'thread-feedback',
+  optimisticMessageId: 'optimistic-feedback',
+  runningVisible: false,
+})
+markChatFeedbackRendered({
+  threadId: 'thread-feedback',
+  optimisticMessageId: 'optimistic-feedback',
+  runningVisible: true,
+})
+const feedbackMetric = globalThis.__cxCodexChatFeedbackMetrics?.[0]
+assert.equal(feedbackMetric?.clientMessageId, 'client-feedback')
+assert.ok((feedbackMetric?.stateCommitLatencyMs ?? -1) >= 0)
+assert.ok((feedbackMetric?.bubbleVisibleLatencyMs ?? -1) >= 0)
+assert.ok((feedbackMetric?.runningVisibleLatencyMs ?? -1) >= 0)
+assert.ok((feedbackMetric?.requestDispatchedLatencyMs ?? -1) >= 0)
+assert.ok((feedbackMetric?.serverAcknowledgedLatencyMs ?? -1) >= 0)
+assert.equal(feedbackMetric?.turnId, 'turn-feedback')
+assert.ok((feedbackMetric?.turnStartedLatencyMs ?? -1) >= 0)
+assert.ok((feedbackMetric?.firstAssistantDataLatencyMs ?? -1) >= 0)
+assert.equal(feedbackMetric?.firstAssistantMessageId, 'assistant-feedback')
+assert.ok((feedbackMetric?.firstAssistantVisibleLatencyMs ?? -1) >= 0)
+delete globalThis.__cxCodexChatFeedbackMetrics
+if (originalWindow === undefined) delete globalThis.window
+else globalThis.window = originalWindow
+
+assert.equal(shouldApplyRuntimeSnapshotVersion({ lastEventSeq: 42 }, { lastEventSeq: 41 }), false)
+assert.equal(shouldApplyRuntimeSnapshotVersion({ lastEventSeq: 42 }, { lastEventSeq: 42 }), true)
+assert.equal(shouldApplyRuntimeSnapshotVersion({ lastEventSeq: 42 }, { lastEventSeq: 43 }), true)
+assert.equal(shouldApplyRuntimeSnapshotVersion({ lastEventSeq: 42 }, { lastEventSeq: 0 }), true)
+
+const mergedOutbox = mergeMessageOutboxEntries([
+  { clientMessageId: 'client-a', createdAtMs: 1, updatedAtMs: 3, state: 'confirming' },
+  { clientMessageId: 'client-b', createdAtMs: 2, updatedAtMs: 2, state: 'sending' },
+], [
+  { clientMessageId: 'client-a', createdAtMs: 1, updatedAtMs: 1, state: 'sending' },
+  { clientMessageId: 'client-c', createdAtMs: 3, updatedAtMs: 3, state: 'sending' },
+])
+assert.deepEqual(mergedOutbox.map((entry) => [entry.clientMessageId, entry.state]), [
+  ['client-a', 'confirming'],
+  ['client-b', 'sending'],
+  ['client-c', 'sending'],
+])
+
+const removedOutbox = mergeMessageOutboxState([
+  { clientMessageId: 'client-stale', createdAtMs: 1, updatedAtMs: 5, state: 'confirming' },
+  { clientMessageId: 'client-newer', createdAtMs: 2, updatedAtMs: 9, state: 'sending' },
+], [], [], [
+  { clientMessageId: 'client-stale', removedAtMs: 6 },
+  { clientMessageId: 'client-newer', removedAtMs: 8 },
+])
+assert.deepEqual(removedOutbox.entries.map((entry) => entry.clientMessageId), ['client-newer'])
+assert.deepEqual(removedOutbox.removals, [
+  { clientMessageId: 'client-stale', removedAtMs: 6 },
+  { clientMessageId: 'client-newer', removedAtMs: 8 },
+])
+
+const retryAttempts = []
+const retryFeedback = []
+const retryWaits = []
+const recoveredAfterRetry = await runWithBoundedRecovery({
+  retryDelaysMs: [650, 1800],
+  run: async (attemptIndex) => {
+    retryAttempts.push(attemptIndex)
+    if (attemptIndex === 0) throw new TypeError('Failed to fetch')
+    return 'running'
+  },
+  recover: async () => null,
+  shouldRetry: (error) => error instanceof TypeError,
+  onRetry: (retryNumber, maxRetries) => retryFeedback.push([retryNumber, maxRetries]),
+  wait: async (delayMs) => { retryWaits.push(delayMs) },
+})
+assert.equal(recoveredAfterRetry, 'running')
+assert.deepEqual(retryAttempts, [0, 1])
+assert.deepEqual(retryFeedback, [[1, 2]])
+assert.deepEqual(retryWaits, [650])
+
+let lostResponseAttempts = 0
+const recoveredLostResponse = await runWithBoundedRecovery({
+  retryDelaysMs: [650, 1800],
+  run: async () => {
+    lostResponseAttempts += 1
+    throw new Error('Runtime turn start request timed out')
+  },
+  recover: async () => 'start_uncertain',
+  shouldRetry: () => true,
+})
+assert.equal(recoveredLostResponse, 'start_uncertain')
+assert.equal(lostResponseAttempts, 1)
+
+const exhaustedAttempts = []
+const exhaustedWaits = []
+await assert.rejects(() => runWithBoundedRecovery({
+  retryDelaysMs: [650, 1800],
+  run: async (attemptIndex) => {
+    exhaustedAttempts.push(attemptIndex)
+    throw new TypeError('Failed to fetch')
+  },
+  recover: async () => null,
+  shouldRetry: () => true,
+  wait: async (delayMs) => { exhaustedWaits.push(delayMs) },
+}), /Failed to fetch/)
+assert.deepEqual(exhaustedAttempts, [0, 1, 2])
+assert.deepEqual(exhaustedWaits, [650, 1800])
+
+let definiteFailureAttempts = 0
+await assert.rejects(() => runWithBoundedRecovery({
+  retryDelaysMs: [650, 1800],
+  run: async () => {
+    definiteFailureAttempts += 1
+    throw new Error('Permission denied')
+  },
+  recover: async () => null,
+  shouldRetry: () => false,
+}), /Permission denied/)
+assert.equal(definiteFailureAttempts, 1)
+
+let rejectedRecoveryAttempts = 0
+await assert.rejects(() => runWithBoundedRecovery({
+  retryDelaysMs: [650, 1800],
+  run: async () => {
+    rejectedRecoveryAttempts += 1
+    throw new TypeError('Failed to fetch')
+  },
+  recover: async () => { throw new Error('Server rejected the request') },
+  shouldRetry: () => true,
+}), /Server rejected the request/)
+assert.equal(rejectedRecoveryAttempts, 1)
 
 const messages = normalizeThreadMessagesV2({
   thread: {
@@ -56,6 +238,12 @@ const messages = normalizeThreadMessagesV2({
             })),
           },
           {
+            id: 'item-web-search',
+            type: 'webSearch',
+            query: 'Codex desktop parity',
+            action: { type: 'search', query: 'Codex desktop parity' },
+          },
+          {
             id: 'item-new',
             type: 'threadShellCommandOutput',
             command: 'secret command',
@@ -79,6 +267,7 @@ assert.equal(messages[1]?.rawPayload?.includes('secret command'), true)
 assert.equal(messages[2]?.messageType, 'unhandled.invalidItem')
 assert.equal(messages[2]?.isUnhandled, true)
 assert.equal(messages.some((message) => message.messageType === 'unhandled.fileChange'), false)
+assert.equal(messages.some((message) => message.messageType === 'unhandled.webSearch'), false)
 assert.equal(messages.some((message) => message.rawPayload?.includes('large internal patch details')), false)
 
 const unloadedTurnMessages = normalizeThreadMessagesV2({

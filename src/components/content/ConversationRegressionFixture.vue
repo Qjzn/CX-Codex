@@ -26,6 +26,8 @@
         :pending-requests="pendingRequests"
         :live-overlay="liveOverlay"
         :is-loading="false"
+        :is-turn-in-progress="true"
+        compact-runtime-chrome
         active-thread-id="regression-conversation-blocks"
         cwd="E:/javaword/CXCodex/codexui"
         :scroll-state="null"
@@ -37,6 +39,7 @@
         @load-older-history="onLoadOlderHistory"
         @return-to-new-thread="noop"
         @dismiss-empty-thread="noop"
+        @retry-failed-message="noop"
       />
       <span class="conversation-regression-older-history-count" :data-count="olderHistoryRequestCount" aria-hidden="true" />
       <QueuedMessages
@@ -64,7 +67,7 @@ const messages: UiMessage[] = [
     role: 'system',
     text: '已优先显示最近 10 轮，较早 8 轮已折叠以保持流畅。',
     messageType: 'history.notice',
-    turnIndex: 1,
+    turnIndex: 0,
   },
   {
     id: 'fixture-user-files',
@@ -80,8 +83,15 @@ const messages: UiMessage[] = [
         path: 'E:/javaword/CXCodex/codexui/src/components/content/ThreadConversation.vue',
       },
     ],
-    turnIndex: 1,
+    turnIndex: 0,
   },
+  ...Array.from({ length: 8 }, (_, index): UiMessage => ({
+    id: `fixture-latest-turn-progress-${String(index + 1)}`,
+    role: 'system',
+    text: `fixture latest turn progress ${String(index + 1)}`,
+    messageType: 'fixture.progress',
+    turnIndex: 0,
+  })),
   {
     id: 'fixture-assistant-blocks',
     role: 'assistant',
@@ -121,7 +131,6 @@ const messages: UiMessage[] = [
         summary: 'Raw payload must stay inspectable but folded behind a structured card.',
       },
     }),
-    isUnhandled: true,
     turnIndex: 1,
   },
   {
@@ -133,6 +142,18 @@ const messages: UiMessage[] = [
       type: 'fileChange',
       marker: 'fixture-hidden-file-change-noise',
       summary: 'This low-value system item should not render in the normal conversation flow.',
+    }),
+    isUnhandled: true,
+    turnIndex: 1,
+  },
+  {
+    id: 'fixture-hidden-web-search-noise',
+    role: 'system',
+    text: 'Unhandled App Server item: webSearch',
+    messageType: 'unhandled.webSearch',
+    rawPayload: JSON.stringify({
+      type: 'webSearch',
+      query: 'fixture-hidden-web-search-noise',
     }),
     isUnhandled: true,
     turnIndex: 1,
@@ -157,18 +178,79 @@ const messages: UiMessage[] = [
     },
     turnIndex: 1,
   },
-  ...Array.from({ length: 8 }, (_, index): UiMessage => ({
-    id: `fixture-latest-turn-progress-${String(index + 1)}`,
+  {
+    id: 'fixture-interrupted-turn',
     role: 'system',
-    text: `fixture latest turn progress ${String(index + 1)}`,
-    messageType: 'fixture.progress',
+    text: '已在 12 秒后停止',
+    messageType: 'turn.interrupted',
     turnIndex: 1,
-  })),
+  },
+  {
+    id: 'optimistic-user:fixture:plain-echo',
+    role: 'user',
+    text: '这是一条立即回显的用户消息；内容会立刻出现，不暴露内部状态。',
+    deliveryState: 'sending',
+    turnIndex: 1,
+  },
+  {
+    id: 'optimistic-user:fixture:failed-echo',
+    role: 'user',
+    text: '这是一条弱网发送失败后仍保留的消息，可以直接重试。',
+    deliveryState: 'failed',
+    deliveryError: '发送失败，请检查连接后重试。',
+    turnIndex: 1,
+  },
+  {
+    id: 'optimistic-user:fixture:retrying-echo',
+    role: 'user',
+    text: '网络短暂中断，正在安全重连，内容不会重复发送。',
+    deliveryState: 'retrying',
+    deliveryAttempt: 1,
+    deliveryAttemptMax: 2,
+    turnIndex: 1,
+  },
+  {
+    id: 'optimistic-user:fixture:confirming-echo',
+    role: 'user',
+    text: '服务器已记录请求，但任务启动结果仍在确认，消息恢复依据会继续保留。',
+    deliveryState: 'confirming',
+    turnIndex: 1,
+  },
+  {
+    id: 'optimistic-user:fixture:sent-echo',
+    role: 'user',
+    text: '服务端已经确认接收，正在等待历史消息同步。',
+    deliveryState: 'sent',
+    turnIndex: 1,
+  },
+  {
+    id: 'fixture-running-command-current',
+    role: 'system',
+    text: '',
+    messageType: 'commandExecution',
+    commandExecution: {
+      command: 'npm.cmd run verify:frontend-normalizers',
+      cwd: 'E:/javaword/CXCodex/codexui',
+      status: 'inProgress',
+      aggregatedOutput: 'fixture-current-command: running',
+      exitCode: null,
+      durationMs: null,
+      startedAtMs: Date.now() - 6500,
+    },
+    turnIndex: 2,
+  },
+  {
+    id: 'fixture-streaming-assistant-tail',
+    role: 'assistant',
+    text: '我已经完成前半部分检查，回复仍在继续生成，不应让运行状态消失。',
+    messageType: 'agentMessage.live',
+    turnIndex: 2,
+  },
 ]
 
 const olderHistoryRequestCount = ref(0)
 
-const pendingRequests: UiServerRequest[] = [
+const allPendingRequests: UiServerRequest[] = [
   {
     id: 742001,
     method: 'elicitation/create',
@@ -177,9 +259,24 @@ const pendingRequests: UiServerRequest[] = [
     itemId: 'fixture-mcp-permission',
     receivedAtIso: '2026-07-05T05:00:00.000Z',
     params: {
-      message: 'Allow the chrome MCP server to run tool "browser_click"?',
-      serverName: 'chrome',
-      toolName: 'browser_click',
+      serverName: 'codex_apps',
+      mode: 'form',
+      message: 'Allow GitHub to run tool "github_update_pull_request"?',
+      requestedSchema: {
+        type: 'object',
+        properties: {},
+      },
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        connector_name: 'GitHub',
+        tool_title: 'update_pull_request',
+        persist: ['session', 'always'],
+        tool_params_display: [
+          { name: 'pr_number', value: 18, display_name: 'pr_number' },
+          { name: 'repository_full_name', value: 'Qjzn/CX-Codex', display_name: 'repository_full_name' },
+          { name: 'state', value: 'closed', display_name: 'state' },
+        ],
+      },
       reason: 'fixture-permission-workbench',
     },
   },
@@ -199,11 +296,25 @@ const pendingRequests: UiServerRequest[] = [
   },
 ]
 
-const liveOverlay: UiLiveOverlay = {
+const isTailStatusFixture = typeof window !== 'undefined'
+  && new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('tailStatus') === '1'
+const pendingRequests: UiServerRequest[] = isTailStatusFixture ? [] : allPendingRequests
+
+const liveOverlay = ref<UiLiveOverlay | null>({
+  startedAtMs: Date.now() - 6500,
   activityLabel: 'fixture runtime activity',
   activityDetails: ['fixture runtime detail should stay compact and neutral'],
   reasoningText: 'fixture reasoning text',
   errorText: '',
+})
+
+if (
+  typeof window !== 'undefined'
+  && new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('tailGap') === '1'
+) {
+  window.setTimeout(() => {
+    liveOverlay.value = null
+  }, 250)
 }
 
 const runtimeSummary: UiRuntimeStatusSummary = {

@@ -38,6 +38,7 @@ type RuntimeStoreForOperations = {
     patch: Parameters<AppServerRuntimeActionsDependencies['updateRequest']>[1],
   ): RuntimeRequestRecord | null
   getRequest(requestId: string): RuntimeRequestRecord | null
+  getLatestRequestByClientMessageId(clientMessageId: string): RuntimeRequestRecord | null
   getSnapshot(threadId: string): RuntimeSnapshotRecord | null
   upsertSnapshot(snapshot: RuntimeSnapshotRecord): RuntimeSnapshotRecord
 } & Parameters<typeof createAppServerRuntimeReconciliation>[0]['runtimeStore']
@@ -135,6 +136,7 @@ export function createCodexBridgeRuntimeOperations(
     createRequest: (record) => runtimeStore.createRequest(record),
     updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
     getRequest: (requestId) => runtimeStore.getRequest(requestId),
+    getLatestRequestByClientMessageId: (clientMessageId) => runtimeStore.getLatestRequestByClientMessageId(clientMessageId),
     rpc: (method, params) => appServer.rpc(method, params),
     clearThreadSearchIndex: () => dependencies.threadSearchIndexStore.clear(),
     markStarting: (threadId) => runtimeStateStore.markStarting(threadId),

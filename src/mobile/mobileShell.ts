@@ -1,4 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
+import type { UiTaskPetRecentThread } from '../types/codex'
 
 export type MobileShellServerConfig = {
   serverUrl: string
@@ -104,6 +105,26 @@ export type MobileShellDictationStopResult = {
   stopping: boolean
 }
 
+export type MobileShellTaskPetItem = {
+  threadId: string
+  title: string
+  projectName: string
+  detail: string
+  latestActivity: string
+  latestReply: string
+  state: 'running' | 'waiting'
+  updatedAtIso: string
+}
+
+export type MobileShellTaskPetRecentThread = UiTaskPetRecentThread
+
+export type MobileShellTaskPetStatus = {
+  enabled: boolean
+  showing: boolean
+  canDrawOverlays: boolean
+  permissionRequired: boolean
+}
+
 type MobileShellPlugin = {
   getServerConfig(): Promise<MobileShellServerConfig>
   setServerUrl(options: { serverUrl: string }): Promise<MobileShellServerConfig>
@@ -131,6 +152,19 @@ type MobileShellPlugin = {
   startDictation(options: { language?: string }): Promise<MobileShellDictationResult>
   stopDictation(): Promise<MobileShellDictationStopResult>
   cancelDictation(): Promise<void>
+  getTaskPetStatus(): Promise<MobileShellTaskPetStatus>
+  setTaskPetEnabled(options: {
+    enabled: boolean
+    serverUrl?: string
+    tasksJson?: string
+    recentThreadsJson?: string
+  }): Promise<MobileShellTaskPetStatus>
+  updateTaskPet(options: {
+    serverUrl: string
+    tasksJson: string
+    recentThreadsJson: string
+  }): Promise<MobileShellTaskPetStatus>
+  markTaskPetThreadRead(options: { threadId: string }): Promise<void>
 }
 
 const MobileShell = registerPlugin<MobileShellPlugin>('MobileShell')
@@ -236,4 +270,40 @@ export async function stopMobileShellDictation(): Promise<MobileShellDictationSt
 
 export async function cancelMobileShellDictation(): Promise<void> {
   await MobileShell.cancelDictation()
+}
+
+export async function getMobileShellTaskPetStatus(): Promise<MobileShellTaskPetStatus> {
+  return await MobileShell.getTaskPetStatus()
+}
+
+export async function setMobileShellTaskPetEnabled(
+  enabled: boolean,
+  serverUrl = '',
+  tasks: MobileShellTaskPetItem[] = [],
+  recentThreads: MobileShellTaskPetRecentThread[] = [],
+): Promise<MobileShellTaskPetStatus> {
+  return await MobileShell.setTaskPetEnabled({
+    enabled,
+    serverUrl,
+    tasksJson: JSON.stringify(tasks),
+    recentThreadsJson: JSON.stringify(recentThreads),
+  })
+}
+
+export async function updateMobileShellTaskPet(
+  serverUrl: string,
+  tasks: MobileShellTaskPetItem[],
+  recentThreads: MobileShellTaskPetRecentThread[],
+): Promise<MobileShellTaskPetStatus> {
+  return await MobileShell.updateTaskPet({
+    serverUrl,
+    tasksJson: JSON.stringify(tasks),
+    recentThreadsJson: JSON.stringify(recentThreads),
+  })
+}
+
+export async function markMobileShellTaskPetThreadRead(threadId: string): Promise<void> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId || !isNativeAndroidShell()) return
+  await MobileShell.markTaskPetThreadRead({ threadId: normalizedThreadId })
 }

@@ -7,11 +7,13 @@ import { readRuntimeRequestStatusFromExecutionState } from './appServerRuntimeBr
 
 export const RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES: RuntimeRequestStatus[] = [
   'pending_start',
+  'starting',
   'start_uncertain',
   'running',
   'stopping',
   'stop_uncertain',
   'still_running',
+  'sync_degraded',
 ]
 export const RUNTIME_RECONCILE_RUNNING_THROTTLE_MS = 10_000
 export const RUNTIME_RECONCILE_BATCH_LIMIT = 3
@@ -89,7 +91,11 @@ export function selectRuntimeRequestsForReconcile(
   return requests
     .filter((request) => {
       if (!request.threadId) return false
-      if (request.status !== 'running' && request.status !== 'still_running') return true
+      if (
+        request.status !== 'running'
+        && request.status !== 'still_running'
+        && request.status !== 'sync_degraded'
+      ) return true
       const lastAtMs = lastReconciledAtMsByThreadId.get(request.threadId) ?? 0
       return nowMs - lastAtMs >= RUNTIME_RECONCILE_RUNNING_THROTTLE_MS
     })
@@ -112,8 +118,13 @@ export function createRuntimeRequestSnapshotPatch(
   threadId: string,
   snapshot: Pick<ThreadRuntimeSnapshot, 'activeTurnId' | 'executionState' | 'inProgress' | 'lastError'>,
 ): RuntimeRequestSnapshotPatch {
-  const status =
-    snapshot.inProgress && (request.status === 'stopping' || request.status === 'stop_uncertain')
+  const startWasInterrupted =
+    (request.status === 'pending_start' || request.status === 'starting')
+    && !snapshot.inProgress
+    && (snapshot.executionState === 'idle' || snapshot.executionState === 'stopped')
+  const status = startWasInterrupted
+    ? 'failed'
+    : snapshot.inProgress && (request.status === 'stopping' || request.status === 'stop_uncertain')
       ? 'still_running'
       : readRuntimeRequestStatusFromExecutionState(snapshot.executionState)
 
@@ -121,6 +132,8 @@ export function createRuntimeRequestSnapshotPatch(
     status,
     threadId,
     turnId: snapshot.activeTurnId || request.turnId,
-    lastError: snapshot.lastError,
+    lastError: startWasInterrupted
+      ? 'Turn start was not confirmed after bridge restart'
+      : snapshot.lastError,
   }
 }
