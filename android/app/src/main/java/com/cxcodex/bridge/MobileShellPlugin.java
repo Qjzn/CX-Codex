@@ -229,7 +229,7 @@ public class MobileShellPlugin extends Plugin {
             .getBoolean(MobileShellConfig.PREF_TASK_PET_ENABLED, false);
         boolean canDrawOverlays = Settings.canDrawOverlays(getContext());
         if (enabled && canDrawOverlays && !TaskPetOverlayService.isRunning()) {
-            TaskPetOverlayService.startOrUpdate(getContext(), null, null);
+            TaskPetOverlayService.startOrUpdate(getContext(), null, null, null);
         }
         call.resolve(buildTaskPetStatus(enabled, canDrawOverlays));
     }
@@ -240,18 +240,21 @@ public class MobileShellPlugin extends Plugin {
         String serverUrl = MobileShellConfig.normalizeServerUrl(call.getString("serverUrl", ""));
         String tasksJson = call.getString("tasksJson", "[]");
         if (tasksJson == null) tasksJson = "[]";
+        String recentThreadsJson = call.getString("recentThreadsJson", "[]");
+        if (recentThreadsJson == null) recentThreadsJson = "[]";
 
         MobileShellConfig.getPreferences(getContext()).edit()
             .putBoolean(MobileShellConfig.PREF_TASK_PET_ENABLED, enabled)
             .putString(MobileShellConfig.PREF_TASK_PET_SERVER_URL, serverUrl)
-            .putString(MobileShellConfig.PREF_TASK_PET_TASKS_JSON, tasksJson)
+            .putString(MobileShellConfig.PREF_TASK_PET_ACTIVE_TASKS_JSON, tasksJson)
+            .putString(MobileShellConfig.PREF_TASK_PET_RECENT_THREADS_JSON, recentThreadsJson)
             .apply();
 
         boolean canDrawOverlays = Settings.canDrawOverlays(getContext());
         if (!enabled) {
             TaskPetOverlayService.stop(getContext());
         } else if (canDrawOverlays) {
-            TaskPetOverlayService.startOrUpdate(getContext(), serverUrl, tasksJson);
+            TaskPetOverlayService.startOrUpdate(getContext(), serverUrl, tasksJson, recentThreadsJson);
         } else {
             try {
                 Intent settingsIntent = new Intent(
@@ -273,18 +276,32 @@ public class MobileShellPlugin extends Plugin {
         String serverUrl = MobileShellConfig.normalizeServerUrl(call.getString("serverUrl", ""));
         String tasksJson = call.getString("tasksJson", "[]");
         if (tasksJson == null) tasksJson = "[]";
+        String recentThreadsJson = call.getString("recentThreadsJson", "[]");
+        if (recentThreadsJson == null) recentThreadsJson = "[]";
         MobileShellConfig.getPreferences(getContext()).edit()
             .putString(MobileShellConfig.PREF_TASK_PET_SERVER_URL, serverUrl)
-            .putString(MobileShellConfig.PREF_TASK_PET_TASKS_JSON, tasksJson)
+            .putString(MobileShellConfig.PREF_TASK_PET_ACTIVE_TASKS_JSON, tasksJson)
+            .putString(MobileShellConfig.PREF_TASK_PET_RECENT_THREADS_JSON, recentThreadsJson)
             .apply();
 
         boolean enabled = MobileShellConfig.getPreferences(getContext())
             .getBoolean(MobileShellConfig.PREF_TASK_PET_ENABLED, false);
         boolean canDrawOverlays = Settings.canDrawOverlays(getContext());
         if (enabled && canDrawOverlays) {
-            TaskPetOverlayService.startOrUpdate(getContext(), serverUrl, tasksJson);
+            TaskPetOverlayService.startOrUpdate(getContext(), serverUrl, tasksJson, recentThreadsJson);
         }
         call.resolve(buildTaskPetStatus(enabled, canDrawOverlays));
+    }
+
+    @PluginMethod
+    public void markTaskPetThreadRead(PluginCall call) {
+        String threadId = call.getString("threadId", "");
+        if (threadId == null || threadId.trim().isEmpty()) {
+            call.reject("缺少会话标识");
+            return;
+        }
+        TaskPetOverlayService.markThreadRead(getContext(), threadId);
+        call.resolve();
     }
 
     private JSObject buildTaskPetStatus(boolean enabled, boolean canDrawOverlays) {

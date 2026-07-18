@@ -384,7 +384,7 @@ export class RuntimeStore {
   listUncertainRequests(limit = 50): RuntimeRequestRecord[] {
     const rows = this.db.prepare(`
       SELECT * FROM runtime_requests
-      WHERE status IN ('pending_start', 'start_uncertain', 'running', 'stopping', 'stop_uncertain', 'still_running')
+      WHERE status IN ('pending_start', 'starting', 'start_uncertain', 'running', 'stopping', 'stop_uncertain', 'still_running', 'sync_degraded')
       ORDER BY updated_at_iso ASC
       LIMIT ?
     `).all(Math.max(1, Math.min(200, Math.trunc(limit)))) as RuntimeRequestRow[]
@@ -540,7 +540,7 @@ export class RuntimeStore {
       requestCount: scalar('SELECT COUNT(*) AS value FROM runtime_requests'),
       uncertainRequestCount: scalar(`
         SELECT COUNT(*) AS value FROM runtime_requests
-        WHERE status IN ('pending_start', 'start_uncertain', 'running', 'stopping', 'stop_uncertain', 'still_running')
+        WHERE status IN ('pending_start', 'starting', 'start_uncertain', 'running', 'stopping', 'stop_uncertain', 'still_running', 'sync_degraded')
       `),
       latestSeq: this.getLatestEventSeq(),
       oldestSeq: this.getOldestEventSeq(),
@@ -573,7 +573,7 @@ export class RuntimeStore {
   private countActiveRequests(): number {
     const row = this.db.prepare(`
       SELECT COUNT(*) AS value FROM runtime_requests
-      WHERE status IN ('pending_start', 'start_uncertain', 'running', 'stopping', 'stop_uncertain', 'still_running')
+      WHERE status IN ('pending_start', 'starting', 'start_uncertain', 'running', 'stopping', 'stop_uncertain', 'still_running')
     `).get() as { value?: number } | undefined
     return typeof row?.value === 'number' && Number.isFinite(row.value) ? Math.max(0, Math.trunc(row.value)) : 0
   }

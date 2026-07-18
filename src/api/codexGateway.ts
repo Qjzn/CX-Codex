@@ -112,6 +112,7 @@ export type ThreadRuntimeSnapshot = {
   lastStartedAtIso: string | null
   lastCompletedAtIso: string | null
   lastError: string | null
+  latestReply?: string
   stale: boolean
   degradedReason: string | null
   messageState: 'fresh' | 'cached' | 'unavailable'

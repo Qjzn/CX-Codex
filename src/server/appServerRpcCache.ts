@@ -38,7 +38,13 @@ const APP_SERVER_MODEL_LIST_STALE_CACHE_TTL_MS = 60 * 60_000
 const APP_SERVER_MODEL_LIST_BACKGROUND_REFRESH_MIN_INTERVAL_MS = 5 * 60_000
 
 export function getShareableRpcKey(method: string, params: unknown): string | null {
-  if (method !== 'thread/list' && method !== 'thread/read' && method !== 'model/list') {
+  if (
+    method !== 'thread/list'
+    && method !== 'thread/read'
+    && method !== 'model/list'
+    && method !== 'plugin/list'
+    && method !== 'mcpServerStatus/list'
+  ) {
     return null
   }
 

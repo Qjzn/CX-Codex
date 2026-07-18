@@ -8,6 +8,7 @@ import {
   normalizePlanModeTurnStartParams,
   parseRuntimeSendPayload,
   shouldRetryPlanModeWithoutNativeMode,
+  type ParsedRuntimeSendPayload,
 } from './runtimePayload.js'
 import type {
   RuntimeRequestRecord,
@@ -38,9 +39,11 @@ export type RuntimeStartDependencies = {
       turnId?: string
       status?: RuntimeRequestStatus
       lastError?: string | null
+      incrementRetry?: boolean
     },
   ): RuntimeRequestRecord | null
   getRequest(requestId: string): RuntimeRequestRecord | null
+  getLatestRequestByClientMessageId(clientMessageId: string): RuntimeRequestRecord | null
   rpc(method: string, params: unknown): Promise<unknown>
   clearThreadSearchIndex(): void
   markStarting(threadId: string): void
@@ -54,7 +57,36 @@ export type RuntimeStartDependencies = {
 export function createAppServerRuntimeTurnStarter(
   dependencies: RuntimeStartDependencies,
 ): (payload: unknown) => Promise<RuntimeStartResult> {
-  return async (payload) => await startRuntimeTurnWithAppServer(payload, dependencies)
+  const inFlightByClientMessageId = new Map<string, {
+    signature: string
+    promise: Promise<RuntimeStartResult>
+  }>()
+
+  return async (payload) => {
+    const parsed = parseRuntimeSendPayload(payload)
+    const promptHash = createRuntimePromptHash(parsed.input)
+    const signature = runtimeSendIdempotencySignature(parsed, promptHash)
+    const clientMessageId = parsed.clientMessageId
+    const inFlight = clientMessageId ? inFlightByClientMessageId.get(clientMessageId) : undefined
+    if (inFlight) {
+      if (inFlight.signature !== signature) {
+        throw new Error('clientMessageId already belongs to different message content')
+      }
+      return await inFlight.promise
+    }
+
+    const promise = startParsedRuntimeTurnWithAppServer(parsed, promptHash, dependencies)
+    if (clientMessageId) {
+      inFlightByClientMessageId.set(clientMessageId, { signature, promise })
+    }
+    try {
+      return await promise
+    } finally {
+      if (clientMessageId && inFlightByClientMessageId.get(clientMessageId)?.promise === promise) {
+        inFlightByClientMessageId.delete(clientMessageId)
+      }
+    }
+  }
 }
 
 export async function startRuntimeTurnWithAppServer(
@@ -62,17 +94,57 @@ export async function startRuntimeTurnWithAppServer(
   dependencies: RuntimeStartDependencies,
 ): Promise<RuntimeStartResult> {
   const parsed = parseRuntimeSendPayload(payload)
-  let threadId = parsed.threadId
+  return await startParsedRuntimeTurnWithAppServer(
+    parsed,
+    createRuntimePromptHash(parsed.input),
+    dependencies,
+  )
+}
 
-  dependencies.createRequest({
-    requestId: parsed.requestId,
-    clientMessageId: parsed.clientMessageId,
-    threadId,
-    status: 'pending_start',
-    promptHash: createRuntimePromptHash(parsed.input),
-    mode: parsed.mode,
-    payload: parsed.payloadSummary,
-  })
+async function startParsedRuntimeTurnWithAppServer(
+  parsed: ParsedRuntimeSendPayload,
+  promptHash: string,
+  dependencies: RuntimeStartDependencies,
+): Promise<RuntimeStartResult> {
+  let threadId = parsed.threadId
+  let requestId = parsed.requestId
+  let shouldCreateRequest = true
+
+  if (parsed.clientMessageId) {
+    const existing = dependencies.getLatestRequestByClientMessageId(parsed.clientMessageId)
+    if (existing) {
+      if (
+        existing.promptHash !== promptHash
+        || existing.mode !== parsed.mode
+        || (parsed.threadId && existing.threadId && existing.threadId !== parsed.threadId)
+      ) {
+        throw new Error('clientMessageId already belongs to different message content')
+      }
+      if (existing.status === 'pending_start' && !existing.threadId) {
+        requestId = existing.requestId
+        shouldCreateRequest = false
+        dependencies.updateRequest(existing.requestId, { incrementRetry: true })
+      } else {
+        const retried = dependencies.updateRequest(existing.requestId, { incrementRetry: true }) ?? existing
+        if (retried.status === 'failed') {
+          throw new Error(retried.lastError || 'Previous send attempt failed')
+        }
+        return runtimeStartResultFromRequest(retried)
+      }
+    }
+  }
+
+  if (shouldCreateRequest) {
+    dependencies.createRequest({
+      requestId,
+      clientMessageId: parsed.clientMessageId,
+      threadId,
+      status: 'pending_start',
+      promptHash,
+      mode: parsed.mode,
+      payload: parsed.payloadSummary,
+    })
+  }
 
   try {
     if (!threadId) {
@@ -83,7 +155,7 @@ export async function startRuntimeTurnWithAppServer(
       threadId = readThreadIdFromPayload(startedThread)
       if (!threadId) throw new Error('thread/start did not return a thread id')
       dependencies.clearThreadSearchIndex()
-      dependencies.updateRequest(parsed.requestId, {
+      dependencies.updateRequest(requestId, {
         threadId,
         status: 'pending_start',
       })
@@ -100,7 +172,7 @@ export async function startRuntimeTurnWithAppServer(
 
     dependencies.markStarting(threadId)
     dependencies.persistRuntimeSnapshot(threadId)
-    dependencies.updateRequest(parsed.requestId, {
+    dependencies.updateRequest(requestId, {
       status: 'starting',
       threadId,
     })
@@ -113,12 +185,12 @@ export async function startRuntimeTurnWithAppServer(
     dependencies.markRunning(threadId, turnId)
     const snapshot = dependencies.persistRuntimeSnapshot(threadId)
     const effectiveTurnId = turnId || snapshot.activeTurnId
-    const request = dependencies.updateRequest(parsed.requestId, {
+    const request = dependencies.updateRequest(requestId, {
       status: 'running',
       threadId,
       turnId: effectiveTurnId,
       lastError: null,
-    }) ?? dependencies.getRequest(parsed.requestId)
+    }) ?? dependencies.getRequest(requestId)
     return {
       request: request as RuntimeRequestRecord,
       threadId,
@@ -130,11 +202,11 @@ export async function startRuntimeTurnWithAppServer(
       const lastError = dependencies.getErrorMessage(error, 'turn/start timed out')
       dependencies.markStartUncertain(threadId, lastError)
       dependencies.persistRuntimeSnapshot(threadId)
-      const request = dependencies.updateRequest(parsed.requestId, {
+      const request = dependencies.updateRequest(requestId, {
         status: 'start_uncertain',
         threadId,
         lastError,
-      }) ?? dependencies.getRequest(parsed.requestId)
+      }) ?? dependencies.getRequest(requestId)
       return {
         request: request as RuntimeRequestRecord,
         threadId,
@@ -143,13 +215,26 @@ export async function startRuntimeTurnWithAppServer(
       }
     }
 
-    dependencies.updateRequest(parsed.requestId, {
+    dependencies.updateRequest(requestId, {
       status: 'failed',
       threadId,
       lastError: dependencies.getErrorMessage(error, 'runtime send failed'),
     })
     throw error
   }
+}
+
+function runtimeStartResultFromRequest(request: RuntimeRequestRecord): RuntimeStartResult {
+  return {
+    request,
+    threadId: request.threadId,
+    turnId: request.turnId,
+    status: request.status,
+  }
+}
+
+function runtimeSendIdempotencySignature(parsed: ParsedRuntimeSendPayload, promptHash: string): string {
+  return [promptHash, parsed.mode, parsed.threadId].join('\u001f')
 }
 
 function createRuntimeTurnStartParams(args: {

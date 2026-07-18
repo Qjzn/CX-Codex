@@ -218,8 +218,9 @@
       <span v-for="index in 5" :key="`thread-skeleton-${index}`" class="thread-loading-skeleton" />
     </div>
 
-    <SidebarMenuRow v-else-if="groups.length === 0" as="p" class="thread-tree-empty-row">
-      <span class="thread-tree-empty-text">会话列表暂未加载，稍后重试或刷新页面。</span>
+    <SidebarMenuRow v-else-if="groups.length === 0" as="div" class="thread-tree-empty-row">
+      <span class="thread-tree-empty-text">暂无会话。</span>
+      <button class="thread-tree-empty-retry" type="button" @click="emit('refresh')">重新加载</button>
     </SidebarMenuRow>
 
     <ul v-else-if="isChronologicalView" class="thread-list thread-list-global">
@@ -590,6 +591,7 @@ const emit = defineEmits<{
   'reorder-project': [payload: { projectName: string; toIndex: number }]
   'export-thread': [threadId: string]
   'fork-thread': [threadId: string]
+  refresh: []
 }>()
 
 type PendingProjectDrag = {
@@ -1937,12 +1939,26 @@ onBeforeUnmount(() => {
 }
 
 .thread-tree-empty-row {
-  @apply cursor-default;
+  @apply cursor-default items-center;
 }
 
 .thread-tree-empty-text {
   @apply text-[12px] leading-5;
   color: var(--ui-text-tertiary);
+}
+
+.thread-tree-empty-retry {
+  @apply ml-auto inline-flex min-h-11 shrink-0 items-center justify-center rounded-lg border px-2.5 text-xs font-semibold;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.thread-tree-empty-retry:hover,
+.thread-tree-empty-retry:focus-visible {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
 }
 
 .thread-tree-groups {

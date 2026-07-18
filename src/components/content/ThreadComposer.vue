@@ -3178,7 +3178,16 @@ watch(
   .thread-composer-controls {
     @apply mt-1 items-center gap-1.5;
     display: grid;
-    grid-template-columns: 2.25rem minmax(0, 1fr) auto;
+    grid-template-columns: 2.75rem minmax(0, 1fr) auto;
+  }
+
+  .thread-composer-expand,
+  .thread-composer-attach-trigger,
+  .thread-composer-mic,
+  .thread-composer-submit,
+  .thread-composer-stop {
+    width: 2.75rem;
+    height: 2.75rem;
   }
 
   .thread-composer-attach {
@@ -3211,7 +3220,7 @@ watch(
   .thread-composer-mic,
   .thread-composer-submit,
   .thread-composer-stop {
-    @apply h-9 w-9;
+    @apply h-11 w-11;
   }
 
   .thread-composer-attach-menu {

@@ -31,14 +31,14 @@
 
     <template v-else>
       <ul ref="conversationListRef" class="conversation-list" :class="{ 'conversation-list--switching': isThreadSwitchingState }">
-      <li
+      <Teleport
         v-if="showProcessPanel"
-        ref="processPanelRef"
-        class="conversation-item conversation-item-process"
+        defer
+        :to="`#${conversationProcessTargetId}`"
       >
       <section class="conversation-process-panel">
         <article
-          v-if="showInlineLiveOverlay && liveOverlay"
+          v-if="showInlineLiveOverlay && effectiveLiveOverlay"
           class="live-overlay-inline"
           :class="{
             'live-overlay-inline-compact': !shouldRenderDetailedLiveOverlay,
@@ -54,7 +54,7 @@
                 <span class="live-overlay-indicator-core" />
               </span>
               <div class="live-overlay-heading">
-                <p class="live-overlay-label">{{ liveOverlayPrimaryLabel(liveOverlay) }}</p>
+                <p class="live-overlay-label">{{ liveOverlayPrimaryLabel(effectiveLiveOverlay) }}</p>
                 <span class="live-overlay-dots" aria-hidden="true">
                   <span class="live-overlay-dot" />
                   <span class="live-overlay-dot" />
@@ -63,11 +63,11 @@
               </div>
             </div>
             <div
-              v-if="!liveOverlayCommandMessage && liveOverlayDetails(liveOverlay).length > 0"
+              v-if="!liveOverlayCommandMessage && liveOverlayDetails(effectiveLiveOverlay).length > 0"
               class="live-overlay-detail-list"
             >
               <span
-                v-for="detail in liveOverlayDetails(liveOverlay)"
+                v-for="detail in liveOverlayDetails(effectiveLiveOverlay)"
                 :key="detail"
                 class="live-overlay-detail-chip"
               >
@@ -75,9 +75,9 @@
               </span>
             </div>
             <section v-if="liveOverlayCommandMessage" class="live-overlay-command-panel">
-              <div v-if="liveOverlayDetails(liveOverlay).length > 0" class="live-overlay-detail-list live-overlay-command-details">
+              <div v-if="liveOverlayDetails(effectiveLiveOverlay).length > 0" class="live-overlay-detail-list live-overlay-command-details">
                 <span
-                  v-for="detail in liveOverlayDetails(liveOverlay)"
+                  v-for="detail in liveOverlayDetails(effectiveLiveOverlay)"
                   :key="detail"
                   class="live-overlay-detail-chip"
                 >
@@ -96,14 +96,14 @@
               </div>
             </section>
             <p
-              v-else-if="liveOverlay.reasoningText"
+              v-else-if="effectiveLiveOverlay.reasoningText"
               class="live-overlay-reasoning"
               ref="liveOverlayReasoningRef"
             >
-              {{ liveOverlay.reasoningText }}
+              {{ effectiveLiveOverlay.reasoningText }}
             </p>
             <p v-else class="live-overlay-hint">
-              {{ liveOverlayHint(liveOverlay) }}
+              {{ liveOverlayHint(effectiveLiveOverlay) }}
             </p>
             <section v-if="overlayPrimaryPendingRequest" class="live-overlay-actions">
               <template v-if="isApprovalRequestMethod(overlayPrimaryPendingRequest.method)">
@@ -165,13 +165,13 @@
             <p v-if="pendingRequests.length > 1" class="live-overlay-request-count">
               还有 {{ pendingRequests.length - 1 }} 个待处理请求
             </p>
-            <p v-if="liveOverlay.errorText" class="live-overlay-error">{{ liveOverlay.errorText }}</p>
+            <p v-if="effectiveLiveOverlay.errorText" class="live-overlay-error">{{ effectiveLiveOverlay.errorText }}</p>
           </template>
           <template v-else>
             <button
               class="live-overlay-compact-main"
               type="button"
-              :aria-label="`${liveOverlayCompactLabel}，点击展开运行内容`"
+              :aria-label="`${liveOverlayCompactLabel}，${liveOverlayTailHint}`"
               @click="openLiveOverlayDetail"
             >
               <span class="live-overlay-indicator" aria-hidden="true">
@@ -180,8 +180,9 @@
               </span>
               <div class="live-overlay-compact-copy">
                 <p class="live-overlay-compact-label">{{ liveOverlayCompactLabel }}</p>
-                <p class="live-overlay-compact-hint">{{ liveOverlayPrimaryLabel(liveOverlay) }} · 点击展开运行内容</p>
+                <p class="live-overlay-compact-hint">{{ liveOverlayTailHint }}</p>
               </div>
+              <span class="live-overlay-compact-chevron" aria-hidden="true">›</span>
             </button>
           </template>
         </article>
@@ -435,7 +436,7 @@
           </div>
         </section>
       </section>
-      </li>
+      </Teleport>
       <li
         v-if="hasOlderMessagesAffordance"
         class="conversation-item conversation-item-load-more"
@@ -486,6 +487,7 @@
           'conversation-item-highlighted': entry.kind === 'message' && highlightedMessageId === entry.message.id,
         }"
         :data-role="entry.kind === 'message' ? entry.message.role : 'assistant'"
+        :data-message-id="entry.kind === 'message' ? entry.message.id : ''"
         :data-message-type="entry.kind === 'message' ? (entry.message.messageType || '') : 'guidedSummary'"
       >
         <div v-if="entry.kind === 'guidedSummary'" class="message-row" data-role="assistant" data-message-type="guidedSummary">
@@ -876,6 +878,34 @@
                     </button>
                   </div>
                 </div>
+                <div
+                  v-if="entry.message.deliveryState"
+                  class="message-delivery-state"
+                  :data-state="entry.message.deliveryState"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span class="message-delivery-dot" aria-hidden="true" />
+                  <span>{{ messageDeliveryLabel(entry.message) }}</span>
+                  <button
+                    v-if="entry.message.deliveryState === 'failed' && props.allowFailedMessageEdit"
+                    type="button"
+                    class="message-delivery-retry"
+                    title="编辑后重新发送"
+                    @click.stop="emit('editFailedMessage', entry.message.id)"
+                  >
+                    编辑
+                  </button>
+                  <button
+                    v-if="entry.message.deliveryState === 'failed'"
+                    type="button"
+                    class="message-delivery-retry"
+                    :title="entry.message.deliveryError || '重新发送这条消息'"
+                    @click.stop="emit('retryFailedMessage', entry.message.id)"
+                  >
+                    重试
+                  </button>
+                </div>
               </article>
             </article>
 
@@ -931,6 +961,12 @@
         aria-hidden="true"
         :style="{ height: `${String(virtualBottomSpacerHeight)}px` }"
       />
+      <li
+        v-if="showProcessPanel"
+        :id="conversationProcessTargetId"
+        ref="processPanelRef"
+        class="conversation-item conversation-item-process"
+      />
       <li ref="bottomAnchorRef" class="conversation-bottom-anchor" />
       </ul>
 
@@ -952,7 +988,7 @@
 
     <Teleport to="body">
       <div
-        v-if="isLiveOverlayDetailOpen && liveOverlay"
+        v-if="isLiveOverlayDetailOpen && effectiveLiveOverlay"
         class="live-overlay-detail-backdrop"
         role="presentation"
         @click="closeLiveOverlayDetail"
@@ -968,16 +1004,16 @@
           <header class="live-overlay-detail-header">
             <div class="live-overlay-detail-title-group">
               <p class="live-overlay-detail-kicker">运行状态</p>
-              <h2 class="live-overlay-detail-title">{{ liveOverlayPrimaryLabel(liveOverlay) }}</h2>
+              <h2 class="live-overlay-detail-title">{{ liveOverlayPrimaryLabel(effectiveLiveOverlay) }}</h2>
             </div>
             <button class="live-overlay-detail-close" type="button" @click="closeLiveOverlayDetail">
               关闭
             </button>
           </header>
 
-          <div v-if="liveOverlayDetails(liveOverlay).length > 0" class="live-overlay-detail-list live-overlay-detail-sheet-chips">
+          <div v-if="liveOverlayDetails(effectiveLiveOverlay).length > 0" class="live-overlay-detail-list live-overlay-detail-sheet-chips">
             <span
-              v-for="detail in liveOverlayDetails(liveOverlay)"
+              v-for="detail in liveOverlayDetails(effectiveLiveOverlay)"
               :key="`detail-sheet:${detail}`"
               class="live-overlay-detail-chip"
             >
@@ -998,9 +1034,9 @@
             <p v-else class="live-overlay-detail-empty">暂无命令输出。</p>
           </section>
 
-          <section v-if="liveOverlay.reasoningText" class="live-overlay-detail-block">
-            <p class="live-overlay-detail-block-title">思考过程</p>
-            <pre class="live-overlay-detail-reasoning">{{ liveOverlay.reasoningText }}</pre>
+          <section v-if="effectiveLiveOverlay.reasoningText" class="live-overlay-detail-block">
+            <p class="live-overlay-detail-block-title">最新进展</p>
+            <pre class="live-overlay-detail-reasoning">{{ effectiveLiveOverlay.reasoningText }}</pre>
           </section>
 
           <section v-if="overlayPrimaryPendingRequest" class="live-overlay-detail-block">
@@ -1011,7 +1047,7 @@
             </button>
           </section>
 
-          <p v-if="liveOverlay.errorText" class="live-overlay-detail-error">{{ liveOverlay.errorText }}</p>
+          <p v-if="effectiveLiveOverlay.errorText" class="live-overlay-detail-error">{{ effectiveLiveOverlay.errorText }}</p>
         </section>
       </div>
     </Teleport>
@@ -1095,6 +1131,10 @@ import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerPencil from '../icons/IconTablerPencil.vue'
 import LoadingInline from './LoadingInline.vue'
 import { isNativeAndroidShell, openMobileShellUrl } from '../../mobile/mobileShell'
+import {
+  markChatFeedbackFirstAssistantVisible,
+  markChatFeedbackRendered,
+} from '../../composables/chatFeedbackMetrics'
 
 export type ThreadConversationExposed = {
   focusMessage: (messageId: string) => Promise<boolean>
@@ -1105,12 +1145,12 @@ const collapsingCommandIds = ref<Set<string>>(new Set())
 const prevCommandStatuses = ref<Record<string, string>>({})
 const commandElapsedNowMs = ref(Date.now())
 const observedCommandStartedAtById = ref<Record<string, number>>({})
-const liveOverlayObservedAtMs = ref(0)
 let commandElapsedTimer: number | null = null
 const estimatedMessageHeightById = new Map<string, { sourceText: string; signature: string; height: number }>()
 const COMPACT_TABLE_VIEWPORT_QUERY = '(max-width: 767px)'
 const isCompactTableViewport = ref(false)
 let compactTableViewportMql: MediaQueryList | null = null
+let chatFeedbackMetricFrame = 0
 
 type ThreadFirstScreenReadyMetric = {
   readyAtMs: number
@@ -1165,7 +1205,6 @@ function isRunningCommandMessage(message: UiMessage): boolean {
 }
 
 function isCommandExpanded(message: UiMessage): boolean {
-  if (message.commandExecution?.status === 'inProgress') return true
   if (collapsingCommandIds.value.has(message.id)) return true
   return expandedCommandIds.value.has(message.id)
 }
@@ -1179,7 +1218,6 @@ function shouldMountCommandOutput(message: UiMessage): boolean {
 }
 
 function toggleCommandExpand(message: UiMessage): void {
-  if (message.commandExecution?.status === 'inProgress') return
   const next = new Set(expandedCommandIds.value)
   if (next.has(message.id)) next.delete(message.id)
   else next.add(message.id)
@@ -1319,7 +1357,7 @@ function syncObservedCommandStartTimes(messages: UiMessage[]): void {
   }
 
   observedCommandStartedAtById.value = next
-  if (hasRunningCommand || props.liveOverlay) {
+  if (hasRunningCommand || effectiveLiveOverlay.value) {
     startCommandElapsedTimer()
   } else {
     stopCommandElapsedTimer()
@@ -1351,7 +1389,41 @@ const props = defineProps<{
   isThreadSwitching?: boolean
   compactRuntimeChrome?: boolean
   favoriteMessageIds?: string[]
+  allowFailedMessageEdit?: boolean
 }>()
+
+const retainedLiveOverlay = ref<UiLiveOverlay | null>(null)
+watch(
+  [() => props.activeThreadId, () => props.liveOverlay, () => props.isTurnInProgress] as const,
+  ([threadId, nextOverlay, isTurnInProgress], [previousThreadId]) => {
+    if (threadId !== previousThreadId) retainedLiveOverlay.value = null
+    if (nextOverlay) {
+      const previousOverlay = retainedLiveOverlay.value
+      const shouldKeepStartedAt = (
+        isTurnInProgress === true &&
+        previousOverlay !== null &&
+        previousOverlay.startedAtMs > 0
+      )
+      retainedLiveOverlay.value = {
+        ...nextOverlay,
+        startedAtMs: shouldKeepStartedAt
+          ? Math.min(previousOverlay.startedAtMs, nextOverlay.startedAtMs || previousOverlay.startedAtMs)
+          : nextOverlay.startedAtMs,
+      }
+      return
+    }
+    if (isTurnInProgress !== true) retainedLiveOverlay.value = null
+  },
+  { immediate: true },
+)
+
+const effectiveLiveOverlay = computed<UiLiveOverlay | null>(() => (
+  props.liveOverlay ?? (props.isTurnInProgress === true ? retainedLiveOverlay.value : null)
+))
+const conversationProcessTargetId = computed(() => {
+  const threadKey = props.activeThreadId.replace(/[^a-zA-Z0-9_-]/gu, '-').slice(-64) || 'new'
+  return `conversation-process-tail-${threadKey}`
+})
 
 const MESSAGE_WINDOW_SIZE = 10
 const MESSAGE_WINDOW_CONTEXT_BACKFILL_LIMIT = 24
@@ -1465,6 +1537,10 @@ function isInternalCodexContextMessage(message: UiMessage): boolean {
 function shouldSuppressConversationMessage(message: UiMessage): boolean {
   if (message.messageType === 'worked') return true
 
+  // The active command belongs to the single tail status surface. Once it
+  // completes it returns to history as a normal, collapsed command row.
+  if (isRunningCommandMessage(message) && effectiveLiveOverlay.value) return true
+
   if (isInternalCodexContextMessage(message)) {
     return true
   }
@@ -1517,7 +1593,7 @@ function isTurnCompleted(turnIndex: number): boolean {
   if (turnIndex !== latestRenderableTurnIndex.value) return true
   if (
     props.isTurnInProgress !== true &&
-    !props.liveOverlay &&
+    !effectiveLiveOverlay.value &&
     props.pendingRequests.length === 0
   ) return true
   return typeof workedSummaryDurationByTurnIndex.value[turnIndex] === 'number'
@@ -1739,7 +1815,7 @@ const olderMessagesAffordanceTitle = computed(() => {
 })
 
 const liveOverlayCommandMessage = computed<UiMessage | null>(() => {
-  const overlay = props.liveOverlay
+  const overlay = effectiveLiveOverlay.value
   if (!overlay) return null
   for (let index = props.messages.length - 1; index >= 0; index -= 1) {
     const candidate = props.messages[index]
@@ -1760,6 +1836,8 @@ const emit = defineEmits<{
   loadOlderHistory: []
   returnToNewThread: []
   dismissEmptyThread: []
+  retryFailedMessage: [messageId: string]
+  editFailedMessage: [messageId: string]
 }>()
 
 const conversationListRef = ref<HTMLElement | null>(null)
@@ -1924,7 +2002,7 @@ const conversationListResizeObserver =
 const hasRenderableConversation = computed(() => (
   visibleRenderableEntries.value.length > 0 ||
   props.pendingRequests.length > 0 ||
-  props.liveOverlay !== null
+  effectiveLiveOverlay.value !== null
 ))
 const isThreadSwitchingState = computed(() => props.isThreadSwitching === true && hasRenderableConversation.value)
 const showLoadingIndicator = computed(() => (
@@ -1944,21 +2022,13 @@ const overlayPrimaryPendingRequest = computed<UiServerRequest | null>(() => prop
 const favoriteMessageIdSet = computed(() => new Set(props.favoriteMessageIds ?? []))
 const hasVisibleLiveAgentText = computed(() => props.messages.some(isStreamingAgentMessage))
 const hasLiveOverlayDetail = computed<boolean>(() => {
-  const overlay = props.liveOverlay
+  const overlay = effectiveLiveOverlay.value
   if (!overlay) return false
   return true
 })
 const showInlineLiveOverlay = computed<boolean>(() => {
-  const overlay = props.liveOverlay
+  const overlay = effectiveLiveOverlay.value
   if (!overlay) return false
-  if (
-    hasVisibleLiveAgentText.value &&
-    !overlayPrimaryPendingRequest.value &&
-    !liveOverlayCommandMessage.value &&
-    !overlay.errorText.trim()
-  ) {
-    return false
-  }
   if (props.compactRuntimeChrome !== true) return true
   return hasLiveOverlayDetail.value
 })
@@ -1966,14 +2036,14 @@ const showProcessPanel = computed(() => (
   showInlineLiveOverlay.value || props.pendingRequests.length > 0
 ))
 const shouldRenderDetailedLiveOverlay = computed<boolean>(() => {
-  const overlay = props.liveOverlay
+  const overlay = effectiveLiveOverlay.value
   if (!overlay) return false
   if (overlayPrimaryPendingRequest.value) return true
   if (overlay.errorText.trim().length > 0) return true
   return false
 })
 const liveOverlayBehaviorSignature = computed<string>(() => {
-  const overlay = props.liveOverlay
+  const overlay = effectiveLiveOverlay.value
   if (!overlay) return ''
   return [
     overlay.activityLabel.trim(),
@@ -1984,10 +2054,17 @@ const liveOverlayBehaviorSignature = computed<string>(() => {
   ].join('|')
 })
 const liveOverlayElapsedLabel = computed(() => {
-  if (!props.liveOverlay || liveOverlayObservedAtMs.value <= 0) return ''
-  return formatHandledDuration(Math.max(0, commandElapsedNowMs.value - liveOverlayObservedAtMs.value))
+  const overlay = effectiveLiveOverlay.value
+  if (!overlay || overlay.startedAtMs <= 0) return ''
+  return formatHandledDuration(Math.max(0, commandElapsedNowMs.value - overlay.startedAtMs))
 })
-const liveOverlayCompactLabel = computed(() => `正在运行 ${liveOverlayElapsedLabel.value || '<1 秒'}`)
+const liveOverlayCompactLabel = computed(() => `正在处理 · ${liveOverlayElapsedLabel.value || '<1 秒'}`)
+const liveOverlayTailHint = computed(() => {
+  if (overlayPrimaryPendingRequest.value) return '等待你的确认，处理后会继续'
+  if (liveOverlayCommandMessage.value) return '正在执行最新操作 · 点击查看'
+  if (hasVisibleLiveAgentText.value) return '正在继续生成回复 · 点击查看最新进展'
+  return '正在准备回复 · 点击查看最新进展'
+})
 const interruptedTurnUserMessage = computed<UiMessage | null>(() => {
   for (let index = props.messages.length - 1; index >= 0; index -= 1) {
     const message = props.messages[index]
@@ -4233,8 +4310,21 @@ function canRollbackMessage(message: UiMessage): boolean {
   return true
 }
 
+function messageDeliveryLabel(message: UiMessage): string {
+  if (message.deliveryState === 'failed') return '发送失败'
+  if (message.deliveryState === 'sent') return '已发送'
+  if (message.deliveryState === 'confirming') return '确认中'
+  if (message.deliveryState === 'retrying') {
+    const attempt = Math.max(1, message.deliveryAttempt ?? 1)
+    const maxAttempts = Math.max(attempt, message.deliveryAttemptMax ?? attempt)
+    return `正在重连 ${String(attempt)}/${String(maxAttempts)}`
+  }
+  return '发送中'
+}
+
 function canFavoriteMessage(message: UiMessage): boolean {
   if (message.role !== 'user' && message.role !== 'assistant') return false
+  if (message.deliveryState) return false
   return message.text.trim().length > 0
 }
 
@@ -4653,6 +4743,31 @@ function markThreadFirstScreenReadyIfPossible(): void {
   }
 }
 
+function scheduleChatFeedbackMetric(): void {
+  if (typeof window === 'undefined' || chatFeedbackMetricFrame) return
+  chatFeedbackMetricFrame = requestAnimationFrame(() => {
+    chatFeedbackMetricFrame = 0
+    const threadId = props.activeThreadId.trim()
+    const list = conversationListRef.value
+    if (!threadId || !list) return
+    const visibleMessageIds = new Set(
+      Array.from(list.querySelectorAll<HTMLElement>('.conversation-item[data-message-id]'))
+        .map((item) => item.dataset.messageId ?? '')
+        .filter(Boolean),
+    )
+    const runningVisible = Boolean(list.querySelector('.live-overlay-inline'))
+    for (const message of props.messages) {
+      if (!message.id.startsWith('optimistic-user:') || !visibleMessageIds.has(message.id)) continue
+      markChatFeedbackRendered({
+        threadId,
+        optimisticMessageId: message.id,
+        runningVisible,
+      })
+    }
+    markChatFeedbackFirstAssistantVisible({ threadId, visibleMessageIds })
+  })
+}
+
 function scheduleIdleScrollStateEmit(container: HTMLElement, force = false): void {
   pendingScrollStateContainer = container
   pendingScrollStateForce = pendingScrollStateForce || force
@@ -4931,7 +5046,7 @@ watch(
       if (m.messageType !== 'commandExecution' || !m.commandExecution) continue
       const prev = prevCommandStatuses.value[m.id]
       const cur = m.commandExecution.status
-      if (prev === 'inProgress' && cur !== 'inProgress') {
+      if (prev === 'inProgress' && cur !== 'inProgress' && expandedCommandIds.value.has(m.id)) {
         scheduleCollapse(m.id)
       }
       prevCommandStatuses.value[m.id] = cur
@@ -4966,6 +5081,19 @@ watch(
 )
 
 watch(
+  () => [
+    props.activeThreadId,
+    props.messages.map((message) => `${message.id}:${message.deliveryState ?? ''}`).join('|'),
+    liveOverlayBehaviorSignature.value,
+  ] as const,
+  async () => {
+    await nextTick()
+    scheduleChatFeedbackMetric()
+  },
+  { immediate: true, flush: 'post' },
+)
+
+watch(
   liveOverlayBehaviorSignature,
   async (signature) => {
     if (!signature) return
@@ -4978,16 +5106,12 @@ watch(
 )
 
 watch(
-  () => props.liveOverlay,
-  (overlay, previousOverlay) => {
+  effectiveLiveOverlay,
+  (overlay) => {
     if (overlay) {
-      if (!previousOverlay || liveOverlayObservedAtMs.value <= 0) {
-        liveOverlayObservedAtMs.value = Date.now()
-      }
       startCommandElapsedTimer()
       return
     }
-    liveOverlayObservedAtMs.value = 0
     if (Object.keys(observedCommandStartedAtById.value).length === 0) {
       stopCommandElapsedTimer()
     }
@@ -5041,7 +5165,6 @@ watch(
 watch(
   () => props.activeThreadId,
   () => {
-    liveOverlayObservedAtMs.value = props.liveOverlay ? Date.now() : 0
     modalImageUrl.value = ''
     closeFileLinkContextMenu()
     failedMarkdownImageKeys.value = new Set()
@@ -5322,7 +5445,7 @@ function alignLiveOverlayReasoningToBottom(): void {
 }
 
 watch(
-  () => props.liveOverlay?.reasoningText,
+  () => effectiveLiveOverlay.value?.reasoningText,
   async (reasoningText) => {
     if (!reasoningText || !shouldRenderDetailedLiveOverlay.value) return
     await nextTick()
@@ -5331,7 +5454,7 @@ watch(
 )
 
 watch(
-  () => props.liveOverlay,
+  effectiveLiveOverlay,
   (overlay) => {
     if (!overlay) {
       closeLiveOverlayDetail()
@@ -5376,6 +5499,9 @@ onBeforeUnmount(() => {
   }
   if (scrollInteractionFrame) {
     cancelAnimationFrame(scrollInteractionFrame)
+  }
+  if (chatFeedbackMetricFrame) {
+    cancelAnimationFrame(chatFeedbackMetricFrame)
   }
   if (scrollStateIdleTimer && typeof window !== 'undefined') {
     window.clearTimeout(scrollStateIdleTimer)
@@ -5437,7 +5563,6 @@ onBeforeUnmount(() => {
 
 .conversation-item-process {
   @apply justify-center;
-  order: 20;
 }
 
 .conversation-process-panel {
@@ -5888,8 +6013,15 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-inline-compact {
-  @apply rounded-[18px] px-2.5 py-1.5;
-  max-width: min(38rem, 100%);
+  @apply rounded-2xl px-3 py-2;
+  max-width: min(42rem, 100%);
+  transition: border-color var(--motion-duration-fast) var(--motion-ease-standard),
+    background-color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.live-overlay-inline-compact:hover {
+  border-color: color-mix(in srgb, var(--ui-accent) 38%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-bg-surface));
 }
 
 .live-overlay-inline-compact::after {
@@ -5942,6 +6074,20 @@ onBeforeUnmount(() => {
   @apply min-w-0 flex-1 flex flex-col gap-0.5;
 }
 
+.live-overlay-compact-chevron {
+  @apply shrink-0 text-xl leading-none;
+  color: var(--ui-text-tertiary);
+  transform: translateX(0);
+  transition: transform var(--motion-duration-fast) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.live-overlay-compact-main:hover .live-overlay-compact-chevron,
+.live-overlay-compact-main:focus-visible .live-overlay-compact-chevron {
+  color: var(--ui-accent);
+  transform: translateX(2px);
+}
+
 .live-overlay-compact-head {
   @apply flex items-center gap-2;
 }
@@ -5964,7 +6110,7 @@ onBeforeUnmount(() => {
 }
 
 .live-overlay-compact-label {
-  @apply m-0 text-[12px] font-semibold text-[#1b4d47];
+  @apply m-0 text-[13px] font-semibold text-[#1b4d47];
 }
 
 .live-overlay-dots {
@@ -6485,6 +6631,53 @@ onBeforeUnmount(() => {
 
 .message-long-actions {
   @apply mt-1 flex flex-wrap gap-1.5;
+}
+
+.message-delivery-state {
+  @apply mt-1 flex min-h-8 items-center justify-end gap-1.5 px-0.5 text-[11px] font-medium;
+  color: var(--ui-text-tertiary);
+}
+
+.message-delivery-state[data-state='failed'] {
+  color: var(--ui-danger);
+}
+
+.message-delivery-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.message-delivery-state[data-state='sending'] .message-delivery-dot,
+.message-delivery-state[data-state='confirming'] .message-delivery-dot,
+.message-delivery-state[data-state='retrying'] .message-delivery-dot {
+  animation: message-delivery-pulse 1.2s ease-in-out infinite;
+}
+
+.message-delivery-retry {
+  @apply inline-flex min-h-8 items-center px-2 text-[11px] font-semibold transition-colors duration-150;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-danger);
+}
+
+.message-delivery-retry:hover,
+.message-delivery-retry:focus-visible {
+  background: color-mix(in srgb, var(--ui-danger) 9%, transparent);
+  outline: none;
+}
+
+@keyframes message-delivery-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-delivery-state[data-state='sending'] .message-delivery-dot,
+  .message-delivery-state[data-state='confirming'] .message-delivery-dot,
+  .message-delivery-state[data-state='retrying'] .message-delivery-dot {
+    animation: none;
+  }
 }
 
 .message-long-action {
@@ -7113,6 +7306,8 @@ onBeforeUnmount(() => {
 
 @media (prefers-reduced-motion: reduce) {
   .conversation-list--switching,
+  .live-overlay-inline-compact,
+  .live-overlay-compact-chevron,
   .live-overlay-inline::after,
   .live-overlay-indicator-ring,
   .live-overlay-indicator-core,

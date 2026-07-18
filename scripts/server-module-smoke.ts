@@ -305,6 +305,7 @@ import {
 } from '../src/server/runtimeStore.js'
 import { handleRpcProxyRoute, type RpcProxyRouteDependencies } from '../src/server/rpcProxyRoute.js'
 import {
+  createRuntimePromptHash,
   parseRuntimeInterruptPayload,
   parseRuntimeSendPayload,
 } from '../src/server/runtimePayload.js'
@@ -3643,6 +3644,8 @@ async function smokeTranscriptionRoutes(): Promise<void> {
 async function smokeAppServerRpcCache(): Promise<void> {
   assert.equal(getShareableRpcKey('thread/start', {}), null)
   assert.equal(getShareableRpcKey('thread/list', { limit: 1 }), 'thread/list:{"limit":1}')
+  assert.equal(getShareableRpcKey('plugin/list', {}), 'plugin/list:{}')
+  assert.equal(getShareableRpcKey('mcpServerStatus/list', { cursor: null }), 'mcpServerStatus/list:{"cursor":null}')
   assert.equal(
     getShareableRpcKey('thread/list', { archived: false, limit: 100, sortKey: 'updated_at', cursor: null }),
     getShareableRpcKey('thread/list', { cursor: null, sortKey: 'updated_at', limit: 100, archived: false }),
@@ -3955,6 +3958,8 @@ async function smokeAppServerRpcQueue(): Promise<void> {
   assert.equal(getAppServerRpcQueuePriority('thread/read', {}), 1)
   assert.equal(getAppServerRpcQueuePriority('thread/list', {}), 4)
   assert.equal(getAppServerRpcQueuePriority('model/list', {}), 5)
+  assert.equal(getAppServerRpcQueuePriority('plugin/list', {}), 5)
+  assert.equal(getAppServerRpcQueuePriority('mcpServerStatus/list', {}), 5)
 
   let now = 9_000
   Date.now = () => now++
@@ -4830,6 +4835,7 @@ function smokeCodexBridgeRuntimeOperations(): void {
       createRequest: (record) => record as never,
       updateRequest: () => null,
       getRequest: () => null,
+      getLatestRequestByClientMessageId: () => null,
       getSnapshot: () => null,
       upsertSnapshot: (record) => {
         upsertedSnapshots.push(record)
@@ -7217,6 +7223,21 @@ function smokeRuntimeStateStore(): void {
   assert.equal(running.executionState, 'sync_degraded')
   assert.equal(running.stale, true)
 
+  store.observeEvent({
+    method: 'item/agentMessage/delta',
+    params: { threadId: 'thread-a', turnId: 'turn-1', itemId: 'agent-1', delta: '已完成浮窗布局' },
+    atIso: new Date().toISOString(),
+    seq: 2,
+  })
+  assert.equal(store.snapshot('thread-a').latestReply, '已完成浮窗布局')
+  store.observeEvent({
+    method: 'item/completed',
+    params: { threadId: 'thread-a', turnId: 'turn-1', item: { id: 'agent-1', type: 'agentMessage', text: '已完成浮窗布局和交互验证。' } },
+    atIso: new Date().toISOString(),
+    seq: 3,
+  })
+  assert.equal(store.snapshot('thread-a').latestReply, '已完成浮窗布局和交互验证。')
+
   store.observeThreadRead('thread-a', false, '', new Date().toISOString(), 'thread-read')
   const completed = store.snapshot('thread-a', { tokenUsage: { total: 1 }, pendingServerRequests: [] })
   assert.equal(completed.executionState, 'completed')
@@ -7264,11 +7285,13 @@ function smokeAppServerRuntimeBridge(): void {
 async function smokeAppServerRuntimeRequestReconciliation(): Promise<void> {
   assert.deepEqual(RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES, [
     'pending_start',
+    'starting',
     'start_uncertain',
     'running',
     'stopping',
     'stop_uncertain',
     'still_running',
+    'sync_degraded',
   ])
   assert.equal(RUNTIME_RECONCILE_RUNNING_THROTTLE_MS, 10_000)
   assert.equal(RUNTIME_RECONCILE_BATCH_LIMIT, 3)
@@ -7372,24 +7395,29 @@ async function smokeAppServerRuntimeRequestReconciliation(): Promise<void> {
   })
   const reconcileRequests = [
     makeRuntimeRequest('missing-thread', 'start_uncertain', ''),
+    makeRuntimeRequest('starting-a', 'starting', 'thread-starting'),
     makeRuntimeRequest('stopping-a', 'stopping', 'thread-a'),
     makeRuntimeRequest('running-fresh', 'running', 'thread-b'),
     makeRuntimeRequest('still-stale', 'still_running', 'thread-c'),
+    makeRuntimeRequest('degraded-fresh', 'sync_degraded', 'thread-degraded-fresh'),
+    makeRuntimeRequest('degraded-stale', 'sync_degraded', 'thread-degraded-stale'),
     makeRuntimeRequest('start-uncertain', 'start_uncertain', 'thread-d'),
     makeRuntimeRequest('running-stale', 'running', 'thread-e'),
   ]
   const lastReconciledAtMs = new Map<string, number>([
     ['thread-b', 9_500],
     ['thread-c', 0],
+    ['thread-degraded-fresh', 9_500],
+    ['thread-degraded-stale', 0],
     ['thread-e', -1],
   ])
   assert.deepEqual(
     selectRuntimeRequestsForReconcile(reconcileRequests, lastReconciledAtMs, 10_000).map((request) => request.requestId),
-    ['stopping-a', 'still-stale', 'start-uncertain'],
+    ['starting-a', 'stopping-a', 'still-stale'],
   )
   assert.deepEqual(
     selectRuntimeRequestsForReconcile(reconcileRequests, lastReconciledAtMs, 10_000, 10).map((request) => request.requestId),
-    ['stopping-a', 'still-stale', 'start-uncertain', 'running-stale'],
+    ['starting-a', 'stopping-a', 'still-stale', 'degraded-stale', 'start-uncertain', 'running-stale'],
   )
   assert.deepEqual(createRuntimeReconcileFailurePatch(
     { status: 'stopping' },
@@ -7406,6 +7434,22 @@ async function smokeAppServerRuntimeRequestReconciliation(): Promise<void> {
     status: 'running',
     lastError: 'runtime reconcile failed',
     incrementRetry: true,
+  })
+
+  assert.deepEqual(createRuntimeRequestSnapshotPatch(
+    { status: 'starting', turnId: '' },
+    'thread-starting',
+    {
+      executionState: 'idle',
+      inProgress: false,
+      activeTurnId: '',
+      lastError: null,
+    },
+  ), {
+    status: 'failed',
+    threadId: 'thread-starting',
+    turnId: '',
+    lastError: 'Turn start was not confirmed after bridge restart',
   })
 
   assert.deepEqual(createRuntimeRequestSnapshotPatch(
@@ -7709,15 +7753,20 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
       updateRequest: (requestId, patch) => {
         updates.push({ requestId, patch })
         if (!currentRequest) return null
+        const { incrementRetry, ...recordPatch } = patch
         currentRequest = {
           ...currentRequest,
-          ...patch,
+          ...recordPatch,
+          retryCount: currentRequest.retryCount + (incrementRetry === true ? 1 : 0),
           updatedAtIso: '2026-01-01T00:00:01.000Z',
           lastError: Object.prototype.hasOwnProperty.call(patch, 'lastError') ? patch.lastError ?? null : currentRequest.lastError,
         }
         return currentRequest
       },
       getRequest: () => currentRequest,
+      getLatestRequestByClientMessageId: (clientMessageId) => (
+        currentRequest?.clientMessageId === clientMessageId ? currentRequest : null
+      ),
       rpc: async (method, params) => {
         rpcCalls.push({ method, params })
         return await rpc(method, params)
@@ -7753,6 +7802,9 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
       clearedThreadSearchIndexes,
       planModeTurns,
       dependencies,
+      seedRequest: (request: RuntimeRequestRecord) => {
+        currentRequest = request
+      },
     }
   }
 
@@ -7862,6 +7914,102 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
       lastError: 'permission denied',
     },
   })
+
+  const deduplicated = createHarness(async (method) => {
+    assert.equal(method, 'turn/start')
+    return { turn: { id: 'turn-deduplicated' } }
+  })
+  const deduplicatedStarter = createAppServerRuntimeTurnStarter(deduplicated.dependencies)
+  const deduplicatedPayload = {
+    requestId: 'request-deduplicated-first',
+    clientMessageId: 'client-deduplicated',
+    threadId: 'thread-deduplicated',
+    input: [{ type: 'text', text: 'Send once' }],
+  }
+  const firstDeduplicatedResult = await deduplicatedStarter(deduplicatedPayload)
+  const repeatedDeduplicatedResult = await deduplicatedStarter({
+    ...deduplicatedPayload,
+    requestId: 'request-deduplicated-second',
+  })
+  assert.equal(firstDeduplicatedResult.turnId, 'turn-deduplicated')
+  assert.equal(repeatedDeduplicatedResult.request.requestId, 'request-deduplicated-first')
+  assert.equal(repeatedDeduplicatedResult.request.retryCount, 1)
+  assert.equal(deduplicated.created.length, 1)
+  assert.equal(deduplicated.rpcCalls.length, 1)
+  await assert.rejects(
+    () => deduplicatedStarter({
+      ...deduplicatedPayload,
+      input: [{ type: 'text', text: 'Different content' }],
+    }),
+    /clientMessageId already belongs to different message content/,
+  )
+  await assert.rejects(
+    () => deduplicatedStarter({
+      ...deduplicatedPayload,
+      threadId: 'thread-other',
+    }),
+    /clientMessageId already belongs to different message content/,
+  )
+
+  const resumedPendingStart = createHarness(async (method) => {
+    if (method === 'thread/start') return { thread: { id: 'thread-resumed-pending' } }
+    if (method === 'turn/start') return { turn: { id: 'turn-resumed-pending' } }
+    throw new Error(`unexpected rpc method ${method}`)
+  })
+  const resumedInput = [{ type: 'text', text: 'Resume durable send' }]
+  resumedPendingStart.seedRequest({
+    requestId: 'request-pending-before-restart',
+    clientMessageId: 'client-pending-before-restart',
+    threadId: '',
+    turnId: '',
+    status: 'pending_start',
+    promptHash: createRuntimePromptHash(resumedInput),
+    mode: 'execute',
+    payload: {},
+    retryCount: 0,
+    createdAtIso: '2026-01-01T00:00:00.000Z',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    lastError: null,
+  })
+  const resumedPendingResult = await createAppServerRuntimeTurnStarter(resumedPendingStart.dependencies)({
+    requestId: 'request-after-restart',
+    clientMessageId: 'client-pending-before-restart',
+    input: resumedInput,
+  })
+  assert.equal(resumedPendingResult.request.requestId, 'request-pending-before-restart')
+  assert.equal(resumedPendingResult.threadId, 'thread-resumed-pending')
+  assert.equal(resumedPendingResult.turnId, 'turn-resumed-pending')
+  assert.equal(resumedPendingStart.created.length, 0)
+  assert.deepEqual(resumedPendingStart.rpcCalls.map((call) => call.method), ['thread/start', 'turn/start'])
+  assert.deepEqual(resumedPendingStart.updates.map((call) => call.requestId), [
+    'request-pending-before-restart',
+    'request-pending-before-restart',
+    'request-pending-before-restart',
+    'request-pending-before-restart',
+  ])
+
+  let releaseConcurrentStart!: (value: unknown) => void
+  const concurrentStartGate = new Promise<unknown>((resolve) => {
+    releaseConcurrentStart = resolve
+  })
+  const concurrent = createHarness(async (method) => {
+    assert.equal(method, 'turn/start')
+    return await concurrentStartGate
+  })
+  const concurrentStarter = createAppServerRuntimeTurnStarter(concurrent.dependencies)
+  const concurrentPayload = {
+    clientMessageId: 'client-concurrent',
+    threadId: 'thread-concurrent',
+    input: [{ type: 'text', text: 'Send concurrently once' }],
+  }
+  const firstConcurrentStart = concurrentStarter({ ...concurrentPayload, requestId: 'request-concurrent-first' })
+  const secondConcurrentStart = concurrentStarter({ ...concurrentPayload, requestId: 'request-concurrent-second' })
+  await Promise.resolve()
+  assert.equal(concurrent.created.length, 1)
+  assert.equal(concurrent.rpcCalls.length, 1)
+  releaseConcurrentStart({ turn: { id: 'turn-concurrent' } })
+  const concurrentResults = await Promise.all([firstConcurrentStart, secondConcurrentStart])
+  assert.deepEqual(concurrentResults.map((result) => result.turnId), ['turn-concurrent', 'turn-concurrent'])
 }
 
 async function smokeAppServerRuntimeInterrupt(): Promise<void> {
@@ -8080,15 +8228,20 @@ async function smokeAppServerRuntimeActions(): Promise<void> {
     updateRequest: (requestId, patch) => {
       updates.push({ requestId, patch })
       if (!currentRequest) return null
+      const incrementRetry = 'incrementRetry' in patch && patch.incrementRetry === true
       currentRequest = {
         ...currentRequest,
         ...patch,
+        retryCount: currentRequest.retryCount + (incrementRetry ? 1 : 0),
         updatedAtIso: '2026-01-01T00:00:01.000Z',
         lastError: Object.prototype.hasOwnProperty.call(patch, 'lastError') ? patch.lastError ?? null : currentRequest.lastError,
       }
       return currentRequest
     },
     getRequest: () => currentRequest,
+    getLatestRequestByClientMessageId: (clientMessageId) => (
+      currentRequest?.clientMessageId === clientMessageId ? currentRequest : null
+    ),
     rpc: async (method, params) => {
       rpcCalls.push({ method, params })
       if (method === 'turn/start') return { turn: { id: 'turn-actions' } }
@@ -9825,6 +9978,15 @@ async function smokeRuntimeStoreMaintenance(): Promise<void> {
       requestId: 'active-request',
       status: 'running',
     })
+    runtimeStore.createRequest({
+      requestId: 'degraded-request',
+      threadId: 'thread-degraded',
+      status: 'sync_degraded',
+    })
+    assert.deepEqual(
+      runtimeStore.listUncertainRequests(10).map((request) => request.requestId),
+      ['active-request', 'degraded-request'],
+    )
     const skipped = runtimeStore.compact()
     assert.equal(skipped.status, 'skipped-active-requests')
     assert.equal(skipped.activeRequestCount, 1)

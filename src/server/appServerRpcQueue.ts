@@ -53,7 +53,13 @@ export function getAppServerRpcQueuePriority(method: string, _params: unknown): 
     return 4
   }
 
-  if (method === 'model/list' || method === 'skills/list' || method === 'account/rateLimits/read') {
+  if (
+    method === 'model/list'
+    || method === 'skills/list'
+    || method === 'account/rateLimits/read'
+    || method === 'plugin/list'
+    || method === 'mcpServerStatus/list'
+  ) {
     return 5
   }
 

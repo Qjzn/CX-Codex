@@ -97,7 +97,7 @@
                 <span class="sidebar-action-label">搜索</span>
               </button>
               <button
-                class="sidebar-action-tile"
+                class="sidebar-action-tile sidebar-action-tile-workbench"
                 :class="{ 'is-active': isWorkbenchRoute }"
                 type="button"
                 :aria-current="isWorkbenchRoute ? 'page' : undefined"
@@ -121,6 +121,10 @@
                   <span class="sidebar-action-label">工具</span>
                 </button>
                 <div v-if="isSidebarToolsOpen" class="sidebar-tools-menu-panel" role="menu" aria-label="更多工具">
+                  <button v-if="isMobile" class="sidebar-tools-menu-item" type="button" role="menuitem" @click="onOpenSidebarTool('workbench')">
+                    <IconTablerFolder class="sidebar-tools-menu-icon" />
+                    工作台
+                  </button>
                   <button class="sidebar-tools-menu-item" type="button" role="menuitem" @click="onOpenSidebarTool('skills')">
                     <IconTablerBolt class="sidebar-tools-menu-icon" />
                     技能
@@ -176,6 +180,7 @@
             @browse-thread-files="onBrowseThreadFiles"
             @rename-thread="onRenameThread"
             @fork-thread="onForkThread"
+            @refresh="onRefreshSidebarThreads"
             @remove-project="onRemoveProject" @reorder-project="onReorderProject"
             @export-thread="onExportThread" />
         </div>
@@ -384,7 +389,14 @@
               </section>
               <section v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="任务宠物">
                 <p class="sidebar-settings-section-title">任务宠物</p>
-                <TaskPetPreview :items="activeTaskPetItems" @open="openTaskPetThread" />
+                <TaskPetPreview
+                  :items="activeTaskPetItems"
+                  :recent-threads="recentTaskPetThreads"
+                  @open="openTaskPetThread"
+                  @enter="enterTaskPetPlatform"
+                  @close="closeTaskPetFromPreview"
+                  @reply="sendTaskPetQuickReply"
+                />
                 <button
                   class="sidebar-settings-row"
                   type="button"
@@ -399,7 +411,7 @@
                   <span class="sidebar-settings-value">{{ mobileShellTaskPetStatusLabel }}</span>
                 </div>
                 <p class="sidebar-settings-hint">
-                  切到其他 App 后仍显示任务数量；点宠物展开进展，点任务直接回到对应会话。首次开启需要系统悬浮窗权限。
+                  切到其他 App 后仍显示任务数量和最近两条会话；可进入平台、直达会话或直接回复。关闭后可在这里重新开启。
                 </p>
                 <p v-if="mobileShellTaskPetMessage" class="sidebar-settings-hint sidebar-settings-hint-status">
                   {{ mobileShellTaskPetMessage }}
@@ -660,7 +672,32 @@
           </template>
           <template v-else-if="isHomeRoute">
             <div class="content-grid">
-              <div class="new-thread-empty">
+              <div
+                v-if="pendingNewThreadPreview"
+                class="content-thread"
+                data-testid="pending-new-thread-preview"
+              >
+                <ThreadConversation
+                  ref="threadConversationRef"
+                  :messages="[pendingNewThreadPreview.message]"
+                  :is-loading="false"
+                  active-thread-id="__new-thread__"
+                  :cwd="pendingNewThreadPreview.cwd"
+                  :scroll-state="null"
+                  :live-overlay="pendingNewThreadPreview.liveOverlay"
+                  :pending-requests="[]"
+                  :favorite-message-ids="[]"
+                  :is-thread-switching="false"
+                  :compact-runtime-chrome="showRuntimeStatusBar"
+                  :show-empty-thread-actions="false"
+                  :is-turn-in-progress="true"
+                  :is-rolling-back="false"
+                  :allow-failed-message-edit="true"
+                  @retry-failed-message="onRetryPendingNewThreadMessage"
+                  @edit-failed-message="onEditPendingNewThreadMessage"
+                />
+              </div>
+              <div v-else class="new-thread-empty">
                 <p class="new-thread-hero">开始任务</p>
                 <ComposerDropdown class="new-thread-folder-dropdown" :model-value="newThreadCwd"
                   :options="newThreadFolderOptions" placeholder="选择目录"
@@ -708,6 +745,7 @@
                 :selected-speed-mode="selectedSpeedMode"
                 :selected-collaboration-mode="selectedCollaborationMode"
                 :is-updating-speed-mode="isUpdatingSpeedMode"
+                :disabled="Boolean(pendingNewThreadPreview)"
                 :skills="enabledComposerSkills"
                 :has-loaded-skills="hasLoadedSkills"
                 :plugins="availableComposerPlugins"
@@ -748,6 +786,7 @@
                   @load-older-history="loadOlderHistoryForSelectedThread"
                   @return-to-new-thread="onReturnToNewThreadFromEmptyThread"
                   @dismiss-empty-thread="onDismissEmptyThread"
+                  @retry-failed-message="retryFailedUserMessage"
                   @rollback="onRollback" />
               </div>
 
@@ -839,9 +878,45 @@
   </Teleport>
 
   <Teleport to="body">
+    <div
+      v-if="pendingQueuedMessageEditId"
+      class="desktop-refresh-confirm-overlay"
+      @click.self="cancelQueuedMessageEdit"
+    >
+      <div class="desktop-refresh-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="queued-message-edit-title">
+        <p class="desktop-refresh-confirm-kicker">保留当前输入</p>
+        <h2 id="queued-message-edit-title" class="desktop-refresh-confirm-title">替换为排队消息？</h2>
+        <p class="desktop-refresh-confirm-text">输入框里还有未发送内容。继续后会用选中的排队消息替换当前草稿。</p>
+        <div class="desktop-refresh-confirm-actions">
+          <button class="desktop-refresh-confirm-button" type="button" @click="cancelQueuedMessageEdit">保留草稿</button>
+          <button class="desktop-refresh-confirm-button desktop-refresh-confirm-button-primary" type="button" @click="confirmQueuedMessageEdit">
+            替换并编辑
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
     <Transition name="product-toast">
-      <div v-if="productToast" class="product-toast" :data-tone="productToast.tone" role="status" aria-live="polite">
-        {{ productToast.message }}
+      <div
+        v-if="productToast"
+        class="product-toast"
+        :class="{ 'product-toast--above-composer': showProductToastAboveComposer }"
+        :data-tone="productToast.tone"
+        :role="productToast.tone === 'danger' ? 'alert' : 'status'"
+        aria-live="polite"
+      >
+        <span class="product-toast-message">{{ productToast.message }}</span>
+        <button
+          v-if="productToast.tone === 'danger' || productToast.tone === 'warning'"
+          class="product-toast-close"
+          type="button"
+          aria-label="关闭提示"
+          @click="closeProductToast"
+        >
+          <IconTablerX class="product-toast-close-icon" />
+        </button>
       </div>
     </Transition>
   </Teleport>
@@ -930,6 +1005,7 @@ import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerSettings from './components/icons/IconTablerSettings.vue'
 import IconTablerX from './components/icons/IconTablerX.vue'
 import { useDesktopState } from './composables/useDesktopState'
+import { chatFeedbackNow } from './composables/chatFeedbackMetrics'
 import { useFavorites, type FavoriteRecord } from './composables/useFavorites'
 import { useMobile } from './composables/useMobile'
 import {
@@ -943,6 +1019,7 @@ import {
   openProjectRoot,
   refreshDesktopApp,
   searchThreads,
+  startRuntimeThreadTurn,
   updateWebBridgeSettings,
 } from './api/codexGateway'
 import type {
@@ -956,6 +1033,7 @@ import type {
   UiRateLimitSnapshot,
   UiRateLimitWindow,
   UiServerRequest,
+  UiTaskPetRecentThread,
   UiThread,
 } from './types/codex'
 import type { ComposerDraftPayload, SubmitPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
@@ -976,6 +1054,7 @@ import {
   getMobileShellTaskPetStatus,
   installMobileShellApk,
   isNativeAndroidShell,
+  markMobileShellTaskPetThreadRead,
   openMobileShellUrl,
   requestMobileShellNotificationPermission,
   resetMobileShellServerUrl,
@@ -1245,6 +1324,7 @@ const {
   selectedReasoningEffort,
   selectedSpeedMode,
   selectedCollaborationMode,
+  pendingNewThreadPreview,
   installedSkills,
   hasLoadedSkills,
   availableComposerPlugins,
@@ -1278,6 +1358,10 @@ const {
   forkThreadById,
   renameThreadById,
   sendMessageToSelectedThread,
+  retryFailedUserMessage,
+  retryFailedNewThreadMessage,
+  takeFailedNewThreadMessageForEditing,
+  clearPendingNewThreadPreview,
   sendMessageToNewThread,
   interruptSelectedThreadTurn,
   rollbackSelectedThread,
@@ -1319,6 +1403,7 @@ const githubTipsScope = ref<GithubTipsScope>('trending-daily')
 const lastLoadedGithubTipsScope = ref<GithubTipsScope | ''>('')
 const isManualThreadRefreshRunning = ref(false)
 const editingQueuedMessageState = ref<{ threadId: string; queueIndex: number } | null>(null)
+const pendingQueuedMessageEditId = ref('')
 const isRouteSyncInProgress = ref(false)
 const hasInitialized = ref(false)
 const routeWarmThreadIds = ref<string[]>([])
@@ -1425,6 +1510,9 @@ const isThreadRouteLike = computed(() => {
   const hashPath = window.location.hash.replace(/^#/u, '')
   return route.path.startsWith('/thread/') || hashPath.startsWith('/thread/')
 })
+const showProductToastAboveComposer = computed(() => (
+  isSidebarCollapsed.value && (route.name === 'thread' || route.name === 'home')
+))
 
 const knownThreadIdSet = computed(() => {
   const ids = new Set<string>()
@@ -1434,6 +1522,23 @@ const knownThreadIdSet = computed(() => {
     }
   }
   return ids
+})
+const recentTaskPetThreads = computed<UiTaskPetRecentThread[]>(() => {
+  const threads = projectGroups.value.flatMap((group) => group.threads)
+  const uniqueById = new Map<string, UiThread>()
+  for (const thread of threads) {
+    const threadId = thread.id.trim()
+    if (threadId && !uniqueById.has(threadId)) uniqueById.set(threadId, thread)
+  }
+  return [...uniqueById.values()]
+    .sort((left, right) => Date.parse(right.updatedAtIso) - Date.parse(left.updatedAtIso))
+    .slice(0, 2)
+    .map((thread) => ({
+      threadId: thread.id,
+      title: thread.title.trim() || thread.preview.trim() || '未命名会话',
+      projectName: thread.projectName,
+      updatedAtIso: thread.updatedAtIso,
+    }))
 })
 const routableThreadIdSet = computed(() => {
   const ids = new Set<string>(knownThreadIdSet.value)
@@ -2735,6 +2840,7 @@ async function toggleMobileShellTaskPet(): Promise<void> {
       enable,
       mobileShellServerConfig.value?.serverUrl.trim() || window.location.origin,
       activeTaskPetItems.value,
+      recentTaskPetThreads.value,
     )
     mobileShellTaskPetLastPayload = enable ? currentMobileShellTaskPetPayload() : ''
     mobileShellTaskPetMessage.value = enable
@@ -2762,6 +2868,7 @@ async function syncMobileShellTaskPet(): Promise<void> {
     mobileShellTaskPetStatus.value = await updateMobileShellTaskPet(
       mobileShellServerConfig.value?.serverUrl.trim() || window.location.origin,
       activeTaskPetItems.value,
+      recentTaskPetThreads.value,
     )
     mobileShellTaskPetLastPayload = payload
   } catch {
@@ -2784,8 +2891,10 @@ function currentMobileShellTaskPetPayload(): string {
       projectName: item.projectName,
       detail: item.detail,
       latestActivity: item.latestActivity,
+      latestReply: item.latestReply,
       state: item.state,
     })),
+    recentThreads: recentTaskPetThreads.value,
   })
 }
 
@@ -2796,6 +2905,40 @@ async function openTaskPetThread(threadId: string): Promise<void> {
   if (selectedThreadId.value !== normalized) await selectThread(normalized)
   await router.push({ name: 'thread', params: { threadId: normalized } })
   isSettingsOpen.value = false
+}
+
+function enterTaskPetPlatform(): void {
+  isSettingsOpen.value = false
+}
+
+async function closeTaskPetFromPreview(): Promise<void> {
+  if (mobileShellTaskPetStatus.value?.enabled !== true) {
+    mobileShellTaskPetMessage.value = '任务宠物当前已关闭，可使用下方开关重新开启。'
+    return
+  }
+  await toggleMobileShellTaskPet()
+  if (mobileShellTaskPetStatus.value?.enabled !== true) {
+    mobileShellTaskPetMessage.value = '任务宠物已关闭，可使用下方开关重新开启。'
+  }
+}
+
+async function sendTaskPetQuickReply(threadId: string, message: string): Promise<void> {
+  const normalizedThreadId = threadId.trim()
+  const normalizedMessage = message.trim()
+  if (!normalizedThreadId || !normalizedMessage) return
+  mobileShellTaskPetMessage.value = '正在发送回复…'
+  try {
+    const randomId = globalThis.crypto?.randomUUID?.()
+      ?? `task-pet-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    await startRuntimeThreadTurn({
+      threadId: normalizedThreadId,
+      text: normalizedMessage,
+      clientMessageId: randomId,
+    })
+    mobileShellTaskPetMessage.value = '回复已发送，任务进展会继续实时更新。'
+  } catch (error) {
+    mobileShellTaskPetMessage.value = error instanceof Error ? error.message : '回复发送失败，请重试。'
+  }
 }
 
 async function requestMobileShellNotifications(): Promise<void> {
@@ -2914,7 +3057,7 @@ async function refreshDesktopAppAvailability(): Promise<void> {
 function onRefreshDesktopApp(): void {
   if (isDesktopRefreshRunning.value) return
   if (!desktopAppStatus.value.available) {
-    window.alert(desktopAppStatus.value.reason || '当前机器无法刷新官方 Codex 桌面端。')
+    showProductToast(desktopAppStatus.value.reason || '当前机器无法刷新官方 Codex 桌面端。', 'warning', 4200)
     return
   }
 
@@ -3062,11 +3205,11 @@ function confirmDesktopRefresh(): void {
   void refreshDesktopApp()
     .then((result) => {
       clearDesktopSyncPending()
-      window.alert(result.message)
+      showProductToast(result.message, 'success')
     })
     .catch((error: unknown) => {
       const message = error instanceof Error ? error.message : '刷新官方 Codex 桌面端失败'
-      window.alert(message)
+      showProductToast(message, 'danger', 5200)
     })
     .finally(() => {
       isDesktopRefreshRunning.value = false
@@ -3087,7 +3230,7 @@ function toggleSidebarSearch(): void {
   }
 }
 
-function onOpenSidebarTool(routeName: 'skills' | 'github-trending' | 'diagnostics'): void {
+function onOpenSidebarTool(routeName: 'workbench' | 'skills' | 'github-trending' | 'diagnostics'): void {
   isSidebarToolsOpen.value = false
   void router.push({ name: routeName })
   if (isMobile.value) setSidebarCollapsed(true)
@@ -3314,6 +3457,11 @@ function setSidebarCollapsed(nextValue: boolean): void {
 
 function onWindowKeyDown(event: KeyboardEvent): void {
   if (event.defaultPrevented) return
+  if (event.key === 'Escape' && pendingQueuedMessageEditId.value) {
+    event.preventDefault()
+    cancelQueuedMessageEdit()
+    return
+  }
   if (event.key === 'Escape' && isMobileShellUpdatePromptVisible.value) {
     event.preventDefault()
     closeMobileShellUpdatePrompt()
@@ -3349,6 +3497,7 @@ function onWindowPointerDownForSettings(event: PointerEvent): void {
 }
 
 function onSubmitThreadMessage(payload: SubmitPayload): void {
+  const feedbackStartedAtMs = isHomeRoute.value || payload.mode === 'steer' ? chatFeedbackNow() : undefined
   const text = payload.text
   const editingState = editingQueuedMessageState.value
   const queueInsertIndex =
@@ -3366,6 +3515,7 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
       payload.fileAttachments,
       payload.collaborationMode,
       payload.turnOptions,
+      feedbackStartedAtMs,
     )
     return
   }
@@ -3382,6 +3532,7 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
     queueInsertIndex,
     payload.collaborationMode,
     payload.turnOptions,
+    { feedbackStartedAtMs },
   ).then(() => {
     if (payload.mode !== 'queue') {
       markDesktopSyncPending(selectedThreadId.value)
@@ -3424,6 +3575,18 @@ async function onRefreshSelectedThreadContent(): Promise<void> {
     showProductToast(message, 'danger', 4200)
   } finally {
     isManualThreadRefreshRunning.value = false
+  }
+}
+
+async function onRefreshSidebarThreads(): Promise<void> {
+  try {
+    await refreshAll({ loadMessages: false, loadSkills: false })
+    const refreshError = desktopStateError.value.trim()
+    if (refreshError) throw new Error(refreshError)
+    showProductToast('会话列表已重新加载。', 'success')
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : '重新加载会话列表失败'
+    showProductToast(message, 'danger', 5200)
   }
 }
 
@@ -3540,15 +3703,22 @@ async function onRunWorkbenchTemplate(templateId: string): Promise<void> {
 }
 
 function onEditQueuedMessage(messageId: string): void {
+  const composer = threadComposerRef.value
+  if (!composer) return
+
+  if (composer.hasUnsavedDraft()) {
+    pendingQueuedMessageEditId.value = messageId
+    return
+  }
+
+  hydrateQueuedMessageForEditing(messageId)
+}
+
+function hydrateQueuedMessageForEditing(messageId: string): void {
   const queueIndex = selectedThreadQueuedMessages.value.findIndex((item) => item.id === messageId)
   const message = queueIndex >= 0 ? selectedThreadQueuedMessages.value[queueIndex] : undefined
   const composer = threadComposerRef.value
   if (!message || !composer) return
-
-  if (composer.hasUnsavedDraft()) {
-    const shouldReplace = window.confirm('当前输入框里还有未发送内容，是否替换为这条排队消息继续编辑？')
-    if (!shouldReplace) return
-  }
 
   editingQueuedMessageState.value = selectedThreadId.value
     ? { threadId: selectedThreadId.value, queueIndex }
@@ -3563,6 +3733,17 @@ function onEditQueuedMessage(messageId: string): void {
   }
   composer.hydrateDraft(payload)
   removeQueuedMessage(messageId)
+}
+
+function cancelQueuedMessageEdit(): void {
+  pendingQueuedMessageEditId.value = ''
+}
+
+function confirmQueuedMessageEdit(): void {
+  const messageId = pendingQueuedMessageEditId.value
+  pendingQueuedMessageEditId.value = ''
+  if (!messageId) return
+  hydrateQueuedMessageForEditing(messageId)
 }
 
 async function rollbackAndResendDictation(payload: {
@@ -3973,6 +4154,14 @@ function showProductToast(
   }, durationMs)
 }
 
+function closeProductToast(): void {
+  if (productToastTimer) {
+    window.clearTimeout(productToastTimer)
+    productToastTimer = null
+  }
+  productToast.value = null
+}
+
 function loadDarkModePref(): 'system' | 'light' | 'dark' {
   if (typeof window === 'undefined') return 'system'
   const v = window.localStorage.getItem(DARK_MODE_KEY)
@@ -4254,7 +4443,7 @@ watch(
 )
 
 watch(
-  activeTaskPetItems,
+  [activeTaskPetItems, recentTaskPetThreads],
   () => {
     if (!isMobileShellAvailable.value || mobileShellTaskPetStatus.value?.enabled !== true) return
     if (mobileShellTaskPetSyncTimer) clearTimeout(mobileShellTaskPetSyncTimer)
@@ -4262,6 +4451,28 @@ watch(
       mobileShellTaskPetSyncTimer = null
       void syncMobileShellTaskPet()
     }, 180)
+  },
+)
+
+watch(
+  () => [
+    routeThreadId.value,
+    displayedThreadConversationId.value,
+    isLoadingMessages.value,
+    isSelectedThreadInProgress.value,
+  ] as const,
+  ([routeId, displayedId, loading, inProgress]) => {
+    const normalizedRouteId = routeId.trim()
+    if (
+      !isMobileShellAvailable.value
+      || loading
+      || inProgress
+      || !normalizedRouteId
+      || displayedId.trim() !== normalizedRouteId
+    ) return
+    void markMobileShellTaskPetThreadRead(normalizedRouteId).catch(() => {
+      // The native record remains until the next successful read acknowledgement.
+    })
   },
 )
 
@@ -4388,7 +4599,16 @@ async function submitFirstMessageForNewThread(
   fileAttachments: Array<{ label: string; path: string; fsPath: string }> = [],
   collaborationMode: CollaborationMode = selectedCollaborationMode.value,
   turnOptions?: ComposerTurnOptions,
+  feedbackStartedAtMs?: number,
 ): Promise<string> {
+  let activatedThreadId = ''
+  let routeToCreatedThreadPromise: Promise<void> | null = null
+  const onThreadCreated = (threadId: string): void => {
+    if (!threadId || activatedThreadId === threadId) return
+    activatedThreadId = threadId
+    routeToCreatedThreadPromise = navigateToCreatedThread(threadId)
+  }
+
   try {
     worktreeInitStatus.value = { phase: 'idle', title: '', message: '' }
     let targetCwd = newThreadCwd.value
@@ -4428,6 +4648,7 @@ async function submitFirstMessageForNewThread(
       fileAttachments,
       collaborationMode,
       turnOptions,
+      { feedbackStartedAtMs, onThreadCreated },
     )
     if (!threadId) {
       restoreHomeThreadComposerDraft({
@@ -4440,21 +4661,61 @@ async function submitFirstMessageForNewThread(
       })
       return ''
     }
-    await router.replace({ name: 'thread', params: { threadId } })
-    markDesktopSyncPending(threadId)
+    if (routeToCreatedThreadPromise) {
+      await routeToCreatedThreadPromise
+    } else {
+      await navigateToCreatedThread(threadId)
+    }
     return threadId
   } catch {
     // Error is already reflected in state.
-    restoreHomeThreadComposerDraft({
-      text,
-      imageUrls,
-      fileAttachments,
-      skills,
-      plugins: turnOptions?.plugins,
-      goal: turnOptions?.goal,
-    })
-    return ''
+    if (routeToCreatedThreadPromise) {
+      try { await routeToCreatedThreadPromise } catch {}
+      return activatedThreadId
+    }
+    if (!pendingNewThreadPreview.value) {
+      restoreHomeThreadComposerDraft({
+        text,
+        imageUrls,
+        fileAttachments,
+        skills,
+        plugins: turnOptions?.plugins,
+        goal: turnOptions?.goal,
+      })
+    }
+    return activatedThreadId
   }
+}
+
+async function navigateToCreatedThread(threadId: string): Promise<void> {
+  await router.replace({ name: 'thread', params: { threadId } })
+  clearPendingNewThreadPreview()
+  markDesktopSyncPending(threadId)
+}
+
+function onRetryPendingNewThreadMessage(messageId: string): void {
+  void retryFailedNewThreadMessage(messageId, (threadId) => {
+    void navigateToCreatedThread(threadId)
+  })
+}
+
+function onEditPendingNewThreadMessage(messageId: string): void {
+  const draft = takeFailedNewThreadMessageForEditing(messageId)
+  if (!draft) return
+  if (draft.cwd) newThreadCwd.value = draft.cwd
+  if (draft.modelId) setSelectedModelId(draft.modelId)
+  setSelectedReasoningEffort(draft.reasoningEffort)
+  setSelectedCollaborationMode(draft.collaborationMode)
+  void nextTick(() => {
+    restoreHomeThreadComposerDraft({
+      text: draft.text,
+      imageUrls: [...draft.imageUrls],
+      fileAttachments: draft.fileAttachments.map((file) => ({ ...file })),
+      skills: draft.skills.map((skill) => ({ ...skill })),
+      plugins: draft.turnOptions?.plugins?.map((plugin) => ({ ...plugin })),
+      goal: draft.turnOptions?.goal ? { ...draft.turnOptions.goal } : undefined,
+    })
+  })
 }
 </script>
 
@@ -5070,7 +5331,7 @@ async function submitFirstMessageForNewThread(
 }
 
 .product-toast {
-  @apply fixed left-1/2 z-[70] max-w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 border px-4 py-2 text-sm font-medium;
+  @apply fixed left-1/2 z-[70] flex max-w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 items-center gap-2 border px-4 py-2 text-sm font-medium;
   bottom: max(1rem, env(safe-area-inset-bottom));
   font-family: var(--font-sans-ui);
   border-radius: var(--ui-radius-pill);
@@ -5078,6 +5339,24 @@ async function submitFirstMessageForNewThread(
   background: var(--ui-bg-surface);
   color: var(--ui-text-secondary);
   box-shadow: 0 10px 24px rgb(0 0 0 / 0.09);
+}
+
+.product-toast-message {
+  @apply min-w-0 flex-1;
+}
+
+.product-toast-close {
+  @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-0 bg-transparent;
+  color: currentColor;
+}
+
+.product-toast-close:hover,
+.product-toast-close:focus-visible {
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.product-toast-close-icon {
+  @apply h-4 w-4;
 }
 
 .product-toast[data-tone='success'] {
@@ -5101,6 +5380,25 @@ async function submitFirstMessageForNewThread(
 .product-toast-leave-to {
   opacity: 0;
   transform: translate(-50%, 8px);
+}
+
+@media (max-width: 767px) {
+  .sidebar-action-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .sidebar-action-tile-workbench {
+    display: none;
+  }
+
+  .product-toast--above-composer {
+    bottom: max(7rem, calc(env(safe-area-inset-bottom) + 6.5rem));
+  }
+
+  .product-toast-close {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
 }
 
 .content-grid {
@@ -5970,6 +6268,8 @@ async function submitFirstMessageForNewThread(
   .settings-mobile-backdrop-leave-active,
   .settings-mobile-panel-enter-active,
   .settings-mobile-panel-leave-active,
+  .product-toast-enter-active,
+  .product-toast-leave-active,
   .sidebar-search-toggle,
   .sidebar-search-clear,
   .sidebar-skills-link,

@@ -32,6 +32,7 @@ export type ThreadRuntimeSnapshot = {
   lastStartedAtIso: string | null
   lastCompletedAtIso: string | null
   lastError: string | null
+  latestReply?: string
   stale: boolean
   degradedReason: string | null
   source: RuntimeSnapshotSource
@@ -67,6 +68,7 @@ type ThreadRuntimeState = {
   lastStartedAtIso: string | null
   lastCompletedAtIso: string | null
   lastError: string | null
+  latestReply: string
   degradedReason: string | null
   source: RuntimeSnapshotSource
 }
@@ -118,6 +120,7 @@ function createInitialRuntimeState(threadId: string): ThreadRuntimeState {
     lastStartedAtIso: null,
     lastCompletedAtIso: null,
     lastError: null,
+    latestReply: '',
     degradedReason: null,
     source: 'unknown',
   }
@@ -183,6 +186,7 @@ export class RuntimeStateStore {
       stopRequested: false,
       degradedReason: null,
       lastError: null,
+      latestReply: '',
     }, 'events')
   }
 
@@ -248,6 +252,33 @@ export class RuntimeStateStore {
     const turnId = this.readers.readTurnIdFromPayload(event.params)
     const itemId = this.readers.readItemIdFromPayload(event.params)
 
+    if (method === 'item/agentMessage/delta') {
+      const delta = readStringProperty(event.params, 'delta')
+      if (delta) {
+        const state = this.getMutable(threadId)
+        this.touch(threadId, {
+          executionState: isRuntimeSettledState(state.executionState) && state.executionState !== 'idle'
+            ? state.executionState
+            : 'running',
+          activeTurnId: turnId || state.activeTurnId,
+          activeItemId: itemId || state.activeItemId,
+          latestReply: appendLatestReply(state.latestReply, delta),
+          degradedReason: null,
+        }, 'events', event)
+      }
+      return
+    }
+
+    if (method === 'item/completed') {
+      const completedReply = readCompletedAgentReply(event.params)
+      if (completedReply) {
+        this.touch(threadId, {
+          latestReply: completedReply,
+        }, 'events', event)
+      }
+      return
+    }
+
     if (method === 'turn/started' || method === 'turn/start' || method === 'thread/started') {
       this.touch(threadId, {
         executionState: 'running',
@@ -257,6 +288,7 @@ export class RuntimeStateStore {
         degradedReason: null,
         lastStartedAtIso: event.atIso,
         lastError: null,
+        latestReply: '',
       }, 'events', event)
       return
     }
@@ -397,6 +429,7 @@ export class RuntimeStateStore {
       lastStartedAtIso: state.lastStartedAtIso,
       lastCompletedAtIso: state.lastCompletedAtIso,
       lastError: state.lastError,
+      latestReply: state.latestReply,
       stale,
       degradedReason: state.degradedReason,
       source: state.source,
@@ -413,4 +446,35 @@ export class RuntimeStateStore {
       .filter((threadId) => threadId.length > 0)
       .map((threadId) => this.snapshot(threadId, overlaysByThreadId.get(threadId) ?? {}))
   }
+}
+
+const LATEST_REPLY_CACHE_LIMIT = 1_200
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function readStringProperty(value: unknown, key: string): string {
+  const child = asRecord(value)?.[key]
+  return typeof child === 'string' ? child : ''
+}
+
+function normalizeLatestReply(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+function appendLatestReply(current: string, delta: string): string {
+  const combined = normalizeLatestReply(`${current}${delta}`)
+  return combined.length <= LATEST_REPLY_CACHE_LIMIT
+    ? combined
+    : combined.slice(combined.length - LATEST_REPLY_CACHE_LIMIT)
+}
+
+function readCompletedAgentReply(params: unknown): string {
+  const item = asRecord(asRecord(params)?.item)
+  if (item?.type !== 'agentMessage' || typeof item.text !== 'string') return ''
+  const normalized = normalizeLatestReply(item.text)
+  return normalized.slice(0, LATEST_REPLY_CACHE_LIMIT)
 }

@@ -12,7 +12,10 @@ param(
   [string]$ScreenshotTaskName = "frontend-ui-regression",
   [string]$ScreenshotOutputDir = "",
   [string]$RequireThreadTitle = "",
-  [int]$AgentBrowserTimeoutSec = 25
+  [int]$AgentBrowserTimeoutSec = 25,
+  [switch]$MeasureSendFeedback,
+  [switch]$MeasureNewThreadFeedback,
+  [switch]$MeasureResponseFeedback
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,6 +55,91 @@ function Assert-AndroidResumeThreadListRecoverySource {
   Assert-True ($functionSource -notmatch "if\s*\(\s*androidShellAvailable\s*\)\s*return\s+false") "Android resume thread-list recovery is disabled"
   Assert-True ($source -match "const\s+ACTIVE_SYNC_THREAD_LIST_INTERVAL_MS\s*=\s*120000") "Android resume thread-list recovery interval must remain 120 seconds"
   Assert-True ($functionSource -match "return\s+isFirstAttempt\s*&&\s*now\s*-\s*lastThreadListSyncAtMs\s*>=\s*ACTIVE_SYNC_THREAD_LIST_INTERVAL_MS") "Android resume must refresh a stale thread list on the first resume attempt"
+}
+
+function Assert-CrossClientThreadStartedRefreshSource {
+  $sourcePath = Join-Path (Get-Location) "src\composables\useDesktopState.ts"
+  $source = Get-Content -Raw -Encoding UTF8 -LiteralPath $sourcePath
+  $functionMatch = [regex]::Match($source, "function\s+shouldRefreshThreadListFromNotification[\s\S]*?\n\s*}")
+  Assert-True ($functionMatch.Success) "could not find shouldRefreshThreadListFromNotification source"
+  $functionSource = $functionMatch.Value
+  Assert-True ($functionSource -match "method\s*===\s*'thread/started'") "thread/started must invalidate the thread list for other 7420 clients"
+  Assert-True ($functionSource -match "method\s*===\s*THREAD_TOKEN_USAGE_UPDATED_METHOD\)\s*return\s+false") "token usage updates must not trigger thread-list refreshes"
+}
+
+function Assert-PendingStartOutboxRecoverySource {
+  $sourcePath = Join-Path (Get-Location) "src\composables\useDesktopState.ts"
+  $source = Get-Content -Raw -Encoding UTF8 -LiteralPath $sourcePath
+  $functionMatch = [regex]::Match($source, "async\s+function\s+recoverPersistentMessageOutbox[\s\S]*?\n\s*async\s+function\s+runSendPreflightWithBoundedRecovery")
+  Assert-True ($functionMatch.Success) "could not find recoverPersistentMessageOutbox source"
+  $functionSource = $functionMatch.Value
+  Assert-True ($functionSource -match "recovered\?\.status\s*===\s*'pending_start'\s*&&\s*!recoveredThreadId") "threadless pending_start requests must be recovered before removing the outbox entry"
+  Assert-True ($functionSource -match "startRuntimeThreadTurn\(\{[\s\S]*?clientMessageId:\s*entry\.clientMessageId") "threadless pending_start recovery must reuse the durable client message id"
+  Assert-True ($functionSource -match "isRuntimeRequestAwaitingDeliveryConfirmation\(recovered\.status\)[\s\S]*?restoreConfirmingMessageOutboxEntry") "unconfirmed runtime requests must keep a confirming outbox bubble"
+  Assert-True ($source -match "function\s+markOptimisticUserMessageConfirming[\s\S]*?updateMessageOutboxEntry\(clientMessageId,\s*\{\s*state:\s*'confirming'\s*\}\)") "confirming delivery must remain durable in the message outbox"
+  Assert-True ($source -match "runtimeResult\s*&&\s*isRuntimeRequestAwaitingDeliveryConfirmation\(runtimeResult\.status\)[\s\S]*?markOptimisticUserMessageConfirming") "direct sends must not present an unconfirmed request as sent"
+  Assert-True ($source -match "messageOutboxRemovalByClientId[\s\S]*?mergeMessageOutboxState") "cross-page outbox recovery must retain deletion markers"
+  Assert-True ($source -match "removeMessageOutboxEntry[\s\S]*?messageOutboxRemovalByClientId\.set\(clientMessageId,\s*removedAtMs\)") "confirmed outbox deletion must prevent stale-page resurrection"
+  Assert-True ($source -match "function\s+convergeMessageOutboxFromStorage[\s\S]*?mergeMessageOutboxFromStorage\(\)[\s\S]*?persistMessageOutbox\(\)") "concurrent storage writes must merge and converge instead of replacing local state"
+  Assert-True ($source -match "function\s+reconcilePendingNewThreadPreviewWithOutbox[\s\S]*?pendingNewThreadPreview\.value\s*=\s*null") "cross-page outbox removal must clear a stale new-thread preview"
+  Assert-True ($functionSource -match "await\s+getRuntimeRequestByClientMessageId\(entry\.clientMessageId\)[\s\S]*?messageOutboxByClientId\.get\(entry\.clientMessageId\)[\s\S]*?if\s*\(!currentEntry\)\s*continue") "outbox recovery must discard stale lookup results after another page removes the entry"
+  Assert-True ($source -match "isFirstAttempt\)[\s\S]*?mergeMessageOutboxFromStorage\(\)[\s\S]*?recoverPersistentMessageOutbox\(\)") "foreground resume must reconcile the durable message outbox on its first attempt"
+  Assert-True ($source -match "addEventListener\('storage',\s*onStorage\)") "parallel 7420 pages must observe message outbox storage changes"
+}
+
+function Assert-RuntimeSnapshotOrderingSource {
+  $sourcePath = Join-Path (Get-Location) "src\composables\useDesktopState.ts"
+  $source = Get-Content -Raw -Encoding UTF8 -LiteralPath $sourcePath
+  Assert-True ($source -match "shouldApplyRuntimeSnapshotVersion\(runtimeStatusSummaryByThreadId\.value\[threadId\],\s*snapshot\)") "runtime snapshots must be checked against the latest applied event sequence"
+  Assert-True ($source -match "eventSeq:\s*notification\.seq") "runtime notification state must retain the authoritative event sequence"
+  Assert-True ($source -match "const\s+runtimeSnapshotApplied\s*=\s*applyRuntimeSnapshotState") "message reconciliation must know when an outdated runtime snapshot was rejected"
+}
+
+function Assert-BoundedRuntimeSendRecoverySource {
+  $sourcePath = Join-Path (Get-Location) "src\composables\useDesktopState.ts"
+  $source = Get-Content -Raw -Encoding UTF8 -LiteralPath $sourcePath
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\App.vue")
+  Assert-True ($source -match "const\s+RUNTIME_SEND_RETRY_DELAYS_MS\s*=\s*\[650,\s*1800\]") "runtime send retries must remain bounded to two delays"
+  $functionMatch = [regex]::Match($source, "async\s+function\s+startRuntimeTurnWithBoundedRecovery[\s\S]*?\n\s*function\s+hydrateCachedMessagesForThread")
+  Assert-True ($functionMatch.Success) "could not find startRuntimeTurnWithBoundedRecovery source"
+  $functionSource = $functionMatch.Value
+  Assert-True ($functionSource -match "runWithBoundedRecovery\(\{") "production runtime sends must use the tested bounded recovery coordinator"
+  Assert-True ($functionSource -match "getRuntimeRequestByClientMessageId\(args\.clientMessageId\)") "transport failures must reconcile the same client message id before retrying"
+  Assert-True ($functionSource -match "markOptimisticUserMessageRetrying") "bounded recovery must publish visible retry progress"
+  $preflightMatch = [regex]::Match($source, "async\s+function\s+runSendPreflightWithBoundedRecovery[\s\S]*?\n\s*async\s+function\s+startRuntimeTurnWithBoundedRecovery")
+  Assert-True ($preflightMatch.Success) "could not find bounded send preflight recovery source"
+  Assert-True ($preflightMatch.Value -match "runWithBoundedRecovery\(\{") "send preflight must use the tested bounded recovery coordinator"
+  Assert-True ($source -match "runSendPreflightWithBoundedRecovery\([\s\S]*?recoverThreadExecutionState") "thread-state preflight failures must receive bounded reconnect feedback"
+  Assert-True ($source -match "if\s*\(wasThreadInProgressBeforeSubmit\)\s*\{[\s\S]*?recoverThreadExecutionState") "idle sends must not recover the optimistic state they just created"
+  Assert-True ($source -match "runSendPreflightWithBoundedRecovery\([\s\S]*?ensureThreadResumed") "thread-resume preflight failures must receive bounded reconnect feedback"
+  Assert-True ($source -match "const\s+runtimeStateBeforeSubmit\s*=\s*runtimeExecutionStateByThreadId\.value\[threadId\]") "send failure cleanup must capture the authoritative runtime state before optimistic feedback"
+  Assert-True ($source -match "const\s+isInProgress\s*=\s*runtimeStateAfterRecovery\s*!==\s*undefined[\s\S]*?isRuntimeExecutionActiveState\(runtimeStateAfterRecovery\)[\s\S]*?wasThreadInProgressBeforeSubmit") "authoritative runtime state must win over a stale thread-list in-progress marker"
+  Assert-True ($source -match "markOptimisticUserMessageFailed\(threadId,\s*optimisticMessageId,\s*failedMessageRequest\)[\s\S]*?setTurnErrorForThread\(threadId,\s*null\)") "local send failure must stay on the message bubble instead of creating a false turn-error overlay"
+  $manualRetryMatch = [regex]::Match($source, "async\s+function\s+retryFailedUserMessage[\s\S]*?\n\s*function\s+restoreFailedMessageOutboxEntry")
+  Assert-True ($manualRetryMatch.Success) "could not find failed-message retry source"
+  Assert-True ($manualRetryMatch.Value -notmatch "removeOptimisticUserMessage") "manual retry must update the failed bubble in place instead of replacing it"
+  Assert-True ($manualRetryMatch.Value -match "reuseOptimisticMessageId:\s*messageId") "manual retry must pass the original optimistic message id into the send path"
+  Assert-True ($manualRetryMatch.Value -match "targetThreadId:\s*request\.threadId") "manual retry must target the failed message thread instead of depending on transient global selection"
+  Assert-True ($manualRetryMatch.Value -notmatch "selectedThreadId\.value\s*!==\s*request\.threadId") "manual retry must not silently stop during route-selection convergence"
+  Assert-True ($manualRetryMatch.Value -match "durableEntry\?\.state\s*===\s*'failed'\s*\?\s*failedUserMessageRequestFromOutbox") "manual retry must recover its request from the durable outbox when volatile state was lost"
+  Assert-True ($source -match "messageId:\s*reusedOptimisticMessageId\s*\|\|\s*undefined[\s\S]*?deliveryState:\s*'sending'") "the send path must reset a reused failed bubble to sending"
+  Assert-True ($source -match "function\s+restoreFailedMessageOutboxEntry[\s\S]*?findOptimisticMessageIdForOutbox\(entry\.clientMessageId,\s*normalizedThreadId\)\s*\|\|\s*addOptimisticUserMessage") "failed outbox recovery must reuse the current optimistic bubble before creating one after reload"
+  Assert-True ($appSource -match "function\s+onSubmitThreadMessage[\s\S]*?const\s+feedbackStartedAtMs\s*=\s*isHomeRoute\.value\s*\|\|\s*payload\.mode\s*===\s*'steer'\s*\?\s*chatFeedbackNow\(\)") "message feedback timing must start at the composer submit handler"
+  Assert-True ($source -match "const\s+feedbackStartedAtMs\s*=\s*internalOptions\.feedbackStartedAtMs\s*\?\?\s*chatFeedbackNow\(\)") "non-composer sends must retain a local feedback timing fallback"
+  Assert-True ($source -match "beginChatFeedbackMetric\(\{[\s\S]*?clientMessageId,[\s\S]*?optimisticMessageId,[\s\S]*?submitStartedAtMs:\s*feedbackStartedAtMs") "message feedback timing must bind the send id to its optimistic bubble"
+  Assert-True ($source -match "pendingNewThreadPreview\.value\s*=\s*\{[\s\S]*?message:\s*\{[\s\S]*?id:\s*optimisticMessageId") "new-thread sends must publish an immediate in-memory conversation preview"
+  Assert-True ($source -match "addOptimisticUserMessage\(threadId,[\s\S]*?messageId:\s*optimisticMessageId") "the real thread must adopt the provisional bubble id instead of creating a duplicate"
+  Assert-True ($source -match "internalOptions\.onThreadCreated\?\.\(threadId\)") "new-thread sends must announce the authoritative thread before waiting for the first turn"
+  Assert-True ($appSource -match "routeToCreatedThreadPromise\s*=\s*navigateToCreatedThread\(threadId\)") "the app must enter a newly created thread while its first turn continues in the background"
+  Assert-True ($source -match "else\s*\{\s*markPendingNewThreadPreviewFailed\(clientMessageId,\s*optimisticMessageId\)") "threadless send failure must retain the outbox-backed preview bubble"
+  Assert-True ($source -match "async\s+function\s+retryFailedNewThreadMessage[\s\S]*?reuseOptimisticMessageId:\s*messageId") "threadless manual retry must reuse the same visual message id"
+  Assert-True ($source -match "function\s+takeFailedNewThreadMessageForEditing[\s\S]*?removeMessageOutboxEntry\(entry\.clientMessageId\)[\s\S]*?pendingNewThreadPreview\.value\s*=\s*null") "editing a failed threadless message must atomically leave preview mode and clear its outbox attempt"
+  Assert-True ($source -match "if\s*\(newestDraftEntry\)\s*\{\s*restoreFailedNewThreadOutboxEntry\(newestDraftEntry\)") "restart recovery must restore a failed new-thread bubble instead of silently moving it back to the composer"
+  Assert-True ($appSource -match 'data-testid="pending-new-thread-preview"[\s\S]*?:messages="\[pendingNewThreadPreview\.message\]"') "the home route must render the provisional first turn as a conversation"
+  Assert-True ($functionSource -match "markChatFeedbackRequestDispatched\(args\.clientMessageId\)") "runtime sends must mark the first request dispatch"
+  Assert-True ($functionSource -match "markChatFeedbackServerAcknowledged\(\{[\s\S]*?clientMessageId:\s*args\.clientMessageId") "runtime send acknowledgement must remain bound to its client message id"
+  Assert-True ($source -match "const\s+startedTurn\s*=\s*readTurnStartedInfo\(notification\)[\s\S]*?markChatFeedbackServerAcknowledged\(\{[\s\S]*?turnStarted:\s*true") "turn/started must mark authoritative server acceptance"
+  Assert-True ($source -match "const\s+liveAgentMessageDelta\s*=\s*readAgentMessageDelta\(notification\)[\s\S]*?markChatFeedbackFirstAssistantData") "the first assistant delta must mark data receipt before rendering"
 }
 
 function Invoke-AgentBrowser {
@@ -166,6 +254,484 @@ function Invoke-BrowserEvalJson {
   return $parsed
 }
 
+function Measure-ThreadSendFeedbackBudget {
+  param(
+    [string]$Session,
+    [string]$ThreadId
+  )
+
+  $probeText = "7420-send-feedback-budget-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+  $prepareScript = @'
+JSON.stringify((() => {
+  window.localStorage.removeItem('codex-web-local.message-outbox.v1');
+  delete window.__cxCodexChatFeedbackMetrics;
+  return { prepared: true };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $prepareScript | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'set', 'offline', 'on') | Out-Null
+
+  try {
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'fill', '.thread-composer-input', $probeText) | Out-Null
+    $clickScript = @'
+JSON.stringify((() => {
+  const button = document.querySelector('.thread-composer-submit');
+  if (!(button instanceof HTMLButtonElement) || button.disabled) return { clicked: false };
+  button.click();
+  return { clicked: true };
+})())
+'@
+    $clickState = Invoke-BrowserEvalJson -Session $Session -Script $clickScript
+    Assert-True ($clickState.clicked -eq $true) "send feedback probe could not click the composer submit button"
+
+    $metrics = $null
+    $escapedProbe = $probeText.Replace('\', '\\').Replace("'", "\'")
+    for ($attempt = 1; $attempt -le 10; $attempt++) {
+      $readScript = @"
+JSON.stringify((() => {
+  const rows = window.__cxCodexChatFeedbackMetrics ?? [];
+  const metric = rows.length > 0 ? rows[rows.length - 1] : null;
+  const promptCount = Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+    .filter((item) => item.textContent?.includes('$escapedProbe'))
+    .length;
+  return { metric, promptCount };
+})())
+"@
+      $metrics = Invoke-BrowserEvalJson -Session $Session -Script $readScript
+      if (
+        $null -ne $metrics.metric -and
+        $null -ne $metrics.metric.bubbleVisibleLatencyMs -and
+        $null -ne $metrics.metric.runningVisibleLatencyMs
+      ) {
+        break
+      }
+      Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '50') | Out-Null
+    }
+
+    Assert-True ($null -ne $metrics.metric) "send feedback page metric was not recorded"
+    Assert-True ([int]$metrics.promptCount -eq 1) "send feedback probe did not render exactly one optimistic bubble"
+    Assert-True ([int]$metrics.metric.stateCommitLatencyMs -le 50) "send feedback state commit exceeded 50 ms"
+    Assert-True ([int]$metrics.metric.bubbleVisibleLatencyMs -le 200) "send feedback bubble exceeded 200 ms"
+    Assert-True ([int]$metrics.metric.runningVisibleLatencyMs -le 200) "send feedback running indicator exceeded 200 ms"
+    Write-Step ("send feedback timing -> " + (@{
+      threadId = $ThreadId
+      stateCommitMs = [int]$metrics.metric.stateCommitLatencyMs
+      bubbleVisibleMs = [int]$metrics.metric.bubbleVisibleLatencyMs
+      runningVisibleMs = [int]$metrics.metric.runningVisibleLatencyMs
+    } | ConvertTo-Json -Compress))
+    $focusScript = @"
+JSON.stringify((() => {
+  const item = Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+    .find((row) => row.textContent?.includes('$escapedProbe'));
+  item?.scrollIntoView({ block: 'center' });
+  return { focused: Boolean(item) };
+})())
+"@
+    $focusState = Invoke-BrowserEvalJson -Session $Session -Script $focusScript
+    Assert-True ($focusState.focused -eq $true) "send feedback probe could not be focused for screenshot evidence"
+    Save-RegressionScreenshot -Session $Session -Name 'send-feedback-budget-phone' | Out-Null
+  } finally {
+    try { Invoke-AgentBrowser -Arguments @('--session', $Session, 'set', 'offline', 'off') | Out-Null } catch {}
+    try {
+      $cleanupScript = @'
+JSON.stringify((() => {
+  window.localStorage.removeItem('codex-web-local.message-outbox.v1');
+  delete window.__cxCodexChatFeedbackMetrics;
+  const input = document.querySelector('.thread-composer-input');
+  if (input instanceof HTMLTextAreaElement) {
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  return { cleared: true };
+})())
+'@
+      Invoke-BrowserEvalJson -Session $Session -Script $cleanupScript | Out-Null
+      Invoke-AgentBrowser -Arguments @('--session', $Session, 'reload') | Out-Null
+      Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '--load', 'networkidle') | Out-Null
+    } catch {}
+  }
+}
+
+function Measure-NewThreadSendFeedbackBudget {
+  param([string]$Session)
+
+  $probeText = "7420-new-thread-feedback-budget-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+  $prepareScript = @'
+JSON.stringify((() => {
+  window.localStorage.removeItem('codex-web-local.message-outbox.v1');
+  delete window.__cxCodexChatFeedbackMetrics;
+  return { prepared: true };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $prepareScript | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'set', 'offline', 'on') | Out-Null
+
+  try {
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'fill', '.thread-composer-input', $probeText) | Out-Null
+    $clickScript = @'
+JSON.stringify((() => {
+  const button = document.querySelector('.thread-composer-submit');
+  if (!(button instanceof HTMLButtonElement) || button.disabled) return { clicked: false };
+  button.click();
+  return { clicked: true };
+})())
+'@
+    $clickState = Invoke-BrowserEvalJson -Session $Session -Script $clickScript
+    Assert-True ($clickState.clicked -eq $true) "new-thread feedback probe could not click the composer submit button"
+
+    $metrics = $null
+    $escapedProbe = $probeText.Replace('\', '\\').Replace("'", "\'")
+    for ($attempt = 1; $attempt -le 12; $attempt++) {
+      $readScript = @"
+JSON.stringify((() => {
+  const rows = window.__cxCodexChatFeedbackMetrics ?? [];
+  const metric = rows.length > 0 ? rows[rows.length - 1] : null;
+  const preview = document.querySelector('[data-testid="pending-new-thread-preview"]');
+  const promptCount = Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+    .filter((item) => item.textContent?.includes('$escapedProbe'))
+    .length;
+  return {
+    metric,
+    previewVisible: Boolean(preview),
+    promptCount,
+    composerDisabled: document.querySelector('.thread-composer-input')?.disabled === true
+  };
+})())
+"@
+      $metrics = Invoke-BrowserEvalJson -Session $Session -Script $readScript
+      if (
+        $null -ne $metrics.metric -and
+        $null -ne $metrics.metric.bubbleVisibleLatencyMs -and
+        $null -ne $metrics.metric.runningVisibleLatencyMs
+      ) {
+        break
+      }
+      Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '50') | Out-Null
+    }
+
+    Assert-True ($null -ne $metrics.metric) "new-thread feedback page metric was not recorded"
+    Assert-True ($metrics.previewVisible -eq $true) "new-thread feedback did not replace the empty home state"
+    Assert-True ([int]$metrics.promptCount -eq 1) "new-thread feedback did not render exactly one provisional bubble"
+    Assert-True ($metrics.composerDisabled -eq $true) "new-thread feedback did not guard against duplicate submit"
+    Assert-True ([int]$metrics.metric.stateCommitLatencyMs -le 50) "new-thread feedback state commit exceeded 50 ms"
+    Assert-True ([int]$metrics.metric.bubbleVisibleLatencyMs -le 200) "new-thread feedback bubble exceeded 200 ms"
+    Assert-True ([int]$metrics.metric.runningVisibleLatencyMs -le 200) "new-thread feedback running indicator exceeded 200 ms"
+    Write-Step ("new-thread feedback timing -> " + (@{
+      stateCommitMs = [int]$metrics.metric.stateCommitLatencyMs
+      bubbleVisibleMs = [int]$metrics.metric.bubbleVisibleLatencyMs
+      runningVisibleMs = [int]$metrics.metric.runningVisibleLatencyMs
+    } | ConvertTo-Json -Compress))
+    Save-RegressionScreenshot -Session $Session -Name 'new-thread-feedback-budget-phone' | Out-Null
+
+    $failedState = $null
+    for ($attempt = 1; $attempt -le 24; $attempt++) {
+      $failedScript = @"
+JSON.stringify((() => {
+  const item = Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+    .find((row) => row.textContent?.includes('$escapedProbe'));
+  const delivery = item?.querySelector('.message-delivery-state');
+  let outboxState = '';
+  try {
+    outboxState = JSON.parse(window.localStorage.getItem('codex-web-local.message-outbox.v1') || '{}')?.entries?.[0]?.state || '';
+  } catch {}
+  return {
+    messageId: item?.getAttribute('data-message-id') || '',
+    deliveryState: delivery?.getAttribute('data-state') || '',
+    retryButtonCount: Array.from(item?.querySelectorAll('.message-delivery-retry') || [])
+      .filter((button) => button.textContent?.trim() === '重试').length,
+    editButtonCount: Array.from(item?.querySelectorAll('.message-delivery-retry') || [])
+      .filter((button) => button.textContent?.trim() === '编辑').length,
+    runningCount: document.querySelectorAll('.live-overlay-inline').length,
+    outboxState,
+    promptCount: Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+      .filter((row) => row.textContent?.includes('$escapedProbe')).length
+  };
+})())
+"@
+      $failedState = Invoke-BrowserEvalJson -Session $Session -Script $failedScript
+      if ([string]$failedState.deliveryState -eq 'failed') { break }
+      Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '250') | Out-Null
+    }
+    Assert-True ([string]$failedState.deliveryState -eq 'failed') "threadless send failure did not stay as a failed bubble"
+    Assert-True ([int]$failedState.retryButtonCount -eq 1) "threadless send failure is missing its retry action"
+    Assert-True ([int]$failedState.editButtonCount -eq 1) "threadless send failure is missing its edit action"
+    Assert-True ([int]$failedState.runningCount -eq 0) "threadless send failure left a false running indicator"
+    Assert-True ([string]$failedState.outboxState -eq 'failed') "threadless send failure was removed from the durable outbox"
+    Assert-True ([int]$failedState.promptCount -eq 1) "threadless send failure duplicated or removed the original bubble"
+    $failedMessageId = [string]$failedState.messageId
+    Save-RegressionScreenshot -Session $Session -Name 'new-thread-failed-retry-phone' | Out-Null
+
+    $retryScript = @'
+JSON.stringify((() => {
+  const button = Array.from(document.querySelectorAll('[data-testid="pending-new-thread-preview"] .message-delivery-retry'))
+    .find((candidate) => candidate.textContent?.trim() === '重试');
+  if (!(button instanceof HTMLButtonElement) || button.disabled) return { clicked: false };
+  button.click();
+  return { clicked: true };
+})())
+'@
+    $retryState = Invoke-BrowserEvalJson -Session $Session -Script $retryScript
+    Assert-True ($retryState.clicked -eq $true) "threadless failed message retry could not be clicked"
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+
+    $retryingScript = @"
+JSON.stringify((() => {
+  const item = document.querySelector('.conversation-item[data-message-id]');
+  const delivery = item?.querySelector('.message-delivery-state');
+  return {
+    messageId: item?.getAttribute('data-message-id') || '',
+    deliveryState: delivery?.getAttribute('data-state') || '',
+    promptCount: document.querySelectorAll('.conversation-item[data-message-id]').length
+  };
+})())
+"@
+    $retryingState = Invoke-BrowserEvalJson -Session $Session -Script $retryingScript
+    Assert-True ([string]$retryingState.messageId -eq $failedMessageId) "threadless retry replaced the original visual message"
+    Assert-True ([string]$retryingState.deliveryState -in @('sending', 'retrying')) "threadless retry did not return the same bubble to an active delivery state"
+    Assert-True ([int]$retryingState.promptCount -eq 1) "threadless retry appended a duplicate bubble"
+
+    $retryFailedAgain = $null
+    for ($attempt = 1; $attempt -le 24; $attempt++) {
+      $retryFailedAgain = Invoke-BrowserEvalJson -Session $Session -Script $failedScript
+      if ([string]$retryFailedAgain.deliveryState -eq 'failed') { break }
+      Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '250') | Out-Null
+    }
+    Assert-True ([string]$retryFailedAgain.deliveryState -eq 'failed') "threadless retry did not return to an actionable failed state after bounded exhaustion"
+    Assert-True ([string]$retryFailedAgain.messageId -eq $failedMessageId) "threadless retry changed the visual message id after failure"
+    Assert-True ([int]$retryFailedAgain.promptCount -eq 1) "threadless retry left duplicate bubbles after bounded exhaustion"
+
+    $editScript = @'
+JSON.stringify((() => {
+  const button = Array.from(document.querySelectorAll('[data-testid="pending-new-thread-preview"] .message-delivery-retry'))
+    .find((candidate) => candidate.textContent?.trim() === '编辑');
+  if (!(button instanceof HTMLButtonElement) || button.disabled) return { clicked: false };
+  button.click();
+  return { clicked: true };
+})())
+'@
+    $editState = Invoke-BrowserEvalJson -Session $Session -Script $editScript
+    Assert-True ($editState.clicked -eq $true) "threadless failed message could not return to editing"
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+    $editedScript = @"
+JSON.stringify((() => {
+  const input = document.querySelector('.thread-composer-input');
+  let outbox = {};
+  try { outbox = JSON.parse(window.localStorage.getItem('codex-web-local.message-outbox.v1') || '{}'); } catch {}
+  return {
+    inputValue: input instanceof HTMLTextAreaElement ? input.value : '',
+    previewCount: document.querySelectorAll('[data-testid="pending-new-thread-preview"]').length,
+    outboxEntryCount: Array.isArray(outbox.entries) ? outbox.entries.length : 0,
+    outboxRemovalCount: Array.isArray(outbox.removals) ? outbox.removals.length : 0
+  };
+})())
+"@
+    $editedState = Invoke-BrowserEvalJson -Session $Session -Script $editedScript
+    Assert-True ([string]$editedState.inputValue -eq $probeText) "threadless failed message edit lost the original content"
+    Assert-True ([int]$editedState.previewCount -eq 0) "threadless failed message edit left preview mode mounted"
+    Assert-True ([int]$editedState.outboxEntryCount -eq 0) "threadless failed message edit retained the known-failed outbox attempt"
+    Assert-True ([int]$editedState.outboxRemovalCount -ge 1) "threadless failed message edit did not retain its cross-page deletion marker"
+  } finally {
+    try { Invoke-AgentBrowser -Arguments @('--session', $Session, 'set', 'offline', 'off') | Out-Null } catch {}
+    try {
+      $cleanupScript = @'
+JSON.stringify((() => {
+  window.localStorage.removeItem('codex-web-local.message-outbox.v1');
+  window.localStorage.removeItem('codex-web-local.thread-draft.v1.__new-thread__');
+  delete window.__cxCodexChatFeedbackMetrics;
+  return { cleared: true };
+})())
+'@
+      Invoke-BrowserEvalJson -Session $Session -Script $cleanupScript | Out-Null
+      Invoke-AgentBrowser -Arguments @('--session', $Session, 'reload') | Out-Null
+      Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '--load', 'networkidle') | Out-Null
+    } catch {}
+  }
+}
+
+function Measure-NewThreadAuthoritativeHandoff {
+  param(
+    [string]$Session,
+    [string]$BaseUrl
+  )
+
+  $probeText = "7420-new-thread-handoff-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+  $prepareScript = @'
+JSON.stringify((() => {
+  window.localStorage.removeItem('codex-web-local.message-outbox.v1');
+  const originalFetch = window.fetch.bind(window);
+  window.__cxCodexHandoffStartedAt = performance.now();
+  window.fetch = (input, init) => {
+    const url = typeof input === 'string'
+      ? input
+      : input instanceof Request
+        ? input.url
+        : String(input);
+    if (url.includes('/codex-api/runtime/send')) {
+      return new Promise((_, reject) => {
+        window.setTimeout(() => reject(new TypeError('simulated delayed runtime transport')), 1200);
+      });
+    }
+    return originalFetch(input, init);
+  };
+  return { prepared: true };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $prepareScript | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'fill', '.thread-composer-input', $probeText) | Out-Null
+  $clickScript = @'
+JSON.stringify((() => {
+  const button = document.querySelector('.thread-composer-submit');
+  if (!(button instanceof HTMLButtonElement) || button.disabled) return { clicked: false };
+  window.__cxCodexHandoffStartedAt = performance.now();
+  button.click();
+  return { clicked: true };
+})())
+'@
+  $clickState = Invoke-BrowserEvalJson -Session $Session -Script $clickScript
+  Assert-True ($clickState.clicked -eq $true) "new-thread handoff probe could not click submit"
+
+  $handoff = $null
+  $escapedProbe = $probeText.Replace('\', '\\').Replace("'", "\'")
+  for ($attempt = 1; $attempt -le 100; $attempt++) {
+    $readScript = @"
+JSON.stringify((() => {
+  const match = window.location.hash.match(/\/thread\/([^/?#]+)/);
+  const threadId = match?.[1] ? decodeURIComponent(match[1]) : '';
+  const items = Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+    .filter((item) => item.textContent?.includes('$escapedProbe'));
+  const delivery = items[0]?.querySelector('.message-delivery-state');
+  return {
+    threadId,
+    routeLatencyMs: Math.round(performance.now() - (window.__cxCodexHandoffStartedAt || performance.now())),
+    promptCount: items.length,
+    deliveryState: delivery?.getAttribute('data-state') || '',
+    runningCount: document.querySelectorAll('.live-overlay-inline').length,
+    previewCount: document.querySelectorAll('[data-testid="pending-new-thread-preview"]').length
+  };
+})())
+"@
+    $handoff = Invoke-BrowserEvalJson -Session $Session -Script $readScript
+    if (
+      -not [string]::IsNullOrWhiteSpace([string]$handoff.threadId) -and
+      [int]$handoff.promptCount -eq 1 -and
+      [string]$handoff.deliveryState -in @('sending', 'retrying')
+    ) { break }
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+  }
+
+  $threadId = [string]$handoff.threadId
+  try {
+    Assert-True (-not [string]::IsNullOrWhiteSpace($threadId)) "new-thread handoff did not enter the authoritative thread"
+    Assert-True ([int]$handoff.promptCount -eq 1) "new-thread handoff did not preserve exactly one message bubble"
+    Assert-True ([string]$handoff.deliveryState -in @('sending', 'retrying')) "new-thread handoff waited for runtime completion before entering the thread"
+    Assert-True ([int]$handoff.runningCount -ge 1) "new-thread handoff lost the running timeline"
+    Assert-True ([int]$handoff.previewCount -eq 0) "new-thread handoff left the provisional home surface mounted"
+    Write-Step ("new-thread authoritative handoff -> " + (@{
+      threadId = $threadId
+      routeLatencyMs = [int]$handoff.routeLatencyMs
+      deliveryState = [string]$handoff.deliveryState
+    } | ConvertTo-Json -Compress))
+    Save-RegressionScreenshot -Session $Session -Name 'new-thread-authoritative-handoff-phone' | Out-Null
+
+    $settled = $null
+    for ($attempt = 1; $attempt -le 40; $attempt++) {
+      $settled = Invoke-BrowserEvalJson -Session $Session -Script $readScript
+      if ([string]$settled.deliveryState -eq 'failed') { break }
+      Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '250') | Out-Null
+    }
+    Assert-True ([string]$settled.deliveryState -eq 'failed') "new-thread handoff probe did not settle after bounded simulated transport failure"
+  } finally {
+    try {
+      $cleanupScript = @'
+JSON.stringify((() => {
+  window.localStorage.removeItem('codex-web-local.message-outbox.v1');
+  return { cleared: true };
+})())
+'@
+      Invoke-BrowserEvalJson -Session $Session -Script $cleanupScript | Out-Null
+    } catch {}
+    if (-not [string]::IsNullOrWhiteSpace($threadId)) {
+      try {
+        Invoke-PostJson -Name 'archive new-thread handoff probe' -Url "$($BaseUrl)/codex-api/rpc" -Payload @{
+          method = 'thread/archive'
+          params = @{ threadId = $threadId }
+        } | Out-Null
+      } catch {}
+    }
+    try {
+      Open-And-ReadPage -Session $Session -Url "$($BaseUrl)/#/" -Width 393 -Height 852 | Out-Null
+    } catch {}
+  }
+}
+
+function Measure-ThreadResponseFeedbackBudget {
+  param(
+    [string]$Session,
+    [string]$ThreadId
+  )
+
+  $probeText = "请只回复：7420-ACK-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+  $escapedProbe = $probeText.Replace('\', '\\').Replace("'", "\'")
+  $prepareScript = @'
+JSON.stringify((() => {
+  delete window.__cxCodexChatFeedbackMetrics;
+  return { prepared: true };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $prepareScript | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'fill', '.thread-composer-input', $probeText) | Out-Null
+  $clickScript = @'
+JSON.stringify((() => {
+  const button = document.querySelector('.thread-composer-submit');
+  if (!(button instanceof HTMLButtonElement) || button.disabled) return { clicked: false };
+  button.click();
+  return { clicked: true };
+})())
+'@
+  $clickState = Invoke-BrowserEvalJson -Session $Session -Script $clickScript
+  Assert-True ($clickState.clicked -eq $true) "response feedback probe could not click the composer submit button"
+
+  $metrics = $null
+  for ($attempt = 1; $attempt -le 240; $attempt++) {
+    $readScript = @"
+JSON.stringify((() => {
+  const rows = window.__cxCodexChatFeedbackMetrics ?? [];
+  const metric = rows.length > 0 ? rows[rows.length - 1] : null;
+  const promptCount = Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+    .filter((item) => item.textContent?.includes('$escapedProbe'))
+    .length;
+  return { metric, promptCount };
+})())
+"@
+    $metrics = Invoke-BrowserEvalJson -Session $Session -Script $readScript
+    if ($null -ne $metrics.metric.firstAssistantVisibleLatencyMs) {
+      break
+    }
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '250') | Out-Null
+  }
+
+  Assert-True ($null -ne $metrics.metric) "response feedback page metric was not recorded"
+  Assert-True ([int]$metrics.promptCount -eq 1) "response feedback probe did not render exactly one user bubble"
+  Assert-True ($null -ne $metrics.metric.serverAcknowledgedLatencyMs) "server acknowledgement was not observed"
+  Assert-True ($null -ne $metrics.metric.firstAssistantDataLatencyMs) "first assistant data was not observed"
+  Assert-True ($null -ne $metrics.metric.firstAssistantVisibleLatencyMs) "first assistant response was not visibly rendered"
+  $renderOverheadMs = [int]$metrics.metric.firstAssistantVisibleLatencyMs - [int]$metrics.metric.firstAssistantDataLatencyMs
+  Write-Step ("response feedback timing -> " + (@{
+    threadId = $ThreadId
+    requestDispatchedMs = [int]$metrics.metric.requestDispatchedLatencyMs
+    serverAcknowledgedMs = [int]$metrics.metric.serverAcknowledgedLatencyMs
+    turnStartedMs = [int]$metrics.metric.turnStartedLatencyMs
+    firstAssistantDataMs = [int]$metrics.metric.firstAssistantDataLatencyMs
+    firstAssistantVisibleMs = [int]$metrics.metric.firstAssistantVisibleLatencyMs
+    renderOverheadMs = $renderOverheadMs
+  } | ConvertTo-Json -Compress))
+  Assert-True ([int]$metrics.metric.requestDispatchedLatencyMs -le 500) "runtime request dispatch exceeded 500 ms"
+  Assert-True ([int]$metrics.metric.serverAcknowledgedLatencyMs -le 5000) "server acknowledgement exceeded 5000 ms"
+  Assert-True ([int]$metrics.metric.firstAssistantDataLatencyMs -le 45000) "first assistant data exceeded 45000 ms"
+  Assert-True ($renderOverheadMs -le 250) "first assistant render overhead exceeded 250 ms"
+  Save-RegressionScreenshot -Session $Session -Name 'response-feedback-budget-phone' | Out-Null
+}
+
 function Reset-AppShellLayoutPreferences {
   param([string]$Session)
 
@@ -195,6 +761,163 @@ JSON.stringify((() => {
 })())
 "@
   Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
+}
+
+function Seed-PersistentOutboxDraftRecoveryProbe {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const now = Date.now();
+  window.localStorage.removeItem('codex-web-local.thread-draft.v1.__new-thread__');
+  window.localStorage.setItem('codex-web-local.message-outbox.v1', JSON.stringify({
+    version: 1,
+    entries: [{
+      clientMessageId: `regression-outbox-${now}`,
+      threadId: '',
+      cwd: 'E:/regression-outbox-project',
+      text: '刷新后仍然保留的待发送消息',
+      imageUrls: [],
+      skills: [],
+      fileAttachments: [],
+      modelId: '',
+      reasoningEffort: 'medium',
+      collaborationMode: 'execute',
+      state: 'sending',
+      createdAtMs: now,
+      updatedAtMs: now
+    }]
+  }));
+  return { seeded: true };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
+}
+
+function Read-PersistentOutboxDraftRecoveryMetrics {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const input = document.querySelector('.thread-composer-input');
+  const persistedDraftRaw = window.localStorage.getItem('codex-web-local.thread-draft.v1.__new-thread__');
+  let persistedDraftText = '';
+  try {
+    persistedDraftText = JSON.parse(persistedDraftRaw || '{}')?.text || '';
+  } catch {}
+  let outboxState = '';
+  try {
+    outboxState = JSON.parse(window.localStorage.getItem('codex-web-local.message-outbox.v1') || '{}')?.entries?.[0]?.state || '';
+  } catch {}
+  const preview = document.querySelector('[data-testid="pending-new-thread-preview"]');
+  const failedMessage = preview?.querySelector('.message-delivery-state[data-state="failed"]');
+  return {
+    inputValue: input instanceof HTMLTextAreaElement ? input.value : '',
+    outboxPresent: window.localStorage.getItem('codex-web-local.message-outbox.v1') !== null,
+    outboxState,
+    persistedDraftText,
+    previewVisible: Boolean(preview),
+    failedMessageCount: failedMessage ? 1 : 0,
+    retryButtonCount: Array.from(preview?.querySelectorAll('.message-delivery-retry') || [])
+      .filter((button) => button.textContent?.trim() === '重试').length,
+    editButtonCount: Array.from(preview?.querySelectorAll('.message-delivery-retry') || [])
+      .filter((button) => button.textContent?.trim() === '编辑').length,
+    previewText: preview?.textContent || ''
+  };
+})())
+'@
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-PersistentOutboxDraftRecovery {
+  param([string]$Session)
+
+  $metrics = $null
+  for ($attempt = 1; $attempt -le 8; $attempt++) {
+    $metrics = Read-PersistentOutboxDraftRecoveryMetrics -Session $Session
+    if ($metrics.previewVisible -eq $true -and [int]$metrics.failedMessageCount -eq 1) {
+      break
+    }
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '350') | Out-Null
+  }
+  Assert-True ($metrics.previewVisible -eq $true) "persistent outbox did not restore the new-thread conversation preview"
+  Assert-True ([string]$metrics.previewText -like '*刷新后仍然保留的待发送消息*') "persistent outbox preview lost the original message"
+  Assert-True ([int]$metrics.failedMessageCount -eq 1) "persistent outbox did not restore an actionable failed delivery state"
+  Assert-True ([int]$metrics.retryButtonCount -eq 1) "persistent outbox did not restore the retry action"
+  Assert-True ([int]$metrics.editButtonCount -eq 1) "persistent outbox did not restore the edit action"
+  Assert-True ([bool]$metrics.outboxPresent) "persistent outbox was removed before the user retried or discarded the message"
+  Assert-True ([string]$metrics.outboxState -eq 'failed') "persistent outbox did not converge to failed state"
+  Assert-True ([string]$metrics.inputValue -eq '') "persistent outbox duplicated the failed message into the composer"
+}
+
+function Clear-PersistentOutboxDraftRecoveryProbe {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  window.localStorage.removeItem('codex-web-local.message-outbox.v1');
+  window.localStorage.removeItem('codex-web-local.thread-draft.v1.__new-thread__');
+  return { cleared: true };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
+}
+
+function Dispatch-MobileResumeOutboxRecoveryProbe {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify((() => {
+  const input = document.querySelector('.thread-composer-input');
+  if (input instanceof HTMLTextAreaElement) {
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  const now = Date.now();
+  window.localStorage.removeItem('codex-web-local.thread-draft.v1.__new-thread__');
+  window.localStorage.setItem('codex-web-local.message-outbox.v1', JSON.stringify({
+    version: 1,
+    entries: [{
+      clientMessageId: `regression-mobile-resume-${now}`,
+      threadId: '',
+      cwd: 'E:/regression-mobile-resume-project',
+      text: '回到前台自动恢复的待发送消息',
+      imageUrls: [],
+      skills: [],
+      fileAttachments: [],
+      modelId: '',
+      reasoningEffort: 'medium',
+      collaborationMode: 'execute',
+      state: 'confirming',
+      createdAtMs: now,
+      updatedAtMs: now
+    }]
+  }));
+  window.dispatchEvent(new Event('codex-mobile-resume'));
+  return { dispatched: true };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
+}
+
+function Assert-MobileResumeOutboxRecovery {
+  param([string]$Session)
+
+  $metrics = $null
+  for ($attempt = 1; $attempt -le 10; $attempt++) {
+    $metrics = Read-PersistentOutboxDraftRecoveryMetrics -Session $Session
+    if ($metrics.previewVisible -eq $true -and [string]$metrics.previewText -like '*回到前台自动恢复的待发送消息*') {
+      break
+    }
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '300') | Out-Null
+  }
+  Assert-True ($metrics.previewVisible -eq $true) "mobile resume did not restore the durable message bubble"
+  Assert-True ([string]$metrics.previewText -like '*回到前台自动恢复的待发送消息*') "mobile resume lost the durable message content"
+  Assert-True ([int]$metrics.failedMessageCount -eq 1) "mobile resume did not make the unresolved message retryable"
+  Assert-True ([int]$metrics.retryButtonCount -eq 1) "mobile resume did not restore the retry control"
+  Assert-True ([int]$metrics.editButtonCount -eq 1) "mobile resume did not restore the edit control"
+  Assert-True ([bool]$metrics.outboxPresent) "mobile resume removed the durable message before user action"
+  Assert-True ([string]$metrics.outboxState -eq 'failed') "mobile resume outbox did not converge to failed state"
 }
 
 function Close-SettingsPanelIfOpen {
@@ -809,6 +1532,9 @@ JSON.stringify((() => {
   const actionGrid = drawer?.querySelector('.sidebar-action-grid') || null;
   const rows = Array.from(drawer?.querySelectorAll('.thread-row') || []);
   const groups = Array.from(drawer?.querySelectorAll('.project-group') || []);
+  const actionTiles = Array.from(drawer?.querySelectorAll(
+    '.sidebar-action-grid > .sidebar-action-tile, .sidebar-action-grid > .sidebar-tools-menu > .sidebar-action-tile'
+  ) || []);
   const loading = drawer?.querySelector('.thread-tree-loading') || null;
   const emptyText = drawer?.querySelector('.thread-tree-empty-text') || null;
   const drawerRect = drawer?.getBoundingClientRect();
@@ -831,6 +1557,10 @@ JSON.stringify((() => {
     groupCount: groups.length,
     isLoading: !!loading,
     hasEmptyText: !!emptyText,
+    actionTileCount: actionTiles.filter((node) => window.getComputedStyle(node).display !== 'none').length,
+    hasVisibleWorkbenchTile: actionTiles.some((node) => (
+      window.getComputedStyle(node).display !== 'none' && (node.textContent || '').includes('工作台')
+    )),
     drawerWidth: drawerRect ? Math.round(drawerRect.width) : 0,
     fitFailureCount: fitFailures.length,
     fitFailures: fitFailures.slice(0, 5),
@@ -852,6 +1582,8 @@ function Assert-MobileDrawerSidebar {
   Assert-True ([int]$Metrics.rowCount -gt 0) "mobile drawer sidebar did not render thread rows"
   Assert-True ([int]$Metrics.groupCount -gt 0) "mobile drawer sidebar did not render project groups"
   Assert-True ($Metrics.hasEmptyText -eq $false) "mobile drawer sidebar rendered empty/error text despite available threads"
+  Assert-True ([int]$Metrics.actionTileCount -eq 3) "mobile drawer should keep three primary actions: $($Metrics.actionTileCount)"
+  Assert-True ($Metrics.hasVisibleWorkbenchTile -eq $false) "mobile drawer should move Workbench into the Tools menu"
   Assert-True ($Metrics.drawerWidth -le $Metrics.clientWidth) "mobile drawer is wider than viewport: $($Metrics.drawerWidth) > $($Metrics.clientWidth)"
   Assert-True ($Metrics.fitFailureCount -eq 0) "mobile drawer elements overflow viewport: $($Metrics.fitFailures | ConvertTo-Json -Compress)"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "mobile drawer has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
@@ -1023,6 +1755,15 @@ JSON.stringify((() => {
     hasFixtureCodeText: textContent.includes('fixture-code-block'),
     hasFixtureRawText: textContent.includes('fixture-raw-payload'),
     hasOptimisticInternalText: textContent.includes('userMessage.optimistic') || textContent.includes('optimisticUserMessage'),
+    sendingDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="sending"]').length,
+    failedDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="failed"]').length,
+    retryingDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="retrying"]').length,
+    confirmingDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="confirming"]').length,
+    sentDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="sent"]').length,
+    failedDeliveryRetryCount: document.querySelectorAll('.message-delivery-retry').length,
+    hasBoundedReconnectText: textContent.includes('正在重连 1/2'),
+    hasConfirmingDeliveryText: textContent.includes('确认中'),
+    hasStableLiveElapsedTime: /已(?:等待|运行)\s+(?:[6-9]|[1-9]\d+)\s*秒/.test(textContent) || /正在(?:运行|处理)(?:\s*·)?\s*(?:[6-9]|[1-9]\d+)\s*秒/.test(textContent),
     interruptedTurnCardCount: document.querySelectorAll('.interrupted-turn-card').length,
     interruptedTurnEditCount: document.querySelectorAll('.interrupted-turn-edit').length,
     hasHiddenUnhandledNoise: textContent.includes('fixture-hidden-file-change-noise') || textContent.includes('Unhandled App Server item: fileChange') || textContent.includes('unhandled.fileChange') || textContent.includes('fixture-hidden-web-search-noise') || textContent.includes('Unhandled App Server item: webSearch') || textContent.includes('unhandled.webSearch') || textContent.includes('未适配的 App Server 内容'),
@@ -1049,6 +1790,76 @@ JSON.stringify((() => {
 })())
 '@
   return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-ConversationTailStatusFixture {
+  param([string]$Session)
+
+  $beforeScript = @'
+JSON.stringify((() => {
+  const overlay = document.querySelector('.live-overlay-inline');
+  const compact = document.querySelector('.live-overlay-inline-compact');
+  const streamingMessage = document.querySelector('[data-message-id="fixture-streaming-assistant-tail"]');
+  const textContent = document.body.textContent || '';
+  const overlayRect = overlay?.getBoundingClientRect();
+  const streamingRect = streamingMessage?.getBoundingClientRect();
+  return {
+    overlayCount: document.querySelectorAll('.live-overlay-inline').length,
+    compactCount: document.querySelectorAll('.live-overlay-inline-compact').length,
+    detailedSheetCount: document.querySelectorAll('.live-overlay-detail-sheet').length,
+    visibleRunningCommandRowCount: Array.from(document.querySelectorAll('.conversation-item[data-message-type="commandExecution"] .cmd-row')).filter((node) => node.textContent?.includes('npm.cmd run verify:frontend-normalizers')).length,
+    statusFollowsStreamingReply: Boolean(overlayRect && streamingRect && overlayRect.top >= streamingRect.bottom - 1),
+    statusFollowsStreamingReplyInDom: Boolean(
+      overlay && streamingMessage && (streamingMessage.compareDocumentPosition(overlay) & Node.DOCUMENT_POSITION_FOLLOWING)
+    ),
+    hasUnifiedStatusLabel: textContent.includes('正在处理 ·'),
+    hasLatestExecutionHint: textContent.includes('正在执行最新操作'),
+    hasStreamingReply: textContent.includes('回复仍在继续生成，不应让运行状态消失'),
+    hasStableElapsedTime: /正在处理\s*·\s*(?:[6-9]|[1-9]\d+)\s*秒/.test(textContent)
+  };
+})())
+'@
+  $before = Invoke-BrowserEvalJson -Session $Session -Script $beforeScript
+  Assert-True ([int]$before.overlayCount -eq 1) "conversation tail status must render exactly one active surface"
+  Assert-True ([int]$before.compactCount -eq 1) "conversation tail status is not collapsed by default"
+  Assert-True ([int]$before.detailedSheetCount -eq 0) "conversation tail status opened details without user action"
+  Assert-True ([int]$before.visibleRunningCommandRowCount -eq 0) "conversation tail status duplicated the current command in message history"
+  Assert-True ($before.statusFollowsStreamingReply -eq $true) "conversation tail status is not visually placed after the streaming reply"
+  Assert-True ($before.statusFollowsStreamingReplyInDom -eq $true) "conversation tail status is not placed after the streaming reply in DOM reading order"
+  Assert-True ($before.hasUnifiedStatusLabel -eq $true) "conversation tail status is missing the unified processing label"
+  Assert-True ($before.hasLatestExecutionHint -eq $true) "conversation tail status is missing the latest execution hint"
+  Assert-True ($before.hasStreamingReply -eq $true) "conversation tail status fixture is missing streaming reply content"
+  Assert-True ($before.hasStableElapsedTime -eq $true) "conversation tail status disappeared or reset elapsed time after a transient overlay gap"
+
+  $openScript = @'
+JSON.stringify((() => {
+  const button = document.querySelector('.live-overlay-compact-main');
+  if (!(button instanceof HTMLButtonElement)) return { clicked: false };
+  button.click();
+  return { clicked: true };
+})())
+'@
+  $openResult = Invoke-BrowserEvalJson -Session $Session -Script $openScript
+  Assert-True ($openResult.clicked -eq $true) "conversation tail status could not be opened"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
+
+  $afterScript = @'
+JSON.stringify((() => {
+  const sheet = document.querySelector('.live-overlay-detail-sheet');
+  const textContent = sheet?.textContent || '';
+  return {
+    sheetCount: document.querySelectorAll('.live-overlay-detail-sheet').length,
+    hasCurrentCommand: textContent.includes('npm.cmd run verify:frontend-normalizers'),
+    hasCurrentOutput: textContent.includes('fixture-current-command: running'),
+    hasHistoricalCommand: textContent.includes('npm.cmd run test:7420:frontend')
+  };
+})())
+'@
+  $after = Invoke-BrowserEvalJson -Session $Session -Script $afterScript
+  Assert-True ([int]$after.sheetCount -eq 1) "conversation tail status did not open one detail sheet"
+  Assert-True ($after.hasCurrentCommand -eq $true) "conversation tail detail is missing the current command"
+  Assert-True ($after.hasCurrentOutput -eq $true) "conversation tail detail is missing current command output"
+  Assert-True ($after.hasHistoricalCommand -eq $false) "conversation tail detail mixed historical execution into the current status"
 }
 
 function Assert-ConversationFixture {
@@ -1093,6 +1904,15 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.hasFixtureCodeText -eq $true) "conversation fixture is missing fixture code text"
   Assert-True ($Metrics.hasFixtureRawText -eq $true) "conversation fixture is missing raw payload marker"
   Assert-True ($Metrics.hasOptimisticInternalText -eq $false) "conversation fixture exposed optimistic-message internal metadata"
+  Assert-True ([int]$Metrics.sendingDeliveryStateCount -eq 1) "conversation fixture is missing the sending delivery state"
+  Assert-True ([int]$Metrics.failedDeliveryStateCount -eq 1) "conversation fixture is missing the failed delivery state"
+  Assert-True ([int]$Metrics.retryingDeliveryStateCount -eq 1) "conversation fixture is missing the reconnecting delivery state"
+  Assert-True ([int]$Metrics.confirmingDeliveryStateCount -eq 1) "conversation fixture is missing the confirming delivery state"
+  Assert-True ([int]$Metrics.sentDeliveryStateCount -eq 1) "conversation fixture is missing the sent delivery state"
+  Assert-True ([int]$Metrics.failedDeliveryRetryCount -eq 1) "conversation fixture is missing the failed-message retry action"
+  Assert-True ($Metrics.hasBoundedReconnectText -eq $true) "conversation fixture is missing bounded reconnect progress"
+  Assert-True ($Metrics.hasConfirmingDeliveryText -eq $true) "conversation fixture is missing unconfirmed-send feedback"
+  Assert-True ($Metrics.hasStableLiveElapsedTime -eq $true) "conversation fixture reset or ignored the authoritative live-overlay start time"
   Assert-True ([int]$Metrics.interruptedTurnCardCount -eq 1) "conversation fixture is missing stopped-turn feedback"
   Assert-True ([int]$Metrics.interruptedTurnEditCount -eq 1) "conversation fixture is missing stopped-turn edit action"
   Assert-True ($Metrics.hasHiddenUnhandledNoise -eq $false) "conversation fixture rendered unhandled App Server system noise"
@@ -1168,10 +1988,10 @@ function Expand-ConversationFixtureCommandOutput {
 
   $script = @'
 JSON.stringify((() => {
-  if (!document.querySelector('.cmd-output-wrap.cmd-output-visible')) {
-    document.querySelector('.cmd-row')?.click();
+  if (!document.querySelector('.conversation-item[data-message-type="commandExecution"] .cmd-output-wrap.cmd-output-visible')) {
+    document.querySelector('.conversation-item[data-message-type="commandExecution"] .cmd-row')?.click();
   }
-  return { expanded: Boolean(document.querySelector('.cmd-output-wrap.cmd-output-visible')) };
+  return { expanded: Boolean(document.querySelector('.conversation-item[data-message-type="commandExecution"] .cmd-output-wrap.cmd-output-visible')) };
 })())
 '@
   Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
@@ -1282,7 +2102,16 @@ JSON.stringify((() => {
 })())
 '@
   Invoke-BrowserEvalJson -Session $Session -Script $stubScript | Out-Null
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "click", ".message-code-copy") | Out-Null
+  $clickScript = @'
+JSON.stringify((() => {
+  const button = document.querySelector('.message-code-block[data-diff="false"] .message-code-copy');
+  if (!(button instanceof HTMLButtonElement)) return { clicked: false };
+  button.click();
+  return { clicked: true };
+})())
+'@
+  $clickState = Invoke-BrowserEvalJson -Session $Session -Script $clickScript
+  Assert-True ($clickState.clicked -eq $true) "conversation fixture code copy button was not clickable"
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "300") | Out-Null
 
   $stateScript = @'
@@ -1517,6 +2346,7 @@ JSON.stringify((() => {
     submitCount: Number.parseInt(submitCount?.textContent || '0', 10),
     dictationHelperText: dictationStatusText?.textContent?.trim() || '',
     shellWidth: shellRect ? Math.round(shellRect.width) : 0,
+    viewportWidth,
     formWidth: formRect ? Math.round(formRect.width) : 0,
     shellHeight: shellRect ? Math.round(shellRect.height) : 0,
     shellRadius: style ? Number.parseFloat(style.borderTopLeftRadius || '0') : 0,
@@ -1525,6 +2355,7 @@ JSON.stringify((() => {
     shellShadow: style?.boxShadow || '',
     usesWarmShell: bg === 'rgb(255, 253, 248)' || bg === 'rgb(255, 250, 243)',
     attachSize: attach ? Math.round(attach.getBoundingClientRect().width) : 0,
+    expandSize: expand ? Math.round(expand.getBoundingClientRect().width) : 0,
     micSize: mic ? Math.round(mic.getBoundingClientRect().width) : 0,
     submitSize: submit ? Math.round(submit.getBoundingClientRect().width) : 0,
     runtimeWidth: runtime ? Math.round(runtime.getBoundingClientRect().width) : 0,
@@ -1561,9 +2392,11 @@ function Assert-ComposerFixture {
   Assert-True ($Metrics.shellRadius -le 22) "$ViewportName composer shell radius is too large: $($Metrics.shellRadius)"
   Assert-True ($Metrics.shellBorderWidth -le 1) "$ViewportName composer shell border is too heavy: $($Metrics.shellBorderWidth)"
   Assert-True ($Metrics.usesWarmShell -eq $false) "$ViewportName composer shell still uses warm beige background: $($Metrics.shellBackground)"
-  Assert-True ($Metrics.attachSize -ge 34) "$ViewportName composer attach button is too small: $($Metrics.attachSize)"
-  Assert-True ($Metrics.micSize -ge 34) "$ViewportName composer mic button is too small: $($Metrics.micSize)"
-  Assert-True ($Metrics.submitSize -ge 34) "$ViewportName composer submit button is too small: $($Metrics.submitSize)"
+  $minimumControlSize = if ([int]$Metrics.viewportWidth -lt 768) { 44 } else { 34 }
+  Assert-True ($Metrics.attachSize -ge $minimumControlSize) "$ViewportName composer attach button is too small: $($Metrics.attachSize)"
+  Assert-True ($Metrics.expandSize -ge $minimumControlSize) "$ViewportName composer expand button is too small: $($Metrics.expandSize)"
+  Assert-True ($Metrics.micSize -ge $minimumControlSize) "$ViewportName composer mic button is too small: $($Metrics.micSize)"
+  Assert-True ($Metrics.submitSize -ge $minimumControlSize) "$ViewportName composer submit button is too small: $($Metrics.submitSize)"
   Assert-True ($Metrics.runtimeWidth -ge 112) "$ViewportName composer runtime trigger is too narrow: $($Metrics.runtimeWidth)"
   Assert-True ($Metrics.fitFailureCount -eq 0) "$ViewportName composer controls overflow viewport: $($Metrics.fitFailures | ConvertTo-Json -Compress)"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "$ViewportName composer fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
@@ -1950,6 +2783,10 @@ $results = @()
 
 try {
   Assert-AndroidResumeThreadListRecoverySource
+  Assert-CrossClientThreadStartedRefreshSource
+  Assert-PendingStartOutboxRecoverySource
+  Assert-RuntimeSnapshotOrderingSource
+  Assert-BoundedRuntimeSendRecoverySource
 
   $health = Test-HttpJson -Name "health" -Url "$($BaseUrl)/health"
   Assert-True ($health.status -eq "ok") "health status is not ok"
@@ -1993,6 +2830,23 @@ try {
     -Metrics (Read-RequiredSidebarThreadMetrics -Session $session -Thread $requiredSidebarThread -RootSelector ".mobile-drawer") `
     -Context "home mobile drawer"
   Add-RegressionResult -Name "home-mobile-drawer" -Page $homePhone
+
+  if ($MeasureNewThreadFeedback) {
+    $newThreadFeedbackPage = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $PhoneWidth -Height $PhoneHeight
+    Assert-Page -Page $newThreadFeedbackPage -Name "new thread feedback phone" -RequireComposer
+    Measure-NewThreadSendFeedbackBudget -Session $session
+    Measure-NewThreadAuthoritativeHandoff -Session $session -BaseUrl $BaseUrl
+  }
+
+  Seed-PersistentOutboxDraftRecoveryProbe -Session $session
+  $outboxRecoveryPage = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $outboxRecoveryPage -Name "persistent outbox recovery phone" -RequireComposer
+  Assert-PersistentOutboxDraftRecovery -Session $session
+  Add-RegressionResult -Name "persistent-outbox-recovery-phone" -Page $outboxRecoveryPage
+  Clear-PersistentOutboxDraftRecoveryProbe -Session $session
+  Dispatch-MobileResumeOutboxRecoveryProbe -Session $session
+  Assert-MobileResumeOutboxRecovery -Session $session
+  Clear-PersistentOutboxDraftRecoveryProbe -Session $session
 
   $skills = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/skills?regression=frontend" -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $skills -Name "skills phone" -RequireSkillsHub
@@ -2062,6 +2916,12 @@ try {
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "phone"
   Add-RegressionResult -Name "conversation-blocks-fixture-phone" -Page $fixturePhone
 
+  $tailStatusFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&tailStatus=1&tailGap=1"
+  $tailStatusFixture = Open-And-ReadPage -Session $session -Url $tailStatusFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $tailStatusFixture -Name "conversation tail status fixture phone"
+  Assert-ConversationTailStatusFixture -Session $session
+  Add-RegressionResult -Name "conversation-tail-status-fixture-phone" -Page $tailStatusFixture
+
   $fixtureFoldable = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $FoldableWidth -Height $FoldableHeight
   Assert-Page -Page $fixtureFoldable -Name "conversation blocks fixture foldable"
   Assert-ConversationRawPayloadLazy -Session $session
@@ -2097,8 +2957,20 @@ try {
     Assert-ThreadPageLoadMetrics -Metrics $threadPageLoadMetrics -ThreadId $ThreadId
     Assert-ThreadMessageCacheMetrics -Metrics (Read-ThreadMessageCacheMetrics -Session $session -ThreadId $ThreadId) -ThreadId $ThreadId
     Assert-ThreadLoadMoreWindow -Session $session -ThreadId $ThreadId
+    if ($MeasureSendFeedback) {
+      Measure-ThreadSendFeedbackBudget -Session $session -ThreadId $ThreadId
+    }
+    if ($MeasureResponseFeedback) {
+      Measure-ThreadResponseFeedbackBudget -Session $session -ThreadId $ThreadId
+    }
     Add-RegressionResult -Name "thread-phone" -Page $thread
   } else {
+    if ($MeasureSendFeedback) {
+      throw "-MeasureSendFeedback requires -ThreadId"
+    }
+    if ($MeasureResponseFeedback) {
+      throw "-MeasureResponseFeedback requires -ThreadId"
+    }
     Write-Step "thread page check skipped; pass -ThreadId to enable it"
   }
 

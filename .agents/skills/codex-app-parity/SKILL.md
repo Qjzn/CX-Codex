@@ -306,8 +306,169 @@ After each feature implementation session that uses this skill:
 - CX-Codex Android follows the interaction intent with 4 dp promotion, frame-coalesced movement, immediate haptic/scale/tilt feedback, and a 220 ms nearest-edge deceleration. It intentionally omits desktop bounce physics to keep window movement predictable on touch screens.
 - The Android bridge now forwards the newest sanitized activity detail while the WebView is active. Native runtime polling preserves that detail and updates event freshness/state in the background instead of overwriting it with generic copy.
 
+## Findings: Avatar Overlay Size and Tuck Away (2026-07-17)
+
+- Windows Codex `26.707.91948` exposes pet size as a separate 80-224 range and provides explicit `Tuck Away Pet` / `Wake Pet` actions; hiding the mascot is not presented as disabling the feature.
+- CX-Codex Android adapts this to a smaller fixed 88 x 96 dp default plus a non-destructive 48 x 48 dp minimized bubble. The bubble keeps the live count and restores on tap, while the Settings master switch remains the only full-close action.
+- The Android fixed sizes preserve predictable system-overlay geometry and a minimum 48 dp touch target without adding a continuously animated or battery-heavy customization surface.
+
+## Findings: Avatar Overlay Reduced Motion and Hidden Animation (2026-07-17)
+
+- Windows Codex passes a shared reduced-motion signal into the avatar tray and uses zero-duration transitions plus `motion-reduce:transition-none`; drag feedback remains state-driven and bounded to the mascot.
+- CX-Codex uses state-specific four-frame CX companion animations plus bounded property transitions in the full view and the same static state image in the 48 dp minimized bubble. Reduced motion selects the still Web source, and minimizing or destroying the native overlay stops the hidden decoder.
+
+## Findings: CX-Branded Task Pet Identity (2026-07-17)
+
+- Codex desktop proves that the useful parity contract is state visibility, direct task access, drag feedback, and non-destructive minimization; the mascot itself is a product customization surface rather than a fixed character requirement.
+- CX-Codex therefore uses an original companion derived from its loop-and-X logo, with five readable four-frame state animations and bounded native transforms. Continuous decoding is limited to the visible full pet while working, waiting, completed, dragging, or slowly idling.
+
+## Findings: Task-Pet Read Acknowledgement (2026-07-17)
+
+- Codex desktop notification rows open their owning task context; dismissal and navigation are separate concerns, so a click alone is not proof that conversation content was read.
+- CX-Codex keeps completed native records after launch intent delivery and clears them only when the matching Vue conversation has loaded and is no longer running. Direct reply instead converts the record back to an active task.
+
+## Findings: Task-Pet Platform Entry and Confirmed Close (2026-07-17)
+
+- Windows Codex avatar activity rows use `open-in-main-window` with the owning local conversation id, while `Tuck Away Pet` / `Wake Pet` remain separate from navigation and task semantics.
+- CX-Codex Android preserves that separation with one explicit platform entry, two newest known conversation shortcuts, and exact-thread launch intents. Recent conversations are navigation shortcuts and are not merged into persistent task records.
+- A full close is materially different from minimization, so Android requires an inline confirmation, persists the Settings master switch as disabled, and tells the user where to re-enable the overlay. This avoids relying on a service-owned system dialog that may lack a valid application window token.
+
+## Findings: Task-Pet Exact Navigation and Touch Reply (2026-07-17)
+
+- Windows Codex avatar rows carry `localConversationId` into `open-in-main-window`, making the exact conversation target durable across overlay-to-main-window activation. The inspected avatar chunks do not expose a long-press reply gesture.
+- Capacitor calls the Activity's overridden `onNewIntent()` once while `BridgeActivity.load()` is still inside `super.onCreate()`. CX-Codex must capture the task-pet thread id at that point but defer WebView navigation until the subclass has completed initial creation; otherwise the extra is removed before the stable launch path can use it.
+- Long-press reply is an intentional Android touch adaptation: a 520 ms hold consumes the following click, reuses the existing focusable overlay composer and `/codex-api/runtime/send`, and promotes a successful recent-conversation reply into the native running-task list.
+
+## Findings: Glanceable Task-Pet Progress (2026-07-17)
+
+- Windows Codex avatar-overlay notifications retain the exact `localConversationId` and derive compact visible copy from current turn items; a generic record title is not sufficient progress information when the overlay is intended for at-a-glance monitoring.
+- CX-Codex Android therefore makes the latest assistant reply the primary two-line row content while keeping phase, project, and conversation title as secondary context. Foreground messages and server-side `item/agentMessage/delta` events feed the same bounded reply field so background batch polling does not regress to titles.
+- Idle presentation is a derived Android adaptation: no records means a 48 dp touch target with a 36 dp visual, while new work restores the proportionally smaller full companion. The platform Logo and close × remain 48 dp header actions; no manual minimized preference competes with task state.
+
 ## Findings: Desktop Session CLI Parity (2026-07-17)
 
 - Windows Codex package `26.707.12708` keeps local conversation, sidebar-thread signals, thread resolution, and App Server connection state in separate renderer modules; thread history visibility and live resumability are distinct states.
 - A desktop-created session records the writing CLI version in `session_meta`. A session written by desktop CLI `0.144.5` could expose light metadata to an older `0.130.0` bridge while full `thread/read`, `thread/resume`, and `turn/start` failed, producing a readable but non-actionable ghost thread.
 - On Windows, CX-Codex should prefer the newest runnable desktop-managed binary under `%LOCALAPPDATA%\OpenAI\Codex\bin\<build>\codex.exe`, while keeping an explicitly configured runnable command authoritative. Null resume fallbacks must not be cached as proof that a thread is live.
+
+## Findings: Conversation Running Timeline (2026-07-17)
+
+- Windows Codex `26.707.12708` renders active work as a `worked-for` item carrying `startedAtMs` and `completedAtMs`; its elapsed label is derived from those timestamps rather than the component mount time.
+- The turn renderer switches copy between `Thinking`, `Worked for {time}`, and `You stopped after {time}` while retaining the same timeline data, so activity-label changes must not restart the clock.
+- CX-Codex should create the local timeline together with the optimistic user bubble, preserve it through runtime reconciliation, and clear it only on a definitive completion, interruption, or send failure.
+
+## Findings: Reliable Message Delivery Feedback (2026-07-17)
+
+- Windows Codex `26.707.12708` exposes bounded reconnect progress such as `Reconnecting 1/5` when a local conversation stream drops, but it does not provide a reusable failed outgoing-message bubble in the inspected renderer path.
+- Matrix JS SDK and Signal Desktop preserve local outgoing content across send failures, distinguish pending from failed delivery, and expose a retry path. CX-Codex intentionally adopts this messaging convention because mobile and weak-network use make disappearing prompts more harmful than a compact delivery label.
+- CX-Codex keeps the implementation local and reversible: only optimistic user messages carry `sending` or `failed`, authoritative history still replaces them by signature, and retry reuses the original request context without adding a new persistence protocol.
+
+## Findings: Bounded Send Reconnect and Idempotency (2026-07-17)
+
+- Windows Codex `26.707.12708` renders stream recovery with explicit bounded progress (`Reconnecting {attempt}/{maxAttempts}`) and distinct busy-server copy instead of an indefinite spinner.
+- CX-Codex applies the same bounded-progress convention to outgoing mobile messages, but only after assigning a stable `clientMessageId` and making `/codex-api/runtime/send` deduplicate both concurrent and later repeated requests.
+- Automatic retry is limited to transport uncertainty. Definite application errors remain immediate failures, and a user-initiated retry receives a fresh id so a known failed request cannot be confused with a network replay.
+
+## Findings: First Message Reliability (2026-07-17)
+
+- Windows Codex applies the same bounded stream-reconnect presentation to a local conversation regardless of whether it was just created or already existed; users are not exposed to separate first-message recovery vocabulary.
+- CX-Codex therefore shares one runtime-send recovery function for both paths. It deliberately does not automatically replay the preliminary `thread/start`, because that RPC lacks the `clientMessageId` idempotency boundary used by `/codex-api/runtime/send`.
+- If preliminary thread creation is transport-uncertain, CX-Codex falls through to the idempotent runtime endpoint. Once a thread id exists, first-message failure is retained as the same actionable failed bubble used in established conversations.
+
+## Findings: Persistent Mobile Message Outbox (2026-07-17)
+
+- Windows Codex `26.707.12708` persists composer prompt drafts under a versioned signal and restores the original prompt and attachments when submission throws; its completion transport recovery polls the authoritative conversation after a recoverable stream error instead of immediately replaying user input.
+- CX-Codex follows the same restore-and-reconcile semantics and adds a mobile lifecycle adaptation: an outgoing request is stored before the first await, then reconciled by `clientMessageId` after WebView reload or process death.
+- Unknown requests are never automatically replayed during startup. Accepted requests return to authoritative thread sync, while failed requests remain retryable bubbles whether or not a thread id was obtained.
+- The browser outbox is intentionally bounded to 12 entries with a seven-day TTL and no new dependency. It complements server idempotency without becoming a second message database.
+
+## Findings: Cross-client New-thread Invalidation (2026-07-17)
+
+- The authoritative Runtime Store records `thread/started` immediately after a successful `thread/start`, before `turn/started`; this is the existing App Server signal that another client has created a conversation.
+- The sending client can insert its new thread optimistically, but other 7420 clients must treat `thread/started` as a structural thread-list invalidation and run the existing debounced reconciliation.
+- Frequent `thread/status/changed` and `thread/tokenUsage/updated` events remain non-structural so cross-client catch-up does not create a list-refresh storm or require a proprietary synchronization event.
+
+## Findings: Durable Pending-start Resume (2026-07-17)
+
+- Codex.app restores a durable prompt after transport interruption and distinguishes an acknowledged request from an authoritative conversation result; a persisted request row without a thread id is not sufficient proof that the message is visible or runnable.
+- CX-Codex therefore keeps a threadless `pending_start` entry in the mobile outbox and reuses its original `clientMessageId` to resume the known server request. It must not delete that entry merely because the lookup endpoint returned a row.
+- The 7420 server resumes the original persisted request id after process restart. Same-process duplicates still coalesce through the existing in-flight map, while completed, running, failed, or thread-bound requests retain their previous idempotent behavior.
+
+## Findings: Monotonic Runtime Event Convergence (2026-07-17)
+
+- Codex.app keeps conversation event state and sidebar state behind stable signal layers; a completed turn must not return to running because an earlier asynchronous read resolves later.
+- CX-Codex runtime notifications carry the Runtime Store `seq`. The frontend must retain that sequence when applying live or replayed state and reject a snapshot whose non-zero `lastEventSeq` is lower than the latest applied notification sequence.
+- Rejected snapshots may still contribute preserved message content, but cannot replace execution state, active turn, pending requests, token usage, or loaded-version markers. Sequence-free snapshots remain accepted for compatibility with older 7420 servers.
+
+## Findings: Confirmed Delivery Versus Uncertain Acknowledgement (2026-07-17)
+
+- Codex.app keeps reconnecting or transport-uncertain work distinct from a completed acknowledgement; a locally visible prompt is not itself proof that `turn/start` succeeded.
+- CX-Codex now keeps `pending_start`, `starting`, and `start_uncertain` messages in the durable outbox as `确认中`. Only an authoritative running or settled request removes the outbox entry and presents `已发送`.
+- A bridge restart reconciles persisted `starting` requests against the thread snapshot. Running or completed work converges normally; an idle or stopped pre-turn snapshot becomes a retryable failure instead of remaining stuck or being replayed automatically.
+
+## Findings: Foreground and Parallel-page Outbox Recovery (2026-07-17)
+
+- Codex.app couples foreground/reconnect recovery to durable prompt state instead of assuming a still-connected renderer has received every acknowledgement.
+- CX-Codex must reconcile its message outbox on the first foreground attempt even when the notification transport still reports connected; Android can suspend JavaScript without producing a clean disconnect transition.
+- Multiple 7420 pages on the same origin share localStorage but not their in-memory maps. Outbox mutations therefore merge the newest persisted entries before writing, and storage events replace the stale map and trigger authoritative request reconciliation without adding polling.
+
+## Findings: Deterministic Bounded-send Recovery (2026-07-17)
+
+- Codex.app presents reconnect attempts as bounded progress and reconciles authoritative conversation state before treating a transport failure as a new send opportunity.
+- CX-Codex production runtime sends now use one testable bounded-recovery coordinator: each failure first queries the same `clientMessageId`, transport-only failures retry after 650 ms and 1800 ms, and definitive errors stop immediately.
+- A recovered request returns without replay, an exhausted transport failure preserves the original outbox bubble for manual retry, and tests inject waits rather than sleeping so weak-network behavior is deterministic and fast.
+
+## Findings: Local Transport Failure Ownership (2026-07-17)
+
+- Codex.app keeps renderer/network recovery feedback distinct from an authoritative task failure: a request that never reached the runtime must not manufacture an active or failed turn card.
+- CX-Codex therefore lets the optimistic message bubble own local send failure and retry actions, while the global connection indicator owns transport health. Thread-level `turnError` remains reserved for errors reported by the authoritative runtime.
+- On an idle thread, bounded send exhaustion clears the temporary running state. If an authoritative turn was already active before steering, that prior activity remains visible rather than being stopped by the local send failure.
+
+## Findings: Durable In-place Manual Retry (2026-07-17)
+
+- Mature chat clients keep a failed message as one stable visual object: retry changes that object's delivery state and does not append a second copy before server acknowledgement.
+- CX-Codex failed-outbox recovery must first match the currently visible optimistic bubble by `clientMessageId`; only a genuine reload without that bubble may create the deterministic outbox representation.
+- Retry derives its target thread and payload from the failed message's durable outbox entry when volatile state is absent. A known-failed attempt receives a fresh idempotency key, while the same optimistic message id remains visible until authoritative history replaces it.
+
+## Findings: Measurable Mobile Send Feedback (2026-07-17)
+
+- Codex.app commits local conversation feedback before awaiting the App Server; network or thread-list latency must not be used as a proxy for how quickly the renderer acknowledges a tap.
+- CX-Codex measures from the composer submit handler to local state commit and to the next rendered bubble/running frame. The page-side metric follows the existing first-screen-ready approach so browser-driver polling time cannot inflate product latency.
+- The regression budget is deliberately conservative at 50 ms for local state and 200 ms for visible bubble/running feedback. The metric keeps only 20 timing-only rows and never stores message content.
+
+## Findings: Turn First-response Performance Span (2026-07-17)
+
+- Windows Codex `26.707.12708` implements a dedicated `turn_first_response_visible` performance span keyed by the client user-message id. It records `request_dispatched`, binds the conversation and turn on `turn_started`, records `first_data_received`, and ends only after `first_response_visible` is painted.
+- The desktop span treats completion without a visible response as `no_visible_response`, and separately aborts navigation, interruption, superseded submissions, and app disposal. This confirms that HTTP completion alone is not a valid chat responsiveness metric.
+- CX-Codex follows the same correlation model with `clientMessageId`, `turnId`, App Server notifications, and a post-render frame. Its optional real-response regression uses conservative 500/5000/45000/250 ms dispatch, acknowledgement, first-data, and data-to-paint budgets while keeping only timing and identifier fields.
+
+## Findings: Optimistic New-conversation First Turn (2026-07-17)
+
+- Windows Codex `26.707.12708` starts a real conversation first, then launches its initial turn with `returnAfterOptimisticTurn`; the renderer can return once local turn feedback exists without waiting for the runtime request to finish.
+- CX-Codex cannot assume `thread/start` is instantaneous on a mobile bridge, so the home route renders one memory-only provisional conversation immediately. It does not create a fake sidebar thread or a second persistent message store.
+- Once the authoritative thread id arrives, the real thread adopts the same optimistic message id, outbox entry, and start timestamp. This preserves one visual message and one timer across the home-to-thread transition while keeping recovery and cross-client synchronization authoritative.
+
+## Findings: Authoritative New-thread Handoff and Threadless Retry (2026-07-17)
+
+- Windows Codex `26.707.91948` creates the authoritative conversation before launching its first turn and uses `returnAfterOptimisticTurn` so navigation does not wait for the first request to settle.
+- CX-Codex now announces the real thread immediately after `thread/start`, routes to it while `/runtime/send` continues, and keeps the same optimistic message id across the provisional and authoritative surfaces.
+- If no thread id is ever obtained, bounded exhaustion no longer removes the outbox or moves the content silently back into the composer. The same bubble becomes `发送失败`, survives reload/foreground recovery, and offers explicit edit or retry actions. Retry creates a fresh idempotency key while retaining the visual message id; edit restores the exact content to the composer and clears only the known-failed attempt.
+
+## Findings: Cross-page Delivery Deletion Convergence (2026-07-17)
+
+- Windows Codex `26.707.91948` keeps stable `clientUserMessageId` ownership inside its conversation signal layer; once authoritative delivery replaces local pending state, an older renderer snapshot must not recreate that pending send.
+- Multiple CX-Codex 7420 pages share localStorage but receive storage events asynchronously. Entry-only last-write merging can therefore resurrect an outbox row that another page already confirmed and removed.
+- CX-Codex now persists bounded seven-day deletion markers alongside the existing outbox payload. A stale page may merge newer message state, but cannot recreate a client message whose deletion timestamp is at least as new as that stale entry; no server protocol or dependency is added.
+- Storage-event convergence merges and writes the combined state instead of replacing memory. Recovery also revalidates the entry after each authoritative await, so a late lookup cannot recreate a preview that a newer page already removed; same-payload retries rebind the existing preview to the fresh id.
+
+## Findings: Stable Conversation-tail Activity Surface (2026-07-17)
+
+- Windows Codex `26.707.91948` represents working time as one stable timeline item whose label changes between working, completed, and stopped states while retaining the same start and completion timestamps.
+- CX-Codex therefore keeps one collapsed activity surface at the conversation tail while thinking, command execution, and assistant text streaming alternate. The first visible assistant text must not unmount the activity surface or reset its elapsed time.
+- Only the latest active command belongs in this surface. It is hidden from the normal message history while running, becomes inspectable from the activity detail sheet, and returns to history as a collapsed command row after completion. Pending approvals remain expanded because they require immediate user action.
+
+## Findings: Terminal Convergence and Native Reply Idempotency (2026-07-18)
+
+- Windows Codex `26.707.12708` keeps completion behind stable conversation state and correlates outgoing work with durable client message identifiers; a recovered terminal event must clear local running residue without replaying the user's prompt.
+- CX-Codex treats `sync_degraded` as confirmation-pending rather than proof of a running turn, keeps those requests eligible for authoritative reconciliation, and applies idempotent terminal cleanup to replayed completion events.
+- Android task-pet polling rejects older non-zero event sequences and presents stale, partial, or disconnected state as waiting. Direct reply reuses one persisted `clientMessageId` for the same thread and message until running or terminal state is confirmed.
