@@ -472,3 +472,15 @@ After each feature implementation session that uses this skill:
 - Windows Codex `26.707.12708` keeps completion behind stable conversation state and correlates outgoing work with durable client message identifiers; a recovered terminal event must clear local running residue without replaying the user's prompt.
 - CX-Codex treats `sync_degraded` as confirmation-pending rather than proof of a running turn, keeps those requests eligible for authoritative reconciliation, and applies idempotent terminal cleanup to replayed completion events.
 - Android task-pet polling rejects older non-zero event sequences and presents stale, partial, or disconnected state as waiting. Direct reply reuses one persisted `clientMessageId` for the same thread and message until running or terminal state is confirmed.
+
+## Findings: Durable Send Before Thread Resume (2026-07-18)
+
+- Windows Codex `26.707.12708` keeps outgoing work correlated by stable client user-message identifiers and presents bounded reconnect progress instead of treating a renderer transport interruption as an authoritative turn failure.
+- CX-Codex existing-thread sends must enter `/codex-api/runtime/send` before any fallible renderer-side `thread/resume` preflight. The persisted request is the delivery boundary; if `turn/start` reports `thread not found`, the 7420 server resumes once and retries under the same `clientMessageId`.
+- After bounded mobile retries, transport-only exhaustion becomes `等待网络`. Foreground, network, storage, or realtime reconnection reconciles the original idempotency key and automatically resumes only when the server still has no authoritative request.
+
+## Findings: Activity Identity and Authoritative Terminal Cleanup (2026-07-18)
+
+- Windows Codex `26.707.12708` retains elapsed time for one stable working timeline item, not merely for any consecutive renderer state that happens to be marked running.
+- CX-Codex therefore needs a stable activity identity across thinking, execution, and streaming labels. A new local submission or different authoritative `turnId` starts a new timer, while a transient overlay gap within the same activity retains the original timestamp.
+- Fresh terminal snapshots settle only local optimistic feedback whose creation time is no later than the authoritative completion time. The visual bubble stays until history reconciliation, preventing both false running state and a transient message disappearance without allowing an older completion to affect a newer follow-up.

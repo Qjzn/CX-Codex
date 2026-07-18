@@ -169,7 +169,7 @@ export type UiMessage = {
   isUnhandled?: boolean
   commandExecution?: CommandExecutionData
   turnIndex?: number
-  deliveryState?: 'sending' | 'retrying' | 'confirming' | 'sent' | 'failed'
+  deliveryState?: 'sending' | 'retrying' | 'waiting' | 'confirming' | 'sent' | 'failed'
   deliveryError?: string
   deliveryAttempt?: number
   deliveryAttemptMax?: number
@@ -195,6 +195,7 @@ export type UiServerRequestReply = {
 }
 
 export type UiLiveOverlay = {
+  activityId?: string
   startedAtMs: number
   activityLabel: string
   activityDetails: string[]

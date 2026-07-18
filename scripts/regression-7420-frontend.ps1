@@ -74,7 +74,9 @@ function Assert-PendingStartOutboxRecoverySource {
   Assert-True ($functionMatch.Success) "could not find recoverPersistentMessageOutbox source"
   $functionSource = $functionMatch.Value
   Assert-True ($functionSource -match "recovered\?\.status\s*===\s*'pending_start'\s*&&\s*!recoveredThreadId") "threadless pending_start requests must be recovered before removing the outbox entry"
+  Assert-True ($functionSource -match "!recovered\s*&&\s*\(entry\.state\s*===\s*'sending'\s*\|\|\s*entry\.state\s*===\s*'waiting'\)") "unacknowledged transport sends must retry from the durable outbox after reconnect"
   Assert-True ($functionSource -match "startRuntimeThreadTurn\(\{[\s\S]*?clientMessageId:\s*entry\.clientMessageId") "threadless pending_start recovery must reuse the durable client message id"
+  Assert-True ($functionSource -match "restoreWaitingMessageOutboxEntry[\s\S]*?restoreWaitingNewThreadOutboxEntry") "transport recovery must preserve a waiting bubble for both existing and new threads"
   Assert-True ($functionSource -match "isRuntimeRequestAwaitingDeliveryConfirmation\(recovered\.status\)[\s\S]*?restoreConfirmingMessageOutboxEntry") "unconfirmed runtime requests must keep a confirming outbox bubble"
   Assert-True ($source -match "function\s+markOptimisticUserMessageConfirming[\s\S]*?updateMessageOutboxEntry\(clientMessageId,\s*\{\s*state:\s*'confirming'\s*\}\)") "confirming delivery must remain durable in the message outbox"
   Assert-True ($source -match "runtimeResult\s*&&\s*isRuntimeRequestAwaitingDeliveryConfirmation\(runtimeResult\.status\)[\s\S]*?markOptimisticUserMessageConfirming") "direct sends must not present an unconfirmed request as sent"
@@ -93,13 +95,20 @@ function Assert-RuntimeSnapshotOrderingSource {
   Assert-True ($source -match "shouldApplyRuntimeSnapshotVersion\(runtimeStatusSummaryByThreadId\.value\[threadId\],\s*snapshot\)") "runtime snapshots must be checked against the latest applied event sequence"
   Assert-True ($source -match "eventSeq:\s*notification\.seq") "runtime notification state must retain the authoritative event sequence"
   Assert-True ($source -match "const\s+runtimeSnapshotApplied\s*=\s*applyRuntimeSnapshotState") "message reconciliation must know when an outdated runtime snapshot was rejected"
+  Assert-True ($source -match "settleOptimisticUserMessagesThrough\(threadId,\s*settledAtMs\)") "authoritative terminal snapshots must clear older optimistic running residue"
+  Assert-True ($source -match "setTurnActivityForThread\(threadId,\s*\{\s*reset:\s*true") "a new local send must start a distinct activity timeline"
+  Assert-True ($source -match "activityId:\s*activity\?\.activityId") "the live overlay must expose stable activity identity to the conversation renderer"
+  Assert-True ($source -match "ACTIVE_THREAD_DETAIL_FALLBACK_SYNC_INTERVAL_MS\s*=\s*60000") "healthy active turns must use the one-minute detail fallback instead of continuous heavy reads"
+  $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadConversation.vue")
+  Assert-True ($conversationSource -match "previousOverlay\.activityId\s*===\s*nextOverlay\.activityId") "elapsed time may only be retained for the same activity"
 }
 
 function Assert-BoundedRuntimeSendRecoverySource {
   $sourcePath = Join-Path (Get-Location) "src\composables\useDesktopState.ts"
   $source = Get-Content -Raw -Encoding UTF8 -LiteralPath $sourcePath
   $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\App.vue")
-  Assert-True ($source -match "const\s+RUNTIME_SEND_RETRY_DELAYS_MS\s*=\s*\[650,\s*1800\]") "runtime send retries must remain bounded to two delays"
+  $serverSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\appServerRuntimeStart.ts")
+  Assert-True ($source -match "const\s+RUNTIME_SEND_RETRY_DELAYS_MS\s*=\s*\[700,\s*2000,\s*5000,\s*10000\]") "runtime send retries must use the bounded mobile weak-network schedule"
   $functionMatch = [regex]::Match($source, "async\s+function\s+startRuntimeTurnWithBoundedRecovery[\s\S]*?\n\s*function\s+hydrateCachedMessagesForThread")
   Assert-True ($functionMatch.Success) "could not find startRuntimeTurnWithBoundedRecovery source"
   $functionSource = $functionMatch.Value
@@ -111,7 +120,10 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($preflightMatch.Value -match "runWithBoundedRecovery\(\{") "send preflight must use the tested bounded recovery coordinator"
   Assert-True ($source -match "runSendPreflightWithBoundedRecovery\([\s\S]*?recoverThreadExecutionState") "thread-state preflight failures must receive bounded reconnect feedback"
   Assert-True ($source -match "if\s*\(wasThreadInProgressBeforeSubmit\)\s*\{[\s\S]*?recoverThreadExecutionState") "idle sends must not recover the optimistic state they just created"
-  Assert-True ($source -match "runSendPreflightWithBoundedRecovery\([\s\S]*?ensureThreadResumed") "thread-resume preflight failures must receive bounded reconnect feedback"
+  $startTurnMatch = [regex]::Match($source, "async\s+function\s+startTurnForThread[\s\S]*?\n\s*async\s+function\s+processQueuedMessages")
+  Assert-True ($startTurnMatch.Success) "could not find startTurnForThread source"
+  Assert-True ($startTurnMatch.Value -notmatch "ensureThreadResumed") "durable runtime/send must not be blocked by a frontend thread-resume preflight"
+  Assert-True ($serverSource -match "startRuntimeTurnRpcWithResume[\s\S]*?thread/resume[\s\S]*?turn/start") "the durable runtime endpoint must resume a missing thread once before retrying turn/start"
   Assert-True ($source -match "const\s+runtimeStateBeforeSubmit\s*=\s*runtimeExecutionStateByThreadId\.value\[threadId\]") "send failure cleanup must capture the authoritative runtime state before optimistic feedback"
   Assert-True ($source -match "const\s+isInProgress\s*=\s*runtimeStateAfterRecovery\s*!==\s*undefined[\s\S]*?isRuntimeExecutionActiveState\(runtimeStateAfterRecovery\)[\s\S]*?wasThreadInProgressBeforeSubmit") "authoritative runtime state must win over a stale thread-list in-progress marker"
   Assert-True ($source -match "markOptimisticUserMessageFailed\(threadId,\s*optimisticMessageId,\s*failedMessageRequest\)[\s\S]*?setTurnErrorForThread\(threadId,\s*null\)") "local send failure must stay on the message bubble instead of creating a false turn-error overlay"
@@ -131,7 +143,7 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($source -match "addOptimisticUserMessage\(threadId,[\s\S]*?messageId:\s*optimisticMessageId") "the real thread must adopt the provisional bubble id instead of creating a duplicate"
   Assert-True ($source -match "internalOptions\.onThreadCreated\?\.\(threadId\)") "new-thread sends must announce the authoritative thread before waiting for the first turn"
   Assert-True ($appSource -match "routeToCreatedThreadPromise\s*=\s*navigateToCreatedThread\(threadId\)") "the app must enter a newly created thread while its first turn continues in the background"
-  Assert-True ($source -match "else\s*\{\s*markPendingNewThreadPreviewFailed\(clientMessageId,\s*optimisticMessageId\)") "threadless send failure must retain the outbox-backed preview bubble"
+  Assert-True ($source -match "markPendingNewThreadPreviewWaiting\(clientMessageId,\s*optimisticMessageId\)[\s\S]*?markPendingNewThreadPreviewFailed\(clientMessageId,\s*optimisticMessageId\)") "threadless transport failures must wait for reconnect while definitive failures remain actionable"
   Assert-True ($source -match "async\s+function\s+retryFailedNewThreadMessage[\s\S]*?reuseOptimisticMessageId:\s*messageId") "threadless manual retry must reuse the same visual message id"
   Assert-True ($source -match "function\s+takeFailedNewThreadMessageForEditing[\s\S]*?removeMessageOutboxEntry\(entry\.clientMessageId\)[\s\S]*?pendingNewThreadPreview\.value\s*=\s*null") "editing a failed threadless message must atomically leave preview mode and clear its outbox attempt"
   Assert-True ($source -match "if\s*\(newestDraftEntry\)\s*\{\s*restoreFailedNewThreadOutboxEntry\(newestDraftEntry\)") "restart recovery must restore a failed new-thread bubble instead of silently moving it back to the composer"
@@ -1758,10 +1770,12 @@ JSON.stringify((() => {
     sendingDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="sending"]').length,
     failedDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="failed"]').length,
     retryingDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="retrying"]').length,
+    waitingDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="waiting"]').length,
     confirmingDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="confirming"]').length,
     sentDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="sent"]').length,
     failedDeliveryRetryCount: document.querySelectorAll('.message-delivery-retry').length,
-    hasBoundedReconnectText: textContent.includes('正在重连 1/2'),
+    hasBoundedReconnectText: textContent.includes('正在重连 1/4'),
+    hasWaitingDeliveryText: textContent.includes('等待网络'),
     hasConfirmingDeliveryText: textContent.includes('确认中'),
     hasStableLiveElapsedTime: /已(?:等待|运行)\s+(?:[6-9]|[1-9]\d+)\s*秒/.test(textContent) || /正在(?:运行|处理)(?:\s*·)?\s*(?:[6-9]|[1-9]\d+)\s*秒/.test(textContent),
     interruptedTurnCardCount: document.querySelectorAll('.interrupted-turn-card').length,
@@ -1862,6 +1876,29 @@ JSON.stringify((() => {
   Assert-True ($after.hasHistoricalCommand -eq $false) "conversation tail detail mixed historical execution into the current status"
 }
 
+function Assert-ConversationNewActivityTimerFixture {
+  param([string]$Session)
+
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "500") | Out-Null
+  $script = @'
+JSON.stringify((() => {
+  const text = document.querySelector('.live-overlay-inline')?.textContent?.replace(/\s+/g, ' ').trim() || '';
+  const match = text.match(/正在处理\s*·\s*(?:(\d+)\s*分\s*)?(\d+)\s*秒/);
+  return {
+    overlayCount: document.querySelectorAll('.live-overlay-inline').length,
+    elapsedSeconds: text.includes('正在处理 · <1 秒')
+      ? 0
+      : match ? (Number(match[1] || '0') * 60 + Number(match[2] || '0')) : -1,
+    text
+  };
+})())
+'@
+  $metrics = Invoke-BrowserEvalJson -Session $Session -Script $script
+  Assert-True ([int]$metrics.overlayCount -eq 1) "new activity fixture must keep one active surface"
+  Assert-True ([int]$metrics.elapsedSeconds -ge 0) "new activity fixture did not expose elapsed time"
+  Assert-True ([int]$metrics.elapsedSeconds -lt 30) "a later activity inherited the previous five-minute timer: $($metrics.text)"
+}
+
 function Assert-ConversationFixture {
   param(
     [object]$Metrics,
@@ -1907,10 +1944,12 @@ function Assert-ConversationFixture {
   Assert-True ([int]$Metrics.sendingDeliveryStateCount -eq 1) "conversation fixture is missing the sending delivery state"
   Assert-True ([int]$Metrics.failedDeliveryStateCount -eq 1) "conversation fixture is missing the failed delivery state"
   Assert-True ([int]$Metrics.retryingDeliveryStateCount -eq 1) "conversation fixture is missing the reconnecting delivery state"
+  Assert-True ([int]$Metrics.waitingDeliveryStateCount -eq 1) "conversation fixture is missing the waiting-for-network delivery state"
   Assert-True ([int]$Metrics.confirmingDeliveryStateCount -eq 1) "conversation fixture is missing the confirming delivery state"
   Assert-True ([int]$Metrics.sentDeliveryStateCount -eq 1) "conversation fixture is missing the sent delivery state"
   Assert-True ([int]$Metrics.failedDeliveryRetryCount -eq 1) "conversation fixture is missing the failed-message retry action"
   Assert-True ($Metrics.hasBoundedReconnectText -eq $true) "conversation fixture is missing bounded reconnect progress"
+  Assert-True ($Metrics.hasWaitingDeliveryText -eq $true) "conversation fixture is missing waiting-for-network feedback"
   Assert-True ($Metrics.hasConfirmingDeliveryText -eq $true) "conversation fixture is missing unconfirmed-send feedback"
   Assert-True ($Metrics.hasStableLiveElapsedTime -eq $true) "conversation fixture reset or ignored the authoritative live-overlay start time"
   Assert-True ([int]$Metrics.interruptedTurnCardCount -eq 1) "conversation fixture is missing stopped-turn feedback"
@@ -2921,6 +2960,12 @@ try {
   Assert-Page -Page $tailStatusFixture -Name "conversation tail status fixture phone"
   Assert-ConversationTailStatusFixture -Session $session
   Add-RegressionResult -Name "conversation-tail-status-fixture-phone" -Page $tailStatusFixture
+
+  $nextActivityFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&tailStatus=1&tailNextActivity=1"
+  $nextActivityFixture = Open-And-ReadPage -Session $session -Url $nextActivityFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $nextActivityFixture -Name "conversation new activity timer fixture phone"
+  Assert-ConversationNewActivityTimerFixture -Session $session
+  Add-RegressionResult -Name "conversation-new-activity-timer-fixture-phone" -Page $nextActivityFixture
 
   $fixtureFoldable = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $FoldableWidth -Height $FoldableHeight
   Assert-Page -Page $fixtureFoldable -Name "conversation blocks fixture foldable"

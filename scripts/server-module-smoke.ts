@@ -7872,6 +7872,34 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     },
   }])
 
+  let missingThreadStartCount = 0
+  const resumedMissingThread = createHarness(async (method, params) => {
+    if (method === 'turn/start') {
+      missingThreadStartCount += 1
+      if (missingThreadStartCount === 1) throw new Error('thread not found: thread-mobile')
+      return { turn: { id: 'turn-mobile' } }
+    }
+    if (method === 'thread/resume') {
+      assert.deepEqual(params, { threadId: 'thread-mobile' })
+      return { thread: { id: 'thread-mobile' } }
+    }
+    throw new Error(`unexpected rpc method ${method}`)
+  })
+  const resumedMissingThreadResult = await startRuntimeTurnWithAppServer({
+    requestId: 'request-mobile',
+    clientMessageId: 'client-mobile',
+    threadId: 'thread-mobile',
+    input: [{ type: 'text', text: 'Resume and send' }],
+  }, resumedMissingThread.dependencies)
+  assert.equal(resumedMissingThreadResult.status, 'running')
+  assert.equal(resumedMissingThreadResult.turnId, 'turn-mobile')
+  assert.deepEqual(resumedMissingThread.rpcCalls.map((call) => call.method), [
+    'turn/start',
+    'thread/resume',
+    'turn/start',
+  ])
+  assert.equal(resumedMissingThread.created.length, 1)
+
   const timedOut = createHarness(async () => {
     throw createRpcTimeoutError('turn/start', 1000)
   })

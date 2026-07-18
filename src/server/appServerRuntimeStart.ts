@@ -268,12 +268,33 @@ async function startRuntimeTurnRpc(
     ? normalizePlanModeTurnStartParams(turnParams, { includeNativeMode: true })
     : turnParams
   try {
-    return await dependencies.rpc('turn/start', rpcParams)
+    return await startRuntimeTurnRpcWithResume(rpcParams, dependencies)
   } catch (error) {
     if (mode !== 'plan' || !shouldRetryPlanModeWithoutNativeMode(error)) {
       throw error
     }
     rpcParams = normalizePlanModeTurnStartParams(turnParams, { includeNativeMode: false })
+    return await startRuntimeTurnRpcWithResume(rpcParams, dependencies)
+  }
+}
+
+async function startRuntimeTurnRpcWithResume(
+  rpcParams: unknown,
+  dependencies: RuntimeStartDependencies,
+): Promise<unknown> {
+  try {
+    return await dependencies.rpc('turn/start', rpcParams)
+  } catch (error) {
+    const threadId = readRuntimeThreadId(rpcParams)
+    const message = dependencies.getErrorMessage(error, '').toLowerCase()
+    if (!threadId || !message.includes('thread not found')) throw error
+    await dependencies.rpc('thread/resume', { threadId })
     return await dependencies.rpc('turn/start', rpcParams)
   }
+}
+
+function readRuntimeThreadId(payload: unknown): string {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return ''
+  const threadId = (payload as Record<string, unknown>).threadId
+  return typeof threadId === 'string' ? threadId.trim() : ''
 }

@@ -206,7 +206,14 @@ const messages: UiMessage[] = [
     text: '网络短暂中断，正在安全重连，内容不会重复发送。',
     deliveryState: 'retrying',
     deliveryAttempt: 1,
-    deliveryAttemptMax: 2,
+    deliveryAttemptMax: 4,
+    turnIndex: 1,
+  },
+  {
+    id: 'optimistic-user:fixture:waiting-echo',
+    role: 'user',
+    text: '网络暂时不可用，消息已保留，将在连接恢复后自动发送。',
+    deliveryState: 'waiting',
     turnIndex: 1,
   },
   {
@@ -296,24 +303,38 @@ const allPendingRequests: UiServerRequest[] = [
   },
 ]
 
-const isTailStatusFixture = typeof window !== 'undefined'
-  && new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('tailStatus') === '1'
+const fixtureParams = typeof window !== 'undefined'
+  ? new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+  : new URLSearchParams()
+const isTailStatusFixture = fixtureParams.get('tailStatus') === '1'
+const isNextActivityFixture = fixtureParams.get('tailNextActivity') === '1'
 const pendingRequests: UiServerRequest[] = isTailStatusFixture ? [] : allPendingRequests
 
 const liveOverlay = ref<UiLiveOverlay | null>({
-  startedAtMs: Date.now() - 6500,
+  activityId: 'fixture-turn-runtime',
+  startedAtMs: Date.now() - (isNextActivityFixture ? 5 * 60 * 1000 : 6500),
   activityLabel: 'fixture runtime activity',
   activityDetails: ['fixture runtime detail should stay compact and neutral'],
   reasoningText: 'fixture reasoning text',
   errorText: '',
 })
 
-if (
-  typeof window !== 'undefined'
-  && new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('tailGap') === '1'
-) {
+if (typeof window !== 'undefined' && fixtureParams.get('tailGap') === '1') {
   window.setTimeout(() => {
     liveOverlay.value = null
+  }, 250)
+}
+
+if (typeof window !== 'undefined' && isNextActivityFixture) {
+  window.setTimeout(() => {
+    liveOverlay.value = {
+      activityId: 'fixture-turn-next',
+      startedAtMs: Date.now(),
+      activityLabel: 'fixture next activity',
+      activityDetails: ['a later turn must start a new elapsed timer'],
+      reasoningText: '',
+      errorText: '',
+    }
   }, 250)
 }
 

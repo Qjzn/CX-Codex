@@ -1399,8 +1399,14 @@ watch(
     if (threadId !== previousThreadId) retainedLiveOverlay.value = null
     if (nextOverlay) {
       const previousOverlay = retainedLiveOverlay.value
+      const sameActivity = previousOverlay !== null && (
+        previousOverlay.activityId && nextOverlay.activityId
+          ? previousOverlay.activityId === nextOverlay.activityId
+          : previousOverlay.startedAtMs === nextOverlay.startedAtMs
+      )
       const shouldKeepStartedAt = (
         isTurnInProgress === true &&
+        sameActivity &&
         previousOverlay !== null &&
         previousOverlay.startedAtMs > 0
       )
@@ -4313,6 +4319,7 @@ function canRollbackMessage(message: UiMessage): boolean {
 function messageDeliveryLabel(message: UiMessage): string {
   if (message.deliveryState === 'failed') return '发送失败'
   if (message.deliveryState === 'sent') return '已发送'
+  if (message.deliveryState === 'waiting') return '等待网络'
   if (message.deliveryState === 'confirming') return '确认中'
   if (message.deliveryState === 'retrying') {
     const attempt = Math.max(1, message.deliveryAttempt ?? 1)

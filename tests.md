@@ -2,6 +2,53 @@
 
 This file tracks manual regression and feature verification steps.
 
+## Authoritative completion and stable per-turn timer (2026-07-18)
+
+### Expected behavior
+
+1. Every submitted message starts a distinct activity timeline. Thinking, command execution, and response streaming within that same turn keep one elapsed timer, but a later turn never inherits the previous turn's duration.
+2. A short realtime overlay gap keeps the current activity visible and preserves its timer. A different authoritative `turnId` replaces the retained activity immediately.
+3. A fresh settled runtime snapshot marks only older optimistic messages as settled and clears their pending running feedback. The bubble remains visible until authoritative history replaces it, while a newer follow-up message remains active.
+4. While realtime notifications are healthy, the 9-second background check reads lightweight runtime status only. Full `thread/read(includeTurns: true)` falls back after 60 seconds, when notifications are stale, when delivery is still optimistic-only, or once terminal state needs one final reconciliation.
+
+### Verification
+
+- Run `npm.cmd run build:frontend` and `npm.cmd run verify:frontend-normalizers`.
+- Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots` and confirm the phone conversation-tail fixture keeps one stable timer through its intentional overlay gap.
+- In a real conversation, finish one turn, immediately send a follow-up, and confirm the second timer begins near zero while the first turn's completed state does not clear the new bubble.
+- During a healthy response longer than one minute, inspect diagnostics: lightweight runtime checks may continue, but heavy `thread/read(includeTurns: true)` should no longer recur every 12 seconds.
+
+### Regression evidence (2026-07-18)
+
+- `npm.cmd run build:frontend`, `npm.cmd run build:cli`, `npm.cmd run verify:server-modules`, and `npm.cmd run verify:frontend-normalizers` passed; the PowerShell regression script parser and `git diff --check` also passed.
+- The isolated 393 px mobile fixture began with a five-minute prior activity, switched to a different activity id, and rendered exactly one active surface at `<1 秒`; viewport width and document scroll width both remained 393 px.
+- Screenshot evidence: `output/regression-7420/authoritative-turn-state/conversation-tail-mobile.png`.
+- The full live frontend suite was not started because the real 7420 Runtime Store is carrying this active task. No service restart, Runtime Store cleanup, or live-thread mutation was performed for testing.
+
+## Mobile durable-send and reconnect recovery (2026-07-18)
+
+### Expected behavior
+
+1. Submitting to an existing conversation renders one optimistic user bubble immediately and calls `/codex-api/runtime/send` without waiting for a frontend `thread/resume` preflight.
+2. If App Server reports `thread not found`, the 7420 runtime resumes that thread once and retries `turn/start` inside the same persisted request and `clientMessageId`.
+3. Transport-only failures retry after 700 ms, 2 s, 5 s, and 10 s. If the connection is still unavailable, the original bubble becomes `等待网络`; it is not converted into a definitive task failure.
+4. Browser, Android network, foreground, storage, or realtime reconnection recovery looks up the same `clientMessageId` first. If the server has no request, it resends the durable outbox entry with the same idempotency key.
+5. A recovered send marks the same bubble `已发送` or `确认中`. Definitive application failures still become `发送失败` and keep the existing edit/retry actions.
+
+### Verification
+
+- Run `npm.cmd run build:frontend`.
+- Run `npm.cmd run build:cli` and `npm.cmd run verify:server-modules`.
+- Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots` and confirm the phone fixture contains one calm `等待网络` state alongside the existing sending, reconnecting, confirming, sent, and failed states.
+- For a real-device weak-network check, send once in an idle existing thread, disable connectivity until `等待网络` appears, then restore connectivity. Confirm the same bubble is delivered once without tapping retry and without a duplicate user turn.
+
+### Regression evidence (2026-07-18)
+
+- `npm.cmd run build:frontend`, `npm.cmd run build:cli`, `npm.cmd run verify:server-modules`, and `npm.cmd run verify:frontend-normalizers` passed.
+- Headless Chromium at 393 x 852 found exactly one `等待网络`, one `正在重连 1/4`, and one definitive failed-delivery fixture; `body.scrollWidth` remained equal to the 393 px viewport width.
+- Screenshot evidence: `output/regression-7420/durable-send-reconnect/conversation-waiting-phone.png`.
+- The full live frontend suite stopped at its pre-test idle gate because the real 7420 Runtime Store contained one `start_uncertain` request. The request was preserved; no user runtime state was cleared for testing.
+
 ## New-conversation first-turn feedback budget (2026-07-17)
 
 ### Automated verification
