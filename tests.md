@@ -13664,6 +13664,62 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - Sidebar skeleton sheen runs once instead of indefinitely.
 - Reduced-motion mode removes transforms and continuous status animation while preserving all content and actions.
 
+### Feature: Windows local browse paths
+
+#### Prerequisites
+
+- Build and start CX-Codex from Windows.
+- Keep an existing thread and an installed skill under a drive-letter path such as `D:\Workspaces\Example Project`.
+- Include a directory whose name contains spaces or Chinese characters.
+
+#### Steps
+
+1. Open the existing thread and use its toolbar action to browse the working directory.
+2. Open the Skills view and browse files from a skill card.
+3. Open the same skill's detail modal and browse its files again.
+4. Inspect each opened URL and confirm `/codex-local-browse/` appears before the encoded drive-letter path.
+5. Navigate through the directory containing spaces or Chinese characters.
+
+#### Expected Results
+
+- Thread and skill browse actions open the intended Windows directory.
+- The drive letter remains part of the route path instead of being interpreted as a URL route name.
+- Spaces and Chinese path segments remain intact after URL encoding and server-side decoding.
+- Existing POSIX absolute-path browsing remains unchanged.
+
+#### Rollback/Cleanup Notes
+
+- No data cleanup is required.
+- Revert the browse-path normalization in `src/App.vue`, `src/components/content/SkillCard.vue`, and `src/components/content/SkillDetailModal.vue`, then remove this test section to roll back.
+
+### Feature: Source and configuration file preview
+
+#### Prerequisites
+
+- Build and start CX-Codex.
+- Prepare representative source and configuration files, including `.ts`, `.vue`, `.java`, `.py`, `.go`, `.ps1`, and `.sql`.
+- Keep at least one existing Markdown, PDF, Word, and image file available for regression checks.
+
+#### Steps
+
+1. Open the local file browser and navigate to the prepared files.
+2. Confirm each supported source or configuration file exposes the preview action.
+3. Open each file and inspect the rendered text preview.
+4. Repeat with a file whose path contains spaces or Chinese characters.
+5. Open the existing Markdown, PDF, Word, and image files and verify their original preview modes.
+6. Open a text-editable file and confirm its existing edit and save actions remain available.
+
+#### Expected Results
+
+- Supported source and configuration extensions open in the text preview page.
+- File content remains readable and the full path survives URL encoding and decoding.
+- Existing Markdown, PDF, Word, image, download, edit, and save behavior remains unchanged.
+- Unsupported binary files do not incorrectly expose a text preview action.
+
+#### Rollback/Cleanup Notes
+
+- No generated data requires cleanup.
+- Revert the source-extension additions in `src/localPreview.ts` and `src/server/localBrowseUi.ts`, then remove this test section to roll back.
 ### Feature: Android deep-Doze terminal wake with FCM
 
 #### Steps

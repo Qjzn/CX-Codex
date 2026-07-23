@@ -17,7 +17,10 @@ const TEXT_EDITABLE_EXTENSIONS = new Set([
 
 const PREVIEWABLE_EXTENSIONS = new Set([
   '.pdf',
-  '.md', '.markdown', '.txt', '.log', '.json', '.csv', '.xml', '.yaml', '.yml',
+  '.txt', '.md', '.markdown', '.json', '.js', '.ts', '.tsx', '.jsx', '.vue', '.css', '.scss',
+  '.html', '.htm', '.xml', '.yml', '.yaml', '.log', '.csv', '.env', '.py', '.java',
+  '.kt', '.kts', '.go', '.rs', '.c', '.cc', '.cpp', '.h', '.hpp', '.cs', '.php', '.rb',
+  '.sh', '.toml', '.ini', '.conf', '.sql', '.bat', '.cmd', '.ps1',
   '.docx',
   '.avif', '.bmp', '.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp',
 ])
