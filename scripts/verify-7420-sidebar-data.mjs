@@ -240,7 +240,38 @@ async function readThreadListFirstPage(archived) {
 }
 
 async function readAllActiveThreads(firstPage) {
-  const threads = [...firstPage.data]
+  const threads = []
+  const seenThreadIds = new Set()
+  const overlappingSupplementalThreadIds = new Set()
+  const supplementalThreadIds = new Set(
+    firstPage.data
+      .slice(THREAD_LIST_LIMIT)
+      .map(readThreadId)
+      .filter(Boolean),
+  )
+
+  const appendPage = (rows, label) => {
+    const pageThreadIds = new Set()
+    for (const row of rows) {
+      const threadId = readThreadId(row)
+      if (threadId) {
+        assert(!pageThreadIds.has(threadId), `${label} contains duplicate thread id: ${threadId}`)
+        pageThreadIds.add(threadId)
+        if (seenThreadIds.has(threadId)) {
+          assert(
+            supplementalThreadIds.has(threadId),
+            `${label} overlaps a non-supplemental earlier thread: ${threadId}`,
+          )
+          overlappingSupplementalThreadIds.add(threadId)
+          continue
+        }
+        seenThreadIds.add(threadId)
+      }
+      threads.push(row)
+    }
+  }
+
+  appendPage(firstPage.data, 'active first page')
   let cursor = typeof firstPage.nextCursor === 'string' && firstPage.nextCursor.length > 0
     ? firstPage.nextCursor
     : null
@@ -254,14 +285,25 @@ async function readAllActiveThreads(firstPage) {
     const record = asRecord(result)
     assert(record && Array.isArray(record.data), 'thread/list active cursor page returned malformed result')
     assert(record.data.length <= THREAD_LIST_LIMIT, 'active cursor page was unexpectedly supplemented beyond the requested limit')
-    threads.push(...record.data)
+    appendPage(record.data, 'active cursor page')
     cursor = typeof record.nextCursor === 'string' && record.nextCursor.length > 0 ? record.nextCursor : null
   }
-  return threads
+  return {
+    threads,
+    overlappingSupplementalThreadIds: [...overlappingSupplementalThreadIds],
+  }
 }
 
-async function readReadablePinnedThreadIds(pinnedThreadIds) {
-  const readable = []
+function isArchivedThread(thread) {
+  const record = asRecord(thread)
+  if (record?.archived === true) return true
+  const threadPath = typeof record?.path === 'string' ? record.path.replace(/\\/gu, '/') : ''
+  return threadPath.split('/').some((segment) => segment.toLowerCase() === 'archived_sessions')
+}
+
+async function readPinnedThreadSample(pinnedThreadIds) {
+  const active = []
+  const archived = []
   const unreadable = []
   for (const threadId of pinnedThreadIds.slice(0, PINNED_THREAD_READ_SAMPLE_LIMIT)) {
     try {
@@ -270,13 +312,18 @@ async function readReadablePinnedThreadIds(pinnedThreadIds) {
         includeTurns: false,
       })
       const thread = asRecord(asRecord(result)?.thread)
-      if (thread?.id === threadId) readable.push(threadId)
-      else unreadable.push(threadId)
+      if (thread?.id !== threadId) {
+        unreadable.push(threadId)
+      } else if (isArchivedThread(thread)) {
+        archived.push(threadId)
+      } else {
+        active.push(threadId)
+      }
     } catch {
       unreadable.push(threadId)
     }
   }
-  return { readable, unreadable }
+  return { active, archived, unreadable }
 }
 
 async function readRequiredThreadFromSearch(title) {
@@ -366,11 +413,14 @@ async function main() {
   assert(archivedFirstPage.data.length <= THREAD_LIST_LIMIT, 'archived first page was unexpectedly supplemented beyond the requested limit')
 
   const activeThreadsRead = await measureAsync(() => readAllActiveThreads(activeFirstPage))
-  const activeThreads = activeThreadsRead.value
+  const activeThreads = activeThreadsRead.value.threads
+  const overlappingSupplementalThreadIds = activeThreadsRead.value.overlappingSupplementalThreadIds
   const activeThreadIds = activeThreads.map(readThreadId).filter(Boolean)
   assertUnique(activeThreadIds, 'active thread/list result')
 
-  const { readable, unreadable } = await readReadablePinnedThreadIds(pinnedThreadIds)
+  const pinnedThreadSample = await readPinnedThreadSample(pinnedThreadIds)
+  const readable = [...pinnedThreadSample.active, ...pinnedThreadSample.archived]
+  const unreadable = pinnedThreadSample.unreadable
   const activeThreadIdSet = new Set(activeThreadIds)
   const requiredThread = await readRequiredThreadFromSearch(requiredThreadTitle)
   if (requiredThread) {
@@ -380,13 +430,16 @@ async function main() {
     )
   }
 
-  for (const threadId of readable) {
+  for (const threadId of pinnedThreadSample.active) {
     assert(activeThreadIdSet.has(threadId), `readable pinned thread is missing from active thread/list data source: ${threadId}`)
+  }
+  for (const threadId of pinnedThreadSample.archived) {
+    assert(!activeThreadIdSet.has(threadId), `archived pinned thread leaked into active thread/list data source: ${threadId}`)
   }
 
   const pinnedSectionThreadIds = pinnedThreadIds.filter((threadId) => activeThreadIdSet.has(threadId))
   assert(
-    readable.every((threadId, index) => pinnedSectionThreadIds[index] === threadId),
+    pinnedThreadSample.active.every((threadId, index) => pinnedSectionThreadIds[index] === threadId),
     'computed pinned section order does not follow /codex-api/pinned-threads order',
   )
 
@@ -410,8 +463,10 @@ async function main() {
     baseUrl,
     pinnedThreadCount: pinnedThreadIds.length,
     readablePinnedSampleCount: readable.length,
+    archivedPinnedSampleCount: pinnedThreadSample.archived.length,
     unreadablePinnedSampleCount: unreadable.length,
     activeThreadCount: activeThreads.length,
+    overlappingSupplementalThreadIds,
     activeFirstPageCount: activeFirstPage.data.length,
     archivedFirstPageCount: archivedFirstPage.data.length,
     activeFirstPageMs: activeFirstPageRead.durationMs,

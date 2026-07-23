@@ -23,7 +23,7 @@ export async function handleRuntimeActionRoutes(
   if (req.method === 'POST' && url.pathname === '/codex-api/runtime/send') {
     const payload = await dependencies.readJsonBody(req)
     const result = await dependencies.startRuntimeTurn(payload)
-    setJson(res, result.status === 'start_uncertain' ? 202 : 200, { data: result })
+    setJson(res, isRuntimeStartPending(result.status) ? 202 : 200, { data: result })
     return true
   }
 
@@ -50,4 +50,11 @@ export async function handleRuntimeActionRoutes(
   }
 
   return false
+}
+
+function isRuntimeStartPending(status: string): boolean {
+  return status === 'pending_start'
+    || status === 'starting'
+    || status === 'start_uncertain'
+    || status === 'sync_degraded'
 }

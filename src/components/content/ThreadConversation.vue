@@ -30,7 +30,15 @@
     </div>
 
     <template v-else>
-      <ul ref="conversationListRef" class="conversation-list" :class="{ 'conversation-list--switching': isThreadSwitchingState }">
+      <ul
+        ref="conversationListRef"
+        class="conversation-list"
+        :class="{ 'conversation-list--switching': isThreadSwitchingState }"
+        :data-message-count="renderableMessages.length"
+        :data-earliest-turn-index="earliestRenderableTurnIndex ?? undefined"
+        tabindex="0"
+        aria-label="会话消息"
+      >
       <Teleport
         v-if="showProcessPanel"
         defer
@@ -44,8 +52,10 @@
             'live-overlay-inline-compact': !shouldRenderDetailedLiveOverlay,
             'live-overlay-inline-thinking': !liveOverlayCommandMessage,
             'live-overlay-inline-command': Boolean(liveOverlayCommandMessage),
+            'live-overlay-inline-recovering': effectiveLiveOverlay.isRecovering === true,
           }"
           aria-live="polite"
+          :aria-busy="effectiveLiveOverlay.isRecovering === true ? 'true' : undefined"
         >
           <template v-if="shouldRenderDetailedLiveOverlay">
             <div class="live-overlay-head">
@@ -976,6 +986,7 @@
         :class="{ 'has-pending-updates': hasPendingBelowFoldUpdates }"
         type="button"
         :title="jumpToLatestTitle"
+        :aria-label="jumpToLatestTitle"
         @click="jumpToLatest"
       >
         <IconTablerArrowUp class="conversation-jump-to-latest-icon" />
@@ -1135,6 +1146,10 @@ import {
   markChatFeedbackFirstAssistantVisible,
   markChatFeedbackRendered,
 } from '../../composables/chatFeedbackMetrics'
+import {
+  CONVERSATION_BOTTOM_THRESHOLD_PX,
+  isConversationViewportAtBottom,
+} from '../../composables/conversationViewport'
 
 export type ThreadConversationExposed = {
   focusMessage: (messageId: string) => Promise<boolean>
@@ -1495,6 +1510,15 @@ const recentRenderableMessagesForDerivedUi = computed<UiMessage[]>(() => {
 const visibleRenderableMessages = computed<UiMessage[]>(() => (
   renderableMessages.value.slice(visibleMessageStartIndex.value)
 ))
+const earliestRenderableTurnIndex = computed<number | null>(() => {
+  let earliest: number | null = null
+  for (const message of renderableMessages.value) {
+    const turnIndex = readTurnIndex(message)
+    if (turnIndex === null) continue
+    earliest = earliest === null ? turnIndex : Math.min(earliest, turnIndex)
+  }
+  return earliest
+})
 
 function recentMessagesForReactiveWatch(messages: UiMessage[]): UiMessage[] {
   if (messages.length <= REACTIVE_WATCH_MESSAGE_LIMIT) return messages
@@ -1866,7 +1890,6 @@ const requestResponseResetTimers = new Map<number, number>()
 const hasPendingBelowFoldUpdates = ref(false)
 const autoFollowBottom = ref(props.scrollState?.isAtBottom !== false)
 const autoAnchoredLongResponseId = ref('')
-const BOTTOM_THRESHOLD_PX = 16
 const LONG_RESPONSE_ANCHOR_MAX_WIDTH_PX = 1100
 const LONG_RESPONSE_MIN_HEIGHT_PX = 260
 const LONG_USER_MESSAGE_COLLAPSE_THRESHOLD = 3000
@@ -1917,6 +1940,7 @@ type ScrollAnchorSnapshot = {
   measureId: string
   viewportOffset: number
 }
+let pendingRemoteOlderHistoryAnchor: ScrollAnchorSnapshot | null = null
 
 const VIRTUALIZE_MIN_MESSAGES = 80
 const VIRTUAL_OVERSCAN_PX = 640
@@ -2021,7 +2045,6 @@ const loadingIndicatorText = computed(() => {
 })
 const showJumpToLatestButton = computed(() => (
   hasRenderableConversation.value &&
-  hasPendingBelowFoldUpdates.value &&
   !shouldLockToBottom()
 ))
 const overlayPrimaryPendingRequest = computed<UiServerRequest | null>(() => props.pendingRequests[0] ?? null)
@@ -2064,8 +2087,13 @@ const liveOverlayElapsedLabel = computed(() => {
   if (!overlay || overlay.startedAtMs <= 0) return ''
   return formatHandledDuration(Math.max(0, commandElapsedNowMs.value - overlay.startedAtMs))
 })
-const liveOverlayCompactLabel = computed(() => `正在处理 · ${liveOverlayElapsedLabel.value || '<1 秒'}`)
+const liveOverlayCompactLabel = computed(() => (
+  effectiveLiveOverlay.value?.isRecovering === true
+    ? `正在恢复任务 · ${liveOverlayElapsedLabel.value || '<1 秒'}`
+    : `正在处理 · ${liveOverlayElapsedLabel.value || '<1 秒'}`
+))
 const liveOverlayTailHint = computed(() => {
+  if (effectiveLiveOverlay.value?.isRecovering === true) return '正在同步最新进度，完成后会自动更新'
   if (overlayPrimaryPendingRequest.value) return '等待你的确认，处理后会继续'
   if (liveOverlayCommandMessage.value) return '正在执行最新操作 · 点击查看'
   if (hasVisibleLiveAgentText.value) return '正在继续生成回复 · 点击查看最新进展'
@@ -2378,6 +2406,7 @@ async function revealOlderMessages(): Promise<void> {
     return
   }
 
+  pendingRemoteOlderHistoryAnchor = anchorSnapshot
   markRemoteOlderHistoryRequestInFlight()
   emit('loadOlderHistory')
   await nextTick()
@@ -2400,6 +2429,7 @@ function clearRemoteOlderHistoryRequestInFlight(): void {
     window.clearTimeout(remoteOlderHistoryRequestTimer)
     remoteOlderHistoryRequestTimer = null
   }
+  pendingRemoteOlderHistoryAnchor = null
   isRevealingOlderMessages.value = false
 }
 
@@ -4443,6 +4473,7 @@ function pendingRequestActionLabel(request: UiServerRequest): string {
 }
 
 function liveOverlayPrimaryLabel(overlay: UiLiveOverlay): string {
+  if (overlay.isRecovering === true) return '正在恢复任务'
   const label = overlay.activityLabel.trim()
   if (!label) return '思考中'
   if (/工具不可用|unsupported tool|tool unavailable/iu.test(label)) return '工具不可用'
@@ -4476,6 +4507,9 @@ function liveOverlayDetails(overlay: UiLiveOverlay): string[] {
 }
 
 function liveOverlayHint(overlay: UiLiveOverlay): string {
+  if (overlay.isRecovering === true) {
+    return '正在同步离开期间的最新进度，完成后会自动继续显示。'
+  }
   if (/工具不可用|unsupported tool|tool unavailable/iu.test(overlay.activityLabel)) {
     return '这个工具调用无法在 CX-Codex Web 执行，可让 Codex 改用文字方式继续。'
   }
@@ -4659,8 +4693,11 @@ function scrollToBottom(): void {
 }
 
 function isAtBottom(container: HTMLElement): boolean {
-  const distance = container.scrollHeight - (container.scrollTop + container.clientHeight)
-  return distance <= BOTTOM_THRESHOLD_PX
+  return isConversationViewportAtBottom({
+    scrollHeight: container.scrollHeight,
+    scrollTop: container.scrollTop,
+    clientHeight: container.clientHeight,
+  }, CONVERSATION_BOTTOM_THRESHOLD_PX)
 }
 
 function flushScrollState(): void {
@@ -5146,9 +5183,11 @@ watch(
 
 watch(
   () => props.messages.length,
-  () => {
+  async () => {
     if (remoteOlderHistoryRequestTimer === null) return
+    const anchorSnapshot = pendingRemoteOlderHistoryAnchor
     clearRemoteOlderHistoryRequestInFlight()
+    await restoreScrollAnchorOverFrames(anchorSnapshot, 6)
   },
 )
 
@@ -5639,12 +5678,18 @@ onBeforeUnmount(() => {
 .conversation-list {
   @apply h-full min-h-0 list-none m-0 px-2.5 sm:px-5 py-0 overflow-y-auto overflow-x-visible flex flex-col gap-1.5;
   padding-bottom: max(0.875rem, env(safe-area-inset-bottom));
+  overflow-anchor: none;
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--ui-text-tertiary) 42%, transparent) transparent;
   transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.conversation-list:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ui-focus) 46%, transparent);
+  outline-offset: -2px;
 }
 
 .conversation-list::-webkit-scrollbar {
@@ -5672,17 +5717,31 @@ onBeforeUnmount(() => {
 }
 
 .conversation-jump-to-latest {
-  @apply absolute bottom-4 right-4 z-20 inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold;
+  @apply absolute bottom-4 left-1/2 z-20 inline-flex min-h-8 -translate-x-1/2 items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold;
   bottom: max(1rem, calc(env(safe-area-inset-bottom) + 0.5rem));
   border-color: var(--ui-border-subtle);
   background: color-mix(in srgb, var(--ui-bg-surface) 96%, transparent);
   color: var(--ui-text-secondary);
   box-shadow: 0 8px 22px rgb(0 0 0 / 0.08);
+  transition:
+    background-color var(--motion-duration-fast) var(--motion-ease-standard),
+    border-color var(--motion-duration-fast) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard),
+    transform var(--motion-duration-press) var(--motion-ease-out);
 }
 
 .conversation-jump-to-latest:hover {
   border-color: var(--ui-border-strong);
   color: var(--ui-text-primary);
+}
+
+.conversation-jump-to-latest:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 2px;
+}
+
+.conversation-jump-to-latest:active {
+  transform: translateX(-50%) scale(0.96);
 }
 
 .conversation-jump-to-latest.has-pending-updates {
@@ -6110,6 +6169,20 @@ onBeforeUnmount(() => {
 .live-overlay-inline-compact .live-overlay-indicator-core {
   @apply h-2 w-2;
   animation: liveOverlayCorePulse 1.4s var(--motion-ease-standard) infinite;
+}
+
+.live-overlay-inline-recovering .live-overlay-indicator-ring {
+  display: block;
+  position: absolute;
+  inset: 2px;
+  border: 1.5px solid color-mix(in srgb, var(--ui-accent) 28%, transparent);
+  border-top-color: var(--ui-accent);
+  border-radius: 999px;
+  animation: liveOverlayRecoverySpin 820ms linear infinite;
+}
+
+.live-overlay-inline-recovering .live-overlay-indicator-core {
+  animation: liveOverlayRecoveryCore 820ms var(--motion-ease-standard) infinite;
 }
 
 .live-overlay-label {
@@ -7375,6 +7448,24 @@ onBeforeUnmount(() => {
   50% {
     transform: scale(1);
     opacity: 1;
+  }
+}
+
+@keyframes liveOverlayRecoverySpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes liveOverlayRecoveryCore {
+  0%,
+  100% {
+    transform: scale(0.62);
+    opacity: 0.58;
+  }
+  50% {
+    transform: scale(0.82);
+    opacity: 0.92;
   }
 }
 

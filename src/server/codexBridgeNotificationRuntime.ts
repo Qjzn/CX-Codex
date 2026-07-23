@@ -52,6 +52,7 @@ export type CodexBridgeNotificationRuntimeDependencies = {
   notificationDiagnostics: NotificationDiagnosticsObserver
   statusDiagnostics: StatusDiagnosticsObserver
   persistRuntimeSnapshot: BridgeNotificationRuntimeSyncDependencies['persistRuntimeSnapshot']
+  onRuntimeEvent?: (event: RuntimeEventRecord) => void
 }
 
 export type CodexBridgeNotificationRuntime = Pick<
@@ -98,6 +99,11 @@ export function createCodexBridgeNotificationRuntime(
     runtimeStore: dependencies.runtimeStore,
     deleteCachedThreadRead: (threadId) => dependencies.threadReadCacheStore.delete(threadId),
     emitNotification: (event) => {
+      dependencies.onRuntimeEvent?.({
+        ...event,
+        threadId: readThreadIdFromPayload(event.params),
+        turnId: readTurnIdFromPayload(event.params),
+      })
       bridgeNotificationListeners.emit(event)
     },
   })

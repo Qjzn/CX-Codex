@@ -11,14 +11,22 @@
         label="正在提交队列中的下一条消息"
         compact
       />
+      <p v-else-if="hasPausedFailure" class="queued-messages-caption queued-messages-caption-failed" role="status">
+        下一条未能发送，队列已暂停。重试、编辑或删除后继续。
+      </p>
       <p v-else class="queued-messages-caption">
         当前任务结束后按顺序执行。点正文可继续编辑。
       </p>
 
-      <div v-for="(msg, index) in messages" :key="msg.id" class="queued-row">
+      <div
+        v-for="(msg, index) in messages"
+        :key="msg.id"
+        class="queued-row"
+        :class="{ 'is-failed': msg.deliveryState === 'failed' }"
+      >
         <button class="queued-row-main" type="button" title="编辑这条排队消息" @click="$emit('edit', msg.id)">
           <span class="queued-row-order" :class="{ 'is-next': index === 0 }">
-            {{ index === 0 ? '下一条' : String(index + 1).padStart(2, '0') }}
+            {{ msg.deliveryState === 'failed' ? '未发送' : index === 0 ? '下一条' : String(index + 1).padStart(2, '0') }}
           </span>
           <span class="queued-row-copy">
             <span class="queued-row-text">{{ getMessagePreview(msg) }}</span>
@@ -27,7 +35,16 @@
         </button>
 
         <div class="queued-row-actions">
-          <button class="queued-row-quote" type="button" title="立即引用并执行这条队列消息" @click.stop="$emit('quote', msg.id)">
+          <button
+            v-if="msg.deliveryState === 'failed'"
+            class="queued-row-retry"
+            type="button"
+            title="重新发送这条排队消息"
+            @click.stop="$emit('retry', msg.id)"
+          >
+            重试
+          </button>
+          <button v-else class="queued-row-quote" type="button" title="立即引用并执行这条队列消息" @click.stop="$emit('quote', msg.id)">
             引用
           </button>
           <button class="queued-row-delete" type="button" aria-label="删除排队消息" title="删除排队消息" @click.stop="$emit('delete', msg.id)">
@@ -43,17 +60,19 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import LoadingInline from './LoadingInline.vue'
 
 type QueuedMessageRow = {
   id: string
+  deliveryState?: 'queued' | 'failed'
   text: string
   imageUrls?: string[]
   skills?: Array<{ name: string; path: string }>
   fileAttachments?: Array<{ label: string; path: string; fsPath: string }>
 }
 
-defineProps<{
+const props = defineProps<{
   messages: QueuedMessageRow[]
   isProcessing?: boolean
 }>()
@@ -61,8 +80,11 @@ defineProps<{
 defineEmits<{
   edit: [messageId: string]
   quote: [messageId: string]
+  retry: [messageId: string]
   delete: [messageId: string]
 }>()
+
+const hasPausedFailure = computed(() => props.messages[0]?.deliveryState === 'failed')
 
 function getMessagePreview(message: QueuedMessageRow): string {
   const text = message.text.trim()
@@ -133,11 +155,20 @@ function getMessageMeta(message: QueuedMessageRow): string {
   color: var(--ui-accent);
 }
 
+.queued-messages-caption-failed {
+  color: color-mix(in srgb, var(--ui-warning) 78%, var(--ui-text-primary));
+}
+
 .queued-row {
   @apply flex min-w-0 items-start gap-2 border px-2.5 py-2;
   border-radius: var(--ui-radius-card);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
+}
+
+.queued-row.is-failed {
+  border-color: color-mix(in srgb, var(--ui-warning) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-warning) 5%, var(--ui-bg-surface));
 }
 
 .queued-row-main {
@@ -154,6 +185,11 @@ function getMessageMeta(message: QueuedMessageRow): string {
 .queued-row-order.is-next {
   background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-bg-surface));
   color: var(--ui-accent);
+}
+
+.queued-row.is-failed .queued-row-order {
+  background: color-mix(in srgb, var(--ui-warning) 10%, var(--ui-bg-surface));
+  color: color-mix(in srgb, var(--ui-warning) 82%, var(--ui-text-primary));
 }
 
 .queued-row-copy {
@@ -178,7 +214,8 @@ function getMessageMeta(message: QueuedMessageRow): string {
   @apply flex shrink-0 items-center gap-1 self-center;
 }
 
-.queued-row-quote {
+.queued-row-quote,
+.queued-row-retry {
   @apply border px-2.5 py-1 text-xs font-medium transition;
   border-radius: var(--ui-radius-control);
   border-color: color-mix(in srgb, var(--ui-accent) 24%, var(--ui-border-subtle));
@@ -186,7 +223,8 @@ function getMessageMeta(message: QueuedMessageRow): string {
   color: var(--ui-accent);
 }
 
-.queued-row-quote:hover {
+.queued-row-quote:hover,
+.queued-row-retry:hover {
   border-color: color-mix(in srgb, var(--ui-accent) 36%, var(--ui-border-strong));
   background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-bg-surface));
 }
@@ -216,6 +254,10 @@ function getMessageMeta(message: QueuedMessageRow): string {
   }
 
   .queued-row-quote {
+    @apply px-2 py-0.5;
+  }
+
+  .queued-row-retry {
     @apply px-2 py-0.5;
   }
 }

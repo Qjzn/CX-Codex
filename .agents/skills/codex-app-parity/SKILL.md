@@ -484,3 +484,316 @@ After each feature implementation session that uses this skill:
 - Windows Codex `26.707.12708` retains elapsed time for one stable working timeline item, not merely for any consecutive renderer state that happens to be marked running.
 - CX-Codex therefore needs a stable activity identity across thinking, execution, and streaming labels. A new local submission or different authoritative `turnId` starts a new timer, while a transient overlay gap within the same activity retains the original timestamp.
 - Fresh terminal snapshots settle only local optimistic feedback whose creation time is no later than the authoritative completion time. The visual bubble stays until history reconciliation, preventing both false running state and a transient message disappearance without allowing an older completion to affect a newer follow-up.
+
+## Findings: Task-Pet Canonical Conversation Route (2026-07-18)
+
+- Windows Codex avatar rows preserve one exact `localConversationId` through `open-in-main-window`; the host location is not allowed to reinterpret that identity as a home-page navigation.
+- CX-Codex Android connection setup accepts addresses copied from a browser, so the native shell must remove an existing hash route and query before composing `/#/thread/:threadId`. Appending to a saved `/#/` creates `#/#/thread/...`, which Vue correctly treats as an unknown route and redirects home.
+- Exact-thread regression must cover both warm and cold Activity launches with bare-host, trailing-slash, home-hash, and existing-thread URLs. Source-only lifecycle checks are insufficient for this cross-boundary behavior.
+
+## Findings: Foreground Task Recovery Feedback (2026-07-18)
+
+- Windows Codex keeps connection recovery compact: connecting and restarting use one small spinner, while the conversation's stable working timeline continues to own elapsed time.
+- CX-Codex foreground recovery follows the same presentation hierarchy. Android or browser resume temporarily marks the existing conversation-tail activity as `正在恢复任务`; it does not mount a second loader or replace the activity identity and start timestamp.
+- A matching realtime execution event or runtime snapshot settles the transient feedback after a 500 ms minimum visible interval. An 8-second visual timeout prevents a failed recovery check from becoming a new indefinite loading state, and reduced-motion keeps the text while disabling rotation.
+
+## Findings: Mobile Resume, Unread, and Queue Convergence (2026-07-18)
+
+- Windows Codex keeps queued follow-ups in a separate composer-adjacent queue signal; the presence of queued text is not evidence that the preceding turn is still running. CX-Codex must clear terminal turn residue from an accepted Runtime Store snapshot before advancing the queue.
+- Sidebar completion attention should be driven by a terminal conversation event, not by generic thread `updatedAt` changes. CX-Codex persists only event-backed unread completion state so token usage, renames, first startup, and cross-client list reconciliation cannot mark every row unread.
+- On mobile resume, CX-Codex applies the lightweight Runtime Store snapshot before a potentially slow full-history RPC. The visible activity timer uses the earlier authoritative `lastStartedAtIso`, while cached messages remain in place until history reconciliation completes.
+- Item-level progress remains owned by the realtime activity stream. `item/completed` and generic thread metadata changes should not force repeated full-history reads; turn/thread terminal events remain the authoritative history reconciliation boundary.
+
+## Findings: Paused Queue Failure Recovery (2026-07-18)
+
+- Windows Codex `26.707.91948` keeps a queued follow-up in place when it cannot be sent, marks the queue as paused, and offers retry, edit, and delete actions. Its visible remedy explicitly says one of those actions is required before later queued messages continue.
+- CX-Codex follows the same conservative state machine: automatic queue submission never loops on a failed first item. Manual retry resets only that item, editing returns it to the composer, and deletion releases the next item.
+- Because multiple 7420 pages can observe the same terminal event, each CX-Codex queued item also keeps one stable `clientMessageId`. Runtime idempotency prevents duplicate execution, while storage events synchronize display state without making background tabs auto-run the queue.
+- Dense output events keep only their newest sequence outside Vue reactive state while content deltas are batch-rendered. This preserves stale-snapshot protection without rerendering the conversation chrome for every token, and terminal state is never revived by a delayed delta.
+- Durable outbox recovery restores the existing message bubble before awaiting runtime lookup or resume. Mobile re-entry therefore shows immediate `等待网络` feedback and later updates the same bubble, instead of leaving the conversation visually blank during bounded recovery.
+
+## Findings: Recent Project Ordering (2026-07-18)
+
+- Windows Codex `26.707.91948` exposes `sidebarElectron.groupByMenu.recentProjects` and a `sidebarElectron.sortMenu.updated` choice alongside manual ordering, confirming that project groups may be organized by their latest conversation activity rather than only by saved workspace-root order.
+- The same sidebar exposes explicit project pinning. CX-Codex therefore keeps pinned projects first by pin rank, sorts every unpinned project by its newest thread timestamp, and uses the incoming order only as a stable tie-breaker.
+- Empty workspace roots remain visible after projects with conversation activity; recent ordering is a presentation rule and does not rewrite persisted workspace-root order.
+
+## Findings: Per-turn Activity Timer Boundary (2026-07-18)
+
+- Windows Codex `26.707.12708` models working duration on a per-turn timeline item and initializes the reasoning timer when that turn becomes active. A later turn must not inherit the previous turn's start timestamp.
+- CX-Codex Runtime Store writes a fresh provisional `lastStartedAtIso` at `markStarting`; the authoritative `turn/started` notification may refine that timestamp without restarting the same turn's visible timer.
+- Renderer recovery accepts an older authoritative start only when it is newer than `lastCompletedAtIso`. This rejects provably stale prior-turn timestamps while preserving legitimate tasks that have continued in the background for an hour or longer.
+
+## Findings: Server-first New-thread Acceptance (2026-07-18)
+
+- Windows Codex creates the authoritative conversation before its first turn, but its desktop renderer is not subject to Android WebView suspension between those two operations.
+- CX-Codex mobile must dispatch the idempotent `/codex-api/runtime/send` request before any fallible renderer-side `thread/start`. The 7420 server persists `pending_start` under `clientMessageId` first, then creates the thread and starts the turn after the HTTP body has been accepted.
+- The home route keeps the existing memory-only provisional conversation during that work. Once the Runtime request returns or foreground recovery finds its thread id, the authoritative conversation adopts the same optimistic message id without duplicating the prompt.
+
+## Findings: Android Completion Notification Separation (2026-07-18)
+
+- Codex desktop keeps passive connection/activity state visually quiet while completion attention is a separate event. A persistent host-status surface should not own the user's completion alert semantics.
+- CX-Codex Android therefore keeps the foreground task-monitor notification on a low-importance channel and emits completion through a distinct high-importance channel. Android channel importance is immutable after creation, so correcting an older low-importance design requires a new channel id.
+- Completion notifications open the exact owning thread and prefer the Runtime Store's bounded latest assistant reply over a generic completed label.
+
+## Findings: Overlay-independent Android Task Monitoring (2026-07-18)
+
+- Codex desktop's avatar overlay is a presentation surface over durable conversation state; closing or hiding the mascot does not define whether the underlying task continues.
+- CX-Codex Android follows that separation by keeping its existing foreground monitor alive while active tasks remain, even when the pet overlay is disabled or `SYSTEM_ALERT_WINDOW` is unavailable. The overlay preference controls only the visual window.
+- Once no active task remains and no overlay should be shown, the service stops itself. This preserves background completion alerts without turning the task monitor into an always-on battery cost.
+
+## Findings: Provisional Android New-thread Tracking (2026-07-18)
+
+- Windows Codex binds optimistic first-turn feedback and the later authoritative conversation to the same client user-message id. Android must preserve that identity even if its WebView is suspended before the new conversation id returns.
+- CX-Codex therefore registers the provisional `clientMessageId` with the native foreground monitor immediately after the durable browser outbox write and before `/runtime/send`. The native service resolves `/codex-api/runtime/request` until a `threadId` exists, then switches the same task row to batched runtime snapshot polling.
+- A provisional row cannot open or reply to a nonexistent conversation. It becomes actionable only after resolution, and the next active-task snapshot removes it if the renderer definitively fails or abandons the send.
+
+## Findings: Contextual Android Completion Permission (2026-07-18)
+
+- Windows Codex `26.707.12708` exposes turn-completion notifications as an independent setting and provides an explicit `Enable notifications` onboarding action; completion attention is not coupled to ordinary composer dispatch.
+- Android 13 adds a runtime permission boundary that the desktop host does not have. CX-Codex therefore requests it only after a real message has durable delivery ownership and `/runtime/send` has already been dispatched; a queued follow-up uses its durable queue write because the current task is already running.
+- The automatic prompt is recorded in native app storage before launch so denial cannot produce repeated prompts across WebView reloads or server-address changes. The Settings action remains an explicit manual recovery path, and the native bridge resolves only after Android reports the user's decision.
+- Like Codex desktop's explicit system-settings action, CX-Codex opens the app-specific Android notification settings after a permanent denial or system-level disable and refreshes permission state when the Activity regains focus; automatic task submission never opens Settings.
+
+## Findings: Bounded Android Screen-off Monitoring (2026-07-18)
+
+- Codex desktop keeps task execution in a persistent host process, but its renderer parity does not imply that Android polling survives screen-off CPU suspension or deep Doze.
+- CX-Codex Android therefore holds a non-reference-counted partial wake lock only while native task records are active. Each visible state, event-sequence, or reply update renews a 30-minute progress window; no active task releases it immediately, and a stalled task cannot hold it forever.
+- Deep Doze still suspends ordinary network access and ignores wake locks. The mobile Settings surface exposes the current battery-optimization allowlist state and opens only Android's general manual settings; task submission never requests a direct exemption or claims guaranteed real-time delivery without a push channel.
+
+## Findings: Long-task No-progress Attention (2026-07-18)
+
+- Windows Codex `26.707.12708` keeps long-running work as one stable timeline item (`workingFor` / `workedFor`) and exposes turn-completion notification policy separately. Elapsed time is status, not proof of failure.
+- Its avatar notification tray keeps open, dismiss, reply, and follow-up actions tied to the exact owning conversation. CX-Codex Android therefore treats ten minutes without progress as a separate actionable notification, never as an execution-state mutation.
+- One reminder is allowed per unchanged progress timestamp and the deduplication marker persists with the native task record. A real state, event-sequence, detail, or reply update removes the stale reminder and starts a new window; completion cancels it and emits the existing terminal notification with the latest reply.
+
+## Findings: Native Terminal Ownership Across Frontend Omission (2026-07-18)
+
+- Windows Codex `26.707.91948` routes an avatar notification action to the exact owning conversation and keeps notification open/action separate from dismiss. Renderer omission therefore cannot be interpreted as task deletion or read acknowledgement.
+- CX-Codex Android retains running, waiting, and unread-completed native records when a later WebView snapshot omits them. The foreground monitor stops only after authoritative terminal reconciliation leaves no active task, independent of whether the overlay is visible.
+- A threadless provisional record has a separate non-acceptance boundary: only an omitted record with three consecutive authoritative request lookups returning not found is removed. Network failures remain recoverable and cannot manufacture either completion or deletion.
+- Native terminal settlement removes the stale renderer-active preference before notifying, so a later service restart cannot resurrect the completed task as running.
+
+## Findings: Same-conversation Native Turn Generation (2026-07-18)
+
+- Windows Codex `26.707.12708` keeps working duration on a stable per-turn timeline item and correlates outgoing work with a client user-message identity. Conversation identity alone is therefore insufficient to decide which turn a delayed terminal signal owns.
+- CX-Codex sends the current renderer activity id, activity start time, and Runtime Store event sequence with every Android task snapshot. A different activity in the same thread is accepted only when its event sequence or start time proves that it is newer.
+- Each native poll retains the generation present when the request began. If the WebView starts a follow-up before that response returns, the result is discarded before it can change state, overwrite the latest reply, clear active persistence, or emit completion attention.
+- Older persisted records without generation metadata remain readable and converge through the existing event-sequence checks; generation isolation becomes strict as soon as a current renderer snapshot is available.
+
+## Findings: Native Event-woken Reply Reconciliation (2026-07-18)
+
+- Windows Codex `26.707.12708` drives working and completion surfaces from host notifications instead of waiting for a renderer polling interval. Android should likewise use events for wake timing while keeping one authoritative state reader.
+- CX-Codex Android listens to the existing authenticated SSE notification route only while tasks are active. Relevant assistant, request, turn, and thread events wake the existing Runtime Store snapshot path; event payloads never mutate task state directly.
+- Reply deltas are throttled to a 750 ms wake cadence, terminal signals bypass the throttle, and an event received during a poll retains exactly one immediate follow-up. This improves visible reply freshness without parallel request storms.
+- SSE is an optimization rather than a second authority. A 1.5-second reconnect and the existing 3-second batch poll preserve convergence through proxy or stream failures, and deep Android Doze still requires a future high-priority push channel for guaranteed timely delivery.
+
+## Findings: Quiet Native Monitor Diagnostics (2026-07-19)
+
+- Windows Codex keeps connection and completion feedback attached to compact task surfaces; transport internals are not promoted into persistent conversation chrome.
+- CX-Codex Android therefore exposes sanitized task-monitor evidence through the native bridge without adding another always-visible status card. The bounded snapshot records only lifecycle state, counts, timestamps, HTTP status, and notification result—never message text, conversation ids, or server addresses.
+- SSE remains a wake optimization and Runtime Store snapshots remain authoritative. Diagnostics must observe that path without mutating task state, triggering retries, or becoming a second source of completion truth.
+
+## Findings: Android Completion Channel Recovery (2026-07-19)
+
+- Codex desktop `26.707.91948` presents turn-completion notifications as their own setting and retains an explicit `Enable notifications` action; task completion is not inferred from a generic host-status permission.
+- Android 8+ lets users disable an individual channel while leaving app-level notifications allowed. CX-Codex must therefore report the `cx_codex_task_completion_v2` channel separately and reject a false successful delivery when its importance is `IMPORTANCE_NONE`.
+- Manual recovery opens the exact task-completion channel settings when only that channel is blocked. Automatic message submission remains interruption-free and never navigates to system settings.
+
+## Findings: Periodic Long-task Review (2026-07-19)
+
+- Codex desktop `26.707.91948` keeps elapsed work in the stable `workingFor` / `workedFor` timeline state; elapsed time alone neither marks failure nor stops execution.
+- Its avatar notification actions remain bound to the owning conversation and support opening, replying, and dismissing independently. Android reminders must therefore stay actionable without mutating the native task state.
+- CX-Codex now reminds after the first 10-minute silent window and then at a bounded 20-minute review cadence. The actual reminder time persists across service restarts, progress resets the cadence, and completion replaces the reminder with the terminal notification.
+
+## Findings: Android Default-network Recovery Wake (2026-07-19)
+
+- Codex desktop `26.707.91948` presents app-server reconnecting/restarting as bounded connection state while retaining the same conversation task; transport recovery does not directly mutate authoritative task state.
+- Android default-network availability is therefore only a wake signal. CX-Codex immediately schedules the existing Runtime Store snapshot and rebuilds SSE after a known network recovery or handoff, while the snapshot remains the sole task-state authority.
+- The service records its initial default network to suppress registration noise, coalesces behind an in-flight snapshot, and unregisters the callback on destruction. Network recovery counters and timestamps remain content-free diagnostics for physical-device latency review.
+
+## Findings: Durable Native Direct-reply Confirmation (2026-07-19)
+
+- Windows Codex `26.707.12708` binds response visibility to `clientUserMessageId` and renders reconnecting attempts as explicit bounded progress. A renderer/network exception is not authoritative proof that the user's message was rejected.
+- CX-Codex Android therefore restores every dispatched task-pet reply from its persisted thread, draft, and stable `clientMessageId`, then queries `/runtime/request` before returning to thread-snapshot monitoring. Service recreation and network recovery resume confirmation without automatically replaying the prompt.
+- Running or settled authority clears the reply attempt. A definite failure, or three consecutive successful not-found lookups, preserves the full draft as a non-active manual-retry row, releases SSE/poll/wake-lock ownership, emits a retry notification, and assigns a fresh id only when the user retries.
+
+## Findings: Existing-thread Native Ownership at Submit (2026-07-19)
+
+- Windows Codex `26.707.91948` creates outgoing conversation work under a stable `clientUserMessageId`, returns after the optimistic turn is owned by its persistent host, and marks first-response visibility against that same id. It does not wait for a renderer debounce before host ownership exists.
+- CX-Codex existing-thread sends must therefore hand the durable `clientMessageId` to the Android foreground monitor immediately after optimistic activity is established. The normal 180 ms renderer watcher remains only a later convergence path, and a submit-time handoff may pass an older bridge call without delaying `/runtime/send`.
+- Because an existing thread already has a terminal snapshot from its preceding turn, the native monitor must confirm the new Runtime request before polling that thread. Persisted request acceptance prevents service recreation from either rechecking the old turn as new work or falsely completing the fresh send.
+
+## Findings: Deep-Doze Terminal Wake Authority (2026-07-19)
+
+- Codex desktop `26.707.91948` keeps turn-completion notification policy independent from passive host status, and avatar notification actions remain bound to the exact `localConversationId`. A remote wake transport must preserve that task identity instead of broadcasting generic activity.
+- CX-Codex FCM therefore targets only Android registrations subscribed to the terminal event's thread and carries only identity, method, and event sequence. Prompt and assistant content stay on the authenticated 7420 snapshot path.
+- FCM is timing authority only: a delivered high-priority terminal message may wake the existing Android foreground monitor, but Runtime Store snapshots remain state authority and the existing per-task completion notification remains attention authority. Downgraded, duplicate, unrelated, or unconfigured pushes cannot settle a task.
+- Device-side dedupe becomes durable only after the foreground monitor accepts the wake. A system-rejected background start records failure but cannot claim the event sequence, so a later delivery retains one recovery opportunity; successful concurrent duplicates still converge by thread and sequence.
+
+## Findings: Non-blocking Stale Sidebar Search (2026-07-19)
+
+- Windows Codex `26.707.12708` keeps sidebar thread identity in dedicated signal/key modules and lets `AppPrefetchImpl` start independent `startup_prefetch` queries without replacing the rendered sidebar with one blocking full-list barrier.
+- CX-Codex therefore keeps persisted `thread/list` pages renderable after structural invalidation or App Server restart, marks them stale, and reconciles them in the background. Cache generations prevent a response started before the structural change from overwriting newer authority.
+- A stale server search index extends the currently loaded local title filter instead of replacing it. This keeps just-created or just-renamed local rows discoverable while the full active/archived index rebuild remains non-blocking.
+- First-screen supplemental rows and later cursor pages converge by stable thread identity before grouping, retaining the first visible row instead of rendering duplicate sidebar entries.
+
+## Findings: Local Mobile Response Review (2026-07-19)
+
+- Windows Codex `26.707.91948` implements `turn_first_response_visible` as a timing span with `request_dispatched`, `turn_started`, `first_data_received`, and `first_response_visible` marks. Its extracted renderer does not expose those latency values as a user-facing settings or diagnostics panel.
+- CX-Codex keeps the desktop correlation stages but exposes its device-local rolling summary only on the optional diagnostics route because mobile send/return latency needs periodic field review. The main conversation surface remains quiet, and the stored records remain timing-and-identifier only.
+- A stage needs five local samples before P95 can mark it on target or needing review. Crossing a review target is diagnostic evidence, not task failure or runtime authority; task state still comes from Runtime Store and Android uses the existing native monitor path.
+
+## Findings: Native FCM Token Recovery Ownership (2026-07-19)
+
+- Codex desktop owns completion attention in a persistent host and does not depend on a renderer surviving long enough to reacquire a mobile push token. Android must move that recovery boundary into the native foreground monitor whenever an active task exists.
+- CX-Codex now retries a missing Firebase token from native monitor startup and later authoritative snapshot convergence. A persisted 30-second token-attempt timestamp and one process-wide in-flight guard prevent task updates or service recreation from producing a request storm.
+- Token recovery changes only wake-channel readiness. Existing Runtime Store snapshots remain task authority, active-thread registration remains content-free, and builds without Firebase configuration do not start repeated token work.
+
+## Findings: Persistent Latest-reply Authority (2026-07-19)
+
+- Codex desktop keeps response visibility under its persistent host and correlates first data with the active turn; recreating a renderer is not a valid reason to discard already observed assistant progress.
+- CX-Codex therefore serves both single and Android batch runtime snapshots through the persisted local recovery path. A restarted bridge restores the bounded reply accumulator before applying the next event, while SSE remains only a wake signal.
+- The task-pet label means the newest assistant reply: streaming chunks retain separator continuity, and a completed reply longer than the mobile cache keeps its latest tail. Terminal settlement cannot replace a visible conclusion with the beginning of the same response.
+- A turn may emit multiple user-visible assistant items, including commentary followed by a final answer. CX-Codex persists the owning agent item id so the first delta of a newer item replaces the previous message immediately, while later deltas for that same item continue the bounded accumulator.
+- Completion diagnostics record only whether the notification body came from the authoritative latest reply, a generic terminal detail, or a reply-retry prompt. This keeps field verification possible without copying assistant content into diagnostics or delaying the terminal wake path.
+
+## Findings: Durable Acceptance and Turn-start Timing (2026-07-19)
+
+- Codex desktop distinguishes the request-dispatched span from `turn_started` and first-response visibility. A successful host response is already meaningful acceptance even when the final turn identity arrives on a later notification.
+- CX-Codex therefore records a successful `/runtime/send` 200/202 response as server acknowledgement immediately, including the durable `starting` and `pending_start` states. Later Runtime events enrich the same timing row with turn identity and authoritative start time instead of moving the acknowledgement timestamp.
+- A clean empty thread is a valid cold first-turn surface. Mobile parity regression recognizes the rendered empty state plus an enabled composer without requiring a warm-up exchange or fabricating a zero-message cache entry.
+
+## Findings: Activity-independent Mobile Task Ownership (2026-07-19)
+
+- Codex desktop keeps active turns in a persistent host outside any one renderer window. Closing or recreating a renderer is not task cancellation and does not erase completion attention.
+- CX-Codex Android therefore keeps its foreground task-monitor Service independent from the Activity task with `stopWithTask=false`. A recent-task removal records evidence but does not stop monitoring; a genuine process recreation uses `START_STICKY` and restores persisted tasks before rebuilding polling and SSE.
+- Lifecycle diagnostics expose only counts, timestamps, and a bounded start reason. They do not contain server addresses, thread identities, prompts, or replies, and they never initiate recovery themselves.
+
+## Findings: Device-confirmed Deep-Doze Completion Wake (2026-07-19)
+
+- Windows Codex `26.707.12708` keeps execution and completion attention in a persistent host; a transport provider accepting a signal is not equivalent to the host applying terminal conversation state or attempting notification delivery.
+- CX-Codex therefore retains each FCM-accepted terminal wake in the Runtime Store outbox until the owning Android app instance reports an observed event sequence after authoritative terminal reconciliation and its completion-notification attempt. The acknowledgement contains only app-instance, thread, and event-sequence identity.
+- Android persists separate claimed, locally reconciled, and server-acknowledged boundaries. A monitor killed after claim but before snapshot may be restarted by the same high-priority event; once local reconciliation is durable, redelivery retries only the authenticated acknowledgement and cannot duplicate completion attention.
+- FCM remains timing authority, Runtime Store remains state authority, and the local completion channel remains attention authority. Physical Doze verification must time all three through terminal-to-notification and terminal-to-device-acknowledgement evidence.
+
+## Findings: Trailing-edge Native Reply Refresh (2026-07-19)
+
+- Windows Codex `26.707.12708` records `first_data_received` separately from `first_response_visible` and refreshes avatar notification rows from persistent-host conversation state. Receiving a stream event alone is therefore not proof that current reply text became visible.
+- CX-Codex Android keeps SSE as a wake signal and Runtime Store snapshots as reply authority, but a reply delta coalesced inside the 750 ms leading-edge window must retain one trailing snapshot wake. Otherwise the last chunk can wait for the 3-second fallback poll when no later event arrives.
+- Physical reply verification must record content-free event, snapshot-application, and expanded-overlay-render boundaries with covering event sequences. A strict latency gate may fail without copying the assistant reply into diagnostics or making the event stream a second state source.
+
+## Findings: Token-independent Claimed-push Acknowledgement (2026-07-19)
+
+- Windows Codex `26.707.12708` keeps avatar activity under persistent conversation state and exposes turn-completion notification policy independently from transient renderer state. A temporary local transport credential gap is therefore not proof that already applied completion attention should be forgotten.
+- CX-Codex keeps the normal stored-token path as an early acknowledgement watermark, but an FCM event already claimed by the native monitor also owns a durable acknowledgement even if the cached token is temporarily absent during process recovery. Registration recovery later retries that persisted work.
+- A normal completion with neither a stored token, a claimed push, nor existing pending work remains a no-op. This prevents builds without Firebase configuration from accumulating acknowledgement rows while preserving the device-confirmed outbox boundary for real push deliveries.
+
+## Findings: Durable Exact-thread Notification Navigation (2026-07-19)
+
+- Windows Codex `26.707.12708` avatar notification rows retain their local conversation identity and open the exact owning conversation through the persistent host.
+- CX-Codex Android therefore persists the notification or overlay thread target before consuming the one-shot Intent, including before first-run server setup, and replays it after Activity, WebView, or process recreation.
+- Dispatching `loadUrl` is not acknowledgement. Only Vue confirming the exact rendered thread with visible conversation content clears the pending target; another, empty, failed, or still-switching thread cannot clear it.
+
+## Findings: Visible Navigation and Terminal Read Are Separate (2026-07-19)
+
+- Windows Codex `26.707.12708` keeps avatar notification activation and dismissal as separate actions around the owning `localConversationId`; opening a live activity is not a request to keep reopening it until the turn stops.
+- CX-Codex therefore acknowledges a persisted Android navigation target as soon as the exact thread has visible messages, even while that task is active. This prevents an active or no-progress notification from stealing navigation again on every Activity resume.
+- Unread completion cleanup remains stricter: the same visible-content boundary must be met and the Vue task must no longer be running. Native state still refuses to remove any record that is not authoritatively completed.
+
+## Findings: Terminal-before-registration Push Catch-up (2026-07-19)
+
+- Codex desktop keeps terminal attention in a persistent host, so a renderer or credential becoming ready slightly after task completion does not erase the completed turn. Android FCM registration must preserve that ownership boundary when token acquisition or active-thread subscription loses the race with the terminal event.
+- CX-Codex now checks each newly registered active thread against its persisted Runtime Store snapshot. Only a snapshot that is still terminal and whose last applied event is the matching terminal event may enter the existing content-free outbox for that device.
+- A newer running/starting/waiting snapshot rejects the older terminal event. Re-registration, a simultaneous terminal callback, an earlier device acknowledgement, or service restart still converges through the existing delivery identity and acknowledgement ledger instead of creating a second wake.
+
+## Findings: Doze-safe Periodic Long-task Review (2026-07-19)
+
+- Windows Codex `26.707.12708` keeps long-running work under persistent `workingFor` / `workedFor` conversation state; elapsed time alone is neither failure nor authority to stop the task. Android periodic attention must preserve that boundary.
+- CX-Codex therefore schedules an inexact local `setAndAllowWhileIdle` review from each persisted active-task snapshot. The review only posts attention for the exact owning conversation and advances the persisted reminder watermark; it never performs network work, invents Runtime state, or changes a task to failed/completed.
+- When the foreground monitor is alive, the alarm delegates to its in-memory reconciliation. After ordinary process death, a non-exported receiver performs the same persisted dedupe directly and schedules the next review without trying to restart a killed foreground service. Progress and terminal snapshots cancel or recalculate attention; Doze delivery remains approximate rather than a false exact-time promise.
+
+## Findings: Deep-Doze Push Readiness Proof (2026-07-19)
+
+- Codex desktop owns execution and completion attention inside one installed persistent host; Android FCM splits that ownership across an APK Firebase client, a 7420 service credential, a registered device, and an active conversation subscription. Source support alone is not parity evidence that the wake channel is ready.
+- CX-Codex therefore treats configuration, device registration, and active subscription as separate readiness gates. Android and server Firebase projects must match, the running server must have actually loaded its credential, and a real task subscription must exist before deep-Doze terminal delivery is called ready.
+- Readiness diagnostics remain content-free: they expose only bounded states/counts and never print the private key, service-account email, device token, credential path, or Firebase project identity. Missing configuration is actionable deployment evidence, not a task failure or Runtime state transition.
+
+## Findings: Immediate Active-thread Runtime Ownership (2026-07-19)
+
+- Windows Codex `26.707.12708` was re-extracted from the installed ASAR. `app-server-manager-signals-Csn7-AWv.js` classifies `thread/start`, `turn/start`, and `turn/steer` as critical requests, commits the optimistic turn before `markRequestDispatched`, and tracks `request_dispatched` separately inside `turn_first_response_visible`.
+- CX-Codex therefore must not place a fallible Runtime snapshot read between its durable browser outbox/native handoff and `/runtime/send`, even when the current thread is already active. Submit-time activity is sufficient to preserve the previous running surface if the new send fails; Runtime Store and App Server remain execution authority.
+- A queued follow-up promoted through `引用` is another immediate submission boundary, not only a queue edit. It forwards the same timing and Android native-monitor callbacks as the composer path so locking the screen directly after that action cannot leave ownership dependent on the later renderer watcher.
+- Promotion is a one-way ownership transfer after synchronous rejection guards: remove the queue owner before awaiting the durable send, then let its outgoing outbox bubble own offline reconnect, edit, and retry. Retaining both owners after a transport failure can duplicate the same prompt when connectivity returns.
+
+## Findings: Complete Internal-submit Native Handoff (2026-07-19)
+
+- Windows Codex `26.707.12708` keeps every outgoing turn under the persistent host's stable client user-message identity; retry or follow-up provenance does not make renderer lifetime the execution owner.
+- CX-Codex therefore installs submit lifecycle callbacks once at the App-to-state boundary. Direct composer calls may override them, while failed-message retry, failed-new-thread retry, dictation rollback resend, and automatic queue promotion inherit the same native handoff and post-dispatch notification boundary.
+- Conservative queue failure semantics remain separate from Android monitoring identity. During automatic promotion, the queue row stays the durable retry owner until acceptance, but its stable `clientMessageId` is exposed to the native task snapshot before the first await so the previous turn's terminal snapshot cannot settle the new work.
+
+## Findings: Visible Reply Cadence and Provisional Durable Acceptance (2026-07-19)
+
+- Windows Codex `26.707.12708` separates `request_dispatched`, `turn_started`, `first_data_received`, and `first_response_visible`. CX-Codex must likewise treat a durable threadless HTTP 202 as server acceptance without pretending that thread or turn startup has already completed.
+- The provisional new-thread timing row remains bound to its stable client message id. A 202 marks server acknowledgement against `__new-thread__`, later thread binding rebinds that same row, and Runtime events add the authoritative turn identity/start time without moving the original acknowledgement timestamp.
+- Browser reply rendering keeps the first assistant delta immediate, batches later deltas for at most 48 ms, and force-flushes pending tails before item/turn completion. On Android, Runtime Store remains reply authority while the expanded overlay uses a 250 ms event-wake cadence; collapsed/background monitoring stays at 750 ms, retains one trailing poll, and lets terminal events bypass throttling.
+- With more active tasks than visible rows, receiving new text is not enough: the authoritative reply with the newest global event sequence promotes its owning task to the first row. Renderer snapshots are then ordered by the native progress timestamp so stale thread-list order cannot hide that reply again.
+- Native diagnostics distinguish construction from visibility. A matching reply row increments render evidence only while the panel is expanded, shown, and nontransparent; a collapsed-to-expanded transition waits until its opening animation completes, so physical-device parity cannot pass on a hidden prebuilt row.
+
+## Findings: Service-recreated Reply Visibility and Terminal Commit Boundaries (2026-07-19)
+
+- Windows Codex `26.707.12708` keeps avatar activity and turn-completion attention under one persistent host. Recreating a renderer cannot turn an already observed reply back into unseen data or revive a terminal activity as running.
+- CX-Codex Android therefore persists the exact content-free pending reply-render identity and covering global event sequence while the task panel is collapsed. Service recreation restores that boundary only when the same persisted task still owns a nonempty reply and covers the sequence; visibility is committed after the expanded panel is actually shown.
+- Content-free reply, snapshot, terminal, and notification counters remain monotonic across Service recreation so a physical process-death run can compare evidence collected before and after recovery.
+- Terminal attention follows a per-task durable commit boundary: the native completed snapshot and stale frontend-active removal are synchronously committed before notification delivery. Multiple tasks may settle in one batch, but process death after one notification cannot duplicate that task or erase later tasks; attempted and posted counters let the device verifier require each expected completion.
+
+## Findings: Recovering Frontend Reply Monotonicity (2026-07-19)
+
+- Codex desktop keeps already observed assistant progress under persistent host authority. A renderer that has restored activity metadata before message history cannot make the host forget a visible reply.
+- CX-Codex Android therefore retains its persisted nonempty latest reply when an empty WebView snapshot belongs to the same task generation and carries an equal or absent event sequence. This covers renderer recovery without making the frontend a second reply authority.
+- A higher event sequence or different task generation remains allowed to clear the old reply. New turns cannot inherit stale assistant content merely because both surfaces share a conversation id.
+
+## Findings: Native Settled-state Monotonicity (2026-07-19)
+
+- Windows Codex `26.707.91948` derives avatar-session status from persistent local-conversation state and maps only the current host-owned turn to running, waiting, failed, review, or idle. A newly recreated renderer does not own a reverse transition from settled back to active.
+- CX-Codex Android therefore treats native `completed` and manual `retry` records as absorbing for every same-generation frontend `running` or `waiting` snapshot. Rejection also removes the exact stale frontend-active preference row so Service recreation cannot retry the regression.
+- Event sequence is an ordering cursor, not a generation identity: the same turn may emit higher-sequence token or status metadata after its assistant item completes. Only a provably different `turnId`/activity generation remains eligible to become active, preserving legitimate follow-ups without letting recovery ordering duplicate monitoring or completion attention.
+
+## Findings: Cross-source Task-generation Ordering (2026-07-19)
+
+- Windows Codex `26.707.91948` keeps avatar activity rows under persistent `localConversationId` plus per-turn `turnKey`; conversation identity and turn freshness are separate host-owned boundaries.
+- CX-Codex frontend task-pet payloads intentionally combine renderer activity identity/time with the independent Runtime Store event cursor. During recovery or parallel-page convergence, an older activity can therefore temporarily carry a newer cursor; event sequence alone is not proof that the activity itself is newer.
+- Android different-generation reconciliation uses known `startedAtMs` values before event sequence. A later start wins, an earlier start loses even with a newer cursor, equal starts use sequence as a tie-breaker, and sequence remains the compatibility fallback only when both starts are unknown.
+
+## Findings: Reply-content Version Ownership (2026-07-19)
+
+- Windows Codex `26.707.91948` keeps avatar reply/session content under persistent host-owned conversation and turn state; a renderer-local message cache is not allowed to manufacture host freshness for older text.
+- CX-Codex Runtime Store therefore versions `latestReply` with a dedicated `latestReplyEventSeq`. Generic task metadata may advance `lastEventSeq` without advancing the reply pair, and a new turn clears both reply text and its version.
+- Renderer-local live/history text remains a fast provisional fallback but crosses the Android bridge with reply version `0`. The native monitor may seed an empty row from it, but once a versioned native reply exists, only a strictly newer authoritative reply version or a different task generation may replace it.
+
+## Findings: Archived-thread Exclusion and Provisional Send Failure (2026-07-20)
+
+- Windows Codex `26.707.12708` keeps archive operations in a dedicated archive context: active-thread listing is separate from `thread/unarchive`, and archived conversation ids are suppressed from the active store after archive.
+- In `app-server-manager-signals-Csn7-AWv.js`, `thread/start`, `turn/start`, and `turn/steer` are critical requests. The first-turn optimistic path resolves only after its `beforeSendRequest` dispatch boundary, while background failure remains a separate rejected outcome.
+- `request_dispatched`, `turn_started`, `first_data_received`, and `first_response_visible` remain separate timing marks. A provisional HTTP acceptance may show confirmation, but only an authoritative running/settled request may remove the durable outbox entry and present `已发送`.
+- CX-Codex active-list augmentation must inspect each supplemental thread's session path and reject the `archived_sessions` segment. A pre-start completed `thread/read` older than `lastStartedAtIso` is history, not evidence that the new turn completed.
+
+## Findings: Compact Latest-reply Task Preview (2026-07-20)
+
+- Windows Codex `26.707.12708` keeps avatar activity notifications bound to their exact `localConversationId`, derives compact copy from the latest turn items, and opens that conversation through `open-in-main-window`.
+- CX-Codex keeps the existing multi-task tray but adds a collapsed single-reply preview: the newest authoritative reply is primary, conversation/project context is secondary, and tapping the preview opens the exact `threadId`.
+- The idle state remains the existing 48 dp bubble. A running task restores the pet plus compact reply preview, while tapping the mascot still exposes the full tray for multiple tasks and reply actions.
+- Visible-reply diagnostics accept either an actually shown expanded row or an actually shown compact preview; hidden prebuilt views remain ineligible.
+
+## Findings: Conversation Viewport Ownership and Status Layering (2026-07-20)
+
+- The Codex desktop code extracted from the installed `26.707.12708` Windows package uses one bottom-distance scroll owner: a 24 px bottom threshold, `overflow-anchor: none`, resize-aware follow behavior, and a centered return-to-bottom control whenever the user has moved away from the live tail.
+- CX-Codex follows the same ownership boundary. User scroll-away disables automatic following, returning within 24 px restores it, and the return action remains available even when no new output arrived; pending output may change the label but does not own button visibility.
+- Runtime state is split by scope instead of repeated in every surface: the thread header owns compact connection/recovery, the conversation tail owns task progress, and each outgoing message owns delivery state. The former desktop thread-level phase rail was removed because it duplicated the tail state and reduced message space.
+- Browser parity evidence covered 1440x900 and 393x852. At mobile width, moving 420 px away from the tail exposed the centered return action while the composer remained fixed and usable.
+
+## Findings: Local Project Identity Mapping (2026-07-23)
+
+- Windows Codex `26.715.72359` stores `project-order` and `pinned-project-ids` as project identities rather than filesystem paths. Local identities resolve through `local-projects`, whose records contain `id`, `name`, and `rootPaths`.
+- `electron-saved-workspace-roots` remains a path list. CX-Codex must resolve local project identities to roots for its path-based sidebar model, use the local project name as the visible label, and map reordered roots back to identities before writing global state.
+- Remote or otherwise unresolved project identities must remain preserved on write but stay out of the local filesystem sidebar; rendering them as `local-*` or UUID project groups is a data-model leak.

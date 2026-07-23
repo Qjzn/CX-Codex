@@ -11,8 +11,8 @@
         :project-display-name-by-id="projectDisplayNameById"
         selected-thread-id="fixture-thread-running"
         :is-loading="false"
-        search-query=""
-        :search-matched-thread-ids="null"
+        :search-query="fixtureSearchQuery"
+        :search-matched-thread-ids="fixtureMatchedThreadIds"
         :pinned-thread-ids-override="['fixture-thread-unread', 'fixture-thread-running']"
         desktop-list-parity
         @select="noop"
@@ -31,10 +31,19 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
+
 import SidebarThreadTree from './SidebarThreadTree.vue'
 import type { UiProjectGroup } from '../../types/codex'
 
 const now = Date.parse('2026-07-05T10:00:00.000Z')
+const route = useRoute()
+const staleSearchMode = computed(() => route.query.staleSearch === '1')
+const fixtureSearchQuery = computed(() => (staleSearchMode.value ? '移动端' : ''))
+const fixtureMatchedThreadIds = computed(() => (
+  staleSearchMode.value ? ['fixture-thread-unread'] : null
+))
 
 const groups: UiProjectGroup[] = [
   {
@@ -44,14 +53,14 @@ const groups: UiProjectGroup[] = [
     threads: [
       {
         id: 'fixture-thread-eight',
-        title: '保留项目顺序回归',
+        title: '最近项目排序回归',
         projectName: 'E:/javaword/CXCodex/codexui',
         cwd: 'E:/javaword/CXCodex/codexui',
         sourceKind: 'cli',
         hasWorktree: false,
         createdAtIso: new Date(now - 104400000).toISOString(),
         updatedAtIso: new Date(now - 14400000).toISOString(),
-        preview: '项目目录仍沿用上游归一化顺序，不做二次重排。',
+        preview: '项目目录按内部最新会话时间上浮。',
         unread: false,
         inProgress: false,
       },

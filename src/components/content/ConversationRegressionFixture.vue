@@ -6,6 +6,7 @@
         <h1>Conversation Blocks</h1>
       </header>
       <RuntimeStatusBar
+        v-if="!isQueueFailureFixture"
         class="conversation-regression-runtime"
         :summary="runtimeSummary"
         :live-overlay="liveOverlay"
@@ -21,6 +22,7 @@
         @stop="noop"
       />
       <ThreadConversation
+        v-if="!isQueueFailureFixture"
         class="conversation-regression-thread"
         :messages="messages"
         :pending-requests="pendingRequests"
@@ -45,9 +47,10 @@
       <QueuedMessages
         class="conversation-regression-queue"
         :messages="queuedMessages"
-        :is-processing="true"
+        :is-processing="!isQueueFailureFixture"
         @edit="noop"
         @quote="noop"
+        @retry="noop"
         @delete="noop"
       />
     </section>
@@ -308,10 +311,13 @@ const fixtureParams = typeof window !== 'undefined'
   : new URLSearchParams()
 const isTailStatusFixture = fixtureParams.get('tailStatus') === '1'
 const isNextActivityFixture = fixtureParams.get('tailNextActivity') === '1'
+const isResumeRecoveryFixture = fixtureParams.get('resumeRecovery') === '1'
+const isQueueFailureFixture = fixtureParams.get('queueFailure') === '1'
 const pendingRequests: UiServerRequest[] = isTailStatusFixture ? [] : allPendingRequests
 
 const liveOverlay = ref<UiLiveOverlay | null>({
   activityId: 'fixture-turn-runtime',
+  isRecovering: isResumeRecoveryFixture,
   startedAtMs: Date.now() - (isNextActivityFixture ? 5 * 60 * 1000 : 6500),
   activityLabel: 'fixture runtime activity',
   activityDetails: ['fixture runtime detail should stay compact and neutral'],
@@ -350,6 +356,8 @@ const runtimeSummary: UiRuntimeStatusSummary = {
   messageState: 'fresh',
   updatedAtIso: '2026-07-05T05:02:00.000Z',
   lastEventSeq: 7420,
+  latestReply: '',
+  latestReplyEventSeq: 0,
   lastStartedAtIso: '2026-07-05T05:00:00.000Z',
   lastCompletedAtIso: null,
 }
@@ -357,6 +365,7 @@ const runtimeSummary: UiRuntimeStatusSummary = {
 const queuedMessages = [
   {
     id: 'fixture-queue-next',
+    deliveryState: isQueueFailureFixture ? 'failed' as const : 'queued' as const,
     text: 'fixture queued message keeps compact neutral styling',
     imageUrls: [],
     skills: [{ name: 'ui-ux-pro-max', path: 'C:/Users/SW/.agents/skills/ui-ux-pro-max/SKILL.md' }],
@@ -370,6 +379,7 @@ const queuedMessages = [
   },
   {
     id: 'fixture-queue-followup',
+    deliveryState: 'queued' as const,
     text: 'second queued item should not introduce warm panels',
     imageUrls: [],
     skills: [],

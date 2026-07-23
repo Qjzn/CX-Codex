@@ -56,6 +56,7 @@ type RuntimeStateStoreForOperations = {
   markStarting(threadId: string): void
   markRunning(threadId: string, turnId?: string): void
   markStartUncertain(threadId: string, lastError?: string | null): void
+  markFailed(threadId: string, lastError?: string | null): void
   markStopping(threadId: string): void
   markInterrupted(threadId: string, lastError?: string | null): void
   markStopUncertain(threadId: string, lastError?: string | null): void
@@ -142,6 +143,7 @@ export function createCodexBridgeRuntimeOperations(
     markStarting: (threadId) => runtimeStateStore.markStarting(threadId),
     markRunning: (threadId, turnId = '') => runtimeStateStore.markRunning(threadId, turnId),
     markStartUncertain: (threadId, lastError = null) => runtimeStateStore.markStartUncertain(threadId, lastError),
+    markFailed: (threadId, lastError = null) => runtimeStateStore.markFailed(threadId, lastError),
     persistRuntimeSnapshot,
     markPlanModeTurn: (threadId, turnId = '') => appServer.markPlanModeTurn(threadId, turnId),
     markStopping: (threadId) => runtimeStateStore.markStopping(threadId),

@@ -1,4 +1,4 @@
-import type { RuntimeRequestStatus } from '../api/codexGateway'
+import type { RuntimeRequestStatus, ThreadRuntimeSnapshot } from '../api/codexGateway'
 
 export function isRuntimeRequestAwaitingDeliveryConfirmation(status: RuntimeRequestStatus): boolean {
   return (
@@ -7,4 +7,11 @@ export function isRuntimeRequestAwaitingDeliveryConfirmation(status: RuntimeRequ
     || status === 'start_uncertain'
     || status === 'sync_degraded'
   )
+}
+
+export function shouldSettleOptimisticDeliveryFromRuntimeSnapshot(
+  executionState: ThreadRuntimeSnapshot['executionState'],
+  hasUnconfirmedOutboxEntry: boolean,
+): boolean {
+  return executionState !== 'failed' || !hasUnconfirmedOutboxEntry
 }

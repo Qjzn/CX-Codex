@@ -19,7 +19,7 @@
 │  │             │  │ State        │  │ codexRpcClient   │ │
 │  └────────────┘  └──────────────┘  └────────┬─────────┘ │
 └─────────────────────────────────────────────┼───────────┘
-                                              │ HTTP/SSE
+                                              │ HTTP + WS/SSE
 ┌─────────────────────────────────────────────┼───────────┐
 │  Node.js Server                             │           │
 │  ┌──────────────────────────────────────────┼─────────┐ │
@@ -39,8 +39,9 @@
 
 ### Key Architectural Decisions
 
-- **No Pinia / Vuex**: All state lives in a single composable (`useDesktopState`). Reactive refs + computed properties manage thread, message, model, and UI state.
+- **No Pinia / Vuex**: `useDesktopState` remains the frontend orchestration boundary. Focused pure modules own message identity, outbox merging, replay coordination, snapshot ordering, delivery policy, and timing calculations.
 - **Realtime transport**: Client prefers **WebSocket** on `/codex-api/ws` for server-to-client notifications, with automatic fallback to **SSE** (`EventSource`) on `/codex-api/events`. Client-to-server RPC stays on HTTP POST.
+- **Message convergence**: Outgoing messages receive a stable `clientMessageId` and enter a bounded durable browser outbox before network awaits. Runtime notifications carry a monotonic sequence and can be replayed after gaps; authoritative snapshots remain the final state source.
 - **Single child process**: The Node server spawns exactly one `codex app-server` child process and multiplexes all RPC calls through it via stdin/stdout.
 - **Shared bridge state**: A global singleton (`AppServerProcess` + `MethodCatalog`) survives Vite HMR reloads during development.
 
@@ -65,7 +66,7 @@ codex-web-local/
 ├── src/
 │   ├── api/                          # Backend communication layer
 │   │   ├── codexGateway.ts           # High-level API (threads, turns, models)
-│   │   ├── codexRpcClient.ts         # HTTP/SSE transport for /codex-api/*
+│   │   ├── codexRpcClient.ts         # HTTP RPC + WebSocket/SSE notifications
 │   │   ├── codexErrors.ts            # Error normalization
 │   │   ├── appServerDtos.ts          # Raw DTO types from app-server
 │   │   └── normalizers/v2.ts         # DTO → UI type transformers
@@ -82,7 +83,13 @@ codex-web-local/
 │   │   │   └── DesktopLayout.vue       # Sidebar + content split layout
 │   │   └── icons/                    # Tabler icon components
 │   ├── composables/
-│   │   └── useDesktopState.ts        # Central state composable (~2000 LOC)
+│   │   ├── useDesktopState.ts        # Frontend state orchestration
+│   │   ├── conversationProjection.ts # Message equality, merge, ordering, and live dedupe
+│   │   ├── messageIdentity.ts         # Stable send ids + optimistic-message reconciliation
+│   │   ├── messageOutboxPersistence.ts # Bounded outbox parsing and storage
+│   │   ├── messageOutboxMerge.ts      # Cross-page durable-outbox convergence
+│   │   ├── notificationReplayCoordinator.ts # Sequence/gap/replay coordination
+│   │   └── runtimeSnapshotOrdering.ts # Reject stale authoritative snapshots
 │   ├── server/                       # Node.js server (production + dev)
 │   │   ├── codexAppServerBridge.ts   # Spawns/proxies codex app-server
 │   │   ├── httpServer.ts             # Express app for production
@@ -116,7 +123,7 @@ codex-web-local/
 |---|---|
 | Thread management | List, create, archive, select threads; resume inactive threads on demand |
 | Chat conversation | Send messages, view full conversation history with user/assistant/system roles |
-| Real-time streaming | SSE-based live updates for agent messages, reasoning text, and turn lifecycle |
+| Real-time streaming | WebSocket-preferred live updates with SSE fallback, heartbeat recovery, sequence tracking, and replay after gaps |
 | Model selection | Dropdown to choose from available models (`model/list` RPC) |
 | Reasoning effort | Configurable reasoning effort level (none → xhigh) |
 | Turn interrupt | Stop in-progress agent turns |
@@ -253,7 +260,7 @@ Communication uses newline-delimited JSON-RPC 2.0 over stdin/stdout of the `code
 
 ## State Management
 
-All frontend state is managed by `useDesktopState()` — a single Vue composable that provides:
+Frontend state is orchestrated by `useDesktopState()`. Transport-independent identity, delivery, replay, ordering, and timing rules live in focused pure modules so they can be verified without mounting the full application.
 
 ### Reactive State
 
@@ -273,19 +280,23 @@ All frontend state is managed by `useDesktopState()` — a single Vue composable
 | Key | Data |
 |---|---|
 | `codex-web-local.thread-read-state.v1` | Per-thread read timestamps |
+| `codex-web-local.thread-unread-state.v1` | Event-backed unread completion flags |
 | `codex-web-local.thread-scroll-state.v1` | Per-thread scroll positions |
 | `codex-web-local.selected-thread-id.v1` | Last selected thread |
 | `codex-web-local.project-order.v1` | Custom project ordering |
 | `codex-web-local.project-display-name.v1` | Custom project names |
+| `codex-web-local.message-outbox.v1` | Bounded outgoing requests and cross-page deletion markers |
+| `codex-web-local.notification-seq.v1` | Last applied runtime event sequence |
 | `codex-web-local.auto-refresh-enabled.v1` | Auto-refresh preference |
 | `codex-web-local.sidebar-collapsed.v1` | Sidebar collapse state |
 
 ### Event Processing Pipeline
 
-1. Realtime events arrive via WebSocket on `/codex-api/ws` (fallback: `EventSource` on `/codex-api/events`)
-2. Each event is passed to `applyRealtimeUpdates()` for immediate UI effects (activity labels, live text, in-progress flags)
-3. Events are also passed to `queueEventDrivenSync()` which debounces (220ms) a full data refresh
-4. The debounced `syncFromNotifications()` calls `loadThreads()` and `loadMessages()` to reconcile server state
+1. Realtime events arrive via WebSocket on `/codex-api/ws` (fallback: `EventSource` on `/codex-api/events`).
+2. The replay coordinator applies monotonic event sequences, detects gaps, and requests `/codex-api/events/replay` before falling back to an authoritative snapshot.
+3. Each accepted event is passed to `applyRealtimeUpdates()` for immediate UI effects (activity labels, live text, in-progress flags).
+4. Structural or terminal events also enter `queueEventDrivenSync()`, which debounces reconciliation by 350 ms.
+5. `syncFromNotifications()` refreshes the smallest necessary thread list, runtime snapshot, or message history; stale lower-sequence snapshots cannot revive older execution state.
 
 ## Routing
 

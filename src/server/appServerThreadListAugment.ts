@@ -1,3 +1,5 @@
+import { readThreadSessionPathFromThreadReadPayload } from './appServerThreadPayload.js'
+
 export const SUPPLEMENTAL_THREAD_SUMMARY_CACHE_TTL_MS = 5 * 60_000
 export const SUPPLEMENTAL_THREAD_SUMMARY_MAX_READS = 20
 export const SUPPLEMENTAL_THREAD_SUMMARY_MAX_OUTPUT = 20
@@ -178,7 +180,12 @@ export class AppServerThreadListAugmenter {
   private cacheThreadSummaryResponse(threadId: string, response: unknown): unknown | null {
     const responseRecord = asRecord(response)
     const thread = asRecord(responseRecord?.thread)
-    if (thread?.id === threadId) {
+    const sessionPath = readThreadSessionPathFromThreadReadPayload(response)
+    const isArchived = sessionPath
+      .replace(/\\/g, '/')
+      .split('/')
+      .some((segment) => segment.toLowerCase() === 'archived_sessions')
+    if (thread?.id === threadId && !isArchived) {
       this.cacheByThreadId.set(threadId, {
         value: thread,
         cachedAtMs: this.nowMs(),
