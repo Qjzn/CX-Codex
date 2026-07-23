@@ -13664,6 +13664,34 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - Sidebar skeleton sheen runs once instead of indefinitely.
 - Reduced-motion mode removes transforms and continuous status animation while preserving all content and actions.
 
+### Feature: Windows startup paths containing spaces
+
+#### Prerequisites
+
+- Build CX-Codex in a Windows checkout whose absolute path contains spaces.
+- Prepare a valid CX-Codex configuration file in a directory whose path contains spaces.
+- Keep a supported Node.js executable available; its path may also contain spaces.
+- Confirm the target port is free before starting the script.
+
+#### Steps
+
+1. Run `scripts\restart-local-service.ps1` with explicit `-NodePath` and `-ConfigPath` values that contain spaces.
+2. Inspect the started process command line and confirm the complete `dist-cli\index.js` and configuration paths are present.
+3. Request the configured `/health` endpoint and confirm it returns HTTP 200.
+4. Inspect the generated output and error logs under the normal CX-Codex log directory.
+5. Run the same command again and confirm the previously managed process is replaced without leaving a second listener.
+
+#### Expected Results
+
+- `Start-Process` passes the complete CLI entry and configuration paths to Node.js without splitting either path at spaces.
+- The service starts from the intended checkout, loads the intended configuration, and reports a healthy response.
+- Repeated startup leaves one managed process listening on the configured port.
+- Existing process detection, version checking, health polling, and log redirection behavior remains unchanged.
+
+#### Rollback/Cleanup Notes
+
+- Stop the process created for this verification if it is no longer needed.
+- Revert the argument quoting in `scripts/restart-local-service.ps1`, then remove this test section to roll back.
 ### Feature: Windows local browse paths
 
 #### Prerequisites
