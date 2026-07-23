@@ -95,9 +95,41 @@ function getPreviewKind(pathValue: string): PreviewKind {
     case '.log':
     case '.json':
     case '.csv':
+    case '.js':
+    case '.ts':
+    case '.tsx':
+    case '.jsx':
+    case '.vue':
+    case '.css':
+    case '.scss':
+    case '.html':
+    case '.htm':
     case '.xml':
     case '.yaml':
     case '.yml':
+    case '.env':
+    case '.py':
+    case '.java':
+    case '.kt':
+    case '.kts':
+    case '.go':
+    case '.rs':
+    case '.c':
+    case '.cc':
+    case '.cpp':
+    case '.h':
+    case '.hpp':
+    case '.cs':
+    case '.php':
+    case '.rb':
+    case '.sh':
+    case '.toml':
+    case '.ini':
+    case '.conf':
+    case '.sql':
+    case '.bat':
+    case '.cmd':
+    case '.ps1':
       return 'text'
     case '.docx':
       return 'docx'
