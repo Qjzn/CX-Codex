@@ -49,6 +49,8 @@ On first launch, enter your own CX-Codex service URL. The Android app does not s
 
 If you previously installed a debug APK and this release provides a signed APK, Android may require uninstalling the debug build before installing the signed build.
 
+Deep-Doze FCM wake is optional and is not enabled by source support alone. The default release workflow does not bundle a project-specific `google-services.json` or server service-account credential. Self-hosters must configure matching Android/server Firebase projects, rebuild the APK, and pass `npm run verify:mobile-push-readiness -- --require-ready` with a real registered device and active task before calling this channel ready. Foreground service, SSE, bounded polling, network recovery, and manual refresh remain available without Firebase.
+
 ## Privacy
 
 Release notes, docs, and screenshots must not include private accounts, passwords, tokens, private IPs, personal paths, real public tunnel URLs, or private conversation content.

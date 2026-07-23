@@ -358,6 +358,27 @@
                   <span class="sidebar-settings-value">{{ mobileShellRuntimeDeviceLabel }}</span>
                 </div>
                 <div class="sidebar-settings-row sidebar-settings-row--static">
+                  <span class="sidebar-settings-label">后台运行</span>
+                  <span class="sidebar-settings-value">{{ mobileShellBackgroundRuntimeLabel }}</span>
+                </div>
+                <div class="sidebar-settings-row sidebar-settings-row--static">
+                  <span class="sidebar-settings-label">深度休眠通知</span>
+                  <span class="sidebar-settings-value">{{ mobileShellDeepSleepPushLabel }}</span>
+                </div>
+                <div class="sidebar-settings-actions">
+                  <button
+                    class="sidebar-settings-github-button sidebar-settings-github-button--secondary"
+                    type="button"
+                    :disabled="isMobileShellBackgroundSettingsOpening"
+                    @click="openMobileShellBackgroundSettings"
+                  >
+                    {{ isMobileShellBackgroundSettingsOpening ? '打开中...' : '调整后台运行' }}
+                  </button>
+                </div>
+                <p class="sidebar-settings-hint">
+                  普通后台由实时事件与快照轮询接力；深度休眠仅在任务终态使用高优先级推送唤醒并回查权威结果。未就绪时仍受系统省电策略限制。
+                </p>
+                <div class="sidebar-settings-row sidebar-settings-row--static">
                   <span class="sidebar-settings-label">WebView</span>
                   <span class="sidebar-settings-value">{{ mobileShellRuntimeWebViewLabel }}</span>
                 </div>
@@ -411,7 +432,7 @@
                   <span class="sidebar-settings-value">{{ mobileShellTaskPetStatusLabel }}</span>
                 </div>
                 <p class="sidebar-settings-hint">
-                  切到其他 App 后仍显示任务数量和最近两条会话；可进入平台、直达会话或直接回复。关闭后可在这里重新开启。
+                  切到其他 App 后仍显示任务数量和最近两条会话；连续 10 分钟无新进展时首次提醒，之后约每 20 分钟复盘一次，有进展后重新计时。省电模式可能延后提醒，可进入平台、直达会话或直接回复。
                 </p>
                 <p v-if="mobileShellTaskPetMessage" class="sidebar-settings-hint sidebar-settings-hint-status">
                   {{ mobileShellTaskPetMessage }}
@@ -577,24 +598,7 @@
               </span>
               <span class="content-context-badge-number">{{ contentContextPercentLabel }}</span>
             </span>
-              <RuntimeStatusBar
-                v-if="showRuntimeStatusBar"
-                class="content-runtime-status content-runtime-status--header"
-                variant="header"
-                :summary="selectedThreadRuntimeStatus"
-                :live-overlay="selectedLiveOverlay"
-                :pending-request-count="selectedThreadServerRequests.length"
-                :is-sending="isSendingMessage"
-                :is-loading="isLoadingMessages"
-                :is-refreshing="isManualThreadRefreshRunning"
-                :sync-lagging="syncLagging"
-                :sync-error="syncError"
-                :notification-stale="notificationStale"
-                :connection-state="realtimeConnectionState"
-                @refresh="onRefreshSelectedThreadContent"
-                @stop="onInterruptTurn('runtime-status-stop')"
-              />
-              <div v-else-if="showHeaderStatusStrip" class="content-status-strip">
+              <div v-if="showHeaderStatusStrip" class="content-status-strip">
                 <span class="content-status-pill" :data-tone="contentStatusTone">
                   <span class="content-status-pill-label">{{ contentStatusCaption }}</span>
                   <span>{{ contentStatusLabel }}</span>
@@ -688,9 +692,9 @@
                   :pending-requests="[]"
                   :favorite-message-ids="[]"
                   :is-thread-switching="false"
-                  :compact-runtime-chrome="showRuntimeStatusBar"
+                  :compact-runtime-chrome="true"
                   :show-empty-thread-actions="false"
-                  :is-turn-in-progress="true"
+                  :is-turn-in-progress="pendingNewThreadPreview.liveOverlay !== null"
                   :is-rolling-back="false"
                   :allow-failed-message-edit="true"
                   @retry-failed-message="onRetryPendingNewThreadMessage"
@@ -776,7 +780,7 @@
                   :pending-requests="displayedThreadPendingRequests"
                   :favorite-message-ids="favoriteMessageIdsForDisplayedThread"
                   :is-thread-switching="isThreadContentSwitching"
-                  :compact-runtime-chrome="showRuntimeStatusBar"
+                  :compact-runtime-chrome="true"
                   :show-empty-thread-actions="isRouteOnlyEmptyThread"
                   :is-turn-in-progress="isSelectedThreadInProgress"
                   :is-rolling-back="isRollingBack"
@@ -806,8 +810,9 @@
                   :messages="selectedThreadQueuedMessages"
                   :is-processing="selectedThreadQueueProcessing"
                   @edit="onEditQueuedMessage"
-                  @quote="quoteQueuedMessage"
-                  @delete="removeQueuedMessage"
+                  @quote="onQuoteQueuedMessage"
+                  @retry="retryQueuedMessage"
+                  @delete="deleteQueuedMessage"
                 />
                 <ThreadComposer ref="threadComposerRef" :active-thread-id="composerThreadContextId"
                   :cwd="composerCwd"
@@ -987,7 +992,6 @@ import ThreadConversation from './components/content/ThreadConversation.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import QueuedMessages from './components/content/QueuedMessages.vue'
 import RateLimitStatus from './components/content/RateLimitStatus.vue'
-import RuntimeStatusBar from './components/content/RuntimeStatusBar.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import FavoritesModal from './components/content/FavoritesModal.vue'
@@ -1047,6 +1051,7 @@ import type {
 } from './api/codexGateway'
 import { getPathLeafName, getPathParent } from './pathUtils.js'
 import {
+  acknowledgeMobileShellTaskPetThreadOpen,
   getMobileShellAppInfo,
   getMobileShellNotificationPermissionStatus,
   getMobileShellRuntimeInfo,
@@ -1055,6 +1060,7 @@ import {
   installMobileShellApk,
   isNativeAndroidShell,
   markMobileShellTaskPetThreadRead,
+  openMobileShellBatteryOptimizationSettings,
   openMobileShellUrl,
   requestMobileShellNotificationPermission,
   resetMobileShellServerUrl,
@@ -1065,8 +1071,13 @@ import {
   type MobileShellNotificationPermissionStatus,
   type MobileShellRuntimeInfo,
   type MobileShellServerConfig,
+  type MobileShellTaskPetItem,
   type MobileShellTaskPetStatus,
 } from './mobile/mobileShell'
+import {
+  shouldAcknowledgeMobileShellTaskPetThreadOpen,
+  shouldMarkMobileShellTaskPetThreadRead,
+} from './mobile/taskPetReadPolicy'
 import {
   compareMobileReleaseVersions,
   fetchLatestMobileRelease,
@@ -1371,6 +1382,8 @@ const {
   selectedThreadQueuedMessages,
   selectedThreadQueueProcessing,
   removeQueuedMessage,
+  deleteQueuedMessage,
+  retryQueuedMessage,
   quoteQueuedMessage,
   markAllThreadsAsRead,
   setSelectedModelId,
@@ -1385,7 +1398,11 @@ const {
   pinProjectToTop,
   startPolling,
   stopPolling,
-} = useDesktopState()
+} = useDesktopState({
+  onDeliveryPersisted: () => { void ensureMobileShellTaskNotificationPermission() },
+  onPendingRequestCreated: () => { void syncMobileShellTaskPet(true) },
+  onRequestDispatched: () => { void ensureMobileShellTaskNotificationPermission() },
+})
 const enabledComposerSkills = computed(() => installedSkills.value.filter((skill) => skill.enabled !== false))
 
 const route = useRoute()
@@ -1478,6 +1495,7 @@ const isMobileShellSaving = ref(false)
 const isMobileShellUpdateLoading = ref(false)
 const isMobileShellInstalling = ref(false)
 const isMobileShellNotificationRequesting = ref(false)
+const isMobileShellBackgroundSettingsOpening = ref(false)
 const isMobileShellTaskPetUpdating = ref(false)
 const mobileShellTaskPetMessage = ref('')
 const isMobileShellUpdatePromptVisible = ref(false)
@@ -1487,6 +1505,51 @@ let mobileShellTaskPetSyncTimer: ReturnType<typeof setTimeout> | null = null
 let mobileShellTaskPetLastPayload = ''
 let mobileShellTaskPetSyncInFlight = false
 let mobileShellTaskPetSyncPending = false
+let mobileShellTaskPetSyncSequence = 0
+let mobileShellTaskPetLastAppliedSequence = 0
+let mobileShellNotificationAutoRequestSettled = false
+const mobileShellTaskPetItems = computed<MobileShellTaskPetItem[]>(() => {
+  const items: MobileShellTaskPetItem[] = activeTaskPetItems.value.map((item) => ({
+    threadId: item.threadId,
+    clientMessageId: item.clientMessageId,
+    activityId: item.activityId,
+    startedAtMs: item.startedAtMs,
+    lastEventSeq: item.lastEventSeq,
+    title: item.title,
+    projectName: item.projectName,
+    detail: item.detail,
+    latestActivity: item.latestActivity,
+    latestReply: item.latestReply,
+    latestReplyEventSeq: item.latestReplyEventSeq,
+    state: item.state,
+    updatedAtIso: item.updatedAtIso,
+  }))
+  const preview = pendingNewThreadPreview.value
+  if (preview && preview.message.deliveryState !== 'failed') {
+    const title = preview.message.text.replace(/\s+/gu, ' ').trim().slice(0, 60) || '新任务'
+    const deliveryState = preview.message.deliveryState
+    items.unshift({
+      threadId: '',
+      clientMessageId: preview.clientMessageId,
+      activityId: `request:${preview.clientMessageId}`,
+      startedAtMs: preview.liveOverlay?.startedAtMs,
+      lastEventSeq: 0,
+      title,
+      projectName: getPathLeafName(preview.cwd) || preview.cwd,
+      detail: deliveryState === 'waiting'
+        ? '等待网络'
+        : deliveryState === 'confirming'
+          ? '正在确认任务状态'
+          : '正在创建会话',
+      latestActivity: preview.liveOverlay?.activityDetails.at(-1)?.trim() || '首条消息已保存，正在连接 7420',
+      latestReply: '',
+      latestReplyEventSeq: 0,
+      state: deliveryState === 'waiting' || deliveryState === 'confirming' ? 'waiting' : 'running',
+      updatedAtIso: new Date(preview.liveOverlay?.startedAtMs ?? 0).toISOString(),
+    })
+  }
+  return items.slice(0, 8)
+})
 const desktopAppStatus = ref<DesktopAppStatus>({
   available: false,
   platform: '',
@@ -1617,6 +1680,31 @@ const mobileShellRuntimeDeviceLabel = computed(() => {
     .join(' ')
   return `${model || 'Android'} · ${runtime.powerSaveMode ? '省电模式' : '标准模式'}`
 })
+const mobileShellBackgroundRuntimeLabel = computed(() => {
+  const runtime = mobileShellRuntimeInfo.value
+  if (!runtime) return '未读取'
+  if (runtime.ignoringBatteryOptimizations) return '已允许持续运行'
+  return runtime.powerSaveMode ? '省电限制中' : '受系统休眠限制'
+})
+const mobileShellDeepSleepPushLabel = computed(() => {
+  const diagnostics = mobileShellTaskPetStatus.value?.pushDiagnostics
+  if (!diagnostics?.state) return '未读取'
+  if (diagnostics.state === 'not_configured') return 'App 未配置 Firebase'
+  if (diagnostics.state === 'server_not_configured') return '服务端未配置'
+  if (diagnostics.state === 'token_failed') return '设备令牌不可用'
+  if (diagnostics.state === 'registration_failed') return '设备注册异常'
+  if (diagnostics.state === 'wake_failed') return '最近唤醒失败'
+  if (diagnostics.state === 'wake_started') return '最近已唤醒同步'
+  if (diagnostics.state === 'wake_restarted') return '最近已恢复同步'
+  if (diagnostics.state === 'ack_retry') return '结果已同步 · 回执重试中'
+  if (diagnostics.state === 'registered') {
+    const subscriptionCount = Math.max(0, Number(diagnostics.subscriptionCount) || 0)
+    return subscriptionCount > 0 ? `${String(subscriptionCount)} 个任务 · 已就绪` : '已就绪 · 待任务'
+  }
+  if (diagnostics.state === 'duplicate_ignored') return '已就绪 · 最近推送已去重'
+  if (diagnostics.state === 'ignored') return '已就绪 · 最近推送未匹配任务'
+  return '状态待确认'
+})
 const mobileShellRuntimeWebViewLabel = computed(() => {
   const runtime = mobileShellRuntimeInfo.value
   if (!runtime) return '未读取'
@@ -1627,21 +1715,25 @@ const mobileShellRuntimeWebViewLabel = computed(() => {
 const mobileShellNotificationPermissionLabel = computed(() => {
   const permission = mobileShellNotificationPermission.value
   if (!permission) return '未读取'
-  if (permission.granted) return '已允许'
   if (!permission.notificationsEnabled) return '系统已关闭'
-  return permission.requiresRuntimePermission ? '待授权' : '未允许'
+  if (!permission.granted) return permission.requiresRuntimePermission ? '待授权' : '未允许'
+  if (permission.completionChannelEnabled === false) return '任务完成通道已关闭'
+  return '已允许'
 })
 const mobileShellTaskPetStatusLabel = computed(() => {
   const status = mobileShellTaskPetStatus.value
   if (!status) return '未读取'
   if (status.permissionRequired) return '等待悬浮窗授权'
-  if (status.showing) return `${activeTaskPetItems.value.length} 个任务 · 已显示`
+  if (status.showing) return `${mobileShellTaskPetItems.value.length} 个任务 · 已显示`
   return status.enabled && status.canDrawOverlays ? '已开启' : '已关闭'
 })
 const canRequestMobileShellNotifications = computed(() => (
   isMobileShellAvailable.value
   && !isMobileShellNotificationRequesting.value
-  && mobileShellNotificationPermission.value?.granted !== true
+  && (
+    mobileShellNotificationPermission.value?.granted !== true
+    || mobileShellNotificationPermission.value?.completionChannelEnabled === false
+  )
 ))
 const normalizedMobileShellServerInput = computed(() => normalizeUrlInput(mobileShellServerInput.value))
 const canSaveMobileShellServerUrl = computed(() => {
@@ -1828,12 +1920,8 @@ const isCompactTouchContent = computed(() => (
   isDualPaneMobile.value ||
   (viewportWidth.value > 0 && viewportWidth.value < 1024)
 ))
-const showHeaderStatusStrip = computed(() => !isCompactTouchContent.value)
-const showRuntimeStatusBar = computed(() => (
-  route.name === 'thread'
-  && selectedThreadId.value.trim().length > 0
-  && !isRouteOnlyEmptyThread.value
-  && !isCompactTouchContent.value
+const showHeaderStatusStrip = computed(() => (
+  !isCompactTouchContent.value && route.name !== 'thread'
 ))
 const mobileThreadConnectionLabel = computed(() => {
   if (!isCompactTouchContent.value) return ''
@@ -2601,6 +2689,8 @@ function onWindowFocusRefreshAccountState(): void {
   if (requiresMobileShellServerSetup.value) return
   if (isMobileShellAvailable.value) {
     void refreshMobileShellTaskPetStatus(true)
+    void refreshMobileShellNotificationPermission()
+    void refreshMobileShellRuntimeInfo()
   }
   if (isSettingsOpen.value) {
     void refreshRateLimits()
@@ -2804,6 +2894,22 @@ async function refreshMobileShellRuntimeInfo(): Promise<void> {
   }
 }
 
+async function openMobileShellBackgroundSettings(): Promise<void> {
+  if (!isMobileShellAvailable.value || isMobileShellBackgroundSettingsOpening.value) return
+
+  isMobileShellBackgroundSettingsOpening.value = true
+  try {
+    const result = await openMobileShellBatteryOptimizationSettings()
+    setMobileShellStatus(result.opened ? '请在系统中允许 CX-Codex 后台持续运行' : '当前已允许后台持续运行')
+    window.setTimeout(() => { void refreshMobileShellRuntimeInfo() }, 900)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '打开后台运行设置失败'
+    setMobileShellStatus(message)
+  } finally {
+    isMobileShellBackgroundSettingsOpening.value = false
+  }
+}
+
 async function refreshMobileShellNotificationPermission(): Promise<void> {
   if (!isMobileShellAvailable.value) return
 
@@ -2818,11 +2924,7 @@ async function refreshMobileShellTaskPetStatus(syncAfterRefresh = false): Promis
   if (!isMobileShellAvailable.value) return
   try {
     mobileShellTaskPetStatus.value = await getMobileShellTaskPetStatus()
-    if (
-      syncAfterRefresh
-      && mobileShellTaskPetStatus.value.enabled
-      && mobileShellTaskPetStatus.value.canDrawOverlays
-    ) {
+    if (syncAfterRefresh) {
       await syncMobileShellTaskPet()
     }
   } catch {
@@ -2839,10 +2941,10 @@ async function toggleMobileShellTaskPet(): Promise<void> {
     mobileShellTaskPetStatus.value = await setMobileShellTaskPetEnabled(
       enable,
       mobileShellServerConfig.value?.serverUrl.trim() || window.location.origin,
-      activeTaskPetItems.value,
+      mobileShellTaskPetItems.value,
       recentTaskPetThreads.value,
     )
-    mobileShellTaskPetLastPayload = enable ? currentMobileShellTaskPetPayload() : ''
+    mobileShellTaskPetLastPayload = currentMobileShellTaskPetPayload()
     mobileShellTaskPetMessage.value = enable
       ? mobileShellTaskPetStatus.value.permissionRequired
         ? '请在系统页面允许悬浮窗，返回后会自动开启。'
@@ -2855,27 +2957,33 @@ async function toggleMobileShellTaskPet(): Promise<void> {
   }
 }
 
-async function syncMobileShellTaskPet(): Promise<void> {
-  if (!isMobileShellAvailable.value || mobileShellTaskPetStatus.value?.enabled !== true) return
+async function syncMobileShellTaskPet(force = false): Promise<void> {
+  if (!isMobileShellAvailable.value) return
   const payload = currentMobileShellTaskPetPayload()
-  if (payload === mobileShellTaskPetLastPayload) return
-  if (mobileShellTaskPetSyncInFlight) {
+  if (!force && payload === mobileShellTaskPetLastPayload) return
+  const ownsSyncSlot = !mobileShellTaskPetSyncInFlight
+  if (!ownsSyncSlot && !force) {
     mobileShellTaskPetSyncPending = true
     return
   }
-  mobileShellTaskPetSyncInFlight = true
+  if (ownsSyncSlot) mobileShellTaskPetSyncInFlight = true
+  const sequence = ++mobileShellTaskPetSyncSequence
   try {
-    mobileShellTaskPetStatus.value = await updateMobileShellTaskPet(
+    const status = await updateMobileShellTaskPet(
       mobileShellServerConfig.value?.serverUrl.trim() || window.location.origin,
-      activeTaskPetItems.value,
+      mobileShellTaskPetItems.value,
       recentTaskPetThreads.value,
     )
-    mobileShellTaskPetLastPayload = payload
+    if (sequence >= mobileShellTaskPetLastAppliedSequence) {
+      mobileShellTaskPetLastAppliedSequence = sequence
+      mobileShellTaskPetStatus.value = status
+      mobileShellTaskPetLastPayload = payload
+    }
   } catch {
     // The native service retains its last good snapshot and keeps polling it.
   } finally {
-    mobileShellTaskPetSyncInFlight = false
-    if (mobileShellTaskPetSyncPending) {
+    if (ownsSyncSlot) mobileShellTaskPetSyncInFlight = false
+    if (ownsSyncSlot && mobileShellTaskPetSyncPending) {
       mobileShellTaskPetSyncPending = false
       void syncMobileShellTaskPet()
     }
@@ -2885,13 +2993,18 @@ async function syncMobileShellTaskPet(): Promise<void> {
 function currentMobileShellTaskPetPayload(): string {
   return JSON.stringify({
     serverUrl: mobileShellServerConfig.value?.serverUrl.trim() || window.location.origin,
-    tasks: activeTaskPetItems.value.map((item) => ({
+    tasks: mobileShellTaskPetItems.value.map((item) => ({
       threadId: item.threadId,
+      clientMessageId: item.clientMessageId,
+      activityId: item.activityId,
+      startedAtMs: item.startedAtMs,
+      lastEventSeq: item.lastEventSeq,
       title: item.title,
       projectName: item.projectName,
       detail: item.detail,
       latestActivity: item.latestActivity,
       latestReply: item.latestReply,
+      latestReplyEventSeq: item.latestReplyEventSeq,
       state: item.state,
     })),
     recentThreads: recentTaskPetThreads.value,
@@ -2951,6 +3064,32 @@ async function requestMobileShellNotifications(): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : '请求通知权限失败'
     setMobileShellStatus(message)
+  } finally {
+    isMobileShellNotificationRequesting.value = false
+  }
+}
+
+async function ensureMobileShellTaskNotificationPermission(): Promise<void> {
+  if (
+    !isMobileShellAvailable.value
+    || mobileShellNotificationAutoRequestSettled
+    || isMobileShellNotificationRequesting.value
+    || mobileShellNotificationPermission.value?.granted === true
+  ) return
+
+  isMobileShellNotificationRequesting.value = true
+  try {
+    const current = mobileShellNotificationPermission.value
+      ?? await getMobileShellNotificationPermissionStatus()
+    mobileShellNotificationPermission.value = current
+    if (current.granted) {
+      mobileShellNotificationAutoRequestSettled = true
+      return
+    }
+    mobileShellNotificationPermission.value = await requestMobileShellNotificationPermission({ automatic: true })
+    mobileShellNotificationAutoRequestSettled = true
+  } catch {
+    // A later durable send may retry if the Activity was temporarily unavailable.
   } finally {
     isMobileShellNotificationRequesting.value = false
   }
@@ -3532,7 +3671,12 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
     queueInsertIndex,
     payload.collaborationMode,
     payload.turnOptions,
-    { feedbackStartedAtMs },
+    {
+      feedbackStartedAtMs,
+      onDeliveryPersisted: () => { void ensureMobileShellTaskNotificationPermission() },
+      onPendingRequestCreated: () => { void syncMobileShellTaskPet(true) },
+      onRequestDispatched: () => { void ensureMobileShellTaskNotificationPermission() },
+    },
   ).then(() => {
     if (payload.mode !== 'queue') {
       markDesktopSyncPending(selectedThreadId.value)
@@ -3733,6 +3877,14 @@ function hydrateQueuedMessageForEditing(messageId: string): void {
   }
   composer.hydrateDraft(payload)
   removeQueuedMessage(messageId)
+}
+
+function onQuoteQueuedMessage(messageId: string): void {
+  void quoteQueuedMessage(messageId, {
+    feedbackStartedAtMs: chatFeedbackNow(),
+    onPendingRequestCreated: () => { void syncMobileShellTaskPet(true) },
+    onRequestDispatched: () => { void ensureMobileShellTaskNotificationPermission() },
+  })
 }
 
 function cancelQueuedMessageEdit(): void {
@@ -4443,9 +4595,9 @@ watch(
 )
 
 watch(
-  [activeTaskPetItems, recentTaskPetThreads],
+  [mobileShellTaskPetItems, recentTaskPetThreads],
   () => {
-    if (!isMobileShellAvailable.value || mobileShellTaskPetStatus.value?.enabled !== true) return
+    if (!isMobileShellAvailable.value) return
     if (mobileShellTaskPetSyncTimer) clearTimeout(mobileShellTaskPetSyncTimer)
     mobileShellTaskPetSyncTimer = setTimeout(() => {
       mobileShellTaskPetSyncTimer = null
@@ -4458,18 +4610,26 @@ watch(
   () => [
     routeThreadId.value,
     displayedThreadConversationId.value,
+    displayedThreadMessages.value.length,
     isLoadingMessages.value,
+    isThreadContentSwitching.value,
     isSelectedThreadInProgress.value,
   ] as const,
-  ([routeId, displayedId, loading, inProgress]) => {
+  ([routeId, displayedId, messageCount, loading, switching, inProgress]) => {
+    if (!isMobileShellAvailable.value) return
+    const viewState = {
+      routeThreadId: routeId,
+      displayedThreadId: displayedId,
+      messageCount,
+      loading,
+      switching,
+    }
+    if (!shouldAcknowledgeMobileShellTaskPetThreadOpen(viewState)) return
     const normalizedRouteId = routeId.trim()
-    if (
-      !isMobileShellAvailable.value
-      || loading
-      || inProgress
-      || !normalizedRouteId
-      || displayedId.trim() !== normalizedRouteId
-    ) return
+    void acknowledgeMobileShellTaskPetThreadOpen(normalizedRouteId).catch(() => {
+      // The native route target remains pending until a later visible-content acknowledgement.
+    })
+    if (!shouldMarkMobileShellTaskPetThreadRead({ ...viewState, inProgress })) return
     void markMobileShellTaskPetThreadRead(normalizedRouteId).catch(() => {
       // The native record remains until the next successful read acknowledgement.
     })
@@ -4648,17 +4808,26 @@ async function submitFirstMessageForNewThread(
       fileAttachments,
       collaborationMode,
       turnOptions,
-      { feedbackStartedAtMs, onThreadCreated },
+      {
+        feedbackStartedAtMs,
+        onPendingRequestCreated: () => {
+          void syncMobileShellTaskPet(true)
+        },
+        onRequestDispatched: () => { void ensureMobileShellTaskNotificationPermission() },
+        onThreadCreated,
+      },
     )
     if (!threadId) {
-      restoreHomeThreadComposerDraft({
-        text,
-        imageUrls,
-        fileAttachments,
-        skills,
-        plugins: turnOptions?.plugins,
-        goal: turnOptions?.goal,
-      })
+      if (!pendingNewThreadPreview.value) {
+        restoreHomeThreadComposerDraft({
+          text,
+          imageUrls,
+          fileAttachments,
+          skills,
+          plugins: turnOptions?.plugins,
+          goal: turnOptions?.goal,
+        })
+      }
       return ''
     }
     if (routeToCreatedThreadPromise) {

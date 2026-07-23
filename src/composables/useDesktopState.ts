@@ -1,5 +1,6 @@
 import { computed, ref, watch } from 'vue'
 import { runWithBoundedRecovery } from './boundedAsyncRecovery'
+import { readRuntimeActivityStartedAtMs } from './activityTimer'
 import {
   beginChatFeedbackMetric,
   chatFeedbackNow,
@@ -12,6 +13,17 @@ import {
   mergeMessageOutboxState,
   type MessageOutboxRemoval,
 } from './messageOutboxMerge'
+import {
+  cloneComposerTurnOptions as cloneTurnOptions,
+  normalizeComposerTurnOptions as normalizeTurnOptions,
+} from './composerTurnOptions'
+import {
+  MESSAGE_OUTBOX_STORAGE_KEY,
+  loadMessageOutboxState,
+  saveMessageOutboxState,
+  type MessageOutboxEntry,
+  type MessageOutboxFileAttachment,
+} from './messageOutboxPersistence'
 import {
   autoCommitWorktreeChanges,
   archiveThread,
@@ -37,7 +49,6 @@ import {
   setCodexSpeedMode,
   setDefaultModel,
   setWorkspaceRootsState,
-  startThread,
   startComposerPluginOauthLogin,
   reloadComposerPlugins,
   getThreadTitleCache,
@@ -79,6 +90,8 @@ import type {
 } from '../types/codex'
 import { isAbortLikeError } from '../api/codexErrors'
 import { normalizePathForUi, toProjectName } from '../pathUtils.js'
+import { orderProjectGroupsByRecentActivity } from '../utils/projectGroupOrdering'
+import { compactLatestReplyTail } from '../utils/latestReply'
 import {
   MOBILE_APP_PAUSE_EVENT,
   MOBILE_APP_RESUME_EVENT,
@@ -97,8 +110,34 @@ import {
   createNotificationReplayCoordinator,
   type NotificationReplaySource,
 } from './notificationReplayCoordinator'
+import {
+  createConnectionManager,
+  decideConnectedRecovery,
+  shouldRestartNotificationStreamOnForeground,
+} from './connectionManager'
 import { shouldApplyRuntimeSnapshotVersion } from './runtimeSnapshotOrdering'
-import { isRuntimeRequestAwaitingDeliveryConfirmation } from './runtimeRequestDelivery'
+import {
+  isRuntimeRequestAwaitingDeliveryConfirmation,
+  shouldSettleOptimisticDeliveryFromRuntimeSnapshot,
+} from './runtimeRequestDelivery'
+import {
+  OPTIMISTIC_USER_MESSAGE_PREFIX,
+  countPersistedUserMessageSignatures,
+  createClientMessageId,
+  filterVisibleOptimisticUserMessages,
+  normalizeMessageText,
+  userMessageSignature,
+  type OptimisticUserMessageMeta,
+} from './messageIdentity'
+import {
+  areMessageArraysEqual,
+  areStringArraysEqual,
+  earliestTurnIndexFromMessages,
+  mergeMessages,
+  removeRedundantLiveAgentMessages,
+  removeStaleHistoryNoticeAfterOlderMerge,
+  upsertMessage,
+} from './conversationProjection'
 
 function flattenThreads(groups: UiProjectGroup[]): UiThread[] {
   return groups.flatMap((group) => group.threads)
@@ -109,11 +148,11 @@ function shouldRefreshMessagesFromNotification(method: string): boolean {
   return (
     method === 'turn/started' ||
     method === 'turn/completed' ||
-    method === 'item/completed' ||
+    method === 'thread/completed' ||
+    method === 'thread/interrupted' ||
     method === 'error' ||
     method === 'server/request' ||
-    method === 'server/request/resolved' ||
-    method.startsWith('thread/')
+    method === 'server/request/resolved'
   )
 }
 
@@ -133,7 +172,7 @@ function shouldRefreshThreadListFromNotification(method: string): boolean {
 }
 
 function shouldUrgentlyRefreshFromNotification(method: string): boolean {
-  return method === 'turn/completed' || method === 'item/completed' || method === 'error'
+  return method === 'turn/completed' || method === 'thread/completed' || method === 'error'
 }
 
 function shouldBoostSyncForNotification(method: string): boolean {
@@ -148,6 +187,7 @@ function shouldBoostSyncForNotification(method: string): boolean {
 }
 
 const READ_STATE_STORAGE_KEY = 'codex-web-local.thread-read-state.v1'
+const UNREAD_STATE_STORAGE_KEY = 'codex-web-local.thread-unread-state.v1'
 const SCROLL_STATE_STORAGE_KEY = 'codex-web-local.thread-scroll-state.v1'
 const SELECTED_THREAD_STORAGE_KEY = 'codex-web-local.selected-thread-id.v1'
 const SELECTED_MODEL_STORAGE_KEY = 'codex-web-local.selected-model-id.v1'
@@ -159,7 +199,6 @@ const THREAD_GROUP_CACHE_STORAGE_KEY = 'codex-web-local.thread-groups-cache.v1'
 const THREAD_MESSAGE_CACHE_STORAGE_KEY = 'codex-web-local.thread-message-cache.v1'
 const HIDDEN_THREAD_IDS_STORAGE_KEY = 'codex-web-local.hidden-thread-ids.v1'
 const QUEUED_MESSAGES_STORAGE_KEY = 'codex-web-local.queued-messages.v1'
-const MESSAGE_OUTBOX_STORAGE_KEY = 'codex-web-local.message-outbox.v1'
 const NOTIFICATION_SEQ_STORAGE_KEY = 'codex-web-local.notification-seq.v1'
 const THREAD_GROUP_CACHE_VERSION = 1
 const THREAD_GROUP_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
@@ -171,10 +210,6 @@ const THREAD_MESSAGE_CACHE_MAX_THREADS = 12
 const THREAD_MESSAGE_CACHE_MAX_MESSAGES_PER_THREAD = 24
 const THREAD_MESSAGE_CACHE_TEXT_LIMIT = 6_000
 const THREAD_MESSAGE_CACHE_COMMAND_OUTPUT_LIMIT = 3_000
-const MESSAGE_OUTBOX_VERSION = 1
-const MESSAGE_OUTBOX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
-const MESSAGE_OUTBOX_MAX_ENTRIES = 12
-const MESSAGE_OUTBOX_MAX_REMOVALS = 256
 // Keep cached rows interactive first, then reconcile the complete project list soon after
 // initial paint. A long wait leaves older projects temporarily undiscoverable.
 const THREAD_LIST_CACHED_BACKGROUND_DELAY_MS = 1800
@@ -182,6 +217,7 @@ const THREAD_LIST_INITIAL_BACKGROUND_DELAY_MS = 1800
 const EVENT_SYNC_DEBOUNCE_MS = 350
 const BACKGROUND_SYNC_INTERVAL_MS = 9000
 const ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS = 12000
+const ACTIVE_THREAD_DETAIL_FALLBACK_SYNC_INTERVAL_MS = 60000
 const ACTIVE_THREAD_DETAIL_SYNC_IDLE_MS = 18000
 const FOREGROUND_RECOVERY_DETAIL_REFRESH_MIN_INTERVAL_MS = ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS
 const THREAD_SELECTION_RECOVERY_SUPPRESS_MS = 5000
@@ -191,12 +227,15 @@ const ACTIVE_SYNC_BOOST_WINDOW_MS = 18000
 const RESUME_SYNC_RETRY_DELAYS_MS = [0, 1200, 4500, 12000]
 const ANDROID_RESUME_SYNC_RETRY_DELAYS_MS = [0, 4500, 12000]
 const ANDROID_RESUME_SYNC_DEBOUNCE_MS = 2500
+const FOREGROUND_RECOVERY_FEEDBACK_MIN_MS = 500
+const FOREGROUND_RECOVERY_FEEDBACK_TIMEOUT_MS = 8000
 const NON_FRESH_THREAD_DETAIL_RETRY_DELAYS_MS = [2500, 9000, 20000]
 const ACTIVE_SYNC_THREAD_LIST_INTERVAL_MS = 120000
 const ACTIVE_SYNC_STALE_MS = 14000
 const STALE_THREAD_ACTIVE_TURN_TTL_MS = 5 * 60 * 1000
 const STALE_THREAD_ACTIVE_TURN_IMMEDIATE_MS = 20 * 60 * 1000
 const OPTIMISTIC_EXECUTION_RECOVERY_GRACE_MS = 6000
+const NEW_THREAD_ACCEPTED_RECONCILE_DELAYS_MS = [150, 500, 1000, 2000, 3000]
 const LIVE_OVERLAY_ACTIVITY_GRACE_MS = 4500
 const UNKNOWN_ACTIVE_TURN_ID = '__unknown_active_turn__'
 const LIVE_DELTA_BATCH_MS = 48
@@ -221,9 +260,8 @@ const COMPOSER_PLUGIN_INVALIDATING_NOTIFICATION_METHODS = new Set([
 ])
 const MODEL_FALLBACK_ID = 'gpt-5.2-codex'
 const AUTO_COMMIT_MESSAGE_FALLBACK = 'Auto-commit from Codex rollback chat turn'
-const OPTIMISTIC_USER_MESSAGE_PREFIX = 'optimistic-user:'
 const PENDING_NEW_THREAD_ID = '__new-thread__'
-const RUNTIME_SEND_RETRY_DELAYS_MS = [650, 1800]
+const RUNTIME_SEND_RETRY_DELAYS_MS = [700, 2000, 5000, 10000]
 const optimisticUserMessageMetaById = new Map<string, OptimisticUserMessageMeta>()
 
 export type PendingNewThreadPreview = {
@@ -245,9 +283,17 @@ export type FailedNewThreadDraft = {
   turnOptions?: ComposerTurnOptions
 }
 
-type FileAttachment = { label: string; path: string; fsPath: string }
+type DesktopStateSubmitCallbacks = {
+  onDeliveryPersisted?: () => void
+  onPendingRequestCreated?: (clientMessageId: string) => void
+  onRequestDispatched?: () => void
+}
+
+type FileAttachment = MessageOutboxFileAttachment
 type QueuedMessage = {
   id: string
+  clientMessageId: string
+  deliveryState: 'queued' | 'failed'
   text: string
   imageUrls: string[]
   skills: Array<{ name: string; path: string }>
@@ -257,31 +303,6 @@ type QueuedMessage = {
   speedMode: SpeedMode
   collaborationMode: CollaborationMode
   turnOptions?: ComposerTurnOptions
-}
-type MessageOutboxEntry = {
-  clientMessageId: string
-  threadId: string
-  cwd: string
-  text: string
-  imageUrls: string[]
-  skills: Array<{ name: string; path: string }>
-  fileAttachments: FileAttachment[]
-  modelId: string
-  reasoningEffort: ReasoningEffort | ''
-  collaborationMode: CollaborationMode
-  turnOptions?: ComposerTurnOptions
-  state: 'sending' | 'confirming' | 'failed'
-  createdAtMs: number
-  updatedAtMs: number
-}
-type MessageOutboxPayload = {
-  version: number
-  entries: MessageOutboxEntry[]
-  removals?: MessageOutboxRemoval[]
-}
-type MessageOutboxState = {
-  entries: MessageOutboxEntry[]
-  removals: MessageOutboxRemoval[]
 }
 type RealtimeConnectionState = RpcConnectionState
 type ThreadGroupCachePayload = {
@@ -302,183 +323,6 @@ type ThreadMessageCacheSnapshot = {
   signature: string
 }
 
-function createClientMessageId(): string {
-  const randomPart =
-    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : Math.random().toString(36).slice(2, 12)
-  return `cm-${Date.now()}-${randomPart}`
-}
-
-function normalizeTurnOptions(value: unknown): ComposerTurnOptions | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
-  const row = value as Record<string, unknown>
-  const plugins = Array.isArray(row.plugins)
-    ? row.plugins
-      .filter((item): item is { id: string; name: string; path?: string; source?: ComposerPluginSource } => (
-        Boolean(item)
-        && typeof item === 'object'
-        && typeof (item as Record<string, unknown>).id === 'string'
-        && typeof (item as Record<string, unknown>).name === 'string'
-      ))
-      .map((item) => {
-        const id = item.id.trim()
-        const name = item.name.trim()
-        const source: ComposerPluginSource = item.source === 'app'
-          ? 'app'
-          : item.source === 'plugin'
-            ? 'plugin'
-            : 'mcp'
-        const path = typeof item.path === 'string' && item.path.trim()
-          ? item.path.trim()
-          : (source === 'app' ? `app://${id}` : `plugin://${id}`)
-        return { id, name, path, source }
-      })
-      .filter((item) => item.id.length > 0 && item.name.length > 0)
-    : []
-  const rawGoal = row.goal
-  const goal = rawGoal && typeof rawGoal === 'object' && !Array.isArray(rawGoal)
-    ? {
-        enabled: (rawGoal as Record<string, unknown>).enabled === true,
-        text: typeof (rawGoal as Record<string, unknown>).text === 'string'
-          ? ((rawGoal as Record<string, unknown>).text as string).trim()
-          : '',
-      }
-    : undefined
-  const normalizedGoal = goal?.enabled === true ? goal : undefined
-  if (plugins.length === 0 && !normalizedGoal) return undefined
-  return {
-    ...(plugins.length > 0 ? { plugins } : {}),
-    ...(normalizedGoal ? { goal: normalizedGoal } : {}),
-  }
-}
-
-function cloneTurnOptions(options?: ComposerTurnOptions): ComposerTurnOptions | undefined {
-  return normalizeTurnOptions(options)
-}
-
-function normalizeMessageOutboxEntry(value: unknown, nowMs = Date.now()): MessageOutboxEntry | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const row = value as Record<string, unknown>
-  const clientMessageId = typeof row.clientMessageId === 'string' ? row.clientMessageId.trim() : ''
-  const createdAtMs = typeof row.createdAtMs === 'number' && Number.isFinite(row.createdAtMs)
-    ? row.createdAtMs
-    : 0
-  if (!clientMessageId || createdAtMs <= 0 || nowMs - createdAtMs > MESSAGE_OUTBOX_MAX_AGE_MS) return null
-
-  const imageUrls = Array.isArray(row.imageUrls)
-    ? row.imageUrls.filter((item): item is string => typeof item === 'string')
-    : []
-  const skills = Array.isArray(row.skills)
-    ? row.skills
-      .filter((item): item is { name: string; path: string } => (
-        Boolean(item)
-        && typeof item === 'object'
-        && typeof (item as Record<string, unknown>).name === 'string'
-        && typeof (item as Record<string, unknown>).path === 'string'
-      ))
-      .map((item) => ({ name: item.name, path: item.path }))
-    : []
-  const fileAttachments = Array.isArray(row.fileAttachments)
-    ? row.fileAttachments
-      .filter((item): item is FileAttachment => (
-        Boolean(item)
-        && typeof item === 'object'
-        && typeof (item as Record<string, unknown>).label === 'string'
-        && typeof (item as Record<string, unknown>).path === 'string'
-        && typeof (item as Record<string, unknown>).fsPath === 'string'
-      ))
-      .map((item) => ({ label: item.label, path: item.path, fsPath: item.fsPath }))
-    : []
-  const reasoningEffort = typeof row.reasoningEffort === 'string'
-    && REASONING_EFFORT_OPTIONS.includes(row.reasoningEffort as ReasoningEffort)
-    ? row.reasoningEffort as ReasoningEffort
-    : ''
-
-  return {
-    clientMessageId,
-    threadId: typeof row.threadId === 'string' ? row.threadId.trim() : '',
-    cwd: typeof row.cwd === 'string' ? row.cwd.trim() : '',
-    text: typeof row.text === 'string' ? row.text : '',
-    imageUrls,
-    skills,
-    fileAttachments,
-    modelId: typeof row.modelId === 'string' ? row.modelId.trim() : '',
-    reasoningEffort,
-    collaborationMode: row.collaborationMode === 'plan' ? 'plan' : 'execute',
-    turnOptions: normalizeTurnOptions(row.turnOptions),
-    state: row.state === 'failed' ? 'failed' : row.state === 'confirming' ? 'confirming' : 'sending',
-    createdAtMs,
-    updatedAtMs: typeof row.updatedAtMs === 'number' && Number.isFinite(row.updatedAtMs)
-      ? row.updatedAtMs
-      : createdAtMs,
-  }
-}
-
-function normalizeMessageOutboxRemoval(value: unknown, nowMs = Date.now()): MessageOutboxRemoval | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const row = value as Record<string, unknown>
-  const clientMessageId = typeof row.clientMessageId === 'string' ? row.clientMessageId.trim() : ''
-  const removedAtMs = typeof row.removedAtMs === 'number' && Number.isFinite(row.removedAtMs)
-    ? row.removedAtMs
-    : 0
-  if (!clientMessageId || removedAtMs <= 0 || nowMs - removedAtMs > MESSAGE_OUTBOX_MAX_AGE_MS) return null
-  return { clientMessageId, removedAtMs }
-}
-
-function loadMessageOutboxState(): MessageOutboxState {
-  if (typeof window === 'undefined') return { entries: [], removals: [] }
-  try {
-    const raw = window.localStorage.getItem(MESSAGE_OUTBOX_STORAGE_KEY)
-    if (!raw) return { entries: [], removals: [] }
-    const parsed = JSON.parse(raw) as Partial<MessageOutboxPayload>
-    if (parsed.version !== MESSAGE_OUTBOX_VERSION || !Array.isArray(parsed.entries)) {
-      return { entries: [], removals: [] }
-    }
-    const nowMs = Date.now()
-    const entries = parsed.entries
-      .map((entry) => normalizeMessageOutboxEntry(entry, nowMs))
-      .filter((entry): entry is MessageOutboxEntry => entry !== null)
-      .sort((left, right) => left.createdAtMs - right.createdAtMs)
-      .slice(-MESSAGE_OUTBOX_MAX_ENTRIES)
-    const removals = (Array.isArray(parsed.removals) ? parsed.removals : [])
-      .map((entry) => normalizeMessageOutboxRemoval(entry, nowMs))
-      .filter((entry): entry is MessageOutboxRemoval => entry !== null)
-      .sort((left, right) => left.removedAtMs - right.removedAtMs)
-      .slice(-MESSAGE_OUTBOX_MAX_REMOVALS)
-    return mergeMessageOutboxState(entries, [], removals, [])
-  } catch {
-    return { entries: [], removals: [] }
-  }
-}
-
-function saveMessageOutboxState(entries: MessageOutboxEntry[], removals: MessageOutboxRemoval[]): void {
-  if (typeof window === 'undefined') return
-  try {
-    const nowMs = Date.now()
-    const nextEntries = entries
-      .filter((entry) => nowMs - entry.createdAtMs <= MESSAGE_OUTBOX_MAX_AGE_MS)
-      .sort((left, right) => left.createdAtMs - right.createdAtMs)
-      .slice(-MESSAGE_OUTBOX_MAX_ENTRIES)
-    const nextRemovals = removals
-      .filter((entry) => nowMs - entry.removedAtMs <= MESSAGE_OUTBOX_MAX_AGE_MS)
-      .sort((left, right) => left.removedAtMs - right.removedAtMs)
-      .slice(-MESSAGE_OUTBOX_MAX_REMOVALS)
-    if (nextEntries.length === 0 && nextRemovals.length === 0) {
-      window.localStorage.removeItem(MESSAGE_OUTBOX_STORAGE_KEY)
-      return
-    }
-    const payload: MessageOutboxPayload = {
-      version: MESSAGE_OUTBOX_VERSION,
-      entries: nextEntries,
-      removals: nextRemovals,
-    }
-    window.localStorage.setItem(MESSAGE_OUTBOX_STORAGE_KEY, JSON.stringify(payload))
-  } catch {
-    // Sending still proceeds when private mode or storage quota makes persistence unavailable.
-  }
-}
-
 function loadReadStateMap(): Record<string, string> {
   if (typeof window === 'undefined') return {}
 
@@ -496,7 +340,45 @@ function loadReadStateMap(): Record<string, string> {
 
 function saveReadStateMap(state: Record<string, string>): void {
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(READ_STATE_STORAGE_KEY, JSON.stringify(state))
+  try {
+    window.localStorage.setItem(READ_STATE_STORAGE_KEY, JSON.stringify(state))
+  } catch {
+    // Reading a conversation must still work when storage is unavailable.
+  }
+}
+
+function loadUnreadStateMap(): Record<string, boolean> {
+  if (typeof window === 'undefined') return {}
+
+  try {
+    const raw = window.localStorage.getItem(UNREAD_STATE_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const next: Record<string, boolean> = {}
+    for (const [threadId, unread] of Object.entries(parsed as Record<string, unknown>)) {
+      if (threadId.trim().length > 0 && unread === true) next[threadId] = true
+    }
+    return next
+  } catch {
+    return {}
+  }
+}
+
+function saveUnreadStateMap(state: Record<string, boolean>): void {
+  if (typeof window === 'undefined') return
+  try {
+    const unreadEntries = Object.fromEntries(
+      Object.entries(state).filter(([threadId, unread]) => threadId.trim().length > 0 && unread === true),
+    )
+    if (Object.keys(unreadEntries).length === 0) {
+      window.localStorage.removeItem(UNREAD_STATE_STORAGE_KEY)
+      return
+    }
+    window.localStorage.setItem(UNREAD_STATE_STORAGE_KEY, JSON.stringify(unreadEntries))
+  } catch {
+    // Unread feedback remains available in memory when storage is unavailable.
+  }
 }
 
 function clamp(value: number, minValue: number, maxValue: number): number {
@@ -1044,6 +926,10 @@ function normalizeQueuedMessage(value: unknown): QueuedMessage | null {
 
   return {
     id,
+    clientMessageId: typeof row.clientMessageId === 'string' && row.clientMessageId.trim()
+      ? row.clientMessageId.trim()
+      : `queued-${id}`,
+    deliveryState: row.deliveryState === 'failed' ? 'failed' : 'queued',
     text,
     imageUrls,
     skills,
@@ -1151,36 +1037,7 @@ function orderGroupsByProjectOrder(incoming: UiProjectGroup[], projectOrder: str
     }
   }
 
-  return orderPinnedProjectGroupsFirst(ordered)
-}
-
-function getPinnedProjectRank(group: UiProjectGroup): number {
-  return group.isPinnedProject === true && typeof group.pinnedProjectRank === 'number'
-    ? group.pinnedProjectRank
-    : Number.MAX_SAFE_INTEGER
-}
-
-function orderPinnedProjectGroupsFirst(groups: UiProjectGroup[]): UiProjectGroup[] {
-  const pinnedGroups = groups
-    .filter((group) => group.isPinnedProject === true)
-    .sort((first, second) => getPinnedProjectRank(first) - getPinnedProjectRank(second))
-  if (pinnedGroups.length === 0) return groups
-
-  const pinnedProjectNames = new Set(pinnedGroups.map((group) => group.projectName))
-  return [
-    ...pinnedGroups,
-    ...groups.filter((group) => !pinnedProjectNames.has(group.projectName)),
-  ]
-}
-
-function areStringArraysEqual(first?: string[], second?: string[]): boolean {
-  const left = Array.isArray(first) ? first : []
-  const right = Array.isArray(second) ? second : []
-  if (left.length !== right.length) return false
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) return false
-  }
-  return true
+  return orderProjectGroupsByRecentActivity(ordered)
 }
 
 function reorderStringArray(items: string[], fromIndex: number, toIndex: number): string[] {
@@ -1196,18 +1053,6 @@ function reorderStringArray(items: string[], fromIndex: number, toIndex: number)
   const [moved] = next.splice(fromIndex, 1)
   next.splice(toIndex, 0, moved)
   return next
-}
-
-function areCommandExecutionsEqual(first?: CommandExecutionData, second?: CommandExecutionData): boolean {
-  if (!first && !second) return true
-  if (!first || !second) return false
-  return (
-    first.status === second.status &&
-    first.aggregatedOutput === second.aggregatedOutput &&
-    first.exitCode === second.exitCode &&
-    first.durationMs === second.durationMs &&
-    first.startedAtMs === second.startedAtMs
-  )
 }
 
 function isUnsupportedChatGptModelError(error: unknown): boolean {
@@ -1234,232 +1079,6 @@ function isRetryableRuntimeSendError(error: unknown): boolean {
   )
 }
 
-function areMessageFieldsEqual(first: UiMessage, second: UiMessage): boolean {
-  return (
-    first.id === second.id &&
-    first.role === second.role &&
-    first.text === second.text &&
-    areStringArraysEqual(first.images, second.images) &&
-    first.messageType === second.messageType &&
-    first.rawPayload === second.rawPayload &&
-    first.isUnhandled === second.isUnhandled &&
-    areCommandExecutionsEqual(first.commandExecution, second.commandExecution) &&
-    first.turnIndex === second.turnIndex &&
-    first.deliveryState === second.deliveryState &&
-    first.deliveryError === second.deliveryError &&
-    first.deliveryAttempt === second.deliveryAttempt &&
-    first.deliveryAttemptMax === second.deliveryAttemptMax
-  )
-}
-
-function areMessageArraysEqual(first: UiMessage[], second: UiMessage[]): boolean {
-  if (first.length !== second.length) return false
-  for (let index = 0; index < first.length; index += 1) {
-    if (first[index] !== second[index]) return false
-  }
-  return true
-}
-
-function mergeMessages(
-  previous: UiMessage[],
-  incoming: UiMessage[],
-  options: { preserveMissing?: boolean; sortByTurnIndex?: boolean; replaceHistoryNotice?: boolean } = {},
-): UiMessage[] {
-  const previousById = new Map(previous.map((message) => [message.id, message]))
-  const incomingById = new Map(incoming.map((message) => [message.id, message]))
-  const incomingHasHistoryNotice = incoming.some((message) => message.messageType === 'history.notice')
-
-  const mergedIncoming = incoming.map((incomingMessage) => {
-    const previousMessage = previousById.get(incomingMessage.id)
-    if (previousMessage && areMessageFieldsEqual(previousMessage, incomingMessage)) {
-      return previousMessage
-    }
-    return incomingMessage
-  })
-
-  if (options.preserveMissing !== true) {
-    return areMessageArraysEqual(previous, mergedIncoming) ? previous : mergedIncoming
-  }
-
-  const mergedFromPrevious = previous
-    .filter((previousMessage) => {
-      return !(
-        options.replaceHistoryNotice === true &&
-        previousMessage.messageType === 'history.notice' &&
-        !incomingHasHistoryNotice
-      )
-    })
-    .map((previousMessage) => {
-      const nextMessage = incomingById.get(previousMessage.id)
-      if (!nextMessage) {
-        return previousMessage
-      }
-      if (areMessageFieldsEqual(previousMessage, nextMessage)) {
-        return previousMessage
-      }
-      return nextMessage
-    })
-
-  const previousIdSet = new Set(previous.map((message) => message.id))
-  const appended = mergedIncoming.filter((message) => !previousIdSet.has(message.id))
-  const merged = options.sortByTurnIndex === true
-    ? sortMessagesByTurnIndex([...mergedFromPrevious, ...appended])
-    : [...mergedFromPrevious, ...appended]
-
-  return areMessageArraysEqual(previous, merged) ? previous : merged
-}
-
-function sortMessagesByTurnIndex(messages: UiMessage[]): UiMessage[] {
-  const originalIndexById = new Map(messages.map((message, index) => [message.id, index]))
-  return [...messages].sort((first, second) => {
-    if (first.messageType === 'history.notice' && second.messageType !== 'history.notice') return -1
-    if (second.messageType === 'history.notice' && first.messageType !== 'history.notice') return 1
-
-    const firstTurnIndex = typeof first.turnIndex === 'number' ? first.turnIndex : null
-    const secondTurnIndex = typeof second.turnIndex === 'number' ? second.turnIndex : null
-    if (firstTurnIndex !== null && secondTurnIndex !== null && firstTurnIndex !== secondTurnIndex) {
-      return firstTurnIndex - secondTurnIndex
-    }
-    if (firstTurnIndex !== null && secondTurnIndex === null) return -1
-    if (firstTurnIndex === null && secondTurnIndex !== null) return 1
-
-    return (originalIndexById.get(first.id) ?? 0) - (originalIndexById.get(second.id) ?? 0)
-  })
-}
-
-function earliestTurnIndexFromMessages(messages: UiMessage[]): number | null {
-  let earliest: number | null = null
-  for (const message of messages) {
-    if (message.messageType === 'history.notice') continue
-    if (typeof message.turnIndex !== 'number' || !Number.isFinite(message.turnIndex)) continue
-    earliest = earliest === null ? message.turnIndex : Math.min(earliest, message.turnIndex)
-  }
-  return earliest
-}
-
-function removeStaleHistoryNoticeAfterOlderMerge(messages: UiMessage[]): UiMessage[] {
-  const earliest = earliestTurnIndexFromMessages(messages)
-  if (earliest === null || earliest > 0) return messages
-  const nextMessages = messages.filter((message) => message.messageType !== 'history.notice')
-  return nextMessages.length === messages.length ? messages : nextMessages
-}
-
-function normalizeMessageSignatureList(values: string[] | undefined): string {
-  return (values ?? [])
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0)
-    .join('\u001f')
-}
-
-function normalizeMessageText(value: string): string {
-  return value.replace(/\s+/gu, ' ').trim()
-}
-
-function userMessageSignature(message: UiMessage): string {
-  const filePaths = (message.fileAttachments ?? []).map((file) => file.path)
-  return [
-    normalizeMessageText(message.text),
-    normalizeMessageSignatureList(message.images),
-    normalizeMessageSignatureList(filePaths),
-  ].join('\u001e')
-}
-
-function parseOptimisticUserMessageMeta(message: UiMessage): OptimisticUserMessageMeta | null {
-  if (!message.id.startsWith(OPTIMISTIC_USER_MESSAGE_PREFIX)) return null
-  const inMemoryMeta = optimisticUserMessageMetaById.get(message.id)
-  if (inMemoryMeta) return inMemoryMeta
-  if (!message.rawPayload) return null
-
-  try {
-    const parsed = JSON.parse(message.rawPayload) as unknown
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
-    const record = parsed as Record<string, unknown>
-    if (record.kind !== 'optimisticUserMessage') return null
-    if (typeof record.signature !== 'string') return null
-    if (typeof record.baselineMatchCount !== 'number' || !Number.isFinite(record.baselineMatchCount)) return null
-    if (typeof record.createdAtMs !== 'number' || !Number.isFinite(record.createdAtMs)) return null
-    return {
-      kind: 'optimisticUserMessage',
-      signature: record.signature,
-      baselineMatchCount: Math.max(0, Math.floor(record.baselineMatchCount)),
-      createdAtMs: record.createdAtMs,
-    }
-  } catch {
-    return null
-  }
-}
-
-function countPersistedUserMessageSignatures(messages: UiMessage[]): Map<string, number> {
-  const counts = new Map<string, number>()
-  for (const message of messages) {
-    if (message.role !== 'user') continue
-    if (message.id.startsWith(OPTIMISTIC_USER_MESSAGE_PREFIX)) continue
-    const signature = userMessageSignature(message)
-    counts.set(signature, (counts.get(signature) ?? 0) + 1)
-  }
-  return counts
-}
-
-function filterVisibleOptimisticUserMessages(persisted: UiMessage[], optimistic: UiMessage[]): UiMessage[] {
-  if (optimistic.length === 0) return optimistic
-
-  const persistedCounts = countPersistedUserMessageSignatures(persisted)
-  const consumedAcknowledgements = new Map<string, number>()
-
-  return optimistic.filter((message) => {
-    const meta = parseOptimisticUserMessageMeta(message)
-    const signature = meta?.signature ?? userMessageSignature(message)
-    const baselineMatchCount = meta?.baselineMatchCount ?? 0
-    const acknowledgedCount = Math.max((persistedCounts.get(signature) ?? 0) - baselineMatchCount, 0)
-    const consumedCount = consumedAcknowledgements.get(signature) ?? 0
-
-    if (acknowledgedCount > consumedCount) {
-      consumedAcknowledgements.set(signature, consumedCount + 1)
-      return false
-    }
-
-    return true
-  })
-}
-
-function removeRedundantLiveAgentMessages(previous: UiMessage[], incoming: UiMessage[]): UiMessage[] {
-  const incomingAssistantTexts = new Set(
-    incoming
-      .filter((message) => message.role === 'assistant')
-      .map((message) => normalizeMessageText(message.text))
-      .filter((text) => text.length > 0),
-  )
-
-  if (incomingAssistantTexts.size === 0) {
-    return previous
-  }
-
-  const next = previous.filter((message) => {
-    if (message.messageType !== 'agentMessage.live') return true
-    const normalized = normalizeMessageText(message.text)
-    if (normalized.length === 0) return false
-    return !incomingAssistantTexts.has(normalized)
-  })
-
-  return next.length === previous.length ? previous : next
-}
-
-function upsertMessage(previous: UiMessage[], nextMessage: UiMessage): UiMessage[] {
-  const existingIndex = previous.findIndex((message) => message.id === nextMessage.id)
-  if (existingIndex < 0) {
-    return [...previous, nextMessage]
-  }
-
-  const existing = previous[existingIndex]
-  if (areMessageFieldsEqual(existing, nextMessage)) {
-    return previous
-  }
-
-  const next = [...previous]
-  next.splice(existingIndex, 1, nextMessage)
-  return next
-}
-
 type TurnSummaryState = {
   turnId: string
   durationMs: number
@@ -1467,12 +1086,17 @@ type TurnSummaryState = {
 }
 
 type TurnActivityState = {
+  activityId: string
+  turnId: string
   label: string
   details: string[]
   startedAtMs: number
 }
 
 type TurnActivityInput = {
+  activityId?: string
+  turnId?: string
+  reset?: boolean
   label: string
   details: string[]
   startedAtMs?: number
@@ -1480,13 +1104,6 @@ type TurnActivityInput = {
 
 type TurnErrorState = {
   message: string
-}
-
-type OptimisticUserMessageMeta = {
-  kind: 'optimisticUserMessage'
-  signature: string
-  baselineMatchCount: number
-  createdAtMs: number
 }
 
 type TurnStartedInfo = {
@@ -1559,6 +1176,8 @@ function areTurnSummariesEqual(first?: TurnSummaryState, second?: TurnSummarySta
 function areTurnActivitiesEqual(first?: TurnActivityState, second?: TurnActivityState): boolean {
   if (!first && !second) return true
   if (!first || !second) return false
+  if (first.activityId !== second.activityId) return false
+  if (first.turnId !== second.turnId) return false
   if (first.startedAtMs !== second.startedAtMs) return false
   if (first.label !== second.label) return false
   if (first.details.length !== second.details.length) return false
@@ -1809,7 +1428,22 @@ function toOptimisticThreadTitle(message: string): string {
   return firstLine.slice(0, 80)
 }
 
-export function useDesktopState() {
+export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {}) {
+  function notifyDeliveryPersisted(override?: () => void): void {
+    try { (override ?? submitCallbacks.onDeliveryPersisted)?.() } catch {}
+  }
+
+  function notifyPendingRequestCreated(
+    override: ((clientMessageId: string) => void) | undefined,
+    clientMessageId: string,
+  ): void {
+    try { (override ?? submitCallbacks.onPendingRequestCreated)?.(clientMessageId) } catch {}
+  }
+
+  function requestDispatchedCallback(override?: () => void): (() => void) | undefined {
+    return override ?? submitCallbacks.onRequestDispatched
+  }
+
   const projectGroups = ref<UiProjectGroup[]>([])
   const sourceGroups = ref<UiProjectGroup[]>([])
   const workspaceRootGroups = ref<UiProjectGroup[]>([])
@@ -1824,6 +1458,7 @@ export function useDesktopState() {
   const tokenUsageRefreshAttemptedAtByThreadId = new Map<string, number>()
   const tokenUsageRefreshTimerByThreadId = new Map<string, number>()
   const messageLoadInFlightByThreadId = new Map<string, Promise<void>>()
+  const authoritativeMessageLoadInFlightThreadIds = new Set<string>()
   const inProgressById = ref<Record<string, boolean>>({})
   type PendingTurnRequest = {
     text: string
@@ -1860,7 +1495,7 @@ export function useDesktopState() {
   type BufferedCommandDelta = { threadId: string; itemId: string; delta: string }
   const queuedMessagesByThreadId = ref<Record<string, QueuedMessage[]>>(loadQueuedMessagesMap())
   const queueProcessingByThreadId = ref<Record<string, boolean>>({})
-  const eventUnreadByThreadId = ref<Record<string, boolean>>({})
+  const eventUnreadByThreadId = ref<Record<string, boolean>>(loadUnreadStateMap())
   const availableModels = ref<ComposerModelInfo[]>([])
   const availableModelIds = ref<string[]>([])
   const selectedModelId = ref(loadSelectedModelId())
@@ -1912,8 +1547,8 @@ export function useDesktopState() {
   const notificationHealthTick = ref(Date.now())
   const realtimeConnectionState = ref<RealtimeConnectionState>('connecting')
   const lastSuccessfulSyncAtMs = ref(0)
+  const foregroundRecoveryThreadId = ref('')
   const hasLoadedThreads = ref(false)
-  let stopNotificationStream: (() => void) | null = null
   let backgroundSyncTimer: number | null = null
   let scrollStateSaveTimer: number | null = null
   let activeSyncBoostTimer: number | null = null
@@ -1943,6 +1578,8 @@ export function useDesktopState() {
   const pendingThreadMessageRefresh = new Set<string>()
   let visibilitySyncTimer: number | null = null
   const resumeSyncTimers = new Set<number>()
+  let foregroundRecoveryFeedbackTimer: number | null = null
+  let foregroundRecoveryFeedbackStartedAtMs = 0
   let lastAndroidResumeSyncScheduledAtMs = 0
   let stopVisibilitySync = (): void => {}
   let hasHydratedWorkspaceRootsState = false
@@ -1956,6 +1593,7 @@ export function useDesktopState() {
   const settledRuntimeRpcRefreshKeyByThreadId = new Map<string, string>()
   const settledRuntimeRpcRefreshInFlightByThreadId = new Map<string, string>()
   const cachedThreadMessageSignatureByThreadId = new Map<string, string>()
+  const latestRuntimeEventSeqByThreadId = new Map<string, number>()
   const lastExecutionSignalPublishedAtByThreadId = new Map<string, number>()
   const fallbackRetryInFlightThreadIds = new Set<string>()
   const nonFreshThreadDetailRetryTimersByThreadId = new Map<string, number>()
@@ -1979,6 +1617,12 @@ export function useDesktopState() {
       }
       scheduleEventSync(0)
     },
+  })
+  const realtimeConnectionManager = createConnectionManager<RpcNotification>({
+    subscribe: (onNotification, handlers) => subscribeCodexNotifications(onNotification, handlers),
+    onNotification: processIncomingNotification,
+    onTransportActivity: noteIncomingNotificationActivity,
+    onConnectionStateChange: handleRealtimeConnectionStateChange,
   })
 
   function mergeWorkspaceRootGroups(threadGroups: UiProjectGroup[]): UiProjectGroup[] {
@@ -2025,7 +1669,7 @@ export function useDesktopState() {
   )
 
   function latestTaskPetReply(threadId: string): string {
-    const normalize = (value: string) => value.replace(/\s+/g, ' ').trim().slice(0, 260)
+    const normalize = (value: string) => compactLatestReplyTail(value, 260)
     const liveMessages = liveAgentMessagesByThreadId.value[threadId] ?? []
     for (let index = liveMessages.length - 1; index >= 0; index -= 1) {
       const normalized = normalize(liveMessages[index]?.text ?? '')
@@ -2036,6 +1680,7 @@ export function useDesktopState() {
     const visibleOptimistic = filterVisibleOptimisticUserMessages(
       persisted,
       optimisticUserMessagesByThreadId.value[threadId] ?? [],
+      optimisticUserMessageMetaById,
     )
     if (visibleOptimistic.length > 0) return ''
 
@@ -2055,6 +1700,21 @@ export function useDesktopState() {
     return ''
   }
 
+  function latestTaskPetClientMessageId(threadId: string): string {
+    const optimisticMessages = optimisticUserMessagesByThreadId.value[threadId] ?? []
+    for (let index = optimisticMessages.length - 1; index >= 0; index -= 1) {
+      const message = optimisticMessages[index]
+      if (!message || message.deliveryState === 'failed') continue
+      const clientMessageId = outboxClientIdByOptimisticMessageId.get(message.id)?.trim() ?? ''
+      if (clientMessageId) return clientMessageId
+    }
+    if (queueProcessingByThreadId.value[threadId] === true) {
+      const clientMessageId = queuedMessagesByThreadId.value[threadId]?.[0]?.clientMessageId?.trim() ?? ''
+      if (clientMessageId) return clientMessageId
+    }
+    return ''
+  }
+
   const activeTaskPetItems = computed<UiTaskPetItem[]>(() => sourceThreads.value
     .filter((thread) => (
       isThreadExecutionActive(thread.id)
@@ -2063,18 +1723,37 @@ export function useDesktopState() {
     .map((thread) => {
       const pendingRequest = (pendingServerRequestsByThreadId.value[thread.id] ?? [])[0]
       const activity = turnActivityByThreadId.value[thread.id]
+      const runtimeSummary = runtimeStatusSummaryByThreadId.value[thread.id]
+      const clientMessageId = latestTaskPetClientMessageId(thread.id)
       const detail = pendingRequest
         ? pendingServerRequestStatusLabel(pendingRequest)
         : localizeActivityText(activity?.label || 'Thinking')
       const latestActivity = activity?.details.at(-1)?.trim() || ''
       const state: UiTaskPetItem['state'] = pendingRequest ? 'waiting' : 'running'
+      const runtimeReplyMatchesActiveTurn = !pendingRequest && (
+        !activity
+        || Boolean(
+          activity.turnId
+          && runtimeSummary?.activeTurnId
+          && activity.turnId === runtimeSummary.activeTurnId,
+        )
+      )
+      const runtimeLatestReply = runtimeReplyMatchesActiveTurn
+        ? runtimeSummary?.latestReply.trim() ?? ''
+        : ''
+      const latestReply = runtimeLatestReply || latestTaskPetReply(thread.id)
       return {
         threadId: thread.id,
+        clientMessageId: clientMessageId || undefined,
+        activityId: activity?.activityId || runtimeSummary?.activeTurnId || '',
+        startedAtMs: activity?.startedAtMs ?? readRuntimeActivityStartedAtMs(runtimeSummary) ?? undefined,
+        lastEventSeq: runtimeSummary?.lastEventSeq ?? 0,
         title: thread.title.trim() || thread.preview.trim() || '未命名会话',
         projectName: thread.projectName.trim(),
         detail,
         latestActivity: latestActivity === detail ? '' : latestActivity,
-        latestReply: latestTaskPetReply(thread.id),
+        latestReply,
+        latestReplyEventSeq: runtimeLatestReply ? runtimeSummary?.latestReplyEventSeq ?? 0 : 0,
         state,
         updatedAtIso: thread.updatedAtIso,
       }
@@ -2215,11 +1894,14 @@ export function useDesktopState() {
     if (!threadId) return null
 
     const activity = turnActivityByThreadId.value[threadId]
-    const runtimeStartedAtMs = parseIsoTimestamp(runtimeStatusSummaryByThreadId.value[threadId]?.lastStartedAtIso ?? '')
+    const isRecovering = foregroundRecoveryThreadId.value === threadId
+    const runtimeStartedAtMs = readRuntimeActivityStartedAtMs(runtimeStatusSummaryByThreadId.value[threadId])
     const startedAtMs = activity?.startedAtMs ?? runtimeStartedAtMs ?? Date.now()
     const pendingRequest = selectedThreadServerRequests.value[0]
     if (pendingRequest) {
       return {
+        activityId: `request:${String(pendingRequest.id)}`,
+        isRecovering,
         startedAtMs,
         activityLabel: pendingServerRequestStatusLabel(pendingRequest),
         activityDetails: pendingServerRequestStatusDetails(pendingRequest),
@@ -2251,6 +1933,8 @@ export function useDesktopState() {
     if (isSettled && !errorText && !reasoningText && !hasRunningCommand && !hasPendingSignal) return null
     if (!activity && !reasoningText && !errorText && !isInProgress && !hasRunningCommand && !hasPendingSignal) return null
     return {
+      activityId: activity?.activityId,
+      isRecovering,
       startedAtMs,
       activityLabel: localizeActivityText(activity?.label || 'Thinking'),
       activityDetails: (activity?.details ?? []).map((line) => localizeActivityText(line)),
@@ -2393,6 +2077,7 @@ export function useDesktopState() {
     const optimisticUser = filterVisibleOptimisticUserMessages(
       persisted,
       optimisticUserMessagesByThreadId.value[threadId] ?? [],
+      optimisticUserMessageMetaById,
     )
     const liveAgent = liveAgentMessagesByThreadId.value[threadId] ?? []
     const liveCommands = liveCommandsByThreadId.value[threadId] ?? []
@@ -2789,9 +2474,8 @@ export function useDesktopState() {
       threads: group.threads.map((thread) => {
         const inProgress = isThreadExecutionActive(thread.id)
         const isSelected = selectedThreadId.value === thread.id
-        const lastReadIso = readStateByThreadId.value[thread.id]
         const unreadByEvent = eventUnreadByThreadId.value[thread.id] === true
-        const unread = !isSelected && !inProgress && (unreadByEvent || lastReadIso !== thread.updatedAtIso)
+        const unread = !isSelected && !inProgress && unreadByEvent
 
         return {
           ...thread,
@@ -2800,7 +2484,10 @@ export function useDesktopState() {
         }
       }),
     }))
-    projectGroups.value = mergeThreadGroups(projectGroups.value, flaggedGroups)
+    projectGroups.value = mergeThreadGroups(
+      projectGroups.value,
+      orderProjectGroupsByRecentActivity(flaggedGroups),
+    )
   }
 
   function insertOptimisticThread(threadId: string, cwd: string, firstMessageText: string): void {
@@ -2916,13 +2603,19 @@ export function useDesktopState() {
     lastExecutionSignalAtByThreadId.value = pruneThreadStateMap(lastExecutionSignalAtByThreadId.value, activeThreadIds)
     threadReadActiveStateByThreadId.value = pruneThreadStateMap(threadReadActiveStateByThreadId.value, activeThreadIds)
     ignoredStaleActiveTurnByThreadId.value = pruneThreadStateMap(ignoredStaleActiveTurnByThreadId.value, activeThreadIds)
-    eventUnreadByThreadId.value = pruneThreadStateMap(eventUnreadByThreadId.value, activeThreadIds)
+    const nextUnreadState = pruneThreadStateMap(eventUnreadByThreadId.value, activeThreadIds)
+    if (nextUnreadState !== eventUnreadByThreadId.value) {
+      replaceEventUnreadState(nextUnreadState)
+    }
     inProgressById.value = pruneThreadStateMap(inProgressById.value, activeThreadIds)
     const nextQueuedMessages = pruneThreadStateMap(queuedMessagesByThreadId.value, activeThreadIds)
     if (nextQueuedMessages !== queuedMessagesByThreadId.value) {
       replaceQueuedMessagesState(nextQueuedMessages)
     }
     queueProcessingByThreadId.value = pruneThreadStateMap(queueProcessingByThreadId.value, activeThreadIds)
+    for (const threadId of latestRuntimeEventSeqByThreadId.keys()) {
+      if (!activeThreadIds.has(threadId)) latestRuntimeEventSeqByThreadId.delete(threadId)
+    }
     const nextPending: Record<string, UiServerRequest[]> = {}
     for (const [threadId, requests] of Object.entries(pendingServerRequestsByThreadId.value)) {
       if (threadId === GLOBAL_SERVER_REQUEST_SCOPE || activeThreadIds.has(threadId)) {
@@ -2956,6 +2649,30 @@ export function useDesktopState() {
     setQueuedMessagesForThread(normalizedThreadId, next)
   }
 
+  function setQueuedMessageDeliveryState(
+    threadId: string,
+    messageId: string,
+    deliveryState: QueuedMessage['deliveryState'],
+    clientMessageId?: string,
+  ): void {
+    const queue = queuedMessagesByThreadId.value[threadId]
+    if (!queue) return
+    const next = queue.map((message) => (
+      message.id === messageId && (
+        message.deliveryState !== deliveryState
+        || (clientMessageId && message.clientMessageId !== clientMessageId)
+      )
+        ? { ...message, deliveryState, clientMessageId: clientMessageId || message.clientMessageId }
+        : message
+    ))
+    setQueuedMessagesForThread(threadId, next)
+  }
+
+  function replaceEventUnreadState(nextState: Record<string, boolean>): void {
+    eventUnreadByThreadId.value = nextState
+    saveUnreadStateMap(nextState)
+  }
+
   function markThreadAsRead(threadId: string): void {
     const thread = sourceThreadById.value[threadId]
     if (!thread) return
@@ -2966,7 +2683,7 @@ export function useDesktopState() {
     }
     saveReadStateMap(readStateByThreadId.value)
     if (eventUnreadByThreadId.value[threadId]) {
-      eventUnreadByThreadId.value = omitKey(eventUnreadByThreadId.value, threadId)
+      replaceEventUnreadState(omitKey(eventUnreadByThreadId.value, threadId))
     }
     applyThreadFlags()
   }
@@ -2990,7 +2707,7 @@ export function useDesktopState() {
     readStateByThreadId.value = nextReadState
     saveReadStateMap(nextReadState)
     if (hadEventUnread) {
-      eventUnreadByThreadId.value = {}
+      replaceEventUnreadState({})
     }
     applyThreadFlags()
   }
@@ -3115,10 +2832,10 @@ export function useDesktopState() {
     if (!threadId) return
     if (threadId === selectedThreadId.value) return
     if (eventUnreadByThreadId.value[threadId] === true) return
-    eventUnreadByThreadId.value = {
+    replaceEventUnreadState({
       ...eventUnreadByThreadId.value,
       [threadId]: true,
-    }
+    })
     applyThreadFlags()
   }
 
@@ -3134,17 +2851,40 @@ export function useDesktopState() {
     }
 
     const normalizedLabel = sanitizeDisplayText(activity.label) || 'Thinking'
+    const explicitStartedAtMs =
+      typeof activity.startedAtMs === 'number' && Number.isFinite(activity.startedAtMs) && activity.startedAtMs > 0
+        ? activity.startedAtMs
+        : null
+    const runtimeSummary = runtimeStatusSummaryByThreadId.value[threadId]
+    const authoritativeStartedAtMs = explicitStartedAtMs ?? readRuntimeActivityStartedAtMs(runtimeSummary)
+    const incomingTurnId = activity.turnId?.trim() || (
+      activity.reset === true
+        ? ''
+        : activeTurnIdByThreadId.value[threadId]?.trim() || runtimeSummary?.activeTurnId?.trim() || ''
+    )
+    const continuesExistingActivity = Boolean(previous) && activity.reset !== true && (
+      !incomingTurnId || !previous?.turnId || previous.turnId === incomingTurnId
+    )
     const incomingDetails = activity.details
       .map((line) => sanitizeDisplayText(line))
       .filter((line) => line.length > 0 && line !== normalizedLabel)
-    const mergedDetails = Array.from(new Set([...(previous?.details ?? []), ...incomingDetails])).slice(-3)
+    const mergedDetails = Array.from(new Set([
+      ...(continuesExistingActivity ? previous?.details ?? [] : []),
+      ...incomingDetails,
+    ])).slice(-3)
+    const startedAtMs = continuesExistingActivity
+      ? previous && authoritativeStartedAtMs
+        ? Math.min(previous.startedAtMs, authoritativeStartedAtMs)
+        : previous?.startedAtMs ?? authoritativeStartedAtMs ?? Date.now()
+      : authoritativeStartedAtMs ?? Date.now()
     const nextActivity: TurnActivityState = {
+      activityId: continuesExistingActivity
+        ? previous?.activityId ?? ''
+        : activity.activityId?.trim() || incomingTurnId || `local:${threadId}:${startedAtMs}`,
+      turnId: incomingTurnId || (continuesExistingActivity ? previous?.turnId ?? '' : ''),
       label: localizeActivityText(normalizedLabel),
       details: mergedDetails,
-      startedAtMs:
-        typeof activity.startedAtMs === 'number' && Number.isFinite(activity.startedAtMs) && activity.startedAtMs > 0
-          ? activity.startedAtMs
-          : previous?.startedAtMs ?? parseIsoTimestamp(runtimeStatusSummaryByThreadId.value[threadId]?.lastStartedAtIso ?? '') ?? Date.now(),
+      startedAtMs,
     }
 
     if (areTurnActivitiesEqual(previous, nextActivity)) return
@@ -3493,6 +3233,16 @@ export function useDesktopState() {
     )
   }
 
+  function readAuthoritativeSettledAtMs(
+    runtime: Pick<UiRuntimeStatusSummary, 'executionState' | 'lastCompletedAtIso' | 'messageState' | 'updatedAtIso'> | undefined,
+  ): number | null {
+    if (!runtime) return null
+    const completedAtMs = parseIsoTimestamp(runtime.lastCompletedAtIso ?? '')
+    if (completedAtMs !== null) return completedAtMs
+    if (runtime.messageState !== 'fresh' || !isRuntimeExecutionSettledState(runtime.executionState)) return null
+    return parseIsoTimestamp(runtime.updatedAtIso ?? '')
+  }
+
   function getSettledRuntimeMessageRefreshKey(snapshot: ThreadRuntimeSnapshot | null): string {
     if (!snapshot) return ''
     if (!isRuntimeExecutionSettledState(snapshot.executionState)) return ''
@@ -3539,6 +3289,8 @@ export function useDesktopState() {
       messageState: 'unavailable',
       updatedAtIso: '',
       lastEventSeq: 0,
+      latestReply: '',
+      latestReplyEventSeq: 0,
       lastStartedAtIso: null,
       lastCompletedAtIso: null,
     }
@@ -3554,6 +3306,13 @@ export function useDesktopState() {
     }
   }
 
+  function rememberLatestRuntimeEventSequence(threadId: string, eventSeq: number | undefined): void {
+    if (!threadId || typeof eventSeq !== 'number' || !Number.isFinite(eventSeq)) return
+    const normalizedSeq = Math.max(0, Math.trunc(eventSeq))
+    if (normalizedSeq <= (latestRuntimeEventSeqByThreadId.get(threadId) ?? 0)) return
+    latestRuntimeEventSeqByThreadId.set(threadId, normalizedSeq)
+  }
+
   function rememberRuntimeSnapshotSummary(threadId: string, snapshot: ThreadRuntimeSnapshot): void {
     rememberRuntimeStatusSummary(threadId, {
       threadId,
@@ -3567,6 +3326,8 @@ export function useDesktopState() {
       messageState: snapshot.messageState,
       updatedAtIso: snapshot.updatedAtIso,
       lastEventSeq: snapshot.lastEventSeq,
+      latestReply: snapshot.latestReply,
+      latestReplyEventSeq: snapshot.latestReplyEventSeq,
       lastStartedAtIso: snapshot.lastStartedAtIso,
       lastCompletedAtIso: snapshot.lastCompletedAtIso,
     })
@@ -3603,8 +3364,24 @@ export function useDesktopState() {
 
   function applyRuntimeSnapshotState(threadId: string, snapshot: ThreadRuntimeSnapshot): boolean {
     if (!threadId) return false
-    if (!shouldApplyRuntimeSnapshotVersion(runtimeStatusSummaryByThreadId.value[threadId], snapshot)) return false
+    finishForegroundRecoveryFeedback(threadId)
+    const currentSummary = runtimeStatusSummaryByThreadId.value[threadId]
+    const currentEventSeq = Math.max(
+      currentSummary?.lastEventSeq ?? 0,
+      latestRuntimeEventSeqByThreadId.get(threadId) ?? 0,
+    )
+    if (!shouldApplyRuntimeSnapshotVersion({ lastEventSeq: currentEventSeq }, snapshot)) return false
+    rememberLatestRuntimeEventSequence(threadId, snapshot.lastEventSeq)
     rememberRuntimeSnapshotSummary(threadId, snapshot)
+    const authoritativeTurnStartedAtMs = parseIsoTimestamp(snapshot.lastStartedAtIso ?? '')
+    if (authoritativeTurnStartedAtMs !== null) {
+      markChatFeedbackServerAcknowledged({
+        threadId,
+        turnId: snapshot.activeTurnId || undefined,
+        turnStarted: true,
+        turnStartedAtMs: authoritativeTurnStartedAtMs,
+      })
+    }
     runtimeExecutionStateByThreadId.value = {
       ...runtimeExecutionStateByThreadId.value,
       [threadId]: snapshot.executionState,
@@ -3649,12 +3426,37 @@ export function useDesktopState() {
 
     if (isRuntimeExecutionSettledState(snapshot.executionState)) {
       const hasPendingServerRequests = (snapshot.pendingServerRequests ?? []).length > 0
-      const preserveLocalTurnFeedback = hasPendingLocalTurnFeedback(threadId)
+      const hasUnconfirmedOutboxEntry = snapshot.executionState === 'failed'
+        && hasUnconfirmedMessageOutboxEntryForThread(threadId)
+      const settledAtMs = readAuthoritativeSettledAtMs(snapshot)
+      if (
+        !hasPendingServerRequests
+        && settledAtMs !== null
+        && shouldSettleOptimisticDeliveryFromRuntimeSnapshot(
+          snapshot.executionState,
+          hasUnconfirmedOutboxEntry,
+        )
+      ) {
+        settleOptimisticUserMessagesThrough(threadId, settledAtMs)
+        const pending = pendingTurnRequestByThreadId.value[threadId]
+        if (pending && pending.createdAtMs <= settledAtMs) {
+          clearPendingTurnRequest(threadId)
+        }
+      }
+      if (hasUnconfirmedOutboxEntry) {
+        const failureMessage = normalizeMessageText(snapshot.lastError ?? '') || '发送请求未能启动'
+        setTurnErrorForThread(threadId, failureMessage)
+        error.value = failureMessage
+        void recoverPersistentMessageOutbox()
+      }
+      const preserveLocalTurnFeedback = hasUnconfirmedOutboxEntry || hasPendingLocalTurnFeedback(threadId)
       if (!hasPendingServerRequests && pendingTurnRequestByThreadId.value[threadId] && !preserveLocalTurnFeedback) {
         clearPendingTurnRequest(threadId)
       }
-      if (!hasPendingServerRequests && !hasQueuedFollowupWork(threadId) && !preserveLocalTurnFeedback) {
+      if (!hasPendingServerRequests && !preserveLocalTurnFeedback) {
+        setPendingServerRequestsForThread(threadId, [])
         clearSettledRuntimeResidue(threadId, snapshot.executionState)
+        void processQueuedMessages(threadId)
         return true
       }
       setThreadReadActiveState(threadId, null)
@@ -3669,6 +3471,7 @@ export function useDesktopState() {
     options: { canStop?: boolean; activeTurnId?: string; eventSeq?: number; eventAtIso?: string } = {},
   ): void {
     if (!threadId) return
+    rememberLatestRuntimeEventSequence(threadId, options.eventSeq)
     const previousState = runtimeExecutionStateByThreadId.value[threadId]
     const previousCanStop = runtimeCanStopByThreadId.value[threadId] === true
     const nextCanStop = options.canStop === true
@@ -3771,6 +3574,7 @@ export function useDesktopState() {
 
     const threadId = extractThreadIdFromNotification(notification)
     if (!threadId) return
+    rememberLatestRuntimeEventSequence(threadId, notification.seq)
 
     if (method === 'turn/started' || method === 'thread/started') {
       const startedTurn = readTurnStartedInfo(notification)
@@ -3799,6 +3603,12 @@ export function useDesktopState() {
     }
 
     if (method === 'item/started' || method === 'item/updated' || method === 'item/delta' || method.endsWith('/delta')) {
+      const currentState = runtimeExecutionStateByThreadId.value[threadId]
+      if (isRuntimeExecutionActiveState(currentState)) {
+        markThreadLiveExecutionSignal(threadId)
+        return
+      }
+      if (isRuntimeExecutionSettledState(currentState)) return
       setRuntimeExecutionState(threadId, 'running', { canStop: true, ...eventVersion })
     }
   }
@@ -3824,6 +3634,7 @@ export function useDesktopState() {
     clearPendingTurnRequest(threadId)
     clearSettledRuntimeResidue(threadId, state)
     setPendingServerRequestsForThread(threadId, [])
+    markThreadUnreadByEvent(threadId)
     pendingThreadMessageRefresh.add(threadId)
     pendingThreadsRefresh = true
   }
@@ -3861,13 +3672,11 @@ export function useDesktopState() {
     if (inProgressById.value[threadId] === true) return false
     if (typeof activeTurnIdByThreadId.value[threadId] === 'string' && activeTurnIdByThreadId.value[threadId].trim().length > 0) return false
     if (hasPendingServerRequestSignal(threadId)) return false
-    if (hasQueuedThreadWork(threadId)) return false
     return true
   }
 
   function hasStrongExecutionSignal(threadId: string): boolean {
     if (!threadId) return false
-    if (hasQueuedThreadWork(threadId)) return true
     if (hasRunningLiveCommand(threadId)) return true
     if (!hasRecoveredCompletionAfterRunningCommand(threadId) && hasPersistedRunningCommand(threadId)) return true
     return (pendingServerRequestsByThreadId.value[threadId] ?? []).length > 0
@@ -3913,7 +3722,6 @@ export function useDesktopState() {
       const currentActiveTurnId = activeTurnIdByThreadId.value[threadId]?.trim() ?? ''
       const hasRecoverableTransientState =
         hasPendingServerRequestSignal(threadId) ||
-        hasQueuedThreadWork(threadId) ||
         hasFreshExecutionSignal(threadId, OPTIMISTIC_EXECUTION_RECOVERY_GRACE_MS)
       if (hasRecoverableTransientState) {
         return {
@@ -3929,8 +3737,7 @@ export function useDesktopState() {
       isRuntimeExecutionStale(threadId) &&
       hasLoadedThreadDetail(threadId) &&
       hasRecoveredCompletionAfterRunningActivity(threadId) &&
-      !hasPendingServerRequestSignal(threadId) &&
-      !hasQueuedThreadWork(threadId)
+      !hasPendingServerRequestSignal(threadId)
     ) {
       clearThreadExecutionTracking(threadId)
       return { inProgress: false, activeTurnId: '' }
@@ -4024,7 +3831,6 @@ export function useDesktopState() {
     if (!hasLoadedThreadDetail(threadId)) return false
     if (!hasAssistantOutputAfterLatestPersistedRunningCommand(threadId)) return false
     if (hasPendingServerRequestSignal(threadId)) return false
-    if (hasQueuedThreadWork(threadId)) return false
     return true
   }
 
@@ -4033,7 +3839,6 @@ export function useDesktopState() {
     if (!hasLoadedThreadDetail(threadId)) return false
     if (isRuntimeExecutionFreshActiveState(threadId)) return false
     if (hasPendingServerRequestSignal(threadId)) return false
-    if (hasQueuedThreadWork(threadId)) return false
     if (hasAssistantOutputAfterLatestPersistedRunningCommand(threadId)) return true
     return hasRunningLiveCommand(threadId) && hasAssistantOutputAfterLatestUserMessage(threadId)
   }
@@ -4073,15 +3878,13 @@ export function useDesktopState() {
       isRuntimeExecutionFreshActiveState(threadId) ||
       hasRunningLiveCommand(threadId) ||
       hasPendingServerRequestSignal(threadId) ||
-      hasQueuedThreadWork(threadId) ||
       (!runtimeIsStale && hasFreshExecutionSignal(threadId, STALE_THREAD_ACTIVE_TURN_TTL_MS))
     if (!hasAuthoritativeRunningSignal) return false
     if (
       runtimeIsStale &&
       hasAssistantOutputAfterLatestPersistedRunningCommand(threadId) &&
       !hasRunningLiveCommand(threadId) &&
-      !hasPendingServerRequestSignal(threadId) &&
-      !hasQueuedThreadWork(threadId)
+      !hasPendingServerRequestSignal(threadId)
     ) return false
     if (hasSettledThreadDetail(threadId) && !hasRunningLiveCommand(threadId)) return false
     return (persistedMessagesByThreadId.value[threadId] ?? [])
@@ -4097,30 +3900,19 @@ export function useDesktopState() {
 
   function hasPendingLocalTurnFeedback(threadId: string): boolean {
     if (!threadId) return false
-    if ((optimisticUserMessagesByThreadId.value[threadId] ?? []).some((message) => message.deliveryState !== 'failed')) {
+    const runtimeSummary = runtimeStatusSummaryByThreadId.value[threadId]
+    const completedAtMs = readAuthoritativeSettledAtMs(runtimeSummary)
+    if ((optimisticUserMessagesByThreadId.value[threadId] ?? []).some((message) => {
+      if (message.deliveryState === 'failed') return false
+      const meta = optimisticUserMessageMetaById.get(message.id)
+      return completedAtMs === null || !meta || meta.createdAtMs > completedAtMs
+    })) {
       return true
     }
     const pending = pendingTurnRequestByThreadId.value[threadId]
     if (!pending) return false
-    const runtimeSummary = runtimeStatusSummaryByThreadId.value[threadId]
-    const completedAtMs = parseIsoTimestamp(runtimeSummary?.lastCompletedAtIso ?? '')
     if (completedAtMs !== null && completedAtMs >= pending.createdAtMs) return false
-    const updatedAtMs = parseIsoTimestamp(runtimeSummary?.updatedAtIso ?? '')
-    if (
-      runtimeSummary?.messageState === 'fresh'
-      && isRuntimeExecutionSettledState(runtimeSummary.executionState)
-      && updatedAtMs !== null
-      && updatedAtMs >= pending.createdAtMs
-    ) {
-      return false
-    }
     return true
-  }
-
-  function hasQueuedFollowupWork(threadId: string): boolean {
-    if (!threadId) return false
-    if (queueProcessingByThreadId.value[threadId] === true) return true
-    return (queuedMessagesByThreadId.value[threadId] ?? []).length > 0
   }
 
   function hasPendingServerRequestSignal(threadId: string): boolean {
@@ -4144,7 +3936,6 @@ export function useDesktopState() {
 
     if (hasRunningLiveCommand(threadId)) return true
     if (hasPersistedRunningCommand(threadId)) return true
-    if (hasQueuedThreadWork(threadId)) return true
 
     if (
       !hasSettledThreadDetail(threadId) &&
@@ -4430,12 +4221,16 @@ export function useDesktopState() {
       }
 
       const lastDetailSyncAt = lastThreadDetailSyncAtById.value[activeThreadId] ?? 0
+      const notificationIsStale = now - lastNotificationAtMs >= NOTIFICATION_STALE_MS
+      const optimisticOnly = hasOptimisticOnlyExecutionState(activeThreadId)
       const shouldRefreshMessages =
         pendingThreadMessageRefresh.has(activeThreadId) ||
-        now - lastDetailSyncAt >= ACTIVE_SYNC_BOOST_INTERVAL_MS
+        notificationIsStale ||
+        optimisticOnly
       const shouldRefreshThreads = shouldRefreshThreadListForActiveBoost(now)
+      const shouldRefreshRuntime = isThreadExecutionActive(activeThreadId) || optimisticOnly
 
-      if (shouldRefreshMessages || shouldRefreshThreads) {
+      if (shouldRefreshRuntime || shouldRefreshMessages || shouldRefreshThreads) {
         void syncThreadStatus({
           includeThreadList: shouldRefreshThreads,
           forceMessageRefresh: shouldRefreshMessages,
@@ -4659,7 +4454,11 @@ export function useDesktopState() {
     }
 
     const previousOptimistic = optimisticUserMessagesByThreadId.value[threadId] ?? []
-    const nextOptimistic = filterVisibleOptimisticUserMessages(nextMessages, previousOptimistic)
+    const nextOptimistic = filterVisibleOptimisticUserMessages(
+      nextMessages,
+      previousOptimistic,
+      optimisticUserMessageMetaById,
+    )
     if (!areMessageArraysEqual(previousOptimistic, nextOptimistic)) {
       optimisticUserMessagesByThreadId.value = {
         ...optimisticUserMessagesByThreadId.value,
@@ -4704,6 +4503,8 @@ export function useDesktopState() {
     outboxClientIdByOptimisticMessageId.set(preview.message.id, replacement.clientMessageId)
     const deliveryState = replacement.state === 'failed'
       ? 'failed'
+      : replacement.state === 'waiting'
+        ? 'waiting'
       : replacement.state === 'confirming'
         ? 'confirming'
         : 'sending'
@@ -4719,7 +4520,11 @@ export function useDesktopState() {
         ? null
         : preview.liveOverlay ?? {
             startedAtMs: replacement.updatedAtMs,
-            activityLabel: deliveryState === 'confirming' ? '确认任务状态中' : '正在重新发送',
+            activityLabel: deliveryState === 'confirming'
+              ? '确认任务状态中'
+              : deliveryState === 'waiting'
+                ? '等待网络'
+                : '正在重新发送',
             activityDetails: ['另一页面已更新发送状态，正在同步'],
             reasoningText: '',
             errorText: '',
@@ -4881,6 +4686,45 @@ export function useDesktopState() {
     }
   }
 
+  function markPendingNewThreadPreviewWaiting(
+    clientMessageId: string,
+    optimisticMessageId: string,
+  ): void {
+    updateMessageOutboxEntry(clientMessageId, { state: 'waiting' })
+    const current = pendingNewThreadPreview.value
+    if (!current || current.message.id !== optimisticMessageId) return
+    pendingNewThreadPreview.value = {
+      ...current,
+      message: {
+        ...current.message,
+        deliveryState: 'waiting',
+        deliveryError: undefined,
+        deliveryAttempt: undefined,
+        deliveryAttemptMax: undefined,
+      },
+      liveOverlay: null,
+    }
+  }
+
+  function markPendingNewThreadPreviewConfirming(
+    clientMessageId: string,
+    optimisticMessageId: string,
+  ): void {
+    updateMessageOutboxEntry(clientMessageId, { state: 'confirming' })
+    const current = pendingNewThreadPreview.value
+    if (!current || current.message.id !== optimisticMessageId) return
+    pendingNewThreadPreview.value = {
+      ...current,
+      message: {
+        ...current.message,
+        deliveryState: 'confirming',
+        deliveryError: undefined,
+        deliveryAttempt: undefined,
+        deliveryAttemptMax: undefined,
+      },
+    }
+  }
+
   function restoreFailedNewThreadOutboxEntry(entry: MessageOutboxEntry): void {
     const optimisticMessageId = `${OPTIMISTIC_USER_MESSAGE_PREFIX}new-thread:${entry.clientMessageId}`
     outboxClientIdByOptimisticMessageId.set(optimisticMessageId, entry.clientMessageId)
@@ -4901,6 +4745,33 @@ export function useDesktopState() {
           : undefined,
         deliveryState: 'failed',
         deliveryError: '上次发送未完成，请检查连接后重试。',
+      },
+      liveOverlay: null,
+    }
+  }
+
+  function restoreWaitingNewThreadOutboxEntry(entry: MessageOutboxEntry): void {
+    const current = pendingNewThreadPreview.value
+    const optimisticMessageId = current?.clientMessageId === entry.clientMessageId
+      ? current.message.id
+      : `${OPTIMISTIC_USER_MESSAGE_PREFIX}new-thread:${entry.clientMessageId}`
+    outboxClientIdByOptimisticMessageId.set(optimisticMessageId, entry.clientMessageId)
+    updateMessageOutboxEntry(entry.clientMessageId, { state: 'waiting' })
+    pendingNewThreadPreview.value = {
+      clientMessageId: entry.clientMessageId,
+      cwd: entry.cwd,
+      message: {
+        id: optimisticMessageId,
+        role: 'user',
+        text: entry.text,
+        images: entry.imageUrls.length > 0 ? [...entry.imageUrls] : undefined,
+        fileAttachments: entry.fileAttachments.length > 0
+          ? entry.fileAttachments.map((file) => ({
+              label: file.label,
+              path: file.path || file.fsPath || file.label,
+            }))
+          : undefined,
+        deliveryState: 'waiting',
       },
       liveOverlay: null,
     }
@@ -4974,6 +4845,28 @@ export function useDesktopState() {
     }
   }
 
+  function settleOptimisticUserMessagesThrough(threadId: string, settledAtMs: number): void {
+    if (!threadId || !Number.isFinite(settledAtMs) || settledAtMs <= 0) return
+    const settledMessageIds = (optimisticUserMessagesByThreadId.value[threadId] ?? [])
+      .filter((message) => {
+        if (message.deliveryState === 'failed') return false
+        const meta = optimisticUserMessageMetaById.get(message.id)
+        return Boolean(meta && meta.createdAtMs <= settledAtMs)
+      })
+      .map((message) => message.id)
+    for (const messageId of settledMessageIds) {
+      markOptimisticUserMessageSent(threadId, messageId)
+    }
+  }
+
+  function hasUnconfirmedMessageOutboxEntryForThread(threadId: string): boolean {
+    if (!threadId) return false
+    for (const entry of messageOutboxByClientId.values()) {
+      if (entry.threadId === threadId && entry.state !== 'failed') return true
+    }
+    return false
+  }
+
   function markOptimisticUserMessageFailed(
     threadId: string,
     messageId: string,
@@ -5034,6 +4927,17 @@ export function useDesktopState() {
       deliveryAttempt: attempt,
       deliveryAttemptMax: maxAttempts,
     })
+  }
+
+  function markOptimisticUserMessageWaiting(threadId: string, messageId: string): void {
+    updateOptimisticUserMessageDelivery(threadId, messageId, {
+      deliveryState: 'waiting',
+      deliveryError: undefined,
+      deliveryAttempt: undefined,
+      deliveryAttemptMax: undefined,
+    })
+    const clientMessageId = outboxClientIdByOptimisticMessageId.get(messageId)
+    if (clientMessageId) updateMessageOutboxEntry(clientMessageId, { state: 'waiting' })
   }
 
   function markOptimisticUserMessageSent(threadId: string, messageId: string): void {
@@ -5216,6 +5120,25 @@ export function useDesktopState() {
     })
   }
 
+  function restoreWaitingMessageOutboxEntry(entry: MessageOutboxEntry, threadId: string): void {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return
+    insertOptimisticThread(normalizedThreadId, entry.cwd, entry.text || '[Image]')
+    const optimisticMessageId = findOptimisticMessageIdForOutbox(entry.clientMessageId, normalizedThreadId)
+      || addOptimisticUserMessage(
+        normalizedThreadId,
+        entry.text,
+        entry.imageUrls,
+        entry.fileAttachments,
+        {
+          messageId: `${OPTIMISTIC_USER_MESSAGE_PREFIX}${normalizedThreadId}:outbox:${entry.clientMessageId}`,
+          createdAtMs: entry.createdAtMs,
+        },
+      )
+    attachOutboxEntryToOptimisticMessage(entry.clientMessageId, normalizedThreadId, optimisticMessageId)
+    markOptimisticUserMessageWaiting(normalizedThreadId, optimisticMessageId)
+  }
+
   async function recoverPersistentMessageOutbox(): Promise<void> {
     if (messageOutboxRecoveryInFlight) return messageOutboxRecoveryInFlight
     messageOutboxRecoveryInFlight = (async () => {
@@ -5228,6 +5151,13 @@ export function useDesktopState() {
         try {
           recovered = await getRuntimeRequestByClientMessageId(entry.clientMessageId)
         } catch {
+          if (entry.state === 'sending' || entry.state === 'waiting') {
+            if (entry.threadId) {
+              restoreWaitingMessageOutboxEntry(entry, entry.threadId)
+            } else {
+              restoreWaitingNewThreadOutboxEntry(entry)
+            }
+          }
           // Keep unknown entries durable and retry reconciliation when the connection returns.
           continue
         }
@@ -5239,9 +5169,19 @@ export function useDesktopState() {
         if (recoveredThreadId && recoveredThreadId !== entry.threadId) {
           updateMessageOutboxEntry(entry.clientMessageId, { threadId: recoveredThreadId })
         }
-        if (recovered?.status === 'pending_start' && !recoveredThreadId) {
+        const shouldResumePersistedSend =
+          (recovered?.status === 'pending_start' && !recoveredThreadId)
+          || (!recovered && (entry.state === 'sending' || entry.state === 'waiting'))
+        if (shouldResumePersistedSend) {
           try {
+            updateMessageOutboxEntry(entry.clientMessageId, { state: 'sending' })
+            if (recoveredThreadId) {
+              restoreWaitingMessageOutboxEntry(entry, recoveredThreadId)
+            } else {
+              restoreWaitingNewThreadOutboxEntry(entry)
+            }
             const resumed = await startRuntimeThreadTurn({
+              threadId: recoveredThreadId || undefined,
               cwd: entry.cwd || undefined,
               text: entry.text,
               imageUrls: entry.imageUrls,
@@ -5264,14 +5204,34 @@ export function useDesktopState() {
                   resumedThreadId,
                 )
               } else {
-                removeMessageOutboxEntry(entry.clientMessageId)
+                const optimisticMessageId = findOptimisticMessageIdForOutbox(
+                  entry.clientMessageId,
+                  resumedThreadId,
+                )
+                if (optimisticMessageId) {
+                  markOptimisticUserMessageSent(resumedThreadId, optimisticMessageId)
+                } else {
+                  removeMessageOutboxEntry(entry.clientMessageId)
+                }
                 insertOptimisticThread(resumedThreadId, entry.cwd, entry.text || '[Image]')
               }
               pendingThreadMessageRefresh.add(resumedThreadId)
               pendingThreadsRefresh = true
+            } else if (resumedThreadId) {
+              restoreFailedMessageOutboxEntry(entry, resumedThreadId)
+            } else {
+              newestDraftEntry = entry
             }
           } catch (unknownError) {
-            if (!isRetryableRuntimeSendError(unknownError)) {
+            if (isRetryableRuntimeSendError(unknownError)) {
+              if (recoveredThreadId) {
+                restoreWaitingMessageOutboxEntry(entry, recoveredThreadId)
+              } else {
+                restoreWaitingNewThreadOutboxEntry(entry)
+              }
+            } else if (recoveredThreadId) {
+              restoreFailedMessageOutboxEntry(entry, recoveredThreadId)
+            } else {
               newestDraftEntry = entry
             }
           }
@@ -5322,46 +5282,6 @@ export function useDesktopState() {
     return messageOutboxRecoveryInFlight
   }
 
-  async function runSendPreflightWithBoundedRecovery(
-    run: () => Promise<void>,
-    feedback: {
-      threadId: string
-      optimisticMessageId: string
-      activityLabel: string
-      activityDetails: string[]
-    },
-  ): Promise<void> {
-    let retried = false
-    await runWithBoundedRecovery({
-      retryDelaysMs: RUNTIME_SEND_RETRY_DELAYS_MS,
-      shouldRetry: isRetryableRuntimeSendError,
-      run: async () => {
-        await run()
-        if (retried && feedback.threadId) {
-          setTurnActivityForThread(feedback.threadId, {
-            label: feedback.activityLabel,
-            details: feedback.activityDetails,
-          })
-        }
-      },
-      recover: async () => null,
-      onRetry: (retryNumber, maxRetries) => {
-        retried = true
-        if (!feedback.threadId) return
-        markOptimisticUserMessageRetrying(
-          feedback.threadId,
-          feedback.optimisticMessageId,
-          retryNumber,
-          maxRetries,
-        )
-        setTurnActivityForThread(feedback.threadId, {
-          label: 'Reconnecting',
-          details: [`网络不稳定，正在重新连接 ${String(retryNumber)}/${String(maxRetries)}`],
-        })
-      },
-    })
-  }
-
   async function startRuntimeTurnWithBoundedRecovery(
     args: Parameters<typeof startRuntimeThreadTurn>[0] & { clientMessageId: string },
     feedback: {
@@ -5369,15 +5289,22 @@ export function useDesktopState() {
       optimisticMessageId: string
       activityLabel: string
       activityDetails: string[]
+      onRequestDispatched?: () => void
     },
   ): Promise<Awaited<ReturnType<typeof startRuntimeThreadTurn>>> {
     let retried = false
+    let dispatchNotified = false
     return await runWithBoundedRecovery({
       retryDelaysMs: RUNTIME_SEND_RETRY_DELAYS_MS,
       shouldRetry: isRetryableRuntimeSendError,
       run: async () => {
         markChatFeedbackRequestDispatched(args.clientMessageId)
-        const result = await startRuntimeThreadTurn(args)
+        const runtimeRequest = startRuntimeThreadTurn(args)
+        if (!dispatchNotified) {
+          dispatchNotified = true
+          try { feedback.onRequestDispatched?.() } catch {}
+        }
+        const result = await runtimeRequest
         if (result.status === 'failed') {
           throw new Error('发送请求未能启动')
         }
@@ -5387,13 +5314,11 @@ export function useDesktopState() {
             details: feedback.activityDetails,
           })
         }
-        if (result.threadId && result.turnId && !isRuntimeRequestAwaitingDeliveryConfirmation(result.status)) {
-          markChatFeedbackServerAcknowledged({
-            clientMessageId: args.clientMessageId,
-            threadId: result.threadId,
-            turnId: result.turnId,
-          })
-        }
+        markChatFeedbackServerAcknowledged({
+          clientMessageId: args.clientMessageId,
+          threadId: result.threadId || feedback.threadId || PENDING_NEW_THREAD_ID,
+          turnId: result.turnId,
+        })
         return result
       },
       recover: async () => {
@@ -5407,6 +5332,11 @@ export function useDesktopState() {
           if (recovered.status === 'failed') {
             throw new Error(recovered.lastError || '发送请求未能启动')
           }
+          markChatFeedbackServerAcknowledged({
+            clientMessageId: args.clientMessageId,
+            threadId: recovered.threadId || feedback.threadId || PENDING_NEW_THREAD_ID,
+            turnId: recovered.turnId || undefined,
+          })
           return {
             requestId: recovered.requestId,
             threadId: recovered.threadId,
@@ -5712,6 +5642,18 @@ export function useDesktopState() {
     return ''
   }
 
+  function extractTurnIdFromNotification(notification: RpcNotification): string {
+    const params = asRecord(notification.params)
+    if (!params) return ''
+    return (
+      readString(params.turnId) ||
+      readString(params.turn_id) ||
+      readString(asRecord(params.turn)?.id) ||
+      readString(asRecord(params.item)?.turnId) ||
+      readString(asRecord(params.item)?.turn_id)
+    )
+  }
+
   function readTurnErrorMessage(notification: RpcNotification): string {
     if (notification.method !== 'turn/completed') return ''
     const params = asRecord(notification.params)
@@ -5859,12 +5801,14 @@ export function useDesktopState() {
   function readTurnActivity(notification: RpcNotification): { threadId: string; activity: TurnActivityInput } | null {
     const threadId = extractThreadIdFromNotification(notification)
     if (!threadId) return null
+    const turnId = extractTurnIdFromNotification(notification)
 
     if (notification.method === 'turn/started') {
       const startedTurn = readTurnStartedInfo(notification)
       return {
         threadId,
         activity: {
+          turnId: startedTurn?.turnId || turnId,
           label: 'Thinking',
           details: [],
           startedAtMs: startedTurn?.startedAtMs,
@@ -5880,6 +5824,7 @@ export function useDesktopState() {
         return {
           threadId,
           activity: {
+            turnId,
             label: 'Thinking',
             details: [],
           },
@@ -5889,6 +5834,7 @@ export function useDesktopState() {
         return {
           threadId,
           activity: {
+            turnId,
             label: 'Writing response',
             details: [],
           },
@@ -5899,6 +5845,7 @@ export function useDesktopState() {
         return {
           threadId,
           activity: {
+            turnId,
             label: 'Running command',
             details: cmd ? [cmd] : [],
           },
@@ -5909,6 +5856,7 @@ export function useDesktopState() {
         return {
           threadId,
           activity: {
+            turnId,
             label: '正在搜索网页',
             details: query ? [query] : [],
           },
@@ -5920,6 +5868,7 @@ export function useDesktopState() {
       return {
         threadId,
         activity: {
+          turnId,
           label: 'Running command',
           details: [],
         },
@@ -5933,6 +5882,7 @@ export function useDesktopState() {
       return {
         threadId,
         activity: {
+          turnId,
           label: 'Thinking',
           details: [],
         },
@@ -5943,6 +5893,7 @@ export function useDesktopState() {
       return {
         threadId,
         activity: {
+          turnId,
           label: 'Writing response',
           details: [],
         },
@@ -6231,6 +6182,7 @@ export function useDesktopState() {
 
     if (
       notification.method === 'turn/started'
+      || notification.method === 'thread/started'
       || notification.method === 'turn/completed'
       || notification.method === 'thread/completed'
       || notification.method === 'error'
@@ -6258,6 +6210,8 @@ export function useDesktopState() {
 
     if (shouldBoostSyncForNotification(notification.method)) {
       markActiveSyncBoost()
+      const notificationThreadId = extractThreadIdFromNotification(notification)
+      if (notificationThreadId) finishForegroundRecoveryFeedback(notificationThreadId)
     }
 
     if (notification.method === 'thread/name/updated') {
@@ -6294,7 +6248,7 @@ export function useDesktopState() {
       setTurnErrorForThread(startedTurn.threadId, null)
       setThreadInProgress(startedTurn.threadId, true)
       if (eventUnreadByThreadId.value[startedTurn.threadId]) {
-        eventUnreadByThreadId.value = omitKey(eventUnreadByThreadId.value, startedTurn.threadId)
+        replaceEventUnreadState(omitKey(eventUnreadByThreadId.value, startedTurn.threadId))
       }
     }
 
@@ -6520,6 +6474,10 @@ export function useDesktopState() {
       }
       const completedThreadId = extractThreadIdFromNotification(notification)
       if (completedThreadId) {
+        const completedTurn = readTurnCompletedInfo(notification)
+        if (completedTurn) {
+          settleOptimisticUserMessagesThrough(completedThreadId, completedTurn.completedAtMs)
+        }
         setThreadInProgress(completedThreadId, false)
         setTurnActivityForThread(completedThreadId, null)
         markThreadUnreadByEvent(completedThreadId)
@@ -6879,7 +6837,13 @@ export function useDesktopState() {
       return snapshot
     }
     const refreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
-    if (!refreshKey && options.fullHistory !== true) return snapshot
+    const shouldForceCachedSnapshotRefresh = options.force === true && snapshot.messageState === 'cached'
+    if (
+      !refreshKey &&
+      options.fullHistory !== true &&
+      !options.olderHistory &&
+      !shouldForceCachedSnapshotRefresh
+    ) return snapshot
     if ((snapshot.pendingServerRequests ?? []).length > 0) return snapshot
 
     try {
@@ -6973,6 +6937,7 @@ export function useDesktopState() {
 
     const existingLoad = messageLoadInFlightByThreadId.get(threadId)
     if (existingLoad) {
+      const existingWasAuthoritative = authoritativeMessageLoadInFlightThreadIds.has(threadId)
       try {
         await existingLoad
       } finally {
@@ -6984,31 +6949,54 @@ export function useDesktopState() {
       if (options.forceSettledRpcRefresh !== true) {
         return
       }
+      if (existingWasAuthoritative && options.fullHistory !== true && !options.olderHistory) {
+        return
+      }
     }
+
+    const isAuthoritativeMessageLoad =
+      options.forceSettledRpcRefresh === true ||
+      options.fullHistory === true ||
+      Boolean(options.olderHistory)
 
     const runLoad = (async (): Promise<void> => {
       let snapshot: ThreadRuntimeSnapshot
       try {
-        snapshot = await getThreadRuntimeSnapshot(threadId, { signal: options.signal })
+        snapshot = await getThreadRuntimeSnapshot(threadId, {
+          signal: options.signal,
+          preferCachedMessages: shouldShowLoading || options.fullHistory === true || Boolean(options.olderHistory),
+        })
       } catch (error) {
         if (resumedThreadById.value[threadId] === true || !isThreadMaterializingError(error)) {
           throw error
         }
         await ensureThreadResumed(threadId, { signal: options.signal })
-        snapshot = await getThreadRuntimeSnapshot(threadId, { signal: options.signal })
+        snapshot = await getThreadRuntimeSnapshot(threadId, {
+          signal: options.signal,
+          preferCachedMessages: shouldShowLoading || options.fullHistory === true || Boolean(options.olderHistory),
+        })
       }
       if (options.signal?.aborted) return
+      const initialRuntimeSnapshot = snapshot
+      const initialRuntimeSnapshotApplied = applyRuntimeSnapshotState(threadId, snapshot)
       const previousPersisted = persistedMessagesByThreadId.value[threadId] ?? []
       const settledRefreshKey = getSettledRuntimeMessageRefreshKey(snapshot)
       markFreshSettledSnapshotMessagesSynced(threadId, snapshot, previousPersisted)
       const shouldDeferSettledRpcRefresh =
         options.fullHistory !== true &&
         options.forceSettledRpcRefresh !== true &&
-        shouldShowLoading &&
+        (shouldShowLoading || options.silent === true) &&
         (snapshot.messages.length > 0 || previousPersisted.length > 0) &&
         shouldFetchSettledSnapshotMessagesFromRpc(threadId, snapshot, previousPersisted)
-      if (shouldDeferSettledRpcRefresh && settledRefreshKey) {
-        scheduleSettledSnapshotMessagesRpcRefresh(threadId, settledRefreshKey)
+      const shouldDeferCachedRpcRefresh =
+        options.forceSettledRpcRefresh !== true &&
+        snapshot.messageState === 'cached' &&
+        (snapshot.messages.length > 0 || previousPersisted.length > 0)
+      const deferredRefreshKey = settledRefreshKey || (shouldDeferCachedRpcRefresh
+        ? `cached:${snapshot.updatedAtIso}:${String(snapshot.lastEventSeq)}`
+        : '')
+      if ((shouldDeferSettledRpcRefresh || shouldDeferCachedRpcRefresh) && deferredRefreshKey) {
+        scheduleSettledSnapshotMessagesRpcRefresh(threadId, deferredRefreshKey)
       } else {
         snapshot = await refreshSettledSnapshotMessagesFromRpc(threadId, snapshot, previousPersisted, options.signal, {
           force: options.forceSettledRpcRefresh === true || options.fullHistory === true || Boolean(options.olderHistory),
@@ -7018,7 +7006,10 @@ export function useDesktopState() {
       }
       if (options.signal?.aborted) return
 
-      const runtimeSnapshotApplied = applyRuntimeSnapshotState(threadId, snapshot)
+      const refreshedRuntimeSnapshotApplied = snapshot === initialRuntimeSnapshot
+        ? false
+        : applyRuntimeSnapshotState(threadId, snapshot)
+      const runtimeSnapshotApplied = initialRuntimeSnapshotApplied || refreshedRuntimeSnapshotApplied
       const nextMessages = snapshot.messages
       const inProgress = runtimeSnapshotApplied
         ? snapshot.inProgress
@@ -7064,7 +7055,7 @@ export function useDesktopState() {
       )
       if (snapshot.messageState === 'fresh') {
         clearNonFreshThreadDetailRetry(threadId)
-      } else {
+      } else if (!shouldDeferCachedRpcRefresh) {
         scheduleNonFreshThreadDetailRetry(threadId)
       }
       if (inProgress && !snapshot.stale && hasPersistedRunningCommand(threadId)) {
@@ -7121,6 +7112,9 @@ export function useDesktopState() {
     })()
 
     messageLoadInFlightByThreadId.set(threadId, runLoad)
+    if (isAuthoritativeMessageLoad) {
+      authoritativeMessageLoadInFlightThreadIds.add(threadId)
+    }
 
     try {
       await runLoad
@@ -7153,6 +7147,9 @@ export function useDesktopState() {
     } finally {
       if (messageLoadInFlightByThreadId.get(threadId) === runLoad) {
         messageLoadInFlightByThreadId.delete(threadId)
+        if (isAuthoritativeMessageLoad) {
+          authoritativeMessageLoadInFlightThreadIds.delete(threadId)
+        }
       }
       if (shouldShowLoading && foregroundMessageLoadId === loadId) {
         isLoadingMessages.value = false
@@ -7617,6 +7614,9 @@ export function useDesktopState() {
       reuseOptimisticMessageId?: string
       targetThreadId?: string
       feedbackStartedAtMs?: number
+      onDeliveryPersisted?: () => void
+      onPendingRequestCreated?: (clientMessageId: string) => void
+      onRequestDispatched?: () => void
     } = {},
   ): Promise<void> {
     if (isUpdatingSpeedMode.value) return
@@ -7641,6 +7641,8 @@ export function useDesktopState() {
         : nextQueue.length
       nextQueue.splice(insertIndex, 0, {
         id,
+        clientMessageId: createClientMessageId(),
+        deliveryState: 'queued',
         text: nextText,
         imageUrls,
         skills,
@@ -7652,6 +7654,7 @@ export function useDesktopState() {
         turnOptions: cloneTurnOptions(turnOptions),
       })
       setQueuedMessagesForThread(threadId, nextQueue)
+      notifyDeliveryPersisted(internalOptions.onDeliveryPersisted)
 
       await recoverThreadExecutionState(threadId)
       consumePlanModeAfterSubmit(collaborationMode)
@@ -7704,6 +7707,7 @@ export function useDesktopState() {
     markActiveSyncBoost()
     setTurnSummaryForThread(threadId, null)
     setTurnActivityForThread(threadId, {
+      reset: true,
       label: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
       details: buildPendingTurnDetails(selectedModelId.value, selectedReasoningEffort.value, collaborationMode),
       startedAtMs: Date.now(),
@@ -7717,34 +7721,9 @@ export function useDesktopState() {
       optimisticMessageId,
       submitStartedAtMs: feedbackStartedAtMs,
     })
+    notifyPendingRequestCreated(internalOptions.onPendingRequestCreated, clientMessageId)
 
-    if (wasThreadInProgressBeforeSubmit) {
-      try {
-        await runSendPreflightWithBoundedRecovery(
-          () => recoverThreadExecutionState(threadId),
-          {
-            threadId,
-            optimisticMessageId,
-            activityLabel: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
-            activityDetails: buildPendingTurnDetails(
-              selectedModelId.value,
-              selectedReasoningEffort.value,
-              collaborationMode,
-            ),
-          },
-        )
-      } catch (unknownError) {
-        markOptimisticUserMessageFailed(threadId, optimisticMessageId, failedMessageRequest)
-        setThreadInProgress(threadId, false)
-        setTurnActivityForThread(threadId, null)
-        throw unknownError
-      }
-    }
-
-    const runtimeStateAfterRecovery = runtimeExecutionStateByThreadId.value[threadId]
-    const isInProgress = runtimeStateAfterRecovery !== undefined
-      ? isRuntimeExecutionActiveState(runtimeStateAfterRecovery)
-      : wasThreadInProgressBeforeSubmit
+    const isInProgress = wasThreadInProgressBeforeSubmit
 
     if (isInProgress) {
       shouldAutoScrollOnNextAgentEvent = true
@@ -7753,14 +7732,19 @@ export function useDesktopState() {
         await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode, turnOptions, {
           optimisticMessageId,
           clientMessageId,
+          onRequestDispatched: requestDispatchedCallback(internalOptions.onRequestDispatched),
         })
         consumePlanModeAfterSubmit(collaborationMode)
       } catch (unknownError) {
-        markOptimisticUserMessageFailed(threadId, optimisticMessageId, failedMessageRequest)
+        if (isRetryableRuntimeSendError(unknownError)) {
+          markOptimisticUserMessageWaiting(threadId, optimisticMessageId)
+        } else {
+          markOptimisticUserMessageFailed(threadId, optimisticMessageId, failedMessageRequest)
+        }
         setTurnActivityForThread(threadId, previousTurnActivity)
         const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
         setTurnErrorForThread(threadId, null)
-        error.value = errorMessage
+        error.value = isRetryableRuntimeSendError(unknownError) ? '' : errorMessage
         throw unknownError
       }
       return
@@ -7770,16 +7754,21 @@ export function useDesktopState() {
       await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode, turnOptions, {
         optimisticMessageId,
         clientMessageId,
+        onRequestDispatched: requestDispatchedCallback(internalOptions.onRequestDispatched),
       })
       consumePlanModeAfterSubmit(collaborationMode)
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false
-      markOptimisticUserMessageFailed(threadId, optimisticMessageId, failedMessageRequest)
+      if (isRetryableRuntimeSendError(unknownError)) {
+        markOptimisticUserMessageWaiting(threadId, optimisticMessageId)
+      } else {
+        markOptimisticUserMessageFailed(threadId, optimisticMessageId, failedMessageRequest)
+      }
       setThreadInProgress(threadId, false)
       setTurnActivityForThread(threadId, null)
       const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
       setTurnErrorForThread(threadId, null)
-      error.value = errorMessage
+      error.value = isRetryableRuntimeSendError(unknownError) ? '' : errorMessage
       throw unknownError
     }
   }
@@ -7795,6 +7784,8 @@ export function useDesktopState() {
     internalOptions: {
       feedbackStartedAtMs?: number
       reuseOptimisticMessageId?: string
+      onPendingRequestCreated?: (clientMessageId: string) => void
+      onRequestDispatched?: () => void
       onThreadCreated?: (threadId: string) => void
     } = {},
   ): Promise<string> {
@@ -7851,6 +7842,7 @@ export function useDesktopState() {
       collaborationMode,
       turnOptions,
     }))
+    notifyPendingRequestCreated(internalOptions.onPendingRequestCreated, clientMessageId)
     triggerAndroidHaptic('medium')
 
     isSendingMessage.value = true
@@ -7924,6 +7916,13 @@ export function useDesktopState() {
         const recovered = await getRuntimeRequestByClientMessageId(clientMessageId)
         if (!recovered?.threadId) return false
         activateNewThreadUi(recovered.threadId, recovered.turnId)
+        const awaitingDeliveryConfirmation = isRuntimeRequestAwaitingDeliveryConfirmation(recovered.status)
+        markChatFeedbackServerAcknowledged({
+          clientMessageId,
+          threadId: recovered.threadId,
+          turnId: recovered.turnId || undefined,
+          turnStarted: Boolean(recovered.turnId && !awaitingDeliveryConfirmation),
+        })
         shouldAutoScrollOnNextAgentEvent = true
         markActiveSyncBoost()
         setTurnSummaryForThread(recovered.threadId, null)
@@ -7938,7 +7937,7 @@ export function useDesktopState() {
             failedMessageRequestForThread(),
           )
           if (recovered.lastError) error.value = recovered.lastError
-        } else if (isRuntimeRequestAwaitingDeliveryConfirmation(recovered.status)) {
+        } else if (awaitingDeliveryConfirmation) {
           setThreadInProgress(recovered.threadId, true)
           setRuntimeExecutionState(recovered.threadId, 'start_uncertain', { canStop: false, activeTurnId: recovered.turnId })
           setTurnActivityForThread(recovered.threadId, {
@@ -7953,7 +7952,7 @@ export function useDesktopState() {
             details: buildPendingTurnDetails(selectedModelId.value, selectedReasoningEffort.value, collaborationMode),
           })
         }
-        if (isRuntimeRequestAwaitingDeliveryConfirmation(recovered.status)) {
+        if (awaitingDeliveryConfirmation) {
           markOptimisticUserMessageConfirming(recovered.threadId, optimisticMessageId)
         } else if (recovered.status !== 'failed') {
           markOptimisticUserMessageSent(recovered.threadId, optimisticMessageId)
@@ -7969,32 +7968,30 @@ export function useDesktopState() {
       }
     }
 
-    try {
-      if (!threadId) {
-        let prestartedThreadId = ''
+    const reconcileAcceptedNewThreadInBackground = async (): Promise<void> => {
+      for (const delayMs of NEW_THREAD_ACCEPTED_RECONCILE_DELAYS_MS) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, delayMs))
+        let recovered: Awaited<ReturnType<typeof getRuntimeRequestByClientMessageId>> = null
         try {
-          prestartedThreadId = await startThread(targetCwd || undefined, selectedModel || undefined)
-        } catch (unknownError) {
-          if (!isRetryableRuntimeSendError(unknownError)) throw unknownError
-          // runtime/send can safely create the thread under the idempotent client message id.
+          recovered = await getRuntimeRequestByClientMessageId(clientMessageId)
+        } catch {
+          continue
         }
-        if (prestartedThreadId) {
-          activateNewThreadUi(prestartedThreadId)
-          shouldAutoScrollOnNextAgentEvent = true
-          markActiveSyncBoost()
-          setTurnSummaryForThread(prestartedThreadId, null)
-          setTurnErrorForThread(prestartedThreadId, null)
-          setThreadInProgress(prestartedThreadId, true)
-          setRuntimeExecutionState(prestartedThreadId, 'starting', { canStop: false })
-          setTurnActivityForThread(prestartedThreadId, {
-            label: 'Sending',
-            details: ['会话已创建，正在提交首条任务'],
-          })
-          markThreadLiveExecutionSignal(prestartedThreadId)
-          markThreadResumed(prestartedThreadId)
+        if (recovered?.status === 'failed' && !recovered.threadId) {
+          markPendingNewThreadPreviewFailed(clientMessageId, optimisticMessageId)
+          error.value = recovered.lastError || '发送请求未能启动'
+          return
         }
+        if (!recovered?.threadId) continue
+        if (!await recoverRuntimeRequestByClientMessage()) continue
+        if (threadId) {
+          void requestThreadTitleGeneration(threadId, nextText, targetCwd || null)
+        }
+        return
       }
+    }
 
+    try {
       let runtimeResult = null as Awaited<ReturnType<typeof startRuntimeThreadTurn>> | null
       try {
         runtimeResult = await startRuntimeTurnWithBoundedRecovery({
@@ -8014,6 +8011,7 @@ export function useDesktopState() {
           optimisticMessageId,
           activityLabel: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
           activityDetails: buildPendingTurnDetails(selectedModel, selectedReasoningEffort.value, collaborationMode),
+          onRequestDispatched: requestDispatchedCallback(internalOptions.onRequestDispatched),
         })
       } catch (unknownError) {
         if (selectedModel && selectedModel !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
@@ -8040,6 +8038,7 @@ export function useDesktopState() {
             collaborationMode,
             turnOptions,
           }))
+          notifyPendingRequestCreated(internalOptions.onPendingRequestCreated, clientMessageId)
           attachOutboxEntryToOptimisticMessage(clientMessageId, threadId, optimisticMessageId)
           runtimeResult = await startRuntimeTurnWithBoundedRecovery({
             threadId: threadId || undefined,
@@ -8058,6 +8057,7 @@ export function useDesktopState() {
             optimisticMessageId,
             activityLabel: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
             activityDetails: buildPendingTurnDetails(MODEL_FALLBACK_ID, selectedReasoningEffort.value, collaborationMode),
+            onRequestDispatched: requestDispatchedCallback(internalOptions.onRequestDispatched),
           })
         } else {
           if (await recoverRuntimeRequestByClientMessage()) {
@@ -8069,6 +8069,13 @@ export function useDesktopState() {
       }
       const resultThreadId = runtimeResult?.threadId ?? ''
       if (!resultThreadId) {
+        if (runtimeResult && isRuntimeRequestAwaitingDeliveryConfirmation(runtimeResult.status)) {
+          markPendingNewThreadPreviewConfirming(clientMessageId, optimisticMessageId)
+          isSendingMessage.value = false
+          consumePlanModeAfterSubmit(collaborationMode)
+          void reconcileAcceptedNewThreadInBackground()
+          return ''
+        }
         if (await recoverRuntimeRequestByClientMessage()) {
           isSendingMessage.value = false
           return threadId
@@ -8077,7 +8084,7 @@ export function useDesktopState() {
       }
 
       activateNewThreadUi(resultThreadId, runtimeResult?.turnId ?? '')
-      if (runtimeResult?.turnId && !isRuntimeRequestAwaitingDeliveryConfirmation(runtimeResult.status)) {
+      if (runtimeResult?.threadId) {
         markChatFeedbackServerAcknowledged({
           clientMessageId,
           threadId: resultThreadId,
@@ -8123,6 +8130,7 @@ export function useDesktopState() {
       void requestThreadTitleGeneration(capturedThreadId, capturedPrompt, capturedCwd)
       return threadId
     } catch (unknownError) {
+      const isTransportFailure = isRetryableRuntimeSendError(unknownError)
       shouldAutoScrollOnNextAgentEvent = false
       if (threadId) {
         setThreadInProgress(threadId, false)
@@ -8130,23 +8138,31 @@ export function useDesktopState() {
         clearPendingTurnRequest(threadId)
       }
       if (threadId && optimisticMessageId) {
-        markOptimisticUserMessageFailed(threadId, optimisticMessageId, failedMessageRequestForThread())
+        if (isTransportFailure) {
+          markOptimisticUserMessageWaiting(threadId, optimisticMessageId)
+        } else {
+          markOptimisticUserMessageFailed(threadId, optimisticMessageId, failedMessageRequestForThread())
+        }
       } else {
-        markPendingNewThreadPreviewFailed(clientMessageId, optimisticMessageId)
+        if (isTransportFailure) {
+          markPendingNewThreadPreviewWaiting(clientMessageId, optimisticMessageId)
+        } else {
+          markPendingNewThreadPreviewFailed(clientMessageId, optimisticMessageId)
+        }
       }
       const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
       if (threadId) {
         setTurnErrorForThread(threadId, null)
       }
-      error.value = errorMessage
+      error.value = isTransportFailure ? '' : errorMessage
       isSendingMessage.value = false
       if (threadId && pendingNewThreadPreview.value?.message.id === optimisticMessageId) {
         pendingNewThreadPreview.value = {
           ...pendingNewThreadPreview.value,
           message: {
             ...pendingNewThreadPreview.value.message,
-            deliveryState: 'failed',
-            deliveryError: '发送失败，请检查连接后重试。',
+            deliveryState: isTransportFailure ? 'waiting' : 'failed',
+            deliveryError: isTransportFailure ? undefined : '发送失败，请检查连接后重试。',
           },
           liveOverlay: null,
         }
@@ -8172,6 +8188,7 @@ export function useDesktopState() {
       reasoningEffort?: ReasoningEffort | ''
       optimisticMessageId?: string
       clientMessageId?: string
+      onRequestDispatched?: () => void
     } = {},
   ): Promise<void> {
     const modelId = (runtimeOverrides.modelId ?? selectedModelId.value).trim()
@@ -8211,16 +8228,6 @@ export function useDesktopState() {
     })
 
     try {
-      await runSendPreflightWithBoundedRecovery(
-        () => ensureThreadResumed(threadId),
-        {
-          threadId,
-          optimisticMessageId,
-          activityLabel: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
-          activityDetails: buildPendingTurnDetails(modelId, reasoningEffort, collaborationMode),
-        },
-      )
-
       let startedTurnId = ''
       let runtimeStartStatus: 'running' | 'confirming' | '' = ''
       try {
@@ -8240,6 +8247,7 @@ export function useDesktopState() {
           optimisticMessageId,
           activityLabel: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
           activityDetails: buildPendingTurnDetails(modelId, reasoningEffort, collaborationMode),
+          onRequestDispatched: runtimeOverrides.onRequestDispatched,
         })
         startedTurnId = runtimeResult.turnId
         runtimeStartStatus = isRuntimeRequestAwaitingDeliveryConfirmation(runtimeResult.status) ? 'confirming' : 'running'
@@ -8288,6 +8296,7 @@ export function useDesktopState() {
             optimisticMessageId,
             activityLabel: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
             activityDetails: buildPendingTurnDetails(MODEL_FALLBACK_ID, reasoningEffort, collaborationMode),
+            onRequestDispatched: runtimeOverrides.onRequestDispatched,
           })
           startedTurnId = runtimeFallbackResult.turnId
           runtimeStartStatus = isRuntimeRequestAwaitingDeliveryConfirmation(runtimeFallbackResult.status) ? 'confirming' : 'running'
@@ -8334,6 +8343,7 @@ export function useDesktopState() {
     if (hasPendingServerRequestSignal(threadId)) return
     const queue = queuedMessagesByThreadId.value[threadId]
     if (!queue || queue.length === 0) return
+    if (queue[0]?.deliveryState === 'failed') return
     queueProcessingByThreadId.value = {
       ...queueProcessingByThreadId.value,
       [threadId]: true,
@@ -8355,6 +8365,7 @@ export function useDesktopState() {
     markThreadLiveExecutionSignal(threadId)
     markActiveSyncBoost()
     const optimisticMessageId = addOptimisticUserMessage(threadId, next.text, next.imageUrls, next.fileAttachments)
+    notifyPendingRequestCreated(undefined, next.clientMessageId)
     try {
       if (selectedSpeedMode.value !== queuedSpeedMode) {
         await updateSelectedSpeedMode(queuedSpeedMode)
@@ -8374,13 +8385,21 @@ export function useDesktopState() {
           modelId: queuedModelId,
           reasoningEffort: queuedReasoningEffort,
           optimisticMessageId,
+          clientMessageId: next.clientMessageId,
+          onRequestDispatched: submitCallbacks.onRequestDispatched,
         },
       )
       removeQueuedMessageByThreadId(threadId, next.id)
-    } catch {
+    } catch (unknownError) {
       removeOptimisticUserMessage(threadId, optimisticMessageId)
       setThreadInProgress(threadId, false)
       setTurnActivityForThread(threadId, null)
+      setQueuedMessageDeliveryState(
+        threadId,
+        next.id,
+        'failed',
+        isRetryableRuntimeSendError(unknownError) ? next.clientMessageId : createClientMessageId(),
+      )
     } finally {
       queueProcessingByThreadId.value = omitKey(queueProcessingByThreadId.value, threadId)
       isSendingMessage.value = false
@@ -8413,7 +8432,7 @@ export function useDesktopState() {
     setTurnActivityForThread(threadId, { label: 'Stopping', details: [] })
     pendingThreadMessageRefresh.add(threadId)
     pendingThreadsRefresh = true
-    const startedAtMs = parseIsoTimestamp(runtimeStatusSummaryByThreadId.value[threadId]?.lastStartedAtIso ?? '')
+    const startedAtMs = readRuntimeActivityStartedAtMs(runtimeStatusSummaryByThreadId.value[threadId])
     try {
       const result = await interruptRuntimeThreadTurn(threadId, turnId, {
         source,
@@ -8805,21 +8824,23 @@ export function useDesktopState() {
       const isInProgress = activeThreadId ? isThreadExecutionActive(activeThreadId) : false
       const lastDetailSyncAt = activeThreadId ? (lastThreadDetailSyncAtById.value[activeThreadId] ?? 0) : 0
       const notificationStale = now - lastNotificationAtMs >= NOTIFICATION_STALE_MS
+      const optimisticOnly = activeThreadId ? hasOptimisticOnlyExecutionState(activeThreadId) : false
+      const shouldRefreshRuntime = Boolean(activeThreadId) && (isInProgress || optimisticOnly)
       const shouldRefreshMessages =
         Boolean(activeThreadId) &&
         (
-          isInProgress ||
-          hasOptimisticOnlyExecutionState(activeThreadId) ||
+          optimisticOnly ||
+          (isInProgress && (
+            notificationStale ||
+            now - lastDetailSyncAt >= ACTIVE_THREAD_DETAIL_FALLBACK_SYNC_INTERVAL_MS
+          )) ||
+          (!isInProgress &&
           now - lastDetailSyncAt >= ACTIVE_THREAD_DETAIL_SYNC_IDLE_MS
-        ) &&
-        (
-          hasOptimisticOnlyExecutionState(activeThreadId) ||
-          notificationStale ||
-          now - lastDetailSyncAt >= ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS
+          )
         )
       const shouldRefreshThreads = shouldRefreshThreadListForBackground(now)
 
-      if (!shouldRefreshThreads && !shouldRefreshMessages) {
+      if (!shouldRefreshRuntime && !shouldRefreshThreads && !shouldRefreshMessages) {
         return
       }
 
@@ -8835,6 +8856,10 @@ export function useDesktopState() {
     requestedForceRefresh: boolean,
   ): boolean {
     if (!threadId) return false
+    const lastDetailSyncAt = lastThreadDetailSyncAtById.value[threadId] ?? 0
+    const recentlySynced =
+      lastDetailSyncAt > 0 &&
+      Date.now() - lastDetailSyncAt < THREAD_SELECTION_RECOVERY_SUPPRESS_MS
     if (pendingThreadMessageRefresh.has(threadId)) return true
     if (eventUnreadByThreadId.value[threadId] === true) return true
     if (isThreadExecutionActive(threadId)) return true
@@ -8842,10 +8867,9 @@ export function useDesktopState() {
     if (!hasLoadedThreadDetail(threadId)) return true
     if (hasPendingServerRequestSignal(threadId)) return true
     if (hasQueuedThreadWork(threadId)) return true
-    if (notificationStale.value || syncLagging.value) return true
+    if ((notificationStale.value || syncLagging.value) && !recentlySynced) return true
     if (!requestedForceRefresh) return false
 
-    const lastDetailSyncAt = lastThreadDetailSyncAtById.value[threadId] ?? 0
     return lastDetailSyncAt <= 0 ||
       Date.now() - lastDetailSyncAt >= FOREGROUND_RECOVERY_DETAIL_REFRESH_MIN_INTERVAL_MS
   }
@@ -8885,6 +8909,49 @@ export function useDesktopState() {
       })
   }
 
+  function clearForegroundRecoveryFeedback(): void {
+    if (foregroundRecoveryFeedbackTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(foregroundRecoveryFeedbackTimer)
+    }
+    foregroundRecoveryFeedbackTimer = null
+    foregroundRecoveryFeedbackStartedAtMs = 0
+    foregroundRecoveryThreadId.value = ''
+  }
+
+  function beginForegroundRecoveryFeedback(threadId: string): void {
+    if (typeof window === 'undefined' || !threadId) return
+    if (!isThreadExecutionActive(threadId) && !hasPendingLocalTurnFeedback(threadId)) return
+    if (foregroundRecoveryThreadId.value === threadId) return
+    clearForegroundRecoveryFeedback()
+    foregroundRecoveryThreadId.value = threadId
+    foregroundRecoveryFeedbackStartedAtMs = Date.now()
+    foregroundRecoveryFeedbackTimer = window.setTimeout(() => {
+      foregroundRecoveryFeedbackTimer = null
+      foregroundRecoveryFeedbackStartedAtMs = 0
+      foregroundRecoveryThreadId.value = ''
+    }, FOREGROUND_RECOVERY_FEEDBACK_TIMEOUT_MS)
+  }
+
+  function finishForegroundRecoveryFeedback(threadId: string): void {
+    if (!threadId || foregroundRecoveryThreadId.value !== threadId) return
+    if (typeof window === 'undefined') {
+      clearForegroundRecoveryFeedback()
+      return
+    }
+    const remainingMs = Math.max(
+      FOREGROUND_RECOVERY_FEEDBACK_MIN_MS - (Date.now() - foregroundRecoveryFeedbackStartedAtMs),
+      0,
+    )
+    if (foregroundRecoveryFeedbackTimer !== null) {
+      window.clearTimeout(foregroundRecoveryFeedbackTimer)
+    }
+    foregroundRecoveryFeedbackTimer = window.setTimeout(() => {
+      foregroundRecoveryFeedbackTimer = null
+      foregroundRecoveryFeedbackStartedAtMs = 0
+      foregroundRecoveryThreadId.value = ''
+    }, remainingMs)
+  }
+
   function scheduleVisibilitySync(): void {
     if (typeof window === 'undefined' || typeof document === 'undefined') return
 
@@ -8899,8 +8966,11 @@ export function useDesktopState() {
       resumeSyncTimers.clear()
     }
 
-    const scheduleResumeSync = (force = false): void => {
+    const scheduleResumeSync = (force = false, showRecoveryFeedback = false): void => {
       if (!force && document.hidden) return
+      if (showRecoveryFeedback) {
+        beginForegroundRecoveryFeedback(selectedThreadId.value)
+      }
       const now = Date.now()
       if (androidShellAvailable && now - lastAndroidResumeSyncScheduledAtMs < ANDROID_RESUME_SYNC_DEBOUNCE_MS) {
         return
@@ -8908,14 +8978,12 @@ export function useDesktopState() {
       if (androidShellAvailable) {
         lastAndroidResumeSyncScheduledAtMs = now
       }
-      const shouldRestartNotifications =
-        realtimeConnectionState.value === 'reconnecting' ||
-        realtimeConnectionState.value === 'disconnected' ||
-        (
-          realtimeConnectionState.value === 'connected' &&
-          notificationStale.value &&
-          (hasSyncDemand.value || Boolean(selectedThreadId.value))
-        )
+      const shouldRestartNotifications = shouldRestartNotificationStreamOnForeground({
+        connectionState: realtimeConnectionState.value,
+        notificationStale: notificationStale.value,
+        hasSyncDemand: hasSyncDemand.value,
+        hasSelectedThread: Boolean(selectedThreadId.value),
+      })
       if (shouldRestartNotifications) {
         restartNotificationStream()
       }
@@ -8958,12 +9026,13 @@ export function useDesktopState() {
 
     const onVisibilityChange = (): void => {
       if (document.hidden) {
+        clearForegroundRecoveryFeedback()
         clearVisibilitySyncTimer()
         clearResumeSyncTimers()
         stopActiveSyncBoost()
         return
       }
-      scheduleResumeSync()
+      scheduleResumeSync(false, true)
     }
 
     const onWindowFocus = (): void => {
@@ -8971,17 +9040,18 @@ export function useDesktopState() {
     }
 
     const onPageShow = (event: PageTransitionEvent): void => {
-      scheduleResumeSync(event.persisted === true)
+      scheduleResumeSync(event.persisted === true, event.persisted === true)
     }
 
     const onPageHide = (): void => {
+      clearForegroundRecoveryFeedback()
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
       stopActiveSyncBoost()
     }
 
     const onPageLifecycleResume = (): void => {
-      scheduleResumeSync(true)
+      scheduleResumeSync(true, true)
     }
 
     const onOnline = (): void => {
@@ -8996,11 +9066,12 @@ export function useDesktopState() {
 
     const onMobileResume = (): void => {
       androidAppPaused = false
-      scheduleResumeSync(true)
+      scheduleResumeSync(true, true)
     }
 
     const onMobilePause = (): void => {
       androidAppPaused = true
+      clearForegroundRecoveryFeedback()
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
       stopActiveSyncBoost()
@@ -9017,6 +9088,15 @@ export function useDesktopState() {
     }
 
     const onStorage = (event: StorageEvent): void => {
+      if (event.key === UNREAD_STATE_STORAGE_KEY) {
+        eventUnreadByThreadId.value = loadUnreadStateMap()
+        applyThreadFlags()
+        return
+      }
+      if (event.key === QUEUED_MESSAGES_STORAGE_KEY) {
+        queuedMessagesByThreadId.value = loadQueuedMessagesMap()
+        return
+      }
       if (event.key !== MESSAGE_OUTBOX_STORAGE_KEY) return
       if (event.newValue === null) {
         replaceMessageOutboxFromStorage()
@@ -9134,80 +9214,54 @@ export function useDesktopState() {
     }
   }
 
-  function openNotificationStream(): void {
-    realtimeConnectionState.value = 'connecting'
-    stopNotificationStream = subscribeCodexNotifications(
-      (notification) => {
-        processIncomingNotification(notification)
-      },
-      {
-        onTransportActivity: noteIncomingNotificationActivity,
-        onConnectionStateChange: (state) => {
-          const previousState = realtimeConnectionState.value
-          realtimeConnectionState.value = state
-          notificationHealthTick.value = Date.now()
-          if (state === 'connected') {
-            clearSyncError()
-            void recoverPersistentMessageOutbox()
-          }
-          if (!isDocumentVisible()) {
-            return
-          }
-          if (state === 'reconnecting' || state === 'disconnected') {
-            return
-          }
-          if (state === 'connected' && previousState !== 'connected') {
-            if (androidShellAvailable) {
-              const activeThreadId = selectedThreadId.value
-              if (activeThreadId && shouldSuppressInitialConnectionRecovery(activeThreadId)) {
-                void replayMissedNotifications()
-                return
-              }
-              runForegroundRecoverySync({
-                includeThreadList: false,
-                forceMessageRefresh: true,
-                urgent: true,
-              })
-              return
-            }
-            if (hasSyncDemand.value) {
-              const activeThreadId = selectedThreadId.value
-              if (activeThreadId && shouldSuppressInitialConnectionRecovery(activeThreadId)) {
-                void replayMissedNotifications()
-                return
-              }
-              runForegroundRecoverySync({
-                includeThreadList: pendingThreadsRefresh || (!activeThreadId && !hasLoadedThreads.value),
-                forceMessageRefresh: true,
-                urgent: true,
-              })
-              return
-            }
-            void replayMissedNotifications()
-          }
-        },
-      },
-    )
+  function handleRealtimeConnectionStateChange(
+    state: RpcConnectionState,
+    previousState: RpcConnectionState,
+  ): void {
+    realtimeConnectionState.value = state
+    notificationHealthTick.value = Date.now()
+    if (state === 'connected') {
+      clearSyncError()
+      void recoverPersistentMessageOutbox()
+    }
+
+    const activeThreadId = selectedThreadId.value
+    const decision = decideConnectedRecovery({
+      previousState,
+      nextState: state,
+      documentVisible: isDocumentVisible(),
+      androidShellAvailable,
+      hasSyncDemand: hasSyncDemand.value,
+      activeThreadId,
+      suppressActiveThreadRecovery: Boolean(
+        activeThreadId && shouldSuppressInitialConnectionRecovery(activeThreadId),
+      ),
+      pendingThreadsRefresh,
+      hasLoadedThreads: hasLoadedThreads.value,
+    })
+    if (decision.kind === 'replay') {
+      void replayMissedNotifications()
+      return
+    }
+    if (decision.kind === 'foreground') {
+      runForegroundRecoverySync(decision)
+    }
   }
 
   function restartNotificationStream(): void {
     if (typeof window === 'undefined') return
-    if (stopNotificationStream) {
-      stopNotificationStream()
-      stopNotificationStream = null
-    }
-    openNotificationStream()
+    realtimeConnectionManager.restart()
   }
 
   function startPolling(): void {
     if (typeof window === 'undefined') return
 
-    if (stopNotificationStream) return
+    if (realtimeConnectionManager.isStarted()) return
     void loadPendingServerRequestsFromBridge()
     void recoverPersistentMessageOutbox()
     scheduleBackgroundSync()
     scheduleVisibilitySync()
-    openNotificationStream()
+    realtimeConnectionManager.start()
   }
 
   async function loadPendingServerRequestsFromBridge(signal?: AbortSignal): Promise<void> {
@@ -9322,10 +9376,7 @@ export function useDesktopState() {
     setAndroidKeepAwake(false)
     stopAndroidKeepAwakeWatch?.()
     notificationReplayCoordinator.stop()
-    if (stopNotificationStream) {
-      stopNotificationStream()
-      stopNotificationStream = null
-    }
+    realtimeConnectionManager.stop()
     if (backgroundSyncTimer !== null && typeof window !== 'undefined') {
       window.clearInterval(backgroundSyncTimer)
       backgroundSyncTimer = null
@@ -9354,6 +9405,7 @@ export function useDesktopState() {
       skillsChangedRefreshTimer = null
     }
     clearVisibilitySyncTimer()
+    clearForegroundRecoveryFeedback()
     stopVisibilitySync()
     for (const timer of resumeSyncTimers) {
       window.clearTimeout(timer)
@@ -9388,6 +9440,7 @@ export function useDesktopState() {
     turnErrorByThreadId.value = {}
     activeTurnIdByThreadId.value = {}
     runtimeExecutionStateByThreadId.value = {}
+    latestRuntimeEventSeqByThreadId.clear()
     runtimeCanStopByThreadId.value = {}
     runtimeStaleByThreadId.value = {}
     lastExecutionSignalAtByThreadId.value = {}
@@ -9415,13 +9468,37 @@ export function useDesktopState() {
     removeQueuedMessageByThreadId(threadId, messageId)
   }
 
-  async function quoteQueuedMessage(messageId: string): Promise<void> {
+  function deleteQueuedMessage(messageId: string): void {
+    const threadId = selectedThreadId.value
+    if (!threadId) return
+    removeQueuedMessageByThreadId(threadId, messageId)
+    void processQueuedMessages(threadId)
+  }
+
+  function retryQueuedMessage(messageId: string): void {
+    const threadId = selectedThreadId.value
+    if (!threadId) return
+    const queue = queuedMessagesByThreadId.value[threadId]
+    if (!queue || queue[0]?.id !== messageId || queue[0].deliveryState !== 'failed') return
+    setQueuedMessageDeliveryState(threadId, messageId, 'queued')
+    void processQueuedMessages(threadId)
+  }
+
+  async function quoteQueuedMessage(
+    messageId: string,
+    internalOptions: {
+      feedbackStartedAtMs?: number
+      onPendingRequestCreated?: (clientMessageId: string) => void
+      onRequestDispatched?: () => void
+    } = {},
+  ): Promise<void> {
     const threadId = selectedThreadId.value
     if (!threadId) return
     const queue = queuedMessagesByThreadId.value[threadId]
     if (!queue) return
     const msg = queue.find((m) => m.id === messageId)
-    if (!msg) return
+    if (!msg || isUpdatingSpeedMode.value) return
+    removeQueuedMessageByThreadId(threadId, messageId)
     try {
       await sendMessageToSelectedThread(
         msg.text,
@@ -9432,10 +9509,10 @@ export function useDesktopState() {
         undefined,
         msg.collaborationMode,
         msg.turnOptions,
+        internalOptions,
       )
-      removeQueuedMessageByThreadId(threadId, messageId)
     } catch {
-      // Keep the queued message so the user can retry or edit it.
+      // The durable outgoing bubble now owns reconnect, edit, and retry recovery.
     }
   }
 
@@ -9505,6 +9582,8 @@ export function useDesktopState() {
     selectedThreadQueuedMessages,
     selectedThreadQueueProcessing,
     removeQueuedMessage,
+    deleteQueuedMessage,
+    retryQueuedMessage,
     quoteQueuedMessage,
     markAllThreadsAsRead,
     setSelectedModelId,

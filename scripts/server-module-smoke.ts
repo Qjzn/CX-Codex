@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { generateKeyPairSync } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -312,6 +313,15 @@ import {
 import { handleRuntimeActionRoutes } from '../src/server/runtimeActionRoutes.js'
 import { handleDiagnosticsRoutes } from '../src/server/diagnosticsRoutes.js'
 import {
+  createFcmTerminalMessage,
+  createMobilePushDeliveryKey,
+  isMobilePushTerminalEvent,
+  MobilePushCoordinator,
+  normalizeMobilePushAcknowledgement,
+  normalizeMobilePushRegistration,
+  resolveMobilePushConfiguration,
+} from '../src/server/mobilePush.js'
+import {
   normalizeRuntimeEventForReplay,
   readRuntimeRequestStatusFromExecutionState,
   type BridgeNotificationEvent,
@@ -323,6 +333,7 @@ import {
 import { runRuntimeReconcileBatch } from '../src/server/appServerRuntimeReconcileScheduler.js'
 import {
   createAppServerRuntimeTurnStarter,
+  createRuntimeThreadStartParams,
   startRuntimeTurnWithAppServer,
   type RuntimeStartDependencies,
 } from '../src/server/appServerRuntimeStart.js'
@@ -516,6 +527,7 @@ try {
   smokeAppServerRuntimeSnapshotPersistence()
   smokeAppServerNotificationRuntimeSync()
   await smokeRuntimeActionRoutes()
+  await smokeMobilePush()
   await smokeDiagnosticsRoutes()
   await smokeRuntimeStoreMaintenance()
   smokeAppServerNotificationReplay()
@@ -658,7 +670,7 @@ function smokeAppServerSessionCleanup(): void {
     },
     rpcCache: {
       clearSharedReads: () => calls.push('rpcCache.clearSharedReads'),
-      clearThreadList: () => calls.push('rpcCache.clearThreadList'),
+      invalidateThreadList: () => calls.push('rpcCache.invalidateThreadList'),
     },
     threadTokenUsage: {
       clear: () => calls.push('threadTokenUsage.clear'),
@@ -670,7 +682,7 @@ function smokeAppServerSessionCleanup(): void {
   assert.deepEqual(calls, [
     'pendingServerRequests.clear',
     'rpcCache.clearSharedReads',
-    'rpcCache.clearThreadList',
+    'rpcCache.invalidateThreadList',
     'threadTokenUsage.clear',
     'planModeTurns.clearAll',
   ])
@@ -2220,12 +2232,12 @@ function smokeAppServerNotificationState(): void {
   assert.equal(shouldClearPlanModeTurnForNotification('item/tool/failed'), true)
   assert.equal(shouldClearPlanModeTurnForNotification('thread/name/updated'), false)
 
-  let clearedThreadListCount = 0
+  let invalidatedThreadListCount = 0
   const clearedPlanModeTurns: Array<{ threadId: string; turnId: string }> = []
   const observedTokenUsageParams: unknown[] = []
   const dependencies = {
-    clearThreadListCache: () => {
-      clearedThreadListCount += 1
+    invalidateThreadListCache: () => {
+      invalidatedThreadListCount += 1
     },
     clearPlanModeTurnByThreadOrTurn: (threadId: string, turnId: string) => {
       clearedPlanModeTurns.push({ threadId, turnId })
@@ -2239,7 +2251,7 @@ function smokeAppServerNotificationState(): void {
     method: 'thread/name/updated',
     params: { threadId: 'thread-cache' },
   }, dependencies)
-  assert.equal(clearedThreadListCount, 1)
+  assert.equal(invalidatedThreadListCount, 1)
   assert.deepEqual(clearedPlanModeTurns, [])
   assert.deepEqual(observedTokenUsageParams, [])
 
@@ -2273,7 +2285,7 @@ function smokeAppServerNotificationState(): void {
     params: tokenUsageParams,
   }, dependencies)
   assert.deepEqual(observedTokenUsageParams, [tokenUsageParams])
-  assert.equal(clearedThreadListCount, 1)
+  assert.equal(invalidatedThreadListCount, 1)
 }
 
 async function smokeAppServerHookDiagnostics(): Promise<void> {
@@ -3163,6 +3175,26 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
   }) as { data: Array<{ id: string; title?: string }> }
   assert.deepEqual(timeoutCalls, ['slow-a'])
   assert.deepEqual(timeoutResult.data, [])
+
+  const archivedFilterResult = await new AppServerThreadListAugmenter({
+    maxReads: 3,
+    nowMs: () => 4_000,
+  }).augmentThreadListRpcResult({
+    params: { archived: false },
+    result: { data: [] },
+    readSupplementalThreadIds: async () => ['archived-windows', 'archived-posix', 'active-thread'],
+    readThreadById: async (threadId) => ({
+      thread: {
+        id: threadId,
+        path: threadId === 'archived-windows'
+          ? 'C:\\Users\\SW\\.codex\\archived_sessions\\archived-windows.jsonl'
+          : threadId === 'archived-posix'
+            ? '/home/sw/.codex/archived_sessions/archived-posix.jsonl'
+            : 'C:\\Users\\SW\\.codex\\sessions\\active-thread.jsonl',
+      },
+    }),
+  }) as { data: Array<{ id: string }> }
+  assert.deepEqual(archivedFilterResult.data.map((thread) => thread.id), ['active-thread'])
 }
 
 function smokeAppServerThreadReadCache(): void {
@@ -3703,6 +3735,10 @@ async function smokeAppServerRpcCache(): Promise<void> {
   cache.writeThreadList(key, { rows: ['fresh'] })
   assert.deepEqual(cache.readThreadList(key, true), { value: { rows: ['fresh'] }, stale: false })
 
+  cache.invalidateThreadList()
+  assert.deepEqual(cache.readThreadList(key, true), { value: { rows: ['fresh'] }, stale: true })
+  cache.writeThreadList(key, { rows: ['fresh'] })
+
   now += 4 * 60_000
   assert.deepEqual(cache.readThreadList(key, true), { value: { rows: ['fresh'] }, stale: true })
 
@@ -3717,7 +3753,13 @@ async function smokeAppServerRpcCache(): Promise<void> {
       value: { rows: ['persisted'] },
       stale: false,
     })
-    reloadedPersistentCache.clearThreadList()
+    reloadedPersistentCache.invalidateThreadList()
+    const invalidatedPersistentCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
+    assert.deepEqual(invalidatedPersistentCache.readThreadList(key, true), {
+      value: { rows: ['persisted'] },
+      stale: true,
+    })
+    invalidatedPersistentCache.clearThreadList()
 
     const clearedPersistentCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
     assert.equal(clearedPersistentCache.readThreadList(key, true), null)
@@ -3760,6 +3802,28 @@ async function smokeAppServerRpcCache(): Promise<void> {
   assert.deepEqual(await catchupRead, { rows: ['caught-up'] })
   assert.deepEqual(staleCatchupCache.readThreadList(key, true), {
     value: { rows: ['caught-up'] },
+    stale: false,
+  })
+
+  const generationCache = new AppServerRpcCache({ threadListCachePath: '' })
+  let releaseOldGeneration = (): void => {}
+  const oldGenerationGate = new Promise<void>((resolve) => {
+    releaseOldGeneration = resolve
+  })
+  const oldGenerationRead = generationCache.executeShareableRead('thread/list', {}, key, async () => {
+    await oldGenerationGate
+    return { rows: ['old-generation'] }
+  })
+  await Promise.resolve()
+  generationCache.invalidateThreadList()
+  const newGenerationRead = generationCache.executeShareableRead('thread/list', {}, key, async () => ({
+    rows: ['new-generation'],
+  }))
+  assert.deepEqual(await newGenerationRead, { rows: ['new-generation'] })
+  releaseOldGeneration()
+  assert.deepEqual(await oldGenerationRead, { rows: ['old-generation'] })
+  assert.deepEqual(generationCache.readThreadList(key, true), {
+    value: { rows: ['new-generation'] },
     stale: false,
   })
 
@@ -4690,6 +4754,9 @@ function smokeCodexBridgeMiddlewareDispose(): void {
     windowsSandboxReadinessCache: {
       clear: () => calls.push('windowsSandboxReadinessCache.clear'),
     },
+    mobilePushCoordinator: {
+      dispose: () => calls.push('mobilePushCoordinator.dispose'),
+    },
     runtimeStore: {
       close: () => calls.push('runtimeStore.close'),
     },
@@ -4707,6 +4774,7 @@ function smokeCodexBridgeMiddlewareDispose(): void {
     'statusDiagnostics.clear',
     'hookDiagnosticsCache.clear',
     'windowsSandboxReadinessCache.clear',
+    'mobilePushCoordinator.dispose',
     'runtimeStore.close',
     'appServer.dispose',
   ])
@@ -4851,6 +4919,7 @@ function smokeCodexBridgeRuntimeOperations(): void {
       markStarting: () => {},
       markRunning: () => {},
       markStartUncertain: () => {},
+      markFailed: () => {},
       markStopping: () => {},
       markInterrupted: () => {},
       markStopUncertain: () => {},
@@ -4962,6 +5031,12 @@ async function smokeCodexBridgeRouteHandlers(): Promise<void> {
     readAppServerHookDiagnostics: async () => ({}),
     readAppServerSchemaAuditSummary: async () => ({}),
     readWindowsSandboxReadinessDiagnostics: async () => ({}),
+    mobilePushCoordinator: {
+      getStatus: () => ({ configurationState: 'not_configured' }),
+      register: () => ({ configurationState: 'not_configured' }),
+      unregister: () => ({ configurationState: 'not_configured' }),
+      acknowledge: () => ({ configurationState: 'not_configured', accepted: false, acknowledgedCount: 0 }),
+    },
   }
 
   const replayResponse = createRouteTestResponse()
@@ -4973,7 +5048,7 @@ async function smokeCodexBridgeRouteHandlers(): Promise<void> {
     dependencies as never,
   )
 
-  assert.equal(replayHandlers.length, 18)
+  assert.equal(replayHandlers.length, 19)
   assert.equal(await runCodexBridgeRouteHandlers(replayHandlers), true)
   assert.deepEqual(replayCalls, [{ afterSeq: 5, limit: 2 }])
   assert.deepEqual(JSON.parse(replayResponse.body), {
@@ -6128,8 +6203,10 @@ async function smokeThreadSearchIndex(): Promise<void> {
   assert.deepEqual(await store.search('alpha', 10), { threadIds: ['thread-a'], indexedThreadCount: 1 })
   assert.equal(buildCount, 1)
   store.clear()
-  assert.deepEqual(await store.search('alpha', 10), { threadIds: ['thread-a'], indexedThreadCount: 1 })
+  assert.deepEqual(await store.search('alpha 1', 10), { threadIds: ['thread-a'], indexedThreadCount: 1 })
   assert.equal(buildCount, 2)
+  await Promise.resolve()
+  assert.deepEqual(await store.search('alpha 2', 10), { threadIds: ['thread-a'], indexedThreadCount: 1 })
 
   const concurrentBuild = { release: null as (() => void) | null }
   let concurrentBuildCount = 0
@@ -6824,6 +6901,26 @@ async function smokeWorkspaceRootsState(): Promise<void> {
     projectOrder: ['C:\\work\\project'],
     pinnedProjectIds: ['C:\\work\\pin'],
   })
+  assert.deepEqual(readWorkspaceRootsStateFromPayload({
+    'electron-saved-workspace-roots': ['C:\\work\\one'],
+    'electron-workspace-root-labels': { 'C:\\work\\one': 'Legacy name' },
+    'active-workspace-roots': ['C:\\work\\one'],
+    'local-projects': {
+      'local-one': {
+        id: 'local-one',
+        name: 'Current project name',
+        rootPaths: ['C:\\work\\one'],
+      },
+    },
+    'project-order': ['local-one', '00000000-0000-0000-0000-000000000001'],
+    'pinned-project-ids': ['local-one'],
+  }), {
+    order: ['C:\\work\\one'],
+    labels: { 'C:\\work\\one': 'Current project name' },
+    active: ['C:\\work\\one'],
+    projectOrder: ['C:\\work\\one'],
+    pinnedProjectIds: ['C:\\work\\one'],
+  })
 
   const upserted = upsertWorkspaceRootState({
     order: ['C:\\work\\old', 'C:\\work\\new'],
@@ -6862,6 +6959,39 @@ async function smokeWorkspaceRootsState(): Promise<void> {
       pinnedProjectIds: ['C:\\work\\pin'],
     })
     assert.equal(JSON.parse(await readFile(statePath, 'utf8')).existing, true)
+
+    await writeFile(statePath, JSON.stringify({
+      existing: true,
+      'local-projects': {
+        'local-one': {
+          id: 'local-one',
+          name: 'One',
+          rootPaths: ['C:\\work\\one'],
+        },
+      },
+      'project-order': ['local-one', '00000000-0000-0000-0000-000000000001'],
+      'pinned-project-ids': ['local-one'],
+    }), 'utf8')
+    await writeWorkspaceRootsState(statePath, {
+      order: ['C:\\work\\one'],
+      labels: { 'C:\\work\\one': 'One' },
+      active: ['C:\\work\\one'],
+      projectOrder: ['C:\\work\\one'],
+      pinnedProjectIds: ['C:\\work\\one'],
+    })
+    const projectStatePayload = JSON.parse(await readFile(statePath, 'utf8'))
+    assert.deepEqual(projectStatePayload['project-order'], [
+      'local-one',
+      '00000000-0000-0000-0000-000000000001',
+    ])
+    assert.deepEqual(projectStatePayload['pinned-project-ids'], ['local-one'])
+    assert.deepEqual(await readWorkspaceRootsState(statePath), {
+      order: ['C:\\work\\one'],
+      labels: { 'C:\\work\\one': 'One' },
+      active: ['C:\\work\\one'],
+      projectOrder: ['C:\\work\\one'],
+      pinnedProjectIds: ['C:\\work\\one'],
+    })
   } finally {
     await rm(tempDir, { recursive: true, force: true })
   }
@@ -7230,13 +7360,132 @@ function smokeRuntimeStateStore(): void {
     seq: 2,
   })
   assert.equal(store.snapshot('thread-a').latestReply, '已完成浮窗布局')
+  assert.equal(store.snapshot('thread-a').latestReplyEventSeq, 2)
+  store.observeEvent({
+    method: 'item/agentMessage/delta',
+    params: { threadId: 'thread-a', turnId: 'turn-1', itemId: 'agent-1', delta: ' ' },
+    atIso: new Date().toISOString(),
+    seq: 3,
+  })
+  store.observeEvent({
+    method: 'item/agentMessage/delta',
+    params: { threadId: 'thread-a', turnId: 'turn-1', itemId: 'agent-1', delta: '和交互验证' },
+    atIso: new Date().toISOString(),
+    seq: 4,
+  })
+  assert.equal(store.snapshot('thread-a').latestReply, '已完成浮窗布局 和交互验证')
+  assert.equal(store.snapshot('thread-a').latestReplyEventSeq, 4)
   store.observeEvent({
     method: 'item/completed',
     params: { threadId: 'thread-a', turnId: 'turn-1', item: { id: 'agent-1', type: 'agentMessage', text: '已完成浮窗布局和交互验证。' } },
     atIso: new Date().toISOString(),
-    seq: 3,
+    seq: 5,
   })
   assert.equal(store.snapshot('thread-a').latestReply, '已完成浮窗布局和交互验证。')
+
+  const longCompletedReply = `HEAD_MARKER${'内容'.repeat(700)}TERMINAL_MARKER`
+  store.observeEvent({
+    method: 'item/completed',
+    params: { threadId: 'thread-a', turnId: 'turn-1', item: { id: 'agent-1', type: 'agentMessage', text: longCompletedReply } },
+    atIso: new Date().toISOString(),
+    seq: 6,
+  })
+  const boundedCompletedReply = store.snapshot('thread-a').latestReply ?? ''
+  assert.equal(boundedCompletedReply.length, 1_200)
+  assert.equal(boundedCompletedReply.includes('HEAD_MARKER'), false)
+  assert.equal(boundedCompletedReply.endsWith('TERMINAL_MARKER'), true)
+
+  store.observeEvent({
+    method: 'item/started',
+    params: { threadId: 'thread-a', turnId: 'turn-1', item: { id: 'agent-2', type: 'agentMessage', phase: 'final_answer', text: '' } },
+    atIso: new Date().toISOString(),
+    seq: 7,
+  })
+  store.observeEvent({
+    method: 'item/agentMessage/delta',
+    params: { threadId: 'thread-a', turnId: 'turn-1', itemId: 'agent-2', delta: '第二条' },
+    atIso: new Date().toISOString(),
+    seq: 8,
+  })
+  assert.equal(store.snapshot('thread-a').latestReply, '第二条')
+  assert.equal(store.snapshot('thread-a').latestReplyItemId, 'agent-2')
+  store.observeEvent({
+    method: 'item/agentMessage/delta',
+    params: { threadId: 'thread-a', turnId: 'turn-1', itemId: 'agent-2', delta: '回复' },
+    atIso: new Date().toISOString(),
+    seq: 9,
+  })
+  assert.equal(store.snapshot('thread-a').latestReply, '第二条回复')
+  assert.equal(store.snapshot('thread-a').latestReplyEventSeq, 9)
+
+  store.observeEvent({
+    method: 'item/updated',
+    params: { threadId: 'thread-a', turnId: 'turn-1', itemId: 'tool-1' },
+    atIso: new Date().toISOString(),
+    seq: 10,
+  })
+  const replyAfterNonReplyEvent = store.snapshot('thread-a')
+  assert.equal(replyAfterNonReplyEvent.lastEventSeq, 10)
+  assert.equal(replyAfterNonReplyEvent.latestReplyEventSeq, 9)
+
+  store.observeEvent({
+    method: 'turn/started',
+    params: { threadId: 'thread-reply-reset', turnId: 'turn-old' },
+    atIso: new Date().toISOString(),
+    seq: 11,
+  })
+  store.observeEvent({
+    method: 'item/agentMessage/delta',
+    params: { threadId: 'thread-reply-reset', turnId: 'turn-old', itemId: 'agent-old', delta: '旧轮次回复' },
+    atIso: new Date().toISOString(),
+    seq: 12,
+  })
+  store.observeEvent({
+    method: 'turn/started',
+    params: { threadId: 'thread-reply-reset', turnId: 'turn-new' },
+    atIso: new Date().toISOString(),
+    seq: 13,
+  })
+  const resetReply = store.snapshot('thread-reply-reset')
+  assert.equal(resetReply.latestReply, '')
+  assert.equal(resetReply.latestReplyEventSeq, 0)
+
+  const restoredStore = new RuntimeStateStore({
+    readThreadIdFromPayload,
+    readTurnIdFromPayload,
+    readItemIdFromPayload,
+    readThreadInProgressFromThreadReadPayload: (payload) => readBooleanProperty(payload, 'inProgress'),
+    getErrorMessage: (_payload, fallback) => fallback,
+  }, {
+    loadPersistedSnapshot: (threadId) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'running',
+      activeTurnId: 'turn-restored',
+      activeItemId: 'agent-restored',
+      latestReply: '恢复中的回复 ',
+      latestReplyItemId: 'agent-restored',
+      lastEventSeq: 8,
+      latestReplyEventSeq: 8,
+    }),
+  })
+  assert.equal(restoredStore.snapshot('thread-restored').latestReply, '')
+  restoredStore.observeEvent({
+    method: 'item/agentMessage/delta',
+    params: { threadId: 'thread-restored', turnId: 'turn-restored', itemId: 'agent-restored', delta: '继续' },
+    atIso: new Date().toISOString(),
+    seq: 9,
+  })
+  assert.equal(restoredStore.snapshot('thread-restored').latestReply, '恢复中的回复 继续')
+  assert.equal(restoredStore.snapshot('thread-restored').latestReplyEventSeq, 9)
+
+  restoredStore.observeEvent({
+    method: 'item/agentMessage/delta',
+    params: { threadId: 'thread-restored', turnId: 'turn-restored', itemId: 'agent-new', delta: '新的回复项' },
+    atIso: new Date().toISOString(),
+    seq: 10,
+  })
+  assert.equal(restoredStore.snapshot('thread-restored').latestReply, '新的回复项')
+  assert.equal(restoredStore.snapshot('thread-restored').latestReplyItemId, 'agent-new')
 
   store.observeThreadRead('thread-a', false, '', new Date().toISOString(), 'thread-read')
   const completed = store.snapshot('thread-a', { tokenUsage: { total: 1 }, pendingServerRequests: [] })
@@ -7245,6 +7494,36 @@ function smokeRuntimeStateStore(): void {
   assert.equal(persistable.threadRead, null)
   assert.deepEqual(persistable.pendingServerRequests, [])
   assert.equal(persistable.tokenUsage, null)
+
+  const previousTurnStartedAtIso = '2026-01-01T00:00:00.000Z'
+  const previousTurnCompletedAtIso = '2026-01-01T01:00:00.000Z'
+  store.observeEvent({
+    method: 'turn/started',
+    params: { threadId: 'thread-timer', turnId: 'turn-old' },
+    atIso: previousTurnStartedAtIso,
+    seq: 4,
+  })
+  store.observeEvent({
+    method: 'turn/completed',
+    params: { threadId: 'thread-timer', turnId: 'turn-old' },
+    atIso: previousTurnCompletedAtIso,
+    seq: 5,
+  })
+  store.markStarting('thread-timer')
+  const restarted = store.snapshot('thread-timer')
+  assert.equal(restarted.executionState, 'starting')
+  assert.ok(Date.parse(restarted.lastStartedAtIso ?? '') > Date.parse(previousTurnCompletedAtIso))
+  store.observeThreadRead('thread-timer', false, '', previousTurnCompletedAtIso, 'thread-read')
+  assert.equal(store.snapshot('thread-timer').executionState, 'starting')
+  store.markRunning('thread-timer', 'turn-new')
+  assert.equal(store.snapshot('thread-timer').lastStartedAtIso, restarted.lastStartedAtIso)
+
+  store.markStarting('thread-failed-start')
+  store.markFailed('thread-failed-start', 'thread is archived')
+  const failedStart = store.snapshot('thread-failed-start')
+  assert.equal(failedStart.executionState, 'failed')
+  assert.equal(failedStart.activeTurnId, '')
+  assert.equal(failedStart.lastError, 'thread is archived')
 }
 
 function smokeAppServerRuntimeBridge(): void {
@@ -7783,6 +8062,9 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
       markStartUncertain: (threadId, lastError = null) => {
         marks.push({ action: 'start_uncertain', threadId, lastError })
       },
+      markFailed: (threadId, lastError = null) => {
+        marks.push({ action: 'failed', threadId, lastError })
+      },
       persistRuntimeSnapshot: (threadId) => {
         persisted.push(threadId)
         return { activeTurnId: `${threadId}-snapshot-turn` }
@@ -7805,8 +8087,22 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
       seedRequest: (request: RuntimeRequestRecord) => {
         currentRequest = request
       },
+      getCurrentRequest: () => currentRequest,
     }
   }
+
+  assert.deepEqual(
+    createRuntimeThreadStartParams({ cwd: 'E:/project', model: 'gpt-test' }, 'win32'),
+    {
+      cwd: 'E:/project',
+      model: 'gpt-test',
+      config: { 'features.shell_snapshot': false },
+    },
+  )
+  assert.deepEqual(
+    createRuntimeThreadStartParams({ cwd: 'E:/project', model: '' }, 'linux'),
+    { cwd: 'E:/project' },
+  )
 
   let planStartCallCount = 0
   const plan = createHarness(async (method, params) => {
@@ -7825,8 +8121,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     }
     throw new Error(`unexpected rpc method ${method}`)
   })
-  const startRuntimeTurn = createAppServerRuntimeTurnStarter(plan.dependencies)
-  const planResult = await startRuntimeTurn({
+  const planResult = await startRuntimeTurnWithAppServer({
     requestId: 'request-plan',
     clientMessageId: 'client-plan',
     mode: 'plan',
@@ -7835,7 +8130,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     effort: ' high ',
     attachments: [{ path: 'a.txt' }],
     input: [{ type: 'text', text: 'Draft a plan' }],
-  })
+  }, plan.dependencies)
   assert.equal(planResult.status, 'running')
   assert.equal(planResult.threadId, 'thread-plan')
   assert.equal(planResult.turnId, 'turn-plan')
@@ -7871,6 +8166,34 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
       input: [{ type: 'text', text: 'Continue' }],
     },
   }])
+
+  let missingThreadStartCount = 0
+  const resumedMissingThread = createHarness(async (method, params) => {
+    if (method === 'turn/start') {
+      missingThreadStartCount += 1
+      if (missingThreadStartCount === 1) throw new Error('thread not found: thread-mobile')
+      return { turn: { id: 'turn-mobile' } }
+    }
+    if (method === 'thread/resume') {
+      assert.deepEqual(params, { threadId: 'thread-mobile' })
+      return { thread: { id: 'thread-mobile' } }
+    }
+    throw new Error(`unexpected rpc method ${method}`)
+  })
+  const resumedMissingThreadResult = await startRuntimeTurnWithAppServer({
+    requestId: 'request-mobile',
+    clientMessageId: 'client-mobile',
+    threadId: 'thread-mobile',
+    input: [{ type: 'text', text: 'Resume and send' }],
+  }, resumedMissingThread.dependencies)
+  assert.equal(resumedMissingThreadResult.status, 'running')
+  assert.equal(resumedMissingThreadResult.turnId, 'turn-mobile')
+  assert.deepEqual(resumedMissingThread.rpcCalls.map((call) => call.method), [
+    'turn/start',
+    'thread/resume',
+    'turn/start',
+  ])
+  assert.equal(resumedMissingThread.created.length, 1)
 
   const timedOut = createHarness(async () => {
     throw createRpcTimeoutError('turn/start', 1000)
@@ -7914,10 +8237,19 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
       lastError: 'permission denied',
     },
   })
+  assert.deepEqual(failed.marks, [
+    { action: 'starting', threadId: 'thread-failed' },
+    { action: 'failed', threadId: 'thread-failed', lastError: 'permission denied' },
+  ])
+  assert.deepEqual(failed.persisted, ['thread-failed', 'thread-failed'])
 
+  let releaseDeduplicatedStart!: (value: unknown) => void
+  const deduplicatedStartGate = new Promise<unknown>((resolve) => {
+    releaseDeduplicatedStart = resolve
+  })
   const deduplicated = createHarness(async (method) => {
     assert.equal(method, 'turn/start')
-    return { turn: { id: 'turn-deduplicated' } }
+    return await deduplicatedStartGate
   })
   const deduplicatedStarter = createAppServerRuntimeTurnStarter(deduplicated.dependencies)
   const deduplicatedPayload = {
@@ -7931,9 +8263,10 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     ...deduplicatedPayload,
     requestId: 'request-deduplicated-second',
   })
-  assert.equal(firstDeduplicatedResult.turnId, 'turn-deduplicated')
+  assert.equal(firstDeduplicatedResult.status, 'starting')
+  assert.equal(firstDeduplicatedResult.turnId, '')
   assert.equal(repeatedDeduplicatedResult.request.requestId, 'request-deduplicated-first')
-  assert.equal(repeatedDeduplicatedResult.request.retryCount, 1)
+  assert.equal(repeatedDeduplicatedResult.request.retryCount, 0)
   assert.equal(deduplicated.created.length, 1)
   assert.equal(deduplicated.rpcCalls.length, 1)
   await assert.rejects(
@@ -7943,6 +8276,11 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     }),
     /clientMessageId already belongs to different message content/,
   )
+  releaseDeduplicatedStart({ turn: { id: 'turn-deduplicated' } })
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  const completedDeduplicatedResult = await deduplicatedStarter(deduplicatedPayload)
+  assert.equal(completedDeduplicatedResult.turnId, 'turn-deduplicated')
+  assert.equal(completedDeduplicatedResult.request.retryCount, 1)
   await assert.rejects(
     () => deduplicatedStarter({
       ...deduplicatedPayload,
@@ -7971,11 +8309,11 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     updatedAtIso: '2026-01-01T00:00:00.000Z',
     lastError: null,
   })
-  const resumedPendingResult = await createAppServerRuntimeTurnStarter(resumedPendingStart.dependencies)({
+  const resumedPendingResult = await startRuntimeTurnWithAppServer({
     requestId: 'request-after-restart',
     clientMessageId: 'client-pending-before-restart',
     input: resumedInput,
-  })
+  }, resumedPendingStart.dependencies)
   assert.equal(resumedPendingResult.request.requestId, 'request-pending-before-restart')
   assert.equal(resumedPendingResult.threadId, 'thread-resumed-pending')
   assert.equal(resumedPendingResult.turnId, 'turn-resumed-pending')
@@ -7987,6 +8325,37 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     'request-pending-before-restart',
     'request-pending-before-restart',
   ])
+
+  const resumedPendingTurn = createHarness(async (method) => {
+    if (method === 'turn/start') return { turn: { id: 'turn-resumed-existing-thread' } }
+    throw new Error(`unexpected rpc method ${method}`)
+  })
+  const resumedTurnInput = [{ type: 'text', text: 'Resume after thread creation' }]
+  resumedPendingTurn.seedRequest({
+    requestId: 'request-pending-with-thread',
+    clientMessageId: 'client-pending-with-thread',
+    threadId: 'thread-created-before-restart',
+    turnId: '',
+    status: 'pending_start',
+    promptHash: createRuntimePromptHash(resumedTurnInput),
+    mode: 'execute',
+    payload: {},
+    retryCount: 0,
+    createdAtIso: '2026-01-01T00:00:00.000Z',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    lastError: null,
+  })
+  const resumedPendingTurnResult = await startRuntimeTurnWithAppServer({
+    requestId: 'request-after-thread-created',
+    clientMessageId: 'client-pending-with-thread',
+    input: resumedTurnInput,
+  }, resumedPendingTurn.dependencies)
+  assert.equal(resumedPendingTurnResult.request.requestId, 'request-pending-with-thread')
+  assert.equal(resumedPendingTurnResult.threadId, 'thread-created-before-restart')
+  assert.equal(resumedPendingTurnResult.turnId, 'turn-resumed-existing-thread')
+  assert.equal(resumedPendingTurn.created.length, 0)
+  assert.deepEqual(resumedPendingTurn.rpcCalls.map((call) => call.method), ['turn/start'])
+  assert.equal(resumedPendingTurn.getCurrentRequest()?.retryCount, 1)
 
   let releaseConcurrentStart!: (value: unknown) => void
   const concurrentStartGate = new Promise<unknown>((resolve) => {
@@ -8009,7 +8378,12 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
   assert.equal(concurrent.rpcCalls.length, 1)
   releaseConcurrentStart({ turn: { id: 'turn-concurrent' } })
   const concurrentResults = await Promise.all([firstConcurrentStart, secondConcurrentStart])
-  assert.deepEqual(concurrentResults.map((result) => result.turnId), ['turn-concurrent', 'turn-concurrent'])
+  assert.deepEqual(concurrentResults.map((result) => result.status), ['starting', 'starting'])
+  assert.deepEqual(concurrentResults.map((result) => result.turnId), ['', ''])
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  const completedConcurrent = await concurrentStarter(concurrentPayload)
+  assert.equal(completedConcurrent.turnId, 'turn-concurrent')
+  assert.equal(concurrent.rpcCalls.length, 1)
 }
 
 async function smokeAppServerRuntimeInterrupt(): Promise<void> {
@@ -8260,6 +8634,9 @@ async function smokeAppServerRuntimeActions(): Promise<void> {
     markStartUncertain: (threadId, lastError = null) => {
       marks.push({ action: 'start_uncertain', threadId, lastError })
     },
+    markFailed: (threadId, lastError = null) => {
+      marks.push({ action: 'failed', threadId, lastError })
+    },
     persistRuntimeSnapshot: (threadId) => {
       persisted.push(threadId)
       return { activeTurnId: `${threadId}-snapshot-turn` }
@@ -8288,9 +8665,12 @@ async function smokeAppServerRuntimeActions(): Promise<void> {
     threadId: 'thread-actions',
     input: [{ type: 'text', text: 'Run action' }],
   })
-  assert.equal(startResult.status, 'running')
+  assert.equal(startResult.status, 'starting')
   assert.equal(startResult.threadId, 'thread-actions')
-  assert.equal(startResult.turnId, 'turn-actions')
+  assert.equal(startResult.turnId, '')
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal((currentRequest as RuntimeRequestRecord | null)?.status, 'running')
+  assert.equal((currentRequest as RuntimeRequestRecord | null)?.turnId, 'turn-actions')
 
   const interruptResult = await actions.interruptRuntimeTurn({
     requestId: 'request-actions-interrupt',
@@ -8498,6 +8878,8 @@ function smokeAppServerNotificationRuntimeSync(): void {
 async function smokeRuntimeActionRoutes(): Promise<void> {
   const bodies: unknown[] = [
     { input: 'hello' },
+    { input: 'queued' },
+    { input: 'starting' },
     { input: 'wait' },
     { threadId: 'thread-a', turnId: 'turn-a' },
     { threadId: 'thread-b', turnId: 'turn-b' },
@@ -8522,8 +8904,9 @@ async function smokeRuntimeActionRoutes(): Promise<void> {
     readJsonBody: async () => bodies.shift(),
     startRuntimeTurn: async (payload: unknown) => {
       startedPayloads.push(payload)
+      const statuses = ['running', 'pending_start', 'starting', 'start_uncertain']
       return {
-        status: startedPayloads.length === 1 ? 'running' : 'start_uncertain',
+        status: statuses[startedPayloads.length - 1],
         requestId: `start-${startedPayloads.length}`,
       }
     },
@@ -8549,6 +8932,26 @@ async function smokeRuntimeActionRoutes(): Promise<void> {
   assert.equal(sendRunning.response.statusCode, 200)
   assert.deepEqual(JSON.parse(sendRunning.body), { data: { status: 'running', requestId: 'start-1' } })
 
+  const sendPending = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'POST' } as never,
+    sendPending.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/send'),
+    dependencies,
+  ), true)
+  assert.equal(sendPending.response.statusCode, 202)
+  assert.deepEqual(JSON.parse(sendPending.body), { data: { status: 'pending_start', requestId: 'start-2' } })
+
+  const sendStarting = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'POST' } as never,
+    sendStarting.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/send'),
+    dependencies,
+  ), true)
+  assert.equal(sendStarting.response.statusCode, 202)
+  assert.deepEqual(JSON.parse(sendStarting.body), { data: { status: 'starting', requestId: 'start-3' } })
+
   const sendUncertain = createRouteTestResponse()
   assert.equal(await handleRuntimeActionRoutes(
     { method: 'POST' } as never,
@@ -8557,8 +8960,13 @@ async function smokeRuntimeActionRoutes(): Promise<void> {
     dependencies,
   ), true)
   assert.equal(sendUncertain.response.statusCode, 202)
-  assert.deepEqual(startedPayloads, [{ input: 'hello' }, { input: 'wait' }])
-  assert.deepEqual(JSON.parse(sendUncertain.body), { data: { status: 'start_uncertain', requestId: 'start-2' } })
+  assert.deepEqual(startedPayloads, [
+    { input: 'hello' },
+    { input: 'queued' },
+    { input: 'starting' },
+    { input: 'wait' },
+  ])
+  assert.deepEqual(JSON.parse(sendUncertain.body), { data: { status: 'start_uncertain', requestId: 'start-4' } })
 
   const missingRequestId = createRouteTestResponse()
   assert.equal(await handleRuntimeActionRoutes(
@@ -9498,6 +9906,75 @@ async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
     'Heavy thread snapshot fell back to session log messages',
   ])
 
+  const cacheFirstRpcCalls: unknown[] = []
+  const cacheFirstRemembered: unknown[] = []
+  const cacheFirstThreadReadPayload = {
+    thread: {
+      ...sessionFallbackThreadReadPayload.thread,
+      path: 'session-cache-first.jsonl',
+      turns: Array.from({ length: 12 }, (_value, index) => ({
+        id: `turn-cache-${String(index)}`,
+        status: 'completed',
+        items: [{ type: 'agentMessage', id: `agent-cache-${String(index)}`, text: `Cached answer ${String(index)}` }],
+      })),
+    },
+  }
+  const cacheFirstSnapshot = await readAppServerThreadRuntimeSnapshot('thread-cache-first', {
+    rpc: async (_method, params) => {
+      cacheFirstRpcCalls.push(params)
+      if (readIncludeTurns(params) === true) {
+        throw new Error('cache-first snapshot must not block on a heavy thread read')
+      }
+      return {
+        thread: {
+          id: 'thread-cache-first',
+          updatedAt: updatedAtSeconds,
+          inProgress: false,
+          path: 'session-cache-first.jsonl',
+        },
+      }
+    },
+    observeThreadRead: () => {},
+    getCachedThreadRead: () => null,
+    rememberCachedThreadRead: (_threadId, threadRead, source) => {
+      cacheFirstRemembered.push({ threadRead, source })
+      return createCachedThreadRead(threadRead, () => '2026-01-01T00:00:30.000Z', source)
+    },
+    snapshotRuntime: (threadId, overlay = {}) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'completed',
+      threadRead: overlay.threadRead ?? null,
+      messageState: overlay.messageState ?? 'unavailable',
+      pendingServerRequests: overlay.pendingServerRequests ?? [],
+      tokenUsage: overlay.tokenUsage ?? null,
+    }),
+    observeRuntimeThreadRead: () => {},
+    markRuntimeDegraded: () => {
+      throw new Error('cache-first session recovery should avoid degraded runtime state')
+    },
+    persistRuntimeSnapshot: (_threadId, snapshot) => snapshot,
+    listPendingServerRequestsForThread: () => [],
+    getThreadTokenUsage: () => null,
+    readSessionLogThreadRead: async (sessionPath, fallbackThreadRead) => {
+      assert.equal(sessionPath, 'session-cache-first.jsonl')
+      assert.equal(readThreadSessionPathFromThreadReadPayload(fallbackThreadRead), 'session-cache-first.jsonl')
+      return cacheFirstThreadReadPayload
+    },
+    getErrorMessage,
+    writeWarning: () => {
+      throw new Error('expected cache-first session recovery must not warn')
+    },
+  }, { preferCachedMessages: true })
+  assert.deepEqual(cacheFirstRpcCalls.map(readIncludeTurns), [false])
+  const cacheFirstThreadRead = cacheFirstSnapshot.threadRead as {
+    thread: { turns: unknown[]; turnsView?: string; originalTurnsCount?: number }
+  }
+  assert.equal(cacheFirstThreadRead.thread.turns.length, 10)
+  assert.equal(cacheFirstThreadRead.thread.turnsView, 'recent')
+  assert.equal(cacheFirstThreadRead.thread.originalTurnsCount, 12)
+  assert.deepEqual(cacheFirstRemembered, [{ threadRead: cacheFirstThreadRead, source: 'session-log' }])
+  assert.equal(cacheFirstSnapshot.messageState, 'cached')
+
   const sessionFallbackCacheHit = createCachedThreadRead(
     sessionFallbackThreadReadPayload,
     () => '2026-01-01T00:00:30.000Z',
@@ -9974,6 +10451,84 @@ async function smokeRuntimeStoreMaintenance(): Promise<void> {
     assert.equal(compacted.after.autoVacuumMode, 2)
     assert.equal(compacted.reclaimedBytes >= 0, true)
 
+    const previousRegistration = runtimeStore.upsertMobilePushRegistration({
+      token: 'device-token-abcdefghijklmnopqrstuvwxyz',
+      platform: 'android',
+      appInstanceId: 'app-instance-a',
+      threadIds: ['thread-push'],
+    })
+    runtimeStore.markMobilePushDelivery({
+      tokenHash: previousRegistration.tokenHash,
+      deliveryKey: 'thread-push:turn-before-token-rotation',
+      eventSeq: 11,
+      success: true,
+    })
+    assert.equal(runtimeStore.enqueueMobilePushDelivery({
+      tokenHash: previousRegistration.tokenHash,
+      deliveryKey: 'thread-push:turn-pending-before-token-rotation',
+      eventSeq: 12,
+      method: 'turn/completed',
+      threadId: 'thread-push',
+      turnId: 'turn-pending-before-token-rotation',
+    }), true)
+    assert.equal(runtimeStore.getMobilePushHealth().pendingDeliveryCount, 1)
+    assert.equal(runtimeStore.hasMobilePushDelivery(
+      previousRegistration.tokenHash,
+      'thread-push:turn-before-token-rotation',
+    ), true)
+    const registration = runtimeStore.upsertMobilePushRegistration({
+      token: 'rotated-device-token-abcdefghijklmnopqrstuvwxyz',
+      platform: 'android',
+      appInstanceId: 'app-instance-a',
+      threadIds: ['thread-push'],
+    })
+    assert.equal(runtimeStore.hasMobilePushDelivery(
+      previousRegistration.tokenHash,
+      'thread-push:turn-before-token-rotation',
+    ), false)
+    assert.equal(runtimeStore.getMobilePushHealth().pendingDeliveryCount, 0)
+    assert.equal(registration.threadIds[0], 'thread-push')
+    assert.equal(runtimeStore.getMobilePushHealth().registrationCount, 1)
+    assert.equal(runtimeStore.listMobilePushRegistrationsForThread('thread-push')[0]?.token, registration.token)
+    runtimeStore.markMobilePushDelivery({
+      tokenHash: registration.tokenHash,
+      deliveryKey: 'thread-push:turn-a',
+      eventSeq: 12,
+      success: true,
+    })
+    runtimeStore.markMobilePushDelivery({
+      tokenHash: registration.tokenHash,
+      deliveryKey: 'thread-push:turn-b',
+      eventSeq: 13,
+      success: true,
+    })
+    assert.equal(runtimeStore.hasMobilePushDelivery(registration.tokenHash, 'thread-push:turn-a'), true)
+    assert.equal(runtimeStore.hasMobilePushDelivery(registration.tokenHash, 'thread-push:turn-b'), true)
+    assert.equal(runtimeStore.getMobilePushHealth().lastSuccessAtIso != null, true)
+    runtimeStore.close()
+    runtimeStore = new RuntimeStore(dbPath)
+    assert.equal(runtimeStore.hasMobilePushDelivery(registration.tokenHash, 'thread-push:turn-a'), true)
+    assert.equal(runtimeStore.hasMobilePushDelivery(registration.tokenHash, 'thread-push:turn-b'), true)
+    assert.equal(runtimeStore.deleteMobilePushRegistration('rotated-device-token-abcdefghijklmnopqrstuvwxyz'), true)
+    assert.equal(runtimeStore.hasMobilePushDelivery(registration.tokenHash, 'thread-push:turn-a'), false)
+    assert.equal(runtimeStore.getMobilePushHealth().registrationCount, 0)
+
+    runtimeStore.upsertMobilePushRegistration({
+      token: 'older-subscribed-device-token-abcdefghijklmnopqrstuvwxyz',
+      platform: 'android',
+      appInstanceId: 'older-subscribed-instance',
+      threadIds: ['thread-push'],
+    })
+    for (let index = 0; index < 40; index += 1) {
+      runtimeStore.upsertMobilePushRegistration({
+        token: `unrelated-device-token-${String(index).padStart(2, '0')}-abcdefghijklmnopqrstuvwxyz`,
+        platform: 'android',
+        appInstanceId: `unrelated-instance-${String(index)}`,
+        threadIds: ['thread-unrelated'],
+      })
+    }
+    assert.equal(runtimeStore.listMobilePushRegistrationsForThread('thread-push').length, 1)
+
     runtimeStore.createRequest({
       requestId: 'active-request',
       status: 'running',
@@ -9991,6 +10546,343 @@ async function smokeRuntimeStoreMaintenance(): Promise<void> {
     assert.equal(skipped.status, 'skipped-active-requests')
     assert.equal(skipped.activeRequestCount, 1)
   } finally {
+    runtimeStore?.close()
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+async function smokeMobilePush(): Promise<void> {
+  assert.deepEqual(resolveMobilePushConfiguration({}), { state: 'not_configured' })
+  assert.equal(isMobilePushTerminalEvent('turn/completed'), true)
+  assert.equal(isMobilePushTerminalEvent('item/agentMessage/delta'), false)
+  const registration = normalizeMobilePushRegistration({
+    token: 'device-token-abcdefghijklmnopqrstuvwxyz',
+    platform: 'android',
+    appInstanceId: 'app-instance-a',
+    threadIds: [' thread-a ', 'thread-a', 'thread-b'],
+  })
+  assert.deepEqual(registration.threadIds, ['thread-a', 'thread-b'])
+  assert.deepEqual(normalizeMobilePushAcknowledgement({
+    appInstanceId: ' app-instance-a ',
+    threadId: ' thread-a ',
+    eventSeq: 42,
+  }), {
+    appInstanceId: 'app-instance-a',
+    threadId: 'thread-a',
+    eventSeq: 42,
+  })
+  assert.throws(() => normalizeMobilePushAcknowledgement({
+    appInstanceId: 'app-instance-a',
+    threadId: 'thread-a',
+    eventSeq: 0,
+  }))
+  const event: RuntimeEventRecord = {
+    seq: 42,
+    method: 'turn/completed',
+    params: { threadId: 'thread-a', text: 'must-not-leave-server' },
+    atIso: '2026-01-01T00:00:00.000Z',
+    threadId: 'thread-a',
+    turnId: 'turn-a',
+  }
+  assert.equal(createMobilePushDeliveryKey(event), 'thread-a:turn-a')
+  const message = createFcmTerminalMessage(event, registration.token) as {
+    message: { data: Record<string, string>; notification?: unknown }
+  }
+  assert.equal(message.message.data.kind, 'task_terminal')
+  assert.equal(message.message.data.eventSeq, '42')
+  assert.equal(message.message.notification, undefined)
+  assert.equal(JSON.stringify(message).includes('must-not-leave-server'), false)
+
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const configuration = {
+    state: 'configured' as const,
+    projectId: 'cx-codex-test',
+    serviceAccount: {
+      client_email: 'push-test@cx-codex-test.iam.gserviceaccount.com',
+      private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+      project_id: 'cx-codex-test',
+    },
+  }
+  const lateRegistrationRoot = await mkdtemp(join(tmpdir(), 'cx-codex-mobile-push-late-registration-'))
+  const lateRegistrationDbPath = join(lateRegistrationRoot, 'runtime.sqlite')
+  let lateRegistrationStore: RuntimeStore | null = null
+  let lateRegistrationCoordinator: MobilePushCoordinator | null = null
+  const lateRegistrationRequests: Array<Record<string, unknown>> = []
+  const lateRegistrationNowMs = new Date().getTime() + 60_000
+  try {
+    lateRegistrationStore = new RuntimeStore(lateRegistrationDbPath)
+    const lateTerminalEvent: RuntimeEventRecord = {
+      seq: 101,
+      method: 'turn/completed',
+      params: { threadId: 'thread-late-registration', text: 'must-stay-on-server' },
+      atIso: '2026-01-01T00:01:41.000Z',
+      threadId: 'thread-late-registration',
+      turnId: 'turn-late-registration',
+    }
+    lateRegistrationStore.appendEvent(lateTerminalEvent)
+    lateRegistrationStore.upsertSnapshot({
+      threadId: lateTerminalEvent.threadId,
+      executionState: 'completed_pending_sync',
+      activeTurnId: '',
+      activeItemId: '',
+      canStop: false,
+      stopRequested: false,
+      lastEventSeq: lateTerminalEvent.seq,
+      updatedAtIso: lateTerminalEvent.atIso,
+      snapshot: { executionState: 'completed_pending_sync', latestReply: 'must-stay-on-server' },
+    })
+    lateRegistrationStore.appendEvent({
+      seq: 102,
+      method: 'turn/completed',
+      params: { threadId: 'thread-running-after-terminal' },
+      atIso: '2026-01-01T00:01:42.000Z',
+      threadId: 'thread-running-after-terminal',
+      turnId: 'turn-old',
+    })
+    lateRegistrationStore.appendEvent({
+      seq: 103,
+      method: 'turn/started',
+      params: { threadId: 'thread-running-after-terminal' },
+      atIso: '2026-01-01T00:01:43.000Z',
+      threadId: 'thread-running-after-terminal',
+      turnId: 'turn-new',
+    })
+    lateRegistrationStore.upsertSnapshot({
+      threadId: 'thread-running-after-terminal',
+      executionState: 'running',
+      activeTurnId: 'turn-new',
+      activeItemId: '',
+      canStop: true,
+      stopRequested: false,
+      lastEventSeq: 103,
+      updatedAtIso: '2026-01-01T00:01:43.000Z',
+      snapshot: { executionState: 'running' },
+    })
+    lateRegistrationStore.close()
+    lateRegistrationStore = new RuntimeStore(lateRegistrationDbPath)
+    lateRegistrationCoordinator = new MobilePushCoordinator({
+      configuration,
+      now: () => lateRegistrationNowMs,
+      fetcher: (async (input, init) => {
+        if (String(input).includes('oauth2.googleapis.com')) {
+          return new Response(JSON.stringify({ access_token: 'test-access-token', expires_in: 3600 }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        lateRegistrationRequests.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+        return new Response('{}', { status: 200 })
+      }) as typeof fetch,
+      store: lateRegistrationStore,
+    })
+    lateRegistrationCoordinator.start()
+    const lateRegistrationPayload = {
+      token: 'late-device-token-abcdefghijklmnopqrstuvwxyz',
+      platform: 'android' as const,
+      appInstanceId: 'late-app-instance',
+      threadIds: ['thread-late-registration', 'thread-running-after-terminal'],
+    }
+    lateRegistrationCoordinator.register(lateRegistrationPayload)
+    await lateRegistrationCoordinator.retryPendingDeliveries()
+    assert.equal(
+      lateRegistrationRequests.length,
+      1,
+      'a device that registers after a persisted terminal event must receive one catch-up wake',
+    )
+    assert.equal(
+      JSON.stringify(lateRegistrationRequests[0]).includes('thread-late-registration'),
+      true,
+      'the catch-up wake must target the terminal thread',
+    )
+    assert.equal(
+      JSON.stringify(lateRegistrationRequests).includes('thread-running-after-terminal'),
+      false,
+      'an older terminal event must not wake a thread whose current snapshot is running',
+    )
+    assert.equal(JSON.stringify(lateRegistrationRequests).includes('must-stay-on-server'), false)
+    lateRegistrationCoordinator.register(lateRegistrationPayload)
+    await lateRegistrationCoordinator.retryPendingDeliveries()
+    assert.equal(lateRegistrationRequests.length, 1, 're-registering must not duplicate the catch-up wake')
+  } finally {
+    lateRegistrationCoordinator?.dispose()
+    lateRegistrationStore?.close()
+    await rm(lateRegistrationRoot, { recursive: true, force: true })
+  }
+  const root = await mkdtemp(join(tmpdir(), 'cx-codex-mobile-push-'))
+  const dbPath = join(root, 'runtime.sqlite')
+  let runtimeStore: RuntimeStore | null = null
+  let coordinator: MobilePushCoordinator | null = null
+  let nowMs = new Date().getTime() + 60_000
+  let fcmSendCount = 0
+  try {
+    runtimeStore = new RuntimeStore(dbPath)
+    const storedRegistration = runtimeStore.upsertMobilePushRegistration(registration)
+    coordinator = new MobilePushCoordinator({
+      configuration,
+      now: () => nowMs,
+      retryDelaysMs: [1_000],
+      fetcher: (async (input) => {
+        if (String(input).includes('oauth2.googleapis.com')) {
+          return new Response(JSON.stringify({ access_token: 'test-access-token', expires_in: 3600 }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        fcmSendCount += 1
+        return new Response('{}', { status: 503 })
+      }) as typeof fetch,
+      store: runtimeStore,
+    })
+    assert.equal(runtimeStore.listMobilePushRegistrationsForThread('thread-a').length, 1)
+    const earlyAcknowledgement = coordinator.acknowledge({
+      appInstanceId: registration.appInstanceId,
+      threadId: 'thread-b',
+      eventSeq: 41,
+    })
+    assert.equal(earlyAcknowledgement.accepted, true)
+    assert.equal(earlyAcknowledgement.acknowledgedCount, 0)
+    await coordinator.handleRuntimeEvent({
+      ...event,
+      seq: 41,
+      threadId: 'thread-b',
+      turnId: 'turn-early-ack',
+    })
+    assert.equal(fcmSendCount, 0, 'an acknowledgement that wins the enqueue race must suppress the stale wake')
+    assert.equal(runtimeStore.getMobilePushHealth().pendingDeliveryCount, 0)
+    await coordinator.handleRuntimeEvent(event)
+    const firstAttemptHealth = runtimeStore.getMobilePushHealth()
+    assert.equal(
+      fcmSendCount,
+      1,
+      `first FCM attempt should run before retry persistence: ${JSON.stringify(firstAttemptHealth)}`,
+    )
+    assert.equal(firstAttemptHealth.pendingDeliveryCount, 1, 'failed FCM delivery should remain in outbox')
+    assert.equal(firstAttemptHealth.lastError, 'fcm_http_503')
+    coordinator.dispose()
+    coordinator = null
+    runtimeStore.close()
+    runtimeStore = null
+
+    nowMs += 1_000
+    runtimeStore = new RuntimeStore(dbPath)
+    const recoveredOutbox = runtimeStore.listDueMobilePushDeliveries(new Date(nowMs).toISOString(), 10)
+    assert.equal(recoveredOutbox.length, 1, 'pending FCM delivery should survive Runtime Store reopen')
+    assert.equal(recoveredOutbox[0]?.deliveryKey, 'thread-a:turn-a')
+    assert.equal(JSON.stringify(recoveredOutbox).includes('must-not-leave-server'), false)
+    coordinator = new MobilePushCoordinator({
+      configuration,
+      now: () => nowMs,
+      retryDelaysMs: [1_000],
+      fetcher: (async (input) => {
+        if (String(input).includes('oauth2.googleapis.com')) {
+          return new Response(JSON.stringify({ access_token: 'test-access-token', expires_in: 3600 }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        fcmSendCount += 1
+        return new Response('{}', { status: 200 })
+      }) as typeof fetch,
+      store: runtimeStore,
+    })
+    await coordinator.retryPendingDeliveries()
+    assert.equal(fcmSendCount, 2)
+    assert.equal(runtimeStore.getMobilePushHealth().pendingDeliveryCount, 1)
+    assert.equal(runtimeStore.getMobilePushHealth().awaitingDeviceAckCount, 1)
+    assert.equal(runtimeStore.hasMobilePushDelivery(storedRegistration.tokenHash, 'thread-a:turn-a'), false)
+    coordinator.dispose()
+    coordinator = null
+    runtimeStore.close()
+    runtimeStore = new RuntimeStore(dbPath)
+    assert.equal(runtimeStore.getMobilePushHealth().pendingDeliveryCount, 1)
+    assert.equal(runtimeStore.getMobilePushHealth().awaitingDeviceAckCount, 1)
+    coordinator = new MobilePushCoordinator({
+      configuration,
+      now: () => nowMs,
+      deviceAckRetryDelaysMs: [1_000],
+      fetcher: (async (input) => {
+        if (String(input).includes('oauth2.googleapis.com')) {
+          return new Response(JSON.stringify({ access_token: 'test-access-token', expires_in: 3600 }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        fcmSendCount += 1
+        return new Response('{}', { status: 200 })
+      }) as typeof fetch,
+      store: runtimeStore,
+    })
+    const wrongDeviceAcknowledgement = coordinator.acknowledge({
+      appInstanceId: 'another-app-instance',
+      threadId: event.threadId,
+      eventSeq: event.seq,
+    })
+    assert.equal(wrongDeviceAcknowledgement.accepted, false)
+    assert.equal(wrongDeviceAcknowledgement.acknowledgedCount, 0)
+    assert.equal(wrongDeviceAcknowledgement.pendingDeliveryCount, 1)
+    const firstAcknowledgement = coordinator.acknowledge({
+      appInstanceId: registration.appInstanceId,
+      threadId: event.threadId,
+      eventSeq: event.seq,
+    })
+    assert.equal(firstAcknowledgement.accepted, true)
+    assert.equal(firstAcknowledgement.acknowledgedCount, 1)
+    assert.equal(firstAcknowledgement.pendingDeliveryCount, 0)
+    assert.equal(firstAcknowledgement.awaitingDeviceAckCount, 0)
+    assert.equal(runtimeStore.hasMobilePushDelivery(storedRegistration.tokenHash, 'thread-a:turn-a'), true)
+
+    const secondEvent: RuntimeEventRecord = {
+      ...event,
+      seq: 43,
+      turnId: 'turn-b',
+    }
+    const thirdEvent: RuntimeEventRecord = {
+      ...event,
+      seq: 44,
+      turnId: 'turn-c',
+    }
+    await coordinator.handleRuntimeEvent(secondEvent)
+    await coordinator.handleRuntimeEvent(thirdEvent)
+    await coordinator.handleRuntimeEvent(event)
+    assert.equal(fcmSendCount, 4)
+    const batchedAcknowledgement = coordinator.acknowledge({
+      appInstanceId: registration.appInstanceId,
+      threadId: thirdEvent.threadId,
+      eventSeq: thirdEvent.seq,
+    })
+    assert.equal(batchedAcknowledgement.accepted, true)
+    assert.equal(batchedAcknowledgement.acknowledgedCount, 2)
+    assert.equal(runtimeStore.hasMobilePushDelivery(storedRegistration.tokenHash, 'thread-a:turn-b'), true)
+    assert.equal(runtimeStore.hasMobilePushDelivery(storedRegistration.tokenHash, 'thread-a:turn-c'), true)
+    assert.equal(runtimeStore.getMobilePushHealth().pendingDeliveryCount, 0)
+
+    coordinator.dispose()
+    coordinator = new MobilePushCoordinator({
+      configuration,
+      now: () => nowMs,
+      retryDelaysMs: [1_000],
+      fetcher: (async (input) => {
+        if (String(input).includes('oauth2.googleapis.com')) {
+          return new Response(JSON.stringify({ access_token: 'test-access-token', expires_in: 3600 }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        fcmSendCount += 1
+        return new Response(JSON.stringify({ error: { status: 'UNREGISTERED' } }), { status: 404 })
+      }) as typeof fetch,
+      store: runtimeStore,
+    })
+    await coordinator.handleRuntimeEvent({
+      ...event,
+      seq: 45,
+      turnId: 'turn-d',
+    })
+    assert.equal(fcmSendCount, 5)
+    assert.equal(runtimeStore.getMobilePushHealth().registrationCount, 0)
+    assert.equal(runtimeStore.getMobilePushHealth().pendingDeliveryCount, 0)
+  } finally {
+    coordinator?.dispose()
     runtimeStore?.close()
     await rm(root, { recursive: true, force: true })
   }
@@ -10319,7 +11211,6 @@ async function smokeLocalStateRoutes(): Promise<void> {
 async function smokeRuntimeStateRoutes(): Promise<void> {
   const localSnapshot = createThreadRuntimeSnapshot({ threadId: 'thread-local', executionState: 'running' })
   const reconciledSnapshot = createThreadRuntimeSnapshot({ threadId: 'thread-reconciled', executionState: 'completed' })
-  const persistedSnapshot = createThreadRuntimeSnapshot({ threadId: 'thread-persisted', executionState: 'waiting_permission' })
   const legacySnapshot = createThreadRuntimeSnapshot({ threadId: 'thread-legacy', executionState: 'sync_degraded' })
   const tokenUsage = normalizeThreadTokenUsage({
     total: {
@@ -10341,10 +11232,8 @@ async function smokeRuntimeStateRoutes(): Promise<void> {
   if (!tokenUsage) throw new Error('expected normalized token usage')
   const requestedThreads: string[] = []
   const reconciledThreads: string[] = []
-  const persisted: Array<{ threadId: string; snapshot: ThreadRuntimeSnapshot }> = []
-  const overlays: Array<{ threadId: string; overlay: RuntimeSnapshotOverlay }> = []
-  const snapshotBatchCalls: Array<{ threadIds: string[]; overlays: Map<string, RuntimeSnapshotOverlay> }> = []
-  const legacyReads: string[] = []
+  const localSnapshotReads: string[] = []
+  const legacyReads: Array<{ threadId: string; preferCachedMessages: boolean }> = []
   const tokenUsageReads: string[] = []
   const dependencies = {
     runtimeRequestStore: {
@@ -10354,26 +11243,32 @@ async function smokeRuntimeStateRoutes(): Promise<void> {
       },
     },
     runtimeStateStore: {
-      snapshot: (threadId: string, overlay?: RuntimeSnapshotOverlay) => {
-        overlays.push({ threadId, overlay: overlay ?? {} })
-        return createThreadRuntimeSnapshot({ threadId, executionState: 'running', pendingServerRequests: overlay?.pendingServerRequests ?? [] })
+      snapshot: () => {
+        throw new Error('runtime snapshot routes must use persisted local recovery')
       },
-      snapshots: (threadIds: string[], overlaysByThreadId?: Map<string, RuntimeSnapshotOverlay>) => {
-        snapshotBatchCalls.push({ threadIds, overlays: overlaysByThreadId ?? new Map() })
-        return threadIds.map((threadId) => createThreadRuntimeSnapshot({ threadId }))
+      snapshots: () => {
+        throw new Error('runtime batch snapshot route must use persisted local recovery')
       },
     },
     reconcileRuntimeThread: async (threadId: string) => {
       reconciledThreads.push(threadId)
       return reconciledSnapshot
     },
-    readLocalRuntimeSnapshot: (threadId: string) => ({ ...localSnapshot, threadId }),
-    persistRuntimeSnapshot: (threadId: string, snapshot: ThreadRuntimeSnapshot) => {
-      persisted.push({ threadId, snapshot })
-      return persistedSnapshot
+    readLocalRuntimeSnapshot: (threadId: string) => {
+      localSnapshotReads.push(threadId)
+      return { ...localSnapshot, threadId, latestReply: `restored:${threadId}` }
     },
-    readThreadRuntimeSnapshot: async (threadId: string) => {
-      legacyReads.push(threadId)
+    persistRuntimeSnapshot: () => {
+      throw new Error('runtime snapshot routes must let the local reader own persistence')
+    },
+    readThreadRuntimeSnapshot: async (
+      threadId: string,
+      options: { preferCachedMessages?: boolean } = {},
+    ) => {
+      legacyReads.push({
+        threadId,
+        preferCachedMessages: options.preferCachedMessages === true,
+      })
       return legacySnapshot
     },
     readCachedThreadTokenUsage: async (threadId: string) => {
@@ -10398,7 +11293,7 @@ async function smokeRuntimeStateRoutes(): Promise<void> {
   ), true)
   assert.deepEqual(JSON.parse(runtimeThreadRead.body), {
     data: {
-      snapshot: { ...localSnapshot, threadId: 'thread A' },
+      snapshot: { ...localSnapshot, threadId: 'thread A', latestReply: 'restored:thread A' },
       requests: [],
     },
   })
@@ -10446,9 +11341,9 @@ async function smokeRuntimeStateRoutes(): Promise<void> {
     new URL('http://127.0.0.1/codex-api/runtime/snapshot?threadId=thread-one'),
     dependencies,
   ), true)
-  assert.deepEqual(persisted.map((item) => item.threadId), ['thread-one'])
-  assert.deepEqual(overlays.map((item) => item.threadId), ['thread-one'])
-  assert.deepEqual(JSON.parse(runtimeSnapshot.body), { data: persistedSnapshot })
+  assert.deepEqual(JSON.parse(runtimeSnapshot.body), {
+    data: { ...localSnapshot, threadId: 'thread-one', latestReply: 'restored:thread-one' },
+  })
 
   const runtimeSnapshots = createRouteTestResponse()
   assert.equal(await handleRuntimeStateRoutes(
@@ -10457,10 +11352,11 @@ async function smokeRuntimeStateRoutes(): Promise<void> {
     new URL('http://127.0.0.1/codex-api/runtime/snapshots?threadIds=thread-a,, thread-b ,%20'),
     dependencies,
   ), true)
-  assert.deepEqual(snapshotBatchCalls[0].threadIds, ['thread-a', 'thread-b'])
-  assert.equal(snapshotBatchCalls[0].overlays.has('thread-a'), true)
-  assert.equal(snapshotBatchCalls[0].overlays.has('thread-b'), true)
-  assert.deepEqual(JSON.parse(runtimeSnapshots.body).data.map((snapshot: ThreadRuntimeSnapshot) => snapshot.threadId), ['thread-a', 'thread-b'])
+  assert.deepEqual(localSnapshotReads, ['thread A', 'thread-one', 'thread-a', 'thread-b'])
+  assert.deepEqual(JSON.parse(runtimeSnapshots.body).data, [
+    { ...localSnapshot, threadId: 'thread-a', latestReply: 'restored:thread-a' },
+    { ...localSnapshot, threadId: 'thread-b', latestReply: 'restored:thread-b' },
+  ])
 
   const legacyState = createRouteTestResponse()
   assert.equal(await handleRuntimeStateRoutes(
@@ -10469,8 +11365,21 @@ async function smokeRuntimeStateRoutes(): Promise<void> {
     new URL('http://127.0.0.1/codex-api/state/thread/thread%20legacy'),
     dependencies,
   ), true)
-  assert.deepEqual(legacyReads, ['thread legacy'])
+  assert.deepEqual(legacyReads, [{ threadId: 'thread legacy', preferCachedMessages: false }])
   assert.deepEqual(JSON.parse(legacyState.body), { data: legacySnapshot })
+
+  const cacheFirstState = createRouteTestResponse()
+  assert.equal(await handleRuntimeStateRoutes(
+    { method: 'GET' } as never,
+    cacheFirstState.response as never,
+    new URL('http://127.0.0.1/codex-api/state/thread/thread%20cache?preferCachedMessages=1'),
+    dependencies,
+  ), true)
+  assert.deepEqual(legacyReads, [
+    { threadId: 'thread legacy', preferCachedMessages: false },
+    { threadId: 'thread cache', preferCachedMessages: true },
+  ])
+  assert.deepEqual(JSON.parse(cacheFirstState.body), { data: legacySnapshot })
 
   const missingLegacyState = createRouteTestResponse()
   assert.equal(await handleRuntimeStateRoutes(

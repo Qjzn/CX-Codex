@@ -59,6 +59,10 @@ import {
   type NotificationSseRouteDependencies,
 } from './notificationSseRoute.js'
 import type { CodexBridgeRouteHandler } from './codexBridgeRouteDispatch.js'
+import {
+  handleMobilePushRoutes,
+  type MobilePushRoutesDependencies,
+} from './mobilePushRoutes.js'
 
 type CodexBridgeRouteAppServer = {
   rpc(method: string, params: unknown): Promise<unknown>
@@ -127,6 +131,7 @@ export type CodexBridgeRouteHandlersDependencies = {
   readAppServerHookDiagnostics: DiagnosticsRoutesDependencies['readHookDiagnostics']
   readAppServerSchemaAuditSummary: DiagnosticsRoutesDependencies['readSchemaAuditSummary']
   readWindowsSandboxReadinessDiagnostics: DiagnosticsRoutesDependencies['readWindowsSandboxDiagnostics']
+  mobilePushCoordinator: MobilePushRoutesDependencies['mobilePushCoordinator']
 }
 
 export function createCodexBridgeRouteHandlers(
@@ -173,6 +178,10 @@ export function createCodexBridgeRouteHandlers(
       startRuntimeTurn: dependencies.startRuntimeTurn,
       interruptRuntimeTurn: dependencies.interruptRuntimeTurn,
       getLatestRequestByClientMessageId: (clientMessageId) => runtimeStore.getLatestRequestByClientMessageId(clientMessageId),
+    }),
+    () => handleMobilePushRoutes(req, res, url, {
+      readJsonBody,
+      mobilePushCoordinator: dependencies.mobilePushCoordinator,
     }),
     () => handleTranscriptionRoutes(req, res, url),
     () => handleServerRequestRoutes(req, res, url, {

@@ -1,4 +1,5 @@
 import type { ThreadTitleCache } from './threadTitleCache.js'
+import { logBridgeError } from './bridgeLog.js'
 
 export type ThreadSearchDocument = {
   id: string
@@ -128,13 +129,16 @@ export function searchThreadIndex(
 export class ThreadSearchIndexStore {
   private index: ThreadSearchIndex | null = null
   private indexPromise: Promise<ThreadSearchIndex> | null = null
+  private refreshPromise: Promise<void> | null = null
+  private stale = false
   private version = 0
 
   constructor(private readonly buildIndex: () => Promise<ThreadSearchIndex>) {}
 
   clear(): void {
-    this.index = null
     this.indexPromise = null
+    this.refreshPromise = null
+    this.stale = this.index !== null
     this.version += 1
   }
 
@@ -143,7 +147,9 @@ export class ThreadSearchIndexStore {
     if (!normalizedQuery) return { threadIds: [], indexedThreadCount: 0 }
 
     const index = await this.getIndex()
-    return searchThreadIndex(index, normalizedQuery, limit)
+    const result = searchThreadIndex(index, normalizedQuery, limit)
+    if (this.stale) this.refreshInBackground()
+    return result
   }
 
   private async getIndex(): Promise<ThreadSearchIndex> {
@@ -155,6 +161,7 @@ export class ThreadSearchIndexStore {
         .then((index) => {
           if (this.version === version) {
             this.index = index
+            this.stale = false
           }
           return index
         })
@@ -166,6 +173,27 @@ export class ThreadSearchIndexStore {
     }
 
     return this.indexPromise
+  }
+
+  private refreshInBackground(): void {
+    if (this.refreshPromise) return
+    const version = this.version
+    this.refreshPromise = this.buildIndex()
+      .then((index) => {
+        if (this.version !== version) return
+        this.index = index
+        this.stale = false
+      })
+      .catch((error) => {
+        if (this.version === version) {
+          logBridgeError('Background thread search index refresh failed', error)
+        }
+      })
+      .finally(() => {
+        if (this.version === version) {
+          this.refreshPromise = null
+        }
+      })
   }
 }
 

@@ -21,6 +21,9 @@ export type CodexBridgeMiddlewareDisposeDependencies = {
   windowsSandboxReadinessCache: {
     clear: () => void
   }
+  mobilePushCoordinator: {
+    dispose: () => void
+  }
   runtimeStore: {
     close: () => void
   }
@@ -40,6 +43,7 @@ export function disposeCodexBridgeMiddlewareResources(
   dependencies.statusDiagnostics.clear()
   dependencies.hookDiagnosticsCache.clear()
   dependencies.windowsSandboxReadinessCache.clear()
+  dependencies.mobilePushCoordinator.dispose()
   dependencies.runtimeStore.close()
   dependencies.appServer.dispose()
 }

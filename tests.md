@@ -2,6 +2,632 @@
 
 This file tracks manual regression and feature verification steps.
 
+## Runtime send restart after thread creation (2026-07-23)
+
+### Expected behavior
+
+1. If 7420 restarts after a new thread id is durably attached to a `pending_start` request but before `turn/start` begins, replaying the same `clientMessageId` resumes that exact request.
+2. Recovery reuses the persisted thread id, skips `thread/start`, executes `turn/start` once, and updates the original request instead of creating a second row.
+3. Content-signature and target-thread conflict checks remain unchanged, so the idempotency key cannot be reused for another message.
+
+### Verification
+
+- Run `npm.cmd run verify:server-modules`.
+- Confirm the restart harness seeds `pending_start + threadId`, observes zero new requests, zero `thread/start` calls, exactly one `turn/start`, and one retry increment on the original request.
+
+## Android first-connect thread-list recovery (2026-07-23)
+
+### Expected behavior
+
+1. If Android opens while offline and has never loaded the conversation list, the first successful realtime connection requests the thread list immediately.
+2. A normal foreground reconnect with an already loaded list remains lightweight unless a thread-list refresh is explicitly pending.
+3. Notification replay and selected-thread message recovery keep their existing behavior.
+
+### Verification
+
+- Run `npm.cmd run verify:frontend-normalizers` and confirm the connection-policy matrix covers Android with no active thread and `hasLoadedThreads=false`.
+- Run `npm.cmd run build:frontend`.
+
+## Conversation projection field completeness (2026-07-23)
+
+### Expected behavior
+
+1. A refreshed message with the same id but different file attachments replaces the previous projection.
+2. A command-execution card with an updated command or working directory replaces the previous projection even when status and output have not changed.
+3. Truly unchanged message objects keep reference equality to avoid unnecessary rerenders.
+
+### Verification
+
+- Run `npm.cmd run verify:frontend-normalizers`.
+- Run `npm.cmd run build:frontend`.
+
+## Task-pet compact latest-reply preview (2026-07-20)
+
+### Expected behavior
+
+1. With at least one tracked task, collapsing the task-pet panel keeps one compact preview visible beside the pet instead of reducing the overlay to a mascot-only state.
+2. The compact preview shows only the newest task's conversation context, latest assistant reply (falling back to current activity/status before the first reply), and freshness label.
+3. A newer reply updates the same compact preview and the task owning the newest authoritative reply remains first.
+4. Tapping the compact preview opens its exact `threadId`; tapping the pet still expands the full multi-task tray. The no-task state remains the existing 48 dp idle bubble.
+5. Native reply-render diagnostics may commit from either the actually visible expanded row or the actually visible compact preview, never from a hidden/prebuilt view.
+6. If the exact conversation is already visible and its completed content has loaded, the read acknowledgement survives a short frontend/native state race. The same task generation is removed without a completion notification once the native snapshot settles; a new generation resets to unread.
+
+### Verification
+
+- Run the focused Android policy test and compile the Android debug Java sources.
+- Run `npm.cmd run build:frontend`, PowerShell parser validation, `git diff --check`, and the 7420 headless frontend regression.
+- In `/#/__regression/task-pet?latestReplyBurst=1`, collapse the pet, trigger `模拟最新回复`, confirm the compact copy changes without reopening the tray, click it, and confirm `fixture-latest-reply` is preserved.
+- Capture and inspect a 393 x 852 screenshot of the collapsed compact preview with no horizontal overflow.
+- Exercise the native read-race policy: unread completion is retained and notified, while a read-acknowledged same-generation completion is removed and suppressed.
+
+### Automated evidence
+
+- Frontend typecheck/build and the focused Android policy test plus debug Java compilation passed.
+- The complete 21-surface 7420 frontend regression passed. The compact-preview scenario proved one visible reply card, realtime replacement after `模拟最新回复`, no horizontal overflow, and exact navigation to `fixture-latest-reply`.
+- The read-race policy test and source gate passed: a same-generation read acknowledgement is persisted while native state catches up, then suppresses notification and removes the settled task; unread completions remain retained.
+- `latest-reply-promoted-phone.png` was inspected at 393 x 852 and shows the collapsed one-reply preview beside the original CX pet.
+- Final signed APK `2.4.1` passed release assembly and `apksigner` v2 verification; manifest identity is `com.cxcodex.bridge`, `versionCode=20401`, and `versionName=2.4.1`.
+
+## Runtime send failure feedback and archived-thread filtering (2026-07-20)
+
+### Verification
+
+1. Keep an archived conversation id in `session_index.jsonl` or the pinned-thread source, then request `thread/list` with `archived: false`.
+2. Submit a message to an active conversation and force `turn/start` to fail after `/runtime/send` has durably returned `starting`.
+3. While the request is still `starting`, apply a completed `thread/read` whose `updatedAt` predates the new start.
+4. Refresh the conversation after the failure and inspect the optimistic message plus its durable outbox row.
+5. Run `npm.cmd run verify:server-modules`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build:frontend`, `npm.cmd run build:cli`, and the 7420 frontend regression.
+
+### Expected results
+
+- Archived session paths are never appended to the active conversation list, even when their ids remain in the session index or pinned-thread data.
+- HTTP 202 / `starting` remains `确认中`; it is not proof that `turn/start` succeeded.
+- A non-timeout `turn/start` error persists both the request row and Runtime snapshot as `failed`, including the actionable error text.
+- A completed thread snapshot older than the current start cannot overwrite `starting` as `completed`.
+- A failed Runtime snapshot with an unconfirmed outbox row keeps the message out of `已发送`, reconciles the durable request, and shows the existing failed/retry UI.
+
+### Automated evidence
+
+- `verify:server-modules` passed and covers Windows/POSIX archived-session paths, stale pre-start thread reads, and failed-start snapshot persistence.
+- `verify:frontend-normalizers`, frontend typecheck/build, and `build:cli` passed. The frontend policy test proves that only a failed snapshot with no unconfirmed outbox entry may settle optimistic delivery by timestamp.
+- The complete 21-surface 7420 frontend regression passed in a headless browser with screenshots. `persistent-outbox-recovery-phone.png` shows the preserved failed bubble with `发送失败`, `编辑`, and `重试`.
+- After the zero-backlog safety check, the managed local restart activated CLI `2.4.0` on listener PID `9448` with App Server PID `35180`. A live `thread/list` check returned the reproduced archived thread in `archived: true` and excluded it from the 100-row active result; final active/pending/queued RPC counts, pending server requests, and uncertain Runtime requests were all zero. No APK build, install, release, or remote deployment was performed.
+
+## Service-recreated reply visibility and terminal notification durability (2026-07-19)
+
+### Expected behavior
+
+1. Runtime notification sequence numbers remain globally comparable across conversations. One persisted replay counter orders thread A, B, and C events rather than restarting per thread, so multi-task latest-reply promotion is authoritative.
+2. When a latest reply is applied while the Android task panel is collapsed, its task key and covering event sequence survive ordinary Service/process recreation. The marker is retained only while the exact persisted task still has that reply and covers the event sequence.
+3. A restored pending reply does not count as visible during row construction. It clears only after the matching row is inside the expanded, shown, nontransparent panel and the opening animation has completed.
+4. Reply, snapshot, terminal, and notification verification counters remain monotonic across Service recreation. Diagnostics stay content-free and never expose thread ids or reply text.
+5. Each newly terminal task synchronously commits its completed native task snapshot and removes its stale frontend-active snapshot before posting completion attention. A process death after notification therefore cannot restore the same generation as running and notify it twice.
+6. Completion notification attempt and posted counters advance independently for every terminal task. The ADB verifier can require two or more successful notifications during one multi-task observation window.
+7. `latestReply` carries its own `latestReplyEventSeq`; generic task metadata may advance `lastEventSeq` without changing that pair. For the same task generation, an unversioned, equal-version, or older frontend reply—empty or nonempty—must retain the native monitor's persisted newer reply. Only a provably newer reply version or different generation may replace it.
+8. Once the native monitor has durably settled a task as `completed` or manual `retry`, no same-generation frontend `running`/`waiting` snapshot may revive it, even when later same-turn metadata carries a higher event sequence. The stale active preference row is removed again; only a provably different activity generation may become active.
+9. A task-pet payload may combine activity metadata and Runtime sequence from independent frontend state. When two different activity ids both have known start times, the newer start time is authoritative; a higher Runtime sequence cannot make an older activity replace the current native task. Event sequence breaks an equal-time tie or provides the legacy fallback only when both start times are absent.
+
+### Verification
+
+- The Android red test must fail before `shouldRestorePendingReplyRender` exists, then prove exact key, positive sequence, covering task sequence, and nonempty reply requirements.
+- The recovering-snapshot red test must prove same-generation unversioned/equal/older reply retention for both empty and nonempty frontend text, while a genuinely newer reply version and different generation remain applicable.
+- The settled-state red test must prove `completed` and manual `retry` are absorbing for every same-generation frontend active snapshot, including a higher-sequence snapshot, while native authority and a different activity generation remain applicable.
+- The generation-order red test must reject an older `startedAtMs` even when it carries a higher `lastEventSeq`, accept a genuinely newer start, use a higher sequence only for equal starts, and preserve the both-starts-unknown compatibility path.
+- The frontend source gate must fail while terminal settlement lacks `persistTasksSynchronously()` before `notifyTaskSettled()`, and while monotonic attempted/posted notification counters are absent.
+- Run focused Android unit tests, Android `lintDebug`, PowerShell parser validation, `git diff --check`, and the complete 21-surface 7420 browser regression.
+- On a configured device, collapse the panel after reply progress, kill only the app process, let the sticky Service restore, then expand the panel. Require the restored reply render sequence to cover the applied reply sequence.
+- For two tasks completing in one observation window, add `-MinimumTerminalNotificationAttempts 2` with `-RequireTerminalNotification`; both attempt and posted deltas must be at least two.
+
+### Regression evidence (2026-07-19)
+
+- Source inspection proved the single `AppServerNotificationReplay` resumes from `RuntimeStore.getLatestEventSeq()` and increments one counter for every notification. Existing server smoke coverage orders events from `thread-a`, `thread-b`, and `thread-c` as `11`, `12`, and `13`.
+- The pending-render Android test first failed to compile because `shouldRestorePendingReplyRender` did not exist, then passed after the durable exact-task boundary was added.
+- The original recovering-snapshot Android test first failed to compile because `shouldPreserveKnownLatestReply` did not exist. The boundary now also covers stale nonempty renderer text by comparing the reply-specific version instead of the generic task cursor.
+- The settled-state Android test first failed to compile because `shouldPreserveNativeSettledState` did not exist. It passes after native merge rejection also durably removes the exact stale frontend-active generation instead of allowing it to restart monitoring after Service recreation.
+- A follow-up red test failed at `TaskPetRuntimePolicyTest.java:69` because a higher event sequence still bypassed the settled-state boundary. Live Runtime Store events proved the same turn can advance from `item/completed` at sequence 1974645 through token/status metadata at 1974646/1974648 before `turn/completed` at 1974649; after removing sequence from the generation decision, the focused 29-test policy suite passed.
+- Android `lintDebug`, PowerShell parser validation, `git diff --check`, and the complete 21-surface screenshot regression passed after the stricter boundary. The 393 x 852 `output/regression-7420/mobile-settled-generation-20260719/latest-reply-promoted-phone.png` and `completion-notification-recovery-phone.png` were visually inspected: newest reply stayed first, notification recovery remained actionable, and neither surface overflowed horizontally.
+- Source inspection confirmed `activeTaskPetItems` reads `activityId/startedAtMs` from `turnActivityByThreadId` but `lastEventSeq` from the independent Runtime summary. The generation-order red test then failed at `TaskPetRuntimePolicyTest.java:113` because the old policy accepted start `250` over current start `300` solely on sequence `21 > 20`; the focused 29-test suite passed after start time became the primary different-generation ordering key.
+- Android `lintDebug`, PowerShell parsing, `git diff --check`, and the complete 21-surface 7420 screenshot regression passed. The first source-contract attempt correctly stopped before browser launch because its method extractor ended at a nested block; after scoping the assertion to the complete policy method, all source gates and pages passed. The 393 x 852 new-activity timer, latest-reply promotion, and completion-channel recovery screenshots under `output/regression-7420/mobile-generation-ordering-20260719/` were visually inspected with no horizontal overflow or task-order regression.
+- Focused Android unit tests, Android `lintDebug`, PowerShell parser validation, `git diff --check`, and two complete 21-surface 7420 browser passes succeeded. The screenshot pass wrote and visually verified `output/regression-7420/mobile-settled-monotonicity-20260719/latest-reply-promoted-phone.png` and `completion-notification-recovery-phone.png` at 393 x 852.
+- The 7420 source regression first failed with `each terminal task must commit its completed native snapshot before completion attention is posted`, then failed again while per-task attempted/posted counters were missing. Both gates pass after the terminal ordering and monotonic diagnostics changes.
+- Focused Android unit tests, Android `lintDebug`, and the complete 21-surface screenshot regression passed. The phone task-pet evidence was visually inspected at `output/regression-7420/mobile-restart-terminal-durability-20260719/latest-reply-promoted-phone.png`.
+- Reply-version red tests first failed because `ThreadRuntimeSnapshot.latestReplyEventSeq` and the five-argument native merge policy did not exist. After implementation, server smoke proves a non-reply event can advance `lastEventSeq` from `9` to `10` while the reply version remains `9`, a new turn resets the reply pair, and persisted reply accumulation resumes at the next reply event. Android policy coverage rejects unversioned, equal-version, and older same-generation renderer replacements, including nonempty text.
+- `npm.cmd run verify:server-modules`, `npm.cmd run build:frontend`, `npm.cmd run build:cli`, `npm.cmd run verify:frontend-normalizers`, focused Android unit tests, Android `lintDebug`, UTF-8 PowerShell parsing, and `git diff --check` passed. The idle managed restart activated service PID `40788` and initialized App Server PID `42276`; the live snapshot endpoint exposes `latestReplyEventSeq`, and final health has zero active/pending/queued RPC calls, pending server requests, and uncertain Runtime requests.
+- The complete 21-surface agent-browser regression passed after the new source contracts. The 393 x 852 latest-reply promotion, blocked completion-channel recovery, and new-activity timer screenshots under `output/regression-7420/mobile-reply-version-20260719/` were visually inspected with correct newest-first ordering, actionable notification recovery, and no horizontal overflow.
+- Firebase remains unconfigured on both APK and running server, registration/delivery/acknowledgement counts are zero, and the installed ADB reports no connected device. Those prerequisites are still required for the physical process-death/Doze matrix. No APK was synced, built, installed, or released in this source-only iteration.
+
+## Visible reply cadence and durable-acceptance feedback (2026-07-19)
+
+### Expected behavior
+
+1. The browser renders the first assistant delta immediately, batches only later deltas for at most 48 ms, and flushes every pending agent/reasoning/command tail before an item or turn completion mutates terminal UI state.
+2. Android keeps Runtime Store snapshots authoritative. While the task-pet panel is expanded, assistant progress may wake snapshots every 250 ms; while collapsed or in the background it remains bounded to 750 ms. A coalesced event retains one trailing poll and a terminal event always bypasses the throttle.
+3. A threadless `/runtime/send` 202 is durable server acceptance even though `thread/start` and `turn/start` are still pending. Response metrics and user feedback record that acceptance against the provisional message immediately, then rebind the same row and record authoritative turn start separately.
+4. No timing improvement may duplicate the outgoing message, fabricate turn start, clear the running surface early, or make SSE payloads a second task-state authority.
+5. When several tasks are active, the task whose authoritative snapshot contains the newest assistant reply moves into the first visible overlay row. A later WebView snapshot must preserve newest-progress-first order instead of pushing that reply below the three-row display limit.
+6. `replyRenderCount` is display evidence, not row-construction evidence. It may advance only when the matching newest-reply row belongs to an expanded, shown panel with nonzero alpha; opening a collapsed panel commits only after the visible animation finishes.
+
+### Verification
+
+- Android `TaskPetRuntimePolicyTest` must prove the 250/750 ms visible/background policy, the bounded trailing delay, and urgent zero-delay terminal behavior. Android lint must compile the service call site.
+- The frontend source contract must fail if a threadless 202 waits for `threadId` before recording durable acceptance, if transport recovery omits the same acknowledgement, or if Android loses the adaptive cadence/in-flight follow-up contract.
+- In a real 393 x 852 browser, send a new-thread exact-reply probe, wait for the final assistant frame, and inspect the message-id-correlated timing row. Require one user message, one assistant reply, zero running residue, no horizontal overflow, and no console error.
+
+### Regression evidence (2026-07-19)
+
+- Before the acknowledgement fix, a real threadless request dispatched in `2 ms` but recorded server acknowledgement only after thread binding at `6750 ms`; first assistant data/visibility were `13474/13484 ms`, with `10 ms` render overhead. The new source gate failed at `a successful threadless 202 response must record durable server acknowledgement before turn identity is available`.
+- After the fix, a second disposable new thread recorded state commit `1 ms`, bubble/running visibility `24 ms`, request dispatch `3 ms`, durable server acknowledgement `27 ms`, authoritative turn start `6762 ms`, first assistant data `15419 ms`, and first visible response `15428 ms`. The `9 ms` data-to-paint gap proves the acceptance timestamp moved without hiding the real turn-start cost.
+- The final DOM used exactly one user and one assistant message, reported viewport/document/body widths `393/393/393`, left zero running overlays, and produced no console warning or error. The synthetic thread was archived. Visual evidence: `output/regression-7420/mobile-visible-reply-20260719/fast-ack-visible-reply-phone.png`.
+- A four-task 393 x 852 visual contract rendered exactly three rows, placed `最新回复已提升到浮窗可见首行` first, kept the older fourth reply hidden, and had no horizontal overflow. The screenshot was visually inspected at `output/regression-7420/mobile-latest-reply-20260719/latest-reply-promoted-phone.png`.
+- The strict render-evidence red test initially failed because the policy did not distinguish a built hidden row from a visible panel. Native rendering now retains the matching row key during construction, checks expanded/shown/nonzero-alpha state, and delays the collapsed-to-expanded acknowledgement until the 190 ms opening animation ends.
+- Focused Android unit tests, Android `lintDebug`, `build:frontend`, PowerShell parser validation, `git diff --check`, and the complete 21-surface 7420 frontend browser regression passed.
+
+## Complete submit-entry Android handoff (2026-07-19)
+
+### Expected behavior
+
+1. Direct composer sends, queued `引用`, automatic queue promotion, failed-message retry, failed-new-thread retry, and dictation rollback resend all inherit one App-installed submit lifecycle contract.
+2. Every immediate or automatic execution hands the stable `clientMessageId` to native task monitoring before its first fallible await. Notification permission work starts only after durable queue ownership or `/runtime/send` dispatch, as appropriate.
+3. While automatic queue execution owns the first row, `activeTaskPetItems` exposes that row's stable client id even though the conservative queue state remains its failure/retry owner. Android must confirm that Runtime request before reading the thread snapshot, so the previous turn's terminal snapshot cannot settle the new turn.
+4. Queue ordering and failure semantics remain unchanged: the next row starts only after authoritative settlement, the row is removed only after send acceptance, and a failed first row pauses later rows.
+
+### Verification
+
+- The frontend source contract must fail when `useDesktopState` has no App-level callback fallback, when automatic queue execution waits before native handoff, or when its task-pet snapshot omits the queue row's client id.
+- In a real 393 x 852 browser, start a bounded task, queue one follow-up, capture its local stable client id, and let the preceding task finish without pressing `引用`.
+- Query both Runtime requests and prove that the queued request is created only after the preceding request settles, uses the captured id, completes once with retry count `0`, and leaves one authoritative user message and reply after reload.
+
+### Regression evidence (2026-07-19)
+
+- The new red gate failed at `all internal send entry points must share one submit-time native handoff contract`. It passed after App-installed callbacks became the default for internal retry, rollback-resend, and queue-processing paths.
+- The browser queue row used `cm-1784441070159-d165ba17-afde-4088-a2c5-e99885011975`. The preceding request completed at `06:05:19.101Z`; automatic execution created the queued Runtime request at `06:05:19.120Z`, 19 ms later, and that same request completed with retry count `0`.
+- After authoritative reload, the follow-up appeared as exactly one user message and one exact assistant reply, with queue count `0`. The viewport was 393 x 852 and `body.scrollWidth = 393`.
+- `build:frontend`, PowerShell parser validation, and the complete 20-surface 7420 browser regression passed. Visual evidence: `output/regression-7420/internal-send-native-handoff-20260719/automatic-queue-handoff-phone.png`.
+
+## Active-thread immediate durable dispatch (2026-07-19)
+
+### Expected behavior
+
+1. Sending or choosing `引用` while the current thread is already running persists the outbox row, renders the optimistic bubble, starts response timing, and hands the stable `clientMessageId` to Android before the first network await.
+2. The active-thread path calls `/codex-api/runtime/send` directly. It does not wait for a separate `recoverThreadExecutionState` or frontend `thread/resume` preflight; the Runtime Store endpoint owns idempotency and the server retries `thread/resume` only after an authoritative `thread not found` response.
+3. Send failure cleanup uses the activity state captured before optimistic feedback. A failed steer therefore restores the previous running activity instead of stopping it, while an originally idle send clears only its own temporary activity.
+4. The queued-message `引用` action forwards submit timing, native task-monitor handoff, and contextual notification-permission callbacks through the same immediate path as a direct composer send.
+5. Promoting a queued message transfers ownership to the durable outgoing bubble before the network await. Offline or failed delivery must leave exactly one recoverable outbox owner, never both the original queue row and an outbox row; speed-mode switching must reject before that transfer.
+6. A fast 200/202 is only durable acceptance. The same request must later converge to running and terminal authority without duplicating the user message or leaving the queue row behind.
+
+### Verification
+
+- The frontend source contract must fail if an active-thread send reintroduces a snapshot preflight, if queued `引用` bypasses the Android-aware wrapper, or if queue ownership is not transferred before the network await.
+- In a real 393 x 852 browser, start a bounded synthetic task, queue one follow-up, choose `引用` while the first turn is still running, and read the message-id-correlated timing row.
+- Repeat the promotion with that browser session offline. After bounded recovery settles, assert one `waiting` outbox row with the stable `clientMessageId`, zero queued rows, and one visible user message; restore connectivity and require the same request to converge.
+- Query `/codex-api/runtime/request` until the same `clientMessageId` is terminal, then reload the thread and confirm exactly one user message, the expected final reply, zero queued rows, and no horizontal overflow.
+- Archive only the synthetic test thread and confirm Runtime Store has no pending, queued, or uncertain work.
+
+### Regression evidence (2026-07-19)
+
+- The new source gate first failed because `runSendPreflightWithBoundedRecovery` still preceded durable dispatch, then passed after that helper and its active-thread call were removed. A second red gate showed queued `引用` still bypassed native handoff; it passed after the Android-aware wrapper was added. A third red gate showed failed promotion could leave both queue and outbox owners; the row is now removed only after all synchronous rejection guards and before the durable-send await.
+- Real active-thread timing: local state commit `1 ms`, optimistic bubble and running feedback `13 ms`, runtime request dispatch `1 ms`, and 7420 durable acknowledgement `16 ms`. The persisted request moved from `running` to `completed` with retry count `0`.
+- In the real offline promotion probe, after 19 seconds offline the queue contained `0` matching rows and the outbox contained exactly one matching row in `waiting`, with stable id `cm-1784440086602-00229f3e-8b6f-40f6-a6c0-6b522feba91e`. Restoring connectivity completed that same Runtime request with retry count `0`; after reload, authoritative history contained one matching user message and one exact assistant reply, with both outbox and queue at `0`.
+- Reloaded authoritative history contained one quoted user message and the final reply `ACTIVE-DISPATCH-SEED3-DONE ACTIVE-STEER-DISPATCH-ACK`; the queue was empty. The synthetic thread was archived afterward, and health returned pending RPC `0`, queued RPC `0`, and uncertain Runtime request `0`.
+- `build:frontend`, `verify:frontend-normalizers`, PowerShell parser validation, and the complete 20-surface 7420 browser regression passed. Visual evidence: `output/regression-7420/active-thread-immediate-dispatch-20260719/active-thread-immediate-dispatch-phone.png` and `output/regression-7420/queued-quote-single-owner-20260719/offline-recovered-phone.png`, both at 393 x 852 with `body.scrollWidth = 393`.
+
+## Android deep-Doze push readiness gate (2026-07-19)
+
+### Expected behavior
+
+1. `npm.cmd run verify:mobile-push-readiness` reports Android Firebase config, server credential config, Firebase-project match, live 7420 configuration, device registration, and active subscription as separate evidence boundaries.
+2. Default mode is diagnostic and exits successfully even when configuration is missing. `--require-configuration` fails until both local configurations match the live configured server; `--require-ready` additionally fails until a real device is registered and at least one active task subscription exists.
+3. The report and its failure output never include a private key, service-account email, device token, credentials path, or Firebase project id. Missing states return bounded codes plus actionable Chinese recovery steps.
+4. A configured server without a device, or a registered device without an active subscription, is not reported as ready for deep-Doze terminal delivery.
+
+### Verification
+
+- Run `npm.cmd run verify:mobile-push-readiness:test` and confirm configured, mismatched-project, missing-registration, missing-subscription, and sanitized-output cases pass.
+- Run the default command against live 7420, then run `--require-configuration` and confirm the strict command retains the same sanitized report and exits nonzero while configuration is incomplete.
+- After configuring both sides and installing a rebuilt APK, require configuration first, send one active task, then require full readiness before starting the physical screen-off/Doze timing matrix.
+
+### Regression evidence (2026-07-19)
+
+- The self-test first failed because the implementation module did not exist, then passed after the readiness model was added. A second red test proved arbitrary provider text could reach `lastErrorCode`; the implementation now exposes only fixed local codes or bounded FCM HTTP codes and maps everything else to `provider_error`.
+- The live diagnostic currently reports five exact missing boundaries: Android Google Services config, server credentials, live-server Firebase config, device registration, and active subscription. `--require-configuration` retained the same content-free report and failed as designed.
+- `build:frontend`, `build:cli`, `verify:frontend-normalizers`, `verify:server-modules`, `git diff --check`, and the complete 20-surface 7420 browser regression passed. Phone screenshots covered persistent outbox recovery, resume recovery, and blocked completion-notification recovery under `output/regression-7420/mobile-push-readiness-20260719/`; no authorized ADB device was available for the physical timing matrix.
+
+## Android terminal-before-registration push catch-up (2026-07-19)
+
+### Expected behavior
+
+1. If Runtime Store persists a terminal event before Android obtains an FCM token or registers its active-thread subscription, the later registration enqueues that current terminal identity for the newly registered device and drains it through the existing durable outbox.
+2. Catch-up requires the persisted thread snapshot to still be completed, interrupted, stopped, or failed and the snapshot's last Runtime event to be the matching terminal event. If a newer turn is running, registering that thread must not replay the previous turn's terminal wake.
+3. Re-registering the same token and thread set, restarting Runtime Store, an earlier device acknowledgement, and a normal terminal callback racing the registration all converge through the existing outbox/ledger keys and cannot duplicate the wake.
+4. Registration catch-up persists only token hash plus terminal identity/method/sequence. Event params, prompt, latest reply, server address, Cookie, and authorization values remain outside the FCM payload and outbox.
+
+### Verification
+
+- Run `npm.cmd run verify:server-modules`. The real SQLite smoke must persist terminal and running-after-terminal cases before any registration, close and reopen Runtime Store, register one device for both threads, observe exactly one content-free FCM request for the still-terminal thread, and observe no second request after re-registration.
+- Run `npm.cmd run build:cli`, the PowerShell source-contract parser, Android focused tests/lint, `git diff --check`, and the complete 7420 browser regression.
+- On a configured physical device, clear the app token/registration state, send a short task, immediately lock the device, then restore token/network only after the server terminal event. Confirm one FCM wake, one authoritative terminal reconciliation, one completion notification, and one accepted device acknowledgement.
+
+### Regression evidence (2026-07-19)
+
+- The new real-SQLite regression first reproduced the defect with `0 !== 1`: a terminal event and terminal snapshot survived Runtime Store reopen, but a device registering afterward produced no FCM request. After the fix, `npm.cmd run verify:server-modules` passed the late-terminal catch-up, newer-running-turn rejection, content-free payload, and duplicate re-registration matrix.
+- `npm.cmd run build:cli`, `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, Android focused `TaskPetRuntimePolicyTest`, Android `:app:lintDebug`, the PowerShell parser/source contract, and `git diff --check` passed. The complete 20-surface 7420 browser regression passed; the visually inspected mobile evidence is `output/regression-7420/mobile-late-push-registration-20260719/completion-notification-recovery-phone.png`.
+- After confirming zero active/pending/queued RPC calls, zero pending server requests, and zero uncertain Runtime requests, the managed restart activated the rebuilt CLI as 7420 service PID `44836`; App Server reinitialized as PID `42852` with all final queues still zero. Post-restart `npm.cmd run test:7420` passed health, event replay, notification-cursor recovery, and desktop/phone/foldable browser gates. FCM remains `not_configured` with zero registrations, pending deliveries, and device acknowledgements. ADB reports no authorized device, so physical immediate-lock/late-token/Doze timing remains pending; no APK was built, synced, installed, or released.
+
+## Android FCM token recovery while WebView is suspended (2026-07-19)
+
+### Expected behavior
+
+1. If Firebase is configured but the first `FirebaseMessaging.getToken()` attempt fails, the failure is not permanent. Starting the native task monitor and each later successful authoritative snapshot ensure a token exists before synchronizing active-thread subscriptions.
+2. Token acquisition uses a persisted 30-second attempt timestamp plus one process-wide in-flight guard. Repeated task updates cannot create overlapping Firebase requests, a clock rollback does not suppress recovery indefinitely, and service recreation retains the retry boundary.
+3. Once a token exists, the existing registration signature, six-hour freshness window, changed-subscription bypass, and 30-second failed-registration throttle remain authoritative. The recovery path does not send prompt or assistant content and does not create another task-state source.
+4. Builds without `google-services.json` remain quiet: the foreground monitor does not start repeated Firebase or registration work, and the existing `not_configured` diagnostics remain available from the Activity startup check.
+
+### Verification
+
+- Run Android `:app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest` and `:app:lintDebug`.
+- Run the PowerShell parser plus `npm.cmd run test:7420:frontend`; source contracts must prove persistent token-attempt state, in-flight deduplication, and native monitor recovery calls at startup plus snapshot convergence.
+- On a configured physical device, make the first token request fail, send a task, background or lock the App, restore network after 30 seconds, and confirm diagnostics advance from `token_failed` to `registered` before the terminal push test.
+
+### Regression evidence (2026-07-19)
+
+- The focused Android policy test passed after adding coverage for an in-flight request, a repeated request inside 30 seconds, retry at the boundary, and a backward-clock value. Android `:app:lintDebug`, the PowerShell parser, `git diff --check`, and the complete 20-surface `npm.cmd run test:7420:frontend` regression also passed; source contracts confirm native recovery calls at service startup and snapshot convergence.
+
+## Mobile response feedback review surface (2026-07-19)
+
+### Expected behavior
+
+1. The diagnostics route reads the existing timing-only local feedback summary and shows six stages: local state commit, bubble visibility, Runtime dispatch, server acknowledgement, first assistant data, and assistant render overhead. It never reads or renders prompt or reply content.
+2. Each row displays P50, P95, its explicit review target, and its own sample count. A stage remains neutral until it has at least five samples; only then may P95 classify it as currently on target or needing review.
+3. The summary is device-local, bounded by the existing seven-day / fifty-sample retention, and refreshes with the diagnostics page without mutating task state or triggering retries. Crossing a review target is described as a diagnostic lead, not task failure.
+4. At a 393 x 852 viewport, the feedback rows stack without horizontal overflow and keep the existing compact diagnostics visual vocabulary.
+
+### Verification
+
+- Run `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser for `scripts/regression-7420-frontend.ps1`, `git diff --check`, and the complete 7420 browser regression.
+- In an isolated real browser at 393 x 852, open `/#/diagnostics` with no samples and confirm the waiting explanation. Then insert five timing-only samples with P95 values above every review target, reload, and confirm six warning rows plus the `5 次 · 需复盘` summary.
+- Confirm `document.documentElement.scrollWidth === window.innerWidth` in both states and visually inspect the screenshots.
+
+### Regression evidence (2026-07-19)
+
+- `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser, `git diff --check`, and the complete 20-surface `npm.cmd run test:7420:frontend` regression passed after the diagnostics surface was added. The source contract preserves the six stages and the five-sample trend boundary.
+- Isolated system Chrome rendered the empty and over-target states at 393 x 852. The injected five timing-only rows produced six warning stages, the expected summary badge, and no horizontal overflow (`viewportWidth=393`, `scrollWidth=393`).
+- Visually inspected screenshots: `output/regression-7420/mobile-feedback-review-20260719/empty-phone.png` and `output/regression-7420/mobile-feedback-review-20260719/over-budget-phone.png`.
+
+## Durable deep-Doze terminal push retry (2026-07-19)
+
+### Expected behavior
+
+1. For each subscribed Android registration, a terminal runtime event is synchronously inserted into `mobile_push_outbox` before OAuth or FCM network work begins. The row contains only token hash, delivery identity, event sequence/method, thread/turn identity, attempt state, and timestamps; it contains no event params, prompt, assistant reply, service URL, Cookie, or authorization value.
+2. The coordinator drains due rows immediately, then retries transient failures after 1 s, 5 s, 15 s, 1 min, 5 min, and at most 15 min between later attempts. `pendingDeliveryCount`, `nextRetryAtIso`, failure time, and a bounded error code remain visible through `/codex-api/mobile-push/status`.
+3. Restarting 7420 reopens the same outbox and resumes due work. A successful FCM response marks the row `awaiting_device_ack` and schedules another bounded wake instead of deleting it. Only an authenticated Android acknowledgement after authoritative terminal reconciliation removes matching rows and writes the durable delivery ledger; replaying the same acknowledged terminal event cannot send again after restart.
+4. FCM `UNREGISTERED`, explicit unregister, and app-instance token rotation remove both pending and delivered state for the obsolete token. Middleware disposal stops the retry timer before closing Runtime Store.
+5. Delivery is at least once across crashes before device acknowledgement. Android distinguishes a claimed wake, a locally reconciled terminal result, and a server-acknowledged event: `wake_failed` stays unclaimed; a claimed event may restart a monitor that died before its snapshot; a locally reconciled event retries only its persisted acknowledgement and never repeats completion attention. Every successful wake still re-reads authoritative Runtime Store state before notifying.
+
+### Verification
+
+- Run `npm.cmd run verify:server-modules` and confirm the real SQLite smoke fails the first FCM attempt with 503, closes Runtime Store, reopens it, retains the row after FCM 200, rejects a different app instance's acknowledgement, settles multiple observed events with the owning device acknowledgement, suppresses replay, and clears obsolete-token state.
+- Run `npm.cmd run build:cli`, restart an idle local 7420 with the managed script, then confirm the live database contains `mobile_push_outbox` and `/codex-api/mobile-push/status` exposes the pending/retry fields without credentials or tokens.
+- Run Android focused unit tests/lint, frontend build/normalizers, `git diff --check`, and the complete 7420 browser regression. On a configured physical device, temporarily return FCM 503 for one terminal event, restore it, lock/force-Doze the device, and confirm exactly one user-visible completion after the server retry.
+
+### Regression evidence (2026-07-19)
+
+- The server module smoke passed the durable failure/restart/success/replay and obsolete-token cleanup matrix against a real temporary SQLite database. The recovered outbox record was asserted not to contain the event's secret test text.
+- `npm.cmd run build:cli` passed. After confirming zero RPC/request backlog, the managed 7420 restart replaced the service and initialized App Server successfully. The live database contains the expected 11-column `mobile_push_outbox` table with zero current rows; `/codex-api/mobile-push/status` reports `configurationState=not_configured`, `pendingDeliveryCount=0`, `nextRetryAtIso=null`, and no registrations or errors.
+- Android focused unit tests and `:app:lintDebug`, `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser, and `git diff --check` passed. The complete 20-surface 7420 regression passed with source contracts for content-free outbox storage, bounded backoff, startup recovery, and worker disposal.
+- Two-phase device-dedupe pass: Android focused policy tests and lint, the real-SQLite server module smoke, the PowerShell source contract, `git diff --check`, and the complete 20-surface 7420 browser regression passed. The contract proves duplicate detection is read-only before wake, `wake_failed` returns without claiming the event sequence, and only a successful foreground-service handoff commits the claim.
+- Device-processing acknowledgement pass: CLI build, Android focused policy tests, and the real-SQLite server smoke passed. FCM 200 left one `awaiting_device_ack` row across Runtime Store reopen; the wrong app instance acknowledged zero rows, while the owning instance atomically settled its observed event range and made replay durable. Android source ordering requires authoritative terminal state, a completion-notification attempt, persistent local acknowledgement state, and authenticated 7420 acceptance in that order.
+- Device-acknowledgement race pass: the real-SQLite smoke submitted a valid device acknowledgement before the matching terminal callback and proved the later stale wake was never enqueued or sent. `npm.cmd run build:cli`, `npm.cmd run verify:server-modules`, Android focused policy tests and `:app:lintDebug`, `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, both PowerShell parser checks, `git diff --check`, and the complete 20-surface real-browser regression passed.
+- After confirming zero active, pending, and queued App Server work, the managed 7420 restart loaded the new schema and route. Live status reported `awaitingDeviceAckCount=0`; an unregistered application-instance acknowledgement returned `accepted=false` and `acknowledgedCount=0`. The post-restart backend/event-replay and sidebar-data gates passed, and final App Server health remained idle with no uncertain Runtime Store requests.
+- Independent `agent-browser` at 393 x 852 rendered the task-pet completion-channel recovery surface with two task rows and no horizontal overflow. A browser-origin request to the live status route returned HTTP 200 with all pending/retry fields and no token or credential; the visually inspected screenshot is `output/regression-7420/mobile-push-retry-20260719/task-pet-retry-status-phone.png`.
+- Physical transient-FCM/Doze notification timing remains pending until Firebase credentials and an authorized Android device are available. No APK was built, synced, installed, or released.
+
+## Android lock-screen / Doze evidence harness (2026-07-19)
+
+### Expected behavior
+
+1. `dumpsys activity service com.cxcodex.bridge/.TaskPetOverlayService` exposes one JSON line prefixed with `CX_CODEX_TASK_PET_DIAGNOSTICS=` while the foreground monitor is alive. It includes only system state, counters, timestamps, notification results, push/acknowledgement state, and event sequences; it never includes the server address, thread/client identity, prompt, title, or reply content.
+2. `npm run test:android:background` is read-only by default and writes a `before.json` snapshot covering the monitor, WakeLock, process, Doze/power state, relevant package declarations, overlay AppOp, and notification AppOp.
+3. `-Mode ScreenOff` and `-Mode Doze` are explicit opt-ins. Screen-off only sleeps an initially interactive device; Doze additionally simulates unplugged power and forces idle. A `finally` block always unforces idle, resets battery state, wakes a screen changed by the script, and writes `restored.json`.
+4. The harness never builds, syncs, installs, launches, or sends a task. Missing ADB, missing authorization, multiple devices, and a missing package fail with an actionable boundary instead of mutating the workstation or phone.
+5. Assistant reply SSE events use a leading plus trailing 750 ms wake boundary. A final delta arriving inside that window cannot fall through to the 3-second fallback poll. Diagnostics prove reply-event receipt, authoritative snapshot application, and rendering into a visible expanded task row using counters, timestamps, and event sequences only.
+6. Terminal device acknowledgement remains durable when a claimed FCM wake has temporarily lost its locally cached token. A stored token still permits the pre-delivery acknowledgement watermark, while a completion with no token, no claimed push, and no pending acknowledgement creates no orphan work.
+7. Every persisted active-task snapshot owns one inexact `setAndAllowWhileIdle` no-progress review. It remains independent from the 30-minute WakeLock deadline, survives ordinary process death, and is cancelled or recalculated after progress/terminal state. The receiver is non-exported, performs no network request or task-state transition, and never starts a killed foreground service.
+
+### Verification
+
+- Run the PowerShell parser, `npm.cmd run test:android:background -- -ListDevices`, Android focused unit tests, Android `:app:lintDebug`, and the complete 7420 frontend source/browser regression.
+- On a connected target device with a current development APK, start one active task and run Snapshot, ScreenOff, and Doze modes. Compare `before`, `during-*`, and `restored` evidence for monitor ownership, active count, WakeLock, `noProgressReviewScheduledAtMs`, the filtered AlarmManager registration, terminal timestamp, notification attempt/result, push wake, and device acknowledgement timestamps.
+- For the strict terminal matrix, add `-RequireTerminalNotification -RequireDeviceAcknowledgement`. Confirm `terminalToNotificationMs` and `terminalToAcknowledgementMs` are ordered and within their configured limits, then confirm the server's pending and awaiting-device counts return to zero.
+- For cross-app live reply verification, keep the task-pet panel expanded and add `-RequireLiveReplyUpdate -MaxReplyRenderLatencyMs 2000`. Confirm `replyEventToSnapshotApplyMs`, `replySnapshotApplyToRenderMs`, and `replyEventToRenderMs` are ordered, the rendered event sequence covers the latest reply event, and no reply content appears in evidence.
+- Repeat once with notifications denied and once with the completion channel disabled. Confirm task convergence is independent of notification delivery and the diagnostic result distinguishes `blocked` from `channel_blocked`.
+
+### Regression evidence (2026-07-19)
+
+- Doze-safe periodic-review pass: the new policy test first failed at compile time before `nextNoProgressReviewAtMs` existed, then all Android `:app:testDebugUnitTest` tests and `:app:lintDebug` passed. The merged manifest contains the non-exported `TaskPetNoProgressReviewReceiver` and no exact-alarm permission; PowerShell parser checks, `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, and `git diff --check` passed. Source contracts require `setAndAllowWhileIdle`, persisted reminder commit/dedupe, service-alive delegation, process-death local handling, no network, and no killed-FGS start.
+- The complete live 7420 browser regression passed all 20 desktop, foldable, and mobile surfaces. The 393 × 852 task-pet/notification-recovery screenshot was visually inspected with two exact-thread tasks, a visible 32-minute no-progress row, channel recovery, and no horizontal overflow: `output/regression-7420/mobile-doze-periodic-review-20260719/completion-notification-recovery-phone.png`. Live `/health` and `/codex-api/health` remained healthy with zero active/pending/queued RPCs, zero pending server requests, and zero uncertain Runtime Store requests.
+- `npm.cmd run test:android:background -- -ListDevices` still reports no authorized Android device. Physical alarm delivery after ordinary process death, screen-off/Doze batching, OEM behavior, and exact notification timing remain pending; no APK was built, synced, installed, or released.
+- The PowerShell parser passed, and `npm.cmd run test:android:background -- -ListDevices` resolved the installed Android platform-tools and exited cleanly with `未检测到已授权 Android 设备`; no screen, battery, Doze, package, or process state was changed.
+- Android `TaskPetRuntimePolicyTest` plus `MobileShellConfigTest` passed after compiling the native `Service.dump` implementation, and `:app:lintDebug` passed. `git diff --check` also passed.
+- `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, and the complete 20-surface 7420 frontend regression passed, including source contracts for dumpsys privacy, read-only default mode, and forced-state restoration. Screenshots are under `output/regression-7420/android-background-evidence-20260719/`.
+- Independent `agent-browser` at 393 x 852 sent `请只回复：移动端后台证据链验证通过` through the real 7420 new-thread path, observed the immediate running state, then the exact completed reply with zero running residue and no horizontal overflow (`viewportWidth=393`, `scrollWidth=393`). The screenshot is `real-send-completed-phone.png`; synthetic thread `019f77ab-0146-7851-a17b-8ba5066fb125` was archived and was absent from the active list. Final App Server health was `status=ok` with zero pending RPC, queued RPC, pending server request, and uncertain runtime request counts.
+- A second disposable Runtime Store thread proved the trailing-edge reply refresh change through the complete 393 x 852 browser gate. Dispatch was `10 ms`, server acknowledgement `29 ms`, `turn/started` `84 ms`, first assistant data `7890 ms`, first visible reply `7897 ms`, and data-to-paint overhead `7 ms`; the screenshot is `output/regression-7420/mobile-reply-trailing-edge-20260719/response-feedback-budget-phone.png`, and the disposable thread was archived after the run.
+- The focused Android policy test covers the leading poll, the remaining trailing delay inside 750 ms, the exact boundary, urgent terminal wake, and backward-clock recovery. `:app:lintDebug`, `npm.cmd run build:frontend`, `npm.cmd run verify:server-modules`, `npm.cmd run verify:frontend-normalizers`, the complete source/browser regression, PowerShell parser checks, and `git diff --check` passed. Final App Server health remained `ok` with zero pending/queued RPC, pending server requests, and uncertain Runtime Store requests.
+- The terminal acknowledgement policy test covers the four recovery boundaries: stored-token early acknowledgement, claimed-push acknowledgement with no cached token, an already-pending retry, and the unconfigured/no-push no-op. The source contract also requires persistence before asynchronous submission so process loss cannot erase the recovered acknowledgement. The focused test, Android `:app:lintDebug`, `git diff --check`, and the complete 7420 browser regression passed; screenshots are under `output/regression-7420/mobile-push-ack-token-recovery-20260719/`.
+- Physical Snapshot / ScreenOff / Doze evidence remains pending because ADB has no authorized device. No APK was built, synced, installed, or released.
+
+## Mobile cache-first thread history and older paging (2026-07-19)
+
+### Expected behavior
+
+1. A cold long-thread route may render a bounded local session-log window immediately, but it must schedule exactly one background authoritative message read and converge to server absolute `turnIndex` values without a duplicate notification-recovery read.
+2. The first load-more action expands locally hidden messages without a network request. The next action reads lightweight cached runtime state and sends `thread/read` with `responseView: older` and the earliest loaded absolute `beforeTurnIndex`.
+3. Explicit older-history paging is allowed for legacy threads that have no `lastCompletedAtIso` or event sequence. The load button must leave its busy state when the request settles and preserve the user's reading anchor.
+
+### Verification
+
+- Run `npm.cmd run build:frontend`, `npm.cmd run build:cli`, `npm.cmd run verify:server-modules`, `git diff --check`, and the complete 7420 frontend regression with the real long-thread id.
+- In a 393 x 852 real browser, cold-open the thread, wait for cache-to-authority convergence, expand the local message window, then load remote older history. Confirm the second action sends one `/codex-api/rpc` request containing `responseView: "older"` plus a positive absolute `beforeTurnIndex` and that no second heavy state read precedes it.
+
+### Regression evidence (2026-07-19)
+
+- A targeted real-browser run returned `preferCachedMessages=1` state in 18 ms, then sent `thread/read(responseView: older, beforeTurnIndex: 391)` and completed in about 4.32 s. The load-more button recovered from its busy state normally.
+- The complete live frontend regression passed all 21 desktop, foldable, and mobile surfaces. The real 393 x 852 thread reported product-side `firstUsableMs=412`, one background authoritative RPC, four mounted virtualized items, three message cards, and 196 conversation DOM nodes. Repeated load-more moved the absolute earliest turn from 391 to 381 while the targeted anchor check measured `0 px` drift.
+- Visually inspected screenshots: `output/regression-7420/mobile-cache-authority-final6-20260719/completion-notification-recovery-phone.png` and `output/regression-7420/mobile-cache-authority-final6-20260719/thread-phone.png`.
+- Final `/codex-api/health` reported `status=ok`, `pendingRpcCount=0`, `queuedRpcCount=0`, `pendingServerRequestCount=0`, and `uncertainRequestCount=0`. No APK was synced, packaged, installed, or released; physical lock-screen/Doze/FCM verification remains gated on a configured Android device and Firebase credentials.
+
+## Android immediate-lock existing-thread handoff (2026-07-19)
+
+### Expected behavior
+
+1. After an existing-thread message is written to the durable outbox and receives immediate optimistic running feedback, its stable `clientMessageId` is handed to the native task monitor before any fallible send preflight. The older 180 ms renderer watcher remains a convergence path, not the ownership boundary.
+2. A forced submit-time handoff can cross an older task-pet sync that is still waiting for its bridge response. Completion of that older call cannot overwrite the newer status/payload in JavaScript, and `/runtime/send` dispatch does not await the native bridge.
+3. Native monitoring queries `/codex-api/runtime/request` for the new id before reading the existing thread snapshot. A missing or confirmation-pending request remains waiting; only after acceptance does the task join batch snapshot polling, so the previous turn's terminal snapshot cannot produce a false completion.
+4. Request acceptance is persisted across sticky foreground-service recreation. The service uses `specialUse` with an accurate user-initiated AI task monitoring description; it does not use Android 15's six-hour-limited `dataSync` type.
+
+### Verification
+
+- Run `npm.cmd run build:frontend`, Android `:app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest`, Android `:app:lintDebug`, the complete 7420 frontend source contracts, and `git diff --check`.
+- On a physical Android 15/16 device, send into an already completed conversation and lock immediately after the local bubble appears. Delay `/runtime/send` acceptance while leaving the old thread snapshot terminal; confirm the native row stays confirmation-pending, then becomes running/completed exactly once after acceptance.
+- Repeat with a foreground-service process recreation and confirm persisted `requestAccepted` avoids reverting to the previous turn or replaying the prompt.
+
+### Regression evidence (2026-07-19)
+
+- `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, Android `:app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest`, Android `:app:lintDebug`, the PowerShell parser check, and `git diff --check` passed after adding existing-thread handoff identity and persisted request-acceptance state.
+- The complete live 7420 frontend regression passed all 19 desktop, foldable, and mobile surfaces, including source contracts for immediate existing-thread handoff, forced sync ordering, Runtime request confirmation, persisted acceptance, and the `specialUse`/non-`dataSync` manifest boundary.
+- Independent `agent-browser` at 393 x 852 rendered two task rows, two recent conversations, and the blocked completion-channel recovery action; viewport, client, and scroll widths were all 393 and the console contained no error. The visually inspected screenshot is `output/regression-7420/mobile-existing-thread-handoff-20260719/task-pet-phone.png`.
+- Final `/codex-api/health` reported `status=ok`, `pendingRpcCount=0`, `queuedRpcCount=0`, `pendingServerRequestCount=0`, and `uncertainRequestCount=0`. No ADB device is connected and `android/app/google-services.json` is absent, so immediate-lock/service-recreation timing and high-priority FCM remain the next physical-device/configuration gates. No APK was synced, packaged, installed, or released.
+
+## Android task-pet direct-reply delivery recovery (2026-07-19)
+
+### Expected behavior
+
+1. The native reply draft, target thread, and stable `clientMessageId` are persisted before `/runtime/send` is dispatched. A lost HTTP response becomes `回复已提交 · 正在确认`, not an immediate false failure and not an automatic replay.
+2. The foreground monitor queries `/codex-api/runtime/request` with that original id before using the thread snapshot. Service recreation and default-network recovery resume the same confirmation path even when the WebView remains suspended.
+3. `pending_start`, `starting`, `start_uncertain`, and `sync_degraded` remain waiting. A running or settled authoritative request clears the persisted attempt and returns to normal batched snapshot/live-reply monitoring.
+4. A request must be authoritatively absent for three consecutive polls before it becomes `回复未送达 · 点击回复重试`. The retry row stops polling, SSE, wake-lock, and no-progress reminders; it preserves the full draft, posts a high-importance retry notification, and uses a fresh id on manual retry. A definite HTTP or runtime failure keeps the visible composer draft and also prepares a fresh id.
+
+### Verification
+
+- Run `android\\gradlew.bat :app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest` and `android\\gradlew.bat :app:lintDebug`.
+- Run the 7420 frontend source contracts and confirm service recreation calls `ensurePersistedReplyAttemptTask`, uncertain transport returns confirmation-pending, reply reconciliation reads the original id, and the three-miss boundary enters a non-active retry state with notification feedback.
+- On a real Android device, submit an exact-thread floating reply, drop the POST response after server acceptance, background/lock the app, and restart the service. Confirm only one turn exists and the row converges from confirming to running/completed. Repeat with the POST blocked before reaching the server; after three successful 404 lookups confirm one retry notification, a red retry row with the original full draft, no continuing wake lock, and a manual retry using a new id.
+
+### Regression evidence (2026-07-19)
+
+- `TaskPetRuntimePolicyTest`, Android `:app:lintDebug`, `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser check, and `git diff --check` passed.
+- The complete live 7420 frontend regression passed all 19 desktop, foldable, and mobile surfaces with the new native direct-reply source contracts. An independent agent-browser run at 393 x 852 opened the reply composer by a 650 ms touch hold, filled and sent `继续处理并及时同步结果`, emitted exactly `回复会话：fixture-recent-one`, reported viewport/document width `393/393`, horizontal overflow `0`, and no captured console errors.
+- Visually inspected evidence: `output/regression-7420/mobile-direct-reply-recovery-20260719/task-pet-direct-reply-phone.png`. No APK was synced, packaged, installed, or released. Physical Android lost-response, service-recreation, notification, and wake-lock timing remain pending because ADB has no connected device.
+
+## Android background-monitor diagnostics (2026-07-19)
+
+### Expected behavior
+
+1. While the native task monitor runs, it retains one bounded diagnostic snapshot covering monitor start, active-task count, SSE state/status/reconnects, relevant event wakes, authoritative snapshot success/failure, terminal convergence, and completion-notification delivery.
+2. The snapshot contains no server address, thread/client id, title, prompt, assistant reply, or other message content. It is evidence only and cannot change task execution state or trigger recovery.
+3. Frequent progress does not write preferences per token: ordinary updates persist at most once per 15 seconds, while connection transitions, first poll failure/recovery, terminal state, and notification result persist immediately.
+4. `getTaskPetStatus` returns `monitorRunning` plus the last persisted `monitorDiagnostics`, so a real-device test can distinguish a dead service, SSE reconnect, event-to-poll delay, snapshot failure, and notification block after backgrounding or lock screen.
+5. Removing the CX-Codex Activity from Android recents must not stop the foreground monitor. The manifest explicitly keeps the Service independent from the task; a sticky process recreation restores persisted active tasks before polling and records content-free service-create, task-removal, and sticky-restart evidence.
+
+### Verification
+
+- Run Android unit tests and `lintDebug`, then run the 7420 frontend source contracts. Confirm the diagnostics preference, bounded persistence interval, sanitized fields, and bridge response are present.
+- On a real Android device, record `monitorStartedAtMs`, `lastRelevantEventAtMs`, `lastEventDrivenPollAtMs`, `lastSnapshotSuccessAtMs`, `lastTerminalAtMs`, and `lastCompletionNotificationAttemptAtMs` before and after app switch, ordinary lock, process recreation, weak network, and forced Doze. Use these timestamps to calculate event-to-poll, poll-to-terminal, and terminal-to-notification P50/P95 rather than relying on visual observation alone.
+- For a formal completion run, execute `npm run test:android:background -- -Mode ScreenOff -ObservationSeconds 30 -RequireActiveTask -RequireTerminalNotification -MaxTerminalNotificationLatencyMs 5000`, then repeat in `Doze` with an appropriate observation window. Confirm `summary.json` reports a new terminal and notification, notification result `posted`, body source `latest_reply` or `detail`, and terminal-to-notification latency within the selected budget. Blocked channels and `reply_retry` prompts must not pass as a delivered task-completion notification; the verifier must retain evidence and fail if any required condition is missing.
+- Run `npm run test:android:background -- -Mode Observe -ObservationSeconds 30 -RequireActiveTask -RequireTaskRemoval`, then manually swipe CX-Codex from recents during the observation window. Confirm the same foreground Service keeps monitoring and `taskRemovedAdvanced=true`. For a separate system-recreation test, require `stickyRestartAdvanced=true` with `-RequireStickyRestart` and confirm the restored active-task count is nonzero.
+- Deny notifications once and confirm the task still settles while `lastCompletionNotificationResult` becomes `blocked`; re-enable permission and repeat with a new task to confirm `posted`.
+
+### Regression evidence (2026-07-19)
+
+- Activity-independent lifecycle pass: the merged Debug manifest at `android/app/build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml` retains `android:stopWithTask="false"` on `TaskPetOverlayService`. Native diagnostics now persist service-create, sticky-restart, and recent-task-removal counters plus a bounded start reason; `Observe` mode can require task removal without mutating recents itself. Android compilation, focused unit tests, `:app:lintDebug`, `npm.cmd run build:frontend`, parser/diff checks, and the complete 20-surface frontend browser regression passed.
+- The enhanced verifier passed PowerShell parser validation and `npm.cmd run test:android:background -- -ListDevices`; the latter correctly reported no authorized device without creating evidence, changing device state, building, or installing an APK. Static contracts require the strict gate to reject any completion result other than `posted` and any completion body source other than `latest_reply` or `detail`.
+- Android `TaskPetRuntimePolicyTest` and `MobileShellConfigTest` passed after recompiling the native plugin/service; `:app:lintDebug`, `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser check, and `git diff --check` passed.
+- The complete live agent-browser 7420 regression passed all 18 desktop, foldable, and mobile surfaces, including the new diagnostics persistence/privacy source contracts. A separate real Chromium request confirmed `/codex-api/events` returned `200`, `text/event-stream; charset=utf-8`, and `Cache-Control: no-cache, no-transform`.
+- The dedicated 393 × 852 task-pet fixture showed two tasks, live latest-reply copy, a 12-minute no-progress row, two exact-thread recent rows, and no horizontal overflow (`393 px` viewport/document width). Screenshot: `output/regression-7420/mobile-monitor-diagnostics-20260719/task-pet-phone.png`.
+- ADB still reports no connected device and `google-services.json` remains absent, so native status payload capture, lock-screen/process-recreation timestamps, forced Doze, notification permission delivery, and FCM latency remain in the physical-device/configuration matrix. No APK was synced, packaged, installed, or released.
+
+## Android native SSE task wake channel (2026-07-18)
+
+### Expected behavior
+
+1. While at least one native task is active, the foreground service opens `/codex-api/events` on a dedicated executor and keeps ordinary snapshot polling free for state reconciliation and quick replies.
+2. Assistant delta, turn/thread, and server-request events for a tracked thread wake an immediate authoritative snapshot. High-frequency progress is limited to one wake per 750 ms; terminal events bypass that throttle.
+3. If an event arrives during a snapshot request, one follow-up poll is retained and runs immediately after the in-flight request. Event bursts cannot create parallel snapshot requests.
+4. Heartbeats and unrelated account/global events do not wake task polling. Threadless provisional tasks may wake on thread/turn creation so they can resolve their authoritative thread promptly.
+5. SSE read failure, proxy interruption, or authentication recovery cannot stop monitoring: the stream reconnects after 1.5 seconds while the existing 3-second poll remains authoritative and backs off to 7.5 seconds after poll failures.
+6. The event stream disconnects when no active task remains or the service is destroyed; it never turns an idle enabled overlay into a permanent network connection.
+
+### Verification
+
+- Run `.\\gradlew.bat :app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest` and `.\\gradlew.bat :app:lintDebug` from the `android` directory.
+- Run the 7420 frontend source contracts and confirm the service has a separate event executor, `text/event-stream` request, bounded reconnect, progress throttle, in-flight follow-up flag, event filter, and unchanged periodic poll fallback.
+- In a real browser session, fetch `/codex-api/events` and confirm a `200` response with `text/event-stream`; the Android auth cookie path is shared with snapshot polling.
+- On a real Android device, start a replying task, background or lock the App, and compare log timestamps for the SSE notification, immediate snapshot request, latest-reply update, and completion notification. Repeat after temporarily blocking the event stream and confirm the 3-second poll still converges.
+
+### Regression evidence (2026-07-18)
+
+- `TaskPetRuntimePolicyTest` passed relevant-event filtering and terminal-priority cases; Android `lintDebug` passed the dedicated executor, connection lifecycle, JSON extraction, throttling, and fallback-poll implementation.
+- A real Chromium session fetched `/codex-api/events` with status `200`, content type `text/event-stream; charset=utf-8`, and `Cache-Control: no-cache, no-transform`, then aborted the probe cleanly.
+- The complete live agent-browser 7420 frontend regression passed all 18 desktop, foldable, and mobile surfaces after the SSE source contracts were added. `git diff --check` also passed.
+- Physical Android timing, screen-off socket survival, and forced fallback remain in the real-device matrix because no adb device is currently connected.
+
+## Android same-thread task generation isolation (2026-07-18)
+
+### Expected behavior
+
+1. Each active task-pet row carries the renderer's stable `activityId`, activity start time, and latest Runtime Store event sequence into native persistence.
+2. When a new turn starts in the same thread, its different activity generation replaces the previous completed or active row only when a newer event sequence or start time proves ordering. A delayed older frontend snapshot cannot roll the row backward.
+3. A native runtime poll captures the generation it requested. If the same thread advances before that network response returns, the old result is ignored before state, latest reply, completion notification, or frontend-active cleanup can change.
+4. Legacy rows without generation metadata remain compatible; normal event-sequence ordering still applies until a new renderer snapshot supplies a stable generation.
+
+### Verification
+
+- Run `.\\gradlew.bat :app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest` from the `android` directory and confirm both generation equality and provably-newer ordering cases pass.
+- Run `npm.cmd run build:frontend` and the 7420 frontend source contracts to confirm `activityId`, `startedAtMs`, and `lastEventSeq` survive the Vue-to-native payload.
+- On a real Android device, let one turn finish and immediately submit a follow-up in the same thread while repeatedly backgrounding and foregrounding the App. Confirm there is no completion notification for the new turn until it actually settles, its elapsed state does not revert, and the latest reply belongs to the second turn.
+
+### Regression evidence (2026-07-18)
+
+- The expanded `TaskPetRuntimePolicyTest` passed generation equality, newer event-sequence precedence, newer start-time fallback, stale-generation rejection, and legacy-unknown compatibility cases. Android `lintDebug` also passed after compiling the full plugin and service.
+- `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, `git diff --check`, and the complete live agent-browser 7420 frontend regression passed. The source gate confirmed all three generation fields cross the Vue-to-native payload and that native poll application checks the originally requested generation.
+- The generation change does not alter task-pet layout; the same 393 px visual proof remains `output/regression-7420/mobile-native-terminal-ownership-20260718/task-pet-native-terminal-phone.png`, with document width equal to viewport width.
+- The overlapping-poll timing case still requires a physical Android device or emulator with controllable network delay; no APK sync, packaging, installation, or release action was performed.
+
+## Android native terminal ownership after WebView omission (2026-07-18)
+
+### Expected behavior
+
+1. After a tracked task disappears from the WebView active-task snapshot, the Android foreground monitor keeps the known running or waiting record and continues authoritative Runtime Store polling; an empty renderer snapshot cannot stop the service, including the first active-to-empty transition while that service is still starting.
+2. A tracked task settles exactly once from the native runtime snapshot, keeps the latest reply for its exact-thread completion notification, and removes the stale frontend-active preference before service restart can revive it.
+3. A new-conversation provisional row remains while it is still present in the frontend snapshot. Once omitted, it is removed only after three consecutive `/runtime/request` not-found responses; transport failures remain waiting and do not count as non-acceptance.
+4. Unread completed rows remain persisted until the owning thread has actually opened and been marked read. Frontend omission alone is never treated as a user dismissal.
+
+### Verification
+
+- Run `.\\gradlew.bat :app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest` from the `android` directory, followed by `.\\gradlew.bat :app:lintDebug`.
+- Run `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, and `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots`.
+- On a real Android device, send one existing-thread task and immediately lock the screen. After the WebView has been suspended, wait for completion and confirm one exact-thread notification containing the latest reply; reopen the app and confirm the task is complete rather than running again.
+- For a provisional-send check, suspend the WebView immediately after submit. Confirm a successfully accepted request resolves into its real thread, while a definitively abandoned request disappears only after the bounded confirmation window and never produces a false completion alert.
+
+### Regression evidence (2026-07-18)
+
+- `TaskPetRuntimePolicyTest` and Android `lintDebug` passed, including retained omitted-task states and the three-poll provisional cleanup boundary.
+- `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, and the complete agent-browser 7420 frontend regression passed against the live local service. The run covered 18 desktop, foldable, and 393 x 852 mobile surfaces plus the native lifecycle source contracts.
+- The dedicated task-pet fixture exposed two active rows, a latest-reply timestamp, a 12-minute no-progress state, two recent exact-thread targets, and no horizontal overflow (`393 px` viewport and document width). Screenshot: `output/regression-7420/mobile-native-terminal-ownership-20260718/task-pet-native-terminal-phone.png`.
+- Physical Android lock-screen, service-process restart, and notification delivery remain in the real-device matrix; no APK sync, packaging, installation, or release action was performed in this stage.
+
+## Per-turn elapsed time reset (2026-07-18)
+
+### Expected behavior
+
+1. A newly submitted turn receives a fresh Runtime Store `lastStartedAtIso`; it never inherits the previous turn's elapsed time while waiting for the authoritative `turn/started` event.
+2. Foreground and restart recovery ignore a runtime start timestamp when it is at or before `lastCompletedAtIso`, preventing a new `正在处理` row from jumping directly to one hour or more.
+3. A genuinely long-running task keeps its original start time as long as that time is newer than the last completed turn. Thinking, execution, and reply streaming within the same turn continue to share one stable timer.
+4. Stop-duration reporting uses the same validated timestamp and cannot inherit the duration of an already completed turn.
+
+### Verification
+
+- Run `npm.cmd run build:frontend`, `npm.cmd run build:cli`, `npm.cmd run verify:server-modules`, and `npm.cmd run verify:frontend-normalizers`.
+- Run the PowerShell parser check for `scripts/regression-7420-frontend.ps1` and `git diff --check`.
+- Open the isolated mobile conversation fixture with a previous five-minute activity followed by a new activity. Confirm the new row begins near zero, keeps one compact status surface, and does not overflow horizontally.
+
+### Regression evidence (2026-07-18)
+
+- `npm.cmd run build:frontend`, `npm.cmd run build:cli`, `npm.cmd run verify:server-modules`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser check, and `git diff --check` passed.
+- Headless Playwright at 393 x 852 changed the fixture from a five-minute prior activity to a new activity and observed `正在处理 · 6 秒`; the document scroll width remained 393 px.
+- Screenshot: `output/regression-7420/per-turn-timer-20260718/conversation-new-turn-timer-mobile.png`.
+
+## Mobile resume convergence, unread, and queued follow-ups (2026-07-18)
+
+### Expected behavior
+
+1. Reopening an active conversation keeps the authoritative task start time. A provisional renderer timestamp may be corrected earlier by the Runtime Store, but it must never reset the visible elapsed time later.
+2. Sidebar unread state is created only by a terminal task event while the conversation is not selected. Thread-list timestamp changes, token usage, renames, and first startup must not mark every conversation unread. Unread completion state survives a mobile process restart and clears after opening the matching conversation or using mark-all-read.
+3. A settled runtime snapshot clears the previous turn's local running residue and starts the first queued follow-up immediately when no approval or newer local send is pending. Merely having queued follow-up text must not count as proof that the previous turn is still running.
+4. If automatic submission of the first queued follow-up fails, the row remains visible as `未发送`, the queue pauses, and the user can retry, edit, or delete it. It must not retry indefinitely in the background. Retrying resumes that item; deleting it releases the next queued item.
+5. Each queued item retains one `clientMessageId` while it is pending or transport-uncertain, so two 7420 pages cannot execute the same follow-up twice. A definitive application failure receives a fresh id only when prepared for explicit manual retry. Cross-tab storage events update queue display state but do not auto-run work.
+6. High-frequency agent/reasoning/command delta events retain their latest non-reactive sequence for stale-snapshot rejection, but do not rewrite the full reactive runtime summary while the turn is already active. A delayed delta after terminal completion must not revive the turn.
+7. On reload, a durable threadless or thread-bound outbox entry restores its original bubble as `等待网络` before the authoritative resume request completes. The same bubble later becomes confirmed, sent, or failed; the conversation must not remain visually blank during bounded recovery.
+4. Foreground and initial message recovery apply the lightweight runtime snapshot before any heavy `thread/read(includeTurns: true)` refresh. Cached content remains visible while missing final history reconciles in the background.
+5. Individual `item/completed` events and generic thread metadata/status events update their live state without forcing a full-history read. Authoritative message refresh remains attached to turn/thread completion, errors, and server-request transitions.
+
+### Verification
+
+- Run `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser check for `scripts/regression-7420-frontend.ps1`, and `git diff --check`.
+- Start with empty read/unread browser storage and a current notification cursor. Open a running thread in a 1280px foldable/mobile viewport; assert zero `.thread-status-indicator[data-state="unread"]` rows and compare the conversation-tail elapsed label with `lastStartedAtIso` from `/codex-api/runtime/thread/:threadId`.
+- Verify a settled-snapshot fixture or source contract clears runtime residue before `processQueuedMessages(threadId)`, and that `hasStrongExecutionSignal` does not use the queued-message list.
+- Open `/#/__regression/conversation-blocks?regression=frontend&queueFailure=1` in a phone viewport. Confirm one compact paused warning, a `未发送` first row, a visible `重试` action, and no horizontal overflow.
+- In two same-origin 7420 tabs, queue one follow-up and confirm both tabs converge the row. When the current turn completes, the Runtime Store must contain only one request for that queued item's stable `clientMessageId`.
+- During a command with dense output, confirm text still updates in bounded batches and the running indicator remains stable. After completion, inject or replay a later delta and confirm the status does not return to running.
+- Seed a durable `sending` outbox entry in a focused recovery test, reload, and confirm the original content is visible on the first recovery frame before runtime lookup/send settles. Keep the normal failed-bubble UI regression deterministic by seeding `failed` directly so it never creates a real Runtime request.
+- Verify `shouldRefreshMessagesFromNotification` retains terminal refreshes but excludes `item/completed` and the broad `thread/*` fallback, preventing repeated heavy reads during multi-command turns.
+
+2026-07-18 local verification: frontend build and normalizer smoke passed. Headless Playwright opened the current running thread with empty read/unread storage, found zero false unread indicators, and observed an elapsed time above 20 minutes, matching the Runtime Store start time instead of a fresh page timestamp. Screenshot: `output/regression-7420/mobile-resume-state.png`. The full live 7420 suite and a real queued send were not run because this service was hosting the active task.
+
+## Foreground task recovery feedback (2026-07-18)
+
+### Expected behavior
+
+1. Leaving the browser or Android shell while the selected task is running, then returning, immediately changes the existing conversation-tail status to `正在恢复任务` with one compact rotating indicator.
+2. The original task elapsed time and activity identity remain unchanged. Recovery feedback does not create a second card, move the message list, block interaction, or restart the timer.
+3. The first matching realtime execution event or runtime snapshot returns the row to its normal running/completed state after at least 500 ms, preventing an imperceptible flash. If recovery cannot be confirmed, the temporary state expires after 8 seconds and existing connection/error feedback remains authoritative.
+4. Idle conversations do not show the recovery animation. `prefers-reduced-motion` keeps the explicit recovery text but disables the indicator animation.
+
+### Verification
+
+- Run `npm.cmd run build:frontend` and `npm.cmd run verify:frontend-normalizers`.
+- Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots`; the phone fixture must contain exactly one `正在恢复任务` surface with `aria-busy=true`, a visible recovery hint, and no horizontal overflow.
+- On Android, start a task, switch to another app for several seconds, then return. Confirm recovery feedback appears immediately and converges automatically without tapping refresh.
+- Enable the operating system's reduced-motion preference and repeat. Confirm the label remains readable while rotation is disabled.
+
+2026-07-18 local verification: `build:frontend`, `verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The isolated 393px regression fixture rendered one `aria-busy=true` recovery surface at the conversation tail with no horizontal overflow. The test machine had reduced motion enabled, so the visible label and static indicator were retained while animation was correctly disabled. Screenshot: `output/regression-7420/foreground-recovery/conversation-resume-recovery-mobile.png`. The full live 7420 suite was not run because the current service was hosting an active real task.
+
+## Authoritative completion and stable per-turn timer (2026-07-18)
+
+### Expected behavior
+
+1. Every submitted message starts a distinct activity timeline. Thinking, command execution, and response streaming within that same turn keep one elapsed timer, but a later turn never inherits the previous turn's duration.
+2. A short realtime overlay gap keeps the current activity visible and preserves its timer. A different authoritative `turnId` replaces the retained activity immediately.
+3. A fresh settled runtime snapshot marks only older optimistic messages as settled and clears their pending running feedback. The bubble remains visible until authoritative history replaces it, while a newer follow-up message remains active.
+4. While realtime notifications are healthy, the 9-second background check reads lightweight runtime status only. Full `thread/read(includeTurns: true)` falls back after 60 seconds, when notifications are stale, when delivery is still optimistic-only, or once terminal state needs one final reconciliation.
+
+### Verification
+
+- Run `npm.cmd run build:frontend` and `npm.cmd run verify:frontend-normalizers`.
+- Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots` and confirm the phone conversation-tail fixture keeps one stable timer through its intentional overlay gap.
+- In a real conversation, finish one turn, immediately send a follow-up, and confirm the second timer begins near zero while the first turn's completed state does not clear the new bubble.
+- During a healthy response longer than one minute, inspect diagnostics: lightweight runtime checks may continue, but heavy `thread/read(includeTurns: true)` should no longer recur every 12 seconds.
+
+### Regression evidence (2026-07-18)
+
+- `npm.cmd run build:frontend`, `npm.cmd run build:cli`, `npm.cmd run verify:server-modules`, and `npm.cmd run verify:frontend-normalizers` passed; the PowerShell regression script parser and `git diff --check` also passed.
+- The isolated 393 px mobile fixture began with a five-minute prior activity, switched to a different activity id, and rendered exactly one active surface at `<1 秒`; viewport width and document scroll width both remained 393 px.
+- Screenshot evidence: `output/regression-7420/authoritative-turn-state/conversation-tail-mobile.png`.
+- The full live frontend suite was not started because the real 7420 Runtime Store is carrying this active task. No service restart, Runtime Store cleanup, or live-thread mutation was performed for testing.
+
+## Mobile durable-send and reconnect recovery (2026-07-18)
+
+### Expected behavior
+
+1. Submitting to an existing conversation renders one optimistic user bubble immediately and calls `/codex-api/runtime/send` without waiting for a frontend snapshot or `thread/resume` preflight, including when the thread was already active at submit time.
+2. If App Server reports `thread not found`, the 7420 runtime resumes that thread once and retries `turn/start` inside the same persisted request and `clientMessageId`.
+3. Transport-only failures retry after 700 ms, 2 s, 5 s, and 10 s. If the connection is still unavailable, the original bubble becomes `等待网络`; it is not converted into a definitive task failure.
+4. Browser, Android network, foreground, storage, or realtime reconnection recovery looks up the same `clientMessageId` first. If the server has no request, it resends the durable outbox entry with the same idempotency key.
+5. A recovered send marks the same bubble `已发送` or `确认中`. Definitive application failures still become `发送失败` and keep the existing edit/retry actions.
+
+### Verification
+
+- Run `npm.cmd run build:frontend`.
+- Run `npm.cmd run build:cli` and `npm.cmd run verify:server-modules`.
+- Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots` and confirm the phone fixture contains one calm `等待网络` state alongside the existing sending, reconnecting, confirming, sent, and failed states.
+- For a real-device weak-network check, send once in an idle existing thread, disable connectivity until `等待网络` appears, then restore connectivity. Confirm the same bubble is delivered once without tapping retry and without a duplicate user turn.
+
+### Regression evidence (2026-07-18)
+
+- `npm.cmd run build:frontend`, `npm.cmd run build:cli`, `npm.cmd run verify:server-modules`, and `npm.cmd run verify:frontend-normalizers` passed.
+- Headless Chromium at 393 x 852 found exactly one `等待网络`, one `正在重连 1/4`, and one definitive failed-delivery fixture; `body.scrollWidth` remained equal to the 393 px viewport width.
+- Screenshot evidence: `output/regression-7420/durable-send-reconnect/conversation-waiting-phone.png`.
+- The full live frontend suite stopped at its pre-test idle gate because the real 7420 Runtime Store contained one `start_uncertain` request. The request was preserved; no user runtime state was cleared for testing.
+
 ## New-conversation first-turn feedback budget (2026-07-17)
 
 ### Automated verification
@@ -32,6 +658,7 @@ This file tracks manual regression and feature verification steps.
 1. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -ThreadId <idle-regression-thread-id> -MeasureResponseFeedback -CaptureScreenshots`.
 2. This optional gate sends one real, uniquely labelled `请只回复：7420-ACK-...` turn into the supplied thread. Use a regression thread because the authoritative user and assistant messages remain in its history.
 3. The page-side metric correlates the composer submit, first runtime dispatch, accepted `clientMessageId` / `turnId`, `turn/started`, first assistant data, and first visible assistant frame without storing prompt or response text.
+4. A disposable thread with at most the initial 10-message render window is valid: the unrelated load-more check is skipped when no older history exists. Threads with more cached messages must still expose and pass the bounded load-more verification.
 
 ### Performance budgets
 
@@ -47,20 +674,81 @@ This file tracks manual regression and feature verification steps.
 - Screenshot evidence: `output/regression-7420/frontend-ui-regression/response-feedback-budget-phone.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the complete frontend regression, PowerShell parser validation, and `git diff --check` passed.
 
-## Mobile send-feedback latency budget (2026-07-17)
+### P1 cold-resume response revalidation (2026-07-18)
+
+- A real 393 x 852 browser run retained one failed outbox bubble across a local 7420 restart, retried it in place with a fresh idempotency key, automatically resumed the cold thread, and rendered the exact requested acknowledgement.
+- Page-side timings were: state commit `8 ms`, request dispatch `8 ms`, visible bubble/running feedback `23 ms`, server acknowledgement `5445 ms`, `turn/started` `5527 ms`, first assistant data `17495 ms`, and first visible response `17500 ms`. Data-to-paint overhead was `5 ms`.
+- The 445 ms acknowledgement budget overrun was isolated to the one-time app-server `thread/resume` path for a cold thread. The test used `gpt-5.6-sol`, `xhigh`, standard speed, so model time is reported separately from UI latency.
+- Screenshot evidence: `output/regression-7420/mobile-message-p1-20260718/response-feedback-budget-phone-passed.png`.
+- A second turn in the now-warm thread measured state commit `8 ms`, dispatch `9 ms`, visible bubble/running feedback `28 ms`, server acknowledgement `31 ms`, `turn/started` `81 ms`, first assistant data `2604 ms`, first visible response `2611 ms`, and data-to-paint overhead `7 ms`. The page contained exactly one matching user turn, one matching assistant reply, and zero horizontal overflow.
+- Warm-path screenshot evidence: `output/regression-7420/mobile-message-p1-20260718/response-feedback-warm-phone-passed.png`.
+
+### Disposable real-thread revalidation (2026-07-19)
+
+- The real-thread gate now accepts a clean disposable thread with at most the initial 10-message render window. When no older history exists, it reports an explicit load-more skip; threads above that window still require the bounded load-more and reading-anchor assertions.
+- The captured 393 x 852 full frontend regression passed all 19 surfaces. The disposable thread first screen measured `294 ms`, with 2 visible items, 2 message cards, 47 conversation DOM nodes, and no mounted command output or code lines.
+- Send feedback measured state commit `8 ms` and first visible bubble/running feedback `32 ms`.
+- The real response measured request dispatch `6 ms`, server acknowledgement `22 ms`, `turn/started` `76 ms`, first assistant data `1682 ms`, first visible response `1688 ms`, and data-to-paint overhead `6 ms`.
+- Visual review confirmed one matching user turn and one matching assistant reply without horizontal overflow. The synthetic thread was archived after verification.
+- A separate no-send run against the existing long `分析项目` thread also passed, including two bounded load-more/reading-anchor iterations, proving the short-thread exception does not weaken long-history coverage.
+- Screenshot evidence: `output/regression-7420/mobile-real-response-20260719/send-feedback-budget-phone.png` and `response-feedback-budget-phone.png`.
+
+### Empty-thread cold first-turn revalidation (2026-07-19)
+
+- The real-thread gate now recognizes a genuinely empty authoritative thread from its exact route, enabled composer, visible empty state, and absence of a conversation loader. It does not require a synthetic warm-up exchange or a zero-message local cache entry before measuring the first turn.
+- A pre-fix 393 x 852 probe showed the `/codex-api/runtime/send` resource completed in `7 ms` and the authoritative `turn/started` timestamp was `16 ms`, while the old feedback metric incorrectly waited until `747 ms` to label server acknowledgement because it required a later turn id.
+- Successful 200/202 Runtime responses now record durable server acknowledgement immediately; later notification/snapshot correlation enriches the same row with the turn id and authoritative start time without moving the acknowledgement timestamp.
+- The independent post-fix cold thread measured request dispatch `9 ms`, server acknowledgement `36 ms`, `turn/started` `12 ms`, first assistant data `2414 ms`, first visible response `2422 ms`, and data-to-paint overhead `8 ms`.
+- `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build:frontend`, PowerShell parser validation, `git diff --check`, and the complete 21-surface browser regression passed. Visual inspection confirmed the exact ACK, usable phone composer, no horizontal overflow, and no page error in `output/regression-7420/mobile-latency-cold-ack-20260719/response-feedback-budget-phone.png`.
+
+## Mobile stale thread-list and search recovery (2026-07-19)
 
 ### Automated verification
 
-1. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -ThreadId <idle-thread-id> -MeasureSendFeedback -CaptureScreenshots`.
-2. The optional gate opens the real thread at 393 x 852, switches only that isolated browser session offline, submits a unique local probe, reads `window.__cxCodexChatFeedbackMetrics`, and cleans the outbox before restoring the network.
-3. Confirm the probe creates exactly one optimistic bubble and no `/runtime/send` request can reach 7420 while the browser context is offline.
+1. Run `npm.cmd run verify:server-modules`.
+2. Run `npm.cmd run build:frontend` and `npm.cmd run build:cli`.
+3. Start the rebuilt CLI on an isolated local port, warm `/codex-api/thread-search`, create a disposable thread with `thread/start`, and immediately repeat the same search while the structural list refresh runs in the background. Archive the disposable thread after measurement.
+4. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:<isolated-port> -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -CaptureScreenshots -ScreenshotTaskName mobile-thread-list-p1-20260719 -AgentBrowserTimeoutSec 90`.
+5. Run the 393 x 852 `staleSearch=1` sidebar fixture with headless Playwright and confirm both the stale server-index match and the current local-title match remain visible.
+6. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:<isolated-port>` and confirm any repeated raw id belongs only to the first-page supplemental tail before the client merge removes it.
+
+### Expected results
+
+- Structural RPCs, structural notifications, and App Server restarts invalidate cached `thread/list` pages without deleting their renderable values.
+- An invalidated page is returned immediately while one shared background refresh rebuilds it. A result started under an older cache generation cannot overwrite a newer page or delete its in-flight request.
+- Search-index invalidation returns the previous index immediately and starts one background rebuild. A current loaded thread whose title matches locally remains visible even if that thread is absent from the stale server index.
+- When a first-page supplemental thread reappears on a later App Server cursor page, UI normalization keeps the first row and emits one stable thread identity. Duplicates inside a page or overlaps involving a non-supplemental row still fail the data gate.
+- No new full-page loader, duplicate cursor-page row inside one sidebar section, horizontal overflow, or browser error is introduced.
+
+### Regression evidence
+
+- On the isolated rebuilt server, cold search completed in `342 ms`. After `thread/start` invalidated the list and search index, the same query completed in `4 ms`; after background coordination it completed in `5 ms`. The synthetic thread was archived.
+- App Server diagnostics still recorded real background `thread/list` calls of `9239 ms` and `13599 ms`, proving the visible request no longer waits for the slow authority. The post-archive query remained successful at `284 ms` with no 502.
+- After the final frontend rebuild, the complete agent-browser regression passed all 21 surfaces, including the stale-search phone fixture, completion-notification recovery, and the real long-thread load-more checks.
+- Headless Playwright reported the two unique ids `fixture-thread-unread` and `fixture-thread-six`, zero horizontal overflow, and zero page errors.
+- The isolated sidebar-data gate found the expected single supplemental/cursor overlap (`019e9135-62f1-77d2-bdfa-072e9c10e512`), then verified 256 unique active threads. First-page and full-list reads completed in `16 ms` and `28 ms`; the frontend normalizer gate proved the earlier supplemental row wins.
+- Screenshot evidence: `output/regression-7420/mobile-thread-list-p1-20260719-final/sidebar-stale-search-playwright-phone.png`.
+
+## Mobile send-feedback latency budget and periodic review (updated 2026-07-19)
+
+### Automated verification
+
+1. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -MeasureNewThreadFeedback -CaptureScreenshots -ScreenshotTaskName mobile-feedback-review`.
+2. The optional gate opens the home composer at 393 x 852, switches only that isolated browser session offline, submits a unique local probe, and reads `window.__cxCodexChatFeedbackMetrics` plus `window.__cxCodexChatFeedbackSummary`.
+3. Confirm the probe creates exactly one optimistic bubble, becomes a durable `waiting` outbox row after bounded transport recovery, removes the false running indicator, and is not mislabeled as a definitive failure.
+4. The gate removes the isolated outbox probe before reconnecting, performs a full page reload, and confirms the timing row plus its P50/P95 summary rehydrate from local storage without sending a real task.
+5. A separate authoritative-handoff probe lets `/runtime/send` reach 7420, drops only the successful HTTP response, and confirms the page recovers the accepted request by the same client message id, enters the real thread, and preserves exactly one bubble plus its running timeline.
+
+The pending home conversation must derive `is-turn-in-progress` from its current live overlay. A `waiting` outbox row has no live overlay, so the conversation cannot retain the previous “正在创建会话” process card after bounded recovery settles.
 
 ### Performance budgets
 
 - Composer submit handler to committed optimistic message plus running state: at most 50 ms.
 - Composer submit handler to the first rendered user bubble frame: at most 200 ms.
 - Composer submit handler to the first rendered running-feedback frame: at most 200 ms.
-- Metrics retain only the latest 20 rows and record thread/request/message ids plus timings; message text and attachments are never copied into the diagnostics surface.
+- Metrics use absolute `performance.timeOrigin + performance.now()` timestamps so an in-progress row can continue across WebView recreation.
+- Metrics retain at most the latest 50 rows from the last 7 days and expose sample count, P50, P95, and maximum for state commit, bubble/running visibility, request dispatch, server acknowledgement, turn start, first assistant data/visibility, and assistant render overhead.
+- The durable diagnostics record only thread/request/message ids plus timings. Prompt text and attachments are never copied into local storage or the window diagnostics surface.
 
 ### Regression evidence (2026-07-17)
 
@@ -69,6 +757,15 @@ This file tracks manual regression and feature verification steps.
 - After removing the redundant idle-send recovery preflight, the same offline gate passed again with `stateCommitMs=9`, `bubbleVisibleMs=52`, and `runningVisibleMs=52`.
 - Screenshot evidence: `output/regression-7420/frontend-ui-regression/send-feedback-budget-phone.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, and `git diff --check` passed for the timing implementation.
+
+### Periodic-review evidence (2026-07-19)
+
+- The isolated phone probe measured `stateCommitMs=1`, `bubbleVisibleMs=42`, and `runningVisibleMs=42`; the single-sample bubble P50/P95 were both `42 ms` after a full page reload.
+- After bounded offline recovery, the same provisional bubble remained `waiting` in the durable outbox, showed “等待网络”, rendered no stale running process card, and exposed no definitive retry/edit actions.
+- The accepted-request/lost-response probe recovered the real thread with the original message bubble and a `sent` delivery state in `7283 ms`, including the deliberate `1200 ms` response loss and the local App Server thread-start cost; the synthetic thread was archived afterward.
+- All 20 non-thread frontend surfaces passed at desktop, phone, and foldable sizes, including persistent outbox recovery, resume recovery, and blocked completion-notification recovery.
+- Screenshot evidence: `output/regression-7420/mobile-feedback-persistence-final2-20260719/new-thread-feedback-budget-phone.png`, `new-thread-offline-waiting-phone.png`, and `new-thread-authoritative-handoff-phone.png`.
+- `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed.
 
 ## Background plugin RPC contention control (2026-07-17)
 
@@ -166,19 +863,19 @@ This file tracks manual regression and feature verification steps.
 - Resume recovery is immediate on the first attempt and retains the existing bounded 0 / 4500 / 12000 ms Android fallback schedule.
 - Repeated Capacitor `appStateChange` and `resume` events remain protected by the existing 2500 ms Android debounce.
 
-## Offline send preflight recovery (2026-07-17)
+## Offline runtime-send recovery (2026-07-17)
 
 ### Fault case
 
 1. Load an existing idle thread at 393 x 852, then switch the browser context to fully offline before submission.
 2. Send a unique prompt and confirm it appears immediately with the running timeline.
-3. Confirm thread-state recovery and thread-resume preflights use the same bounded retry policy as `runtime/send`, showing visible reconnect progress instead of failing before the send coordinator is reached.
+3. Confirm the durable `runtime/send` coordinator itself shows bounded reconnect progress; no separate thread-state or thread-resume request may fail before that coordinator is reached.
 4. Keep the browser offline through both delays and confirm the original prompt remains as one failed bubble with one retry action and a durable failed outbox entry.
 
 ### Expected results
 
-- A transport failure at any network-dependent stage of the send path receives consistent `1/2` and `2/2` feedback.
-- Definitive resume or permission failures remain immediate and are not retried.
+- A transport failure after durable local ownership receives consistent bounded retry feedback.
+- Definitive Runtime or permission failures remain immediate and are not retried.
 - No request reaches 7420 while the browser context is offline, so the failed local bubble cannot represent a duplicated server turn.
 - An idle-thread failure clears the temporary running/reconnecting card. If the thread was already running before submission, failed steering restores its previous activity instead of falsely stopping the existing task.
 - Local transport errors remain attached to the failed message bubble and global connection state; they never populate the thread-level turn error used for authoritative task failures.
@@ -258,18 +955,18 @@ This file tracks manual regression and feature verification steps.
 
 ### Manual verification
 
-1. From the new-conversation screen, submit a first message and confirm a provisional bubble and running timeline appear before `thread/start` returns.
-2. Confirm the app enters the authoritative thread as soon as `thread/start` returns, while the first `/runtime/send` remains pending in the background.
-3. Interrupt the first `/codex-api/runtime/send` response after the thread exists. Confirm the first bubble follows the same `发送中 → 正在重连 1/2 → 已发送` path as an existing conversation.
-4. Keep the connection unavailable through both retries. Confirm the newly created thread remains selected and the first bubble becomes `发送失败` with `重试`; it must not disappear or return to the empty composer.
-5. Click `重试` and confirm the first message is submitted into that existing thread exactly once.
-6. Simulate a transport failure during the preliminary `thread/start`. Confirm the client falls through to idempotent `runtime/send`, which may safely create and recover the thread instead of blindly retrying `thread/start`.
+1. From the new-conversation screen, submit a first message and confirm a provisional bubble and running timeline appear before any network response.
+2. Confirm the first network ownership boundary is `/codex-api/runtime/send`; the browser must not wait for a separate `thread/start` RPC before the idempotent request is persisted by 7420.
+3. Background or lock the Android device immediately after the optimistic bubble appears. Confirm the Runtime Store contains the original `clientMessageId` and continues `thread/start` / `turn/start` after the WebView is suspended.
+4. Interrupt the first `/codex-api/runtime/send` response after 7420 accepts it. Confirm lookup by the same client id recovers the real thread without submitting a duplicate prompt.
+5. Keep the connection unavailable through bounded retries. Confirm the provisional bubble becomes `等待网络` and remains available for foreground reconciliation.
+6. Restore the connection and confirm the same visual bubble moves into the authoritative thread exactly once; a definitive failure retains `发送失败`, `重试`, and `编辑` actions.
 
 ### Expected results
 
 - New and existing conversations share one bounded runtime-send recovery implementation and one delivery-state vocabulary.
-- The provisional home view is memory-only; the real thread adopts the same optimistic message id and the route changes before first-turn completion.
-- Preliminary `thread/start` is never automatically replayed because it has no client idempotency key; transport uncertainty falls through to the idempotent runtime endpoint.
+- The provisional home view is memory-only; the real thread adopts the same optimistic message id after the durable runtime endpoint returns or recovery finds its request.
+- New-thread delivery has no frontend `thread/start` preflight. The server persists `pending_start` under `clientMessageId` before creating the thread, closing the immediate-lock-screen loss window.
 - Once a thread id exists, a failed first message retains the complete request context and uses the same in-bubble retry action as any other failed message.
 - A recovered or acknowledged first send is marked `已发送` until authoritative history replaces the optimistic bubble.
 
@@ -280,6 +977,31 @@ This file tracks manual regression and feature verification steps.
 - `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots` passed desktop, phone, and foldable checks, including bounded reconnect states, retry affordance, stable running time, history loading, and overflow guards.
 - Mobile visual review confirmed that delivery feedback remains inline and compact, with no blocking dialog or additional loading layer.
 - The delayed-runtime handoff probe entered authoritative thread `019f7081-1e38-7731-ac15-7a997d0e1dbf` with the bubble still `sending`, captured the route state, then archived the probe thread. The measured route time was `5773 ms`, dominated by the real `thread/start`; it did not include the simulated 1200 ms runtime response or bounded retry completion.
+
+## Immediate durable runtime acceptance (2026-07-19)
+
+### Manual verification
+
+1. Start a rebuilt isolated bridge, submit a first message with a stable `clientMessageId`, and measure the `/codex-api/runtime/send` response separately from the later authoritative thread and turn ids.
+2. Confirm the response is HTTP 202 with `pending_start` or `starting` after the Runtime Store row exists; the HTTP request must not wait for `thread/start` or `turn/start`.
+3. While `thread/start` continues, confirm the home conversation keeps one `confirming` provisional bubble and does not restore the same draft into the composer.
+4. Confirm `thread/started` triggers immediate outbox reconciliation, adopts the authoritative thread exactly once, navigates to it, and keeps the running timeline until the turn settles.
+5. Repeat the same request while its start is in flight. Confirm the bridge returns the same persisted request and executes only one start chain. Restart recovery may resume a threadless `pending_start` with the same id.
+6. On Windows, inspect the `thread/start` params and confirm only `features.shell_snapshot=false` is injected. The actual project cwd remains the thread cwd; OpenAI Developer Docs MCP, project AGENTS, skills, and hooks remain enabled.
+
+### Expected results
+
+- Durable acceptance is normally visible in under 500 ms even when Codex needs several seconds to collect Git metadata or initialize MCP.
+- Slow startup continues in the persistent 7420 process after the WebView is suspended. A background failure updates the same Runtime Store row to `failed`; it cannot create an unhandled rejection or a duplicate turn.
+- Existing-thread sends return `starting` with their known thread id. New-thread sends return `pending_start` without inventing a temporary thread id.
+- Foreground request lookup is bounded. Android native monitoring remains the authority while the WebView is backgrounded or frozen.
+
+### Regression evidence (2026-07-19)
+
+- `npm.cmd run verify:server-modules` passed. The smoke test covers immediate `pending_start` / `starting`, HTTP 202, one in-flight start per client id, conflicting-content rejection, background completion, restart recovery, plan fallback, and interrupt compatibility.
+- `npm.cmd run build:frontend` and `npm.cmd run build:cli` passed. Vite reported only the existing large-chunk advisory.
+- A real isolated 17422 request returned HTTP 202 `pending_start` in `117 ms`, bound authoritative thread and turn ids after `5574 ms`, and completed after `14292 ms`; synthetic thread `019f778d-924e-76b3-a9da-880eba4ed0df` was archived.
+- The final agent-browser regression passed desktop, 393 x 852 phone, and 884 x 1104 foldable surfaces against the rebuilt 17422 bridge. The first bubble and running feedback rendered in `41 ms`; the browser received HTTP 202 in `17 ms`, visibly crossed the provisional `confirming` state, then bound the authoritative thread without duplicating the bubble. Lost-response recovery preserved one sent bubble and one running timeline, then archived synthetic thread `019f7799-4a73-7db1-b776-410e214df398`. Screenshots are under `output/regression-7420/mobile-async-handoff-20260719-final/`.
 
 ## Persistent message outbox recovery (2026-07-17)
 
@@ -2909,10 +3631,14 @@ This file tracks manual regression and feature verification steps.
 2. 观察滚动过程中是否出现明显掉帧、白块、延迟跟手或 hover 控件抖动。
 3. 在会话中切换到另一条有历史消息的线程，观察切换时顶部加载提示和内容过渡。
 4. 打开侧栏，再关闭侧栏，检查遮罩、抽屉和主内容切换是否仍然平滑。
-5. 在消息列表底部观察“回到底部”按钮、消息卡片、队列区、标题栏和输入区的视觉层级是否更轻。
+5. 在没有新消息时手动向上滚动离开底部，确认页面仍显示居中的“回到底部”按钮；点击后应恢复自动追随。
+6. 停留在较早消息处，等待图片、代码块或运行详情高度变化，确认当前阅读位置不被浏览器原生滚动锚定二次推移。
+7. 使用键盘 Tab 聚焦消息列表和“回到底部”按钮，确认焦点可见且 Enter 可执行返回。
 
 #### Expected Results
 - 长会话滚动时，页面跟手更稳定，不应再出现明显连续掉帧。
+- 离开底部超过约 24px 后，即使没有新输出也能随时返回底部；有新输出时同一按钮显示未读提示。
+- 会话列表只使用组件自己的锚定策略，图片加载、虚拟窗口变化和历史展开不应发生双重位移。
 - 会话切换仅保留低感知过渡，不出现滤镜感或重阴影拖影。
 - 标题栏、消息卡片、队列区和输入区整体更平、更轻，视觉层级更统一。
 - 侧栏抽屉与主内容的切换应顺滑，不应因遮罩或重模糊造成明显性能负担。
@@ -3690,23 +4416,23 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
-### Feature: 产品化运行状态与强制恢复
+### Feature: 分层运行状态与强制恢复
 
 #### Prerequisites
-- 当前构建已包含 runtime 状态摘要和统一任务状态条。
+- 当前构建已包含 runtime 状态摘要、标题栏紧凑连接入口和会话尾部任务状态。
 - 使用临时服务 `http://127.0.0.1:17423` 验证，不影响正在运行的 7420。
 
 #### Steps
 1. 打开一个已有线程页面。
-2. 确认线程顶部显示运行状态条，包含发送、接收、执行、收敛四段状态。
-3. 点击状态条里的强制恢复按钮。
-4. 切换到 393x852 移动视口，确认状态条不会造成横向滚动。
+2. 确认标题栏只保留连接点和刷新入口，不再重复显示任务阶段；任务进度显示在会话尾部稳定条目中。
+3. 点击标题栏刷新入口执行强制恢复。
+4. 切换到 393x852 移动视口，确认异常连接标签、刷新按钮和会话尾部状态都不会造成横向滚动。
 
 #### Expected Results
-- 用户可以直接看到当前任务是否发送、执行、收敛或需要恢复。
-- 强制恢复按钮调用同一套 reconcile 流程，不重复触发任务。
+- 顶部负责全局连接和恢复，会话尾部负责当前任务进度，消息气泡负责单条发送状态，三者不重复抢占空间。
+- 强制恢复入口调用同一套 reconcile 流程，不重复触发任务。
 - 恢复成功后显示轻量 Toast，不用阻塞式弹窗。
-- 移动端状态条保持一行紧凑展示，按钮收敛为图标尺寸。
+- 移动端连接入口保持一行紧凑展示，按钮收敛为触摸友好的图标尺寸。
 
 #### Regression Evidence
 - 2026-06-01 静态验证：`git diff --check` 通过。
@@ -4436,7 +5162,7 @@ This file tracks manual regression and feature verification steps.
 5. 未配置 OpenAI API key 时重复转写，确认后端仍回退到原 ChatGPT 登录态代理链路。
 6. 上传超过默认请求体限制的音频 multipart 请求，确认接口返回 `413` 和可读错误。
 7. 在移动端或窄屏开始一次任务后，立即观察底部停止按钮，确认短暂防误触窗口内不会展示停止按钮。
-8. 任务进行中点击 composer 停止按钮和运行状态条停止按钮，确认 `/codex-api/runtime/interrupt` payload 分别包含 `source=composer-stop` 或 `source=runtime-status-stop`，并带有 `requestedAtIso`、`clientElapsedMs`、截断后的 `userAgent`。
+8. 任务进行中点击 composer 停止按钮；回归夹具保留的运行状态条停止按钮可继续用于验证第二入口。确认 `/codex-api/runtime/interrupt` payload 分别包含 `source=composer-stop` 或 `source=runtime-status-stop`，并带有 `requestedAtIso`、`clientElapsedMs`、截断后的 `userAgent`。
 
 #### Expected Results
 - 官方转写链路默认补齐 `model=gpt-4o-transcribe` 和 `response_format=json`，前端能继续从返回 JSON 中提取文本。
@@ -10636,20 +11362,23 @@ This file tracks manual regression and feature verification steps.
 5. Confirm labeled roots such as `ZXSAAS-mini` match their workspace root label.
 6. Confirm each sampled project row has one project-level new-thread action.
 7. Confirm sampled empty workspace projects show `暂无会话`.
+8. Confirm the initial home navigation reports `home workspace projects ready in <ms>` and reaches the sampled project count within the 15000 ms budget.
 
 #### Expected Results
 - The frontend regression fails if desktop workspace roots stop appearing at the top of the home sidebar in the same order.
 - The regression fails if an empty workspace-root project loses its empty-state text or new-thread action.
 - The assertion is dynamic and follows the current `/codex-api/workspace-roots-state` response instead of hard-coding `codexui`.
+- A slow initial `thread/list` may settle before parity is asserted, but the regression still fails when workspace projects exceed the explicit 15000 ms home-navigation budget.
 
 #### Rollback/Cleanup Notes
 - Screenshot artifacts are saved under `output/regression-7420/automated-workspace-root-parity/` when `-CaptureScreenshots` is used.
-- To roll back, remove `Read-HomeWorkspaceProjectMetrics`, `Assert-WorkspaceRootProjectParity`, the `/codex-api/workspace-roots-state` check from `scripts/regression-7420-frontend.ps1`, and this test section.
+- To roll back, remove `Read-HomeWorkspaceProjectMetrics`, `Wait-HomeWorkspaceProjectMetrics`, `Assert-WorkspaceRootProjectParity`, the `/codex-api/workspace-roots-state` check from `scripts/regression-7420-frontend.ps1`, and this test section.
 
 #### Regression Evidence
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName automated-workspace-root-parity` passed. The run checked `/codex-api/workspace-roots-state` before home rendering, asserted the real home sidebar project rows match the first sampled workspace roots, then passed home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 screenshot artifact: `output/regression-7420/automated-workspace-root-parity/home-desktop.png`.
+- 2026-07-20 initial-load timing gate: the first observed run exposed a premature parity assertion while `thread/list` took about 11 seconds. After adding bounded convergence polling, the complete frontend regression passed with 21 project groups visible, the first three sampled roots ready in 4896 ms, and the 15000 ms budget still enforced.
 
 ### Feature: P1 Codex Desktop project-order sidebar parity
 
@@ -10847,11 +11576,11 @@ This file tracks manual regression and feature verification steps.
 1. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420`.
 2. Confirm the script checks `/health` and `/codex-api/health`.
 3. Confirm pinned thread ids from `/codex-api/pinned-threads` are non-empty strings with no duplicates.
-4. Confirm readable pinned thread ids from the first 20 sampled pins are present in the active `thread/list` data source.
+4. Confirm readable active pinned thread ids from the first 20 sampled pins are present in the active `thread/list` data source, while readable archived pins remain excluded from it.
 5. Confirm the computed pinned section preserves `/codex-api/pinned-threads` order.
 6. Confirm the active first page does not exceed the requested limit plus the supplemental pinned read limit.
 7. Confirm archived first page and active cursor pages do not exceed the requested `thread/list` limit.
-8. Confirm workspace `pinnedProjectIds` are present in `projectOrder` or raw `order`, and the computed sidebar project order promotes pinned projects first.
+8. Confirm current Codex project ids in `projectOrder` and `pinnedProjectIds` resolve through `local-projects` to workspace roots, and the computed sidebar order promotes those pinned projects first without rendering opaque ids.
 9. Confirm each real project group's latest 5 thread preview is newest-first.
 
 #### Expected Results
@@ -12797,6 +13526,7 @@ This file tracks manual regression and feature verification steps.
 - Install an APK built after the task-pet native service was added.
 - Configure a reachable 7420 server and allow Android's “display over other apps” permission.
 - Keep at least one conversation running; optionally leave another waiting for an approval or user input.
+- On Android 13 or newer, begin once from a fresh install or cleared app storage with notification permission not yet decided.
 
 #### Steps
 
@@ -12805,19 +13535,25 @@ This file tracks manual regression and feature verification steps.
 3. Confirm the pet remains visible after switching to another app. Press and drag it across the screen, verify the initial press responds immediately, the CX companion changes to its forward-leaning dragging pose, dragging tracks the finger, and release settles against the nearest edge without leaving the screen before restoring the current task pose.
 4. With no records, confirm the idle companion defaults to a 48 dp bubble with a 36 dp visual. Start work and confirm it restores as a proportionally smaller 72 x 79 dp companion; verify coding, amber waiting, completed, and dragging artwork still follows the real state.
 5. Tap the pet and confirm the progress panel opens with a short reveal transition without moving the pet away from its screen position. Repeat from both screen edges and rapidly toggle twice to check interruption safety.
-6. Confirm the header shows a 48 dp CX Logo action and a 48 dp × action instead of text buttons, plus no more than two `最近会话` rows. Tap each recent row with CX-Codex already running and confirm it opens the exact thread. Force-stop the Activity while keeping the service scenario reproducible, then repeat from a cold Activity launch and confirm the pending thread id survives bridge creation and opens the same exact chat instead of the platform home page. Tap the CX Logo and confirm CX-Codex comes to the foreground without changing the selected conversation.
+6. Confirm the header shows a 48 dp CX Logo action and a 48 dp × action instead of text buttons, plus no more than two `最近会话` rows. Save each of `http://host:7420`, `http://host:7420/`, `http://host:7420/#/`, and `http://host:7420/#/thread/old` as the connection address; tap each recent row with CX-Codex already running and confirm every form opens the exact thread through one canonical `/#/thread/:threadId` route. Force-stop the Activity while keeping the service scenario reproducible, then repeat from a cold Activity launch and confirm the pending thread id survives bridge creation and opens the same exact chat instead of the platform home page. Clear the configured server, tap a completion notification, complete first-run server setup, and confirm that target still opens. Kill the process after the Intent is captured but before WebView navigation, relaunch, and confirm the persisted target replays. Open a different thread first and confirm it cannot acknowledge or clear the pending target. Open an active/no-progress task with visible messages, navigate elsewhere, background and resume the App, and confirm the old target does not force-open again. Repeat with an unavailable or empty target and confirm it remains pending. Tap the CX Logo and confirm CX-Codex comes to the foreground without changing the selected conversation.
 7. Tap `关闭浮窗`, confirm an inline confirmation explains that the feature can be reopened from Settings, then cancel once. Open it again, confirm close, and verify the overlay plus foreground notification disappear and the Settings switch reads off; enable it again from Settings.
 8. Confirm no manual `最小化` action remains. Clear all read records and verify the idle pet automatically becomes the 48 dp bubble; tap it to inspect the idle panel, collapse it, and confirm it returns to the bubble. Start another task and confirm the 72 x 79 dp pet restores automatically without an edge-position jump.
 9. Restart the foreground service and confirm the last screen position persists while idle/full presentation is derived from current records instead of stale minimized preferences.
 10. Tap a task row and confirm CX-Codex returns to the exact `/thread/:threadId` conversation. For a completed row, confirm tapping alone does not clear it; it is removed only after that exact conversation finishes loading and the frontend sends the native read acknowledgement. Simulate an unavailable target once and confirm the completed record remains.
-11. Tap `回复` on a task row, confirm the overlay becomes keyboard-focusable, enter a short message, and send it. Then long-press either recent-conversation row for roughly half a second; confirm the normal open action is suppressed, the same reply input appears for that exact conversation, and a successful send promotes it into the running task list. Drop the first HTTP response after the server accepts it, retry the unchanged reply, and confirm the same `clientMessageId` is reused so only one turn exists. Verify rejected/busy/network responses leave the draft visible with an inline error instead of pretending success.
+11. Tap `回复` on a task row, confirm the overlay becomes keyboard-focusable, enter a short message, and send it. Then long-press either recent-conversation row for roughly half a second; confirm the normal open action is suppressed, the same reply input appears for that exact conversation, and a successful send promotes it into the running task list. Drop the first HTTP response after the server accepts it, background the app or recreate the service, and confirm the original `clientMessageId` is queried until the single accepted turn becomes running/completed without another POST. Separately block the POST before it reaches the server: confirm three successful not-found lookups precede one red `回复未送达 · 点击回复重试` row and retry notification, the full draft is restored by `回复`, polling/wake-lock ownership stops, and manual retry uses a fresh id. Verify definitive rejected/busy responses keep the composer draft with an inline error instead of pretending success.
 12. Leave the WebView in the background until a running task completes; on a healthy connection, confirm the row becomes completed after the next roughly 3-second snapshot poll and, when notification permission is available, a completion notification appears. Send an empty active-task snapshot and restart the foreground service; verify the unread completed row remains until step 10 is performed.
+    - On the fresh Android 13+ run, first send a real task and confirm its local bubble/outbox and native provisional task registration happen first, then `/runtime/send` is dispatched before the system notification prompt appears. The send must continue while the prompt is open.
+    - Deny the prompt once, send another task, and confirm the automatic system prompt does not repeat. Use `设置 -> 开启任务通知` to request it manually, grant it, then background or lock the device and finish a task.
+    - Confirm the completion notification contains the latest reply and opens the exact owning conversation. The permission bridge call must resolve only after the grant/deny result, not on dialog launch.
+    - On Android 8+, keep app notifications enabled but disable only the `CX-Codex 任务完成` channel. Return to Settings and confirm it shows `任务完成通道已关闭`; tap `开启任务通知` and confirm Android opens that exact channel rather than the app-wide notification page. Re-enable it and confirm the status refreshes to `已允许`.
 13. Keep the WebView active while assistant text streams. Confirm the latest assistant reply is the task row's two-line primary content and updates during streaming; phase, project, and conversation title remain compact secondary context. Background the WebView and confirm the batch snapshot continues updating the latest reply from server-side agent-message events. Deliver an older non-zero `lastEventSeq` poll after a newer completed snapshot and confirm the row cannot return to running.
-14. Disconnect the server for two consecutive poll attempts and confirm active rows change to amber `网络中断，等待同步` instead of continuing a false running timer. Restore the server and confirm the next authoritative snapshot restores running, waiting, or completed state. Return a partial snapshot once and confirm omitted rows show `暂时无法确认状态` while polling continues.
+14. Disconnect the server for two consecutive poll attempts and confirm active rows change to amber `网络中断，等待同步` instead of continuing a false running timer. While a task is active, enable then disable airplane mode, or switch the default network between Wi-Fi and mobile data. Confirm the first callback registered at service startup does not create an extra request; a later known network recovery immediately starts one authoritative snapshot and rebuilds SSE. If a snapshot is already in flight, confirm exactly one follow-up runs instead of a parallel request. Verify `networkRecoveryCount`, `lastDefaultNetworkAvailableAtMs`, and the next `lastSnapshotSuccessAtMs` in task-monitor diagnostics, then confirm running, waiting, or completed state is restored. Return a partial snapshot once and confirm omitted rows show `暂时无法确认状态` while polling continues.
 15. Rotate the device or change the fold state with the pet near an edge; confirm the panel closes safely, the mascot or minimized bubble settles inside the new bounds, and a short landscape viewport shows at most three task rows.
 16. Disable the setting, then confirm the overlay and its ongoing foreground-service notification disappear; this remains the full-close action, unlike minimization.
-17. Run `npm.cmd run mobile:android:sync`, then run `android\gradlew.bat assembleDebug` with the documented JDK and Android SDK environment.
-18. Open `/#/__regression/task-pet` at 390 x 844 in headless Playwright, verify latest-reply copy, 48 dp icon actions, absence of the minimize control, 66 x 78 Web companion, 48 dp idle bubble with 36 dp PNG, reduced-motion PNG fallback, and capture expanded plus idle screenshots.
+17. Start an active task, lock the screen, and use `adb shell dumpsys power` to confirm `CX-Codex:TaskMonitor` is held. Finish the task and confirm the lock is released. Leave a test task with no state, event-sequence, or reply progress for 30 minutes and confirm the timed lock is not retained indefinitely.
+18. From `设置 -> 移动端连接`, confirm `后台运行` reflects `PowerManager.isIgnoringBatteryOptimizations`. Open the manual system setting, allow CX-Codex, return, and verify the row refreshes. Repeat a task after `adb shell dumpsys deviceidle force-idle`; record notification delay both before and after allowlisting instead of treating a WakeLock as proof that deep Doze network access is available.
+19. Leave one running or waiting task without state, event-sequence, detail, or reply changes for 10 minutes. Confirm one default-importance “任务已连续 10 分钟无新进展” notification appears and opens the exact owning conversation. Record `noProgressReviewScheduledAtMs` and `dumpsys alarm`, then restart the service before roughly 20 more minutes elapse and confirm the unchanged task does not alert early. Repeat after killing only the app process (not force-stop), lock the device, enter Doze, and confirm the non-exported Receiver posts one deduplicated reminder and schedules the next review without network or foreground-service restart. Allow for OS batching rather than requiring an exact minute. Then advance its event sequence or latest reply, confirm the old reminder is removed and a new 10-minute window is scheduled. Complete the task and confirm the high-importance completion notification replaces the no-progress reminder, includes the latest reply, and cancels the review alarm when no active task remains.
+20. Run `npm.cmd run mobile:android:sync`, then run `android\gradlew.bat assembleDebug` with the documented JDK and Android SDK environment. Open `/#/__regression/task-pet` at 390 x 844 in a headless browser, verify latest-reply copy, a visible `32 分钟无新进展` state, 48 dp icon actions, absence of the minimize control, 66 x 78 Web companion, 48 dp idle bubble with 36 dp PNG, reduced-motion PNG fallback, and capture expanded plus idle screenshots.
 
 #### Expected Results
 
@@ -12831,13 +13567,23 @@ This file tracks manual regression and feature verification steps.
 - Every task row carries its thread id through the Android launch intent and opens the matching conversation; the row's direct-reply action posts to `/codex-api/runtime/send` with the same thread id.
 - The panel exposes CX Logo and × icon actions with 48 dp targets plus exactly two newest known conversations. Recent rows use the same exact-thread launch intent without being mixed into task records.
 - Exact-thread navigation stores the incoming id until `BridgeActivity.onCreate()` has completed, so Capacitor's early `onNewIntent()` callback cannot consume the target before the WebView is ready.
+- Exact-thread notification navigation is durable beyond one Activity instance: Android persists the target before consuming the Intent and replays it after first-run server setup or process/WebView recreation. Vue acknowledges navigation only after the exact conversation has visible messages and content switching has finished, including for an active/no-progress task; empty, failed, or wrong-thread routes stay pending. Completed-record cleanup remains a separate non-running acknowledgement.
+- Saved connection addresses discard browser fragments and queries before launch, so copying a home or conversation URL cannot create a double-hash route that falls back to the platform home page.
 - Recent rows advertise and support a 520 ms long press. The gesture consumes the trailing click, opens the existing keyboard-focusable reply composer, and sends through the same idempotent runtime endpoint as task-row replies.
 - Full close is protected by an in-overlay confirmation, persists `taskPetEnabled=false`, and remains reversible from Settings; idle compaction is automatic and non-destructive.
 - Completed records are persisted across incoming active-only snapshots and service restarts. A row tap only launches the target; native removal waits for the matching loaded conversation's read acknowledgement. Sending a reply converts that same record back to an active task.
+- The ongoing task-pet foreground notification remains low importance, while completion alerts use the separate `cx_codex_task_completion_v2` high-importance channel and show the latest reply when available. Android 8+ must not silently absorb completion into the foreground-service channel.
+- No-progress alerts use the separate `cx_codex_task_no_progress_v1` default-importance channel. The first unchanged-progress alert is allowed after 10 minutes and later reviews are bounded to one every 20 minutes across service restarts; a newer progress timestamp resets eligibility, and completion cancels the stale reminder before raising the terminal alert.
+- Android 13+ asks for notification permission only after a real send has durable delivery ownership and `/runtime/send` has been dispatched. The prompt never blocks dispatch, is attempted automatically once per app install, and remains manually recoverable from Settings after denial. A queued follow-up uses its durable queue write as the boundary because the current turn is already running.
+- Android 8+ reports the completion channel independently from app-level permission. A blocked channel prevents a false `posted` diagnostic, remains manually recoverable through its exact system settings page, and never causes automatic task submission to navigate away.
+- Active tasks keep the native foreground monitor running even when the task-pet overlay is disabled or overlay permission is unavailable. Closing the overlay hides only the visual surface; the monitor stops automatically after the last active task settles.
+- Active tasks hold a timeout-bounded partial CPU wake lock during ordinary screen-off monitoring. Visible progress renews its 30-minute window, completion releases it immediately, and the Settings row exposes the separate deep-Doze battery-optimization boundary without automatic exemption prompts.
+- A new-conversation first send registers its stable `clientMessageId` with the native monitor before `/runtime/send`. If the WebView is backgrounded or suspended before `threadId` returns, Android resolves `/codex-api/runtime/request`, adopts the returned thread, and continues normal batch snapshot polling without requiring the app to reopen.
 - One poll batches all known active thread ids through `/codex-api/runtime/snapshots`; it does not issue one reconcile POST per task.
 - The native service preserves content during a single transient poll failure, changes active rows to an explicit waiting state after two consecutive failures, retries at the slower 7.5-second interval, and stops network polling when no active task remains.
+- Android default-network recovery immediately wakes the existing authoritative snapshot path and rebuilds SSE only while tasks are active. Initial registration and duplicate callbacks do not add traffic, an in-flight snapshot coalesces one follow-up, and service destruction unregisters the callback.
 - Non-zero event sequences are monotonic across foreground updates and background polls; degraded, partial, and disconnected snapshots cannot present themselves as confirmed running work.
-- Native direct reply persists one idempotency key for the same thread and message until the server confirms a running or settled state; transport retries cannot create duplicate turns.
+- Native direct reply persists one idempotency key for the same thread and message until the server confirms a running or settled state. Transport uncertainty queries that id without replay; three authoritative misses or a definite failure convert the full draft into a non-active manual-retry row and a fresh id is created only when the user retries.
 - Drag updates are coalesced to display frames, and the collapsed overlay does not rebuild task-row views or rewrite the foreground notification unless its active count changes.
 - Idle, working, waiting, completed, and dragging states use matching four-frame Animated WebP artwork on the visible full pet in Web and Android 9+. Android 8, reduced-motion Web rendering, and the minimized bubble use matching transparent PNG stills.
 - Idle compaction stops the hidden full native drawable; a new task restores the current animation automatically without losing the badge or its state-aware accessibility label.
@@ -12858,11 +13604,44 @@ This file tracks manual regression and feature verification steps.
 - Exact-navigation and long-press-reply pass: source inspection confirmed Capacitor invokes the overridden `onNewIntent()` from inside `BridgeActivity.load()` before the subclass's `super.onCreate()` returns; `MainActivity` now stores the target until `initialCreateComplete` and only then posts the exact `/#/thread/:threadId` load. Frontend build, Android Java compilation, `mobile:android:sync`, and `assembleDebug` passed. Headless Playwright held a recent row for 560 ms, opened the exact reply form, entered `继续处理并同步结果`, emitted the reply for `fixture-recent-one`, and separately confirmed ordinary click still emits the exact open action. The input measured 194 x 58 px, send measured 94 x 44 px, horizontal overflow stayed 0, and console errors/warnings were 0. The rebuilt APK is 12,432,351 bytes with SHA-256 `79248DE138084739C0671369B4A66EEB8C3BCC395D992E85554D619393DB4957`. No ADB device was connected, so warm/cold native Activity routing, IME focus, and real cross-app reply remain device-only checks.
 - Glanceable-progress and idle-compaction pass: `npm.cmd run build:frontend`, `npm.cmd run verify:server-modules`, `npm.cmd run mobile:android:sync`, and Android `assembleDebug` passed. The server smoke covers live agent delta plus completed-reply replacement in the batch runtime snapshot. Headless Playwright at 390 x 844 found the two real latest-reply snippets as primary card content, no manual minimize button, 48 x 48 Logo/× actions, a 66 x 78 full Web companion, and a 48 x 48 idle bubble with a 36 x 36 image. Horizontal overflow and console errors/warnings were 0; reduced motion reported `0s` animation/transition. Screenshots are `cx-pet-glanceable-progress.png` and `cx-pet-idle-mini.png`. The final rebuilt APK is 12,433,697 bytes with SHA-256 `5DF51CE5C90901C1A75260FC7AC5CE2D5FF883A4FA4E348E8830969DE33C96F9`. ADB found no connected device, so permission-enabled native overlay touch, automatic idle/full switching, and background streamed-reply visibility remain device-only checks.
 - Runtime-convergence and reply-idempotency pass (2026-07-18): `npm.cmd run verify:server-modules`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build:frontend`, `npm.cmd run build:cli`, `npm.cmd run test:7420:frontend`, and Android `testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest` passed. Coverage now includes `sync_degraded` reconciliation, terminal replay cleanup, monotonic native snapshot application, stale-running eviction, and stable client-message IDs across uncertain reply retries. Headless Chrome at 393 x 852 rendered two task rows, two recent conversations, and the direct-reply form with 0 console errors/warnings; evidence is `output/regression-7420/task-pet-runtime-convergence-20260718/task-pet-expanded-reply.png`. Local `/health` and `/codex-api/health` returned 200 before the restart attempt. The execution policy rejected the automated restart before any process change, so the existing 7420 process stayed available and the rebuilt CLI will load on the next normal restart. Android APK packaging/install was intentionally not performed in this pass.
+- Immediate-lock first-send pass (2026-07-18): frontend production build and Android `:app:testDebugUnitTest` passed after adding provisional native tracking by `clientMessageId`. The 7420 frontend regression passed at desktop, 393 x 852 phone, and 884 x 1104 foldable viewports, including persistent-outbox recovery, structured replies, stable activity timing, and foreground-recovery feedback. Independent headless Playwright with Pixel 5 emulation waited for `.live-overlay-inline-recovering` and captured `output/regression-7420/mobile-message-reliability-20260718-final/playwright-mobile-resume-recovery.png`. No APK was packaged or installed, so physical lock-screen delivery remains the next device-only gate.
+- Contextual completion-permission pass (2026-07-18): `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, Android `:app:testDebugUnitTest`, Android `:app:lintDebug`, and `git diff --check` passed. The full 7420 frontend suite passed at desktop, 393 x 852 phone, and 884 x 1104 foldable viewports, including source contracts that create `/runtime/send` before permission work, persist the one-time marker natively, open app-specific settings after permanent denial/system disable, and refresh on foreground return; persistent outbox recovery, composer, paused queue, stable activity timing, and foreground recovery also passed. Final screenshots are under `output/regression-7420/mobile-notification-permission-20260718-final/`. Lint additionally required a `SecurityException` guard for notification permission being revoked between a file-operation permission check and delivery. ADB reported no device and the SDK contains no emulator image, so the Android 13 grant/deny dialog, one-time denial behavior, lock-screen completion notification, and exact-thread tap remain the next physical-device gate. No APK was packaged or installed.
+- Bounded screen-off monitoring pass (2026-07-18): `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, Android `:app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest`, Android `:app:lintDebug`, `git diff --check`, and the complete 7420 frontend regression passed. Source contracts cover the `WAKE_LOCK` permission, active-task-only partial wake lock, 30-minute progress deadline, release-on-completion, battery-optimization state/action, and foreground refresh. Desktop, 393 x 852 phone, and 884 x 1104 foldable pages passed with final screenshots under `output/regression-7420/mobile-screenoff-monitoring-20260718-final/`; the mobile recovery screenshot was visually inspected. ADB still reports no connected device and the SDK has no emulator image, so actual screen-off lock ownership, force-idle Doze delay, vendor battery policy, and completion notification timing remain device-only checks. No APK was packaged, synced, installed, or released.
+- Long-task no-progress reminder pass (2026-07-18): `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, Android `:app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest`, Android `:app:lintDebug`, `git diff --check`, and the complete 7420 frontend regression passed. Native policy coverage proves the 10-minute threshold, one reminder per unchanged progress timestamp, reset after progress, and no alert after completion; source contracts cover persistent deduplication, a separate default-importance channel, completion supersession, and Settings copy. Independent `agent-browser` at 393 x 852 found one amber `12 分钟无新进展` row, two task rows, two recent conversations, 48 x 48 Logo/close actions, zero horizontal overflow, and no console warnings or errors; clicking the stalled row emitted the exact `fixture-waiting` conversation. The visually inspected screenshot is `output/regression-7420/mobile-no-progress-reminder-20260718-final/task-pet-no-progress-phone.png`. Local `/health` and `/codex-api/health` both returned 200 after regression. No Android device/emulator was available, so real notification-channel sound/visibility, service-restart deduplication, exact-thread notification tap, and completion replacement remain device-only checks. No APK was packaged, synced, installed, or released.
+- Completion-channel recovery and warm response-latency pass (2026-07-19): `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, Android `:app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest`, Android `:app:lintDebug`, `git diff --check`, and the complete 19-surface 7420 frontend regression passed. Source contracts cover channel-specific permission reporting, `IMPORTANCE_NONE` detection, exact `ACTION_CHANNEL_NOTIFICATION_SETTINGS` recovery, and interruption-free automatic sends. A disposable real browser thread measured state commit `6 ms`, runtime dispatch `7 ms`, user bubble/running feedback `23 ms`, server acknowledgement `25 ms`, `turn/started` `99 ms`, first assistant data `1717 ms`, first visible reply `1723 ms`, and data-to-paint overhead `6 ms`; final DOM contained exactly one measured prompt, no running residue, and no horizontal overflow. The thread was archived and final health reported zero pending RPC, queued RPC, pending server requests, and uncertain runtime requests. Visually inspected phone evidence is `output/regression-7420/mobile-completion-channel-20260719/completion-notification-recovery-phone.png` and `response-feedback-budget-phone.png`. No APK was packaged, synced, installed, or released.
+- Periodic long-task review pass (2026-07-19): Android `:app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest`, Android `:app:lintDebug`, `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, and the complete 19-surface 7420 frontend regression passed. Native policy coverage proves the 10-minute first alert, 20-minute repeat boundary, progress reset, and completion stop; source contracts cover the persisted actual reminder time and Settings cadence. Independent `agent-browser` at 393 x 852 rendered the `32 分钟无新进展` row with two tasks and two recent conversations, opened exact id `fixture-waiting`, reported document and viewport width both 393, and produced no console error. The visually inspected screenshot is `output/regression-7420/mobile-periodic-review-20260719/task-pet-periodic-review-phone.png`. No APK was synced, packaged, installed, or released; notification timing across service recreation remains a physical-device gate.
+- Default-network recovery wake pass (2026-07-19): Android `:app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest`, Android `:app:lintDebug`, `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, `git diff --check`, and the complete 19-surface 7420 frontend regression passed. Policy coverage rejects initial registration, duplicate same-network callbacks, and idle-service wakeups while accepting a known network recovery with active tasks. Source contracts prove `ACCESS_NETWORK_STATE`, initial `getActiveNetwork`, default callback registration/unregistration, immediate authoritative snapshot wake, in-flight coalescing, SSE rebuild, and content-free recovery diagnostics. Independent `agent-browser` at 393 x 852 rendered two task rows and two recent conversations, opened exact id `fixture-waiting`, reported viewport/body/root width as 393/393/393, and produced no console error. The visually inspected screenshot is `output/regression-7420/mobile-network-recovery-20260719/task-pet-network-recovery-phone.png`. ADB still had no connected device, so actual airplane-mode, Wi-Fi/mobile handoff, process recreation, and Doze recovery latency remain device-only checks. No APK was synced, packaged, installed, or released.
+- Durable exact-thread notification-navigation pass (2026-07-19): focused Android `MobileShellConfigTest` and `TaskPetRuntimePolicyTest`, Android `:app:lintDebug`, `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, `git diff --check`, and the complete 20-surface 7420 frontend browser regression passed. Native unit coverage requires only the same non-empty pending/opened thread pair to acknowledge navigation. Executable frontend policy coverage proves that an exact thread with visible messages acknowledges navigation while active, but empty, loading, switching, or wrong-thread views do not; completed-record read cleanup additionally requires the task to be non-running. Source contracts require cold `onCreate` capture before server setup, synchronous preference persistence before the one-shot Intent extra is removed, retention across asynchronous WebView dispatch, and separate native navigation/read bridge calls. The visually inspected 393 x 852 evidence is `output/regression-7420/mobile-visible-thread-ack-20260719-final/completion-notification-recovery-phone.png`; ADB found no authorized device, so first-run setup, process-death replay, exact notification tap, active-task resume non-replay, and wrong-thread non-acknowledgement remain physical-device checks. No APK was synced, packaged, installed, or released.
 
 #### Rollback/Cleanup Notes
 
 - Disable `系统悬浮窗` before uninstalling a development APK.
 - Revert `TaskPetOverlayService.java`, the task-pet methods in `MobileShellPlugin.java` and `mobileShell.ts`, the manifest permissions/service, App settings UI, regression fixture, Android documentation, parity findings, and this test section.
+
+### Feature: Recent-project sidebar ordering
+
+#### Steps
+
+1. Prepare at least three project groups: one pinned project, two unpinned projects whose latest conversations have different `updatedAtIso` values, and optionally an empty workspace root.
+2. Open the sidebar on a phone viewport and confirm the pinned project remains first.
+3. Send or resume a conversation in the older unpinned project and confirm its entire project group moves above the other unpinned project as soon as the local thread timestamp updates.
+4. Reload the page and confirm the same order is reconstructed from thread data without rewriting workspace-root order.
+5. Search for a conversation and confirm the filtered project groups still follow latest-conversation order.
+6. Run `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build:frontend`, and the targeted 7420 frontend regression.
+
+#### Expected Results
+
+- Explicitly pinned projects remain first in pin-rank order.
+- Every unpinned project is ordered by the newest `updatedAtIso` or `createdAtIso` among its conversations.
+- Projects with no conversations remain visible after projects with activity.
+- Equal or invalid timestamps retain their incoming order, preventing refresh jitter.
+- Recent-project ordering is presentation-only and does not mutate persisted workspace-root order.
+
+#### Regression Evidence (2026-07-18)
+
+- `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build:frontend`, the PowerShell parser check, and `git diff --check` passed.
+- Headless Playwright at 393 x 852 rendered `codexui` first as the pinned project, then `Playground` with a recent conversation, then the empty workspace root. The empty root remained visible and the page had no horizontal overflow. Screenshot: `output/regression-7420/recent-project-ordering-20260718/sidebar-recent-projects-mobile.png`.
+- The full live 7420 frontend suite stopped at its pre-page health gate because Runtime Store already reported one uncertain request. The live sidebar-data check was retried once and both attempts reached the same App Server `thread/list` 15-second timeout. No request was cleared or replayed for this visual-only change; the isolated fixture remained healthy.
 
 ### Feature: Lightweight mobile interaction motion
 
@@ -12884,3 +13663,70 @@ This file tracks manual regression and feature verification steps.
 - The running surface keeps one calm pulse and no longer combines sweep, spinner, and jumping-dot animations.
 - Sidebar skeleton sheen runs once instead of indefinitely.
 - Reduced-motion mode removes transforms and continuous status animation while preserving all content and actions.
+
+### Feature: Android deep-Doze terminal wake with FCM
+
+#### Steps
+
+1. Without `android/app/google-services.json` and without `GOOGLE_APPLICATION_CREDENTIALS`, run the focused Android unit test, Android lint, `npm.cmd run verify:server-modules`, and frontend build. Confirm the ordinary SSE/poll monitor still builds and the native setting reports that Firebase is not configured.
+2. Configure a Firebase Android app for `com.cxcodex.bridge`, install a newly built development APK, configure the 7420 host with an external service-account file, then open the App and confirm `设置 -> 移动端连接 -> 深度休眠通知` becomes ready.
+3. Start one mobile task and confirm `/codex-api/mobile-push/status` reports one subscribed registration without exposing the device token. Complete an unrelated desktop-only thread and confirm the device receives no wake for it.
+4. Start a mobile task, background the App, lock the screen, and wait for completion. Record server terminal event time, FCM receive time, authoritative snapshot success time, completion-notification time, and device-acknowledgement time. Require `pendingDeliveryCount` and `awaitingDeviceAckCount` to return to zero after acknowledgement.
+5. Repeat after `adb shell dumpsys deviceidle force-idle`; restore the device with `adb shell dumpsys deviceidle unforce` after the check.
+6. Repeat with the App process removed while the task remains persisted, with notification permission denied, with the completion channel disabled, and after an FCM token rotation/reinstall.
+7. Send a replayed terminal event with the same thread/turn identity and confirm only one terminal wake/notification is produced. Then complete two tracked tasks and deliver their pushes out of event-sequence order; confirm each thread wakes once. Inspect the FCM request body and confirm it contains no prompt, assistant reply, Cookie, auth key, or service URL.
+
+#### Expected Results
+
+- High-priority FCM is sent only for persisted user-visible terminal events and only to devices subscribed to the matching active thread.
+- The push is a wake signal, not task authority: Android always reconciles `/runtime/request` or `/runtime/snapshots` before showing the final completion result.
+- A delivered high-priority push can start the existing `specialUse` foreground monitor from the background; a downgraded normal-priority push cannot cold-start it and is recorded as ignored.
+- Duplicate or unrelated pushes do not mutate task state or create duplicate completion attention. Dedupe is isolated per thread, so a newer terminal event for one task cannot suppress another tracked task's older terminal event.
+- Android performs a read-only duplicate check before starting the foreground monitor and commits the event sequence only after that start succeeds. A background-start failure records `wake_failed` without claiming the event; a later delivery of the same terminal sequence may try again, while concurrent successful duplicates still converge atomically.
+- FCM HTTP 2xx is provider acceptance, not device completion. The server retains that row and resends on a 15 s / 1 min / 5 min / 15 min acknowledgement cadence until Android has applied an authoritative terminal snapshot and attempted completion attention.
+- Device-acknowledged sends are recorded by device-token hash plus terminal delivery identity, not only as one global “last key”. One acknowledgement may settle older pending terminal rows for the same app instance and thread up to its observed Runtime Store sequence. Replay remains suppressed across restart; token removal clears the bounded ledger.
+- A Service that dies after claiming a push but before terminal reconciliation can be restarted by the same high-priority event. Once terminal reconciliation is persisted, duplicate FCM wakes retry only the authenticated acknowledgement and cannot repeat the notification.
+- A new active-thread subscription bypasses the 30-second repeated-failure throttle even when another registration was just attempted. Only the same attempted signature is throttled; a signature that matches an older success but not the latest attempt remains uncertain and is registered again instead of being falsely treated as fresh.
+- Missing Firebase configuration disables only deep-Doze wake. Existing foreground service, SSE, bounded polling, network recovery, replay, and manual battery-setting paths remain intact.
+
+#### Current automated evidence (2026-07-19)
+
+- The Android policy test covers high-priority, downgraded, unrelated, and already-running service boundaries.
+- The frontend regression source gate requires per-thread hashed event-sequence dedupe pruned to the currently tracked task set.
+- Server module smoke covers registration persistence, subscription filtering, terminal classification, payload privacy, and the interleaved A -> B -> replay A case. It reopens Runtime Store between assertions to prove both successful delivery identities survive restart and confirms token removal clears the ledger.
+- Device-ack coverage proves FCM 200 remains pending across Runtime Store reopen, exposes `awaitingDeviceAckCount`, rejects an unrelated app instance, atomically settles the owning thread's observed event range, and writes the replay ledger only at that boundary.
+- Durable terminal-ledger pass: `npm.cmd run verify:server-modules`, `npm.cmd run build:cli`, Android `:app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest`, and Android `:app:lintDebug` passed. A rebuilt isolated 7421 returned `health=ok`, zero final RPC/request backlog, and `/codex-api/mobile-push/status` reported `provider=fcm`, `configurationState=not_configured`, and zero registrations without exposing credentials. The isolated service was then stopped; current 7420 remained healthy and uninterrupted.
+- Immediate mobile-push subscription policy coverage proves an unchanged attempt is throttled inside 30 seconds, a changed task subscription proceeds immediately, forced token refresh bypasses throttling, and a response-uncertain attempt cannot be hidden behind an older successful signature.
+- Immediate-subscription regression pass: Android `:app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest` and `:app:lintDebug` passed, followed by the complete 21-surface agent-browser regression against the uninterrupted current 7420. The source contract, persistent outbox, phone/foldable composer, resume recovery, blocked completion-channel action, and real long thread all passed; the long thread reported `firstUsableMs=4414`, 101 conversation DOM nodes, two message cards, and no mounted command/code expansion. Visually inspected phone evidence is `output/regression-7420/mobile-push-subscription-20260719/completion-notification-recovery-phone.png`.
+- Current-service activation pass: after confirming zero pending/queued/active RPC calls, zero pending server requests, and zero uncertain runtime requests, `npm.cmd run build:cli`, `npm.cmd run verify:server-modules`, and `git diff --check` passed. The managed restart script replaced listener PID `43056` with `34928` on port 7420; the rebuilt service returned `status=ok`, initialized app-server PID `31720`, and zero final backlog. The live Runtime Store contains `mobile_push_deliveries` with zero rows, and `/codex-api/mobile-push/status` reports `provider=fcm`, `configurationState=not_configured`, and zero registrations. The subsequent 21-surface agent-browser regression passed; the long thread reported `firstUsableMs=4936`, 101 conversation DOM nodes, two message cards, and no mounted command/code expansion. Visually inspected phone evidence is `output/regression-7420/mobile-runtime-activation-20260719/completion-notification-recovery-phone.png`.
+- Physical-device FCM/Doze latency remains pending until `google-services.json`, external service-account credentials, and a connected Android device are available. No APK was synced, packaged, installed, or released for this source-only milestone.
+
+## Mobile latest-reply persistence and tail continuity (2026-07-19)
+
+### Verification
+
+1. Run `npm.cmd run verify:server-modules` and confirm split deltas ending at a whitespace boundary remain separated.
+2. Complete an assistant message longer than 1200 UTF-16 characters and confirm `latestReply` keeps the terminal marker while dropping the oldest prefix.
+3. Seed a persisted running snapshot whose `latestReply` ends in whitespace, construct a fresh `RuntimeStateStore`, apply the next delta, and confirm the restored text and new fragment join correctly.
+4. Complete one agent message, then stream a second agent item in the same turn. Confirm its first delta replaces the previous reply and subsequent deltas append to the new item. Repeat after restoring `latestReplyItemId` from a persisted snapshot.
+5. Confirm `latestTaskPetReply()` retains the latest 260-character tail for long live and persisted assistant messages instead of freezing on the prefix.
+6. Call both `/codex-api/runtime/snapshot` and `/codex-api/runtime/snapshots` through the route smoke and confirm both use `readLocalRuntimeSnapshot`; the process-local snapshot methods must not be called.
+7. Run `npm.cmd run build:cli`, parse `scripts/regression-7420-frontend.ps1`, run `git diff --check`, then run the complete 7420 frontend regression and a 393 x 852 real-browser task-pet check.
+
+### Expected results
+
+- Restarting 7420 or its App Server cannot blank the latest reply already persisted for an Android-monitored task.
+- The first post-restart delta resumes from the persisted accumulator rather than overwriting it with a fragment.
+- The first delta from a different agent item replaces the previous commentary/final item immediately; messages from separate items are never concatenated.
+- Streaming chunk boundaries do not merge words, and terminal long replies keep the newest result visible instead of jumping back to the opening text.
+- SSE remains a wake optimization; Runtime Store snapshots remain the only state and reply authority.
+
+### Regression evidence
+
+- `npm.cmd run verify:server-modules`, `npm.cmd run build:cli`, the PowerShell parser, and `git diff --check` passed. The first complete frontend run exposed only an overly short new source-contract regex; after correcting that test harness, the complete 20-surface `npm.cmd run test:7420:frontend` regression passed.
+- The managed restart activated CLI version 2.4.0 on service PID `33164` with App Server PID `33672`. A read-only existing SQLite snapshot returned the same completed state, 12-character reply length, and SHA-256 hash through both the single and Android batch endpoints after restart, without printing reply content.
+- Independent `agent-browser` at 393 x 852 rendered two task rows with current latest-reply text, two recent conversations, no horizontal overflow (`viewport/document/body/root width = 393`), and no page or console error. Visually inspected evidence: `output/regression-7420/mobile-latest-reply-recovery-20260719/task-pet-phone.png`.
+- Final health was `ok` with zero active/pending/queued RPC calls, zero pending server requests, and zero uncertain runtime requests. ADB still listed no connected device, so physical lock-screen, Doze, completion-channel, and system-overlay verification remains the device-only gate; no APK was synced, packaged, installed, or released.
+- Multi-item continuation pass: a read-only scan of the latest 1317 relevant Runtime Store events found two real turns with multiple agent-message items and a maximum of four items in one turn (`commentary` followed by `final_answer`), without reading or printing message bodies. Server smoke proves first-delta replacement, same-item continuation, and persisted item ownership; frontend normalizer smoke proves the 260-character tail retains its terminal marker. `npm.cmd run build:frontend`, `npm.cmd run build:cli`, `npm.cmd run verify:server-modules`, `npm.cmd run verify:frontend-normalizers`, the parser/diff checks, and the complete 20-surface browser regression passed. Independent 393 x 852 browser evidence again showed two task rows, two recent conversations, exact 393-pixel document/body/root width, and no page error: `output/regression-7420/mobile-multi-item-reply-20260719/task-pet-phone.png`.
+- Terminal-notification ordering review: among 24 recent terminal turns, no final agent completion or final delta arrived after the turn terminal event. Nineteen completed answers reached terminal 51–105ms after `item/completed`; five terminal turns had no final agent item and legitimately fall back to terminal detail. Android source contracts require `latestReply` assignment before terminal branching and now persist only `latest_reply/detail/reply_retry` as the notification body source, allowing ADB/device diagnostics to prove content freshness without storing the content itself.
+- Notification-body diagnostics verification: focused Android `TaskPetRuntimePolicyTest`, Android `lintDebug`, `npm.cmd run build:frontend`, PowerShell parser validation, `git diff --check`, and the complete 20-surface 7420 frontend browser regression passed. Final live health reported initialized App Server PID `33164`, zero active/pending/queued RPC calls, zero pending server requests, zero uncertain requests, and an empty mobile-push outbox. FCM remains explicitly `not_configured` with no registered device, and ADB still reports no connected device, so the physical lock-screen/Doze/notification/overlay matrix remains pending.
