@@ -254,7 +254,7 @@ export class AppServerProcess {
 
   private captureNotificationState(notification: { method: string; params: unknown }): void {
     captureAppServerNotificationState(notification, {
-      clearThreadListCache: () => this.rpcCache.clearThreadList(),
+      invalidateThreadListCache: () => this.rpcCache.invalidateThreadList(),
       clearPlanModeTurnByThreadOrTurn: (threadId, turnId) => {
         this.serverRequests.clearPlanModeTurnByThreadOrTurn(threadId, turnId)
       },
@@ -367,7 +367,7 @@ export class AppServerProcess {
   async rpc(method: string, params: unknown): Promise<unknown> {
     await this.ensureInitialized()
     if (shouldInvalidateThreadListCacheForRpc(method)) {
-      this.rpcCache.clearThreadList()
+      this.rpcCache.invalidateThreadList()
     }
     if (getAppServerRpcQueuePriority(method, params) === 0) {
       return this.call(method, params)

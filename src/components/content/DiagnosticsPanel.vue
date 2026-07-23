@@ -15,6 +15,36 @@
 
     <p v-if="error" class="diagnostics-error">{{ error }}</p>
 
+    <section class="diagnostics-section diagnostics-section-wide">
+      <div class="diagnostics-section-header">
+        <div>
+          <h2>消息响应复盘</h2>
+          <p class="diagnostics-section-description">本机最近 7 天的发送与首回复耗时，不包含消息内容。</p>
+        </div>
+        <span class="diagnostics-badge" :data-tone="messageFeedbackTone">{{ messageFeedbackLabel }}</span>
+      </div>
+      <div v-if="!chatFeedbackSummary?.sampleCount" class="diagnostics-empty">
+        发送一条消息后，这里会显示本地反馈、服务确认、首段回复和渲染开销；每项至少 5 个样本后再判断趋势。
+      </div>
+      <ul v-else class="diagnostics-feedback-list">
+        <li v-for="row in messageFeedbackRows" :key="row.stage" :data-tone="row.tone">
+          <div class="diagnostics-feedback-copy">
+            <strong>{{ row.label }}</strong>
+            <span>{{ row.description }}</span>
+            <small>{{ row.count }} 次 · {{ row.statusLabel }}</small>
+          </div>
+          <div class="diagnostics-feedback-values">
+            <span><small>P50</small><strong>{{ formatDurationMs(row.p50Ms) }}</strong></span>
+            <span><small>P95</small><strong>{{ formatDurationMs(row.p95Ms) }}</strong></span>
+            <span><small>复盘线</small><strong>≤ {{ formatDurationMs(row.targetMs) }}</strong></span>
+          </div>
+        </li>
+      </ul>
+      <p v-if="chatFeedbackSummary?.sampleCount" class="diagnostics-feedback-note">
+        最近一次发送 {{ messageFeedbackUpdatedLabel }}；P95 超过复盘线只表示需要继续定位，不代表任务失败。
+      </p>
+    </section>
+
     <div class="diagnostics-grid">
       <section class="diagnostics-section">
         <div class="diagnostics-section-header">
@@ -431,8 +461,30 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import {
+  readChatFeedbackMetricSummary,
+  type ChatFeedbackMetricSummary,
+  type ChatFeedbackStageName,
+} from '../../composables/chatFeedbackMetrics'
 
 type Tone = 'ok' | 'warning' | 'danger' | 'neutral'
+
+type MessageFeedbackTarget = {
+  stage: ChatFeedbackStageName
+  label: string
+  description: string
+  targetMs: number
+}
+
+const MESSAGE_FEEDBACK_MIN_SAMPLE_COUNT = 5
+const MESSAGE_FEEDBACK_TARGETS: MessageFeedbackTarget[] = [
+  { stage: 'stateCommit', label: '本地状态', description: '点击发送到状态提交', targetMs: 50 },
+  { stage: 'bubbleVisible', label: '气泡可见', description: '点击发送到消息绘制', targetMs: 200 },
+  { stage: 'requestDispatched', label: '请求发出', description: '点击发送到 Runtime 请求', targetMs: 500 },
+  { stage: 'serverAcknowledged', label: '服务确认', description: '点击发送到服务端接收', targetMs: 5_000 },
+  { stage: 'firstAssistantData', label: '首段回复', description: '点击发送到首段数据', targetMs: 45_000 },
+  { stage: 'assistantRenderOverhead', label: '渲染开销', description: '首段数据到屏幕可见', targetMs: 250 },
+]
 
 type SlowRpcRecord = {
   method: string
@@ -836,6 +888,7 @@ const emptyHookDiagnostics: HookDiagnostics = {
 }
 
 const diagnostics = ref<DiagnosticsData | null>(null)
+const chatFeedbackSummary = ref<ChatFeedbackMetricSummary | null>(null)
 const error = ref('')
 const isLoading = ref(false)
 let refreshTimer: number | null = null
@@ -874,6 +927,44 @@ const recentRemoteControlNotifications = computed(() => (
 ))
 const unknownStatuses = computed(() => diagnostics.value?.statusDiagnostics?.recentUnknownStatuses ?? [])
 const unknownStatusCount = computed(() => diagnostics.value?.statusDiagnostics?.unknownStatusCount ?? 0)
+
+const messageFeedbackRows = computed(() => MESSAGE_FEEDBACK_TARGETS.map((target) => {
+  const summary = chatFeedbackSummary.value?.stages[target.stage]
+  const count = summary?.count ?? 0
+  const p50Ms = summary?.p50Ms ?? null
+  const p95Ms = summary?.p95Ms ?? null
+  const hasEnoughSamples = count >= MESSAGE_FEEDBACK_MIN_SAMPLE_COUNT && p95Ms !== null
+  const tone: Tone = !hasEnoughSamples ? 'neutral' : p95Ms > target.targetMs ? 'warning' : 'ok'
+  return {
+    ...target,
+    count,
+    p50Ms,
+    p95Ms,
+    tone,
+    statusLabel: !hasEnoughSamples ? '样本积累中' : tone === 'warning' ? '超过复盘线' : '当前达标',
+  }
+}))
+
+const messageFeedbackTone = computed<Tone>(() => {
+  if (!chatFeedbackSummary.value?.sampleCount) return 'neutral'
+  const evaluableRows = messageFeedbackRows.value.filter((row) => row.count >= MESSAGE_FEEDBACK_MIN_SAMPLE_COUNT)
+  if (evaluableRows.length === 0) return 'neutral'
+  return evaluableRows.some((row) => row.tone === 'warning') ? 'warning' : 'ok'
+})
+
+const messageFeedbackLabel = computed(() => {
+  const sampleCount = chatFeedbackSummary.value?.sampleCount ?? 0
+  if (sampleCount === 0) return '等待样本'
+  if (messageFeedbackTone.value === 'warning') return `${sampleCount} 次 · 需复盘`
+  if (messageFeedbackTone.value === 'ok') return `${sampleCount} 次 · 当前达标`
+  return `${sampleCount} 次 · 采集中`
+})
+
+const messageFeedbackUpdatedLabel = computed(() => {
+  const updatedAtMs = chatFeedbackSummary.value?.newestSubmitStartedAtMs
+  if (!updatedAtMs) return '-'
+  return formatTime(new Date(updatedAtMs).toISOString())
+})
 
 const launchPolicyLabel = computed(() => {
   const policy = appServer.value.launchPolicy
@@ -1046,6 +1137,7 @@ onUnmounted(() => {
 })
 
 async function loadDiagnostics(options: { silent?: boolean } = {}): Promise<void> {
+  chatFeedbackSummary.value = readChatFeedbackMetricSummary()
   if (!options.silent) {
     isLoading.value = true
   }
@@ -1080,6 +1172,13 @@ function formatTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+function formatDurationMs(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '-'
+  if (value < 1_000) return `${Math.round(value)}ms`
+  if (value < 10_000) return `${(value / 1_000).toFixed(1)}s`
+  return `${Math.round(value / 1_000)}s`
 }
 
 function formatServerRequestKind(kind: PendingServerRequestDiagnostics['kind']): string {
@@ -1247,6 +1346,10 @@ function formatAge(value: string): string {
   @apply text-base font-semibold text-slate-950;
 }
 
+.diagnostics-section-description {
+  @apply mt-1 max-w-2xl text-sm text-slate-600;
+}
+
 .diagnostics-badge {
   @apply rounded-full border px-2.5 py-1 text-xs font-semibold;
 }
@@ -1351,6 +1454,49 @@ function formatAge(value: string): string {
   @apply font-mono text-slate-500;
 }
 
+.diagnostics-feedback-list {
+  @apply flex flex-col gap-2;
+}
+
+.diagnostics-feedback-list li {
+  @apply flex items-center justify-between gap-4 rounded-md bg-stone-50 px-3 py-2.5;
+}
+
+.diagnostics-feedback-list li[data-tone="warning"] {
+  @apply bg-amber-50;
+}
+
+.diagnostics-feedback-copy {
+  @apply flex min-w-0 flex-col gap-0.5;
+}
+
+.diagnostics-feedback-copy strong {
+  @apply text-sm font-semibold text-slate-900;
+}
+
+.diagnostics-feedback-copy span,
+.diagnostics-feedback-copy small,
+.diagnostics-feedback-values small,
+.diagnostics-feedback-note {
+  @apply text-xs text-slate-600;
+}
+
+.diagnostics-feedback-values {
+  @apply grid shrink-0 grid-cols-3 gap-4 text-right;
+}
+
+.diagnostics-feedback-values span {
+  @apply flex min-w-14 flex-col gap-0.5;
+}
+
+.diagnostics-feedback-values strong {
+  @apply font-mono text-xs font-semibold text-slate-900;
+}
+
+.diagnostics-feedback-note {
+  @apply mt-3;
+}
+
 @media (max-width: 640px) {
   .diagnostics-panel {
     @apply gap-3 px-3 py-3;
@@ -1366,6 +1512,18 @@ function formatAge(value: string): string {
 
   .diagnostics-section {
     @apply p-3;
+  }
+
+  .diagnostics-section-header {
+    @apply items-start;
+  }
+
+  .diagnostics-feedback-list li {
+    @apply flex-col items-stretch gap-2;
+  }
+
+  .diagnostics-feedback-values {
+    @apply grid-cols-3 gap-2 border-t border-stone-200 pt-2 text-left;
   }
 }
 </style>

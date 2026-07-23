@@ -130,11 +130,16 @@ export type UiThread = {
 
 export type UiTaskPetItem = {
   threadId: string
+  clientMessageId?: string
+  activityId?: string
+  startedAtMs?: number
+  lastEventSeq?: number
   title: string
   projectName: string
   detail: string
   latestActivity: string
   latestReply: string
+  latestReplyEventSeq?: number
   state: 'running' | 'waiting'
   updatedAtIso: string
 }
@@ -169,7 +174,7 @@ export type UiMessage = {
   isUnhandled?: boolean
   commandExecution?: CommandExecutionData
   turnIndex?: number
-  deliveryState?: 'sending' | 'retrying' | 'confirming' | 'sent' | 'failed'
+  deliveryState?: 'sending' | 'retrying' | 'waiting' | 'confirming' | 'sent' | 'failed'
   deliveryError?: string
   deliveryAttempt?: number
   deliveryAttemptMax?: number
@@ -195,6 +200,8 @@ export type UiServerRequestReply = {
 }
 
 export type UiLiveOverlay = {
+  activityId?: string
+  isRecovering?: boolean
   startedAtMs: number
   activityLabel: string
   activityDetails: string[]
@@ -214,6 +221,8 @@ export type UiRuntimeStatusSummary = {
   messageState: 'fresh' | 'cached' | 'unavailable'
   updatedAtIso: string
   lastEventSeq: number
+  latestReply: string
+  latestReplyEventSeq: number
   lastStartedAtIso: string | null
   lastCompletedAtIso: string | null
 }

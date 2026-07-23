@@ -8,6 +8,7 @@ output/
 *.tsbuildinfo
 test-*.png
 tmp-*.png
+tmp/
 logs/
 .cert/
 *.pem

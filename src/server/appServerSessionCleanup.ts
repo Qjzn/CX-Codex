@@ -4,7 +4,7 @@ export type AppServerSessionCleanupDependencies = {
   }
   rpcCache: {
     clearSharedReads: () => void
-    clearThreadList: () => void
+    invalidateThreadList: () => void
   }
   threadTokenUsage: {
     clear: () => void
@@ -17,7 +17,7 @@ export type AppServerSessionCleanupDependencies = {
 export function clearAppServerSessionStores(dependencies: AppServerSessionCleanupDependencies): void {
   dependencies.pendingServerRequests.clear()
   dependencies.rpcCache.clearSharedReads()
-  dependencies.rpcCache.clearThreadList()
+  dependencies.rpcCache.invalidateThreadList()
   dependencies.threadTokenUsage.clear()
   dependencies.planModeTurns.clearAll()
 }

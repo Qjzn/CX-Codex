@@ -34,7 +34,9 @@
               <Transition name="task-pet-live" mode="out-in">
                 <strong :key="taskReply(item)" class="task-pet-preview-reply-copy">{{ taskReply(item) }}</strong>
               </Transition>
-              <small class="task-pet-preview-live">{{ item.latestReply ? '最新回复 · 刚刚' : '等待新的回复 · 实时同步' }}</small>
+              <small class="task-pet-preview-live" :class="{ 'is-no-progress': taskHasNoProgress(item) }">
+                {{ taskFreshness(item) }}
+              </small>
             </span>
             <span class="task-pet-preview-arrow" aria-hidden="true">›</span>
           </button>
@@ -89,6 +91,22 @@
       </div>
     </Transition>
 
+    <Transition name="task-pet-compact">
+      <button
+        v-if="!expanded && !minimized && primaryItem"
+        class="task-pet-preview-compact"
+        type="button"
+        :aria-label="`${taskReply(primaryItem)}，点击打开会话 ${primaryItem.title}`"
+        @click="$emit('open', primaryItem.threadId)"
+      >
+        <small>
+          {{ primaryItem.title }}<template v-if="primaryItem.projectName"> · {{ primaryItem.projectName }}</template>
+        </small>
+        <strong>{{ taskReply(primaryItem) }}</strong>
+        <span>{{ taskFreshness(primaryItem) }} <b aria-hidden="true">›</b></span>
+      </button>
+    </Transition>
+
     <Transition name="task-pet-mode" mode="out-in">
       <button
         v-if="minimized"
@@ -127,7 +145,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { UiTaskPetItem, UiTaskPetRecentThread } from '../../types/codex'
 
 const props = withDefaults(defineProps<{
@@ -153,9 +171,21 @@ const recentReplyThread = ref<UiTaskPetRecentThread | null>(null)
 const recentReplyDraft = ref('')
 const recentReplyInput = ref<HTMLTextAreaElement | null>(null)
 const suppressRecentOpenThreadId = ref('')
+const nowMs = ref(Date.now())
 let recentPressTimer: ReturnType<typeof setTimeout> | null = null
-onBeforeUnmount(cancelRecentPress)
+let freshnessTimer: ReturnType<typeof setInterval> | null = null
+const NO_PROGRESS_THRESHOLD_MS = 10 * 60_000
+onBeforeUnmount(() => {
+  cancelRecentPress()
+  if (freshnessTimer) clearInterval(freshnessTimer)
+})
+onMounted(() => {
+  freshnessTimer = setInterval(() => {
+    nowMs.value = Date.now()
+  }, 30_000)
+})
 const visibleItems = computed(() => props.items.slice(0, 3))
+const primaryItem = computed(() => visibleItems.value[0] ?? null)
 const visibleRecentThreads = computed(() => props.recentThreads.slice(0, 2))
 const hasWaitingTask = computed(() => props.items.some((item) => item.state === 'waiting'))
 const mascotState = computed(() => hasWaitingTask.value ? 'waiting' : visibleItems.value.length > 0 ? 'working' : 'idle')
@@ -186,6 +216,27 @@ function toggleExpanded() {
 
 function taskReply(item: UiTaskPetItem): string {
   return item.latestReply || item.latestActivity || item.detail || '正在等待新的回复…'
+}
+
+function taskAgeMs(item: UiTaskPetItem): number {
+  const updatedAtMs = Date.parse(item.updatedAtIso)
+  if (!Number.isFinite(updatedAtMs)) return 0
+  return Math.max(0, nowMs.value - updatedAtMs)
+}
+
+function taskHasNoProgress(item: UiTaskPetItem): boolean {
+  return taskAgeMs(item) >= NO_PROGRESS_THRESHOLD_MS
+}
+
+function taskFreshness(item: UiTaskPetItem): string {
+  const ageMs = taskAgeMs(item)
+  if (ageMs >= NO_PROGRESS_THRESHOLD_MS) {
+    return `${Math.max(10, Math.floor(ageMs / 60_000))} 分钟无新进展`
+  }
+  if (ageMs < 15_000) return item.latestReply ? '最新回复 · 刚刚' : '等待新的回复 · 刚刚'
+  if (ageMs < 60_000) return item.latestReply ? '最新回复 · 1 分钟内' : '等待新的回复 · 1 分钟内'
+  const minutes = Math.max(1, Math.floor(ageMs / 60_000))
+  return item.latestReply ? `最新回复 · ${minutes} 分钟前` : `等待新的回复 · ${minutes} 分钟前`
 }
 
 function confirmClose() {
@@ -260,6 +311,70 @@ function submitRecentReply() {
   border-radius: 14px;
   box-shadow: 0 4px 8px rgb(15 23 42 / 12%);
   transform-origin: right bottom;
+}
+
+.task-pet-preview-compact {
+  display: flex;
+  width: min(258px, calc(100% - 84px));
+  min-width: 0;
+  min-height: 82px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--color-bg-primary, #fff);
+  box-shadow: 0 4px 12px rgb(15 23 42 / 14%);
+  color: var(--color-text-primary, #1e2430);
+  text-align: left;
+  transition: background-color 120ms ease, transform 120ms ease;
+}
+
+.task-pet-preview-compact:hover {
+  background: color-mix(in srgb, var(--color-bg-primary, #fff) 92%, var(--color-accent, #2a72e8));
+}
+
+.task-pet-preview-compact:active {
+  transform: scale(0.985);
+}
+
+.task-pet-preview-compact:focus-visible {
+  outline: 2px solid var(--color-accent, #2a72e8);
+  outline-offset: 2px;
+}
+
+.task-pet-preview-compact small {
+  overflow: hidden;
+  color: var(--color-text-secondary, #596579);
+  font-size: 9px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-pet-preview-compact strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.42;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.task-pet-preview-compact > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: color-mix(in srgb, var(--color-accent, #2a72e8) 78%, #263449);
+  font-size: 9px;
+}
+
+.task-pet-preview-compact b {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 10px;
 }
 
 .task-pet-preview-header {
@@ -428,6 +543,11 @@ function submitRecentReply() {
 .task-pet-preview-copy .task-pet-preview-live {
   color: color-mix(in srgb, var(--color-accent, #2a72e8) 78%, #263449);
   font-size: 9px;
+}
+
+.task-pet-preview-copy .task-pet-preview-live.is-no-progress {
+  color: #a75c12;
+  font-weight: 700;
 }
 
 .task-pet-preview-copy .task-pet-preview-context {
@@ -702,6 +822,17 @@ function submitRecentReply() {
 .task-pet-mode-enter-active,
 .task-pet-mode-leave-active {
   transition: opacity 120ms ease-out, transform 170ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.task-pet-compact-enter-active,
+.task-pet-compact-leave-active {
+  transition: opacity 120ms ease-out, transform 170ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.task-pet-compact-enter-from,
+.task-pet-compact-leave-to {
+  opacity: 0;
+  transform: translateY(4px) scale(0.97);
 }
 
 .task-pet-mode-enter-from,

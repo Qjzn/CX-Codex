@@ -3,6 +3,7 @@ import {
 } from './appServerLocalRuntimeSnapshot.js'
 import {
   createAppServerThreadRuntimeSnapshotReader,
+  type ThreadRuntimeSnapshotReadOptions,
 } from './appServerThreadRuntimeSnapshot.js'
 import type { CachedThreadRead } from './appServerThreadReadCache.js'
 import type { ThreadReadCacheSource } from './appServerThreadReadCache.js'
@@ -41,7 +42,7 @@ export type AppServerRuntimeReadersDependencies = {
 }
 
 export type AppServerRuntimeReaders = {
-  readThreadRuntimeSnapshot(threadId: string): Promise<ThreadRuntimeSnapshot>
+  readThreadRuntimeSnapshot(threadId: string, options?: ThreadRuntimeSnapshotReadOptions): Promise<ThreadRuntimeSnapshot>
   readLocalRuntimeSnapshot(threadId: string): ThreadRuntimeSnapshot
   readCachedThreadTokenUsage(threadId: string): Promise<ThreadTokenUsage | null>
 }

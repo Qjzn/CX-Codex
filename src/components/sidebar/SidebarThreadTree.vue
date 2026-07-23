@@ -559,6 +559,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import { getPinnedThreadIds, updatePinnedThreadIds } from '../../api/codexGateway'
 import type { UiProjectGroup, UiThread } from '../../types/codex'
+import { orderProjectGroupsByRecentActivity } from '../../utils/projectGroupOrdering'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
 import IconTablerDots from '../icons/IconTablerDots.vue'
@@ -855,9 +856,7 @@ function matchesThreadSearch(
   matchedIds: Set<string> | null,
 ): boolean {
   if (!query) return true
-  if (matchedIds) {
-    return matchedIds.has(thread.id)
-  }
+  if (matchedIds?.has(thread.id)) return true
   return thread.title.toLowerCase().includes(query)
 }
 
@@ -939,7 +938,9 @@ function threadMatchesSearch(thread: UiThread): boolean {
 }
 
 const filteredGroups = computed<UiProjectGroup[]>(() => threadCollections.value.filteredGroups)
-const displayedGroups = computed<UiProjectGroup[]>(() => filteredGroups.value)
+const displayedGroups = computed<UiProjectGroup[]>(() => (
+  orderProjectGroupsByRecentActivity(filteredGroups.value)
+))
 const effectiveThreadViewMode = computed<'project' | 'chronological'>(() => (
   useDesktopListParity.value ? 'project' : threadViewMode.value
 ))
@@ -989,10 +990,7 @@ const projectedDropProjectIndex = computed<number | null>(() => {
 })
 
 const layoutProjectOrder = computed<string[]>(() => {
-  const sourceGroups = useDesktopListParity.value
-    ? displayedGroups.value
-    : (isSearchActive.value ? filteredGroups.value : props.groups)
-  const names = sourceGroups.map((group) => group.projectName)
+  const names = displayedGroups.value.map((group) => group.projectName)
   const drag = activeProjectDrag.value
   const projectedIndex = projectedDropProjectIndex.value
 

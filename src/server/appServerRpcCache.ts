@@ -8,6 +8,7 @@ type CachedRpcResponse = {
   value: unknown
   cachedAtMs: number
   refreshStartedAtMs: number
+  invalidated: boolean
 }
 
 export type CachedRpcRead = {
@@ -25,6 +26,7 @@ type PersistedThreadListCachePayload = {
     key?: unknown
     value?: unknown
     cachedAtMs?: unknown
+    invalidated?: unknown
   }>
 }
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
@@ -167,6 +169,7 @@ export class AppServerRpcCache {
   private readonly cachedThreadListRpcByKey = new Map<string, CachedRpcResponse>()
   private readonly cachedModelListRpcByKey = new Map<string, CachedRpcResponse>()
   private readonly threadListCachePath: string
+  private threadListGeneration = 0
 
   constructor(options: AppServerRpcCacheOptions = {}) {
     this.threadListCachePath = options.threadListCachePath ?? getWebThreadListCachePath()
@@ -178,7 +181,19 @@ export class AppServerRpcCache {
   }
 
   clearThreadList(): void {
+    this.threadListGeneration += 1
+    this.clearThreadListSharedReads()
     this.cachedThreadListRpcByKey.clear()
+    this.persistThreadListCache()
+  }
+
+  invalidateThreadList(): void {
+    this.threadListGeneration += 1
+    this.clearThreadListSharedReads()
+    for (const entry of this.cachedThreadListRpcByKey.values()) {
+      entry.invalidated = true
+      entry.refreshStartedAtMs = 0
+    }
     this.persistThreadListCache()
   }
 
@@ -190,7 +205,8 @@ export class AppServerRpcCache {
     this.sharedReadRpcByKey.set(shareableKey, request)
   }
 
-  deleteSharedRead(shareableKey: string): void {
+  deleteSharedRead(shareableKey: string, request?: Promise<unknown>): void {
+    if (request && this.sharedReadRpcByKey.get(shareableKey) !== request) return
     this.sharedReadRpcByKey.delete(shareableKey)
   }
 
@@ -207,7 +223,12 @@ export class AppServerRpcCache {
     )
   }
 
-  writeThreadList(shareableKey: string, value: unknown): void {
+  writeThreadList(
+    shareableKey: string,
+    value: unknown,
+    generation = this.threadListGeneration,
+  ): void {
+    if (generation !== this.threadListGeneration) return
     writeCachedRpc(this.cachedThreadListRpcByKey, shareableKey, value)
     this.persistThreadListCache()
   }
@@ -244,13 +265,15 @@ export class AppServerRpcCache {
       return existingRequest
     }
 
-    const request = enqueueRpc(method, params)
+    const threadListGeneration = this.threadListGeneration
+    let request: Promise<unknown>
+    request = enqueueRpc(method, params)
       .then((value) => {
-        this.writeShareableCache(method, shareableKey, value)
+        this.writeShareableCache(method, shareableKey, value, threadListGeneration)
         return value
       })
       .finally(() => {
-        this.deleteSharedRead(shareableKey)
+        this.deleteSharedRead(shareableKey, request)
       })
     this.setSharedRead(shareableKey, request)
     return request
@@ -271,13 +294,16 @@ export class AppServerRpcCache {
       cached.refreshStartedAtMs = now
     }
 
-    const request = enqueueRpc('thread/list', params)
+    const generation = this.threadListGeneration
+    let request: Promise<unknown>
+    request = enqueueRpc('thread/list', params)
       .then((value) => {
-        this.writeThreadList(shareableKey, value)
+        this.writeThreadList(shareableKey, value, generation)
         return value
       })
       .catch((error) => {
         logBridgeError('Background thread/list refresh failed', error)
+        if (generation !== this.threadListGeneration) return null
         const current = this.cachedThreadListRpcByKey.get(shareableKey)
         if (current) {
           current.refreshStartedAtMs = 0
@@ -285,7 +311,7 @@ export class AppServerRpcCache {
         return null
       })
       .finally(() => {
-        this.sharedReadRpcByKey.delete(shareableKey)
+        this.deleteSharedRead(shareableKey, request)
       })
 
     this.sharedReadRpcByKey.set(shareableKey, request)
@@ -306,7 +332,8 @@ export class AppServerRpcCache {
       cached.refreshStartedAtMs = now
     }
 
-    const request = enqueueRpc('model/list', params)
+    let request: Promise<unknown>
+    request = enqueueRpc('model/list', params)
       .then((value) => {
         this.writeModelList(shareableKey, value)
         return value
@@ -320,7 +347,7 @@ export class AppServerRpcCache {
         return null
       })
       .finally(() => {
-        this.sharedReadRpcByKey.delete(shareableKey)
+        this.deleteSharedRead(shareableKey, request)
       })
 
     this.sharedReadRpcByKey.set(shareableKey, request)
@@ -336,9 +363,14 @@ export class AppServerRpcCache {
     return null
   }
 
-  private writeShareableCache(method: string, shareableKey: string, value: unknown): void {
+  private writeShareableCache(
+    method: string,
+    shareableKey: string,
+    value: unknown,
+    threadListGeneration: number,
+  ): void {
     if (method === 'thread/list') {
-      this.writeThreadList(shareableKey, value)
+      this.writeThreadList(shareableKey, value, threadListGeneration)
     } else if (method === 'model/list') {
       this.writeModelList(shareableKey, value)
     }
@@ -349,6 +381,14 @@ export class AppServerRpcCache {
       this.refreshThreadListInBackground(shareableKey, params, enqueueRpc)
     } else if (method === 'model/list') {
       this.refreshModelListInBackground(shareableKey, params, enqueueRpc)
+    }
+  }
+
+  private clearThreadListSharedReads(): void {
+    for (const key of this.sharedReadRpcByKey.keys()) {
+      if (key.startsWith('thread/list:')) {
+        this.sharedReadRpcByKey.delete(key)
+      }
     }
   }
 
@@ -364,6 +404,7 @@ export class AppServerRpcCache {
           value: entry.value,
           cachedAtMs: entry.cachedAtMs,
           refreshStartedAtMs: 0,
+          invalidated: entry.invalidated === true,
         })
       }
     } catch {
@@ -378,6 +419,7 @@ export class AppServerRpcCache {
         key,
         value: entry.value,
         cachedAtMs: entry.cachedAtMs,
+        invalidated: entry.invalidated,
       }))
       mkdirSync(dirname(this.threadListCachePath), { recursive: true })
       writeFileSync(this.threadListCachePath, JSON.stringify({ version: 1, entries }), 'utf8')
@@ -397,7 +439,7 @@ function readCachedRpc(
   const cached = cache.get(shareableKey)
   if (!cached) return null
   const ageMs = Date.now() - cached.cachedAtMs
-  if (ageMs <= ttlMs) {
+  if (!cached.invalidated && ageMs <= ttlMs) {
     return { value: cached.value, stale: false }
   }
   if (allowStale && ageMs <= staleTtlMs) {
@@ -414,6 +456,7 @@ function writeCachedRpc(cache: Map<string, CachedRpcResponse>, shareableKey: str
     value,
     cachedAtMs: Date.now(),
     refreshStartedAtMs: 0,
+    invalidated: false,
   })
   if (cache.size <= maxEntries) return
   const oldestKey = cache.keys().next().value

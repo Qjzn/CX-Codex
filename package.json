@@ -1,6 +1,6 @@
 {
   "name": "cx-codex",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "CX-Codex Web UI and browser bridge for Windows, Linux, Android, LAN, and remote self-hosted access",
   "type": "module",
   "license": "MIT",
@@ -59,6 +59,9 @@
     "mobile:android:sync": "npm run build:frontend && npx cap sync android",
     "mobile:android:open": "npx cap open android",
     "mobile:android:run": "npm run mobile:android:sync && npx cap run android",
+    "test:android:background": "node ./scripts/run-powershell-script.mjs ./scripts/verify-android-background.ps1",
+    "verify:mobile-push-readiness": "node ./scripts/verify-mobile-push-readiness.mjs",
+    "verify:mobile-push-readiness:test": "node ./scripts/verify-mobile-push-readiness.test.mjs",
     "package:release": "node ./scripts/run-powershell-script.mjs ./scripts/package-release.ps1",
     "setup:windows": "node ./scripts/run-powershell-script.mjs ./setup.ps1",
     "test:7420": "node ./scripts/run-powershell-script.mjs ./scripts/regression-7420.ps1",

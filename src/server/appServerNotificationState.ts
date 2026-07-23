@@ -2,7 +2,7 @@ import { readThreadIdFromPayload, readTurnIdFromPayload } from './appServerPaylo
 import { shouldInvalidateThreadListCacheForNotification } from './appServerRpcCache.js'
 
 export type AppServerNotificationStateDependencies = {
-  clearThreadListCache(): void
+  invalidateThreadListCache(): void
   clearPlanModeTurnByThreadOrTurn(threadId: string, turnId: string): void
   observeThreadTokenUsage(params: unknown): void
 }
@@ -28,7 +28,7 @@ export function captureAppServerNotificationState(
   dependencies: AppServerNotificationStateDependencies,
 ): void {
   if (shouldInvalidateThreadListCacheForNotification(notification.method)) {
-    dependencies.clearThreadListCache()
+    dependencies.invalidateThreadListCache()
   }
 
   if (shouldClearPlanModeTurnForNotification(notification.method)) {
