@@ -48,6 +48,7 @@ type CurrentModelConfig = {
 }
 
 type RpcCallOptions = { signal?: AbortSignal }
+type ThreadRuntimeSnapshotOptions = RpcCallOptions & { preferCachedMessages?: boolean }
 type ThreadListOptions = RpcCallOptions & {
   maxPages?: number
 }
@@ -112,7 +113,8 @@ export type ThreadRuntimeSnapshot = {
   lastStartedAtIso: string | null
   lastCompletedAtIso: string | null
   lastError: string | null
-  latestReply?: string
+  latestReply: string
+  latestReplyEventSeq: number
   stale: boolean
   degradedReason: string | null
   messageState: 'fresh' | 'cached' | 'unavailable'
@@ -664,7 +666,7 @@ async function getThreadDetailV2(
 
 export async function getThreadRuntimeSnapshot(
   threadId: string,
-  options: RpcCallOptions = {},
+  options: ThreadRuntimeSnapshotOptions = {},
 ): Promise<ThreadRuntimeSnapshot> {
   const normalizedThreadId = threadId.trim()
   throwIfSignalAborted(options.signal)
@@ -675,7 +677,11 @@ export async function getThreadRuntimeSnapshot(
   }
 
   if (options.signal) {
-    const snapshot = await fetchThreadRuntimeSnapshot(normalizedThreadId, options.signal)
+    const snapshot = await fetchThreadRuntimeSnapshot(
+      normalizedThreadId,
+      options.signal,
+      options.preferCachedMessages === true,
+    )
     throwIfSignalAborted(options.signal)
     return snapshot
   }
@@ -687,7 +693,11 @@ export async function getThreadRuntimeSnapshot(
     return snapshot
   }
 
-  const request = fetchThreadRuntimeSnapshot(normalizedThreadId)
+  const request = fetchThreadRuntimeSnapshot(
+    normalizedThreadId,
+    undefined,
+    options.preferCachedMessages === true,
+  )
   threadRuntimeSnapshotInFlightByThreadId.set(normalizedThreadId, request)
   try {
     const snapshot = await request
@@ -703,8 +713,10 @@ export async function getThreadRuntimeSnapshot(
 async function fetchThreadRuntimeSnapshot(
   normalizedThreadId: string,
   signal?: AbortSignal,
+  preferCachedMessages = false,
 ): Promise<ThreadRuntimeSnapshot> {
-  const response = await fetchWithTimeout(`/codex-api/state/thread/${encodeURIComponent(normalizedThreadId)}`, {
+  const query = preferCachedMessages ? '?preferCachedMessages=1' : ''
+  const response = await fetchWithTimeout(`/codex-api/state/thread/${encodeURIComponent(normalizedThreadId)}${query}`, {
     signal,
   }, {
     timeoutMs: GATEWAY_BACKGROUND_FETCH_TIMEOUT_MS,
@@ -754,6 +766,9 @@ async function fetchThreadRuntimeSnapshot(
   const lastEventSeq = typeof data.lastEventSeq === 'number' && Number.isFinite(data.lastEventSeq)
     ? Math.max(0, Math.trunc(data.lastEventSeq))
     : 0
+  const latestReplyEventSeq = typeof data.latestReplyEventSeq === 'number' && Number.isFinite(data.latestReplyEventSeq)
+    ? Math.max(0, Math.trunc(data.latestReplyEventSeq))
+    : 0
   const readNullableString = (value: unknown): string | null => (
     typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
   )
@@ -777,6 +792,8 @@ async function fetchThreadRuntimeSnapshot(
     lastStartedAtIso: readNullableString(data.lastStartedAtIso),
     lastCompletedAtIso: readNullableString(data.lastCompletedAtIso),
     lastError: readNullableString(data.lastError),
+    latestReply: typeof data.latestReply === 'string' ? data.latestReply.trim() : '',
+    latestReplyEventSeq,
     stale: data.stale === true,
     degradedReason: readNullableString(data.degradedReason),
     messageState,
@@ -857,6 +874,10 @@ export async function getThreadRuntimeStatusSnapshot(
     lastStartedAtIso: readNullableString(snapshotData.lastStartedAtIso),
     lastCompletedAtIso: readNullableString(snapshotData.lastCompletedAtIso),
     lastError: readNullableString(snapshotData.lastError),
+    latestReply: typeof snapshotData.latestReply === 'string' ? snapshotData.latestReply.trim() : '',
+    latestReplyEventSeq: typeof snapshotData.latestReplyEventSeq === 'number' && Number.isFinite(snapshotData.latestReplyEventSeq)
+      ? Math.max(0, Math.trunc(snapshotData.latestReplyEventSeq))
+      : 0,
     stale: snapshotData.stale === true,
     degradedReason: readNullableString(snapshotData.degradedReason),
     messageState,
@@ -1386,6 +1407,10 @@ export async function reconcileThreadRuntime(threadId: string, options: RpcCallO
     lastStartedAtIso: typeof snapshot.lastStartedAtIso === 'string' ? snapshot.lastStartedAtIso : null,
     lastCompletedAtIso: typeof snapshot.lastCompletedAtIso === 'string' ? snapshot.lastCompletedAtIso : null,
     lastError: typeof snapshot.lastError === 'string' ? snapshot.lastError : null,
+    latestReply: typeof snapshot.latestReply === 'string' ? snapshot.latestReply.trim() : '',
+    latestReplyEventSeq: typeof snapshot.latestReplyEventSeq === 'number' && Number.isFinite(snapshot.latestReplyEventSeq)
+      ? Math.max(0, Math.trunc(snapshot.latestReplyEventSeq))
+      : 0,
     stale: snapshot.stale === true,
     degradedReason: typeof snapshot.degradedReason === 'string' ? snapshot.degradedReason : null,
     messageState: 'unavailable',

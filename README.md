@@ -17,6 +17,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 ## 快速入口
 
 - 最新 Release: [github.com/Qjzn/CX-Codex/releases/latest](https://github.com/Qjzn/CX-Codex/releases/latest)
+- 2.4.1 发布说明: [docs/release-notes-2.4.1.zh-CN.md](./docs/release-notes-2.4.1.zh-CN.md)
 - 2.4.0 发布说明: [docs/release-notes-2.4.0.zh-CN.md](./docs/release-notes-2.4.0.zh-CN.md)
 - 2.3.1 发布说明: [docs/release-notes-2.3.1.zh-CN.md](./docs/release-notes-2.3.1.zh-CN.md)
 - 2.3.0 发布说明: [docs/release-notes-2.3.0.zh-CN.md](./docs/release-notes-2.3.0.zh-CN.md)

@@ -13,31 +13,260 @@ const entryPath = join(outputRoot, 'entry.ts')
 const bundledPath = join(outputRoot, 'entry.mjs')
 const normalizerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'normalizers', 'v2.ts')))
 const notificationReplayImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'notificationReplayCoordinator.ts')))
+const connectionManagerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'connectionManager.ts')))
+const conversationViewportImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'conversationViewport.ts')))
 const runtimeSnapshotOrderingImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'runtimeSnapshotOrdering.ts')))
 const messageOutboxMergeImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'messageOutboxMerge.ts')))
+const messageIdentityImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'messageIdentity.ts')))
+const composerTurnOptionsImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'composerTurnOptions.ts')))
+const messageOutboxPersistenceImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'messageOutboxPersistence.ts')))
+const conversationProjectionImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'conversationProjection.ts')))
 const boundedAsyncRecoveryImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'boundedAsyncRecovery.ts')))
 const chatFeedbackMetricsImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'chatFeedbackMetrics.ts')))
 const runtimeRequestDeliveryImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'runtimeRequestDelivery.ts')))
 const rpcClientImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'codexRpcClient.ts')))
+const projectGroupOrderingImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'utils', 'projectGroupOrdering.ts')))
+const activityTimerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'activityTimer.ts')))
+const latestReplyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'utils', 'latestReply.ts')))
+const taskPetReadPolicyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'mobile', 'taskPetReadPolicy.ts')))
 
 try {
   writeFileSync(entryPath, `
 import assert from 'node:assert/strict'
 import { normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from '${normalizerImport}'
 import { createNotificationReplayCoordinator } from '${notificationReplayImport}'
+import {
+  createConnectionManager,
+  decideConnectedRecovery,
+  shouldRestartNotificationStreamOnForeground,
+} from '${connectionManagerImport}'
+import {
+  CONVERSATION_BOTTOM_THRESHOLD_PX,
+  conversationDistanceFromBottom,
+  isConversationViewportAtBottom,
+} from '${conversationViewportImport}'
 import { shouldApplyRuntimeSnapshotVersion } from '${runtimeSnapshotOrderingImport}'
 import { mergeMessageOutboxEntries, mergeMessageOutboxState } from '${messageOutboxMergeImport}'
+import {
+  createClientMessageId,
+  filterVisibleOptimisticUserMessages,
+  userMessageSignature,
+} from '${messageIdentityImport}'
+import {
+  cloneComposerTurnOptions,
+  normalizeComposerTurnOptions,
+} from '${composerTurnOptionsImport}'
+import {
+  parseMessageOutboxState,
+  serializeMessageOutboxState,
+} from '${messageOutboxPersistenceImport}'
+import {
+  areMessageFieldsEqual,
+  mergeMessages,
+  removeRedundantLiveAgentMessages,
+  removeStaleHistoryNoticeAfterOlderMerge,
+  sortMessagesByTurnIndex,
+  upsertMessage,
+} from '${conversationProjectionImport}'
 import { runWithBoundedRecovery } from '${boundedAsyncRecoveryImport}'
 import {
   beginChatFeedbackMetric,
+  chatFeedbackNow,
   markChatFeedbackFirstAssistantData,
   markChatFeedbackFirstAssistantVisible,
   markChatFeedbackRendered,
   markChatFeedbackRequestDispatched,
   markChatFeedbackServerAcknowledged,
+  readChatFeedbackMetricSummary,
 } from '${chatFeedbackMetricsImport}'
-import { isRuntimeRequestAwaitingDeliveryConfirmation } from '${runtimeRequestDeliveryImport}'
+import {
+  isRuntimeRequestAwaitingDeliveryConfirmation,
+  shouldSettleOptimisticDeliveryFromRuntimeSnapshot,
+} from '${runtimeRequestDeliveryImport}'
 import { subscribeRpcNotifications } from '${rpcClientImport}'
+import { orderProjectGroupsByRecentActivity } from '${projectGroupOrderingImport}'
+import { readRuntimeActivityStartedAtMs } from '${activityTimerImport}'
+import { compactLatestReplyTail } from '${latestReplyImport}'
+import {
+  shouldAcknowledgeMobileShellTaskPetThreadOpen,
+  shouldMarkMobileShellTaskPetThreadRead,
+} from '${taskPetReadPolicyImport}'
+
+assert.equal(CONVERSATION_BOTTOM_THRESHOLD_PX, 24)
+assert.equal(conversationDistanceFromBottom({ scrollHeight: 1000, scrollTop: 676, clientHeight: 300 }), 24)
+assert.equal(isConversationViewportAtBottom({ scrollHeight: 1000, scrollTop: 676, clientHeight: 300 }), true)
+assert.equal(isConversationViewportAtBottom({ scrollHeight: 1000, scrollTop: 675, clientHeight: 300 }), false)
+assert.equal(conversationDistanceFromBottom({ scrollHeight: 100, scrollTop: 0, clientHeight: 200 }), 0)
+
+const managerSubscriptions = []
+const managerStates = []
+const managerNotifications = []
+let managerTransportActivity = 0
+let managerStopCount = 0
+const connectionManager = createConnectionManager({
+  subscribe: (onNotification, handlers) => {
+    const subscription = { onNotification, handlers }
+    managerSubscriptions.push(subscription)
+    return () => {
+      managerStopCount += 1
+      handlers.onConnectionStateChange('disconnected')
+    }
+  },
+  onNotification: (notification) => { managerNotifications.push(notification) },
+  onTransportActivity: () => { managerTransportActivity += 1 },
+  onConnectionStateChange: (state, previousState) => {
+    managerStates.push([previousState, state])
+  },
+})
+assert.equal(connectionManager.getState(), 'disconnected')
+connectionManager.start()
+assert.equal(connectionManager.isStarted(), true)
+assert.equal(managerSubscriptions.length, 1)
+managerSubscriptions[0].handlers.onConnectionStateChange('connected')
+managerSubscriptions[0].handlers.onTransportActivity()
+managerSubscriptions[0].onNotification('first')
+assert.equal(connectionManager.getState(), 'connected')
+assert.equal(managerTransportActivity, 1)
+assert.deepEqual(managerNotifications, ['first'])
+connectionManager.restart()
+assert.equal(managerStopCount, 1)
+assert.equal(managerSubscriptions.length, 2)
+managerSubscriptions[0].handlers.onConnectionStateChange('disconnected')
+managerSubscriptions[0].onNotification('stale')
+managerSubscriptions[1].handlers.onConnectionStateChange('connected')
+managerSubscriptions[1].onNotification('second')
+assert.deepEqual(managerNotifications, ['first', 'second'])
+connectionManager.stop()
+assert.equal(managerStopCount, 2)
+assert.equal(connectionManager.isStarted(), false)
+assert.equal(connectionManager.getState(), 'disconnected')
+assert.deepEqual(managerStates, [
+  ['disconnected', 'connecting'],
+  ['connecting', 'connected'],
+  ['connected', 'connecting'],
+  ['connecting', 'connected'],
+  ['connected', 'disconnected'],
+])
+
+assert.equal(shouldRestartNotificationStreamOnForeground({
+  connectionState: 'reconnecting',
+  notificationStale: false,
+  hasSyncDemand: false,
+  hasSelectedThread: false,
+}), true)
+assert.equal(shouldRestartNotificationStreamOnForeground({
+  connectionState: 'connected',
+  notificationStale: true,
+  hasSyncDemand: false,
+  hasSelectedThread: true,
+}), true)
+assert.equal(shouldRestartNotificationStreamOnForeground({
+  connectionState: 'connected',
+  notificationStale: true,
+  hasSyncDemand: false,
+  hasSelectedThread: false,
+}), false)
+assert.deepEqual(decideConnectedRecovery({
+  previousState: 'reconnecting',
+  nextState: 'connected',
+  documentVisible: false,
+  androidShellAvailable: false,
+  hasSyncDemand: true,
+  activeThreadId: 'thread-hidden',
+  suppressActiveThreadRecovery: false,
+  pendingThreadsRefresh: true,
+  hasLoadedThreads: false,
+}), { kind: 'none' })
+assert.deepEqual(decideConnectedRecovery({
+  previousState: 'connecting',
+  nextState: 'connected',
+  documentVisible: true,
+  androidShellAvailable: false,
+  hasSyncDemand: false,
+  activeThreadId: '',
+  suppressActiveThreadRecovery: false,
+  pendingThreadsRefresh: false,
+  hasLoadedThreads: true,
+}), { kind: 'replay' })
+assert.deepEqual(decideConnectedRecovery({
+  previousState: 'reconnecting',
+  nextState: 'connected',
+  documentVisible: true,
+  androidShellAvailable: false,
+  hasSyncDemand: true,
+  activeThreadId: '',
+  suppressActiveThreadRecovery: false,
+  pendingThreadsRefresh: false,
+  hasLoadedThreads: false,
+}), {
+  kind: 'foreground',
+  includeThreadList: true,
+  forceMessageRefresh: true,
+  urgent: true,
+})
+assert.deepEqual(decideConnectedRecovery({
+  previousState: 'reconnecting',
+  nextState: 'connected',
+  documentVisible: true,
+  androidShellAvailable: true,
+  hasSyncDemand: true,
+  activeThreadId: 'thread-recent',
+  suppressActiveThreadRecovery: true,
+  pendingThreadsRefresh: true,
+  hasLoadedThreads: false,
+}), { kind: 'replay' })
+assert.deepEqual(decideConnectedRecovery({
+  previousState: 'reconnecting',
+  nextState: 'connected',
+  documentVisible: true,
+  androidShellAvailable: true,
+  hasSyncDemand: false,
+  activeThreadId: '',
+  suppressActiveThreadRecovery: false,
+  pendingThreadsRefresh: false,
+  hasLoadedThreads: false,
+}), {
+  kind: 'foreground',
+  includeThreadList: true,
+  forceMessageRefresh: true,
+  urgent: true,
+})
+
+const visibleTaskPetThread = {
+  routeThreadId: ' thread-visible ',
+  displayedThreadId: 'thread-visible',
+  messageCount: 2,
+  loading: false,
+  switching: false,
+}
+assert.equal(shouldAcknowledgeMobileShellTaskPetThreadOpen(visibleTaskPetThread), true)
+assert.equal(shouldMarkMobileShellTaskPetThreadRead({ ...visibleTaskPetThread, inProgress: true }), false)
+assert.equal(shouldMarkMobileShellTaskPetThreadRead({ ...visibleTaskPetThread, inProgress: false }), true)
+assert.equal(shouldAcknowledgeMobileShellTaskPetThreadOpen({ ...visibleTaskPetThread, messageCount: 0 }), false)
+assert.equal(shouldAcknowledgeMobileShellTaskPetThreadOpen({ ...visibleTaskPetThread, loading: true }), false)
+assert.equal(shouldAcknowledgeMobileShellTaskPetThreadOpen({ ...visibleTaskPetThread, switching: true }), false)
+assert.equal(shouldAcknowledgeMobileShellTaskPetThreadOpen({ ...visibleTaskPetThread, displayedThreadId: 'thread-other' }), false)
+
+assert.equal(compactLatestReplyTail('  实时\\n回复  ', 260), '实时 回复')
+const longReply = 'HEAD_MARKER' + '内容'.repeat(150) + 'TERMINAL_MARKER'
+const replyTail = compactLatestReplyTail(longReply, 260)
+assert.equal(replyTail.length, 260)
+assert.equal(replyTail.includes('HEAD_MARKER'), false)
+assert.equal(replyTail.endsWith('TERMINAL_MARKER'), true)
+
+const longRunningStartedAtIso = '2026-07-18T08:00:00.000Z'
+assert.equal(readRuntimeActivityStartedAtMs({
+  lastStartedAtIso: longRunningStartedAtIso,
+  lastCompletedAtIso: '2026-07-18T07:00:00.000Z',
+}), Date.parse(longRunningStartedAtIso))
+assert.equal(readRuntimeActivityStartedAtMs({
+  lastStartedAtIso: '2026-07-18T08:00:00.000Z',
+  lastCompletedAtIso: '2026-07-18T09:00:00.000Z',
+}), null)
+assert.equal(readRuntimeActivityStartedAtMs({
+  lastStartedAtIso: 'invalid',
+  lastCompletedAtIso: null,
+}), null)
 
 const originalWindow = globalThis.window
 assert.equal(isRuntimeRequestAwaitingDeliveryConfirmation('pending_start'), true)
@@ -45,10 +274,14 @@ assert.equal(isRuntimeRequestAwaitingDeliveryConfirmation('start_uncertain'), tr
 assert.equal(isRuntimeRequestAwaitingDeliveryConfirmation('sync_degraded'), true)
 assert.equal(isRuntimeRequestAwaitingDeliveryConfirmation('running'), false)
 assert.equal(isRuntimeRequestAwaitingDeliveryConfirmation('completed'), false)
+assert.equal(shouldSettleOptimisticDeliveryFromRuntimeSnapshot('completed', true), true)
+assert.equal(shouldSettleOptimisticDeliveryFromRuntimeSnapshot('failed', false), true)
+assert.equal(shouldSettleOptimisticDeliveryFromRuntimeSnapshot('failed', true), false)
 
 globalThis.window = globalThis
 delete globalThis.__cxCodexChatFeedbackMetrics
-const feedbackStartedAtMs = performance.now() - 8
+delete globalThis.__cxCodexChatFeedbackSummary
+const feedbackStartedAtMs = chatFeedbackNow() - 8
 beginChatFeedbackMetric({
   threadId: 'thread-feedback',
   clientMessageId: 'client-feedback',
@@ -65,6 +298,7 @@ markChatFeedbackServerAcknowledged({
   threadId: 'thread-feedback',
   turnId: 'turn-feedback',
   turnStarted: true,
+  turnStartedAtMs: feedbackStartedAtMs + 4,
 })
 markChatFeedbackFirstAssistantData({
   threadId: 'thread-feedback',
@@ -93,11 +327,17 @@ assert.ok((feedbackMetric?.runningVisibleLatencyMs ?? -1) >= 0)
 assert.ok((feedbackMetric?.requestDispatchedLatencyMs ?? -1) >= 0)
 assert.ok((feedbackMetric?.serverAcknowledgedLatencyMs ?? -1) >= 0)
 assert.equal(feedbackMetric?.turnId, 'turn-feedback')
-assert.ok((feedbackMetric?.turnStartedLatencyMs ?? -1) >= 0)
+assert.equal(feedbackMetric?.turnStartedLatencyMs, 4)
 assert.ok((feedbackMetric?.firstAssistantDataLatencyMs ?? -1) >= 0)
 assert.equal(feedbackMetric?.firstAssistantMessageId, 'assistant-feedback')
 assert.ok((feedbackMetric?.firstAssistantVisibleLatencyMs ?? -1) >= 0)
+const feedbackSummary = readChatFeedbackMetricSummary()
+assert.equal(feedbackSummary?.sampleCount, 1)
+assert.equal(feedbackSummary?.stages.stateCommit.p50Ms, feedbackMetric?.stateCommitLatencyMs)
+assert.equal(feedbackSummary?.stages.firstAssistantVisible.p95Ms, feedbackMetric?.firstAssistantVisibleLatencyMs)
+assert.equal(feedbackSummary?.stages.assistantRenderOverhead.count, 1)
 delete globalThis.__cxCodexChatFeedbackMetrics
+delete globalThis.__cxCodexChatFeedbackSummary
 if (originalWindow === undefined) delete globalThis.window
 else globalThis.window = originalWindow
 
@@ -131,6 +371,199 @@ assert.deepEqual(removedOutbox.removals, [
   { clientMessageId: 'client-stale', removedAtMs: 6 },
   { clientMessageId: 'client-newer', removedAtMs: 8 },
 ])
+
+const normalizedTurnOptions = normalizeComposerTurnOptions({
+  plugins: [
+    { id: ' app-id ', name: ' App ', source: 'app' },
+    { id: 'plugin-id', name: 'Plugin', source: 'plugin', path: ' plugin://custom ' },
+    { id: '', name: 'Dropped' },
+  ],
+  goal: { enabled: true, text: ' keep goal whitespace ' },
+})
+assert.deepEqual(normalizedTurnOptions, {
+  plugins: [
+    { id: 'app-id', name: 'App', path: 'app://app-id', source: 'app' },
+    { id: 'plugin-id', name: 'Plugin', path: 'plugin://custom', source: 'plugin' },
+  ],
+  goal: { enabled: true, text: 'keep goal whitespace' },
+})
+assert.deepEqual(cloneComposerTurnOptions(normalizedTurnOptions), normalizedTurnOptions)
+assert.notEqual(cloneComposerTurnOptions(normalizedTurnOptions), normalizedTurnOptions)
+
+const outboxNowMs = Date.parse('2026-07-20T12:00:00.000Z')
+const outboxEntry = (clientMessageId, createdAtMs, updatedAtMs = createdAtMs) => ({
+  clientMessageId,
+  threadId: ' thread-outbox ',
+  cwd: ' E:/repo ',
+  text: 'message',
+  imageUrls: ['image'],
+  skills: [{ name: 'skill', path: 'skill/path' }],
+  fileAttachments: [{ label: 'file', path: 'file.txt', fsPath: 'E:/repo/file.txt' }],
+  modelId: ' model ',
+  reasoningEffort: 'high',
+  collaborationMode: 'plan',
+  turnOptions: normalizedTurnOptions,
+  state: 'confirming',
+  createdAtMs,
+  updatedAtMs,
+})
+const parsedOutbox = parseMessageOutboxState(JSON.stringify({
+  version: 1,
+  entries: [
+    outboxEntry('client-expired', outboxNowMs - 8 * 24 * 60 * 60 * 1000),
+    outboxEntry('client-removed', outboxNowMs - 2000, outboxNowMs - 1000),
+    outboxEntry('client-valid', outboxNowMs - 500),
+    { ...outboxEntry('client-normalized', outboxNowMs - 250), fileAttachments: [{ label: 'bad' }] },
+  ],
+  removals: [{ clientMessageId: 'client-removed', removedAtMs: outboxNowMs }],
+}), outboxNowMs)
+assert.deepEqual(parsedOutbox.entries.map((entry) => entry.clientMessageId), [
+  'client-valid',
+  'client-normalized',
+])
+assert.equal(parsedOutbox.entries[0]?.threadId, 'thread-outbox')
+assert.equal(parsedOutbox.entries[0]?.cwd, 'E:/repo')
+assert.equal(parsedOutbox.entries[0]?.modelId, 'model')
+assert.deepEqual(parsedOutbox.entries[1]?.fileAttachments, [])
+assert.deepEqual(parseMessageOutboxState('{bad json', outboxNowMs), { entries: [], removals: [] })
+assert.deepEqual(parseMessageOutboxState('{"version":2,"entries":[]}', outboxNowMs), { entries: [], removals: [] })
+
+const serializedOutbox = serializeMessageOutboxState(
+  Array.from({ length: 14 }, (_, index) => outboxEntry('client-bounded-' + index, outboxNowMs - 14 + index)),
+  [{ clientMessageId: 'client-old-removal', removedAtMs: outboxNowMs - 8 * 24 * 60 * 60 * 1000 }],
+  outboxNowMs,
+)
+assert.ok(serializedOutbox)
+const serializedOutboxPayload = JSON.parse(serializedOutbox)
+assert.equal(serializedOutboxPayload.entries.length, 12)
+assert.equal(serializedOutboxPayload.entries[0]?.clientMessageId, 'client-bounded-2')
+assert.deepEqual(serializedOutboxPayload.removals, [])
+assert.equal(serializeMessageOutboxState([], [], outboxNowMs), null)
+
+const generatedClientMessageId = createClientMessageId()
+assert.match(generatedClientMessageId, /^cm-\\d+-.+/)
+
+const persistedIdentityMessage = {
+  id: 'persisted-identity-1',
+  role: 'user',
+  text: '  同一条\\n消息  ',
+  images: [' image-a ', ''],
+  fileAttachments: [{ label: 'file-a', path: ' C:/work/a.txt ' }],
+}
+const optimisticIdentityMessage = {
+  ...persistedIdentityMessage,
+  id: 'optimistic-user:identity-1',
+  text: '同一条 消息',
+  images: ['image-a'],
+  fileAttachments: [{ label: 'file-a', path: 'C:/work/a.txt' }],
+}
+const identitySignature = userMessageSignature(optimisticIdentityMessage)
+assert.equal(userMessageSignature(persistedIdentityMessage), identitySignature)
+const rememberedIdentityMeta = new Map([[optimisticIdentityMessage.id, {
+  kind: 'optimisticUserMessage',
+  signature: identitySignature,
+  baselineMatchCount: 1,
+  createdAtMs: 1,
+}]])
+assert.deepEqual(
+  filterVisibleOptimisticUserMessages(
+    [persistedIdentityMessage],
+    [optimisticIdentityMessage],
+    rememberedIdentityMeta,
+  ),
+  [optimisticIdentityMessage],
+)
+assert.deepEqual(
+  filterVisibleOptimisticUserMessages(
+    [persistedIdentityMessage, { ...persistedIdentityMessage, id: 'persisted-identity-2' }],
+    [optimisticIdentityMessage],
+    rememberedIdentityMeta,
+  ),
+  [],
+)
+
+const historyNoticeMessage = {
+  id: 'history-notice',
+  role: 'system',
+  text: 'Older history available',
+  messageType: 'history.notice',
+}
+const projectedTurnTwo = {
+  id: 'projected-turn-2',
+  role: 'assistant',
+  text: 'turn two',
+  turnIndex: 2,
+}
+const projectedTurnZero = {
+  id: 'projected-turn-0',
+  role: 'user',
+  text: 'turn zero',
+  turnIndex: 0,
+}
+assert.equal(areMessageFieldsEqual(projectedTurnTwo, { ...projectedTurnTwo }), true)
+assert.equal(areMessageFieldsEqual(projectedTurnTwo, { ...projectedTurnTwo, text: 'changed' }), false)
+assert.equal(areMessageFieldsEqual(projectedTurnTwo, {
+  ...projectedTurnTwo,
+  fileAttachments: [{ label: 'report', path: 'report.txt' }],
+}), false)
+const projectedCommand = {
+  id: 'command-projection',
+  role: 'assistant',
+  text: '',
+  commandExecution: {
+    command: 'npm test',
+    cwd: 'E:/repo',
+    status: 'inProgress',
+    aggregatedOutput: '',
+    exitCode: null,
+    durationMs: null,
+    startedAtMs: 1,
+  },
+}
+assert.equal(areMessageFieldsEqual(projectedCommand, {
+  ...projectedCommand,
+  commandExecution: { ...projectedCommand.commandExecution, command: 'npm run test' },
+}), false)
+assert.equal(areMessageFieldsEqual(projectedCommand, {
+  ...projectedCommand,
+  commandExecution: { ...projectedCommand.commandExecution, cwd: 'E:/other' },
+}), false)
+const unchangedProjection = [projectedTurnTwo]
+assert.equal(mergeMessages(unchangedProjection, [{ ...projectedTurnTwo }]), unchangedProjection)
+assert.deepEqual(
+  sortMessagesByTurnIndex([projectedTurnTwo, historyNoticeMessage, projectedTurnZero]).map((message) => message.id),
+  ['history-notice', 'projected-turn-0', 'projected-turn-2'],
+)
+const mergedOlderHistory = mergeMessages(
+  [historyNoticeMessage, projectedTurnTwo],
+  [projectedTurnZero],
+  { preserveMissing: true, sortByTurnIndex: true, replaceHistoryNotice: true },
+)
+assert.deepEqual(mergedOlderHistory.map((message) => message.id), ['projected-turn-0', 'projected-turn-2'])
+const laterHistoryMessages = [historyNoticeMessage, projectedTurnTwo]
+assert.equal(removeStaleHistoryNoticeAfterOlderMerge(laterHistoryMessages), laterHistoryMessages)
+assert.deepEqual(
+  removeStaleHistoryNoticeAfterOlderMerge([historyNoticeMessage, projectedTurnZero]).map((message) => message.id),
+  ['projected-turn-0'],
+)
+const liveAgentProjection = {
+  id: 'live-agent-projection',
+  role: 'assistant',
+  text: 'same live text',
+  messageType: 'agentMessage.live',
+}
+assert.deepEqual(
+  removeRedundantLiveAgentMessages(
+    [liveAgentProjection],
+    [{ ...projectedTurnTwo, text: ' same\\n live text ' }],
+  ),
+  [],
+)
+assert.equal(upsertMessage(unchangedProjection, { ...projectedTurnTwo }), unchangedProjection)
+assert.deepEqual(
+  upsertMessage(unchangedProjection, projectedTurnZero).map((message) => message.id),
+  ['projected-turn-2', 'projected-turn-0'],
+)
 
 const retryAttempts = []
 const retryFeedback = []
@@ -379,6 +812,19 @@ const groups = normalizeThreadGroupsV2({
       turns: [],
     },
     {
+      id: 'thread-cli',
+      cwd: 'E:\\\\repo',
+      preview: 'Duplicate cursor-page thread',
+      modelProvider: 'openai',
+      cliVersion: '0.0.0',
+      createdAt: 1,
+      updatedAt: 4,
+      path: null,
+      source: 'cli',
+      gitInfo: null,
+      turns: [],
+    },
+    {
       id: 'thread-sub-agent',
       cwd: 'E:\\\\repo',
       preview: 'Sub-agent thread',
@@ -410,9 +856,38 @@ const groups = normalizeThreadGroupsV2({
 
 assert.equal(groups.length, 1)
 assert.deepEqual(groups[0]?.threads.map((thread) => thread.id), ['thread-cli', 'thread-sub-agent', 'thread-future-source'])
+assert.equal(groups[0]?.threads[0]?.preview, 'CLI thread')
 assert.equal(groups[0]?.threads[0]?.sourceKind, 'cli')
 assert.equal(groups[0]?.threads[1]?.sourceKind, 'subAgent.thread_spawn')
 assert.equal(groups[0]?.threads[2]?.sourceKind, 'futureSource')
+
+const recentProjectGroups = orderProjectGroupsByRecentActivity([
+  {
+    projectName: 'empty-project',
+    threads: [],
+  },
+  {
+    projectName: 'older-project',
+    threads: [{ ...groups[0].threads[0], id: 'older-thread', updatedAtIso: '2026-01-01T00:00:00.000Z' }],
+  },
+  {
+    projectName: 'newer-project',
+    threads: [{ ...groups[0].threads[0], id: 'newer-thread', updatedAtIso: '2026-02-01T00:00:00.000Z' }],
+  },
+  {
+    projectName: 'pinned-project',
+    isPinnedProject: true,
+    pinnedProjectRank: 0,
+    threads: [{ ...groups[0].threads[0], id: 'pinned-thread', updatedAtIso: '2025-01-01T00:00:00.000Z' }],
+  },
+])
+
+assert.deepEqual(recentProjectGroups.map((group) => group.projectName), [
+  'pinned-project',
+  'newer-project',
+  'older-project',
+  'empty-project',
+])
 
 const makeReplayNotification = (seq: number) => ({
   method: 'turn/completed',

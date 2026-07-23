@@ -8,6 +8,7 @@ import type {
 } from '../appServerDtos.js'
 import type { CommandExecutionData, UiFileAttachment, UiMessage, UiProjectGroup, UiThread } from '../../types/codex.js'
 import { normalizePathForComparison, normalizePathForUi, toProjectName } from '../../pathUtils.js'
+import { orderProjectGroupsByRecentActivity } from '../../utils/projectGroupOrdering.js'
 
 function toIso(seconds: number): string {
   return new Date(seconds * 1000).toISOString()
@@ -441,22 +442,25 @@ function groupThreadsByProject(threads: UiThread[]): UiProjectGroup[] {
     else grouped.set(thread.projectName, [thread])
   }
 
-  return Array.from(grouped.entries())
+  const groups = Array.from(grouped.entries())
     .map(([projectName, projectThreads]) => ({
       projectName,
       threads: projectThreads.sort(
         (a, b) => new Date(b.updatedAtIso).getTime() - new Date(a.updatedAtIso).getTime(),
       ),
     }))
-    .sort((a, b) => {
-      const aLast = new Date(a.threads[0]?.updatedAtIso ?? 0).getTime()
-      const bLast = new Date(b.threads[0]?.updatedAtIso ?? 0).getTime()
-      return bLast - aLast
-    })
+  return orderProjectGroupsByRecentActivity(groups)
 }
 
 export function normalizeThreadGroupsV2(payload: ThreadListResponse): UiProjectGroup[] {
-  const uiThreads = payload.data.map(toUiThread)
+  const seenThreadIds = new Set<string>()
+  const uiThreads: UiThread[] = []
+  for (const thread of payload.data) {
+    const uiThread = toUiThread(thread)
+    if (seenThreadIds.has(uiThread.id)) continue
+    seenThreadIds.add(uiThread.id)
+    uiThreads.push(uiThread)
+  }
   return groupThreadsByProject(uiThreads)
 }
 

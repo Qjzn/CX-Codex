@@ -27,6 +27,7 @@ import {
 import { startCodexBridgeStartupTasks } from './codexBridgeStartupTasks.js'
 import { createCodexBridgeRuntimeOperations } from './codexBridgeRuntimeOperations.js'
 import { createCodexBridgeMiddlewareState } from './codexBridgeMiddlewareState.js'
+import { MobilePushCoordinator } from './mobilePush.js'
 
 type CodexBridgeMiddleware = ((req: IncomingMessage, res: ServerResponse, next: () => void) => Promise<void>) & {
   dispose: () => void
@@ -63,6 +64,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     hookDiagnosticsCache,
     windowsSandboxReadinessCache,
   } = createCodexBridgeMiddlewareState(appServer)
+  const mobilePushCoordinator = new MobilePushCoordinator({ store: runtimeStore })
   const {
     persistRuntimeSnapshot,
     readThreadRuntimeSnapshot,
@@ -101,7 +103,18 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
     notificationDiagnostics,
     statusDiagnostics,
     persistRuntimeSnapshot,
+    onRuntimeEvent: (event) => {
+      void mobilePushCoordinator.handleRuntimeEvent(event).catch((error) => {
+        writeBridgeLog('warn', 'Mobile push terminal wake failed', {
+          method: event.method,
+          threadId: event.threadId,
+          seq: event.seq,
+          error: getErrorMessage(error, 'mobile_push_delivery_failed'),
+        })
+      })
+    },
   })
+  mobilePushCoordinator.start()
 
   const {
     readAppServerHookDiagnostics,
@@ -156,6 +169,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         readAppServerHookDiagnostics,
         readAppServerSchemaAuditSummary,
         readWindowsSandboxReadinessDiagnostics,
+        mobilePushCoordinator,
       }))) {
         return
       }
@@ -179,6 +193,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       statusDiagnostics,
       hookDiagnosticsCache,
       windowsSandboxReadinessCache,
+      mobilePushCoordinator,
       runtimeStore,
       appServer,
     })

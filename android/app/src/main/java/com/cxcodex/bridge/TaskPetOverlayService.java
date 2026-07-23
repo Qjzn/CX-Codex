@@ -17,11 +17,15 @@ import android.graphics.drawable.AnimatedImageDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.os.SystemClock;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -42,9 +46,11 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 import java.io.BufferedReader;
+import java.io.FileDescriptor;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.PrintWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -63,14 +69,27 @@ public final class TaskPetOverlayService extends Service {
 
     private static final String ACTION_UPDATE = "com.cxcodex.bridge.taskpet.UPDATE";
     private static final String ACTION_MARK_THREAD_READ = "com.cxcodex.bridge.taskpet.MARK_THREAD_READ";
+    private static final String ACTION_MOBILE_PUSH_WAKE = "com.cxcodex.bridge.taskpet.MOBILE_PUSH_WAKE";
+    private static final String ACTION_NO_PROGRESS_REVIEW = "com.cxcodex.bridge.taskpet.RUN_NO_PROGRESS_REVIEW";
     private static final String EXTRA_SERVER_URL = "serverUrl";
     private static final String EXTRA_TASKS_JSON = "tasksJson";
     private static final String EXTRA_RECENT_THREADS_JSON = "recentThreadsJson";
+    private static final String EXTRA_PUSH_EVENT_SEQ = "pushEventSeq";
     private static final String CHANNEL_ID = "cx_codex_task_pet";
     private static final String CHANNEL_NAME = "CX-Codex 任务宠物";
+    static final String COMPLETION_CHANNEL_ID = "cx_codex_task_completion_v2";
+    private static final String COMPLETION_CHANNEL_NAME = "CX-Codex 任务完成";
     private static final int FOREGROUND_NOTIFICATION_ID = 7421;
     private static final long ACTIVE_POLL_INTERVAL_MS = 3_000L;
     private static final long RETRY_POLL_INTERVAL_MS = 7_500L;
+    private static final long EVENT_STREAM_RETRY_MS = 1_500L;
+    private static final long DIAGNOSTICS_PERSIST_INTERVAL_MS = 15_000L;
+    private static final long ACTIVE_TASK_WAKE_LOCK_TIMEOUT_MS = 30 * 60_000L;
+    private static final String ACTIVE_TASK_WAKE_LOCK_TAG = "CX-Codex:TaskMonitor";
+    private static final int MAX_FRONTEND_TASKS = 8;
+    private static final int MAX_TRACKED_TASKS = 16;
+    private static final int OMITTED_PROVISIONAL_MISSING_LIMIT = 3;
+    private static final int REPLY_CONFIRMATION_MISSING_LIMIT = 3;
     private static final int ROOT_PADDING_DP = 6;
     private static final int PANEL_WIDTH_DP = 282;
     private static final int PANEL_CONTENT_WIDTH_DP = 258;
@@ -78,6 +97,8 @@ public final class TaskPetOverlayService extends Service {
     private static final int MASCOT_HEIGHT_DP = 79;
     private static final int MINI_SIZE_DP = 48;
     private static final int TASK_ROW_HEIGHT_DP = 88;
+    private static final int COMPACT_PREVIEW_HEIGHT_DP = 86;
+    private static final int COMPACT_PREVIEW_GAP_DP = 4;
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
     private static final Interpolator EASE_OUT = new PathInterpolator(0.22f, 1f, 0.36f, 1f);
 
@@ -85,10 +106,17 @@ public final class TaskPetOverlayService extends Service {
     private final List<TaskItem> tasks = new ArrayList<>();
     private final List<RecentThreadItem> recentThreads = new ArrayList<>();
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService eventStreamExecutor = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean eventStreamRunning = new AtomicBoolean(false);
+    private final AtomicBoolean eventStreamDesired = new AtomicBoolean(false);
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback defaultNetworkCallback;
+    private Network currentDefaultNetwork;
     private WindowManager windowManager;
     private WindowManager.LayoutParams windowParams;
     private LinearLayout overlayRoot;
     private LinearLayout taskPanel;
+    private LinearLayout compactPreview;
     private LinearLayout platformActions;
     private LinearLayout taskList;
     private LinearLayout recentSection;
@@ -103,6 +131,9 @@ public final class TaskPetOverlayService extends Service {
     private TextView miniBadge;
     private TextView petStatus;
     private TextView panelSummary;
+    private TextView compactPreviewContext;
+    private TextView compactPreviewReply;
+    private TextView compactPreviewFreshness;
     private TextView replyTitle;
     private EditText replyInput;
     private TextView replyStatus;
@@ -112,6 +143,11 @@ public final class TaskPetOverlayService extends Service {
     private boolean anchoredRight;
     private boolean dragFramePending;
     private boolean pollInFlight;
+    private boolean eventDrivenPollPending;
+    private boolean eventDrivenPollScheduled;
+    private boolean connectivityCallbackRegistered;
+    private boolean defaultNetworkKnown;
+    private boolean networkRecoveryStreamRestartPending;
     private boolean destroyed;
     private boolean sendingReply;
     private boolean closeConfirmationVisible;
@@ -127,8 +163,53 @@ public final class TaskPetOverlayService extends Service {
     private String replyAttemptThreadId = "";
     private String replyAttemptMessage = "";
     private String serverUrl = "";
+    private String eventStreamServerUrl = "";
+    private String eventStreamState = "idle";
+    private String lastStartReason = "none";
+    private String lastCompletionNotificationResult = "none";
+    private String lastCompletionNotificationBodySource = "none";
+    private String pendingReplyRenderTaskKey = "";
     private int consecutivePollFailures;
+    private int eventStreamReconnectCount;
+    private int lastEventStreamStatusCode;
+    private long monitorStartedAtMs;
+    private long serviceCreateCount;
+    private long stickyRestartCount;
+    private long taskRemovedCount;
+    private long lastStartCommandAtMs;
+    private long lastTaskRemovedAtMs;
+    private long lastDiagnosticsPersistAtMs;
+    private long lastEventStreamConnectedAtMs;
+    private long lastEventStreamDisconnectedAtMs;
+    private long lastRelevantEventAtMs;
+    private long lastEventDrivenPollAtMs;
+    private long lastReplyEventAtMs;
+    private long lastReplyEventSeq;
+    private long lastReplyAppliedAtMs;
+    private long lastReplyAppliedEventSeq;
+    private long lastReplyRenderedAtMs;
+    private long lastReplyRenderedEventSeq;
+    private long pendingReplyRenderEventSeq;
+    private long lastSnapshotSuccessAtMs;
+    private long lastSnapshotFailureAtMs;
+    private long lastTerminalAtMs;
+    private long lastCompletionNotificationAttemptAtMs;
+    private long networkRecoveryCount;
+    private long lastDefaultNetworkAvailableAtMs;
+    private long lastDefaultNetworkLostAtMs;
+    private long relevantEventCount;
+    private long replyEventCount;
+    private long replySnapshotApplyCount;
+    private long replyRenderCount;
+    private long snapshotSuccessCount;
+    private long snapshotFailureCount;
+    private long completionNotificationAttemptCount;
+    private long completionNotificationPostedCount;
+    private volatile HttpURLConnection eventStreamConnection;
     private ValueAnimator positionAnimator;
+    private PowerManager.WakeLock taskWakeLock;
+    private String wakeLockProgressSignature = "";
+    private long wakeLockProgressDeadlineMs;
 
     private final Runnable pollRunnable = new Runnable() {
         @Override
@@ -137,8 +218,27 @@ public final class TaskPetOverlayService extends Service {
         }
     };
 
+    private final Runnable eventStreamReconnectRunnable = new Runnable() {
+        @Override
+        public void run() {
+            syncEventStream();
+        }
+    };
+
     public static boolean isRunning() {
         return RUNNING.get();
+    }
+
+    static boolean requestNoProgressReview(Context context) {
+        if (!isRunning()) return false;
+        try {
+            context.startService(
+                new Intent(context, TaskPetOverlayService.class).setAction(ACTION_NO_PROGRESS_REVIEW)
+            );
+            return true;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
     }
 
     public static void startOrUpdate(
@@ -164,13 +264,43 @@ public final class TaskPetOverlayService extends Service {
         context.stopService(new Intent(context, TaskPetOverlayService.class));
     }
 
+    public static boolean wakeFromMobilePush(
+        Context context,
+        String threadId,
+        long eventSeq,
+        boolean highPriority
+    ) {
+        String normalizedThreadId = threadId == null ? "" : threadId.trim();
+        if (normalizedThreadId.isEmpty()) return false;
+        Intent intent = new Intent(context, TaskPetOverlayService.class)
+            .setAction(ACTION_MOBILE_PUSH_WAKE)
+            .putExtra(EXTRA_THREAD_ID, normalizedThreadId)
+            .putExtra(EXTRA_PUSH_EVENT_SEQ, Math.max(0L, eventSeq));
+        try {
+            if (isRunning() || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                context.startService(intent);
+            } else if (highPriority) {
+                ContextCompat.startForegroundService(context, intent);
+            } else {
+                return false;
+            }
+            return true;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
     public static void markThreadRead(Context context, String threadId) {
         String normalizedThreadId = threadId == null ? "" : threadId.trim();
-        if (!isRunning() || normalizedThreadId.isEmpty()) return;
+        if (normalizedThreadId.isEmpty()) return;
         Intent intent = new Intent(context, TaskPetOverlayService.class)
             .setAction(ACTION_MARK_THREAD_READ)
             .putExtra(EXTRA_THREAD_ID, normalizedThreadId);
-        context.startService(intent);
+        if (isRunning() || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            context.startService(intent);
+        } else {
+            ContextCompat.startForegroundService(context, intent);
+        }
     }
 
     @Override
@@ -178,24 +308,38 @@ public final class TaskPetOverlayService extends Service {
         super.onCreate();
         destroyed = false;
         RUNNING.set(true);
+        restoreMonitorLifecycleDiagnostics();
+        restorePendingReplyRender();
         restoreReplyAttempt();
         ensureNotificationChannel();
         startForeground(FOREGROUND_NOTIFICATION_ID, buildForegroundNotification(0));
-        if (!android.provider.Settings.canDrawOverlays(this)) {
-            stopSelf();
-            return;
-        }
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-        createOverlay();
+        PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+        if (powerManager != null) {
+            taskWakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, ACTIVE_TASK_WAKE_LOCK_TAG);
+            taskWakeLock.setReferenceCounted(false);
+        }
+        monitorStartedAtMs = System.currentTimeMillis();
+        registerDefaultNetworkCallback();
+        eventStreamState = "starting";
+        persistMonitorDiagnostics(true);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (!android.provider.Settings.canDrawOverlays(this)) {
-            stopSelf();
-            return START_NOT_STICKY;
+        lastStartCommandAtMs = System.currentTimeMillis();
+        if (intent == null) {
+            lastStartReason = "sticky_restart";
+            stickyRestartCount += 1L;
+        } else if (ACTION_MOBILE_PUSH_WAKE.equals(intent.getAction())) {
+            lastStartReason = "mobile_push";
+        } else if (ACTION_MARK_THREAD_READ.equals(intent.getAction())) {
+            lastStartReason = "mark_read";
+        } else if (ACTION_NO_PROGRESS_REVIEW.equals(intent.getAction())) {
+            lastStartReason = "no_progress_review";
+        } else {
+            lastStartReason = "update";
         }
-
         String incomingServerUrl = intent == null ? null : intent.getStringExtra(EXTRA_SERVER_URL);
         String incomingTasksJson = intent == null ? null : intent.getStringExtra(EXTRA_TASKS_JSON);
         String incomingRecentThreadsJson = intent == null ? null : intent.getStringExtra(EXTRA_RECENT_THREADS_JSON);
@@ -208,15 +352,16 @@ public final class TaskPetOverlayService extends Service {
         if (tasks.isEmpty()) {
             String persistedTasksJson = MobileShellConfig.getPreferences(this)
                 .getString(MobileShellConfig.PREF_TASK_PET_TASKS_JSON, "[]");
-            replaceTasks(persistedTasksJson == null ? "[]" : persistedTasksJson);
+            replaceTasks(persistedTasksJson == null ? "[]" : persistedTasksJson, false);
         }
         if (incomingTasksJson != null) {
-            replaceTasks(incomingTasksJson);
+            replaceTasks(incomingTasksJson, true);
         } else {
             String latestActiveTasksJson = MobileShellConfig.getPreferences(this)
                 .getString(MobileShellConfig.PREF_TASK_PET_ACTIVE_TASKS_JSON, "[]");
-            replaceTasks(latestActiveTasksJson == null ? "[]" : latestActiveTasksJson);
+            replaceTasks(latestActiveTasksJson == null ? "[]" : latestActiveTasksJson, true);
         }
+        reconcilePendingReplyRender();
         if (incomingRecentThreadsJson != null) {
             replaceRecentThreads(incomingRecentThreadsJson);
         } else {
@@ -224,12 +369,36 @@ public final class TaskPetOverlayService extends Service {
                 .getString(MobileShellConfig.PREF_TASK_PET_RECENT_THREADS_JSON, "[]");
             replaceRecentThreads(persistedRecentThreadsJson == null ? "[]" : persistedRecentThreadsJson);
         }
+        ensurePersistedReplyAttemptTask();
+        if (intent != null && ACTION_MOBILE_PUSH_WAKE.equals(intent.getAction())) {
+            relevantEventCount += 1L;
+            lastRelevantEventAtMs = System.currentTimeMillis();
+            long pushEventSeq = intent.getLongExtra(EXTRA_PUSH_EVENT_SEQ, 0L);
+            if (pushEventSeq > 0L) lastEventDrivenPollAtMs = System.currentTimeMillis();
+        }
         if (intent != null && ACTION_MARK_THREAD_READ.equals(intent.getAction())) {
             clearCompletedThread(intent.getStringExtra(EXTRA_THREAD_ID));
         }
+        syncOverlayVisibility();
         renderTasks();
+        syncTaskWakeLock();
         schedulePoll(0L);
+        syncEventStream();
+        MobilePushRegistration.ensureTokenAndSyncAsync(this);
+        persistMonitorDiagnostics(true);
+        if (!shouldKeepMonitorRunning()) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         return START_STICKY;
+    }
+
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        taskRemovedCount += 1L;
+        lastTaskRemovedAtMs = System.currentTimeMillis();
+        persistMonitorDiagnostics(true);
+        super.onTaskRemoved(rootIntent);
     }
 
     @Override
@@ -249,15 +418,241 @@ public final class TaskPetOverlayService extends Service {
     }
 
     @Override
+    protected void dump(FileDescriptor fileDescriptor, PrintWriter writer, String[] args) {
+        super.dump(fileDescriptor, writer, args);
+        try {
+            String monitorDiagnosticsJson = MobileShellConfig.getPreferences(this)
+                .getString(MobileShellConfig.PREF_TASK_PET_MONITOR_DIAGNOSTICS_JSON, "{}");
+            String pushDiagnosticsJson = MobileShellConfig.getPreferences(this)
+                .getString(MobileShellConfig.PREF_MOBILE_PUSH_DIAGNOSTICS_JSON, "{}");
+            PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+            boolean runtimeNotificationPermissionGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED;
+            JSONObject snapshot = new JSONObject()
+                .put("version", 1)
+                .put("capturedAtMs", System.currentTimeMillis())
+                .put("running", RUNNING.get())
+                .put("overlayAttached", overlayRoot != null)
+                .put("overlayExpanded", expanded)
+                .put("wakeLockHeld", taskWakeLock != null && taskWakeLock.isHeld())
+                .put("screenInteractive", powerManager != null && powerManager.isInteractive())
+                .put("powerSaveMode", powerManager != null && powerManager.isPowerSaveMode())
+                .put("deviceIdleMode", powerManager != null && powerManager.isDeviceIdleMode())
+                .put(
+                    "ignoringBatteryOptimizations",
+                    powerManager != null && powerManager.isIgnoringBatteryOptimizations(getPackageName())
+                )
+                .put("canDrawOverlays", android.provider.Settings.canDrawOverlays(this))
+                .put("notificationsEnabled", NotificationManagerCompat.from(this).areNotificationsEnabled())
+                .put("runtimeNotificationPermissionGranted", runtimeNotificationPermissionGranted)
+                .put("completionChannelEnabled", isCompletionNotificationChannelEnabled(this))
+                .put(
+                    "noProgressReviewScheduledAtMs",
+                    MobileShellConfig.getPreferences(this).getLong(
+                        MobileShellConfig.PREF_TASK_PET_NO_PROGRESS_REVIEW_AT_MS,
+                        0L
+                    )
+                )
+                .put("monitorDiagnostics", new JSONObject(monitorDiagnosticsJson == null ? "{}" : monitorDiagnosticsJson))
+                .put("pushDiagnostics", new JSONObject(pushDiagnosticsJson == null ? "{}" : pushDiagnosticsJson));
+            writer.println("CX_CODEX_TASK_PET_DIAGNOSTICS=" + snapshot);
+        } catch (Exception exception) {
+            writer.println("CX_CODEX_TASK_PET_DIAGNOSTICS_ERROR=" + exception.getClass().getSimpleName());
+        }
+        writer.flush();
+    }
+
+    @Override
     public void onDestroy() {
         destroyed = true;
+        unregisterDefaultNetworkCallback();
+        if (eventStreamRunning.get()) lastEventStreamDisconnectedAtMs = System.currentTimeMillis();
+        eventStreamState = "stopped";
+        persistMonitorDiagnostics(true);
         mainHandler.removeCallbacks(pollRunnable);
+        mainHandler.removeCallbacks(eventStreamReconnectRunnable);
+        stopEventStream();
+        releaseTaskWakeLock();
+        removeOverlay();
+        networkExecutor.shutdownNow();
+        eventStreamExecutor.shutdownNow();
+        RUNNING.set(false);
+        super.onDestroy();
+    }
+
+    private void registerDefaultNetworkCallback() {
+        connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (connectivityManager == null || defaultNetworkCallback != null) return;
+        try {
+            currentDefaultNetwork = connectivityManager.getActiveNetwork();
+            defaultNetworkKnown = true;
+            if (currentDefaultNetwork != null) {
+                lastDefaultNetworkAvailableAtMs = System.currentTimeMillis();
+            }
+        } catch (RuntimeException ignored) {
+            defaultNetworkKnown = false;
+        }
+        defaultNetworkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                mainHandler.post(() -> handleDefaultNetworkAvailable(network));
+            }
+
+            @Override
+            public void onLost(Network network) {
+                mainHandler.post(() -> handleDefaultNetworkLost(network));
+            }
+        };
+        try {
+            connectivityManager.registerDefaultNetworkCallback(defaultNetworkCallback);
+            connectivityCallbackRegistered = true;
+        } catch (RuntimeException ignored) {
+            defaultNetworkCallback = null;
+            connectivityCallbackRegistered = false;
+        }
+    }
+
+    private void unregisterDefaultNetworkCallback() {
+        ConnectivityManager manager = connectivityManager;
+        ConnectivityManager.NetworkCallback callback = defaultNetworkCallback;
+        if (manager != null && callback != null && connectivityCallbackRegistered) {
+            try {
+                manager.unregisterNetworkCallback(callback);
+            } catch (RuntimeException ignored) {
+                // The callback may already have been released with the service process.
+            }
+        }
+        connectivityCallbackRegistered = false;
+        defaultNetworkCallback = null;
+        currentDefaultNetwork = null;
+        networkRecoveryStreamRestartPending = false;
+    }
+
+    private void handleDefaultNetworkAvailable(Network network) {
+        if (destroyed) return;
+        boolean sameNetwork = currentDefaultNetwork != null && currentDefaultNetwork.equals(network);
+        boolean shouldRecover = TaskPetRuntimePolicy.shouldWakeForDefaultNetworkChange(
+            defaultNetworkKnown,
+            sameNetwork,
+            activeTaskCount()
+        );
+        defaultNetworkKnown = true;
+        currentDefaultNetwork = network;
+        lastDefaultNetworkAvailableAtMs = System.currentTimeMillis();
+        if (!shouldRecover) return;
+        networkRecoveryCount += 1L;
+        persistMonitorDiagnostics(true);
+        requestImmediateSnapshotPoll(true);
+        restartEventStreamAfterNetworkRecovery();
+    }
+
+    private void handleDefaultNetworkLost(Network network) {
+        if (destroyed || currentDefaultNetwork == null || !currentDefaultNetwork.equals(network)) return;
+        currentDefaultNetwork = null;
+        defaultNetworkKnown = true;
+        lastDefaultNetworkLostAtMs = System.currentTimeMillis();
+        persistMonitorDiagnostics(true);
+    }
+
+    private void restartEventStreamAfterNetworkRecovery() {
+        mainHandler.removeCallbacks(eventStreamReconnectRunnable);
+        if (!hasActiveTasks() || serverUrl.isEmpty()) return;
+        if (eventStreamRunning.get()) {
+            networkRecoveryStreamRestartPending = true;
+            stopEventStream();
+            return;
+        }
+        networkRecoveryStreamRestartPending = false;
+        syncEventStream();
+    }
+
+    private boolean shouldShowOverlay() {
+        return MobileShellConfig.getPreferences(this)
+            .getBoolean(MobileShellConfig.PREF_TASK_PET_ENABLED, false)
+            && android.provider.Settings.canDrawOverlays(this);
+    }
+
+    private int activeTaskCount() {
+        int count = 0;
+        for (TaskItem task : tasks) {
+            if (TaskPetRuntimePolicy.isActiveTaskState(task.state)) count += 1;
+        }
+        return count;
+    }
+
+    private boolean shouldKeepMonitorRunning() {
+        return TaskPetRuntimePolicy.shouldKeepMonitorRunning(shouldShowOverlay(), activeTaskCount());
+    }
+
+    private void syncTaskWakeLock() {
+        if (!TaskPetRuntimePolicy.shouldHoldWakeLock(activeTaskCount())) {
+            wakeLockProgressSignature = "";
+            wakeLockProgressDeadlineMs = 0L;
+            releaseTaskWakeLock();
+            return;
+        }
+        if (taskWakeLock == null) return;
+
+        String progressSignature = activeTaskProgressSignature();
+        long now = SystemClock.elapsedRealtime();
+        if (!progressSignature.equals(wakeLockProgressSignature)) {
+            wakeLockProgressSignature = progressSignature;
+            wakeLockProgressDeadlineMs = now + ACTIVE_TASK_WAKE_LOCK_TIMEOUT_MS;
+            releaseTaskWakeLock();
+        }
+        if (taskWakeLock.isHeld()) return;
+
+        long remainingMs = wakeLockProgressDeadlineMs - now;
+        if (remainingMs <= 0L) return;
+        try {
+            taskWakeLock.acquire(remainingMs);
+        } catch (SecurityException ignored) {
+            // The foreground monitor still works while Android keeps the CPU active.
+        }
+    }
+
+    private String activeTaskProgressSignature() {
+        StringBuilder signature = new StringBuilder();
+        for (TaskItem task : tasks) {
+            if (!TaskPetRuntimePolicy.isActiveTaskState(task.state)) continue;
+            signature
+                .append(task.threadId).append('|')
+                .append(task.clientMessageId).append('|')
+                .append(task.state).append('|')
+                .append(task.detail).append('|')
+                .append(task.lastEventSeq).append('|')
+                .append(task.lastUpdatedAtMs).append(';');
+        }
+        return signature.toString();
+    }
+
+    private void releaseTaskWakeLock() {
+        if (taskWakeLock == null || !taskWakeLock.isHeld()) return;
+        try {
+            taskWakeLock.release();
+        } catch (RuntimeException ignored) {
+            // A timed wake lock can expire between isHeld() and release().
+        }
+    }
+
+    private void syncOverlayVisibility() {
+        if (shouldShowOverlay()) {
+            if (overlayRoot == null && windowManager != null) createOverlay();
+            return;
+        }
+        removeOverlay();
+    }
+
+    private void removeOverlay() {
         if (positionAnimator != null) positionAnimator.cancel();
+        positionAnimator = null;
         if (mascot != null) mascot.animate().cancel();
         if (miniMascot != null) miniMascot.animate().cancel();
         stopPetAnimation(petImage);
         stopPetAnimation(miniPetImage);
         if (taskPanel != null) taskPanel.animate().cancel();
+        if (compactPreview != null) compactPreview.animate().cancel();
         if (windowManager != null && overlayRoot != null) {
             try {
                 windowManager.removeView(overlayRoot);
@@ -265,9 +660,35 @@ public final class TaskPetOverlayService extends Service {
                 // The system may already have detached the overlay.
             }
         }
-        networkExecutor.shutdownNow();
-        RUNNING.set(false);
-        super.onDestroy();
+        overlayRoot = null;
+        taskPanel = null;
+        compactPreview = null;
+        platformActions = null;
+        taskList = null;
+        recentSection = null;
+        recentList = null;
+        replyComposer = null;
+        closeConfirmPanel = null;
+        mascot = null;
+        miniMascot = null;
+        petImage = null;
+        miniPetImage = null;
+        badge = null;
+        miniBadge = null;
+        petStatus = null;
+        panelSummary = null;
+        compactPreviewContext = null;
+        compactPreviewReply = null;
+        compactPreviewFreshness = null;
+        replyTitle = null;
+        replyInput = null;
+        replyStatus = null;
+        replySendButton = null;
+        windowParams = null;
+        expanded = false;
+        closeConfirmationVisible = false;
+        lastPetMode = "";
+        lastRenderedTaskSignature = "";
     }
 
     private void createOverlay() {
@@ -326,6 +747,14 @@ public final class TaskPetOverlayService extends Service {
         taskPanel.addView(closeConfirmPanel, closeConfirmParams);
         overlayRoot.addView(taskPanel, new LinearLayout.LayoutParams(dp(PANEL_WIDTH_DP), LinearLayout.LayoutParams.WRAP_CONTENT));
 
+        compactPreview = buildCompactPreview();
+        LinearLayout.LayoutParams compactPreviewParams = new LinearLayout.LayoutParams(
+            dp(PANEL_WIDTH_DP),
+            dp(COMPACT_PREVIEW_HEIGHT_DP)
+        );
+        compactPreviewParams.bottomMargin = dp(COMPACT_PREVIEW_GAP_DP);
+        overlayRoot.addView(compactPreview, compactPreviewParams);
+
         mascot = buildMascot();
         LinearLayout.LayoutParams mascotParams = new LinearLayout.LayoutParams(dp(MASCOT_WIDTH_DP), dp(MASCOT_HEIGHT_DP));
         mascotParams.topMargin = dp(2);
@@ -365,6 +794,41 @@ public final class TaskPetOverlayService extends Service {
         windowParams.x = initialX;
         windowParams.y = initialY;
         windowManager.addView(overlayRoot, windowParams);
+    }
+
+    private LinearLayout buildCompactPreview() {
+        LinearLayout preview = new LinearLayout(this);
+        preview.setOrientation(LinearLayout.VERTICAL);
+        preview.setGravity(Gravity.CENTER_VERTICAL);
+        preview.setPadding(dp(12), dp(8), dp(12), dp(8));
+        preview.setBackground(touchBackground(Color.rgb(253, 253, 254), 15, Color.argb(28, 42, 114, 232)));
+        preview.setElevation(dp(7));
+        preview.setVisibility(View.GONE);
+
+        compactPreviewContext = text("", 10, Color.rgb(91, 103, 124), Typeface.BOLD);
+        compactPreviewContext.setSingleLine(true);
+        compactPreviewContext.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        preview.addView(compactPreviewContext, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(18)
+        ));
+
+        compactPreviewReply = text("", 13, Color.rgb(30, 36, 48), Typeface.BOLD);
+        compactPreviewReply.setMaxLines(2);
+        compactPreviewReply.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        compactPreviewReply.setGravity(Gravity.CENTER_VERTICAL);
+        preview.addView(compactPreviewReply, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(38)
+        ));
+
+        compactPreviewFreshness = text("", 9, Color.rgb(42, 103, 190), Typeface.NORMAL);
+        compactPreviewFreshness.setSingleLine(true);
+        preview.addView(compactPreviewFreshness, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(14)
+        ));
+        return preview;
     }
 
     private LinearLayout buildPlatformActions() {
@@ -557,18 +1021,24 @@ public final class TaskPetOverlayService extends Service {
     }
 
     private void renderTasks() {
+        int activeCount = 0;
+        int completedCount = 0;
+        int retryCount = 0;
+        boolean waiting = false;
+        for (TaskItem task : tasks) {
+            if (TaskPetRuntimePolicy.isActiveTaskState(task.state)) activeCount += 1;
+            if ("completed".equals(task.state)) completedCount += 1;
+            if ("retry".equals(task.state)) retryCount += 1;
+            if ("waiting".equals(task.state)) waiting = true;
+        }
+        if (activeCount != lastForegroundActiveCount) {
+            lastForegroundActiveCount = activeCount;
+            updateForegroundNotification(activeCount);
+        }
         if (
             taskList == null || badge == null || miniBadge == null || petImage == null
                 || miniPetImage == null || petStatus == null || recentList == null
         ) return;
-        int activeCount = 0;
-        int completedCount = 0;
-        boolean waiting = false;
-        for (TaskItem task : tasks) {
-            if (!"completed".equals(task.state)) activeCount += 1;
-            if ("completed".equals(task.state)) completedCount += 1;
-            if ("waiting".equals(task.state)) waiting = true;
-        }
         if (tasks.isEmpty() && !expanded && !minimized) {
             setMinimized(true);
         } else if (!tasks.isEmpty() && minimized) {
@@ -576,12 +1046,19 @@ public final class TaskPetOverlayService extends Service {
         }
         badge.setVisibility(tasks.isEmpty() ? View.GONE : View.VISIBLE);
         badge.setText(tasks.size() > 99 ? "99+" : String.valueOf(tasks.size()));
-        badge.setBackground(rounded(waiting ? Color.rgb(214, 126, 28) : Color.rgb(42, 114, 232), 999));
+        int badgeColor = retryCount > 0
+            ? Color.rgb(196, 73, 65)
+            : waiting ? Color.rgb(214, 126, 28) : Color.rgb(42, 114, 232);
+        badge.setBackground(rounded(badgeColor, 999));
         miniBadge.setVisibility(tasks.isEmpty() ? View.GONE : View.VISIBLE);
         miniBadge.setText(tasks.size() > 9 ? "9+" : String.valueOf(tasks.size()));
-        miniBadge.setBackground(rounded(waiting ? Color.rgb(214, 126, 28) : Color.rgb(42, 114, 232), 999));
-        String petMode = waiting ? "waiting" : activeCount > 0 ? "working" : completedCount > 0 ? "completed" : "idle";
-        String stateLabel = waiting ? "待处理" : activeCount > 0 ? "工作中" : completedCount > 0 ? "已完成" : "待命";
+        miniBadge.setBackground(rounded(badgeColor, 999));
+        String petMode = waiting || retryCount > 0
+            ? "waiting"
+            : activeCount > 0 ? "working" : completedCount > 0 ? "completed" : "idle";
+        String stateLabel = retryCount > 0
+            ? "待重试"
+            : waiting ? "待处理" : activeCount > 0 ? "工作中" : completedCount > 0 ? "已完成" : "待命";
         updatePetImage(petMode);
         petStatus.setText(stateLabel);
         String countLabel = tasks.isEmpty() ? "没有任务" : tasks.size() + " 个任务";
@@ -590,17 +1067,88 @@ public final class TaskPetOverlayService extends Service {
         if (panelSummary != null) {
             panelSummary.setText(
                 activeCount > 0
-                    ? activeCount + " 个任务 · 最新回复实时更新"
+                    ? activeCount + " 个任务 · 最新回复实时更新" + (retryCount > 0 ? " · " + retryCount + " 条待重试" : "")
+                    : retryCount > 0
+                        ? retryCount + " 条回复待重试"
                     : completedCount > 0
                         ? completedCount + " 条已完成 · 回复保留至查看"
                         : "当前空闲"
             );
         }
-        if (activeCount != lastForegroundActiveCount) {
-            lastForegroundActiveCount = activeCount;
-            updateForegroundNotification(activeCount);
+        String compactRenderedReplyTaskKey = renderCompactPreview();
+        syncCompactPreviewVisibility();
+        if (
+            !compactRenderedReplyTaskKey.isEmpty()
+                && compactPreview != null
+                && compactPreview.getVisibility() == View.VISIBLE
+        ) {
+            compactPreview.animate().cancel();
+            compactPreview.setAlpha(0.78f);
+            compactPreview.setTranslationY(dp(3));
+            compactPreview.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setDuration(140L)
+                .setInterpolator(EASE_OUT)
+                .withEndAction(() -> commitPendingReplyRender(compactRenderedReplyTaskKey))
+                .start();
         }
         if (expanded) renderExpandedTaskListPreservingPet();
+    }
+
+    private String renderCompactPreview() {
+        if (
+            compactPreview == null
+                || compactPreviewContext == null
+                || compactPreviewReply == null
+                || compactPreviewFreshness == null
+        ) return "";
+        if (tasks.isEmpty()) {
+            compactPreviewContext.setText("");
+            compactPreviewReply.setText("");
+            compactPreviewFreshness.setText("");
+            compactPreview.setOnClickListener(null);
+            compactPreview.setClickable(false);
+            compactPreview.setFocusable(false);
+            return "";
+        }
+
+        TaskItem task = tasks.get(0);
+        String replyPreview = task.latestReply.isEmpty()
+            ? task.latestActivity.isEmpty() ? task.detail : task.latestActivity
+            : task.latestReply;
+        String context = task.title;
+        if (!task.projectName.isEmpty()) context += " · " + task.projectName;
+        compactPreviewContext.setText(context);
+        compactPreviewReply.setText(replyPreview);
+        compactPreviewFreshness.setText(freshnessLabel(task) + "   ›");
+        boolean canOpenThread = !task.threadId.isEmpty();
+        compactPreview.setClickable(canOpenThread);
+        compactPreview.setFocusable(canOpenThread);
+        compactPreview.setContentDescription(
+            replyPreview + "，" + task.title + (canOpenThread ? "，点击打开会话" : "，正在等待会话创建")
+        );
+        compactPreview.setOnClickListener(canOpenThread ? view -> {
+            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
+            openThread(task.threadId);
+        } : null);
+        return !pendingReplyRenderTaskKey.isEmpty()
+            && pendingReplyRenderTaskKey.equals(taskNotificationKey(task))
+                ? pendingReplyRenderTaskKey
+                : "";
+    }
+
+    private void syncCompactPreviewVisibility() {
+        if (compactPreview == null) return;
+        compactPreview.setVisibility(shouldShowCompactPreview() ? View.VISIBLE : View.GONE);
+    }
+
+    private boolean shouldShowCompactPreview() {
+        return compactPreview != null
+            && !expanded
+            && !minimized
+            && !tasks.isEmpty()
+            && (taskPanel == null || taskPanel.getVisibility() != View.VISIBLE);
     }
 
     private void updatePetImage(String mode) {
@@ -691,9 +1239,10 @@ public final class TaskPetOverlayService extends Service {
         if (drawable instanceof AnimatedImageDrawable) ((AnimatedImageDrawable) drawable).stop();
     }
 
-    private void renderTaskList() {
+    private String renderTaskList() {
         taskList.removeAllViews();
         renderRecentThreads();
+        String renderedReplyTaskKey = "";
         int maxVisibleRows = getResources().getDisplayMetrics().heightPixels < dp(700) ? 2 : 3;
         if (!replyThreadId.isEmpty()) maxVisibleRows = 1;
         int visibleCount = Math.min(tasks.size(), maxVisibleRows);
@@ -706,6 +1255,9 @@ public final class TaskPetOverlayService extends Service {
             for (int index = 0; index < visibleCount; index++) {
                 TaskItem task = tasks.get(index);
                 View row = buildTaskRow(task);
+                if (!pendingReplyRenderTaskKey.isEmpty() && pendingReplyRenderTaskKey.equals(taskNotificationKey(task))) {
+                    renderedReplyTaskKey = pendingReplyRenderTaskKey;
+                }
                 LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(dp(PANEL_CONTENT_WIDTH_DP), dp(TASK_ROW_HEIGHT_DP));
                 if (index > 0) rowParams.topMargin = dp(6);
                 taskList.addView(row, rowParams);
@@ -719,6 +1271,33 @@ public final class TaskPetOverlayService extends Service {
             }
         }
         lastRenderedTaskSignature = taskListSignature();
+        return renderedReplyTaskKey;
+    }
+
+    private void commitPendingReplyRender(String renderedReplyTaskKey) {
+        boolean keyMatches = !renderedReplyTaskKey.isEmpty()
+            && renderedReplyTaskKey.equals(pendingReplyRenderTaskKey);
+        boolean expandedPanelVisible = TaskPetRuntimePolicy.shouldCommitReplyRender(
+            expanded,
+            taskPanel != null && taskPanel.isShown(),
+            taskPanel == null ? 0f : taskPanel.getAlpha(),
+            keyMatches
+        );
+        boolean compactPreviewVisible = TaskPetRuntimePolicy.shouldCommitCompactReplyRender(
+            expanded,
+            minimized,
+            compactPreview != null && compactPreview.isShown(),
+            compactPreview == null ? 0f : compactPreview.getAlpha(),
+            keyMatches
+        );
+        if (!expandedPanelVisible && !compactPreviewVisible) return;
+        replyRenderCount += 1L;
+        lastReplyRenderedAtMs = System.currentTimeMillis();
+        lastReplyRenderedEventSeq = pendingReplyRenderEventSeq;
+        pendingReplyRenderTaskKey = "";
+        pendingReplyRenderEventSeq = 0L;
+        persistPendingReplyRender();
+        persistMonitorDiagnostics(true);
     }
 
     private void renderRecentThreads() {
@@ -761,7 +1340,7 @@ public final class TaskPetOverlayService extends Service {
     private void renderExpandedTaskListPreservingPet() {
         if (taskListSignature().equals(lastRenderedTaskSignature)) return;
         int petY = windowParams.y + taskPanel.getHeight();
-        renderTaskList();
+        String renderedReplyTaskKey = renderTaskList();
         taskPanel.measure(
             View.MeasureSpec.makeMeasureSpec(dp(PANEL_WIDTH_DP), View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
@@ -771,6 +1350,7 @@ public final class TaskPetOverlayService extends Service {
             windowParams.y = nextY;
             windowManager.updateViewLayout(overlayRoot, windowParams);
         }
+        commitPendingReplyRender(renderedReplyTaskKey);
         taskList.setAlpha(0.72f);
         taskList.setTranslationY(dp(3));
         taskList.animate()
@@ -782,25 +1362,30 @@ public final class TaskPetOverlayService extends Service {
     }
 
     private View buildTaskRow(TaskItem task) {
+        boolean canOpenThread = !task.threadId.isEmpty();
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(10), dp(7), dp(9), dp(7));
         row.setBackground(touchBackground(Color.rgb(242, 245, 249), 11, Color.argb(28, 42, 114, 232)));
-        row.setClickable(true);
-        row.setFocusable(true);
+        row.setClickable(canOpenThread);
+        row.setFocusable(canOpenThread);
         String replyPreview = task.latestReply.isEmpty()
             ? task.latestActivity.isEmpty() ? task.detail : task.latestActivity
             : task.latestReply;
-        row.setContentDescription(replyPreview + "，" + task.title + "，点击打开会话");
-        row.setOnClickListener(view -> {
-            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
-            openThread(task.threadId);
-        });
+        row.setContentDescription(replyPreview + "，" + task.title + (canOpenThread ? "，点击打开会话" : "，正在等待会话创建"));
+        if (canOpenThread) {
+            row.setOnClickListener(view -> {
+                view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
+                openThread(task.threadId);
+            });
+        }
 
         TextView dot = text("", 1, Color.TRANSPARENT, Typeface.NORMAL);
         int dotColor = "completed".equals(task.state)
             ? Color.rgb(45, 148, 91)
+            : "retry".equals(task.state)
+                ? Color.rgb(196, 73, 65)
             : "waiting".equals(task.state)
                 ? Color.rgb(214, 126, 28)
                 : Color.rgb(42, 114, 232);
@@ -821,9 +1406,11 @@ public final class TaskPetOverlayService extends Service {
         replyView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         replyView.setGravity(Gravity.CENTER_VERTICAL);
         TextView freshness = text(
-            task.latestReply.isEmpty() ? "等待新的回复 · " + freshnessText(task) : "最新回复 · " + freshnessText(task),
+            freshnessLabel(task),
             9,
-            task.latestReply.isEmpty() ? Color.rgb(104, 114, 130) : Color.rgb(42, 103, 190),
+            isNoProgress(task)
+                ? Color.rgb(186, 101, 17)
+                : task.latestReply.isEmpty() ? Color.rgb(104, 114, 130) : Color.rgb(42, 103, 190),
             Typeface.NORMAL
         );
         freshness.setSingleLine(true);
@@ -842,12 +1429,22 @@ public final class TaskPetOverlayService extends Service {
             view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
             showReplyComposer(task);
         });
+        reply.setVisibility(canOpenThread ? View.VISIBLE : View.GONE);
         row.addView(reply, new LinearLayout.LayoutParams(dp(44), dp(38)));
         return row;
     }
 
     private void showReplyComposer(TaskItem task) {
         showReplyComposer(task.threadId, task.title);
+        if (
+            replyAttemptClientMessageId.isEmpty()
+            && task.threadId.equals(replyAttemptThreadId)
+            && !replyAttemptMessage.isEmpty()
+            && replyInput != null
+        ) {
+            replyInput.setText(replyAttemptMessage);
+            replyInput.setSelection(replyInput.length());
+        }
     }
 
     private void showReplyComposer(String threadId, String title) {
@@ -885,13 +1482,14 @@ public final class TaskPetOverlayService extends Service {
     private void relayoutExpandedPanel(int petY) {
         if (!expanded || taskPanel == null || windowManager == null) return;
         lastRenderedTaskSignature = "";
-        renderTaskList();
+        String renderedReplyTaskKey = renderTaskList();
         taskPanel.measure(
             View.MeasureSpec.makeMeasureSpec(dp(PANEL_WIDTH_DP), View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
         );
         windowParams.y = Math.max(0, petY - taskPanel.getMeasuredHeight());
         windowManager.updateViewLayout(overlayRoot, windowParams);
+        commitPendingReplyRender(renderedReplyTaskKey);
     }
 
     private void setOverlayInputEnabled(boolean enabled) {
@@ -988,7 +1586,7 @@ public final class TaskPetOverlayService extends Service {
             }
             return new ReplyResult(false, "failed", errorMessage);
         } catch (Exception ignored) {
-            return new ReplyResult(false, "start_uncertain", "网络异常，请重试");
+            return new ReplyResult(true, "start_uncertain", "");
         } finally {
             if (connection != null) connection.disconnect();
         }
@@ -1001,10 +1599,16 @@ public final class TaskPetOverlayService extends Service {
         replySendButton.setEnabled(true);
         replySendButton.setAlpha(1f);
         if (!result.success) {
+            prepareReplyAttemptForFreshRetry();
             replyStatus.setText(result.message);
             replyInput.requestFocus();
             return;
         }
+        String submittedClientMessageId = replyAttemptClientMessageId;
+        long submittedAtMs = System.currentTimeMillis();
+        String submittedActivityId = submittedClientMessageId.isEmpty()
+            ? "reply:" + threadId + ":" + submittedAtMs
+            : "request:" + submittedClientMessageId;
         boolean awaitingConfirmation = TaskPetRuntimePolicy.isAwaitingConfirmation(result.runtimeStatus);
         boolean alreadySettled = "completed".equals(result.runtimeStatus)
             || "stopped".equals(result.runtimeStatus)
@@ -1023,6 +1627,9 @@ public final class TaskPetOverlayService extends Service {
             String projectName = recentThread == null ? "" : recentThread.projectName;
             task = new TaskItem(
                 threadId,
+                submittedClientMessageId,
+                submittedActivityId,
+                submittedAtMs,
                 title,
                 projectName,
                 nextDetail,
@@ -1030,20 +1637,37 @@ public final class TaskPetOverlayService extends Service {
                 "",
                 nextState,
                 0L,
-                System.currentTimeMillis()
+                0L,
+                System.currentTimeMillis(),
+                0L,
+                !awaitingConfirmation,
+                false,
+                false,
+                0
             );
             tasks.add(0, task);
             if (tasks.size() > 8) tasks.remove(tasks.size() - 1);
         } else {
+            task.activityId = submittedActivityId;
+            task.startedAtMs = submittedAtMs;
             task.state = nextState;
             task.detail = nextDetail;
             task.latestActivity = clean(message, 80);
             task.latestReply = "";
+            task.latestReplyEventSeq = 0L;
             task.lastUpdatedAtMs = System.currentTimeMillis();
+            task.lastNoProgressReminderAtMs = 0L;
+            task.requestAccepted = !awaitingConfirmation;
+            task.readAcknowledged = false;
+            tasks.remove(task);
+            tasks.add(0, task);
         }
+        reconcileNoProgressNotifications();
         persistTasks();
         hideReplyComposer();
         renderTasks();
+        syncTaskWakeLock();
+        syncEventStream();
         schedulePoll(0L);
         Toast.makeText(this, awaitingConfirmation ? "回复已提交，正在确认" : "回复已发送", Toast.LENGTH_SHORT).show();
     }
@@ -1080,10 +1704,77 @@ public final class TaskPetOverlayService extends Service {
             .apply();
     }
 
+    private void prepareReplyAttemptForFreshRetry() {
+        replyAttemptClientMessageId = "";
+        MobileShellConfig.getPreferences(this).edit()
+            .remove(MobileShellConfig.PREF_TASK_PET_REPLY_CLIENT_ID)
+            .apply();
+    }
+
+    private void ensurePersistedReplyAttemptTask() {
+        if (
+            replyAttemptThreadId.isEmpty()
+            || replyAttemptMessage.isEmpty()
+        ) return;
+        boolean awaitingConfirmation = !replyAttemptClientMessageId.isEmpty();
+        String activityId = awaitingConfirmation
+            ? "request:" + replyAttemptClientMessageId
+            : "reply-retry:" + replyAttemptThreadId + ":" + replyAttemptMessage.hashCode();
+        TaskItem task = findTask(replyAttemptThreadId);
+        if (!awaitingConfirmation && task != null && TaskPetRuntimePolicy.isActiveTaskState(task.state)) return;
+        String restoredState = awaitingConfirmation ? "waiting" : "retry";
+        if (task != null && activityId.equals(task.activityId) && restoredState.equals(task.state)) return;
+        long now = System.currentTimeMillis();
+        if (task == null) {
+            RecentThreadItem recentThread = findRecentThread(replyAttemptThreadId);
+            task = new TaskItem(
+                replyAttemptThreadId,
+                replyAttemptClientMessageId,
+                activityId,
+                now,
+                recentThread == null ? "最近会话" : recentThread.title,
+                recentThread == null ? "" : recentThread.projectName,
+                awaitingConfirmation ? "回复已提交 · 正在确认" : "回复未送达 · 点击回复重试",
+                clean(replyAttemptMessage, 80),
+                "",
+                restoredState,
+                0L,
+                0L,
+                now,
+                0L,
+                false,
+                false,
+                true,
+                0
+            );
+            tasks.add(0, task);
+            if (tasks.size() > MAX_TRACKED_TASKS) tasks.remove(tasks.size() - 1);
+        } else {
+            task.activityId = activityId;
+            task.startedAtMs = now;
+            task.state = restoredState;
+            task.detail = awaitingConfirmation ? "回复已提交 · 正在确认" : "回复未送达 · 点击回复重试";
+            task.latestActivity = clean(replyAttemptMessage, 80);
+            task.latestReply = "";
+            task.lastEventSeq = 0L;
+            task.latestReplyEventSeq = 0L;
+            task.lastUpdatedAtMs = now;
+            task.lastNoProgressReminderAtMs = 0L;
+            task.requestAccepted = false;
+            task.readAcknowledged = false;
+            task.omittedFromFrontend = true;
+            task.missingRequestPollCount = 0;
+            tasks.remove(task);
+            tasks.add(0, task);
+        }
+        persistTasks();
+    }
+
     private String taskListSignature() {
         StringBuilder signature = new StringBuilder();
         for (TaskItem task : tasks) {
             signature.append(task.threadId).append('|')
+                .append(task.clientMessageId).append('|')
                 .append(task.state).append('|')
                 .append(task.detail).append('|')
                 .append(task.latestActivity).append('|')
@@ -1112,6 +1803,27 @@ public final class TaskPetOverlayService extends Service {
         if (ageMs < 60_000L) return "1 分钟内";
         long minutes = Math.max(1L, ageMs / 60_000L);
         return Math.min(59L, minutes) + " 分钟前";
+    }
+
+    private boolean isNoProgress(TaskItem task) {
+        return TaskPetRuntimePolicy.shouldNotifyNoProgress(
+            task.state,
+            task.lastUpdatedAtMs,
+            0L,
+            System.currentTimeMillis(),
+            TaskPetNoProgressReviewReceiver.INITIAL_REMINDER_MS,
+            TaskPetNoProgressReviewReceiver.REVIEW_INTERVAL_MS
+        );
+    }
+
+    private String freshnessLabel(TaskItem task) {
+        if (isNoProgress(task)) {
+            long minutes = Math.max(10L, (System.currentTimeMillis() - task.lastUpdatedAtMs) / 60_000L);
+            return minutes + " 分钟无新进展";
+        }
+        return task.latestReply.isEmpty()
+            ? "等待新的回复 · " + freshnessText(task)
+            : "最新回复 · " + freshnessText(task);
     }
 
     private void attachDragAndClick(View target, Runnable tapAction) {
@@ -1232,8 +1944,14 @@ public final class TaskPetOverlayService extends Service {
     }
 
     private void persistPetPosition() {
-        int petX = windowParams.x + (expanded && anchoredRight ? expandedAnchorOffset() : 0);
-        int petY = windowParams.y + (expanded ? expandedPanelOffset() : 0);
+        int petX = windowParams.x + (
+            expanded
+                ? anchoredRight ? expandedAnchorOffset() : 0
+                : collapsedMascotOffsetX(minimized)
+        );
+        int petY = windowParams.y + (
+            expanded ? expandedPanelOffset() : collapsedCompactOffsetY(minimized)
+        );
         MobileShellConfig.getPreferences(this).edit()
             .putInt(MobileShellConfig.PREF_TASK_PET_X, petX)
             .putInt(MobileShellConfig.PREF_TASK_PET_Y, petY)
@@ -1250,40 +1968,128 @@ public final class TaskPetOverlayService extends Service {
         });
     }
 
-    private void replaceTasks(String tasksJson) {
+    private void replaceTasks(String tasksJson, boolean frontendSnapshot) {
         List<TaskItem> next = new ArrayList<>();
         long now = System.currentTimeMillis();
         try {
             JSONArray rows = new JSONArray(tasksJson);
-            for (int index = 0; index < rows.length() && next.size() < 8; index++) {
+            int inputLimit = frontendSnapshot ? MAX_FRONTEND_TASKS : MAX_TRACKED_TASKS;
+            for (int index = 0; index < rows.length() && next.size() < inputLimit; index++) {
                 JSONObject row = rows.optJSONObject(index);
                 if (row == null) continue;
                 String threadId = clean(row.optString("threadId"), 160);
-                if (threadId.isEmpty()) continue;
-                TaskItem previous = findTask(threadId);
+                String clientMessageId = clean(row.optString("clientMessageId"), 160);
+                if (threadId.isEmpty() && clientMessageId.isEmpty()) continue;
+                TaskItem previous = findTaskByIdentity(threadId, clientMessageId);
+                String resolvedThreadId = threadId.isEmpty() && previous != null
+                    ? previous.threadId
+                    : threadId;
+                String resolvedClientMessageId = clientMessageId.isEmpty() && previous != null
+                    ? previous.clientMessageId
+                    : clientMessageId;
+                String activityId = clean(row.optString("activityId"), 160);
+                long startedAtMs = row.optLong("startedAtMs", 0L);
+                boolean sameGeneration = previous == null || TaskPetRuntimePolicy.isSameTaskGeneration(
+                    previous.activityId,
+                    previous.startedAtMs,
+                    activityId,
+                    startedAtMs
+                );
+                String resolvedActivityId = activityId.isEmpty() && previous != null && sameGeneration
+                    ? previous.activityId
+                    : activityId;
+                long resolvedStartedAtMs = startedAtMs <= 0L && previous != null && sameGeneration
+                    ? previous.startedAtMs
+                    : startedAtMs;
                 String incomingState = row.optString("state");
                 String normalizedState = "completed".equals(incomingState)
                     ? "completed"
-                    : "waiting".equals(incomingState) ? "waiting" : "running";
+                    : "retry".equals(incomingState)
+                        ? "retry"
+                        : "waiting".equals(incomingState) ? "waiting" : "running";
+                long incomingLastEventSeq = row.optLong(
+                    "lastEventSeq",
+                    previous == null || !sameGeneration ? 0L : previous.lastEventSeq
+                );
+                String incomingLatestReply = clean(row.optString("latestReply"), 1200);
+                long incomingLatestReplyEventSeq = Math.max(0L, row.optLong("latestReplyEventSeq", 0L));
+                boolean preserveKnownLatestReply = previous != null && TaskPetRuntimePolicy.shouldPreserveKnownLatestReply(
+                    frontendSnapshot,
+                    sameGeneration,
+                    previous.latestReplyEventSeq,
+                    incomingLatestReplyEventSeq,
+                    previous.latestReply
+                );
+                String resolvedLatestReply = preserveKnownLatestReply ? previous.latestReply : incomingLatestReply;
+                long resolvedLatestReplyEventSeq = preserveKnownLatestReply
+                    ? previous.latestReplyEventSeq
+                    : incomingLatestReplyEventSeq;
                 TaskItem incoming = new TaskItem(
-                    threadId,
+                    resolvedThreadId,
+                    resolvedClientMessageId,
+                    resolvedActivityId,
+                    resolvedStartedAtMs,
                     clean(row.optString("title", "未命名会话"), 90),
                     clean(row.optString("projectName"), 50),
                     clean(row.optString("detail", "任务进行中"), 80),
                     clean(row.optString("latestActivity"), 140),
-                    clean(row.optString("latestReply"), 1200),
+                    resolvedLatestReply,
                     normalizedState,
-                    row.optLong("lastEventSeq", previous == null ? 0L : previous.lastEventSeq),
-                    row.optLong("lastUpdatedAtMs", now)
+                    incomingLastEventSeq,
+                    resolvedLatestReplyEventSeq,
+                    row.optLong("lastUpdatedAtMs", now),
+                    row.optLong(
+                        "lastNoProgressReminderAtMs",
+                        previous == null || !sameGeneration ? 0L : previous.lastNoProgressReminderAtMs
+                    ),
+                    row.has("requestAccepted")
+                        ? row.optBoolean("requestAccepted", false)
+                        : previous != null && sameGeneration && previous.requestAccepted,
+                    previous != null && sameGeneration
+                        ? previous.readAcknowledged
+                        : !frontendSnapshot && row.optBoolean("readAcknowledged", false),
+                    frontendSnapshot ? false : row.optBoolean("omittedFromFrontend", false),
+                    frontendSnapshot ? 0 : row.optInt("missingRequestPollCount", 0)
                 );
                 if (
                     previous != null
-                    && !TaskPetRuntimePolicy.shouldApplySnapshot(previous.lastEventSeq, incoming.lastEventSeq)
+                    && !sameGeneration
+                    && !TaskPetRuntimePolicy.shouldAcceptDifferentTaskGeneration(
+                        previous.startedAtMs,
+                        previous.lastEventSeq,
+                        incoming.startedAtMs,
+                        incoming.lastEventSeq
+                    )
                 ) {
                     next.add(previous);
                     continue;
                 }
-                if (previous != null && incoming.hasSameVisibleContent(previous)) {
+                if (
+                    previous != null
+                    && sameGeneration
+                    && !TaskPetRuntimePolicy.shouldApplySnapshot(previous.lastEventSeq, incoming.lastEventSeq)
+                ) {
+                    if (frontendSnapshot) {
+                        previous.omittedFromFrontend = false;
+                        previous.missingRequestPollCount = 0;
+                    }
+                    next.add(previous);
+                    continue;
+                }
+                if (
+                    previous != null
+                    && TaskPetRuntimePolicy.shouldPreserveNativeSettledState(
+                        frontendSnapshot,
+                        sameGeneration,
+                        previous.state,
+                        incoming.state
+                    )
+                ) {
+                    removeTaskFromFrontendActiveSnapshot(previous);
+                    next.add(previous);
+                    continue;
+                }
+                if (previous != null && sameGeneration && incoming.hasSameVisibleContent(previous)) {
                     incoming.lastUpdatedAtMs = previous.lastUpdatedAtMs;
                 }
                 next.add(incoming);
@@ -1292,22 +2098,32 @@ public final class TaskPetOverlayService extends Service {
             // Keep the existing records when a malformed snapshot arrives.
             return;
         }
-        for (TaskItem existing : tasks) {
-            boolean alreadyIncluded = false;
-            for (TaskItem incoming : next) {
-                if (incoming.threadId.equals(existing.threadId)) {
-                    alreadyIncluded = true;
-                    break;
+        if (frontendSnapshot) {
+            for (TaskItem existing : tasks) {
+                boolean alreadyIncluded = false;
+                for (TaskItem incoming : next) {
+                    if (sameTaskIdentity(incoming, existing)) {
+                        alreadyIncluded = true;
+                        break;
+                    }
+                }
+                if (
+                    !alreadyIncluded
+                    && next.size() < MAX_TRACKED_TASKS
+                    && TaskPetRuntimePolicy.shouldRetainOmittedTask(existing.state)
+                ) {
+                    if (!"completed".equals(existing.state)) existing.omittedFromFrontend = true;
+                    next.add(existing);
                 }
             }
-            if (
-                !alreadyIncluded
-                && next.size() < 8
-                && TaskPetRuntimePolicy.shouldRetainOmittedTask(existing.state)
-            ) next.add(existing);
         }
+        next.sort((left, right) -> TaskPetRuntimePolicy.compareTaskRecency(
+            left.lastUpdatedAtMs,
+            right.lastUpdatedAtMs
+        ));
         tasks.clear();
         tasks.addAll(next);
+        reconcileNoProgressNotifications();
         persistTasks();
     }
 
@@ -1342,11 +2158,22 @@ public final class TaskPetOverlayService extends Service {
     }
 
     private void persistTasks() {
+        persistTasks(false);
+    }
+
+    private void persistTasksSynchronously() {
+        persistTasks(true);
+    }
+
+    private void persistTasks(boolean synchronous) {
         JSONArray rows = new JSONArray();
         try {
             for (TaskItem task : tasks) {
                 rows.put(new JSONObject()
                     .put("threadId", task.threadId)
+                    .put("clientMessageId", task.clientMessageId)
+                    .put("activityId", task.activityId)
+                    .put("startedAtMs", task.startedAtMs)
                     .put("title", task.title)
                     .put("projectName", task.projectName)
                     .put("detail", task.detail)
@@ -1354,14 +2181,69 @@ public final class TaskPetOverlayService extends Service {
                     .put("latestReply", task.latestReply)
                     .put("state", task.state)
                     .put("lastEventSeq", task.lastEventSeq)
-                    .put("lastUpdatedAtMs", task.lastUpdatedAtMs));
+                    .put("latestReplyEventSeq", task.latestReplyEventSeq)
+                    .put("lastUpdatedAtMs", task.lastUpdatedAtMs)
+                    .put("lastNoProgressReminderAtMs", task.lastNoProgressReminderAtMs)
+                    .put("requestAccepted", task.requestAccepted)
+                    .put("readAcknowledged", task.readAcknowledged)
+                    .put("omittedFromFrontend", task.omittedFromFrontend)
+                    .put("missingRequestPollCount", task.missingRequestPollCount));
             }
-            MobileShellConfig.getPreferences(this).edit()
-                .putString(MobileShellConfig.PREF_TASK_PET_TASKS_JSON, rows.toString())
-                .apply();
+            android.content.SharedPreferences.Editor editor = MobileShellConfig.getPreferences(this).edit()
+                .putString(MobileShellConfig.PREF_TASK_PET_TASKS_JSON, rows.toString());
+            if (synchronous) editor.commit();
+            else editor.apply();
+            TaskPetNoProgressReviewReceiver.scheduleNext(this, rows.toString());
         } catch (Exception ignored) {
             // A failed local snapshot must not stop the floating pet.
         }
+    }
+
+    private void restorePendingReplyRender() {
+        android.content.SharedPreferences preferences = MobileShellConfig.getPreferences(this);
+        pendingReplyRenderTaskKey = clean(
+            preferences.getString(MobileShellConfig.PREF_TASK_PET_PENDING_REPLY_RENDER_KEY, ""),
+            160
+        );
+        pendingReplyRenderEventSeq = Math.max(
+            0L,
+            preferences.getLong(MobileShellConfig.PREF_TASK_PET_PENDING_REPLY_RENDER_EVENT_SEQ, 0L)
+        );
+        if (pendingReplyRenderTaskKey.isEmpty() || pendingReplyRenderEventSeq <= 0L) {
+            pendingReplyRenderTaskKey = "";
+            pendingReplyRenderEventSeq = 0L;
+        }
+    }
+
+    private void reconcilePendingReplyRender() {
+        if (pendingReplyRenderTaskKey.isEmpty() || pendingReplyRenderEventSeq <= 0L) return;
+        for (TaskItem task : tasks) {
+            if (TaskPetRuntimePolicy.shouldRestorePendingReplyRender(
+                pendingReplyRenderTaskKey,
+                pendingReplyRenderEventSeq,
+                taskNotificationKey(task),
+                task.latestReplyEventSeq,
+                !task.latestReply.isEmpty()
+            )) return;
+        }
+        pendingReplyRenderTaskKey = "";
+        pendingReplyRenderEventSeq = 0L;
+        persistPendingReplyRender();
+    }
+
+    private void persistPendingReplyRender() {
+        android.content.SharedPreferences.Editor editor = MobileShellConfig.getPreferences(this).edit();
+        if (pendingReplyRenderTaskKey.isEmpty() || pendingReplyRenderEventSeq <= 0L) {
+            editor
+                .remove(MobileShellConfig.PREF_TASK_PET_PENDING_REPLY_RENDER_KEY)
+                .remove(MobileShellConfig.PREF_TASK_PET_PENDING_REPLY_RENDER_EVENT_SEQ)
+                .apply();
+            return;
+        }
+        editor
+            .putString(MobileShellConfig.PREF_TASK_PET_PENDING_REPLY_RENDER_KEY, pendingReplyRenderTaskKey)
+            .putLong(MobileShellConfig.PREF_TASK_PET_PENDING_REPLY_RENDER_EVENT_SEQ, pendingReplyRenderEventSeq)
+            .apply();
     }
 
     @Nullable
@@ -1370,6 +2252,28 @@ public final class TaskPetOverlayService extends Service {
             if (task.threadId.equals(threadId)) return task;
         }
         return null;
+    }
+
+    @Nullable
+    private TaskItem findTaskByIdentity(String threadId, String clientMessageId) {
+        for (TaskItem task : tasks) {
+            if (sameTaskIdentity(task.threadId, task.clientMessageId, threadId, clientMessageId)) return task;
+        }
+        return null;
+    }
+
+    private boolean sameTaskIdentity(TaskItem left, TaskItem right) {
+        return sameTaskIdentity(left.threadId, left.clientMessageId, right.threadId, right.clientMessageId);
+    }
+
+    private boolean sameTaskIdentity(
+        String leftThreadId,
+        String leftClientMessageId,
+        String rightThreadId,
+        String rightClientMessageId
+    ) {
+        if (!leftThreadId.isEmpty() && leftThreadId.equals(rightThreadId)) return true;
+        return !leftClientMessageId.isEmpty() && leftClientMessageId.equals(rightClientMessageId);
     }
 
     @Nullable
@@ -1384,9 +2288,13 @@ public final class TaskPetOverlayService extends Service {
         if (pollInFlight || serverUrl.isEmpty()) return;
         List<TaskItem> active = new ArrayList<>();
         for (TaskItem task : tasks) {
-            if (!"completed".equals(task.state)) active.add(task.copy());
+            if (TaskPetRuntimePolicy.isActiveTaskState(task.state)) active.add(task.copy());
         }
         if (active.isEmpty()) return;
+        if (eventDrivenPollScheduled) {
+            eventDrivenPollScheduled = false;
+            lastEventDrivenPollAtMs = System.currentTimeMillis();
+        }
         pollInFlight = true;
         networkExecutor.execute(() -> {
             List<RuntimeResult> results = readRuntimeResults(active);
@@ -1395,22 +2303,324 @@ public final class TaskPetOverlayService extends Service {
                 pollInFlight = false;
                 if (results == null) {
                     consecutivePollFailures += 1;
+                    snapshotFailureCount += 1L;
+                    lastSnapshotFailureAtMs = System.currentTimeMillis();
+                    persistMonitorDiagnostics(consecutivePollFailures == 1);
                     if (consecutivePollFailures >= 2) markPollUnavailable();
                 } else {
+                    boolean recoveredFromFailure = consecutivePollFailures > 0;
                     consecutivePollFailures = 0;
+                    snapshotSuccessCount += 1L;
+                    lastSnapshotSuccessAtMs = System.currentTimeMillis();
+                    persistMonitorDiagnostics(recoveredFromFailure);
                     applyRuntimeResults(active, results);
                 }
-                schedulePoll(results == null ? RETRY_POLL_INTERVAL_MS : ACTIVE_POLL_INTERVAL_MS);
+                long nextDelayMs = results == null ? RETRY_POLL_INTERVAL_MS : ACTIVE_POLL_INTERVAL_MS;
+                if (eventDrivenPollPending) {
+                    eventDrivenPollPending = false;
+                    if (hasActiveTasks()) {
+                        eventDrivenPollScheduled = true;
+                        nextDelayMs = 0L;
+                    }
+                }
+                schedulePoll(nextDelayMs);
             });
         });
     }
 
+    private void syncEventStream() {
+        mainHandler.removeCallbacks(eventStreamReconnectRunnable);
+        if (destroyed || !hasActiveTasks() || serverUrl.isEmpty()) {
+            stopEventStream();
+            if (!destroyed && !"idle".equals(eventStreamState)) {
+                eventStreamState = "idle";
+                persistMonitorDiagnostics(true);
+            }
+            return;
+        }
+        String targetServerUrl = serverUrl;
+        if (eventStreamRunning.get()) {
+            if (targetServerUrl.equals(eventStreamServerUrl)) {
+                eventStreamDesired.set(true);
+                return;
+            }
+            stopEventStream();
+            return;
+        }
+        eventStreamServerUrl = targetServerUrl;
+        eventStreamDesired.set(true);
+        eventStreamRunning.set(true);
+        eventStreamState = "connecting";
+        persistMonitorDiagnostics(true);
+        eventStreamExecutor.execute(() -> runEventStream(targetServerUrl));
+    }
+
+    private void stopEventStream() {
+        eventStreamDesired.set(false);
+        HttpURLConnection connection = eventStreamConnection;
+        if (connection != null) connection.disconnect();
+    }
+
+    private void runEventStream(String targetServerUrl) {
+        HttpURLConnection connection = null;
+        try {
+            String endpoint = targetServerUrl + "/codex-api/events";
+            MobileShellPlugin.ensureWebAuthCookie(this, endpoint);
+            connection = (HttpURLConnection) new URL(endpoint).openConnection();
+            eventStreamConnection = connection;
+            if (!eventStreamDesired.get()) return;
+            connection.setConnectTimeout(5_000);
+            connection.setReadTimeout(35_000);
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty("Accept", "text/event-stream");
+            connection.setRequestProperty("Cache-Control", "no-cache");
+            connection.setRequestProperty("User-Agent", "CX-Codex-Android-TaskPet-Events");
+            connection.setUseCaches(false);
+            String cookies = CookieManager.getInstance().getCookie(endpoint);
+            if (cookies != null && !cookies.isEmpty()) connection.setRequestProperty("Cookie", cookies);
+            int statusCode = connection.getResponseCode();
+            final int observedStatusCode = statusCode;
+            mainHandler.post(() -> {
+                if (destroyed || !targetServerUrl.equals(serverUrl)) return;
+                lastEventStreamStatusCode = observedStatusCode;
+                if (observedStatusCode >= 200 && observedStatusCode < 300 && eventStreamDesired.get()) {
+                    eventStreamState = "connected";
+                    lastEventStreamConnectedAtMs = System.currentTimeMillis();
+                }
+                persistMonitorDiagnostics(true);
+            });
+            if (statusCode < 200 || statusCode >= 300) return;
+            try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8)
+            )) {
+                String line;
+                while (!destroyed && eventStreamDesired.get() && (line = reader.readLine()) != null) {
+                    if (!line.startsWith("data:")) continue;
+                    String payload = line.substring(5).trim();
+                    if (!payload.isEmpty()) handleEventStreamPayload(payload);
+                }
+            }
+        } catch (Exception ignored) {
+            // The regular bounded poll remains authoritative while the event stream reconnects.
+        } finally {
+            if (connection != null) connection.disconnect();
+            if (eventStreamConnection == connection) eventStreamConnection = null;
+            eventStreamRunning.set(false);
+            mainHandler.post(() -> {
+                if (destroyed) return;
+                if (targetServerUrl.equals(eventStreamServerUrl)) eventStreamServerUrl = "";
+                lastEventStreamDisconnectedAtMs = System.currentTimeMillis();
+                if (!hasActiveTasks() || serverUrl.isEmpty()) {
+                    networkRecoveryStreamRestartPending = false;
+                    eventStreamState = "idle";
+                    persistMonitorDiagnostics(true);
+                    return;
+                }
+                if (networkRecoveryStreamRestartPending) {
+                    networkRecoveryStreamRestartPending = false;
+                    eventStreamState = "connecting";
+                    persistMonitorDiagnostics(true);
+                    mainHandler.removeCallbacks(eventStreamReconnectRunnable);
+                    mainHandler.post(eventStreamReconnectRunnable);
+                    return;
+                }
+                eventStreamReconnectCount += 1;
+                eventStreamState = "retrying";
+                persistMonitorDiagnostics(true);
+                mainHandler.removeCallbacks(eventStreamReconnectRunnable);
+                mainHandler.postDelayed(eventStreamReconnectRunnable, EVENT_STREAM_RETRY_MS);
+            });
+        }
+    }
+
+    private void handleEventStreamPayload(String payload) {
+        try {
+            JSONObject event = new JSONObject(payload);
+            String method = clean(event.optString("method"), 120);
+            if (!TaskPetRuntimePolicy.shouldWakeForRuntimeEvent(method)) return;
+            String threadId = readRuntimeEventThreadId(event.optJSONObject("params"));
+            boolean terminal = TaskPetRuntimePolicy.isTerminalRuntimeEvent(method);
+            boolean replyProgress = "item/agentMessage/delta".equals(method);
+            long eventSeq = Math.max(0L, event.optLong("seq", 0L));
+            mainHandler.post(() -> {
+                if (destroyed || !hasActiveTasks()) return;
+                boolean trackedThread = !threadId.isEmpty() && isTrackedActiveThread(threadId);
+                boolean mayResolveProvisional = hasThreadlessActiveTask()
+                    && (method.startsWith("thread/") || method.startsWith("turn/"));
+                if (!trackedThread && !mayResolveProvisional) return;
+                relevantEventCount += 1L;
+                lastRelevantEventAtMs = System.currentTimeMillis();
+                if (replyProgress) {
+                    replyEventCount += 1L;
+                    lastReplyEventAtMs = lastRelevantEventAtMs;
+                    if (eventSeq > 0L) lastReplyEventSeq = eventSeq;
+                }
+                requestImmediateSnapshotPoll(terminal);
+            });
+        } catch (Exception ignored) {
+            // A malformed or future event shape cannot interrupt fallback polling.
+        }
+    }
+
+    private String readRuntimeEventThreadId(@Nullable JSONObject params) {
+        return readRuntimeEventThreadId(params, 0);
+    }
+
+    private String readRuntimeEventThreadId(@Nullable JSONObject params, int depth) {
+        if (params == null || depth > 3) return "";
+        for (String key : new String[] { "threadId", "thread_id", "conversationId", "conversation_id" }) {
+            String direct = clean(params.optString(key), 160);
+            if (!direct.isEmpty()) return direct;
+        }
+        JSONObject thread = params.optJSONObject("thread");
+        if (thread != null) {
+            String nested = clean(thread.optString("id"), 160);
+            if (!nested.isEmpty()) return nested;
+        }
+        for (String key : new String[] { "request", "turn", "item", "params" }) {
+            String nested = readRuntimeEventThreadId(params.optJSONObject(key), depth + 1);
+            if (!nested.isEmpty()) return nested;
+        }
+        return "";
+    }
+
+    private boolean isTrackedActiveThread(String threadId) {
+        for (TaskItem task : tasks) {
+            if (TaskPetRuntimePolicy.isActiveTaskState(task.state) && task.threadId.equals(threadId)) return true;
+        }
+        return false;
+    }
+
+    private boolean hasThreadlessActiveTask() {
+        for (TaskItem task : tasks) {
+            if (TaskPetRuntimePolicy.isActiveTaskState(task.state) && task.threadId.isEmpty()) return true;
+        }
+        return false;
+    }
+
+    private void requestImmediateSnapshotPoll(boolean urgent) {
+        long now = System.currentTimeMillis();
+        if (pollInFlight) {
+            eventDrivenPollPending = true;
+            persistMonitorDiagnostics(urgent);
+            return;
+        }
+        long delayMs = TaskPetRuntimePolicy.nextEventDrivenPollDelayMs(
+            urgent,
+            now,
+            lastEventDrivenPollAtMs,
+            TaskPetRuntimePolicy.eventStreamProgressThrottleMs(expanded)
+        );
+        eventDrivenPollScheduled = true;
+        persistMonitorDiagnostics(urgent);
+        schedulePoll(delayMs);
+    }
+
     @Nullable
     private List<RuntimeResult> readRuntimeResults(List<TaskItem> active) {
+        List<RuntimeResult> results = new ArrayList<>();
+        List<TaskItem> resolvedTasks = new ArrayList<>();
+        for (TaskItem task : active) {
+            if (TaskPetRuntimePolicy.shouldReconcileReplyAttempt(
+                replyAttemptClientMessageId,
+                replyAttemptThreadId,
+                task.threadId
+            )) {
+                RuntimeRequestResult request = readRuntimeRequest(replyAttemptClientMessageId);
+                if (request == null) return null;
+                if (!request.threadId.isEmpty()) task.threadId = request.threadId;
+                String requestStatus = request.status.isEmpty() ? "pending_start" : request.status;
+                if (
+                    "not_found".equals(requestStatus)
+                    || "failed".equals(requestStatus)
+                    || TaskPetRuntimePolicy.isAwaitingConfirmation(requestStatus)
+                    || task.threadId.isEmpty()
+                ) {
+                    results.add(new RuntimeResult(
+                        task.threadId,
+                        task.clientMessageId,
+                        false,
+                        TaskPetRuntimePolicy.isAwaitingConfirmation(requestStatus),
+                        requestStatus,
+                        false,
+                        false,
+                        0L,
+                        0L,
+                        ""
+                    ));
+                    continue;
+                }
+                task.requestAccepted = true;
+                resolvedTasks.add(task);
+                continue;
+            }
+            if (TaskPetRuntimePolicy.shouldConfirmRuntimeRequest(task.clientMessageId, task.requestAccepted)) {
+                RuntimeRequestResult request = readRuntimeRequest(task.clientMessageId);
+                if (request == null) return null;
+                if (!request.threadId.isEmpty()) task.threadId = request.threadId;
+                String requestStatus = request.status.isEmpty() ? "pending_start" : request.status;
+                if (
+                    "not_found".equals(requestStatus)
+                    || TaskPetRuntimePolicy.isAwaitingConfirmation(requestStatus)
+                    || task.threadId.isEmpty()
+                ) {
+                    boolean inProgress = !"failed".equals(requestStatus)
+                        && !"completed".equals(requestStatus)
+                        && !"stopped".equals(requestStatus)
+                        && !"interrupted".equals(requestStatus);
+                    String resultStatus = "not_found".equals(requestStatus) && !task.threadId.isEmpty()
+                        ? "pending_start"
+                        : requestStatus;
+                    results.add(new RuntimeResult(
+                        task.threadId,
+                        task.clientMessageId,
+                        false,
+                        inProgress,
+                        resultStatus,
+                        false,
+                        false,
+                        0L,
+                        0L,
+                        ""
+                    ));
+                    continue;
+                }
+                task.requestAccepted = true;
+            }
+            if (!task.threadId.isEmpty()) {
+                resolvedTasks.add(task);
+                continue;
+            }
+            RuntimeRequestResult request = readRuntimeRequest(task.clientMessageId);
+            if (request == null) return null;
+            if (!request.threadId.isEmpty()) {
+                task.threadId = request.threadId;
+                resolvedTasks.add(task);
+                continue;
+            }
+            boolean inProgress = !"failed".equals(request.status)
+                && !"completed".equals(request.status)
+                && !"stopped".equals(request.status)
+                && !"interrupted".equals(request.status);
+            results.add(new RuntimeResult(
+                "",
+                task.clientMessageId,
+                false,
+                inProgress,
+                request.status.isEmpty() ? "pending_start" : request.status,
+                false,
+                false,
+                0L,
+                0L,
+                ""
+            ));
+        }
+        if (resolvedTasks.isEmpty()) return results;
+
         HttpURLConnection connection = null;
         try {
             StringBuilder encodedThreadIds = new StringBuilder();
-            for (TaskItem task : active) {
+            for (TaskItem task : resolvedTasks) {
                 if (encodedThreadIds.length() > 0) encodedThreadIds.append(',');
                 encodedThreadIds.append(Uri.encode(task.threadId));
             }
@@ -1430,21 +2640,35 @@ public final class TaskPetOverlayService extends Service {
             JSONObject payload = new JSONObject(readText(connection.getInputStream()));
             JSONArray snapshots = payload.optJSONArray("data");
             if (snapshots == null) return null;
-            List<RuntimeResult> results = new ArrayList<>();
             for (int index = 0; index < snapshots.length(); index++) {
                 JSONObject snapshot = snapshots.optJSONObject(index);
                 if (snapshot == null) continue;
                 String threadId = clean(snapshot.optString("threadId"), 160);
                 if (threadId.isEmpty()) continue;
+                String clientMessageId = "";
+                for (TaskItem task : resolvedTasks) {
+                    if (task.threadId.equals(threadId)) {
+                        clientMessageId = task.clientMessageId;
+                        break;
+                    }
+                }
                 JSONArray pendingRequests = snapshot.optJSONArray("pendingServerRequests");
+                long lastEventSeq = Math.max(0L, snapshot.optLong("lastEventSeq", 0L));
+                String latestReply = clean(snapshot.optString("latestReply"), 1200);
+                long latestReplyEventSeq = snapshot.has("latestReplyEventSeq")
+                    ? Math.max(0L, snapshot.optLong("latestReplyEventSeq", 0L))
+                    : latestReply.isEmpty() ? 0L : lastEventSeq;
                 results.add(new RuntimeResult(
                     threadId,
+                    clientMessageId,
+                    true,
                     snapshot.optBoolean("inProgress", false),
                     clean(snapshot.optString("executionState"), 40),
                     pendingRequests != null && pendingRequests.length() > 0,
                     snapshot.optBoolean("stale", false),
-                    snapshot.optLong("lastEventSeq", 0L),
-                    clean(snapshot.optString("latestReply"), 1200)
+                    lastEventSeq,
+                    latestReplyEventSeq,
+                    latestReply
                 ));
             }
             return results;
@@ -1455,42 +2679,201 @@ public final class TaskPetOverlayService extends Service {
         }
     }
 
+    @Nullable
+    private RuntimeRequestResult readRuntimeRequest(String clientMessageId) {
+        if (clientMessageId.isEmpty()) return null;
+        HttpURLConnection connection = null;
+        try {
+            String endpoint = serverUrl + "/codex-api/runtime/request?clientMessageId=" + Uri.encode(clientMessageId);
+            MobileShellPlugin.ensureWebAuthCookie(this, endpoint);
+            connection = (HttpURLConnection) new URL(endpoint).openConnection();
+            connection.setConnectTimeout(5_000);
+            connection.setReadTimeout(8_000);
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("User-Agent", "CX-Codex-Android-TaskPet");
+            connection.setUseCaches(false);
+            String cookies = CookieManager.getInstance().getCookie(endpoint);
+            if (cookies != null && !cookies.isEmpty()) connection.setRequestProperty("Cookie", cookies);
+            int statusCode = connection.getResponseCode();
+            if (statusCode == 404) return new RuntimeRequestResult("", "not_found");
+            if (statusCode < 200 || statusCode >= 300) return null;
+            JSONObject payload = new JSONObject(readText(connection.getInputStream()));
+            JSONObject request = payload.optJSONObject("data");
+            if (request == null) return new RuntimeRequestResult("", "not_found");
+            return new RuntimeRequestResult(
+                clean(request.optString("threadId"), 160),
+                clean(request.optString("status"), 40)
+            );
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
     private void applyRuntimeResults(List<TaskItem> requestedTasks, List<RuntimeResult> results) {
+        List<TaskItem> tasksToRemove = new ArrayList<>();
+        boolean removedReadSettledTask = false;
+        boolean replyDiagnosticsChanged = false;
+        TaskItem latestReplyCandidate = null;
+        long latestReplyCandidateEventSeq = 0L;
         for (RuntimeResult result : results) {
+            TaskItem requestedGeneration = null;
+            for (TaskItem requested : requestedTasks) {
+                if (sameTaskIdentity(
+                    requested.threadId,
+                    requested.clientMessageId,
+                    result.threadId,
+                    result.clientMessageId
+                )) {
+                    requestedGeneration = requested;
+                    break;
+                }
+            }
             for (TaskItem task : tasks) {
-                if (!task.threadId.equals(result.threadId)) continue;
+                if (!sameTaskIdentity(task.threadId, task.clientMessageId, result.threadId, result.clientMessageId)) continue;
+                if (
+                    requestedGeneration != null
+                    && !TaskPetRuntimePolicy.isSameTaskGeneration(
+                        task.activityId,
+                        task.startedAtMs,
+                        requestedGeneration.activityId,
+                        requestedGeneration.startedAtMs
+                    )
+                ) break;
                 if (!TaskPetRuntimePolicy.shouldApplySnapshot(task.lastEventSeq, result.lastEventSeq)) break;
+                if (result.requestAccepted) task.requestAccepted = true;
                 String previousState = task.state;
                 String previousDetail = task.detail;
                 String previousReply = task.latestReply;
+                boolean replyDeliveryAttempt = TaskPetRuntimePolicy.shouldReconcileReplyAttempt(
+                    replyAttemptClientMessageId,
+                    replyAttemptThreadId,
+                    task.threadId
+                );
+                if (
+                    replyDeliveryAttempt
+                    && ("not_found".equals(result.executionState) || "failed".equals(result.executionState))
+                ) {
+                    task.missingRequestPollCount = "not_found".equals(result.executionState)
+                        ? task.missingRequestPollCount + 1
+                        : REPLY_CONFIRMATION_MISSING_LIMIT;
+                    if (TaskPetRuntimePolicy.shouldRequireManualReplyRetry(
+                        result.executionState,
+                        task.missingRequestPollCount,
+                        REPLY_CONFIRMATION_MISSING_LIMIT
+                    )) {
+                        markReplyForManualRetry(task);
+                    } else {
+                        task.state = "waiting";
+                        task.detail = "正在确认回复是否送达";
+                    }
+                    if (!previousState.equals(task.state) || !previousDetail.equals(task.detail)) {
+                        task.lastUpdatedAtMs = System.currentTimeMillis();
+                    }
+                    break;
+                }
+                if ("not_found".equals(result.executionState) && task.threadId.isEmpty()) {
+                    if (task.omittedFromFrontend) {
+                        task.missingRequestPollCount += 1;
+                        if (TaskPetRuntimePolicy.shouldDropOmittedProvisional(
+                            true,
+                            false,
+                            task.missingRequestPollCount,
+                            OMITTED_PROVISIONAL_MISSING_LIMIT
+                        )) {
+                            tasksToRemove.add(task);
+                            break;
+                        }
+                        task.state = "waiting";
+                        task.detail = "正在确认任务是否已提交";
+                    } else {
+                        task.missingRequestPollCount = 0;
+                        task.state = "running";
+                        task.detail = "正在创建会话";
+                    }
+                    if (!previousState.equals(task.state) || !previousDetail.equals(task.detail)) {
+                        task.lastUpdatedAtMs = System.currentTimeMillis();
+                    }
+                    break;
+                }
+                task.omittedFromFrontend = false;
+                task.missingRequestPollCount = 0;
+                if (task.threadId.isEmpty() && !result.threadId.isEmpty()) task.threadId = result.threadId;
                 if (result.lastEventSeq > task.lastEventSeq) {
                     task.lastEventSeq = result.lastEventSeq;
                     task.lastUpdatedAtMs = System.currentTimeMillis();
                 }
+                boolean canApplyReply = !result.latestReply.isEmpty() && (
+                    task.latestReply.isEmpty()
+                    || task.latestReplyEventSeq <= 0L
+                    || result.latestReplyEventSeq > task.latestReplyEventSeq
+                );
+                if (canApplyReply) {
+                    boolean replyChanged = !result.latestReply.equals(task.latestReply);
+                    task.latestReply = result.latestReply;
+                    task.latestReplyEventSeq = Math.max(0L, result.latestReplyEventSeq);
+                    if (replyChanged) {
+                        replySnapshotApplyCount += 1L;
+                        replyDiagnosticsChanged = true;
+                        if (TaskPetRuntimePolicy.shouldPreferReplyCandidate(
+                            latestReplyCandidateEventSeq,
+                            result.latestReplyEventSeq
+                        )) {
+                            latestReplyCandidate = task;
+                            latestReplyCandidateEventSeq = result.latestReplyEventSeq;
+                        }
+                    }
+                }
                 if (
                     result.stale
-                    || "sync_degraded".equals(result.executionState)
-                    || "start_uncertain".equals(result.executionState)
+                    || TaskPetRuntimePolicy.isAwaitingConfirmation(result.executionState)
                 ) {
                     task.state = "waiting";
-                    task.detail = "状态待确认";
+                    task.detail = replyDeliveryAttempt ? "回复已提交 · 正在确认" : "状态待确认";
                 } else if (!result.inProgress) {
                     boolean wasCompleted = "completed".equals(task.state);
+                    boolean retainUnreadCompletion = TaskPetRuntimePolicy.shouldRetainUnreadSettledTask(
+                        task.readAcknowledged
+                    );
                     task.state = "completed";
                     task.detail = "failed".equals(result.executionState)
                         ? "执行失败 · 打开会话后清理"
                         : "已完成 · 打开会话后清理";
-                    if (!wasCompleted) notifyTaskCompleted(task);
+                    if (!wasCompleted) {
+                        lastTerminalAtMs = System.currentTimeMillis();
+                        task.lastUpdatedAtMs = lastTerminalAtMs;
+                        persistMonitorDiagnostics(true);
+                        removeTaskFromFrontendActiveSnapshot(task);
+                        if (retainUnreadCompletion) {
+                            persistTasksSynchronously();
+                            notifyTaskSettled(task, "failed".equals(result.executionState));
+                        } else {
+                            tasksToRemove.add(task);
+                            lastCompletionNotificationResult = "suppressed_read";
+                            lastCompletionNotificationBodySource = "none";
+                            persistMonitorDiagnostics(true);
+                        }
+                        MobilePushRegistration.acknowledgeTerminalAsync(
+                            this,
+                            task.threadId,
+                            task.lastEventSeq
+                        );
+                    }
                 } else if (result.hasPendingRequest || "waiting_permission".equals(result.executionState)) {
                     task.state = "waiting";
                     task.detail = "等待处理";
                 } else {
                     task.state = "running";
-                    if (task.detail.isEmpty() || "状态同步中".equals(task.detail) || "等待处理".equals(task.detail)) {
+                    if (replyDeliveryAttempt) {
+                        task.detail = "已发送回复 · 处理中";
+                    } else if (task.threadId.isEmpty()) {
+                        task.detail = "正在创建会话";
+                    } else if (task.detail.isEmpty() || "状态同步中".equals(task.detail) || "等待处理".equals(task.detail)) {
                         task.detail = "任务进行中";
                     }
                 }
-                if (!result.latestReply.isEmpty()) task.latestReply = result.latestReply;
                 if (
                     task.threadId.equals(replyAttemptThreadId)
                     && !TaskPetRuntimePolicy.isAwaitingConfirmation(result.executionState)
@@ -1502,29 +2885,121 @@ public final class TaskPetOverlayService extends Service {
                 break;
             }
         }
-        for (TaskItem requested : requestedTasks) {
-            if (containsRuntimeResult(results, requested.threadId)) continue;
-            TaskItem task = findTask(requested.threadId);
-            if (task == null || "completed".equals(task.state)) continue;
-            task.state = "waiting";
-            task.detail = "暂时无法确认状态";
-            task.lastUpdatedAtMs = System.currentTimeMillis();
+        for (TaskItem task : tasksToRemove) {
+            String notificationKey = taskNotificationKey(task);
+            TaskPetNoProgressReviewReceiver.cancelNotification(this, notificationKey);
+            NotificationManagerCompat.from(this).cancel(completionNotificationId(notificationKey));
+            removeTaskFromFrontendActiveSnapshot(task);
+            tasks.remove(task);
+            if (task == latestReplyCandidate) {
+                latestReplyCandidate = null;
+                latestReplyCandidateEventSeq = 0L;
+            }
+            if (task.readAcknowledged && "completed".equals(task.state)) {
+                removedReadSettledTask = true;
+            }
         }
+        if (removedReadSettledTask) persistTasksSynchronously();
+        for (TaskItem requested : requestedTasks) {
+            if (containsRuntimeResult(results, requested)) continue;
+            TaskItem task = findTaskByIdentity(requested.threadId, requested.clientMessageId);
+            if (task == null || !TaskPetRuntimePolicy.isActiveTaskState(task.state)) continue;
+            if (!"waiting".equals(task.state) || !"暂时无法确认状态".equals(task.detail)) {
+                task.state = "waiting";
+                task.detail = "暂时无法确认状态";
+                task.lastUpdatedAtMs = System.currentTimeMillis();
+            }
+        }
+        if (latestReplyCandidate != null) {
+            lastReplyAppliedAtMs = System.currentTimeMillis();
+            lastReplyAppliedEventSeq = latestReplyCandidateEventSeq;
+            pendingReplyRenderTaskKey = taskNotificationKey(latestReplyCandidate);
+            pendingReplyRenderEventSeq = latestReplyCandidateEventSeq;
+            persistPendingReplyRender();
+            tasks.remove(latestReplyCandidate);
+            tasks.add(0, latestReplyCandidate);
+        }
+        reconcileNoProgressNotifications();
         persistTasks();
+        if (replyDiagnosticsChanged) persistMonitorDiagnostics(true);
+        MobilePushRegistration.ensureTokenAndSyncAsync(this);
         renderTasks();
+        syncTaskWakeLock();
+        syncEventStream();
+        if (!shouldKeepMonitorRunning()) stopSelf();
     }
 
-    private boolean containsRuntimeResult(List<RuntimeResult> results, String threadId) {
+    private void markReplyForManualRetry(TaskItem task) {
+        String notificationKey = replyAttemptClientMessageId.isEmpty()
+            ? taskNotificationKey(task)
+            : replyAttemptClientMessageId;
+        task.state = "retry";
+        task.detail = "回复未送达 · 点击回复重试";
+        task.latestReply = "";
+        task.latestReplyEventSeq = 0L;
+        task.missingRequestPollCount = 0;
+        task.lastNoProgressReminderAtMs = 0L;
+        task.omittedFromFrontend = true;
+        prepareReplyAttemptForFreshRetry();
+        notifyReplyNeedsRetry(task, notificationKey);
+        if (overlayRoot != null) {
+            Toast.makeText(this, "回复未送达，请重试", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private boolean containsRuntimeResult(List<RuntimeResult> results, TaskItem task) {
         for (RuntimeResult result : results) {
-            if (threadId.equals(result.threadId)) return true;
+            if (sameTaskIdentity(task.threadId, task.clientMessageId, result.threadId, result.clientMessageId)) return true;
         }
         return false;
+    }
+
+    private void removeTaskFromFrontendActiveSnapshot(TaskItem settledTask) {
+        android.content.SharedPreferences preferences = MobileShellConfig.getPreferences(this);
+        String activeTasksJson = preferences.getString(MobileShellConfig.PREF_TASK_PET_ACTIVE_TASKS_JSON, "[]");
+        if (activeTasksJson == null || activeTasksJson.isEmpty()) return;
+        try {
+            JSONArray rows = new JSONArray(activeTasksJson);
+            JSONArray next = new JSONArray();
+            boolean changed = false;
+            for (int index = 0; index < rows.length(); index++) {
+                JSONObject row = rows.optJSONObject(index);
+                if (row == null) continue;
+                String threadId = clean(row.optString("threadId"), 160);
+                String clientMessageId = clean(row.optString("clientMessageId"), 160);
+                String activityId = clean(row.optString("activityId"), 160);
+                long startedAtMs = row.optLong("startedAtMs", 0L);
+                if (
+                    sameTaskIdentity(
+                    settledTask.threadId,
+                    settledTask.clientMessageId,
+                    threadId,
+                    clientMessageId
+                    )
+                    && TaskPetRuntimePolicy.isSameTaskGeneration(
+                        settledTask.activityId,
+                        settledTask.startedAtMs,
+                        activityId,
+                        startedAtMs
+                    )
+                ) {
+                    changed = true;
+                    continue;
+                }
+                next.put(row);
+            }
+            if (changed) preferences.edit()
+                .putString(MobileShellConfig.PREF_TASK_PET_ACTIVE_TASKS_JSON, next.toString())
+                .commit();
+        } catch (Exception ignored) {
+            // Keep the last frontend snapshot if it cannot be parsed safely.
+        }
     }
 
     private void markPollUnavailable() {
         boolean changed = false;
         for (TaskItem task : tasks) {
-            if ("completed".equals(task.state)) continue;
+            if (!TaskPetRuntimePolicy.isActiveTaskState(task.state)) continue;
             if (!"waiting".equals(task.state) || !"网络中断，等待同步".equals(task.detail)) {
                 task.state = "waiting";
                 task.detail = "网络中断，等待同步";
@@ -1532,20 +3007,25 @@ public final class TaskPetOverlayService extends Service {
                 changed = true;
             }
         }
-        if (!changed) return;
+        boolean reminderChanged = reconcileNoProgressNotifications();
+        if (!changed && !reminderChanged) return;
         persistTasks();
         renderTasks();
+        syncTaskWakeLock();
     }
 
     private void schedulePoll(long delayMs) {
         mainHandler.removeCallbacks(pollRunnable);
-        if (!hasActiveTasks() || serverUrl.isEmpty()) return;
+        if (!hasActiveTasks() || serverUrl.isEmpty()) {
+            eventDrivenPollScheduled = false;
+            return;
+        }
         mainHandler.postDelayed(pollRunnable, Math.max(0L, delayMs));
     }
 
     private boolean hasActiveTasks() {
         for (TaskItem task : tasks) {
-            if (!"completed".equals(task.state)) return true;
+            if (TaskPetRuntimePolicy.isActiveTaskState(task.state)) return true;
         }
         return false;
     }
@@ -1591,18 +3071,37 @@ public final class TaskPetOverlayService extends Service {
             .putBoolean(MobileShellConfig.PREF_TASK_PET_ENABLED, false)
             .putBoolean(MobileShellConfig.PREF_TASK_PET_MINIMIZED, false)
             .commit();
-        Toast.makeText(this, "浮窗已关闭，可在设置中重新开启", Toast.LENGTH_LONG).show();
-        stopSelf();
+        syncOverlayVisibility();
+        if (hasActiveTasks()) {
+            Toast.makeText(this, "浮窗已关闭，后台任务通知仍会继续", Toast.LENGTH_LONG).show();
+            renderTasks();
+        } else {
+            Toast.makeText(this, "浮窗已关闭，可在设置中重新开启", Toast.LENGTH_LONG).show();
+            stopSelf();
+        }
     }
 
     private void clearCompletedThread(@Nullable String threadId) {
         if (threadId == null || threadId.trim().isEmpty()) return;
-        TaskItem completedTask = findTask(threadId.trim());
-        if (completedTask == null || !"completed".equals(completedTask.state)) return;
-        tasks.remove(completedTask);
-        if (completedTask.threadId.equals(replyAttemptThreadId)) clearReplyAttempt();
+        TaskItem task = findTask(threadId.trim());
+        if (task == null) return;
+        String notificationKey = taskNotificationKey(task);
+        if (TaskPetRuntimePolicy.isActiveTaskState(task.state)) {
+            task.readAcknowledged = true;
+            persistTasksSynchronously();
+            NotificationManagerCompat.from(this).cancel(completionNotificationId(notificationKey));
+            TaskPetNoProgressReviewReceiver.cancelNotification(this, notificationKey);
+            return;
+        }
+        if (!"completed".equals(task.state)) return;
+        tasks.remove(task);
+        if (task.threadId.equals(replyAttemptThreadId)) clearReplyAttempt();
         persistTasks();
-        NotificationManagerCompat.from(this).cancel(Math.abs(completedTask.threadId.hashCode()) + 10_000);
+        MobilePushRegistration.syncStoredTokenAsync(this);
+        NotificationManagerCompat.from(this).cancel(completionNotificationId(notificationKey));
+        TaskPetNoProgressReviewReceiver.cancelNotification(this, notificationKey);
+        syncTaskWakeLock();
+        if (!shouldKeepMonitorRunning()) stopSelf();
     }
 
     private int expandedPanelOffset() {
@@ -1614,8 +3113,23 @@ public final class TaskPetOverlayService extends Service {
         return dp(PANEL_WIDTH_DP - MASCOT_WIDTH_DP);
     }
 
+    private int collapsedContentWidthDp(boolean minimizedState) {
+        if (minimizedState) return MINI_SIZE_DP;
+        return tasks.isEmpty() ? MASCOT_WIDTH_DP : PANEL_WIDTH_DP;
+    }
+
+    private int collapsedMascotOffsetX(boolean minimizedState) {
+        if (minimizedState || tasks.isEmpty() || !anchoredRight) return 0;
+        return dp(PANEL_WIDTH_DP - MASCOT_WIDTH_DP);
+    }
+
+    private int collapsedCompactOffsetY(boolean minimizedState) {
+        if (minimizedState || tasks.isEmpty()) return 0;
+        return dp(COMPACT_PREVIEW_HEIGHT_DP + COMPACT_PREVIEW_GAP_DP);
+    }
+
     private int collapsedRootWidthDp(boolean minimizedState) {
-        return (minimizedState ? MINI_SIZE_DP : MASCOT_WIDTH_DP) + ROOT_PADDING_DP * 2;
+        return collapsedContentWidthDp(minimizedState) + ROOT_PADDING_DP * 2;
     }
 
     private int maxCollapsedX() {
@@ -1646,9 +3160,11 @@ public final class TaskPetOverlayService extends Service {
             return;
         }
         collapsePanelImmediately();
-        int oldWidthDp = collapsedRootWidthDp(minimized);
+        int anchorX = anchoredRight
+            ? windowParams.x + dp(collapsedContentWidthDp(minimized))
+            : windowParams.x;
+        int petY = windowParams.y + collapsedCompactOffsetY(minimized);
         minimized = nextMinimized;
-        int newWidthDp = collapsedRootWidthDp(minimized);
         MobileShellConfig.getPreferences(this).edit()
             .putBoolean(MobileShellConfig.PREF_TASK_PET_MINIMIZED, minimized)
             .apply();
@@ -1664,9 +3180,13 @@ public final class TaskPetOverlayService extends Service {
         incoming.setScaleY(0.78f);
         applyPetImage(lastPetMode.isEmpty() ? "idle" : lastPetMode, false);
         updateMascotGravity();
+        syncCompactPreviewVisibility();
 
-        if (anchoredRight) windowParams.x += dp(oldWidthDp - newWidthDp);
+        windowParams.x = anchoredRight
+            ? anchorX - dp(collapsedContentWidthDp(minimized))
+            : anchorX;
         windowParams.x = Math.max(0, Math.min(maxCollapsedX(), windowParams.x));
+        windowParams.y = Math.max(0, petY - collapsedCompactOffsetY(minimized));
         windowManager.updateViewLayout(overlayRoot, windowParams);
         incoming.animate()
             .alpha(1f)
@@ -1692,18 +3212,23 @@ public final class TaskPetOverlayService extends Service {
         int animationToken = ++panelAnimationToken;
         taskPanel.animate().cancel();
         if (nextExpanded) {
-            int petX = pendingCollapsedPetX >= 0 ? pendingCollapsedPetX : windowParams.x;
-            int petY = pendingCollapsedPetY >= 0 ? pendingCollapsedPetY : windowParams.y;
+            int petX = pendingCollapsedPetX >= 0
+                ? pendingCollapsedPetX
+                : windowParams.x + collapsedMascotOffsetX(minimized);
+            int petY = pendingCollapsedPetY >= 0
+                ? pendingCollapsedPetY
+                : windowParams.y + collapsedCompactOffsetY(minimized);
             pendingCollapsedPetX = -1;
             pendingCollapsedPetY = -1;
             lastRenderedTaskSignature = "";
-            renderTaskList();
+            String renderedReplyTaskKey = renderTaskList();
             taskPanel.measure(
                 View.MeasureSpec.makeMeasureSpec(dp(PANEL_WIDTH_DP), View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
             );
             int panelHeight = taskPanel.getMeasuredHeight();
             expanded = true;
+            syncCompactPreviewVisibility();
             taskPanel.setVisibility(View.VISIBLE);
             taskPanel.setPivotY(panelHeight);
             taskPanel.setAlpha(0f);
@@ -1720,6 +3245,7 @@ public final class TaskPetOverlayService extends Service {
                 .translationY(0f)
                 .setDuration(190L)
                 .setInterpolator(EASE_OUT)
+                .withEndAction(() -> commitPendingReplyRender(renderedReplyTaskKey))
                 .start();
             return;
         }
@@ -1741,8 +3267,12 @@ public final class TaskPetOverlayService extends Service {
                 taskPanel.setAlpha(1f);
                 taskPanel.setScaleY(1f);
                 taskPanel.setTranslationY(0f);
-                windowParams.x = Math.max(0, Math.min(maxCollapsedX(), petX));
-                windowParams.y = Math.max(0, petY);
+                syncCompactPreviewVisibility();
+                windowParams.x = Math.max(
+                    0,
+                    Math.min(maxCollapsedX(), petX - collapsedMascotOffsetX(minimized))
+                );
+                windowParams.y = Math.max(0, petY - collapsedCompactOffsetY(minimized));
                 windowManager.updateViewLayout(overlayRoot, windowParams);
                 pendingCollapsedPetX = -1;
                 pendingCollapsedPetY = -1;
@@ -1765,8 +3295,12 @@ public final class TaskPetOverlayService extends Service {
         taskPanel.setAlpha(1f);
         taskPanel.setScaleY(1f);
         taskPanel.setTranslationY(0f);
-        windowParams.x = Math.max(0, Math.min(maxCollapsedX(), petX));
-        windowParams.y = Math.max(0, petY);
+        syncCompactPreviewVisibility();
+        windowParams.x = Math.max(
+            0,
+            Math.min(maxCollapsedX(), petX - collapsedMascotOffsetX(minimized))
+        );
+        windowParams.y = Math.max(0, petY - collapsedCompactOffsetY(minimized));
         windowManager.updateViewLayout(overlayRoot, windowParams);
     }
 
@@ -1786,20 +3320,267 @@ public final class TaskPetOverlayService extends Service {
         );
     }
 
-    private void notifyTaskCompleted(TaskItem task) {
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
+    private PendingIntent createPlatformPendingIntent(String key) {
+        Intent intent = new Intent(this, MainActivity.class)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        return PendingIntent.getActivity(
+            this,
+            Math.abs(key.hashCode()),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+    }
+
+    private void notifyTaskSettled(TaskItem task, boolean failed) {
+        ensureCompletionNotificationChannel();
+        boolean hasLatestReply = !task.latestReply.isEmpty();
+        String body = hasLatestReply ? task.latestReply : task.detail;
+        lastCompletionNotificationBodySource = hasLatestReply ? "latest_reply" : "detail";
+        String notificationKey = taskNotificationKey(task);
+        TaskPetNoProgressReviewReceiver.cancelNotification(this, notificationKey);
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, COMPLETION_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(task.title)
-            .setContentText(task.detail)
-            .setContentIntent(createThreadPendingIntent(task.threadId))
+            .setContentTitle((failed ? "任务执行失败 · " : "任务已完成 · ") + task.title)
+            .setContentText(body)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(task.threadId.isEmpty()
+                ? createPlatformPendingIntent(notificationKey)
+                : createThreadPendingIntent(task.threadId))
             .setAutoCancel(true)
             .setOnlyAlertOnce(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT);
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH);
+        completionNotificationAttemptCount += 1L;
+        lastCompletionNotificationAttemptAtMs = System.currentTimeMillis();
+        NotificationManagerCompat notificationManager = NotificationManagerCompat.from(this);
+        boolean runtimePermissionGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+            || ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        if (!notificationManager.areNotificationsEnabled() || !runtimePermissionGranted) {
+            lastCompletionNotificationResult = "blocked";
+            persistMonitorDiagnostics(true);
+            return;
+        }
+        if (!isCompletionNotificationChannelEnabled(this)) {
+            lastCompletionNotificationResult = "channel_blocked";
+            persistMonitorDiagnostics(true);
+            return;
+        }
         try {
-            NotificationManagerCompat.from(this).notify(Math.abs(task.threadId.hashCode()) + 10_000, builder.build());
+            notificationManager.notify(completionNotificationId(notificationKey), builder.build());
+            completionNotificationPostedCount += 1L;
+            lastCompletionNotificationResult = "posted";
         } catch (SecurityException ignored) {
+            lastCompletionNotificationResult = "blocked";
             // The overlay stays usable even when notification permission is denied.
         }
+        persistMonitorDiagnostics(true);
+    }
+
+    private void notifyReplyNeedsRetry(TaskItem task, String notificationKey) {
+        ensureCompletionNotificationChannel();
+        String body = "网络恢复后仍未确认这次回复已送达，点此打开会话重试";
+        lastCompletionNotificationBodySource = "reply_retry";
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, COMPLETION_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("回复未送达 · " + task.title)
+            .setContentText(body)
+            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(task.threadId.isEmpty()
+                ? createPlatformPendingIntent(notificationKey)
+                : createThreadPendingIntent(task.threadId))
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .setPriority(NotificationCompat.PRIORITY_HIGH);
+        lastCompletionNotificationAttemptAtMs = System.currentTimeMillis();
+        NotificationManagerCompat notificationManager = NotificationManagerCompat.from(this);
+        boolean runtimePermissionGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+            || ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        if (!notificationManager.areNotificationsEnabled() || !runtimePermissionGranted) {
+            lastCompletionNotificationResult = "reply_retry_blocked";
+            persistMonitorDiagnostics(true);
+            return;
+        }
+        if (!isCompletionNotificationChannelEnabled(this)) {
+            lastCompletionNotificationResult = "reply_retry_channel_blocked";
+            persistMonitorDiagnostics(true);
+            return;
+        }
+        try {
+            notificationManager.notify(completionNotificationId(notificationKey), builder.build());
+            lastCompletionNotificationResult = "reply_retry_posted";
+        } catch (SecurityException ignored) {
+            lastCompletionNotificationResult = "reply_retry_blocked";
+        }
+        persistMonitorDiagnostics(true);
+    }
+
+    private void persistMonitorDiagnostics(boolean force) {
+        long now = System.currentTimeMillis();
+        if (!force && now - lastDiagnosticsPersistAtMs < DIAGNOSTICS_PERSIST_INTERVAL_MS) return;
+        try {
+            JSONObject diagnostics = new JSONObject()
+                .put("version", 5)
+                .put("monitorStartedAtMs", monitorStartedAtMs)
+                .put("serviceCreateCount", serviceCreateCount)
+                .put("stickyRestartCount", stickyRestartCount)
+                .put("taskRemovedCount", taskRemovedCount)
+                .put("lastStartCommandAtMs", lastStartCommandAtMs)
+                .put("lastStartReason", lastStartReason)
+                .put("lastTaskRemovedAtMs", lastTaskRemovedAtMs)
+                .put("activeTaskCount", activeTaskCount())
+                .put("eventStreamState", eventStreamState)
+                .put("eventStreamReconnectCount", eventStreamReconnectCount)
+                .put("lastEventStreamStatusCode", lastEventStreamStatusCode)
+                .put("lastEventStreamConnectedAtMs", lastEventStreamConnectedAtMs)
+                .put("lastEventStreamDisconnectedAtMs", lastEventStreamDisconnectedAtMs)
+                .put("relevantEventCount", relevantEventCount)
+                .put("lastRelevantEventAtMs", lastRelevantEventAtMs)
+                .put("lastEventDrivenPollAtMs", lastEventDrivenPollAtMs)
+                .put("replyEventCount", replyEventCount)
+                .put("lastReplyEventAtMs", lastReplyEventAtMs)
+                .put("lastReplyEventSeq", lastReplyEventSeq)
+                .put("replySnapshotApplyCount", replySnapshotApplyCount)
+                .put("lastReplyAppliedAtMs", lastReplyAppliedAtMs)
+                .put("lastReplyAppliedEventSeq", lastReplyAppliedEventSeq)
+                .put("replyRenderCount", replyRenderCount)
+                .put("lastReplyRenderedAtMs", lastReplyRenderedAtMs)
+                .put("lastReplyRenderedEventSeq", lastReplyRenderedEventSeq)
+                .put("snapshotSuccessCount", snapshotSuccessCount)
+                .put("snapshotFailureCount", snapshotFailureCount)
+                .put("lastSnapshotSuccessAtMs", lastSnapshotSuccessAtMs)
+                .put("lastSnapshotFailureAtMs", lastSnapshotFailureAtMs)
+                .put("consecutivePollFailures", consecutivePollFailures)
+                .put("lastTerminalAtMs", lastTerminalAtMs)
+                .put("lastCompletionNotificationAttemptAtMs", lastCompletionNotificationAttemptAtMs)
+                .put("completionNotificationAttemptCount", completionNotificationAttemptCount)
+                .put("completionNotificationPostedCount", completionNotificationPostedCount)
+                .put("lastCompletionNotificationResult", lastCompletionNotificationResult)
+                .put("lastCompletionNotificationBodySource", lastCompletionNotificationBodySource)
+                .put("connectivityCallbackRegistered", connectivityCallbackRegistered)
+                .put("networkRecoveryCount", networkRecoveryCount)
+                .put("lastDefaultNetworkAvailableAtMs", lastDefaultNetworkAvailableAtMs)
+                .put("lastDefaultNetworkLostAtMs", lastDefaultNetworkLostAtMs)
+                .put("updatedAtMs", now);
+            MobileShellConfig.getPreferences(this).edit()
+                .putString(MobileShellConfig.PREF_TASK_PET_MONITOR_DIAGNOSTICS_JSON, diagnostics.toString())
+                .apply();
+            lastDiagnosticsPersistAtMs = now;
+        } catch (Exception ignored) {
+            // Diagnostics are best effort and never participate in task execution state.
+        }
+    }
+
+    private void restoreMonitorLifecycleDiagnostics() {
+        serviceCreateCount = 1L;
+        try {
+            String previousJson = MobileShellConfig.getPreferences(this)
+                .getString(MobileShellConfig.PREF_TASK_PET_MONITOR_DIAGNOSTICS_JSON, "{}");
+            JSONObject previous = new JSONObject(previousJson == null ? "{}" : previousJson);
+            serviceCreateCount = Math.max(0L, previous.optLong("serviceCreateCount", 0L)) + 1L;
+            stickyRestartCount = Math.max(0L, previous.optLong("stickyRestartCount", 0L));
+            taskRemovedCount = Math.max(0L, previous.optLong("taskRemovedCount", 0L));
+            lastTaskRemovedAtMs = Math.max(0L, previous.optLong("lastTaskRemovedAtMs", 0L));
+            eventStreamReconnectCount = Math.max(0, previous.optInt("eventStreamReconnectCount", 0));
+            lastEventStreamStatusCode = Math.max(0, previous.optInt("lastEventStreamStatusCode", 0));
+            lastEventStreamConnectedAtMs = Math.max(0L, previous.optLong("lastEventStreamConnectedAtMs", 0L));
+            lastEventStreamDisconnectedAtMs = Math.max(0L, previous.optLong("lastEventStreamDisconnectedAtMs", 0L));
+            relevantEventCount = Math.max(0L, previous.optLong("relevantEventCount", 0L));
+            lastRelevantEventAtMs = Math.max(0L, previous.optLong("lastRelevantEventAtMs", 0L));
+            lastEventDrivenPollAtMs = Math.max(0L, previous.optLong("lastEventDrivenPollAtMs", 0L));
+            replyEventCount = Math.max(0L, previous.optLong("replyEventCount", 0L));
+            lastReplyEventAtMs = Math.max(0L, previous.optLong("lastReplyEventAtMs", 0L));
+            lastReplyEventSeq = Math.max(0L, previous.optLong("lastReplyEventSeq", 0L));
+            replySnapshotApplyCount = Math.max(0L, previous.optLong("replySnapshotApplyCount", 0L));
+            lastReplyAppliedAtMs = Math.max(0L, previous.optLong("lastReplyAppliedAtMs", 0L));
+            lastReplyAppliedEventSeq = Math.max(0L, previous.optLong("lastReplyAppliedEventSeq", 0L));
+            replyRenderCount = Math.max(0L, previous.optLong("replyRenderCount", 0L));
+            lastReplyRenderedAtMs = Math.max(0L, previous.optLong("lastReplyRenderedAtMs", 0L));
+            lastReplyRenderedEventSeq = Math.max(0L, previous.optLong("lastReplyRenderedEventSeq", 0L));
+            snapshotSuccessCount = Math.max(0L, previous.optLong("snapshotSuccessCount", 0L));
+            snapshotFailureCount = Math.max(0L, previous.optLong("snapshotFailureCount", 0L));
+            lastSnapshotSuccessAtMs = Math.max(0L, previous.optLong("lastSnapshotSuccessAtMs", 0L));
+            lastSnapshotFailureAtMs = Math.max(0L, previous.optLong("lastSnapshotFailureAtMs", 0L));
+            lastTerminalAtMs = Math.max(0L, previous.optLong("lastTerminalAtMs", 0L));
+            lastCompletionNotificationAttemptAtMs = Math.max(
+                0L,
+                previous.optLong("lastCompletionNotificationAttemptAtMs", 0L)
+            );
+            completionNotificationAttemptCount = Math.max(
+                0L,
+                previous.optLong("completionNotificationAttemptCount", 0L)
+            );
+            completionNotificationPostedCount = Math.max(
+                0L,
+                previous.optLong("completionNotificationPostedCount", 0L)
+            );
+            lastCompletionNotificationResult = clean(
+                previous.optString("lastCompletionNotificationResult", "none"),
+                40
+            );
+            lastCompletionNotificationBodySource = clean(
+                previous.optString("lastCompletionNotificationBodySource", "none"),
+                40
+            );
+            networkRecoveryCount = Math.max(0L, previous.optLong("networkRecoveryCount", 0L));
+            lastDefaultNetworkAvailableAtMs = Math.max(
+                0L,
+                previous.optLong("lastDefaultNetworkAvailableAtMs", 0L)
+            );
+            lastDefaultNetworkLostAtMs = Math.max(0L, previous.optLong("lastDefaultNetworkLostAtMs", 0L));
+        } catch (Exception ignored) {
+            // A malformed diagnostic snapshot must not affect task recovery.
+        }
+    }
+
+    private boolean reconcileNoProgressNotifications() {
+        boolean changed = false;
+        long now = System.currentTimeMillis();
+        for (TaskItem task : tasks) {
+            String notificationKey = taskNotificationKey(task);
+            if (!TaskPetRuntimePolicy.isActiveTaskState(task.state)) {
+                if (task.lastNoProgressReminderAtMs > 0L) {
+                    TaskPetNoProgressReviewReceiver.cancelNotification(this, notificationKey);
+                    task.lastNoProgressReminderAtMs = 0L;
+                    changed = true;
+                }
+                continue;
+            }
+            if (
+                task.lastNoProgressReminderAtMs > 0L
+                && task.lastUpdatedAtMs > task.lastNoProgressReminderAtMs
+            ) {
+                TaskPetNoProgressReviewReceiver.cancelNotification(this, notificationKey);
+                task.lastNoProgressReminderAtMs = 0L;
+                changed = true;
+            }
+            if (!TaskPetRuntimePolicy.shouldNotifyNoProgress(
+                task.state,
+                task.lastUpdatedAtMs,
+                task.lastNoProgressReminderAtMs,
+                now,
+                TaskPetNoProgressReviewReceiver.INITIAL_REMINDER_MS,
+                TaskPetNoProgressReviewReceiver.REVIEW_INTERVAL_MS
+            )) continue;
+            notifyTaskNoProgress(task, notificationKey, now);
+            task.lastNoProgressReminderAtMs = now;
+            changed = true;
+        }
+        return changed;
+    }
+
+    private void notifyTaskNoProgress(TaskItem task, String notificationKey, long nowMs) {
+        TaskPetNoProgressReviewReceiver.notifyNoProgress(
+            this,
+            task.threadId,
+            notificationKey,
+            task.title,
+            task.detail,
+            task.lastUpdatedAtMs,
+            nowMs
+        );
     }
 
     private void ensureNotificationChannel() {
@@ -1810,6 +3591,36 @@ public final class TaskPetOverlayService extends Service {
         channel.setDescription("保持任务宠物浮窗并提示任务完成");
         channel.setShowBadge(false);
         manager.createNotificationChannel(channel);
+    }
+
+    private void ensureCompletionNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager == null || manager.getNotificationChannel(COMPLETION_CHANNEL_ID) != null) return;
+        NotificationChannel channel = new NotificationChannel(
+            COMPLETION_CHANNEL_ID,
+            COMPLETION_CHANNEL_NAME,
+            NotificationManager.IMPORTANCE_HIGH
+        );
+        channel.setDescription("任务完成或失败时及时提醒并显示最新回复");
+        channel.setShowBadge(true);
+        manager.createNotificationChannel(channel);
+    }
+
+    static boolean isCompletionNotificationChannelEnabled(Context context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return true;
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager == null) return false;
+        NotificationChannel channel = manager.getNotificationChannel(COMPLETION_CHANNEL_ID);
+        return channel == null || channel.getImportance() != NotificationManager.IMPORTANCE_NONE;
+    }
+
+    private static int completionNotificationId(String threadId) {
+        return (threadId.hashCode() & 0x7fffffff) % 1_000_000 + 10_000;
+    }
+
+    private static String taskNotificationKey(TaskItem task) {
+        return task.clientMessageId.isEmpty() ? task.threadId : task.clientMessageId;
     }
 
     private android.app.Notification buildForegroundNotification(int activeCount) {
@@ -1888,7 +3699,10 @@ public final class TaskPetOverlayService extends Service {
     }
 
     private static final class TaskItem {
-        final String threadId;
+        String threadId;
+        final String clientMessageId;
+        String activityId;
+        long startedAtMs;
         final String title;
         final String projectName;
         String detail;
@@ -1896,10 +3710,19 @@ public final class TaskPetOverlayService extends Service {
         String latestReply;
         String state;
         long lastEventSeq;
+        long latestReplyEventSeq;
         long lastUpdatedAtMs;
+        long lastNoProgressReminderAtMs;
+        boolean requestAccepted;
+        boolean readAcknowledged;
+        boolean omittedFromFrontend;
+        int missingRequestPollCount;
 
         TaskItem(
             String threadId,
+            String clientMessageId,
+            String activityId,
+            long startedAtMs,
             String title,
             String projectName,
             String detail,
@@ -1907,9 +3730,18 @@ public final class TaskPetOverlayService extends Service {
             String latestReply,
             String state,
             long lastEventSeq,
-            long lastUpdatedAtMs
+            long latestReplyEventSeq,
+            long lastUpdatedAtMs,
+            long lastNoProgressReminderAtMs,
+            boolean requestAccepted,
+            boolean readAcknowledged,
+            boolean omittedFromFrontend,
+            int missingRequestPollCount
         ) {
             this.threadId = threadId;
+            this.clientMessageId = clientMessageId;
+            this.activityId = activityId;
+            this.startedAtMs = startedAtMs;
             this.title = title;
             this.projectName = projectName;
             this.detail = detail;
@@ -1917,12 +3749,21 @@ public final class TaskPetOverlayService extends Service {
             this.latestReply = latestReply;
             this.state = state;
             this.lastEventSeq = lastEventSeq;
+            this.latestReplyEventSeq = latestReplyEventSeq;
             this.lastUpdatedAtMs = lastUpdatedAtMs;
+            this.lastNoProgressReminderAtMs = lastNoProgressReminderAtMs;
+            this.requestAccepted = requestAccepted;
+            this.readAcknowledged = readAcknowledged;
+            this.omittedFromFrontend = omittedFromFrontend;
+            this.missingRequestPollCount = missingRequestPollCount;
         }
 
         TaskItem copy() {
             return new TaskItem(
                 threadId,
+                clientMessageId,
+                activityId,
+                startedAtMs,
                 title,
                 projectName,
                 detail,
@@ -1930,7 +3771,13 @@ public final class TaskPetOverlayService extends Service {
                 latestReply,
                 state,
                 lastEventSeq,
-                lastUpdatedAtMs
+                latestReplyEventSeq,
+                lastUpdatedAtMs,
+                lastNoProgressReminderAtMs,
+                requestAccepted,
+                readAcknowledged,
+                omittedFromFrontend,
+                missingRequestPollCount
             );
         }
 
@@ -1958,29 +3805,48 @@ public final class TaskPetOverlayService extends Service {
 
     private static final class RuntimeResult {
         final String threadId;
+        final String clientMessageId;
+        final boolean requestAccepted;
         final boolean inProgress;
         final String executionState;
         final boolean hasPendingRequest;
         final boolean stale;
         final long lastEventSeq;
+        final long latestReplyEventSeq;
         final String latestReply;
 
         RuntimeResult(
             String threadId,
+            String clientMessageId,
+            boolean requestAccepted,
             boolean inProgress,
             String executionState,
             boolean hasPendingRequest,
             boolean stale,
             long lastEventSeq,
+            long latestReplyEventSeq,
             String latestReply
         ) {
             this.threadId = threadId;
+            this.clientMessageId = clientMessageId;
+            this.requestAccepted = requestAccepted;
             this.inProgress = inProgress;
             this.executionState = executionState;
             this.hasPendingRequest = hasPendingRequest;
             this.stale = stale;
             this.lastEventSeq = lastEventSeq;
+            this.latestReplyEventSeq = latestReplyEventSeq;
             this.latestReply = latestReply;
+        }
+    }
+
+    private static final class RuntimeRequestResult {
+        final String threadId;
+        final String status;
+
+        RuntimeRequestResult(String threadId, String status) {
+            this.threadId = threadId;
+            this.status = status;
         }
     }
 

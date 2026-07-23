@@ -47,9 +47,14 @@ export type AppServerThreadRuntimeSnapshotDependencies = {
   writeWarning(message: string, details: Record<string, unknown>): void
 }
 
+export type ThreadRuntimeSnapshotReadOptions = {
+  preferCachedMessages?: boolean
+}
+
 export async function readAppServerThreadRuntimeSnapshot(
   threadId: string,
   dependencies: AppServerThreadRuntimeSnapshotDependencies,
+  options: ThreadRuntimeSnapshotReadOptions = {},
 ): Promise<ThreadRuntimeSnapshot> {
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) {
@@ -83,6 +88,8 @@ export async function readAppServerThreadRuntimeSnapshot(
     pendingServerRequests: dependencies.listPendingServerRequestsForThread(normalizedThreadId),
     tokenUsage: dependencies.getThreadTokenUsage(normalizedThreadId),
   })
+  const sessionPath = lightThreadRead ? readThreadSessionPathFromThreadReadPayload(lightThreadRead) : ''
+  let sessionLogReadAttempted = false
   let threadRead: unknown = null
   let messageState: ThreadRuntimeSnapshot['messageState'] = 'unavailable'
 
@@ -95,53 +102,67 @@ export async function readAppServerThreadRuntimeSnapshot(
     threadRead = cachedThreadRead.threadRead
     messageState = cachedThreadRead.source === 'session-log' ? 'cached' : 'fresh'
   } else {
-    try {
-      const rawThreadRead = await dependencies.rpc('thread/read', {
-        threadId: normalizedThreadId,
-        includeTurns: true,
-      })
-      threadRead = trimThreadTurnsInRpcResult('thread/read', rawThreadRead)
-      dependencies.observeThreadRead({
-        threadId: normalizedThreadId,
-        payload: threadRead,
-      })
-      dependencies.rememberCachedThreadRead(normalizedThreadId, threadRead)
-      messageState = 'fresh'
-    } catch (error) {
-      if (!isRecoverableThreadReadError(error)) {
-        throw error
-      }
-      if (cachedThreadRead) {
-        threadRead = cachedThreadRead.threadRead
+    if (options.preferCachedMessages === true && lightThreadRead && sessionPath) {
+      sessionLogReadAttempted = true
+      const recoveredThreadRead = await (dependencies.readSessionLogThreadRead ?? readThreadReadFromSessionLog)(sessionPath, lightThreadRead)
+      if (recoveredThreadRead) {
+        threadRead = trimThreadTurnsInRpcResult('thread/read', recoveredThreadRead)
         messageState = 'cached'
-        dependencies.writeWarning('Heavy thread snapshot fell back to cached messages', {
+        dependencies.rememberCachedThreadRead(normalizedThreadId, threadRead, 'session-log')
+      }
+    }
+    if (!threadRead && options.preferCachedMessages === true && cachedThreadRead) {
+      threadRead = cachedThreadRead.threadRead
+      messageState = 'cached'
+    }
+    if (!threadRead) {
+      try {
+        const rawThreadRead = await dependencies.rpc('thread/read', {
           threadId: normalizedThreadId,
-          lightUpdatedAtIso,
-          cachedUpdatedAtIso: cachedThreadRead.updatedAtIso,
-          error: dependencies.getErrorMessage(error, 'Heavy thread snapshot failed'),
+          includeTurns: true,
         })
-      } else {
-        const sessionPath = lightThreadRead ? readThreadSessionPathFromThreadReadPayload(lightThreadRead) : ''
-        const fallbackThreadRead = sessionPath
-          ? await (dependencies.readSessionLogThreadRead ?? readThreadReadFromSessionLog)(sessionPath, lightThreadRead)
-          : null
-        if (fallbackThreadRead) {
-          threadRead = fallbackThreadRead
+        threadRead = trimThreadTurnsInRpcResult('thread/read', rawThreadRead)
+        dependencies.observeThreadRead({
+          threadId: normalizedThreadId,
+          payload: threadRead,
+        })
+        dependencies.rememberCachedThreadRead(normalizedThreadId, threadRead)
+        messageState = 'fresh'
+      } catch (error) {
+        if (!isRecoverableThreadReadError(error)) {
+          throw error
+        }
+        if (cachedThreadRead) {
+          threadRead = cachedThreadRead.threadRead
           messageState = 'cached'
-          dependencies.rememberCachedThreadRead(normalizedThreadId, fallbackThreadRead, 'session-log')
-          dependencies.writeWarning('Heavy thread snapshot fell back to session log messages', {
+          dependencies.writeWarning('Heavy thread snapshot fell back to cached messages', {
             threadId: normalizedThreadId,
             lightUpdatedAtIso,
-            sessionPath,
+            cachedUpdatedAtIso: cachedThreadRead.updatedAtIso,
             error: dependencies.getErrorMessage(error, 'Heavy thread snapshot failed'),
           })
         } else {
-          dependencies.writeWarning('Heavy thread snapshot unavailable with no cache', {
-            threadId: normalizedThreadId,
-            lightUpdatedAtIso,
-            sessionPath,
-            error: dependencies.getErrorMessage(error, 'Heavy thread snapshot failed'),
-          })
+          const recoveredThreadRead = !sessionLogReadAttempted && sessionPath
+            ? await (dependencies.readSessionLogThreadRead ?? readThreadReadFromSessionLog)(sessionPath, lightThreadRead)
+            : null
+          if (recoveredThreadRead) {
+            threadRead = trimThreadTurnsInRpcResult('thread/read', recoveredThreadRead)
+            messageState = 'cached'
+            dependencies.rememberCachedThreadRead(normalizedThreadId, threadRead, 'session-log')
+            dependencies.writeWarning('Heavy thread snapshot fell back to session log messages', {
+              threadId: normalizedThreadId,
+              lightUpdatedAtIso,
+              sessionPath,
+              error: dependencies.getErrorMessage(error, 'Heavy thread snapshot failed'),
+            })
+          } else {
+            dependencies.writeWarning('Heavy thread snapshot unavailable with no cache', {
+              threadId: normalizedThreadId,
+              lightUpdatedAtIso,
+              sessionPath,
+              error: dependencies.getErrorMessage(error, 'Heavy thread snapshot failed'),
+            })
+          }
         }
       }
     }
@@ -203,8 +224,8 @@ export async function readAppServerThreadRuntimeSnapshot(
 
 export function createAppServerThreadRuntimeSnapshotReader(
   dependencies: AppServerThreadRuntimeSnapshotDependencies,
-): (threadId: string) => Promise<ThreadRuntimeSnapshot> {
-  return async (threadId) => await readAppServerThreadRuntimeSnapshot(threadId, dependencies)
+): (threadId: string, options?: ThreadRuntimeSnapshotReadOptions) => Promise<ThreadRuntimeSnapshot> {
+  return async (threadId, options = {}) => await readAppServerThreadRuntimeSnapshot(threadId, dependencies, options)
 }
 
 function isRecoverableThreadReadError(error: unknown): boolean {

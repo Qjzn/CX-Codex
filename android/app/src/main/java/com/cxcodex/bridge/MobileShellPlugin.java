@@ -59,18 +59,20 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 @CapacitorPlugin(
     name = "MobileShell",
     permissions = {
-        @Permission(alias = "microphone", strings = { Manifest.permission.RECORD_AUDIO })
+        @Permission(alias = "microphone", strings = { Manifest.permission.RECORD_AUDIO }),
+        @Permission(alias = "notifications", strings = { Manifest.permission.POST_NOTIFICATIONS })
     }
 )
 public class MobileShellPlugin extends Plugin {
 
     private static final int CONNECT_TIMEOUT_MS = 20_000;
     private static final int READ_TIMEOUT_MS = 90_000;
-    private static final int NOTIFICATION_PERMISSION_REQUEST_CODE = 7420;
     private static final String TASK_NOTIFICATION_CHANNEL_ID = "cx_codex_tasks";
     private static final String TASK_NOTIFICATION_CHANNEL_NAME = "CX-Codex 任务";
     private static final String PREF_PENDING_APK_INSTALL_PATH = "pending_apk_install_path";
@@ -213,6 +215,7 @@ public class MobileShellPlugin extends Plugin {
         result.put("metered", networkSnapshot.metered);
         result.put("transport", networkSnapshot.transport);
         result.put("powerSaveMode", isPowerSaveMode());
+        result.put("ignoringBatteryOptimizations", isIgnoringBatteryOptimizations());
         result.put("sdkInt", Build.VERSION.SDK_INT);
         result.put("manufacturer", Build.MANUFACTURER == null ? "" : Build.MANUFACTURER);
         result.put("model", Build.MODEL == null ? "" : Build.MODEL);
@@ -224,11 +227,54 @@ public class MobileShellPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void openBatteryOptimizationSettings(PluginCall call) {
+        boolean alreadyAllowed = isIgnoringBatteryOptimizations();
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || alreadyAllowed) {
+            JSObject result = new JSObject();
+            result.put("opened", false);
+            result.put("ignoringBatteryOptimizations", alreadyAllowed);
+            call.resolve(result);
+            return;
+        }
+
+        Intent settingsIntent = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            getContext().startActivity(settingsIntent);
+        } catch (ActivityNotFoundException exception) {
+            try {
+                getContext().startActivity(
+                    new Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                );
+            } catch (Exception fallbackException) {
+                call.reject("无法打开系统后台运行设置", fallbackException);
+                return;
+            }
+        } catch (Exception exception) {
+            call.reject("无法打开系统后台运行设置", exception);
+            return;
+        }
+
+        JSObject result = new JSObject();
+        result.put("opened", true);
+        result.put("ignoringBatteryOptimizations", false);
+        call.resolve(result);
+    }
+
+    @PluginMethod
     public void getTaskPetStatus(PluginCall call) {
         boolean enabled = MobileShellConfig.getPreferences(getContext())
             .getBoolean(MobileShellConfig.PREF_TASK_PET_ENABLED, false);
         boolean canDrawOverlays = Settings.canDrawOverlays(getContext());
-        if (enabled && canDrawOverlays && !TaskPetOverlayService.isRunning()) {
+        String activeTasksJson = MobileShellConfig.getPreferences(getContext())
+            .getString(MobileShellConfig.PREF_TASK_PET_ACTIVE_TASKS_JSON, "[]");
+        if (
+            !TaskPetOverlayService.isRunning()
+            && TaskPetRuntimePolicy.shouldKeepMonitorRunning(
+                enabled && canDrawOverlays,
+                countTrackedActiveTasks(activeTasksJson)
+            )
+        ) {
             TaskPetOverlayService.startOrUpdate(getContext(), null, null, null);
         }
         call.resolve(buildTaskPetStatus(enabled, canDrawOverlays));
@@ -242,6 +288,8 @@ public class MobileShellPlugin extends Plugin {
         if (tasksJson == null) tasksJson = "[]";
         String recentThreadsJson = call.getString("recentThreadsJson", "[]");
         if (recentThreadsJson == null) recentThreadsJson = "[]";
+        String previousActiveTasksJson = MobileShellConfig.getPreferences(getContext())
+            .getString(MobileShellConfig.PREF_TASK_PET_ACTIVE_TASKS_JSON, "[]");
 
         MobileShellConfig.getPreferences(getContext()).edit()
             .putBoolean(MobileShellConfig.PREF_TASK_PET_ENABLED, enabled)
@@ -251,11 +299,15 @@ public class MobileShellPlugin extends Plugin {
             .apply();
 
         boolean canDrawOverlays = Settings.canDrawOverlays(getContext());
-        if (!enabled) {
-            TaskPetOverlayService.stop(getContext());
-        } else if (canDrawOverlays) {
+        if (TaskPetRuntimePolicy.shouldKeepMonitorRunning(
+            enabled && canDrawOverlays,
+            countTrackedActiveTasks(tasksJson, previousActiveTasksJson)
+        )) {
             TaskPetOverlayService.startOrUpdate(getContext(), serverUrl, tasksJson, recentThreadsJson);
         } else {
+            TaskPetOverlayService.stop(getContext());
+        }
+        if (enabled && !canDrawOverlays) {
             try {
                 Intent settingsIntent = new Intent(
                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -278,6 +330,8 @@ public class MobileShellPlugin extends Plugin {
         if (tasksJson == null) tasksJson = "[]";
         String recentThreadsJson = call.getString("recentThreadsJson", "[]");
         if (recentThreadsJson == null) recentThreadsJson = "[]";
+        String previousActiveTasksJson = MobileShellConfig.getPreferences(getContext())
+            .getString(MobileShellConfig.PREF_TASK_PET_ACTIVE_TASKS_JSON, "[]");
         MobileShellConfig.getPreferences(getContext()).edit()
             .putString(MobileShellConfig.PREF_TASK_PET_SERVER_URL, serverUrl)
             .putString(MobileShellConfig.PREF_TASK_PET_ACTIVE_TASKS_JSON, tasksJson)
@@ -287,8 +341,13 @@ public class MobileShellPlugin extends Plugin {
         boolean enabled = MobileShellConfig.getPreferences(getContext())
             .getBoolean(MobileShellConfig.PREF_TASK_PET_ENABLED, false);
         boolean canDrawOverlays = Settings.canDrawOverlays(getContext());
-        if (enabled && canDrawOverlays) {
+        if (TaskPetRuntimePolicy.shouldKeepMonitorRunning(
+            enabled && canDrawOverlays,
+            countTrackedActiveTasks(tasksJson, previousActiveTasksJson)
+        )) {
             TaskPetOverlayService.startOrUpdate(getContext(), serverUrl, tasksJson, recentThreadsJson);
+        } else {
+            TaskPetOverlayService.stop(getContext());
         }
         call.resolve(buildTaskPetStatus(enabled, canDrawOverlays));
     }
@@ -300,17 +359,97 @@ public class MobileShellPlugin extends Plugin {
             call.reject("缺少会话标识");
             return;
         }
-        TaskPetOverlayService.markThreadRead(getContext(), threadId);
+        String normalizedThreadId = threadId.trim();
+        TaskPetOverlayService.markThreadRead(getContext(), normalizedThreadId);
+        acknowledgeTaskPetThreadOpen(normalizedThreadId);
         call.resolve();
+    }
+
+    @PluginMethod
+    public void acknowledgeTaskPetThreadOpen(PluginCall call) {
+        String threadId = call.getString("threadId", "");
+        if (threadId == null || threadId.trim().isEmpty()) {
+            call.reject("缺少会话标识");
+            return;
+        }
+        acknowledgeTaskPetThreadOpen(threadId.trim());
+        call.resolve();
+    }
+
+    private void acknowledgeTaskPetThreadOpen(String normalizedThreadId) {
+        android.content.SharedPreferences preferences = MobileShellConfig.getPreferences(getContext());
+        String pendingThreadId = preferences.getString(
+            MobileShellConfig.PREF_TASK_PET_PENDING_OPEN_THREAD_ID,
+            ""
+        );
+        if (MobileShellConfig.shouldAcknowledgePendingTaskPetThreadOpen(
+            pendingThreadId,
+            normalizedThreadId
+        )) {
+            preferences.edit()
+                .remove(MobileShellConfig.PREF_TASK_PET_PENDING_OPEN_THREAD_ID)
+                .commit();
+        }
     }
 
     private JSObject buildTaskPetStatus(boolean enabled, boolean canDrawOverlays) {
         JSObject result = new JSObject();
+        boolean monitorRunning = TaskPetOverlayService.isRunning();
         result.put("enabled", enabled);
-        result.put("showing", enabled && canDrawOverlays && TaskPetOverlayService.isRunning());
+        result.put("showing", enabled && canDrawOverlays && monitorRunning);
         result.put("canDrawOverlays", canDrawOverlays);
         result.put("permissionRequired", enabled && !canDrawOverlays);
+        result.put("monitorRunning", monitorRunning);
+        String diagnosticsJson = MobileShellConfig.getPreferences(getContext())
+            .getString(MobileShellConfig.PREF_TASK_PET_MONITOR_DIAGNOSTICS_JSON, "{}");
+        try {
+            result.put("monitorDiagnostics", new JSONObject(diagnosticsJson == null ? "{}" : diagnosticsJson));
+        } catch (Exception ignored) {
+            result.put("monitorDiagnostics", new JSONObject());
+        }
+        String pushDiagnosticsJson = MobileShellConfig.getPreferences(getContext())
+            .getString(MobileShellConfig.PREF_MOBILE_PUSH_DIAGNOSTICS_JSON, "{}");
+        try {
+            result.put("pushDiagnostics", new JSONObject(pushDiagnosticsJson == null ? "{}" : pushDiagnosticsJson));
+        } catch (Exception ignored) {
+            result.put("pushDiagnostics", new JSONObject());
+        }
         return result;
+    }
+
+    private static int countTaskRows(String tasksJson) {
+        try {
+            return new JSONArray(tasksJson == null ? "[]" : tasksJson).length();
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private int countTrackedActiveTasks(String incomingTasksJson) {
+        String persistedTasksJson = MobileShellConfig.getPreferences(getContext())
+            .getString(MobileShellConfig.PREF_TASK_PET_TASKS_JSON, "[]");
+        return Math.max(countTaskRows(incomingTasksJson), countActiveTaskRows(persistedTasksJson));
+    }
+
+    private int countTrackedActiveTasks(String incomingTasksJson, String previousActiveTasksJson) {
+        return Math.max(
+            countTaskRows(previousActiveTasksJson),
+            countTrackedActiveTasks(incomingTasksJson)
+        );
+    }
+
+    private static int countActiveTaskRows(String tasksJson) {
+        int count = 0;
+        try {
+            JSONArray rows = new JSONArray(tasksJson == null ? "[]" : tasksJson);
+            for (int index = 0; index < rows.length(); index++) {
+                JSONObject row = rows.optJSONObject(index);
+                if (row != null && !"completed".equals(row.optString("state"))) count += 1;
+            }
+        } catch (Exception ignored) {
+            return 0;
+        }
+        return count;
     }
 
     @PluginMethod
@@ -568,21 +707,57 @@ public class MobileShellPlugin extends Plugin {
 
     @PluginMethod
     public void requestNotificationPermission(PluginCall call) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || hasNotificationPermission()) {
+        if (hasNotificationPermission() && TaskPetOverlayService.isCompletionNotificationChannelEnabled(getContext())) {
             call.resolve(buildNotificationPermissionResult(false));
             return;
         }
 
-        if (getActivity() == null) {
+        boolean automatic = Boolean.TRUE.equals(call.getBoolean("automatic", false));
+        if (automatic) {
+            boolean alreadyRequested = MobileShellConfig.getPreferences(getContext())
+                .getBoolean(MobileShellConfig.PREF_NOTIFICATION_AUTO_REQUESTED, false);
+            if (alreadyRequested) {
+                call.resolve(buildNotificationPermissionResult(false));
+                return;
+            }
+        }
+
+        PermissionState permissionState = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+            ? getPermissionState("notifications")
+            : PermissionState.GRANTED;
+        boolean canRequestRuntimePermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+            && permissionState != PermissionState.GRANTED
+            && permissionState != PermissionState.DENIED;
+
+        if (getActivity() == null && (!automatic || canRequestRuntimePermission)) {
             call.reject("当前 Activity 不可用，无法请求通知权限");
             return;
         }
 
-        ActivityCompat.requestPermissions(
-            getActivity(),
-            new String[] { Manifest.permission.POST_NOTIFICATIONS },
-            NOTIFICATION_PERMISSION_REQUEST_CODE
-        );
+        if (automatic) {
+            MobileShellConfig.getPreferences(getContext())
+                .edit()
+                .putBoolean(MobileShellConfig.PREF_NOTIFICATION_AUTO_REQUESTED, true)
+                .apply();
+            if (!canRequestRuntimePermission) {
+                call.resolve(buildNotificationPermissionResult(false));
+                return;
+            }
+        } else if (!canRequestRuntimePermission) {
+            try {
+                openTaskNotificationSettings();
+                call.resolve(buildNotificationPermissionResult(false));
+            } catch (Exception exception) {
+                call.reject("无法打开系统通知设置：" + exception.getMessage(), exception);
+            }
+            return;
+        }
+
+        requestPermissionForAlias("notifications", call, "notificationPermissionAfterRequest");
+    }
+
+    @PermissionCallback
+    private void notificationPermissionAfterRequest(PluginCall call) {
         call.resolve(buildNotificationPermissionResult(true));
     }
 
@@ -1114,12 +1289,23 @@ public class MobileShellPlugin extends Plugin {
         return powerManager != null && powerManager.isPowerSaveMode();
     }
 
+    private boolean isIgnoringBatteryOptimizations() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+        PowerManager powerManager = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
+        return powerManager != null
+            && powerManager.isIgnoringBatteryOptimizations(getContext().getPackageName());
+    }
+
     private JSObject buildNotificationPermissionResult(boolean requested) {
         JSObject result = new JSObject();
         result.put("granted", hasNotificationPermission());
         result.put("requested", requested);
         result.put("requiresRuntimePermission", Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU);
         result.put("notificationsEnabled", NotificationManagerCompat.from(getContext()).areNotificationsEnabled());
+        result.put(
+            "completionChannelEnabled",
+            TaskPetOverlayService.isCompletionNotificationChannelEnabled(getContext())
+        );
         return result;
     }
 
@@ -1129,6 +1315,35 @@ public class MobileShellPlugin extends Plugin {
         }
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
             || getContext().checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void openAppNotificationSettings() {
+        Intent settingsIntent;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            settingsIntent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
+        } else {
+            settingsIntent = new Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + getContext().getPackageName())
+            );
+        }
+        getActivity().startActivity(settingsIntent);
+    }
+
+    private void openTaskNotificationSettings() {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            && hasNotificationPermission()
+            && !TaskPetOverlayService.isCompletionNotificationChannelEnabled(getContext())
+        ) {
+            Intent settingsIntent = new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName())
+                .putExtra(Settings.EXTRA_CHANNEL_ID, TaskPetOverlayService.COMPLETION_CHANNEL_ID);
+            getActivity().startActivity(settingsIntent);
+            return;
+        }
+        openAppNotificationSettings();
     }
 
     private void ensureTaskNotificationChannel() {
@@ -1508,6 +1723,8 @@ public class MobileShellPlugin extends Plugin {
                 .setPriority(resolveNotificationPriority(type));
             int notificationId = (int) (System.currentTimeMillis() % Integer.MAX_VALUE);
             NotificationManagerCompat.from(getContext()).notify(notificationId, builder.build());
+        } catch (SecurityException ignored) {
+            // Permission can be revoked between the check and notification delivery.
         } catch (Exception ignored) {
             // Toast has already provided foreground feedback; notifications are best effort.
         }

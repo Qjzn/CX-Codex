@@ -8,6 +8,7 @@ import type {
   RuntimeSnapshotOverlay,
   ThreadRuntimeSnapshot,
 } from './runtimeState.js'
+import type { ThreadRuntimeSnapshotReadOptions } from './appServerThreadRuntimeSnapshot.js'
 import type { PendingServerRequest } from './pendingServerRequests.js'
 import type { ThreadTokenUsage } from './threadTokenUsage.js'
 
@@ -24,7 +25,10 @@ export type RuntimeStateRoutesDependencies = {
   reconcileRuntimeThread: (threadId: string) => Promise<ThreadRuntimeSnapshot>
   readLocalRuntimeSnapshot: (threadId: string) => ThreadRuntimeSnapshot
   persistRuntimeSnapshot: (threadId: string, snapshot: ThreadRuntimeSnapshot) => ThreadRuntimeSnapshot
-  readThreadRuntimeSnapshot: (threadId: string) => Promise<ThreadRuntimeSnapshot | null>
+  readThreadRuntimeSnapshot: (
+    threadId: string,
+    options?: ThreadRuntimeSnapshotReadOptions,
+  ) => Promise<ThreadRuntimeSnapshot | null>
   readCachedThreadTokenUsage: (threadId: string) => Promise<ThreadTokenUsage | null>
   listPendingServerRequestsForThread: (threadId: string) => PendingServerRequest[]
   getThreadTokenUsage: (threadId: string) => ThreadTokenUsage | null
@@ -68,10 +72,7 @@ export async function handleRuntimeStateRoutes(
       setJson(res, 400, { error: 'Missing threadId' })
       return true
     }
-    const snapshot = dependencies.persistRuntimeSnapshot(
-      threadId,
-      dependencies.runtimeStateStore.snapshot(threadId, createRuntimeSnapshotOverlay(threadId, dependencies)),
-    )
+    const snapshot = dependencies.readLocalRuntimeSnapshot(threadId)
     setJson(res, 200, { data: snapshot })
     return true
   }
@@ -82,11 +83,7 @@ export async function handleRuntimeStateRoutes(
       .map((threadId) => threadId.trim())
       .filter((threadId) => threadId.length > 0)
       .slice(0, 100)
-    const overlays = new Map<string, RuntimeSnapshotOverlay>()
-    for (const threadId of threadIds) {
-      overlays.set(threadId, createRuntimeSnapshotOverlay(threadId, dependencies))
-    }
-    setJson(res, 200, { data: dependencies.runtimeStateStore.snapshots(threadIds, overlays) })
+    setJson(res, 200, { data: threadIds.map((threadId) => dependencies.readLocalRuntimeSnapshot(threadId)) })
     return true
   }
 
@@ -98,7 +95,9 @@ export async function handleRuntimeStateRoutes(
       return true
     }
 
-    const snapshot = await dependencies.readThreadRuntimeSnapshot(threadId)
+    const snapshot = await dependencies.readThreadRuntimeSnapshot(threadId, {
+      preferCachedMessages: url.searchParams.get('preferCachedMessages') === '1',
+    })
     setJson(res, 200, { data: snapshot })
     return true
   }

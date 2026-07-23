@@ -64,12 +64,15 @@ export function createCodexBridgeMiddlewareState(
     readSupplementalThreadIds,
     rpc: (method, params) => appServer.rpc(method, params),
   })
+  const runtimeStore = new RuntimeStore()
   const runtimeStateStore = new RuntimeStateStore({
     readThreadIdFromPayload,
     readTurnIdFromPayload,
     readItemIdFromPayload,
     readThreadInProgressFromThreadReadPayload,
     getErrorMessage,
+  }, {
+    loadPersistedSnapshot: (threadId) => runtimeStore.getSnapshot(threadId)?.snapshot ?? null,
   })
 
   return {
@@ -77,7 +80,7 @@ export function createCodexBridgeMiddlewareState(
     threadReadCacheStore,
     augmentThreadListRpcResult,
     runtimeStateStore,
-    runtimeStore: new RuntimeStore(),
+    runtimeStore,
     notificationDiagnostics: new AppServerNotificationDiagnostics(),
     statusDiagnostics: new AppServerStatusDiagnostics(),
     hookDiagnosticsCache: new AppServerHookDiagnosticsCache(),

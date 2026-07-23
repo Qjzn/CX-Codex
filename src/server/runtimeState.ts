@@ -33,6 +33,8 @@ export type ThreadRuntimeSnapshot = {
   lastCompletedAtIso: string | null
   lastError: string | null
   latestReply?: string
+  latestReplyItemId?: string
+  latestReplyEventSeq?: number
   stale: boolean
   degradedReason: string | null
   source: RuntimeSnapshotSource
@@ -69,6 +71,8 @@ type ThreadRuntimeState = {
   lastCompletedAtIso: string | null
   lastError: string | null
   latestReply: string
+  latestReplyItemId: string
+  latestReplyEventSeq: number
   degradedReason: string | null
   source: RuntimeSnapshotSource
 }
@@ -79,6 +83,11 @@ type RuntimeStateStoreReaders = {
   readItemIdFromPayload: (payload: unknown) => string
   readThreadInProgressFromThreadReadPayload: (payload: unknown) => boolean
   getErrorMessage: (payload: unknown, fallback: string) => string
+}
+
+type RuntimeStateStoreOptions = {
+  staleMs?: number
+  loadPersistedSnapshot?: (threadId: string) => unknown
 }
 
 export const RUNTIME_SNAPSHOT_STALE_MS = 90_000
@@ -121,6 +130,8 @@ function createInitialRuntimeState(threadId: string): ThreadRuntimeState {
     lastCompletedAtIso: null,
     lastError: null,
     latestReply: '',
+    latestReplyItemId: '',
+    latestReplyEventSeq: 0,
     degradedReason: null,
     source: 'unknown',
   }
@@ -138,18 +149,28 @@ export function toPersistableRuntimeSnapshot(snapshot: ThreadRuntimeSnapshot): T
 export class RuntimeStateStore {
   private readonly stateByThreadId = new Map<string, ThreadRuntimeState>()
   private readonly staleMs: number
+  private readonly loadPersistedSnapshot?: (threadId: string) => unknown
 
-  constructor(private readonly readers: RuntimeStateStoreReaders, options: { staleMs?: number } = {}) {
+  constructor(private readonly readers: RuntimeStateStoreReaders, options: RuntimeStateStoreOptions = {}) {
     this.staleMs = options.staleMs ?? RUNTIME_SNAPSHOT_STALE_MS
+    this.loadPersistedSnapshot = options.loadPersistedSnapshot
   }
 
   private getMutable(threadId: string): ThreadRuntimeState {
     const normalizedThreadId = threadId.trim()
     const existing = this.stateByThreadId.get(normalizedThreadId)
     if (existing) return existing
-    const created = createInitialRuntimeState(normalizedThreadId)
+    const created = createRuntimeStateFromPersisted(
+      normalizedThreadId,
+      this.loadPersistedSnapshot?.(normalizedThreadId),
+    ) ?? createInitialRuntimeState(normalizedThreadId)
     this.stateByThreadId.set(normalizedThreadId, created)
     return created
+  }
+
+  private getReadable(threadId: string): ThreadRuntimeState {
+    const normalizedThreadId = threadId.trim()
+    return this.stateByThreadId.get(normalizedThreadId) ?? createInitialRuntimeState(normalizedThreadId)
   }
 
   private touch(
@@ -187,6 +208,9 @@ export class RuntimeStateStore {
       degradedReason: null,
       lastError: null,
       latestReply: '',
+      latestReplyItemId: '',
+      latestReplyEventSeq: 0,
+      lastStartedAtIso: new Date().toISOString(),
     }, 'events')
   }
 
@@ -197,6 +221,19 @@ export class RuntimeStateStore {
       stopRequested: false,
       degradedReason: 'turn start requires verification',
       lastError,
+    }, 'events')
+  }
+
+  markFailed(threadId: string, lastError: string | null = null): void {
+    if (!threadId.trim()) return
+    this.touch(threadId, {
+      executionState: 'failed',
+      activeTurnId: '',
+      activeItemId: '',
+      stopRequested: false,
+      lastCompletedAtIso: new Date().toISOString(),
+      lastError,
+      degradedReason: null,
     }, 'events')
   }
 
@@ -256,13 +293,18 @@ export class RuntimeStateStore {
       const delta = readStringProperty(event.params, 'delta')
       if (delta) {
         const state = this.getMutable(threadId)
+        const nextLatestReply = itemId && state.latestReplyItemId && itemId !== state.latestReplyItemId
+          ? appendLatestReply('', delta)
+          : appendLatestReply(state.latestReply, delta)
         this.touch(threadId, {
           executionState: isRuntimeSettledState(state.executionState) && state.executionState !== 'idle'
             ? state.executionState
             : 'running',
           activeTurnId: turnId || state.activeTurnId,
           activeItemId: itemId || state.activeItemId,
-          latestReply: appendLatestReply(state.latestReply, delta),
+          latestReply: nextLatestReply,
+          latestReplyItemId: itemId || state.latestReplyItemId,
+          latestReplyEventSeq: Math.max(0, Math.trunc(event.seq)),
           degradedReason: null,
         }, 'events', event)
       }
@@ -272,8 +314,11 @@ export class RuntimeStateStore {
     if (method === 'item/completed') {
       const completedReply = readCompletedAgentReply(event.params)
       if (completedReply) {
+        const state = this.getMutable(threadId)
         this.touch(threadId, {
           latestReply: completedReply,
+          latestReplyItemId: itemId || state.latestReplyItemId,
+          latestReplyEventSeq: Math.max(0, Math.trunc(event.seq)),
         }, 'events', event)
       }
       return
@@ -289,6 +334,8 @@ export class RuntimeStateStore {
         lastStartedAtIso: event.atIso,
         lastError: null,
         latestReply: '',
+        latestReplyItemId: '',
+        latestReplyEventSeq: 0,
       }, 'events', event)
       return
     }
@@ -370,6 +417,7 @@ export class RuntimeStateStore {
   ): void {
     if (!threadId.trim()) return
     const current = this.getMutable(threadId)
+    if (!inProgress && isThreadReadOlderThanPendingStart(current, updatedAtIso)) return
     const nextState: RuntimeExecutionState = inProgress
       ? (current.executionState === 'waiting_permission' ? 'waiting_permission' : 'running')
       : (isRuntimeActiveState(current.executionState) || current.executionState === 'completed_pending_sync')
@@ -400,7 +448,7 @@ export class RuntimeStateStore {
   }
 
   snapshot(threadId: string, overlay: RuntimeSnapshotOverlay = {}): ThreadRuntimeSnapshot {
-    const state = this.getMutable(threadId)
+    const state = this.getReadable(threadId)
     const pendingServerRequests = overlay.pendingServerRequests ?? []
     const overlayThreadReadInProgress = overlay.threadRead
       ? this.readers.readThreadInProgressFromThreadReadPayload(overlay.threadRead)
@@ -430,6 +478,8 @@ export class RuntimeStateStore {
       lastCompletedAtIso: state.lastCompletedAtIso,
       lastError: state.lastError,
       latestReply: state.latestReply,
+      latestReplyItemId: state.latestReplyItemId,
+      latestReplyEventSeq: state.latestReplyEventSeq,
       stale,
       degradedReason: state.degradedReason,
       source: state.source,
@@ -466,7 +516,9 @@ function normalizeLatestReply(value: string): string {
 }
 
 function appendLatestReply(current: string, delta: string): string {
-  const combined = normalizeLatestReply(`${current}${delta}`)
+  // Keep one trailing separator while streaming so a chunk ending in whitespace
+  // cannot merge with the first word of the next chunk.
+  const combined = `${current}${delta}`.replace(/\s+/g, ' ')
   return combined.length <= LATEST_REPLY_CACHE_LIMIT
     ? combined
     : combined.slice(combined.length - LATEST_REPLY_CACHE_LIMIT)
@@ -476,5 +528,85 @@ function readCompletedAgentReply(params: unknown): string {
   const item = asRecord(asRecord(params)?.item)
   if (item?.type !== 'agentMessage' || typeof item.text !== 'string') return ''
   const normalized = normalizeLatestReply(item.text)
-  return normalized.slice(0, LATEST_REPLY_CACHE_LIMIT)
+  return normalized.length <= LATEST_REPLY_CACHE_LIMIT
+    ? normalized
+    : normalized.slice(normalized.length - LATEST_REPLY_CACHE_LIMIT)
+}
+
+function createRuntimeStateFromPersisted(threadId: string, value: unknown): ThreadRuntimeState | null {
+  const snapshot = asRecord(value)
+  if (!snapshot || readStringProperty(snapshot, 'threadId').trim() !== threadId) return null
+
+  const initial = createInitialRuntimeState(threadId)
+  const executionState = readStringProperty(snapshot, 'executionState')
+  const source = readStringProperty(snapshot, 'source')
+  const lastEventSeq = snapshot.lastEventSeq
+  const latestReplyEventSeq = snapshot.latestReplyEventSeq
+  const nullableString = (key: string): string | null => {
+    const child = snapshot[key]
+    return typeof child === 'string' ? child : null
+  }
+
+  return {
+    ...initial,
+    executionState: isRuntimeExecutionState(executionState) ? executionState : initial.executionState,
+    activeTurnId: readStringProperty(snapshot, 'activeTurnId'),
+    activeItemId: readStringProperty(snapshot, 'activeItemId'),
+    stopRequested: snapshot.stopRequested === true,
+    updatedAtIso: readStringProperty(snapshot, 'updatedAtIso') || initial.updatedAtIso,
+    lastEventSeq: typeof lastEventSeq === 'number' && Number.isFinite(lastEventSeq)
+      ? Math.max(0, Math.trunc(lastEventSeq))
+      : 0,
+    lastEventAtIso: nullableString('lastEventAtIso'),
+    lastStartedAtIso: nullableString('lastStartedAtIso'),
+    lastCompletedAtIso: nullableString('lastCompletedAtIso'),
+    lastError: nullableString('lastError'),
+    latestReply: boundLatestReply(readStringProperty(snapshot, 'latestReply')),
+    latestReplyItemId: readStringProperty(snapshot, 'latestReplyItemId'),
+    latestReplyEventSeq: typeof latestReplyEventSeq === 'number' && Number.isFinite(latestReplyEventSeq)
+      ? Math.max(0, Math.trunc(latestReplyEventSeq))
+      : 0,
+    degradedReason: nullableString('degradedReason'),
+    source: isRuntimeSnapshotSource(source) ? source : initial.source,
+  }
+}
+
+function boundLatestReply(value: string): string {
+  const compact = value.replace(/\s+/g, ' ')
+  return compact.length <= LATEST_REPLY_CACHE_LIMIT
+    ? compact
+    : compact.slice(compact.length - LATEST_REPLY_CACHE_LIMIT)
+}
+
+function isRuntimeExecutionState(value: string): value is RuntimeExecutionState {
+  return [
+    'idle',
+    'queued',
+    'starting',
+    'start_uncertain',
+    'running',
+    'waiting_permission',
+    'stopping',
+    'stop_uncertain',
+    'completed_pending_sync',
+    'completed',
+    'failed',
+    'interrupted',
+    'stopped',
+    'sync_degraded',
+  ].includes(value)
+}
+
+function isRuntimeSnapshotSource(value: string): value is RuntimeSnapshotSource {
+  return value === 'events' || value === 'thread-read' || value === 'cache' || value === 'unknown'
+}
+
+function isThreadReadOlderThanPendingStart(current: ThreadRuntimeState, updatedAtIso: string): boolean {
+  if (current.executionState !== 'starting' && current.executionState !== 'start_uncertain') return false
+  const startedAtMs = Date.parse(current.lastStartedAtIso ?? '')
+  if (!Number.isFinite(startedAtMs)) return false
+  const readUpdatedAtMs = Date.parse(updatedAtIso)
+  if (!Number.isFinite(readUpdatedAtMs)) return true
+  // App Server thread timestamps have second precision; tolerate the current start second.
+  return readUpdatedAtMs + 1_000 < startedAtMs
 }
