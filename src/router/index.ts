@@ -12,6 +12,7 @@ function normalizeInitialHashRoute(): void {
     || pathname === '/__regression/sidebar-rows'
     || pathname === '/__regression/composer-shell'
     || pathname === '/__regression/task-pet'
+    || pathname === '/__regression/docs-showcase'
     || pathname.startsWith('/thread/')
   if (!isKnownCleanRoute) return
   if (hash && hash !== '#/') return
@@ -77,6 +78,11 @@ const router = createRouter({
       path: '/__regression/task-pet',
       name: 'regression-task-pet',
       component: () => import('../components/mobile/TaskPetRegressionFixture.vue'),
+    },
+    {
+      path: '/__regression/docs-showcase',
+      name: 'regression-docs-showcase',
+      component: () => import('../components/content/DocumentationShowcaseFixture.vue'),
     },
     {
       path: '/new-thread',

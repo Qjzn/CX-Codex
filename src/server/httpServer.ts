@@ -5,7 +5,8 @@ import { existsSync } from 'node:fs'
 import { writeFile, stat } from 'node:fs/promises'
 import express, { type Express } from 'express'
 import { createCodexBridgeMiddleware } from './codexAppServerBridge.js'
-import { createAuthSession } from './authMiddleware.js'
+import { createAuthSession, isLoopbackRequest } from './authMiddleware.js'
+import { getQuickTunnelSnapshot } from './quickTunnel.js'
 import { createDirectoryListingHtml, createLocalFileActionHtml, createTextEditorHtml, decodeBrowsePath, isPreviewableLocalPath, isTextEditableFile, normalizeLocalPath, toLocalFilePreviewHref } from './localBrowseUi.js'
 import {
   NOTIFICATION_WEBSOCKET_MAX_INBOUND_BYTES,
@@ -95,6 +96,57 @@ function renderFrontendMissingHtml(message: string, details?: string[]): string 
   ].join('')
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/gu, '&amp;')
+    .replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;')
+    .replace(/"/gu, '&quot;')
+    .replace(/'/gu, '&#39;')
+}
+
+function renderLocalSetupHtml(password: string): string {
+  const tunnel = getQuickTunnelSnapshot()
+  const publicUrl = tunnel.active ? tunnel.publicUrl : ''
+  const publicLink = publicUrl
+    ? `<a class="primary" href="${escapeHtml(publicUrl)}" target="_blank" rel="noreferrer">打开手机访问地址</a>`
+    : '<p class="muted">临时地址尚未生成，可在 CX-Codex 设置的“手机访问”中开启。</p>'
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>CX-Codex 本机配对</title>
+<style>
+body{margin:0;background:#f4f7f6;color:#17201e;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:560px;margin:0 auto;padding:48px 20px}
+.card{border:1px solid #dbe5e2;border-radius:18px;background:#fff;padding:26px;box-shadow:0 16px 42px rgba(20,55,47,.08)}
+.kicker{margin:0;color:#0f766e;font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+h1{margin:8px 0 10px;font-size:24px}
+.muted{color:#62706d;line-height:1.6}
+dl{display:grid;gap:12px;margin:22px 0}dt{color:#77837f;font-size:12px}dd{margin:4px 0 0}
+code{display:block;overflow-wrap:anywhere;border:1px solid #dbe5e2;border-radius:10px;background:#f7faf9;padding:12px;font-size:14px}
+.primary{display:inline-flex;border-radius:10px;background:#0f766e;color:#fff;padding:11px 15px;text-decoration:none;font-weight:650}
+.warning{margin-top:18px;border-left:3px solid #d97706;padding-left:12px;color:#79511d;font-size:13px;line-height:1.55}
+</style>
+</head>
+<body>
+<main><section class="card">
+<p class="kicker">仅限本机</p>
+<h1>CX-Codex 手机配对</h1>
+<p class="muted">在手机打开临时地址后，输入下面的访问密码。密码不会写入公网链接。</p>
+<dl>
+<div><dt>手机访问地址</dt><dd><code>${escapeHtml(publicUrl || '尚未生成')}</code></dd></div>
+<div><dt>访问密码</dt><dd><code>${escapeHtml(password || '当前未启用密码')}</code></dd></div>
+</dl>
+${publicLink}
+<p class="warning">只在你自己的电脑上打开本页，不要截图或转发访问密码。临时地址停止后会失效。</p>
+</section></main>
+</body>
+</html>`
+}
+
 function normalizeLocalImagePath(rawPath: string): string {
   const trimmed = rawPath.trim()
   if (!trimmed) return ''
@@ -153,7 +205,9 @@ function setLocalFileDisposition(
 
 export function createServer(options: ServerOptions = {}): ServerInstance {
   const app = express()
-  const bridge = createCodexBridgeMiddleware()
+  const bridge = createCodexBridgeMiddleware({
+    remoteAccessProtected: Boolean(options.password),
+  })
   const authSession = options.password ? createAuthSession(options.password) : null
 
   app.get('/health', (_req, res) => {
@@ -162,6 +216,16 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       service: 'cx-codex',
       atIso: new Date().toISOString(),
     })
+  })
+
+  app.get('/local-setup', (req, res) => {
+    if (!isLoopbackRequest(req)) {
+      res.status(404).end()
+      return
+    }
+    res.setHeader('Cache-Control', 'no-store')
+    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
+    res.status(200).type('text/html; charset=utf-8').send(renderLocalSetupHtml(options.password ?? ''))
   })
 
   // 1. Auth middleware (if password is set)

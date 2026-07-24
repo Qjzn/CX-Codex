@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { chmodSync, createWriteStream, existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir, networkInterfaces } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
@@ -7,7 +7,6 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
-import { get as httpsGet } from 'node:https'
 import { Command } from 'commander'
 import qrcode from 'qrcode-terminal'
 import {
@@ -21,6 +20,11 @@ import { resolveLaunchOptions, type LaunchCliOptions } from './config.js'
 import { createServer as createApp } from '../server/httpServer.js'
 import { generatePassword } from '../server/password.js'
 import { RuntimeStore } from '../server/runtimeStore.js'
+import {
+  ensureVerifiedCloudflared,
+  startQuickTunnel,
+  stopQuickTunnel,
+} from '../server/quickTunnel.js'
 import { spawnSyncCommand } from '../utils/commandInvocation.js'
 
 const program = new Command().name('cx-codex').description('CX-Codex Web bridge for Codex app-server')
@@ -105,29 +109,6 @@ function runWithStatus(command: string, args: string[]): number {
   return result.status ?? -1
 }
 
-function mapCloudflaredLinuxArch(arch: NodeJS.Architecture): string | null {
-  if (arch === 'x64') {
-    return 'amd64'
-  }
-  if (arch === 'arm64') {
-    return 'arm64'
-  }
-  return null
-}
-
-function mapCloudflaredWindowsArch(arch: NodeJS.Architecture): string | null {
-  if (arch === 'x64') {
-    return 'amd64'
-  }
-  if (arch === 'ia32') {
-    return '386'
-  }
-  if (arch === 'arm64') {
-    return 'arm64'
-  }
-  return null
-}
-
 function resolveCloudflaredCommand(): string | null {
   const explicit = getBridgeEnv('CLOUDFLARED_COMMAND')
   const candidates = [
@@ -147,98 +128,6 @@ function resolveCloudflaredCommand(): string | null {
   }
 
   return null
-}
-
-function downloadFile(url: string, destination: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const request = (currentUrl: string) => {
-      httpsGet(currentUrl, (response) => {
-        const code = response.statusCode ?? 0
-        if (code >= 300 && code < 400 && response.headers.location) {
-          response.resume()
-          request(response.headers.location)
-          return
-        }
-        if (code !== 200) {
-          response.resume()
-          reject(new Error(`Download failed with HTTP status ${String(code)}`))
-          return
-        }
-        const file = createWriteStream(destination, { mode: 0o755 })
-        response.pipe(file)
-        file.on('finish', () => {
-          file.close()
-          resolve()
-        })
-        file.on('error', reject)
-      }).on('error', reject)
-    }
-
-    request(url)
-  })
-}
-
-async function ensureCloudflaredInstalledWindows(): Promise<string | null> {
-  const current = resolveCloudflaredCommand()
-  if (current) {
-    return current
-  }
-  if (process.platform !== 'win32') {
-    return null
-  }
-
-  const mappedArch = mapCloudflaredWindowsArch(process.arch)
-  if (!mappedArch) {
-    throw new Error(`cloudflared auto-install is not supported for Windows architecture: ${process.arch}`)
-  }
-
-  const userBinDir = getCloudflaredUserBinDir()
-  mkdirSync(userBinDir, { recursive: true })
-  const destination = join(userBinDir, 'cloudflared.exe')
-  const downloadUrl = `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-${mappedArch}.exe`
-
-  console.log(`\ncloudflared not found. Installing to ${userBinDir}...\n`)
-  await downloadFile(downloadUrl, destination)
-  process.env.PATH = prependPathEntry(process.env.PATH ?? '', userBinDir)
-
-  const installed = resolveCloudflaredCommand()
-  if (!installed) {
-    throw new Error('cloudflared download completed but executable is still not available')
-  }
-  console.log('\ncloudflared installed.\n')
-  return installed
-}
-
-async function ensureCloudflaredInstalledLinux(): Promise<string | null> {
-  const current = resolveCloudflaredCommand()
-  if (current) {
-    return current
-  }
-  if (process.platform !== 'linux') {
-    return null
-  }
-
-  const mappedArch = mapCloudflaredLinuxArch(process.arch)
-  if (!mappedArch) {
-    throw new Error(`cloudflared auto-install is not supported for Linux architecture: ${process.arch}`)
-  }
-
-  const userBinDir = getCloudflaredUserBinDir()
-  mkdirSync(userBinDir, { recursive: true })
-  const destination = join(userBinDir, 'cloudflared')
-  const downloadUrl = `https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${mappedArch}`
-
-  console.log('\ncloudflared not found. Installing to ~/.local/bin...\n')
-  await downloadFile(downloadUrl, destination)
-  chmodSync(destination, 0o755)
-  process.env.PATH = prependPathEntry(process.env.PATH ?? '', userBinDir)
-
-  const installed = resolveCloudflaredCommand()
-  if (!installed) {
-    throw new Error('cloudflared download completed but executable is still not available')
-  }
-  console.log('\ncloudflared installed.\n')
-  return installed
 }
 
 async function shouldInstallCloudflaredInteractively(): Promise<boolean> {
@@ -275,11 +164,9 @@ async function resolveCloudflaredForTunnel(): Promise<string | null> {
     return null
   }
 
-  if (process.platform === 'win32') {
-    return ensureCloudflaredInstalledWindows()
-  }
-
-  return ensureCloudflaredInstalledLinux()
+  const installed = await ensureVerifiedCloudflared()
+  process.env.PATH = prependPathEntry(process.env.PATH ?? '', getCloudflaredUserBinDir())
+  return installed.command
 }
 
 function hasCodexAuth(): boolean {
@@ -366,14 +253,6 @@ function openBrowser(url: string): void {
   child.unref()
 }
 
-function parseCloudflaredUrl(chunk: string): string | null {
-  const urlMatch = chunk.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/g)
-  if (!urlMatch || urlMatch.length === 0) {
-    return null
-  }
-  return urlMatch[urlMatch.length - 1] ?? null
-}
-
 function isWildcardBindHost(host: string): boolean {
   const normalized = host.trim().toLowerCase()
   return normalized === '0.0.0.0' || normalized === '::'
@@ -437,51 +316,6 @@ function listenWithFallback(server: ReturnType<typeof createServer>, startPort: 
     }
 
     attempt(startPort)
-  })
-}
-
-async function startCloudflaredTunnel(command: string, localPort: number): Promise<{
-  process: ReturnType<typeof spawn>
-  url: string
-}> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, ['tunnel', '--url', `http://localhost:${String(localPort)}`], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-
-    const timeout = setTimeout(() => {
-      child.kill('SIGTERM')
-      reject(new Error('Timed out waiting for cloudflared tunnel URL'))
-    }, 20000)
-
-    const handleData = (value: Buffer | string) => {
-      const text = String(value)
-      const parsedUrl = parseCloudflaredUrl(text)
-      if (!parsedUrl) {
-        return
-      }
-      clearTimeout(timeout)
-      child.stdout?.off('data', handleData)
-      child.stderr?.off('data', handleData)
-      resolve({ process: child, url: parsedUrl })
-    }
-
-    const onError = (error: Error) => {
-      clearTimeout(timeout)
-      reject(new Error(`Failed to start cloudflared: ${error.message}`))
-    }
-
-    child.once('error', onError)
-    child.stdout?.on('data', handleData)
-    child.stderr?.on('data', handleData)
-
-    child.once('exit', (code) => {
-      if (code === 0) {
-        return
-      }
-      clearTimeout(timeout)
-      reject(new Error(`cloudflared exited before providing a URL (code ${String(code)})`))
-    })
   })
 }
 
@@ -556,6 +390,10 @@ async function startServer(options: {
   ripgrepCommand?: string
   cloudflaredCommand?: string
 }) {
+  if (options.configPath) {
+    process.env.CX_CODEX_CONFIG = options.configPath
+    process.env.CODEXUI_CONFIG = options.configPath
+  }
   const version = await readCliVersion()
   const projectPath = options.projectPath?.trim() ?? ''
   if (projectPath.length > 0) {
@@ -594,6 +432,9 @@ async function startServer(options: {
     throw new Error(`Invalid port: ${options.port}`)
   }
   const password = resolvePassword(options.password)
+  if (options.tunnel && !password) {
+    throw new Error('Cloudflare Tunnel requires password protection. Remove --no-password and try again.')
+  }
   const { app, dispose, attachWebSocket } = createApp({ password })
   const server = createServer(app)
   server.keepAliveTimeout = 65_000
@@ -602,7 +443,6 @@ async function startServer(options: {
   server.timeout = 0
   attachWebSocket(server)
   const port = await listenWithFallback(server, requestedPort, host)
-  let tunnelChild: ReturnType<typeof spawn> | null = null
   let tunnelUrl: string | null = null
   let resolvedCloudflaredCommand: string | null = null
 
@@ -613,9 +453,12 @@ async function startServer(options: {
         throw new Error('cloudflared is not installed. Install it first, rerun in an interactive terminal to allow auto-install, or set cloudflaredCommand / CX_CODEX_CLOUDFLARED_COMMAND.')
       }
       resolvedCloudflaredCommand = cloudflaredCommand
-      const tunnel = await startCloudflaredTunnel(cloudflaredCommand, port)
-      tunnelChild = tunnel.process
-      tunnelUrl = tunnel.url
+      const tunnel = await startQuickTunnel({
+        localPort: port,
+        preferredCommand: cloudflaredCommand,
+      })
+      resolvedCloudflaredCommand = tunnel.command
+      tunnelUrl = tunnel.publicUrl
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       console.warn(`\n[cloudflared] Tunnel not started: ${message}`)
@@ -639,6 +482,9 @@ async function startServer(options: {
   }
   lines.push('  Health:   /health')
   lines.push('  RPC:      /codex-api/rpc')
+  if (password) {
+    lines.push(`  Pairing:  http://127.0.0.1:${String(port)}/local-setup (local machine only)`)
+  }
 
   if (options.configPath) {
     lines.push(`  Config:   ${options.configPath}`)
@@ -668,14 +514,16 @@ async function startServer(options: {
   }
   if (options.open) openBrowser(getPreferredOpenUrl(host, port))
 
+  let isShuttingDown = false
   function shutdown() {
+    if (isShuttingDown) return
+    isShuttingDown = true
     console.log('\nShutting down...')
-    if (tunnelChild && !tunnelChild.killed) {
-      tunnelChild.kill('SIGTERM')
-    }
-    server.close(() => {
-      dispose()
-      process.exit(0)
+    void stopQuickTunnel().finally(() => {
+      server.close(() => {
+        dispose()
+        process.exit(0)
+      })
     })
     // Force exit after timeout
     setTimeout(() => {

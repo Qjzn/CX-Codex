@@ -1149,6 +1149,31 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - The manual checks do not create files unless an attachment is explicitly selected; delete any test attachment or test turn if one was created.
 - To roll back, revert the conversation/composer changes in `src/App.vue`, `src/components/content/ThreadConversation.vue`, `src/components/content/ThreadComposer.vue`, `src/composables/useDesktopState.ts`, `src/api/codexGateway.ts`, `src/types/codex.ts`, and `src/server/runtimePayload.ts` together.
 
+### Feature: Public documentation screenshots from sanitized current UI
+
+#### Prerequisites
+- Build the current frontend with `npm.cmd run build:frontend`.
+- Start the current repository CLI on a local test port so the fixture has the same app shell and API environment as a normal CX-Codex page.
+- Do not use the normal home or thread routes, because they can contain private local workspace and conversation data.
+
+#### Steps
+1. Open `http://127.0.0.1:<port>/?docs=<cache-buster>#/__regression/docs-showcase` at `1440x900` and capture `docs/screenshots/chat.png`.
+2. Repeat at `393x852` for `chat-mobile.png`; add `?panel=plus` and `?panel=model` inside the hash route for the two mobile composer screenshots.
+3. Add `?view=setup` for `android-setup.png`, and `?view=github` at desktop and `884x1104` foldable viewports for the GitHub screenshots.
+4. Confirm every visible workspace, conversation, path, address and key is a fixture value. Search the fixture and rendered page for personal drive paths, usernames, private/public IPs, tokens, passwords and private conversation text.
+5. Open `README.md` and confirm the “当前界面” descriptions match the new white/gray workspace screenshots.
+6. Run `npm.cmd run build:frontend`, `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:<port>`, and `git diff --check`.
+
+#### Expected Results
+- README screenshots match the current desktop, phone and foldable UI.
+- The screenshot flow never reads or renders normal account thread data.
+- The setup image only contains `https://codex.example.com` and a masked demonstration key.
+- The public images contain no personal paths, private conversations, credentials or private/public server addresses.
+
+#### Rollback/Cleanup Notes
+- Stop the temporary CLI after capture and close the isolated browser session.
+- To roll back, restore `README.md`, the related documentation entries, `docs/screenshots/`, and the documentation fixture route together.
+
 ### Feature: 2.3.0 release documentation and mobile composer images
 
 #### Prerequisites
@@ -1281,7 +1306,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - The thread can exercise `thread/read(includeTurns:true)` fallback from local session log.
 
@@ -1324,7 +1349,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - The thread can exercise `thread/read(includeTurns:true)` fallback from local session log.
 
@@ -1363,7 +1388,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
 #### Steps
@@ -1425,7 +1450,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - For manual Android verification, CX Codex is installed and points to the current 7420 server.
 
@@ -1469,7 +1494,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 
 #### Steps
 1. Open `http://127.0.0.1:7420/#/__regression/conversation-blocks?regression=frontend`.
@@ -1490,7 +1515,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available and shows `继续查看更多`.
 
 #### Steps
@@ -1521,12 +1546,12 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
 #### Steps
 1. Run `npm.cmd run verify:server-modules`.
-2. Restart 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+2. Restart 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 3. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` at a phone viewport.
 4. Wait until the route background refresh has settled.
 5. Confirm the recovered conversation is not limited to only the current run's assistant status messages.
@@ -1545,7 +1570,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
 #### Steps
@@ -1566,7 +1591,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
 #### Steps
@@ -1589,7 +1614,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - The browser has a message cache entry for the target thread, or the first run is allowed to create one.
 
@@ -1612,7 +1637,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
 #### Steps
@@ -1622,7 +1647,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Confirm the page still does not expose an actual internal context block such as `<codex_internal_context source=...>`.
 5. Confirm entering the thread does not trigger `/codex-api/rpc` `thread/list` during the first visible-window check.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run verify:frontend-normalizers`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -1641,7 +1666,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available and contains an internal goal/context message.
 
 #### Steps
@@ -1650,7 +1675,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 3. Confirm the page title still shows `分析项目`.
 4. Confirm `document.body.innerText` does not include `<codex_internal_context`.
 5. Run `npm.cmd run build`.
-6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 7. Run `npm.cmd run verify:server-modules`.
 8. Run `npm.cmd run verify:frontend-normalizers`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -1669,7 +1694,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - Browser request capture can inspect `/codex-api/rpc` calls during startup.
 
@@ -1680,7 +1705,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Capture `/codex-api/rpc` requests for the first 5 seconds after navigation.
 5. Confirm no `thread/list` RPC runs in the first 5 seconds.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run verify:frontend-normalizers`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -1700,7 +1725,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
 #### Steps
@@ -1712,7 +1737,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 6. Run `npm.cmd run verify:server-modules`.
 7. Run `npm.cmd run verify:frontend-normalizers`.
 8. Run `npm.cmd run build`.
-9. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+9. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
 11. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
 
@@ -1817,7 +1842,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Measure and restore thread first-screen ready state
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - A browser context can open the phone-width thread route.
 
@@ -1828,7 +1853,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Confirm `readyAtMs`, `itemCount`, `userCount`, and `assistantCount` are recorded once the DOM becomes readable.
 5. Confirm messages that arrive while loading is still true still restore the first-screen scroll/bottom state.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run verify:frontend-normalizers`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -1998,7 +2023,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Defer thread route list refresh past first screen
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - A browser context can open the thread route at phone width and capture `/codex-api/rpc` requests.
 
@@ -2011,7 +2036,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 6. Confirm the delayed background `thread/list` refresh still runs later and may continue normal cursor pagination.
 7. Confirm manual refresh and `test:7420:sidebar-data` still read full thread-list pagination.
 8. Run `npm.cmd run build`.
-9. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+9. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 10. Run `npm.cmd run verify:server-modules`.
 11. Run `npm.cmd run verify:frontend-normalizers`.
 12. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -2039,7 +2064,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Defer selected thread skills after first background window
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - A browser context can open the thread route at phone width and capture `/codex-api/rpc` requests.
 
@@ -2051,7 +2076,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 5. Confirm the selected cwd `skills/list` runs as delayed background work if the same thread is still selected.
 6. Confirm skills changed notifications and explicit skill-center refresh paths still use their existing immediate or short-debounce refresh behavior.
 7. Run `npm.cmd run build`.
-8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 9. Run `npm.cmd run verify:server-modules`.
 10. Run `npm.cmd run verify:frontend-normalizers`.
 11. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -2079,7 +2104,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Defer model preferences past thread first screen
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - A browser context can open the thread route at phone width and capture `/codex-api/rpc` requests.
 
@@ -2090,7 +2115,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Continue capturing until at least 8 seconds after navigation.
 5. Confirm `model/list` and `config/read` run as delayed background work after the first thread screen is already usable.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run verify:frontend-normalizers`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -2119,7 +2144,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
 #### Steps
@@ -2130,7 +2155,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 5. Run `npm.cmd run verify:server-modules`.
 6. Run `npm.cmd run verify:frontend-normalizers`.
 7. Run `npm.cmd run build`.
-8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
 10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
 
@@ -2145,7 +2170,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Regression Evidence
 - 2026-07-07 measurement before fix: opening the real `分析项目` phone thread produced a selected cwd `skills/list` RPC at about `460ms` after the first RPC, with about `615ms` duration.
-- 2026-07-07 post-fix CDP measurement: opening the same real phone thread delayed the selected cwd `skills/list`; a 10 second check showed it running in the background at about `2061ms`, with cwd `E:\javaword\CXCodex\codexui`.
+- 2026-07-07 post-fix CDP measurement: opening the same real phone thread delayed the selected cwd `skills/list`; a 10 second check showed it running in the background at about `2061ms`, with cwd `C:\src\CX-Codex`.
 - 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
 - 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
 - 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
@@ -2157,7 +2182,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
 #### Steps
@@ -2168,7 +2193,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 5. Run `npm.cmd run verify:server-modules`.
 6. Run `npm.cmd run verify:frontend-normalizers`.
 7. Run `npm.cmd run build`.
-8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
 10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
 
@@ -2195,7 +2220,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Screenshot capture directory `output/regression-7420/compact-conversation-ui/` may be regenerated for visual confirmation.
 
 #### Steps
@@ -2229,7 +2254,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Screenshot capture directory `output/regression-7420/p5-screenshot-baseline/` may be regenerated for visual confirmation.
 
 #### Steps
@@ -2264,7 +2289,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Screenshot capture directory `output/regression-7420/p5-screenshot-baseline/` may be regenerated for visual confirmation.
 
 #### Steps
@@ -2297,7 +2322,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - `agent-browser` is available in `PATH`.
 - Built-in regression fixture routes `/#/__regression/sidebar-rows`, `/#/__regression/composer-shell`, and `/#/__regression/conversation-blocks` are available.
 
@@ -4373,7 +4398,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
   - 模拟 Android 原生 `openFileFromUrl` 返回 `started` 时，页面显示 `已开始后台打开，完成后会自动唤起系统应用。`。
   - 点击 `返回会话` 后 URL 回到 `/#/`，避免文件预览页返回后停在不可操作的全屏列表状态。
 - 2026-05-28 公开地址 PDF 回归：
-  - URL：`http://116.62.234.104:17420/local-preview.html?path=E%3A%2Fjavaword%2FCXCodex%2Ffinal_multi_target_resume%2F%E9%82%B5%E5%8D%AB-%E6%9C%80%E7%BB%88%E6%8A%95%E9%80%92%E7%AE%80%E5%8E%86-%E4%BA%A7%E5%93%81%E7%BB%8F%E7%90%86%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%E9%A1%B9%E7%9B%AE%E7%BB%8F%E7%90%86-2026-05-27.pdf`。
+  - URL：`http://203.0.113.10:17420/local-preview.html?path=E%3A%2Fjavaword%2FCXCodex%2Ffinal_multi_target_resume%2F%E9%82%B5%E5%8D%AB-%E6%9C%80%E7%BB%88%E6%8A%95%E9%80%92%E7%AE%80%E5%8E%86-%E4%BA%A7%E5%93%81%E7%BB%8F%E7%90%86%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%E9%A1%B9%E7%9B%AE%E7%BB%8F%E7%90%86-2026-05-27.pdf`。
   - 登录后 393x852 移动视口显示 `PDF 预览已就绪，共 2 页。`，页面 `scrollWidth == clientWidth`。
   - `复制路径` 在公开 HTTP 页面可用，状态显示 `路径已复制。`，干净会话 `errors=[]`。
   - 模拟 Android 原生 `downloadFileFromUrl` 不返回时，12 秒后不再卡在 `正在请求系统下载...`，按钮恢复，状态显示兼容下载提示；再次点击下载直接进入兼容下载。
@@ -8408,7 +8433,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 如需回滚，撤销 `docs/app-server-schema-audit-summary.json`、`docs/app-server-protocol-matrix.zh-CN.md`、`docs/openai-docs-review.zh-CN.md` 和本节测试记录。
 
 #### Regression Evidence
-- 2026-07-04 官方 manual helper：`node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` 通过，输出 `Manual status: local manual was already current.`，manual outline 仍包含 Codex App Server、Auto-review、Permissions、Remote connections 和 Open Source 等章节。
+- 2026-07-04 官方 manual helper：`node C:\Users\example\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` 通过，输出 `Manual status: local manual was already current.`，manual outline 仍包含 Codex App Server、Auto-review、Permissions、Remote connections 和 Open Source 等章节。
 - 2026-07-04 Schema audit：`npm.cmd run audit:app-server-schemas` 生成 `output\app-server-schema-audit\20260704-141839\audit-summary.json`；命令因已知 schema drift 返回 1，并输出 “Exit code 1 means review is required, not that generation failed.”。
 - 2026-07-04 摘要更新：`node scripts\update-app-server-schema-audit-summary.mjs` 通过，输出 `Schema audit summary updated: docs\app-server-schema-audit-summary.json`，来源为 `output\app-server-schema-audit\20260704-141839\audit-summary.json`。
 
@@ -9570,7 +9595,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - Current repository includes `docs/openai-docs-review.zh-CN.md` and `docs/protocol-compatibility.zh-CN.md`.
 
 #### Steps
-1. Run `node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` and confirm the manual is current or refreshed successfully.
+1. Run `node C:\Users\example\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` and confirm the manual is current or refreshed successfully.
 2. Open `https://developers.openai.com/codex/app-server` and confirm the page still documents `initialize` followed by `initialized`, version-specific schema generation, and `capabilities.experimentalApi` as the experimental API opt-in.
 3. Open `https://developers.openai.com/codex/remote-connections` and confirm remote Codex work still uses SSH/VPN/mesh style boundaries rather than direct public App Server exposure.
 4. Open `https://developers.openai.com/api/docs/guides/speech-to-text` and `https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create`; confirm ordinary transcription still supports JSON output and diarized transcription still uses `gpt-4o-transcribe-diarize`, `response_format=diarized_json`, and `chunking_strategy=auto`.
@@ -9593,7 +9618,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - To roll back, revert the OpenAI docs snapshot additions in `docs/openai-docs-review.zh-CN.md`, `docs/protocol-compatibility.zh-CN.md`, and this test section.
 
 #### Regression Evidence
-- 2026-07-04 official Codex manual refresh: `node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` passed and reported `Manual status: local manual was already current.`
+- 2026-07-04 official Codex manual refresh: `node C:\Users\example\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` passed and reported `Manual status: local manual was already current.`
 - 2026-07-04 static verification: `git diff --check` passed.
 - 2026-07-04 governance gate: `node scripts\run-powershell-script.mjs .\scripts\verify-governance.ps1` passed with `Governance docs check passed.`
 - 2026-07-04 release gate: `node scripts\run-powershell-script.mjs .\scripts\verify-release.ps1 -AllowDirty -SkipBuild -SchemaAudit skip` passed with `server module smoke ok`, `cli cjs launcher smoke ok`, `release package smoke ok`, `npm package smoke ok`, and `Release verification completed.`
@@ -10430,7 +10455,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Steps
 1. Run `codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp` and confirm the global OpenAI Docs MCP server is registered for the next Codex restart.
-2. Run `node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` and confirm the manual is current or refreshed successfully.
+2. Run `node C:\Users\example\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` and confirm the manual is current or refreshed successfully.
 3. Open `https://developers.openai.com/codex/app-server` and confirm the page still documents `initialize`, `initialized`, `capabilities.experimentalApi`, WebSocket transport as experimental / unsupported, and WebSocket auth requirements.
 4. Open `https://developers.openai.com/codex/remote-connections` and confirm remote project access still uses SSH with normal SSH security expectations rather than unauthenticated public listeners.
 5. Open `https://developers.openai.com/api/docs/guides/speech-to-text` and confirm file uploads are still limited to 25 MB and diarize examples still use `gpt-4o-transcribe-diarize`, `response_format=diarized_json`, and `chunking_strategy=auto`.
@@ -10453,7 +10478,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Regression Evidence
 - 2026-07-05 MCP setup: `codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp` passed with `Added global MCP server 'openaiDeveloperDocs'.`
-- 2026-07-05 Codex manual check: `node C:\Users\SW\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` passed and reported `Manual status: local manual was already current.`
+- 2026-07-05 Codex manual check: `node C:\Users\example\.codex\skills\.system\openai-docs\scripts\fetch-codex-manual.mjs` passed and reported `Manual status: local manual was already current.`
 - 2026-07-05 official docs check: official Codex App Server documentation still records `initialize`, `initialized`, `capabilities.experimentalApi`, WebSocket transport as experimental / unsupported, and WebSocket auth; official Remote connections documentation still records SSH remote access with normal SSH security expectations.
 - 2026-07-05 official API docs check: official Speech to text documentation still records the 25 MB upload limit and diarize multipart example; the audio transcription API reference still records `gpt-4o-transcribe-diarize`, `diarized_json`, and `chunking_strategy` requirements; the Responses migration guide still recommends Responses for new general OpenAI projects while documenting a distinct Items/output object model.
 - 2026-07-05 static verification: `git diff --check` passed.
@@ -10553,7 +10578,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 has been redeployed from `E:\javaword\CXCodex\codexui\dist-cli\index.js`.
+- Local 7420 has been redeployed from `C:\src\CX-Codex\dist-cli\index.js`.
 - Current repository includes `docs/local-regression-checklist.zh-CN.md`, `docs/local-regression-execution-20260705.zh-CN.md`, `README.md`, `docs/changelog.zh-CN.md`, `scripts/verify-governance.ps1`, and `scripts/verify-release.ps1`.
 - Browser automation and Android true-device checks are available only when explicitly scheduled for this regression pass.
 
@@ -10567,8 +10592,8 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 7. Run `npm.cmd run verify:frontend-normalizers`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`.
-10. Run `npm.cmd run test:7420 -- -SkipBrowser -PublicHealthUrl http://116.62.234.104:17420/health`.
-11. Run `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://116.62.234.104:17420`.
+10. Run `npm.cmd run test:7420 -- -SkipBrowser -PublicHealthUrl http://203.0.113.10:17420/health`.
+11. Run `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://203.0.113.10:17420`.
 12. Append command results, soak report path, and any not-run browser/Android/manual scope to `docs/local-regression-execution-20260705.zh-CN.md`.
 
 #### Expected Results
@@ -10589,8 +10614,8 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-05 frontend normalizer smoke: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
 - 2026-07-05 server module smoke: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; the queue/slow/error log lines are expected synthetic coverage from the smoke script.
 - 2026-07-05 package-level release gate: `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip` passed with CLI, CJS launcher, release package, checksum, and NPM package smoke complete.
-- 2026-07-05 7420 HTTP regression: `npm.cmd run test:7420 -- -SkipBrowser -PublicHealthUrl http://116.62.234.104:17420/health` passed for local health, App Server health, event replay, and public health; browser regression was intentionally skipped.
-- 2026-07-05 short soak: `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://116.62.234.104:17420` passed with 4 healthy samples, `maxPending=0`, `maxQueued=0`, `timeouts=0`, and `slowThreadList=0`; report path is `output\soak-7420\soak-20260705-105723.json`.
+- 2026-07-05 7420 HTTP regression: `npm.cmd run test:7420 -- -SkipBrowser -PublicHealthUrl http://203.0.113.10:17420/health` passed for local health, App Server health, event replay, and public health; browser regression was intentionally skipped.
+- 2026-07-05 short soak: `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://203.0.113.10:17420` passed with 4 healthy samples, `maxPending=0`, `maxQueued=0`, `timeouts=0`, and `slowThreadList=0`; report path is `output\soak-7420\soak-20260705-105723.json`.
 - 2026-07-05 residual risk: browser automation, Android true-device checks, voice transcription, and 2-hour soak were not executed, so visual/device/long-duration regression is not claimed complete.
 
 ---
@@ -10599,14 +10624,14 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from `E:\javaword\CXCodex\codexui\dist-cli\index.js`.
+- Local 7420 is running from `C:\src\CX-Codex\dist-cli\index.js`.
 - `agent-browser` is installed and `agent-browser doctor --offline --quick` reports no failures.
 - Current repository includes `scripts/regression-7420.ps1`, `scripts/regression-7420-frontend.ps1`, and `docs/local-regression-execution-20260705.zh-CN.md`.
 
 #### Steps
 1. Run `agent-browser doctor --offline --quick`.
 2. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
-3. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-browser-20260705 -AgentBrowserTimeoutSec 25`.
+3. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://203.0.113.10:17420/health -ScreenshotDir output\regression-7420\p1-browser-20260705 -AgentBrowserTimeoutSec 25`.
 4. Confirm `output\regression-7420\p1-browser-20260705\desktop.png`, `phone.png`, and `fold.png` exist.
 5. Open `docs/local-regression-execution-20260705.zh-CN.md` and confirm it records the P1 browser pass, screenshot paths, optional thread page skip, and remaining P2 manual/device scope.
 6. Run `git diff --check`.
@@ -10628,7 +10653,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 #### Regression Evidence
 - 2026-07-05 `agent-browser doctor --offline --quick` passed with CLI version `0.26.0` and 0 failures.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, and local preview phone; thread page check was skipped because no `-ThreadId` was supplied.
-- 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-browser-20260705 -AgentBrowserTimeoutSec 25` passed with notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
+- 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://203.0.113.10:17420/health -ScreenshotDir output\regression-7420\p1-browser-20260705 -AgentBrowserTimeoutSec 25` passed with notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
 - 2026-07-05 screenshot evidence: `output\regression-7420\p1-browser-20260705\desktop.png`, `phone.png`, and `fold.png` were generated.
 
 ---
@@ -10637,7 +10662,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from `E:\javaword\CXCodex\codexui\dist-cli\index.js`.
+- Local 7420 is running from `C:\src\CX-Codex\dist-cli\index.js`.
 - Current repository includes `PRODUCT.md`, `src/components/content/ThreadConversation.vue`, `src/components/sidebar/SidebarThreadTree.vue`, and `docs/changelog.zh-CN.md`.
 
 #### Steps
@@ -10649,7 +10674,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 6. Run `git diff --check`.
 7. Run `npm.cmd run build:frontend`.
 8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
-9. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\conversation-rendering-20260705 -AgentBrowserTimeoutSec 25`.
+9. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://203.0.113.10:17420/health -ScreenshotDir output\regression-7420\conversation-rendering-20260705 -AgentBrowserTimeoutSec 25`.
 
 #### Expected Results
 - Sidebar rows remain compact but provide enough preview content to identify a session without opening it.
@@ -10666,7 +10691,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, and local preview phone; thread page check was skipped because no `-ThreadId` was supplied.
-- 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\conversation-rendering-20260705 -AgentBrowserTimeoutSec 25` passed with notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
+- 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://203.0.113.10:17420/health -ScreenshotDir output\regression-7420\conversation-rendering-20260705 -AgentBrowserTimeoutSec 25` passed with notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
 - 2026-07-05 screenshot evidence: `output\regression-7420\conversation-rendering-20260705\desktop.png`, `phone.png`, and `fold.png` were generated; desktop screenshot confirms sidebar rows now show title, preview, source/status chips, and relative time.
 - 2026-07-05 limitation: no dedicated fixture thread with fenced code/raw payload was created in this pass, so those branches are covered by type/template build verification rather than a content-specific browser assertion.
 
@@ -10676,7 +10701,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Desktop visual reference is the user-provided Codex Desktop screenshot set from 2026-07-05.
 
 #### Steps
@@ -10687,7 +10712,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 5. Run `git diff --check`.
 6. Run `npm.cmd run build:frontend`.
 7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
-8. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p0-desktop-parity-shell-20260705 -AgentBrowserTimeoutSec 25`.
+8. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://203.0.113.10:17420/health -ScreenshotDir output\regression-7420\p0-desktop-parity-shell-20260705 -AgentBrowserTimeoutSec 25`.
 
 #### Expected Results
 - App Shell, sidebar, header, and composer share the same neutral token baseline.
@@ -10703,7 +10728,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, and local preview phone; thread page check was skipped because no `-ThreadId` was supplied.
-- 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p0-desktop-parity-shell-20260705 -AgentBrowserTimeoutSec 25` passed with local health, App Server health, event replay, public health, notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
+- 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://203.0.113.10:17420/health -ScreenshotDir output\regression-7420\p0-desktop-parity-shell-20260705 -AgentBrowserTimeoutSec 25` passed with local health, App Server health, event replay, public health, notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
 - 2026-07-05 screenshot evidence: `output\regression-7420\p0-desktop-parity-shell-20260705\desktop.png`, `phone.png`, and `fold.png` were generated.
 - 2026-07-05 visual sanity check: desktop screenshot confirms the warm card-heavy shell has been replaced by a neutral continuous sidebar, lighter header, centered content column, and desktop-style bottom composer; phone screenshot confirms no horizontal overflow, while empty composer action visibility remains a P1 state-specific follow-up.
 
@@ -10713,7 +10738,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Built-in regression fixture route `/#/__regression/conversation-blocks` is available for deterministic content-specific verification.
 
 #### Steps
@@ -10727,7 +10752,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 8. Run `git diff --check`.
 9. Run `npm.cmd run build:frontend`.
 10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`.
-11. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-conversation-block-polish-20260705 -AgentBrowserTimeoutSec 25`.
+11. Run `npm.cmd run test:7420 -- -PublicHealthUrl http://203.0.113.10:17420/health -ScreenshotDir output\regression-7420\p1-conversation-block-polish-20260705 -AgentBrowserTimeoutSec 25`.
 
 #### Expected Results
 - Code and diff blocks support block-level copy with visible feedback and no layout jump.
@@ -10745,9 +10770,9 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` passed for home desktop, skills phone, GitHub trending phone, diagnostics phone, local preview phone, and the `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 fixture DOM assertions: the built-in conversation fixture verified at least two code/diff blocks, diff add/delete/meta line styling, code copy buttons, file cards without emoji file icons, raw payload card, fixture marker text, and no horizontal overflow.
 - 2026-07-05 fixture copy interaction: `test:7420:frontend` clicked the first `.message-code-copy` button with `navigator.clipboard.writeText` stubbed, captured code block body text containing `fixture-code-block`, confirmed Markdown fence markers were not copied, and confirmed the button changed to `已复制`.
-- 2026-07-05 post-fixture three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-conversation-fixture-20260705 -AgentBrowserTimeoutSec 25` passed with desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
+- 2026-07-05 post-fixture three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://203.0.113.10:17420/health -ScreenshotDir output\regression-7420\p1-conversation-fixture-20260705 -AgentBrowserTimeoutSec 25` passed with desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
 - 2026-07-05 post-fixture screenshot evidence: `output\regression-7420\p1-conversation-fixture-20260705\desktop.png`, `phone.png`, and `fold.png` were generated.
-- 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\p1-conversation-block-polish-20260705 -AgentBrowserTimeoutSec 25` passed with local health, App Server health, event replay, public health, notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
+- 2026-07-05 three viewport regression: `npm.cmd run test:7420 -- -PublicHealthUrl http://203.0.113.10:17420/health -ScreenshotDir output\regression-7420\p1-conversation-block-polish-20260705 -AgentBrowserTimeoutSec 25` passed with local health, App Server health, event replay, public health, notification cursor recovery, desktop 1440x900, phone 390x844, fold 884x1104, no horizontal overflow, and `pageErrors=0`.
 - 2026-07-05 screenshot evidence: `output\regression-7420\p1-conversation-block-polish-20260705\desktop.png`, `phone.png`, and `fold.png` were generated.
 - 2026-07-05 visual sanity check: phone screenshot confirms the empty composer keeps both mic and disabled send controls visible, reducing action-area layout jump.
 - 2026-07-05 remaining limitation: system clipboard read/write is not used because headless browser permission can deny it; the regression verifies the component passes the correct code body into `navigator.clipboard.writeText` and shows copied feedback.
@@ -10756,7 +10781,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Built-in regression fixture route `/#/__regression/conversation-blocks` is available.
 
 #### Steps
@@ -10788,7 +10813,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Built-in regression fixture route `/#/__regression/conversation-blocks` is available.
 
 #### Steps
@@ -10820,7 +10845,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Built-in regression fixture route `/#/__regression/conversation-blocks` is available.
 - Public reference checked: `friuns2/codex-mobile` commit `fac2291`, specifically the `ThreadPendingRequestPanel.vue` `item/tool/call` branch.
 
@@ -10853,7 +10878,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Built-in regression fixture routes `/#/__regression/composer-shell` and `/#/__regression/conversation-blocks` are available.
 
 #### Steps
@@ -10887,7 +10912,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Built-in regression fixture route `/#/__regression/conversation-blocks` is available.
 - Public reference checked: `friuns2/codex-mobile` commit `fac2291`; use it for compact runtime/queue structure and desktop-app positioning only, not for copying its whole theme.
 
@@ -10922,7 +10947,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Built-in regression fixture route `/#/__regression/conversation-blocks` is available.
 - Public reference checked: `friuns2/codex-mobile` commit `fac2291`; use it for pending-request component boundaries and mobile drawer/sheet structure only, not for its dark large-radius visual theme.
 
@@ -10956,7 +10981,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Built-in regression fixture route `/#/__regression/sidebar-rows` is available.
 
 #### Steps
@@ -10991,7 +11016,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Built-in regression fixture route `/#/__regression/composer-shell` is available.
 - Public reference checked: `friuns2/codex-mobile` commit `fac2291`; use it for Composer structure and control grouping only, not for its theme.
 
@@ -11026,7 +11051,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The sidebar is visible on the desktop home route.
 
 #### Steps
@@ -11060,7 +11085,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The sidebar is visible on the desktop home route.
 - A real thread route can be opened for manual title/status inspection.
 
@@ -11092,7 +11117,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 #### Regression Evidence
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
-- 2026-07-05 local service recovery: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted 7420 as PID 48492 after `/codex-api/health` timed out during one retry run; `/codex-api/health` then returned `status: ok`.
+- 2026-07-05 local service recovery: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted 7420 as PID 48492 after `/codex-api/health` timed out during one retry run; `/codex-api/health` then returned `status: ok`.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName compact-app-chrome-layout` passed for home desktop/foldable, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 manual thread DOM check: opened `http://127.0.0.1:7420/#/thread/019ea7cc-2558-7de2-a094-778c9268f3bc`; header runtime bars = 1, runtime bars outside header = 0, legacy header status strips = 0, body inline overlays/loading/process panels = 0.
 - 2026-07-05 screenshot artifacts: saved under `output/regression-7420/compact-app-chrome-layout/`, including `home-desktop.png`, `home-foldable.png`, and `thread-header-manual.png`.
@@ -11101,7 +11126,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Built-in regression fixture route `/#/__regression/conversation-blocks` is available.
 
 #### Steps
@@ -11131,7 +11156,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Built-in regression fixture route `/#/__regression/sidebar-rows` is available.
 
 #### Steps
@@ -11165,7 +11190,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Built-in regression fixture route `/#/__regression/sidebar-rows` is available.
 
 #### Steps
@@ -11202,7 +11227,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - App Server `thread/list` is expected to respond through `/codex-api/rpc`.
 
 #### Steps
@@ -11226,7 +11251,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Regression Evidence
 - 2026-07-05 root-cause evidence: before restart, `/health` returned ok but `/codex-api/health`, `/codex-api/diagnostics`, and direct `/codex-api/rpc` `thread/list` timed out; mobile drawer stayed on `thread-tree-loading` with zero `.thread-row` and zero `.project-group`.
-- 2026-07-05 local service recovery: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted 7420 as PID 41572; direct `thread/list` then returned 20 rows and `/codex-api/health` returned `status: ok`.
+- 2026-07-05 local service recovery: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted 7420 as PID 41572; direct `thread/list` then returned 20 rows and `/codex-api/health` returned `status: ok`.
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName mobile-drawer-thread-list-recovery` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
@@ -11237,7 +11262,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Official Codex Desktop may be open, but this test focuses on the 7420 bridge staying responsive when App Server list/diagnostic RPCs stall.
 
 #### Steps
@@ -11265,7 +11290,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-05 root-cause evidence: before the fix, `/health` returned ok while `/codex-api/health`, `/codex-api/diagnostics`, and `/codex-api/rpc` `thread/list` timed out, so the Node web process was alive but App Server-backed sync was blocked.
 - 2026-07-05 server module verification: `npm.cmd run verify:server-modules` passed, including `thread/list` 15-second timeout policy, no startup-grace suppression for `thread/list`, and fast health timeout fallback for hook/sandbox diagnostics.
 - 2026-07-05 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
-- 2026-07-05 local service recovery: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted 7420 as PID 26612 with version 2.2.7.
+- 2026-07-05 local service recovery: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted 7420 as PID 26612 with version 2.2.7.
 - 2026-07-05 post-restart smoke: `/codex-api/health` returned 200 in 363ms and `thread/list` with `limit=5` returned 200 in 879ms.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName app-server-sync-recovery` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 
@@ -11273,11 +11298,11 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
-- `C:\Users\SW\.codex\.codex-global-state.json` contains Codex Desktop workspace roots, including at least one root that has no current `thread/list` session.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
+- `C:\Users\example\.codex\.codex-global-state.json` contains Codex Desktop workspace roots, including at least one root that has no current `thread/list` session.
 
 #### Steps
-1. Call `http://127.0.0.1:7420/codex-api/workspace-roots-state` and confirm the response includes desktop roots such as `E:\javaword\CXCodex\codexui`.
+1. Call `http://127.0.0.1:7420/codex-api/workspace-roots-state` and confirm the response includes desktop roots such as `C:\src\CX-Codex`.
 2. POST `/codex-api/rpc` with `{"jsonrpc":"2.0","id":1,"method":"thread/list","params":{"limit":200}}` and confirm the missing project can be absent from App Server thread rows.
 3. Open `http://127.0.0.1:7420/#/` and inspect the sidebar project list.
 4. Confirm desktop workspace roots are displayed in desktop order even when a root has no sessions.
@@ -11296,7 +11321,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - To roll back, revert `src/composables/useDesktopState.ts`, `src/types/codex.ts`, `src/App.vue`, `src/components/sidebar/SidebarRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, and this test section.
 
 #### Regression Evidence
-- 2026-07-05 root-cause evidence: `/codex-api/workspace-roots-state` returned desktop roots including `E:\javaword\CXCodex\codexui`, while `/codex-api/rpc` `thread/list` with `limit=200` returned no current thread whose `cwd` contained `codexui`.
+- 2026-07-05 root-cause evidence: `/codex-api/workspace-roots-state` returned desktop roots including `C:\src\CX-Codex`, while `/codex-api/rpc` `thread/list` with `limit=200` returned no current thread whose `cwd` contained `codexui`.
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName workspace-root-project-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
@@ -11307,19 +11332,19 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Prerequisites
 - Current branch is `codex/candidate-release-review`.
-- Local 7420 is running from `E:\javaword\CXCodex\codexui`.
-- `C:\Users\SW\.codex\.codex-global-state.json` is the Codex Desktop workspace roots source for this Windows machine.
+- Local 7420 is running from `C:\src\CX-Codex`.
+- `C:\Users\example\.codex\.codex-global-state.json` is the Codex Desktop workspace roots source for this Windows machine.
 
 #### Steps
 1. Call `GET http://127.0.0.1:7420/codex-api/workspace-roots-state`.
-2. Confirm the first workspace roots include `C:\Users\SW\Documents\Playground`, `E:\javaword\CXCodex\codexui`, and `E:\javaword\ZXSAAS\mini`.
-3. Call `thread/list` through `/codex-api/rpc` and confirm App Server thread rows may still omit `E:\javaword\CXCodex\codexui`.
+2. Confirm the first workspace roots include `C:\Users\example\Documents\Playground`, `C:\src\CX-Codex`, and `C:\src\ZXSAAS\mini`.
+3. Call `thread/list` through `/codex-api/rpc` and confirm App Server thread rows may still omit `C:\src\CX-Codex`.
 4. Open `http://127.0.0.1:7420/#/` in an automated browser and read `.project-group` DOM rows.
 5. Confirm the first project names are `Playground`, `codexui`, and `mini`, with `mini` displayed as `ZXSAAS-mini`.
 6. Confirm `codexui` and `ZXSAAS-mini` render `0个会话`, `暂无会话`, and one project-level new-thread button.
 7. Click the `codexui` project new-thread action and confirm the composer folder dropdown selects `codexui`.
 8. Refresh the page and confirm the same project order and empty project states remain.
-9. Restart local 7420 with `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+9. Restart local 7420 with `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 10. Confirm `/health`, `/codex-api/health`, and the automated browser DOM check still pass after restart.
 11. Run `git diff --check`.
 12. Run `npm.cmd run build:frontend`.
@@ -11336,12 +11361,12 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - To roll back, revert `src/composables/useDesktopState.ts`, `src/types/codex.ts`, `src\App.vue`, `src/components/sidebar/SidebarRegressionFixture.vue`, `scripts/regression-7420-frontend.ps1`, and this test section.
 
 #### Regression Evidence
-- 2026-07-05 real data evidence: `/codex-api/workspace-roots-state` returned first roots `C:\Users\SW\Documents\Playground`, `E:\javaword\CXCodex\codexui`, and `E:\javaword\ZXSAAS\mini`; labels included `E:\javaword\ZXSAAS\mini=ZXSAAS-mini`; active root was `E:\javaword\CXCodex\codexui`.
-- 2026-07-05 real App Server evidence: a `thread/list` sample showed current thread rows from `E:\javaword\CXCodex`, `E:\javaword\ZXSAAS`, `E:\javaword\FZYC\live`, and other roots, while `codexui` was supplied by workspace roots rather than current thread rows.
+- 2026-07-05 real data evidence: `/codex-api/workspace-roots-state` returned first roots `C:\Users\example\Documents\Playground`, `C:\src\CX-Codex`, and `C:\src\ZXSAAS\mini`; labels included `C:\src\ZXSAAS\mini=ZXSAAS-mini`; active root was `C:\src\CX-Codex`.
+- 2026-07-05 real App Server evidence: a `thread/list` sample showed current thread rows from `C:\src\CXCodex`, `C:\src\ZXSAAS`, `C:\src\FZYC\live`, and other roots, while `codexui` was supplied by workspace roots rather than current thread rows.
 - 2026-07-05 real DOM evidence: automated browser read 19 `.project-group` rows; the first names were `Playground`, `codexui`, `mini`, `MFDW_ZJ`, `MFDW`, `znjk`, `live`, and `live-service`; `codexui` rendered `0个会话` and `暂无会话` with one new-thread button; `mini` rendered as `ZXSAAS-mini` with the same empty state.
 - 2026-07-05 interaction evidence: after clicking the `codexui` empty project new-thread action, the composer folder dropdown selected `codexui`; the bug found during acceptance was that `workspaceRoot` was lost while mapping `sourceGroups` to `projectGroups`, and it was fixed by preserving `workspaceRoot` in `applyCachedTitlesToGroups` and `applyThreadFlags`.
 - 2026-07-05 refresh evidence: after reloading `http://127.0.0.1:7420/#/`, the first project names still read `Playground`, `codexui`, `mini`, `MFDW_ZJ`, `MFDW`, `znjk`, `live`, and `live-service`.
-- 2026-07-05 restart evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 43248; `/health` returned ok; `/codex-api/health` returned ok with App Server PID 57096, `pendingRpcCount: 0`, and `queuedRpcCount: 0`; post-restart DOM still showed 19 project groups with `Playground`, `codexui`, and `mini` first.
+- 2026-07-05 restart evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted local 7420 as PID 43248; `/health` returned ok; `/codex-api/health` returned ok with App Server PID 57096, `pendingRpcCount: 0`, and `queuedRpcCount: 0`; post-restart DOM still showed 19 project groups with `Playground`, `codexui`, and `mini` first.
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p0-real-workspace-root-sync` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
@@ -11350,7 +11375,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Automated workspace root project parity regression
 
 #### Prerequisites
-- Local 7420 is running from `E:\javaword\CXCodex\codexui`.
+- Local 7420 is running from `C:\src\CX-Codex`.
 - `/codex-api/workspace-roots-state` returns the current Codex Desktop workspace root order and labels.
 - `agent-browser` is available in PATH.
 
@@ -11383,22 +11408,22 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: P1 Codex Desktop project-order sidebar parity
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
-- `C:\Users\SW\.codex\.codex-global-state.json` contains Codex Desktop `project-order`, `pinned-project-ids`, and `pinned-thread-ids`.
-- Codex Desktop currently orders the sidebar project list with `E:\javaword\CXCodex\codexui` before `E:\javaword\ZXSAAS\mini`.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
+- `C:\Users\example\.codex\.codex-global-state.json` contains Codex Desktop `project-order`, `pinned-project-ids`, and `pinned-thread-ids`.
+- Codex Desktop currently orders the sidebar project list with `C:\src\CX-Codex` before `C:\src\ZXSAAS\mini`.
 
 #### Steps
 1. Call `GET http://127.0.0.1:7420/codex-api/workspace-roots-state`.
 2. Confirm the response includes `projectOrder` and `pinnedProjectIds` in addition to `order`, `labels`, and `active`.
-3. Confirm `projectOrder` starts with desktop project entries such as `E:\javaword\CXCodex\codexui`, `E:\javaword\ZXSAAS\mini`, and `E:\javaword\MFDW_ZJ`.
+3. Confirm `projectOrder` starts with desktop project entries such as `C:\src\CX-Codex`, `C:\src\ZXSAAS\mini`, and `C:\src\MFDW_ZJ`.
 4. Open `http://127.0.0.1:7420/#/` and read the first `.project-group` rows.
 5. Confirm the first project rows follow `projectOrder`; fall back to `order` only for roots missing from `projectOrder`.
-6. Confirm labeled roots such as `E:\javaword\ZXSAAS\mini` still render with the desktop label `ZXSAAS-mini`.
+6. Confirm labeled roots such as `C:\src\ZXSAAS\mini` still render with the desktop label `ZXSAAS-mini`.
 7. Confirm pinned threads still appear in the pinned section and project rows, while pinned projects are preserved in state but not rendered as a new UI section.
 8. Run `git diff --check`.
 9. Run `npm.cmd run verify:server-modules`.
 10. Run `npm.cmd run build`.
-11. Restart local 7420 with `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+11. Restart local 7420 with `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 12. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-project-order-parity`.
 
 #### Expected Results
@@ -11412,8 +11437,8 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - To roll back, revert `src/server/workspaceRootsState.ts`, `src/api/codexGateway.ts`, `src/composables/useDesktopState.ts`, `scripts/server-module-smoke.ts`, `scripts/regression-7420-frontend.ps1`, and this test section.
 
 #### Regression Evidence
-- 2026-07-05 service evidence: after `npm.cmd run build`, `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 57748; `/health` returned ok.
-- 2026-07-05 workspace state evidence: `/codex-api/workspace-roots-state` returned raw `order` starting with `C:\Users\SW\Documents\Playground`, `E:\javaword\CXCodex\codexui`, and `E:\javaword\ZXSAAS\mini`; `projectOrder` started with `E:\javaword\CXCodex\codexui`, `E:\javaword\ZXSAAS\mini`, `E:\javaword\MFDW_ZJ`, `E:\javaword\MFDW`, and `C:\Users\SW\Documents\Playground`; `pinnedProjectIds` included `E:\javaword\ZXSAAS` and `E:\javaword\ZXSAAS\mini`.
+- 2026-07-05 service evidence: after `npm.cmd run build`, `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted local 7420 as PID 57748; `/health` returned ok.
+- 2026-07-05 workspace state evidence: `/codex-api/workspace-roots-state` returned raw `order` starting with `C:\Users\example\Documents\Playground`, `C:\src\CX-Codex`, and `C:\src\ZXSAAS\mini`; `projectOrder` started with `C:\src\CX-Codex`, `C:\src\ZXSAAS\mini`, `C:\src\MFDW_ZJ`, `C:\src\MFDW`, and `C:\Users\example\Documents\Playground`; `pinnedProjectIds` included `C:\src\ZXSAAS` and `C:\src\ZXSAAS\mini`.
 - 2026-07-05 health evidence: `/codex-api/health` returned `status: ok`, App Server PID 53684, `pendingRpcCount: 0`, `queuedRpcCount: 0`, `pendingServerRequestCount: 0`, and `uncertainRequestCount: 0`.
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 server module verification: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
@@ -11424,9 +11449,9 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: P1 Codex Desktop pinned project sidebar parity
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
-- `C:\Users\SW\.codex\.codex-global-state.json` contains Codex Desktop `pinned-project-ids`.
-- Current real pinned project ids include `E:\javaword\ZXSAAS` and `E:\javaword\ZXSAAS\mini`.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
+- `C:\Users\example\.codex\.codex-global-state.json` contains Codex Desktop `pinned-project-ids`.
+- Current real pinned project ids include `C:\src\ZXSAAS` and `C:\src\ZXSAAS\mini`.
 
 #### Steps
 1. Call `GET http://127.0.0.1:7420/codex-api/workspace-roots-state`.
@@ -11452,14 +11477,14 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 #### Regression Evidence
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
-- 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 22316; `/health` returned ok.
+- 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted local 7420 as PID 22316; `/health` returned ok.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-pinned-project-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 screenshot artifact: `output/regression-7420/p1-pinned-project-parity/home-desktop.png`.
 
 ### Feature: P1 project thread preview ordering
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The sidebar regression fixture contains an intentionally unsorted first project thread array.
 - P1 workspace project order and pinned project behavior are already enabled.
 
@@ -11488,14 +11513,14 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 frontend build verification: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
-- 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 42060; `/health` returned ok.
+- 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted local 7420 as PID 42060; `/health` returned ok.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-project-thread-order` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 screenshot artifact: `output/regression-7420/p1-project-thread-order/sidebar-rows-fixture-phone.png`.
 
 ### Feature: P1 pinned thread sidebar ordering and de-duplication
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - `/codex-api/pinned-threads` returns the merged Web + Codex Desktop pinned thread ids.
 - The sidebar regression fixture pins `fixture-thread-unread` first and `fixture-thread-running` second.
 
@@ -11525,14 +11550,14 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 frontend build verification: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
-- 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 34200; `/health` returned ok.
+- 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted local 7420 as PID 34200; `/health` returned ok.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-pinned-thread-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 screenshot artifact: `output/regression-7420/p1-pinned-thread-parity/sidebar-rows-fixture-phone.png`.
 
 ### Feature: P1 missing pinned thread supplemental hydration
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - `/codex-api/pinned-threads` returns merged Web + Codex Desktop pinned thread ids.
 - `getThreadGroupsV2` calls active `thread/list` with `archived: false`.
 
@@ -11545,7 +11570,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 6. Run `git diff --check`.
 7. Run `npm.cmd run verify:server-modules`.
 8. Run `npm.cmd run build`.
-9. Restart 7420 with `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+9. Restart 7420 with `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-pinned-thread-supplement`.
 
 #### Expected Results
@@ -11561,14 +11586,14 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 server module verification: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; the smoke now covers active/default first-page supplementation, archived list skip, active cursor-page skip, max-read behavior, failed read tolerance, and `thread/read` factory params.
 - 2026-07-05 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
-- 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 50220; `/health` returned ok.
+- 2026-07-05 service evidence: `scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted local 7420 as PID 50220; `/health` returned ok.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName p1-pinned-thread-supplement` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-05 screenshot artifact: `output/regression-7420/p1-pinned-thread-supplement/sidebar-rows-fixture-phone.png`.
 
 ### Feature: P1 real 7420 sidebar data parity gate
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - `/codex-api/pinned-threads`, `/codex-api/workspace-roots-state`, and `/codex-api/rpc` are reachable.
 - The App Server can answer `thread/list` and `thread/read(includeTurns:false)`.
 
@@ -11599,14 +11624,14 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: P1 Desktop session-index sidebar parity
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The Codex Desktop/session search index can find the target thread title through `/codex-api/thread-search`.
 - The App Server can answer `thread/read(includeTurns:false)` for matching search results.
 
 #### Steps
 1. Run `npm.cmd run verify:server-modules`.
 2. Run `npm.cmd run build`.
-3. Restart 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+3. Restart 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 4. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
 5. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-session-index-sidebar-parity`.
 6. Confirm the data gate reports `requiredThread.title` as `分析项目` and `requiredThread.projectName` as `codexui`.
@@ -11625,7 +11650,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 #### Regression Evidence
 - 2026-07-06 server module verification: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; the smoke covers supplemental session-index ids before pinned ids, max-read behavior, archived list skip, active cursor-page skip, failed read tolerance, and `thread/read(includeTurns:false)` factory params.
 - 2026-07-06 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
-- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 35140; `/health` returned ok.
+- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted local 7420 as PID 35140; `/health` returned ok.
 - 2026-07-06 data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with required thread `019f27ae-0ecd-7c50-9701-8ec003e66447`, title `分析项目`, project `codexui`, `activeThreadCount: 172`, `activeFirstPageCount: 113`, `archivedFirstPageCount: 100`, and `projectGroupCount: 18`.
 - 2026-07-06 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-session-index-sidebar-parity` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-06 screenshot artifacts: `output/regression-7420/p1-session-index-sidebar-parity/home-desktop.png` and `output/regression-7420/p1-session-index-sidebar-parity/home-mobile-drawer.png`.
@@ -11633,7 +11658,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: P1 bounded Desktop session-index sidebar supplement
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - `package.json` and `package-lock.json` are on version `2.2.8`.
 - The Codex Desktop/session search index can find `分析项目` through `/codex-api/thread-search`.
 
@@ -11642,7 +11667,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 2. Confirm cached supplemental summaries do not allow active first-page output to grow beyond `thread/list` limit plus the supplemental output limit.
 3. Run `npm.cmd run verify:server-modules`.
 4. Run `npm.cmd run build`.
-5. Restart 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+5. Restart 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 6. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
 7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-session-index-sidebar-output-limit`.
 8. Run `npm.cmd run verify:release -- -SchemaAudit warn -AllowDirty`.
@@ -11664,7 +11689,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-06 pre-fix data gate exposed the bounded-output bug: active first page reached `160+` after supplemental cache warm-up, while `分析项目` was still present.
 - 2026-07-06 server module verification: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; the smoke now covers cold and cached supplemental output limiting.
 - 2026-07-06 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
-- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 56392 on version `2.2.8`; `/health` returned ok.
+- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted local 7420 as PID 56392 on version `2.2.8`; `/health` returned ok.
 - 2026-07-06 data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed with `activeFirstPageCount: 120`, required thread `019f27ae-0ecd-7c50-9701-8ec003e66447`, title `分析项目`, project `codexui`, `archivedFirstPageCount: 100`, and `projectGroupCount: 18`.
 - 2026-07-06 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-session-index-sidebar-output-limit` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-06 release gate: `npm.cmd run verify:release -- -SchemaAudit warn -AllowDirty` completed successfully; schema audit drift remained a warning and wrote raw output to `output/app-server-schema-audit/20260706-021030/`.
@@ -11676,7 +11701,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: P1 Android voice-to-text draft insertion
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The browser regression agent is available through `agent-browser`.
 - For real audio verification, configure `CX_CODEX_OPENAI_API_KEY`, `CODEXUI_OPENAI_API_KEY`, or `OPENAI_API_KEY`; without a key, the existing ChatGPT login-state fallback may be used.
 
@@ -11687,7 +11712,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Confirm the recognized text is inserted into the Composer input box.
 5. Confirm the message is not submitted automatically unless the user explicitly enables “转写后自动发送”.
 6. Run `npm.cmd run build`.
-7. Restart 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-android-dictation-draft`.
 9. Run Android sync or build checks after frontend changes are compiled, for example `npm.cmd run mobile:android:sync`.
 
@@ -11705,7 +11730,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 #### Regression Evidence
 - 2026-07-06 diff whitespace check: `git diff --check` passed.
 - 2026-07-06 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
-- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 18944 on version `2.2.8`; `/health` returned ok.
+- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted local 7420 as PID 18944 on version `2.2.8`; `/health` returned ok.
 - 2026-07-06 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-android-dictation-draft` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; Composer fixture additionally clicked the dictation probe and asserted `语音转文字回归测试` entered the input with submit count `0`.
 - 2026-07-06 Android sync: `npm.cmd run mobile:android:sync` passed; Capacitor copied current `dist` assets and found `@capacitor/app@8.1.0` plus `@capacitor/network@8.0.1`.
 - 2026-07-06 Android debug build: `android\gradlew.bat assembleDebug` passed with `BUILD SUCCESSFUL`; Gradle still reports existing flatDir/deprecation warnings.
@@ -11714,15 +11739,15 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Thread-store session metadata read failure containment
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - A thread may reference a malformed or legacy session jsonl that App Server reports as `thread-store internal error` or `does not start with session metadata`.
 
 #### Steps
 1. Run `npm.cmd run verify:server-modules`.
 2. Run `npm.cmd run build`.
-3. Restart 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+3. Restart 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 4. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -CaptureScreenshots -ScreenshotTaskName p1-thread-store-read-error`.
-5. Open the affected thread on mobile and confirm the status card does not show the local `C:\Users\SW\.codex\sessions\...jsonl` path or internal thread-store read error.
+5. Open the affected thread on mobile and confirm the status card does not show the local `C:\Users\example\.codex\sessions\...jsonl` path or internal thread-store read error.
 
 #### Expected Results
 - Server-side runtime snapshots treat malformed session metadata read failures as recoverable thread-read failures, using cache or degraded snapshot behavior instead of throwing to the page.
@@ -11737,7 +11762,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-06 diff whitespace check: `git diff --check` passed.
 - 2026-07-06 server module verification: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; the smoke now covers `does not start with session metadata` and `thread-store internal error: failed to read thread` as recoverable thread-read failures.
 - 2026-07-06 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
-- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 31768 on version `2.2.8`; `/health` returned ok.
+- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted local 7420 as PID 31768 on version `2.2.8`; `/health` returned ok.
 - 2026-07-06 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -CaptureScreenshots -ScreenshotTaskName p1-thread-store-read-error` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, desktop/phone/foldable `conversation-blocks-fixture`, and the target `thread-phone` page; every page asserted that internal thread-store read errors were not exposed.
 - 2026-07-06 service log evidence: the malformed `019f27ae-0ecd-7c50-9701-8ec003e66447` session read is logged server-side as `Heavy thread snapshot unavailable with no cache`, confirming the error is contained as a degraded snapshot instead of being thrown to the UI.
 - 2026-07-06 screenshot artifact: `output/regression-7420/p1-thread-store-read-error/thread-phone.png`.
@@ -11745,7 +11770,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Android settings update entry consolidation
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - Android shell assets have been synced after the frontend build.
 - For the native download prompt branch, GitHub latest release must have an Android APK asset and a version greater than the installed app version.
 
@@ -11753,7 +11778,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 1. Run `git diff --check`.
 2. Run `npm.cmd run build`.
 3. Run `npm.cmd run mobile:android:sync`.
-4. Restart local 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+4. Restart local 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 5. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-settings-mobile-update-entry`.
 6. On Android, open Settings and confirm there is no separate `APP 更新`, `版本状态`, `更新包`, or `重新安装` block.
 7. Tap the `当前版本` card and confirm it shows a checking/loading state while reading GitHub release metadata.
@@ -11774,21 +11799,21 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-06 diff whitespace check: `git diff --check` passed.
 - 2026-07-06 build verification: `npm.cmd run build` passed for frontend and CLI; Vite still reports the existing large chunk warning.
 - 2026-07-06 Android sync: `npm.cmd run mobile:android:sync` passed; Capacitor copied current `dist` assets and found `@capacitor/app@8.1.0` plus `@capacitor/network@8.0.1`.
-- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json` restarted local 7420 as PID 47264 on version `2.2.8`; `/health` returned ok.
+- 2026-07-06 service evidence: `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json` restarted local 7420 as PID 47264 on version `2.2.8`; `/health` returned ok.
 - 2026-07-06 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -CaptureScreenshots -ScreenshotTaskName p1-settings-mobile-update-entry` passed for home desktop/foldable/mobile drawer, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
 - 2026-07-06 screenshot artifacts: `output/regression-7420/p1-settings-mobile-update-entry/home-desktop.png`, `output/regression-7420/p1-settings-mobile-update-entry/home-mobile-drawer.png`, and `output/regression-7420/p1-settings-mobile-update-entry/composer-shell-fixture-phone.png`.
 
 ### Feature: Mobile thread list and history stability recovery
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The Codex account has enough sessions to exercise `thread/list` pagination.
 - At least one legacy or malformed session jsonl exists where App Server heavy `thread/read` can fail with `does not start with session metadata` or `thread-store internal error`.
 
 #### Steps
 1. Run `npm.cmd run verify:server-modules`.
 2. Run `npm.cmd run build`.
-3. Restart local 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+3. Restart local 7420 with `powershell -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 4. Call `thread/list` through `/codex-api/rpc` and confirm the first page returns without waiting for all supplemental session-index reads to finish.
 5. Open the mobile page and confirm the sidebar/session list renders even if a later `nextCursor` request fails with `invalid cursor`.
 6. Open a normal recent thread and confirm messages appear without a long blank loading state.
@@ -11810,7 +11835,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 #### Regression Evidence
 - 2026-07-06 pre-fix evidence: local `/codex-api/rpc` `thread/list` with `limit=20` returned 40 rows but took about `4163ms` on the first uncached call because supplemental reads were synchronous; repeated cached calls dropped to `23ms` and `13ms`.
 - 2026-07-06 pre-fix evidence: full pagination hit App Server `invalid cursor: 05/15/2026 09:06:24`, proving list loading must preserve already loaded pages on cursor failure.
-- 2026-07-06 pre-fix evidence: `/codex-api/state/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` returned `messageState=unavailable` and zero turns while the local session jsonl existed at `C:\Users\SW\.codex\sessions\2026\07\03\rollout-2026-07-03T19-12-31-019f27ae-0ecd-7c50-9701-8ec003e66447.jsonl`.
+- 2026-07-06 pre-fix evidence: `/codex-api/state/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` returned `messageState=unavailable` and zero turns while the local session jsonl existed at `C:\Users\example\.codex\sessions\2026\07\03\rollout-2026-07-03T19-12-31-019f27ae-0ecd-7c50-9701-8ec003e66447.jsonl`.
 - 2026-07-06 server module verification: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; coverage includes supplemental-read timeout, session-log thread-read parsing, and runtime snapshot fallback from failed heavy `thread/read` to session-log messages.
 - 2026-07-09 source inspection: foreground `getThreadRuntimeSnapshot(...)` accepted an `AbortSignal`, but the underlying `/codex-api/state/thread/...` fetch did not pass it into `fetchWithTimeout`, and signal-bound callers could still await a stale shared in-flight snapshot.
 - 2026-07-09 frontend build: `npm.cmd run build:frontend` passed after making foreground snapshot requests signal-bound and non-shared; Vite still reports the existing large chunk warning.
@@ -11819,7 +11844,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-06 post-fallback measurement after wiring session-log fallback into `/codex-api/rpc`: malformed `thread/read(includeTurns:true)` for `019f27ae-0ecd-7c50-9701-8ec003e66447` returned `10` turns in `1670ms` with warning `thread/read fell back to local session log messages` instead of `502`.
 - 2026-07-06 final P0 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`; coverage includes supplemental-read timeout, tail-bounded session-log fallback, runtime snapshot fallback, and `/codex-api/rpc thread/read` session-log recovery.
 - 2026-07-06 final P0 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`; `npm.cmd run build` passed for frontend and CLI with only the existing large chunk warning.
-- 2026-07-06 final deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `29528`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 final deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json` restarted local 7420 as PID `29528`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 final sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` appeared as title `分析项目` under project `codexui`, with `activeThreadCount=180` and `projectGroupCount=18`.
 - 2026-07-06 final malformed thread-read gate: direct `/codex-api/rpc thread/read(includeTurns:true)` for `019f27ae-0ecd-7c50-9701-8ec003e66447` returned warning `thread/read fell back to local session log messages`, `threadId=019f27ae-0ecd-7c50-9701-8ec003e66447`, `turnCount=1`, and `elapsedMs=196`; this confirms the tail-bounded local fallback avoids the previous 502 while recovering recent history.
 - 2026-07-06 final browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed; it opened the real thread page at `393x852` after desktop, foldable, phone drawer, fixture, and content-block checks.
@@ -11827,7 +11852,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Hide low-value MCP tool call fallback messages
 
 #### Prerequisites
-- The frontend is built from the latest `E:\javaword\CXCodex\codexui` source.
+- The frontend is built from the latest `C:\src\CX-Codex` source.
 - A conversation contains App Server `mcpToolCall` thread items, such as browser/tool automation metadata.
 
 #### Steps
@@ -11852,13 +11877,13 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Cache-first thread list startup
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The browser has loaded the home page once after this change, so `codex-web-local.thread-groups-cache.v1` can be populated.
 - The account has a non-empty thread list and includes the `分析项目` thread used by the standard sidebar data gate.
 
 #### Steps
 1. Run `npm.cmd run build:frontend`.
-2. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+2. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json`.
 3. Open `http://127.0.0.1:7420/#/` once in a browser session and wait until sidebar thread rows render.
 4. Confirm `localStorage.getItem('codex-web-local.thread-groups-cache.v1')` is present and reasonably bounded.
 5. Navigate the same browser session to `about:blank`, then reopen `http://127.0.0.1:7420/#/`.
@@ -11880,7 +11905,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 #### Regression Evidence
 - 2026-07-06 baseline measurement before this change: direct `/codex-api/rpc thread/list` cold call took `5387ms`; repeated cached backend call took `44ms`; target `thread/read` light/heavy recovery was not the bottleneck (`11ms` / `82ms`).
 - 2026-07-06 post-change frontend build: `npm.cmd run build:frontend` passed; Vite still reports the existing large chunk warning.
-- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `63832`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json` restarted local 7420 as PID `63832`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 cache measurement with agent-browser desktop viewport: first page load populated `codex-web-local.thread-groups-cache.v1` at about `119831` characters with `65` rendered sidebar rows; reopening from `about:blank` rendered rows in `1058ms`.
 - 2026-07-06 backend cold-list check after deploy: direct `/codex-api/rpc thread/list` still took `4167ms`, confirming the optimization improves perceived startup by rendering cached rows while preserving the real background sync path.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
@@ -11890,13 +11915,13 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Cache-first thread message startup
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - A target conversation such as `019f27ae-0ecd-7c50-9701-8ec003e66447` has been opened once after this change, so `codex-web-local.thread-message-cache.v1` can be populated.
 - The same browser session or Android WebView can retain localStorage between page opens.
 
 #### Steps
 1. Run `npm.cmd run build:frontend`.
-2. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+2. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json`.
 3. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` and wait until messages render.
 4. Confirm `localStorage.getItem('codex-web-local.thread-message-cache.v1')` exists and contains an entry for the target thread.
 5. Reopen the same thread route and confirm cached messages appear before a full network refresh is required.
@@ -11917,21 +11942,21 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 #### Regression Evidence
 - 2026-07-06 pre-change API measurement: target `thread/read(includeTurns:true)` returned in `181ms` cold and `67ms` warm through local fallback; runtime snapshot returned in `13ms`, so this cache primarily protects larger/colder/weak-network conversations rather than the already-small target thread.
 - 2026-07-06 post-change frontend build: `npm.cmd run build:frontend` passed; Vite still reports the existing large chunk warning.
-- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `60888`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json` restarted local 7420 as PID `60888`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 page evidence after waiting for background sync: target route `#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` rendered the P0 completion content, wrote `codex-web-local.thread-message-cache.v1` at about `8857` characters, and stored `40` cached messages for the target thread.
 - 2026-07-06 final P1 message-cache gate: `npm.cmd run verify:server-modules`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build`, `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`, and `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` all passed; local 7420 final restart used PID `21308`.
 
 ### Feature: Lazy render long conversation code blocks
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - A conversation or regression fixture contains a fenced code block or diff block longer than 120 lines.
 - The browser viewport is set to a phone-sized width such as `393x852` for the primary mobile check.
 
 #### Steps
 1. Run `npm.cmd run verify:frontend-normalizers`.
 2. Run `npm.cmd run build`.
-3. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+3. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json`.
 4. Open the target conversation or `/#/__regression/conversation-blocks`.
 5. Locate a code/diff block longer than 120 lines.
 6. Confirm the block initially renders the first 120 lines plus an `展开剩余 N 行` action.
@@ -11955,14 +11980,14 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-06 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
 - 2026-07-06 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
 - 2026-07-06 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
-- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `44504`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json` restarted local 7420 as PID `44504`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
 
 ### Feature: Recent-window conversation derived UI metadata
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The account has at least one real thread with a large recovered or App Server `thread/read(includeTurns:true)` payload.
 - The standard real-thread check can still use `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目`.
 
@@ -11970,7 +11995,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 1. Measure representative threads with `/codex-api/rpc` `thread/read(includeTurns:true)` and record elapsed time, JSON size, turn count, and item count.
 2. Run `npm.cmd run verify:frontend-normalizers`.
 3. Run `npm.cmd run build`.
-4. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+4. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json`.
 5. Open a phone-sized conversation route such as `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447`.
 6. Confirm the latest messages render first without a blank page.
 7. Use `继续查看更多` to reveal older messages and confirm older history still appears on demand.
@@ -11994,21 +12019,21 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-06 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
 - 2026-07-06 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
 - 2026-07-06 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
-- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `64740`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json` restarted local 7420 as PID `64740`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
 
 ### Feature: Visible-window conversation render entries
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The account has a long enough conversation to show `继续查看更多`, or the standard `分析项目` real-thread route is available for regression.
 - The browser viewport is set to a phone-sized width such as `393x852` for the primary mobile check.
 
 #### Steps
 1. Run `npm.cmd run verify:frontend-normalizers`.
 2. Run `npm.cmd run build`.
-3. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+3. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json`.
 4. Open a long conversation on the phone viewport.
 5. Confirm the latest message window appears first and older history is behind `继续查看更多`.
 6. Tap `继续查看更多` and confirm older messages are added without jumping away from the current reading position.
@@ -12031,14 +12056,14 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-06 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
 - 2026-07-06 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
 - 2026-07-06 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
-- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `63872`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json` restarted local 7420 as PID `63872`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
 
 ### Feature: Recent-window conversation reactive watcher
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - A long real conversation is available; the standard regression target is `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目`.
 - The conversation contains enough messages to exercise the newest-window default and optional older-history reveal path.
 
@@ -12046,7 +12071,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 1. Run `npm.cmd run verify:server-modules`.
 2. Run `npm.cmd run verify:frontend-normalizers`.
 3. Run `npm.cmd run build`.
-4. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+4. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json`.
 5. Open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447` on a phone-sized viewport.
 6. Confirm the newest messages render first and the page does not expose a blank history area or internal thread-read error.
 7. If `继续查看更多` is visible, tap it and confirm older history can still be revealed without losing the newest-window position.
@@ -12069,14 +12094,14 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-06 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
 - 2026-07-06 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
 - 2026-07-06 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
-- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `13116`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json` restarted local 7420 as PID `13116`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
 
 ### Feature: Bounded App Server turn item payloads
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The standard real-thread regression target `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - Server module smoke is part of the verification run.
 
@@ -12085,7 +12110,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 2. Confirm `smokeAppServerRpcResult` covers both recent-turn trimming and single-turn item trimming.
 3. Run `npm.cmd run verify:frontend-normalizers`.
 4. Run `npm.cmd run build`.
-5. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+5. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json`.
 6. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
 7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
 
@@ -12104,14 +12129,14 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-06 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
 - 2026-07-06 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
 - 2026-07-06 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
-- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `51632`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json` restarted local 7420 as PID `51632`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
 
 ### Feature: Non-fresh thread detail retry
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The standard real-thread regression target `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - Browser devtools or logs can be used for manual inspection when simulating transient App Server failure.
 
@@ -12119,7 +12144,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 1. Run `npm.cmd run verify:server-modules`.
 2. Run `npm.cmd run verify:frontend-normalizers`.
 3. Run `npm.cmd run build`.
-4. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+4. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json`.
 5. Open a selected thread while App Server details are healthy and confirm fresh details clear any pending non-fresh retry.
 6. Simulate or observe a transient `cached` / `unavailable` thread detail state and confirm existing messages stay visible while the active selected thread is queued for delayed silent retry.
 7. Confirm retries are bounded to three delays (`2500ms`, `9000ms`, `20000ms`) and are cleared on fresh detail success or polling stop.
@@ -12141,14 +12166,14 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-06 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
 - 2026-07-06 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
 - 2026-07-06 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
-- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `43452`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json` restarted local 7420 as PID `43452`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
 
 ### Feature: Session-log fallback thread title metadata
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The standard real-thread regression target `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - A malformed or non-standard session log can trigger local session-log fallback, or the server module smoke fixture can validate the parser directly.
 
@@ -12157,7 +12182,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 2. Confirm `smokeAppServerSessionLogThreadRead` verifies fallback `thread.name` and `thread.title` are recovered from the original thread metadata or first user preview.
 3. Run `npm.cmd run verify:frontend-normalizers`.
 4. Run `npm.cmd run build`.
-5. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+5. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json`.
 6. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
 7. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
 
@@ -12177,14 +12202,14 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-06 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
 - 2026-07-06 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
 - 2026-07-06 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
-- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `69172`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json` restarted local 7420 as PID `69172`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
 
 ### Feature: Session-log fallback repeated message recovery
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The standard real-thread regression target `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - Server module smoke can validate the parser with repeated recovered messages.
 
@@ -12194,7 +12219,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 3. Confirm adjacent duplicate no-id agent events are still collapsed to one recovered item.
 4. Run `npm.cmd run verify:frontend-normalizers`.
 5. Run `npm.cmd run build`.
-6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json`.
 7. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
 8. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
 
@@ -12212,14 +12237,14 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-06 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
 - 2026-07-06 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
 - 2026-07-06 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
-- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `20580`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-06 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json` restarted local 7420 as PID `20580`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-06 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-06 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route.
 
 ### Feature: Thread page token usage sync throttling
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The standard real-thread regression target `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - The target thread can be running; active state/runtime refreshes are allowed, but token usage must not be repeatedly polled during the initial settle window.
 
@@ -12231,7 +12256,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 5. Run `npm.cmd run verify:server-modules`.
 6. Run `npm.cmd run verify:frontend-normalizers`.
 7. Run `npm.cmd run build`.
-8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
 10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
 
@@ -12251,21 +12276,21 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-07 gate: `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
 - 2026-07-07 gate: `npm.cmd run verify:frontend-normalizers` passed with `frontend normalizer smoke ok`.
 - 2026-07-07 build: `npm.cmd run build` passed; Vite still reports the existing large chunk warning.
-- 2026-07-07 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json` restarted local 7420 as PID `30008`, version `2.2.8`, and `/health` returned ok.
+- 2026-07-07 deploy evidence: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json` restarted local 7420 as PID `30008`, version `2.2.8`, and `/health` returned ok.
 - 2026-07-07 sidebar data gate: `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目` passed; required thread `019f27ae-0ecd-7c50-9701-8ec003e66447` remained under project `codexui`.
 - 2026-07-07 browser gate: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90` passed across desktop, phone, foldable, conversation-blocks fixture, and the real target thread phone route with the token usage request throttle assertion enabled.
 
 ### Feature: Persistent thread/list startup cache
 
 #### Prerequisites
-- Local 7420 can be restarted from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 can be restarted from the latest `C:\src\CX-Codex` build.
 - The standard real-thread regression target `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
-- `C:\Users\SW\.codex\web-thread-list-cache.json` is writable.
+- `C:\Users\example\.codex\web-thread-list-cache.json` is writable.
 
 #### Steps
-1. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.cx-codex\config.json`.
+1. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.cx-codex\config.json`.
 2. POST `/codex-api/rpc` with `method=thread/list` and params `{ archived:false, limit:100, sortKey:"updated_at", cursor:null }`.
-3. Confirm `C:\Users\SW\.codex\web-thread-list-cache.json` exists and includes a `thread/list` entry.
+3. Confirm `C:\Users\example\.codex\web-thread-list-cache.json` exists and includes a `thread/list` entry.
 4. Restart local 7420 again.
 5. Immediately repeat the same logical `thread/list` request with the params fields in a different order.
 6. Run `npm.cmd run verify:server-modules`.
@@ -12282,7 +12307,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Rollback/Cleanup Notes
 - To roll back, revert `src/server/appServerRpcCache.ts`, `src/server/codexPaths.ts`, `scripts/server-module-smoke.ts`, `docs/changelog.zh-CN.md`, and this test section.
-- Optional cleanup: delete `C:\Users\SW\.codex\web-thread-list-cache.json`; the cache will be recreated on the next successful `thread/list`.
+- Optional cleanup: delete `C:\Users\example\.codex\web-thread-list-cache.json`; the cache will be recreated on the next successful `thread/list`.
 
 #### Regression Evidence
 - 2026-07-07 measurement before fix: cold active `thread/list` took about `5.6s`, and cold archived first page took about `6.0s`; repeated in-memory requests returned in tens of milliseconds.
@@ -12299,7 +12324,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Defer settled thread detail refresh from first paint
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - Browser local storage may contain cached messages for recently opened threads.
 
@@ -12308,7 +12333,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 2. Confirm the conversation renders those available messages before any settled-state supplemental `thread/read(includeTurns:true)` finishes.
 3. Keep the page open briefly and confirm the background refresh can still merge newer/fresher messages without dropping existing cached messages.
 4. Run `npm.cmd run build`.
-5. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+5. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 6. Run `npm.cmd run verify:frontend-normalizers`.
 7. Run `npm.cmd run verify:server-modules`.
 8. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12333,7 +12358,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Skip redundant thread message cache writes
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - Browser local storage is writable.
 
@@ -12342,7 +12367,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 2. Trigger repeated silent refreshes or wait for background sync to process the same thread again.
 3. Confirm unchanged message snapshots do not force a new thread-message cache write, while changed snapshots still update the in-memory conversation and cache.
 4. Run `npm.cmd run build`.
-5. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+5. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 6. Run `npm.cmd run verify:frontend-normalizers`.
 7. Run `npm.cmd run verify:server-modules`.
 8. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12368,7 +12393,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Binary search virtual conversation range
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - The conversation regression fixture can render at desktop, phone, and foldable viewports.
 
@@ -12377,7 +12402,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 2. Scroll through the message list and reveal older messages.
 3. Confirm the same messages remain visible as before, with no blank rows, jumpy spacer height, or broken return-to-bottom behavior.
 4. Run `npm.cmd run build`.
-5. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+5. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 6. Run `npm.cmd run verify:frontend-normalizers`.
 7. Run `npm.cmd run verify:server-modules`.
 8. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12403,7 +12428,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Defer desktop app status after thread first screen
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - Browser automation can open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447`.
 
@@ -12414,7 +12439,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Confirm the automatic desktop app availability check still runs later after the initial screen settles.
 5. Confirm manual desktop refresh still calls `refreshDesktopAppAvailability()` immediately after refresh completion.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:frontend-normalizers`.
 9. Run `npm.cmd run verify:server-modules`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12441,7 +12466,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Deduplicate first-screen workspace roots state reads
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - Browser automation can open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447`.
 
@@ -12452,7 +12477,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Confirm `getWorkspaceRootsState()` reuses an in-flight request and returns cloned cached state for short repeated reads.
 5. Confirm `setWorkspaceRootsState()`, successful `openProjectRoot()`, and successful `createWorktree()` clear the short workspace roots cache.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:frontend-normalizers`.
 9. Run `npm.cmd run verify:server-modules`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12480,7 +12505,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Deduplicate first-screen project root suggestions
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - Browser automation can open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447`.
 
@@ -12491,7 +12516,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Confirm `getProjectRootSuggestion()` reuses the same in-flight promise for the same normalized `basePath`.
 5. Confirm successful `openProjectRoot()` and `createWorktree()` clear the short suggestion cache.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:frontend-normalizers`.
 9. Run `npm.cmd run verify:server-modules`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12519,7 +12544,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Defer thread token usage refresh after first screen
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - Browser automation can open `http://127.0.0.1:7420/#/thread/019f27ae-0ecd-7c50-9701-8ec003e66447`.
 
@@ -12530,7 +12555,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Confirm `/codex-api/thread-token-usage?threadId=<threadId>` is not started immediately during the first-screen message load.
 5. Wait a few more seconds and confirm token usage can still refresh in the background when no token usage is already present.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:frontend-normalizers`.
 9. Run `npm.cmd run verify:server-modules`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12558,7 +12583,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Explain recent-only long thread payloads
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - Server module smoke can exercise `trimThreadTurnsInRpcResult()`.
 - Frontend normalizer smoke can exercise `normalizeThreadMessagesV2()`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
@@ -12570,7 +12595,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Pass a recent-view thread payload through `normalizeThreadMessagesV2()`.
 5. Confirm the first rendered message is a lightweight `history.notice` system message, not an unhandled raw payload card.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:frontend-normalizers`.
 9. Run `npm.cmd run verify:server-modules`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12598,7 +12623,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Lazy prepare long code block lines
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - Conversation regression fixture includes code and diff blocks.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -12608,7 +12633,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 3. Click the code block expand control and confirm the full code appears.
 4. Copy the code block and confirm the copied text is the full original code, not only preview lines.
 5. Run `npm.cmd run build`.
-6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 7. Run `npm.cmd run verify:frontend-normalizers`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12635,7 +12660,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Render one table layout per viewport
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - Conversation regression fixture includes Markdown table content.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -12645,7 +12670,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 3. Open the same content on phone width.
 4. Confirm the table renders as stacked mobile cards and no desktop table-scroll DOM is mounted for that table.
 5. Run `npm.cmd run build`.
-6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 7. Run `npm.cmd run verify:frontend-normalizers`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12671,7 +12696,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Bound prepared message block cache
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - A long real thread such as `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - Conversation regression fixture includes Markdown text, code, diff, file cards, raw payload, and table content.
 
@@ -12681,7 +12706,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 3. Repeat the reveal/scroll cycle enough to touch more than 80 message cards.
 4. Confirm old messages can still render again when revisited, but prepared Markdown/code/table blocks do not remain unbounded in memory.
 5. Run `npm.cmd run build`.
-6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 7. Run `npm.cmd run verify:frontend-normalizers`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12708,7 +12733,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Lazy render raw payload preview
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - Conversation regression fixture includes a raw payload card.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -12719,7 +12744,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Expand the card and confirm the pretty/raw preview is rendered and still inspectable.
 5. Switch away from the thread and back to confirm expanded raw payload state does not leak across thread changes.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:frontend-normalizers`.
 9. Run `npm.cmd run verify:server-modules`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12746,7 +12771,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Lazy mount collapsed command output
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - Conversation regression fixture includes a completed command execution block.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -12757,7 +12782,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Expand the command row and confirm the output text mounts and remains readable.
 5. Confirm running command output still renders while the command is in progress.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:frontend-normalizers`.
 9. Run `npm.cmd run verify:server-modules`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12784,7 +12809,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Cache estimated message heights
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - A long real thread such as `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - Conversation regression fixture includes normal messages, command execution, Markdown images or text blocks, and collapsible content.
 
@@ -12795,7 +12820,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Expand and collapse a long prompt or command output, then scroll again.
 5. Confirm the virtual list keeps stable spacer heights, no blank rows appear, and scroll anchoring remains stable.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:frontend-normalizers`.
 9. Run `npm.cmd run verify:server-modules`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12822,7 +12847,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Reuse thread message cache snapshot
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - Browser local storage is writable.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -12832,7 +12857,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 3. Confirm the thread message cache still stores the latest trimmed message snapshot and the visible conversation remains intact.
 4. Confirm unchanged snapshots still skip redundant `localStorage` writes.
 5. Run `npm.cmd run build`.
-6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 7. Run `npm.cmd run verify:frontend-normalizers`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12859,7 +12884,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Filter fileChange before message normalization
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The frontend normalizer smoke can run through `npm.cmd run verify:frontend-normalizers`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -12869,7 +12894,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 3. Confirm `fileChange` items do not produce `unhandled.fileChange` messages and do not leave large raw payload text in normalized messages.
 4. Confirm other unknown App Server items still produce structured `unhandled.<type>` raw payload fallback messages.
 5. Run `npm.cmd run build`.
-6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 7. Run `npm.cmd run verify:frontend-normalizers`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12896,7 +12921,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Pre-filter session-log fallback parse candidates
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - A malformed or non-standard session log can trigger local session-log fallback, or server module smoke can validate the parser directly.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -12906,7 +12931,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 3. Confirm non-message event lines are skipped before JSON parsing and do not affect recovered thread messages.
 4. Confirm recovered user/assistant messages, preview, title, cwd, repeated user turns, and tail-bounded behavior remain unchanged.
 5. Run `npm.cmd run build`.
-6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 7. Run `npm.cmd run verify:frontend-normalizers`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12933,7 +12958,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Filter fileChange from thread/read RPC payload
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - Server module smoke can exercise `trimThreadTurnsInRpcResult()`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -12943,7 +12968,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 3. Confirm the `fileChange` item and its large patch text are absent from the trimmed result.
 4. Confirm other unknown item types still remain in the result for diagnostic fallback.
 5. Run `npm.cmd run build`.
-6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 7. Run `npm.cmd run verify:frontend-normalizers`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -12970,7 +12995,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Filter mcpToolCall from thread/read RPC payload
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - Server module smoke can exercise `trimThreadTurnsInRpcResult()`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -12980,7 +13005,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 3. Confirm the `mcpToolCall` item and its internal result text are absent from the trimmed result.
 4. Confirm other unknown item types still remain in the result for diagnostic fallback.
 5. Run `npm.cmd run build`.
-6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 7. Run `npm.cmd run verify:frontend-normalizers`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -13008,7 +13033,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Filter reasoning from thread/read RPC payload
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - Server module smoke can exercise `trimThreadTurnsInRpcResult()`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -13018,7 +13043,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 3. Confirm the `reasoning` item and its internal text are absent from the trimmed result.
 4. Confirm other unknown item types still remain in the result for diagnostic fallback.
 5. Run `npm.cmd run build`.
-6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 7. Run `npm.cmd run verify:frontend-normalizers`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -13046,7 +13071,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Avoid duplicate foreground recovery message refresh
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - A thread has already loaded fresh details in the current browser session.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -13056,7 +13081,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 3. Confirm a thread that is recently fresh, not running, not stale, and has no unread event, queue, or pending server request does not get repeated heavy message refreshes from recovery retries.
 4. Confirm running/stale/unloaded/queued threads still schedule message refresh during foreground recovery.
 5. Run `npm.cmd run build`.
-6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+6. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 7. Run `npm.cmd run verify:frontend-normalizers`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -13083,7 +13108,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Load full history from recent thread notice
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - A long thread can return `turnsView: recent` / `originalTurnsCount` from service-side trimming.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -13095,7 +13120,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 5. Confirm the full-history request does not write the large response into the service-side thread-read cache.
 6. Confirm normal thread switching and background sync still use the default recent turn window.
 7. Run `npm.cmd run build`.
-8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 9. Run `npm.cmd run verify:frontend-normalizers`.
 10. Run `npm.cmd run verify:server-modules`.
 11. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -13123,7 +13148,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Load older history in bounded turn windows
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - A long thread can return `turnsView: recent` / `turnsStartIndex` from service-side trimming.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -13136,7 +13161,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 6. Confirm normalized messages use absolute `turnIndex`, so older messages are merged before the recent window.
 7. Confirm default thread switching and background sync still use recent-window loading.
 8. Run `npm.cmd run build`.
-9. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+9. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 10. Run `npm.cmd run verify:frontend-normalizers`.
 11. Run `npm.cmd run verify:server-modules`.
 12. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -13164,7 +13189,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Defer cached sidebar refresh after first thread screen
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The browser has a cached sidebar thread group snapshot.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 
@@ -13175,7 +13200,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Confirm the first `thread/list` request starts after the cached background delay instead of immediately after cache hydration.
 5. Confirm manual refresh or an uncached start still performs an immediate network thread list refresh.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run verify:frontend-normalizers`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -13203,7 +13228,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Keep latest turn context in recent message window
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - The conversation fixture route `/#/__regression/conversation-blocks?regression=frontend` is available.
 
@@ -13214,7 +13239,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Open the conversation fixture route and confirm the fixture still renders code/diff/file/raw/command/request blocks.
 5. Confirm the fixture text includes the original latest-turn user prompt `请审查这些文件`.
 6. Run `npm.cmd run build`.
-7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+7. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 8. Run `npm.cmd run verify:server-modules`.
 9. Run `npm.cmd run verify:frontend-normalizers`.
 10. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -13242,7 +13267,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Avoid early skills refresh on thread reload
 
 #### Prerequisites
-- Local 7420 can be rebuilt and restarted from `E:\javaword\CXCodex\codexui`.
+- Local 7420 can be rebuilt and restarted from `C:\src\CX-Codex`.
 - The real regression thread `019f27ae-0ecd-7c50-9701-8ec003e66447` / `分析项目` is available.
 - A browser context can warm the cached thread/sidebar state, then reload the thread route.
 
@@ -13254,7 +13279,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 5. Confirm `skills/list` does not start in the first second of the cached thread reload.
 6. Confirm non-thread pages can still refresh skills after startup idle time.
 7. Run `npm.cmd run build`.
-8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\SW\.codexui\config.json`.
+8. Restart local 7420 with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restart-local-service.ps1 -Port 7420 -ConfigPath C:\Users\example\.codexui\config.json`.
 9. Run `npm.cmd run verify:server-modules`.
 10. Run `npm.cmd run verify:frontend-normalizers`.
 11. Run `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420 --require-thread-title 分析项目`.
@@ -13283,7 +13308,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: CI release verification does not require a local schema-audit directory
 
 #### Prerequisites
-- Dependencies are installed in `E:\javaword\CXCodex\codexui`.
+- Dependencies are installed in `C:\src\CX-Codex`.
 - No generated `output/app-server-schema-audit/<timestamp>` directory is required.
 
 #### Steps
@@ -13376,7 +13401,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Chat-like immediate send feedback and App Server noise suppression
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The conversation regression fixture route `/#/__regression/conversation-blocks?regression=frontend` is available.
 
 #### Steps
@@ -13400,7 +13425,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Feature: Non-blocking MCP tool approval experience
 
 #### Prerequisites
-- Local 7420 is running from the latest `E:\javaword\CXCodex\codexui` build.
+- Local 7420 is running from the latest `C:\src\CX-Codex` build.
 - The conversation regression fixture route `/#/__regression/conversation-blocks?regression=frontend` is available.
 
 #### Steps
@@ -13814,3 +13839,29 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - Multi-item continuation pass: a read-only scan of the latest 1317 relevant Runtime Store events found two real turns with multiple agent-message items and a maximum of four items in one turn (`commentary` followed by `final_answer`), without reading or printing message bodies. Server smoke proves first-delta replacement, same-item continuation, and persisted item ownership; frontend normalizer smoke proves the 260-character tail retains its terminal marker. `npm.cmd run build:frontend`, `npm.cmd run build:cli`, `npm.cmd run verify:server-modules`, `npm.cmd run verify:frontend-normalizers`, the parser/diff checks, and the complete 20-surface browser regression passed. Independent 393 x 852 browser evidence again showed two task rows, two recent conversations, exact 393-pixel document/body/root width, and no page error: `output/regression-7420/mobile-multi-item-reply-20260719/task-pet-phone.png`.
 - Terminal-notification ordering review: among 24 recent terminal turns, no final agent completion or final delta arrived after the turn terminal event. Nineteen completed answers reached terminal 51–105ms after `item/completed`; five terminal turns had no final agent item and legitimately fall back to terminal detail. Android source contracts require `latestReply` assignment before terminal branching and now persist only `latest_reply/detail/reply_retry` as the notification body source, allowing ADB/device diagnostics to prove content freshness without storing the content itself.
 - Notification-body diagnostics verification: focused Android `TaskPetRuntimePolicyTest`, Android `lintDebug`, `npm.cmd run build:frontend`, PowerShell parser validation, `git diff --check`, and the complete 20-surface 7420 frontend browser regression passed. Final live health reported initialized App Server PID `33164`, zero active/pending/queued RPC calls, zero pending server requests, zero uncertain requests, and an empty mobile-push outbox. FCM remains explicitly `not_configured` with no registered device, and ADB still reports no connected device, so the physical lock-screen/Doze/notification/overlay matrix remains pending.
+
+## Windows one-prompt install and temporary phone access
+
+### Verification
+
+1. Parse `setup.ps1`, `scripts/bootstrap-windows.ps1`, and `scripts/install-windows-server.ps1` with PowerShell.
+2. In a clean Windows user profile, run the official bootstrap with `-RemoteQuick -JsonOutput`; confirm the downloaded CX-Codex Release and cloudflared asset both pass SHA-256 validation.
+3. Confirm the generated config binds `127.0.0.1:7420`, enables a non-empty password and Tunnel, and creates no firewall, startup, or watchdog task.
+4. Confirm the final JSON contains no password, Cookie, token, Cloudflare configuration content, or private file contents.
+5. Open `http://127.0.0.1:7420/local-setup` locally and confirm it shows the pairing details. Repeat with a public `Host` header and require `404`.
+6. From Settings, start phone access. Require public `/health` to return `200`, unauthenticated `/codex-api/tunnel-status` to return `401`, and unauthenticated `/codex-api/ws` upgrade to return `401` before the UI reports ready.
+7. Stop access from Settings and confirm the managed cloudflared child exits, the temporary URL is cleared, and config `tunnel` becomes false.
+8. Repeat with an occupied port, an existing `.cloudflared/config.yml`, a blocked Quick Tunnel DNS path, a bad Release checksum, and a failed update. Require a stable error code and no silent firewall, hosts, DNS, or existing Cloudflare config change.
+
+### Expected results
+
+- The prompt is only an orchestration entry; all installation and remote-access work is performed by the repository's deterministic scripts and API.
+- Quick access refuses to start without password protection and closes the Tunnel if any public security verification fails.
+- Existing installations update atomically and retain a recoverable previous version; a failed install does not recursively erase the known-good installation.
+- The temporary public URL never embeds the password, and the local pairing page is inaccessible through public or LAN hostnames.
+
+### Current automated evidence (2026-07-25)
+
+- `npm.cmd run verify:quick-tunnel` completed twice consecutively against real Cloudflare Quick Tunnels. Both runs reached `ready`, returned a temporary public URL, verified public health and authentication boundaries, stopped cleanly, and left no managed `cloudflared` child running.
+- The public verifier waits for both the generated hostname and `Registered tunnel connection`. On networks that reset Node TLS probes, it resolves only the temporary hostname through process-scoped Cloudflare DoH and falls back to the OS `curl` client without changing DNS, hosts, firewall, or existing Cloudflare configuration.
+- Server module smoke covers proxy-header loopback bypass prevention, password-required start, managed start/stop routes, and redacted status fields.

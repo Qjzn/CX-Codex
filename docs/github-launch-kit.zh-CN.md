@@ -54,7 +54,7 @@ Run Codex locally, use it from your phone or browser, and expose it through your
 长期保持这个顺序：
 
 1. 一句话定位
-2. 脱敏真实浏览器截图
+2. 当前组件渲染的脱敏演示截图
 3. 核心卖点
 4. 快速安装
 5. Android 客户端
@@ -71,8 +71,10 @@ Run Codex locally, use it from your phone or browser, and expose it through your
 - [github-trending.png](./screenshots/github-trending.png): GitHub 热门项目模块
 - [mobile-composer-plus.png](./screenshots/mobile-composer-plus.png): 手机端附件、一次性计划、任务要求与插件入口
 - [mobile-model-settings.png](./screenshots/mobile-model-settings.png): 手机端模型、推理档位与速度设置
+- [promo-foldable-github-trending.jpg](./screenshots/promo-foldable-github-trending.jpg): 折叠屏双栏与 GitHub 热门
+- [promo-android-chat.jpg](./screenshots/promo-android-chat.jpg): 手机端会话的 JPEG 传播版本
 
-新截图必须在 regression fixture 或脱敏演示数据上采集；禁止使用真实会话、个人路径、账号、密钥、内网或公网地址。
+公开截图统一从 `/#/__regression/docs-showcase` 生成。该路由复用真实前端组件，但工作区、会话、路径、地址、密钥和热门数据均为演示值；禁止直接截取真实会话、个人路径、账号、密钥、内网或公网地址。
 
 ## 发布分支约定
 

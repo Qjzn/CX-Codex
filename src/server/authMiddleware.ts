@@ -22,6 +22,10 @@ const TOKEN_MAX_AGE_SECONDS = 31536000
 const TOKEN_MAX_AGE_MS = TOKEN_MAX_AGE_SECONDS * 1000
 const TOKEN_STORE_MAX_ENTRIES = 24
 const AUTH_LOGIN_REQUEST_BODY_LIMIT_BYTES = 16 * 1024
+const AUTH_LOGIN_FAILURE_WINDOW_MS = 5 * 60 * 1000
+const AUTH_LOGIN_BLOCK_MS = 10 * 60 * 1000
+const AUTH_LOGIN_MAX_FAILURES = 5
+const AUTH_LOGIN_TRACKED_CLIENTS_MAX = 2_000
 
 type StoredAuthToken = {
   hash: string
@@ -33,6 +37,11 @@ type StoredAuthState = {
   version: 1
   passwordFingerprint?: string
   tokens: StoredAuthToken[]
+}
+
+type LoginAttemptState = {
+  failures: number[]
+  blockedUntil: number
 }
 
 function constantTimeCompare(a: string, b: string): boolean {
@@ -153,6 +162,20 @@ function isLocalhostHost(host: string): boolean {
   )
 }
 
+export function isLoopbackRequest(req: IncomingMessage): boolean {
+  const forwardedHeaders = [
+    req.headers.forwarded,
+    req.headers['x-forwarded-for'],
+    req.headers['x-forwarded-host'],
+    req.headers['x-forwarded-proto'],
+    req.headers['cf-connecting-ip'],
+    req.headers['cf-ray'],
+  ]
+  return isLocalhostRemote(req.socket.remoteAddress ?? '')
+    && isLocalhostHost(req.headers.host ?? '')
+    && forwardedHeaders.every((value) => typeof value === 'undefined')
+}
+
 function isCodexApiPath(path: string): boolean {
   return path === '/codex-api' || path.startsWith('/codex-api/')
 }
@@ -161,26 +184,48 @@ function clearTokenCookie(res: Response): void {
   res.setHeader('Set-Cookie', `${TOKEN_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`)
 }
 
+function readSingleHeader(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value[0]?.trim() ?? ''
+  return value?.split(',')[0]?.trim() ?? ''
+}
+
+function isHttpsProxyRequest(req: Request): boolean {
+  return req.secure || (
+    isLocalhostRemote(req.socket.remoteAddress ?? '')
+    && readSingleHeader(req.headers['x-forwarded-proto']).toLowerCase() === 'https'
+  )
+}
+
+function getLoginClientKey(req: Request): string {
+  const cloudflareIp = readSingleHeader(req.headers['cf-connecting-ip'])
+  const cloudflareRay = readSingleHeader(req.headers['cf-ray'])
+  if (cloudflareIp && cloudflareRay && isHttpsProxyRequest(req)) {
+    return `cf:${cloudflareIp}`
+  }
+  return `tcp:${req.socket.remoteAddress ?? 'unknown'}`
+}
+
+function getLoginRetryAfterSeconds(state: LoginAttemptState, now: number): number {
+  return Math.max(1, Math.ceil((state.blockedUntil - now) / 1000))
+}
+
 function isValidStoredTokenHash(hash: string, storedHash: string): boolean {
   if (hash.length !== storedHash.length) return false
   return timingSafeEqual(Buffer.from(hash), Buffer.from(storedHash))
 }
 
 function isAuthorizedByRequestLike(
-  remoteAddress: string | undefined,
-  hostHeader: string | undefined,
-  cookieHeader: string | undefined,
+  req: IncomingMessage,
   validTokenHashes: Map<string, StoredAuthToken>,
   passwordFingerprint: string,
 ): boolean {
-  const remote = remoteAddress ?? ''
-  // Host is fully client-controlled. Keep the local convenience bypass only
-  // when both the TCP peer and the requested host are loopback addresses.
-  if (isLocalhostRemote(remote) && isLocalhostHost(hostHeader ?? '')) {
+  // Reverse proxies connect from loopback too. The local convenience bypass is
+  // valid only when the request has a loopback Host and no forwarding headers.
+  if (isLoopbackRequest(req)) {
     return true
   }
 
-  const cookies = parseCookies(cookieHeader)
+  const cookies = parseCookies(req.headers.cookie)
   const token = cookies[TOKEN_COOKIE]
   if (!token) return false
   const incomingHash = hashToken(token)
@@ -325,13 +370,14 @@ export type AuthSession = {
 
 export function createAuthSession(password: string): AuthSession {
   const validTokenHashes = new Map<string, StoredAuthToken>()
+  const loginAttempts = new Map<string, LoginAttemptState>()
   const passwordFingerprint = hashPasswordFingerprint(password)
   for (const token of loadStoredAuthTokens(passwordFingerprint)) {
     validTokenHashes.set(token.hash, token)
   }
 
   const middleware: RequestHandler = (req: Request, res: Response, next: NextFunction): void => {
-    if (isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, validTokenHashes, passwordFingerprint)) {
+    if (isAuthorizedByRequestLike(req, validTokenHashes, passwordFingerprint)) {
       next()
       return
     }
@@ -340,24 +386,47 @@ export function createAuthSession(password: string): AuthSession {
     if (req.method === 'POST' && req.path === '/auth/login') {
       void (async () => {
         try {
+          const now = Date.now()
+          const clientKey = getLoginClientKey(req)
+          const currentAttempt = loginAttempts.get(clientKey) ?? { failures: [], blockedUntil: 0 }
+          currentAttempt.failures = currentAttempt.failures.filter(
+            (failedAt) => now - failedAt <= AUTH_LOGIN_FAILURE_WINDOW_MS,
+          )
+          if (currentAttempt.blockedUntil > now) {
+            res.setHeader('Retry-After', String(getLoginRetryAfterSeconds(currentAttempt, now)))
+            res.status(429).json({ error: '登录尝试过多，请稍后再试。' })
+            return
+          }
+
           const provided = await readAuthLoginPassword(req)
 
           if (!constantTimeCompare(provided, password)) {
+            currentAttempt.failures.push(now)
+            if (currentAttempt.failures.length >= AUTH_LOGIN_MAX_FAILURES) {
+              currentAttempt.blockedUntil = now + AUTH_LOGIN_BLOCK_MS
+            }
+            loginAttempts.set(clientKey, currentAttempt)
+            if (loginAttempts.size > AUTH_LOGIN_TRACKED_CLIENTS_MAX) {
+              const oldestKey = loginAttempts.keys().next().value
+              if (typeof oldestKey === 'string') loginAttempts.delete(oldestKey)
+            }
             res.status(401).json({ error: '密码错误' })
             return
           }
 
+          loginAttempts.delete(clientKey)
           const token = randomBytes(32).toString('hex')
           const tokenHash = hashToken(token)
-          const now = Date.now()
+          const tokenCreatedAt = Date.now()
           validTokenHashes.set(tokenHash, {
             hash: tokenHash,
-            createdAt: now,
-            lastSeenAt: now,
+            createdAt: tokenCreatedAt,
+            lastSeenAt: tokenCreatedAt,
           })
           persistStoredAuthTokens([...validTokenHashes.values()], passwordFingerprint)
 
-          res.setHeader('Set-Cookie', `${TOKEN_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${TOKEN_MAX_AGE_SECONDS}`)
+          const secureCookie = isHttpsProxyRequest(req) ? '; Secure' : ''
+          res.setHeader('Set-Cookie', `${TOKEN_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${TOKEN_MAX_AGE_SECONDS}${secureCookie}`)
           res.json({ ok: true })
         } catch (error) {
           if (error instanceof RequestBodyTooLargeError) {
@@ -389,7 +458,7 @@ export function createAuthSession(password: string): AuthSession {
   return {
     middleware,
     isRequestAuthorized: (req: IncomingMessage) => (
-      isAuthorizedByRequestLike(req.socket.remoteAddress, req.headers.host, req.headers.cookie, validTokenHashes, passwordFingerprint)
+      isAuthorizedByRequestLike(req, validTokenHashes, passwordFingerprint)
     ),
   }
 }

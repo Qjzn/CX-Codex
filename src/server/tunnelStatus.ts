@@ -3,10 +3,19 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { canRunCommand } from '../commandResolution.js'
+import {
+  getQuickTunnelSnapshot,
+  type QuickTunnelPhase,
+  type QuickTunnelVerification,
+} from './quickTunnel.js'
 
 export type TunnelStatus = {
   enabled: boolean | null
   active: boolean
+  managed: boolean
+  temporary: boolean
+  phase: QuickTunnelPhase
+  networkMode: 'system-dns' | 'scoped-doh'
   publicUrl: string
   configPath: string
   configuredCommand: string
@@ -14,6 +23,9 @@ export type TunnelStatus = {
   cloudflaredAvailable: boolean
   logPath: string
   lastDetectedAtIso: string
+  startedAtIso: string
+  errorCode: string
+  verification: QuickTunnelVerification
   reason: string
 }
 
@@ -251,28 +263,38 @@ function buildTunnelReason(payload: {
 export async function getTunnelStatus(): Promise<TunnelStatus> {
   const configSnapshot = await readLaunchConfigSnapshot()
   const { logSnapshot, logPath, lastDetectedAtIso } = await readLatestTunnelSnapshotFromLogs()
+  const runtime = getQuickTunnelSnapshot()
 
   const resolvedCommand = resolveCloudflaredCommand(configSnapshot.cloudflaredCommand)
   const enabled = configSnapshot.tunnel
-  const publicUrl = enabled === false ? '' : logSnapshot.publicUrl
-  const active = publicUrl.length > 0
+  const publicUrl = runtime.publicUrl || (enabled === false ? '' : logSnapshot.publicUrl)
+  const active = runtime.active
 
   return {
     enabled,
     active,
+    managed: runtime.phase !== 'idle' || runtime.startedAtIso.length > 0,
+    temporary: true,
+    phase: runtime.phase,
+    networkMode: runtime.networkMode,
     publicUrl,
     configPath: configSnapshot.path || getDefaultConfigWritePath(),
     configuredCommand: configSnapshot.cloudflaredCommand,
-    resolvedCommand: resolvedCommand || logSnapshot.cloudflaredCommand,
+    resolvedCommand: runtime.command || resolvedCommand || logSnapshot.cloudflaredCommand,
     cloudflaredAvailable: resolvedCommand.length > 0,
     logPath,
     lastDetectedAtIso,
-    reason: buildTunnelReason({
-      enabled,
-      publicUrl,
-      resolvedCommand,
-      configuredCommand: configSnapshot.cloudflaredCommand,
-    }),
+    startedAtIso: runtime.startedAtIso,
+    errorCode: runtime.errorCode,
+    verification: { ...runtime.verification },
+    reason: runtime.phase === 'idle'
+      ? buildTunnelReason({
+          enabled,
+          publicUrl: '',
+          resolvedCommand,
+          configuredCommand: configSnapshot.cloudflaredCommand,
+        })
+      : runtime.message,
   }
 }
 

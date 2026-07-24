@@ -10,7 +10,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 
 把本机 Codex 变成可从浏览器、手机和远程入口访问的稳定工作台。重点面向 Windows / Windows Server、Android、局域网、自托管远程访问和长期日常使用。
 
-> 截图使用浏览器渲染的脱敏演示数据，不包含真实账号、真实路径、密钥、公网地址或私人会话内容。
+> 截图由当前前端组件在专用演示路由中渲染，工作区、会话、地址和密钥均为虚构数据，不包含真实账号、个人路径、公网入口或私人对话。
 
 ![CX-Codex desktop workspace](./docs/screenshots/chat.png)
 
@@ -61,43 +61,42 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 - 想把本地 Codex 通过局域网、VPN 或自托管公网入口安全访问的人。
 - 想要一个轻量、可维护、开源的 Codex browser bridge，而不是重型 SaaS 平台的人。
 
-## 产品截图
+## 当前界面
 
-Android 实机对话：
+以下图片直接复用项目里的侧栏、消息、输入区和 GitHub 热门组件，仅替换为可公开的演示数据。
 
-![Android real conversation](./docs/screenshots/promo-android-chat.jpg)
-
-折叠屏 / 平板 GitHub 热门：
-
-![Foldable GitHub trending](./docs/screenshots/promo-foldable-github-trending.jpg)
-
-桌面工作台：
+桌面端采用紧凑双栏工作台，会话、状态和输入区保持在同一任务上下文中：
 
 ![Desktop conversation](./docs/screenshots/chat.png)
 
-Android / 手机会话：
+手机端改为单栏阅读，保留同步状态、完整消息流和底部输入区：
 
 ![Mobile conversation](./docs/screenshots/chat-mobile.png)
 
-移动端操作栏：
+附件、文件夹、拍照、一次性计划、本轮要求、插件和技能集中在 `+` 菜单：
 
 ![Mobile composer add menu](./docs/screenshots/mobile-composer-plus.png)
 
-模型、质量与速度：
+模型、质量和速度使用同一个移动端设置面板：
 
 ![Mobile model settings](./docs/screenshots/mobile-model-settings.png)
 
-Android 首次连接：
+Android 首次连接只需要自托管地址和访问密钥；图中的域名与密钥均为演示值：
 
 ![Android first connection](./docs/screenshots/android-setup.png)
 
-GitHub 热门项目：
+折叠屏 / 平板保留双栏浏览，并可直接查看 GitHub 热门项目：
+
+![Foldable GitHub trending](./docs/screenshots/promo-foldable-github-trending.jpg)
+
+桌面端 GitHub 热门模块：
 
 ![GitHub trending module](./docs/screenshots/github-trending.png)
 
 ## 快速安装
 
-Windows bootstrap 会复用 Node.js `22.13.0+`；当本机版本过旧时，会在安装目录内下载便携式 LTS 运行时，不切换系统全局 Node 版本。
+Windows bootstrap 会复用匹配的 Node.js `22.13.0+` 与 npm `9+`；当本机版本过旧或 Node/npm 错配时，会校验 Node.js 官方 SHA-256 后在安装目录内使用便携式 LTS 运行时，不切换系统全局 Node 版本。
+默认从 GitHub 最新正式 Release 下载，并校验配套 SHA-256；更新使用临时目录切换，失败时保留或恢复上一版本。
 
 Windows 一条命令：
 
@@ -120,24 +119,29 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercont
 http://127.0.0.1:7420
 ```
 
-## 让 Codex 自动部署
+## 一句话安装并开启手机访问
 
-也可以把下面的提示词交给目标机器上的 Codex：
+把下面的提示词交给目标 Windows 机器上的 Codex：
 
 ```text
 打开并检查 https://github.com/Qjzn/CX-Codex 这个仓库。
-请在这台机器上用最简单、最稳的方式部署这个项目。
-
-要求：
-- 创建一个稳定的 Codex Web UI 服务，端口固定为 7420
-- 优先使用仓库自带 bootstrap 或 setup 脚本
-- 如果这台机器已经登录过 Codex，尽量复用现有登录态
-- 尽量开启本机浏览器访问和局域网访问
-- 如果机器允许，配置开机或登录后自动启动
-- 完成后输出：本机访问地址、局域网访问地址、密码、重启命令
-
-直接执行部署，不要只给步骤说明。
+请只运行项目官方 Windows bootstrap，并使用 -UseBranchArchive -RemoteQuick -JsonOutput。
+安装到当前用户目录，保持 127.0.0.1:7420、访问密码和 SHA-256 校验；
+不要修改防火墙、hosts、系统 DNS，不要关闭鉴权，也不要输出密码、Cookie 或 Token。
+完成后只返回 JSON 中的 publicUrl、pairingUrl、停止方式和非敏感错误。
+如果公网健康、未登录 API 401 或 WebSocket 鉴权任一验证失败，不要声称安装完成。
+直接执行，不要只给步骤。
 ```
+
+官方执行入口：
+
+```powershell
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) -UseBranchArchive -RemoteQuick -JsonOutput
+```
+
+> `-RemoteQuick` 尚未进入当前 `2.4.1` Release，因此暂时显式使用 `-UseBranchArchive` 安装 `main` 源码预览版。源码归档没有 Release SHA-256 保证；正式版本发布后应去掉该参数，恢复默认的 Release 校验链路。
+
+安装完成后，电脑本机打开 `http://127.0.0.1:7420/local-setup` 查看访问密码；该页面不允许通过公网域名访问。
 
 ## Android 客户端
 
@@ -235,13 +239,13 @@ App Server 权限策略可选配置：
 - 自有公网：Nginx / Caddy / frp。
 - 临时公网：Cloudflare Tunnel。
 
-Cloudflare Tunnel 一条命令：
+Cloudflare Tunnel 安全一键模式：
 
 ```powershell
-& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) -EnableCloudflareTunnel
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) -UseBranchArchive -RemoteQuick -JsonOutput
 ```
 
-长期固定域名请看：
+也可以在 Web 设置的“手机访问”中生成、复制、打开和停止临时地址。快速隧道免费且无需账号或域名，但地址会变化、无 SLA 且不支持 SSE。鉴权检查、已有配置冲突、DNS 异常、公网验证及长期固定域名请看：
 
 - [docs/cloudflare-tunnel.zh-CN.md](./docs/cloudflare-tunnel.zh-CN.md)
 
@@ -291,6 +295,7 @@ Cloudflare Tunnel 一条命令：
 - Android 壳: [docs/android-shell.zh-CN.md](./docs/android-shell.zh-CN.md)
 - Windows Server 安装: [docs/windows-server.md](./docs/windows-server.md)
 - Cloudflare Tunnel: [docs/cloudflare-tunnel.zh-CN.md](./docs/cloudflare-tunnel.zh-CN.md)
+- 开源发布前检查: [docs/open-source-readiness-20260725.zh-CN.md](./docs/open-source-readiness-20260725.zh-CN.md)
 - 安全硬化清单: [docs/security-hardening.zh-CN.md](./docs/security-hardening.zh-CN.md)
 - 贡献指南: [CONTRIBUTING.md](./CONTRIBUTING.md)
 - 行为准则: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)

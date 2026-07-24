@@ -298,6 +298,7 @@
                   {{ webBridgeSettingsStatus }}
                 </p>
               </section>
+              <RemoteAccessCard />
               <section v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="移动端连接">
                 <p class="sidebar-settings-section-title">移动端连接</p>
                 <div class="sidebar-settings-row sidebar-settings-row--static sidebar-settings-row--stacked">
@@ -996,6 +997,7 @@ import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import FavoritesModal from './components/content/FavoritesModal.vue'
 import TaskPetPreview from './components/mobile/TaskPetPreview.vue'
+import RemoteAccessCard from './components/settings/RemoteAccessCard.vue'
 import IconTablerBolt from './components/icons/IconTablerBolt.vue'
 import IconTablerBroom from './components/icons/IconTablerBroom.vue'
 import IconTablerBookmark from './components/icons/IconTablerBookmark.vue'
@@ -1621,6 +1623,7 @@ const isStandaloneRoute = computed(() => {
     || route.name === 'regression-sidebar-rows'
     || route.name === 'regression-composer-shell'
     || route.name === 'regression-task-pet'
+    || route.name === 'regression-docs-showcase'
   if (isNamedFixture || typeof window === 'undefined') return isNamedFixture
   return window.location.hash.startsWith('#/__regression/')
 })

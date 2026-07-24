@@ -260,6 +260,10 @@ export type DesktopAppRefreshResult = {
 export type TunnelStatus = {
   enabled: boolean | null
   active: boolean
+  managed: boolean
+  temporary: boolean
+  phase: 'idle' | 'installing' | 'starting' | 'verifying' | 'ready' | 'stopping' | 'error'
+  networkMode: 'system-dns' | 'scoped-doh'
   publicUrl: string
   configPath: string
   configuredCommand: string
@@ -267,6 +271,13 @@ export type TunnelStatus = {
   cloudflaredAvailable: boolean
   logPath: string
   lastDetectedAtIso: string
+  startedAtIso: string
+  errorCode: string
+  verification: {
+    health: boolean
+    auth: boolean
+    websocketAuth: boolean
+  }
   reason: string
 }
 
@@ -2082,6 +2093,17 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
   return {
     enabled: typeof data.enabled === 'boolean' ? data.enabled : null,
     active: data.active === true,
+    managed: data.managed === true,
+    temporary: data.temporary !== false,
+    phase: data.phase === 'installing'
+      || data.phase === 'starting'
+      || data.phase === 'verifying'
+      || data.phase === 'ready'
+      || data.phase === 'stopping'
+      || data.phase === 'error'
+      ? data.phase
+      : 'idle',
+    networkMode: data.networkMode === 'scoped-doh' ? 'scoped-doh' : 'system-dns',
     publicUrl: typeof data.publicUrl === 'string' ? data.publicUrl : '',
     configPath: typeof data.configPath === 'string' ? data.configPath : '',
     configuredCommand: typeof data.configuredCommand === 'string' ? data.configuredCommand : '',
@@ -2089,6 +2111,28 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
     cloudflaredAvailable: data.cloudflaredAvailable === true,
     logPath: typeof data.logPath === 'string' ? data.logPath : '',
     lastDetectedAtIso: typeof data.lastDetectedAtIso === 'string' ? data.lastDetectedAtIso : '',
+    startedAtIso: typeof data.startedAtIso === 'string' ? data.startedAtIso : '',
+    errorCode: typeof data.errorCode === 'string' ? data.errorCode : '',
+    verification: {
+      health: Boolean(
+        data.verification
+        && typeof data.verification === 'object'
+        && !Array.isArray(data.verification)
+        && (data.verification as Record<string, unknown>).health === true
+      ),
+      auth: Boolean(
+        data.verification
+        && typeof data.verification === 'object'
+        && !Array.isArray(data.verification)
+        && (data.verification as Record<string, unknown>).auth === true
+      ),
+      websocketAuth: Boolean(
+        data.verification
+        && typeof data.verification === 'object'
+        && !Array.isArray(data.verification)
+        && (data.verification as Record<string, unknown>).websocketAuth === true
+      ),
+    },
     reason: typeof data.reason === 'string' ? data.reason : '',
   }
 }
@@ -2119,6 +2163,17 @@ export async function updateTunnelStatus(config: TunnelConfigUpdate): Promise<Tu
   return {
     enabled: typeof data.enabled === 'boolean' ? data.enabled : null,
     active: data.active === true,
+    managed: data.managed === true,
+    temporary: data.temporary !== false,
+    phase: data.phase === 'installing'
+      || data.phase === 'starting'
+      || data.phase === 'verifying'
+      || data.phase === 'ready'
+      || data.phase === 'stopping'
+      || data.phase === 'error'
+      ? data.phase
+      : 'idle',
+    networkMode: data.networkMode === 'scoped-doh' ? 'scoped-doh' : 'system-dns',
     publicUrl: typeof data.publicUrl === 'string' ? data.publicUrl : '',
     configPath: typeof data.configPath === 'string' ? data.configPath : '',
     configuredCommand: typeof data.configuredCommand === 'string' ? data.configuredCommand : '',
@@ -2126,8 +2181,52 @@ export async function updateTunnelStatus(config: TunnelConfigUpdate): Promise<Tu
     cloudflaredAvailable: data.cloudflaredAvailable === true,
     logPath: typeof data.logPath === 'string' ? data.logPath : '',
     lastDetectedAtIso: typeof data.lastDetectedAtIso === 'string' ? data.lastDetectedAtIso : '',
+    startedAtIso: typeof data.startedAtIso === 'string' ? data.startedAtIso : '',
+    errorCode: typeof data.errorCode === 'string' ? data.errorCode : '',
+    verification: {
+      health: false,
+      auth: false,
+      websocketAuth: false,
+      ...(data.verification && typeof data.verification === 'object' && !Array.isArray(data.verification)
+        ? {
+            health: (data.verification as Record<string, unknown>).health === true,
+            auth: (data.verification as Record<string, unknown>).auth === true,
+            websocketAuth: (data.verification as Record<string, unknown>).websocketAuth === true,
+          }
+        : {}),
+    },
     reason: typeof data.reason === 'string' ? data.reason : '',
   }
+}
+
+export async function startQuickTunnelAccess(cloudflaredCommand = ''): Promise<TunnelStatus> {
+  const response = await fetchWithTimeout('/codex-api/tunnel-status/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cloudflaredCommand }),
+  }, {
+    timeoutMs: 150_000,
+    label: 'Quick Tunnel startup request',
+  })
+  const payload = await response.json()
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to start quick tunnel'))
+  }
+  return await getTunnelStatus()
+}
+
+export async function stopQuickTunnelAccess(): Promise<TunnelStatus> {
+  const response = await fetchWithTimeout('/codex-api/tunnel-status', {
+    method: 'DELETE',
+  }, {
+    timeoutMs: 15_000,
+    label: 'Quick Tunnel stop request',
+  })
+  const payload = await response.json()
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to stop quick tunnel'))
+  }
+  return await getTunnelStatus()
 }
 
 function formatGithubDate(date: Date): string {

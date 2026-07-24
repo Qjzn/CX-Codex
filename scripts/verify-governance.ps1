@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param()
 
 $ErrorActionPreference = "Stop"
@@ -764,7 +764,7 @@ Assert-ContentIncludes "docs/local-regression-checklist.zh-CN.md" @(
 Assert-ContentIncludes "docs/local-regression-execution-20260705.zh-CN.md" @(
   "本地回归执行记录 2026-07-05",
   "codex/candidate-release-review",
-  "E:\javaword\CXCodex\codexui\dist-cli\index.js",
+  "C:\src\CX-Codex\dist-cli\index.js",
   "P0-13 事件回放端点",
   "P0-14 短时浸泡",
   "P1-7 至 P1-10 浏览器自动化",

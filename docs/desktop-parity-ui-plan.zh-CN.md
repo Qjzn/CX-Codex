@@ -240,7 +240,7 @@
 git diff --check
 npm.cmd run build:frontend
 npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420
-npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\<task-name> -AgentBrowserTimeoutSec 25
+npm.cmd run test:7420 -- -PublicHealthUrl http://203.0.113.10:17420/health -ScreenshotDir output\regression-7420\<task-name> -AgentBrowserTimeoutSec 25
 ```
 
 如果改动影响运行时模块加载，还需要按仓库规则执行 CJS smoke。

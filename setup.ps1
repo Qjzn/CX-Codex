@@ -8,6 +8,8 @@ param(
   [switch]$SkipStartupTask,
   [switch]$SkipFirewall,
   [switch]$SkipLogin,
+  [switch]$RemoteQuick,
+  [switch]$JsonOutput,
   [switch]$NoStart
 )
 
@@ -32,6 +34,12 @@ if ($SkipFirewall) {
 }
 if ($SkipLogin) {
   $arguments.SkipLogin = $true
+}
+if ($RemoteQuick) {
+  $arguments.RemoteQuick = $true
+}
+if ($JsonOutput) {
+  $arguments.JsonOutput = $true
 }
 if ($NoStart) {
   $arguments.NoStart = $true

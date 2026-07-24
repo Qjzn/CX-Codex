@@ -51,7 +51,11 @@ function getSharedBridgeState(): SharedBridgeState {
   })
 }
 
-export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
+export type CodexBridgeMiddlewareOptions = {
+  remoteAccessProtected?: boolean
+}
+
+export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOptions = {}): CodexBridgeMiddleware {
   const { appServer, methodCatalog } = getSharedBridgeState()
   const {
     threadSearchIndexStore,
@@ -170,6 +174,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         readAppServerSchemaAuditSummary,
         readWindowsSandboxReadinessDiagnostics,
         mobilePushCoordinator,
+        remoteAccessProtected: options.remoteAccessProtected === true,
       }))) {
         return
       }

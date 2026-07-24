@@ -132,6 +132,7 @@ export type CodexBridgeRouteHandlersDependencies = {
   readAppServerSchemaAuditSummary: DiagnosticsRoutesDependencies['readSchemaAuditSummary']
   readWindowsSandboxReadinessDiagnostics: DiagnosticsRoutesDependencies['readWindowsSandboxDiagnostics']
   mobilePushCoordinator: MobilePushRoutesDependencies['mobilePushCoordinator']
+  remoteAccessProtected: boolean
 }
 
 export function createCodexBridgeRouteHandlers(
@@ -235,6 +236,7 @@ export function createCodexBridgeRouteHandlers(
     }),
     () => handleStatusRoutes(req, res, url, {
       readJsonBody,
+      remoteAccessProtected: dependencies.remoteAccessProtected,
     }),
     () => handleNotificationSseRoute(req, res, url, {
       latestSeq: () => dependencies.notificationReplay.latestSeq,

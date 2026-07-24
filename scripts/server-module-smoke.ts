@@ -493,7 +493,7 @@ try {
   await smokeFileUploadRoute()
   smokeHttpJsonResponse()
   smokeCodexBridgeRequestError()
-  smokeCodexBridgeMiddlewareState()
+  await smokeCodexBridgeMiddlewareState()
   smokeCodexBridgeMiddlewareDispose()
   smokeCodexBridgeNotificationRuntime()
   smokeCodexBridgeRuntimeOperations()
@@ -1443,14 +1443,28 @@ function smokeAppServerHealth(): void {
 
 async function smokeAuthMiddleware(): Promise<void> {
   const authSession = createAuthSession('server-module-smoke-password')
-  const requestLike = (remoteAddress: string, host: string) => ({
+  const requestLike = (
+    remoteAddress: string,
+    host: string,
+    headers: Record<string, string> = {},
+  ) => ({
     socket: { remoteAddress },
-    headers: { host },
+    headers: { host, ...headers },
   }) as never
 
   assert.equal(authSession.isRequestAuthorized(requestLike('127.0.0.1', 'localhost:7420')), true)
   assert.equal(authSession.isRequestAuthorized(requestLike('::1', '[::1]:7420')), true)
   assert.equal(authSession.isRequestAuthorized(requestLike('127.0.0.1', 'remote.example.com')), false)
+  assert.equal(authSession.isRequestAuthorized(requestLike(
+    '127.0.0.1',
+    '127.0.0.1:7420',
+    { 'cf-ray': 'test-ray', 'cf-connecting-ip': '203.0.113.10' },
+  )), false)
+  assert.equal(authSession.isRequestAuthorized(requestLike(
+    '127.0.0.1',
+    'localhost:7420',
+    { 'x-forwarded-for': '203.0.113.10' },
+  )), false)
   assert.equal(authSession.isRequestAuthorized(requestLike('203.0.113.10', 'localhost:7420')), false)
   assert.equal(authSession.isRequestAuthorized(requestLike('203.0.113.10', '127.0.0.1:7420')), false)
 
@@ -4711,22 +4725,29 @@ function smokeCodexBridgeRequestError(): void {
   assert.deepEqual(JSON.parse(bridgeFailure.body), { error: 'bridge failed' })
 }
 
-function smokeCodexBridgeMiddlewareState(): void {
-  const state = createCodexBridgeMiddlewareState({
-    rpc: async () => ({ data: [] }),
-  })
+async function smokeCodexBridgeMiddlewareState(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'cx-codex-middleware-state-'))
+  try {
+    const state = createCodexBridgeMiddlewareState({
+      rpc: async () => ({ data: [] }),
+    }, {
+      runtimeDatabasePath: join(root, 'runtime.sqlite'),
+    })
 
-  assert.equal(typeof state.threadSearchIndexStore.search, 'function')
-  assert.equal(typeof state.threadSearchIndexStore.clear, 'function')
-  assert.equal(typeof state.threadReadCacheStore.get, 'function')
-  assert.equal(typeof state.augmentThreadListRpcResult, 'function')
-  assert.equal(typeof state.runtimeStateStore.snapshot, 'function')
-  assert.equal(typeof state.runtimeStore.getHealth, 'function')
-  assert.equal(typeof state.notificationDiagnostics.snapshot, 'function')
-  assert.equal(typeof state.statusDiagnostics.snapshot, 'function')
-  assert.equal(typeof state.hookDiagnosticsCache.clear, 'function')
-  assert.equal(typeof state.windowsSandboxReadinessCache.clear, 'function')
-  state.runtimeStore.close()
+    assert.equal(typeof state.threadSearchIndexStore.search, 'function')
+    assert.equal(typeof state.threadSearchIndexStore.clear, 'function')
+    assert.equal(typeof state.threadReadCacheStore.get, 'function')
+    assert.equal(typeof state.augmentThreadListRpcResult, 'function')
+    assert.equal(typeof state.runtimeStateStore.snapshot, 'function')
+    assert.equal(typeof state.runtimeStore.getHealth, 'function')
+    assert.equal(typeof state.notificationDiagnostics.snapshot, 'function')
+    assert.equal(typeof state.statusDiagnostics.snapshot, 'function')
+    assert.equal(typeof state.hookDiagnosticsCache.clear, 'function')
+    assert.equal(typeof state.windowsSandboxReadinessCache.clear, 'function')
+    state.runtimeStore.close()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 }
 
 function smokeCodexBridgeMiddlewareDispose(): void {
@@ -6770,6 +6791,10 @@ async function smokeStatusRoutes(): Promise<void> {
   const tunnelStatus = {
     enabled: true,
     active: true,
+    managed: true,
+    temporary: true,
+    phase: 'ready' as const,
+    networkMode: 'system-dns' as const,
     publicUrl: 'https://demo.trycloudflare.com',
     configPath: 'config.json',
     configuredCommand: 'cloudflared',
@@ -6777,13 +6802,23 @@ async function smokeStatusRoutes(): Promise<void> {
     cloudflaredAvailable: true,
     logPath: 'cx-codex.out.log',
     lastDetectedAtIso: '2026-01-01T00:00:00.000Z',
+    startedAtIso: '2026-01-01T00:00:00.000Z',
+    errorCode: '',
+    verification: {
+      health: true,
+      auth: true,
+      websocketAuth: true,
+    },
     reason: 'ok',
   }
   const bodies: unknown[] = [
     { enabled: false, cloudflaredCommand: ' C:\\tools\\cloudflared.exe ' },
     ['bad'],
+    { cloudflaredCommand: ' C:\\tools\\cloudflared.exe ' },
   ]
   const tunnelUpdates: unknown[] = []
+  const tunnelStarts: unknown[] = []
+  let tunnelStopCount = 0
   let shouldFailRefresh = false
   const dependencies = {
     readJsonBody: async () => bodies.shift(),
@@ -6797,6 +6832,37 @@ async function smokeStatusRoutes(): Promise<void> {
       tunnelUpdates.push(update)
       return tunnelStatus
     },
+    startQuickTunnel: async (options: unknown) => {
+      tunnelStarts.push(options)
+      return {
+        phase: 'ready' as const,
+        active: true,
+        publicUrl: tunnelStatus.publicUrl,
+        command: 'C:\\tools\\cloudflared.exe',
+        installedByCxCodex: false,
+        networkMode: 'system-dns' as const,
+        startedAtIso: tunnelStatus.startedAtIso,
+        errorCode: '',
+        message: 'ready',
+        verification: { ...tunnelStatus.verification },
+      }
+    },
+    stopQuickTunnel: async () => {
+      tunnelStopCount += 1
+      return {
+        phase: 'idle' as const,
+        active: false,
+        publicUrl: '',
+        command: '',
+        installedByCxCodex: false,
+        networkMode: 'system-dns' as const,
+        startedAtIso: '',
+        errorCode: '',
+        message: 'stopped',
+        verification: { health: false, auth: false, websocketAuth: false },
+      }
+    },
+    remoteAccessProtected: true,
     getErrorMessage: (error: unknown, fallback: string) => getErrorMessage(error, fallback),
   }
 
@@ -6864,6 +6930,47 @@ async function smokeStatusRoutes(): Promise<void> {
     cloudflaredCommand: undefined,
   })
   assert.deepEqual(JSON.parse(invalidTunnelUpdateResponse.body), { data: tunnelStatus })
+
+  const tunnelStartResponse = createRouteTestResponse()
+  assert.equal(await handleStatusRoutes(
+    { method: 'POST', socket: { localPort: 7420 } } as never,
+    tunnelStartResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/tunnel-status/start'),
+    dependencies,
+  ), true)
+  assert.deepEqual(tunnelStarts, [{
+    localPort: 7420,
+    preferredCommand: 'C:\\tools\\cloudflared.exe',
+  }])
+  assert.deepEqual(tunnelUpdates[2], {
+    enabled: true,
+    cloudflaredCommand: 'C:\\tools\\cloudflared.exe',
+  })
+  assert.deepEqual(JSON.parse(tunnelStartResponse.body), { data: tunnelStatus })
+
+  const tunnelStopResponse = createRouteTestResponse()
+  assert.equal(await handleStatusRoutes(
+    { method: 'DELETE' } as never,
+    tunnelStopResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/tunnel-status'),
+    dependencies,
+  ), true)
+  assert.equal(tunnelStopCount, 1)
+  assert.deepEqual(tunnelUpdates[3], { enabled: false })
+  assert.deepEqual(JSON.parse(tunnelStopResponse.body), { data: tunnelStatus })
+
+  const unprotectedTunnelStartResponse = createRouteTestResponse()
+  assert.equal(await handleStatusRoutes(
+    { method: 'POST', socket: { localPort: 7420 } } as never,
+    unprotectedTunnelStartResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/tunnel-status/start'),
+    { ...dependencies, remoteAccessProtected: false },
+  ), true)
+  assert.equal(unprotectedTunnelStartResponse.response.statusCode, 409)
+  assert.deepEqual(JSON.parse(unprotectedTunnelStartResponse.body), {
+    error: '开启手机访问前必须启用 CX-Codex 访问密码。',
+    code: 'AUTH_REQUIRED',
+  })
 
   assert.equal(await handleStatusRoutes(
     { method: 'GET' } as never,

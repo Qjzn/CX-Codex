@@ -32,6 +32,7 @@ type CodexBridgeMiddlewareStateAppServer = {
 
 export function createCodexBridgeMiddlewareState(
   appServer: CodexBridgeMiddlewareStateAppServer,
+  options: { runtimeDatabasePath?: string } = {},
 ) {
   const readSupplementalThreadIds = async (): Promise<string[]> => {
     const [sessionIndexCache, pinnedThreadIds] = await Promise.all([
@@ -64,7 +65,7 @@ export function createCodexBridgeMiddlewareState(
     readSupplementalThreadIds,
     rpc: (method, params) => appServer.rpc(method, params),
   })
-  const runtimeStore = new RuntimeStore()
+  const runtimeStore = new RuntimeStore(options.runtimeDatabasePath)
   const runtimeStateStore = new RuntimeStateStore({
     readThreadIdFromPayload,
     readTurnIdFromPayload,

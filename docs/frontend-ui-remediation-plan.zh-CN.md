@@ -282,7 +282,7 @@ GitHub 上的 assistant-ui、Palot、OpenCode ChatUI、Cline 只能参考结构�
 git diff --check
 npm.cmd run build:frontend
 npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420
-npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\<task-name> -AgentBrowserTimeoutSec 25
+npm.cmd run test:7420 -- -PublicHealthUrl http://203.0.113.10:17420/health -ScreenshotDir output\regression-7420\<task-name> -AgentBrowserTimeoutSec 25
 ```
 
 涉及模块加载行为时追加 CJS smoke。

@@ -31,12 +31,12 @@
 
 | 编号 | 项目 | 命令 / 动作 | 通过标准 |
 | --- | --- | --- | --- |
-| P0-9 | 进程来源 | 查询 7420 监听进程命令行 | `node.exe` 使用当前仓库 `E:\javaword\CXCodex\codexui\dist-cli\index.js` |
+| P0-9 | 进程来源 | 查询 7420 监听进程命令行 | `node.exe` 使用当前仓库 `C:\src\CX-Codex\dist-cli\index.js` |
 | P0-10 | 本机健康 | `Invoke-WebRequest http://127.0.0.1:7420/health` | HTTP 200，`status=ok` |
 | P0-11 | App Server 健康 | `Invoke-WebRequest http://127.0.0.1:7420/codex-api/health` | HTTP 200，`appServer.running=true` 且 `initialized=true` |
-| P0-12 | 公网映射健康 | `Invoke-WebRequest http://116.62.234.104:17420/health` | HTTP 200，`status=ok`；失败时先定位 FRP/隧道/防火墙，不直接归因前端 |
-| P0-13 | 事件回放端点 | `npm.cmd run test:7420 -- -SkipBrowser -PublicHealthUrl http://116.62.234.104:17420/health` | 本机、公网、`/codex-api/events/replay` 通过 |
-| P0-14 | 短时浸泡 | `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://116.62.234.104:17420` | 无连续健康失败、无新增 RPC timeout、pending/queued RPC 未超过阈值 |
+| P0-12 | 公网映射健康 | `Invoke-WebRequest http://203.0.113.10:17420/health` | HTTP 200，`status=ok`；失败时先定位 FRP/隧道/防火墙，不直接归因前端 |
+| P0-13 | 事件回放端点 | `npm.cmd run test:7420 -- -SkipBrowser -PublicHealthUrl http://203.0.113.10:17420/health` | 本机、公网、`/codex-api/events/replay` 通过 |
+| P0-14 | 短时浸泡 | `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://203.0.113.10:17420` | 无连续健康失败、无新增 RPC timeout、pending/queued RPC 未超过阈值 |
 
 ## P1 协议和发布治理
 
@@ -55,7 +55,7 @@
 
 | 编号 | 项目 | 命令 / 动作 | 通过标准 |
 | --- | --- | --- | --- |
-| P1-7 | 基础三视口回归 | `npm.cmd run test:7420 -- -PublicHealthUrl http://116.62.234.104:17420/health -ScreenshotDir output\regression-7420\candidate` | 桌面、手机、折叠屏无空白、无横向溢出、composer 可见、无浏览器 page error |
+| P1-7 | 基础三视口回归 | `npm.cmd run test:7420 -- -PublicHealthUrl http://203.0.113.10:17420/health -ScreenshotDir output\regression-7420\candidate` | 桌面、手机、折叠屏无空白、无横向溢出、composer 可见、无浏览器 page error |
 | P1-8 | 前端页面回归 | `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` | 首页、skills、GitHub trending、diagnostics、本地预览和可选 thread 页通过 |
 | P1-9 | 诊断中心 | 打开 `/diagnostics` | Runtime Store、App Server、schema audit、通知/状态诊断卡片可见，无敏感信息泄漏 |
 | P1-10 | 本地预览 | 打开 `local-preview.html?path=<README.md>` | Markdown 渲染正常，无横向溢出 |
@@ -74,14 +74,14 @@
 | P2-8 | 收藏/置顶 | 收藏消息、置顶线程、刷新页面 | 状态持久化，非浏览器 localStorage 单点依赖 |
 | P2-9 | 语音转写 | 配置或不配置 OpenAI API key 分别测试 | 官方 API 路径和登录态回退路径行为符合 README；诊断不泄露 key |
 | P2-10 | Android 壳 | Android 连接公网 17420，前后台恢复 | 首页、线程、恢复补同步、下载更新入口可用 |
-| P2-11 | 公网访问 | 外部网络访问 `http://116.62.234.104:17420` | 登录/健康/页面加载正常；公网失败不影响本机健康判断 |
+| P2-11 | 公网访问 | 外部网络访问 `http://203.0.113.10:17420` | 登录/健康/页面加载正常；公网失败不影响本机健康判断 |
 
 ## P2 长时稳定性
 
 | 编号 | 项目 | 命令 / 动作 | 通过标准 |
 | --- | --- | --- | --- |
-| P2-12 | 发布前浸泡 | `npm.cmd run test:7420:soak -- -DurationSeconds 7200 -IntervalSeconds 15 -PublicBaseUrl http://116.62.234.104:17420` | 2 小时内无连续健康失败、无新增 RPC timeout、pending/queued RPC 未超过阈值 |
-| P2-13 | 日志审查 | 查看 `C:\Users\SW\.codexui\logs` 最新 `.log` | 无重复崩溃、无限重启、明文凭据或异常堆积 |
+| P2-12 | 发布前浸泡 | `npm.cmd run test:7420:soak -- -DurationSeconds 7200 -IntervalSeconds 15 -PublicBaseUrl http://203.0.113.10:17420` | 2 小时内无连续健康失败、无新增 RPC timeout、pending/queued RPC 未超过阈值 |
+| P2-13 | 日志审查 | 查看 `C:\Users\example\.codexui\logs` 最新 `.log` | 无重复崩溃、无限重启、明文凭据或异常堆积 |
 
 ## 失败处理规则
 

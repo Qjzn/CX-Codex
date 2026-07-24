@@ -23,7 +23,8 @@ param(
   [switch]$InstallCloudflared,
   [string]$TaskName = "",
   [string]$WatchdogTaskName = "",
-  [switch]$StartNow
+  [switch]$StartNow,
+  [switch]$JsonOutput
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,10 +37,17 @@ function Write-Step {
 
 function New-StablePassword {
   $alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-  $chars = for ($i = 0; $i -lt 16; $i++) {
-    $alphabet[(Get-Random -Minimum 0 -Maximum $alphabet.Length)]
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $chars = for ($i = 0; $i -lt 20; $i++) {
+      $buffer = New-Object byte[] 1
+      $rng.GetBytes($buffer)
+      $alphabet[$buffer[0] % $alphabet.Length]
+    }
+    return -join $chars
+  } finally {
+    $rng.Dispose()
   }
-  -join $chars
 }
 
 function Resolve-OptionalPath {
@@ -338,20 +346,83 @@ function Resolve-CloudflaredCommand {
 function Install-CloudflaredWindows {
   param([string]$PreferredCommand = "")
 
-  $existing = Resolve-CloudflaredCommand -PreferredCommand $PreferredCommand
-  if ($existing) {
-    Write-Host "cloudflared already available: $existing"
-    return $existing
+  $managedDir = Join-Path $env:USERPROFILE ".local\bin"
+  if (-not [string]::IsNullOrWhiteSpace($PreferredCommand)) {
+    $preferred = Resolve-OptionalPath -Value $PreferredCommand
+    $preferredParent = if (Test-Path -LiteralPath $preferred) { Split-Path -Parent $preferred } else { "" }
+    $preferredLeaf = Split-Path -Leaf $preferred
+    $isManagedCommand =
+      $preferred -eq (Join-Path $managedDir "cloudflared.exe") -or
+      ($preferredParent -eq $managedDir -and $preferredLeaf -like "cloudflared-*.exe")
+    if ($preferred -ne "cloudflared" -and -not $isManagedCommand) {
+      $preferredVersion = & $preferred --version 2>$null
+      if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($preferredVersion)) {
+        Write-Host "Using explicitly configured cloudflared: $preferred"
+        return $preferred
+      }
+    }
+  }
+  $cachedManaged = Get-ChildItem -LiteralPath $managedDir -Filter "cloudflared-*.exe" -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending
+  foreach ($cached in $cachedManaged) {
+    if ($cached.BaseName -notmatch "^cloudflared-([a-f0-9]{12,64})$") {
+      continue
+    }
+    $cachedChecksumPrefix = $Matches[1].ToLowerInvariant()
+    $cachedChecksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $cached.FullName).Hash.ToLowerInvariant()
+    if (-not $cachedChecksum.StartsWith($cachedChecksumPrefix)) {
+      continue
+    }
+    $cachedVersion = & $cached.FullName --version 2>$null
+    if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($cachedVersion)) {
+      Write-Host "Using verified cached cloudflared: $($cached.FullName)"
+      return $cached.FullName
+    }
   }
 
   $archAsset = if ([Environment]::Is64BitOperatingSystem) { "cloudflared-windows-amd64.exe" } else { "cloudflared-windows-386.exe" }
-  $downloadUrl = "https://github.com/cloudflare/cloudflared/releases/latest/download/$archAsset"
-  $targetDir = Join-Path $env:USERPROFILE ".local\bin"
-  $targetPath = Join-Path $targetDir "cloudflared.exe"
+  $release = Invoke-RestMethod `
+    -Uri "https://api.github.com/repos/cloudflare/cloudflared/releases/latest" `
+    -Headers @{
+      "Accept" = "application/vnd.github+json"
+      "User-Agent" = "CX-Codex-installer"
+      "X-GitHub-Api-Version" = "2022-11-28"
+    }
+  $asset = $release.assets | Where-Object { $_.name -eq $archAsset } | Select-Object -First 1
+  if (-not $asset) {
+    throw "Official cloudflared release does not contain $archAsset"
+  }
+  $escapedAssetName = [Regex]::Escape($archAsset)
+  $checksumMatch = [Regex]::Match(
+    [string]$release.body,
+    "(?im)^\s*$escapedAssetName\s*:\s*([a-f0-9]{64})\s*$"
+  )
+  if (-not $checksumMatch.Success) {
+    throw "Official cloudflared release does not publish a SHA-256 checksum for $archAsset"
+  }
+  $expectedChecksum = $checksumMatch.Groups[1].Value.ToLowerInvariant()
+  $downloadUrl = [string]$asset.browser_download_url
+  $targetDir = $managedDir
+  $targetPath = Join-Path $targetDir "cloudflared-$($expectedChecksum.Substring(0, 12)).exe"
+  $temporaryPath = "$targetPath.download-$PID"
 
   New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
   Write-Host "Downloading cloudflared: $downloadUrl"
-  Invoke-WebRequest -Uri $downloadUrl -OutFile $targetPath
+  if (Test-Path -LiteralPath $targetPath) {
+    $currentChecksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $targetPath).Hash.ToLowerInvariant()
+    if ($currentChecksum -eq $expectedChecksum) {
+      Write-Host "Verified cloudflared already available: $targetPath"
+      return $targetPath
+    }
+  }
+
+  Invoke-WebRequest -Uri $downloadUrl -OutFile $temporaryPath
+  $actualChecksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $temporaryPath).Hash.ToLowerInvariant()
+  if ($actualChecksum -ne $expectedChecksum) {
+    Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+    throw "cloudflared SHA-256 verification failed: $archAsset"
+  }
+  Move-Item -LiteralPath $temporaryPath -Destination $targetPath -Force
 
   $version = & $targetPath --version 2>$null
   if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
@@ -372,14 +443,14 @@ function Ensure-CloudflaredForTunnel {
     return $null
   }
 
+  if ($InstallCloudflared) {
+    return Install-CloudflaredWindows -PreferredCommand $PreferredCommand
+  }
+
   $existing = Resolve-CloudflaredCommand -PreferredCommand $PreferredCommand
   if ($existing) {
     Write-Host "cloudflared available: $existing"
     return $existing
-  }
-
-  if ($InstallCloudflared) {
-    return Install-CloudflaredWindows -PreferredCommand $PreferredCommand
   }
 
   Write-Warning "Tunnel is enabled but cloudflared was not found. Re-run with -InstallCloudflared, or install Cloudflare.cloudflared manually."
@@ -389,7 +460,7 @@ function Ensure-CloudflaredForTunnel {
 function Wait-ForTunnelUrlFromLog {
   param(
     [string]$LogPath,
-    [int]$TimeoutSeconds = 45
+    [int]$TimeoutSeconds = 150
   )
 
   if ([string]::IsNullOrWhiteSpace($LogPath)) {
@@ -414,6 +485,7 @@ function Wait-ForTunnelUrlFromLog {
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $nodeCommand = Get-Command node -ErrorAction Stop
 $minimumNodeVersion = [Version]"22.13.0"
+$minimumNpmVersion = [Version]"9.0.0"
 $nodeVersionText = (& $nodeCommand.Source --version).Trim().TrimStart('v')
 $nodeVersion = [Version]$nodeVersionText
 if ($nodeVersion -lt $minimumNodeVersion) {
@@ -421,6 +493,11 @@ if ($nodeVersion -lt $minimumNodeVersion) {
 }
 $npmCommandInfo = Get-Command npm -ErrorAction Stop
 $npmExecutable = Resolve-NpmExecutable -CommandInfo $npmCommandInfo
+$npmVersionText = (& $npmExecutable --version).Trim()
+$npmVersion = [Version]$npmVersionText
+if ($npmVersion -lt $minimumNpmVersion) {
+  throw "npm $minimumNpmVersion or newer is required (found $npmVersion). Run scripts/bootstrap-windows.ps1 to use a compatible portable Node.js/npm pair."
+}
 
 Write-Host "Using repo root: $repoRoot"
 Write-Host "Using node: $($nodeCommand.Source)"
@@ -460,6 +537,9 @@ $resolvedTaskName = if ([string]::IsNullOrWhiteSpace($TaskName)) { "CodexUI-$Por
 $resolvedWatchdogTaskName = if ([string]::IsNullOrWhiteSpace($WatchdogTaskName)) { "CodexUI-$Port-Watchdog" } else { $WatchdogTaskName }
 
 if ($NoPassword) {
+  if ($Tunnel) {
+    throw "Cloudflare Tunnel requires password protection. Remove -NoPassword and try again."
+  }
   $passwordValue = $false
 } elseif ([string]::IsNullOrWhiteSpace($Password)) {
   $passwordValue = New-StablePassword
@@ -503,11 +583,13 @@ if ($resolvedCloudflaredCommand) {
 }
 
 $configJson = $config | ConvertTo-Json -Depth 5
+$configTempPath = "$ConfigPath.tmp-$PID"
 [System.IO.File]::WriteAllText(
-  $ConfigPath,
+  $configTempPath,
   $configJson,
   (New-Object System.Text.UTF8Encoding($false))
 )
+Move-Item -LiteralPath $configTempPath -Destination $ConfigPath -Force
 Create-LauncherFile -TargetLauncherPath $LauncherPath -NodePath $nodeCommand.Source -RepoRoot $repoRoot -TargetConfigPath $ConfigPath
 
 if ($CreateStartupTask) {
@@ -550,7 +632,7 @@ if ($StartNow) {
   Write-Step "Starting CX-Codex"
   $canStart = Stop-ExistingCodexUiProcesses -TargetPort $Port -RepoRoot $repoRoot -TargetLauncherPath $LauncherPath -TargetConfigPath $ConfigPath
   if ($canStart) {
-    Start-Process -FilePath $LauncherPath | Out-Null
+    Start-Process -FilePath $LauncherPath -WindowStyle Hidden | Out-Null
     $healthPayload = Wait-ForHealthEndpoint -TargetPort $Port
   } else {
     Write-Warning "Skipped auto-start because port $Port is already in use by another process."
@@ -575,6 +657,9 @@ foreach ($url in $accessUrls) {
 }
 Write-Host "Health:   http://127.0.0.1:$Port/health"
 Write-Host "Bridge:   http://127.0.0.1:$Port/codex-api/health"
+if ($passwordValue -is [string]) {
+  Write-Host "Pairing:  http://127.0.0.1:$Port/local-setup (local machine only)"
+}
 if ($Tunnel) {
   if ($tunnelUrl) {
     Write-Host "Tunnel:   $tunnelUrl"
@@ -600,4 +685,34 @@ if ($healthPayload) {
   Write-Host "Status:   health check passed"
 } elseif ($StartNow) {
   Write-Warning "Health check did not succeed yet. If this is the first run, check the browser login flow or logs in $logDir."
+}
+
+if ($JsonOutput) {
+  $tunnelStatus = $null
+  if ($StartNow) {
+    try {
+      $tunnelStatus = Invoke-RestMethod `
+        -Uri "http://127.0.0.1:$Port/codex-api/tunnel-status" `
+        -TimeoutSec 10
+    } catch {}
+  }
+  $runtimeTunnel = if ($tunnelStatus -and $tunnelStatus.data) { $tunnelStatus.data } else { $null }
+  [ordered]@{
+    ok = [bool]$healthPayload -and ((-not $Tunnel) -or [bool]$runtimeTunnel.active)
+    localUrl = "http://127.0.0.1:$Port"
+    pairingUrl = if ($passwordValue -is [string]) { "http://127.0.0.1:$Port/local-setup" } else { "" }
+    publicUrl = if ($runtimeTunnel) { [string]$runtimeTunnel.publicUrl } else { [string]$tunnelUrl }
+    authRequired = $passwordValue -is [string]
+    provider = if ($Tunnel) { "cloudflare-quick" } else { "none" }
+    temporary = [bool]$Tunnel
+    phase = if ($runtimeTunnel) { [string]$runtimeTunnel.phase } else { "idle" }
+    verification = if ($runtimeTunnel) {
+      $runtimeTunnel.verification
+    } else {
+      [ordered]@{ health = $false; auth = $false; websocketAuth = $false }
+    }
+    configPath = $ConfigPath
+    logsPath = $logDir
+    warnings = @()
+  } | ConvertTo-Json -Depth 6 -Compress | Write-Output
 }
