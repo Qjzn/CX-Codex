@@ -27,6 +27,15 @@ param(
 $ErrorActionPreference = "Stop"
 $MinimumNodeVersion = [Version]"22.13.0"
 $MinimumNpmVersion = [Version]"9.0.0"
+$ManagedStateDir = [System.IO.Path]::GetFullPath("$env:USERPROFILE\.cx-codex").TrimEnd('\')
+$ManagedLauncherPath = [System.IO.Path]::GetFullPath("$env:USERPROFILE\.local\bin\cx-codex-start.cmd")
+$ManagedCloudflaredDir = [System.IO.Path]::GetFullPath("$env:USERPROFILE\.local\bin").TrimEnd('\')
+$StateDirExistedBeforeInstall = Test-Path -LiteralPath $ManagedStateDir
+$LauncherExistedBeforeInstall = Test-Path -LiteralPath $ManagedLauncherPath
+$CloudflaredPathsBeforeInstall = @(
+  Get-ChildItem -LiteralPath $ManagedCloudflaredDir -Filter "cloudflared*.exe" -File -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty FullName
+)
 
 if ($RemoteQuick) {
   if ($NoPassword) {
@@ -402,6 +411,20 @@ if ($installerExitCode -ne 0) {
       Write-Warning "Installation failed; restored the previous CX-Codex version. Failed files remain at $failedDir"
     } elseif (Test-Path -LiteralPath $safeInstallDir) {
       Remove-Item -LiteralPath $safeInstallDir -Recurse -Force
+      if (-not $StateDirExistedBeforeInstall -and (Test-Path -LiteralPath $ManagedStateDir)) {
+        Remove-Item -LiteralPath $ManagedStateDir -Recurse -Force
+      }
+      if (-not $LauncherExistedBeforeInstall -and (Test-Path -LiteralPath $ManagedLauncherPath)) {
+        Remove-Item -LiteralPath $ManagedLauncherPath -Force
+      }
+      $newCloudflaredFiles = Get-ChildItem -LiteralPath $ManagedCloudflaredDir -Filter "cloudflared*.exe" -File -ErrorAction SilentlyContinue |
+        Where-Object {
+          $_.Name -match "^cloudflared(?:-[a-f0-9]{12,64})?\.exe$" -and
+          $CloudflaredPathsBeforeInstall -notcontains $_.FullName
+        }
+      foreach ($file in $newCloudflaredFiles) {
+        Remove-Item -LiteralPath $file.FullName -Force
+      }
       Write-Warning "Installation failed; removed the incomplete new installation."
     }
   }

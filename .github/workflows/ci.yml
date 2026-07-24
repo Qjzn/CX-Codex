@@ -63,5 +63,14 @@ jobs:
       - name: Validate generated files
         shell: pwsh
         run: |
-          Test-Path "$env:USERPROFILE\.local\bin\cx-codex-start.cmd" | Where-Object { $_ } | Out-Null
+          $launcher = "$env:USERPROFILE\.local\bin\cx-codex-start.cmd"
+          Test-Path $launcher | Where-Object { $_ } | Out-Null
           Test-Path "$env:USERPROFILE\.cx-codex\config.json" | Where-Object { $_ } | Out-Null
+          $launcherContent = Get-Content -LiteralPath $launcher -Raw
+          if ($launcherContent -match '(?m)^\s*""\s') {
+            throw "Generated launcher contains an empty Node.js command."
+          }
+          $expectedNode = (Get-Command node -ErrorAction Stop).Source
+          if (-not $launcherContent.Contains($expectedNode)) {
+            throw "Generated launcher does not contain the selected Node.js path."
+          }

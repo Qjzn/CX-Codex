@@ -595,7 +595,7 @@ if ($NoPassword) {
 }
 
 if ($EnsureCodexLogin) {
-  Ensure-CodexLogin -NodePath $nodeCommand.Source -RepoRoot $repoRoot
+  Ensure-CodexLogin -NodePath $nodeExecutable -RepoRoot $repoRoot
 }
 
 if ($Tunnel -or $InstallCloudflared) {
@@ -637,7 +637,7 @@ $configTempPath = "$ConfigPath.tmp-$PID"
   (New-Object System.Text.UTF8Encoding($false))
 )
 Move-Item -LiteralPath $configTempPath -Destination $ConfigPath -Force
-Create-LauncherFile -TargetLauncherPath $LauncherPath -NodePath $nodeCommand.Source -RepoRoot $repoRoot -TargetConfigPath $ConfigPath
+Create-LauncherFile -TargetLauncherPath $LauncherPath -NodePath $nodeExecutable -RepoRoot $repoRoot -TargetConfigPath $ConfigPath
 
 if ($CreateStartupTask) {
   Write-Step "Creating startup task"
@@ -652,7 +652,7 @@ if ($CreateStartupTask) {
 if ($CreateWatchdogTask) {
   Write-Step "Creating watchdog task"
   try {
-    Register-WatchdogTask -ResolvedTaskName $resolvedWatchdogTaskName -RepoRoot $repoRoot -TargetPort $Port -TargetConfigPath $ConfigPath -NodePath $nodeCommand.Source
+    Register-WatchdogTask -ResolvedTaskName $resolvedWatchdogTaskName -RepoRoot $repoRoot -TargetPort $Port -TargetConfigPath $ConfigPath -NodePath $nodeExecutable
     Write-Host "Watchdog task created: $resolvedWatchdogTaskName"
   } catch {
     Write-Warning $_
@@ -689,7 +689,11 @@ if ($StartNow) {
 $logDir = "$env:USERPROFILE\.cx-codex\logs"
 $outLogPath = Join-Path $logDir "cx-codex.out.log"
 $accessUrls = Get-AccessibleUrls -BindHostValue $BindHost -TargetPort $Port
-$tunnelUrl = if ($Tunnel -and $StartNow) { Wait-ForTunnelUrlFromLog -LogPath $outLogPath } else { $null }
+$tunnelUrl = if ($Tunnel -and $StartNow -and $healthPayload) {
+  Wait-ForTunnelUrlFromLog -LogPath $outLogPath
+} else {
+  $null
+}
 
 Write-Host ""
 Write-Host "Install complete."
