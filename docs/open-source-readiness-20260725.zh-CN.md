@@ -16,6 +16,7 @@
 - 使用隔离的 Node.js `24.18.0` / npm `11.16.0` 和 npm 官方源执行生产依赖审计：455 个依赖，严重、高、中、低风险均为 0。
 - PowerShell 脚本语法检查与 `git diff --check`。
 - 真实 Cloudflare Quick Tunnel 验证：公网健康、未登录 HTTP API 401、未登录 WebSocket 鉴权均通过，停止后子进程退出。
+- 从无 CX-Codex 运行目录的状态按 README 完成安装、启动、公网登录、浏览器发送消息和接收回复；完整记录见 [Windows 新人安装实测与改进建议](./new-user-install-review-20260725.zh-CN.md)。
 - 当前工作树未发现 AWS、Google、GitHub、OpenAI 私钥或常见访问令牌格式。
 - 文档中的历史真实公网地址、个人用户目录和本机工作区路径已替换为 RFC 5737 示例地址或通用示例路径。
 - README 截图已人工查看；工作区、会话、地址和消息均为虚构内容。图片元数据未发现用户名、路径、GPS 或设备标识。
@@ -40,5 +41,5 @@
 1. 处置历史 Google/Firebase key 并保留处置证据。
 2. 审阅 App Server schema 漂移，更新协议兼容说明。
 3. 发布与当前 `main` 同一提交对应的新版本和 SHA-256 文件。
-4. 在一台没有 CX-Codex 的 Windows 用户环境中按 README 完成安装、登录、发送消息、接收回复、手机访问和卸载复测。
+4. 新 Release 发布后，从 Release 归档再重复一次安装、登录、发送消息、接收回复、手机访问和卸载复测；当前已经完成 `main` 源码预览版实测。
 5. 启用 Dependabot；条件允许时增加 CodeQL 或等价静态分析。

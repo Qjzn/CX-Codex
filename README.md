@@ -296,6 +296,7 @@ Cloudflare Tunnel 安全一键模式：
 - Windows Server 安装: [docs/windows-server.md](./docs/windows-server.md)
 - Cloudflare Tunnel: [docs/cloudflare-tunnel.zh-CN.md](./docs/cloudflare-tunnel.zh-CN.md)
 - 开源发布前检查: [docs/open-source-readiness-20260725.zh-CN.md](./docs/open-source-readiness-20260725.zh-CN.md)
+- Windows 新人安装实测与改进建议: [docs/new-user-install-review-20260725.zh-CN.md](./docs/new-user-install-review-20260725.zh-CN.md)
 - 安全硬化清单: [docs/security-hardening.zh-CN.md](./docs/security-hardening.zh-CN.md)
 - 贡献指南: [CONTRIBUTING.md](./CONTRIBUTING.md)
 - 行为准则: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)

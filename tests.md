@@ -2,6 +2,31 @@
 
 This file tracks manual regression and feature verification steps.
 
+## Windows clean-install newcomer journey (2026-07-25)
+
+### Expected behavior
+
+1. The README `-UseBranchArchive -RemoteQuick -JsonOutput` command selects a compatible Node.js/npm pair without relying on the user's PowerShell profile, global npm prefix, or ambiguous PATH order.
+2. The generated launcher contains the selected absolute Node.js path; a failed first install removes only newly created install state while preserving pre-existing files.
+3. Startup failure does not wait for a tunnel URL after local health has already failed.
+4. A successful install binds to loopback, starts a password-protected Quick Tunnel, verifies public health plus unauthorized HTTP/WebSocket boundaries, and keeps `/local-setup` unavailable through the public hostname.
+5. A user can select the new workspace, send a message, receive the assistant reply, and return to an enabled composer.
+
+### Verification
+
+- Start with no CX-Codex install directory, runtime state, launcher, managed cloudflared binary, 7420 listener, or legacy FRP 7420 task.
+- Run the exact README command and record total elapsed time without storing the generated password or temporary public URL.
+- Confirm local health 200, unauthenticated public API 401, public `/local-setup` 404, login 200, authenticated API 200, and a `Secure` session cookie.
+- In an isolated browser session select `CodexWorkspace`, send `只回复：新人安装验证成功`, wait for the active state to settle, and confirm the assistant reply is `新人安装验证成功`.
+- Run the GitHub Actions Linux build and Windows bootstrap smoke; the Windows job must reject launchers whose Node.js command is empty or differs from the selected runtime.
+
+### Evidence
+
+- The successful clean install completed in 153.5 seconds with local health and all three Quick Tunnel verification flags true.
+- Public authentication boundaries returned 401/404 before login and 200 after login; the HTTPS cookie was marked `Secure`.
+- The browser showed realtime connection healthy, the sent state settled, the expected reply appeared, and the composer became usable again.
+- Three newcomer-blocking defects found during earlier attempts were fixed: multiline npm version parsing, global-prefix npm contamination, and an empty Node.js launcher command.
+
 ## Runtime send restart after thread creation (2026-07-23)
 
 ### Expected behavior
