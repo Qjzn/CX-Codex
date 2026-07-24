@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
 
-const PROBE_TIMEOUT_MS = 5_000
+const PROBE_TIMEOUT_MS = 15_000
 
 const [, , scriptPath, ...scriptArgs] = process.argv
 
