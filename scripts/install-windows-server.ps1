@@ -10,6 +10,9 @@ param(
   [switch]$OpenBrowser,
   [string]$ConfigPath = "$env:USERPROFILE\.cx-codex\config.json",
   [string]$LauncherPath = "$env:USERPROFILE\.local\bin\cx-codex-start.cmd",
+  [string]$NodeCommand = "",
+  [string]$NpmCommand = "",
+  [string]$NpmCliPath = "",
   [string]$CodexCommand = "",
   [string]$RipgrepCommand = "",
   [string]$CloudflaredCommand = "",
@@ -496,23 +499,56 @@ function Wait-ForTunnelUrlFromLog {
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$nodeCommand = Get-Command node -ErrorAction Stop
+$nodeExecutable = if ([string]::IsNullOrWhiteSpace($NodeCommand)) {
+  (Get-Command node -ErrorAction Stop).Source
+} else {
+  (Resolve-Path -LiteralPath $NodeCommand -ErrorAction Stop).Path
+}
+$nodeRoot = Split-Path -Parent $nodeExecutable
+$env:PATH = "$nodeRoot;$env:PATH"
 $minimumNodeVersion = [Version]"22.13.0"
 $minimumNpmVersion = [Version]"9.0.0"
-$nodeVersion = Get-ToolVersionObject -VersionOutput (& $nodeCommand.Source --version) -ToolName "Node.js"
+$nodeVersion = Get-ToolVersionObject -VersionOutput (& $nodeExecutable --version) -ToolName "Node.js"
 if ($nodeVersion -lt $minimumNodeVersion) {
   throw "Node.js $minimumNodeVersion or newer is required (found $nodeVersion). Run scripts/bootstrap-windows.ps1 to use a compatible portable LTS runtime."
 }
-$npmCommandInfo = Get-Command npm -ErrorAction Stop
-$npmExecutable = Resolve-NpmExecutable -CommandInfo $npmCommandInfo
-$npmVersion = Get-ToolVersionObject -VersionOutput (& $npmExecutable --version) -ToolName "npm"
+$resolvedNpmCliPath = if (-not [string]::IsNullOrWhiteSpace($NpmCliPath)) {
+  (Resolve-Path -LiteralPath $NpmCliPath -ErrorAction Stop).Path
+} else {
+  $adjacentNpmCli = Join-Path $nodeRoot "node_modules\npm\bin\npm-cli.js"
+  if (Test-Path -LiteralPath $adjacentNpmCli) { $adjacentNpmCli } else { "" }
+}
+$npmExecutable = if ($resolvedNpmCliPath) {
+  ""
+} elseif (-not [string]::IsNullOrWhiteSpace($NpmCommand)) {
+  (Resolve-Path -LiteralPath $NpmCommand -ErrorAction Stop).Path
+} else {
+  $adjacentNpm = Join-Path $nodeRoot "npm.cmd"
+  if (Test-Path -LiteralPath $adjacentNpm) {
+    $adjacentNpm
+  } else {
+    Resolve-NpmExecutable -CommandInfo (Get-Command npm -ErrorAction Stop)
+  }
+}
+
+function Invoke-Npm {
+  param([string[]]$Arguments)
+  if ($resolvedNpmCliPath) {
+    & $nodeExecutable $resolvedNpmCliPath @Arguments
+    return
+  }
+  & $npmExecutable @Arguments
+}
+
+$npmVersion = Get-ToolVersionObject -VersionOutput (Invoke-Npm -Arguments @("--version")) -ToolName "npm"
 if ($npmVersion -lt $minimumNpmVersion) {
   throw "npm $minimumNpmVersion or newer is required (found $npmVersion). Run scripts/bootstrap-windows.ps1 to use a compatible portable Node.js/npm pair."
 }
 
 Write-Host "Using repo root: $repoRoot"
-Write-Host "Using node: $($nodeCommand.Source)"
-Write-Host "Using npm:  $npmExecutable"
+Write-Host "Using node: $nodeExecutable"
+$npmDisplay = if ($resolvedNpmCliPath) { "$nodeExecutable $resolvedNpmCliPath" } else { $npmExecutable }
+Write-Host "Using npm:  $npmDisplay"
 
 Push-Location $repoRoot
 try {
@@ -523,7 +559,7 @@ try {
   if (-not $SkipNpmInstall) {
     Write-Step "Installing npm dependencies"
     $installCommand = if (Test-Path -LiteralPath (Join-Path $repoRoot "package-lock.json")) { "ci" } else { "install" }
-    & $npmExecutable $installCommand
+    Invoke-Npm -Arguments @($installCommand)
     if ($LASTEXITCODE -ne 0) {
       throw "npm $installCommand failed with exit code $LASTEXITCODE"
     }
@@ -531,7 +567,7 @@ try {
 
   if (-not $SkipBuild) {
     Write-Step "Building CX-Codex"
-    & $npmExecutable run build
+    Invoke-Npm -Arguments @("run", "build")
     if ($LASTEXITCODE -ne 0) {
       throw "npm run build failed with exit code $LASTEXITCODE"
     }

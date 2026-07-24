@@ -127,6 +127,7 @@ function Get-PortableNodeRuntime {
   return @{
     Node = Join-Path $nodeRoot "node.exe"
     Npm = Join-Path $nodeRoot "npm.cmd"
+    NpmCli = Join-Path $nodeRoot "node_modules\npm\bin\npm-cli.js"
     Root = $nodeRoot
   }
 }
@@ -138,18 +139,22 @@ function Ensure-NodeRuntime {
     $version = Get-NodeVersionObject -VersionText $versionText
     if ($version -ge $MinimumNodeVersion) {
       $nodeRoot = Split-Path -Parent $nodeCommand.Source
-      $npmExecutable = Join-Path $nodeRoot "npm.cmd"
-      if (-not (Test-Path -LiteralPath $npmExecutable)) {
+      $npmCli = Join-Path $nodeRoot "node_modules\npm\bin\npm-cli.js"
+      $npmExecutable = ""
+      if (Test-Path -LiteralPath $npmCli) {
+        $npmVersionText = & $nodeCommand.Source $npmCli --version
+      } else {
         $npmCommand = Get-Command npm -ErrorAction Stop
         $npmExecutable = $npmCommand.Source
+        $npmVersionText = & $npmExecutable --version
       }
 
-      $npmVersionText = & $npmExecutable --version
       $npmVersion = Get-NpmVersionObject -VersionText $npmVersionText
       if ($npmVersion -ge $MinimumNpmVersion) {
         return @{
           Node = $nodeCommand.Source
-          Npm = $npmExecutable
+          Npm = if ($npmExecutable) { $npmExecutable } else { Join-Path $nodeRoot "npm.cmd" }
+          NpmCli = if (Test-Path -LiteralPath $npmCli) { $npmCli } else { "" }
           Root = $nodeRoot
         }
       }
@@ -332,6 +337,7 @@ if (-not (Test-Path -LiteralPath $installScript)) {
 }
 
 $invokeArgs = @(
+  "-NoProfile",
   "-ExecutionPolicy", "Bypass",
   "-File", $installScript,
   "-ProjectPath", $WorkspacePath,
@@ -339,8 +345,13 @@ $invokeArgs = @(
   "-Port", "$Port",
   "-BindHost", $BindHost,
   "-ConfigPath", "$env:USERPROFILE\.cx-codex\config.json",
-  "-LauncherPath", "$env:USERPROFILE\.local\bin\cx-codex-start.cmd"
+  "-LauncherPath", "$env:USERPROFILE\.local\bin\cx-codex-start.cmd",
+  "-NodeCommand", $runtime.Node,
+  "-NpmCommand", $runtime.Npm
 )
+if (-not [string]::IsNullOrWhiteSpace($runtime.NpmCli)) {
+  $invokeArgs += @("-NpmCliPath", $runtime.NpmCli)
+}
 
 if ($NoPassword) {
   $invokeArgs += "-NoPassword"
