@@ -46,15 +46,27 @@ function Write-Step {
   Write-Host "==> $Message" -ForegroundColor Green
 }
 
+function Get-ToolVersionObject {
+  param(
+    [object]$VersionOutput,
+    [string]$ToolName
+  )
+  $text = (@($VersionOutput) | ForEach-Object { [string]$_ }) -join "`n"
+  $match = [Regex]::Match($text, "(?m)^\s*v?(\d+\.\d+\.\d+)(?:[-+][0-9A-Za-z.-]+)?\s*$")
+  if (-not $match.Success) {
+    throw "Could not parse $ToolName version output."
+  }
+  return [Version]$match.Groups[1].Value
+}
+
 function Get-NodeVersionObject {
-  param([string]$VersionText)
-  $clean = $VersionText.Trim().TrimStart('v')
-  return [Version]$clean
+  param([object]$VersionText)
+  return Get-ToolVersionObject -VersionOutput $VersionText -ToolName "Node.js"
 }
 
 function Get-NpmVersionObject {
-  param([string]$VersionText)
-  return [Version]$VersionText.Trim()
+  param([object]$VersionText)
+  return Get-ToolVersionObject -VersionOutput $VersionText -ToolName "npm"
 }
 
 function Get-PortableNodeRuntime {
@@ -365,7 +377,8 @@ if ($JsonOutput) {
 
 Write-Step "Running installer"
 & powershell.exe @invokeArgs
-if ($LASTEXITCODE -ne 0) {
+$installerExitCode = $LASTEXITCODE
+if ($installerExitCode -ne 0) {
   if ([string]::IsNullOrWhiteSpace($SourceRepoRoot)) {
     $safeInstallDir = Assert-SafeInstallDirectory -Path $InstallDir
     $backupDir = "$safeInstallDir.previous"
@@ -376,9 +389,12 @@ if ($LASTEXITCODE -ne 0) {
       }
       Move-Item -LiteralPath $backupDir -Destination $safeInstallDir
       Write-Warning "Installation failed; restored the previous CX-Codex version. Failed files remain at $failedDir"
+    } elseif (Test-Path -LiteralPath $safeInstallDir) {
+      Remove-Item -LiteralPath $safeInstallDir -Recurse -Force
+      Write-Warning "Installation failed; removed the incomplete new installation."
     }
   }
-  throw "Installer failed with exit code $LASTEXITCODE"
+  throw "Installer failed with exit code $installerExitCode"
 }
 
 if (-not $JsonOutput) {

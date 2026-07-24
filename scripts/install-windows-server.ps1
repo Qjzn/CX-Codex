@@ -74,6 +74,19 @@ function Resolve-NpmExecutable {
   return $source
 }
 
+function Get-ToolVersionObject {
+  param(
+    [object]$VersionOutput,
+    [string]$ToolName
+  )
+  $text = (@($VersionOutput) | ForEach-Object { [string]$_ }) -join "`n"
+  $match = [Regex]::Match($text, "(?m)^\s*v?(\d+\.\d+\.\d+)(?:[-+][0-9A-Za-z.-]+)?\s*$")
+  if (-not $match.Success) {
+    throw "Could not parse $ToolName version output."
+  }
+  return [Version]$match.Groups[1].Value
+}
+
 function Ensure-ProjectDirectory {
   param(
     [string]$TargetPath,
@@ -486,15 +499,13 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $nodeCommand = Get-Command node -ErrorAction Stop
 $minimumNodeVersion = [Version]"22.13.0"
 $minimumNpmVersion = [Version]"9.0.0"
-$nodeVersionText = (& $nodeCommand.Source --version).Trim().TrimStart('v')
-$nodeVersion = [Version]$nodeVersionText
+$nodeVersion = Get-ToolVersionObject -VersionOutput (& $nodeCommand.Source --version) -ToolName "Node.js"
 if ($nodeVersion -lt $minimumNodeVersion) {
   throw "Node.js $minimumNodeVersion or newer is required (found $nodeVersion). Run scripts/bootstrap-windows.ps1 to use a compatible portable LTS runtime."
 }
 $npmCommandInfo = Get-Command npm -ErrorAction Stop
 $npmExecutable = Resolve-NpmExecutable -CommandInfo $npmCommandInfo
-$npmVersionText = (& $npmExecutable --version).Trim()
-$npmVersion = [Version]$npmVersionText
+$npmVersion = Get-ToolVersionObject -VersionOutput (& $npmExecutable --version) -ToolName "npm"
 if ($npmVersion -lt $minimumNpmVersion) {
   throw "npm $minimumNpmVersion or newer is required (found $npmVersion). Run scripts/bootstrap-windows.ps1 to use a compatible portable Node.js/npm pair."
 }
