@@ -19,7 +19,8 @@ function Invoke-CapturedPowerShell {
     [string]$ScriptPath,
     [string[]]$Arguments,
     [string]$CaptureRoot,
-    [string]$Label
+    [string]$Label,
+    [int]$TimeoutSeconds = 180
   )
 
   $stdoutPath = Join-Path $CaptureRoot "$Label.stdout.log"
@@ -42,14 +43,14 @@ function Invoke-CapturedPowerShell {
     -PassThru `
     -RedirectStandardOutput $stdoutPath `
     -RedirectStandardError $stderrPath
-  $deadline = (Get-Date).AddMinutes(3)
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   while (-not $process.HasExited -and (Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 100
     $process.Refresh()
   }
   if (-not $process.HasExited) {
     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-    throw "$Label exceeded the three-minute process timeout."
+    throw "$Label exceeded the $TimeoutSeconds-second process timeout."
   }
   $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -LiteralPath $stdoutPath -Raw } else { "" }
   $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { "" }
@@ -256,12 +257,38 @@ try {
     "-JsonOutput"
   )
 
+  $runtimeInstallerArgsPath = Join-Path $testRoot "install-start-now.args.clixml"
+  $runtimeCaptureWrapperPath = Join-Path $testRoot "install-start-now-capture-wrapper.ps1"
+  $runtimeInstallerArgs | Export-Clixml -LiteralPath $runtimeInstallerArgsPath
+  Set-Content `
+    -LiteralPath $runtimeCaptureWrapperPath `
+    -Encoding UTF8 `
+    -Value @'
+[CmdletBinding()]
+param(
+  [string]$InstallScript,
+  [string]$ArgumentsPath
+)
+$capturedArguments = @(Import-Clixml -LiteralPath $ArgumentsPath)
+$captured = & powershell.exe `
+  -NoProfile `
+  -ExecutionPolicy Bypass `
+  -File $InstallScript `
+  @capturedArguments
+$installerExitCode = $LASTEXITCODE
+[Console]::Out.WriteLine((@($captured) -join "`n"))
+exit $installerExitCode
+'@
   $runtimeInstallResult = Invoke-CapturedPowerShell `
-    -ScriptPath $installScript `
-    -Arguments $runtimeInstallerArgs `
+    -ScriptPath $runtimeCaptureWrapperPath `
+    -Arguments @(
+      "-InstallScript", $installScript,
+      "-ArgumentsPath", $runtimeInstallerArgsPath
+    ) `
     -CaptureRoot $testRoot `
-    -Label "install-start-now"
-  Write-Host "productization: StartNow installer returned"
+    -Label "install-start-now-captured" `
+    -TimeoutSeconds 60
+  Write-Host "productization: captured StartNow installer returned"
   Assert-True ($runtimeInstallResult.ExitCode -eq 0) "StartNow installer smoke exited with $($runtimeInstallResult.ExitCode). $($runtimeInstallResult.Stderr)"
   $runtimeInstallJson = ConvertFrom-SingleJsonLine -Text $runtimeInstallResult.Stdout -Label "StartNow installer smoke"
   Assert-True ([bool]$runtimeInstallJson.ok) "StartNow installer must report ok=true. $($runtimeInstallResult.Stderr)"
@@ -420,7 +447,16 @@ try {
     $resolvedTemp = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\')
     $resolvedTestRoot = [System.IO.Path]::GetFullPath($testRoot).TrimEnd('\')
     if ($resolvedTestRoot.StartsWith("$resolvedTemp\", [System.StringComparison]::OrdinalIgnoreCase)) {
-      Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
+      for ($attempt = 1; $attempt -le 10 -and (Test-Path -LiteralPath $resolvedTestRoot); $attempt++) {
+        try {
+          Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force -ErrorAction Stop
+        } catch {
+          if ($attempt -eq 10) {
+            throw
+          }
+          Start-Sleep -Milliseconds 250
+        }
+      }
     }
   }
   if ([string]::IsNullOrWhiteSpace($originalCodexHome)) {

@@ -13980,6 +13980,8 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 ### Current automated evidence (2026-07-25)
 
+- Windows 产品化回归现在从外层 Windows PowerShell 变量捕获真实 `StartNow` 安装器 JSON；要求调用在 60 秒内退出、stdout 仍只有一行 JSON、服务继续存活且 `/health` 返回 200，随后官方卸载必须停止服务并关闭端口，从而直接覆盖正式 Release 安装回归发现的挂起路径。
+- 隔离新人环境的源码版 `-RemoteQuick -JsonOutput` 回归已证明外层变量捕获可正常退出，三项公网验证全部通过；全新浏览器可经密码页进入新会话界面，创建任务、消息输入和设置入口均可见，1254px 视口无横向溢出。临时隧道、测试端口和浏览器会话均已清理，记录未保存公网地址、密码或真实会话标题。
 - `npm.cmd run verify:quick-tunnel` completed twice consecutively against real Cloudflare Quick Tunnels. Both runs reached `ready`, returned a temporary public URL, verified public health and authentication boundaries, stopped cleanly, and left no managed `cloudflared` child running.
 - The public verifier waits for both the generated hostname and `Registered tunnel connection`. On networks that reset Node TLS probes, it resolves only the temporary hostname through process-scoped Cloudflare DoH and falls back to the OS `curl` client without changing DNS, hosts, firewall, or existing Cloudflare configuration.
 - Server module smoke covers proxy-header loopback bypass prevention, password-required start, managed start/stop routes, and redacted status fields.

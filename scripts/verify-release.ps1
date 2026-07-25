@@ -374,6 +374,7 @@ if (-not $SkipPackageSmoke) {
     "docs\roadmap.zh-CN.md",
     "docs\security-hardening.zh-CN.md",
     "scripts\package-release.ps1",
+    "scripts\start-detached-server.mjs",
     "scripts\uninstall-windows.ps1",
     "scripts\verify-windows-productization.ps1",
     "scripts\verify-frontend-normalizers.mjs",
