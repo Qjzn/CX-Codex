@@ -97,6 +97,9 @@ if (Test-Path -LiteralPath $testRoot) {
 }
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 $runtimeCleanupArgs = $null
+$processTreeCleanupArgs = $null
+$processTreeRoot = $null
+$processTreeChildPid = 0
 $originalCodexHome = $env:CODEX_HOME
 
 try {
@@ -287,6 +290,69 @@ try {
   Assert-True ($null -eq $stoppedHealth) "Official uninstall must stop the managed StartNow service."
   Write-Host "productization: StartNow cleanup passed"
 
+  $portProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+  $portProbe.Start()
+  $processTreePort = [int]$portProbe.LocalEndpoint.Port
+  $portProbe.Stop()
+  $processTreeInstallDir = Join-Path $testRoot "process-tree-program"
+  $processTreeDistCliDir = Join-Path $processTreeInstallDir "dist-cli"
+  $processTreeStateDir = Join-Path $testRoot "process-tree-state"
+  $processTreeBinDir = Join-Path $testRoot "process-tree-bin"
+  $processTreeChildPidPath = Join-Path $processTreeStateDir "child.pid"
+  $processTreeServerEntryPoint = Join-Path $processTreeDistCliDir "index.js"
+  New-Item -ItemType Directory -Path $processTreeDistCliDir,$processTreeStateDir,$processTreeBinDir -Force | Out-Null
+  $childPidPathJson = $processTreeChildPidPath | ConvertTo-Json -Compress
+  Set-Content `
+    -LiteralPath $processTreeServerEntryPoint `
+    -Value "const fs=require('node:fs');const{spawn}=require('node:child_process');const child=spawn(process.execPath,['-e','setInterval(()=>{},60000)'],{stdio:'ignore'});fs.writeFileSync($childPidPathJson,String(child.pid));require('node:net').createServer(()=>{}).listen($processTreePort,'127.0.0.1');"
+  $processTreeRoot = Start-Process `
+    -FilePath $nodePath `
+    -ArgumentList @("`"$processTreeServerEntryPoint`"") `
+    -WorkingDirectory $processTreeInstallDir `
+    -WindowStyle Hidden `
+    -PassThru
+  $processTreePidMarker = Join-Path $processTreeStateDir "cx-codex-$processTreePort.pid"
+  Set-Content -LiteralPath $processTreePidMarker -Value ([string]$processTreeRoot.Id)
+  $processTreeDeadline = (Get-Date).AddSeconds(10)
+  do {
+    $processTreeListener = Get-NetTCPConnection -LocalPort $processTreePort -State Listen -ErrorAction SilentlyContinue
+    if ($processTreeListener -and (Test-Path -LiteralPath $processTreeChildPidPath)) {
+      break
+    }
+    Start-Sleep -Milliseconds 100
+  } while ((Get-Date) -lt $processTreeDeadline)
+  Assert-True ($processTreeListener -and [int]$processTreeListener.OwningProcess -eq $processTreeRoot.Id) "Process-tree fixture must own its listener."
+  Assert-True (Test-Path -LiteralPath $processTreeChildPidPath) "Process-tree fixture must record its child PID."
+  $processTreeChildPid = [int](Get-Content -LiteralPath $processTreeChildPidPath -Raw)
+  Assert-True ([bool](Get-Process -Id $processTreeChildPid -ErrorAction SilentlyContinue)) "Process-tree fixture child must be running."
+  $processTreeCleanupArgs = @(
+    "-InstallDir", $processTreeInstallDir,
+    "-StateDir", $processTreeStateDir,
+    "-LauncherPath", (Join-Path $processTreeBinDir "cx-codex-start.cmd"),
+    "-ManagedBinDir", $processTreeBinDir,
+    "-Port", "$processTreePort",
+    "-RemoveUserData",
+    "-JsonOutput"
+  )
+  $processTreeCleanupResult = Invoke-CapturedPowerShell `
+    -ScriptPath $uninstallScript `
+    -Arguments $processTreeCleanupArgs `
+    -CaptureRoot $testRoot `
+    -Label "uninstall-process-tree"
+  Assert-True ($processTreeCleanupResult.ExitCode -eq 0) "Process-tree uninstall exited with $($processTreeCleanupResult.ExitCode). $($processTreeCleanupResult.Stderr)"
+  $processTreeCleanupJson = ConvertFrom-SingleJsonLine -Text $processTreeCleanupResult.Stdout -Label "Process-tree uninstall smoke"
+  Assert-True ([bool]$processTreeCleanupJson.ok) "Process-tree uninstall must report ok=true."
+  Assert-True (@($processTreeCleanupJson.warnings).Count -eq 0) "Process-tree uninstall must not emit stop timeout warnings."
+  $processTreeRoot.Refresh()
+  Assert-True ($processTreeRoot.HasExited) "Process-tree uninstall must stop the managed root."
+  Assert-True (-not (Get-Process -Id $processTreeChildPid -ErrorAction SilentlyContinue)) "Process-tree uninstall must stop managed descendants."
+  Assert-True (-not (Get-NetTCPConnection -LocalPort $processTreePort -State Listen -ErrorAction SilentlyContinue)) "Process-tree uninstall must close the managed port."
+  Assert-True (-not (Test-Path -LiteralPath $processTreeInstallDir)) "Process-tree uninstall must remove the installation."
+  $processTreeCleanupArgs = $null
+  $processTreeRoot.Dispose()
+  $processTreeRoot = $null
+  Write-Host "productization: process-tree uninstall passed"
+
   $failureResult = Invoke-CapturedPowerShell `
     -ScriptPath $bootstrapScript `
     -Arguments @(
@@ -333,6 +399,22 @@ try {
         -CaptureRoot $testRoot `
         -Label "uninstall-start-now-finally" | Out-Null
     } catch {}
+  }
+  if ($processTreeCleanupArgs) {
+    try {
+      Invoke-CapturedPowerShell `
+        -ScriptPath $uninstallScript `
+        -Arguments $processTreeCleanupArgs `
+        -CaptureRoot $testRoot `
+        -Label "uninstall-process-tree-finally" | Out-Null
+    } catch {}
+  }
+  if ($processTreeChildPid -gt 0) {
+    Stop-Process -Id $processTreeChildPid -Force -ErrorAction SilentlyContinue
+  }
+  if ($processTreeRoot) {
+    Stop-Process -Id $processTreeRoot.Id -Force -ErrorAction SilentlyContinue
+    $processTreeRoot.Dispose()
   }
   if (Test-Path -LiteralPath $testRoot) {
     $resolvedTemp = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\')

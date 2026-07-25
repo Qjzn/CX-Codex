@@ -193,6 +193,28 @@ function Test-ManagedServerCommandLine {
   return $false
 }
 
+function Add-ProcessTreePostOrder {
+  param(
+    [int]$RootProcessId,
+    [object[]]$Processes,
+    [System.Collections.Generic.HashSet[int]]$VisitedProcessIds,
+    [System.Collections.Generic.List[int]]$OrderedProcessIds
+  )
+
+  if ($RootProcessId -le 0 -or $RootProcessId -eq $PID -or -not $VisitedProcessIds.Add($RootProcessId)) {
+    return
+  }
+
+  foreach ($childProcess in @($Processes | Where-Object { [int]$_.ParentProcessId -eq $RootProcessId })) {
+    Add-ProcessTreePostOrder `
+      -RootProcessId ([int]$childProcess.ProcessId) `
+      -Processes $Processes `
+      -VisitedProcessIds $VisitedProcessIds `
+      -OrderedProcessIds $OrderedProcessIds
+  }
+  $OrderedProcessIds.Add($RootProcessId) | Out-Null
+}
+
 $resolvedInstallDir = Assert-SafeManagedDirectory -Path $InstallDir -Label "install"
 $resolvedStateDir = Assert-SafeManagedDirectory -Path $StateDir -Label "state"
 $resolvedManagedBinDir = Assert-SafeManagedDirectory -Path $ManagedBinDir -Label "managed bin"
@@ -217,8 +239,9 @@ if (Test-Path -LiteralPath $resolvedConfigPath) {
 
 $script:UninstallStage = "stop_processes"
 $managedProcessIds = New-Object 'System.Collections.Generic.HashSet[int]'
+$processes = @()
 try {
-  $processes = Get-CimInstance Win32_Process -ErrorAction Stop
+  $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop)
   foreach ($processInfo in $processes) {
     $processId = [int]$processInfo.ProcessId
     if (-not $processId -or $processId -eq $PID) {
@@ -268,13 +291,42 @@ if ($recordedServerProcessId -gt 0 -and $recordedServerProcessId -ne $PID) {
   }
 }
 
+$visitedProcessIds = New-Object 'System.Collections.Generic.HashSet[int]'
+$orderedProcessIds = New-Object 'System.Collections.Generic.List[int]'
 foreach ($managedProcessId in $managedProcessIds) {
+  Add-ProcessTreePostOrder `
+    -RootProcessId $managedProcessId `
+    -Processes $processes `
+    -VisitedProcessIds $visitedProcessIds `
+    -OrderedProcessIds $orderedProcessIds
+}
+
+$processIdsToStop = New-Object 'System.Collections.Generic.List[int]'
+foreach ($managedProcessId in $orderedProcessIds) {
   if (-not $PSCmdlet.ShouldProcess("PID $managedProcessId", "Stop managed CX-Codex process")) {
     continue
   }
   Stop-Process -Id $managedProcessId -Force -ErrorAction SilentlyContinue
-  Wait-Process -Id $managedProcessId -Timeout 10 -ErrorAction SilentlyContinue
-  if (Get-Process -Id $managedProcessId -ErrorAction SilentlyContinue) {
+  $processIdsToStop.Add($managedProcessId) | Out-Null
+}
+
+$remainingProcessIds = @()
+if ($processIdsToStop.Count -gt 0) {
+  $deadline = (Get-Date).AddSeconds(10)
+  do {
+    $remainingProcessIds = @(
+      $processIdsToStop |
+        Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }
+    )
+    if ($remainingProcessIds.Count -eq 0) {
+      break
+    }
+    Start-Sleep -Milliseconds 100
+  } while ((Get-Date) -lt $deadline)
+}
+
+foreach ($managedProcessId in $processIdsToStop) {
+  if ($remainingProcessIds -contains $managedProcessId) {
     Write-UninstallWarning -Code "PROCESS_STOP_TIMEOUT" -Message "Managed process $managedProcessId did not exit within 10 seconds; file cleanup may need a retry."
   }
   $script:RemovedItems.Add("process:$managedProcessId") | Out-Null
