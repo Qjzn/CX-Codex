@@ -93,9 +93,10 @@ jobs:
           $keystoreDir = Join-Path $env:RUNNER_TEMP 'android-signing'
           New-Item -ItemType Directory -Force -Path $keystoreDir | Out-Null
           $keystorePath = Join-Path $keystoreDir 'cx-codex-release.jks'
+          $keystorePropertiesPath = $keystorePath.Replace('\', '/')
           [System.IO.File]::WriteAllBytes($keystorePath, [Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64))
           @"
-          storeFile=$keystorePath
+          storeFile=$keystorePropertiesPath
           storePassword=$env:ANDROID_KEYSTORE_PASSWORD
           keyAlias=$env:ANDROID_KEY_ALIAS
           keyPassword=$env:ANDROID_KEY_PASSWORD

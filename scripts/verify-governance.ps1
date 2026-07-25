@@ -645,6 +645,7 @@ Assert-ContentIncludes ".github/workflows/release.yml" @(
   "Release tag `$env:GITHUB_REF_NAME does not match package version `$packageVersion.",
   "docs/release-notes-`$tagVersion.zh-CN.md",
   "Require Android release signing secrets",
+  "keystorePath.Replace('\', '/')",
   "Verify Android release signature",
   "ANDROID_RELEASE_CERT_SHA256",
   'body_path: ${{ steps.release-metadata.outputs.release_notes_path }}'
