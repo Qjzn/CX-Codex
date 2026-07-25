@@ -12,6 +12,7 @@ import {
 } from './tunnelStatus.js'
 import {
   startQuickTunnel,
+  startQuickTunnelWithTransientRetry,
   stopQuickTunnel,
 } from './quickTunnel.js'
 
@@ -95,10 +96,13 @@ export async function handleStatusRoutes(
       const preferredCommand = typeof record.cloudflaredCommand === 'string'
         ? record.cloudflaredCommand.trim()
         : ''
-      const runtime = await startManagedQuickTunnel({
-        localPort: req.socket.localPort ?? 0,
-        preferredCommand,
-      })
+      const runtime = await startQuickTunnelWithTransientRetry(
+        {
+          localPort: req.socket.localPort ?? 0,
+          preferredCommand,
+        },
+        startManagedQuickTunnel,
+      )
       await writeTunnelConfig({
         enabled: true,
         cloudflaredCommand: runtime.command,

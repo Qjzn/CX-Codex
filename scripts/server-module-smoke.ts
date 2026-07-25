@@ -360,6 +360,11 @@ import {
   BRIDGE_HEARTBEAT_METHOD,
   handleNotificationSseRoute,
 } from '../src/server/notificationSseRoute.js'
+import {
+  isTransientQuickTunnelVerificationError,
+  startQuickTunnelWithTransientRetry,
+  type QuickTunnelSnapshot,
+} from '../src/server/quickTunnel.js'
 import { handleStatusRoutes } from '../src/server/statusRoutes.js'
 import { handleLocalStateRoutes } from '../src/server/localStateRoutes.js'
 import {
@@ -515,6 +520,7 @@ try {
   await smokeThreadSearchIndex()
   await smokeThreadRoutes()
   await smokeRpcProxyRoute()
+  await smokeQuickTunnelTransientRetry()
   await smokeStatusRoutes()
   await smokeWorkspaceRootsState()
   await smokeWorkspaceMetaRoutes()
@@ -6773,6 +6779,72 @@ async function smokeRpcProxyRoute(): Promise<void> {
     new URL('http://127.0.0.1/codex-api/rpc'),
     dependencies,
   ), false)
+}
+
+async function smokeQuickTunnelTransientRetry(): Promise<void> {
+  const options = {
+    localPort: 7420,
+    preferredCommand: 'cloudflared',
+  }
+  const readySnapshot: QuickTunnelSnapshot = {
+    phase: 'ready',
+    active: true,
+    publicUrl: 'https://retry-success.trycloudflare.com',
+    command: 'cloudflared',
+    installedByCxCodex: false,
+    networkMode: 'system-dns',
+    startedAtIso: '2026-07-25T00:00:00.000Z',
+    errorCode: '',
+    message: 'ready',
+    verification: {
+      health: true,
+      auth: true,
+      websocketAuth: true,
+    },
+  }
+  const transientError = Object.assign(
+    new Error('公网鉴权验证失败（HTTP unreachable），已拒绝开放手机访问。'),
+    { code: 'PUBLIC_AUTH_VERIFY_FAILED' },
+  )
+  assert.equal(isTransientQuickTunnelVerificationError(transientError), true)
+  assert.equal(isTransientQuickTunnelVerificationError(Object.assign(
+    new Error('公网鉴权验证失败（HTTP 200），已拒绝开放手机访问。'),
+    { code: 'PUBLIC_AUTH_VERIFY_FAILED' },
+  )), false)
+  assert.equal(isTransientQuickTunnelVerificationError(Object.assign(
+    new Error('等待 Cloudflare 临时地址超时。'),
+    { code: 'QUICK_TUNNEL_TIMEOUT' },
+  )), false)
+
+  let transientAttempts = 0
+  const retried = await startQuickTunnelWithTransientRetry(
+    options,
+    async () => {
+      transientAttempts += 1
+      if (transientAttempts === 1) throw transientError
+      return readySnapshot
+    },
+    0,
+  )
+  assert.equal(transientAttempts, 2)
+  assert.equal(retried, readySnapshot)
+
+  let unsafeAttempts = 0
+  await assert.rejects(
+    startQuickTunnelWithTransientRetry(
+      options,
+      async () => {
+        unsafeAttempts += 1
+        throw Object.assign(
+          new Error('公网鉴权验证失败（HTTP 200），已拒绝开放手机访问。'),
+          { code: 'PUBLIC_AUTH_VERIFY_FAILED' },
+        )
+      },
+      0,
+    ),
+    /HTTP 200/u,
+  )
+  assert.equal(unsafeAttempts, 1)
 }
 
 async function smokeStatusRoutes(): Promise<void> {
