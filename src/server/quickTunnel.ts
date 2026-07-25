@@ -40,6 +40,11 @@ export type QuickTunnelSnapshot = {
   verification: QuickTunnelVerification
 }
 
+export type QuickTunnelStartOptions = {
+  localPort: number
+  preferredCommand?: string
+}
+
 type CloudflaredRelease = {
   tag_name?: unknown
   body?: unknown
@@ -57,7 +62,13 @@ type VerificationProbe = {
 const CLOUDFLARED_RELEASE_API = 'https://api.github.com/repos/cloudflare/cloudflared/releases/latest'
 const TRYCLOUDFLARE_URL_PATTERN = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/gu
 const VERIFY_DELAYS_MS = [0, 1_000, 2_500, 5_000, 9_000]
+const TRANSIENT_RETRY_DELAY_MS = 1_500
 const MAX_DIAGNOSTIC_CHARS = 12_000
+const RETRYABLE_PUBLIC_VERIFICATION_ERROR_CODES = new Set([
+  'PUBLIC_AUTH_VERIFY_FAILED',
+  'PUBLIC_WEBSOCKET_AUTH_VERIFY_FAILED',
+  'PUBLIC_HEALTH_VERIFY_FAILED',
+])
 
 let tunnelChild: ChildProcessByStdio<null, Readable, Readable> | null = null
 let quickServiceServer: HttpServer | null = null
@@ -161,6 +172,12 @@ function readTunnelError(error: unknown, fallbackCode: string): { code: string; 
       ? record.message.trim()
       : String(error),
   }
+}
+
+export function isTransientQuickTunnelVerificationError(error: unknown): boolean {
+  const failure = readTunnelError(error, '')
+  return RETRYABLE_PUBLIC_VERIFICATION_ERROR_CODES.has(failure.code)
+    && /\bHTTP unreachable\b/iu.test(failure.message)
 }
 
 function parseReleaseChecksum(body: string, assetName: string): string {
@@ -722,10 +739,7 @@ export function getQuickTunnelSnapshot(): QuickTunnelSnapshot {
   return cloneSnapshot()
 }
 
-export async function startQuickTunnel(options: {
-  localPort: number
-  preferredCommand?: string
-}): Promise<QuickTunnelSnapshot> {
+export async function startQuickTunnel(options: QuickTunnelStartOptions): Promise<QuickTunnelSnapshot> {
   if (!Number.isInteger(options.localPort) || options.localPort < 1 || options.localPort > 65535) {
     throw createTunnelError('INVALID_LOCAL_PORT', '无法确定 CX-Codex 当前监听端口。')
   }
@@ -910,6 +924,20 @@ export async function startQuickTunnel(options: {
   })()
 
   return await startPromise
+}
+
+export async function startQuickTunnelWithTransientRetry(
+  options: QuickTunnelStartOptions,
+  startAttempt: (attemptOptions: QuickTunnelStartOptions) => Promise<QuickTunnelSnapshot> = startQuickTunnel,
+  retryDelayMs = TRANSIENT_RETRY_DELAY_MS,
+): Promise<QuickTunnelSnapshot> {
+  try {
+    return await startAttempt(options)
+  } catch (error) {
+    if (!isTransientQuickTunnelVerificationError(error)) throw error
+    await wait(Math.max(0, retryDelayMs))
+    return await startAttempt(options)
+  }
 }
 
 export async function stopQuickTunnel(): Promise<QuickTunnelSnapshot> {

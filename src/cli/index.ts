@@ -22,7 +22,7 @@ import { generatePassword } from '../server/password.js'
 import { RuntimeStore } from '../server/runtimeStore.js'
 import {
   ensureVerifiedCloudflared,
-  startQuickTunnel,
+  startQuickTunnelWithTransientRetry,
   stopQuickTunnel,
 } from '../server/quickTunnel.js'
 import { spawnSyncCommand } from '../utils/commandInvocation.js'
@@ -453,7 +453,7 @@ async function startServer(options: {
         throw new Error('cloudflared is not installed. Install it first, rerun in an interactive terminal to allow auto-install, or set cloudflaredCommand / CX_CODEX_CLOUDFLARED_COMMAND.')
       }
       resolvedCloudflaredCommand = cloudflaredCommand
-      const tunnel = await startQuickTunnel({
+      const tunnel = await startQuickTunnelWithTransientRetry({
         localPort: port,
         preferredCommand: cloudflaredCommand,
       })
