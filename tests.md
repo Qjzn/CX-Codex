@@ -13980,6 +13980,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 ### Current automated evidence (2026-07-25)
 
+- 正式 `v2.5.8` 公开资产新人回归通过：官方卸载先保留用户数据与 Codex 登录目录，README 一条命令随后安装 2.5.8；外层 PowerShell 捕获正常退出，stdout 仅一行 JSON，本机服务与 Quick Tunnel 均为 `ready`，公网健康、HTTP 鉴权和 WebSocket 鉴权全部通过。全新隔离浏览器从公网密码页登录，点击可见“新建会话”后进入新会话路由，“开始任务”、消息输入框和设置入口均可见，1254px 视口无横向溢出；临时测试浏览器和诊断日志已清理，未保存公网地址、密码或私人会话内容。
 - Windows 产品化源契约要求安装器在输出人类可读结果或 JSON 前等待 Quick Tunnel 运行态，并把 `active + ready + health + HTTP auth + WebSocket auth` 作为唯一成功边界；连续错误快照会保留约 4 秒，覆盖一次瞬时公网失败重试窗口。
 - 真实 7420 源码安装已在外层 PowerShell 变量捕获下通过：stdout 仅一行 JSON，安装调用在运行时进入 `ready` 后退出，本机健康与公网健康、HTTP 鉴权、WebSocket 鉴权全部通过，既有 Codex 登录目录保持不变。
 - Windows 产品化回归现在从外层 Windows PowerShell 变量捕获真实 `StartNow` 安装器 JSON；要求调用在 60 秒内退出、stdout 仍只有一行 JSON、服务继续存活且 `/health` 返回 200，随后官方卸载必须停止服务并关闭端口，从而直接覆盖正式 Release 安装回归发现的挂起路径。
