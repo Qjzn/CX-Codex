@@ -95,17 +95,15 @@ jobs:
         shell: pwsh
         run: |
           $installDir = "$env:TEMP\cx-codex-smoke-install"
-          New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+          $distCliDir = Join-Path $installDir "dist-cli"
+          New-Item -ItemType Directory -Path $distCliDir -Force | Out-Null
           Set-Content -LiteralPath (Join-Path $installDir "upgrade-lock.txt") -Value "previous installation"
+          $serverEntryPoint = Join-Path $distCliDir "index.js"
+          Set-Content -LiteralPath $serverEntryPoint -Value "setInterval(()=>{},60000)"
           $nodePath = (Get-Command node -ErrorAction Stop).Source
           $lockProcess = Start-Process `
             -FilePath $nodePath `
-            -ArgumentList @(
-              "-e",
-              "setInterval(()=>{},60000)",
-              "dist-cli/index.js",
-              $installDir
-            ) `
+            -ArgumentList @("`"$serverEntryPoint`"") `
             -WorkingDirectory $installDir `
             -WindowStyle Hidden `
             -PassThru
