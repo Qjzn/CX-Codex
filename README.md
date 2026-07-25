@@ -147,7 +147,7 @@ http://127.0.0.1:7420
 
 默认安装最新正式 Release，并校验 Release 包的 SHA-256；只有参与源码预览时才应显式使用 `-UseBranchArchive`。
 
-安装完成后，电脑本机打开 `http://127.0.0.1:7420/local-setup` 查看访问密码；该页面不允许通过公网域名访问。
+安装完成后，电脑本机打开 `http://127.0.0.1:7420/local-setup`，用手机扫描二维码打开临时地址，再输入页面显示的访问密码。二维码只在本机生成且只包含地址，不包含密码；配对页不允许通过公网域名访问。
 
 `-JsonOutput` 的 stdout 固定为单行 JSON，构建进度和诊断写入 stderr。成功结果包含 `schemaVersion`、`operation`、`version`、`started`、`healthReady`、本机/公网地址和结构化告警；失败结果返回 `BOOTSTRAP_FAILED` 与失败阶段，不输出密码、Cookie 或 Token。bootstrap 还会读取归档内的 `release-capabilities.json`，拒绝把新版参数交给不支持它们的旧 Release。
 

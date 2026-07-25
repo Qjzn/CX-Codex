@@ -57,9 +57,14 @@ try {
     throw "Isolated CX-Codex server did not become healthy."
   }
 
-  $localSetupStatus = (
-    Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/local-setup" -TimeoutSec 5
-  ).StatusCode
+  $localSetupBeforeTunnel = Invoke-WebRequest `
+    -UseBasicParsing `
+    -Uri "http://127.0.0.1:$Port/local-setup" `
+    -TimeoutSec 5
+  $localSetupStatus = $localSetupBeforeTunnel.StatusCode
+  if ($localSetupBeforeTunnel.Content -match 'aria-label="手机访问地址二维码"') {
+    throw "Local pairing page rendered a QR code before the tunnel was active."
+  }
   $remoteSetupStatus = 0
   try {
     Invoke-WebRequest `
@@ -90,8 +95,17 @@ try {
     }
   }
 
+  $localSetupHasQr = $false
   $stopped = $true
   if ($startState -and $startState.active) {
+    $localSetupReady = Invoke-WebRequest `
+      -UseBasicParsing `
+      -Uri "http://127.0.0.1:$Port/local-setup" `
+      -TimeoutSec 5
+    $localSetupHasQr = $localSetupReady.Content -match 'aria-label="手机访问地址二维码"'
+    if (-not $localSetupHasQr) {
+      throw "Local pairing page did not render a QR code for the active tunnel."
+    }
     Invoke-RestMethod `
       -Method Delete `
       -Uri "http://127.0.0.1:$Port/codex-api/tunnel-status" `
@@ -108,6 +122,7 @@ try {
     tunnelActive = [bool]$startState.active
     phase = if ($startState) { [string]$startState.phase } else { "error" }
     publicUrlReturned = -not [string]::IsNullOrWhiteSpace([string]$startState.publicUrl)
+    localSetupHasQr = $localSetupHasQr
     verification = if ($startState) { $startState.verification } else { $null }
     errorCode = $startErrorCode
     stopped = $stopped

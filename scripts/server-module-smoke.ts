@@ -435,6 +435,10 @@ import {
   CODEX_BRIDGE_SHARED_STATE_KEY,
   getCodexBridgeSharedState,
 } from '../src/server/codexBridgeSharedState.js'
+import {
+  renderLocalSetupHtml,
+  renderPairingQrSvg,
+} from '../src/server/localPairingPage.js'
 
 const originalNow = Date.now
 
@@ -456,6 +460,7 @@ try {
   smokeAppServerLaunch()
   smokeAppServerHealth()
   await smokeAuthMiddleware()
+  smokeLocalPairingPage()
   await smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
   smokeAppServerNotificationListeners()
@@ -1510,6 +1515,32 @@ async function smokeAuthMiddleware(): Promise<void> {
       delete process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES
     }
   }
+}
+
+function smokeLocalPairingPage(): void {
+  const publicUrl = 'https://pairing.example.test/connect?a=1&b=2'
+  const qrSvg = renderPairingQrSvg(publicUrl)
+  assert.match(qrSvg, /^<svg class="pairing-qr"/u)
+  assert.match(qrSvg, /aria-label="手机访问地址二维码"/u)
+  assert.match(qrSvg, /<path d="M/u)
+  assert.equal(qrSvg.includes(publicUrl), false)
+  assert.equal(renderPairingQrSvg('  '), '')
+
+  const html = renderLocalSetupHtml({
+    password: 'secret<&"',
+    publicUrl,
+  })
+  assert.match(html, /二维码只包含手机访问地址，不包含访问密码/u)
+  assert.match(html, /https:\/\/pairing\.example\.test\/connect\?a=1&amp;b=2/u)
+  assert.match(html, /secret&lt;&amp;&quot;/u)
+  assert.match(html, /在电脑上测试手机地址/u)
+
+  const inactiveHtml = renderLocalSetupHtml({
+    password: 'secret',
+    publicUrl: '',
+  })
+  assert.match(inactiveHtml, /临时地址尚未生成/u)
+  assert.equal(inactiveHtml.includes('<svg class="pairing-qr"'), false)
 }
 
 function smokeAppServerNotificationDiagnostics(): void {

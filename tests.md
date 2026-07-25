@@ -2,6 +2,25 @@
 
 This file tracks manual regression and feature verification steps.
 
+## Local phone-pairing QR (2026-07-25)
+
+### Expected behavior
+
+1. Opening `http://127.0.0.1:7420/local-setup` while Quick Tunnel is ready shows a scannable QR code for the active public URL.
+2. The QR code is generated locally, contains only the public URL, and never includes the CX-Codex password.
+3. The page keeps `Cache-Control: no-store`, a script-blocking Content Security Policy, and HTTP 404 for requests made through a non-loopback/public host.
+4. When no tunnel is active, the page shows the existing start-from-settings guidance and renders no QR SVG.
+5. At 393 × 852 the card, QR code, address, password, and warning remain readable without horizontal overflow.
+
+### Verification
+
+- Run `npm.cmd run build:cli`.
+- Run `npm.cmd run build:frontend`.
+- Run `npm.cmd run verify:server-modules`.
+- Run `node .\scripts\run-powershell-script.mjs .\scripts\verify-quick-tunnel.ps1`.
+- Start an isolated password-protected server, enable a temporary Quick Tunnel, and open `/local-setup` at 393 × 852.
+- Decode the rendered screenshot with a QR decoder and require it to match the server's active `publicUrl`; then stop the tunnel and isolated server.
+
 ## Phone-access settings priority (2026-07-25)
 
 ### Expected behavior
