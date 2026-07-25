@@ -91,6 +91,76 @@ jobs:
         shell: pwsh
         run: npm run verify:windows-productization
 
+      - name: Run locked in-place upgrade smoke test
+        shell: pwsh
+        run: |
+          $installDir = "$env:TEMP\cx-codex-smoke-install"
+          $distCliDir = Join-Path $installDir "dist-cli"
+          New-Item -ItemType Directory -Path $distCliDir -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $installDir "upgrade-lock.txt") -Value "previous installation"
+          $serverEntryPoint = Join-Path $distCliDir "index.js"
+          Set-Content -LiteralPath $serverEntryPoint -Value "require('node:net').createServer(()=>{}).listen(7441,'127.0.0.1')"
+          $nodePath = (Get-Command node -ErrorAction Stop).Source
+          $lockProcess = Start-Process `
+            -FilePath $nodePath `
+            -ArgumentList @("`"$serverEntryPoint`"") `
+            -WorkingDirectory $installDir `
+            -WindowStyle Hidden `
+            -PassThru
+          try {
+            $pidMarker = "$env:USERPROFILE\.cx-codex\cx-codex-7441.pid"
+            Set-Content -LiteralPath $pidMarker -Value ([string]$lockProcess.Id)
+            $listenDeadline = (Get-Date).AddSeconds(10)
+            do {
+              $listener = Get-NetTCPConnection -LocalPort 7441 -State Listen -ErrorAction SilentlyContinue
+              if ($listener) {
+                break
+              }
+              Start-Sleep -Milliseconds 100
+            } while ((Get-Date) -lt $listenDeadline)
+            if (-not $listener -or [int]$listener.OwningProcess -ne $lockProcess.Id) {
+              throw "Upgrade fixture did not acquire the expected listener and PID marker."
+            }
+            $branch = if ($env:GITHUB_HEAD_REF) { $env:GITHUB_HEAD_REF } else { $env:GITHUB_REF_NAME }
+            $jsonLines = @(
+              ./scripts/bootstrap-windows.ps1 `
+                -InstallDir $installDir `
+                -WorkspacePath "$env:TEMP\CodexWorkspace" `
+                -Port 7441 `
+                -Password "ci-password" `
+                -Branch $branch `
+                -UseBranchArchive `
+                -SkipStartupTask `
+                -SkipWatchdogTask `
+                -SkipFirewall `
+                -SkipLogin `
+                -NoStart `
+                -JsonOutput
+            )
+            if ($jsonLines.Count -ne 1) {
+              throw "Upgrade bootstrap JSON stdout must contain exactly one line; found $($jsonLines.Count)."
+            }
+            $result = $jsonLines[0] | ConvertFrom-Json
+            if (-not $result.ok -or $result.schemaVersion -ne 1 -or $result.operation -ne "install") {
+              throw "Upgrade bootstrap JSON result is invalid."
+            }
+            $lockProcess.Refresh()
+            if (-not $lockProcess.HasExited) {
+              throw "Upgrade bootstrap did not stop the process locking the previous installation."
+            }
+            if (-not (Test-Path -LiteralPath (Join-Path $installDir "package.json"))) {
+              throw "Upgrade bootstrap did not replace the installation."
+            }
+            if (-not (Test-Path -LiteralPath "$installDir.previous\upgrade-lock.txt")) {
+              throw "Upgrade bootstrap did not retain the previous installation for rollback."
+            }
+          } finally {
+            if (-not $lockProcess.HasExited) {
+              Stop-Process -Id $lockProcess.Id -Force -ErrorAction SilentlyContinue
+            }
+            $lockProcess.Dispose()
+          }
+
       - name: Run official uninstall cleanup
         if: always()
         shell: pwsh

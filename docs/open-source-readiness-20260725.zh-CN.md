@@ -2,7 +2,7 @@
 
 ## 结论
 
-当前改动可提交到公开仓库的 `main` 分支并作为 2.5.0 候选发布；协议基线漂移与历史 Google/Firebase key 仍需按下述边界持续处置，Release/README 已同步到可校验的正式安装链路。
+当前改动可提交到公开仓库的 `main` 分支并作为 2.5.2 候选发布；2.5.1 正式 Release 已完成资产校验与首次安装回归，2.5.2 补齐运行中重复升级。协议基线漂移与历史 Google/Firebase key 仍需按下述边界持续处置。
 
 ## 已通过
 
@@ -17,6 +17,8 @@
 - PowerShell 脚本语法检查与 `git diff --check`。
 - 真实 Cloudflare Quick Tunnel 验证：公网健康、未登录 HTTP API 401、未登录 WebSocket 鉴权均通过，停止后子进程退出。
 - 从无 CX-Codex 运行目录的状态按 README 完成安装、启动、公网登录、浏览器发送消息和接收回复；完整记录见 [Windows 新人安装实测与改进建议](./new-user-install-review-20260725.zh-CN.md)。
+- 从正式 2.5.1 Release 下载全部六个资产，三组 SHA-256 均通过；ZIP 包含两个 Vite HTML 入口，签名 APK 通过 APK Signature Scheme v2 校验。
+- 正式 2.5.1 首次安装返回稳定成功 JSON，本机健康和公网健康、HTTP 鉴权、WebSocket 鉴权验证均通过；重复安装暴露的目录锁定已在 2.5.2 修复并加入 Windows CI。
 - 当前工作树未发现 AWS、Google、GitHub、OpenAI 私钥或常见访问令牌格式。
 - 文档中的历史真实公网地址、个人用户目录和本机工作区路径已替换为 RFC 5737 示例地址或通用示例路径。
 - README 截图已人工查看；工作区、会话、地址和消息均为虚构内容。图片元数据未发现用户名、路径、GPS 或设备标识。
@@ -34,12 +36,12 @@
 2. 本机 Codex CLI 的 App Server schema 已明显领先仓库基线。`warn` 模式允许本次源码提交，但正式 Release 前应审阅生成的 TypeScript/JSON schema 差异并更新兼容矩阵。
 3. GitHub Dependabot 当前未启用，Code Scanning 也没有分析结果。npm 官方审计本次为 0，但仓库仍缺少持续依赖和静态安全告警。
 4. 前端构建仍有超过 500 kB 的 chunk 警告；它不阻断本次功能，但会影响首次打开速度。
-5. 2.5.0 已纳入 `-RemoteQuick`、稳定 JSON、能力清单和官方卸载器；README 默认使用 Release + SHA-256 链路。发布后仍需从正式 Release 下载执行一次完整安装/卸载回归。
+5. 2.5.2 发布后仍需从正式 Release 连续执行“首次安装 → 保持运行再次升级 → 官方卸载”，确认 GitHub 资产与本地候选门禁一致。
 
 ## 正式 Release 前门禁
 
 1. 处置历史 Google/Firebase key 并保留处置证据。
 2. 审阅 App Server schema 漂移，更新协议兼容说明。
 3. 发布与当前 `main` 同一提交对应的新版本和 SHA-256 文件。
-4. 新 Release 发布后，从 Release 归档再重复一次安装、登录、发送消息、接收回复、手机访问和卸载复测；当前已经完成 `main` 源码预览版实测。
+4. 2.5.2 Release 发布后，从正式归档连续执行首次安装、运行中重复升级、手机访问和卸载；聊天发送/接收沿用已经通过的真实新人链路，并在聊天相关变更时重新执行。
 5. 启用 Dependabot；条件允许时增加 CodeQL 或等价静态分析。

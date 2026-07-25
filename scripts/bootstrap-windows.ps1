@@ -231,6 +231,151 @@ function Get-Sha256Hex {
   return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
 }
 
+function Test-ManagedServerCommandLine {
+  param(
+    [string]$CommandLine,
+    [string[]]$ManagedPaths
+  )
+
+  if ([string]::IsNullOrWhiteSpace($CommandLine)) {
+    return $false
+  }
+
+  $normalizedCommandLine = $CommandLine.Replace('\', '/')
+  if ($normalizedCommandLine.IndexOf("dist-cli/index.js", [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+    return $false
+  }
+
+  foreach ($managedPath in $ManagedPaths) {
+    if ([string]::IsNullOrWhiteSpace($managedPath)) {
+      continue
+    }
+    $normalizedManagedPath = $managedPath.Replace('\', '/')
+    if ($normalizedCommandLine.IndexOf($normalizedManagedPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+      return $true
+    }
+  }
+  return $false
+}
+
+function Test-CommandLineContainsPath {
+  param(
+    [string]$CommandLine,
+    [string]$Path
+  )
+
+  if ([string]::IsNullOrWhiteSpace($CommandLine) -or [string]::IsNullOrWhiteSpace($Path)) {
+    return $false
+  }
+  return $CommandLine.Replace('\', '/').IndexOf(
+    $Path.Replace('\', '/'),
+    [System.StringComparison]::OrdinalIgnoreCase
+  ) -ge 0
+}
+
+function Stop-ManagedInstallationProcesses {
+  param([string]$TargetInstallDir)
+
+  $safeInstallDir = Assert-SafeInstallDirectory -Path $TargetInstallDir
+  if (-not (Test-Path -LiteralPath $safeInstallDir)) {
+    return
+  }
+
+  $configPath = Join-Path $ManagedStateDir "config.json"
+  $serverPidPath = Join-Path $ManagedStateDir "cx-codex-$Port.pid"
+  $configuredCloudflaredPath = ""
+  if (Test-Path -LiteralPath $configPath) {
+    try {
+      $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+      if ($config.cloudflaredCommand) {
+        $configuredCloudflaredPath = [System.IO.Path]::GetFullPath([string]$config.cloudflaredCommand)
+      }
+    } catch {
+      Write-BootstrapWarning "Could not read the existing CX-Codex config while preparing the upgrade."
+    }
+  }
+
+  $managedProcessIds = New-Object 'System.Collections.Generic.HashSet[int]'
+  $processes = @()
+  try {
+    $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+    foreach ($processInfo in $processes) {
+      $processId = [int]$processInfo.ProcessId
+      if (-not $processId -or $processId -eq $PID) {
+        continue
+      }
+
+      $commandLine = [string]$processInfo.CommandLine
+      if ([string]::IsNullOrWhiteSpace($commandLine)) {
+        continue
+      }
+      $isManagedServer = Test-ManagedServerCommandLine `
+        -CommandLine $commandLine `
+        -ManagedPaths @($safeInstallDir, $configPath, $ManagedLauncherPath)
+      $isManagedQuickTunnel =
+        $commandLine.IndexOf("cloudflared", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+        $commandLine.IndexOf("127.0.0.1`:$Port", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and (
+          (Test-CommandLineContainsPath -CommandLine $commandLine -Path $ManagedCloudflaredDir) -or
+          (Test-CommandLineContainsPath -CommandLine $commandLine -Path $configuredCloudflaredPath)
+        )
+
+      if ($isManagedServer -or $isManagedQuickTunnel) {
+        $managedProcessIds.Add($processId) | Out-Null
+      }
+    }
+  } catch {
+    Write-BootstrapWarning "Could not scan existing CX-Codex processes before the upgrade."
+  }
+
+  $recordedServerProcessId = 0
+  if (Test-Path -LiteralPath $serverPidPath) {
+    $recordedPidText = [string](Get-Content -LiteralPath $serverPidPath -Raw -ErrorAction SilentlyContinue)
+    [int]::TryParse($recordedPidText.Trim(), [ref]$recordedServerProcessId) | Out-Null
+  }
+  if ($recordedServerProcessId -gt 0 -and $recordedServerProcessId -ne $PID) {
+    try {
+      $listenerOwners = @(
+        Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
+          ForEach-Object { [int]$_.OwningProcess }
+      )
+      $recordedProcess = Get-Process -Id $recordedServerProcessId -ErrorAction SilentlyContinue
+      if ($recordedProcess -and $listenerOwners -contains $recordedServerProcessId -and $recordedProcess.ProcessName -eq "node") {
+        $managedProcessIds.Add($recordedServerProcessId) | Out-Null
+      }
+    } catch {
+      Write-BootstrapWarning "Could not verify the recorded CX-Codex process for port $Port."
+    }
+  }
+
+  if ($managedProcessIds.Count -eq 0) {
+    return
+  }
+
+  Write-Step "Stopping existing CX-Codex service"
+  foreach ($managedProcessId in $managedProcessIds) {
+    Stop-Process -Id $managedProcessId -Force -ErrorAction SilentlyContinue
+  }
+
+  $deadline = (Get-Date).AddSeconds(10)
+  do {
+    $remainingProcessIds = @(
+      $managedProcessIds |
+        Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }
+    )
+    if ($remainingProcessIds.Count -eq 0) {
+      break
+    }
+    Start-Sleep -Milliseconds 100
+  } while ((Get-Date) -lt $deadline)
+
+  if ($remainingProcessIds.Count -gt 0) {
+    throw "Could not stop the existing CX-Codex service before replacing $safeInstallDir."
+  }
+
+  Remove-Item -LiteralPath $serverPidPath -Force -ErrorAction SilentlyContinue
+  Write-BootstrapMessage "Stopped existing CX-Codex processes: $($managedProcessIds.Count)"
+}
+
 function Assert-SafeInstallDirectory {
   param([string]$Path)
 
@@ -354,6 +499,7 @@ function Install-RepositoryAtomically {
     Remove-Item -LiteralPath $backupDir -Recurse -Force
   }
   if (Test-Path -LiteralPath $safeInstallDir) {
+    Stop-ManagedInstallationProcesses -TargetInstallDir $safeInstallDir
     Move-Item -LiteralPath $safeInstallDir -Destination $backupDir
   }
 

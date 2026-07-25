@@ -2,6 +2,12 @@
 
 ## 未发布
 
+## 2.5.2 - 2026-07-25
+
+- 修复 Windows 上重复执行一键安装命令时，正在运行的 CX-Codex 进程占用安装目录，导致 bootstrap 在原子替换阶段报“文件正在被另一进程使用”的问题。
+- bootstrap 现在结合受管安装路径、`dist-cli/index.js`、配置/启动器路径、PID 标记与监听端口精确识别旧服务，并单独匹配对应 cloudflared 隧道；替换前停止并等待退出，无法确认停止时拒绝覆盖。
+- Windows CI 新增“进程占用旧安装目录 → 同命令原地升级 → 保留上一版本回滚目录”的回归，防止首次安装可用但后续升级失效。
+
 ## 2.5.1 - 2026-07-25
 
 - 修复 2.5.0 Release zip 遗漏 Vite 的 `local-preview.html` 入口，导致默认 bootstrap 已通过 SHA-256 校验和依赖安装后仍在构建阶段失败的问题；Release package smoke 现在强制检查两个根 HTML 入口。
