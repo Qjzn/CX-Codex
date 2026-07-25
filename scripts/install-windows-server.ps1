@@ -600,7 +600,7 @@ function Invoke-Npm {
     if ($JsonOutput -and $ProgressOutput) {
       $previousErrorActionPreference = $ErrorActionPreference
       try {
-        $ErrorActionPreference = "SilentlyContinue"
+        $ErrorActionPreference = "Continue"
         & $nodeExecutable $resolvedNpmCliPath @Arguments 2>&1 |
           ForEach-Object { [Console]::Error.WriteLine([string]$_) }
         $script:NpmExitCode = $LASTEXITCODE
@@ -617,7 +617,7 @@ function Invoke-Npm {
   if ($JsonOutput -and $ProgressOutput) {
     $previousErrorActionPreference = $ErrorActionPreference
     try {
-      $ErrorActionPreference = "SilentlyContinue"
+      $ErrorActionPreference = "Continue"
       & $npmExecutable @Arguments 2>&1 |
         ForEach-Object { [Console]::Error.WriteLine([string]$_) }
       $script:NpmExitCode = $LASTEXITCODE

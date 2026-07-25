@@ -357,6 +357,8 @@ if (-not $SkipPackageSmoke) {
     "SUPPORT.md",
     "CONTRIBUTING.md",
     "tests.md",
+    "index.html",
+    "local-preview.html",
     "docs\app-server-schema-audit-summary.json",
     "docs\app-server-protocol-matrix.zh-CN.md",
     "docs\changelog.zh-CN.md",

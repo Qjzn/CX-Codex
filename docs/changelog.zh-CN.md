@@ -2,6 +2,11 @@
 
 ## 未发布
 
+## 2.5.1 - 2026-07-25
+
+- 修复 2.5.0 Release zip 遗漏 Vite 的 `local-preview.html` 入口，导致默认 bootstrap 已通过 SHA-256 校验和依赖安装后仍在构建阶段失败的问题；Release package smoke 现在强制检查两个根 HTML 入口。
+- JSON 安装模式在 npm 真正失败时会继续输出原始 stderr 诊断，同时仍只依据 npm 退出码判断成功或失败，避免只看到笼统的 `npm run build failed`。
+
 ## 2.5.0 - 2026-07-25
 
 - Windows 安装/卸载开始使用版本化产品契约：归档新增 `release-capabilities.json`，bootstrap 在使用 `RemoteQuick` 或 `JsonOutput` 前先验证同版本能力，避免 raw bootstrap 与旧 Release 安装器错配。
