@@ -243,6 +243,7 @@
                 <span class="sidebar-settings-label">GitHub 热门项目</span>
                 <span class="sidebar-settings-toggle" :class="{ 'is-on': showGithubTrendingProjects }" />
               </button>
+              <RemoteAccessCard />
               <section class="sidebar-settings-section" aria-label="套餐余量">
                 <p class="sidebar-settings-section-title">套餐余量</p>
                 <div class="sidebar-settings-rate-limits">
@@ -298,7 +299,6 @@
                   {{ webBridgeSettingsStatus }}
                 </p>
               </section>
-              <RemoteAccessCard />
               <section v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="移动端连接">
                 <p class="sidebar-settings-section-title">移动端连接</p>
                 <div class="sidebar-settings-row sidebar-settings-row--static sidebar-settings-row--stacked">

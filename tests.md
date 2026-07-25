@@ -2,6 +2,21 @@
 
 This file tracks manual regression and feature verification steps.
 
+## Phone-access settings priority (2026-07-25)
+
+### Expected behavior
+
+1. Opening settings on desktop or phone shows the existing `手机访问` card directly after the basic settings rows.
+2. Users do not need to scroll past package usage or permission controls before they can generate, copy, open, refresh, stop, or inspect the local pairing password.
+3. Package usage, permission controls, Android-only settings, voice settings, and version information retain their existing behavior and relative order.
+4. The phone-access card keeps the existing Quick Tunnel status, safety verification, button labels, and responsive layout; this change only improves discovery.
+
+### Verification
+
+- Run `npm.cmd run build:frontend`.
+- Run `npm.cmd run test:7420:frontend`.
+- Open settings at desktop and 393 × 852 phone sizes, capture screenshots, and confirm `手机访问` appears before `套餐余量` and `权限控制` without horizontal overflow.
+
 ## Windows productization contract (2026-07-25)
 
 ### Expected behavior
