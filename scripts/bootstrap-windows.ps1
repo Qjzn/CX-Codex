@@ -13,6 +13,7 @@ param(
   [switch]$UseBranchArchive,
   [switch]$RemoteQuick,
   [switch]$JsonOutput,
+  [switch]$SkipOpenPairing,
   [switch]$SkipStartupTask,
   [switch]$SkipWatchdogTask,
   [switch]$SkipFirewall,
@@ -109,6 +110,147 @@ function Write-Step {
   param([string]$Message)
   Write-BootstrapMessage ""
   Write-BootstrapMessage "==> $Message" -ForegroundColor Green
+}
+
+function Invoke-InstallerWithProgress {
+  param(
+    [string]$InstallerPath,
+    [string[]]$Arguments
+  )
+
+  $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
+  $captureRoot = [System.IO.Path]::GetFullPath(
+    (Join-Path $tempRoot "cx-codex-bootstrap-installer-$PID")
+  ).TrimEnd('\')
+  if (-not $captureRoot.StartsWith("$tempRoot\", [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Unsafe installer capture directory: $captureRoot"
+  }
+
+  if (Test-Path -LiteralPath $captureRoot) {
+    Remove-Item -LiteralPath $captureRoot -Recurse -Force
+  }
+  New-Item -ItemType Directory -Path $captureRoot -Force | Out-Null
+
+  $stdoutPath = Join-Path $captureRoot "stdout.log"
+  $stderrPath = Join-Path $captureRoot "stderr.log"
+  $rawArguments = @(
+    "-NoProfile",
+    "-OutputFormat", "Text",
+    "-ExecutionPolicy", "Bypass",
+    "-File", $InstallerPath
+  ) + $Arguments
+  $argumentList = @(
+    $rawArguments | ForEach-Object {
+      '"' + ([string]$_).Replace('"', '\"') + '"'
+    }
+  )
+  $process = $null
+  $publishedStderrCharacters = 0
+  $startedAt = Get-Date
+  $nextHeartbeatAt = $startedAt.AddSeconds(15)
+
+  try {
+    $process = Start-Process `
+      -FilePath "powershell.exe" `
+      -ArgumentList $argumentList `
+      -WindowStyle Hidden `
+      -PassThru `
+      -RedirectStandardOutput $stdoutPath `
+      -RedirectStandardError $stderrPath
+
+    while (-not $process.HasExited) {
+      Start-Sleep -Milliseconds 250
+      $process.Refresh()
+
+      $stderrText = if (Test-Path -LiteralPath $stderrPath) {
+        [string](Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue)
+      } else {
+        ""
+      }
+      if ($stderrText.Length -gt $publishedStderrCharacters) {
+        $pendingText = $stderrText.Substring($publishedStderrCharacters)
+        $lastCompleteLine = $pendingText.LastIndexOf("`n")
+        if ($lastCompleteLine -ge 0) {
+          $completeText = $pendingText.Substring(0, $lastCompleteLine + 1)
+          $completeText -split "\r?\n" |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            ForEach-Object { Write-BootstrapMessage ([string]$_) }
+          $publishedStderrCharacters += $completeText.Length
+        }
+      }
+
+      $now = Get-Date
+      if ($now -ge $nextHeartbeatAt) {
+        $elapsedSeconds = [Math]::Max(15, [int][Math]::Round(($now - $startedAt).TotalSeconds))
+        Write-BootstrapMessage "CX-Codex is still installing ($elapsedSeconds seconds elapsed). First-time setup usually takes 2-5 minutes; keep this window open."
+        $nextHeartbeatAt = $now.AddSeconds(15)
+      }
+    }
+
+    $process.WaitForExit()
+    $stderrText = if (Test-Path -LiteralPath $stderrPath) {
+      [string](Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue)
+    } else {
+      ""
+    }
+    if ($stderrText.Length -gt $publishedStderrCharacters) {
+      $stderrText.Substring($publishedStderrCharacters) -split "\r?\n" |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        ForEach-Object { Write-BootstrapMessage ([string]$_) }
+    }
+
+    return [ordered]@{
+      ExitCode = [int]$process.ExitCode
+      Stdout = if (Test-Path -LiteralPath $stdoutPath) {
+        [string](Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue)
+      } else {
+        ""
+      }
+    }
+  } finally {
+    if ($process) {
+      if (-not $process.HasExited) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        $process.WaitForExit(2000) | Out-Null
+      }
+      $process.Dispose()
+    }
+    if (Test-Path -LiteralPath $captureRoot) {
+      Remove-Item -LiteralPath $captureRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
+function Open-LocalPairingPage {
+  param([int]$TargetPort)
+
+  $pairingUrl = "http://127.0.0.1:$TargetPort/local-setup"
+  try {
+    $tunnelStatus = (
+      Invoke-RestMethod `
+        -Uri "http://127.0.0.1:$TargetPort/codex-api/tunnel-status" `
+        -TimeoutSec 5
+    ).data
+    $verification = $tunnelStatus.verification
+    $ready =
+      [bool]$tunnelStatus.active -and
+      [string]$tunnelStatus.phase -eq "ready" -and
+      [bool]$verification.health -and
+      [bool]$verification.auth -and
+      [bool]$verification.websocketAuth
+    if (-not $ready) {
+      throw "The temporary public address is not ready."
+    }
+
+    $response = Invoke-WebRequest -UseBasicParsing -Uri $pairingUrl -TimeoutSec 5
+    if ($response.StatusCode -ne 200) {
+      throw "The local pairing page returned HTTP $($response.StatusCode)."
+    }
+    Start-Process -FilePath $pairingUrl | Out-Null
+    Write-BootstrapMessage "Opened the local phone-pairing page. If no browser appeared, open $pairingUrl manually."
+  } catch {
+    Write-BootstrapWarning "CX-Codex is installed, but the local phone-pairing page could not be opened automatically. Open $pairingUrl manually."
+  }
 }
 
 function Get-ToolVersionObject {
@@ -684,9 +826,6 @@ if (-not (Test-Path -LiteralPath $installScript)) {
 }
 
 $invokeArgs = @(
-  "-NoProfile",
-  "-ExecutionPolicy", "Bypass",
-  "-File", $installScript,
   "-ProjectPath", $WorkspacePath,
   "-CreateProjectPath",
   "-Port", "$Port",
@@ -735,8 +874,19 @@ if ($JsonOutput) {
 
 $script:BootstrapStage = "run_installer"
 Write-Step "Running installer"
-& powershell.exe @invokeArgs
-$installerExitCode = $LASTEXITCODE
+$installerResult = Invoke-InstallerWithProgress -InstallerPath $installScript -Arguments $invokeArgs
+$installerExitCode = [int]$installerResult.ExitCode
+if (-not [string]::IsNullOrWhiteSpace([string]$installerResult.Stdout)) {
+  if ($JsonOutput) {
+    $installerResult.Stdout -split "\r?\n" |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+      Write-Output
+  } else {
+    $installerResult.Stdout -split "\r?\n" |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+      ForEach-Object { Write-BootstrapMessage ([string]$_) }
+  }
+}
 if ($installerExitCode -ne 0) {
   if ([string]::IsNullOrWhiteSpace($SourceRepoRoot)) {
     $safeInstallDir = Assert-SafeInstallDirectory -Path $InstallDir
@@ -768,6 +918,10 @@ if ($installerExitCode -ne 0) {
     }
   }
   throw "Installer failed with exit code $installerExitCode"
+}
+
+if ($RemoteQuick -and -not $SkipOpenPairing -and -not $NoStart) {
+  Open-LocalPairingPage -TargetPort $Port
 }
 
 $script:BootstrapStage = "complete"

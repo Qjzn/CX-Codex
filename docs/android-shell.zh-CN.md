@@ -63,7 +63,7 @@ npm run mobile:android:open
 
 当前工作区已经支持本地签名版 APK：
 
-- 本地 keystore：`%USERPROFILE%\\.cx-codex\\android-signing\\cxcodex-release.jks`
+- 本地 keystore：`%USERPROFILE%\\.codexui\\android-signing\\codexui-release.jks`
 - 本地签名配置：`android/keystore.properties`
 
 这两个文件只用于当前机器：
@@ -288,7 +288,10 @@ Android 侧分三段持久收敛：Service 成功启动后才声明事件；权�
 
 - 构建 Web Release 包
 - 构建签名版 `CX-Codex` Android APK
+- 校验 APK 签名证书 SHA-256 与项目固定证书一致
 - 将 APK 与 `.sha256` 一并挂到 GitHub Release
+
+正式 Release 不再回退发布 Debug APK。缺少任一签名 secret、签名失败或证书指纹变化都会中止发布。本地 Debug 构建使用 `com.cxcodex.bridge.debug`，不会与正式版 `com.cxcodex.bridge` 发生覆盖安装冲突。
 
 ## 已知边界
 

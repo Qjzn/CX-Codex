@@ -88,6 +88,7 @@ $uninstallScript = Join-Path $repoRoot "scripts\uninstall-windows.ps1"
 $bootstrapScript = Join-Path $repoRoot "scripts\bootstrap-windows.ps1"
 $testRoot = Join-Path $env:TEMP "cx-codex-productization-$PID"
 $installSource = Get-Content -LiteralPath $installScript -Raw
+$bootstrapSource = Get-Content -LiteralPath $bootstrapScript -Raw
 Assert-True `
   ($installSource -match "function\s+Wait-ForTunnelReadyState") `
   "Windows installer must wait for the runtime tunnel readiness state."
@@ -97,6 +98,12 @@ Assert-True `
 Assert-True `
   ($installSource -match '\$runtimeTunnel\s*=\s*if\s*\(\$Tunnel[\s\S]*?Wait-ForTunnelReadyState[\s\S]*?if\s*\(-not\s+\$JsonOutput\)') `
   "Tunnel readiness must settle before human or JSON install output is emitted."
+Assert-True `
+  ($bootstrapSource -match 'function\s+Invoke-InstallerWithProgress[\s\S]*?AddSeconds\(15\)[\s\S]*?CX-Codex is still installing[\s\S]*?Write-BootstrapMessage') `
+  "Bootstrap must emit a password-free 15-second installer heartbeat through the diagnostic channel."
+Assert-True `
+  ($bootstrapSource -match '\[switch\]\$SkipOpenPairing[\s\S]*?function\s+Open-LocalPairingPage[\s\S]*?verification\.websocketAuth[\s\S]*?Start-Process\s+-FilePath\s+\$pairingUrl') `
+  "RemoteQuick pairing must support opt-out and open only after all public verification gates pass."
 
 if (Test-Path -LiteralPath $testRoot) {
   $resolvedTemp = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\')
@@ -117,6 +124,63 @@ try {
   $nodePath = (Get-Command node -ErrorAction Stop).Source
   $nodeRoot = Split-Path -Parent $nodePath
   $npmCliPath = Join-Path $nodeRoot "node_modules\npm\bin\npm-cli.js"
+
+  $heartbeatFixtureRoot = Join-Path $testRoot "heartbeat source with spaces"
+  $heartbeatFixtureScripts = Join-Path $heartbeatFixtureRoot "scripts"
+  New-Item -ItemType Directory -Path $heartbeatFixtureScripts -Force | Out-Null
+  Set-Content `
+    -LiteralPath (Join-Path $heartbeatFixtureRoot "release-capabilities.json") `
+    -Encoding UTF8 `
+    -Value '{"schemaVersion":1,"installerContractVersion":1,"features":{"remoteQuick":true,"jsonOutput":true}}'
+  Set-Content `
+    -LiteralPath (Join-Path $heartbeatFixtureScripts "install-windows-server.ps1") `
+    -Encoding UTF8 `
+    -Value @'
+[CmdletBinding()]
+param(
+  [Parameter(ValueFromRemainingArguments = $true)]
+  [object[]]$RemainingArguments
+)
+[Console]::Error.WriteLine("fixture installer diagnostic")
+Start-Sleep -Seconds 16
+[ordered]@{
+  schemaVersion = 1
+  operation = "install"
+  ok = $true
+  started = $false
+  healthReady = $false
+  pairingUrl = ""
+  publicUrl = ""
+} | ConvertTo-Json -Compress | Write-Output
+'@
+  $heartbeatResult = Invoke-CapturedPowerShell `
+    -ScriptPath $bootstrapScript `
+    -Arguments @(
+      "-SourceRepoRoot", $heartbeatFixtureRoot,
+      "-InstallDir", (Join-Path $testRoot "heartbeat-install"),
+      "-WorkspacePath", (Join-Path $testRoot "heartbeat-workspace"),
+      "-Port", "17419",
+      "-NoStart",
+      "-JsonOutput",
+      "-SkipOpenPairing"
+    ) `
+    -CaptureRoot $testRoot `
+    -Label "bootstrap-heartbeat" `
+    -TimeoutSeconds 45
+  Assert-True ($heartbeatResult.ExitCode -eq 0) "Bootstrap heartbeat smoke exited with $($heartbeatResult.ExitCode). $($heartbeatResult.Stderr)"
+  $heartbeatJson = ConvertFrom-SingleJsonLine -Text $heartbeatResult.Stdout -Label "Bootstrap heartbeat smoke"
+  Assert-True ([bool]$heartbeatJson.ok) "Bootstrap heartbeat smoke must preserve the child installer JSON result."
+  Assert-True `
+    ($heartbeatResult.Stderr -match 'CX-Codex is still installing \(\d+ seconds elapsed\)') `
+    "Bootstrap heartbeat smoke must emit a live 15-second diagnostic."
+  Assert-True `
+    ($heartbeatResult.Stderr -match 'fixture installer diagnostic' -and $heartbeatResult.Stderr -notmatch 'CLIXML') `
+    "Bootstrap must forward child diagnostics as readable text. $($heartbeatResult.Stderr)"
+  Assert-True `
+    ($heartbeatResult.Stdout -notmatch '(?i)password|cookie|token') `
+    "Bootstrap heartbeat stdout must not expose credentials."
+  Write-Host "productization: bootstrap heartbeat and stable stdout passed"
+
   $installerArgs = @(
     "-ProjectPath", (Join-Path $testRoot "workspace"),
     "-CreateProjectPath",

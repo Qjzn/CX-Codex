@@ -631,7 +631,7 @@ Assert-ContentIncludes ".github/release-body.md" @(
   "docs/candidate-release-review.zh-CN.md",
   "CX-Codex-<tag>.zip",
   "cx-codex-android-<tag>.apk",
-  "cx-codex-android-debug-<tag>.apk",
+  "stable official release certificate",
   "npm run verify:release -- -RequireCleanGit -SchemaAudit skip",
   "npm run package:release -- -Version <tag> -OutputDir <release-dir>",
   "npm run verify:release-artifacts -- -OutputDir <release-dir>",
@@ -644,7 +644,21 @@ Assert-ContentIncludes ".github/workflows/release.yml" @(
   "Verify release metadata",
   "Release tag `$env:GITHUB_REF_NAME does not match package version `$packageVersion.",
   "docs/release-notes-`$tagVersion.zh-CN.md",
+  "Require Android release signing secrets",
+  "Verify Android release signature",
+  "ANDROID_RELEASE_CERT_SHA256",
   'body_path: ${{ steps.release-metadata.outputs.release_notes_path }}'
+)
+
+Assert-ContentExcludes ".github/workflows/release.yml" @(
+  "assembleDebug",
+  "android-debug",
+  "debug APK fallback"
+)
+
+Assert-ContentExcludes ".github/release-body.md" @(
+  "cx-codex-android-debug-<tag>.apk",
+  "debug APK fallback"
 )
 
 Assert-ContentIncludes $releaseNotesPath @(

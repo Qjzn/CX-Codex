@@ -10,14 +10,13 @@ This release is built from the tagged source in this repository. It is intended 
 - Review [docs/security-hardening.zh-CN.md](./docs/security-hardening.zh-CN.md) before exposing the service beyond localhost or LAN.
 - Review [docs/openai-docs-review.zh-CN.md](./docs/openai-docs-review.zh-CN.md) and [docs/app-server-protocol-matrix.zh-CN.md](./docs/app-server-protocol-matrix.zh-CN.md) for Codex App Server / OpenAI API compatibility notes.
 - Review [docs/candidate-release-review.zh-CN.md](./docs/candidate-release-review.zh-CN.md) before treating schema drift, MCP/plugin, WebSocket, Realtime, filesystem, terminal, or permission-profile capabilities as stable.
-- If Android assets include a debug APK instead of a signed release APK, the repository has not configured Android signing secrets for this run.
+- Android assets are published only after the stable official signing certificate passes the release fingerprint gate.
 
 ## Assets
 
 - `CX-Codex-<tag>.zip`: source, docs, scripts, and built Web / CLI assets for self-hosted deployment and audit.
 - `CX-Codex-<tag>.sha256`: checksum for the release zip.
-- `cx-codex-android-<tag>.apk`: signed Android APK, when signing secrets are configured.
-- `cx-codex-android-debug-<tag>.apk`: debug APK fallback for self-hosted testing when signing secrets are not configured.
+- `cx-codex-android-<tag>.apk`: Android APK signed with the stable official release certificate.
 - `*.sha256`: checksum files for each uploaded zip or APK asset.
 
 ## Verification
@@ -47,7 +46,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercont
 
 On first launch, enter your own CX-Codex service URL. The Android app does not ship with a private server address.
 
-If you previously installed a debug APK and this release provides a signed APK, Android may require uninstalling the debug build before installing the signed build.
+Official signed releases can update earlier official signed releases in place. Development builds use a separate application id and do not replace the official app.
 
 Deep-Doze FCM wake is optional and is not enabled by source support alone. The default release workflow does not bundle a project-specific `google-services.json` or server service-account credential. Self-hosters must configure matching Android/server Firebase projects, rebuild the APK, and pass `npm run verify:mobile-push-readiness -- --require-ready` with a real registered device and active task before calling this channel ready. Foreground service, SSE, bounded polling, network recovery, and manual refresh remain available without Firebase.
 

@@ -42,16 +42,19 @@ This file tracks manual regression and feature verification steps.
 
 1. `-JsonOutput` writes exactly one non-empty JSON line to stdout; progress and diagnostics use stderr.
 2. A successful result reports schema/operation/version plus separate `started` and `healthReady` flags. A bootstrap failure reports `BOOTSTRAP_FAILED` and the failing stage without a password, Cookie, or Token.
-3. `release-capabilities.json` must declare `remoteQuick`, `jsonOutput`, the stable JSON contract, and Windows uninstall support before the bootstrap combines those options with an archive.
-4. The official uninstaller removes only managed program/system entries by default and preserves CX-Codex user data, Codex login, workspaces, and Android signing files.
-5. `-RemoveUserData -RemoveCloudflared` additionally removes the CX-Codex state directory and only project-managed cloudflared files.
-6. `StartNow` must start an isolated service, pass `/health` with HTTP 200, and the official uninstaller must stop that service and close the port.
-7. Re-running bootstrap while the managed service is active must stop only the matching service/tunnel, atomically replace the installation, and retain the previous directory for rollback.
+3. While the child installer is running, bootstrap forwards diagnostics and writes a password-free heartbeat to stderr every 15 seconds without adding stdout records.
+4. Successful `RemoteQuick` opens the loopback-only pairing page only after local health, public health, HTTP auth, and WebSocket auth are ready; `-SkipOpenPairing` disables this side effect, and browser launch failure remains a non-fatal warning.
+5. `release-capabilities.json` must declare `remoteQuick`, `jsonOutput`, the stable JSON contract, and Windows uninstall support before the bootstrap combines those options with an archive.
+6. The official uninstaller removes only managed program/system entries by default and preserves CX-Codex user data, Codex login, workspaces, and Android signing files.
+7. `-RemoveUserData -RemoveCloudflared` additionally removes the CX-Codex state directory and only project-managed cloudflared files.
+8. `StartNow` must start an isolated service, pass `/health` with HTTP 200, and the official uninstaller must stop that service and close the port.
+9. Re-running bootstrap while the managed service is active must stop only the matching service/tunnel, atomically replace the installation, and retain the previous directory for rollback.
 
 ### Verification
 
 - Run `npm.cmd run verify:windows-productization`.
 - Run `npm.cmd run verify:governance`.
+- Parse bootstrap with Windows PowerShell and confirm the heartbeat and pairing-page messages use stderr in JSON mode while stdout remains one final JSON line.
 - Confirm the Windows GitHub Actions job runs the productization smoke and always invokes the official uninstall cleanup.
 - Confirm the Windows GitHub Actions job starts a Node service plus child process from the old install directory, records its managed PID/listener, and completes an in-place branch-archive upgrade without a directory-lock failure.
 - Confirm the Release zip contains `release-capabilities.json`, `scripts/uninstall-windows.ps1`, and `scripts/verify-windows-productization.ps1`.
@@ -70,6 +73,22 @@ This file tracks manual regression and feature verification steps.
 - Official uninstall must collect every descendant of a verified managed root, stop the tree in child-first order, wait once for the selected tree, and return no `PROCESS_STOP_TIMEOUT` warning when the tree exits. The Windows productization smoke uses a real listening Node root plus child process and requires both PIDs, the port, and the installation directory to be gone.
 - Formal 2.5.4 passed all six public asset checks and a warning-free five-process uninstall. Its first upgrade reached local health but the newly issued Quick Tunnel remained publicly unreachable; manually starting again succeeded with all three verification flags in about 20 seconds. The managed retry must therefore retry exactly once only for `HTTP unreachable`, while observable wrong auth statuses such as HTTP 200 must fail after one attempt and keep the tunnel closed.
 - A separate unmanaged 30-second directory lock was not killed; bootstrap exhausted its finite move retries, returned `BOOTSTRAP_FAILED`, automatically restarted the preserved 2.5.2 service, and recovered local health plus all three Quick Tunnel verification flags.
+
+## Android release signing contract (2026-07-25)
+
+### Expected behavior
+
+1. A tagged GitHub Release fails before Android packaging if any required signing secret is absent.
+2. The generated release APK must use package id `com.cxcodex.bridge` and certificate SHA-256 `f06cc88920b5f0cdc55c5ddcd51694fcf0131431900dbb24e8bd8820d965d4d4`.
+3. GitHub Releases never publish an `android-debug` fallback asset.
+4. Local Debug builds use `com.cxcodex.bridge.debug`, so development and official apps can coexist without a signature conflict.
+
+### Verification
+
+- Run `npm.cmd run verify:governance`.
+- Build `assembleRelease`, verify the package/version with `aapt`, and verify the certificate with `apksigner verify --print-certs`.
+- Build `assembleDebug` and confirm its package id is `com.cxcodex.bridge.debug`.
+- After tagging, require the Release workflow to pass and verify that the public asset list contains the signed APK and checksum but no Debug APK.
 
 ## Windows clean-install newcomer journey (2026-07-25)
 
