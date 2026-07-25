@@ -95,6 +95,7 @@ if (Test-Path -LiteralPath $testRoot) {
 }
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 $runtimeCleanupArgs = $null
+$originalCodexHome = $env:CODEX_HOME
 
 try {
   $nodePath = (Get-Command node -ErrorAction Stop).Source
@@ -216,8 +217,12 @@ try {
   $runtimeStateDir = Join-Path $testRoot "runtime-state"
   $runtimeBinDir = Join-Path $testRoot "runtime-bin"
   $runtimeLauncherPath = Join-Path $runtimeBinDir "cx-codex-start.cmd"
+  $runtimeCodexHome = Join-Path $testRoot "runtime-codex-home"
   New-Item -ItemType Directory -Path $runtimeInstallDir -Force | Out-Null
+  New-Item -ItemType Directory -Path $runtimeCodexHome -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $runtimeInstallDir "marker.txt") -Value "managed runtime program"
+  Set-Content -LiteralPath (Join-Path $runtimeCodexHome "auth.json") -Value "{}"
+  $env:CODEX_HOME = $runtimeCodexHome
   $runtimeInstallerArgs = @(
     "-ProjectPath", (Join-Path $testRoot "runtime-workspace"),
     "-CreateProjectPath",
@@ -227,6 +232,7 @@ try {
     "-ConfigPath", (Join-Path $runtimeStateDir "config.json"),
     "-LauncherPath", $runtimeLauncherPath,
     "-NodeCommand", $nodePath,
+    "-CodexCommand", $nodePath,
     "-SkipNpmInstall",
     "-SkipBuild",
     "-StartNow",
@@ -253,7 +259,7 @@ try {
   Write-Host "productization: StartNow installer returned"
   Assert-True ($runtimeInstallResult.ExitCode -eq 0) "StartNow installer smoke exited with $($runtimeInstallResult.ExitCode). $($runtimeInstallResult.Stderr)"
   $runtimeInstallJson = ConvertFrom-SingleJsonLine -Text $runtimeInstallResult.Stdout -Label "StartNow installer smoke"
-  Assert-True ([bool]$runtimeInstallJson.ok) "StartNow installer must report ok=true."
+  Assert-True ([bool]$runtimeInstallJson.ok) "StartNow installer must report ok=true. $($runtimeInstallResult.Stderr)"
   Assert-True ([bool]$runtimeInstallJson.started) "StartNow installer must report started=true."
   Assert-True ([bool]$runtimeInstallJson.healthReady) "StartNow installer must pass the local health gate."
   $healthResponse = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$runtimePort/health" -TimeoutSec 5
@@ -331,5 +337,10 @@ try {
     if ($resolvedTestRoot.StartsWith("$resolvedTemp\", [System.StringComparison]::OrdinalIgnoreCase)) {
       Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
     }
+  }
+  if ([string]::IsNullOrWhiteSpace($originalCodexHome)) {
+    Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
+  } else {
+    $env:CODEX_HOME = $originalCodexHome
   }
 }

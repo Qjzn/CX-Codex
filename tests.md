@@ -26,6 +26,7 @@ This file tracks manual regression and feature verification steps.
 - StartNow uses port-specific stdout/stderr logs so an already-running 7420 process cannot lock the new test instance's log files.
 - Process replacement is scoped to the target port/config/launcher instead of every CX-Codex process that happens to use the same source directory.
 - JSON progress forwarding treats native npm/Vite stderr as diagnostics and uses the actual npm exit code, so GitHub Windows Runner warnings cannot turn a successful build into a failed install.
+- The StartNow smoke uses an isolated temporary Codex Home and synthetic local auth marker, so CI validates the 7420 lifecycle without installing Codex or opening an interactive login flow.
 
 ## Windows clean-install newcomer journey (2026-07-25)
 
