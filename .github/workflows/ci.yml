@@ -99,7 +99,7 @@ jobs:
           New-Item -ItemType Directory -Path $distCliDir -Force | Out-Null
           Set-Content -LiteralPath (Join-Path $installDir "upgrade-lock.txt") -Value "previous installation"
           $serverEntryPoint = Join-Path $distCliDir "index.js"
-          Set-Content -LiteralPath $serverEntryPoint -Value "require('node:net').createServer(()=>{}).listen(7441,'127.0.0.1')"
+          Set-Content -LiteralPath $serverEntryPoint -Value "const{spawn}=require('node:child_process');spawn(process.execPath,['-e','setInterval(()=>{},60000)'],{stdio:'ignore'});require('node:net').createServer(()=>{}).listen(7441,'127.0.0.1')"
           $nodePath = (Get-Command node -ErrorAction Stop).Source
           $lockProcess = Start-Process `
             -FilePath $nodePath `
