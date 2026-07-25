@@ -25,6 +25,7 @@ This file tracks manual regression and feature verification steps.
 - The isolated Windows smoke passed stable install JSON, preserving uninstall, full cleanup, real StartNow health, post-uninstall port closure, and bootstrap failure JSON.
 - StartNow uses port-specific stdout/stderr logs so an already-running 7420 process cannot lock the new test instance's log files.
 - Process replacement is scoped to the target port/config/launcher instead of every CX-Codex process that happens to use the same source directory.
+- JSON progress forwarding treats native npm/Vite stderr as diagnostics and uses the actual npm exit code, so GitHub Windows Runner warnings cannot turn a successful build into a failed install.
 
 ## Windows clean-install newcomer journey (2026-07-25)
 

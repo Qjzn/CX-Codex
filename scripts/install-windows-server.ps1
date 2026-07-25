@@ -595,21 +595,38 @@ function Invoke-Npm {
     [switch]$ProgressOutput
   )
 
+  $script:NpmExitCode = 0
   if ($resolvedNpmCliPath) {
     if ($JsonOutput -and $ProgressOutput) {
-      & $nodeExecutable $resolvedNpmCliPath @Arguments 2>&1 |
-        ForEach-Object { [Console]::Error.WriteLine([string]$_) }
+      $previousErrorActionPreference = $ErrorActionPreference
+      try {
+        $ErrorActionPreference = "SilentlyContinue"
+        & $nodeExecutable $resolvedNpmCliPath @Arguments 2>&1 |
+          ForEach-Object { [Console]::Error.WriteLine([string]$_) }
+        $script:NpmExitCode = $LASTEXITCODE
+      } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+      }
     } else {
       & $nodeExecutable $resolvedNpmCliPath @Arguments
+      $script:NpmExitCode = $LASTEXITCODE
     }
     return
   }
 
   if ($JsonOutput -and $ProgressOutput) {
-    & $npmExecutable @Arguments 2>&1 |
-      ForEach-Object { [Console]::Error.WriteLine([string]$_) }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+      $ErrorActionPreference = "SilentlyContinue"
+      & $npmExecutable @Arguments 2>&1 |
+        ForEach-Object { [Console]::Error.WriteLine([string]$_) }
+      $script:NpmExitCode = $LASTEXITCODE
+    } finally {
+      $ErrorActionPreference = $previousErrorActionPreference
+    }
   } else {
     & $npmExecutable @Arguments
+    $script:NpmExitCode = $LASTEXITCODE
   }
 }
 
@@ -633,16 +650,16 @@ try {
     Write-Step "Installing npm dependencies"
     $installCommand = if (Test-Path -LiteralPath (Join-Path $repoRoot "package-lock.json")) { "ci" } else { "install" }
     Invoke-Npm -Arguments @($installCommand) -ProgressOutput
-    if ($LASTEXITCODE -ne 0) {
-      throw "npm $installCommand failed with exit code $LASTEXITCODE"
+    if ($script:NpmExitCode -ne 0) {
+      throw "npm $installCommand failed with exit code $script:NpmExitCode"
     }
   }
 
   if (-not $SkipBuild) {
     Write-Step "Building CX-Codex"
     Invoke-Npm -Arguments @("run", "build") -ProgressOutput
-    if ($LASTEXITCODE -ne 0) {
-      throw "npm run build failed with exit code $LASTEXITCODE"
+    if ($script:NpmExitCode -ne 0) {
+      throw "npm run build failed with exit code $script:NpmExitCode"
     }
   }
 } finally {
