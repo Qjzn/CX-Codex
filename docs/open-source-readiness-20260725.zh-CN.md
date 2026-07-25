@@ -2,7 +2,7 @@
 
 ## 结论
 
-当前改动可提交到公开仓库的 `main` 分支；正式 Release 仍应先完成协议基线复核、历史 Google/Firebase key 处置和 Release/README 同步。
+当前改动可提交到公开仓库的 `main` 分支并作为 2.5.0 候选发布；协议基线漂移与历史 Google/Firebase key 仍需按下述边界持续处置，Release/README 已同步到可校验的正式安装链路。
 
 ## 已通过
 
@@ -34,7 +34,7 @@
 2. 本机 Codex CLI 的 App Server schema 已明显领先仓库基线。`warn` 模式允许本次源码提交，但正式 Release 前应审阅生成的 TypeScript/JSON schema 差异并更新兼容矩阵。
 3. GitHub Dependabot 当前未启用，Code Scanning 也没有分析结果。npm 官方审计本次为 0，但仓库仍缺少持续依赖和静态安全告警。
 4. 前端构建仍有超过 500 kB 的 chunk 警告；它不阻断本次功能，但会影响首次打开速度。
-5. 最新正式 Release 仍是 `2.4.1`，不包含 `-RemoteQuick`。README 暂时显式使用 `-UseBranchArchive` 安装 `main` 预览版，因此没有 Release 归档的 SHA-256 保证。发布包含本功能的新 Release 后，应立即移除该参数。
+5. 2.5.0 已纳入 `-RemoteQuick`、稳定 JSON、能力清单和官方卸载器；README 默认使用 Release + SHA-256 链路。发布后仍需从正式 Release 下载执行一次完整安装/卸载回归。
 
 ## 正式 Release 前门禁
 

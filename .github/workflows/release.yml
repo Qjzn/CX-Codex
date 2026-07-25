@@ -32,6 +32,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify release metadata
+        id: release-metadata
+        shell: pwsh
+        run: |
+          $tagVersion = $env:GITHUB_REF_NAME.TrimStart('v')
+          $packageVersion = [string](Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($tagVersion -ne $packageVersion) {
+            throw "Release tag $env:GITHUB_REF_NAME does not match package version $packageVersion."
+          }
+
+          $releaseNotesPath = "docs/release-notes-$tagVersion.zh-CN.md"
+          if (-not (Test-Path -LiteralPath $releaseNotesPath)) {
+            throw "Missing release notes: $releaseNotesPath"
+          }
+          "release_notes_path=$releaseNotesPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Run release verification
         run: npm run verify:release -- -RequireCleanGit -SchemaAudit skip
 
@@ -121,7 +137,7 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v3
         with:
-          body_path: .github/release-body.md
+          body_path: ${{ steps.release-metadata.outputs.release_notes_path }}
           files: |
             ${{ runner.temp }}/release/*.zip
             ${{ runner.temp }}/release/*.sha256

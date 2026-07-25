@@ -27,6 +27,55 @@ param(
 $ErrorActionPreference = "Stop"
 $MinimumNodeVersion = [Version]"22.13.0"
 $MinimumNpmVersion = [Version]"9.0.0"
+$script:BootstrapStage = "initialize"
+
+trap {
+  $message = if ($_.Exception -and $_.Exception.Message) {
+    [string]$_.Exception.Message
+  } else {
+    [string]$_
+  }
+
+  if ($JsonOutput) {
+    $payload = [ordered]@{
+      schemaVersion = 1
+      operation = "install"
+      ok = $false
+      error = [ordered]@{
+        code = "BOOTSTRAP_FAILED"
+        stage = $script:BootstrapStage
+        message = $message
+      }
+    } | ConvertTo-Json -Depth 5 -Compress
+    [Console]::Out.WriteLine($payload)
+    [Console]::Error.WriteLine("error[BOOTSTRAP_FAILED][$($script:BootstrapStage)]: $message")
+  }
+  break
+}
+
+function Write-BootstrapMessage {
+  param(
+    [string]$Message,
+    [ConsoleColor]$ForegroundColor = [ConsoleColor]::Gray
+  )
+
+  if ($JsonOutput) {
+    [Console]::Error.WriteLine($Message)
+  } else {
+    Write-Host $Message -ForegroundColor $ForegroundColor
+  }
+}
+
+function Write-BootstrapWarning {
+  param([string]$Message)
+
+  if ($JsonOutput) {
+    [Console]::Error.WriteLine("warning: $Message")
+  } else {
+    Write-Warning $Message
+  }
+}
+
 $ManagedStateDir = [System.IO.Path]::GetFullPath("$env:USERPROFILE\.cx-codex").TrimEnd('\')
 $ManagedLauncherPath = [System.IO.Path]::GetFullPath("$env:USERPROFILE\.local\bin\cx-codex-start.cmd")
 $ManagedCloudflaredDir = [System.IO.Path]::GetFullPath("$env:USERPROFILE\.local\bin").TrimEnd('\')
@@ -51,8 +100,8 @@ if ($RemoteQuick) {
 
 function Write-Step {
   param([string]$Message)
-  Write-Host ""
-  Write-Host "==> $Message" -ForegroundColor Green
+  Write-BootstrapMessage ""
+  Write-BootstrapMessage "==> $Message" -ForegroundColor Green
 }
 
 function Get-ToolVersionObject {
@@ -198,6 +247,34 @@ function Assert-SafeInstallDirectory {
   return $fullPath
 }
 
+function Assert-RepositoryCapabilities {
+  param([string]$RepoRoot)
+
+  if (-not $RemoteQuick -and -not $JsonOutput) {
+    return
+  }
+
+  $manifestPath = Join-Path $RepoRoot "release-capabilities.json"
+  if (-not (Test-Path -LiteralPath $manifestPath)) {
+    throw "Selected CX-Codex source does not declare installer capabilities. Use -UseBranchArchive for the current preview, or install a newer formal Release."
+  }
+
+  try {
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+  } catch {
+    throw "Installer capability manifest is invalid: $manifestPath"
+  }
+  if ([int]$manifest.schemaVersion -ne 1 -or [int]$manifest.installerContractVersion -lt 1) {
+    throw "Installer capability manifest is unsupported: $manifestPath"
+  }
+  if ($RemoteQuick -and -not [bool]$manifest.features.remoteQuick) {
+    throw "Selected CX-Codex source does not support RemoteQuick."
+  }
+  if ($JsonOutput -and -not [bool]$manifest.features.jsonOutput) {
+    throw "Selected CX-Codex source does not support JsonOutput."
+  }
+}
+
 function Get-VerifiedReleaseArchive {
   param([string]$TargetZipPath)
 
@@ -311,11 +388,11 @@ function Acquire-Repository {
   New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
 
   if ($UseBranchArchive) {
-    Write-Warning "Using an unverified branch archive. Prefer the default verified GitHub Release flow."
+    Write-BootstrapWarning "Using an unverified branch archive. Prefer the default verified GitHub Release flow."
     Invoke-WebRequest -Uri (Get-RepoArchiveUrl) -OutFile $zipPath
   } else {
     $releaseInfo = Get-VerifiedReleaseArchive -TargetZipPath $zipPath
-    Write-Host "Verified release: $($releaseInfo.Tag) ($($releaseInfo.Sha256))"
+    Write-BootstrapMessage "Verified release: $($releaseInfo.Tag) ($($releaseInfo.Sha256))"
   }
   Expand-Archive -LiteralPath $zipPath -DestinationPath $extractRoot -Force
 
@@ -333,12 +410,16 @@ function Acquire-Repository {
   return Install-RepositoryAtomically -ExpandedRepo $expandedRepo -TargetInstallDir $safeInstallDir
 }
 
+$script:BootstrapStage = "acquire_repository"
 $repoRoot = Acquire-Repository
+$script:BootstrapStage = "validate_capabilities"
+Assert-RepositoryCapabilities -RepoRoot $repoRoot
+$script:BootstrapStage = "prepare_runtime"
 $runtime = Ensure-NodeRuntime
 $env:PATH = "$($runtime.Root);$env:PATH"
 
-Write-Host "Using node: $($runtime.Node)"
-Write-Host "Using npm:  $($runtime.Npm)"
+Write-BootstrapMessage "Using node: $($runtime.Node)"
+Write-BootstrapMessage "Using npm:  $($runtime.Npm)"
 
 $installScript = Join-Path $repoRoot "scripts\install-windows-server.ps1"
 if (-not (Test-Path -LiteralPath $installScript)) {
@@ -395,6 +476,7 @@ if ($JsonOutput) {
   $invokeArgs += "-JsonOutput"
 }
 
+$script:BootstrapStage = "run_installer"
 Write-Step "Running installer"
 & powershell.exe @invokeArgs
 $installerExitCode = $LASTEXITCODE
@@ -408,7 +490,7 @@ if ($installerExitCode -ne 0) {
         Move-Item -LiteralPath $safeInstallDir -Destination $failedDir
       }
       Move-Item -LiteralPath $backupDir -Destination $safeInstallDir
-      Write-Warning "Installation failed; restored the previous CX-Codex version. Failed files remain at $failedDir"
+      Write-BootstrapWarning "Installation failed; restored the previous CX-Codex version. Failed files remain at $failedDir"
     } elseif (Test-Path -LiteralPath $safeInstallDir) {
       Remove-Item -LiteralPath $safeInstallDir -Recurse -Force
       if (-not $StateDirExistedBeforeInstall -and (Test-Path -LiteralPath $ManagedStateDir)) {
@@ -425,19 +507,20 @@ if ($installerExitCode -ne 0) {
       foreach ($file in $newCloudflaredFiles) {
         Remove-Item -LiteralPath $file.FullName -Force
       }
-      Write-Warning "Installation failed; removed the incomplete new installation."
+      Write-BootstrapWarning "Installation failed; removed the incomplete new installation."
     }
   }
   throw "Installer failed with exit code $installerExitCode"
 }
 
+$script:BootstrapStage = "complete"
 if (-not $JsonOutput) {
-  Write-Host ""
-  Write-Host "Bootstrap complete." -ForegroundColor Green
-  Write-Host "Install dir: $repoRoot"
-  Write-Host "Launcher:    $env:USERPROFILE\.local\bin\cx-codex-start.cmd"
-  Write-Host "Logs:        $env:USERPROFILE\.cx-codex\logs"
+  Write-BootstrapMessage ""
+  Write-BootstrapMessage "Bootstrap complete." -ForegroundColor Green
+  Write-BootstrapMessage "Install dir: $repoRoot"
+  Write-BootstrapMessage "Launcher:    $env:USERPROFILE\.local\bin\cx-codex-start.cmd"
+  Write-BootstrapMessage "Logs:        $env:USERPROFILE\.cx-codex\logs"
   if ($EnableCloudflareTunnel) {
-    Write-Host "Tunnel:      enabled; open the trycloudflare.com URL printed above or in cx-codex.out.log"
+    Write-BootstrapMessage "Tunnel:      enabled; open the trycloudflare.com URL printed above or in cx-codex.out.log"
   }
 }

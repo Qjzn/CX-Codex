@@ -2,11 +2,38 @@
 
 This file tracks manual regression and feature verification steps.
 
+## Windows productization contract (2026-07-25)
+
+### Expected behavior
+
+1. `-JsonOutput` writes exactly one non-empty JSON line to stdout; progress and diagnostics use stderr.
+2. A successful result reports schema/operation/version plus separate `started` and `healthReady` flags. A bootstrap failure reports `BOOTSTRAP_FAILED` and the failing stage without a password, Cookie, or Token.
+3. `release-capabilities.json` must declare `remoteQuick`, `jsonOutput`, the stable JSON contract, and Windows uninstall support before the bootstrap combines those options with an archive.
+4. The official uninstaller removes only managed program/system entries by default and preserves CX-Codex user data, Codex login, workspaces, and Android signing files.
+5. `-RemoveUserData -RemoveCloudflared` additionally removes the CX-Codex state directory and only project-managed cloudflared files.
+6. `StartNow` must start an isolated service, pass `/health` with HTTP 200, and the official uninstaller must stop that service and close the port.
+
+### Verification
+
+- Run `npm.cmd run verify:windows-productization`.
+- Run `npm.cmd run verify:governance`.
+- Confirm the Windows GitHub Actions job runs the productization smoke and always invokes the official uninstall cleanup.
+- Confirm the Release zip contains `release-capabilities.json`, `scripts/uninstall-windows.ps1`, and `scripts/verify-windows-productization.ps1`.
+
+### Evidence
+
+- The isolated Windows smoke passed stable install JSON, preserving uninstall, full cleanup, real StartNow health, post-uninstall port closure, and bootstrap failure JSON.
+- StartNow uses port-specific stdout/stderr logs so an already-running 7420 process cannot lock the new test instance's log files.
+- Process replacement is scoped to the target port/config/launcher instead of every CX-Codex process that happens to use the same source directory.
+- JSON progress forwarding treats native npm/Vite stderr as diagnostics and uses the actual npm exit code, so GitHub Windows Runner warnings cannot turn a successful build into a failed install.
+- The StartNow smoke uses an isolated temporary Codex Home and synthetic local auth marker, so CI validates the 7420 lifecycle without installing Codex or opening an interactive login flow.
+- Custom config paths keep their port logs and managed PID marker under the matching state directory; official uninstall cross-checks command line, PID marker, and listening port, then waits for managed processes and retries transient Windows file locks before reporting cleanup failure.
+
 ## Windows clean-install newcomer journey (2026-07-25)
 
 ### Expected behavior
 
-1. The README `-UseBranchArchive -RemoteQuick -JsonOutput` command selects a compatible Node.js/npm pair without relying on the user's PowerShell profile, global npm prefix, or ambiguous PATH order.
+1. The README `-RemoteQuick -JsonOutput` command selects the verified formal Release and a compatible Node.js/npm pair without relying on the user's PowerShell profile, global npm prefix, or ambiguous PATH order.
 2. The generated launcher contains the selected absolute Node.js path; a failed first install removes only newly created install state while preserving pre-existing files.
 3. Startup failure does not wait for a tunnel URL after local health has already failed.
 4. A successful install binds to loopback, starts a password-protected Quick Tunnel, verifies public health plus unauthorized HTTP/WebSocket boundaries, and keeps `/local-setup` unavailable through the public hostname.
@@ -8828,29 +8855,30 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 ---
 
-### Feature: GitHub Release 正文版本中性治理
+### Feature: GitHub Release 版本说明与标签一致性治理
 
 #### Prerequisites
-- `.github/release-body.md` 存在，并被 `.github/workflows/release.yml` 的 `body_path` 使用。
+- `.github/release-body.md` 作为通用模板存在。
+- 当前 `package.json` 版本对应的 `docs/release-notes-<version>.zh-CN.md` 存在，并被 `.github/workflows/release.yml` 动态选为 `body_path`。
 - 当前仓库包含 `docs/changelog.zh-CN.md`、`docs/security-hardening.zh-CN.md`、`docs/openai-docs-review.zh-CN.md` 和 `docs/app-server-protocol-matrix.zh-CN.md`。
 
 #### Steps
-1. 打开 `.github/release-body.md`。
-2. 确认标题为 `CX-Codex Release`，正文不包含固定旧版本号，例如 `2.2.7`。
-3. 确认正文说明 release zip、APK、debug APK fallback、checksum、release workflow 验证和本地 schema audit 建议。
-4. 执行 `git diff --check`。
-5. 执行 `npm.cmd run verify:governance`。
-6. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`。
+1. 打开 `.github/workflows/release.yml`。
+2. 确认 workflow 去掉 tag 的 `v` 前缀后与 `package.json` 版本严格比较。
+3. 确认缺少对应 `docs/release-notes-<version>.zh-CN.md` 时发布失败，存在时将其作为 Release 正文。
+4. 确认本版说明包含用户可感知变化、安装/卸载、安全边界和验证结果。
+5. 执行 `git diff --check`。
+6. 执行 `npm.cmd run verify:governance`。
+7. 执行 `npm.cmd run verify:release -- -AllowDirty -SkipBuild -SchemaAudit skip`。
 
 #### Expected Results
-- GitHub Release 正文可复用于任意 tag，不会把旧版本号或旧版本卖点发布到新 Release。
-- Release 正文包含 changelog、安全、OpenAI/Codex App Server 兼容文档入口。
-- Release 正文说明 zip/APK/checksum 资产用途、workflow 验证步骤和本地 schema audit 要求。
-- `verify:governance` 会阻止 `.github/release-body.md` 中残留固定旧版本号或旧版说明标题。
+- 标签与 package 版本不一致、缺少本版说明时，Release 在构建和上传资产前失败。
+- GitHub Release 正文来自同版本说明，不会把旧版本卖点发布到新 Release。
+- `verify:governance` 会阻止缺少本版说明或说明遗漏安装、校验、卸载和候选边界。
 
 #### Rollback/Cleanup Notes
 - 无运行产物需要清理。
-- 如需回滚，撤销 `.github/release-body.md`、`scripts/verify-governance.ps1`、`docs/changelog.zh-CN.md` 和本节测试记录的改动。
+- 如需回滚，撤销 `.github/workflows/release.yml`、`scripts/verify-governance.ps1`、本版说明和本节测试记录的改动。
 
 #### Regression Evidence
 - 2026-07-04 静态验证：`git diff --check` 通过。

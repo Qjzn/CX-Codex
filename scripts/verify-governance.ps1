@@ -129,6 +129,7 @@ $requiredFiles = @(
   "SECURITY.md",
   "SUPPORT.md",
   "RELEASE.md",
+  "release-capabilities.json",
   "tests.md",
   "docs/app-server-schema-audit-summary.json",
   "docs/security-hardening.zh-CN.md",
@@ -152,13 +153,19 @@ $requiredFiles = @(
   ".github/workflows/release.yml",
   ".github/release-body.md",
   "scripts/run-powershell-script.mjs",
+  "scripts/uninstall-windows.ps1",
   "scripts/update-app-server-schema-audit-summary.mjs",
-  "scripts/verify-release-artifacts.ps1"
+  "scripts/verify-release-artifacts.ps1",
+  "scripts/verify-windows-productization.ps1"
 )
 
 foreach ($file in $requiredFiles) {
   Assert-FileExists $file
 }
+
+$packageVersion = [string](Get-Content -LiteralPath (Join-Path $repoRoot "package.json") -Raw | ConvertFrom-Json).version
+$releaseNotesPath = "docs/release-notes-$packageVersion.zh-CN.md"
+Assert-FileExists $releaseNotesPath
 
 Assert-ContentExcludes "tests.md" @(
   "待本轮验证后补充",
@@ -548,6 +555,7 @@ Assert-ContentIncludes "package.json" @(
   '"audit:app-server-schemas": "node ./scripts/run-powershell-script.mjs ./scripts/audit-app-server-schemas.ps1"',
   '"audit:app-server-schemas:update-summary": "node ./scripts/update-app-server-schema-audit-summary.mjs"',
   '"verify:governance": "node ./scripts/run-powershell-script.mjs ./scripts/verify-governance.ps1"',
+  '"verify:windows-productization": "node ./scripts/run-powershell-script.mjs ./scripts/verify-windows-productization.ps1"',
   '"verify:release": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release.ps1"',
   '"verify:release-artifacts": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release-artifacts.ps1"',
   '"esbuild":'
@@ -578,8 +586,21 @@ Assert-ContentIncludes "scripts/package-release.ps1" @(
   "CONTRIBUTING.md",
   "SECURITY.md",
   "SUPPORT.md",
-  "tests.md"
+  "tests.md",
+  "release-capabilities.json"
 )
+
+$releaseCapabilities = Get-Content -LiteralPath (Join-Path $repoRoot "release-capabilities.json") -Raw | ConvertFrom-Json
+if (
+  $releaseCapabilities.schemaVersion -ne 1 -or
+  $releaseCapabilities.installerContractVersion -lt 1 -or
+  -not $releaseCapabilities.features.remoteQuick -or
+  -not $releaseCapabilities.features.jsonOutput -or
+  -not $releaseCapabilities.features.stableJsonContract -or
+  -not $releaseCapabilities.features.windowsUninstall
+) {
+  throw "release-capabilities.json does not declare the required Windows productization contract."
+}
 
 Assert-ContentIncludes ".github/dependabot.yml" @(
   "version: 2",
@@ -617,6 +638,22 @@ Assert-ContentIncludes ".github/release-body.md" @(
   "npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn",
   "candidate-reviewed rather than fully aligned",
   "must not include private accounts"
+)
+
+Assert-ContentIncludes ".github/workflows/release.yml" @(
+  "Verify release metadata",
+  "Release tag `$env:GITHUB_REF_NAME does not match package version `$packageVersion.",
+  "docs/release-notes-`$tagVersion.zh-CN.md",
+  'body_path: ${{ steps.release-metadata.outputs.release_notes_path }}'
+)
+
+Assert-ContentIncludes $releaseNotesPath @(
+  "CX-Codex $packageVersion",
+  "RemoteQuick",
+  "JsonOutput",
+  "SHA-256",
+  "uninstall-windows.ps1",
+  "候选"
 )
 
 Assert-ContentIncludes ".github/ISSUE_TEMPLATE/protocol_compatibility.yml" @(
@@ -812,7 +849,9 @@ foreach ($key in @("typescriptRoot", "typescriptV2", "jsonRoot", "jsonV2")) {
 }
 
 Assert-ContentIncludes ".github/workflows/ci.yml" @(
-  "npm run verify:release -- -SchemaAudit skip"
+  "npm run verify:release -- -SchemaAudit skip",
+  "npm run verify:windows-productization",
+  "./scripts/uninstall-windows.ps1"
 )
 
 Assert-ContentIncludes ".github/workflows/release.yml" @(

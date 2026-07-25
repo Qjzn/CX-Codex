@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - 'codex/**'
   pull_request:
 
 permissions:
@@ -49,16 +48,29 @@ jobs:
       - name: Run local bootstrap smoke test
         shell: pwsh
         run: |
-          ./scripts/bootstrap-windows.ps1 `
-            -SourceRepoRoot $PWD `
-            -InstallDir "$env:TEMP\cx-codex-smoke-install" `
-            -WorkspacePath "$env:TEMP\CodexWorkspace" `
-            -Port 7441 `
-            -Password "ci-password" `
-            -SkipStartupTask `
-            -SkipFirewall `
-            -SkipLogin `
-            -NoStart
+          $jsonLines = @(
+            ./scripts/bootstrap-windows.ps1 `
+              -SourceRepoRoot $PWD `
+              -InstallDir "$env:TEMP\cx-codex-smoke-install" `
+              -WorkspacePath "$env:TEMP\CodexWorkspace" `
+              -Port 7441 `
+              -Password "ci-password" `
+              -SkipStartupTask `
+              -SkipFirewall `
+              -SkipLogin `
+              -NoStart `
+              -JsonOutput
+          )
+          if ($jsonLines.Count -ne 1) {
+            throw "Bootstrap JSON stdout must contain exactly one line; found $($jsonLines.Count)."
+          }
+          $result = $jsonLines[0] | ConvertFrom-Json
+          if (-not $result.ok -or $result.schemaVersion -ne 1 -or $result.operation -ne "install") {
+            throw "Bootstrap JSON result is invalid."
+          }
+          if ($result.started -or $result.healthReady) {
+            throw "No-start bootstrap smoke must not claim the service is running."
+          }
 
       - name: Validate generated files
         shell: pwsh
@@ -73,4 +85,30 @@ jobs:
           $expectedNode = (Get-Command node -ErrorAction Stop).Source
           if (-not $launcherContent.Contains($expectedNode)) {
             throw "Generated launcher does not contain the selected Node.js path."
+          }
+
+      - name: Run Windows productization smoke test
+        shell: pwsh
+        run: npm run verify:windows-productization
+
+      - name: Run official uninstall cleanup
+        if: always()
+        shell: pwsh
+        run: |
+          $jsonLines = @(
+            ./scripts/uninstall-windows.ps1 `
+              -InstallDir "$env:TEMP\cx-codex-smoke-install" `
+              -StateDir "$env:USERPROFILE\.cx-codex" `
+              -LauncherPath "$env:USERPROFILE\.local\bin\cx-codex-start.cmd" `
+              -ManagedBinDir "$env:USERPROFILE\.local\bin" `
+              -Port 7441 `
+              -RemoveUserData `
+              -JsonOutput
+          )
+          if ($jsonLines.Count -ne 1) {
+            throw "Uninstall JSON stdout must contain exactly one line; found $($jsonLines.Count)."
+          }
+          $result = $jsonLines[0] | ConvertFrom-Json
+          if (-not $result.ok -or $result.schemaVersion -ne 1 -or $result.operation -ne "uninstall") {
+            throw "Uninstall JSON result is invalid."
           }

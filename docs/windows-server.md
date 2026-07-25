@@ -85,7 +85,27 @@ By default the installer writes `tunnel: false` and `open: false`, which is usua
 
 `/health` is intentionally lightweight so it can be used by reverse proxies and process monitors.
 
-## 5. Optional config locations
+## 5. Uninstall
+
+Run the official uninstall entry:
+
+```powershell
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/uninstall-windows.ps1')))
+```
+
+The default uninstall removes the managed program, launcher, scheduled tasks, firewall rule, and running service while preserving CX-Codex user data, Codex login, workspaces, and Android signing files.
+
+To also remove CX-Codex config/log/runtime data and only the cloudflared copies managed by this project:
+
+```powershell
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/uninstall-windows.ps1'))) `
+  -RemoveUserData `
+  -RemoveCloudflared
+```
+
+Add `-JsonOutput` when another installer or agent needs one machine-readable stdout line.
+
+## 6. Optional config locations
 
 `cx-codex` will automatically load config from the first file it finds:
 
@@ -98,7 +118,7 @@ See [cx-codex.config.example.json](../cx-codex.config.example.json) for the supp
 
 Release process notes for maintainers live in [RELEASE.md](../RELEASE.md).
 
-## 6. Reverse proxy notes
+## 7. Reverse proxy notes
 
 - Bind with `0.0.0.0` for LAN or reverse-proxy access.
 - Keep `/health`, `/codex-api/events`, and `/codex-api/ws` reachable through the proxy.

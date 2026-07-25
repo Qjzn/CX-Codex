@@ -2,6 +2,15 @@
 
 ## 未发布
 
+## 2.5.0 - 2026-07-25
+
+- Windows 安装/卸载开始使用版本化产品契约：归档新增 `release-capabilities.json`，bootstrap 在使用 `RemoteQuick` 或 `JsonOutput` 前先验证同版本能力，避免 raw bootstrap 与旧 Release 安装器错配。
+- `-JsonOutput` 现在把构建进度和诊断写入 stderr，stdout 只保留一行版本化 JSON；成功结果区分“安装完成”“已启动”“健康就绪”，失败结果返回固定 `BOOTSTRAP_FAILED` 与失败阶段，且继续不输出密码、Cookie 或 Token。
+- 新增官方 `scripts/uninstall-windows.ps1`：默认停止托管进程并删除程序、启动器、计划任务和对应防火墙规则，同时保留 CX-Codex 用户数据、Codex 登录态、工作区和 Android 签名；可显式选择删除运行数据与项目托管的 cloudflared，并支持 `-WhatIf` / `-JsonOutput`。
+- Windows 产品化门禁新增真实 `StartNow → /health 200 → 官方卸载 → 端口关闭` 回归，同时覆盖默认保留用户数据、显式完整清理和失败 JSON。
+- 修复 `StartNow` 复用通用日志文件时可能被已运行实例占用而无法启动的问题：安装器改为使用端口级启动日志并直接启动已校验的 Node.js 入口；重启时只停止目标端口或目标配置对应的实例，不再误停同一源码目录下的其他端口。
+- 修复 GitHub Windows Runner 将 Vite stderr 警告提升为 `NativeCommandError` 后，安装器把已经成功的 npm 构建误判为失败的问题；JSON 模式继续把进度写入 stderr，但只以 npm 的真实退出码判断成败。
+- 自定义 `ConfigPath` 的启动日志和受管 PID 标记现在跟随对应状态目录，不再写入默认用户目录；官方卸载会结合命令行、PID 标记与监听端口识别托管进程，等待其真正退出，并对 Windows 短暂文件锁做有限重试，避免服务已经关闭但清理仍误报失败。
 - Windows bootstrap 现在同时检查 Node.js 与 npm 版本；遇到新 Node 搭配旧 npm 的错配环境时，校验 Node.js 官方 SHA-256 后自动使用安装目录内的便携式 LTS 运行时，避免 `package-lock v3` 安装失败。
 - 修复部分 Windows `npm.cmd --version` 同时输出代码页提示和版本号时安装器解析失败的问题；首次安装失败时会自动删除不完整的新安装目录，不再留下半成品。
 - bootstrap 现在使用 `-NoProfile` 启动安装器，并显式传入已校验的 Node.js/npm 绝对路径，避免用户 PowerShell profile 或全局 PATH 把便携 npm 替换成旧版本。
