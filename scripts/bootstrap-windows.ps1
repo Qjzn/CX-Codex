@@ -296,8 +296,9 @@ function Stop-ManagedInstallationProcesses {
   }
 
   $managedProcessIds = New-Object 'System.Collections.Generic.HashSet[int]'
+  $processes = @()
   try {
-    $processes = Get-CimInstance Win32_Process -ErrorAction Stop
+    $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop)
     foreach ($processInfo in $processes) {
       $processId = [int]$processInfo.ProcessId
       if (-not $processId -or $processId -eq $PID) {
@@ -324,6 +325,26 @@ function Stop-ManagedInstallationProcesses {
     }
   } catch {
     Write-BootstrapWarning "Could not scan existing CX-Codex processes before the upgrade."
+  }
+
+  $recordedServerProcessId = 0
+  if (Test-Path -LiteralPath $serverPidPath) {
+    $recordedPidText = [string](Get-Content -LiteralPath $serverPidPath -Raw -ErrorAction SilentlyContinue)
+    [int]::TryParse($recordedPidText.Trim(), [ref]$recordedServerProcessId) | Out-Null
+  }
+  if ($recordedServerProcessId -gt 0 -and $recordedServerProcessId -ne $PID) {
+    try {
+      $listenerOwners = @(
+        Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
+          ForEach-Object { [int]$_.OwningProcess }
+      )
+      $recordedProcess = Get-Process -Id $recordedServerProcessId -ErrorAction SilentlyContinue
+      if ($recordedProcess -and $listenerOwners -contains $recordedServerProcessId -and $recordedProcess.ProcessName -eq "node") {
+        $managedProcessIds.Add($recordedServerProcessId) | Out-Null
+      }
+    } catch {
+      Write-BootstrapWarning "Could not verify the recorded CX-Codex process for port $Port."
+    }
   }
 
   if ($managedProcessIds.Count -eq 0) {

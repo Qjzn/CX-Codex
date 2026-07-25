@@ -19,7 +19,7 @@ This file tracks manual regression and feature verification steps.
 - Run `npm.cmd run verify:windows-productization`.
 - Run `npm.cmd run verify:governance`.
 - Confirm the Windows GitHub Actions job runs the productization smoke and always invokes the official uninstall cleanup.
-- Confirm the Windows GitHub Actions job starts a process from the old install directory and completes an in-place branch-archive upgrade without a directory-lock failure.
+- Confirm the Windows GitHub Actions job starts a Node service from the old install directory, records its managed PID/listener, and completes an in-place branch-archive upgrade without a directory-lock failure.
 - Confirm the Release zip contains `release-capabilities.json`, `scripts/uninstall-windows.ps1`, and `scripts/verify-windows-productization.ps1`.
 - Confirm the Release zip contains both Vite root entrypoints: `index.html` and `local-preview.html`.
 
