@@ -32,6 +32,6 @@
 - 自动化验证 `PUBLIC_AUTH_VERIFY_FAILED + HTTP 200` 不重试，仍返回失败。
 - 真实 Quick Tunnel 通过公网健康、未登录 HTTP 401、未登录 WebSocket 拒绝和停止清理。
 
-## 候选边界
+## 正式发布结果
 
-在 GitHub Release 工作流、正式资产校验和公开归档安装回归完成前，2.5.5 仍是候选版本。Quick Tunnel 是 Cloudflare 提供的临时免费入口，地址会变化且没有 SLA；自动重试只减少瞬时传播抖动，不能替代固定 Tunnel 或 Tailscale。
+GitHub Release 工作流、公开资产校验和正式归档安装回归均已完成，2.5.5 已正式发布。Quick Tunnel 是 Cloudflare 提供的临时免费入口，地址会变化且没有 SLA；自动重试只减少瞬时传播抖动，不能替代固定 Tunnel 或 Tailscale。
