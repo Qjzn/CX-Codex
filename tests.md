@@ -12,12 +12,14 @@ This file tracks manual regression and feature verification steps.
 4. The official uninstaller removes only managed program/system entries by default and preserves CX-Codex user data, Codex login, workspaces, and Android signing files.
 5. `-RemoveUserData -RemoveCloudflared` additionally removes the CX-Codex state directory and only project-managed cloudflared files.
 6. `StartNow` must start an isolated service, pass `/health` with HTTP 200, and the official uninstaller must stop that service and close the port.
+7. Re-running bootstrap while the managed service is active must stop only the matching service/tunnel, atomically replace the installation, and retain the previous directory for rollback.
 
 ### Verification
 
 - Run `npm.cmd run verify:windows-productization`.
 - Run `npm.cmd run verify:governance`.
 - Confirm the Windows GitHub Actions job runs the productization smoke and always invokes the official uninstall cleanup.
+- Confirm the Windows GitHub Actions job starts a process from the old install directory and completes an in-place branch-archive upgrade without a directory-lock failure.
 - Confirm the Release zip contains `release-capabilities.json`, `scripts/uninstall-windows.ps1`, and `scripts/verify-windows-productization.ps1`.
 - Confirm the Release zip contains both Vite root entrypoints: `index.html` and `local-preview.html`.
 
@@ -30,6 +32,7 @@ This file tracks manual regression and feature verification steps.
 - The StartNow smoke uses an isolated temporary Codex Home and synthetic local auth marker, so CI validates the 7420 lifecycle without installing Codex or opening an interactive login flow.
 - Custom config paths keep their port logs and managed PID marker under the matching state directory; official uninstall cross-checks command line, PID marker, and listening port, then waits for managed processes and retries transient Windows file locks before reporting cleanup failure.
 - 2.5.1 candidate zip was extracted into an isolated directory; `npm ci` plus frontend/CLI build passed with both `index.html` and `local-preview.html` present.
+- The 2.5.1 formal Release passed clean installation and all Quick Tunnel verification flags, then a second bootstrap reproduced the Windows install-directory lock. The 2.5.2 bootstrap stopped the two matching managed processes and completed the same in-place upgrade with stable success JSON.
 
 ## Windows clean-install newcomer journey (2026-07-25)
 

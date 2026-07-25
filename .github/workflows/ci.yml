@@ -91,6 +91,65 @@ jobs:
         shell: pwsh
         run: npm run verify:windows-productization
 
+      - name: Run locked in-place upgrade smoke test
+        shell: pwsh
+        run: |
+          $installDir = "$env:TEMP\cx-codex-smoke-install"
+          New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $installDir "upgrade-lock.txt") -Value "previous installation"
+          $nodePath = (Get-Command node -ErrorAction Stop).Source
+          $lockProcess = Start-Process `
+            -FilePath $nodePath `
+            -ArgumentList @(
+              "-e",
+              "setInterval(()=>{},60000)",
+              "dist-cli/index.js",
+              $installDir
+            ) `
+            -WorkingDirectory $installDir `
+            -WindowStyle Hidden `
+            -PassThru
+          try {
+            $branch = if ($env:GITHUB_HEAD_REF) { $env:GITHUB_HEAD_REF } else { $env:GITHUB_REF_NAME }
+            $jsonLines = @(
+              ./scripts/bootstrap-windows.ps1 `
+                -InstallDir $installDir `
+                -WorkspacePath "$env:TEMP\CodexWorkspace" `
+                -Port 7441 `
+                -Password "ci-password" `
+                -Branch $branch `
+                -UseBranchArchive `
+                -SkipStartupTask `
+                -SkipWatchdogTask `
+                -SkipFirewall `
+                -SkipLogin `
+                -NoStart `
+                -JsonOutput
+            )
+            if ($jsonLines.Count -ne 1) {
+              throw "Upgrade bootstrap JSON stdout must contain exactly one line; found $($jsonLines.Count)."
+            }
+            $result = $jsonLines[0] | ConvertFrom-Json
+            if (-not $result.ok -or $result.schemaVersion -ne 1 -or $result.operation -ne "install") {
+              throw "Upgrade bootstrap JSON result is invalid."
+            }
+            $lockProcess.Refresh()
+            if (-not $lockProcess.HasExited) {
+              throw "Upgrade bootstrap did not stop the process locking the previous installation."
+            }
+            if (-not (Test-Path -LiteralPath (Join-Path $installDir "package.json"))) {
+              throw "Upgrade bootstrap did not replace the installation."
+            }
+            if (-not (Test-Path -LiteralPath "$installDir.previous\upgrade-lock.txt")) {
+              throw "Upgrade bootstrap did not retain the previous installation for rollback."
+            }
+          } finally {
+            if (-not $lockProcess.HasExited) {
+              Stop-Process -Id $lockProcess.Id -Force -ErrorAction SilentlyContinue
+            }
+            $lockProcess.Dispose()
+          }
+
       - name: Run official uninstall cleanup
         if: always()
         shell: pwsh
