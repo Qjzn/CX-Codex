@@ -94,6 +94,7 @@ $releaseItems = @(
   "cx-codex.config.example.json",
   "docs",
   "index.html",
+  "local-preview.html",
   "package-lock.json",
   "package.json",
   "release-capabilities.json",

@@ -19,6 +19,7 @@ This file tracks manual regression and feature verification steps.
 - Run `npm.cmd run verify:governance`.
 - Confirm the Windows GitHub Actions job runs the productization smoke and always invokes the official uninstall cleanup.
 - Confirm the Release zip contains `release-capabilities.json`, `scripts/uninstall-windows.ps1`, and `scripts/verify-windows-productization.ps1`.
+- Confirm the Release zip contains both Vite root entrypoints: `index.html` and `local-preview.html`.
 
 ### Evidence
 
@@ -28,6 +29,7 @@ This file tracks manual regression and feature verification steps.
 - JSON progress forwarding treats native npm/Vite stderr as diagnostics and uses the actual npm exit code, so GitHub Windows Runner warnings cannot turn a successful build into a failed install.
 - The StartNow smoke uses an isolated temporary Codex Home and synthetic local auth marker, so CI validates the 7420 lifecycle without installing Codex or opening an interactive login flow.
 - Custom config paths keep their port logs and managed PID marker under the matching state directory; official uninstall cross-checks command line, PID marker, and listening port, then waits for managed processes and retries transient Windows file locks before reporting cleanup failure.
+- 2.5.1 candidate zip was extracted into an isolated directory; `npm ci` plus frontend/CLI build passed with both `index.html` and `local-preview.html` present.
 
 ## Windows clean-install newcomer journey (2026-07-25)
 
