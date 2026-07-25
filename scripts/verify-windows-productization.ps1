@@ -53,9 +53,11 @@ function Invoke-CapturedPowerShell {
   }
   $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -LiteralPath $stdoutPath -Raw } else { "" }
   $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { "" }
+  $exitCode = $process.ExitCode
+  $process.Dispose()
 
   return [ordered]@{
-    ExitCode = $process.ExitCode
+    ExitCode = $exitCode
     Stdout = $stdout
     Stderr = $stderr
   }

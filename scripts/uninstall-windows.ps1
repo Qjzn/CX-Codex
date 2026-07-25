@@ -116,10 +116,20 @@ function Remove-ManagedItem {
   }
 
   $item = Get-Item -LiteralPath $Path
-  if ($item.PSIsContainer) {
-    Remove-Item -LiteralPath $Path -Recurse -Force
-  } else {
-    Remove-Item -LiteralPath $Path -Force
+  for ($attempt = 1; $attempt -le 5; $attempt++) {
+    try {
+      if ($item.PSIsContainer) {
+        Remove-Item -LiteralPath $Path -Recurse -Force
+      } else {
+        Remove-Item -LiteralPath $Path -Force
+      }
+      break
+    } catch {
+      if ($attempt -eq 5) {
+        throw
+      }
+      Start-Sleep -Milliseconds 250
+    }
   }
   $script:RemovedItems.Add($Path) | Out-Null
   Write-UninstallMessage "Removed $Label`: $Path"
@@ -218,6 +228,10 @@ foreach ($managedProcessId in $managedProcessIds) {
     continue
   }
   Stop-Process -Id $managedProcessId -Force -ErrorAction SilentlyContinue
+  Wait-Process -Id $managedProcessId -Timeout 10 -ErrorAction SilentlyContinue
+  if (Get-Process -Id $managedProcessId -ErrorAction SilentlyContinue) {
+    Write-UninstallWarning -Code "PROCESS_STOP_TIMEOUT" -Message "Managed process $managedProcessId did not exit within 10 seconds; file cleanup may need a retry."
+  }
   $script:RemovedItems.Add("process:$managedProcessId") | Out-Null
   Write-UninstallMessage "Stopped managed process: $managedProcessId"
 }

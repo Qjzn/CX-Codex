@@ -766,7 +766,11 @@ if ($OpenFirewall) {
   }
 }
 
-$logDir = "$env:USERPROFILE\.cx-codex\logs"
+$logBaseDir = Split-Path -Parent $ConfigPath
+if ([string]::IsNullOrWhiteSpace($logBaseDir)) {
+  $logBaseDir = (Get-Location).Path
+}
+$logDir = Join-Path $logBaseDir "logs"
 $outLogPath = Join-Path $logDir "cx-codex-$Port.out.log"
 $errLogPath = Join-Path $logDir "cx-codex-$Port.err.log"
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
