@@ -28,7 +28,7 @@
 
 1. `npm.cmd run build`
 2. Release zip 和 sha256 是否生成
-3. Android APK 是否生成；没有签名 secrets 时必须生成 debug 备用 APK
+3. Android 正式签名 APK 是否生成，证书 SHA-256 是否与固定发布证书一致
 4. README 截图是否脱敏
 5. `.github/release-body.md` 是否是当前版本
 6. `docs/changelog.zh-CN.md` 是否写明用户可感知变化
@@ -108,7 +108,7 @@ README、Release 和 GitHub About 要持续覆盖这些关键词：
 - README 首屏长期保留 Release、构建、License、Android 和 Windows 入口 badge。
 - Issue 模板必须收集版本、平台、访问方式、健康检查和脱敏确认。
 - `SUPPORT.md` 作为反馈前置页，减少无效 Issue 和隐私泄露。
-- Release workflow 必须保证至少有 Web zip、sha256 和 Android debug 备用 APK。
+- Release workflow 必须保证至少有 Web zip、sha256 和固定证书签名的 Android APK；缺少签名配置时必须停止发布。
 
 暂不优先：
 

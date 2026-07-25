@@ -2,6 +2,13 @@
 
 ## 未发布
 
+## 2.5.9 - 2026-07-25
+
+- Android 正式 Release 现在强制使用固定发布证书；缺少签名 secrets、签名失败或证书 SHA-256 与项目固定指纹不一致时，GitHub Release 会直接失败，不再公开发布容易产生覆盖安装冲突的 Debug APK。
+- 本地 Debug 构建改用独立包名 `com.cxcodex.bridge.debug`，可以与正式版并存，不再争用正式包名 `com.cxcodex.bridge`。
+- Windows 一键安装在子安装器长时间运行时会持续转发诊断，并每 15 秒显示一次无敏感信息的安装心跳；`-JsonOutput` 的 stdout 仍只保留最终单行 JSON。
+- `RemoteQuick` 完成本机健康、公网健康、HTTP 鉴权和 WebSocket 鉴权后，会自动打开仅限本机的手机配对页；无人值守环境可用 `-SkipOpenPairing` 禁用自动打开，浏览器启动失败也不会把已经成功的安装误报为失败。
+
 ## 2.5.8 - 2026-07-25
 
 - 修复 `RemoteQuick` 已生成临时地址、但公网验证仍处于 `verifying` 时安装器就提前返回 `ok=false` 的竞态；安装结果现在等待运行时进入 `ready` 且健康、HTTP 鉴权、WebSocket 鉴权三项全部通过，短暂验证失败重试期间也不会过早结束。

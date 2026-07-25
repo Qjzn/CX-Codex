@@ -17,6 +17,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 ## 快速入口
 
 - 最新 Release: [github.com/Qjzn/CX-Codex/releases/latest](https://github.com/Qjzn/CX-Codex/releases/latest)
+- 2.5.9 发布说明: [docs/release-notes-2.5.9.zh-CN.md](./docs/release-notes-2.5.9.zh-CN.md)
 - 2.5.8 发布说明: [docs/release-notes-2.5.8.zh-CN.md](./docs/release-notes-2.5.8.zh-CN.md)
 - 2.5.7 发布说明: [docs/release-notes-2.5.7.zh-CN.md](./docs/release-notes-2.5.7.zh-CN.md)
 - 2.5.6 发布说明: [docs/release-notes-2.5.6.zh-CN.md](./docs/release-notes-2.5.6.zh-CN.md)
@@ -51,7 +52,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 - 原生 Codex 仍在本机运行，`CX-Codex` 只负责把浏览器、手机和远程访问链路做稳。
 - 重点解决 Windows 常驻、Android 恢复、长会话状态和远程入口这几类高频真实问题。
 - 默认不内置私人服务器地址，不要求上传私有项目、Token 或账号凭据。
-- Release 自动产出 Web 包、校验文件，并在没有签名 secret 时提供 Android debug 备用 APK。
+- Release 自动产出 Web 包、校验文件和使用固定官方证书签名的 Android APK。
 
 ## 核心卖点
 
@@ -150,7 +151,9 @@ http://127.0.0.1:7420
 
 默认安装最新正式 Release，并校验 Release 包的 SHA-256；只有参与源码预览时才应显式使用 `-UseBranchArchive`。
 
-安装完成后，电脑本机打开 `http://127.0.0.1:7420/local-setup`，用手机扫描二维码打开临时地址，再输入页面显示的访问密码。二维码只在本机生成且只包含地址，不包含密码；配对页不允许通过公网域名访问。
+首次安装通常需要 2–5 分钟。bootstrap 会持续显示安装阶段，并在长步骤中每 15 秒提示仍在运行；不要在构建期间关闭窗口。
+
+安装和公网验证全部完成后，bootstrap 会自动打开电脑本机的 `http://127.0.0.1:7420/local-setup`。用手机扫描二维码打开临时地址，再输入页面显示的访问密码即可；二维码只在本机生成且只包含地址，不包含密码，配对页也不允许通过公网域名访问。无人值守安装可增加 `-SkipOpenPairing`，完成后再手动打开配对页。
 
 `-JsonOutput` 的 stdout 固定为单行 JSON，构建进度和诊断写入 stderr。成功结果包含 `schemaVersion`、`operation`、`version`、`started`、`healthReady`、本机/公网地址和结构化告警；失败结果返回 `BOOTSTRAP_FAILED` 与失败阶段，不输出密码、Cookie 或 Token。bootstrap 还会读取归档内的 `release-capabilities.json`，拒绝把新版参数交给不支持它们的旧 Release。
 
@@ -187,9 +190,9 @@ http://127.0.0.1:7420
 
 Release 页面会发布 Android APK：
 
-- 配置签名 secret 时发布正式 `cx-codex-android-<version>.apk`。
-- 未配置签名 secret 时发布 `cx-codex-android-debug-<version>.apk`，适合自托管测试和临时安装。
-- debug 包切换到正式签名包时，Android 可能要求先卸载旧 debug 包。
+- 正式 Release 只发布 `cx-codex-android-<version>.apk`，并始终使用同一张官方签名证书。
+- GitHub 仓库缺少签名配置或证书指纹变化时，发布工作流会直接失败，不会生成可能导致覆盖安装失败的公开 Debug APK。
+- 本地 Debug 构建使用独立包名 `com.cxcodex.bridge.debug`，可与正式版同时安装。
 
 如果你自己构建，请查看：
 

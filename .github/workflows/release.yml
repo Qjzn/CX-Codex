@@ -18,6 +18,7 @@ jobs:
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       ANDROID_DEFAULT_SERVER_URL: ${{ secrets.ANDROID_DEFAULT_SERVER_URL }}
+      ANDROID_RELEASE_CERT_SHA256: f06cc88920b5f0cdc55c5ddcd51694fcf0131431900dbb24e8bd8820d965d4d4
 
     steps:
       - name: Checkout repository
@@ -68,8 +69,25 @@ jobs:
         run: |
           sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
+      - name: Require Android release signing secrets
+        shell: pwsh
+        run: |
+          $requiredSecrets = [ordered]@{
+            ANDROID_KEYSTORE_BASE64 = $env:ANDROID_KEYSTORE_BASE64
+            ANDROID_KEYSTORE_PASSWORD = $env:ANDROID_KEYSTORE_PASSWORD
+            ANDROID_KEY_ALIAS = $env:ANDROID_KEY_ALIAS
+            ANDROID_KEY_PASSWORD = $env:ANDROID_KEY_PASSWORD
+          }
+          $missingSecrets = @(
+            $requiredSecrets.GetEnumerator() |
+              Where-Object { [string]::IsNullOrWhiteSpace([string]$_.Value) } |
+              ForEach-Object { $_.Key }
+          )
+          if ($missingSecrets.Count -gt 0) {
+            throw "Official Android releases require stable signing secrets. Missing: $($missingSecrets -join ', ')"
+          }
+
       - name: Prepare Android signing files
-        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         shell: pwsh
         run: |
           $keystoreDir = Join-Path $env:RUNNER_TEMP 'android-signing'
@@ -90,7 +108,6 @@ jobs:
         run: npm run mobile:android:sync
 
       - name: Build Android release APK
-        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         shell: pwsh
         env:
           APP_VERSION_NAME: ${{ github.ref_name }}
@@ -99,34 +116,44 @@ jobs:
           .\gradlew.bat assembleRelease
           Pop-Location
 
-      - name: Build Android debug APK fallback
-        if: ${{ env.ANDROID_KEYSTORE_BASE64 == '' }}
+      - name: Verify Android release signature
         shell: pwsh
-        env:
-          APP_VERSION_NAME: ${{ github.ref_name }}
         run: |
-          Push-Location android
-          .\gradlew.bat assembleDebug
-          Pop-Location
+          $apkPath = "android/app/build/outputs/apk/release/app-release.apk"
+          $sdkRoot = if (-not [string]::IsNullOrWhiteSpace($env:ANDROID_SDK_ROOT)) {
+            $env:ANDROID_SDK_ROOT
+          } else {
+            $env:ANDROID_HOME
+          }
+          $apksignerPath = Join-Path $sdkRoot "build-tools/36.0.0/apksigner.bat"
+          if (-not (Test-Path -LiteralPath $apksignerPath -PathType Leaf)) {
+            throw "apksigner was not found: $apksignerPath"
+          }
+
+          $certificateOutput = (& $apksignerPath verify --print-certs $apkPath 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0) {
+            throw "Android release APK signature verification failed."
+          }
+          $digestMatch = [regex]::Match(
+            $certificateOutput,
+            "Signer #1 certificate SHA-256 digest:\s*(?<digest>[0-9a-fA-F]{64})"
+          )
+          if (-not $digestMatch.Success) {
+            throw "Android release certificate SHA-256 digest was not found."
+          }
+          $actualDigest = $digestMatch.Groups["digest"].Value.ToLowerInvariant()
+          $expectedDigest = $env:ANDROID_RELEASE_CERT_SHA256.ToLowerInvariant()
+          if ($actualDigest -ne $expectedDigest) {
+            throw "Android release certificate changed unexpectedly. Expected $expectedDigest but found $actualDigest."
+          }
+          Write-Host "Android release signature verified: $actualDigest"
 
       - name: Collect Android release artifacts
-        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         shell: pwsh
         run: |
           $outputDir = Join-Path $env:RUNNER_TEMP 'release'
           $apkSource = "android/app/build/outputs/apk/release/app-release.apk"
           $apkTarget = Join-Path $outputDir "cx-codex-android-${env:GITHUB_REF_NAME}.apk"
-          Copy-Item $apkSource $apkTarget -Force
-          $hash = (Get-FileHash -Algorithm SHA256 $apkTarget).Hash.ToLowerInvariant()
-          Set-Content -Path ($apkTarget + '.sha256') -Value "$hash  $(Split-Path -Leaf $apkTarget)" -Encoding ASCII
-
-      - name: Collect Android debug fallback artifacts
-        if: ${{ env.ANDROID_KEYSTORE_BASE64 == '' }}
-        shell: pwsh
-        run: |
-          $outputDir = Join-Path $env:RUNNER_TEMP 'release'
-          $apkSource = "android/app/build/outputs/apk/debug/app-debug.apk"
-          $apkTarget = Join-Path $outputDir "cx-codex-android-debug-${env:GITHUB_REF_NAME}.apk"
           Copy-Item $apkSource $apkTarget -Force
           $hash = (Get-FileHash -Algorithm SHA256 $apkTarget).Hash.ToLowerInvariant()
           Set-Content -Path ($apkTarget + '.sha256') -Value "$hash  $(Split-Path -Leaf $apkTarget)" -Encoding ASCII
