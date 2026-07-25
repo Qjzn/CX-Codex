@@ -36,7 +36,7 @@
 | P0-11 | App Server 健康 | `Invoke-WebRequest http://127.0.0.1:7420/codex-api/health` | HTTP 200，`appServer.running=true` 且 `initialized=true` |
 | P0-12 | 公网映射健康 | `Invoke-WebRequest http://203.0.113.10:17420/health` | HTTP 200，`status=ok`；失败时先定位 FRP/隧道/防火墙，不直接归因前端 |
 | P0-13 | 事件回放端点 | `npm.cmd run test:7420 -- -SkipBrowser -PublicHealthUrl http://203.0.113.10:17420/health` | 本机、公网、`/codex-api/events/replay` 通过 |
-| P0-14 | 短时浸泡 | `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://203.0.113.10:17420` | 无连续健康失败、无新增 RPC timeout、pending/queued RPC 未超过阈值 |
+| P0-14 | 短时浸泡 | `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://203.0.113.10:17420` | 无连续健康失败、事件回放序号不倒退、公网未登录 API 始终为 401、无新增 RPC timeout、pending/queued RPC 未超过阈值 |
 
 ## P1 协议和发布治理
 
@@ -80,7 +80,7 @@
 
 | 编号 | 项目 | 命令 / 动作 | 通过标准 |
 | --- | --- | --- | --- |
-| P2-12 | 发布前浸泡 | `npm.cmd run test:7420:soak -- -DurationSeconds 7200 -IntervalSeconds 15 -PublicBaseUrl http://203.0.113.10:17420` | 2 小时内无连续健康失败、无新增 RPC timeout、pending/queued RPC 未超过阈值 |
+| P2-12 | 发布前浸泡 | `npm.cmd run test:7420:soak -- -DurationSeconds 7200 -IntervalSeconds 15 -PublicBaseUrl http://203.0.113.10:17420` | 2 小时内无连续健康或事件回放失败、事件序号不倒退、公网未登录 API 始终为 401、无新增 RPC timeout、pending/queued RPC 未超过阈值 |
 | P2-13 | 日志审查 | 查看 `C:\Users\example\.codexui\logs` 最新 `.log` | 无重复崩溃、无限重启、明文凭据或异常堆积 |
 
 ## 失败处理规则

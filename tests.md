@@ -3821,7 +3821,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 #### Prerequisites
 - `7420` 服务运行中。
 - 本机可访问 `http://127.0.0.1:7420/health` 与 `http://127.0.0.1:7420/codex-api/health`。
-- 若传入 `-PublicHealthUrl`，公网入口 `/health` 可访问。
+- 若传入 `-PublicBaseUrl`，公网入口 `/health` 可访问，且未登录访问 `/codex-api/health` 返回 HTTP 401。
 
 #### Steps
 1. 短时验证脚本：执行 `npm run test:7420:soak -- -DurationSeconds 90 -IntervalSeconds 15`。
@@ -3830,14 +3830,37 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. 查看 `output\soak-7420\soak-*.json` 报告。
 
 #### Expected Results
-- 脚本在每个采样点输出本机、公网、API、pending/queued RPC、timeout 和慢 `thread/list` 信息。
+- 脚本在每个采样点输出本机、公网、API、事件回放序号、公网 401、pending/queued RPC、timeout 和慢 `thread/list` 信息。
 - 没有连续健康检查失败。
+- 事件回放持续可用且 `latestSeq` 不倒退；公网鉴权边界持续为 HTTP 401。
 - `queuedRpcCount` 与 `pendingRpcCount` 不超过阈值。
 - 浸泡窗口内不出现新的 RPC timeout。
 - 脚本退出码为 `0`，JSON 报告 `summary.passed=true`。
 
 #### Rollback/Cleanup
 - 若需回退，移除 `scripts/soak-7420.ps1`，并恢复 `package.json` 和本测试说明。
+
+### Feature: 长时浸泡覆盖事件回放与公网鉴权边界（2026-07-25）
+
+#### Scope
+
+1. 每个浸泡样本除本机健康、Codex API、公网健康和 RPC 队列外，还读取一次本机事件回放端点。
+2. 事件回放必须持续返回通知数组与合法序号边界；同一次浸泡期间 `latestSeq` 不得倒退。
+3. 配置 `-PublicBaseUrl` 时，每个样本必须确认未登录访问 `/codex-api/health` 返回 HTTP 401，防止隧道仍在线但鉴权边界失守。
+4. JSON 报告必须保留每个样本的回放、最新序号、公网鉴权状态及错误，并汇总回放失败、鉴权失败和序号倒退次数。
+
+#### Verification
+
+1. PowerShell parser 必须接受 `scripts/soak-7420.ps1`。
+2. 执行 `npm.cmd run test:7420:soak -- -DurationSeconds 30 -IntervalSeconds 5 -PublicBaseUrl <当前公网地址>`。
+3. 确认全部样本 `eventReplayOk=true`、`publicAuthOk=true`、`publicAuthStatusCode=401`，且 `replayFailureCount=0`、`publicAuthFailureCount=0`、`eventSeqRegressionCount=0`。
+4. 保持原有健康、RPC backlog、新 timeout 和慢 `thread/list` 门槛不变。
+
+#### Evidence
+
+- PowerShell parser 通过。
+- 真实 Quick Tunnel 短时浸泡通过 5 个样本：事件回放持续为 `latestSeq=51`，公网未登录 API 均为 HTTP 401，RPC pending/queued、timeout、慢 `thread/list`、回放失败、鉴权失败和序号倒退均为 0；报告为 `output\soak-7420\soak-20260725-124700.json`。
+- 负向门禁使用本机回环地址冒充公网，连续 3 次得到 HTTP 200 后按预期失败，并报告 `public auth boundary failed 3 times in a row`。
 
 ---
 

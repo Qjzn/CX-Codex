@@ -29,10 +29,16 @@ $failures = New-Object System.Collections.Generic.List[string]
 $consecutiveLocalFailures = 0
 $consecutiveApiFailures = 0
 $consecutivePublicFailures = 0
+$consecutiveReplayFailures = 0
+$consecutivePublicAuthFailures = 0
 $maxQueuedObserved = 0
 $maxPendingObserved = 0
 $newTimeoutCount = 0
 $slowThreadListCount = 0
+$replayFailureCount = 0
+$publicAuthFailureCount = 0
+$eventSeqRegressionCount = 0
+$lastEventSeq = $null
 
 function Invoke-JsonHealth {
   param(
@@ -68,6 +74,74 @@ function Read-DateOrNull {
   }
 }
 
+function Invoke-EventReplayHealth {
+  param(
+    [string]$Url,
+    [int]$TimeoutSeconds = 8
+  )
+
+  try {
+    $value = Invoke-RestMethod -Uri $Url -TimeoutSec $TimeoutSeconds
+    if ($null -eq $value.data -or $null -eq $value.data.notifications) {
+      throw "response is missing data.notifications"
+    }
+    if ($null -eq $value.data.latestSeq -or $null -eq $value.data.oldestSeq) {
+      throw "response is missing sequence bounds"
+    }
+
+    $latestSeq = [long]$value.data.latestSeq
+    $oldestSeq = [long]$value.data.oldestSeq
+    if ($latestSeq -lt 0 -or $oldestSeq -lt 0 -or $oldestSeq -gt $latestSeq) {
+      throw "invalid sequence bounds oldest=$oldestSeq latest=$latestSeq"
+    }
+
+    return [pscustomobject]@{
+      ok = $true
+      latestSeq = $latestSeq
+      oldestSeq = $oldestSeq
+      error = $null
+    }
+  } catch {
+    return [pscustomobject]@{
+      ok = $false
+      latestSeq = $null
+      oldestSeq = $null
+      error = $_.Exception.Message
+    }
+  }
+}
+
+function Invoke-ExpectedHttpStatus {
+  param(
+    [string]$Url,
+    [int]$ExpectedStatus,
+    [int]$TimeoutSeconds = 12
+  )
+
+  $statusCode = $null
+  $requestError = $null
+  try {
+    $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSeconds
+    $statusCode = [int]$response.StatusCode
+  } catch {
+    $requestError = $_.Exception.Message
+    if ($null -ne $_.Exception.Response) {
+      $statusCode = [int]$_.Exception.Response.StatusCode
+    }
+  }
+
+  $ok = $null -ne $statusCode -and $statusCode -eq $ExpectedStatus
+  return [pscustomobject]@{
+    ok = $ok
+    statusCode = $statusCode
+    error = if ($ok) { $null } elseif ($null -ne $statusCode) {
+      "expected HTTP $ExpectedStatus, got HTTP $statusCode"
+    } else {
+      $requestError
+    }
+  }
+}
+
 $effectiveSkipPublic = $SkipPublic -or [string]::IsNullOrWhiteSpace($PublicBaseUrl)
 
 Write-Host "[7420-soak] start duration=${DurationSeconds}s interval=${IntervalSeconds}s local=$LocalBaseUrl public=$PublicBaseUrl"
@@ -76,15 +150,38 @@ while ((Get-Date) -lt $deadline) {
   $now = Get-Date
   $local = Invoke-JsonHealth -Url "$LocalBaseUrl/health" -TimeoutSeconds 8
   $api = Invoke-JsonHealth -Url "$LocalBaseUrl/codex-api/health" -TimeoutSeconds 20
+  $replay = Invoke-EventReplayHealth -Url "$LocalBaseUrl/codex-api/events/replay?after=0&limit=1" -TimeoutSeconds 8
   $public = if ($effectiveSkipPublic) {
     [pscustomobject]@{ ok = $true; value = $null; error = $null }
   } else {
     Invoke-JsonHealth -Url "$PublicBaseUrl/health" -TimeoutSeconds 12
   }
+  $publicAuth = if ($effectiveSkipPublic) {
+    [pscustomobject]@{ ok = $true; statusCode = $null; error = $null }
+  } else {
+    Invoke-ExpectedHttpStatus -Url "$PublicBaseUrl/codex-api/health" -ExpectedStatus 401 -TimeoutSeconds 12
+  }
 
   if ($local.ok) { $consecutiveLocalFailures = 0 } else { $consecutiveLocalFailures += 1 }
   if ($api.ok) { $consecutiveApiFailures = 0 } else { $consecutiveApiFailures += 1 }
   if ($public.ok) { $consecutivePublicFailures = 0 } else { $consecutivePublicFailures += 1 }
+  if ($replay.ok) { $consecutiveReplayFailures = 0 } else {
+    $consecutiveReplayFailures += 1
+    $replayFailureCount += 1
+  }
+  if ($publicAuth.ok) { $consecutivePublicAuthFailures = 0 } else {
+    $consecutivePublicAuthFailures += 1
+    $publicAuthFailureCount += 1
+  }
+
+  $eventSeqRegressed = $false
+  if ($replay.ok) {
+    if ($null -ne $lastEventSeq -and [long]$replay.latestSeq -lt [long]$lastEventSeq) {
+      $eventSeqRegressed = $true
+      $eventSeqRegressionCount += 1
+    }
+    $lastEventSeq = [long]$replay.latestSeq
+  }
 
   $appServer = $api.value.data.appServer
   $diagnostics = $appServer.rpcDiagnostics
@@ -117,7 +214,12 @@ while ((Get-Date) -lt $deadline) {
     atIso = $now.ToUniversalTime().ToString("o")
     localOk = [bool]$local.ok
     apiOk = [bool]$api.ok
+    eventReplayOk = [bool]$replay.ok
+    latestEventSeq = $replay.latestSeq
+    eventSeqRegressed = $eventSeqRegressed
     publicOk = [bool]$public.ok
+    publicAuthOk = [bool]$publicAuth.ok
+    publicAuthStatusCode = $publicAuth.statusCode
     appServerRunning = [bool]$appServer.running
     appServerInitialized = [bool]$appServer.initialized
     pendingRpcCount = $pendingRpcCount
@@ -128,12 +230,14 @@ while ((Get-Date) -lt $deadline) {
     slowThreadListCount = $slowThreadLists.Count
     localError = $local.error
     apiError = $api.error
+    eventReplayError = $replay.error
     publicError = $public.error
+    publicAuthError = $publicAuth.error
   }
   $samples.Add($sample) | Out-Null
 
-  Write-Host ("[7420-soak] {0} local={1} api={2} public={3} pending={4} queued={5} timeouts={6} slowThreadList={7}" -f `
-    $sample.atIso, $sample.localOk, $sample.apiOk, $sample.publicOk, $sample.pendingRpcCount, $sample.queuedRpcCount, $sample.newTimeoutCount, $sample.slowThreadListCount)
+  Write-Host ("[7420-soak] {0} local={1} api={2} replay={3}/{4} public={5} auth401={6} pending={7} queued={8} timeouts={9} slowThreadList={10}" -f `
+    $sample.atIso, $sample.localOk, $sample.apiOk, $sample.eventReplayOk, $sample.latestEventSeq, $sample.publicOk, $sample.publicAuthOk, $sample.pendingRpcCount, $sample.queuedRpcCount, $sample.newTimeoutCount, $sample.slowThreadListCount)
 
   if ($consecutiveLocalFailures -gt $MaxConsecutiveFailures) {
     $failures.Add("local health failed $consecutiveLocalFailures times in a row") | Out-Null
@@ -143,6 +247,15 @@ while ((Get-Date) -lt $deadline) {
   }
   if (-not $effectiveSkipPublic -and $consecutivePublicFailures -gt $MaxConsecutiveFailures) {
     $failures.Add("public health failed $consecutivePublicFailures times in a row") | Out-Null
+  }
+  if ($consecutiveReplayFailures -gt $MaxConsecutiveFailures) {
+    $failures.Add("event replay failed $consecutiveReplayFailures times in a row") | Out-Null
+  }
+  if (-not $effectiveSkipPublic -and $consecutivePublicAuthFailures -gt $MaxConsecutiveFailures) {
+    $failures.Add("public auth boundary failed $consecutivePublicAuthFailures times in a row") | Out-Null
+  }
+  if ($eventSeqRegressed) {
+    $failures.Add("event replay latestSeq regressed during the soak") | Out-Null
   }
   if ($queuedRpcCount -gt $MaxQueuedRpc) {
     $failures.Add("queuedRpcCount $queuedRpcCount exceeded $MaxQueuedRpc") | Out-Null
@@ -181,6 +294,10 @@ $summary = [pscustomobject]@{
   maxPendingRpcCount = $maxPendingObserved
   newTimeoutCount = $newTimeoutCount
   slowThreadListCount = $slowThreadListCount
+  replayFailureCount = $replayFailureCount
+  publicAuthFailureCount = $publicAuthFailureCount
+  eventSeqRegressionCount = $eventSeqRegressionCount
+  latestEventSeq = $lastEventSeq
   failures = @($failures.ToArray())
   localBaseUrl = $LocalBaseUrl
   publicBaseUrl = $publicReportUrl
@@ -195,7 +312,7 @@ $reportPath = Join-Path $OutputDir "soak-$stamp.json"
 
 Write-Host "[7420-soak] report: $reportPath"
 if ($passed) {
-  Write-Host "[7420-soak] passed samples=$($samples.Count) maxPending=$maxPendingObserved maxQueued=$maxQueuedObserved timeouts=$newTimeoutCount slowThreadList=$slowThreadListCount"
+  Write-Host "[7420-soak] passed samples=$($samples.Count) maxPending=$maxPendingObserved maxQueued=$maxQueuedObserved timeouts=$newTimeoutCount slowThreadList=$slowThreadListCount replayFailures=$replayFailureCount authFailures=$publicAuthFailureCount seqRegressions=$eventSeqRegressionCount latestSeq=$lastEventSeq"
   exit 0
 }
 
