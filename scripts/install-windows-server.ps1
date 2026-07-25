@@ -662,6 +662,50 @@ function Wait-ForTunnelUrlFromLog {
   return $null
 }
 
+function Wait-ForTunnelReadyState {
+  param(
+    [int]$TargetPort,
+    [int]$TimeoutSeconds = 180
+  )
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  $lastStatus = $null
+  $consecutiveErrorSnapshots = 0
+  do {
+    try {
+      $response = Invoke-RestMethod `
+        -Uri "http://127.0.0.1:$TargetPort/codex-api/tunnel-status" `
+        -TimeoutSec 10
+      if ($response -and $response.data) {
+        $lastStatus = $response.data
+        $verification = $lastStatus.verification
+        $ready =
+          [bool]$lastStatus.active -and
+          [string]$lastStatus.phase -eq "ready" -and
+          [bool]$verification.health -and
+          [bool]$verification.auth -and
+          [bool]$verification.websocketAuth
+        if ($ready) {
+          return $lastStatus
+        }
+        if ([string]$lastStatus.phase -eq "error") {
+          $consecutiveErrorSnapshots++
+          if ($consecutiveErrorSnapshots -ge 8) {
+            return $lastStatus
+          }
+        } else {
+          $consecutiveErrorSnapshots = 0
+        }
+      }
+    } catch {
+      $consecutiveErrorSnapshots = 0
+    }
+    Start-Sleep -Milliseconds 500
+  } while ((Get-Date) -lt $deadline)
+
+  return $lastStatus
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $nodeExecutable = if ([string]::IsNullOrWhiteSpace($NodeCommand)) {
   (Get-Command node -ErrorAction Stop).Source
@@ -923,6 +967,22 @@ $tunnelUrl = if ($Tunnel -and $StartNow -and $healthPayload) {
 } else {
   $null
 }
+$runtimeTunnel = if ($Tunnel -and $StartNow -and $healthPayload) {
+  Wait-ForTunnelReadyState -TargetPort $Port
+} else {
+  $null
+}
+if ($Tunnel -and $StartNow -and $healthPayload -and -not [bool]$runtimeTunnel.active) {
+  $tunnelMessage = if (
+    $runtimeTunnel -and
+    -not [string]::IsNullOrWhiteSpace([string]$runtimeTunnel.message)
+  ) {
+    [string]$runtimeTunnel.message
+  } else {
+    "Tunnel verification did not reach the ready state before the installer timeout."
+  }
+  Write-InstallerWarning -Code "TUNNEL_NOT_READY" -Message $tunnelMessage
+}
 
 if (-not $JsonOutput) {
   Write-InstallerMessage ""
@@ -942,8 +1002,8 @@ if (-not $JsonOutput) {
     Write-InstallerMessage "Pairing:  http://127.0.0.1:$Port/local-setup (local machine only)"
   }
   if ($Tunnel) {
-    if ($tunnelUrl) {
-      Write-InstallerMessage "Tunnel:   $tunnelUrl"
+    if ([bool]$runtimeTunnel.active) {
+      Write-InstallerMessage "Tunnel:   $([string]$runtimeTunnel.publicUrl)"
     } else {
       Write-InstallerMessage "Tunnel:   enabled; check $outLogPath for the trycloudflare.com URL"
     }
@@ -973,15 +1033,6 @@ if (-not $healthPayload -and $StartNow) {
 }
 
 if ($JsonOutput) {
-  $tunnelStatus = $null
-  if ($StartNow) {
-    try {
-      $tunnelStatus = Invoke-RestMethod `
-        -Uri "http://127.0.0.1:$Port/codex-api/tunnel-status" `
-        -TimeoutSec 10
-    } catch {}
-  }
-  $runtimeTunnel = if ($tunnelStatus -and $tunnelStatus.data) { $tunnelStatus.data } else { $null }
   $packageVersion = try {
     [string](Get-Content -LiteralPath (Join-Path $repoRoot "package.json") -Raw | ConvertFrom-Json).version
   } catch {

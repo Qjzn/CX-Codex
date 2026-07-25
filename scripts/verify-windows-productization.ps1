@@ -87,6 +87,16 @@ $installScript = Join-Path $repoRoot "scripts\install-windows-server.ps1"
 $uninstallScript = Join-Path $repoRoot "scripts\uninstall-windows.ps1"
 $bootstrapScript = Join-Path $repoRoot "scripts\bootstrap-windows.ps1"
 $testRoot = Join-Path $env:TEMP "cx-codex-productization-$PID"
+$installSource = Get-Content -LiteralPath $installScript -Raw
+Assert-True `
+  ($installSource -match "function\s+Wait-ForTunnelReadyState") `
+  "Windows installer must wait for the runtime tunnel readiness state."
+Assert-True `
+  ($installSource -match '\[bool\]\$lastStatus\.active[\s\S]*?\[string\]\$lastStatus\.phase\s+-eq\s+"ready"[\s\S]*?\[bool\]\$verification\.health[\s\S]*?\[bool\]\$verification\.auth[\s\S]*?\[bool\]\$verification\.websocketAuth') `
+  "Tunnel readiness must require active, ready, health, HTTP auth, and WebSocket auth."
+Assert-True `
+  ($installSource -match '\$runtimeTunnel\s*=\s*if\s*\(\$Tunnel[\s\S]*?Wait-ForTunnelReadyState[\s\S]*?if\s*\(-not\s+\$JsonOutput\)') `
+  "Tunnel readiness must settle before human or JSON install output is emitted."
 
 if (Test-Path -LiteralPath $testRoot) {
   $resolvedTemp = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\')
