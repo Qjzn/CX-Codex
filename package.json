@@ -1,6 +1,6 @@
 {
   "name": "cx-codex",
-  "version": "2.4.1",
+  "version": "2.5.0",
   "description": "CX-Codex Web UI and browser bridge for Windows, Linux, Android, LAN, and remote self-hosted access",
   "type": "module",
   "license": "MIT",
@@ -74,6 +74,7 @@
     "verify:frontend-normalizers": "node ./scripts/verify-frontend-normalizers.mjs",
     "verify:quick-tunnel": "node ./scripts/verify-quick-tunnel-manager.mjs",
     "verify:server-modules": "node ./scripts/verify-server-modules.mjs",
+    "verify:windows-productization": "node ./scripts/run-powershell-script.mjs ./scripts/verify-windows-productization.ps1",
     "verify:release": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release.ps1",
     "verify:release-artifacts": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release-artifacts.ps1",
     "preview": "vite preview",

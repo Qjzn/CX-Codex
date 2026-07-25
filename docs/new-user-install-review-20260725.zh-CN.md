@@ -4,7 +4,7 @@
 
 从没有 CX-Codex 运行环境的 Windows 状态出发，按 README 的一行命令已经能够完成安装、构建、启动、免费临时公网访问、密码登录、发送消息和接收回复。
 
-最终成功用时 153.5 秒。功能链路可用，但还不能称为真正“傻瓜式”：安装过程缺少进度反馈，正式 Release 尚未包含新功能，没有官方卸载入口，首次工作区选择也不够明确。
+最终成功用时 153.5 秒。功能链路可用；随后一轮产品化调整已经补齐稳定 JSON、同版本能力清单、官方卸载入口和真实 StartNow/卸载门禁，并纳入 2.5.0 正式发布链路。当前仍不能称为真正“傻瓜式”，主要差距变为：下载阶段缺少连续进度、首次工作区选择和二维码配对仍不够明确。
 
 ## 测试边界
 
@@ -30,7 +30,7 @@
 1. 在普通 PowerShell 中执行 README 命令：
 
    ```powershell
-   & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) -UseBranchArchive -RemoteQuick -JsonOutput
+   & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) -RemoteQuick -JsonOutput
    ```
 
 2. 等待源码下载、依赖安装、前端/CLI 构建和 cloudflared 下载。
@@ -67,19 +67,22 @@
 4. 本机健康失败后仍等待 150 秒公网地址。现在本机启动失败会立即跳过隧道等待。
 5. 全新安装失败只删除项目目录，曾残留运行状态、启动器和 cloudflared。现在只清理本次新建的文件，安装前已有内容不动。
 6. GitHub Actions 的 PowerShell 冷启动偶发超过 5 秒。探测超时调整为 15 秒，减少无业务原因的 CI 波动。
+7. `-JsonOutput` 原先会混入构建输出。现在 stdout 只保留一行版本化 JSON，进度/诊断进入 stderr；失败返回固定错误码和阶段。
+8. raw bootstrap 与旧 Release 可能错配。现在归档携带 `release-capabilities.json`，bootstrap 会在组合新参数前验证能力。
+9. 缺少官方卸载入口。现在默认卸载保留用户数据、Codex 登录态、工作区和 Android 签名，可显式清运行数据与项目托管的 cloudflared。
+10. `StartNow` 使用通用日志时可能被已有实例占用。现在使用端口级启动日志，并用真实健康与卸载关停作为 Windows CI 门禁。
 
 ## 槽点
 
-### P0：正式发布一致性
+### 已关闭：正式发布一致性
 
-- 最新正式 Release 仍是 `2.4.1`，不包含 `-RemoteQuick`。
-- README 暂时必须使用 `-UseBranchArchive`，源码归档没有 Release SHA-256 保证。
-- Raw 文件在连续推送后的短时间内可能命中旧缓存，bootstrap 与源码归档存在短暂版本错位风险。
+- 2.5.0 正式 Release 包含 `-RemoteQuick`、稳定 JSON、能力清单和官方卸载器。
+- README 默认使用 Release + SHA-256 链路，不再依赖 `main` 源码归档。
+- Release 工作流强制校验标签、`package.json` 和版本说明一致，避免误发错版本。
 
 ### P1：安装体验
 
 - 冷安装约 2.5 分钟，cloudflared 下载期间可连续几十秒没有输出。
-- `-JsonOutput` 之前仍有构建日志和提示，不能直接作为稳定的机器接口消费。
 - npm/Vite 输出较多，新人难以判断“正常构建”还是“安装失败”。
 - 没有下载百分比、剩余时间、镜像切换、断点续传或明确的重试按钮。
 - 安装后虽然生成 `CodexWorkspace`，已有 Codex 项目的用户仍可能默认停留在上次项目，需要手动切换。
@@ -89,11 +92,10 @@
 - 临时地址会变化，无 SLA，退出进程后失效。
 - 安全模式默认不创建自启动任务；重启电脑后需要重新启动并获得新地址。
 - 需要先在本机打开配对页，再到手机输入地址和密码；还没有二维码配对闭环。
-- 缺少官方一键卸载命令，用户难以判断哪些运行数据、登录态和工作区应该保留。
 
 ### P2：可维护性
 
-- Windows bootstrap、安装器、CLI 各自承担部分运行时和隧道逻辑，端到端组合测试仍偏少。
+- Windows bootstrap、安装器、CLI 各自承担部分运行时和隧道逻辑；已经增加 Windows 安装/启动/健康/卸载组合门禁，2.5.0 发布后仍需保留一次正式 Release 下载回归作为发版证据。
 - GitHub Dependabot 未启用，Code Scanning 没有分析结果。
 - 前端构建存在大于 500 kB 的 chunk 警告，影响首次打开速度。
 
@@ -101,11 +103,11 @@
 
 ### 第一阶段：发布即可用
 
-1. 发布包含本次功能的新 Release，并让 README 默认命令恢复 Release + SHA-256 链路。
-2. bootstrap 读取同版本能力清单，确认归档支持 `RemoteQuick`、`JsonOutput` 和所需安装器版本，拒绝混用。
-3. 规定 stdout 最终只输出一行稳定 JSON；进度和诊断写入 stderr，提供固定错误码。
-4. 增加官方 `uninstall-windows.ps1`，默认保留 Codex 登录态、工作区和 Android 签名，可选清除运行数据库与托管 cloudflared。
-5. Windows CI 增加真正的 `StartNow` 健康检查，而不只验证文件生成。
+1. 已完成：2.5.0 纳入本次功能，README 默认命令恢复 Release + SHA-256 链路。
+2. 已完成：bootstrap 读取同版本能力清单，确认归档支持 `RemoteQuick`、`JsonOutput` 和所需安装器契约，拒绝混用。
+3. 已完成：stdout 最终只输出一行稳定 JSON；进度和诊断写入 stderr，失败提供固定错误码和阶段。
+4. 已完成：增加官方 `uninstall-windows.ps1`，默认保留 Codex 登录态、工作区和 Android 签名，可选清除运行数据与托管 cloudflared。
+5. 已完成：Windows CI 增加真正的 `StartNow` 健康和卸载关停检查。
 
 ### 第二阶段：首次引导
 

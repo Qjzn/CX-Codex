@@ -54,22 +54,22 @@ curl.exe -sS -o NUL -w "%{http_code}`n" `
 
 ```powershell
 & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) `
-  -UseBranchArchive `
   -RemoteQuick `
   -JsonOutput
 ```
 
-`-RemoteQuick` 尚未进入当前 `2.4.1` Release，因此这里暂时显式安装 `main` 源码预览版。源码归档没有 Release SHA-256 保证；正式版本发布后应去掉 `-UseBranchArchive`。
+该命令默认安装最新正式 Release，并校验 Release 包的 SHA-256。只有参与 `main` 源码预览时才应显式增加 `-UseBranchArchive`。
 
 这个命令会：
 
-- 从最新正式 GitHub Release 安装或更新 `CX-Codex`，校验 Release SHA-256
+- 从最新正式 Release 安装，并校验配套 SHA-256
 - 使用临时目录原子切换版本，安装失败时保留或恢复上一版本
+- 校验归档内的能力清单，拒绝把 `RemoteQuick` / `JsonOutput` 交给不支持它们的旧版本
 - 自动下载官方 `cloudflared.exe`，并按 Cloudflare Release 正文校验 SHA-256
 - 固定监听 `127.0.0.1:7420`，不创建防火墙规则、开机任务或看门狗任务
 - 隔离已有 `%USERPROFILE%\.cloudflared\config.yml`，不覆盖用户配置
 - 验证公网健康为 `200`、未登录 API 为 `401`、未登录 WebSocket 握手被拒绝
-- 最后一行输出不含密码和 Token 的 JSON 结果
+- stdout 只输出一行不含密码和 Token 的稳定 JSON；进度和诊断写入 stderr
 
 如果本机对 `api.trycloudflare.com` 的解析与 Cloudflare DoH 结果不一致，CX-Codex 会为本次进程启动一个仅监听回环地址、带随机路径的临时转发，并让 cloudflared 只通过它申请快速隧道。它与隧道同时停止，不写 hosts、不改系统 DNS，也不接管其他域名。该兼容回退依赖 cloudflared 当前的 Quick Tunnel 参数；若未来官方移除参数，CX-Codex 会返回明确错误并保持公网关闭，需要升级项目或改用固定 Tunnel / Tailscale。
 
@@ -84,6 +84,14 @@ http://127.0.0.1:7420/local-setup
 这个页面同时检查 TCP 来源和 `Host` 都是回环地址；通过公网域名、局域网 IP 或 Cloudflare 地址请求时返回 `404`。
 
 服务已经运行时，也可进入 CX-Codex 设置，找到“手机访问”，点击“生成手机访问地址”。设置页会显示健康、密码和消息连接三项验证，并提供复制、打开、刷新和停止入口。
+
+需要卸载时，执行：
+
+```powershell
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/uninstall-windows.ps1')))
+```
+
+默认保留 CX-Codex 用户数据、Codex 登录态和工作区。只有明确不再需要运行数据与项目托管的 cloudflared 时，才增加 `-RemoveUserData -RemoveCloudflared`。
 
 从源码执行 `npm ci` 和 `npm run build` 后，也可直接用 CLI 开启这条链路：
 

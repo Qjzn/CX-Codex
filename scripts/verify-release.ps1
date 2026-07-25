@@ -351,6 +351,7 @@ if (-not $SkipPackageSmoke) {
   Assert-ZipContains -ZipPath $zipPath -RequiredEntries @(
     "README.md",
     "RELEASE.md",
+    "release-capabilities.json",
     "CODE_OF_CONDUCT.md",
     "SECURITY.md",
     "SUPPORT.md",
@@ -371,6 +372,8 @@ if (-not $SkipPackageSmoke) {
     "docs\roadmap.zh-CN.md",
     "docs\security-hardening.zh-CN.md",
     "scripts\package-release.ps1",
+    "scripts\uninstall-windows.ps1",
+    "scripts\verify-windows-productization.ps1",
     "scripts\verify-frontend-normalizers.mjs",
     "scripts\verify-governance.ps1",
     "scripts\verify-release.ps1",

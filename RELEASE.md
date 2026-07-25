@@ -100,6 +100,6 @@ Release 压缩包默认包含：
 - `README.md` 是中文主文档，也包含面向 GitHub / AI 检索的英文关键词。
 - `README.zh-CN.md` 只保留兼容跳转。
 - 更新日志统一写入 `docs/changelog.zh-CN.md`。
-- Release 正文使用 `.github/release-body.md`。
+- Release workflow 会校验标签、`package.json` 与 `docs/release-notes-<version>.zh-CN.md` 一致，并使用对应版本说明作为正文；`.github/release-body.md` 保留为通用模板与审查基线。
 - 每次发版前优先参考 `docs/release-template.zh-CN.md`，先整理用户可感知变化，再发布。
 - 公开截图必须使用脱敏演示数据，不能包含真实路径、密钥、账号、公网地址或私人会话。

@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "installerContractVersion": 1,
+  "features": {
+    "remoteQuick": true,
+    "jsonOutput": true,
+    "stableJsonContract": true,
+    "windowsUninstall": true
+  }
+}

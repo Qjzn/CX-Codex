@@ -31,11 +31,44 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:InstallWarnings = New-Object 'System.Collections.Generic.List[object]'
+
+function Write-InstallerMessage {
+  param(
+    [string]$Message,
+    [ConsoleColor]$ForegroundColor = [ConsoleColor]::Gray
+  )
+
+  if ($JsonOutput) {
+    [Console]::Error.WriteLine($Message)
+  } else {
+    Write-Host $Message -ForegroundColor $ForegroundColor
+  }
+}
+
+function Write-InstallerWarning {
+  param(
+    [string]$Code,
+    [object]$Message
+  )
+
+  $text = [string]$Message
+  $script:InstallWarnings.Add([ordered]@{
+    code = $Code
+    message = $text
+  }) | Out-Null
+
+  if ($JsonOutput) {
+    [Console]::Error.WriteLine("warning[$Code]: $text")
+  } else {
+    Write-Warning $text
+  }
+}
 
 function Write-Step {
   param([string]$Message)
-  Write-Host ""
-  Write-Host "==> $Message" -ForegroundColor Cyan
+  Write-InstallerMessage ""
+  Write-InstallerMessage "==> $Message" -ForegroundColor Cyan
 }
 
 function New-StablePassword {
@@ -158,15 +191,21 @@ function Ensure-CodexLogin {
 
   $authPath = Get-CodexAuthPath
   if (Test-Path -LiteralPath $authPath) {
-    Write-Host "Codex auth already present: $authPath"
+    Write-InstallerMessage "Codex auth already present: $authPath"
     return
   }
 
   Write-Step "Codex login required"
-  Write-Host "No Codex auth was found, so login will open once in this console."
-  & $NodePath "$RepoRoot\dist-cli\index.js" login
-  if ($LASTEXITCODE -ne 0) {
-    throw "Codex login failed with exit code $LASTEXITCODE"
+  Write-InstallerMessage "No Codex auth was found, so login will open once in this console."
+  if ($JsonOutput) {
+    & $NodePath "$RepoRoot\dist-cli\index.js" login 2>&1 |
+      ForEach-Object { [Console]::Error.WriteLine([string]$_) }
+  } else {
+    & $NodePath "$RepoRoot\dist-cli\index.js" login
+  }
+  $loginExitCode = $LASTEXITCODE
+  if ($loginExitCode -ne 0) {
+    throw "Codex login failed with exit code $loginExitCode"
   }
 }
 
@@ -179,6 +218,7 @@ function Stop-ExistingCodexUiProcesses {
   )
 
   $managedProcessIds = New-Object 'System.Collections.Generic.HashSet[int]'
+  $managedCommandLines = @{}
   $launcherLeaf = if ([string]::IsNullOrWhiteSpace($TargetLauncherPath)) { "" } else { Split-Path -Leaf $TargetLauncherPath }
 
   try {
@@ -204,6 +244,7 @@ function Stop-ExistingCodexUiProcesses {
 
       if ($isManagedCodexUi) {
         $managedProcessIds.Add($processId) | Out-Null
+        $managedCommandLines[$processId] = $commandLine
       }
     }
   } catch {}
@@ -215,6 +256,7 @@ function Stop-ExistingCodexUiProcesses {
     $listeners = @()
   }
 
+  $processIdsToStop = New-Object 'System.Collections.Generic.HashSet[int]'
   foreach ($processId in $listeners) {
     if (-not $processId -or $processId -eq $PID) {
       continue
@@ -226,13 +268,27 @@ function Stop-ExistingCodexUiProcesses {
     }
 
     if (-not $managedProcessIds.Contains([int]$processId)) {
-      Write-Warning "Port $TargetPort is already occupied by PID $processId ($($processInfo.Name)). Not stopping it automatically."
+      Write-InstallerWarning `
+        -Code "PORT_IN_USE" `
+        -Message "Port $TargetPort is already occupied by PID $processId ($($processInfo.Name)). Not stopping it automatically."
       return $false
+    }
+    $processIdsToStop.Add([int]$processId) | Out-Null
+  }
+
+  foreach ($entry in $managedCommandLines.GetEnumerator()) {
+    $managedProcessId = [int]$entry.Key
+    $commandLine = [string]$entry.Value
+    $isExactManagedInstance =
+      $commandLine -like "*$TargetConfigPath*" -or
+      (-not [string]::IsNullOrWhiteSpace($TargetLauncherPath) -and $commandLine -like "*$TargetLauncherPath*")
+    if ($isExactManagedInstance) {
+      $processIdsToStop.Add($managedProcessId) | Out-Null
     }
   }
 
-  foreach ($managedProcessId in $managedProcessIds) {
-    Write-Host "Stopping previous CX-Codex process (PID $managedProcessId)..."
+  foreach ($managedProcessId in $processIdsToStop) {
+    Write-InstallerMessage "Stopping previous CX-Codex process (PID $managedProcessId)..."
     Stop-Process -Id $managedProcessId -Force -ErrorAction SilentlyContinue
   }
 
@@ -373,7 +429,7 @@ function Install-CloudflaredWindows {
     if ($preferred -ne "cloudflared" -and -not $isManagedCommand) {
       $preferredVersion = & $preferred --version 2>$null
       if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($preferredVersion)) {
-        Write-Host "Using explicitly configured cloudflared: $preferred"
+        Write-InstallerMessage "Using explicitly configured cloudflared: $preferred"
         return $preferred
       }
     }
@@ -391,7 +447,7 @@ function Install-CloudflaredWindows {
     }
     $cachedVersion = & $cached.FullName --version 2>$null
     if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($cachedVersion)) {
-      Write-Host "Using verified cached cloudflared: $($cached.FullName)"
+      Write-InstallerMessage "Using verified cached cloudflared: $($cached.FullName)"
       return $cached.FullName
     }
   }
@@ -423,11 +479,11 @@ function Install-CloudflaredWindows {
   $temporaryPath = "$targetPath.download-$PID"
 
   New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-  Write-Host "Downloading cloudflared: $downloadUrl"
+  Write-InstallerMessage "Downloading cloudflared: $downloadUrl"
   if (Test-Path -LiteralPath $targetPath) {
     $currentChecksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $targetPath).Hash.ToLowerInvariant()
     if ($currentChecksum -eq $expectedChecksum) {
-      Write-Host "Verified cloudflared already available: $targetPath"
+      Write-InstallerMessage "Verified cloudflared already available: $targetPath"
       return $targetPath
     }
   }
@@ -445,7 +501,7 @@ function Install-CloudflaredWindows {
     throw "cloudflared download completed but verification failed: $targetPath"
   }
 
-  Write-Host "cloudflared installed: $targetPath"
+  Write-InstallerMessage "cloudflared installed: $targetPath"
   return $targetPath
 }
 
@@ -465,11 +521,13 @@ function Ensure-CloudflaredForTunnel {
 
   $existing = Resolve-CloudflaredCommand -PreferredCommand $PreferredCommand
   if ($existing) {
-    Write-Host "cloudflared available: $existing"
+    Write-InstallerMessage "cloudflared available: $existing"
     return $existing
   }
 
-  Write-Warning "Tunnel is enabled but cloudflared was not found. Re-run with -InstallCloudflared, or install Cloudflare.cloudflared manually."
+  Write-InstallerWarning `
+    -Code "CLOUDFLARED_NOT_FOUND" `
+    -Message "Tunnel is enabled but cloudflared was not found. Re-run with -InstallCloudflared, or install Cloudflare.cloudflared manually."
   return $null
 }
 
@@ -532,12 +590,27 @@ $npmExecutable = if ($resolvedNpmCliPath) {
 }
 
 function Invoke-Npm {
-  param([string[]]$Arguments)
+  param(
+    [string[]]$Arguments,
+    [switch]$ProgressOutput
+  )
+
   if ($resolvedNpmCliPath) {
-    & $nodeExecutable $resolvedNpmCliPath @Arguments
+    if ($JsonOutput -and $ProgressOutput) {
+      & $nodeExecutable $resolvedNpmCliPath @Arguments 2>&1 |
+        ForEach-Object { [Console]::Error.WriteLine([string]$_) }
+    } else {
+      & $nodeExecutable $resolvedNpmCliPath @Arguments
+    }
     return
   }
-  & $npmExecutable @Arguments
+
+  if ($JsonOutput -and $ProgressOutput) {
+    & $npmExecutable @Arguments 2>&1 |
+      ForEach-Object { [Console]::Error.WriteLine([string]$_) }
+  } else {
+    & $npmExecutable @Arguments
+  }
 }
 
 $npmVersion = Get-ToolVersionObject -VersionOutput (Invoke-Npm -Arguments @("--version")) -ToolName "npm"
@@ -545,10 +618,10 @@ if ($npmVersion -lt $minimumNpmVersion) {
   throw "npm $minimumNpmVersion or newer is required (found $npmVersion). Run scripts/bootstrap-windows.ps1 to use a compatible portable Node.js/npm pair."
 }
 
-Write-Host "Using repo root: $repoRoot"
-Write-Host "Using node: $nodeExecutable"
+Write-InstallerMessage "Using repo root: $repoRoot"
+Write-InstallerMessage "Using node: $nodeExecutable"
 $npmDisplay = if ($resolvedNpmCliPath) { "$nodeExecutable $resolvedNpmCliPath" } else { $npmExecutable }
-Write-Host "Using npm:  $npmDisplay"
+Write-InstallerMessage "Using npm:  $npmDisplay"
 
 Push-Location $repoRoot
 try {
@@ -559,7 +632,7 @@ try {
   if (-not $SkipNpmInstall) {
     Write-Step "Installing npm dependencies"
     $installCommand = if (Test-Path -LiteralPath (Join-Path $repoRoot "package-lock.json")) { "ci" } else { "install" }
-    Invoke-Npm -Arguments @($installCommand)
+    Invoke-Npm -Arguments @($installCommand) -ProgressOutput
     if ($LASTEXITCODE -ne 0) {
       throw "npm $installCommand failed with exit code $LASTEXITCODE"
     }
@@ -567,7 +640,7 @@ try {
 
   if (-not $SkipBuild) {
     Write-Step "Building CX-Codex"
-    Invoke-Npm -Arguments @("run", "build")
+    Invoke-Npm -Arguments @("run", "build") -ProgressOutput
     if ($LASTEXITCODE -ne 0) {
       throw "npm run build failed with exit code $LASTEXITCODE"
     }
@@ -643,9 +716,9 @@ if ($CreateStartupTask) {
   Write-Step "Creating startup task"
   try {
     Register-StartupTask -ResolvedTaskName $resolvedTaskName -TargetLauncherPath $LauncherPath
-    Write-Host "Scheduled task created: $resolvedTaskName"
+    Write-InstallerMessage "Scheduled task created: $resolvedTaskName"
   } catch {
-    Write-Warning $_
+    Write-InstallerWarning -Code "STARTUP_TASK_FAILED" -Message $_
   }
 }
 
@@ -653,9 +726,9 @@ if ($CreateWatchdogTask) {
   Write-Step "Creating watchdog task"
   try {
     Register-WatchdogTask -ResolvedTaskName $resolvedWatchdogTaskName -RepoRoot $repoRoot -TargetPort $Port -TargetConfigPath $ConfigPath -NodePath $nodeExecutable
-    Write-Host "Watchdog task created: $resolvedWatchdogTaskName"
+    Write-InstallerMessage "Watchdog task created: $resolvedWatchdogTaskName"
   } catch {
-    Write-Warning $_
+    Write-InstallerWarning -Code "WATCHDOG_TASK_FAILED" -Message $_
   }
 }
 
@@ -668,26 +741,39 @@ if ($OpenFirewall) {
       Remove-NetFirewallRule -DisplayName $ruleName | Out-Null
     }
     New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort $Port | Out-Null
-    Write-Host "Firewall rule created: $ruleName"
+    Write-InstallerMessage "Firewall rule created: $ruleName"
   } catch {
-    Write-Warning "Could not update firewall rule. Run PowerShell as Administrator if you want to open the port automatically."
+    Write-InstallerWarning `
+      -Code "FIREWALL_RULE_FAILED" `
+      -Message "Could not update firewall rule. Run PowerShell as Administrator if you want to open the port automatically."
   }
 }
 
+$logDir = "$env:USERPROFILE\.cx-codex\logs"
+$outLogPath = Join-Path $logDir "cx-codex-$Port.out.log"
+$errLogPath = Join-Path $logDir "cx-codex-$Port.err.log"
+New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 $healthPayload = $null
 if ($StartNow) {
   Write-Step "Starting CX-Codex"
   $canStart = Stop-ExistingCodexUiProcesses -TargetPort $Port -RepoRoot $repoRoot -TargetLauncherPath $LauncherPath -TargetConfigPath $ConfigPath
   if ($canStart) {
-    Start-Process -FilePath $LauncherPath -WindowStyle Hidden | Out-Null
+    $serverEntryPoint = Join-Path $repoRoot "dist-cli\index.js"
+    Start-Process `
+      -FilePath $nodeExecutable `
+      -ArgumentList @("`"$serverEntryPoint`"", "--config", "`"$ConfigPath`"") `
+      -WorkingDirectory $repoRoot `
+      -RedirectStandardOutput $outLogPath `
+      -RedirectStandardError $errLogPath `
+      -WindowStyle Hidden | Out-Null
     $healthPayload = Wait-ForHealthEndpoint -TargetPort $Port
   } else {
-    Write-Warning "Skipped auto-start because port $Port is already in use by another process."
+    Write-InstallerWarning `
+      -Code "START_SKIPPED_PORT_IN_USE" `
+      -Message "Skipped auto-start because port $Port is already in use by another process."
   }
 }
 
-$logDir = "$env:USERPROFILE\.cx-codex\logs"
-$outLogPath = Join-Path $logDir "cx-codex.out.log"
 $accessUrls = Get-AccessibleUrls -BindHostValue $BindHost -TargetPort $Port
 $tunnelUrl = if ($Tunnel -and $StartNow -and $healthPayload) {
   Wait-ForTunnelUrlFromLog -LogPath $outLogPath
@@ -695,47 +781,52 @@ $tunnelUrl = if ($Tunnel -and $StartNow -and $healthPayload) {
   $null
 }
 
-Write-Host ""
-Write-Host "Install complete."
-Write-Host "Config:   $ConfigPath"
-Write-Host "Launcher: $LauncherPath"
-Write-Host "Logs:     $logDir"
-if ($resolvedProjectPath) {
-  Write-Host "Project:  $resolvedProjectPath"
-}
-foreach ($url in $accessUrls) {
-  Write-Host "Browse:   $url"
-}
-Write-Host "Health:   http://127.0.0.1:$Port/health"
-Write-Host "Bridge:   http://127.0.0.1:$Port/codex-api/health"
-if ($passwordValue -is [string]) {
-  Write-Host "Pairing:  http://127.0.0.1:$Port/local-setup (local machine only)"
-}
-if ($Tunnel) {
-  if ($tunnelUrl) {
-    Write-Host "Tunnel:   $tunnelUrl"
-  } else {
-    Write-Host "Tunnel:   enabled; check $outLogPath for the trycloudflare.com URL"
+if (-not $JsonOutput) {
+  Write-InstallerMessage ""
+  Write-InstallerMessage "Install complete."
+  Write-InstallerMessage "Config:   $ConfigPath"
+  Write-InstallerMessage "Launcher: $LauncherPath"
+  Write-InstallerMessage "Logs:     $logDir"
+  if ($resolvedProjectPath) {
+    Write-InstallerMessage "Project:  $resolvedProjectPath"
+  }
+  foreach ($url in $accessUrls) {
+    Write-InstallerMessage "Browse:   $url"
+  }
+  Write-InstallerMessage "Health:   http://127.0.0.1:$Port/health"
+  Write-InstallerMessage "Bridge:   http://127.0.0.1:$Port/codex-api/health"
+  if ($passwordValue -is [string]) {
+    Write-InstallerMessage "Pairing:  http://127.0.0.1:$Port/local-setup (local machine only)"
+  }
+  if ($Tunnel) {
+    if ($tunnelUrl) {
+      Write-InstallerMessage "Tunnel:   $tunnelUrl"
+    } else {
+      Write-InstallerMessage "Tunnel:   enabled; check $outLogPath for the trycloudflare.com URL"
+    }
+  }
+  if ($resolvedCloudflaredCommand) {
+    Write-InstallerMessage "cloudflared: $resolvedCloudflaredCommand"
+  }
+  if ($passwordValue -is [string]) {
+    Write-InstallerMessage "Password: enabled (hidden)"
+  } elseif ($passwordValue -eq $false) {
+    Write-InstallerMessage "Password: disabled"
+  }
+  if ($CreateStartupTask) {
+    Write-InstallerMessage "Task:     $resolvedTaskName"
+  }
+  if ($CreateWatchdogTask) {
+    Write-InstallerMessage "Watchdog: $resolvedWatchdogTaskName"
+  }
+  if ($healthPayload) {
+    Write-InstallerMessage "Status:   health check passed"
   }
 }
-if ($resolvedCloudflaredCommand) {
-  Write-Host "cloudflared: $resolvedCloudflaredCommand"
-}
-if ($passwordValue -is [string]) {
-  Write-Host "Password: enabled (hidden)"
-} elseif ($passwordValue -eq $false) {
-  Write-Host "Password: disabled"
-}
-if ($CreateStartupTask) {
-  Write-Host "Task:     $resolvedTaskName"
-}
-if ($CreateWatchdogTask) {
-  Write-Host "Watchdog: $resolvedWatchdogTaskName"
-}
-if ($healthPayload) {
-  Write-Host "Status:   health check passed"
-} elseif ($StartNow) {
-  Write-Warning "Health check did not succeed yet. If this is the first run, check the browser login flow or logs in $logDir."
+if (-not $healthPayload -and $StartNow) {
+  Write-InstallerWarning `
+    -Code "HEALTH_CHECK_PENDING" `
+    -Message "Health check did not succeed yet. Check the browser login flow or logs in $logDir."
 }
 
 if ($JsonOutput) {
@@ -748,8 +839,18 @@ if ($JsonOutput) {
     } catch {}
   }
   $runtimeTunnel = if ($tunnelStatus -and $tunnelStatus.data) { $tunnelStatus.data } else { $null }
+  $packageVersion = try {
+    [string](Get-Content -LiteralPath (Join-Path $repoRoot "package.json") -Raw | ConvertFrom-Json).version
+  } catch {
+    "unknown"
+  }
   [ordered]@{
-    ok = [bool]$healthPayload -and ((-not $Tunnel) -or [bool]$runtimeTunnel.active)
+    schemaVersion = 1
+    operation = "install"
+    ok = ((-not $StartNow) -or [bool]$healthPayload) -and ((-not $Tunnel) -or [bool]$runtimeTunnel.active)
+    version = $packageVersion
+    started = $StartNow.IsPresent
+    healthReady = [bool]$healthPayload
     localUrl = "http://127.0.0.1:$Port"
     pairingUrl = if ($passwordValue -is [string]) { "http://127.0.0.1:$Port/local-setup" } else { "" }
     publicUrl = if ($runtimeTunnel) { [string]$runtimeTunnel.publicUrl } else { [string]$tunnelUrl }
@@ -764,6 +865,7 @@ if ($JsonOutput) {
     }
     configPath = $ConfigPath
     logsPath = $logDir
-    warnings = @()
+    uninstallScript = (Join-Path $repoRoot "scripts\uninstall-windows.ps1")
+    warnings = @($script:InstallWarnings | ForEach-Object { $_ })
   } | ConvertTo-Json -Depth 6 -Compress | Write-Output
 }

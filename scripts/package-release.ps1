@@ -96,6 +96,7 @@ $releaseItems = @(
   "index.html",
   "package-lock.json",
   "package.json",
+  "release-capabilities.json",
   "scripts",
   "setup.ps1",
   "src",

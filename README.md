@@ -17,6 +17,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 ## 快速入口
 
 - 最新 Release: [github.com/Qjzn/CX-Codex/releases/latest](https://github.com/Qjzn/CX-Codex/releases/latest)
+- 2.5.0 发布说明: [docs/release-notes-2.5.0.zh-CN.md](./docs/release-notes-2.5.0.zh-CN.md)
 - 2.4.1 发布说明: [docs/release-notes-2.4.1.zh-CN.md](./docs/release-notes-2.4.1.zh-CN.md)
 - 2.4.0 发布说明: [docs/release-notes-2.4.0.zh-CN.md](./docs/release-notes-2.4.0.zh-CN.md)
 - 2.3.1 发布说明: [docs/release-notes-2.3.1.zh-CN.md](./docs/release-notes-2.3.1.zh-CN.md)
@@ -125,7 +126,7 @@ http://127.0.0.1:7420
 
 ```text
 打开并检查 https://github.com/Qjzn/CX-Codex 这个仓库。
-请只运行项目官方 Windows bootstrap，并使用 -UseBranchArchive -RemoteQuick -JsonOutput。
+请只运行项目官方 Windows bootstrap，并使用 -RemoteQuick -JsonOutput。
 安装到当前用户目录，保持 127.0.0.1:7420、访问密码和 SHA-256 校验；
 不要修改防火墙、hosts、系统 DNS，不要关闭鉴权，也不要输出密码、Cookie 或 Token。
 完成后只返回 JSON 中的 publicUrl、pairingUrl、停止方式和非敏感错误。
@@ -136,12 +137,32 @@ http://127.0.0.1:7420
 官方执行入口：
 
 ```powershell
-& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) -UseBranchArchive -RemoteQuick -JsonOutput
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) -RemoteQuick -JsonOutput
 ```
 
-> `-RemoteQuick` 尚未进入当前 `2.4.1` Release，因此暂时显式使用 `-UseBranchArchive` 安装 `main` 源码预览版。源码归档没有 Release SHA-256 保证；正式版本发布后应去掉该参数，恢复默认的 Release 校验链路。
+默认安装最新正式 Release，并校验 Release 包的 SHA-256；只有参与源码预览时才应显式使用 `-UseBranchArchive`。
 
 安装完成后，电脑本机打开 `http://127.0.0.1:7420/local-setup` 查看访问密码；该页面不允许通过公网域名访问。
+
+`-JsonOutput` 的 stdout 固定为单行 JSON，构建进度和诊断写入 stderr。成功结果包含 `schemaVersion`、`operation`、`version`、`started`、`healthReady`、本机/公网地址和结构化告警；失败结果返回 `BOOTSTRAP_FAILED` 与失败阶段，不输出密码、Cookie 或 Token。bootstrap 还会读取归档内的 `release-capabilities.json`，拒绝把新版参数交给不支持它们的旧 Release。
+
+## 卸载或彻底清理
+
+官方卸载命令：
+
+```powershell
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/uninstall-windows.ps1')))
+```
+
+默认会停止 CX-Codex 与对应快速隧道，删除程序目录、启动器、计划任务和对应防火墙规则；保留 `%USERPROFILE%\.cx-codex` 中的配置/日志/运行数据，也不会删除 `%USERPROFILE%\.codex` 登录态、用户工作区或 Android 签名材料。
+
+确认不再需要 CX-Codex 运行数据和项目托管的 cloudflared 时，才执行：
+
+```powershell
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/uninstall-windows.ps1'))) -RemoveUserData -RemoveCloudflared
+```
+
+两种模式都支持 `-JsonOutput`，便于安装器或自动化读取结果。
 
 ## Android 客户端
 
@@ -242,7 +263,7 @@ App Server 权限策略可选配置：
 Cloudflare Tunnel 安全一键模式：
 
 ```powershell
-& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) -UseBranchArchive -RemoteQuick -JsonOutput
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) -RemoteQuick -JsonOutput
 ```
 
 也可以在 Web 设置的“手机访问”中生成、复制、打开和停止临时地址。快速隧道免费且无需账号或域名，但地址会变化、无 SLA 且不支持 SSE。鉴权检查、已有配置冲突、DNS 异常、公网验证及长期固定域名请看：
