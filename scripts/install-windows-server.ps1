@@ -123,6 +123,112 @@ function Get-ToolVersionObject {
   return [Version]$match.Groups[1].Value
 }
 
+function ConvertTo-WindowsProcessArgument {
+  param(
+    [AllowEmptyString()]
+    [string]$Value
+  )
+
+  if ($null -eq $Value) {
+    $Value = ""
+  }
+  $builder = [System.Text.StringBuilder]::new()
+  [void]$builder.Append([char]'"')
+  $backslashCount = 0
+  foreach ($character in $Value.ToCharArray()) {
+    if ($character -eq [char]'\') {
+      $backslashCount++
+      continue
+    }
+    if ($character -eq [char]'"') {
+      [void]$builder.Append([char]'\', (($backslashCount * 2) + 1))
+      [void]$builder.Append([char]'"')
+      $backslashCount = 0
+      continue
+    }
+    if ($backslashCount -gt 0) {
+      [void]$builder.Append([char]'\', $backslashCount)
+      $backslashCount = 0
+    }
+    [void]$builder.Append($character)
+  }
+  if ($backslashCount -gt 0) {
+    [void]$builder.Append([char]'\', ($backslashCount * 2))
+  }
+  [void]$builder.Append([char]'"')
+  return $builder.ToString()
+}
+
+function Start-DetachedServerProcess {
+  param(
+    [string]$NodePath,
+    [string]$LauncherPath,
+    [string]$LaunchToken,
+    [string]$WorkingDirectory
+  )
+
+  $resultPath = Join-Path $env:TEMP "cx-codex-server-start-$PID-$([guid]::NewGuid().ToString('N')).json"
+  $commandLine = @(
+    $NodePath,
+    $LauncherPath,
+    $LaunchToken,
+    $resultPath
+  ) | ForEach-Object {
+    ConvertTo-WindowsProcessArgument -Value ([string]$_)
+  }
+  $environmentVariables = @(
+    [Environment]::GetEnvironmentVariables().GetEnumerator() |
+      Where-Object { [string]$_.Key -notmatch "=" } |
+      Sort-Object Key |
+      ForEach-Object { "$($_.Key)=$($_.Value)" }
+  )
+  $startup = New-CimInstance `
+    -ClassName Win32_ProcessStartup `
+    -ClientOnly `
+    -Property @{
+      EnvironmentVariables = [string[]]$environmentVariables
+      ShowWindow = [uint16]0
+    }
+  $createResult = Invoke-CimMethod `
+    -ClassName Win32_Process `
+    -MethodName Create `
+    -Arguments @{
+      CommandLine = ($commandLine -join " ")
+      CurrentDirectory = $WorkingDirectory
+      ProcessStartupInformation = $startup
+    }
+  if ([int]$createResult.ReturnValue -ne 0 -or [int]$createResult.ProcessId -le 0) {
+    throw "Detached server worker failed to start (Win32 error $($createResult.ReturnValue))."
+  }
+  $workerPid = [int]$createResult.ProcessId
+
+  try {
+    $deadline = (Get-Date).AddSeconds(10)
+    $result = $null
+    do {
+      if (Test-Path -LiteralPath $resultPath) {
+        try {
+          $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        } catch {}
+        if ($result) {
+          break
+        }
+      }
+      Start-Sleep -Milliseconds 50
+    } while ((Get-Date) -lt $deadline)
+    if (-not $result) {
+      Stop-Process -Id $workerPid -Force -ErrorAction SilentlyContinue
+      throw "Detached server worker did not report a result within 10 seconds."
+    }
+    if (-not [bool]$result.ok -or [int]$result.pid -le 0) {
+      throw "Detached server worker failed: $([string]$result.error)"
+    }
+    return [int]$result.pid
+  } finally {
+    Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Ensure-ProjectDirectory {
   param(
     [string]$TargetPath,
@@ -781,15 +887,28 @@ if ($StartNow) {
   $canStart = Stop-ExistingCodexUiProcesses -TargetPort $Port -RepoRoot $repoRoot -TargetLauncherPath $LauncherPath -TargetConfigPath $ConfigPath
   if ($canStart) {
     $serverEntryPoint = Join-Path $repoRoot "dist-cli\index.js"
-    $serverProcess = Start-Process `
-      -FilePath $nodeExecutable `
-      -ArgumentList @("`"$serverEntryPoint`"", "--config", "`"$ConfigPath`"") `
-      -WorkingDirectory $repoRoot `
-      -RedirectStandardOutput $outLogPath `
-      -RedirectStandardError $errLogPath `
-      -WindowStyle Hidden `
-      -PassThru
-    Set-Content -LiteralPath $serverPidPath -Value ([string]$serverProcess.Id) -Encoding ASCII
+    $detachedLauncher = Join-Path $repoRoot "scripts\start-detached-server.mjs"
+    if (-not (Test-Path -LiteralPath $detachedLauncher)) {
+      throw "Detached server launcher not found: $detachedLauncher"
+    }
+    $launchPayload = [ordered]@{
+      nodeExecutable = $nodeExecutable
+      serverEntryPoint = $serverEntryPoint
+      configPath = $ConfigPath
+      workingDirectory = $repoRoot
+      stdoutPath = $outLogPath
+      stderrPath = $errLogPath
+    } | ConvertTo-Json -Compress
+    $launchToken = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($launchPayload))
+    $serverPid = Start-DetachedServerProcess `
+      -NodePath $nodeExecutable `
+      -LauncherPath $detachedLauncher `
+      -LaunchToken $launchToken `
+      -WorkingDirectory $repoRoot
+    if (-not (Get-Process -Id $serverPid -ErrorAction SilentlyContinue)) {
+      throw "Detached server process exited before the health check."
+    }
+    Set-Content -LiteralPath $serverPidPath -Value ([string]$serverPid) -Encoding ASCII
     $healthPayload = Wait-ForHealthEndpoint -TargetPort $Port
   } else {
     Write-InstallerWarning `
