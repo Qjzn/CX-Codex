@@ -19,7 +19,7 @@ This file tracks manual regression and feature verification steps.
 - Run `npm.cmd run verify:windows-productization`.
 - Run `npm.cmd run verify:governance`.
 - Confirm the Windows GitHub Actions job runs the productization smoke and always invokes the official uninstall cleanup.
-- Confirm the Windows GitHub Actions job starts a Node service from the old install directory, records its managed PID/listener, and completes an in-place branch-archive upgrade without a directory-lock failure.
+- Confirm the Windows GitHub Actions job starts a Node service plus child process from the old install directory, records its managed PID/listener, and completes an in-place branch-archive upgrade without a directory-lock failure.
 - Confirm the Release zip contains `release-capabilities.json`, `scripts/uninstall-windows.ps1`, and `scripts/verify-windows-productization.ps1`.
 - Confirm the Release zip contains both Vite root entrypoints: `index.html` and `local-preview.html`.
 
@@ -32,7 +32,8 @@ This file tracks manual regression and feature verification steps.
 - The StartNow smoke uses an isolated temporary Codex Home and synthetic local auth marker, so CI validates the 7420 lifecycle without installing Codex or opening an interactive login flow.
 - Custom config paths keep their port logs and managed PID marker under the matching state directory; official uninstall cross-checks command line, PID marker, and listening port, then waits for managed processes and retries transient Windows file locks before reporting cleanup failure.
 - 2.5.1 candidate zip was extracted into an isolated directory; `npm ci` plus frontend/CLI build passed with both `index.html` and `local-preview.html` present.
-- The 2.5.1 formal Release passed clean installation and all Quick Tunnel verification flags, then a second bootstrap reproduced the Windows install-directory lock. The 2.5.2 bootstrap stopped the two matching managed processes and completed the same in-place upgrade with stable success JSON.
+- The 2.5.1 formal Release passed clean installation and all Quick Tunnel verification flags, then a second bootstrap reproduced the Windows install-directory lock. Formal 2.5.2 testing proved that stopping only the parent service and tunnel can leave a Codex App Server child holding the directory. The 2.5.3 candidate stopped the five-member managed process tree and completed the same in-place upgrade with stable success JSON.
+- A separate unmanaged 30-second directory lock was not killed; bootstrap exhausted its finite move retries, returned `BOOTSTRAP_FAILED`, automatically restarted the preserved 2.5.2 service, and recovered local health plus all three Quick Tunnel verification flags.
 
 ## Windows clean-install newcomer journey (2026-07-25)
 

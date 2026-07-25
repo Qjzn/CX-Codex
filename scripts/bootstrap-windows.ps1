@@ -28,12 +28,19 @@ $ErrorActionPreference = "Stop"
 $MinimumNodeVersion = [Version]"22.13.0"
 $MinimumNpmVersion = [Version]"9.0.0"
 $script:BootstrapStage = "initialize"
+$script:StoppedExistingServerForUpgrade = $false
+$script:UpgradeRecoveryAttempted = $false
 
 trap {
   $message = if ($_.Exception -and $_.Exception.Message) {
     [string]$_.Exception.Message
   } else {
     [string]$_
+  }
+
+  $recoveryCommand = Get-Command Restore-ManagedServiceAfterBootstrapFailure -CommandType Function -ErrorAction SilentlyContinue
+  if ($recoveryCommand) {
+    Restore-ManagedServiceAfterBootstrapFailure
   }
 
   if ($JsonOutput) {
@@ -273,6 +280,65 @@ function Test-CommandLineContainsPath {
   ) -ge 0
 }
 
+function Add-ProcessTreePostOrder {
+  param(
+    [int]$RootProcessId,
+    [object[]]$Processes,
+    [System.Collections.Generic.HashSet[int]]$VisitedProcessIds,
+    [System.Collections.Generic.List[int]]$OrderedProcessIds
+  )
+
+  if ($RootProcessId -le 0 -or $RootProcessId -eq $PID -or -not $VisitedProcessIds.Add($RootProcessId)) {
+    return
+  }
+
+  foreach ($childProcess in @($Processes | Where-Object { [int]$_.ParentProcessId -eq $RootProcessId })) {
+    Add-ProcessTreePostOrder `
+      -RootProcessId ([int]$childProcess.ProcessId) `
+      -Processes $Processes `
+      -VisitedProcessIds $VisitedProcessIds `
+      -OrderedProcessIds $OrderedProcessIds
+  }
+  $OrderedProcessIds.Add($RootProcessId) | Out-Null
+}
+
+function Restore-ManagedServiceAfterBootstrapFailure {
+  if (-not $script:StoppedExistingServerForUpgrade -or $script:UpgradeRecoveryAttempted) {
+    return
+  }
+  $script:UpgradeRecoveryAttempted = $true
+
+  $safeInstallDir = Assert-SafeInstallDirectory -Path $InstallDir
+  if (-not (Test-Path -LiteralPath $safeInstallDir) -or -not (Test-Path -LiteralPath $ManagedLauncherPath)) {
+    Write-BootstrapWarning "The previous CX-Codex service was stopped, but its installation or launcher is unavailable for automatic recovery."
+    return
+  }
+
+  try {
+    Start-Process `
+      -FilePath $ManagedLauncherPath `
+      -WorkingDirectory $safeInstallDir `
+      -WindowStyle Hidden | Out-Null
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+      try {
+        $healthResponse = Invoke-WebRequest `
+          -UseBasicParsing `
+          -Uri "http://127.0.0.1:$Port/health" `
+          -TimeoutSec 2
+        if ($healthResponse.StatusCode -eq 200) {
+          Write-BootstrapWarning "Upgrade failed; restarted the previous CX-Codex service."
+          return
+        }
+      } catch {}
+      Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    Write-BootstrapWarning "Upgrade failed and the previous CX-Codex service did not become healthy after automatic restart."
+  } catch {
+    Write-BootstrapWarning "Upgrade failed and the previous CX-Codex service could not be restarted automatically: $($_.Exception.Message)"
+  }
+}
+
 function Stop-ManagedInstallationProcesses {
   param([string]$TargetInstallDir)
 
@@ -295,7 +361,8 @@ function Stop-ManagedInstallationProcesses {
     }
   }
 
-  $managedProcessIds = New-Object 'System.Collections.Generic.HashSet[int]'
+  $managedServerProcessIds = New-Object 'System.Collections.Generic.HashSet[int]'
+  $managedTunnelProcessIds = New-Object 'System.Collections.Generic.HashSet[int]'
   $processes = @()
   try {
     $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop)
@@ -319,8 +386,11 @@ function Stop-ManagedInstallationProcesses {
           (Test-CommandLineContainsPath -CommandLine $commandLine -Path $configuredCloudflaredPath)
         )
 
-      if ($isManagedServer -or $isManagedQuickTunnel) {
-        $managedProcessIds.Add($processId) | Out-Null
+      if ($isManagedServer) {
+        $managedServerProcessIds.Add($processId) | Out-Null
+      }
+      if ($isManagedQuickTunnel) {
+        $managedTunnelProcessIds.Add($processId) | Out-Null
       }
     }
   } catch {
@@ -340,26 +410,46 @@ function Stop-ManagedInstallationProcesses {
       )
       $recordedProcess = Get-Process -Id $recordedServerProcessId -ErrorAction SilentlyContinue
       if ($recordedProcess -and $listenerOwners -contains $recordedServerProcessId -and $recordedProcess.ProcessName -eq "node") {
-        $managedProcessIds.Add($recordedServerProcessId) | Out-Null
+        $managedServerProcessIds.Add($recordedServerProcessId) | Out-Null
       }
     } catch {
       Write-BootstrapWarning "Could not verify the recorded CX-Codex process for port $Port."
     }
   }
 
-  if ($managedProcessIds.Count -eq 0) {
+  if ($managedServerProcessIds.Count -eq 0 -and $managedTunnelProcessIds.Count -eq 0) {
     return
   }
 
+  if ($managedServerProcessIds.Count -gt 0) {
+    $script:StoppedExistingServerForUpgrade = $true
+  }
+  $visitedProcessIds = New-Object 'System.Collections.Generic.HashSet[int]'
+  $orderedProcessIds = New-Object 'System.Collections.Generic.List[int]'
+  foreach ($managedServerProcessId in $managedServerProcessIds) {
+    Add-ProcessTreePostOrder `
+      -RootProcessId $managedServerProcessId `
+      -Processes $processes `
+      -VisitedProcessIds $visitedProcessIds `
+      -OrderedProcessIds $orderedProcessIds
+  }
+  foreach ($managedTunnelProcessId in $managedTunnelProcessIds) {
+    Add-ProcessTreePostOrder `
+      -RootProcessId $managedTunnelProcessId `
+      -Processes $processes `
+      -VisitedProcessIds $visitedProcessIds `
+      -OrderedProcessIds $orderedProcessIds
+  }
+
   Write-Step "Stopping existing CX-Codex service"
-  foreach ($managedProcessId in $managedProcessIds) {
+  foreach ($managedProcessId in $orderedProcessIds) {
     Stop-Process -Id $managedProcessId -Force -ErrorAction SilentlyContinue
   }
 
   $deadline = (Get-Date).AddSeconds(10)
   do {
     $remainingProcessIds = @(
-      $managedProcessIds |
+      $orderedProcessIds |
         Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }
     )
     if ($remainingProcessIds.Count -eq 0) {
@@ -373,7 +463,28 @@ function Stop-ManagedInstallationProcesses {
   }
 
   Remove-Item -LiteralPath $serverPidPath -Force -ErrorAction SilentlyContinue
-  Write-BootstrapMessage "Stopped existing CX-Codex processes: $($managedProcessIds.Count)"
+  Write-BootstrapMessage "Stopped existing CX-Codex process tree: $($orderedProcessIds.Count)"
+}
+
+function Move-DirectoryWithRetry {
+  param(
+    [string]$Source,
+    [string]$Destination,
+    [int]$MaxAttempts = 20,
+    [int]$DelayMilliseconds = 250
+  )
+
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    try {
+      Move-Item -LiteralPath $Source -Destination $Destination
+      return
+    } catch {
+      if ($attempt -eq $MaxAttempts) {
+        throw
+      }
+      Start-Sleep -Milliseconds $DelayMilliseconds
+    }
+  }
 }
 
 function Assert-SafeInstallDirectory {
@@ -493,21 +604,21 @@ function Install-RepositoryAtomically {
   if (Test-Path -LiteralPath $stagingDir) {
     Remove-Item -LiteralPath $stagingDir -Recurse -Force
   }
-  Move-Item -LiteralPath $ExpandedRepo -Destination $stagingDir
+  Move-DirectoryWithRetry -Source $ExpandedRepo -Destination $stagingDir
 
   if (Test-Path -LiteralPath $backupDir) {
     Remove-Item -LiteralPath $backupDir -Recurse -Force
   }
   if (Test-Path -LiteralPath $safeInstallDir) {
     Stop-ManagedInstallationProcesses -TargetInstallDir $safeInstallDir
-    Move-Item -LiteralPath $safeInstallDir -Destination $backupDir
+    Move-DirectoryWithRetry -Source $safeInstallDir -Destination $backupDir
   }
 
   try {
-    Move-Item -LiteralPath $stagingDir -Destination $safeInstallDir
+    Move-DirectoryWithRetry -Source $stagingDir -Destination $safeInstallDir
   } catch {
     if (Test-Path -LiteralPath $backupDir) {
-      Move-Item -LiteralPath $backupDir -Destination $safeInstallDir
+      Move-DirectoryWithRetry -Source $backupDir -Destination $safeInstallDir
     }
     throw
   }
@@ -633,9 +744,9 @@ if ($installerExitCode -ne 0) {
     $failedDir = "$safeInstallDir.failed-$PID"
     if (Test-Path -LiteralPath $backupDir) {
       if (Test-Path -LiteralPath $safeInstallDir) {
-        Move-Item -LiteralPath $safeInstallDir -Destination $failedDir
+        Move-DirectoryWithRetry -Source $safeInstallDir -Destination $failedDir
       }
-      Move-Item -LiteralPath $backupDir -Destination $safeInstallDir
+      Move-DirectoryWithRetry -Source $backupDir -Destination $safeInstallDir
       Write-BootstrapWarning "Installation failed; restored the previous CX-Codex version. Failed files remain at $failedDir"
     } elseif (Test-Path -LiteralPath $safeInstallDir) {
       Remove-Item -LiteralPath $safeInstallDir -Recurse -Force
