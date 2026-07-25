@@ -10,7 +10,7 @@
 - Windows 产品化门禁新增真实 `StartNow → /health 200 → 官方卸载 → 端口关闭` 回归，同时覆盖默认保留用户数据、显式完整清理和失败 JSON。
 - 修复 `StartNow` 复用通用日志文件时可能被已运行实例占用而无法启动的问题：安装器改为使用端口级启动日志并直接启动已校验的 Node.js 入口；重启时只停止目标端口或目标配置对应的实例，不再误停同一源码目录下的其他端口。
 - 修复 GitHub Windows Runner 将 Vite stderr 警告提升为 `NativeCommandError` 后，安装器把已经成功的 npm 构建误判为失败的问题；JSON 模式继续把进度写入 stderr，但只以 npm 的真实退出码判断成败。
-- 自定义 `ConfigPath` 的启动日志现在跟随对应状态目录，不再写入默认用户目录；官方卸载会等待托管进程真正退出，并对 Windows 短暂文件锁做有限重试，避免服务已经关闭但清理仍误报失败。
+- 自定义 `ConfigPath` 的启动日志和受管 PID 标记现在跟随对应状态目录，不再写入默认用户目录；官方卸载会结合命令行、PID 标记与监听端口识别托管进程，等待其真正退出，并对 Windows 短暂文件锁做有限重试，避免服务已经关闭但清理仍误报失败。
 - Windows bootstrap 现在同时检查 Node.js 与 npm 版本；遇到新 Node 搭配旧 npm 的错配环境时，校验 Node.js 官方 SHA-256 后自动使用安装目录内的便携式 LTS 运行时，避免 `package-lock v3` 安装失败。
 - 修复部分 Windows `npm.cmd --version` 同时输出代码页提示和版本号时安装器解析失败的问题；首次安装失败时会自动删除不完整的新安装目录，不再留下半成品。
 - bootstrap 现在使用 `-NoProfile` 启动安装器，并显式传入已校验的 Node.js/npm 绝对路径，避免用户 PowerShell profile 或全局 PATH 把便携 npm 替换成旧版本。

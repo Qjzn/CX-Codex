@@ -264,6 +264,7 @@ try {
   Assert-True ([bool]$runtimeInstallJson.ok) "StartNow installer must report ok=true. $($runtimeInstallResult.Stderr)"
   Assert-True ([bool]$runtimeInstallJson.started) "StartNow installer must report started=true."
   Assert-True ([bool]$runtimeInstallJson.healthReady) "StartNow installer must pass the local health gate."
+  Assert-True (Test-Path -LiteralPath (Join-Path $runtimeStateDir "cx-codex-$runtimePort.pid")) "StartNow installer must persist the managed server PID marker."
   $healthResponse = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$runtimePort/health" -TimeoutSec 5
   Assert-True ($healthResponse.StatusCode -eq 200) "StartNow health endpoint must return HTTP 200."
   Write-Host "productization: StartNow health passed"

@@ -166,6 +166,33 @@ function Remove-ScheduledTaskIfPresent {
   Write-UninstallMessage "Removed $Label`: $Name"
 }
 
+function Test-ManagedServerCommandLine {
+  param(
+    [string]$CommandLine,
+    [string[]]$ManagedPaths
+  )
+
+  if ([string]::IsNullOrWhiteSpace($CommandLine)) {
+    return $false
+  }
+
+  $normalizedCommandLine = $CommandLine.Replace('\', '/')
+  if ($normalizedCommandLine.IndexOf("dist-cli/index.js", [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+    return $false
+  }
+
+  foreach ($managedPath in $ManagedPaths) {
+    if ([string]::IsNullOrWhiteSpace($managedPath)) {
+      continue
+    }
+    $normalizedManagedPath = $managedPath.Replace('\', '/')
+    if ($normalizedCommandLine.IndexOf($normalizedManagedPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+      return $true
+    }
+  }
+  return $false
+}
+
 $resolvedInstallDir = Assert-SafeManagedDirectory -Path $InstallDir -Label "install"
 $resolvedStateDir = Assert-SafeManagedDirectory -Path $StateDir -Label "state"
 $resolvedManagedBinDir = Assert-SafeManagedDirectory -Path $ManagedBinDir -Label "managed bin"
@@ -174,6 +201,7 @@ $resolvedConfigPath = Join-Path $resolvedStateDir "config.json"
 $resolvedTaskName = if ([string]::IsNullOrWhiteSpace($TaskName)) { "CodexUI-$Port" } else { $TaskName }
 $resolvedWatchdogTaskName = if ([string]::IsNullOrWhiteSpace($WatchdogTaskName)) { "CodexUI-$Port-Watchdog" } else { $WatchdogTaskName }
 $resolvedFirewallRuleName = if ([string]::IsNullOrWhiteSpace($FirewallRuleName)) { "cx-codex-$Port" } else { $FirewallRuleName }
+$resolvedServerPidPath = Join-Path $resolvedStateDir "cx-codex-$Port.pid"
 
 $configuredCloudflaredPath = ""
 if (Test-Path -LiteralPath $resolvedConfigPath) {
@@ -202,12 +230,9 @@ try {
       continue
     }
 
-    $isManagedServer =
-      $commandLine -like "*dist-cli\index.js*" -and (
-        $commandLine -like "*$resolvedInstallDir*" -or
-        $commandLine -like "*$resolvedConfigPath*" -or
-        $commandLine -like "*$resolvedLauncherPath*"
-      )
+    $isManagedServer = Test-ManagedServerCommandLine `
+      -CommandLine $commandLine `
+      -ManagedPaths @($resolvedInstallDir, $resolvedConfigPath, $resolvedLauncherPath)
     $isManagedQuickTunnel =
       $commandLine -like "*cloudflared*" -and
       $commandLine -like "*127.0.0.1`:$Port*" -and (
@@ -221,6 +246,26 @@ try {
   }
 } catch {
   Write-UninstallWarning -Code "PROCESS_SCAN_FAILED" -Message "Could not scan running processes; file cleanup will continue."
+}
+
+$recordedServerProcessId = 0
+if (Test-Path -LiteralPath $resolvedServerPidPath) {
+  $recordedPidText = [string](Get-Content -LiteralPath $resolvedServerPidPath -Raw -ErrorAction SilentlyContinue)
+  [int]::TryParse($recordedPidText.Trim(), [ref]$recordedServerProcessId) | Out-Null
+}
+if ($recordedServerProcessId -gt 0 -and $recordedServerProcessId -ne $PID) {
+  try {
+    $listenerOwners = @(
+      Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
+        ForEach-Object { [int]$_.OwningProcess }
+    )
+    $recordedProcess = Get-Process -Id $recordedServerProcessId -ErrorAction SilentlyContinue
+    if ($recordedProcess -and $listenerOwners -contains $recordedServerProcessId -and $recordedProcess.ProcessName -eq "node") {
+      $managedProcessIds.Add($recordedServerProcessId) | Out-Null
+    }
+  } catch {
+    Write-UninstallWarning -Code "PID_MARKER_CHECK_FAILED" -Message "Could not verify the recorded managed process for port $Port."
+  }
 }
 
 foreach ($managedProcessId in $managedProcessIds) {
@@ -255,6 +300,7 @@ if ($firewallCommand) {
 }
 
 $script:UninstallStage = "remove_program_files"
+Remove-ManagedItem -Path $resolvedServerPidPath -Label "server PID marker"
 Remove-ManagedItem -Path $resolvedLauncherPath -Label "launcher"
 Remove-ManagedItem -Path $resolvedInstallDir -Label "installation"
 Remove-ManagedItem -Path "$resolvedInstallDir.previous" -Label "previous installation"

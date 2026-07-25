@@ -771,6 +771,7 @@ if ([string]::IsNullOrWhiteSpace($logBaseDir)) {
   $logBaseDir = (Get-Location).Path
 }
 $logDir = Join-Path $logBaseDir "logs"
+$serverPidPath = Join-Path $logBaseDir "cx-codex-$Port.pid"
 $outLogPath = Join-Path $logDir "cx-codex-$Port.out.log"
 $errLogPath = Join-Path $logDir "cx-codex-$Port.err.log"
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -780,13 +781,15 @@ if ($StartNow) {
   $canStart = Stop-ExistingCodexUiProcesses -TargetPort $Port -RepoRoot $repoRoot -TargetLauncherPath $LauncherPath -TargetConfigPath $ConfigPath
   if ($canStart) {
     $serverEntryPoint = Join-Path $repoRoot "dist-cli\index.js"
-    Start-Process `
+    $serverProcess = Start-Process `
       -FilePath $nodeExecutable `
       -ArgumentList @("`"$serverEntryPoint`"", "--config", "`"$ConfigPath`"") `
       -WorkingDirectory $repoRoot `
       -RedirectStandardOutput $outLogPath `
       -RedirectStandardError $errLogPath `
-      -WindowStyle Hidden | Out-Null
+      -WindowStyle Hidden `
+      -PassThru
+    Set-Content -LiteralPath $serverPidPath -Value ([string]$serverProcess.Id) -Encoding ASCII
     $healthPayload = Wait-ForHealthEndpoint -TargetPort $Port
   } else {
     Write-InstallerWarning `
