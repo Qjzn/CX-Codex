@@ -119,6 +119,8 @@ $processTreeCleanupArgs = $null
 $processTreeRoot = $null
 $processTreeChildPid = 0
 $originalCodexHome = $env:CODEX_HOME
+$originalManagementShortcutRoot = $env:CX_CODEX_MANAGEMENT_SHORTCUT_ROOT
+$env:CX_CODEX_MANAGEMENT_SHORTCUT_ROOT = Join-Path $testRoot "shortcuts"
 
 try {
   $nodePath = (Get-Command node -ErrorAction Stop).Source
@@ -198,6 +200,13 @@ Start-Sleep -Seconds 16
     $installerArgs += @("-NpmCliPath", $npmCliPath)
   }
 
+  $shortcutConflictPath = Join-Path $env:CX_CODEX_MANAGEMENT_SHORTCUT_ROOT "Desktop\CX-Codex 管理中心.url"
+  New-Item -ItemType Directory -Path (Split-Path -Parent $shortcutConflictPath) -Force | Out-Null
+  Set-Content -LiteralPath $shortcutConflictPath -Value @"
+[InternetShortcut]
+URL=https://example.invalid/personal-shortcut
+"@ -Encoding ASCII
+
   $installResult = Invoke-CapturedPowerShell `
     -ScriptPath $installScript `
     -Arguments $installerArgs `
@@ -211,6 +220,20 @@ Start-Sleep -Seconds 16
   Assert-True (-not [bool]$installJson.started) "No-start installation must report started=false."
   Assert-True (-not [bool]$installJson.healthReady) "No-start installation must report healthReady=false."
   Assert-True ([string]::IsNullOrWhiteSpace([string]$installJson.publicUrl)) "Local no-start installation must not report a public URL."
+  $expectedManagementShortcuts = @(
+    (Join-Path $env:CX_CODEX_MANAGEMENT_SHORTCUT_ROOT "Desktop\CX-Codex 管理中心 (17420).url"),
+    (Join-Path $env:CX_CODEX_MANAGEMENT_SHORTCUT_ROOT "Programs\CX-Codex 管理中心.url")
+  )
+  Assert-True (@($installJson.managementShortcuts).Count -eq 2) "Installer JSON must report both management shortcuts."
+  foreach ($managementShortcut in $expectedManagementShortcuts) {
+    Assert-True (Test-Path -LiteralPath $managementShortcut) "Installer must create management shortcut: $managementShortcut"
+    Assert-True `
+      ((Get-Content -LiteralPath $managementShortcut -Raw) -match 'URL=http://127\.0\.0\.1:17420/local-setup') `
+      "Management shortcut must target the loopback-only management center."
+  }
+  Assert-True `
+    ((Get-Content -LiteralPath $shortcutConflictPath -Raw) -match 'URL=https://example\.invalid/personal-shortcut') `
+    "Installer must preserve a same-name shortcut with a different target."
   Write-Host "productization: stable install JSON passed"
 
   $fakeInstallDir = Join-Path $testRoot "program"
@@ -234,6 +257,13 @@ Start-Sleep -Seconds 16
   Assert-True ([bool]$preserveJson.ok) "Preserving uninstall must report ok=true."
   Assert-True (-not (Test-Path -LiteralPath $fakeInstallDir)) "Uninstaller must remove the managed program directory."
   Assert-True (-not (Test-Path -LiteralPath (Join-Path $testRoot "bin\cx-codex-start.cmd"))) "Uninstaller must remove the managed launcher."
+  foreach ($managementShortcut in $expectedManagementShortcuts) {
+    Assert-True (-not (Test-Path -LiteralPath $managementShortcut)) "Uninstaller must remove management shortcut: $managementShortcut"
+  }
+  Assert-True (Test-Path -LiteralPath $shortcutConflictPath) "Uninstaller must preserve a shortcut it does not own."
+  Assert-True `
+    (@($preserveJson.warnings).Count -eq 0) `
+    "Preserving a shortcut owned by another application must not emit an uninstall failure warning."
   Assert-True (Test-Path -LiteralPath (Join-Path $testRoot "state\config.json")) "User data must be preserved by default."
   Write-Host "productization: preserving uninstall passed"
 
@@ -537,5 +567,10 @@ exit $installerExitCode
     Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
   } else {
     $env:CODEX_HOME = $originalCodexHome
+  }
+  if ([string]::IsNullOrWhiteSpace($originalManagementShortcutRoot)) {
+    Remove-Item Env:CX_CODEX_MANAGEMENT_SHORTCUT_ROOT -ErrorAction SilentlyContinue
+  } else {
+    $env:CX_CODEX_MANAGEMENT_SHORTCUT_ROOT = $originalManagementShortcutRoot
   }
 }

@@ -2,28 +2,52 @@ package com.cxcodex.bridge;
 
 import android.app.DownloadManager;
 import android.content.Intent;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
 import android.content.Context;
 import android.webkit.CookieManager;
 import android.webkit.URLUtil;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebView;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import com.getcapacitor.CapConfig;
 import com.getcapacitor.BridgeActivity;
+import com.getcapacitor.BridgeWebViewClient;
 
 public class MainActivity extends BridgeActivity {
 
+    private static final long CONNECTION_TIMEOUT_MS = 15000L;
     private boolean initialCreateComplete;
+    private boolean mainFrameLoadFailed;
+    private LinearLayout connectionOverlay;
+    private ProgressBar connectionProgress;
+    private TextView connectionTitle;
+    private TextView connectionMessage;
+    private LinearLayout connectionActions;
+    private final Handler connectionHandler = new Handler(Looper.getMainLooper());
+    private final Runnable connectionTimeout = () -> {
+        if (connectionOverlay != null && connectionOverlay.getVisibility() == View.VISIBLE) {
+            showConnectionError("连接时间较长，请检查服务电脑是否在线，以及外网地址是否仍然有效。");
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -37,6 +61,7 @@ public class MainActivity extends BridgeActivity {
         if (MobileShellConfig.getStoredServerUrl(this).isEmpty()) {
             showServerSetupScreen();
         } else {
+            installConnectionUi();
             configureWebViewDownloadListener();
             openPendingTaskPetThread();
         }
@@ -157,8 +182,179 @@ public class MainActivity extends BridgeActivity {
         runOnUiThread(() -> Toast.makeText(this, message, duration).show());
     }
 
+    private void installConnectionUi() {
+        if (bridge == null || bridge.getWebView() == null || connectionOverlay != null) {
+            return;
+        }
+
+        WebView webView = bridge.getWebView();
+        bridge.setWebViewClient(new BridgeWebViewClient(bridge) {
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                mainFrameLoadFailed = false;
+                showConnectionLoading();
+                super.onPageStarted(view, url, favicon);
+            }
+
+            @Override
+            public void onPageCommitVisible(WebView view, String url) {
+                super.onPageCommitVisible(view, url);
+                if (!mainFrameLoadFailed) {
+                    hideConnectionUi();
+                }
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                if (!mainFrameLoadFailed && view.getProgress() == 100) {
+                    hideConnectionUi();
+                }
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                super.onReceivedError(view, request, error);
+                if (request.isForMainFrame()) {
+                    mainFrameLoadFailed = true;
+                    showConnectionError("无法连接到 CX-Codex。请确认服务电脑正在运行，并核对连接地址。");
+                }
+            }
+
+            @Override
+            public void onReceivedHttpError(
+                WebView view,
+                WebResourceRequest request,
+                WebResourceResponse errorResponse
+            ) {
+                super.onReceivedHttpError(view, request, errorResponse);
+                if (request.isForMainFrame() && errorResponse.getStatusCode() >= 400) {
+                    mainFrameLoadFailed = true;
+                    showConnectionError("服务返回异常，请稍后重试；如果外网地址已变化，请修改连接地址。");
+                }
+            }
+        });
+
+        ViewGroup parent = (ViewGroup) webView.getParent();
+        if (parent == null) return;
+
+        connectionOverlay = new LinearLayout(this);
+        connectionOverlay.setOrientation(LinearLayout.VERTICAL);
+        connectionOverlay.setGravity(Gravity.CENTER);
+        connectionOverlay.setPadding(dp(28), dp(28), dp(28), dp(28));
+        connectionOverlay.setBackgroundColor(0xFFF8F6F0);
+        connectionOverlay.setClickable(true);
+        connectionOverlay.setFocusable(true);
+
+        connectionProgress = new ProgressBar(this);
+        connectionOverlay.addView(connectionProgress, new LinearLayout.LayoutParams(dp(42), dp(42)));
+
+        connectionTitle = new TextView(this);
+        connectionTitle.setTextColor(0xFF2D261F);
+        connectionTitle.setTextSize(22);
+        connectionTitle.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        titleParams.setMargins(0, dp(20), 0, 0);
+        connectionOverlay.addView(connectionTitle, titleParams);
+
+        connectionMessage = new TextView(this);
+        connectionMessage.setTextColor(0xFF7B7062);
+        connectionMessage.setTextSize(14);
+        connectionMessage.setGravity(Gravity.CENTER);
+        connectionMessage.setLineSpacing(0, 1.25f);
+        LinearLayout.LayoutParams messageParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        messageParams.setMargins(0, dp(10), 0, 0);
+        connectionOverlay.addView(connectionMessage, messageParams);
+
+        connectionActions = new LinearLayout(this);
+        connectionActions.setOrientation(LinearLayout.HORIZONTAL);
+        connectionActions.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams actionsParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        actionsParams.setMargins(0, dp(20), 0, 0);
+
+        Button retryButton = new Button(this);
+        retryButton.setText("重试");
+        retryButton.setOnClickListener((view) -> {
+            String serverUrl = MobileShellConfig.getStoredServerUrl(this);
+            if (serverUrl.isEmpty()) {
+                showServerSetupScreen();
+                return;
+            }
+            mainFrameLoadFailed = false;
+            showConnectionLoading();
+            webView.loadUrl(serverUrl);
+        });
+        LinearLayout.LayoutParams actionButtonParams = new LinearLayout.LayoutParams(
+            0,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            1
+        );
+        actionButtonParams.setMargins(0, 0, dp(6), 0);
+        connectionActions.addView(retryButton, actionButtonParams);
+
+        Button changeAddressButton = new Button(this);
+        changeAddressButton.setText("修改地址");
+        changeAddressButton.setOnClickListener((view) -> showServerSetupScreen());
+        LinearLayout.LayoutParams changeAddressParams = new LinearLayout.LayoutParams(
+            0,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            1
+        );
+        changeAddressParams.setMargins(dp(6), 0, 0, 0);
+        connectionActions.addView(changeAddressButton, changeAddressParams);
+        connectionOverlay.addView(connectionActions, actionsParams);
+
+        parent.addView(connectionOverlay, new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        connectionOverlay.bringToFront();
+        showConnectionLoading();
+    }
+
+    private void showConnectionLoading() {
+        if (connectionOverlay == null) return;
+        connectionHandler.removeCallbacks(connectionTimeout);
+        connectionOverlay.setVisibility(View.VISIBLE);
+        connectionOverlay.bringToFront();
+        connectionProgress.setVisibility(View.VISIBLE);
+        connectionActions.setVisibility(View.GONE);
+        connectionTitle.setText("正在连接 CX-Codex");
+        connectionMessage.setText("正在打开已保存的服务地址，请稍候…");
+        connectionHandler.postDelayed(connectionTimeout, CONNECTION_TIMEOUT_MS);
+    }
+
+    private void showConnectionError(String message) {
+        if (connectionOverlay == null) return;
+        connectionHandler.removeCallbacks(connectionTimeout);
+        connectionOverlay.setVisibility(View.VISIBLE);
+        connectionOverlay.bringToFront();
+        connectionProgress.setVisibility(View.GONE);
+        connectionActions.setVisibility(View.VISIBLE);
+        connectionTitle.setText("暂时无法连接");
+        connectionMessage.setText(message);
+    }
+
+    private void hideConnectionUi() {
+        connectionHandler.removeCallbacks(connectionTimeout);
+        if (connectionOverlay != null) {
+            connectionOverlay.setVisibility(View.GONE);
+        }
+    }
+
     private void showServerSetupScreen() {
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        connectionHandler.removeCallbacks(connectionTimeout);
+        String storedServerUrl = MobileShellConfig.getStoredServerUrl(this);
 
         int outerPadding = dp(24);
         int itemGap = dp(12);
@@ -175,7 +371,7 @@ public class MainActivity extends BridgeActivity {
         card.setBackgroundColor(0xFFFFFDF8);
 
         TextView title = new TextView(this);
-        title.setText("输入连接地址");
+        title.setText(storedServerUrl.isEmpty() ? "输入连接地址" : "修改连接地址");
         title.setTextColor(0xFF2D261F);
         title.setTextSize(24);
         title.setGravity(Gravity.START);
@@ -192,10 +388,12 @@ public class MainActivity extends BridgeActivity {
         serverInput.setTextColor(0xFF2D261F);
         serverInput.setHintTextColor(0xFF9F9484);
         serverInput.setSelectAllOnFocus(false);
+        serverInput.setText(storedServerUrl);
+        serverInput.setSelection(serverInput.getText().length());
 
         Button submitButton = new Button(this);
         submitButton.setText("保存并进入");
-        submitButton.setEnabled(false);
+        submitButton.setEnabled(MobileShellConfig.isValidServerUrl(storedServerUrl));
 
         TextView status = new TextView(this);
         status.setText("");
@@ -259,12 +457,14 @@ public class MainActivity extends BridgeActivity {
         });
 
         serverInput.requestFocus();
-        serverInput.postDelayed(() -> {
-            InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-            if (inputMethodManager != null) {
-                inputMethodManager.showSoftInput(serverInput, InputMethodManager.SHOW_IMPLICIT);
-            }
-        }, 250);
+        if (storedServerUrl.isEmpty()) {
+            serverInput.postDelayed(() -> {
+                InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (inputMethodManager != null) {
+                    inputMethodManager.showSoftInput(serverInput, InputMethodManager.SHOW_IMPLICIT);
+                }
+            }, 250);
+        }
     }
 
     private void restartActivity() {

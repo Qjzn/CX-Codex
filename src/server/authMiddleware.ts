@@ -266,6 +266,7 @@ button:hover{background:#2563eb}
 .notice{display:none;margin-bottom:1rem;padding:.75rem .875rem;border-radius:10px;border:1px solid rgba(250,204,21,.24);background:rgba(250,204,21,.08);color:#fde68a;font-size:.875rem;line-height:1.55}
 .notice-title{display:block;font-size:.9375rem;font-weight:600;color:#fef3c7;margin-bottom:.25rem}
 .error{color:#ef4444;font-size:.8125rem;margin-top:.75rem;text-align:center;display:none}
+.help{margin-top:1rem;color:#737373;font-size:.8125rem;line-height:1.55;text-align:center}
 </style>
 </head>
 <body>
@@ -280,6 +281,7 @@ button:hover{background:#2563eb}
 <input id="pw" name="password" type="password" autocomplete="current-password" autofocus required>
 <button type="submit">登录</button>
 <p class="error" id="err">密码错误</p>
+<p class="help">忘记密码？请在服务电脑打开“CX-Codex 管理中心”查看或重置。</p>
 </form>
 </div>
 <script>
@@ -366,12 +368,15 @@ export function createAuthMiddleware(password: string): RequestHandler {
 export type AuthSession = {
   middleware: RequestHandler
   isRequestAuthorized: (req: IncomingMessage) => boolean
+  getPassword: () => string
+  rotatePassword: (nextPassword: string) => void
 }
 
 export function createAuthSession(password: string): AuthSession {
   const validTokenHashes = new Map<string, StoredAuthToken>()
   const loginAttempts = new Map<string, LoginAttemptState>()
-  const passwordFingerprint = hashPasswordFingerprint(password)
+  let currentPassword = password
+  let passwordFingerprint = hashPasswordFingerprint(currentPassword)
   for (const token of loadStoredAuthTokens(passwordFingerprint)) {
     validTokenHashes.set(token.hash, token)
   }
@@ -400,7 +405,7 @@ export function createAuthSession(password: string): AuthSession {
 
           const provided = await readAuthLoginPassword(req)
 
-          if (!constantTimeCompare(provided, password)) {
+          if (!constantTimeCompare(provided, currentPassword)) {
             currentAttempt.failures.push(now)
             if (currentAttempt.failures.length >= AUTH_LOGIN_MAX_FAILURES) {
               currentAttempt.blockedUntil = now + AUTH_LOGIN_BLOCK_MS
@@ -460,5 +465,13 @@ export function createAuthSession(password: string): AuthSession {
     isRequestAuthorized: (req: IncomingMessage) => (
       isAuthorizedByRequestLike(req, validTokenHashes, passwordFingerprint)
     ),
+    getPassword: () => currentPassword,
+    rotatePassword: (nextPassword: string) => {
+      currentPassword = nextPassword
+      passwordFingerprint = hashPasswordFingerprint(currentPassword)
+      validTokenHashes.clear()
+      loginAttempts.clear()
+      persistStoredAuthTokens([], passwordFingerprint)
+    },
   }
 }

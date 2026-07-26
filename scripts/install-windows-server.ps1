@@ -71,6 +71,23 @@ function Write-Step {
   Write-InstallerMessage "==> $Message" -ForegroundColor Cyan
 }
 
+function Get-InternetShortcutUrl {
+  param([string]$Path)
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    return ""
+  }
+  try {
+    $match = [regex]::Match(
+      (Get-Content -LiteralPath $Path -Raw),
+      '(?im)^URL=(?<url>[^\r\n]+)'
+    )
+    if ($match.Success) {
+      return $match.Groups["url"].Value.Trim()
+    }
+  } catch {}
+  return ""
+}
+
 function New-StablePassword {
   $alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
   $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
@@ -425,6 +442,56 @@ cd /d "$RepoRoot"
 "@
 
   Set-Content -LiteralPath $TargetLauncherPath -Value $launcherContent -Encoding ASCII
+}
+
+function Create-ManagementShortcuts {
+  param([int]$TargetPort)
+
+  $shortcutTestRoot = [string]$env:CX_CODEX_MANAGEMENT_SHORTCUT_ROOT
+  $shortcutDirectories = if ([string]::IsNullOrWhiteSpace($shortcutTestRoot)) {
+    @(
+      [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory),
+      [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
+    )
+  } else {
+    @(
+      (Join-Path $shortcutTestRoot "Desktop"),
+      (Join-Path $shortcutTestRoot "Programs")
+    )
+  }
+  $shortcutDirectories = @($shortcutDirectories) |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    Select-Object -Unique
+  $shortcutPaths = New-Object 'System.Collections.Generic.List[string]'
+  $shortcutBaseName = "CX-Codex $([char]0x7BA1)$([char]0x7406)$([char]0x4E2D)$([char]0x5FC3)"
+  $shortcutUrl = "http://127.0.0.1:$TargetPort/local-setup"
+  $shortcutContent = @"
+[InternetShortcut]
+URL=$shortcutUrl
+"@
+
+  foreach ($shortcutDirectory in $shortcutDirectories) {
+    New-Item -ItemType Directory -Path $shortcutDirectory -Force | Out-Null
+    $shortcutPath = Join-Path $shortcutDirectory "$shortcutBaseName.url"
+    if (
+      (Test-Path -LiteralPath $shortcutPath) -and
+      (Get-InternetShortcutUrl -Path $shortcutPath) -ne $shortcutUrl
+    ) {
+      $shortcutPath = Join-Path $shortcutDirectory "$shortcutBaseName ($TargetPort).url"
+    }
+    if (
+      (Test-Path -LiteralPath $shortcutPath) -and
+      (Get-InternetShortcutUrl -Path $shortcutPath) -ne $shortcutUrl
+    ) {
+      Write-InstallerWarning `
+        -Code "MANAGEMENT_SHORTCUT_CONFLICT" `
+        -Message "Skipped an existing shortcut not owned by CX-Codex: $shortcutPath"
+      continue
+    }
+    Set-Content -LiteralPath $shortcutPath -Value $shortcutContent -Encoding ASCII
+    $shortcutPaths.Add($shortcutPath) | Out-Null
+  }
+  return @($shortcutPaths)
 }
 
 function Register-StartupTask {
@@ -878,6 +945,7 @@ $configTempPath = "$ConfigPath.tmp-$PID"
 )
 Move-Item -LiteralPath $configTempPath -Destination $ConfigPath -Force
 Create-LauncherFile -TargetLauncherPath $LauncherPath -NodePath $nodeExecutable -RepoRoot $repoRoot -TargetConfigPath $ConfigPath
+$managementShortcutPaths = @(Create-ManagementShortcuts -TargetPort $Port)
 
 if ($CreateStartupTask) {
   Write-Step "Creating startup task"
@@ -989,6 +1057,9 @@ if (-not $JsonOutput) {
   Write-InstallerMessage "Install complete."
   Write-InstallerMessage "Config:   $ConfigPath"
   Write-InstallerMessage "Launcher: $LauncherPath"
+  foreach ($shortcutPath in $managementShortcutPaths) {
+    Write-InstallerMessage "Manage:   $shortcutPath"
+  }
   Write-InstallerMessage "Logs:     $logDir"
   if ($resolvedProjectPath) {
     Write-InstallerMessage "Project:  $resolvedProjectPath"
@@ -999,7 +1070,7 @@ if (-not $JsonOutput) {
   Write-InstallerMessage "Health:   http://127.0.0.1:$Port/health"
   Write-InstallerMessage "Bridge:   http://127.0.0.1:$Port/codex-api/health"
   if ($passwordValue -is [string]) {
-    Write-InstallerMessage "Pairing:  http://127.0.0.1:$Port/local-setup (local machine only)"
+    Write-InstallerMessage "Manage:   http://127.0.0.1:$Port/local-setup (local machine only)"
   }
   if ($Tunnel) {
     if ([bool]$runtimeTunnel.active) {
@@ -1058,6 +1129,8 @@ if ($JsonOutput) {
       [ordered]@{ health = $false; auth = $false; websocketAuth = $false }
     }
     configPath = $ConfigPath
+    managementUrl = "http://127.0.0.1:$Port/local-setup"
+    managementShortcuts = @($managementShortcutPaths)
     logsPath = $logDir
     uninstallScript = (Join-Path $repoRoot "scripts\uninstall-windows.ps1")
     warnings = @($script:InstallWarnings | ForEach-Object { $_ })

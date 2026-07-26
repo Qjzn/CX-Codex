@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { readFile, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { canRunCommand } from '../commandResolution.js'
@@ -8,6 +8,7 @@ import {
   type QuickTunnelPhase,
   type QuickTunnelVerification,
 } from './quickTunnel.js'
+import { updateLocalAccessConfig } from './localAccessConfig.js'
 
 export type TunnelStatus = {
   enabled: boolean | null
@@ -302,29 +303,19 @@ export async function updateTunnelConfig(update: TunnelConfigUpdate): Promise<Tu
   const configSnapshot = await readLaunchConfigSnapshot()
   const targetPath = configSnapshot.path || getDefaultConfigWritePath()
 
-  let nextConfig: Record<string, unknown> = {}
-  if (existsSync(targetPath)) {
-    try {
-      nextConfig = JSON.parse(await readFile(targetPath, 'utf8')) as Record<string, unknown>
-    } catch {
-      nextConfig = {}
+  await updateLocalAccessConfig(targetPath, (nextConfig) => {
+    if (typeof update.enabled === 'boolean') {
+      nextConfig.tunnel = update.enabled
     }
-  }
 
-  if (typeof update.enabled === 'boolean') {
-    nextConfig.tunnel = update.enabled
-  }
-
-  if (typeof update.cloudflaredCommand === 'string') {
-    const normalizedCommand = update.cloudflaredCommand.trim()
-    if (normalizedCommand) {
-      nextConfig.cloudflaredCommand = normalizedCommand
-    } else {
-      delete nextConfig.cloudflaredCommand
+    if (typeof update.cloudflaredCommand === 'string') {
+      const normalizedCommand = update.cloudflaredCommand.trim()
+      if (normalizedCommand) {
+        nextConfig.cloudflaredCommand = normalizedCommand
+      } else {
+        delete nextConfig.cloudflaredCommand
+      }
     }
-  }
-
-  await mkdir(dirname(targetPath), { recursive: true })
-  await writeFile(targetPath, JSON.stringify(nextConfig, null, 2), 'utf8')
+  })
   return await getTunnelStatus()
 }

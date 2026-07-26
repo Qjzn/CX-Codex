@@ -435,7 +435,11 @@ async function startServer(options: {
   if (options.tunnel && !password) {
     throw new Error('Cloudflare Tunnel requires password protection. Remove --no-password and try again.')
   }
-  const { app, dispose, attachWebSocket } = createApp({ password })
+  const { app, dispose, attachWebSocket } = createApp({
+    password,
+    configPath: options.configPath,
+    host,
+  })
   const server = createServer(app)
   server.keepAliveTimeout = 65_000
   server.headersTimeout = 66_000
@@ -483,7 +487,7 @@ async function startServer(options: {
   lines.push('  Health:   /health')
   lines.push('  RPC:      /codex-api/rpc')
   if (password) {
-    lines.push(`  Pairing:  http://127.0.0.1:${String(port)}/local-setup (local machine only)`)
+    lines.push(`  Manage:   http://127.0.0.1:${String(port)}/local-setup (local machine only)`)
   }
 
   if (options.configPath) {

@@ -247,9 +247,9 @@ function Open-LocalPairingPage {
       throw "The local pairing page returned HTTP $($response.StatusCode)."
     }
     Start-Process -FilePath $pairingUrl | Out-Null
-    Write-BootstrapMessage "Opened the local phone-pairing page. If no browser appeared, open $pairingUrl manually."
+    Write-BootstrapMessage "Opened the local CX-Codex management center. If no browser appeared, open $pairingUrl manually."
   } catch {
-    Write-BootstrapWarning "CX-Codex is installed, but the local phone-pairing page could not be opened automatically. Open $pairingUrl manually."
+    Write-BootstrapWarning "CX-Codex is installed, but the local management center could not be opened automatically. Open $pairingUrl manually."
   }
 }
 

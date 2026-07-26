@@ -17,6 +17,7 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 ## 快速入口
 
 - 最新 Release: [github.com/Qjzn/CX-Codex/releases/latest](https://github.com/Qjzn/CX-Codex/releases/latest)
+- 2.6.0 发布说明: [docs/release-notes-2.6.0.zh-CN.md](./docs/release-notes-2.6.0.zh-CN.md)
 - 2.5.9 发布说明: [docs/release-notes-2.5.9.zh-CN.md](./docs/release-notes-2.5.9.zh-CN.md)
 - 2.5.8 发布说明: [docs/release-notes-2.5.8.zh-CN.md](./docs/release-notes-2.5.8.zh-CN.md)
 - 2.5.7 发布说明: [docs/release-notes-2.5.7.zh-CN.md](./docs/release-notes-2.5.7.zh-CN.md)
@@ -153,7 +154,7 @@ http://127.0.0.1:7420
 
 首次安装通常需要 2–5 分钟。bootstrap 会持续显示安装阶段，并在长步骤中每 15 秒提示仍在运行；不要在构建期间关闭窗口。
 
-安装和公网验证全部完成后，bootstrap 会自动打开电脑本机的 `http://127.0.0.1:7420/local-setup`。用手机扫描二维码打开临时地址，再输入页面显示的访问密码即可；二维码只在本机生成且只包含地址，不包含密码，配对页也不允许通过公网域名访问。无人值守安装可增加 `-SkipOpenPairing`，完成后再手动打开配对页。
+安装和公网验证全部完成后，bootstrap 会自动打开电脑本机的 `http://127.0.0.1:7420/local-setup`，并在桌面和开始菜单创建“CX-Codex 管理中心”。这里会持续显示本机、局域网和当前外网地址，也可查看、生成或修改访问密码。用手机扫描二维码打开临时地址，再输入页面显示的密码即可；二维码只在本机生成且只包含地址，管理中心也不允许通过公网域名访问。无人值守安装可增加 `-SkipOpenPairing`，完成后再从快捷方式打开管理中心。
 
 `-JsonOutput` 的 stdout 固定为单行 JSON，构建进度和诊断写入 stderr。成功结果包含 `schemaVersion`、`operation`、`version`、`started`、`healthReady`、本机/公网地址和结构化告警；失败结果返回 `BOOTSTRAP_FAILED` 与失败阶段，不输出密码、Cookie 或 Token。bootstrap 还会读取归档内的 `release-capabilities.json`，拒绝把新版参数交给不支持它们的旧 Release。
 
@@ -165,7 +166,7 @@ http://127.0.0.1:7420
 & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/uninstall-windows.ps1')))
 ```
 
-默认会停止 CX-Codex 与对应快速隧道，删除程序目录、启动器、计划任务和对应防火墙规则；保留 `%USERPROFILE%\.cx-codex` 中的配置/日志/运行数据，也不会删除 `%USERPROFILE%\.codex` 登录态、用户工作区或 Android 签名材料。
+默认会停止 CX-Codex 与对应快速隧道，删除程序目录、启动器、管理中心快捷方式、计划任务和对应防火墙规则；保留 `%USERPROFILE%\.cx-codex` 中的配置/日志/运行数据，也不会删除 `%USERPROFILE%\.codex` 登录态、用户工作区或 Android 签名材料。
 
 确认不再需要 CX-Codex 运行数据和项目托管的 cloudflared 时，才执行：
 

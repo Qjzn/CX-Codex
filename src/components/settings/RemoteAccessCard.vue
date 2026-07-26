@@ -58,7 +58,7 @@
         class="remote-access-secondary"
         @click="openLocalPairing"
       >
-        查看登录密码
+        打开管理中心
       </button>
     </div>
 

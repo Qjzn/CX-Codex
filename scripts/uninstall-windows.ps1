@@ -83,6 +83,23 @@ function Get-FullPath {
   return [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
 }
 
+function Get-InternetShortcutUrl {
+  param([string]$Path)
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    return ""
+  }
+  try {
+    $match = [regex]::Match(
+      (Get-Content -LiteralPath $Path -Raw),
+      '(?im)^URL=(?<url>[^\r\n]+)'
+    )
+    if ($match.Success) {
+      return $match.Groups["url"].Value.Trim()
+    }
+  } catch {}
+  return ""
+}
+
 function Assert-SafeManagedDirectory {
   param(
     [string]$Path,
@@ -224,6 +241,28 @@ $resolvedTaskName = if ([string]::IsNullOrWhiteSpace($TaskName)) { "CodexUI-$Por
 $resolvedWatchdogTaskName = if ([string]::IsNullOrWhiteSpace($WatchdogTaskName)) { "CodexUI-$Port-Watchdog" } else { $WatchdogTaskName }
 $resolvedFirewallRuleName = if ([string]::IsNullOrWhiteSpace($FirewallRuleName)) { "cx-codex-$Port" } else { $FirewallRuleName }
 $resolvedServerPidPath = Join-Path $resolvedStateDir "cx-codex-$Port.pid"
+$shortcutTestRoot = [string]$env:CX_CODEX_MANAGEMENT_SHORTCUT_ROOT
+$managementShortcutDirectories = if ([string]::IsNullOrWhiteSpace($shortcutTestRoot)) {
+  @(
+    [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory),
+    [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs)
+  )
+} else {
+  @(
+    (Join-Path $shortcutTestRoot "Desktop"),
+    (Join-Path $shortcutTestRoot "Programs")
+  )
+}
+$managementShortcutBaseName = "CX-Codex $([char]0x7BA1)$([char]0x7406)$([char]0x4E2D)$([char]0x5FC3)"
+$managementShortcutUrl = "http://127.0.0.1:$Port/local-setup"
+$managementShortcutPaths = @($managementShortcutDirectories) |
+  Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+  Select-Object -Unique |
+  ForEach-Object {
+    Join-Path $_ "$managementShortcutBaseName.url"
+    Join-Path $_ "$managementShortcutBaseName ($Port).url"
+  } |
+  Select-Object -Unique
 
 $configuredCloudflaredPath = ""
 if (Test-Path -LiteralPath $resolvedConfigPath) {
@@ -354,6 +393,16 @@ if ($firewallCommand) {
 $script:UninstallStage = "remove_program_files"
 Remove-ManagedItem -Path $resolvedServerPidPath -Label "server PID marker"
 Remove-ManagedItem -Path $resolvedLauncherPath -Label "launcher"
+foreach ($managementShortcutPath in $managementShortcutPaths) {
+  if (
+    (Test-Path -LiteralPath $managementShortcutPath) -and
+    (Get-InternetShortcutUrl -Path $managementShortcutPath) -ne $managementShortcutUrl
+  ) {
+    $script:PreservedItems.Add("management-shortcut:$managementShortcutPath") | Out-Null
+    continue
+  }
+  Remove-ManagedItem -Path $managementShortcutPath -Label "management shortcut"
+}
 Remove-ManagedItem -Path $resolvedInstallDir -Label "installation"
 Remove-ManagedItem -Path "$resolvedInstallDir.previous" -Label "previous installation"
 

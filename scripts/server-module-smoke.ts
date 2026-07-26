@@ -439,6 +439,7 @@ import {
   renderLocalSetupHtml,
   renderPairingQrSvg,
 } from '../src/server/localPairingPage.js'
+import { persistAccessPassword, updateLocalAccessConfig } from '../src/server/localAccessConfig.js'
 
 const originalNow = Date.now
 
@@ -460,6 +461,7 @@ try {
   smokeAppServerLaunch()
   smokeAppServerHealth()
   await smokeAuthMiddleware()
+  await smokeLocalAccessConfig()
   smokeLocalPairingPage()
   await smokeAppServerMethodCatalog()
   smokeAppServerNotificationDiagnostics()
@@ -1478,6 +1480,9 @@ async function smokeAuthMiddleware(): Promise<void> {
   )), false)
   assert.equal(authSession.isRequestAuthorized(requestLike('203.0.113.10', 'localhost:7420')), false)
   assert.equal(authSession.isRequestAuthorized(requestLike('203.0.113.10', '127.0.0.1:7420')), false)
+  assert.equal(authSession.getPassword(), 'server-module-smoke-password')
+  authSession.rotatePassword('server-module-rotated-password')
+  assert.equal(authSession.getPassword(), 'server-module-rotated-password')
 
   const originalLimit = process.env.CX_CODEX_AUTH_LOGIN_BODY_MAX_BYTES
   try {
@@ -1517,6 +1522,40 @@ async function smokeAuthMiddleware(): Promise<void> {
   }
 }
 
+async function smokeLocalAccessConfig(): Promise<void> {
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-local-access-'))
+  const configPath = join(tempDir, 'config.json')
+  try {
+    await writeFile(configPath, JSON.stringify({
+      host: '127.0.0.1',
+      port: 7420,
+      password: 'old-password',
+      tunnel: true,
+      customOption: 'preserved',
+    }), 'utf8')
+    await persistAccessPassword(configPath, 'new-password')
+    const persisted = JSON.parse(await readFile(configPath, 'utf8')) as Record<string, unknown>
+    assert.equal(persisted.password, 'new-password')
+    assert.equal(persisted.customOption, 'preserved')
+    assert.equal(persisted.tunnel, true)
+
+    await Promise.all([
+      persistAccessPassword(configPath, 'concurrent-password'),
+      updateLocalAccessConfig(configPath, (config) => {
+        config.tunnel = false
+        config.concurrentOption = 'preserved'
+      }),
+    ])
+    const concurrentlyPersisted = JSON.parse(await readFile(configPath, 'utf8')) as Record<string, unknown>
+    assert.equal(concurrentlyPersisted.password, 'concurrent-password')
+    assert.equal(concurrentlyPersisted.tunnel, false)
+    assert.equal(concurrentlyPersisted.concurrentOption, 'preserved')
+    assert.equal(concurrentlyPersisted.customOption, 'preserved')
+  } finally {
+    await rm(tempDir, { recursive: true, force: true })
+  }
+}
+
 function smokeLocalPairingPage(): void {
   const publicUrl = 'https://pairing.example.test/connect?a=1&b=2'
   const qrSvg = renderPairingQrSvg(publicUrl)
@@ -1529,17 +1568,24 @@ function smokeLocalPairingPage(): void {
   const html = renderLocalSetupHtml({
     password: 'secret<&"',
     publicUrl,
+    localUrl: 'http://127.0.0.1:7420',
+    lanUrls: ['http://192.168.1.20:7420'],
+    managementToken: 'local-management-token',
+    canChangePassword: true,
   })
-  assert.match(html, /二维码只包含手机访问地址，不包含访问密码/u)
+  assert.match(html, /二维码只包含外网地址，不包含密码/u)
   assert.match(html, /https:\/\/pairing\.example\.test\/connect\?a=1&amp;b=2/u)
   assert.match(html, /secret&lt;&amp;&quot;/u)
-  assert.match(html, /在电脑上测试手机地址/u)
+  assert.match(html, /http:\/\/192\.168\.1\.20:7420/u)
+  assert.match(html, /修改访问密码/u)
+  assert.match(html, /local-management-token/u)
+  assert.match(html, /测试外网地址/u)
 
   const inactiveHtml = renderLocalSetupHtml({
     password: 'secret',
     publicUrl: '',
   })
-  assert.match(inactiveHtml, /临时地址尚未生成/u)
+  assert.match(inactiveHtml, /外网地址正在准备或尚未开启/u)
   assert.equal(inactiveHtml.includes('<svg class="pairing-qr"'), false)
 }
 

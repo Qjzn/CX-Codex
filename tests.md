@@ -2,15 +2,18 @@
 
 This file tracks manual regression and feature verification steps.
 
-## Local phone-pairing QR (2026-07-25)
+## Local management center and phone pairing (2026-07-27)
 
 ### Expected behavior
 
-1. Opening `http://127.0.0.1:7420/local-setup` while Quick Tunnel is ready shows a scannable QR code for the active public URL.
+1. Opening `http://127.0.0.1:7420/local-setup` shows the active local, LAN (when bound beyond loopback), and public access addresses, plus a scannable QR code for the active public URL.
 2. The QR code is generated locally, contains only the public URL, and never includes the CX-Codex password.
-3. The page keeps `Cache-Control: no-store`, a script-blocking Content Security Policy, and HTTP 404 for requests made through a non-loopback/public host.
+3. The page keeps `Cache-Control: no-store`, permits only its local management script/connect request, and returns HTTP 404 for requests made through a non-loopback/public host.
 4. When no tunnel is active, the page shows the existing start-from-settings guidance and renders no QR SVG.
-5. At 393 × 852 the card, QR code, address, password, and warning remain readable without horizontal overflow.
+5. A password change can be submitted only from the loopback-only page with its per-process management token, persists to the active config file, takes effect immediately, and invalidates existing HTTP and WebSocket sessions.
+6. Password and tunnel updates serialize writes to the same config file, so concurrent updates preserve both values and unrelated config fields.
+7. The installer creates `CX-Codex 管理中心` shortcuts on the current user's desktop and Start menu; when a same-name shortcut points elsewhere, installation uses a port-specific fallback and the official uninstaller preserves the unrelated shortcut.
+8. At 393 × 852 the card, QR code, addresses, password controls, and warning remain readable without horizontal overflow.
 
 ### Verification
 
@@ -18,8 +21,24 @@ This file tracks manual regression and feature verification steps.
 - Run `npm.cmd run build:frontend`.
 - Run `npm.cmd run verify:server-modules`.
 - Run `node .\scripts\run-powershell-script.mjs .\scripts\verify-quick-tunnel.ps1`.
+- The Quick Tunnel verifier runs `scripts/verify-auth-session-rotation.mjs` against its isolated server and requires the old WebSocket to close, the old Cookie/password to return 401, and the new password to log in.
 - Start an isolated password-protected server, enable a temporary Quick Tunnel, and open `/local-setup` at 393 × 852.
 - Decode the rendered screenshot with a QR decoder and require it to match the server's active `publicUrl`; then stop the tunnel and isolated server.
+- Change the password while updating tunnel settings, verify both values changed without losing unrelated fields, and verify the old remote login/session no longer works.
+
+## Android connection recovery (2026-07-27)
+
+### Expected behavior
+
+1. When a saved server URL is loading, the Android app immediately shows `正在连接 CX-Codex` with a progress indicator instead of a blank WebView.
+2. A main-frame network error, HTTP error, or 15-second timeout shows a focused recovery screen with `重试` and `修改地址`.
+3. `重试` reloads the saved URL; `修改地址` opens a prefilled connection form so the user can replace an expired Quick Tunnel URL.
+4. Once a successful main page becomes visible, the native connection layer disappears and does not cover the chat UI; committing an HTTP/network error page must not clear the error state.
+
+### Verification
+
+- Build `assembleDebug` and run the Android background verifier.
+- Launch once with a reachable URL and once with an unreachable URL; confirm loading, success, timeout/error, retry, and prefilled address editing on a phone-sized emulator/device.
 
 ## Phone-access settings priority (2026-07-25)
 

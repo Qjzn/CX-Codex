@@ -1,13 +1,18 @@
 import { fileURLToPath } from 'node:url'
+import { randomBytes } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join } from 'node:path'
 import type { Server as HttpServer, IncomingMessage } from 'node:http'
+import { networkInterfaces } from 'node:os'
 import { existsSync } from 'node:fs'
 import { writeFile, stat } from 'node:fs/promises'
 import express, { type Express } from 'express'
 import { createCodexBridgeMiddleware } from './codexAppServerBridge.js'
 import { createAuthSession, isLoopbackRequest } from './authMiddleware.js'
+import { readJsonBody, RequestBodyTooLargeError } from './httpBody.js'
+import { persistAccessPassword } from './localAccessConfig.js'
 import { getQuickTunnelSnapshot } from './quickTunnel.js'
 import { renderLocalSetupHtml } from './localPairingPage.js'
+import { generatePassword } from './password.js'
 import { createDirectoryListingHtml, createLocalFileActionHtml, createTextEditorHtml, decodeBrowsePath, isPreviewableLocalPath, isTextEditableFile, normalizeLocalPath, toLocalFilePreviewHref } from './localBrowseUi.js'
 import {
   NOTIFICATION_WEBSOCKET_MAX_INBOUND_BYTES,
@@ -23,6 +28,8 @@ const BRIDGE_HEARTBEAT_METHOD = 'bridge/heartbeat'
 
 export type ServerOptions = {
   password?: string
+  configPath?: string
+  host?: string
 }
 
 export type ServerInstance = {
@@ -67,6 +74,37 @@ const LOCAL_FILE_CONTENT_TYPES: Record<string, string> = {
   '.xml': 'application/xml; charset=utf-8',
   '.yaml': 'application/yaml; charset=utf-8',
   '.yml': 'application/yaml; charset=utf-8',
+}
+
+const LOCAL_SETUP_BODY_LIMIT_BYTES = 16 * 1024
+
+function formatHttpUrl(host: string, port: number): string {
+  const normalizedHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
+  return `http://${normalizedHost}:${String(port)}`
+}
+
+function getLanAccessUrls(host: string | undefined, port: number): string[] {
+  const normalizedHost = host?.trim().toLowerCase() ?? ''
+  if (
+    !normalizedHost
+    || normalizedHost === '127.0.0.1'
+    || normalizedHost === 'localhost'
+    || normalizedHost === '::1'
+  ) {
+    return []
+  }
+  if (normalizedHost !== '0.0.0.0' && normalizedHost !== '::') {
+    return [formatHttpUrl(host!.trim(), port)]
+  }
+
+  const urls = new Set<string>()
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.internal || address.family !== 'IPv4' || address.address.startsWith('169.254.')) continue
+      urls.add(formatHttpUrl(address.address, port))
+    }
+  }
+  return [...urls]
 }
 
 const DOWNLOAD_ONLY_EXTENSIONS = new Set([
@@ -159,6 +197,8 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
     remoteAccessProtected: Boolean(options.password),
   })
   const authSession = options.password ? createAuthSession(options.password) : null
+  const localSetupToken = randomBytes(24).toString('hex')
+  let invalidateWebSocketSessions = () => {}
 
   app.get('/health', (_req, res) => {
     res.status(200).json({
@@ -174,12 +214,62 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       return
     }
     const tunnel = getQuickTunnelSnapshot()
+    const localPort = req.socket.localPort ?? 7420
     res.setHeader('Cache-Control', 'no-store')
-    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
+    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
     res.status(200).type('text/html; charset=utf-8').send(renderLocalSetupHtml({
-      password: options.password ?? '',
+      password: authSession?.getPassword() ?? '',
       publicUrl: tunnel.active ? tunnel.publicUrl : '',
+      localUrl: formatHttpUrl('127.0.0.1', localPort),
+      lanUrls: getLanAccessUrls(options.host, localPort),
+      managementToken: localSetupToken,
+      canChangePassword: Boolean(authSession && options.configPath),
     }))
+  })
+
+  app.post('/local-setup/password', (req, res) => {
+    if (!isLoopbackRequest(req)) {
+      res.status(404).end()
+      return
+    }
+    if (req.get('X-CX-Codex-Local-Setup') !== localSetupToken) {
+      res.status(403).json({ error: '管理页面校验已失效，请刷新后重试。' })
+      return
+    }
+    if (!authSession || !options.configPath) {
+      res.status(409).json({ error: '当前启动方式无法保存密码，请使用配置文件启动 CX-Codex。' })
+      return
+    }
+
+    void (async () => {
+      try {
+        const payload = await readJsonBody(req, { maxBytes: LOCAL_SETUP_BODY_LIMIT_BYTES })
+        const body = payload && typeof payload === 'object' && !Array.isArray(payload)
+          ? payload as Record<string, unknown>
+          : {}
+        const nextPassword = body.generate === true
+          ? generatePassword()
+          : typeof body.password === 'string'
+            ? body.password.trim()
+            : ''
+        if (nextPassword.length < 8 || nextPassword.length > 128) {
+          res.status(400).json({ error: '新密码必须为 8–128 个字符。' })
+          return
+        }
+        await persistAccessPassword(options.configPath!, nextPassword)
+        authSession.rotatePassword(nextPassword)
+        invalidateWebSocketSessions()
+        res.setHeader('Cache-Control', 'no-store')
+        res.status(200).json({ ok: true, password: nextPassword })
+      } catch (error) {
+        if (error instanceof RequestBodyTooLargeError) {
+          res.status(413).json({ error: '请求内容过大。' })
+          return
+        }
+        const message = error instanceof Error ? error.message : '密码保存失败。'
+        res.status(500).json({ error: message })
+      }
+    })()
   })
 
   // 1. Auth middleware (if password is set)
@@ -359,6 +449,11 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
         noServer: true,
         maxPayload: NOTIFICATION_WEBSOCKET_MAX_INBOUND_BYTES,
       })
+      invalidateWebSocketSessions = () => {
+        for (const ws of wss.clients) {
+          ws.terminate()
+        }
+      }
       const heartbeatState = new WeakMap<WebSocket, boolean>()
       const heartbeat = setInterval(() => {
         for (const ws of wss.clients) {
@@ -425,9 +520,8 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
 
       server.on('close', () => {
         clearInterval(heartbeat)
-        for (const ws of wss.clients) {
-          ws.terminate()
-        }
+        invalidateWebSocketSessions()
+        invalidateWebSocketSessions = () => {}
         wss.close()
       })
     },

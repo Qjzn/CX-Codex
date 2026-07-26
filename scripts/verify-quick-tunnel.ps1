@@ -75,6 +75,53 @@ try {
   } catch {
     $remoteSetupStatus = [int]$_.Exception.Response.StatusCode
   }
+  $localPasswordWithoutTokenStatus = 0
+  try {
+    Invoke-WebRequest `
+      -UseBasicParsing `
+      -Method Post `
+      -Uri "http://127.0.0.1:$Port/local-setup/password" `
+      -ContentType "application/json" `
+      -Body '{"password":"should-not-change"}' `
+      -TimeoutSec 5 | Out-Null
+  } catch {
+    $localPasswordWithoutTokenStatus = [int]$_.Exception.Response.StatusCode
+  }
+  if ($localPasswordWithoutTokenStatus -ne 403) {
+    throw "Local password change without the management token must return 403."
+  }
+  $remotePasswordStatus = 0
+  try {
+    Invoke-WebRequest `
+      -UseBasicParsing `
+      -Method Post `
+      -Uri "http://127.0.0.1:$Port/local-setup/password" `
+      -Headers @{ Host = "remote-access-check.invalid" } `
+      -ContentType "application/json" `
+      -Body '{"password":"should-not-change"}' `
+      -TimeoutSec 5 | Out-Null
+  } catch {
+    $remotePasswordStatus = [int]$_.Exception.Response.StatusCode
+  }
+  if ($remotePasswordStatus -ne 404) {
+    throw "Remote password change route must return 404."
+  }
+
+  $previousRotationPassword = [string]$env:CX_CODEX_ROTATION_TEST_PASSWORD
+  try {
+    $env:CX_CODEX_ROTATION_TEST_PASSWORD = $testPassword
+    $rotationOutput = & $nodePath (Join-Path $repoRoot "scripts\verify-auth-session-rotation.mjs") $Port
+    if ($LASTEXITCODE -ne 0) {
+      throw "Password rotation session smoke failed with exit code $LASTEXITCODE."
+    }
+    $rotationState = $rotationOutput | ConvertFrom-Json
+  } finally {
+    if ([string]::IsNullOrEmpty($previousRotationPassword)) {
+      Remove-Item Env:CX_CODEX_ROTATION_TEST_PASSWORD -ErrorAction SilentlyContinue
+    } else {
+      $env:CX_CODEX_ROTATION_TEST_PASSWORD = $previousRotationPassword
+    }
+  }
 
   $startState = $null
   $startErrorCode = ""
@@ -119,6 +166,9 @@ try {
     health = $healthy
     localSetupStatus = $localSetupStatus
     remoteSetupStatus = $remoteSetupStatus
+    localPasswordWithoutTokenStatus = $localPasswordWithoutTokenStatus
+    remotePasswordStatus = $remotePasswordStatus
+    passwordRotation = $rotationState
     tunnelActive = [bool]$startState.active
     phase = if ($startState) { [string]$startState.phase } else { "error" }
     publicUrlReturned = -not [string]::IsNullOrWhiteSpace([string]$startState.publicUrl)

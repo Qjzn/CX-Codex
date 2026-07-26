@@ -244,6 +244,12 @@ After each feature implementation session that uses this skill:
 - Error presentation maps actionable causes such as login, install, update, restart, or settings to a focused recovery action instead of displaying raw transport details.
 - CX-Codex mobile parity intentionally keeps the same compact state vocabulary but makes the badge trigger current-thread recovery, because a suspended mobile WebView needs a direct catch-up affordance that the desktop host does not.
 
+## Findings: Android WebView Connection Recovery (2026-07-26)
+
+- Windows Codex `26.721.4979` continues to use the connection states `connecting`, `restarting`, `connected`, `disconnected`, and `error`; Chinese locale strings present connecting/error as concise states rather than exposing transport details.
+- Recovery copy routes users to one focused action such as retry, restart, or settings. CX-Codex Android follows that pattern with `重试` and `修改地址`, because expired Quick Tunnel URLs require an address-level recovery path that desktop Codex does not need.
+- For remote WebView shells, the native layer must remain visible from Activity startup until `onPageCommitVisible` or a successful `onPageFinished`; main-frame network/HTTP errors and a bounded timeout must replace the spinner with recovery actions.
+
 ## Findings: Queued Messages and Web Search Activity (2026-07-13)
 
 - Windows Codex `26.707.31428` maps App Server `webSearch` thread items into a structured `web-search` tool activity. While active it shows `Searching the web` with the query when available; completed searches contribute to the collapsed tool-activity summary instead of rendering an unsupported/raw fallback card.
