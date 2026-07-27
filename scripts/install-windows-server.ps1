@@ -71,6 +71,28 @@ function Write-Step {
   Write-InstallerMessage "==> $Message" -ForegroundColor Cyan
 }
 
+function Get-Sha256Hex {
+  param([string]$Path)
+
+  $fileHashCommand = Get-Command Get-FileHash -ErrorAction SilentlyContinue
+  if ($null -ne $fileHashCommand) {
+    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+  }
+
+  $stream = [System.IO.File]::OpenRead($Path)
+  try {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $bytes = $sha256.ComputeHash($stream)
+      return ([BitConverter]::ToString($bytes) -replace "-", "").ToLowerInvariant()
+    } finally {
+      $sha256.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 function Get-InternetShortcutUrl {
   param([string]$Path)
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -614,7 +636,7 @@ function Install-CloudflaredWindows {
       continue
     }
     $cachedChecksumPrefix = $Matches[1].ToLowerInvariant()
-    $cachedChecksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $cached.FullName).Hash.ToLowerInvariant()
+    $cachedChecksum = Get-Sha256Hex -Path $cached.FullName
     if (-not $cachedChecksum.StartsWith($cachedChecksumPrefix)) {
       continue
     }
@@ -654,20 +676,43 @@ function Install-CloudflaredWindows {
   New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
   Write-InstallerMessage "Downloading cloudflared: $downloadUrl"
   if (Test-Path -LiteralPath $targetPath) {
-    $currentChecksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $targetPath).Hash.ToLowerInvariant()
+    $currentChecksum = Get-Sha256Hex -Path $targetPath
     if ($currentChecksum -eq $expectedChecksum) {
       Write-InstallerMessage "Verified cloudflared already available: $targetPath"
       return $targetPath
     }
   }
 
-  Invoke-WebRequest -Uri $downloadUrl -OutFile $temporaryPath
-  $actualChecksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $temporaryPath).Hash.ToLowerInvariant()
-  if ($actualChecksum -ne $expectedChecksum) {
+  try {
+    $downloaded = $false
+    $maximumDownloadAttempts = 3
+    for ($attempt = 1; $attempt -le $maximumDownloadAttempts; $attempt++) {
+      try {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $temporaryPath
+        $downloaded = $true
+        break
+      } catch {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        if ($attempt -eq $maximumDownloadAttempts) {
+          throw
+        }
+        $retryDelaySeconds = $attempt * 2
+        Write-InstallerMessage "cloudflared download was interrupted. Retrying attempt $($attempt + 1) of $maximumDownloadAttempts in $retryDelaySeconds seconds."
+        Start-Sleep -Seconds $retryDelaySeconds
+      }
+    }
+    if (-not $downloaded) {
+      throw "cloudflared download did not complete."
+    }
+    $actualChecksum = Get-Sha256Hex -Path $temporaryPath
+    if ($actualChecksum -ne $expectedChecksum) {
+      throw "cloudflared SHA-256 verification failed: $archAsset"
+    }
+    Move-Item -LiteralPath $temporaryPath -Destination $targetPath -Force
+  } finally {
     Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
-    throw "cloudflared SHA-256 verification failed: $archAsset"
   }
-  Move-Item -LiteralPath $temporaryPath -Destination $targetPath -Force
 
   $version = & $targetPath --version 2>$null
   if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {

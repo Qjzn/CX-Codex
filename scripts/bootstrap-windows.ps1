@@ -317,7 +317,7 @@ function Get-PortableNodeRuntime {
 
   try {
     Invoke-WebRequest -Uri $downloadUrl -OutFile $zipPath
-    $actualChecksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
+    $actualChecksum = Get-Sha256Hex -Path $zipPath
     if ($actualChecksum -ne $expectedChecksum) {
       throw "Node.js SHA-256 verification failed for $zipName."
     }
@@ -377,7 +377,24 @@ function Get-RepoArchiveUrl {
 
 function Get-Sha256Hex {
   param([string]$Path)
-  return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+
+  $fileHashCommand = Get-Command Get-FileHash -ErrorAction SilentlyContinue
+  if ($null -ne $fileHashCommand) {
+    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+  }
+
+  $stream = [System.IO.File]::OpenRead($Path)
+  try {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $bytes = $sha256.ComputeHash($stream)
+      return ([BitConverter]::ToString($bytes) -replace "-", "").ToLowerInvariant()
+    } finally {
+      $sha256.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
 }
 
 function Test-ManagedServerCommandLine {

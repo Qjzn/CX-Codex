@@ -104,6 +104,18 @@ Assert-True `
 Assert-True `
   ($bootstrapSource -match '\[switch\]\$SkipOpenPairing[\s\S]*?function\s+Open-LocalPairingPage[\s\S]*?verification\.websocketAuth[\s\S]*?Start-Process\s+-FilePath\s+\$pairingUrl') `
   "RemoteQuick pairing must support opt-out and open only after all public verification gates pass."
+Assert-True `
+  ($bootstrapSource -match 'function\s+Get-Sha256Hex[\s\S]*?Get-Command\s+Get-FileHash[\s\S]*?\[System\.Security\.Cryptography\.SHA256\]::Create\(\)') `
+  "Windows bootstrap must fall back to .NET SHA-256 when Get-FileHash is unavailable."
+Assert-True `
+  ($installSource -match 'function\s+Get-Sha256Hex[\s\S]*?Get-Command\s+Get-FileHash[\s\S]*?\[System\.Security\.Cryptography\.SHA256\]::Create\(\)') `
+  "Windows installer must fall back to .NET SHA-256 when Get-FileHash is unavailable."
+Assert-True `
+  ($installSource -match 'Invoke-WebRequest\s+-Uri\s+\$downloadUrl\s+-OutFile\s+\$temporaryPath[\s\S]*?finally\s*\{[\s\S]*?Remove-Item\s+-LiteralPath\s+\$temporaryPath') `
+  "Windows installer must remove incomplete cloudflared downloads after failures."
+Assert-True `
+  ($installSource -match '\$maximumDownloadAttempts\s*=\s*3[\s\S]*?cloudflared download was interrupted\. Retrying attempt[\s\S]*?Start-Sleep\s+-Seconds\s+\$retryDelaySeconds') `
+  "Windows installer must retry interrupted cloudflared downloads with a bounded delay."
 
 if (Test-Path -LiteralPath $testRoot) {
   $resolvedTemp = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\')

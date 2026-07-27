@@ -14008,6 +14008,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 6. From Settings, start phone access. Require public `/health` to return `200`, unauthenticated `/codex-api/tunnel-status` to return `401`, and unauthenticated `/codex-api/ws` upgrade to return `401` before the UI reports ready.
 7. Stop access from Settings and confirm the managed cloudflared child exits, the temporary URL is cleared, and config `tunnel` becomes false.
 8. Repeat with an occupied port, an existing `.cloudflared/config.yml`, a blocked Quick Tunnel DNS path, a bad Release checksum, and a failed update. Require a stable error code and no silent firewall, hosts, DNS, or existing Cloudflare config change.
+9. Run the public `-RemoteQuick -JsonOutput` install path from a clean machine state when `Get-FileHash` is unavailable to the child Windows PowerShell process. Confirm both bootstrap and installer fall back to .NET SHA-256, still reject a bad checksum, retry an interrupted cloudflared download at most three times, and remove any `cloudflared-*.exe.download-*` file after failure.
 
 ### Expected results
 

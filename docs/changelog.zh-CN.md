@@ -2,6 +2,11 @@
 
 ## 未发布
 
+## 2.6.1 - 2026-07-27
+
+- Windows bootstrap 与内层安装器在 `Get-FileHash` 不可用时会自动降级到 .NET SHA-256，继续严格校验 Node.js、Release 和 cloudflared，不再因精简或异常 PowerShell 环境中缺少该命令而中断。
+- cloudflared 大文件下载遇到 EOF 或瞬时网络中断时最多自动重试三次，每次重试前清理半包；最终失败也不会在用户目录残留 `cloudflared-*.exe.download-*` 临时文件。
+
 ## 2.6.0 - 2026-07-27
 
 - 新增仅限本机的“CX-Codex 管理中心”，集中显示本机、局域网和当前外网地址，并支持查看、生成或修改访问密码；密码轮换会写回配置并立即注销旧的远程会话。
