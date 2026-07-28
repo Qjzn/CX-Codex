@@ -803,3 +803,15 @@ After each feature implementation session that uses this skill:
 - Windows Codex `26.715.72359` stores `project-order` and `pinned-project-ids` as project identities rather than filesystem paths. Local identities resolve through `local-projects`, whose records contain `id`, `name`, and `rootPaths`.
 - `electron-saved-workspace-roots` remains a path list. CX-Codex must resolve local project identities to roots for its path-based sidebar model, use the local project name as the visible label, and map reordered roots back to identities before writing global state.
 - Remote or otherwise unresolved project identities must remain preserved on write but stay out of the local filesystem sidebar; rendering them as `local-*` or UUID project groups is a data-model leak.
+
+## Findings: Mobile Thread-history Connection Recovery (2026-07-27)
+
+- Windows Codex `26.721.4979` distinguishes an empty task from connection recovery with dedicated loading, reconnecting, retry, and connection-settings actions.
+- A cached sidebar entry proves only that the task index was available earlier; it does not prove that the current desktop address can still serve the selected task history.
+- CX-Codex keeps cached messages visible, represents an uncached history transport failure as a recoverable state instead of an empty task, retries through the existing bounded scheduler, and lets the Android shell open its editable connection address directly.
+
+## Findings: Stable-first Remote Access Recovery (2026-07-28)
+
+- Windows Codex `26.721.4979` presents connection recovery as a compact state plus one focused action; protocol and transport internals stay outside the primary settings hierarchy.
+- CX-Codex applies the same hierarchy to its product-specific remote access: fixed Tailscale Funnel is the recommended state, Cloudflare Quick Tunnel is visibly temporary, and missing installation/login becomes an explicit recovery action instead of an unexplained failure.
+- Upgrade configuration is durable user state. The installer preserves the existing password, access mode, enabled state, and unknown fields unless the user explicitly replaces them; a temporary fallback never changes the persisted fixed-address preference.

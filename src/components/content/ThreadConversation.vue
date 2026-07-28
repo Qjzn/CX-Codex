@@ -15,7 +15,30 @@
     </div>
 
     <div
-      v-if="!hasRenderableConversation && !props.isLoading"
+      v-if="showLoadErrorState"
+      class="conversation-load-error"
+      role="status"
+      aria-live="polite"
+    >
+      <p class="conversation-load-error-title">会话内容未加载</p>
+      <p class="conversation-load-error-detail">{{ props.loadError }}</p>
+      <div class="conversation-load-error-actions">
+        <button type="button" class="conversation-load-error-action conversation-load-error-action-primary" @click="emit('retryLoad')">
+          重新连接
+        </button>
+        <button
+          v-if="props.showConnectionSettingsAction === true"
+          type="button"
+          class="conversation-load-error-action"
+          @click="emit('openConnectionSettings')"
+        >
+          修改地址
+        </button>
+      </div>
+    </div>
+
+    <div
+      v-else-if="!hasRenderableConversation && !props.isLoading"
       class="conversation-empty-state"
     >
       <p class="conversation-empty">当前会话还没有消息。</p>
@@ -1403,6 +1426,8 @@ const props = defineProps<{
   showEmptyThreadActions?: boolean
   isThreadSwitching?: boolean
   compactRuntimeChrome?: boolean
+  loadError?: string
+  showConnectionSettingsAction?: boolean
   favoriteMessageIds?: string[]
   allowFailedMessageEdit?: boolean
 }>()
@@ -1866,6 +1891,8 @@ const emit = defineEmits<{
   loadOlderHistory: []
   returnToNewThread: []
   dismissEmptyThread: []
+  retryLoad: []
+  openConnectionSettings: []
   retryFailedMessage: [messageId: string]
   editFailedMessage: [messageId: string]
 }>()
@@ -2033,6 +2060,11 @@ const hasRenderableConversation = computed(() => (
   visibleRenderableEntries.value.length > 0 ||
   props.pendingRequests.length > 0 ||
   effectiveLiveOverlay.value !== null
+))
+const showLoadErrorState = computed(() => (
+  !hasRenderableConversation.value &&
+  props.isLoading !== true &&
+  Boolean(props.loadError?.trim())
 ))
 const isThreadSwitchingState = computed(() => props.isThreadSwitching === true && hasRenderableConversation.value)
 const showLoadingIndicator = computed(() => (
@@ -5639,6 +5671,47 @@ onBeforeUnmount(() => {
 
 .conversation-empty-state {
   @apply flex flex-col items-start gap-3 px-2 sm:px-5 py-2.5;
+}
+
+.conversation-load-error {
+  @apply mx-2 flex max-w-[28rem] flex-col items-start gap-2 rounded-xl border px-4 py-3 sm:mx-5;
+  border-color: color-mix(in srgb, var(--ui-warning) 32%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-warning) 7%, var(--ui-bg-surface));
+}
+
+.conversation-load-error-title {
+  @apply m-0 text-sm font-semibold;
+  color: var(--ui-text-primary);
+}
+
+.conversation-load-error-detail {
+  @apply m-0 text-xs leading-5;
+  color: var(--ui-text-secondary);
+}
+
+.conversation-load-error-actions {
+  @apply mt-1 flex flex-wrap items-center gap-2;
+}
+
+.conversation-load-error-action {
+  @apply inline-flex min-h-11 items-center justify-center border px-3.5 py-2 text-xs font-semibold transition-colors;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+  touch-action: manipulation;
+}
+
+.conversation-load-error-action:hover {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+.conversation-load-error-action-primary {
+  border-color: color-mix(in srgb, var(--ui-accent) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-bg-surface));
+  color: var(--ui-accent);
 }
 
 .conversation-empty {

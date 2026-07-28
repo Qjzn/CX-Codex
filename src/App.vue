@@ -299,7 +299,7 @@
                   {{ webBridgeSettingsStatus }}
                 </p>
               </section>
-              <section v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="移动端连接">
+              <section id="mobile-shell-connection-settings" v-if="isMobileShellAvailable" class="sidebar-settings-section" aria-label="移动端连接">
                 <p class="sidebar-settings-section-title">移动端连接</p>
                 <div class="sidebar-settings-row sidebar-settings-row--static sidebar-settings-row--stacked">
                   <span class="sidebar-settings-label">当前地址</span>
@@ -775,10 +775,12 @@
           <template v-else>
             <div class="content-grid">
               <div class="content-thread">
-                <ThreadConversation ref="threadConversationRef" :messages="displayedThreadMessages" :is-loading="isLoadingMessages"
+                <ThreadConversation ref="threadConversationRef" :messages="displayedThreadMessages" :is-loading="isLoadingMessages || isManualThreadRefreshRunning"
                   :active-thread-id="displayedThreadConversationId" :cwd="displayedThreadCwd" :scroll-state="displayedThreadScrollState"
                   :live-overlay="displayedThreadLiveOverlay"
                   :pending-requests="displayedThreadPendingRequests"
+                  :load-error="selectedThreadLoadError"
+                  :show-connection-settings-action="isMobileShellAvailable"
                   :favorite-message-ids="favoriteMessageIdsForDisplayedThread"
                   :is-thread-switching="isThreadContentSwitching"
                   :compact-runtime-chrome="true"
@@ -789,6 +791,8 @@
                   @respond-server-request="onRespondServerRequest"
                   @toggle-favorite="onToggleFavoriteMessage"
                   @load-older-history="loadOlderHistoryForSelectedThread"
+                  @retry-load="onRefreshSelectedThreadContent"
+                  @open-connection-settings="onOpenThreadConnectionSettings"
                   @return-to-new-thread="onReturnToNewThreadFromEmptyThread"
                   @dismiss-empty-thread="onDismissEmptyThread"
                   @retry-failed-message="retryFailedUserMessage"
@@ -1330,6 +1334,7 @@ const {
   selectedLiveOverlay,
   selectedThreadRuntimeStatus,
   selectedThreadTokenUsage,
+  selectedThreadLoadError,
   selectedThreadId,
   availableModels,
   availableModelIds,
@@ -3724,6 +3729,18 @@ async function onRefreshSelectedThreadContent(): Promise<void> {
   } finally {
     isManualThreadRefreshRunning.value = false
   }
+}
+
+async function onOpenThreadConnectionSettings(): Promise<void> {
+  isSettingsOpen.value = true
+  if (isMobileShellAvailable.value) {
+    await refreshMobileShellServerConfig()
+  }
+  await nextTick()
+  document.getElementById('mobile-shell-connection-settings')?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'start',
+  })
 }
 
 async function onRefreshSidebarThreads(): Promise<void> {

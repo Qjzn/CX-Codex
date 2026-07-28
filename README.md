@@ -137,7 +137,8 @@ http://127.0.0.1:7420
 ```text
 打开并检查 https://github.com/Qjzn/CX-Codex 这个仓库。
 请只运行项目官方 Windows bootstrap，并使用 -RemoteQuick -JsonOutput。
-安装到当前用户目录，保持 127.0.0.1:7420、访问密码和 SHA-256 校验；
+安装到当前用户目录，保持 127.0.0.1:7420、已有访问密码和 SHA-256 校验；
+公网访问优先恢复 Tailscale 固定地址，未安装或未登录时才使用 Cloudflare 临时备用地址；
 不要修改防火墙、hosts、系统 DNS，不要关闭鉴权，也不要输出密码、Cookie 或 Token。
 完成后只返回 JSON 中的 publicUrl、pairingUrl、停止方式和非敏感错误。
 如果公网健康、未登录 API 401 或 WebSocket 鉴权任一验证失败，不要声称安装完成。
@@ -154,7 +155,7 @@ http://127.0.0.1:7420
 
 首次安装通常需要 2–5 分钟。bootstrap 会持续显示安装阶段，并在长步骤中每 15 秒提示仍在运行；不要在构建期间关闭窗口。cloudflared 大文件下载遇到瞬时断线时会自动重试，失败或重试前会清理未完成的半包。
 
-安装和公网验证全部完成后，bootstrap 会自动打开电脑本机的 `http://127.0.0.1:7420/local-setup`，并在桌面和开始菜单创建“CX-Codex 管理中心”。这里会持续显示本机、局域网和当前外网地址，也可查看、生成或修改访问密码。用手机扫描二维码打开临时地址，再输入页面显示的密码即可；二维码只在本机生成且只包含地址，管理中心也不允许通过公网域名访问。无人值守安装可增加 `-SkipOpenPairing`，完成后再从快捷方式打开管理中心。
+安装和公网验证全部完成后，bootstrap 会自动打开电脑本机的 `http://127.0.0.1:7420/local-setup`，并在桌面和开始菜单创建“CX-Codex 管理中心”。这里会持续显示本机、局域网和当前外网地址，也可查看、生成或修改访问密码。升级和重复安装会保留原密码、远程访问模式及未知配置字段；只有首次安装或用户手动修改时密码才变化。用手机扫描二维码打开外网地址，再输入页面显示的密码即可；二维码只在本机生成且只包含地址，管理中心也不允许通过公网域名访问。无人值守安装可增加 `-SkipOpenPairing`，完成后再从快捷方式打开管理中心。
 
 `-JsonOutput` 的 stdout 固定为单行 JSON，构建进度和诊断写入 stderr。成功结果包含 `schemaVersion`、`operation`、`version`、`started`、`healthReady`、本机/公网地址和结构化告警；失败结果返回 `BOOTSTRAP_FAILED` 与失败阶段，不输出密码、Cookie 或 Token。bootstrap 还会读取归档内的 `release-capabilities.json`，拒绝把新版参数交给不支持它们的旧 Release。
 
@@ -265,20 +266,20 @@ App Server 权限策略可选配置：
 
 ## 远程访问
 
-本项目不强绑定某一种公网方案。推荐路径：
+默认策略是“固定优先、临时兜底”：
 
 - 局域网：直接访问服务器 IP 和端口。
-- 私有网络：Tailscale / ZeroTier。
+- 固定公网：Tailscale Funnel。首次需要安装并登录 Tailscale，之后设备域名保持不变；CX-Codex 使用独立的 HTTPS `8443` 端口，后台 Funnel 会在 Tailscale 或电脑重启后恢复。
 - 自有公网：Nginx / Caddy / frp。
-- 临时公网：Cloudflare Tunnel。
+- 临时公网：Cloudflare Quick Tunnel，无需账号或域名，但地址会变化。
 
-Cloudflare Tunnel 安全一键模式：
+Windows 安全一键入口（保留 `RemoteQuick` 参数名以兼容旧版本；新版本会先尝试固定地址）：
 
 ```powershell
 & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1'))) -RemoteQuick -JsonOutput
 ```
 
-也可以在 Web 设置的“手机访问”中生成、复制、打开和停止临时地址。快速隧道免费且无需账号或域名，但地址会变化、无 SLA 且不支持 SSE。鉴权检查、已有配置冲突、DNS 异常、公网验证及长期固定域名请看：
+也可以在 Web 设置的“手机访问”中安装/检查 Tailscale、启用固定地址，或先使用临时备用地址。Tailscale Funnel 需要一次登录；Quick Tunnel 无需账号或域名，但地址会变化、无 SLA 且不支持 SSE。两种模式都会验证公网健康、访问密码和 WebSocket 鉴权。详细步骤与故障排查请看：
 
 - [docs/cloudflare-tunnel.zh-CN.md](./docs/cloudflare-tunnel.zh-CN.md)
 

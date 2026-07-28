@@ -196,6 +196,9 @@ function Assert-BoundedRuntimeSendRecoverySource {
   $chatFeedbackSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\chatFeedbackMetrics.ts")
   $diagnosticsPanelSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\DiagnosticsPanel.vue")
   $taskPetPreviewSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\mobile\TaskPetPreview.vue")
+  Assert-True ($source -match "function\s+classifyThreadLoadFailure[\s\S]*?failed to fetch[\s\S]*?页面会自动重试") "thread history transport failures must map to actionable Chinese recovery copy"
+  Assert-True ($source -match "const\s+failure\s*=\s*classifyThreadLoadFailure\(error\)[\s\S]*?setThreadLoadError\(threadId,\s*failure\.message\)[\s\S]*?scheduleNonFreshThreadDetailRetry\(threadId\)") "recoverable thread history failures must retain per-thread error state and schedule bounded retries"
+  Assert-True ($appSource -match ':load-error=\"selectedThreadLoadError\"' -and $appSource -match '@open-connection-settings=\"onOpenThreadConnectionSettings\"') "the conversation surface must expose thread recovery and mobile address repair"
   Assert-True ($source -match "const\s+RUNTIME_SEND_RETRY_DELAYS_MS\s*=\s*\[700,\s*2000,\s*5000,\s*10000\]") "runtime send retries must use the bounded mobile weak-network schedule"
   $functionMatch = [regex]::Match($source, "async\s+function\s+startRuntimeTurnWithBoundedRecovery[\s\S]*?\n\s*function\s+hydrateCachedMessagesForThread")
   Assert-True ($functionMatch.Success) "could not find startRuntimeTurnWithBoundedRecovery source"
@@ -2197,6 +2200,59 @@ JSON.stringify((() => {
   return Invoke-BrowserEvalJson -Session $Session -Script $script
 }
 
+function Read-ConversationLoadFailureFixtureMetrics {
+  param([string]$Session)
+
+  return Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const card = document.querySelector('.conversation-load-error');
+  const actions = Array.from(document.querySelectorAll('.conversation-load-error-action'));
+  const text = card?.textContent?.replace(/\s+/g, ' ').trim() || '';
+  return {
+    cardCount: document.querySelectorAll('.conversation-load-error').length,
+    emptyStateCount: document.querySelectorAll('.conversation-empty-state').length,
+    actionCount: actions.length,
+    actionLabels: actions.map((node) => node.textContent?.trim() || ''),
+    minimumActionHeight: actions.length
+      ? Math.min(...actions.map((node) => Math.round(node.getBoundingClientRect().height)))
+      : 0,
+    hasFriendlyCopy: text.includes('会话内容未加载') && text.includes('连接不到桌面端'),
+    hasRawFetchError: text.includes('Failed to fetch'),
+    retryCount: Number(document.querySelector('.conversation-regression-load-retry-count')?.getAttribute('data-count') || '0'),
+    connectionSettingsCount: Number(document.querySelector('.conversation-regression-connection-settings-count')?.getAttribute('data-count') || '0'),
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  };
+})())
+'@
+}
+
+function Assert-ConversationLoadFailureFixture {
+  param([string]$Session)
+
+  $before = Read-ConversationLoadFailureFixtureMetrics -Session $Session
+  Assert-True ([int]$before.cardCount -eq 1) "conversation load failure fixture must render one recovery card"
+  Assert-True ([int]$before.emptyStateCount -eq 0) "conversation load failure must not be presented as an empty conversation"
+  Assert-True ($before.hasFriendlyCopy -eq $true) "conversation load failure fixture is missing actionable Chinese recovery copy"
+  Assert-True ($before.hasRawFetchError -eq $false) "conversation load failure fixture leaked the raw Failed to fetch error"
+  Assert-True ([int]$before.actionCount -eq 2) "conversation load failure fixture must expose retry and connection settings actions"
+  Assert-True (($before.actionLabels -join '|') -match '重新连接' -and ($before.actionLabels -join '|') -match '修改地址') "conversation load failure actions drifted"
+  Assert-True ([int]$before.minimumActionHeight -ge 44) "conversation load failure actions must keep a 44px mobile touch target"
+  Assert-True ($before.hasHorizontalOverflow -eq $false) "conversation load failure fixture overflowed horizontally"
+
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  document.querySelector('.conversation-load-error-action-primary')?.click();
+  document.querySelector('.conversation-load-error-action:not(.conversation-load-error-action-primary)')?.click();
+  return { clicked: true };
+})())
+'@ | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+
+  $after = Read-ConversationLoadFailureFixtureMetrics -Session $Session
+  Assert-True ([int]$after.retryCount -eq 1) "conversation load failure retry action did not emit exactly once"
+  Assert-True ([int]$after.connectionSettingsCount -eq 1) "conversation load failure settings action did not emit exactly once"
+}
+
 function Assert-ConversationTailStatusFixture {
   param([string]$Session)
 
@@ -3572,6 +3628,12 @@ try {
   Assert-ConversationCommandOutputLazy -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "phone"
   Add-RegressionResult -Name "conversation-blocks-fixture-phone" -Page $fixturePhone
+
+  $loadFailureFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&loadFailure=1"
+  $loadFailureFixture = Open-And-ReadPage -Session $session -Url $loadFailureFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $loadFailureFixture -Name "conversation load failure fixture phone"
+  Assert-ConversationLoadFailureFixture -Session $session
+  Add-RegressionResult -Name "conversation-load-failure-fixture-phone" -Page $loadFailureFixture
 
   $tailStatusFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&tailStatus=1&tailGap=1"
   $tailStatusFixture = Open-And-ReadPage -Session $session -Url $tailStatusFixtureUrl -Width $PhoneWidth -Height $PhoneHeight

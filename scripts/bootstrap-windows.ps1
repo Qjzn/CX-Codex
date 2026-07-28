@@ -949,6 +949,6 @@ if (-not $JsonOutput) {
   Write-BootstrapMessage "Launcher:    $env:USERPROFILE\.local\bin\cx-codex-start.cmd"
   Write-BootstrapMessage "Logs:        $env:USERPROFILE\.cx-codex\logs"
   if ($EnableCloudflareTunnel) {
-    Write-BootstrapMessage "Tunnel:      enabled; open the trycloudflare.com URL printed above or in cx-codex.out.log"
+    Write-BootstrapMessage "Tunnel:      enabled; fixed Tailscale address is preferred, with a temporary Cloudflare fallback"
   }
 }

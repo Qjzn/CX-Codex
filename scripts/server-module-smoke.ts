@@ -365,6 +365,7 @@ import {
   startQuickTunnelWithTransientRetry,
   type QuickTunnelSnapshot,
 } from '../src/server/quickTunnel.js'
+import { readTailscaleFunnelPublicUrl } from '../src/server/tailscaleFunnel.js'
 import { handleStatusRoutes } from '../src/server/statusRoutes.js'
 import { handleLocalStateRoutes } from '../src/server/localStateRoutes.js'
 import {
@@ -6925,6 +6926,27 @@ async function smokeQuickTunnelTransientRetry(): Promise<void> {
 }
 
 async function smokeStatusRoutes(): Promise<void> {
+  assert.equal(readTailscaleFunnelPublicUrl(JSON.stringify({
+    TCP: { 8443: { HTTPS: true } },
+    Web: {
+      'cx-codex.example.ts.net:8443': {
+        Handlers: { '/': { Proxy: 'http://127.0.0.1:7420' } },
+      },
+    },
+    AllowFunnel: { 'cx-codex.example.ts.net:8443': true },
+  }), 7420), 'https://cx-codex.example.ts.net:8443')
+  assert.equal(readTailscaleFunnelPublicUrl(JSON.stringify({
+    AllowFunnel: { 'cx-codex.example.ts.net:443': true },
+  })), '')
+  assert.equal(readTailscaleFunnelPublicUrl(JSON.stringify({
+    Web: {
+      'private.example.ts.net:8443': {
+        Handlers: { '/': { Proxy: 'http://127.0.0.1:3000' } },
+      },
+    },
+    AllowFunnel: { 'private.example.ts.net:8443': true },
+  }), 7420), '')
+
   const desktopStatus = {
     available: true,
     platform: 'win32',
@@ -6942,6 +6964,8 @@ async function smokeStatusRoutes(): Promise<void> {
     active: true,
     managed: true,
     temporary: true,
+    preferredMode: 'quick' as const,
+    activeMode: 'quick' as const,
     phase: 'ready' as const,
     networkMode: 'system-dns' as const,
     publicUrl: 'https://demo.trycloudflare.com',
@@ -6959,15 +6983,35 @@ async function smokeStatusRoutes(): Promise<void> {
       websocketAuth: true,
     },
     reason: 'ok',
+    stable: {
+      installed: true,
+      authenticated: true,
+      active: false,
+      phase: 'idle' as const,
+      publicUrl: '',
+      command: 'C:\\Program Files\\Tailscale\\tailscale.exe',
+      dnsName: 'cx-codex.example.ts.net',
+      startedAtIso: '',
+      errorCode: '',
+      message: 'ready',
+      verification: {
+        health: false,
+        auth: false,
+        websocketAuth: false,
+      },
+    },
   }
   const bodies: unknown[] = [
     { enabled: false, cloudflaredCommand: ' C:\\tools\\cloudflared.exe ' },
     ['bad'],
-    { cloudflaredCommand: ' C:\\tools\\cloudflared.exe ' },
+    { mode: 'quick', fallback: true, cloudflaredCommand: ' C:\\tools\\cloudflared.exe ' },
+    { mode: 'stable', tailscaleCommand: ' C:\\Program Files\\Tailscale\\tailscale.exe ' },
   ]
   const tunnelUpdates: unknown[] = []
   const tunnelStarts: unknown[] = []
   let tunnelStopCount = 0
+  let stableStopCount = 0
+  const stableStarts: unknown[] = []
   let shouldFailRefresh = false
   const dependencies = {
     readJsonBody: async () => bodies.shift(),
@@ -7010,6 +7054,21 @@ async function smokeStatusRoutes(): Promise<void> {
         message: 'stopped',
         verification: { health: false, auth: false, websocketAuth: false },
       }
+    },
+    startStableAccess: async (options: unknown) => {
+      stableStarts.push(options)
+      return {
+        ...tunnelStatus.stable,
+        active: true,
+        phase: 'ready' as const,
+        publicUrl: 'https://cx-codex.example.ts.net',
+        startedAtIso: tunnelStatus.startedAtIso,
+        verification: { ...tunnelStatus.verification },
+      }
+    },
+    stopStableAccess: async () => {
+      stableStopCount += 1
+      return { ...tunnelStatus.stable }
     },
     remoteAccessProtected: true,
     getErrorMessage: (error: unknown, fallback: string) => getErrorMessage(error, fallback),
@@ -7064,6 +7123,8 @@ async function smokeStatusRoutes(): Promise<void> {
   assert.deepEqual(tunnelUpdates, [{
     enabled: false,
     cloudflaredCommand: ' C:\\tools\\cloudflared.exe ',
+    preferredMode: undefined,
+    tailscaleCommand: undefined,
   }])
   assert.deepEqual(JSON.parse(tunnelUpdateResponse.body), { data: tunnelStatus })
 
@@ -7077,6 +7138,8 @@ async function smokeStatusRoutes(): Promise<void> {
   assert.deepEqual(tunnelUpdates[1], {
     enabled: null,
     cloudflaredCommand: undefined,
+    preferredMode: undefined,
+    tailscaleCommand: undefined,
   })
   assert.deepEqual(JSON.parse(invalidTunnelUpdateResponse.body), { data: tunnelStatus })
 
@@ -7093,19 +7156,39 @@ async function smokeStatusRoutes(): Promise<void> {
   }])
   assert.deepEqual(tunnelUpdates[2], {
     enabled: true,
+    preferredMode: 'stable',
     cloudflaredCommand: 'C:\\tools\\cloudflared.exe',
   })
   assert.deepEqual(JSON.parse(tunnelStartResponse.body), { data: tunnelStatus })
 
+  const stableStartResponse = createRouteTestResponse()
+  assert.equal(await handleStatusRoutes(
+    { method: 'POST', socket: { localPort: 7420 } } as never,
+    stableStartResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/tunnel-status/start'),
+    dependencies,
+  ), true)
+  assert.deepEqual(stableStarts, [{
+    localPort: 7420,
+    preferredCommand: 'C:\\Program Files\\Tailscale\\tailscale.exe',
+  }])
+  assert.deepEqual(tunnelUpdates[3], {
+    enabled: true,
+    preferredMode: 'stable',
+    tailscaleCommand: 'C:\\Program Files\\Tailscale\\tailscale.exe',
+  })
+  assert.deepEqual(JSON.parse(stableStartResponse.body), { data: tunnelStatus })
+
   const tunnelStopResponse = createRouteTestResponse()
   assert.equal(await handleStatusRoutes(
-    { method: 'DELETE' } as never,
+    { method: 'DELETE', socket: { localPort: 7420 } } as never,
     tunnelStopResponse.response as never,
     new URL('http://127.0.0.1/codex-api/tunnel-status'),
     dependencies,
   ), true)
-  assert.equal(tunnelStopCount, 1)
-  assert.deepEqual(tunnelUpdates[3], { enabled: false })
+  assert.equal(tunnelStopCount, 2)
+  assert.equal(stableStopCount, 2)
+  assert.deepEqual(tunnelUpdates[4], { enabled: false })
   assert.deepEqual(JSON.parse(tunnelStopResponse.body), { data: tunnelStatus })
 
   const unprotectedTunnelStartResponse = createRouteTestResponse()

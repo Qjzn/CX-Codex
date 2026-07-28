@@ -25,6 +25,7 @@ import {
   startQuickTunnelWithTransientRetry,
   stopQuickTunnel,
 } from '../server/quickTunnel.js'
+import { startStableAccess } from '../server/tailscaleFunnel.js'
 import { spawnSyncCommand } from '../utils/commandInvocation.js'
 
 const program = new Command().name('cx-codex').description('CX-Codex Web bridge for Codex app-server')
@@ -51,11 +52,11 @@ process.on('uncaughtExceptionMonitor', (error) => {
   logRuntimeError('cx-codex-uncaught-exception', error)
 })
 
-function getBridgeEnv(name: 'CONFIG' | 'CODEX_COMMAND' | 'RG_COMMAND' | 'CLOUDFLARED_COMMAND'): string | undefined {
+function getBridgeEnv(name: 'CONFIG' | 'CODEX_COMMAND' | 'RG_COMMAND' | 'CLOUDFLARED_COMMAND' | 'TAILSCALE_COMMAND'): string | undefined {
   return process.env[`CX_CODEX_${name}`]?.trim() || process.env[`CODEXUI_${name}`]?.trim()
 }
 
-function setBridgeEnv(name: 'CODEX_COMMAND' | 'RG_COMMAND' | 'CLOUDFLARED_COMMAND', value: string): void {
+function setBridgeEnv(name: 'CODEX_COMMAND' | 'RG_COMMAND' | 'CLOUDFLARED_COMMAND' | 'TAILSCALE_COMMAND', value: string): void {
   process.env[`CX_CODEX_${name}`] = value
   process.env[`CODEXUI_${name}`] = value
 }
@@ -389,6 +390,8 @@ async function startServer(options: {
   codexCommand?: string
   ripgrepCommand?: string
   cloudflaredCommand?: string
+  remoteAccessMode: 'stable' | 'quick'
+  tailscaleCommand?: string
 }) {
   if (options.configPath) {
     process.env.CX_CODEX_CONFIG = options.configPath
@@ -413,6 +416,9 @@ async function startServer(options: {
   if (options.cloudflaredCommand) {
     setBridgeEnv('CLOUDFLARED_COMMAND', options.cloudflaredCommand)
   }
+  if (options.tailscaleCommand) {
+    setBridgeEnv('TAILSCALE_COMMAND', options.tailscaleCommand)
+  }
 
   const codexCommand = ensureCodexInstalled() ?? resolveCodexCommand()
   if (codexCommand) {
@@ -433,7 +439,7 @@ async function startServer(options: {
   }
   const password = resolvePassword(options.password)
   if (options.tunnel && !password) {
-    throw new Error('Cloudflare Tunnel requires password protection. Remove --no-password and try again.')
+    throw new Error('Remote access requires password protection. Remove --no-password and try again.')
   }
   const { app, dispose, attachWebSocket } = createApp({
     password,
@@ -449,23 +455,40 @@ async function startServer(options: {
   const port = await listenWithFallback(server, requestedPort, host)
   let tunnelUrl: string | null = null
   let resolvedCloudflaredCommand: string | null = null
+  let stableTunnel = false
 
   if (options.tunnel) {
-    try {
-      const cloudflaredCommand = await resolveCloudflaredForTunnel()
-      if (!cloudflaredCommand) {
-        throw new Error('cloudflared is not installed. Install it first, rerun in an interactive terminal to allow auto-install, or set cloudflaredCommand / CX_CODEX_CLOUDFLARED_COMMAND.')
+    if (options.remoteAccessMode === 'stable') {
+      try {
+        const stable = await startStableAccess({
+          localPort: port,
+          preferredCommand: options.tailscaleCommand,
+        })
+        tunnelUrl = stable.publicUrl
+        stableTunnel = true
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(`\n[tailscale] Fixed address unavailable; using a temporary fallback: ${message}`)
       }
-      resolvedCloudflaredCommand = cloudflaredCommand
-      const tunnel = await startQuickTunnelWithTransientRetry({
-        localPort: port,
-        preferredCommand: cloudflaredCommand,
-      })
-      resolvedCloudflaredCommand = tunnel.command
-      tunnelUrl = tunnel.publicUrl
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      console.warn(`\n[cloudflared] Tunnel not started: ${message}`)
+    }
+
+    if (!tunnelUrl) {
+      try {
+        const cloudflaredCommand = await resolveCloudflaredForTunnel()
+        if (!cloudflaredCommand) {
+          throw new Error('cloudflared is not installed. Install it first, rerun in an interactive terminal to allow auto-install, or set cloudflaredCommand / CX_CODEX_CLOUDFLARED_COMMAND.')
+        }
+        resolvedCloudflaredCommand = cloudflaredCommand
+        const tunnel = await startQuickTunnelWithTransientRetry({
+          localPort: port,
+          preferredCommand: cloudflaredCommand,
+        })
+        resolvedCloudflaredCommand = tunnel.command
+        tunnelUrl = tunnel.publicUrl
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(`\n[cloudflared] Tunnel not started: ${message}`)
+      }
     }
   }
 
@@ -503,6 +526,7 @@ async function startServer(options: {
   }
   if (tunnelUrl) {
     lines.push(`  Tunnel:   ${tunnelUrl}`)
+    lines.push(`  Address:  ${stableTunnel ? 'fixed (Tailscale Funnel)' : 'temporary fallback (Cloudflare Quick Tunnel)'}`)
     lines.push('  Tunnel QR code below')
   }
   if (resolvedCloudflaredCommand) {
@@ -579,8 +603,10 @@ program
   .option('-p, --port <port>', 'port to listen on', '5999')
   .option('--password <pass>', 'set a specific password')
   .option('--no-password', 'disable password protection')
-  .option('--tunnel', 'start cloudflared tunnel')
-  .option('--no-tunnel', 'disable cloudflared tunnel startup')
+  .option('--tunnel', 'start fixed remote access when available, otherwise a temporary fallback')
+  .option('--no-tunnel', 'disable remote access startup')
+  .option('--remote-access-mode <mode>', 'prefer stable or quick remote access', 'stable')
+  .option('--tailscale-command <path>', 'set explicit Tailscale executable path')
   .option('--cloudflared-command <path>', 'set explicit cloudflared executable path')
   .option('--open', 'open browser on startup', true)
   .option('--no-open', 'do not open browser on startup')

@@ -2,6 +2,27 @@
 
 This file tracks manual regression and feature verification steps.
 
+## Stable remote address and password persistence (2026-07-28)
+
+### Expected behavior
+
+1. A fresh Windows install writes `remoteAccessMode: "stable"` and generates one access password.
+2. Re-running the installer without `-Password`, `-NoPassword`, or an explicit tunnel switch preserves the exact existing password, tunnel enabled state, selected access mode, and unknown future config fields.
+3. When Tailscale is installed and logged in, starting phone access uses a verified background Funnel and reports a fixed `ts.net` address; stopping removes only the HTTPS Funnel entry used by CX-Codex.
+4. When Tailscale is missing or logged out, the UI gives a focused install/login action and offers Cloudflare Quick Tunnel only as a temporary fallback. Using that fallback keeps the persisted preference on `stable`.
+5. On startup with remote access enabled, CX-Codex attempts the stable Funnel first and falls back to Quick Tunnel without changing the preferred mode. Process shutdown stops only the managed Quick Tunnel; Tailscale `--bg` state remains available to resume after reboot.
+6. Both access modes must pass public health, unauthorized HTTP API, and unauthorized WebSocket checks before the UI labels the address ready.
+7. The settings card and local management center identify fixed versus temporary addresses and never print the access password in logs or JSON output.
+
+### Verification
+
+- Run `npm.cmd run build:frontend`.
+- Run `npm.cmd run build:cli`.
+- Run `npm.cmd run verify:server-modules`.
+- Run `npm.cmd run verify:windows-productization`; the repeat-install fixture must prove password/config preservation without writing the password to its output.
+- With Tailscale absent, verify the phone-access card shows “安装 Tailscale” plus “先用临时地址” at desktop and 393 × 852 sizes.
+- With a logged-in Tailscale test node, enable the fixed address, restart CX-Codex/Tailscale, and confirm the same `ts.net` URL plus all three verification flags.
+
 ## Local management center and phone pairing (2026-07-27)
 
 ### Expected behavior
@@ -47,7 +68,7 @@ This file tracks manual regression and feature verification steps.
 1. Opening settings on desktop or phone shows the existing `手机访问` card directly after the basic settings rows.
 2. Users do not need to scroll past package usage or permission controls before they can generate, copy, open, refresh, stop, or inspect the local pairing password.
 3. Package usage, permission controls, Android-only settings, voice settings, and version information retain their existing behavior and relative order.
-4. The phone-access card keeps the existing Quick Tunnel status, safety verification, button labels, and responsive layout; this change only improves discovery.
+4. The phone-access card keeps its safety verification and responsive layout while clearly distinguishing the recommended fixed address from the temporary fallback.
 
 ### Verification
 
@@ -14027,3 +14048,21 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - `npm.cmd run verify:quick-tunnel` completed twice consecutively against real Cloudflare Quick Tunnels. Both runs reached `ready`, returned a temporary public URL, verified public health and authentication boundaries, stopped cleanly, and left no managed `cloudflared` child running.
 - The public verifier waits for both the generated hostname and `Registered tunnel connection`. On networks that reset Node TLS probes, it resolves only the temporary hostname through process-scoped Cloudflare DoH and falls back to the OS `curl` client without changing DNS, hosts, firewall, or existing Cloudflare configuration.
 - Server module smoke covers proxy-header loopback bypass prevention, password-required start, managed start/stop routes, and redacted status fields.
+
+## Mobile thread history connection recovery
+
+### Verification
+
+1. Keep a cached sidebar thread visible, then make its `thread/read` request fail with `TypeError("Failed to fetch")`.
+2. Confirm the conversation does not show the empty-thread copy or the raw English error; it must show a Chinese recovery card instead.
+3. Confirm recoverable network and timeout failures schedule the existing bounded retries at 2.5, 9, and 20 seconds.
+4. Confirm `重新连接` retries immediately and the Android shell also exposes `修改地址`, which opens the mobile connection settings.
+5. Restore the desktop connection and confirm a successful retry clears the failure state and renders the same thread's messages.
+6. At 393 x 852, confirm both recovery actions are at least 44 px high and the page has no horizontal overflow.
+
+### Expected results
+
+- A failed history request is never represented as “当前会话还没有消息”.
+- Cached conversation content remains visible during a background refresh failure.
+- Mobile users can recover from a stale Quick Tunnel address without reinstalling the APK.
+- No raw transport exception such as `Failed to fetch` is shown to the user.

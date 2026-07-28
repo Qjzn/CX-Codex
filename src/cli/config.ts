@@ -13,6 +13,8 @@ export type LaunchConfigFile = {
   codexCommand?: string
   ripgrepCommand?: string
   cloudflaredCommand?: string
+  remoteAccessMode?: 'stable' | 'quick'
+  tailscaleCommand?: string
 }
 
 export type LaunchCliOptions = {
@@ -24,6 +26,8 @@ export type LaunchCliOptions = {
   open: boolean
   openProject?: string
   cloudflaredCommand?: string
+  remoteAccessMode?: string
+  tailscaleCommand?: string
 }
 
 export type ResolvedLaunchOptions = {
@@ -37,6 +41,8 @@ export type ResolvedLaunchOptions = {
   codexCommand?: string
   ripgrepCommand?: string
   cloudflaredCommand?: string
+  remoteAccessMode: 'stable' | 'quick'
+  tailscaleCommand?: string
 }
 
 type LoadedLaunchConfig = {
@@ -72,6 +78,10 @@ function normalizePassword(value: unknown): string | boolean | undefined {
   return undefined
 }
 
+function normalizeRemoteAccessMode(value: unknown): 'stable' | 'quick' | undefined {
+  return value === 'stable' || value === 'quick' ? value : undefined
+}
+
 function normalizeConfigShape(raw: unknown): LaunchConfigFile {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return {}
@@ -87,6 +97,8 @@ function normalizeConfigShape(raw: unknown): LaunchConfigFile {
     codexCommand: normalizeString(record.codexCommand),
     ripgrepCommand: normalizeString(record.ripgrepCommand),
     cloudflaredCommand: normalizeString(record.cloudflaredCommand),
+    remoteAccessMode: normalizeRemoteAccessMode(record.remoteAccessMode),
+    tailscaleCommand: normalizeString(record.tailscaleCommand),
   }
 }
 
@@ -190,6 +202,12 @@ export async function resolveLaunchOptions(args: {
   const cloudflaredCommand = flagProvided(rawArgv, 'cloudflared-command')
     ? normalizeString(cliOptions.cloudflaredCommand)
     : config.cloudflaredCommand
+  const remoteAccessMode = flagProvided(rawArgv, 'remote-access-mode')
+    ? normalizeRemoteAccessMode(cliOptions.remoteAccessMode) ?? 'stable'
+    : config.remoteAccessMode ?? 'stable'
+  const tailscaleCommand = flagProvided(rawArgv, 'tailscale-command')
+    ? normalizeString(cliOptions.tailscaleCommand)
+    : config.tailscaleCommand
 
   return {
     configPath: loaded.path,
@@ -202,5 +220,7 @@ export async function resolveLaunchOptions(args: {
     codexCommand: config.codexCommand,
     ripgrepCommand: config.ripgrepCommand,
     cloudflaredCommand,
+    remoteAccessMode,
+    tailscaleCommand,
   }
 }

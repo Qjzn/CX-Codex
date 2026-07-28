@@ -686,7 +686,7 @@ async function terminateTunnelChild(): Promise<void> {
   })
 }
 
-async function verifyQuickTunnel(
+export async function verifyPublicAccess(
   publicUrl: string,
   isTunnelAlive: () => boolean,
 ): Promise<{
@@ -853,7 +853,7 @@ export async function startQuickTunnel(options: QuickTunnelStartOptions): Promis
       if (childExited || child.exitCode !== null) {
         throw createTunnelError('QUICK_TUNNEL_EXITED', '临时通道在公网验证前退出。')
       }
-      const verificationResult = await verifyQuickTunnel(
+      const verificationResult = await verifyPublicAccess(
         publicUrl,
         () => !childExited && child.exitCode === null,
       )

@@ -262,7 +262,9 @@ export type TunnelStatus = {
   active: boolean
   managed: boolean
   temporary: boolean
-  phase: 'idle' | 'installing' | 'starting' | 'verifying' | 'ready' | 'stopping' | 'error'
+  preferredMode: 'stable' | 'quick'
+  activeMode: 'stable' | 'quick' | ''
+  phase: 'idle' | 'installing' | 'starting' | 'verifying' | 'ready' | 'stopping' | 'error' | 'unavailable' | 'needs-login'
   networkMode: 'system-dns' | 'scoped-doh'
   publicUrl: string
   configPath: string
@@ -279,11 +281,30 @@ export type TunnelStatus = {
     websocketAuth: boolean
   }
   reason: string
+  stable: {
+    installed: boolean
+    authenticated: boolean
+    active: boolean
+    phase: 'unavailable' | 'needs-login' | 'idle' | 'starting' | 'verifying' | 'ready' | 'stopping' | 'error'
+    publicUrl: string
+    command: string
+    dnsName: string
+    startedAtIso: string
+    errorCode: string
+    message: string
+    verification: {
+      health: boolean
+      auth: boolean
+      websocketAuth: boolean
+    }
+  }
 }
 
 export type TunnelConfigUpdate = {
   enabled?: boolean | null
   cloudflaredCommand?: string
+  preferredMode?: 'stable' | 'quick'
+  tailscaleCommand?: string
 }
 
 export type FavoriteRecord = {
@@ -2070,39 +2091,62 @@ export async function refreshDesktopApp(): Promise<DesktopAppRefreshResult> {
   }
 }
 
-export async function getTunnelStatus(): Promise<TunnelStatus> {
-  const response = await fetchWithTimeout('/codex-api/tunnel-status', {}, {
-    timeoutMs: GATEWAY_BACKGROUND_FETCH_TIMEOUT_MS,
-    label: 'Tunnel status request',
-  })
-  const payload = await response.json()
-  if (!response.ok) {
-    const message = getErrorMessageFromPayload(payload, 'Failed to load tunnel status')
-    throw new Error(message)
+function normalizeTunnelVerification(value: unknown): TunnelStatus['verification'] {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  return {
+    health: record.health === true,
+    auth: record.auth === true,
+    websocketAuth: record.websocketAuth === true,
   }
+}
 
-  const record =
-    payload && typeof payload === 'object' && !Array.isArray(payload)
-      ? (payload as Record<string, unknown>)
-      : {}
-  const data =
-    record.data && typeof record.data === 'object' && !Array.isArray(record.data)
-      ? (record.data as Record<string, unknown>)
-      : {}
+function normalizeTunnelStatusPayload(payload: unknown): TunnelStatus {
+  const record = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {}
+  const data = record.data && typeof record.data === 'object' && !Array.isArray(record.data)
+    ? record.data as Record<string, unknown>
+    : {}
+  const stable = data.stable && typeof data.stable === 'object' && !Array.isArray(data.stable)
+    ? data.stable as Record<string, unknown>
+    : {}
+  const phase = data.phase === 'installing'
+    || data.phase === 'starting'
+    || data.phase === 'verifying'
+    || data.phase === 'ready'
+    || data.phase === 'stopping'
+    || data.phase === 'error'
+    || data.phase === 'unavailable'
+    || data.phase === 'needs-login'
+    ? data.phase
+    : 'idle'
+  const stablePhase = stable.phase === 'needs-login'
+    || stable.phase === 'idle'
+    || stable.phase === 'starting'
+    || stable.phase === 'verifying'
+    || stable.phase === 'ready'
+    || stable.phase === 'stopping'
+    || stable.phase === 'error'
+    ? stable.phase
+    : 'unavailable'
+  const activeMode = data.activeMode === 'stable' || data.activeMode === 'quick'
+    ? data.activeMode
+    : data.active === true
+      ? data.temporary === false
+        ? 'stable'
+        : 'quick'
+      : ''
 
   return {
     enabled: typeof data.enabled === 'boolean' ? data.enabled : null,
     active: data.active === true,
     managed: data.managed === true,
     temporary: data.temporary !== false,
-    phase: data.phase === 'installing'
-      || data.phase === 'starting'
-      || data.phase === 'verifying'
-      || data.phase === 'ready'
-      || data.phase === 'stopping'
-      || data.phase === 'error'
-      ? data.phase
-      : 'idle',
+    preferredMode: data.preferredMode === 'quick' ? 'quick' : 'stable',
+    activeMode,
+    phase,
     networkMode: data.networkMode === 'scoped-doh' ? 'scoped-doh' : 'system-dns',
     publicUrl: typeof data.publicUrl === 'string' ? data.publicUrl : '',
     configPath: typeof data.configPath === 'string' ? data.configPath : '',
@@ -2113,28 +2157,35 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
     lastDetectedAtIso: typeof data.lastDetectedAtIso === 'string' ? data.lastDetectedAtIso : '',
     startedAtIso: typeof data.startedAtIso === 'string' ? data.startedAtIso : '',
     errorCode: typeof data.errorCode === 'string' ? data.errorCode : '',
-    verification: {
-      health: Boolean(
-        data.verification
-        && typeof data.verification === 'object'
-        && !Array.isArray(data.verification)
-        && (data.verification as Record<string, unknown>).health === true
-      ),
-      auth: Boolean(
-        data.verification
-        && typeof data.verification === 'object'
-        && !Array.isArray(data.verification)
-        && (data.verification as Record<string, unknown>).auth === true
-      ),
-      websocketAuth: Boolean(
-        data.verification
-        && typeof data.verification === 'object'
-        && !Array.isArray(data.verification)
-        && (data.verification as Record<string, unknown>).websocketAuth === true
-      ),
-    },
+    verification: normalizeTunnelVerification(data.verification),
     reason: typeof data.reason === 'string' ? data.reason : '',
+    stable: {
+      installed: stable.installed === true,
+      authenticated: stable.authenticated === true,
+      active: stable.active === true,
+      phase: stablePhase,
+      publicUrl: typeof stable.publicUrl === 'string' ? stable.publicUrl : '',
+      command: typeof stable.command === 'string' ? stable.command : '',
+      dnsName: typeof stable.dnsName === 'string' ? stable.dnsName : '',
+      startedAtIso: typeof stable.startedAtIso === 'string' ? stable.startedAtIso : '',
+      errorCode: typeof stable.errorCode === 'string' ? stable.errorCode : '',
+      message: typeof stable.message === 'string' ? stable.message : '',
+      verification: normalizeTunnelVerification(stable.verification),
+    },
   }
+}
+
+export async function getTunnelStatus(): Promise<TunnelStatus> {
+  const response = await fetchWithTimeout('/codex-api/tunnel-status', {}, {
+    timeoutMs: GATEWAY_BACKGROUND_FETCH_TIMEOUT_MS,
+    label: 'Tunnel status request',
+  })
+  const payload = await response.json()
+  if (!response.ok) {
+    const message = getErrorMessageFromPayload(payload, 'Failed to load tunnel status')
+    throw new Error(message)
+  }
+  return normalizeTunnelStatusPayload(payload)
 }
 
 export async function updateTunnelStatus(config: TunnelConfigUpdate): Promise<TunnelStatus> {
@@ -2151,82 +2202,57 @@ export async function updateTunnelStatus(config: TunnelConfigUpdate): Promise<Tu
     throw new Error(message)
   }
 
-  const record =
-    payload && typeof payload === 'object' && !Array.isArray(payload)
-      ? (payload as Record<string, unknown>)
-      : {}
-  const data =
-    record.data && typeof record.data === 'object' && !Array.isArray(record.data)
-      ? (record.data as Record<string, unknown>)
-      : {}
-
-  return {
-    enabled: typeof data.enabled === 'boolean' ? data.enabled : null,
-    active: data.active === true,
-    managed: data.managed === true,
-    temporary: data.temporary !== false,
-    phase: data.phase === 'installing'
-      || data.phase === 'starting'
-      || data.phase === 'verifying'
-      || data.phase === 'ready'
-      || data.phase === 'stopping'
-      || data.phase === 'error'
-      ? data.phase
-      : 'idle',
-    networkMode: data.networkMode === 'scoped-doh' ? 'scoped-doh' : 'system-dns',
-    publicUrl: typeof data.publicUrl === 'string' ? data.publicUrl : '',
-    configPath: typeof data.configPath === 'string' ? data.configPath : '',
-    configuredCommand: typeof data.configuredCommand === 'string' ? data.configuredCommand : '',
-    resolvedCommand: typeof data.resolvedCommand === 'string' ? data.resolvedCommand : '',
-    cloudflaredAvailable: data.cloudflaredAvailable === true,
-    logPath: typeof data.logPath === 'string' ? data.logPath : '',
-    lastDetectedAtIso: typeof data.lastDetectedAtIso === 'string' ? data.lastDetectedAtIso : '',
-    startedAtIso: typeof data.startedAtIso === 'string' ? data.startedAtIso : '',
-    errorCode: typeof data.errorCode === 'string' ? data.errorCode : '',
-    verification: {
-      health: false,
-      auth: false,
-      websocketAuth: false,
-      ...(data.verification && typeof data.verification === 'object' && !Array.isArray(data.verification)
-        ? {
-            health: (data.verification as Record<string, unknown>).health === true,
-            auth: (data.verification as Record<string, unknown>).auth === true,
-            websocketAuth: (data.verification as Record<string, unknown>).websocketAuth === true,
-          }
-        : {}),
-    },
-    reason: typeof data.reason === 'string' ? data.reason : '',
-  }
+  return normalizeTunnelStatusPayload(payload)
 }
 
-export async function startQuickTunnelAccess(cloudflaredCommand = ''): Promise<TunnelStatus> {
+export async function startRemoteAccess(
+  mode: 'stable' | 'quick',
+  commands: {
+    cloudflaredCommand?: string
+    tailscaleCommand?: string
+    keepStablePreference?: boolean
+  } = {},
+): Promise<TunnelStatus> {
   const response = await fetchWithTimeout('/codex-api/tunnel-status/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ cloudflaredCommand }),
+    body: JSON.stringify({
+      mode,
+      cloudflaredCommand: commands.cloudflaredCommand ?? '',
+      tailscaleCommand: commands.tailscaleCommand ?? '',
+      fallback: commands.keepStablePreference === true,
+    }),
   }, {
     timeoutMs: 150_000,
-    label: 'Quick Tunnel startup request',
+    label: 'Remote access startup request',
   })
   const payload = await response.json()
   if (!response.ok) {
-    throw new Error(getErrorMessageFromPayload(payload, 'Failed to start quick tunnel'))
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to start remote access'))
+  }
+  return await getTunnelStatus()
+}
+
+export async function startQuickTunnelAccess(cloudflaredCommand = ''): Promise<TunnelStatus> {
+  return await startRemoteAccess('quick', { cloudflaredCommand })
+}
+
+export async function stopRemoteAccess(): Promise<TunnelStatus> {
+  const response = await fetchWithTimeout('/codex-api/tunnel-status', {
+    method: 'DELETE',
+  }, {
+    timeoutMs: 15_000,
+    label: 'Remote access stop request',
+  })
+  const payload = await response.json()
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to stop remote access'))
   }
   return await getTunnelStatus()
 }
 
 export async function stopQuickTunnelAccess(): Promise<TunnelStatus> {
-  const response = await fetchWithTimeout('/codex-api/tunnel-status', {
-    method: 'DELETE',
-  }, {
-    timeoutMs: 15_000,
-    label: 'Quick Tunnel stop request',
-  })
-  const payload = await response.json()
-  if (!response.ok) {
-    throw new Error(getErrorMessageFromPayload(payload, 'Failed to stop quick tunnel'))
-  }
-  return await getTunnelStatus()
+  return await stopRemoteAccess()
 }
 
 function formatGithubDate(date: Date): string {

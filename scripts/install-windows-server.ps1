@@ -935,15 +935,52 @@ $resolvedCloudflaredCommand = Resolve-OptionalPath -Value $CloudflaredCommand
 $resolvedTaskName = if ([string]::IsNullOrWhiteSpace($TaskName)) { "CodexUI-$Port" } else { $TaskName }
 $resolvedWatchdogTaskName = if ([string]::IsNullOrWhiteSpace($WatchdogTaskName)) { "CodexUI-$Port-Watchdog" } else { $WatchdogTaskName }
 
+$existingConfig = [ordered]@{}
+if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
+  try {
+    $parsedConfig = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+    if ($null -ne $parsedConfig -and $parsedConfig -isnot [array]) {
+      foreach ($property in $parsedConfig.PSObject.Properties) {
+        $existingConfig[$property.Name] = $property.Value
+      }
+    }
+  } catch {
+    Write-InstallerWarning `
+      -Code "CONFIG_PRESERVE_FAILED" `
+      -Message "Existing config could not be read and will be replaced: $($_.Exception.Message)"
+  }
+}
+
+$effectiveTunnel = if ($PSBoundParameters.ContainsKey("Tunnel")) {
+  $Tunnel.IsPresent
+} elseif ($existingConfig.Contains("tunnel") -and $existingConfig.tunnel -is [bool]) {
+  [bool]$existingConfig.tunnel
+} else {
+  $false
+}
+
 if ($NoPassword) {
-  if ($Tunnel) {
-    throw "Cloudflare Tunnel requires password protection. Remove -NoPassword and try again."
+  if ($effectiveTunnel) {
+    throw "Remote access requires password protection. Remove -NoPassword and try again."
   }
   $passwordValue = $false
-} elseif ([string]::IsNullOrWhiteSpace($Password)) {
-  $passwordValue = New-StablePassword
-} else {
+} elseif ($PSBoundParameters.ContainsKey("Password") -and -not [string]::IsNullOrWhiteSpace($Password)) {
   $passwordValue = $Password
+} elseif (
+  $existingConfig.Contains("password") -and
+  $existingConfig.password -is [string] -and
+  -not [string]::IsNullOrWhiteSpace([string]$existingConfig.password)
+) {
+  $passwordValue = $existingConfig.password
+} elseif (
+  -not $effectiveTunnel -and
+  $existingConfig.Contains("password") -and
+  $existingConfig.password -is [bool] -and
+  $existingConfig.password -eq $false
+) {
+  $passwordValue = $false
+} else {
+  $passwordValue = New-StablePassword
 }
 
 if ($EnsureCodexLogin) {
@@ -960,12 +997,26 @@ if (-not [string]::IsNullOrWhiteSpace($configDir)) {
   New-Item -ItemType Directory -Path $configDir -Force | Out-Null
 }
 
-$config = [ordered]@{
-  host = $BindHost
-  port = $Port
-  password = $passwordValue
-  tunnel = $Tunnel.IsPresent
-  open = $OpenBrowser.IsPresent
+$config = [ordered]@{}
+foreach ($entry in $existingConfig.GetEnumerator()) {
+  $config[$entry.Key] = $entry.Value
+}
+$config.host = $BindHost
+$config.port = $Port
+$config.password = $passwordValue
+$config.tunnel = $effectiveTunnel
+$config.open = if ($PSBoundParameters.ContainsKey("OpenBrowser")) {
+  $OpenBrowser.IsPresent
+} elseif ($existingConfig.Contains("open") -and $existingConfig.open -is [bool]) {
+  [bool]$existingConfig.open
+} else {
+  $false
+}
+if (
+  -not $config.Contains("remoteAccessMode") -or
+  ([string]$config.remoteAccessMode -notin @("stable", "quick"))
+) {
+  $config.remoteAccessMode = "stable"
 }
 
 if ($resolvedProjectPath) {
@@ -1121,7 +1172,7 @@ if (-not $JsonOutput) {
     if ([bool]$runtimeTunnel.active) {
       Write-InstallerMessage "Tunnel:   $([string]$runtimeTunnel.publicUrl)"
     } else {
-      Write-InstallerMessage "Tunnel:   enabled; check $outLogPath for the trycloudflare.com URL"
+      Write-InstallerMessage "Tunnel:   enabled; open the local management center to check the fixed or temporary address"
     }
   }
   if ($resolvedCloudflaredCommand) {

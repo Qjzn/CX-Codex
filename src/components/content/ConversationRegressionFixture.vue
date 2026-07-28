@@ -6,7 +6,7 @@
         <h1>Conversation Blocks</h1>
       </header>
       <RuntimeStatusBar
-        v-if="!isQueueFailureFixture"
+        v-if="!isQueueFailureFixture && !isLoadFailureFixture"
         class="conversation-regression-runtime"
         :summary="runtimeSummary"
         :live-overlay="liveOverlay"
@@ -24,11 +24,13 @@
       <ThreadConversation
         v-if="!isQueueFailureFixture"
         class="conversation-regression-thread"
-        :messages="messages"
+        :messages="fixtureMessages"
         :pending-requests="pendingRequests"
         :live-overlay="liveOverlay"
         :is-loading="false"
-        :is-turn-in-progress="true"
+        :is-turn-in-progress="!isLoadFailureFixture"
+        :load-error="isLoadFailureFixture ? '连接不到桌面端，会话内容暂时未加载。页面会自动重试，也可以检查或修改连接地址。' : ''"
+        :show-connection-settings-action="isLoadFailureFixture"
         compact-runtime-chrome
         active-thread-id="regression-conversation-blocks"
         cwd="E:/javaword/CXCodex/codexui"
@@ -39,12 +41,17 @@
         @rollback="noop"
         @toggle-favorite="noop"
         @load-older-history="onLoadOlderHistory"
+        @retry-load="loadRetryCount += 1"
+        @open-connection-settings="connectionSettingsCount += 1"
         @return-to-new-thread="noop"
         @dismiss-empty-thread="noop"
         @retry-failed-message="noop"
       />
       <span class="conversation-regression-older-history-count" :data-count="olderHistoryRequestCount" aria-hidden="true" />
+      <span class="conversation-regression-load-retry-count" :data-count="loadRetryCount" aria-hidden="true" />
+      <span class="conversation-regression-connection-settings-count" :data-count="connectionSettingsCount" aria-hidden="true" />
       <QueuedMessages
+        v-if="!isLoadFailureFixture"
         class="conversation-regression-queue"
         :messages="queuedMessages"
         :is-processing="!isQueueFailureFixture"
@@ -313,7 +320,11 @@ const isTailStatusFixture = fixtureParams.get('tailStatus') === '1'
 const isNextActivityFixture = fixtureParams.get('tailNextActivity') === '1'
 const isResumeRecoveryFixture = fixtureParams.get('resumeRecovery') === '1'
 const isQueueFailureFixture = fixtureParams.get('queueFailure') === '1'
-const pendingRequests: UiServerRequest[] = isTailStatusFixture ? [] : allPendingRequests
+const isLoadFailureFixture = fixtureParams.get('loadFailure') === '1'
+const fixtureMessages = isLoadFailureFixture ? [] : messages
+const pendingRequests: UiServerRequest[] = isTailStatusFixture || isLoadFailureFixture ? [] : allPendingRequests
+const loadRetryCount = ref(0)
+const connectionSettingsCount = ref(0)
 
 const liveOverlay = ref<UiLiveOverlay | null>({
   activityId: 'fixture-turn-runtime',
@@ -324,6 +335,10 @@ const liveOverlay = ref<UiLiveOverlay | null>({
   reasoningText: 'fixture reasoning text',
   errorText: '',
 })
+
+if (isLoadFailureFixture) {
+  liveOverlay.value = null
+}
 
 if (typeof window !== 'undefined' && fixtureParams.get('tailGap') === '1') {
   window.setTimeout(() => {

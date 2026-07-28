@@ -71,10 +71,22 @@ export function renderLocalSetupHtml(options: {
   publicUrl: string
   localUrl?: string
   lanUrls?: string[]
+  publicAddressType?: 'fixed' | 'temporary' | ''
   managementToken?: string
   canChangePassword?: boolean
 }): string {
   const publicUrl = options.publicUrl.trim()
+  const publicAddressType = options.publicAddressType ?? ''
+  const publicAddressLabel = publicAddressType === 'fixed'
+    ? '外网访问地址（固定）'
+    : publicAddressType === 'temporary'
+      ? '外网访问地址（临时）'
+      : '外网访问地址'
+  const addressWarning = publicAddressType === 'fixed'
+    ? '固定地址会在电脑和 Tailscale 在线后自动恢复。升级和重启不会重置访问密码；只有你在本页手动修改时才会改变。'
+    : publicAddressType === 'temporary'
+      ? '当前为临时备用地址，升级、重启或通道重连后可能变化。访问密码会保留，只有你在本页手动修改时才会改变。'
+      : '外网访问尚未启用。升级和重启不会重置访问密码；只有你在本页手动修改时才会改变。'
   const localUrl = options.localUrl?.trim() ?? ''
   const lanUrls = (options.lanUrls ?? []).map((url) => url.trim()).filter(Boolean)
   const qrCode = renderPairingQrSvg(publicUrl)
@@ -174,12 +186,12 @@ ${pairingGuide}
 <dl>
 ${renderAddressRow('本机访问地址', localUrl || 'http://127.0.0.1:7420', Boolean(localUrl))}
 ${lanRows}
-${renderAddressRow('外网访问地址', publicUrl || '尚未生成', Boolean(publicUrl))}
+${renderAddressRow(publicAddressLabel, publicUrl || '尚未生成', Boolean(publicUrl))}
 <div><dt>当前访问密码</dt><dd>${passwordControls}</dd></div>
 </dl>
 <div class="actions">${publicLink}<button class="ghost" type="button" onclick="window.location.reload()">刷新状态</button></div>
 ${passwordForm}
-<p class="warning">不要截图或转发访问密码。外网临时地址会在服务重启后变化，请始终以本页显示为准。</p>
+<p class="warning">不要截图或转发访问密码。${addressWarning}</p>
 </section></main>
 <script>
 const managementToken=${managementToken};

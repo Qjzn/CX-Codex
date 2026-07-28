@@ -10,7 +10,7 @@ import { createCodexBridgeMiddleware } from './codexAppServerBridge.js'
 import { createAuthSession, isLoopbackRequest } from './authMiddleware.js'
 import { readJsonBody, RequestBodyTooLargeError } from './httpBody.js'
 import { persistAccessPassword } from './localAccessConfig.js'
-import { getQuickTunnelSnapshot } from './quickTunnel.js'
+import { getTunnelStatus } from './tunnelStatus.js'
 import { renderLocalSetupHtml } from './localPairingPage.js'
 import { generatePassword } from './password.js'
 import { createDirectoryListingHtml, createLocalFileActionHtml, createTextEditorHtml, decodeBrowsePath, isPreviewableLocalPath, isTextEditableFile, normalizeLocalPath, toLocalFilePreviewHref } from './localBrowseUi.js'
@@ -208,18 +208,23 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
     })
   })
 
-  app.get('/local-setup', (req, res) => {
+  app.get('/local-setup', async (req, res) => {
     if (!isLoopbackRequest(req)) {
       res.status(404).end()
       return
     }
-    const tunnel = getQuickTunnelSnapshot()
+    const tunnel = await getTunnelStatus()
     const localPort = req.socket.localPort ?? 7420
     res.setHeader('Cache-Control', 'no-store')
     res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
     res.status(200).type('text/html; charset=utf-8').send(renderLocalSetupHtml({
       password: authSession?.getPassword() ?? '',
       publicUrl: tunnel.active ? tunnel.publicUrl : '',
+      publicAddressType: tunnel.activeMode === 'stable'
+        ? 'fixed'
+        : tunnel.activeMode === 'quick'
+          ? 'temporary'
+          : '',
       localUrl: formatHttpUrl('127.0.0.1', localPort),
       lanUrls: getLanAccessUrls(options.host, localPort),
       managementToken: localSetupToken,

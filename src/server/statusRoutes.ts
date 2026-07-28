@@ -15,6 +15,10 @@ import {
   startQuickTunnelWithTransientRetry,
   stopQuickTunnel,
 } from './quickTunnel.js'
+import {
+  startStableAccess,
+  stopStableAccess,
+} from './tailscaleFunnel.js'
 
 export type StatusRoutesDependencies = {
   readJsonBody: (req: IncomingMessage) => Promise<unknown>
@@ -24,6 +28,8 @@ export type StatusRoutesDependencies = {
   updateTunnelConfig?: typeof updateTunnelConfig
   startQuickTunnel?: typeof startQuickTunnel
   stopQuickTunnel?: typeof stopQuickTunnel
+  startStableAccess?: typeof startStableAccess
+  stopStableAccess?: typeof stopStableAccess
   remoteAccessProtected?: boolean
   getErrorMessage?: typeof getErrorMessage
 }
@@ -40,6 +46,8 @@ export async function handleStatusRoutes(
   const writeTunnelConfig = dependencies.updateTunnelConfig ?? updateTunnelConfig
   const startManagedQuickTunnel = dependencies.startQuickTunnel ?? startQuickTunnel
   const stopManagedQuickTunnel = dependencies.stopQuickTunnel ?? stopQuickTunnel
+  const startManagedStableAccess = dependencies.startStableAccess ?? startStableAccess
+  const stopManagedStableAccess = dependencies.stopStableAccess ?? stopStableAccess
   const readErrorMessage = dependencies.getErrorMessage ?? getErrorMessage
 
   if (req.method === 'GET' && url.pathname === '/codex-api/desktop-app/status') {
@@ -73,6 +81,10 @@ export async function handleStatusRoutes(
     const status = await writeTunnelConfig({
       enabled: typeof record.enabled === 'boolean' ? record.enabled : null,
       cloudflaredCommand: typeof record.cloudflaredCommand === 'string' ? record.cloudflaredCommand : undefined,
+      preferredMode: record.preferredMode === 'stable' || record.preferredMode === 'quick'
+        ? record.preferredMode
+        : undefined,
+      tailscaleCommand: typeof record.tailscaleCommand === 'string' ? record.tailscaleCommand : undefined,
     })
     setJson(res, 200, { data: status })
     return true
@@ -93,28 +105,51 @@ export async function handleStatusRoutes(
         payload && typeof payload === 'object' && !Array.isArray(payload)
           ? payload as Record<string, unknown>
           : {}
-      const preferredCommand = typeof record.cloudflaredCommand === 'string'
-        ? record.cloudflaredCommand.trim()
-        : ''
-      const runtime = await startQuickTunnelWithTransientRetry(
-        {
+      const mode = record.mode === 'quick' ? 'quick' : 'stable'
+      if (mode === 'stable') {
+        const preferredCommand = typeof record.tailscaleCommand === 'string'
+          ? record.tailscaleCommand.trim()
+          : ''
+        const runtime = await startManagedStableAccess({
           localPort: req.socket.localPort ?? 0,
           preferredCommand,
-        },
-        startManagedQuickTunnel,
-      )
-      await writeTunnelConfig({
-        enabled: true,
-        cloudflaredCommand: runtime.command,
-      })
+        })
+        await stopManagedQuickTunnel()
+        await writeTunnelConfig({
+          enabled: true,
+          preferredMode: 'stable',
+          tailscaleCommand: runtime.command,
+        })
+      } else {
+        const preferredCommand = typeof record.cloudflaredCommand === 'string'
+          ? record.cloudflaredCommand.trim()
+          : ''
+        const runtime = await startQuickTunnelWithTransientRetry(
+          {
+            localPort: req.socket.localPort ?? 0,
+            preferredCommand,
+          },
+          startManagedQuickTunnel,
+        )
+        const currentStatus = await readTunnelStatus()
+        await stopManagedStableAccess(
+          currentStatus.stable.command,
+          req.socket.localPort ?? 0,
+        )
+        await writeTunnelConfig({
+          enabled: true,
+          preferredMode: record.fallback === true ? 'stable' : 'quick',
+          cloudflaredCommand: runtime.command,
+        })
+      }
       setJson(res, 200, { data: await readTunnelStatus() })
     } catch (error) {
       const errorRecord = error && typeof error === 'object'
         ? error as { code?: unknown }
         : {}
       setJson(res, 409, {
-        error: readErrorMessage(error, 'Failed to start quick tunnel'),
-        code: typeof errorRecord.code === 'string' ? errorRecord.code : 'QUICK_TUNNEL_FAILED',
+        error: readErrorMessage(error, 'Failed to start remote access'),
+        code: typeof errorRecord.code === 'string' ? errorRecord.code : 'REMOTE_ACCESS_FAILED',
       })
     }
     return true
@@ -123,6 +158,11 @@ export async function handleStatusRoutes(
   if (req.method === 'DELETE' && url.pathname === '/codex-api/tunnel-status') {
     try {
       await stopManagedQuickTunnel()
+      const currentStatus = await readTunnelStatus()
+      await stopManagedStableAccess(
+        currentStatus.stable.command,
+        req.socket.localPort ?? 0,
+      )
       await writeTunnelConfig({ enabled: false })
       setJson(res, 200, { data: await readTunnelStatus() })
     } catch (error) {

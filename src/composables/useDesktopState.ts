@@ -1543,6 +1543,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   const isRollingBack = ref(false)
   const error = ref('')
   const syncError = ref('')
+  const threadLoadErrorById = ref<Record<string, string>>({})
   const isPolling = ref(false)
   const notificationHealthTick = ref(Date.now())
   const realtimeConnectionState = ref<RealtimeConnectionState>('connecting')
@@ -1667,6 +1668,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   const selectedThread = computed(() =>
     allThreads.value.find((thread) => thread.id === selectedThreadId.value) ?? null,
   )
+  const selectedThreadLoadError = computed(() => (
+    threadLoadErrorById.value[selectedThreadId.value]?.trim() ?? ''
+  ))
 
   function latestTaskPetReply(threadId: string): string {
     const normalize = (value: string) => compactLatestReplyTail(value, 260)
@@ -2942,6 +2946,46 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       if (typeof maybeError === 'string') return maybeError
     }
     return ''
+  }
+
+  function classifyThreadLoadFailure(error: unknown): { message: string; recoverable: boolean } {
+    const rawMessage = normalizeMessageText(readErrorMessage(error))
+    const lowerMessage = rawMessage.toLowerCase()
+    if (
+      /failed to fetch|networkerror|network request failed|load failed|fetch failed|econnreset|econnrefused|enotfound|socket hang up/iu.test(lowerMessage)
+    ) {
+      return {
+        message: '连接不到桌面端，会话内容暂时未加载。页面会自动重试，也可以检查或修改连接地址。',
+        recoverable: true,
+      }
+    }
+    if (/timeout|timed out|超时/iu.test(lowerMessage)) {
+      return {
+        message: '桌面端响应较慢，会话内容暂时未加载。页面会自动重试。',
+        recoverable: true,
+      }
+    }
+    return {
+      message: '会话内容暂时没有加载成功，请重试。',
+      recoverable: false,
+    }
+  }
+
+  function setThreadLoadError(threadId: string, message: string): void {
+    const normalizedThreadId = threadId.trim()
+    const normalizedMessage = normalizeMessageText(message)
+    if (!normalizedThreadId || !normalizedMessage) return
+    if (threadLoadErrorById.value[normalizedThreadId] === normalizedMessage) return
+    threadLoadErrorById.value = {
+      ...threadLoadErrorById.value,
+      [normalizedThreadId]: normalizedMessage,
+    }
+  }
+
+  function clearThreadLoadError(threadId: string): void {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId || !threadLoadErrorById.value[normalizedThreadId]) return
+    threadLoadErrorById.value = omitKey(threadLoadErrorById.value, normalizedThreadId)
   }
 
   function isTransientConnectionStatusMessage(message: string): boolean {
@@ -7073,6 +7117,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         ...loadedMessagesByThreadId.value,
         [threadId]: true,
       }
+      clearThreadLoadError(threadId)
+      if (selectedThreadId.value === threadId) {
+        error.value = ''
+      }
       noteSuccessfulSync()
       lastThreadDetailSyncAtById.value = {
         ...lastThreadDetailSyncAtById.value,
@@ -7142,8 +7190,14 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         }
         return
       }
-      setSyncErrorFromUnknown(error)
-      throw error
+      const failure = classifyThreadLoadFailure(error)
+      setThreadLoadError(threadId, failure.message)
+      setSyncErrorMessage(failure.message)
+      if (failure.recoverable) {
+        pendingThreadMessageRefresh.add(threadId)
+        scheduleNonFreshThreadDetailRetry(threadId)
+      }
+      throw new Error(failure.message)
     } finally {
       if (messageLoadInFlightByThreadId.get(threadId) === runLoad) {
         messageLoadInFlightByThreadId.delete(threadId)
@@ -7345,6 +7399,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
 
     try {
+      clearThreadLoadError(threadId)
       abortCurrentSync()
       clearBufferedLiveDeltas()
       pendingThreadMessageRefresh.delete(threadId)
@@ -7440,6 +7495,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       installedSkills.value = []
     }
     setSelectedThreadId(normalizedThreadId)
+    clearThreadLoadError(normalizedThreadId)
 
     threadSelectionAbortController?.abort()
     threadSelectionAbortController = null
@@ -9528,6 +9584,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     selectedThreadCanStop,
     selectedThreadRuntimeStatus,
     selectedThreadTokenUsage,
+    selectedThreadLoadError,
     selectedThreadId,
     availableModels,
     availableModelIds,

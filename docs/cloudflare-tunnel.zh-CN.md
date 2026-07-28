@@ -1,8 +1,28 @@
-# Cloudflare Tunnel 一键模式
+# 手机外网访问：固定地址优先，临时地址兜底
 
-Cloudflare Tunnel 适合想从手机或外网访问家里电脑 / Windows Server 上 Codex Web UI 的用户。它的优点是通常不需要公网 IP，也不需要路由器端口映射。
+CX-Codex 默认优先使用 Tailscale Funnel 固定地址；未安装、未登录或固定地址暂时不可用时，再使用 Cloudflare Quick Tunnel 临时备用地址。两种方式通常都不需要公网 IP、服务器或路由器端口映射。
 
-本项目优先支持“快速隧道”模式：不需要 Cloudflare 账号、不需要域名，安装后会生成一个临时的 `trycloudflare.com` HTTPS 地址。
+## 默认行为
+
+- 访问密码首次生成后写入 `%USERPROFILE%\.cx-codex\config.json`；升级、重启和重复安装都会保留，只有在本机管理中心手动修改或彻底删除用户数据后才变化。
+- 配置默认记录 `remoteAccessMode: "stable"`。CX-Codex 启动时先恢复 Tailscale Funnel；失败时才启动 Cloudflare 临时备用地址，并保留“固定优先”的偏好。
+- Tailscale Funnel 的设备域名固定，使用后台模式后会在电脑或 Tailscale 重启后恢复。首次仍需安装 Tailscale，并完成一次账号登录和 Funnel 授权。
+- Cloudflare Quick Tunnel 不需要账号或域名，但每次重新建立通道都可能获得不同的 `trycloudflare.com` 地址。
+
+### 首次启用固定地址
+
+1. 打开 CX-Codex 设置中的“手机访问”。
+2. 点击“安装 Tailscale”，按官方安装页完成安装。
+3. 在 Windows 右下角打开 Tailscale 并登录；个人免费方案即可使用。
+4. 返回 CX-Codex，点击“我已登录，刷新”，再点击“启用固定地址”。
+5. 等待“健康、密码、消息连接”三项验证全部通过，再复制 `https://设备名.网络名.ts.net:8443` 地址。
+
+CX-Codex 使用独立的 HTTPS `8443` 端口建立后台 Funnel，避免覆盖机器上常见的 `443` Serve/Funnel 配置；如果 `8443` 已被其他服务使用，会停止并提示，不会强行覆盖。无需使用固定地址时，可在设置中点击“停止访问”。Tailscale 官方说明见：
+
+- [Tailscale Funnel](https://tailscale.com/docs/features/tailscale-funnel)
+- [tailscale funnel 命令](https://tailscale.com/docs/reference/tailscale-cli/funnel)
+
+## 临时备用地址
 
 ## 先说结论
 
@@ -15,7 +35,7 @@ Cloudflare Quick Tunnel 当前可以免费、免注册、免域名使用，也�
 - 最多允许 200 个并发中的请求
 - 不支持 Server-Sent Events（SSE），CX-Codex 前台会优先使用 WebSocket，其他恢复链路继续依赖事件回放和轮询
 
-长期固定地址和更完整的访问控制，请使用本文后面的固定域名模式，或改用 Tailscale 私有网络。
+长期固定地址优先使用上面的 Tailscale Funnel；已有 Cloudflare 域名的用户也可以使用本文后面的命名 Tunnel。
 
 官方说明：
 
@@ -83,7 +103,7 @@ http://127.0.0.1:7420/local-setup
 
 这个页面同时检查 TCP 来源和 `Host` 都是回环地址；通过公网域名、局域网 IP 或 Cloudflare 地址请求时返回 `404`。修改密码后，旧的远程登录会话立即失效，手机或其他浏览器需要用新密码重新登录。
 
-服务已经运行时，也可进入 CX-Codex 设置，找到“手机访问”，点击“生成手机访问地址”。设置页会显示健康、密码和消息连接三项验证，并提供复制、打开、刷新和停止入口。
+服务已经运行时，也可进入 CX-Codex 设置，找到“手机访问”。设置页默认引导固定地址；选择“先用临时地址”才会启动 Quick Tunnel。页面会显示地址类型以及健康、密码和消息连接三项验证，并提供复制、打开、刷新和停止入口。
 
 需要卸载时，执行：
 

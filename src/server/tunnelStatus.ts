@@ -8,14 +8,23 @@ import {
   type QuickTunnelPhase,
   type QuickTunnelVerification,
 } from './quickTunnel.js'
+import {
+  inspectStableAccess,
+  type StableAccessPhase,
+  type StableAccessSnapshot,
+} from './tailscaleFunnel.js'
 import { updateLocalAccessConfig } from './localAccessConfig.js'
+
+export type RemoteAccessMode = 'stable' | 'quick'
 
 export type TunnelStatus = {
   enabled: boolean | null
   active: boolean
   managed: boolean
   temporary: boolean
-  phase: QuickTunnelPhase
+  preferredMode: RemoteAccessMode
+  activeMode: RemoteAccessMode | ''
+  phase: QuickTunnelPhase | StableAccessPhase
   networkMode: 'system-dns' | 'scoped-doh'
   publicUrl: string
   configPath: string
@@ -28,17 +37,23 @@ export type TunnelStatus = {
   errorCode: string
   verification: QuickTunnelVerification
   reason: string
+  stable: StableAccessSnapshot
 }
 
 export type TunnelConfigUpdate = {
   enabled?: boolean | null
   cloudflaredCommand?: string
+  preferredMode?: RemoteAccessMode
+  tailscaleCommand?: string
 }
 
 type LaunchConfigSnapshot = {
   path: string
+  port: number
   tunnel: boolean | null
   cloudflaredCommand: string
+  remoteAccessMode: RemoteAccessMode
+  tailscaleCommand: string
 }
 
 type LogTunnelSnapshot = {
@@ -51,6 +66,15 @@ const ANY_HTTPS_URL_PATTERN = /https:\/\/[^\s"'`<>()]+/g
 
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizePort(value: unknown): number {
+  const parsed = typeof value === 'number'
+    ? Math.trunc(value)
+    : typeof value === 'string'
+      ? Number.parseInt(value.trim(), 10)
+      : 0
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : 0
 }
 
 function resolveConfigCandidatePath(configPath: string): string {
@@ -91,22 +115,31 @@ async function readLaunchConfigSnapshot(): Promise<LaunchConfigSnapshot> {
 
       return {
         path: candidate,
+        port: normalizePort(record.port),
         tunnel: typeof record.tunnel === 'boolean' ? record.tunnel : null,
         cloudflaredCommand: normalizeString(record.cloudflaredCommand),
+        remoteAccessMode: record.remoteAccessMode === 'quick' ? 'quick' : 'stable',
+        tailscaleCommand: normalizeString(record.tailscaleCommand),
       }
     } catch {
       return {
         path: candidate,
+        port: 0,
         tunnel: null,
         cloudflaredCommand: '',
+        remoteAccessMode: 'stable',
+        tailscaleCommand: '',
       }
     }
   }
 
   return {
     path: '',
+    port: 0,
     tunnel: null,
     cloudflaredCommand: '',
+    remoteAccessMode: 'stable',
+    tailscaleCommand: '',
   }
 }
 
@@ -263,21 +296,52 @@ function buildTunnelReason(payload: {
 
 export async function getTunnelStatus(): Promise<TunnelStatus> {
   const configSnapshot = await readLaunchConfigSnapshot()
-  const { logSnapshot, logPath, lastDetectedAtIso } = await readLatestTunnelSnapshotFromLogs()
-  const runtime = getQuickTunnelSnapshot()
+  const [{ logSnapshot, logPath, lastDetectedAtIso }, stable, runtime] = await Promise.all([
+    readLatestTunnelSnapshotFromLogs(),
+    inspectStableAccess(configSnapshot.tailscaleCommand, configSnapshot.port),
+    Promise.resolve(getQuickTunnelSnapshot()),
+  ])
 
   const resolvedCommand = resolveCloudflaredCommand(configSnapshot.cloudflaredCommand)
   const enabled = configSnapshot.tunnel
-  const publicUrl = runtime.publicUrl || (enabled === false ? '' : logSnapshot.publicUrl)
-  const active = runtime.active
+  const activeMode: RemoteAccessMode | '' = stable.active
+    ? 'stable'
+    : runtime.active
+      ? 'quick'
+      : ''
+  const active = Boolean(activeMode)
+  const publicUrl = activeMode === 'stable'
+    ? stable.publicUrl
+    : runtime.publicUrl || (enabled === false ? '' : logSnapshot.publicUrl)
+  const preferredMode = configSnapshot.remoteAccessMode
+  const activeRuntime = activeMode === 'stable' ? stable : runtime
+  const reason = activeMode === 'stable'
+    ? stable.message
+    : activeMode === 'quick' && preferredMode === 'stable'
+      ? '固定地址当前不可用，已使用临时备用地址；安装并登录 Tailscale 后可切换为固定地址。'
+      : runtime.phase === 'idle' && preferredMode === 'stable'
+        ? stable.message
+        : runtime.phase === 'idle'
+          ? buildTunnelReason({
+              enabled,
+              publicUrl: '',
+              resolvedCommand,
+              configuredCommand: configSnapshot.cloudflaredCommand,
+            })
+          : runtime.message
 
   return {
     enabled,
     active,
-    managed: runtime.phase !== 'idle' || runtime.startedAtIso.length > 0,
-    temporary: true,
-    phase: runtime.phase,
-    networkMode: runtime.networkMode,
+    managed: active
+      || runtime.phase !== 'idle'
+      || runtime.startedAtIso.length > 0
+      || stable.phase === 'ready',
+    temporary: activeMode !== 'stable',
+    preferredMode,
+    activeMode,
+    phase: activeRuntime.phase,
+    networkMode: activeMode === 'quick' ? runtime.networkMode : 'system-dns',
     publicUrl,
     configPath: configSnapshot.path || getDefaultConfigWritePath(),
     configuredCommand: configSnapshot.cloudflaredCommand,
@@ -285,17 +349,11 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
     cloudflaredAvailable: resolvedCommand.length > 0,
     logPath,
     lastDetectedAtIso,
-    startedAtIso: runtime.startedAtIso,
-    errorCode: runtime.errorCode,
-    verification: { ...runtime.verification },
-    reason: runtime.phase === 'idle'
-      ? buildTunnelReason({
-          enabled,
-          publicUrl: '',
-          resolvedCommand,
-          configuredCommand: configSnapshot.cloudflaredCommand,
-        })
-      : runtime.message,
+    startedAtIso: activeRuntime.startedAtIso,
+    errorCode: activeRuntime.errorCode,
+    verification: { ...activeRuntime.verification },
+    reason,
+    stable,
   }
 }
 
@@ -314,6 +372,19 @@ export async function updateTunnelConfig(update: TunnelConfigUpdate): Promise<Tu
         nextConfig.cloudflaredCommand = normalizedCommand
       } else {
         delete nextConfig.cloudflaredCommand
+      }
+    }
+
+    if (update.preferredMode === 'stable' || update.preferredMode === 'quick') {
+      nextConfig.remoteAccessMode = update.preferredMode
+    }
+
+    if (typeof update.tailscaleCommand === 'string') {
+      const normalizedCommand = update.tailscaleCommand.trim()
+      if (normalizedCommand) {
+        nextConfig.tailscaleCommand = normalizedCommand
+      } else {
+        delete nextConfig.tailscaleCommand
       }
     }
   })

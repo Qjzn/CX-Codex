@@ -246,6 +246,41 @@ URL=https://example.invalid/personal-shortcut
   Assert-True `
     ((Get-Content -LiteralPath $shortcutConflictPath -Raw) -match 'URL=https://example\.invalid/personal-shortcut') `
     "Installer must preserve a same-name shortcut with a different target."
+  $installedConfigPath = Join-Path $testRoot "state\config.json"
+  $installedConfig = Get-Content -LiteralPath $installedConfigPath -Raw | ConvertFrom-Json
+  Assert-True ($installedConfig.remoteAccessMode -eq "stable") "Fresh installs must prefer stable remote access."
+  $originalPassword = [string]$installedConfig.password
+  $installedConfig.tunnel = $true
+  $installedConfig.remoteAccessMode = "quick"
+  $installedConfig | Add-Member -NotePropertyName "futureOption" -NotePropertyValue "preserve-me"
+  $installedConfig | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $installedConfigPath -Encoding UTF8
+
+  $upgradeArgs = @(
+    "-ProjectPath", (Join-Path $testRoot "workspace"),
+    "-Port", "17420",
+    "-BindHost", "127.0.0.1",
+    "-ConfigPath", $installedConfigPath,
+    "-LauncherPath", (Join-Path $testRoot "bin\cx-codex-start.cmd"),
+    "-NodeCommand", $nodePath,
+    "-SkipNpmInstall",
+    "-SkipBuild",
+    "-JsonOutput"
+  )
+  if (Test-Path -LiteralPath $npmCliPath) {
+    $upgradeArgs += @("-NpmCliPath", $npmCliPath)
+  }
+  $upgradeResult = Invoke-CapturedPowerShell `
+    -ScriptPath $installScript `
+    -Arguments $upgradeArgs `
+    -CaptureRoot $testRoot `
+    -Label "install-upgrade"
+  Assert-True ($upgradeResult.ExitCode -eq 0) "Upgrade installation exited with $($upgradeResult.ExitCode). $($upgradeResult.Stderr)"
+  $upgradedConfig = Get-Content -LiteralPath $installedConfigPath -Raw | ConvertFrom-Json
+  Assert-True ([string]$upgradedConfig.password -ceq $originalPassword) "Upgrade must preserve the existing password when no replacement is supplied."
+  Assert-True ([bool]$upgradedConfig.tunnel) "Upgrade must preserve the existing remote-access enabled state."
+  Assert-True ($upgradedConfig.remoteAccessMode -eq "quick") "Upgrade must preserve the selected remote-access mode."
+  Assert-True ($upgradedConfig.futureOption -eq "preserve-me") "Upgrade must preserve unknown future config fields."
+  $originalPassword = $null
   Write-Host "productization: stable install JSON passed"
 
   $fakeInstallDir = Join-Path $testRoot "program"
