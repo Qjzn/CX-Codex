@@ -2,6 +2,21 @@
 
 This file tracks manual regression and feature verification steps.
 
+## Android local-file open and download URL preservation (2026-07-29)
+
+### Expected behavior
+
+1. `openFileFromUrl` and `downloadFileFromUrl` preserve the complete `/codex-local-file?path=...&download=1` URL passed by the preview page.
+2. Native URL normalization may remove a browser fragment, but must not remove or rewrite the encoded file path and download/inline query parameters.
+3. Auth cookies, absolute-path validation, response MIME type, and attachment disposition keep their existing behavior over LAN, Tailscale Funnel, and Cloudflare Quick Tunnel.
+4. A PDF or office document that already renders in the mobile preview can be opened or saved to Android Downloads without HTTP 400.
+
+### Verification
+
+- Run `android\gradlew.bat :app:testDebugUnitTest`; `MobileShellConfigTest` must cover a file URL with encoded Windows path, query parameters, HTTPS port, and trailing fragment.
+- Run `android\gradlew.bat :app:compileDebugJavaWithJavac`.
+- From the Android shell, open a previewed PDF over the authenticated public address, then verify both “打开” and “下载” complete without HTTP 400.
+
 ## Stable remote address and password persistence (2026-07-28)
 
 ### Expected behavior
