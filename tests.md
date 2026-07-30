@@ -104,6 +104,7 @@ This file tracks manual regression and feature verification steps.
 7. `-RemoveUserData -RemoveCloudflared` additionally removes the CX-Codex state directory and only project-managed cloudflared files.
 8. `StartNow` must start an isolated service, pass `/health` with HTTP 200, and the official uninstaller must stop that service and close the port.
 9. Re-running bootstrap while the managed service is active must stop only the matching service/tunnel, atomically replace the installation, and retain the previous directory for rollback.
+10. A detached Windows service must keep the Codex app-server connected through stdio without creating a visible Codex, Console Host, or Windows Terminal window.
 
 ### Verification
 
@@ -112,6 +113,7 @@ This file tracks manual regression and feature verification steps.
 - Parse bootstrap with Windows PowerShell and confirm the heartbeat and pairing-page messages use stderr in JSON mode while stdout remains one final JSON line.
 - Confirm the Windows GitHub Actions job runs the productization smoke and always invokes the official uninstall cleanup.
 - Confirm the Windows GitHub Actions job starts a Node service plus child process from the old install directory, records its managed PID/listener, and completes an in-place branch-archive upgrade without a directory-lock failure.
+- Start the detached service on Windows, exercise an App Server-backed request, and confirm the Codex app-server remains connected through stdio without a visible Codex, Console Host, or Windows Terminal window.
 - Confirm the Release zip contains `release-capabilities.json`, `scripts/uninstall-windows.ps1`, and `scripts/verify-windows-productization.ps1`.
 - Confirm the Release zip contains both Vite root entrypoints: `index.html` and `local-preview.html`.
 

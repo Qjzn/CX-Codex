@@ -102,7 +102,10 @@ export class AppServerProcess {
     this.stopping = false
     this.startedAtMs = Date.now()
     const invocation = getSpawnInvocation(this.getCodexCommand(), this.appServerArgs)
-    const proc = spawn(invocation.command, invocation.args, { stdio: ['pipe', 'pipe', 'pipe'] })
+    const proc = spawn(invocation.command, invocation.args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: process.platform === 'win32',
+    })
     this.process = proc
 
     attachAppServerProcessHandlers(proc, {
