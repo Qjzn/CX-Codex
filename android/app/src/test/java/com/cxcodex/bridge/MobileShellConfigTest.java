@@ -20,6 +20,22 @@ public class MobileShellConfigTest {
     }
 
     @Test
+    public void preservesFileTransferQueryWhileDiscardingBrowserFragment() {
+        assertEquals(
+            "https://device.example.ts.net:8443/codex-local-file?path=E%3A%5Cdocs%5Creport%20final.pdf&download=1",
+            MobileShellConfig.normalizeFileTransferUrl(
+                " https://device.example.ts.net:8443/codex-local-file?path=E%3A%5Cdocs%5Creport%20final.pdf&download=1#preview "
+            )
+        );
+        assertEquals(
+            "https://temporary.example/codex-local-file?path=%2Ftmp%2Freport.pdf&inline=1",
+            MobileShellConfig.normalizeFileTransferUrl(
+                "https://temporary.example/codex-local-file?path=%2Ftmp%2Freport.pdf&inline=1"
+            )
+        );
+    }
+
+    @Test
     public void buildsOneCanonicalHashRouteForAThread() {
         assertEquals(
             "http://127.0.0.1:7420/#/thread/thread-123",

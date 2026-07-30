@@ -87,6 +87,18 @@ public final class MobileShellConfig {
         return normalized;
     }
 
+    public static String normalizeFileTransferUrl(String value) {
+        if (value == null) {
+            return "";
+        }
+        String normalized = value.trim();
+        int fragmentIndex = normalized.indexOf('#');
+        if (fragmentIndex >= 0) {
+            normalized = normalized.substring(0, fragmentIndex);
+        }
+        return normalized;
+    }
+
     public static String buildAppHashUrl(String serverUrl, String hashPath) {
         String normalizedServerUrl = normalizeServerUrl(serverUrl);
         String normalizedHashPath = hashPath == null ? "" : hashPath.trim();

@@ -846,7 +846,7 @@ public class MobileShellPlugin extends Plugin {
 
     @PluginMethod
     public void openFileFromUrl(PluginCall call) {
-        String downloadUrl = MobileShellConfig.normalizeServerUrl(call.getString("url", ""));
+        String downloadUrl = MobileShellConfig.normalizeFileTransferUrl(call.getString("url", ""));
         if (!isValidDownloadUrl(downloadUrl)) {
             call.reject("文件地址无效，请检查链接");
             return;
@@ -882,7 +882,7 @@ public class MobileShellPlugin extends Plugin {
 
     @PluginMethod
     public void downloadFileFromUrl(PluginCall call) {
-        String downloadUrl = MobileShellConfig.normalizeServerUrl(call.getString("url", ""));
+        String downloadUrl = MobileShellConfig.normalizeFileTransferUrl(call.getString("url", ""));
         if (!isValidDownloadUrl(downloadUrl)) {
             call.reject("文件地址无效，请检查链接");
             return;

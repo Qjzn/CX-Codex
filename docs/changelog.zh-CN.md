@@ -2,6 +2,11 @@
 
 ## 未发布
 
+## 2.7.1 - 2026-07-29
+
+- 修复 Android 客户端预览本地 PDF、Word 等文件后，点击“打开”或“下载”返回 HTTP 400 的问题。原生层现在保留文件地址中的 `path`、`download` 等查询参数，只移除浏览器片段，不再把有效下载地址误改成缺少文件路径的接口。
+- 公网域名、Tailscale Funnel 和 Cloudflare Quick Tunnel 的下载链路保持一致；文件访问仍需登录 Cookie，服务端绝对路径校验和下载响应头不变。
+
 ## 2.7.0 - 2026-07-28
 
 - 手机外网访问改为“固定优先、临时兜底”：检测到已登录的 Tailscale 后，会建立可在电脑或 Tailscale 重启后恢复的 Funnel 固定地址；未安装、未登录或固定通道不可用时，仍可继续使用 Cloudflare Quick Tunnel 临时地址。
