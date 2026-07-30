@@ -605,9 +605,40 @@
                 class="message-image-list"
                 :data-role="entry.message.role"
               >
-                <li v-for="imageUrl in entry.message.images" :key="imageUrl" class="message-image-item">
-                  <button class="message-image-button" type="button" @click="openImageModal(imageUrl)">
-                    <img class="message-image-preview" :src="toRenderableImageUrl(imageUrl)" alt="消息图片预览" loading="lazy" />
+                <li
+                  v-for="(imageUrl, imageIndex) in entry.message.images"
+                  :key="`${imageUrl}-${imageIndex}`"
+                  class="message-image-item"
+                >
+                  <button
+                    class="message-image-button"
+                    :class="{
+                      'is-loading': !isMessageImageLoaded(entry.message.id, imageIndex) && !isMessageImageFailed(entry.message.id, imageIndex),
+                      'is-failed': isMessageImageFailed(entry.message.id, imageIndex),
+                    }"
+                    type="button"
+                    aria-label="打开消息图片预览"
+                    :disabled="isMessageImageFailed(entry.message.id, imageIndex)"
+                    @click="openImageModal(imageUrl)"
+                  >
+                    <span
+                      v-if="!isMessageImageLoaded(entry.message.id, imageIndex) && !isMessageImageFailed(entry.message.id, imageIndex)"
+                      class="message-image-loading"
+                      aria-hidden="true"
+                    />
+                    <img
+                      v-if="!isMessageImageFailed(entry.message.id, imageIndex)"
+                      class="message-image-preview"
+                      :class="{ 'is-loaded': isMessageImageLoaded(entry.message.id, imageIndex) }"
+                      :src="toRenderableImageUrl(imageUrl)"
+                      alt="消息图片预览"
+                      loading="lazy"
+                      @load="onMessageImageLoad(entry.message.id, imageIndex)"
+                      @error="onMessageImageError(entry.message.id, imageIndex)"
+                    />
+                    <span v-else class="message-image-failed" role="img" aria-label="图片加载失败">
+                      加载失败
+                    </span>
                   </button>
                 </li>
               </ul>
@@ -1086,8 +1117,16 @@
       </div>
     </Teleport>
 
-    <div v-if="modalImageUrl.length > 0" class="image-modal-backdrop" @click="closeImageModal">
-      <div class="image-modal-content" role="dialog" aria-modal="true" aria-label="图片预览" @click.stop>
+    <Transition name="image-modal">
+      <div v-if="modalImageUrl.length > 0" class="image-modal-backdrop" @click="closeImageModal">
+      <div
+        ref="imageModalContentRef"
+        class="image-modal-content"
+        role="dialog"
+        aria-modal="true"
+        aria-label="图片预览"
+        @click.stop
+      >
         <div class="image-modal-toolbar">
           <div class="image-modal-toolbar-group">
             <button class="image-modal-tool" type="button" aria-label="缩小图片" @click="zoomOutImageModal">
@@ -1100,7 +1139,7 @@
               +
             </button>
           </div>
-          <button class="image-modal-close" type="button" aria-label="关闭图片预览" @click="closeImageModal">
+          <button ref="imageModalCloseRef" class="image-modal-close" type="button" aria-label="关闭图片预览" @click="closeImageModal">
             <IconTablerX class="icon-svg" />
           </button>
         </div>
@@ -1111,12 +1150,23 @@
           @wheel.prevent="onImageModalWheel"
           @dblclick="onImageModalDoubleClick"
         >
+          <div v-if="isModalImageLoading" class="image-modal-status" role="status">
+            <span class="image-modal-spinner" aria-hidden="true" />
+            正在加载图片…
+          </div>
+          <div v-else-if="isModalImageFailed" class="image-modal-status image-modal-status--error" role="alert">
+            图片加载失败，请关闭后重试。
+          </div>
           <img
+            v-show="!isModalImageFailed"
             ref="imageModalImageRef"
             class="image-modal-image"
+            :class="{ 'is-loaded': !isModalImageLoading }"
             :src="modalImageUrl"
             alt="放大的消息图片"
             :style="imageModalStyle"
+            @load="onModalImageLoad"
+            @error="onModalImageError"
             @dragstart.prevent
             @pointerdown="onImageModalPointerDown"
             @pointermove="onImageModalPointerMove"
@@ -1126,6 +1176,7 @@
         </div>
       </div>
     </div>
+    </Transition>
 
     <div
       v-if="isFileLinkContextMenuVisible"
@@ -1902,8 +1953,14 @@ const bottomAnchorRef = ref<HTMLElement | null>(null)
 const processPanelRef = ref<HTMLElement | null>(null)
 const liveOverlayReasoningRef = ref<HTMLElement | null>(null)
 const modalImageUrl = ref('')
+const isModalImageLoading = ref(false)
+const isModalImageFailed = ref(false)
+const imageModalContentRef = ref<HTMLElement | null>(null)
+const imageModalCloseRef = ref<HTMLButtonElement | null>(null)
 const imageModalStageRef = ref<HTMLElement | null>(null)
 const imageModalImageRef = ref<HTMLImageElement | null>(null)
+const loadedMessageImageKeys = ref<Set<string>>(new Set())
+const failedMessageImageKeys = ref<Set<string>>(new Set())
 const modalImageScale = ref(1)
 const modalImageOffsetX = ref(0)
 const modalImageOffsetY = ref(0)
@@ -1935,6 +1992,7 @@ let highlightedMessageTimer: number | null = null
 const pendingRollbackMessageId = ref('')
 let rollbackConfirmTimer: number | null = null
 let previousBodyOverflow = ''
+let imageModalPreviousFocus: HTMLElement | null = null
 const copiedCodeBlockKey = ref('')
 let copiedCodeBlockTimer: number | null = null
 let remoteOlderHistoryRequestTimer: number | null = null
@@ -5244,6 +5302,8 @@ watch(
   () => props.activeThreadId,
   () => {
     modalImageUrl.value = ''
+    loadedMessageImageKeys.value = new Set()
+    failedMessageImageKeys.value = new Set()
     closeFileLinkContextMenu()
     failedMarkdownImageKeys.value = new Set()
     preparedMessageBlocksById.clear()
@@ -5279,6 +5339,7 @@ watch(
       window.addEventListener('resize', onWindowResizeForImageModal)
       await nextTick()
       resetImageModalView()
+      imageModalCloseRef.value?.focus()
       return
     }
 
@@ -5287,6 +5348,13 @@ watch(
     document.body.style.overflow = previousBodyOverflow
     previousBodyOverflow = ''
     resetImageModalView()
+    isModalImageLoading.value = false
+    isModalImageFailed.value = false
+    const focusTarget = imageModalPreviousFocus
+    imageModalPreviousFocus = null
+    if (focusTarget?.isConnected) {
+      focusTarget.focus()
+    }
   },
 )
 
@@ -5467,8 +5535,49 @@ function onImageModalPointerUp(event: PointerEvent): void {
   modalImagePointerId = null
 }
 
+function messageImageKey(messageId: string, imageIndex: number): string {
+  return `${messageId}:${imageIndex}`
+}
+
+function onMessageImageLoad(messageId: string, imageIndex: number): void {
+  const key = messageImageKey(messageId, imageIndex)
+  const nextLoaded = new Set(loadedMessageImageKeys.value)
+  nextLoaded.add(key)
+  loadedMessageImageKeys.value = nextLoaded
+}
+
+function onMessageImageError(messageId: string, imageIndex: number): void {
+  const key = messageImageKey(messageId, imageIndex)
+  const nextFailed = new Set(failedMessageImageKeys.value)
+  nextFailed.add(key)
+  failedMessageImageKeys.value = nextFailed
+}
+
+function isMessageImageLoaded(messageId: string, imageIndex: number): boolean {
+  return loadedMessageImageKeys.value.has(messageImageKey(messageId, imageIndex))
+}
+
+function isMessageImageFailed(messageId: string, imageIndex: number): boolean {
+  return failedMessageImageKeys.value.has(messageImageKey(messageId, imageIndex))
+}
+
 function openImageModal(imageUrl: string): void {
+  if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+    imageModalPreviousFocus = document.activeElement
+  }
+  isModalImageLoading.value = true
+  isModalImageFailed.value = false
   modalImageUrl.value = toRenderableImageUrl(imageUrl)
+}
+
+function onModalImageLoad(): void {
+  isModalImageLoading.value = false
+  isModalImageFailed.value = false
+}
+
+function onModalImageError(): void {
+  isModalImageLoading.value = false
+  isModalImageFailed.value = true
 }
 
 function markdownImageKey(messageId: string, blockIndex: number): string {
@@ -5494,6 +5603,25 @@ function onWindowKeydownForImageModal(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
     closeImageModal()
     return
+  }
+  if (event.key === 'Tab') {
+    const focusable = imageModalContentRef.value?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+    )
+    if (!focusable || focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (!first || !last) return
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+      return
+    }
+    if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+      return
+    }
   }
   if (event.key === '+' || event.key === '=') {
     event.preventDefault()
@@ -6491,7 +6619,7 @@ onBeforeUnmount(() => {
 }
 
 .message-image-button {
-  @apply block overflow-hidden border p-0;
+  @apply relative block h-16 w-16 overflow-hidden border p-0;
   border-radius: var(--ui-radius-card);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
@@ -6501,8 +6629,37 @@ onBeforeUnmount(() => {
   border-color: var(--ui-border-strong);
 }
 
+.message-image-button:disabled {
+  @apply cursor-default;
+}
+
+.message-image-loading {
+  @apply absolute inset-0;
+  background:
+    linear-gradient(
+      100deg,
+      var(--ui-bg-surface-muted) 20%,
+      var(--ui-bg-row-hover) 42%,
+      var(--ui-bg-surface-muted) 64%
+    );
+  background-size: 220% 100%;
+  animation: message-image-shimmer 1.2s ease-in-out infinite;
+}
+
 .message-image-preview {
   @apply block w-16 h-16 object-cover;
+  opacity: 0;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.message-image-preview.is-loaded {
+  opacity: 1;
+}
+
+.message-image-failed {
+  @apply flex h-full w-full items-center justify-center px-1 text-center text-[10px] leading-3;
+  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
+  color: var(--ui-danger);
 }
 
 .message-file-attachments {
@@ -6968,6 +7125,26 @@ onBeforeUnmount(() => {
   backdrop-filter: blur(2px);
 }
 
+.image-modal-enter-active,
+.image-modal-leave-active {
+  transition: opacity var(--motion-duration-base) var(--motion-ease-standard);
+}
+
+.image-modal-enter-active .image-modal-content,
+.image-modal-leave-active .image-modal-content {
+  transition: transform var(--motion-duration-base) var(--motion-ease-out);
+}
+
+.image-modal-enter-from,
+.image-modal-leave-to {
+  opacity: 0;
+}
+
+.image-modal-enter-from .image-modal-content,
+.image-modal-leave-to .image-modal-content {
+  transform: translateY(8px) scale(0.985);
+}
+
 .image-modal-content {
   @apply relative flex w-full max-w-[min(96vw,1200px)] max-h-[94vh] flex-col gap-3 rounded-[28px] border border-white/10 bg-[#17120c]/92 p-3 shadow-2xl;
 }
@@ -7002,6 +7179,19 @@ onBeforeUnmount(() => {
   @apply relative flex min-h-[min(58vh,420px)] flex-1 items-center justify-center overflow-hidden rounded-[24px] bg-[#0d0b08]/55;
 }
 
+.image-modal-status {
+  @apply absolute inset-0 z-10 flex items-center justify-center gap-2 text-sm font-medium text-white/80;
+}
+
+.image-modal-status--error {
+  @apply text-red-200;
+}
+
+.image-modal-spinner {
+  @apply h-5 w-5 rounded-full border-2 border-white/25 border-t-white;
+  animation: image-modal-spin 800ms linear infinite;
+}
+
 .image-modal-stage--zoomed {
   touch-action: none;
 }
@@ -7014,6 +7204,12 @@ onBeforeUnmount(() => {
   @apply block max-w-full max-h-[calc(94vh-7rem)] rounded-2xl bg-white shadow-2xl select-none;
   transform-origin: center center;
   will-change: transform;
+  opacity: 0;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.image-modal-image.is-loaded {
+  opacity: 1;
 }
 
 .icon-svg {
@@ -7467,6 +7663,14 @@ onBeforeUnmount(() => {
   .live-overlay-dot,
   .conversation-loading-card::after,
   .message-action-button,
+  .message-image-loading,
+  .message-image-preview,
+  .image-modal-spinner,
+  .image-modal-enter-active,
+  .image-modal-leave-active,
+  .image-modal-enter-active .image-modal-content,
+  .image-modal-leave-active .image-modal-content,
+  .image-modal-image,
   .cmd-row,
   .cmd-chevron,
   .worked-chevron,
@@ -7477,6 +7681,18 @@ onBeforeUnmount(() => {
 
   .message-streaming-text::after {
     animation: none !important;
+  }
+}
+
+@keyframes message-image-shimmer {
+  to {
+    background-position: -120% 0;
+  }
+}
+
+@keyframes image-modal-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

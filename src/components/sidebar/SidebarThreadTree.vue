@@ -28,6 +28,13 @@
               <span class="thread-row-content">
                 <span class="thread-row-title-wrap">
                   <span class="thread-row-title">{{ thread.title }}</span>
+                  <span
+                    v-if="hasCollidingRunningTitle(thread)"
+                    class="thread-row-identity"
+                    :title="`不同会话 · ${thread.id}`"
+                  >
+                    会话 {{ formatThreadIdentity(thread.id) }}
+                  </span>
                   <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
                 </span>
                 <span class="thread-row-meta">
@@ -657,6 +664,7 @@ let pendingDragPointerSample: DragPointerSample | null = null
 let dragPointerRafId: number | null = null
 const suppressNextProjectToggleId = ref('')
 const measuredHeightByProject = ref<Record<string, number>>({})
+const isProjectLayoutMotionReady = ref(false)
 const projectGroupElementByName = new Map<string, HTMLElement>()
 const projectMenuWrapElementByName = new Map<string, HTMLElement>()
 const threadMenuWrapElementById = new Map<string, HTMLElement>()
@@ -941,6 +949,30 @@ const filteredGroups = computed<UiProjectGroup[]>(() => threadCollections.value.
 const displayedGroups = computed<UiProjectGroup[]>(() => (
   orderProjectGroupsByRecentActivity(filteredGroups.value)
 ))
+const hasMeasuredDisplayedProjectLayout = computed(() => (
+  displayedGroups.value.length > 0
+  && displayedGroups.value.every((group) => (measuredHeightByProject.value[group.projectName] ?? 0) > 0)
+))
+let projectLayoutMotionRafId: number | null = null
+
+watch(hasMeasuredDisplayedProjectLayout, async (isMeasured) => {
+  isProjectLayoutMotionReady.value = false
+  if (projectLayoutMotionRafId !== null) {
+    window.cancelAnimationFrame(projectLayoutMotionRafId)
+    projectLayoutMotionRafId = null
+  }
+  if (!isMeasured) return
+
+  await nextTick()
+  if (!hasMeasuredDisplayedProjectLayout.value) return
+
+  projectLayoutMotionRafId = window.requestAnimationFrame(() => {
+    projectLayoutMotionRafId = null
+    if (hasMeasuredDisplayedProjectLayout.value) {
+      isProjectLayoutMotionReady.value = true
+    }
+  })
+})
 const effectiveThreadViewMode = computed<'project' | 'chronological'>(() => (
   useDesktopListParity.value ? 'project' : threadViewMode.value
 ))
@@ -955,6 +987,19 @@ const threadProjectNameById = computed(() => threadCollections.value.threadProje
 const threadTimestampById = computed(() => threadCollections.value.threadTimestampById)
 const pinnedThreads = computed(() => threadCollections.value.pinnedThreads)
 const runningThreads = computed<UiThread[]>(() => threadCollections.value.runningThreads)
+const collidingRunningTitleKeys = computed(() => {
+  const titleCounts = new Map<string, number>()
+  for (const thread of runningThreads.value) {
+    const key = runningTitleCollisionKey(thread.title)
+    if (!key) continue
+    titleCounts.set(key, (titleCounts.get(key) ?? 0) + 1)
+  }
+  return new Set(
+    [...titleCounts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([key]) => key),
+  )
+})
 const pinnedThreadsAlwaysVisible = computed(() => new Set(
   pinnedThreads.value
     .filter((thread) => thread.id === props.selectedThreadId || thread.inProgress)
@@ -978,6 +1023,20 @@ const hiddenPinnedThreadCount = computed(() => Math.max(
   pinnedThreads.value.length - visiblePinnedThreads.value.length,
   0,
 ))
+
+function runningTitleCollisionKey(title: string): string {
+  return title.trim().replace(/\s+/gu, ' ').toLocaleLowerCase().slice(0, 16)
+}
+
+function hasCollidingRunningTitle(thread: UiThread): boolean {
+  const key = runningTitleCollisionKey(thread.title)
+  return Boolean(key && collidingRunningTitleKeys.value.has(key))
+}
+
+function formatThreadIdentity(threadId: string): string {
+  const compact = threadId.replace(/[^a-z0-9]/giu, '')
+  return compact.slice(-4).toUpperCase() || '----'
+}
 
 const projectedDropProjectIndex = computed<number | null>(() => {
   const drag = activeProjectDrag.value
@@ -1020,6 +1079,12 @@ const layoutTopByProject = computed<Record<string, number>>(() => {
 })
 
 const groupsContainerStyle = computed<Record<string, string>>(() => {
+  if (!hasMeasuredDisplayedProjectLayout.value) {
+    return {
+      height: 'auto',
+    }
+  }
+
   let totalHeight = 0
   for (const projectName of layoutProjectOrder.value) {
     totalHeight += getProjectOuterHeight(projectName)
@@ -1687,15 +1752,27 @@ function projectGroupStyle(projectName: string): Record<string, string> | undefi
   const shouldElevateForMenu =
     openProjectMenuId.value === projectName || openThreadMenuProjectName === projectName
 
+  if (!hasMeasuredDisplayedProjectLayout.value) {
+    return {
+      position: 'relative',
+      zIndex: shouldElevateForMenu ? '40' : '1',
+      marginBottom: isCollapsed(projectName) ? '0' : `${PROJECT_GROUP_EXPANDED_GAP_PX}px`,
+      transform: 'none',
+      transition: 'none',
+    }
+  }
+
   if (!drag || drag.projectName !== projectName) {
     return {
       position: 'absolute',
-      top: `${targetTop}px`,
+      top: '0',
       left: '0',
       right: '0',
       zIndex: shouldElevateForMenu ? '40' : '1',
-      transform: 'none',
-      transition: 'top 180ms ease',
+      transform: `translate3d(0, ${targetTop}px, 0)`,
+      transition: isProjectLayoutMotionReady.value
+        ? 'transform var(--motion-duration-base) var(--motion-ease-standard)'
+        : 'none',
     }
   }
 
@@ -1786,6 +1863,10 @@ watch(hasOpenDismissableMenu, (isOpen) => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('focus', onWindowFocusRefreshPinned)
+  if (projectLayoutMotionRafId !== null) {
+    window.cancelAnimationFrame(projectLayoutMotionRafId)
+    projectLayoutMotionRafId = null
+  }
   for (const element of projectGroupElementByName.values()) {
     projectGroupResizeObserver?.unobserve(element)
   }
@@ -2172,12 +2253,20 @@ onBeforeUnmount(() => {
 }
 
 .thread-row-title {
-  @apply block text-[14px] font-medium truncate whitespace-nowrap;
+  @apply block min-w-0 flex-1 text-[14px] font-medium truncate whitespace-nowrap;
   color: var(--ui-text-primary);
   font-family: var(--font-sans-reading);
   line-height: 1.12rem;
   letter-spacing: 0;
   text-shadow: none;
+}
+
+.thread-row-identity {
+  @apply inline-flex shrink-0 items-center rounded px-1 text-[10px] font-medium leading-4;
+  color: var(--ui-text-tertiary);
+  background: var(--ui-bg-surface-muted);
+  border: 1px solid var(--ui-border-subtle);
+  font-family: var(--font-sans-ui);
 }
 
 .thread-row-worktree-icon {

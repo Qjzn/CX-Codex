@@ -815,3 +815,21 @@ After each feature implementation session that uses this skill:
 - Windows Codex `26.721.4979` presents connection recovery as a compact state plus one focused action; protocol and transport internals stay outside the primary settings hierarchy.
 - CX-Codex applies the same hierarchy to its product-specific remote access: fixed Tailscale Funnel is the recommended state, Cloudflare Quick Tunnel is visibly temporary, and missing installation/login becomes an explicit recovery action instead of an unexplained failure.
 - Upgrade configuration is durable user state. The installer preserves the existing password, access mode, enabled state, and unknown fields unless the user explicitly replaces them; a temporary fallback never changes the persisted fixed-address preference.
+
+## Findings: Compact Smartwatch Task Actions (2026-07-29)
+
+- Windows Codex `26.721.4979` keeps compact activity status separate from the task title, using distinct running, input-needed, ready, and blocked states instead of copying the full response into the status label.
+- Its avatar notification surface binds open and follow-up actions to the exact `localConversationId`; opening the conversation and sending a follow-up remain separate user intents.
+- CX-Codex smartwatch notifications therefore use a truthful two-character status plus title, keep exact-thread `详情` separate from `回复`, and place voice or preset follow-up composition on a small native confirmation surface rather than auto-sending recognized speech.
+
+## Findings: Attachment Upload and Image Loading Feedback (2026-07-30)
+
+- Windows Codex `26.721.4979` creates the image attachment surface from the selected local source before cloud upload settles, then overlays that stable thumbnail with an accessible progress bar, spinner, or percentage.
+- The composer blocks submission with distinct `Images uploading…` and `Files uploading…` reasons. Upload failure is explicit, while a historical image that cannot load keeps its reserved size and renders a compact failure state instead of collapsing.
+- CX-Codex follows the same state ownership: selected images and files appear immediately, pending and failed uploads cannot be sent, retry/remove stay local to the attachment, and conversation images reserve their layout through loading or failure.
+
+## Findings: Cold-start Module Boundaries and Stable Reordering (2026-07-30)
+
+- Windows Codex package `26.721.41059` keeps `local-conversation-page`, `settings-page`, `pets-settings`, and the compact `settings-loading-row` in separate renderer chunks instead of making every surface part of the first application entry.
+- CX-Codex follows that boundary by loading the conversation renderer, sidebar tree, queued-message UI, settings-only cards, task-pet settings, and Favorites only when their owning surface is rendered. The home route must not briefly render the thread fallback while the router is still resolving.
+- Frequent sidebar project movement follows the existing lightweight-motion rule: use compositor transforms with the shared reduced-motion duration tokens. Transitioning the layout-driving `top` property creates visible reorder jank and measurable layout shift.

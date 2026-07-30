@@ -2,6 +2,24 @@
 
 This file tracks manual regression and feature verification steps.
 
+## New-thread duplicate-submit protection (2026-07-30)
+
+### Expected behavior
+
+1. Two submit events received before the first new-thread request yields must share one in-flight promise.
+2. Worktree creation, `clientMessageId` generation, durable outbox persistence, `/codex-api/runtime/send`, and route activation each run once for that submission.
+3. While the first request is sending or still represented by `pendingNewThreadPreview`, the home composer ignores another click or Enter event.
+4. After the first attempt settles or becomes an explicit retryable failure, a later intentional submission can create a new request normally.
+5. Transport recovery continues to reuse the original `clientMessageId`; identical text is not globally deduplicated.
+6. When two running rows have the same visible 16-character title prefix, both rows show a short session identity; unrelated titles keep the compact layout.
+
+### Verification
+
+- Run `npm.cmd run build:frontend`.
+- Run `npm.cmd run verify:frontend-normalizers`.
+- Run `npm.cmd run verify:server-modules`; the existing concurrent runtime-send smoke must still prove one `thread/start` for the same `clientMessageId`.
+- Parse `scripts/regression-7420-frontend.ps1` and run its new-thread source contract. It must find both the App-level submit guard and the state-level single-flight promise before any new `clientMessageId` is created.
+
 ## Stable remote address and password persistence (2026-07-28)
 
 ### Expected behavior
@@ -14066,3 +14084,58 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - Cached conversation content remains visible during a background refresh failure.
 - Mobile users can recover from a stale Quick Tunnel address without reinstalling the APK.
 - No raw transport exception such as `Failed to fetch` is shown to the user.
+## Android smartwatch compact task notifications (2026-07-29)
+
+1. Android 9 and newer task notifications show only a truthful two-character state (`执行`、`等待`、`同步`、`完成`、`失败`、`停止`、`待命`) plus the task title. The public lock-screen version hides the title.
+2. A running task exposes `停止` only when an exact active turn id is available, always keeps `详情`, and requires native confirmation before interrupting.
+3. A settled task exposes `回复` and `详情`. `回复` opens a compact native screen sized for 410 × 502 with voice draft input, `继续`、`审查`、`计划` presets, and confirmed manual sending.
+4. Voice recognition fills a draft and never auto-sends. `审查` reports issues, risks, and omissions without modifying; `计划` proposes next steps without executing.
+5. Notification reply reuses the persisted stable `clientMessageId` recovery path. A lost response becomes a synchronization state and is reconciled before any manual retry, so repeated transport recovery cannot create a duplicate turn.
+6. `详情` and every notification action remain bound to the exact owning thread. Multiple task notifications share the CX-Codex task group.
+
+Verification:
+
+- Run `npm.cmd run build:frontend`.
+- Run `android\gradlew.bat :app:testDebugUnitTest --tests com.cxcodex.bridge.TaskNotificationPolicyTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest`.
+- Run `android\gradlew.bat :app:lintDebug` and `git diff --check`.
+- On the 410 × 502 Android 9 watch, verify the running, waiting, uncertain, completed, failed, and stopped labels; lock-screen title privacy; stop confirmation; exact-thread detail navigation; voice draft review; and one-turn delivery after a dropped reply response.
+
+## Loading, switching, and attachment feedback (2026-07-30)
+
+1. Before Vue finishes loading, the HTML entry shows the compact `CX / 正在打开工作台` shell on light and dark system themes; it is replaced in place when the app mounts, with no white or black blank frame.
+2. Opening Skills, GitHub Trending, Diagnostics, or Workbench shows a layout-preserving skeleton when its route chunk or first request is cold. A refresh keeps cached/current cards visible and reports the background update instead of replacing content with a spinner.
+3. Switching from a populated conversation to an uncached conversation keeps the previous conversation visible with the existing switching status until the target history or recoverable error is ready.
+4. Selecting images creates thumbnails immediately and preserves selection order. Each thumbnail exposes uploading, failed, retry, and remove states; sending remains disabled until every selected attachment is ready.
+5. Selecting ordinary files creates file chips immediately. Failed and timed-out uploads remain visible with retry/remove actions, and removing a pending item cancels its request.
+6. A single attachment over 48 MB fails locally with a clear size message and is never converted to a large base64 draft. Standalone uploads and folder uploads use bounded concurrency.
+7. Folder upload reports processed/total progress, supports cancellation, keeps the successful count, reports the failed count, and retries only failed files.
+8. Typing `@` shows `正在查找文件…` while the debounced search is pending; `没有匹配文件` appears only after the current request settles.
+9. Conversation image slots keep a fixed size while loading, fade in after load, and show a fixed failure state on error. The image preview dialog has a bounded transition, loading/error feedback, Escape handling, focus containment, and focus restoration.
+10. Production frontend builds generate Brotli companions for compressible assets. Requests with `Accept-Encoding: br` receive `Content-Encoding: br`; hashed assets are immutable for one year, while `index.html` remains revalidatable.
+11. The main entry must not preload the document-preview/PDF vendor bundle. That code remains owned by the separate `local-preview.html` entry.
+12. Motion-specific feedback becomes static under `prefers-reduced-motion: reduce`.
+
+Verification:
+
+- Run `npm.cmd run build:frontend`.
+- Run `npm.cmd run build:cli` and `npm.cmd run verify:server-modules`.
+- Run `npm.cmd run verify:frontend-normalizers` and `npm.cmd run test:7420:frontend`.
+- In a headless browser, delay `/codex-api/upload-file`, verify immediate image/file feedback, force one upload failure, retry it, and capture desktop plus 393 px mobile screenshots.
+- Start the built server and verify cache/Brotli headers for `index.html` and a hashed JS asset.
+
+## Cold-start code splitting and sidebar stability (2026-07-30)
+
+1. The home route does not request the conversation renderer, queued-message UI, sidebar tree on collapsed mobile, settings cards, task-pet settings, or favorites modal before those surfaces are actually needed.
+2. A cold thread route shows a conversation-shaped fallback after 100 ms while its renderer chunk loads; an unresolved main route shows the shared page skeleton instead of briefly rendering thread UI.
+3. Opening the sidebar, a thread, Settings, task-pet settings, or Favorites loads the matching chunk and preserves the existing behavior after it resolves.
+4. Project group reordering uses compositor `transform` motion instead of transitioning `top`; reduced-motion still resolves through the shared duration tokens.
+5. The production main entry stays below 400 KB minified, while the conversation renderer, sidebar tree, and their CSS remain separate hashed assets.
+6. Under the reproducible Fast 3G plus 4× CPU profile at 393 × 852, compare the home route with the prior baseline: input readiness, FCP/LCP, JS transfer, maximum long task, and CLS must not regress.
+
+Verification:
+
+- Run `npm.cmd run build:frontend` and inspect the generated entry/chunk sizes.
+- Run `npm.cmd run test:7420:frontend` against the built isolated server.
+- In headless Playwright, load the home route with a fresh context at 1440 × 900 and at 393 × 852 with Fast 3G plus 4× CPU throttling.
+- Confirm the mobile home resource list does not contain `ThreadConversation`, `SidebarThreadTree`, `QueuedMessages`, `FavoritesModal`, `RemoteAccessCard`, or `TaskPetPreview`.
+- Capture desktop and mobile screenshots and confirm there is no blank main region, sidebar overlap, or horizontal overflow.

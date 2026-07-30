@@ -419,7 +419,47 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
 
   // 7. Static files from Vue build
   if (hasFrontendAssets) {
-    app.use(express.static(distDir))
+    app.use('/assets', (req, res, next) => {
+      if ((req.method !== 'GET' && req.method !== 'HEAD') || req.headers.range) {
+        next()
+        return
+      }
+      if (!String(req.headers['accept-encoding'] ?? '').toLowerCase().includes('br')) {
+        next()
+        return
+      }
+      const assetName = req.path.replace(/^\/+/u, '')
+      if (!assetName || assetName !== basename(assetName)) {
+        next()
+        return
+      }
+      const sourcePath = join(distDir, 'assets', assetName)
+      const compressedPath = `${sourcePath}.br`
+      if (!existsSync(sourcePath) || !existsSync(compressedPath)) {
+        next()
+        return
+      }
+      res.type(sourcePath)
+      res.setHeader('Content-Encoding', 'br')
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+      res.vary('Accept-Encoding')
+      res.sendFile(compressedPath, (error) => {
+        if (!error || res.headersSent) return
+        next(error)
+      })
+    })
+    app.use(express.static(distDir, {
+      setHeaders: (res, filePath) => {
+        const normalizedPath = filePath.replace(/\\/g, '/')
+        if (normalizedPath.includes('/assets/')) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+          return
+        }
+        if (basename(filePath) === 'index.html') {
+          res.setHeader('Cache-Control', 'no-cache')
+        }
+      },
+    }))
   }
 
   // 8. SPA fallback
@@ -438,6 +478,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       return
     }
 
+    res.setHeader('Cache-Control', 'no-cache')
     res.sendFile(spaEntryFile, (error) => {
       if (!error) return
       if (!res.headersSent) {

@@ -1489,6 +1489,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   )
   const outboxClientIdByOptimisticMessageId = new Map<string, string>()
   let messageOutboxRecoveryInFlight: Promise<void> | null = null
+  let newThreadSendInFlight: Promise<string> | null = null
   const failedUserMessageRequestById = new Map<string, FailedUserMessageRequest>()
   const failedMessageRetryInFlightIds = new Set<string>()
   type BufferedAgentDelta = { threadId: string; messageId: string; delta: string }
@@ -1750,8 +1751,12 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         threadId: thread.id,
         clientMessageId: clientMessageId || undefined,
         activityId: activity?.activityId || runtimeSummary?.activeTurnId || '',
+        activeTurnId: runtimeSummary?.activeTurnId || '',
         startedAtMs: activity?.startedAtMs ?? readRuntimeActivityStartedAtMs(runtimeSummary) ?? undefined,
         lastEventSeq: runtimeSummary?.lastEventSeq ?? 0,
+        executionState: runtimeSummary?.stale
+          ? 'stale'
+          : runtimeSummary?.executionState || (pendingRequest ? 'waiting_permission' : 'running'),
         title: thread.title.trim() || thread.preview.trim() || '未命名会话',
         projectName: thread.projectName.trim(),
         detail,
@@ -7829,7 +7834,43 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
   }
 
-  async function sendMessageToNewThread(
+  function sendMessageToNewThread(
+    text: string,
+    cwd: string,
+    imageUrls: string[] = [],
+    skills: Array<{ name: string; path: string }> = [],
+    fileAttachments: FileAttachment[] = [],
+    collaborationMode: CollaborationMode = selectedCollaborationMode.value,
+    turnOptions?: ComposerTurnOptions,
+    internalOptions: {
+      feedbackStartedAtMs?: number
+      reuseOptimisticMessageId?: string
+      onPendingRequestCreated?: (clientMessageId: string) => void
+      onRequestDispatched?: () => void
+      onThreadCreated?: (threadId: string) => void
+    } = {},
+  ): Promise<string> {
+    if (newThreadSendInFlight) return newThreadSendInFlight
+
+    const request = Promise.resolve().then(() => sendMessageToNewThreadOnce(
+      text,
+      cwd,
+      imageUrls,
+      skills,
+      fileAttachments,
+      collaborationMode,
+      turnOptions,
+      internalOptions,
+    ))
+    newThreadSendInFlight = request
+    const clearInFlight = (): void => {
+      if (newThreadSendInFlight === request) newThreadSendInFlight = null
+    }
+    void request.then(clearInFlight, clearInFlight)
+    return request
+  }
+
+  async function sendMessageToNewThreadOnce(
     text: string,
     cwd: string,
     imageUrls: string[] = [],

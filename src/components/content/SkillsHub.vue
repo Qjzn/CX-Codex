@@ -111,9 +111,27 @@
     </div>
 
     <div class="skills-hub-section">
-      <LoadingInline v-if="isLoading" class="skills-hub-loading" label="正在加载技能..." tone="muted" />
-      <div v-else-if="error" class="skills-hub-error">{{ error }}</div>
+      <div
+        v-if="isLoading && !hasSkillsContent"
+        class="skills-hub-grid skills-hub-skeleton-grid"
+        role="status"
+        aria-label="正在加载技能"
+      >
+        <article v-for="index in 6" :key="index" class="skills-hub-skeleton-card" aria-hidden="true">
+          <span class="skills-hub-skeleton-line skills-hub-skeleton-line--title" />
+          <span class="skills-hub-skeleton-line" />
+          <span class="skills-hub-skeleton-line skills-hub-skeleton-line--short" />
+          <span class="skills-hub-skeleton-action" />
+        </article>
+      </div>
+      <div v-else-if="error && !hasSkillsContent" class="skills-hub-error">{{ error }}</div>
       <template v-else>
+        <div v-if="isLoading" class="skills-hub-refreshing" role="status" aria-live="polite">
+          正在更新技能列表，当前结果仍可使用…
+        </div>
+        <div v-if="error" class="skills-hub-cache-warning" role="status">
+          更新失败，已保留上次结果：{{ error }}
+        </div>
         <div v-if="browseSkills.length > 0" class="skills-hub-grid">
           <SkillCard
             v-for="skill in browseSkills"
@@ -144,7 +162,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import IconTablerSearch from '../icons/IconTablerSearch.vue'
 import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
-import LoadingInline from './LoadingInline.vue'
 import SkillCard from './SkillCard.vue'
 import SkillDetailModal, { type HubSkill } from './SkillDetailModal.vue'
 import { useGithubSkillsSync } from '../../composables/useGithubSkillsSync'
@@ -188,6 +205,9 @@ const isDetailInstalling = computed(() =>
 const isDetailUninstalling = computed(() =>
   isUninstallActionInFlight.value && actionSkillKey.value === currentDetailSkillKey.value,
 )
+const hasSkillsContent = computed(() => (
+  browseSkills.value.length > 0 || installedSkills.value.length > 0
+))
 const githubRepoUrl = computed(() => {
   if (!syncStatus.value.configured) return ''
   const owner = syncStatus.value.repoOwner.trim()
@@ -585,8 +605,45 @@ function onVisibilityChange(): void {
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
 }
 
-.skills-hub-loading {
-  @apply flex items-center justify-center py-8 text-sm text-zinc-500;
+.skills-hub-skeleton-card {
+  @apply flex min-h-40 flex-col gap-3 rounded-lg border border-zinc-200 bg-white p-4;
+}
+
+.skills-hub-skeleton-line,
+.skills-hub-skeleton-action {
+  @apply block rounded-md bg-zinc-100;
+  background-image: linear-gradient(100deg, transparent 20%, rgb(255 255 255 / 0.72) 42%, transparent 64%);
+  background-size: 220% 100%;
+  animation: skills-skeleton-shimmer 1.25s ease-in-out infinite;
+}
+
+.skills-hub-skeleton-line {
+  @apply h-3 w-full;
+}
+
+.skills-hub-skeleton-line--title {
+  @apply h-5 w-2/3;
+}
+
+.skills-hub-skeleton-line--short {
+  @apply w-4/5;
+}
+
+.skills-hub-skeleton-action {
+  @apply mt-auto h-8 w-20;
+}
+
+.skills-hub-refreshing,
+.skills-hub-cache-warning {
+  @apply rounded-lg border px-3 py-2 text-xs;
+}
+
+.skills-hub-refreshing {
+  @apply border-zinc-200 bg-zinc-50 text-zinc-600;
+}
+
+.skills-hub-cache-warning {
+  @apply border-amber-200 bg-amber-50 text-amber-800;
 }
 
 .skills-hub-error {
@@ -595,5 +652,18 @@ function onVisibilityChange(): void {
 
 .skills-hub-empty {
   @apply text-sm text-zinc-400 py-8 text-center;
+}
+
+@keyframes skills-skeleton-shimmer {
+  to {
+    background-position: -120% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skills-hub-skeleton-line,
+  .skills-hub-skeleton-action {
+    animation: none;
+  }
 }
 </style>

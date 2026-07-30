@@ -52,7 +52,7 @@
   ],
   "scripts": {
     "dev": "vite",
-    "build:frontend": "vue-tsc --noEmit && vite build",
+    "build:frontend": "vue-tsc --noEmit && vite build && vite build --config vite.local-preview.config.ts && node ./scripts/precompress-frontend-assets.mjs",
     "build:cli": "tsup",
     "build": "npm run build:frontend && npm run build:cli",
     "mobile:android:add": "npx cap add android",

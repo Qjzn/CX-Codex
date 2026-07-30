@@ -1,12 +1,100 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Codex Web Local</title>
+    <title>CX-Codex</title>
+    <style>
+      html,
+      body,
+      #app {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        overflow: hidden;
+        background: #f7f7f6;
+        color: #1f1f1f;
+        font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+      }
+
+      .app-boot-shell {
+        box-sizing: border-box;
+        display: grid;
+        height: 100%;
+        place-items: center;
+        padding: 24px;
+      }
+
+      .app-boot-status {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: #6f6f6c;
+        font-size: 14px;
+      }
+
+      .app-boot-mark {
+        display: grid;
+        width: 34px;
+        height: 34px;
+        place-items: center;
+        border-radius: 10px;
+        background: #0f766e;
+        color: #fff;
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .app-boot-dot {
+        display: inline-block;
+        width: 5px;
+        height: 5px;
+        margin-left: 2px;
+        border-radius: 999px;
+        background: currentColor;
+        animation: app-boot-pulse 1.1s ease-in-out infinite;
+      }
+
+      @keyframes app-boot-pulse {
+        0%,
+        100% {
+          opacity: 0.28;
+        }
+        50% {
+          opacity: 0.9;
+        }
+      }
+
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: #18181b;
+          color: #f4f4f5;
+        }
+
+        .app-boot-status {
+          color: #a1a1aa;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .app-boot-dot {
+          animation: none;
+        }
+      }
+    </style>
   </head>
-  <body class="bg-slate-950">
-    <div id="app"></div>
+  <body>
+    <div id="app">
+      <div class="app-boot-shell" role="status" aria-live="polite">
+        <div class="app-boot-status">
+          <span class="app-boot-mark" aria-hidden="true">CX</span>
+          <span>正在打开工作台<span class="app-boot-dot" aria-hidden="true"></span></span>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

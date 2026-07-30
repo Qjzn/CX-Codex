@@ -181,6 +181,8 @@ function Assert-BoundedRuntimeSendRecoverySource {
   $codexBridgeDisposeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\codexBridgeMiddlewareDispose.ts")
   $androidTaskPetSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\TaskPetOverlayService.java")
   $androidTaskPetPolicySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\TaskPetRuntimePolicy.java")
+  $androidTaskNotificationPolicySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\TaskNotificationPolicy.java")
+  $androidTaskNotificationActionSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\TaskNotificationActionActivity.java")
   $androidNoProgressReviewSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\TaskPetNoProgressReviewReceiver.java")
   $androidPushServiceSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\TaskPetFirebaseMessagingService.java")
   $androidPushRegistrationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\MobilePushRegistration.java")
@@ -196,6 +198,13 @@ function Assert-BoundedRuntimeSendRecoverySource {
   $chatFeedbackSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\chatFeedbackMetrics.ts")
   $diagnosticsPanelSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\DiagnosticsPanel.vue")
   $taskPetPreviewSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\mobile\TaskPetPreview.vue")
+  $sidebarThreadTreeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue")
+  Assert-True ($androidTaskNotificationPolicySource -match 'waiting_permission[\s\S]*?return\s+"等待"' -and $androidTaskNotificationPolicySource -match 'start_uncertain[\s\S]*?sync_degraded[\s\S]*?return\s+"同步"' -and $androidTaskNotificationPolicySource -match 'completed[\s\S]*?return\s+"完成"' -and $androidTaskNotificationPolicySource -match 'failed[\s\S]*?return\s+"失败"' -and $androidTaskNotificationPolicySource -match 'interrupted[\s\S]*?return\s+"停止"') "smartwatch notification states must stay truthful and two characters"
+  Assert-True ($androidTaskPetSource -match 'setContentTitle\(status\)[\s\S]*?setContentText\(task\.title\)[\s\S]*?setPublicVersion' -and $androidTaskPetSource -match '"回复"[\s\S]*?MODE_REPLY[\s\S]*?"详情"' -and $androidTaskPetSource -match '"停止"[\s\S]*?MODE_STOP') "smartwatch notifications must contain only status and title with separate reply, stop, and detail actions"
+  Assert-True ($androidManifestSource -match 'TaskNotificationActionActivity[\s\S]*?android:exported="false"') "the native notification action surface must not be externally launchable"
+  $voiceResultMatch = [regex]::Match($androidTaskNotificationActionSource, 'protected\s+void\s+onActivityResult[\s\S]*?\n\s*private\s+void\s+focusManualInput')
+  Assert-True ($voiceResultMatch.Success -and $voiceResultMatch.Value -match 'manualInput\.setText' -and $voiceResultMatch.Value -notmatch '\bsubmit\(') "voice recognition must fill a confirmable draft and never auto-send"
+  Assert-True ($androidTaskNotificationPolicySource -match '只报告问题、风险和遗漏，不要修改' -and $androidTaskNotificationPolicySource -match '给出下一步计划，不要执行') "review and plan presets must remain read-only"
   Assert-True ($source -match "function\s+classifyThreadLoadFailure[\s\S]*?failed to fetch[\s\S]*?页面会自动重试") "thread history transport failures must map to actionable Chinese recovery copy"
   Assert-True ($source -match "const\s+failure\s*=\s*classifyThreadLoadFailure\(error\)[\s\S]*?setThreadLoadError\(threadId,\s*failure\.message\)[\s\S]*?scheduleNonFreshThreadDetailRetry\(threadId\)") "recoverable thread history failures must retain per-thread error state and schedule bounded retries"
   Assert-True ($appSource -match ':load-error=\"selectedThreadLoadError\"' -and $appSource -match '@open-connection-settings=\"onOpenThreadConnectionSettings\"') "the conversation surface must expose thread recovery and mobile address repair"
@@ -241,8 +250,12 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($diagnosticsPanelSource -match "消息响应复盘[\s\S]*?P50[\s\S]*?P95[\s\S]*?复盘线") "diagnostics must expose the mobile response review in a user-visible compact surface"
   Assert-True ($source -match "pendingNewThreadPreview\.value\s*=\s*\{[\s\S]*?message:\s*\{[\s\S]*?id:\s*optimisticMessageId") "new-thread sends must publish an immediate in-memory conversation preview"
   Assert-True ($source -match "addOptimisticUserMessage\(threadId,[\s\S]*?messageId:\s*optimisticMessageId") "the real thread must adopt the provisional bubble id instead of creating a duplicate"
-  $newThreadSendMatch = [regex]::Match($source, "async\s+function\s+sendMessageToNewThread[\s\S]*?\n\s*function\s+clearPendingNewThreadPreview")
+  $newThreadSendMatch = [regex]::Match($source, "function\s+sendMessageToNewThread[\s\S]*?\n\s*function\s+clearPendingNewThreadPreview")
   Assert-True ($newThreadSendMatch.Success) "could not find new-thread send source"
+  Assert-True ($newThreadSendMatch.Value -match "if\s*\(newThreadSendInFlight\)\s*return\s+newThreadSendInFlight[\s\S]*?Promise\.resolve\(\)\.then\(\(\)\s*=>\s*sendMessageToNewThreadOnce[\s\S]*?newThreadSendInFlight\s*=\s*request") "new-thread delivery must claim a single-flight promise before creating a client message id"
+  Assert-True ($appSource -match "if\s*\(newThreadSubmitInFlight\s*\|\|\s*isSendingMessage\.value\s*\|\|\s*pendingNewThreadPreview\.value\)\s*return[\s\S]*?submitFirstMessageForNewThread") "the home composer must synchronously reject duplicate new-thread submit events"
+  Assert-True ($appSource -match "if\s*\(newThreadSubmitInFlight\)\s*return\s+newThreadSubmitInFlight[\s\S]*?Promise\.resolve\(\)\.then\(\(\)\s*=>\s*submitFirstMessageForNewThreadOnce[\s\S]*?newThreadSubmitInFlight\s*=\s*request") "worktree setup and new-thread routing must share one submit promise"
+  Assert-True ($sidebarThreadTreeSource -match "collidingRunningTitleKeys[\s\S]*?count\s*>\s*1" -and $sidebarThreadTreeSource -match "hasCollidingRunningTitle\(thread\)[\s\S]*?会话\s+\{\{\s*formatThreadIdentity\(thread\.id\)\s*\}\}") "visually colliding running-thread titles must expose a short session identity"
   Assert-True ($newThreadSendMatch.Value -notmatch "\bstartThread\(") "new-thread delivery must enter durable runtime/send before any fallible thread/start preflight"
   Assert-True ($newThreadSendMatch.Value -match "putMessageOutboxEntry[\s\S]*?startRuntimeTurnWithBoundedRecovery") "new-thread delivery must persist the outbox before dispatching durable runtime/send"
   Assert-True ($newThreadSendMatch.Value -match "putMessageOutboxEntry[\s\S]*?notifyPendingRequestCreated\(internalOptions\.onPendingRequestCreated,\s*clientMessageId\)[\s\S]*?startRuntimeTurnWithBoundedRecovery") "new-thread delivery must register its stable client id with the native monitor before runtime/send can be suspended"
@@ -348,7 +361,7 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($androidNoProgressReviewSource -match 'INITIAL_REMINDER_MS\s*=\s*10\s*\*\s*60_000L') "native long-task review must begin after ten minutes without progress"
   Assert-True ($androidNoProgressReviewSource -match 'REVIEW_INTERVAL_MS\s*=\s*20\s*\*\s*60_000L') "native long-task review must repeat at a bounded twenty-minute cadence"
   Assert-True ($androidTaskPetSource -match 'lastNoProgressReminderAtMs[\s\S]*?put\("lastNoProgressReminderAtMs"') "no-progress reminder deduplication must survive service restarts"
-  Assert-True ($androidTaskPetSource -match 'notifyTaskNoProgress\(task,\s*notificationKey,\s*now\)[\s\S]*?lastNoProgressReminderAtMs\s*=\s*now') "native long-task review must persist the actual reminder time for periodic review"
+  Assert-True ($androidTaskPetSource -match 'notifyTaskNoProgress\(task,\s*notificationKey\)[\s\S]*?lastNoProgressReminderAtMs\s*=\s*now') "native long-task review must persist the actual reminder time for periodic review"
   Assert-True ($androidNoProgressReviewSource -match 'CHANNEL_ID[\s\S]*?NotificationManager\.IMPORTANCE_DEFAULT') "no-progress attention must use a separate default-importance notification channel"
   Assert-True ($androidTaskPetSource -match 'notifyTaskSettled[\s\S]*?TaskPetNoProgressReviewReceiver\.cancelNotification') "completion must supersede a stale no-progress reminder"
   Assert-True ($androidManifestSource -match 'TaskPetNoProgressReviewReceiver[\s\S]*?android:exported="false"') "the idle review alarm receiver must be explicit and unavailable to other apps"
@@ -417,7 +430,10 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($androidTaskPetSource -match 'onDestroy\(\)[\s\S]*?unregisterDefaultNetworkCallback[\s\S]*?unregisterNetworkCallback') "the default-network callback must be released with the foreground service"
   Assert-True ($androidConfigSource -match 'PREF_TASK_PET_MONITOR_DIAGNOSTICS_JSON') "native task monitoring diagnostics must survive a service/process restart"
   Assert-True ($androidTaskPetSource -match 'persistMonitorDiagnostics[\s\S]*?lastRelevantEventAtMs[\s\S]*?lastEventDrivenPollAtMs[\s\S]*?lastSnapshotSuccessAtMs[\s\S]*?lastTerminalAtMs[\s\S]*?lastCompletionNotificationResult[\s\S]*?lastCompletionNotificationBodySource[\s\S]*?networkRecoveryCount[\s\S]*?lastDefaultNetworkAvailableAtMs') "native task monitoring must retain stream, event, authoritative snapshot, terminal, notification body source, and network-recovery evidence"
-  Assert-True ($androidTaskPetSource -match 'boolean\s+hasLatestReply\s*=\s*!task\.latestReply\.isEmpty\(\)[\s\S]*?lastCompletionNotificationBodySource\s*=\s*hasLatestReply\s*\?\s*"latest_reply"\s*:\s*"detail"[\s\S]*?notificationManager\.notify') "completion diagnostics must prove whether the posted notification used the authoritative latest reply without persisting its content"
+  Assert-True (
+    ($androidTaskPetSource -match 'setContentTitle\(status\)[\s\S]*?setContentText\(task\.title\)') -and
+    ($androidTaskPetSource -match 'lastCompletionNotificationBodySource\s*=\s*"title_only"[\s\S]*?notificationManager\.notify')
+  ) "completion notifications must expose only the truthful two-character status and task title"
   $monitorDiagnosticsMatch = [regex]::Match($androidTaskPetSource, 'private\s+void\s+persistMonitorDiagnostics[\s\S]*?\n\s*private\s+boolean\s+reconcileNoProgressNotifications')
   Assert-True ($monitorDiagnosticsMatch.Success) "could not find native task monitor diagnostics persistence"
   Assert-True ($monitorDiagnosticsMatch.Value -notmatch 'threadId|clientMessageId|latestReply|serverUrl') "native task monitor diagnostics must not persist conversation content, identity, or server addresses"
@@ -433,7 +449,7 @@ function Assert-BoundedRuntimeSendRecoverySource {
     ($androidBackgroundVerifierSource -match 'lastCompletionNotificationBodySource[\s\S]*?terminalToNotificationMs[\s\S]*?summary\.json') -and
     ($androidBackgroundVerifierSource -match 'dumpsys",\s*"alarm"[\s\S]*?noProgressReviewAlarm')
   ) "the Android background verifier must summarize scheduled review, alarm registration, content-free notification source, and terminal latency evidence"
-  Assert-True ($androidBackgroundVerifierSource -match 'notificationResult\s*-ne\s*"posted"[\s\S]*?notificationBodySource\s*-notin\s*@\("latest_reply",\s*"detail"\)') "strict Android completion verification must reject blocked or retry notifications"
+  Assert-True ($androidBackgroundVerifierSource -match 'notificationResult\s*-ne\s*"posted"[\s\S]*?notificationBodySource\s*-ne\s*"title_only"') "strict Android completion verification must reject blocked, retry, or verbose completion notifications"
   Assert-True ($androidTaskPetSource -match 'restoreMonitorLifecycleDiagnostics\(\)[\s\S]*?START_STICKY' -and $androidTaskPetSource -match 'onTaskRemoved\(Intent\s+rootIntent\)[\s\S]*?taskRemovedCount\s*\+=\s*1L[\s\S]*?persistMonitorDiagnostics\(true\)') "native monitoring must preserve sticky restart and recent-task removal evidence"
   Assert-True ($androidBackgroundVerifierSource -match 'serviceRecreated[\s\S]*?stickyRestartAdvanced[\s\S]*?taskRemovedAdvanced[\s\S]*?RequireTaskRemoval[\s\S]*?RequireStickyRestart') "Android lifecycle verification must summarize and gate task removal and sticky recreation"
   Assert-True ($source -match "internalOptions\.onThreadCreated\?\.\(threadId\)") "new-thread sends must announce the authoritative thread returned by runtime/send"

@@ -104,6 +104,7 @@
             v-if="isGithubView"
             :projects="trendingProjects"
             :is-loading="false"
+            error=""
             scope="trending-daily"
             :scope-options="scopeOptions"
             @update:scope="noop"

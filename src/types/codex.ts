@@ -132,8 +132,10 @@ export type UiTaskPetItem = {
   threadId: string
   clientMessageId?: string
   activityId?: string
+  activeTurnId?: string
   startedAtMs?: number
   lastEventSeq?: number
+  executionState?: string
   title: string
   projectName: string
   detail: string

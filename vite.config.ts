@@ -78,31 +78,6 @@ function getWorktreeName(): string {
 const worktreeName = getWorktreeName();
 const appVersion = typeof pkg.version === "string" ? pkg.version : "unknown";
 const WS_UPGRADE_ATTACHED_KEY = "__codexBridgeWsAttached__";
-const DOCUMENT_PREVIEW_VENDOR_MARKERS = [
-  "node_modules/pdfjs-dist/",
-  "node_modules/@napi-rs/canvas/",
-  "node_modules/markdown-it/",
-  "node_modules/dompurify/",
-  "node_modules/docx-preview/",
-  "node_modules/jszip/",
-  "node_modules/linkify-it/",
-  "node_modules/mdurl/",
-  "node_modules/uc.micro/",
-  "node_modules/entities/",
-  "node_modules/argparse/",
-  "node_modules/pako/",
-  "node_modules/lie/",
-  "node_modules/immediate/",
-  "node_modules/readable-stream/",
-  "node_modules/process-nextick-args/",
-  "node_modules/safe-buffer/",
-  "node_modules/string_decoder/",
-  "node_modules/core-util-is/",
-  "node_modules/isarray/",
-  "node_modules/setimmediate/",
-  "node_modules/punycode.js/",
-];
-
 export default defineConfig({
   define: {
     "import.meta.env.VITE_WORKTREE_NAME": JSON.stringify(worktreeName),
@@ -112,15 +87,10 @@ export default defineConfig({
     rollupOptions: {
       input: {
         app: "index.html",
-        localPreview: "local-preview.html",
       },
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return undefined;
-          const normalizedId = id.replace(/\\/g, "/");
-          if (DOCUMENT_PREVIEW_VENDOR_MARKERS.some((marker) => normalizedId.includes(marker))) {
-            return "document-preview-vendor";
-          }
           if (
             id.includes("node_modules/vue/") ||
             id.includes("node_modules/@vue/") ||
@@ -128,7 +98,7 @@ export default defineConfig({
           ) {
             return "vue-vendor";
           }
-          return "vendor";
+          return undefined;
         },
       },
     },

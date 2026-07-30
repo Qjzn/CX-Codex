@@ -1,5 +1,29 @@
 <template>
-  <div class="diagnostics-panel" :data-tone="overallTone">
+  <div
+    v-if="isInitialLoading"
+    class="diagnostics-panel diagnostics-panel-skeleton"
+    role="status"
+    aria-label="正在加载诊断数据"
+  >
+    <div class="diagnostics-skeleton-toolbar" aria-hidden="true">
+      <span class="diagnostics-skeleton-line diagnostics-skeleton-line--status" />
+      <span class="diagnostics-skeleton-line diagnostics-skeleton-line--button" />
+    </div>
+    <section class="diagnostics-skeleton-wide" aria-hidden="true">
+      <span class="diagnostics-skeleton-line diagnostics-skeleton-line--heading" />
+      <span class="diagnostics-skeleton-line" />
+      <span class="diagnostics-skeleton-line diagnostics-skeleton-line--medium" />
+    </section>
+    <div class="diagnostics-grid" aria-hidden="true">
+      <section v-for="index in 4" :key="index" class="diagnostics-skeleton-card">
+        <span class="diagnostics-skeleton-line diagnostics-skeleton-line--heading" />
+        <span class="diagnostics-skeleton-line" />
+        <span class="diagnostics-skeleton-line diagnostics-skeleton-line--medium" />
+        <span class="diagnostics-skeleton-line" />
+      </section>
+    </div>
+  </div>
+  <div v-else class="diagnostics-panel" :data-tone="overallTone">
     <div class="diagnostics-toolbar">
       <div class="diagnostics-status">
         <span class="diagnostics-status-dot" aria-hidden="true" />
@@ -891,8 +915,10 @@ const diagnostics = ref<DiagnosticsData | null>(null)
 const chatFeedbackSummary = ref<ChatFeedbackMetricSummary | null>(null)
 const error = ref('')
 const isLoading = ref(false)
+const hasLoadedOnce = ref(false)
 let refreshTimer: number | null = null
 
+const isInitialLoading = computed(() => diagnostics.value === null && !hasLoadedOnce.value)
 const appServer = computed(() => diagnostics.value?.appServer ?? emptyAppServer)
 const runtimeStore = computed(() => diagnostics.value?.runtimeStore ?? emptyRuntimeStore)
 const transcription = computed(() => diagnostics.value?.transcription ?? emptyTranscription)
@@ -1152,6 +1178,7 @@ async function loadDiagnostics(options: { silent?: boolean } = {}): Promise<void
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
+    hasLoadedOnce.value = true
     if (!options.silent) {
       isLoading.value = false
     }
@@ -1287,6 +1314,56 @@ function formatAge(value: string): string {
 
 .diagnostics-panel {
   @apply mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-4 text-slate-900;
+}
+
+.diagnostics-panel-skeleton {
+  @apply overflow-hidden;
+}
+
+.diagnostics-skeleton-toolbar,
+.diagnostics-skeleton-wide,
+.diagnostics-skeleton-card {
+  @apply rounded-lg border border-stone-200 bg-white p-4;
+}
+
+.diagnostics-skeleton-toolbar {
+  @apply flex items-center justify-between gap-4;
+}
+
+.diagnostics-skeleton-wide,
+.diagnostics-skeleton-card {
+  @apply flex flex-col gap-3;
+}
+
+.diagnostics-skeleton-wide {
+  @apply min-h-36;
+}
+
+.diagnostics-skeleton-card {
+  @apply min-h-44;
+}
+
+.diagnostics-skeleton-line {
+  @apply block h-3 w-full rounded-md bg-stone-100;
+  background-image: linear-gradient(100deg, transparent 20%, rgb(255 255 255 / 0.78) 42%, transparent 64%);
+  background-size: 220% 100%;
+  animation: diagnostics-skeleton-shimmer 1.25s ease-in-out infinite;
+}
+
+.diagnostics-skeleton-line--status {
+  @apply h-5 w-32;
+}
+
+.diagnostics-skeleton-line--button {
+  @apply h-9 w-20;
+}
+
+.diagnostics-skeleton-line--heading {
+  @apply h-5 w-40;
+}
+
+.diagnostics-skeleton-line--medium {
+  @apply w-2/3;
 }
 
 .diagnostics-toolbar {
@@ -1524,6 +1601,18 @@ function formatAge(value: string): string {
 
   .diagnostics-feedback-values {
     @apply grid-cols-3 gap-2 border-t border-stone-200 pt-2 text-left;
+  }
+}
+
+@keyframes diagnostics-skeleton-shimmer {
+  to {
+    background-position: -120% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .diagnostics-skeleton-line {
+    animation: none;
   }
 }
 </style>

@@ -20,10 +20,36 @@
       </div>
     </div>
 
-    <LoadingInline v-if="isLoading" class="trending-hub-empty trending-hub-loading" label="正在加载热门项目..." tone="muted" />
-    <p v-else-if="projects.length === 0" class="trending-hub-empty">当前没有可展示的热门项目。</p>
+    <div
+      v-if="isLoading && projects.length === 0"
+      class="trending-hub-grid trending-hub-skeleton-grid"
+      role="status"
+      aria-label="正在加载热门项目"
+    >
+      <article v-for="index in 6" :key="index" class="trending-card trending-card-skeleton" aria-hidden="true">
+        <span class="trending-skeleton-line trending-skeleton-line--title" />
+        <span class="trending-skeleton-line trending-skeleton-line--short" />
+        <span class="trending-skeleton-line" />
+        <span class="trending-skeleton-line" />
+        <span class="trending-skeleton-action" />
+      </article>
+    </div>
+    <p
+      v-else-if="projects.length === 0"
+      class="trending-hub-empty"
+      :class="{ 'trending-hub-error': error }"
+      :role="error ? 'alert' : undefined"
+    >
+      {{ error ? `加载失败：${error}` : '当前没有可展示的热门项目。' }}
+    </p>
 
     <div v-else class="trending-hub-grid">
+      <p v-if="isLoading" class="trending-hub-refreshing" role="status" aria-live="polite">
+        正在刷新，当前项目仍可浏览…
+      </p>
+      <p v-else-if="error" class="trending-hub-refreshing trending-hub-error" role="status">
+        刷新失败，已保留当前项目：{{ error }}
+      </p>
       <article
         v-for="project in projects"
         :key="project.id"
@@ -88,13 +114,13 @@
 <script setup lang="ts">
 import { defineAsyncComponent } from 'vue'
 import type { GithubTipsScope, GithubTrendingProject } from '../../api/codexGateway'
-import LoadingInline from './LoadingInline.vue'
 
 const ComposerDropdown = defineAsyncComponent(() => import('./ComposerDropdown.vue'))
 
 const props = defineProps<{
   projects: GithubTrendingProject[]
   isLoading: boolean
+  error: string
   scope: GithubTipsScope
   scopeOptions: Array<{ value: GithubTipsScope; label: string }>
 }>()
@@ -163,16 +189,48 @@ function showProjectDetails(project: GithubTrendingProject): boolean {
   @apply m-0 rounded-2xl border border-dashed border-[#ddd5c7] bg-[#faf6ef] px-4 py-5 text-sm text-[#7b7062];
 }
 
-.trending-hub-loading {
-  @apply flex w-full items-center;
+.trending-hub-error {
+  @apply border-red-200 bg-red-50 text-red-700;
 }
 
 .trending-hub-grid {
   @apply grid gap-3 md:grid-cols-2 xl:grid-cols-3;
 }
 
+.trending-hub-refreshing {
+  @apply col-span-full m-0 rounded-xl border border-[#e3d8c8] bg-[#faf6ef] px-3 py-2 text-xs text-[#6d6354];
+}
+
 .trending-card {
   @apply flex min-h-[18rem] flex-col rounded-[24px] border border-[#e3d8c8] bg-white px-4 py-4 shadow-[0_14px_35px_-28px_rgba(31,41,55,0.28)];
+}
+
+.trending-card-skeleton {
+  @apply gap-3 shadow-none;
+}
+
+.trending-skeleton-line,
+.trending-skeleton-action {
+  @apply block rounded-lg bg-[#f3ede3];
+  background-image: linear-gradient(100deg, transparent 20%, rgb(255 255 255 / 0.72) 42%, transparent 64%);
+  background-size: 220% 100%;
+  animation: trending-skeleton-shimmer 1.25s ease-in-out infinite;
+}
+
+.trending-skeleton-line {
+  @apply h-4 w-full;
+}
+
+.trending-skeleton-line--title {
+  @apply h-6 w-2/3;
+}
+
+.trending-skeleton-line--short {
+  @apply w-2/5;
+}
+
+.trending-skeleton-action {
+  @apply mt-auto h-10 w-24;
 }
 
 .trending-card-head {
@@ -258,5 +316,18 @@ function showProjectDetails(project: GithubTrendingProject): boolean {
 
 .trending-card-action-primary {
   @apply border-[#0f766e] bg-[#0f766e] text-white hover:border-[#0b5e58] hover:bg-[#0b5e58];
+}
+
+@keyframes trending-skeleton-shimmer {
+  to {
+    background-position: -120% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trending-skeleton-line,
+  .trending-skeleton-action {
+    animation: none;
+  }
 }
 </style>

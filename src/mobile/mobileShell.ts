@@ -116,8 +116,10 @@ export type MobileShellTaskPetItem = {
   threadId: string
   clientMessageId?: string
   activityId?: string
+  activeTurnId?: string
   startedAtMs?: number
   lastEventSeq?: number
+  executionState?: string
   title: string
   projectName: string
   detail: string
@@ -137,7 +139,15 @@ export type MobileShellTaskPetMonitorDiagnostics = {
   stickyRestartCount: number
   taskRemovedCount: number
   lastStartCommandAtMs: number
-  lastStartReason: 'none' | 'update' | 'mobile_push' | 'mark_read' | 'sticky_restart'
+  lastStartReason:
+    | 'none'
+    | 'update'
+    | 'mobile_push'
+    | 'mark_read'
+    | 'no_progress_review'
+    | 'notification_reply'
+    | 'notification_stop'
+    | 'sticky_restart'
   lastTaskRemovedAtMs: number
   activeTaskCount: number
   eventStreamState: 'starting' | 'connecting' | 'connected' | 'retrying' | 'idle' | 'stopped'
@@ -172,7 +182,7 @@ export type MobileShellTaskPetMonitorDiagnostics = {
     | 'reply_retry_posted'
     | 'reply_retry_blocked'
     | 'reply_retry_channel_blocked'
-  lastCompletionNotificationBodySource: 'none' | 'latest_reply' | 'detail' | 'reply_retry'
+  lastCompletionNotificationBodySource: 'none' | 'title_only' | 'reply_retry'
   connectivityCallbackRegistered: boolean
   networkRecoveryCount: number
   lastDefaultNetworkAvailableAtMs: number

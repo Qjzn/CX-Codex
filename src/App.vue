@@ -668,6 +668,7 @@
             <GithubTrendingHub
               :projects="trendingProjects"
               :is-loading="isTrendingProjectsLoading"
+              :error="trendingProjectsError"
               :scope="githubTipsScope"
               :scope-options="githubTipsScopeOptions"
               @update:scope="onGithubTipsScopeChange"
@@ -772,7 +773,7 @@
                 @login-plugin="loginComposerPlugin" />
             </div>
           </template>
-          <template v-else>
+          <template v-else-if="isThreadRoute">
             <div class="content-grid">
               <div class="content-thread">
                 <ThreadConversation ref="threadConversationRef" :messages="displayedThreadMessages" :is-loading="isLoadingMessages || isManualThreadRefreshRunning"
@@ -851,6 +852,7 @@
               </div>
             </div>
           </template>
+          <PageLoadingSkeleton v-else />
         </section>
       </section>
     </template>
@@ -975,6 +977,7 @@
   </Teleport>
 
   <FavoritesModal
+    v-if="isFavoritesModalVisible"
     :visible="isFavoritesModalVisible"
     :favorites="displayFavorites"
     :active-thread-id="displayedThreadConversationId"
@@ -991,17 +994,13 @@
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import DesktopLayout from './components/layout/DesktopLayout.vue'
-import SidebarThreadTree from './components/sidebar/SidebarThreadTree.vue'
 import ContentHeader from './components/content/ContentHeader.vue'
-import ThreadConversation from './components/content/ThreadConversation.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
-import QueuedMessages from './components/content/QueuedMessages.vue'
-import RateLimitStatus from './components/content/RateLimitStatus.vue'
 import ComposerDropdown from './components/content/ComposerDropdown.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
-import FavoritesModal from './components/content/FavoritesModal.vue'
-import TaskPetPreview from './components/mobile/TaskPetPreview.vue'
-import RemoteAccessCard from './components/settings/RemoteAccessCard.vue'
+import PageLoadingSkeleton from './components/content/PageLoadingSkeleton.vue'
+import ConversationLoadingSkeleton from './components/content/ConversationLoadingSkeleton.vue'
+import SidebarLoadingSkeleton from './components/sidebar/SidebarLoadingSkeleton.vue'
 import IconTablerBolt from './components/icons/IconTablerBolt.vue'
 import IconTablerBroom from './components/icons/IconTablerBroom.vue'
 import IconTablerBookmark from './components/icons/IconTablerBookmark.vue'
@@ -1092,11 +1091,42 @@ import {
   type MobileLatestRelease,
 } from './mobile/mobileRelease'
 
-const SkillsHub = defineAsyncComponent(() => import('./components/content/SkillsHub.vue'))
-const WorkspaceWorkbench = defineAsyncComponent(() => import('./components/content/WorkspaceWorkbench.vue'))
-const GithubTrendingHub = defineAsyncComponent(() => import('./components/content/GithubTrendingHub.vue'))
+const SkillsHub = defineAsyncComponent({
+  loader: () => import('./components/content/SkillsHub.vue'),
+  loadingComponent: PageLoadingSkeleton,
+  delay: 100,
+})
+const SidebarThreadTree = defineAsyncComponent({
+  loader: () => import('./components/sidebar/SidebarThreadTree.vue'),
+  loadingComponent: SidebarLoadingSkeleton,
+  delay: 0,
+})
+const ThreadConversation = defineAsyncComponent({
+  loader: () => import('./components/content/ThreadConversation.vue'),
+  loadingComponent: ConversationLoadingSkeleton,
+  delay: 100,
+})
+const QueuedMessages = defineAsyncComponent(() => import('./components/content/QueuedMessages.vue'))
+const RateLimitStatus = defineAsyncComponent(() => import('./components/content/RateLimitStatus.vue'))
+const FavoritesModal = defineAsyncComponent(() => import('./components/content/FavoritesModal.vue'))
+const TaskPetPreview = defineAsyncComponent(() => import('./components/mobile/TaskPetPreview.vue'))
+const RemoteAccessCard = defineAsyncComponent(() => import('./components/settings/RemoteAccessCard.vue'))
+const WorkspaceWorkbench = defineAsyncComponent({
+  loader: () => import('./components/content/WorkspaceWorkbench.vue'),
+  loadingComponent: PageLoadingSkeleton,
+  delay: 100,
+})
+const GithubTrendingHub = defineAsyncComponent({
+  loader: () => import('./components/content/GithubTrendingHub.vue'),
+  loadingComponent: PageLoadingSkeleton,
+  delay: 100,
+})
 const ComposerRuntimeDropdown = defineAsyncComponent(() => import('./components/content/ComposerRuntimeDropdown.vue'))
-const DiagnosticsPanel = defineAsyncComponent(() => import('./components/content/DiagnosticsPanel.vue'))
+const DiagnosticsPanel = defineAsyncComponent({
+  loader: () => import('./components/content/DiagnosticsPanel.vue'),
+  loadingComponent: PageLoadingSkeleton,
+  delay: 100,
+})
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
@@ -1423,6 +1453,7 @@ const threadConversationRef = ref<ThreadConversationExposed | null>(null)
 const sidebarSettingsAreaRef = ref<HTMLElement | null>(null)
 const trendingProjects = ref<GithubTrendingProject[]>([])
 const isTrendingProjectsLoading = ref(false)
+const trendingProjectsError = ref('')
 const githubTipsScope = ref<GithubTipsScope>('trending-daily')
 const lastLoadedGithubTipsScope = ref<GithubTipsScope | ''>('')
 const isManualThreadRefreshRunning = ref(false)
@@ -1520,8 +1551,10 @@ const mobileShellTaskPetItems = computed<MobileShellTaskPetItem[]>(() => {
     threadId: item.threadId,
     clientMessageId: item.clientMessageId,
     activityId: item.activityId,
+    activeTurnId: item.activeTurnId,
     startedAtMs: item.startedAtMs,
     lastEventSeq: item.lastEventSeq,
+    executionState: item.executionState,
     title: item.title,
     projectName: item.projectName,
     detail: item.detail,
@@ -1539,8 +1572,10 @@ const mobileShellTaskPetItems = computed<MobileShellTaskPetItem[]>(() => {
       threadId: '',
       clientMessageId: preview.clientMessageId,
       activityId: `request:${preview.clientMessageId}`,
+      activeTurnId: '',
       startedAtMs: preview.liveOverlay?.startedAtMs,
       lastEventSeq: 0,
+      executionState: deliveryState === 'confirming' ? 'start_uncertain' : 'starting',
       title,
       projectName: getPathLeafName(preview.cwd) || preview.cwd,
       detail: deliveryState === 'waiting'
@@ -1619,6 +1654,7 @@ const routableThreadIdSet = computed(() => {
 })
 
 const isHomeRoute = computed(() => route.name === 'home')
+const isThreadRoute = computed(() => route.name === 'thread')
 const isWorkbenchRoute = computed(() => route.name === 'workbench')
 const isSkillsRoute = computed(() => route.name === 'skills')
 const isGithubTrendingRoute = computed(() => route.name === 'github-trending')
@@ -2460,11 +2496,6 @@ watch(
       displayedThreadMessages.value.length > 0 ||
       displayedThreadPendingRequests.value.length > 0 ||
       displayedThreadLiveOverlay.value !== null
-    const hasNextConversation =
-      nextMessages.length > 0 ||
-      nextPendingRequests.length > 0 ||
-      nextLiveOverlay !== null
-
     if (!nextThreadId || homeRoute) {
       isThreadContentSwitching.value = false
       displayedThreadConversationId.value = nextThreadId
@@ -2478,16 +2509,6 @@ watch(
 
     const isSwitchingToAnotherThread = displayedThreadConversationId.value !== '' && displayedThreadConversationId.value !== nextThreadId
     if (loading && isSwitchingToAnotherThread && hasDisplayedConversation) {
-      if (!hasNextConversation) {
-        displayedThreadConversationId.value = nextThreadId
-        displayedThreadCwd.value = nextCwd
-        displayedThreadMessages.value = []
-        displayedThreadPendingRequests.value = []
-        displayedThreadLiveOverlay.value = null
-        displayedThreadScrollState.value = nextScrollState
-        isThreadContentSwitching.value = false
-        return
-      }
       isThreadContentSwitching.value = true
       return
     }
@@ -3656,6 +3677,7 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
       : undefined
   editingQueuedMessageState.value = null
   if (isHomeRoute.value) {
+    if (newThreadSubmitInFlight || isSendingMessage.value || pendingNewThreadPreview.value) return
     void submitFirstMessageForNewThread(
       text,
       payload.imageUrls,
@@ -3710,10 +3732,8 @@ function onGithubTipsScopeChange(nextValue: string): void {
 }
 
 function onRefreshTrendingProjects(): void {
-  trendingProjectsRequestToken += 1
-  lastLoadedGithubTipsScope.value = ''
   cancelPendingTrendingProjectsLoad()
-  scheduleTrendingProjectsLoad('immediate')
+  void loadTrendingProjects(githubTipsScope.value)
 }
 
 async function onRefreshSelectedThreadContent(): Promise<void> {
@@ -4071,6 +4091,11 @@ async function loadWorkspaceRootOptionsState(): Promise<void> {
 
 async function loadTrendingProjects(scope: GithubTipsScope = githubTipsScope.value): Promise<void> {
   const requestToken = ++trendingProjectsRequestToken
+  const isScopeChange = Boolean(lastLoadedGithubTipsScope.value) && lastLoadedGithubTipsScope.value !== scope
+  if (isScopeChange) {
+    trendingProjects.value = []
+  }
+  trendingProjectsError.value = ''
   isTrendingProjectsLoading.value = true
   try {
     const rows = await getGithubProjectsForScope(scope, 10)
@@ -4079,10 +4104,12 @@ async function loadTrendingProjects(scope: GithubTipsScope = githubTipsScope.val
     if (scope !== githubTipsScope.value) return
     trendingProjects.value = rows
     lastLoadedGithubTipsScope.value = scope
-  } catch {
+  } catch (error) {
     if (requestToken !== trendingProjectsRequestToken) return
-    trendingProjects.value = []
-    lastLoadedGithubTipsScope.value = ''
+    trendingProjectsError.value = error instanceof Error ? error.message : '加载热门项目失败'
+    if (isScopeChange) {
+      lastLoadedGithubTipsScope.value = ''
+    }
   } finally {
     if (requestToken === trendingProjectsRequestToken) {
       isTrendingProjectsLoading.value = false
@@ -4673,6 +4700,7 @@ watch(
       trendingProjectsRequestToken += 1
       isTrendingProjectsLoading.value = false
       trendingProjects.value = []
+      trendingProjectsError.value = ''
       lastLoadedGithubTipsScope.value = ''
       return
     }
@@ -4773,7 +4801,37 @@ watch(isMobile, (mobile) => {
   }
 }, { immediate: true })
 
-async function submitFirstMessageForNewThread(
+let newThreadSubmitInFlight: Promise<string> | null = null
+
+function submitFirstMessageForNewThread(
+  text: string,
+  imageUrls: string[] = [],
+  skills: Array<{ name: string; path: string }> = [],
+  fileAttachments: Array<{ label: string; path: string; fsPath: string }> = [],
+  collaborationMode: CollaborationMode = selectedCollaborationMode.value,
+  turnOptions?: ComposerTurnOptions,
+  feedbackStartedAtMs?: number,
+): Promise<string> {
+  if (newThreadSubmitInFlight) return newThreadSubmitInFlight
+
+  const request = Promise.resolve().then(() => submitFirstMessageForNewThreadOnce(
+    text,
+    imageUrls,
+    skills,
+    fileAttachments,
+    collaborationMode,
+    turnOptions,
+    feedbackStartedAtMs,
+  ))
+  newThreadSubmitInFlight = request
+  const clearInFlight = (): void => {
+    if (newThreadSubmitInFlight === request) newThreadSubmitInFlight = null
+  }
+  void request.then(clearInFlight, clearInFlight)
+  return request
+}
+
+async function submitFirstMessageForNewThreadOnce(
   text: string,
   imageUrls: string[] = [],
   skills: Array<{ name: string; path: string }> = [],

@@ -1,5 +1,10 @@
 <template>
-  <div class="loading-inline" :class="[compact ? 'loading-inline--compact' : '', `loading-inline--${tone}`]">
+  <div
+    class="loading-inline"
+    :class="[compact ? 'loading-inline--compact' : '', `loading-inline--${tone}`]"
+    role="status"
+    aria-live="polite"
+  >
     <span class="loading-inline-marker" aria-hidden="true">
       <span class="loading-inline-marker-ring" />
       <span class="loading-inline-marker-core" />

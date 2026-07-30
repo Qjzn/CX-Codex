@@ -2750,18 +2750,24 @@ export async function getSkillsList(cwds?: string[]): Promise<SkillInfo[]> {
   }
 }
 
-export async function uploadFile(file: File): Promise<string | null> {
-  try {
-    const form = new FormData()
-    form.append('file', file)
-    const resp = await fetchWithTimeout('/codex-api/upload-file', { method: 'POST', body: form }, {
-      timeoutMs: GATEWAY_UPLOAD_FETCH_TIMEOUT_MS,
-      label: 'Upload file request',
-    })
-    if (!resp.ok) return null
-    const data = (await resp.json()) as { path?: string }
-    return data.path ?? null
-  } catch {
-    return null
+export async function uploadFile(file: File, options: RpcCallOptions = {}): Promise<string> {
+  const form = new FormData()
+  form.append('file', file)
+  const resp = await fetchWithTimeout('/codex-api/upload-file', {
+    method: 'POST',
+    body: form,
+    signal: options.signal,
+  }, {
+    timeoutMs: GATEWAY_UPLOAD_FETCH_TIMEOUT_MS,
+    label: 'Upload file request',
+  })
+  const data = await resp.json().catch(() => null) as { path?: string; error?: string } | null
+  if (!resp.ok) {
+    throw new Error(data?.error?.trim() || `文件上传失败（HTTP ${resp.status}）`)
   }
+  const path = data?.path?.trim() ?? ''
+  if (!path) {
+    throw new Error('文件上传成功，但服务端未返回可用路径。')
+  }
+  return path
 }

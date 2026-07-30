@@ -47,9 +47,45 @@
         'thread-composer-shell--expanded': isComposerExpanded,
       }"
     >
-      <div v-if="selectedImages.length > 0" class="thread-composer-attachments">
-        <div v-for="image in selectedImages" :key="image.id" class="thread-composer-attachment">
+      <div
+        v-if="selectedImages.length > 0"
+        class="thread-composer-attachments"
+        role="status"
+        aria-live="polite"
+      >
+        <div
+          v-for="image in selectedImages"
+          :key="image.id"
+          class="thread-composer-attachment"
+          :class="`thread-composer-attachment--${image.status}`"
+        >
           <img class="thread-composer-attachment-image" :src="image.previewUrl" :alt="image.name || '已选图片'" />
+          <span
+            v-if="image.status === 'uploading'"
+            class="thread-composer-attachment-status"
+            role="progressbar"
+            :aria-label="`正在上传 ${image.name || '图片'}`"
+          >
+            <span class="thread-composer-upload-spinner" aria-hidden="true" />
+          </span>
+          <span
+            v-else-if="image.status === 'error'"
+            class="thread-composer-attachment-status thread-composer-attachment-status--error"
+            role="alert"
+            :title="image.errorMessage"
+          >
+            上传失败
+          </span>
+          <button
+            v-if="image.status === 'error'"
+            class="thread-composer-attachment-retry"
+            type="button"
+            :aria-label="`重新上传 ${image.name || '图片'}`"
+            :disabled="isInteractionDisabled"
+            @click="retryImageUpload(image.id)"
+          >
+            重试
+          </button>
           <button
             class="thread-composer-attachment-remove"
             type="button"
@@ -70,16 +106,67 @@
             <template v-if="group.isUploading">
               {{ getFolderUploadPercent(group) }}% 上传中（{{ group.processed }}/{{ group.total }}）
             </template>
+            <template v-else-if="group.failed > 0">
+              {{ group.filePaths.length }} 个成功，{{ group.failed }} 个失败
+            </template>
             <template v-else>
               {{ group.filePaths.length }} 个文件
             </template>
           </span>
           <button
+            v-if="!group.isUploading && group.failed > 0"
+            class="thread-composer-folder-chip-retry"
+            type="button"
+            :aria-label="`重试文件夹 ${group.name} 中上传失败的文件`"
+            :disabled="isInteractionDisabled"
+            @click="retryFolderUpload(group.id)"
+          >
+            重试
+          </button>
+          <button
             class="thread-composer-folder-chip-remove"
             type="button"
-            :aria-label="`移除文件夹 ${group.name}`"
+            :aria-label="group.isUploading ? `取消上传文件夹 ${group.name}` : `移除文件夹 ${group.name}`"
             :disabled="isInteractionDisabled"
             @click="removeFolderAttachment(group.id)"
+          >×</button>
+        </span>
+      </div>
+
+      <div v-if="pendingFileUploads.length > 0" class="thread-composer-file-chips" aria-live="polite">
+        <span
+          v-for="upload in pendingFileUploads"
+          :key="upload.id"
+          class="thread-composer-file-chip"
+          :class="`thread-composer-file-chip--${upload.status}`"
+        >
+          <IconTablerFilePencil class="thread-composer-file-chip-icon" />
+          <span class="thread-composer-file-chip-name" :title="upload.errorMessage || upload.label">
+            {{ upload.label }}
+          </span>
+          <span v-if="upload.status === 'uploading'" class="thread-composer-file-chip-status">
+            <span class="thread-composer-upload-spinner thread-composer-upload-spinner--small" aria-hidden="true" />
+            上传中
+          </span>
+          <span v-else class="thread-composer-file-chip-status thread-composer-file-chip-status--error">
+            上传失败
+          </span>
+          <button
+            v-if="upload.status === 'error'"
+            class="thread-composer-file-chip-retry"
+            type="button"
+            :aria-label="`重新上传 ${upload.label}`"
+            :disabled="isInteractionDisabled"
+            @click="retryFileUpload(upload.id)"
+          >
+            重试
+          </button>
+          <button
+            class="thread-composer-file-chip-remove"
+            type="button"
+            :aria-label="upload.status === 'uploading' ? `取消上传 ${upload.label}` : `移除 ${upload.label}`"
+            :disabled="isInteractionDisabled"
+            @click="removePendingFileUpload(upload.id)"
           >×</button>
         </span>
       </div>
@@ -97,6 +184,10 @@
           >×</button>
         </span>
       </div>
+
+      <p v-if="attachmentUploadFailureMessage" class="thread-composer-upload-feedback" role="alert">
+        {{ attachmentUploadFailureMessage }}
+      </p>
 
       <div v-if="selectedSkills.length > 0" class="thread-composer-skill-chips">
         <span v-for="skill in selectedSkills" :key="skill.path" class="thread-composer-skill-chip">
@@ -181,6 +272,10 @@
               </span>
             </button>
           </template>
+          <div v-else-if="isFileMentionSearching" class="thread-composer-file-mention-loading" role="status">
+            <span class="thread-composer-upload-spinner thread-composer-upload-spinner--small" aria-hidden="true" />
+            正在查找文件…
+          </div>
           <div v-else class="thread-composer-file-mention-empty">没有匹配文件</div>
         </div>
         <textarea
@@ -220,24 +315,27 @@
             +
           </button>
 
-          <button
-            v-if="isAttachMenuOpen && isCompactViewport"
-            class="thread-composer-mobile-backdrop"
-            type="button"
-            aria-label="关闭附件菜单"
-            @pointerdown.stop.prevent="closeAttachMenu()"
-            @click="closeAttachMenu()"
-          />
-          <div
-            v-if="isAttachMenuOpen"
-            ref="attachMenuRef"
-            class="thread-composer-attach-menu"
-            :class="{ 'thread-composer-attach-menu--sheet': isCompactViewport }"
-            role="dialog"
-            aria-label="添加内容和功能"
-            :aria-modal="isCompactViewport ? 'true' : undefined"
-            @keydown="onAttachMenuKeydown"
-          >
+          <Transition name="composer-backdrop">
+            <button
+              v-if="isAttachMenuOpen && isCompactViewport"
+              class="thread-composer-mobile-backdrop"
+              type="button"
+              aria-label="关闭附件菜单"
+              @pointerdown.stop.prevent="closeAttachMenu()"
+              @click="closeAttachMenu()"
+            />
+          </Transition>
+          <Transition name="composer-attach-menu">
+            <div
+              v-if="isAttachMenuOpen"
+              ref="attachMenuRef"
+              class="thread-composer-attach-menu"
+              :class="{ 'thread-composer-attach-menu--sheet': isCompactViewport }"
+              role="dialog"
+              aria-label="添加内容和功能"
+              :aria-modal="isCompactViewport ? 'true' : undefined"
+              @keydown="onAttachMenuKeydown"
+            >
             <div v-show="!isCompactViewport || !isPluginSubmenuOpen" class="thread-composer-attach-main">
             <button
               class="thread-composer-attach-item"
@@ -412,7 +510,8 @@
                 @toggle="onSkillDropdownToggle"
               />
             </div>
-          </div>
+            </div>
+          </Transition>
         </div>
 
         <div v-if="!isDictationRecording" class="thread-composer-control-strip" aria-label="发送设置">
@@ -752,6 +851,16 @@ type SelectedImage = {
   name: string
   url: string
   previewUrl: string
+  status: 'uploading' | 'ready' | 'error'
+  errorMessage: string
+  objectUrl: string
+}
+
+type PendingFileUpload = {
+  id: string
+  label: string
+  status: 'uploading' | 'error'
+  errorMessage: string
 }
 
 type FolderUploadGroup = {
@@ -759,6 +868,7 @@ type FolderUploadGroup = {
   name: string
   total: number
   processed: number
+  failed: number
   filePaths: string[]
   isUploading: boolean
 }
@@ -776,7 +886,11 @@ const goalModeEnabled = ref(false)
 const goalText = ref('')
 const pluginSearchQuery = ref('')
 const fileAttachments = ref<FileAttachment[]>([])
+const pendingFileUploads = ref<PendingFileUpload[]>([])
 const folderUploadGroups = ref<FolderUploadGroup[]>([])
+const uploadFilesById = new Map<string, File>()
+const uploadControllersById = new Map<string, AbortController>()
+const failedFolderFilesByGroupId = new Map<string, File[]>()
 
 const dictationFeedback = ref('')
 const dictationFeedbackTone = ref<DictationFeedbackTone>('neutral')
@@ -841,6 +955,7 @@ const mentionStartIndex = ref<number | null>(null)
 const mentionQuery = ref('')
 const fileMentionSuggestions = ref<ComposerFileSuggestion[]>([])
 const isFileMentionOpen = ref(false)
+const isFileMentionSearching = ref(false)
 const fileMentionHighlightedIndex = ref(0)
 const isCompactViewport = ref(
   typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
@@ -853,6 +968,11 @@ let dictationShouldRollbackLatestUserTurn = false
 const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)
 const DRAFT_STORAGE_PREFIX = 'codex-web-local.thread-draft.v1.'
 const MOBILE_STOP_GUARD_MS = 2500
+const MAX_ATTACHMENT_BYTES = 48 * 1024 * 1024
+const FOLDER_UPLOAD_CONCURRENCY = 3
+const STANDALONE_UPLOAD_CONCURRENCY = 3
+const standaloneUploadQueue: Array<() => Promise<void>> = []
+let activeStandaloneUploadCount = 0
 let lastActiveThreadId = ''
 let stopGuardTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -996,12 +1116,31 @@ const skillDropdownOptions = computed(() =>
 const pendingCapabilityCount = computed(() => (
   pendingRestoredSkills.value.length + pendingRestoredPlugins.value.length
 ))
+const activeUploadCount = computed(() => (
+  selectedImages.value.filter((image) => image.status === 'uploading').length
+  + pendingFileUploads.value.filter((upload) => upload.status === 'uploading').length
+  + folderUploadGroups.value.reduce((count, group) => count + (group.isUploading ? 1 : 0), 0)
+))
+const hasUploadFailures = computed(() => (
+  selectedImages.value.some((image) => image.status === 'error')
+  || pendingFileUploads.value.some((upload) => upload.status === 'error')
+  || folderUploadGroups.value.some((group) => group.failed > 0)
+))
+const attachmentUploadFailureMessage = computed(() => {
+  const imageError = selectedImages.value.find((image) => image.status === 'error')?.errorMessage
+  if (imageError) return imageError
+  const fileError = pendingFileUploads.value.find((upload) => upload.status === 'error')?.errorMessage
+  if (fileError) return fileError
+  const folder = folderUploadGroups.value.find((group) => group.failed > 0)
+  return folder ? `${folder.name} 有 ${folder.failed} 个文件上传失败，请重试或移除。` : ''
+})
 
 const canSubmit = computed(() => {
   if (props.disabled) return false
   if (props.isUpdatingSpeedMode) return false
   if (!props.activeThreadId) return false
   if (pendingCapabilityCount.value > 0) return false
+  if (activeUploadCount.value > 0 || hasUploadFailures.value) return false
   return draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0
 })
 const hasUnsavedDraft = computed(() =>
@@ -1012,6 +1151,7 @@ const hasUnsavedDraft = computed(() =>
   || pendingCapabilityCount.value > 0
   || goalModeEnabled.value
   || fileAttachments.value.length > 0
+  || pendingFileUploads.value.length > 0
   || folderUploadGroups.value.length > 0,
 )
 const standaloneFileAttachments = computed(() => {
@@ -1032,6 +1172,12 @@ const collaborationModeHintText = computed(() => {
     : ''
 })
 const submitActionLabel = computed(() => {
+  if (activeUploadCount.value > 0) {
+    return `等待 ${activeUploadCount.value} 项附件上传完成`
+  }
+  if (hasUploadFailures.value) {
+    return '请重试或移除上传失败的附件'
+  }
   if (props.isTurnInProgress) {
     return props.selectedCollaborationMode === 'plan'
       ? '加入计划消息队列'
@@ -1081,7 +1227,11 @@ const placeholderText = computed(() =>
   props.activeThreadId ? '向 Codex 提问，+ 添加功能' : '请先选择一个会话再发送消息',
 )
 const hasSubmitContent = computed(() =>
-  draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0,
+  draft.value.trim().length > 0
+  || selectedImages.value.length > 0
+  || fileAttachments.value.length > 0
+  || pendingFileUploads.value.length > 0
+  || folderUploadGroups.value.length > 0,
 )
 const isStopGuardActive = ref(false)
 const shouldUseStopGuard = computed(() => isAndroid || isCompactViewport.value)
@@ -1270,6 +1420,7 @@ function reconcilePendingRestoredPlugins(): void {
 }
 
 function replaceDraftState(payload: ComposerDraftPayload): void {
+  cancelAndReleaseDraftUploads()
   draftGeneration.value += 1
   draft.value = payload.text
   selectedImages.value = payload.imageUrls.map((url, index) => ({
@@ -1277,6 +1428,9 @@ function replaceDraftState(payload: ComposerDraftPayload): void {
     name: `图片 ${index + 1}`,
     url,
     previewUrl: toRenderableImageUrl(url),
+    status: 'ready',
+    errorMessage: '',
+    objectUrl: '',
   }))
   selectedSkills.value = []
   selectedPlugins.value = []
@@ -1287,6 +1441,7 @@ function replaceDraftState(payload: ComposerDraftPayload): void {
   goalModeEnabled.value = payload.goal?.enabled === true
   goalText.value = payload.goal?.text ?? ''
   fileAttachments.value = payload.fileAttachments.map((attachment) => ({ ...attachment }))
+  pendingFileUploads.value = []
   folderUploadGroups.value = []
   clearDictationFeedback()
   isAttachMenuOpen.value = false
@@ -1736,6 +1891,12 @@ async function onAudioCaptureChange(event: Event): Promise<void> {
 }
 
 function removeImage(id: string): void {
+  const image = selectedImages.value.find((item) => item.id === id)
+  cancelUpload(id)
+  uploadFilesById.delete(id)
+  if (image?.objectUrl) {
+    URL.revokeObjectURL(image.objectUrl)
+  }
   selectedImages.value = selectedImages.value.filter((image) => image.id !== id)
 }
 
@@ -1747,9 +1908,17 @@ function removeFileAttachment(fsPath: string): void {
   fileAttachments.value = fileAttachments.value.filter((a) => a.fsPath !== fsPath)
 }
 
+function removePendingFileUpload(id: string): void {
+  cancelUpload(id)
+  uploadFilesById.delete(id)
+  pendingFileUploads.value = pendingFileUploads.value.filter((upload) => upload.id !== id)
+}
+
 function removeFolderAttachment(groupId: string): void {
   const group = folderUploadGroups.value.find((item) => item.id === groupId)
   if (!group) return
+  cancelUpload(groupId)
+  failedFolderFilesByGroupId.delete(groupId)
   const toRemove = new Set(group.filePaths)
   fileAttachments.value = fileAttachments.value.filter((a) => !toRemove.has(a.fsPath))
   folderUploadGroups.value = folderUploadGroups.value.filter((item) => item.id !== groupId)
@@ -1773,23 +1942,175 @@ function isImageFile(file: File): boolean {
   return /\.(png|jpe?g|gif|webp)$/i.test(file.name)
 }
 
-function appendSelectedImage(name: string, url: string): void {
-  selectedImages.value.push({
-    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    name,
-    url,
-    previewUrl: toRenderableImageUrl(url),
-  })
+function createUploadId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
-function appendImageFromReader(file: File, generation: number): void {
-  const reader = new FileReader()
-  reader.onload = () => {
-    if (generation !== draftGeneration.value) return
-    if (typeof reader.result !== 'string') return
-    appendSelectedImage(file.name, reader.result)
+function cancelUpload(id: string): void {
+  const controller = uploadControllersById.get(id)
+  if (controller) {
+    controller.abort()
+    uploadControllersById.delete(id)
   }
-  reader.readAsDataURL(file)
+}
+
+function drainStandaloneUploadQueue(): void {
+  while (
+    activeStandaloneUploadCount < STANDALONE_UPLOAD_CONCURRENCY
+    && standaloneUploadQueue.length > 0
+  ) {
+    const task = standaloneUploadQueue.shift()
+    if (!task) return
+    activeStandaloneUploadCount += 1
+    void task().finally(() => {
+      activeStandaloneUploadCount = Math.max(0, activeStandaloneUploadCount - 1)
+      drainStandaloneUploadQueue()
+    })
+  }
+}
+
+function scheduleStandaloneUpload(task: () => Promise<void>): void {
+  standaloneUploadQueue.push(task)
+  drainStandaloneUploadQueue()
+}
+
+function cancelAndReleaseDraftUploads(): void {
+  for (const controller of uploadControllersById.values()) {
+    controller.abort()
+  }
+  uploadControllersById.clear()
+  uploadFilesById.clear()
+  failedFolderFilesByGroupId.clear()
+  standaloneUploadQueue.splice(0, standaloneUploadQueue.length)
+  for (const image of selectedImages.value) {
+    if (image.objectUrl) {
+      URL.revokeObjectURL(image.objectUrl)
+    }
+  }
+}
+
+function isAttachmentTooLarge(file: File): boolean {
+  return file.size > MAX_ATTACHMENT_BYTES
+}
+
+function getUploadErrorMessage(error: unknown, file: File): string {
+  if (isAttachmentTooLarge(file)) {
+    return '单个附件不能超过 48 MB。'
+  }
+  if (error instanceof Error && /timed out|timeout|超时/iu.test(error.message)) {
+    return '上传超时，请检查连接后重试。'
+  }
+  if (error instanceof Error && /too large|413|request size/iu.test(error.message)) {
+    return '附件超过服务端允许的大小。'
+  }
+  return error instanceof Error && error.message.trim()
+    ? error.message.trim()
+    : '上传失败，请重试。'
+}
+
+async function startImageUpload(id: string, generation: number): Promise<void> {
+  const file = uploadFilesById.get(id)
+  if (!file) return
+  const controller = new AbortController()
+  cancelUpload(id)
+  uploadControllersById.set(id, controller)
+  selectedImages.value = selectedImages.value.map((image) => (
+    image.id === id ? { ...image, status: 'uploading', errorMessage: '' } : image
+  ))
+  try {
+    if (isAttachmentTooLarge(file)) {
+      throw new Error('Attachment too large')
+    }
+    const serverPath = await uploadFile(file, { signal: controller.signal })
+    if (generation !== draftGeneration.value || controller.signal.aborted) return
+    selectedImages.value = selectedImages.value.map((image) => (
+      image.id === id
+        ? { ...image, url: serverPath, status: 'ready', errorMessage: '' }
+        : image
+    ))
+  } catch (error) {
+    if (generation !== draftGeneration.value || controller.signal.aborted) return
+    selectedImages.value = selectedImages.value.map((image) => (
+      image.id === id
+        ? { ...image, status: 'error', errorMessage: getUploadErrorMessage(error, file) }
+        : image
+    ))
+  } finally {
+    if (uploadControllersById.get(id) === controller) {
+      uploadControllersById.delete(id)
+    }
+  }
+}
+
+function retryImageUpload(id: string): void {
+  const generation = draftGeneration.value
+  scheduleStandaloneUpload(() => startImageUpload(id, generation))
+}
+
+function queueImageUpload(file: File, generation: number): void {
+  const id = createUploadId('image')
+  const objectUrl = URL.createObjectURL(file)
+  uploadFilesById.set(id, file)
+  selectedImages.value = [
+    ...selectedImages.value,
+    {
+      id,
+      name: file.name,
+      url: '',
+      previewUrl: objectUrl,
+      status: 'uploading',
+      errorMessage: '',
+      objectUrl,
+    },
+  ]
+  scheduleStandaloneUpload(() => startImageUpload(id, generation))
+}
+
+async function startFileUpload(id: string, generation: number): Promise<void> {
+  const file = uploadFilesById.get(id)
+  if (!file) return
+  const controller = new AbortController()
+  cancelUpload(id)
+  uploadControllersById.set(id, controller)
+  pendingFileUploads.value = pendingFileUploads.value.map((upload) => (
+    upload.id === id ? { ...upload, status: 'uploading', errorMessage: '' } : upload
+  ))
+  try {
+    if (isAttachmentTooLarge(file)) {
+      throw new Error('Attachment too large')
+    }
+    const serverPath = await uploadFile(file, { signal: controller.signal })
+    if (generation !== draftGeneration.value || controller.signal.aborted) return
+    addFileAttachment(serverPath, file.name)
+    pendingFileUploads.value = pendingFileUploads.value.filter((upload) => upload.id !== id)
+    uploadFilesById.delete(id)
+  } catch (error) {
+    if (generation !== draftGeneration.value || controller.signal.aborted) return
+    pendingFileUploads.value = pendingFileUploads.value.map((upload) => (
+      upload.id === id
+        ? { ...upload, status: 'error', errorMessage: getUploadErrorMessage(error, file) }
+        : upload
+    ))
+  } finally {
+    if (uploadControllersById.get(id) === controller) {
+      uploadControllersById.delete(id)
+    }
+  }
+}
+
+function retryFileUpload(id: string): void {
+  const generation = draftGeneration.value
+  scheduleStandaloneUpload(() => startFileUpload(id, generation))
+}
+
+function queueFileUpload(file: File, generation: number): void {
+  const id = createUploadId('file')
+  uploadFilesById.set(id, file)
+  pendingFileUploads.value = [
+    ...pendingFileUploads.value,
+    { id, label: file.name, status: 'uploading', errorMessage: '' },
+  ]
+  scheduleStandaloneUpload(() => startFileUpload(id, generation))
 }
 
 function addFiles(files: FileList | null): void {
@@ -1797,22 +2118,81 @@ function addFiles(files: FileList | null): void {
   const generation = draftGeneration.value
   for (const file of Array.from(files)) {
     if (isImageFile(file)) {
-      void uploadFile(file).then((serverPath) => {
-        if (generation !== draftGeneration.value) return
-        if (serverPath) {
-          appendSelectedImage(file.name, serverPath)
-          return
-        }
-        appendImageFromReader(file, generation)
-      }).catch(() => {
-        appendImageFromReader(file, generation)
-      })
+      queueImageUpload(file, generation)
     } else {
-      void uploadFile(file).then((serverPath) => {
-        if (generation !== draftGeneration.value) return
-        if (serverPath) addFileAttachment(serverPath)
-      }).catch(() => {})
+      queueFileUpload(file, generation)
     }
+  }
+}
+
+function updateFolderGroup(
+  groupId: string,
+  generation: number,
+  updater: (group: FolderUploadGroup) => FolderUploadGroup,
+): void {
+  if (generation !== draftGeneration.value) return
+  folderUploadGroups.value = folderUploadGroups.value.map((group) => (
+    group.id === groupId ? updater(group) : group
+  ))
+}
+
+async function uploadFolderFiles(groupId: string, rows: File[], generation: number): Promise<void> {
+  const controller = new AbortController()
+  cancelUpload(groupId)
+  uploadControllersById.set(groupId, controller)
+  const failedFiles: File[] = []
+  let cursor = 0
+
+  const worker = async (): Promise<void> => {
+    while (cursor < rows.length && !controller.signal.aborted) {
+      const file = rows[cursor]
+      cursor += 1
+      if (!file) continue
+      try {
+        if (isAttachmentTooLarge(file)) {
+          throw new Error('Attachment too large')
+        }
+        const serverPath = await uploadFile(file, { signal: controller.signal })
+        if (generation !== draftGeneration.value || controller.signal.aborted) return
+        const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+        addFileAttachment(serverPath, relativePath)
+        updateFolderGroup(groupId, generation, (group) => ({
+          ...group,
+          filePaths: [...group.filePaths, serverPath],
+        }))
+      } catch {
+        if (generation !== draftGeneration.value || controller.signal.aborted) return
+        failedFiles.push(file)
+        updateFolderGroup(groupId, generation, (group) => ({ ...group, failed: group.failed + 1 }))
+      } finally {
+        if (generation === draftGeneration.value && !controller.signal.aborted) {
+          updateFolderGroup(groupId, generation, (group) => ({
+            ...group,
+            processed: Math.min(group.total, group.processed + 1),
+          }))
+        }
+      }
+    }
+  }
+
+  const workerCount = rows.some((file) => file.size > 16 * 1024 * 1024)
+    ? 1
+    : FOLDER_UPLOAD_CONCURRENCY
+  await Promise.all(Array.from(
+    { length: Math.min(workerCount, rows.length) },
+    () => worker(),
+  ))
+
+  if (generation === draftGeneration.value && !controller.signal.aborted) {
+    updateFolderGroup(groupId, generation, (group) => ({ ...group, isUploading: false }))
+    if (failedFiles.length > 0) {
+      failedFolderFilesByGroupId.set(groupId, failedFiles)
+    } else {
+      failedFolderFilesByGroupId.delete(groupId)
+    }
+  }
+  if (uploadControllersById.get(groupId) === controller) {
+    uploadControllersById.delete(groupId)
   }
 }
 
@@ -1822,7 +2202,7 @@ async function addFolderFiles(files: FileList | null): Promise<void> {
   const rows = Array.from(files)
   const firstRelativePath = (rows[0] as File & { webkitRelativePath?: string }).webkitRelativePath || rows[0].name
   const folderName = firstRelativePath.split('/').filter(Boolean)[0] || '文件夹'
-  const groupId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const groupId = createUploadId('folder')
   folderUploadGroups.value = [
     ...folderUploadGroups.value,
     {
@@ -1830,39 +2210,25 @@ async function addFolderFiles(files: FileList | null): Promise<void> {
       name: folderName,
       total: rows.length,
       processed: 0,
+      failed: 0,
       filePaths: [],
       isUploading: true,
     },
   ]
+  await uploadFolderFiles(groupId, rows, generation)
+}
 
-  const updateGroup = (updater: (group: FolderUploadGroup) => FolderUploadGroup): void => {
-    if (generation !== draftGeneration.value) return
-    folderUploadGroups.value = folderUploadGroups.value.map((group) => (
-      group.id === groupId ? updater(group) : group
-    ))
-  }
-
-  for (const file of rows) {
-    try {
-      const serverPath = await uploadFile(file)
-      if (generation !== draftGeneration.value) return
-      if (serverPath) {
-        const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
-        addFileAttachment(serverPath, relativePath)
-        updateGroup((group) => ({
-          ...group,
-          processed: group.processed + 1,
-          filePaths: [...group.filePaths, serverPath],
-        }))
-        continue
-      }
-      updateGroup((group) => ({ ...group, processed: group.processed + 1 }))
-    } catch {
-      updateGroup((group) => ({ ...group, processed: group.processed + 1 }))
-    }
-  }
-
-  updateGroup((group) => ({ ...group, isUploading: false }))
+function retryFolderUpload(groupId: string): void {
+  const failedFiles = failedFolderFilesByGroupId.get(groupId) ?? []
+  if (failedFiles.length === 0) return
+  const generation = draftGeneration.value
+  updateFolderGroup(groupId, generation, (group) => ({
+    ...group,
+    processed: Math.max(0, group.total - failedFiles.length),
+    failed: 0,
+    isUploading: true,
+  }))
+  void uploadFolderFiles(groupId, failedFiles, generation)
 }
 
 function clearInputValue(inputRefEl: HTMLInputElement | null): void {
@@ -1970,6 +2336,7 @@ function closeSlashMenu(): void {
 
 function closeFileMention(): void {
   isFileMentionOpen.value = false
+  isFileMentionSearching.value = false
   mentionStartIndex.value = null
   mentionQuery.value = ''
   fileMentionSuggestions.value = []
@@ -2004,12 +2371,14 @@ async function queueFileMentionSearch(): Promise<void> {
   const cwd = (props.cwd ?? '').trim()
   if (!cwd) {
     fileMentionSuggestions.value = []
+    isFileMentionSearching.value = false
     return
   }
   if (fileMentionDebounceTimer) {
     clearTimeout(fileMentionDebounceTimer)
   }
   const token = ++fileMentionSearchToken
+  isFileMentionSearching.value = true
   fileMentionDebounceTimer = setTimeout(async () => {
     try {
       const rows = await searchComposerFiles(cwd, mentionQuery.value, 20)
@@ -2019,6 +2388,10 @@ async function queueFileMentionSearch(): Promise<void> {
     } catch {
       if (!isFileMentionOpen.value || token !== fileMentionSearchToken) return
       fileMentionSuggestions.value = []
+    } finally {
+      if (isFileMentionOpen.value && token === fileMentionSearchToken) {
+        isFileMentionSearching.value = false
+      }
     }
   }, 120)
 }
@@ -2158,6 +2531,7 @@ defineExpose<ThreadComposerExposed>({
 })
 
 onBeforeUnmount(() => {
+  cancelAndReleaseDraftUploads()
   if (stopGuardTimer) {
     clearTimeout(stopGuardTimer)
     stopGuardTimer = null
@@ -2327,8 +2701,32 @@ watch(
   @apply h-full w-full object-cover;
 }
 
+.thread-composer-attachment-status {
+  @apply absolute inset-0 flex items-center justify-center rounded-lg bg-black/20 text-[10px] font-semibold text-white;
+  backdrop-filter: blur(1px);
+}
+
+.thread-composer-attachment-status--error {
+  @apply items-end bg-red-950/45 pb-1.5;
+}
+
+.thread-composer-attachment-retry {
+  @apply absolute bottom-1 left-1 z-10 rounded-md border-0 bg-white/90 px-1.5 py-0.5 text-[10px] font-semibold text-red-700;
+}
+
 .thread-composer-attachment-remove {
-  @apply absolute right-0.5 top-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full border-0 bg-black/70 text-xs leading-none text-white;
+  @apply absolute right-0.5 top-0.5 z-20 inline-flex h-4 w-4 items-center justify-center rounded-full border-0 bg-black/70 text-xs leading-none text-white;
+}
+
+.thread-composer-upload-spinner {
+  @apply inline-block h-5 w-5 shrink-0 rounded-full border-2 border-white/35 border-t-white;
+  animation: composer-upload-spin 800ms linear infinite;
+}
+
+.thread-composer-upload-spinner--small {
+  @apply h-3.5 w-3.5 border;
+  border-color: color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
 }
 
 .thread-composer-file-chips {
@@ -2359,6 +2757,15 @@ watch(
   color: var(--ui-text-tertiary);
 }
 
+.thread-composer-folder-chip-retry {
+  @apply ml-1 rounded-md border-0 bg-transparent px-1 py-0.5 text-[11px] font-semibold;
+  color: var(--ui-danger);
+}
+
+.thread-composer-folder-chip-retry:hover {
+  background: var(--ui-bg-row-hover);
+}
+
 .thread-composer-folder-chip-remove {
   @apply ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border-0 bg-transparent transition text-xs leading-none p-0;
   color: var(--ui-text-tertiary);
@@ -2373,6 +2780,15 @@ watch(
   @apply inline-flex items-center gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs text-zinc-700;
 }
 
+.thread-composer-file-chip--uploading {
+  border-color: color-mix(in srgb, var(--ui-accent) 28%, var(--ui-border-subtle));
+}
+
+.thread-composer-file-chip--error {
+  border-color: color-mix(in srgb, var(--ui-danger) 32%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 5%, var(--ui-bg-surface));
+}
+
 .thread-composer-file-chip-icon {
   @apply h-3.5 w-3.5 text-zinc-400 shrink-0;
 }
@@ -2383,6 +2799,31 @@ watch(
 
 .thread-composer-file-chip-remove {
   @apply ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border-0 bg-transparent text-zinc-400 transition hover:bg-zinc-200 hover:text-zinc-700 text-xs leading-none p-0;
+}
+
+.thread-composer-file-chip-status {
+  @apply inline-flex shrink-0 items-center gap-1 text-[11px];
+  color: var(--ui-accent);
+}
+
+.thread-composer-file-chip-status--error {
+  color: var(--ui-danger);
+}
+
+.thread-composer-file-chip-retry {
+  @apply rounded-md border-0 bg-transparent px-1 py-0.5 text-[11px] font-semibold;
+  color: var(--ui-danger);
+}
+
+.thread-composer-file-chip-retry:hover {
+  background: var(--ui-bg-row-hover);
+}
+
+.thread-composer-upload-feedback {
+  @apply mb-2 mt-0 rounded-md border px-2 py-1.5 text-xs;
+  border-color: color-mix(in srgb, var(--ui-danger) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 6%, var(--ui-bg-surface));
+  color: var(--ui-danger);
 }
 
 .thread-composer-skill-chips {
@@ -2502,6 +2943,11 @@ watch(
   @apply px-2 py-1.5 text-xs text-zinc-500;
 }
 
+.thread-composer-file-mention-loading {
+  @apply flex items-center gap-2 px-2 py-2 text-xs;
+  color: var(--ui-text-secondary);
+}
+
 .thread-composer-input {
   @apply w-full min-w-0 min-h-8 max-h-32 rounded-xl border-0 bg-transparent px-1 py-1 text-sm outline-none transition resize-none overflow-y-auto;
   color: var(--ui-text-primary);
@@ -2582,6 +3028,35 @@ watch(
   max-height: min(82dvh, 46rem);
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+.composer-attach-menu-enter-active,
+.composer-attach-menu-leave-active {
+  transition:
+    opacity var(--motion-duration-fast) var(--motion-ease-standard),
+    transform var(--motion-duration-fast) var(--motion-ease-out);
+  transform-origin: left bottom;
+}
+
+.composer-attach-menu-enter-from,
+.composer-attach-menu-leave-to {
+  opacity: 0;
+  transform: translateY(4px) scale(0.98);
+}
+
+.composer-attach-menu-enter-from.thread-composer-attach-menu--sheet,
+.composer-attach-menu-leave-to.thread-composer-attach-menu--sheet {
+  transform: translateY(18px);
+}
+
+.composer-backdrop-enter-active,
+.composer-backdrop-leave-active {
+  transition: opacity var(--motion-duration-base) var(--motion-ease-standard);
+}
+
+.composer-backdrop-enter-from,
+.composer-backdrop-leave-to {
+  opacity: 0;
 }
 
 .thread-composer-attach-item {
@@ -3074,9 +3549,23 @@ watch(
   }
 }
 
+@keyframes composer-upload-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .thread-composer-dictation-processing-dot {
+  .thread-composer-dictation-processing-dot,
+  .thread-composer-upload-spinner {
     animation: none;
+  }
+
+  .composer-attach-menu-enter-active,
+  .composer-attach-menu-leave-active,
+  .composer-backdrop-enter-active,
+  .composer-backdrop-leave-active {
+    transition-duration: 1ms;
   }
 
   .thread-composer-expand,
