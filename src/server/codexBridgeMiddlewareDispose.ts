@@ -24,6 +24,9 @@ export type CodexBridgeMiddlewareDisposeDependencies = {
   mobilePushCoordinator: {
     dispose: () => void
   }
+  sessionFileChangeObserver: {
+    dispose: () => void
+  }
   runtimeStore: {
     close: () => void
   }
@@ -35,6 +38,7 @@ export type CodexBridgeMiddlewareDisposeDependencies = {
 export function disposeCodexBridgeMiddlewareResources(
   dependencies: CodexBridgeMiddlewareDisposeDependencies,
 ): void {
+  dependencies.sessionFileChangeObserver.dispose()
   dependencies.runtimeReconcileScheduler.dispose()
   dependencies.threadSearchIndexStore.clear()
   dependencies.bridgeNotificationListeners.clear()

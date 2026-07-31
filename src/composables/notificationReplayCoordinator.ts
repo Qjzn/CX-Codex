@@ -11,10 +11,11 @@ export type NotificationReplayRecoveryResult = {
 
 type NotificationReplayCoordinatorOptions = {
   initialCursor: number
+  initialStreamId?: string
   fetchPage: (afterSeq: number, limit: number) => Promise<RpcNotificationReplay>
   applyNotification: (notification: RpcNotification, source: NotificationReplaySource) => void
   recoverSnapshot: (signal: AbortSignal) => Promise<void>
-  persistCursor: (cursor: number) => void
+  persistCursor: (cursor: number, streamId: string) => void
   onRecoveryError?: (error: unknown) => void
   pageSize?: number
   maxPages?: number
@@ -37,13 +38,14 @@ export function createNotificationReplayCoordinator(
   const maxPages = normalizeBoundedInteger(options.maxPages, DEFAULT_MAX_PAGES, 1, 100)
   const bufferedLiveBySeq = new Map<number, RpcNotification>()
   let cursor = normalizeSequence(options.initialCursor)
+  let streamId = normalizeStreamId(options.initialStreamId)
   let generation = 0
   let stopped = false
   let recoveryPromise: Promise<NotificationReplayRecoveryResult> | null = null
   let activeRecoveryController: AbortController | null = null
 
   const persistCurrentCursor = (): void => {
-    options.persistCursor(cursor)
+    options.persistCursor(cursor, streamId)
   }
 
   const isCurrentRun = (runGeneration: number): boolean => {
@@ -115,7 +117,11 @@ export function createNotificationReplayCoordinator(
 
       let highWater = normalizeSequence(page.latestSeq)
       const oldestSeq = normalizeSequence(page.oldestSeq)
+      const pageStreamId = normalizeStreamId(page.streamId)
+      const streamChanged = Boolean(pageStreamId) && pageStreamId !== streamId
+      if (streamChanged) streamId = pageStreamId
       const needsInitialSnapshot =
+        streamChanged ||
         cursor === 0 ||
         highWater < cursor ||
         (highWater > cursor && oldestSeq > cursor + 1)
@@ -128,6 +134,14 @@ export function createNotificationReplayCoordinator(
           pageCount += 1
           const pageLatestSeq = normalizeSequence(page.latestSeq)
           const pageOldestSeq = normalizeSequence(page.oldestSeq)
+          const nextPageStreamId = normalizeStreamId(page.streamId)
+
+          if (nextPageStreamId && nextPageStreamId !== streamId) {
+            streamId = nextPageStreamId
+            highWater = pageLatestSeq
+            snapshotRecovered = await recoverFromSnapshot(highWater, runGeneration, signal)
+            break
+          }
 
           if (pageLatestSeq < cursor || (pageLatestSeq > cursor && pageOldestSeq > cursor + 1)) {
             highWater = pageLatestSeq
@@ -274,6 +288,10 @@ function readNotificationSequence(notification: RpcNotification): number | null 
 
 function normalizeSequence(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0
+}
+
+function normalizeStreamId(value: string | undefined): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 function normalizeBoundedInteger(

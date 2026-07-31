@@ -156,6 +156,14 @@ export class RuntimeStateStore {
     this.loadPersistedSnapshot = options.loadPersistedSnapshot
   }
 
+  getActiveThreadCount(): number {
+    let count = 0
+    for (const state of this.stateByThreadId.values()) {
+      if (isRuntimeActiveState(state.executionState)) count += 1
+    }
+    return count
+  }
+
   private getMutable(threadId: string): ThreadRuntimeState {
     const normalizedThreadId = threadId.trim()
     const existing = this.stateByThreadId.get(normalizedThreadId)

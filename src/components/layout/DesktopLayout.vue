@@ -216,10 +216,10 @@ function onResizeHandlePointerDown(event: PointerEvent): void {
 }
 
 .mobile-drawer {
-  @apply absolute top-0 left-0 bottom-0 w-full max-w-none overflow-hidden border-r;
+  @apply absolute top-0 left-0 bottom-0 overflow-hidden border-r;
   border-color: var(--ui-border-subtle);
-  width: 100vw;
-  max-width: 100vw;
+  width: min(22rem, calc(100vw - 2.5rem));
+  max-width: calc(100vw - 2.5rem);
   border-top-right-radius: 1.5rem;
   border-bottom-right-radius: 1.5rem;
   padding-left: max(0px, env(safe-area-inset-left));
@@ -228,17 +228,10 @@ function onResizeHandlePointerDown(event: PointerEvent): void {
   box-shadow: 0 16px 36px -34px rgba(31, 31, 31, 0.24);
 }
 
-@media (min-width: 768px) {
-  .mobile-drawer {
-    width: min(26rem, calc(100vw - 1rem));
-    max-width: min(26rem, calc(100vw - 1rem));
-  }
-}
-
 @media (max-width: 767px) {
   .mobile-drawer {
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
+    border-top-right-radius: 1.125rem;
+    border-bottom-right-radius: 1.125rem;
   }
 }
 

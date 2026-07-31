@@ -631,6 +631,13 @@ type DragPointerSample = {
   clientY: number
 }
 
+type HomeWorkspaceProjectsReadyMetric = {
+  readyAtMs: number
+  firstReadyAtMs: number
+  groupCount: number
+  projectNames: string[]
+}
+
 const DRAG_START_THRESHOLD_PX = 4
 const PROJECT_GROUP_EXPANDED_GAP_PX = 6
 const PROJECT_THREAD_PREVIEW_LIMIT = 5
@@ -816,6 +823,7 @@ collapsedProjects.value = loadCollapsedState()
 
 onMounted(() => {
   window.addEventListener('focus', onWindowFocusRefreshPinned)
+  window.addEventListener('keydown', onWindowKeyDownForSidebarSurface, true)
   if (!hasPinnedThreadIdsOverride.value) {
     void hydratePinnedThreadIds()
   }
@@ -949,6 +957,38 @@ const filteredGroups = computed<UiProjectGroup[]>(() => threadCollections.value.
 const displayedGroups = computed<UiProjectGroup[]>(() => (
   orderProjectGroupsByRecentActivity(filteredGroups.value)
 ))
+
+function markHomeWorkspaceProjectsReady(): void {
+  if (typeof window === 'undefined') return
+  const projectNames = displayedGroups.value.map((group) => group.projectName)
+  if (projectNames.length === 0) return
+
+  const host = window as Window & {
+    __cxCodexHomeWorkspaceProjectsReady?: HomeWorkspaceProjectsReadyMetric
+  }
+  const previous = host.__cxCodexHomeWorkspaceProjectsReady
+  if (previous && previous.groupCount >= projectNames.length) return
+
+  const readyAtMs =
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? Math.round(performance.now())
+      : Date.now()
+  host.__cxCodexHomeWorkspaceProjectsReady = {
+    readyAtMs,
+    firstReadyAtMs: previous?.firstReadyAtMs ?? readyAtMs,
+    groupCount: projectNames.length,
+    projectNames,
+  }
+}
+
+watch(
+  () => displayedGroups.value.map((group) => group.projectName).join('\n'),
+  async () => {
+    await nextTick()
+    markHomeWorkspaceProjectsReady()
+  },
+  { immediate: true, flush: 'post' },
+)
 const hasMeasuredDisplayedProjectLayout = computed(() => (
   displayedGroups.value.length > 0
   && displayedGroups.value.every((group) => (measuredHeightByProject.value[group.projectName] ?? 0) > 0)
@@ -1271,6 +1311,40 @@ function closeDeleteThreadDialog(): void {
   deleteThreadDialogVisible.value = false
   deleteThreadDialogThreadId.value = ''
   deleteThreadTitle.value = ''
+}
+
+function onWindowKeyDownForSidebarSurface(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || event.defaultPrevented) return
+
+  if (deleteThreadDialogVisible.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    closeDeleteThreadDialog()
+    return
+  }
+  if (renameThreadDialogVisible.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    closeRenameThreadDialog()
+    return
+  }
+  if (openThreadMenuId.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    closeThreadMenu()
+    return
+  }
+  if (openProjectMenuId.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    closeProjectMenu()
+    return
+  }
+  if (isOrganizeMenuOpen.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    isOrganizeMenuOpen.value = false
+  }
 }
 
 function submitDeleteThread(): void {
@@ -1863,6 +1937,7 @@ watch(hasOpenDismissableMenu, (isOpen) => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('focus', onWindowFocusRefreshPinned)
+  window.removeEventListener('keydown', onWindowKeyDownForSidebarSurface, true)
   if (projectLayoutMotionRafId !== null) {
     window.cancelAnimationFrame(projectLayoutMotionRafId)
     projectLayoutMotionRafId = null

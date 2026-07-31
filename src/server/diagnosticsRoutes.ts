@@ -36,6 +36,7 @@ export type DiagnosticsRoutesDependencies = {
   readSchemaAuditSummary: () => Promise<unknown>
   readWindowsSandboxDiagnostics: () => Promise<unknown>
   getTranscriptionDiagnostics: () => unknown
+  getSessionFileSyncStatus?: () => unknown
   runtimeStore: RuntimeDiagnosticsStore
   nowIso?: () => string
 }
@@ -112,6 +113,9 @@ export async function handleDiagnosticsRoutes(
         schemaAudit,
         windowsSandbox,
         transcription: dependencies.getTranscriptionDiagnostics(),
+        ...(dependencies.getSessionFileSyncStatus
+          ? { sessionFileSync: dependencies.getSessionFileSyncStatus() }
+          : {}),
         runtimeStore: runtimeHealth,
         timestamp,
       },
@@ -152,6 +156,9 @@ export async function handleDiagnosticsRoutes(
       schemaAudit,
       windowsSandbox,
       transcription: dependencies.getTranscriptionDiagnostics(),
+      ...(dependencies.getSessionFileSyncStatus
+        ? { sessionFileSync: dependencies.getSessionFileSyncStatus() }
+        : {}),
       runtimeStore: runtimeHealth,
       runtime: {
         uncertainRequests,

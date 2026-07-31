@@ -90,7 +90,12 @@ import type {
 } from '../types/codex'
 import { isAbortLikeError } from '../api/codexErrors'
 import { normalizePathForUi, toProjectName } from '../pathUtils.js'
-import { orderProjectGroupsByRecentActivity } from '../utils/projectGroupOrdering'
+import { isCxSessionFilesChangedMethod } from '../sessionFileChange'
+import {
+  dedupeProjectThreadGroups,
+  orderProjectGroupsByRecentActivity,
+  upsertThreadIntoProjectGroups,
+} from '../utils/projectGroupOrdering'
 import { compactLatestReplyTail } from '../utils/latestReply'
 import {
   MOBILE_APP_PAUSE_EVENT,
@@ -146,6 +151,7 @@ function flattenThreads(groups: UiProjectGroup[]): UiThread[] {
 function shouldRefreshMessagesFromNotification(method: string): boolean {
   if (method === THREAD_TOKEN_USAGE_UPDATED_METHOD) return false
   return (
+    isCxSessionFilesChangedMethod(method) ||
     method === 'turn/started' ||
     method === 'turn/completed' ||
     method === 'thread/completed' ||
@@ -158,6 +164,7 @@ function shouldRefreshMessagesFromNotification(method: string): boolean {
 
 function shouldRefreshThreadListFromNotification(method: string): boolean {
   if (method === THREAD_TOKEN_USAGE_UPDATED_METHOD) return false
+  if (isCxSessionFilesChangedMethod(method)) return true
   if (method === 'thread/name/updated' || method === 'thread/started') return true
   if (!method.startsWith('thread/')) return false
   return (
@@ -172,12 +179,17 @@ function shouldRefreshThreadListFromNotification(method: string): boolean {
 }
 
 function shouldUrgentlyRefreshFromNotification(method: string): boolean {
-  return method === 'turn/completed' || method === 'thread/completed' || method === 'error'
+  return (
+    method === 'turn/completed' ||
+    method === 'thread/completed' ||
+    method === 'error'
+  )
 }
 
 function shouldBoostSyncForNotification(method: string): boolean {
   if (method === THREAD_TOKEN_USAGE_UPDATED_METHOD) return false
   return (
+    isCxSessionFilesChangedMethod(method) ||
     method === 'turn/started' ||
     method === 'turn/completed' ||
     method === 'error' ||
@@ -200,6 +212,7 @@ const THREAD_MESSAGE_CACHE_STORAGE_KEY = 'codex-web-local.thread-message-cache.v
 const HIDDEN_THREAD_IDS_STORAGE_KEY = 'codex-web-local.hidden-thread-ids.v1'
 const QUEUED_MESSAGES_STORAGE_KEY = 'codex-web-local.queued-messages.v1'
 const NOTIFICATION_SEQ_STORAGE_KEY = 'codex-web-local.notification-seq.v1'
+const NOTIFICATION_CURSOR_STORAGE_KEY = 'codex-web-local.notification-cursor.v2'
 const THREAD_GROUP_CACHE_VERSION = 1
 const THREAD_GROUP_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const THREAD_GROUP_CACHE_MAX_GROUPS = 18
@@ -685,10 +698,12 @@ function loadCachedThreadGroups(): UiProjectGroup[] {
     if (Date.now() - payload.savedAtMs > THREAD_GROUP_CACHE_MAX_AGE_MS) return []
     if (!Array.isArray(payload.groups)) return []
 
-    return payload.groups
-      .map((group) => normalizeCachedThreadGroup(group))
-      .filter((group): group is UiProjectGroup => group !== null)
-      .slice(0, THREAD_GROUP_CACHE_MAX_GROUPS)
+    return dedupeProjectThreadGroups(
+      payload.groups
+        .map((group) => normalizeCachedThreadGroup(group))
+        .filter((group): group is UiProjectGroup => group !== null)
+        .slice(0, THREAD_GROUP_CACHE_MAX_GROUPS),
+    )
   } catch {
     return []
   }
@@ -701,10 +716,12 @@ function saveCachedThreadGroups(groups: UiProjectGroup[]): void {
     const payload: ThreadGroupCachePayload = {
       version: THREAD_GROUP_CACHE_VERSION,
       savedAtMs: Date.now(),
-      groups: groups
-        .map((group) => normalizeCachedThreadGroup(group))
-        .filter((group): group is UiProjectGroup => group !== null)
-        .slice(0, THREAD_GROUP_CACHE_MAX_GROUPS),
+      groups: dedupeProjectThreadGroups(
+        groups
+          .map((group) => normalizeCachedThreadGroup(group))
+          .filter((group): group is UiProjectGroup => group !== null)
+          .slice(0, THREAD_GROUP_CACHE_MAX_GROUPS),
+      ),
     }
     if (payload.groups.length === 0) return
     window.localStorage.setItem(THREAD_GROUP_CACHE_STORAGE_KEY, JSON.stringify(payload))
@@ -979,29 +996,48 @@ function saveQueuedMessagesMap(queueByThreadId: Record<string, QueuedMessage[]>)
   }
 }
 
-function loadLastNotificationSeq(): number {
-  if (typeof window === 'undefined') return 0
+function loadLastNotificationCursor(): { cursor: number; streamId: string } {
+  if (typeof window === 'undefined') return { cursor: 0, streamId: '' }
 
   try {
+    const cursorRaw = window.localStorage.getItem(NOTIFICATION_CURSOR_STORAGE_KEY)
+    if (cursorRaw) {
+      const parsed = JSON.parse(cursorRaw) as { cursor?: unknown; streamId?: unknown }
+      const cursor = typeof parsed.cursor === 'number' && Number.isFinite(parsed.cursor)
+        ? Math.max(0, Math.trunc(parsed.cursor))
+        : 0
+      const streamId = typeof parsed.streamId === 'string' ? parsed.streamId.trim() : ''
+      if (streamId) return { cursor, streamId }
+    }
     const raw = window.localStorage.getItem(NOTIFICATION_SEQ_STORAGE_KEY)
-    if (!raw) return 0
+    if (!raw) return { cursor: 0, streamId: '' }
     const value = Number.parseInt(raw, 10)
-    return Number.isFinite(value) ? Math.max(0, value) : 0
+    return {
+      cursor: Number.isFinite(value) ? Math.max(0, value) : 0,
+      streamId: '',
+    }
   } catch {
-    return 0
+    return { cursor: 0, streamId: '' }
   }
 }
 
-function saveLastNotificationSeq(seq: number): void {
+function saveLastNotificationCursor(seq: number, streamId: string): void {
   if (typeof window === 'undefined') return
 
   try {
     const normalizedSeq = Number.isFinite(seq) ? Math.max(0, Math.trunc(seq)) : 0
-    if (normalizedSeq <= 0) {
-      window.localStorage.removeItem(NOTIFICATION_SEQ_STORAGE_KEY)
+    const normalizedStreamId = streamId.trim()
+    if (!normalizedStreamId) {
+      if (normalizedSeq > 0) {
+        window.localStorage.setItem(NOTIFICATION_SEQ_STORAGE_KEY, String(normalizedSeq))
+      }
       return
     }
-    window.localStorage.setItem(NOTIFICATION_SEQ_STORAGE_KEY, String(normalizedSeq))
+    window.localStorage.setItem(NOTIFICATION_CURSOR_STORAGE_KEY, JSON.stringify({
+      cursor: normalizedSeq,
+      streamId: normalizedStreamId,
+    }))
+    window.localStorage.removeItem(NOTIFICATION_SEQ_STORAGE_KEY)
   } catch {
     // Replay still works within the current page lifetime if storage is unavailable.
   }
@@ -1270,8 +1306,9 @@ function mergeThreadGroups(
   previous: UiProjectGroup[],
   incoming: UiProjectGroup[],
 ): UiProjectGroup[] {
+  const dedupedIncoming = dedupeProjectThreadGroups(incoming)
   const previousGroupsByName = new Map(previous.map((group) => [group.projectName, group]))
-  const mergedGroups: UiProjectGroup[] = incoming.map((incomingGroup) => {
+  const mergedGroups: UiProjectGroup[] = dedupedIncoming.map((incomingGroup) => {
     const previousGroup = previousGroupsByName.get(incomingGroup.projectName)
     const previousThreadsById = new Map(previousGroup?.threads.map((thread) => [thread.id, thread]) ?? [])
 
@@ -1605,12 +1642,14 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   const bufferedAgentDeltaByKey = new Map<string, BufferedAgentDelta>()
   const bufferedCommandDeltaByKey = new Map<string, BufferedCommandDelta>()
   const bufferedReasoningDeltaByThreadId = new Map<string, string>()
+  const initialNotificationCursor = loadLastNotificationCursor()
   const notificationReplayCoordinator = createNotificationReplayCoordinator({
-    initialCursor: loadLastNotificationSeq(),
+    initialCursor: initialNotificationCursor.cursor,
+    initialStreamId: initialNotificationCursor.streamId,
     fetchPage: getNotificationReplay,
     applyNotification: applyIncomingNotification,
     recoverSnapshot: recoverNotificationSnapshot,
-    persistCursor: saveLastNotificationSeq,
+    persistCursor: saveLastNotificationCursor,
     onRecoveryError: () => {
       pendingThreadsRefresh = true
       const activeThreadId = selectedThreadId.value
@@ -2524,23 +2563,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       }
     }
 
-    const existingGroupIndex = sourceGroups.value.findIndex((group) => group.projectName === projectName)
-    if (existingGroupIndex >= 0) {
-      const existingGroup = sourceGroups.value[existingGroupIndex]
-      const remainingThreads = existingGroup.threads.filter((thread) => thread.id !== threadId)
-      const nextGroup: UiProjectGroup = {
-        projectName,
-        workspaceRoot: existingGroup.workspaceRoot,
-        isPinnedProject: existingGroup.isPinnedProject,
-        pinnedProjectRank: existingGroup.pinnedProjectRank,
-        threads: [nextThread, ...remainingThreads],
-      }
-      const nextGroups = [...sourceGroups.value]
-      nextGroups.splice(existingGroupIndex, 1, nextGroup)
-      sourceGroups.value = nextGroups
-    } else {
-      sourceGroups.value = [{ projectName, threads: [nextThread] }, ...sourceGroups.value]
-    }
+    sourceGroups.value = upsertThreadIntoProjectGroups(sourceGroups.value, nextThread)
 
     const nextProjectOrder = mergeProjectOrder(projectOrder.value, sourceGroups.value)
     if (!areStringArraysEqual(projectOrder.value, nextProjectOrder)) {

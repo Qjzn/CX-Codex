@@ -22,4 +22,12 @@
         <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
         <item name="android:background">@drawable/launch_screen</item>
     </style>
+
+    <style name="TaskNotificationActionTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">@color/splashBackground</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorAccent">@color/colorPrimary</item>
+    </style>
 </resources>

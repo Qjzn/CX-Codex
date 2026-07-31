@@ -16,6 +16,7 @@ export type RpcNotification = {
 
 export type RpcNotificationReplay = {
   notifications: RpcNotification[]
+  streamId: string
   latestSeq: number
   oldestSeq: number
 }
@@ -275,6 +276,7 @@ export async function fetchRpcNotificationReplay(afterSeq: number, limit = 200):
     notifications: rawNotifications
       .map((value) => toNotification(value))
       .filter((value): value is RpcNotification => value !== null),
+    streamId: typeof data?.streamId === 'string' ? data.streamId.trim() : '',
     latestSeq: typeof data?.latestSeq === 'number' ? Math.max(0, Math.trunc(data.latestSeq)) : normalizedAfterSeq,
     oldestSeq: typeof data?.oldestSeq === 'number' ? Math.max(0, Math.trunc(data.oldestSeq)) : 0,
   }
@@ -385,7 +387,7 @@ export function subscribeRpcNotifications(
       const parsed = JSON.parse(payload) as unknown
       const notification = toNotification(parsed)
       if (notification) {
-        if (notification.method === BRIDGE_HEARTBEAT_METHOD) {
+        if (notification.method === BRIDGE_HEARTBEAT_METHOD || notification.method === 'ready') {
           return
         }
         onNotification(notification)

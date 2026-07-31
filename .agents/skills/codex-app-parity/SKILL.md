@@ -833,3 +833,47 @@ After each feature implementation session that uses this skill:
 - Windows Codex package `26.721.41059` keeps `local-conversation-page`, `settings-page`, `pets-settings`, and the compact `settings-loading-row` in separate renderer chunks instead of making every surface part of the first application entry.
 - CX-Codex follows that boundary by loading the conversation renderer, sidebar tree, queued-message UI, settings-only cards, task-pet settings, and Favorites only when their owning surface is rendered. The home route must not briefly render the thread fallback while the router is still resolving.
 - Frequent sidebar project movement follows the existing lightweight-motion rule: use compositor transforms with the shared reduced-motion duration tokens. Transitioning the layout-driving `top` property creates visible reorder jank and measurable layout shift.
+
+## Findings: Stable Sidebar Project Materialization (2026-07-31)
+
+- Windows Codex package `26.721.41059` converges cached, supplemental, and later cursor rows by stable conversation identity before project grouping; renderer timing cannot create two sidebar rows for one conversation.
+- CX-Codex optimistic insertion and `thread/list` may cross in either order. A resolved `cwd` and project identity must beat an empty-path `unknown-project` placeholder, including when the placeholder arrives last.
+- The same identity rule applies while reading and writing the sidebar cache so an upgrade repairs historical duplicate rows without asking users to clear app data. A synthetic group emptied by repair disappears, while explicit workspace-root placeholders remain.
+
+## Findings: Predictable Mobile Navigation Stack (2026-07-31)
+
+- Windows Codex package `26.721.41059` keeps local-conversation routing under one stable application shell; transient panels close without replaying unrelated conversation state, and thread identity remains stable while content resolves.
+- CX-Codex mobile navigation therefore owns one explicit back hierarchy: dismiss the topmost dialog, settings sheet, tools menu, search, or drawer first; return a content route to Home second; only let Android exit when Home has no transient surface.
+- A phone drawer is temporary navigation, not a desktop layout preference. Opening, closing, selecting a conversation, changing orientation, or pressing Android Back must never overwrite the persisted desktop sidebar state.
+- Conversation selection closes the phone drawer before starting route and history loading. The drawer leaves a visible backdrop edge so its modal nature and tap-to-dismiss affordance remain clear without animating the conversation canvas.
+- A handset keeps the same one-pane shell across portrait and landscape. The shell class is resolved synchronously before first paint, and compact phone dimensions remain a fallback when a recovering WebView temporarily omits its coarse-pointer signal; larger foldables retain their intentional dual-pane layout.
+
+## Findings: Immediate Lazy-route Continuity (2026-07-31)
+
+- Windows Codex package `26.721.41059` keeps its local-conversation shell and route-sized loading surfaces mounted while a cold renderer chunk resolves; route identity does not create an intentionally empty intermediate frame.
+- CX-Codex route and conversation fallbacks therefore render from the first async-component frame. A delayed chunk may show a stable skeleton, but it must not expose the content canvas or conversation slot as empty before that skeleton appears.
+
+## Findings: Native WebView Route Continuity (2026-07-31)
+
+- Windows Codex package `26.721.41059` keeps the active local-conversation identity stable across shell lifecycle transitions and connection recovery instead of replaying the same route into a fresh page.
+- CX-Codex Android therefore ignores a pending task route when the WebView is already at that exact canonical URL. A genuinely different pending conversation still replaces the current route.
+- A main-frame retry reuses the current hash route only when it belongs to the configured CX-Codex server; foreign or missing URLs fall back to the configured root rather than being trusted.
+
+## Findings: Thread-scoped Scroll Continuity (2026-07-31)
+
+- Windows Codex package `26.721.41059` keeps the conversation viewport owned by the active local-conversation identity; switching tasks does not let an older scroll callback reposition the new task.
+- CX-Codex settles a pending idle save under the previous thread before the list DOM is reused, then cancels that thread's anchor, interaction, and bottom-lock frames.
+- The new thread performs one post-switch restore from its own saved state. Delayed resize and image callbacks are ignored when their conversation owner no longer matches the active thread.
+
+## Findings: Topmost Modal Back Ownership (2026-07-31)
+
+- Windows Codex package `26.721.41059` routes image preview and shared dialog surfaces through modal primitives that trap focus, disable background scrolling, and isolate Escape from underlying controls.
+- CX-Codex Android Back is translated to a cancelable Escape boundary. The visually topmost conversation detail, image preview, file menu, rollback confirmation, message action strip, favorite dialog, or blocking confirmation must consume that boundary before drawer or route navigation runs.
+- Closing one transient surface must preserve the current conversation route and every lower navigation state. A single Back event may dismiss at most one visible layer.
+- A conversation bottom sheet is a real modal surface, not only a high `z-index`: it takes focus, locks background scrolling, and restores both on close so the software keyboard cannot keep resizing the underlying composer.
+
+## Findings: Global Confirmation Modal Environment (2026-07-31)
+
+- Windows Codex package `26.721.41059` renders shared confirmations through its Dialog primitive: fixed overlay/content layers, outside-interaction prevention, focus ownership, and stable content sizing are provided as one modal boundary rather than by each trigger.
+- CX-Codex global refresh, queued-edit, and Android-update confirmations therefore share one active-dialog environment owner. Opening blurs the composer and locks body scrolling; cancel/Back restores the prior environment, while a confirm action may hand focus to its next workflow instead.
+- Visual `z-index` and Back order must use the same priority. The Android update prompt stays above queued-edit and desktop-refresh confirmations, and one Back event closes only that active layer.

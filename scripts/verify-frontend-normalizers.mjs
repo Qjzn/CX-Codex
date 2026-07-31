@@ -29,6 +29,7 @@ const projectGroupOrderingImport = toImportPath(relative(outputRoot, join(repoRo
 const activityTimerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'activityTimer.ts')))
 const latestReplyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'utils', 'latestReply.ts')))
 const taskPetReadPolicyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'mobile', 'taskPetReadPolicy.ts')))
+const sessionFileChangeImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'sessionFileChange.ts')))
 
 try {
   writeFileSync(entryPath, `
@@ -84,15 +85,26 @@ import {
   shouldSettleOptimisticDeliveryFromRuntimeSnapshot,
 } from '${runtimeRequestDeliveryImport}'
 import { subscribeRpcNotifications } from '${rpcClientImport}'
-import { orderProjectGroupsByRecentActivity } from '${projectGroupOrderingImport}'
+import {
+  dedupeProjectThreadGroups,
+  orderProjectGroupsByRecentActivity,
+  upsertThreadIntoProjectGroups,
+} from '${projectGroupOrderingImport}'
 import { readRuntimeActivityStartedAtMs } from '${activityTimerImport}'
 import { compactLatestReplyTail } from '${latestReplyImport}'
 import {
   shouldAcknowledgeMobileShellTaskPetThreadOpen,
   shouldMarkMobileShellTaskPetThreadRead,
 } from '${taskPetReadPolicyImport}'
+import {
+  CX_SESSION_FILES_CHANGED_METHOD,
+  isCxSessionFilesChangedMethod,
+} from '${sessionFileChangeImport}'
 
 assert.equal(CONVERSATION_BOTTOM_THRESHOLD_PX, 24)
+assert.equal(CX_SESSION_FILES_CHANGED_METHOD, 'cx/session-files/changed')
+assert.equal(isCxSessionFilesChangedMethod('cx/session-files/changed'), true)
+assert.equal(isCxSessionFilesChangedMethod('turn/completed'), false)
 assert.equal(conversationDistanceFromBottom({ scrollHeight: 1000, scrollTop: 676, clientHeight: 300 }), 24)
 assert.equal(isConversationViewportAtBottom({ scrollHeight: 1000, scrollTop: 676, clientHeight: 300 }), true)
 assert.equal(isConversationViewportAtBottom({ scrollHeight: 1000, scrollTop: 675, clientHeight: 300 }), false)
@@ -889,6 +901,53 @@ assert.deepEqual(recentProjectGroups.map((group) => group.projectName), [
   'empty-project',
 ])
 
+const sharedThreadBase = {
+  ...groups[0].threads[0],
+  id: 'shared-thread',
+  title: '帮我优化',
+  createdAtIso: '2026-07-30T13:00:00.000Z',
+  updatedAtIso: '2026-07-30T14:00:00.000Z',
+}
+const unresolvedSharedThread = {
+  ...sharedThreadBase,
+  projectName: 'unknown-project',
+  cwd: '',
+  preview: '帮我优化',
+}
+const resolvedSharedThread = {
+  ...sharedThreadBase,
+  projectName: 'CXCodex',
+  cwd: 'E:\\\\javaword\\\\CXCodex',
+  preview: 'Github 上帮我找个关于找工作有帮助的热门技能',
+}
+
+const dedupedProjectGroups = dedupeProjectThreadGroups([
+  { projectName: 'unknown-project', threads: [unresolvedSharedThread] },
+  { projectName: 'CXCodex', threads: [resolvedSharedThread] },
+])
+assert.equal(dedupedProjectGroups.flatMap((group) => group.threads).length, 1)
+assert.equal(dedupedProjectGroups.length, 1)
+assert.equal(dedupedProjectGroups[0].projectName, 'CXCodex')
+assert.equal(dedupedProjectGroups[0].threads[0].cwd, 'E:\\\\javaword\\\\CXCodex')
+
+const protectedResolvedProject = upsertThreadIntoProjectGroups(
+  [{ projectName: 'CXCodex', threads: [resolvedSharedThread] }],
+  unresolvedSharedThread,
+)
+assert.equal(protectedResolvedProject.length, 1)
+assert.equal(protectedResolvedProject[0].projectName, 'CXCodex')
+assert.equal(protectedResolvedProject[0].threads.length, 1)
+assert.equal(protectedResolvedProject[0].threads[0].cwd, 'E:\\\\javaword\\\\CXCodex')
+
+const upgradedResolvedProject = upsertThreadIntoProjectGroups(
+  [{ projectName: 'unknown-project', threads: [unresolvedSharedThread] }],
+  resolvedSharedThread,
+)
+assert.equal(upgradedResolvedProject.length, 1)
+assert.equal(upgradedResolvedProject[0].projectName, 'CXCodex')
+assert.equal(upgradedResolvedProject[0].threads.length, 1)
+assert.equal(upgradedResolvedProject[0].threads[0].preview, resolvedSharedThread.preview)
+
 const makeReplayNotification = (seq: number) => ({
   method: 'turn/completed',
   params: { threadId: 'thread-replay', turnId: 'turn-' + seq },
@@ -983,6 +1042,29 @@ const resetResult = await resetCoordinator.recover()
 assert.equal(resetSnapshotCount, 1)
 assert.deepEqual(resetPersisted, [20])
 assert.equal(resetResult.cursor, 20)
+
+const streamResetApplied: number[] = []
+const streamResetPersisted: Array<{ cursor: number; streamId: string }> = []
+let streamResetSnapshotCount = 0
+const streamResetCoordinator = createNotificationReplayCoordinator({
+  initialCursor: 100,
+  initialStreamId: 'stream-before-database-reset',
+  fetchPage: async () => ({
+    notifications: Array.from({ length: 50 }, (_, index) => makeReplayNotification(index + 101)),
+    streamId: 'stream-after-database-reset',
+    latestSeq: 150,
+    oldestSeq: 1,
+  }),
+  applyNotification: (notification) => { streamResetApplied.push(notification.seq ?? 0) },
+  recoverSnapshot: async () => { streamResetSnapshotCount += 1 },
+  persistCursor: (cursor, streamId) => { streamResetPersisted.push({ cursor, streamId }) },
+})
+const streamResetResult = await streamResetCoordinator.recover()
+assert.deepEqual(streamResetApplied, [])
+assert.equal(streamResetSnapshotCount, 1)
+assert.deepEqual(streamResetPersisted, [{ cursor: 150, streamId: 'stream-after-database-reset' }])
+assert.equal(streamResetResult.cursor, 150)
+assert.equal(streamResetResult.snapshotRecovered, true)
 
 let releaseResetRacePage: ((page: { notifications: ReturnType<typeof makeReplayNotification>[]; latestSeq: number; oldestSeq: number }) => void) | null = null
 const resetRaceApplied: Array<{ seq: number | undefined; source: string }> = []

@@ -111,6 +111,28 @@ public final class MobileShellConfig {
         return normalizedServerUrl + "/#" + normalizedHashPath;
     }
 
+    public static boolean shouldLoadPendingAppRoute(String currentUrl, String targetUrl) {
+        String current = currentUrl == null ? "" : currentUrl.trim();
+        String target = targetUrl == null ? "" : targetUrl.trim();
+        return !target.isEmpty() && !target.equals(current);
+    }
+
+    public static String resolveAppRetryUrl(String serverUrl, String currentUrl) {
+        String normalizedServerUrl = normalizeServerUrl(serverUrl);
+        String current = currentUrl == null ? "" : currentUrl.trim();
+        if (
+            !normalizedServerUrl.isEmpty()
+            && (
+                current.equals(normalizedServerUrl)
+                || current.equals(normalizedServerUrl + "/")
+                || current.startsWith(normalizedServerUrl + "/#/")
+            )
+        ) {
+            return current;
+        }
+        return normalizedServerUrl;
+    }
+
     public static boolean shouldAcknowledgePendingTaskPetThreadOpen(
         String pendingThreadId,
         String openedThreadId

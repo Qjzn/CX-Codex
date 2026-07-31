@@ -2497,15 +2497,19 @@ function onDocumentClick(event: MouseEvent): void {
 
 function onDocumentKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return
+  if (event.defaultPrevented) return
   if (isAttachMenuOpen.value) {
+    event.preventDefault()
     closeAttachMenu()
     return
   }
   if (isRuntimeSettingsOpen.value) {
+    event.preventDefault()
     closeRuntimeSettings()
     return
   }
   if (isComposerExpanded.value) {
+    event.preventDefault()
     isComposerExpanded.value = false
     inputRef.value?.focus()
   }

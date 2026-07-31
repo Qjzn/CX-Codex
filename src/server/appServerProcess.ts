@@ -87,6 +87,7 @@ export class AppServerProcess {
   private webBridgeSettings: WebBridgeSettings = DEFAULT_WEB_BRIDGE_SETTINGS
   private readonly appServerLaunchPolicy = resolveAppServerLaunchPolicy()
   private readonly appServerArgs = createAppServerArgs(this.appServerLaunchPolicy)
+  private readRestartBlockingRequestCount: () => number = () => 0
 
   private getCodexCommand(): string {
     const codexCommand = resolveCodexCommand()
@@ -177,6 +178,9 @@ export class AppServerProcess {
       timeoutMs,
       startedAtMs: this.startedAtMs,
       coldStartGraceMs: APP_SERVER_COLD_START_GRACE_MS,
+      restartProtection: {
+        blockingRequestCount: this.readRestartBlockingRequestCount(),
+      },
       dependencies: {
         now: Date.now,
         recordTimeout: (method, params, timeoutMs, nowMs) => {
@@ -196,6 +200,18 @@ export class AppServerProcess {
       return
     }
 
+    if (decision.kind === 'restart-blocked') {
+      this.rpcDiagnostics.resetTimeoutWindow()
+      writeBridgeLog('warn', 'Skipped Codex app-server restart while runtime requests are active', {
+        method,
+        durationMs: timeoutMs,
+        timeoutCount: decision.timeoutCount,
+        includeTurns: decision.includeTurns,
+        blockingRequestCount: decision.blockingRequestCount,
+      })
+      return
+    }
+
     if (decision.kind !== 'restart') return
 
     this.restartAppServer('repeated RPC timeouts', {
@@ -209,6 +225,20 @@ export class AppServerProcess {
   private restartAppServer(reason: string, details: Record<string, unknown> = {}): void {
     const proc = this.process
     if (!proc) return
+
+    const blockingRequestCount = Math.max(0, Math.trunc(this.readRestartBlockingRequestCount()))
+    if (blockingRequestCount > 0) {
+      this.rpcDiagnostics.resetTimeoutWindow()
+      writeBridgeLog('warn', 'Skipped Codex app-server restart while runtime requests are active', {
+        reason,
+        pid: proc.pid,
+        blockingRequestCount,
+        pendingRpcCount: this.pending.count,
+        pendingServerRequestCount: this.serverRequests.pendingCount,
+        ...details,
+      })
+      return
+    }
 
     const now = Date.now()
     if (now - this.lastRestartAtMs < APP_SERVER_RESTART_COOLDOWN_MS) {
@@ -272,6 +302,14 @@ export class AppServerProcess {
 
   getWebBridgeSettings(): WebBridgeSettings {
     return this.webBridgeSettings
+  }
+
+  setRestartProtectionReader(reader: () => number): void {
+    this.readRestartBlockingRequestCount = reader
+  }
+
+  invalidateThreadListCache(): void {
+    this.rpcCache.invalidateThreadList()
   }
 
   markPlanModeTurn(threadId: string, turnId = ''): void {
@@ -422,6 +460,9 @@ export class AppServerProcess {
       queuedRpcCount: this.rpcQueue.count,
       pendingServerRequestCount: this.serverRequests.pendingCount,
       activePlanModeTurnCount: this.serverRequests.activePlanModeTurnCount,
+      restartProtection: {
+        blockingRequestCount: Math.max(0, Math.trunc(this.readRestartBlockingRequestCount())),
+      },
       launchPolicy: createAppServerLaunchPolicySnapshot(this.appServerLaunchPolicy),
       rpcDiagnostics: this.rpcDiagnostics.snapshot(this.pending.count, this.rpcQueue.count),
     })

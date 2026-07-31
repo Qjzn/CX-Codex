@@ -1,4 +1,5 @@
 import { shouldInvalidateThreadReadCacheForNotification } from './appServerRpcCache.js'
+import { isCxSessionFilesChangedMethod } from '../sessionFileChange.js'
 import { updateRuntimeRequestsFromSnapshot } from './appServerRuntimeRequestReconciliation.js'
 import type { BridgeNotificationEvent } from './appServerRuntimeBridge.js'
 import type { RuntimeStateStore, ThreadRuntimeSnapshot } from './runtimeState.js'
@@ -41,10 +42,13 @@ export function syncBridgeNotificationRuntimeState(
   dependencies: BridgeNotificationRuntimeSyncDependencies,
 ): BridgeNotificationEvent {
   const event = dependencies.rememberNotificationEvent(notification)
-  dependencies.runtimeStateStore.observeEvent(event)
+  const externalSessionFileChange = isCxSessionFilesChangedMethod(notification.method)
+  if (!externalSessionFileChange) {
+    dependencies.runtimeStateStore.observeEvent(event)
+  }
 
   const eventThreadId = dependencies.readThreadIdFromPayload(notification.params)
-  if (eventThreadId) {
+  if (eventThreadId && !externalSessionFileChange) {
     const snapshot = dependencies.persistRuntimeSnapshot(eventThreadId)
     updateRuntimeRequestsFromSnapshot(eventThreadId, snapshot, dependencies.runtimeStore)
   }

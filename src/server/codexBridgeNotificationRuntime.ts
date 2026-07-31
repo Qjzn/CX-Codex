@@ -7,6 +7,7 @@ import {
   type AppServerNotification,
   type BridgeNotificationRuntimeSyncDependencies,
   subscribeBridgeNotificationRuntimeSync,
+  syncBridgeNotificationRuntimeState,
 } from './appServerNotificationRuntimeSync.js'
 import { AppServerNotificationListeners } from './appServerNotificationListeners.js'
 import type { BridgeNotificationEvent } from './appServerRuntimeBridge.js'
@@ -18,6 +19,7 @@ import type { RuntimeEventRecord } from './runtimeStore.js'
 
 type RuntimeEventReplay = {
   notifications: RuntimeEventRecord[]
+  streamId: string
   latestSeq: number
   oldestSeq: number
 }
@@ -25,6 +27,7 @@ type RuntimeEventReplay = {
 type CodexBridgeNotificationRuntimeStore =
   BridgeNotificationRuntimeSyncDependencies['runtimeStore'] & {
     getLatestEventSeq(): number
+    getStreamId(): string
     appendEvent(event: RuntimeEventRecord): RuntimeEventRecord
     listEventsAfter(afterSeq: number, limit: number): RuntimeEventReplay
   }
@@ -60,6 +63,7 @@ export type CodexBridgeNotificationRuntime = Pick<
   'notificationReplay' | 'listNotificationEventsAfter'
 > & {
   bridgeNotificationListeners: AppServerNotificationListeners<BridgeNotificationEvent>
+  publishBridgeNotification: (notification: AppServerNotification) => BridgeNotificationEvent
   unsubscribeAppServerNotifications: () => void
 }
 
@@ -73,6 +77,7 @@ export function createCodexBridgeNotificationRuntime(
     listNotificationEventsAfter,
   } = createAppServerNotificationReplayBundle({
     initialSeq: dependencies.runtimeStore.getLatestEventSeq(),
+    streamId: dependencies.runtimeStore.getStreamId(),
     appendEvent: (event) => {
       dependencies.runtimeStore.appendEvent(event)
     },
@@ -90,8 +95,7 @@ export function createCodexBridgeNotificationRuntime(
     readTurnIdFromPayload,
   })
 
-  const unsubscribeAppServerNotifications = subscribeBridgeNotificationRuntimeSync({
-    subscribeNotifications: dependencies.subscribeAppServerNotifications,
+  const runtimeSyncDependencies: BridgeNotificationRuntimeSyncDependencies = {
     rememberNotificationEvent,
     runtimeStateStore: dependencies.runtimeStateStore,
     readThreadIdFromPayload,
@@ -106,12 +110,20 @@ export function createCodexBridgeNotificationRuntime(
       })
       bridgeNotificationListeners.emit(event)
     },
+  }
+  const publishBridgeNotification = (notification: AppServerNotification): BridgeNotificationEvent => {
+    return syncBridgeNotificationRuntimeState(notification, runtimeSyncDependencies)
+  }
+  const unsubscribeAppServerNotifications = subscribeBridgeNotificationRuntimeSync({
+    subscribeNotifications: dependencies.subscribeAppServerNotifications,
+    ...runtimeSyncDependencies,
   })
 
   return {
     notificationReplay,
     listNotificationEventsAfter,
     bridgeNotificationListeners,
+    publishBridgeNotification,
     unsubscribeAppServerNotifications,
   }
 }

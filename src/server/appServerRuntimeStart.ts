@@ -144,7 +144,7 @@ async function startParsedRuntimeTurnWithAppServer(
   }
 
   if (shouldCreateRequest) {
-    dependencies.createRequest({
+    const accepted = dependencies.createRequest({
       requestId,
       clientMessageId: parsed.clientMessageId,
       threadId,
@@ -153,6 +153,15 @@ async function startParsedRuntimeTurnWithAppServer(
       mode: parsed.mode,
       payload: parsed.payloadSummary,
     })
+    if (accepted.requestId !== requestId) {
+      if (!runtimeRequestMatchesParsed(accepted, parsed, promptHash)) {
+        throw new Error('clientMessageId already belongs to different message content')
+      }
+      if (accepted.status === 'failed') {
+        throw new Error(accepted.lastError || 'Previous send attempt failed')
+      }
+      return runtimeStartResultFromRequest(accepted)
+    }
   }
 
   try {

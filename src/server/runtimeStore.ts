@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -52,6 +52,15 @@ export type RuntimeSnapshotRecord = {
   lastEventSeq: number
   updatedAtIso: string
   snapshot: unknown
+}
+
+export type RuntimeThreadLeaseRecord = {
+  threadId: string
+  requestId: string
+  turnId: string
+  generation: number
+  acquiredAtIso: string
+  updatedAtIso: string
 }
 
 export type MobilePushRegistrationRecord = {
@@ -119,6 +128,15 @@ type RuntimeSnapshotRow = {
   snapshot_json: string
 }
 
+type RuntimeThreadLeaseRow = {
+  thread_id: string
+  request_id: string
+  turn_id: string
+  generation: number
+  acquired_at_iso: string
+  updated_at_iso: string
+}
+
 type MobilePushRegistrationRow = {
   token_hash: string
   token: string
@@ -157,6 +175,7 @@ const RUNTIME_DB_AUTO_VACUUM_INCREMENTAL = 2
 const MOBILE_PUSH_DELIVERY_RETENTION_LIMIT = 128
 const MOBILE_PUSH_ACKNOWLEDGEMENT_RETENTION_LIMIT = 256
 const APP_LIST_UPDATED_METHOD = 'app/list/updated'
+const RUNTIME_REQUEST_RESTART_BLOCKING_STATUS_SQL = "'pending_start', 'starting', 'start_uncertain', 'running', 'stopping', 'stop_uncertain', 'still_running', 'sync_degraded'"
 
 export type RuntimeDatabaseStorageStats = {
   databaseBytes: number
@@ -264,6 +283,48 @@ function fromSnapshotRow(row: RuntimeSnapshotRow): RuntimeSnapshotRecord {
   }
 }
 
+function fromThreadLeaseRow(row: RuntimeThreadLeaseRow): RuntimeThreadLeaseRecord {
+  return {
+    threadId: row.thread_id,
+    requestId: row.request_id,
+    turnId: row.turn_id,
+    generation: row.generation,
+    acquiredAtIso: row.acquired_at_iso,
+    updatedAtIso: row.updated_at_iso,
+  }
+}
+
+function runtimeRequestOwnsThreadLease(
+  request: Pick<RuntimeRequestRecord, 'threadId' | 'status' | 'mode'>,
+): boolean {
+  return (
+    request.mode !== 'interrupt'
+    && request.threadId.trim().length > 0
+    && (
+      request.status === 'pending_start'
+      || request.status === 'starting'
+      || request.status === 'start_uncertain'
+      || request.status === 'running'
+      || request.status === 'stopping'
+      || request.status === 'stop_uncertain'
+      || request.status === 'still_running'
+      || request.status === 'sync_degraded'
+    )
+  )
+}
+
+export class RuntimeThreadBusyError extends Error {
+  readonly code = 'RUNTIME_THREAD_BUSY'
+
+  constructor(
+    readonly threadId: string,
+    readonly ownerRequestId: string,
+  ) {
+    super(`Thread ${threadId} already has an active runtime request`)
+    this.name = 'RuntimeThreadBusyError'
+  }
+}
+
 function fromMobilePushRegistrationRow(row: MobilePushRegistrationRow): MobilePushRegistrationRecord {
   const parsedThreadIds = safeParseJson(row.thread_ids_json)
   return {
@@ -314,6 +375,11 @@ export class RuntimeStore {
     this.db.pragma('journal_mode = WAL')
     this.db.pragma(`busy_timeout = ${RUNTIME_DB_BUSY_TIMEOUT_MS}`)
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS runtime_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS runtime_requests (
         request_id TEXT PRIMARY KEY,
         client_message_id TEXT NOT NULL DEFAULT '',
@@ -355,6 +421,17 @@ export class RuntimeStore {
         updated_at_iso TEXT NOT NULL,
         snapshot_json TEXT NOT NULL DEFAULT '{}'
       );
+
+      CREATE TABLE IF NOT EXISTS runtime_thread_leases (
+        thread_id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL UNIQUE,
+        turn_id TEXT NOT NULL DEFAULT '',
+        generation INTEGER NOT NULL DEFAULT 1,
+        acquired_at_iso TEXT NOT NULL,
+        updated_at_iso TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_runtime_thread_leases_updated
+        ON runtime_thread_leases(updated_at_iso);
 
       CREATE TABLE IF NOT EXISTS mobile_push_registrations (
         token_hash TEXT PRIMARY KEY,
@@ -420,6 +497,8 @@ export class RuntimeStore {
       FROM mobile_push_registrations
       WHERE last_delivery_key <> '';
     `)
+    this.getStreamId()
+    this.migrateRuntimeRequestOwnership()
     this.runLightweightStartupMaintenance()
   }
 
@@ -433,6 +512,25 @@ export class RuntimeStore {
     return typeof row?.seq === 'number' && Number.isFinite(row.seq) ? Math.max(0, Math.trunc(row.seq)) : 0
   }
 
+  getStreamId(): string {
+    const key = 'notification_stream_id'
+    const existing = this.db.prepare(
+      'SELECT value FROM runtime_metadata WHERE key = ?',
+    ).get(key) as { value?: string } | undefined
+    const existingValue = existing?.value?.trim() ?? ''
+    if (existingValue) return existingValue
+
+    this.db.prepare(
+      'INSERT OR IGNORE INTO runtime_metadata (key, value) VALUES (?, ?)',
+    ).run(key, randomUUID())
+    const created = this.db.prepare(
+      'SELECT value FROM runtime_metadata WHERE key = ?',
+    ).get(key) as { value?: string } | undefined
+    const createdValue = created?.value?.trim() ?? ''
+    if (!createdValue) throw new Error('Runtime Store could not initialize notification stream identity')
+    return createdValue
+  }
+
   createRequest(record: {
     requestId: string
     clientMessageId?: string
@@ -444,39 +542,51 @@ export class RuntimeStore {
     payload?: unknown
     lastError?: string | null
   }): RuntimeRequestRecord {
-    const timestamp = nowIso()
-    this.db.prepare(`
-      INSERT INTO runtime_requests (
-        request_id, client_message_id, thread_id, turn_id, status, prompt_hash, mode,
-        payload_json, retry_count, created_at_iso, updated_at_iso, last_error
-      ) VALUES (
-        @requestId, @clientMessageId, @threadId, @turnId, @status, @promptHash, @mode,
-        @payloadJson, 0, @createdAtIso, @updatedAtIso, @lastError
-      )
-      ON CONFLICT(request_id) DO UPDATE SET
-        client_message_id=excluded.client_message_id,
-        thread_id=excluded.thread_id,
-        turn_id=excluded.turn_id,
-        status=excluded.status,
-        prompt_hash=excluded.prompt_hash,
-        mode=excluded.mode,
-        payload_json=excluded.payload_json,
-        updated_at_iso=excluded.updated_at_iso,
-        last_error=excluded.last_error
-    `).run({
-      requestId: record.requestId,
-      clientMessageId: record.clientMessageId ?? '',
-      threadId: record.threadId ?? '',
-      turnId: record.turnId ?? '',
-      status: record.status,
-      promptHash: record.promptHash ?? '',
-      mode: record.mode ?? '',
-      payloadJson: toJson(record.payload ?? {}),
-      createdAtIso: timestamp,
-      updatedAtIso: timestamp,
-      lastError: record.lastError ?? null,
-    })
-    return this.getRequest(record.requestId) as RuntimeRequestRecord
+    return this.db.transaction(() => {
+      const clientMessageId = record.clientMessageId?.trim() ?? ''
+      if (clientMessageId) {
+        const accepted = this.getLatestRequestByClientMessageId(clientMessageId)
+        if (accepted && accepted.requestId !== record.requestId) return accepted
+      }
+
+      const timestamp = nowIso()
+      this.db.prepare(`
+        INSERT INTO runtime_requests (
+          request_id, client_message_id, thread_id, turn_id, status, prompt_hash, mode,
+          payload_json, retry_count, created_at_iso, updated_at_iso, last_error
+        ) VALUES (
+          @requestId, @clientMessageId, @threadId, @turnId, @status, @promptHash, @mode,
+          @payloadJson, 0, @createdAtIso, @updatedAtIso, @lastError
+        )
+        ON CONFLICT(request_id) DO UPDATE SET
+          client_message_id=excluded.client_message_id,
+          thread_id=excluded.thread_id,
+          turn_id=excluded.turn_id,
+          status=excluded.status,
+          prompt_hash=excluded.prompt_hash,
+          mode=excluded.mode,
+          payload_json=excluded.payload_json,
+          updated_at_iso=excluded.updated_at_iso,
+          last_error=excluded.last_error
+      `).run({
+        requestId: record.requestId,
+        clientMessageId,
+        threadId: record.threadId?.trim() ?? '',
+        turnId: record.turnId?.trim() ?? '',
+        status: record.status,
+        promptHash: record.promptHash ?? '',
+        mode: record.mode ?? '',
+        payloadJson: toJson(record.payload ?? {}),
+        createdAtIso: timestamp,
+        updatedAtIso: timestamp,
+        lastError: record.lastError ?? null,
+      })
+      const created = this.getRequest(record.requestId) as RuntimeRequestRecord
+      if (runtimeRequestOwnsThreadLease(created)) {
+        this.claimThreadLease(created, true)
+      }
+      return created
+    }).immediate()
   }
 
   updateRequest(requestId: string, patch: {
@@ -487,30 +597,61 @@ export class RuntimeStore {
     payload?: unknown
     incrementRetry?: boolean
   }): RuntimeRequestRecord | null {
-    const existing = this.getRequest(requestId)
-    if (!existing) return null
-    const nextPayload = typeof patch.payload === 'undefined' ? existing.payload : patch.payload
-    this.db.prepare(`
-      UPDATE runtime_requests SET
-        thread_id=@threadId,
-        turn_id=@turnId,
-        status=@status,
-        payload_json=@payloadJson,
-        retry_count=@retryCount,
-        updated_at_iso=@updatedAtIso,
-        last_error=@lastError
-      WHERE request_id=@requestId
-    `).run({
-      requestId,
-      threadId: patch.threadId ?? existing.threadId,
-      turnId: patch.turnId ?? existing.turnId,
-      status: patch.status ?? existing.status,
-      payloadJson: toJson(nextPayload),
-      retryCount: existing.retryCount + (patch.incrementRetry === true ? 1 : 0),
-      updatedAtIso: nowIso(),
-      lastError: typeof patch.lastError === 'undefined' ? existing.lastError : patch.lastError,
-    })
-    return this.getRequest(requestId)
+    return this.db.transaction(() => {
+      const existing = this.getRequest(requestId)
+      if (!existing) return null
+      const nextPayload = typeof patch.payload === 'undefined' ? existing.payload : patch.payload
+      const nextRecord: RuntimeRequestRecord = {
+        ...existing,
+        threadId: patch.threadId?.trim() ?? existing.threadId,
+        turnId: patch.turnId?.trim() ?? existing.turnId,
+        status: patch.status ?? existing.status,
+        payload: nextPayload,
+        retryCount: existing.retryCount + (patch.incrementRetry === true ? 1 : 0),
+        updatedAtIso: nowIso(),
+        lastError: typeof patch.lastError === 'undefined' ? existing.lastError : patch.lastError,
+      }
+      const movingOwnedLease = runtimeRequestOwnsThreadLease(existing)
+        && runtimeRequestOwnsThreadLease(nextRecord)
+        && existing.threadId !== nextRecord.threadId
+      if (movingOwnedLease) {
+        this.db.prepare(
+          'DELETE FROM runtime_thread_leases WHERE thread_id = ? AND request_id = ?',
+        ).run(existing.threadId, requestId)
+      }
+      if (runtimeRequestOwnsThreadLease(nextRecord)) {
+        const alreadyActiveOnThread = runtimeRequestOwnsThreadLease(existing)
+          && existing.threadId === nextRecord.threadId
+        this.claimThreadLease(nextRecord, !alreadyActiveOnThread)
+      }
+      this.db.prepare(`
+        UPDATE runtime_requests SET
+          thread_id=@threadId,
+          turn_id=@turnId,
+          status=@status,
+          payload_json=@payloadJson,
+          retry_count=@retryCount,
+          updated_at_iso=@updatedAtIso,
+          last_error=@lastError
+        WHERE request_id=@requestId
+      `).run({
+        requestId,
+        threadId: nextRecord.threadId,
+        turnId: nextRecord.turnId,
+        status: nextRecord.status,
+        payloadJson: toJson(nextRecord.payload),
+        retryCount: nextRecord.retryCount,
+        updatedAtIso: nextRecord.updatedAtIso,
+        lastError: nextRecord.lastError,
+      })
+      if (movingOwnedLease) {
+        this.restoreThreadLeaseForActiveRequest(existing.threadId)
+      }
+      if (!runtimeRequestOwnsThreadLease(nextRecord)) {
+        this.releaseThreadLease(existing.threadId, requestId)
+      }
+      return this.getRequest(requestId)
+    }).immediate()
   }
 
   getRequest(requestId: string): RuntimeRequestRecord | null {
@@ -550,6 +691,19 @@ export class RuntimeStore {
       LIMIT ?
     `).all(Math.max(1, Math.min(200, Math.trunc(limit)))) as RuntimeRequestRow[]
     return rows.map(fromRequestRow)
+  }
+
+  getThreadLease(threadId: string): RuntimeThreadLeaseRecord | null {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return null
+    const row = this.db.prepare(
+      'SELECT * FROM runtime_thread_leases WHERE thread_id = ?',
+    ).get(normalizedThreadId) as RuntimeThreadLeaseRow | undefined
+    return row ? fromThreadLeaseRow(row) : null
+  }
+
+  getRestartBlockingRequestCount(): number {
+    return this.countRequestsByStatusSql(RUNTIME_REQUEST_RESTART_BLOCKING_STATUS_SQL)
   }
 
   appendEvent(event: RuntimeEventRecord): RuntimeEventRecord {
@@ -620,6 +774,7 @@ export class RuntimeStore {
 
   listEventsAfter(afterSeq: number, limit = 200): {
     notifications: RuntimeEventRecord[]
+    streamId: string
     latestSeq: number
     oldestSeq: number
   } {
@@ -633,6 +788,7 @@ export class RuntimeStore {
     `).all(normalizedAfterSeq, normalizedLimit) as RuntimeEventRow[]
     return {
       notifications: rows.map(fromEventRow),
+      streamId: this.getStreamId(),
       latestSeq: this.getLatestEventSeq(),
       oldestSeq: this.getOldestEventSeq(),
     }
@@ -1137,11 +1293,13 @@ export class RuntimeStore {
 
   getHealth(): {
     path: string
+    streamId: string
     requestCount: number
     uncertainRequestCount: number
     latestSeq: number
     oldestSeq: number
     snapshotCount: number
+    threadLeaseCount: number
     databaseBytes: number
     freeBytes: number
     freePageRatio: number
@@ -1158,6 +1316,7 @@ export class RuntimeStore {
     const storage = this.getStorageStats()
     return {
       path: displayPath,
+      streamId: this.getStreamId(),
       requestCount: scalar('SELECT COUNT(*) AS value FROM runtime_requests'),
       uncertainRequestCount: scalar(`
         SELECT COUNT(*) AS value FROM runtime_requests
@@ -1166,6 +1325,7 @@ export class RuntimeStore {
       latestSeq: this.getLatestEventSeq(),
       oldestSeq: this.getOldestEventSeq(),
       snapshotCount: scalar('SELECT COUNT(*) AS value FROM thread_runtime_snapshots'),
+      threadLeaseCount: scalar('SELECT COUNT(*) AS value FROM runtime_thread_leases'),
       databaseBytes: storage.databaseBytes,
       freeBytes: storage.freeBytes,
       freePageRatio: storage.freePageRatio,
@@ -1204,17 +1364,142 @@ export class RuntimeStore {
     this.runIncrementalVacuum()
   }
 
+  private migrateRuntimeRequestOwnership(): void {
+    this.db.transaction(() => {
+      this.db.exec(`
+        WITH ranked AS (
+          SELECT
+            request_id,
+            ROW_NUMBER() OVER (
+              PARTITION BY client_message_id
+              ORDER BY updated_at_iso DESC, request_id DESC
+            ) AS duplicate_rank
+          FROM runtime_requests
+          WHERE client_message_id <> ''
+        )
+        UPDATE runtime_requests
+        SET client_message_id = ''
+        WHERE request_id IN (
+          SELECT request_id FROM ranked WHERE duplicate_rank > 1
+        );
+
+        DROP INDEX IF EXISTS idx_runtime_requests_client_message;
+        CREATE UNIQUE INDEX idx_runtime_requests_client_message
+          ON runtime_requests(client_message_id)
+          WHERE client_message_id <> '';
+
+        DELETE FROM runtime_thread_leases
+        WHERE NOT EXISTS (
+          SELECT 1 FROM runtime_requests
+          WHERE runtime_requests.request_id = runtime_thread_leases.request_id
+            AND runtime_requests.thread_id = runtime_thread_leases.thread_id
+            AND runtime_requests.mode <> 'interrupt'
+            AND runtime_requests.status IN (${RUNTIME_REQUEST_RESTART_BLOCKING_STATUS_SQL})
+        );
+
+        WITH ranked AS (
+          SELECT
+            request_id,
+            thread_id,
+            turn_id,
+            updated_at_iso,
+            ROW_NUMBER() OVER (
+              PARTITION BY thread_id
+              ORDER BY updated_at_iso DESC, request_id DESC
+            ) AS owner_rank
+          FROM runtime_requests
+          WHERE thread_id <> ''
+            AND mode <> 'interrupt'
+            AND status IN (${RUNTIME_REQUEST_RESTART_BLOCKING_STATUS_SQL})
+        )
+        INSERT OR IGNORE INTO runtime_thread_leases (
+          thread_id, request_id, turn_id, generation, acquired_at_iso, updated_at_iso
+        )
+        SELECT
+          thread_id, request_id, turn_id, 1, updated_at_iso, updated_at_iso
+        FROM ranked
+        WHERE owner_rank = 1;
+      `)
+    }).immediate()
+  }
+
+  private claimThreadLease(request: RuntimeRequestRecord, strict: boolean): void {
+    const threadId = request.threadId.trim()
+    if (!threadId) return
+    const timestamp = nowIso()
+    const existing = this.getThreadLease(threadId)
+    if (!existing) {
+      this.db.prepare(`
+        INSERT INTO runtime_thread_leases (
+          thread_id, request_id, turn_id, generation, acquired_at_iso, updated_at_iso
+        ) VALUES (?, ?, ?, 1, ?, ?)
+      `).run(threadId, request.requestId, request.turnId, timestamp, timestamp)
+      return
+    }
+    if (existing.requestId === request.requestId) {
+      this.db.prepare(`
+        UPDATE runtime_thread_leases
+        SET turn_id = ?, updated_at_iso = ?
+        WHERE thread_id = ? AND request_id = ?
+      `).run(request.turnId, timestamp, threadId, request.requestId)
+      return
+    }
+
+    const owner = this.getRequest(existing.requestId)
+    if (owner && runtimeRequestOwnsThreadLease(owner)) {
+      if (strict) throw new RuntimeThreadBusyError(threadId, existing.requestId)
+      return
+    }
+
+    this.db.prepare(`
+      UPDATE runtime_thread_leases
+      SET request_id = ?, turn_id = ?, generation = generation + 1,
+          acquired_at_iso = ?, updated_at_iso = ?
+      WHERE thread_id = ?
+    `).run(request.requestId, request.turnId, timestamp, timestamp, threadId)
+  }
+
+  private releaseThreadLease(threadId: string, requestId: string): void {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return
+    this.db.prepare(
+      'DELETE FROM runtime_thread_leases WHERE thread_id = ? AND request_id = ?',
+    ).run(normalizedThreadId, requestId)
+    this.restoreThreadLeaseForActiveRequest(normalizedThreadId)
+  }
+
+  private restoreThreadLeaseForActiveRequest(threadId: string): void {
+    if (this.getThreadLease(threadId)) return
+    const row = this.db.prepare(`
+      SELECT * FROM runtime_requests
+      WHERE thread_id = ?
+        AND mode <> 'interrupt'
+        AND status IN (${RUNTIME_REQUEST_RESTART_BLOCKING_STATUS_SQL})
+      ORDER BY updated_at_iso DESC, request_id DESC
+      LIMIT 1
+    `).get(threadId) as RuntimeRequestRow | undefined
+    if (row) this.claimThreadLease(fromRequestRow(row), false)
+  }
+
+  private countRequestsByStatusSql(statusSql: string): number {
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS value FROM runtime_requests
+      WHERE status IN (${statusSql})
+    `).get() as { value?: number } | undefined
+    return typeof row?.value === 'number' && Number.isFinite(row.value)
+      ? Math.max(0, Math.trunc(row.value))
+      : 0
+  }
+
   private runIncrementalVacuum(): void {
     if (this.readPragmaNumber('auto_vacuum') !== RUNTIME_DB_AUTO_VACUUM_INCREMENTAL) return
     this.db.pragma(`incremental_vacuum(${RUNTIME_DB_INCREMENTAL_VACUUM_PAGES})`)
   }
 
   private countActiveRequests(): number {
-    const row = this.db.prepare(`
-      SELECT COUNT(*) AS value FROM runtime_requests
-      WHERE status IN ('pending_start', 'starting', 'start_uncertain', 'running', 'stopping', 'stop_uncertain', 'still_running')
-    `).get() as { value?: number } | undefined
-    return typeof row?.value === 'number' && Number.isFinite(row.value) ? Math.max(0, Math.trunc(row.value)) : 0
+    return this.countRequestsByStatusSql(
+      "'pending_start', 'starting', 'start_uncertain', 'running', 'stopping', 'stop_uncertain', 'still_running'",
+    )
   }
 
   private readPragmaNumber(name: 'page_count' | 'freelist_count' | 'page_size' | 'auto_vacuum'): number {

@@ -21,6 +21,7 @@ public final class TaskPetNoProgressReviewReceiver extends BroadcastReceiver {
     private static final String ACTION_REVIEW = "com.cxcodex.bridge.taskpet.NO_PROGRESS_REVIEW";
     private static final String CHANNEL_ID = "cx_codex_task_no_progress_v1";
     private static final String CHANNEL_NAME = "CX-Codex 长任务提醒";
+    private static final String NOTIFICATION_GROUP_KEY = "cx_codex_tasks";
     private static final int ALARM_REQUEST_CODE = 7422;
     private static final long MIN_SCHEDULE_DELAY_MS = 1_000L;
 
@@ -65,24 +66,30 @@ public final class TaskPetNoProgressReviewReceiver extends BroadcastReceiver {
         String threadId,
         String notificationKey,
         String title,
-        String detail,
-        long lastProgressAtMs,
-        long nowMs
+        String runtimeState
     ) {
         ensureNotificationChannel(context);
-        long silentMinutes = Math.max(10L, (nowMs - lastProgressAtMs) / 60_000L);
-        String status = detail == null || detail.isEmpty() ? "任务仍在等待新的回复" : detail;
-        String body = title + " · " + status + "。点此查看或继续回复";
+        String status = TaskNotificationPolicy.statusLabel(runtimeState);
+        android.app.Notification publicVersion = new NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(status)
+            .setContentText("CX-Codex 任务")
+            .setOnlyAlertOnce(false)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build();
         NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("任务已连续 " + silentMinutes + " 分钟无新进展")
-            .setContentText(body)
-            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+            .setContentTitle(status)
+            .setContentText(title)
             .setContentIntent(createOpenPendingIntent(context, threadId, notificationKey))
             .setAutoCancel(true)
             .setOnlyAlertOnce(false)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT);
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicVersion)
+            .setGroup(NOTIFICATION_GROUP_KEY);
         try {
             NotificationManagerCompat.from(context).notify(notificationId(notificationKey), builder.build());
         } catch (SecurityException ignored) {
@@ -163,9 +170,7 @@ public final class TaskPetNoProgressReviewReceiver extends BroadcastReceiver {
                 threadId,
                 notificationKey,
                 clean(row.optString("title", "未命名会话")),
-                clean(row.optString("detail", "任务进行中")),
-                row.optLong("lastUpdatedAtMs", 0L),
-                nowMs
+                clean(row.optString("executionState", row.optString("state")))
             );
         }
         scheduleNext(context, nextTasksJson);
@@ -237,7 +242,7 @@ public final class TaskPetNoProgressReviewReceiver extends BroadcastReceiver {
             CHANNEL_NAME,
             NotificationManager.IMPORTANCE_DEFAULT
         );
-        channel.setDescription("长任务静默 10 分钟首次提醒，之后约每 20 分钟复盘；省电模式下可能延后");
+        channel.setDescription("长任务无新进展时用两字状态和标题提醒；省电模式下可能延后");
         channel.setShowBadge(true);
         manager.createNotificationChannel(channel);
     }

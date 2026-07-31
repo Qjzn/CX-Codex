@@ -113,7 +113,15 @@ public class MainActivity extends BridgeActivity {
             "/thread/" + Uri.encode(threadId)
         );
         if (bridge != null && bridge.getWebView() != null) {
-            bridge.getWebView().post(() -> bridge.getWebView().loadUrl(targetUrl));
+            WebView webView = bridge.getWebView();
+            if (!MobileShellConfig.shouldLoadPendingAppRoute(webView.getUrl(), targetUrl)) {
+                return;
+            }
+            webView.post(() -> {
+                if (MobileShellConfig.shouldLoadPendingAppRoute(webView.getUrl(), targetUrl)) {
+                    webView.loadUrl(targetUrl);
+                }
+            });
         }
     }
 
@@ -291,7 +299,7 @@ public class MainActivity extends BridgeActivity {
             }
             mainFrameLoadFailed = false;
             showConnectionLoading();
-            webView.loadUrl(serverUrl);
+            webView.loadUrl(MobileShellConfig.resolveAppRetryUrl(serverUrl, webView.getUrl()));
         });
         LinearLayout.LayoutParams actionButtonParams = new LinearLayout.LayoutParams(
             0,

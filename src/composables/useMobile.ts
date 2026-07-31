@@ -4,6 +4,9 @@ const MOBILE_BREAKPOINT = 768
 const TOUCH_DUAL_PANE_MIN_WIDTH = 680
 const TOUCH_DUAL_PANE_MAX_WIDTH = 1180
 const TOUCH_DUAL_PANE_MAX_LONG_EDGE = 1800
+const TOUCH_HANDSET_MAX_SHORT_EDGE = 600
+const TOUCH_HANDSET_MAX_LONG_EDGE = 960
+const COMPACT_HANDSET_MAX_SHORT_EDGE = 480
 
 type WindowWithViewportSegments = Window & {
   getWindowSegments?: () => Array<{ width: number; height: number }>
@@ -17,6 +20,15 @@ function readViewportWidth(): number {
 function readViewportHeight(): number {
   if (typeof window === 'undefined') return 0
   return window.innerHeight || document.documentElement.clientHeight || 0
+}
+
+function readCoarsePointer(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.matchMedia('(pointer: coarse)').matches
+  } catch {
+    return false
+  }
 }
 
 function readViewportSegmentCount(): number {
@@ -34,7 +46,7 @@ export function useMobile() {
   const viewportWidth = ref(readViewportWidth())
   const viewportHeight = ref(readViewportHeight())
   const viewportSegmentCount = ref(readViewportSegmentCount())
-  const isCoarsePointer = ref(false)
+  const isCoarsePointer = ref(readCoarsePointer())
   const stableDualPaneMobile = ref(false)
 
   let coarsePointerMql: MediaQueryList | null = null
@@ -84,9 +96,18 @@ export function useMobile() {
   }
 
   const isDualPaneMobile = computed(() => stableDualPaneMobile.value)
+  const isHandsetViewport = computed(() => {
+    const shortEdge = Math.min(viewportWidth.value, viewportHeight.value)
+    const longEdge = Math.max(viewportWidth.value, viewportHeight.value)
+    return (
+      shortEdge < TOUCH_HANDSET_MAX_SHORT_EDGE
+      && longEdge <= TOUCH_HANDSET_MAX_LONG_EDGE
+      && (isCoarsePointer.value || shortEdge <= COMPACT_HANDSET_MAX_SHORT_EDGE)
+    )
+  })
 
   const isMobile = computed(() => (
-    viewportWidth.value < MOBILE_BREAKPOINT
+    (viewportWidth.value < MOBILE_BREAKPOINT || isHandsetViewport.value)
     && !isDualPaneMobile.value
   ))
 
@@ -99,7 +120,6 @@ export function useMobile() {
     window.addEventListener('orientationchange', refreshViewport, { passive: true })
     window.addEventListener('pageshow', refreshViewport, { passive: true })
     window.visualViewport?.addEventListener('resize', refreshViewport, { passive: true })
-    window.visualViewport?.addEventListener('scroll', refreshViewport, { passive: true })
     window.screen.orientation?.addEventListener('change', refreshViewport)
   })
 
@@ -109,7 +129,6 @@ export function useMobile() {
     window.removeEventListener('orientationchange', refreshViewport)
     window.removeEventListener('pageshow', refreshViewport)
     window.visualViewport?.removeEventListener('resize', refreshViewport)
-    window.visualViewport?.removeEventListener('scroll', refreshViewport)
     window.screen.orientation?.removeEventListener('change', refreshViewport)
   })
 

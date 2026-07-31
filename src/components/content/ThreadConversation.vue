@@ -57,6 +57,7 @@
         ref="conversationListRef"
         class="conversation-list"
         :class="{ 'conversation-list--switching': isThreadSwitchingState }"
+        :data-thread-id="activeThreadId"
         :data-message-count="renderableMessages.length"
         :data-earliest-turn-index="earliestRenderableTurnIndex ?? undefined"
         tabindex="0"
@@ -1059,10 +1060,12 @@
         @click="closeLiveOverlayDetail"
       >
         <section
+          ref="liveOverlayDetailSheetRef"
           class="live-overlay-detail-sheet"
           role="dialog"
           aria-modal="true"
           aria-label="运行详情"
+          tabindex="-1"
           @click.stop
         >
           <span class="live-overlay-detail-handle" aria-hidden="true" />
@@ -1204,7 +1207,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import type { ThreadScrollState, UiLiveOverlay, UiMessage, UiServerRequest } from '../../types/codex'
 import IconTablerX from '../icons/IconTablerX.vue'
@@ -1952,6 +1955,7 @@ const conversationListRef = ref<HTMLElement | null>(null)
 const bottomAnchorRef = ref<HTMLElement | null>(null)
 const processPanelRef = ref<HTMLElement | null>(null)
 const liveOverlayReasoningRef = ref<HTMLElement | null>(null)
+const liveOverlayDetailSheetRef = ref<HTMLElement | null>(null)
 const modalImageUrl = ref('')
 const isModalImageLoading = ref(false)
 const isModalImageFailed = ref(false)
@@ -1991,6 +1995,9 @@ let modalImageDragOriginY = 0
 let highlightedMessageTimer: number | null = null
 const pendingRollbackMessageId = ref('')
 let rollbackConfirmTimer: number | null = null
+let liveOverlayDetailPreviousFocus: HTMLElement | null = null
+let liveOverlayDetailPreviousBodyOverflow = ''
+let liveOverlayDetailOwnsBodyScrollLock = false
 let previousBodyOverflow = ''
 let imageModalPreviousFocus: HTMLElement | null = null
 const copiedCodeBlockKey = ref('')
@@ -2040,7 +2047,11 @@ let scrollInteractionFrame = 0
 let scrollStateIdleTimer: number | null = null
 let pendingScrollStateContainer: HTMLElement | null = null
 let pendingScrollStateForce = false
+let pendingScrollStateThreadId = ''
 let pendingScrollInteractionContainer: HTMLElement | null = null
+let scrollContextGeneration = 0
+let threadSwitchScrollRestorePending = false
+let scrollAnchorRestoreResolve: ((restored: boolean) => void) | null = null
 let lastGapMeasuredContainer: HTMLElement | null = null
 let lastGapMeasuredViewportHeight = -1
 let observedConversationListElement: HTMLElement | null = null
@@ -2074,6 +2085,8 @@ const itemResizeObserver =
       for (const entry of entries) {
         const target = entry.target
         if (!(target instanceof HTMLElement)) continue
+        const ownerThreadId = target.closest<HTMLElement>('.conversation-list')?.dataset.threadId?.trim() ?? ''
+        if (ownerThreadId && ownerThreadId !== props.activeThreadId) continue
         const measureKind = target.dataset.measureKind
         const measureId = target.dataset.measureId ?? ''
         if (!measureKind || !measureId) continue
@@ -2107,6 +2120,7 @@ const conversationListResizeObserver =
       for (const entry of entries) {
         const target = entry.target
         if (!(target instanceof HTMLElement)) continue
+        if ((target.dataset.threadId?.trim() ?? '') !== props.activeThreadId) continue
         syncConversationViewport(target)
         if (shouldLockToBottom()) {
           scheduleBottomLock(1)
@@ -2463,17 +2477,42 @@ function restoreScrollAnchor(snapshot: ScrollAnchorSnapshot): boolean {
 
 async function scheduleScrollAnchorRestore(snapshot: ScrollAnchorSnapshot | null): Promise<boolean> {
   if (!snapshot) return false
+  const requestedThreadId = props.activeThreadId
+  const requestedGeneration = scrollContextGeneration
   await nextTick()
-  if (scrollAnchorRestoreFrame) {
-    cancelAnimationFrame(scrollAnchorRestoreFrame)
-  }
+  if (
+    requestedGeneration !== scrollContextGeneration
+    || requestedThreadId !== props.activeThreadId
+  ) return false
+  cancelScheduledScrollAnchorRestore()
 
   return await new Promise<boolean>((resolve) => {
+    scrollAnchorRestoreResolve = resolve
     scrollAnchorRestoreFrame = requestAnimationFrame(() => {
       scrollAnchorRestoreFrame = 0
+      scrollAnchorRestoreResolve = null
+      if (
+        requestedGeneration !== scrollContextGeneration
+        || requestedThreadId !== props.activeThreadId
+      ) {
+        resolve(false)
+        return
+      }
       resolve(restoreScrollAnchor(snapshot))
     })
   })
+}
+
+function cancelScheduledScrollAnchorRestore(): void {
+  if (scrollAnchorRestoreFrame) {
+    cancelAnimationFrame(scrollAnchorRestoreFrame)
+    scrollAnchorRestoreFrame = 0
+  }
+  if (scrollAnchorRestoreResolve) {
+    const resolve = scrollAnchorRestoreResolve
+    scrollAnchorRestoreResolve = null
+    resolve(false)
+  }
 }
 
 async function restoreScrollAnchorOverFrames(snapshot: ScrollAnchorSnapshot | null, frames = 4): Promise<void> {
@@ -3425,6 +3464,7 @@ function onWindowBlurForFileLinkContextMenu(): void {
 
 function onWindowKeydownForFileLinkContextMenu(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return
+  event.preventDefault()
   closeFileLinkContextMenu()
 }
 
@@ -4655,6 +4695,43 @@ function closeLiveOverlayDetail(): void {
   isLiveOverlayDetailOpen.value = false
 }
 
+function restoreLiveOverlayDetailEnvironment(): void {
+  if (typeof document === 'undefined') return
+  if (liveOverlayDetailOwnsBodyScrollLock) {
+    document.body.style.overflow = liveOverlayDetailPreviousBodyOverflow
+    liveOverlayDetailOwnsBodyScrollLock = false
+    liveOverlayDetailPreviousBodyOverflow = ''
+  }
+  const focusTarget = liveOverlayDetailPreviousFocus
+  liveOverlayDetailPreviousFocus = null
+  if (focusTarget?.isConnected) {
+    focusTarget.focus({ preventScroll: true })
+  }
+}
+
+function onWindowKeyDownForConversationSurface(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || event.defaultPrevented) return
+
+  let handled = true
+  if (isLiveOverlayDetailOpen.value) {
+    closeLiveOverlayDetail()
+  } else if (modalImageUrl.value) {
+    closeImageModal()
+  } else if (isFileLinkContextMenuVisible.value) {
+    closeFileLinkContextMenu()
+  } else if (pendingRollbackMessageId.value) {
+    clearRollbackConfirmation()
+  } else if (activeMessageActionId.value) {
+    activeMessageActionId.value = ''
+  } else {
+    handled = false
+  }
+
+  if (!handled) return
+  event.preventDefault()
+  event.stopPropagation()
+}
+
 function goToPendingRequestsFromDetail(): void {
   closeLiveOverlayDetail()
   void nextTick(() => {
@@ -4794,14 +4871,22 @@ function flushScrollState(): void {
   scrollStateEmitFrame = 0
   const container = pendingScrollStateContainer
   const force = pendingScrollStateForce
+  const threadId = pendingScrollStateThreadId
   pendingScrollStateContainer = null
   pendingScrollStateForce = false
-  if (!container) return
-  emitScrollState(container, force)
+  pendingScrollStateThreadId = ''
+  if (!container || !threadId) return
+  emitScrollState(container, force, false, threadId)
 }
 
-function emitScrollState(container: HTMLElement, force = false, viewportSynced = false): void {
-  if (!props.activeThreadId) return
+function emitScrollState(
+  container: HTMLElement,
+  force = false,
+  viewportSynced = false,
+  threadId = props.activeThreadId,
+): void {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return
   if (!viewportSynced) {
     syncConversationViewport(container)
   }
@@ -4809,7 +4894,7 @@ function emitScrollState(container: HTMLElement, force = false, viewportSynced =
   const scrollRatio = maxScrollTop > 0 ? Math.min(Math.max(container.scrollTop / maxScrollTop, 0), 1) : 1
   const atBottom = isAtBottom(container)
   const nextSignature = [
-    props.activeThreadId,
+    normalizedThreadId,
     String(Math.round(container.scrollTop / 24)),
     atBottom ? '1' : '0',
     String(Math.round(scrollRatio * 100)),
@@ -4827,7 +4912,7 @@ function emitScrollState(container: HTMLElement, force = false, viewportSynced =
   lastScrollStateEmitAt = now
   lastEmittedScrollStateSignature.value = nextSignature
   emit('updateScrollState', {
-    threadId: props.activeThreadId,
+    threadId: normalizedThreadId,
     state: {
       scrollTop: container.scrollTop,
       isAtBottom: atBottom,
@@ -4843,6 +4928,7 @@ function scheduleEmitScrollState(container: HTMLElement, force = false): void {
   }
   pendingScrollStateContainer = container
   pendingScrollStateForce = pendingScrollStateForce || force
+  pendingScrollStateThreadId = props.activeThreadId
   if (scrollStateEmitFrame) return
   scrollStateEmitFrame = requestAnimationFrame(flushScrollState)
 }
@@ -4905,6 +4991,7 @@ function scheduleChatFeedbackMetric(): void {
 function scheduleIdleScrollStateEmit(container: HTMLElement, force = false): void {
   pendingScrollStateContainer = container
   pendingScrollStateForce = pendingScrollStateForce || force
+  pendingScrollStateThreadId = props.activeThreadId
   if (typeof window === 'undefined') {
     flushScrollState()
     return
@@ -5126,7 +5213,8 @@ function scheduleBottomLock(frames = 1): void {
   bottomLockFrame = requestAnimationFrame(runBottomLockFrame)
 }
 
-function onPendingImageSettled(): void {
+function onPendingImageSettled(ownerThreadId: string): void {
+  if (ownerThreadId !== props.activeThreadId) return
   scheduleBottomLock(3)
 }
 
@@ -5136,23 +5224,42 @@ function bindPendingImageHandlers(): void {
   if (!container) return
 
   const images = container.querySelectorAll<HTMLImageElement>('img.message-image-preview')
+  const ownerThreadId = props.activeThreadId
   for (const image of images) {
     if (image.complete || trackedPendingImages.has(image)) continue
     trackedPendingImages.add(image)
-    image.addEventListener('load', onPendingImageSettled, { once: true })
-    image.addEventListener('error', onPendingImageSettled, { once: true })
+    const onSettled = () => {
+      image.removeEventListener('load', onSettled)
+      image.removeEventListener('error', onSettled)
+      onPendingImageSettled(ownerThreadId)
+    }
+    image.addEventListener('load', onSettled, { once: true })
+    image.addEventListener('error', onSettled, { once: true })
   }
 }
 
-async function scheduleScrollRestore(forceBottom = shouldLockToBottom()): Promise<void> {
-  const anchorSnapshot = forceBottom ? null : captureVisibleConversationAnchor()
+async function scheduleScrollRestore(forceBottom: boolean | null = shouldLockToBottom()): Promise<void> {
+  const requestedThreadId = props.activeThreadId
+  const requestedGeneration = scrollContextGeneration
+  const anchorSnapshot = forceBottom === false ? captureVisibleConversationAnchor() : null
   await nextTick()
+  if (
+    requestedGeneration !== scrollContextGeneration
+    || requestedThreadId !== props.activeThreadId
+  ) return
   if (scrollRestoreFrame) {
     cancelAnimationFrame(scrollRestoreFrame)
   }
   scrollRestoreFrame = requestAnimationFrame(() => {
     scrollRestoreFrame = 0
-    if (forceBottom) {
+    if (
+      requestedGeneration !== scrollContextGeneration
+      || requestedThreadId !== props.activeThreadId
+    ) return
+    const resolvedForceBottom = forceBottom === null
+      ? props.scrollState?.isAtBottom !== false
+      : forceBottom
+    if (resolvedForceBottom) {
       enforceBottomState()
     } else {
       const didRestoreAnchor = anchorSnapshot ? restoreScrollAnchor(anchorSnapshot) : false
@@ -5161,7 +5268,7 @@ async function scheduleScrollRestore(forceBottom = shouldLockToBottom()): Promis
       }
     }
     bindPendingImageHandlers()
-    if (forceBottom) {
+    if (resolvedForceBottom) {
       scheduleBottomLock()
     }
   })
@@ -5196,7 +5303,9 @@ watch(
       markBelowFoldUpdate()
     }
 
-    await scheduleScrollRestore(shouldFollowBottom)
+    if (!threadSwitchScrollRestorePending) {
+      await scheduleScrollRestore(shouldFollowBottom)
+    }
   },
   { immediate: true },
 )
@@ -5263,6 +5372,23 @@ watch(
   },
 )
 
+watch(isLiveOverlayDetailOpen, async (isOpen) => {
+  if (typeof document === 'undefined') return
+  if (!isOpen) {
+    restoreLiveOverlayDetailEnvironment()
+    return
+  }
+
+  liveOverlayDetailPreviousFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null
+  liveOverlayDetailPreviousBodyOverflow = document.body.style.overflow
+  document.body.style.overflow = 'hidden'
+  liveOverlayDetailOwnsBodyScrollLock = true
+  await nextTick()
+  liveOverlayDetailSheetRef.value?.focus({ preventScroll: true })
+})
+
 watch(
   () => props.isLoading,
   async (loading) => {
@@ -5298,6 +5424,56 @@ watch(
   { deep: false },
 )
 
+function settlePendingScrollStateBeforeThreadChange(previousThreadId: string): void {
+  if (scrollStateEmitFrame) {
+    cancelAnimationFrame(scrollStateEmitFrame)
+    scrollStateEmitFrame = 0
+  }
+  if (scrollStateIdleTimer && typeof window !== 'undefined') {
+    window.clearTimeout(scrollStateIdleTimer)
+    scrollStateIdleTimer = null
+  }
+
+  const container = pendingScrollStateContainer
+  const force = pendingScrollStateForce
+  const threadId = pendingScrollStateThreadId
+  pendingScrollStateContainer = null
+  pendingScrollStateForce = false
+  pendingScrollStateThreadId = ''
+  if (container && threadId && threadId === previousThreadId) {
+    emitScrollState(container, force, false, threadId)
+  }
+}
+
+function cancelScheduledScrollWorkForThreadChange(): void {
+  if (scrollRestoreFrame) {
+    cancelAnimationFrame(scrollRestoreFrame)
+    scrollRestoreFrame = 0
+  }
+  cancelScheduledScrollAnchorRestore()
+  if (bottomLockFrame) {
+    cancelAnimationFrame(bottomLockFrame)
+    bottomLockFrame = 0
+  }
+  bottomLockFramesLeft = 0
+  if (scrollInteractionFrame) {
+    cancelAnimationFrame(scrollInteractionFrame)
+    scrollInteractionFrame = 0
+  }
+  pendingScrollInteractionContainer = null
+}
+
+watch(
+  () => props.activeThreadId,
+  (_nextThreadId, previousThreadId) => {
+    scrollContextGeneration += 1
+    threadSwitchScrollRestorePending = true
+    settlePendingScrollStateBeforeThreadChange(previousThreadId)
+    cancelScheduledScrollWorkForThreadChange()
+  },
+  { flush: 'sync' },
+)
+
 watch(
   () => props.activeThreadId,
   () => {
@@ -5324,6 +5500,8 @@ watch(
     clearBelowFoldUpdates()
     autoAnchoredLongResponseId.value = ''
     autoFollowBottom.value = props.scrollState?.isAtBottom !== false
+    threadSwitchScrollRestorePending = false
+    void scheduleScrollRestore(null)
   },
   { flush: 'post' },
 )
@@ -5601,6 +5779,7 @@ function closeImageModal(): void {
 function onWindowKeydownForImageModal(event: KeyboardEvent): void {
   if (!modalImageUrl.value) return
   if (event.key === 'Escape') {
+    event.preventDefault()
     closeImageModal()
     return
   }
@@ -5682,29 +5861,21 @@ defineExpose<{
   focusMessage,
 })
 
+onMounted(() => {
+  window.addEventListener('keydown', onWindowKeyDownForConversationSurface, { capture: true })
+})
+
 onBeforeUnmount(() => {
+  settlePendingScrollStateBeforeThreadChange(props.activeThreadId)
+  cancelScheduledScrollWorkForThreadChange()
   for (const requestId of requestResponseResetTimers.keys()) clearRequestResponding(requestId)
   stopCommandElapsedTimer()
   clearHighlightedMessage()
   clearRollbackConfirmation()
+  restoreLiveOverlayDetailEnvironment()
   if (copiedCodeBlockTimer !== null && typeof window !== 'undefined') {
     window.clearTimeout(copiedCodeBlockTimer)
     copiedCodeBlockTimer = null
-  }
-  if (scrollRestoreFrame) {
-    cancelAnimationFrame(scrollRestoreFrame)
-  }
-  if (scrollAnchorRestoreFrame) {
-    cancelAnimationFrame(scrollAnchorRestoreFrame)
-  }
-  if (bottomLockFrame) {
-    cancelAnimationFrame(bottomLockFrame)
-  }
-  if (scrollStateEmitFrame) {
-    cancelAnimationFrame(scrollStateEmitFrame)
-  }
-  if (scrollInteractionFrame) {
-    cancelAnimationFrame(scrollInteractionFrame)
   }
   if (chatFeedbackMetricFrame) {
     cancelAnimationFrame(chatFeedbackMetricFrame)
@@ -5726,6 +5897,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydownForFileLinkContextMenu)
   window.removeEventListener('keydown', onWindowKeydownForImageModal)
   window.removeEventListener('resize', onWindowResizeForImageModal)
+  window.removeEventListener('keydown', onWindowKeyDownForConversationSurface, { capture: true })
   removeCompactTableViewportListener()
   if (typeof document !== 'undefined') {
     document.body.style.overflow = previousBodyOverflow

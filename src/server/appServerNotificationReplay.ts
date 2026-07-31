@@ -19,6 +19,7 @@ type RuntimeEventLike = {
 
 type PersistedNotificationReplay = {
   notifications: RuntimeEventLike[]
+  streamId?: string
   latestSeq: number
   oldestSeq: number
 }
@@ -27,6 +28,7 @@ export type AppServerNotificationReplayAccessors = {
   rememberNotificationEvent: (notification: AppServerNotification) => BridgeNotificationEvent
   listNotificationEventsAfter: (afterSeq: number, limit?: number) => {
     notifications: BridgeNotificationEvent[]
+    streamId?: string
     latestSeq: number
     oldestSeq: number
   }
@@ -34,6 +36,7 @@ export type AppServerNotificationReplayAccessors = {
 
 export type AppServerNotificationReplayOptions = {
   initialSeq: number
+  streamId?: string
   appendEvent: (event: RuntimeEventLike & { threadId: string; turnId: string }) => void
   listEventsAfter: (afterSeq: number, limit: number) => PersistedNotificationReplay
   observeNotification: (observation: {
@@ -60,6 +63,7 @@ export function projectNotificationParamsForReplay(method: string, params: unkno
 
 export class AppServerNotificationReplay {
   private seq: number
+  readonly streamId: string
   private readonly buffer: BridgeNotificationEvent[] = []
   private readonly appendEvent: AppServerNotificationReplayOptions['appendEvent']
   private readonly listEventsAfter: AppServerNotificationReplayOptions['listEventsAfter']
@@ -71,6 +75,7 @@ export class AppServerNotificationReplay {
 
   constructor(options: AppServerNotificationReplayOptions) {
     this.seq = Number.isFinite(options.initialSeq) ? Math.max(0, Math.trunc(options.initialSeq)) : 0
+    this.streamId = options.streamId?.trim() ?? ''
     this.appendEvent = options.appendEvent
     this.listEventsAfter = options.listEventsAfter
     this.observeNotification = options.observeNotification
@@ -118,6 +123,7 @@ export class AppServerNotificationReplay {
 
   listAfter(afterSeq: number, limit = 200): {
     notifications: BridgeNotificationEvent[]
+    streamId?: string
     latestSeq: number
     oldestSeq: number
   } {
@@ -127,6 +133,9 @@ export class AppServerNotificationReplay {
     if (persistedReplay.notifications.length > 0 || normalizedAfterSeq < persistedReplay.latestSeq) {
       return {
         notifications: persistedReplay.notifications.map(normalizeRuntimeEventForReplay),
+        ...((persistedReplay.streamId?.trim() || this.streamId)
+          ? { streamId: persistedReplay.streamId?.trim() || this.streamId }
+          : {}),
         latestSeq: persistedReplay.latestSeq,
         oldestSeq: persistedReplay.oldestSeq,
       }
@@ -135,6 +144,7 @@ export class AppServerNotificationReplay {
       notifications: this.buffer
         .filter((notification) => notification.seq > normalizedAfterSeq)
         .slice(0, normalizedLimit),
+      ...(this.streamId ? { streamId: this.streamId } : {}),
       latestSeq: this.seq,
       oldestSeq: this.buffer[0]?.seq ?? this.seq,
     }

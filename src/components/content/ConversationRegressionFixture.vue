@@ -5,6 +5,23 @@
         <p class="conversation-regression-kicker">Regression Fixture</p>
         <h1>Conversation Blocks</h1>
       </header>
+      <div v-if="isScrollSwitchRaceFixture" class="conversation-scroll-switch-controls">
+        <button type="button" data-testid="switch-scroll-thread-a" @click="activeThreadId = 'regression-scroll-a'">
+          Thread A
+        </button>
+        <button type="button" data-testid="switch-scroll-thread-b" @click="activeThreadId = 'regression-scroll-b'">
+          Thread B
+        </button>
+        <span
+          class="conversation-scroll-switch-state"
+          :data-active-thread-id="activeThreadId"
+          :data-thread-a-scroll-top="scrollStateByThreadId['regression-scroll-a']?.scrollTop ?? -1"
+          :data-thread-a-at-bottom="scrollStateByThreadId['regression-scroll-a']?.isAtBottom ?? ''"
+          :data-thread-b-scroll-top="scrollStateByThreadId['regression-scroll-b']?.scrollTop ?? -1"
+          :data-thread-b-at-bottom="scrollStateByThreadId['regression-scroll-b']?.isAtBottom ?? ''"
+          aria-hidden="true"
+        />
+      </div>
       <RuntimeStatusBar
         v-if="!isQueueFailureFixture && !isLoadFailureFixture"
         class="conversation-regression-runtime"
@@ -28,15 +45,15 @@
         :pending-requests="pendingRequests"
         :live-overlay="liveOverlay"
         :is-loading="false"
-        :is-turn-in-progress="!isLoadFailureFixture"
+        :is-turn-in-progress="!isLoadFailureFixture && !isScrollSwitchRaceFixture"
         :load-error="isLoadFailureFixture ? '连接不到桌面端，会话内容暂时未加载。页面会自动重试，也可以检查或修改连接地址。' : ''"
         :show-connection-settings-action="isLoadFailureFixture"
         compact-runtime-chrome
-        active-thread-id="regression-conversation-blocks"
+        :active-thread-id="activeThreadId"
         cwd="E:/javaword/CXCodex/codexui"
-        :scroll-state="null"
+        :scroll-state="activeScrollState"
         :favorite-message-ids="[]"
-        @update-scroll-state="noop"
+        @update-scroll-state="onUpdateScrollState"
         @respond-server-request="noop"
         @rollback="noop"
         @toggle-favorite="noop"
@@ -65,11 +82,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import ThreadConversation from './ThreadConversation.vue'
 import RuntimeStatusBar from './RuntimeStatusBar.vue'
 import QueuedMessages from './QueuedMessages.vue'
-import type { UiLiveOverlay, UiMessage, UiRuntimeStatusSummary, UiServerRequest } from '../../types/codex'
+import type {
+  ThreadScrollState,
+  UiLiveOverlay,
+  UiMessage,
+  UiRuntimeStatusSummary,
+  UiServerRequest,
+} from '../../types/codex'
 
 const messages: UiMessage[] = [
   {
@@ -321,7 +344,28 @@ const isNextActivityFixture = fixtureParams.get('tailNextActivity') === '1'
 const isResumeRecoveryFixture = fixtureParams.get('resumeRecovery') === '1'
 const isQueueFailureFixture = fixtureParams.get('queueFailure') === '1'
 const isLoadFailureFixture = fixtureParams.get('loadFailure') === '1'
-const fixtureMessages = isLoadFailureFixture ? [] : messages
+const isScrollSwitchRaceFixture = fixtureParams.get('scrollSwitchRace') === '1'
+const activeThreadId = ref(isScrollSwitchRaceFixture ? 'regression-scroll-a' : 'regression-conversation-blocks')
+const scrollStateByThreadId = ref<Record<string, ThreadScrollState>>({})
+const activeScrollState = computed(() => scrollStateByThreadId.value[activeThreadId.value] ?? null)
+const scrollRaceMessagesByThreadId: Record<string, UiMessage[]> = Object.fromEntries(
+  ['regression-scroll-a', 'regression-scroll-b'].map((threadId) => [
+    threadId,
+    Array.from({ length: 48 }, (_, index): UiMessage => ({
+      id: `${threadId}-message-${String(index + 1)}`,
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      text: `${threadId} fixture message ${String(index + 1)} ${'stable scroll content '.repeat(5)}`,
+      turnIndex: Math.floor(index / 2),
+    })),
+  ]),
+)
+const fixtureMessages = computed(() => {
+  if (isLoadFailureFixture) return []
+  if (isScrollSwitchRaceFixture) {
+    return scrollRaceMessagesByThreadId[activeThreadId.value] ?? []
+  }
+  return messages
+})
 const pendingRequests: UiServerRequest[] = isTailStatusFixture || isLoadFailureFixture ? [] : allPendingRequests
 const loadRetryCount = ref(0)
 const connectionSettingsCount = ref(0)
@@ -336,7 +380,7 @@ const liveOverlay = ref<UiLiveOverlay | null>({
   errorText: '',
 })
 
-if (isLoadFailureFixture) {
+if (isLoadFailureFixture || isScrollSwitchRaceFixture) {
   liveOverlay.value = null
 }
 
@@ -406,6 +450,13 @@ function noop(): void {
   // Fixture route only needs rendered output for browser assertions.
 }
 
+function onUpdateScrollState(payload: { threadId: string; state: ThreadScrollState }): void {
+  scrollStateByThreadId.value = {
+    ...scrollStateByThreadId.value,
+    [payload.threadId]: payload.state,
+  }
+}
+
 function onLoadOlderHistory(): void {
   olderHistoryRequestCount.value += 1
 }
@@ -440,6 +491,21 @@ function onLoadOlderHistory(): void {
 .conversation-regression-header h1 {
   @apply m-0 mt-1 text-lg font-semibold;
   color: var(--ui-text-primary);
+}
+
+.conversation-scroll-switch-controls {
+  @apply flex shrink-0 gap-2 border-b px-4 py-2;
+  border-color: var(--ui-border-subtle);
+}
+
+.conversation-scroll-switch-controls button {
+  @apply rounded-md border px-3 py-1 text-xs;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+}
+
+.conversation-scroll-switch-state {
+  @apply hidden;
 }
 
 .conversation-regression-thread {

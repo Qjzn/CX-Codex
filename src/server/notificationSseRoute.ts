@@ -9,6 +9,7 @@ export const NOTIFICATION_SSE_MAX_EVENT_BYTES = 1024 * 1024
 
 export type NotificationSseRouteDependencies = {
   latestSeq: number | (() => number)
+  streamId?: string | (() => string)
   subscribeNotifications: (listener: (value: BridgeNotificationEvent) => void) => () => void
   heartbeatIntervalMs?: number
   nowIso?: () => string
@@ -164,7 +165,14 @@ export function handleNotificationSseRoute(
   const latestSeq = typeof dependencies.latestSeq === 'function'
     ? dependencies.latestSeq()
     : dependencies.latestSeq
-  writeSse(`event: ready\ndata: ${JSON.stringify({ ok: true, latestSeq })}\n\n`)
+  const streamId = typeof dependencies.streamId === 'function'
+    ? dependencies.streamId()
+    : dependencies.streamId
+  writeSse(`event: ready\ndata: ${JSON.stringify({
+    ok: true,
+    latestSeq,
+    ...(streamId?.trim() ? { streamId: streamId.trim() } : {}),
+  })}\n\n`)
   if (!closed) keepAlive = setTimer(() => {
     writeSse(`data: ${JSON.stringify({
       method: BRIDGE_HEARTBEAT_METHOD,

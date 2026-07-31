@@ -105,6 +105,7 @@ type NotificationDiagnosticsForRoutes = {
 
 type NotificationReplayForRoutes = {
   latestSeq: number
+  streamId: string
 }
 
 export type CodexBridgeRouteHandlersDependencies = {
@@ -131,6 +132,7 @@ export type CodexBridgeRouteHandlersDependencies = {
   readAppServerHookDiagnostics: DiagnosticsRoutesDependencies['readHookDiagnostics']
   readAppServerSchemaAuditSummary: DiagnosticsRoutesDependencies['readSchemaAuditSummary']
   readWindowsSandboxReadinessDiagnostics: DiagnosticsRoutesDependencies['readWindowsSandboxDiagnostics']
+  getSessionFileSyncStatus?: DiagnosticsRoutesDependencies['getSessionFileSyncStatus']
   mobilePushCoordinator: MobilePushRoutesDependencies['mobilePushCoordinator']
   remoteAccessProtected: boolean
 }
@@ -211,6 +213,7 @@ export function createCodexBridgeRouteHandlers(
       readSchemaAuditSummary: dependencies.readAppServerSchemaAuditSummary,
       readWindowsSandboxDiagnostics: dependencies.readWindowsSandboxReadinessDiagnostics,
       getTranscriptionDiagnostics: getTranscriptionProxyConfigSnapshot,
+      getSessionFileSyncStatus: dependencies.getSessionFileSyncStatus,
       runtimeStore,
     }),
     () => handleGithubTrendingRoutes(req, res, url, {
@@ -240,6 +243,7 @@ export function createCodexBridgeRouteHandlers(
     }),
     () => handleNotificationSseRoute(req, res, url, {
       latestSeq: () => dependencies.notificationReplay.latestSeq,
+      streamId: () => dependencies.notificationReplay.streamId,
       subscribeNotifications: dependencies.subscribeNotifications,
     }),
   ]

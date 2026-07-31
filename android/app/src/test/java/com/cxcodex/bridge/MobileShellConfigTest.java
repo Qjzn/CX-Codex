@@ -48,6 +48,46 @@ public class MobileShellConfigTest {
     }
 
     @Test
+    public void skipsARepeatedPendingRouteButStillLoadsADifferentThread() {
+        String target = "https://example.com/cx-codex/#/thread/thread-123";
+        assertFalse(MobileShellConfig.shouldLoadPendingAppRoute(target, target));
+        assertTrue(MobileShellConfig.shouldLoadPendingAppRoute(
+            "https://example.com/cx-codex/#/",
+            target
+        ));
+        assertTrue(MobileShellConfig.shouldLoadPendingAppRoute(
+            "https://example.com/cx-codex/#/thread/thread-456",
+            target
+        ));
+        assertFalse(MobileShellConfig.shouldLoadPendingAppRoute(target, ""));
+    }
+
+    @Test
+    public void connectionRetryKeepsTheCurrentAppHashRouteOnlyOnTheConfiguredServer() {
+        assertEquals(
+            "https://example.com/cx-codex/#/thread/thread-123",
+            MobileShellConfig.resolveAppRetryUrl(
+                "https://example.com/cx-codex",
+                "https://example.com/cx-codex/#/thread/thread-123"
+            )
+        );
+        assertEquals(
+            "https://example.com/cx-codex",
+            MobileShellConfig.resolveAppRetryUrl(
+                "https://example.com/cx-codex",
+                "https://untrusted.example/#/thread/thread-123"
+            )
+        );
+        assertEquals(
+            "https://example.com/cx-codex",
+            MobileShellConfig.resolveAppRetryUrl(
+                "https://example.com/cx-codex",
+                null
+            )
+        );
+    }
+
+    @Test
     public void acknowledgesOnlyThePendingNotificationThreadThatActuallyOpened() {
         assertTrue(MobileShellConfig.shouldAcknowledgePendingTaskPetThreadOpen(" thread-123 ", "thread-123"));
         assertFalse(MobileShellConfig.shouldAcknowledgePendingTaskPetThreadOpen("thread-123", "thread-456"));

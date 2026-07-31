@@ -989,7 +989,7 @@ export async function getNotificationCatalog(): Promise<string[]> {
   return fetchRpcNotificationCatalog()
 }
 
-export async function getNotificationReplay(afterSeq: number, limit = 200): Promise<{ notifications: RpcNotification[]; latestSeq: number; oldestSeq: number }> {
+export async function getNotificationReplay(afterSeq: number, limit = 200): Promise<{ notifications: RpcNotification[]; streamId: string; latestSeq: number; oldestSeq: number }> {
   return fetchRpcNotificationReplay(afterSeq, limit)
 }
 

@@ -6,6 +6,8 @@ param(
   [int]$DesktopHeight = 900,
   [int]$PhoneWidth = 393,
   [int]$PhoneHeight = 852,
+  [int]$PhoneLandscapeWidth = 852,
+  [int]$PhoneLandscapeHeight = 393,
   [int]$FoldableWidth = 884,
   [int]$FoldableHeight = 1104,
   [switch]$CaptureScreenshots,
@@ -20,7 +22,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ThreadInitialMessageWindowSize = 10
-$HomeWorkspaceProjectsReadyBudgetMs = 15000
+$HomeWorkspaceProjectsPollingTimeoutMs = 15000
+$HomeWorkspaceProjectsFirstUsableBudgetMs = 5000
 
 function Write-Step {
   param([string]$Message)
@@ -46,6 +49,72 @@ function Convert-ToSafeFileName {
     return "screenshot"
   }
   return $safe
+}
+
+function Assert-ImmediateAsyncRouteFallbackSource {
+  $sourcePath = Join-Path (Get-Location) "src\App.vue"
+  $source = Get-Content -Raw -Encoding UTF8 -LiteralPath $sourcePath
+  $expectedFallbacks = @{
+    SkillsHub = "PageLoadingSkeleton"
+    ThreadConversation = "ConversationLoadingSkeleton"
+    WorkspaceWorkbench = "PageLoadingSkeleton"
+    GithubTrendingHub = "PageLoadingSkeleton"
+    DiagnosticsPanel = "PageLoadingSkeleton"
+  }
+
+  foreach ($componentName in $expectedFallbacks.Keys) {
+    $componentMatch = [regex]::Match(
+      $source,
+      "const\s+$componentName\s*=\s*defineAsyncComponent\(\{[\s\S]*?\n\s*\}\)"
+    )
+    Assert-True ($componentMatch.Success) "could not find async component definition for $componentName"
+    Assert-True (
+      $componentMatch.Value -match "loadingComponent:\s*$($expectedFallbacks[$componentName])"
+    ) "$componentName must retain its layout-preserving loading fallback"
+    Assert-True (
+      $componentMatch.Value -match "delay:\s*0"
+    ) "$componentName must show its loading fallback immediately instead of rendering an empty route frame"
+  }
+}
+
+function Assert-NestedMobileBackOwnershipSource {
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
+  )
+  $skillDetailSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\SkillDetailModal.vue"
+  )
+  $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\ThreadConversation.vue"
+  )
+  $favoritesSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\FavoritesModal.vue"
+  )
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\App.vue"
+  )
+
+  Assert-True (
+    $sidebarSource -match "function\s+onWindowKeyDownForSidebarSurface[\s\S]*?deleteThreadDialogVisible[\s\S]*?renameThreadDialogVisible[\s\S]*?openThreadMenuId[\s\S]*?openProjectMenuId[\s\S]*?isOrganizeMenuOpen"
+  ) "sidebar Back handling must dismiss its topmost dialog or menu before the mobile drawer"
+  $sidebarListenersAreSymmetric = ($sidebarSource -match "addEventListener\('keydown',\s*onWindowKeyDownForSidebarSurface,\s*true\)") -and ($sidebarSource -match "removeEventListener\('keydown',\s*onWindowKeyDownForSidebarSurface,\s*true\)")
+  Assert-True $sidebarListenersAreSymmetric "sidebar transient surfaces must capture Escape before the App-level drawer handler"
+  $skillDetailOwnsEscape = ($skillDetailSource -match 'role="dialog"[\s\S]*?aria-modal="true"') -and ($skillDetailSource -match "function\s+onWindowKeyDown[\s\S]*?props\.visible[\s\S]*?event\.preventDefault\(\)[\s\S]*?emit\('close'\)") -and ($skillDetailSource -match "addEventListener\('keydown',\s*onWindowKeyDown,\s*true\)")
+  Assert-True $skillDetailOwnsEscape "skill details must own Escape/Android Back instead of navigating the underlying route"
+  $conversationOwnsEscape = ($conversationSource -match "function\s+onWindowKeyDownForConversationSurface[\s\S]*?isLiveOverlayDetailOpen[\s\S]*?modalImageUrl[\s\S]*?isFileLinkContextMenuVisible[\s\S]*?pendingRollbackMessageId[\s\S]*?activeMessageActionId") -and ($conversationSource -match "addEventListener\('keydown',\s*onWindowKeyDownForConversationSurface,\s*\{\s*capture:\s*true\s*\}\)")
+  Assert-True $conversationOwnsEscape "conversation transient surfaces must consume Escape/Android Back before route navigation"
+  $favoritesOwnEscapeAndFocus = ($favoritesSource -match 'ref="panelRef"[\s\S]*?role="dialog"[\s\S]*?aria-modal="true"[\s\S]*?tabindex="-1"') -and ($favoritesSource -match "document\.body\.style\.overflow\s*=\s*'hidden'") -and ($favoritesSource -match "addEventListener\('keydown',\s*onWindowKeyDown,\s*\{\s*capture:\s*true\s*\}\)")
+  Assert-True $favoritesOwnEscapeAndFocus "favorites must own focus, background scrolling, and Escape while visible"
+  $blockingDialogsOwnEnvironment = ($appSource -match "function\s+dismissTopmostBlockingDialog[\s\S]*?isMobileShellUpdatePromptVisible[\s\S]*?pendingQueuedMessageEditId[\s\S]*?isDesktopRefreshConfirmVisible") -and ($appSource -match "addEventListener\('keydown',\s*onWindowKeyDownForBlockingDialog,\s*\{\s*capture:\s*true\s*\}\)") -and ($appSource -match "watch\(activeBlockingDialogKind[\s\S]*?document\.body\.style\.overflow\s*=\s*'hidden'[\s\S]*?resolveBlockingDialogElement\(kind\)\?\.focus")
+  Assert-True $blockingDialogsOwnEnvironment "blocking App dialogs must own focus, background scrolling, and Escape before lower-layer controls"
+}
+
+function Assert-StableHandsetViewportSource {
+  $source = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\composables\useMobile.ts"
+  )
+  $hasStableHandsetFallback = ($source -match "const\s+COMPACT_HANDSET_MAX_SHORT_EDGE\s*=\s*480") -and ($source -match "isCoarsePointer\.value\s*\|\|\s*shortEdge\s*<=\s*COMPACT_HANDSET_MAX_SHORT_EDGE")
+  Assert-True $hasStableHandsetFallback "handset-shaped landscape viewports must stay mobile when pointer media queries are temporarily unavailable"
 }
 
 function Assert-AndroidResumeThreadListRecoverySource {
@@ -305,7 +374,12 @@ function Assert-BoundedRuntimeSendRecoverySource {
   $captureTaskPetThreadMatch = [regex]::Match($androidMainActivitySource, 'private\s+void\s+captureTaskPetThreadFromIntent[\s\S]*?\n\s*private\s+void\s+openPendingTaskPetThread')
   Assert-True ($captureTaskPetThreadMatch.Success -and $captureTaskPetThreadMatch.Value -match 'putString\(MobileShellConfig\.PREF_TASK_PET_PENDING_OPEN_THREAD_ID[\s\S]*?\.commit\(\)[\s\S]*?if\s*\(saved\)\s*intent\.removeExtra') "notification navigation must be committed before its one-shot intent extra is consumed"
   $openPendingTaskPetThreadMatch = [regex]::Match($androidMainActivitySource, 'private\s+void\s+openPendingTaskPetThread[\s\S]*?\n\s*private\s+void\s+configureWebViewDownloadListener')
-  Assert-True ($openPendingTaskPetThreadMatch.Success -and $openPendingTaskPetThreadMatch.Value -match 'getString\(MobileShellConfig\.PREF_TASK_PET_PENDING_OPEN_THREAD_ID[\s\S]*?buildAppHashUrl[\s\S]*?getWebView\(\)\.loadUrl\(targetUrl\)' -and $openPendingTaskPetThreadMatch.Value -notmatch 'remove\(MobileShellConfig\.PREF_TASK_PET_PENDING_OPEN_THREAD_ID') "WebView dispatch must retain the pending exact-thread navigation until the rendered route acknowledges it"
+  Assert-True (
+    $openPendingTaskPetThreadMatch.Success -and
+    ($openPendingTaskPetThreadMatch.Value -match 'getString\(MobileShellConfig\.PREF_TASK_PET_PENDING_OPEN_THREAD_ID[\s\S]*?buildAppHashUrl[\s\S]*?webView\.loadUrl\(targetUrl\)') -and
+    ([regex]::Matches($openPendingTaskPetThreadMatch.Value, 'MobileShellConfig\.shouldLoadPendingAppRoute').Count -ge 2) -and
+    ($openPendingTaskPetThreadMatch.Value -notmatch 'remove\(MobileShellConfig\.PREF_TASK_PET_PENDING_OPEN_THREAD_ID')
+  ) "WebView dispatch must dedupe an already-visible exact-thread route while retaining pending navigation until the rendered route acknowledges it"
   $markTaskPetThreadReadMatch = [regex]::Match($androidPluginSource, 'public\s+void\s+markTaskPetThreadRead[\s\S]*?\n\s*private\s+JSObject\s+buildTaskPetStatus')
   Assert-True ($markTaskPetThreadReadMatch.Success -and $markTaskPetThreadReadMatch.Value -match 'shouldAcknowledgePendingTaskPetThreadOpen[\s\S]*?remove\(MobileShellConfig\.PREF_TASK_PET_PENDING_OPEN_THREAD_ID\)[\s\S]*?\.commit\(\)') "only the exact thread confirmed visible by the WebView may clear pending notification navigation"
   $visibleThreadAcknowledgementMatch = [regex]::Match($appSource, 'watch\(\s*\(\)\s*=>\s*\[\s*routeThreadId\.value,[\s\S]*?markMobileShellTaskPetThreadRead\(normalizedRouteId\)')
@@ -1451,7 +1525,14 @@ JSON.stringify((() => {
     threadRowCount: node.querySelectorAll('.thread-row').length,
     newThreadButtonCount: node.querySelectorAll('.thread-start-button').length
   }));
-  return { groupCount: groups.length, groups };
+  const readyMetric = window.__cxCodexHomeWorkspaceProjectsReady ?? null;
+  return {
+    groupCount: groups.length,
+    groups,
+    pageObservedAtMs: Math.round(performance.now()),
+    pageReadyAtMs: Number.isFinite(readyMetric?.readyAtMs) ? readyMetric.readyAtMs : null,
+    pageReadyGroupCount: Number.isFinite(readyMetric?.groupCount) ? readyMetric.groupCount : 0
+  };
 })())
 '@
   return Invoke-BrowserEvalJson -Session $Session -Script $script
@@ -1478,7 +1559,7 @@ function Wait-HomeWorkspaceProjectMetrics {
     [string]$Session,
     [object]$RootsState,
     [long]$NavigationStartedAtMs,
-    [int]$TimeoutMs = $HomeWorkspaceProjectsReadyBudgetMs
+    [int]$TimeoutMs = $HomeWorkspaceProjectsPollingTimeoutMs
   )
 
   $expectedGroupCount = @(Get-WorkspaceRootSample -RootsState $RootsState).Count
@@ -1492,11 +1573,21 @@ function Wait-HomeWorkspaceProjectMetrics {
     Start-Sleep -Milliseconds 250
   } while ($true)
 
-  $readyMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $NavigationStartedAtMs
-  $metrics | Add-Member -NotePropertyName "workspaceProjectsReadyMs" -NotePropertyValue $readyMs -Force
-  $metrics | Add-Member -NotePropertyName "workspaceProjectsReadyBudgetMs" -NotePropertyValue $TimeoutMs -Force
-  $metrics | Add-Member -NotePropertyName "workspaceProjectsReadyWithinBudget" -NotePropertyValue ($readyMs -le $TimeoutMs) -Force
-  Write-Step "home workspace projects ready in $readyMs ms ($($metrics.groupCount)/$expectedGroupCount groups)"
+  $browserObservedReadyMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $NavigationStartedAtMs
+  $firstUsableMs = if (
+    $null -ne $metrics.pageReadyAtMs `
+      -and [int]$metrics.pageReadyAtMs -gt 0 `
+      -and [int]$metrics.pageReadyGroupCount -ge $expectedGroupCount
+  ) {
+    [int]$metrics.pageReadyAtMs
+  } else {
+    [int]$metrics.pageObservedAtMs
+  }
+  $metrics | Add-Member -NotePropertyName "workspaceProjectsFirstUsableMs" -NotePropertyValue $firstUsableMs -Force
+  $metrics | Add-Member -NotePropertyName "workspaceProjectsFirstUsableBudgetMs" -NotePropertyValue $HomeWorkspaceProjectsFirstUsableBudgetMs -Force
+  $metrics | Add-Member -NotePropertyName "workspaceProjectsFirstUsableWithinBudget" -NotePropertyValue ($firstUsableMs -le $HomeWorkspaceProjectsFirstUsableBudgetMs) -Force
+  $metrics | Add-Member -NotePropertyName "browserObservedWorkspaceProjectsReadyMs" -NotePropertyValue $browserObservedReadyMs -Force
+  Write-Step "home workspace projects ready: product=$firstUsableMs ms, browser-observed=$browserObservedReadyMs ms ($($metrics.groupCount)/$expectedGroupCount groups)"
   return $metrics
 }
 
@@ -1576,8 +1667,8 @@ function Assert-WorkspaceRootProjectParity {
     $labelsByRoot[[string]$property.Name] = [string]$property.Value
   }
 
-  Assert-True ($Metrics.workspaceProjectsReadyWithinBudget -eq $true) "home sidebar workspace projects exceeded the $($Metrics.workspaceProjectsReadyBudgetMs) ms home-navigation budget: $($Metrics.workspaceProjectsReadyMs) ms"
-  Assert-True ($Metrics.groupCount -ge $expectedRoots.Count) "home sidebar project group count is below workspace root count sample after $($Metrics.workspaceProjectsReadyMs) ms"
+  Assert-True ($Metrics.workspaceProjectsFirstUsableWithinBudget -eq $true) "home sidebar workspace projects exceeded the $($Metrics.workspaceProjectsFirstUsableBudgetMs) ms product-side first-usable budget: $($Metrics.workspaceProjectsFirstUsableMs) ms"
+  Assert-True ($Metrics.groupCount -ge $expectedRoots.Count) "home sidebar project group count is below workspace root count sample after $($Metrics.browserObservedWorkspaceProjectsReadyMs) browser-observed ms"
 
   for ($index = 0; $index -lt $expectedRoots.Count; $index++) {
     $rootPath = [string]$expectedRoots[$index]
@@ -1984,6 +2075,8 @@ JSON.stringify((() => {
       window.getComputedStyle(node).display !== 'none' && (node.textContent || '').includes('工作台')
     )),
     drawerWidth: drawerRect ? Math.round(drawerRect.width) : 0,
+    drawerRightGap: drawerRect ? Math.round(viewportWidth - drawerRect.right) : 0,
+    sidebarCollapsedPreference: window.localStorage.getItem('codex-web-local.sidebar-collapsed.v1'),
     fitFailureCount: fitFailures.length,
     fitFailures: fitFailures.slice(0, 5),
     hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
@@ -2006,7 +2099,12 @@ function Assert-MobileDrawerSidebar {
   Assert-True ($Metrics.hasEmptyText -eq $false) "mobile drawer sidebar rendered empty/error text despite available threads"
   Assert-True ([int]$Metrics.actionTileCount -eq 3) "mobile drawer should keep three primary actions: $($Metrics.actionTileCount)"
   Assert-True ($Metrics.hasVisibleWorkbenchTile -eq $false) "mobile drawer should move Workbench into the Tools menu"
-  Assert-True ($Metrics.drawerWidth -le $Metrics.clientWidth) "mobile drawer is wider than viewport: $($Metrics.drawerWidth) > $($Metrics.clientWidth)"
+  Assert-True ($Metrics.drawerWidth -lt $Metrics.clientWidth) "mobile drawer should leave a visible backdrop edge: $($Metrics.drawerWidth) >= $($Metrics.clientWidth)"
+  Assert-True ($Metrics.drawerRightGap -ge 32) "mobile drawer backdrop edge is too narrow: $($Metrics.drawerRightGap)"
+  if ($Metrics.clientWidth -le 480) {
+    Assert-True ($Metrics.drawerRightGap -le 64) "portrait mobile drawer backdrop edge is too wide: $($Metrics.drawerRightGap)"
+  }
+  Assert-True ($Metrics.sidebarCollapsedPreference -eq "0") "mobile drawer changed the persisted desktop sidebar preference: $($Metrics.sidebarCollapsedPreference)"
   Assert-True ($Metrics.fitFailureCount -eq 0) "mobile drawer elements overflow viewport: $($Metrics.fitFailures | ConvertTo-Json -Compress)"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "mobile drawer has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
 }
@@ -2045,6 +2143,396 @@ JSON.stringify((() => {
   }
 
   return Read-MobileDrawerSidebarMetrics -Session $Session
+}
+
+function Assert-MobileDrawerThreadNavigationStability {
+  param([string]$Session)
+
+  $selectScript = @'
+JSON.stringify((() => {
+  const row = document.querySelector('.mobile-drawer .thread-row');
+  const button = row?.querySelector('.thread-main-button') || null;
+  const threadId = row?.getAttribute('data-thread-id') || '';
+  if (button instanceof HTMLElement) button.click();
+  return {
+    clicked: button instanceof HTMLElement,
+    threadId,
+    sidebarCollapsedPreference: window.localStorage.getItem('codex-web-local.sidebar-collapsed.v1')
+  };
+})())
+'@
+  $selection = Invoke-BrowserEvalJson -Session $Session -Script $selectScript
+  Assert-True ($selection.clicked -eq $true) "mobile drawer has no clickable thread row"
+  Assert-True (-not [string]::IsNullOrWhiteSpace($selection.threadId)) "mobile drawer thread row has no stable thread id"
+
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "500") | Out-Null
+  $selectedState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  hasDrawer: !!document.querySelector('.mobile-drawer'),
+  route: window.location.hash,
+  sidebarCollapsedPreference: window.localStorage.getItem('codex-web-local.sidebar-collapsed.v1')
+})
+'@
+  Assert-True ($selectedState.hasDrawer -eq $false) "mobile drawer stayed open after selecting a thread"
+  Assert-True ($selectedState.route -like "#/thread/*") "mobile thread selection did not navigate to the thread route: $($selectedState.route)"
+  Assert-True ($selectedState.sidebarCollapsedPreference -eq "0") "mobile thread selection changed the desktop sidebar preference"
+
+  Assert-MobileComposerViewportCompression -Session $Session
+
+  $backState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  prevented: !window.dispatchEvent(new CustomEvent('codex-mobile-back-button', { cancelable: true }))
+})
+'@
+  Assert-True ($backState.prevented -eq $true) "Android back was not claimed on a thread route"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "350") | Out-Null
+
+  $homeState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  route: window.location.hash,
+  hasDrawer: !!document.querySelector('.mobile-drawer'),
+  sidebarCollapsedPreference: window.localStorage.getItem('codex-web-local.sidebar-collapsed.v1')
+})
+'@
+  Assert-True ($homeState.route -eq "#/") "Android back did not return the mobile thread route to home: $($homeState.route)"
+  Assert-True ($homeState.hasDrawer -eq $false) "Android back unexpectedly reopened the mobile drawer"
+  Assert-True ($homeState.sidebarCollapsedPreference -eq "0") "Android back changed the desktop sidebar preference"
+}
+
+function Assert-MobileComposerViewportCompression {
+  param([string]$Session)
+
+  $before = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const input = document.querySelector('.thread-composer-input');
+  if (input instanceof HTMLElement) input.focus({ preventScroll: true });
+  const composer = document.querySelector('.composer-with-queue');
+  const rect = composer?.getBoundingClientRect();
+  return {
+    hasInput: input instanceof HTMLElement,
+    focused: document.activeElement === input,
+    width: window.innerWidth,
+    height: window.innerHeight,
+    composerBottom: rect ? Math.round(rect.bottom) : 0,
+    route: window.location.hash
+  };
+})())
+'@
+  Assert-True ($before.hasInput -eq $true) "mobile thread route is missing its composer input"
+  Assert-True ($before.focused -eq $true) "mobile composer could not receive focus before viewport compression"
+  Assert-True ($before.route -like "#/thread/*") "viewport compression probe is not on a thread route"
+
+  $compressedHeight = [Math]::Max(280, [Math]::Min(500, [int]$before.height - 160))
+  Invoke-AgentBrowser -Arguments @(
+    "--session", $Session, "set", "viewport",
+    ([string][int]$before.width), ([string]$compressedHeight)
+  ) | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "250") | Out-Null
+
+  $compressed = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const input = document.querySelector('.thread-composer-input');
+  const composer = document.querySelector('.composer-with-queue');
+  const layout = document.querySelector('.desktop-layout');
+  const rect = composer?.getBoundingClientRect();
+  return {
+    focused: document.activeElement === input,
+    mobile: layout?.classList.contains('is-mobile') || false,
+    drawer: !!document.querySelector('.mobile-drawer'),
+    composerTop: rect ? Math.round(rect.top) : -1,
+    composerBottom: rect ? Math.round(rect.bottom) : 0,
+    viewportHeight: window.innerHeight,
+    visualViewportHeight: Math.round(window.visualViewport?.height || window.innerHeight),
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+    route: window.location.hash,
+    sidebarCollapsedPreference: window.localStorage.getItem('codex-web-local.sidebar-collapsed.v1')
+  };
+})())
+'@
+  Assert-True ($compressed.mobile -eq $true) "keyboard-sized viewport switched the handset into the desktop shell"
+  Assert-True ($compressed.drawer -eq $false) "keyboard-sized viewport reopened the mobile drawer"
+  Assert-True ($compressed.focused -eq $true) "keyboard-sized viewport lost composer focus"
+  Assert-True ([int]$compressed.composerTop -ge 0) "keyboard-sized viewport moved the composer above the visible area"
+  Assert-True ([int]$compressed.composerBottom -le [int]$compressed.visualViewportHeight + 2) "keyboard-sized viewport left the composer below the visual viewport"
+  Assert-True ([int]$compressed.scrollWidth -le [int]$compressed.clientWidth + 2) "keyboard-sized viewport introduced horizontal overflow"
+  Assert-True ($compressed.route -eq $before.route) "keyboard-sized viewport changed the active thread route"
+  Assert-True ($compressed.sidebarCollapsedPreference -eq "0") "keyboard-sized viewport changed the desktop sidebar preference"
+
+  Invoke-AgentBrowser -Arguments @(
+    "--session", $Session, "set", "viewport",
+    ([string][int]$before.width), ([string][int]$before.height)
+  ) | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "250") | Out-Null
+
+  $restored = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const input = document.querySelector('.thread-composer-input');
+  const composer = document.querySelector('.composer-with-queue');
+  const rect = composer?.getBoundingClientRect();
+  return {
+    focused: document.activeElement === input,
+    width: window.innerWidth,
+    height: window.innerHeight,
+    composerBottom: rect ? Math.round(rect.bottom) : 0,
+    route: window.location.hash
+  };
+})())
+'@
+  Assert-True ([int]$restored.width -eq [int]$before.width -and [int]$restored.height -eq [int]$before.height) "mobile viewport did not restore after keyboard compression"
+  Assert-True ($restored.focused -eq $true) "restoring the mobile viewport lost composer focus"
+  Assert-True ([int]$restored.composerBottom -le [int]$restored.height + 2) "restored mobile viewport left the composer outside the screen"
+  Assert-True ($restored.route -eq $before.route) "restoring the mobile viewport changed the active thread route"
+}
+
+function Assert-MobileBackDismissesSidebarDialog {
+  param([string]$Session)
+
+  $menuRequested = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const row = document.querySelector('.mobile-drawer .thread-row');
+  if (!(row instanceof HTMLElement)) return { requested: false };
+  row.dispatchEvent(new MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    button: 2,
+    buttons: 2
+  }));
+  return { requested: true };
+})())
+'@
+  Assert-True ($menuRequested.requested -eq $true) "mobile sidebar has no thread row for dialog Back verification"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+
+  $opened = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const menu = Array.from(document.querySelectorAll('.thread-menu-panel')).find((candidate) => {
+    const rect = candidate.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  });
+  const deleteButton = menu?.querySelector('.thread-menu-item-danger') || null;
+  if (deleteButton instanceof HTMLElement) deleteButton.click();
+  return { opened: deleteButton instanceof HTMLElement };
+})())
+'@
+  Assert-True ($opened.opened -eq $true) "mobile sidebar could not open its delete confirmation"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+
+  $back = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const dialogBefore = !!document.querySelector('[role="dialog"][aria-label="删除会话"]');
+  const prevented = !window.dispatchEvent(new CustomEvent('codex-mobile-back-button', { cancelable: true }));
+  return { dialogBefore, prevented };
+})())
+'@
+  Assert-True ($back.dialogBefore -eq $true) "mobile sidebar delete confirmation did not render"
+  Assert-True ($back.prevented -eq $true) "Android back was not claimed by the mobile sidebar dialog"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+
+  $closed = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  dialog: !!document.querySelector('[role="dialog"][aria-label="删除会话"]'),
+  drawer: !!document.querySelector('.mobile-drawer'),
+  route: window.location.hash,
+  sidebarCollapsedPreference: window.localStorage.getItem('codex-web-local.sidebar-collapsed.v1')
+})
+'@
+  Assert-True ($closed.dialog -eq $false) "Android back left the mobile sidebar dialog open"
+  Assert-True ($closed.drawer -eq $true) "Android back closed the drawer underneath its child dialog"
+  Assert-True ($closed.route -eq "#/") "closing the mobile sidebar dialog changed route: $($closed.route)"
+  Assert-True ($closed.sidebarCollapsedPreference -eq "0") "closing the mobile sidebar dialog changed the desktop sidebar preference"
+}
+
+function Assert-MobileBackDismissesSkillDetail {
+  param([string]$Session)
+
+  $skillState = $null
+  for ($attempt = 0; $attempt -lt 50; $attempt += 1) {
+    $skillState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  hasCard: !!document.querySelector('.skill-card'),
+  loading: !!document.querySelector('[aria-label="正在加载技能"]'),
+  error: document.querySelector('.skills-hub-error')?.textContent?.trim() || ''
+})
+'@
+    if ($skillState.hasCard -eq $true) {
+      break
+    }
+    Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+  }
+  Assert-True ($skillState.hasCard -eq $true) "skills route has no detail card for Back verification (loading=$($skillState.loading), error=$($skillState.error))"
+
+  $opened = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const card = document.querySelector('.skill-card');
+  if (card instanceof HTMLElement) card.click();
+  return { opened: card instanceof HTMLElement };
+})())
+'@
+  Assert-True ($opened.opened -eq $true) "skills route could not open its available detail card"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+
+  $back = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const dialogBefore = !!document.querySelector('.sdm-panel[role="dialog"]');
+  const routeBefore = window.location.hash;
+  const prevented = !window.dispatchEvent(new CustomEvent('codex-mobile-back-button', { cancelable: true }));
+  return { dialogBefore, routeBefore, prevented };
+})())
+'@
+  Assert-True ($back.dialogBefore -eq $true) "skill detail dialog did not render"
+  Assert-True ($back.prevented -eq $true) "Android back was not claimed by skill details"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+
+  $closed = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  dialog: !!document.querySelector('.sdm-panel[role="dialog"]'),
+  route: window.location.hash
+})
+'@
+  Assert-True ($closed.dialog -eq $false) "Android back left skill details open"
+  Assert-True ($closed.route -eq $back.routeBefore) "closing skill details changed route: $($closed.route)"
+}
+
+function Assert-MobileBackDismissesComposerSurface {
+  param([string]$Session)
+
+  $openState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const button = document.querySelector('button[aria-label="展开为半屏长文输入框"]');
+  if (button instanceof HTMLElement) button.click();
+  return { clicked: button instanceof HTMLElement };
+})())
+'@
+  Assert-True ($openState.clicked -eq $true) "mobile composer expand control is missing"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+
+  $expandedState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  expanded: !!document.querySelector('.thread-composer-shell--expanded'),
+  prevented: !window.dispatchEvent(new CustomEvent('codex-mobile-back-button', { cancelable: true }))
+})
+'@
+  Assert-True ($expandedState.expanded -eq $true) "mobile composer did not expand"
+  Assert-True ($expandedState.prevented -eq $true) "Android back was not claimed by the expanded composer"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+
+  $closedState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  expanded: !!document.querySelector('.thread-composer-shell--expanded'),
+  route: window.location.hash
+})
+'@
+  Assert-True ($closedState.expanded -eq $false) "Android back did not collapse the expanded composer"
+  Assert-True ($closedState.route -eq "#/") "closing the expanded composer unexpectedly changed route: $($closedState.route)"
+}
+
+function Assert-MobileBackDismissesFavoritesModal {
+  param([string]$Session)
+
+  $opened = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const button = document.querySelector('.content-favorites-button');
+  const state = {
+    clicked: button instanceof HTMLButtonElement,
+    routeBefore: window.location.hash,
+    overflowBefore: document.body.style.overflow
+  };
+  if (button instanceof HTMLButtonElement) button.click();
+  return state;
+})())
+'@
+  Assert-True ($opened.clicked -eq $true) "mobile Favorites control is missing"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+
+  $visible = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  panelCount: document.querySelectorAll('.favorites-panel').length,
+  panelFocused: document.activeElement?.classList.contains('favorites-panel') === true,
+  bodyOverflow: document.body.style.overflow
+})
+'@
+  Assert-True ([int]$visible.panelCount -eq 1) "Favorites modal did not open"
+  Assert-True ($visible.panelFocused -eq $true) "Favorites modal did not take focus from the underlying page"
+  Assert-True ($visible.bodyOverflow -eq "hidden") "Favorites modal did not lock background scrolling"
+
+  $back = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  prevented: !window.dispatchEvent(new CustomEvent('codex-mobile-back-button', { cancelable: true }))
+})
+'@
+  Assert-True ($back.prevented -eq $true) "Android Back was not claimed by Favorites"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+
+  $closed = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  panelCount: document.querySelectorAll('.favorites-panel').length,
+  routeAfter: window.location.hash,
+  bodyOverflow: document.body.style.overflow
+})
+'@
+  Assert-True ([int]$closed.panelCount -eq 0) "Android Back left Favorites open"
+  Assert-True ($closed.routeAfter -eq $opened.routeBefore) "closing Favorites changed route: $($closed.routeAfter)"
+  Assert-True ($closed.bodyOverflow -eq $opened.overflowBefore) "closing Favorites did not restore background scrolling"
+}
+
+function Assert-BlockingDialogEnvironment {
+  param([string]$Session)
+
+  foreach ($kind in @('desktop-refresh', 'queued-edit', 'mobile-update')) {
+    $openScript = @"
+JSON.stringify((() => {
+  const input = document.querySelector('.thread-composer-input');
+  if (input instanceof HTMLElement) input.focus();
+  const routeBefore = window.location.hash;
+  const overflowBefore = document.body.style.overflow;
+  window.dispatchEvent(new CustomEvent('cx-codex-regression-open-blocking-dialog', {
+    detail: { kind: '$kind' }
+  }));
+  return { inputFound: input instanceof HTMLElement, routeBefore, overflowBefore };
+})())
+"@
+    $opened = Invoke-BrowserEvalJson -Session $Session -Script $openScript
+    Assert-True ($opened.inputFound -eq $true) "$kind regression could not focus the underlying composer"
+    Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+
+    $visible = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const dialog = document.querySelector('.mobile-update-confirm-dialog, .desktop-refresh-confirm-dialog');
+  return {
+    dialogCount: document.querySelectorAll('.mobile-update-confirm-dialog, .desktop-refresh-confirm-dialog').length,
+    dialogFocused: document.activeElement === dialog,
+    bodyOverflow: document.body.style.overflow,
+    route: window.location.hash
+  };
+})())
+'@
+    Assert-True ([int]$visible.dialogCount -eq 1) "$kind regression did not open exactly one blocking dialog"
+    Assert-True ($visible.dialogFocused -eq $true) "$kind blocking dialog did not take focus from the underlying composer"
+    Assert-True ($visible.bodyOverflow -eq 'hidden') "$kind blocking dialog did not lock background scrolling"
+    Assert-True ($visible.route -eq $opened.routeBefore) "$kind blocking dialog changed route while opening"
+
+    $back = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  prevented: !window.dispatchEvent(new CustomEvent('codex-mobile-back-button', { cancelable: true }))
+})
+'@
+    Assert-True ($back.prevented -eq $true) "Android Back was not claimed by $kind blocking dialog"
+    Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+
+    $closed = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  dialogCount: document.querySelectorAll('.mobile-update-confirm-dialog, .desktop-refresh-confirm-dialog').length,
+  composerFocused: document.activeElement?.classList.contains('thread-composer-input') === true,
+  bodyOverflow: document.body.style.overflow,
+  route: window.location.hash
+})
+'@
+    Assert-True ([int]$closed.dialogCount -eq 0) "Android Back left $kind blocking dialog open"
+    Assert-True ($closed.composerFocused -eq $true) "$kind blocking dialog did not restore the previous focus"
+    Assert-True ($closed.bodyOverflow -eq $opened.overflowBefore) "$kind blocking dialog did not restore background scrolling"
+    Assert-True ($closed.route -eq $opened.routeBefore) "closing $kind blocking dialog changed route"
+  }
 }
 
 function Read-ConversationFixtureMetrics {
@@ -2292,7 +2780,8 @@ JSON.stringify((() => {
     hasUnifiedStatusLabel: textContent.includes('正在处理 ·'),
     hasLatestExecutionHint: textContent.includes('正在执行最新操作'),
     hasStreamingReply: textContent.includes('回复仍在继续生成，不应让运行状态消失'),
-    hasStableElapsedTime: /正在处理\s*·\s*(?:[6-9]|[1-9]\d+)\s*秒/.test(textContent)
+    hasStableElapsedTime: /正在处理\s*·\s*(?:[6-9]|[1-9]\d+)\s*秒/.test(textContent),
+    bodyOverflowBefore: document.body.style.overflow
   };
 })())
 '@
@@ -2326,6 +2815,8 @@ JSON.stringify((() => {
   const textContent = sheet?.textContent || '';
   return {
     sheetCount: document.querySelectorAll('.live-overlay-detail-sheet').length,
+    sheetFocused: document.activeElement === sheet,
+    bodyOverflow: document.body.style.overflow,
     hasCurrentCommand: textContent.includes('npm.cmd run verify:frontend-normalizers'),
     hasCurrentOutput: textContent.includes('fixture-current-command: running'),
     hasHistoricalCommand: textContent.includes('npm.cmd run test:7420:frontend')
@@ -2334,9 +2825,37 @@ JSON.stringify((() => {
 '@
   $after = Invoke-BrowserEvalJson -Session $Session -Script $afterScript
   Assert-True ([int]$after.sheetCount -eq 1) "conversation tail status did not open one detail sheet"
+  Assert-True ($after.sheetFocused -eq $true) "conversation tail detail did not take focus from the underlying page"
+  Assert-True ($after.bodyOverflow -eq "hidden") "conversation tail detail did not lock background scrolling"
   Assert-True ($after.hasCurrentCommand -eq $true) "conversation tail detail is missing the current command"
   Assert-True ($after.hasCurrentOutput -eq $true) "conversation tail detail is missing current command output"
   Assert-True ($after.hasHistoricalCommand -eq $false) "conversation tail detail mixed historical execution into the current status"
+
+  $backResult = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const routeBefore = window.location.hash;
+  const event = new CustomEvent('codex-mobile-back-button', { cancelable: true });
+  window.dispatchEvent(event);
+  return {
+    prevented: event.defaultPrevented,
+    routeBefore
+  };
+})())
+'@
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+  $afterBack = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  routeAfter: window.location.hash,
+  sheetCount: document.querySelectorAll('.live-overlay-detail-sheet').length,
+  compactCount: document.querySelectorAll('.live-overlay-compact-main').length,
+  bodyOverflow: document.body.style.overflow
+})
+'@
+  Assert-True ($backResult.prevented -eq $true) "Android Back was not consumed by the topmost conversation detail"
+  Assert-True ([int]$afterBack.sheetCount -eq 0) "Android Back did not close the topmost conversation detail"
+  Assert-True ([string]$afterBack.routeAfter -eq [string]$backResult.routeBefore) "Android Back changed route while closing conversation detail"
+  Assert-True ([int]$afterBack.compactCount -eq 1) "conversation tail status disappeared after closing its detail"
+  Assert-True ([string]$afterBack.bodyOverflow -eq [string]$before.bodyOverflowBefore) "conversation tail detail did not restore background scrolling"
 }
 
 function Assert-ConversationNewActivityTimerFixture {
@@ -2556,6 +3075,113 @@ JSON.stringify((() => {
 '@
   Assert-True ([int]$returnedMetrics.distance -le 24) "conversation return-to-bottom action did not restore the bottom anchor"
   Assert-True ($returnedMetrics.hasButton -eq $false) "conversation return-to-bottom action remained visible after bottom recovery"
+}
+
+function Assert-ConversationThreadSwitchScrollIsolation {
+  param([string]$Session)
+
+  $firstSwitch = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const list = document.querySelector('.conversation-list');
+  const switchButton = document.querySelector('[data-testid="switch-scroll-thread-b"]');
+  if (!(list instanceof HTMLElement) || !(switchButton instanceof HTMLButtonElement)) {
+    return { ready: false };
+  }
+  list.style.flex = '0 0 320px';
+  list.style.height = '320px';
+  list.style.minHeight = '320px';
+  list.style.maxHeight = '320px';
+  const maxScrollTop = Math.max(list.scrollHeight - list.clientHeight, 0);
+  const targetScrollTop = Math.round(maxScrollTop * 0.28);
+  list.scrollTop = targetScrollTop;
+  list.dispatchEvent(new Event('scroll'));
+  switchButton.click();
+  return {
+    ready: true,
+    maxScrollTop,
+    targetScrollTop,
+    targetRatio: maxScrollTop > 0 ? targetScrollTop / maxScrollTop : 0
+  };
+})())
+'@
+  Assert-True ($firstSwitch.ready -eq $true) "conversation thread-switch fixture is missing its list or switch control"
+  Assert-True ([int]$firstSwitch.maxScrollTop -gt 300) "conversation thread-switch fixture is not scrollable enough"
+
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "350") | Out-Null
+  $threadBMetrics = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const list = document.querySelector('.conversation-list');
+  const state = document.querySelector('.conversation-scroll-switch-state');
+  if (!(list instanceof HTMLElement) || !(state instanceof HTMLElement)) return { ready: false };
+  const maxScrollTop = Math.max(list.scrollHeight - list.clientHeight, 0);
+  return {
+    ready: true,
+    activeThreadId: state.dataset.activeThreadId || '',
+    listThreadId: list.dataset.threadId || '',
+    threadAScrollTop: Number(state.dataset.threadAScrollTop || -1),
+    threadAAtBottom: state.dataset.threadAAtBottom || '',
+    threadBScrollTop: Number(state.dataset.threadBScrollTop || -1),
+    threadBAtBottom: state.dataset.threadBAtBottom || '',
+    distanceFromBottom: Math.max(list.scrollHeight - list.scrollTop - list.clientHeight, 0),
+    maxScrollTop
+  };
+})())
+'@
+  Assert-True ($threadBMetrics.ready -eq $true) "conversation thread-switch fixture did not render thread B"
+  Assert-True ([string]$threadBMetrics.activeThreadId -eq 'regression-scroll-b') "conversation thread switch did not select thread B"
+  Assert-True ([string]$threadBMetrics.listThreadId -eq 'regression-scroll-b') "conversation list retained thread A ownership after selecting thread B"
+  Assert-True ([double]$threadBMetrics.threadAScrollTop -gt 0) "conversation thread A scroll state was not settled before switching"
+  Assert-True ([string]$threadBMetrics.threadAAtBottom -eq 'false') "conversation thread A scroll state was incorrectly saved at the bottom"
+  Assert-True ([int]$threadBMetrics.distanceFromBottom -le 24) "thread A's delayed scroll state moved a fresh thread B away from the bottom"
+  Assert-True (
+    [string]$threadBMetrics.threadBAtBottom -eq '' -or [string]$threadBMetrics.threadBAtBottom -eq 'true'
+  ) "thread A's delayed scroll state was written under thread B"
+
+  $secondSwitch = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const list = document.querySelector('.conversation-list');
+  const switchButton = document.querySelector('[data-testid="switch-scroll-thread-a"]');
+  if (!(list instanceof HTMLElement) || !(switchButton instanceof HTMLButtonElement)) {
+    return { ready: false };
+  }
+  const maxScrollTop = Math.max(list.scrollHeight - list.clientHeight, 0);
+  const targetScrollTop = Math.round(maxScrollTop * 0.62);
+  list.scrollTop = targetScrollTop;
+  list.dispatchEvent(new Event('scroll'));
+  switchButton.click();
+  return {
+    ready: true,
+    targetRatio: maxScrollTop > 0 ? targetScrollTop / maxScrollTop : 0
+  };
+})())
+'@
+  Assert-True ($secondSwitch.ready -eq $true) "conversation thread-switch fixture could not return to thread A"
+
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "350") | Out-Null
+  $restoredMetrics = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const list = document.querySelector('.conversation-list');
+  const state = document.querySelector('.conversation-scroll-switch-state');
+  if (!(list instanceof HTMLElement) || !(state instanceof HTMLElement)) return { ready: false };
+  const maxScrollTop = Math.max(list.scrollHeight - list.clientHeight, 0);
+  return {
+    ready: true,
+    activeThreadId: state.dataset.activeThreadId || '',
+    listThreadId: list.dataset.threadId || '',
+    currentRatio: maxScrollTop > 0 ? list.scrollTop / maxScrollTop : 1,
+    threadBScrollTop: Number(state.dataset.threadBScrollTop || -1),
+    threadBAtBottom: state.dataset.threadBAtBottom || ''
+  };
+})())
+'@
+  Assert-True ($restoredMetrics.ready -eq $true) "conversation thread A did not render after the return switch"
+  Assert-True ([string]$restoredMetrics.activeThreadId -eq 'regression-scroll-a') "conversation return switch did not select thread A"
+  Assert-True ([string]$restoredMetrics.listThreadId -eq 'regression-scroll-a') "conversation list retained thread B ownership after returning to thread A"
+  Assert-True ([double]$restoredMetrics.threadBScrollTop -gt 0) "conversation thread B scroll state was not settled before returning"
+  Assert-True ([string]$restoredMetrics.threadBAtBottom -eq 'false') "conversation thread B scroll state was incorrectly saved at the bottom"
+  Assert-True (
+    [Math]::Abs([double]$restoredMetrics.currentRatio - [double]$firstSwitch.targetRatio) -le 0.08
+  ) "conversation thread A did not restore its own saved scroll ratio"
 }
 
 function Assert-ConversationOlderHistoryAffordance {
@@ -3496,6 +4122,9 @@ $script:screenshotOutputDir = Initialize-ScreenshotOutputDir
 $results = @()
 
 try {
+  Assert-ImmediateAsyncRouteFallbackSource
+  Assert-NestedMobileBackOwnershipSource
+  Assert-StableHandsetViewportSource
   Assert-AndroidResumeThreadListRecoverySource
   Assert-CrossClientThreadStartedRefreshSource
   Assert-PendingStartOutboxRecoverySource
@@ -3541,7 +4170,7 @@ try {
   Assert-FoldableShell -Metrics (Read-FoldableShellMetrics -Session $session)
   Add-RegressionResult -Name "home-foldable" -Page $homeFoldable
 
-  Set-SidebarCollapsedPreference -Session $session -Collapsed $true
+  Set-SidebarCollapsedPreference -Session $session -Collapsed $false
   $homePhone = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $homePhone -Name "home phone" -RequireComposer
   Assert-MobileDrawerSidebar -Metrics (Open-MobileDrawerSidebar -Session $session)
@@ -3550,6 +4179,22 @@ try {
     -Metrics (Read-RequiredSidebarThreadMetrics -Session $session -Thread $requiredSidebarThread -RootSelector ".mobile-drawer") `
     -Context "home mobile drawer"
   Add-RegressionResult -Name "home-mobile-drawer" -Page $homePhone
+  Assert-MobileBackDismissesSidebarDialog -Session $session
+  Assert-MobileDrawerThreadNavigationStability -Session $session
+  Assert-MobileBackDismissesComposerSurface -Session $session
+  Assert-MobileBackDismissesFavoritesModal -Session $session
+
+  $blockingDialogFixtureUrl = $BaseUrl + "/#/?regression=frontend&blockingDialogs=1"
+  $blockingDialogFixture = Open-And-ReadPage -Session $session -Url $blockingDialogFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $blockingDialogFixture -Name "blocking dialog fixture phone" -RequireComposer
+  Assert-BlockingDialogEnvironment -Session $session
+
+  Set-SidebarCollapsedPreference -Session $session -Collapsed $false
+  $homePhoneLandscape = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $PhoneLandscapeWidth -Height $PhoneLandscapeHeight
+  Assert-Page -Page $homePhoneLandscape -Name "home phone landscape" -RequireComposer
+  Assert-MobileDrawerSidebar -Metrics (Open-MobileDrawerSidebar -Session $session)
+  Add-RegressionResult -Name "home-mobile-drawer-landscape" -Page $homePhoneLandscape
+  Assert-MobileDrawerThreadNavigationStability -Session $session
 
   if ($MeasureNewThreadFeedback) {
     $newThreadFeedbackPage = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $PhoneWidth -Height $PhoneHeight
@@ -3570,6 +4215,7 @@ try {
 
   $skills = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/skills?regression=frontend" -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $skills -Name "skills phone" -RequireSkillsHub
+  Assert-MobileBackDismissesSkillDetail -Session $session
   Add-RegressionResult -Name "skills-phone" -Page $skills
 
   $trending = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/github-trending?regression=frontend" -Width $PhoneWidth -Height $PhoneHeight
@@ -3644,6 +4290,12 @@ try {
   Assert-ConversationCommandOutputLazy -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "phone"
   Add-RegressionResult -Name "conversation-blocks-fixture-phone" -Page $fixturePhone
+
+  $scrollSwitchFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&scrollSwitchRace=1"
+  $scrollSwitchFixture = Open-And-ReadPage -Session $session -Url $scrollSwitchFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $scrollSwitchFixture -Name "conversation thread-switch scroll fixture phone"
+  Assert-ConversationThreadSwitchScrollIsolation -Session $session
+  Add-RegressionResult -Name "conversation-thread-switch-scroll-fixture-phone" -Page $scrollSwitchFixture
 
   $loadFailureFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&loadFailure=1"
   $loadFailureFixture = Open-And-ReadPage -Session $session -Url $loadFailureFixtureUrl -Width $PhoneWidth -Height $PhoneHeight

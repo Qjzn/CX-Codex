@@ -4,7 +4,10 @@ param(
   [string]$ConfigPath = "$env:USERPROFILE\.cx-codex\config.json",
   [string]$NodePath = "C:\Program Files\nodejs\node.exe",
   [string]$BindHealthHost = "127.0.0.1",
-  [string]$ExpectedVersion = ""
+  [string]$ExpectedVersion = "",
+  [ValidateRange(0, 86400)]
+  [int]$DrainTimeoutSeconds = 300,
+  [switch]$ForceActiveTaskRestart
 )
 
 $ErrorActionPreference = "Stop"
@@ -72,6 +75,53 @@ function Test-Health {
   return $null
 }
 
+function Wait-ForRuntimeDrain {
+  if ($ForceActiveTaskRestart) {
+    return
+  }
+
+  $deadline = (Get-Date).AddSeconds($DrainTimeoutSeconds)
+  $lastReadError = ""
+  do {
+    $health = $null
+    $lastReadError = ""
+    try {
+      $health = Invoke-RestMethod `
+        -Method Get `
+        -Uri "http://$BindHealthHost`:$Port/codex-api/health" `
+        -TimeoutSec 5
+    } catch {
+      $lastReadError = [string]$_.Exception.Message
+    }
+
+    if ($health -and $health.status -eq "ok" -and $health.data) {
+      $runtimeRequestCount = [int]$health.data.runtimeStore.uncertainRequestCount
+      $restartBlockingCount = if ($health.data.appServer.restartProtection) {
+        [int]$health.data.appServer.restartProtection.blockingRequestCount
+      } else {
+        0
+      }
+      $pendingServerRequestCount = [int]$health.data.appServer.pendingServerRequestCount
+      $activePlanModeTurnCount = [int]$health.data.appServer.activePlanModeTurnCount
+      if (
+        [Math]::Max($runtimeRequestCount, $restartBlockingCount) -eq 0 -and
+        $pendingServerRequestCount -eq 0 -and
+        $activePlanModeTurnCount -eq 0
+      ) {
+        return
+      }
+    }
+
+    if ((Get-Date) -ge $deadline) {
+      if (-not [string]::IsNullOrWhiteSpace($lastReadError)) {
+        throw "Restart stopped because active-task safety could not read /codex-api/health: $lastReadError. Retry after CX-Codex becomes healthy, or explicitly use -ForceActiveTaskRestart."
+      }
+      throw "Restart is still blocked by active Codex work after $DrainTimeoutSeconds seconds. Wait for tasks to finish, or explicitly use -ForceActiveTaskRestart."
+    }
+    Start-Sleep -Seconds 2
+  } while ($true)
+}
+
 if (-not (Test-Path -LiteralPath $distCliPath)) {
   throw "Missing CLI entry: $distCliPath"
 }
@@ -85,6 +135,16 @@ if (-not $ExpectedVersion -and (Test-Path -LiteralPath $packageJsonPath)) {
 
 if (-not (Test-Path -LiteralPath $NodePath)) {
   throw "Missing Node runtime: $NodePath"
+}
+
+if ($ExpectedVersion) {
+  $versionOutput = @(& $NodePath $distCliPath --version 2>$null)
+  $versionExitCode = $LASTEXITCODE
+  $actualVersion = if ($versionOutput.Count -gt 0) { [string]$versionOutput[0] } else { "" }
+  $actualVersion = $actualVersion.Trim()
+  if ($versionExitCode -ne 0 -or $actualVersion -ne $ExpectedVersion) {
+    throw "CLI build has unexpected version '$actualVersion'; expected '$ExpectedVersion'. Rebuild before restarting the service."
+  }
 }
 
 if (-not (Test-Path -LiteralPath $ConfigPath)) {
@@ -101,6 +161,9 @@ if (-not (Test-Path -LiteralPath $ConfigPath)) {
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 $managedProcessIds = Get-ManagedCodexUiProcessIds -RepoRoot $repoRoot -TargetConfigPath $ConfigPath
+if ($managedProcessIds.Count -gt 0) {
+  Wait-ForRuntimeDrain
+}
 foreach ($managedProcessId in $managedProcessIds) {
   try {
     Stop-Process -Id $managedProcessId -Force -ErrorAction Stop
@@ -151,18 +214,6 @@ for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
 
 if (-not $healthPayload) {
   throw "Service started with PID $($process.Id), but /health did not become ready on port $Port."
-}
-
-if ($ExpectedVersion) {
-  $startupOutput = Get-Content -Raw -LiteralPath $outLog -ErrorAction SilentlyContinue
-  $versionMatch = [regex]::Match([string]$startupOutput, "Version:\s+([^\r\n]+)")
-  $actualVersion = if ($versionMatch.Success) { $versionMatch.Groups[1].Value.Trim() } else { "" }
-  if ($actualVersion -ne $ExpectedVersion) {
-    try {
-      Stop-Process -Id $process.Id -Force -ErrorAction Stop
-    } catch {}
-    throw "Service started with unexpected version '$actualVersion'; expected '$ExpectedVersion'. OutLog: $outLog"
-  }
 }
 
 [PSCustomObject]@{

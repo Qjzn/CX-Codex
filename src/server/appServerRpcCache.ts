@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
+import { isCxSessionFilesChangedMethod } from '../sessionFileChange.js'
 import { logBridgeError } from './bridgeLog.js'
 import { getWebThreadListCachePath } from './codexPaths.js'
 
@@ -93,6 +94,7 @@ export function shouldInvalidateThreadListCacheForRpc(method: string): boolean {
 }
 
 export function shouldInvalidateThreadListCacheForNotification(method: string): boolean {
+  if (isCxSessionFilesChangedMethod(method)) return true
   if (method === 'thread/name/updated') return true
   if (!method.startsWith('thread/')) return false
   return (
@@ -125,6 +127,7 @@ export function shouldInvalidateThreadReadCacheForRpc(method: string): boolean {
 }
 
 export function shouldInvalidateThreadReadCacheForNotification(method: string): boolean {
+  if (isCxSessionFilesChangedMethod(method)) return true
   if (
     method === 'thread/goal/updated' ||
     method === 'thread/goal/cleared' ||

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
+import Database from 'better-sqlite3'
 import { getWindowsDesktopCodexExecutables } from '../src/commandResolution.js'
 import {
   createAppServerClientInfo,
@@ -300,6 +301,7 @@ import {
 } from '../src/server/runtimeState.js'
 import { handleRuntimeStateRoutes } from '../src/server/runtimeStateRoutes.js'
 import {
+  RuntimeThreadBusyError,
   RuntimeStore,
   type RuntimeEventRecord,
   type RuntimeRequestRecord,
@@ -429,6 +431,12 @@ import { writeCodexBridgeRequestError } from '../src/server/codexBridgeRequestEr
 import { disposeCodexBridgeMiddlewareResources } from '../src/server/codexBridgeMiddlewareDispose.js'
 import { createCodexBridgeMiddlewareState } from '../src/server/codexBridgeMiddlewareState.js'
 import { createCodexBridgeNotificationRuntime } from '../src/server/codexBridgeNotificationRuntime.js'
+import {
+  CodexSessionFileChangeObserver,
+  classifyCodexSessionFileChange,
+  createCodexSessionFileChangedNotification,
+} from '../src/server/codexSessionFileChangeObserver.js'
+import { CX_SESSION_FILES_CHANGED_METHOD } from '../src/sessionFileChange.js'
 import { createCodexBridgeRuntimeOperations } from '../src/server/codexBridgeRuntimeOperations.js'
 import { createCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteHandlers.js'
 import { runCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteDispatch.js'
@@ -506,6 +514,7 @@ try {
   await smokeFileUploadRoute()
   smokeHttpJsonResponse()
   smokeCodexBridgeRequestError()
+  await smokeCodexSessionFileChangeObserver()
   await smokeCodexBridgeMiddlewareState()
   smokeCodexBridgeMiddlewareDispose()
   smokeCodexBridgeNotificationRuntime()
@@ -3506,6 +3515,26 @@ function smokeAppServerRpcTimeoutRecovery(): void {
     timeoutCount: 3,
     includeTurns: false,
   })
+
+  const protectedDecision = createAppServerRpcTimeoutRecoveryDecision({
+    method: 'thread/read',
+    params: { includeTurns: true },
+    timeoutMs: 30_000,
+    startedAtMs: 1,
+    coldStartGraceMs: 60_000,
+    restartProtection: { blockingRequestCount: 2 },
+    dependencies: {
+      now: () => 100_000,
+      recordTimeout: () => {},
+      noteRestartableTimeout: () => ({ shouldRestart: true, timeoutCount: 4 }),
+    },
+  })
+  assert.deepEqual(protectedDecision, {
+    kind: 'restart-blocked',
+    timeoutCount: 4,
+    includeTurns: true,
+    blockingRequestCount: 2,
+  })
 }
 
 function smokeTranscriptionProxyConfig(): void {
@@ -3788,6 +3817,7 @@ async function smokeAppServerRpcCache(): Promise<void> {
   assert.equal(shouldInvalidateThreadListCacheForRpc('thread/inject_items'), true)
   assert.equal(shouldInvalidateThreadListCacheForRpc('thread/read'), false)
   assert.equal(shouldInvalidateThreadListCacheForNotification('thread/name/updated'), true)
+  assert.equal(shouldInvalidateThreadListCacheForNotification(CX_SESSION_FILES_CHANGED_METHOD), true)
   assert.equal(shouldInvalidateThreadListCacheForNotification('thread/created'), true)
   assert.equal(shouldInvalidateThreadListCacheForNotification('item/completed'), false)
   assert.equal(shouldInvalidateThreadReadCacheForRpc('turn/start'), true)
@@ -3801,6 +3831,7 @@ async function smokeAppServerRpcCache(): Promise<void> {
   assert.equal(shouldInvalidateThreadReadCacheForRpc('thread/inject_items'), true)
   assert.equal(shouldInvalidateThreadReadCacheForRpc('model/list'), false)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('thread/goal/updated'), true)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification(CX_SESSION_FILES_CHANGED_METHOD), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('thread/goal/cleared'), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('thread/compacted'), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('turn/completed'), true)
@@ -4822,6 +4853,7 @@ async function smokeCodexBridgeMiddlewareState(): Promise<void> {
     assert.equal(typeof state.threadSearchIndexStore.clear, 'function')
     assert.equal(typeof state.threadReadCacheStore.get, 'function')
     assert.equal(typeof state.augmentThreadListRpcResult, 'function')
+    assert.equal(typeof state.invalidateSupplementalThreadListCache, 'function')
     assert.equal(typeof state.runtimeStateStore.snapshot, 'function')
     assert.equal(typeof state.runtimeStore.getHealth, 'function')
     assert.equal(typeof state.notificationDiagnostics.snapshot, 'function')
@@ -4837,6 +4869,9 @@ async function smokeCodexBridgeMiddlewareState(): Promise<void> {
 function smokeCodexBridgeMiddlewareDispose(): void {
   const calls: string[] = []
   disposeCodexBridgeMiddlewareResources({
+    sessionFileChangeObserver: {
+      dispose: () => calls.push('sessionFileChangeObserver.dispose'),
+    },
     runtimeReconcileScheduler: {
       dispose: () => calls.push('runtimeReconcileScheduler.dispose'),
     },
@@ -4871,6 +4906,7 @@ function smokeCodexBridgeMiddlewareDispose(): void {
   })
 
   assert.deepEqual(calls, [
+    'sessionFileChangeObserver.dispose',
     'runtimeReconcileScheduler.dispose',
     'threadSearchIndexStore.clear',
     'bridgeNotificationListeners.clear',
@@ -4911,12 +4947,14 @@ function smokeCodexBridgeNotificationRuntime(): void {
     },
     runtimeStore: {
       getLatestEventSeq: () => 10,
+      getStreamId: () => 'stream-runtime',
       appendEvent: (event) => {
         appendedEvents.push(event)
         return event
       },
       listEventsAfter: (afterSeq, limit) => ({
         notifications: appendedEvents.filter((event) => event.seq > afterSeq).slice(0, limit),
+        streamId: 'stream-runtime',
         latestSeq: appendedEvents.at(-1)?.seq ?? 10,
         oldestSeq: appendedEvents[0]?.seq ?? 10,
       }),
@@ -4959,6 +4997,7 @@ function smokeCodexBridgeNotificationRuntime(): void {
   })
 
   assert.equal(runtime.notificationReplay.latestSeq, 11)
+  assert.equal(runtime.notificationReplay.streamId, 'stream-runtime')
   assert.deepEqual(appendedEvents.map((event) => ({
     seq: event.seq,
     method: event.method,
@@ -4976,11 +5015,87 @@ function smokeCodexBridgeNotificationRuntime(): void {
   assert.deepEqual(deletedThreadReads, ['thread-a'])
   assert.deepEqual(emittedEvents, [observedRuntimeEvents[0]])
   assert.equal(runtime.listNotificationEventsAfter(10, 5).notifications.length, 1)
+  assert.equal(runtime.listNotificationEventsAfter(10, 5).streamId, 'stream-runtime')
+
+  const externalEvent = runtime.publishBridgeNotification(createCodexSessionFileChangedNotification({
+    source: 'session-log',
+    threadId: 'thread-a',
+  }))
+  assert.equal(externalEvent.seq, 12)
+  assert.equal(externalEvent.method, CX_SESSION_FILES_CHANGED_METHOD)
+  assert.equal(observedRuntimeEvents.length, 1)
+  assert.deepEqual(deletedThreadReads, ['thread-a', 'thread-a'])
+  assert.equal(emittedEvents.length, 2)
+  assert.equal(runtime.listNotificationEventsAfter(10, 5).notifications.length, 2)
 
   unsubscribeBridgeListener()
   assert.equal(runtime.bridgeNotificationListeners.count, 0)
   runtime.unsubscribeAppServerNotifications()
   assert.equal(unsubscribeCount, 1)
+}
+
+async function smokeCodexSessionFileChangeObserver(): Promise<void> {
+  const threadId = '019f7e69-25a4-7aa2-8166-b8257873b8ab'
+  assert.deepEqual(classifyCodexSessionFileChange('session_index.jsonl'), {
+    source: 'session-index',
+    threadId: '',
+  })
+  assert.deepEqual(classifyCodexSessionFileChange(
+    `sessions\\2026\\07\\20\\rollout-2026-07-20T15-24-12-${threadId}.jsonl`,
+  ), {
+    source: 'session-log',
+    threadId,
+  })
+  assert.deepEqual(classifyCodexSessionFileChange(Buffer.from(
+    `archived_sessions/rollout-2026-07-20T15-24-12-${threadId}.jsonl`,
+  )), {
+    source: 'session-log',
+    threadId,
+  })
+  assert.equal(classifyCodexSessionFileChange('runtime/runtime.sqlite'), null)
+  assert.equal(classifyCodexSessionFileChange(null), null)
+  assert.deepEqual(createCodexSessionFileChangedNotification({ source: 'session-log', threadId }), {
+    method: CX_SESSION_FILES_CHANGED_METHOD,
+    params: { source: 'session-log', threadId },
+  })
+
+  const root = await mkdtemp(join(tmpdir(), 'cx-codex-session-observer-'))
+  const changes: Array<{ source: string; threadId: string }> = []
+  const errors: unknown[] = []
+  const observer = new CodexSessionFileChangeObserver({
+    codexHomeDir: root,
+    debounceMs: 20,
+    minEmitIntervalMs: 30,
+    maxWaitMs: 80,
+    onChange: (change) => changes.push(change),
+    onError: (error) => errors.push(error),
+  })
+  try {
+    const sessionsDir = join(root, 'sessions')
+    await mkdir(sessionsDir, { recursive: true })
+    observer.start()
+    const sessionPath = join(sessionsDir, `rollout-2026-07-20T15-24-12-${threadId}.jsonl`)
+    await writeFile(sessionPath, '{}\n', 'utf8')
+    await waitForCondition(() => changes.some((change) => change.threadId === threadId))
+    await appendFile(sessionPath, '{}\n', 'utf8')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.equal(changes.filter((change) => change.threadId === threadId).length, 1)
+    await waitForCondition(() => changes.filter((change) => change.threadId === threadId).length === 2)
+    await writeFile(join(root, 'session_index.jsonl'), '{}\n', 'utf8')
+    await waitForCondition(() => changes.some((change) => change.source === 'session-index'))
+    assert.deepEqual(errors, [])
+    assert.deepEqual(observer.getStatus(), {
+      running: true,
+      watchedSessionRootCount: 1,
+      emittedChangeCount: 3,
+      lastChangeAtIso: observer.getStatus().lastChangeAtIso,
+      lastErrorCode: '',
+    })
+    assert.notEqual(observer.getStatus().lastChangeAtIso, '')
+  } finally {
+    observer.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
 }
 
 function smokeCodexBridgeRuntimeOperations(): void {
@@ -7671,6 +7786,19 @@ async function smokeProjectRootRoutes(): Promise<void> {
 }
 
 function smokeRuntimeStateStore(): void {
+  const activeCountStore = new RuntimeStateStore({
+    readThreadIdFromPayload,
+    readTurnIdFromPayload,
+    readItemIdFromPayload,
+    readThreadInProgressFromThreadReadPayload: (payload) => readBooleanProperty(payload, 'inProgress'),
+    getErrorMessage: (_payload, fallback) => fallback,
+  })
+  assert.equal(activeCountStore.getActiveThreadCount(), 0)
+  activeCountStore.markRunning('thread-active-count', 'turn-active-count')
+  assert.equal(activeCountStore.getActiveThreadCount(), 1)
+  activeCountStore.markFailed('thread-active-count')
+  assert.equal(activeCountStore.getActiveThreadCount(), 0)
+
   const store = new RuntimeStateStore({
     readThreadIdFromPayload,
     readTurnIdFromPayload,
@@ -8723,6 +8851,36 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
   const completedConcurrent = await concurrentStarter(concurrentPayload)
   assert.equal(completedConcurrent.turnId, 'turn-concurrent')
   assert.equal(concurrent.rpcCalls.length, 1)
+
+  const racedInput = [{ type: 'text', text: 'Reuse database accepted request' }]
+  const raced = createHarness(async () => {
+    throw new Error('database-accepted request must not start another turn')
+  })
+  const databaseAcceptedRequest: RuntimeRequestRecord = {
+    requestId: 'request-database-accepted',
+    clientMessageId: 'client-database-accepted',
+    threadId: 'thread-database-accepted',
+    turnId: 'turn-database-accepted',
+    status: 'running',
+    promptHash: createRuntimePromptHash(racedInput),
+    mode: 'execute',
+    payload: {},
+    retryCount: 0,
+    createdAtIso: '2026-01-01T00:00:00.000Z',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    lastError: null,
+  }
+  raced.dependencies.getLatestRequestByClientMessageId = () => null
+  raced.dependencies.createRequest = () => databaseAcceptedRequest
+  const racedResult = await createAppServerRuntimeTurnStarter(raced.dependencies)({
+    requestId: 'request-database-racer',
+    clientMessageId: 'client-database-accepted',
+    threadId: 'thread-database-accepted',
+    input: racedInput,
+  })
+  assert.equal(racedResult.request.requestId, 'request-database-accepted')
+  assert.equal(racedResult.turnId, 'turn-database-accepted')
+  assert.equal(raced.rpcCalls.length, 0)
 }
 
 async function smokeAppServerRuntimeInterrupt(): Promise<void> {
@@ -9220,6 +9378,7 @@ async function smokeRuntimeActionRoutes(): Promise<void> {
     { input: 'queued' },
     { input: 'starting' },
     { input: 'wait' },
+    { input: 'busy' },
     { threadId: 'thread-a', turnId: 'turn-a' },
     { threadId: 'thread-b', turnId: 'turn-b' },
   ]
@@ -9306,6 +9465,25 @@ async function smokeRuntimeActionRoutes(): Promise<void> {
     { input: 'wait' },
   ])
   assert.deepEqual(JSON.parse(sendUncertain.body), { data: { status: 'start_uncertain', requestId: 'start-4' } })
+
+  const sendBusy = createRouteTestResponse()
+  const busyDependencies = {
+    ...dependencies,
+    startRuntimeTurn: async () => {
+      throw new RuntimeThreadBusyError('thread-busy', 'request-owner')
+    },
+  }
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'POST' } as never,
+    sendBusy.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/send'),
+    busyDependencies,
+  ), true)
+  assert.equal(sendBusy.response.statusCode, 409)
+  assert.deepEqual(JSON.parse(sendBusy.body), {
+    error: '当前会话已有任务正在执行，请等待完成后再发送。',
+    code: 'RUNTIME_THREAD_BUSY',
+  })
 
   const missingRequestId = createRouteTestResponse()
   assert.equal(await handleRuntimeActionRoutes(
@@ -10574,6 +10752,7 @@ function smokeAppServerNotificationReplay(): void {
   }
   const replay = new AppServerNotificationReplay({
     initialSeq: 10.8,
+    streamId: 'stream-replay',
     bufferLimit: 2,
     nowIso: () => '2026-01-01T00:00:00.000Z',
     appendEvent: (event) => { appended.push(event) },
@@ -10650,6 +10829,7 @@ function smokeAppServerNotificationReplay(): void {
 
   assert.deepEqual(replay.listAfter(11, 10), {
     notifications: [second, third],
+    streamId: 'stream-replay',
     latestSeq: 13,
     oldestSeq: 12,
   })
@@ -10671,6 +10851,7 @@ function smokeAppServerNotificationReplay(): void {
       params: { ok: true },
       atIso: '2026-01-01T00:00:01.000Z',
     }],
+    streamId: 'stream-replay',
     latestSeq: 13,
     oldestSeq: 2,
   })
@@ -10768,9 +10949,13 @@ function smokeAppServerNotificationReplay(): void {
 async function smokeRuntimeStoreMaintenance(): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'cx-codex-runtime-store-'))
   const dbPath = join(root, 'runtime.sqlite')
+  const legacyDbPath = join(root, 'legacy-runtime.sqlite')
   let runtimeStore: RuntimeStore | null = null
+  let persistedStreamId = ''
   try {
     runtimeStore = new RuntimeStore(dbPath)
+    persistedStreamId = runtimeStore.getStreamId()
+    assert.match(persistedStreamId, /^[0-9a-f-]{36}$/u)
     assert.equal(runtimeStore.getStorageStats().autoVacuumMode, 2)
     runtimeStore.appendEvent({
       seq: 1,
@@ -10784,7 +10969,11 @@ async function smokeRuntimeStoreMaintenance(): Promise<void> {
     runtimeStore = null
 
     runtimeStore = new RuntimeStore(dbPath)
-    assert.deepEqual(runtimeStore.listEventsAfter(0, 10).notifications[0]?.params, {})
+    assert.equal(runtimeStore.getStreamId(), persistedStreamId)
+    const reopenedReplay = runtimeStore.listEventsAfter(0, 10)
+    assert.equal(reopenedReplay.streamId, persistedStreamId)
+    assert.deepEqual(reopenedReplay.notifications[0]?.params, {})
+    assert.equal(runtimeStore.getHealth().streamId, persistedStreamId)
     const compacted = runtimeStore.compact()
     assert.equal(compacted.status, 'compacted')
     assert.equal(compacted.after.autoVacuumMode, 2)
@@ -10868,6 +11057,82 @@ async function smokeRuntimeStoreMaintenance(): Promise<void> {
     }
     assert.equal(runtimeStore.listMobilePushRegistrationsForThread('thread-push').length, 1)
 
+    const firstIdempotent = runtimeStore.createRequest({
+      requestId: 'idempotent-first',
+      clientMessageId: 'client-message-once',
+      status: 'completed',
+      promptHash: 'prompt-hash',
+      mode: 'execute',
+    })
+    const repeatedIdempotent = runtimeStore.createRequest({
+      requestId: 'idempotent-second',
+      clientMessageId: 'client-message-once',
+      status: 'completed',
+      promptHash: 'prompt-hash',
+      mode: 'execute',
+    })
+    assert.equal(repeatedIdempotent.requestId, firstIdempotent.requestId)
+    assert.equal(runtimeStore.getRequest('idempotent-second'), null)
+
+    runtimeStore.createRequest({
+      requestId: 'thread-owner',
+      clientMessageId: 'client-thread-owner',
+      threadId: 'thread-owned-once',
+      status: 'running',
+      mode: 'execute',
+    })
+    assert.equal(runtimeStore.getThreadLease('thread-owned-once')?.requestId, 'thread-owner')
+    const peerRuntimeStore = new RuntimeStore(dbPath)
+    assert.equal(peerRuntimeStore.createRequest({
+      requestId: 'idempotent-peer',
+      clientMessageId: 'client-message-once',
+      status: 'completed',
+      mode: 'execute',
+    }).requestId, firstIdempotent.requestId)
+    assert.throws(() => peerRuntimeStore.createRequest({
+      requestId: 'thread-peer-conflict',
+      clientMessageId: 'client-thread-peer-conflict',
+      threadId: 'thread-owned-once',
+      status: 'pending_start',
+      mode: 'execute',
+    }), /already has an active runtime request/)
+    peerRuntimeStore.close()
+    assert.throws(() => runtimeStore?.createRequest({
+      requestId: 'thread-conflict',
+      clientMessageId: 'client-thread-conflict',
+      threadId: 'thread-owned-once',
+      status: 'pending_start',
+      mode: 'execute',
+    }), (error: unknown) => (
+      error instanceof Error
+      && error.name === 'RuntimeThreadBusyError'
+      && (error as Error & { code?: string }).code === 'RUNTIME_THREAD_BUSY'
+    ))
+    runtimeStore.createRequest({
+      requestId: 'thread-interrupt',
+      threadId: 'thread-owned-once',
+      turnId: 'turn-owned-once',
+      status: 'stopping',
+      mode: 'interrupt',
+    })
+    assert.equal(runtimeStore.getThreadLease('thread-owned-once')?.requestId, 'thread-owner')
+    runtimeStore.updateRequest('thread-owner', { status: 'completed' })
+    assert.equal(runtimeStore.getThreadLease('thread-owned-once'), null)
+    runtimeStore.updateRequest('thread-interrupt', { status: 'stopped' })
+    runtimeStore.createRequest({
+      requestId: 'thread-next-owner',
+      clientMessageId: 'client-thread-next-owner',
+      threadId: 'thread-owned-once',
+      status: 'pending_start',
+      mode: 'execute',
+    })
+    assert.equal(runtimeStore.getThreadLease('thread-owned-once')?.requestId, 'thread-next-owner')
+    runtimeStore.updateRequest('thread-next-owner', { threadId: 'thread-moved-owner' })
+    assert.equal(runtimeStore.getThreadLease('thread-owned-once'), null)
+    assert.equal(runtimeStore.getThreadLease('thread-moved-owner')?.requestId, 'thread-next-owner')
+    runtimeStore.updateRequest('thread-next-owner', { status: 'failed' })
+    assert.equal(runtimeStore.getThreadLease('thread-moved-owner'), null)
+
     runtimeStore.createRequest({
       requestId: 'active-request',
       status: 'running',
@@ -10884,6 +11149,38 @@ async function smokeRuntimeStoreMaintenance(): Promise<void> {
     const skipped = runtimeStore.compact()
     assert.equal(skipped.status, 'skipped-active-requests')
     assert.equal(skipped.activeRequestCount, 1)
+    assert.equal(runtimeStore.getRestartBlockingRequestCount(), 2)
+
+    const legacyStore = new RuntimeStore(legacyDbPath)
+    const legacyStreamId = legacyStore.getStreamId()
+    assert.notEqual(legacyStreamId, persistedStreamId)
+    legacyStore.close()
+    const legacyDb = new Database(legacyDbPath)
+    legacyDb.exec(`
+      DROP INDEX idx_runtime_requests_client_message;
+      INSERT INTO runtime_requests (
+        request_id, client_message_id, thread_id, turn_id, status, prompt_hash, mode,
+        payload_json, retry_count, created_at_iso, updated_at_iso, last_error
+      ) VALUES
+        ('legacy-older', 'legacy-duplicate-client', '', '', 'completed', '', 'execute', '{}', 0,
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', NULL),
+        ('legacy-newer', 'legacy-duplicate-client', '', '', 'completed', '', 'execute', '{}', 0,
+          '2026-01-01T00:00:01.000Z', '2026-01-01T00:00:01.000Z', NULL);
+    `)
+    legacyDb.close()
+    const migratedStore = new RuntimeStore(legacyDbPath)
+    assert.equal(migratedStore.getStreamId(), legacyStreamId)
+    assert.equal(migratedStore.getRequest('legacy-older')?.clientMessageId, '')
+    assert.equal(
+      migratedStore.getLatestRequestByClientMessageId('legacy-duplicate-client')?.requestId,
+      'legacy-newer',
+    )
+    assert.equal(migratedStore.createRequest({
+      requestId: 'legacy-third',
+      clientMessageId: 'legacy-duplicate-client',
+      status: 'completed',
+    }).requestId, 'legacy-newer')
+    migratedStore.close()
   } finally {
     runtimeStore?.close()
     await rm(root, { recursive: true, force: true })
@@ -11772,6 +12069,7 @@ function smokeNotificationSseRoute(): void {
     new URL('http://127.0.0.1/codex-api/events'),
     {
       latestSeq: () => 42,
+      streamId: () => 'stream-sse',
       nowIso: () => '2026-01-01T00:00:00.000Z',
       heartbeatIntervalMs: 10,
       setInterval: ((callback: () => void, intervalMs: number) => {
@@ -11797,7 +12095,7 @@ function smokeNotificationSseRoute(): void {
   assert.equal(response.headers.get('Cache-Control'), 'no-cache, no-transform')
   assert.equal(response.headers.get('Connection'), 'keep-alive')
   assert.equal(response.headers.get('X-Accel-Buffering'), 'no')
-  assert.equal(response.chunks[0], 'event: ready\ndata: {"ok":true,"latestSeq":42}\n\n')
+  assert.equal(response.chunks[0], 'event: ready\ndata: {"ok":true,"latestSeq":42,"streamId":"stream-sse"}\n\n')
   assert.equal(timers.length, 1)
   assert.equal(listeners.length, 1)
 
@@ -12021,6 +12319,14 @@ function createThreadRuntimeSnapshot(overrides: Partial<ThreadRuntimeSnapshot> =
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve()
   await Promise.resolve()
+}
+
+async function waitForCondition(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for asynchronous smoke-test condition')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
 }
 
 function withTranscriptionEnv(

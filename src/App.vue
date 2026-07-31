@@ -74,7 +74,11 @@
               </button>
             </SidebarThreadControls>
 
-            <div class="sidebar-action-grid" aria-label="侧栏快捷操作">
+            <div
+              class="sidebar-action-grid"
+              :class="{ 'sidebar-action-grid--mobile': isMobile }"
+              aria-label="侧栏快捷操作"
+            >
               <button
                 class="sidebar-action-tile"
                 type="button"
@@ -90,7 +94,7 @@
                 type="button"
                 :aria-pressed="isSidebarSearchVisible"
                 aria-label="搜索会话"
-                title="搜索会话"
+                title="筛选侧栏会话；Ctrl / Command + K 打开命令菜单"
                 @click="isSidebarToolsOpen = false; toggleSidebarSearch()"
               >
                 <IconTablerSearch class="sidebar-action-icon" />
@@ -101,7 +105,7 @@
                 :class="{ 'is-active': isWorkbenchRoute }"
                 type="button"
                 :aria-current="isWorkbenchRoute ? 'page' : undefined"
-                @click="isSidebarToolsOpen = false; router.push({ name: 'workbench' }); isMobile && setSidebarCollapsed(true)"
+                @click="onOpenSidebarTool('workbench')"
               >
                 <IconTablerFolder class="sidebar-action-icon" />
                 <span class="sidebar-action-label">工作台</span>
@@ -115,7 +119,7 @@
                   aria-haspopup="menu"
                   :aria-expanded="isSidebarToolsOpen"
                   @click="isSidebarToolsOpen = !isSidebarToolsOpen"
-                  @keydown.esc="isSidebarToolsOpen = false"
+                  @keydown.esc.prevent="isSidebarToolsOpen = false"
                 >
                   <IconTablerDots class="sidebar-action-icon" />
                   <span class="sidebar-action-label">工具</span>
@@ -864,7 +868,14 @@
       class="desktop-refresh-confirm-overlay"
       @click.self="closeDesktopRefreshConfirm"
     >
-      <div class="desktop-refresh-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="desktop-refresh-confirm-title">
+      <div
+        ref="desktopRefreshConfirmDialogRef"
+        class="desktop-refresh-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="desktop-refresh-confirm-title"
+        tabindex="-1"
+      >
         <p class="desktop-refresh-confirm-kicker">确认刷新客户端</p>
         <h2 id="desktop-refresh-confirm-title" class="desktop-refresh-confirm-title">
           {{ desktopRefreshConfirmTitle }}
@@ -895,7 +906,14 @@
       class="desktop-refresh-confirm-overlay"
       @click.self="cancelQueuedMessageEdit"
     >
-      <div class="desktop-refresh-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="queued-message-edit-title">
+      <div
+        ref="queuedMessageEditDialogRef"
+        class="desktop-refresh-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="queued-message-edit-title"
+        tabindex="-1"
+      >
         <p class="desktop-refresh-confirm-kicker">保留当前输入</p>
         <h2 id="queued-message-edit-title" class="desktop-refresh-confirm-title">替换为排队消息？</h2>
         <p class="desktop-refresh-confirm-text">输入框里还有未发送内容。继续后会用选中的排队消息替换当前草稿。</p>
@@ -939,7 +957,14 @@
       class="mobile-update-confirm-overlay"
       @click.self="closeMobileShellUpdatePrompt"
     >
-      <div class="mobile-update-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="mobile-update-confirm-title">
+      <div
+        ref="mobileUpdateConfirmDialogRef"
+        class="mobile-update-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mobile-update-confirm-title"
+        tabindex="-1"
+      >
         <p class="mobile-update-confirm-kicker">发现新版本</p>
         <h2 id="mobile-update-confirm-title" class="mobile-update-confirm-title">
           {{ mobileShellUpdatePromptTitle }}
@@ -975,6 +1000,18 @@
       </div>
     </div>
   </Teleport>
+
+  <CommandMenu
+    v-if="isCommandMenuOpen"
+    :open="isCommandMenuOpen"
+    :groups="projectGroups"
+    :selected-thread-id="selectedThreadId"
+    :show-github="showGithubTrendingProjects"
+    @close="closeCommandMenu"
+    @select-thread="onSelectThread"
+    @start-new-thread="onStartNewThreadFromToolbar"
+    @open-route="onOpenSidebarTool"
+  />
 
   <FavoritesModal
     v-if="isFavoritesModalVisible"
@@ -1090,11 +1127,12 @@ import {
   isMobileReleaseUpdateAvailable,
   type MobileLatestRelease,
 } from './mobile/mobileRelease'
+import { MOBILE_BACK_BUTTON_EVENT } from './mobile/events'
 
 const SkillsHub = defineAsyncComponent({
   loader: () => import('./components/content/SkillsHub.vue'),
   loadingComponent: PageLoadingSkeleton,
-  delay: 100,
+  delay: 0,
 })
 const SidebarThreadTree = defineAsyncComponent({
   loader: () => import('./components/sidebar/SidebarThreadTree.vue'),
@@ -1104,28 +1142,29 @@ const SidebarThreadTree = defineAsyncComponent({
 const ThreadConversation = defineAsyncComponent({
   loader: () => import('./components/content/ThreadConversation.vue'),
   loadingComponent: ConversationLoadingSkeleton,
-  delay: 100,
+  delay: 0,
 })
 const QueuedMessages = defineAsyncComponent(() => import('./components/content/QueuedMessages.vue'))
 const RateLimitStatus = defineAsyncComponent(() => import('./components/content/RateLimitStatus.vue'))
 const FavoritesModal = defineAsyncComponent(() => import('./components/content/FavoritesModal.vue'))
+const CommandMenu = defineAsyncComponent(() => import('./components/content/CommandMenu.vue'))
 const TaskPetPreview = defineAsyncComponent(() => import('./components/mobile/TaskPetPreview.vue'))
 const RemoteAccessCard = defineAsyncComponent(() => import('./components/settings/RemoteAccessCard.vue'))
 const WorkspaceWorkbench = defineAsyncComponent({
   loader: () => import('./components/content/WorkspaceWorkbench.vue'),
   loadingComponent: PageLoadingSkeleton,
-  delay: 100,
+  delay: 0,
 })
 const GithubTrendingHub = defineAsyncComponent({
   loader: () => import('./components/content/GithubTrendingHub.vue'),
   loadingComponent: PageLoadingSkeleton,
-  delay: 100,
+  delay: 0,
 })
 const ComposerRuntimeDropdown = defineAsyncComponent(() => import('./components/content/ComposerRuntimeDropdown.vue'))
 const DiagnosticsPanel = defineAsyncComponent({
   loader: () => import('./components/content/DiagnosticsPanel.vue'),
   loadingComponent: PageLoadingSkeleton,
-  delay: 100,
+  delay: 0,
 })
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
@@ -1470,7 +1509,7 @@ const worktreeInitStatus = ref<{ phase: 'idle' | 'running' | 'error'; title: str
   title: '',
   message: '',
 })
-const isSidebarCollapsed = ref(loadSidebarCollapsed())
+const isSidebarCollapsed = ref(isMobile.value ? true : loadSidebarCollapsed())
 const isFavoritesModalVisible = ref(false)
 const favoritesStatusText = ref('')
 const productToast = ref<{ id: number; message: string; tone: 'success' | 'info' | 'warning' | 'danger' } | null>(null)
@@ -1478,7 +1517,16 @@ const pendingFavoriteJump = ref<{ threadId: string; messageId: string } | null>(
 const sidebarSearchQuery = ref('')
 const isSidebarSearchVisible = ref(false)
 const isSidebarToolsOpen = ref(false)
+const isCommandMenuOpen = ref(false)
+const BLOCKING_DIALOG_REGRESSION_EVENT = 'cx-codex-regression-open-blocking-dialog'
 const sidebarSearchInputRef = ref<HTMLInputElement | null>(null)
+const desktopRefreshConfirmDialogRef = ref<HTMLElement | null>(null)
+const queuedMessageEditDialogRef = ref<HTMLElement | null>(null)
+const mobileUpdateConfirmDialogRef = ref<HTMLElement | null>(null)
+let blockingDialogPreviousFocus: HTMLElement | null = null
+let blockingDialogPreviousBodyOverflow = ''
+let blockingDialogOwnsBodyScrollLock = false
+let blockingDialogShouldRestoreFocus = true
 const serverMatchedThreadIds = ref<string[] | null>(null)
 let threadSearchTimer: ReturnType<typeof setTimeout> | null = null
 const defaultNewProjectName = ref('New Project (1)')
@@ -1604,6 +1652,13 @@ const isDesktopRefreshRunning = ref(false)
 const isDesktopRefreshConfirmVisible = ref(false)
 const desktopSyncPendingThreadId = ref('')
 const desktopSyncPendingAtMs = ref(0)
+type BlockingDialogKind = '' | 'mobile-update' | 'queued-edit' | 'desktop-refresh'
+const activeBlockingDialogKind = computed<BlockingDialogKind>(() => {
+  if (isMobileShellUpdatePromptVisible.value) return 'mobile-update'
+  if (pendingQueuedMessageEditId.value) return 'queued-edit'
+  if (isDesktopRefreshConfirmVisible.value) return 'desktop-refresh'
+  return ''
+})
 
 const routeThreadId = computed(() => {
   const rawThreadId = route.params.threadId
@@ -2667,7 +2722,10 @@ function scheduleTrendingProjectsLoad(priority: 'idle' | 'immediate' = 'idle'): 
 }
 
 onMounted(() => {
+  window.addEventListener('keydown', onWindowKeyDownForBlockingDialog, { capture: true })
   window.addEventListener('keydown', onWindowKeyDown)
+  window.addEventListener(MOBILE_BACK_BUTTON_EVENT, onMobileBackButton)
+  window.addEventListener(BLOCKING_DIALOG_REGRESSION_EVENT, onOpenBlockingDialogRegression)
   window.addEventListener('focus', onWindowFocusRefreshAccountState)
   applyDarkMode()
   darkModeMediaQuery?.addEventListener('change', applyDarkMode)
@@ -2677,7 +2735,10 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', onWindowKeyDownForBlockingDialog, { capture: true })
   window.removeEventListener('keydown', onWindowKeyDown)
+  window.removeEventListener(MOBILE_BACK_BUTTON_EVENT, onMobileBackButton)
+  window.removeEventListener(BLOCKING_DIALOG_REGRESSION_EVENT, onOpenBlockingDialogRegression)
   window.removeEventListener('focus', onWindowFocusRefreshAccountState)
   window.removeEventListener('pointerdown', onWindowPointerDownForSettings, { capture: true })
   darkModeMediaQuery?.removeEventListener('change', applyDarkMode)
@@ -2711,6 +2772,7 @@ onUnmounted(() => {
     clearTimeout(productToastTimer)
     productToastTimer = null
   }
+  restoreBlockingDialogEnvironment()
   stopPolling()
 })
 
@@ -2773,6 +2835,29 @@ watch(isSettingsOpen, (open) => {
 watch(isFavoritesModalVisible, (visible) => {
   if (!visible) return
   void refreshFavorites()
+})
+
+watch(activeBlockingDialogKind, async (kind, previousKind) => {
+  if (!kind) {
+    await nextTick()
+    restoreBlockingDialogEnvironment()
+    return
+  }
+
+  if (!previousKind && typeof document !== 'undefined') {
+    const activeElement = document.activeElement
+    blockingDialogPreviousFocus = activeElement instanceof HTMLElement && activeElement !== document.body
+      ? activeElement
+      : null
+    blockingDialogPreviousBodyOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    blockingDialogOwnsBodyScrollLock = true
+    blockingDialogShouldRestoreFocus = true
+    blockingDialogPreviousFocus?.blur()
+  }
+
+  await nextTick()
+  resolveBlockingDialogElement(kind)?.focus({ preventScroll: true })
 })
 
 function onSkillsChanged(): void {
@@ -3341,6 +3426,7 @@ function closeMobileShellUpdatePrompt(): void {
 async function confirmLatestMobileShellReleaseInstall(): Promise<void> {
   const started = await installLatestMobileShellRelease()
   if (started) {
+    blockingDialogShouldRestoreFocus = false
     closeMobileShellUpdatePrompt()
   }
 }
@@ -3368,6 +3454,7 @@ function confirmDesktopRefresh(): void {
     return
   }
 
+  blockingDialogShouldRestoreFocus = false
   closeDesktopRefreshConfirm()
   isDesktopRefreshRunning.value = true
   void refreshDesktopApp()
@@ -3400,8 +3487,8 @@ function toggleSidebarSearch(): void {
 
 function onOpenSidebarTool(routeName: 'workbench' | 'skills' | 'github-trending' | 'diagnostics'): void {
   isSidebarToolsOpen.value = false
+  closeMobileSidebarAfterNavigation()
   void router.push({ name: routeName })
-  if (isMobile.value) setSidebarCollapsed(true)
 }
 
 function clearSidebarSearch(): void {
@@ -3411,8 +3498,23 @@ function clearSidebarSearch(): void {
   }
 }
 
+function openCommandMenu(): void {
+  if (isStandaloneRoute.value || isAnyBlockingDialogVisible()) return
+  isFavoritesModalVisible.value = false
+  isSettingsOpen.value = false
+  isSidebarToolsOpen.value = false
+  isSidebarSearchVisible.value = false
+  sidebarSearchQuery.value = ''
+  isCommandMenuOpen.value = true
+}
+
+function closeCommandMenu(): void {
+  isCommandMenuOpen.value = false
+}
+
 function onSidebarSearchKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
+    event.preventDefault()
     isSidebarSearchVisible.value = false
     sidebarSearchQuery.value = ''
   }
@@ -3420,13 +3522,13 @@ function onSidebarSearchKeydown(event: KeyboardEvent): void {
 
 function onSelectThread(threadId: string): void {
   if (!threadId) return
+  closeMobileSidebarAfterNavigation()
   if (selectedThreadId.value !== threadId) {
     void selectThread(threadId)
   }
   if (route.name !== 'thread') {
     void router.push({ name: 'thread', params: { threadId } })
   }
-  if (isMobile.value) setSidebarCollapsed(true)
 }
 
 function closeFavoritesModal(): void {
@@ -3484,6 +3586,7 @@ async function onOpenFavorite(record: FavoriteRecord): Promise<void> {
   if (!targetThreadId || !targetMessageId) return
 
   closeFavoritesModal()
+  closeMobileSidebarAfterNavigation()
   pendingFavoriteJump.value = { threadId: targetThreadId, messageId: targetMessageId }
 
   if (selectedThreadId.value !== targetThreadId) {
@@ -3492,7 +3595,6 @@ async function onOpenFavorite(record: FavoriteRecord): Promise<void> {
   if (route.name !== 'thread' || routeThreadId.value !== targetThreadId) {
     await router.push({ name: 'thread', params: { threadId: targetThreadId } })
   }
-  if (isMobile.value) setSidebarCollapsed(true)
   await nextTick()
   void tryFocusPendingFavoriteJump()
 }
@@ -3519,7 +3621,7 @@ async function onForkThread(threadId: string): Promise<void> {
   } else {
     await router.replace({ name: 'thread', params: { threadId: nextThreadId } })
   }
-  if (isMobile.value) setSidebarCollapsed(true)
+  closeMobileSidebarAfterNavigation()
 }
 
 function isWorktreePath(cwdRaw: string): boolean {
@@ -3542,7 +3644,7 @@ function onStartNewThread(projectName: string): void {
   if (projectCwd) {
     newThreadCwd.value = projectCwd
   }
-  if (isMobile.value) setSidebarCollapsed(true)
+  closeMobileSidebarAfterNavigation()
   if (isHomeRoute.value) return
   void router.push({ name: 'home' })
 }
@@ -3569,7 +3671,7 @@ function onStartNewThreadFromToolbar(): void {
   if (cwd) {
     newThreadCwd.value = cwd
   }
-  if (isMobile.value) setSidebarCollapsed(true)
+  closeMobileSidebarAfterNavigation()
   if (isHomeRoute.value) return
   void router.push({ name: 'home' })
 }
@@ -3615,39 +3717,179 @@ function onRespondServerRequest(payload: { id: number; result?: unknown; error?:
   void respondToPendingServerRequest(payload)
 }
 
-function setSidebarCollapsed(nextValue: boolean): void {
-  if (isSidebarCollapsed.value === nextValue) return
-  isSidebarCollapsed.value = nextValue
+function shouldUseMobileSidebarDrawer(): boolean {
+  return isMobile.value || viewportWidth.value < 768
+}
+
+function closeMobileSidebarAfterNavigation(): void {
+  if (!shouldUseMobileSidebarDrawer() || isSidebarCollapsed.value) return
+  setSidebarCollapsed(true, { persist: false })
+}
+
+function setSidebarCollapsed(nextValue: boolean, options: { persist?: boolean } = {}): void {
   if (nextValue) {
     isSettingsOpen.value = false
   }
-  saveSidebarCollapsed(nextValue)
+  if (isSidebarCollapsed.value === nextValue) return
+  isSidebarCollapsed.value = nextValue
+  const shouldPersist = options.persist ?? !shouldUseMobileSidebarDrawer()
+  if (shouldPersist) {
+    saveSidebarCollapsed(nextValue)
+  }
+}
+
+function dismissTopmostBlockingDialog(): boolean {
+  if (isMobileShellUpdatePromptVisible.value) {
+    closeMobileShellUpdatePrompt()
+    return true
+  }
+  if (pendingQueuedMessageEditId.value) {
+    cancelQueuedMessageEdit()
+    return true
+  }
+  if (isDesktopRefreshConfirmVisible.value) {
+    closeDesktopRefreshConfirm()
+    return true
+  }
+  return false
+}
+
+function isAnyBlockingDialogVisible(): boolean {
+  return isMobileShellUpdatePromptVisible.value
+    || Boolean(pendingQueuedMessageEditId.value)
+    || isDesktopRefreshConfirmVisible.value
+}
+
+function resolveBlockingDialogElement(kind: BlockingDialogKind): HTMLElement | null {
+  if (kind === 'mobile-update') return mobileUpdateConfirmDialogRef.value
+  if (kind === 'queued-edit') return queuedMessageEditDialogRef.value
+  if (kind === 'desktop-refresh') return desktopRefreshConfirmDialogRef.value
+  return null
+}
+
+function restoreBlockingDialogEnvironment(): void {
+  if (typeof document === 'undefined') return
+  if (blockingDialogOwnsBodyScrollLock) {
+    document.body.style.overflow = blockingDialogPreviousBodyOverflow
+    blockingDialogOwnsBodyScrollLock = false
+    blockingDialogPreviousBodyOverflow = ''
+  }
+  const focusTarget = blockingDialogPreviousFocus
+  const shouldRestoreFocus = blockingDialogShouldRestoreFocus
+  blockingDialogPreviousFocus = null
+  blockingDialogShouldRestoreFocus = true
+  if (shouldRestoreFocus && focusTarget?.isConnected) {
+    focusTarget.focus({ preventScroll: true })
+  }
+}
+
+function dismissTopmostTransientSurface(): boolean {
+  if (dismissTopmostBlockingDialog()) return true
+  if (isCommandMenuOpen.value) {
+    closeCommandMenu()
+    return true
+  }
+  if (isFavoritesModalVisible.value) {
+    closeFavoritesModal()
+    return true
+  }
+  if (isSettingsOpen.value) {
+    isSettingsOpen.value = false
+    return true
+  }
+  if (isSidebarToolsOpen.value) {
+    isSidebarToolsOpen.value = false
+    return true
+  }
+  if (isSidebarSearchVisible.value) {
+    isSidebarSearchVisible.value = false
+    sidebarSearchQuery.value = ''
+    return true
+  }
+  return false
+}
+
+function onWindowKeyDownForBlockingDialog(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || event.defaultPrevented) return
+  if (!dismissTopmostBlockingDialog()) return
+  event.preventDefault()
+  event.stopPropagation()
+}
+
+function onOpenBlockingDialogRegression(event: Event): void {
+  if (typeof window === 'undefined') return
+  const params = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+  if (params.get('regression') !== 'frontend' || params.get('blockingDialogs') !== '1') return
+  const kind = (event as CustomEvent<{ kind?: string }>).detail?.kind
+  if (kind === 'mobile-update') {
+    isMobileShellUpdatePromptVisible.value = true
+    return
+  }
+  if (kind === 'queued-edit') {
+    pendingQueuedMessageEditId.value = 'regression-queued-message'
+    return
+  }
+  if (kind === 'desktop-refresh') {
+    isDesktopRefreshConfirmVisible.value = true
+  }
+}
+
+function dispatchEscapeToFocusedSurface(): boolean {
+  if (typeof document === 'undefined') return false
+  const target = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : document
+  const escapeEvent = new KeyboardEvent('keydown', {
+    key: 'Escape',
+    code: 'Escape',
+    bubbles: true,
+    cancelable: true,
+  })
+  return !target.dispatchEvent(escapeEvent)
+}
+
+function onMobileBackButton(event: Event): void {
+  if (dispatchEscapeToFocusedSurface()) {
+    event.preventDefault()
+    return
+  }
+  if (dismissTopmostTransientSurface()) {
+    event.preventDefault()
+    return
+  }
+  if (shouldUseMobileSidebarDrawer() && !isSidebarCollapsed.value) {
+    event.preventDefault()
+    setSidebarCollapsed(true, { persist: false })
+    return
+  }
+  if (!isHomeRoute.value) {
+    event.preventDefault()
+    void router.replace({ name: 'home' })
+  }
 }
 
 function onWindowKeyDown(event: KeyboardEvent): void {
   if (event.defaultPrevented) return
-  if (event.key === 'Escape' && pendingQueuedMessageEditId.value) {
+  if (event.key === 'Escape' && dismissTopmostTransientSurface()) {
     event.preventDefault()
-    cancelQueuedMessageEdit()
     return
   }
-  if (event.key === 'Escape' && isMobileShellUpdatePromptVisible.value) {
+  if (event.key === 'Escape' && shouldUseMobileSidebarDrawer() && !isSidebarCollapsed.value) {
     event.preventDefault()
-    closeMobileShellUpdatePrompt()
-    return
-  }
-  if (event.key === 'Escape' && isDesktopRefreshConfirmVisible.value) {
-    event.preventDefault()
-    closeDesktopRefreshConfirm()
-    return
-  }
-  if (event.key === 'Escape' && isSettingsOpen.value) {
-    event.preventDefault()
-    isSettingsOpen.value = false
+    setSidebarCollapsed(true, { persist: false })
     return
   }
   if (!event.ctrlKey && !event.metaKey) return
   if (event.shiftKey || event.altKey) return
+  if (event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    if (isCommandMenuOpen.value) {
+      closeCommandMenu()
+    } else {
+      openCommandMenu()
+    }
+    return
+  }
   if (event.key.toLowerCase() !== 'b') return
   event.preventDefault()
   setSidebarCollapsed(!isSidebarCollapsed.value)
@@ -3934,6 +4176,7 @@ function cancelQueuedMessageEdit(): void {
 
 function confirmQueuedMessageEdit(): void {
   const messageId = pendingQueuedMessageEditId.value
+  blockingDialogShouldRestoreFocus = false
   pendingQueuedMessageEditId.value = ''
   if (!messageId) return
   hydrateQueuedMessageForEditing(messageId)
@@ -4796,9 +5039,11 @@ watch(
 )
 
 watch(isMobile, (mobile) => {
-  if (mobile && !isSidebarCollapsed.value) {
-    setSidebarCollapsed(true)
+  if (mobile) {
+    setSidebarCollapsed(true, { persist: false })
+    return
   }
+  setSidebarCollapsed(loadSidebarCollapsed(), { persist: false })
 }, { immediate: true })
 
 let newThreadSubmitInFlight: Promise<string> | null = null
@@ -5631,14 +5876,6 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 @media (max-width: 767px) {
-  .sidebar-action-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .sidebar-action-tile-workbench {
-    display: none;
-  }
-
   .product-toast--above-composer {
     bottom: max(7rem, calc(env(safe-area-inset-bottom) + 6.5rem));
   }
@@ -5647,6 +5884,14 @@ function onEditPendingNewThreadMessage(messageId: string): void {
     width: 2.75rem;
     height: 2.75rem;
   }
+}
+
+.sidebar-action-grid--mobile {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sidebar-action-grid--mobile .sidebar-action-tile-workbench {
+  display: none;
 }
 
 .content-grid {
@@ -6397,7 +6642,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .desktop-refresh-confirm-dialog {
-  @apply w-full max-w-md border p-5;
+  @apply w-full max-w-md border p-5 outline-none;
   border-radius: var(--ui-radius-composer);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
@@ -6451,7 +6696,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .mobile-update-confirm-dialog {
-  @apply w-full max-w-md border p-5;
+  @apply w-full max-w-md border p-5 outline-none;
   border-radius: var(--ui-radius-composer);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);

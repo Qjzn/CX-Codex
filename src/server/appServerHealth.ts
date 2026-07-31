@@ -10,6 +10,9 @@ export type AppServerHealth = {
   queuedRpcCount: number
   pendingServerRequestCount: number
   activePlanModeTurnCount: number
+  restartProtection?: {
+    blockingRequestCount: number
+  }
   launchPolicy: AppServerLaunchPolicySnapshot
   rpcDiagnostics?: RpcDiagnostics
 }
@@ -24,6 +27,7 @@ export function createAppServerHealthSnapshot(input: AppServerHealth): AppServer
     queuedRpcCount: input.queuedRpcCount,
     pendingServerRequestCount: input.pendingServerRequestCount,
     activePlanModeTurnCount: input.activePlanModeTurnCount,
+    ...(input.restartProtection ? { restartProtection: input.restartProtection } : {}),
     launchPolicy: input.launchPolicy,
     rpcDiagnostics: input.rpcDiagnostics,
   }

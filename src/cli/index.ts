@@ -295,28 +295,30 @@ function getPreferredOpenUrl(host: string, port: number): string {
   return urls[0] ?? `http://localhost:${String(port)}`
 }
 
-function listenWithFallback(server: ReturnType<typeof createServer>, startPort: number, host: string): Promise<number> {
+function listenOnRequestedPort(server: ReturnType<typeof createServer>, port: number, host: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const attempt = (port: number) => {
-      const onError = (error: NodeJS.ErrnoException) => {
-        server.off('listening', onListening)
-        if (error.code === 'EADDRINUSE' || error.code === 'EACCES') {
-          attempt(port + 1)
-          return
-        }
-        reject(error)
+    const onError = (error: NodeJS.ErrnoException) => {
+      server.off('listening', onListening)
+      if (error.code === 'EADDRINUSE') {
+        reject(new Error(
+          `Port ${String(port)} is already in use. CX-Codex will not silently start a second broker on another port; open the existing service or stop it before retrying.`,
+        ))
+        return
       }
-      const onListening = () => {
-        server.off('error', onError)
-        resolve(port)
+      if (error.code === 'EACCES') {
+        reject(new Error(`Port ${String(port)} cannot be opened with the current permissions.`))
+        return
       }
-
-      server.once('error', onError)
-      server.once('listening', onListening)
-      server.listen(port, host)
+      reject(error)
+    }
+    const onListening = () => {
+      server.off('error', onError)
+      resolve(port)
     }
 
-    attempt(startPort)
+    server.once('error', onError)
+    server.once('listening', onListening)
+    server.listen(port, host)
   })
 }
 
@@ -452,7 +454,7 @@ async function startServer(options: {
   server.requestTimeout = 0
   server.timeout = 0
   attachWebSocket(server)
-  const port = await listenWithFallback(server, requestedPort, host)
+  const port = await listenOnRequestedPort(server, requestedPort, host)
   let tunnelUrl: string | null = null
   let resolvedCloudflaredCommand: string | null = null
   let stableTunnel = false
@@ -515,10 +517,6 @@ async function startServer(options: {
 
   if (options.configPath) {
     lines.push(`  Config:   ${options.configPath}`)
-  }
-
-  if (port !== requestedPort) {
-    lines.push(`  Requested port ${String(requestedPort)} was unavailable; using ${String(port)}.`)
   }
 
   if (password) {
@@ -648,6 +646,7 @@ program.command('help').description('Show CX-Codex command help').action(() => {
   program.outputHelp()
 })
 
+program.version(await readCliVersion(), '-V, --version', 'output CX-Codex version')
 program.parseAsync(process.argv).catch((error) => {
   const message = error instanceof Error ? error.message : String(error)
   console.error(`\nFailed to run CX-Codex: ${message}`)

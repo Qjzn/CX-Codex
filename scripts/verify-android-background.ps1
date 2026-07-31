@@ -379,8 +379,8 @@ function Write-VerificationSummary {
     if ($notificationResult -ne "posted") {
       throw "检测到任务终态，但完成通知结果为 $notificationResult，而不是 posted。请检查通知权限和完成通知通道。"
     }
-    if ($notificationBodySource -notin @("latest_reply", "detail")) {
-      throw "完成通知正文来源为 $notificationBodySource；严格终态验收只接受 latest_reply 或 detail。"
+    if ($notificationBodySource -ne "title_only") {
+      throw "完成通知内容模式为 $notificationBodySource；精简手表通知严格验收只接受 title_only。"
     }
     if ($null -eq $terminalToNotificationMs) {
       throw "终态与完成通知时间顺序无效。证据保留在 $summaryPath。"

@@ -12,6 +12,12 @@ export type AppServerRpcTimeoutRecoveryDecision =
     includeTurns: boolean | undefined
   }
   | {
+    kind: 'restart-blocked'
+    timeoutCount: number
+    includeTurns: boolean | undefined
+    blockingRequestCount: number
+  }
+  | {
     kind: 'none'
   }
 
@@ -30,6 +36,9 @@ export type AppServerRpcTimeoutRecoveryOptions = {
   timeoutMs: number
   startedAtMs: number
   coldStartGraceMs: number
+  restartProtection?: {
+    blockingRequestCount: number
+  }
   dependencies: AppServerRpcTimeoutRecoveryDependencies
 }
 
@@ -39,6 +48,7 @@ export function createAppServerRpcTimeoutRecoveryDecision({
   timeoutMs,
   startedAtMs,
   coldStartGraceMs,
+  restartProtection,
   dependencies,
 }: AppServerRpcTimeoutRecoveryOptions): AppServerRpcTimeoutRecoveryDecision {
   const nowMs = dependencies.now()
@@ -58,6 +68,19 @@ export function createAppServerRpcTimeoutRecoveryDecision({
   if (!shouldRestart) {
     return {
       kind: 'none',
+    }
+  }
+
+  const blockingRequestCount = Math.max(
+    0,
+    Math.trunc(restartProtection?.blockingRequestCount ?? 0),
+  )
+  if (blockingRequestCount > 0) {
+    return {
+      kind: 'restart-blocked',
+      timeoutCount,
+      includeTurns,
+      blockingRequestCount,
     }
   }
 

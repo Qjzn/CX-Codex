@@ -21,6 +21,9 @@ param(
   [switch]$EnableCloudflareTunnel,
   [switch]$SkipCloudflaredInstall,
   [string]$CloudflaredCommand = "",
+  [ValidateRange(0, 86400)]
+  [int]$UpgradeDrainTimeoutSeconds = 900,
+  [switch]$ForceActiveTaskUpgrade,
   [switch]$NoStart,
   [string]$SourceRepoRoot = ""
 )
@@ -498,6 +501,62 @@ function Restore-ManagedServiceAfterBootstrapFailure {
   }
 }
 
+function Wait-ForManagedRuntimeDrain {
+  if ($ForceActiveTaskUpgrade) {
+    Write-BootstrapWarning "ForceActiveTaskUpgrade was requested. Active Codex tasks may be interrupted."
+    return
+  }
+
+  $script:BootstrapStage = "wait_for_runtime_drain"
+  $deadline = (Get-Date).AddSeconds($UpgradeDrainTimeoutSeconds)
+  $lastProgressAt = [DateTime]::MinValue
+  $lastReadError = ""
+  do {
+    $health = $null
+    $lastReadError = ""
+    try {
+      $health = Invoke-RestMethod `
+        -Method Get `
+        -Uri "http://127.0.0.1:$Port/codex-api/health" `
+        -TimeoutSec 5
+    } catch {
+      $lastReadError = [string]$_.Exception.Message
+    }
+
+    if ($health -and $health.status -eq "ok" -and $health.data) {
+      $runtimeRequestCount = [int]$health.data.runtimeStore.uncertainRequestCount
+      $restartBlockingCount = if ($health.data.appServer.restartProtection) {
+        [int]$health.data.appServer.restartProtection.blockingRequestCount
+      } else {
+        0
+      }
+      $pendingServerRequestCount = [int]$health.data.appServer.pendingServerRequestCount
+      $activePlanModeTurnCount = [int]$health.data.appServer.activePlanModeTurnCount
+      $blockingCount = [Math]::Max($runtimeRequestCount, $restartBlockingCount)
+      if ($blockingCount -eq 0 -and $pendingServerRequestCount -eq 0 -and $activePlanModeTurnCount -eq 0) {
+        Write-BootstrapMessage "Runtime is idle; upgrade can safely replace the service."
+        return
+      }
+
+      if (((Get-Date) - $lastProgressAt).TotalSeconds -ge 10) {
+        Write-BootstrapMessage "Waiting for active Codex tasks before upgrade: runtime=$blockingCount, approvals=$pendingServerRequestCount, plan=$activePlanModeTurnCount"
+        $lastProgressAt = Get-Date
+      }
+    } elseif (((Get-Date) - $lastProgressAt).TotalSeconds -ge 10) {
+      Write-BootstrapMessage "Waiting for CX-Codex runtime health before upgrade."
+      $lastProgressAt = Get-Date
+    }
+
+    if ((Get-Date) -ge $deadline) {
+      if (-not [string]::IsNullOrWhiteSpace($lastReadError)) {
+        throw "Upgrade stopped because active-task safety could not read /codex-api/health: $lastReadError. Retry after CX-Codex becomes healthy, or explicitly use -ForceActiveTaskUpgrade."
+      }
+      throw "Upgrade is still blocked by active Codex work after $UpgradeDrainTimeoutSeconds seconds. Wait for tasks to finish, or explicitly use -ForceActiveTaskUpgrade."
+    }
+    Start-Sleep -Seconds 2
+  } while ($true)
+}
+
 function Stop-ManagedInstallationProcesses {
   param([string]$TargetInstallDir)
 
@@ -581,6 +640,7 @@ function Stop-ManagedInstallationProcesses {
   }
 
   if ($managedServerProcessIds.Count -gt 0) {
+    Wait-ForManagedRuntimeDrain
     $script:StoppedExistingServerForUpgrade = $true
   }
   $visitedProcessIds = New-Object 'System.Collections.Generic.HashSet[int]'

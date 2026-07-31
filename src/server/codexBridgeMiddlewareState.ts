@@ -79,6 +79,13 @@ export function createCodexBridgeMiddlewareState(
   return {
     threadSearchIndexStore,
     threadReadCacheStore,
+    invalidateSupplementalThreadListCache: (threadId = '') => {
+      if (threadId) {
+        supplementalThreadListAugmenter.delete(threadId)
+      } else {
+        supplementalThreadListAugmenter.clear()
+      }
+    },
     augmentThreadListRpcResult,
     runtimeStateStore,
     runtimeStore,

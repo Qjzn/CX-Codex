@@ -62,6 +62,14 @@ export class AppServerThreadListAugmenter {
     this.nowMs = options.nowMs ?? (() => Date.now())
   }
 
+  delete(threadId: string): boolean {
+    return this.cacheByThreadId.delete(threadId)
+  }
+
+  clear(): void {
+    this.cacheByThreadId.clear()
+  }
+
   async augmentThreadListRpcResult(options: ThreadListAugmentOptions): Promise<unknown> {
     const paramsRecord = asRecord(options.params)
     if (paramsRecord?.archived === true) return options.result

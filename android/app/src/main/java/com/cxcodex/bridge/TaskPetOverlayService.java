@@ -71,15 +71,21 @@ public final class TaskPetOverlayService extends Service {
     private static final String ACTION_MARK_THREAD_READ = "com.cxcodex.bridge.taskpet.MARK_THREAD_READ";
     private static final String ACTION_MOBILE_PUSH_WAKE = "com.cxcodex.bridge.taskpet.MOBILE_PUSH_WAKE";
     private static final String ACTION_NO_PROGRESS_REVIEW = "com.cxcodex.bridge.taskpet.RUN_NO_PROGRESS_REVIEW";
+    private static final String ACTION_NOTIFICATION_REPLY = "com.cxcodex.bridge.taskpet.NOTIFICATION_REPLY";
+    private static final String ACTION_NOTIFICATION_STOP = "com.cxcodex.bridge.taskpet.NOTIFICATION_STOP";
     private static final String EXTRA_SERVER_URL = "serverUrl";
     private static final String EXTRA_TASKS_JSON = "tasksJson";
     private static final String EXTRA_RECENT_THREADS_JSON = "recentThreadsJson";
     private static final String EXTRA_PUSH_EVENT_SEQ = "pushEventSeq";
+    private static final String EXTRA_NOTIFICATION_TITLE = "notificationTitle";
+    private static final String EXTRA_NOTIFICATION_MESSAGE = "notificationMessage";
+    private static final String EXTRA_ACTIVE_TURN_ID = "activeTurnId";
     private static final String CHANNEL_ID = "cx_codex_task_pet";
     private static final String CHANNEL_NAME = "CX-Codex 任务宠物";
     static final String COMPLETION_CHANNEL_ID = "cx_codex_task_completion_v2";
     private static final String COMPLETION_CHANNEL_NAME = "CX-Codex 任务完成";
     private static final int FOREGROUND_NOTIFICATION_ID = 7421;
+    private static final String NOTIFICATION_GROUP_KEY = "cx_codex_tasks";
     private static final long ACTIVE_POLL_INTERVAL_MS = 3_000L;
     private static final long RETRY_POLL_INTERVAL_MS = 7_500L;
     private static final long EVENT_STREAM_RETRY_MS = 1_500L;
@@ -155,6 +161,7 @@ public final class TaskPetOverlayService extends Service {
     private int pendingCollapsedPetX = -1;
     private int pendingCollapsedPetY = -1;
     private int lastForegroundActiveCount = -1;
+    private String lastForegroundTaskSignature = "";
     private String lastPetMode = "";
     private String lastRenderedTaskSignature = "";
     private String replyThreadId = "";
@@ -264,6 +271,46 @@ public final class TaskPetOverlayService extends Service {
         context.stopService(new Intent(context, TaskPetOverlayService.class));
     }
 
+    public static void submitNotificationReply(
+        Context context,
+        String threadId,
+        String title,
+        String message
+    ) {
+        startNotificationActionService(
+            context,
+            new Intent(context, TaskPetOverlayService.class)
+                .setAction(ACTION_NOTIFICATION_REPLY)
+                .putExtra(EXTRA_THREAD_ID, threadId)
+                .putExtra(EXTRA_NOTIFICATION_TITLE, title)
+                .putExtra(EXTRA_NOTIFICATION_MESSAGE, message)
+        );
+    }
+
+    public static void requestNotificationStop(
+        Context context,
+        String threadId,
+        String title,
+        String activeTurnId
+    ) {
+        startNotificationActionService(
+            context,
+            new Intent(context, TaskPetOverlayService.class)
+                .setAction(ACTION_NOTIFICATION_STOP)
+                .putExtra(EXTRA_THREAD_ID, threadId)
+                .putExtra(EXTRA_NOTIFICATION_TITLE, title)
+                .putExtra(EXTRA_ACTIVE_TURN_ID, activeTurnId)
+        );
+    }
+
+    private static void startNotificationActionService(Context context, Intent intent) {
+        if (isRunning() || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            context.startService(intent);
+        } else {
+            ContextCompat.startForegroundService(context, intent);
+        }
+    }
+
     public static boolean wakeFromMobilePush(
         Context context,
         String threadId,
@@ -337,6 +384,10 @@ public final class TaskPetOverlayService extends Service {
             lastStartReason = "mark_read";
         } else if (ACTION_NO_PROGRESS_REVIEW.equals(intent.getAction())) {
             lastStartReason = "no_progress_review";
+        } else if (ACTION_NOTIFICATION_REPLY.equals(intent.getAction())) {
+            lastStartReason = "notification_reply";
+        } else if (ACTION_NOTIFICATION_STOP.equals(intent.getAction())) {
+            lastStartReason = "notification_stop";
         } else {
             lastStartReason = "update";
         }
@@ -370,6 +421,12 @@ public final class TaskPetOverlayService extends Service {
             replaceRecentThreads(persistedRecentThreadsJson == null ? "[]" : persistedRecentThreadsJson);
         }
         ensurePersistedReplyAttemptTask();
+        if (intent != null && ACTION_NOTIFICATION_REPLY.equals(intent.getAction())) {
+            handleNotificationReply(intent);
+        }
+        if (intent != null && ACTION_NOTIFICATION_STOP.equals(intent.getAction())) {
+            handleNotificationStop(intent);
+        }
         if (intent != null && ACTION_MOBILE_PUSH_WAKE.equals(intent.getAction())) {
             relevantEventCount += 1L;
             lastRelevantEventAtMs = System.currentTimeMillis();
@@ -1031,8 +1088,13 @@ public final class TaskPetOverlayService extends Service {
             if ("retry".equals(task.state)) retryCount += 1;
             if ("waiting".equals(task.state)) waiting = true;
         }
-        if (activeCount != lastForegroundActiveCount) {
+        String foregroundTaskSignature = foregroundTaskSignature(activeCount);
+        if (
+            activeCount != lastForegroundActiveCount
+            || !foregroundTaskSignature.equals(lastForegroundTaskSignature)
+        ) {
             lastForegroundActiveCount = activeCount;
+            lastForegroundTaskSignature = foregroundTaskSignature;
             updateForegroundNotification(activeCount);
         }
         if (
@@ -1566,16 +1628,20 @@ public final class TaskPetOverlayService extends Service {
             int status = connection.getResponseCode();
             if (status == 200 || status == 202) {
                 String runtimeStatus = "running";
+                String activeTurnId = "";
                 InputStream responseStream = connection.getInputStream();
                 if (responseStream != null) {
                     JSONObject responsePayload = new JSONObject(readText(responseStream));
                     JSONObject data = responsePayload.optJSONObject("data");
-                    if (data != null) runtimeStatus = clean(data.optString("status", "running"), 40);
+                    if (data != null) {
+                        runtimeStatus = clean(data.optString("status", "running"), 40);
+                        activeTurnId = clean(data.optString("turnId"), 160);
+                    }
                 }
                 if ("failed".equals(runtimeStatus)) {
-                    return new ReplyResult(false, runtimeStatus, "发送失败，请重试");
+                    return new ReplyResult(false, runtimeStatus, activeTurnId, "发送失败，请重试");
                 }
-                return new ReplyResult(true, runtimeStatus, "");
+                return new ReplyResult(true, runtimeStatus, activeTurnId, "");
             }
             InputStream errorStream = connection.getErrorStream();
             String errorMessage = "发送失败（" + status + "）";
@@ -1584,9 +1650,9 @@ public final class TaskPetOverlayService extends Service {
                 String serverMessage = clean(errorPayload.optString("message", errorPayload.optString("error")), 60);
                 if (!serverMessage.isEmpty()) errorMessage = serverMessage;
             }
-            return new ReplyResult(false, "failed", errorMessage);
+            return new ReplyResult(false, "failed", "", errorMessage);
         } catch (Exception ignored) {
-            return new ReplyResult(true, "start_uncertain", "");
+            return new ReplyResult(true, "start_uncertain", "", "");
         } finally {
             if (connection != null) connection.disconnect();
         }
@@ -1604,6 +1670,26 @@ public final class TaskPetOverlayService extends Service {
             replyInput.requestFocus();
             return;
         }
+        boolean awaitingConfirmation = applySuccessfulReply(
+            threadId,
+            replyThreadTitle,
+            message,
+            result
+        );
+        hideReplyComposer();
+        renderTasks();
+        syncTaskWakeLock();
+        syncEventStream();
+        schedulePoll(0L);
+        Toast.makeText(this, awaitingConfirmation ? "回复已提交，正在确认" : "回复已发送", Toast.LENGTH_SHORT).show();
+    }
+
+    private boolean applySuccessfulReply(
+        String threadId,
+        String suppliedTitle,
+        String message,
+        ReplyResult result
+    ) {
         String submittedClientMessageId = replyAttemptClientMessageId;
         long submittedAtMs = System.currentTimeMillis();
         String submittedActivityId = submittedClientMessageId.isEmpty()
@@ -1615,27 +1701,32 @@ public final class TaskPetOverlayService extends Service {
             || "interrupted".equals(result.runtimeStatus);
         if (!awaitingConfirmation) clearReplyAttempt();
         String nextState = awaitingConfirmation ? "waiting" : alreadySettled ? "completed" : "running";
+        String nextRuntimeState = result.runtimeStatus.isEmpty()
+            ? awaitingConfirmation ? "pending_start" : alreadySettled ? "completed" : "running"
+            : result.runtimeStatus;
         String nextDetail = awaitingConfirmation
             ? "回复已提交 · 正在确认"
             : alreadySettled ? "回复已送达 · 已结束" : "已发送回复 · 处理中";
         TaskItem task = findTask(threadId);
         if (task == null) {
             RecentThreadItem recentThread = findRecentThread(threadId);
-            String title = replyThreadTitle.isEmpty()
+            String title = suppliedTitle.isEmpty()
                 ? recentThread == null ? "最近会话" : recentThread.title
-                : replyThreadTitle;
+                : suppliedTitle;
             String projectName = recentThread == null ? "" : recentThread.projectName;
             task = new TaskItem(
                 threadId,
                 submittedClientMessageId,
                 submittedActivityId,
                 submittedAtMs,
+                result.activeTurnId,
                 title,
                 projectName,
                 nextDetail,
                 clean(message, 80),
                 "",
                 nextState,
+                nextRuntimeState,
                 0L,
                 0L,
                 System.currentTimeMillis(),
@@ -1650,7 +1741,9 @@ public final class TaskPetOverlayService extends Service {
         } else {
             task.activityId = submittedActivityId;
             task.startedAtMs = submittedAtMs;
+            task.activeTurnId = result.activeTurnId;
             task.state = nextState;
+            task.runtimeState = nextRuntimeState;
             task.detail = nextDetail;
             task.latestActivity = clean(message, 80);
             task.latestReply = "";
@@ -1664,12 +1757,211 @@ public final class TaskPetOverlayService extends Service {
         }
         reconcileNoProgressNotifications();
         persistTasks();
-        hideReplyComposer();
+        return awaitingConfirmation;
+    }
+
+    private void handleNotificationReply(Intent intent) {
+        if (sendingReply) return;
+        String threadId = clean(intent.getStringExtra(EXTRA_THREAD_ID), 160);
+        String title = clean(intent.getStringExtra(EXTRA_NOTIFICATION_TITLE), 90);
+        String message = clean(intent.getStringExtra(EXTRA_NOTIFICATION_MESSAGE), 2_000);
+        if (threadId.isEmpty() || message.isEmpty() || serverUrl.isEmpty()) return;
+        String clientMessageId = TaskPetRuntimePolicy.reuseOrCreateClientMessageId(
+            replyAttemptClientMessageId,
+            replyAttemptThreadId,
+            replyAttemptMessage,
+            threadId,
+            message,
+            "task-pet-" + UUID.randomUUID()
+        );
+        rememberReplyAttempt(threadId, message, clientMessageId);
+        TaskItem task = findTask(threadId);
+        long now = System.currentTimeMillis();
+        if (task == null) {
+            RecentThreadItem recentThread = findRecentThread(threadId);
+            task = new TaskItem(
+                threadId,
+                clientMessageId,
+                "request:" + clientMessageId,
+                now,
+                "",
+                title.isEmpty() ? recentThread == null ? "最近会话" : recentThread.title : title,
+                recentThread == null ? "" : recentThread.projectName,
+                "回复已提交 · 正在确认",
+                clean(message, 80),
+                "",
+                "waiting",
+                "pending_start",
+                0L,
+                0L,
+                now,
+                0L,
+                false,
+                false,
+                false,
+                0
+            );
+            tasks.add(0, task);
+        } else {
+            task.activityId = "request:" + clientMessageId;
+            task.startedAtMs = now;
+            task.activeTurnId = "";
+            task.state = "waiting";
+            task.runtimeState = "pending_start";
+            task.detail = "回复已提交 · 正在确认";
+            task.latestActivity = clean(message, 80);
+            task.latestReply = "";
+            task.latestReplyEventSeq = 0L;
+            task.lastUpdatedAtMs = now;
+            task.lastNoProgressReminderAtMs = 0L;
+            task.requestAccepted = false;
+            task.readAcknowledged = false;
+            tasks.remove(task);
+            tasks.add(0, task);
+        }
+        if (tasks.size() > MAX_TRACKED_TASKS) tasks.remove(tasks.size() - 1);
+        NotificationManagerCompat.from(this).cancel(completionNotificationId(taskNotificationKey(task)));
+        persistTasksSynchronously();
+        renderTasks();
+        syncTaskWakeLock();
+        sendingReply = true;
+        networkExecutor.execute(() -> {
+            ReplyResult result = sendReplyRequest(threadId, message, clientMessageId);
+            mainHandler.post(() -> finishNotificationReply(threadId, title, message, result));
+        });
+    }
+
+    private void finishNotificationReply(
+        String threadId,
+        String title,
+        String message,
+        ReplyResult result
+    ) {
+        if (destroyed || !RUNNING.get()) return;
+        sendingReply = false;
+        TaskItem task = findTask(threadId);
+        if (!result.success) {
+            if (task != null) {
+                task.state = "retry";
+                task.runtimeState = "retry";
+                task.detail = "回复未送达 · 点击回复重试";
+                task.lastUpdatedAtMs = System.currentTimeMillis();
+                prepareReplyAttemptForFreshRetry();
+                reconcileNoProgressNotifications();
+                persistTasksSynchronously();
+                notifyReplyNeedsRetry(task, taskNotificationKey(task));
+            }
+        } else {
+            applySuccessfulReply(threadId, title, message, result);
+        }
         renderTasks();
         syncTaskWakeLock();
         syncEventStream();
         schedulePoll(0L);
-        Toast.makeText(this, awaitingConfirmation ? "回复已提交，正在确认" : "回复已发送", Toast.LENGTH_SHORT).show();
+        if (!shouldKeepMonitorRunning()) stopSelf();
+    }
+
+    private void handleNotificationStop(Intent intent) {
+        String threadId = clean(intent.getStringExtra(EXTRA_THREAD_ID), 160);
+        String activeTurnId = clean(intent.getStringExtra(EXTRA_ACTIVE_TURN_ID), 160);
+        TaskItem task = findTask(threadId);
+        if (
+            task == null
+            || serverUrl.isEmpty()
+            || !TaskPetRuntimePolicy.isActiveTaskState(task.state)
+            || activeTurnId.isEmpty()
+            || (!task.activeTurnId.isEmpty() && !task.activeTurnId.equals(activeTurnId))
+        ) return;
+        task.activeTurnId = activeTurnId;
+        task.state = "waiting";
+        task.runtimeState = "stopping";
+        task.detail = "正在停止";
+        task.lastUpdatedAtMs = System.currentTimeMillis();
+        persistTasksSynchronously();
+        renderTasks();
+        syncTaskWakeLock();
+        networkExecutor.execute(() -> {
+            StopResult result = sendStopRequest(threadId, activeTurnId);
+            mainHandler.post(() -> finishNotificationStop(threadId, result));
+        });
+    }
+
+    private StopResult sendStopRequest(String threadId, String activeTurnId) {
+        HttpURLConnection connection = null;
+        try {
+            String endpoint = serverUrl + "/codex-api/runtime/interrupt";
+            MobileShellPlugin.ensureWebAuthCookie(this, endpoint);
+            JSONObject payload = new JSONObject()
+                .put("threadId", threadId)
+                .put("turnId", activeTurnId)
+                .put("source", "android_notification");
+            byte[] body = payload.toString().getBytes(StandardCharsets.UTF_8);
+            connection = (HttpURLConnection) new URL(endpoint).openConnection();
+            connection.setConnectTimeout(5_000);
+            connection.setReadTimeout(12_000);
+            connection.setRequestMethod("POST");
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            connection.setRequestProperty("User-Agent", "CX-Codex-Android-TaskPet");
+            connection.setUseCaches(false);
+            connection.setDoOutput(true);
+            String cookies = CookieManager.getInstance().getCookie(endpoint);
+            if (cookies != null && !cookies.isEmpty()) connection.setRequestProperty("Cookie", cookies);
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(body);
+            }
+            int status = connection.getResponseCode();
+            if (status == 200 || status == 202) {
+                String runtimeStatus = status == 202 ? "stop_uncertain" : "stopping";
+                InputStream responseStream = connection.getInputStream();
+                if (responseStream != null) {
+                    JSONObject responsePayload = new JSONObject(readText(responseStream));
+                    JSONObject data = responsePayload.optJSONObject("data");
+                    if (data != null) runtimeStatus = clean(data.optString("status", runtimeStatus), 40);
+                }
+                return new StopResult(true, runtimeStatus);
+            }
+            return new StopResult(false, "running");
+        } catch (Exception ignored) {
+            return new StopResult(true, "stop_uncertain");
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private void finishNotificationStop(String threadId, StopResult result) {
+        if (destroyed || !RUNNING.get()) return;
+        TaskItem task = findTask(threadId);
+        if (task == null) return;
+        if (!result.success) {
+            task.state = "running";
+            task.runtimeState = "running";
+            task.detail = "停止失败 · 任务仍在执行";
+        } else if (
+            "stopped".equals(result.runtimeStatus)
+            || "interrupted".equals(result.runtimeStatus)
+            || "completed".equals(result.runtimeStatus)
+        ) {
+            task.state = "completed";
+            task.runtimeState = result.runtimeStatus;
+            task.activeTurnId = "";
+            task.detail = "completed".equals(result.runtimeStatus) ? "已完成" : "已停止";
+            task.lastUpdatedAtMs = System.currentTimeMillis();
+            removeTaskFromFrontendActiveSnapshot(task);
+            persistTasksSynchronously();
+            notifyTaskSettled(task, false);
+        } else {
+            task.state = "waiting";
+            task.runtimeState = result.runtimeStatus.isEmpty() ? "stop_uncertain" : result.runtimeStatus;
+            task.detail = "停止请求正在确认";
+        }
+        task.lastUpdatedAtMs = System.currentTimeMillis();
+        persistTasks();
+        renderTasks();
+        syncTaskWakeLock();
+        syncEventStream();
+        schedulePoll(0L);
+        if (!shouldKeepMonitorRunning()) stopSelf();
     }
 
     private void restoreReplyAttempt() {
@@ -1732,12 +2024,14 @@ public final class TaskPetOverlayService extends Service {
                 replyAttemptClientMessageId,
                 activityId,
                 now,
+                "",
                 recentThread == null ? "最近会话" : recentThread.title,
                 recentThread == null ? "" : recentThread.projectName,
                 awaitingConfirmation ? "回复已提交 · 正在确认" : "回复未送达 · 点击回复重试",
                 clean(replyAttemptMessage, 80),
                 "",
                 restoredState,
+                awaitingConfirmation ? "pending_start" : "retry",
                 0L,
                 0L,
                 now,
@@ -1752,7 +2046,9 @@ public final class TaskPetOverlayService extends Service {
         } else {
             task.activityId = activityId;
             task.startedAtMs = now;
+            task.activeTurnId = "";
             task.state = restoredState;
+            task.runtimeState = awaitingConfirmation ? "pending_start" : "retry";
             task.detail = awaitingConfirmation ? "回复已提交 · 正在确认" : "回复未送达 · 点击回复重试";
             task.latestActivity = clean(replyAttemptMessage, 80);
             task.latestReply = "";
@@ -2029,12 +2325,20 @@ public final class TaskPetOverlayService extends Service {
                     resolvedClientMessageId,
                     resolvedActivityId,
                     resolvedStartedAtMs,
+                    clean(row.optString("activeTurnId"), 160),
                     clean(row.optString("title", "未命名会话"), 90),
                     clean(row.optString("projectName"), 50),
                     clean(row.optString("detail", "任务进行中"), 80),
                     clean(row.optString("latestActivity"), 140),
                     resolvedLatestReply,
                     normalizedState,
+                    clean(
+                        row.optString(
+                            "executionState",
+                            "waiting".equals(normalizedState) ? "waiting_permission" : normalizedState
+                        ),
+                        40
+                    ),
                     incomingLastEventSeq,
                     resolvedLatestReplyEventSeq,
                     row.optLong("lastUpdatedAtMs", now),
@@ -2174,12 +2478,14 @@ public final class TaskPetOverlayService extends Service {
                     .put("clientMessageId", task.clientMessageId)
                     .put("activityId", task.activityId)
                     .put("startedAtMs", task.startedAtMs)
+                    .put("activeTurnId", task.activeTurnId)
                     .put("title", task.title)
                     .put("projectName", task.projectName)
                     .put("detail", task.detail)
                     .put("latestActivity", task.latestActivity)
                     .put("latestReply", task.latestReply)
                     .put("state", task.state)
+                    .put("executionState", task.runtimeState)
                     .put("lastEventSeq", task.lastEventSeq)
                     .put("latestReplyEventSeq", task.latestReplyEventSeq)
                     .put("lastUpdatedAtMs", task.lastUpdatedAtMs)
@@ -2542,6 +2848,7 @@ public final class TaskPetOverlayService extends Service {
                         false,
                         TaskPetRuntimePolicy.isAwaitingConfirmation(requestStatus),
                         requestStatus,
+                        "",
                         false,
                         false,
                         0L,
@@ -2577,6 +2884,7 @@ public final class TaskPetOverlayService extends Service {
                         false,
                         inProgress,
                         resultStatus,
+                        "",
                         false,
                         false,
                         0L,
@@ -2608,6 +2916,7 @@ public final class TaskPetOverlayService extends Service {
                 false,
                 inProgress,
                 request.status.isEmpty() ? "pending_start" : request.status,
+                "",
                 false,
                 false,
                 0L,
@@ -2664,6 +2973,7 @@ public final class TaskPetOverlayService extends Service {
                     true,
                     snapshot.optBoolean("inProgress", false),
                     clean(snapshot.optString("executionState"), 40),
+                    clean(snapshot.optString("activeTurnId"), 160),
                     pendingRequests != null && pendingRequests.length() > 0,
                     snapshot.optBoolean("stale", false),
                     lastEventSeq,
@@ -2745,6 +3055,7 @@ public final class TaskPetOverlayService extends Service {
                 if (!TaskPetRuntimePolicy.shouldApplySnapshot(task.lastEventSeq, result.lastEventSeq)) break;
                 if (result.requestAccepted) task.requestAccepted = true;
                 String previousState = task.state;
+                String previousRuntimeState = task.runtimeState;
                 String previousDetail = task.detail;
                 String previousReply = task.latestReply;
                 boolean replyDeliveryAttempt = TaskPetRuntimePolicy.shouldReconcileReplyAttempt(
@@ -2767,6 +3078,7 @@ public final class TaskPetOverlayService extends Service {
                         markReplyForManualRetry(task);
                     } else {
                         task.state = "waiting";
+                        task.runtimeState = "pending_start";
                         task.detail = "正在确认回复是否送达";
                     }
                     if (!previousState.equals(task.state) || !previousDetail.equals(task.detail)) {
@@ -2787,10 +3099,12 @@ public final class TaskPetOverlayService extends Service {
                             break;
                         }
                         task.state = "waiting";
+                        task.runtimeState = "pending_start";
                         task.detail = "正在确认任务是否已提交";
                     } else {
                         task.missingRequestPollCount = 0;
                         task.state = "running";
+                        task.runtimeState = "starting";
                         task.detail = "正在创建会话";
                     }
                     if (!previousState.equals(task.state) || !previousDetail.equals(task.detail)) {
@@ -2801,6 +3115,13 @@ public final class TaskPetOverlayService extends Service {
                 task.omittedFromFrontend = false;
                 task.missingRequestPollCount = 0;
                 if (task.threadId.isEmpty() && !result.threadId.isEmpty()) task.threadId = result.threadId;
+                if (!result.activeTurnId.isEmpty()) task.activeTurnId = result.activeTurnId;
+                String nextRuntimeState = result.stale
+                    ? "stale"
+                    : result.hasPendingRequest
+                        ? "waiting_permission"
+                        : result.executionState;
+                if (!nextRuntimeState.isEmpty()) task.runtimeState = nextRuntimeState;
                 if (result.lastEventSeq > task.lastEventSeq) {
                     task.lastEventSeq = result.lastEventSeq;
                     task.lastUpdatedAtMs = System.currentTimeMillis();
@@ -2838,6 +3159,7 @@ public final class TaskPetOverlayService extends Service {
                         task.readAcknowledged
                     );
                     task.state = "completed";
+                    task.activeTurnId = "";
                     task.detail = "failed".equals(result.executionState)
                         ? "执行失败 · 打开会话后清理"
                         : "已完成 · 打开会话后清理";
@@ -2879,7 +3201,12 @@ public final class TaskPetOverlayService extends Service {
                     && !TaskPetRuntimePolicy.isAwaitingConfirmation(result.executionState)
                     && !result.stale
                 ) clearReplyAttempt();
-                if (!previousState.equals(task.state) || !previousDetail.equals(task.detail) || !previousReply.equals(task.latestReply)) {
+                if (
+                    !previousState.equals(task.state)
+                    || !previousRuntimeState.equals(task.runtimeState)
+                    || !previousDetail.equals(task.detail)
+                    || !previousReply.equals(task.latestReply)
+                ) {
                     task.lastUpdatedAtMs = System.currentTimeMillis();
                 }
                 break;
@@ -2906,6 +3233,7 @@ public final class TaskPetOverlayService extends Service {
             if (task == null || !TaskPetRuntimePolicy.isActiveTaskState(task.state)) continue;
             if (!"waiting".equals(task.state) || !"暂时无法确认状态".equals(task.detail)) {
                 task.state = "waiting";
+                task.runtimeState = "sync_degraded";
                 task.detail = "暂时无法确认状态";
                 task.lastUpdatedAtMs = System.currentTimeMillis();
             }
@@ -2934,6 +3262,7 @@ public final class TaskPetOverlayService extends Service {
             ? taskNotificationKey(task)
             : replyAttemptClientMessageId;
         task.state = "retry";
+        task.runtimeState = "retry";
         task.detail = "回复未送达 · 点击回复重试";
         task.latestReply = "";
         task.latestReplyEventSeq = 0L;
@@ -3331,25 +3660,91 @@ public final class TaskPetOverlayService extends Service {
         );
     }
 
-    private void notifyTaskSettled(TaskItem task, boolean failed) {
-        ensureCompletionNotificationChannel();
-        boolean hasLatestReply = !task.latestReply.isEmpty();
-        String body = hasLatestReply ? task.latestReply : task.detail;
-        lastCompletionNotificationBodySource = hasLatestReply ? "latest_reply" : "detail";
-        String notificationKey = taskNotificationKey(task);
-        TaskPetNoProgressReviewReceiver.cancelNotification(this, notificationKey);
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, COMPLETION_CHANNEL_ID)
+    private PendingIntent createTaskActionPendingIntent(TaskItem task, String mode) {
+        Intent intent = new Intent(this, TaskNotificationActionActivity.class)
+            .putExtra(TaskNotificationActionActivity.EXTRA_MODE, mode)
+            .putExtra(EXTRA_THREAD_ID, task.threadId)
+            .putExtra(TaskNotificationActionActivity.EXTRA_TITLE, task.title)
+            .putExtra(TaskNotificationActionActivity.EXTRA_ACTIVE_TURN_ID, task.activeTurnId)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        String requestKey = mode + ":" + taskNotificationKey(task);
+        return PendingIntent.getActivity(
+            this,
+            requestKey.hashCode() & 0x7fffffff,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+    }
+
+    private android.app.Notification buildPublicTaskNotification(
+        String channelId,
+        String status,
+        int priority,
+        boolean ongoing
+    ) {
+        return new NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle((failed ? "任务执行失败 · " : "任务已完成 · ") + task.title)
-            .setContentText(body)
-            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
-            .setContentIntent(task.threadId.isEmpty()
-                ? createPlatformPendingIntent(notificationKey)
-                : createThreadPendingIntent(task.threadId))
-            .setAutoCancel(true)
+            .setContentTitle(status)
+            .setContentText("CX-Codex 任务")
+            .setOngoing(ongoing)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
-            .setPriority(NotificationCompat.PRIORITY_HIGH);
+            .setPriority(priority)
+            .build();
+    }
+
+    private NotificationCompat.Builder buildCompactTaskNotification(
+        TaskItem task,
+        String channelId,
+        String status,
+        int priority,
+        boolean ongoing
+    ) {
+        PendingIntent detailIntent = task.threadId.isEmpty()
+            ? createPlatformPendingIntent(taskNotificationKey(task))
+            : createThreadPendingIntent(task.threadId);
+        return new NotificationCompat.Builder(this, channelId)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(status)
+            .setContentText(task.title)
+            .setContentIntent(detailIntent)
+            .setOngoing(ongoing)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(priority)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(buildPublicTaskNotification(channelId, status, priority, ongoing))
+            .setGroup(NOTIFICATION_GROUP_KEY);
+    }
+
+    private void notifyTaskSettled(TaskItem task, boolean failed) {
+        ensureCompletionNotificationChannel();
+        String runtimeState = failed ? "failed" : task.runtimeState;
+        if (runtimeState.isEmpty() || "running".equals(runtimeState)) runtimeState = "completed";
+        String status = TaskNotificationPolicy.statusLabel(runtimeState);
+        lastCompletionNotificationBodySource = "title_only";
+        String notificationKey = taskNotificationKey(task);
+        TaskPetNoProgressReviewReceiver.cancelNotification(this, notificationKey);
+        NotificationCompat.Builder builder = buildCompactTaskNotification(
+            task,
+            COMPLETION_CHANNEL_ID,
+            status,
+            NotificationCompat.PRIORITY_HIGH,
+            false
+        )
+            .setAutoCancel(true)
+            .addAction(
+                R.mipmap.ic_launcher,
+                "回复",
+                createTaskActionPendingIntent(task, TaskNotificationActionActivity.MODE_REPLY)
+            )
+            .addAction(
+                R.mipmap.ic_launcher,
+                "详情",
+                task.threadId.isEmpty()
+                    ? createPlatformPendingIntent(notificationKey)
+                    : createThreadPendingIntent(task.threadId)
+            );
         completionNotificationAttemptCount += 1L;
         lastCompletionNotificationAttemptAtMs = System.currentTimeMillis();
         NotificationManagerCompat notificationManager = NotificationManagerCompat.from(this);
@@ -3379,20 +3774,28 @@ public final class TaskPetOverlayService extends Service {
 
     private void notifyReplyNeedsRetry(TaskItem task, String notificationKey) {
         ensureCompletionNotificationChannel();
-        String body = "网络恢复后仍未确认这次回复已送达，点此打开会话重试";
         lastCompletionNotificationBodySource = "reply_retry";
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, COMPLETION_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("回复未送达 · " + task.title)
-            .setContentText(body)
-            .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
-            .setContentIntent(task.threadId.isEmpty()
-                ? createPlatformPendingIntent(notificationKey)
-                : createThreadPendingIntent(task.threadId))
+        NotificationCompat.Builder builder = buildCompactTaskNotification(
+            task,
+            COMPLETION_CHANNEL_ID,
+            "失败",
+            NotificationCompat.PRIORITY_HIGH,
+            false
+        )
             .setAutoCancel(true)
-            .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_ERROR)
-            .setPriority(NotificationCompat.PRIORITY_HIGH);
+            .addAction(
+                R.mipmap.ic_launcher,
+                "回复",
+                createTaskActionPendingIntent(task, TaskNotificationActionActivity.MODE_REPLY)
+            )
+            .addAction(
+                R.mipmap.ic_launcher,
+                "详情",
+                task.threadId.isEmpty()
+                    ? createPlatformPendingIntent(notificationKey)
+                    : createThreadPendingIntent(task.threadId)
+            );
         lastCompletionNotificationAttemptAtMs = System.currentTimeMillis();
         NotificationManagerCompat notificationManager = NotificationManagerCompat.from(this);
         boolean runtimePermissionGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
@@ -3564,22 +3967,20 @@ public final class TaskPetOverlayService extends Service {
                 TaskPetNoProgressReviewReceiver.INITIAL_REMINDER_MS,
                 TaskPetNoProgressReviewReceiver.REVIEW_INTERVAL_MS
             )) continue;
-            notifyTaskNoProgress(task, notificationKey, now);
+            notifyTaskNoProgress(task, notificationKey);
             task.lastNoProgressReminderAtMs = now;
             changed = true;
         }
         return changed;
     }
 
-    private void notifyTaskNoProgress(TaskItem task, String notificationKey, long nowMs) {
+    private void notifyTaskNoProgress(TaskItem task, String notificationKey) {
         TaskPetNoProgressReviewReceiver.notifyNoProgress(
             this,
             task.threadId,
             notificationKey,
             task.title,
-            task.detail,
-            task.lastUpdatedAtMs,
-            nowMs
+            task.runtimeState
         );
     }
 
@@ -3588,7 +3989,7 @@ public final class TaskPetOverlayService extends Service {
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (manager == null) return;
         NotificationChannel channel = new NotificationChannel(CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_LOW);
-        channel.setDescription("保持任务宠物浮窗并提示任务完成");
+        channel.setDescription("用两字状态和任务标题显示当前任务");
         channel.setShowBadge(false);
         manager.createNotificationChannel(channel);
     }
@@ -3602,7 +4003,7 @@ public final class TaskPetOverlayService extends Service {
             COMPLETION_CHANNEL_NAME,
             NotificationManager.IMPORTANCE_HIGH
         );
-        channel.setDescription("任务完成或失败时及时提醒并显示最新回复");
+        channel.setDescription("任务完成或失败时用两字状态和标题提醒");
         channel.setShowBadge(true);
         manager.createNotificationChannel(channel);
     }
@@ -3623,25 +4024,76 @@ public final class TaskPetOverlayService extends Service {
         return task.clientMessageId.isEmpty() ? task.threadId : task.clientMessageId;
     }
 
+    @Nullable
+    private TaskItem primaryActiveTask() {
+        for (TaskItem task : tasks) {
+            if (TaskPetRuntimePolicy.isActiveTaskState(task.state)) return task;
+        }
+        return null;
+    }
+
+    private String foregroundTaskSignature(int activeCount) {
+        TaskItem task = primaryActiveTask();
+        if (task == null) return activeCount + ":idle";
+        return activeCount
+            + ":" + taskNotificationKey(task)
+            + ":" + task.runtimeState
+            + ":" + task.activeTurnId
+            + ":" + task.title;
+    }
+
     private android.app.Notification buildForegroundNotification(int activeCount) {
-        Intent launchIntent = new Intent(this, MainActivity.class)
-            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        PendingIntent contentIntent = PendingIntent.getActivity(
-            this,
-            FOREGROUND_NOTIFICATION_ID,
-            launchIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        TaskItem task = primaryActiveTask();
+        if (task == null) {
+            Intent launchIntent = new Intent(this, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            PendingIntent contentIntent = PendingIntent.getActivity(
+                this,
+                FOREGROUND_NOTIFICATION_ID,
+                launchIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+            );
+            return new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("待命")
+                .setContentText("CX-Codex")
+                .setContentIntent(contentIntent)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setPublicVersion(buildPublicTaskNotification(
+                    CHANNEL_ID,
+                    "待命",
+                    NotificationCompat.PRIORITY_LOW,
+                    true
+                ))
+                .build();
+        }
+        String status = TaskNotificationPolicy.statusLabel(task.runtimeState);
+        NotificationCompat.Builder builder = buildCompactTaskNotification(
+            task,
+            CHANNEL_ID,
+            status,
+            NotificationCompat.PRIORITY_LOW,
+            true
+        ).setOngoing(true);
+        if (TaskNotificationPolicy.canStop(task.runtimeState, task.activeTurnId)) {
+            builder.addAction(
+                R.mipmap.ic_launcher,
+                "停止",
+                createTaskActionPendingIntent(task, TaskNotificationActionActivity.MODE_STOP)
+            );
+        }
+        builder.addAction(
+            R.mipmap.ic_launcher,
+            "详情",
+            task.threadId.isEmpty()
+                ? createPlatformPendingIntent(taskNotificationKey(task))
+                : createThreadPendingIntent(task.threadId)
         );
-        String body = activeCount > 0 ? activeCount + " 个任务正在进行" : "宠物正在待命";
-        return new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("CX-Codex 任务宠物")
-            .setContentText(body)
-            .setContentIntent(contentIntent)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build();
+        return builder.build();
     }
 
     private void updateForegroundNotification(int activeCount) {
@@ -3703,12 +4155,14 @@ public final class TaskPetOverlayService extends Service {
         final String clientMessageId;
         String activityId;
         long startedAtMs;
+        String activeTurnId;
         final String title;
         final String projectName;
         String detail;
         String latestActivity;
         String latestReply;
         String state;
+        String runtimeState;
         long lastEventSeq;
         long latestReplyEventSeq;
         long lastUpdatedAtMs;
@@ -3723,12 +4177,14 @@ public final class TaskPetOverlayService extends Service {
             String clientMessageId,
             String activityId,
             long startedAtMs,
+            String activeTurnId,
             String title,
             String projectName,
             String detail,
             String latestActivity,
             String latestReply,
             String state,
+            String runtimeState,
             long lastEventSeq,
             long latestReplyEventSeq,
             long lastUpdatedAtMs,
@@ -3742,12 +4198,14 @@ public final class TaskPetOverlayService extends Service {
             this.clientMessageId = clientMessageId;
             this.activityId = activityId;
             this.startedAtMs = startedAtMs;
+            this.activeTurnId = activeTurnId;
             this.title = title;
             this.projectName = projectName;
             this.detail = detail;
             this.latestActivity = latestActivity;
             this.latestReply = latestReply;
             this.state = state;
+            this.runtimeState = runtimeState;
             this.lastEventSeq = lastEventSeq;
             this.latestReplyEventSeq = latestReplyEventSeq;
             this.lastUpdatedAtMs = lastUpdatedAtMs;
@@ -3764,12 +4222,14 @@ public final class TaskPetOverlayService extends Service {
                 clientMessageId,
                 activityId,
                 startedAtMs,
+                activeTurnId,
                 title,
                 projectName,
                 detail,
                 latestActivity,
                 latestReply,
                 state,
+                runtimeState,
                 lastEventSeq,
                 latestReplyEventSeq,
                 lastUpdatedAtMs,
@@ -3787,7 +4247,9 @@ public final class TaskPetOverlayService extends Service {
                 && detail.equals(other.detail)
                 && latestActivity.equals(other.latestActivity)
                 && latestReply.equals(other.latestReply)
-                && state.equals(other.state);
+                && state.equals(other.state)
+                && runtimeState.equals(other.runtimeState)
+                && activeTurnId.equals(other.activeTurnId);
         }
     }
 
@@ -3809,6 +4271,7 @@ public final class TaskPetOverlayService extends Service {
         final boolean requestAccepted;
         final boolean inProgress;
         final String executionState;
+        final String activeTurnId;
         final boolean hasPendingRequest;
         final boolean stale;
         final long lastEventSeq;
@@ -3821,6 +4284,7 @@ public final class TaskPetOverlayService extends Service {
             boolean requestAccepted,
             boolean inProgress,
             String executionState,
+            String activeTurnId,
             boolean hasPendingRequest,
             boolean stale,
             long lastEventSeq,
@@ -3832,6 +4296,7 @@ public final class TaskPetOverlayService extends Service {
             this.requestAccepted = requestAccepted;
             this.inProgress = inProgress;
             this.executionState = executionState;
+            this.activeTurnId = activeTurnId;
             this.hasPendingRequest = hasPendingRequest;
             this.stale = stale;
             this.lastEventSeq = lastEventSeq;
@@ -3853,12 +4318,24 @@ public final class TaskPetOverlayService extends Service {
     private static final class ReplyResult {
         final boolean success;
         final String runtimeStatus;
+        final String activeTurnId;
         final String message;
 
-        ReplyResult(boolean success, String runtimeStatus, String message) {
+        ReplyResult(boolean success, String runtimeStatus, String activeTurnId, String message) {
             this.success = success;
             this.runtimeStatus = runtimeStatus;
+            this.activeTurnId = activeTurnId;
             this.message = message;
+        }
+    }
+
+    private static final class StopResult {
+        final boolean success;
+        final String runtimeStatus;
+
+        StopResult(boolean success, String runtimeStatus) {
+            this.success = success;
+            this.runtimeStatus = runtimeStatus;
         }
     }
 }

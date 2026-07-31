@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { setJson } from './httpJsonResponse.js'
-import type { RuntimeRequestRecord } from './runtimeStore.js'
+import { RuntimeThreadBusyError, type RuntimeRequestRecord } from './runtimeStore.js'
 
 type RuntimeActionResult = {
   status: string
@@ -22,8 +22,16 @@ export async function handleRuntimeActionRoutes(
 ): Promise<boolean> {
   if (req.method === 'POST' && url.pathname === '/codex-api/runtime/send') {
     const payload = await dependencies.readJsonBody(req)
-    const result = await dependencies.startRuntimeTurn(payload)
-    setJson(res, isRuntimeStartPending(result.status) ? 202 : 200, { data: result })
+    try {
+      const result = await dependencies.startRuntimeTurn(payload)
+      setJson(res, isRuntimeStartPending(result.status) ? 202 : 200, { data: result })
+    } catch (error) {
+      if (!(error instanceof RuntimeThreadBusyError)) throw error
+      setJson(res, 409, {
+        error: '当前会话已有任务正在执行，请等待完成后再发送。',
+        code: error.code,
+      })
+    }
     return true
   }
 

@@ -86,9 +86,13 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $installScript = Join-Path $repoRoot "scripts\install-windows-server.ps1"
 $uninstallScript = Join-Path $repoRoot "scripts\uninstall-windows.ps1"
 $bootstrapScript = Join-Path $repoRoot "scripts\bootstrap-windows.ps1"
+$restartScript = Join-Path $repoRoot "scripts\restart-local-service.ps1"
+$cliScript = Join-Path $repoRoot "src\cli\index.ts"
 $testRoot = Join-Path $env:TEMP "cx-codex-productization-$PID"
 $installSource = Get-Content -LiteralPath $installScript -Raw
 $bootstrapSource = Get-Content -LiteralPath $bootstrapScript -Raw
+$restartSource = Get-Content -LiteralPath $restartScript -Raw
+$cliSource = Get-Content -LiteralPath $cliScript -Raw
 Assert-True `
   ($installSource -match "function\s+Wait-ForTunnelReadyState") `
   "Windows installer must wait for the runtime tunnel readiness state."
@@ -104,6 +108,21 @@ Assert-True `
 Assert-True `
   ($bootstrapSource -match '\[switch\]\$SkipOpenPairing[\s\S]*?function\s+Open-LocalPairingPage[\s\S]*?verification\.websocketAuth[\s\S]*?Start-Process\s+-FilePath\s+\$pairingUrl') `
   "RemoteQuick pairing must support opt-out and open only after all public verification gates pass."
+Assert-True `
+  ($bootstrapSource -match '\[int\]\$UpgradeDrainTimeoutSeconds\s*=\s*900[\s\S]*?\[switch\]\$ForceActiveTaskUpgrade[\s\S]*?function\s+Wait-ForManagedRuntimeDrain') `
+  "Windows bootstrap must expose a bounded active-task drain gate and an explicit force override."
+Assert-True `
+  ($bootstrapSource -match 'runtimeStore\.uncertainRequestCount[\s\S]*?restartProtection\.blockingRequestCount[\s\S]*?pendingServerRequestCount[\s\S]*?activePlanModeTurnCount[\s\S]*?Wait-ForManagedRuntimeDrain[\s\S]*?Stop-Process') `
+  "Windows bootstrap must wait for runtime ownership and approval state before stopping the managed service."
+Assert-True `
+  ($restartSource -match '\[int\]\$DrainTimeoutSeconds\s*=\s*300[\s\S]*?\[switch\]\$ForceActiveTaskRestart[\s\S]*?function\s+Wait-ForRuntimeDrain[\s\S]*?Wait-ForRuntimeDrain[\s\S]*?Stop-Process') `
+  "Local restart must drain active tasks unless the operator explicitly forces interruption."
+Assert-True `
+  ($restartSource -match '&\s+\$NodePath\s+\$distCliPath\s+--version[\s\S]*?versionExitCode[\s\S]*?Rebuild before restarting the service[\s\S]*?Get-ManagedCodexUiProcessIds') `
+  "Local restart must validate the built CLI version before stopping the running service."
+Assert-True `
+  ($cliSource -match 'function\s+listenOnRequestedPort[\s\S]*?will not silently start a second broker[\s\S]*?server\.listen\(port,\s*host\)' -and $cliSource -notmatch 'attempt\(port\s*\+\s*1\)') `
+  "CLI port conflicts must fail explicitly instead of starting a second broker on another port."
 Assert-True `
   ($bootstrapSource -match 'function\s+Get-Sha256Hex[\s\S]*?Get-Command\s+Get-FileHash[\s\S]*?\[System\.Security\.Cryptography\.SHA256\]::Create\(\)') `
   "Windows bootstrap must fall back to .NET SHA-256 when Get-FileHash is unavailable."

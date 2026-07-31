@@ -28,12 +28,17 @@ import { startCodexBridgeStartupTasks } from './codexBridgeStartupTasks.js'
 import { createCodexBridgeRuntimeOperations } from './codexBridgeRuntimeOperations.js'
 import { createCodexBridgeMiddlewareState } from './codexBridgeMiddlewareState.js'
 import { MobilePushCoordinator } from './mobilePush.js'
+import {
+  CodexSessionFileChangeObserver,
+  createCodexSessionFileChangedNotification,
+} from './codexSessionFileChangeObserver.js'
 
 type CodexBridgeMiddleware = ((req: IncomingMessage, res: ServerResponse, next: () => void) => Promise<void>) & {
   dispose: () => void
   subscribeNotifications: (listener: (value: BridgeNotificationEvent) => void) => () => void
   listNotificationEventsAfter: (afterSeq: number, limit?: number) => {
     notifications: BridgeNotificationEvent[]
+    streamId?: string
     latestSeq: number
     oldestSeq: number
   }
@@ -60,6 +65,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
   const {
     threadSearchIndexStore,
     threadReadCacheStore,
+    invalidateSupplementalThreadListCache,
     augmentThreadListRpcResult,
     runtimeStateStore,
     runtimeStore,
@@ -68,6 +74,10 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     hookDiagnosticsCache,
     windowsSandboxReadinessCache,
   } = createCodexBridgeMiddlewareState(appServer)
+  appServer.setRestartProtectionReader(() => Math.max(
+    runtimeStore.getRestartBlockingRequestCount(),
+    runtimeStateStore.getActiveThreadCount(),
+  ))
   const mobilePushCoordinator = new MobilePushCoordinator({ store: runtimeStore })
   const {
     persistRuntimeSnapshot,
@@ -98,6 +108,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     notificationReplay,
     listNotificationEventsAfter,
     bridgeNotificationListeners,
+    publishBridgeNotification,
     unsubscribeAppServerNotifications,
   } = createCodexBridgeNotificationRuntime({
     subscribeAppServerNotifications: (listener) => appServer.onNotification(listener),
@@ -118,6 +129,20 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
       })
     },
   })
+  const sessionFileChangeObserver = new CodexSessionFileChangeObserver({
+    onChange: (change) => {
+      appServer.invalidateThreadListCache()
+      threadSearchIndexStore.clear()
+      invalidateSupplementalThreadListCache(change.threadId)
+      publishBridgeNotification(createCodexSessionFileChangedNotification(change))
+    },
+    onError: (error) => {
+      writeBridgeLog('warn', 'Codex session file change observer failed', {
+        error: getErrorMessage(error, 'session_file_observer_failed'),
+      })
+    },
+  })
+  sessionFileChangeObserver.start()
   mobilePushCoordinator.start()
 
   const {
@@ -173,6 +198,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
         readAppServerHookDiagnostics,
         readAppServerSchemaAuditSummary,
         readWindowsSandboxReadinessDiagnostics,
+        getSessionFileSyncStatus: () => sessionFileChangeObserver.getStatus(),
         mobilePushCoordinator,
         remoteAccessProtected: options.remoteAccessProtected === true,
       }))) {
@@ -199,6 +225,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
       hookDiagnosticsCache,
       windowsSandboxReadinessCache,
       mobilePushCoordinator,
+      sessionFileChangeObserver,
       runtimeStore,
       appServer,
     })

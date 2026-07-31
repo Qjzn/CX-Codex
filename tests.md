@@ -2,6 +2,23 @@
 
 This file tracks manual regression and feature verification steps.
 
+## Stable thread identity across project groups (2026-07-31)
+
+### Expected behavior
+
+1. One stable thread id appears at most once across the entire sidebar, even when optimistic insertion, cached data, and `thread/list` arrive in a different order.
+2. A thread with a resolved `cwd` and real project name wins over an empty-path `unknown-project` placeholder.
+3. A late optimistic insert with an empty `cwd` cannot move an already resolved thread back into `unknown-project`; a later resolved row must move an earlier placeholder into the real project.
+4. Loading or saving a cache created by an older version removes duplicate rows and drops any temporary project group left empty by that repair.
+5. Pinned workspace roots and intentionally empty saved workspace groups remain visible.
+
+### Verification
+
+- Run `npm.cmd run verify:frontend-normalizers`; the project-group identity cases must cover dedupe, downgrade protection, and placeholder-to-real-project upgrade.
+- Run `npm.cmd run build:frontend`.
+- Open `/#/__regression/sidebar-rows?regression=frontend&duplicateIdentity=1` at a phone viewport. Exactly one `fixture-thread-running` row must render inside project groups under `codexui`, and `unknown-project` must not render. Its separate pinned shortcut may remain visible.
+- Seed `codex-web-local.thread-groups-cache.v1` with the same thread id under both `unknown-project` and its resolved project, then reload. The sidebar must self-heal without clearing browser data.
+
 ## New-thread duplicate-submit protection (2026-07-30)
 
 ### Expected behavior
@@ -14141,7 +14158,7 @@ Verification:
 ## Cold-start code splitting and sidebar stability (2026-07-30)
 
 1. The home route does not request the conversation renderer, queued-message UI, sidebar tree on collapsed mobile, settings cards, task-pet settings, or favorites modal before those surfaces are actually needed.
-2. A cold thread route shows a conversation-shaped fallback after 100 ms while its renderer chunk loads; an unresolved main route shows the shared page skeleton instead of briefly rendering thread UI.
+2. A cold thread route shows a conversation-shaped fallback in its first rendered route frame while its renderer chunk loads; an unresolved main route shows the shared page skeleton immediately instead of exposing an empty content frame or briefly rendering thread UI.
 3. Opening the sidebar, a thread, Settings, task-pet settings, or Favorites loads the matching chunk and preserves the existing behavior after it resolves.
 4. Project group reordering uses compositor `transform` motion instead of transitioning `top`; reduced-motion still resolves through the shared duration tokens.
 5. The production main entry stays below 400 KB minified, while the conversation renderer, sidebar tree, and their CSS remain separate hashed assets.
@@ -14154,3 +14171,179 @@ Verification:
 - In headless Playwright, load the home route with a fresh context at 1440 × 900 and at 393 × 852 with Fast 3G plus 4× CPU throttling.
 - Confirm the mobile home resource list does not contain `ThreadConversation`, `SidebarThreadTree`, `QueuedMessages`, `FavoritesModal`, `RemoteAccessCard`, or `TaskPetPreview`.
 - Capture desktop and mobile screenshots and confirm there is no blank main region, sidebar overlap, or horizontal overflow.
+
+## Predictable mobile drawer and Android back navigation (2026-07-31)
+
+1. Store the desktop sidebar preference as expanded, then open Home at 393 × 852. Confirm the phone starts with its temporary drawer closed while the stored desktop preference remains expanded.
+2. Open the phone drawer. It must leave a 32–64 px backdrop edge, remain within the viewport, and expose tap/Back dismissal without shifting the main canvas.
+3. Open Settings from the drawer and press Android Back. Settings closes first and the drawer stays open. Press Back again and the drawer closes.
+4. Reopen the drawer and select any conversation. The drawer starts closing before conversation loading, the selected thread route opens, and the stored desktop preference is unchanged.
+5. On a thread route with no transient surface, press Android Back. The app returns to Home without reopening the drawer or replaying an older WebView route. On clean Home, the next native Back is left to Capacitor to exit the app.
+6. Resize or reopen at 1440 × 900. The desktop sidebar must still be expanded, proving phone navigation did not overwrite desktop layout state.
+7. Repeat with reduced motion, a cold conversation, Settings open, sidebar search open, and the tools menu open. Each Back action dismisses exactly one topmost surface.
+8. Rotate a phone from 393 × 852 to 852 × 393. It must keep the phone shell and temporary drawer even if the WebView briefly fails to report `pointer: coarse`; 884 × 1104 foldable/tablet behavior remains dual-pane.
+9. Expand the composer or open its attach/runtime menu, then press Android Back. The focused surface receives one synthetic Escape and closes while the current route remains unchanged.
+10. Open a thread row menu, rename/delete confirmation, or Skill Details and press Android Back. Exactly that topmost child surface closes; the drawer and current content route stay unchanged until the next Back action.
+
+Verification:
+
+- `npm.cmd run build:frontend`
+- `npm.cmd run verify:frontend-normalizers`
+- `npm.cmd run build:cli`
+- `npm.cmd run verify:server-modules`
+- Parse `scripts/regression-7420-frontend.ps1` with the PowerShell parser and run `git diff --check`.
+- Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName predictable-mobile-navigation` when Runtime Store has no uncertain request.
+
+Current evidence:
+
+- The 393 × 852 headless regression measured a 352 px drawer with a 41 px visible backdrop edge. Settings Back was claimed before drawer Back; conversation selection closed the drawer and opened the target thread; thread Back returned to `#/`; clean Home Back remained available for native exit.
+- The desktop preference stayed `0` throughout the phone flow, and the 1440 × 900 reload restored a visible desktop sidebar. Conversation selection measured CLS `0.000027`.
+- Visually inspected screenshots: `output/ui-stability-round-1/mobile-drawer-bounded.png` and `output/ui-stability-round-1/thread-after-drawer-selection.png`.
+- The portrait-to-landscape regression kept the mobile shell at 852 × 393 with zero measured layout shift, no desktop sidebar, a 352 px drawer, and unchanged desktop preference. Visually inspected evidence: `output/ui-stability-round-2/landscape-phone-drawer.png`.
+- Native Back claimed and collapsed the expanded composer without changing `#/`; it then claimed the attachment sheet, which entered its bounded leave transition while Home remained active.
+- After the existing Runtime Store state converged naturally, the complete frontend regression passed with the new portrait, landscape, drawer-selection, nested-Back, and composer-viewport assertions. No Runtime Store data was cleared to force the result.
+
+## Immediate cold-route fallback and viewport stability (2026-07-31)
+
+1. Delay each lazy main-route chunk and the conversation-renderer chunk by at least 700 ms. From a fully rendered Home page, open Skills and then a conversation.
+2. The previous route may be replaced only when the matching page or conversation skeleton is already present. The main content body and conversation host must never expose an empty rendered frame.
+3. During the delayed conversation load, the conversation host and composer retain their positions; the skeleton owns the same content slot until the renderer resolves.
+4. Repeat at phone width while shrinking the viewport to simulate the soft keyboard and browser address-bar movement. The app must retain the phone shell, keep the focused composer visible, and avoid changing the persisted desktop sidebar preference.
+
+Verification:
+
+- Run `npm.cmd run build:frontend`.
+- Parse `scripts/regression-7420-frontend.ps1` with the PowerShell parser and run `git diff --check`.
+- In a fresh Playwright context, delay `SkillsHub-*.{js,css}` and `ThreadConversation-*.{js,css}` by 700 ms, record each animation frame after navigation, and confirm the first route frame already contains `.page-loading-skeleton` or `.conversation-loading-skeleton`.
+- Capture and inspect the delayed mobile route plus keyboard-compressed composer screenshots.
+
+Current evidence:
+
+- Before the fix, a 700 ms delayed Skills chunk produced a 76 ms empty `.content-body` interval, and a delayed conversation renderer exposed an empty conversation host for one frame. With immediate fallbacks, both transitions moved directly from the previous route into the matching skeleton; the conversation host stayed 664 px high and the composer top stayed at 781 px.
+- The 393 × 852 thread composer remained focused while the viewport was compressed to 393 × 500 and restored. Its bottom tracked 844 → 492 → 844 px, document dimensions always matched the viewport, the handset shell and thread route were preserved, and measured CLS was `0`.
+- Android Back closed a sidebar delete confirmation while leaving the drawer and `#/` intact; the next Back closed only the drawer. Skill Details closed while preserving `#/skills`.
+- The complete `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420` suite passed across desktop, portrait phone, 852 × 393 landscape phone, 884 × 1104 foldable, Skills, GitHub, Diagnostics, preview, sidebar, composer, conversation, failure/recovery, and task-pet fixtures.
+- Privacy-safe visual evidence: `output/ui-stability-round-3/mobile-cold-route-skeleton.png` and `output/ui-stability-round-3/mobile-keyboard-composer.png`.
+
+## Android WebView route continuity on resume and retry (2026-07-31)
+
+1. Open a conversation from a task notification, then immediately background and resume the App before the WebView acknowledgement completes. The native shell must not reload the same canonical thread URL a second time.
+2. If a different pending task notification targets another thread, the native shell must still load that new canonical route.
+3. While a thread URL is showing a main-frame connection error, tap `重试`. The retry must reload the current route on the configured CX-Codex server rather than resetting the UI to Home.
+4. A current URL from another host must never be reused by retry; the shell falls back to the configured server root.
+
+Verification:
+
+- From the repository root, run `android\gradlew.bat -p android :app:testDebugUnitTest --tests com.cxcodex.bridge.MobileShellConfigTest`.
+- With a physical device attached, open a notification thread, quickly background/resume twice, and confirm the WebView does not show a second startup/loading transition. Then simulate a connection failure on that thread and confirm `重试` returns to the same thread route.
+
+## Thread-scoped scroll restoration during rapid switching (2026-07-31)
+
+1. Scroll thread A away from the bottom and select thread B before the 140 ms idle-state save fires.
+2. Thread A's last position must be settled under A before its DOM is reused. Thread B must open at its own saved position, or at the bottom when it has no saved state.
+3. Scroll thread B and immediately return to A. Delayed scroll events, resize callbacks, image-settle callbacks, anchor restores, and bottom-lock frames created for B must not move A.
+4. Leaving a thread route before the idle timer fires must still persist its latest scroll state rather than discarding it during unmount.
+
+Verification:
+
+- Run `npm.cmd run build:frontend`.
+- Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`; the `scrollSwitchRace=1` fixture performs an immediate A → B → A switch inside both idle-save windows.
+- Parse `scripts/regression-7420-frontend.ps1` with the PowerShell parser and run `git diff --check`.
+
+Current evidence:
+
+- At 393 × 852 with a 320 px deterministic conversation viewport, A saved `scrollTop=243` (27.995%); fresh B remained at its own bottom.
+- B then saved `scrollTop=538` (61.982%); returning to A restored exactly 27.995%. Neither delayed save changed the other thread's `isAtBottom` state.
+
+## Topmost modal and Android Back ownership (2026-07-31)
+
+1. Open the compact conversation runtime status and then its `运行详情` sheet. The sheet takes focus and locks background scrolling so a visible software keyboard cannot resize the underlying composer. One Android Back closes only that sheet, restores focus/scroll ownership, and leaves the current route, conversation, scroll state, and drawer state unchanged.
+2. Repeat with image preview, file-link context menu, rollback confirmation, and the mobile message-action strip. Each Back dismisses at most one visible conversation surface before App-level navigation runs.
+3. Open Favorites while focus is still in the composer. The modal receives focus, locks background scrolling, and consumes Escape/Android Back before the composer or drawer can react. Closing restores the previous focus and body overflow value.
+4. If the mobile-update prompt and another confirmation overlap, the higher `z-index` update prompt closes first. A focused lower-layer editor or attachment menu must not consume its Back event.
+5. Desktop refresh, queued-message replacement, and Android update confirmations blur the underlying editor, take dialog focus, and lock body scrolling. Cancel/Back restores the previous focus and overflow; a confirmed queued edit leaves focus ownership to the hydrated composer instead of restoring the old queue action.
+
+Verification:
+
+- Run `npm.cmd run build:frontend`.
+- Parse `scripts/regression-7420-frontend.ps1` with the PowerShell parser and run `git diff --check`.
+- Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420`; the `tailStatus=1` fixture must prove the detail sheet closes while the regression route remains byte-for-byte unchanged.
+- On a physical Android device, repeat Back handling with the software keyboard open, portrait/landscape rotation, and a notification-opened conversation.
+
+Current evidence:
+
+- Before the fix, opening `运行详情` and dispatching Android Back left the sheet open; 100 ms later the regression route changed to Home. After the fix, the event is consumed, the sheet count changes from one to zero, the compact runtime status remains, and the route is unchanged.
+- Favorites takes focus on `.favorites-panel`, sets body overflow to `hidden`, consumes Android Back, restores the previous overflow value, and keeps Home active.
+- `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, `git diff --check`, the complete Android debug unit-test suite, and three complete 24-surface frontend regressions passed. The final pass also asserted detail-sheet focus ownership and background-scroll restoration.
+- Visually inspected 393 × 852 evidence: `output/ui-stability-round-4/topmost-runtime-detail-phone.png`. The bottom sheet stays bounded, readable, and free of horizontal page overflow.
+- The 393 × 852 blocking-dialog regression passed for desktop refresh, queued-message replacement, and Android update: each dialog took focus, set body overflow to `hidden`, consumed one Back action, restored composer focus and the original overflow value, and kept `#/?regression=frontend&blockingDialogs=1` unchanged. Visually inspected evidence: `output/ui-stability-round-5/blocking-dialog-phone.png`.
+- The complete frontend suite was attempted after the blocking-dialog change but stopped at its existing preflight because Runtime Store still reported one uncertain request; no page assertion ran in that attempt. The production frontend build and the focused browser regression both passed.
+- No ADB device was attached, so physical-device keyboard, rotation, notification-entry, and OEM Back-gesture validation remains pending.
+
+## Runtime single-owner and active-task restart protection (2026-07-31)
+
+1. Reuse the same non-empty `clientMessageId` with two request IDs. Runtime Store must keep one accepted request and must not create a second turn.
+2. Start an execute request on a thread, then attempt a different execute request on the same thread. The second request must fail with `RUNTIME_THREAD_BUSY` before `turn/start`; an interrupt request for the owning turn remains allowed.
+3. Reopen a legacy Runtime Store containing duplicate message IDs. Startup migration must retain the newest owner, clear only the duplicate ID from older history, and recreate the partial unique index.
+4. Trigger the repeated-RPC-timeout recovery threshold while an active or uncertain runtime request exists. The app-server process must stay alive and report a blocked restart decision.
+5. Run Windows bootstrap upgrade or the local restart helper while runtime ownership, approvals, or a plan-mode turn is active. The command waits for drain and must not stop the process unless the operator explicitly supplies the force switch.
+6. The local restart helper validates the built CLI version with `--version` before it stops the current service; tunnel startup and buffered stdout must not cause a false version mismatch.
+7. Notification replay persists a database-scoped `streamId` together with the sequence cursor. A normal service restart keeps the same `streamId`; replacing the Runtime Store creates a new one and forces desktop/mobile clients through a full authoritative snapshot before accepting new live events.
+8. Starting CX-Codex on an occupied configured port exits with an explicit single-Broker error. It must not silently increment 7420 to 7421; a second port remains available only when the operator explicitly configures it.
+9. Start a task or rename a conversation in the official Codex desktop app while CX-Codex is open on another browser or Android device. Changes under `session_index.jsonl`, `sessions`, or `archived_sessions` must invalidate the Broker caches and emit a persisted `cx/session-files/changed` event without exposing local paths or message content. A short burst settles after 700 ms; one thread emits at most once per 2 seconds, while a continuously written session must still trigger convergence within 2.5 seconds. An external change queues behind an in-flight UI sync instead of aborting it.
+10. `/codex-api/health` and `/codex-api/diagnostics` expose `sessionFileSync` with listener state, watched-root count, emitted-change count, last-change time, and only a sanitized error code. They must never expose the Codex home path or a session filename.
+
+Verification:
+
+- Run `npm.cmd run verify:server-modules`.
+- The server-module smoke creates an isolated Codex home, writes a session log and session index, and confirms both file changes are observed before disposal.
+- Run `npm.cmd run verify:frontend-normalizers` for event-stream replacement, gap recovery, pagination, and live/replay race coverage.
+- Run `npm.cmd run build:cli`.
+- Run `npm.cmd run verify:windows-productization`.
+- Run `node .\dist-cli\index.js --version` and confirm it prints only the package version.
+- Parse `scripts/bootstrap-windows.ps1` and `scripts/restart-local-service.ps1` with the PowerShell parser, then run `git diff --check`.
+- Before replacing the live service, query `/codex-api/health` and confirm both `runtimeStore.uncertainRequestCount` and `appServer.restartProtection.blockingRequestCount` are zero.
+
+Current evidence:
+
+- The drained local 7420 service restarted onto the rebuilt CLI with the same persisted notification `streamId`, zero uncertain requests, and zero restart blockers.
+- The live observer reported `running=true`, two watched session roots, no error code, and persisted `cx/session-files/changed` events for the official desktop task. The replay endpoint returned the same `streamId`; eight sampled events for one thread had a minimum measured gap of 4001 ms, so no refresh storm was present.
+- The new Cloudflare Quick Tunnel root and `/health` both returned HTTP 200 after the final restart. Because Quick Tunnel addresses are ephemeral, the concrete URL is intentionally not committed to this test contract.
+- The complete 24-surface `test:7420:frontend` regression passed against the rebuilt live service across desktop, portrait phone, landscape phone, foldable, Skills, GitHub, Diagnostics, local preview, sidebar, composer, conversation failure/recovery, scroll-switch race, and task-pet notification recovery. Its first attempt exposed a pre-existing timing gap in the Skills Back assertion; the regression now waits for the asynchronous skill card and reports loading/error state instead of failing as soon as the page shell appears.
+
+## Frontend stability and response-speed measurement (2026-08-01)
+
+1. Home-project readiness uses the page's own navigation clock and records the first rendered project-group set after Vue has flushed the DOM. Process startup, browser-control commands, and fixed test polling must not be reported as product latency.
+2. The live frontend regression reports both `product` and `browser-observed` home readiness. The product-side project-group budget is 5 seconds; browser polling may continue for up to 15 seconds so a slow test controller does not create a false product failure.
+3. A real long conversation must retain the existing bounded first-screen DOM, cache-first rendering, endpoint timing, and `firstUsableMs` checks.
+4. A 3-minute local/public soak must keep health, event replay, authentication boundaries, and event sequence monotonic with no new timeout or replay failures.
+
+Verification:
+
+- Run `npm.cmd run build:frontend` and `npm.cmd run verify:frontend-normalizers`.
+- Parse `scripts/regression-7420-frontend.ps1` with the PowerShell parser and run `git diff --check`.
+- Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -ThreadId <real-long-thread-id> -AgentBrowserTimeoutSec 90`.
+- Run `npm.cmd run test:7420:soak -- -DurationSeconds 180 -IntervalSeconds 5 -LocalBaseUrl http://127.0.0.1:7420 -PublicBaseUrl <current-public-url>`.
+
+Current evidence:
+
+- The complete 24-surface regression passed before the timing-hook-only change. The real long thread became product-usable in 642 ms, mounted 24 conversation items and 1214 conversation DOM nodes, and kept command output collapsed. Its heavy `thread/read` completed in about 1.05 seconds while cached light reads stayed around 9–11 ms.
+- After the timing hook, `build:frontend`, `verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. A fresh 1440 × 900 browser page rendered 21 project groups in 431 ms with the composer ready, no loading skeleton, no blank body, and no horizontal overflow; `workspace-roots-state` completed in 7 ms.
+- The browser controller took 47 seconds to reach the same DOM inspection because of process/session overhead. Keeping this value separate from the 431 ms page-side metric prevents false performance regressions.
+- A 180-second local/public soak completed 28 samples with all local health, API, replay, public-page, and protected-public-API checks passing. It recorded zero new timeouts, slow thread-list reads, replay failures, authentication failures, or event-sequence regressions.
+- The post-hook full regression was intentionally not forced through its idle gate because the task used to perform this verification was itself an active 7420 runtime request. Runtime diagnostics showed one healthy `running` owner and no app-server RPC backlog; no runtime data was cleared to manufacture a pass.
+
+## Global command menu parity (2026-08-01)
+
+1. On any normal application route, press Ctrl + K on Windows/Linux or Command + K on macOS. A modal command menu opens, moves focus into the search field, and exposes recommended commands plus recent tasks.
+2. Type a task title, project name, preview fragment, path fragment, or command label. Results update locally without changing the sidebar or current route; an unmatched query shows one clear empty state.
+3. Use Arrow Up/Down to move the active result and Enter to activate it. Task results open the selected task; commands open the same existing route/action used elsewhere in the app.
+4. Press Escape, click the backdrop, or invoke Ctrl/Command + K again. The menu closes and restores focus to the previously focused control.
+5. Important task state remains readable without relying on color: running and unread results include visible text labels. At phone width the menu stays inside the viewport, keeps touch rows at least 52 px high, and hides desktop-only shortcut help.
+6. A blocking confirmation dialog always wins the modal stack; Ctrl/Command + K must not open the command menu over it. Android Back closes the command menu before changing the route or closing the navigation drawer.
+
+Verification:
+
+- Run `npm.cmd run build:frontend` and `npm.cmd run verify:frontend-normalizers`.
+- Open `/#/__regression/command-menu` in headless Playwright at desktop and phone sizes. Verify initial focus, Arrow navigation, query filtering, Enter activation, Escape focus restoration, no horizontal overflow, and capture screenshots.
+- Run `git diff --check`.

@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div v-if="visible" class="sdm-overlay" @click.self="$emit('close')">
-      <div class="sdm-panel">
+      <div class="sdm-panel" role="dialog" aria-modal="true" aria-label="技能详情">
         <div class="sdm-header">
           <div class="sdm-title-area">
             <img
@@ -87,7 +87,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import IconTablerX from '../icons/IconTablerX.vue'
 import LoadingInline from './LoadingInline.vue'
 
@@ -213,6 +213,21 @@ function onToggleEnabled(): void {
   localEnabled.value = next
   emit('toggle-enabled', props.skill, next)
 }
+
+function onWindowKeyDown(event: KeyboardEvent): void {
+  if (!props.visible || event.key !== 'Escape' || event.defaultPrevented) return
+  event.preventDefault()
+  event.stopPropagation()
+  emit('close')
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onWindowKeyDown, true)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onWindowKeyDown, true)
+})
 
 function onBrowseFiles(): void {
   const dir = skillDirPath.value

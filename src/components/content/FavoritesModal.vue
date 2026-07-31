@@ -1,7 +1,14 @@
 <template>
   <Teleport to="body">
     <div v-if="visible" class="favorites-overlay" @click.self="$emit('close')">
-      <div class="favorites-panel" role="dialog" aria-modal="true" aria-labelledby="favorites-modal-title">
+      <div
+        ref="panelRef"
+        class="favorites-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="favorites-modal-title"
+        tabindex="-1"
+      >
         <div class="favorites-header">
           <div class="favorites-title-wrap">
             <p class="favorites-kicker">全局收藏</p>
@@ -72,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
 import IconTablerBookmark from '../icons/IconTablerBookmark.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'
@@ -86,7 +93,7 @@ const props = defineProps<{
   statusText?: string
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   close: []
   copy: [record: FavoriteRecord]
   open: [record: FavoriteRecord]
@@ -95,6 +102,10 @@ defineEmits<{
 
 const searchQuery = ref('')
 const currentThreadOnly = ref(false)
+const panelRef = ref<HTMLElement | null>(null)
+let previousFocusedElement: HTMLElement | null = null
+let previousBodyOverflow = ''
+let ownsBodyScrollLock = false
 
 const filteredFavorites = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
@@ -115,7 +126,50 @@ watch(() => props.visible, (visible) => {
   if (!visible) {
     searchQuery.value = ''
     currentThreadOnly.value = false
+    restoreModalEnvironment()
+    return
   }
+
+  if (typeof document === 'undefined') return
+  previousFocusedElement = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null
+  previousBodyOverflow = document.body.style.overflow
+  document.body.style.overflow = 'hidden'
+  ownsBodyScrollLock = true
+  void nextTick(() => {
+    panelRef.value?.focus({ preventScroll: true })
+  })
+}, { immediate: true })
+
+function restoreModalEnvironment(): void {
+  if (typeof document === 'undefined') return
+  if (ownsBodyScrollLock) {
+    document.body.style.overflow = previousBodyOverflow
+    ownsBodyScrollLock = false
+    previousBodyOverflow = ''
+  }
+  const focusTarget = previousFocusedElement
+  previousFocusedElement = null
+  if (focusTarget?.isConnected) {
+    focusTarget.focus({ preventScroll: true })
+  }
+}
+
+function onWindowKeyDown(event: KeyboardEvent): void {
+  if (!props.visible || event.key !== 'Escape' || event.defaultPrevented) return
+  event.preventDefault()
+  event.stopPropagation()
+  emit('close')
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onWindowKeyDown, { capture: true })
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onWindowKeyDown, { capture: true })
+  restoreModalEnvironment()
 })
 
 function formatFavoriteTime(value: string): string {

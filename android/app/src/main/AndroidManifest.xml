@@ -35,6 +35,14 @@
 
         </activity>
 
+        <activity
+            android:name=".TaskNotificationActionActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:theme="@style/TaskNotificationActionTheme"
+            android:windowSoftInputMode="adjustResize|stateHidden" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

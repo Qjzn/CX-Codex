@@ -36,6 +36,7 @@ import { useRoute } from 'vue-router'
 
 import SidebarThreadTree from './SidebarThreadTree.vue'
 import type { UiProjectGroup } from '../../types/codex'
+import { dedupeProjectThreadGroups } from '../../utils/projectGroupOrdering'
 
 const now = Date.parse('2026-07-05T10:00:00.000Z')
 const route = useRoute()
@@ -45,7 +46,7 @@ const fixtureMatchedThreadIds = computed(() => (
   staleSearchMode.value ? ['fixture-thread-unread'] : null
 ))
 
-const groups: UiProjectGroup[] = [
+const baseGroups: UiProjectGroup[] = [
   {
     projectName: 'E:/javaword/CXCodex/codexui',
     isPinnedProject: true,
@@ -181,6 +182,26 @@ const groups: UiProjectGroup[] = [
     ],
   },
 ]
+
+const groups = computed<UiProjectGroup[]>(() => {
+  if (route.query.duplicateIdentity !== '1') return baseGroups
+
+  const resolvedThread = baseGroups[0]?.threads.find((thread) => thread.id === 'fixture-thread-running')
+  if (!resolvedThread) return baseGroups
+
+  return dedupeProjectThreadGroups([
+    {
+      projectName: 'unknown-project',
+      threads: [{
+        ...resolvedThread,
+        projectName: 'unknown-project',
+        cwd: '',
+        preview: '帮我优化',
+      }],
+    },
+    ...baseGroups,
+  ])
+})
 
 const projectDisplayNameById: Record<string, string> = {
   'E:/javaword/CXCodex/codexui': 'codexui',

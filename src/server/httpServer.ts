@@ -556,9 +556,14 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
           heartbeatState.delete(ws)
           unsubscribe()
         })
+        const replayStatus = bridge.listNotificationEventsAfter(Number.MAX_SAFE_INTEGER, 1)
         if (!sendBoundedWebSocketJson(ws, {
           method: 'ready',
-          params: { ok: true },
+          params: {
+            ok: true,
+            latestSeq: replayStatus.latestSeq,
+            ...(replayStatus.streamId ? { streamId: replayStatus.streamId } : {}),
+          },
           atIso: new Date().toISOString(),
         })) return
         unsubscribe = subscribeBoundedWebSocketNotifications(ws, bridge.subscribeNotifications)
