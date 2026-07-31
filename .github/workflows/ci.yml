@@ -121,6 +121,7 @@ jobs:
             if (-not $listener -or [int]$listener.OwningProcess -ne $lockProcess.Id) {
               throw "Upgrade fixture did not acquire the expected listener and PID marker."
             }
+            # This lock fixture is intentionally not a CX-Codex health server.
             $branch = if ($env:GITHUB_HEAD_REF) { $env:GITHUB_HEAD_REF } else { $env:GITHUB_REF_NAME }
             $jsonLines = @(
               ./scripts/bootstrap-windows.ps1 `
@@ -130,6 +131,7 @@ jobs:
                 -Password "ci-password" `
                 -Branch $branch `
                 -UseBranchArchive `
+                -ForceActiveTaskUpgrade `
                 -SkipStartupTask `
                 -SkipWatchdogTask `
                 -SkipFirewall `
