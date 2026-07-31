@@ -58,6 +58,8 @@ if idx >= 0:
 "
 ```
 
+On Windows, locale bundles may be emitted as one very long line. To extract matching key/value pairs without printing the full bundle, load the file with PowerShell and apply `[regex]::Matches(...)` to the in-memory string.
+
 ### What to Search For
 
 1. **i18n keys**: Search locale files (`webview/assets/zh-TW-*.js`, `webview/assets/en-*.js`, etc.) for human-readable labels. Keys follow the pattern `component.feature.property` (e.g., `composer.dictation.tooltip`).
@@ -278,6 +280,12 @@ After each feature implementation session that uses this skill:
 
 - Windows Codex `26.707.12708` keeps connection state compact and task-related; it does not expose unrelated desktop-host availability as a persistent new-conversation warning.
 - The desktop settings bundle uses grouped settings surfaces and compact rows. For CX-Codex, optional operational destinations such as skills, GitHub, and diagnostics should be reachable from a compact tools entry instead of competing with primary conversation actions.
+
+## Findings: Global Command Menu (2026-08-01)
+
+- Windows Codex `26.721.4979` exposes a unified command menu through `codex.commandMenu.*` locale keys. Its title is `命令菜单`, description is `搜索命令和过去的任务。`, and unified placeholder is `搜索任务或运行命令`.
+- The desktop menu distinguishes command suggestions from recent, pinned, unread, and recently viewed tasks; it also defines explicit loading, no-result, no-recent-task, and untitled-task states.
+- CX-Codex matches the unified task/command search model and keyboard-first selection, while intentionally limiting the first implementation to existing local routes plus loaded task metadata. Theme/file search and additional task groupings remain out of scope until their backing data and actions exist in the web product.
 
 ## Findings: Avatar Task Overlay (2026-07-17)
 

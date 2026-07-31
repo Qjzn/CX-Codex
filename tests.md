@@ -14347,3 +14347,8 @@ Verification:
 - Run `npm.cmd run build:frontend` and `npm.cmd run verify:frontend-normalizers`.
 - Open `/#/__regression/command-menu` in headless Playwright at desktop and phone sizes. Verify initial focus, Arrow navigation, query filtering, Enter activation, Escape focus restoration, no horizontal overflow, and capture screenshots.
 - Run `git diff --check`.
+
+Current evidence:
+
+- Headless Playwright passed initial focus, Arrow navigation, one-result filtering, Enter activation, Escape close, focus restoration, 393 × 852 viewport containment, horizontal-overflow, and visible running/unread labels.
+- Screenshots: `output/regression-7420/global-command-menu-parity/command-menu-desktop.png` and `output/regression-7420/global-command-menu-parity/command-menu-phone.png`.
