@@ -35,11 +35,14 @@ import type {
   SpeedMode,
   UiMessage,
   UiProjectGroup,
+  UiThreadGoal,
+  UiThreadGoalStatus,
   UiThreadTokenUsage,
   UiTokenUsageBreakdown,
 } from '../types/codex'
 import { normalizePathForUi } from '../pathUtils.js'
 import { shouldAutoLoginForResponse, tryMobileShellAutoLogin } from '../mobile/mobileAuth'
+import { normalizeThreadGoal } from '../composables/threadGoal'
 
 type CurrentModelConfig = {
   model: string
@@ -1036,6 +1039,29 @@ export async function unarchiveThread(threadId: string): Promise<void> {
 
 export async function renameThread(threadId: string, threadName: string): Promise<void> {
   await callRpc('thread/name/set', { threadId, name: threadName })
+}
+
+export async function getThreadGoal(threadId: string, options: RpcCallOptions = {}): Promise<UiThreadGoal | null> {
+  const payload = await callRpc<{ goal?: unknown }>('thread/goal/get', { threadId }, options)
+  return normalizeThreadGoal(payload?.goal)
+}
+
+export async function setThreadGoal(
+  threadId: string,
+  input: { objective?: string; status?: Extract<UiThreadGoalStatus, 'active' | 'paused'> },
+): Promise<UiThreadGoal> {
+  const params: Record<string, unknown> = { threadId }
+  const objective = input.objective?.trim()
+  if (objective) params.objective = objective
+  if (input.status) params.status = input.status
+  const payload = await callRpc<{ goal?: unknown }>('thread/goal/set', params)
+  const goal = normalizeThreadGoal(payload?.goal)
+  if (!goal) throw new Error('thread/goal/set did not return a valid goal')
+  return goal
+}
+
+export async function clearThreadGoal(threadId: string): Promise<void> {
+  await callRpc('thread/goal/clear', { threadId })
 }
 
 export async function rollbackThread(threadId: string, numTurns: number): Promise<UiMessage[]> {

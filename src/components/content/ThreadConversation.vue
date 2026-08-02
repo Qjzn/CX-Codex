@@ -542,6 +542,68 @@
           </div>
         </div>
 
+        <div v-else-if="isPlanMessage(entry.message)" class="message-row" data-role="system" data-message-type="plan">
+          <div class="message-stack" data-role="system">
+            <section class="plan-card" :class="{ 'is-streaming': entry.message.plan?.isStreaming }">
+              <button
+                type="button"
+                class="plan-card-header"
+                :aria-expanded="isPlanExpanded(entry.message)"
+                @click="togglePlanExpanded(entry.message)"
+              >
+                <span class="plan-card-title-wrap">
+                  <span class="plan-card-icon" aria-hidden="true">✓</span>
+                  <span class="plan-card-title">计划</span>
+                </span>
+                <span class="plan-card-meta">{{ planProgressLabel(entry.message) }}</span>
+                <span class="plan-card-chevron" :class="{ 'is-open': isPlanExpanded(entry.message) }" aria-hidden="true">›</span>
+              </button>
+              <div v-if="isPlanExpanded(entry.message)" class="plan-card-body">
+                <p v-if="entry.message.plan?.explanation" class="plan-card-explanation">
+                  {{ entry.message.plan.explanation }}
+                </p>
+                <ol v-if="entry.message.plan?.steps.length" class="plan-step-list">
+                  <template
+                    v-for="stepEntry in visiblePlanStepEntries(entry.message)"
+                    :key="`${entry.message.id}:${stepEntry.index}`"
+                  >
+                    <li v-if="stepEntry.hiddenBefore > 0" class="plan-step-gap">
+                      已隐藏 {{ stepEntry.hiddenBefore }} 步
+                    </li>
+                    <li class="plan-step" :data-status="stepEntry.step.status">
+                      <span class="plan-step-marker" aria-hidden="true">{{ planStepMarker(stepEntry.step.status) }}</span>
+                      <span class="plan-step-copy">{{ stepEntry.step.step }}</span>
+                      <span class="plan-step-status">{{ planStepStatusLabel(stepEntry.step.status) }}</span>
+                    </li>
+                  </template>
+                </ol>
+                <button
+                  v-if="shouldShowPlanStepToggle(entry.message)"
+                  type="button"
+                  class="plan-steps-toggle"
+                  @click.stop="togglePlanSteps(entry.message)"
+                >
+                  {{ isPlanStepListExpanded(entry.message) ? '收起步骤' : `显示全部 ${entry.message.plan?.steps.length ?? 0} 步` }}
+                </button>
+                <p
+                  v-if="!entry.message.plan?.steps.length && entry.message.plan?.rawText"
+                  class="plan-card-raw"
+                >{{ entry.message.plan.rawText }}</p>
+                <p v-else-if="!entry.message.plan?.steps.length" class="plan-card-raw">正在整理计划…</p>
+                <div v-if="shouldShowPlanImplementationAction(entry.message)" class="plan-card-actions">
+                  <span>{{ isPlanImplemented(entry.message) ? '计划已交给执行模式' : '实施此计划？' }}</span>
+                  <button
+                    type="button"
+                    :class="{ 'is-submitted': isPlanImplemented(entry.message) }"
+                    :disabled="isPlanImplementing(entry.message) || isPlanImplemented(entry.message)"
+                    @click.stop="onImplementPlan(entry.message)"
+                  >{{ planImplementationActionLabel(entry.message) }}</button>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+
         <div v-else-if="isCommandMessage(entry.message)" class="message-row" data-role="system">
           <div class="message-stack" data-role="system">
             <button
@@ -1267,6 +1329,7 @@ import {
   CONVERSATION_BOTTOM_THRESHOLD_PX,
   isConversationViewportAtBottom,
 } from '../../composables/conversationViewport'
+import { hasPlanImplementationConfirmation } from '../../composables/conversationProjection'
 import { copyTextToClipboard } from '../../utils/clipboard'
 
 export type ThreadConversationExposed = {
@@ -1327,6 +1390,143 @@ if (typeof window !== 'undefined') {
 
 function isCommandMessage(message: UiMessage): boolean {
   return message.messageType === 'commandExecution' && !!message.commandExecution
+}
+
+function isPlanMessage(message: UiMessage): boolean {
+  return message.messageType === 'plan' && !!message.plan
+}
+
+const collapsedLatestPlanIds = ref<Set<string>>(new Set())
+const expandedOlderPlanIds = ref<Set<string>>(new Set())
+const expandedPlanStepIds = ref<Set<string>>(new Set())
+
+const latestPlanMessageId = computed(() => {
+  for (let index = props.messages.length - 1; index >= 0; index -= 1) {
+    const message = props.messages[index]
+    if (message && isPlanMessage(message)) return message.id
+  }
+  return ''
+})
+
+function isPlanExpanded(message: UiMessage): boolean {
+  if (message.id === latestPlanMessageId.value) {
+    return !collapsedLatestPlanIds.value.has(message.id)
+  }
+  return expandedOlderPlanIds.value.has(message.id)
+}
+
+function togglePlanExpanded(message: UiMessage): void {
+  if (message.id === latestPlanMessageId.value) {
+    const next = new Set(collapsedLatestPlanIds.value)
+    if (next.has(message.id)) next.delete(message.id)
+    else next.add(message.id)
+    collapsedLatestPlanIds.value = next
+    return
+  }
+  const next = new Set(expandedOlderPlanIds.value)
+  if (next.has(message.id)) next.delete(message.id)
+  else next.add(message.id)
+  expandedOlderPlanIds.value = next
+}
+
+function planProgressLabel(message: UiMessage): string {
+  const plan = message.plan
+  if (!plan) return ''
+  if (plan.isStreaming) return '生成中'
+  if (isPlanImplemented(message)) return '已提交执行'
+  if (plan.steps.length > 0 && plan.steps.every((step) => step.status === 'completed')) return '已完成'
+  return '已生成'
+}
+
+function planStepMarker(status: NonNullable<UiMessage['plan']>['steps'][number]['status']): string {
+  if (status === 'completed') return '✓'
+  if (status === 'inProgress') return '→'
+  return '·'
+}
+
+function planStepStatusLabel(status: NonNullable<UiMessage['plan']>['steps'][number]['status']): string {
+  if (status === 'completed') return '已完成'
+  if (status === 'inProgress') return '执行中'
+  return '待处理'
+}
+
+function isPlanStepListExpanded(message: UiMessage): boolean {
+  return expandedPlanStepIds.value.has(message.id)
+}
+
+function shouldShowPlanStepToggle(message: UiMessage): boolean {
+  return (message.plan?.steps.length ?? 0) > 6
+}
+
+function togglePlanSteps(message: UiMessage): void {
+  const next = new Set(expandedPlanStepIds.value)
+  if (next.has(message.id)) next.delete(message.id)
+  else next.add(message.id)
+  expandedPlanStepIds.value = next
+}
+
+function visiblePlanStepEntries(message: UiMessage): Array<{
+  index: number
+  step: NonNullable<UiMessage['plan']>['steps'][number]
+  hiddenBefore: number
+}> {
+  const steps = message.plan?.steps ?? []
+  if (steps.length <= 6 || isPlanStepListExpanded(message)) {
+    return steps.map((step, index) => ({ index, step, hiddenBefore: 0 }))
+  }
+  const currentIndex = steps.findIndex((step) => step.status === 'inProgress')
+  const visibleIndexes = new Set([0, 1, currentIndex >= 0 ? currentIndex : 2])
+  const sortedIndexes = [...visibleIndexes]
+    .filter((index) => index >= 0 && index < steps.length)
+    .sort((left, right) => left - right)
+  return sortedIndexes.map((index, position) => ({
+    index,
+    step: steps[index]!,
+    hiddenBefore: position > 0 ? Math.max(0, index - sortedIndexes[position - 1]! - 1) : 0,
+  }))
+}
+
+const latestImplementablePlanMessageId = computed(() => {
+  let hasLaterUserMessage = false
+  for (let index = props.messages.length - 1; index >= 0; index -= 1) {
+    const message = props.messages[index]
+    if (!message) continue
+    if (message.role === 'user') hasLaterUserMessage = true
+    if (isPlanMessage(message)) return hasLaterUserMessage ? '' : message.id
+  }
+  return ''
+})
+
+function canImplementPlan(message: UiMessage): boolean {
+  return latestImplementablePlanMessageId.value === message.id
+    && message.plan?.isStreaming !== true
+    && !props.isTurnInProgress
+    && !isPlanImplementing(message)
+    && !isPlanImplemented(message)
+}
+
+function isPlanImplementing(message: UiMessage): boolean {
+  return props.implementingPlanId === message.id
+}
+
+function isPlanImplemented(message: UiMessage): boolean {
+  return props.implementedPlanIds?.includes(message.id) === true
+    || hasPlanImplementationConfirmation(props.messages, message.id)
+}
+
+function shouldShowPlanImplementationAction(message: UiMessage): boolean {
+  return canImplementPlan(message) || isPlanImplementing(message) || isPlanImplemented(message)
+}
+
+function planImplementationActionLabel(message: UiMessage): string {
+  if (isPlanImplementing(message)) return '正在提交…'
+  if (isPlanImplemented(message)) return '已提交执行'
+  return '是，实施此计划'
+}
+
+function onImplementPlan(message: UiMessage): void {
+  if (!canImplementPlan(message)) return
+  emit('implementPlan', message)
 }
 
 function isInterruptedTurnMessage(message: UiMessage): boolean {
@@ -1536,6 +1736,8 @@ const props = defineProps<{
   showConnectionSettingsAction?: boolean
   favoriteMessageIds?: string[]
   allowFailedMessageEdit?: boolean
+  implementingPlanId?: string
+  implementedPlanIds?: string[]
 }>()
 
 const retainedLiveOverlay = ref<UiLiveOverlay | null>(null)
@@ -2002,6 +2204,7 @@ const emit = defineEmits<{
   retryFailedMessage: [messageId: string]
   editFailedMessage: [messageId: string]
   copyStatus: [payload: { message: string; tone: 'success' | 'info' | 'warning' | 'danger' }]
+  implementPlan: [message: UiMessage]
 }>()
 
 const conversationListRef = ref<HTMLElement | null>(null)
@@ -7923,12 +8126,242 @@ onBeforeUnmount(() => {
   @apply sr-only;
 }
 
+.plan-card {
+  box-sizing: border-box;
+  width: min(42rem, 100%);
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--ui-accent) 22%, var(--ui-border-subtle));
+  border-radius: var(--ui-radius-card);
+  background: color-mix(in srgb, var(--ui-accent) 4%, var(--ui-bg-surface));
+}
+
+.plan-card.is-streaming {
+  border-color: color-mix(in srgb, var(--ui-accent) 34%, var(--ui-border-subtle));
+}
+
+.plan-card-header {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: .65rem;
+  width: 100%;
+  min-height: 42px;
+  padding: .55rem .7rem;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.plan-card-header:hover,
+.plan-card-header:focus-visible {
+  background: color-mix(in srgb, var(--ui-accent) 6%, transparent);
+}
+
+.plan-card-title-wrap {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: .5rem;
+}
+
+.plan-card-icon {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ui-accent) 12%, transparent);
+  color: var(--ui-accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.plan-card-title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-card-meta,
+.plan-step-status {
+  color: var(--ui-text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.plan-card-chevron {
+  color: var(--ui-text-tertiary);
+  font-size: 18px;
+  line-height: 1;
+  transform: rotate(90deg);
+  transition: transform var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.plan-card-chevron.is-open {
+  transform: rotate(-90deg);
+}
+
+.plan-card-body {
+  padding: 0 .75rem .75rem 2.95rem;
+}
+
+.plan-card-explanation,
+.plan-card-raw {
+  margin: 0 0 .6rem;
+  color: var(--ui-text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.plan-step-list {
+  display: grid;
+  gap: .42rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-step {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: .35rem;
+  color: var(--ui-text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.plan-step-gap {
+  padding-left: 1.45rem;
+  color: var(--ui-text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+  list-style: none;
+}
+
+.plan-step-marker {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  margin-top: 1px;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: 50%;
+  color: var(--ui-text-tertiary);
+  font-size: 10px;
+}
+
+.plan-step[data-status='completed'] .plan-step-marker {
+  border-color: color-mix(in srgb, var(--ui-success) 38%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-success) 9%, transparent);
+  color: var(--ui-success);
+}
+
+.plan-step[data-status='inProgress'] .plan-step-marker,
+.plan-step[data-status='inProgress'] .plan-step-status {
+  border-color: color-mix(in srgb, var(--ui-accent) 42%, var(--ui-border-subtle));
+  color: var(--ui-accent);
+}
+
+.plan-steps-toggle {
+  min-height: 28px;
+  margin-top: .55rem;
+  padding: 0 .45rem;
+  border: 0;
+  border-radius: var(--ui-radius-control);
+  background: transparent;
+  color: var(--ui-text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.plan-steps-toggle:hover,
+.plan-steps-toggle:focus-visible {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+.plan-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: .55rem;
+  margin-top: .75rem;
+  color: var(--ui-text-secondary);
+  font-size: 11px;
+}
+
+.plan-card-actions button {
+  min-height: 30px;
+  padding: 0 .7rem;
+  border: 1px solid color-mix(in srgb, var(--ui-accent) 38%, var(--ui-border-subtle));
+  border-radius: var(--ui-radius-control);
+  background: var(--ui-accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.plan-card-actions button:hover,
+.plan-card-actions button:focus-visible {
+  filter: brightness(.96);
+}
+
+.plan-card-actions button:disabled {
+  cursor: wait;
+  opacity: .72;
+}
+
+.plan-card-actions button.is-submitted {
+  border-color: color-mix(in srgb, var(--ui-success) 36%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-success) 10%, var(--ui-bg-surface));
+  color: var(--ui-success);
+  cursor: default;
+  opacity: 1;
+}
+
 .interrupted-turn-card {
   @apply flex w-full items-center gap-2 border px-3 py-2;
   max-width: min(38rem, 100%);
   border-radius: var(--ui-radius-card);
   border-color: color-mix(in srgb, var(--ui-warning) 26%, var(--ui-border-subtle));
   background: color-mix(in srgb, var(--ui-warning) 6%, var(--ui-bg-surface));
+}
+
+@media (max-width: 640px) {
+  .plan-card-body {
+    padding: 0 .65rem .65rem;
+  }
+
+  .plan-step-status {
+    display: none;
+  }
+
+  .plan-step {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .plan-card-actions {
+    align-items: stretch;
+    flex-direction: column;
+    gap: .4rem;
+  }
+
+  .plan-card-actions button {
+    width: 100%;
+    min-height: 44px;
+  }
 }
 
 .interrupted-turn-dot {

@@ -31,6 +31,7 @@ const latestReplyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src'
 const taskPetReadPolicyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'mobile', 'taskPetReadPolicy.ts')))
 const sessionFileChangeImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'sessionFileChange.ts')))
 const composerEnterBehaviorImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'composerEnterBehavior.ts')))
+const threadGoalImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'threadGoal.ts')))
 
 try {
   writeFileSync(entryPath, `
@@ -64,7 +65,9 @@ import {
 } from '${messageOutboxPersistenceImport}'
 import {
   areMessageFieldsEqual,
+  hasPlanImplementationConfirmation,
   mergeMessages,
+  PLAN_IMPLEMENTATION_CONFIRMATION,
   removeRedundantLiveAgentMessages,
   removeStaleHistoryNoticeAfterOlderMerge,
   sortMessagesByTurnIndex,
@@ -105,6 +108,7 @@ import {
   readCxSessionFileChangeSource,
 } from '${sessionFileChangeImport}'
 import { resolveSendWithEnterPreference } from '${composerEnterBehaviorImport}'
+import { normalizeThreadGoal } from '${threadGoalImport}'
 
 assert.equal(CONVERSATION_BOTTOM_THRESHOLD_PX, 24)
 assert.equal(CX_SESSION_FILES_CHANGED_METHOD, 'cx/session-files/changed')
@@ -131,6 +135,27 @@ assert.equal(resolveSendWithEnterPreference(null, true), false)
 assert.equal(resolveSendWithEnterPreference('1', true), true)
 assert.equal(resolveSendWithEnterPreference('0', false), false)
 assert.equal(resolveSendWithEnterPreference('invalid', true), false)
+assert.deepEqual(normalizeThreadGoal({
+  threadId: 'thread-goal',
+  objective: 'Keep improving',
+  status: 'active',
+  tokenBudget: 1000,
+  tokensUsed: 120,
+  timeUsedSeconds: 30,
+  createdAt: 1,
+  updatedAt: 2,
+}), {
+  threadId: 'thread-goal',
+  objective: 'Keep improving',
+  status: 'active',
+  tokenBudget: 1000,
+  tokensUsed: 120,
+  timeUsedSeconds: 30,
+  createdAt: 1,
+  updatedAt: 2,
+})
+assert.equal(normalizeThreadGoal({ threadId: 'thread-goal', objective: 'x', status: 'unknown' }), null)
+assert.equal(normalizeThreadGoal({ threadId: '', objective: 'x', status: 'active' }), null)
 assert.equal(conversationDistanceFromBottom({ scrollHeight: 1000, scrollTop: 676, clientHeight: 300 }), 24)
 assert.equal(isConversationViewportAtBottom({ scrollHeight: 1000, scrollTop: 676, clientHeight: 300 }), true)
 assert.equal(isConversationViewportAtBottom({ scrollHeight: 1000, scrollTop: 675, clientHeight: 300 }), false)
@@ -562,6 +587,37 @@ assert.equal(areMessageFieldsEqual(projectedCommand, {
   ...projectedCommand,
   commandExecution: { ...projectedCommand.commandExecution, command: 'npm run test' },
 }), false)
+const projectedPlan = {
+  id: 'plan:turn-projection',
+  role: 'system',
+  text: '',
+  messageType: 'plan',
+  plan: {
+    turnId: 'turn-projection',
+    explanation: 'Plan safely',
+    steps: [{ step: 'Inspect', status: 'pending' }],
+    rawText: '',
+    isStreaming: false,
+  },
+}
+assert.equal(areMessageFieldsEqual(projectedPlan, { ...projectedPlan, plan: { ...projectedPlan.plan } }), true)
+assert.equal(areMessageFieldsEqual(projectedPlan, {
+  ...projectedPlan,
+  plan: { ...projectedPlan.plan, steps: [{ step: 'Inspect', status: 'completed' }] },
+}), false)
+assert.equal(hasPlanImplementationConfirmation([
+  projectedPlan,
+  { id: 'plan-confirmation', role: 'user', text: PLAN_IMPLEMENTATION_CONFIRMATION },
+], projectedPlan.id), true)
+assert.equal(hasPlanImplementationConfirmation([
+  projectedPlan,
+  { id: 'ordinary-follow-up', role: 'user', text: '继续检查，但先不要执行' },
+], projectedPlan.id), false)
+assert.equal(hasPlanImplementationConfirmation([
+  projectedPlan,
+  { ...projectedPlan, id: 'plan:newer-turn' },
+  { id: 'late-confirmation', role: 'user', text: PLAN_IMPLEMENTATION_CONFIRMATION },
+], projectedPlan.id), false)
 assert.equal(areMessageFieldsEqual(projectedCommand, {
   ...projectedCommand,
   commandExecution: { ...projectedCommand.commandExecution, cwd: 'E:/other' },
@@ -717,6 +773,7 @@ const messages = normalizeThreadMessagesV2({
         status: 'completed',
         items: [
           { id: 'item-known', type: 'agentMessage', text: 'Known message' },
+          { id: 'item-plan', type: 'plan', text: '1. Inspect\\n2. Implement' },
           {
             id: 'item-mcp',
             type: 'mcpToolCall',
@@ -756,16 +813,21 @@ const messages = normalizeThreadMessagesV2({
   },
 })
 
-assert.equal(messages.length, 3)
+assert.equal(messages.length, 4)
 assert.equal(messages[0]?.messageType, 'agentMessage')
 assert.equal(messages[1]?.role, 'system')
-assert.equal(messages[1]?.messageType, 'unhandled.threadShellCommandOutput')
-assert.equal(messages[1]?.text, 'Unhandled App Server item: threadShellCommandOutput')
-assert.equal(messages[1]?.isUnhandled, true)
-assert.equal(messages[1]?.turnIndex, 0)
-assert.equal(messages[1]?.rawPayload?.includes('secret command'), true)
-assert.equal(messages[2]?.messageType, 'unhandled.invalidItem')
+assert.equal(messages[1]?.id, 'plan:turn-a')
+assert.equal(messages[1]?.messageType, 'plan')
+assert.equal(messages[1]?.plan?.turnId, 'turn-a')
+assert.equal(messages[1]?.plan?.rawText, '1. Inspect\\n2. Implement')
+assert.equal(messages[1]?.plan?.isStreaming, false)
+assert.equal(messages[2]?.messageType, 'unhandled.threadShellCommandOutput')
+assert.equal(messages[2]?.text, 'Unhandled App Server item: threadShellCommandOutput')
 assert.equal(messages[2]?.isUnhandled, true)
+assert.equal(messages[2]?.turnIndex, 0)
+assert.equal(messages[2]?.rawPayload?.includes('secret command'), true)
+assert.equal(messages[3]?.messageType, 'unhandled.invalidItem')
+assert.equal(messages[3]?.isUnhandled, true)
 assert.equal(messages.some((message) => message.messageType === 'unhandled.fileChange'), false)
 assert.equal(messages.some((message) => message.messageType === 'unhandled.webSearch'), false)
 assert.equal(messages.some((message) => message.rawPayload?.includes('large internal patch details')), false)

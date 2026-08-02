@@ -53,7 +53,7 @@
         :pending-requests="pendingRequests"
         :live-overlay="liveOverlay"
         :is-loading="false"
-        :is-turn-in-progress="!isLoadFailureFixture && !isScrollSwitchRaceFixture"
+        :is-turn-in-progress="!isLoadFailureFixture && !isScrollSwitchRaceFixture && !isPlanFixture"
         :load-error="isLoadFailureFixture ? '连接不到桌面端，会话内容暂时未加载。页面会自动重试，也可以检查或修改连接地址。' : ''"
         :show-connection-settings-action="isLoadFailureFixture"
         compact-runtime-chrome
@@ -61,6 +61,8 @@
         cwd="E:/javaword/CXCodex/codexui"
         :scroll-state="activeScrollState"
         :favorite-message-ids="favoriteMessageIds"
+        :implementing-plan-id="fixtureImplementingPlanId"
+        :implemented-plan-ids="fixtureImplementedPlanIds"
         @update-scroll-state="onUpdateScrollState"
         @respond-server-request="noop"
         @rollback="noop"
@@ -71,6 +73,7 @@
         @return-to-new-thread="noop"
         @dismiss-empty-thread="noop"
         @retry-failed-message="noop"
+        @implement-plan="implementFixturePlan"
         @copy-status="copyStatus = $event"
       />
       <p
@@ -103,6 +106,7 @@ import { computed, ref } from 'vue'
 import ThreadConversation from './ThreadConversation.vue'
 import RuntimeStatusBar from './RuntimeStatusBar.vue'
 import QueuedMessages from './QueuedMessages.vue'
+import { PLAN_IMPLEMENTATION_CONFIRMATION } from '../../composables/conversationProjection'
 import type {
   ThreadScrollState,
   UiLiveOverlay,
@@ -366,6 +370,11 @@ const isForegroundResumeScrollFixture = fixtureParams.get('foregroundResumeScrol
 const isImagePreviewFixture = fixtureParams.get('imagePreview') === '1'
 const isMarkdownImageFixture = fixtureParams.get('markdownImage') === '1'
 const isMessageActionHitFixture = fixtureParams.get('messageActionHit') === '1'
+const isPlanFixture = fixtureParams.get('plan') === '1'
+const isPlanSubmittedFixture = fixtureParams.get('planSubmitted') === '1'
+const isPlanHistoryImplementedFixture = fixtureParams.get('planHistoryImplemented') === '1'
+const fixtureImplementingPlanId = ref(fixtureParams.get('planSubmitting') === '1' ? 'plan:fixture-plan-turn' : '')
+const fixtureImplementedPlanIds = ref<string[]>(isPlanSubmittedFixture ? ['plan:fixture-plan-turn'] : [])
 const activeThreadId = ref(isScrollSwitchRaceFixture ? 'regression-scroll-a' : 'regression-conversation-blocks')
 const scrollStateByThreadId = ref<Record<string, ThreadScrollState>>({})
 const activeScrollState = computed(() => scrollStateByThreadId.value[activeThreadId.value] ?? null)
@@ -393,6 +402,54 @@ const markdownImageMessages: UiMessage[] = [
     turnIndex: 9,
   },
 ]
+const planMessages: UiMessage[] = [
+  {
+    id: 'plan:fixture-older-plan-turn',
+    role: 'system',
+    text: '',
+    messageType: 'plan',
+    plan: {
+      turnId: 'fixture-older-plan-turn',
+      explanation: '这是较早的计划，默认应收起以降低长会话噪声。',
+      steps: [
+        { step: '读取现有实现', status: 'completed' },
+        { step: '列出体验问题', status: 'completed' },
+      ],
+      rawText: '',
+      isStreaming: false,
+    },
+    turnIndex: 9,
+  },
+  {
+    id: 'fixture-plan-request',
+    role: 'user',
+    text: '请先规划如何稳定实现持续目标，不要修改文件。',
+    turnIndex: 10,
+  },
+  {
+    id: 'plan:fixture-plan-turn',
+    role: 'system',
+    text: '',
+    messageType: 'plan',
+    plan: {
+      turnId: 'fixture-plan-turn',
+      explanation: '先确认桌面端协议，再以最小改动补齐状态、交互和验证闭环。',
+      steps: [
+        { step: '核对 thread/goal 与 turn/plan 事件结构', status: 'completed' },
+        { step: '接入线程级目标生命周期和持续计划模式', status: 'completed' },
+        { step: '补充计划增量合并，避免频繁重绘', status: 'completed' },
+        { step: '为目标读取增加请求去重与旧响应保护', status: 'completed' },
+        { step: '优化移动端目标操作区', status: 'inProgress' },
+        { step: '验证清除确认和错误重试', status: 'pending' },
+        { step: '完成浏览器回归并记录兼容边界', status: 'pending' },
+        { step: '整理发布前验收结论', status: 'pending' },
+      ],
+      rawText: '',
+      isStreaming: false,
+    },
+    turnIndex: 10,
+  },
+]
 const scrollRaceMessagesByThreadId = ref<Record<string, UiMessage[]>>(Object.fromEntries(
   ['regression-scroll-a', 'regression-scroll-b'].map((threadId) => [
     threadId,
@@ -411,6 +468,16 @@ const fixtureMessages = computed(() => {
   }
   if (isImagePreviewFixture) return [...messages, imagePreviewMessage]
   if (isMarkdownImageFixture) return [...messages, ...markdownImageMessages]
+  if (isPlanFixture) {
+    return isPlanHistoryImplementedFixture
+      ? [...planMessages, {
+          id: 'fixture-plan-implementation-confirmation',
+          role: 'user' as const,
+          text: PLAN_IMPLEMENTATION_CONFIRMATION,
+          turnIndex: 11,
+        }]
+      : planMessages
+  }
   return messages
 })
 const pendingRequests: UiServerRequest[] = isTailStatusFixture || isLoadFailureFixture ? [] : allPendingRequests
@@ -428,7 +495,7 @@ const liveOverlay = ref<UiLiveOverlay | null>({
   errorText: '',
 })
 
-if (isLoadFailureFixture || isScrollSwitchRaceFixture) {
+if (isLoadFailureFixture || isScrollSwitchRaceFixture || isPlanFixture) {
   liveOverlay.value = null
 }
 
@@ -496,6 +563,15 @@ const queuedMessages = [
 
 function noop(): void {
   // Fixture route only needs rendered output for browser assertions.
+}
+
+function implementFixturePlan(message: UiMessage): void {
+  if (fixtureImplementingPlanId.value || fixtureImplementedPlanIds.value.includes(message.id)) return
+  fixtureImplementingPlanId.value = message.id
+  window.setTimeout(() => {
+    fixtureImplementedPlanIds.value = [...fixtureImplementedPlanIds.value, message.id]
+    fixtureImplementingPlanId.value = ''
+  }, 400)
 }
 
 function appendResumeOutput(): void {

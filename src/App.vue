@@ -813,6 +813,8 @@
                   :show-empty-thread-actions="isRouteOnlyEmptyThread"
                   :is-turn-in-progress="isSelectedThreadInProgress"
                   :is-rolling-back="isRollingBack"
+                  :implementing-plan-id="implementingPlanId"
+                  :implemented-plan-ids="implementedPlanIds"
                   @update-scroll-state="onUpdateThreadScrollState"
                   @respond-server-request="onRespondServerRequest"
                   @toggle-favorite="onToggleFavoriteMessage"
@@ -823,6 +825,7 @@
                   @dismiss-empty-thread="onDismissEmptyThread"
                   @copy-status="onConversationCopyStatus"
                   @retry-failed-message="retryFailedUserMessage"
+                  @implement-plan="onImplementPlan"
                   @rollback="onRollback" />
               </div>
 
@@ -846,6 +849,20 @@
                   @retry="retryQueuedMessage"
                   @delete="deleteQueuedMessage"
                 />
+                <ThreadGoalBar
+                  :key="selectedThreadId"
+                  :goal="selectedThreadGoal"
+                  :is-loading="isSelectedThreadGoalLoading"
+                  :is-updating="isSelectedThreadGoalUpdating"
+                  :error="selectedThreadGoalError"
+                  :execution-hint="selectedThreadGoalExecutionHint"
+                  :plan-mode-active="selectedCollaborationMode === 'plan'"
+                  :disabled="isThreadContentSwitching"
+                  @set-goal="onSaveThreadGoal"
+                  @set-status="onSetThreadGoalStatus"
+                  @clear-goal="onClearThreadGoal"
+                  @retry="refreshSelectedThreadGoal"
+                />
                 <ThreadComposer ref="threadComposerRef" :active-thread-id="composerThreadContextId"
                   :cwd="composerCwd"
                   :models="availableModelIds"
@@ -861,7 +878,6 @@
                   :is-loading-plugins="isLoadingComposerPlugins"
                   :has-loaded-plugins="hasLoadedComposerPlugins"
                   :is-turn-in-progress="isSelectedThreadInterruptible" :is-interrupting-turn="isInterruptingTurn"
-                  :has-queue-above="selectedThreadQueuedMessages.length > 0"
                   :send-with-enter="sendWithEnter"
                   :dictation-click-to-toggle="dictationClickToToggle" :dictation-auto-send="dictationAutoSend"
                   :show-dictation-button="dictationButtonVisible"
@@ -1091,6 +1107,7 @@ import { chatFeedbackNow } from './composables/chatFeedbackMetrics'
 import { useFavorites, type FavoriteRecord } from './composables/useFavorites'
 import { useMobile } from './composables/useMobile'
 import { resolveSendWithEnterPreference } from './composables/composerEnterBehavior'
+import { PLAN_IMPLEMENTATION_CONFIRMATION } from './composables/conversationProjection'
 import { useLazyModalEnvironment } from './composables/useLazyModalEnvironment'
 import {
   createWorktree,
@@ -1183,6 +1200,7 @@ const ThreadConversation = defineAsyncComponent({
   loadingComponent: ConversationLoadingSkeleton,
   delay: 0,
 })
+const ThreadGoalBar = defineAsyncComponent(() => import('./components/content/ThreadGoalBar.vue'))
 const QueuedMessages = defineAsyncComponent(() => import('./components/content/QueuedMessages.vue'))
 const RateLimitStatus = defineAsyncComponent(() => import('./components/content/RateLimitStatus.vue'))
 const FavoritesModal = defineAsyncComponent(() => import('./components/content/FavoritesModal.vue'))
@@ -1442,6 +1460,10 @@ const {
   selectedLiveOverlay,
   selectedThreadRuntimeStatus,
   selectedThreadTokenUsage,
+  selectedThreadGoal,
+  isSelectedThreadGoalLoading,
+  isSelectedThreadGoalUpdating,
+  selectedThreadGoalError,
   selectedThreadLoadError,
   selectedThreadId,
   availableModels,
@@ -1508,6 +1530,10 @@ const {
   setWorktreeGitAutomationEnabled,
   setSelectedReasoningEffort,
   setSelectedCollaborationMode,
+  refreshSelectedThreadGoal,
+  saveSelectedThreadGoal,
+  updateSelectedThreadGoalStatus,
+  clearSelectedThreadGoal,
   updateSelectedSpeedMode,
   respondToPendingServerRequest,
   renameProject,
@@ -1530,6 +1556,8 @@ const isSettingsSheetMode = computed(() => isMobile.value || isDualPaneMobile.va
 const { favorites, toggleFavorite, removeFavorite, refreshFavorites } = useFavorites()
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
+const implementingPlanId = ref('')
+const implementedPlanIds = ref<string[]>([])
 const threadConversationRef = ref<ThreadConversationExposed | null>(null)
 const sidebarThreadTreeRef = ref<{ revealSelectedThread: () => Promise<boolean> } | null>(null)
 const sidebarScrollableRef = ref<HTMLElement | null>(null)
@@ -2333,6 +2361,13 @@ const displayFavorites = computed<FavoriteRecord[]>(() => (
 ))
 const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThreadExecutionActive.value)
 const isSelectedThreadInterruptible = computed(() => !isHomeRoute.value && selectedThreadCanStop.value)
+const selectedThreadGoalExecutionHint = computed(() => {
+  if (selectedThreadGoal.value?.status !== 'active') return ''
+  if (selectedThreadServerRequests.value.length > 0) return '等待确认'
+  if (selectedThreadQueuedMessages.value.length > 0) return '等待消息队列'
+  if (isSelectedThreadInProgress.value) return '正在推进'
+  return '等待继续'
+})
 const shouldShowSelectedThreadProcessing = computed(() => (
   selectedThreadServerRequests.value.length > 0 ||
   selectedLiveOverlay.value !== null ||
@@ -4581,8 +4616,62 @@ function onSelectCollaborationMode(mode: CollaborationMode): void {
   setSelectedCollaborationMode(mode)
 }
 
+function onSaveThreadGoal(objective: string): void {
+  void saveSelectedThreadGoal(objective).catch(() => {
+    // The desktop state exposes the actionable RPC error in the shared error banner.
+  })
+}
+
+function onSetThreadGoalStatus(status: 'active' | 'paused'): void {
+  void updateSelectedThreadGoalStatus(status).catch(() => {
+    // Keep the existing goal visible so the user can retry without re-entering it.
+  })
+}
+
+function onClearThreadGoal(): void {
+  void clearSelectedThreadGoal().catch(() => {
+    // The goal remains visible when the authoritative clear fails.
+  })
+}
+
+async function onImplementPlan(message: UiMessage): Promise<void> {
+  const threadId = selectedThreadId.value
+  if (
+    !threadId
+    || isSelectedThreadInProgress.value
+    || implementingPlanId.value
+    || implementedPlanIds.value.includes(message.id)
+  ) return
+  const previousMode = selectedCollaborationMode.value
+  implementingPlanId.value = message.id
+  setSelectedCollaborationMode('execute')
+  try {
+    await sendMessageToSelectedThread(
+      PLAN_IMPLEMENTATION_CONFIRMATION,
+      [],
+      [],
+      'steer',
+      [],
+      undefined,
+      'execute',
+    )
+    implementedPlanIds.value = [...implementedPlanIds.value, message.id].slice(-12)
+    markDesktopSyncPending(threadId)
+  } catch {
+    if (selectedThreadId.value === threadId) setSelectedCollaborationMode(previousMode)
+    showProductToast('计划提交失败，计划卡已保留，可直接重试。', 'danger')
+  } finally {
+    if (implementingPlanId.value === message.id) implementingPlanId.value = ''
+  }
+}
+
 function onInterruptTurn(source: 'composer-stop' | 'runtime-status-stop' | 'unknown' = 'unknown'): void {
-  showProductToast('已请求停止，正在确认任务状态。', 'warning')
+  showProductToast(
+    selectedThreadGoal.value?.status === 'active'
+      ? '已请求停止，持续目标已同时暂停。'
+      : '已请求停止，正在确认任务状态。',
+    'warning',
+  )
   void interruptSelectedThreadTurn(source)
 }
 

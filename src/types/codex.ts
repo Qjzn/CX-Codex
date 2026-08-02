@@ -39,6 +39,40 @@ export type ComposerTurnOptions = {
   goal?: TurnGoalSelection
 }
 
+export type UiThreadGoalStatus =
+  | 'active'
+  | 'paused'
+  | 'budgetLimited'
+  | 'usageLimited'
+  | 'blocked'
+  | 'complete'
+
+export type UiThreadGoal = {
+  threadId: string
+  objective: string
+  status: UiThreadGoalStatus
+  tokenBudget: number | null
+  tokensUsed: number
+  timeUsedSeconds: number
+  createdAt: number
+  updatedAt: number
+}
+
+export type UiPlanStepStatus = 'pending' | 'inProgress' | 'completed'
+
+export type UiPlanStep = {
+  step: string
+  status: UiPlanStepStatus
+}
+
+export type UiPlan = {
+  turnId: string
+  explanation: string
+  steps: UiPlanStep[]
+  rawText: string
+  isStreaming: boolean
+}
+
 export type ComposerPluginInfo = {
   id: string
   name: string
@@ -176,6 +210,7 @@ export type UiMessage = {
   rawPayload?: string
   isUnhandled?: boolean
   commandExecution?: CommandExecutionData
+  plan?: UiPlan
   turnIndex?: number
   deliveryState?: 'sending' | 'retrying' | 'waiting' | 'confirming' | 'sent' | 'failed'
   deliveryError?: string

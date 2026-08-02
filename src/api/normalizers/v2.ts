@@ -223,7 +223,7 @@ function extractAssistantImages(item: ThreadItem): string[] {
   return images
 }
 
-function toUiMessages(item: ThreadItem): UiMessage[] {
+function toUiMessages(item: ThreadItem, turnId = ''): UiMessage[] {
   const rawItem = item as Record<string, unknown>
   const itemId = readTrimmedString(rawItem.id) || `unhandled:${readTrimmedString(rawItem.type) || 'item'}`
   const itemType = readTrimmedString(rawItem.type)
@@ -250,6 +250,26 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
         text,
         images: images.length > 0 ? images : undefined,
         messageType: item.type,
+      },
+    ]
+  }
+
+  if (item.type === 'plan') {
+    const text = typeof item.text === 'string' ? item.text : ''
+    const normalizedTurnId = turnId.trim()
+    return [
+      {
+        id: normalizedTurnId ? `plan:${normalizedTurnId}` : item.id,
+        role: 'system',
+        text,
+        messageType: 'plan',
+        plan: {
+          turnId: normalizedTurnId,
+          explanation: '',
+          steps: [],
+          rawText: text,
+          isStreaming: false,
+        },
       },
     ]
   }
@@ -507,7 +527,7 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse): UiMessag
           ? item
           : { id: `turn-${String(turnIndex)}:item-${String(messages.length)}`, type: 'invalidItem', content: item }
       ) as ThreadItem
-      for (const msg of toUiMessages(threadItem)) {
+      for (const msg of toUiMessages(threadItem, readTrimmedString(rawTurn.id))) {
         messages.push({ ...msg, turnIndex: absoluteTurnIndex })
       }
     }

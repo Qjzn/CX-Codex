@@ -221,7 +221,10 @@
         </span>
       </div>
 
-      <div v-if="selectedPlugins.length > 0 || goalModeEnabled || pendingCapabilityCount > 0" class="thread-composer-option-chips">
+      <div
+        v-if="selectedPlugins.length > 0 || goalModeEnabled || selectedCollaborationMode === 'plan' || pendingCapabilityCount > 0"
+        class="thread-composer-option-chips"
+      >
         <span
           v-if="pendingCapabilityCount > 0"
           class="thread-composer-option-chip"
@@ -248,8 +251,24 @@
           <button
             class="thread-composer-option-chip-remove"
             type="button"
-            aria-label="移除本轮要求"
+            aria-label="移除一次性本轮要求"
             @click="disableGoalMode"
+          >×</button>
+        </span>
+        <span
+          v-if="selectedCollaborationMode === 'plan'"
+          class="thread-composer-option-chip thread-composer-option-chip--plan"
+          role="status"
+          title="计划模式会持续开启，发送消息只生成计划"
+        >
+          <span class="thread-composer-option-chip-dot" aria-hidden="true" />
+          <span class="thread-composer-option-chip-name">计划模式 · 持续开启</span>
+          <button
+            class="thread-composer-option-chip-remove"
+            type="button"
+            aria-label="退出计划模式"
+            title="退出计划模式"
+            @click="togglePlanMode"
           >×</button>
         </span>
       </div>
@@ -409,9 +428,9 @@
             >
               <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--text">✓</span>
               <span class="thread-composer-attach-item-body">
-                <span class="thread-composer-attach-item-title">仅生成计划</span>
+                <span class="thread-composer-attach-item-title">计划模式</span>
                 <span class="thread-composer-attach-item-subtitle">
-                  {{ selectedCollaborationMode === 'plan' ? '本次只生成计划，发送后回到执行' : '仅规划一次，不执行文件和命令' }}
+                  {{ selectedCollaborationMode === 'plan' ? '持续开启，仅规划，不执行修改' : '开启后持续使用计划模式' }}
                 </span>
               </span>
               <span class="thread-composer-switch" :class="{ 'is-on': selectedCollaborationMode === 'plan' }" aria-hidden="true" />
@@ -425,7 +444,7 @@
             >
               <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--text">◎</span>
               <span class="thread-composer-attach-item-body">
-                <span class="thread-composer-attach-item-title">本轮要求</span>
+                <span class="thread-composer-attach-item-title">本轮要求（一次性）</span>
                 <span class="thread-composer-attach-item-subtitle">{{ activeGoalLabel }}</span>
               </span>
               <span class="thread-composer-switch" :class="{ 'is-on': goalModeEnabled }" aria-hidden="true" />
@@ -434,7 +453,7 @@
               <textarea
                 v-model="goalText"
                 class="thread-composer-goal-input"
-                aria-label="本轮要求内容"
+                aria-label="一次性本轮要求内容"
                 placeholder="输入本次消息的额外要求，例如：给出可执行方案并主动补齐风险"
                 :disabled="isInteractionDisabled"
                 rows="2"
@@ -1209,7 +1228,7 @@ const isSpeedToggleDisabled = computed(() =>
 const collaborationModeHintText = computed(() => {
   if (props.isTurnInProgress) return ''
   return props.selectedCollaborationMode === 'plan'
-    ? '只制定计划，发送后自动回到执行'
+    ? '计划模式会保持开启，直到你主动关闭'
     : ''
 })
 const submitActionLabel = computed(() => {
@@ -2945,6 +2964,12 @@ watch(
 
 .thread-composer-option-chip--goal {
   @apply border-amber-200 bg-amber-50 text-amber-800;
+}
+
+.thread-composer-option-chip--plan {
+  border-color: color-mix(in srgb, var(--ui-accent) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-bg-surface));
+  color: var(--ui-accent);
 }
 
 .thread-composer-option-chip-dot {

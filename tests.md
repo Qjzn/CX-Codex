@@ -1476,7 +1476,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Confirm internal `<recommended_plugins>` / Codex context messages, trailing `<oai-mem-citation>` blocks, and supported `::git-*` / task directives do not appear as chat content.
 5. Reload the thread and confirm the existing conversation is readable before deferred capability metadata completes; after the background refresh, open the model control.
 6. Confirm the model list matches visible `model/list` entries, uses server display names/descriptions/default markers, and only offers reasoning levels supported by the selected model. If the runtime later exposes GPT-5.6 variants, confirm they appear without a frontend code change.
-7. Open `+`, verify `添加照片和文件`, `添加文件夹`, `拍照`, `仅生成计划`, `本轮要求`, `插件`, and enabled skills remain available with concise one-shot descriptions.
+7. Open `+`, verify `添加照片和文件`, `添加文件夹`, `拍照`, persistent `计划模式`, `本轮要求（一次性）`, `插件`, and enabled skills remain available with concise descriptions.
 8. Open the plugin subview and confirm installed/enabled native plugins appear as soon as `plugin/list` returns without waiting for the slower MCP scan; after background completion, search by name and confirm only usable ready/login-required MCP servers are merged. Use Tab/Shift+Tab to confirm focus stays inside the mobile sheet, then close it with Escape or the close control and confirm focus returns to `+`.
 9. Save a draft with one skill/plugin selected and reload. Before capability metadata completes, confirm a compact `正在恢复 N 项能力` state is shown and Send is disabled; after loading, confirm valid selections are restored, unavailable selections are removed, and the draft text is preserved.
 10. Start a reply from the second client. Confirm the first assistant text appears immediately, subsequent text remains smooth, only one copy of the live answer is visible, and the compact activity overlay yields to the answer text.
@@ -4394,7 +4394,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 ---
 
-### Feature: 计划模式接近桌面端行为
+### Feature: 持续计划模式、结构化计划与实施动作
 
 #### Prerequisites
 - `7420` 服务运行中，当前构建已包含计划模式优化。
@@ -4402,21 +4402,54 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Steps
 1. 打开新会话或任意已有会话。
-2. 点击输入区的 `计划`。
+2. 打开 `+`，启用 `计划模式`。
 3. 输入一个只需要制定计划的任务并发送。
 4. 观察回复内容是否只给计划，不执行命令、不读写文件。
-5. 等待回复完成后查看输入区模式。
+5. 等待回复完成，确认输入框上方持续显示 `计划模式 · 持续开启`，可直接点 `×` 退出；刷新页面后再次确认该模式保持。
 6. 打开 `/codex-api/health`，确认 `activePlanModeTurnCount` 回到 `0`。
-7. 再输入 `开始执行`，确认默认已处于 `执行`，不会继续被计划模式拦截。
+7. 确认 `turn/plan/updated` 对应的计划以可折叠步骤卡展示：最新计划默认展开、旧计划默认收起，超过 6 步时先展示前两步和当前步骤，并用 `已隐藏 N 步` 解释中间跳步，可手动显示全部；增量阶段不出现重复计划卡或逐字重绘抖动。
+8. 点击最新计划上的 `是，实施此计划`，确认按钮立即变为 `正在提交…` 且不能重复点击；提交成功后保留 `已提交执行`，模式切换到执行并发送 `是的，执行此计划`；刷新页面后仍从会话历史恢复 `已提交执行`；提交失败时保留计划卡并允许重试。
+9. 再次手动关闭计划模式，确认后续普通消息使用执行模式。
 
 #### Expected Results
 - 前端发送计划时使用原生 `mode: plan`，不再把整段 Plan Mode 规则注入用户消息。
 - 如果后端不支持原生 `mode: plan`，才降级注入只读计划提示。
-- 计划消息发送后输入区自动切回 `执行`。
+- 计划模式持续生效，直到用户主动关闭或点击实施计划。
+- 计划卡使用 `生成中`、`已生成`、`已提交执行`、`执行中`、`已完成` 等明确状态；结构化步骤随 `turn/plan/updated` 更新，`item/plan/delta` 以约 48ms 合并刷新，完成项覆盖临时内容。
 - 计划完成后不残留停止按钮、思考中状态或 `activePlanModeTurnCount`。
 
 #### Rollback/Cleanup
 - 若需回退，恢复 `src/server/codexAppServerBridge.ts`、`src/composables/useDesktopState.ts` 和 `src/components/content/ThreadComposer.vue` 的计划模式相关改动。
+
+---
+
+### Feature: 线程级持续目标完整生命周期
+
+#### Prerequisites
+- 当前 App Server 支持 `thread/goal/get`、`thread/goal/set`、`thread/goal/clear`。
+- 准备一个当前无运行任务的已有会话。
+
+#### Steps
+1. 打开会话，点击输入区上方的 `设置持续目标`，输入可衡量目标并点击 `保存并开始`。
+2. 确认目标条显示目标、运行提示、预算使用百分比和耗时；刷新页面并重新进入会话。
+3. 在目标运行时点击 `暂停`，确认任务完成后不会自动继续；再点击 `继续`，确认空闲时继续推进。
+4. 点击 `编辑` 修改目标，确认状态和已用量保持为服务端返回值。
+5. 在目标活跃且任务运行时点击停止，确认目标同步变为暂停，不会立即重新启动。
+6. 点击 `清除`，确认界面先展示目标摘要和 `确认清除`，取消一次后重新确认清除，刷新页面确认目标不再出现。
+7. 在移动宽度确认只保留 `暂停/继续` 主操作，`编辑/清除` 收入更多菜单，所有直接操作目标至少为 44px；目标正文最多显示两行且页面无横向溢出。
+8. 模拟 `thread/goal/get` 失败，确认错误显示在目标栏附近、草稿不丢失且 `重试` 可恢复；快速重复触发刷新时只保留一个读取请求，较旧响应不会覆盖更新后的目标。
+9. 打开目标编辑器并输入未保存内容，切换到另一个会话，确认编辑器、更多菜单和清除确认全部关闭，新会话不会继承上一会话草稿。
+10. 同时开启计划模式与活跃持续目标，确认目标栏明确提示 `计划模式只影响新消息；持续目标仍会推进`，暂停目标仍是直接操作。
+11. 在手机宽度用键盘打开目标更多菜单，确认焦点进入第一个菜单项，方向键可移动，Escape 关闭并回到触发按钮；点击菜单外部也会关闭。打开清除确认后等待超过 6 秒，确认操作不会自行消失。
+
+#### Expected Results
+- 目标状态以 App Server 为唯一事实来源，通过 `thread/goal/updated` / `thread/goal/cleared` 实时同步。
+- 活跃目标仅在会话空闲、无排队消息且无待处理授权时继续，不与用户消息抢占执行。
+- 目标读取失败不阻塞会话加载；读取请求按会话去重并以状态代次阻止旧响应回写；保存、状态切换或清除失败会保留当前草稿和可重试界面并显示就近错误。
+- 目标用量在移动端仍可见，计划模式与持续目标并存时不隐藏执行边界；切换会话不会携带任何目标栏临时交互状态。
+
+#### Rollback/Cleanup
+- 清除回归目标；若需回退，恢复 `threadGoal.ts`、`useDesktopState.ts`、`ThreadGoalBar.vue` 及 App 接线改动。
 
 ---
 
