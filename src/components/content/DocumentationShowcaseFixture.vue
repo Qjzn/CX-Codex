@@ -1,5 +1,24 @@
 <template>
-  <main v-if="isSetupView" class="docs-setup-page" aria-label="CX-Codex connection setup demo">
+  <main v-if="isSkillDetailView" class="docs-skill-detail-page" aria-label="Skill detail modal regression fixture">
+    <button
+      ref="skillDetailLaunchRef"
+      class="docs-skill-detail-launch"
+      type="button"
+      @click="openSkillDetailFixture"
+    >
+      打开技能详情
+    </button>
+    <SkillDetailModal
+      :skill="skillDetailFixture"
+      :visible="isSkillDetailVisible"
+      @close="closeSkillDetailFixture"
+      @install="noop"
+      @uninstall="noop"
+      @toggle-enabled="noop"
+    />
+  </main>
+
+  <main v-else-if="isSetupView" class="docs-setup-page" aria-label="CX-Codex connection setup demo">
     <section class="docs-setup-card">
       <div class="docs-setup-brand">
         <img src="/branding/cx-codex-app-icon.png" alt="" class="docs-setup-logo" />
@@ -73,6 +92,8 @@
           @remove-project="noop"
           @reorder-project="noop"
           @export-thread="noop"
+          @copy-thread="noop"
+          @copy-thread-link="noop"
           @fork-thread="noop"
         />
 
@@ -175,7 +196,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import type { GithubTipsScope, GithubTrendingProject } from '../../api/codexGateway'
 import { useMobile } from '../../composables/useMobile'
@@ -196,6 +217,7 @@ import DesktopLayout from '../layout/DesktopLayout.vue'
 import SidebarThreadTree from '../sidebar/SidebarThreadTree.vue'
 import ContentHeader from './ContentHeader.vue'
 import GithubTrendingHub from './GithubTrendingHub.vue'
+import SkillDetailModal from './SkillDetailModal.vue'
 import ThreadComposer from './ThreadComposer.vue'
 import ThreadConversation from './ThreadConversation.vue'
 
@@ -203,6 +225,46 @@ const route = useRoute()
 const { isMobile } = useMobile()
 const isGithubView = computed(() => route.query.view === 'github')
 const isSetupView = computed(() => route.query.view === 'setup')
+const isSkillDetailView = computed(() => route.query.view === 'skill-detail')
+const isSkillDetailVisible = ref(false)
+const skillDetailLaunchRef = ref<HTMLButtonElement | null>(null)
+
+const skillDetailFixture = {
+  name: 'stable-skill',
+  displayName: '稳定性检查',
+  owner: 'cx-codex',
+  description: '检查任务恢复、同步与前端交互稳定性。',
+  url: 'https://example.com/cx-codex/stable-skill',
+  installed: false,
+  sourceLabel: '社区技能',
+  stars: 7420,
+}
+
+const originalFetch = window.fetch
+let skillReadmeRequestCount = 0
+let isSkillReadmeFetchMocked = false
+
+if (isSkillDetailView.value) {
+  isSkillReadmeFetchMocked = true
+  window.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (!url.includes('/codex-api/skills-hub/readme')) return originalFetch.call(window, input, init)
+    skillReadmeRequestCount += 1
+    if (skillReadmeRequestCount === 1) {
+      return new Response(JSON.stringify({ error: 'fixture failure' }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    return new Response(JSON.stringify({
+      content: '# 稳定性检查\n\n重试后已恢复技能说明。',
+      description: '检查任务恢复、同步与前端交互稳定性。',
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+}
 
 const now = Date.now()
 const projectGroups: UiProjectGroup[] = [
@@ -315,7 +377,7 @@ const availableModels: ComposerModelInfo[] = [
     hidden: false,
     isDefault: true,
     defaultReasoningEffort: 'high',
-    supportedReasoningEfforts: reasoningOptions(['low', 'medium', 'high', 'xhigh']),
+    supportedReasoningEfforts: reasoningOptions(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
   },
   {
     id: 'gpt-5.4',
@@ -414,7 +476,21 @@ function noop(): void {
   // Documentation fixture only renders stable, sanitized UI states.
 }
 
+function openSkillDetailFixture(): void {
+  isSkillDetailVisible.value = true
+}
+
+function closeSkillDetailFixture(): void {
+  isSkillDetailVisible.value = false
+}
+
 onMounted(async () => {
+  if (isSkillDetailView.value) {
+    await nextTick()
+    skillDetailLaunchRef.value?.focus({ preventScroll: true })
+    openSkillDetailFixture()
+    return
+  }
   if (isSetupView.value || isGithubView.value) return
   await nextTick()
   window.requestAnimationFrame(() => {
@@ -429,6 +505,10 @@ onMounted(async () => {
     }
   })
 })
+
+onBeforeUnmount(() => {
+  if (isSkillReadmeFetchMocked) window.fetch = originalFetch
+})
 </script>
 
 <style scoped>
@@ -437,6 +517,18 @@ onMounted(async () => {
 .docs-sidebar {
   @apply flex h-full min-h-0 flex-col;
   background: var(--ui-bg-sidebar);
+}
+
+.docs-skill-detail-page {
+  @apply flex min-h-dvh w-full items-center justify-center;
+  background: var(--ui-bg-window);
+}
+
+.docs-skill-detail-launch {
+  @apply rounded-lg border px-3 py-2 text-sm font-medium;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
 }
 
 .docs-sidebar-toolbar {

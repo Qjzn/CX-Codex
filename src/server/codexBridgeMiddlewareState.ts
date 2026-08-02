@@ -8,6 +8,7 @@ import {
 import { AppServerThreadReadCacheStore } from './appServerThreadReadCache.js'
 import {
   getCodexSessionIndexPath,
+  getWebThreadSearchIndexCachePath,
 } from './codexPaths.js'
 import { readMergedPinnedThreadIds } from './pinnedThreads.js'
 import {
@@ -55,6 +56,7 @@ export function createCodexBridgeMiddlewareState(
   }
 
   const threadSearchIndexStore = createThreadSearchIndexStore({
+    cachePath: getWebThreadSearchIndexCachePath(),
     listThreads: (params) => appServer.rpc('thread/list', params),
     getSessionIndexPath: getCodexSessionIndexPath,
     readThreadTitlesFromSessionIndex,

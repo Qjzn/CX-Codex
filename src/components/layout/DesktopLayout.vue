@@ -7,7 +7,15 @@
     <Teleport v-if="isMobile" to="body">
       <Transition name="drawer">
         <div v-if="!isSidebarCollapsed" class="mobile-drawer-backdrop" @click="$emit('close-sidebar')">
-          <aside class="mobile-drawer" @click.stop>
+          <aside
+            ref="mobileDrawerRef"
+            class="mobile-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="会话导航"
+            tabindex="-1"
+            @click.stop
+          >
             <slot name="sidebar" />
           </aside>
         </div>
@@ -36,6 +44,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useMobile } from '../../composables/useMobile'
+import { useLazyModalEnvironment } from '../../composables/useLazyModalEnvironment'
 
 const props = withDefaults(
   defineProps<{
@@ -51,6 +60,7 @@ defineEmits<{
 }>()
 
 const { isMobile, isDualPaneMobile, viewportWidth } = useMobile()
+const mobileDrawerRef = ref<HTMLElement | null>(null)
 
 const SIDEBAR_WIDTH_KEY = 'codex-web-local.sidebar-width.v1'
 const MIN_SIDEBAR_WIDTH = 260
@@ -89,6 +99,13 @@ const resolvedSidebarWidth = computed(() => {
   const preferredWidth = sidebarWidth.value === DEFAULT_SIDEBAR_WIDTH ? ratioWidth : sidebarWidth.value
   return clampTouchDualPaneSidebarWidth(Math.min(preferredWidth, touchDualPaneMaxSidebarWidth.value))
 })
+const isMobileDrawerOpen = computed(() => isMobile.value && !props.isSidebarCollapsed)
+
+useLazyModalEnvironment(
+  isMobileDrawerOpen,
+  () => mobileDrawerRef.value,
+  () => document.activeElement instanceof HTMLElement ? document.activeElement : null,
+)
 const layoutStyle = computed(() => {
   if (isMobile.value || props.isSidebarCollapsed) {
     return {

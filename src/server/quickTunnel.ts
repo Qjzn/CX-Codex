@@ -735,6 +735,29 @@ export async function verifyPublicAccess(
   }
 }
 
+export async function canReuseActiveQuickTunnel(
+  currentSnapshot: QuickTunnelSnapshot,
+  isTunnelAlive: () => boolean,
+  verify: typeof verifyPublicAccess = verifyPublicAccess,
+): Promise<boolean> {
+  if (
+    currentSnapshot.phase !== 'ready'
+    || !currentSnapshot.active
+    || !currentSnapshot.publicUrl
+    || !isTunnelAlive()
+  ) return false
+
+  try {
+    const result = await verify(currentSnapshot.publicUrl, isTunnelAlive)
+    return isTunnelAlive()
+      && result.verification.health
+      && result.verification.auth
+      && result.verification.websocketAuth
+  } catch {
+    return false
+  }
+}
+
 export function getQuickTunnelSnapshot(): QuickTunnelSnapshot {
   return cloneSnapshot()
 }
@@ -743,10 +766,31 @@ export async function startQuickTunnel(options: QuickTunnelStartOptions): Promis
   if (!Number.isInteger(options.localPort) || options.localPort < 1 || options.localPort > 65535) {
     throw createTunnelError('INVALID_LOCAL_PORT', '无法确定 CX-Codex 当前监听端口。')
   }
-  if (snapshot.active && tunnelChild && tunnelChild.exitCode === null) return cloneSnapshot()
   if (startPromise) return await startPromise
 
   startPromise = (async () => {
+    if (snapshot.active && tunnelChild && tunnelChild.exitCode === null) {
+      const activeChild = tunnelChild
+      snapshot = {
+        ...snapshot,
+        phase: 'verifying',
+        message: '正在重新确认临时公网地址…',
+      }
+      const canReuse = await canReuseActiveQuickTunnel(
+        { ...snapshot, phase: 'ready' },
+        () => tunnelChild === activeChild && activeChild.exitCode === null,
+      )
+      if (canReuse) {
+        snapshot = {
+          ...snapshot,
+          phase: 'ready',
+          message: '手机访问已开启，关闭程序或手动停止后地址失效。',
+        }
+        return cloneSnapshot()
+      }
+      await terminateTunnelChild()
+    }
+
     snapshot = {
       ...createIdleSnapshot(),
       phase: 'installing',

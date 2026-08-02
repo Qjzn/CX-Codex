@@ -1,18 +1,64 @@
 <template>
   <main class="sidebar-regression-fixture" aria-label="Sidebar row regression fixture">
-    <aside class="sidebar-regression-shell">
+    <aside class="sidebar-regression-shell" :data-scroll-anchor-test="scrollAnchorMode || revealCurrentMode">
       <header class="sidebar-regression-header">
-        <p class="sidebar-regression-kicker">Regression Fixture</p>
-        <h1>Sidebar Rows</h1>
+        <div>
+          <p class="sidebar-regression-kicker">Regression Fixture</p>
+          <h1>Sidebar Rows</h1>
+        </div>
+        <div class="sidebar-regression-header-actions">
+          <button
+            v-if="scrollAnchorMode"
+            class="sidebar-regression-promote-button"
+            type="button"
+            data-regression-action="promote-background-project"
+            @click="promoteBackgroundProject = true"
+          >
+            模拟后台更新
+          </button>
+          <button
+            v-if="searchContinuityMode"
+            class="sidebar-regression-promote-button"
+            type="button"
+            data-regression-action="diverge-search-query"
+            @click="continuitySearchQuery = 'release'"
+          >
+            切换查询
+          </button>
+          <button
+            v-if="searchContinuityMode"
+            class="sidebar-regression-promote-button"
+            type="button"
+            data-regression-action="restore-search-prefix"
+            @click="continuitySearchQuery = '移动端'"
+          >
+            恢复前缀
+          </button>
+          <button
+            v-if="revealCurrentMode"
+            class="sidebar-regression-promote-button"
+            type="button"
+            data-regression-action="reveal-current-thread"
+            @click="revealFixtureCurrentThread"
+          >
+            定位当前会话
+          </button>
+          <SidebarThreadControls
+            :is-sidebar-collapsed="true"
+            :attention-count="2"
+            @toggle-sidebar="noop"
+          />
+        </div>
       </header>
       <SidebarThreadTree
+        ref="sidebarTreeRef"
         class="sidebar-regression-tree"
         :groups="groups"
         :project-display-name-by-id="projectDisplayNameById"
-        selected-thread-id="fixture-thread-running"
+        :selected-thread-id="fixtureSelectedThreadId"
         :is-loading="false"
         :search-query="fixtureSearchQuery"
-        :search-matched-thread-ids="fixtureMatchedThreadIds"
+        :search-matched-thread-ids="fixtureVisibleMatchedThreadIds"
         :pinned-thread-ids-override="['fixture-thread-unread', 'fixture-thread-running']"
         desktop-list-parity
         @select="noop"
@@ -24,6 +70,8 @@
         @remove-project="noop"
         @reorder-project="noop"
         @export-thread="noop"
+        @copy-thread="noop"
+        @copy-thread-link="noop"
         @fork-thread="noop"
       />
     </aside>
@@ -31,19 +79,41 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
+import SidebarThreadControls from './SidebarThreadControls.vue'
 import SidebarThreadTree from './SidebarThreadTree.vue'
 import type { UiProjectGroup } from '../../types/codex'
 import { dedupeProjectThreadGroups } from '../../utils/projectGroupOrdering'
+import { shouldHoldThreadSearchResults } from '../../utils/threadSearchContinuity'
 
 const now = Date.parse('2026-07-05T10:00:00.000Z')
 const route = useRoute()
 const staleSearchMode = computed(() => route.query.staleSearch === '1')
-const fixtureSearchQuery = computed(() => (staleSearchMode.value ? '移动端' : ''))
+const scrollAnchorMode = computed(() => route.query.scrollAnchor === '1')
+const searchContinuityMode = computed(() => route.query.searchContinuity === '1')
+const revealCurrentMode = computed(() => route.query.revealCurrent === '1')
+const fixtureSelectedThreadId = computed(() => (
+  revealCurrentMode.value ? 'fixture-thread-eight' : 'fixture-thread-running'
+))
+const sidebarTreeRef = ref<{ revealSelectedThread: () => Promise<boolean> } | null>(null)
+const promoteBackgroundProject = ref(false)
+const continuitySearchQuery = ref('移动端')
+const fixtureSearchQuery = computed(() => (
+  staleSearchMode.value || searchContinuityMode.value ? continuitySearchQuery.value : ''
+))
 const fixtureMatchedThreadIds = computed(() => (
-  staleSearchMode.value ? ['fixture-thread-unread'] : null
+  staleSearchMode.value || searchContinuityMode.value ? ['fixture-thread-unread'] : null
+))
+const fixtureMatchedThreadQuery = computed(() => (
+  staleSearchMode.value ? '移动端' : searchContinuityMode.value ? '移动' : ''
+))
+const fixtureVisibleMatchedThreadIds = computed(() => (
+  fixtureMatchedThreadIds.value
+  && shouldHoldThreadSearchResults(fixtureMatchedThreadQuery.value, fixtureSearchQuery.value)
+    ? fixtureMatchedThreadIds.value
+    : null
 ))
 
 const baseGroups: UiProjectGroup[] = [
@@ -67,7 +137,7 @@ const baseGroups: UiProjectGroup[] = [
       },
       {
         id: 'fixture-thread-running',
-        title: '优化会话栏桌面端信息密度',
+        title: '优化会话栏桌面端信息密度，确保长标题在窄侧栏中仍可完整识别',
         projectName: 'E:/javaword/CXCodex/codexui',
         cwd: 'E:/javaword/CXCodex/codexui',
         sourceKind: 'desktop',
@@ -167,6 +237,33 @@ const baseGroups: UiProjectGroup[] = [
     projectName: 'E:/javaword/CXCodex/playground',
     threads: [
       {
+        id: 'fixture-thread-waiting',
+        title: '确认移动端工具权限',
+        projectName: 'E:/javaword/CXCodex/playground',
+        cwd: 'E:/javaword/CXCodex/playground',
+        sourceKind: 'app',
+        hasWorktree: false,
+        createdAtIso: new Date(now - 5400000).toISOString(),
+        updatedAtIso: new Date(now - 180000).toISOString(),
+        preview: '任务暂停在权限确认，等待用户处理。',
+        unread: false,
+        inProgress: true,
+        waitingForInput: true,
+      },
+      {
+        id: 'fixture-thread-background',
+        title: '后台整理回归证据',
+        projectName: 'E:/javaword/CXCodex/playground',
+        cwd: 'E:/javaword/CXCodex/playground',
+        sourceKind: 'app',
+        hasWorktree: false,
+        createdAtIso: new Date(now - 3600000).toISOString(),
+        updatedAtIso: new Date(now - 60000).toISOString(),
+        preview: '普通运行任务更新时间更近，但优先级低于等待处理。',
+        unread: false,
+        inProgress: true,
+      },
+      {
         id: 'fixture-thread-project',
         title: 'Playground 新会话',
         projectName: 'E:/javaword/CXCodex/playground',
@@ -183,11 +280,57 @@ const baseGroups: UiProjectGroup[] = [
   },
 ]
 
-const groups = computed<UiProjectGroup[]>(() => {
-  if (route.query.duplicateIdentity !== '1') return baseGroups
+const scrollAnchorExtraGroups: UiProjectGroup[] = Array.from({ length: 5 }, (_, index) => {
+  const projectName = `fixture-anchor-${index + 1}`
+  return {
+    projectName,
+    threads: [{
+      id: `fixture-anchor-thread-${index + 1}`,
+      title: `滚动锚点样本 ${index + 1}`,
+      projectName,
+      cwd: `E:/javaword/CXCodex/${projectName}`,
+      sourceKind: 'app',
+      hasWorktree: false,
+      createdAtIso: new Date(now - 7200000 - index * 3600000).toISOString(),
+      updatedAtIso: new Date(now - 7200000 - index * 3600000).toISOString(),
+      preview: '用于验证后台项目重排后可见位置保持稳定。',
+      unread: false,
+      inProgress: false,
+    }],
+  }
+})
 
-  const resolvedThread = baseGroups[0]?.threads.find((thread) => thread.id === 'fixture-thread-running')
-  if (!resolvedThread) return baseGroups
+const groups = computed<UiProjectGroup[]>(() => {
+  const fixtureGroups = scrollAnchorMode.value
+    ? [...baseGroups, ...scrollAnchorExtraGroups]
+    : baseGroups
+  const groupsWithBackgroundUpdate = scrollAnchorMode.value && promoteBackgroundProject.value
+    ? fixtureGroups.map((group) => (
+        group.projectName === 'empty-root'
+          ? {
+              ...group,
+              threads: [{
+                id: 'fixture-thread-materialized',
+                title: '后台创建的新任务',
+                projectName: 'empty-root',
+                cwd: 'E:/javaword/CXCodex/empty-root',
+                sourceKind: 'app',
+                hasWorktree: false,
+                createdAtIso: new Date(now + 60000).toISOString(),
+                updatedAtIso: new Date(now + 60000).toISOString(),
+                preview: '后台任务更新不应打断当前侧栏浏览位置。',
+                unread: false,
+                inProgress: false,
+              }],
+            }
+          : group
+      ))
+    : fixtureGroups
+
+  if (route.query.duplicateIdentity !== '1') return groupsWithBackgroundUpdate
+
+  const resolvedThread = groupsWithBackgroundUpdate[0]?.threads.find((thread) => thread.id === 'fixture-thread-running')
+  if (!resolvedThread) return groupsWithBackgroundUpdate
 
   return dedupeProjectThreadGroups([
     {
@@ -199,7 +342,7 @@ const groups = computed<UiProjectGroup[]>(() => {
         preview: '帮我优化',
       }],
     },
-    ...baseGroups,
+    ...groupsWithBackgroundUpdate,
   ])
 })
 
@@ -207,10 +350,17 @@ const projectDisplayNameById: Record<string, string> = {
   'E:/javaword/CXCodex/codexui': 'codexui',
   'empty-root': 'Empty Workspace',
   'E:/javaword/CXCodex/playground': 'Playground',
+  ...Object.fromEntries(scrollAnchorExtraGroups.map((group, index) => (
+    [group.projectName, `Anchor Workspace ${index + 1}`]
+  ))),
 }
 
 function noop(): void {
   // Fixture route only needs rendered output for browser assertions.
+}
+
+function revealFixtureCurrentThread(): void {
+  void sidebarTreeRef.value?.revealSelectedThread()
 }
 </script>
 
@@ -230,8 +380,13 @@ function noop(): void {
   background: var(--ui-bg-sidebar);
 }
 
+.sidebar-regression-shell[data-scroll-anchor-test='true'] {
+  height: calc(100dvh - 3rem);
+  min-height: 0;
+}
+
 .sidebar-regression-header {
-  @apply shrink-0 border-b px-3 py-2.5;
+  @apply flex shrink-0 items-center justify-between gap-3 border-b px-3 py-2.5;
   border-color: var(--ui-border-subtle);
 }
 
@@ -243,6 +398,17 @@ function noop(): void {
 .sidebar-regression-header h1 {
   @apply m-0 mt-0.5 text-base font-semibold;
   color: var(--ui-text-primary);
+}
+
+.sidebar-regression-header-actions {
+  @apply flex items-center gap-1.5;
+}
+
+.sidebar-regression-promote-button {
+  @apply rounded-md border px-2 py-1 text-[11px] font-medium;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
 }
 
 .sidebar-regression-tree {

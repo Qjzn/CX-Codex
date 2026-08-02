@@ -57,7 +57,7 @@ const hasTitleSuffix = computed(() => Boolean(slots['title-suffix']))
 }
 
 .content-title {
-  @apply m-0 min-w-0 truncate text-[16px] sm:text-[17px] font-semibold leading-6;
+  @apply m-0 min-w-0 flex-1 truncate text-[16px] sm:text-[17px] font-semibold leading-6;
   color: var(--ui-text-primary);
   font-family: var(--font-sans-reading);
   letter-spacing: var(--tracking-tight-soft);

@@ -9,6 +9,7 @@ const FALLBACK_CACHE_LIMIT = 40
 const TOP_LEVEL_RESPONSE_ITEM_PATTERN = /^\s*\{(?:\s*"timestamp"\s*:\s*"[^"]*"\s*,)?\s*"type"\s*:\s*"response_item"/
 const TOP_LEVEL_EVENT_MESSAGE_PATTERN = /^\s*\{(?:\s*"timestamp"\s*:\s*"[^"]*"\s*,)?\s*"type"\s*:\s*"event_msg"/
 const TOP_LEVEL_SESSION_META_PATTERN = /^\s*\{(?:\s*"timestamp"\s*:\s*"[^"]*"\s*,)?\s*"type"\s*:\s*"session_meta"/
+const TRAILING_MEMORY_CITATION_PATTERN = /\s*<oai-mem-citation>[\s\S]*<\/oai-mem-citation>\s*$/u
 
 type FallbackItem = {
   type: 'userMessage' | 'agentMessage'
@@ -113,6 +114,10 @@ function isInternalContextMessageText(text: string): boolean {
   )
 }
 
+function normalizeRecoveredAssistantText(text: string): string {
+  return text.replace(TRAILING_MEMORY_CITATION_PATTERN, '').trim()
+}
+
 function readResponseItemMessage(entry: Record<string, unknown>): RecoveredMessage | null {
   if (entry.type !== 'response_item') return null
   const payload = asRecord(entry.payload)
@@ -120,7 +125,8 @@ function readResponseItemMessage(entry: Record<string, unknown>): RecoveredMessa
   const role = payload.role === 'user' || payload.role === 'assistant' ? payload.role : null
   if (!role) return null
   if (role === 'assistant' && readTrimmedString(payload.phase) === 'commentary') return null
-  const text = readTextContent(payload.content)
+  const rawText = readTextContent(payload.content)
+  const text = role === 'assistant' ? normalizeRecoveredAssistantText(rawText) : rawText
   if (!text) return null
   const id = readTrimmedString(payload.id)
   if (isInternalContextMessageText(text)) {
@@ -141,7 +147,8 @@ function readEventMessage(entry: Record<string, unknown>): RecoveredMessage | nu
         : null
   if (!role) return null
   if (role === 'assistant' && readTrimmedString(payload?.phase) === 'commentary') return null
-  const text = readTrimmedString(payload?.message)
+  const rawText = readTrimmedString(payload?.message)
+  const text = role === 'assistant' ? normalizeRecoveredAssistantText(rawText) : rawText
   if (!text) return null
   if (isInternalContextMessageText(text)) {
     return role === 'user' ? { role, text: '', id: '', hidden: true } : null

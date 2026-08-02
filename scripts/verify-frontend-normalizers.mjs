@@ -30,6 +30,7 @@ const activityTimerImport = toImportPath(relative(outputRoot, join(repoRoot, 'sr
 const latestReplyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'utils', 'latestReply.ts')))
 const taskPetReadPolicyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'mobile', 'taskPetReadPolicy.ts')))
 const sessionFileChangeImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'sessionFileChange.ts')))
+const composerEnterBehaviorImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'composerEnterBehavior.ts')))
 
 try {
   writeFileSync(entryPath, `
@@ -86,6 +87,7 @@ import {
 } from '${runtimeRequestDeliveryImport}'
 import { subscribeRpcNotifications } from '${rpcClientImport}'
 import {
+  areUiThreadFieldsEqual,
   dedupeProjectThreadGroups,
   orderProjectGroupsByRecentActivity,
   upsertThreadIntoProjectGroups,
@@ -98,13 +100,37 @@ import {
 } from '${taskPetReadPolicyImport}'
 import {
   CX_SESSION_FILES_CHANGED_METHOD,
+  getCxSessionFileChangeSyncPolicy,
   isCxSessionFilesChangedMethod,
+  readCxSessionFileChangeSource,
 } from '${sessionFileChangeImport}'
+import { resolveSendWithEnterPreference } from '${composerEnterBehaviorImport}'
 
 assert.equal(CONVERSATION_BOTTOM_THRESHOLD_PX, 24)
 assert.equal(CX_SESSION_FILES_CHANGED_METHOD, 'cx/session-files/changed')
 assert.equal(isCxSessionFilesChangedMethod('cx/session-files/changed'), true)
 assert.equal(isCxSessionFilesChangedMethod('turn/completed'), false)
+assert.equal(readCxSessionFileChangeSource({ source: 'session-log' }), 'session-log')
+assert.equal(readCxSessionFileChangeSource({ source: 'session-index' }), 'session-index')
+assert.equal(readCxSessionFileChangeSource({ source: 'unknown' }), '')
+assert.deepEqual(
+  getCxSessionFileChangeSyncPolicy(CX_SESSION_FILES_CHANGED_METHOD, { source: 'session-log' }),
+  { refreshMessages: true, refreshThreads: false },
+)
+assert.deepEqual(
+  getCxSessionFileChangeSyncPolicy(CX_SESSION_FILES_CHANGED_METHOD, { source: 'session-index' }),
+  { refreshMessages: false, refreshThreads: true },
+)
+assert.deepEqual(
+  getCxSessionFileChangeSyncPolicy(CX_SESSION_FILES_CHANGED_METHOD, {}),
+  { refreshMessages: true, refreshThreads: true },
+)
+assert.equal(getCxSessionFileChangeSyncPolicy('turn/completed', { source: 'session-log' }), null)
+assert.equal(resolveSendWithEnterPreference(null, false), true)
+assert.equal(resolveSendWithEnterPreference(null, true), false)
+assert.equal(resolveSendWithEnterPreference('1', true), true)
+assert.equal(resolveSendWithEnterPreference('0', false), false)
+assert.equal(resolveSendWithEnterPreference('invalid', true), false)
 assert.equal(conversationDistanceFromBottom({ scrollHeight: 1000, scrollTop: 676, clientHeight: 300 }), 24)
 assert.equal(isConversationViewportAtBottom({ scrollHeight: 1000, scrollTop: 676, clientHeight: 300 }), true)
 assert.equal(isConversationViewportAtBottom({ scrollHeight: 1000, scrollTop: 675, clientHeight: 300 }), false)
@@ -549,9 +575,38 @@ assert.deepEqual(
 const mergedOlderHistory = mergeMessages(
   [historyNoticeMessage, projectedTurnTwo],
   [projectedTurnZero],
-  { preserveMissing: true, sortByTurnIndex: true, replaceHistoryNotice: true },
+  true,
+  true,
+  true,
 )
 assert.deepEqual(mergedOlderHistory.map((message) => message.id), ['projected-turn-0', 'projected-turn-2'])
+const authoritativeTurnReplacement = mergeMessages(
+  [
+    { id: 'cached-turn-1', role: 'assistant', text: 'same final answer', turnIndex: 1 },
+    { id: 'fallback-turn-2', role: 'assistant', text: 'same final answer', turnIndex: 2 },
+    { id: 'response-turn-2', role: 'assistant', text: 'same final answer', turnIndex: 2 },
+  ],
+  [{ id: 'item-turn-2', role: 'assistant', text: 'same final answer', turnIndex: 2 }],
+  true,
+  false,
+  false,
+  true,
+)
+assert.deepEqual(
+  authoritativeTurnReplacement.map((message) => message.id),
+  ['cached-turn-1', 'item-turn-2'],
+)
+assert.deepEqual(
+  mergeMessages(
+    [{ id: 'same-text-turn-1', role: 'assistant', text: 'repeatable answer', turnIndex: 1 }],
+    [{ id: 'same-text-turn-2', role: 'assistant', text: 'repeatable answer', turnIndex: 2 }],
+    true,
+    false,
+    false,
+    true,
+  ).map((message) => message.id),
+  ['same-text-turn-1', 'same-text-turn-2'],
+)
 const laterHistoryMessages = [historyNoticeMessage, projectedTurnTwo]
 assert.equal(removeStaleHistoryNoticeAfterOlderMerge(laterHistoryMessages), laterHistoryMessages)
 assert.deepEqual(
@@ -895,9 +950,9 @@ const recentProjectGroups = orderProjectGroupsByRecentActivity([
 ])
 
 assert.deepEqual(recentProjectGroups.map((group) => group.projectName), [
-  'pinned-project',
   'newer-project',
   'older-project',
+  'pinned-project',
   'empty-project',
 ])
 
@@ -908,6 +963,11 @@ const sharedThreadBase = {
   createdAtIso: '2026-07-30T13:00:00.000Z',
   updatedAtIso: '2026-07-30T14:00:00.000Z',
 }
+assert.equal(areUiThreadFieldsEqual(sharedThreadBase, { ...sharedThreadBase }), true)
+assert.equal(
+  areUiThreadFieldsEqual(sharedThreadBase, { ...sharedThreadBase, hasWorktree: !sharedThreadBase.hasWorktree }),
+  false,
+)
 const unresolvedSharedThread = {
   ...sharedThreadBase,
   projectName: 'unknown-project',

@@ -1,3 +1,5 @@
+import { CX_SESSION_FILES_CHANGED_METHOD } from '../sessionFileChange.js'
+
 export type UnknownNotificationRecord = {
   method: string
   count: number
@@ -152,6 +154,7 @@ const REALTIME_NOTIFICATION_METHODS = new Set<RealtimeNotificationRecord['method
 ])
 
 const KNOWN_NOTIFICATION_METHODS = new Set([
+  CX_SESSION_FILES_CHANGED_METHOD,
   'error',
   'account/login/completed',
   'item/completed',

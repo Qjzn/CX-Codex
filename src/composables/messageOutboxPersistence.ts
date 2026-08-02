@@ -15,7 +15,7 @@ const MESSAGE_OUTBOX_VERSION = 1
 const MESSAGE_OUTBOX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const MESSAGE_OUTBOX_MAX_ENTRIES = 12
 const MESSAGE_OUTBOX_MAX_REMOVALS = 256
-const OUTBOX_REASONING_EFFORTS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+const OUTBOX_REASONING_EFFORTS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 
 export type MessageOutboxFileAttachment = {
   label: string

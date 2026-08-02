@@ -116,6 +116,7 @@ import {
   stopRemoteAccess,
   type TunnelStatus,
 } from '../../api/codexGateway'
+import { copyTextToClipboard } from '../../utils/clipboard'
 
 const status = ref<TunnelStatus | null>(null)
 const startingMode = ref<'stable' | 'quick' | ''>('')
@@ -298,7 +299,7 @@ async function copyPublicUrl(): Promise<void> {
   const url = status.value?.publicUrl.trim() ?? ''
   if (!url) return
   try {
-    await navigator.clipboard.writeText(url)
+    await copyTextToClipboard(url)
     message.value = '手机访问地址已复制。'
   } catch {
     message.value = '浏览器未允许复制，请长按地址手动复制。'

@@ -13,7 +13,6 @@ import type {
   ConfigReadResponse,
   GetAccountRateLimitsResponse,
   ModelListResponse,
-  ReasoningEffort,
   ThreadListResponse,
   ThreadReadResponse,
   Turn,
@@ -32,6 +31,7 @@ import type {
   ComposerPluginSelection,
   ComposerTurnOptions,
   PluginAuthStatus,
+  ReasoningEffort,
   SpeedMode,
   UiMessage,
   UiProjectGroup,
@@ -230,6 +230,7 @@ export type WorktreeRollbackResult = {
 export type ThreadSearchResult = {
   threadIds: string[]
   indexedThreadCount: number
+  partial?: true
 }
 
 export type PermissionDecision = 'ask' | 'allowForSession'
@@ -535,7 +536,7 @@ async function callRpc<T>(method: string, params?: unknown, options: RpcCallOpti
 }
 
 function normalizeReasoningEffort(value: unknown): ReasoningEffort | '' {
-  const allowed: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+  const allowed: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
   return typeof value === 'string' && allowed.includes(value as ReasoningEffort)
     ? (value as ReasoningEffort)
     : ''
@@ -1024,8 +1025,13 @@ export async function resumeThread(threadId: string, options: RpcCallOptions = {
   return payload !== null && payload !== undefined
 }
 
-export async function archiveThread(threadId: string): Promise<void> {
-  await callRpc('thread/archive', { threadId })
+export async function archiveThread(threadId: string): Promise<boolean> {
+  const payload = await callRpc<unknown>('thread/archive', { threadId })
+  return payload !== null && payload !== undefined
+}
+
+export async function unarchiveThread(threadId: string): Promise<void> {
+  await callRpc('thread/unarchive', { threadId })
 }
 
 export async function renameThread(threadId: string, threadName: string): Promise<void> {

@@ -175,14 +175,37 @@ const nowMs = ref(Date.now())
 let recentPressTimer: ReturnType<typeof setTimeout> | null = null
 let freshnessTimer: ReturnType<typeof setInterval> | null = null
 const NO_PROGRESS_THRESHOLD_MS = 10 * 60_000
-onBeforeUnmount(() => {
-  cancelRecentPress()
-  if (freshnessTimer) clearInterval(freshnessTimer)
-})
-onMounted(() => {
+
+function stopFreshnessTimer(): void {
+  if (freshnessTimer === null) return
+  clearInterval(freshnessTimer)
+  freshnessTimer = null
+}
+
+function startFreshnessTimer(): void {
+  if (freshnessTimer !== null || (typeof document !== 'undefined' && document.hidden)) return
+  nowMs.value = Date.now()
   freshnessTimer = setInterval(() => {
     nowMs.value = Date.now()
   }, 30_000)
+}
+
+function onFreshnessVisibilityChange(): void {
+  if (document.hidden) {
+    stopFreshnessTimer()
+    return
+  }
+  startFreshnessTimer()
+}
+
+onBeforeUnmount(() => {
+  cancelRecentPress()
+  stopFreshnessTimer()
+  document.removeEventListener('visibilitychange', onFreshnessVisibilityChange)
+})
+onMounted(() => {
+  startFreshnessTimer()
+  document.addEventListener('visibilitychange', onFreshnessVisibilityChange)
 })
 const visibleItems = computed(() => props.items.slice(0, 3))
 const primaryItem = computed(() => visibleItems.value[0] ?? null)

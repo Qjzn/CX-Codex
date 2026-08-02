@@ -205,8 +205,14 @@ import {
 } from '../src/server/fileUpload.js'
 import { handleFileUploadRoute } from '../src/server/fileUploadRoute.js'
 import {
+  COMPOSER_FILE_SEARCH_CACHE_MAX_ROOTS,
+  COMPOSER_FILE_SEARCH_CACHE_TTL_MS,
+  COMPOSER_FILE_SEARCH_MAX_OUTPUT_BYTES,
+  COMPOSER_FILE_SEARCH_TIMEOUT_MS,
   ComposerFileSearchError,
   assertComposerFileSearchCwd,
+  clearComposerFileSearchCache,
+  getComposerFileSearchFiles,
   normalizeComposerFileSearchCwd,
   normalizeComposerFileSearchLimit,
   scoreFileCandidate,
@@ -255,6 +261,7 @@ import {
   getWebBridgeSettingsPath,
   getWebFavoritesPath,
   getWebPinnedThreadIdsPath,
+  getWebThreadSearchIndexCachePath,
   getWebUiStatePath,
 } from '../src/server/codexPaths.js'
 import { readCodexAuth } from '../src/server/codexAuth.js'
@@ -286,8 +293,10 @@ import {
   isExactPhraseMatch,
   loadAllThreadsForSearch,
   normalizeThreadSearchRow,
+  readThreadSearchIndexCache,
   searchThreadIndex,
   ThreadSearchIndexStore,
+  writeThreadSearchIndexCache,
   type ThreadListParams,
 } from '../src/server/threadSearchIndex.js'
 import { handleThreadRoutes } from '../src/server/threadRoutes.js'
@@ -363,6 +372,7 @@ import {
   handleNotificationSseRoute,
 } from '../src/server/notificationSseRoute.js'
 import {
+  canReuseActiveQuickTunnel,
   isTransientQuickTunnelVerificationError,
   startQuickTunnelWithTransientRetry,
   type QuickTunnelSnapshot,
@@ -436,7 +446,10 @@ import {
   classifyCodexSessionFileChange,
   createCodexSessionFileChangedNotification,
 } from '../src/server/codexSessionFileChangeObserver.js'
-import { CX_SESSION_FILES_CHANGED_METHOD } from '../src/sessionFileChange.js'
+import {
+  CX_SESSION_FILES_CHANGED_METHOD,
+  shouldInvalidateThreadCollectionForCxSessionFileChange,
+} from '../src/sessionFileChange.js'
 import { createCodexBridgeRuntimeOperations } from '../src/server/codexBridgeRuntimeOperations.js'
 import { createCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteHandlers.js'
 import { runCodexBridgeRouteHandlers } from '../src/server/codexBridgeRouteDispatch.js'
@@ -1632,6 +1645,7 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('thread/realtime/closed'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/status/changed'), true)
   assert.equal(isKnownAppServerNotificationMethod('remoteControl/status/changed'), true)
+  assert.equal(isKnownAppServerNotificationMethod(CX_SESSION_FILES_CHANGED_METHOD), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/goal/updated'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/goal/cleared'), true)
   assert.equal(isKnownAppServerNotificationMethod('thread/closed'), true)
@@ -2215,6 +2229,12 @@ function smokeAppServerNotificationDiagnostics(): void {
     method: 'thread/realtime/transcript/delta',
     atIso: '2026-07-03T00:00:02.000Z',
     threadId: 'thread-b',
+  })
+  diagnostics.observe({
+    method: CX_SESSION_FILES_CHANGED_METHOD,
+    atIso: '2026-07-03T00:00:02.250Z',
+    threadId: 'thread-session-file',
+    params: { source: 'session-log', threadId: 'thread-session-file' },
   })
   diagnostics.observe({
     method: 'thread/status/changed',
@@ -3858,7 +3878,7 @@ async function smokeAppServerRpcCache(): Promise<void> {
 
   let now = 1_000
   Date.now = () => now
-  const cache = new AppServerRpcCache()
+  const cache = new AppServerRpcCache({ threadListCachePath: '' })
   const key = getShareableRpcKey('thread/list', {}) ?? ''
 
   cache.writeThreadList(key, { rows: ['fresh'] })
@@ -3876,6 +3896,7 @@ async function smokeAppServerRpcCache(): Promise<void> {
     const persistentCachePath = join(persistentCacheDir, 'thread-list-cache.json')
     const persistentCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
     persistentCache.writeThreadList(key, { rows: ['persisted'] })
+    await persistentCache.waitForPendingThreadListCacheWrites()
 
     const reloadedPersistentCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
     assert.deepEqual(reloadedPersistentCache.readThreadList(key, true), {
@@ -3883,15 +3904,27 @@ async function smokeAppServerRpcCache(): Promise<void> {
       stale: false,
     })
     reloadedPersistentCache.invalidateThreadList()
+    await reloadedPersistentCache.waitForPendingThreadListCacheWrites()
     const invalidatedPersistentCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
     assert.deepEqual(invalidatedPersistentCache.readThreadList(key, true), {
       value: { rows: ['persisted'] },
       stale: true,
     })
     invalidatedPersistentCache.clearThreadList()
+    await invalidatedPersistentCache.waitForPendingThreadListCacheWrites()
 
     const clearedPersistentCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
     assert.equal(clearedPersistentCache.readThreadList(key, true), null)
+
+    const coalescedPersistentCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
+    coalescedPersistentCache.writeThreadList(key, { rows: ['superseded'] })
+    coalescedPersistentCache.writeThreadList(key, { rows: ['latest'] })
+    await coalescedPersistentCache.waitForPendingThreadListCacheWrites()
+    const reloadedCoalescedCache = new AppServerRpcCache({ threadListCachePath: persistentCachePath })
+    assert.deepEqual(reloadedCoalescedCache.readThreadList(key, true), {
+      value: { rows: ['latest'] },
+      stale: false,
+    })
   } finally {
     await rm(persistentCacheDir, { recursive: true, force: true })
   }
@@ -5036,6 +5069,9 @@ function smokeCodexBridgeNotificationRuntime(): void {
 
 async function smokeCodexSessionFileChangeObserver(): Promise<void> {
   const threadId = '019f7e69-25a4-7aa2-8166-b8257873b8ab'
+  assert.equal(shouldInvalidateThreadCollectionForCxSessionFileChange({ source: 'session-log' }), false)
+  assert.equal(shouldInvalidateThreadCollectionForCxSessionFileChange({ source: 'session-index' }), true)
+  assert.equal(shouldInvalidateThreadCollectionForCxSessionFileChange({ source: 'unknown' }), true)
   assert.deepEqual(classifyCodexSessionFileChange('session_index.jsonl'), {
     source: 'session-index',
     threadId: '',
@@ -5483,6 +5519,74 @@ async function smokeComposerFileSearch(): Promise<void> {
     { path: 'a.txt' },
     { path: 'b.txt' },
   ])
+  assert.equal(COMPOSER_FILE_SEARCH_CACHE_TTL_MS, 2000)
+  assert.equal(COMPOSER_FILE_SEARCH_CACHE_MAX_ROOTS, 4)
+  assert.equal(COMPOSER_FILE_SEARCH_TIMEOUT_MS, 10_000)
+  assert.equal(COMPOSER_FILE_SEARCH_MAX_OUTPUT_BYTES, 32 * 1024 * 1024)
+
+  clearComposerFileSearchCache()
+  const originalNow = Date.now
+  let nowMs = 10_000
+  Date.now = () => nowMs
+  try {
+    let fileListLoads = 0
+    let resolveFileList!: (files: string[]) => void
+    const fileListGate = new Promise<string[]>((resolveFiles) => {
+      resolveFileList = resolveFiles
+    })
+    const loadFiles = async (): Promise<string[]> => {
+      fileListLoads += 1
+      return await fileListGate
+    }
+    const firstFileList = getComposerFileSearchFiles('C:\\cache-test', loadFiles)
+    const joinedFileList = getComposerFileSearchFiles('C:\\cache-test', loadFiles)
+    assert.equal(fileListLoads, 1)
+    resolveFileList(['src/App.vue'])
+    assert.deepEqual(await firstFileList, ['src/App.vue'])
+    assert.deepEqual(await joinedFileList, ['src/App.vue'])
+    assert.deepEqual(await getComposerFileSearchFiles('C:\\cache-test', loadFiles), ['src/App.vue'])
+    assert.equal(fileListLoads, 1)
+
+    nowMs += COMPOSER_FILE_SEARCH_CACHE_TTL_MS + 1
+    const refreshedFiles = await getComposerFileSearchFiles('C:\\cache-test', async () => {
+      fileListLoads += 1
+      return ['README.md']
+    })
+    assert.deepEqual(refreshedFiles, ['README.md'])
+    assert.equal(fileListLoads, 2)
+
+    clearComposerFileSearchCache()
+    let failedLoads = 0
+    await assert.rejects(
+      getComposerFileSearchFiles('C:\\failed-cache-test', async () => {
+        failedLoads += 1
+        throw new Error('listing failed')
+      }),
+      /listing failed/,
+    )
+    assert.deepEqual(await getComposerFileSearchFiles('C:\\failed-cache-test', async () => {
+      failedLoads += 1
+      return ['recovered.txt']
+    }), ['recovered.txt'])
+    assert.equal(failedLoads, 2)
+
+    clearComposerFileSearchCache()
+    let oldestRootLoads = 0
+    for (let index = 0; index <= COMPOSER_FILE_SEARCH_CACHE_MAX_ROOTS; index += 1) {
+      await getComposerFileSearchFiles(`C:\\cache-root-${index}`, async () => {
+        if (index === 0) oldestRootLoads += 1
+        return [`root-${index}.txt`]
+      })
+    }
+    assert.deepEqual(await getComposerFileSearchFiles('C:\\cache-root-0', async () => {
+      oldestRootLoads += 1
+      return ['root-0-refreshed.txt']
+    }), ['root-0-refreshed.txt'])
+    assert.equal(oldestRootLoads, 2)
+  } finally {
+    Date.now = originalNow
+    clearComposerFileSearchCache()
+  }
 
   const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-composer-file-search-'))
   try {
@@ -5953,6 +6057,7 @@ function smokeCodexPaths(): void {
     assert.equal(getWebUiStatePath(), join('C:\\cx-codex-home', 'web-ui-state.json'))
     assert.equal(getWebFavoritesPath(), join('C:\\cx-codex-home', 'web-favorites.json'))
     assert.equal(getWebPinnedThreadIdsPath(), join('C:\\cx-codex-home', 'web-pinned-thread-ids.json'))
+    assert.equal(getWebThreadSearchIndexCachePath(), join('C:\\cx-codex-home', 'web-thread-search-index-cache.json'))
     assert.equal(getSkillsInstallDir(), join('C:\\cx-codex-home', 'skills'))
     assert.equal(getSkillsSyncStatePath(), join('C:\\cx-codex-home', 'skills-sync.json'))
     assert.equal(getCodexWorktreesDir(), join('C:\\cx-codex-home', 'worktrees'))
@@ -6423,7 +6528,11 @@ async function smokeThreadSearchIndex(): Promise<void> {
   assert.deepEqual(await store.search('alpha', 10), { threadIds: ['thread-a'], indexedThreadCount: 1 })
   assert.equal(buildCount, 1)
   store.clear()
-  assert.deepEqual(await store.search('alpha 1', 10), { threadIds: ['thread-a'], indexedThreadCount: 1 })
+  assert.deepEqual(await store.search('alpha 1', 10), {
+    threadIds: ['thread-a'],
+    indexedThreadCount: 1,
+    partial: true,
+  })
   assert.equal(buildCount, 2)
   await Promise.resolve()
   assert.deepEqual(await store.search('alpha 2', 10), { threadIds: ['thread-a'], indexedThreadCount: 1 })
@@ -6452,45 +6561,91 @@ async function smokeThreadSearchIndex(): Promise<void> {
   assert.deepEqual(await secondConcurrentSearch, { threadIds: ['thread-concurrent'], indexedThreadCount: 1 })
   assert.equal(concurrentBuildCount, 1)
 
-  const clearDuringBuildResolvers: Array<() => void> = []
-  let clearDuringBuildCount = 0
-  const clearDuringBuildStore = new ThreadSearchIndexStore(async () => {
-    clearDuringBuildCount += 1
-    const buildNumber = clearDuringBuildCount
-    await new Promise<void>((resolve) => {
-      clearDuringBuildResolvers[buildNumber] = resolve
-    })
-    return {
-      docsById: new Map([
-        [`thread-build-${String(buildNumber)}`, {
-          id: `thread-build-${String(buildNumber)}`,
-          title: `Needle build ${String(buildNumber)}`,
-          preview: '',
-          messageText: '',
-          searchableText: '',
-        }],
-      ]),
-    }
-  })
-  const staleSearch = clearDuringBuildStore.search('needle', 10)
+  const invalidatedBuildResolvers: Array<() => void> = []
+  const persistedInvalidatedBuildIds: string[] = []
+  let invalidatedBuildCount = 0
+  const clearDuringBuildStore = new ThreadSearchIndexStore(
+    async () => {
+      invalidatedBuildCount += 1
+      const buildNumber = invalidatedBuildCount
+      await new Promise<void>((resolve) => {
+        invalidatedBuildResolvers[buildNumber] = resolve
+      })
+      return {
+        docsById: new Map([
+          [`thread-build-${String(buildNumber)}`, {
+            id: `thread-build-${String(buildNumber)}`,
+            title: `Needle build ${String(buildNumber)}`,
+            preview: '',
+            messageText: '',
+            searchableText: '',
+          }],
+        ]),
+      }
+    },
+    {
+      persistIndex: (index) => {
+        persistedInvalidatedBuildIds.push(Array.from(index.docsById.keys())[0] ?? '')
+      },
+    },
+  )
+  const searchBeforeInvalidation = clearDuringBuildStore.search('needle', 10)
   await Promise.resolve()
-  assert.equal(clearDuringBuildCount, 1)
+  assert.equal(invalidatedBuildCount, 1)
   clearDuringBuildStore.clear()
-  const freshSearch = clearDuringBuildStore.search('needle', 10)
+  const searchAfterInvalidation = clearDuringBuildStore.search('needle', 10)
   await Promise.resolve()
-  assert.equal(clearDuringBuildCount, 2)
-  clearDuringBuildResolvers[1]?.()
-  assert.deepEqual(await staleSearch, { threadIds: ['thread-build-1'], indexedThreadCount: 1 })
-  clearDuringBuildResolvers[2]?.()
-  assert.deepEqual(await freshSearch, { threadIds: ['thread-build-2'], indexedThreadCount: 1 })
-  assert.deepEqual(await clearDuringBuildStore.search('needle', 10), { threadIds: ['thread-build-2'], indexedThreadCount: 1 })
-  assert.equal(clearDuringBuildCount, 2)
+  assert.equal(invalidatedBuildCount, 1)
+  invalidatedBuildResolvers[1]?.()
+  assert.deepEqual(await searchBeforeInvalidation, {
+    threadIds: ['thread-build-1'],
+    indexedThreadCount: 1,
+    partial: true,
+  })
+  assert.deepEqual(await searchAfterInvalidation, {
+    threadIds: ['thread-build-1'],
+    indexedThreadCount: 1,
+    partial: true,
+  })
+  assert.equal(invalidatedBuildCount, 2)
+  assert.deepEqual(persistedInvalidatedBuildIds, ['thread-build-1'])
+
+  clearDuringBuildStore.clear()
+  assert.deepEqual(await clearDuringBuildStore.search('needle', 10), {
+    threadIds: ['thread-build-1'],
+    indexedThreadCount: 1,
+    partial: true,
+  })
+  assert.equal(invalidatedBuildCount, 2)
+
+  invalidatedBuildResolvers[2]?.()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual(persistedInvalidatedBuildIds, ['thread-build-1', 'thread-build-2'])
+  assert.deepEqual(await clearDuringBuildStore.search('needle', 10), {
+    threadIds: ['thread-build-1'],
+    indexedThreadCount: 1,
+    partial: true,
+  })
+  assert.equal(invalidatedBuildCount, 3)
+  invalidatedBuildResolvers[3]?.()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual(persistedInvalidatedBuildIds, ['thread-build-1', 'thread-build-2', 'thread-build-3'])
+  assert.deepEqual(await clearDuringBuildStore.search('needle build 3', 10), {
+    threadIds: ['thread-build-3'],
+    indexedThreadCount: 1,
+  })
+  assert.equal(invalidatedBuildCount, 3)
 
   const factoryListParams: ThreadListParams[] = []
   const factorySessionIndexPaths: string[] = []
+  let releaseFactoryThreadList!: () => void
+  const factoryThreadListGate = new Promise<void>((resolve) => {
+    releaseFactoryThreadList = resolve
+  })
   const factoryStore = createThreadSearchIndexStore({
     listThreads: async (params) => {
       factoryListParams.push(params)
+      await factoryThreadListGate
       if (!params.archived && params.cursor === null) {
         return { data: [{ id: 'factory-thread', name: 'Factory title' }] }
       }
@@ -6508,19 +6663,79 @@ async function smokeThreadSearchIndex(): Promise<void> {
       }
     },
   })
+  const initialFactorySearch = factoryStore.search('session', 10)
+  assert.deepEqual(await Promise.race([
+    initialFactorySearch,
+    new Promise((resolve) => setImmediate(() => resolve('blocked-on-thread-list'))),
+  ]), {
+    threadIds: ['session-thread'],
+    indexedThreadCount: 1,
+    partial: true,
+  })
+  releaseFactoryThreadList()
+  await waitForCondition(() => factoryListParams.length === 2)
+  await new Promise<void>((resolve) => setImmediate(resolve))
   assert.deepEqual(await factoryStore.search('factory', 10), {
     threadIds: ['factory-thread'],
     indexedThreadCount: 2,
   })
-  assert.deepEqual(await factoryStore.search('session', 10), {
-    threadIds: ['session-thread'],
-    indexedThreadCount: 2,
-  })
-  assert.deepEqual(factorySessionIndexPaths, ['session-index.jsonl'])
+  assert.deepEqual(factorySessionIndexPaths, ['session-index.jsonl', 'session-index.jsonl'])
   assert.deepEqual(factoryListParams, [
     { archived: false, limit: 100, sortKey: 'updated_at', cursor: null },
     { archived: true, limit: 100, sortKey: 'updated_at', cursor: null },
   ])
+
+  const searchCacheDir = await mkdtemp(join(tmpdir(), 'cx-codex-thread-search-cache-'))
+  try {
+    const searchCachePath = join(searchCacheDir, 'thread-search-index.json')
+    assert.equal(readThreadSearchIndexCache(searchCachePath), null)
+    await writeThreadSearchIndexCache(searchCachePath, {
+      docsById: new Map([
+        ['cached-thread', {
+          id: 'cached-thread',
+          title: 'Cached needle',
+          preview: 'not persisted',
+          messageText: 'not persisted',
+          searchableText: 'Cached needle',
+        }],
+      ]),
+    })
+    assert.deepEqual(searchThreadIndex(readThreadSearchIndexCache(searchCachePath)!, 'cached', 10), {
+      threadIds: ['cached-thread'],
+      indexedThreadCount: 1,
+    })
+
+    const cachedFactoryListParams: ThreadListParams[] = []
+    const cachedFactoryStore = createThreadSearchIndexStore({
+      cachePath: searchCachePath,
+      listThreads: async (params) => {
+        cachedFactoryListParams.push(params)
+        return params.archived
+          ? { data: [] }
+          : { data: [{ id: 'hydrated-thread', name: 'Hydrated needle' }] }
+      },
+      getSessionIndexPath: () => 'cached-factory-session-index.jsonl',
+      readThreadTitlesFromSessionIndex: async () => ({ titles: {}, order: [] }),
+    })
+    assert.deepEqual(await cachedFactoryStore.search('cached', 10), {
+      threadIds: ['cached-thread'],
+      indexedThreadCount: 1,
+      partial: true,
+    })
+    await waitForCondition(() => cachedFactoryListParams.length === 2)
+    assert.deepEqual(await cachedFactoryStore.search('hydrated', 10), {
+      threadIds: ['hydrated-thread'],
+      indexedThreadCount: 1,
+    })
+    await waitForCondition(() => (
+      readThreadSearchIndexCache(searchCachePath)?.docsById.has('hydrated-thread') === true
+    ))
+
+    await writeFile(searchCachePath, '{broken', 'utf8')
+    assert.equal(readThreadSearchIndexCache(searchCachePath), null)
+  } finally {
+    await rm(searchCacheDir, { recursive: true, force: true })
+  }
 }
 
 async function smokeThreadRoutes(): Promise<void> {
@@ -7038,6 +7253,36 @@ async function smokeQuickTunnelTransientRetry(): Promise<void> {
     /HTTP 200/u,
   )
   assert.equal(unsafeAttempts, 1)
+
+  let reuseProbeCount = 0
+  assert.equal(await canReuseActiveQuickTunnel(
+    readySnapshot,
+    () => true,
+    async () => {
+      reuseProbeCount += 1
+      return {
+        verification: { health: true, auth: true, websocketAuth: true },
+        statuses: { health: 200, auth: 401, websocketAuth: 401 },
+      }
+    },
+  ), true)
+  assert.equal(reuseProbeCount, 1)
+
+  assert.equal(await canReuseActiveQuickTunnel(
+    readySnapshot,
+    () => true,
+    async () => ({
+      verification: { health: false, auth: false, websocketAuth: false },
+      statuses: { health: 0, auth: 0, websocketAuth: 0 },
+    }),
+  ), false)
+  assert.equal(await canReuseActiveQuickTunnel(
+    readySnapshot,
+    () => false,
+    async () => {
+      throw new Error('inactive tunnels must not be probed')
+    },
+  ), false)
 }
 
 async function smokeStatusRoutes(): Promise<void> {
@@ -10018,7 +10263,10 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
           type: 'message',
           id: 'agent-1',
           role: 'assistant',
-          content: [{ type: 'output_text', text: 'Recovered answer' }],
+          content: [{
+            type: 'output_text',
+            text: 'Recovered answer\n\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[transport metadata]\n</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>',
+          }],
         },
       }),
       JSON.stringify({

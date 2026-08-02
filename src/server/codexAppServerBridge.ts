@@ -32,6 +32,7 @@ import {
   CodexSessionFileChangeObserver,
   createCodexSessionFileChangedNotification,
 } from './codexSessionFileChangeObserver.js'
+import { shouldInvalidateThreadCollectionForCxSessionFileChange } from '../sessionFileChange.js'
 
 type CodexBridgeMiddleware = ((req: IncomingMessage, res: ServerResponse, next: () => void) => Promise<void>) & {
   dispose: () => void
@@ -131,8 +132,10 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
   })
   const sessionFileChangeObserver = new CodexSessionFileChangeObserver({
     onChange: (change) => {
-      appServer.invalidateThreadListCache()
-      threadSearchIndexStore.clear()
+      if (shouldInvalidateThreadCollectionForCxSessionFileChange(change)) {
+        appServer.invalidateThreadListCache()
+        threadSearchIndexStore.clear()
+      }
       invalidateSupplementalThreadListCache(change.threadId)
       publishBridgeNotification(createCodexSessionFileChangedNotification(change))
     },

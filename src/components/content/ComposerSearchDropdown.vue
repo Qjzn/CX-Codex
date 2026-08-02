@@ -1,12 +1,16 @@
 <template>
   <div ref="rootRef" class="search-dropdown">
     <button
+      ref="triggerRef"
       class="search-dropdown-trigger"
       :class="{ 'is-icon': isIconTrigger, 'has-selection': triggerSelectedCount > 0 }"
       type="button"
       :disabled="disabled"
       :aria-label="triggerLabel"
       :title="triggerLabel"
+      :aria-expanded="isOpen"
+      aria-haspopup="dialog"
+      aria-controls="composer-skill-search-dialog"
       @click="onToggle"
     >
       <slot v-if="isIconTrigger" name="trigger-icon" />
@@ -23,9 +27,20 @@
         class="search-dropdown-mobile-overlay"
         :class="{ 'is-mobile': isMobileViewport, 'is-desktop': !isMobileViewport }"
         :style="overlayStyle"
-        @click.self="closeMenu"
+        @click.self="closeMenu()"
       >
-        <div ref="menuRef" class="search-dropdown-mobile-dialog" :style="mobileDialogStyle">
+        <div
+          id="composer-skill-search-dialog"
+          ref="menuRef"
+          class="search-dropdown-mobile-dialog"
+          :style="mobileDialogStyle"
+          role="dialog"
+          aria-label="选择技能"
+          :aria-modal="isMobileViewport ? 'true' : undefined"
+          tabindex="-1"
+          @keydown.escape.stop.prevent="closeMenu()"
+          @keydown.tab="onMenuKeydown"
+        >
           <div class="search-dropdown-dialog-head">
             <div class="search-dropdown-dialog-handle" aria-hidden="true" />
             <div class="search-dropdown-dialog-title-row">
@@ -34,7 +49,7 @@
                 class="search-dropdown-dialog-close"
                 type="button"
                 aria-label="关闭技能弹窗"
-                @click="closeMenu"
+                @click="closeMenu()"
               >
                 关闭
               </button>
@@ -47,7 +62,6 @@
               class="search-dropdown-search"
               type="text"
               :placeholder="searchPlaceholder"
-              @keydown.escape.prevent="closeMenu"
               @keydown.enter.prevent="selectHighlighted"
               @keydown.arrow-down.prevent="moveHighlight(1)"
               @keydown.arrow-up.prevent="moveHighlight(-1)"
@@ -112,6 +126,7 @@ const emit = defineEmits<{
 
 const rootRef = ref<HTMLElement | null>(null)
 const menuRef = ref<HTMLElement | null>(null)
+const triggerRef = ref<HTMLButtonElement | null>(null)
 const searchRef = ref<HTMLInputElement | null>(null)
 const isOpen = ref(false)
 const searchQuery = ref('')
@@ -184,8 +199,12 @@ function updateViewportMetrics(): void {
   )
 }
 
-function closeMenu(): void {
+function closeMenu(restoreFocus = true): void {
+  const wasOpen = isOpen.value
   isOpen.value = false
+  if (wasOpen && restoreFocus) {
+    void nextTick(() => triggerRef.value?.focus({ preventScroll: true }))
+  }
 }
 
 function onToggle(): void {
@@ -194,11 +213,55 @@ function onToggle(): void {
   if (!isOpen.value) return
   searchQuery.value = ''
   highlightIdx.value = 0
+  void nextTick(() => focusFirstMenuControl())
 }
 
 function onSelect(opt: SearchDropdownOption): void {
   emit('toggle', opt.value, !selected.value.has(opt.value))
   closeMenu()
+}
+
+function getMenuFocusableElements(): HTMLElement[] {
+  const menu = menuRef.value
+  if (!menu) return []
+  return Array.from(menu.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )).filter((element) => element.getClientRects().length > 0)
+}
+
+function focusFirstMenuControl(): void {
+  const target = searchRef.value ?? getMenuFocusableElements()[0] ?? menuRef.value
+  target?.focus({ preventScroll: true })
+}
+
+function onMenuKeydown(event: KeyboardEvent): void {
+  if (!isMobileViewport.value || event.key !== 'Tab' || event.altKey || event.ctrlKey || event.metaKey) return
+  const focusable = getMenuFocusableElements()
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (!first || !last) {
+    event.preventDefault()
+    menuRef.value?.focus({ preventScroll: true })
+    return
+  }
+  const activeElement = document.activeElement
+  if (event.shiftKey && activeElement === first) {
+    event.preventDefault()
+    last.focus({ preventScroll: true })
+    return
+  }
+  if (!event.shiftKey && activeElement === last) {
+    event.preventDefault()
+    first.focus({ preventScroll: true })
+  }
+}
+
+function onDocumentFocusIn(event: FocusEvent): void {
+  if (!isOpen.value || !isMobileViewport.value) return
+  const menu = menuRef.value
+  if (!menu) return
+  if (event.target instanceof Node && menu.contains(event.target)) return
+  focusFirstMenuControl()
 }
 
 function moveHighlight(delta: number): void {
@@ -219,7 +282,7 @@ function onDocumentPointerDown(event: PointerEvent): void {
   if (!(target instanceof Node)) return
   if (root?.contains(target)) return
   if (menu?.contains(target)) return
-  closeMenu()
+  closeMenu(false)
 }
 
 watch(searchQuery, () => {
@@ -229,6 +292,7 @@ watch(searchQuery, () => {
 onMounted(() => {
   updateViewportMetrics()
   window.addEventListener('pointerdown', onDocumentPointerDown)
+  document.addEventListener('focusin', onDocumentFocusIn, true)
   window.addEventListener('resize', updateViewportMetrics)
   window.visualViewport?.addEventListener('resize', updateViewportMetrics)
   window.visualViewport?.addEventListener('scroll', updateViewportMetrics)
@@ -236,22 +300,11 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('pointerdown', onDocumentPointerDown)
+  document.removeEventListener('focusin', onDocumentFocusIn, true)
   window.removeEventListener('resize', updateViewportMetrics)
   window.visualViewport?.removeEventListener('resize', updateViewportMetrics)
   window.visualViewport?.removeEventListener('scroll', updateViewportMetrics)
-  if (typeof document !== 'undefined') {
-    document.body.style.overflow = ''
-  }
 })
-
-watch(
-  () => [isOpen.value, isMobileViewport.value] as const,
-  ([open, mobile]) => {
-    if (typeof document === 'undefined') return
-    document.body.style.overflow = open && mobile ? 'hidden' : ''
-  },
-  { immediate: true },
-)
 
 </script>
 

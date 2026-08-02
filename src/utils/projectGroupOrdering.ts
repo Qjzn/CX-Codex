@@ -40,6 +40,23 @@ function shouldKeepEmptyProjectGroup(group: UiProjectGroup): boolean {
   return Boolean(group.workspaceRoot || group.isPinnedProject)
 }
 
+export function areUiThreadFieldsEqual(first: UiThread, second: UiThread): boolean {
+  return (
+    first.id === second.id &&
+    first.title === second.title &&
+    first.projectName === second.projectName &&
+    first.cwd === second.cwd &&
+    first.sourceKind === second.sourceKind &&
+    first.hasWorktree === second.hasWorktree &&
+    first.createdAtIso === second.createdAtIso &&
+    first.updatedAtIso === second.updatedAtIso &&
+    first.preview === second.preview &&
+    first.unread === second.unread &&
+    first.inProgress === second.inProgress &&
+    first.waitingForInput === second.waitingForInput
+  )
+}
+
 export function dedupeProjectThreadGroups(groups: UiProjectGroup[]): UiProjectGroup[] {
   const winnersByThreadId = new Map<string, ThreadOccurrence>()
 
@@ -150,12 +167,6 @@ function readProjectActivityTimestamp(group: UiProjectGroup): number {
   return latestTimestamp
 }
 
-function readPinnedProjectRank(group: UiProjectGroup): number {
-  return group.isPinnedProject === true && typeof group.pinnedProjectRank === 'number'
-    ? group.pinnedProjectRank
-    : Number.MAX_SAFE_INTEGER
-}
-
 export function orderProjectGroupsByRecentActivity(groups: UiProjectGroup[]): UiProjectGroup[] {
   return groups
     .map((group, inputIndex) => ({
@@ -164,15 +175,6 @@ export function orderProjectGroupsByRecentActivity(groups: UiProjectGroup[]): Ui
       latestTimestamp: readProjectActivityTimestamp(group),
     }))
     .sort((first, second) => {
-      const firstPinned = first.group.isPinnedProject === true
-      const secondPinned = second.group.isPinnedProject === true
-      if (firstPinned !== secondPinned) return firstPinned ? -1 : 1
-
-      if (firstPinned && secondPinned) {
-        const rankDifference = readPinnedProjectRank(first.group) - readPinnedProjectRank(second.group)
-        if (rankDifference !== 0) return rankDifference
-      }
-
       const activityDifference = second.latestTimestamp - first.latestTimestamp
       return activityDifference !== 0 ? activityDifference : first.inputIndex - second.inputIndex
     })

@@ -634,6 +634,7 @@
                       :src="toRenderableImageUrl(imageUrl)"
                       alt="消息图片预览"
                       loading="lazy"
+                      :ref="(element) => onMessageImageElementRef(element, entry.message.id, imageIndex)"
                       @load="onMessageImageLoad(entry.message.id, imageIndex)"
                       @error="onMessageImageError(entry.message.id, imageIndex)"
                     />
@@ -908,18 +909,43 @@
                           </button>
                         </div>
                       </div>
-                      <p v-else-if="isMarkdownImageFailed(entry.message.id, blockIndex)" class="message-text">{{ block.markdown }}</p>
+                      <div
+                        v-else-if="isMarkdownImageFailed(entry.message.id, blockIndex)"
+                        class="message-markdown-image-failed"
+                      >
+                        <span role="status">图片加载失败</span>
+                        <button
+                          type="button"
+                          class="message-markdown-image-retry"
+                          @click="retryMarkdownImage(entry.message.id, blockIndex)"
+                        >
+                          重试
+                        </button>
+                      </div>
                       <button
                         v-else
-                        class="message-image-button"
+                        class="message-image-button message-markdown-image-button"
+                        :class="{ 'is-loading': !isMarkdownImageLoaded(entry.message.id, blockIndex) }"
                         type="button"
+                        :aria-label="markdownImageActionLabel(block.alt, isMarkdownImageLoaded(entry.message.id, blockIndex))"
+                        :aria-busy="isMarkdownImageLoaded(entry.message.id, blockIndex) ? undefined : 'true'"
+                        :disabled="!isMarkdownImageLoaded(entry.message.id, blockIndex)"
                         @click="openImageModal(block.url)"
                       >
+                        <span
+                          v-if="!isMarkdownImageLoaded(entry.message.id, blockIndex)"
+                          class="message-image-loading"
+                          aria-hidden="true"
+                        />
                         <img
+                          :key="markdownImageRenderKey(entry.message.id, blockIndex)"
                           class="message-image-preview message-markdown-image"
+                          :class="{ 'is-loaded': isMarkdownImageLoaded(entry.message.id, blockIndex) }"
                           :src="block.url"
                           :alt="block.alt || '消息内图片'"
                           loading="lazy"
+                          :ref="(element) => onMarkdownImageElementRef(element, entry.message.id, blockIndex)"
+                          @load="onMarkdownImageLoad(entry.message.id, blockIndex)"
                           @error="onMarkdownImageError(entry.message.id, blockIndex)"
                         />
                       </button>
@@ -930,7 +956,7 @@
                       {{ isLongUserMessageCollapsed(entry.message) ? '展开完整 Prompt' : '收起' }}
                     </button>
                     <button type="button" class="message-long-action" @click.stop="onCopyMessage(entry.message)">
-                      复制全文
+                      {{ isMessageCopied(entry.message.id) ? '已复制全文' : '复制全文' }}
                     </button>
                   </div>
                   <div v-if="isHistoryNoticeMessage(entry.message)" class="history-notice-actions">
@@ -991,7 +1017,7 @@
                 <IconTablerArrowBackUp v-else class="message-action-icon" />
                 <span class="message-action-label">{{ isRollbackConfirming(entry.message) ? '确认操作' : entry.message.role === 'user' ? '编辑继续' : '回滚' }}</span>
               </button>
-              <div v-if="canFavoriteMessage(entry.message) || canCopyMessage(entry.message)" class="message-actions-main">
+              <div v-if="canFavoriteMessage(entry.message) || canCopyMessage(entry.message) || canScrollMessageToTop(entry.message)" class="message-actions-main">
                 <button
                   v-if="canFavoriteMessage(entry.message)"
                   class="message-action-button message-action-button--favorite"
@@ -1007,13 +1033,26 @@
                 <button
                   v-if="canCopyMessage(entry.message)"
                   class="message-action-button"
+                  :class="{ 'is-copied': isMessageCopied(entry.message.id) }"
                   type="button"
-                  title="复制消息内容"
-                  aria-label="复制消息内容"
+                  :title="isMessageCopied(entry.message.id) ? '消息内容已复制' : '复制消息内容'"
+                  :aria-label="isMessageCopied(entry.message.id) ? '消息内容已复制' : '复制消息内容'"
                   @click.stop="onCopyMessage(entry.message)"
                 >
-                  <IconTablerCopy class="message-action-icon" />
-                  <span class="message-action-label">复制</span>
+                  <IconTablerCheck v-if="isMessageCopied(entry.message.id)" class="message-action-icon" />
+                  <IconTablerCopy v-else class="message-action-icon" />
+                  <span class="message-action-label">{{ isMessageCopied(entry.message.id) ? '已复制' : '复制' }}</span>
+                </button>
+                <button
+                  v-if="canScrollMessageToTop(entry.message)"
+                  class="message-action-button"
+                  type="button"
+                  title="将这条回复滚动到阅读区顶部"
+                  aria-label="将这条回复滚动到阅读区顶部"
+                  @click.stop="scrollMessageToTop(entry.message.id)"
+                >
+                  <IconTablerArrowUp class="message-action-icon" />
+                  <span class="message-action-label">移到顶部</span>
                 </button>
               </div>
             </div>
@@ -1132,13 +1171,13 @@
       >
         <div class="image-modal-toolbar">
           <div class="image-modal-toolbar-group">
-            <button class="image-modal-tool" type="button" aria-label="缩小图片" @click="zoomOutImageModal">
+            <button class="image-modal-tool" type="button" aria-label="缩小图片" :disabled="!canZoomOutImageModal" @click="zoomOutImageModal">
               -
             </button>
-            <button class="image-modal-tool image-modal-scale" type="button" aria-label="重置图片缩放" @click="resetImageModalView">
+            <button class="image-modal-tool image-modal-scale" type="button" aria-label="重置图片缩放" :disabled="!canZoomOutImageModal" @click="resetImageModalView">
               {{ modalImageScaleLabel }}
             </button>
-            <button class="image-modal-tool" type="button" aria-label="放大图片" @click="zoomInImageModal">
+            <button class="image-modal-tool" type="button" aria-label="放大图片" :disabled="!canZoomInImageModal" @click="zoomInImageModal">
               +
             </button>
           </div>
@@ -1150,8 +1189,12 @@
           ref="imageModalStageRef"
           class="image-modal-stage"
           :class="{ 'image-modal-stage--zoomed': isImageModalZoomed, 'image-modal-stage--dragging': isImageModalDragging }"
-          @wheel.prevent="onImageModalWheel"
+          @wheel="onImageModalWheel"
           @dblclick="onImageModalDoubleClick"
+          @pointerdown="onImageModalPointerDown"
+          @pointermove="onImageModalPointerMove"
+          @pointerup="onImageModalPointerUp"
+          @pointercancel="onImageModalPointerUp"
         >
           <div v-if="isModalImageLoading" class="image-modal-status" role="status">
             <span class="image-modal-spinner" aria-hidden="true" />
@@ -1171,10 +1214,6 @@
             @load="onModalImageLoad"
             @error="onModalImageError"
             @dragstart.prevent
-            @pointerdown="onImageModalPointerDown"
-            @pointermove="onImageModalPointerMove"
-            @pointerup="onImageModalPointerUp"
-            @pointercancel="onImageModalPointerUp"
           />
         </div>
       </div>
@@ -1214,6 +1253,7 @@ import IconTablerX from '../icons/IconTablerX.vue'
 import IconTablerArrowBackUp from '../icons/IconTablerArrowBackUp.vue'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerBookmark from '../icons/IconTablerBookmark.vue'
+import IconTablerCheck from '../icons/IconTablerCheck.vue'
 import IconTablerCopy from '../icons/IconTablerCopy.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerPencil from '../icons/IconTablerPencil.vue'
@@ -1227,6 +1267,7 @@ import {
   CONVERSATION_BOTTOM_THRESHOLD_PX,
   isConversationViewportAtBottom,
 } from '../../composables/conversationViewport'
+import { copyTextToClipboard } from '../../utils/clipboard'
 
 export type ThreadConversationExposed = {
   focusMessage: (messageId: string) => Promise<boolean>
@@ -1417,11 +1458,22 @@ function stopCommandElapsedTimer(): void {
 
 function startCommandElapsedTimer(): void {
   if (typeof window === 'undefined') return
+  if (typeof document !== 'undefined' && document.hidden) return
   commandElapsedNowMs.value = Date.now()
   if (commandElapsedTimer !== null) return
   commandElapsedTimer = window.setInterval(() => {
     commandElapsedNowMs.value = Date.now()
   }, 1000)
+}
+
+function onCommandElapsedVisibilityChange(): void {
+  if (document.hidden) {
+    stopCommandElapsedTimer()
+    return
+  }
+  if (effectiveLiveOverlay.value || Object.keys(observedCommandStartedAtById.value).length > 0) {
+    startCommandElapsedTimer()
+  }
 }
 
 function syncObservedCommandStartTimes(messages: UiMessage[]): void {
@@ -1949,6 +2001,7 @@ const emit = defineEmits<{
   openConnectionSettings: []
   retryFailedMessage: [messageId: string]
   editFailedMessage: [messageId: string]
+  copyStatus: [payload: { message: string; tone: 'success' | 'info' | 'warning' | 'danger' }]
 }>()
 
 const conversationListRef = ref<HTMLElement | null>(null)
@@ -1965,6 +2018,8 @@ const imageModalStageRef = ref<HTMLElement | null>(null)
 const imageModalImageRef = ref<HTMLImageElement | null>(null)
 const loadedMessageImageKeys = ref<Set<string>>(new Set())
 const failedMessageImageKeys = ref<Set<string>>(new Set())
+const loadedMarkdownImageKeys = ref<Set<string>>(new Set())
+const markdownImageRetryAttempts = ref<Map<string, number>>(new Map())
 const modalImageScale = ref(1)
 const modalImageOffsetX = ref(0)
 const modalImageOffsetY = ref(0)
@@ -1987,11 +2042,20 @@ const CODE_BLOCK_PREVIEW_LINE_COUNT = 120
 const IMAGE_MODAL_MIN_SCALE = 1
 const IMAGE_MODAL_MAX_SCALE = 4
 const IMAGE_MODAL_SCALE_STEP = 0.25
+const IMAGE_MODAL_WHEEL_ZOOM_SENSITIVITY = 300
+const IMAGE_MODAL_WHEEL_DELTA_LIMIT = 120
+const IMAGE_MODAL_LINE_DELTA_PX = 16
+type ImageModalPointerPoint = { clientX: number; clientY: number }
+const modalImageTouchPointers = new Map<number, ImageModalPointerPoint>()
 let modalImagePointerId: number | null = null
 let modalImageDragStartX = 0
 let modalImageDragStartY = 0
 let modalImageDragOriginX = 0
 let modalImageDragOriginY = 0
+let modalImagePinchStartDistance = 0
+let modalImagePinchStartScale = IMAGE_MODAL_MIN_SCALE
+let modalImagePinchImageAnchorX = 0
+let modalImagePinchImageAnchorY = 0
 let highlightedMessageTimer: number | null = null
 const pendingRollbackMessageId = ref('')
 let rollbackConfirmTimer: number | null = null
@@ -2002,6 +2066,8 @@ let previousBodyOverflow = ''
 let imageModalPreviousFocus: HTMLElement | null = null
 const copiedCodeBlockKey = ref('')
 let copiedCodeBlockTimer: number | null = null
+const copiedMessageId = ref('')
+let copiedMessageTimer: number | null = null
 let remoteOlderHistoryRequestTimer: number | null = null
 type InlineSegment =
   | { kind: 'text'; value: string }
@@ -2032,6 +2098,11 @@ type ScrollAnchorSnapshot = {
   measureId: string
   viewportOffset: number
 }
+type ForegroundScrollIntent = {
+  threadId: string
+  followBottom: boolean
+  anchorSnapshot: ScrollAnchorSnapshot | null
+}
 let pendingRemoteOlderHistoryAnchor: ScrollAnchorSnapshot | null = null
 
 const VIRTUALIZE_MIN_MESSAGES = 80
@@ -2049,6 +2120,7 @@ let pendingScrollStateContainer: HTMLElement | null = null
 let pendingScrollStateForce = false
 let pendingScrollStateThreadId = ''
 let pendingScrollInteractionContainer: HTMLElement | null = null
+let pendingForegroundScrollIntent: ForegroundScrollIntent | null = null
 let scrollContextGeneration = 0
 let threadSwitchScrollRestorePending = false
 let scrollAnchorRestoreResolve: ((restored: boolean) => void) | null = null
@@ -2214,6 +2286,8 @@ const jumpToLatestTitle = computed(() => (
   hasPendingBelowFoldUpdates.value ? '跳到最新输出' : '回到底部'
 ))
 const isImageModalZoomed = computed(() => modalImageScale.value > IMAGE_MODAL_MIN_SCALE + 0.001)
+const canZoomOutImageModal = computed(() => modalImageScale.value > IMAGE_MODAL_MIN_SCALE + 0.001)
+const canZoomInImageModal = computed(() => modalImageScale.value < IMAGE_MODAL_MAX_SCALE - 0.001)
 const modalImageScaleLabel = computed(() => `${Math.round(modalImageScale.value * 100)}%`)
 const imageModalStyle = computed(() => ({
   transform: `translate3d(${String(modalImageOffsetX.value)}px, ${String(modalImageOffsetY.value)}px, 0) scale(${String(modalImageScale.value)})`,
@@ -3432,17 +3506,10 @@ async function copyFileLinkContextLink(): Promise<void> {
   closeFileLinkContextMenu()
   if (!href || href === '#') return
   try {
-    await navigator.clipboard.writeText(href)
+    await copyTextToClipboard(href)
+    emit('copyStatus', { message: '链接已复制。', tone: 'success' })
   } catch {
-    const textarea = document.createElement('textarea')
-    textarea.value = href
-    textarea.setAttribute('readonly', 'true')
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    document.body.appendChild(textarea)
-    textarea.select()
-    document.execCommand('copy')
-    document.body.removeChild(textarea)
+    emit('copyStatus', { message: '复制失败，请长按链接手动复制。', tone: 'danger' })
   }
 }
 
@@ -3813,24 +3880,13 @@ function codeBlockText(block: Extract<PreparedMessageBlock, { kind: 'code' }>): 
   return block.code
 }
 
-async function copyTextToClipboard(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text)
-  } catch {
-    const textarea = document.createElement('textarea')
-    textarea.value = text
-    textarea.setAttribute('readonly', 'true')
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    document.body.appendChild(textarea)
-    textarea.select()
-    document.execCommand('copy')
-    document.body.removeChild(textarea)
-  }
-}
-
 async function onCopyCodeBlock(messageId: string, blockIndex: number, block: Extract<PreparedMessageBlock, { kind: 'code' }>): Promise<void> {
-  await copyTextToClipboard(codeBlockText(block))
+  try {
+    await copyTextToClipboard(codeBlockText(block))
+  } catch {
+    emit('copyStatus', { message: '代码复制失败，请手动选择复制。', tone: 'danger' })
+    return
+  }
   copiedCodeBlockKey.value = codeBlockKey(messageId, blockIndex)
   if (copiedCodeBlockTimer !== null && typeof window !== 'undefined') {
     window.clearTimeout(copiedCodeBlockTimer)
@@ -4504,8 +4560,12 @@ function canCopyMessage(message: UiMessage): boolean {
   return message.text.trim().length > 0
 }
 
+function canScrollMessageToTop(message: UiMessage): boolean {
+  return message.role === 'assistant' && message.text.trim().length > 0
+}
+
 function canShowMessageActions(message: UiMessage): boolean {
-  return canCopyMessage(message) || canRollbackMessage(message)
+  return canCopyMessage(message) || canRollbackMessage(message) || canScrollMessageToTop(message)
 }
 
 function canShowMessageActionBar(message: UiMessage): boolean {
@@ -4742,7 +4802,26 @@ function goToPendingRequestsFromDetail(): void {
 async function onCopyMessage(message: UiMessage): Promise<void> {
   if (!canCopyMessage(message)) return
   const text = message.text.trim()
-  await copyTextToClipboard(text)
+  try {
+    await copyTextToClipboard(text)
+  } catch {
+    emit('copyStatus', { message: '消息复制失败，请手动选择复制。', tone: 'danger' })
+    return
+  }
+  copiedMessageId.value = message.id
+  if (copiedMessageTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(copiedMessageTimer)
+  }
+  if (typeof window !== 'undefined') {
+    copiedMessageTimer = window.setTimeout(() => {
+      copiedMessageTimer = null
+      if (copiedMessageId.value === message.id) copiedMessageId.value = ''
+    }, 1600)
+  }
+}
+
+function isMessageCopied(messageId: string): boolean {
+  return copiedMessageId.value === messageId
 }
 
 function clearRollbackConfirmation(): void {
@@ -4851,6 +4930,22 @@ async function focusMessage(messageId: string): Promise<boolean> {
 
   highlightMessage(normalizedMessageId)
   return true
+}
+
+function scrollMessageToTop(messageId: string): void {
+  const container = conversationListRef.value
+  const target = observedMessageElementsById.get(messageId)
+  if (!container || !target) return
+
+  const containerRect = container.getBoundingClientRect()
+  const targetRect = target.getBoundingClientRect()
+  const maxScrollTop = Math.max(container.scrollHeight - container.clientHeight, 0)
+  const nextScrollTop = container.scrollTop + targetRect.top - containerRect.top - 16
+  autoFollowBottom.value = false
+  container.scrollTo({
+    top: Math.min(Math.max(nextScrollTop, 0), maxScrollTop),
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+  })
 }
 
 function scrollToBottom(): void {
@@ -5238,10 +5333,15 @@ function bindPendingImageHandlers(): void {
   }
 }
 
-async function scheduleScrollRestore(forceBottom: boolean | null = shouldLockToBottom()): Promise<void> {
+async function scheduleScrollRestore(
+  forceBottom: boolean | null = shouldLockToBottom(),
+  preferredAnchorSnapshot: ScrollAnchorSnapshot | null = null,
+): Promise<void> {
   const requestedThreadId = props.activeThreadId
   const requestedGeneration = scrollContextGeneration
-  const anchorSnapshot = forceBottom === false ? captureVisibleConversationAnchor() : null
+  const anchorSnapshot = forceBottom === false
+    ? preferredAnchorSnapshot ?? captureVisibleConversationAnchor()
+    : null
   await nextTick()
   if (
     requestedGeneration !== scrollContextGeneration
@@ -5281,7 +5381,14 @@ watch(
     syncObservedCommandStartTimes(watchedMessages)
     if (props.isLoading && !hasVisibleConversationContent.value) return
     const previousMessages = previous ?? EMPTY_MESSAGES
-    const shouldFollowBottom = shouldLockToBottom()
+    const foregroundScrollIntent = pendingForegroundScrollIntent?.threadId === props.activeThreadId
+      ? pendingForegroundScrollIntent
+      : null
+    if (foregroundScrollIntent) {
+      pendingForegroundScrollIntent = null
+      autoFollowBottom.value = foregroundScrollIntent.followBottom
+    }
+    const shouldFollowBottom = foregroundScrollIntent?.followBottom ?? shouldLockToBottom()
 
     for (const m of watchedMessages) {
       if (m.messageType !== 'commandExecution' || !m.commandExecution) continue
@@ -5304,7 +5411,7 @@ watch(
     }
 
     if (!threadSwitchScrollRestorePending) {
-      await scheduleScrollRestore(shouldFollowBottom)
+      await scheduleScrollRestore(shouldFollowBottom, foregroundScrollIntent?.anchorSnapshot ?? null)
     }
   },
   { immediate: true },
@@ -5461,6 +5568,7 @@ function cancelScheduledScrollWorkForThreadChange(): void {
     scrollInteractionFrame = 0
   }
   pendingScrollInteractionContainer = null
+  pendingForegroundScrollIntent = null
 }
 
 watch(
@@ -5480,6 +5588,8 @@ watch(
     modalImageUrl.value = ''
     loadedMessageImageKeys.value = new Set()
     failedMessageImageKeys.value = new Set()
+    loadedMarkdownImageKeys.value = new Set()
+    markdownImageRetryAttempts.value = new Map()
     closeFileLinkContextMenu()
     failedMarkdownImageKeys.value = new Set()
     preparedMessageBlocksById.clear()
@@ -5561,6 +5671,10 @@ watch(
   (nextElement, previousElement) => {
     if (previousElement) {
       previousElement.removeEventListener('scroll', onConversationScroll, { passive: true } as AddEventListenerOptions)
+      previousElement.removeEventListener('wheel', clearPendingForegroundScrollIntent)
+      previousElement.removeEventListener('touchstart', clearPendingForegroundScrollIntent)
+      previousElement.removeEventListener('pointerdown', clearPendingForegroundScrollIntent)
+      previousElement.removeEventListener('keydown', onConversationScrollIntentKeydown)
       observedConversationListElement = null
     }
     if (previousElement) {
@@ -5568,12 +5682,56 @@ watch(
     }
     if (!nextElement) return
     nextElement.addEventListener('scroll', onConversationScroll, { passive: true })
+    nextElement.addEventListener('wheel', clearPendingForegroundScrollIntent, { passive: true })
+    nextElement.addEventListener('touchstart', clearPendingForegroundScrollIntent, { passive: true })
+    nextElement.addEventListener('pointerdown', clearPendingForegroundScrollIntent)
+    nextElement.addEventListener('keydown', onConversationScrollIntentKeydown)
     observedConversationListElement = nextElement
     syncConversationViewport(nextElement)
     conversationListResizeObserver?.observe(nextElement)
   },
   { flush: 'post' },
 )
+
+function clearPendingForegroundScrollIntent(): void {
+  pendingForegroundScrollIntent = null
+}
+
+function onConversationScrollIntentKeydown(event: KeyboardEvent): void {
+  if (!['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) return
+  clearPendingForegroundScrollIntent()
+}
+
+function onConversationScrollVisibilityChange(): void {
+  const container = conversationListRef.value
+  const threadId = props.activeThreadId.trim()
+  if (document.hidden) {
+    if (!container || !threadId) {
+      pendingForegroundScrollIntent = null
+      return
+    }
+    syncConversationViewport(container)
+    const followBottom = isAtBottom(container)
+    pendingForegroundScrollIntent = {
+      threadId,
+      followBottom,
+      anchorSnapshot: followBottom ? null : captureVisibleConversationAnchor(),
+    }
+    return
+  }
+
+  const intent = pendingForegroundScrollIntent
+  if (!intent || intent.threadId !== threadId) {
+    pendingForegroundScrollIntent = null
+    return
+  }
+  autoFollowBottom.value = intent.followBottom
+  if (intent.followBottom) {
+    scheduleBottomLock(2)
+  } else {
+    void scheduleScrollAnchorRestore(intent.anchorSnapshot)
+  }
+}
 
 function onConversationScroll(event: Event): void {
   const container = event.currentTarget instanceof HTMLElement
@@ -5587,9 +5745,14 @@ function onConversationScroll(event: Event): void {
 }
 
 function jumpToLatest(): void {
+  const ownerThreadId = props.activeThreadId
   autoFollowBottom.value = true
   enforceBottomState()
   scheduleBottomLock(4)
+  requestAnimationFrame(() => {
+    if (props.activeThreadId !== ownerThreadId) return
+    conversationListRef.value?.focus({ preventScroll: true })
+  })
 }
 
 function clampImageModalScale(scale: number): number {
@@ -5632,15 +5795,32 @@ function syncImageModalOffsets(scale = modalImageScale.value): void {
   modalImageOffsetY.value = y
 }
 
-function applyImageModalScale(nextScale: number): void {
+function applyImageModalScale(
+  nextScale: number,
+  anchor?: ImageModalPointerPoint,
+): void {
   const clampedScale = clampImageModalScale(nextScale)
+  const currentScale = modalImageScale.value
+  let nextOffsetX = modalImageOffsetX.value
+  let nextOffsetY = modalImageOffsetY.value
+  const stage = imageModalStageRef.value
+  if (anchor && stage && currentScale > 0) {
+    const stageRect = stage.getBoundingClientRect()
+    const anchorX = anchor.clientX - stageRect.left - stageRect.width / 2
+    const anchorY = anchor.clientY - stageRect.top - stageRect.height / 2
+    const scaleRatio = clampedScale / currentScale
+    nextOffsetX = anchorX - (anchorX - modalImageOffsetX.value) * scaleRatio
+    nextOffsetY = anchorY - (anchorY - modalImageOffsetY.value) * scaleRatio
+  }
   modalImageScale.value = clampedScale
   if (clampedScale <= IMAGE_MODAL_MIN_SCALE) {
     modalImageOffsetX.value = 0
     modalImageOffsetY.value = 0
     return
   }
-  syncImageModalOffsets(clampedScale)
+  const clampedOffsets = clampImageModalOffsets(nextOffsetX, nextOffsetY, clampedScale)
+  modalImageOffsetX.value = clampedOffsets.x
+  modalImageOffsetY.value = clampedOffsets.y
 }
 
 function resetImageModalView(): void {
@@ -5649,6 +5829,9 @@ function resetImageModalView(): void {
   modalImageOffsetY.value = 0
   isImageModalDragging.value = false
   modalImagePointerId = null
+  modalImageTouchPointers.clear()
+  modalImagePinchStartDistance = 0
+  modalImagePinchStartScale = IMAGE_MODAL_MIN_SCALE
 }
 
 function zoomInImageModal(): void {
@@ -5661,6 +5844,25 @@ function zoomOutImageModal(): void {
 
 function onImageModalWheel(event: WheelEvent): void {
   if (!modalImageUrl.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  if (event.deltaY === 0) return
+  if (event.ctrlKey) {
+    const deltaModeMultiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? IMAGE_MODAL_LINE_DELTA_PX
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? Math.max(imageModalStageRef.value?.clientHeight ?? 0, 1)
+        : 1
+    const normalizedDelta = Math.min(
+      IMAGE_MODAL_WHEEL_DELTA_LIMIT,
+      Math.max(-IMAGE_MODAL_WHEEL_DELTA_LIMIT, event.deltaY * deltaModeMultiplier),
+    )
+    applyImageModalScale(
+      modalImageScale.value * Math.exp(-normalizedDelta / IMAGE_MODAL_WHEEL_ZOOM_SENSITIVITY),
+      { clientX: event.clientX, clientY: event.clientY },
+    )
+    return
+  }
   if (event.deltaY < 0) {
     zoomInImageModal()
     return
@@ -5676,23 +5878,106 @@ function onImageModalDoubleClick(): void {
   applyImageModalScale(2)
 }
 
+function captureImageModalPointer(target: HTMLElement, pointerId: number): void {
+  if (typeof target.setPointerCapture !== 'function') return
+  try {
+    target.setPointerCapture(pointerId)
+  } catch {
+    // Synthetic regression events and older WebViews may not expose an active pointer to capture.
+  }
+}
+
+function readImageModalPinchGesture(): (ImageModalPointerPoint & { distance: number }) | null {
+  const points = Array.from(modalImageTouchPointers.values())
+  const first = points[0]
+  const second = points[1]
+  if (!first || !second) return null
+  const deltaX = second.clientX - first.clientX
+  const deltaY = second.clientY - first.clientY
+  const distance = Math.hypot(deltaX, deltaY)
+  if (distance <= 0) return null
+  return {
+    clientX: (first.clientX + second.clientX) / 2,
+    clientY: (first.clientY + second.clientY) / 2,
+    distance,
+  }
+}
+
+function beginImageModalDrag(pointerId: number, point: ImageModalPointerPoint): void {
+  modalImagePointerId = pointerId
+  modalImageDragStartX = point.clientX
+  modalImageDragStartY = point.clientY
+  modalImageDragOriginX = modalImageOffsetX.value
+  modalImageDragOriginY = modalImageOffsetY.value
+  isImageModalDragging.value = isImageModalZoomed.value
+}
+
+function beginImageModalPinch(): void {
+  const gesture = readImageModalPinchGesture()
+  const stage = imageModalStageRef.value
+  if (!gesture || !stage) return
+  const stageRect = stage.getBoundingClientRect()
+  const anchorX = gesture.clientX - stageRect.left - stageRect.width / 2
+  const anchorY = gesture.clientY - stageRect.top - stageRect.height / 2
+  modalImagePointerId = null
+  modalImagePinchStartDistance = gesture.distance
+  modalImagePinchStartScale = modalImageScale.value
+  modalImagePinchImageAnchorX = (anchorX - modalImageOffsetX.value) / modalImageScale.value
+  modalImagePinchImageAnchorY = (anchorY - modalImageOffsetY.value) / modalImageScale.value
+  isImageModalDragging.value = true
+}
+
 function onImageModalPointerDown(event: PointerEvent): void {
-  if (!isImageModalZoomed.value) return
   const target = event.currentTarget
   if (!(target instanceof HTMLElement)) return
 
-  modalImagePointerId = event.pointerId
-  modalImageDragStartX = event.clientX
-  modalImageDragStartY = event.clientY
-  modalImageDragOriginX = modalImageOffsetX.value
-  modalImageDragOriginY = modalImageOffsetY.value
-  isImageModalDragging.value = true
-  target.setPointerCapture(event.pointerId)
+  const point = { clientX: event.clientX, clientY: event.clientY }
+  if (event.pointerType === 'touch') {
+    modalImageTouchPointers.set(event.pointerId, point)
+    captureImageModalPointer(target, event.pointerId)
+    if (modalImageTouchPointers.size >= 2) {
+      beginImageModalPinch()
+    } else if (isImageModalZoomed.value) {
+      beginImageModalDrag(event.pointerId, point)
+    }
+    event.preventDefault()
+    return
+  }
+
+  if (!isImageModalZoomed.value) return
+  beginImageModalDrag(event.pointerId, point)
+  captureImageModalPointer(target, event.pointerId)
   event.preventDefault()
 }
 
 function onImageModalPointerMove(event: PointerEvent): void {
+  if (event.pointerType === 'touch' && modalImageTouchPointers.has(event.pointerId)) {
+    modalImageTouchPointers.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY })
+    if (modalImageTouchPointers.size >= 2) {
+      event.preventDefault()
+      event.stopPropagation()
+      const gesture = readImageModalPinchGesture()
+      const stage = imageModalStageRef.value
+      if (!gesture || !stage || modalImagePinchStartDistance <= 0) return
+      const nextScale = clampImageModalScale(
+        modalImagePinchStartScale * (gesture.distance / modalImagePinchStartDistance),
+      )
+      const stageRect = stage.getBoundingClientRect()
+      const anchorX = gesture.clientX - stageRect.left - stageRect.width / 2
+      const anchorY = gesture.clientY - stageRect.top - stageRect.height / 2
+      modalImageScale.value = nextScale
+      const offsets = clampImageModalOffsets(
+        anchorX - modalImagePinchImageAnchorX * nextScale,
+        anchorY - modalImagePinchImageAnchorY * nextScale,
+        nextScale,
+      )
+      modalImageOffsetX.value = offsets.x
+      modalImageOffsetY.value = offsets.y
+      return
+    }
+  }
   if (!isImageModalDragging.value || modalImagePointerId !== event.pointerId) return
+  event.preventDefault()
   const deltaX = event.clientX - modalImageDragStartX
   const deltaY = event.clientY - modalImageDragStartY
   const { x, y } = clampImageModalOffsets(
@@ -5704,11 +5989,30 @@ function onImageModalPointerMove(event: PointerEvent): void {
 }
 
 function onImageModalPointerUp(event: PointerEvent): void {
-  if (modalImagePointerId !== event.pointerId) return
   const target = event.currentTarget
   if (target instanceof HTMLElement && target.hasPointerCapture(event.pointerId)) {
     target.releasePointerCapture(event.pointerId)
   }
+
+  if (event.pointerType === 'touch') {
+    modalImageTouchPointers.delete(event.pointerId)
+    if (modalImageTouchPointers.size >= 2) {
+      beginImageModalPinch()
+      return
+    }
+    const remaining = modalImageTouchPointers.entries().next().value as [number, ImageModalPointerPoint] | undefined
+    if (remaining && isImageModalZoomed.value) {
+      beginImageModalDrag(remaining[0], remaining[1])
+      modalImagePinchStartDistance = 0
+      return
+    }
+    isImageModalDragging.value = false
+    modalImagePointerId = null
+    modalImagePinchStartDistance = 0
+    return
+  }
+
+  if (modalImagePointerId !== event.pointerId) return
   isImageModalDragging.value = false
   modalImagePointerId = null
 }
@@ -5717,8 +6021,22 @@ function messageImageKey(messageId: string, imageIndex: number): string {
   return `${messageId}:${imageIndex}`
 }
 
+function onMessageImageElementRef(
+  element: MeasureRefTarget,
+  messageId: string,
+  imageIndex: number,
+): void {
+  if (!(element instanceof HTMLImageElement) || !element.complete || !element.currentSrc) return
+  if (element.naturalWidth > 0) {
+    onMessageImageLoad(messageId, imageIndex)
+    return
+  }
+  onMessageImageError(messageId, imageIndex)
+}
+
 function onMessageImageLoad(messageId: string, imageIndex: number): void {
   const key = messageImageKey(messageId, imageIndex)
+  if (loadedMessageImageKeys.value.has(key)) return
   const nextLoaded = new Set(loadedMessageImageKeys.value)
   nextLoaded.add(key)
   loadedMessageImageKeys.value = nextLoaded
@@ -5726,6 +6044,7 @@ function onMessageImageLoad(messageId: string, imageIndex: number): void {
 
 function onMessageImageError(messageId: string, imageIndex: number): void {
   const key = messageImageKey(messageId, imageIndex)
+  if (failedMessageImageKeys.value.has(key)) return
   const nextFailed = new Set(failedMessageImageKeys.value)
   nextFailed.add(key)
   failedMessageImageKeys.value = nextFailed
@@ -5762,14 +6081,65 @@ function markdownImageKey(messageId: string, blockIndex: number): string {
   return `${messageId}:${String(blockIndex)}`
 }
 
+function markdownImageRenderKey(messageId: string, blockIndex: number): string {
+  const key = markdownImageKey(messageId, blockIndex)
+  return `${key}:${String(markdownImageRetryAttempts.value.get(key) ?? 0)}`
+}
+
+function markdownImageActionLabel(alt: string, isLoaded: boolean): string {
+  const description = alt.trim() || '消息内图片'
+  return isLoaded ? `预览图片：${description}` : `正在加载图片：${description}`
+}
+
+function onMarkdownImageElementRef(
+  element: MeasureRefTarget,
+  messageId: string,
+  blockIndex: number,
+): void {
+  if (!(element instanceof HTMLImageElement) || !element.complete || !element.currentSrc) return
+  if (element.naturalWidth > 0) {
+    onMarkdownImageLoad(messageId, blockIndex)
+    return
+  }
+  onMarkdownImageError(messageId, blockIndex)
+}
+
+function onMarkdownImageLoad(messageId: string, blockIndex: number): void {
+  const key = markdownImageKey(messageId, blockIndex)
+  if (loadedMarkdownImageKeys.value.has(key)) return
+  const nextLoaded = new Set(loadedMarkdownImageKeys.value)
+  nextLoaded.add(key)
+  loadedMarkdownImageKeys.value = nextLoaded
+}
+
 function onMarkdownImageError(messageId: string, blockIndex: number): void {
+  const key = markdownImageKey(messageId, blockIndex)
+  if (loadedMarkdownImageKeys.value.has(key)) {
+    const nextLoaded = new Set(loadedMarkdownImageKeys.value)
+    nextLoaded.delete(key)
+    loadedMarkdownImageKeys.value = nextLoaded
+  }
   const next = new Set(failedMarkdownImageKeys.value)
-  next.add(markdownImageKey(messageId, blockIndex))
+  next.add(key)
   failedMarkdownImageKeys.value = next
+}
+
+function isMarkdownImageLoaded(messageId: string, blockIndex: number): boolean {
+  return loadedMarkdownImageKeys.value.has(markdownImageKey(messageId, blockIndex))
 }
 
 function isMarkdownImageFailed(messageId: string, blockIndex: number): boolean {
   return failedMarkdownImageKeys.value.has(markdownImageKey(messageId, blockIndex))
+}
+
+function retryMarkdownImage(messageId: string, blockIndex: number): void {
+  const key = markdownImageKey(messageId, blockIndex)
+  const nextFailed = new Set(failedMarkdownImageKeys.value)
+  nextFailed.delete(key)
+  failedMarkdownImageKeys.value = nextFailed
+  const nextAttempts = new Map(markdownImageRetryAttempts.value)
+  nextAttempts.set(key, (nextAttempts.get(key) ?? 0) + 1)
+  markdownImageRetryAttempts.value = nextAttempts
 }
 
 function closeImageModal(): void {
@@ -5863,11 +6233,15 @@ defineExpose<{
 
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeyDownForConversationSurface, { capture: true })
+  document.addEventListener('visibilitychange', onCommandElapsedVisibilityChange)
+  document.addEventListener('visibilitychange', onConversationScrollVisibilityChange)
 })
 
 onBeforeUnmount(() => {
   settlePendingScrollStateBeforeThreadChange(props.activeThreadId)
   cancelScheduledScrollWorkForThreadChange()
+  document.removeEventListener('visibilitychange', onCommandElapsedVisibilityChange)
+  document.removeEventListener('visibilitychange', onConversationScrollVisibilityChange)
   for (const requestId of requestResponseResetTimers.keys()) clearRequestResponding(requestId)
   stopCommandElapsedTimer()
   clearHighlightedMessage()
@@ -5876,6 +6250,10 @@ onBeforeUnmount(() => {
   if (copiedCodeBlockTimer !== null && typeof window !== 'undefined') {
     window.clearTimeout(copiedCodeBlockTimer)
     copiedCodeBlockTimer = null
+  }
+  if (copiedMessageTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(copiedMessageTimer)
+    copiedMessageTimer = null
   }
   if (chatFeedbackMetricFrame) {
     cancelAnimationFrame(chatFeedbackMetricFrame)
@@ -5887,6 +6265,10 @@ onBeforeUnmount(() => {
   clearRemoteOlderHistoryRequestInFlight()
   if (observedConversationListElement) {
     observedConversationListElement.removeEventListener('scroll', onConversationScroll, { passive: true } as AddEventListenerOptions)
+    observedConversationListElement.removeEventListener('wheel', clearPendingForegroundScrollIntent)
+    observedConversationListElement.removeEventListener('touchstart', clearPendingForegroundScrollIntent)
+    observedConversationListElement.removeEventListener('pointerdown', clearPendingForegroundScrollIntent)
+    observedConversationListElement.removeEventListener('keydown', onConversationScrollIntentKeydown)
     observedConversationListElement = null
   }
   conversationListResizeObserver?.disconnect()
@@ -6130,6 +6512,10 @@ onBeforeUnmount(() => {
 
 .conversation-jump-to-latest-label {
   @apply hidden sm:inline;
+}
+
+.conversation-jump-to-latest.has-pending-updates .conversation-jump-to-latest-label {
+  @apply inline;
 }
 
 .conversation-jump-to-latest-badge {
@@ -6834,6 +7220,37 @@ onBeforeUnmount(() => {
   color: var(--ui-danger);
 }
 
+.message-markdown-image-button {
+  @apply h-auto w-auto min-h-16 min-w-16;
+  max-width: min(560px, 85vw);
+  max-height: min(460px, 62vh);
+}
+
+.message-markdown-image-button.is-loading {
+  @apply h-16 w-16;
+}
+
+.message-markdown-image-failed {
+  @apply flex min-h-16 w-fit min-w-32 items-center gap-2 border px-3 py-2 text-xs;
+  border-radius: var(--ui-radius-card);
+  border-color: color-mix(in srgb, var(--ui-danger) 24%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
+  color: var(--ui-danger);
+}
+
+.message-markdown-image-retry {
+  @apply border px-2 py-1 font-medium;
+  border-radius: var(--ui-radius-control);
+  border-color: color-mix(in srgb, var(--ui-danger) 32%, var(--ui-border-subtle));
+  background: var(--ui-bg-surface);
+  color: var(--ui-danger);
+}
+
+.message-markdown-image-retry:hover {
+  border-color: var(--ui-danger);
+  background: color-mix(in srgb, var(--ui-danger) 10%, var(--ui-bg-surface));
+}
+
 .message-file-attachments {
   @apply mb-2 grid max-w-full gap-1.5;
   grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
@@ -7339,6 +7756,14 @@ onBeforeUnmount(() => {
   @apply bg-white;
 }
 
+.image-modal-tool:disabled {
+  @apply cursor-not-allowed opacity-50;
+}
+
+.image-modal-tool:disabled:hover {
+  @apply bg-[#f8f2e6];
+}
+
 .image-modal-scale {
   @apply min-w-18 px-4 tabular-nums;
 }
@@ -7349,6 +7774,7 @@ onBeforeUnmount(() => {
 
 .image-modal-stage {
   @apply relative flex min-h-[min(58vh,420px)] flex-1 items-center justify-center overflow-hidden rounded-[24px] bg-[#0d0b08]/55;
+  touch-action: none;
 }
 
 .image-modal-status {
@@ -7362,10 +7788,6 @@ onBeforeUnmount(() => {
 .image-modal-spinner {
   @apply h-5 w-5 rounded-full border-2 border-white/25 border-t-white;
   animation: image-modal-spin 800ms linear infinite;
-}
-
-.image-modal-stage--zoomed {
-  touch-action: none;
 }
 
 .image-modal-stage--dragging {
@@ -7405,6 +7827,14 @@ onBeforeUnmount(() => {
 .conversation-item-actions-active .message-action-button,
 .conversation-item-actionable:focus-within .message-action-button {
   @apply opacity-90;
+  pointer-events: auto;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .conversation-item-actionable:hover .message-action-button {
+    @apply opacity-90;
+    pointer-events: auto;
+  }
 }
 
 .message-actions {
@@ -7428,7 +7858,7 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--ui-bg-surface) 88%, transparent);
   color: var(--ui-text-tertiary);
   box-shadow: 0 6px 14px rgb(0 0 0 / 0.05);
-  pointer-events: auto;
+  pointer-events: none;
   transition:
     background-color var(--motion-duration-fast) var(--motion-ease-standard),
     border-color var(--motion-duration-fast) var(--motion-ease-standard),
@@ -7447,11 +7877,16 @@ onBeforeUnmount(() => {
   color: var(--ui-text-secondary);
 }
 
+.message-action-button.is-copied {
+  color: var(--ui-success);
+}
+
 .message-action-button--favorite.is-favorited {
   @apply opacity-100;
   border-color: color-mix(in srgb, var(--ui-warning) 28%, var(--ui-border-subtle));
   background: color-mix(in srgb, var(--ui-warning) 8%, var(--ui-bg-surface));
   color: var(--ui-warning);
+  pointer-events: auto;
 }
 
 .message-action-button--rollback {

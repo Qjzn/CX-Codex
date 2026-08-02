@@ -1,88 +1,9 @@
 <template>
-  <section class="thread-tree-root">
-    <section v-if="runningThreads.length > 0" class="thread-section">
-      <div class="thread-section-heading">
-        <span class="thread-section-label">正在运行</span>
-        <span class="thread-section-count">{{ runningThreads.length }}</span>
-      </div>
-      <ul class="thread-list">
-        <li v-for="thread in runningThreads" :key="thread.id" class="thread-row-item">
-          <SidebarMenuRow
-            class="thread-row thread-row-priority"
-            :data-thread-id="thread.id"
-            :data-active="thread.id === selectedThreadId"
-            :data-pinned="isPinned(thread.id)"
-            :force-right-hover="isThreadMenuOpen(thread.id)"
-            @mouseleave="onThreadRowLeave(thread.id)"
-            @contextmenu="onThreadRowContextMenu($event, thread.id)"
-          >
-            <template #left>
-              <span class="thread-left-stack">
-                <span class="thread-status-indicator" :data-state="getThreadState(thread)" :title="getThreadStatusLabel(thread)" />
-                <button class="thread-pin-button" type="button" title="置顶" @click="togglePin(thread.id)">
-                  <IconTablerPin class="thread-icon" />
-                </button>
-              </span>
-            </template>
-            <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
-              <span class="thread-row-content">
-                <span class="thread-row-title-wrap">
-                  <span class="thread-row-title">{{ thread.title }}</span>
-                  <span
-                    v-if="hasCollidingRunningTitle(thread)"
-                    class="thread-row-identity"
-                    :title="`不同会话 · ${thread.id}`"
-                  >
-                    会话 {{ formatThreadIdentity(thread.id) }}
-                  </span>
-                  <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
-                </span>
-                <span class="thread-row-meta">
-                  <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
-                  <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
-                </span>
-              </span>
-            </button>
-            <template #right>
-              <span class="thread-row-time">{{ formatRelativeThread(thread) }}</span>
-            </template>
-            <template #right-hover>
-              <div :ref="(el) => setThreadMenuWrapRef(thread.id, el)" class="thread-menu-wrap">
-                <button
-                  class="thread-menu-trigger"
-                  type="button"
-                  title="thread_menu"
-                  @click.stop="toggleThreadMenu(thread.id)"
-                >
-                  <IconTablerDots class="thread-icon" />
-                </button>
-                <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @pointerdown.stop @click.stop>
-                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onBrowseThreadFiles(thread.id)">
-                    浏览文件
-                  </button>
-                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onExportThread(thread.id)">
-                    导出会话
-                  </button>
-                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onToggleThreadPin(thread.id)">
-                    {{ isPinned(thread.id) ? '取消置顶' : '置顶会话' }}
-                  </button>
-                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onForkThread(thread.id)">
-                    创建分支会话
-                  </button>
-                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="openRenameThreadDialog(thread.id, thread.title)">
-                    重命名会话
-                  </button>
-                  <button class="thread-menu-item thread-menu-item-danger" type="button" @pointerdown.stop @click.stop.prevent="openDeleteThreadDialog(thread.id, thread.title)">
-                    删除会话
-                  </button>
-                </div>
-              </div>
-            </template>
-          </SidebarMenuRow>
-        </li>
-      </ul>
-    </section>
-
+  <section
+    ref="threadTreeRootRef"
+    class="thread-tree-root"
+    :aria-busy="isSearchActive && (isFullSearchPending || hasPartialSearchResults) ? 'true' : undefined"
+  >
     <section v-if="pinnedThreads.length > 0" class="thread-section pinned-section">
       <div class="thread-section-heading">
         <span class="thread-section-label">置顶</span>
@@ -95,9 +16,8 @@
             :data-thread-id="thread.id"
             :data-active="thread.id === selectedThreadId"
             :data-pinned="isPinned(thread.id)"
-            :force-right-hover="isThreadMenuOpen(thread.id)"
-            @mouseleave="onThreadRowLeave(thread.id)"
-            @contextmenu="onThreadRowContextMenu($event, thread.id)"
+            :force-right-hover="isThreadMenuOpen('pinned:' + thread.id)"
+            @contextmenu="onThreadRowContextMenu($event, thread.id, 'pinned:' + thread.id)"
           >
             <template #left>
               <span class="thread-left-stack">
@@ -107,20 +27,35 @@
                   :data-state="getThreadState(thread)"
                   :title="getThreadStatusLabel(thread)"
                 />
-                <button class="thread-pin-button" type="button" title="置顶" @click="togglePin(thread.id)">
+                <button
+                  class="thread-pin-button"
+                  type="button"
+                  :aria-label="getThreadPinActionLabel(thread)"
+                  :title="getThreadPinActionLabel(thread)"
+                  @click="togglePin(thread.id)"
+                >
                   <IconTablerPin class="thread-icon" />
                 </button>
               </span>
             </template>
-            <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
+            <button
+              class="thread-main-button"
+              type="button"
+              :aria-label="getThreadOpenAriaLabel(thread)"
+              @click="onSelect(thread.id)"
+            >
               <span class="thread-row-content">
                 <span class="thread-row-title-wrap">
-                  <span class="thread-row-title">{{ thread.title }}</span>
+                  <span class="thread-row-title" :title="thread.title">{{ thread.title }}</span>
                   <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
                 </span>
                 <span class="thread-row-meta">
                   <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
-                  <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
+                  <span
+                    v-if="thread.inProgress"
+                    class="thread-row-source"
+                    :data-state="thread.waitingForInput ? 'waiting' : 'working'"
+                  >{{ getThreadActivityLabel(thread) }}</span>
                 </span>
               </span>
             </button>
@@ -128,35 +63,19 @@
               <span class="thread-row-time">{{ formatRelativeThread(thread) }}</span>
             </template>
             <template #right-hover>
-              <div :ref="(el) => setThreadMenuWrapRef(thread.id, el)" class="thread-menu-wrap">
+              <div class="thread-menu-wrap">
                 <button
                   class="thread-menu-trigger"
                   type="button"
-                  title="thread_menu"
-                  @click.stop="toggleThreadMenu(thread.id)"
+                  :aria-label="getThreadMenuAriaLabel(thread)"
+                  :title="getThreadMenuAriaLabel(thread)"
+                  aria-haspopup="menu"
+                  :aria-expanded="isThreadMenuOpen('pinned:' + thread.id)"
+                  aria-controls="sidebar-thread-actions-menu"
+                  @click.stop="toggleThreadMenu($event, thread.id, 'pinned:' + thread.id)"
                 >
                   <IconTablerDots class="thread-icon" />
                 </button>
-                <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @pointerdown.stop @click.stop>
-                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onBrowseThreadFiles(thread.id)">
-                    浏览文件
-                  </button>
-                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onExportThread(thread.id)">
-                    导出会话
-                  </button>
-                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onToggleThreadPin(thread.id)">
-                    {{ isPinned(thread.id) ? '取消置顶' : '置顶会话' }}
-                  </button>
-                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onForkThread(thread.id)">
-                    创建分支会话
-                  </button>
-                  <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="openRenameThreadDialog(thread.id, thread.title)">
-                    重命名会话
-                  </button>
-                  <button class="thread-menu-item thread-menu-item-danger" type="button" @pointerdown.stop @click.stop.prevent="openDeleteThreadDialog(thread.id, thread.title)">
-                    删除会话
-                  </button>
-                </div>
               </div>
             </template>
           </SidebarMenuRow>
@@ -175,8 +94,8 @@
 
     <SidebarMenuRow as="header" class="thread-tree-header-row">
       <span class="thread-tree-header-stack">
-        <span class="thread-tree-header">{{ threadTreeHeader }}</span>
-        <span class="thread-tree-header-subtitle">{{ threadTreeHeaderSubtitle }}</span>
+        <span class="thread-tree-header">目录</span>
+        <span class="thread-tree-header-subtitle">最近会话优先</span>
       </span>
       <template #right>
         <div ref="organizeMenuWrapRef" class="organize-menu-wrap">
@@ -184,42 +103,86 @@
             class="organize-menu-trigger"
             type="button"
             :aria-expanded="isOrganizeMenuOpen"
-            aria-label="整理会话"
-            title="整理会话"
+            aria-haspopup="menu"
+            aria-controls="sidebar-organize-menu"
+            aria-label="整理目录"
+            title="整理目录"
             @click="toggleOrganizeMenu"
           >
             <IconTablerDots class="thread-icon" />
           </button>
 
-          <div v-if="isOrganizeMenuOpen" class="organize-menu-panel" @pointerdown.stop @click.stop>
-            <p class="organize-menu-title">整理方式</p>
-            <button
-              class="organize-menu-item"
-              :data-active="effectiveThreadViewMode === 'project'"
-              type="button"
-              @pointerdown.stop
-              @click.stop.prevent="setThreadViewMode('project')"
-            >
-              <span>按项目</span>
-              <span v-if="effectiveThreadViewMode === 'project'">✓</span>
-            </button>
-            <button
-              v-if="!useDesktopListParity"
-              class="organize-menu-item"
-              :data-active="effectiveThreadViewMode === 'chronological'"
-              type="button"
-              @pointerdown.stop
-              @click.stop.prevent="setThreadViewMode('chronological')"
-            >
-              <span>按时间</span>
-              <span v-if="effectiveThreadViewMode === 'chronological'">✓</span>
-            </button>
+          <div
+            v-if="isOrganizeMenuOpen"
+            id="sidebar-organize-menu"
+            class="organize-menu-panel"
+            role="menu"
+            aria-label="整理目录"
+            @pointerdown.stop
+            @click.stop
+          >
+            <template v-if="displayedGroups.length > 0">
+              <p class="organize-menu-title">目录显示</p>
+              <button
+                class="organize-menu-item"
+                data-organize-action="collapse-all-projects"
+                type="button"
+                role="menuitem"
+                :disabled="!canCollapseAllProjects"
+                @pointerdown.stop
+                @click.stop.prevent="setAllProjectsCollapsed(true)"
+              >
+                <span>收起全部目录</span>
+              </button>
+              <button
+                class="organize-menu-item"
+                data-organize-action="expand-all-projects"
+                type="button"
+                role="menuitem"
+                :disabled="!canExpandAllProjects"
+                @pointerdown.stop
+                @click.stop.prevent="setAllProjectsCollapsed(false)"
+              >
+                <span>展开全部目录</span>
+              </button>
+            </template>
           </div>
         </div>
       </template>
     </SidebarMenuRow>
 
-    <p v-if="isSearchActive && filteredGroups.length === 0" class="thread-tree-no-results">没有匹配的会话</p>
+    <div
+      v-if="isSearchActive && filteredGroups.length === 0 && isFullSearchPending"
+      class="thread-tree-search-state"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="thread-tree-search-indicator" aria-hidden="true" />
+      <span>正在搜索全部会话…</span>
+    </div>
+
+    <div
+      v-else-if="isSearchActive && filteredGroups.length === 0 && hasFullSearchFailed"
+      class="thread-tree-search-state"
+      role="status"
+      aria-live="polite"
+    >
+      <span>完整搜索暂时不可用</span>
+      <button class="thread-tree-search-retry" type="button" @click="retryFullSearch">重新搜索</button>
+    </div>
+
+    <div
+      v-else-if="isSearchActive && hasPartialSearchResults"
+      class="thread-tree-search-state"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="thread-tree-search-indicator" aria-hidden="true" />
+      <span>{{ filteredGroups.length > 0 ? '已显示本地匹配，更多会话仍在整理' : '已搜索本地记录，更多会话仍在整理' }}</span>
+      <button class="thread-tree-search-retry" type="button" @click="retryFullSearch">再次检查</button>
+    </div>
+
+    <p v-else-if="isSearchActive && filteredGroups.length === 0" class="thread-tree-no-results">没有匹配的会话</p>
 
     <div v-else-if="isLoading && groups.length === 0" class="thread-tree-loading" aria-hidden="true">
       <span v-for="index in 5" :key="`thread-skeleton-${index}`" class="thread-loading-skeleton" />
@@ -229,81 +192,6 @@
       <span class="thread-tree-empty-text">暂无会话。</span>
       <button class="thread-tree-empty-retry" type="button" @click="emit('refresh')">重新加载</button>
     </SidebarMenuRow>
-
-    <ul v-else-if="isChronologicalView" class="thread-list thread-list-global">
-      <li v-for="thread in globalThreads" :key="thread.id" class="thread-row-item">
-        <SidebarMenuRow
-          class="thread-row"
-          :data-thread-id="thread.id"
-          :data-active="thread.id === selectedThreadId"
-          :data-pinned="isPinned(thread.id)"
-          :force-right-hover="isThreadMenuOpen(thread.id)"
-          @mouseleave="onThreadRowLeave(thread.id)"
-          @contextmenu="onThreadRowContextMenu($event, thread.id)"
-        >
-          <template #left>
-            <span class="thread-left-stack">
-              <span
-                v-if="thread.inProgress || thread.unread"
-                class="thread-status-indicator"
-                :data-state="getThreadState(thread)"
-                :title="getThreadStatusLabel(thread)"
-              />
-              <button class="thread-pin-button" type="button" title="置顶" @click="togglePin(thread.id)">
-                <IconTablerPin class="thread-icon" />
-              </button>
-            </span>
-          </template>
-          <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
-            <span class="thread-row-content">
-              <span class="thread-row-title-wrap">
-                <span class="thread-row-title">{{ thread.title }}</span>
-                <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
-              </span>
-              <span class="thread-row-meta">
-                <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
-                <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
-              </span>
-            </span>
-          </button>
-          <template #right>
-            <span class="thread-row-time">{{ formatRelativeThread(thread) }}</span>
-          </template>
-          <template #right-hover>
-            <div :ref="(el) => setThreadMenuWrapRef(thread.id, el)" class="thread-menu-wrap">
-              <button
-                class="thread-menu-trigger"
-                type="button"
-                title="thread_menu"
-                @click.stop="toggleThreadMenu(thread.id)"
-              >
-                <IconTablerDots class="thread-icon" />
-              </button>
-              <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @pointerdown.stop @click.stop>
-                <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onBrowseThreadFiles(thread.id)">
-                  浏览文件
-                </button>
-                <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onExportThread(thread.id)">
-                  导出会话
-                </button>
-                <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onToggleThreadPin(thread.id)">
-                  {{ isPinned(thread.id) ? '取消置顶' : '置顶会话' }}
-                </button>
-                <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onForkThread(thread.id)">
-                  创建分支会话
-                </button>
-                <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="openRenameThreadDialog(thread.id, thread.title)">
-                  重命名会话
-                </button>
-                <button class="thread-menu-item thread-menu-item-danger" type="button" @pointerdown.stop @click.stop.prevent="openDeleteThreadDialog(thread.id, thread.title)">
-                  删除会话
-                </button>
-              </div>
-            </div>
-          </template>
-        </SidebarMenuRow>
-      </li>
-    </ul>
 
     <div v-else ref="groupsContainerRef" class="thread-tree-groups" :style="groupsContainerStyle">
       <article
@@ -320,12 +208,7 @@
           <SidebarMenuRow
             as="div"
             class="project-header-row"
-            role="button"
-            tabindex="0"
             @click="toggleProjectCollapse(group.projectName)"
-            @keydown="onProjectHeaderKeyDown($event, group.projectName)"
-            @keydown.enter.prevent="toggleProjectCollapse(group.projectName)"
-            @keydown.space.prevent="toggleProjectCollapse(group.projectName)"
           >
             <template #left>
               <span class="project-icon-stack">
@@ -339,64 +222,36 @@
                 </span>
               </span>
             </template>
-            <span
+            <button
               class="project-main-button"
-              :data-dragging-handle="isDraggingProject(group.projectName)"
-              @mousedown.left="onProjectHandleMouseDown($event, group.projectName)"
+              type="button"
+              :aria-label="getProjectToggleAriaLabel(group)"
+              :aria-expanded="!isCollapsed(group.projectName)"
             >
               <span class="project-title-wrap">
                 <span class="project-title-line">
-                  <span class="project-title">{{ getProjectDisplayName(group.projectName) }}</span>
-                  <IconTablerPin v-if="group.isPinnedProject === true" class="project-pinned-icon" title="置顶项目" />
+                  <span class="project-title" :title="getProjectDisplayName(group.projectName)">
+                    {{ getProjectDisplayName(group.projectName) }}
+                  </span>
                 </span>
                 <span class="project-summary">{{ getProjectSummary(group) }}</span>
               </span>
-            </span>
+            </button>
             <template #right>
               <div class="project-hover-controls">
-                <div :ref="(el) => setProjectMenuWrapRef(group.projectName, el)" class="project-menu-wrap">
+                <div class="project-menu-wrap">
                   <button
                     class="project-menu-trigger"
                     type="button"
-                    title="project_menu"
-                    @click.stop="toggleProjectMenu(group.projectName)"
+                    :aria-label="getProjectMenuAriaLabel(group.projectName)"
+                    :title="getProjectMenuAriaLabel(group.projectName)"
+                    aria-haspopup="menu"
+                    :aria-expanded="isProjectMenuOpen(group.projectName)"
+                    aria-controls="sidebar-project-actions-menu"
+                    @click.stop="toggleProjectMenu($event, group.projectName)"
                   >
                     <IconTablerDots class="thread-icon" />
                   </button>
-
-                  <div v-if="isProjectMenuOpen(group.projectName)" class="project-menu-panel" @pointerdown.stop @click.stop>
-                    <template v-if="projectMenuMode === 'actions'">
-                      <button
-                        v-if="useDesktopListParity"
-                        class="project-menu-item"
-                        type="button"
-                        @pointerdown.stop
-                        @click.stop.prevent="onStartNewThread(group.projectName)"
-                      >
-                        新建任务
-                      </button>
-                      <button class="project-menu-item" type="button" @pointerdown.stop @click.stop.prevent="openRenameProjectMenu(group.projectName)">
-                        修改名称
-                      </button>
-                      <button
-                        class="project-menu-item project-menu-item-danger"
-                        type="button"
-                        @pointerdown.stop
-                        @click.stop.prevent="onRemoveProject(group.projectName)"
-                      >
-                        移除
-                      </button>
-                    </template>
-                    <template v-else>
-                      <label class="project-menu-label">项目名称</label>
-                      <input
-                        v-model="projectRenameDraft"
-                        class="project-menu-input"
-                        type="text"
-                        @input="onProjectNameInput(group.projectName)"
-                      />
-                    </template>
-                  </div>
                 </div>
 
                 <button
@@ -420,9 +275,8 @@
                 :data-thread-id="thread.id"
                 :data-active="thread.id === selectedThreadId"
                 :data-pinned="isPinned(thread.id)"
-                :force-right-hover="isThreadMenuOpen(thread.id)"
-                @mouseleave="onThreadRowLeave(thread.id)"
-                @contextmenu="onThreadRowContextMenu($event, thread.id)"
+                :force-right-hover="isThreadMenuOpen('project:' + group.projectName + ':' + thread.id)"
+                @contextmenu="onThreadRowContextMenu($event, thread.id, 'project:' + group.projectName + ':' + thread.id)"
               >
                 <template #left>
                   <span class="thread-left-stack">
@@ -432,20 +286,35 @@
                       :data-state="getThreadState(thread)"
                       :title="getThreadStatusLabel(thread)"
                     />
-                    <button class="thread-pin-button" type="button" title="置顶" @click="togglePin(thread.id)">
+                    <button
+                      class="thread-pin-button"
+                      type="button"
+                      :aria-label="getThreadPinActionLabel(thread)"
+                      :title="getThreadPinActionLabel(thread)"
+                      @click="togglePin(thread.id)"
+                    >
                       <IconTablerPin class="thread-icon" />
                     </button>
                   </span>
                 </template>
-                <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
+                <button
+                  class="thread-main-button"
+                  type="button"
+                  :aria-label="getThreadOpenAriaLabel(thread)"
+                  @click="onSelect(thread.id)"
+                >
                   <span class="thread-row-content">
                     <span class="thread-row-title-wrap">
-                      <span class="thread-row-title">{{ thread.title }}</span>
+                      <span class="thread-row-title" :title="thread.title">{{ thread.title }}</span>
                       <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="工作树会话" />
                     </span>
                     <span class="thread-row-meta">
                       <span class="thread-row-preview">{{ getThreadPreview(thread) }}</span>
-                      <span v-if="thread.inProgress" class="thread-row-source thread-row-source--working">执行中</span>
+                      <span
+                        v-if="thread.inProgress"
+                        class="thread-row-source"
+                        :data-state="thread.waitingForInput ? 'waiting' : 'working'"
+                      >{{ getThreadActivityLabel(thread) }}</span>
                     </span>
                   </span>
                 </button>
@@ -453,35 +322,19 @@
                   <span class="thread-row-time">{{ formatRelativeThread(thread) }}</span>
                 </template>
                 <template #right-hover>
-                  <div :ref="(el) => setThreadMenuWrapRef(thread.id, el)" class="thread-menu-wrap">
+                  <div class="thread-menu-wrap">
                     <button
                       class="thread-menu-trigger"
                       type="button"
-                      title="thread_menu"
-                      @click.stop="toggleThreadMenu(thread.id)"
+                      :aria-label="getThreadMenuAriaLabel(thread)"
+                      :title="getThreadMenuAriaLabel(thread)"
+                      aria-haspopup="menu"
+                      :aria-expanded="isThreadMenuOpen('project:' + group.projectName + ':' + thread.id)"
+                      aria-controls="sidebar-thread-actions-menu"
+                      @click.stop="toggleThreadMenu($event, thread.id, 'project:' + group.projectName + ':' + thread.id)"
                     >
                       <IconTablerDots class="thread-icon" />
                     </button>
-                    <div v-if="isThreadMenuOpen(thread.id)" class="thread-menu-panel" @pointerdown.stop @click.stop>
-                      <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onBrowseThreadFiles(thread.id)">
-                        浏览文件
-                      </button>
-                      <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onExportThread(thread.id)">
-                        导出会话
-                      </button>
-                      <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onToggleThreadPin(thread.id)">
-                        {{ isPinned(thread.id) ? '取消置顶' : '置顶会话' }}
-                      </button>
-                      <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="onForkThread(thread.id)">
-                        创建分支会话
-                      </button>
-                      <button class="thread-menu-item" type="button" @pointerdown.stop @click.stop.prevent="openRenameThreadDialog(thread.id, thread.title)">
-                        重命名会话
-                      </button>
-                      <button class="thread-menu-item thread-menu-item-danger" type="button" @pointerdown.stop @click.stop.prevent="openDeleteThreadDialog(thread.id, thread.title)">
-                        删除会话
-                      </button>
-                    </div>
                   </div>
                 </template>
               </SidebarMenuRow>
@@ -505,6 +358,108 @@
           </SidebarMenuRow>
       </article>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="openProjectMenuGroup"
+        id="sidebar-project-actions-menu"
+        ref="projectMenuPanelRef"
+        class="project-menu-panel"
+        role="menu"
+        :aria-label="`${getProjectDisplayName(openProjectMenuGroup.projectName)} 项目操作`"
+        :data-side="projectMenuPlacement"
+        :style="projectMenuStyle"
+        @keydown="onProjectMenuKeyDown"
+        @pointerdown.stop
+        @click.stop
+      >
+        <template v-if="projectMenuMode === 'actions'">
+          <button
+            v-if="useDesktopListParity"
+            class="project-menu-item"
+            type="button"
+            role="menuitem"
+            @pointerdown.stop
+            @click.stop.prevent="onStartNewThread(openProjectMenuGroup.projectName)"
+          >
+            新建任务
+          </button>
+          <button
+            class="project-menu-item"
+            type="button"
+            role="menuitem"
+            @pointerdown.stop
+            @click.stop.prevent="openRenameProjectMenu(openProjectMenuGroup.projectName)"
+          >
+            修改名称
+          </button>
+          <button
+            class="project-menu-item project-menu-item-danger"
+            type="button"
+            role="menuitem"
+            @pointerdown.stop
+            @click.stop.prevent="onRemoveProject(openProjectMenuGroup.projectName)"
+          >
+            移除
+          </button>
+        </template>
+        <template v-else>
+          <label class="project-menu-label" for="sidebar-project-rename-input">项目名称</label>
+          <input
+            id="sidebar-project-rename-input"
+            ref="projectMenuInputRef"
+            v-model="projectRenameDraft"
+            class="project-menu-input"
+            type="text"
+            @input="onProjectNameInput(openProjectMenuGroup.projectName)"
+          />
+        </template>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div
+        v-if="openThreadMenuThread"
+        id="sidebar-thread-actions-menu"
+        ref="threadMenuPanelRef"
+        class="thread-menu-panel"
+        role="menu"
+        aria-label="会话操作"
+        :data-side="threadMenuPlacement"
+        :style="threadMenuStyle"
+        @keydown="onThreadMenuKeyDown"
+        @pointerdown.stop
+        @click.stop
+      >
+        <button class="thread-menu-item" type="button" role="menuitem" @pointerdown.stop @click.stop.prevent="onBrowseThreadFiles(openThreadMenuThread.id)">
+          浏览文件
+        </button>
+        <button class="thread-menu-item" type="button" role="menuitem" @pointerdown.stop @click.stop.prevent="onExportThread(openThreadMenuThread.id)">
+          导出会话
+        </button>
+        <button class="thread-menu-item" type="button" role="menuitem" @pointerdown.stop @click.stop.prevent="onCopyThread(openThreadMenuThread.id)">
+          复制完整会话
+        </button>
+        <button class="thread-menu-item" type="button" role="menuitem" @pointerdown.stop @click.stop.prevent="onCopyThreadLink(openThreadMenuThread.id)">
+          复制会话链接
+        </button>
+        <button class="thread-menu-item" type="button" role="menuitem" @pointerdown.stop @click.stop.prevent="onToggleThreadPin(openThreadMenuThread.id)">
+          {{ isPinned(openThreadMenuThread.id) ? '取消置顶' : '置顶会话' }}
+        </button>
+        <button class="thread-menu-item" type="button" role="menuitem" @pointerdown.stop @click.stop.prevent="onToggleThreadUnread(openThreadMenuThread)">
+          {{ openThreadMenuThread.unread ? '标记为已读' : '标记为未读' }}
+        </button>
+        <button class="thread-menu-item" type="button" role="menuitem" @pointerdown.stop @click.stop.prevent="onForkThread(openThreadMenuThread.id)">
+          创建分支会话
+        </button>
+        <button class="thread-menu-item" type="button" role="menuitem" @pointerdown.stop @click.stop.prevent="openRenameThreadDialog(openThreadMenuThread.id, openThreadMenuThread.title)">
+          重命名会话
+        </button>
+        <button class="thread-menu-item" type="button" role="menuitem" @pointerdown.stop @click.stop.prevent="openDeleteThreadDialog(openThreadMenuThread.id, openThreadMenuThread.title)">
+          归档会话
+        </button>
+      </div>
+    </Teleport>
 
     <Teleport to="body">
       <div v-if="renameThreadDialogVisible" class="rename-thread-overlay" @click.self="onRenameThreadOverlayClick">
@@ -543,17 +498,17 @@
           class="rename-thread-panel"
           role="dialog"
           aria-modal="true"
-          aria-label="删除会话"
+          aria-label="归档会话"
           @pointerdown.stop
           @click.stop
         >
-          <h3 class="rename-thread-title">删除会话？</h3>
+          <h3 class="rename-thread-title">归档会话？</h3>
           <p class="rename-thread-subtitle">
-            这会把会话“{{ deleteThreadTitle }}”移到归档中，之后仍可在归档列表中找到。
+            会话“{{ deleteThreadTitle }}”将移出当前列表；归档完成后可立即撤销。
           </p>
           <div class="rename-thread-actions">
             <button class="rename-thread-button" type="button" @pointerdown.stop @click.stop.prevent="closeDeleteThreadDialog">取消</button>
-            <button class="rename-thread-button rename-thread-button-danger" type="button" @pointerdown.stop @click.stop.prevent="submitDeleteThread">删除</button>
+            <button class="rename-thread-button rename-thread-button-primary" type="button" @pointerdown.stop @click.stop.prevent="submitDeleteThread">归档</button>
           </div>
         </div>
       </div>
@@ -564,9 +519,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
-import { getPinnedThreadIds, updatePinnedThreadIds } from '../../api/codexGateway'
+import { getPinnedThreadIds, searchThreads, updatePinnedThreadIds } from '../../api/codexGateway'
 import type { UiProjectGroup, UiThread } from '../../types/codex'
 import { orderProjectGroupsByRecentActivity } from '../../utils/projectGroupOrdering'
+import { shouldHoldThreadSearchResults } from '../../utils/threadSearchContinuity'
 import IconTablerChevronDown from '../icons/IconTablerChevronDown.vue'
 import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
 import IconTablerDots from '../icons/IconTablerDots.vue'
@@ -583,7 +539,9 @@ const props = defineProps<{
   selectedThreadId: string
   isLoading: boolean
   searchQuery: string
-  searchMatchedThreadIds: string[] | null
+  searchMatchedThreadIds?: string[] | null
+  searchPending?: boolean
+  searchFailed?: boolean
   desktopListParity?: boolean
   pinnedThreadIdsOverride?: string[]
 }>()
@@ -598,7 +556,11 @@ const emit = defineEmits<{
   'remove-project': [projectName: string]
   'reorder-project': [payload: { projectName: string; toIndex: number }]
   'export-thread': [threadId: string]
+  'copy-thread': [threadId: string]
+  'copy-thread-link': [threadId: string]
   'fork-thread': [threadId: string]
+  'set-thread-unread': [payload: { threadId: string; unread: boolean }]
+  'retry-search': []
   refresh: []
 }>()
 
@@ -638,14 +600,22 @@ type HomeWorkspaceProjectsReadyMetric = {
   projectNames: string[]
 }
 
+type ProjectScrollAnchor = {
+  projectName: string
+  viewportOffset: number
+}
+
 const DRAG_START_THRESHOLD_PX = 4
 const PROJECT_GROUP_EXPANDED_GAP_PX = 6
 const PROJECT_THREAD_PREVIEW_LIMIT = 5
 const PINNED_THREAD_PREVIEW_LIMIT = 3
 const PINNED_REFRESH_MIN_INTERVAL_MS = 60_000
+const RELATIVE_TIME_REFRESH_INTERVAL_MS = 30_000
 const expandedProjects = ref<Record<string, boolean>>({})
 const collapsedProjects = ref<Record<string, boolean>>({})
 const isPinnedSectionExpanded = ref(false)
+const relativeTimeNowMs = ref(Date.now())
+let relativeTimeRefreshTimer: number | null = null
 const PINNED_THREAD_STORAGE_KEY = 'codex-web-local.pinned-thread-ids.v1'
 const pinnedThreadIds = ref<string[]>(normalizePinnedThreadIds(props.pinnedThreadIdsOverride ?? loadPinnedThreadIds()))
 const hasPinnedThreadIdsHydrated = ref(false)
@@ -653,7 +623,28 @@ let pinnedThreadIdsSequence = 0
 let pinnedThreadIdsHydrationPromise: Promise<void> | null = null
 let lastPinnedThreadIdsRefreshAttemptAt = 0
 const openProjectMenuId = ref('')
+const projectMenuPanelRef = ref<HTMLElement | null>(null)
+const projectMenuInputRef = ref<HTMLInputElement | null>(null)
+const projectMenuAnchorElement = ref<HTMLElement | null>(null)
+const projectMenuPlacement = ref<'top' | 'bottom'>('bottom')
+const projectMenuStyle = ref<Record<string, string>>({
+  left: '8px',
+  top: '8px',
+  maxHeight: 'calc(100dvh - 16px)',
+  visibility: 'hidden',
+})
 const openThreadMenuId = ref('')
+const openThreadMenuKey = ref('')
+const threadMenuPanelRef = ref<HTMLElement | null>(null)
+const threadMenuAnchorElement = ref<HTMLElement | null>(null)
+const threadMenuContextPoint = ref<{ x: number; y: number } | null>(null)
+const threadMenuPlacement = ref<'top' | 'bottom'>('bottom')
+const threadMenuStyle = ref<Record<string, string>>({
+  left: '8px',
+  top: '8px',
+  maxHeight: 'calc(100dvh - 16px)',
+  visibility: 'hidden',
+})
 const projectMenuMode = ref<'actions' | 'rename'>('actions')
 const projectRenameDraft = ref('')
 const renameThreadDialogVisible = ref(false)
@@ -664,6 +655,7 @@ const renameThreadDialogOpenedAt = ref(0)
 const deleteThreadDialogVisible = ref(false)
 const deleteThreadDialogThreadId = ref('')
 const deleteThreadTitle = ref('')
+const threadTreeRootRef = ref<HTMLElement | null>(null)
 const groupsContainerRef = ref<HTMLElement | null>(null)
 const pendingProjectDrag = ref<PendingProjectDrag | null>(null)
 const activeProjectDrag = ref<ActiveProjectDrag | null>(null)
@@ -673,13 +665,9 @@ const suppressNextProjectToggleId = ref('')
 const measuredHeightByProject = ref<Record<string, number>>({})
 const isProjectLayoutMotionReady = ref(false)
 const projectGroupElementByName = new Map<string, HTMLElement>()
-const projectMenuWrapElementByName = new Map<string, HTMLElement>()
-const threadMenuWrapElementById = new Map<string, HTMLElement>()
 const projectNameByElement = new WeakMap<HTMLElement, string>()
 const organizeMenuWrapRef = ref<HTMLElement | null>(null)
 const isOrganizeMenuOpen = ref(false)
-const THREAD_VIEW_MODE_STORAGE_KEY = 'codex-web-local.thread-view-mode.v1'
-const threadViewMode = ref<'project' | 'chronological'>(loadThreadViewMode())
 const projectGroupResizeObserver =
   typeof window !== 'undefined'
     ? new ResizeObserver((entries) => {
@@ -726,13 +714,6 @@ function loadCollapsedState(): Record<string, boolean> {
   } catch {
     return {}
   }
-}
-
-function loadThreadViewMode(): 'project' | 'chronological' {
-  if (typeof window === 'undefined') return 'project'
-
-  const raw = window.localStorage.getItem(THREAD_VIEW_MODE_STORAGE_KEY)
-  return raw === 'chronological' ? 'chronological' : 'project'
 }
 
 function loadPinnedThreadIds(): string[] {
@@ -824,6 +805,8 @@ collapsedProjects.value = loadCollapsedState()
 onMounted(() => {
   window.addEventListener('focus', onWindowFocusRefreshPinned)
   window.addEventListener('keydown', onWindowKeyDownForSidebarSurface, true)
+  document.addEventListener('visibilitychange', onRelativeTimeVisibilityChange)
+  startRelativeTimeRefreshTimer()
   if (!hasPinnedThreadIdsOverride.value) {
     void hydratePinnedThreadIds()
   }
@@ -836,6 +819,30 @@ function onWindowFocusRefreshPinned(): void {
   void hydratePinnedThreadIds()
 }
 
+function stopRelativeTimeRefreshTimer(): void {
+  if (relativeTimeRefreshTimer === null || typeof window === 'undefined') return
+  window.clearInterval(relativeTimeRefreshTimer)
+  relativeTimeRefreshTimer = null
+}
+
+function refreshRelativeTimeNow(): void {
+  relativeTimeNowMs.value = Date.now()
+}
+
+function startRelativeTimeRefreshTimer(): void {
+  refreshRelativeTimeNow()
+  if (typeof window === 'undefined' || document.hidden || relativeTimeRefreshTimer !== null) return
+  relativeTimeRefreshTimer = window.setInterval(refreshRelativeTimeNow, RELATIVE_TIME_REFRESH_INTERVAL_MS)
+}
+
+function onRelativeTimeVisibilityChange(): void {
+  if (document.hidden) {
+    stopRelativeTimeRefreshTimer()
+    return
+  }
+  startRelativeTimeRefreshTimer()
+}
+
 watch(
   collapsedProjects,
   (value) => {
@@ -845,14 +852,82 @@ watch(
   { deep: true },
 )
 
-watch(threadViewMode, (value) => {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(THREAD_VIEW_MODE_STORAGE_KEY, value)
-})
-
 const normalizedSearchQuery = computed(() => props.searchQuery.trim().toLowerCase())
 
 const isSearchActive = computed(() => normalizedSearchQuery.value.length > 0)
+const internalSearchMatchedThreadIds = ref<string[] | null>(null)
+const internalSearchMatchedQuery = ref('')
+const internalSearchState = ref<'idle' | 'pending' | 'partial' | 'failed'>('idle')
+let fullSearchTimer: ReturnType<typeof setTimeout> | null = null
+const hasExternalSearchState = computed(() => props.searchMatchedThreadIds !== undefined)
+const isFullSearchPending = computed(() => (
+  hasExternalSearchState.value ? props.searchPending === true : internalSearchState.value === 'pending'
+))
+const hasFullSearchFailed = computed(() => (
+  hasExternalSearchState.value ? props.searchFailed === true : internalSearchState.value === 'failed'
+))
+const hasPartialSearchResults = computed(() => (
+  !hasExternalSearchState.value && internalSearchState.value === 'partial'
+))
+const visibleSearchMatchedThreadIds = computed(() => {
+  if (props.searchMatchedThreadIds !== undefined) return props.searchMatchedThreadIds
+  if (!internalSearchMatchedThreadIds.value) return null
+  return shouldHoldThreadSearchResults(internalSearchMatchedQuery.value, props.searchQuery)
+    ? internalSearchMatchedThreadIds.value
+    : null
+})
+
+function clearFullSearchTimer(): void {
+  if (fullSearchTimer === null) return
+  clearTimeout(fullSearchTimer)
+  fullSearchTimer = null
+}
+
+function runFullSearch(query: string): void {
+  internalSearchState.value = 'pending'
+  void searchThreads(query, 1000)
+    .then((result) => {
+      if (props.searchQuery.trim() !== query) return
+      internalSearchMatchedThreadIds.value = result.threadIds
+      internalSearchMatchedQuery.value = query
+      internalSearchState.value = result.partial === true ? 'partial' : 'idle'
+    })
+    .catch(() => {
+      if (props.searchQuery.trim() !== query) return
+      internalSearchMatchedThreadIds.value = null
+      internalSearchMatchedQuery.value = ''
+      internalSearchState.value = 'failed'
+    })
+}
+
+function retryFullSearch(): void {
+  if (hasExternalSearchState.value) {
+    emit('retry-search')
+    return
+  }
+  const query = props.searchQuery.trim()
+  if (query.length < 2 || isFullSearchPending.value) return
+  runFullSearch(query)
+}
+
+watch(
+  () => props.searchQuery,
+  (value) => {
+    if (hasExternalSearchState.value) return
+    clearFullSearchTimer()
+    const query = value.trim()
+    if (query.length < 2) {
+      internalSearchMatchedThreadIds.value = null
+      internalSearchMatchedQuery.value = ''
+      internalSearchState.value = 'idle'
+      return
+    }
+    internalSearchState.value = 'pending'
+    fullSearchTimer = setTimeout(() => runFullSearch(query), 280)
+  },
+  { immediate: true },
+)
+
 const useDesktopListParity = computed(() => props.desktopListParity === true)
 const hasPinnedThreadIdsOverride = computed(() => Array.isArray(props.pinnedThreadIdsOverride))
 const effectivePinnedThreadIds = computed(() => (
@@ -861,8 +936,8 @@ const effectivePinnedThreadIds = computed(() => (
     : pinnedThreadIds.value
 ))
 const matchedThreadIdSet = computed(() => {
-  if (!props.searchMatchedThreadIds) return null
-  return new Set(props.searchMatchedThreadIds)
+  if (!visibleSearchMatchedThreadIds.value) return null
+  return new Set(visibleSearchMatchedThreadIds.value)
 })
 const pinnedThreadIdSet = computed(() => new Set(effectivePinnedThreadIds.value))
 
@@ -886,7 +961,6 @@ const threadCollections = computed(() => {
   const query = normalizedSearchQuery.value
   const matchedIds = matchedThreadIdSet.value
   const pinnedIds = effectivePinnedThreadIds.value
-  const pinnedSet = new Set(pinnedIds)
   const threadById = new Map<string, UiThread>()
   const threadProjectNameById = new Map<string, string>()
   const threadTimestampById = new Map<string, number>()
@@ -908,44 +982,18 @@ const threadCollections = computed(() => {
       .filter((group) => group.threads.length > 0)
     : props.groups
 
-  const runningThreads: UiThread[] = []
-  for (const group of filteredGroups) {
-    for (const thread of group.threads) {
-      if (thread.inProgress && !pinnedSet.has(thread.id)) {
-        runningThreads.push(thread)
-      }
-    }
-  }
-  runningThreads.sort(compareThreadByUpdatedAt)
-
-  const prioritizedThreadIdSet = new Set<string>([
-    ...pinnedIds,
-    ...runningThreads.map((thread) => thread.id),
-  ])
-
   const pinnedThreads = pinnedIds
     .map((threadId) => threadById.get(threadId) ?? null)
     .filter((thread): thread is UiThread => thread !== null)
     .filter((thread) => matchesThreadSearch(thread, query, matchedIds))
-
-  const globalThreads: UiThread[] = []
-  for (const group of filteredGroups) {
-    for (const thread of group.threads) {
-      if (prioritizedThreadIdSet.has(thread.id)) continue
-      globalThreads.push(thread)
-    }
-  }
-  globalThreads.sort(compareThreadByUpdatedAt)
+    .sort(compareThreadByUpdatedAt)
 
   return {
     filteredGroups,
-    globalThreads,
     threadById,
     threadProjectNameById,
     threadTimestampById,
     pinnedThreads,
-    runningThreads,
-    prioritizedThreadIdSet,
   }
 })
 
@@ -956,6 +1004,12 @@ function threadMatchesSearch(thread: UiThread): boolean {
 const filteredGroups = computed<UiProjectGroup[]>(() => threadCollections.value.filteredGroups)
 const displayedGroups = computed<UiProjectGroup[]>(() => (
   orderProjectGroupsByRecentActivity(filteredGroups.value)
+))
+const canCollapseAllProjects = computed(() => (
+  props.groups.some((group) => !isCollapsed(group.projectName))
+))
+const canExpandAllProjects = computed(() => (
+  props.groups.some((group) => isCollapsed(group.projectName))
 ))
 
 function markHomeWorkspaceProjectsReady(): void {
@@ -994,6 +1048,7 @@ const hasMeasuredDisplayedProjectLayout = computed(() => (
   && displayedGroups.value.every((group) => (measuredHeightByProject.value[group.projectName] ?? 0) > 0)
 ))
 let projectLayoutMotionRafId: number | null = null
+let projectScrollAnchorSequence = 0
 
 watch(hasMeasuredDisplayedProjectLayout, async (isMeasured) => {
   isProjectLayoutMotionReady.value = false
@@ -1013,33 +1068,175 @@ watch(hasMeasuredDisplayedProjectLayout, async (isMeasured) => {
     }
   })
 })
-const effectiveThreadViewMode = computed<'project' | 'chronological'>(() => (
-  useDesktopListParity.value ? 'project' : threadViewMode.value
-))
-const isChronologicalView = computed(() => effectiveThreadViewMode.value === 'chronological')
-const threadTreeHeader = computed(() => (isChronologicalView.value ? '最近会话' : '项目'))
-const threadTreeHeaderSubtitle = computed(() => (
-  isChronologicalView.value ? '按最近活动排序' : '按工作区分组浏览'
-))
-const globalThreads = computed<UiThread[]>(() => threadCollections.value.globalThreads)
+
+function findProjectTreeScrollContainer(): HTMLElement | null {
+  let element = threadTreeRootRef.value
+  while (element) {
+    const overflowY = window.getComputedStyle(element).overflowY
+    const canScroll = /^(auto|scroll)$/u.test(overflowY) && element.scrollHeight > element.clientHeight + 1
+    if (canScroll) return element
+    element = element.parentElement
+  }
+  return null
+}
+
+async function revealSelectedThread(): Promise<boolean> {
+  const threadId = props.selectedThreadId.trim()
+  if (!threadId) return false
+
+  const selectedGroup = props.groups.find((group) => (
+    group.threads.some((thread) => thread.id === threadId)
+  ))
+  if (selectedGroup) {
+    if (isCollapsed(selectedGroup.projectName)) {
+      const nextCollapsedProjects = { ...collapsedProjects.value }
+      delete nextCollapsedProjects[selectedGroup.projectName]
+      collapsedProjects.value = nextCollapsedProjects
+    }
+    if (projectThreads(selectedGroup).findIndex((thread) => thread.id === threadId) >= PROJECT_THREAD_PREVIEW_LIMIT) {
+      expandedProjects.value = {
+        ...expandedProjects.value,
+        [selectedGroup.projectName]: true,
+      }
+    }
+  }
+
+  await nextTick()
+  const root = threadTreeRootRef.value
+  const container = findProjectTreeScrollContainer()
+  if (!root || !container) return false
+
+  const activeRows = Array.from(root.querySelectorAll<HTMLElement>('.thread-row[data-active="true"]'))
+  const target = activeRows.find((row) => row.closest('.project-group')) ?? activeRows[0]
+  if (!target) return false
+
+  const containerRect = container.getBoundingClientRect()
+  const targetRect = target.getBoundingClientRect()
+  const targetTop = targetRect.top - containerRect.top + container.scrollTop
+  const targetBottom = targetRect.bottom - containerRect.top + container.scrollTop
+  const viewportTop = container.scrollTop
+  const viewportBottom = viewportTop + container.clientHeight
+  const nextScrollTop = targetTop < viewportTop
+    ? targetTop
+    : targetBottom > viewportBottom
+      ? targetBottom - container.clientHeight
+      : null
+  if (nextScrollTop === null) return true
+
+  const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+  container.scrollTo({
+    top: Math.max(0, nextScrollTop),
+    behavior: reduceMotion ? 'auto' : 'smooth',
+  })
+  return true
+}
+
+function readGroupsContentTop(scrollContainer: HTMLElement): number | null {
+  const groupsContainer = groupsContainerRef.value
+  if (!groupsContainer) return null
+
+  const scrollRect = scrollContainer.getBoundingClientRect()
+  const groupsRect = groupsContainer.getBoundingClientRect()
+  return groupsRect.top - scrollRect.top + scrollContainer.scrollTop
+}
+
+function buildProjectLayoutTop(projectNames: string[]): Record<string, number> {
+  const topByProject: Record<string, number> = {}
+  let currentTop = 0
+  for (const projectName of projectNames) {
+    topByProject[projectName] = currentTop
+    currentTop += getProjectOuterHeight(projectName)
+  }
+  return topByProject
+}
+
+function captureProjectScrollAnchor(previousProjectOrder: string[]): ProjectScrollAnchor | null {
+  if (previousProjectOrder.length === 0 || isSearchActive.value) return null
+  if (activeProjectDrag.value || pendingProjectDrag.value) return null
+
+  const scrollContainer = findProjectTreeScrollContainer()
+  if (!scrollContainer || scrollContainer.scrollTop <= 1) return null
+
+  const groupsContentTop = readGroupsContentTop(scrollContainer)
+  if (groupsContentTop === null) return null
+
+  const visibleTopInGroups = scrollContainer.scrollTop - groupsContentTop
+  if (visibleTopInGroups <= 0) return null
+
+  const previousLayoutTop = buildProjectLayoutTop(previousProjectOrder)
+  const projectName = previousProjectOrder.find((name) => (
+    (previousLayoutTop[name] ?? 0) + getProjectOuterHeight(name) > visibleTopInGroups + 0.5
+  ))
+  if (!projectName) return null
+
+  return {
+    projectName,
+    viewportOffset: groupsContentTop + (previousLayoutTop[projectName] ?? 0) - scrollContainer.scrollTop,
+  }
+}
+
+function scheduleProjectLayoutMotionRestore(sequence: number): void {
+  if (projectLayoutMotionRafId !== null) {
+    window.cancelAnimationFrame(projectLayoutMotionRafId)
+  }
+  projectLayoutMotionRafId = window.requestAnimationFrame(() => {
+    projectLayoutMotionRafId = null
+    if (projectScrollAnchorSequence !== sequence) return
+    if (hasMeasuredDisplayedProjectLayout.value) {
+      isProjectLayoutMotionReady.value = true
+    }
+  })
+}
+
+watch(
+  () => displayedGroups.value.map((group) => group.projectName).join('\n'),
+  async (nextOrderSignature, previousOrderSignature) => {
+    if (!previousOrderSignature || nextOrderSignature === previousOrderSignature) return
+
+    const sequence = projectScrollAnchorSequence + 1
+    projectScrollAnchorSequence = sequence
+    const nextProjectNames = nextOrderSignature.split('\n')
+    const previousProjectNames = previousOrderSignature.split('\n')
+    const anchor = captureProjectScrollAnchor(previousProjectNames)
+    if (!anchor || !nextProjectNames.includes(anchor.projectName)) {
+      scheduleProjectLayoutMotionRestore(sequence)
+      return
+    }
+    isProjectLayoutMotionReady.value = false
+
+    await nextTick()
+    if (projectScrollAnchorSequence !== sequence) return
+
+    for (const [projectName, element] of projectGroupElementByName) {
+      updateMeasuredProjectHeight(projectName, element)
+    }
+
+    await nextTick()
+    if (projectScrollAnchorSequence !== sequence) return
+
+    const scrollContainer = findProjectTreeScrollContainer()
+    const groupsContentTop = scrollContainer ? readGroupsContentTop(scrollContainer) : null
+    const anchorTop = layoutTopByProject.value[anchor.projectName]
+    if (!scrollContainer || groupsContentTop === null || anchorTop === undefined) {
+      scheduleProjectLayoutMotionRestore(sequence)
+      return
+    }
+
+    const desiredScrollTop = groupsContentTop + anchorTop - anchor.viewportOffset
+    const maxScrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight)
+    scrollContainer.scrollTop = Math.max(0, Math.min(desiredScrollTop, maxScrollTop))
+    scheduleProjectLayoutMotionRestore(sequence)
+  },
+  { flush: 'pre' },
+)
 const threadById = computed(() => threadCollections.value.threadById)
+const openProjectMenuGroup = computed<UiProjectGroup | null>(() => (
+  props.groups.find((group) => group.projectName === openProjectMenuId.value) ?? null
+))
+const openThreadMenuThread = computed<UiThread | null>(() => threadById.value.get(openThreadMenuId.value) ?? null)
 const threadProjectNameById = computed(() => threadCollections.value.threadProjectNameById)
 const threadTimestampById = computed(() => threadCollections.value.threadTimestampById)
 const pinnedThreads = computed(() => threadCollections.value.pinnedThreads)
-const runningThreads = computed<UiThread[]>(() => threadCollections.value.runningThreads)
-const collidingRunningTitleKeys = computed(() => {
-  const titleCounts = new Map<string, number>()
-  for (const thread of runningThreads.value) {
-    const key = runningTitleCollisionKey(thread.title)
-    if (!key) continue
-    titleCounts.set(key, (titleCounts.get(key) ?? 0) + 1)
-  }
-  return new Set(
-    [...titleCounts.entries()]
-      .filter(([, count]) => count > 1)
-      .map(([key]) => key),
-  )
-})
 const pinnedThreadsAlwaysVisible = computed(() => new Set(
   pinnedThreads.value
     .filter((thread) => thread.id === props.selectedThreadId || thread.inProgress)
@@ -1063,20 +1260,6 @@ const hiddenPinnedThreadCount = computed(() => Math.max(
   pinnedThreads.value.length - visiblePinnedThreads.value.length,
   0,
 ))
-
-function runningTitleCollisionKey(title: string): string {
-  return title.trim().replace(/\s+/gu, ' ').toLocaleLowerCase().slice(0, 16)
-}
-
-function hasCollidingRunningTitle(thread: UiThread): boolean {
-  const key = runningTitleCollisionKey(thread.title)
-  return Boolean(key && collidingRunningTitleKeys.value.has(key))
-}
-
-function formatThreadIdentity(threadId: string): string {
-  const compact = threadId.replace(/[^a-z0-9]/giu, '')
-  return compact.slice(-4).toUpperCase() || '----'
-}
 
 const projectedDropProjectIndex = computed<number | null>(() => {
   const drag = activeProjectDrag.value
@@ -1138,7 +1321,7 @@ const groupsContainerStyle = computed<Record<string, string>>(() => {
 function formatRelative(timestamp: number): string {
   if (Number.isNaN(timestamp)) return 'n/a'
 
-  const diffMs = Math.abs(Date.now() - timestamp)
+  const diffMs = Math.abs(relativeTimeNowMs.value - timestamp)
   if (diffMs < 60000) return 'now'
 
   const minutes = Math.floor(diffMs / 60000)
@@ -1169,15 +1352,34 @@ function getThreadPreview(thread: UiThread): string {
 }
 
 function getThreadStatusLabel(thread: UiThread): string {
+  if (thread.waitingForInput) return '等待处理'
   if (thread.inProgress) return '执行中'
   if (thread.unread) return '未读'
   return thread.hasWorktree ? '工作树' : '就绪'
 }
 
+function getThreadActivityLabel(thread: UiThread): string {
+  return thread.waitingForInput ? '等待处理' : '执行中'
+}
+
+function getThreadOpenAriaLabel(thread: UiThread): string {
+  const states: string[] = []
+  if (thread.waitingForInput) states.push('等待处理')
+  else if (thread.inProgress) states.push('执行中')
+  if (thread.unread) states.push('未读')
+  if (thread.hasWorktree) states.push('工作树会话')
+  return `打开会话：${thread.title}${states.length > 0 ? `，${states.join('，')}` : ''}`
+}
+
 function getProjectSummary(group: UiProjectGroup): string {
   const total = group.threads.length
-  const running = group.threads.filter((thread) => thread.inProgress).length
+  const waiting = group.threads.filter((thread) => thread.waitingForInput).length
+  const running = group.threads.filter((thread) => thread.inProgress && !thread.waitingForInput).length
   const threadLabel = '个会话'
+  if (waiting > 0) {
+    const runningText = running > 0 ? ` · ${running} 个运行中` : ''
+    return `${total}${threadLabel} · ${waiting} 个待处理${runningText}`
+  }
   if (running > 0) {
     return `${total}${threadLabel} · ${running} 个运行中`
   }
@@ -1203,12 +1405,32 @@ function onToggleThreadPin(threadId: string): void {
   closeThreadMenu()
 }
 
+function onToggleThreadUnread(thread: UiThread): void {
+  emit('set-thread-unread', { threadId: thread.id, unread: !thread.unread })
+  closeThreadMenu()
+}
+
 function onSelect(threadId: string): void {
+  const shouldFocusMainContent = typeof document !== 'undefined' && Boolean(document.querySelector('.mobile-drawer'))
   emit('select', threadId)
+  if (!shouldFocusMainContent) return
+  void nextTick(() => {
+    document.getElementById('main-content')?.focus({ preventScroll: true })
+  })
 }
 
 function onExportThread(threadId: string): void {
   emit('export-thread', threadId)
+  closeThreadMenu()
+}
+
+function onCopyThread(threadId: string): void {
+  emit('copy-thread', threadId)
+  closeThreadMenu()
+}
+
+function onCopyThreadLink(threadId: string): void {
+  emit('copy-thread-link', threadId)
   closeThreadMenu()
 }
 
@@ -1221,6 +1443,24 @@ function getNewThreadButtonAriaLabel(projectName: string): string {
   return `在 ${getProjectDisplayName(projectName)} 中新建会话`
 }
 
+function getThreadMenuAriaLabel(thread: UiThread): string {
+  return `会话操作：${thread.title}`
+}
+
+function getThreadPinActionLabel(thread: UiThread): string {
+  return `${isPinned(thread.id) ? '取消置顶' : '置顶会话'}：${thread.title}`
+}
+
+function getProjectMenuAriaLabel(projectName: string): string {
+  return `${getProjectDisplayName(projectName)} 项目操作`
+}
+
+function getProjectToggleAriaLabel(group: UiProjectGroup): string {
+  const action = isCollapsed(group.projectName) ? '展开项目' : '收起项目'
+  const pinned = group.isPinnedProject === true ? '，已置顶' : ''
+  return `${action}：${getProjectDisplayName(group.projectName)}，${getProjectSummary(group)}${pinned}`
+}
+
 function onStartNewThread(projectName: string): void {
   emit('start-new-thread', projectName)
   closeProjectMenu()
@@ -1231,31 +1471,131 @@ function onBrowseThreadFiles(threadId: string): void {
   closeThreadMenu()
 }
 
-function onThreadRowLeave(threadId: string): void {
-  if (openThreadMenuId.value === threadId) {
-    closeThreadMenu()
+const THREAD_MENU_VIEWPORT_PADDING_PX = 8
+const THREAD_MENU_ANCHOR_GAP_PX = 8
+
+function isThreadMenuOpen(menuKey: string): boolean {
+  return openThreadMenuKey.value === menuKey
+}
+
+function closeThreadMenu(restoreFocus = false): void {
+  const anchorElement = threadMenuAnchorElement.value
+  if (restoreFocus && anchorElement?.isConnected) {
+    anchorElement.focus({ preventScroll: true })
   }
-}
-
-function isThreadMenuOpen(threadId: string): boolean {
-  return openThreadMenuId.value === threadId
-}
-
-function closeThreadMenu(): void {
   openThreadMenuId.value = ''
+  openThreadMenuKey.value = ''
+  threadMenuAnchorElement.value = null
+  threadMenuContextPoint.value = null
+  threadMenuPlacement.value = 'bottom'
 }
 
-function toggleThreadMenu(threadId: string): void {
-  if (openThreadMenuId.value === threadId) {
-    closeThreadMenu()
+function openThreadMenu(
+  threadId: string,
+  menuKey: string,
+  anchorElement: HTMLElement,
+  contextPoint: { x: number; y: number } | null,
+): void {
+  closeProjectMenu()
+  isOrganizeMenuOpen.value = false
+  openThreadMenuId.value = threadId
+  openThreadMenuKey.value = menuKey
+  threadMenuAnchorElement.value = anchorElement
+  threadMenuContextPoint.value = contextPoint
+  threadMenuStyle.value = {
+    left: `${THREAD_MENU_VIEWPORT_PADDING_PX}px`,
+    top: `${THREAD_MENU_VIEWPORT_PADDING_PX}px`,
+    maxHeight: `calc(100dvh - ${THREAD_MENU_VIEWPORT_PADDING_PX * 2}px)`,
+    visibility: 'hidden',
+  }
+
+  void nextTick(() => {
+    if (openThreadMenuKey.value !== menuKey) return
+    positionThreadMenu()
+    window.setTimeout(() => {
+      if (openThreadMenuKey.value !== menuKey) return
+      threadMenuPanelRef.value?.querySelector<HTMLElement>('[role="menuitem"]')?.focus({ preventScroll: true })
+    }, 0)
+  })
+}
+
+function toggleThreadMenu(event: MouseEvent, threadId: string, menuKey: string): void {
+  if (openThreadMenuKey.value === menuKey) {
+    closeThreadMenu(true)
     return
   }
-  openThreadMenuId.value = threadId
+
+  const anchorElement = event.currentTarget
+  if (!(anchorElement instanceof HTMLElement)) return
+  openThreadMenu(threadId, menuKey, anchorElement, null)
 }
 
-function onThreadRowContextMenu(event: MouseEvent, threadId: string): void {
+function onThreadRowContextMenu(event: MouseEvent, threadId: string, menuKey: string): void {
   event.preventDefault()
-  openThreadMenuId.value = threadId
+  const anchorElement = event.currentTarget
+  if (!(anchorElement instanceof HTMLElement)) return
+  openThreadMenu(threadId, menuKey, anchorElement, { x: event.clientX, y: event.clientY })
+}
+
+function positionThreadMenu(): void {
+  const panel = threadMenuPanelRef.value
+  const anchorElement = threadMenuAnchorElement.value
+  if (!panel || !anchorElement || typeof window === 'undefined') return
+
+  const viewportWidth = document.documentElement.clientWidth
+  const viewportHeight = document.documentElement.clientHeight
+  const maxWidth = Math.max(0, viewportWidth - THREAD_MENU_VIEWPORT_PADDING_PX * 2)
+  const maxHeight = Math.max(0, viewportHeight - THREAD_MENU_VIEWPORT_PADDING_PX * 2)
+  const panelRect = panel.getBoundingClientRect()
+  const menuWidth = Math.min(panelRect.width, maxWidth)
+  const menuHeight = Math.min(panelRect.height, maxHeight)
+  const contextPoint = threadMenuContextPoint.value
+  const anchorRect = anchorElement.getBoundingClientRect()
+  const anchorLeft = contextPoint?.x ?? anchorRect.right
+  const anchorTop = contextPoint?.y ?? anchorRect.bottom
+  const belowTop = anchorTop + (contextPoint ? 0 : THREAD_MENU_ANCHOR_GAP_PX)
+  const aboveTop = (contextPoint?.y ?? anchorRect.top) - menuHeight - THREAD_MENU_ANCHOR_GAP_PX
+  const shouldPlaceAbove = belowTop + menuHeight > viewportHeight - THREAD_MENU_VIEWPORT_PADDING_PX
+    && aboveTop >= THREAD_MENU_VIEWPORT_PADDING_PX
+
+  threadMenuPlacement.value = shouldPlaceAbove ? 'top' : 'bottom'
+  const preferredLeft = contextPoint ? anchorLeft : anchorLeft - menuWidth
+  const left = Math.min(
+    Math.max(preferredLeft, THREAD_MENU_VIEWPORT_PADDING_PX),
+    Math.max(THREAD_MENU_VIEWPORT_PADDING_PX, viewportWidth - menuWidth - THREAD_MENU_VIEWPORT_PADDING_PX),
+  )
+  const preferredTop = shouldPlaceAbove ? aboveTop : belowTop
+  const top = Math.min(
+    Math.max(preferredTop, THREAD_MENU_VIEWPORT_PADDING_PX),
+    Math.max(THREAD_MENU_VIEWPORT_PADDING_PX, viewportHeight - menuHeight - THREAD_MENU_VIEWPORT_PADDING_PX),
+  )
+
+  threadMenuStyle.value = {
+    left: `${Math.round(left)}px`,
+    top: `${Math.round(top)}px`,
+    maxWidth: `${Math.round(maxWidth)}px`,
+    maxHeight: `${Math.round(maxHeight)}px`,
+    visibility: 'visible',
+  }
+}
+
+function onThreadMenuKeyDown(event: KeyboardEvent): void {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  const items = Array.from(
+    threadMenuPanelRef.value?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [],
+  )
+  if (items.length === 0) return
+
+  event.preventDefault()
+  const currentIndex = items.findIndex((item) => item === document.activeElement)
+  const nextIndex = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? items.length - 1
+      : event.key === 'ArrowUp'
+        ? (currentIndex <= 0 ? items.length - 1 : currentIndex - 1)
+        : (currentIndex + 1) % items.length
+  items[nextIndex]?.focus({ preventScroll: true })
 }
 
 function focusRenameThreadInput(): void {
@@ -1331,13 +1671,13 @@ function onWindowKeyDownForSidebarSurface(event: KeyboardEvent): void {
   if (openThreadMenuId.value) {
     event.preventDefault()
     event.stopPropagation()
-    closeThreadMenu()
+    closeThreadMenu(true)
     return
   }
   if (openProjectMenuId.value) {
     event.preventDefault()
     event.stopPropagation()
-    closeProjectMenu()
+    closeProjectMenu(true)
     return
   }
   if (isOrganizeMenuOpen.value) {
@@ -1363,8 +1703,17 @@ function isProjectMenuOpen(projectName: string): boolean {
   return openProjectMenuId.value === projectName
 }
 
-function closeProjectMenu(): void {
+const PROJECT_MENU_VIEWPORT_PADDING_PX = 8
+const PROJECT_MENU_ANCHOR_GAP_PX = 8
+
+function closeProjectMenu(restoreFocus = false): void {
+  const anchorElement = projectMenuAnchorElement.value
+  if (restoreFocus && anchorElement?.isConnected) {
+    anchorElement.focus({ preventScroll: true })
+  }
   openProjectMenuId.value = ''
+  projectMenuAnchorElement.value = null
+  projectMenuPlacement.value = 'bottom'
   projectMenuMode.value = 'actions'
   projectRenameDraft.value = ''
 }
@@ -1373,26 +1722,123 @@ function toggleOrganizeMenu(): void {
   isOrganizeMenuOpen.value = !isOrganizeMenuOpen.value
 }
 
-function setThreadViewMode(mode: 'project' | 'chronological'): void {
-  threadViewMode.value = mode
+function setAllProjectsCollapsed(collapsed: boolean): void {
+  const nextCollapsedProjects = { ...collapsedProjects.value }
+  for (const group of props.groups) {
+    if (collapsed) {
+      nextCollapsedProjects[group.projectName] = true
+    } else {
+      delete nextCollapsedProjects[group.projectName]
+    }
+  }
+  collapsedProjects.value = nextCollapsedProjects
   isOrganizeMenuOpen.value = false
 }
 
-function toggleProjectMenu(projectName: string): void {
+function openProjectMenu(projectName: string, anchorElement: HTMLElement): void {
+  closeThreadMenu()
+  isOrganizeMenuOpen.value = false
+  openProjectMenuId.value = projectName
+  projectMenuAnchorElement.value = anchorElement
+  projectMenuMode.value = 'actions'
+  projectRenameDraft.value = getProjectDisplayName(projectName)
+  projectMenuStyle.value = {
+    left: `${PROJECT_MENU_VIEWPORT_PADDING_PX}px`,
+    top: `${PROJECT_MENU_VIEWPORT_PADDING_PX}px`,
+    maxHeight: `calc(100dvh - ${PROJECT_MENU_VIEWPORT_PADDING_PX * 2}px)`,
+    visibility: 'hidden',
+  }
+
+  void nextTick(() => {
+    if (openProjectMenuId.value !== projectName) return
+    positionProjectMenu()
+    window.setTimeout(() => {
+      if (openProjectMenuId.value !== projectName || projectMenuMode.value !== 'actions') return
+      projectMenuPanelRef.value?.querySelector<HTMLElement>('[role="menuitem"]')?.focus({ preventScroll: true })
+    }, 0)
+  })
+}
+
+function toggleProjectMenu(event: MouseEvent, projectName: string): void {
   if (openProjectMenuId.value === projectName) {
-    closeProjectMenu()
+    closeProjectMenu(true)
     return
   }
 
-  openProjectMenuId.value = projectName
-  projectMenuMode.value = 'actions'
-  projectRenameDraft.value = getProjectDisplayName(projectName)
+  const anchorElement = event.currentTarget
+  if (!(anchorElement instanceof HTMLElement)) return
+  openProjectMenu(projectName, anchorElement)
+}
+
+function positionProjectMenu(): void {
+  const panel = projectMenuPanelRef.value
+  const anchorElement = projectMenuAnchorElement.value
+  if (!panel || !anchorElement || typeof window === 'undefined') return
+
+  const viewportWidth = document.documentElement.clientWidth
+  const viewportHeight = document.documentElement.clientHeight
+  const maxWidth = Math.max(0, viewportWidth - PROJECT_MENU_VIEWPORT_PADDING_PX * 2)
+  const maxHeight = Math.max(0, viewportHeight - PROJECT_MENU_VIEWPORT_PADDING_PX * 2)
+  const panelRect = panel.getBoundingClientRect()
+  const menuWidth = Math.min(panelRect.width, maxWidth)
+  const menuHeight = Math.min(panelRect.height, maxHeight)
+  const anchorRect = anchorElement.getBoundingClientRect()
+  const belowTop = anchorRect.bottom + PROJECT_MENU_ANCHOR_GAP_PX
+  const aboveTop = anchorRect.top - menuHeight - PROJECT_MENU_ANCHOR_GAP_PX
+  const shouldPlaceAbove = belowTop + menuHeight > viewportHeight - PROJECT_MENU_VIEWPORT_PADDING_PX
+    && aboveTop >= PROJECT_MENU_VIEWPORT_PADDING_PX
+
+  projectMenuPlacement.value = shouldPlaceAbove ? 'top' : 'bottom'
+  const preferredLeft = anchorRect.right - menuWidth
+  const left = Math.min(
+    Math.max(preferredLeft, PROJECT_MENU_VIEWPORT_PADDING_PX),
+    Math.max(PROJECT_MENU_VIEWPORT_PADDING_PX, viewportWidth - menuWidth - PROJECT_MENU_VIEWPORT_PADDING_PX),
+  )
+  const preferredTop = shouldPlaceAbove ? aboveTop : belowTop
+  const top = Math.min(
+    Math.max(preferredTop, PROJECT_MENU_VIEWPORT_PADDING_PX),
+    Math.max(PROJECT_MENU_VIEWPORT_PADDING_PX, viewportHeight - menuHeight - PROJECT_MENU_VIEWPORT_PADDING_PX),
+  )
+
+  projectMenuStyle.value = {
+    left: `${Math.round(left)}px`,
+    top: `${Math.round(top)}px`,
+    maxWidth: `${Math.round(maxWidth)}px`,
+    maxHeight: `${Math.round(maxHeight)}px`,
+    visibility: 'visible',
+  }
+}
+
+function onProjectMenuKeyDown(event: KeyboardEvent): void {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  const items = Array.from(
+    projectMenuPanelRef.value?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [],
+  )
+  if (items.length === 0) return
+
+  event.preventDefault()
+  const currentIndex = items.findIndex((item) => item === document.activeElement)
+  const nextIndex = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? items.length - 1
+      : event.key === 'ArrowUp'
+        ? (currentIndex <= 0 ? items.length - 1 : currentIndex - 1)
+        : (currentIndex + 1) % items.length
+  items[nextIndex]?.focus({ preventScroll: true })
 }
 
 function openRenameProjectMenu(projectName: string): void {
   openProjectMenuId.value = projectName
   projectMenuMode.value = 'rename'
   projectRenameDraft.value = getProjectDisplayName(projectName)
+  void nextTick(() => {
+    if (openProjectMenuId.value !== projectName || projectMenuMode.value !== 'rename') return
+    positionProjectMenu()
+    const input = projectMenuInputRef.value
+    input?.focus({ preventScroll: true })
+    input?.select()
+  })
 }
 
 function onProjectNameInput(projectName: string): void {
@@ -1470,64 +1916,36 @@ function getProjectOuterHeight(projectName: string): number {
   return Math.max(0, Math.round(baseHeight + gap))
 }
 
-function setProjectMenuWrapRef(projectName: string, element: Element | ComponentPublicInstance | null): void {
-  const htmlElement =
-    element instanceof HTMLElement
-      ? element
-      : element && '$el' in element && element.$el instanceof HTMLElement
-        ? element.$el
-        : null
-
-  if (htmlElement) {
-    projectMenuWrapElementByName.set(projectName, htmlElement)
-    return
-  }
-
-  projectMenuWrapElementByName.delete(projectName)
-}
-
-function setThreadMenuWrapRef(threadId: string, element: Element | ComponentPublicInstance | null): void {
-  const htmlElement =
-    element instanceof HTMLElement
-      ? element
-      : element && '$el' in element && element.$el instanceof HTMLElement
-        ? element.$el
-        : null
-
-  if (htmlElement) {
-    threadMenuWrapElementById.set(threadId, htmlElement)
-    return
-  }
-
-  threadMenuWrapElementById.delete(threadId)
-}
-
 function isEventInsideOpenProjectMenu(event: Event): boolean {
-  const projectName = openProjectMenuId.value
-  if (!projectName) return false
-
-  const openMenuWrapElement = projectMenuWrapElementByName.get(projectName)
-  if (!openMenuWrapElement) return false
-
+  if (!openProjectMenuId.value) return false
+  const anchorElement = projectMenuAnchorElement.value
+  const panelElement = projectMenuPanelRef.value
   const eventPath = typeof event.composedPath === 'function' ? event.composedPath() : []
-  if (eventPath.includes(openMenuWrapElement)) return true
+  if ((anchorElement && eventPath.includes(anchorElement)) || (panelElement && eventPath.includes(panelElement))) {
+    return true
+  }
 
   const target = event.target
-  return target instanceof Node ? openMenuWrapElement.contains(target) : false
+  if (target instanceof Element && target.closest('#sidebar-project-actions-menu')) return true
+  return target instanceof Node
+    ? Boolean(anchorElement?.contains(target) || panelElement?.contains(target))
+    : false
 }
 
 function isEventInsideOpenThreadMenu(event: Event): boolean {
-  const threadId = openThreadMenuId.value
-  if (!threadId) return false
-
-  const openMenuWrapElement = threadMenuWrapElementById.get(threadId)
-  if (!openMenuWrapElement) return false
-
+  if (!openThreadMenuId.value) return false
+  const anchorElement = threadMenuAnchorElement.value
+  const panelElement = threadMenuPanelRef.value
   const eventPath = typeof event.composedPath === 'function' ? event.composedPath() : []
-  if (eventPath.includes(openMenuWrapElement)) return true
+  if ((anchorElement && eventPath.includes(anchorElement)) || (panelElement && eventPath.includes(panelElement))) {
+    return true
+  }
 
   const target = event.target
-  return target instanceof Node ? openMenuWrapElement.contains(target) : false
+  if (target instanceof Element && target.closest('#sidebar-thread-actions-menu')) return true
+  return target instanceof Node
+    ? Boolean(anchorElement?.contains(target) || panelElement?.contains(target))
+    : false
 }
 
 function onProjectMenuPointerDown(event: PointerEvent): void {
@@ -1543,14 +1961,13 @@ function onProjectMenuPointerDown(event: PointerEvent): void {
     }
   }
 
-  if (!openProjectMenuId.value) return
-  if (!isEventInsideOpenProjectMenu(event)) {
+  if (openProjectMenuId.value && !isEventInsideOpenProjectMenu(event)) {
     closeProjectMenu()
   }
 
-  if (!openThreadMenuId.value) return
-  if (isEventInsideOpenThreadMenu(event)) return
-  closeThreadMenu()
+  if (openThreadMenuId.value && !isEventInsideOpenThreadMenu(event)) {
+    closeThreadMenu()
+  }
 }
 
 function onProjectMenuFocusIn(event: FocusEvent): void {
@@ -1574,16 +1991,32 @@ function onWindowBlurForProjectMenu(): void {
   }
 }
 
+function onThreadMenuViewportChange(event: Event): void {
+  if (
+    event.type === 'scroll'
+    && event.target instanceof Node
+    && (projectMenuPanelRef.value?.contains(event.target) || threadMenuPanelRef.value?.contains(event.target))
+  ) {
+    return
+  }
+  if (openProjectMenuId.value) closeProjectMenu()
+  if (openThreadMenuId.value) closeThreadMenu()
+}
+
 function bindProjectMenuDismissListeners(): void {
   window.addEventListener('pointerdown', onProjectMenuPointerDown, { capture: true })
   window.addEventListener('focusin', onProjectMenuFocusIn, { capture: true })
   window.addEventListener('blur', onWindowBlurForProjectMenu)
+  window.addEventListener('scroll', onThreadMenuViewportChange, true)
+  window.addEventListener('resize', onThreadMenuViewportChange)
 }
 
 function unbindProjectMenuDismissListeners(): void {
   window.removeEventListener('pointerdown', onProjectMenuPointerDown, { capture: true })
   window.removeEventListener('focusin', onProjectMenuFocusIn, { capture: true })
   window.removeEventListener('blur', onWindowBlurForProjectMenu)
+  window.removeEventListener('scroll', onThreadMenuViewportChange, true)
+  window.removeEventListener('resize', onThreadMenuViewportChange)
 }
 
 function updateMeasuredProjectHeight(projectName: string, element: HTMLElement): void {
@@ -1897,7 +2330,8 @@ function hasThreads(group: UiProjectGroup): boolean {
   return projectThreads(group).length > 0
 }
 
-function getThreadState(thread: UiThread): 'working' | 'unread' | 'idle' {
+function getThreadState(thread: UiThread): 'waiting' | 'working' | 'unread' | 'idle' {
+  if (thread.waitingForInput) return 'waiting'
   if (thread.inProgress) return 'working'
   if (thread.unread) return 'unread'
   return 'idle'
@@ -1912,6 +2346,9 @@ watch(
     }
 
     const projectNameSet = new Set(projectNames)
+    if (openProjectMenuId.value && !projectNameSet.has(openProjectMenuId.value)) {
+      closeProjectMenu()
+    }
     const nextMeasuredHeights = Object.fromEntries(
       Object.entries(measuredHeightByProject.value).filter(([projectName]) => projectNameSet.has(projectName)),
     ) as Record<string, number>
@@ -1935,9 +2372,14 @@ watch(hasOpenDismissableMenu, (isOpen) => {
   unbindProjectMenuDismissListeners()
 })
 
+defineExpose({ revealSelectedThread })
+
 onBeforeUnmount(() => {
+  clearFullSearchTimer()
   window.removeEventListener('focus', onWindowFocusRefreshPinned)
   window.removeEventListener('keydown', onWindowKeyDownForSidebarSurface, true)
+  document.removeEventListener('visibilitychange', onRelativeTimeVisibilityChange)
+  stopRelativeTimeRefreshTimer()
   if (projectLayoutMotionRafId !== null) {
     window.cancelAnimationFrame(projectLayoutMotionRafId)
     projectLayoutMotionRafId = null
@@ -1946,8 +2388,6 @@ onBeforeUnmount(() => {
     projectGroupResizeObserver?.unobserve(element)
   }
   projectGroupElementByName.clear()
-  projectMenuWrapElementByName.clear()
-  threadMenuWrapElementById.clear()
   unbindProjectMenuDismissListeners()
   resetProjectDragState()
 })
@@ -2036,6 +2476,12 @@ onBeforeUnmount(() => {
   letter-spacing: 0;
 }
 
+.organize-menu-divider {
+  height: 1px;
+  margin: 0.375rem 0.5rem;
+  background: var(--ui-border-subtle);
+}
+
 .organize-menu-item {
   @apply w-full px-2.5 py-2 text-sm flex items-center justify-between;
   border-radius: var(--ui-radius-control);
@@ -2051,6 +2497,16 @@ onBeforeUnmount(() => {
 .organize-menu-item[data-active='true'] {
   background: var(--ui-bg-row-active);
   color: var(--ui-text-primary);
+}
+
+.organize-menu-item:disabled {
+  color: var(--ui-text-tertiary);
+  cursor: default;
+  opacity: 0.56;
+}
+
+.organize-menu-item:disabled:hover {
+  background: transparent;
 }
 
 .thread-start-button {
@@ -2090,6 +2546,42 @@ onBeforeUnmount(() => {
 .thread-tree-no-results {
   @apply px-3 py-3 text-sm;
   color: var(--ui-text-secondary);
+}
+
+.thread-tree-search-state {
+  @apply flex min-h-11 items-center gap-2 px-3 py-2 text-sm;
+  color: var(--ui-text-secondary);
+}
+
+.thread-tree-search-indicator {
+  @apply h-2 w-2 shrink-0 rounded-full;
+  background: var(--ui-accent);
+  animation: thread-search-pulse 900ms ease-in-out infinite alternate;
+}
+
+.thread-tree-search-retry {
+  @apply ml-auto inline-flex min-h-9 shrink-0 items-center justify-center rounded-lg border px-2.5 text-xs font-semibold;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+}
+
+.thread-tree-search-retry:hover,
+.thread-tree-search-retry:focus-visible {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+@keyframes thread-search-pulse {
+  from { opacity: 0.4; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-tree-search-indicator {
+    animation: none;
+  }
 }
 
 .thread-tree-empty-row {
@@ -2147,6 +2639,11 @@ onBeforeUnmount(() => {
   @apply cursor-grabbing;
 }
 
+.project-main-button:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 2px;
+}
+
 .project-icon-stack {
   @apply relative w-4 h-4 flex items-center justify-center;
   color: var(--ui-text-secondary);
@@ -2170,11 +2667,6 @@ onBeforeUnmount(() => {
 
 .project-title-line {
   @apply min-w-0 inline-flex items-center gap-1.5;
-}
-
-.project-pinned-icon {
-  @apply h-3.5 w-3.5 shrink-0;
-  color: var(--ui-accent);
 }
 
 .project-title-wrap {
@@ -2212,11 +2704,14 @@ onBeforeUnmount(() => {
 }
 
 .project-menu-panel {
-  @apply absolute right-0 top-full mt-2 z-20 min-w-40 border p-1.5 flex flex-col gap-0.5;
+  @apply fixed min-w-40 border p-1.5 flex flex-col gap-0.5 overflow-y-auto;
+  z-index: var(--ui-z-popover, 70);
+  max-width: calc(100vw - 1rem);
   border-radius: var(--ui-radius-card);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
   box-shadow: var(--ui-shadow-float);
+  overscroll-behavior: contain;
 }
 
 .project-menu-item {
@@ -2248,8 +2743,15 @@ onBeforeUnmount(() => {
 }
 
 .project-menu-input {
-  @apply px-2 py-1 text-sm bg-transparent border-none outline-none;
+  @apply w-full rounded-md px-2 py-1.5 text-sm outline-none;
+  border: 1px solid var(--ui-border-subtle);
+  background: var(--ui-bg-surface-muted);
   color: var(--ui-text-primary);
+}
+
+.project-menu-input:focus-visible {
+  border-color: color-mix(in srgb, var(--ui-accent) 68%, var(--ui-border-subtle));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-accent) 18%, transparent);
 }
 
 .project-empty-row {
@@ -2267,10 +2769,6 @@ onBeforeUnmount(() => {
 
 .thread-list {
   @apply list-none m-0 p-0 flex flex-col gap-0.5;
-}
-
-.thread-list-global {
-  @apply pr-0.5;
 }
 
 .project-group > .thread-list {
@@ -2383,8 +2881,12 @@ onBeforeUnmount(() => {
   color: var(--ui-text-tertiary);
 }
 
-.thread-row-source--working {
+.thread-row-source[data-state='working'] {
   color: var(--ui-accent);
+}
+
+.thread-row-source[data-state='waiting'] {
+  color: color-mix(in srgb, var(--ui-warning) 82%, var(--ui-text-primary));
 }
 
 .thread-row-time {
@@ -2416,11 +2918,14 @@ onBeforeUnmount(() => {
 }
 
 .thread-menu-panel {
-  @apply absolute right-0 top-full mt-2 z-20 min-w-40 border p-1.5 flex flex-col gap-0.5;
+  @apply fixed min-w-40 border p-1.5 flex flex-col gap-0.5 overflow-y-auto;
+  z-index: var(--ui-z-popover, 70);
+  max-width: calc(100vw - 1rem);
   border-radius: var(--ui-radius-card);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
   box-shadow: var(--ui-shadow-float);
+  overscroll-behavior: contain;
 }
 
 .thread-menu-item {
@@ -2523,10 +3028,19 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-accent) 14%, transparent);
 }
 
+.thread-status-indicator[data-state='waiting'] {
+  width: 7px;
+  height: 7px;
+  background: var(--ui-warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-warning) 15%, transparent);
+}
+
 .thread-row:hover .thread-status-indicator[data-state='unread'],
 .thread-row:hover .thread-status-indicator[data-state='working'],
+.thread-row:hover .thread-status-indicator[data-state='waiting'],
 .thread-row:focus-within .thread-status-indicator[data-state='unread'],
-.thread-row:focus-within .thread-status-indicator[data-state='working'] {
+.thread-row:focus-within .thread-status-indicator[data-state='working'],
+.thread-row:focus-within .thread-status-indicator[data-state='waiting'] {
   @apply opacity-0;
 }
 
@@ -2670,6 +3184,23 @@ onBeforeUnmount(() => {
   .thread-row-time {
     background: transparent;
     padding-inline: 0;
+  }
+}
+
+@media (max-width: 767px), (hover: none), (pointer: coarse), (max-height: 480px) and (max-width: 932px) {
+  .thread-pin-button {
+    display: none;
+  }
+
+  .thread-menu-trigger {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .thread-menu-wrap {
+    display: flex;
+    align-items: center;
+    height: 1.75rem;
   }
 }
 

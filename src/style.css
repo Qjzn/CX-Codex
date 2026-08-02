@@ -29,6 +29,7 @@
   --ui-radius-pill: 999px;
   --ui-radius-composer: 22px;
   --ui-shadow-float: 0 14px 40px rgb(0 0 0 / 0.08);
+  --ui-z-popover: 70;
   --motion-duration-press: 80ms;
   --motion-duration-fast: 120ms;
   --motion-duration-base: 180ms;

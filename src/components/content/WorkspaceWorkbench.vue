@@ -171,6 +171,8 @@ const reasoningLabels: Record<string, string> = {
   medium: '中',
   high: '高',
   xhigh: '超高',
+  max: '最高',
+  ultra: '极致',
 }
 
 const modelLabel = computed(() => props.selectedModel.trim() || '未选择')

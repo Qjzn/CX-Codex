@@ -38,6 +38,10 @@ export function getWebThreadListCachePath(): string {
   return join(getCodexHomeDir(), 'web-thread-list-cache.json')
 }
 
+export function getWebThreadSearchIndexCachePath(): string {
+  return join(getCodexHomeDir(), 'web-thread-search-index-cache.json')
+}
+
 export function getSkillsInstallDir(): string {
   return join(getCodexHomeDir(), 'skills')
 }

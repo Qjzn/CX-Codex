@@ -285,7 +285,44 @@ After each feature implementation session that uses this skill:
 
 - Windows Codex `26.721.4979` exposes a unified command menu through `codex.commandMenu.*` locale keys. Its title is `命令菜单`, description is `搜索命令和过去的任务。`, and unified placeholder is `搜索任务或运行命令`.
 - The desktop menu distinguishes command suggestions from recent, pinned, unread, and recently viewed tasks; it also defines explicit loading, no-result, no-recent-task, and untitled-task states.
-- CX-Codex matches the unified task/command search model and keyboard-first selection, while intentionally limiting the first implementation to existing local routes plus loaded task metadata. Theme/file search and additional task groupings remain out of scope until their backing data and actions exist in the web product.
+- The `unread-threads` feature is registered ahead of normal groups and renders only while the search query is empty. CX-Codex should likewise reserve running/unread grouping for the command-menu home, then collapse task matches into one group as soon as the user searches.
+- CX-Codex matches the unified task/command search model and keyboard-first selection. The first implementation was intentionally limited to existing local routes plus loaded task metadata; later modes should be added only when the web product already has a bounded data source and a safe action path.
+
+## Findings: Waiting-input Task Priority (2026-08-01)
+
+- The current Windows Codex Chinese locale distinguishes `avatarOverlay.statusWaiting` as `需要输入` and `codex.localTaskRow.awaitingApproval` as `等待批准`; ordinary running work remains a separate state.
+- `sidebarElectron.sortMenu.priorityDescription` explicitly says priority sorting shows tasks needing input and unread tasks first. The agent-key legend uses amber for input-required and blue for thinking, so state should remain distinguishable by both text and color.
+- CX-Codex derives its compact `等待处理` marker from unresolved per-thread server requests, not generic `updatedAt` or a stale display flag. Waiting tasks stay executable/in-progress but sort ahead of ordinary running work in the sidebar and command-menu attention group.
+
+## Findings: Workspace File Search Mode (2026-08-01)
+
+- The currently extracted Windows package (outer package `26.721.4979`, embedded app package `26.721.41059`) registers a `thread-file-search` command-menu feature. `Search files` switches the global menu from `root` to an exclusive `files` mode, changes the placeholder, preserves a `Back to commands` row, and renders a dedicated `Files` group.
+- Its file-search command is bound to the registered `searchFiles` shortcut (displayed as Cmd/Ctrl+P), keeps the first file result as the default keyboard target, and opens the selected workspace file in a side panel.
+- CX-Codex can reuse this interaction hierarchy because `/codex-api/composer-file-search` and `/codex-local-browse` already exist. Its web adaptation avoids an empty-query scan because the current endpoint has no recency ranking, rejects stale asynchronous results, opens a separate preview on desktop, and uses the current WebView on Android/phone widths.
+
+## Findings: Workspace Recent Files (2026-08-01)
+
+- The extracted Windows Codex package `26.721.4979` confirms the exclusive file mode, back row, file group, shortcut, and first-result keyboard target, but its inspected command-menu bundle and locale surface do not expose a distinct recent-file group.
+- Orca Quick Open ranks matching files with recent usage as an input. CX-Codex adopts the low-risk portion locally: only files explicitly opened through Quick Open are remembered, history is bounded to 36 entries and six per workspace, and empty file mode reads this local history without issuing a workspace search.
+- This is an intentional web adaptation rather than strict desktop parity. Query-time file results, stale-response protection, preview routing, Escape behavior, and Android/phone navigation remain unchanged.
+
+## Findings: Hidden-page Quiescence (2026-08-01)
+
+- The installed Windows Codex `26.721.4979` bundle listens to `visibilitychange`, switches its realtime presence between `foreground` and `background`, and adjusts reconnect behavior from the focused-and-visible state rather than treating a hidden renderer as fully active.
+- Orca current main (`402e492`) uses a visibility-bound interval for heartbeat, polling, and relative-time clocks: hidden windows disarm the interval, becoming visible refreshes immediately, and connection heartbeat keeps its last inbound timestamp so a stale transport is detected instead of masked after resume.
+- CX-Codex applies that lifecycle boundary only to its browser fallback sync and display clocks. Realtime notifications, Runtime Store authority, and Android native task monitoring remain active under their existing owners; visibility, page, network, and mobile resume events re-arm the fallback and run the established authoritative catch-up flow.
+
+## Findings: Reliable Web Clipboard Fallback (2026-08-01)
+
+- The installed Windows Codex `26.721.4979` renderer writes user-message, command, output, and diff text through `navigator.clipboard.writeText`; user-message copy changes to a brief copied state for about 1.5 seconds. Its Electron host provides the trusted clipboard environment, so it does not need the plain-HTTP browser fallback used by a remote web client.
+- Orca current main (`402e492`) first uses `navigator.clipboard.writeText`, then catches permission or insecure-context rejection inside the same user action and invokes a one-shot `copy` event. The event supplies `text/plain`, stops later handlers, verifies that data was served, and removes the listener in `finally` without inserting or selecting a hidden textarea.
+- CX-Codex follows the same web fallback for favorite content, messages, code blocks, local-file links, and remote-access addresses. Existing component-owned success/status feedback stays in place; message copy now mirrors the desktop app's brief `已复制` state, and genuine failures remain visible instead of being reported as success.
+
+## Findings: Collapsed-sidebar Attention Badge (2026-08-01)
+
+- The installed Windows Codex `26.721.4979` derives one unread count from unread runs plus unread non-automation conversations, sends it through `electron-set-badge-count`, and replaces the collapsed sidebar icon with an unread-aware variant while the expanded sidebar keeps its full task rows visible.
+- Orca current main (`402e492`) likewise counts unread `done`, `blocked`, and `waiting` agent states for activity chrome; its collapsed/sidebar badge avoids requiring the full activity surface to remain open.
+- CX-Codex uses the same information hierarchy for the web host: distinct `waitingForInput` or unread conversations contribute to one attention count, the collapsed sidebar toggle shows a bounded numeric badge with an exact accessible label, and the browser title mirrors the exact count as the web substitute for an Electron OS badge. Ordinary running work remains excluded.
 
 ## Findings: Avatar Task Overlay (2026-07-17)
 
@@ -885,3 +922,306 @@ After each feature implementation session that uses this skill:
 - Windows Codex package `26.721.41059` renders shared confirmations through its Dialog primitive: fixed overlay/content layers, outside-interaction prevention, focus ownership, and stable content sizing are provided as one modal boundary rather than by each trigger.
 - CX-Codex global refresh, queued-edit, and Android-update confirmations therefore share one active-dialog environment owner. Opening blurs the composer and locks body scrolling; cancel/Back restores the prior environment, while a confirm action may hand focus to its next workflow instead.
 - Visual `z-index` and Back order must use the same priority. The Android update prompt stays above queued-edit and desktop-refresh confirmations, and one Back event closes only that active layer.
+
+## Findings: Same-site Conversation Deep Links (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` defines `threadHeader.copyAppLink` as `Copy deeplink` / `复制深度链接`; its handler copies `codex://threads/<conversationId>` without changing conversation state.
+- CX-Codex preserves that identity-only action but adapts the transport to its browser and Android WebView surface: it copies the current 7420 site with the canonical encoded `#/thread/<threadId>` hash. This deliberately preserves whichever local, LAN, tunnel, or authenticated address the user is actually using instead of emitting a desktop-only custom scheme.
+- The user-facing label is `复制会话链接` rather than the more technical `复制深度链接`. The action uses the shared HTTP-safe clipboard fallback, closes the thread menu immediately, reports success only after a real write, and leaves a visible manual-copy recovery message when both clipboard paths fail.
+
+## Findings: Collision-aware Thread Action Menus (2026-08-01)
+
+- Orca revision `4c03cdf` builds dropdowns on a portaled Radix primitive with available-height limits, vertical overflow, side offset, and collision padding; a concrete dashboard settings menu uses 8 px collision padding.
+- The installed Windows Codex package `26.721.4979` likewise uses a fixed-position portaled Popper/Dropdown primitive with collision avoidance enabled, a 6 px collision boundary, available-height constraints, and side metadata.
+- CX-Codex follows the same behavior boundary without adding a UI dependency: one portaled fixed menu owns the selected thread, clamps to an 8 px viewport boundary, flips above lower anchors, and closes when scrolling or resizing would detach it. Exact trigger keys prevent a pinned/project duplicate from rendering or claiming a second menu.
+- This is intentional behavioral parity rather than internal implementation parity. The app closes on anchor-moving viewport events instead of continuously recomputing Popper geometry, which keeps the change small and avoids a new positioning runtime in the mobile WebView.
+
+## Findings: Collision-aware Project Action Menus (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` exposes project option and rename actions through the same fixed-position Popper/Dropdown foundation used by other menus: available-height constraints, collision avoidance, a 6 px boundary, and side metadata belong to the shared behavior rather than to thread actions alone.
+- CX-Codex project actions must likewise escape the scrollable/transformed project tree. One body-portaled fixed menu owns the exact project trigger, clamps to an 8 px viewport boundary, flips above lower anchors, and closes when scrolling or resizing detaches the anchor.
+- Keyboard ownership is part of the menu contract: opening focuses the first action, arrow/Home/End keys move within actions, rename mode focuses and selects the current name, and Escape restores the exact trigger. This is behavioral parity without adding a Popper dependency to the mobile WebView.
+
+## Findings: Background Sidebar Reorder Anchoring (2026-08-01)
+
+- Orca revisions `0fe1278` and `abec358` treat sidebar reading position as user-owned state: background workspace creation must not surface and scroll the owner, and a re-keyed virtual row must carry its existing scroll anchor to the new structural key.
+- The installed Windows Codex package `26.721.4979` exposes stable project and thread identity attributes inside one dedicated `overflow-y-auto` sidebar owner. Its file tree separately persists a selected path plus scroll offset through refresh, confirming the same identity-before-position boundary even though its sidebar implementation is not copied.
+- CX-Codex recent-activity ordering may legitimately move a workspace while the user is reading lower projects. When the viewport has entered the project region, the first visible project identity and its viewport offset therefore remain stable across a background order change; the scroll owner absorbs the inserted height.
+- Top-of-sidebar behavior is intentionally unchanged so newly active or waiting work can still surface. Search, chronological mode, active drag, and an anchor that disappears are excluded, and compensation is clamped to the real scroll range without adding persistence, polling, or a new list dependency.
+
+## Findings: IME-safe Composer Menus (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` guards its composer mention key handler with `defaultPrevented`, `isComposing`, and process-key `keyCode === 229` before Escape, arrow, Enter, or Tab menu behavior is evaluated.
+- Orca revision `fe6f929` independently reinforces that cross-platform IME input must be treated as a lifecycle boundary rather than as ordinary Enter input. Its terminal transaction machinery is intentionally not copied into the textarea composer.
+- CX-Codex applies the smaller matching boundary: an IME-owned key event exits the composer handler before `@` file-menu navigation or submission. Ordinary mention selection and user-configured Enter behavior remain unchanged.
+
+## Findings: Sidebar Search Result Continuity (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` associates asynchronous thread results with its debounced query and excludes them whenever the live query is ahead, so an old content match cannot masquerade as a result for newly typed text.
+- Orca revision `8d4e975` refines that boundary for its source picker: useful rows remain visible across a short prefix extension or trim, but disappear immediately when the live query diverges; a four-character delta caps how long a very short settled query may linger.
+- CX-Codex applies that continuity rule only to sidebar server-index IDs. Same-query and short prefix edits retain content matches alongside synchronous title matches; cleared, short, divergent, or excessively extended queries ignore the old IDs until their own response settles. Existing request-token checks still reject late network responses.
+
+## Findings: Recoverable Skill Content Loading (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` keeps the skill detail surface mounted while content loads and renders a persistent `Unable to load skill contents.` state when that request fails; an empty body is not used as an error state.
+- Orca revision `0ffdb79` applies the same recovery principle to skill setup commands: failed work stays visible with diagnostics and an explicit retry path instead of disappearing after a transient error.
+- CX-Codex keeps the smaller boundary appropriate to its Skills Hub: the skill description, source link, and modal actions remain available while a compact inline state explains that the README failed to load. `重试` repeats only the content request, clears stale failure UI after success, and does not expose raw transport details or add a global notification.
+
+## Findings: Skill Detail Focus Ownership (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` renders skill details through its shared Radix Dialog foundation. The underlying FocusScope automatically focuses the dialog, traps and loops Tab navigation, rejects outside focus, and restores the previous target when the dialog unmounts.
+- Orca's shared dialogs likewise build on portaled Radix Dialog content, so focus containment belongs to the modal boundary rather than to an individual button or async content state.
+- CX-Codex preserves that behavior without adding a new UI dependency: opening focuses the close action, Tab and Shift+Tab wrap within currently available actions, outside focus is reclaimed, and closing restores the exact connected opener. README retry, Escape/Android Back ownership, overlay dismissal, and the mobile bottom-sheet layout remain unchanged.
+
+## Findings: Recoverable Sidebar Labels (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` builds its sidebar task hover card with the current full `threadTitleValue`, while its `threadHeader.moreActions` locale entry is explicitly the accessible label for the task-actions dropdown (`任务操作` in Chinese). Truncation and icon-only controls therefore retain a readable name outside the compact row.
+- Orca's reviewed `Show Full Tab Title Tooltip` design likewise treats full-title recovery as a renderer-only concern: reuse the current label, preserve the existing focusable root, avoid extra tab stops and persistence, and keep action controls unobstructed.
+- CX-Codex uses the smallest browser-native adaptation for its dense sidebar: thread and project label spans expose their exact current text through `title`, while the existing menu button exposes `会话操作：<title>` through matching `aria-label` and `title`. No measurement listener, tooltip runtime, new wrapper, data contract, or mobile navigation behavior is added.
+
+## Findings: Anchored Image-preview Gestures (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` keeps image zoom local to the preview surface, intercepts only Ctrl-wheel for exponential pointer-anchored zoom, and tracks touch pointers for proportional two-finger pinch plus one-finger continuation after a pointer lifts. Its controls share the same bounded zoom state and disable unavailable directions.
+- Orca revision `4c03cdf` applies the same local ownership in `ImageViewer`: native non-passive Ctrl-wheel handling prevents browser zoom, bounded factors avoid high-frequency jumps, and current touch handling retains an anchor while switching between pinch and pan.
+- CX-Codex preserves its existing 100%-400% modal, button, ordinary-wheel, keyboard, double-click, and mouse-drag behavior. Ctrl-wheel now scales smoothly around the pointer, the modal stage owns touch gestures from the first contact, two pointers pinch proportionally, and the remaining pointer continues panning without a gesture reset. No persistence, image-fetching, route, server, or dependency boundary changes.
+
+## Findings: Visibility-bound Sidebar Relative Time (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` treats renderer visibility as a foreground/background lifecycle boundary, and its internationalization runtime provides relative-time formatting independently from thread synchronization.
+- Orca revision `4c03cdf` passes an explicit current-time value into compact sidebar activity rows instead of reading the wall clock as an untracked render side effect.
+- CX-Codex keeps its existing compact `now` / minute / hour / day labels and row layout, but drives them from one sidebar-owned reactive clock. The clock refreshes only while visible, catches up immediately on return, and does not request thread, runtime, or mobile state.
+
+## Findings: Message Reading Anchor and Composer Accessible Name (2026-08-01)
+
+- Orca `origin/main` revision `3a70078ab997` places a copy action and `Scroll this message to top` action together on assistant responses. The action aligns the selected response with the conversation viewport so a long answer can be reread from its beginning without dragging through the message history.
+- The installed Windows Codex package `26.721.4979` derives its composer accessible label from the explicit label or current placeholder and applies it to the textbox. CX-Codex follows that exact fallback so normal, plan, and follow-up composer modes retain an accurate spoken name.
+- An exact installed Codex desktop equivalent for Orca's per-response scroll-to-top action was not found. CX-Codex intentionally adopts Orca's compact reading affordance while preserving its own existing scroll owner, away-from-bottom state, and return-to-latest control.
+- Both changes are renderer-only. They add no message field, request, persisted preference, timer, synchronization path, Android navigation owner, or dependency; reduced-motion users receive an immediate scroll instead of animation.
+
+## Findings: Reversible Thread Archive (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` names the operation `归档任务` and defines `codex.archiveInfo.electronWithUndo` as an archive-complete notice containing a dedicated `撤销` link. Failure is separately named `未成功归档任务`, so archive is neither presented as deletion nor assumed successful before the RPC settles.
+- CX-Codex now uses the same user boundary: the sidebar and confirmation say `归档会话`, the confirmation truthfully says the task leaves the current list, and a successful archive exposes an eight-second `撤销` action. Failed or locally hidden materializing tasks do not receive a false success action.
+- Undo calls the existing App Server `thread/unarchive` RPC, removes the task from the existing local hidden-ID filter, and reloads the thread list. The existing server RPC cache already invalidates both archive and unarchive, so no notification, synchronization field, persistence format, Android owner, or dependency is added.
+- No exact archive-undo affordance was found in the reviewed Orca `origin/main` revision `c79b85975809`. Its latest connection, offline-input, and attachment-recovery changes were not copied because CX-Codex already has the corresponding focused recovery, durable outbox, upload retry, and image-state boundaries; the installed Codex behavior provides the more precise reference for this remaining gap.
+
+## Findings: Foreground Conversation Scroll Intent (2026-08-01)
+
+- Orca `origin/main` revision `1f307af` synchronizes terminal viewport intent before requesting backlog recovery and flushing queued output. That ordering preserves follow-at-bottom across streaming refocus while leaving a user-pinned scrollback position untouched.
+- The installed Windows Codex package `26.721.4979` likewise has one conversation scroll owner, a 24 px bottom threshold, disabled browser scroll anchoring, resize-aware bottom following, and an explicit return-to-bottom affordance. CX-Codex retains those existing rules.
+- CX-Codex now snapshots the active conversation's bottom-follow state or visible reading anchor when the document becomes hidden. The first recovered message update consumes that snapshot once, so a transient mobile WebView resize or scroll event between foregrounding and backlog delivery cannot reverse the prior intent.
+- Fresh wheel, touch, pointer, or scroll-key input after resume clears the snapshot before recovered output arrives. Thread changes and unmount also clear it. This is renderer-only and adds no timer, request, event protocol, persistence field, Android navigation owner, or dependency.
+
+## Findings: Non-blocking Thread-list Cache Persistence (2026-08-01)
+
+- Orca revision `76a2317` moves backup rotation off the synchronous request path and serializes persistent writes so filesystem latency cannot pause interactive work or let older state overwrite newer state.
+- CX-Codex had the same risk on a hotter path: every `thread/list` cache write, invalidation, and clear synchronously created the directory and rewrote `%USERPROFILE%\.codex\web-thread-list-cache.json`. The observed local cache was approximately 1.7 MB, so routine list convergence could pause the Node bridge that also owns conversation RPCs.
+- CX-Codex now keeps cache mutation synchronous in memory but persists snapshots through one asynchronous writer. Updates arriving during a write replace the pending snapshot, the writer drains the newest state in order, and filesystem failures remain isolated because this file is only a startup accelerator.
+- Startup loading deliberately remains synchronous so cached rows are available before the first request. The persistence format, cache TTLs, invalidation generation, RPC methods, frontend state, mobile recovery, and installed Codex desktop behavior are unchanged.
+
+## Findings: Contextual Browser Titles and Stable Narrow Headers (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` keeps the stable product identity `Codex` at the native window boundary and represents compact connection activity with a dot or spinner while the complete state remains available to assistive text and hover disclosure.
+- Orca revision `c6d2180` preserves a mobile action row's footprint while asynchronous eligibility resolves. Its specific pull-request control is not copied, but the same no-shift principle applies when CX-Codex connection state changes from live to syncing or recovery.
+- CX-Codex browser tabs now combine the current route or task title with `CX-Codex`, retain non-local host identity, and preserve the existing exact attention prefix. At 430 px and below, the thread header keeps the connection dot, refresh/spinner, tooltip, accessible label, and recovery action but hides the redundant visible status text; the title owns and end-truncates the remaining width.
+- These are renderer-only identity and layout changes. Routing, attention calculation, connection state, recovery ownership, Runtime Store, persistence, and Android lifecycle behavior remain unchanged.
+
+## Findings: Command-menu Modal Focus Ownership (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` builds its global command menu on the same Radix dialog and focus-scope foundation used by its other modal surfaces, so opening transfers focus into the menu, Tab stays within it, outside focus is rejected, and closing returns focus to the opener.
+- Orca `origin/main` revision `16c5526` implements Quick Open through its shared `CommandDialog`. The shared Radix Dialog portal owns focus containment and background scroll locking, while `useModalReturnFocus` records the prior surface for dismissal.
+- CX-Codex now enforces the equivalent boundary locally without adding a dependency: the search field owns the single Tab stop, forward and reverse Tab remain in the dialog, programmatic outside focus is reclaimed, body scrolling is locked only while open, and the exact connected opener is restored on close. Command data, arrow-key selection, file search, Escape mode navigation, routes, synchronization, and Android lifecycle ownership remain unchanged.
+
+## Findings: Compact Composer Sheet Environment Ownership (2026-08-01)
+
+- Orca `origin/main` revision `16c5526` renders mobile bottom drawers inside a dedicated native `Modal`, marks the active drawer with `accessibilityViewIsModal` and `aria-modal`, and routes Android Back to that top drawer. Its desktop `Sheet` uses the shared Radix Dialog primitive, which also owns focus containment and background interaction.
+- The installed Windows Codex package `26.721.4979` exposes the same modal foundation in its renderer: trapped `FocusScope` reclaims outside focus and its scroll-removal layer disables background scrolling while dialog content is active. No exact phone composer-sheet surface exists in the desktop package, so the shared modal contract is the parity reference.
+- CX-Codex applies that contract only when the existing attachment or model/quality/speed panel is rendered as a compact bottom sheet. Desktop popovers remain non-modal; phone sheets lock body scrolling, contain keyboard and programmatic focus, restore their trigger on close, and expose trigger-to-dialog ownership.
+- The teleported skill chooser is a nested modal boundary on phones: it delegates body-scroll ownership to the attachment sheet, owns its search focus while open, and restores the skill trigger without dismissing the attachment sheet. Attachment actions, runtime selection, drafts, synchronization, and Android Back ordering remain unchanged.
+
+## Findings: Mobile Sidebar Drawer Environment Ownership (2026-08-01)
+
+- Orca `origin/main` revision `16c5526` renders its phone `RightDrawer` inside a native modal, marks it with `accessibilityViewIsModal` and `aria-modal`, dismisses through the backdrop, and gives Android Back to the active drawer before lower navigation.
+- The installed Windows Codex package `26.721.4979` has no exact phone sidebar, but its shared dialog foundation uses a trapped focus scope plus background scroll removal. That common modal boundary is the applicable parity reference.
+- CX-Codex keeps the existing bounded drawer, backdrop, route handoff, desktop preference, and App-level Back order. Opening now focuses `收起侧栏`, contains forward/reverse Tab, rejects background focus, and locks root scrolling; closing restores the exact connected opener and prior root overflow.
+- A nested settings or global dialog may still own focus above the drawer. The environment implementation is shared with compact Composer sheets and loads only when a modal opens, keeping the production main entry below its 400 KB minified budget without adding a dependency or changing synchronization and Android lifecycle paths.
+
+## Findings: Authoritative Conversation-turn Reconciliation (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` reconciles paged turn items by stable item ID and has an explicit fallback for final assistant messages: when IDs differ but `phase === final_answer` and text matches, it retains one logical item and carries forward memory-citation metadata.
+- Orca `origin/main` revision `16c5526` applies the same user-facing principle in Agent Session History: adjacent same-role turns with equivalent normalized text collapse before display. CX-Codex does not copy that global text rule because identical replies in separate conversation turns may be intentional.
+- CX-Codex instead uses the strongest identity boundary available to each source. Session-log recovery strips only the transport-owned trailing `<oai-mem-citation>` block before pairing an `event_msg` with its `response_item`; a later fresh App Server window replaces cached identities only inside the exact overlapping `turnIndex` values.
+- Cached history outside the authoritative window remains available, and same-role/same-text messages in different turns remain distinct. Rendering, rollback targets, favorites, synchronization, Runtime Store, mobile recovery, and Android navigation receive no new protocol or persistence field.
+
+## Findings: Recoverable Markdown-image Rendering (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` gives image attachments three explicit states: a bounded placeholder before a source resolves, a descriptive interactive preview after success, and a compact `Image failed to load` surface after failure. Its preview trigger is keyboard operable and named from the image description.
+- Orca `origin/main` revision `16c5526` follows the same state boundary in `ImageViewer`: unresolved content says `Loading preview...`, invalid content retains a visible `Failed to load file preview` surface, and successful content becomes the only interactive preview state.
+- CX-Codex's Markdown-image branch reused the attachment image opacity transition but never recorded a successful load. Real 7420 screenshots therefore downloaded and acquired valid natural dimensions while remaining permanently at `opacity: 0`; the same branch rendered a blank 64 px border during loading and exposed raw Markdown text after failure.
+- CX-Codex now records cached and fresh Markdown-image settlement, shows the existing reduced-motion-aware loading skeleton, reveals successful content with a descriptive preview label, and offers an explicit `重试` action after failure. Retry remounts only that image request; message data, Markdown parsing, scroll ownership, preview gestures, synchronization, persistence, and Android lifecycle behavior remain unchanged.
+
+## Findings: Explicit New-output Return and Transcript Focus (2026-08-01)
+
+- Orca `origin/main` revision `16c5526` renders its desktop native-chat jump affordance with both an ArrowDown icon and the visible text `Jump to latest`; its mobile native surface keeps the tighter icon-only FAB with `Scroll to latest` as the accessibility label.
+- The installed Windows Codex package `26.721.4979` likewise keeps its reusable scroll-to-bottom action compact at 32 px while retaining the caller-provided accessible label. These references agree on the action boundary but make different density choices for desktop and phone surfaces.
+- CX-Codex keeps the compact icon-only control when a reader has merely moved away from the bottom. When actual output arrives below the fold, the existing accent state now also exposes `最新输出` at phone widths; this preserves compact browsing while making the meaningful changed state self-explanatory.
+- Activating the transient control returns focus to the existing `会话消息` transcript before the button unmounts. Keyboard users therefore continue from a stable focus owner instead of falling back to `BODY`. Message flow, scroll thresholds, bottom locking, saved anchors, synchronization, persistence, and Android lifecycle behavior are unchanged.
+
+## Findings: Explicit Context Percentage and Mobile Header Targets (2026-08-01)
+
+- The installed Windows Codex package `26.721.4979` renders context usage with an explicit unit in both visible and assistive copy: `{usage}% 已用` and `上下文用量：{percent}%`. A bare number is not used for this status.
+- Orca `origin/main` revision `16c5526` likewise formats usage as a complete percentage label, and its native-chat controls grow from 32 px to 40 px on coarse pointers. CX-Codex adopts the semantic unit and touch-target principle without copying Orca's status-bar or breakpoint architecture.
+- CX-Codex's compact context ring previously exposed the full `上下文已使用 31%` accessibility label but rendered only `31`, which could be mistaken for seconds, items, or a badge count. The visible label now renders `31%` while retaining the same calculation, ring, tooltip, thresholds, and token detail.
+- Across CX-Codex's existing compact-touch boundary below 1024 px, including phone landscape, the recovery and Favorites actions now use 36 px minimum height/width instead of 28 px. They match the adjacent sidebar controls while keeping the header, title truncation, and 320 px layout stable. No request, synchronization state, token calculation, persistence field, Android lifecycle owner, or dependency changes.
+
+## Findings: Mobile Thread-navigation Focus Handoff (2026-08-01)
+
+- Orca `origin/main` revision `16c5526` routes workspace and dashboard navigation through `activateTabAndFocusPane` / `activateAndRevealWorktree`, so selecting a destination also establishes focus ownership in the destination pane instead of leaving it on a dismissed navigation surface.
+- The installed Windows Codex package `26.721.4979` exposes `主要内容` as an explicit application landmark and uses contained focus scopes for modal surfaces. Its exact desktop navigation structure is different, but the shared boundary is that focus remains attached to a meaningful destination after a modal owner disappears.
+- CX-Codex's phone drawer correctly restored its opener when dismissed without navigation. Selecting a thread was different: the selected row and drawer unmounted, then focus returned to `展开侧栏` or `BODY`, so keyboard and assistive users were not placed in the conversation they had just opened.
+- Thread selection from the mobile drawer now transfers focus, without scrolling, to the existing `#main-content` skip-link target after Vue applies the navigation state. Ordinary drawer dismissal still restores the opener, desktop sidebar selection is unchanged, and route, conversation scroll, synchronization, persistence, and Android Back ownership receive no new state.
+
+## Findings: Mobile Drawer Assistive Isolation (2026-08-01)
+
+- Orca `origin/main` revision `16c5526` marks its native phone drawer with `accessibilityViewIsModal` and `aria-modal`, so assistive navigation treats the drawer as the active surface instead of continuing through the obscured application.
+- The installed Windows Codex package `26.721.4979` applies the same boundary through its shared dialog foundation, which hides background content from the assistive tree while focus containment and scroll removal are active.
+- CX-Codex already trapped focus and locked root scrolling, but a real 393 x 852 accessibility snapshot still exposed the background header, project controls, Composer, and skip link while the mobile drawer was open.
+- The shared modal environment now marks only non-portal body siblings that it owns as `inert`, then restores only those siblings on close. This covers the teleported drawer and compact Composer sheets, preserves pre-existing inert state and nested modal ownership, and leaves ordinary desktop popovers unchanged.
+- No route, thread selection, scroll position, synchronization field, persistence format, Android Back owner, dependency, or main-entry import was added.
+
+## Findings: Safe Message-action Hit Testing (2026-08-02)
+
+- The installed Windows Codex package `26.721.4979` reveals user-message actions through its shared hover/focus-within group state and also supports an explicit always-visible action mode. Visibility and interaction ownership therefore change together; an opacity-zero action is not treated as an independent touch surface.
+- Orca `origin/main` revision `16c5526` keeps its native assistant copy and scroll controls visibly present instead of hiding an active hit target. CX-Codex retains its quieter tap-to-reveal layout because each message may expose edit/rollback, favorite, copy, and scroll actions, but adopts the same visible-action boundary.
+- A real 393 x 852 CX-Codex fixture proved that the prior opacity-zero edit, rollback, favorite, copy, and scroll buttons still owned their center hit targets and could execute a click. Hidden actions now reject pointer input; selecting a message, keyboard focus within it, or fine-pointer hover reveals and activates them together.
+- A favorited action is intentionally always visible and therefore remains pointer-operable even when the rest of its row is inactive. Keyboard Tab behavior is preserved because pointer hit testing does not remove controls from the focus order, and focus-within reveals the complete action row before interaction.
+- The change is CSS-state ownership plus regression coverage only. Message actions, rollback confirmation, favorites data, clipboard handling, scroll behavior, synchronization, persistence, routes, and Android lifecycle ownership are unchanged.
+
+## Findings: Explicit Sidebar Search Progress and Recovery (2026-08-02)
+
+- The installed Windows Codex package `26.721.4979` defines separate command-menu states for `正在加载任务…`, `无匹配项`, and recoverable failures elsewhere through explicit retry actions. Pending work is not presented as a settled empty result.
+- A real 393 x 852 CX-Codex drawer showed `没有匹配的会话` immediately for a query with no visible local-title match, while its full `/codex-api/thread-search` request remained unresolved until the frontend's 12-second background timeout. The query then stayed on the same false empty state with no failure disclosure or recovery path.
+- CX-Codex now keeps local-title matches visible while full search is pending; an otherwise empty tree exposes `正在搜索全部会话…`, then either settles to the real no-result state or shows `完整搜索暂时不可用` with `重新搜索`. Progress is polite and busy rather than alerting, and reduced-motion users receive a static indicator.
+- The request owner moved with the existing async `SidebarThreadTree` boundary so the production main entry remains below 400,000 minified bytes. Search endpoint, index, debounce, timeout, matching, stale-result continuity, thread synchronization, persistence, routes, and Android lifecycle ownership are unchanged.
+
+## Findings: Coalesced Sidebar Search-index Invalidation (2026-08-02)
+
+- Orca `origin/main` observed at `b04c695` uses a single-flight request owner that keeps one request on the wire and coalesces repeated triggers into at most one trailing follow-up. It also clears in-flight ownership by exact promise or entry identity so an older completion cannot tear down a newer owner.
+- The installed Windows Codex package `26.721.4979` keeps sidebar prefetch independent from rendering and does not replace a usable sidebar with a blocking full-list barrier. CX-Codex retains the same stale-first presentation boundary.
+- A real isolated CX-Codex search build received repeated session-file invalidations while five requests waited on a 573-thread index. The old store dropped its promise handles on every invalidation, allowing parallel full active/archived scans; the deterministic smoke reproduced this as build count `2` where single-flight ownership requires `1`.
+- CX-Codex now retains the exact in-flight initial build and refresh across invalidation. Generation checks keep their result stale when necessary, the stale index remains immediately searchable, and one later refresh converges current authority without parallel `thread/list` storms. Endpoint, in-memory index format, frontend recovery, synchronization, and Android lifecycle ownership are unchanged; restart persistence is documented separately below.
+
+## Findings: Restart-ready Full Thread-search Cache (2026-08-02)
+
+- The installed Windows Codex package `26.721.4979` keeps sidebar prefetch independent from the rendered sidebar, while Orca `origin/main` at `b04c695` uses exact in-flight ownership and one trailing refresh instead of blocking readers behind duplicate work. CX-Codex preserves that stale-first contract across its browser-bridge process boundary.
+- A local coverage audit found that `session_index.jsonl` contained 438 titled sessions but covered only 174 of 238 active rows in the newest persisted list chain (73.1%). The overlapping titles all matched, but treating that partial source as complete would hide 64 active conversations and was rejected.
+- CX-Codex therefore persists only the result of a successful full active/archived scan. The versioned file contains ordered ID/title pairs only, loads as stale after restart, and immediately serves matching IDs while the existing single-flight refresh validates current authority. Malformed files are ignored, and serialized asynchronous writes preserve completion order.
+- A real isolated cold scan indexed 573 threads in 23,803 ms and wrote a 104,303-byte cache. Restarting the same build reduced the first identical search to 21 ms with the same match and count; five concurrent follow-ups completed with one identical result in 100 ms total, then diagnostics settled with no `thread/list` timeout or active work. Frontend protocol, visible recovery states, thread synchronization, routes, and Android lifecycle ownership are unchanged.
+
+## Findings: Non-blocking Cold Full-thread Search (2026-08-02)
+
+- The installed Windows Codex package `26.721.4979` keeps cached sidebar rows usable while independent `AppPrefetchImpl` stages reconcile complete task data. Missing background authority is not allowed to turn an already usable local task surface into one blocking full-list barrier.
+- A real 393 x 852 CX-Codex drawer reproduced the opposite cold-search path twice: a local miss waited for the frontend's 12-second timeout and ended at `完整搜索暂时不可用`. The bridge log tied the first failure to `/codex-api/thread-search`, a 12,996 ms successful `thread/list`, and the next page timing out at 15,000 ms.
+- The existing coverage audit showed session titles cover only 73.1% of the newest active list, so CX-Codex does not call that fallback complete. A missing full cache now returns the local title index with optional `partial: true`, immediately starts the existing single-flight active/archived reconciliation, and keeps the drawer busy with `更多会话仍在整理` plus `再次检查`.
+- The deterministic gate test failed before the change with `blocked-on-thread-list` and now returns the provisional title match before one event-loop turn; releasing the App Server gate replaces it with the complete union. Matching, cache authority, source invalidation, routes, Runtime Store, and Android lifecycle ownership remain unchanged.
+
+## Findings: Source-scoped Session-file Refresh (2026-08-02)
+
+- Orca revision `5c0195a` moves watcher-driven File Explorer work behind one owner that distinguishes full-tree from directory refreshes, deduplicates paths, bounds concurrency, and retains one trailing run instead of turning every filesystem event into every kind of refresh.
+- CX-Codex already had the corresponding user-state boundary in its shared session-file policy: `session-log` refreshes selected messages without refreshing the thread collection, while `session-index` refreshes the collection without rereading message history. The server bridge had not applied that distinction and invalidated both `thread/list` and the title search index for every log append.
+- Main 7420 diagnostics had emitted 11,331 session-file changes. CX-Codex now keeps log notifications, exact thread-read/supplemental invalidation, Runtime replay, and mobile convergence intact, but reserves global list/search invalidation for session-index or unknown-source changes.
+- In an isolated rebuilt process, five confirmed log-only observer events occurred while `session_index.jsonl` stayed unchanged. The next 573-thread search completed in 8 ms and the latest `thread/list` timestamp did not move, with no pending, queued, or active RPC. Notification payload, debounce, search response, persistence format, routes, and Android lifecycle ownership are unchanged.
+
+## Findings: Complete Thread-row Identity Admission (2026-08-02)
+
+- Orca revision `6e7ceaf` avoids publishing unchanged worktree-catalog payloads, preserving renderer stability while still admitting a new snapshot whenever meaningful workspace state changes.
+- CX-Codex already applied the same principle locally by reusing equal thread and project-group objects across list refreshes. Its equality boundary omitted `hasWorktree`, however, so a meaningful worktree-state correction could be mistaken for an unchanged row.
+- CX-Codex now compares all fields in `UiThread`, including `hasWorktree`, before reusing identity. Unchanged payloads remain quiet, while a worktree transition updates the sidebar indicator and the existing auto-commit/rollback eligibility checks.
+- This is a frontend admission fix only. Thread ordering, deduplication, requests, persistence, Runtime Store ownership, routes, and Android lifecycle behavior remain unchanged.
+
+## Findings: Bounded Composer Auto-grow (2026-08-02)
+
+- Orca `origin/main` at revision `786d704` gives its native-chat textarea layout-driven `field-sizing: content` with an eight-line cap. Its contract explicitly avoids JavaScript-written heights so draft wrapping responds naturally when the pane or viewport width changes.
+- CX-Codex already declared a one-line minimum and 128 px maximum but had no growth owner. A real 393 x 852 fixture stayed 32 px high for five explicit lines while `scrollHeight` reached 107 px, turning ordinary prompt editing into a one-line scroll surface.
+- CX-Codex now adopts the same layout-owned boundary within its existing dimensions: five lines grow to 107 px, 20 lines cap at 128 px with internal scrolling, clearing shrinks to 32 px, and the existing half-screen action still reaches 368 px.
+- The CSS property is progressive enhancement. Unsupported engines retain the prior functional fallback, while supported desktop Chrome and Android WebView-class engines gain auto-grow without a watcher, resize observer, inline height, timer, dependency, request, persistence field, or lifecycle state.
+
+## Findings: Adaptive Default Enter Semantics (2026-08-02)
+
+- The installed Windows Codex package preserves the familiar desktop boundary where Enter submits and Shift+Enter creates a line break. Orca `origin/main` revision `786d704` likewise keeps IME composition ahead of its native-chat Enter-to-send decision, so an active composition session cannot be mistaken for submission.
+- Applying that desktop default unchanged to CX-Codex's phone surface made ordinary multi-line editing impractical: a 393 x 852 black-box run submitted and cleared a draft on Return, while a soft keyboard offered no dependable Shift modifier.
+- CX-Codex now keeps desktop parity when no preference exists but resolves the unset phone default to newline. The explicit send button remains the primary touch action, and Ctrl/Command+Enter still sends for attached hardware keyboards.
+- A stored user choice remains authoritative on every viewport. The change adds only a pure preference resolver and a computed effective value; the existing key, IME guard, submit pipeline, focus restoration, draft persistence, synchronization, and Android lifecycle ownership are unchanged.
+
+## Findings: Deliberate Bulk Project Collapse (2026-08-02)
+
+- Orca `origin/main` at revision `c5c10e1` adds stability work around file-explorer/watch ownership rather than a new chat-navigation pattern. The installed Windows Codex package `26.721.4979` likewise does not provide evidence for silently changing every existing project expansion preference. CX-Codex therefore treats compacting as an explicit user action, not a new default.
+- A real 393 x 852 CX-Codex drawer with 21 expanded projects mounted about 283 buttons, 71 conversation entries, and 5,505 px of scroll content. Three open-to-two-frame samples were 124.6 / 118.6 / 129.7 ms, while the existing `整理会话` menu only exposed `按项目`.
+- The same menu now offers `收起全部项目` and `展开全部项目`, with connected menu semantics and an unavailable inverse action disabled. Both operations batch through the established persisted project-collapse map; per-project toggles, grouping, ordering, pinned conversations, selection, and drawer ownership remain unchanged.
+- After collapse-all, the real drawer mounted 67 buttons, zero project conversation rows, and 1,631 px of scroll content; open samples fell to 42.0 / 40.6 / 37.1 ms. Expand-all restored 21/21 groups and 69 project rows with no browser errors. No request, synchronization field, route, Runtime Store state, dependency, or Android lifecycle owner was added.
+
+## Findings: Current Reasoning-effort Coverage (2026-08-02)
+
+- Installed Windows Codex `26.721.4979` contains the current `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra` protocol values plus an enabled-reasoning-efforts control. Orca `origin/main` at `c5c10e1` has no corresponding Composer control to reuse.
+- The running CX-Codex app-server advertised six selectable GPT-5.6-Sol levels ending in `max` and `ultra`, while the frontend type, normalization, persistence, and label maps ended at `xhigh`. At 393 x 852, this rendered two unnamed 170 x 36 buttons; selecting the first was silently rejected by the state allowlist.
+- CX-Codex now owns compatibility for both new values at its local frontend boundary without hand-editing the generated schema snapshot. The panel labels them `最高` and `极致`, and the same values survive selected preference, workbench presets, durable queued-message recovery, activity summaries, and runtime send.
+- Real mobile verification selected each new value and observed `5.6 · 最高 · 标准` and `5.6 · 极致 · 标准`, then restored `超高` with no browser error. Model capability filtering, default resolution, speed, collaboration mode, requests, synchronization, Runtime Store, and Android lifecycle ownership remain unchanged.
+
+## Findings: Complete Long-conversation Export Ownership (2026-08-02)
+
+- The installed Windows Codex package `26.721.4979` exposes `copyConversationMarkdown` through its conversation overflow owner. That action names the whole conversation rather than an arbitrary currently rendered message slice.
+- A real 393 x 852 CX-Codex thread still exposed `继续查看更多（剩余 5 条）`, while its old `导出会话` action silently serialized only the loaded frontend window. The 62,025-byte, 187-section file omitted the original `github.com/stablyai/orca` prompt and the early question `前端有值得参考的吗`, and the UI exposed no completeness state.
+- CX-Codex now treats explicit export as a full-history operation. It reuses the existing uncached `fullHistory: true` reader, exposes pending/success/failure feedback, shares one in-flight owner across repeated taps, verifies thread ownership before download, and only then serializes a captured message snapshot.
+- Post-fix dogfood captured the actual page-generated Blob at 341,604 bytes and 942 sections with both early values and current-turn content present. Two rapid export actions produced one Blob, and browser errors remained empty.
+- Markdown serialization and download moved behind a 1.68 KB dynamic import, reducing the cold main entry to 399,145 bytes. Ordinary bounded history, search, thread synchronization, routes, persistence, Runtime Store, requests, protocol shape, dependencies, and Android lifecycle ownership are unchanged.
+
+## Findings: Complete Conversation Copy (2026-08-02)
+
+- Installed Windows Codex `26.721.4979` exposes `copyConversationMarkdown` through the conversation-overflow owner. CX-Codex had the matching complete export path but required a download-open-select-copy round trip before users could paste a conversation elsewhere.
+- CX-Codex now exposes `复制完整会话` beside export. Both actions share the existing uncached full-history read and single in-flight owner, while Markdown generation stays in the established lazy helper.
+- Real 393 x 852 verification copied more than 163,000 characters and 961 message sections while the page still displayed `继续查看更多（剩余 5 条）`. The payload contained the original project URL, an early follow-up question, and current-round content.
+- Pending, success, and truthful failure states are explicit. Forced failure of both clipboard paths recommends export instead of claiming success. Requests, bounded navigation history, synchronization, routes, persistence, Runtime Store, protocol shape, dependencies, and Android lifecycle ownership are unchanged.
+
+## Findings: Navigation-neutral Conversation Sharing (2026-08-02)
+
+- Installed Windows Codex `26.721.4979` keeps `copyConversationMarkdown` inside the conversation action owner; copying is read-only and does not implicitly navigate to another task.
+- CX-Codex's first complete-copy/export implementation loaded full history by selecting the sidebar target and pushing its route. Two-way 393 x 852 dogfood proved that copying conversation B while reading A silently replaced A behind the still-open drawer, so the context change was easy to miss.
+- CX-Codex now reads the exact menu target directly with `thread/read` and `responseView: 'full'`, normalizes that returned snapshot for Markdown, and never mutates the selected thread, route, drawer, foreground synchronization owner, or reading position. Copy and export retain the same single in-flight owner and explicit pending/success/failure feedback.
+- Post-fix mobile verification copied 189,633 characters and exported one 394,284-byte Blob for conversation B while A's title, URL, heading, and open drawer remained unchanged. Forced clipboard failure retained A and showed the recoverable danger state without false success. No dependency, protocol field, persistence format, Runtime Store state, or Android lifecycle owner was added.
+
+## Findings: Completed Mobile Search Intent (2026-08-02)
+
+- Orca `origin/main` at `e0f597a` owns mobile worktree search as page-local state. Opening a worktree navigates away from that list, so the temporary query cannot unexpectedly filter the next list mount. Its picker drawer similarly closes the transient surface before delivering the selected value.
+- Installed Windows Codex `26.721.4979` has no equivalent phone drawer, so CX-Codex adapts the same completed-intent boundary instead of copying desktop persistence semantics into a transient mobile surface.
+- A real 393 x 852 CX-Codex drawer retained `查找热门 Web Codex 项目` after selecting that result and completing navigation. Reopening the drawer showed only the former one-row result, which made the rest of the conversations appear missing.
+- CX-Codex now clears search visibility and query only inside the successful mobile-navigation close boundary. Manual drawer dismissal preserves an interrupted search, desktop selection preserves its persistent sidebar filter, and routes, matching, synchronization, persistence, Runtime Store, and Android lifecycle ownership remain unchanged.
+- Post-fix phone verification reopened the completed-navigation drawer with search closed, an empty query, and 71 visible rows. Manual dismissal restored its exact query and one-row result; the desktop sidebar likewise retained its filter after selection. Browser errors were empty and the complete 34-surface regression passed.
+
+## Findings: Explicit Current-conversation Recovery (2026-08-02)
+
+- Orca `origin/main` at `e0f597a` keeps a permanent `Reveal active workspace` action in its sidebar toolbar. The request clears filters that hide the target, stages virtualized rows when needed, performs only the scroll required to reveal its bounds, highlights the result, and changes smooth scrolling to an immediate jump for reduced-motion users.
+- Installed Windows Codex `26.721.4979` has no equivalent phone drawer to copy directly. CX-Codex adapts Orca's explicit recovery boundary to conversations instead of auto-scrolling whenever the drawer opens and taking ownership away from a user browsing elsewhere in the list.
+- A real 393 x 852 search-navigation path reopened at `scrollTop = 0` with the active row at `982.44px–1,028.91px`, outside a viewport ending at `799px`; the list was `5,505px` high and offered no current-location recovery.
+- CX-Codex now exposes `当前会话` beside Settings. It clears the transient search, expands a collapsed project or the default five-row preview, then scrolls only when the active project row is outside the current viewport. Existing active-row styling supplies the visual confirmation, and later manual scrolling does not snap back.
+- Post-fix phone verification moved the original row into view at `752.44px–798.91px`; an older sixth conversation expanded all nine project rows and became visible at `scrollTop = 424`. Desktop recovery and reduced-motion immediate scrolling also passed. No request, synchronization field, route, persistence format, Runtime Store state, dependency, or Android lifecycle owner was added.
+
+## Findings: Nested Mobile Settings-sheet Ownership (2026-08-02)
+
+- Installed Windows Codex `26.721.4979` uses a trapped, looping Radix `FocusScope` with focus guards for its shared dialogs. Orca `origin/main` at revision `de75003` likewise routes modal command surfaces through its shared dialog and `useModalReturnFocus`, which captures and restores the exact previously focused element.
+- Neither reference exposes CX-Codex's exact phone Settings sheet, so parity is applied at the interaction boundary rather than copied as a visual surface: one visible modal owns focus, its covered siblings leave sequential and assistive navigation, and dismissal restores the initiating control.
+- A real 410 x 502 CX-Codex run previously kept focus on the obscured `设置` trigger; two Tab presses reached `新建会话`, while roughly 200 covered drawer controls remained exposed to the accessibility tree.
+- CX-Codex now reuses its existing lazy modal environment for the nested Settings sheet, adds the drawer scroll region and footer as reversible inert targets, keeps the backdrop out of the Tab order, and preserves exact focus restoration. Android Back closes only the inner sheet, leaving the outer drawer and its root scroll lock intact; desktop Settings remains inline.
+
+## Findings: Presentational Mobile Modal Backdrops (2026-08-02)
+
+- Installed Windows Codex `26.721.4979` routes its shared dialogs through Radix primitives: the overlay has no accessible name, focus remains inside the dialog, and the content owns the single named close action. Orca `origin/main` at `8ab85c9` uses the same unnamed `DialogOverlay` boundary and places its sole `DialogPrimitive.Close` inside `DialogContent`.
+- CX-Codex's phone Settings sheet visually showed one close icon but announced the full-screen pointer backdrop as a second `关闭设置` button. Two independent 410 x 502 accessibility snapshots exposed the duplicate at opposite ends of the control list.
+- The backdrop is now presentational and omitted from assistive and sequential navigation while preserving pointer dismissal. Preventing pointer focus on press keeps the established modal release path able to restore the exact `设置` trigger after the backdrop element is removed.
+- Real pointer verification closed only Settings, kept the outer mobile drawer and root scroll lock active, restored focus to `设置`, and preserved the existing preference state. Header close, Escape, Android Back, desktop inline Settings, requests, synchronization, persistence, Runtime Store ownership, and Android lifecycle behavior remain unchanged.
+
+## Findings: Fixed Recent-first Sidebar Hierarchy (2026-08-02)
+
+- Installed Windows Codex `26.721.4979` exposes `最近的项目` and `最近更新` as first-class sidebar sorting concepts, alongside optional grouping and manual-priority controls. Its useful transferable contract is that conversation activity owns recency.
+- CX-Codex previously combined a running shortcut, pinned shortcut, optional chronological mode, project grouping, pinned-project priority, and manual project reordering. On the real 7420 sidebar this placed stale pinned projects above the active `codexui` directory and made one conversation appear in several navigation collections.
+- The user explicitly chose a simpler fixed model, so CX-Codex intentionally narrows rather than copies the full Codex option set: `置顶` conversations, then `目录`, then directory conversations. All three levels use the latest conversation timestamp; running, waiting, and unread remain row state rather than sorting priority or a separate collection.
+- Pinned conversations remain discoverable inside their owning directory, preserving project context. Directory collapse, search, current-thread reveal, thread menus, synchronization, routes, persistence, Runtime Store, and Android lifecycle ownership are unchanged; stored project pin/order metadata is retained for compatibility but no longer affects or advertises the fixed recent presentation.

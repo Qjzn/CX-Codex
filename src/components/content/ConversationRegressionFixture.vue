@@ -12,6 +12,14 @@
         <button type="button" data-testid="switch-scroll-thread-b" @click="activeThreadId = 'regression-scroll-b'">
           Thread B
         </button>
+        <button
+          v-if="isForegroundResumeScrollFixture"
+          type="button"
+          data-testid="append-resume-output"
+          @click="appendResumeOutput"
+        >
+          Append output
+        </button>
         <span
           class="conversation-scroll-switch-state"
           :data-active-thread-id="activeThreadId"
@@ -52,7 +60,7 @@
         :active-thread-id="activeThreadId"
         cwd="E:/javaword/CXCodex/codexui"
         :scroll-state="activeScrollState"
-        :favorite-message-ids="[]"
+        :favorite-message-ids="favoriteMessageIds"
         @update-scroll-state="onUpdateScrollState"
         @respond-server-request="noop"
         @rollback="noop"
@@ -63,7 +71,16 @@
         @return-to-new-thread="noop"
         @dismiss-empty-thread="noop"
         @retry-failed-message="noop"
+        @copy-status="copyStatus = $event"
       />
+      <p
+        v-if="copyStatus"
+        class="conversation-regression-copy-status"
+        :data-tone="copyStatus.tone"
+        role="status"
+      >
+        {{ copyStatus.message }}
+      </p>
       <span class="conversation-regression-older-history-count" :data-count="olderHistoryRequestCount" aria-hidden="true" />
       <span class="conversation-regression-load-retry-count" :data-count="loadRetryCount" aria-hidden="true" />
       <span class="conversation-regression-connection-settings-count" :data-count="connectionSettingsCount" aria-hidden="true" />
@@ -345,10 +362,38 @@ const isResumeRecoveryFixture = fixtureParams.get('resumeRecovery') === '1'
 const isQueueFailureFixture = fixtureParams.get('queueFailure') === '1'
 const isLoadFailureFixture = fixtureParams.get('loadFailure') === '1'
 const isScrollSwitchRaceFixture = fixtureParams.get('scrollSwitchRace') === '1'
+const isForegroundResumeScrollFixture = fixtureParams.get('foregroundResumeScroll') === '1'
+const isImagePreviewFixture = fixtureParams.get('imagePreview') === '1'
+const isMarkdownImageFixture = fixtureParams.get('markdownImage') === '1'
+const isMessageActionHitFixture = fixtureParams.get('messageActionHit') === '1'
 const activeThreadId = ref(isScrollSwitchRaceFixture ? 'regression-scroll-a' : 'regression-conversation-blocks')
 const scrollStateByThreadId = ref<Record<string, ThreadScrollState>>({})
 const activeScrollState = computed(() => scrollStateByThreadId.value[activeThreadId.value] ?? null)
-const scrollRaceMessagesByThreadId: Record<string, UiMessage[]> = Object.fromEntries(
+const favoriteMessageIds = computed(() => (
+  isMessageActionHitFixture ? [`${activeThreadId.value}-message-39`] : []
+))
+const imagePreviewMessage: UiMessage = {
+  id: 'fixture-image-preview-gestures',
+  role: 'assistant',
+  text: '图片预览手势回归夹具',
+  images: ['branding/cx-codex-logo.png'],
+  turnIndex: 7,
+}
+const markdownImageMessages: UiMessage[] = [
+  {
+    id: 'fixture-markdown-image-visible',
+    role: 'assistant',
+    text: '已生成回归截图：\n\n![Markdown 图片回归](branding/cx-codex-logo.png)',
+    turnIndex: 8,
+  },
+  {
+    id: 'fixture-markdown-image-failed',
+    role: 'assistant',
+    text: '失效图片应提供恢复入口：\n\n![失效 Markdown 图片](/__missing-markdown-image-regression.png)',
+    turnIndex: 9,
+  },
+]
+const scrollRaceMessagesByThreadId = ref<Record<string, UiMessage[]>>(Object.fromEntries(
   ['regression-scroll-a', 'regression-scroll-b'].map((threadId) => [
     threadId,
     Array.from({ length: 48 }, (_, index): UiMessage => ({
@@ -358,17 +403,20 @@ const scrollRaceMessagesByThreadId: Record<string, UiMessage[]> = Object.fromEnt
       turnIndex: Math.floor(index / 2),
     })),
   ]),
-)
+))
 const fixtureMessages = computed(() => {
   if (isLoadFailureFixture) return []
   if (isScrollSwitchRaceFixture) {
-    return scrollRaceMessagesByThreadId[activeThreadId.value] ?? []
+    return scrollRaceMessagesByThreadId.value[activeThreadId.value] ?? []
   }
+  if (isImagePreviewFixture) return [...messages, imagePreviewMessage]
+  if (isMarkdownImageFixture) return [...messages, ...markdownImageMessages]
   return messages
 })
 const pendingRequests: UiServerRequest[] = isTailStatusFixture || isLoadFailureFixture ? [] : allPendingRequests
 const loadRetryCount = ref(0)
 const connectionSettingsCount = ref(0)
+const copyStatus = ref<{ message: string; tone: 'success' | 'info' | 'warning' | 'danger' } | null>(null)
 
 const liveOverlay = ref<UiLiveOverlay | null>({
   activityId: 'fixture-turn-runtime',
@@ -450,6 +498,24 @@ function noop(): void {
   // Fixture route only needs rendered output for browser assertions.
 }
 
+function appendResumeOutput(): void {
+  const threadId = activeThreadId.value
+  const currentMessages = scrollRaceMessagesByThreadId.value[threadId] ?? []
+  const nextIndex = currentMessages.length + 1
+  scrollRaceMessagesByThreadId.value = {
+    ...scrollRaceMessagesByThreadId.value,
+    [threadId]: [
+      ...currentMessages,
+      {
+        id: `${threadId}-message-${String(nextIndex)}`,
+        role: 'assistant',
+        text: `${threadId} recovered output ${String(nextIndex)} ${'foreground recovery content '.repeat(8)}`,
+        turnIndex: Math.floor(nextIndex / 2),
+      },
+    ],
+  }
+}
+
 function onUpdateScrollState(payload: { threadId: string; state: ThreadScrollState }): void {
   scrollStateByThreadId.value = {
     ...scrollStateByThreadId.value,
@@ -514,6 +580,13 @@ function onLoadOlderHistory(): void {
 
 .conversation-regression-runtime {
   @apply shrink-0;
+}
+
+.conversation-regression-copy-status {
+  @apply fixed left-1/2 top-3 z-50 m-0 -translate-x-1/2 rounded-lg px-3 py-2 text-sm font-medium;
+  color: var(--ui-danger);
+  background: color-mix(in srgb, var(--ui-danger) 8%, var(--ui-bg-surface));
+  border: 1px solid color-mix(in srgb, var(--ui-danger) 28%, var(--ui-border-subtle));
 }
 
 .conversation-regression-queue {

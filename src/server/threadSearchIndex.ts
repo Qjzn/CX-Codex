@@ -1,5 +1,10 @@
+import { readFileSync } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import type { ThreadTitleCache } from './threadTitleCache.js'
 import { logBridgeError } from './bridgeLog.js'
+
+const THREAD_SEARCH_INDEX_CACHE_VERSION = 1
 
 export type ThreadSearchDocument = {
   id: string
@@ -23,9 +28,16 @@ export type ThreadListParams = {
 export type ThreadListRpc = (params: ThreadListParams) => Promise<unknown>
 
 export type ThreadSearchIndexStoreDependencies = {
+  cachePath?: string
   listThreads: ThreadListRpc
   getSessionIndexPath: () => string
   readThreadTitlesFromSessionIndex: (sessionIndexPath: string) => Promise<ThreadTitleCache>
+}
+
+type ThreadSearchIndexStoreOptions = {
+  initialIndex?: ThreadSearchIndex | null
+  buildInitialIndex?: () => Promise<ThreadSearchIndex>
+  persistIndex?: (index: ThreadSearchIndex) => void
 }
 
 type ThreadListRow = {
@@ -59,6 +71,40 @@ export function createThreadSearchDocument(thread: ThreadListRow): ThreadSearchD
     messageText: '',
     searchableText: thread.title,
   }
+}
+
+export function readThreadSearchIndexCache(cachePath: string): ThreadSearchIndex | null {
+  try {
+    const payload = asRecord(JSON.parse(readFileSync(cachePath, 'utf8')) as unknown)
+    if (payload?.version !== THREAD_SEARCH_INDEX_CACHE_VERSION || !Array.isArray(payload.documents)) return null
+
+    const docsById = new Map<string, ThreadSearchDocument>()
+    for (const value of payload.documents) {
+      const document = asRecord(value)
+      const id = typeof document?.id === 'string' ? document.id.trim() : ''
+      const title = typeof document?.title === 'string' ? document.title.trim() : ''
+      if (!id || !title || docsById.has(id)) continue
+      docsById.set(id, createThreadSearchDocument({ id, title, preview: '' }))
+    }
+    return { docsById }
+  } catch {
+    return null
+  }
+}
+
+export async function writeThreadSearchIndexCache(
+  cachePath: string,
+  index: ThreadSearchIndex,
+): Promise<void> {
+  const documents = Array.from(index.docsById.values()).map((document) => ({
+    id: document.id,
+    title: document.title,
+  }))
+  await mkdir(dirname(cachePath), { recursive: true })
+  await writeFile(cachePath, JSON.stringify({
+    version: THREAD_SEARCH_INDEX_CACHE_VERSION,
+    documents,
+  }), 'utf8')
 }
 
 export async function loadAllThreadsForSearch(
@@ -106,6 +152,16 @@ export async function buildThreadSearchIndex(
   return { docsById }
 }
 
+function buildThreadSearchIndexFromTitleCache(sessionIndexCache: ThreadTitleCache): ThreadSearchIndex {
+  const docsById = new Map<string, ThreadSearchDocument>()
+  for (const id of sessionIndexCache.order) {
+    const title = sessionIndexCache.titles[id]?.trim() ?? ''
+    if (!id || !title || docsById.has(id)) continue
+    docsById.set(id, createThreadSearchDocument({ id, title, preview: '' }))
+  }
+  return { docsById }
+}
+
 export function isExactPhraseMatch(query: string, doc: ThreadSearchDocument): boolean {
   const q = query.trim().toLowerCase()
   if (!q) return false
@@ -127,29 +183,38 @@ export function searchThreadIndex(
 }
 
 export class ThreadSearchIndexStore {
-  private index: ThreadSearchIndex | null = null
+  private index: ThreadSearchIndex | null
   private indexPromise: Promise<ThreadSearchIndex> | null = null
   private refreshPromise: Promise<void> | null = null
-  private stale = false
+  private stale: boolean
   private version = 0
 
-  constructor(private readonly buildIndex: () => Promise<ThreadSearchIndex>) {}
+  constructor(
+    private readonly buildIndex: () => Promise<ThreadSearchIndex>,
+    private readonly options: ThreadSearchIndexStoreOptions = {},
+  ) {
+    this.index = options.initialIndex ?? null
+    this.stale = this.index !== null
+  }
 
   clear(): void {
-    this.indexPromise = null
-    this.refreshPromise = null
-    this.stale = this.index !== null
+    // Keep in-flight work joined; its generation will stay stale and trigger one trailing refresh.
+    this.stale = true
     this.version += 1
   }
 
-  async search(query: string, limit: number): Promise<{ threadIds: string[]; indexedThreadCount: number }> {
+  async search(
+    query: string,
+    limit: number,
+  ): Promise<{ threadIds: string[]; indexedThreadCount: number; partial?: true }> {
     const normalizedQuery = query.trim()
     if (!normalizedQuery) return { threadIds: [], indexedThreadCount: 0 }
 
     const index = await this.getIndex()
     const result = searchThreadIndex(index, normalizedQuery, limit)
-    if (this.stale) this.refreshInBackground()
-    return result
+    const partial = this.stale
+    if (partial) this.refreshInBackground()
+    return partial ? { ...result, partial: true } : result
   }
 
   private async getIndex(): Promise<ThreadSearchIndex> {
@@ -157,19 +222,23 @@ export class ThreadSearchIndexStore {
 
     if (!this.indexPromise) {
       const version = this.version
-      this.indexPromise = this.buildIndex()
+      const shouldRemainStale = Boolean(this.options.buildInitialIndex)
+      const indexPromise = (this.options.buildInitialIndex ?? this.buildIndex)()
         .then((index) => {
-          if (this.version === version) {
+          const isCurrent = this.version === version
+          if (isCurrent || !this.index) {
             this.index = index
-            this.stale = false
+            this.stale = shouldRemainStale || !isCurrent
           }
+          this.persistIndex(index)
           return index
         })
         .finally(() => {
-          if (this.version === version) {
+          if (this.indexPromise === indexPromise) {
             this.indexPromise = null
           }
         })
+      this.indexPromise = indexPromise
     }
 
     return this.indexPromise
@@ -178,11 +247,15 @@ export class ThreadSearchIndexStore {
   private refreshInBackground(): void {
     if (this.refreshPromise) return
     const version = this.version
-    this.refreshPromise = this.buildIndex()
+    const refreshPromise = this.buildIndex()
       .then((index) => {
-        if (this.version !== version) return
+        if (this.version !== version) {
+          this.persistIndex(index)
+          return
+        }
         this.index = index
         this.stale = false
+        this.persistIndex(index)
       })
       .catch((error) => {
         if (this.version === version) {
@@ -190,18 +263,48 @@ export class ThreadSearchIndexStore {
         }
       })
       .finally(() => {
-        if (this.version === version) {
+        if (this.refreshPromise === refreshPromise) {
           this.refreshPromise = null
         }
       })
+    this.refreshPromise = refreshPromise
+  }
+
+  private persistIndex(index: ThreadSearchIndex): void {
+    try {
+      this.options.persistIndex?.(index)
+    } catch (error) {
+      logBridgeError('Thread search index cache persistence failed', error)
+    }
   }
 }
 
 export function createThreadSearchIndexStore(
   dependencies: ThreadSearchIndexStoreDependencies,
 ): ThreadSearchIndexStore {
-  return new ThreadSearchIndexStore(async () => buildThreadSearchIndex(
-    dependencies.listThreads,
-    await dependencies.readThreadTitlesFromSessionIndex(dependencies.getSessionIndexPath()),
-  ))
+  const cachePath = dependencies.cachePath?.trim() ?? ''
+  let cacheWrite = Promise.resolve()
+  const persistIndex = cachePath
+    ? (index: ThreadSearchIndex): void => {
+        cacheWrite = cacheWrite
+          .then(() => writeThreadSearchIndexCache(cachePath, index))
+          .catch((error) => {
+            logBridgeError('Thread search index cache persistence failed', error)
+          })
+      }
+    : undefined
+
+  return new ThreadSearchIndexStore(
+    async () => buildThreadSearchIndex(
+      dependencies.listThreads,
+      await dependencies.readThreadTitlesFromSessionIndex(dependencies.getSessionIndexPath()),
+    ),
+    {
+      initialIndex: cachePath ? readThreadSearchIndexCache(cachePath) : null,
+      buildInitialIndex: async () => buildThreadSearchIndexFromTitleCache(
+        await dependencies.readThreadTitlesFromSessionIndex(dependencies.getSessionIndexPath()),
+      ),
+      persistIndex,
+    },
+  )
 }

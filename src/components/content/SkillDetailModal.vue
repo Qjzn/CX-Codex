@@ -1,7 +1,14 @@
 <template>
   <Teleport to="body">
     <div v-if="visible" class="sdm-overlay" @click.self="$emit('close')">
-      <div class="sdm-panel" role="dialog" aria-modal="true" aria-label="技能详情">
+      <div
+        ref="panelRef"
+        class="sdm-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="skill-detail-modal-title"
+        tabindex="-1"
+      >
         <div class="sdm-header">
           <div class="sdm-title-area">
             <img
@@ -13,7 +20,7 @@
             />
             <div class="sdm-title-col">
               <div class="sdm-title-row">
-                <h3 class="sdm-title">{{ skill.displayName || skill.name }}</h3>
+                <h3 id="skill-detail-modal-title" class="sdm-title">{{ skill.displayName || skill.name }}</h3>
                 <span v-if="skill.installed && !effectiveEnabled" class="sdm-badge-disabled">已禁用</span>
               </div>
               <span class="sdm-owner">{{ skill.owner }}</span>
@@ -23,7 +30,7 @@
               </div>
             </div>
           </div>
-          <button class="sdm-close" type="button" aria-label="关闭" @click="$emit('close')">
+          <button ref="closeButtonRef" class="sdm-close" type="button" aria-label="关闭" @click="$emit('close')">
             <IconTablerX class="sdm-close-icon" />
           </button>
         </div>
@@ -35,6 +42,13 @@
           </section>
 
           <LoadingInline v-if="isLoadingReadme" class="sdm-readme-loading" label="正在加载技能内容..." tone="muted" />
+          <div v-else-if="readmeError" class="sdm-readme-error" role="status" aria-live="polite">
+            <div>
+              <p class="sdm-readme-error-title">无法加载技能内容</p>
+              <p class="sdm-readme-error-copy">请检查网络后重试。</p>
+            </div>
+            <button class="sdm-readme-retry" type="button" @click="fetchReadme">重试</button>
+          </div>
           <div v-else-if="readmeContent" class="sdm-readme" v-html="renderedReadme"></div>
 
           <a v-if="skill.url" class="sdm-link" :href="skill.url" target="_blank" rel="noopener noreferrer">查看来源</a>
@@ -87,7 +101,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import IconTablerX from '../icons/IconTablerX.vue'
 import LoadingInline from './LoadingInline.vue'
 
@@ -126,7 +140,20 @@ const emit = defineEmits<{
 const localEnabled = ref<boolean | null>(null)
 const localDescription = ref('')
 const readmeContent = ref('')
+const readmeError = ref(false)
 const isLoadingReadme = ref(false)
+const panelRef = ref<HTMLElement | null>(null)
+const closeButtonRef = ref<HTMLButtonElement | null>(null)
+let previousFocusedElement: HTMLElement | null = null
+
+const DIALOG_FOCUSABLE_SELECTOR = [
+  'button:not([disabled])',
+  'a[href]',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ')
 
 const effectiveEnabled = computed(() => localEnabled.value ?? props.skill.enabled ?? true)
 const isActing = computed(() => (props.isInstalling === true) || (props.isUninstalling === true))
@@ -174,18 +201,22 @@ async function fetchReadme(): Promise<void> {
   isLoadingReadme.value = true
   localDescription.value = ''
   readmeContent.value = ''
+  readmeError.value = false
   try {
     const params = new URLSearchParams({ owner: props.skill.owner, name: props.skill.name })
     if (props.skill.installed) params.set('installed', 'true')
     if (props.skill.path) params.set('path', props.skill.path)
     if (props.skill.sourcePath) params.set('sourcePath', props.skill.sourcePath)
     const resp = await fetch(`/codex-api/skills-hub/readme?${params}`)
-    if (!resp.ok) return
+    if (!resp.ok) {
+      readmeError.value = true
+      return
+    }
     const data = (await resp.json()) as { content?: string; description?: string }
     readmeContent.value = data.content ?? ''
     localDescription.value = data.description ?? ''
   } catch {
-    // silently fail
+    readmeError.value = true
   } finally {
     isLoadingReadme.value = false
   }
@@ -193,12 +224,36 @@ async function fetchReadme(): Promise<void> {
 
 watch(() => props.visible, (v) => {
   if (v) {
+    previousFocusedElement = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null
     localEnabled.value = null
     localDescription.value = ''
     readmeContent.value = ''
+    readmeError.value = false
     void fetchReadme()
+    void nextTick(() => {
+      if (props.visible) focusInitialDialogControl()
+    })
+    return
   }
+  restoreDialogFocus()
 })
+
+function getDialogFocusableElements(): HTMLElement[] {
+  return Array.from(panelRef.value?.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE_SELECTOR) ?? [])
+}
+
+function focusInitialDialogControl(): void {
+  const target = closeButtonRef.value ?? getDialogFocusableElements()[0] ?? panelRef.value
+  target?.focus({ preventScroll: true })
+}
+
+function restoreDialogFocus(): void {
+  const target = previousFocusedElement
+  previousFocusedElement = null
+  if (target?.isConnected) target.focus({ preventScroll: true })
+}
 
 function onInstall(): void {
   emit('install', props.skill)
@@ -215,18 +270,57 @@ function onToggleEnabled(): void {
 }
 
 function onWindowKeyDown(event: KeyboardEvent): void {
-  if (!props.visible || event.key !== 'Escape' || event.defaultPrevented) return
-  event.preventDefault()
-  event.stopPropagation()
-  emit('close')
+  if (!props.visible || event.defaultPrevented) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    emit('close')
+    return
+  }
+  if (event.key !== 'Tab' || event.altKey || event.ctrlKey || event.metaKey) return
+  const panel = panelRef.value
+  if (!panel) return
+  const focusable = getDialogFocusableElements()
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (!first || !last) {
+    event.preventDefault()
+    panel.focus({ preventScroll: true })
+    return
+  }
+  const activeElement = document.activeElement
+  if (!panel.contains(activeElement)) {
+    event.preventDefault()
+    const wrapTarget = event.shiftKey ? last : first
+    wrapTarget.focus({ preventScroll: true })
+    return
+  }
+  if (event.shiftKey && activeElement === first) {
+    event.preventDefault()
+    last.focus({ preventScroll: true })
+    return
+  }
+  if (!event.shiftKey && activeElement === last) {
+    event.preventDefault()
+    first.focus({ preventScroll: true })
+  }
+}
+
+function onWindowFocusIn(event: FocusEvent): void {
+  if (!props.visible || !panelRef.value) return
+  if (event.target instanceof Node && panelRef.value.contains(event.target)) return
+  focusInitialDialogControl()
 }
 
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeyDown, true)
+  window.addEventListener('focusin', onWindowFocusIn, true)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeyDown, true)
+  window.removeEventListener('focusin', onWindowFocusIn, true)
+  restoreDialogFocus()
 })
 
 function onBrowseFiles(): void {
@@ -314,6 +408,27 @@ function onBrowseFiles(): void {
 
 .sdm-readme-loading {
   @apply flex items-center text-xs text-zinc-500;
+}
+
+.sdm-readme-error {
+  @apply flex items-center justify-between gap-3 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2.5;
+}
+
+.sdm-readme-error-title {
+  @apply m-0 text-xs font-medium text-zinc-700;
+}
+
+.sdm-readme-error-copy {
+  @apply m-0 mt-0.5 text-[11px] text-zinc-500;
+}
+
+.sdm-readme-retry {
+  @apply shrink-0 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100;
+}
+
+.sdm-panel :is(button, a):focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 2px;
 }
 
 .sdm-readme {

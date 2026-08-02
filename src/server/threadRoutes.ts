@@ -14,7 +14,10 @@ import {
 } from './threadTitleCache.js'
 
 type ThreadSearchStore = {
-  search: (query: string, limit: number) => Promise<{ threadIds: string[]; indexedThreadCount: number }>
+  search: (
+    query: string,
+    limit: number,
+  ) => Promise<{ threadIds: string[]; indexedThreadCount: number; partial?: true }>
 }
 
 export type ThreadRoutesDependencies = {

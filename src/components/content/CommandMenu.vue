@@ -14,10 +14,11 @@
           aria-modal="true"
           aria-labelledby="command-menu-title"
           aria-describedby="command-menu-description"
+          tabindex="-1"
           @keydown="onPanelKeydown"
         >
           <h2 id="command-menu-title" class="sr-only">命令菜单</h2>
-          <p id="command-menu-description" class="sr-only">搜索任务或运行命令</p>
+          <p id="command-menu-description" class="sr-only">{{ dialogDescription }}</p>
 
           <div class="command-menu-search">
             <IconTablerSearch class="command-menu-search-icon" aria-hidden="true" />
@@ -28,8 +29,8 @@
               type="text"
               autocomplete="off"
               spellcheck="false"
-              placeholder="搜索任务或运行命令"
-              aria-label="搜索任务或运行命令"
+              :placeholder="searchPlaceholder"
+              :aria-label="searchPlaceholder"
               role="combobox"
               aria-autocomplete="list"
               aria-controls="command-menu-results"
@@ -44,18 +45,19 @@
             ref="resultsRef"
             class="command-menu-results"
             role="listbox"
-            aria-label="命令和任务"
+            :aria-label="resultsLabel"
+            :aria-busy="mode === 'files' && fileSearchState === 'loading'"
           >
             <template v-if="results.length > 0">
               <section
                 v-for="section in sections"
                 :key="section.id"
                 class="command-menu-section"
-                :aria-labelledby="`command-menu-section-${section.id}`"
+                :aria-labelledby="section.label ? `command-menu-section-${section.id}` : undefined"
               >
-                <div class="command-menu-section-heading">
+                <div v-if="section.label" class="command-menu-section-heading">
                   <h3 :id="`command-menu-section-${section.id}`">{{ section.label }}</h3>
-                  <span v-if="section.id === 'threads' && query.trim()" aria-live="polite">
+                  <span v-if="(section.id === 'threads' || section.id === 'files') && query.trim()" aria-live="polite">
                     {{ section.items.length }} 项
                   </span>
                 </div>
@@ -79,7 +81,11 @@
                     <span class="command-menu-result-title">{{ item.title }}</span>
                     <span class="command-menu-result-detail">{{ item.detail }}</span>
                   </span>
-                  <span v-if="item.thread?.inProgress" class="command-menu-result-state">
+                  <span v-if="item.thread?.waitingForInput" class="command-menu-result-state">
+                    <span class="command-menu-result-waiting-dot" aria-hidden="true" />
+                    等待处理
+                  </span>
+                  <span v-else-if="item.thread?.inProgress" class="command-menu-result-state">
                     <span class="command-menu-result-state-dot" aria-hidden="true" />
                     运行中
                   </span>
@@ -87,12 +93,20 @@
                     <span class="command-menu-result-unread-dot" aria-hidden="true" />
                     未读
                   </span>
+                  <kbd v-else-if="item.shortcut" class="command-menu-item-shortcut" aria-hidden="true">{{ item.shortcut }}</kbd>
                   <kbd v-else-if="item.flatIndex === activeIndex" class="command-menu-enter-hint" aria-hidden="true">↵</kbd>
                 </button>
               </section>
             </template>
 
-            <div v-else class="command-menu-empty" role="status">
+            <div v-if="mode === 'files' && fileSearchStatus" class="command-menu-empty command-menu-empty--files" role="status">
+              <span v-if="fileSearchState === 'loading'" class="command-menu-loading-indicator" aria-hidden="true" />
+              <IconTablerSearch v-else class="command-menu-empty-icon" aria-hidden="true" />
+              <p>{{ fileSearchStatus.title }}</p>
+              <span>{{ fileSearchStatus.detail }}</span>
+            </div>
+
+            <div v-else-if="results.length === 0" class="command-menu-empty" role="status">
               <IconTablerSearch class="command-menu-empty-icon" aria-hidden="true" />
               <p>没有匹配的任务或命令</p>
               <span>换个关键词试试</span>
@@ -102,7 +116,7 @@
           <footer class="command-menu-footer" aria-hidden="true">
             <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
             <span><kbd>↵</kbd> 打开</span>
-            <span><kbd>Esc</kbd> 关闭</span>
+            <span><kbd>Esc</kbd> {{ mode === 'files' ? '返回' : '关闭' }}</span>
           </footer>
         </section>
       </div>
@@ -111,36 +125,48 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch, type Component } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
+import { searchComposerFiles, type ComposerFileSuggestion } from '../../api/codexGateway'
 import type { UiProjectGroup, UiThread } from '../../types/codex'
 import IconTablerBolt from '../icons/IconTablerBolt.vue'
+import IconTablerChevronLeft from '../icons/IconTablerChevronLeft.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerFolder from '../icons/IconTablerFolder.vue'
+import IconTablerFolderOpen from '../icons/IconTablerFolderOpen.vue'
 import IconTablerGitFork from '../icons/IconTablerGitFork.vue'
 import IconTablerSearch from '../icons/IconTablerSearch.vue'
 import IconTablerSettings from '../icons/IconTablerSettings.vue'
 
 type CommandRoute = 'workbench' | 'skills' | 'github-trending' | 'diagnostics'
+type CommandMenuMode = 'root' | 'files'
+type RecentFileEntry = {
+  cwd: string
+  path: string
+  openedAtMs: number
+}
 type CommandDefinition = {
   key: string
   title: string
   detail: string
   searchText: string
   icon: Component
-  action?: 'new-thread'
+  action?: 'new-thread' | 'search-files'
   routeName?: CommandRoute
+  shortcut?: string
 }
 type MenuItem = {
   key: string
-  kind: 'command' | 'thread'
+  kind: 'command' | 'thread' | 'file' | 'navigation'
   title: string
   detail: string
   searchText: string
   icon: Component
   flatIndex: number
-  action?: 'new-thread'
+  action?: 'new-thread' | 'search-files' | 'back'
   routeName?: CommandRoute
   thread?: UiThread
+  file?: ComposerFileSuggestion
+  shortcut?: string
 }
 
 const props = defineProps<{
@@ -148,6 +174,9 @@ const props = defineProps<{
   groups: UiProjectGroup[]
   selectedThreadId?: string
   showGithub?: boolean
+  cwd?: string
+  initialMode?: CommandMenuMode
+  modeRequestId?: number
 }>()
 
 const emit = defineEmits<{
@@ -155,14 +184,63 @@ const emit = defineEmits<{
   selectThread: [threadId: string]
   startNewThread: []
   openRoute: [routeName: CommandRoute]
+  openFile: [path: string]
 }>()
 
 const inputRef = ref<HTMLInputElement | null>(null)
 const panelRef = ref<HTMLElement | null>(null)
 const resultsRef = ref<HTMLElement | null>(null)
 const query = ref('')
+const mode = ref<CommandMenuMode>('root')
 const activeIndex = ref(0)
+const fileSuggestions = ref<ComposerFileSuggestion[]>([])
+const settledFileQuery = ref('')
+const fileSearchState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
+const RECENT_FILE_STORAGE_KEY = 'codex-web-local.command-menu-recent-files.v1'
+const MAX_RECENT_FILES = 36
+const MAX_RECENT_FILES_PER_WORKSPACE = 6
+const recentFiles = ref<RecentFileEntry[]>(loadRecentFiles())
 let previousFocus: HTMLElement | null = null
+let previousBodyOverflow = ''
+let ownsBodyScrollLock = false
+let fileSearchTimer: ReturnType<typeof setTimeout> | null = null
+let fileSearchToken = 0
+
+const COMMAND_MENU_FOCUSABLE_SELECTOR = [
+  'button:not([disabled]):not([tabindex="-1"])',
+  'a[href]',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ')
+
+const normalizedCwd = computed(() => props.cwd?.trim() ?? '')
+const recentWorkspaceFiles = computed<ComposerFileSuggestion[]>(() => {
+  const cwdKey = normalizeFileLocation(normalizedCwd.value)
+  if (!cwdKey) return []
+  return recentFiles.value
+    .filter((entry) => normalizeFileLocation(entry.cwd) === cwdKey)
+    .sort((left, right) => right.openedAtMs - left.openedAtMs)
+    .slice(0, MAX_RECENT_FILES_PER_WORKSPACE)
+    .map((entry) => ({ path: entry.path }))
+})
+const visibleFileSuggestions = computed(() => {
+  const normalizedQuery = normalizeSearchText(query.value)
+  if (!normalizedQuery) return []
+  if (normalizedQuery === normalizeSearchText(settledFileQuery.value)) {
+    return fileSuggestions.value
+  }
+  return fileSuggestions.value.filter((file) => (
+    normalizeSearchText(file.path).includes(normalizedQuery)
+  ))
+})
+const searchPlaceholder = computed(() => mode.value === 'files' ? '搜索文件' : '搜索任务或运行命令')
+const dialogDescription = computed(() => mode.value === 'files' ? '在当前工作区中搜索并打开文件' : '搜索任务或运行命令')
+const resultsLabel = computed(() => mode.value === 'files' ? '工作区文件' : '命令和任务')
+const fileSearchShortcut = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/iu.test(navigator.platform)
+  ? '⌘P'
+  : 'Ctrl P'
 
 const commandDefinitions = computed<CommandDefinition[]>(() => {
   const items: CommandDefinition[] = [
@@ -191,6 +269,17 @@ const commandDefinitions = computed<CommandDefinition[]>(() => {
       routeName: 'skills',
     },
   ]
+  if (normalizedCwd.value) {
+    items.splice(1, 0, {
+      key: 'command:search-files',
+      title: '搜索文件',
+      detail: '在当前工作区快速打开文件',
+      searchText: '搜索文件 快速打开 quick open files workspace',
+      icon: IconTablerFolderOpen,
+      action: 'search-files',
+      shortcut: fileSearchShortcut,
+    })
+  }
   if (props.showGithub) {
     items.push({
       key: 'command:github-trending',
@@ -226,36 +315,79 @@ const recentThreads = computed(() => {
   })
 })
 
-const sections = computed(() => {
-  const normalizedQuery = normalizeSearchText(query.value)
-  const commandItems = commandDefinitions.value
-    .filter((item) => !normalizedQuery || normalizeSearchText(`${item.title} ${item.detail} ${item.searchText}`).includes(normalizedQuery))
-    .slice(0, normalizedQuery ? 5 : 3)
-  const threadItems = recentThreads.value
-    .filter((thread) => {
-      if (!normalizedQuery) return true
-      return normalizeSearchText(`${thread.title} ${thread.projectName} ${thread.preview} ${thread.cwd}`).includes(normalizedQuery)
-    })
-    .slice(0, normalizedQuery ? 20 : 8)
+function compareAttentionThreads(left: UiThread, right: UiThread): number {
+  const stateOrder = attentionThreadRank(left) - attentionThreadRank(right)
+  if (stateOrder !== 0) return stateOrder
+  if (left.id === props.selectedThreadId) return -1
+  if (right.id === props.selectedThreadId) return 1
+  return Date.parse(right.updatedAtIso) - Date.parse(left.updatedAtIso)
+}
 
+function attentionThreadRank(thread: UiThread): number {
+  if (thread.waitingForInput) return 0
+  if (thread.inProgress) return 1
+  return 2
+}
+
+const fileSections = computed(() => {
   let flatIndex = 0
-  const menuSections: Array<{ id: string; label: string; items: MenuItem[] }> = []
-  if (commandItems.length > 0) {
+  const menuSections: Array<{ id: string; label: string; items: MenuItem[] }> = [
+    {
+      id: 'navigation',
+      label: '',
+      items: [{
+        key: 'navigation:back',
+        kind: 'navigation',
+        title: '返回命令',
+        detail: normalizedCwd.value,
+        searchText: '',
+        icon: IconTablerChevronLeft,
+        action: 'back',
+        flatIndex: flatIndex++,
+      }],
+    },
+  ]
+  const normalizedQuery = query.value.trim()
+  const visibleFiles = normalizedQuery ? visibleFileSuggestions.value : recentWorkspaceFiles.value
+  if (visibleFiles.length > 0) {
     menuSections.push({
-      id: 'commands',
-      label: normalizedQuery ? '命令' : '推荐',
-      items: commandItems.map((item) => ({
-        ...item,
-        kind: 'command',
+      id: normalizedQuery ? 'files' : 'recent-files',
+      label: normalizedQuery ? '文件' : '最近文件',
+      items: visibleFiles.map((file) => ({
+        key: `file:${file.path}`,
+        kind: 'file',
+        title: fileName(file.path),
+        detail: file.path,
+        searchText: file.path,
+        icon: IconTablerFilePencil,
+        file,
         flatIndex: flatIndex++,
       })),
     })
   }
-  if (threadItems.length > 0) {
+  return menuSections
+})
+
+const sections = computed(() => {
+  if (mode.value === 'files') return fileSections.value
+
+  const normalizedQuery = normalizeSearchText(query.value)
+  const commandItems = commandDefinitions.value
+    .filter((item) => !normalizedQuery || normalizeSearchText(`${item.title} ${item.detail} ${item.searchText}`).includes(normalizedQuery))
+    .slice(0, normalizedQuery ? 5 : 3)
+  const matchingThreads = recentThreads.value.filter((thread) => {
+    if (!normalizedQuery) return true
+    return normalizeSearchText(`${thread.title} ${thread.projectName} ${thread.preview} ${thread.cwd}`).includes(normalizedQuery)
+  })
+
+  let flatIndex = 0
+  const menuSections: Array<{ id: string; label: string; items: MenuItem[] }> = []
+  const appendThreadSection = (id: string, label: string, threads: UiThread[]): void => {
+    if (threads.length === 0) return
     menuSections.push({
-      id: 'threads',
-      label: normalizedQuery ? '任务' : '最近任务',
-      items: threadItems.map((thread) => ({
+      id,
+      label,
+      items: threads.map((thread) => ({
         key: `thread:${thread.id}`,
         kind: 'thread',
         title: thread.title || '未命名任务',
@@ -267,22 +399,120 @@ const sections = computed(() => {
       })),
     })
   }
+  if (commandItems.length > 0) {
+    menuSections.push({
+      id: 'commands',
+      label: normalizedQuery ? '命令' : '推荐',
+      items: commandItems.map((item) => ({
+        ...item,
+        kind: 'command',
+        flatIndex: flatIndex++,
+      })),
+    })
+  }
+  if (normalizedQuery) {
+    appendThreadSection('threads', '任务', matchingThreads.slice(0, 20))
+  } else {
+    const attentionThreads = matchingThreads
+      .filter((thread) => thread.inProgress || thread.unread)
+      .sort(compareAttentionThreads)
+      .slice(0, 6)
+    const recentLimit = Math.min(8, Math.max(4, 10 - attentionThreads.length))
+    const normalRecentThreads = matchingThreads
+      .filter((thread) => !thread.inProgress && !thread.unread)
+      .slice(0, recentLimit)
+    appendThreadSection('attention', '需要关注', attentionThreads)
+    appendThreadSection('threads', '最近任务', normalRecentThreads)
+  }
   return menuSections
 })
 
 const results = computed(() => sections.value.flatMap((section) => section.items))
 const activeResultId = computed(() => results.value.length > 0 ? resultId(activeIndex.value) : undefined)
+const fileSearchStatus = computed(() => {
+  if (mode.value !== 'files') return null
+  if (!normalizedCwd.value) {
+    return { title: '当前没有可搜索的工作区', detail: '返回后选择一个项目再试' }
+  }
+  if (!query.value.trim()) {
+    if (recentWorkspaceFiles.value.length > 0) return null
+    return { title: '输入文件名开始搜索', detail: '仅搜索当前工作区，不会扫描其他目录' }
+  }
+  if (fileSearchState.value === 'loading') {
+    if (visibleFileSuggestions.value.length > 0) return null
+    return { title: '正在查找文件…', detail: normalizedCwd.value }
+  }
+  if (fileSearchState.value === 'error') {
+    return { title: '文件搜索暂时不可用', detail: '请稍后重试或返回工作台浏览文件' }
+  }
+  if (fileSearchState.value === 'ready' && visibleFileSuggestions.value.length === 0) {
+    return { title: '没有匹配的文件', detail: '换个文件名或路径片段试试' }
+  }
+  return null
+})
 
 watch(() => props.open, (open) => {
   if (open) {
     previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    query.value = ''
-    activeIndex.value = 0
-    void nextTick(() => inputRef.value?.focus())
+    lockBackgroundScroll()
+    resetMenu(props.initialMode)
+    void nextTick(() => focusInitialControl())
     return
   }
-  restoreFocus()
+  resetFileSearch()
+  restoreModalEnvironment()
 }, { immediate: true })
+
+watch(() => props.modeRequestId, () => {
+  if (!props.open) return
+  resetMenu(props.initialMode)
+  void nextTick(() => focusInitialControl())
+})
+
+watch(normalizedCwd, (cwd) => {
+  if (!cwd && mode.value === 'files') enterRootMode()
+})
+
+watch([query, mode, normalizedCwd, () => props.open], ([value, currentMode, cwd, open]) => {
+  invalidateFileSearch()
+  const normalizedQuery = value.trim()
+  if (!open || currentMode !== 'files' || !cwd) return
+  if (!normalizedQuery) {
+    fileSuggestions.value = []
+    settledFileQuery.value = ''
+    fileSearchState.value = 'idle'
+    activeIndex.value = recentWorkspaceFiles.value.length > 0 ? 1 : 0
+    return
+  }
+
+  const token = fileSearchToken
+  fileSearchState.value = 'loading'
+  if (activeIndex.value > 0) {
+    activeIndex.value = Math.min(activeIndex.value, visibleFileSuggestions.value.length)
+  }
+  fileSearchTimer = setTimeout(async () => {
+    try {
+      const rows = await searchComposerFiles(cwd, normalizedQuery, 12)
+      if (token !== fileSearchToken || mode.value !== 'files' || !props.open) return
+      const activeFilePath = results.value[activeIndex.value]?.file?.path
+      fileSuggestions.value = rows
+      settledFileQuery.value = normalizedQuery
+      fileSearchState.value = 'ready'
+      const retainedFileIndex = activeFilePath
+        ? rows.findIndex((row) => row.path === activeFilePath)
+        : -1
+      activeIndex.value = retainedFileIndex >= 0
+        ? retainedFileIndex + 1
+        : (rows.length > 0 ? 1 : 0)
+    } catch {
+      if (token !== fileSearchToken || mode.value !== 'files' || !props.open) return
+      fileSuggestions.value = []
+      settledFileQuery.value = ''
+      fileSearchState.value = 'error'
+      activeIndex.value = 0
+    }
+  }, 160)
+})
 
 watch(results, (items) => {
   if (items.length === 0) {
@@ -292,7 +522,15 @@ watch(results, (items) => {
   activeIndex.value = Math.min(activeIndex.value, items.length - 1)
 })
 
-onBeforeUnmount(restoreFocus)
+onMounted(() => {
+  window.addEventListener('focusin', onWindowFocusIn, true)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('focusin', onWindowFocusIn, true)
+  resetFileSearch()
+  restoreModalEnvironment()
+})
 
 function normalizeSearchText(value: string): string {
   return value.trim().toLocaleLowerCase().replace(/\s+/gu, ' ')
@@ -303,6 +541,60 @@ function compactPreview(value: string): string {
   return compact.length > 72 ? `${compact.slice(0, 72)}…` : compact
 }
 
+function fileName(path: string): string {
+  const segments = path.replace(/\\/gu, '/').split('/').filter(Boolean)
+  return segments.at(-1) || path
+}
+
+function normalizeFileLocation(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  return trimmed.replace(/\\/gu, '/').replace(/\/+$/gu, '').toLocaleLowerCase() || '/'
+}
+
+function loadRecentFiles(): RecentFileEntry[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(RECENT_FILE_STORAGE_KEY) ?? '[]')
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((entry): entry is RecentFileEntry => {
+        if (!entry || typeof entry !== 'object') return false
+        const candidate = entry as Partial<RecentFileEntry>
+        return typeof candidate.cwd === 'string'
+          && Boolean(candidate.cwd.trim())
+          && typeof candidate.path === 'string'
+          && Boolean(candidate.path.trim())
+          && typeof candidate.openedAtMs === 'number'
+          && Number.isFinite(candidate.openedAtMs)
+      })
+      .sort((left, right) => right.openedAtMs - left.openedAtMs)
+      .slice(0, MAX_RECENT_FILES)
+  } catch {
+    return []
+  }
+}
+
+function rememberRecentFile(path: string): void {
+  const cwd = normalizedCwd.value
+  const normalizedPath = path.trim()
+  if (!cwd || !normalizedPath) return
+  const cwdKey = normalizeFileLocation(cwd)
+  const pathKey = normalizeFileLocation(normalizedPath)
+  recentFiles.value = [
+    { cwd, path: normalizedPath, openedAtMs: Date.now() },
+    ...recentFiles.value.filter((entry) => (
+      normalizeFileLocation(entry.cwd) !== cwdKey
+      || normalizeFileLocation(entry.path) !== pathKey
+    )),
+  ].slice(0, MAX_RECENT_FILES)
+  try {
+    window.localStorage.setItem(RECENT_FILE_STORAGE_KEY, JSON.stringify(recentFiles.value))
+  } catch {
+    // Quick Open must stay usable when browser storage is unavailable or full.
+  }
+}
+
 function resultId(index: number): string {
   return `command-menu-result-${index}`
 }
@@ -311,13 +603,116 @@ function restoreFocus(): void {
   const target = previousFocus
   previousFocus = null
   if (!target?.isConnected) return
-  void nextTick(() => target.focus())
+  target.focus({ preventScroll: true })
+}
+
+function lockBackgroundScroll(): void {
+  if (ownsBodyScrollLock) return
+  previousBodyOverflow = document.body.style.overflow
+  document.body.style.overflow = 'hidden'
+  ownsBodyScrollLock = true
+}
+
+function restoreModalEnvironment(): void {
+  if (ownsBodyScrollLock) {
+    document.body.style.overflow = previousBodyOverflow
+    previousBodyOverflow = ''
+    ownsBodyScrollLock = false
+  }
+  restoreFocus()
+}
+
+function getFocusableElements(): HTMLElement[] {
+  return Array.from(panelRef.value?.querySelectorAll<HTMLElement>(COMMAND_MENU_FOCUSABLE_SELECTOR) ?? [])
+}
+
+function focusInitialControl(): void {
+  const target = inputRef.value ?? getFocusableElements()[0] ?? panelRef.value
+  target?.focus({ preventScroll: true })
+}
+
+function onWindowFocusIn(event: FocusEvent): void {
+  if (!props.open || !panelRef.value) return
+  if (event.target instanceof Node && panelRef.value.contains(event.target)) return
+  focusInitialControl()
+}
+
+function invalidateFileSearch(): void {
+  if (fileSearchTimer) {
+    clearTimeout(fileSearchTimer)
+    fileSearchTimer = null
+  }
+  fileSearchToken += 1
+}
+
+function resetFileSearch(): void {
+  invalidateFileSearch()
+  fileSuggestions.value = []
+  settledFileQuery.value = ''
+  fileSearchState.value = 'idle'
+}
+
+function resetMenu(requestedMode: CommandMenuMode | undefined): void {
+  mode.value = requestedMode === 'files' && normalizedCwd.value ? 'files' : 'root'
+  query.value = ''
+  activeIndex.value = mode.value === 'files' && recentWorkspaceFiles.value.length > 0 ? 1 : 0
+  resetFileSearch()
+}
+
+function enterFileMode(): void {
+  if (!normalizedCwd.value) return
+  mode.value = 'files'
+  query.value = ''
+  activeIndex.value = recentWorkspaceFiles.value.length > 0 ? 1 : 0
+  void nextTick(() => inputRef.value?.focus())
+}
+
+function enterRootMode(): void {
+  mode.value = 'root'
+  query.value = ''
+  activeIndex.value = 0
+  resetFileSearch()
+  void nextTick(() => inputRef.value?.focus())
 }
 
 function onPanelKeydown(event: KeyboardEvent): void {
+  if (event.isComposing) return
   if (event.key === 'Escape') {
     event.preventDefault()
+    if (mode.value === 'files') {
+      enterRootMode()
+      return
+    }
     emit('close')
+    return
+  }
+  if (event.key === 'Tab' && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    const panel = panelRef.value
+    if (!panel) return
+    const focusable = getFocusableElements()
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (!first || !last) {
+      event.preventDefault()
+      panel.focus({ preventScroll: true })
+      return
+    }
+    const activeElement = document.activeElement
+    if (!panel.contains(activeElement)) {
+      event.preventDefault()
+      const wrapTarget = event.shiftKey ? last : first
+      wrapTarget.focus({ preventScroll: true })
+      return
+    }
+    if (event.shiftKey && activeElement === first) {
+      event.preventDefault()
+      last.focus({ preventScroll: true })
+      return
+    }
+    if (!event.shiftKey && activeElement === last) {
+      event.preventDefault()
+      first.focus({ preventScroll: true })
+    }
     return
   }
   if (event.key === 'ArrowDown') {
@@ -330,7 +725,7 @@ function onPanelKeydown(event: KeyboardEvent): void {
     moveActive(-1)
     return
   }
-  if (event.key === 'Enter' && !event.isComposing) {
+  if (event.key === 'Enter') {
     const item = results.value[activeIndex.value]
     if (!item) return
     event.preventDefault()
@@ -350,7 +745,20 @@ function moveActive(offset: number): void {
 }
 
 function activate(item: MenuItem): void {
+  if (item.action === 'search-files') {
+    enterFileMode()
+    return
+  }
+  if (item.action === 'back') {
+    enterRootMode()
+    return
+  }
+  if (item.file) rememberRecentFile(item.file.path)
   emit('close')
+  if (item.file) {
+    emit('openFile', item.file.path)
+    return
+  }
   if (item.thread) {
     emit('selectThread', item.thread.id)
     return
@@ -407,6 +815,7 @@ function activate(item: MenuItem): void {
 
 .command-menu-escape-hint,
 .command-menu-enter-hint,
+.command-menu-item-shortcut,
 .command-menu-footer kbd {
   @apply inline-flex min-w-5 items-center justify-center border px-1.5 font-mono text-[10px] leading-5;
   border-radius: 5px;
@@ -464,6 +873,10 @@ function activate(item: MenuItem): void {
   color: var(--ui-accent);
 }
 
+.command-menu-result-icon--file {
+  color: var(--ui-text-primary);
+}
+
 .command-menu-result-copy {
   @apply flex min-w-0 flex-1 flex-col;
 }
@@ -482,10 +895,15 @@ function activate(item: MenuItem): void {
   color: var(--ui-text-secondary);
 }
 
+.command-menu-result-waiting-dot,
 .command-menu-result-state-dot,
 .command-menu-result-unread-dot {
   @apply h-1.5 w-1.5 rounded-full;
   background: var(--ui-success);
+}
+
+.command-menu-result-waiting-dot {
+  background: var(--ui-warning);
 }
 
 .command-menu-result-unread-dot {
@@ -510,6 +928,17 @@ function activate(item: MenuItem): void {
   color: var(--ui-text-secondary);
 }
 
+.command-menu-empty--files {
+  min-height: 148px;
+}
+
+.command-menu-loading-indicator {
+  @apply mb-3 h-5 w-5 rounded-full border-2;
+  border-color: var(--ui-border-strong);
+  border-top-color: var(--ui-accent);
+  animation: command-menu-loading 720ms linear infinite;
+}
+
 .command-menu-footer {
   @apply flex min-h-9 items-center justify-end gap-4 border-t px-4 text-[11px];
   border-color: var(--ui-border-subtle);
@@ -525,6 +954,7 @@ function activate(item: MenuItem): void {
 }
 
 .command-menu-enter-hint,
+.command-menu-item-shortcut,
 .command-menu-footer kbd {
   min-width: 18px;
   padding-inline: 4px;
@@ -534,6 +964,10 @@ function activate(item: MenuItem): void {
 .command-menu-enter-hint {
   border-color: var(--ui-border-strong);
   background: var(--ui-bg-surface);
+}
+
+.command-menu-item-shortcut {
+  @apply ml-auto shrink-0;
 }
 
 :root.dark .command-menu-backdrop {
@@ -577,6 +1011,7 @@ function activate(item: MenuItem): void {
 
 :root.dark .command-menu-result-icon,
 :root.dark .command-menu-escape-hint,
+:root.dark .command-menu-item-shortcut,
 :root.dark .command-menu-footer kbd {
   border-color: #3f3f46;
   background: #27272a;
@@ -617,6 +1052,12 @@ function activate(item: MenuItem): void {
   transform: translateY(-8px) scale(0.99);
 }
 
+@keyframes command-menu-loading {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 640px) {
   .command-menu-backdrop {
     @apply px-3;
@@ -638,6 +1079,10 @@ function activate(item: MenuItem): void {
   .command-menu-escape-hint {
     display: none;
   }
+
+  .command-menu-item-shortcut {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -651,6 +1096,10 @@ function activate(item: MenuItem): void {
   .command-menu-enter-from .command-menu-panel,
   .command-menu-leave-to .command-menu-panel {
     transform: none;
+  }
+
+  .command-menu-loading-indicator {
+    animation: none;
   }
 }
 </style>

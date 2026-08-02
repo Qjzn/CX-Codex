@@ -131,4 +131,15 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
   display: inline-flex;
   pointer-events: auto;
 }
+
+@media (max-width: 767px), (hover: none), (pointer: coarse), (max-height: 480px) and (max-width: 932px) {
+  .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true'] .sidebar-menu-row-right-default {
+    display: none;
+  }
+
+  .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true'] .sidebar-menu-row-right-hover {
+    display: inline-flex;
+    pointer-events: auto;
+  }
+}
 </style>

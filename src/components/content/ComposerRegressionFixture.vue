@@ -6,7 +6,12 @@
         <h1>输入区视觉基线</h1>
       </div>
       <div class="composer-regression-probes" aria-label="Composer regression probes">
-        <button class="composer-regression-dictation-insert" type="button" @click="insertMockDictation">
+        <button
+          class="composer-regression-dictation-insert"
+          data-composer-regression-background-focus
+          type="button"
+          @click="insertMockDictation"
+        >
           模拟语音转文字
         </button>
         <span class="composer-regression-submit-count">{{ submitCount }}</span>
@@ -27,7 +32,7 @@
         :is-turn-in-progress="false"
         :is-interrupting-turn="false"
         :is-updating-speed-mode="false"
-        :send-with-enter="true"
+        :send-with-enter="sendWithEnter"
         :dictation-click-to-toggle="false"
         :dictation-auto-send="false"
         :show-dictation-button="true"
@@ -47,9 +52,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import ThreadComposer, { type SubmitPayload, type ThreadComposerExposed } from './ThreadComposer.vue'
 import type { ComposerModelInfo, ComposerPluginInfo, ReasoningEffort } from '../../types/codex'
+import { useMobile } from '../../composables/useMobile'
+import { resolveSendWithEnterPreference } from '../../composables/composerEnterBehavior'
 
 const models = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']
 const reasoningOptions = (values: ReasoningEffort[]) => values.map((value) => ({ value, description: '' }))
@@ -62,7 +69,7 @@ const availableModels: ComposerModelInfo[] = [
     hidden: false,
     isDefault: true,
     defaultReasoningEffort: 'high',
-    supportedReasoningEfforts: reasoningOptions(['low', 'medium', 'high', 'xhigh']),
+    supportedReasoningEfforts: reasoningOptions(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
   },
   {
     id: 'gpt-5.4',
@@ -87,6 +94,28 @@ const availableModels: ComposerModelInfo[] = [
 ]
 const composerRef = ref<ThreadComposerExposed | null>(null)
 const submitCount = ref(0)
+const { isMobile } = useMobile()
+const sendWithEnter = computed(() => resolveSendWithEnterPreference(null, isMobile.value))
+const originalFetch = window.fetch
+const composerFixtureFetch: typeof window.fetch = async (input, init) => {
+  const requestUrl = typeof input === 'string'
+    ? input
+    : (input instanceof URL ? input.toString() : input.url)
+  if (!requestUrl.includes('/codex-api/composer-file-search')) {
+    return originalFetch(input, init)
+  }
+  return new Response(JSON.stringify({
+    data: [
+      { path: 'src/components/content/ThreadComposer.vue' },
+      { path: 'src/components/content/ThreadConversation.vue' },
+      { path: 'src/App.vue' },
+    ],
+  }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+window.fetch = composerFixtureFetch
 
 const skills = [
   {
@@ -132,6 +161,10 @@ function onSubmit(_payload: SubmitPayload): void {
 function insertMockDictation(): void {
   composerRef.value?.insertDictationTranscriptForRegression('语音转文字回归测试')
 }
+
+onBeforeUnmount(() => {
+  if (window.fetch === composerFixtureFetch) window.fetch = originalFetch
+})
 </script>
 
 <style scoped>

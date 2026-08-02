@@ -3,12 +3,17 @@
     <button
       class="sidebar-thread-controls-button"
       type="button"
-      :aria-label="isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
-      :title="isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
+      :aria-label="sidebarToggleLabel"
+      :title="sidebarToggleLabel"
       @click="$emit('toggle-sidebar')"
     >
       <IconTablerLayoutSidebarFilled v-if="isSidebarCollapsed" class="sidebar-thread-controls-icon" />
       <IconTablerLayoutSidebar v-else class="sidebar-thread-controls-icon" />
+      <span
+        v-if="isSidebarCollapsed && normalizedAttentionCount > 0"
+        class="sidebar-thread-controls-attention-badge"
+        aria-hidden="true"
+      >{{ attentionBadgeText }}</span>
     </button>
 
     <button
@@ -27,14 +32,34 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerLayoutSidebar from '../icons/IconTablerLayoutSidebar.vue'
 import IconTablerLayoutSidebarFilled from '../icons/IconTablerLayoutSidebarFilled.vue'
 
-defineProps<{
+const props = withDefaults(defineProps<{
   isSidebarCollapsed: boolean
+  attentionCount?: number
   showNewThreadButton?: boolean
-}>()
+}>(), {
+  attentionCount: 0,
+  showNewThreadButton: false,
+})
+
+const normalizedAttentionCount = computed(() => (
+  Number.isFinite(props.attentionCount)
+    ? Math.max(0, Math.trunc(props.attentionCount))
+    : 0
+))
+const attentionBadgeText = computed(() => (
+  normalizedAttentionCount.value > 9 ? '9+' : String(normalizedAttentionCount.value)
+))
+const sidebarToggleLabel = computed(() => {
+  if (!props.isSidebarCollapsed) return '收起侧栏'
+  if (normalizedAttentionCount.value <= 0) return '展开侧栏'
+  return `展开侧栏，${String(normalizedAttentionCount.value)} 个任务需要关注`
+})
 
 defineEmits<{
   'toggle-sidebar': []
@@ -50,7 +75,7 @@ defineEmits<{
 }
 
 .sidebar-thread-controls-button {
-  @apply h-9 w-9 border border-transparent bg-transparent flex items-center justify-center transition;
+  @apply relative h-9 w-9 border border-transparent bg-transparent flex items-center justify-center transition;
   border-radius: var(--ui-radius-control);
   color: var(--ui-text-secondary);
   transition:
@@ -76,5 +101,11 @@ defineEmits<{
 
 .sidebar-thread-controls-icon {
   @apply w-4 h-4;
+}
+
+.sidebar-thread-controls-attention-badge {
+  @apply absolute right-0.5 top-0.5 flex h-3.5 min-w-3.5 items-center justify-center px-0.5 text-[9px] font-semibold leading-none text-white;
+  border-radius: var(--ui-radius-pill);
+  background: var(--ui-warning);
 }
 </style>

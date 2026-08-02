@@ -60,6 +60,7 @@ import {
   rollbackWorktreeToMessage,
   startRuntimeThreadTurn,
   subscribeCodexNotifications,
+  unarchiveThread,
   type RuntimeInterruptSource,
   type RpcConnectionState,
   type RpcNotification,
@@ -90,8 +91,9 @@ import type {
 } from '../types/codex'
 import { isAbortLikeError } from '../api/codexErrors'
 import { normalizePathForUi, toProjectName } from '../pathUtils.js'
-import { isCxSessionFilesChangedMethod } from '../sessionFileChange'
+import { getCxSessionFileChangeSyncPolicy } from '../sessionFileChange'
 import {
+  areUiThreadFieldsEqual,
   dedupeProjectThreadGroups,
   orderProjectGroupsByRecentActivity,
   upsertThreadIntoProjectGroups,
@@ -148,10 +150,12 @@ function flattenThreads(groups: UiProjectGroup[]): UiThread[] {
   return groups.flatMap((group) => group.threads)
 }
 
-function shouldRefreshMessagesFromNotification(method: string): boolean {
+function shouldRefreshMessagesFromNotification(notification: RpcNotification): boolean {
+  const { method } = notification
   if (method === THREAD_TOKEN_USAGE_UPDATED_METHOD) return false
+  const sessionFileChangePolicy = getCxSessionFileChangeSyncPolicy(method, notification.params)
+  if (sessionFileChangePolicy) return sessionFileChangePolicy.refreshMessages
   return (
-    isCxSessionFilesChangedMethod(method) ||
     method === 'turn/started' ||
     method === 'turn/completed' ||
     method === 'thread/completed' ||
@@ -162,9 +166,11 @@ function shouldRefreshMessagesFromNotification(method: string): boolean {
   )
 }
 
-function shouldRefreshThreadListFromNotification(method: string): boolean {
+function shouldRefreshThreadListFromNotification(notification: RpcNotification): boolean {
+  const { method } = notification
   if (method === THREAD_TOKEN_USAGE_UPDATED_METHOD) return false
-  if (isCxSessionFilesChangedMethod(method)) return true
+  const sessionFileChangePolicy = getCxSessionFileChangeSyncPolicy(method, notification.params)
+  if (sessionFileChangePolicy) return sessionFileChangePolicy.refreshThreads
   if (method === 'thread/name/updated' || method === 'thread/started') return true
   if (!method.startsWith('thread/')) return false
   return (
@@ -189,7 +195,6 @@ function shouldUrgentlyRefreshFromNotification(method: string): boolean {
 function shouldBoostSyncForNotification(method: string): boolean {
   if (method === THREAD_TOKEN_USAGE_UPDATED_METHOD) return false
   return (
-    isCxSessionFilesChangedMethod(method) ||
     method === 'turn/started' ||
     method === 'turn/completed' ||
     method === 'error' ||
@@ -262,7 +267,7 @@ const RATE_LIMIT_REFRESH_DEBOUNCE_MS = 1500
 const RATE_LIMIT_REFRESH_MIN_INTERVAL_MS = 300000
 const COMPOSER_PLUGINS_REFRESH_DEBOUNCE_MS = 450
 const SKILLS_CHANGED_REFRESH_DEBOUNCE_MS = 350
-const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
+const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 const GLOBAL_SERVER_REQUEST_SCOPE = '__global__'
 const THREAD_TOKEN_USAGE_UPDATED_METHOD = 'thread/tokenUsage/updated'
 const SKILLS_CHANGED_METHOD = 'skills/changed'
@@ -425,6 +430,8 @@ function localizeActivityText(value: string): string {
     'medium': '中',
     'high': '高',
     'xhigh': '极高',
+    'max': '最高',
+    'ultra': '极致',
     'none': '无',
   }
 
@@ -1263,21 +1270,6 @@ function omitKey<TValue>(record: Record<string, TValue>, key: string): Record<st
   return next
 }
 
-function areThreadFieldsEqual(first: UiThread, second: UiThread): boolean {
-  return (
-    first.id === second.id &&
-    first.title === second.title &&
-    first.projectName === second.projectName &&
-    first.cwd === second.cwd &&
-    first.sourceKind === second.sourceKind &&
-    first.createdAtIso === second.createdAtIso &&
-    first.updatedAtIso === second.updatedAtIso &&
-    first.preview === second.preview &&
-    first.unread === second.unread &&
-    first.inProgress === second.inProgress
-  )
-}
-
 function areThreadArraysEqual(first: UiThread[], second: UiThread[]): boolean {
   if (first.length !== second.length) return false
   for (let index = 0; index < first.length; index += 1) {
@@ -1314,7 +1306,7 @@ function mergeThreadGroups(
 
     const mergedThreads = incomingGroup.threads.map((incomingThread) => {
       const previousThread = previousThreadsById.get(incomingThread.id)
-      if (previousThread && areThreadFieldsEqual(previousThread, incomingThread)) {
+      if (previousThread && areUiThreadFieldsEqual(previousThread, incomingThread)) {
         return previousThread
       }
       return incomingThread
@@ -2521,13 +2513,14 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       pinnedProjectRank: group.pinnedProjectRank,
       threads: group.threads.map((thread) => {
         const inProgress = isThreadExecutionActive(thread.id)
-        const isSelected = selectedThreadId.value === thread.id
+        const waitingForInput = (pendingServerRequestsByThreadId.value[thread.id] ?? []).length > 0
         const unreadByEvent = eventUnreadByThreadId.value[thread.id] === true
-        const unread = !isSelected && !inProgress && unreadByEvent
+        const unread = !inProgress && unreadByEvent
 
         return {
           ...thread,
           inProgress,
+          waitingForInput,
           unread,
         }
       }),
@@ -2717,6 +2710,18 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     if (eventUnreadByThreadId.value[threadId]) {
       replaceEventUnreadState(omitKey(eventUnreadByThreadId.value, threadId))
     }
+    applyThreadFlags()
+  }
+
+  function markThreadAsUnread(threadId: string): void {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId || !sourceThreadById.value[normalizedThreadId]) return
+    if (eventUnreadByThreadId.value[normalizedThreadId] === true) return
+
+    replaceEventUnreadState({
+      ...eventUnreadByThreadId.value,
+      [normalizedThreadId]: true,
+    })
     applyThreadFlags()
   }
 
@@ -5778,12 +5783,14 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     if (sorted.length === 0) {
       if (!pendingServerRequestsByThreadId.value[normalizedThreadId]) return
       pendingServerRequestsByThreadId.value = omitKey(pendingServerRequestsByThreadId.value, normalizedThreadId)
+      applyThreadFlags()
       return
     }
     pendingServerRequestsByThreadId.value = {
       ...pendingServerRequestsByThreadId.value,
       [normalizedThreadId]: sorted,
     }
+    applyThreadFlags()
   }
 
   function upsertPendingServerRequest(request: UiServerRequest): void {
@@ -5801,6 +5808,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       ...pendingServerRequestsByThreadId.value,
       [threadId]: nextRows.sort((first, second) => first.receivedAtIso.localeCompare(second.receivedAtIso)),
     }
+    applyThreadFlags()
   }
 
   function removePendingServerRequestById(requestId: number): void {
@@ -5812,6 +5820,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       }
     }
     pendingServerRequestsByThreadId.value = next
+    applyThreadFlags()
   }
 
   function pruneAutoResolvedPendingServerRequests(): void {
@@ -6570,7 +6579,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     const method = notification.method
     const urgentRefresh = shouldUrgentlyRefreshFromNotification(method)
     const shouldRefreshMessages =
-      shouldRefreshMessagesFromNotification(method) &&
+      shouldRefreshMessagesFromNotification(notification) &&
       !(
         threadId &&
         pendingTurnRequestByThreadId.value[threadId] &&
@@ -6581,7 +6590,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           method === 'thread/status/changed'
         )
       )
-    const shouldRefreshThreads = shouldRefreshThreadListFromNotification(method)
+    const shouldRefreshThreads = shouldRefreshThreadListFromNotification(notification)
 
     if (threadId && shouldRefreshMessages) {
       pendingThreadMessageRefresh.add(threadId)
@@ -7115,12 +7124,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         (options.silent === true && inProgress) ||
         snapshot.messageState !== 'fresh' ||
         Boolean(options.olderHistory)
-      const mergedMessages = mergeMessages(previousPersisted, nextMessages, {
+      const mergedMessages = mergeMessages(
+        previousPersisted,
+        nextMessages,
         // Preserve previous content when the server only returns partial or stale message state.
-        preserveMissing: shouldPreserveMissingMessages,
-        sortByTurnIndex: Boolean(options.olderHistory),
-        replaceHistoryNotice: Boolean(options.olderHistory),
-      })
+        shouldPreserveMissingMessages,
+        Boolean(options.olderHistory),
+        Boolean(options.olderHistory),
+        shouldPreserveSettledRpcMessages,
+      )
       setPersistedMessagesForThread(
         threadId,
         options.olderHistory ? removeStaleHistoryNoticeAfterOlderMerge(mergedMessages) : mergedMessages,
@@ -7462,27 +7474,6 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
   }
 
-  async function loadFullHistoryForSelectedThread(): Promise<void> {
-    error.value = ''
-
-    const threadId = selectedThreadId.value.trim()
-    if (!threadId) return
-
-    try {
-      abortCurrentSync()
-      clearBufferedLiveDeltas()
-      pendingThreadMessageRefresh.delete(threadId)
-      await loadMessages(threadId, {
-        silent: true,
-        forceSettledRpcRefresh: true,
-        fullHistory: true,
-      })
-    } catch (unknownError) {
-      error.value = unknownError instanceof Error ? unknownError.message : '加载较早历史失败'
-      throw unknownError
-    }
-  }
-
   function earliestLoadedTurnIndex(threadId: string): number | null {
     return earliestTurnIndexFromMessages(persistedMessagesByThreadId.value[threadId] ?? [])
   }
@@ -7616,25 +7607,49 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
   }
 
-  async function archiveThreadById(threadId: string) {
+  async function archiveThreadById(threadId: string): Promise<boolean> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return false
+
     try {
-      await archiveThread(threadId)
-      const normalizedThreadId = threadId.trim()
-      if (normalizedThreadId && !hiddenThreadIds.value.includes(normalizedThreadId)) {
+      const archived = await archiveThread(normalizedThreadId)
+      if (!archived) {
+        hideThreadLocally(normalizedThreadId)
+        return false
+      }
+      if (!hiddenThreadIds.value.includes(normalizedThreadId)) {
         hiddenThreadIds.value = [...hiddenThreadIds.value, normalizedThreadId]
         saveHiddenThreadIds(hiddenThreadIds.value)
       }
-      const flatThreads = removeThreadFromSourceGroups(threadId)
-      if (selectedThreadId.value === threadId) {
+      const flatThreads = removeThreadFromSourceGroups(normalizedThreadId)
+      if (selectedThreadId.value === normalizedThreadId) {
         setSelectedThreadId(flatThreads[0]?.id ?? '')
       }
       await loadThreads()
+      return true
     } catch (unknownError) {
       if (isThreadMaterializingError(unknownError)) {
-        hideThreadLocally(threadId)
-        return
+        hideThreadLocally(normalizedThreadId)
+        return false
       }
       error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+      return false
+    }
+  }
+
+  async function unarchiveThreadById(threadId: string): Promise<boolean> {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return false
+
+    try {
+      await unarchiveThread(normalizedThreadId)
+      hiddenThreadIds.value = hiddenThreadIds.value.filter((id) => id !== normalizedThreadId)
+      saveHiddenThreadIds(hiddenThreadIds.value)
+      await loadThreads()
+      return true
+    } catch (unknownError) {
+      error.value = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
+      return false
     }
   }
 
@@ -8935,9 +8950,19 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
   }
 
+  function stopBackgroundSync(): void {
+    if (typeof window === 'undefined' || backgroundSyncTimer === null) return
+    window.clearInterval(backgroundSyncTimer)
+    backgroundSyncTimer = null
+  }
+
   function scheduleBackgroundSync(): void {
-    if (typeof window === 'undefined' || backgroundSyncTimer !== null) return
+    if (typeof window === 'undefined' || backgroundSyncTimer !== null || !isDocumentVisible()) return
     backgroundSyncTimer = window.setInterval(() => {
+      if (!isDocumentVisible()) {
+        stopBackgroundSync()
+        return
+      }
       const now = Date.now()
       notificationHealthTick.value = now
       const activeThreadId = selectedThreadId.value
@@ -9088,6 +9113,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     const scheduleResumeSync = (force = false, showRecoveryFeedback = false): void => {
       if (!force && document.hidden) return
+      if (isDocumentVisible()) scheduleBackgroundSync()
       if (showRecoveryFeedback) {
         beginForegroundRecoveryFeedback(selectedThreadId.value)
       }
@@ -9150,6 +9176,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         clearVisibilitySyncTimer()
         clearResumeSyncTimers()
         stopActiveSyncBoost()
+        stopBackgroundSync()
         return
       }
       scheduleResumeSync(false, true)
@@ -9168,6 +9195,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
       stopActiveSyncBoost()
+      stopBackgroundSync()
     }
 
     const onPageLifecycleResume = (): void => {
@@ -9182,6 +9210,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
       stopActiveSyncBoost()
+      stopBackgroundSync()
     }
 
     const onMobileResume = (): void => {
@@ -9195,6 +9224,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
       stopActiveSyncBoost()
+      stopBackgroundSync()
     }
 
     const onMobileOnline = (): void => {
@@ -9205,6 +9235,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
       stopActiveSyncBoost()
+      stopBackgroundSync()
     }
 
     const onStorage = (event: StorageEvent): void => {
@@ -9497,10 +9528,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     stopAndroidKeepAwakeWatch?.()
     notificationReplayCoordinator.stop()
     realtimeConnectionManager.stop()
-    if (backgroundSyncTimer !== null && typeof window !== 'undefined') {
-      window.clearInterval(backgroundSyncTimer)
-      backgroundSyncTimer = null
-    }
+    stopBackgroundSync()
     stopActiveSyncBoost()
     clearBufferedLiveDeltas()
 
@@ -9678,7 +9706,6 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     refreshAll,
     loadThreadTitleCache: loadThreadTitleCacheIfNeeded,
     refreshSelectedThreadContent,
-    loadFullHistoryForSelectedThread,
     loadOlderHistoryForSelectedThread,
     refreshSkills,
     refreshComposerPlugins,
@@ -9688,6 +9715,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     selectThread,
     setThreadScrollState,
     archiveThreadById,
+    unarchiveThreadById,
     dismissThreadLocally,
     renameThreadById,
     forkThreadById,
@@ -9706,6 +9734,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     deleteQueuedMessage,
     retryQueuedMessage,
     quoteQueuedMessage,
+    markThreadAsRead,
+    markThreadAsUnread,
     markAllThreadsAsRead,
     setSelectedModelId,
     setWorktreeGitAutomationEnabled,

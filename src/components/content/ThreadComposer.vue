@@ -1,5 +1,25 @@
 <template>
-  <form class="thread-composer" @submit.prevent="onSubmit(resolveSubmitMode())">
+  <form
+    class="thread-composer"
+    @submit.prevent="onSubmit(resolveSubmitMode())"
+    @dragenter="onComposerDragEnter"
+    @dragover="onComposerDragOver"
+    @dragleave="onComposerDragLeave"
+    @drop="onComposerDrop"
+  >
+    <Transition name="composer-drop-overlay">
+      <div
+        v-if="isFileDragActive"
+        class="thread-composer-drop-overlay"
+        role="status"
+        aria-live="polite"
+      >
+        <div class="thread-composer-drop-message">
+          <span class="thread-composer-drop-title">松开即可添加</span>
+          <span class="thread-composer-drop-subtitle">支持图片与文件</span>
+        </div>
+      </div>
+    </Transition>
     <div
       v-if="dictationStatusText"
       class="thread-composer-dictation-statusbar"
@@ -285,9 +305,11 @@
           :class="{ 'thread-composer-input--expanded': isComposerExpanded }"
           rows="1"
           :placeholder="placeholderText"
+          :aria-label="placeholderText"
           :disabled="isInteractionDisabled"
           @input="onInputChange"
           @keydown="onInputKeydown"
+          @paste="onComposerPaste"
         />
         <ComposerSkillPicker
           :skills="skillOptions"
@@ -309,6 +331,9 @@
             class="thread-composer-attach-trigger"
             type="button"
             aria-label="添加内容和功能"
+            aria-haspopup="dialog"
+            :aria-expanded="isAttachMenuOpen"
+            aria-controls="thread-composer-attach-menu"
             :disabled="isInteractionDisabled"
             @click="toggleAttachMenu"
           >
@@ -328,13 +353,14 @@
           <Transition name="composer-attach-menu">
             <div
               v-if="isAttachMenuOpen"
+              id="thread-composer-attach-menu"
               ref="attachMenuRef"
               class="thread-composer-attach-menu"
               :class="{ 'thread-composer-attach-menu--sheet': isCompactViewport }"
               role="dialog"
               aria-label="添加内容和功能"
               :aria-modal="isCompactViewport ? 'true' : undefined"
-              @keydown="onAttachMenuKeydown"
+              tabindex="-1"
             >
             <div v-show="!isCompactViewport || !isPluginSubmenuOpen" class="thread-composer-attach-main">
             <button
@@ -522,6 +548,8 @@
               type="button"
               :disabled="isInteractionDisabled || (models.length === 0 && !selectedModel)"
               :aria-expanded="isRuntimeSettingsOpen"
+              aria-haspopup="dialog"
+              aria-controls="thread-composer-runtime-panel"
               aria-label="配置模型、质量和速度"
               @click="toggleRuntimeSettings"
             >
@@ -545,13 +573,14 @@
             />
             <div
               v-if="isRuntimeSettingsOpen"
+              id="thread-composer-runtime-panel"
               ref="runtimePanelRef"
               class="thread-composer-runtime-panel"
               :class="{ 'thread-composer-runtime-panel--sheet': isCompactViewport }"
               role="dialog"
               aria-label="模型、质量和速度"
               :aria-modal="isCompactViewport ? 'true' : undefined"
-              @keydown="onRuntimePanelKeydown"
+              tabindex="-1"
             >
               <div v-if="isCompactViewport" class="thread-composer-runtime-handle" aria-hidden="true" />
               <div class="thread-composer-runtime-section">
@@ -764,6 +793,7 @@ import type {
 } from '../../types/codex'
 import { useDictation } from '../../composables/useDictation'
 import { searchComposerFiles, uploadFile, type ComposerFileSuggestion } from '../../api/codexGateway'
+import { useLazyModalEnvironment } from '../../composables/useLazyModalEnvironment'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerArrowsMaximize from '../icons/IconTablerArrowsMaximize.vue'
 import IconTablerArrowsMinimize from '../icons/IconTablerArrowsMinimize.vue'
@@ -888,9 +918,11 @@ const pluginSearchQuery = ref('')
 const fileAttachments = ref<FileAttachment[]>([])
 const pendingFileUploads = ref<PendingFileUpload[]>([])
 const folderUploadGroups = ref<FolderUploadGroup[]>([])
+const isFileDragActive = ref(false)
 const uploadFilesById = new Map<string, File>()
 const uploadControllersById = new Map<string, AbortController>()
 const failedFolderFilesByGroupId = new Map<string, File[]>()
+let fileDragDepth = 0
 
 const dictationFeedback = ref('')
 const dictationFeedbackTone = ref<DictationFeedbackTone>('neutral')
@@ -960,6 +992,11 @@ const fileMentionHighlightedIndex = ref(0)
 const isCompactViewport = ref(
   typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
 )
+const composerSurfaceKind = computed<'attach' | 'runtime' | null>(() => {
+  if (isAttachMenuOpen.value) return 'attach'
+  if (isRuntimeSettingsOpen.value) return 'runtime'
+  return null
+})
 const draftGeneration = ref(0)
 let fileMentionSearchToken = 0
 let fileMentionDebounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -983,6 +1020,8 @@ const fallbackReasoningOptions: Array<{ value: ReasoningEffort; label: string; d
   { value: 'medium', label: '中', description: '' },
   { value: 'high', label: '高', description: '' },
   { value: 'xhigh', label: '超高', description: '' },
+  { value: 'max', label: '最高', description: '' },
+  { value: 'ultra', label: '极致', description: '' },
 ]
 
 const speedModeOptions: Array<{ value: SpeedMode; label: string; description: string }> = [
@@ -1048,6 +1087,8 @@ const reasoningOptions = computed(() => {
     medium: '中',
     high: '高',
     xhigh: '超高',
+    max: '最高',
+    ultra: '极致',
   }
   return options.map((option) => ({
     value: option.value,
@@ -1616,39 +1657,13 @@ function toggleRuntimeSettings(): void {
   isRuntimeSettingsOpen.value = !isRuntimeSettingsOpen.value
   if (isRuntimeSettingsOpen.value) {
     isAttachMenuOpen.value = false
-    void nextTick(() => {
-      getRuntimePanelFocusableElements()[0]?.focus()
-    })
   }
 }
 
 function closeRuntimeSettings(restoreFocus = true): void {
   isRuntimeSettingsOpen.value = false
   if (restoreFocus) {
-    void nextTick(() => runtimeTriggerRef.value?.focus())
-  }
-}
-
-function getRuntimePanelFocusableElements(): HTMLElement[] {
-  const panel = runtimePanelRef.value
-  if (!panel) return []
-  return Array.from(panel.querySelectorAll<HTMLElement>('button:not([disabled]), [tabindex]:not([tabindex="-1"])'))
-    .filter((element) => element.getClientRects().length > 0)
-}
-
-function onRuntimePanelKeydown(event: KeyboardEvent): void {
-  if (event.key !== 'Tab') return
-  const focusable = getRuntimePanelFocusableElements()
-  if (focusable.length === 0) return
-  const first = focusable[0]
-  const last = focusable[focusable.length - 1]
-  if (!first || !last) return
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault()
-    last.focus()
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault()
-    first.focus()
+    void nextTick(() => runtimeTriggerRef.value?.focus({ preventScroll: true }))
   }
 }
 
@@ -1809,9 +1824,6 @@ function toggleAttachMenu(): void {
   isAttachMenuOpen.value = !isAttachMenuOpen.value
   if (isAttachMenuOpen.value) {
     isRuntimeSettingsOpen.value = false
-    void nextTick(() => {
-      getAttachMenuFocusableElements()[0]?.focus()
-    })
   } else {
     isPluginSubmenuOpen.value = false
   }
@@ -1822,31 +1834,7 @@ function closeAttachMenu(restoreFocus = true): void {
   isPluginSubmenuOpen.value = false
   pluginSearchQuery.value = ''
   if (restoreFocus) {
-    void nextTick(() => attachTriggerRef.value?.focus())
-  }
-}
-
-function getAttachMenuFocusableElements(): HTMLElement[] {
-  const menu = attachMenuRef.value
-  if (!menu) return []
-  return Array.from(menu.querySelectorAll<HTMLElement>(
-    'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-  )).filter((element) => element.getClientRects().length > 0)
-}
-
-function onAttachMenuKeydown(event: KeyboardEvent): void {
-  if (event.key !== 'Tab') return
-  const focusable = getAttachMenuFocusableElements()
-  if (focusable.length === 0) return
-  const first = focusable[0]
-  const last = focusable[focusable.length - 1]
-  if (!first || !last) return
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault()
-    last.focus()
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault()
-    first.focus()
+    void nextTick(() => attachTriggerRef.value?.focus({ preventScroll: true }))
   }
 }
 
@@ -2113,7 +2101,7 @@ function queueFileUpload(file: File, generation: number): void {
   scheduleStandaloneUpload(() => startFileUpload(id, generation))
 }
 
-function addFiles(files: FileList | null): void {
+function addFiles(files: FileList | readonly File[] | null): void {
   if (!files || files.length === 0) return
   const generation = draftGeneration.value
   for (const file of Array.from(files)) {
@@ -2123,6 +2111,58 @@ function addFiles(files: FileList | null): void {
       queueFileUpload(file, generation)
     }
   }
+}
+
+function hasFileDrag(dataTransfer: DataTransfer | null): boolean {
+  return dataTransfer !== null && Array.from(dataTransfer.types).includes('Files')
+}
+
+function resetFileDragState(): void {
+  fileDragDepth = 0
+  isFileDragActive.value = false
+}
+
+function onComposerDragEnter(event: DragEvent): void {
+  if (isInteractionDisabled.value || !hasFileDrag(event.dataTransfer)) return
+  event.preventDefault()
+  fileDragDepth += 1
+  isFileDragActive.value = true
+}
+
+function onComposerDragOver(event: DragEvent): void {
+  if (isInteractionDisabled.value || !hasFileDrag(event.dataTransfer)) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+  isFileDragActive.value = true
+}
+
+function onComposerDragLeave(event: DragEvent): void {
+  if (!isFileDragActive.value) return
+  event.preventDefault()
+  fileDragDepth = Math.max(0, fileDragDepth - 1)
+  if (fileDragDepth === 0) isFileDragActive.value = false
+}
+
+function onComposerDrop(event: DragEvent): void {
+  if (!hasFileDrag(event.dataTransfer)) return
+  event.preventDefault()
+  const files = event.dataTransfer?.files ?? null
+  resetFileDragState()
+  if (isInteractionDisabled.value) return
+  addFiles(files)
+}
+
+function onComposerPaste(event: ClipboardEvent): void {
+  if (isInteractionDisabled.value || !event.clipboardData) return
+  const itemFiles = Array.from(event.clipboardData.items)
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null)
+  const files = itemFiles.length > 0 ? itemFiles : Array.from(event.clipboardData.files)
+  if (files.length === 0) return
+
+  event.preventDefault()
+  addFiles(files)
 }
 
 function updateFolderGroup(
@@ -2264,6 +2304,8 @@ function onInputChange(): void {
 }
 
 function onInputKeydown(event: KeyboardEvent): void {
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+
   if (isFileMentionOpen.value) {
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -2297,8 +2339,6 @@ function onInputKeydown(event: KeyboardEvent): void {
       return
     }
   }
-
-  if (event.isComposing || event.keyCode === 229) return
 
   const shouldSend = event.key === 'Enter' && (
     event.metaKey ||
@@ -2535,6 +2575,7 @@ defineExpose<ThreadComposerExposed>({
 })
 
 onBeforeUnmount(() => {
+  resetFileDragState()
   cancelAndReleaseDraftUploads()
   if (stopGuardTimer) {
     clearTimeout(stopGuardTimer)
@@ -2556,6 +2597,14 @@ onBeforeUnmount(() => {
     clearTimeout(fileMentionDebounceTimer)
   }
 })
+
+useLazyModalEnvironment(
+  composerSurfaceKind,
+  (kind) => kind === 'attach' ? attachMenuRef.value : runtimePanelRef.value,
+  () => null,
+  () => document.body,
+  () => isCompactViewport.value,
+)
 
 watch(
   () => props.activeThreadId,
@@ -2649,8 +2698,42 @@ watch(
 @reference "tailwindcss";
 
 .thread-composer {
-  @apply w-full mx-auto px-2 sm:px-6;
+  @apply relative w-full mx-auto px-2 sm:px-6;
   max-width: min(var(--ui-composer-max, var(--content-shell-max-width, 88rem)), 100%);
+}
+
+.thread-composer-drop-overlay {
+  @apply pointer-events-none absolute inset-0 z-[80] flex items-center justify-center px-3;
+  border-radius: var(--ui-radius-composer);
+  background: color-mix(in srgb, var(--ui-bg-surface) 84%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.thread-composer-drop-message {
+  @apply flex min-w-44 flex-col items-center gap-0.5 border px-5 py-3 text-center shadow-sm;
+  border-radius: var(--ui-radius-control);
+  border-color: color-mix(in srgb, var(--ui-accent) 34%, var(--ui-border-subtle));
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
+}
+
+.thread-composer-drop-title {
+  @apply text-sm font-semibold;
+}
+
+.thread-composer-drop-subtitle {
+  @apply text-xs;
+  color: var(--ui-text-secondary);
+}
+
+.composer-drop-overlay-enter-active,
+.composer-drop-overlay-leave-active {
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.composer-drop-overlay-enter-from,
+.composer-drop-overlay-leave-to {
+  opacity: 0;
 }
 
 .thread-composer-shell {
@@ -2954,6 +3037,7 @@ watch(
 
 .thread-composer-input {
   @apply w-full min-w-0 min-h-8 max-h-32 rounded-xl border-0 bg-transparent px-1 py-1 text-sm outline-none transition resize-none overflow-y-auto;
+  field-sizing: content;
   color: var(--ui-text-primary);
   font-family: var(--font-sans-reading);
   font-size: var(--font-size-reading, 15px);

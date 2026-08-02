@@ -125,7 +125,7 @@ codex-web-local/
 | Chat conversation | Send messages, view full conversation history with user/assistant/system roles |
 | Real-time streaming | WebSocket-preferred live updates with SSE fallback, heartbeat recovery, sequence tracking, and replay after gaps |
 | Model selection | Dropdown to choose from available models (`model/list` RPC) |
-| Reasoning effort | Configurable reasoning effort level (none → xhigh) |
+| Reasoning effort | Configurable reasoning effort level (none → ultra) |
 | Turn interrupt | Stop in-progress agent turns |
 | Server request handling | Approve/reject server-initiated requests (command approvals, file changes, tool calls) |
 | Project grouping | Threads organized by working directory (project) |

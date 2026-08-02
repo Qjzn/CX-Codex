@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 import { isCxSessionFilesChangedMethod } from '../sessionFileChange.js'
@@ -173,6 +174,8 @@ export class AppServerRpcCache {
   private readonly cachedModelListRpcByKey = new Map<string, CachedRpcResponse>()
   private readonly threadListCachePath: string
   private threadListGeneration = 0
+  private pendingThreadListCachePayload: string | null = null
+  private threadListCacheWritePromise: Promise<void> | null = null
 
   constructor(options: AppServerRpcCacheOptions = {}) {
     this.threadListCachePath = options.threadListCachePath ?? getWebThreadListCachePath()
@@ -234,6 +237,12 @@ export class AppServerRpcCache {
     if (generation !== this.threadListGeneration) return
     writeCachedRpc(this.cachedThreadListRpcByKey, shareableKey, value)
     this.persistThreadListCache()
+  }
+
+  async waitForPendingThreadListCacheWrites(): Promise<void> {
+    while (this.threadListCacheWritePromise) {
+      await this.threadListCacheWritePromise
+    }
   }
 
   readModelList(shareableKey: string, allowStale = false): CachedRpcRead | null {
@@ -424,10 +433,35 @@ export class AppServerRpcCache {
         cachedAtMs: entry.cachedAtMs,
         invalidated: entry.invalidated,
       }))
-      mkdirSync(dirname(this.threadListCachePath), { recursive: true })
-      writeFileSync(this.threadListCachePath, JSON.stringify({ version: 1, entries }), 'utf8')
+      this.pendingThreadListCachePayload = JSON.stringify({ version: 1, entries })
+      this.startThreadListCacheWriter()
     } catch {
       // List caching must never break app-server RPC handling.
+    }
+  }
+
+  private startThreadListCacheWriter(): void {
+    if (this.threadListCacheWritePromise || this.pendingThreadListCachePayload === null) return
+
+    const writePromise = this.drainThreadListCacheWrites()
+    this.threadListCacheWritePromise = writePromise
+    void writePromise.finally(() => {
+      if (this.threadListCacheWritePromise !== writePromise) return
+      this.threadListCacheWritePromise = null
+      this.startThreadListCacheWriter()
+    })
+  }
+
+  private async drainThreadListCacheWrites(): Promise<void> {
+    while (this.pendingThreadListCachePayload !== null) {
+      const payload = this.pendingThreadListCachePayload
+      this.pendingThreadListCachePayload = null
+      try {
+        await mkdir(dirname(this.threadListCachePath), { recursive: true })
+        await writeFile(this.threadListCachePath, payload, 'utf8')
+      } catch {
+        // List caching must never break app-server RPC handling.
+      }
     }
   }
 }

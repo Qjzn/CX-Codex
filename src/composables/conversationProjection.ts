@@ -88,11 +88,15 @@ export function sortMessagesByTurnIndex(messages: UiMessage[]): UiMessage[] {
 export function mergeMessages(
   previous: UiMessage[],
   incoming: UiMessage[],
-  options: { preserveMissing?: boolean; sortByTurnIndex?: boolean; replaceHistoryNotice?: boolean } = {},
+  preserveMissing = false,
+  sortByTurnIndex = false,
+  replaceHistoryNotice = false,
+  replaceOverlappingTurns = false,
 ): UiMessage[] {
   const previousById = new Map(previous.map((message) => [message.id, message]))
   const incomingById = new Map(incoming.map((message) => [message.id, message]))
   const incomingHasHistoryNotice = incoming.some((message) => message.messageType === 'history.notice')
+  const incomingTurnIndexes = new Set(incoming.map((message) => message.turnIndex))
 
   const mergedIncoming = incoming.map((incomingMessage) => {
     const previousMessage = previousById.get(incomingMessage.id)
@@ -102,14 +106,22 @@ export function mergeMessages(
     return incomingMessage
   })
 
-  if (options.preserveMissing !== true) {
+  if (!preserveMissing) {
     return areMessageArraysEqual(previous, mergedIncoming) ? previous : mergedIncoming
   }
 
   const mergedFromPrevious = previous
     .filter((previousMessage) => {
+      if (
+        replaceOverlappingTurns &&
+        previousMessage.turnIndex !== undefined &&
+        incomingTurnIndexes.has(previousMessage.turnIndex) &&
+        !incomingById.has(previousMessage.id)
+      ) {
+        return false
+      }
       return !(
-        options.replaceHistoryNotice === true &&
+        replaceHistoryNotice &&
         previousMessage.messageType === 'history.notice' &&
         !incomingHasHistoryNotice
       )
@@ -123,7 +135,7 @@ export function mergeMessages(
 
   const previousIdSet = new Set(previous.map((message) => message.id))
   const appended = mergedIncoming.filter((message) => !previousIdSet.has(message.id))
-  const merged = options.sortByTurnIndex === true
+  const merged = sortByTurnIndex
     ? sortMessagesByTurnIndex([...mergedFromPrevious, ...appended])
     : [...mergedFromPrevious, ...appended]
 

@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
   [string]$BaseUrl = "http://127.0.0.1:7420",
   [string]$ThreadId = "",
@@ -77,6 +77,46 @@ function Assert-ImmediateAsyncRouteFallbackSource {
   }
 }
 
+function Assert-CompleteThreadExportSource {
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\App.vue"
+  )
+  $exportHelperPath = Join-Path (Get-Location) "src\utils\threadExport.ts"
+
+  Assert-True (Test-Path -LiteralPath $exportHelperPath) "thread export must keep markdown generation in a lazy helper outside the main entry"
+  $exportHelperSource = Get-Content -Raw -Encoding UTF8 -LiteralPath $exportHelperPath
+  $completeActionMatch = [regex]::Match(
+    $appSource,
+    "async\s+function\s+runCompleteThreadExport[\s\S]*?(?=\r?\nasync\s+function\s+onArchiveThread)"
+  )
+
+  Assert-True ($completeActionMatch.Success) "complete export must retain one explicit action owner"
+  $completeActionSource = $completeActionMatch.Value
+  Assert-True ($appSource -match "let\s+threadExportPromise:\s*Promise<void>\s*\|\s*null\s*=\s*null" -and $appSource -match "async\s+function\s+runThreadMarkdownAction[\s\S]*?if\s*\(threadExportPromise\)[\s\S]*?await\s+threadExportPromise") "complete export must suppress duplicate full-history requests and downloads"
+  Assert-True ($completeActionSource -match "showProductToast[\s\S]*?await\s+getThreadDetail\(threadId,\s*\{\s*responseView:\s*'full'\s*\}\)[\s\S]*?await\s+import\('\./utils/threadExport'\)[\s\S]*?downloadThreadMarkdown[\s\S]*?showProductToast") "complete export must expose progress, read the target thread directly, and download only after full history settles"
+  Assert-True ($completeActionSource -notmatch "\bselectThread\s*\(|router\.push\s*\(|loadFullHistoryForSelectedThread\s*\(|selectedThreadId\.value") "copying or exporting another thread must not change or depend on the current navigation owner"
+  Assert-True ($appSource -match "catch\s*\([^)]+\)[\s\S]*?showProductToast\([^\r\n]+?'danger'") "complete export must expose a recoverable failure state"
+  Assert-True ($exportHelperSource -match "export\s+function\s+buildThreadMarkdown" -and $exportHelperSource -match "export\s+function\s+downloadThreadMarkdown") "the lazy export helper must own both markdown serialization and download"
+}
+
+function Assert-CompleteThreadCopySource {
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\App.vue"
+  )
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
+  )
+  $exportHelperSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\utils\threadExport.ts"
+  )
+
+  Assert-True (([regex]::Matches($sidebarSource, "onCopyThread\(openThreadMenuThread\.id\)")).Count -eq 1 -and $sidebarSource -match "'copy-thread':\s*\[threadId:\s*string\]") "the shared thread menu must expose one complete-conversation copy action"
+  Assert-True ($appSource -match '@copy-thread="onCopyThread"' -and $appSource -match "function\s+onCopyThread[\s\S]*?runThreadMarkdownAction\(threadId,\s*true\)") "App must route complete-conversation copying through the full-history action owner"
+  Assert-True ($appSource -match "async\s+function\s+runCompleteThreadExport[\s\S]*?await\s+getThreadDetail\(threadId,\s*\{\s*responseView:\s*'full'\s*\}\)[\s\S]*?buildThreadMarkdown[\s\S]*?copyTextToClipboard[\s\S]*?完整会话已复制") "complete-conversation copying must read the target thread without navigation, reuse Markdown serialization, and report success only after the clipboard write"
+  Assert-True ($appSource -match "复制完整会话失败，请重试或使用导出") "complete-conversation copy failure must offer export as an actionable recovery"
+  Assert-True ($exportHelperSource -match "export\s+function\s+buildThreadMarkdown") "complete-conversation copying must reuse the lazy Markdown serializer"
+}
+
 function Assert-NestedMobileBackOwnershipSource {
   $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
     Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
@@ -109,12 +149,218 @@ function Assert-NestedMobileBackOwnershipSource {
   Assert-True $blockingDialogsOwnEnvironment "blocking App dialogs must own focus, background scrolling, and Escape before lower-layer controls"
 }
 
+function Assert-MobileDrawerEnvironmentOwnershipSource {
+  $layoutSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\layout\DesktopLayout.vue"
+  )
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
+  )
+  $environmentSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\utils\modalEnvironment.ts"
+  )
+  $lazyEnvironmentSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\composables\useLazyModalEnvironment.ts"
+  )
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\App.vue"
+  )
+
+  $hasModalSemantics = ($layoutSource -match 'ref="mobileDrawerRef"[\s\S]*?role="dialog"[\s\S]*?aria-modal="true"[\s\S]*?aria-label="会话导航"[\s\S]*?tabindex="-1"')
+  Assert-True $hasModalSemantics "mobile drawer must expose one named modal navigation boundary"
+  Assert-True ($environmentSource -match "portalRoot\?\.parentElement\s*===\s*document\.body[\s\S]*?!element\.inert[\s\S]*?element\.inert\s*=\s*true[\s\S]*?element\.inert\s*=\s*false") "mobile drawer must reversibly remove its body-level background from sequential and assistive navigation"
+  Assert-True ($layoutSource -match "useLazyModalEnvironment\([\s\S]*?isMobileDrawerOpen" -and $lazyEnvironmentSource -match "import\('\.\./utils/modalEnvironment'\)") "mobile drawer environment code must stay outside the cold main entry"
+  $hasFocusOwnership = ($environmentSource -match "const\s+onKeydown[\s\S]*?event\.key\s*!==\s*'Tab'") -and ($environmentSource -match "const\s+onFocusIn[\s\S]*?focusInitial\(\)") -and ($environmentSource -match '\[role="menu"\]')
+  Assert-True $hasFocusOwnership "mobile drawer must contain Tab navigation and reclaim background focus"
+  $hasSymmetricFocusListeners = ($environmentSource -match "addEventListener\('focusin',\s*onFocusIn,\s*true\)") -and ($environmentSource -match "removeEventListener\('focusin',\s*onFocusIn,\s*true\)")
+  Assert-True $hasSymmetricFocusListeners "mobile drawer focus ownership listeners must be removed on unmount"
+  $hasReversibleEnvironment = ($environmentSource -match "scrollOwner\.style\.overflow\s*=\s*'hidden'") -and ($environmentSource -match "scrollOwner\.style\.overflow\s*=\s*previousOverflow") -and ($environmentSource -match "previousFocus\.focus\(\{\s*preventScroll:\s*true\s*\}\)")
+  Assert-True $hasReversibleEnvironment "mobile drawer must restore root scrolling and the exact connected opener"
+  $settingsOwnsModalEnvironment = ($appSource -match 'ref="sidebarSettingsPanelRef"[\s\S]*?:role="isSettingsSheetMode[\s\S]*?:aria-modal="isSettingsSheetMode') -and ($appSource -match "useLazyModalEnvironment\([\s\S]*?isSettingsModalOpen[\s\S]*?sidebarSettingsPanelRef[\s\S]*?sidebarScrollableRef[\s\S]*?sidebarFooterActionsRef") -and ($lazyEnvironmentSource -match "resolveInertTargets[\s\S]*?ownModalEnvironment\([\s\S]*?resolveInertTargets\?\.\(\)") -and ($environmentSource -match "additionalInertTargets[\s\S]*?inertedElements[\s\S]*?element\.inert\s*=\s*true[\s\S]*?element\.inert\s*=\s*false")
+  Assert-True $settingsOwnsModalEnvironment "mobile settings sheet must lazily own focus and reversibly isolate the underlying drawer"
+  Assert-True ($appSource -match 'class="sidebar-settings-mobile-backdrop"[^>]*tabindex="-1"[^>]*aria-hidden="true"[^>]*@pointerdown\.prevent') "mobile settings backdrop must stay presentational and preserve its opener for focus restoration"
+  Assert-True ($sidebarSource -match "function\s+onSelect\(threadId:\s*string\)[\s\S]*?querySelector\('\.mobile-drawer'\)[\s\S]*?emit\('select',\s*threadId\)[\s\S]*?nextTick[\s\S]*?getElementById\('main-content'\)\?\.focus\(\{\s*preventScroll:\s*true\s*\}\)") "mobile drawer thread navigation must transfer focus to the stable main-content boundary"
+}
+
+function Assert-MobileThreadActionDiscoverySource {
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
+  )
+  $rowSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarMenuRow.vue"
+  )
+
+  Assert-True (([regex]::Matches($sidebarSource, ':aria-label="getThreadPinActionLabel\(thread\)"')).Count -eq 2) "both pinned and directory thread collections must use the contextual pin label"
+  Assert-True ($sidebarSource -notmatch 'class="thread-pin-button"[^>]*title="置顶"') "direct thread pin actions must not expose a false static label"
+  Assert-True ($sidebarSource -match "function\s+getThreadPinActionLabel\(thread:\s*UiThread\)[\s\S]*?isPinned\(thread\.id\)\s*\?\s*'取消置顶'\s*:\s*'置顶会话'") "thread pin labels must describe the action that will occur"
+  $mobileThreadActionMedia = "@media\s*\(max-width:\s*767px\),\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\),\s*\(max-height:\s*480px\)\s*and\s*\(max-width:\s*932px\)"
+  Assert-True ($rowSource -match "$mobileThreadActionMedia[\s\S]*?sidebar-menu-row-right-default\s*\{[\s\S]*?display:\s*none;[\s\S]*?sidebar-menu-row-right-hover\s*\{[\s\S]*?display:\s*inline-flex;") "phone and touch thread rows must expose their existing action menu without hover"
+  Assert-True ($sidebarSource -match "$mobileThreadActionMedia[\s\S]*?\.thread-pin-button\s*\{[\s\S]*?display:\s*none;[\s\S]*?\.thread-menu-trigger\s*\{[\s\S]*?width:\s*2\.25rem;[\s\S]*?height:\s*2\.25rem;[\s\S]*?\.thread-menu-wrap\s*\{[\s\S]*?height:\s*1\.75rem;") "phone and touch rows must remove hidden pin focus stops and retain a 36px menu target without increasing row density"
+}
+
+function Assert-ConciseThreadOpenLabelsSource {
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
+  )
+  $labelHelper = [regex]::Match($sidebarSource, "function\s+getThreadOpenAriaLabel\(thread:\s*UiThread\):\s*string\s*\{[\s\S]*?\n\}")
+
+  Assert-True (([regex]::Matches($sidebarSource, ':aria-label="getThreadOpenAriaLabel\(thread\)"')).Count -eq 2) "both pinned and directory thread collections must use the concise open-thread accessible label"
+  Assert-True ($labelHelper.Success -and $labelHelper.Value -match "打开会话：" -and $labelHelper.Value -match "等待处理" -and $labelHelper.Value -match "执行中" -and $labelHelper.Value -match "未读" -and $labelHelper.Value -match "工作树会话") "thread open labels must retain actionable status without exposing their full preview"
+  Assert-True ($labelHelper.Value -notmatch "preview") "thread open labels must not append the potentially unbounded preview"
+}
+
+function Assert-IndependentProjectControlsSource {
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
+  )
+
+  Assert-True ($sidebarSource -notmatch 'class="project-header-row"[\s\S]{0,120}?role="button"' -and $sidebarSource -notmatch 'class="project-header-row"[\s\S]{0,120}?tabindex="0"') "project headers must not present a composite row containing nested buttons as one button"
+  Assert-True ($sidebarSource -match '<button\s+class="project-main-button"[\s\S]*?:aria-label="getProjectToggleAriaLabel\(group\)"[\s\S]*?:aria-expanded="!isCollapsed\(group\.projectName\)"') "project collapse ownership must move to one named native button"
+  Assert-True ($sidebarSource -match 'class="project-header-row"[\s\S]*?@click="toggleProjectCollapse\(group\.projectName\)"' -and $sidebarSource -match '@click\.stop="toggleProjectMenu\(\$event,\s*group\.projectName\)"') "project row pointer convenience and independent menu ownership must remain intact"
+  Assert-True ($sidebarSource -match "function\s+getProjectToggleAriaLabel\(group:\s*UiProjectGroup\)[\s\S]*?'展开项目'\s*:\s*'收起项目'[\s\S]*?getProjectSummary\(group\)") "project toggle labels must expose their next action, title, and summary"
+  Assert-True ($sidebarSource -match "\.project-main-button:focus-visible\s*\{[\s\S]*?outline:\s*2px\s+solid\s+var\(--ui-focus\)") "the new native project toggle must retain a visible keyboard focus indicator"
+}
+
+function Assert-BulkProjectCollapseSource {
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
+  )
+
+  Assert-True ($sidebarSource -match 'aria-haspopup="menu"[\s\S]*?aria-controls="sidebar-organize-menu"' -and $sidebarSource -match 'id="sidebar-organize-menu"[\s\S]*?role="menu"') "the organize trigger and panel must expose one connected menu surface"
+  Assert-True ($sidebarSource -match 'data-organize-action="collapse-all-projects"[\s\S]*?收起全部目录' -and $sidebarSource -match 'data-organize-action="expand-all-projects"[\s\S]*?展开全部目录') "directory organization must expose explicit bulk collapse and expand actions"
+  Assert-True ($sidebarSource -match 'function\s+setAllProjectsCollapsed\(collapsed:\s*boolean\)[\s\S]*?props\.groups[\s\S]*?collapsedProjects\.value\s*=') "bulk project actions must update the existing persisted collapse state in one batch"
+}
+
+function Assert-SimpleRecentSidebarSource {
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
+  )
+  $orderingSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\utils\projectGroupOrdering.ts"
+  )
+  $recentOrderingSource = $orderingSource.Substring($orderingSource.IndexOf('export function orderProjectGroupsByRecentActivity'))
+
+  Assert-True ($sidebarSource -match '<span class="thread-tree-header">目录</span>' -and $sidebarSource -match '<span class="thread-tree-header-subtitle">最近会话优先</span>') "the sidebar must expose one fixed directory hierarchy with a clear recency contract"
+  Assert-True ($sidebarSource -notmatch '<span class="thread-section-label">正在运行</span>' -and $sidebarSource -notmatch 'threadViewMode|chronological|thread-list-global') "running state and chronological mode must not create parallel sidebar collections"
+  Assert-True ($sidebarSource -match 'const\s+pinnedThreads\s*=\s*pinnedIds[\s\S]*?matchesThreadSearch\(thread,\s*query,\s*matchedIds\)\)[\r\n\s]*\.sort\(compareThreadByUpdatedAt\)') "pinned conversations must follow latest activity instead of pin insertion order"
+  Assert-True ($sidebarSource -match 'function\s+projectThreads\(group:\s*UiProjectGroup\):\s*UiThread\[\][\s\S]*?sort\(compareThreadByUpdatedAt\)') "threads inside every directory must follow latest activity"
+  Assert-True ($recentOrderingSource -match 'latestTimestamp[\s\S]*?activityDifference' -and $recentOrderingSource -notmatch 'isPinnedProject|pinnedProjectRank') "directories must follow their latest child conversation without pinned-project priority"
+  Assert-True ($sidebarSource -notmatch '@mousedown\.left="onProjectHandleMouseDown' -and $sidebarSource -notmatch '@keydown="onProjectHeaderKeyDown' -and $sidebarSource -notmatch '<IconTablerPin\s+v-if="group\.isPinnedProject') "fixed recent ordering must not expose misleading manual-order or pinned-directory affordances"
+}
+
+function Assert-ExplicitSidebarSearchStatesSource {
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\App.vue"
+  )
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
+  )
+
+  Assert-True ($appSource -notmatch '\bsearchThreads\b' -and $sidebarSource -match "getPinnedThreadIds,\s*searchThreads,\s*updatePinnedThreadIds") "full sidebar search must stay inside the existing lazy thread-tree boundary"
+  Assert-True ($sidebarSource -match "watch\([\s\S]*?props\.searchQuery[\s\S]*?internalSearchState\.value\s*=\s*'pending'[\s\S]*?fullSearchTimer\s*=\s*setTimeout" -and $sidebarSource -match "function\s+runFullSearch[\s\S]*?result\.partial\s*===\s*true\s*\?\s*'partial'\s*:\s*'idle'[\s\S]*?internalSearchState\.value\s*=\s*'failed'") "debounced full search must distinguish pending, provisional, settled, and failed results"
+  Assert-True ($sidebarSource -match "function\s+retryFullSearch[\s\S]*?runFullSearch\(query\)") "failed full search must retain an explicit retry path"
+  Assert-True ($sidebarSource -match "isFullSearchPending[\s\S]*?正在搜索全部会话…[\s\S]*?hasFullSearchFailed[\s\S]*?完整搜索暂时不可用[\s\S]*?hasPartialSearchResults[\s\S]*?更多会话仍在整理[\s\S]*?再次检查[\s\S]*?没有匹配的会话") "thread search must distinguish pending, provisional local results, recoverable failure, and settled no-result states"
+  Assert-True ($sidebarSource -match ':aria-busy="isSearchActive && \(isFullSearchPending \|\| hasPartialSearchResults\)' -and $sidebarSource -match 'role="status"[\s\S]*?aria-live="polite"') "sidebar search progress must expose both request and background-index work without an interruptive alert"
+  $mobileSearchCloseMatch = [regex]::Match(
+    $appSource,
+    "function\s+closeMobileSidebarAfterNavigation\(\):\s*void\s*\{[\s\S]*?(?=\r?\nfunction\s+setSidebarCollapsed)"
+  )
+  $sharedCollapseMatch = [regex]::Match(
+    $appSource,
+    "function\s+setSidebarCollapsed\([\s\S]*?(?=\r?\nfunction\s+dismissTopmostBlockingDialog)"
+  )
+  Assert-True ($mobileSearchCloseMatch.Success) "could not find the mobile navigation drawer-close boundary"
+  Assert-True ($mobileSearchCloseMatch.Value -match "if\s*\(\s*!shouldUseMobileSidebarDrawer\(\)\s*\)\s*return[\s\S]*?isSidebarSearchVisible\.value\s*=\s*false[\s\S]*?sidebarSearchQuery\.value\s*=\s*''[\s\S]*?setSidebarCollapsed\(true,\s*\{\s*persist:\s*false\s*\}\)") "successful mobile navigation must clear the transient drawer search before closing it"
+  Assert-True ($sharedCollapseMatch.Success -and $sharedCollapseMatch.Value -notmatch 'isSidebarSearchVisible|sidebarSearchQuery') "manual drawer collapse must preserve an interrupted sidebar search"
+}
+
+function Assert-ActiveThreadSidebarRevealSource {
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\App.vue"
+  )
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
+  )
+  $fixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarRegressionFixture.vue"
+  )
+
+  Assert-True ($appSource -match 'ref="sidebarThreadTreeRef"' -and $appSource -match 'class="[^"]*sidebar-current-thread-button[^"]*"[\s\S]*?aria-label="定位当前会话"') "the fixed sidebar footer must expose one explicit current-conversation recovery action"
+  Assert-True ($appSource -match "async\s+function\s+revealCurrentThreadInSidebar[\s\S]*?clearSidebarSearch\(\)[\s\S]*?await\s+nextTick\(\)[\s\S]*?revealSelectedThread\(\)") "current-conversation recovery must clear transient search before asking the lazy tree to reveal its row"
+  Assert-True ($sidebarSource -match 'async\s+function\s+revealSelectedThread[\s\S]*?collapsedProjects\.value[\s\S]*?expandedProjects\.value[\s\S]*?await\s+nextTick\(\)[\s\S]*?thread-row\[data-active="true"\]') "the thread tree must reveal a selected row hidden by project collapse or preview limits"
+  Assert-True ($sidebarSource -match "getBoundingClientRect\(\)[\s\S]*?container\.scrollTo\([\s\S]*?prefers-reduced-motion:\s*reduce") "current-conversation recovery must scroll only when needed and honor reduced-motion preference"
+  Assert-True ($sidebarSource -match "defineExpose\(\{\s*revealSelectedThread\s*\}\)") "the lazy thread tree must expose only its bounded reveal action"
+  Assert-True ($fixtureSource -match 'data-regression-action="reveal-current-thread"' -and $fixtureSource -match "fixture-thread-eight") "the sidebar fixture must keep a selected conversation outside its default five-row preview"
+}
+
+function Assert-MessageActionHitTestingSource {
+  $source = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\ThreadConversation.vue"
+  )
+
+  Assert-True ($source -match "\.message-action-button\s*\{[\s\S]*?pointer-events:\s*none;") "visually hidden message actions must not intercept pointer input"
+  Assert-True ($source -match "\.conversation-item-actions-active\s+\.message-action-button,[\s\S]*?\.conversation-item-actionable:focus-within\s+\.message-action-button\s*\{[\s\S]*?pointer-events:\s*auto;") "activated or keyboard-focused message actions must restore pointer ownership"
+  Assert-True ($source -match "@media\s*\(hover:\s*hover\)\s*and\s*\(pointer:\s*fine\)[\s\S]*?\.conversation-item-actionable:hover\s+\.message-action-button[\s\S]*?pointer-events:\s*auto;") "fine-pointer hover must reveal and activate message actions"
+  Assert-True ($source -match "\.message-action-button--favorite\.is-favorited\s*\{[\s\S]*?pointer-events:\s*auto;") "the always-visible favorited action must remain pointer-operable"
+}
+
 function Assert-StableHandsetViewportSource {
   $source = Get-Content -Raw -Encoding UTF8 -LiteralPath (
     Join-Path (Get-Location) "src\composables\useMobile.ts"
   )
   $hasStableHandsetFallback = ($source -match "const\s+COMPACT_HANDSET_MAX_SHORT_EDGE\s*=\s*480") -and ($source -match "isCoarsePointer\.value\s*\|\|\s*shortEdge\s*<=\s*COMPACT_HANDSET_MAX_SHORT_EDGE")
   Assert-True $hasStableHandsetFallback "handset-shaped landscape viewports must stay mobile when pointer media queries are temporarily unavailable"
+}
+
+function Assert-ReversibleThreadArchiveSource {
+  $gatewaySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\api\codexGateway.ts")
+  $desktopStateSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\useDesktopState.ts")
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\App.vue")
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue")
+  $rpcCacheSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\appServerRpcCache.ts")
+
+  Assert-True ($gatewaySource -match "function\s+archiveThread[\s\S]*?callRpc<unknown>\('thread/archive'[\s\S]*?payload\s*!==\s*null\s*&&\s*payload\s*!==\s*undefined" -and $gatewaySource -match "function\s+unarchiveThread[\s\S]*?callRpc\('thread/unarchive',\s*\{\s*threadId\s*\}\)") "archive must distinguish the proxy's local-only fallback before offering native thread/unarchive"
+  Assert-True ($desktopStateSource -match "async\s+function\s+archiveThreadById\(threadId:\s*string\):\s*Promise<boolean>[\s\S]*?if\s*\(!archived\)[\s\S]*?hideThreadLocally[\s\S]*?return\s+false[\s\S]*?return\s+true" -and $desktopStateSource -match "async\s+function\s+unarchiveThreadById[\s\S]*?hiddenThreadIds\.value\.filter[\s\S]*?await\s+loadThreads\(\)[\s\S]*?return\s+true") "archive and undo must report their outcome and reconcile the visible thread list"
+  Assert-True ($appSource -match "async\s+function\s+onArchiveThread[\s\S]*?await\s+archiveThreadById[\s\S]*?label:\s*'撤销'[\s\S]*?await\s+unarchiveThreadById") "successful archive must expose a short-lived undo action"
+  Assert-True ($appSource -match "function\s+runProductToastAction[\s\S]*?productToastActionBusyId[\s\S]*?await\s+toast\.action\.run\(\)") "toast actions must suppress duplicate execution while asynchronous recovery is running"
+  Assert-True ($sidebarSource -match ">\s*归档会话\s*<" -and $sidebarSource -match 'aria-label="归档会话"' -and $sidebarSource -notmatch ">\s*删除会话\s*<") "the sidebar must describe archival truthfully instead of presenting it as deletion"
+  Assert-True ($rpcCacheSource -match "method\s*===\s*'thread/unarchive'") "thread restoration must invalidate the existing server-side thread cache"
+}
+
+function Assert-ForegroundResumeScrollIntentSource {
+  $source = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\ThreadConversation.vue"
+  )
+
+  Assert-True ($source -match "function\s+onConversationScrollVisibilityChange[\s\S]*?document\.hidden[\s\S]*?isAtBottom\(container\)[\s\S]*?captureVisibleConversationAnchor\(\)") "conversation resume must capture bottom-follow and reading-anchor intent before the page is hidden"
+  Assert-True ($source -match "pendingForegroundScrollIntent\?\.threadId\s*===\s*props\.activeThreadId[\s\S]*?foregroundScrollIntent\?\.followBottom[\s\S]*?foregroundScrollIntent\?\.anchorSnapshot") "the first recovered message update must consume the foreground scroll intent before restoring the viewport"
+  Assert-True ($source -match "addEventListener\('wheel',\s*clearPendingForegroundScrollIntent[\s\S]*?addEventListener\('touchstart',\s*clearPendingForegroundScrollIntent[\s\S]*?addEventListener\('pointerdown',\s*clearPendingForegroundScrollIntent") "fresh pointer, touch, or wheel input must supersede a latched foreground scroll intent"
+  Assert-True ($source -match "removeEventListener\('visibilitychange',\s*onConversationScrollVisibilityChange\)" -and $source -match "pendingForegroundScrollIntent\s*=\s*null[\s\S]*?scrollContextGeneration") "foreground scroll intent must be removed on unmount and cleared across thread ownership changes"
+}
+
+function Assert-ThreadAttentionChromeSource {
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\App.vue"
+  )
+  $contentHeaderSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\ContentHeader.vue"
+  )
+  $controlsSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadControls.vue"
+  )
+  $fixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarRegressionFixture.vue"
+  )
+
+  Assert-True ($appSource -match "const\s+attentionThreadCount\s*=\s*computed[\s\S]*?thread\.waitingForInput\s*\|\|\s*thread\.unread[\s\S]*?threadIds\.add\(thread\.id\)") "thread attention count must deduplicate waiting and unread conversations"
+  Assert-True ($appSource -match ':attention-count="attentionThreadCount"' -and $appSource -match "attentionThreadCount\.value\s*>\s*0[\s\S]*?baseTitle") "collapsed sidebar controls and browser title must share the actionable thread count"
+  Assert-True ($appSource -match "const\s+browserProductTitle[\s\S]*?'CX-Codex'[\s\S]*?CX-Codex · \$\{browserHostName\}" -and $appSource -match "const\s+routeTitle\s*=\s*contentTitle\.value\.trim\(\)[\s\S]*?\$\{routeTitle\} · \$\{browserProductTitle\}") "browser titles must identify the current product route and preserve non-local host identity"
+  Assert-True ($contentHeaderSource -match "\.content-title\s*\{[\s\S]*?@apply[^;]*\bflex-1\b[^;]*\btruncate\b") "content header titles must own remaining row width and truncate from the end"
+  Assert-True ($appSource -match "@media\s*\(max-width:\s*430px\)[\s\S]*?\.content-title-connection-label\s*\{\s*display:\s*none;") "narrow thread headers must keep connection recovery compact without removing its accessible label"
+  Assert-True ($appSource -match "const\s+contentContextPercentLabel\s*=\s*computed[\s\S]*?Math\.round\(contentContextPercent\.value\)[\s\S]*?%") "visible context usage must include an explicit percent unit"
+  Assert-True ($appSource -match "@media\s*\(max-width:\s*1023px\)[\s\S]*?\.content-title-refresh-button,\s*\.content-favorites-button\s*\{[\s\S]*?@apply[^;]*\bh-9\b[^;]*\bmin-w-9\b") "compact touch thread header actions must retain 36px targets across portrait and landscape widths"
+  Assert-True ($controlsSource -match "isSidebarCollapsed\s*&&\s*normalizedAttentionCount\s*>\s*0" -and $controlsSource -match "9\+" -and $controlsSource -match "任务需要关注") "collapsed sidebar toggle must expose a bounded visible badge and an exact accessible label"
+  Assert-True ($fixtureSource -match ':is-sidebar-collapsed="true"[\s\S]*?:attention-count="2"') "sidebar fixture must render the collapsed attention badge"
 }
 
 function Assert-AndroidResumeThreadListRecoverySource {
@@ -193,7 +439,9 @@ function Assert-RuntimeSnapshotOrderingSource {
   Assert-True ($source -match "activityId:\s*activity\?\.activityId") "the live overlay must expose stable activity identity to the conversation renderer"
   Assert-True ($source -match "Math\.min\(previous\.startedAtMs,\s*authoritativeStartedAtMs\)") "foreground recovery must correct a provisional timer with the earlier authoritative start time"
   Assert-True ($source -match "readRuntimeActivityStartedAtMs\(runtimeSummary\)") "activity recovery must reject a start timestamp that belongs to an already completed turn"
-  Assert-True ($source -match "const\s+unread\s*=\s*!isSelected\s*&&\s*!inProgress\s*&&\s*unreadByEvent") "thread timestamps alone must not mark every sidebar row unread"
+  Assert-True ($source -match "const\s+unread\s*=\s*!inProgress\s*&&\s*unreadByEvent") "thread timestamps alone must not mark every sidebar row unread"
+  Assert-True ($source -match "function\s+markThreadUnreadByEvent[\s\S]*?threadId\s*===\s*selectedThreadId\.value\)\s*return") "background events must not mark the conversation currently being read as unread"
+  Assert-True ($source -match "function\s+markThreadAsUnread[\s\S]*?replaceEventUnreadState") "manual unread actions must reuse the persisted unread state"
   Assert-True ($source -match "const\s+UNREAD_STATE_STORAGE_KEY[\s\S]*?function\s+saveUnreadStateMap") "completion unread state must survive mobile process restarts"
   Assert-True ($source -match "function\s+applyReplayedRuntimeTerminalCleanup[\s\S]*?markThreadUnreadByEvent\(threadId\)") "replayed terminal events must restore unread completion feedback"
   Assert-True ($source -match "clearSettledRuntimeResidue\(threadId,\s*snapshot\.executionState\)[\s\S]*?processQueuedMessages\(threadId\)") "a settled runtime snapshot must release the previous turn and advance queued work"
@@ -219,6 +467,179 @@ function Assert-RuntimeSnapshotOrderingSource {
   Assert-True ($queueSource -match "retry:\s*\[messageId:\s*string\]") "the failed queue row must expose a retry action"
   Assert-True ($conversationSource -match "previousOverlay\.activityId\s*===\s*nextOverlay\.activityId") "elapsed time may only be retained for the same activity"
   Assert-True ($conversationSource -match "live-overlay-inline-recovering[\s\S]*?aria-busy") "foreground recovery must expose one accessible animated status surface"
+}
+
+function Assert-ManualUnreadAndComposerAttachmentSource {
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\App.vue")
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue")
+  $composerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadComposer.vue")
+  $composerSearchDropdownSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ComposerSearchDropdown.vue")
+  $composerFixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ComposerRegressionFixture.vue")
+  $composerEnterBehaviorSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\composerEnterBehavior.ts")
+  $modalEnvironmentSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\utils\modalEnvironment.ts")
+  $lazyModalEnvironmentSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\useLazyModalEnvironment.ts")
+
+  Assert-True (([regex]::Matches($sidebarSource, "onToggleThreadUnread\(openThreadMenuThread\)")).Count -eq 1) "the shared sidebar thread menu must expose exactly one unread toggle"
+  Assert-True ($sidebarSource -match "openThreadMenuThread\.unread\s*\?\s*'标记为已读'\s*:\s*'标记为未读'") "the unread menu label must reflect the current thread state"
+  Assert-True ($appSource -match '@set-thread-unread="onSetThreadUnread"[\s\S]*?function\s+onSetThreadUnread[\s\S]*?markThreadAsUnread[\s\S]*?markThreadAsRead') "the sidebar unread toggle must reach both persisted state actions"
+  Assert-True ($composerSource -match '@dragenter="onComposerDragEnter"[\s\S]*?@drop="onComposerDrop"') "the composer must own the complete file-drag lifecycle"
+  Assert-True ($composerSource -match "function\s+onComposerDrop[\s\S]*?addFiles\(files\)") "dropped files must reuse the existing upload queue"
+  Assert-True ($composerSource -match 'function\s+onComposerPaste[\s\S]*?item\.kind\s*===\s*''file''[\s\S]*?event\.preventDefault\(\)[\s\S]*?addFiles\(files\)') "clipboard files must be intercepted without replacing ordinary text paste"
+  Assert-True ($composerSource -match 'v-if="isFileDragActive"[\s\S]*?松开即可添加') "file drag feedback must remain visible and explicit"
+  $inputKeydown = [regex]::Match($composerSource, "function\s+onInputKeydown\(event:\s*KeyboardEvent\):\s*void\s*\{[\s\S]*?\n\}")
+  Assert-True ($inputKeydown.Success) "the composer input keydown handler must remain inspectable"
+  $imeGuardIndex = $inputKeydown.Value.IndexOf("if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return")
+  $fileMentionIndex = $inputKeydown.Value.IndexOf("if (isFileMentionOpen.value)")
+  Assert-True ($imeGuardIndex -ge 0 -and $imeGuardIndex -lt $fileMentionIndex) "IME composition must be guarded before file-mention keyboard selection"
+  Assert-True ($composerSource -match "\.thread-composer-input\s*\{[\s\S]*?max-h-32[\s\S]*?field-sizing:\s*content;") "the compact composer input must grow with content up to its existing bounded height"
+  Assert-True ($composerEnterBehaviorSource -match "storedPreference\s*===\s*'1'[\s\S]*?storedPreference\s*===\s*'0'[\s\S]*?return\s+!isMobile") "the default Enter policy must preserve explicit preferences and use newline only for an unset mobile default"
+  Assert-True ($appSource -match "storedSendWithEnterPreference[\s\S]*?resolveSendWithEnterPreference\([\s\S]*?isMobile\.value[\s\S]*?function\s+toggleSendWithEnter[\s\S]*?storedSendWithEnterPreference\.value") "App must keep automatic phone/desktop Enter defaults separate from explicit saved preference"
+  Assert-True ($composerFixtureSource -match ':send-with-enter="sendWithEnter"' -and $composerFixtureSource -match "useMobile\(\)[\s\S]*?resolveSendWithEnterPreference\(null,\s*isMobile\.value\)") "the Composer fixture must exercise the responsive unset-preference default"
+  Assert-True ($composerSource -match 'aria-haspopup="dialog"[\s\S]*?aria-controls="thread-composer-attach-menu"' -and $composerSource -match 'aria-controls="thread-composer-runtime-panel"[\s\S]*?aria-label="配置模型、质量和速度"') "composer sheet triggers must expose their dialog ownership"
+  Assert-True ($composerSource -match "const\s+composerSurfaceKind[\s\S]*?isAttachMenuOpen\.value[\s\S]*?isRuntimeSettingsOpen\.value" -and $composerSource -match "useLazyModalEnvironment\([\s\S]*?composerSurfaceKind[\s\S]*?document\.body[\s\S]*?isCompactViewport\.value" -and $lazyModalEnvironmentSource -match "isModal[\s\S]*?panel\.focus[\s\S]*?import\('\.\./utils/modalEnvironment'\)") "composer sheet environment ownership must remain limited to compact viewports while desktop popovers retain initial focus"
+  Assert-True ($modalEnvironmentSource -match "scrollOwner\.style\.overflow\s*=\s*'hidden'" -and $modalEnvironmentSource -match "scrollOwner\.style\.overflow\s*=\s*previousOverflow" -and $modalEnvironmentSource -match "addEventListener\('focusin',\s*onFocusIn,\s*true\)" -and $modalEnvironmentSource -match "removeEventListener\('focusin',\s*onFocusIn,\s*true\)") "compact composer sheets must contain focus and restore background scrolling"
+  Assert-True ($modalEnvironmentSource -match "isExternalSurface[\s\S]*?aria-modal[\s\S]*?!panel\.contains\(surface\)" -and $composerSearchDropdownSource -notmatch "document\.body\.style\.overflow") "nested skill search must stay inside the composer modal owner without competing for body scroll state"
+  Assert-True ($composerSearchDropdownSource -match 'aria-controls="composer-skill-search-dialog"[\s\S]*?id="composer-skill-search-dialog"[\s\S]*?role="dialog"' -and $composerSearchDropdownSource -match "focusFirstMenuControl[\s\S]*?onDocumentFocusIn[\s\S]*?removeEventListener\('focusin',\s*onDocumentFocusIn,\s*true\)") "the nested skill dialog must expose ownership, contain mobile focus, and clean up its listener"
+  Assert-True ($composerFixtureSource -match "composerFixtureFetch[\s\S]*?/codex-api/composer-file-search[\s\S]*?ThreadComposer\.vue" -and $composerFixtureSource -match "window\.fetch\s*===\s*composerFixtureFetch") "composer IME regression must use deterministic file suggestions and restore fetch ownership"
+  Assert-True ($composerFixtureSource -match "data-composer-regression-background-focus") "composer fixture must expose a deterministic background focus target for modal ownership checks"
+}
+
+function Assert-CurrentReasoningEffortCoverageSource {
+  $typeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\types\codex.ts")
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\App.vue")
+  $gatewaySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\api\codexGateway.ts")
+  $desktopStateSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\useDesktopState.ts")
+  $outboxSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\messageOutboxPersistence.ts")
+  $composerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadComposer.vue")
+  $workbenchSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\WorkspaceWorkbench.vue")
+
+  foreach ($effort in @('max', 'ultra')) {
+    Assert-True ($typeSource -match "ReasoningEffort[^\r\n]+'$effort'") "ReasoningEffort must include the app-server $effort level"
+    Assert-True ($gatewaySource -match "allowed:[^\r\n]+'$effort'") "config normalization must retain the app-server $effort level"
+    Assert-True ($desktopStateSource -match "REASONING_EFFORT_OPTIONS[^\r\n]+'$effort'") "desktop state must persist and submit the $effort level"
+    Assert-True ($outboxSource -match "OUTBOX_REASONING_EFFORTS[^\r\n]+'$effort'") "queued messages must preserve the $effort level"
+    Assert-True ($appSource -match "candidate\.reasoningEffort\s*===\s*'$effort'") "workbench presets must accept the $effort level"
+  }
+
+  Assert-True ($composerSource -match "max:\s*'最高'" -and $composerSource -match "ultra:\s*'极致'") "every current reasoning option must render a visible and accessible Chinese label"
+  Assert-True ($workbenchSource -match "max:\s*'最高'" -and $workbenchSource -match "ultra:\s*'极致'") "workbench summaries must label max and ultra without falling back to smart"
+}
+
+function Assert-CollisionAwareThreadMenuSource {
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue")
+  $threadMenuTemplate = [regex]::Match($sidebarSource, 'id="sidebar-thread-actions-menu"[\s\S]*?</div>\s*</Teleport>')
+
+  Assert-True (([regex]::Matches($sidebarSource, 'class="thread-menu-panel"')).Count -eq 1) "thread actions must render through one shared menu instead of duplicating per collection"
+  Assert-True ($sidebarSource -match '<Teleport\s+to="body">[\s\S]*?id="sidebar-thread-actions-menu"[\s\S]*?role="menu"') "the shared thread menu must escape sidebar overflow through a body portal"
+  Assert-True ($threadMenuTemplate.Success -and ([regex]::Matches($threadMenuTemplate.Value, '<button[^>]+role="menuitem"')).Count -eq 9) "the shared thread menu must retain all nine thread actions"
+  Assert-True ($sidebarSource -match "openThreadMenuKey[\s\S]*?isThreadMenuOpen\(menuKey" -and $sidebarSource -match ':aria-expanded="isThreadMenuOpen') "duplicate thread rows must track the exact menu trigger that owns the open state"
+  Assert-True ($sidebarSource -match "function\s+positionThreadMenu[\s\S]*?shouldPlaceAbove[\s\S]*?viewportHeight[\s\S]*?threadMenuPlacement" -and $sidebarSource -match ':data-side="threadMenuPlacement"') "thread menu positioning must flip and clamp against the current viewport"
+  Assert-True ($sidebarSource -match "\.thread-menu-panel\s*\{[\s\S]*?@apply\s+fixed[\s\S]*?overflow-y-auto" -and $sidebarSource -match "overscroll-behavior:\s*contain") "thread menu content must stay fixed and independently scrollable in constrained viewports"
+  $viewportListenersAreSymmetric = ($sidebarSource -match "addEventListener\('scroll',\s*onThreadMenuViewportChange,\s*true\)") -and ($sidebarSource -match "removeEventListener\('scroll',\s*onThreadMenuViewportChange,\s*true\)") -and ($sidebarSource -match "addEventListener\('resize',\s*onThreadMenuViewportChange\)") -and ($sidebarSource -match "removeEventListener\('resize',\s*onThreadMenuViewportChange\)")
+  Assert-True $viewportListenersAreSymmetric "ported thread menus must close symmetrically when their viewport anchor changes"
+  Assert-True ($sidebarSource -notmatch '@mouseleave="onThreadRowLeave') "ported thread menus must remain usable after the pointer leaves their source row"
+}
+
+function Assert-CollisionAwareProjectMenuSource {
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue")
+  $projectMenuTemplate = [regex]::Match($sidebarSource, 'id="sidebar-project-actions-menu"[\s\S]*?</div>\s*</Teleport>')
+
+  Assert-True (([regex]::Matches($sidebarSource, 'class="project-menu-panel"')).Count -eq 1) "project actions must render through one shared menu instead of one overflow-clipped panel per project"
+  Assert-True ($projectMenuTemplate.Success -and $projectMenuTemplate.Value -match 'role="menu"' -and ([regex]::Matches($projectMenuTemplate.Value, 'role="menuitem"')).Count -eq 3) "the shared project menu must preserve its accessible action set"
+  Assert-True ($sidebarSource -match 'aria-controls="sidebar-project-actions-menu"' -and $sidebarSource -match ':aria-expanded="isProjectMenuOpen\(group\.projectName\)"') "each project trigger must expose the shared menu ownership state"
+  Assert-True ($sidebarSource -match "function\s+positionProjectMenu[\s\S]*?shouldPlaceAbove[\s\S]*?viewportHeight[\s\S]*?projectMenuPlacement" -and $sidebarSource -match ':data-side="projectMenuPlacement"') "project menu positioning must flip and clamp against the current viewport"
+  Assert-True ($sidebarSource -match "\.project-menu-panel\s*\{[\s\S]*?@apply\s+fixed[\s\S]*?overflow-y-auto" -and $sidebarSource -match "overscroll-behavior:\s*contain") "project menu content must stay fixed and independently scrollable in constrained viewports"
+  Assert-True ($sidebarSource -match "projectMenuPanelRef[\s\S]*?isEventInsideOpenProjectMenu" -and $sidebarSource -match "closeProjectMenu\(true\)") "ported project menus must include their panel in outside-interaction checks and restore trigger focus on Escape"
+}
+
+function Assert-SidebarProjectScrollAnchorSource {
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue")
+  $fixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarRegressionFixture.vue")
+
+  Assert-True ($sidebarSource -match "function\s+captureProjectScrollAnchor[\s\S]*?visibleTopInGroups[\s\S]*?viewportOffset") "sidebar project reorder must capture the first visible project by stable identity"
+  Assert-True ($sidebarSource -match "function\s+findProjectTreeScrollContainer[\s\S]*?overflowY[\s\S]*?scrollHeight") "sidebar scroll anchoring must resolve the actual overflow owner instead of assuming one shell"
+  Assert-True ($sidebarSource -match "desiredScrollTop\s*=\s*groupsContentTop\s*\+\s*anchorTop\s*-\s*anchor\.viewportOffset" -and $sidebarSource -match "Math\.min\(desiredScrollTop,\s*maxScrollTop\)") "sidebar project reorder must restore and clamp the captured viewport offset"
+  Assert-True ($sidebarSource -match "isProjectLayoutMotionReady\.value\s*=\s*false[\s\S]*?scheduleProjectLayoutMotionRestore\(sequence\)") "background project reordering must not animate the anchored row away from the reader"
+  Assert-True ($fixtureSource -match 'data-regression-action="promote-background-project"' -and $fixtureSource -match "scrollAnchorMode") "sidebar fixture must retain the deterministic background-reorder probe"
+}
+
+function Assert-HiddenPageQuiescenceSource {
+  $desktopStateSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\useDesktopState.ts")
+  $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadConversation.vue")
+  $taskPetSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\mobile\TaskPetPreview.vue")
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue")
+  $backgroundSyncMatch = [regex]::Match($desktopStateSource, "function\s+scheduleBackgroundSync[\s\S]*?\n\s*function\s+shouldRefreshSelectedMessagesForForegroundRecovery")
+  $visibilitySyncMatch = [regex]::Match($desktopStateSource, "function\s+scheduleVisibilitySync[\s\S]*?\n\s*function\s+clearVisibilitySyncTimer")
+
+  Assert-True ($desktopStateSource -match "function\s+stopBackgroundSync[\s\S]*?clearInterval\(backgroundSyncTimer\)[\s\S]*?backgroundSyncTimer\s*=\s*null") "hidden-page recovery must be able to fully disarm the fallback sync interval"
+  Assert-True ($backgroundSyncMatch.Success -and $backgroundSyncMatch.Value -match "!isDocumentVisible\(\)" -and $backgroundSyncMatch.Value -match "stopBackgroundSync\(\)") "fallback thread synchronization must not run or remain armed while the page is hidden"
+  Assert-True ($visibilitySyncMatch.Success -and $visibilitySyncMatch.Value -match "if\s*\(isDocumentVisible\(\)\)\s*scheduleBackgroundSync\(\)" -and ([regex]::Matches($visibilitySyncMatch.Value, "stopBackgroundSync\(\)")).Count -ge 5) "visibility, page, network, and Android lifecycle boundaries must park and visibly re-arm fallback sync"
+  Assert-True ($conversationSource -match "function\s+startCommandElapsedTimer[\s\S]*?document\.hidden\)\s*return" -and $conversationSource -match "function\s+onCommandElapsedVisibilityChange[\s\S]*?stopCommandElapsedTimer\(\)[\s\S]*?startCommandElapsedTimer\(\)") "conversation elapsed-time rendering must pause while hidden and catch up when visible"
+  Assert-True ($conversationSource -match "addEventListener\('visibilitychange',\s*onCommandElapsedVisibilityChange\)" -and $conversationSource -match "removeEventListener\('visibilitychange',\s*onCommandElapsedVisibilityChange\)") "conversation visibility-clock ownership must be cleaned up with the component"
+  Assert-True ($taskPetSource -match "function\s+startFreshnessTimer[\s\S]*?document\.hidden" -and $taskPetSource -match "function\s+onFreshnessVisibilityChange[\s\S]*?stopFreshnessTimer\(\)[\s\S]*?startFreshnessTimer\(\)" -and $taskPetSource -match "removeEventListener\('visibilitychange',\s*onFreshnessVisibilityChange\)") "task-pet freshness labels must use the same hidden-page timer boundary"
+  Assert-True ($sidebarSource -match "function\s+startRelativeTimeRefreshTimer[\s\S]*?refreshRelativeTimeNow\(\)[\s\S]*?document\.hidden" -and $sidebarSource -match "function\s+onRelativeTimeVisibilityChange[\s\S]*?stopRelativeTimeRefreshTimer\(\)[\s\S]*?startRelativeTimeRefreshTimer\(\)") "sidebar relative-time labels must pause while hidden and catch up immediately when visible"
+  Assert-True ($sidebarSource -match "Math\.abs\(relativeTimeNowMs\.value\s*-\s*timestamp\)" -and $sidebarSource -match "removeEventListener\('visibilitychange',\s*onRelativeTimeVisibilityChange\)" -and $sidebarSource -match "stopRelativeTimeRefreshTimer\(\)") "sidebar relative-time rendering must use the reactive display clock and clean up its lifecycle owner"
+}
+
+function Assert-ReliableClipboardSource {
+  $clipboardSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\utils\clipboard.ts")
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\App.vue")
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue")
+  $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadConversation.vue")
+  $conversationFixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ConversationRegressionFixture.vue")
+  $remoteAccessSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\settings\RemoteAccessCard.vue")
+
+  Assert-True ($clipboardSource -match "clipboardData\.setData\('text/plain',\s*text\)[\s\S]*?stopImmediatePropagation\(\)[\s\S]*?preventDefault\(\)[\s\S]*?addEventListener\('copy',\s*onCopy\)") "clipboard fallback must populate the copy event without moving focus into a temporary textarea"
+  Assert-True ($clipboardSource -match "execCommand\('copy'\)\s*===\s*true\s*&&\s*clipboardDataWasSet" -and $clipboardSource -match "finally\s*\{[\s\S]*?removeEventListener\('copy',\s*onCopy\)") "clipboard fallback must verify that data was served and always remove its one-shot listener"
+  Assert-True ($clipboardSource -match "clipboard\?\.writeText[\s\S]*?await\s+clipboard\.writeText\(text\)[\s\S]*?catch\s*\(error\)[\s\S]*?copyTextViaCopyEvent\(text,\s*document\)[\s\S]*?throw\s+error") "clipboard API rejection must fall back during the same user action and preserve a real failure"
+  Assert-True ($clipboardSource -notmatch "createElement\('textarea'\)") "clipboard fallback must not steal focus or selection through a hidden textarea"
+  Assert-True ($appSource -match "import\s*\{\s*copyTextToClipboard\s*\}\s*from\s*'\./utils/clipboard'" -and $appSource -match "await\s+copyTextToClipboard\(record\.text\)") "favorite copying must use the shared reliable clipboard path"
+  Assert-True (([regex]::Matches($sidebarSource, "onCopyThreadLink\(openThreadMenuThread\.id\)")).Count -eq 1 -and $sidebarSource -match "'copy-thread-link':\s*\[threadId:\s*string\]") "the shared sidebar thread menu must expose the thread-link copy action"
+  Assert-True ($appSource -match '@copy-thread-link="onCopyThreadLink"' -and $appSource -match 'function\s+onCopyThreadLink[\s\S]*?url\.hash\s*=\s*`/thread/\$\{encodeURIComponent\(threadId\)\}`[\s\S]*?copyTextToClipboard\(url\.toString\(\)\)[\s\S]*?已复制会话链接') "thread-link copying must preserve the current site and use the canonical encoded hash route with truthful success feedback"
+  Assert-True ($appSource -match "复制失败，请手动复制浏览器地址") "thread-link copy failure must remain visible and actionable"
+  Assert-True ($conversationSource -match "import\s*\{\s*copyTextToClipboard\s*\}\s*from\s*'\.\./\.\./utils/clipboard'" -and $conversationSource -match "isMessageCopied\(entry\.message\.id\)\s*\?\s*'已复制'\s*:\s*'复制'" -and $conversationSource -match 'IconTablerCheck\s+v-if="isMessageCopied\(entry\.message\.id\)"') "message copying must use the shared path and expose text plus icon success feedback"
+  Assert-True ($conversationSource -match "复制失败，请长按链接手动复制" -and $conversationSource -match "消息复制失败，请手动选择复制" -and $conversationSource -match "代码复制失败，请手动选择复制") "conversation copy failures must remain visible and actionable"
+  Assert-True ($conversationFixtureSource -match '@copy-status="copyStatus\s*=\s*\$event"' -and $conversationFixtureSource -match 'class="conversation-regression-copy-status"') "the conversation fixture must expose visible clipboard failure feedback"
+  Assert-True ($remoteAccessSource -match "import\s*\{\s*copyTextToClipboard\s*\}\s*from\s*'\.\./\.\./utils/clipboard'" -and $remoteAccessSource -match "await\s+copyTextToClipboard\(url\)") "remote-access address copying must share the HTTP-safe fallback"
+}
+
+function Assert-TaskAttentionAndFileQuickOpenSource {
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\App.vue")
+  $menuSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\CommandMenu.vue")
+  $fixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\CommandMenuRegressionFixture.vue")
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue")
+  $sidebarFixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarRegressionFixture.vue")
+  $desktopStateSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\useDesktopState.ts")
+  $threadTypesSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\types\codex.ts")
+  $setPendingRequestsMatch = [regex]::Match($desktopStateSource, "function\s+setPendingServerRequestsForThread[\s\S]*?\n\s*function\s+")
+  $upsertPendingRequestMatch = [regex]::Match($desktopStateSource, "function\s+upsertPendingServerRequest[\s\S]*?\n\s*function\s+")
+  $removePendingRequestMatch = [regex]::Match($desktopStateSource, "function\s+removePendingServerRequestById[\s\S]*?\n\s*function\s+")
+
+  Assert-True ($menuSource -match "action\?:\s*'new-thread'\s*\|\s*'search-files'" -and $menuSource -match "title:\s*'搜索文件'") "the command menu must expose workspace file search as a discoverable command"
+  Assert-True ($menuSource -match "watch\(\[query,\s*mode,\s*normalizedCwd" -and $menuSource -match "if\s*\(!normalizedQuery\)\s*\{[\s\S]*?recentWorkspaceFiles\.value\.length\s*>\s*0\s*\?\s*1\s*:\s*0[\s\S]*?return\s*\}[\s\S]*?const\s+token") "file quick open must use local recents without scanning the workspace for an empty query"
+  Assert-True ($menuSource -match "fileSearchToken" -and $menuSource -match "token\s*!==\s*fileSearchToken") "stale file-search responses must not replace newer quick-open results"
+  Assert-True ($menuSource -match "const\s+visibleFileSuggestions[\s\S]*?settledFileQuery[\s\S]*?fileSuggestions\.value\.filter[\s\S]*?normalizeSearchText\(file\.path\)\.includes\(normalizedQuery\)" -and $menuSource -match "fileSearchState\.value\s*===\s*'loading'[\s\S]*?visibleFileSuggestions\.value\.length\s*>\s*0\)\s*return\s+null") "type-ahead file search must locally filter held results and reserve the full loading state for an empty initial result set"
+  Assert-True ($menuSource -match "watch\(\[query,\s*mode,\s*normalizedCwd[\s\S]*?invalidateFileSearch\(\)[\s\S]*?const\s+activeFilePath[\s\S]*?retainedFileIndex") "type-ahead file search must invalidate stale requests without clearing visible rows and retain the highlighted file when it survives refresh"
+  Assert-True ($menuSource -match "searchComposerFiles\(cwd,\s*normalizedQuery,\s*12\)" -and $menuSource -match "fileSearchState\.value\s*=\s*'error'") "file quick open must reuse the bounded composer search route and expose a recoverable failure state"
+  Assert-True ($menuSource -match "RECENT_FILE_STORAGE_KEY\s*=\s*'codex-web-local\.command-menu-recent-files\.v1'" -and $menuSource -match "MAX_RECENT_FILES\s*=\s*36" -and $menuSource -match "MAX_RECENT_FILES_PER_WORKSPACE\s*=\s*6") "recent file history must stay versioned and bounded"
+  Assert-True ($menuSource -match "const\s+recentWorkspaceFiles[\s\S]*?normalizeFileLocation\(entry\.cwd\)\s*===\s*cwdKey[\s\S]*?slice\(0,\s*MAX_RECENT_FILES_PER_WORKSPACE\)" -and $menuSource -match "id:\s*normalizedQuery\s*\?\s*'files'\s*:\s*'recent-files'" -and $menuSource -match "label:\s*normalizedQuery\s*\?\s*'文件'\s*:\s*'最近文件'") "empty file mode must show only bounded recents from the current workspace"
+  Assert-True ($menuSource -match "function\s+rememberRecentFile[\s\S]*?localStorage\.setItem\(RECENT_FILE_STORAGE_KEY" -and $menuSource -match "if\s*\(item\.file\)\s*rememberRecentFile\(item\.file\.path\)[\s\S]*?emit\('close'\)") "opening a quick-open result must remember it before the menu closes"
+  Assert-True ($menuSource -match "function\s+enterFileMode[\s\S]*?nextTick\(\(\)\s*=>\s*inputRef\.value\?\.focus\(\)\)" -and $menuSource -match "function\s+enterRootMode[\s\S]*?nextTick\(\(\)\s*=>\s*inputRef\.value\?\.focus\(\)\)") "mode changes must keep keyboard focus in the command-menu search field"
+  Assert-True ($menuSource -match "if\s*\(mode\.value\s*===\s*'files'\)[\s\S]*?enterRootMode\(\)") "Escape must return from file search to commands before closing the menu"
+  Assert-True ($menuSource -match 'tabindex="-1"[\s\S]*?@keydown="onPanelKeydown"' -and $menuSource -match "event\.key\s*===\s*'Tab'[\s\S]*?getFocusableElements\(\)[\s\S]*?preventScroll:\s*true" -and $menuSource -match "addEventListener\('focusin',\s*onWindowFocusIn,\s*true\)") "the command-menu dialog must contain keyboard and programmatic focus"
+  Assert-True ($menuSource -match "document\.body\.style\.overflow\s*=\s*'hidden'" -and $menuSource -match "function\s+restoreModalEnvironment[\s\S]*?document\.body\.style\.overflow\s*=\s*previousBodyOverflow[\s\S]*?restoreFocus\(\)") "the command-menu dialog must lock background scrolling and restore its opener environment"
+  Assert-True ($threadTypesSource -match "waitingForInput\?:\s*boolean" -and $desktopStateSource -match "const\s+waitingForInput\s*=\s*\(pendingServerRequestsByThreadId\.value\[thread\.id\]\s*\?\?\s*\[\]\)\.length\s*>\s*0") "waiting task attention must derive from unresolved server requests without changing the protocol"
+  Assert-True ($setPendingRequestsMatch.Success -and $setPendingRequestsMatch.Value -match "applyThreadFlags\(\)" -and $upsertPendingRequestMatch.Success -and $upsertPendingRequestMatch.Value -match "applyThreadFlags\(\)" -and $removePendingRequestMatch.Success -and $removePendingRequestMatch.Value -match "applyThreadFlags\(\)") "every pending-request transition must refresh task attention immediately"
+  Assert-True ($sidebarSource -match "thread-status-indicator\[data-state='waiting'\]" -and $sidebarSource -match "getThreadActivityLabel[\s\S]*?等待处理") "the sidebar must expose waiting state as text plus a dedicated indicator without changing recent ordering"
+  Assert-True ($menuSource -match "filter\(\(thread\)\s*=>\s*thread\.inProgress\s*\|\|\s*thread\.unread\)[\s\S]*?appendThreadSection\('attention',\s*'需要关注'" -and $menuSource -match "function\s+attentionThreadRank[\s\S]*?thread\.waitingForInput[\s\S]*?return\s+0" -and $menuSource -match "item\.thread\?\.waitingForInput[\s\S]*?等待处理") "the command-menu home must order waiting, running, then unread attention with explicit labels"
+  Assert-True ($menuSource -match "if\s*\(normalizedQuery\)[\s\S]*?appendThreadSection\('threads',\s*'任务'" -and $menuSource -match "appendThreadSection\('threads',\s*'最近任务',\s*normalRecentThreads\)") "task search must stay unified while the empty-query home separates attention from normal recent tasks"
+  Assert-True ($appSource -match "event\.key\.toLowerCase\(\)\s*===\s*'p'[\s\S]*?openCommandMenu\('files'\)" -and $appSource -match ':mode-request-id="commandMenuModeRequestId"') "Ctrl or Command + P must reopen file search even after an in-menu mode change"
+  Assert-True ($appSource -match "function\s+onOpenCommandMenuFile[\s\S]*?codex-local-browse[\s\S]*?isNativeAndroidShell\(\)[\s\S]*?window\.location\.href[\s\S]*?window\.open") "quick-open files must use the existing local preview route and avoid fragile new-window behavior on mobile"
+  Assert-True ($fixtureSource -match 'cwd="E:/javaword/CXCodex/codexui"' -and $fixtureSource -match '@open-file="status\s*=\s*`file:\$\{\$event\}`"') "the command-menu fixture must expose file-search activation for browser regression"
+  Assert-True ($fixtureSource -match "typeAheadFixture" -and $fixtureSource -match "query\s*===\s*'src'\s*\?\s*initialRows" -and $fixtureSource -match "window\.setTimeout\(resolve,\s*query\s*===\s*'src'\s*\?\s*40\s*:\s*900\)") "the command-menu fixture must provide a deterministic slow follow-up search for type-ahead continuity verification"
+  Assert-True ($fixtureSource -match 'data-command-menu-regression-launch' -and $fixtureSource -match "focusOwnershipFixture" -and $fixtureSource -match "const\s+isOpen\s*=\s*ref\(!focusOwnershipFixture\)") "the command-menu fixture must support opener focus-restoration verification"
+  Assert-True ($fixtureSource -match 'selected-thread-id="thread-gateway"' -and $fixtureSource -match "id:\s*'thread-active'[\s\S]*?waitingForInput:\s*true" -and $fixtureSource -match "id:\s*'thread-running'[\s\S]*?inProgress:\s*true" -and $fixtureSource -match "id:\s*'thread-review'[\s\S]*?unread:\s*true") "the command-menu fixture must cover waiting, running, unread, selection, and recency priority"
+  Assert-True ($sidebarFixtureSource -match "id:\s*'fixture-thread-waiting'[\s\S]*?waitingForInput:\s*true" -and $sidebarFixtureSource -match "id:\s*'fixture-thread-background'[\s\S]*?inProgress:\s*true") "the sidebar fixture must cover explicit waiting and working states under fixed recent ordering"
 }
 
 function Assert-MobileLatestReplyRecoverySource {
@@ -324,7 +745,6 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($newThreadSendMatch.Value -match "if\s*\(newThreadSendInFlight\)\s*return\s+newThreadSendInFlight[\s\S]*?Promise\.resolve\(\)\.then\(\(\)\s*=>\s*sendMessageToNewThreadOnce[\s\S]*?newThreadSendInFlight\s*=\s*request") "new-thread delivery must claim a single-flight promise before creating a client message id"
   Assert-True ($appSource -match "if\s*\(newThreadSubmitInFlight\s*\|\|\s*isSendingMessage\.value\s*\|\|\s*pendingNewThreadPreview\.value\)\s*return[\s\S]*?submitFirstMessageForNewThread") "the home composer must synchronously reject duplicate new-thread submit events"
   Assert-True ($appSource -match "if\s*\(newThreadSubmitInFlight\)\s*return\s+newThreadSubmitInFlight[\s\S]*?Promise\.resolve\(\)\.then\(\(\)\s*=>\s*submitFirstMessageForNewThreadOnce[\s\S]*?newThreadSubmitInFlight\s*=\s*request") "worktree setup and new-thread routing must share one submit promise"
-  Assert-True ($sidebarThreadTreeSource -match "collidingRunningTitleKeys[\s\S]*?count\s*>\s*1" -and $sidebarThreadTreeSource -match "hasCollidingRunningTitle\(thread\)[\s\S]*?会话\s+\{\{\s*formatThreadIdentity\(thread\.id\)\s*\}\}") "visually colliding running-thread titles must expose a short session identity"
   Assert-True ($newThreadSendMatch.Value -notmatch "\bstartThread\(") "new-thread delivery must enter durable runtime/send before any fallible thread/start preflight"
   Assert-True ($newThreadSendMatch.Value -match "putMessageOutboxEntry[\s\S]*?startRuntimeTurnWithBoundedRecovery") "new-thread delivery must persist the outbox before dispatching durable runtime/send"
   Assert-True ($newThreadSendMatch.Value -match "putMessageOutboxEntry[\s\S]*?notifyPendingRequestCreated\(internalOptions\.onPendingRequestCreated,\s*clientMessageId\)[\s\S]*?startRuntimeTurnWithBoundedRecovery") "new-thread delivery must register its stable client id with the native monitor before runtime/send can be suspended"
@@ -661,6 +1081,24 @@ function Invoke-BrowserEvalJson {
     return ($parsed | ConvertFrom-Json)
   }
   return $parsed
+}
+
+function Invoke-AgentBrowserJson {
+  param([string[]]$Arguments)
+
+  $output = Invoke-AgentBrowser -Arguments (@('--json') + $Arguments)
+  $jsonLine = $output |
+    ForEach-Object { ([string]$_).Trim() } |
+    Where-Object { $_.StartsWith('{') } |
+    Select-Object -First 1
+  if (-not $jsonLine) {
+    throw "agent-browser did not return structured JSON. Output:`n$($output -join "`n")"
+  }
+  $result = $jsonLine | ConvertFrom-Json
+  if ($result.success -ne $true) {
+    throw "agent-browser structured command failed: $($result.error | ConvertTo-Json -Compress)"
+  }
+  return $result.data
 }
 
 function Measure-ThreadSendFeedbackBudget {
@@ -1379,7 +1817,7 @@ function Close-SettingsPanelIfOpen {
 JSON.stringify((() => {
   const panel = document.querySelector('.sidebar-settings-panel');
   if (!panel) return { hadPanel: false, closed: false };
-  const button = document.querySelector('.sidebar-settings-button');
+  const button = document.querySelector('.sidebar-settings-button[aria-expanded]');
   if (button instanceof HTMLElement) {
     button.click();
     return { hadPanel: true, closed: true };
@@ -1688,10 +2126,6 @@ function Assert-WorkspaceRootProjectParity {
     }
   }
 
-  $expectedPinnedProjectNames = @($RootsState.data.pinnedProjectIds | ForEach-Object { Get-WorkspaceProjectName -Path ([string]$_) })
-  for ($index = 0; $index -lt $expectedPinnedProjectNames.Count; $index++) {
-    Assert-True ([string]$Metrics.groups[$index].projectName -eq [string]$expectedPinnedProjectNames[$index]) "home sidebar pinned project order drifted at index $index"
-  }
 }
 
 function Wait-CodexHealthIdle {
@@ -1863,6 +2297,112 @@ function Assert-Page {
   foreach ($text in $RequiredText) {
     Assert-True ([string]$Page.text -like "*$text*") "$Name is missing required text: $text"
   }
+}
+
+function Assert-SkillDetailReadmeRecovery {
+  param([string]$Session)
+
+  $initialScript = @'
+JSON.stringify((() => {
+  const panel = document.querySelector('.sdm-panel');
+  const error = document.querySelector('.sdm-readme-error');
+  const retry = document.querySelector('.sdm-readme-retry');
+  const rect = panel?.getBoundingClientRect();
+  return {
+    hasPanel: !!panel,
+    hasError: !!error,
+    errorText: error?.textContent?.replace(/\s+/g, ' ').trim() || '',
+    hasRetry: !!retry,
+    retryLabel: retry?.textContent?.trim() || '',
+    activeClass: document.activeElement?.className || '',
+    panelContainsFocus: !!panel && panel.contains(document.activeElement),
+    panelFitsViewport: !!rect && rect.left >= -2 && rect.right <= window.innerWidth + 2 && rect.top >= -2 && rect.bottom <= window.innerHeight + 2
+  };
+})())
+'@
+  $initial = Invoke-BrowserEvalJson -Session $Session -Script $initialScript
+  Assert-True ($initial.hasPanel -eq $true) "skill detail recovery fixture is missing the detail panel"
+  Assert-True ($initial.hasError -eq $true) "failed skill content load did not remain visible"
+  Assert-True ([string]$initial.errorText -like '*无法加载技能内容*') "skill content failure is missing a clear explanation"
+  Assert-True ($initial.hasRetry -eq $true -and [string]$initial.retryLabel -eq '重试') "skill content failure is missing an inline retry action"
+  Assert-True ($initial.panelContainsFocus -eq $true -and [string]$initial.activeClass -like '*sdm-close*') "skill detail did not move initial focus into the modal"
+  Assert-True ($initial.panelFitsViewport -eq $true) "skill detail failure state does not fit the phone viewport"
+
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'press', 'Shift+Tab') | Out-Null
+  $backwardWrap = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  activeClass: document.activeElement?.className || '',
+  panelContainsFocus: document.querySelector('.sdm-panel')?.contains(document.activeElement) === true
+})
+'@
+  Assert-True ($backwardWrap.panelContainsFocus -eq $true -and [string]$backwardWrap.activeClass -like '*sdm-btn-primary*') "Shift+Tab did not wrap to the last skill-detail action"
+
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'press', 'Tab') | Out-Null
+  $forwardWrap = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  activeClass: document.activeElement?.className || '',
+  panelContainsFocus: document.querySelector('.sdm-panel')?.contains(document.activeElement) === true
+})
+'@
+  Assert-True ($forwardWrap.panelContainsFocus -eq $true -and [string]$forwardWrap.activeClass -like '*sdm-close*') "Tab did not wrap back to the first skill-detail action"
+
+  $externalFocus = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  document.querySelector('.docs-skill-detail-launch')?.focus();
+  return {
+    activeClass: document.activeElement?.className || '',
+    panelContainsFocus: document.querySelector('.sdm-panel')?.contains(document.activeElement) === true
+  };
+})())
+'@
+  Assert-True ($externalFocus.panelContainsFocus -eq $true -and [string]$externalFocus.activeClass -like '*sdm-close*') "skill detail allowed focus to escape to the background page"
+
+  $retryScript = @'
+JSON.stringify((() => {
+  const retry = document.querySelector('.sdm-readme-retry');
+  if (!(retry instanceof HTMLButtonElement)) return { clicked: false };
+  retry.click();
+  return { clicked: true };
+})())
+'@
+  $retryResult = Invoke-BrowserEvalJson -Session $Session -Script $retryScript
+  Assert-True ($retryResult.clicked -eq $true) "skill content retry action could not be triggered"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '150') | Out-Null
+
+  $recoveredScript = @'
+JSON.stringify((() => {
+  const readme = document.querySelector('.sdm-readme');
+  return {
+    hasReadme: !!readme,
+    readmeText: readme?.textContent?.replace(/\s+/g, ' ').trim() || '',
+    hasError: document.querySelector('.sdm-readme-error') !== null,
+    hasRetry: document.querySelector('.sdm-readme-retry') !== null
+  };
+})())
+'@
+  $recovered = Invoke-BrowserEvalJson -Session $Session -Script $recoveredScript
+  Assert-True ($recovered.hasReadme -eq $true) "skill detail did not restore README content after retry"
+  Assert-True ([string]$recovered.readmeText -like '*重试后已恢复技能说明*') "skill detail retry restored the wrong README content"
+  Assert-True ($recovered.hasError -eq $false -and $recovered.hasRetry -eq $false) "skill detail kept stale failure controls after recovery"
+
+  $closeResult = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const close = document.querySelector('.sdm-close');
+  if (!(close instanceof HTMLButtonElement)) return { clicked: false };
+  close.click();
+  return { clicked: true };
+})())
+'@
+  Assert-True ($closeResult.clicked -eq $true) "skill detail close action could not be triggered"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+  $closed = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  hasPanel: document.querySelector('.sdm-panel') !== null,
+  activeClass: document.activeElement?.className || ''
+})
+'@
+  Assert-True ($closed.hasPanel -eq $false) "skill detail remained visible after close"
+  Assert-True ([string]$closed.activeClass -like '*docs-skill-detail-launch*') "closing skill detail did not restore focus to its opener"
 }
 
 function Read-SettingsPanelMetrics {
@@ -2045,6 +2585,16 @@ JSON.stringify((() => {
   const actionGrid = drawer?.querySelector('.sidebar-action-grid') || null;
   const rows = Array.from(drawer?.querySelectorAll('.thread-row') || []);
   const groups = Array.from(drawer?.querySelectorAll('.project-group') || []);
+  const projectHeaders = groups.map((group) => group.querySelector('.project-header-row')).filter(Boolean);
+  const projectToggleButtons = groups.map((group) => group.querySelector('.project-main-button')).filter(Boolean);
+  const pinButtons = rows.map((row) => row.querySelector('.thread-pin-button')).filter(Boolean);
+  const threadOpenButtons = rows.map((row) => row.querySelector('.thread-main-button')).filter(Boolean);
+  const threadMenuTriggers = rows.map((row) => row.querySelector('.thread-menu-trigger')).filter(Boolean);
+  const threadTimes = rows.map((row) => row.querySelector('.thread-row-time')).filter(Boolean);
+  const isRendered = (node) => node.getClientRects().length > 0 && window.getComputedStyle(node).visibility !== 'hidden';
+  const displayedPinButtons = pinButtons.filter(isRendered);
+  const displayedThreadMenuTriggers = threadMenuTriggers.filter(isRendered);
+  const displayedThreadTimes = threadTimes.filter(isRendered);
   const actionTiles = Array.from(drawer?.querySelectorAll(
     '.sidebar-action-grid > .sidebar-action-tile, .sidebar-action-grid > .sidebar-tools-menu > .sidebar-action-tile'
   ) || []);
@@ -2068,6 +2618,51 @@ JSON.stringify((() => {
     hasActionGrid: !!actionGrid,
     rowCount: rows.length,
     groupCount: groups.length,
+    projectToggleButtonCount: projectToggleButtons.length,
+    exactProjectToggleLabelCount: projectToggleButtons.filter((node) => {
+      const label = node.getAttribute('aria-label') || '';
+      const expanded = node.getAttribute('aria-expanded');
+      return (label.startsWith('收起项目：') || label.startsWith('展开项目：'))
+        && (expanded === 'true' || expanded === 'false');
+    }).length,
+    nestedProjectInteractiveOwnerCount: projectHeaders.filter((node) => (
+      node.getAttribute('role') === 'button' || node.hasAttribute('tabindex')
+    ) && !!node.querySelector('button')).length,
+    pinButtonCount: pinButtons.length,
+    displayedPinButtonCount: displayedPinButtons.length,
+    displayedPinButtonTabStopCount: displayedPinButtons.filter((node) => node.tabIndex >= 0 && !node.disabled).length,
+    threadOpenButtonCount: threadOpenButtons.length,
+    exactThreadOpenLabelCount: rows.filter((row) => {
+      const button = row.querySelector('.thread-main-button');
+      const title = (row.querySelector('.thread-row-title')?.textContent || '').trim();
+      const indicatorState = row.querySelector('.thread-status-indicator')?.getAttribute('data-state') || '';
+      const states = [];
+      if (indicatorState === 'waiting') states.push('等待处理');
+      else if (indicatorState === 'working') states.push('执行中');
+      if (indicatorState === 'unread') states.push('未读');
+      if (row.querySelector('.thread-row-worktree-icon')) states.push('工作树会话');
+      const expected = `打开会话：${title}${states.length > 0 ? `，${states.join('，')}` : ''}`;
+      return button?.getAttribute('aria-label') === expected;
+    }).length,
+    threadOpenPreviewLeakCount: rows.filter((row) => {
+      const label = row.querySelector('.thread-main-button')?.getAttribute('aria-label') || '';
+      const title = (row.querySelector('.thread-row-title')?.textContent || '').trim();
+      const preview = (row.querySelector('.thread-row-preview')?.textContent || '').trim();
+      return preview.length > title.length && label.includes(preview);
+    }).length,
+    threadMenuTriggerCount: threadMenuTriggers.length,
+    displayedThreadMenuTriggerCount: displayedThreadMenuTriggers.length,
+    minThreadMenuTarget: displayedThreadMenuTriggers.length
+      ? Math.min(...displayedThreadMenuTriggers.map((node) => {
+          const rect = node.getBoundingClientRect();
+          return Math.min(rect.width, rect.height);
+        }))
+      : 0,
+    exactThreadMenuLabelCount: threadMenuTriggers.filter((node) => {
+      const label = node.getAttribute('aria-label') || '';
+      return label.startsWith('会话操作：') && node.getAttribute('title') === label;
+    }).length,
+    displayedThreadTimeCount: displayedThreadTimes.length,
     isLoading: !!loading,
     hasEmptyText: !!emptyText,
     actionTileCount: actionTiles.filter((node) => window.getComputedStyle(node).display !== 'none').length,
@@ -2077,6 +2672,14 @@ JSON.stringify((() => {
     drawerWidth: drawerRect ? Math.round(drawerRect.width) : 0,
     drawerRightGap: drawerRect ? Math.round(viewportWidth - drawerRect.right) : 0,
     sidebarCollapsedPreference: window.localStorage.getItem('codex-web-local.sidebar-collapsed.v1'),
+    role: drawer?.getAttribute('role') || '',
+    ariaModal: drawer?.getAttribute('aria-modal') || '',
+    ariaLabel: drawer?.getAttribute('aria-label') || '',
+    focusInside: !!drawer?.contains(document.activeElement),
+    activeLabel: document.activeElement?.getAttribute?.('aria-label') || '',
+    backgroundInert: !!document.querySelector('.desktop-layout')?.closest('[inert]'),
+    skipLinkInert: !!document.querySelector('.skip-to-content')?.closest('[inert]'),
+    rootOverflow: document.documentElement.style.overflow,
     fitFailureCount: fitFailures.length,
     fitFailures: fitFailures.slice(0, 5),
     hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
@@ -2096,6 +2699,16 @@ function Assert-MobileDrawerSidebar {
   Assert-True ($Metrics.isLoading -eq $false) "mobile drawer sidebar is still showing loading skeletons"
   Assert-True ([int]$Metrics.rowCount -gt 0) "mobile drawer sidebar did not render thread rows"
   Assert-True ([int]$Metrics.groupCount -gt 0) "mobile drawer sidebar did not render project groups"
+  Assert-True ([int]$Metrics.projectToggleButtonCount -eq [int]$Metrics.groupCount -and [int]$Metrics.exactProjectToggleLabelCount -eq [int]$Metrics.groupCount) "mobile drawer project groups are missing independent exact collapse controls"
+  Assert-True ([int]$Metrics.nestedProjectInteractiveOwnerCount -eq 0) "mobile drawer still exposes a composite project button containing nested buttons"
+  Assert-True ([int]$Metrics.pinButtonCount -eq [int]$Metrics.rowCount) "mobile drawer thread rows lost their desktop pin action source"
+  Assert-True ([int]$Metrics.displayedPinButtonCount -eq 0 -and [int]$Metrics.displayedPinButtonTabStopCount -eq 0) "mobile drawer still exposes invisible direct-pin focus stops"
+  Assert-True ([int]$Metrics.threadOpenButtonCount -eq [int]$Metrics.rowCount -and [int]$Metrics.exactThreadOpenLabelCount -eq [int]$Metrics.rowCount) "mobile drawer thread rows are missing concise exact open labels"
+  Assert-True ([int]$Metrics.threadOpenPreviewLeakCount -eq 0) "mobile drawer thread open labels still expose an unbounded preview"
+  Assert-True ([int]$Metrics.threadMenuTriggerCount -eq [int]$Metrics.rowCount -and [int]$Metrics.displayedThreadMenuTriggerCount -eq [int]$Metrics.rowCount) "mobile drawer thread action menus are not consistently discoverable"
+  Assert-True ([double]$Metrics.minThreadMenuTarget -ge 35.5) "mobile drawer thread action target is smaller than 36px: $($Metrics.minThreadMenuTarget)"
+  Assert-True ([int]$Metrics.exactThreadMenuLabelCount -eq [int]$Metrics.threadMenuTriggerCount) "mobile drawer thread action menus are missing exact accessible labels"
+  Assert-True ([int]$Metrics.displayedThreadTimeCount -eq 0) "mobile drawer still prioritizes passive timestamps over its primary action entry"
   Assert-True ($Metrics.hasEmptyText -eq $false) "mobile drawer sidebar rendered empty/error text despite available threads"
   Assert-True ([int]$Metrics.actionTileCount -eq 3) "mobile drawer should keep three primary actions: $($Metrics.actionTileCount)"
   Assert-True ($Metrics.hasVisibleWorkbenchTile -eq $false) "mobile drawer should move Workbench into the Tools menu"
@@ -2105,6 +2718,10 @@ function Assert-MobileDrawerSidebar {
     Assert-True ($Metrics.drawerRightGap -le 64) "portrait mobile drawer backdrop edge is too wide: $($Metrics.drawerRightGap)"
   }
   Assert-True ($Metrics.sidebarCollapsedPreference -eq "0") "mobile drawer changed the persisted desktop sidebar preference: $($Metrics.sidebarCollapsedPreference)"
+  Assert-True ($Metrics.role -eq "dialog" -and $Metrics.ariaModal -eq "true" -and $Metrics.ariaLabel -eq "会话导航") "mobile drawer is missing its named modal semantics"
+  Assert-True ($Metrics.focusInside -eq $true -and $Metrics.activeLabel -eq "收起侧栏") "mobile drawer did not focus its close action on open"
+  Assert-True ($Metrics.backgroundInert -eq $true -and $Metrics.skipLinkInert -eq $true) "mobile drawer left background navigation exposed to keyboard or assistive browsing"
+  Assert-True ($Metrics.rootOverflow -eq "hidden") "mobile drawer did not lock background root scrolling"
   Assert-True ($Metrics.fitFailureCount -eq 0) "mobile drawer elements overflow viewport: $($Metrics.fitFailures | ConvertTo-Json -Compress)"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "mobile drawer has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
 }
@@ -2126,6 +2743,8 @@ JSON.stringify((() => {
     || visibleButtons[0]
     || null;
   if (button instanceof HTMLElement) {
+    window.__cxRegressionMobileDrawerPreviousRootOverflow = document.documentElement.style.overflow;
+    button.focus({ preventScroll: true });
     button.click();
     return { alreadyOpen: false, clicked: true, label: button.getAttribute('aria-label') || '' };
   }
@@ -2143,6 +2762,341 @@ JSON.stringify((() => {
   }
 
   return Read-MobileDrawerSidebarMetrics -Session $Session
+}
+
+function Assert-MobileDrawerProjectBulkCollapse {
+  param([string]$Session)
+
+  $opened = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const drawer = document.querySelector('.mobile-drawer');
+  const trigger = drawer?.querySelector('.organize-menu-trigger');
+  if (!(trigger instanceof HTMLButtonElement)) return { clicked: false };
+  trigger.click();
+  return {
+    clicked: true,
+    triggerHasPopup: trigger.getAttribute('aria-haspopup') === 'menu',
+    triggerControlsMenu: trigger.getAttribute('aria-controls') === 'sidebar-organize-menu'
+  };
+})())
+'@
+  Assert-True ($opened.clicked -eq $true) "mobile drawer is missing the organize menu trigger"
+  Assert-True ($opened.triggerHasPopup -eq $true -and $opened.triggerControlsMenu -eq $true) "mobile drawer organize trigger is missing connected menu semantics"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+
+  $triggered = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const drawer = document.querySelector('.mobile-drawer');
+  const menu = drawer.querySelector('#sidebar-organize-menu');
+  const collapse = menu?.querySelector('[data-organize-action="collapse-all-projects"]');
+  const expand = menu?.querySelector('[data-organize-action="expand-all-projects"]');
+  const result = {
+    hasMenu: !!menu,
+    menuRole: menu?.getAttribute('role') || '',
+    collapseLabel: collapse?.textContent?.replace(/\s+/g, ' ').trim() || '',
+    expandLabel: expand?.textContent?.replace(/\s+/g, ' ').trim() || '',
+    collapseDisabled: collapse instanceof HTMLButtonElement ? collapse.disabled : null,
+    expandDisabled: expand instanceof HTMLButtonElement ? expand.disabled : null
+  };
+  if (collapse instanceof HTMLButtonElement) collapse.click();
+  return result;
+})())
+'@
+  Assert-True ($triggered.hasMenu -eq $true -and $triggered.menuRole -eq 'menu') "mobile drawer organize panel is missing menu semantics"
+  Assert-True ([string]$triggered.collapseLabel -eq '收起全部目录' -and [string]$triggered.expandLabel -eq '展开全部目录') "mobile drawer organize menu is missing exact bulk directory actions"
+  Assert-True ($triggered.collapseDisabled -eq $false -and $triggered.expandDisabled -eq $true) "fully expanded projects did not expose the correct bulk action state"
+
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '250') | Out-Null
+  $collapsed = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const drawer = document.querySelector('.mobile-drawer');
+  const groups = Array.from(drawer?.querySelectorAll('.project-group') || []);
+  let stored = {};
+  try { stored = JSON.parse(window.localStorage.getItem('codex-web-local.collapsed-projects.v1') || '{}'); } catch {}
+  return {
+    groupCount: groups.length,
+    expandedCount: groups.filter((group) => group.getAttribute('data-expanded') === 'true').length,
+    projectThreadRowCount: drawer?.querySelectorAll('.project-group .thread-row').length || 0,
+    storedCollapsedCount: Object.values(stored).filter(Boolean).length,
+    menuClosed: drawer?.querySelector('#sidebar-organize-menu') === null
+  };
+})())
+'@
+  Assert-True ([int]$collapsed.groupCount -gt 1) "bulk collapse regression needs multiple real project groups"
+  Assert-True ([int]$collapsed.expandedCount -eq 0 -and [int]$collapsed.projectThreadRowCount -eq 0) "collapse-all did not remove expanded project thread rows"
+  Assert-True ([int]$collapsed.storedCollapsedCount -ge [int]$collapsed.groupCount) "collapse-all did not persist every visible project"
+  Assert-True ($collapsed.menuClosed -eq $true) "collapse-all left the organization popover obstructing navigation"
+
+  $expandMenuOpened = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const drawer = document.querySelector('.mobile-drawer');
+  const trigger = drawer?.querySelector('.organize-menu-trigger');
+  if (!(trigger instanceof HTMLButtonElement)) return { clicked: false };
+  trigger.click();
+  return { clicked: true };
+})())
+'@
+  Assert-True ($expandMenuOpened.clicked -eq $true) "mobile drawer could not reopen the organize menu"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+
+  $expanded = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const drawer = document.querySelector('.mobile-drawer');
+  const menu = drawer.querySelector('#sidebar-organize-menu');
+  const collapse = menu?.querySelector('[data-organize-action="collapse-all-projects"]');
+  const expand = menu?.querySelector('[data-organize-action="expand-all-projects"]');
+  const result = {
+    hasMenu: !!menu,
+    collapseDisabled: collapse instanceof HTMLButtonElement ? collapse.disabled : null,
+    expandDisabled: expand instanceof HTMLButtonElement ? expand.disabled : null
+  };
+  if (expand instanceof HTMLButtonElement) expand.click();
+  return result;
+})())
+'@
+  Assert-True ($expanded.hasMenu -eq $true -and $expanded.collapseDisabled -eq $true -and $expanded.expandDisabled -eq $false) "fully collapsed projects did not expose the inverse bulk action state"
+
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '250') | Out-Null
+  $restored = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const drawer = document.querySelector('.mobile-drawer');
+  const groups = Array.from(drawer?.querySelectorAll('.project-group') || []);
+  let stored = {};
+  try { stored = JSON.parse(window.localStorage.getItem('codex-web-local.collapsed-projects.v1') || '{}'); } catch {}
+  return {
+    groupCount: groups.length,
+    expandedCount: groups.filter((group) => group.getAttribute('data-expanded') === 'true').length,
+    projectThreadRowCount: drawer?.querySelectorAll('.project-group .thread-row').length || 0,
+    storedCollapsedCount: Object.values(stored).filter(Boolean).length,
+    menuClosed: drawer?.querySelector('#sidebar-organize-menu') === null
+  };
+})())
+'@
+  Assert-True ([int]$restored.expandedCount -eq [int]$restored.groupCount -and [int]$restored.projectThreadRowCount -gt 0) "expand-all did not restore project thread rows"
+  Assert-True ([int]$restored.storedCollapsedCount -eq 0) "expand-all left stale collapsed project preferences"
+  Assert-True ($restored.menuClosed -eq $true) "expand-all left the organization popover obstructing navigation"
+}
+
+function Assert-MobileDrawerEnvironmentOwnership {
+  param([string]$Session)
+
+  $interaction = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const drawer = document.querySelector('.mobile-drawer');
+  const focusable = Array.from(drawer?.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  ) || []).filter((element) => element.getClientRects().length > 0 && element.getAttribute('aria-hidden') !== 'true');
+  const first = focusable[0] || null;
+  const last = focusable[focusable.length - 1] || null;
+  const initialFocusInside = !!drawer?.contains(document.activeElement);
+  const initialFocusLabel = document.activeElement?.getAttribute?.('aria-label') || '';
+  if (first instanceof HTMLElement) {
+    first.focus({ preventScroll: true });
+    first.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }));
+  }
+  const backwardWrap = document.activeElement === last;
+  if (last instanceof HTMLElement) {
+    last.focus({ preventScroll: true });
+    last.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+  }
+  const forwardWrap = document.activeElement === first;
+  const composer = document.querySelector('.thread-composer-input');
+  if (composer instanceof HTMLElement) composer.focus({ preventScroll: true });
+  const outsideFocusReclaimed = !!drawer?.contains(document.activeElement);
+  const routeBefore = window.location.hash;
+  const prevented = !window.dispatchEvent(new CustomEvent('codex-mobile-back-button', { cancelable: true }));
+  return {
+    initialFocusInside,
+    initialFocusLabel,
+    backwardWrap,
+    forwardWrap,
+    outsideFocusReclaimed,
+    rootScrollLocked: document.documentElement.style.overflow === 'hidden',
+    routeBefore,
+    prevented
+  };
+})())
+'@
+
+  Assert-True ($interaction.initialFocusInside -eq $true -and $interaction.initialFocusLabel -eq "收起侧栏") "mobile drawer did not transfer focus to its close action"
+  Assert-True ($interaction.backwardWrap -eq $true -and $interaction.forwardWrap -eq $true) "mobile drawer did not contain forward and reverse Tab navigation"
+  Assert-True ($interaction.outsideFocusReclaimed -eq $true) "mobile drawer let programmatic focus escape to the background composer"
+  Assert-True ($interaction.rootScrollLocked -eq $true) "mobile drawer lost its background scroll lock while open"
+  Assert-True ($interaction.prevented -eq $true) "Android back was not claimed while the mobile drawer owned focus"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "350") | Out-Null
+
+  $restored = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const active = document.activeElement;
+  const expectedOverflow = window.__cxRegressionMobileDrawerPreviousRootOverflow || '';
+  const state = {
+    hasDrawer: !!document.querySelector('.mobile-drawer'),
+    route: window.location.hash,
+    openerFocusRestored: active instanceof HTMLElement
+      && active.matches('.sidebar-thread-controls-header-host .sidebar-thread-controls-button'),
+    backgroundInert: !!document.querySelector('.desktop-layout')?.closest('[inert]'),
+    skipLinkInert: !!document.querySelector('.skip-to-content')?.closest('[inert]'),
+    rootOverflow: document.documentElement.style.overflow,
+    expectedOverflow
+  };
+  delete window.__cxRegressionMobileDrawerPreviousRootOverflow;
+  return state;
+})())
+'@
+  Assert-True ($restored.hasDrawer -eq $false) "Android back left the mobile drawer open"
+  Assert-True ($restored.route -eq $interaction.routeBefore) "closing the mobile drawer changed route: $($restored.route)"
+  Assert-True ($restored.openerFocusRestored -eq $true) "closing the mobile drawer did not restore its exact opener"
+  Assert-True ($restored.backgroundInert -eq $false -and $restored.skipLinkInert -eq $false) "closing the mobile drawer did not restore background navigation"
+  Assert-True ($restored.rootOverflow -eq $restored.expectedOverflow) "closing the mobile drawer did not restore root scrolling"
+
+  Assert-MobileDrawerSidebar -Metrics (Open-MobileDrawerSidebar -Session $Session)
+}
+
+function Assert-MobileSettingsEnvironmentOwnership {
+  param([string]$Session)
+
+  $opened = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const trigger = document.querySelector('.sidebar-settings-button[aria-expanded]');
+  if (!(trigger instanceof HTMLButtonElement)) return { clicked: false };
+  trigger.focus({ preventScroll: true });
+  trigger.click();
+  return { clicked: true };
+})())
+'@
+  Assert-True ($opened.clicked -eq $true) "mobile settings trigger could not be activated"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '350') | Out-Null
+
+  $interaction = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const panel = document.querySelector('.sidebar-settings-panel-mobile');
+  const drawer = document.querySelector('.mobile-drawer');
+  const sidebarScrollable = document.querySelector('.sidebar-scrollable');
+  const footerActions = document.querySelector('.sidebar-footer-actions');
+  const backdrop = document.querySelector('.sidebar-settings-mobile-backdrop');
+  const panelClose = panel?.querySelector('.sidebar-settings-panel-close') || null;
+  const backgroundAction = document.querySelector('.sidebar-action-tile');
+  const focusable = Array.from(panel?.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  ) || []).filter((element) => element.getClientRects().length > 0 && element.getAttribute('aria-hidden') !== 'true');
+  const first = focusable[0] || null;
+  const last = focusable[focusable.length - 1] || null;
+  const initialFocusInside = !!panel?.contains(document.activeElement);
+  const initialFocusClass = document.activeElement?.className || '';
+  if (first instanceof HTMLElement) {
+    first.focus({ preventScroll: true });
+    first.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }));
+  }
+  const backwardWrap = document.activeElement === last;
+  if (last instanceof HTMLElement) {
+    last.focus({ preventScroll: true });
+    last.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+  }
+  const forwardWrap = document.activeElement === first;
+  if (backgroundAction instanceof HTMLElement) backgroundAction.focus({ preventScroll: true });
+  const outsideFocusReclaimed = !!panel?.contains(document.activeElement);
+  return {
+    hasPanel: !!panel,
+    drawerStillOpen: !!drawer,
+    initialFocusInside,
+    initialFocusClass,
+    backwardWrap,
+    forwardWrap,
+    outsideFocusReclaimed,
+    sidebarScrollableInert: sidebarScrollable?.inert === true,
+    footerActionsInert: footerActions?.inert === true,
+    backgroundActionHidden: !!backgroundAction?.closest('[inert]'),
+    backdropTabIndex: backdrop?.tabIndex ?? 0,
+    backdropAriaHidden: backdrop?.getAttribute('aria-hidden') === 'true',
+    namedCloseActionCount: [backdrop, panelClose].filter((element) => (
+      element instanceof HTMLElement
+      && element.getAttribute('aria-hidden') !== 'true'
+      && !!element.getAttribute('aria-label')?.trim()
+    )).length,
+    rootScrollLocked: document.documentElement.style.overflow === 'hidden'
+  };
+})())
+'@
+
+  Assert-True ($interaction.hasPanel -eq $true -and $interaction.drawerStillOpen -eq $true) "mobile settings sheet did not stay above its drawer"
+  Assert-True ($interaction.initialFocusInside -eq $true -and [string]$interaction.initialFocusClass -like '*sidebar-settings-panel-close*') "mobile settings sheet did not focus its close action on open"
+  Assert-True ($interaction.backwardWrap -eq $true -and $interaction.forwardWrap -eq $true) "mobile settings sheet did not contain forward and reverse Tab navigation"
+  Assert-True ($interaction.outsideFocusReclaimed -eq $true) "mobile settings sheet let programmatic focus escape to the underlying drawer"
+  Assert-True ($interaction.sidebarScrollableInert -eq $true -and $interaction.footerActionsInert -eq $true -and $interaction.backgroundActionHidden -eq $true) "mobile settings sheet left underlying drawer controls exposed to sequential or assistive navigation"
+  Assert-True ([int]$interaction.backdropTabIndex -eq -1) "mobile settings backdrop added a duplicate close action to sequential navigation"
+  Assert-True ($interaction.backdropAriaHidden -eq $true -and [int]$interaction.namedCloseActionCount -eq 1) "mobile settings backdrop remained a duplicate named close action in assistive navigation"
+  Assert-True ($interaction.rootScrollLocked -eq $true) "mobile settings sheet lost the drawer's root scroll lock"
+
+  $close = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({ prevented: !window.dispatchEvent(new CustomEvent('codex-mobile-back-button', { cancelable: true })) })
+'@
+  Assert-True ($close.prevented -eq $true) "Android back was not claimed by the mobile settings sheet"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '350') | Out-Null
+
+  $restored = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const trigger = document.querySelector('.sidebar-settings-button[aria-expanded]');
+  return {
+    hasPanel: !!document.querySelector('.sidebar-settings-panel'),
+    drawerStillOpen: !!document.querySelector('.mobile-drawer'),
+    triggerFocusRestored: document.activeElement === trigger,
+    sidebarScrollableInert: document.querySelector('.sidebar-scrollable')?.inert === true,
+    footerActionsInert: document.querySelector('.sidebar-footer-actions')?.inert === true,
+    rootScrollLocked: document.documentElement.style.overflow === 'hidden'
+  };
+})())
+'@
+  Assert-True ($restored.hasPanel -eq $false -and $restored.drawerStillOpen -eq $true) "closing mobile settings dismissed the drawer or left the sheet open"
+  Assert-True ($restored.triggerFocusRestored -eq $true) "closing mobile settings did not restore focus to its exact trigger"
+  Assert-True ($restored.sidebarScrollableInert -eq $false -and $restored.footerActionsInert -eq $false) "closing mobile settings did not restore underlying drawer controls"
+  Assert-True ($restored.rootScrollLocked -eq $true) "closing nested mobile settings released the outer drawer scroll lock"
+
+  $backdropOpen = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const trigger = document.querySelector('.sidebar-settings-button[aria-expanded]');
+  if (!(trigger instanceof HTMLButtonElement)) return { clicked: false };
+  trigger.focus({ preventScroll: true });
+  trigger.click();
+  return { clicked: true };
+})())
+'@
+  Assert-True ($backdropOpen.clicked -eq $true) "mobile settings trigger could not be reactivated for backdrop dismissal"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '350') | Out-Null
+
+  $backdropPoint = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const backdrop = document.querySelector('.sidebar-settings-mobile-backdrop');
+  const panel = document.querySelector('.sidebar-settings-panel-mobile');
+  if (!(backdrop instanceof HTMLElement) || !(panel instanceof HTMLElement)) return { available: false };
+  const backdropRect = backdrop.getBoundingClientRect();
+  const panelRect = panel.getBoundingClientRect();
+  return {
+    available: panelRect.top > backdropRect.top,
+    x: Math.round(backdropRect.left + (backdropRect.width / 2)),
+    y: Math.round(backdropRect.top + ((panelRect.top - backdropRect.top) / 2))
+  };
+})())
+'@
+  Assert-True ($backdropPoint.available -eq $true) "mobile settings backdrop has no visible pointer dismissal target"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'mouse', 'move', [string]$backdropPoint.x, [string]$backdropPoint.y) | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'mouse', 'down') | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'mouse', 'up') | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '350') | Out-Null
+
+  $backdropRestored = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const trigger = document.querySelector('.sidebar-settings-button[aria-expanded]');
+  return {
+    hasPanel: !!document.querySelector('.sidebar-settings-panel'),
+    drawerStillOpen: !!document.querySelector('.mobile-drawer'),
+    triggerFocusRestored: document.activeElement === trigger,
+    rootScrollLocked: document.documentElement.style.overflow === 'hidden'
+  };
+})())
+'@
+  Assert-True ($backdropRestored.hasPanel -eq $false -and $backdropRestored.drawerStillOpen -eq $true) "backdrop dismissal closed the mobile drawer or left settings open"
+  Assert-True ($backdropRestored.triggerFocusRestored -eq $true) "backdrop dismissal did not restore focus to the mobile settings trigger"
+  Assert-True ($backdropRestored.rootScrollLocked -eq $true) "backdrop dismissal released the outer drawer scroll lock"
 }
 
 function Assert-MobileDrawerThreadNavigationStability {
@@ -2170,13 +3124,18 @@ JSON.stringify((() => {
 JSON.stringify({
   hasDrawer: !!document.querySelector('.mobile-drawer'),
   route: window.location.hash,
-  sidebarCollapsedPreference: window.localStorage.getItem('codex-web-local.sidebar-collapsed.v1')
+  sidebarCollapsedPreference: window.localStorage.getItem('codex-web-local.sidebar-collapsed.v1'),
+  mainContentFocused: document.activeElement?.id === 'main-content',
+  activeTag: document.activeElement?.tagName || '',
+  activeId: document.activeElement?.id || ''
 })
 '@
   Assert-True ($selectedState.hasDrawer -eq $false) "mobile drawer stayed open after selecting a thread"
   Assert-True ($selectedState.route -like "#/thread/*") "mobile thread selection did not navigate to the thread route: $($selectedState.route)"
   Assert-True ($selectedState.sidebarCollapsedPreference -eq "0") "mobile thread selection changed the desktop sidebar preference"
+  Assert-True ($selectedState.mainContentFocused -eq $true) "mobile thread selection lost focus instead of moving it to main content: $($selectedState.activeTag)#$($selectedState.activeId)"
 
+  Assert-MobileThreadHeaderTouchTargets -Session $Session
   Assert-MobileComposerViewportCompression -Session $Session
 
   $backState = Invoke-BrowserEvalJson -Session $Session -Script @'
@@ -2197,6 +3156,51 @@ JSON.stringify({
   Assert-True ($homeState.route -eq "#/") "Android back did not return the mobile thread route to home: $($homeState.route)"
   Assert-True ($homeState.hasDrawer -eq $false) "Android back unexpectedly reopened the mobile drawer"
   Assert-True ($homeState.sidebarCollapsedPreference -eq "0") "Android back changed the desktop sidebar preference"
+}
+
+function Assert-MobileThreadHeaderTouchTargets {
+  param([string]$Session)
+
+  $metrics = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const readButton = (selector) => {
+    const button = document.querySelector(selector);
+    const rect = button?.getBoundingClientRect();
+    return {
+      present: button instanceof HTMLButtonElement,
+      width: rect ? Math.round(rect.width) : 0,
+      height: rect ? Math.round(rect.height) : 0,
+      label: button?.getAttribute('aria-label') || ''
+    };
+  };
+  const titleRect = document.querySelector('.content-title')?.getBoundingClientRect();
+  const headerRect = document.querySelector('.content-header')?.getBoundingClientRect();
+  const contextBadge = document.querySelector('.content-context-badge');
+  return {
+    refresh: readButton('.content-title-refresh-button'),
+    favorites: readButton('.content-favorites-button'),
+    contextBadge: {
+      present: contextBadge instanceof HTMLElement,
+      text: contextBadge?.textContent?.trim() || '',
+      label: contextBadge?.getAttribute('aria-label') || ''
+    },
+    titleWidth: titleRect ? Math.round(titleRect.width) : 0,
+    headerHeight: headerRect ? Math.round(headerRect.height) : 0,
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  };
+})())
+'@
+
+  Assert-True ($metrics.refresh.present -eq $true -and $metrics.favorites.present -eq $true) "mobile thread header is missing recovery or Favorites actions"
+  Assert-True ([int]$metrics.refresh.height -ge 36 -and [int]$metrics.favorites.height -ge 36) "mobile thread header actions are too short for reliable touch: refresh=$($metrics.refresh.height), favorites=$($metrics.favorites.height)"
+  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$metrics.refresh.label) -and -not [string]::IsNullOrWhiteSpace([string]$metrics.favorites.label)) "mobile thread header actions lost accessible labels"
+  if ($metrics.contextBadge.present -eq $true) {
+    Assert-True ([string]$metrics.contextBadge.text -match '^\d+%$') "visible mobile context usage is missing its percent unit: $($metrics.contextBadge.text)"
+    Assert-True ([string]$metrics.contextBadge.label -match '上下文已使用\s+\d+%') "mobile context usage accessible label drifted from the visible percentage"
+  }
+  Assert-True ([int]$metrics.titleWidth -ge 64) "mobile thread header actions squeezed the conversation title too far: $($metrics.titleWidth)px"
+  Assert-True ([int]$metrics.headerHeight -le 96) "compact touch targets made the conversation header too tall: $($metrics.headerHeight)px"
+  Assert-True ($metrics.hasHorizontalOverflow -eq $false) "mobile thread header touch targets caused horizontal overflow"
 }
 
 function Assert-MobileComposerViewportCompression {
@@ -2310,28 +3314,28 @@ JSON.stringify((() => {
     const rect = candidate.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
   });
-  const deleteButton = menu?.querySelector('.thread-menu-item-danger') || null;
-  if (deleteButton instanceof HTMLElement) deleteButton.click();
-  return { opened: deleteButton instanceof HTMLElement };
+  const archiveButton = Array.from(menu?.querySelectorAll('[role="menuitem"]') || []).find((button) => button.textContent?.trim() === '归档会话') || null;
+  if (archiveButton instanceof HTMLElement) archiveButton.click();
+  return { opened: archiveButton instanceof HTMLElement };
 })())
 '@
-  Assert-True ($opened.opened -eq $true) "mobile sidebar could not open its delete confirmation"
+  Assert-True ($opened.opened -eq $true) "mobile sidebar could not open its archive confirmation"
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
 
   $back = Invoke-BrowserEvalJson -Session $Session -Script @'
 JSON.stringify((() => {
-  const dialogBefore = !!document.querySelector('[role="dialog"][aria-label="删除会话"]');
+  const dialogBefore = !!document.querySelector('[role="dialog"][aria-label="归档会话"]');
   const prevented = !window.dispatchEvent(new CustomEvent('codex-mobile-back-button', { cancelable: true }));
   return { dialogBefore, prevented };
 })())
 '@
-  Assert-True ($back.dialogBefore -eq $true) "mobile sidebar delete confirmation did not render"
+  Assert-True ($back.dialogBefore -eq $true) "mobile sidebar archive confirmation did not render"
   Assert-True ($back.prevented -eq $true) "Android back was not claimed by the mobile sidebar dialog"
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
 
   $closed = Invoke-BrowserEvalJson -Session $Session -Script @'
 JSON.stringify({
-  dialog: !!document.querySelector('[role="dialog"][aria-label="删除会话"]'),
+  dialog: !!document.querySelector('[role="dialog"][aria-label="归档会话"]'),
   drawer: !!document.querySelector('.mobile-drawer'),
   route: window.location.hash,
   sidebarCollapsedPreference: window.localStorage.getItem('codex-web-local.sidebar-collapsed.v1')
@@ -2533,6 +3537,64 @@ JSON.stringify({
     Assert-True ($closed.bodyOverflow -eq $opened.overflowBefore) "$kind blocking dialog did not restore background scrolling"
     Assert-True ($closed.route -eq $opened.routeBefore) "closing $kind blocking dialog changed route"
   }
+}
+
+function Assert-ArchiveUndoToast {
+  param([string]$Session)
+
+  $opened = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  window.dispatchEvent(new CustomEvent('cx-codex-regression-open-blocking-dialog', {
+    detail: { kind: 'archive-undo' }
+  }));
+  return { route: window.location.hash };
+})())
+'@
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+
+  $visible = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const toast = document.querySelector('.product-toast');
+  const action = toast?.querySelector('.product-toast-action');
+  const close = toast?.querySelector('.product-toast-close');
+  const message = toast?.querySelector('.product-toast-message');
+  const toastRect = toast?.getBoundingClientRect();
+  const actionRect = action?.getBoundingClientRect();
+  const messageRect = message?.getBoundingClientRect();
+  return {
+    role: toast?.getAttribute('role') || '',
+    message: toast?.querySelector('.product-toast-message')?.textContent?.trim() || '',
+    actionLabel: action?.textContent?.trim() || '',
+    closeLabel: close?.getAttribute('aria-label') || '',
+    actionHeight: actionRect ? Math.round(actionRect.height) : 0,
+    messageSingleLine: !!messageRect && messageRect.height <= 24,
+    fitsViewport: !!toastRect && toastRect.left >= -2 && toastRect.right <= window.innerWidth + 2 && toastRect.top >= -2 && toastRect.bottom <= window.innerHeight + 2,
+    overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+    route: window.location.hash
+  };
+})())
+'@
+  Assert-True ($visible.role -eq 'status') "archive undo feedback must be announced as a non-error status"
+  Assert-True ($visible.message -eq '会话已移到归档。') "archive undo feedback is missing its truthful completion message"
+  Assert-True ($visible.actionLabel -eq '撤销') "archive feedback is missing the immediate undo action"
+  Assert-True ($visible.closeLabel -eq '关闭提示') "archive undo feedback cannot be dismissed independently"
+  Assert-True ([int]$visible.actionHeight -ge 44) "archive undo action is smaller than the mobile touch target"
+  Assert-True ($visible.messageSingleLine -eq $true) "archive undo message wraps awkwardly beside its actions on a phone"
+  Assert-True ($visible.fitsViewport -eq $true -and $visible.overflow -eq $false) "archive undo feedback does not fit the phone viewport"
+  Assert-True ($visible.route -eq $opened.route) "archive feedback changed route before the user chose an action"
+
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "click", ".product-toast-action") | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+  $restored = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  message: document.querySelector('.product-toast-message')?.textContent?.trim() || '',
+  actionCount: document.querySelectorAll('.product-toast-action').length,
+  route: window.location.hash
+})
+'@
+  Assert-True ($restored.message -eq '会话已恢复。') "archive undo did not replace the toast with restoration feedback"
+  Assert-True ([int]$restored.actionCount -eq 0) "completed archive undo left a stale action visible"
+  Assert-True ($restored.route -eq $opened.route) "archive undo changed the current route"
 }
 
 function Read-ConversationFixtureMetrics {
@@ -2914,6 +3976,359 @@ JSON.stringify((() => {
   Assert-True ([int]$metrics.scrollWidth -le [int]$metrics.width + 2) "resume recovery fixture introduced horizontal overflow"
 }
 
+function Wait-ConversationImagePreviewUiState {
+  param(
+    [string]$Session,
+    [int]$ExpectedScale = -1,
+    [int]$ExpectedDialogCount = -1
+  )
+
+  $state = $null
+  for ($attempt = 1; $attempt -le 30; $attempt++) {
+    $state = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => ({
+  scale: Number.parseFloat(document.querySelector('.image-modal-scale')?.textContent || '0'),
+  dialogCount: document.querySelectorAll('.image-modal-content').length
+}))())
+'@
+    $scaleMatches = $ExpectedScale -lt 0 -or [int]$state.scale -eq $ExpectedScale
+    $dialogMatches = $ExpectedDialogCount -lt 0 -or [int]$state.dialogCount -eq $ExpectedDialogCount
+    if ($scaleMatches -and $dialogMatches) { return $state }
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+  }
+
+  throw "image preview state did not settle: expectedScale=$ExpectedScale, actualScale=$($state.scale), expectedDialogCount=$ExpectedDialogCount, actualDialogCount=$($state.dialogCount)"
+}
+
+function Assert-ConversationImagePreviewGestures {
+  param([string]$Session)
+
+  $imagePrepared = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const image = document.querySelector('[data-message-id="fixture-image-preview-gestures"] .message-image-preview');
+  image?.scrollIntoView({ block: 'center' });
+  return { found: image instanceof HTMLImageElement };
+})())
+'@
+  Assert-True ($imagePrepared.found -eq $true) "image preview gesture fixture is missing its deterministic image"
+  $imageReady = $null
+  for ($attempt = 1; $attempt -le 30; $attempt++) {
+    $imageReady = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const image = document.querySelector('[data-message-id="fixture-image-preview-gestures"] .message-image-preview');
+  return {
+    loaded: image instanceof HTMLImageElement
+      && image.complete
+      && image.naturalWidth > 0
+      && image.classList.contains('is-loaded'),
+    complete: image instanceof HTMLImageElement && image.complete,
+    naturalWidth: image instanceof HTMLImageElement ? image.naturalWidth : 0
+  };
+})())
+'@
+    if ($imageReady.loaded -eq $true) { break }
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+  }
+  Assert-True ($imageReady.loaded -eq $true) "image preview gesture fixture did not settle its cached image: complete=$($imageReady.complete), naturalWidth=$($imageReady.naturalWidth)"
+
+  $opened = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const trigger = document.querySelector('[data-message-id="fixture-image-preview-gestures"] .message-image-button');
+  if (!(trigger instanceof HTMLButtonElement)) return { opened: false };
+  trigger.click();
+  return { opened: true };
+})())
+'@
+  Assert-True ($opened.opened -eq $true) "image preview gesture fixture could not open its image"
+  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedScale 100 -ExpectedDialogCount 1 | Out-Null
+
+  $initialControls = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const zoomOut = document.querySelector('[aria-label="缩小图片"]');
+  const reset = document.querySelector('[aria-label="重置图片缩放"]');
+  const zoomIn = document.querySelector('[aria-label="放大图片"]');
+  return {
+    zoomOutDisabled: zoomOut instanceof HTMLButtonElement && zoomOut.disabled,
+    resetDisabled: reset instanceof HTMLButtonElement && reset.disabled,
+    zoomInEnabled: zoomIn instanceof HTMLButtonElement && !zoomIn.disabled
+  };
+})())
+'@
+  Assert-True ($initialControls.zoomOutDisabled -eq $true) "image preview zoom-out control must be disabled at its minimum"
+  Assert-True ($initialControls.resetDisabled -eq $true) "image preview reset control must be disabled at 100%"
+  Assert-True ($initialControls.zoomInEnabled -eq $true) "image preview zoom-in control must remain enabled below its maximum"
+
+  $ctrlWheelDispatch = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const stage = document.querySelector('.image-modal-stage');
+  const content = document.querySelector('.image-modal-content');
+  if (!(stage instanceof HTMLElement) || !(content instanceof HTMLElement)) return { dispatched: false };
+  let bubbled = 0;
+  const onBubble = () => { bubbled += 1; };
+  content.addEventListener('wheel', onBubble);
+  const bounds = stage.getBoundingClientRect();
+  const event = new WheelEvent('wheel', {
+    bubbles: true,
+    cancelable: true,
+    clientX: bounds.left + bounds.width * 0.75,
+    clientY: bounds.top + bounds.height * 0.5,
+    ctrlKey: true,
+    deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+    deltaY: -12
+  });
+  stage.dispatchEvent(event);
+  content.removeEventListener('wheel', onBubble);
+  return { dispatched: true, defaultPrevented: event.defaultPrevented, bubbled };
+})())
+'@
+  Assert-True ($ctrlWheelDispatch.dispatched -eq $true) "image preview ctrl-wheel probe did not find the modal surface"
+  Assert-True ($ctrlWheelDispatch.defaultPrevented -eq $true) "image preview ctrl-wheel must prevent browser-level zoom"
+  Assert-True ([int]$ctrlWheelDispatch.bubbled -eq 0) "image preview ctrl-wheel escaped its local modal surface"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+
+  $smoothZoom = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const scale = Number.parseFloat(document.querySelector('.image-modal-scale')?.textContent || '0');
+  const image = document.querySelector('.image-modal-image');
+  return {
+    scale,
+    transform: image instanceof HTMLElement ? image.style.transform : '',
+    horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  };
+})())
+'@
+  Assert-True ([double]$smoothZoom.scale -gt 100 -and [double]$smoothZoom.scale -lt 125) "small ctrl-wheel input must zoom smoothly instead of jumping by a full 25% step: $($smoothZoom.scale)%"
+  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$smoothZoom.transform)) "smooth image zoom did not update the image transform"
+  Assert-True ($smoothZoom.horizontalOverflow -eq $false) "image preview smooth zoom introduced page-level horizontal overflow"
+
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const reset = document.querySelector('.image-modal-scale');
+  if (!(reset instanceof HTMLButtonElement)) return { reset: false };
+  reset.click();
+  return { reset: true };
+})())
+'@ | Out-Null
+  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedScale 100 -ExpectedDialogCount 1 | Out-Null
+
+  $ordinaryWheelDispatch = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const stage = document.querySelector('.image-modal-stage');
+  if (!(stage instanceof HTMLElement)) return { dispatched: false };
+  const event = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -120 });
+  stage.dispatchEvent(event);
+  return { dispatched: true, defaultPrevented: event.defaultPrevented };
+})())
+'@
+  Assert-True ($ordinaryWheelDispatch.dispatched -eq $true -and $ordinaryWheelDispatch.defaultPrevented -eq $true) "ordinary image-preview wheel zoom must remain locally handled"
+  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedScale 125 -ExpectedDialogCount 1 | Out-Null
+
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const reset = document.querySelector('.image-modal-scale');
+  if (!(reset instanceof HTMLButtonElement)) return { reset: false };
+  reset.click();
+  return { reset: true };
+})())
+'@ | Out-Null
+  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedScale 100 -ExpectedDialogCount 1 | Out-Null
+
+  $pinchDispatch = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const stage = document.querySelector('.image-modal-stage');
+  if (!(stage instanceof HTMLElement)) return { dispatched: false };
+  const bounds = stage.getBoundingClientRect();
+  const centerX = bounds.left + bounds.width / 2;
+  const centerY = bounds.top + bounds.height / 2;
+  const dispatch = (type, pointerId, clientX, clientY, buttons) => stage.dispatchEvent(new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    pointerId,
+    pointerType: 'touch',
+    isPrimary: pointerId === 74201,
+    button: 0,
+    buttons,
+    clientX,
+    clientY
+  }));
+  dispatch('pointerdown', 74201, centerX - 50, centerY, 1);
+  dispatch('pointerdown', 74202, centerX + 50, centerY, 1);
+  dispatch('pointermove', 74202, centerX + 100, centerY, 1);
+  window.__cxImagePreviewPinchProbe = { stage, centerX, centerY, dispatch };
+  return {
+    dispatched: true,
+    touchAction: getComputedStyle(stage).touchAction,
+    dragging: stage.classList.contains('image-modal-stage--dragging')
+  };
+})())
+'@
+  Assert-True ($pinchDispatch.dispatched -eq $true) "image preview touch pinch probe did not find the modal surface"
+  Assert-True ($pinchDispatch.touchAction -eq 'none') "image preview stage must own touch gestures while the modal is open"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+
+  $pinchZoom = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const image = document.querySelector('.image-modal-image');
+  return {
+    scale: Number.parseFloat(document.querySelector('.image-modal-scale')?.textContent || '0'),
+    transform: image instanceof HTMLElement ? image.style.transform : '',
+    dragging: document.querySelector('.image-modal-stage')?.classList.contains('image-modal-stage--dragging') === true
+  };
+})())
+'@
+  Assert-True ([double]$pinchZoom.scale -ge 149 -and [double]$pinchZoom.scale -le 151) "two-pointer pinch must scale proportionally from 100% to 150%: $($pinchZoom.scale)%"
+  Assert-True ($pinchZoom.dragging -eq $true) "image preview pinch did not enter its direct-manipulation state"
+
+  $panDispatch = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const probe = window.__cxImagePreviewPinchProbe;
+  const image = document.querySelector('.image-modal-image');
+  if (!probe || !(image instanceof HTMLElement)) return { dispatched: false };
+  const before = image.style.transform;
+  probe.dispatch('pointerup', 74202, probe.centerX + 100, probe.centerY, 0);
+  probe.dispatch('pointermove', 74201, probe.centerX - 80, probe.centerY + 12, 1);
+  return { dispatched: true, before };
+})())
+'@
+  Assert-True ($panDispatch.dispatched -eq $true) "image preview single-pointer continuation probe did not run"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+  $panResult = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const probe = window.__cxImagePreviewPinchProbe;
+  const stage = document.querySelector('.image-modal-stage');
+  const image = document.querySelector('.image-modal-image');
+  if (!probe || !(stage instanceof HTMLElement) || !(image instanceof HTMLElement)) return { finished: false };
+  const after = image.style.transform;
+  probe.dispatch('pointerup', 74201, probe.centerX - 80, probe.centerY + 12, 0);
+  delete window.__cxImagePreviewPinchProbe;
+  return { finished: true, after, draggingBeforeRelease: stage.classList.contains('image-modal-stage--dragging') };
+})())
+'@
+  Assert-True ($panResult.finished -eq $true) "image preview touch gesture did not finish cleanly"
+  Assert-True ($panResult.draggingBeforeRelease -eq $true) "lifting one pinch pointer did not continue as single-pointer panning"
+  Assert-True ([string]$panResult.after -ne [string]$panDispatch.before) "single-pointer panning after pinch did not move the zoomed image"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+
+  $settled = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const stage = document.querySelector('.image-modal-stage');
+  return {
+    scale: Number.parseFloat(document.querySelector('.image-modal-scale')?.textContent || '0'),
+    dragging: stage?.classList.contains('image-modal-stage--dragging') === true,
+    dialogCount: document.querySelectorAll('.image-modal-content').length
+  };
+})())
+'@
+  Assert-True ([double]$settled.scale -ge 149 -and [double]$settled.scale -le 151) "finishing the touch gesture changed the selected zoom"
+  Assert-True ($settled.dragging -eq $false) "image preview remained stuck in dragging state after all touch pointers were released"
+  Assert-True ([int]$settled.dialogCount -eq 1) "image preview touch gesture unexpectedly closed or duplicated the modal"
+
+  Save-RegressionScreenshot -Session $Session -Name 'conversation-image-preview-pinch-phone' | Out-Null
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const close = document.querySelector('.image-modal-close');
+  if (!(close instanceof HTMLButtonElement)) return { closed: false };
+  close.click();
+  return { closed: true };
+})())
+'@ | Out-Null
+  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedDialogCount 0 | Out-Null
+}
+
+function Assert-ConversationMarkdownImageRecovery {
+  param([string]$Session)
+
+  $prepared = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const visibleCard = document.querySelector('[data-message-id="fixture-markdown-image-visible"]');
+  const image = visibleCard?.querySelector('.message-markdown-image');
+  image?.scrollIntoView({ block: 'center' });
+  return { found: image instanceof HTMLImageElement };
+})())
+'@
+  Assert-True ($prepared.found -eq $true) "markdown-image fixture is missing its deterministic image"
+
+  $state = $null
+  for ($attempt = 1; $attempt -le 40; $attempt++) {
+    $state = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const visibleCard = document.querySelector('[data-message-id="fixture-markdown-image-visible"]');
+  const image = visibleCard?.querySelector('.message-markdown-image');
+  const trigger = visibleCard?.querySelector('.message-markdown-image-button');
+  const failedCard = document.querySelector('[data-message-id="fixture-markdown-image-failed"]');
+  const failure = failedCard?.querySelector('.message-markdown-image-failed');
+  const retry = failedCard?.querySelector('.message-markdown-image-retry');
+  const imageStyle = image instanceof HTMLImageElement ? getComputedStyle(image) : null;
+  return {
+    loaded: image instanceof HTMLImageElement
+      && image.complete
+      && image.naturalWidth > 0
+      && image.classList.contains('is-loaded'),
+    opacity: imageStyle?.opacity || '',
+    triggerDisabled: trigger instanceof HTMLButtonElement ? trigger.disabled : null,
+    triggerLabel: trigger?.getAttribute('aria-label') || '',
+    triggerBusy: trigger?.getAttribute('aria-busy') || '',
+    failureVisible: failure instanceof HTMLElement,
+    failureText: failure?.textContent?.replace(/\s+/g, ' ').trim() || '',
+    retryLabel: retry?.textContent?.trim() || '',
+    rawMarkdownVisible: failedCard?.textContent?.includes('/__missing-markdown-image-regression.png') === true
+  };
+})())
+'@
+    if ($state.loaded -eq $true -and $state.failureVisible -eq $true) { break }
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+  }
+
+  Assert-True ($state.loaded -eq $true) "markdown image did not enter its visible loaded state"
+  Assert-True ([double]$state.opacity -eq 1) "loaded markdown image remained visually hidden: opacity=$($state.opacity)"
+  Assert-True ($state.triggerDisabled -eq $false) "loaded markdown image preview trigger remained disabled"
+  Assert-True ($state.triggerLabel -eq '预览图片：Markdown 图片回归') "loaded markdown image is missing its descriptive preview label: $($state.triggerLabel)"
+  Assert-True ([string]::IsNullOrWhiteSpace([string]$state.triggerBusy)) "loaded markdown image retained aria-busy"
+  Assert-True ($state.failureVisible -eq $true -and $state.failureText -match '图片加载失败' -and $state.retryLabel -eq '重试') "failed markdown image is missing its explicit recovery action"
+  Assert-True ($state.rawMarkdownVisible -eq $false) "failed markdown image exposed its raw markdown source instead of recovery UI"
+
+  $opened = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const trigger = document.querySelector('[data-message-id="fixture-markdown-image-visible"] .message-markdown-image-button');
+  if (!(trigger instanceof HTMLButtonElement)) return { opened: false };
+  trigger.click();
+  return { opened: true };
+})())
+'@
+  Assert-True ($opened.opened -eq $true) "loaded markdown image could not open the shared preview"
+  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedDialogCount 1 | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'press', 'Escape') | Out-Null
+  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedDialogCount 0 | Out-Null
+
+  $retryStarted = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const retry = document.querySelector('[data-message-id="fixture-markdown-image-failed"] .message-markdown-image-retry');
+  if (!(retry instanceof HTMLButtonElement)) return { clicked: false };
+  window.__cxPreviousMarkdownImageRetry = retry;
+  retry.click();
+  return { clicked: true };
+})())
+'@
+  Assert-True ($retryStarted.clicked -eq $true) "failed markdown image retry action could not be activated"
+
+  $retryState = $null
+  for ($attempt = 1; $attempt -le 30; $attempt++) {
+    $retryState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const retry = document.querySelector('[data-message-id="fixture-markdown-image-failed"] .message-markdown-image-retry');
+  return {
+    recoveredFailureUi: retry instanceof HTMLButtonElement,
+    replaced: retry instanceof HTMLButtonElement && retry !== window.__cxPreviousMarkdownImageRetry
+  };
+})())
+'@
+    if ($retryState.recoveredFailureUi -eq $true -and $retryState.replaced -eq $true) { break }
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+  }
+  Assert-True ($retryState.recoveredFailureUi -eq $true -and $retryState.replaced -eq $true) "markdown image retry did not remount the request and recover its failure UI"
+  Save-RegressionScreenshot -Session $Session -Name 'conversation-markdown-image-recovery-phone' | Out-Null
+}
+
 function Assert-ConversationFixture {
   param(
     [object]$Metrics,
@@ -3049,6 +4464,7 @@ JSON.stringify((() => {
 JSON.stringify((() => {
   const button = document.querySelector('.conversation-jump-to-latest');
   if (!(button instanceof HTMLButtonElement)) return { clicked: false };
+  button.focus();
   button.click();
   return { clicked: true };
 })())
@@ -3060,7 +4476,8 @@ JSON.stringify((() => {
   if (!(list instanceof HTMLElement)) return { distance: -1, hasButton: true };
   const result = {
     distance: Math.max(list.scrollHeight - list.scrollTop - list.clientHeight, 0),
-    hasButton: !!document.querySelector('.conversation-jump-to-latest')
+    hasButton: !!document.querySelector('.conversation-jump-to-latest'),
+    focusReturnedToTranscript: document.activeElement === list
   };
   const originalStyle = window.__cxConversationViewportStyle;
   if (originalStyle) {
@@ -3075,6 +4492,7 @@ JSON.stringify((() => {
 '@
   Assert-True ([int]$returnedMetrics.distance -le 24) "conversation return-to-bottom action did not restore the bottom anchor"
   Assert-True ($returnedMetrics.hasButton -eq $false) "conversation return-to-bottom action remained visible after bottom recovery"
+  Assert-True ($returnedMetrics.focusReturnedToTranscript -eq $true) "conversation return-to-bottom action lost keyboard focus when its button unmounted"
 }
 
 function Assert-ConversationThreadSwitchScrollIsolation {
@@ -3182,6 +4600,231 @@ JSON.stringify((() => {
   Assert-True (
     [Math]::Abs([double]$restoredMetrics.currentRatio - [double]$firstSwitch.targetRatio) -le 0.08
   ) "conversation thread A did not restore its own saved scroll ratio"
+}
+
+function Assert-ConversationForegroundResumeScrollIntent {
+  param(
+    [string]$Session,
+    [ValidateSet('bottom', 'reading', 'user')]
+    [string]$Mode
+  )
+
+  $prepared = Invoke-BrowserEvalJson -Session $Session -Script @"
+JSON.stringify((() => {
+  const list = document.querySelector('.conversation-list');
+  const target = document.querySelector('[data-message-id="regression-scroll-a-message-44"]');
+  if (!(list instanceof HTMLElement) || !(target instanceof HTMLElement)) return { ready: false };
+  list.style.flex = '0 0 320px';
+  list.style.height = '320px';
+  list.style.minHeight = '320px';
+  list.style.maxHeight = '320px';
+  if ('$Mode' === 'bottom' || '$Mode' === 'user') {
+    list.scrollTop = list.scrollHeight;
+  } else {
+    target.scrollIntoView({ behavior: 'auto', block: 'center' });
+  }
+  list.dispatchEvent(new Event('scroll'));
+  window.__cxResumeInitialMessageCount = Number(list.dataset.messageCount || '0');
+  return {
+    ready: true,
+    distanceFromBottom: Math.max(list.scrollHeight - list.scrollTop - list.clientHeight, 0),
+    maxScrollTop: Math.max(list.scrollHeight - list.clientHeight, 0)
+  };
+})())
+"@
+  Assert-True ($prepared.ready -eq $true) "foreground resume scroll fixture is missing its list or reading target"
+  Assert-True ([int]$prepared.maxScrollTop -gt 300) "foreground resume scroll fixture is not scrollable enough"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '180') | Out-Null
+
+  $captured = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const list = document.querySelector('.conversation-list');
+  if (!(list instanceof HTMLElement)) return { ready: false };
+  const listRect = list.getBoundingClientRect();
+  const anchor = Array.from(list.querySelectorAll('.conversation-item[data-message-id]')).find((node) => {
+    const rect = node.getBoundingClientRect();
+    return rect.bottom > listRect.top + 1 && rect.top < listRect.bottom;
+  });
+  let hidden = true;
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+  document.dispatchEvent(new Event('visibilitychange'));
+  hidden = false;
+  document.dispatchEvent(new Event('visibilitychange'));
+  window.__cxResumeAnchorId = anchor?.getAttribute('data-message-id') || '';
+  window.__cxResumeAnchorOffset = anchor ? Math.round(anchor.getBoundingClientRect().top - listRect.top) : 0;
+  return {
+    ready: true,
+    anchorId: window.__cxResumeAnchorId,
+    anchorOffset: window.__cxResumeAnchorOffset
+  };
+})())
+'@
+  Assert-True ($captured.ready -eq $true) "foreground resume fixture could not dispatch the hidden-to-visible lifecycle"
+  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$captured.anchorId)) "foreground resume fixture did not capture a visible reading anchor"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '120') | Out-Null
+
+  Invoke-BrowserEvalJson -Session $Session -Script @"
+JSON.stringify((() => {
+  const list = document.querySelector('.conversation-list');
+  if (!(list instanceof HTMLElement)) return { ready: false };
+  const maxScrollTop = Math.max(list.scrollHeight - list.clientHeight, 0);
+  if ('$Mode' === 'user') {
+    list.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -120 }));
+  }
+  list.scrollTop = '$Mode' === 'bottom' ? Math.max(maxScrollTop - 180, 0) : maxScrollTop;
+  if ('$Mode' === 'user') {
+    list.scrollTop = Math.max(maxScrollTop - 180, 0);
+  }
+  list.dispatchEvent(new Event('scroll'));
+  return { ready: true };
+})())
+"@ | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '120') | Out-Null
+
+  $appended = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const button = document.querySelector('[data-testid="append-resume-output"]');
+  if (!(button instanceof HTMLButtonElement)) return { clicked: false };
+  button.click();
+  return { clicked: true };
+})())
+'@
+  Assert-True ($appended.clicked -eq $true) "foreground resume fixture could not append recovered output"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '650') | Out-Null
+
+  $settled = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const list = document.querySelector('.conversation-list');
+  const anchorId = String(window.__cxResumeAnchorId || '');
+  const anchor = anchorId ? document.querySelector(`[data-message-id="${anchorId}"]`) : null;
+  const returnButton = document.querySelector('.conversation-jump-to-latest');
+  const returnLabel = returnButton?.querySelector('.conversation-jump-to-latest-label');
+  const returnButtonRect = returnButton?.getBoundingClientRect();
+  if (!(list instanceof HTMLElement)) return { ready: false };
+  return {
+    ready: true,
+    initialMessageCount: Number(window.__cxResumeInitialMessageCount || '0'),
+    messageCount: Number(list.dataset.messageCount || '0'),
+    distanceFromBottom: Math.max(list.scrollHeight - list.scrollTop - list.clientHeight, 0),
+    anchorDelta: anchor instanceof HTMLElement
+      ? Math.round((anchor.getBoundingClientRect().top - list.getBoundingClientRect().top) - Number(window.__cxResumeAnchorOffset || 0))
+      : 10000,
+    hasReturnToLatest: returnButton instanceof HTMLButtonElement,
+    returnToLatestLabel: returnLabel?.textContent?.trim() || '',
+    returnToLatestLabelDisplay: returnLabel instanceof HTMLElement ? getComputedStyle(returnLabel).display : '',
+    returnToLatestWidth: returnButtonRect ? Math.round(returnButtonRect.width) : 0,
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  };
+})())
+'@
+  Assert-True ($settled.ready -eq $true) "foreground resume fixture did not settle after recovered output"
+  Assert-True ([int]$settled.messageCount -eq [int]$settled.initialMessageCount + 1) "foreground resume fixture did not render exactly one recovered output"
+  Assert-True ($settled.hasHorizontalOverflow -eq $false) "foreground resume scroll recovery introduced horizontal overflow"
+  if ($Mode -eq 'bottom') {
+    Assert-True ([int]$settled.distanceFromBottom -le 24) "foreground recovery lost bottom-follow intent after a transient viewport scroll"
+    Assert-True ($settled.hasReturnToLatest -eq $false) "bottom-follow recovery exposed a stale return-to-latest action"
+  } elseif ($Mode -eq 'reading') {
+    Assert-True ([Math]::Abs([int]$settled.anchorDelta) -le 8) "foreground recovery moved the user's reading anchor: delta=$($settled.anchorDelta)"
+    Assert-True ([int]$settled.distanceFromBottom -gt 24) "foreground recovery pulled a history reader to the latest output"
+    Assert-True ($settled.hasReturnToLatest -eq $true) "history-reading recovery lost the return-to-latest affordance"
+  } else {
+    Assert-True ([int]$settled.distanceFromBottom -gt 24) "fresh user scrolling after resume was overridden by the stale bottom-follow intent"
+    Assert-True ($settled.hasReturnToLatest -eq $true) "fresh user scrolling after resume lost the return-to-latest affordance"
+  }
+  if ($Mode -ne 'bottom') {
+    Assert-True ($settled.returnToLatestLabel -eq '最新输出') "phone return-to-latest action is missing its visible new-output label"
+    Assert-True ($settled.returnToLatestLabelDisplay -ne 'none' -and [int]$settled.returnToLatestWidth -ge 96) "phone return-to-latest new-output label remained visually hidden"
+  }
+}
+
+function Assert-ConversationMessageReadingAnchor {
+  param([string]$Session)
+
+  $prepared = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const list = document.querySelector('.conversation-list');
+  const target = document.querySelector('[data-message-id="regression-scroll-a-message-44"]');
+  const card = target?.querySelector('.message-card');
+  if (!(list instanceof HTMLElement) || !(target instanceof HTMLElement) || !(card instanceof HTMLElement)) {
+    return { ready: false };
+  }
+  window.__cxConversationReadingAnchorStyle = {
+    flex: list.style.flex,
+    height: list.style.height,
+    minHeight: list.style.minHeight,
+    maxHeight: list.style.maxHeight
+  };
+  list.style.flex = '0 0 320px';
+  list.style.height = '320px';
+  list.style.minHeight = '320px';
+  list.style.maxHeight = '320px';
+  target.scrollIntoView({ behavior: 'auto', block: 'center' });
+  list.dispatchEvent(new Event('scroll'));
+  card.click();
+  return {
+    ready: true,
+    distanceBefore: Math.round(target.getBoundingClientRect().top - list.getBoundingClientRect().top),
+    maxScrollTop: Math.max(list.scrollHeight - list.clientHeight, 0)
+  };
+})())
+'@
+  Assert-True ($prepared.ready -eq $true) "conversation reading-anchor fixture is missing its list, target response, or message card"
+  Assert-True ([int]$prepared.maxScrollTop -gt 300) "conversation reading-anchor fixture is not scrollable enough"
+  Assert-True ([Math]::Abs([int]$prepared.distanceBefore - 160) -lt 140) "conversation reading-anchor probe did not place the response away from the viewport top"
+
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "120") | Out-Null
+  $actionMetrics = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const target = document.querySelector('[data-message-id="regression-scroll-a-message-44"]');
+  const button = target?.querySelector('[aria-label="将这条回复滚动到阅读区顶部"]');
+  const rect = button?.getBoundingClientRect();
+  const opacity = button instanceof HTMLElement ? Number.parseFloat(getComputedStyle(button).opacity || '0') : 0;
+  if (button instanceof HTMLButtonElement) button.click();
+  return {
+    hasButton: button instanceof HTMLButtonElement,
+    title: button?.getAttribute('title') || '',
+    ariaLabel: button?.getAttribute('aria-label') || '',
+    width: rect ? Math.round(rect.width) : 0,
+    height: rect ? Math.round(rect.height) : 0,
+    opacity
+  };
+})())
+'@
+  Assert-True ($actionMetrics.hasButton -eq $true) "assistant response is missing its move-to-top action"
+  Assert-True ([string]$actionMetrics.title -eq '将这条回复滚动到阅读区顶部') "assistant move-to-top action is missing its explanatory tooltip"
+  Assert-True ([string]$actionMetrics.ariaLabel -eq '将这条回复滚动到阅读区顶部') "assistant move-to-top action is missing its accessible name"
+  Assert-True ([int]$actionMetrics.width -ge 32 -and [int]$actionMetrics.height -ge 32) "assistant move-to-top action is too small for touch"
+  Assert-True ([double]$actionMetrics.opacity -ge 0.8) "assistant move-to-top action did not become visible after activating the message"
+
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "700") | Out-Null
+  $anchoredMetrics = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const list = document.querySelector('.conversation-list');
+  const target = document.querySelector('[data-message-id="regression-scroll-a-message-44"]');
+  if (!(list instanceof HTMLElement) || !(target instanceof HTMLElement)) return { ready: false };
+  const metrics = {
+    ready: true,
+    topOffset: Math.round(target.getBoundingClientRect().top - list.getBoundingClientRect().top),
+    hasReturnToLatest: document.querySelector('.conversation-jump-to-latest') instanceof HTMLButtonElement,
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  };
+  const originalStyle = window.__cxConversationReadingAnchorStyle;
+  if (originalStyle) {
+    list.style.flex = originalStyle.flex;
+    list.style.height = originalStyle.height;
+    list.style.minHeight = originalStyle.minHeight;
+    list.style.maxHeight = originalStyle.maxHeight;
+    delete window.__cxConversationReadingAnchorStyle;
+  }
+  list.scrollTop = list.scrollHeight;
+  list.dispatchEvent(new Event('scroll'));
+  return metrics;
+})())
+'@
+  Assert-True ($anchoredMetrics.ready -eq $true) "conversation reading-anchor result is missing its list or target response"
+  Assert-True ([int]$anchoredMetrics.topOffset -ge 8 -and [int]$anchoredMetrics.topOffset -le 28) "assistant response did not align to the reading-area top: $($anchoredMetrics.topOffset)"
+  Assert-True ($anchoredMetrics.hasReturnToLatest -eq $true) "assistant move-to-top action did not preserve the return-to-latest affordance"
+  Assert-True ($anchoredMetrics.hasHorizontalOverflow -eq $false) "assistant move-to-top action introduced horizontal overflow"
 }
 
 function Assert-ConversationOlderHistoryAffordance {
@@ -3354,6 +4997,8 @@ function Assert-ConversationFixtureCopyInteraction {
   $stubScript = @'
 JSON.stringify((() => {
   window.__cxCodexCopiedText = '';
+  window.__cxCodexClipboardWriteAttempts = 0;
+  window.__cxCodexFallbackCopyAttempts = 0;
   const originalSetTimeout = window.setTimeout.bind(window);
   window.setTimeout = (handler, timeout, ...args) => originalSetTimeout(handler, timeout === 1600 ? 10000 : timeout, ...args);
   const existingClipboard = navigator.clipboard || {};
@@ -3361,11 +5006,26 @@ JSON.stringify((() => {
     configurable: true,
     value: {
       ...existingClipboard,
-      writeText: async (text) => {
-        window.__cxCodexCopiedText = String(text);
+      writeText: async () => {
+        window.__cxCodexClipboardWriteAttempts += 1;
+        throw new DOMException('fixture clipboard permission rejection', 'NotAllowedError');
       },
     },
   });
+  document.execCommand = (command) => {
+    if (command !== 'copy') return false;
+    window.__cxCodexFallbackCopyAttempts += 1;
+    const event = new Event('copy', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        setData: (type, text) => {
+          if (type === 'text/plain') window.__cxCodexCopiedText = String(text);
+        },
+      },
+    });
+    document.dispatchEvent(event);
+    return true;
+  };
   return { stubbed: true };
 })())
 '@
@@ -3374,6 +5034,7 @@ JSON.stringify((() => {
 JSON.stringify((() => {
   const button = document.querySelector('.message-code-block[data-diff="false"] .message-code-copy');
   if (!(button instanceof HTMLButtonElement)) return { clicked: false };
+  button.focus();
   button.click();
   return { clicked: true };
 })())
@@ -3385,14 +5046,118 @@ JSON.stringify((() => {
   $stateScript = @'
 JSON.stringify({
   copiedText: window.__cxCodexCopiedText || '',
+  clipboardWriteAttempts: window.__cxCodexClipboardWriteAttempts || 0,
+  fallbackCopyAttempts: window.__cxCodexFallbackCopyAttempts || 0,
+  copyButtonKeptFocus: document.activeElement?.classList.contains('message-code-copy') === true,
   copiedButtonCount: Array.from(document.querySelectorAll('.message-code-copy')).filter((button) => button.textContent.includes('已复制')).length
 })
 '@
   $state = Invoke-BrowserEvalJson -Session $Session -Script $stateScript
   $copiedText = [string]$state.copiedText
+  Assert-True ([int]$state.clipboardWriteAttempts -eq 1) "conversation fixture did not exercise the primary clipboard rejection"
+  Assert-True ([int]$state.fallbackCopyAttempts -eq 1) "conversation fixture did not exercise exactly one copy-event fallback"
   Assert-True ($copiedText -like '*fixture-code-block*') "conversation fixture copy did not capture the code block body"
   Assert-True ($copiedText -notlike '*```*') "conversation fixture copy included markdown fence markers"
+  Assert-True ($state.copyButtonKeptFocus -eq $true) "copy fallback moved focus away from the invoking code button"
   Assert-True ([int]$state.copiedButtonCount -ge 1) "conversation fixture copy button did not show copied feedback"
+
+  $failureSetupScript = @'
+JSON.stringify((() => {
+  document.execCommand = () => false;
+  const buttons = Array.from(document.querySelectorAll('.message-code-copy'));
+  const button = buttons[1];
+  if (!(button instanceof HTMLButtonElement)) return { clicked: false };
+  button.focus();
+  button.click();
+  return { clicked: true };
+})())
+'@
+  $failureSetup = Invoke-BrowserEvalJson -Session $Session -Script $failureSetupScript
+  Assert-True ($failureSetup.clicked -eq $true) "conversation fixture is missing a second code copy control for failure feedback"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "300") | Out-Null
+
+  $failureStateScript = @'
+JSON.stringify({
+  statusText: document.querySelector('.conversation-regression-copy-status')?.textContent?.trim() || '',
+  statusTone: document.querySelector('.conversation-regression-copy-status')?.getAttribute('data-tone') || '',
+  failedButtonClaimedSuccess: Array.from(document.querySelectorAll('.message-code-copy'))[1]?.textContent?.includes('已复制') === true
+})
+'@
+  $failureState = Invoke-BrowserEvalJson -Session $Session -Script $failureStateScript
+  Assert-True ($failureState.statusText -eq '代码复制失败，请手动选择复制。') "clipboard failure did not expose actionable conversation feedback"
+  Assert-True ($failureState.statusTone -eq 'danger') "clipboard failure feedback did not retain danger semantics"
+  Assert-True ($failureState.failedButtonClaimedSuccess -eq $false) "failed clipboard fallback incorrectly reported copied success"
+}
+
+function Assert-ConversationMessageActionHitTesting {
+  param([string]$Session)
+
+  $result = Invoke-BrowserEvalJson -Session $Session -Script @'
+(async () => {
+  const isOnScreen = (element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
+  };
+  const action = Array.from(document.querySelectorAll('.message-action-button'))
+    .find((element) => element instanceof HTMLButtonElement
+      && element.getAttribute('aria-label') === '编辑并从此处继续'
+      && isOnScreen(element));
+  if (!(action instanceof HTMLButtonElement)) return JSON.stringify({ actionFound: false });
+  const card = action.closest('.conversation-item')?.querySelector('.message-card');
+  if (!(card instanceof HTMLElement)) return JSON.stringify({ actionFound: true, cardFound: false });
+  const favorite = action.closest('.conversation-item')?.querySelector('.message-action-button--favorite.is-favorited');
+  const read = (element) => {
+    if (!(element instanceof HTMLButtonElement)) return null;
+    const rect = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return {
+      opacity: Number.parseFloat(getComputedStyle(element).opacity),
+      pointerEvents: getComputedStyle(element).pointerEvents,
+      hitLabel: hit?.closest('button')?.getAttribute('aria-label') || '',
+    };
+  };
+  const inactive = read(action);
+  const favoriteInactive = read(favorite);
+  card.click();
+  await Promise.resolve();
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  const active = read(action);
+  window.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Escape',
+    bubbles: true,
+    cancelable: true,
+  }));
+  await Promise.resolve();
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  return JSON.stringify({
+    actionFound: true,
+    cardFound: true,
+    label: action.getAttribute('aria-label'),
+    favoriteLabel: favorite?.getAttribute('aria-label') || '',
+    inactive,
+    favoriteInactive,
+    active,
+    restored: read(action),
+    favoriteRestored: read(favorite),
+  });
+})()
+'@
+
+  Assert-True ($result.actionFound -eq $true -and $result.cardFound -eq $true) "conversation fixture is missing an on-screen editable message action"
+  Assert-True ([double]$result.inactive.opacity -eq 0) "inactive message action must remain visually hidden"
+  Assert-True ($result.inactive.pointerEvents -eq 'none') "inactive message action must not intercept pointer input"
+  Assert-True ($result.inactive.hitLabel -ne $result.label) "inactive message action center must resolve to the content beneath it"
+  Assert-True ($result.favoriteLabel -eq '取消收藏这条消息') "conversation fixture is missing its always-visible favorited action"
+  Assert-True ([double]$result.favoriteInactive.opacity -eq 1) "favorited action must remain visibly persistent"
+  Assert-True ($result.favoriteInactive.pointerEvents -eq 'auto' -and $result.favoriteInactive.hitLabel -eq $result.favoriteLabel) "visible favorited action must remain pointer-operable"
+  Assert-True ([double]$result.active.opacity -ge 0.89) "activated message action must become visible"
+  Assert-True ($result.active.pointerEvents -eq 'auto') "activated message action must accept pointer input"
+  Assert-True ($result.active.hitLabel -eq $result.label) "activated message action center must resolve to the action button"
+  Assert-True ([double]$result.restored.opacity -eq 0) "Escape must hide the active message action"
+  Assert-True ($result.restored.pointerEvents -eq 'none') "Escape must remove pointer ownership from the hidden message action"
+  Assert-True ($result.restored.hitLabel -ne $result.label) "dismissed message action must no longer own its former hit target"
+  Assert-True ($result.favoriteRestored.pointerEvents -eq 'auto' -and $result.favoriteRestored.hitLabel -eq $result.favoriteLabel) "Escape must not disable the still-visible favorited action"
+  Write-Step ("conversation message-action hit testing -> inactive=" + $result.inactive.pointerEvents + ", active=" + $result.active.pointerEvents + ", restored=" + $result.restored.pointerEvents)
 }
 
 function Read-SidebarFixtureMetrics {
@@ -3402,8 +5167,9 @@ function Read-SidebarFixtureMetrics {
 JSON.stringify((() => {
   const rows = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row'));
   const projectGroups = Array.from(document.querySelectorAll('.sidebar-regression-fixture .project-group'));
-  const firstProjectRows = Array.from(projectGroups[0]?.querySelectorAll('.thread-row') || []);
-  const firstProjectThreadIds = firstProjectRows.map((node) => node.getAttribute('data-thread-id') || '');
+  const codexProjectGroup = projectGroups.find((node) => node.getAttribute('data-project-name') === 'E:/javaword/CXCodex/codexui') || null;
+  const codexProjectRows = Array.from(codexProjectGroup?.querySelectorAll('.thread-row') || []);
+  const codexProjectThreadIds = codexProjectRows.map((node) => node.getAttribute('data-thread-id') || '');
   const emptyProjectGroup = projectGroups.find((node) => node.getAttribute('data-project-name') === 'empty-root') || null;
   const pinnedProjectGroups = projectGroups.filter((node) => node.getAttribute('data-pinned-project') === 'true');
   const showMoreButtons = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-show-more-button'));
@@ -3416,6 +5182,18 @@ JSON.stringify((() => {
   const runningSectionThreadIds = getSectionThreadIds('正在运行');
   const sources = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row-source'));
   const indicators = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-status-indicator'));
+  const threadTitles = rows.map((row) => row.querySelector('.thread-row-title')).filter(Boolean);
+  const runningThreadTitles = rows
+    .filter((row) => row.getAttribute('data-thread-id') === 'fixture-thread-running')
+    .map((row) => row.querySelector('.thread-row-title'))
+    .filter(Boolean);
+  const threadMenuTriggers = rows.map((row) => row.querySelector('.thread-menu-trigger')).filter(Boolean);
+  const threadPinButtons = rows.map((row) => row.querySelector('.thread-pin-button')).filter(Boolean);
+  const projectTitles = projectGroups.map((group) => group.querySelector('.project-title')).filter(Boolean);
+  const attentionBadge = document.querySelector('.sidebar-regression-fixture .sidebar-thread-controls-attention-badge');
+  const attentionButton = attentionBadge?.closest('button') || null;
+  const directoryHeader = document.querySelector('.sidebar-regression-fixture .thread-tree-header');
+  const directorySubtitle = document.querySelector('.sidebar-regression-fixture .thread-tree-header-subtitle');
   const countRowsByThreadId = (threadId) => rows.filter((node) => node.getAttribute('data-thread-id') === threadId).length;
   const countProjectRowsByThreadId = (threadId) => projectGroups.reduce((count, group) => (
     count + group.querySelectorAll(`.thread-row[data-thread-id="${threadId}"]`).length
@@ -3445,6 +5223,7 @@ JSON.stringify((() => {
     return {
       state: node.getAttribute('data-state') || '',
       animationName: style.animationName || 'none',
+      backgroundColor: style.backgroundColor,
       width: Number.parseFloat(style.width || '0'),
       height: Number.parseFloat(style.height || '0')
     };
@@ -3459,23 +5238,32 @@ JSON.stringify((() => {
     || (style.backgroundColor !== 'rgba(0, 0, 0, 0)' && style.backgroundColor !== 'transparent')
   ));
   const workingIndicator = indicatorStyles.find((style) => style.state === 'working') || null;
+  const waitingIndicator = indicatorStyles.find((style) => style.state === 'waiting') || null;
   return {
     rowCount: rows.length,
     projectOrder: projectGroups.map((node) => node.getAttribute('data-project-name') || ''),
     pinnedProjectCount: pinnedProjectGroups.length,
     firstProjectPinned: projectGroups[0]?.getAttribute('data-pinned-project') === 'true',
+    directoryHeaderText: directoryHeader?.textContent?.trim() || '',
+    directorySubtitleText: directorySubtitle?.textContent?.trim() || '',
     hasEmptyWorkspaceProject: !!emptyProjectGroup,
     emptyWorkspaceProjectText: emptyProjectGroup?.textContent?.trim() || '',
     emptyWorkspaceNewThreadButtonCount: emptyProjectGroup?.querySelectorAll('.thread-start-button').length || 0,
     emptyWorkspaceProjectMenuTriggerCount: emptyProjectGroup?.querySelectorAll('.project-menu-trigger').length || 0,
-    firstProjectThreadRowCount: firstProjectRows.length,
-    firstProjectThreadIds,
+    codexProjectThreadRowCount: codexProjectRows.length,
+    codexProjectThreadIds,
     showMoreButtonCount: showMoreButtons.length,
     firstShowMoreText: showMoreButtons[0]?.textContent?.trim() || '',
     pinnedSectionThreadIds,
     runningSectionThreadIds,
     runningThreadRowCount: countRowsByThreadId('fixture-thread-running'),
     runningThreadProjectRowCount: countProjectRowsByThreadId('fixture-thread-running'),
+    waitingThreadRowCount: countRowsByThreadId('fixture-thread-waiting'),
+    backgroundThreadRowCount: countRowsByThreadId('fixture-thread-background'),
+    waitingSourceCount: rows.filter((node) => (
+      node.getAttribute('data-thread-id') === 'fixture-thread-waiting'
+      && (node.querySelector('.thread-row-source')?.textContent || '').trim() === '等待处理'
+    )).length,
     pinnedThreadRowCount: countRowsByThreadId('fixture-thread-unread'),
     pinnedThreadProjectRowCount: countProjectRowsByThreadId('fixture-thread-unread'),
     sourceCount: sources.length,
@@ -3485,6 +5273,29 @@ JSON.stringify((() => {
     maxRowRadius: rowRects.length ? Math.max(...rowRects.map((rect) => rect.radius)) : 0,
     hasPillSourceStyle,
     workingIndicator,
+    waitingIndicator,
+    threadTitleCount: threadTitles.length,
+    threadTitleTooltipCount: threadTitles.filter((node) => node.getAttribute('title') === (node.textContent || '').trim()).length,
+    runningTitleClippedCount: runningThreadTitles.filter((node) => node.scrollWidth > node.clientWidth).length,
+    runningTitleTooltipCount: runningThreadTitles.filter((node) => node.getAttribute('title') === (node.textContent || '').trim()).length,
+    threadMenuTriggerCount: threadMenuTriggers.length,
+    threadMenuAccessibleCount: threadMenuTriggers.filter((node) => {
+      const label = node.getAttribute('aria-label') || '';
+      return label.startsWith('会话操作：') && node.getAttribute('title') === label;
+    }).length,
+    internalThreadMenuKeyCount: threadMenuTriggers.filter((node) => node.getAttribute('title') === 'thread_menu').length,
+    threadPinButtonCount: threadPinButtons.length,
+    exactThreadPinActionCount: rows.filter((row) => {
+      const button = row.querySelector('.thread-pin-button');
+      const title = (row.querySelector('.thread-row-title')?.textContent || '').trim();
+      const expected = `${row.getAttribute('data-pinned') === 'true' ? '取消置顶' : '置顶会话'}：${title}`;
+      return !!button && button.getAttribute('aria-label') === expected && button.getAttribute('title') === expected;
+    }).length,
+    projectTitleCount: projectTitles.length,
+    projectTitleTooltipCount: projectTitles.filter((node) => node.getAttribute('title') === (node.textContent || '').trim()).length,
+    attentionBadgeText: attentionBadge?.textContent?.trim() || '',
+    attentionButtonLabel: attentionButton?.getAttribute('aria-label') || '',
+    attentionBadgeVisible: !!attentionBadge && attentionBadge.getBoundingClientRect().width > 0,
     rowFitFailureCount: rowFitFailures.length,
     hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
     scrollWidth: document.documentElement.scrollWidth,
@@ -3500,43 +5311,59 @@ function Assert-SidebarFixture {
 
   Assert-True ($Metrics.rowCount -ge 4) "sidebar fixture is missing thread rows"
   Assert-True ($Metrics.projectOrder.Count -ge 3) "sidebar fixture is missing project groups"
-  Assert-True ([string]$Metrics.projectOrder[0] -eq "E:/javaword/CXCodex/codexui") "sidebar fixture pinned project is no longer first"
-  Assert-True ([string]$Metrics.projectOrder[1] -eq "E:/javaword/CXCodex/playground") "sidebar fixture recent project did not move ahead of the empty workspace"
+  Assert-True ([string]$Metrics.projectOrder[0] -eq "E:/javaword/CXCodex/playground") "sidebar fixture newest directory is not first"
+  Assert-True ([string]$Metrics.projectOrder[1] -eq "E:/javaword/CXCodex/codexui") "sidebar fixture second-newest directory order drifted"
   Assert-True ([string]$Metrics.projectOrder[2] -eq "empty-root") "sidebar fixture empty workspace should remain after projects with recent conversations"
   Assert-True ([int]$Metrics.pinnedProjectCount -eq 1) "sidebar fixture pinned project marker count is unexpected: $($Metrics.pinnedProjectCount)"
-  Assert-True ($Metrics.firstProjectPinned -eq $true) "sidebar fixture first project is missing pinned project marker"
+  Assert-True ($Metrics.firstProjectPinned -eq $false) "pinned-project metadata must not override recent directory order"
+  Assert-True ([string]$Metrics.directoryHeaderText -eq "目录") "sidebar fixture fixed hierarchy header drifted"
+  Assert-True ([string]$Metrics.directorySubtitleText -eq "最近会话优先") "sidebar fixture recency contract is not visible"
   Assert-True ($Metrics.hasEmptyWorkspaceProject -eq $true) "sidebar fixture filtered out empty workspace-root project"
   Assert-True ([string]$Metrics.emptyWorkspaceProjectText -like "*暂无会话*") "sidebar fixture empty workspace-root project does not show empty state"
   Assert-True ([int]$Metrics.emptyWorkspaceNewThreadButtonCount -eq 0) "sidebar fixture desktop-parity mode should keep the project-level new-thread action in the project menu"
   Assert-True ([int]$Metrics.emptyWorkspaceProjectMenuTriggerCount -eq 1) "sidebar fixture empty workspace-root project is missing its project menu"
-  Assert-True ([int]$Metrics.firstProjectThreadRowCount -eq 5) "sidebar fixture first expanded project should show exactly 5 threads by default, got $($Metrics.firstProjectThreadRowCount)"
-  $expectedFirstProjectThreadIds = @(
+  Assert-True ([int]$Metrics.codexProjectThreadRowCount -eq 5) "sidebar fixture codex directory should show exactly 5 threads by default, got $($Metrics.codexProjectThreadRowCount)"
+  $expectedCodexProjectThreadIds = @(
     "fixture-thread-running",
     "fixture-thread-unread",
     "fixture-thread-idle",
     "fixture-thread-four",
     "fixture-thread-five"
   )
-  for ($index = 0; $index -lt $expectedFirstProjectThreadIds.Count; $index++) {
-    Assert-True ([string]$Metrics.firstProjectThreadIds[$index] -eq $expectedFirstProjectThreadIds[$index]) "sidebar fixture project thread order drifted at index $index; expected $($expectedFirstProjectThreadIds[$index]), got $($Metrics.firstProjectThreadIds[$index])"
+  for ($index = 0; $index -lt $expectedCodexProjectThreadIds.Count; $index++) {
+    Assert-True ([string]$Metrics.codexProjectThreadIds[$index] -eq $expectedCodexProjectThreadIds[$index]) "sidebar fixture directory thread order drifted at index $index; expected $($expectedCodexProjectThreadIds[$index]), got $($Metrics.codexProjectThreadIds[$index])"
   }
   Assert-True ([int]$Metrics.showMoreButtonCount -ge 1) "sidebar fixture is missing show more control for long project thread list"
   Assert-True ([string]$Metrics.firstShowMoreText -eq "显示更多 3 条") "sidebar fixture show more label is unexpected: $($Metrics.firstShowMoreText)"
   Assert-True ([int]$Metrics.pinnedSectionThreadIds.Count -eq 2) "sidebar fixture pinned section should show exactly 2 pinned threads, got $($Metrics.pinnedSectionThreadIds.Count)"
-  Assert-True ([string]$Metrics.pinnedSectionThreadIds[0] -eq "fixture-thread-unread") "sidebar fixture pinned section order drifted at index 0"
-  Assert-True ([string]$Metrics.pinnedSectionThreadIds[1] -eq "fixture-thread-running") "sidebar fixture pinned section order drifted at index 1"
-  Assert-True ([int]$Metrics.runningSectionThreadIds.Count -eq 0) "sidebar fixture running section should not duplicate a pinned running thread"
+  Assert-True ([string]$Metrics.pinnedSectionThreadIds[0] -eq "fixture-thread-running") "sidebar fixture newest pinned conversation is not first"
+  Assert-True ([string]$Metrics.pinnedSectionThreadIds[1] -eq "fixture-thread-unread") "sidebar fixture older pinned conversation order drifted"
+  Assert-True ([int]$Metrics.runningSectionThreadIds.Count -eq 0) "sidebar fixture must not create a parallel running section"
   Assert-True ([int]$Metrics.runningThreadRowCount -eq 2) "sidebar fixture pinned running thread should appear only in pinned section and project list"
   Assert-True ([int]$Metrics.runningThreadProjectRowCount -eq 1) "sidebar fixture running thread is not retained exactly once in project list"
+  Assert-True ([int]$Metrics.waitingThreadRowCount -ge 1) "sidebar fixture is missing the waiting task row"
+  Assert-True ([int]$Metrics.waitingSourceCount -eq [int]$Metrics.waitingThreadRowCount) "sidebar fixture waiting task must use explicit text instead of color alone"
   Assert-True ([int]$Metrics.pinnedThreadRowCount -eq 2) "sidebar fixture pinned thread should appear only in pinned section and project list"
   Assert-True ([int]$Metrics.pinnedThreadProjectRowCount -eq 1) "sidebar fixture pinned thread is not retained exactly once in project list"
-  Assert-True ([int]$Metrics.sourceCount -eq [int]$Metrics.runningThreadRowCount) "sidebar fixture should only keep text metadata for running threads"
+  Assert-True ([int]$Metrics.sourceCount -eq ([int]$Metrics.runningThreadRowCount + [int]$Metrics.waitingThreadRowCount + [int]$Metrics.backgroundThreadRowCount)) "sidebar fixture should only keep text metadata for active threads"
   Assert-True ($Metrics.indicatorCount -ge 2) "sidebar fixture is missing unread/running indicators"
   Assert-True ($Metrics.minRowHeight -ge 40) "sidebar fixture row height is too small: $($Metrics.minRowHeight)"
   Assert-True ($Metrics.maxRowHeight -le 52) "sidebar fixture row height is too large: $($Metrics.maxRowHeight)"
   Assert-True ($Metrics.maxRowRadius -le 10) "sidebar fixture row radius is too large: $($Metrics.maxRowRadius)"
   Assert-True ($Metrics.hasPillSourceStyle -eq $false) "sidebar fixture still renders source/status as pill chips"
   Assert-True ($Metrics.workingIndicator.animationName -notlike "*spin*") "sidebar fixture running indicator still uses spinner animation"
+  Assert-True ($null -ne $Metrics.waitingIndicator) "sidebar fixture is missing the waiting indicator"
+  Assert-True ([string]$Metrics.waitingIndicator.backgroundColor -ne [string]$Metrics.workingIndicator.backgroundColor) "sidebar fixture waiting indicator must remain visually distinct from ordinary running work"
+  Assert-True ([int]$Metrics.threadTitleCount -eq [int]$Metrics.threadTitleTooltipCount) "sidebar fixture does not expose every full thread title on hover"
+  Assert-True ([int]$Metrics.runningTitleClippedCount -eq [int]$Metrics.runningThreadRowCount) "sidebar fixture long-title probe is no longer clipped in every rendered location"
+  Assert-True ([int]$Metrics.runningTitleTooltipCount -eq [int]$Metrics.runningThreadRowCount) "sidebar fixture clipped running title is missing its full-title affordance"
+  Assert-True ([int]$Metrics.threadMenuTriggerCount -eq [int]$Metrics.threadMenuAccessibleCount) "sidebar fixture thread action triggers are missing exact accessible labels"
+  Assert-True ([int]$Metrics.internalThreadMenuKeyCount -eq 0) "sidebar fixture exposed the internal thread_menu key to users"
+  Assert-True ([int]$Metrics.threadPinButtonCount -eq [int]$Metrics.exactThreadPinActionCount) "sidebar fixture direct pin actions do not match their current pinned state and thread title"
+  Assert-True ([int]$Metrics.projectTitleCount -eq [int]$Metrics.projectTitleTooltipCount) "sidebar fixture does not expose every full project title on hover"
+  Assert-True ($Metrics.attentionBadgeVisible -eq $true) "sidebar fixture collapsed control is missing its visible attention badge"
+  Assert-True ([string]$Metrics.attentionBadgeText -eq "2") "sidebar fixture attention badge count is unexpected: $($Metrics.attentionBadgeText)"
+  Assert-True ([string]$Metrics.attentionButtonLabel -eq "展开侧栏，2 个任务需要关注") "sidebar fixture attention control is missing its exact accessible label"
   Assert-True ($Metrics.rowFitFailureCount -eq 0) "sidebar fixture rows overflow viewport"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "sidebar fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
 }
@@ -3547,22 +5374,389 @@ function Assert-SidebarFixtureNewThreadMenu {
   $openScript = @'
 JSON.stringify((() => {
   const trigger = document.querySelector('.project-group[data-project-name="empty-root"] .project-menu-trigger');
-  trigger?.click();
-  return { triggerFound: !!trigger };
+  if (trigger instanceof HTMLElement) trigger.scrollIntoView({ block: 'end' });
+  return { triggerFound: trigger instanceof HTMLElement };
 })())
 '@
   $openState = Invoke-BrowserEvalJson -Session $Session -Script $openScript
   Assert-True ($openState.triggerFound -eq $true) "sidebar fixture empty workspace-root project menu trigger is missing"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const trigger = document.querySelector('.project-group[data-project-name="empty-root"] .project-menu-trigger');
+  if (trigger instanceof HTMLElement) trigger.click();
+  return { clicked: trigger instanceof HTMLElement };
+})())
+'@ | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
   $script = @'
 JSON.stringify({
-  newThreadActionCount: Array.from(document.querySelectorAll('.project-menu-panel .project-menu-item'))
-    .filter((node) => (node.textContent || '').trim() === '新建任务')
-    .length
+  menuCount: document.querySelectorAll('.project-menu-panel').length,
+  itemCount: document.querySelectorAll('.project-menu-panel [role="menuitem"]').length,
+  newThreadActionCount: Array.from(document.querySelectorAll('.project-menu-panel .project-menu-item')).filter((node) => (node.textContent || '').trim() === '新建任务').length,
+  expandedTriggerCount: document.querySelectorAll('.project-menu-trigger[aria-expanded="true"]').length,
+  activeText: document.activeElement?.textContent?.trim() || '',
+  side: document.querySelector('.project-menu-panel')?.getAttribute('data-side') || '',
+  fitsViewport: (() => {
+    const rect = document.querySelector('.project-menu-panel')?.getBoundingClientRect();
+    return !!rect
+      && rect.left >= 7
+      && rect.top >= 7
+      && rect.right <= document.documentElement.clientWidth - 7
+      && rect.bottom <= document.documentElement.clientHeight - 7;
+  })(),
+  hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
 })
 '@
   $state = Invoke-BrowserEvalJson -Session $Session -Script $script
+  Assert-True ([int]$state.menuCount -eq 1) "one project-menu request rendered duplicate panels: $($state.menuCount)"
+  Assert-True ([int]$state.itemCount -eq 3) "shared project menu lost one or more actions: $($state.itemCount)"
   Assert-True ([int]$state.newThreadActionCount -eq 1) "sidebar fixture empty workspace-root project menu is missing new-thread action"
+  Assert-True ([int]$state.expandedTriggerCount -eq 1) "only the exact project trigger may claim the shared open menu"
+  Assert-True ([string]$state.activeText -eq "新建任务") "shared project menu did not move focus to its first action"
+  Assert-True ([string]$state.side -eq "top") "lower project menu did not flip above its viewport anchor"
+  Assert-True ($state.fitsViewport -eq $true) "shared project menu escaped the phone viewport"
+  Assert-True ($state.hasHorizontalOverflow -eq $false) "shared project menu introduced horizontal page overflow"
+
+  $keyboardState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'ArrowDown',
+    bubbles: true,
+    cancelable: true
+  }));
+  return { activeText: document.activeElement?.textContent?.trim() || '' };
+})())
+'@
+  Assert-True ([string]$keyboardState.activeText -eq "修改名称") "ArrowDown did not move focus through the shared project menu"
+
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  if (document.activeElement instanceof HTMLElement) document.activeElement.click();
+  return { clicked: true };
+})())
+'@ | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+  $renameState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const input = document.querySelector('#sidebar-project-rename-input');
+  const rect = document.querySelector('.project-menu-panel')?.getBoundingClientRect();
+  return {
+    inputFocused: input instanceof HTMLElement && document.activeElement === input,
+    inputValue: input instanceof HTMLInputElement ? input.value : '',
+    fitsViewport: !!rect
+      && rect.left >= 7
+      && rect.top >= 7
+      && rect.right <= document.documentElement.clientWidth - 7
+      && rect.bottom <= document.documentElement.clientHeight - 7
+  };
+})())
+'@
+  Assert-True ($renameState.inputFocused -eq $true) "project rename mode did not focus its editable field"
+  Assert-True ([string]$renameState.inputValue -eq "Empty Workspace") "project rename mode did not preserve the current display name"
+  Assert-True ($renameState.fitsViewport -eq $true) "project rename mode escaped the phone viewport after resizing"
+
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Escape',
+    bubbles: true,
+    cancelable: true
+  }));
+  return { dispatched: true };
+})())
+'@ | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+  $closedState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const trigger = document.querySelector('.project-group[data-project-name="empty-root"] .project-menu-trigger');
+  return {
+    menuCount: document.querySelectorAll('.project-menu-panel').length,
+    focusRestored: document.activeElement === trigger
+  };
+})())
+'@
+  Assert-True ([int]$closedState.menuCount -eq 0) "Escape left the shared project menu open"
+  Assert-True ($closedState.focusRestored -eq $true) "Escape did not restore focus to the exact project trigger"
+}
+
+function Assert-SidebarFixtureThreadMenuCollisionHandling {
+  param([string]$Session)
+
+  $openState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const duplicateRows = document.querySelectorAll('[data-thread-id="fixture-thread-running"]');
+  const trigger = document.querySelector('.pinned-section [data-thread-id="fixture-thread-running"] .thread-menu-trigger');
+  if (trigger instanceof HTMLElement) trigger.click();
+  return {
+    duplicateRowCount: duplicateRows.length,
+    triggerFound: trigger instanceof HTMLElement
+  };
+})())
+'@
+  Assert-True ([int]$openState.duplicateRowCount -ge 2) "sidebar fixture must render the pinned thread in more than one collection for collision verification"
+  Assert-True ($openState.triggerFound -eq $true) "sidebar fixture pinned-thread menu trigger is missing"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
+
+  $openMetrics = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const menus = Array.from(document.querySelectorAll('.thread-menu-panel'));
+  const menu = menus[0];
+  const rect = menu?.getBoundingClientRect();
+  const expandedTriggers = Array.from(document.querySelectorAll('.thread-menu-trigger[aria-expanded="true"]'));
+  return {
+    menuCount: menus.length,
+    itemCount: menu?.querySelectorAll('[role="menuitem"]').length || 0,
+    expandedTriggerCount: expandedTriggers.length,
+    activeText: document.activeElement?.textContent?.trim() || '',
+    side: menu?.getAttribute('data-side') || '',
+    fitsViewport: !!rect
+      && rect.left >= 7
+      && rect.top >= 7
+      && rect.right <= document.documentElement.clientWidth - 7
+      && rect.bottom <= document.documentElement.clientHeight - 7,
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  };
+})())
+'@
+  Assert-True ([int]$openMetrics.menuCount -eq 1) "one thread-menu request rendered duplicate panels: $($openMetrics.menuCount)"
+  Assert-True ([int]$openMetrics.itemCount -eq 9) "shared thread menu lost one or more actions: $($openMetrics.itemCount)"
+  Assert-True ([int]$openMetrics.expandedTriggerCount -eq 1) "duplicate thread rows must not all claim the same open menu"
+  Assert-True ([string]$openMetrics.activeText -eq "浏览文件") "shared thread menu did not move focus to its first action"
+  Assert-True ($openMetrics.fitsViewport -eq $true) "shared thread menu escaped the phone viewport"
+  Assert-True ($openMetrics.hasHorizontalOverflow -eq $false) "shared thread menu introduced horizontal page overflow"
+
+  $keyboardState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'ArrowDown',
+    bubbles: true,
+    cancelable: true
+  }));
+  return { activeText: document.activeElement?.textContent?.trim() || '' };
+})())
+'@
+  Assert-True ([string]$keyboardState.activeText -eq "导出会话") "ArrowDown did not move focus through the shared thread menu"
+
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Escape',
+    bubbles: true,
+    cancelable: true
+  }));
+  return { dispatched: true };
+})())
+'@ | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+  $closedState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const trigger = document.querySelector('.pinned-section [data-thread-id="fixture-thread-running"] .thread-menu-trigger');
+  return {
+    menuCount: document.querySelectorAll('.thread-menu-panel').length,
+    focusRestored: document.activeElement === trigger
+  };
+})())
+'@
+  Assert-True ([int]$closedState.menuCount -eq 0) "Escape left the shared thread menu open"
+  Assert-True ($closedState.focusRestored -eq $true) "Escape did not restore focus to the exact duplicate-row trigger"
+
+  $outsideOpenState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const trigger = document.querySelector('.pinned-section [data-thread-id="fixture-thread-running"] .thread-menu-trigger');
+  if (trigger instanceof HTMLElement) trigger.click();
+  return { triggerFound: trigger instanceof HTMLElement };
+})())
+'@
+  Assert-True ($outsideOpenState.triggerFound -eq $true) "sidebar fixture pinned-thread menu trigger is missing before outside-close verification"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  document.body.dispatchEvent(new PointerEvent('pointerdown', {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    pointerType: 'mouse'
+  }));
+  return { dispatched: true };
+})())
+'@ | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+  $outsideClosedState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({ menuCount: document.querySelectorAll('.thread-menu-panel').length })
+'@
+  Assert-True ([int]$outsideClosedState.menuCount -eq 0) "outside pointer interaction left the shared thread menu open"
+
+  $scrolledState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const rows = Array.from(document.querySelectorAll('.project-group .thread-row'));
+  const row = rows.at(-1);
+  row?.scrollIntoView({ block: 'end' });
+  return { rowFound: row instanceof HTMLElement };
+})())
+'@
+  Assert-True ($scrolledState.rowFound -eq $true) "sidebar fixture has no lower project row for menu flip verification"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+  $lowerOpenState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const rows = Array.from(document.querySelectorAll('.project-group .thread-row'));
+  const trigger = rows.at(-1)?.querySelector('.thread-menu-trigger');
+  if (trigger instanceof HTMLElement) trigger.click();
+  return { triggerFound: trigger instanceof HTMLElement };
+})())
+'@
+  Assert-True ($lowerOpenState.triggerFound -eq $true) "sidebar fixture lower thread menu trigger is missing"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
+  $lowerMetrics = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const menu = document.querySelector('.thread-menu-panel');
+  const rect = menu?.getBoundingClientRect();
+  return {
+    menuCount: document.querySelectorAll('.thread-menu-panel').length,
+    side: menu?.getAttribute('data-side') || '',
+    fitsViewport: !!rect
+      && rect.left >= 7
+      && rect.top >= 7
+      && rect.right <= document.documentElement.clientWidth - 7
+      && rect.bottom <= document.documentElement.clientHeight - 7
+  };
+})())
+'@
+  Assert-True ([int]$lowerMetrics.menuCount -eq 1) "lower thread row rendered more than one menu"
+  Assert-True ([string]$lowerMetrics.side -eq "top") "lower thread menu did not flip above its viewport anchor"
+  Assert-True ($lowerMetrics.fitsViewport -eq $true) "flipped lower thread menu escaped the phone viewport"
+
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Escape',
+    bubbles: true,
+    cancelable: true
+  }));
+  return { dispatched: true };
+})())
+'@ | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
+}
+
+function Assert-SidebarFixtureProjectScrollAnchor {
+  param([string]$Session)
+
+  $before = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const scroll = document.querySelector('.sidebar-regression-tree');
+  const playground = document.querySelector('[data-project-name="E:/javaword/CXCodex/playground"]');
+  const promote = document.querySelector('[data-regression-action="promote-background-project"]');
+  if (!(scroll instanceof HTMLElement) || !(playground instanceof HTMLElement) || !(promote instanceof HTMLButtonElement)) {
+    return { ready: false };
+  }
+  scroll.scrollTop = 220;
+  const viewport = scroll.getBoundingClientRect();
+  return {
+    ready: true,
+    scrollTop: scroll.scrollTop,
+    playgroundTop: playground.getBoundingClientRect().top - viewport.top,
+    projectOrder: Array.from(scroll.querySelectorAll('.project-group')).map((node) => node.getAttribute('data-project-name') || '')
+  };
+})())
+'@
+  Assert-True ($before.ready -eq $true) "sidebar fixture scroll-anchor probe is not ready"
+  Assert-True ([string]$before.projectOrder[0] -eq "E:/javaword/CXCodex/playground") "sidebar fixture scroll-anchor baseline order drifted"
+
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const promote = document.querySelector('[data-regression-action="promote-background-project"]');
+  promote?.click();
+  return { clicked: promote instanceof HTMLButtonElement };
+})())
+'@ | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "350") | Out-Null
+
+  $after = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const scroll = document.querySelector('.sidebar-regression-tree');
+  const playground = document.querySelector('[data-project-name="E:/javaword/CXCodex/playground"]');
+  const viewport = scroll?.getBoundingClientRect();
+  return {
+    scrollTop: scroll?.scrollTop || 0,
+    playgroundTop: playground && viewport ? playground.getBoundingClientRect().top - viewport.top : Number.NaN,
+    projectOrder: Array.from(document.querySelectorAll('.sidebar-regression-tree .project-group')).map((node) => node.getAttribute('data-project-name') || ''),
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  };
+})())
+'@
+  Assert-True ([string]$after.projectOrder[0] -eq "empty-root") "background materialization did not promote the updated workspace"
+  Assert-True ([string]$after.projectOrder[1] -eq "E:/javaword/CXCodex/playground") "background materialization lost the previously visible project"
+  Assert-True ([Math]::Abs([double]$after.playgroundTop - [double]$before.playgroundTop) -le 1.5) "background project reorder moved the visible anchor by $([Math]::Round([double]$after.playgroundTop - [double]$before.playgroundTop, 2)) px"
+  Assert-True ([double]$after.scrollTop -gt [double]$before.scrollTop) "sidebar did not compensate scroll position for the promoted workspace"
+  Assert-True ($after.hasHorizontalOverflow -eq $false) "sidebar scroll anchoring introduced horizontal page overflow"
+}
+
+function Assert-SidebarFixtureCurrentThreadReveal {
+  param([string]$Session)
+
+  $before = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const scroll = document.querySelector('.sidebar-regression-tree');
+  const selectedProject = document.querySelector('.sidebar-regression-tree .project-group[data-project-name="E:/javaword/CXCodex/codexui"]');
+  const action = document.querySelector('[data-regression-action="reveal-current-thread"]');
+  if (!(scroll instanceof HTMLElement) || !(action instanceof HTMLButtonElement)) {
+    return { ready: false };
+  }
+  scroll.scrollTop = 0;
+  return {
+    ready: true,
+    activeMounted: document.querySelector('.sidebar-regression-tree .thread-row[data-active="true"]') !== null,
+    renderedProjectRows: selectedProject?.querySelectorAll('.thread-row').length || 0,
+    scrollTop: scroll.scrollTop
+  };
+})())
+'@
+  Assert-True ($before.ready -eq $true) "sidebar current-thread reveal fixture is not ready"
+  Assert-True ($before.activeMounted -eq $false) "sidebar current-thread fixture target must begin outside the five-row preview"
+  Assert-True ([int]$before.renderedProjectRows -eq 5) "sidebar current-thread fixture preview baseline drifted"
+
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const action = document.querySelector('[data-regression-action="reveal-current-thread"]');
+  action?.click();
+  return { clicked: action instanceof HTMLButtonElement };
+})())
+'@ | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "650") | Out-Null
+
+  $after = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const scroll = document.querySelector('.sidebar-regression-tree');
+  const row = document.querySelector('.sidebar-regression-tree .thread-row[data-active="true"]');
+  const selectedProject = document.querySelector('.sidebar-regression-tree .project-group[data-project-name="E:/javaword/CXCodex/codexui"]');
+  const viewport = scroll?.getBoundingClientRect();
+  const bounds = row?.getBoundingClientRect();
+  return {
+    activeThreadId: row?.getAttribute('data-thread-id') || '',
+    renderedProjectRows: selectedProject?.querySelectorAll('.thread-row').length || 0,
+    moreLabel: selectedProject?.querySelector('.thread-show-more-button')?.textContent?.trim() || '',
+    scrollTop: scroll?.scrollTop || 0,
+    visible: !!viewport && !!bounds && bounds.top >= viewport.top && bounds.bottom <= viewport.bottom,
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  };
+})())
+'@
+  Assert-True ([string]$after.activeThreadId -eq "fixture-thread-eight") "current-thread reveal did not mount the selected hidden conversation"
+  Assert-True ([int]$after.renderedProjectRows -eq 8 -and [string]$after.moreLabel -eq "收起") "current-thread reveal did not expand the truncated project preview"
+  Assert-True ([double]$after.scrollTop -gt 0 -and $after.visible -eq $true) "current-thread reveal did not scroll the selected row into view"
+  Assert-True ($after.hasHorizontalOverflow -eq $false) "current-thread reveal introduced horizontal page overflow"
+
+  $manual = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const scroll = document.querySelector('.sidebar-regression-tree');
+  if (scroll instanceof HTMLElement) scroll.scrollTop = 0;
+  return { scrollTop: scroll?.scrollTop || 0 };
+})())
+'@
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "250") | Out-Null
+  $settled = Invoke-BrowserEvalJson -Session $Session -Script "JSON.stringify({ scrollTop: document.querySelector('.sidebar-regression-tree')?.scrollTop || 0 })"
+  Assert-True ([double]$manual.scrollTop -eq 0 -and [double]$settled.scrollTop -eq 0) "current-thread reveal must not auto-snap after later user-owned scrolling"
 }
 
 function Assert-SidebarFixtureStaleSearchMerge {
@@ -3581,6 +5775,58 @@ JSON.stringify((() => {
   Assert-True (@($state.threadIds) -contains "fixture-thread-six") "sidebar stale server search result suppressed a current local title match"
   Assert-True (@($state.threadIds) -contains "fixture-thread-unread") "sidebar stale-search fixture lost the server-index match"
   Assert-True ($state.hasHorizontalOverflow -eq $false) "sidebar stale-search fixture has horizontal overflow"
+}
+
+function Assert-SidebarFixtureSearchContinuity {
+  param([string]$Session)
+
+  $readState = {
+    Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  threadIds: Array.from(document.querySelectorAll('.project-group .thread-row')).map((node) => node.getAttribute('data-thread-id') || ''),
+  noResultsVisible: document.querySelector('.thread-tree-no-results') !== null,
+  hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+})
+'@
+  }
+
+  $held = & $readState
+  Assert-True (@($held.threadIds) -contains "fixture-thread-unread") "sidebar search did not hold the compatible prefix result"
+  Assert-True (@($held.threadIds) -contains "fixture-thread-six") "sidebar search lost the current local-title match while holding prefix results"
+
+  $divergeAction = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const button = document.querySelector('[data-regression-action="diverge-search-query"]');
+  button?.click();
+  return { clicked: button instanceof HTMLButtonElement };
+})())
+'@
+  Assert-True ($divergeAction.clicked -eq $true) "sidebar search continuity fixture diverge action is unavailable"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "80") | Out-Null
+  $diverged = & $readState
+  Assert-True (-not (@($diverged.threadIds) -contains "fixture-thread-unread")) "sidebar search kept an unrelated stale server result after the query diverged"
+  Assert-True (@($diverged.threadIds) -contains "fixture-thread-idle") "sidebar search did not fall back to the current local-title match"
+  Assert-True ($diverged.noResultsVisible -eq $false) "sidebar search flashed an empty state despite a current local-title match"
+
+  $restoreAction = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const button = document.querySelector('[data-regression-action="restore-search-prefix"]');
+  button?.click();
+  return { clicked: button instanceof HTMLButtonElement };
+})())
+'@
+  Assert-True ($restoreAction.clicked -eq $true) "sidebar search continuity fixture restore action is unavailable"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "80") | Out-Null
+  $restored = & $readState
+  Assert-True (@($restored.threadIds) -contains "fixture-thread-unread") "sidebar search did not restore the compatible held result"
+  Assert-True (@($restored.threadIds) -contains "fixture-thread-six") "sidebar search did not restore the current local-title match"
+  Assert-True ($restored.noResultsVisible -eq $false) "sidebar search showed an empty state after restoring the compatible prefix"
+  Assert-True ($held.hasHorizontalOverflow -eq $false -and $diverged.hasHorizontalOverflow -eq $false -and $restored.hasHorizontalOverflow -eq $false) "sidebar search continuity fixture has horizontal overflow"
+  Write-Step ("sidebar search continuity -> " + (@{
+    held = @($held.threadIds)
+    diverged = @($diverged.threadIds)
+    restored = @($restored.threadIds)
+  } | ConvertTo-Json -Compress))
 }
 
 function Read-ComposerFixtureMetrics {
@@ -3631,6 +5877,8 @@ JSON.stringify((() => {
     hasDictationHelper: !!dictationStatusText,
     hasDictationProbe: !!dictationProbe,
     inputValue: input?.value || '',
+    inputPlaceholder: input?.getAttribute('placeholder') || '',
+    inputAriaLabel: input?.getAttribute('aria-label') || '',
     submitCount: Number.parseInt(submitCount?.textContent || '0', 10),
     dictationHelperText: dictationStatusText?.textContent?.trim() || '',
     shellWidth: shellRect ? Math.round(shellRect.width) : 0,
@@ -3668,6 +5916,8 @@ function Assert-ComposerFixture {
   Assert-True ($Metrics.hasForm -eq $true) "$ViewportName composer fixture is missing form"
   Assert-True ($Metrics.hasShell -eq $true) "$ViewportName composer fixture is missing shell"
   Assert-True ($Metrics.hasInput -eq $true) "$ViewportName composer fixture is missing input"
+  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$Metrics.inputAriaLabel)) "$ViewportName composer input is missing an accessible name"
+  Assert-True ([string]$Metrics.inputAriaLabel -eq [string]$Metrics.inputPlaceholder) "$ViewportName composer accessible name drifted from its current placeholder"
   Assert-True ($Metrics.hasAttach -eq $true) "$ViewportName composer fixture is missing attach trigger"
   Assert-True ($Metrics.hasRuntime -eq $true) "$ViewportName composer fixture is missing runtime trigger"
   Assert-True ($Metrics.hasMic -eq $true) "$ViewportName composer fixture is missing dictation button"
@@ -3690,22 +5940,516 @@ function Assert-ComposerFixture {
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "$ViewportName composer fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
 }
 
-function Invoke-ComposerDictationProbe {
+function Assert-ComposerAutoGrow {
+  param(
+    [string]$Session,
+    [string]$ViewportName
+  )
+
+  $result = Invoke-BrowserEvalJson -Session $Session -Script @'
+(async () => {
+  const input = document.querySelector('.composer-regression-fixture .thread-composer-input');
+  const expand = document.querySelector('.composer-regression-fixture .thread-composer-expand');
+  const shell = document.querySelector('.composer-regression-fixture .thread-composer-shell');
+  if (!(input instanceof HTMLTextAreaElement) || !(expand instanceof HTMLButtonElement) || !(shell instanceof HTMLElement)) {
+    return JSON.stringify({ inputFound: false });
+  }
+  const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  const settle = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const setValue = async (value) => {
+    valueSetter?.call(input, value);
+    input.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      inputType: value ? 'insertText' : 'deleteContentBackward',
+      data: value || null,
+    }));
+    await settle();
+    return {
+      clientHeight: input.clientHeight,
+      scrollHeight: input.scrollHeight,
+    };
+  };
+
+  const initial = await setValue('');
+  const multiline = await setValue(['第一行', '第二行', '第三行', '第四行', '第五行'].join('\n'));
+  const capped = await setValue(Array.from({ length: 20 }, (_, index) => `第 ${index + 1} 行内容`).join('\n'));
+  const shrunk = await setValue('');
+  expand.click();
+  await settle();
+  const expanded = {
+    inputHeight: input.clientHeight,
+    shellHeight: shell.clientHeight,
+    active: shell.classList.contains('thread-composer-shell--expanded'),
+  };
+  expand.click();
+  await settle();
+
+  return JSON.stringify({
+    inputFound: true,
+    supported: CSS.supports('field-sizing', 'content'),
+    fieldSizing: getComputedStyle(input).fieldSizing,
+    initial,
+    multiline,
+    capped,
+    shrunk,
+    expanded,
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+  });
+})()
+'@
+
+  Assert-True ($result.inputFound -eq $true) "$ViewportName composer auto-grow probe could not find its input"
+  Assert-True ($result.supported -eq $true) "$ViewportName regression browser does not support field-sizing: content"
+  Assert-True ($result.fieldSizing -eq 'content') "$ViewportName composer did not enable content-driven field sizing"
+  Assert-True ([int]$result.multiline.clientHeight -ge [int]$result.initial.clientHeight + 40) "$ViewportName composer did not grow for five lines: $($result.initial.clientHeight) -> $($result.multiline.clientHeight)"
+  Assert-True ([int]$result.multiline.scrollHeight -le [int]$result.multiline.clientHeight + 1) "$ViewportName five-line composer scrolled before reaching its height cap"
+  Assert-True ([int]$result.capped.clientHeight -ge [int]$result.multiline.clientHeight) "$ViewportName composer shrank while content grew"
+  Assert-True ([int]$result.capped.clientHeight -le 132) "$ViewportName composer exceeded its compact 8rem cap: $($result.capped.clientHeight)"
+  Assert-True ([int]$result.capped.scrollHeight -gt [int]$result.capped.clientHeight + 100) "$ViewportName long composer content did not retain bounded internal scrolling"
+  Assert-True ([int]$result.shrunk.clientHeight -le [int]$result.initial.clientHeight + 1) "$ViewportName composer did not shrink after clearing: $($result.shrunk.clientHeight)"
+  Assert-True ($result.expanded.active -eq $true -and [int]$result.expanded.inputHeight -gt [int]$result.capped.clientHeight) "$ViewportName half-screen composer no longer overrides compact auto-grow"
+  Assert-True ($result.hasHorizontalOverflow -eq $false) "$ViewportName composer auto-grow introduced horizontal overflow"
+  Write-Step ("composer auto-grow ($ViewportName) -> " + (@{
+    initial = [int]$result.initial.clientHeight
+    multiline = [int]$result.multiline.clientHeight
+    capped = [int]$result.capped.clientHeight
+    longScrollHeight = [int]$result.capped.scrollHeight
+    shrunk = [int]$result.shrunk.clientHeight
+    expanded = [int]$result.expanded.inputHeight
+  } | ConvertTo-Json -Compress))
+}
+
+function Assert-ComposerEnterDefault {
+  param(
+    [string]$Session,
+    [bool]$ExpectEnterSubmit,
+    [string]$ViewportName
+  )
+
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'fill', '.thread-composer-input', '第一行') | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'press', 'Enter') | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '80') | Out-Null
+  $afterValue = Invoke-AgentBrowserJson -Arguments @('--session', $Session, 'get', 'value', '.thread-composer-input')
+  $afterCount = Invoke-AgentBrowserJson -Arguments @('--session', $Session, 'get', 'text', '.composer-regression-submit-count')
+  $afterBox = Invoke-AgentBrowserJson -Arguments @('--session', $Session, 'get', 'box', '.thread-composer-input')
+  Invoke-AgentBrowserJson -Arguments @('--session', $Session, 'keyboard', 'type', '焦点保留') | Out-Null
+  $afterFocusProbe = Invoke-AgentBrowserJson -Arguments @('--session', $Session, 'get', 'value', '.thread-composer-input')
+
+  if ($ExpectEnterSubmit) {
+    Assert-True ([int]$afterCount.text -eq 1) "$ViewportName default Enter did not submit"
+    Assert-True ([string]$afterValue.value -eq '') "$ViewportName submitted Composer did not clear its draft"
+    Assert-True ([string]$afterFocusProbe.value -eq '焦点保留') "$ViewportName desktop Composer did not retain keyboard focus after Enter submit"
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'fill', '.thread-composer-input', '') | Out-Null
+  } else {
+    Assert-True ([int]$afterCount.text -eq 0) "$ViewportName default Enter submitted instead of inserting a line break"
+    Assert-True ([string]$afterValue.value -eq "第一行`n") "$ViewportName default Enter did not append one line break: $($afterValue.value | ConvertTo-Json -Compress)"
+    Assert-True ([double]$afterBox.height -gt 32) "$ViewportName line break did not grow the Composer"
+    Assert-True ([string]$afterFocusProbe.value -eq "第一行`n焦点保留") "$ViewportName line break moved focus away from the Composer"
+
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'press', 'Control+Enter') | Out-Null
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '80') | Out-Null
+    $afterShortcutCount = Invoke-AgentBrowserJson -Arguments @('--session', $Session, 'get', 'text', '.composer-regression-submit-count')
+    $afterShortcutValue = Invoke-AgentBrowserJson -Arguments @('--session', $Session, 'get', 'value', '.thread-composer-input')
+    Assert-True ([int]$afterShortcutCount.text -eq 1) "$ViewportName Ctrl+Enter fallback did not submit"
+    Assert-True ([string]$afterShortcutValue.value -eq '') "$ViewportName Ctrl+Enter submit did not clear its draft"
+  }
+
+  Write-Step ("composer Enter default ($ViewportName) -> " + (@{
+    enter = if ($ExpectEnterSubmit) { 'submit' } else { 'newline' }
+    ctrlEnter = if ($ExpectEnterSubmit) { 'not-probed' } else { 'submit' }
+    enterHeight = [Math]::Round([double]$afterBox.height)
+  } | ConvertTo-Json -Compress))
+}
+
+function Assert-ComposerSheetEnvironmentOwnership {
+  param(
+    [string]$Session,
+    [bool]$ExpectModal,
+    [string]$ViewportName
+  )
+
+  $cases = @(
+    @{
+      Name = 'attachment'
+      Trigger = '.thread-composer-attach-trigger'
+      Panel = '.thread-composer-attach-menu'
+      PanelId = 'thread-composer-attach-menu'
+    },
+    @{
+      Name = 'runtime'
+      Trigger = '.thread-composer-runtime-trigger'
+      Panel = '.thread-composer-runtime-panel'
+      PanelId = 'thread-composer-runtime-panel'
+    }
+  )
+  $results = @()
+
+  foreach ($case in $cases) {
+    $triggerSelector = $case.Trigger | ConvertTo-Json -Compress
+    $panelSelector = $case.Panel | ConvertTo-Json -Compress
+    $panelId = $case.PanelId
+    $overflowBefore = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({ value: document.body.style.overflow })
+'@
+
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'click', $case.Trigger) | Out-Null
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+    $opened = Invoke-BrowserEvalJson -Session $Session -Script @"
+JSON.stringify((() => {
+  const trigger = document.querySelector($triggerSelector);
+  const panel = document.querySelector($panelSelector);
+  return {
+    panelCount: document.querySelectorAll($panelSelector).length,
+    panelContainsFocus: !!panel && panel.contains(document.activeElement),
+    bodyOverflow: document.body.style.overflow,
+    ariaModal: panel?.getAttribute('aria-modal') || '',
+    triggerExpanded: trigger?.getAttribute('aria-expanded') || '',
+    triggerHasPopup: trigger?.getAttribute('aria-haspopup') || '',
+    triggerControls: trigger?.getAttribute('aria-controls') || ''
+  };
+})())
+"@
+    Assert-True ([int]$opened.panelCount -eq 1) "$ViewportName $($case.Name) composer panel did not open"
+    Assert-True ($opened.panelContainsFocus -eq $true) "$ViewportName $($case.Name) composer panel did not receive initial focus"
+    Assert-True ($opened.triggerExpanded -eq 'true') "$ViewportName $($case.Name) composer trigger did not expose its open state"
+    Assert-True ($opened.triggerHasPopup -eq 'dialog') "$ViewportName $($case.Name) composer trigger lost dialog semantics"
+    Assert-True ($opened.triggerControls -eq $panelId) "$ViewportName $($case.Name) composer trigger does not identify its panel"
+    if ($case.Name -eq 'runtime') {
+      $reasoningOptions = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const section = Array.from(document.querySelectorAll('.thread-composer-runtime-section'))
+    .find((row) => row.querySelector('.thread-composer-runtime-section-title')?.textContent?.trim() === '质量');
+  const labels = Array.from(section?.querySelectorAll('button') || [])
+    .map((button) => button.textContent?.trim() || button.getAttribute('aria-label')?.trim() || '');
+  return {
+    count: labels.length,
+    labels,
+    unnamedCount: labels.filter((label) => !label).length
+  };
+})())
+'@
+      Assert-True ([int]$reasoningOptions.count -eq 6) "$ViewportName runtime fixture must expose all six current selectable reasoning levels"
+      Assert-True ([int]$reasoningOptions.unnamedCount -eq 0) "$ViewportName runtime panel exposed an unnamed reasoning-level button"
+      Assert-True ($reasoningOptions.labels -contains '最高' -and $reasoningOptions.labels -contains '极致') "$ViewportName runtime panel must label max and ultra distinctly"
+    }
+
+    $forwardContained = $false
+    $backwardContained = $false
+    $outsideFocusReclaimed = $false
+    $outsideFocusAllowed = $false
+    $nestedSkillOwned = $false
+    if ($ExpectModal) {
+      Assert-True ($opened.ariaModal -eq 'true') "$ViewportName $($case.Name) compact composer sheet is not exposed as modal"
+      Assert-True ($opened.bodyOverflow -eq 'hidden') "$ViewportName $($case.Name) compact composer sheet did not lock background scrolling"
+
+      Invoke-AgentBrowser -Arguments @('--session', $Session, 'press', 'Shift+Tab') | Out-Null
+      $backward = Invoke-BrowserEvalJson -Session $Session -Script @"
+JSON.stringify({ contained: document.querySelector($panelSelector)?.contains(document.activeElement) === true })
+"@
+      $backwardContained = $backward.contained -eq $true
+      Assert-True $backwardContained "$ViewportName $($case.Name) compact composer sheet allowed Shift+Tab to escape"
+
+      Invoke-AgentBrowser -Arguments @('--session', $Session, 'press', 'Tab') | Out-Null
+      $forward = Invoke-BrowserEvalJson -Session $Session -Script @"
+JSON.stringify({ contained: document.querySelector($panelSelector)?.contains(document.activeElement) === true })
+"@
+      $forwardContained = $forward.contained -eq $true
+      Assert-True $forwardContained "$ViewportName $($case.Name) compact composer sheet allowed Tab to escape"
+
+      $externalFocus = Invoke-BrowserEvalJson -Session $Session -Script @"
+JSON.stringify((() => {
+  const background = document.querySelector('[data-composer-regression-background-focus]');
+  background?.focus();
+  const panel = document.querySelector($panelSelector);
+  return {
+    panelCount: document.querySelectorAll($panelSelector).length,
+    contained: !!panel && panel.contains(document.activeElement),
+    backgroundFocused: document.activeElement === background
+  };
+})())
+"@
+      $outsideFocusReclaimed = $externalFocus.contained -eq $true -and $externalFocus.backgroundFocused -eq $false
+      Assert-True ($externalFocus.panelCount -eq 1 -and $outsideFocusReclaimed) "$ViewportName $($case.Name) compact composer sheet allowed focus to escape to the background"
+      if ($case.Name -eq 'attachment') {
+        Invoke-AgentBrowser -Arguments @('--session', $Session, 'click', '.search-dropdown-trigger') | Out-Null
+        Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+        $nestedOpen = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const search = document.querySelector('.search-dropdown-search');
+  document.querySelector('[data-composer-regression-background-focus]')?.focus();
+  return {
+    dialogCount: document.querySelectorAll('.search-dropdown-mobile-dialog').length,
+    ariaModal: document.querySelector('.search-dropdown-mobile-dialog')?.getAttribute('aria-modal') || '',
+    searchFocused: document.activeElement === search,
+    bodyOverflow: document.body.style.overflow
+  };
+})())
+'@
+        Assert-True ([int]$nestedOpen.dialogCount -eq 1 -and $nestedOpen.ariaModal -eq 'true') "$ViewportName nested skill selector did not expose its compact modal boundary"
+        Assert-True ($nestedOpen.searchFocused -eq $true) "$ViewportName nested skill selector allowed focus to escape"
+        Assert-True ($nestedOpen.bodyOverflow -eq 'hidden') "$ViewportName nested skill selector released the outer composer scroll lock"
+        Invoke-AgentBrowser -Arguments @('--session', $Session, 'press', 'Escape') | Out-Null
+        Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+        $nestedClosed = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  dialogCount: document.querySelectorAll('.search-dropdown-mobile-dialog').length,
+  attachmentCount: document.querySelectorAll('.thread-composer-attach-menu').length,
+  triggerFocused: document.activeElement === document.querySelector('.search-dropdown-trigger'),
+  bodyOverflow: document.body.style.overflow
+})
+'@
+        $nestedSkillOwned = [int]$nestedClosed.dialogCount -eq 0 -and [int]$nestedClosed.attachmentCount -eq 1 -and $nestedClosed.triggerFocused -eq $true -and $nestedClosed.bodyOverflow -eq 'hidden'
+        Assert-True $nestedSkillOwned "$ViewportName nested skill selector did not restore focus while preserving the attachment sheet"
+        Save-RegressionScreenshot -Session $Session -Name 'composer-compact-sheet-focus-ownership-phone' | Out-Null
+      }
+    } else {
+      Assert-True ([string]::IsNullOrEmpty([string]$opened.ariaModal)) "$ViewportName $($case.Name) desktop composer popover incorrectly claims modal semantics"
+      Assert-True ($opened.bodyOverflow -eq $overflowBefore.value) "$ViewportName $($case.Name) desktop composer popover incorrectly locked body scrolling"
+      $externalFocus = Invoke-BrowserEvalJson -Session $Session -Script @"
+JSON.stringify((() => {
+  const background = document.querySelector('[data-composer-regression-background-focus]');
+  background?.focus();
+  return {
+    panelCount: document.querySelectorAll($panelSelector).length,
+    backgroundFocused: document.activeElement === background
+  };
+})())
+"@
+      $outsideFocusAllowed = $externalFocus.panelCount -eq 1 -and $externalFocus.backgroundFocused -eq $true
+      Assert-True $outsideFocusAllowed "$ViewportName $($case.Name) desktop composer popover unexpectedly trapped background focus"
+    }
+
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'press', 'Escape') | Out-Null
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+    $closed = Invoke-BrowserEvalJson -Session $Session -Script @"
+JSON.stringify((() => {
+  const trigger = document.querySelector($triggerSelector);
+  return {
+    panelCount: document.querySelectorAll($panelSelector).length,
+    triggerFocused: document.activeElement === trigger,
+    triggerExpanded: trigger?.getAttribute('aria-expanded') || '',
+    bodyOverflow: document.body.style.overflow
+  };
+})())
+"@
+    Assert-True ([int]$closed.panelCount -eq 0) "$ViewportName $($case.Name) composer panel remained open after Escape"
+    Assert-True ($closed.triggerFocused -eq $true) "$ViewportName $($case.Name) composer panel did not restore focus to its opener"
+    Assert-True ($closed.triggerExpanded -eq 'false') "$ViewportName $($case.Name) composer trigger did not expose its closed state"
+    Assert-True ($closed.bodyOverflow -eq $overflowBefore.value) "$ViewportName $($case.Name) composer panel did not restore background scrolling"
+
+    $results += [pscustomobject]@{
+      panel = $case.Name
+      modal = $ExpectModal
+      backwardTabContained = $backwardContained
+      forwardTabContained = $forwardContained
+      outsideFocusReclaimed = $outsideFocusReclaimed
+      outsideFocusAllowed = $outsideFocusAllowed
+      nestedSkillOwned = $nestedSkillOwned
+      openerFocusRestored = $true
+      bodyScrollRestored = $true
+    }
+  }
+
+  Write-Step ("composer sheet environment ownership ($ViewportName) -> " + ($results | ConvertTo-Json -Compress))
+}
+
+function Read-CommandMenuTypeAheadMetrics {
   param([string]$Session)
 
   $script = @'
 JSON.stringify((() => {
-  const button = document.querySelector('.composer-regression-fixture .composer-regression-dictation-insert');
-  if (button instanceof HTMLElement) {
-    button.click();
-    return { clicked: true };
-  }
-  return { clicked: false };
+  const input = document.querySelector('.command-menu-input');
+  const results = Array.from(document.querySelectorAll('.command-menu-result'))
+    .filter((row) => row.querySelector('.command-menu-result-icon--file'));
+  const activeId = input?.getAttribute('aria-activedescendant') || '';
+  const activeRow = activeId ? document.getElementById(activeId) : null;
+  return {
+    query: input instanceof HTMLInputElement ? input.value : '',
+    focused: document.activeElement === input,
+    busy: document.querySelector('.command-menu-results')?.getAttribute('aria-busy') === 'true',
+    fileCount: results.length,
+    filePaths: results.map((row) => row.querySelector('.command-menu-result-detail')?.textContent?.trim() || ''),
+    loadingPanelCount: document.querySelectorAll('.command-menu-empty--files .command-menu-loading-indicator').length,
+    activeId,
+    activeRowConnected: activeRow?.isConnected === true,
+    activeRowIsFile: activeRow?.querySelector('.command-menu-result-icon--file') != null,
+  };
 })())
 '@
-  $result = Invoke-BrowserEvalJson -Session $Session -Script $script
-  Assert-True ($result.clicked -eq $true) "composer dictation regression probe could not be clicked"
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-CommandMenuModalFocusOwnership {
+  param([string]$Session)
+
+  $opened = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const launcher = document.querySelector('[data-command-menu-regression-launch]');
+  const overflowBefore = document.body.style.overflow;
+  if (launcher instanceof HTMLButtonElement) {
+    launcher.focus();
+    launcher.click();
+  }
+  return { clicked: launcher instanceof HTMLButtonElement, overflowBefore };
+})())
+'@
+  Assert-True ($opened.clicked -eq $true) "command-menu focus fixture is missing its launcher"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+
+  $visible = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const panel = document.querySelector('.command-menu-panel');
+  const input = document.querySelector('.command-menu-input');
+  return {
+    panelCount: document.querySelectorAll('.command-menu-panel').length,
+    inputFocused: document.activeElement === input,
+    panelContainsFocus: !!panel && panel.contains(document.activeElement),
+    bodyOverflow: document.body.style.overflow
+  };
+})())
+'@
+  Assert-True ([int]$visible.panelCount -eq 1) "command-menu focus fixture did not open the dialog"
+  Assert-True ($visible.inputFocused -eq $true -and $visible.panelContainsFocus -eq $true) "command menu did not move initial focus into its search field"
+  Assert-True ($visible.bodyOverflow -eq 'hidden') "command menu did not lock background scrolling"
+
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'press', 'Tab') | Out-Null
+  $forwardWrap = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  inputFocused: document.activeElement === document.querySelector('.command-menu-input'),
+  panelContainsFocus: document.querySelector('.command-menu-panel')?.contains(document.activeElement) === true
+})
+'@
+  Assert-True ($forwardWrap.inputFocused -eq $true -and $forwardWrap.panelContainsFocus -eq $true) "Tab escaped the command-menu dialog"
+
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'press', 'Shift+Tab') | Out-Null
+  $backwardWrap = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  inputFocused: document.activeElement === document.querySelector('.command-menu-input'),
+  panelContainsFocus: document.querySelector('.command-menu-panel')?.contains(document.activeElement) === true
+})
+'@
+  Assert-True ($backwardWrap.inputFocused -eq $true -and $backwardWrap.panelContainsFocus -eq $true) "Shift+Tab escaped the command-menu dialog"
+
+  $externalFocus = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  document.querySelector('[data-command-menu-regression-launch]')?.focus();
+  return {
+    inputFocused: document.activeElement === document.querySelector('.command-menu-input'),
+    panelContainsFocus: document.querySelector('.command-menu-panel')?.contains(document.activeElement) === true
+  };
+})())
+'@
+  Assert-True ($externalFocus.inputFocused -eq $true -and $externalFocus.panelContainsFocus -eq $true) "command menu allowed programmatic focus to escape to the background page"
+
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'press', 'Escape') | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+  $closed = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  panelCount: document.querySelectorAll('.command-menu-panel').length,
+  launcherFocused: document.activeElement === document.querySelector('[data-command-menu-regression-launch]'),
+  bodyOverflow: document.body.style.overflow
+})
+'@
+  Assert-True ([int]$closed.panelCount -eq 0) "Escape left the command menu open"
+  Assert-True ($closed.launcherFocused -eq $true) "closing the command menu did not restore focus to its opener"
+  Assert-True ($closed.bodyOverflow -eq $opened.overflowBefore) "closing the command menu did not restore background scrolling"
+  Write-Step ("command-menu modal focus ownership -> " + (@{
+    forwardWrap = $true
+    backwardWrap = $true
+    outsideFocusReclaimed = $true
+    openerFocusRestored = $true
+    bodyScrollRestored = $true
+  } | ConvertTo-Json -Compress))
+}
+
+function Assert-CommandMenuTypeAheadContinuity {
+  param([string]$Session)
+
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'fill', '.command-menu-input', 'src') | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '400') | Out-Null
+  $settled = Read-CommandMenuTypeAheadMetrics -Session $Session
+  Assert-True ([int]$settled.fileCount -eq 3) "command-menu type-ahead fixture did not settle its initial three file rows"
+  Assert-True ($settled.focused -eq $true) "command-menu file search lost input focus after the initial result set"
+  Assert-True ($settled.busy -eq $false) "command-menu initial file search did not settle"
+
+  $heldScript = @'
+(async () => {
+  const input = document.querySelector('.command-menu-input');
+  if (!(input instanceof HTMLInputElement)) return JSON.stringify({ inputFound: false });
+  const suffix = '/components/content/c';
+  const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  valueSetter?.call(input, `${input.value}${suffix}`);
+  input.dispatchEvent(new InputEvent('input', {
+    bubbles: true,
+    inputType: 'insertText',
+    data: suffix,
+  }));
+  await new Promise((resolve) => window.setTimeout(resolve, 260));
+  const results = Array.from(document.querySelectorAll('.command-menu-result'))
+    .filter((row) => row.querySelector('.command-menu-result-icon--file'));
+  const activeId = input.getAttribute('aria-activedescendant') || '';
+  const activeRow = activeId ? document.getElementById(activeId) : null;
+  return JSON.stringify({
+    inputFound: true,
+    query: input.value,
+    focused: document.activeElement === input,
+    busy: document.querySelector('.command-menu-results')?.getAttribute('aria-busy') === 'true',
+    fileCount: results.length,
+    filePaths: results.map((row) => row.querySelector('.command-menu-result-detail')?.textContent?.trim() || ''),
+    loadingPanelCount: document.querySelectorAll('.command-menu-empty--files .command-menu-loading-indicator').length,
+    activeId,
+    activeRowConnected: activeRow?.isConnected === true,
+    activeRowIsFile: activeRow?.querySelector('.command-menu-result-icon--file') != null,
+  });
+})()
+'@
+  $held = Invoke-BrowserEvalJson -Session $Session -Script $heldScript
+  Assert-True ($held.inputFound -eq $true) "command-menu type-ahead fixture lost its search input"
+  Assert-True ($held.busy -eq $true) "command-menu follow-up search was not exposed as busy"
+  Assert-True ([int]$held.fileCount -eq 2) "command-menu follow-up search did not locally narrow the held file rows"
+  Assert-True ([int]$held.loadingPanelCount -eq 0) "command-menu follow-up search replaced useful file rows with the full loading panel"
+  Assert-True ($held.focused -eq $true) "command-menu follow-up search moved focus away from the input"
+  Assert-True ($held.activeRowConnected -eq $true -and $held.activeRowIsFile -eq $true) "command-menu follow-up search lost its active file row while the request was pending"
+  Save-RegressionScreenshot -Session $Session -Name 'command-menu-type-ahead-held-results' | Out-Null
+
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '900') | Out-Null
+  $resolved = Read-CommandMenuTypeAheadMetrics -Session $Session
+  Assert-True ($resolved.busy -eq $false) "command-menu follow-up search did not settle"
+  Assert-True ([int]$resolved.fileCount -eq 1) "command-menu follow-up search did not replace held rows with the authoritative result"
+  Assert-True ($resolved.focused -eq $true) "command-menu authoritative refresh moved focus away from the input"
+  Assert-True ($resolved.activeRowConnected -eq $true -and $resolved.activeRowIsFile -eq $true) "command-menu authoritative refresh lost the active file row"
+  Write-Step ("command-menu type-ahead continuity -> " + (@{
+    initialRows = [int]$settled.fileCount
+    heldRows = [int]$held.fileCount
+    resolvedRows = [int]$resolved.fileCount
+    loadingPanelCount = [int]$held.loadingPanelCount
+    focusRetained = $true
+  } | ConvertTo-Json -Compress))
+}
+
+function Invoke-ComposerDictationProbe {
+  param([string]$Session)
+
+  Invoke-AgentBrowser -Arguments @(
+    '--session',
+    $Session,
+    'eval',
+    "document.querySelector('.composer-regression-fixture .composer-regression-dictation-insert')?.click()"
+  ) | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "200") | Out-Null
+}
+
+function Read-ComposerDictationMetrics {
+  param([string]$Session)
+
+  $script = @'
+JSON.stringify({
+  inputValue: document.querySelector('.composer-regression-fixture .thread-composer-input')?.value || '',
+  submitCount: Number.parseInt(document.querySelector('.composer-regression-submit-count')?.textContent || '0', 10),
+  dictationHelperText: document.querySelector('.thread-composer-dictation-statusbar-text')?.textContent?.trim() || ''
+})
+'@
+  return Invoke-BrowserEvalJson -Session $Session -Script $script
 }
 
 function Assert-ComposerDictationDraft {
@@ -3717,6 +6461,90 @@ function Assert-ComposerDictationDraft {
   Assert-True ($Metrics.inputValue -like "*语音转文字回归测试*") "$ViewportName composer dictation text was not inserted into the input"
   Assert-True ([int]$Metrics.submitCount -eq 0) "$ViewportName composer dictation auto-submitted unexpectedly"
   Assert-True ($Metrics.dictationHelperText -eq "已转成文字，可编辑后发送。") "$ViewportName composer dictation success text drifted: $($Metrics.dictationHelperText)"
+  Write-Step "composer dictation draft ($ViewportName) -> inserted, submitCount=0"
+}
+
+function Assert-ComposerImeMentionSafety {
+  param([string]$Session)
+
+  $result = Invoke-BrowserEvalJson -Session $Session -Script @'
+(async () => {
+  const input = document.querySelector('.composer-regression-fixture .thread-composer-input');
+  const submitCount = document.querySelector('.composer-regression-submit-count');
+  if (!(input instanceof HTMLTextAreaElement)) return JSON.stringify({ inputFound: false });
+  input.focus();
+  const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  valueSetter?.call(input, '@Th');
+  input.dispatchEvent(new InputEvent('input', {
+    bubbles: true,
+    inputType: 'insertText',
+    data: '@Th',
+  }));
+  const waitStartedAt = performance.now();
+  while (
+    document.querySelectorAll('.thread-composer-file-mention-row').length === 0
+    && performance.now() - waitStartedAt < 2000
+  ) {
+    await new Promise((resolve) => window.setTimeout(resolve, 25));
+  }
+
+  const composingEnter = new KeyboardEvent('keydown', {
+    bubbles: true,
+    cancelable: true,
+    key: 'Enter',
+    code: 'Enter',
+    isComposing: true,
+  });
+  input.dispatchEvent(composingEnter);
+  await new Promise((resolve) => window.setTimeout(resolve, 80));
+
+  const processEnter = new KeyboardEvent('keydown', {
+    bubbles: true,
+    cancelable: true,
+    key: 'Enter',
+    code: 'Enter',
+    keyCode: 229,
+    which: 229,
+  });
+  input.dispatchEvent(processEnter);
+  await new Promise((resolve) => window.setTimeout(resolve, 80));
+
+  const result = {
+    inputFound: true,
+    composingEnterPrevented: composingEnter.defaultPrevented,
+    composingEnterIsComposing: composingEnter.isComposing,
+    processEnterPrevented: processEnter.defaultPrevented,
+    processEnterKeyCode: processEnter.keyCode,
+    value: input.value,
+    suggestionCount: document.querySelectorAll('.thread-composer-file-mention-row').length,
+    attachmentCount: document.querySelectorAll('.thread-composer-file-chip').length,
+    submitCount: Number.parseInt(submitCount?.textContent || '0', 10),
+  };
+  valueSetter?.call(input, '');
+  input.dispatchEvent(new InputEvent('input', {
+    bubbles: true,
+    inputType: 'deleteContentBackward',
+    data: null,
+  }));
+  await new Promise((resolve) => window.setTimeout(resolve, 20));
+  return JSON.stringify(result);
+})()
+'@
+
+  Assert-True ($result.inputFound -eq $true) "composer IME mention probe could not find its input"
+  Assert-True ($result.composingEnterIsComposing -eq $true) "composer IME mention probe did not create a composition event"
+  Assert-True ([int]$result.processEnterKeyCode -eq 229) "composer IME mention probe did not create a process-key event"
+  Assert-True ($result.composingEnterPrevented -eq $false -and $result.processEnterPrevented -eq $false) "composer intercepted an IME-owned Enter event"
+  Assert-True ([string]$result.value -eq "@Th") "composer IME confirmation changed the active mention query: $($result.value)"
+  Assert-True ([int]$result.suggestionCount -gt 0) "composer IME confirmation closed the file-mention suggestions"
+  Assert-True ([int]$result.attachmentCount -eq 0) "composer IME confirmation selected a file attachment"
+  Assert-True ([int]$result.submitCount -eq 0) "composer IME confirmation submitted the draft"
+  Write-Step ("composer IME mention safety -> " + (@{
+    valueRetained = $result.value
+    suggestionCount = [int]$result.suggestionCount
+    attachmentCount = [int]$result.attachmentCount
+    submitCount = [int]$result.submitCount
+  } | ConvertTo-Json -Compress))
 }
 
 function Read-ThreadPageLoadMetrics {
@@ -4123,12 +6951,34 @@ $results = @()
 
 try {
   Assert-ImmediateAsyncRouteFallbackSource
-  Assert-NestedMobileBackOwnershipSource
-  Assert-StableHandsetViewportSource
+  Assert-CompleteThreadExportSource
+  Assert-CompleteThreadCopySource
+Assert-NestedMobileBackOwnershipSource
+Assert-MobileDrawerEnvironmentOwnershipSource
+Assert-MobileThreadActionDiscoverySource
+Assert-ConciseThreadOpenLabelsSource
+Assert-IndependentProjectControlsSource
+Assert-BulkProjectCollapseSource
+Assert-SimpleRecentSidebarSource
+Assert-ExplicitSidebarSearchStatesSource
+Assert-ActiveThreadSidebarRevealSource
+Assert-MessageActionHitTestingSource
+Assert-StableHandsetViewportSource
+Assert-ReversibleThreadArchiveSource
+Assert-ForegroundResumeScrollIntentSource
+Assert-ThreadAttentionChromeSource
   Assert-AndroidResumeThreadListRecoverySource
   Assert-CrossClientThreadStartedRefreshSource
   Assert-PendingStartOutboxRecoverySource
   Assert-RuntimeSnapshotOrderingSource
+  Assert-ManualUnreadAndComposerAttachmentSource
+  Assert-CurrentReasoningEffortCoverageSource
+  Assert-CollisionAwareThreadMenuSource
+  Assert-CollisionAwareProjectMenuSource
+  Assert-SidebarProjectScrollAnchorSource
+  Assert-HiddenPageQuiescenceSource
+  Assert-ReliableClipboardSource
+  Assert-TaskAttentionAndFileQuickOpenSource
   Assert-MobileLatestReplyRecoverySource
   Assert-BoundedRuntimeSendRecoverySource
 
@@ -4159,7 +7009,7 @@ try {
     -Metrics (Read-RequiredSidebarThreadMetrics -Session $session -Thread $requiredSidebarThread) `
     -Context "home desktop"
   Add-RegressionResult -Name "home-desktop" -Page $homePage
-  Invoke-AgentBrowser -Arguments @("--session", $session, "click", ".sidebar-settings-button") | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $session, "click", ".sidebar-settings-button[aria-expanded]") | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "200") | Out-Null
   Assert-SettingsPanel -Metrics (Read-SettingsPanelMetrics -Session $session)
   Close-SettingsPanelIfOpen -Session $session
@@ -4178,6 +7028,9 @@ try {
     -Thread $requiredSidebarThread `
     -Metrics (Read-RequiredSidebarThreadMetrics -Session $session -Thread $requiredSidebarThread -RootSelector ".mobile-drawer") `
     -Context "home mobile drawer"
+  Assert-MobileDrawerEnvironmentOwnership -Session $session
+  Assert-MobileSettingsEnvironmentOwnership -Session $session
+  Assert-MobileDrawerProjectBulkCollapse -Session $session
   Add-RegressionResult -Name "home-mobile-drawer" -Page $homePhone
   Assert-MobileBackDismissesSidebarDialog -Session $session
   Assert-MobileDrawerThreadNavigationStability -Session $session
@@ -4188,6 +7041,7 @@ try {
   $blockingDialogFixture = Open-And-ReadPage -Session $session -Url $blockingDialogFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $blockingDialogFixture -Name "blocking dialog fixture phone" -RequireComposer
   Assert-BlockingDialogEnvironment -Session $session
+  Assert-ArchiveUndoToast -Session $session
 
   Set-SidebarCollapsedPreference -Session $session -Collapsed $false
   $homePhoneLandscape = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $PhoneLandscapeWidth -Height $PhoneLandscapeHeight
@@ -4218,6 +7072,12 @@ try {
   Assert-MobileBackDismissesSkillDetail -Session $session
   Add-RegressionResult -Name "skills-phone" -Page $skills
 
+  $skillDetailFixtureUrl = $BaseUrl + "/#/__regression/docs-showcase?regression=frontend&view=skill-detail"
+  $skillDetailFixture = Open-And-ReadPage -Session $session -Url $skillDetailFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $skillDetailFixture -Name "skill detail recovery fixture phone"
+  Assert-SkillDetailReadmeRecovery -Session $session
+  Add-RegressionResult -Name "skill-detail-recovery-fixture-phone" -Page $skillDetailFixture
+
   $trending = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/github-trending?regression=frontend" -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $trending -Name "github trending phone" -RequireTrendingHub
   Add-RegressionResult -Name "github-trending-phone" -Page $trending
@@ -4239,6 +7099,7 @@ try {
   Assert-Page -Page $sidebarFixture -Name "sidebar rows fixture phone"
   Assert-SidebarFixture -Metrics (Read-SidebarFixtureMetrics -Session $session)
   Assert-SidebarFixtureNewThreadMenu -Session $session
+  Assert-SidebarFixtureThreadMenuCollisionHandling -Session $session
   Add-RegressionResult -Name "sidebar-rows-fixture-phone" -Page $sidebarFixture
 
   $sidebarStaleSearchFixtureUrl = $BaseUrl + "/#/__regression/sidebar-rows?regression=frontend&staleSearch=1"
@@ -4247,26 +7108,64 @@ try {
   Assert-SidebarFixtureStaleSearchMerge -Session $session
   Add-RegressionResult -Name "sidebar-stale-search-fixture-phone" -Page $sidebarStaleSearchFixture
 
+  $sidebarSearchContinuityFixtureUrl = $BaseUrl + "/#/__regression/sidebar-rows?regression=frontend&searchContinuity=1"
+  $sidebarSearchContinuityFixture = Open-And-ReadPage -Session $session -Url $sidebarSearchContinuityFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $sidebarSearchContinuityFixture -Name "sidebar search-continuity fixture phone"
+  Assert-SidebarFixtureSearchContinuity -Session $session
+  Add-RegressionResult -Name "sidebar-search-continuity-fixture-phone" -Page $sidebarSearchContinuityFixture
+
+  $sidebarScrollAnchorFixtureUrl = $BaseUrl + "/#/__regression/sidebar-rows?regression=frontend&scrollAnchor=1"
+  $sidebarScrollAnchorFixture = Open-And-ReadPage -Session $session -Url $sidebarScrollAnchorFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $sidebarScrollAnchorFixture -Name "sidebar scroll-anchor fixture phone"
+  Assert-SidebarFixtureProjectScrollAnchor -Session $session
+  Add-RegressionResult -Name "sidebar-scroll-anchor-fixture-phone" -Page $sidebarScrollAnchorFixture
+
+  $sidebarCurrentRevealFixtureUrl = $BaseUrl + "/#/__regression/sidebar-rows?regression=frontend&revealCurrent=1"
+  $sidebarCurrentRevealFixture = Open-And-ReadPage -Session $session -Url $sidebarCurrentRevealFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $sidebarCurrentRevealFixture -Name "sidebar current-thread reveal fixture phone"
+  Assert-SidebarFixtureCurrentThreadReveal -Session $session
+  Add-RegressionResult -Name "sidebar-current-thread-reveal-fixture-phone" -Page $sidebarCurrentRevealFixture
+
+  $commandMenuFocusFixtureUrl = $BaseUrl + "/#/__regression/command-menu?regression=frontend&focusOwnership=1"
+  $commandMenuFocusFixture = Open-And-ReadPage -Session $session -Url $commandMenuFocusFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $commandMenuFocusFixture -Name "command-menu focus-ownership fixture phone"
+  Assert-CommandMenuModalFocusOwnership -Session $session
+  Save-RegressionScreenshot -Session $session -Name 'command-menu-focus-ownership-phone' | Out-Null
+  Add-RegressionResult -Name "command-menu-focus-ownership-fixture-phone" -Page $commandMenuFocusFixture
+
+  $commandMenuTypeAheadFixtureUrl = $BaseUrl + "/#/__regression/command-menu?regression=frontend&typeAhead=1"
+  $commandMenuTypeAheadFixture = Open-And-ReadPage -Session $session -Url $commandMenuTypeAheadFixtureUrl -Width $DesktopWidth -Height $DesktopHeight
+  Assert-Page -Page $commandMenuTypeAheadFixture -Name "command-menu type-ahead fixture desktop"
+  Assert-CommandMenuTypeAheadContinuity -Session $session
+  Add-RegressionResult -Name "command-menu-type-ahead-fixture-desktop" -Page $commandMenuTypeAheadFixture
+
   $composerFixtureUrl = $BaseUrl + "/#/__regression/composer-shell?regression=frontend"
   $composerFixture = Open-And-ReadPage -Session $session -Url $composerFixtureUrl -Width $DesktopWidth -Height $DesktopHeight
   Assert-Page -Page $composerFixture -Name "composer shell fixture desktop" -RequireComposer
   Assert-ComposerFixture -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "desktop"
+  Assert-ComposerAutoGrow -Session $session -ViewportName "desktop"
+  Assert-ComposerSheetEnvironmentOwnership -Session $session -ExpectModal $false -ViewportName "desktop"
+  Assert-ComposerImeMentionSafety -Session $session
   Invoke-ComposerDictationProbe -Session $session
-  Assert-ComposerDictationDraft -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "desktop"
+  Assert-ComposerDictationDraft -Metrics (Read-ComposerDictationMetrics -Session $session) -ViewportName "desktop"
+  Assert-ComposerEnterDefault -Session $session -ExpectEnterSubmit $true -ViewportName "desktop"
   Add-RegressionResult -Name "composer-shell-fixture-desktop" -Page $composerFixture
 
   $composerFixturePhone = Open-And-ReadPage -Session $session -Url $composerFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $composerFixturePhone -Name "composer shell fixture phone" -RequireComposer
   Assert-ComposerFixture -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "phone"
+  Assert-ComposerAutoGrow -Session $session -ViewportName "phone"
+  Assert-ComposerSheetEnvironmentOwnership -Session $session -ExpectModal $true -ViewportName "phone"
   Invoke-ComposerDictationProbe -Session $session
-  Assert-ComposerDictationDraft -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "phone"
+  Assert-ComposerDictationDraft -Metrics (Read-ComposerDictationMetrics -Session $session) -ViewportName "phone"
+  Assert-ComposerEnterDefault -Session $session -ExpectEnterSubmit $false -ViewportName "phone"
   Add-RegressionResult -Name "composer-shell-fixture-phone" -Page $composerFixturePhone
 
   $composerFixtureFoldable = Open-And-ReadPage -Session $session -Url $composerFixtureUrl -Width $FoldableWidth -Height $FoldableHeight
   Assert-Page -Page $composerFixtureFoldable -Name "composer shell fixture foldable" -RequireComposer
   Assert-ComposerFixture -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "foldable"
   Invoke-ComposerDictationProbe -Session $session
-  Assert-ComposerDictationDraft -Metrics (Read-ComposerFixtureMetrics -Session $session) -ViewportName "foldable"
+  Assert-ComposerDictationDraft -Metrics (Read-ComposerDictationMetrics -Session $session) -ViewportName "foldable"
   Add-RegressionResult -Name "composer-shell-fixture-foldable" -Page $composerFixtureFoldable
 
   $fixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend"
@@ -4291,11 +7190,41 @@ try {
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "phone"
   Add-RegressionResult -Name "conversation-blocks-fixture-phone" -Page $fixturePhone
 
-  $scrollSwitchFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&scrollSwitchRace=1"
+  $imagePreviewFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&imagePreview=1"
+  $imagePreviewFixture = Open-And-ReadPage -Session $session -Url $imagePreviewFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $imagePreviewFixture -Name "conversation image preview gestures fixture phone"
+  Assert-ConversationImagePreviewGestures -Session $session
+  Add-RegressionResult -Name "conversation-image-preview-gestures-phone" -Page $imagePreviewFixture
+
+  $markdownImageFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&markdownImage=1"
+  $markdownImageFixture = Open-And-ReadPage -Session $session -Url $markdownImageFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $markdownImageFixture -Name "conversation markdown-image recovery fixture phone"
+  Assert-ConversationMarkdownImageRecovery -Session $session
+  Add-RegressionResult -Name "conversation-markdown-image-recovery-phone" -Page $markdownImageFixture
+
+  $scrollSwitchFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&scrollSwitchRace=1&messageActionHit=1"
   $scrollSwitchFixture = Open-And-ReadPage -Session $session -Url $scrollSwitchFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $scrollSwitchFixture -Name "conversation thread-switch scroll fixture phone"
+  Assert-ConversationMessageActionHitTesting -Session $session
+  Assert-ConversationMessageReadingAnchor -Session $session
   Assert-ConversationThreadSwitchScrollIsolation -Session $session
   Add-RegressionResult -Name "conversation-thread-switch-scroll-fixture-phone" -Page $scrollSwitchFixture
+
+  $foregroundResumeScrollFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&scrollSwitchRace=1&foregroundResumeScroll=1"
+  $foregroundResumeBottomFixture = Open-And-ReadPage -Session $session -Url $foregroundResumeScrollFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $foregroundResumeBottomFixture -Name "conversation foreground resume bottom fixture phone"
+  Assert-ConversationForegroundResumeScrollIntent -Session $session -Mode 'bottom'
+  Add-RegressionResult -Name "conversation-foreground-resume-bottom-phone" -Page $foregroundResumeBottomFixture
+
+  $foregroundResumeReadingFixture = Open-And-ReadPage -Session $session -Url $foregroundResumeScrollFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $foregroundResumeReadingFixture -Name "conversation foreground resume reading fixture phone"
+  Assert-ConversationForegroundResumeScrollIntent -Session $session -Mode 'reading'
+  Add-RegressionResult -Name "conversation-foreground-resume-reading-phone" -Page $foregroundResumeReadingFixture
+
+  $foregroundResumeUserFixture = Open-And-ReadPage -Session $session -Url $foregroundResumeScrollFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $foregroundResumeUserFixture -Name "conversation foreground resume user-intent fixture phone"
+  Assert-ConversationForegroundResumeScrollIntent -Session $session -Mode 'user'
+  Add-RegressionResult -Name "conversation-foreground-resume-user-intent-phone" -Page $foregroundResumeUserFixture
 
   $loadFailureFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&loadFailure=1"
   $loadFailureFixture = Open-And-ReadPage -Session $session -Url $loadFailureFixtureUrl -Width $PhoneWidth -Height $PhoneHeight

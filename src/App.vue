@@ -52,11 +52,12 @@
   <DesktopLayout v-else :is-sidebar-collapsed="isSidebarCollapsed" @close-sidebar="setSidebarCollapsed(true)">
     <template #sidebar>
       <section class="sidebar-root" :class="{ 'sidebar-root--dual-pane-touch': isDualPaneMobile }">
-        <div class="sidebar-scrollable">
+        <div ref="sidebarScrollableRef" class="sidebar-scrollable">
           <div v-if="!isSidebarCollapsed" class="sidebar-top-shell">
             <SidebarThreadControls
               class="sidebar-thread-controls-host"
               :is-sidebar-collapsed="isSidebarCollapsed"
+              :attention-count="attentionThreadCount"
               :show-new-thread-button="false"
               @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
               @start-new-thread="onStartNewThreadFromToolbar"
@@ -94,7 +95,7 @@
                 type="button"
                 :aria-pressed="isSidebarSearchVisible"
                 aria-label="搜索会话"
-                title="筛选侧栏会话；Ctrl / Command + K 打开命令菜单"
+                title="筛选侧栏会话；Ctrl / Command + K 打开命令菜单，Ctrl / Command + P 搜索文件"
                 @click="isSidebarToolsOpen = false; toggleSidebarSearch()"
               >
                 <IconTablerSearch class="sidebar-action-icon" />
@@ -173,17 +174,19 @@
             </div>
           </div>
 
-          <SidebarThreadTree :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
+          <SidebarThreadTree ref="sidebarThreadTreeRef" :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
             v-if="!isSidebarCollapsed"
             :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads"
             :search-query="sidebarSearchQuery"
-            :search-matched-thread-ids="serverMatchedThreadIds"
             :desktop-list-parity="isMobile || isMobileShellAvailable"
             @select="onSelectThread"
             @archive="onArchiveThread" @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
             @browse-thread-files="onBrowseThreadFiles"
             @rename-thread="onRenameThread"
             @fork-thread="onForkThread"
+            @copy-thread="onCopyThread"
+            @copy-thread-link="onCopyThreadLink"
+            @set-thread-unread="onSetThreadUnread"
             @refresh="onRefreshSidebarThreads"
             @remove-project="onRemoveProject" @reorder-project="onReorderProject"
             @export-thread="onExportThread" />
@@ -195,13 +198,16 @@
               v-if="isSettingsOpen && isSettingsSheetMode"
               class="sidebar-settings-mobile-backdrop"
               type="button"
-              aria-label="关闭设置"
+              tabindex="-1"
+              aria-hidden="true"
+              @pointerdown.prevent
               @click="isSettingsOpen = false"
             />
           </Transition>
           <Transition :name="isSettingsSheetMode ? 'settings-mobile-panel' : 'settings-panel'">
             <div
               v-if="isSettingsOpen"
+              ref="sidebarSettingsPanelRef"
               class="sidebar-settings-panel"
               :class="{ 'sidebar-settings-panel-mobile': isSettingsSheetMode }"
               :role="isSettingsSheetMode ? 'dialog' : undefined"
@@ -517,10 +523,23 @@
               </section>
             </div>
           </Transition>
-          <button class="sidebar-settings-button" type="button" :aria-expanded="isSettingsOpen" @click="isSettingsOpen = !isSettingsOpen">
-            <IconTablerSettings class="sidebar-settings-icon" />
-            <span>设置</span>
-          </button>
+          <div ref="sidebarFooterActionsRef" class="sidebar-footer-actions">
+            <button
+              class="sidebar-settings-button sidebar-current-thread-button"
+              type="button"
+              aria-label="定位当前会话"
+              title="在列表中定位当前会话"
+              :disabled="!selectedThreadId"
+              @click="revealCurrentThreadInSidebar"
+            >
+              <span class="sidebar-current-thread-icon" aria-hidden="true">◎</span>
+              <span>当前会话</span>
+            </button>
+            <button class="sidebar-settings-button" type="button" :aria-expanded="isSettingsOpen" @click="isSettingsOpen = !isSettingsOpen">
+              <IconTablerSettings class="sidebar-settings-icon" />
+              <span>设置</span>
+            </button>
+          </div>
         </div>
       </section>
     </template>
@@ -573,6 +592,7 @@
               v-if="isSidebarCollapsed || isMobile"
               class="sidebar-thread-controls-header-host"
               :is-sidebar-collapsed="isSidebarCollapsed"
+              :attention-count="attentionThreadCount"
               :show-new-thread-button="true"
               @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
               @start-new-thread="onStartNewThreadFromToolbar"
@@ -703,6 +723,7 @@
                   :is-turn-in-progress="pendingNewThreadPreview.liveOverlay !== null"
                   :is-rolling-back="false"
                   :allow-failed-message-edit="true"
+                  @copy-status="onConversationCopyStatus"
                   @retry-failed-message="onRetryPendingNewThreadMessage"
                   @edit-failed-message="onEditPendingNewThreadMessage"
                 />
@@ -800,6 +821,7 @@
                   @open-connection-settings="onOpenThreadConnectionSettings"
                   @return-to-new-thread="onReturnToNewThreadFromEmptyThread"
                   @dismiss-empty-thread="onDismissEmptyThread"
+                  @copy-status="onConversationCopyStatus"
                   @retry-failed-message="retryFailedUserMessage"
                   @rollback="onRollback" />
               </div>
@@ -934,12 +956,22 @@
         class="product-toast"
         :class="{ 'product-toast--above-composer': showProductToastAboveComposer }"
         :data-tone="productToast.tone"
+        :data-action="productToast.action ? 'true' : 'false'"
         :role="productToast.tone === 'danger' ? 'alert' : 'status'"
         aria-live="polite"
       >
         <span class="product-toast-message">{{ productToast.message }}</span>
         <button
-          v-if="productToast.tone === 'danger' || productToast.tone === 'warning'"
+          v-if="productToast.action"
+          class="product-toast-action"
+          type="button"
+          :disabled="productToastActionBusyId === productToast.id"
+          @click="runProductToastAction"
+        >
+          {{ productToastActionBusyId === productToast.id ? '处理中…' : productToast.action.label }}
+        </button>
+        <button
+          v-if="productToast.action || productToast.tone === 'danger' || productToast.tone === 'warning'"
           class="product-toast-close"
           type="button"
           aria-label="关闭提示"
@@ -1007,10 +1039,14 @@
     :groups="projectGroups"
     :selected-thread-id="selectedThreadId"
     :show-github="showGithubTrendingProjects"
+    :cwd="commandMenuCwd"
+    :initial-mode="commandMenuInitialMode"
+    :mode-request-id="commandMenuModeRequestId"
     @close="closeCommandMenu"
     @select-thread="onSelectThread"
     @start-new-thread="onStartNewThreadFromToolbar"
     @open-route="onOpenSidebarTool"
+    @open-file="onOpenCommandMenuFile"
   />
 
   <FavoritesModal
@@ -1054,9 +1090,12 @@ import { useDesktopState } from './composables/useDesktopState'
 import { chatFeedbackNow } from './composables/chatFeedbackMetrics'
 import { useFavorites, type FavoriteRecord } from './composables/useFavorites'
 import { useMobile } from './composables/useMobile'
+import { resolveSendWithEnterPreference } from './composables/composerEnterBehavior'
+import { useLazyModalEnvironment } from './composables/useLazyModalEnvironment'
 import {
   createWorktree,
   getDesktopAppStatus,
+  getThreadDetail,
   getGithubProjectsForScope,
   getHomeDirectory,
   getProjectRootSuggestion,
@@ -1064,7 +1103,6 @@ import {
   getWorkspaceRootsState,
   openProjectRoot,
   refreshDesktopApp,
-  searchThreads,
   startRuntimeThreadTurn,
   updateWebBridgeSettings,
 } from './api/codexGateway'
@@ -1128,6 +1166,7 @@ import {
   type MobileLatestRelease,
 } from './mobile/mobileRelease'
 import { MOBILE_BACK_BUTTON_EVENT } from './mobile/events'
+import { copyTextToClipboard } from './utils/clipboard'
 
 const SkillsHub = defineAsyncComponent({
   loader: () => import('./components/content/SkillsHub.vue'),
@@ -1184,7 +1223,7 @@ const DEFAULT_WEB_BRIDGE_SETTINGS: WebBridgeSettings = {
   },
 }
 const SETTINGS_HELP = {
-  sendWithEnter: '在“发送”和“换行”之间切换。Enter 发送时，Shift + Enter 换行；Enter 换行时，Ctrl / Command + Enter 发送。',
+  sendWithEnter: '默认桌面 Enter 发送、手机 Enter 换行；这里的明确选择会覆盖默认值。换行模式可用 Ctrl / Command + Enter 发送。',
   appearance: '在跟随系统、浅色和深色之间切换。',
   dictationButtonVisible: '控制输入框右侧是否显示语音按钮。',
   dictationAutoSend: '转写后自动发送输入框内容；默认关闭，建议确认后手动发送。',
@@ -1441,6 +1480,7 @@ const {
   selectThread,
   setThreadScrollState,
   archiveThreadById,
+  unarchiveThreadById,
   dismissThreadLocally,
   forkThreadById,
   renameThreadById,
@@ -1461,6 +1501,8 @@ const {
   deleteQueuedMessage,
   retryQueuedMessage,
   quoteQueuedMessage,
+  markThreadAsRead,
+  markThreadAsUnread,
   markAllThreadsAsRead,
   setSelectedModelId,
   setWorktreeGitAutomationEnabled,
@@ -1489,7 +1531,11 @@ const { favorites, toggleFavorite, removeFavorite, refreshFavorites } = useFavor
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadConversationRef = ref<ThreadConversationExposed | null>(null)
+const sidebarThreadTreeRef = ref<{ revealSelectedThread: () => Promise<boolean> } | null>(null)
+const sidebarScrollableRef = ref<HTMLElement | null>(null)
 const sidebarSettingsAreaRef = ref<HTMLElement | null>(null)
+const sidebarSettingsPanelRef = ref<HTMLElement | null>(null)
+const sidebarFooterActionsRef = ref<HTMLElement | null>(null)
 const trendingProjects = ref<GithubTrendingProject[]>([])
 const isTrendingProjectsLoading = ref(false)
 const trendingProjectsError = ref('')
@@ -1512,12 +1558,28 @@ const worktreeInitStatus = ref<{ phase: 'idle' | 'running' | 'error'; title: str
 const isSidebarCollapsed = ref(isMobile.value ? true : loadSidebarCollapsed())
 const isFavoritesModalVisible = ref(false)
 const favoritesStatusText = ref('')
-const productToast = ref<{ id: number; message: string; tone: 'success' | 'info' | 'warning' | 'danger' } | null>(null)
+type ProductToastTone = 'success' | 'info' | 'warning' | 'danger'
+type ProductToastAction = {
+  label: string
+  run: () => void | Promise<void>
+}
+type ProductToast = {
+  id: number
+  message: string
+  tone: ProductToastTone
+  action?: ProductToastAction
+}
+
+const productToast = ref<ProductToast | null>(null)
+const productToastActionBusyId = ref<number | null>(null)
+let threadExportPromise: Promise<void> | null = null
 const pendingFavoriteJump = ref<{ threadId: string; messageId: string } | null>(null)
 const sidebarSearchQuery = ref('')
 const isSidebarSearchVisible = ref(false)
 const isSidebarToolsOpen = ref(false)
 const isCommandMenuOpen = ref(false)
+const commandMenuInitialMode = ref<'root' | 'files'>('root')
+const commandMenuModeRequestId = ref(0)
 const BLOCKING_DIALOG_REGRESSION_EVENT = 'cx-codex-regression-open-blocking-dialog'
 const sidebarSearchInputRef = ref<HTMLInputElement | null>(null)
 const desktopRefreshConfirmDialogRef = ref<HTMLElement | null>(null)
@@ -1527,11 +1589,19 @@ let blockingDialogPreviousFocus: HTMLElement | null = null
 let blockingDialogPreviousBodyOverflow = ''
 let blockingDialogOwnsBodyScrollLock = false
 let blockingDialogShouldRestoreFocus = true
-const serverMatchedThreadIds = ref<string[] | null>(null)
-let threadSearchTimer: ReturnType<typeof setTimeout> | null = null
 const defaultNewProjectName = ref('New Project (1)')
 const homeDirectory = ref('')
 const isSettingsOpen = ref(false)
+const isSettingsModalOpen = computed(() => isSettingsOpen.value && isSettingsSheetMode.value)
+useLazyModalEnvironment(
+  isSettingsModalOpen,
+  () => sidebarSettingsPanelRef.value,
+  () => document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  undefined,
+  undefined,
+  () => [sidebarScrollableRef.value, sidebarFooterActionsRef.value]
+    .filter((element): element is HTMLElement => element !== null),
+)
 const SEND_WITH_ENTER_KEY = 'codex-web-local.send-with-enter.v1'
 const DARK_MODE_KEY = 'codex-web-local.dark-mode.v1'
 const DICTATION_CLICK_TO_TOGGLE_KEY = 'codex-web-local.dictation-click-to-toggle.v1'
@@ -1541,7 +1611,13 @@ const DICTATION_LANGUAGE_KEY = 'codex-web-local.dictation-language.v1'
 const WORKTREE_GIT_AUTOMATION_KEY = 'codex-web-local.worktree-git-automation.v1'
 const GITHUB_TRENDING_PROJECTS_KEY = 'codex-web-local.github-trending-projects.v1'
 const WORKBENCH_PROJECT_PRESETS_KEY = 'cx-codex.workbench.project-presets.v1'
-const sendWithEnter = ref(loadBoolPref(SEND_WITH_ENTER_KEY, true))
+const storedSendWithEnterPreference = ref(
+  typeof window === 'undefined' ? null : window.localStorage.getItem(SEND_WITH_ENTER_KEY),
+)
+const sendWithEnter = computed(() => resolveSendWithEnterPreference(
+  storedSendWithEnterPreference.value,
+  isMobile.value,
+))
 const darkMode = ref<'system' | 'light' | 'dark'>(loadDarkModePref())
 const dictationClickToToggle = ref(loadBoolPref(DICTATION_CLICK_TO_TOGGLE_KEY, false))
 const dictationButtonVisible = ref(loadBoolPref(DICTATION_BUTTON_VISIBLE_KEY, true))
@@ -1995,9 +2071,28 @@ const browserHostName =
   typeof window !== 'undefined'
     ? (window.location.hostname || window.location.host || 'cx-codex')
     : 'cx-codex'
+const browserProductTitle = ['127.0.0.1', 'localhost', '::1', '[::1]', '0.0.0.0'].includes(browserHostName)
+  ? 'CX-Codex'
+  : `CX-Codex · ${browserHostName}`
+const attentionThreadCount = computed(() => {
+  const threadIds = new Set<string>()
+  for (const group of projectGroups.value) {
+    for (const thread of group.threads) {
+      if (thread.waitingForInput || thread.unread) {
+        threadIds.add(thread.id)
+      }
+    }
+  }
+  return threadIds.size
+})
 const pageTitle = computed(() => {
-  const threadTitle = selectedThread.value?.title?.trim() ?? ''
-  return threadTitle || routeThreadCachedTitle.value || browserHostName
+  const routeTitle = contentTitle.value.trim()
+  const baseTitle = routeTitle
+    ? `${routeTitle} · ${browserProductTitle}`
+    : browserProductTitle
+  return attentionThreadCount.value > 0
+    ? `(${String(attentionThreadCount.value)}) ${baseTitle}`
+    : baseTitle
 })
 const headerSubtitle = computed(() => {
   if (isWorkbenchRoute.value) return '集中查看状态、复用项目配置，并一键发起标准化任务。'
@@ -2064,7 +2159,7 @@ const contentContextUsedTokens = computed<number | null>(() => {
 })
 const contentContextPercentLabel = computed(() => (
   typeof contentContextPercent.value === 'number'
-    ? String(Math.round(contentContextPercent.value))
+    ? `${String(Math.round(contentContextPercent.value))}%`
     : '--'
 ))
 const contentContextRingDashArray = `${CONTEXT_RING_CIRCUMFERENCE} ${CONTEXT_RING_CIRCUMFERENCE}`
@@ -2168,8 +2263,8 @@ const serviceStatusDetail = computed(() => {
   if (selectedLiveOverlay.value?.activityLabel) return humanizeActivityLabel(selectedLiveOverlay.value.activityLabel)
   return '实时连接正常。'
 })
-const filteredMessages = computed(() =>
-  messages.value.flatMap((message) => {
+function visibleConversationMessages(sourceMessages: UiMessage[]): UiMessage[] {
+  return sourceMessages.flatMap((message) => {
     if (isInternalCodexContextMessage(message)) return []
     const type = normalizeMessageType(message.messageType, message.role)
     if (type === 'commandExecution' && message.commandExecution?.status !== 'inProgress') return []
@@ -2184,8 +2279,10 @@ const filteredMessages = computed(() =>
       !visibleMessage.rawPayload
     ) return []
     return [visibleMessage]
-  }),
-)
+  })
+}
+
+const filteredMessages = computed(() => visibleConversationMessages(messages.value))
 const latestUserTurnIndex = computed(() => {
   let latest = -1
   for (const message of filteredMessages.value) {
@@ -2201,6 +2298,7 @@ const composerCwd = computed(() => {
   if (isHomeRoute.value) return newThreadCwd.value.trim()
   return selectedThread.value?.cwd?.trim() ?? ''
 })
+const commandMenuCwd = computed(() => composerCwd.value || newThreadCwd.value.trim())
 const displayedThreadConversationId = ref('')
 const displayedThreadCwd = ref('')
 const displayedThreadMessages = ref<UiMessage[]>([])
@@ -2744,10 +2842,6 @@ onUnmounted(() => {
   darkModeMediaQuery?.removeEventListener('change', applyDarkMode)
   clearQueuedIdleTasks()
   cancelPendingTrendingProjectsLoad()
-  if (threadSearchTimer) {
-    clearTimeout(threadSearchTimer)
-    threadSearchTimer = null
-  }
   if (webBridgeSettingsStatusTimer) {
     clearTimeout(webBridgeSettingsStatusTimer)
     webBridgeSettingsStatusTimer = null
@@ -2787,34 +2881,6 @@ function onWindowFocusRefreshAccountState(): void {
     void refreshRateLimits()
   }
 }
-
-watch(sidebarSearchQuery, (value) => {
-  const query = value.trim()
-  if (threadSearchTimer) {
-    clearTimeout(threadSearchTimer)
-    threadSearchTimer = null
-  }
-  if (!query) {
-    serverMatchedThreadIds.value = null
-    return
-  }
-  if (query.length < 2) {
-    serverMatchedThreadIds.value = null
-    return
-  }
-
-  threadSearchTimer = setTimeout(() => {
-    void searchThreads(query, 1000)
-      .then((result) => {
-        if (sidebarSearchQuery.value.trim() !== query) return
-        serverMatchedThreadIds.value = result.threadIds
-      })
-      .catch(() => {
-        if (sidebarSearchQuery.value.trim() !== query) return
-        serverMatchedThreadIds.value = null
-      })
-  }, 280)
-})
 
 watch(isSettingsOpen, (open) => {
   if (open) {
@@ -2939,22 +3005,6 @@ function setFavoritesStatusText(message: string): void {
     favoritesStatusText.value = ''
     favoritesStatusTimer = null
   }, 2200)
-}
-
-async function copyTextToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text)
-    return
-  }
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  textarea.setAttribute('readonly', 'true')
-  textarea.style.position = 'fixed'
-  textarea.style.opacity = '0'
-  document.body.appendChild(textarea)
-  textarea.select()
-  document.execCommand('copy')
-  document.body.removeChild(textarea)
 }
 
 async function refreshWebBridgeSettings(): Promise<void> {
@@ -3498,18 +3548,52 @@ function clearSidebarSearch(): void {
   }
 }
 
-function openCommandMenu(): void {
+async function revealCurrentThreadInSidebar(): Promise<void> {
+  isSidebarSearchVisible.value = false
+  await nextTick()
+  clearSidebarSearch()
+  await nextTick()
+  await sidebarThreadTreeRef.value?.revealSelectedThread()
+}
+
+function openCommandMenu(initialMode: 'root' | 'files' = 'root'): void {
   if (isStandaloneRoute.value || isAnyBlockingDialogVisible()) return
+  const resolvedMode = initialMode === 'files' && commandMenuCwd.value ? 'files' : 'root'
   isFavoritesModalVisible.value = false
   isSettingsOpen.value = false
   isSidebarToolsOpen.value = false
   isSidebarSearchVisible.value = false
   sidebarSearchQuery.value = ''
+  commandMenuInitialMode.value = resolvedMode
+  commandMenuModeRequestId.value += 1
   isCommandMenuOpen.value = true
 }
 
 function closeCommandMenu(): void {
   isCommandMenuOpen.value = false
+}
+
+function resolveCommandMenuFilePath(path: string): string {
+  const candidate = path.trim()
+  if (!candidate) return ''
+  if (/^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(candidate)) return candidate
+  const cwd = commandMenuCwd.value.replace(/[\\/]+$/u, '')
+  if (!cwd) return ''
+  return `${cwd}/${candidate.replace(/^[\\/]+/u, '')}`
+}
+
+function onOpenCommandMenuFile(path: string): void {
+  if (typeof window === 'undefined') return
+  const localPath = resolveCommandMenuFilePath(path)
+  if (!localPath) return
+  const normalizedPath = localPath.replace(/\\/gu, '/')
+  const browsePath = normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`
+  const href = `/codex-local-browse${encodeURI(browsePath)}`
+  if (isNativeAndroidShell() || window.matchMedia('(max-width: 820px)').matches) {
+    window.location.href = href
+    return
+  }
+  window.open(href, '_blank', 'noopener,noreferrer')
 }
 
 function onSidebarSearchKeydown(event: KeyboardEvent): void {
@@ -3529,6 +3613,14 @@ function onSelectThread(threadId: string): void {
   if (route.name !== 'thread') {
     void router.push({ name: 'thread', params: { threadId } })
   }
+}
+
+function onSetThreadUnread(payload: { threadId: string; unread: boolean }): void {
+  if (payload.unread) {
+    markThreadAsUnread(payload.threadId)
+    return
+  }
+  markThreadAsRead(payload.threadId)
 }
 
 function closeFavoritesModal(): void {
@@ -3554,12 +3646,30 @@ function onToggleFavoriteMessage(message: UiMessage): void {
   setFavoritesStatusText(added ? '已加入收藏' : '已取消收藏')
 }
 
+function onConversationCopyStatus(payload: {
+  message: string
+  tone: 'success' | 'info' | 'warning' | 'danger'
+}): void {
+  showProductToast(payload.message, payload.tone, payload.tone === 'danger' ? 4200 : 2200)
+}
+
 async function onCopyFavorite(record: FavoriteRecord): Promise<void> {
   try {
     await copyTextToClipboard(record.text)
     setFavoritesStatusText('收藏内容已复制')
   } catch {
     setFavoritesStatusText('复制失败，请手动复制')
+  }
+}
+
+async function onCopyThreadLink(threadId: string): Promise<void> {
+  try {
+    const url = new URL(window.location.href)
+    url.hash = `/thread/${encodeURIComponent(threadId)}`
+    await copyTextToClipboard(url.toString())
+    showProductToast('已复制会话链接', 'success')
+  } catch {
+    showProductToast('复制失败，请手动复制浏览器地址。', 'danger', 4200)
   }
 }
 
@@ -3600,17 +3710,90 @@ async function onOpenFavorite(record: FavoriteRecord): Promise<void> {
 }
 
 async function onExportThread(threadId: string): Promise<void> {
-  if (!threadId) return
-  if (selectedThreadId.value !== threadId) {
-    await selectThread(threadId)
-    await router.push({ name: 'thread', params: { threadId } })
-  }
-  await nextTick()
-  onExportChat()
+  await runThreadMarkdownAction(threadId, false)
 }
 
-function onArchiveThread(threadId: string): void {
-  void archiveThreadById(threadId)
+async function onCopyThread(threadId: string): Promise<void> {
+  await runThreadMarkdownAction(threadId, true)
+}
+
+async function runThreadMarkdownAction(threadId: string, copyToClipboard: boolean): Promise<void> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return
+  if (threadExportPromise) {
+    showProductToast('正在整理完整会话，请稍候。', 'info', 4200)
+    await threadExportPromise
+    return
+  }
+
+  const currentExportPromise = runCompleteThreadExport(normalizedThreadId, copyToClipboard)
+  threadExportPromise = currentExportPromise
+  try {
+    await currentExportPromise
+  } finally {
+    if (threadExportPromise === currentExportPromise) {
+      threadExportPromise = null
+    }
+  }
+}
+
+async function runCompleteThreadExport(threadId: string, copyToClipboard: boolean): Promise<void> {
+  showProductToast(
+    copyToClipboard ? '正在整理完整会话，完成后会自动复制…' : '正在整理完整会话，完成后会自动下载…',
+    'info',
+    120000,
+  )
+  try {
+    const thread = threadById.value[threadId]
+    if (!thread) throw new Error('Thread metadata is unavailable')
+    const detail = await getThreadDetail(threadId, { responseView: 'full' })
+    const exportMessages = visibleConversationMessages(detail.messages)
+    if (exportMessages.length === 0) {
+      throw new Error('No thread content is available to export')
+    }
+
+    const { buildThreadMarkdown, downloadThreadMarkdown } = await import('./utils/threadExport')
+    const exportInput = {
+      title: thread.title,
+      threadId: thread.id,
+      exportedAtIso: new Date().toISOString(),
+      messages: exportMessages,
+    }
+    if (copyToClipboard) {
+      await copyTextToClipboard(buildThreadMarkdown(exportInput))
+      showProductToast('完整会话已复制。', 'success')
+    } else {
+      downloadThreadMarkdown(exportInput)
+      showProductToast('完整会话已导出。', 'success')
+    }
+  } catch (error: unknown) {
+    console.warn('[thread-export] complete export failed', error)
+    showProductToast(
+      copyToClipboard ? '复制完整会话失败，请重试或使用导出。' : '导出完整会话失败，请重试。',
+      'danger',
+      4200,
+    )
+  }
+}
+
+async function onArchiveThread(threadId: string): Promise<void> {
+  const archived = await archiveThreadById(threadId)
+  if (!archived) {
+    showProductToast('未能归档会话，请稍后重试。', 'danger', 4200)
+    return
+  }
+
+  showProductToast('会话已移到归档。', 'info', 8000, {
+    label: '撤销',
+    run: async () => {
+      const restored = await unarchiveThreadById(threadId)
+      showProductToast(
+        restored ? '会话已恢复。' : '恢复会话失败，请稍后重试。',
+        restored ? 'success' : 'danger',
+        restored ? 2600 : 4200,
+      )
+    },
+  })
 }
 
 async function onForkThread(threadId: string): Promise<void> {
@@ -3722,7 +3905,10 @@ function shouldUseMobileSidebarDrawer(): boolean {
 }
 
 function closeMobileSidebarAfterNavigation(): void {
-  if (!shouldUseMobileSidebarDrawer() || isSidebarCollapsed.value) return
+  if (!shouldUseMobileSidebarDrawer()) return
+  isSidebarSearchVisible.value = false
+  sidebarSearchQuery.value = ''
+  if (isSidebarCollapsed.value) return
   setSidebarCollapsed(true, { persist: false })
 }
 
@@ -3821,6 +4007,13 @@ function onOpenBlockingDialogRegression(event: Event): void {
   const params = new URLSearchParams(window.location.hash.split('?')[1] ?? '')
   if (params.get('regression') !== 'frontend' || params.get('blockingDialogs') !== '1') return
   const kind = (event as CustomEvent<{ kind?: string }>).detail?.kind
+  if (kind === 'archive-undo') {
+    showProductToast('会话已移到归档。', 'info', 8000, {
+      label: '撤销',
+      run: () => showProductToast('会话已恢复。', 'success'),
+    })
+    return
+  }
   if (kind === 'mobile-update') {
     isMobileShellUpdatePromptVisible.value = true
     return
@@ -3888,6 +4081,12 @@ function onWindowKeyDown(event: KeyboardEvent): void {
     } else {
       openCommandMenu()
     }
+    return
+  }
+  if (event.key.toLowerCase() === 'p') {
+    if (!commandMenuCwd.value || isStandaloneRoute.value || isAnyBlockingDialogVisible()) return
+    event.preventDefault()
+    openCommandMenu('files')
     return
   }
   if (event.key.toLowerCase() !== 'b') return
@@ -4396,100 +4595,6 @@ function onRollback(payload: { turnIndex: number; prependText?: string }): void 
   void rollbackSelectedThread(payload.turnIndex)
 }
 
-function onExportChat(): void {
-  if (isNonThreadRoute.value || typeof document === 'undefined') return
-  if (!selectedThread.value || filteredMessages.value.length === 0) return
-  const markdown = buildThreadMarkdown()
-  const fileName = buildExportFileName()
-  const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
-  const objectUrl = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = objectUrl
-  link.download = fileName
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
-}
-
-function buildThreadMarkdown(): string {
-  const lines: string[] = []
-  const threadTitle = selectedThread.value?.title?.trim() || '未命名会话'
-  lines.push(`# ${escapeMarkdownText(threadTitle)}`)
-  lines.push('')
-  lines.push(`- 导出时间：${new Date().toISOString()}`)
-  lines.push(`- 会话 ID：${selectedThread.value?.id ?? ''}`)
-  lines.push('')
-  lines.push('---')
-  lines.push('')
-
-  for (const message of filteredMessages.value) {
-    const roleLabel = message.role === 'user'
-      ? '用户'
-      : message.role === 'assistant'
-        ? 'Codex'
-        : message.role === 'system'
-          ? '系统'
-          : '消息'
-    lines.push(`## ${roleLabel}`)
-    lines.push('')
-
-    const normalizedText = message.text.trim()
-    if (normalizedText) {
-      lines.push(normalizedText)
-      lines.push('')
-    }
-
-    if (message.commandExecution) {
-      lines.push('```text')
-      lines.push(`命令：${message.commandExecution.command}`)
-      lines.push(`状态：${message.commandExecution.status}`)
-      if (message.commandExecution.cwd) {
-        lines.push(`目录：${message.commandExecution.cwd}`)
-      }
-      if (message.commandExecution.exitCode !== null) {
-        lines.push(`退出码：${message.commandExecution.exitCode}`)
-      }
-      lines.push(message.commandExecution.aggregatedOutput || '（无输出）')
-      lines.push('```')
-      lines.push('')
-    }
-
-    if (message.fileAttachments && message.fileAttachments.length > 0) {
-      lines.push('附件：')
-      for (const attachment of message.fileAttachments) {
-        lines.push(`- ${attachment.path}`)
-      }
-      lines.push('')
-    }
-
-    if (message.images && message.images.length > 0) {
-      lines.push('图片：')
-      for (const imageUrl of message.images) {
-        lines.push(`- ${imageUrl}`)
-      }
-      lines.push('')
-    }
-  }
-
-  return `${lines.join('\n').trimEnd()}\n`
-}
-
-function buildExportFileName(): string {
-  const threadTitle = selectedThread.value?.title?.trim() || 'chat'
-  const sanitized = threadTitle
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  const base = sanitized || 'chat'
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-  return `${base}-${stamp}.md`
-}
-
-function escapeMarkdownText(value: string): string {
-  return value.replace(/([\\`*_{}\[\]()#+\-.!])/g, '\\$1')
-}
-
 function loadBoolPref(key: string, fallback: boolean): boolean {
   if (typeof window === 'undefined') return fallback
   const v = window.localStorage.getItem(key)
@@ -4512,7 +4617,9 @@ function isWorkbenchProjectPreset(value: unknown): value is WorkbenchProjectPres
       || candidate.reasoningEffort === 'low'
       || candidate.reasoningEffort === 'medium'
       || candidate.reasoningEffort === 'high'
-      || candidate.reasoningEffort === 'xhigh')
+      || candidate.reasoningEffort === 'xhigh'
+      || candidate.reasoningEffort === 'max'
+      || candidate.reasoningEffort === 'ultra')
     && (candidate.speedMode === 'standard' || candidate.speedMode === 'fast')
     && (candidate.collaborationMode === 'execute' || candidate.collaborationMode === 'plan')
     && (candidate.runtime === 'local' || candidate.runtime === 'worktree')
@@ -4552,6 +4659,8 @@ function formatReasoningEffortLabel(value: ReasoningEffort | ''): string {
     medium: '中',
     high: '高',
     xhigh: '超高',
+    max: '最高',
+    ultra: '极致',
   }
   return labels[value] ?? '智能'
 }
@@ -4577,8 +4686,9 @@ function formatConnectionStateLabel(value: string): string {
 
 function showProductToast(
   message: string,
-  tone: 'success' | 'info' | 'warning' | 'danger' = 'info',
+  tone: ProductToastTone = 'info',
   durationMs = 2600,
+  action?: ProductToastAction,
 ): void {
   if (!message.trim()) return
   if (typeof window === 'undefined') return
@@ -4590,11 +4700,35 @@ function showProductToast(
     id: Date.now(),
     message: message.trim(),
     tone,
+    action,
   }
+  productToastActionBusyId.value = null
   productToastTimer = window.setTimeout(() => {
     productToastTimer = null
     productToast.value = null
   }, durationMs)
+}
+
+async function runProductToastAction(): Promise<void> {
+  const toast = productToast.value
+  if (!toast?.action || productToastActionBusyId.value === toast.id) return
+  if (productToastTimer) {
+    window.clearTimeout(productToastTimer)
+    productToastTimer = null
+  }
+
+  productToastActionBusyId.value = toast.id
+  try {
+    await toast.action.run()
+  } catch {
+    if (productToast.value?.id === toast.id) {
+      showProductToast('操作失败，请稍后重试。', 'danger', 4200)
+    }
+  } finally {
+    if (productToast.value?.id === toast.id) {
+      productToastActionBusyId.value = null
+    }
+  }
 }
 
 function closeProductToast(): void {
@@ -4602,6 +4736,7 @@ function closeProductToast(): void {
     window.clearTimeout(productToastTimer)
     productToastTimer = null
   }
+  productToastActionBusyId.value = null
   productToast.value = null
 }
 
@@ -4613,8 +4748,9 @@ function loadDarkModePref(): 'system' | 'light' | 'dark' {
 }
 
 function toggleSendWithEnter(): void {
-  sendWithEnter.value = !sendWithEnter.value
-  window.localStorage.setItem(SEND_WITH_ENTER_KEY, sendWithEnter.value ? '1' : '0')
+  const nextValue = !sendWithEnter.value
+  storedSendWithEnterPreference.value = nextValue ? '1' : '0'
+  window.localStorage.setItem(SEND_WITH_ENTER_KEY, storedSendWithEnterPreference.value)
 }
 
 function cycleDarkMode(): void {
@@ -5838,6 +5974,30 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   @apply min-w-0 flex-1;
 }
 
+.product-toast[data-action='true'] {
+  min-width: min(19rem, calc(100vw - 2rem));
+}
+
+.product-toast[data-action='true'] .product-toast-message {
+  white-space: nowrap;
+}
+
+.product-toast-action {
+  @apply inline-flex h-8 shrink-0 items-center justify-center border-0 bg-transparent px-2 text-sm font-semibold underline decoration-current/35 underline-offset-4;
+  border-radius: var(--ui-radius-control);
+  color: currentColor;
+}
+
+.product-toast-action:hover,
+.product-toast-action:focus-visible {
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.product-toast-action:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .product-toast-close {
   @apply inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-0 bg-transparent;
   color: currentColor;
@@ -5878,6 +6038,11 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 @media (max-width: 767px) {
   .product-toast--above-composer {
     bottom: max(7rem, calc(env(safe-area-inset-bottom) + 6.5rem));
+  }
+
+  .product-toast-action,
+  .product-toast-close {
+    min-height: 2.75rem;
   }
 
   .product-toast-close {
@@ -6079,10 +6244,18 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   background: var(--ui-bg-sidebar);
 }
 
+.sidebar-footer-actions {
+  @apply grid grid-cols-2 gap-1;
+}
+
 .sidebar-settings-button {
   @apply flex items-center gap-2 w-full border border-transparent bg-transparent px-3 py-2 text-sm transition-colors duration-100 cursor-pointer;
   border-radius: var(--ui-radius-control);
   color: var(--ui-text-secondary);
+}
+
+.sidebar-settings-button:disabled {
+  @apply cursor-not-allowed opacity-45;
 }
 
 .sidebar-settings-button:hover,
@@ -6093,6 +6266,10 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
 .sidebar-settings-icon {
   @apply w-4.5 h-4.5;
+}
+
+.sidebar-current-thread-icon {
+  @apply inline-flex h-4.5 w-4.5 items-center justify-center text-base leading-none;
 }
 
 .sidebar-settings-panel {
@@ -6502,6 +6679,13 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   @apply min-w-0 truncate text-right;
 }
 
+@media (max-width: 1023px) {
+  .content-title-refresh-button,
+  .content-favorites-button {
+    @apply h-9 min-w-9;
+  }
+}
+
 @media (max-width: 767px) {
   .content-root {
     --content-shell-max-width: 100%;
@@ -6571,7 +6755,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   }
 
   .content-title-refresh-button {
-    @apply h-7 min-w-7 px-1.5;
+    @apply px-1.5;
   }
 
   .content-title-refresh-button-icon {
@@ -6612,6 +6796,12 @@ function onEditPendingNewThreadMessage(messageId: string): void {
     right: 0.75rem;
     top: max(0.5rem, env(safe-area-inset-top));
     text-align: center;
+  }
+}
+
+@media (max-width: 430px) {
+  .content-title-connection-label {
+    display: none;
   }
 }
 

@@ -3,6 +3,19 @@ import { stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { resolveRipgrepCommand } from '../commandResolution.js'
 
+export const COMPOSER_FILE_SEARCH_CACHE_TTL_MS = 2000
+export const COMPOSER_FILE_SEARCH_CACHE_MAX_ROOTS = 4
+export const COMPOSER_FILE_SEARCH_TIMEOUT_MS = 10_000
+export const COMPOSER_FILE_SEARCH_MAX_OUTPUT_BYTES = 32 * 1024 * 1024
+
+type ComposerFileSearchCacheEntry = {
+  files: string[]
+  expiresAtMs: number
+}
+
+const composerFileSearchCache = new Map<string, ComposerFileSearchCacheEntry>()
+const composerFileSearchInFlight = new Map<string, Promise<string[]>>()
+
 export type ComposerFileSearchResult = {
   path: string
 }
@@ -68,6 +81,53 @@ export function searchComposerFileCandidates(
     .map((row) => ({ path: row.path }))
 }
 
+export function clearComposerFileSearchCache(): void {
+  composerFileSearchCache.clear()
+  composerFileSearchInFlight.clear()
+}
+
+export async function getComposerFileSearchFiles(
+  cwd: string,
+  loadFiles: (cwd: string) => Promise<string[]> = listFilesWithRipgrep,
+): Promise<string[]> {
+  const now = Date.now()
+  for (const [cacheKey, entry] of composerFileSearchCache) {
+    if (entry.expiresAtMs <= now) composerFileSearchCache.delete(cacheKey)
+  }
+
+  const cached = composerFileSearchCache.get(cwd)
+  if (cached) {
+    composerFileSearchCache.delete(cwd)
+    composerFileSearchCache.set(cwd, cached)
+    return cached.files
+  }
+
+  const pending = composerFileSearchInFlight.get(cwd)
+  if (pending) return await pending
+
+  const loadPromise = loadFiles(cwd)
+    .then((files) => {
+      composerFileSearchCache.set(cwd, {
+        files,
+        expiresAtMs: Date.now() + COMPOSER_FILE_SEARCH_CACHE_TTL_MS,
+      })
+      while (composerFileSearchCache.size > COMPOSER_FILE_SEARCH_CACHE_MAX_ROOTS) {
+        const oldestKey = composerFileSearchCache.keys().next().value
+        if (typeof oldestKey !== 'string') break
+        composerFileSearchCache.delete(oldestKey)
+      }
+      return files
+    })
+    .finally(() => {
+      if (composerFileSearchInFlight.get(cwd) === loadPromise) {
+        composerFileSearchInFlight.delete(cwd)
+      }
+    })
+
+  composerFileSearchInFlight.set(cwd, loadPromise)
+  return await loadPromise
+}
+
 export async function listFilesWithRipgrep(cwd: string): Promise<string[]> {
   return await new Promise<string[]>((resolveRows, reject) => {
     const ripgrepCommand = resolveRipgrepCommand()
@@ -83,21 +143,57 @@ export async function listFilesWithRipgrep(cwd: string): Promise<string[]> {
     })
     let stdout = ''
     let stderr = ''
-    proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
-    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
-    proc.on('error', reject)
-    proc.on('close', (code) => {
+    let stdoutBytes = 0
+    let settled = false
+
+    const finish = (error?: Error, rows?: string[]): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      proc.stdout.off('data', handleStdout)
+      proc.stderr.off('data', handleStderr)
+      proc.off('error', handleError)
+      proc.off('close', handleClose)
+      if (error) reject(error)
+      else resolveRows(rows ?? [])
+    }
+    const stopWithError = (error: Error): void => {
+      if (proc.exitCode === null && proc.signalCode === null) proc.kill()
+      finish(error)
+    }
+    const handleStdout = (chunk: Buffer): void => {
+      stdoutBytes += chunk.byteLength
+      if (stdoutBytes > COMPOSER_FILE_SEARCH_MAX_OUTPUT_BYTES) {
+        stopWithError(new ComposerFileSearchError('Workspace file list is too large to search safely', 503))
+        return
+      }
+      stdout += chunk.toString()
+    }
+    const handleStderr = (chunk: Buffer): void => {
+      if (stderr.length < 64 * 1024) stderr += chunk.toString()
+    }
+    const handleError = (error: Error): void => finish(error)
+    const handleClose = (code: number | null): void => {
       if (code === 0) {
         const rows = stdout
           .split(/\r?\n/)
           .map((line) => line.trim())
           .filter(Boolean)
-        resolveRows(rows)
+        finish(undefined, rows)
         return
       }
       const details = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n')
-      reject(new Error(details || 'rg --files failed'))
-    })
+      finish(new Error(details || 'rg --files failed'))
+    }
+
+    proc.stdout.on('data', handleStdout)
+    proc.stderr.on('data', handleStderr)
+    proc.on('error', handleError)
+    proc.on('close', handleClose)
+    const timeout = setTimeout(() => {
+      stopWithError(new ComposerFileSearchError('Workspace file search timed out', 503))
+    }, COMPOSER_FILE_SEARCH_TIMEOUT_MS)
+    timeout.unref?.()
   })
 }
 
@@ -108,6 +204,6 @@ export async function searchComposerFiles(args: {
 }): Promise<ComposerFileSearchResult[]> {
   const cwd = normalizeComposerFileSearchCwd(args.cwd)
   await assertComposerFileSearchCwd(cwd)
-  const files = await listFilesWithRipgrep(cwd)
+  const files = await getComposerFileSearchFiles(cwd)
   return searchComposerFileCandidates(files, args.query, normalizeComposerFileSearchLimit(args.limit))
 }
