@@ -86,6 +86,15 @@ Release 工作流会自动完成：
 5. 校验 zip / APK 与 `.sha256`
 6. 发布 GitHub Release
 
+## Android 正式签名密钥运维
+
+- 正式签名只通过 GitHub Actions Secrets 提供：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 和 `ANDROID_KEY_PASSWORD`。不要把 keystore、密码、Base64 内容或可还原片段写入提交、Issue、Release、日志或构建产物。
+- 日常只轮换密码时，保留原 keystore 与签名证书，原子更新四个 Secrets，并先用候选 Tag 验证 Release workflow、APK SHA-256、包名、版本号和 `apksigner verify --print-certs` 的证书 SHA-256。
+- 更换 keystore 或签名证书会影响 Android 覆盖升级。除非证书已泄露、失效或平台迁移明确要求，否则不要更换签名证书；必须更换时，要在发布说明中明确旧版无法直接覆盖升级及迁移路径。
+- 怀疑密钥泄露时，立即停止打新 Tag，删除或覆盖仓库中的四个签名 Secrets，使 Release workflow 在签名准备阶段阻断；清理已公开的敏感内容，轮换相关仓库访问凭据，并按 `SECURITY.md` 记录脱敏事件时间线。
+- 轮换或恢复后，使用新的候选 Tag 重跑正式签名流程；只有固定证书指纹、正式 APK、对应 `.sha256` 和公开下载复核全部通过，才恢复稳定发布。受影响的旧 Release 应标记撤回或预发布，并指向安全替代版本。
+- keystore 的离线备份、恢复权限和失效处置由维护者在仓库外管理。GitHub Secrets 只保存 CI 所需副本，不能作为唯一备份或证书恢复来源。
+
 ## Release 包内容
 
 Release 压缩包默认包含：
