@@ -5,6 +5,8 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export type RuntimeRequestStatus =
+  | 'queued'
+  | 'queue_failed'
   | 'pending_start'
   | 'starting'
   | 'running'
@@ -681,6 +683,37 @@ export class RuntimeStore {
       LIMIT ?
     `).all(threadId, ...statuses, Math.max(1, Math.min(100, Math.trunc(limit)))) as RuntimeRequestRow[]
     return rows.map(fromRequestRow)
+  }
+
+  listQueuedRequests(threadId = '', limit = 100): RuntimeRequestRecord[] {
+    const normalizedThreadId = threadId.trim()
+    const boundedLimit = Math.max(1, Math.min(500, Math.trunc(limit)))
+    const rows = normalizedThreadId
+      ? this.db.prepare(`
+          SELECT * FROM runtime_requests
+          WHERE thread_id = ? AND status IN ('queued', 'queue_failed')
+          ORDER BY created_at_iso ASC, request_id ASC
+          LIMIT ?
+        `).all(normalizedThreadId, boundedLimit) as RuntimeRequestRow[]
+      : this.db.prepare(`
+          SELECT * FROM runtime_requests
+          WHERE status IN ('queued', 'queue_failed')
+          ORDER BY created_at_iso ASC, request_id ASC
+          LIMIT ?
+        `).all(boundedLimit) as RuntimeRequestRow[]
+    return rows.map(fromRequestRow)
+  }
+
+  listQueuedThreadIds(limit = 500): string[] {
+    const rows = this.db.prepare(`
+      SELECT thread_id, MIN(created_at_iso) AS first_created_at_iso
+      FROM runtime_requests
+      WHERE status IN ('queued', 'queue_failed') AND thread_id <> ''
+      GROUP BY thread_id
+      ORDER BY first_created_at_iso ASC
+      LIMIT ?
+    `).all(Math.max(1, Math.min(1000, Math.trunc(limit)))) as Array<{ thread_id: string }>
+    return rows.map((row) => row.thread_id)
   }
 
   listUncertainRequests(limit = 50): RuntimeRequestRecord[] {

@@ -13078,8 +13078,8 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
 
 #### Expected Results
-- Desktop viewport mounts only `.message-table-scroll` for table blocks.
-- Phone viewport mounts only `.message-table-cards` for table blocks.
+- Desktop and phone viewports both retain the semantic `<table>` inside `.message-table-scroll`.
+- Phone tables scroll horizontally inside their own region, use 13px cells, and never expand the document width or collapse rows into vertical cards.
 - Switching viewport updates the rendered table representation without breaking the conversation.
 - The real `分析项目` phone thread page and conversation fixture remain nonblank.
 
@@ -15624,9 +15624,34 @@ Current evidence:
 - `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build:frontend`, PowerShell parser validation, and `git diff --check` passed. The production main entry is 399,671 bytes, 329 bytes inside the 400,000-byte budget.
 - The complete 35-surface frontend regression passed in 452.6 seconds, including sidebar recency, search continuity, scroll anchoring, current-thread reveal, mobile drawer, Composer, conversation recovery, notifications, and Task Pet.
 - Final 7420 health remained `ok`, running, and initialized on PID 51368 with `approvalPolicy=never` and `sandboxMode=danger-full-access`. Pending, queued, and active RPCs, pending server requests, blocking restarts, uncertain Runtime requests, and thread leases were all zero.
+
 ## Quick Tunnel stale-session recovery and sidebar outside-dismissal (2026-08-02)
 
 1. Start a verified Quick Tunnel, then invoke start again while its child process is still alive. The existing URL may be reused only after public health, HTTP authentication, and WebSocket authentication all pass again.
 2. Simulate an alive child whose public URL no longer resolves or whose three public checks fail. Starting mobile access must terminate the stale child and continue into a fresh tunnel attempt instead of returning the stale `ready` snapshot.
 3. Open a conversation action menu from either the pinned section or a project group and press Escape. The menu closes and focus returns to the exact trigger.
 4. Open the conversation action menu again and click or tap outside it. The menu closes even when no project menu is open.
+
+## Durable background queue and conversation fidelity (2026-08-03)
+
+1. Queue two messages while a turn is running, switch to another conversation, and close the Android Activity. Both queue records must already exist under `/codex-api/runtime/queue`; the 7420 server starts them in order after the owning thread settles without requiring that conversation or WebView to be open.
+2. Restart only the mobile app while the server queue is active. The queue panel must rehydrate from the server. A failed first item pauses later items until retry, edit, or delete; deleting it allows the next item to continue.
+3. Send a prompt and force a refresh after `runtime/send` is accepted but before `thread/read` contains the user item. The optimistic user bubble must restore before newer assistant output and remain durable until an authoritative matching `userMessage` acknowledges it.
+4. Manually rename a conversation, then receive a different automatic `thread/name/updated`. The manual title remains unchanged locally and in the durable title cache; a session-index refresh must not overwrite it.
+5. Normalize an `imageGeneration` item that contains both `savedPath` and a raw base64 `result`. Render only the local saved image first; when a message image fails, its failure surface remains actionable and remounts the request when tapped.
+6. At phone width, Markdown tables remain semantic tables with a 620px minimum width, 13px text, and an independently focusable horizontal scroll region. The document itself must have no horizontal overflow and no vertical table-card DOM may be mounted.
+7. Start a queued standard-speed message while `config/read` already reports standard speed. The queue must not issue `config/batchWrite`. When a speed change is required, finish that configuration while the request is still `queued`; an idle restart snapshot during the write must not convert it to `queue_failed` before `turn/start` is attempted.
+
+Verification:
+
+- Run `npm run verify:frontend-normalizers`, `npm run verify:server-modules`, `npm run build:frontend`, and `npm run build:cli`.
+- Run the focused 7420 frontend regression and inspect the phone conversation fixture for table-local scrolling, image retry, and zero document overflow.
+- Stop the Android Activity after the server acknowledges queued messages, wait for the current turn to finish, then reopen the app and confirm the next queued turn started while the app was closed.
+
+Current evidence:
+
+- `npm run verify:frontend-normalizers`, `npm run verify:server-modules`, `npm run build:frontend`, `npm run build:cli`, Vue type checking, and `git diff --check` passed. The Runtime queue server smoke proves an active lease blocks the first queued row, a terminal event starts it, a failed row pauses its successors, and retry/delete remain recoverable.
+- Headless Playwright at 393 x 852 measured one semantic table scroll region, zero mobile table cards, a 322 px viewport over 620 px table content, and 13 px computed cell text. The inspected screenshot is `output/regression-7420/message-fidelity-20260803/mobile-table-horizontal.png`.
+- The complete frontend regression passed the updated queue source contracts and reached the live browser phase, then stopped on the pre-existing mobile Settings fixture with `settings panel did not open`, before the conversation fixture. The focused Playwright conversation fixture passed without console errors.
+- The production main entry is 411,336 bytes with the current locked Vite toolchain. A clean HEAD baseline under the same toolchain is 409,169 bytes, so this change adds 2,167 bytes to the cold entry; queue parsing, migration, persistence, and network ownership remain in the 7.81 KB lazy chunk.
+- The restart-race smoke reproduces the configuration-triggered app-server lifecycle boundary. Matching speed performs only `config/read`; changing speed keeps the row `queued` through both config RPCs and still reaches `running` after an injected idle restart snapshot. The mobile queue fixture has no browser errors and its screenshot is `output/regression-7420/queue-restart-race-20260803/queue-accepted-element.png`.

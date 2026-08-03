@@ -315,6 +315,7 @@ import {
   type RuntimeEventRecord,
   type RuntimeRequestRecord,
 } from '../src/server/runtimeStore.js'
+import { RuntimeMessageQueue } from '../src/server/runtimeMessageQueue.js'
 import { handleRpcProxyRoute, type RpcProxyRouteDependencies } from '../src/server/rpcProxyRoute.js'
 import {
   createRuntimePromptHash,
@@ -563,6 +564,7 @@ try {
   smokeAppServerRuntimeSnapshotPersistence()
   smokeAppServerNotificationRuntimeSync()
   await smokeRuntimeActionRoutes()
+  await smokeRuntimeMessageQueue()
   await smokeMobilePush()
   await smokeDiagnosticsRoutes()
   await smokeRuntimeStoreMaintenance()
@@ -6377,24 +6379,28 @@ async function smokeThreadTokenUsage(): Promise<void> {
 }
 
 async function smokeThreadTitleCache(): Promise<void> {
-  assert.deepEqual(normalizeThreadTitleCache(null), { titles: {}, order: [] })
+  assert.deepEqual(normalizeThreadTitleCache(null), { titles: {}, order: [], manualTitleIds: [] })
   assert.deepEqual(normalizeThreadTitleCache({
     titles: { a: 'Alpha', b: '', c: 7 },
     order: ['a', 'missing', 'a', '', 9],
   }), {
     titles: { a: 'Alpha' },
     order: ['a', 'missing'],
+    manualTitleIds: [],
   })
 
-  const updated = updateThreadTitleCache({ titles: { a: 'Alpha' }, order: ['a'] }, 'b', 'Beta')
-  assert.deepEqual(updated, { titles: { a: 'Alpha', b: 'Beta' }, order: ['b', 'a'] })
-  assert.deepEqual(removeFromThreadTitleCache(updated, 'a'), { titles: { b: 'Beta' }, order: ['b'] })
+  const updated = updateThreadTitleCache({ titles: { a: 'Alpha' }, order: ['a'], manualTitleIds: [] }, 'b', 'Beta')
+  assert.deepEqual(updated, { titles: { a: 'Alpha', b: 'Beta' }, order: ['b', 'a'], manualTitleIds: [] })
+  assert.deepEqual(removeFromThreadTitleCache(updated, 'a'), { titles: { b: 'Beta' }, order: ['b'], manualTitleIds: [] })
+  const manuallyUpdated = updateThreadTitleCache(updated, 'b', 'Manual Beta', { manual: true })
+  assert.equal(updateThreadTitleCache(manuallyUpdated, 'b', 'Automatic Beta'), manuallyUpdated)
   assert.deepEqual(mergeThreadTitleCaches(
-    { titles: { a: 'Alpha', b: 'Base Beta' }, order: ['a', 'b'] },
-    { titles: { b: 'Session Beta', c: 'Gamma' }, order: ['c', 'b'] },
+    { titles: { a: 'Alpha', b: 'Base Beta' }, order: ['a', 'b'], manualTitleIds: ['b'] },
+    { titles: { b: 'Session Beta', c: 'Gamma' }, order: ['c', 'b'], manualTitleIds: [] },
   ), {
-    titles: { a: 'Alpha', b: 'Session Beta', c: 'Gamma' },
+    titles: { a: 'Alpha', b: 'Base Beta', c: 'Gamma' },
     order: ['c', 'b', 'a'],
+    manualTitleIds: ['b'],
   })
 
   const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-thread-title-'))
@@ -6402,12 +6408,13 @@ async function smokeThreadTitleCache(): Promise<void> {
     const statePath = join(tempDir, 'global-state.json')
     const sessionIndexPath = join(tempDir, 'session_index.jsonl')
 
-    assert.deepEqual(await readThreadTitleCache(statePath), { titles: {}, order: [] })
+    assert.deepEqual(await readThreadTitleCache(statePath), { titles: {}, order: [], manualTitleIds: [] })
     await writeFile(statePath, JSON.stringify({ existing: true }), 'utf8')
-    await writeThreadTitleCache(statePath, { titles: { manual: 'Manual title' }, order: ['manual'] })
+    await writeThreadTitleCache(statePath, { titles: { manual: 'Manual title' }, order: ['manual'], manualTitleIds: ['manual'] })
     assert.deepEqual(await readThreadTitleCache(statePath), {
       titles: { manual: 'Manual title' },
       order: ['manual'],
+      manualTitleIds: ['manual'],
     })
 
     await writeFile(sessionIndexPath, [
@@ -6421,15 +6428,18 @@ async function smokeThreadTitleCache(): Promise<void> {
     assert.deepEqual(await parseThreadTitlesFromSessionIndex(sessionIndexPath), {
       titles: { 'thread-a': 'New A', 'thread-b': 'Beta' },
       order: ['thread-a', 'thread-b'],
+      manualTitleIds: [],
     })
     assert.deepEqual(await readThreadTitlesFromSessionIndex(sessionIndexPath), {
       titles: { 'thread-a': 'New A', 'thread-b': 'Beta' },
       order: ['thread-a', 'thread-b'],
+      manualTitleIds: [],
     })
-    assert.deepEqual(await readThreadTitlesFromSessionIndex(join(tempDir, 'missing.jsonl')), { titles: {}, order: [] })
+    assert.deepEqual(await readThreadTitlesFromSessionIndex(join(tempDir, 'missing.jsonl')), { titles: {}, order: [], manualTitleIds: [] })
     assert.deepEqual(await readMergedThreadTitleCache(statePath, sessionIndexPath), {
       titles: { manual: 'Manual title', 'thread-a': 'New A', 'thread-b': 'Beta' },
       order: ['thread-a', 'thread-b', 'manual'],
+      manualTitleIds: ['manual'],
     })
   } finally {
     await rm(tempDir, { recursive: true, force: true })
@@ -6715,7 +6725,7 @@ async function smokeThreadSearchIndex(): Promise<void> {
           : { data: [{ id: 'hydrated-thread', name: 'Hydrated needle' }] }
       },
       getSessionIndexPath: () => 'cached-factory-session-index.jsonl',
-      readThreadTitlesFromSessionIndex: async () => ({ titles: {}, order: [] }),
+      readThreadTitlesFromSessionIndex: async () => ({ titles: {}, order: [], manualTitleIds: [] }),
     })
     assert.deepEqual(await cachedFactoryStore.search('cached', 10), {
       threadIds: ['cached-thread'],
@@ -6742,7 +6752,7 @@ async function smokeThreadRoutes(): Promise<void> {
   const bodies: unknown[] = [
     { query: ' alpha ', limit: 2.8 },
     { query: '   ', limit: 10 },
-    { id: 'thread-a', title: 'Alpha title' },
+    { id: 'thread-a', title: 'Alpha title', manual: true },
     { id: 'thread-a', title: '' },
     { title: 'Missing id' },
   ]
@@ -6765,7 +6775,7 @@ async function smokeThreadRoutes(): Promise<void> {
     }),
     readThreadTitleCache: async (path: string) => {
       readTitlePaths.push(path)
-      return { titles: { 'thread-a': 'Old title' }, order: ['thread-a'] }
+      return { titles: { 'thread-a': 'Old title' }, order: ['thread-a'], manualTitleIds: [] }
     },
     writeThreadTitleCache: async (path: string, cache: unknown) => {
       writeTitleCalls.push({ path, cache })
@@ -6819,6 +6829,7 @@ async function smokeThreadRoutes(): Promise<void> {
     cache: {
       titles: { 'thread-a': 'Alpha title' },
       order: ['thread-a'],
+      manualTitleIds: ['thread-a'],
     },
   })
   assert.deepEqual(JSON.parse(updateTitle.body), { ok: true })
@@ -6835,6 +6846,7 @@ async function smokeThreadRoutes(): Promise<void> {
     cache: {
       titles: {},
       order: [],
+      manualTitleIds: [],
     },
   })
   assert.deepEqual(JSON.parse(removeTitle.body), { ok: true })
@@ -9783,6 +9795,76 @@ async function smokeRuntimeActionRoutes(): Promise<void> {
   ])
   assert.deepEqual(JSON.parse(stopUncertain.body), { data: { status: 'stop_uncertain', requestId: 'stop-2' } })
 
+  const queueEntry = {
+    requestId: 'queue-request-a',
+    clientMessageId: 'queue-client-a',
+    threadId: 'thread-queue',
+    status: 'queued' as const,
+    createdAtIso: '2026-01-01T00:00:00.000Z',
+    updatedAtIso: '2026-01-01T00:00:00.000Z',
+    lastError: null,
+    payload: { input: 'queue route' },
+  }
+  const listedQueueThreadIds: string[] = []
+  const cancelledQueueRequestIds: string[] = []
+  const retriedQueueRequestIds: string[] = []
+  const queueDependencies = {
+    ...dependencies,
+    readJsonBody: async () => ({ input: 'queue route' }),
+    enqueueRuntimeTurn: () => queueEntry,
+    listRuntimeQueue: (threadId = '') => {
+      listedQueueThreadIds.push(threadId)
+      return [queueEntry]
+    },
+    cancelQueuedRuntimeTurn: (requestId: string) => {
+      cancelledQueueRequestIds.push(requestId)
+      return true
+    },
+    retryQueuedRuntimeTurn: (requestId: string) => {
+      retriedQueueRequestIds.push(requestId)
+      return true
+    },
+  }
+  const queued = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'POST' } as never,
+    queued.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/queue'),
+    queueDependencies,
+  ), true)
+  assert.equal(queued.response.statusCode, 202)
+  assert.deepEqual(JSON.parse(queued.body), { data: queueEntry })
+
+  const listed = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'GET' } as never,
+    listed.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/queue?threadId=thread-queue'),
+    queueDependencies,
+  ), true)
+  assert.deepEqual(JSON.parse(listed.body), { data: [queueEntry] })
+  assert.deepEqual(listedQueueThreadIds, ['thread-queue'])
+
+  const removed = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'DELETE' } as never,
+    removed.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/queue/queue-request-a'),
+    queueDependencies,
+  ), true)
+  assert.equal(removed.response.statusCode, 200)
+  assert.deepEqual(cancelledQueueRequestIds, ['queue-request-a'])
+
+  const retried = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'POST' } as never,
+    retried.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/queue/queue-request-a/retry'),
+    queueDependencies,
+  ), true)
+  assert.equal(retried.response.statusCode, 202)
+  assert.deepEqual(retriedQueueRequestIds, ['queue-request-a'])
+
   assert.equal(await handleRuntimeActionRoutes(
     { method: 'GET' } as never,
     createRouteTestResponse().response as never,
@@ -11192,6 +11274,134 @@ function smokeAppServerNotificationReplay(): void {
     threadId: '',
     turnId: '',
   }])
+}
+
+async function smokeRuntimeMessageQueue(): Promise<void> {
+  const tempDir = await mkdtemp(join(tmpdir(), 'cx-codex-runtime-queue-'))
+  const dbPath = join(tempDir, 'runtime.sqlite')
+  const store = new RuntimeStore(dbPath)
+  const notifications: Array<{ method: string; params: unknown }> = []
+  const startedClientMessageIds: string[] = []
+  const rpcMethods: string[] = []
+  const queueStatusAtRpc: Array<{ method: string; status: string }> = []
+  let currentServiceTier: 'fast' | null = null
+  let expectedConfigClientMessageId = 'queued-client-1'
+  let queue: RuntimeMessageQueue | null = null
+  try {
+    store.createRequest({
+      requestId: 'active-request',
+      clientMessageId: 'active-client',
+      threadId: 'thread-queue',
+      status: 'running',
+      promptHash: 'active-hash',
+      mode: 'execute',
+      payload: {},
+    })
+    queue = new RuntimeMessageQueue({
+      store,
+      rpc: async (method, params) => {
+        rpcMethods.push(method)
+        const queuedRequest = store.getLatestRequestByClientMessageId(expectedConfigClientMessageId)
+        if (queuedRequest) {
+          queueStatusAtRpc.push({ method, status: queuedRequest.status })
+        }
+        if (method === 'config/read') {
+          return { config: { service_tier: currentServiceTier, features: { fast_mode: true } } }
+        }
+        if (method === 'config/batchWrite') {
+          updateRuntimeRequestsFromSnapshot('thread-queue', createThreadRuntimeSnapshot({
+            executionState: 'idle',
+            inProgress: false,
+          }), store)
+          const edits = params && typeof params === 'object' && !Array.isArray(params)
+            && Array.isArray((params as Record<string, unknown>).edits)
+            ? (params as Record<string, unknown>).edits as unknown[]
+            : []
+          const serviceTierEdit = edits.find((edit) => readStringProperty(edit, 'keyPath') === 'service_tier')
+          currentServiceTier = readStringProperty(serviceTierEdit, 'value') === 'fast' ? 'fast' : null
+        }
+        return {}
+      },
+      startRuntimeTurn: async (payload) => {
+        const clientMessageId = readStringProperty(payload, 'clientMessageId')
+        startedClientMessageIds.push(clientMessageId)
+        const request = store.getLatestRequestByClientMessageId(clientMessageId)
+        assert.ok(request)
+        store.updateRequest(request.requestId, { status: 'running', turnId: `turn-${clientMessageId}` })
+        return {}
+      },
+      publishNotification: (notification) => { notifications.push(notification) },
+      getErrorMessage: (error, fallback) => error instanceof Error ? error.message : fallback,
+    })
+    queue.start()
+
+    const first = queue.enqueue({
+      threadId: 'thread-queue',
+      clientMessageId: 'queued-client-1',
+      input: [{ type: 'text', text: 'First queued prompt' }],
+      collaborationMode: 'execute',
+      queueMetadata: { speedMode: 'standard', text: 'First queued prompt' },
+    })
+    assert.equal(first.status, 'queued')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.deepEqual(startedClientMessageIds, [])
+    assert.equal(queue.list('thread-queue').length, 1)
+
+    store.updateRequest('active-request', { status: 'completed' })
+    queue.handleRuntimeEvent('turn/completed', 'thread-queue')
+    await waitForCondition(() => startedClientMessageIds.length === 1)
+    assert.deepEqual(startedClientMessageIds, ['queued-client-1'])
+    assert.equal(queue.list('thread-queue').length, 0)
+    assert.deepEqual(rpcMethods, ['config/read'])
+    assert.deepEqual(queueStatusAtRpc, [{ method: 'config/read', status: 'queued' }])
+    assert.equal(notifications.some((notification) => readStringProperty(notification.params, 'action') === 'starting'), true)
+
+    store.updateRequest(first.requestId, { status: 'completed' })
+    expectedConfigClientMessageId = 'queued-client-fast'
+    const fast = queue.enqueue({
+      threadId: 'thread-queue',
+      clientMessageId: 'queued-client-fast',
+      input: [{ type: 'text', text: 'Fast queued prompt' }],
+      collaborationMode: 'execute',
+      queueMetadata: { speedMode: 'fast', text: 'Fast queued prompt' },
+    })
+    await waitForCondition(() => startedClientMessageIds.length === 2)
+    assert.deepEqual(startedClientMessageIds, ['queued-client-1', 'queued-client-fast'])
+    assert.equal(rpcMethods.includes('config/batchWrite'), true)
+    assert.equal(store.getRequest(fast.requestId)?.status, 'running')
+    assert.equal(
+      queueStatusAtRpc.every((entry) => entry.status === 'queued'),
+      true,
+      'queued speed configuration must finish before claiming pending_start',
+    )
+    store.updateRequest(fast.requestId, { status: 'completed' })
+    queue.dispose()
+    queue = null
+    const failedQueue = new RuntimeMessageQueue({
+      store,
+      rpc: async () => ({}),
+      startRuntimeTurn: async () => { throw new Error('background start failed') },
+      publishNotification: (notification) => { notifications.push(notification) },
+      getErrorMessage: (error, fallback) => error instanceof Error ? error.message : fallback,
+    })
+    const failed = failedQueue.enqueue({
+      threadId: 'thread-queue',
+      clientMessageId: 'queued-client-failed',
+      input: [{ type: 'text', text: 'Failed queued prompt' }],
+      queueMetadata: { speedMode: 'standard', text: 'Failed queued prompt' },
+    })
+    await waitForCondition(() => store.getRequest(failed.requestId)?.status === 'queue_failed')
+    assert.equal(failedQueue.list('thread-queue')[0]?.lastError, 'background start failed')
+    assert.equal(failedQueue.retry(failed.requestId), true)
+    assert.equal(store.getRequest(failed.requestId)?.status, 'queued')
+    assert.equal(failedQueue.cancel(failed.requestId), true)
+    assert.equal(failedQueue.list('thread-queue').length, 0)
+    failedQueue.dispose()
+  } finally {
+    queue?.dispose()
+    store.close()
+    await rm(tempDir, { recursive: true, force: true })
+  }
 }
 
 async function smokeRuntimeStoreMaintenance(): Promise<void> {

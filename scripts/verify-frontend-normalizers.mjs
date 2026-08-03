@@ -53,6 +53,7 @@ import { mergeMessageOutboxEntries, mergeMessageOutboxState } from '${messageOut
 import {
   createClientMessageId,
   filterVisibleOptimisticUserMessages,
+  mergeVisibleOptimisticUserMessages,
   userMessageSignature,
 } from '${messageIdentityImport}'
 import {
@@ -526,6 +527,8 @@ const rememberedIdentityMeta = new Map([[optimisticIdentityMessage.id, {
   kind: 'optimisticUserMessage',
   signature: identitySignature,
   baselineMatchCount: 1,
+  baselineMessageCount: 2,
+  baselineTailMessageId: 'baseline-assistant',
   createdAtMs: 1,
 }]])
 assert.deepEqual(
@@ -544,6 +547,73 @@ assert.deepEqual(
   ),
   [],
 )
+assert.deepEqual(
+  mergeVisibleOptimisticUserMessages(
+    [
+      persistedIdentityMessage,
+      { id: 'baseline-assistant', role: 'assistant', text: 'Previous answer' },
+      { id: 'new-assistant', role: 'assistant', text: 'Reply arrived before history acknowledgement' },
+    ],
+    [optimisticIdentityMessage],
+    rememberedIdentityMeta,
+  ).map((message) => message.id),
+  ['persisted-identity-1', 'baseline-assistant', 'optimistic-user:identity-1', 'new-assistant'],
+)
+const optimisticAfterFirst = { id: 'optimistic-user:after-first', role: 'user', text: 'First queued prompt' }
+const optimisticAfterLast = { id: 'optimistic-user:after-last', role: 'user', text: 'Second queued prompt' }
+assert.deepEqual(
+  mergeVisibleOptimisticUserMessages(
+    [
+      { id: 'persisted-a', role: 'assistant', text: 'A' },
+      { id: 'persisted-b', role: 'assistant', text: 'B' },
+      { id: 'persisted-c', role: 'assistant', text: 'C' },
+    ],
+    [optimisticAfterFirst, optimisticAfterLast],
+    new Map([
+      [optimisticAfterFirst.id, {
+        kind: 'optimisticUserMessage',
+        signature: userMessageSignature(optimisticAfterFirst),
+        baselineMatchCount: 0,
+        baselineMessageCount: 1,
+        baselineTailMessageId: 'persisted-a',
+        createdAtMs: 2,
+      }],
+      [optimisticAfterLast.id, {
+        kind: 'optimisticUserMessage',
+        signature: userMessageSignature(optimisticAfterLast),
+        baselineMatchCount: 0,
+        baselineMessageCount: 3,
+        baselineTailMessageId: 'persisted-c',
+        createdAtMs: 3,
+      }],
+    ]),
+  ).map((message) => message.id),
+  ['persisted-a', 'optimistic-user:after-first', 'persisted-b', 'persisted-c', 'optimistic-user:after-last'],
+)
+
+const generatedImageMessages = normalizeThreadMessagesV2({
+  thread: {
+    id: 'thread-generated-image',
+    cwd: 'E:\\repo',
+    preview: '',
+    updatedAt: 1,
+    createdAt: 1,
+    turns: [{
+      id: 'turn-generated-image',
+      status: 'completed',
+      items: [{
+        id: 'generated-image-1',
+        type: 'imageGeneration',
+        status: 'completed',
+        savedPath: 'C:\\work\\generated.png',
+        result: 'a'.repeat(512),
+      }],
+    }],
+  },
+})
+assert.equal(generatedImageMessages.length, 1)
+assert.equal(generatedImageMessages[0]?.messageType, 'imageGeneration')
+assert.deepEqual(generatedImageMessages[0]?.images, ['C:\\work\\generated.png'])
 
 const historyNoticeMessage = {
   id: 'history-notice',

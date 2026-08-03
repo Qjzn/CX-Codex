@@ -6,6 +6,8 @@ export type OptimisticUserMessageMeta = {
   kind: 'optimisticUserMessage'
   signature: string
   baselineMatchCount: number
+  baselineMessageCount: number
+  baselineTailMessageId: string
   createdAtMs: number
 }
 
@@ -57,11 +59,46 @@ function parseOptimisticUserMessageMeta(
       kind: 'optimisticUserMessage',
       signature: record.signature,
       baselineMatchCount: Math.max(0, Math.floor(record.baselineMatchCount)),
+      baselineMessageCount: typeof record.baselineMessageCount === 'number' && Number.isFinite(record.baselineMessageCount)
+        ? Math.max(0, Math.floor(record.baselineMessageCount))
+        : Number.MAX_SAFE_INTEGER,
+      baselineTailMessageId: typeof record.baselineTailMessageId === 'string'
+        ? record.baselineTailMessageId.trim()
+        : '',
       createdAtMs: record.createdAtMs,
     }
   } catch {
     return null
   }
+}
+
+export function mergeVisibleOptimisticUserMessages(
+  persisted: UiMessage[],
+  optimistic: UiMessage[],
+  rememberedMetaById?: ReadonlyMap<string, OptimisticUserMessageMeta>,
+): UiMessage[] {
+  const visible = filterVisibleOptimisticUserMessages(persisted, optimistic, rememberedMetaById)
+  if (visible.length === 0) return persisted
+
+  const insertionsByPersistedIndex = new Map<number, UiMessage[]>()
+  for (const message of visible) {
+    const meta = parseOptimisticUserMessageMeta(message, rememberedMetaById?.get(message.id))
+    const anchorId = meta?.baselineTailMessageId ?? ''
+    const anchorIndex = anchorId ? persisted.findIndex((candidate) => candidate.id === anchorId) : -1
+    const insertIndex = anchorIndex >= 0
+      ? anchorIndex + 1
+      : Math.min(meta?.baselineMessageCount ?? persisted.length, persisted.length)
+    const insertions = insertionsByPersistedIndex.get(insertIndex) ?? []
+    insertions.push(message)
+    insertionsByPersistedIndex.set(insertIndex, insertions)
+  }
+
+  const combined: UiMessage[] = []
+  for (let index = 0; index <= persisted.length; index += 1) {
+    combined.push(...(insertionsByPersistedIndex.get(index) ?? []))
+    if (index < persisted.length) combined.push(persisted[index]!)
+  }
+  return combined
 }
 
 export function countPersistedUserMessageSignatures(messages: UiMessage[]): Map<string, number> {

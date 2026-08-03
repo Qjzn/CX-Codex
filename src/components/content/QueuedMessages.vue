@@ -8,14 +8,17 @@
       <LoadingInline
         v-if="isProcessing"
         class="queued-messages-caption queued-messages-caption-loading"
-        label="正在提交队列中的下一条消息"
+        label="正在同步到 7420 后台队列"
         compact
       />
       <p v-else-if="hasPausedFailure" class="queued-messages-caption queued-messages-caption-failed" role="status">
         下一条未能发送，队列已暂停。重试、编辑或删除后继续。
       </p>
+      <p v-else-if="hasLocalPending" class="queued-messages-caption" role="status">
+        已保存在本机，正在等待连接 7420；同步完成后才可脱离移动端执行。
+      </p>
       <p v-else class="queued-messages-caption">
-        当前任务结束后按顺序执行。点正文可继续编辑。
+        已交给 7420 后台；切换会话或关闭移动端后仍会按顺序执行。点正文可编辑。
       </p>
 
       <div
@@ -65,6 +68,7 @@ import LoadingInline from './LoadingInline.vue'
 
 type QueuedMessageRow = {
   id: string
+  backgroundPersisted?: boolean
   deliveryState?: 'queued' | 'failed'
   text: string
   imageUrls?: string[]
@@ -85,6 +89,7 @@ defineEmits<{
 }>()
 
 const hasPausedFailure = computed(() => props.messages[0]?.deliveryState === 'failed')
+const hasLocalPending = computed(() => props.messages.some((message) => message.backgroundPersisted !== true))
 
 function getMessagePreview(message: QueuedMessageRow): string {
   const text = message.text.trim()

@@ -223,6 +223,25 @@ function extractAssistantImages(item: ThreadItem): string[] {
   return images
 }
 
+function normalizeGeneratedImageResult(value: unknown): string {
+  const result = readTrimmedString(value)
+  if (!result) return ''
+  if (
+    result.startsWith('data:image/')
+    || result.startsWith('http://')
+    || result.startsWith('https://')
+    || result.startsWith('blob:')
+    || result.startsWith('/')
+    || /^[A-Za-z]:[\\/]/u.test(result)
+  ) {
+    return result
+  }
+
+  const compact = result.replace(/\s+/gu, '')
+  if (compact.length < 256 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(compact)) return ''
+  return `data:image/png;base64,${compact}`
+}
+
 function toUiMessages(item: ThreadItem, turnId = ''): UiMessage[] {
   const rawItem = item as Record<string, unknown>
   const itemId = readTrimmedString(rawItem.id) || `unhandled:${readTrimmedString(rawItem.type) || 'item'}`
@@ -289,6 +308,25 @@ function toUiMessages(item: ThreadItem, turnId = ''): UiMessage[] {
         messageType: item.type,
       },
     ]
+  }
+
+  if (itemType === 'imageGeneration') {
+    const images: string[] = []
+    pushImageCandidate(images, rawItem.savedPath)
+    pushImageCandidate(images, rawItem.path)
+    pushImageCandidate(images, rawItem.url)
+    if (images.length === 0) {
+      const generatedResult = normalizeGeneratedImageResult(rawItem.result)
+      if (generatedResult) pushImageCandidate(images, generatedResult)
+    }
+    if (images.length === 0) return []
+    return [{
+      id: itemId,
+      role: 'assistant',
+      text: '',
+      images,
+      messageType: itemType,
+    }]
   }
 
   if (item.type === 'userMessage') {

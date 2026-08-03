@@ -680,9 +680,8 @@
                       'is-failed': isMessageImageFailed(entry.message.id, imageIndex),
                     }"
                     type="button"
-                    aria-label="打开消息图片预览"
-                    :disabled="isMessageImageFailed(entry.message.id, imageIndex)"
-                    @click="openImageModal(imageUrl)"
+                    :aria-label="isMessageImageFailed(entry.message.id, imageIndex) ? '图片加载失败，重新加载' : '打开消息图片预览'"
+                    @click="openOrRetryMessageImage(imageUrl, entry.message.id, imageIndex)"
                   >
                     <span
                       v-if="!isMessageImageLoaded(entry.message.id, imageIndex) && !isMessageImageFailed(entry.message.id, imageIndex)"
@@ -691,9 +690,10 @@
                     />
                     <img
                       v-if="!isMessageImageFailed(entry.message.id, imageIndex)"
+                      :key="messageImageRenderKey(entry.message.id, imageIndex)"
                       class="message-image-preview"
                       :class="{ 'is-loaded': isMessageImageLoaded(entry.message.id, imageIndex) }"
-                      :src="toRenderableImageUrl(imageUrl)"
+                      :src="messageImageRenderUrl(imageUrl, entry.message.id, imageIndex)"
                       alt="消息图片预览"
                       loading="lazy"
                       :ref="(element) => onMessageImageElementRef(element, entry.message.id, imageIndex)"
@@ -701,7 +701,7 @@
                       @error="onMessageImageError(entry.message.id, imageIndex)"
                     />
                     <span v-else class="message-image-failed" role="img" aria-label="图片加载失败">
-                      加载失败
+                      图片加载失败，点此重试
                     </span>
                   </button>
                 </li>
@@ -809,7 +809,12 @@
                         </template>
                       </p>
                       <div v-else-if="block.kind === 'table'" class="message-table-block">
-                        <div v-if="!isCompactTableViewport" class="message-table-scroll" role="region" aria-label="表格内容">
+                        <div
+                          class="message-table-scroll"
+                          role="region"
+                          tabindex="0"
+                          aria-label="表格内容，可横向滚动查看"
+                        >
                           <table class="message-table">
                             <thead>
                               <tr>
@@ -884,45 +889,6 @@
                               </tr>
                             </tbody>
                           </table>
-                        </div>
-                        <div v-else class="message-table-cards" aria-label="表格内容">
-                          <article v-for="(row, rowIndex) in block.rows" :key="`table-card-${blockIndex}-${rowIndex}`" class="message-table-card">
-                            <div v-for="(cell, cellIndex) in row" :key="`table-card-cell-${blockIndex}-${rowIndex}-${cellIndex}`" class="message-table-card-row">
-                              <span class="message-table-card-label">{{ block.headers[cellIndex]?.value || `列 ${cellIndex + 1}` }}</span>
-                              <span class="message-table-card-value">
-                                <template v-for="(segment, segmentIndex) in cell.segments" :key="`table-card-cell-seg-${blockIndex}-${rowIndex}-${cellIndex}-${segmentIndex}`">
-                                  <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
-                                  <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
-                                  <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
-                                    <a
-                                      class="message-file-link"
-                                      :href="toBrowseUrl(segment.path)"
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      :title="segment.path"
-                                      @click="onHyperlinkClick($event, toBrowseUrl(segment.path))"
-                                      @contextmenu.prevent="onFileLinkContextMenu($event, segment.path)"
-                                    >
-                                      {{ segment.displayPath }}
-                                    </a>
-                                  </span>
-                                  <a
-                                    v-else-if="segment.kind === 'url'"
-                                    class="message-file-link"
-                                    :href="segment.href"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    :title="segment.href"
-                                    @click="onHyperlinkClick($event, segment.href)"
-                                    @contextmenu.prevent="onUrlLinkContextMenu($event, segment.href)"
-                                  >
-                                    {{ segment.value }}
-                                  </a>
-                                  <code v-else class="message-inline-code">{{ segment.value }}</code>
-                                </template>
-                              </span>
-                            </div>
-                          </article>
                         </div>
                       </div>
                       <div
@@ -1343,9 +1309,6 @@ const commandElapsedNowMs = ref(Date.now())
 const observedCommandStartedAtById = ref<Record<string, number>>({})
 let commandElapsedTimer: number | null = null
 const estimatedMessageHeightById = new Map<string, { sourceText: string; signature: string; height: number }>()
-const COMPACT_TABLE_VIEWPORT_QUERY = '(max-width: 767px)'
-const isCompactTableViewport = ref(false)
-let compactTableViewportMql: MediaQueryList | null = null
 let chatFeedbackMetricFrame = 0
 
 type ThreadFirstScreenReadyMetric = {
@@ -1355,38 +1318,6 @@ type ThreadFirstScreenReadyMetric = {
   assistantCount: number
 }
 
-type LegacyMediaQueryList = MediaQueryList & {
-  addListener?: (listener: () => void) => void
-  removeListener?: (listener: () => void) => void
-}
-
-function updateCompactTableViewport(): void {
-  isCompactTableViewport.value = compactTableViewportMql?.matches === true
-}
-
-function addCompactTableViewportListener(): void {
-  if (!compactTableViewportMql) return
-  if (typeof compactTableViewportMql.addEventListener === 'function') {
-    compactTableViewportMql.addEventListener('change', updateCompactTableViewport)
-    return
-  }
-  ;(compactTableViewportMql as LegacyMediaQueryList).addListener?.(updateCompactTableViewport)
-}
-
-function removeCompactTableViewportListener(): void {
-  if (!compactTableViewportMql) return
-  if (typeof compactTableViewportMql.removeEventListener === 'function') {
-    compactTableViewportMql.removeEventListener('change', updateCompactTableViewport)
-    return
-  }
-  ;(compactTableViewportMql as LegacyMediaQueryList).removeListener?.(updateCompactTableViewport)
-}
-
-if (typeof window !== 'undefined') {
-  compactTableViewportMql = window.matchMedia(COMPACT_TABLE_VIEWPORT_QUERY)
-  updateCompactTableViewport()
-  addCompactTableViewportListener()
-}
 
 function isCommandMessage(message: UiMessage): boolean {
   return message.messageType === 'commandExecution' && !!message.commandExecution
@@ -2221,6 +2152,7 @@ const imageModalStageRef = ref<HTMLElement | null>(null)
 const imageModalImageRef = ref<HTMLImageElement | null>(null)
 const loadedMessageImageKeys = ref<Set<string>>(new Set())
 const failedMessageImageKeys = ref<Set<string>>(new Set())
+const messageImageRetryAttempts = ref<Map<string, number>>(new Map())
 const loadedMarkdownImageKeys = ref<Set<string>>(new Set())
 const markdownImageRetryAttempts = ref<Map<string, number>>(new Map())
 const modalImageScale = ref(1)
@@ -5791,6 +5723,7 @@ watch(
     modalImageUrl.value = ''
     loadedMessageImageKeys.value = new Set()
     failedMessageImageKeys.value = new Set()
+    messageImageRetryAttempts.value = new Map()
     loadedMarkdownImageKeys.value = new Set()
     markdownImageRetryAttempts.value = new Map()
     closeFileLinkContextMenu()
@@ -6224,6 +6157,39 @@ function messageImageKey(messageId: string, imageIndex: number): string {
   return `${messageId}:${imageIndex}`
 }
 
+function messageImageRenderKey(messageId: string, imageIndex: number): string {
+  const key = messageImageKey(messageId, imageIndex)
+  return `${key}:${String(messageImageRetryAttempts.value.get(key) ?? 0)}`
+}
+
+function messageImageRenderUrl(imageUrl: string, messageId: string, imageIndex: number): string {
+  const rendered = toRenderableImageUrl(imageUrl)
+  const attempt = messageImageRetryAttempts.value.get(messageImageKey(messageId, imageIndex)) ?? 0
+  if (attempt <= 0 || rendered.startsWith('data:') || rendered.startsWith('blob:')) return rendered
+  return `${rendered}${rendered.includes('?') ? '&' : '?'}cx_retry=${String(attempt)}`
+}
+
+function retryMessageImage(messageId: string, imageIndex: number): void {
+  const key = messageImageKey(messageId, imageIndex)
+  const nextFailed = new Set(failedMessageImageKeys.value)
+  nextFailed.delete(key)
+  failedMessageImageKeys.value = nextFailed
+  const nextLoaded = new Set(loadedMessageImageKeys.value)
+  nextLoaded.delete(key)
+  loadedMessageImageKeys.value = nextLoaded
+  const nextAttempts = new Map(messageImageRetryAttempts.value)
+  nextAttempts.set(key, (nextAttempts.get(key) ?? 0) + 1)
+  messageImageRetryAttempts.value = nextAttempts
+}
+
+function openOrRetryMessageImage(imageUrl: string, messageId: string, imageIndex: number): void {
+  if (isMessageImageFailed(messageId, imageIndex)) {
+    retryMessageImage(messageId, imageIndex)
+    return
+  }
+  openImageModal(imageUrl)
+}
+
 function onMessageImageElementRef(
   element: MeasureRefTarget,
   messageId: string,
@@ -6483,7 +6449,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKeydownForImageModal)
   window.removeEventListener('resize', onWindowResizeForImageModal)
   window.removeEventListener('keydown', onWindowKeyDownForConversationSurface, { capture: true })
-  removeCompactTableViewportListener()
   if (typeof document !== 'undefined') {
     document.body.style.overflow = previousBodyOverflow
   }
@@ -7564,6 +7529,13 @@ onBeforeUnmount(() => {
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
   overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+.message-table-scroll:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ui-accent) 55%, transparent);
+  outline-offset: 2px;
 }
 
 .message-table {
@@ -8470,11 +8442,20 @@ onBeforeUnmount(() => {
   }
 
   .message-table-scroll {
-    @apply hidden;
+    @apply block;
+    max-width: 100%;
   }
 
-  .message-table-cards {
-    @apply flex;
+  .message-table {
+    min-width: 620px;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .message-table th,
+  .message-table td {
+    padding: 0.5rem 0.625rem;
+    font-size: 13px;
   }
 
   .request-card {

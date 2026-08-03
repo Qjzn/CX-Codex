@@ -33,6 +33,7 @@ import {
   createCodexSessionFileChangedNotification,
 } from './codexSessionFileChangeObserver.js'
 import { shouldInvalidateThreadCollectionForCxSessionFileChange } from '../sessionFileChange.js'
+import { RuntimeMessageQueue } from './runtimeMessageQueue.js'
 
 type CodexBridgeMiddleware = ((req: IncomingMessage, res: ServerResponse, next: () => void) => Promise<void>) & {
   dispose: () => void
@@ -80,6 +81,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     runtimeStateStore.getActiveThreadCount(),
   ))
   const mobilePushCoordinator = new MobilePushCoordinator({ store: runtimeStore })
+  let runtimeMessageQueue: RuntimeMessageQueue | null = null
   const {
     persistRuntimeSnapshot,
     readThreadRuntimeSnapshot,
@@ -120,6 +122,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     statusDiagnostics,
     persistRuntimeSnapshot,
     onRuntimeEvent: (event) => {
+      runtimeMessageQueue?.handleRuntimeEvent(event.method, event.threadId)
       void mobilePushCoordinator.handleRuntimeEvent(event).catch((error) => {
         writeBridgeLog('warn', 'Mobile push terminal wake failed', {
           method: event.method,
@@ -130,6 +133,14 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
       })
     },
   })
+  runtimeMessageQueue = new RuntimeMessageQueue({
+    store: runtimeStore,
+    startRuntimeTurn,
+    rpc: (method, params) => appServer.rpc(method, params),
+    publishNotification: (notification) => { publishBridgeNotification(notification) },
+    getErrorMessage,
+  })
+  runtimeMessageQueue.start()
   const sessionFileChangeObserver = new CodexSessionFileChangeObserver({
     onChange: (change) => {
       if (shouldInvalidateThreadCollectionForCxSessionFileChange(change)) {
@@ -193,6 +204,10 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
         persistRuntimeSnapshot,
         startRuntimeTurn,
         interruptRuntimeTurn,
+        enqueueRuntimeTurn: (payload) => runtimeMessageQueue!.enqueue(payload),
+        listRuntimeQueue: (threadId = '') => runtimeMessageQueue!.list(threadId),
+        cancelQueuedRuntimeTurn: (requestId) => runtimeMessageQueue!.cancel(requestId),
+        retryQueuedRuntimeTurn: (requestId) => runtimeMessageQueue!.retry(requestId),
         augmentThreadListRpcResult,
         reconcileRuntimeThread,
         readLocalRuntimeSnapshot,
@@ -220,6 +235,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
   middleware.dispose = () => {
     disposeCodexBridgeMiddlewareResources({
       runtimeReconcileScheduler,
+      runtimeMessageQueue,
       threadSearchIndexStore,
       bridgeNotificationListeners,
       unsubscribeAppServerNotifications,

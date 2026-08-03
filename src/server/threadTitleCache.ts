@@ -2,10 +2,10 @@ import { createReadStream } from 'node:fs'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 
-export type ThreadTitleCache = { titles: Record<string, string>; order: string[] }
+export type ThreadTitleCache = { titles: Record<string, string>; order: string[]; manualTitleIds?: string[] }
 
 const MAX_THREAD_TITLES = 500
-const EMPTY_THREAD_TITLE_CACHE: ThreadTitleCache = { titles: {}, order: [] }
+const EMPTY_THREAD_TITLE_CACHE: ThreadTitleCache = { titles: {}, order: [], manualTitleIds: [] }
 
 type SessionIndexThreadTitleCacheState = {
   sessionIndexPath: string | null
@@ -56,22 +56,43 @@ export function normalizeThreadTitleCache(value: unknown): ThreadTitleCache {
     }
   }
   const order = normalizeStringArray(record.order)
-  return { titles, order }
+  const manualTitleIds = normalizeStringArray(record.manualTitleIds).filter((id) => Boolean(titles[id]))
+  return { titles, order, manualTitleIds }
 }
 
-export function updateThreadTitleCache(cache: ThreadTitleCache, id: string, title: string): ThreadTitleCache {
+export function updateThreadTitleCache(
+  cache: ThreadTitleCache,
+  id: string,
+  title: string,
+  options: { manual?: boolean } = {},
+): ThreadTitleCache {
+  const manualTitleIds = cache.manualTitleIds ?? []
+  if (options.manual !== true && manualTitleIds.includes(id) && cache.titles[id] !== title) {
+    return cache
+  }
   const titles = { ...cache.titles, [id]: title }
   const order = [id, ...cache.order.filter((o) => o !== id)]
+  const nextManualTitleIds = options.manual === true
+    ? [id, ...manualTitleIds.filter((candidate) => candidate !== id)]
+    : [...manualTitleIds]
   while (order.length > MAX_THREAD_TITLES) {
     const removed = order.pop()
-    if (removed) delete titles[removed]
+    if (removed) {
+      delete titles[removed]
+      const manualIndex = nextManualTitleIds.indexOf(removed)
+      if (manualIndex >= 0) nextManualTitleIds.splice(manualIndex, 1)
+    }
   }
-  return { titles, order }
+  return { titles, order, manualTitleIds: nextManualTitleIds }
 }
 
 export function removeFromThreadTitleCache(cache: ThreadTitleCache, id: string): ThreadTitleCache {
   const { [id]: _, ...titles } = cache.titles
-  return { titles, order: cache.order.filter((o) => o !== id) }
+  return {
+    titles,
+    order: cache.order.filter((o) => o !== id),
+    manualTitleIds: (cache.manualTitleIds ?? []).filter((candidate) => candidate !== id),
+  }
 }
 
 function normalizeSessionIndexThreadTitle(value: unknown): SessionIndexThreadTitle | null {
@@ -104,11 +125,19 @@ function trimThreadTitleCache(cache: ThreadTitleCache): ThreadTitleCache {
     }
   }
 
-  return { titles, order }
+  return {
+    titles,
+    order,
+    manualTitleIds: (cache.manualTitleIds ?? []).filter((id) => order.includes(id)),
+  }
 }
 
 export function mergeThreadTitleCaches(base: ThreadTitleCache, overlay: ThreadTitleCache): ThreadTitleCache {
   const titles = { ...base.titles, ...overlay.titles }
+  const manualTitleIds = [...(base.manualTitleIds ?? [])]
+  for (const id of manualTitleIds) {
+    if (base.titles[id]) titles[id] = base.titles[id]
+  }
   const order: string[] = []
 
   for (const id of [...overlay.order, ...base.order]) {
@@ -122,7 +151,7 @@ export function mergeThreadTitleCaches(base: ThreadTitleCache, overlay: ThreadTi
     }
   }
 
-  return trimThreadTitleCache({ titles, order })
+  return trimThreadTitleCache({ titles, order, manualTitleIds })
 }
 
 export async function readThreadTitleCache(statePath: string): Promise<ThreadTitleCache> {
@@ -185,7 +214,7 @@ export async function parseThreadTitlesFromSessionIndex(sessionIndexPath: string
     order.push(entry.id)
   }
 
-  return trimThreadTitleCache({ titles, order })
+  return trimThreadTitleCache({ titles, order, manualTitleIds: [] })
 }
 
 export async function readThreadTitlesFromSessionIndex(sessionIndexPath: string): Promise<ThreadTitleCache> {

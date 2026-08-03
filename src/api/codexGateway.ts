@@ -173,6 +173,8 @@ function throwIfSignalAborted(signal: AbortSignal | undefined): void {
 }
 
 export type RuntimeRequestStatus =
+  | 'queued'
+  | 'queue_failed'
   | 'pending_start'
   | 'starting'
   | 'running'
@@ -631,6 +633,8 @@ function normalizeThreadTokenUsage(value: unknown): UiThreadTokenUsage | null {
   }
 }
 
+const rejectedThreadListCursorsByArchiveState = new Map<boolean, Set<string>>()
+
 async function listThreadsByArchiveState(
   archived: boolean,
   options: ThreadListOptions = {},
@@ -643,6 +647,7 @@ async function listThreadsByArchiveState(
   let pageCount = 0
 
   do {
+    if (cursor && rejectedThreadListCursorsByArchiveState.get(archived)?.has(cursor)) break
     pageCount += 1
     let payload: ThreadListResponse
     try {
@@ -654,6 +659,9 @@ async function listThreadsByArchiveState(
       }, options)
     } catch (error) {
       if (cursor && data.length > 0 && !isAbortLikeError(error)) {
+        const rejected = rejectedThreadListCursorsByArchiveState.get(archived) ?? new Set<string>()
+        rejected.add(cursor)
+        rejectedThreadListCursorsByArchiveState.set(archived, rejected)
         console.warn('Stopped thread/list pagination after a cursor error', error)
         break
       }
@@ -1086,6 +1094,8 @@ function normalizeThreadIdFromPayload(payload: unknown): string {
 function normalizeRuntimeRequestStatus(value: unknown): RuntimeRequestStatus {
   const normalized = typeof value === 'string' ? value.trim() : ''
   if (
+    normalized === 'queued' ||
+    normalized === 'queue_failed' ||
     normalized === 'pending_start' ||
     normalized === 'starting' ||
     normalized === 'running' ||
@@ -2464,7 +2474,7 @@ function getErrorMessageFromPayload(payload: unknown, fallback: string): string 
   return typeof error === 'string' && error.trim().length > 0 ? error : fallback
 }
 
-export type ThreadTitleCache = { titles: Record<string, string>; order: string[] }
+export type ThreadTitleCache = { titles: Record<string, string>; order: string[]; manualTitleIds: string[] }
 let supportsThreadTitleGeneration: boolean | null = null
 
 export async function getThreadTitleCache(): Promise<ThreadTitleCache> {
@@ -2473,20 +2483,24 @@ export async function getThreadTitleCache(): Promise<ThreadTitleCache> {
       timeoutMs: GATEWAY_BACKGROUND_FETCH_TIMEOUT_MS,
       label: 'Thread title cache request',
     })
-    if (!response.ok) return { titles: {}, order: [] }
+    if (!response.ok) return { titles: {}, order: [], manualTitleIds: [] }
     const envelope = (await response.json()) as { data?: ThreadTitleCache }
-    return envelope.data ?? { titles: {}, order: [] }
+    return envelope.data ?? { titles: {}, order: [], manualTitleIds: [] }
   } catch {
-    return { titles: {}, order: [] }
+    return { titles: {}, order: [], manualTitleIds: [] }
   }
 }
 
-export async function persistThreadTitle(id: string, title: string): Promise<void> {
+export async function persistThreadTitle(
+  id: string,
+  title: string,
+  options: { manual?: boolean } = {},
+): Promise<void> {
   try {
     await fetchWithTimeout('/codex-api/thread-titles', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, title }),
+      body: JSON.stringify({ id, title, manual: options.manual === true }),
     }, {
       timeoutMs: GATEWAY_BACKGROUND_FETCH_TIMEOUT_MS,
       label: 'Thread title save request',
