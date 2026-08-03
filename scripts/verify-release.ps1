@@ -359,6 +359,8 @@ if (-not $SkipPackageSmoke) {
     "tests.md",
     "index.html",
     "local-preview.html",
+    "vite.config.ts",
+    "vite.local-preview.config.ts",
     "docs\app-server-schema-audit-summary.json",
     "docs\app-server-protocol-matrix.zh-CN.md",
     "docs\changelog.zh-CN.md",
