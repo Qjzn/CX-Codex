@@ -587,7 +587,9 @@ Assert-ContentIncludes "scripts/package-release.ps1" @(
   "SECURITY.md",
   "SUPPORT.md",
   "tests.md",
-  "release-capabilities.json"
+  "release-capabilities.json",
+  "vite.config.ts",
+  "vite.local-preview.config.ts"
 )
 
 $releaseCapabilities = Get-Content -LiteralPath (Join-Path $repoRoot "release-capabilities.json") -Raw | ConvertFrom-Json
