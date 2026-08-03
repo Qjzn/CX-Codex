@@ -1297,6 +1297,11 @@ import {
 } from '../../composables/conversationViewport'
 import { hasPlanImplementationConfirmation } from '../../composables/conversationProjection'
 import { copyTextToClipboard } from '../../utils/clipboard'
+import {
+  CODEX_FILE_CITATION_PREFIX,
+  splitCodexFileCitations,
+  type CodexFileCitation,
+} from '../../utils/codexFileCitation'
 
 export type ThreadConversationExposed = {
   focusMessage: (messageId: string) => Promise<boolean>
@@ -3347,7 +3352,7 @@ function applyBoldMarkersAcrossTextSegments(segments: InlineSegment[]): InlineSe
 
   return output
 }
-function splitTextByFileUrls(text: string): InlineSegment[] {
+function splitTextByMarkdownLinks(text: string): InlineSegment[] {
   const segments: InlineSegment[] = []
   let cursor = 0
 
@@ -3373,6 +3378,49 @@ function splitTextByFileUrls(text: string): InlineSegment[] {
 
   if (cursor < text.length) {
     segments.push(...splitPlainTextByLinks(text.slice(cursor)))
+  }
+
+  return segments
+}
+
+function pushCodexFileCitationSegment(
+  segments: InlineSegment[],
+  citation: CodexFileCitation,
+): void {
+  const fileReference = parseFileReference(citation.path)
+  if (!fileReference) {
+    const fallbackText = citation.purpose || citation.raw
+    if (fallbackText) segments.push({ kind: 'text', value: fallbackText })
+    return
+  }
+
+  segments.push({
+    kind: 'file',
+    value: citation.raw,
+    path: fileReference.path,
+    displayPath: getBasename(fileReference.path),
+    downloadName: getBasename(fileReference.path),
+  })
+}
+
+function splitTextByFileUrls(text: string): InlineSegment[] {
+  const parts = splitCodexFileCitations(text)
+  const segments: InlineSegment[] = []
+
+  for (const part of parts) {
+    if (part.kind === 'citation') {
+      pushCodexFileCitationSegment(segments, part.citation)
+      continue
+    }
+    const invalidDirectiveStart = part.value.indexOf(CODEX_FILE_CITATION_PREFIX)
+    if (invalidDirectiveStart < 0) {
+      segments.push(...splitTextByMarkdownLinks(part.value))
+      continue
+    }
+    if (invalidDirectiveStart > 0) {
+      segments.push(...splitTextByMarkdownLinks(part.value.slice(0, invalidDirectiveStart)))
+    }
+    segments.push({ kind: 'text', value: part.value.slice(invalidDirectiveStart) })
   }
 
   return segments

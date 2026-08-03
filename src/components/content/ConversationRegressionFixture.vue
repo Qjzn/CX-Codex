@@ -53,7 +53,7 @@
         :pending-requests="pendingRequests"
         :live-overlay="liveOverlay"
         :is-loading="false"
-        :is-turn-in-progress="!isLoadFailureFixture && !isScrollSwitchRaceFixture && !isPlanFixture"
+        :is-turn-in-progress="!isLoadFailureFixture && !isScrollSwitchRaceFixture && !isPlanFixture && !isFileCitationFixture"
         :load-error="isLoadFailureFixture ? '连接不到桌面端，会话内容暂时未加载。页面会自动重试，也可以检查或修改连接地址。' : ''"
         :show-connection-settings-action="isLoadFailureFixture"
         compact-runtime-chrome
@@ -373,6 +373,7 @@ const isMessageActionHitFixture = fixtureParams.get('messageActionHit') === '1'
 const isPlanFixture = fixtureParams.get('plan') === '1'
 const isPlanSubmittedFixture = fixtureParams.get('planSubmitted') === '1'
 const isPlanHistoryImplementedFixture = fixtureParams.get('planHistoryImplemented') === '1'
+const isFileCitationFixture = fixtureParams.get('fileCitation') === '1'
 const fixtureImplementingPlanId = ref(fixtureParams.get('planSubmitting') === '1' ? 'plan:fixture-plan-turn' : '')
 const fixtureImplementedPlanIds = ref<string[]>(isPlanSubmittedFixture ? ['plan:fixture-plan-turn'] : [])
 const activeThreadId = ref(isScrollSwitchRaceFixture ? 'regression-scroll-a' : 'regression-conversation-blocks')
@@ -400,6 +401,20 @@ const markdownImageMessages: UiMessage[] = [
     role: 'assistant',
     text: '失效图片应提供恢复入口：\n\n![失效 Markdown 图片](/__missing-markdown-image-regression.png)',
     turnIndex: 9,
+  },
+]
+const fileCitationMessages: UiMessage[] = [
+  {
+    id: 'fixture-codex-file-citation',
+    role: 'assistant',
+    text: [
+      '已生成产品与项目经理通用投递版简历。',
+      '',
+      ':codex-file-citation{path="E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf" purpose="产品与项目经理通用投递简历"}',
+      '',
+      '可编辑内容：:codex-file-citation{path="E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.md" purpose="产品与项目经理简历 Markdown 版本"}',
+    ].join('\n'),
+    turnIndex: 10,
   },
 ]
 const planMessages: UiMessage[] = [
@@ -468,6 +483,7 @@ const fixtureMessages = computed(() => {
   }
   if (isImagePreviewFixture) return [...messages, imagePreviewMessage]
   if (isMarkdownImageFixture) return [...messages, ...markdownImageMessages]
+  if (isFileCitationFixture) return fileCitationMessages
   if (isPlanFixture) {
     return isPlanHistoryImplementedFixture
       ? [...planMessages, {
@@ -495,7 +511,7 @@ const liveOverlay = ref<UiLiveOverlay | null>({
   errorText: '',
 })
 
-if (isLoadFailureFixture || isScrollSwitchRaceFixture || isPlanFixture) {
+if (isLoadFailureFixture || isScrollSwitchRaceFixture || isPlanFixture || isFileCitationFixture) {
   liveOverlay.value = null
 }
 

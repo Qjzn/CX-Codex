@@ -32,6 +32,7 @@ const taskPetReadPolicyImport = toImportPath(relative(outputRoot, join(repoRoot,
 const sessionFileChangeImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'sessionFileChange.ts')))
 const composerEnterBehaviorImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'composerEnterBehavior.ts')))
 const threadGoalImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'threadGoal.ts')))
+const codexFileCitationImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'utils', 'codexFileCitation.ts')))
 
 try {
   writeFileSync(entryPath, `
@@ -110,6 +111,58 @@ import {
 } from '${sessionFileChangeImport}'
 import { resolveSendWithEnterPreference } from '${composerEnterBehaviorImport}'
 import { normalizeThreadGoal } from '${threadGoalImport}'
+import {
+  readCodexFileCitationAt,
+  splitCodexFileCitations,
+} from '${codexFileCitationImport}'
+
+const resumePdfCitation = ':codex-file-citation{path="E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf" purpose="产品与项目经理通用投递简历"}'
+assert.deepEqual(readCodexFileCitationAt(resumePdfCitation, 0), {
+  raw: resumePdfCitation,
+  start: 0,
+  end: resumePdfCitation.length,
+  path: 'E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf',
+  purpose: '产品与项目经理通用投递简历',
+  attributes: {
+    path: 'E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf',
+    purpose: '产品与项目经理通用投递简历',
+  },
+})
+assert.deepEqual(
+  splitCodexFileCitations('PDF：' + resumePdfCitation + '。'),
+  [
+    { kind: 'text', value: 'PDF：' },
+    {
+      kind: 'citation',
+      citation: {
+        raw: resumePdfCitation,
+        start: 4,
+        end: 4 + resumePdfCitation.length,
+        path: 'E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf',
+        purpose: '产品与项目经理通用投递简历',
+        attributes: {
+          path: 'E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf',
+          purpose: '产品与项目经理通用投递简历',
+        },
+      },
+    },
+    { kind: 'text', value: '。' },
+  ],
+)
+const windowsSeparator = String.fromCharCode(92)
+const spacedDocxPath = ['E:', '投递材料', '产品 经理', '邵卫 简历.docx'].join(windowsSeparator)
+const spacedDocxCitation = ':codex-file-citation{purpose="带 ' + windowsSeparator + '"引号' + windowsSeparator + '" 的定制简历" path="' + spacedDocxPath + '" artifact_kind="document" page_number="2"}'
+assert.equal(readCodexFileCitationAt(spacedDocxCitation, 0)?.path, spacedDocxPath)
+assert.equal(readCodexFileCitationAt(spacedDocxCitation, 0)?.purpose, '带 "引号" 的定制简历')
+assert.equal(readCodexFileCitationAt(spacedDocxCitation, 0)?.attributes.page_number, '2')
+const unquotedXlsxCitation = ':codex-file-citation{path=E:/reports/项目清单.xlsx artifact_kind=workbook range=Sheet1!A1:D20}'
+assert.equal(readCodexFileCitationAt(unquotedXlsxCitation, 0)?.path, 'E:/reports/项目清单.xlsx')
+assert.equal(readCodexFileCitationAt(unquotedXlsxCitation, 0)?.attributes.range, 'Sheet1!A1:D20')
+assert.equal(splitCodexFileCitations(resumePdfCitation + unquotedXlsxCitation).filter((part) => part.kind === 'citation').length, 2)
+assert.equal(readCodexFileCitationAt(':codex-file-citation{purpose="缺少路径"}', 0)?.path, '')
+assert.deepEqual(splitCodexFileCitations('保留 :codex-file-citation{path="E:/unfinished.pdf"'), [
+  { kind: 'text', value: '保留 :codex-file-citation{path="E:/unfinished.pdf"' },
+])
 
 assert.equal(CONVERSATION_BOTTOM_THRESHOLD_PX, 24)
 assert.equal(CX_SESSION_FILES_CHANGED_METHOD, 'cx/session-files/changed')

@@ -1256,3 +1256,11 @@ After each feature implementation session that uses this skill:
 - Queue speed configuration now remains preflight work. A row stays `queued` until any required configuration change has completed, so restart reconciliation cannot mistake preflight for a dispatched turn. A deletion during preflight is re-read and cannot be resurrected as `pending_start`.
 - `config/read` suppresses no-op speed writes. Standard speed already represented by `service_tier: null` no longer performs the configuration write that triggered the observed restart; fast mode still enables its feature and changes service tier only when necessary.
 - This preserves the desktop queue contract: genuine first-item failures still pause for retry, edit, or delete, while renderer-independent server ownership and stable `clientMessageId` ordering remain unchanged.
+
+## Findings: Structured File Citations and Legacy PDF Preview (2026-08-03)
+
+- Installed Windows Codex `26.721.4979` parses `codex-file-citation` as structured content, displays the basename, keeps the complete path as secondary context, and does not expose the transport directive or descriptive metadata in conversation text.
+- CX-Codex previously let its broad plain-path matcher consume the directive prefix, which converted a valid absolute resume path into a nonexistent workspace-relative path. Historical local messages contain the same directive across PDF, DOCX, XLSX, and PPTX outputs, so the fix is a shared parser rather than a PDF-only string replacement.
+- CX-Codex now adapts the desktop citation boundary to mobile: the basename is the compact link label, the full path remains the title and open target, and internal links stay in the current Android WebView. Invalid or incomplete directives degrade to safe text.
+- The current `pdfjs-dist` standard build requires `Promise.withResolvers` and `Math.sumPrecise`, which are absent in some Android WebViews. The isolated local preview now uses PDF.js's official legacy main and worker bundles so compatibility applies on both execution contexts.
+- Headless phone verification at 393 x 852 showed no protocol or metadata leakage, no document overflow, two rendered resume pages, and no browser errors or compatibility warnings. Evidence is under `output/regression-7420/file-citation-20260803`.

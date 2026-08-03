@@ -15655,3 +15655,23 @@ Current evidence:
 - The complete frontend regression passed the updated queue source contracts and reached the live browser phase, then stopped on the pre-existing mobile Settings fixture with `settings panel did not open`, before the conversation fixture. The focused Playwright conversation fixture passed without console errors.
 - The production main entry is 411,336 bytes with the current locked Vite toolchain. A clean HEAD baseline under the same toolchain is 409,169 bytes, so this change adds 2,167 bytes to the cold entry; queue parsing, migration, persistence, and network ownership remain in the 7.81 KB lazy chunk.
 - The restart-race smoke reproduces the configuration-triggered app-server lifecycle boundary. Matching speed performs only `config/read`; changing speed keeps the row `queued` through both config RPCs and still reaches `running` after an injected idle restart snapshot. The mobile queue fixture has no browser errors and its screenshot is `output/regression-7420/queue-restart-race-20260803/queue-accepted-element.png`.
+
+## Structured Codex file citations and mobile PDF preview (2026-08-03)
+
+1. Render `:codex-file-citation{path="..." ...}` as a local-file link whose visible label is the basename. The raw directive and metadata such as `purpose` must not appear in conversation text.
+2. Preserve complete Windows and POSIX paths, spaces, escaped quotes, backslashes, Unicode names, and additional attributes. An incomplete or pathless directive must remain safe text and must not become a link to the current workspace.
+3. At phone width, tapping an internal file link opens the existing local preview in the current WebView. The document must not gain horizontal overflow.
+4. PDF preview must use the PDF.js legacy main and worker builds so Android WebViews without `Promise.withResolvers` or `Math.sumPrecise` can still render every page.
+
+Verification:
+
+- Run `npm.cmd run verify:frontend-normalizers` and `npm.cmd run build:frontend`.
+- Open `/#/__regression/conversation-blocks?fileCitation=1` at 393 x 852. Confirm the PDF and Markdown labels are basenames, the raw protocol and `purpose` metadata are absent, and `scrollWidth === clientWidth`.
+- Tap the PDF link. Confirm the URL changes to `/local-preview.html`, the status reaches `PDF 预览已就绪，共 2 页。`, two canvases render, and there are no browser errors or compatibility warnings.
+- Inspect `output/regression-7420/file-citation-20260803/file-citation-phone.png` and `output/regression-7420/file-citation-20260803/pdf-preview-phone.png`.
+
+Current evidence:
+
+- The parser smoke covers the reported resume PDF, a Markdown companion, quoted and unquoted attributes, Windows backslashes, spaces, escaped metadata, adjacent citations, pathless directives, and incomplete directives.
+- Headless Chrome at 393 x 852 measured 393 px document width over a 393 px viewport, rendered both file labels without leaking internal metadata, and opened the exact encoded local path.
+- The reported 297.1 KB resume rendered two PDF canvases. Both compatibility APIs were functions after the legacy bundle initialized, and browser errors and warnings were empty.
