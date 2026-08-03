@@ -2,7 +2,10 @@ import { readFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-import { isCxSessionFilesChangedMethod } from '../sessionFileChange.js'
+import {
+  getCxSessionFileChangeSyncPolicy,
+  isCxSessionFilesChangedMethod,
+} from '../sessionFileChange.js'
 import { logBridgeError } from './bridgeLog.js'
 import { getWebThreadListCachePath } from './codexPaths.js'
 
@@ -127,8 +130,10 @@ export function shouldInvalidateThreadReadCacheForRpc(method: string): boolean {
   )
 }
 
-export function shouldInvalidateThreadReadCacheForNotification(method: string): boolean {
-  if (isCxSessionFilesChangedMethod(method)) return true
+export function shouldInvalidateThreadReadCacheForNotification(method: string, params?: unknown): boolean {
+  if (isCxSessionFilesChangedMethod(method)) {
+    return getCxSessionFileChangeSyncPolicy(method, params)?.refreshMessages ?? true
+  }
   if (
     method === 'thread/goal/updated' ||
     method === 'thread/goal/cleared' ||
@@ -152,18 +157,6 @@ export function shouldInvalidateThreadReadCacheForNotification(method: string): 
     method === 'item/updated' ||
     method === 'item/completed' ||
     method === 'rawResponseItem/completed' ||
-    method === 'item/agentMessage/delta' ||
-    method === 'item/plan/delta' ||
-    method === 'item/reasoning/summaryTextDelta' ||
-    method === 'item/reasoning/summaryPartAdded' ||
-    method === 'item/reasoning/textDelta' ||
-    method === 'item/commandExecution/outputDelta' ||
-    method === 'item/commandExecution/terminalInteraction' ||
-    method === 'item/fileChange/outputDelta' ||
-    method === 'item/fileChange/patchUpdated' ||
-    method === 'item/mcpToolCall/progress' ||
-    method === 'command/exec/outputDelta' ||
-    method === 'process/outputDelta' ||
     method === 'process/exited'
   )
 }

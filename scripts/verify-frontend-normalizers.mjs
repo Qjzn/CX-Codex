@@ -16,6 +16,7 @@ const notificationReplayImport = toImportPath(relative(outputRoot, join(repoRoot
 const connectionManagerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'connectionManager.ts')))
 const conversationViewportImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'conversationViewport.ts')))
 const runtimeSnapshotOrderingImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'runtimeSnapshotOrdering.ts')))
+const runtimeExecutionRecoveryImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'runtimeExecutionRecovery.ts')))
 const messageOutboxMergeImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'messageOutboxMerge.ts')))
 const messageIdentityImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'messageIdentity.ts')))
 const composerTurnOptionsImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'composerTurnOptions.ts')))
@@ -33,6 +34,7 @@ const sessionFileChangeImport = toImportPath(relative(outputRoot, join(repoRoot,
 const composerEnterBehaviorImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'composerEnterBehavior.ts')))
 const threadGoalImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'threadGoal.ts')))
 const codexFileCitationImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'utils', 'codexFileCitation.ts')))
+const runtimeMessageQueueImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'runtimeMessageQueue.ts')))
 
 try {
   writeFileSync(entryPath, `
@@ -50,6 +52,7 @@ import {
   isConversationViewportAtBottom,
 } from '${conversationViewportImport}'
 import { shouldApplyRuntimeSnapshotVersion } from '${runtimeSnapshotOrderingImport}'
+import { isOptimisticOnlyExecutionEvidence } from '${runtimeExecutionRecoveryImport}'
 import { mergeMessageOutboxEntries, mergeMessageOutboxState } from '${messageOutboxMergeImport}'
 import {
   createClientMessageId,
@@ -107,6 +110,7 @@ import {
   CX_SESSION_FILES_CHANGED_METHOD,
   getCxSessionFileChangeSyncPolicy,
   isCxSessionFilesChangedMethod,
+  readCxSessionFileChangeOrigin,
   readCxSessionFileChangeSource,
 } from '${sessionFileChangeImport}'
 import { resolveSendWithEnterPreference } from '${composerEnterBehaviorImport}'
@@ -115,6 +119,33 @@ import {
   readCodexFileCitationAt,
   splitCodexFileCitations,
 } from '${codexFileCitationImport}'
+import {
+  mergePersistedRuntimeQueuedMessages,
+  mergeRuntimeMessageQueueThreadState,
+} from '${runtimeMessageQueueImport}'
+
+const queuedA = { id: 'local-a', clientMessageId: 'client-a', deliveryState: 'queued' } as any
+const queuedB = { id: 'local-b', clientMessageId: 'client-b', deliveryState: 'queued' } as any
+const queuedC = { id: 'local-c', clientMessageId: 'client-c', deliveryState: 'queued' } as any
+const serverA = { ...queuedA, id: 'server-a', serverRequestId: 'server-a', backgroundPersisted: true }
+const serverC = { ...queuedC, id: 'server-c', serverRequestId: 'server-c', backgroundPersisted: true }
+assert.deepEqual(mergePersistedRuntimeQueuedMessages([queuedA, queuedB], [serverA]), {
+  queue: [serverA, queuedB],
+  orphanedServerRequestIds: [],
+})
+assert.deepEqual(mergePersistedRuntimeQueuedMessages([queuedB], [serverA]), {
+  queue: [queuedB],
+  orphanedServerRequestIds: ['server-a'],
+})
+assert.deepEqual(
+  mergeRuntimeMessageQueueThreadState([serverA, queuedB, serverC], [serverC, serverA]),
+  [serverA, queuedB, serverC],
+)
+assert.deepEqual(
+  mergeRuntimeMessageQueueThreadState([serverA, queuedB, serverC], [serverC, serverA], false),
+  [serverC, serverA, queuedB],
+)
+assert.deepEqual(mergeRuntimeMessageQueueThreadState([serverA], []), [])
 
 const resumePdfCitation = ':codex-file-citation{path="E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf" purpose="产品与项目经理通用投递简历"}'
 assert.deepEqual(readCodexFileCitationAt(resumePdfCitation, 0), {
@@ -171,19 +202,53 @@ assert.equal(isCxSessionFilesChangedMethod('turn/completed'), false)
 assert.equal(readCxSessionFileChangeSource({ source: 'session-log' }), 'session-log')
 assert.equal(readCxSessionFileChangeSource({ source: 'session-index' }), 'session-index')
 assert.equal(readCxSessionFileChangeSource({ source: 'unknown' }), '')
+assert.equal(readCxSessionFileChangeOrigin({ origin: 'live-app-server' }), 'live-app-server')
+assert.equal(readCxSessionFileChangeOrigin({ origin: 'external' }), 'external')
+assert.equal(readCxSessionFileChangeOrigin({ origin: 'unknown' }), '')
 assert.deepEqual(
   getCxSessionFileChangeSyncPolicy(CX_SESSION_FILES_CHANGED_METHOD, { source: 'session-log' }),
-  { refreshMessages: true, refreshThreads: false },
+  { refreshMessages: true, refreshThreads: false, preferSessionLogMessages: true },
+)
+assert.deepEqual(
+  getCxSessionFileChangeSyncPolicy(CX_SESSION_FILES_CHANGED_METHOD, {
+    source: 'session-log',
+    origin: 'live-app-server',
+  }),
+  { refreshMessages: true, refreshThreads: false, preferSessionLogMessages: true },
 )
 assert.deepEqual(
   getCxSessionFileChangeSyncPolicy(CX_SESSION_FILES_CHANGED_METHOD, { source: 'session-index' }),
-  { refreshMessages: false, refreshThreads: true },
+  { refreshMessages: false, refreshThreads: true, preferSessionLogMessages: false },
 )
 assert.deepEqual(
   getCxSessionFileChangeSyncPolicy(CX_SESSION_FILES_CHANGED_METHOD, {}),
-  { refreshMessages: true, refreshThreads: true },
+  { refreshMessages: true, refreshThreads: true, preferSessionLogMessages: false },
 )
 assert.equal(getCxSessionFileChangeSyncPolicy('turn/completed', { source: 'session-log' }), null)
+assert.equal(isOptimisticOnlyExecutionEvidence({
+  executionActive: true,
+  sourceInProgress: false,
+  runtimeFreshActive: true,
+  hasRunningCommand: false,
+  hasPendingServerRequest: false,
+  hasFreshExecutionSignal: false,
+  pendingTurnAgeMs: null,
+  recoveryGraceMs: 2_500,
+  hasActiveTurnId: true,
+  queueProcessing: false,
+}), false)
+assert.equal(isOptimisticOnlyExecutionEvidence({
+  executionActive: true,
+  sourceInProgress: false,
+  runtimeFreshActive: false,
+  hasRunningCommand: false,
+  hasPendingServerRequest: false,
+  hasFreshExecutionSignal: false,
+  pendingTurnAgeMs: null,
+  recoveryGraceMs: 2_500,
+  hasActiveTurnId: true,
+  queueProcessing: false,
+}), true)
 assert.equal(resolveSendWithEnterPreference(null, false), true)
 assert.equal(resolveSendWithEnterPreference(null, true), false)
 assert.equal(resolveSendWithEnterPreference('1', true), true)

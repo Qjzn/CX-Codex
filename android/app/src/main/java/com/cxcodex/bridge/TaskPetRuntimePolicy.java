@@ -52,6 +52,56 @@ final class TaskPetRuntimePolicy {
         return !readAcknowledged;
     }
 
+    static boolean hasUnreadReply(long latestReplyEventSeq, long readThroughReplyEventSeq) {
+        return latestReplyEventSeq > 0L && latestReplyEventSeq > readThroughReplyEventSeq;
+    }
+
+    static long resolveReplyUpdatedAtMs(
+        long currentReplyEventSeq,
+        long incomingReplyEventSeq,
+        long currentReplyUpdatedAtMs,
+        long observedAtMs
+    ) {
+        return incomingReplyEventSeq > 0L && incomingReplyEventSeq > currentReplyEventSeq
+            ? Math.max(0L, observedAtMs)
+            : Math.max(0L, currentReplyUpdatedAtMs);
+    }
+
+    static boolean shouldRetainUnreadSettledTask(
+        boolean readAcknowledged,
+        long latestReplyEventSeq,
+        long readThroughReplyEventSeq
+    ) {
+        return !readAcknowledged || hasUnreadReply(latestReplyEventSeq, readThroughReplyEventSeq);
+    }
+
+    static boolean shouldCountAttention(
+        String state,
+        boolean readAcknowledged,
+        long latestReplyEventSeq,
+        long readThroughReplyEventSeq
+    ) {
+        return "waiting".equals(state)
+            || "retry".equals(state)
+            || hasUnreadReply(latestReplyEventSeq, readThroughReplyEventSeq)
+            || ("completed".equals(state) && !readAcknowledged);
+    }
+
+    static boolean shouldShowTransientReplyPeek(
+        boolean appForeground,
+        boolean screenInteractive,
+        boolean deviceLocked,
+        boolean replyItemChanged,
+        long latestReplyEventSeq,
+        long readThroughReplyEventSeq
+    ) {
+        return !appForeground
+            && screenInteractive
+            && !deviceLocked
+            && replyItemChanged
+            && hasUnreadReply(latestReplyEventSeq, readThroughReplyEventSeq);
+    }
+
     static boolean shouldDropOmittedProvisional(
         boolean omittedFromFrontend,
         boolean hasThreadId,

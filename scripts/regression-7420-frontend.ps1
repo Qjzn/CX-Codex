@@ -412,6 +412,8 @@ function Assert-RuntimeSnapshotOrderingSource {
   $sourcePath = Join-Path (Get-Location) "src\composables\useDesktopState.ts"
   $source = Get-Content -Raw -Encoding UTF8 -LiteralPath $sourcePath
   $gatewaySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\api\codexGateway.ts")
+  $runtimeQueueClientSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\api\runtimeMessageQueue.ts")
+  $runtimeQueueServerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\runtimeMessageQueue.ts")
   $serverSnapshotSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\appServerThreadRuntimeSnapshot.ts")
   $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadConversation.vue")
   Assert-True ($source -match "const\s+currentEventSeq\s*=\s*Math\.max\([\s\S]*?latestRuntimeEventSeqByThreadId\.get\(threadId\)[\s\S]*?shouldApplyRuntimeSnapshotVersion\(\{\s*lastEventSeq:\s*currentEventSeq\s*\},\s*snapshot\)") "runtime snapshots must be checked against the latest buffered event sequence"
@@ -419,13 +421,15 @@ function Assert-RuntimeSnapshotOrderingSource {
   Assert-True ($source -match "rememberLatestRuntimeEventSequence\(threadId,\s*notification\.seq\)[\s\S]*?method\.endsWith\('/delta'\)") "delta events must record their latest sequence before taking the non-reactive fast path"
   Assert-True ($source -match "method\.endsWith\('/delta'\)[\s\S]*?isRuntimeExecutionActiveState\(currentState\)[\s\S]*?markThreadLiveExecutionSignal\(threadId\)[\s\S]*?isRuntimeExecutionSettledState\(currentState\)\)\s*return") "high-frequency deltas must not rewrite reactive runtime state or revive a settled turn"
   Assert-True ($source -match "const\s+initialRuntimeSnapshotApplied\s*=\s*applyRuntimeSnapshotState\(threadId,\s*snapshot\)[\s\S]*?refreshSettledSnapshotMessagesFromRpc") "foreground recovery must apply the lightweight runtime snapshot before a heavy history refresh"
-  Assert-True ($source -match "preferCachedMessages:\s*shouldShowLoading") "cold thread selection must request recoverable cached messages before a heavy history read"
-  Assert-True ($source -match "preferCachedMessages:\s*shouldShowLoading\s*\|\|\s*options\.fullHistory\s*===\s*true\s*\|\|\s*Boolean\(options\.olderHistory\)") "explicit history paging must reuse the lightweight cached state before its authoritative RPC"
+  Assert-True ($source -match "preferCachedMessages:\s*options\.preferSessionLogMessages\s*===\s*true\s*\|\|\s*shouldShowLoading") "session-log notifications and cold thread selection must request recoverable cached messages before a heavy history read"
+  Assert-True ($source -match "preferCachedMessages:\s*options\.preferSessionLogMessages\s*===\s*true\s*\|\|\s*shouldShowLoading\s*\|\|\s*options\.fullHistory\s*===\s*true\s*\|\|\s*Boolean\(options\.olderHistory\)") "session-log refreshes and explicit history paging must reuse the lightweight cached state before an authoritative RPC"
   Assert-True ($gatewaySource -match "preferCachedMessages\s*\?\s*'\?preferCachedMessages=1'") "the frontend gateway must opt into the cache-first thread-state route"
   Assert-True ($serverSnapshotSource -match "options\.preferCachedMessages\s*===\s*true[\s\S]*?readSessionLogThreadRead[\s\S]*?messageState\s*=\s*'cached'") "cache-first state must recover local session messages without presenting them as authoritative"
   Assert-True ($serverSnapshotSource -match "trimThreadTurnsInRpcResult\('thread/read',\s*recoveredThreadRead\)") "cache-first session recovery must retain the bounded initial message window"
   Assert-True ($source -match "shouldDeferCachedRpcRefresh[\s\S]*?scheduleSettledSnapshotMessagesRpcRefresh") "cache-first messages must trigger an immediate background authoritative refresh"
   Assert-True ($source -match "shouldDeferCachedRpcRefresh\s*=\s*options\.forceSettledRpcRefresh\s*!==\s*true") "the forced authoritative refresh must not defer itself again"
+  Assert-True ($source -match "options\.preferSessionLogMessages\s*===\s*true\s*&&\s*snapshot\.messageState\s*===\s*'cached'[\s\S]*?scheduleSessionLogAuthoritativeRefresh\(threadId") "session-log projections must coalesce a quiet-period authoritative refresh instead of remaining permanently lossy"
+  Assert-True ($source -match "pendingSessionLogMessageRefresh\.add\(threadId\)[\s\S]{0,240}?scheduleSessionLogAuthoritativeRefresh\(threadId\)") "each session-log notification must reset the authoritative quiet window before its local projection begins"
   Assert-True ($source -match "shouldForceCachedSnapshotRefresh\s*=\s*options\.force\s*===\s*true\s*&&\s*snapshot\.messageState\s*===\s*'cached'") "cached historical threads without a terminal event key must still receive an authoritative refresh"
   Assert-True ($source -match "!options\.olderHistory\s*&&\s*!shouldForceCachedSnapshotRefresh") "explicit older-history reads must not be blocked when a legacy thread has no terminal refresh key"
   Assert-True ($conversationSource -match "pendingRemoteOlderHistoryAnchor\s*=\s*anchorSnapshot[\s\S]*?emit\('loadOlderHistory'\)[\s\S]*?props\.messages\.length[\s\S]*?restoreScrollAnchorOverFrames\(anchorSnapshot,\s*6\)") "remote older-history insertion must restore the pre-request reading anchor after messages arrive"
@@ -445,12 +449,12 @@ function Assert-RuntimeSnapshotOrderingSource {
   Assert-True ($source -match "const\s+UNREAD_STATE_STORAGE_KEY[\s\S]*?function\s+saveUnreadStateMap") "completion unread state must survive mobile process restarts"
   Assert-True ($source -match "function\s+applyReplayedRuntimeTerminalCleanup[\s\S]*?markThreadUnreadByEvent\(threadId\)") "replayed terminal events must restore unread completion feedback"
   Assert-True ($source -match "clearSettledRuntimeResidue\(threadId,\s*snapshot\.executionState\)[\s\S]*?processQueuedMessages\(threadId\)") "a settled runtime snapshot must release the previous turn and advance queued work"
-  Assert-True ($source -match "if\s*\(queue\[0\]\?\.deliveryState\s*===\s*'failed'\)\s*return") "a failed queued follow-up must pause instead of retrying indefinitely"
-  Assert-True ($source -match "catch\s*\(unknownError\)[\s\S]*?setQueuedMessageDeliveryState\([\s\S]*?threadId,[\s\S]*?next\.id,[\s\S]*?'failed'") "queued send failures must remain visible and retryable"
+  Assert-True ($runtimeQueueServerSource -match "next\.status\s*===\s*'queue_failed'[\s\S]*?return") "a failed durable queued follow-up must pause instead of retrying indefinitely"
+  Assert-True ($runtimeQueueClientSource -match "persistRuntimeQueuedMessages[\s\S]*?isRetryableQueueError[\s\S]*?deliveryState:\s*'failed'") "queued handoff failures must remain visible and retryable"
   Assert-True ($source -match "function\s+retryQueuedMessage[\s\S]*?setQueuedMessageDeliveryState\(threadId,\s*messageId,\s*'queued'\)[\s\S]*?processQueuedMessages\(threadId\)") "manual queue retry must resume the paused first item"
   Assert-True ($source -match "function\s+deleteQueuedMessage[\s\S]*?removeQueuedMessageByThreadId\(threadId,\s*messageId\)[\s\S]*?processQueuedMessages\(threadId\)") "deleting a failed queue item must release the following item"
-  Assert-True ($source -match "clientMessageId:\s*next\.clientMessageId") "queued follow-ups must reuse a stable idempotency key across pages and retries"
-  Assert-True ($source -match "event\.key\s*===\s*QUEUED_MESSAGES_STORAGE_KEY[\s\S]*?queuedMessagesByThreadId\.value\s*=\s*loadQueuedMessagesMap\(\)") "parallel 7420 pages must converge queued-message state without auto-running it"
+  Assert-True ($runtimeQueueClientSource -match "clientMessageId:\s*message\.clientMessageId") "queued follow-ups must reuse a stable idempotency key across pages and retries"
+  Assert-True ($source -match "event\.key\s*===\s*QUEUED_MESSAGES_STORAGE_KEY[\s\S]*?api\.loadQueuedMessagesMap\(QUEUED_MESSAGES_STORAGE_KEY\)") "parallel 7420 pages must converge queued-message state without browser-owned execution"
   $strongSignalMatch = [regex]::Match($source, "function\s+hasStrongExecutionSignal[\s\S]*?\n\s*}")
   Assert-True ($strongSignalMatch.Success -and $strongSignalMatch.Value -notmatch "hasQueuedThreadWork") "queued follow-up work must not keep the completed turn marked as running"
   $messageRefreshMatch = [regex]::Match($source, "function\s+shouldRefreshMessagesFromNotification[\s\S]*?\n}")
@@ -667,6 +671,8 @@ function Assert-BoundedRuntimeSendRecoverySource {
   $serverSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\appServerRuntimeStart.ts")
   $runtimeActionSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\runtimeActionRoutes.ts")
   $runtimeStoreSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\runtimeStore.ts")
+  $runtimeQueueClientSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\api\runtimeMessageQueue.ts")
+  $runtimeQueueServerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\runtimeMessageQueue.ts")
   $codexBridgeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\codexAppServerBridge.ts")
   $codexBridgeDisposeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\codexBridgeMiddlewareDispose.ts")
   $androidTaskPetSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\TaskPetOverlayService.java")
@@ -765,11 +771,12 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($appSource -match "useDesktopState\(\{[\s\S]*?onDeliveryPersisted:[\s\S]*?ensureMobileShellTaskNotificationPermission\(\)[\s\S]*?onPendingRequestCreated:[\s\S]*?syncMobileShellTaskPet\(true\)[\s\S]*?onRequestDispatched:[\s\S]*?ensureMobileShellTaskNotificationPermission\(\)") "the App must install native monitoring callbacks for retries, rollback resend, and automatic queue execution"
   $processQueuedMessagesMatch = [regex]::Match($source, "async\s+function\s+processQueuedMessages[\s\S]*?\n\s*async\s+function\s+interruptSelectedThreadTurn")
   Assert-True ($processQueuedMessagesMatch.Success) "could not find automatic queued-message execution source"
-  Assert-True ($processQueuedMessagesMatch.Value -match "notifyPendingRequestCreated\(undefined,\s*next\.clientMessageId\)[\s\S]*?await\s+startTurnForThread") "automatic queued-message execution must hand the stable client id to Android before the network await"
-  Assert-True ($processQueuedMessagesMatch.Value -match "clientMessageId:\s*next\.clientMessageId[\s\S]*?onRequestDispatched:\s*submitCallbacks\.onRequestDispatched") "automatic queued-message execution must preserve request-dispatched notification ownership"
-  Assert-True ($source -match "function\s+latestTaskPetClientMessageId[\s\S]*?queueProcessingByThreadId\.value\[threadId\][\s\S]*?queuedMessagesByThreadId\.value\[threadId\][\s\S]*?clientMessageId") "native task sync must expose the stable id of an automatically promoted queue row"
+  Assert-True ($processQueuedMessagesMatch.Value -match "api\.persistRuntimeQueuedMessages\(threadId,\s*queue\)[\s\S]*?syncRuntimeMessageQueue\(threadId\)") "browser queue processing must hand local rows to the durable 7420 queue instead of owning turn execution"
+  Assert-True ($runtimeQueueClientSource -match "persistRuntimeQueuedMessages[\s\S]*?clientMessageId:\s*message\.clientMessageId") "durable queue handoff must preserve the stable idempotency key"
+  Assert-True ($source -match "function\s+promoteQueuedMessageToOptimistic[\s\S]*?createMessageOutboxEntry[\s\S]*?clientMessageId:\s*queued\.clientMessageId") "a server-started queue row must transfer its stable id to the durable optimistic outbox"
+  Assert-True ($runtimeQueueServerSource -match "setInterval\(\(\)\s*=>\s*this\.scheduleAll\(\),\s*QUEUE_SWEEP_INTERVAL_MS\)" -and $runtimeQueueServerSource -match "listQueuedThreadIds[\s\S]*?processThread") "7420 must advance queued messages independently of the selected conversation and Android renderer lifecycle"
   Assert-True ($appSource -match "const\s+ownsSyncSlot\s*=\s*!mobileShellTaskPetSyncInFlight[\s\S]*?if\s*\(!ownsSyncSlot\s*&&\s*!force\)") "an immediate send handoff must bypass an older renderer sync already awaiting its bridge response"
-  Assert-True ($source -match "setQueuedMessagesForThread\(threadId,\s*nextQueue\)[\s\S]*?notifyDeliveryPersisted\(internalOptions\.onDeliveryPersisted\)[\s\S]*?await\s+recoverThreadExecutionState") "queued delivery must be persisted before contextual notification permission work begins"
+  Assert-True ($source -match "setQueuedMessagesForThread\(threadId,\s*nextQueue\)[\s\S]*?notifyDeliveryPersisted\(internalOptions\.onDeliveryPersisted\)[\s\S]*?await\s+processQueuedMessages\(threadId\)") "queued delivery must be persisted locally before its immediate durable 7420 handoff"
   Assert-True ($functionMatch.Value -match "const\s+runtimeRequest\s*=\s*startRuntimeThreadTurn\(args\)[\s\S]*?onRequestDispatched\?\.\(\)[\s\S]*?await\s+runtimeRequest") "contextual permission work must begin only after runtime/send has been dispatched"
   Assert-True ($appSource -match "onDeliveryPersisted:[\s\S]*?ensureMobileShellTaskNotificationPermission[\s\S]*?onRequestDispatched:[\s\S]*?ensureMobileShellTaskNotificationPermission") "existing-thread queue and immediate sends must use their respective durable or dispatched permission boundaries"
   Assert-True ($appSource -match "onPendingRequestCreated:[\s\S]*?syncMobileShellTaskPet\(true\)[\s\S]*?onRequestDispatched:[\s\S]*?ensureMobileShellTaskNotificationPermission") "new-thread sends must register provisional native tracking before requesting permission after runtime/send dispatch"
@@ -899,9 +906,16 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($androidTaskPetSource -match 'next\.sort\(\(left,\s*right\)\s*->[\s\S]*?compareTaskRecency[\s\S]*?tasks\.addAll\(next\)') "frontend task snapshots must preserve newest-progress-first native ordering"
   Assert-True ($androidTaskPetSource -match 'latestReplyCandidate[\s\S]*?shouldPreferReplyCandidate[\s\S]*?pendingReplyRenderTaskKey\s*=\s*taskNotificationKey\(latestReplyCandidate\)[\s\S]*?tasks\.remove\(latestReplyCandidate\)[\s\S]*?tasks\.add\(0,\s*latestReplyCandidate\)') "the task with the newest assistant reply must enter the visible overlay rows before render evidence is committed"
   Assert-True ($androidTaskPetPolicySource -match 'shouldCommitReplyRender[\s\S]*?overlayExpanded[\s\S]*?panelShown[\s\S]*?panelAlpha\s*>\s*0f[\s\S]*?renderedTaskMatchesPendingReply') "reply-render evidence must require an expanded and actually shown overlay panel"
-  Assert-True ($androidTaskPetSource -match 'commitPendingReplyRender\(String renderedReplyTaskKey\)[\s\S]*?taskPanel\.isShown\(\)[\s\S]*?taskPanel\.getAlpha\(\)[\s\S]*?replyRenderCount\s*\+=\s*1L' -and $androidTaskPetSource -match 'withEndAction\(\(\)\s*->\s*commitPendingReplyRender\(renderedReplyTaskKey\)\)') "opening a collapsed panel must commit reply-render evidence only after its visible animation completes"
-  Assert-True ($taskPetPreviewSource -match 'task-pet-preview-compact[\s\S]*?primaryItem[\s\S]*?\$emit\(''open'',\s*primaryItem\.threadId\)') "the collapsed web task-pet surface must show one latest-reply preview that opens its exact conversation"
+  Assert-True ($androidTaskPetSource -match 'commitPendingReplyRender\(String renderedReplyTaskKey\)[\s\S]*?taskPanel\.isShown\(\)[\s\S]*?taskPanel\.getAlpha\(\)[\s\S]*?replyRenderCount\s*\+=\s*1L' -and $androidTaskPetSource -match 'withEndAction\(\(\)\s*->\s*\{[\s\S]*?commitPendingReplyRender\(renderedReplyTaskKey\)[\s\S]*?scheduleTaskStackCollapse\(\)') "opening a collapsed panel must commit reply-render evidence only after its visible animation completes"
+  Assert-True ($taskPetPreviewSource -match 'task-pet-preview-compact[\s\S]*?primaryItem[\s\S]*?openTask\(primaryItem\)' -and $taskPetPreviewSource -match 'function\s+openTask[\s\S]*?emit\(''open'',\s*item\.threadId\)') "the collapsed web task-pet surface must show one latest-reply preview that opens its exact conversation"
+  Assert-True ($taskPetPreviewSource -match 'watch\(\(\)\s*=>\s*props\.items\.length[\s\S]*?count\s*>\s*0[\s\S]*?minimized\.value\s*=\s*false') "a web task arriving after idle must restore the task pet before reply presentation"
+  Assert-True ($taskPetPreviewSource -match 'unreadReplyTaskKeys[\s\S]*?item\.state\s*===\s*''waiting''\s*\|\|\s*unreadReplyTaskKeys\.value\.has') "web task-pet attention must count waiting tasks and unread running replies separately"
+  Assert-True ($taskPetPreviewSource -match 'function\s+showCloseConfirmation[\s\S]*?stopStackTimer\(\)[\s\S]*?closeConfirmationVisible\.value\s*=\s*true' -and $taskPetPreviewSource -match 'function\s+cancelCloseConfirmation[\s\S]*?closeConfirmationVisible\.value\s*=\s*false[\s\S]*?scheduleStackCollapse\(\)') "web task-pet close confirmation must pause auto-collapse and resume it only after cancellation"
   Assert-True ($androidTaskPetSource -match 'buildCompactPreview[\s\S]*?renderCompactPreview[\s\S]*?compactPreviewReply\.setText\(replyPreview\)[\s\S]*?openThread\(task\.threadId\)' -and $androidTaskPetPolicySource -match 'shouldCommitCompactReplyRender[\s\S]*?!overlayExpanded[\s\S]*?!overlayMinimized[\s\S]*?previewShown[\s\S]*?previewAlpha\s*>\s*0f') "the collapsed native task pet must render the newest reply, open its exact thread, and record visibility only while the compact preview is shown"
+  Assert-True ($androidTaskPetPolicySource -match 'hasUnreadReply[\s\S]*?latestReplyEventSeq\s*>\s*readThroughReplyEventSeq' -and $androidTaskPetSource -match 'put\("readThroughReplyEventSeq",\s*task\.readThroughReplyEventSeq\)' -and $androidTaskPetSource -match 'task\.readThroughReplyEventSeq\s*=\s*Math\.max[\s\S]*?task\.latestReplyEventSeq') "native task attention must use a persisted reply-event read cursor instead of a sticky boolean alone"
+  Assert-True ($androidTaskPetSource -match 'latestReplyItemId[\s\S]*?replyItemChanged[\s\S]*?showTransientReplyPeek' -and $androidTaskPetSource -match 'REPLY_PEEK_TIMEOUT_MS\s*=\s*5_000L' -and $androidTaskPetSource -match 'getRecommendedTimeoutMillis') "one assistant item may open one accessible five-second reply peek without stream chunks restarting the timer"
+  Assert-True ($androidTaskPetSource -match 'TASK_STACK_TIMEOUT_MS\s*=\s*8_000L[\s\S]*?collapseTaskStackRunnable[\s\S]*?setExpanded\(false\)' -and $androidTaskPetSource -match 'EDGE_VISIBLE_HANDLE_DP\s*=\s*32[\s\S]*?screenWidth\s*-\s*visibleHandle[\s\S]*?-\(rootWidth\s*-\s*visibleHandle\)') "the Android task stack must auto-collapse and leave only a bounded side handle"
+  Assert-True ($androidMainActivitySource -match 'appForeground\s*=\s*true[\s\S]*?refreshPresentation' -and $androidMainActivitySource -match 'appForeground\s*=\s*false[\s\S]*?refreshPresentation' -and $androidTaskPetSource -match 'shouldAttachOverlay[\s\S]*?!MainActivity\.isAppForeground\(\)' -and $androidTaskPetSource -match 'suppressed_foreground') "the overlay and terminal notification must stay quiet while the Android app itself is foreground"
   Assert-True ($androidTaskPetSource -match 'restorePendingReplyRender\(\)[\s\S]*?PREF_TASK_PET_PENDING_REPLY_RENDER_KEY[\s\S]*?PREF_TASK_PET_PENDING_REPLY_RENDER_EVENT_SEQ' -and $androidTaskPetSource -match 'pendingReplyRenderTaskKey\s*=\s*taskNotificationKey\(latestReplyCandidate\)[\s\S]*?persistPendingReplyRender\(\)' -and $androidTaskPetSource -match 'replyRenderCount\s*\+=\s*1L[\s\S]*?persistPendingReplyRender\(\)') "a collapsed latest-reply render boundary must survive service recreation and clear only after visible render"
   Assert-True ($androidTaskPetPolicySource -match 'shouldPreserveKnownLatestReply[\s\S]*?frontendSnapshot[\s\S]*?sameTaskGeneration[\s\S]*?!currentReply\.isEmpty\(\)[\s\S]*?incomingReplyEventSeq\s*<=\s*0L\s*\|\|\s*incomingReplyEventSeq\s*<=\s*currentReplyEventSeq' -and $androidTaskPetSource -match 'incomingLatestReplyEventSeq[\s\S]*?preserveKnownLatestReply[\s\S]*?resolvedLatestReplyEventSeq[\s\S]*?previous\.latestReplyEventSeq') "an unversioned, equal-version, or older recovering frontend reply must not overwrite a same-generation reply already persisted by the native monitor"
   $nativeSettledStatePolicyMatch = [regex]::Match($androidTaskPetPolicySource, 'static\s+boolean\s+shouldPreserveNativeSettledState[\s\S]*?\n\s*\}')
@@ -3615,6 +3629,9 @@ JSON.stringify((() => {
   const tableScrolls = Array.from(document.querySelectorAll('.message-table-scroll'));
   const tableCardGroups = Array.from(document.querySelectorAll('.message-table-cards'));
   const tableCards = Array.from(document.querySelectorAll('.message-table-card'));
+  const tableScrollableCount = tableScrolls.filter((node) => node.scrollWidth > node.clientWidth + 2).length;
+  const tableFontSizes = tableScrolls.flatMap((node) => Array.from(node.querySelectorAll('th, td')))
+    .map((node) => Number.parseFloat(window.getComputedStyle(node).fontSize || '0'));
   const runtimeStatusBars = Array.from(document.querySelectorAll('.conversation-regression-fixture .runtime-status-bar'));
   const runtimeStatusHeights = runtimeStatusBars.map((node) => Math.round(node.getBoundingClientRect().height));
   const queuedPanels = Array.from(document.querySelectorAll('.conversation-regression-fixture .queued-messages-inner'));
@@ -3709,6 +3726,8 @@ JSON.stringify((() => {
     tableScrollCount: tableScrolls.length,
     tableCardGroupCount: tableCardGroups.length,
     tableCardCount: tableCards.length,
+    tableScrollableCount,
+    tableMaxFontSize: tableFontSizes.length ? Math.max(...tableFontSizes) : 0,
     runtimeStatusBarCount: runtimeStatusBars.length,
     runtimeStatusMaxHeight: runtimeStatusHeights.length ? Math.max(...runtimeStatusHeights) : 0,
     viewportWidth,
@@ -4348,9 +4367,10 @@ function Assert-ConversationFixture {
   Assert-True ($Metrics.toolPanelCount -ge 1) "conversation fixture is missing tool call panel"
   Assert-True ($Metrics.requestButtonCount -ge 3) "conversation fixture is missing permission action buttons"
   if ([int]$Metrics.viewportWidth -lt 768) {
-    Assert-True ([int]$Metrics.tableScrollCount -eq 0) "conversation fixture phone viewport mounted desktop table DOM: $($Metrics.tableScrollCount)"
-    Assert-True ([int]$Metrics.tableCardGroupCount -ge 1) "conversation fixture phone viewport is missing mobile table card group"
-    Assert-True ([int]$Metrics.tableCardCount -ge 1) "conversation fixture phone viewport is missing mobile table cards"
+    Assert-True ([int]$Metrics.tableScrollCount -ge 1) "conversation fixture phone viewport is missing semantic table scroll region"
+    Assert-True ([int]$Metrics.tableScrollableCount -ge 1) "conversation fixture phone table is not horizontally scrollable"
+    Assert-True ([double]$Metrics.tableMaxFontSize -le 13.5) "conversation fixture phone table font is too large: $($Metrics.tableMaxFontSize)"
+    Assert-True ([int]$Metrics.tableCardGroupCount -eq 0) "conversation fixture phone viewport still mounted vertical table cards"
   } else {
     Assert-True ([int]$Metrics.tableScrollCount -ge 1) "conversation fixture $ViewportName viewport is missing desktop table DOM"
     Assert-True ([int]$Metrics.tableCardGroupCount -eq 0) "conversation fixture $ViewportName viewport mounted mobile table DOM: $($Metrics.tableCardGroupCount)"
@@ -7265,9 +7285,78 @@ Assert-ThreadAttentionChromeSource
   Assert-True ($notificationRecoveryFixture.hasCompletionNotificationRecovery -eq $true) "completion notification recovery fixture phone is missing the blocked-channel state or recovery action"
   Add-RegressionResult -Name "completion-notification-recovery-phone" -Page $notificationRecoveryFixture
 
+  $taskPetWakeFixtureUrl = $BaseUrl + "/#/__regression/task-pet?regression=frontend"
+  $taskPetWakeFixture = Open-And-ReadPage -Session $session -Url $taskPetWakeFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $taskPetWakeFixture -Name "task-pet idle wake fixture phone"
+  Invoke-AgentBrowser -Arguments @("--session", $session, "click", '[data-testid="toggle-task-state"]') | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "100") | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $session, "click", '[data-testid="toggle-task-state"]') | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "100") | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $session, "click", '[data-testid="simulate-latest-reply"]') | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "200") | Out-Null
+  $taskPetWakeMetrics = Invoke-BrowserEvalJson -Session $session -Script @'
+JSON.stringify((() => {
+  const root = document.querySelector('[aria-label="任务宠物预览"]');
+  const badge = root?.querySelector('.task-pet-preview-badge');
+  return {
+    minimized: Boolean(root?.querySelector('[aria-label="恢复任务宠物"]')),
+    compactCount: root?.querySelectorAll('.task-pet-preview-compact').length || 0,
+    compactText: root?.querySelector('.task-pet-preview-compact')?.textContent?.replace(/\s+/g, ' ').trim() || '',
+    attentionCount: Number(badge?.textContent?.trim() || 0)
+  };
+})())
+'@
+  Assert-True ($taskPetWakeMetrics.minimized -eq $false) "a task arriving after idle must restore the task pet instead of leaving it minimized"
+  Assert-True ([int]$taskPetWakeMetrics.compactCount -eq 1) "a new assistant reply after idle must show exactly one transient reply preview"
+  Assert-True ([string]$taskPetWakeMetrics.compactText -match '浮窗已实时同步最新回复') "the reply preview after idle did not show the new assistant reply"
+  Assert-True ([int]$taskPetWakeMetrics.attentionCount -eq 2) "one waiting task plus one unread running reply must show attention count 2"
+  Invoke-AgentBrowser -Arguments @("--session", $session, "click", ".task-pet-preview-mascot") | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $session, "click", '[data-testid="toggle-task-state"]') | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "8250") | Out-Null
+  $taskPetIdleCollapseMetrics = Invoke-BrowserEvalJson -Session $session -Script @'
+JSON.stringify({
+  expanded: Boolean(document.querySelector('.task-pet-preview-panel')),
+  minimized: Boolean(document.querySelector('[aria-label="恢复任务宠物"]'))
+})
+'@
+  Assert-True ($taskPetIdleCollapseMetrics.expanded -eq $false) "an empty task stack must auto-collapse after its visibility timeout"
+  Assert-True ($taskPetIdleCollapseMetrics.minimized -eq $true) "an empty task stack must return to the minimized pet after auto-collapse"
+  Invoke-AgentBrowser -Arguments @("--session", $session, "click", '[data-testid="toggle-task-state"]') | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $session, "click", ".task-pet-preview-mascot") | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $session, "click", '[aria-label="关闭浮窗"]') | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "8250") | Out-Null
+  $taskPetCloseConfirmationMetrics = Invoke-BrowserEvalJson -Session $session -Script @'
+JSON.stringify({
+  dialog: Boolean(document.querySelector('[aria-label="确认关闭浮窗"]')),
+  expanded: Boolean(document.querySelector('.task-pet-preview-panel'))
+})
+'@
+  Assert-True ($taskPetCloseConfirmationMetrics.dialog -eq $true) "task-pet close confirmation must pause auto-collapse while awaiting a decision"
+  Assert-True ($taskPetCloseConfirmationMetrics.expanded -eq $true) "task-pet close confirmation must keep its panel expanded"
+  Invoke-AgentBrowser -Arguments @("--session", $session, "click", '.task-pet-preview-close-confirm button:not([data-tone="danger"])') | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "100") | Out-Null
+  Add-RegressionResult -Name "task-pet-idle-wake-phone" -Page $taskPetWakeFixture
+
   $latestReplyFixtureUrl = $BaseUrl + "/#/__regression/task-pet?regression=frontend&latestReplyBurst=1"
   $latestReplyFixture = Open-And-ReadPage -Session $session -Url $latestReplyFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $latestReplyFixture -Name "latest reply promoted fixture phone"
+  $latestReplyDockedMetrics = Invoke-BrowserEvalJson -Session $session -Script @'
+JSON.stringify({
+  visibleRowCount: document.querySelectorAll('.task-pet-preview-row').length,
+  compactCount: document.querySelectorAll('.task-pet-preview-compact').length
+})
+'@
+  Assert-True ([int]$latestReplyDockedMetrics.visibleRowCount -eq 0) "task pet must start quietly docked until the user expands it"
+  Assert-True ([int]$latestReplyDockedMetrics.compactCount -eq 0) "quietly docked task pet must not expose a stale reply preview"
+  $expandLatestReplyPreview = Invoke-BrowserEvalJson -Session $session -Script @'
+JSON.stringify((() => {
+  const mascot = document.querySelector('.task-pet-preview-mascot');
+  mascot?.click();
+  return { expanded: Boolean(mascot) };
+})())
+'@
+  Assert-True ($expandLatestReplyPreview.expanded -eq $true) "task-pet latest-reply fixture could not expand its task stack"
+  Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "250") | Out-Null
   $latestReplyFixtureMetrics = Invoke-BrowserEvalJson -Session $session -Script @'
 JSON.stringify((() => {
   const rows = Array.from(document.querySelectorAll('.task-pet-preview-row'));
@@ -7304,8 +7393,7 @@ JSON.stringify((() => {
   };
 })())
 '@
-  Assert-True ([int]$compactLatestReplyBefore.compactCount -eq 1) "collapsed task pet must show exactly one latest-reply preview"
-  Assert-True ([string]$compactLatestReplyBefore.text -match '最新回复已提升到浮窗可见首行') "collapsed task pet did not retain the newest visible reply"
+  Assert-True ([int]$compactLatestReplyBefore.compactCount -eq 0) "collapsed task pet must remain quiet until a new reply arrives"
   Assert-True ([int]$compactLatestReplyBefore.documentWidth -eq [int]$compactLatestReplyBefore.viewportWidth) "collapsed latest-reply preview has horizontal overflow"
   Invoke-AgentBrowser -Arguments @("--session", $session, "click", '[data-testid="simulate-latest-reply"]') | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "200") | Out-Null

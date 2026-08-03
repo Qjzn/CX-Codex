@@ -102,7 +102,7 @@ export async function readAppServerThreadRuntimeSnapshot(
     threadRead = cachedThreadRead.threadRead
     messageState = cachedThreadRead.source === 'session-log' ? 'cached' : 'fresh'
   } else {
-    if (options.preferCachedMessages === true && lightThreadRead && sessionPath) {
+    if (lightThreadRead && sessionPath) {
       sessionLogReadAttempted = true
       const recoveredThreadRead = await (dependencies.readSessionLogThreadRead ?? readThreadReadFromSessionLog)(sessionPath, lightThreadRead)
       if (recoveredThreadRead) {

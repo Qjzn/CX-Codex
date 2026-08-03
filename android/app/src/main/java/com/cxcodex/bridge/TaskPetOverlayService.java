@@ -1,6 +1,7 @@
 package com.cxcodex.bridge;
 
 import android.animation.ValueAnimator;
+import android.app.KeyguardManager;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -31,6 +32,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.accessibility.AccessibilityManager;
 import android.view.animation.Interpolator;
 import android.view.animation.PathInterpolator;
 import android.view.inputmethod.InputMethodManager;
@@ -97,14 +99,18 @@ public final class TaskPetOverlayService extends Service {
     private static final int OMITTED_PROVISIONAL_MISSING_LIMIT = 3;
     private static final int REPLY_CONFIRMATION_MISSING_LIMIT = 3;
     private static final int ROOT_PADDING_DP = 6;
-    private static final int PANEL_WIDTH_DP = 282;
-    private static final int PANEL_CONTENT_WIDTH_DP = 258;
-    private static final int MASCOT_WIDTH_DP = 72;
-    private static final int MASCOT_HEIGHT_DP = 79;
+    private static final int PANEL_WIDTH_DP = 248;
+    private static final int PANEL_CONTENT_WIDTH_DP = 224;
+    private static final int MASCOT_WIDTH_DP = 56;
+    private static final int MASCOT_HEIGHT_DP = 62;
     private static final int MINI_SIZE_DP = 48;
-    private static final int TASK_ROW_HEIGHT_DP = 88;
-    private static final int COMPACT_PREVIEW_HEIGHT_DP = 86;
+    private static final int TASK_ROW_HEIGHT_DP = 64;
+    private static final int COMPACT_PREVIEW_WIDTH_DP = 224;
+    private static final int COMPACT_PREVIEW_HEIGHT_DP = 60;
     private static final int COMPACT_PREVIEW_GAP_DP = 4;
+    private static final int EDGE_VISIBLE_HANDLE_DP = 32;
+    private static final long REPLY_PEEK_TIMEOUT_MS = 5_000L;
+    private static final long TASK_STACK_TIMEOUT_MS = 8_000L;
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
     private static final Interpolator EASE_OUT = new PathInterpolator(0.22f, 1f, 0.36f, 1f);
 
@@ -157,6 +163,7 @@ public final class TaskPetOverlayService extends Service {
     private boolean destroyed;
     private boolean sendingReply;
     private boolean closeConfirmationVisible;
+    private boolean replyPeekVisible;
     private int panelAnimationToken;
     private int pendingCollapsedPetX = -1;
     private int pendingCollapsedPetY = -1;
@@ -232,6 +239,13 @@ public final class TaskPetOverlayService extends Service {
         }
     };
 
+    private final Runnable hideReplyPeekRunnable = () -> hideTransientReplyPeek(true);
+
+    private final Runnable collapseTaskStackRunnable = () -> {
+        if (!expanded || sendingReply || closeConfirmationVisible) return;
+        setExpanded(false);
+    };
+
     public static boolean isRunning() {
         return RUNNING.get();
     }
@@ -269,6 +283,13 @@ public final class TaskPetOverlayService extends Service {
 
     public static void stop(Context context) {
         context.stopService(new Intent(context, TaskPetOverlayService.class));
+    }
+
+    public static void refreshPresentation(Context context) {
+        if (!isRunning()) return;
+        context.startService(
+            new Intent(context, TaskPetOverlayService.class).setAction(ACTION_UPDATE)
+        );
     }
 
     public static void submitNotificationReply(
@@ -529,6 +550,8 @@ public final class TaskPetOverlayService extends Service {
         persistMonitorDiagnostics(true);
         mainHandler.removeCallbacks(pollRunnable);
         mainHandler.removeCallbacks(eventStreamReconnectRunnable);
+        mainHandler.removeCallbacks(hideReplyPeekRunnable);
+        mainHandler.removeCallbacks(collapseTaskStackRunnable);
         stopEventStream();
         releaseTaskWakeLock();
         removeOverlay();
@@ -630,6 +653,10 @@ public final class TaskPetOverlayService extends Service {
             && android.provider.Settings.canDrawOverlays(this);
     }
 
+    private boolean shouldAttachOverlay() {
+        return shouldShowOverlay() && !MainActivity.isAppForeground();
+    }
+
     private int activeTaskCount() {
         int count = 0;
         for (TaskItem task : tasks) {
@@ -694,7 +721,7 @@ public final class TaskPetOverlayService extends Service {
     }
 
     private void syncOverlayVisibility() {
-        if (shouldShowOverlay()) {
+        if (shouldAttachOverlay()) {
             if (overlayRoot == null && windowManager != null) createOverlay();
             return;
         }
@@ -702,6 +729,8 @@ public final class TaskPetOverlayService extends Service {
     }
 
     private void removeOverlay() {
+        mainHandler.removeCallbacks(hideReplyPeekRunnable);
+        mainHandler.removeCallbacks(collapseTaskStackRunnable);
         if (positionAnimator != null) positionAnimator.cancel();
         positionAnimator = null;
         if (mascot != null) mascot.animate().cancel();
@@ -743,6 +772,7 @@ public final class TaskPetOverlayService extends Service {
         replySendButton = null;
         windowParams = null;
         expanded = false;
+        replyPeekVisible = false;
         closeConfirmationVisible = false;
         lastPetMode = "";
         lastRenderedTaskSignature = "";
@@ -782,19 +812,7 @@ public final class TaskPetOverlayService extends Service {
         taskPanel.addView(panelHeader, new LinearLayout.LayoutParams(dp(PANEL_CONTENT_WIDTH_DP), dp(48)));
         taskPanel.addView(taskList, listParams);
         recentSection = buildRecentSection();
-        LinearLayout.LayoutParams recentParams = new LinearLayout.LayoutParams(
-            dp(PANEL_CONTENT_WIDTH_DP),
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        recentParams.topMargin = dp(8);
-        taskPanel.addView(recentSection, recentParams);
         replyComposer = buildReplyComposer();
-        LinearLayout.LayoutParams composerParams = new LinearLayout.LayoutParams(
-            dp(PANEL_CONTENT_WIDTH_DP),
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        composerParams.topMargin = dp(8);
-        taskPanel.addView(replyComposer, composerParams);
         closeConfirmPanel = buildCloseConfirmPanel();
         LinearLayout.LayoutParams closeConfirmParams = new LinearLayout.LayoutParams(
             dp(PANEL_CONTENT_WIDTH_DP),
@@ -806,7 +824,7 @@ public final class TaskPetOverlayService extends Service {
 
         compactPreview = buildCompactPreview();
         LinearLayout.LayoutParams compactPreviewParams = new LinearLayout.LayoutParams(
-            dp(PANEL_WIDTH_DP),
+            dp(COMPACT_PREVIEW_WIDTH_DP),
             dp(COMPACT_PREVIEW_HEIGHT_DP)
         );
         compactPreviewParams.bottomMargin = dp(COMPACT_PREVIEW_GAP_DP);
@@ -824,10 +842,11 @@ public final class TaskPetOverlayService extends Service {
         overlayRoot.addView(miniMascot, miniParams);
         attachDragAndClick(miniMascot, () -> {
             setMinimized(false);
-            if (tasks.isEmpty()) setExpanded(true);
+            setExpanded(true);
         });
 
         minimized = true;
+        replyPeekVisible = false;
         mascot.setVisibility(minimized ? View.GONE : View.VISIBLE);
         miniMascot.setVisibility(minimized ? View.VISIBLE : View.GONE);
 
@@ -851,13 +870,14 @@ public final class TaskPetOverlayService extends Service {
         windowParams.x = initialX;
         windowParams.y = initialY;
         windowManager.addView(overlayRoot, windowParams);
+        overlayRoot.post(this::snapPetToNearestEdge);
     }
 
     private LinearLayout buildCompactPreview() {
         LinearLayout preview = new LinearLayout(this);
         preview.setOrientation(LinearLayout.VERTICAL);
         preview.setGravity(Gravity.CENTER_VERTICAL);
-        preview.setPadding(dp(12), dp(8), dp(12), dp(8));
+        preview.setPadding(dp(11), dp(6), dp(11), dp(6));
         preview.setBackground(touchBackground(Color.rgb(253, 253, 254), 15, Color.argb(28, 42, 114, 232)));
         preview.setElevation(dp(7));
         preview.setVisibility(View.GONE);
@@ -867,23 +887,23 @@ public final class TaskPetOverlayService extends Service {
         compactPreviewContext.setEllipsize(android.text.TextUtils.TruncateAt.END);
         preview.addView(compactPreviewContext, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
-            dp(18)
+            dp(14)
         ));
 
         compactPreviewReply = text("", 13, Color.rgb(30, 36, 48), Typeface.BOLD);
-        compactPreviewReply.setMaxLines(2);
+        compactPreviewReply.setMaxLines(1);
         compactPreviewReply.setEllipsize(android.text.TextUtils.TruncateAt.END);
         compactPreviewReply.setGravity(Gravity.CENTER_VERTICAL);
         preview.addView(compactPreviewReply, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
-            dp(38)
+            dp(24)
         ));
 
         compactPreviewFreshness = text("", 9, Color.rgb(42, 103, 190), Typeface.NORMAL);
         compactPreviewFreshness.setSingleLine(true);
         preview.addView(compactPreviewFreshness, new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
-            dp(14)
+            dp(12)
         ));
         return preview;
     }
@@ -1033,23 +1053,18 @@ public final class TaskPetOverlayService extends Service {
         petImage = new ImageView(this);
         petImage.setImageResource(R.drawable.cx_pet_idle);
         petImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        FrameLayout.LayoutParams imageParams = new FrameLayout.LayoutParams(dp(70), dp(73), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        FrameLayout.LayoutParams imageParams = new FrameLayout.LayoutParams(dp(56), dp(60), Gravity.TOP | Gravity.CENTER_HORIZONTAL);
         root.addView(petImage, imageParams);
 
         petStatus = text("待命", 10, Color.rgb(53, 62, 78), Typeface.BOLD);
-        petStatus.setGravity(Gravity.CENTER);
-        petStatus.setBackground(rounded(Color.argb(238, 255, 255, 255), 999));
-        FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(dp(44), dp(20), Gravity.BOTTOM | Gravity.START);
-        statusParams.leftMargin = dp(1);
-        root.addView(petStatus, statusParams);
+        petStatus.setVisibility(View.GONE);
 
         badge = text("", 11, Color.WHITE, Typeface.BOLD);
         badge.setGravity(Gravity.CENTER);
         badge.setBackground(rounded(Color.rgb(42, 114, 232), 999));
         badge.setElevation(dp(4));
-        FrameLayout.LayoutParams badgeParams = new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.TOP | Gravity.END);
-        badgeParams.topMargin = dp(3);
-        badgeParams.rightMargin = dp(1);
+        FrameLayout.LayoutParams badgeParams = new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.TOP | Gravity.END);
+        badgeParams.topMargin = dp(1);
         root.addView(badge, badgeParams);
         return root;
     }
@@ -1081,12 +1096,19 @@ public final class TaskPetOverlayService extends Service {
         int activeCount = 0;
         int completedCount = 0;
         int retryCount = 0;
+        int attentionCount = 0;
         boolean waiting = false;
         for (TaskItem task : tasks) {
             if (TaskPetRuntimePolicy.isActiveTaskState(task.state)) activeCount += 1;
             if ("completed".equals(task.state)) completedCount += 1;
             if ("retry".equals(task.state)) retryCount += 1;
             if ("waiting".equals(task.state)) waiting = true;
+            if (TaskPetRuntimePolicy.shouldCountAttention(
+                task.state,
+                task.readAcknowledged,
+                task.latestReplyEventSeq,
+                task.readThroughReplyEventSeq
+            )) attentionCount += 1;
         }
         String foregroundTaskSignature = foregroundTaskSignature(activeCount);
         if (
@@ -1099,21 +1121,20 @@ public final class TaskPetOverlayService extends Service {
         }
         if (
             taskList == null || badge == null || miniBadge == null || petImage == null
-                || miniPetImage == null || petStatus == null || recentList == null
+                || miniPetImage == null || petStatus == null
         ) return;
         if (tasks.isEmpty() && !expanded && !minimized) {
+            hideTransientReplyPeek(false);
             setMinimized(true);
-        } else if (!tasks.isEmpty() && minimized) {
-            setMinimized(false);
         }
-        badge.setVisibility(tasks.isEmpty() ? View.GONE : View.VISIBLE);
-        badge.setText(tasks.size() > 99 ? "99+" : String.valueOf(tasks.size()));
+        badge.setVisibility(attentionCount == 0 ? View.GONE : View.VISIBLE);
+        badge.setText(attentionCount > 99 ? "99+" : String.valueOf(attentionCount));
         int badgeColor = retryCount > 0
             ? Color.rgb(196, 73, 65)
             : waiting ? Color.rgb(214, 126, 28) : Color.rgb(42, 114, 232);
         badge.setBackground(rounded(badgeColor, 999));
-        miniBadge.setVisibility(tasks.isEmpty() ? View.GONE : View.VISIBLE);
-        miniBadge.setText(tasks.size() > 9 ? "9+" : String.valueOf(tasks.size()));
+        miniBadge.setVisibility(attentionCount == 0 ? View.GONE : View.VISIBLE);
+        miniBadge.setText(attentionCount > 9 ? "9+" : String.valueOf(attentionCount));
         miniBadge.setBackground(rounded(badgeColor, 999));
         String petMode = waiting || retryCount > 0
             ? "waiting"
@@ -1123,13 +1144,15 @@ public final class TaskPetOverlayService extends Service {
             : waiting ? "待处理" : activeCount > 0 ? "工作中" : completedCount > 0 ? "已完成" : "待命";
         updatePetImage(petMode);
         petStatus.setText(stateLabel);
-        String countLabel = tasks.isEmpty() ? "没有任务" : tasks.size() + " 个任务";
+        String countLabel = tasks.isEmpty()
+            ? "没有任务"
+            : tasks.size() + " 个任务，" + attentionCount + " 条待处理";
         mascot.setContentDescription("CX-Codex 任务宠物，" + stateLabel + "，" + countLabel + "，点击查看任务进展");
         miniMascot.setContentDescription("已最小化的 CX-Codex 任务宠物，" + stateLabel + "，" + countLabel + "，点击恢复");
         if (panelSummary != null) {
             panelSummary.setText(
                 activeCount > 0
-                    ? activeCount + " 个任务 · 最新回复实时更新" + (retryCount > 0 ? " · " + retryCount + " 条待重试" : "")
+                    ? activeCount + " 个任务" + (attentionCount > 0 ? " · " + attentionCount + " 条待处理" : "")
                     : retryCount > 0
                         ? retryCount + " 条回复待重试"
                     : completedCount > 0
@@ -1209,8 +1232,93 @@ public final class TaskPetOverlayService extends Service {
         return compactPreview != null
             && !expanded
             && !minimized
+            && replyPeekVisible
             && !tasks.isEmpty()
             && (taskPanel == null || taskPanel.getVisibility() != View.VISIBLE);
+    }
+
+    private void showTransientReplyPeek(TaskItem task, boolean replyItemChanged) {
+        if (overlayRoot == null || windowParams == null || !shouldAttachOverlay()) return;
+        PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+        KeyguardManager keyguardManager = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+        boolean screenInteractive = powerManager != null && powerManager.isInteractive();
+        boolean deviceLocked = keyguardManager != null && keyguardManager.isKeyguardLocked();
+        if (!TaskPetRuntimePolicy.shouldShowTransientReplyPeek(
+            MainActivity.isAppForeground(),
+            screenInteractive,
+            deviceLocked,
+            replyItemChanged,
+            task.latestReplyEventSeq,
+            task.readThroughReplyEventSeq
+        )) return;
+        if (expanded) {
+            scheduleTaskStackCollapse();
+            return;
+        }
+        if (minimized) setMinimized(false);
+        setReplyPeekVisible(true);
+        mainHandler.removeCallbacks(hideReplyPeekRunnable);
+        mainHandler.postDelayed(
+            hideReplyPeekRunnable,
+            recommendedTimeoutMs(
+                REPLY_PEEK_TIMEOUT_MS,
+                AccessibilityManager.FLAG_CONTENT_TEXT | AccessibilityManager.FLAG_CONTENT_CONTROLS
+            )
+        );
+    }
+
+    private void hideTransientReplyPeek(boolean tuckAfterHide) {
+        mainHandler.removeCallbacks(hideReplyPeekRunnable);
+        if (!replyPeekVisible) return;
+        setReplyPeekVisible(false);
+        if (tuckAfterHide && !expanded) snapPetToNearestEdge();
+    }
+
+    private void setReplyPeekVisible(boolean visible) {
+        if (replyPeekVisible == visible) {
+            syncCompactPreviewVisibility();
+            return;
+        }
+        int petX = windowParams == null
+            ? 0
+            : windowParams.x + collapsedMascotOffsetX(minimized);
+        int petY = windowParams == null
+            ? 0
+            : windowParams.y + collapsedCompactOffsetY(minimized);
+        replyPeekVisible = visible;
+        syncCompactPreviewVisibility();
+        if (windowParams == null || windowManager == null || overlayRoot == null || expanded) return;
+        windowParams.x = petX - collapsedMascotOffsetX(minimized);
+        windowParams.y = Math.max(0, petY - collapsedCompactOffsetY(minimized));
+        if (visible) {
+            int rootWidth = dp(collapsedRootWidthDp(minimized));
+            int margin = dp(8);
+            int maxX = Math.max(margin, getResources().getDisplayMetrics().widthPixels - rootWidth - margin);
+            windowParams.x = anchoredRight ? maxX : margin;
+        }
+        windowManager.updateViewLayout(overlayRoot, windowParams);
+    }
+
+    private void scheduleTaskStackCollapse() {
+        mainHandler.removeCallbacks(collapseTaskStackRunnable);
+        if (!expanded) return;
+        mainHandler.postDelayed(
+            collapseTaskStackRunnable,
+            recommendedTimeoutMs(
+                TASK_STACK_TIMEOUT_MS,
+                AccessibilityManager.FLAG_CONTENT_TEXT | AccessibilityManager.FLAG_CONTENT_CONTROLS
+            )
+        );
+    }
+
+    private long recommendedTimeoutMs(long originalTimeoutMs, int contentFlags) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return originalTimeoutMs;
+        AccessibilityManager manager = (AccessibilityManager) getSystemService(ACCESSIBILITY_SERVICE);
+        if (manager == null) return originalTimeoutMs;
+        return Math.max(
+            originalTimeoutMs,
+            manager.getRecommendedTimeoutMillis((int) originalTimeoutMs, contentFlags)
+        );
     }
 
     private void updatePetImage(String mode) {
@@ -1303,10 +1411,8 @@ public final class TaskPetOverlayService extends Service {
 
     private String renderTaskList() {
         taskList.removeAllViews();
-        renderRecentThreads();
         String renderedReplyTaskKey = "";
         int maxVisibleRows = getResources().getDisplayMetrics().heightPixels < dp(700) ? 2 : 3;
-        if (!replyThreadId.isEmpty()) maxVisibleRows = 1;
         int visibleCount = Math.min(tasks.size(), maxVisibleRows);
         if (visibleCount == 0) {
             TextView empty = text("没有正在运行的任务", 13, Color.rgb(87, 98, 117), Typeface.NORMAL);
@@ -1428,7 +1534,7 @@ public final class TaskPetOverlayService extends Service {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(10), dp(7), dp(9), dp(7));
+        row.setPadding(dp(9), dp(5), dp(8), dp(5));
         row.setBackground(touchBackground(Color.rgb(242, 245, 249), 11, Color.argb(28, 42, 114, 232)));
         row.setClickable(canOpenThread);
         row.setFocusable(canOpenThread);
@@ -1464,7 +1570,7 @@ public final class TaskPetOverlayService extends Service {
         contextView.setSingleLine(true);
         contextView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         TextView replyView = text(replyPreview, 12, Color.rgb(30, 36, 48), Typeface.NORMAL);
-        replyView.setMaxLines(2);
+        replyView.setMaxLines(1);
         replyView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         replyView.setGravity(Gravity.CENTER_VERTICAL);
         TextView freshness = text(
@@ -1476,23 +1582,10 @@ public final class TaskPetOverlayService extends Service {
             Typeface.NORMAL
         );
         freshness.setSingleLine(true);
-        copy.addView(contextView, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(18)));
-        copy.addView(replyView, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(38)));
-        copy.addView(freshness, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(16)));
-        row.addView(copy, new LinearLayout.LayoutParams(0, dp(72), 1f));
-
-        TextView reply = text("回复", 11, Color.rgb(42, 103, 190), Typeface.BOLD);
-        reply.setGravity(Gravity.CENTER);
-        reply.setClickable(true);
-        reply.setFocusable(true);
-        reply.setContentDescription("直接回复" + task.title);
-        reply.setBackground(touchBackground(Color.WHITE, 999, Color.argb(30, 42, 114, 232)));
-        reply.setOnClickListener(view -> {
-            view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
-            showReplyComposer(task);
-        });
-        reply.setVisibility(canOpenThread ? View.VISIBLE : View.GONE);
-        row.addView(reply, new LinearLayout.LayoutParams(dp(44), dp(38)));
+        copy.addView(contextView, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(15)));
+        copy.addView(replyView, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(24)));
+        copy.addView(freshness, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(13)));
+        row.addView(copy, new LinearLayout.LayoutParams(0, dp(52), 1f));
         return row;
     }
 
@@ -1729,6 +1822,8 @@ public final class TaskPetOverlayService extends Service {
                 nextRuntimeState,
                 0L,
                 0L,
+                "",
+                0L,
                 System.currentTimeMillis(),
                 0L,
                 !awaitingConfirmation,
@@ -1748,6 +1843,9 @@ public final class TaskPetOverlayService extends Service {
             task.latestActivity = clean(message, 80);
             task.latestReply = "";
             task.latestReplyEventSeq = 0L;
+            task.latestReplyItemId = "";
+            task.readThroughReplyEventSeq = 0L;
+            task.latestReplyUpdatedAtMs = 0L;
             task.lastUpdatedAtMs = System.currentTimeMillis();
             task.lastNoProgressReminderAtMs = 0L;
             task.requestAccepted = !awaitingConfirmation;
@@ -1794,6 +1892,8 @@ public final class TaskPetOverlayService extends Service {
                 "pending_start",
                 0L,
                 0L,
+                "",
+                0L,
                 now,
                 0L,
                 false,
@@ -1812,6 +1912,9 @@ public final class TaskPetOverlayService extends Service {
             task.latestActivity = clean(message, 80);
             task.latestReply = "";
             task.latestReplyEventSeq = 0L;
+            task.latestReplyItemId = "";
+            task.readThroughReplyEventSeq = 0L;
+            task.latestReplyUpdatedAtMs = 0L;
             task.lastUpdatedAtMs = now;
             task.lastNoProgressReminderAtMs = 0L;
             task.requestAccepted = false;
@@ -2034,6 +2137,8 @@ public final class TaskPetOverlayService extends Service {
                 awaitingConfirmation ? "pending_start" : "retry",
                 0L,
                 0L,
+                "",
+                0L,
                 now,
                 0L,
                 false,
@@ -2054,6 +2159,9 @@ public final class TaskPetOverlayService extends Service {
             task.latestReply = "";
             task.lastEventSeq = 0L;
             task.latestReplyEventSeq = 0L;
+            task.latestReplyItemId = "";
+            task.readThroughReplyEventSeq = 0L;
+            task.latestReplyUpdatedAtMs = 0L;
             task.lastUpdatedAtMs = now;
             task.lastNoProgressReminderAtMs = 0L;
             task.requestAccepted = false;
@@ -2087,18 +2195,24 @@ public final class TaskPetOverlayService extends Service {
     }
 
     private int freshnessBucket(TaskItem task) {
-        long ageMs = Math.max(0L, System.currentTimeMillis() - task.lastUpdatedAtMs);
+        long ageMs = Math.max(0L, System.currentTimeMillis() - freshnessTimestampMs(task));
         if (ageMs < 15_000L) return 0;
         if (ageMs < 60_000L) return 1;
         return 2 + (int) Math.min(59L, ageMs / 60_000L);
     }
 
     private String freshnessText(TaskItem task) {
-        long ageMs = Math.max(0L, System.currentTimeMillis() - task.lastUpdatedAtMs);
+        long ageMs = Math.max(0L, System.currentTimeMillis() - freshnessTimestampMs(task));
         if (ageMs < 15_000L) return "刚刚";
         if (ageMs < 60_000L) return "1 分钟内";
         long minutes = Math.max(1L, ageMs / 60_000L);
         return Math.min(59L, minutes) + " 分钟前";
+    }
+
+    private long freshnessTimestampMs(TaskItem task) {
+        return !task.latestReply.isEmpty() && task.latestReplyUpdatedAtMs > 0L
+            ? task.latestReplyUpdatedAtMs
+            : task.lastUpdatedAtMs;
     }
 
     private boolean isNoProgress(TaskItem task) {
@@ -2205,14 +2319,22 @@ public final class TaskPetOverlayService extends Service {
     private void snapPetToNearestEdge() {
         int screenWidth = getResources().getDisplayMetrics().widthPixels;
         int screenHeight = getResources().getDisplayMetrics().heightPixels;
-        int margin = dp(8);
-        int maxX = Math.max(margin, screenWidth - overlayRoot.getWidth() - margin);
-        int maxY = Math.max(margin, screenHeight - overlayRoot.getHeight() - margin);
-        int centerX = windowParams.x + overlayRoot.getWidth() / 2;
+        boolean tuckAtEdge = !expanded && !replyPeekVisible;
+        int margin = tuckAtEdge ? 0 : dp(8);
+        int verticalMargin = dp(8);
+        int visibleHandle = dp(EDGE_VISIBLE_HANDLE_DP);
+        int rootWidth = expanded
+            ? Math.max(dp(PANEL_WIDTH_DP + ROOT_PADDING_DP * 2), overlayRoot.getWidth())
+            : dp(collapsedRootWidthDp(minimized));
+        int maxX = Math.max(margin, screenWidth - rootWidth - margin);
+        int maxY = Math.max(verticalMargin, screenHeight - overlayRoot.getHeight() - verticalMargin);
+        int centerX = windowParams.x + rootWidth / 2;
         anchoredRight = centerX >= screenWidth / 2;
         updateMascotGravity();
-        int targetX = anchoredRight ? maxX : margin;
-        int targetY = Math.max(margin, Math.min(maxY, windowParams.y));
+        int targetX = tuckAtEdge
+            ? anchoredRight ? screenWidth - visibleHandle : -(rootWidth - visibleHandle)
+            : anchoredRight ? maxX : margin;
+        int targetY = Math.max(verticalMargin, Math.min(maxY, windowParams.y));
         animateWindowTo(targetX, targetY);
     }
 
@@ -2266,6 +2388,7 @@ public final class TaskPetOverlayService extends Service {
 
     private void replaceTasks(String tasksJson, boolean frontendSnapshot) {
         List<TaskItem> next = new ArrayList<>();
+        TaskItem frontendPeekCandidate = null;
         long now = System.currentTimeMillis();
         try {
             JSONArray rows = new JSONArray(tasksJson);
@@ -2320,6 +2443,26 @@ public final class TaskPetOverlayService extends Service {
                 long resolvedLatestReplyEventSeq = preserveKnownLatestReply
                     ? previous.latestReplyEventSeq
                     : incomingLatestReplyEventSeq;
+                String incomingLatestReplyItemId = clean(row.optString("latestReplyItemId"), 160);
+                String resolvedLatestReplyItemId = preserveKnownLatestReply && previous != null
+                    ? previous.latestReplyItemId
+                    : incomingLatestReplyItemId.isEmpty() && previous != null && sameGeneration
+                        ? previous.latestReplyItemId
+                        : incomingLatestReplyItemId;
+                boolean resolvedReadAcknowledged = previous != null && sameGeneration
+                    ? previous.readAcknowledged
+                    : !frontendSnapshot && row.optBoolean("readAcknowledged", false);
+                long resolvedReadThroughReplyEventSeq = previous != null && sameGeneration
+                    ? previous.readThroughReplyEventSeq
+                    : !frontendSnapshot
+                        ? row.has("readThroughReplyEventSeq")
+                            ? Math.max(0L, row.optLong("readThroughReplyEventSeq", 0L))
+                            : resolvedReadAcknowledged ? resolvedLatestReplyEventSeq : 0L
+                        : 0L;
+                if (TaskPetRuntimePolicy.hasUnreadReply(
+                    resolvedLatestReplyEventSeq,
+                    resolvedReadThroughReplyEventSeq
+                )) resolvedReadAcknowledged = false;
                 TaskItem incoming = new TaskItem(
                     resolvedThreadId,
                     resolvedClientMessageId,
@@ -2341,6 +2484,8 @@ public final class TaskPetOverlayService extends Service {
                     ),
                     incomingLastEventSeq,
                     resolvedLatestReplyEventSeq,
+                    resolvedLatestReplyItemId,
+                    resolvedReadThroughReplyEventSeq,
                     row.optLong("lastUpdatedAtMs", now),
                     row.optLong(
                         "lastNoProgressReminderAtMs",
@@ -2349,11 +2494,18 @@ public final class TaskPetOverlayService extends Service {
                     row.has("requestAccepted")
                         ? row.optBoolean("requestAccepted", false)
                         : previous != null && sameGeneration && previous.requestAccepted,
-                    previous != null && sameGeneration
-                        ? previous.readAcknowledged
-                        : !frontendSnapshot && row.optBoolean("readAcknowledged", false),
+                    resolvedReadAcknowledged,
                     frontendSnapshot ? false : row.optBoolean("omittedFromFrontend", false),
                     frontendSnapshot ? 0 : row.optInt("missingRequestPollCount", 0)
+                );
+                long incomingReplyObservedAtMs = row.has("latestReplyUpdatedAtMs")
+                    ? Math.max(0L, row.optLong("latestReplyUpdatedAtMs", 0L))
+                    : Math.max(0L, row.optLong("lastUpdatedAtMs", now));
+                incoming.latestReplyUpdatedAtMs = TaskPetRuntimePolicy.resolveReplyUpdatedAtMs(
+                    previous != null && sameGeneration ? previous.latestReplyEventSeq : 0L,
+                    incoming.latestReplyEventSeq,
+                    previous != null && sameGeneration ? previous.latestReplyUpdatedAtMs : 0L,
+                    incomingReplyObservedAtMs
                 );
                 if (
                     previous != null
@@ -2396,6 +2548,20 @@ public final class TaskPetOverlayService extends Service {
                 if (previous != null && sameGeneration && incoming.hasSameVisibleContent(previous)) {
                     incoming.lastUpdatedAtMs = previous.lastUpdatedAtMs;
                 }
+                if (
+                    frontendSnapshot
+                    && previous != null
+                    && sameGeneration
+                    && !TaskPetRuntimePolicy.hasUnreadReply(
+                        previous.latestReplyEventSeq,
+                        previous.readThroughReplyEventSeq
+                    )
+                    && TaskPetRuntimePolicy.hasUnreadReply(
+                        incoming.latestReplyEventSeq,
+                        incoming.readThroughReplyEventSeq
+                    )
+                    && !incoming.latestReply.isEmpty()
+                ) frontendPeekCandidate = incoming;
                 next.add(incoming);
             }
         } catch (Exception ignored) {
@@ -2429,6 +2595,9 @@ public final class TaskPetOverlayService extends Service {
         tasks.addAll(next);
         reconcileNoProgressNotifications();
         persistTasks();
+        if (frontendPeekCandidate != null) {
+            showTransientReplyPeek(frontendPeekCandidate, true);
+        }
     }
 
     private void replaceRecentThreads(String recentThreadsJson) {
@@ -2488,6 +2657,9 @@ public final class TaskPetOverlayService extends Service {
                     .put("executionState", task.runtimeState)
                     .put("lastEventSeq", task.lastEventSeq)
                     .put("latestReplyEventSeq", task.latestReplyEventSeq)
+                    .put("latestReplyItemId", task.latestReplyItemId)
+                    .put("readThroughReplyEventSeq", task.readThroughReplyEventSeq)
+                    .put("latestReplyUpdatedAtMs", task.latestReplyUpdatedAtMs)
                     .put("lastUpdatedAtMs", task.lastUpdatedAtMs)
                     .put("lastNoProgressReminderAtMs", task.lastNoProgressReminderAtMs)
                     .put("requestAccepted", task.requestAccepted)
@@ -2853,6 +3025,7 @@ public final class TaskPetOverlayService extends Service {
                         false,
                         0L,
                         0L,
+                        "",
                         ""
                     ));
                     continue;
@@ -2889,6 +3062,7 @@ public final class TaskPetOverlayService extends Service {
                         false,
                         0L,
                         0L,
+                        "",
                         ""
                     ));
                     continue;
@@ -2921,6 +3095,7 @@ public final class TaskPetOverlayService extends Service {
                 false,
                 0L,
                 0L,
+                "",
                 ""
             ));
         }
@@ -2967,6 +3142,7 @@ public final class TaskPetOverlayService extends Service {
                 long latestReplyEventSeq = snapshot.has("latestReplyEventSeq")
                     ? Math.max(0L, snapshot.optLong("latestReplyEventSeq", 0L))
                     : latestReply.isEmpty() ? 0L : lastEventSeq;
+                String latestReplyItemId = clean(snapshot.optString("latestReplyItemId"), 160);
                 results.add(new RuntimeResult(
                     threadId,
                     clientMessageId,
@@ -2978,6 +3154,7 @@ public final class TaskPetOverlayService extends Service {
                     snapshot.optBoolean("stale", false),
                     lastEventSeq,
                     latestReplyEventSeq,
+                    latestReplyItemId,
                     latestReply
                 ));
             }
@@ -3028,6 +3205,8 @@ public final class TaskPetOverlayService extends Service {
         boolean replyDiagnosticsChanged = false;
         TaskItem latestReplyCandidate = null;
         long latestReplyCandidateEventSeq = 0L;
+        TaskItem latestReplyPeekCandidate = null;
+        long latestReplyPeekCandidateEventSeq = 0L;
         for (RuntimeResult result : results) {
             TaskItem requestedGeneration = null;
             for (TaskItem requested : requestedTasks) {
@@ -3058,6 +3237,7 @@ public final class TaskPetOverlayService extends Service {
                 String previousRuntimeState = task.runtimeState;
                 String previousDetail = task.detail;
                 String previousReply = task.latestReply;
+                String previousReplyItemId = task.latestReplyItemId;
                 boolean replyDeliveryAttempt = TaskPetRuntimePolicy.shouldReconcileReplyAttempt(
                     replyAttemptClientMessageId,
                     replyAttemptThreadId,
@@ -3132,9 +3312,26 @@ public final class TaskPetOverlayService extends Service {
                     || result.latestReplyEventSeq > task.latestReplyEventSeq
                 );
                 if (canApplyReply) {
+                    long previousReplyEventSeq = task.latestReplyEventSeq;
                     boolean replyChanged = !result.latestReply.equals(task.latestReply);
+                    boolean replyItemChanged = !result.latestReplyItemId.isEmpty()
+                        ? !result.latestReplyItemId.equals(previousReplyItemId)
+                        : previousReply.isEmpty() && replyChanged;
                     task.latestReply = result.latestReply;
                     task.latestReplyEventSeq = Math.max(0L, result.latestReplyEventSeq);
+                    task.latestReplyUpdatedAtMs = TaskPetRuntimePolicy.resolveReplyUpdatedAtMs(
+                        previousReplyEventSeq,
+                        task.latestReplyEventSeq,
+                        task.latestReplyUpdatedAtMs,
+                        System.currentTimeMillis()
+                    );
+                    if (!result.latestReplyItemId.isEmpty()) {
+                        task.latestReplyItemId = result.latestReplyItemId;
+                    }
+                    if (TaskPetRuntimePolicy.hasUnreadReply(
+                        task.latestReplyEventSeq,
+                        task.readThroughReplyEventSeq
+                    )) task.readAcknowledged = false;
                     if (replyChanged) {
                         replySnapshotApplyCount += 1L;
                         replyDiagnosticsChanged = true;
@@ -3146,6 +3343,16 @@ public final class TaskPetOverlayService extends Service {
                             latestReplyCandidateEventSeq = result.latestReplyEventSeq;
                         }
                     }
+                    if (
+                        replyItemChanged
+                        && TaskPetRuntimePolicy.shouldPreferReplyCandidate(
+                            latestReplyPeekCandidateEventSeq,
+                            result.latestReplyEventSeq
+                        )
+                    ) {
+                        latestReplyPeekCandidate = task;
+                        latestReplyPeekCandidateEventSeq = result.latestReplyEventSeq;
+                    }
                 }
                 if (
                     result.stale
@@ -3156,7 +3363,9 @@ public final class TaskPetOverlayService extends Service {
                 } else if (!result.inProgress) {
                     boolean wasCompleted = "completed".equals(task.state);
                     boolean retainUnreadCompletion = TaskPetRuntimePolicy.shouldRetainUnreadSettledTask(
-                        task.readAcknowledged
+                        task.readAcknowledged,
+                        task.latestReplyEventSeq,
+                        task.readThroughReplyEventSeq
                     );
                     task.state = "completed";
                     task.activeTurnId = "";
@@ -3247,6 +3456,9 @@ public final class TaskPetOverlayService extends Service {
             tasks.remove(latestReplyCandidate);
             tasks.add(0, latestReplyCandidate);
         }
+        if (latestReplyPeekCandidate != null) {
+            showTransientReplyPeek(latestReplyPeekCandidate, true);
+        }
         reconcileNoProgressNotifications();
         persistTasks();
         if (replyDiagnosticsChanged) persistMonitorDiagnostics(true);
@@ -3266,6 +3478,9 @@ public final class TaskPetOverlayService extends Service {
         task.detail = "回复未送达 · 点击回复重试";
         task.latestReply = "";
         task.latestReplyEventSeq = 0L;
+        task.latestReplyItemId = "";
+        task.readThroughReplyEventSeq = 0L;
+        task.latestReplyUpdatedAtMs = 0L;
         task.missingRequestPollCount = 0;
         task.lastNoProgressReminderAtMs = 0L;
         task.omittedFromFrontend = true;
@@ -3374,6 +3589,7 @@ public final class TaskPetOverlayService extends Service {
 
     private void showCloseConfirmation() {
         if (closeConfirmPanel == null || closeConfirmationVisible || sendingReply) return;
+        mainHandler.removeCallbacks(collapseTaskStackRunnable);
         if (replyComposer != null && replyComposer.getVisibility() == View.VISIBLE) hideReplyComposer();
         int petY = windowParams.y + taskPanel.getHeight();
         closeConfirmationVisible = true;
@@ -3393,6 +3609,7 @@ public final class TaskPetOverlayService extends Service {
         taskList.setVisibility(View.VISIBLE);
         renderRecentThreads();
         relayoutExpandedPanel(petY);
+        scheduleTaskStackCollapse();
     }
 
     private void closeTaskPet() {
@@ -3417,9 +3634,17 @@ public final class TaskPetOverlayService extends Service {
         String notificationKey = taskNotificationKey(task);
         if (TaskPetRuntimePolicy.isActiveTaskState(task.state)) {
             task.readAcknowledged = true;
+            task.readThroughReplyEventSeq = Math.max(
+                task.readThroughReplyEventSeq,
+                task.latestReplyEventSeq
+            );
+            if (!tasks.isEmpty() && sameTaskIdentity(tasks.get(0), task)) {
+                hideTransientReplyPeek(true);
+            }
             persistTasksSynchronously();
             NotificationManagerCompat.from(this).cancel(completionNotificationId(notificationKey));
             TaskPetNoProgressReviewReceiver.cancelNotification(this, notificationKey);
+            renderTasks();
             return;
         }
         if (!"completed".equals(task.state)) return;
@@ -3430,6 +3655,7 @@ public final class TaskPetOverlayService extends Service {
         NotificationManagerCompat.from(this).cancel(completionNotificationId(notificationKey));
         TaskPetNoProgressReviewReceiver.cancelNotification(this, notificationKey);
         syncTaskWakeLock();
+        renderTasks();
         if (!shouldKeepMonitorRunning()) stopSelf();
     }
 
@@ -3444,16 +3670,16 @@ public final class TaskPetOverlayService extends Service {
 
     private int collapsedContentWidthDp(boolean minimizedState) {
         if (minimizedState) return MINI_SIZE_DP;
-        return tasks.isEmpty() ? MASCOT_WIDTH_DP : PANEL_WIDTH_DP;
+        return replyPeekVisible ? COMPACT_PREVIEW_WIDTH_DP : MASCOT_WIDTH_DP;
     }
 
     private int collapsedMascotOffsetX(boolean minimizedState) {
-        if (minimizedState || tasks.isEmpty() || !anchoredRight) return 0;
-        return dp(PANEL_WIDTH_DP - MASCOT_WIDTH_DP);
+        if (minimizedState || !replyPeekVisible || !anchoredRight) return 0;
+        return dp(COMPACT_PREVIEW_WIDTH_DP - MASCOT_WIDTH_DP);
     }
 
     private int collapsedCompactOffsetY(boolean minimizedState) {
-        if (minimizedState || tasks.isEmpty()) return 0;
+        if (minimizedState || !replyPeekVisible) return 0;
         return dp(COMPACT_PREVIEW_HEIGHT_DP + COMPACT_PREVIEW_GAP_DP);
     }
 
@@ -3525,6 +3751,7 @@ public final class TaskPetOverlayService extends Service {
             .setInterpolator(EASE_OUT)
             .start();
         persistPetPosition();
+        if (minimized) overlayRoot.post(this::snapPetToNearestEdge);
     }
 
     private void setExpanded(boolean nextExpanded) {
@@ -3538,6 +3765,7 @@ public final class TaskPetOverlayService extends Service {
             hideReplyComposer();
         }
         if (!nextExpanded && closeConfirmationVisible) hideCloseConfirmation();
+        mainHandler.removeCallbacks(collapseTaskStackRunnable);
         int animationToken = ++panelAnimationToken;
         taskPanel.animate().cancel();
         if (nextExpanded) {
@@ -3547,6 +3775,8 @@ public final class TaskPetOverlayService extends Service {
             int petY = pendingCollapsedPetY >= 0
                 ? pendingCollapsedPetY
                 : windowParams.y + collapsedCompactOffsetY(minimized);
+            mainHandler.removeCallbacks(hideReplyPeekRunnable);
+            replyPeekVisible = false;
             pendingCollapsedPetX = -1;
             pendingCollapsedPetY = -1;
             lastRenderedTaskSignature = "";
@@ -3574,7 +3804,10 @@ public final class TaskPetOverlayService extends Service {
                 .translationY(0f)
                 .setDuration(190L)
                 .setInterpolator(EASE_OUT)
-                .withEndAction(() -> commitPendingReplyRender(renderedReplyTaskKey))
+                .withEndAction(() -> {
+                    commitPendingReplyRender(renderedReplyTaskKey);
+                    scheduleTaskStackCollapse();
+                })
                 .start();
             return;
         }
@@ -3606,6 +3839,7 @@ public final class TaskPetOverlayService extends Service {
                 pendingCollapsedPetX = -1;
                 pendingCollapsedPetY = -1;
                 if (tasks.isEmpty()) setMinimized(true);
+                else snapPetToNearestEdge();
             })
             .start();
     }
@@ -3615,6 +3849,9 @@ public final class TaskPetOverlayService extends Service {
         if (sendingReply) return;
         if (replyComposer != null && replyComposer.getVisibility() == View.VISIBLE) hideReplyComposer();
         if (closeConfirmationVisible) hideCloseConfirmation();
+        mainHandler.removeCallbacks(collapseTaskStackRunnable);
+        mainHandler.removeCallbacks(hideReplyPeekRunnable);
+        replyPeekVisible = false;
         panelAnimationToken += 1;
         taskPanel.animate().cancel();
         int petX = windowParams.x + (anchoredRight ? expandedAnchorOffset() : 0);
@@ -3631,6 +3868,7 @@ public final class TaskPetOverlayService extends Service {
         );
         windowParams.y = Math.max(0, petY - collapsedCompactOffsetY(minimized));
         windowManager.updateViewLayout(overlayRoot, windowParams);
+        overlayRoot.post(this::snapPetToNearestEdge);
     }
 
     private Intent createThreadIntent(String threadId) {
@@ -3718,6 +3956,12 @@ public final class TaskPetOverlayService extends Service {
     }
 
     private void notifyTaskSettled(TaskItem task, boolean failed) {
+        if (MainActivity.isAppForeground()) {
+            lastCompletionNotificationResult = "suppressed_foreground";
+            lastCompletionNotificationBodySource = "none";
+            persistMonitorDiagnostics(true);
+            return;
+        }
         ensureCompletionNotificationChannel();
         String runtimeState = failed ? "failed" : task.runtimeState;
         if (runtimeState.isEmpty() || "running".equals(runtimeState)) runtimeState = "completed";
@@ -4165,6 +4409,9 @@ public final class TaskPetOverlayService extends Service {
         String runtimeState;
         long lastEventSeq;
         long latestReplyEventSeq;
+        String latestReplyItemId;
+        long readThroughReplyEventSeq;
+        long latestReplyUpdatedAtMs;
         long lastUpdatedAtMs;
         long lastNoProgressReminderAtMs;
         boolean requestAccepted;
@@ -4187,6 +4434,8 @@ public final class TaskPetOverlayService extends Service {
             String runtimeState,
             long lastEventSeq,
             long latestReplyEventSeq,
+            String latestReplyItemId,
+            long readThroughReplyEventSeq,
             long lastUpdatedAtMs,
             long lastNoProgressReminderAtMs,
             boolean requestAccepted,
@@ -4208,6 +4457,9 @@ public final class TaskPetOverlayService extends Service {
             this.runtimeState = runtimeState;
             this.lastEventSeq = lastEventSeq;
             this.latestReplyEventSeq = latestReplyEventSeq;
+            this.latestReplyItemId = latestReplyItemId;
+            this.readThroughReplyEventSeq = readThroughReplyEventSeq;
+            this.latestReplyUpdatedAtMs = latestReply.isEmpty() ? 0L : lastUpdatedAtMs;
             this.lastUpdatedAtMs = lastUpdatedAtMs;
             this.lastNoProgressReminderAtMs = lastNoProgressReminderAtMs;
             this.requestAccepted = requestAccepted;
@@ -4217,7 +4469,7 @@ public final class TaskPetOverlayService extends Service {
         }
 
         TaskItem copy() {
-            return new TaskItem(
+            TaskItem copy = new TaskItem(
                 threadId,
                 clientMessageId,
                 activityId,
@@ -4232,6 +4484,8 @@ public final class TaskPetOverlayService extends Service {
                 runtimeState,
                 lastEventSeq,
                 latestReplyEventSeq,
+                latestReplyItemId,
+                readThroughReplyEventSeq,
                 lastUpdatedAtMs,
                 lastNoProgressReminderAtMs,
                 requestAccepted,
@@ -4239,6 +4493,8 @@ public final class TaskPetOverlayService extends Service {
                 omittedFromFrontend,
                 missingRequestPollCount
             );
+            copy.latestReplyUpdatedAtMs = latestReplyUpdatedAtMs;
+            return copy;
         }
 
         boolean hasSameVisibleContent(TaskItem other) {
@@ -4247,6 +4503,7 @@ public final class TaskPetOverlayService extends Service {
                 && detail.equals(other.detail)
                 && latestActivity.equals(other.latestActivity)
                 && latestReply.equals(other.latestReply)
+                && latestReplyItemId.equals(other.latestReplyItemId)
                 && state.equals(other.state)
                 && runtimeState.equals(other.runtimeState)
                 && activeTurnId.equals(other.activeTurnId);
@@ -4276,6 +4533,7 @@ public final class TaskPetOverlayService extends Service {
         final boolean stale;
         final long lastEventSeq;
         final long latestReplyEventSeq;
+        final String latestReplyItemId;
         final String latestReply;
 
         RuntimeResult(
@@ -4289,6 +4547,7 @@ public final class TaskPetOverlayService extends Service {
             boolean stale,
             long lastEventSeq,
             long latestReplyEventSeq,
+            String latestReplyItemId,
             String latestReply
         ) {
             this.threadId = threadId;
@@ -4301,6 +4560,7 @@ public final class TaskPetOverlayService extends Service {
             this.stale = stale;
             this.lastEventSeq = lastEventSeq;
             this.latestReplyEventSeq = latestReplyEventSeq;
+            this.latestReplyItemId = latestReplyItemId;
             this.latestReply = latestReply;
         }
     }

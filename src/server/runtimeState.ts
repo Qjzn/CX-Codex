@@ -91,6 +91,7 @@ type RuntimeStateStoreOptions = {
 }
 
 export const RUNTIME_SNAPSHOT_STALE_MS = 90_000
+export const RUNTIME_START_THREAD_READ_GRACE_MS = 20_000
 
 export function isRuntimeActiveState(state: RuntimeExecutionState): boolean {
   return (
@@ -615,6 +616,12 @@ function isThreadReadOlderThanPendingStart(current: ThreadRuntimeState, updatedA
   if (!Number.isFinite(startedAtMs)) return false
   const readUpdatedAtMs = Date.parse(updatedAtIso)
   if (!Number.isFinite(readUpdatedAtMs)) return true
-  // App Server thread timestamps have second precision; tolerate the current start second.
-  return readUpdatedAtMs + 1_000 < startedAtMs
+  const startedSecondMs = Math.floor(startedAtMs / 1_000) * 1_000
+  if (readUpdatedAtMs < startedSecondMs) return true
+  // App Server thread timestamps have second precision. A non-running read from
+  // the start second can still describe the previous turn while turn/start is
+  // materializing. Ignore it for one bounded start window, then allow recovery
+  // when lifecycle notifications were lost across a restart.
+  return readUpdatedAtMs === startedSecondMs
+    && Date.now() - startedAtMs < RUNTIME_START_THREAD_READ_GRACE_MS
 }

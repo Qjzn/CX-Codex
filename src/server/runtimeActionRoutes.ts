@@ -17,6 +17,7 @@ export type RuntimeActionRoutesDependencies = {
   listRuntimeQueue?: (threadId?: string) => RuntimeMessageQueueEntry[]
   cancelQueuedRuntimeTurn?: (requestId: string) => boolean
   retryQueuedRuntimeTurn?: (requestId: string) => boolean
+  reorderQueuedRuntimeTurns?: (threadId: string, requestIds: string[]) => boolean
 }
 
 export async function handleRuntimeActionRoutes(
@@ -35,6 +36,20 @@ export async function handleRuntimeActionRoutes(
   if (req.method === 'GET' && url.pathname === '/codex-api/runtime/queue' && dependencies.listRuntimeQueue) {
     const threadId = url.searchParams.get('threadId')?.trim() ?? ''
     setJson(res, 200, { data: dependencies.listRuntimeQueue(threadId) })
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/codex-api/runtime/queue/reorder' && dependencies.reorderQueuedRuntimeTurns) {
+    const payload = await dependencies.readJsonBody(req)
+    const row = payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : {}
+    const threadId = typeof row.threadId === 'string' ? row.threadId.trim() : ''
+    const requestIds = Array.isArray(row.requestIds)
+      ? row.requestIds.filter((requestId): requestId is string => typeof requestId === 'string')
+      : []
+    const reordered = dependencies.reorderQueuedRuntimeTurns(threadId, requestIds)
+    setJson(res, reordered ? 200 : 409, reordered ? { ok: true } : { error: 'Runtime queue changed before reorder' })
     return true
   }
 

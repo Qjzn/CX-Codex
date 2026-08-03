@@ -128,6 +128,7 @@ export type CodexBridgeRouteHandlersDependencies = {
   listRuntimeQueue: RuntimeActionRoutesDependencies['listRuntimeQueue']
   cancelQueuedRuntimeTurn: RuntimeActionRoutesDependencies['cancelQueuedRuntimeTurn']
   retryQueuedRuntimeTurn: RuntimeActionRoutesDependencies['retryQueuedRuntimeTurn']
+  reorderQueuedRuntimeTurns: RuntimeActionRoutesDependencies['reorderQueuedRuntimeTurns']
   augmentThreadListRpcResult: RpcProxyRouteDependencies['augmentThreadListRpcResult']
   reconcileRuntimeThread: RuntimeStateRoutesDependencies['reconcileRuntimeThread']
   readLocalRuntimeSnapshot: RuntimeStateRoutesDependencies['readLocalRuntimeSnapshot']
@@ -189,6 +190,7 @@ export function createCodexBridgeRouteHandlers(
       listRuntimeQueue: dependencies.listRuntimeQueue,
       cancelQueuedRuntimeTurn: dependencies.cancelQueuedRuntimeTurn,
       retryQueuedRuntimeTurn: dependencies.retryQueuedRuntimeTurn,
+      reorderQueuedRuntimeTurns: dependencies.reorderQueuedRuntimeTurns,
     }),
     () => handleMobilePushRoutes(req, res, url, {
       readJsonBody,

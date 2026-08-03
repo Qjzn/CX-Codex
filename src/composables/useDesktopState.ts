@@ -131,6 +131,7 @@ import {
   shouldRestartNotificationStreamOnForeground,
 } from './connectionManager'
 import { shouldApplyRuntimeSnapshotVersion } from './runtimeSnapshotOrdering'
+import { isOptimisticOnlyExecutionEvidence } from './runtimeExecutionRecovery'
 import {
   isRuntimeRequestAwaitingDeliveryConfirmation,
   shouldSettleOptimisticDeliveryFromRuntimeSnapshot,
@@ -265,6 +266,7 @@ const ANDROID_RESUME_SYNC_DEBOUNCE_MS = 2500
 const FOREGROUND_RECOVERY_FEEDBACK_MIN_MS = 500
 const FOREGROUND_RECOVERY_FEEDBACK_TIMEOUT_MS = 8000
 const NON_FRESH_THREAD_DETAIL_RETRY_DELAYS_MS = [2500, 9000, 20000]
+const SESSION_LOG_AUTHORITATIVE_REFRESH_QUIET_MS = 1800
 const ACTIVE_SYNC_THREAD_LIST_INTERVAL_MS = 120000
 const ACTIVE_SYNC_STALE_MS = 14000
 const STALE_THREAD_ACTIVE_TURN_TTL_MS = 5 * 60 * 1000
@@ -1537,6 +1539,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   let activeSyncBoostUntilMs = 0
   let pendingThreadsRefresh = false
   const pendingThreadMessageRefresh = new Set<string>()
+  const pendingSessionLogMessageRefresh = new Set<string>()
   let visibilitySyncTimer: number | null = null
   const resumeSyncTimers = new Set<number>()
   let foregroundRecoveryFeedbackTimer: number | null = null
@@ -1553,6 +1556,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   const settledRuntimeMessageRefreshKeyByThreadId = new Map<string, string>()
   const settledRuntimeRpcRefreshKeyByThreadId = new Map<string, string>()
   const settledRuntimeRpcRefreshInFlightByThreadId = new Map<string, string>()
+  const sessionLogAuthoritativeRefreshGenerationByThreadId = new Map<string, number>()
+  let sessionLogAuthoritativeRefreshGeneration = 0
   const cachedThreadMessageSignatureByThreadId = new Map<string, string>()
   const latestRuntimeEventSeqByThreadId = new Map<string, number>()
   const lastExecutionSignalPublishedAtByThreadId = new Map<string, number>()
@@ -2617,11 +2622,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     replaceQueuedMessagesState(nextState)
   }
 
-  function syncRuntimeMessageQueue(threadId = ''): Promise<void> {
+  function syncRuntimeMessageQueue(threadId = '', preserveCurrentOrder = true): Promise<void> {
     const normalizedThreadId = threadId.trim()
     const sync = async (): Promise<void> => {
       const api = await import('../api/runtimeMessageQueue')
-      const next = await api.syncRuntimeMessageQueueState(queuedMessagesByThreadId.value, normalizedThreadId)
+      const next = await api.syncRuntimeMessageQueueState(
+        queuedMessagesByThreadId.value,
+        normalizedThreadId,
+        preserveCurrentOrder,
+      )
       replaceQueuedMessagesState(next)
     }
 
@@ -3248,6 +3257,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     setTurnErrorForThread(threadId, errorMessage)
     error.value = errorMessage
     pendingThreadMessageRefresh.delete(threadId)
+    pendingSessionLogMessageRefresh.delete(threadId)
     pendingThreadsRefresh = true
 
     if (!isMissingThreadError(terminalError)) {
@@ -4210,20 +4220,19 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   }
 
   function hasOptimisticOnlyExecutionState(threadId: string): boolean {
-    if (!threadId || !isThreadExecutionActive(threadId)) return false
-    if (sourceThreadById.value[threadId]?.inProgress === true) return false
-    if (hasRunningLiveCommand(threadId) || hasPersistedRunningCommand(threadId)) return false
-    if (hasPendingServerRequestSignal(threadId)) return false
-    if (hasFreshExecutionSignal(threadId, OPTIMISTIC_EXECUTION_RECOVERY_GRACE_MS)) return false
-
     const pendingTurnRequest = pendingTurnRequestByThreadId.value[threadId]
-    if (pendingTurnRequest) {
-      return Date.now() - pendingTurnRequest.createdAtMs >= OPTIMISTIC_EXECUTION_RECOVERY_GRACE_MS
-    }
-
-    if (activeTurnIdByThreadId.value[threadId]) return true
-    if (queueProcessingByThreadId.value[threadId] === true) return true
-    return false
+    return isOptimisticOnlyExecutionEvidence({
+      executionActive: Boolean(threadId) && isThreadExecutionActive(threadId),
+      sourceInProgress: sourceThreadById.value[threadId]?.inProgress === true,
+      runtimeFreshActive: isRuntimeExecutionFreshActiveState(threadId),
+      hasRunningCommand: hasRunningLiveCommand(threadId) || hasPersistedRunningCommand(threadId),
+      hasPendingServerRequest: hasPendingServerRequestSignal(threadId),
+      hasFreshExecutionSignal: hasFreshExecutionSignal(threadId, OPTIMISTIC_EXECUTION_RECOVERY_GRACE_MS),
+      pendingTurnAgeMs: pendingTurnRequest ? Date.now() - pendingTurnRequest.createdAtMs : null,
+      recoveryGraceMs: OPTIMISTIC_EXECUTION_RECOVERY_GRACE_MS,
+      hasActiveTurnId: Boolean(activeTurnIdByThreadId.value[threadId]),
+      queueProcessing: queueProcessingByThreadId.value[threadId] === true,
+    })
   }
 
   function reconcileLiveThreadState(threadId: string, inProgress: boolean): void {
@@ -6944,6 +6953,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   ): void {
     const threadId = extractThreadIdFromNotification(notification)
     const method = notification.method
+    const sessionFileChangePolicy = getCxSessionFileChangeSyncPolicy(method, notification.params)
     const urgentRefresh = shouldUrgentlyRefreshFromNotification(method)
     const shouldRefreshMessages =
       shouldRefreshMessagesFromNotification(notification) &&
@@ -6961,6 +6971,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     if (threadId && shouldRefreshMessages) {
       pendingThreadMessageRefresh.add(threadId)
+      if (sessionFileChangePolicy?.preferSessionLogMessages === true) {
+        pendingSessionLogMessageRefresh.add(threadId)
+        scheduleSessionLogAuthoritativeRefresh(threadId)
+      }
     }
 
     if (shouldRefreshThreads) {
@@ -7271,11 +7285,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     settledRuntimeRpcRefreshInFlightByThreadId.set(threadId, refreshKey)
     const runRefresh = () => {
-      void loadMessages(threadId, { silent: true, forceSettledRpcRefresh: true }).finally(() => {
-        if (settledRuntimeRpcRefreshInFlightByThreadId.get(threadId) === refreshKey) {
-          settledRuntimeRpcRefreshInFlightByThreadId.delete(threadId)
-        }
-      })
+      void loadMessages(threadId, { silent: true, forceSettledRpcRefresh: true })
+        .catch((error) => {
+          if (!isAbortLikeError(error)) setSyncErrorFromUnknown(error)
+        })
+        .finally(() => {
+          if (settledRuntimeRpcRefreshInFlightByThreadId.get(threadId) === refreshKey) {
+            settledRuntimeRpcRefreshInFlightByThreadId.delete(threadId)
+          }
+        })
     }
 
     if (typeof window === 'undefined') {
@@ -7283,6 +7301,20 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       return
     }
     window.setTimeout(runRefresh, 80)
+  }
+
+  function scheduleSessionLogAuthoritativeRefresh(threadId: string): void {
+    if (!threadId || typeof window === 'undefined') return
+    const generation = ++sessionLogAuthoritativeRefreshGeneration
+    sessionLogAuthoritativeRefreshGenerationByThreadId.set(threadId, generation)
+    window.setTimeout(() => {
+      if (sessionLogAuthoritativeRefreshGenerationByThreadId.get(threadId) !== generation) return
+      sessionLogAuthoritativeRefreshGenerationByThreadId.delete(threadId)
+      if (selectedThreadId.value !== threadId) return
+      void loadMessages(threadId, { silent: true, forceSettledRpcRefresh: true }).catch((error) => {
+        if (!isAbortLikeError(error)) setSyncErrorFromUnknown(error)
+      })
+    }, SESSION_LOG_AUTHORITATIVE_REFRESH_QUIET_MS)
   }
 
   async function refreshSettledSnapshotMessagesFromRpc(
@@ -7358,6 +7390,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       silent?: boolean
       signal?: AbortSignal
       forceSettledRpcRefresh?: boolean
+      preferSessionLogMessages?: boolean
       fullHistory?: boolean
       olderHistory?: { beforeTurnIndex: number; limit?: number }
     } = {},
@@ -7375,6 +7408,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     if (
       options.silent === true &&
       options.forceSettledRpcRefresh !== true &&
+      options.preferSessionLogMessages !== true &&
       options.fullHistory !== true &&
       !options.olderHistory &&
       alreadyLoaded &&
@@ -7405,7 +7439,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         }
       }
       if (options.signal?.aborted) return
-      if (options.forceSettledRpcRefresh !== true) {
+      if (options.forceSettledRpcRefresh !== true && options.preferSessionLogMessages !== true) {
         return
       }
       if (existingWasAuthoritative && options.fullHistory !== true && !options.olderHistory) {
@@ -7423,7 +7457,11 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       try {
         snapshot = await getThreadRuntimeSnapshot(threadId, {
           signal: options.signal,
-          preferCachedMessages: shouldShowLoading || options.fullHistory === true || Boolean(options.olderHistory),
+          preferCachedMessages:
+            options.preferSessionLogMessages === true ||
+            shouldShowLoading ||
+            options.fullHistory === true ||
+            Boolean(options.olderHistory),
         })
       } catch (error) {
         if (resumedThreadById.value[threadId] === true || !isThreadMaterializingError(error)) {
@@ -7432,7 +7470,11 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         await ensureThreadResumed(threadId, { signal: options.signal })
         snapshot = await getThreadRuntimeSnapshot(threadId, {
           signal: options.signal,
-          preferCachedMessages: shouldShowLoading || options.fullHistory === true || Boolean(options.olderHistory),
+          preferCachedMessages:
+            options.preferSessionLogMessages === true ||
+            shouldShowLoading ||
+            options.fullHistory === true ||
+            Boolean(options.olderHistory),
         })
       }
       if (options.signal?.aborted) return
@@ -7454,7 +7496,11 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       const deferredRefreshKey = settledRefreshKey || (shouldDeferCachedRpcRefresh
         ? `cached:${snapshot.updatedAtIso}:${String(snapshot.lastEventSeq)}`
         : '')
-      if ((shouldDeferSettledRpcRefresh || shouldDeferCachedRpcRefresh) && deferredRefreshKey) {
+      if (options.preferSessionLogMessages === true && snapshot.messageState === 'cached') {
+        // Apply the bounded local projection immediately, then converge once after the
+        // session file has been quiet so structured items cannot remain permanently lossy.
+        scheduleSessionLogAuthoritativeRefresh(threadId)
+      } else if ((shouldDeferSettledRpcRefresh || shouldDeferCachedRpcRefresh) && deferredRefreshKey) {
         scheduleSettledSnapshotMessagesRpcRefresh(threadId, deferredRefreshKey)
       } else {
         snapshot = await refreshSettledSnapshotMessagesFromRpc(threadId, snapshot, previousPersisted, options.signal, {
@@ -7464,6 +7510,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         })
       }
       if (options.signal?.aborted) return
+      if (snapshot.messageState === 'fresh') {
+        sessionLogAuthoritativeRefreshGenerationByThreadId.delete(threadId)
+      }
 
       const refreshedRuntimeSnapshotApplied = snapshot === initialRuntimeSnapshot
         ? false
@@ -7546,7 +7595,11 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       }
 
       const version = snapshot.updatedAtIso || currentThreadVersion(threadId)
-      if (runtimeSnapshotApplied && version && snapshot.messageState === 'fresh') {
+      if (
+        runtimeSnapshotApplied &&
+        version &&
+        (snapshot.messageState === 'fresh' || options.preferSessionLogMessages === true)
+      ) {
         loadedVersionByThreadId.value = {
           ...loadedVersionByThreadId.value,
           [threadId]: version,
@@ -7824,6 +7877,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       abortCurrentSync()
       clearBufferedLiveDeltas()
       pendingThreadMessageRefresh.delete(threadId)
+      pendingSessionLogMessageRefresh.delete(threadId)
 
       try {
         const reconciledSnapshot = await reconcileThreadRuntime(threadId)
@@ -7873,6 +7927,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       abortCurrentSync()
       clearBufferedLiveDeltas()
       pendingThreadMessageRefresh.delete(threadId)
+      pendingSessionLogMessageRefresh.delete(threadId)
       await loadMessages(threadId, {
         silent: true,
         forceSettledRpcRefresh: true,
@@ -8868,18 +8923,40 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     if (queueProcessingByThreadId.value[threadId] === true) return
     const queue = queuedMessagesByThreadId.value[threadId]
     if (!queue || queue.length === 0) return
+    const attemptedClientMessageIds = new Set(
+      queue.filter((message) => !message.serverRequestId).map((message) => message.clientMessageId),
+    )
     queueProcessingByThreadId.value = {
       ...queueProcessingByThreadId.value,
       [threadId]: true,
     }
     try {
       const api = await import('../api/runtimeMessageQueue')
-      setQueuedMessagesForThread(threadId, await api.persistRuntimeQueuedMessages(threadId, queue))
+      const persisted = await api.persistRuntimeQueuedMessages(threadId, queue)
+      const merged = api.mergePersistedRuntimeQueuedMessages(
+        queuedMessagesByThreadId.value[threadId] ?? [],
+        persisted,
+      )
+      setQueuedMessagesForThread(threadId, merged.queue)
+      await Promise.allSettled(merged.orphanedServerRequestIds.map((requestId) => (
+        api.removeRuntimeQueuedMessage(requestId)
+      )))
       await syncRuntimeMessageQueue(threadId)
+      const serverRequestIds = (queuedMessagesByThreadId.value[threadId] ?? []).flatMap((message) => (
+        message.serverRequestId ? [message.serverRequestId] : []
+      ))
+      const reordered = await api.reorderRuntimeQueuedMessages(threadId, serverRequestIds)
+      if (!reordered) await syncRuntimeMessageQueue(threadId, false)
     } catch {
       // The local queue remains durable and will migrate when 7420 reconnects.
     } finally {
       queueProcessingByThreadId.value = omitKey(queueProcessingByThreadId.value, threadId)
+      const hasNewLocalMessage = (queuedMessagesByThreadId.value[threadId] ?? []).some((message) => (
+        !message.serverRequestId
+        && message.deliveryState !== 'failed'
+        && !attemptedClientMessageIds.has(message.clientMessageId)
+      ))
+      if (hasNewLocalMessage) void processQueuedMessages(threadId)
     }
   }
 
@@ -9264,8 +9341,13 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     const refreshSelectedMessagesNow = async (threadId: string): Promise<void> => {
       if (!threadId) return
-      await loadMessages(threadId, { silent: true, signal: controller?.signal })
+      await loadMessages(threadId, {
+        silent: true,
+        signal: controller?.signal,
+        preferSessionLogMessages: pendingSessionLogMessageRefresh.has(threadId),
+      })
       pendingThreadMessageRefresh.delete(threadId)
+      pendingSessionLogMessageRefresh.delete(threadId)
       refreshedMessageThreadId = threadId
     }
 
@@ -9703,14 +9785,20 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     const shouldRefreshThreads = pendingThreadsRefresh
     const threadIdsToRefresh = new Set(pendingThreadMessageRefresh)
+    const sessionLogThreadIdsToRefresh = new Set(pendingSessionLogMessageRefresh)
     pendingThreadsRefresh = false
     pendingThreadMessageRefresh.clear()
+    pendingSessionLogMessageRefresh.clear()
     let wasAborted = false
     let refreshedMessageThreadId = ''
 
     const refreshActiveMessagesNow = async (threadId: string): Promise<void> => {
       if (!threadId) return
-      await loadMessages(threadId, { silent: true, signal: controller?.signal })
+      await loadMessages(threadId, {
+        silent: true,
+        signal: controller?.signal,
+        preferSessionLogMessages: sessionLogThreadIdsToRefresh.has(threadId),
+      })
       refreshedMessageThreadId = threadId
     }
 
@@ -9908,6 +9996,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       })
       if (signal.aborted) return
       pendingThreadMessageRefresh.delete(activeThreadId)
+      pendingSessionLogMessageRefresh.delete(activeThreadId)
     }
     pendingThreadsRefresh = false
   }
@@ -9942,6 +10031,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     pendingThreadsRefresh = false
     pendingThreadMessageRefresh.clear()
+    pendingSessionLogMessageRefresh.clear()
+    sessionLogAuthoritativeRefreshGenerationByThreadId.clear()
     pendingTurnStartsById.clear()
     clearNonFreshThreadDetailRetries()
     clearEventSyncTimer()

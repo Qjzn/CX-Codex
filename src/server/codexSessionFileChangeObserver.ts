@@ -1,12 +1,16 @@
 import { watch, type FSWatcher } from 'node:fs'
 import { join } from 'node:path'
 
-import { CX_SESSION_FILES_CHANGED_METHOD } from '../sessionFileChange.js'
+import {
+  CX_SESSION_FILES_CHANGED_METHOD,
+  type CxSessionFileChangeOrigin,
+} from '../sessionFileChange.js'
 import { getCodexHomeDir } from './codexPaths.js'
 
 export type CodexSessionFileChange = {
   source: 'session-index' | 'session-log'
   threadId: string
+  origin?: CxSessionFileChangeOrigin
 }
 
 export type CodexSessionFileChangeObserverOptions = {
@@ -37,6 +41,18 @@ const SESSION_LOG_ROOTS = new Set(['sessions', 'archived_sessions'])
 const THREAD_ID_PATTERN = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=\.jsonl$)/iu
 const DEFAULT_DEBOUNCE_MS = 700
 const DEFAULT_MAX_WAIT_MS = 2_500
+const DEFAULT_LIVE_EVENT_COVERAGE_MS = 5_000
+
+export function resolveCodexSessionFileChangeOrigin(
+  change: CodexSessionFileChange,
+  lastLiveRuntimeEventAtMs: number,
+  nowMs = Date.now(),
+  coverageMs = DEFAULT_LIVE_EVENT_COVERAGE_MS,
+): CxSessionFileChangeOrigin {
+  if (change.source !== 'session-log' || !change.threadId || lastLiveRuntimeEventAtMs <= 0) return 'external'
+  const ageMs = nowMs - lastLiveRuntimeEventAtMs
+  return ageMs >= 0 && ageMs <= Math.max(0, coverageMs) ? 'live-app-server' : 'external'
+}
 
 export function classifyCodexSessionFileChange(filename: string | Buffer | null): CodexSessionFileChange | null {
   if (filename === null) return null

@@ -1250,6 +1250,13 @@ After each feature implementation session that uses this skill:
 - Manual conversation titles now have explicit durable ownership and reject later automatic name notifications. Generated images prefer the saved local path over oversized raw base64 payloads and expose a real remounting retry action on failure.
 - Phone Markdown tables retain the semantic desktop table and use a focusable horizontal scroll owner instead of changing rows into cards. Headless Playwright at 393 x 852 measured 322 px visible width over 620 px content, 13 px cells, zero table-card DOM, and no browser console errors.
 
+## Findings: Quiet Docked Android Task Pet (2026-08-03)
+
+- Installed Windows Codex `26.721.4979` keeps exact-conversation navigation on the activity owner through `localConversationId` and `open-in-main-window`, carries a bounded notification count on the avatar frame, and distinguishes waiting (`Needs input`) from settled review (`Ready`).
+- CX-Codex adapts those state and navigation boundaries to Android instead of reproducing the desktop window: the edge pet is a compact attention owner, a new assistant item gets one transient reply peek, a tap opens a bounded task stack, and full reading or input stays in the conversation.
+- Unread ownership is now a persisted reply-event cursor. Stream chunks from the same assistant item update visible text without extending the five-second interruption window; opening the exact conversation advances the cursor and prevents stale completion attention after restart.
+- The app foreground is deliberately quiet, restart returns to the docked state, and transient panel/peek state is not persisted. The native monitor remains authoritative in the background, while notification actions continue to provide the system-level fallback.
+
 ## Findings: Restart-safe Queued Speed Handoff (2026-08-03)
 
 - A real failed 7420 queue record showed `queued -> queue_failed` in 53 ms with `Turn start was not confirmed after bridge restart`; its prompt was absent from the full authoritative thread history. The queued coordinator had marked the request `pending_start` before `config/batchWrite`, while that configuration call could restart app-server and trigger pending-start reconciliation.
@@ -1264,3 +1271,27 @@ After each feature implementation session that uses this skill:
 - CX-Codex now adapts the desktop citation boundary to mobile: the basename is the compact link label, the full path remains the title and open target, and internal links stay in the current Android WebView. Invalid or incomplete directives degrade to safe text.
 - The current `pdfjs-dist` standard build requires `Promise.withResolvers` and `Math.sumPrecise`, which are absent in some Android WebViews. The isolated local preview now uses PDF.js's official legacy main and worker bundles so compatibility applies on both execution contexts.
 - Headless phone verification at 393 x 852 showed no protocol or metadata leakage, no document overflow, two rendered resume pages, and no browser errors or compatibility warnings. Evidence is under `output/regression-7420/file-citation-20260803`.
+
+## Findings: External-session Progress and Bounded History Recovery (2026-08-03)
+
+- Installed Windows Codex `26.727.51351` keeps request dispatch, turn start, first data, and first visible response as separate milestones. Its avatar overlay retains the owning `localConversationId`, opens through `open-in-main-window`, and keeps queued messages as a distinct composer-adjacent surface with retry and steer states.
+- CX-Codex must preserve those ownership boundaries when mirroring a task executed by another desktop process. A session-file append is authoritative new progress, but it must not make 7420 re-read the complete rollout or invent a local Runtime-running state.
+- Default recent-message and Runtime reads now use a bounded session-log projection. High-frequency response, reasoning, plan, command, file, MCP, and process deltas no longer evict that projection; explicit full-history and older-turn reads still use the authoritative App Server.
+- Session-log recovery retains `phase: commentary`, so a progress-only tail renders under phase replies instead of becoming a fake final answer or an empty result. Native Task Pet reply freshness remains tied only to a newer `latestReplyEventSeq`.
+- A 72 MB real conversation previously issued 6.7-8.0 second heavy reads every 8-10 seconds. After the boundary change, a fresh reload plus 35 seconds of live external updates produced zero heavy reads; light metadata reads peaked at 24 ms, with no RPC queue, pending server request, or uncertain Runtime request.
+
+## Findings: Task-pet Wake and Lossless Session Convergence (2026-08-03)
+
+- Installed Windows Codex `26.727.6591` still owns avatar attention through an exact `localConversationId`, dispatches `open-in-main-window`, presents a bounded notification count, and labels waiting work separately from review-ready work.
+- A docked CX-Codex task pet previously stayed minimized when work arrived after an idle snapshot, and running-task replies were excluded from its badge. It now restores on task arrival, shows one five-second reply peek, counts unread reply cursors alongside waiting tasks, and clears only the exact conversation that is opened.
+- Empty expanded stacks now return to the minimized pet after eight seconds. Close confirmation pauses that timer and cancellation starts a fresh timeout, matching the native Android interaction owner instead of allowing a destructive prompt to disappear mid-decision.
+- Session-log ownership is split deliberately: the bounded file projection supplies immediate text, but it is not treated as structurally complete. File notifications reset a 1.8-second quiet window, after which one coalesced authoritative read restores plans, commands, file changes, approvals, and tool items without returning to per-append heavy reads.
+- Real 7420 browser checks covered idle-to-task wake, `2 -> 1` unread acknowledgement, exact `fixture-running` navigation, empty-stack minimization, and close-confirmation timer ownership. Frontend normalization, production build, CLI build, server-module smoke, Android policy tests, and the full frontend regression remained the verification boundary.
+
+## Findings: Queue Generation Isolation and Stable Local Merge (2026-08-04)
+
+- Installed Windows Codex `26.727.6591` keeps queued work as a composer-adjacent list with stable message identity, explicit retry/edit/delete ownership, and first-failure blocking. Queue UI changes do not impersonate App Server turn lifecycle events.
+- CX-Codex had two ownership leaks: its internal `runtime/queue/updated` broadcast reconciled a newly claimed request against the previous turn's completed snapshot, and a second-precision pre-start `thread/read` could release the active lease before `turn/start` materialized.
+- Internal queue notifications now remain replayable UI signals but cannot mutate or reconcile Runtime state. A same-second non-running thread snapshot is ignored during a bounded 20-second materialization window, keeping queued work isolated behind the real active turn without making restart recovery permanent.
+- Frontend persistence acknowledgements merge into the latest queue by stable `clientMessageId`, cancel server rows deleted during an in-flight write, and stop behind the first failed local row. After a complete sync, an exact-set server reorder makes the retained UI order authoritative without letting stale or partial client state move another client's message.
+- A real controlled 7420 run recorded `BASE2 -> QUEUE2-A -> QUEUE2-B` as three distinct turns. A/B reached first token in 2.27/1.85 seconds, while a separate direct no-tool reply reached first token in 1.71 seconds; no queued prompt was lost or injected into the previous turn. A second run reordered `A -> B -> C` into `C -> A -> B`, and both the immediate server list and authoritative history followed that exact order.

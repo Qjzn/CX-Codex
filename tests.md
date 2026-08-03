@@ -15625,6 +15625,26 @@ Current evidence:
 - The complete 35-surface frontend regression passed in 452.6 seconds, including sidebar recency, search continuity, scroll anchoring, current-thread reveal, mobile drawer, Composer, conversation recovery, notifications, and Task Pet.
 - Final 7420 health remained `ok`, running, and initialized on PID 51368 with `approvalPolicy=never` and `sandboxMode=danger-full-access`. Pending, queued, and active RPCs, pending server requests, blocking restarts, uncertain Runtime requests, and thread leases were all zero.
 
+## Keep the Android Task Pet quiet, docked, and cursor-driven (2026-08-03)
+
+1. The native overlay is a background companion only. Returning to the CX-Codex Activity removes the overlay immediately and suppresses completion notifications while the app is foreground; authoritative monitoring continues without duplicating the visible app UI.
+2. Reply attention is owned by the persisted cursor `latestReplyEventSeq > readThroughReplyEventSeq`. Confirming that the exact conversation is visible advances the cursor, clears its badge and completion notification, and prevents an already-read result from reappearing after service recreation.
+3. One new assistant item may show one transient latest-reply strip for an accessibility-adjusted five seconds. Further stream chunks update that strip without restarting its lifetime. Normal running state does not count as unread attention.
+4. The resting pet automatically tucks to either screen edge with only a 32 dp handle visible. Tapping it opens a 248 dp task stack with at most three rows; the stack closes after an accessibility-adjusted eight seconds and returns to the edge.
+5. The overlay no longer owns recent conversations, an inline reply composer, or a persistent `工作中` label. The latest-reply strip and every task row still open the exact owning conversation; Android notification reply remains the system fallback.
+
+Verification:
+
+- Run `npm run build:frontend`, parse `scripts/regression-7420-frontend.ps1`, execute its Task Pet source-contract functions, and run `git diff --check`.
+- At 393 x 852, confirm the initial state is docked with no panel or reply strip. Simulate a new reply, confirm the strip is 224 px wide and disappears after five seconds, then open the pet and confirm a 248 px stack with three rows closes after eight seconds.
+- Confirm the fixture has no recent-conversation section, inline reply form, or `工作中` pill and that clicking the reply strip retains the exact thread id.
+- Run `:app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest`, `:app:lintDebug`, and `:app:assembleRelease`; verify the resulting APK signature and package metadata.
+
+Current evidence:
+
+- Headless Chrome measured an initially docked surface, a 224 x 63 latest-reply strip, a 248 x 278 three-row stack, five-second reply-strip dismissal, and eight-second stack dismissal. Browser errors were empty; screenshots are under `output/task-pet-quiet-overlay-20260803`.
+- Task Pet source contracts, the focused Android policy unit tests, production frontend build, Capacitor Android sync, Android lint, release assembly, APK v2 signature verification, and `git diff --check` passed.
+- The broad `test:7420:frontend` run stopped at its environment health gate before browser checks because the already-running 7420 process reported `uncertainRequestCount=2`. The affected Task Pet source and real-browser contracts were run independently and passed.
 ## Quick Tunnel stale-session recovery and sidebar outside-dismissal (2026-08-02)
 
 1. Start a verified Quick Tunnel, then invoke start again while its child process is still alive. The existing URL may be reused only after public health, HTTP authentication, and WebSocket authentication all pass again.
@@ -15675,3 +15695,74 @@ Current evidence:
 - The parser smoke covers the reported resume PDF, a Markdown companion, quoted and unquoted attributes, Windows backslashes, spaces, escaped metadata, adjacent citations, pathless directives, and incomplete directives.
 - Headless Chrome at 393 x 852 measured 393 px document width over a 393 px viewport, rendered both file labels without leaking internal metadata, and opened the exact encoded local path.
 - The reported 297.1 KB resume rendered two PDF canvases. Both compatibility APIs were functions after the legacy bundle initialized, and browser errors and warnings were empty.
+
+## Runtime notification pressure and truthful reply freshness (2026-08-03)
+
+1. Every `cx/session-files/changed` notification with `source: session-log` refreshes selected-thread messages from the bounded local session-log projection without refreshing the thread collection. The heuristic `origin` value may describe likely ownership but must never suppress correctness; `session-index` changes still refresh the collection.
+2. Transient command, process, file-change, and MCP progress deltas must remain available to live notification consumers without invalidating the cached thread read or persisting a Runtime snapshot per chunk. Terminal and reply events must retain their existing invalidation and snapshot behavior.
+3. Native Task Pet progress freshness and reply freshness are separate clocks. Advancing `lastEventSeq` without advancing `latestReplyEventSeq` must not relabel an old reply as “刚刚”. A strictly newer positive reply event advances the persisted reply clock.
+4. A queued message with `backgroundPersisted !== true` must continue to say it is local-only; only a row returned from the durable 7420 queue may claim background ownership.
+5. A genuinely external `session-log` append must refresh the selected conversation from the local session file without scheduling an immediate authoritative `thread/read`. After the first bounded tail read, complete JSONL appends must reuse the cached 40-turn projection and read only the newly appended bytes; once the append burst has been quiet for 1.8 seconds, one coalesced authoritative read must restore structured items that the local projection cannot represent.
+6. Session-log recovery must preserve assistant `phase: commentary` items as phase replies. It must not discard a progress-only tail and fall back to a heavy history read, and it must not relabel commentary as a final answer.
+7. Default recent-message reads and Runtime snapshots must try the bounded session-log projection before `thread/read includeTurns: true`. Explicit full-history and older-turn requests remain authoritative and bypass this shortcut.
+8. If the task-pet stack becomes empty while expanded, its eight-second auto-collapse must return to the minimized pet instead of leaving an empty full-size mascot behind.
+9. Opening the task-pet close confirmation must pause the eight-second auto-collapse timer. Cancelling the confirmation keeps the panel open and starts a fresh collapse timeout.
+
+Verification:
+
+- Run `npm.cmd run verify:frontend-normalizers`.
+- Run `npm.cmd run verify:server-modules`.
+- From `android/`, run `.\gradlew.bat testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest`.
+- Run `npm.cmd run build:frontend` and `npm.cmd run build:cli` before restarting the local 7420 process, so frontend and server modules come from the same source revision.
+
+Current evidence:
+
+- The frontend policy test first failed because a `live-app-server` heuristic suppressed the same selected-thread refresh needed by a concurrent external writer. It now passes with every session-log origin using the bounded local projection, and the source contract requires both notification-time quiet-window reset and one post-quiet authoritative convergence.
+- Server smoke covers cached session-log append recovery, all-origin thread-read cache invalidation, and confirms transient progress chunks neither invalidate heavy thread reads nor persist one Runtime snapshot per chunk.
+- A 24,000,000-byte local session-tail benchmark measured a 215-261 ms bounded first read and a 34.99-38.04 ms median append refresh on this Windows machine. The append path no longer scans the 24 MB tail or issues a full app-server `thread/read`.
+- Before the final recovery boundary, the 72 MB dogfood conversation issued a heavy read every 8-10 seconds; observed calls took 6.7-8.0 seconds and blocked current-page recovery. Its 24 MB tail contained only commentary and tool records, which exposed the discarded-commentary fallback defect.
+- The final 2.7.3 verification passed frontend normalizer smoke, production frontend build, CLI build, server-module smoke, Android `TaskPetRuntimePolicyTest`, real 7420 sidebar data checks, and the complete 36-surface frontend regression in 521.4 seconds.
+- Real task-pet fixtures verified idle-to-task wake, one transient reply peek, attention `2 -> 1` after exact `fixture-running` navigation, empty-stack auto-minimization, and a close confirmation that stays open beyond eight seconds before cancellation restarts collapse.
+
+## Session queue isolation and reply-latency stability (2026-08-04)
+
+1. `runtime/queue/updated` is an internal delivery notification. It must remain replayable to clients, but it must not observe or persist Runtime state, reconcile active requests, or settle a newly claimed `pending_start` row against the previous turn's terminal snapshot.
+2. A non-running `thread/read` from the same second as `lastStartedAtIso` must not settle a materializing turn during the bounded 20-second start window. Strictly older reads remain stale; after the bounded window, a same-second terminal read may recover a request whose lifecycle notifications were lost across restart.
+3. Rapid local enqueues merge persistence acknowledgements into the latest in-memory queue by stable `clientMessageId`; an older async snapshot must not drop a later enqueue or resurrect a deleted row. A newly persisted row deleted during the request is removed from the server queue.
+4. Server reconciliation preserves the current stable queue order for matching messages, drops server-owned rows that have actually left the server queue, retains unsynced local rows, and appends only genuinely server-only rows.
+5. A failed first local row pauses later persistence. Retry, edit, or delete must resolve the blocked row before later local messages are handed to 7420.
+6. After persistence and a complete server sync, 7420 atomically applies the exact stable request-id order only when the server queue set still matches. A concurrent queue change returns conflict instead of applying a partial or stale reorder, and the frontend then adopts the authoritative server order.
+
+Verification:
+
+- Run `npm.cmd run verify:server-modules`; the notification-boundary and same-start-second tests must both fail on the pre-fix code and pass after the fix.
+- Run `npm.cmd run verify:frontend-normalizers` and `npm.cmd run build:frontend`.
+- Run `npm.cmd run build:cli`, restart the exact local 7420 process only after restart protection reports zero blockers, then enqueue two uniquely marked messages behind a controlled running turn.
+- Confirm the authoritative session log contains `BASE`, queue A, and queue B in that order with three distinct `turnId` values. Confirm the Runtime Store records all three as completed with no error and the queue becomes empty.
+- Send one no-tool direct reply and record HTTP acceptance, first-token, and completion latency separately.
+
+Current evidence:
+
+- The pre-fix real run accepted both queued messages but marked them completed without `turnId` and omitted both from history. The first boundary regression reproduced the stale terminal snapshot settlement exactly.
+- After the first fix, A/B reached history but A shared the still-running base turn, exposing second-precision pre-start settlement. The second regression reproduced that materialization race before the timestamp boundary changed.
+- The final real run returned HTTP 202 in 81 ms for the base and 5/10 ms for A/B. The session log recorded `BASE2 -> QUEUE2-A -> QUEUE2-B` with distinct turns; queued A/B time-to-first-token was 2,272/1,853 ms and total duration was 2,642/1,972 ms.
+- A separate no-tool direct reply was accepted in 104 ms, produced first assistant data in 1,712 ms, and completed in 2,110 ms.
+- A final real reorder changed queued `A -> B -> C` to `C -> A -> B`. The immediate server list and authoritative session log both preserved `BASE -> C -> A -> B`, with four distinct turns and no failed request.
+- The complete 36-surface frontend regression passed first in 540.2 seconds and again on the final exact-order implementation in 590.3 seconds. The endpoint/store/frontend-order follow-up also passed server-module smoke, frontend normalizer smoke, production frontend build, CLI build, and the real reordered execution above.
+- The final review added bounded same-second restart recovery and authoritative conflict fallback. Both focused regressions, both production builds, `git diff --check`, and a post-restart real sidebar-data pass succeeded; the final list pass covered 239 active conversations with zero RPC retry.
+
+## CX-Codex 2.7.3 release gate (2026-08-04)
+
+1. `package.json`, `package-lock.json`, the GitHub tag and `docs/release-notes-2.7.3.zh-CN.md` must all resolve to `2.7.3`; the public notes must describe the queue, long-session, plan/goal, file-preview and Android changes without claiming complete future App Server compatibility.
+2. Run `npm.cmd run verify:release -- -AllowDirty -SchemaAudit warn` before the release commit, then repeat with `-RequireCleanGit` from the isolated release worktree.
+3. Confirm the schema-audit counts match the committed governance checkpoint. If any count changes, update the redacted summary and protocol matrix before tagging; never commit raw generated schema output.
+4. Run a production-only dependency audit with npm 10 or newer because the machine's prefix-level npm 6 cannot parse lockfile v3 correctly.
+5. The tag workflow must build the source ZIP and officially signed Android APK, verify every SHA-256, publish no debug APK, and complete before the release is called stable.
+
+Current evidence:
+
+- Alibaba OpenCodeReview `1.8.6` previewed 26 reviewable workspace files under `.opencodereview/rule.json`. Its delegated host-agent review applied the server, Vue, Android and deterministic-test rules and found no additional release blocker.
+- `npm.cmd run verify:release -- -AllowDirty -SchemaAudit warn` completed in 206.9 seconds with governance, frontend/CLI, normalizer, server-module, CJS launcher, release-package, checksum and npm-package smoke gates passing.
+- The regenerated schema counts exactly matched `docs/app-server-schema-audit-summary.json`: TypeScript root `236 -> 77`, TypeScript v2 `199 -> 445`, JSON root `37 -> 35`, and JSON v2 `102 -> 202`. The existing protocol matrix already classifies thread goals/status/realtime, plugins, permissions and unknown notifications as partial, diagnostic or deferred capabilities, so no baseline replacement is required for this patch release.
+- npm `10.9.3` audited 131 production dependencies through the official registry with zero info, low, moderate, high or critical vulnerabilities. The default prefix-level npm `6.14.6` audit error was a local tool incompatibility, not a dependency finding.
+- GitHub authentication is active for `Qjzn/CX-Codex`, the latest public release remains `v2.7.2`, and all four required Android signing secret names are present. Publication still requires clean-worktree verification, main/tag CI, public asset inspection and certificate/checksum proof.

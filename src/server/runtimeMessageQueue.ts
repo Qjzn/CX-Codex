@@ -26,6 +26,7 @@ type RuntimeMessageQueueStore = {
   getLatestRequestByClientMessageId(clientMessageId: string): RuntimeRequestRecord | null
   getThreadLease(threadId: string): { requestId: string } | null
   listQueuedRequests(threadId?: string, limit?: number): RuntimeRequestRecord[]
+  reorderQueuedRequests(threadId: string, requestIds: string[]): boolean
   listQueuedThreadIds(limit?: number): string[]
 }
 
@@ -159,6 +160,14 @@ export class RuntimeMessageQueue {
     if (!updated) return false
     this.publish(request.threadId, requestId, 'retried')
     this.scheduleThread(request.threadId)
+    return true
+  }
+
+  reorder(threadId: string, requestIds: string[]): boolean {
+    const normalizedThreadId = threadId.trim()
+    if (!this.dependencies.store.reorderQueuedRequests(normalizedThreadId, requestIds)) return false
+    this.publish(normalizedThreadId, '', 'reordered')
+    this.scheduleThread(normalizedThreadId)
     return true
   }
 

@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs'
-import { stat } from 'node:fs/promises'
+import { open, stat } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 
 const FALLBACK_TURN_LIMIT = 40
@@ -14,6 +14,7 @@ const TRAILING_MEMORY_CITATION_PATTERN = /\s*<oai-mem-citation>[\s\S]*<\/oai-mem
 type FallbackItem = {
   type: 'userMessage' | 'agentMessage'
   id: string
+  phase?: 'commentary'
   content?: Array<{ type: 'text'; text: string }>
   text?: string
 }
@@ -22,6 +23,7 @@ type RecoveredMessage = {
   role: 'user' | 'assistant'
   text: string
   id: string
+  phase?: 'commentary'
   hidden?: boolean
 }
 
@@ -33,6 +35,8 @@ type FallbackTurn = {
 
 type SessionLogThreadReadCacheState = {
   fileSignature: string
+  fileSize: number
+  incrementalReady: boolean
   threadRead: unknown | null
 }
 
@@ -81,6 +85,78 @@ function readFallbackThreadTitle(thread: Record<string, unknown>, preview: strin
   )
 }
 
+function cloneFallbackTurns(value: unknown): FallbackTurn[] {
+  if (!Array.isArray(value)) return []
+
+  const turns: FallbackTurn[] = []
+  for (const row of value) {
+    const turn = asRecord(row)
+    if (!turn || !Array.isArray(turn.items)) continue
+    const items: FallbackItem[] = []
+    for (const itemValue of turn.items) {
+      const item = asRecord(itemValue)
+      if (!item) continue
+      const id = readTrimmedString(item.id)
+      if (item.type === 'userMessage') {
+        const text = readTextContent(item.content)
+        if (text) {
+          items.push({ type: 'userMessage', id, content: [{ type: 'text', text }] })
+        }
+      } else if (item.type === 'agentMessage') {
+        const text = readTrimmedString(item.text)
+        const phase = readTrimmedString(item.phase)
+        if (text) items.push({
+          type: 'agentMessage',
+          id,
+          text,
+          ...(phase === 'commentary' ? { phase } : {}),
+        })
+      }
+    }
+    turns.push({
+      id: readTrimmedString(turn.id) || `fallback-turn-${String(turns.length + 1)}`,
+      status: 'completed',
+      items,
+    })
+  }
+  return turns.slice(-FALLBACK_TURN_LIMIT)
+}
+
+function hydrateRecoveredMessageState(
+  turns: FallbackTurn[],
+  seenMessageIds: Set<string>,
+): RecoveredMessage | null {
+  let lastRecoveredMessage: RecoveredMessage | null = null
+  for (const turn of turns) {
+    for (const item of turn.items) {
+      if (item.id) seenMessageIds.add(item.id)
+      const role = item.type === 'userMessage' ? 'user' : 'assistant'
+      const text = item.type === 'userMessage'
+        ? readTextContent(item.content)
+        : readTrimmedString(item.text)
+      if (text) lastRecoveredMessage = {
+        role,
+        text,
+        id: item.id,
+        ...(item.phase === 'commentary' ? { phase: item.phase } : {}),
+      }
+    }
+  }
+  return lastRecoveredMessage
+}
+
+async function doesFileEndWithNewline(sessionPath: string, fileSize: number): Promise<boolean> {
+  if (fileSize <= 0) return false
+  const handle = await open(sessionPath, 'r')
+  try {
+    const byte = Buffer.allocUnsafe(1)
+    const result = await handle.read(byte, 0, 1, fileSize - 1)
+    return result.bytesRead === 1 && byte[0] === 10
+  } finally {
+    await handle.close()
+  }
+}
+
 function readTextContent(content: unknown): string {
   if (typeof content === 'string') return content.trim()
   if (!Array.isArray(content)) return ''
@@ -124,7 +200,9 @@ function readResponseItemMessage(entry: Record<string, unknown>): RecoveredMessa
   if (payload?.type !== 'message') return null
   const role = payload.role === 'user' || payload.role === 'assistant' ? payload.role : null
   if (!role) return null
-  if (role === 'assistant' && readTrimmedString(payload.phase) === 'commentary') return null
+  const phase = role === 'assistant' && readTrimmedString(payload.phase) === 'commentary'
+    ? 'commentary' as const
+    : undefined
   const rawText = readTextContent(payload.content)
   const text = role === 'assistant' ? normalizeRecoveredAssistantText(rawText) : rawText
   if (!text) return null
@@ -132,7 +210,7 @@ function readResponseItemMessage(entry: Record<string, unknown>): RecoveredMessa
   if (isInternalContextMessageText(text)) {
     return role === 'user' ? { role, text: '', id, hidden: true } : null
   }
-  return { role, text, id }
+  return { role, text, id, ...(phase ? { phase } : {}) }
 }
 
 function readEventMessage(entry: Record<string, unknown>): RecoveredMessage | null {
@@ -181,6 +259,7 @@ function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): vo
         type: 'agentMessage',
         id: itemId,
         text,
+        ...(message.phase === 'commentary' ? { phase: message.phase } : {}),
       })
 
   while (turns.length > FALLBACK_TURN_LIMIT) {
@@ -193,7 +272,12 @@ function isDuplicateRecoveredMessage(
   second: RecoveredMessage,
 ): boolean {
   if (second.hidden) return false
-  if (!first || first.role !== second.role || first.text !== second.text) return false
+  if (
+    !first ||
+    first.role !== second.role ||
+    first.text !== second.text ||
+    first.phase !== second.phase
+  ) return false
   return !first.id || !second.id
 }
 
@@ -209,9 +293,10 @@ function writeCacheState(sessionPath: string, cacheState: SessionLogThreadReadCa
   }
 }
 
-export async function parseThreadReadFromSessionLog(
+async function parseThreadReadFromSessionLogRange(
   sessionPath: string,
   fallbackThreadRead: unknown,
+  options: { startOffset?: number; seedTurns?: boolean } = {},
 ): Promise<unknown | null> {
   const fallbackRoot = asRecord(fallbackThreadRead)
   const fallbackThread = asRecord(fallbackRoot?.thread)
@@ -224,71 +309,95 @@ export async function parseThreadReadFromSessionLog(
   let source = fallbackThread?.source ?? 'unknown'
   let createdAt = readUnixSeconds(fallbackThread?.createdAt)
   let updatedAt = readUnixSeconds(fallbackThread?.updatedAt)
-  const turns: FallbackTurn[] = []
+  const turns = options.seedTurns === true ? cloneFallbackTurns(fallbackThread.turns) : []
   const seenMessageIds = new Set<string>()
-  let lastRecoveredMessage: RecoveredMessage | null = null
+  let lastRecoveredMessage = hydrateRecoveredMessageState(turns, seenMessageIds)
   const stats = await stat(sessionPath)
-  const startOffset = Math.max(0, stats.size - FALLBACK_READ_BYTE_LIMIT)
+  const startOffset = typeof options.startOffset === 'number'
+    ? Math.max(0, Math.min(options.startOffset, stats.size))
+    : Math.max(0, stats.size - FALLBACK_READ_BYTE_LIMIT)
 
-  const input = createReadStream(sessionPath, { encoding: 'utf8', start: startOffset })
-  const lines = createInterface({
-    input,
-    crlfDelay: Infinity,
-  })
-  let skipPartialFirstLine = startOffset > 0
+  const processLine = (line: string): void => {
+    const trimmed = line.trim()
+    if (!trimmed || !isSessionLogThreadReadCandidateLine(trimmed)) return
 
-  try {
-    for await (const line of lines) {
-      if (skipPartialFirstLine) {
-        skipPartialFirstLine = false
-        continue
+    try {
+      const entry = asRecord(JSON.parse(trimmed) as unknown)
+      if (!entry) return
+
+      updatedAt = Math.max(updatedAt, readUnixSeconds(entry.timestamp))
+      if (entry.type === 'session_meta') {
+        const payload = asRecord(entry.payload)
+        if (payload) {
+          cwd = cwd || readTrimmedString(payload.cwd)
+          source = payload.source ?? source
+          createdAt = createdAt || readUnixSeconds(payload.timestamp)
+        }
       }
 
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      if (!isSessionLogThreadReadCandidateLine(trimmed)) continue
+      const message = readResponseItemMessage(entry) ?? readEventMessage(entry)
+      if (!message || isDuplicateRecoveredMessage(lastRecoveredMessage, message)) return
+      if (message.id) {
+        if (seenMessageIds.has(message.id)) return
+        seenMessageIds.add(message.id)
+      }
+      if (message.hidden && turns.length === 0) return
+      appendMessageTurn(turns, message)
+      if (!message.hidden) {
+        lastRecoveredMessage = {
+          role: message.role,
+          text: message.text,
+          id: message.id,
+          ...(message.phase === 'commentary' ? { phase: message.phase } : {}),
+        }
+      }
+      if (!preview && message.role === 'user') {
+        preview = message.text.split('\n')[0]?.trim() ?? ''
+      }
+    } catch {
+      // Skip malformed lines and keep the rest of the recoverable history.
+    }
+  }
 
+  if (options.startOffset !== undefined) {
+    const byteCount = Math.max(0, stats.size - startOffset)
+    if (byteCount > 0) {
+      const handle = await open(sessionPath, 'r')
       try {
-        const entry = asRecord(JSON.parse(trimmed) as unknown)
-        if (!entry) continue
-
-        updatedAt = Math.max(updatedAt, readUnixSeconds(entry.timestamp))
-        if (entry.type === 'session_meta') {
-          const payload = asRecord(entry.payload)
-          if (payload) {
-            cwd = cwd || readTrimmedString(payload.cwd)
-            source = payload.source ?? source
-            createdAt = createdAt || readUnixSeconds(payload.timestamp)
-          }
+        const buffer = Buffer.allocUnsafe(byteCount)
+        let bytesRead = 0
+        while (bytesRead < byteCount) {
+          const result = await handle.read(buffer, bytesRead, byteCount - bytesRead, startOffset + bytesRead)
+          if (result.bytesRead === 0) break
+          bytesRead += result.bytesRead
         }
-
-        const message = readResponseItemMessage(entry) ?? readEventMessage(entry)
-        if (!message) continue
-
-        if (isDuplicateRecoveredMessage(lastRecoveredMessage, message)) {
-          continue
+        for (const line of buffer.subarray(0, bytesRead).toString('utf8').split(/\r?\n/u)) {
+          processLine(line)
         }
-        if (message.id) {
-          if (seenMessageIds.has(message.id)) continue
-          seenMessageIds.add(message.id)
-        }
-        if (message.hidden && turns.length === 0) {
-          continue
-        }
-        appendMessageTurn(turns, message)
-        if (!message.hidden) {
-          lastRecoveredMessage = { role: message.role, text: message.text, id: message.id }
-        }
-        if (!preview && message.role === 'user') {
-          preview = message.text.split('\n')[0]?.trim() ?? ''
-        }
-      } catch {
-        // Skip malformed lines and keep the rest of the recoverable history.
+      } finally {
+        await handle.close()
       }
     }
-  } finally {
-    lines.close()
-    input.close()
+  } else {
+    const input = createReadStream(sessionPath, {
+      encoding: 'utf8',
+      start: startOffset,
+      end: Math.max(startOffset, stats.size - 1),
+    })
+    const lines = createInterface({ input, crlfDelay: Infinity })
+    let skipPartialFirstLine = startOffset > 0
+    try {
+      for await (const line of lines) {
+        if (skipPartialFirstLine) {
+          skipPartialFirstLine = false
+          continue
+        }
+        processLine(line)
+      }
+    } finally {
+      lines.close()
+      input.close()
+    }
   }
 
   if (turns.length === 0) return null
@@ -313,6 +422,13 @@ export async function parseThreadReadFromSessionLog(
   }
 }
 
+export async function parseThreadReadFromSessionLog(
+  sessionPath: string,
+  fallbackThreadRead: unknown,
+): Promise<unknown | null> {
+  return parseThreadReadFromSessionLogRange(sessionPath, fallbackThreadRead)
+}
+
 export async function readThreadReadFromSessionLog(
   sessionPath: string,
   fallbackThreadRead: unknown,
@@ -326,11 +442,40 @@ export async function readThreadReadFromSessionLog(
     const cached = sessionLogThreadReadCacheStateByPath.get(normalizedSessionPath)
     if (cached?.fileSignature === fileSignature) return cached.threadRead
 
-    const threadRead = await parseThreadReadFromSessionLog(normalizedSessionPath, fallbackThreadRead)
-    writeCacheState(normalizedSessionPath, { fileSignature, threadRead })
+    const appendedByteCount = cached ? stats.size - cached.fileSize : 0
+    const canReadIncrementally = Boolean(
+      cached?.incrementalReady &&
+      cached.threadRead &&
+      appendedByteCount > 0 &&
+      appendedByteCount <= FALLBACK_READ_BYTE_LIMIT,
+    )
+    const threadRead = canReadIncrementally
+      ? await parseThreadReadFromSessionLogRange(normalizedSessionPath, {
+          thread: {
+            ...asRecord(asRecord(cached?.threadRead)?.thread),
+            ...asRecord(asRecord(fallbackThreadRead)?.thread),
+            turns: asRecord(asRecord(cached?.threadRead)?.thread)?.turns ?? [],
+          },
+        }, {
+          startOffset: cached?.fileSize,
+          seedTurns: true,
+        })
+      : await parseThreadReadFromSessionLog(normalizedSessionPath, fallbackThreadRead)
+    const incrementalReady = await doesFileEndWithNewline(normalizedSessionPath, stats.size)
+    writeCacheState(normalizedSessionPath, {
+      fileSignature,
+      fileSize: stats.size,
+      incrementalReady,
+      threadRead,
+    })
     return threadRead
   } catch {
-    writeCacheState(normalizedSessionPath, { fileSignature: 'missing', threadRead: null })
+    writeCacheState(normalizedSessionPath, {
+      fileSignature: 'missing',
+      fileSize: 0,
+      incrementalReady: false,
+      threadRead: null,
+    })
     return null
   }
 }

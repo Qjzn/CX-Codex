@@ -269,9 +269,59 @@ export function saveQueuedMessagesMap(
   }
 }
 
+export function mergeRuntimeMessageQueueThreadState(
+  currentQueue: RuntimeQueuedMessage[],
+  serverQueue: RuntimeQueuedMessage[],
+  preserveCurrentOrder = true,
+): RuntimeQueuedMessage[] {
+  if (!preserveCurrentOrder) {
+    const serverClientMessageIds = new Set(serverQueue.map((message) => message.clientMessageId))
+    const localOnly = currentQueue.filter((message) => (
+      !message.serverRequestId && !serverClientMessageIds.has(message.clientMessageId)
+    ))
+    return [...serverQueue, ...localOnly]
+  }
+  const serverByClientMessageId = new Map(
+    serverQueue.map((message) => [message.clientMessageId, message] as const),
+  )
+  const next: RuntimeQueuedMessage[] = []
+  for (const message of currentQueue) {
+    const serverMessage = serverByClientMessageId.get(message.clientMessageId)
+    if (serverMessage) {
+      next.push(serverMessage)
+      serverByClientMessageId.delete(message.clientMessageId)
+    } else if (!message.serverRequestId) {
+      next.push(message)
+    }
+  }
+  next.push(...serverByClientMessageId.values())
+  return next
+}
+
+export function mergePersistedRuntimeQueuedMessages(
+  currentQueue: RuntimeQueuedMessage[],
+  persistedQueue: RuntimeQueuedMessage[],
+): { queue: RuntimeQueuedMessage[]; orphanedServerRequestIds: string[] } {
+  const currentClientMessageIds = new Set(currentQueue.map((message) => message.clientMessageId))
+  const persistedByClientMessageId = new Map(
+    persistedQueue.map((message) => [message.clientMessageId, message] as const),
+  )
+  return {
+    queue: currentQueue.map((message) => (
+      persistedByClientMessageId.get(message.clientMessageId) ?? message
+    )),
+    orphanedServerRequestIds: persistedQueue.flatMap((message) => (
+      message.serverRequestId && !currentClientMessageIds.has(message.clientMessageId)
+        ? [message.serverRequestId]
+        : []
+    )),
+  }
+}
+
 export async function syncRuntimeMessageQueueState(
   current: Record<string, RuntimeQueuedMessage[]>,
   threadId = '',
+  preserveCurrentOrder = true,
 ): Promise<Record<string, RuntimeQueuedMessage[]>> {
   const normalizedThreadId = threadId.trim()
   const entries = await listRuntimeMessageQueue(normalizedThreadId)
@@ -283,10 +333,11 @@ export async function syncRuntimeMessageQueueState(
   }
   const merge = (targetThreadId: string): RuntimeQueuedMessage[] => {
     const serverQueue = serverByThreadId.get(targetThreadId) ?? []
-    const serverClientIds = new Set(serverQueue.map((message) => message.clientMessageId))
-    const localOnly = (current[targetThreadId] ?? [])
-      .filter((message) => !message.serverRequestId && !serverClientIds.has(message.clientMessageId))
-    return [...serverQueue, ...localOnly]
+    return mergeRuntimeMessageQueueThreadState(
+      current[targetThreadId] ?? [],
+      serverQueue,
+      preserveCurrentOrder,
+    )
   }
   if (normalizedThreadId) {
     const queue = merge(normalizedThreadId)
@@ -318,7 +369,8 @@ export async function persistRuntimeQueuedMessages(
 ): Promise<RuntimeQueuedMessage[]> {
   let next = [...queue]
   for (const message of queue) {
-    if (message.serverRequestId || message.deliveryState === 'failed') continue
+    if (message.deliveryState === 'failed') break
+    if (message.serverRequestId) continue
     try {
       const entry = await enqueueRuntimeThreadTurn({
         threadId,
@@ -342,6 +394,7 @@ export async function persistRuntimeQueuedMessages(
           ? { ...candidate, deliveryState: 'failed' }
           : candidate)
       }
+      break
     }
   }
   return next
@@ -411,4 +464,18 @@ export async function retryRuntimeQueuedMessage(requestId: string): Promise<void
   if (!response.ok && response.status !== 202) {
     throw new Error(errorMessageFromPayload(await response.json(), 'Failed to retry queued message'))
   }
+}
+
+export async function reorderRuntimeQueuedMessages(threadId: string, requestIds: string[]): Promise<boolean> {
+  if (!threadId.trim() || requestIds.length < 2) return true
+  const response = await queueFetch('/codex-api/runtime/queue/reorder', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ threadId: threadId.trim(), requestIds }),
+  }, 'Runtime queue reorder request')
+  if (response.status === 409) return false
+  if (!response.ok) {
+    throw new Error(errorMessageFromPayload(await response.json(), 'Failed to reorder queued messages'))
+  }
+  return true
 }

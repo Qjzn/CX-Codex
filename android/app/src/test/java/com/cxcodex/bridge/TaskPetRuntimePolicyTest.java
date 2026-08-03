@@ -279,6 +279,25 @@ public class TaskPetRuntimePolicyTest {
     }
 
     @Test
+    public void advancesReplyFreshnessOnlyForANewerReplyEvent() {
+        long previousReplyAtMs = 1_000L;
+        long observedAtMs = 2_000L;
+
+        assertEquals(previousReplyAtMs, TaskPetRuntimePolicy.resolveReplyUpdatedAtMs(
+            42L, 42L, previousReplyAtMs, observedAtMs
+        ));
+        assertEquals(previousReplyAtMs, TaskPetRuntimePolicy.resolveReplyUpdatedAtMs(
+            42L, 0L, previousReplyAtMs, observedAtMs
+        ));
+        assertEquals(observedAtMs, TaskPetRuntimePolicy.resolveReplyUpdatedAtMs(
+            42L, 43L, previousReplyAtMs, observedAtMs
+        ));
+        assertEquals(observedAtMs, TaskPetRuntimePolicy.resolveReplyUpdatedAtMs(
+            0L, 1L, 0L, observedAtMs
+        ));
+    }
+
+    @Test
     public void commitsReplyRenderEvidenceOnlyAfterThePanelIsActuallyVisible() {
         assertTrue(TaskPetRuntimePolicy.shouldCommitReplyRender(true, true, 1f, true));
         assertFalse(TaskPetRuntimePolicy.shouldCommitReplyRender(false, true, 1f, true));
@@ -301,6 +320,38 @@ public class TaskPetRuntimePolicyTest {
     public void retainsAndNotifiesOnlyUnreadSettledTasks() {
         assertTrue(TaskPetRuntimePolicy.shouldRetainUnreadSettledTask(false));
         assertFalse(TaskPetRuntimePolicy.shouldRetainUnreadSettledTask(true));
+
+        assertTrue(TaskPetRuntimePolicy.hasUnreadReply(43L, 42L));
+        assertFalse(TaskPetRuntimePolicy.hasUnreadReply(42L, 42L));
+        assertFalse(TaskPetRuntimePolicy.hasUnreadReply(0L, 0L));
+        assertFalse(TaskPetRuntimePolicy.shouldRetainUnreadSettledTask(true, 42L, 42L));
+        assertTrue(TaskPetRuntimePolicy.shouldRetainUnreadSettledTask(true, 43L, 42L));
+        assertTrue(TaskPetRuntimePolicy.shouldRetainUnreadSettledTask(false, 0L, 0L));
+    }
+
+    @Test
+    public void separatesExecutionStateFromAttentionAndTransientPresentation() {
+        assertFalse(TaskPetRuntimePolicy.shouldCountAttention("running", true, 42L, 42L));
+        assertTrue(TaskPetRuntimePolicy.shouldCountAttention("running", false, 43L, 42L));
+        assertTrue(TaskPetRuntimePolicy.shouldCountAttention("waiting", true, 42L, 42L));
+        assertTrue(TaskPetRuntimePolicy.shouldCountAttention("retry", true, 42L, 42L));
+        assertTrue(TaskPetRuntimePolicy.shouldCountAttention("completed", false, 42L, 42L));
+
+        assertTrue(TaskPetRuntimePolicy.shouldShowTransientReplyPeek(
+            false, true, false, true, 43L, 42L
+        ));
+        assertFalse(TaskPetRuntimePolicy.shouldShowTransientReplyPeek(
+            true, true, false, true, 43L, 42L
+        ));
+        assertFalse(TaskPetRuntimePolicy.shouldShowTransientReplyPeek(
+            false, false, false, true, 43L, 42L
+        ));
+        assertFalse(TaskPetRuntimePolicy.shouldShowTransientReplyPeek(
+            false, true, true, true, 43L, 42L
+        ));
+        assertFalse(TaskPetRuntimePolicy.shouldShowTransientReplyPeek(
+            false, true, false, false, 43L, 42L
+        ));
     }
 
     @Test

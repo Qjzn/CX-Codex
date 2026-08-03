@@ -134,6 +134,7 @@ import {
 import {
   isSessionLogThreadReadCandidateLine,
   parseThreadReadFromSessionLog,
+  readThreadReadFromSessionLog,
 } from '../src/server/appServerSessionLogThreadRead.js'
 import { createAppServerRuntimeReaders } from '../src/server/appServerRuntimeReaders.js'
 import {
@@ -302,6 +303,7 @@ import {
 import { handleThreadRoutes } from '../src/server/threadRoutes.js'
 import {
   isRuntimeActiveState,
+  RUNTIME_START_THREAD_READ_GRACE_MS,
   RuntimeStateStore,
   toPersistableRuntimeSnapshot,
   type RuntimeSnapshotOverlay,
@@ -446,6 +448,7 @@ import {
   CodexSessionFileChangeObserver,
   classifyCodexSessionFileChange,
   createCodexSessionFileChangedNotification,
+  resolveCodexSessionFileChangeOrigin,
 } from '../src/server/codexSessionFileChangeObserver.js'
 import {
   CX_SESSION_FILES_CHANGED_METHOD,
@@ -3854,6 +3857,14 @@ async function smokeAppServerRpcCache(): Promise<void> {
   assert.equal(shouldInvalidateThreadReadCacheForRpc('model/list'), false)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('thread/goal/updated'), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification(CX_SESSION_FILES_CHANGED_METHOD), true)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification(CX_SESSION_FILES_CHANGED_METHOD, {
+    source: 'session-log',
+    origin: 'live-app-server',
+  }), true)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification(CX_SESSION_FILES_CHANGED_METHOD, {
+    source: 'session-log',
+    origin: 'external',
+  }), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('thread/goal/cleared'), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('thread/compacted'), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('turn/completed'), true)
@@ -3861,18 +3872,18 @@ async function smokeAppServerRpcCache(): Promise<void> {
   assert.equal(shouldInvalidateThreadReadCacheForNotification('turn/plan/updated'), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('item/updated'), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('rawResponseItem/completed'), true)
-  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/agentMessage/delta'), true)
-  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/plan/delta'), true)
-  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/reasoning/summaryTextDelta'), true)
-  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/reasoning/summaryPartAdded'), true)
-  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/reasoning/textDelta'), true)
-  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/commandExecution/outputDelta'), true)
-  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/commandExecution/terminalInteraction'), true)
-  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/fileChange/outputDelta'), true)
-  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/fileChange/patchUpdated'), true)
-  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/mcpToolCall/progress'), true)
-  assert.equal(shouldInvalidateThreadReadCacheForNotification('command/exec/outputDelta'), true)
-  assert.equal(shouldInvalidateThreadReadCacheForNotification('process/outputDelta'), true)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/agentMessage/delta'), false)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/plan/delta'), false)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/reasoning/summaryTextDelta'), false)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/reasoning/summaryPartAdded'), false)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/reasoning/textDelta'), false)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/commandExecution/outputDelta'), false)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/commandExecution/terminalInteraction'), false)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/fileChange/outputDelta'), false)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/fileChange/patchUpdated'), false)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('item/mcpToolCall/progress'), false)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('command/exec/outputDelta'), false)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('process/outputDelta'), false)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('process/exited'), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('tool/failed'), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('thread/name/updated'), false)
@@ -4972,6 +4983,7 @@ function smokeCodexBridgeNotificationRuntime(): void {
   const observedRuntimeEvents: unknown[] = []
   const deletedThreadReads: string[] = []
   const emittedEvents: unknown[] = []
+  const persistedRuntimeThreads: string[] = []
 
   const runtime = createCodexBridgeNotificationRuntime({
     subscribeAppServerNotifications: (listener) => {
@@ -5016,7 +5028,10 @@ function smokeCodexBridgeNotificationRuntime(): void {
         observedStatusNotifications.push(observation)
       },
     },
-    persistRuntimeSnapshot: () => ({} as never),
+    persistRuntimeSnapshot: (threadId) => {
+      persistedRuntimeThreads.push(threadId)
+      return {} as never
+    },
   })
 
   const unsubscribeBridgeListener = runtime.bridgeNotificationListeners.subscribe((event) => {
@@ -5048,20 +5063,42 @@ function smokeCodexBridgeNotificationRuntime(): void {
   assert.equal(observedStatusNotifications.length, 1)
   assert.equal(observedRuntimeEvents.length, 1)
   assert.deepEqual(deletedThreadReads, ['thread-a'])
+  assert.deepEqual(persistedRuntimeThreads, ['thread-a'])
   assert.deepEqual(emittedEvents, [observedRuntimeEvents[0]])
   assert.equal(runtime.listNotificationEventsAfter(10, 5).notifications.length, 1)
   assert.equal(runtime.listNotificationEventsAfter(10, 5).streamId, 'stream-runtime')
 
+  const commandOutputEvent = runtime.publishBridgeNotification({
+    method: 'item/commandExecution/outputDelta',
+    params: { threadId: 'thread-a', turnId: 'turn-a', itemId: 'command-a', delta: 'chunk' },
+  })
+  assert.equal(commandOutputEvent.seq, 12)
+  assert.equal(observedRuntimeEvents.length, 2)
+  assert.deepEqual(deletedThreadReads, ['thread-a'])
+  assert.deepEqual(persistedRuntimeThreads, ['thread-a'])
+  assert.equal(emittedEvents.length, 2)
+
+  const coveredSessionEvent = runtime.publishBridgeNotification(createCodexSessionFileChangedNotification({
+    source: 'session-log',
+    threadId: 'thread-a',
+    origin: 'live-app-server',
+  }))
+  assert.equal(coveredSessionEvent.seq, 13)
+  assert.equal(coveredSessionEvent.method, CX_SESSION_FILES_CHANGED_METHOD)
+  assert.equal(observedRuntimeEvents.length, 2)
+  assert.deepEqual(deletedThreadReads, ['thread-a', 'thread-a'])
+  assert.deepEqual(persistedRuntimeThreads, ['thread-a'])
+  assert.equal(emittedEvents.length, 3)
+  assert.equal(runtime.listNotificationEventsAfter(10, 5).notifications.length, 3)
+
   const externalEvent = runtime.publishBridgeNotification(createCodexSessionFileChangedNotification({
     source: 'session-log',
     threadId: 'thread-a',
+    origin: 'external',
   }))
-  assert.equal(externalEvent.seq, 12)
-  assert.equal(externalEvent.method, CX_SESSION_FILES_CHANGED_METHOD)
-  assert.equal(observedRuntimeEvents.length, 1)
-  assert.deepEqual(deletedThreadReads, ['thread-a', 'thread-a'])
-  assert.equal(emittedEvents.length, 2)
-  assert.equal(runtime.listNotificationEventsAfter(10, 5).notifications.length, 2)
+  assert.equal(externalEvent.seq, 14)
+  assert.deepEqual(deletedThreadReads, ['thread-a', 'thread-a', 'thread-a'])
+  assert.equal(emittedEvents.length, 4)
 
   unsubscribeBridgeListener()
   assert.equal(runtime.bridgeNotificationListeners.count, 0)
@@ -5071,6 +5108,21 @@ function smokeCodexBridgeNotificationRuntime(): void {
 
 async function smokeCodexSessionFileChangeObserver(): Promise<void> {
   const threadId = '019f7e69-25a4-7aa2-8166-b8257873b8ab'
+  assert.equal(resolveCodexSessionFileChangeOrigin(
+    { source: 'session-log', threadId },
+    1_000,
+    5_000,
+  ), 'live-app-server')
+  assert.equal(resolveCodexSessionFileChangeOrigin(
+    { source: 'session-log', threadId },
+    1_000,
+    6_001,
+  ), 'external')
+  assert.equal(resolveCodexSessionFileChangeOrigin(
+    { source: 'session-index', threadId: '' },
+    5_000,
+    5_000,
+  ), 'external')
   assert.equal(shouldInvalidateThreadCollectionForCxSessionFileChange({ source: 'session-log' }), false)
   assert.equal(shouldInvalidateThreadCollectionForCxSessionFileChange({ source: 'session-index' }), true)
   assert.equal(shouldInvalidateThreadCollectionForCxSessionFileChange({ source: 'unknown' }), true)
@@ -8242,6 +8294,47 @@ function smokeRuntimeStateStore(): void {
   store.markRunning('thread-timer', 'turn-new')
   assert.equal(store.snapshot('thread-timer').lastStartedAtIso, restarted.lastStartedAtIso)
 
+  store.markStarting('thread-start-second')
+  const currentStart = store.snapshot('thread-start-second')
+  const currentStartAtMs = Date.parse(currentStart.lastStartedAtIso ?? '')
+  const currentStartSecondIso = new Date(Math.floor(currentStartAtMs / 1_000) * 1_000).toISOString()
+  store.observeThreadRead('thread-start-second', false, '', currentStartSecondIso, 'thread-read')
+  assert.equal(
+    store.snapshot('thread-start-second').executionState,
+    'starting',
+    'a second-precision thread read from the start second must not settle a materializing turn',
+  )
+
+  const expiredStartAtMs = Date.now() - RUNTIME_START_THREAD_READ_GRACE_MS - 1_000
+  const expiredStartAtIso = new Date(expiredStartAtMs).toISOString()
+  const expiredStartStore = new RuntimeStateStore({
+    readThreadIdFromPayload,
+    readTurnIdFromPayload,
+    readItemIdFromPayload,
+    readThreadInProgressFromThreadReadPayload: (payload) => readBooleanProperty(payload, 'inProgress'),
+    getErrorMessage: (_payload, fallback) => fallback,
+  }, {
+    loadPersistedSnapshot: (threadId) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'starting',
+      inProgress: true,
+      updatedAtIso: expiredStartAtIso,
+      lastStartedAtIso: expiredStartAtIso,
+    }),
+  })
+  expiredStartStore.observeThreadRead(
+    'thread-expired-start-second',
+    false,
+    '',
+    new Date(Math.floor(expiredStartAtMs / 1_000) * 1_000).toISOString(),
+    'thread-read',
+  )
+  assert.equal(
+    expiredStartStore.snapshot('thread-expired-start-second').executionState,
+    'completed',
+    'an expired same-second snapshot must remain recoverable after lifecycle notifications are lost',
+  )
+
   store.markStarting('thread-failed-start')
   store.markFailed('thread-failed-start', 'thread is archived')
   const failedStart = store.snapshot('thread-failed-start')
@@ -9537,8 +9630,46 @@ function smokeAppServerNotificationRuntimeSync(): void {
     },
   }])
 
-  const noThreadEvent: BridgeNotificationEvent = {
+  const queueEvent: BridgeNotificationEvent = {
     seq: 8,
+    method: 'runtime/queue/updated',
+    params: { threadId: 'thread-a', requestId: 'queued-request', action: 'starting' },
+    atIso: '2026-01-01T00:00:01.000Z',
+  }
+  const queueEmits: BridgeNotificationEvent[] = []
+  assert.equal(syncBridgeNotificationRuntimeState({
+    method: queueEvent.method,
+    params: queueEvent.params,
+  }, {
+    rememberNotificationEvent: () => queueEvent,
+    runtimeStateStore: {
+      observeEvent: () => {
+        throw new Error('internal queue notifications must not mutate runtime state')
+      },
+    },
+    readThreadIdFromPayload,
+    persistRuntimeSnapshot: () => {
+      throw new Error('internal queue notifications must not persist a stale runtime snapshot')
+    },
+    runtimeStore: {
+      listRequestsByThread: () => {
+        throw new Error('internal queue notifications must not reconcile a pending queue request')
+      },
+      updateRequest: () => {
+        throw new Error('internal queue notifications must not settle a pending queue request')
+      },
+    },
+    deleteCachedThreadRead: () => {
+      throw new Error('internal queue notifications must not invalidate thread reads')
+    },
+    emitNotification: (emittedEvent) => {
+      queueEmits.push(emittedEvent)
+    },
+  }), queueEvent)
+  assert.deepEqual(queueEmits, [queueEvent])
+
+  const noThreadEvent: BridgeNotificationEvent = {
+    seq: 9,
     method: 'app/list/updated',
     params: {},
     atIso: '2026-01-01T00:00:01.000Z',
@@ -9808,6 +9939,7 @@ async function smokeRuntimeActionRoutes(): Promise<void> {
   const listedQueueThreadIds: string[] = []
   const cancelledQueueRequestIds: string[] = []
   const retriedQueueRequestIds: string[] = []
+  const reorderedQueues: Array<{ threadId: string; requestIds: string[] }> = []
   const queueDependencies = {
     ...dependencies,
     readJsonBody: async () => ({ input: 'queue route' }),
@@ -9822,6 +9954,10 @@ async function smokeRuntimeActionRoutes(): Promise<void> {
     },
     retryQueuedRuntimeTurn: (requestId: string) => {
       retriedQueueRequestIds.push(requestId)
+      return true
+    },
+    reorderQueuedRuntimeTurns: (threadId: string, requestIds: string[]) => {
+      reorderedQueues.push({ threadId, requestIds })
       return true
     },
   }
@@ -9864,6 +10000,25 @@ async function smokeRuntimeActionRoutes(): Promise<void> {
   ), true)
   assert.equal(retried.response.statusCode, 202)
   assert.deepEqual(retriedQueueRequestIds, ['queue-request-a'])
+
+  const reordered = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'POST' } as never,
+    reordered.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/queue/reorder'),
+    {
+      ...queueDependencies,
+      readJsonBody: async () => ({
+        threadId: 'thread-queue',
+        requestIds: ['queue-request-b', 'queue-request-a'],
+      }),
+    },
+  ), true)
+  assert.equal(reordered.response.statusCode, 200)
+  assert.deepEqual(reorderedQueues, [{
+    threadId: 'thread-queue',
+    requestIds: ['queue-request-b', 'queue-request-a'],
+  }])
 
   assert.equal(await handleRuntimeActionRoutes(
     { method: 'GET' } as never,
@@ -10416,7 +10571,7 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
         title: string
         cwd: string
         preview: string
-        turns: Array<{ items: Array<{ type: string; text?: string; content?: Array<{ text: string }> }> }>
+        turns: Array<{ items: Array<{ type: string; phase?: string; text?: string; content?: Array<{ text: string }> }> }>
       }
     } | null
 
@@ -10429,12 +10584,80 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
     assert.equal(threadRead?.thread.turns[0]?.items[0]?.type, 'userMessage')
     assert.equal(threadRead?.thread.turns[0]?.items[0]?.content?.[0]?.text, 'Restore this session')
     assert.equal(threadRead?.thread.turns[0]?.items[1]?.type, 'agentMessage')
-    assert.equal(threadRead?.thread.turns[0]?.items[1]?.text, 'Recovered answer')
-    assert.equal(threadRead?.thread.turns[0]?.items.length, 2)
+    assert.equal(threadRead?.thread.turns[0]?.items[1]?.phase, 'commentary')
+    assert.equal(threadRead?.thread.turns[0]?.items[1]?.text, 'Intermediate progress should not be restored')
+    assert.equal(threadRead?.thread.turns[0]?.items[2]?.text, 'Recovered answer')
+    assert.equal(threadRead?.thread.turns[0]?.items.length, 3)
     assert.equal(threadRead?.thread.turns[1]?.items[0]?.content?.[0]?.text, '继续')
     assert.equal(threadRead?.thread.turns[1]?.items[1]?.text, 'Second recovered answer')
     assert.equal(threadRead?.thread.turns[2]?.items[0]?.content?.[0]?.text, '继续')
     assert.equal(threadRead?.thread.turns[2]?.items[1]?.text, 'Third recovered answer')
+
+    const incrementalSessionPath = join(dir, 'rollout-2026-07-06T10-02-00-thread-incremental.jsonl')
+    const incrementalFallback = {
+      thread: {
+        id: 'thread-incremental',
+        preview: '',
+        createdAt: 0,
+        updatedAt: 0,
+        path: incrementalSessionPath,
+        cwd: 'E:/workspace/incremental',
+        turns: [],
+      },
+    }
+    await writeFile(incrementalSessionPath, `${[
+      JSON.stringify({
+        timestamp: '2026-07-06T10:02:01.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'incremental-user-1',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Incremental request one' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:02:02.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'incremental-agent-1',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Incremental answer one' }],
+        },
+      }),
+    ].join('\n')}\n`, 'utf8')
+    await readThreadReadFromSessionLog(incrementalSessionPath, incrementalFallback)
+    await appendFile(incrementalSessionPath, `${[
+      JSON.stringify({
+        timestamp: '2026-07-06T10:02:03.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'incremental-user-2',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Incremental request two' }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:02:04.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'incremental-agent-2',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Incremental answer two' }],
+        },
+      }),
+    ].join('\n')}\n`, 'utf8')
+    const incrementalThreadRead = await readThreadReadFromSessionLog(
+      incrementalSessionPath,
+      incrementalFallback,
+    ) as {
+      thread: { turns: Array<{ items: Array<{ text?: string }> }> }
+    } | null
+    assert.equal(incrementalThreadRead?.thread.turns.length, 2)
+    assert.equal(incrementalThreadRead?.thread.turns[1]?.items[1]?.text, 'Incremental answer two')
 
     const largeSessionPath = join(dir, 'rollout-2026-07-06T10-05-00-thread-large-fallback.jsonl')
     await writeFile(largeSessionPath, [
@@ -10745,13 +10968,11 @@ async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
       sessionFallbackWarnings.push({ message, details })
     },
   })
-  assert.deepEqual(sessionFallbackRpcCalls.map(readIncludeTurns), [false, true])
+  assert.deepEqual(sessionFallbackRpcCalls.map(readIncludeTurns), [false])
   assert.deepEqual(sessionFallbackRemembered, [sessionFallbackThreadReadPayload])
   assert.equal(sessionFallbackSnapshot.threadRead, sessionFallbackThreadReadPayload)
   assert.equal(sessionFallbackSnapshot.messageState, 'cached')
-  assert.deepEqual(sessionFallbackWarnings.map((warning) => warning.message), [
-    'Heavy thread snapshot fell back to session log messages',
-  ])
+  assert.deepEqual(sessionFallbackWarnings, [])
 
   const cacheFirstRpcCalls: unknown[] = []
   const cacheFirstRemembered: unknown[] = []
@@ -10821,6 +11042,70 @@ async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
   assert.equal(cacheFirstThreadRead.thread.originalTurnsCount, 12)
   assert.deepEqual(cacheFirstRemembered, [{ threadRead: cacheFirstThreadRead, source: 'session-log' }])
   assert.equal(cacheFirstSnapshot.messageState, 'cached')
+
+  const activeSessionRpcCalls: unknown[] = []
+  const activeSessionThreadRead = {
+    thread: {
+      id: 'thread-active-session',
+      updatedAt: updatedAtSeconds,
+      inProgress: true,
+      activeTurnId: 'turn-active-session',
+      path: 'session-active.jsonl',
+      turns: [{
+        id: 'turn-active-session',
+        status: 'inProgress',
+        items: [{ type: 'agentMessage', id: 'agent-active-session', text: 'Live session progress' }],
+      }],
+    },
+  }
+  const activeSessionSnapshot = await readAppServerThreadRuntimeSnapshot('thread-active-session', {
+    rpc: async (_method, params) => {
+      activeSessionRpcCalls.push(params)
+      if (readIncludeTurns(params) === true) {
+        throw new Error('active session snapshot must not issue a heavy thread read')
+      }
+      return {
+        thread: {
+          id: 'thread-active-session',
+          updatedAt: updatedAtSeconds,
+          inProgress: true,
+          activeTurnId: 'turn-active-session',
+          path: 'session-active.jsonl',
+        },
+      }
+    },
+    observeThreadRead: () => {},
+    getCachedThreadRead: () => null,
+    rememberCachedThreadRead: (_threadId, threadRead, source) => createCachedThreadRead(
+      threadRead,
+      () => '2026-01-01T00:00:30.000Z',
+      source,
+    ),
+    snapshotRuntime: (threadId, overlay = {}) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'running',
+      activeTurnId: 'turn-active-session',
+      threadRead: overlay.threadRead ?? null,
+      messageState: overlay.messageState ?? 'unavailable',
+      pendingServerRequests: overlay.pendingServerRequests ?? [],
+      tokenUsage: overlay.tokenUsage ?? null,
+    }),
+    observeRuntimeThreadRead: () => {},
+    markRuntimeDegraded: () => {
+      throw new Error('active session recovery should not mark degraded')
+    },
+    persistRuntimeSnapshot: (_threadId, snapshot) => snapshot,
+    listPendingServerRequestsForThread: () => [],
+    getThreadTokenUsage: () => null,
+    readSessionLogThreadRead: async () => activeSessionThreadRead,
+    getErrorMessage,
+    writeWarning: () => {
+      throw new Error('active session recovery should not warn')
+    },
+  })
+  assert.deepEqual(activeSessionRpcCalls.map(readIncludeTurns), [false])
+  assert.equal(activeSessionSnapshot.threadRead, activeSessionThreadRead)
+  assert.equal(activeSessionSnapshot.messageState, 'cached')
 
   const sessionFallbackCacheHit = createCachedThreadRead(
     sessionFallbackThreadReadPayload,
@@ -11343,6 +11628,21 @@ async function smokeRuntimeMessageQueue(): Promise<void> {
       queueMetadata: { speedMode: 'standard', text: 'First queued prompt' },
     })
     assert.equal(first.status, 'queued')
+    const reorderPeer = queue.enqueue({
+      threadId: 'thread-queue',
+      clientMessageId: 'queued-client-reorder-peer',
+      input: [{ type: 'text', text: 'Temporary reorder peer' }],
+      collaborationMode: 'execute',
+      queueMetadata: { speedMode: 'standard', text: 'Temporary reorder peer' },
+    })
+    assert.equal(queue.reorder('thread-queue', [reorderPeer.requestId, first.requestId]), true)
+    assert.deepEqual(
+      queue.list('thread-queue').map((entry) => entry.clientMessageId),
+      ['queued-client-reorder-peer', 'queued-client-1'],
+    )
+    assert.equal(queue.reorder('thread-queue', [first.requestId]), false)
+    assert.equal(queue.reorder('thread-queue', [first.requestId, reorderPeer.requestId]), true)
+    assert.equal(queue.cancel(reorderPeer.requestId), true)
     await new Promise((resolve) => setTimeout(resolve, 30))
     assert.deepEqual(startedClientMessageIds, [])
     assert.equal(queue.list('thread-queue').length, 1)

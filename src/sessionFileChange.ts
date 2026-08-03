@@ -1,8 +1,10 @@
 export const CX_SESSION_FILES_CHANGED_METHOD = 'cx/session-files/changed'
 
 export type CxSessionFileChangeSource = 'session-index' | 'session-log'
+export type CxSessionFileChangeOrigin = 'live-app-server' | 'external'
 
 export type CxSessionFileChangeSyncPolicy = {
+  preferSessionLogMessages: boolean
   refreshMessages: boolean
   refreshThreads: boolean
 }
@@ -17,6 +19,12 @@ export function readCxSessionFileChangeSource(params: unknown): CxSessionFileCha
   return source === 'session-index' || source === 'session-log' ? source : ''
 }
 
+export function readCxSessionFileChangeOrigin(params: unknown): CxSessionFileChangeOrigin | '' {
+  if (typeof params !== 'object' || params === null || Array.isArray(params)) return ''
+  const origin = (params as { origin?: unknown }).origin
+  return origin === 'live-app-server' || origin === 'external' ? origin : ''
+}
+
 export function getCxSessionFileChangeSyncPolicy(
   method: string,
   params: unknown,
@@ -24,12 +32,16 @@ export function getCxSessionFileChangeSyncPolicy(
   if (!isCxSessionFilesChangedMethod(method)) return null
   const source = readCxSessionFileChangeSource(params)
   if (source === 'session-log') {
-    return { refreshMessages: true, refreshThreads: false }
+    return {
+      preferSessionLogMessages: true,
+      refreshMessages: true,
+      refreshThreads: false,
+    }
   }
   if (source === 'session-index') {
-    return { refreshMessages: false, refreshThreads: true }
+    return { preferSessionLogMessages: false, refreshMessages: false, refreshThreads: true }
   }
-  return { refreshMessages: true, refreshThreads: true }
+  return { preferSessionLogMessages: false, refreshMessages: true, refreshThreads: true }
 }
 
 export function shouldInvalidateThreadCollectionForCxSessionFileChange(params: unknown): boolean {
