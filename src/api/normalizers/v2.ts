@@ -223,7 +223,26 @@ function extractAssistantImages(item: ThreadItem): string[] {
   return images
 }
 
-function toUiMessages(item: ThreadItem): UiMessage[] {
+function normalizeGeneratedImageResult(value: unknown): string {
+  const result = readTrimmedString(value)
+  if (!result) return ''
+  if (
+    result.startsWith('data:image/')
+    || result.startsWith('http://')
+    || result.startsWith('https://')
+    || result.startsWith('blob:')
+    || result.startsWith('/')
+    || /^[A-Za-z]:[\\/]/u.test(result)
+  ) {
+    return result
+  }
+
+  const compact = result.replace(/\s+/gu, '')
+  if (compact.length < 256 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(compact)) return ''
+  return `data:image/png;base64,${compact}`
+}
+
+function toUiMessages(item: ThreadItem, turnId = ''): UiMessage[] {
   const rawItem = item as Record<string, unknown>
   const itemId = readTrimmedString(rawItem.id) || `unhandled:${readTrimmedString(rawItem.type) || 'item'}`
   const itemType = readTrimmedString(rawItem.type)
@@ -254,6 +273,26 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
     ]
   }
 
+  if (item.type === 'plan') {
+    const text = typeof item.text === 'string' ? item.text : ''
+    const normalizedTurnId = turnId.trim()
+    return [
+      {
+        id: normalizedTurnId ? `plan:${normalizedTurnId}` : item.id,
+        role: 'system',
+        text,
+        messageType: 'plan',
+        plan: {
+          turnId: normalizedTurnId,
+          explanation: '',
+          steps: [],
+          rawText: text,
+          isStreaming: false,
+        },
+      },
+    ]
+  }
+
   if (item.type === 'imageView') {
     const images: string[] = []
     pushImageCandidate(images, rawItem.path)
@@ -269,6 +308,25 @@ function toUiMessages(item: ThreadItem): UiMessage[] {
         messageType: item.type,
       },
     ]
+  }
+
+  if (itemType === 'imageGeneration') {
+    const images: string[] = []
+    pushImageCandidate(images, rawItem.savedPath)
+    pushImageCandidate(images, rawItem.path)
+    pushImageCandidate(images, rawItem.url)
+    if (images.length === 0) {
+      const generatedResult = normalizeGeneratedImageResult(rawItem.result)
+      if (generatedResult) pushImageCandidate(images, generatedResult)
+    }
+    if (images.length === 0) return []
+    return [{
+      id: itemId,
+      role: 'assistant',
+      text: '',
+      images,
+      messageType: itemType,
+    }]
   }
 
   if (item.type === 'userMessage') {
@@ -507,7 +565,7 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse): UiMessag
           ? item
           : { id: `turn-${String(turnIndex)}:item-${String(messages.length)}`, type: 'invalidItem', content: item }
       ) as ThreadItem
-      for (const msg of toUiMessages(threadItem)) {
+      for (const msg of toUiMessages(threadItem, readTrimmedString(rawTurn.id))) {
         messages.push({ ...msg, turnIndex: absoluteTurnIndex })
       }
     }

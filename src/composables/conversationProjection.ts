@@ -1,6 +1,23 @@
 import type { CommandExecutionData, UiMessage } from '../types/codex'
 import { normalizeMessageText } from './messageIdentity'
 
+export const PLAN_IMPLEMENTATION_CONFIRMATION = '是的，执行此计划'
+
+export function hasPlanImplementationConfirmation(messages: UiMessage[], planMessageId: string): boolean {
+  const planIndex = messages.findIndex((message) => message.id === planMessageId)
+  if (planIndex < 0) return false
+
+  for (let index = planIndex + 1; index < messages.length; index += 1) {
+    const message = messages[index]
+    if (!message) continue
+    if (message.messageType === 'plan') return false
+    if (message.role !== 'user') continue
+    return normalizeMessageText(message.text) === PLAN_IMPLEMENTATION_CONFIRMATION
+  }
+
+  return false
+}
+
 export function areStringArraysEqual(first?: string[], second?: string[]): boolean {
   const left = Array.isArray(first) ? first : []
   const right = Array.isArray(second) ? second : []
@@ -40,6 +57,29 @@ function areFileAttachmentsEqual(
   return true
 }
 
+function arePlansEqual(first?: UiMessage['plan'], second?: UiMessage['plan']): boolean {
+  if (!first && !second) return true
+  if (!first || !second) return false
+  if (
+    first.turnId !== second.turnId
+    || first.explanation !== second.explanation
+    || first.rawText !== second.rawText
+    || first.isStreaming !== second.isStreaming
+    || first.steps.length !== second.steps.length
+  ) {
+    return false
+  }
+  for (let index = 0; index < first.steps.length; index += 1) {
+    if (
+      first.steps[index]?.step !== second.steps[index]?.step
+      || first.steps[index]?.status !== second.steps[index]?.status
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
 export function areMessageFieldsEqual(first: UiMessage, second: UiMessage): boolean {
   return (
     first.id === second.id &&
@@ -51,6 +91,7 @@ export function areMessageFieldsEqual(first: UiMessage, second: UiMessage): bool
     first.rawPayload === second.rawPayload &&
     first.isUnhandled === second.isUnhandled &&
     areCommandExecutionsEqual(first.commandExecution, second.commandExecution) &&
+    arePlansEqual(first.plan, second.plan) &&
     first.turnIndex === second.turnIndex &&
     first.deliveryState === second.deliveryState &&
     first.deliveryError === second.deliveryError &&

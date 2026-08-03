@@ -71,13 +71,14 @@ export async function handleThreadRoutes(
     const payload = asRecord(await dependencies.readJsonBody(req))
     const id = typeof payload?.id === 'string' ? payload.id : ''
     const title = typeof payload?.title === 'string' ? payload.title : ''
+    const manual = payload?.manual === true
     if (!id) {
       setJson(res, 400, { error: 'Missing id' })
       return true
     }
     const statePath = getStatePath()
     const cache = await readTitles(statePath)
-    const next = title ? updateTitles(cache, id, title) : removeTitle(cache, id)
+    const next = title ? updateTitles(cache, id, title, { manual }) : removeTitle(cache, id)
     await writeTitles(statePath, next)
     setJson(res, 200, { ok: true })
     return true

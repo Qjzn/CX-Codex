@@ -16,6 +16,7 @@ const notificationReplayImport = toImportPath(relative(outputRoot, join(repoRoot
 const connectionManagerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'connectionManager.ts')))
 const conversationViewportImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'conversationViewport.ts')))
 const runtimeSnapshotOrderingImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'runtimeSnapshotOrdering.ts')))
+const runtimeExecutionRecoveryImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'runtimeExecutionRecovery.ts')))
 const messageOutboxMergeImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'messageOutboxMerge.ts')))
 const messageIdentityImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'messageIdentity.ts')))
 const composerTurnOptionsImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'composerTurnOptions.ts')))
@@ -31,6 +32,9 @@ const latestReplyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src'
 const taskPetReadPolicyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'mobile', 'taskPetReadPolicy.ts')))
 const sessionFileChangeImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'sessionFileChange.ts')))
 const composerEnterBehaviorImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'composerEnterBehavior.ts')))
+const threadGoalImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'threadGoal.ts')))
+const codexFileCitationImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'utils', 'codexFileCitation.ts')))
+const runtimeMessageQueueImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'runtimeMessageQueue.ts')))
 
 try {
   writeFileSync(entryPath, `
@@ -48,10 +52,12 @@ import {
   isConversationViewportAtBottom,
 } from '${conversationViewportImport}'
 import { shouldApplyRuntimeSnapshotVersion } from '${runtimeSnapshotOrderingImport}'
+import { isOptimisticOnlyExecutionEvidence } from '${runtimeExecutionRecoveryImport}'
 import { mergeMessageOutboxEntries, mergeMessageOutboxState } from '${messageOutboxMergeImport}'
 import {
   createClientMessageId,
   filterVisibleOptimisticUserMessages,
+  mergeVisibleOptimisticUserMessages,
   userMessageSignature,
 } from '${messageIdentityImport}'
 import {
@@ -64,7 +70,9 @@ import {
 } from '${messageOutboxPersistenceImport}'
 import {
   areMessageFieldsEqual,
+  hasPlanImplementationConfirmation,
   mergeMessages,
+  PLAN_IMPLEMENTATION_CONFIRMATION,
   removeRedundantLiveAgentMessages,
   removeStaleHistoryNoticeAfterOlderMerge,
   sortMessagesByTurnIndex,
@@ -102,9 +110,90 @@ import {
   CX_SESSION_FILES_CHANGED_METHOD,
   getCxSessionFileChangeSyncPolicy,
   isCxSessionFilesChangedMethod,
+  readCxSessionFileChangeOrigin,
   readCxSessionFileChangeSource,
 } from '${sessionFileChangeImport}'
 import { resolveSendWithEnterPreference } from '${composerEnterBehaviorImport}'
+import { normalizeThreadGoal } from '${threadGoalImport}'
+import {
+  readCodexFileCitationAt,
+  splitCodexFileCitations,
+} from '${codexFileCitationImport}'
+import {
+  mergePersistedRuntimeQueuedMessages,
+  mergeRuntimeMessageQueueThreadState,
+} from '${runtimeMessageQueueImport}'
+
+const queuedA = { id: 'local-a', clientMessageId: 'client-a', deliveryState: 'queued' } as any
+const queuedB = { id: 'local-b', clientMessageId: 'client-b', deliveryState: 'queued' } as any
+const queuedC = { id: 'local-c', clientMessageId: 'client-c', deliveryState: 'queued' } as any
+const serverA = { ...queuedA, id: 'server-a', serverRequestId: 'server-a', backgroundPersisted: true }
+const serverC = { ...queuedC, id: 'server-c', serverRequestId: 'server-c', backgroundPersisted: true }
+assert.deepEqual(mergePersistedRuntimeQueuedMessages([queuedA, queuedB], [serverA]), {
+  queue: [serverA, queuedB],
+  orphanedServerRequestIds: [],
+})
+assert.deepEqual(mergePersistedRuntimeQueuedMessages([queuedB], [serverA]), {
+  queue: [queuedB],
+  orphanedServerRequestIds: ['server-a'],
+})
+assert.deepEqual(
+  mergeRuntimeMessageQueueThreadState([serverA, queuedB, serverC], [serverC, serverA]),
+  [serverA, queuedB, serverC],
+)
+assert.deepEqual(
+  mergeRuntimeMessageQueueThreadState([serverA, queuedB, serverC], [serverC, serverA], false),
+  [serverC, serverA, queuedB],
+)
+assert.deepEqual(mergeRuntimeMessageQueueThreadState([serverA], []), [])
+
+const resumePdfCitation = ':codex-file-citation{path="E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf" purpose="产品与项目经理通用投递简历"}'
+assert.deepEqual(readCodexFileCitationAt(resumePdfCitation, 0), {
+  raw: resumePdfCitation,
+  start: 0,
+  end: resumePdfCitation.length,
+  path: 'E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf',
+  purpose: '产品与项目经理通用投递简历',
+  attributes: {
+    path: 'E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf',
+    purpose: '产品与项目经理通用投递简历',
+  },
+})
+assert.deepEqual(
+  splitCodexFileCitations('PDF：' + resumePdfCitation + '。'),
+  [
+    { kind: 'text', value: 'PDF：' },
+    {
+      kind: 'citation',
+      citation: {
+        raw: resumePdfCitation,
+        start: 4,
+        end: 4 + resumePdfCitation.length,
+        path: 'E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf',
+        purpose: '产品与项目经理通用投递简历',
+        attributes: {
+          path: 'E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf',
+          purpose: '产品与项目经理通用投递简历',
+        },
+      },
+    },
+    { kind: 'text', value: '。' },
+  ],
+)
+const windowsSeparator = String.fromCharCode(92)
+const spacedDocxPath = ['E:', '投递材料', '产品 经理', '邵卫 简历.docx'].join(windowsSeparator)
+const spacedDocxCitation = ':codex-file-citation{purpose="带 ' + windowsSeparator + '"引号' + windowsSeparator + '" 的定制简历" path="' + spacedDocxPath + '" artifact_kind="document" page_number="2"}'
+assert.equal(readCodexFileCitationAt(spacedDocxCitation, 0)?.path, spacedDocxPath)
+assert.equal(readCodexFileCitationAt(spacedDocxCitation, 0)?.purpose, '带 "引号" 的定制简历')
+assert.equal(readCodexFileCitationAt(spacedDocxCitation, 0)?.attributes.page_number, '2')
+const unquotedXlsxCitation = ':codex-file-citation{path=E:/reports/项目清单.xlsx artifact_kind=workbook range=Sheet1!A1:D20}'
+assert.equal(readCodexFileCitationAt(unquotedXlsxCitation, 0)?.path, 'E:/reports/项目清单.xlsx')
+assert.equal(readCodexFileCitationAt(unquotedXlsxCitation, 0)?.attributes.range, 'Sheet1!A1:D20')
+assert.equal(splitCodexFileCitations(resumePdfCitation + unquotedXlsxCitation).filter((part) => part.kind === 'citation').length, 2)
+assert.equal(readCodexFileCitationAt(':codex-file-citation{purpose="缺少路径"}', 0)?.path, '')
+assert.deepEqual(splitCodexFileCitations('保留 :codex-file-citation{path="E:/unfinished.pdf"'), [
+  { kind: 'text', value: '保留 :codex-file-citation{path="E:/unfinished.pdf"' },
+])
 
 assert.equal(CONVERSATION_BOTTOM_THRESHOLD_PX, 24)
 assert.equal(CX_SESSION_FILES_CHANGED_METHOD, 'cx/session-files/changed')
@@ -113,24 +202,79 @@ assert.equal(isCxSessionFilesChangedMethod('turn/completed'), false)
 assert.equal(readCxSessionFileChangeSource({ source: 'session-log' }), 'session-log')
 assert.equal(readCxSessionFileChangeSource({ source: 'session-index' }), 'session-index')
 assert.equal(readCxSessionFileChangeSource({ source: 'unknown' }), '')
+assert.equal(readCxSessionFileChangeOrigin({ origin: 'live-app-server' }), 'live-app-server')
+assert.equal(readCxSessionFileChangeOrigin({ origin: 'external' }), 'external')
+assert.equal(readCxSessionFileChangeOrigin({ origin: 'unknown' }), '')
 assert.deepEqual(
   getCxSessionFileChangeSyncPolicy(CX_SESSION_FILES_CHANGED_METHOD, { source: 'session-log' }),
-  { refreshMessages: true, refreshThreads: false },
+  { refreshMessages: true, refreshThreads: false, preferSessionLogMessages: true },
+)
+assert.deepEqual(
+  getCxSessionFileChangeSyncPolicy(CX_SESSION_FILES_CHANGED_METHOD, {
+    source: 'session-log',
+    origin: 'live-app-server',
+  }),
+  { refreshMessages: true, refreshThreads: false, preferSessionLogMessages: true },
 )
 assert.deepEqual(
   getCxSessionFileChangeSyncPolicy(CX_SESSION_FILES_CHANGED_METHOD, { source: 'session-index' }),
-  { refreshMessages: false, refreshThreads: true },
+  { refreshMessages: false, refreshThreads: true, preferSessionLogMessages: false },
 )
 assert.deepEqual(
   getCxSessionFileChangeSyncPolicy(CX_SESSION_FILES_CHANGED_METHOD, {}),
-  { refreshMessages: true, refreshThreads: true },
+  { refreshMessages: true, refreshThreads: true, preferSessionLogMessages: false },
 )
 assert.equal(getCxSessionFileChangeSyncPolicy('turn/completed', { source: 'session-log' }), null)
+assert.equal(isOptimisticOnlyExecutionEvidence({
+  executionActive: true,
+  sourceInProgress: false,
+  runtimeFreshActive: true,
+  hasRunningCommand: false,
+  hasPendingServerRequest: false,
+  hasFreshExecutionSignal: false,
+  pendingTurnAgeMs: null,
+  recoveryGraceMs: 2_500,
+  hasActiveTurnId: true,
+  queueProcessing: false,
+}), false)
+assert.equal(isOptimisticOnlyExecutionEvidence({
+  executionActive: true,
+  sourceInProgress: false,
+  runtimeFreshActive: false,
+  hasRunningCommand: false,
+  hasPendingServerRequest: false,
+  hasFreshExecutionSignal: false,
+  pendingTurnAgeMs: null,
+  recoveryGraceMs: 2_500,
+  hasActiveTurnId: true,
+  queueProcessing: false,
+}), true)
 assert.equal(resolveSendWithEnterPreference(null, false), true)
 assert.equal(resolveSendWithEnterPreference(null, true), false)
 assert.equal(resolveSendWithEnterPreference('1', true), true)
 assert.equal(resolveSendWithEnterPreference('0', false), false)
 assert.equal(resolveSendWithEnterPreference('invalid', true), false)
+assert.deepEqual(normalizeThreadGoal({
+  threadId: 'thread-goal',
+  objective: 'Keep improving',
+  status: 'active',
+  tokenBudget: 1000,
+  tokensUsed: 120,
+  timeUsedSeconds: 30,
+  createdAt: 1,
+  updatedAt: 2,
+}), {
+  threadId: 'thread-goal',
+  objective: 'Keep improving',
+  status: 'active',
+  tokenBudget: 1000,
+  tokensUsed: 120,
+  timeUsedSeconds: 30,
+  createdAt: 1,
+  updatedAt: 2,
+})
+assert.equal(normalizeThreadGoal({ threadId: 'thread-goal', objective: 'x', status: 'unknown' }), null)
+assert.equal(normalizeThreadGoal({ threadId: '', objective: 'x', status: 'active' }), null)
 assert.equal(conversationDistanceFromBottom({ scrollHeight: 1000, scrollTop: 676, clientHeight: 300 }), 24)
 assert.equal(isConversationViewportAtBottom({ scrollHeight: 1000, scrollTop: 676, clientHeight: 300 }), true)
 assert.equal(isConversationViewportAtBottom({ scrollHeight: 1000, scrollTop: 675, clientHeight: 300 }), false)
@@ -501,6 +645,8 @@ const rememberedIdentityMeta = new Map([[optimisticIdentityMessage.id, {
   kind: 'optimisticUserMessage',
   signature: identitySignature,
   baselineMatchCount: 1,
+  baselineMessageCount: 2,
+  baselineTailMessageId: 'baseline-assistant',
   createdAtMs: 1,
 }]])
 assert.deepEqual(
@@ -519,6 +665,73 @@ assert.deepEqual(
   ),
   [],
 )
+assert.deepEqual(
+  mergeVisibleOptimisticUserMessages(
+    [
+      persistedIdentityMessage,
+      { id: 'baseline-assistant', role: 'assistant', text: 'Previous answer' },
+      { id: 'new-assistant', role: 'assistant', text: 'Reply arrived before history acknowledgement' },
+    ],
+    [optimisticIdentityMessage],
+    rememberedIdentityMeta,
+  ).map((message) => message.id),
+  ['persisted-identity-1', 'baseline-assistant', 'optimistic-user:identity-1', 'new-assistant'],
+)
+const optimisticAfterFirst = { id: 'optimistic-user:after-first', role: 'user', text: 'First queued prompt' }
+const optimisticAfterLast = { id: 'optimistic-user:after-last', role: 'user', text: 'Second queued prompt' }
+assert.deepEqual(
+  mergeVisibleOptimisticUserMessages(
+    [
+      { id: 'persisted-a', role: 'assistant', text: 'A' },
+      { id: 'persisted-b', role: 'assistant', text: 'B' },
+      { id: 'persisted-c', role: 'assistant', text: 'C' },
+    ],
+    [optimisticAfterFirst, optimisticAfterLast],
+    new Map([
+      [optimisticAfterFirst.id, {
+        kind: 'optimisticUserMessage',
+        signature: userMessageSignature(optimisticAfterFirst),
+        baselineMatchCount: 0,
+        baselineMessageCount: 1,
+        baselineTailMessageId: 'persisted-a',
+        createdAtMs: 2,
+      }],
+      [optimisticAfterLast.id, {
+        kind: 'optimisticUserMessage',
+        signature: userMessageSignature(optimisticAfterLast),
+        baselineMatchCount: 0,
+        baselineMessageCount: 3,
+        baselineTailMessageId: 'persisted-c',
+        createdAtMs: 3,
+      }],
+    ]),
+  ).map((message) => message.id),
+  ['persisted-a', 'optimistic-user:after-first', 'persisted-b', 'persisted-c', 'optimistic-user:after-last'],
+)
+
+const generatedImageMessages = normalizeThreadMessagesV2({
+  thread: {
+    id: 'thread-generated-image',
+    cwd: 'E:\\repo',
+    preview: '',
+    updatedAt: 1,
+    createdAt: 1,
+    turns: [{
+      id: 'turn-generated-image',
+      status: 'completed',
+      items: [{
+        id: 'generated-image-1',
+        type: 'imageGeneration',
+        status: 'completed',
+        savedPath: 'C:\\work\\generated.png',
+        result: 'a'.repeat(512),
+      }],
+    }],
+  },
+})
+assert.equal(generatedImageMessages.length, 1)
+assert.equal(generatedImageMessages[0]?.messageType, 'imageGeneration')
+assert.deepEqual(generatedImageMessages[0]?.images, ['C:\\work\\generated.png'])
 
 const historyNoticeMessage = {
   id: 'history-notice',
@@ -562,6 +775,37 @@ assert.equal(areMessageFieldsEqual(projectedCommand, {
   ...projectedCommand,
   commandExecution: { ...projectedCommand.commandExecution, command: 'npm run test' },
 }), false)
+const projectedPlan = {
+  id: 'plan:turn-projection',
+  role: 'system',
+  text: '',
+  messageType: 'plan',
+  plan: {
+    turnId: 'turn-projection',
+    explanation: 'Plan safely',
+    steps: [{ step: 'Inspect', status: 'pending' }],
+    rawText: '',
+    isStreaming: false,
+  },
+}
+assert.equal(areMessageFieldsEqual(projectedPlan, { ...projectedPlan, plan: { ...projectedPlan.plan } }), true)
+assert.equal(areMessageFieldsEqual(projectedPlan, {
+  ...projectedPlan,
+  plan: { ...projectedPlan.plan, steps: [{ step: 'Inspect', status: 'completed' }] },
+}), false)
+assert.equal(hasPlanImplementationConfirmation([
+  projectedPlan,
+  { id: 'plan-confirmation', role: 'user', text: PLAN_IMPLEMENTATION_CONFIRMATION },
+], projectedPlan.id), true)
+assert.equal(hasPlanImplementationConfirmation([
+  projectedPlan,
+  { id: 'ordinary-follow-up', role: 'user', text: '继续检查，但先不要执行' },
+], projectedPlan.id), false)
+assert.equal(hasPlanImplementationConfirmation([
+  projectedPlan,
+  { ...projectedPlan, id: 'plan:newer-turn' },
+  { id: 'late-confirmation', role: 'user', text: PLAN_IMPLEMENTATION_CONFIRMATION },
+], projectedPlan.id), false)
 assert.equal(areMessageFieldsEqual(projectedCommand, {
   ...projectedCommand,
   commandExecution: { ...projectedCommand.commandExecution, cwd: 'E:/other' },
@@ -717,6 +961,7 @@ const messages = normalizeThreadMessagesV2({
         status: 'completed',
         items: [
           { id: 'item-known', type: 'agentMessage', text: 'Known message' },
+          { id: 'item-plan', type: 'plan', text: '1. Inspect\\n2. Implement' },
           {
             id: 'item-mcp',
             type: 'mcpToolCall',
@@ -756,16 +1001,21 @@ const messages = normalizeThreadMessagesV2({
   },
 })
 
-assert.equal(messages.length, 3)
+assert.equal(messages.length, 4)
 assert.equal(messages[0]?.messageType, 'agentMessage')
 assert.equal(messages[1]?.role, 'system')
-assert.equal(messages[1]?.messageType, 'unhandled.threadShellCommandOutput')
-assert.equal(messages[1]?.text, 'Unhandled App Server item: threadShellCommandOutput')
-assert.equal(messages[1]?.isUnhandled, true)
-assert.equal(messages[1]?.turnIndex, 0)
-assert.equal(messages[1]?.rawPayload?.includes('secret command'), true)
-assert.equal(messages[2]?.messageType, 'unhandled.invalidItem')
+assert.equal(messages[1]?.id, 'plan:turn-a')
+assert.equal(messages[1]?.messageType, 'plan')
+assert.equal(messages[1]?.plan?.turnId, 'turn-a')
+assert.equal(messages[1]?.plan?.rawText, '1. Inspect\\n2. Implement')
+assert.equal(messages[1]?.plan?.isStreaming, false)
+assert.equal(messages[2]?.messageType, 'unhandled.threadShellCommandOutput')
+assert.equal(messages[2]?.text, 'Unhandled App Server item: threadShellCommandOutput')
 assert.equal(messages[2]?.isUnhandled, true)
+assert.equal(messages[2]?.turnIndex, 0)
+assert.equal(messages[2]?.rawPayload?.includes('secret command'), true)
+assert.equal(messages[3]?.messageType, 'unhandled.invalidItem')
+assert.equal(messages[3]?.isUnhandled, true)
 assert.equal(messages.some((message) => message.messageType === 'unhandled.fileChange'), false)
 assert.equal(messages.some((message) => message.messageType === 'unhandled.webSearch'), false)
 assert.equal(messages.some((message) => message.rawPayload?.includes('large internal patch details')), false)

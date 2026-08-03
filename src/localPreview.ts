@@ -1,8 +1,8 @@
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import { renderAsync } from 'docx-preview'
-import * as pdfjsLib from 'pdfjs-dist'
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url'
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
+import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url'
 
 declare global {
   interface Window {

@@ -5,6 +5,8 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export type RuntimeRequestStatus =
+  | 'queued'
+  | 'queue_failed'
   | 'pending_start'
   | 'starting'
   | 'running'
@@ -681,6 +683,65 @@ export class RuntimeStore {
       LIMIT ?
     `).all(threadId, ...statuses, Math.max(1, Math.min(100, Math.trunc(limit)))) as RuntimeRequestRow[]
     return rows.map(fromRequestRow)
+  }
+
+  listQueuedRequests(threadId = '', limit = 100): RuntimeRequestRecord[] {
+    const normalizedThreadId = threadId.trim()
+    const boundedLimit = Math.max(1, Math.min(500, Math.trunc(limit)))
+    const rows = normalizedThreadId
+      ? this.db.prepare(`
+          SELECT * FROM runtime_requests
+          WHERE thread_id = ? AND status IN ('queued', 'queue_failed')
+          ORDER BY created_at_iso ASC, request_id ASC
+          LIMIT ?
+        `).all(normalizedThreadId, boundedLimit) as RuntimeRequestRow[]
+      : this.db.prepare(`
+          SELECT * FROM runtime_requests
+          WHERE status IN ('queued', 'queue_failed')
+          ORDER BY created_at_iso ASC, request_id ASC
+          LIMIT ?
+        `).all(boundedLimit) as RuntimeRequestRow[]
+    return rows.map(fromRequestRow)
+  }
+
+  reorderQueuedRequests(threadId: string, requestIds: string[]): boolean {
+    const normalizedThreadId = threadId.trim()
+    const normalizedRequestIds = requestIds.map((requestId) => requestId.trim()).filter(Boolean)
+    if (!normalizedThreadId || normalizedRequestIds.length === 0) return false
+    if (new Set(normalizedRequestIds).size !== normalizedRequestIds.length) return false
+
+    return this.db.transaction(() => {
+      const queued = this.listQueuedRequests(normalizedThreadId, 500)
+      const queuedIds = new Set(queued.map((request) => request.requestId))
+      if (
+        queued.length !== normalizedRequestIds.length
+        || normalizedRequestIds.some((requestId) => !queuedIds.has(requestId))
+      ) return false
+
+      const earliestCreatedAtMs = Math.min(...queued.map((request) => Date.parse(request.createdAtIso)))
+      const baseCreatedAtMs = Number.isFinite(earliestCreatedAtMs) ? earliestCreatedAtMs : Date.now()
+      const update = this.db.prepare(`
+        UPDATE runtime_requests
+        SET created_at_iso = ?
+        WHERE request_id = ? AND thread_id = ? AND status IN ('queued', 'queue_failed')
+      `)
+      normalizedRequestIds.forEach((requestId, index) => {
+        update.run(new Date(baseCreatedAtMs + index).toISOString(), requestId, normalizedThreadId)
+      })
+      return true
+    }).immediate()
+  }
+
+  listQueuedThreadIds(limit = 500): string[] {
+    const rows = this.db.prepare(`
+      SELECT thread_id, MIN(created_at_iso) AS first_created_at_iso
+      FROM runtime_requests
+      WHERE status IN ('queued', 'queue_failed') AND thread_id <> ''
+      GROUP BY thread_id
+      ORDER BY first_created_at_iso ASC
+      LIMIT ?
+    `).all(Math.max(1, Math.min(1000, Math.trunc(limit)))) as Array<{ thread_id: string }>
+    return rows.map((row) => row.thread_id)
   }
 
   listUncertainRequests(limit = 50): RuntimeRequestRecord[] {

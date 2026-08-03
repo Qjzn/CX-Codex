@@ -31,8 +31,13 @@ import { MobilePushCoordinator } from './mobilePush.js'
 import {
   CodexSessionFileChangeObserver,
   createCodexSessionFileChangedNotification,
+  resolveCodexSessionFileChangeOrigin,
 } from './codexSessionFileChangeObserver.js'
-import { shouldInvalidateThreadCollectionForCxSessionFileChange } from '../sessionFileChange.js'
+import {
+  CX_SESSION_FILES_CHANGED_METHOD,
+  shouldInvalidateThreadCollectionForCxSessionFileChange,
+} from '../sessionFileChange.js'
+import { RuntimeMessageQueue } from './runtimeMessageQueue.js'
 
 type CodexBridgeMiddleware = ((req: IncomingMessage, res: ServerResponse, next: () => void) => Promise<void>) & {
   dispose: () => void
@@ -80,6 +85,8 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     runtimeStateStore.getActiveThreadCount(),
   ))
   const mobilePushCoordinator = new MobilePushCoordinator({ store: runtimeStore })
+  let runtimeMessageQueue: RuntimeMessageQueue | null = null
+  const recentLiveRuntimeEventAtMsByThreadId = new Map<string, number>()
   const {
     persistRuntimeSnapshot,
     readThreadRuntimeSnapshot,
@@ -120,6 +127,14 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     statusDiagnostics,
     persistRuntimeSnapshot,
     onRuntimeEvent: (event) => {
+      if (event.method !== CX_SESSION_FILES_CHANGED_METHOD && event.threadId) {
+        recentLiveRuntimeEventAtMsByThreadId.set(event.threadId, Date.now())
+        if (recentLiveRuntimeEventAtMsByThreadId.size > 512) {
+          const oldestThreadId = recentLiveRuntimeEventAtMsByThreadId.keys().next().value
+          if (typeof oldestThreadId === 'string') recentLiveRuntimeEventAtMsByThreadId.delete(oldestThreadId)
+        }
+      }
+      runtimeMessageQueue?.handleRuntimeEvent(event.method, event.threadId)
       void mobilePushCoordinator.handleRuntimeEvent(event).catch((error) => {
         writeBridgeLog('warn', 'Mobile push terminal wake failed', {
           method: event.method,
@@ -130,6 +145,14 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
       })
     },
   })
+  runtimeMessageQueue = new RuntimeMessageQueue({
+    store: runtimeStore,
+    startRuntimeTurn,
+    rpc: (method, params) => appServer.rpc(method, params),
+    publishNotification: (notification) => { publishBridgeNotification(notification) },
+    getErrorMessage,
+  })
+  runtimeMessageQueue.start()
   const sessionFileChangeObserver = new CodexSessionFileChangeObserver({
     onChange: (change) => {
       if (shouldInvalidateThreadCollectionForCxSessionFileChange(change)) {
@@ -137,7 +160,13 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
         threadSearchIndexStore.clear()
       }
       invalidateSupplementalThreadListCache(change.threadId)
-      publishBridgeNotification(createCodexSessionFileChangedNotification(change))
+      publishBridgeNotification(createCodexSessionFileChangedNotification({
+        ...change,
+        origin: resolveCodexSessionFileChangeOrigin(
+          change,
+          recentLiveRuntimeEventAtMsByThreadId.get(change.threadId) ?? 0,
+        ),
+      }))
     },
     onError: (error) => {
       writeBridgeLog('warn', 'Codex session file change observer failed', {
@@ -193,6 +222,11 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
         persistRuntimeSnapshot,
         startRuntimeTurn,
         interruptRuntimeTurn,
+        enqueueRuntimeTurn: (payload) => runtimeMessageQueue!.enqueue(payload),
+        listRuntimeQueue: (threadId = '') => runtimeMessageQueue!.list(threadId),
+        cancelQueuedRuntimeTurn: (requestId) => runtimeMessageQueue!.cancel(requestId),
+        retryQueuedRuntimeTurn: (requestId) => runtimeMessageQueue!.retry(requestId),
+        reorderQueuedRuntimeTurns: (threadId, requestIds) => runtimeMessageQueue!.reorder(threadId, requestIds),
         augmentThreadListRpcResult,
         reconcileRuntimeThread,
         readLocalRuntimeSnapshot,
@@ -220,6 +254,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
   middleware.dispose = () => {
     disposeCodexBridgeMiddlewareResources({
       runtimeReconcileScheduler,
+      runtimeMessageQueue,
       threadSearchIndexStore,
       bridgeNotificationListeners,
       unsubscribeAppServerNotifications,

@@ -1,7 +1,7 @@
 <template>
   <div
     class="task-pet-preview"
-    :class="{ 'is-expanded': expanded, 'is-minimized': minimized }"
+    :class="{ 'is-expanded': expanded, 'is-minimized': minimized, 'is-docked': !expanded && !peekVisible }"
     aria-label="任务宠物预览"
   >
     <Transition name="task-pet-panel">
@@ -15,7 +15,7 @@
             <button class="task-pet-preview-brand-action" type="button" aria-label="进入平台" @click.stop="$emit('enter')">
               <img src="/branding/cx-codex-logo.png" alt="" aria-hidden="true">
             </button>
-            <button class="task-pet-preview-close-action" type="button" aria-label="关闭浮窗" @click.stop="closeConfirmationVisible = true">×</button>
+            <button class="task-pet-preview-close-action" type="button" aria-label="关闭浮窗" @click.stop="showCloseConfirmation">×</button>
           </span>
         </div>
         <template v-if="!closeConfirmationVisible">
@@ -24,7 +24,7 @@
             :key="item.threadId"
             class="task-pet-preview-row"
             type="button"
-            @click="$emit('open', item.threadId)"
+            @click="openTask(item)"
           >
             <span class="task-pet-preview-dot" :data-state="item.state" />
             <span class="task-pet-preview-copy">
@@ -41,50 +41,12 @@
             <span class="task-pet-preview-arrow" aria-hidden="true">›</span>
           </button>
           <p v-if="visibleItems.length === 0" class="task-pet-preview-empty">没有正在运行的任务</p>
-          <section v-if="visibleRecentThreads.length > 0" class="task-pet-preview-recents" aria-label="最近会话">
-            <strong>最近会话</strong>
-            <button
-              v-for="thread in visibleRecentThreads"
-              :key="thread.threadId"
-              type="button"
-              :aria-label="`${thread.title}，点击打开，长按直接回复`"
-              @pointerdown="beginRecentPress(thread, $event)"
-              @pointerup="cancelRecentPress"
-              @pointercancel="cancelRecentPress"
-              @pointerleave="cancelRecentPress"
-              @contextmenu.prevent="openRecentReply(thread)"
-              @click="openRecentThread(thread)"
-            >
-              <span>{{ thread.title }}</span>
-              <small>{{ thread.projectName ? `${thread.projectName} · 长按回复` : '长按回复' }}</small>
-              <span aria-hidden="true">›</span>
-            </button>
-          </section>
-          <form
-            v-if="recentReplyThread"
-            class="task-pet-preview-reply"
-            aria-label="快捷回复最近会话"
-            @submit.prevent="submitRecentReply"
-          >
-            <strong>回复 · {{ recentReplyThread.title }}</strong>
-            <textarea
-              ref="recentReplyInput"
-              v-model="recentReplyDraft"
-              rows="2"
-              maxlength="2000"
-              placeholder="输入回复内容…"
-            />
-            <div>
-              <button type="button" @click="closeRecentReply">取消</button>
-              <button type="submit" :disabled="!recentReplyDraft.trim()">发送</button>
-            </div>
-          </form>
         </template>
         <section v-else class="task-pet-preview-close-confirm" role="alertdialog" aria-label="确认关闭浮窗">
           <strong>关闭任务宠物浮窗？</strong>
           <p>关闭后不再显示，但可随时在设置中重新开启。</p>
           <div>
-            <button type="button" @click="closeConfirmationVisible = false">取消</button>
+            <button type="button" @click="cancelCloseConfirmation">取消</button>
             <button type="button" data-tone="danger" @click="confirmClose">确认关闭</button>
           </div>
         </section>
@@ -93,11 +55,11 @@
 
     <Transition name="task-pet-compact">
       <button
-        v-if="!expanded && !minimized && primaryItem"
+        v-if="!expanded && !minimized && peekVisible && primaryItem"
         class="task-pet-preview-compact"
         type="button"
         :aria-label="`${taskReply(primaryItem)}，点击打开会话 ${primaryItem.title}`"
-        @click="$emit('open', primaryItem.threadId)"
+        @click="openTask(primaryItem)"
       >
         <small>
           {{ primaryItem.title }}<template v-if="primaryItem.projectName"> · {{ primaryItem.projectName }}</template>
@@ -117,8 +79,8 @@
         @click="restore"
       >
         <img :key="`mini-${mascotState}`" :src="mascotStaticAsset" alt="" aria-hidden="true">
-        <span v-if="items.length > 0" class="task-pet-preview-mini-badge" :data-waiting="hasWaitingTask">
-          {{ items.length > 9 ? '9+' : items.length }}
+        <span v-if="attentionCount > 0" class="task-pet-preview-mini-badge" :data-waiting="hasWaitingTask">
+          {{ attentionCount > 9 ? '9+' : attentionCount }}
         </span>
       </button>
       <button
@@ -135,9 +97,8 @@
           <source media="(prefers-reduced-motion: reduce)" :srcset="mascotStaticAsset">
           <img class="task-pet-preview-character" :src="mascotAnimatedAsset" alt="" aria-hidden="true">
         </picture>
-        <span class="task-pet-preview-state">{{ hasWaitingTask ? '待处理' : visibleItems.length > 0 ? '工作中' : '待命' }}</span>
-        <span v-if="items.length > 0" class="task-pet-preview-badge" :data-waiting="hasWaitingTask">
-          {{ items.length > 99 ? '99+' : items.length }}
+        <span v-if="attentionCount > 0" class="task-pet-preview-badge" :data-waiting="hasWaitingTask">
+          {{ attentionCount > 99 ? '99+' : attentionCount }}
         </span>
       </button>
     </Transition>
@@ -145,7 +106,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { UiTaskPetItem, UiTaskPetRecentThread } from '../../types/codex'
 
 const props = withDefaults(defineProps<{
@@ -154,7 +115,7 @@ const props = withDefaults(defineProps<{
   initiallyExpanded?: boolean
 }>(), {
   recentThreads: () => [],
-  initiallyExpanded: true,
+  initiallyExpanded: false,
 })
 
 const emit = defineEmits<{
@@ -166,15 +127,19 @@ const emit = defineEmits<{
 
 const expanded = ref(props.initiallyExpanded && props.items.length > 0)
 const minimized = ref(props.items.length === 0)
+const peekVisible = ref(false)
+const unreadReplyTaskKeys = ref<ReadonlySet<string>>(new Set())
+const seenReplyEventSeqByTaskKey = new Map(
+  props.items.map((item) => [taskKey(item), Math.max(0, item.latestReplyEventSeq ?? 0)]),
+)
 const closeConfirmationVisible = ref(false)
-const recentReplyThread = ref<UiTaskPetRecentThread | null>(null)
-const recentReplyDraft = ref('')
-const recentReplyInput = ref<HTMLTextAreaElement | null>(null)
-const suppressRecentOpenThreadId = ref('')
 const nowMs = ref(Date.now())
-let recentPressTimer: ReturnType<typeof setTimeout> | null = null
 let freshnessTimer: ReturnType<typeof setInterval> | null = null
+let peekTimer: ReturnType<typeof setTimeout> | null = null
+let stackTimer: ReturnType<typeof setTimeout> | null = null
 const NO_PROGRESS_THRESHOLD_MS = 10 * 60_000
+const REPLY_PEEK_TIMEOUT_MS = 5_000
+const TASK_STACK_TIMEOUT_MS = 8_000
 
 function stopFreshnessTimer(): void {
   if (freshnessTimer === null) return
@@ -199,18 +164,22 @@ function onFreshnessVisibilityChange(): void {
 }
 
 onBeforeUnmount(() => {
-  cancelRecentPress()
+  stopPeekTimer()
+  stopStackTimer()
   stopFreshnessTimer()
   document.removeEventListener('visibilitychange', onFreshnessVisibilityChange)
 })
 onMounted(() => {
   startFreshnessTimer()
   document.addEventListener('visibilitychange', onFreshnessVisibilityChange)
+  if (expanded.value) scheduleStackCollapse()
 })
 const visibleItems = computed(() => props.items.slice(0, 3))
 const primaryItem = computed(() => visibleItems.value[0] ?? null)
-const visibleRecentThreads = computed(() => props.recentThreads.slice(0, 2))
 const hasWaitingTask = computed(() => props.items.some((item) => item.state === 'waiting'))
+const attentionCount = computed(() => props.items.filter((item) => (
+  item.state === 'waiting' || unreadReplyTaskKeys.value.has(taskKey(item))
+)).length)
 const mascotState = computed(() => hasWaitingTask.value ? 'waiting' : visibleItems.value.length > 0 ? 'working' : 'idle')
 const mascotAnimatedAsset = computed(() => `/assets/task-pet/cx-pet-${mascotState.value}-animated.webp`)
 const mascotStaticAsset = computed(() => `/assets/task-pet/cx-pet-${mascotState.value}.png`)
@@ -220,21 +189,119 @@ watch(() => props.items.length, (count) => {
     minimized.value = false
     return
   }
+  peekVisible.value = false
+  stopPeekTimer()
   if (!expanded.value && !closeConfirmationVisible.value) minimized.value = true
 })
 
+watch(
+  () => props.items.map((item) => `${taskKey(item)}:${Math.max(0, item.latestReplyEventSeq ?? 0)}`).join('|'),
+  () => {
+    const currentTaskKeys = new Set(props.items.map(taskKey))
+    const nextUnreadTaskKeys = new Set(
+      [...unreadReplyTaskKeys.value].filter((key) => currentTaskKeys.has(key)),
+    )
+    const primaryTaskKey = primaryItem.value ? taskKey(primaryItem.value) : ''
+    let primaryReplyChanged = false
+
+    for (const item of props.items) {
+      const key = taskKey(item)
+      const eventSeq = Math.max(0, item.latestReplyEventSeq ?? 0)
+      const previousEventSeq = seenReplyEventSeqByTaskKey.get(key) ?? 0
+      if (eventSeq > previousEventSeq) {
+        nextUnreadTaskKeys.add(key)
+        if (key === primaryTaskKey) primaryReplyChanged = true
+      }
+      seenReplyEventSeqByTaskKey.set(key, Math.max(previousEventSeq, eventSeq))
+    }
+
+    unreadReplyTaskKeys.value = nextUnreadTaskKeys
+    if (primaryReplyChanged && !expanded.value) {
+      minimized.value = false
+      showReplyPeek()
+    }
+  },
+)
+
+function taskKey(item: UiTaskPetItem): string {
+  return `${item.threadId}\u0000${item.activityId || item.startedAtMs || ''}`
+}
+
+function openTask(item: UiTaskPetItem): void {
+  const key = taskKey(item)
+  if (unreadReplyTaskKeys.value.has(key)) {
+    const nextUnreadTaskKeys = new Set(unreadReplyTaskKeys.value)
+    nextUnreadTaskKeys.delete(key)
+    unreadReplyTaskKeys.value = nextUnreadTaskKeys
+  }
+  emit('open', item.threadId)
+}
+
 function restore() {
   minimized.value = false
-  if (props.items.length === 0) expanded.value = true
+  expanded.value = true
+  peekVisible.value = false
+  scheduleStackCollapse()
 }
 
 function toggleExpanded() {
   expanded.value = !expanded.value
-  if (!expanded.value && props.items.length === 0) {
-    void nextTick(() => {
-      minimized.value = true
-    })
+  if (expanded.value) {
+    peekVisible.value = false
+    stopPeekTimer()
+    scheduleStackCollapse()
+    return
   }
+  stopStackTimer()
+  peekVisible.value = false
+  stopPeekTimer()
+  if (!expanded.value && props.items.length === 0) {
+    minimized.value = true
+  }
+}
+
+function stopPeekTimer() {
+  if (!peekTimer) return
+  clearTimeout(peekTimer)
+  peekTimer = null
+}
+
+function stopStackTimer() {
+  if (!stackTimer) return
+  clearTimeout(stackTimer)
+  stackTimer = null
+}
+
+function showReplyPeek() {
+  stopPeekTimer()
+  if (!primaryItem.value || minimized.value || expanded.value) return
+  peekVisible.value = true
+  peekTimer = setTimeout(() => {
+    peekTimer = null
+    peekVisible.value = false
+  }, REPLY_PEEK_TIMEOUT_MS)
+}
+
+function scheduleStackCollapse() {
+  stopStackTimer()
+  if (!expanded.value) return
+  stackTimer = setTimeout(() => {
+    stackTimer = null
+    if (closeConfirmationVisible.value) return
+    expanded.value = false
+    peekVisible.value = false
+    if (props.items.length === 0 && !closeConfirmationVisible.value) minimized.value = true
+  }, TASK_STACK_TIMEOUT_MS)
+}
+
+function showCloseConfirmation() {
+  stopStackTimer()
+  closeConfirmationVisible.value = true
+}
+
+function cancelCloseConfirmation() {
+  closeConfirmationVisible.value = false
+  if (expanded.value) scheduleStackCollapse()
 }
 
 function taskReply(item: UiTaskPetItem): string {
@@ -263,54 +330,11 @@ function taskFreshness(item: UiTaskPetItem): string {
 }
 
 function confirmClose() {
+  stopPeekTimer()
+  stopStackTimer()
   closeConfirmationVisible.value = false
   expanded.value = false
   emit('close')
-}
-
-function beginRecentPress(thread: UiTaskPetRecentThread, event: PointerEvent) {
-  if (event.pointerType === 'mouse' && event.button !== 0) return
-  cancelRecentPress()
-  recentPressTimer = setTimeout(() => {
-    recentPressTimer = null
-    suppressRecentOpenThreadId.value = thread.threadId
-    openRecentReply(thread)
-  }, 520)
-}
-
-function cancelRecentPress() {
-  if (!recentPressTimer) return
-  clearTimeout(recentPressTimer)
-  recentPressTimer = null
-}
-
-function openRecentThread(thread: UiTaskPetRecentThread) {
-  cancelRecentPress()
-  if (suppressRecentOpenThreadId.value === thread.threadId) {
-    suppressRecentOpenThreadId.value = ''
-    return
-  }
-  emit('open', thread.threadId)
-}
-
-function openRecentReply(thread: UiTaskPetRecentThread) {
-  cancelRecentPress()
-  recentReplyThread.value = thread
-  recentReplyDraft.value = ''
-  void nextTick(() => recentReplyInput.value?.focus())
-}
-
-function closeRecentReply() {
-  recentReplyThread.value = null
-  recentReplyDraft.value = ''
-}
-
-function submitRecentReply() {
-  const threadId = recentReplyThread.value?.threadId.trim() ?? ''
-  const message = recentReplyDraft.value.trim()
-  if (!threadId || !message) return
-  emit('reply', threadId, message)
-  closeRecentReply()
 }
 </script>
 
@@ -320,7 +344,7 @@ function submitRecentReply() {
   min-height: 100px;
   align-items: flex-end;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
   padding: 10px;
   overflow: hidden;
   background: color-mix(in srgb, var(--color-bg-secondary, #f4f5f7) 88%, transparent);
@@ -328,7 +352,7 @@ function submitRecentReply() {
 }
 
 .task-pet-preview-panel {
-  width: min(258px, calc(100% - 84px));
+  width: min(248px, calc(100% - 64px));
   padding: 10px;
   background: var(--color-bg-primary, #fff);
   border-radius: 14px;
@@ -338,13 +362,13 @@ function submitRecentReply() {
 
 .task-pet-preview-compact {
   display: flex;
-  width: min(258px, calc(100% - 84px));
+  width: min(224px, calc(100% - 64px));
   min-width: 0;
-  min-height: 82px;
+  min-height: 60px;
   flex-direction: column;
   justify-content: center;
   gap: 2px;
-  padding: 10px 12px;
+  padding: 7px 11px;
   border: 0;
   border-radius: 14px;
   background: var(--color-bg-primary, #fff);
@@ -383,7 +407,7 @@ function submitRecentReply() {
   font-weight: 650;
   line-height: 1.42;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 
 .task-pet-preview-compact > span {
@@ -498,8 +522,8 @@ function submitRecentReply() {
   align-items: center;
   gap: 8px;
   margin-top: 6px;
-  min-height: 88px;
-  padding: 8px;
+  min-height: 64px;
+  padding: 6px 8px;
   border: 0;
   border-radius: 10px;
   background: var(--color-bg-secondary, #f2f5f9);
@@ -555,7 +579,7 @@ function submitRecentReply() {
   font-weight: 600;
   line-height: 1.42;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 
 .task-pet-preview-copy small {
@@ -711,8 +735,8 @@ function submitRecentReply() {
 
 .task-pet-preview-mascot {
   position: relative;
-  width: 66px;
-  height: 78px;
+  width: 56px;
+  height: 62px;
   flex: none;
   border: 0;
   background: transparent;
@@ -733,9 +757,9 @@ function submitRecentReply() {
 
 .task-pet-preview-character-wrap {
   position: absolute;
-  inset: 0 0 7px;
-  width: 66px;
-  height: 73px;
+  inset: 0;
+  width: 56px;
+  height: 60px;
   filter: drop-shadow(0 4px 5px rgb(43 31 24 / 18%));
   transform-origin: 50% 82%;
   transition: opacity 120ms ease-out;
@@ -756,7 +780,6 @@ function submitRecentReply() {
   animation: task-pet-waiting 520ms ease-out 1;
 }
 
-.task-pet-preview-state,
 .task-pet-preview-badge {
   position: absolute;
   display: grid;
@@ -765,26 +788,15 @@ function submitRecentReply() {
   font-weight: 700;
 }
 
-.task-pet-preview-state {
-  bottom: 0;
-  left: 0;
-  min-width: 42px;
-  height: 21px;
-  padding: 0 7px;
-  background: rgb(255 255 255 / 94%);
-  color: #354052;
-  font-size: 10px;
-}
-
 .task-pet-preview-badge {
-  top: 3px;
+  top: 1px;
   right: 0;
-  min-width: 24px;
-  height: 24px;
+  min-width: 20px;
+  height: 20px;
   padding: 0 5px;
   background: #2a72e8;
   color: white;
-  font-size: 11px;
+  font-size: 10px;
 }
 
 .task-pet-preview-badge[data-waiting='true'] {
@@ -840,6 +852,16 @@ function submitRecentReply() {
 
 .task-pet-preview-mini-badge[data-waiting='true'] {
   background: #b9670c;
+}
+
+.task-pet-preview.is-docked .task-pet-preview-mini,
+.task-pet-preview.is-docked .task-pet-preview-mascot {
+  transform: translateX(16px);
+}
+
+.task-pet-preview.is-docked .task-pet-preview-mini:active,
+.task-pet-preview.is-docked .task-pet-preview-mascot:active {
+  transform: translateX(16px) scale(0.96);
 }
 
 .task-pet-mode-enter-active,
@@ -910,7 +932,7 @@ function submitRecentReply() {
   }
 
   .task-pet-preview-panel {
-    width: calc(100% - 70px);
+    width: calc(100% - 64px);
   }
 
   .task-pet-preview-copy small {

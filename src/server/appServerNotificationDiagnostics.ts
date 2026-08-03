@@ -203,6 +203,7 @@ const KNOWN_NOTIFICATION_METHODS = new Set([
   'thread/compacted',
   'thread/goal/cleared',
   'thread/goal/updated',
+  'runtime/queue/updated',
   'thread/interrupted',
   'thread/name/updated',
   'thread/realtime/closed',

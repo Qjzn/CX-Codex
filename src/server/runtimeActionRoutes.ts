@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { setJson } from './httpJsonResponse.js'
 import { RuntimeThreadBusyError, type RuntimeRequestRecord } from './runtimeStore.js'
+import type { RuntimeMessageQueueEntry } from './runtimeMessageQueue.js'
 
 type RuntimeActionResult = {
   status: string
@@ -12,6 +13,11 @@ export type RuntimeActionRoutesDependencies = {
   startRuntimeTurn: (payload: unknown) => Promise<RuntimeActionResult>
   interruptRuntimeTurn: (payload: unknown) => Promise<RuntimeActionResult>
   getLatestRequestByClientMessageId: (clientMessageId: string) => RuntimeRequestRecord | null
+  enqueueRuntimeTurn?: (payload: unknown) => RuntimeMessageQueueEntry
+  listRuntimeQueue?: (threadId?: string) => RuntimeMessageQueueEntry[]
+  cancelQueuedRuntimeTurn?: (requestId: string) => boolean
+  retryQueuedRuntimeTurn?: (requestId: string) => boolean
+  reorderQueuedRuntimeTurns?: (threadId: string, requestIds: string[]) => boolean
 }
 
 export async function handleRuntimeActionRoutes(
@@ -20,6 +26,53 @@ export async function handleRuntimeActionRoutes(
   url: URL,
   dependencies: RuntimeActionRoutesDependencies,
 ): Promise<boolean> {
+  if (req.method === 'POST' && url.pathname === '/codex-api/runtime/queue' && dependencies.enqueueRuntimeTurn) {
+    const payload = await dependencies.readJsonBody(req)
+    const result = dependencies.enqueueRuntimeTurn(payload)
+    setJson(res, 202, { data: result })
+    return true
+  }
+
+  if (req.method === 'GET' && url.pathname === '/codex-api/runtime/queue' && dependencies.listRuntimeQueue) {
+    const threadId = url.searchParams.get('threadId')?.trim() ?? ''
+    setJson(res, 200, { data: dependencies.listRuntimeQueue(threadId) })
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/codex-api/runtime/queue/reorder' && dependencies.reorderQueuedRuntimeTurns) {
+    const payload = await dependencies.readJsonBody(req)
+    const row = payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : {}
+    const threadId = typeof row.threadId === 'string' ? row.threadId.trim() : ''
+    const requestIds = Array.isArray(row.requestIds)
+      ? row.requestIds.filter((requestId): requestId is string => typeof requestId === 'string')
+      : []
+    const reordered = dependencies.reorderQueuedRuntimeTurns(threadId, requestIds)
+    setJson(res, reordered ? 200 : 409, reordered ? { ok: true } : { error: 'Runtime queue changed before reorder' })
+    return true
+  }
+
+  if (url.pathname.startsWith('/codex-api/runtime/queue/')) {
+    const suffix = decodeURIComponent(url.pathname.slice('/codex-api/runtime/queue/'.length)).trim()
+    const isRetry = suffix.endsWith('/retry')
+    const requestId = (isRetry ? suffix.slice(0, -'/retry'.length) : suffix).trim()
+    if (!requestId) {
+      setJson(res, 400, { error: 'Missing queue request id' })
+      return true
+    }
+    if (req.method === 'DELETE' && !isRetry && dependencies.cancelQueuedRuntimeTurn) {
+      const removed = dependencies.cancelQueuedRuntimeTurn(requestId)
+      setJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: 'Queued message not found' })
+      return true
+    }
+    if (req.method === 'POST' && isRetry && dependencies.retryQueuedRuntimeTurn) {
+      const retried = dependencies.retryQueuedRuntimeTurn(requestId)
+      setJson(res, retried ? 202 : 409, retried ? { ok: true } : { error: 'Queued message is not retryable' })
+      return true
+    }
+  }
+
   if (req.method === 'POST' && url.pathname === '/codex-api/runtime/send') {
     const payload = await dependencies.readJsonBody(req)
     try {

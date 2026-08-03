@@ -35,6 +35,7 @@ import com.getcapacitor.BridgeWebViewClient;
 public class MainActivity extends BridgeActivity {
 
     private static final long CONNECTION_TIMEOUT_MS = 15000L;
+    private static volatile boolean appForeground;
     private boolean initialCreateComplete;
     private boolean mainFrameLoadFailed;
     private LinearLayout connectionOverlay;
@@ -82,6 +83,26 @@ public class MainActivity extends BridgeActivity {
         MobileShellPlugin.retryPendingApkInstall(this);
         captureTaskPetThreadFromIntent(getIntent());
         openPendingTaskPetThread();
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        appForeground = true;
+        TaskPetOverlayService.refreshPresentation(this);
+    }
+
+    @Override
+    public void onStop() {
+        if (!isChangingConfigurations()) {
+            appForeground = false;
+            TaskPetOverlayService.refreshPresentation(this);
+        }
+        super.onStop();
+    }
+
+    static boolean isAppForeground() {
+        return appForeground;
     }
 
     private void captureTaskPetThreadFromIntent(Intent intent) {

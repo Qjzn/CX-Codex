@@ -37,23 +37,46 @@ export type BridgeNotificationRuntimeSyncSubscriberDependencies = BridgeNotifica
   subscribeNotifications(listener: (notification: AppServerNotification) => void): () => void
 }
 
+const TRANSIENT_RUNTIME_PROGRESS_METHODS = new Set([
+  'item/commandExecution/outputDelta',
+  'item/commandExecution/terminalInteraction',
+  'item/fileChange/outputDelta',
+  'item/fileChange/patchUpdated',
+  'item/mcpToolCall/progress',
+  'command/exec/outputDelta',
+  'process/outputDelta',
+])
+const INTERNAL_RUNTIME_NOTIFICATION_METHODS = new Set([
+  'runtime/queue/updated',
+])
+
+function shouldPersistRuntimeSnapshot(method: string): boolean {
+  return !TRANSIENT_RUNTIME_PROGRESS_METHODS.has(method)
+}
+
 export function syncBridgeNotificationRuntimeState(
   notification: AppServerNotification,
   dependencies: BridgeNotificationRuntimeSyncDependencies,
 ): BridgeNotificationEvent {
   const event = dependencies.rememberNotificationEvent(notification)
   const externalSessionFileChange = isCxSessionFilesChangedMethod(notification.method)
-  if (!externalSessionFileChange) {
+  const internalRuntimeNotification = INTERNAL_RUNTIME_NOTIFICATION_METHODS.has(notification.method)
+  if (!externalSessionFileChange && !internalRuntimeNotification) {
     dependencies.runtimeStateStore.observeEvent(event)
   }
 
   const eventThreadId = dependencies.readThreadIdFromPayload(notification.params)
-  if (eventThreadId && !externalSessionFileChange) {
+  if (
+    eventThreadId
+    && !externalSessionFileChange
+    && !internalRuntimeNotification
+    && shouldPersistRuntimeSnapshot(notification.method)
+  ) {
     const snapshot = dependencies.persistRuntimeSnapshot(eventThreadId)
     updateRuntimeRequestsFromSnapshot(eventThreadId, snapshot, dependencies.runtimeStore)
   }
 
-  if (eventThreadId && shouldInvalidateThreadReadCacheForNotification(notification.method)) {
+  if (eventThreadId && shouldInvalidateThreadReadCacheForNotification(notification.method, notification.params)) {
     dependencies.deleteCachedThreadRead(eventThreadId)
   }
 

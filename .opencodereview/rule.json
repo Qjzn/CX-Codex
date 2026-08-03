@@ -1,0 +1,37 @@
+{
+  "include": [
+    "android/app/src/test/**/*.java",
+    "**/*Test.java",
+    "**/*Tests.java",
+    "**/*.{test,spec}.{ts,tsx,js,jsx,mjs,cjs}"
+  ],
+  "exclude": [
+    "node_modules/**",
+    "dist/**",
+    "dist-cli/**",
+    "coverage/**",
+    "android/**/build/**"
+  ],
+  "rules": [
+    {
+      "path": "src/server/**/*.{ts,js}",
+      "rule": "Preserve the CLI -> Express bridge -> Codex app-server contract. Treat session-log reads as potentially lossy fallback data, keep normal thread/read responses authoritative, and verify cache invalidation, thread identity, response-view windows, abort handling, and per-thread ordering. Flag optimizations that can hide structured messages such as plans, command executions, file changes, approvals, or tool calls.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "src/**/*.{ts,vue}",
+      "rule": "Preserve Vue reactivity and the desktop/mobile runtime state contract. Check cleanup of timers, listeners, and abort controllers; guard stale async responses by thread identity or version; retain optimistic messages until authoritative reconciliation; and avoid visual-only changes that diverge from the installed Codex desktop behavior.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "android/app/src/**/*.java",
+      "rule": "Preserve Android foreground-service, notification, overlay, and activity lifecycle behavior. Check main-thread UI access, background execution restrictions, PendingIntent identity, configuration changes, accessibility timeouts, lock-screen privacy, resource cleanup, and parity between native task-pet state and the web preview.",
+      "merge_system_rule": true
+    },
+    {
+      "path": "scripts/**/*.{ts,mjs,js,ps1}",
+      "rule": "Keep verification deterministic and behavior-based. Distinguish expected diagnostic logs from failures, avoid timing-only assertions when state can be observed directly, preserve Windows PowerShell compatibility, and make regression checks fail with a specific actionable message.",
+      "merge_system_rule": true
+    }
+  ]
+}

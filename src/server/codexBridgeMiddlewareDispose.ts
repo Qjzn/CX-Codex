@@ -2,6 +2,9 @@ export type CodexBridgeMiddlewareDisposeDependencies = {
   runtimeReconcileScheduler: {
     dispose: () => void
   }
+  runtimeMessageQueue?: {
+    dispose: () => void
+  }
   threadSearchIndexStore: {
     clear: () => void
   }
@@ -40,6 +43,7 @@ export function disposeCodexBridgeMiddlewareResources(
 ): void {
   dependencies.sessionFileChangeObserver.dispose()
   dependencies.runtimeReconcileScheduler.dispose()
+  dependencies.runtimeMessageQueue?.dispose()
   dependencies.threadSearchIndexStore.clear()
   dependencies.bridgeNotificationListeners.clear()
   dependencies.unsubscribeAppServerNotifications()

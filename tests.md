@@ -1476,7 +1476,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Confirm internal `<recommended_plugins>` / Codex context messages, trailing `<oai-mem-citation>` blocks, and supported `::git-*` / task directives do not appear as chat content.
 5. Reload the thread and confirm the existing conversation is readable before deferred capability metadata completes; after the background refresh, open the model control.
 6. Confirm the model list matches visible `model/list` entries, uses server display names/descriptions/default markers, and only offers reasoning levels supported by the selected model. If the runtime later exposes GPT-5.6 variants, confirm they appear without a frontend code change.
-7. Open `+`, verify `添加照片和文件`, `添加文件夹`, `拍照`, `仅生成计划`, `本轮要求`, `插件`, and enabled skills remain available with concise one-shot descriptions.
+7. Open `+`, verify `添加照片和文件`, `添加文件夹`, `拍照`, persistent `计划模式`, `本轮要求（一次性）`, `插件`, and enabled skills remain available with concise descriptions.
 8. Open the plugin subview and confirm installed/enabled native plugins appear as soon as `plugin/list` returns without waiting for the slower MCP scan; after background completion, search by name and confirm only usable ready/login-required MCP servers are merged. Use Tab/Shift+Tab to confirm focus stays inside the mobile sheet, then close it with Escape or the close control and confirm focus returns to `+`.
 9. Save a draft with one skill/plugin selected and reload. Before capability metadata completes, confirm a compact `正在恢复 N 项能力` state is shown and Send is disabled; after loading, confirm valid selections are restored, unavailable selections are removed, and the draft text is preserved.
 10. Start a reply from the second client. Confirm the first assistant text appears immediately, subsequent text remains smooth, only one copy of the live answer is visible, and the compact activity overlay yields to the answer text.
@@ -4394,7 +4394,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 ---
 
-### Feature: 计划模式接近桌面端行为
+### Feature: 持续计划模式、结构化计划与实施动作
 
 #### Prerequisites
 - `7420` 服务运行中，当前构建已包含计划模式优化。
@@ -4402,21 +4402,54 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Steps
 1. 打开新会话或任意已有会话。
-2. 点击输入区的 `计划`。
+2. 打开 `+`，启用 `计划模式`。
 3. 输入一个只需要制定计划的任务并发送。
 4. 观察回复内容是否只给计划，不执行命令、不读写文件。
-5. 等待回复完成后查看输入区模式。
+5. 等待回复完成，确认输入框上方持续显示 `计划模式 · 持续开启`，可直接点 `×` 退出；刷新页面后再次确认该模式保持。
 6. 打开 `/codex-api/health`，确认 `activePlanModeTurnCount` 回到 `0`。
-7. 再输入 `开始执行`，确认默认已处于 `执行`，不会继续被计划模式拦截。
+7. 确认 `turn/plan/updated` 对应的计划以可折叠步骤卡展示：最新计划默认展开、旧计划默认收起，超过 6 步时先展示前两步和当前步骤，并用 `已隐藏 N 步` 解释中间跳步，可手动显示全部；增量阶段不出现重复计划卡或逐字重绘抖动。
+8. 点击最新计划上的 `是，实施此计划`，确认按钮立即变为 `正在提交…` 且不能重复点击；提交成功后保留 `已提交执行`，模式切换到执行并发送 `是的，执行此计划`；刷新页面后仍从会话历史恢复 `已提交执行`；提交失败时保留计划卡并允许重试。
+9. 再次手动关闭计划模式，确认后续普通消息使用执行模式。
 
 #### Expected Results
 - 前端发送计划时使用原生 `mode: plan`，不再把整段 Plan Mode 规则注入用户消息。
 - 如果后端不支持原生 `mode: plan`，才降级注入只读计划提示。
-- 计划消息发送后输入区自动切回 `执行`。
+- 计划模式持续生效，直到用户主动关闭或点击实施计划。
+- 计划卡使用 `生成中`、`已生成`、`已提交执行`、`执行中`、`已完成` 等明确状态；结构化步骤随 `turn/plan/updated` 更新，`item/plan/delta` 以约 48ms 合并刷新，完成项覆盖临时内容。
 - 计划完成后不残留停止按钮、思考中状态或 `activePlanModeTurnCount`。
 
 #### Rollback/Cleanup
 - 若需回退，恢复 `src/server/codexAppServerBridge.ts`、`src/composables/useDesktopState.ts` 和 `src/components/content/ThreadComposer.vue` 的计划模式相关改动。
+
+---
+
+### Feature: 线程级持续目标完整生命周期
+
+#### Prerequisites
+- 当前 App Server 支持 `thread/goal/get`、`thread/goal/set`、`thread/goal/clear`。
+- 准备一个当前无运行任务的已有会话。
+
+#### Steps
+1. 打开会话，点击输入区上方的 `设置持续目标`，输入可衡量目标并点击 `保存并开始`。
+2. 确认目标条显示目标、运行提示、预算使用百分比和耗时；刷新页面并重新进入会话。
+3. 在目标运行时点击 `暂停`，确认任务完成后不会自动继续；再点击 `继续`，确认空闲时继续推进。
+4. 点击 `编辑` 修改目标，确认状态和已用量保持为服务端返回值。
+5. 在目标活跃且任务运行时点击停止，确认目标同步变为暂停，不会立即重新启动。
+6. 点击 `清除`，确认界面先展示目标摘要和 `确认清除`，取消一次后重新确认清除，刷新页面确认目标不再出现。
+7. 在移动宽度确认只保留 `暂停/继续` 主操作，`编辑/清除` 收入更多菜单，所有直接操作目标至少为 44px；目标正文最多显示两行且页面无横向溢出。
+8. 模拟 `thread/goal/get` 失败，确认错误显示在目标栏附近、草稿不丢失且 `重试` 可恢复；快速重复触发刷新时只保留一个读取请求，较旧响应不会覆盖更新后的目标。
+9. 打开目标编辑器并输入未保存内容，切换到另一个会话，确认编辑器、更多菜单和清除确认全部关闭，新会话不会继承上一会话草稿。
+10. 同时开启计划模式与活跃持续目标，确认目标栏明确提示 `计划模式只影响新消息；持续目标仍会推进`，暂停目标仍是直接操作。
+11. 在手机宽度用键盘打开目标更多菜单，确认焦点进入第一个菜单项，方向键可移动，Escape 关闭并回到触发按钮；点击菜单外部也会关闭。打开清除确认后等待超过 6 秒，确认操作不会自行消失。
+
+#### Expected Results
+- 目标状态以 App Server 为唯一事实来源，通过 `thread/goal/updated` / `thread/goal/cleared` 实时同步。
+- 活跃目标仅在会话空闲、无排队消息且无待处理授权时继续，不与用户消息抢占执行。
+- 目标读取失败不阻塞会话加载；读取请求按会话去重并以状态代次阻止旧响应回写；保存、状态切换或清除失败会保留当前草稿和可重试界面并显示就近错误。
+- 目标用量在移动端仍可见，计划模式与持续目标并存时不隐藏执行边界；切换会话不会携带任何目标栏临时交互状态。
+
+#### Rollback/Cleanup
+- 清除回归目标；若需回退，恢复 `threadGoal.ts`、`useDesktopState.ts`、`ThreadGoalBar.vue` 及 App 接线改动。
 
 ---
 
@@ -13045,8 +13078,8 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 10. Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -RequireThreadTitle 分析项目 -ThreadId 019f27ae-0ecd-7c50-9701-8ec003e66447 -AgentBrowserTimeoutSec 90`.
 
 #### Expected Results
-- Desktop viewport mounts only `.message-table-scroll` for table blocks.
-- Phone viewport mounts only `.message-table-cards` for table blocks.
+- Desktop and phone viewports both retain the semantic `<table>` inside `.message-table-scroll`.
+- Phone tables scroll horizontally inside their own region, use 13px cells, and never expand the document width or collapse rows into vertical cards.
 - Switching viewport updates the rendered table representation without breaking the conversation.
 - The real `分析项目` phone thread page and conversation fixture remain nonblank.
 
@@ -15591,9 +15624,145 @@ Current evidence:
 - `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build:frontend`, PowerShell parser validation, and `git diff --check` passed. The production main entry is 399,671 bytes, 329 bytes inside the 400,000-byte budget.
 - The complete 35-surface frontend regression passed in 452.6 seconds, including sidebar recency, search continuity, scroll anchoring, current-thread reveal, mobile drawer, Composer, conversation recovery, notifications, and Task Pet.
 - Final 7420 health remained `ok`, running, and initialized on PID 51368 with `approvalPolicy=never` and `sandboxMode=danger-full-access`. Pending, queued, and active RPCs, pending server requests, blocking restarts, uncertain Runtime requests, and thread leases were all zero.
+
+## Keep the Android Task Pet quiet, docked, and cursor-driven (2026-08-03)
+
+1. The native overlay is a background companion only. Returning to the CX-Codex Activity removes the overlay immediately and suppresses completion notifications while the app is foreground; authoritative monitoring continues without duplicating the visible app UI.
+2. Reply attention is owned by the persisted cursor `latestReplyEventSeq > readThroughReplyEventSeq`. Confirming that the exact conversation is visible advances the cursor, clears its badge and completion notification, and prevents an already-read result from reappearing after service recreation.
+3. One new assistant item may show one transient latest-reply strip for an accessibility-adjusted five seconds. Further stream chunks update that strip without restarting its lifetime. Normal running state does not count as unread attention.
+4. The resting pet automatically tucks to either screen edge with only a 32 dp handle visible. Tapping it opens a 248 dp task stack with at most three rows; the stack closes after an accessibility-adjusted eight seconds and returns to the edge.
+5. The overlay no longer owns recent conversations, an inline reply composer, or a persistent `工作中` label. The latest-reply strip and every task row still open the exact owning conversation; Android notification reply remains the system fallback.
+
+Verification:
+
+- Run `npm run build:frontend`, parse `scripts/regression-7420-frontend.ps1`, execute its Task Pet source-contract functions, and run `git diff --check`.
+- At 393 x 852, confirm the initial state is docked with no panel or reply strip. Simulate a new reply, confirm the strip is 224 px wide and disappears after five seconds, then open the pet and confirm a 248 px stack with three rows closes after eight seconds.
+- Confirm the fixture has no recent-conversation section, inline reply form, or `工作中` pill and that clicking the reply strip retains the exact thread id.
+- Run `:app:testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest`, `:app:lintDebug`, and `:app:assembleRelease`; verify the resulting APK signature and package metadata.
+
+Current evidence:
+
+- Headless Chrome measured an initially docked surface, a 224 x 63 latest-reply strip, a 248 x 278 three-row stack, five-second reply-strip dismissal, and eight-second stack dismissal. Browser errors were empty; screenshots are under `output/task-pet-quiet-overlay-20260803`.
+- Task Pet source contracts, the focused Android policy unit tests, production frontend build, Capacitor Android sync, Android lint, release assembly, APK v2 signature verification, and `git diff --check` passed.
+- The broad `test:7420:frontend` run stopped at its environment health gate before browser checks because the already-running 7420 process reported `uncertainRequestCount=2`. The affected Task Pet source and real-browser contracts were run independently and passed.
 ## Quick Tunnel stale-session recovery and sidebar outside-dismissal (2026-08-02)
 
 1. Start a verified Quick Tunnel, then invoke start again while its child process is still alive. The existing URL may be reused only after public health, HTTP authentication, and WebSocket authentication all pass again.
 2. Simulate an alive child whose public URL no longer resolves or whose three public checks fail. Starting mobile access must terminate the stale child and continue into a fresh tunnel attempt instead of returning the stale `ready` snapshot.
 3. Open a conversation action menu from either the pinned section or a project group and press Escape. The menu closes and focus returns to the exact trigger.
 4. Open the conversation action menu again and click or tap outside it. The menu closes even when no project menu is open.
+
+## Durable background queue and conversation fidelity (2026-08-03)
+
+1. Queue two messages while a turn is running, switch to another conversation, and close the Android Activity. Both queue records must already exist under `/codex-api/runtime/queue`; the 7420 server starts them in order after the owning thread settles without requiring that conversation or WebView to be open.
+2. Restart only the mobile app while the server queue is active. The queue panel must rehydrate from the server. A failed first item pauses later items until retry, edit, or delete; deleting it allows the next item to continue.
+3. Send a prompt and force a refresh after `runtime/send` is accepted but before `thread/read` contains the user item. The optimistic user bubble must restore before newer assistant output and remain durable until an authoritative matching `userMessage` acknowledges it.
+4. Manually rename a conversation, then receive a different automatic `thread/name/updated`. The manual title remains unchanged locally and in the durable title cache; a session-index refresh must not overwrite it.
+5. Normalize an `imageGeneration` item that contains both `savedPath` and a raw base64 `result`. Render only the local saved image first; when a message image fails, its failure surface remains actionable and remounts the request when tapped.
+6. At phone width, Markdown tables remain semantic tables with a 620px minimum width, 13px text, and an independently focusable horizontal scroll region. The document itself must have no horizontal overflow and no vertical table-card DOM may be mounted.
+7. Start a queued standard-speed message while `config/read` already reports standard speed. The queue must not issue `config/batchWrite`. When a speed change is required, finish that configuration while the request is still `queued`; an idle restart snapshot during the write must not convert it to `queue_failed` before `turn/start` is attempted.
+
+Verification:
+
+- Run `npm run verify:frontend-normalizers`, `npm run verify:server-modules`, `npm run build:frontend`, and `npm run build:cli`.
+- Run the focused 7420 frontend regression and inspect the phone conversation fixture for table-local scrolling, image retry, and zero document overflow.
+- Stop the Android Activity after the server acknowledges queued messages, wait for the current turn to finish, then reopen the app and confirm the next queued turn started while the app was closed.
+
+Current evidence:
+
+- `npm run verify:frontend-normalizers`, `npm run verify:server-modules`, `npm run build:frontend`, `npm run build:cli`, Vue type checking, and `git diff --check` passed. The Runtime queue server smoke proves an active lease blocks the first queued row, a terminal event starts it, a failed row pauses its successors, and retry/delete remain recoverable.
+- Headless Playwright at 393 x 852 measured one semantic table scroll region, zero mobile table cards, a 322 px viewport over 620 px table content, and 13 px computed cell text. The inspected screenshot is `output/regression-7420/message-fidelity-20260803/mobile-table-horizontal.png`.
+- The complete frontend regression passed the updated queue source contracts and reached the live browser phase, then stopped on the pre-existing mobile Settings fixture with `settings panel did not open`, before the conversation fixture. The focused Playwright conversation fixture passed without console errors.
+- The production main entry is 411,336 bytes with the current locked Vite toolchain. A clean HEAD baseline under the same toolchain is 409,169 bytes, so this change adds 2,167 bytes to the cold entry; queue parsing, migration, persistence, and network ownership remain in the 7.81 KB lazy chunk.
+- The restart-race smoke reproduces the configuration-triggered app-server lifecycle boundary. Matching speed performs only `config/read`; changing speed keeps the row `queued` through both config RPCs and still reaches `running` after an injected idle restart snapshot. The mobile queue fixture has no browser errors and its screenshot is `output/regression-7420/queue-restart-race-20260803/queue-accepted-element.png`.
+
+## Structured Codex file citations and mobile PDF preview (2026-08-03)
+
+1. Render `:codex-file-citation{path="..." ...}` as a local-file link whose visible label is the basename. The raw directive and metadata such as `purpose` must not appear in conversation text.
+2. Preserve complete Windows and POSIX paths, spaces, escaped quotes, backslashes, Unicode names, and additional attributes. An incomplete or pathless directive must remain safe text and must not become a link to the current workspace.
+3. At phone width, tapping an internal file link opens the existing local preview in the current WebView. The document must not gain horizontal overflow.
+4. PDF preview must use the PDF.js legacy main and worker builds so Android WebViews without `Promise.withResolvers` or `Math.sumPrecise` can still render every page.
+
+Verification:
+
+- Run `npm.cmd run verify:frontend-normalizers` and `npm.cmd run build:frontend`.
+- Open `/#/__regression/conversation-blocks?fileCitation=1` at 393 x 852. Confirm the PDF and Markdown labels are basenames, the raw protocol and `purpose` metadata are absent, and `scrollWidth === clientWidth`.
+- Tap the PDF link. Confirm the URL changes to `/local-preview.html`, the status reaches `PDF 预览已就绪，共 2 页。`, two canvases render, and there are no browser errors or compatibility warnings.
+- Inspect `output/regression-7420/file-citation-20260803/file-citation-phone.png` and `output/regression-7420/file-citation-20260803/pdf-preview-phone.png`.
+
+Current evidence:
+
+- The parser smoke covers the reported resume PDF, a Markdown companion, quoted and unquoted attributes, Windows backslashes, spaces, escaped metadata, adjacent citations, pathless directives, and incomplete directives.
+- Headless Chrome at 393 x 852 measured 393 px document width over a 393 px viewport, rendered both file labels without leaking internal metadata, and opened the exact encoded local path.
+- The reported 297.1 KB resume rendered two PDF canvases. Both compatibility APIs were functions after the legacy bundle initialized, and browser errors and warnings were empty.
+
+## Runtime notification pressure and truthful reply freshness (2026-08-03)
+
+1. Every `cx/session-files/changed` notification with `source: session-log` refreshes selected-thread messages from the bounded local session-log projection without refreshing the thread collection. The heuristic `origin` value may describe likely ownership but must never suppress correctness; `session-index` changes still refresh the collection.
+2. Transient command, process, file-change, and MCP progress deltas must remain available to live notification consumers without invalidating the cached thread read or persisting a Runtime snapshot per chunk. Terminal and reply events must retain their existing invalidation and snapshot behavior.
+3. Native Task Pet progress freshness and reply freshness are separate clocks. Advancing `lastEventSeq` without advancing `latestReplyEventSeq` must not relabel an old reply as “刚刚”. A strictly newer positive reply event advances the persisted reply clock.
+4. A queued message with `backgroundPersisted !== true` must continue to say it is local-only; only a row returned from the durable 7420 queue may claim background ownership.
+5. A genuinely external `session-log` append must refresh the selected conversation from the local session file without scheduling an immediate authoritative `thread/read`. After the first bounded tail read, complete JSONL appends must reuse the cached 40-turn projection and read only the newly appended bytes; once the append burst has been quiet for 1.8 seconds, one coalesced authoritative read must restore structured items that the local projection cannot represent.
+6. Session-log recovery must preserve assistant `phase: commentary` items as phase replies. It must not discard a progress-only tail and fall back to a heavy history read, and it must not relabel commentary as a final answer.
+7. Default recent-message reads and Runtime snapshots must try the bounded session-log projection before `thread/read includeTurns: true`. Explicit full-history and older-turn requests remain authoritative and bypass this shortcut.
+8. If the task-pet stack becomes empty while expanded, its eight-second auto-collapse must return to the minimized pet instead of leaving an empty full-size mascot behind.
+9. Opening the task-pet close confirmation must pause the eight-second auto-collapse timer. Cancelling the confirmation keeps the panel open and starts a fresh collapse timeout.
+
+Verification:
+
+- Run `npm.cmd run verify:frontend-normalizers`.
+- Run `npm.cmd run verify:server-modules`.
+- From `android/`, run `.\gradlew.bat testDebugUnitTest --tests com.cxcodex.bridge.TaskPetRuntimePolicyTest`.
+- Run `npm.cmd run build:frontend` and `npm.cmd run build:cli` before restarting the local 7420 process, so frontend and server modules come from the same source revision.
+
+Current evidence:
+
+- The frontend policy test first failed because a `live-app-server` heuristic suppressed the same selected-thread refresh needed by a concurrent external writer. It now passes with every session-log origin using the bounded local projection, and the source contract requires both notification-time quiet-window reset and one post-quiet authoritative convergence.
+- Server smoke covers cached session-log append recovery, all-origin thread-read cache invalidation, and confirms transient progress chunks neither invalidate heavy thread reads nor persist one Runtime snapshot per chunk.
+- A 24,000,000-byte local session-tail benchmark measured a 215-261 ms bounded first read and a 34.99-38.04 ms median append refresh on this Windows machine. The append path no longer scans the 24 MB tail or issues a full app-server `thread/read`.
+- Before the final recovery boundary, the 72 MB dogfood conversation issued a heavy read every 8-10 seconds; observed calls took 6.7-8.0 seconds and blocked current-page recovery. Its 24 MB tail contained only commentary and tool records, which exposed the discarded-commentary fallback defect.
+- The final 2.7.3 verification passed frontend normalizer smoke, production frontend build, CLI build, server-module smoke, Android `TaskPetRuntimePolicyTest`, real 7420 sidebar data checks, and the complete 36-surface frontend regression in 521.4 seconds.
+- Real task-pet fixtures verified idle-to-task wake, one transient reply peek, attention `2 -> 1` after exact `fixture-running` navigation, empty-stack auto-minimization, and a close confirmation that stays open beyond eight seconds before cancellation restarts collapse.
+
+## Session queue isolation and reply-latency stability (2026-08-04)
+
+1. `runtime/queue/updated` is an internal delivery notification. It must remain replayable to clients, but it must not observe or persist Runtime state, reconcile active requests, or settle a newly claimed `pending_start` row against the previous turn's terminal snapshot.
+2. A non-running `thread/read` from the same second as `lastStartedAtIso` must not settle a materializing turn during the bounded 20-second start window. Strictly older reads remain stale; after the bounded window, a same-second terminal read may recover a request whose lifecycle notifications were lost across restart.
+3. Rapid local enqueues merge persistence acknowledgements into the latest in-memory queue by stable `clientMessageId`; an older async snapshot must not drop a later enqueue or resurrect a deleted row. A newly persisted row deleted during the request is removed from the server queue.
+4. Server reconciliation preserves the current stable queue order for matching messages, drops server-owned rows that have actually left the server queue, retains unsynced local rows, and appends only genuinely server-only rows.
+5. A failed first local row pauses later persistence. Retry, edit, or delete must resolve the blocked row before later local messages are handed to 7420.
+6. After persistence and a complete server sync, 7420 atomically applies the exact stable request-id order only when the server queue set still matches. A concurrent queue change returns conflict instead of applying a partial or stale reorder, and the frontend then adopts the authoritative server order.
+
+Verification:
+
+- Run `npm.cmd run verify:server-modules`; the notification-boundary and same-start-second tests must both fail on the pre-fix code and pass after the fix.
+- Run `npm.cmd run verify:frontend-normalizers` and `npm.cmd run build:frontend`.
+- Run `npm.cmd run build:cli`, restart the exact local 7420 process only after restart protection reports zero blockers, then enqueue two uniquely marked messages behind a controlled running turn.
+- Confirm the authoritative session log contains `BASE`, queue A, and queue B in that order with three distinct `turnId` values. Confirm the Runtime Store records all three as completed with no error and the queue becomes empty.
+- Send one no-tool direct reply and record HTTP acceptance, first-token, and completion latency separately.
+
+Current evidence:
+
+- The pre-fix real run accepted both queued messages but marked them completed without `turnId` and omitted both from history. The first boundary regression reproduced the stale terminal snapshot settlement exactly.
+- After the first fix, A/B reached history but A shared the still-running base turn, exposing second-precision pre-start settlement. The second regression reproduced that materialization race before the timestamp boundary changed.
+- The final real run returned HTTP 202 in 81 ms for the base and 5/10 ms for A/B. The session log recorded `BASE2 -> QUEUE2-A -> QUEUE2-B` with distinct turns; queued A/B time-to-first-token was 2,272/1,853 ms and total duration was 2,642/1,972 ms.
+- A separate no-tool direct reply was accepted in 104 ms, produced first assistant data in 1,712 ms, and completed in 2,110 ms.
+- A final real reorder changed queued `A -> B -> C` to `C -> A -> B`. The immediate server list and authoritative session log both preserved `BASE -> C -> A -> B`, with four distinct turns and no failed request.
+- The complete 36-surface frontend regression passed first in 540.2 seconds and again on the final exact-order implementation in 590.3 seconds. The endpoint/store/frontend-order follow-up also passed server-module smoke, frontend normalizer smoke, production frontend build, CLI build, and the real reordered execution above.
+- The final review added bounded same-second restart recovery and authoritative conflict fallback. Both focused regressions, both production builds, `git diff --check`, and a post-restart real sidebar-data pass succeeded; the final list pass covered 239 active conversations with zero RPC retry.
+
+## CX-Codex 2.7.3 release gate (2026-08-04)
+
+1. `package.json`, `package-lock.json`, the GitHub tag and `docs/release-notes-2.7.3.zh-CN.md` must all resolve to `2.7.3`; the public notes must describe the queue, long-session, plan/goal, file-preview and Android changes without claiming complete future App Server compatibility.
+2. Run `npm.cmd run verify:release -- -AllowDirty -SchemaAudit warn` before the release commit, then repeat with `-RequireCleanGit` from the isolated release worktree.
+3. Confirm the schema-audit counts match the committed governance checkpoint. If any count changes, update the redacted summary and protocol matrix before tagging; never commit raw generated schema output.
+4. Run a production-only dependency audit with npm 10 or newer because the machine's prefix-level npm 6 cannot parse lockfile v3 correctly.
+5. The tag workflow must build the source ZIP and officially signed Android APK, verify every SHA-256, publish no debug APK, and complete before the release is called stable.
+
+Current evidence:
+
+- Alibaba OpenCodeReview `1.8.6` previewed 26 reviewable workspace files under `.opencodereview/rule.json`. Its delegated host-agent review applied the server, Vue, Android and deterministic-test rules and found no additional release blocker.
+- `npm.cmd run verify:release -- -AllowDirty -SchemaAudit warn` completed in 206.9 seconds with governance, frontend/CLI, normalizer, server-module, CJS launcher, release-package, checksum and npm-package smoke gates passing.
+- The regenerated schema counts exactly matched `docs/app-server-schema-audit-summary.json`: TypeScript root `236 -> 77`, TypeScript v2 `199 -> 445`, JSON root `37 -> 35`, and JSON v2 `102 -> 202`. The existing protocol matrix already classifies thread goals/status/realtime, plugins, permissions and unknown notifications as partial, diagnostic or deferred capabilities, so no baseline replacement is required for this patch release.
+- npm `10.9.3` audited 131 production dependencies through the official registry with zero info, low, moderate, high or critical vulnerabilities. The default prefix-level npm `6.14.6` audit error was a local tool incompatibility, not a dependency finding.
+- GitHub authentication is active for `Qjzn/CX-Codex`, the latest public release remains `v2.7.2`, and all four required Android signing secret names are present. Publication still requires clean-worktree verification, main/tag CI, public asset inspection and certificate/checksum proof.

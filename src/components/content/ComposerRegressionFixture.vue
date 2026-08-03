@@ -14,8 +14,30 @@
         >
           模拟语音转文字
         </button>
+        <button
+          v-if="isGoalSwitchFixture"
+          class="composer-regression-dictation-insert"
+          data-testid="switch-goal-thread"
+          type="button"
+          @click="switchFixtureGoalThread"
+        >切换目标会话</button>
+        <span v-if="isGoalSwitchFixture" data-testid="active-goal-thread">{{ fixtureThreadId }}</span>
         <span class="composer-regression-submit-count">{{ submitCount }}</span>
       </div>
+      <ThreadGoalBar
+        v-if="showGoalFixture"
+        :key="fixtureThreadId"
+        :goal="fixtureGoal"
+        :is-loading="false"
+        :is-updating="false"
+        :error="fixtureGoalError"
+        :plan-mode-active="selectedCollaborationMode === 'plan'"
+        execution-hint="等待消息队列"
+        @set-goal="updateFixtureGoal"
+        @set-status="updateFixtureGoalStatus"
+        @clear-goal="fixtureGoal = null"
+        @retry="fixtureGoalError = ''"
+      />
       <ThreadComposer
         ref="composerRef"
         active-thread-id="fixture-thread-composer"
@@ -25,7 +47,7 @@
         selected-model="gpt-5.5"
         selected-reasoning-effort="high"
         selected-speed-mode="fast"
-        selected-collaboration-mode="execute"
+        :selected-collaboration-mode="selectedCollaborationMode"
         :skills="skills"
         :plugins="plugins"
         :is-loading-plugins="false"
@@ -41,7 +63,7 @@
         @update:selected-model="noop"
         @update:selected-reasoning-effort="noop"
         @update:selected-speed-mode="noop"
-        @update:selected-collaboration-mode="noop"
+        @update:selected-collaboration-mode="selectedCollaborationMode = $event"
         @refresh-plugins="noop"
         @reload-plugins="noop"
         @login-plugin="noop"
@@ -54,7 +76,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
 import ThreadComposer, { type SubmitPayload, type ThreadComposerExposed } from './ThreadComposer.vue'
-import type { ComposerModelInfo, ComposerPluginInfo, ReasoningEffort } from '../../types/codex'
+import ThreadGoalBar from './ThreadGoalBar.vue'
+import type { CollaborationMode, ComposerModelInfo, ComposerPluginInfo, ReasoningEffort, UiThreadGoal } from '../../types/codex'
 import { useMobile } from '../../composables/useMobile'
 import { resolveSendWithEnterPreference } from '../../composables/composerEnterBehavior'
 
@@ -94,6 +117,24 @@ const availableModels: ComposerModelInfo[] = [
 ]
 const composerRef = ref<ThreadComposerExposed | null>(null)
 const submitCount = ref(0)
+const fixtureParams = typeof window !== 'undefined'
+  ? new URLSearchParams(window.location.hash.split('?')[1] ?? '')
+  : new URLSearchParams()
+const showGoalFixture = fixtureParams.get('goal') === '1'
+const isGoalSwitchFixture = fixtureParams.get('goalSwitch') === '1'
+const fixtureThreadId = ref(isGoalSwitchFixture ? 'fixture-thread-a' : 'fixture-thread-composer')
+const selectedCollaborationMode = ref<CollaborationMode>(fixtureParams.get('planMode') === '1' ? 'plan' : 'execute')
+const fixtureGoalError = ref(fixtureParams.get('goalError') === '1' ? '持续目标同步失败，请重试。' : '')
+const fixtureGoal = ref<UiThreadGoal | null>(fixtureParams.get('goalEmpty') === '1' ? null : {
+  threadId: fixtureThreadId.value,
+  objective: '持续完善 7420 的稳定性与细节体验，并以可复现回归作为完成标准。',
+  status: 'active',
+  tokenBudget: 120_000,
+  tokensUsed: 36_800,
+  timeUsedSeconds: 4_260,
+  createdAt: Date.now() - 4_260_000,
+  updatedAt: Date.now(),
+})
 const { isMobile } = useMobile()
 const sendWithEnter = computed(() => resolveSendWithEnterPreference(null, isMobile.value))
 const originalFetch = window.fetch
@@ -152,6 +193,40 @@ const plugins: ComposerPluginInfo[] = [
 
 function noop(): void {
   // Fixture route only needs rendered output for browser assertions.
+}
+
+function updateFixtureGoal(objective: string): void {
+  fixtureGoal.value = fixtureGoal.value
+    ? { ...fixtureGoal.value, objective, updatedAt: Date.now() }
+    : {
+        threadId: fixtureThreadId.value,
+        objective,
+        status: 'active',
+        tokenBudget: null,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }
+}
+
+function updateFixtureGoalStatus(status: 'active' | 'paused'): void {
+  if (!fixtureGoal.value) return
+  fixtureGoal.value = { ...fixtureGoal.value, status, updatedAt: Date.now() }
+}
+
+function switchFixtureGoalThread(): void {
+  fixtureThreadId.value = fixtureThreadId.value === 'fixture-thread-a' ? 'fixture-thread-b' : 'fixture-thread-a'
+  fixtureGoal.value = {
+    threadId: fixtureThreadId.value,
+    objective: `持续目标：${fixtureThreadId.value}`,
+    status: 'active',
+    tokenBudget: 120_000,
+    tokensUsed: 36_800,
+    timeUsedSeconds: 4_260,
+    createdAt: Date.now() - 4_260_000,
+    updatedAt: Date.now(),
+  }
 }
 
 function onSubmit(_payload: SubmitPayload): void {
