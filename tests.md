@@ -15766,3 +15766,35 @@ Current evidence:
 - The regenerated schema counts exactly matched `docs/app-server-schema-audit-summary.json`: TypeScript root `236 -> 77`, TypeScript v2 `199 -> 445`, JSON root `37 -> 35`, and JSON v2 `102 -> 202`. The existing protocol matrix already classifies thread goals/status/realtime, plugins, permissions and unknown notifications as partial, diagnostic or deferred capabilities, so no baseline replacement is required for this patch release.
 - npm `10.9.3` audited 131 production dependencies through the official registry with zero info, low, moderate, high or critical vulnerabilities. The default prefix-level npm `6.14.6` audit error was a local tool incompatibility, not a dependency finding.
 - GitHub authentication is active for `Qjzn/CX-Codex`, the latest public release remains `v2.7.2`, and all four required Android signing secret names are present. Publication still requires clean-worktree verification, main/tag CI, public asset inspection and certificate/checksum proof.
+
+## Android duplicate-send and renderer recovery (2026-08-05)
+
+1. Submit one prompt in an existing conversation, background the Android app before the reply completes, and reopen it after authoritative history has persisted the user message. The conversation must contain one visible user bubble and one Runtime request for the same `clientMessageId`.
+2. Repeat the restore path with an outbox record that predates `baselineMatchCount`. The frontend must reconstruct the pre-send boundary from `baselineTailMessageId` or `baselineMessageCount`; it must not retain an acknowledged optimistic duplicate.
+3. On Android foreground recovery, the first attempt may reconcile the active conversation. The 4.5-second and 12-second retries must reload messages only when pending, unread, stale, unloaded, queued, awaiting a server request, or connection-stale evidence remains.
+4. While a task is running or foreground recovery is visible, tap the compact waiting card. Its detail sheet must open and remain dismissible without horizontal overflow or an invisible blocking layer.
+5. Background and resume the app while a long response is streaming. If the WebView renderer does not answer the resume probe, becomes unresponsive, or is reclaimed, native recovery copy must appear and the app must reload or recreate the exact current hash route instead of remaining on a white screen.
+6. Keep Android's default `RENDERER_PRIORITY_IMPORTANT` policy without waiving it while the WebView is invisible. Backgrounding the app must not deliberately make its renderer a more aggressive low-memory kill target.
+7. Distinguish a low-memory renderer kill from a renderer crash. A low-memory kill restores the exact safe hash route; a crash recreates the shell at the server root so a route-specific rendering crash cannot loop indefinitely.
+8. Keep the renderer-crash inspection explicitly scoped to API 26 and newer while `minSdk` remains 24. Android lint must report no `RenderProcessGoneDetail.didCrash()` `NewApi` error.
+
+Verification:
+
+- Run `npm.cmd run verify:frontend-normalizers` and `npm.cmd run build:frontend`.
+- Run `npm.cmd run test:7420:frontend` so the durable baseline, evidence-driven resume policy, and Android renderer-recovery source contracts remain enforced.
+- From `android/`, run `./gradlew testDebugUnitTest --tests com.cxcodex.bridge.WebViewResumeRecoveryPolicyTest --tests com.cxcodex.bridge.MobileShellConfigTest` and `./gradlew lintDebug`.
+- Open `/#/__regression/conversation-blocks?regression=frontend&tailStatus=1&resumeRecovery=1` at 393 x 852 and tap `.live-overlay-compact-main`. Confirm one overlay, one visible detail sheet, no failed responses, and no browser errors.
+- Before release, install the newly built APK on a physical Android device and repeat the long-running background/resume path. A desktop browser cannot prove Android renderer death and recreation.
+
+Current evidence:
+
+- The reported prompt was found once in Runtime Store as request `rt-msfjk7u3-a1b9b567c1de`, with one client message id and one completed turn; duplication was isolated to frontend outbox merging.
+- The focused phone fixture rendered one waiting card and opened one detail sheet. The 393 px document matched the 393 px viewport and emitted zero page errors or failed responses.
+- Frontend normalizer smoke, the production frontend build, Android recovery/config policy tests, Android lint, `git diff --check`, and the complete 36-surface frontend regression passed. The latest full regression completed in 534.4 seconds.
+- Android lint reported zero Error/Fatal findings. Its existing warning set contains no new renderer-recovery API warning.
+- The locally restarted 2.7.3 service serves the same frontend hash as `dist/index.html`; its health snapshot has zero pending/queued RPCs, zero timeouts, and zero uncertain Runtime requests. The stderr log contains performance warnings plus one transient model-refresh child-process timeout observed during regression, while the app-server remained running and initialized.
+- A 60-second local soak completed 12 samples with zero pending/queued RPCs, timeouts, replay failures, event-sequence regressions, or slow active thread-list calls. Cold browser measurements reached first content in 128 ms, the project list in 388 ms, and a bounded large-conversation first screen in 580 ms at 393 x 852.
+- The remaining performance debt is outside the normal chat hot path: an archived full thread-list read took about 8.9 seconds, while authoritative `thread/read(includeTurns=true)` calls for a very long conversation took about 3.1-3.4 seconds. The frontend now bounds first-screen projection and resume retries, but server-side archived pagination/indexing and long-history paging remain follow-up work.
+- npm 10.9.3 audited production dependencies through the official registry with zero vulnerabilities. Android lint retains the intentional cleartext-network warning because dynamic LAN URLs such as `http://192.168.x.x:7420` are a supported setup path; public access must use HTTPS.
+- The local Android delivery build uses version `2.7.5` / code `20705`, bundles the same frontend `index.html` hash as `dist`, passes release signature and zip-alignment verification, and matches the signing certificate of the public `v2.7.4` APK so it can be installed as an in-place upgrade.
+- No Android device was connected during implementation, so physical process-death verification is still required before publishing an APK.

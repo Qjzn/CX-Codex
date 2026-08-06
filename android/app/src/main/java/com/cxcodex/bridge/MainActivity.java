@@ -1,9 +1,11 @@
 package com.cxcodex.bridge;
 
+import android.annotation.TargetApi;
 import android.app.DownloadManager;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
@@ -17,11 +19,14 @@ import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
 import android.content.Context;
 import android.webkit.CookieManager;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.URLUtil;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
+import android.webkit.WebViewRenderProcess;
+import android.webkit.WebViewRenderProcessClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -35,6 +40,9 @@ import com.getcapacitor.BridgeWebViewClient;
 public class MainActivity extends BridgeActivity {
 
     private static final long CONNECTION_TIMEOUT_MS = 15000L;
+    private static final long RESUME_RENDERER_PROBE_DELAY_MS = 180L;
+    private static final long RESUME_RENDERER_PROBE_TIMEOUT_MS = 2500L;
+    private static final String EXTRA_RENDERER_RECOVERY_URL = "cxcodex.rendererRecoveryUrl";
     private static volatile boolean appForeground;
     private boolean initialCreateComplete;
     private boolean mainFrameLoadFailed;
@@ -43,6 +51,7 @@ public class MainActivity extends BridgeActivity {
     private TextView connectionTitle;
     private TextView connectionMessage;
     private LinearLayout connectionActions;
+    private final WebViewResumeRecoveryPolicy resumeRecoveryPolicy = new WebViewResumeRecoveryPolicy();
     private final Handler connectionHandler = new Handler(Looper.getMainLooper());
     private final Runnable connectionTimeout = () -> {
         if (connectionOverlay != null && connectionOverlay.getVisibility() == View.VISIBLE) {
@@ -83,6 +92,20 @@ public class MainActivity extends BridgeActivity {
         MobileShellPlugin.retryPendingApkInstall(this);
         captureTaskPetThreadFromIntent(getIntent());
         openPendingTaskPetThread();
+        connectionHandler.postDelayed(this::probeWebViewAfterResume, RESUME_RENDERER_PROBE_DELAY_MS);
+    }
+
+    @Override
+    public void onPause() {
+        resumeRecoveryPolicy.cancel();
+        super.onPause();
+    }
+
+    @Override
+    public void onDestroy() {
+        resumeRecoveryPolicy.cancel();
+        connectionHandler.removeCallbacksAndMessages(null);
+        super.onDestroy();
     }
 
     @Override
@@ -217,9 +240,27 @@ public class MainActivity extends BridgeActivity {
         }
 
         WebView webView = bridge.getWebView();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            webView.setWebViewRenderProcessClient(new WebViewRenderProcessClient() {
+                @Override
+                public void onRenderProcessUnresponsive(WebView view, WebViewRenderProcess renderer) {
+                    showConnectionLoading("页面暂时无响应，正在自动恢复当前会话…");
+                    if (renderer == null || !renderer.terminate()) {
+                        recoverWebViewAfterResume(view);
+                    }
+                }
+
+                @Override
+                public void onRenderProcessResponsive(WebView view, WebViewRenderProcess renderer) {
+                    view.requestLayout();
+                    view.invalidate();
+                }
+            });
+        }
         bridge.setWebViewClient(new BridgeWebViewClient(bridge) {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                resumeRecoveryPolicy.cancel();
                 mainFrameLoadFailed = false;
                 showConnectionLoading();
                 super.onPageStarted(view, url, favicon);
@@ -229,6 +270,7 @@ public class MainActivity extends BridgeActivity {
             public void onPageCommitVisible(WebView view, String url) {
                 super.onPageCommitVisible(view, url);
                 if (!mainFrameLoadFailed) {
+                    resumeRecoveryPolicy.cancel();
                     hideConnectionUi();
                 }
             }
@@ -237,6 +279,7 @@ public class MainActivity extends BridgeActivity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 if (!mainFrameLoadFailed && view.getProgress() == 100) {
+                    resumeRecoveryPolicy.cancel();
                     hideConnectionUi();
                 }
             }
@@ -245,6 +288,7 @@ public class MainActivity extends BridgeActivity {
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 super.onReceivedError(view, request, error);
                 if (request.isForMainFrame()) {
+                    resumeRecoveryPolicy.cancel();
                     mainFrameLoadFailed = true;
                     showConnectionError("无法连接到 CX-Codex。请确认服务电脑正在运行，并核对连接地址。");
                 }
@@ -258,9 +302,38 @@ public class MainActivity extends BridgeActivity {
             ) {
                 super.onReceivedHttpError(view, request, errorResponse);
                 if (request.isForMainFrame() && errorResponse.getStatusCode() >= 400) {
+                    resumeRecoveryPolicy.cancel();
                     mainFrameLoadFailed = true;
                     showConnectionError("服务返回异常，请稍后重试；如果外网地址已变化，请修改连接地址。");
                 }
+            }
+
+            @TargetApi(Build.VERSION_CODES.O)
+            @Override
+            public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                resumeRecoveryPolicy.cancel();
+                mainFrameLoadFailed = true;
+                boolean rendererCrashed = detail != null && detail.didCrash();
+                boolean restoreExactRoute = resumeRecoveryPolicy.shouldRestoreExactRoute(rendererCrashed);
+                String serverUrl = MobileShellConfig.getStoredServerUrl(MainActivity.this);
+                String recoveryUrl = restoreExactRoute
+                    ? MobileShellConfig.resolveAppRetryUrl(serverUrl, view.getUrl())
+                    : serverUrl;
+                showConnectionLoading(
+                    restoreExactRoute
+                        ? "页面进程已被系统回收，正在自动恢复当前会话…"
+                        : "页面发生异常，正在返回首页恢复，原会话仍会保留…"
+                );
+                ViewGroup parent = view.getParent() instanceof ViewGroup
+                    ? (ViewGroup) view.getParent()
+                    : null;
+                if (parent != null) parent.removeView(view);
+                view.destroy();
+                connectionHandler.postDelayed(
+                    () -> recreateActivityAfterRendererLoss(recoveryUrl),
+                    120L
+                );
+                return true;
             }
         });
 
@@ -351,6 +424,10 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void showConnectionLoading() {
+        showConnectionLoading("正在打开已保存的服务地址，请稍候…");
+    }
+
+    private void showConnectionLoading(String message) {
         if (connectionOverlay == null) return;
         connectionHandler.removeCallbacks(connectionTimeout);
         connectionOverlay.setVisibility(View.VISIBLE);
@@ -358,8 +435,67 @@ public class MainActivity extends BridgeActivity {
         connectionProgress.setVisibility(View.VISIBLE);
         connectionActions.setVisibility(View.GONE);
         connectionTitle.setText("正在连接 CX-Codex");
-        connectionMessage.setText("正在打开已保存的服务地址，请稍候…");
+        connectionMessage.setText(message);
         connectionHandler.postDelayed(connectionTimeout, CONNECTION_TIMEOUT_MS);
+    }
+
+    private void probeWebViewAfterResume() {
+        if (!initialCreateComplete || MobileShellConfig.getStoredServerUrl(this).isEmpty()) return;
+        if (bridge == null || bridge.getWebView() == null) return;
+        if (connectionOverlay != null && connectionOverlay.getVisibility() == View.VISIBLE) return;
+
+        WebView webView = bridge.getWebView();
+        int generation = resumeRecoveryPolicy.beginProbe();
+        try {
+            webView.evaluateJavascript(
+                "(function(){return document&&document.documentElement?'alive':'missing';})()",
+                (result) -> {
+                    if (result != null && result.contains("alive")) {
+                        if (!resumeRecoveryPolicy.markResponsive(generation)) return;
+                        webView.setVisibility(View.VISIBLE);
+                        webView.requestLayout();
+                        webView.invalidate();
+                        return;
+                    }
+                    if (resumeRecoveryPolicy.shouldRecover(generation)) {
+                        recoverWebViewAfterResume(webView);
+                    }
+                }
+            );
+        } catch (RuntimeException ignored) {
+            if (resumeRecoveryPolicy.shouldRecover(generation)) {
+                recoverWebViewAfterResume(webView);
+            }
+            return;
+        }
+
+        connectionHandler.postDelayed(() -> {
+            if (resumeRecoveryPolicy.shouldRecover(generation)) {
+                recoverWebViewAfterResume(webView);
+            }
+        }, RESUME_RENDERER_PROBE_TIMEOUT_MS);
+    }
+
+    private void recoverWebViewAfterResume(WebView webView) {
+        if (isFinishing() || isDestroyed()) return;
+        String serverUrl = MobileShellConfig.getStoredServerUrl(this);
+        if (serverUrl.isEmpty()) {
+            showServerSetupScreen();
+            return;
+        }
+        mainFrameLoadFailed = false;
+        showConnectionLoading("页面恢复超时，正在重新连接并恢复当前会话…");
+        webView.stopLoading();
+        webView.loadUrl(MobileShellConfig.resolveAppRetryUrl(serverUrl, webView.getUrl()));
+    }
+
+    private void recreateActivityAfterRendererLoss(String recoveryUrl) {
+        if (isFinishing() || isDestroyed()) return;
+        Intent intent = getIntent();
+        if (intent != null && recoveryUrl != null && !recoveryUrl.trim().isEmpty()) {
+            intent.putExtra(EXTRA_RENDERER_RECOVERY_URL, recoveryUrl);
+        }
+        recreate();
     }
 
     private void showConnectionError(String message) {
@@ -511,6 +647,14 @@ public class MainActivity extends BridgeActivity {
     private CapConfig buildConfig() {
         CapConfig defaultConfig = CapConfig.loadDefault(this);
         String serverUrl = MobileShellConfig.resolveServerUrl(this, defaultConfig.getServerUrl());
+        Intent launchIntent = getIntent();
+        if (launchIntent != null) {
+            String recoveryUrl = launchIntent.getStringExtra(EXTRA_RENDERER_RECOVERY_URL);
+            if (recoveryUrl != null && !recoveryUrl.trim().isEmpty()) {
+                serverUrl = MobileShellConfig.resolveAppRetryUrl(serverUrl, recoveryUrl);
+                launchIntent.removeExtra(EXTRA_RENDERER_RECOVERY_URL);
+            }
+        }
         boolean allowMixedContent = defaultConfig.isMixedContentAllowed() || serverUrl.startsWith("http://");
 
         CapConfig.Builder builder = new CapConfig.Builder(this)

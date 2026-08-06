@@ -132,6 +132,7 @@ import {
 } from './connectionManager'
 import { shouldApplyRuntimeSnapshotVersion } from './runtimeSnapshotOrdering'
 import { isOptimisticOnlyExecutionEvidence } from './runtimeExecutionRecovery'
+import { shouldRefreshForegroundMessages } from './foregroundRecoveryPolicy'
 import {
   isRuntimeRequestAwaitingDeliveryConfirmation,
   shouldSettleOptimisticDeliveryFromRuntimeSnapshot,
@@ -143,6 +144,7 @@ import {
   filterVisibleOptimisticUserMessages,
   mergeVisibleOptimisticUserMessages,
   normalizeMessageText,
+  recoverOptimisticBaselineMatchCount,
   userMessageSignature,
   type OptimisticUserMessageMeta,
 } from './messageIdentity'
@@ -4897,6 +4899,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     turnOptions?: ComposerTurnOptions
     baselineMessageCount?: number
     baselineTailMessageId?: string
+    baselineMatchCount?: number
   }): MessageOutboxEntry {
     const nowMs = Date.now()
     return {
@@ -4911,6 +4914,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       reasoningEffort: args.reasoningEffort,
       collaborationMode: args.collaborationMode,
       turnOptions: cloneTurnOptions(args.turnOptions),
+      baselineMatchCount: args.baselineMatchCount,
       baselineMessageCount: args.baselineMessageCount,
       baselineTailMessageId: args.baselineTailMessageId,
       state: 'sending',
@@ -4921,7 +4925,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
   function updateMessageOutboxEntry(
     clientMessageId: string,
-    patch: Partial<Pick<MessageOutboxEntry, 'threadId' | 'modelId' | 'state' | 'baselineMessageCount' | 'baselineTailMessageId'>>,
+    patch: Partial<Pick<MessageOutboxEntry, 'threadId' | 'modelId' | 'state' | 'baselineMatchCount' | 'baselineMessageCount' | 'baselineTailMessageId'>>,
   ): void {
     mergeMessageOutboxFromStorage()
     const current = messageOutboxByClientId.get(clientMessageId)
@@ -5277,6 +5281,28 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     return ''
   }
 
+  function restoreOptimisticMetaFromOutbox(
+    entry: MessageOutboxEntry,
+    threadId: string,
+    optimisticMessageId: string,
+  ): void {
+    const restoredMeta = optimisticUserMessageMetaById.get(optimisticMessageId)
+    if (!restoredMeta) return
+    const persisted = persistedMessagesByThreadId.value[threadId] ?? []
+    optimisticUserMessageMetaById.set(optimisticMessageId, {
+      ...restoredMeta,
+      baselineMatchCount: recoverOptimisticBaselineMatchCount(
+        persisted,
+        restoredMeta.signature,
+        entry.baselineMatchCount,
+        entry.baselineMessageCount,
+        entry.baselineTailMessageId,
+      ),
+      baselineMessageCount: entry.baselineMessageCount ?? restoredMeta.baselineMessageCount,
+      baselineTailMessageId: entry.baselineTailMessageId ?? restoredMeta.baselineTailMessageId,
+    })
+  }
+
   function restoreConfirmingMessageOutboxEntry(entry: MessageOutboxEntry, threadId: string): void {
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId) return
@@ -5292,14 +5318,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           createdAtMs: entry.createdAtMs,
         },
       )
-    const restoredMeta = optimisticUserMessageMetaById.get(optimisticMessageId)
-    if (restoredMeta) {
-      optimisticUserMessageMetaById.set(optimisticMessageId, {
-        ...restoredMeta,
-        baselineMessageCount: entry.baselineMessageCount ?? restoredMeta.baselineMessageCount,
-        baselineTailMessageId: entry.baselineTailMessageId ?? restoredMeta.baselineTailMessageId,
-      })
-    }
+    restoreOptimisticMetaFromOutbox(entry, normalizedThreadId, optimisticMessageId)
     attachOutboxEntryToOptimisticMessage(entry.clientMessageId, normalizedThreadId, optimisticMessageId)
     markOptimisticUserMessageConfirming(normalizedThreadId, optimisticMessageId)
   }
@@ -5421,14 +5440,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           createdAtMs: entry.createdAtMs,
         },
       )
-    const restoredMeta = optimisticUserMessageMetaById.get(optimisticMessageId)
-    if (restoredMeta) {
-      optimisticUserMessageMetaById.set(optimisticMessageId, {
-        ...restoredMeta,
-        baselineMessageCount: entry.baselineMessageCount ?? restoredMeta.baselineMessageCount,
-        baselineTailMessageId: entry.baselineTailMessageId ?? restoredMeta.baselineTailMessageId,
-      })
-    }
+    restoreOptimisticMetaFromOutbox(entry, normalizedThreadId, optimisticMessageId)
     attachOutboxEntryToOptimisticMessage(entry.clientMessageId, normalizedThreadId, optimisticMessageId)
     markOptimisticUserMessageFailed(normalizedThreadId, optimisticMessageId, {
       threadId: normalizedThreadId,
@@ -5456,14 +5468,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           createdAtMs: entry.createdAtMs,
         },
       )
-    const restoredMeta = optimisticUserMessageMetaById.get(optimisticMessageId)
-    if (restoredMeta) {
-      optimisticUserMessageMetaById.set(optimisticMessageId, {
-        ...restoredMeta,
-        baselineMessageCount: entry.baselineMessageCount ?? restoredMeta.baselineMessageCount,
-        baselineTailMessageId: entry.baselineTailMessageId ?? restoredMeta.baselineTailMessageId,
-      })
-    }
+    restoreOptimisticMetaFromOutbox(entry, normalizedThreadId, optimisticMessageId)
     attachOutboxEntryToOptimisticMessage(entry.clientMessageId, normalizedThreadId, optimisticMessageId)
     markOptimisticUserMessageWaiting(normalizedThreadId, optimisticMessageId)
   }
@@ -8234,6 +8239,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     const optimisticMeta = optimisticUserMessageMetaById.get(optimisticMessageId)
     if (optimisticMeta) {
       updateMessageOutboxEntry(clientMessageId, {
+        baselineMatchCount: optimisticMeta.baselineMatchCount,
         baselineMessageCount: optimisticMeta.baselineMessageCount,
         baselineTailMessageId: optimisticMeta.baselineTailMessageId,
       })
@@ -8990,6 +8996,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     const optimisticMeta = optimisticUserMessageMetaById.get(optimisticMessageId)
     if (optimisticMeta) {
       updateMessageOutboxEntry(queued.clientMessageId, {
+        baselineMatchCount: optimisticMeta.baselineMatchCount,
         baselineMessageCount: optimisticMeta.baselineMessageCount,
         baselineTailMessageId: optimisticMeta.baselineTailMessageId,
       })
@@ -9474,33 +9481,44 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   function shouldRefreshSelectedMessagesForForegroundRecovery(
     threadId: string,
     requestedForceRefresh: boolean,
+    allowRoutineActiveRefresh = true,
   ): boolean {
     if (!threadId) return false
     const lastDetailSyncAt = lastThreadDetailSyncAtById.value[threadId] ?? 0
+    const detailAgeMs = lastDetailSyncAt > 0 ? Date.now() - lastDetailSyncAt : Number.POSITIVE_INFINITY
     const recentlySynced =
       lastDetailSyncAt > 0 &&
-      Date.now() - lastDetailSyncAt < THREAD_SELECTION_RECOVERY_SUPPRESS_MS
-    if (pendingThreadMessageRefresh.has(threadId)) return true
-    if (eventUnreadByThreadId.value[threadId] === true) return true
-    if (isThreadExecutionActive(threadId)) return true
-    if (isRuntimeExecutionStale(threadId)) return true
-    if (!hasLoadedThreadDetail(threadId)) return true
-    if (hasPendingServerRequestSignal(threadId)) return true
-    if (hasQueuedThreadWork(threadId)) return true
-    if ((notificationStale.value || syncLagging.value) && !recentlySynced) return true
-    if (!requestedForceRefresh) return false
-
-    return lastDetailSyncAt <= 0 ||
-      Date.now() - lastDetailSyncAt >= FOREGROUND_RECOVERY_DETAIL_REFRESH_MIN_INTERVAL_MS
+      detailAgeMs < THREAD_SELECTION_RECOVERY_SUPPRESS_MS
+    return shouldRefreshForegroundMessages({
+      hasThread: Boolean(threadId),
+      requestedForceRefresh,
+      allowRoutineActiveRefresh,
+      pendingMessageRefresh: pendingThreadMessageRefresh.has(threadId),
+      unread: eventUnreadByThreadId.value[threadId] === true,
+      executionActive: isThreadExecutionActive(threadId),
+      executionStale: isRuntimeExecutionStale(threadId),
+      hasLoadedThreadDetail: hasLoadedThreadDetail(threadId),
+      hasPendingServerRequest: hasPendingServerRequestSignal(threadId),
+      hasQueuedWork: hasQueuedThreadWork(threadId),
+      connectionStale: notificationStale.value || syncLagging.value,
+      recentlySynced,
+      forceRefreshDue: detailAgeMs >= FOREGROUND_RECOVERY_DETAIL_REFRESH_MIN_INTERVAL_MS,
+    })
   }
 
   function runForegroundRecoverySync(
-    options: { includeThreadList?: boolean; forceMessageRefresh?: boolean; urgent?: boolean } = {},
+    options: {
+      includeThreadList?: boolean
+      forceMessageRefresh?: boolean
+      urgent?: boolean
+      allowRoutineActiveRefresh?: boolean
+    } = {},
   ): void {
     const activeThreadId = selectedThreadId.value
     const shouldRefreshMessages = shouldRefreshSelectedMessagesForForegroundRecovery(
       activeThreadId,
       options.forceMessageRefresh === true,
+      options.allowRoutineActiveRefresh !== false,
     )
     if (activeThreadId) {
       clearBufferedLiveDeltas()
@@ -9517,6 +9535,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           shouldRefreshSelectedMessagesForForegroundRecovery(
             refreshedActiveThreadId,
             options.forceMessageRefresh === true,
+            options.allowRoutineActiveRefresh !== false,
           )
         if (refreshedActiveThreadId && shouldRefreshMessagesAfterReplay) {
           pendingThreadMessageRefresh.add(refreshedActiveThreadId)
@@ -9640,6 +9659,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             includeThreadList: shouldIncludeThreadList,
             forceMessageRefresh: shouldForceMessageRefresh,
             urgent: isFirstAttempt,
+            allowRoutineActiveRefresh: isFirstAttempt,
           })
         }, delayMs)
         resumeSyncTimers.add(timer)
