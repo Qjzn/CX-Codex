@@ -35,6 +35,7 @@ export type MessageOutboxEntry = {
   reasoningEffort: ReasoningEffort | ''
   collaborationMode: CollaborationMode
   turnOptions?: ComposerTurnOptions
+  baselineMatchCount?: number
   baselineMessageCount?: number
   baselineTailMessageId?: string
   state: 'sending' | 'waiting' | 'confirming' | 'failed'
@@ -107,6 +108,9 @@ function normalizeMessageOutboxEntry(value: unknown, nowMs: number): MessageOutb
     reasoningEffort,
     collaborationMode: row.collaborationMode === 'plan' ? 'plan' : 'execute',
     turnOptions: normalizeComposerTurnOptions(row.turnOptions),
+    baselineMatchCount: typeof row.baselineMatchCount === 'number' && Number.isFinite(row.baselineMatchCount)
+      ? Math.max(0, Math.floor(row.baselineMatchCount))
+      : undefined,
     baselineMessageCount: typeof row.baselineMessageCount === 'number' && Number.isFinite(row.baselineMessageCount)
       ? Math.max(0, Math.floor(row.baselineMessageCount))
       : undefined,

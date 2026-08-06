@@ -112,6 +112,30 @@ export function countPersistedUserMessageSignatures(messages: UiMessage[]): Map<
   return counts
 }
 
+export function recoverOptimisticBaselineMatchCount(
+  persisted: UiMessage[],
+  signature: string,
+  storedBaselineMatchCount?: number,
+  baselineMessageCount?: number,
+  baselineTailMessageId = '',
+): number {
+  if (typeof storedBaselineMatchCount === 'number' && Number.isFinite(storedBaselineMatchCount)) {
+    return Math.max(0, Math.floor(storedBaselineMatchCount))
+  }
+
+  const normalizedTailId = baselineTailMessageId.trim()
+  const tailIndex = normalizedTailId
+    ? persisted.findIndex((message) => message.id === normalizedTailId)
+    : -1
+  const boundary = tailIndex >= 0
+    ? tailIndex + 1
+    : typeof baselineMessageCount === 'number' && Number.isFinite(baselineMessageCount)
+      ? Math.max(0, Math.min(Math.floor(baselineMessageCount), persisted.length))
+      : 0
+  const baselineCounts = countPersistedUserMessageSignatures(persisted.slice(0, boundary))
+  return baselineCounts.get(signature) ?? 0
+}
+
 export function filterVisibleOptimisticUserMessages(
   persisted: UiMessage[],
   optimistic: UiMessage[],

@@ -93,6 +93,9 @@ jobs:
 
       - name: Run locked in-place upgrade smoke test
         shell: pwsh
+        env:
+          SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           $installDir = "$env:TEMP\cx-codex-smoke-install"
           $distCliDir = Join-Path $installDir "dist-cli"
@@ -122,14 +125,22 @@ jobs:
               throw "Upgrade fixture did not acquire the expected listener and PID marker."
             }
             # This lock fixture is intentionally not a CX-Codex health server.
-            $branch = if ($env:GITHUB_HEAD_REF) { $env:GITHUB_HEAD_REF } else { $env:GITHUB_REF_NAME }
+            if ($env:SOURCE_REPOSITORY -notmatch '^[^/]+/[^/]+$') {
+              throw "Source repository must use the owner/name format."
+            }
+            if ([string]::IsNullOrWhiteSpace($env:SOURCE_BRANCH)) {
+              throw "Source branch must not be empty."
+            }
+            $repoOwner, $repoName = $env:SOURCE_REPOSITORY -split '/', 2
             $jsonLines = @(
               ./scripts/bootstrap-windows.ps1 `
                 -InstallDir $installDir `
                 -WorkspacePath "$env:TEMP\CodexWorkspace" `
                 -Port 7441 `
                 -Password "ci-password" `
-                -Branch $branch `
+                -RepoOwner $repoOwner `
+                -RepoName $repoName `
+                -Branch $env:SOURCE_BRANCH `
                 -UseBranchArchive `
                 -ForceActiveTaskUpgrade `
                 -SkipStartupTask `

@@ -280,6 +280,7 @@ This file tracks manual regression and feature verification steps.
 7. `-RemoveUserData -RemoveCloudflared` additionally removes the CX-Codex state directory and only project-managed cloudflared files.
 8. `StartNow` must start an isolated service, pass `/health` with HTTP 200, and the official uninstaller must stop that service and close the port.
 9. Re-running bootstrap while the managed service is active must stop only the matching service/tunnel, atomically replace the installation, and retain the previous directory for rollback.
+10. A detached Windows service must keep the Codex app-server connected through stdio without creating a visible Codex, Console Host, or Windows Terminal window.
 
 ### Verification
 
@@ -288,6 +289,7 @@ This file tracks manual regression and feature verification steps.
 - Parse bootstrap with Windows PowerShell and confirm the heartbeat and pairing-page messages use stderr in JSON mode while stdout remains one final JSON line.
 - Confirm the Windows GitHub Actions job runs the productization smoke and always invokes the official uninstall cleanup.
 - Confirm the Windows GitHub Actions job starts a Node service plus child process from the old install directory, records its managed PID/listener, and completes an in-place branch-archive upgrade without a directory-lock failure.
+- Start the detached service on Windows, exercise an App Server-backed request, and confirm the Codex app-server remains connected through stdio without a visible Codex, Console Host, or Windows Terminal window.
 - Confirm the Release zip contains `release-capabilities.json`, `scripts/uninstall-windows.ps1`, and `scripts/verify-windows-productization.ps1`.
 - Confirm the Release zip contains both Vite root entrypoints: `index.html` and `local-preview.html`.
 
@@ -15767,6 +15769,38 @@ Current evidence:
 - npm `10.9.3` audited 131 production dependencies through the official registry with zero info, low, moderate, high or critical vulnerabilities. The default prefix-level npm `6.14.6` audit error was a local tool incompatibility, not a dependency finding.
 - GitHub authentication is active for `Qjzn/CX-Codex`, the latest public release remains `v2.7.2`, and all four required Android signing secret names are present. Publication still requires clean-worktree verification, main/tag CI, public asset inspection and certificate/checksum proof.
 
+## Android duplicate-send and renderer recovery (2026-08-05)
+
+1. Submit one prompt in an existing conversation, background the Android app before the reply completes, and reopen it after authoritative history has persisted the user message. The conversation must contain one visible user bubble and one Runtime request for the same `clientMessageId`.
+2. Repeat the restore path with an outbox record that predates `baselineMatchCount`. The frontend must reconstruct the pre-send boundary from `baselineTailMessageId` or `baselineMessageCount`; it must not retain an acknowledged optimistic duplicate.
+3. On Android foreground recovery, the first attempt may reconcile the active conversation. The 4.5-second and 12-second retries must reload messages only when pending, unread, stale, unloaded, queued, awaiting a server request, or connection-stale evidence remains.
+4. While a task is running or foreground recovery is visible, tap the compact waiting card. Its detail sheet must open and remain dismissible without horizontal overflow or an invisible blocking layer.
+5. Background and resume the app while a long response is streaming. If the WebView renderer does not answer the resume probe, becomes unresponsive, or is reclaimed, native recovery copy must appear and the app must reload or recreate the exact current hash route instead of remaining on a white screen.
+6. Keep Android's default `RENDERER_PRIORITY_IMPORTANT` policy without waiving it while the WebView is invisible. Backgrounding the app must not deliberately make its renderer a more aggressive low-memory kill target.
+7. Distinguish a low-memory renderer kill from a renderer crash. A low-memory kill restores the exact safe hash route; a crash recreates the shell at the server root so a route-specific rendering crash cannot loop indefinitely.
+8. Keep the renderer-crash inspection explicitly scoped to API 26 and newer while `minSdk` remains 24. Android lint must report no `RenderProcessGoneDetail.didCrash()` `NewApi` error.
+
+Verification:
+
+- Run `npm.cmd run verify:frontend-normalizers` and `npm.cmd run build:frontend`.
+- Run `npm.cmd run test:7420:frontend` so the durable baseline, evidence-driven resume policy, and Android renderer-recovery source contracts remain enforced.
+- From `android/`, run `./gradlew testDebugUnitTest --tests com.cxcodex.bridge.WebViewResumeRecoveryPolicyTest --tests com.cxcodex.bridge.MobileShellConfigTest` and `./gradlew lintDebug`.
+- Open `/#/__regression/conversation-blocks?regression=frontend&tailStatus=1&resumeRecovery=1` at 393 x 852 and tap `.live-overlay-compact-main`. Confirm one overlay, one visible detail sheet, no failed responses, and no browser errors.
+- Before release, install the newly built APK on a physical Android device and repeat the long-running background/resume path. A desktop browser cannot prove Android renderer death and recreation.
+
+Current evidence:
+
+- The reported prompt was found once in Runtime Store as request `rt-msfjk7u3-a1b9b567c1de`, with one client message id and one completed turn; duplication was isolated to frontend outbox merging.
+- The focused phone fixture rendered one waiting card and opened one detail sheet. The 393 px document matched the 393 px viewport and emitted zero page errors or failed responses.
+- Frontend normalizer smoke, the production frontend build, Android recovery/config policy tests, Android lint, `git diff --check`, and the complete 36-surface frontend regression passed. The latest full regression completed in 534.4 seconds.
+- Android lint reported zero Error/Fatal findings. Its existing warning set contains no new renderer-recovery API warning.
+- The locally restarted 2.7.3 service serves the same frontend hash as `dist/index.html`; its health snapshot has zero pending/queued RPCs, zero timeouts, and zero uncertain Runtime requests. The stderr log contains performance warnings plus one transient model-refresh child-process timeout observed during regression, while the app-server remained running and initialized.
+- A 60-second local soak completed 12 samples with zero pending/queued RPCs, timeouts, replay failures, event-sequence regressions, or slow active thread-list calls. Cold browser measurements reached first content in 128 ms, the project list in 388 ms, and a bounded large-conversation first screen in 580 ms at 393 x 852.
+- The remaining performance debt is outside the normal chat hot path: an archived full thread-list read took about 8.9 seconds, while authoritative `thread/read(includeTurns=true)` calls for a very long conversation took about 3.1-3.4 seconds. The frontend now bounds first-screen projection and resume retries, but server-side archived pagination/indexing and long-history paging remain follow-up work.
+- npm 10.9.3 audited production dependencies through the official registry with zero vulnerabilities. Android lint retains the intentional cleartext-network warning because dynamic LAN URLs such as `http://192.168.x.x:7420` are a supported setup path; public access must use HTTPS.
+- The local Android delivery build uses version `2.7.5` / code `20705`, bundles the same frontend `index.html` hash as `dist`, passes release signature and zip-alignment verification, and matches the signing certificate of the public `v2.7.4` APK so it can be installed as an in-place upgrade.
+- No Android device was connected during implementation, so physical process-death verification is still required before publishing an APK.
+
 ## CX-Codex 2.7.4 release-package completeness (2026-08-04)
 
 1. `scripts/package-release.ps1` must treat both `vite.config.ts` and `vite.local-preview.config.ts` as required Release ZIP inputs because `npm run build:frontend` executes both configurations.
@@ -15780,3 +15814,22 @@ Current evidence:
 - The root cause is limited to the Release ZIP manifest and its incomplete content assertion. The configuration exists in source, so repository and tag builds passed while the independently unpacked release could not rebuild the local-preview frontend.
 - The patched `2.7.4` release gate completed in 105.8 seconds with governance, production frontend/CLI builds, normalizer, server-module, CLI launcher, ZIP checksum/content and npm package smokes passing. The generated ZIP contains `vite.config.ts` and `vite.local-preview.config.ts` as required entries.
 - A fresh directory independently extracted that generated ZIP, installed 325 packages with npm `10.9.3`, and completed both Vite builds in 69.1 seconds. Its package version was `2.7.4`, and both `dist/index.html` and `dist/local-preview.html` existed after the build.
+
+## CX-Codex 2.7.5 release gate (2026-08-07)
+
+1. `package.json`, `package-lock.json`, the GitHub tag and `docs/release-notes-2.7.5.zh-CN.md` must all resolve to `2.7.5`.
+2. The release must retain the Android duplicate-message baseline, evidence-driven foreground retries, renderer liveness recovery, default renderer priority and crash-versus-low-memory route policy described above.
+3. The Windows App Server child process must use `windowsHide` without changing stdio or lifecycle ownership. Fork pull request bootstrap smoke must resolve the contributor repository and branch while retaining the active-task upgrade fixture.
+4. Run `npm.cmd run verify:release -- -AllowDirty -SchemaAudit warn`, the complete 7420 frontend regression and the Android focused unit/lint/release-build checks before tagging.
+5. After tagging, verify the public ZIP/APK and SHA-256 assets, the Android package/version/fixed signing certificate, and a public `latest` Windows `-NoStart` installation before calling the release stable.
+6. A physical Android background/process-death run remains required evidence for FCM deep Doze acceptance; the release must not close issue #28 based only on browser, JVM or lint checks.
+
+Current evidence:
+
+- `npm.cmd run verify:release -- -AllowDirty -SchemaAudit warn` completed in 155.2 seconds with governance, production frontend/CLI builds, normalizer, server-module, CLI launcher, ZIP checksum/content and npm package smokes passing. The regenerated schema counts exactly matched the committed reviewed checkpoint: TypeScript root `236 -> 77`, TypeScript v2 `199 -> 445`, JSON root `37 -> 35`, and JSON v2 `102 -> 202`.
+- The complete 36-surface frontend regression passed against an isolated server that served the exact final `dist/index.html` hash in 476.9 seconds. Its first attempt against the installed 7420 service failed because that service still served an older frontend hash; the source-matched run passed and the temporary server, child App Server and port were removed afterward.
+- Android frontend sync, focused recovery/config unit tests, `lintDebug` and `assembleRelease` completed successfully in 127.7 seconds. The official local ZIP/APK packaging and checksum flow completed in 84.9 seconds; both Vite configurations were present in the ZIP and the APK embedded the exact final frontend hash.
+- The local `2.7.5` APK uses package `com.cxcodex.bridge`, version code `20705`, and the same signing certificate SHA-256 as public `v2.7.4`, so it is eligible for an in-place upgrade.
+- npm `10.9.3` audited 131 production dependencies through the official registry with zero info, low, moderate, high or critical vulnerabilities.
+- Pull requests #46 and #47 were reviewed against current main and integrated with contributor authorship preserved. Dependency pull requests #49, #50 and #51 remain outside this stability release because they change PDF/WebView rendering, Markdown rendering or the native SQLite runtime and need dedicated regression evidence.
+- Final clean-worktree release verification, tag workflow, public asset checks, isolated Windows installation and physical Android process-death verification are not satisfied by this pre-release evidence and must be reported separately.

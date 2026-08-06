@@ -387,6 +387,8 @@ function Assert-CrossClientThreadStartedRefreshSource {
 function Assert-PendingStartOutboxRecoverySource {
   $sourcePath = Join-Path (Get-Location) "src\composables\useDesktopState.ts"
   $source = Get-Content -Raw -Encoding UTF8 -LiteralPath $sourcePath
+  $outboxPersistenceSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\messageOutboxPersistence.ts")
+  $messageIdentitySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\messageIdentity.ts")
   $functionMatch = [regex]::Match($source, "async\s+function\s+recoverPersistentMessageOutbox[\s\S]*?\n\s*async\s+function\s+startRuntimeTurnWithBoundedRecovery")
   Assert-True ($functionMatch.Success) "could not find recoverPersistentMessageOutbox source"
   $functionSource = $functionMatch.Value
@@ -406,6 +408,9 @@ function Assert-PendingStartOutboxRecoverySource {
   Assert-True ($functionSource -match "await\s+getRuntimeRequestByClientMessageId\(entry\.clientMessageId\)[\s\S]*?messageOutboxByClientId\.get\(entry\.clientMessageId\)[\s\S]*?if\s*\(!currentEntry\)\s*continue") "outbox recovery must discard stale lookup results after another page removes the entry"
   Assert-True ($source -match "isFirstAttempt\)[\s\S]*?mergeMessageOutboxFromStorage\(\)[\s\S]*?recoverPersistentMessageOutbox\(\)") "foreground resume must reconcile the durable message outbox on its first attempt"
   Assert-True ($source -match "addEventListener\('storage',\s*onStorage\)") "parallel 7420 pages must observe message outbox storage changes"
+  Assert-True ($outboxPersistenceSource -match "baselineMatchCount\?:\s*number" -and $outboxPersistenceSource -match "baselineMatchCount:\s*typeof\s+row\.baselineMatchCount[\s\S]*?Math\.floor\(row\.baselineMatchCount\)") "the durable outbox must retain the pre-send signature count"
+  Assert-True ($messageIdentitySource -match "function\s+recoverOptimisticBaselineMatchCount[\s\S]*?baselineTailMessageId[\s\S]*?baselineMessageCount") "legacy outbox rows must reconstruct their pre-send signature boundary"
+  Assert-True ($source -match "function\s+restoreOptimisticMetaFromOutbox[\s\S]*?recoverOptimisticBaselineMatchCount\([\s\S]*?entry\.baselineMatchCount") "outbox restoration must not count the already-persisted prompt as its own baseline"
 }
 
 function Assert-RuntimeSnapshotOrderingSource {
@@ -416,6 +421,7 @@ function Assert-RuntimeSnapshotOrderingSource {
   $runtimeQueueServerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\runtimeMessageQueue.ts")
   $serverSnapshotSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\appServerThreadRuntimeSnapshot.ts")
   $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadConversation.vue")
+  $foregroundRecoveryPolicySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\foregroundRecoveryPolicy.ts")
   Assert-True ($source -match "const\s+currentEventSeq\s*=\s*Math\.max\([\s\S]*?latestRuntimeEventSeqByThreadId\.get\(threadId\)[\s\S]*?shouldApplyRuntimeSnapshotVersion\(\{\s*lastEventSeq:\s*currentEventSeq\s*\},\s*snapshot\)") "runtime snapshots must be checked against the latest buffered event sequence"
   Assert-True ($source -match "eventSeq:\s*notification\.seq") "runtime notification state must retain the authoritative event sequence"
   Assert-True ($source -match "rememberLatestRuntimeEventSequence\(threadId,\s*notification\.seq\)[\s\S]*?method\.endsWith\('/delta'\)") "delta events must record their latest sequence before taking the non-reactive fast path"
@@ -434,7 +440,8 @@ function Assert-RuntimeSnapshotOrderingSource {
   Assert-True ($source -match "!options\.olderHistory\s*&&\s*!shouldForceCachedSnapshotRefresh") "explicit older-history reads must not be blocked when a legacy thread has no terminal refresh key"
   Assert-True ($conversationSource -match "pendingRemoteOlderHistoryAnchor\s*=\s*anchorSnapshot[\s\S]*?emit\('loadOlderHistory'\)[\s\S]*?props\.messages\.length[\s\S]*?restoreScrollAnchorOverFrames\(anchorSnapshot,\s*6\)") "remote older-history insertion must restore the pre-request reading anchor after messages arrive"
   Assert-True ($source -match "else\s+if\s*\(!shouldDeferCachedRpcRefresh\)\s*\{\s*scheduleNonFreshThreadDetailRetry") "the slow non-fresh retry must not race the immediate cached-message refresh"
-  Assert-True ($source -match "\(notificationStale\.value\s*\|\|\s*syncLagging\.value\)\s*&&\s*!recentlySynced") "startup notification health recovery must not duplicate a just-completed authoritative message refresh"
+  Assert-True ($source -match "connectionStale:\s*notificationStale\.value\s*\|\|\s*syncLagging\.value" -and $foregroundRecoveryPolicySource -match "state\.connectionStale\s*&&\s*!state\.recentlySynced") "startup notification health recovery must not duplicate a just-completed authoritative message refresh"
+  Assert-True ($source -match "allowRoutineActiveRefresh:\s*isFirstAttempt" -and $foregroundRecoveryPolicySource -match "if\s*\(!state\.allowRoutineActiveRefresh\)\s*return\s+false") "later Android resume retries must not repeatedly reload a healthy active conversation"
   Assert-True ($source -match "existingWasAuthoritative\s*=\s*authoritativeMessageLoadInFlightThreadIds\.has\(threadId\)[\s\S]*?existingWasAuthoritative\s*&&\s*options\.fullHistory\s*!==\s*true\s*&&\s*!options\.olderHistory") "concurrent snapshot recovery must reuse an in-flight authoritative message read"
   Assert-True ($source -match "const\s+refreshedRuntimeSnapshotApplied\s*=\s*snapshot\s*===\s*initialRuntimeSnapshot[\s\S]*?\?\s*false[\s\S]*?:\s*applyRuntimeSnapshotState") "the same settled snapshot must not be applied twice while queued work starts"
   Assert-True ($source -match "const\s+runtimeSnapshotApplied\s*=\s*initialRuntimeSnapshotApplied\s*\|\|\s*refreshedRuntimeSnapshotApplied") "message reconciliation must retain a runtime snapshot applied before history refresh"
@@ -683,6 +690,7 @@ function Assert-BoundedRuntimeSendRecoverySource {
   $androidPushServiceSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\TaskPetFirebaseMessagingService.java")
   $androidPushRegistrationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\MobilePushRegistration.java")
   $androidMainActivitySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\MainActivity.java")
+  $androidResumeRecoveryPolicySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\WebViewResumeRecoveryPolicy.java")
   $androidPluginSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\MobileShellPlugin.java")
   $androidConfigSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\MobileShellConfig.java")
   $androidManifestSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\AndroidManifest.xml")
@@ -705,6 +713,12 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($source -match "const\s+failure\s*=\s*classifyThreadLoadFailure\(error\)[\s\S]*?setThreadLoadError\(threadId,\s*failure\.message\)[\s\S]*?scheduleNonFreshThreadDetailRetry\(threadId\)") "recoverable thread history failures must retain per-thread error state and schedule bounded retries"
   Assert-True ($appSource -match ':load-error=\"selectedThreadLoadError\"' -and $appSource -match '@open-connection-settings=\"onOpenThreadConnectionSettings\"') "the conversation surface must expose thread recovery and mobile address repair"
   Assert-True ($source -match "const\s+RUNTIME_SEND_RETRY_DELAYS_MS\s*=\s*\[700,\s*2000,\s*5000,\s*10000\]") "runtime send retries must use the bounded mobile weak-network schedule"
+  Assert-True ($androidMainActivitySource -match "onRenderProcessGone[\s\S]*?resolveAppRetryUrl[\s\S]*?recreateActivityAfterRendererLoss" -and $androidMainActivitySource -match "recreateActivityAfterRendererLoss[\s\S]*?EXTRA_RENDERER_RECOVERY_URL[\s\S]*?recreate\(\)" -and $androidMainActivitySource -match "onRenderProcessUnresponsive[\s\S]*?renderer\.terminate") "Android must recover visibly on the exact route when the WebView renderer hangs or is reclaimed"
+  $rendererPriorityMatch = [regex]::Match($androidMainActivitySource, "setRendererPriorityPolicy\(\s*WebView\.RENDERER_PRIORITY_IMPORTANT\s*,\s*(true|false)\s*\)")
+  Assert-True (-not $rendererPriorityMatch.Success -or $rendererPriorityMatch.Groups[1].Value -eq "false") "Android must not waive renderer priority when the app becomes invisible"
+  Assert-True ($androidMainActivitySource -match "@TargetApi\(Build\.VERSION_CODES\.O\)[\s\S]*?onRenderProcessGone") "Android renderer-crash inspection must retain its API 26 boundary while minSdk remains 24"
+  Assert-True ($androidMainActivitySource -match "detail\.didCrash\(\)[\s\S]*?shouldRestoreExactRoute\(rendererCrashed\)[\s\S]*?restoreExactRoute[\s\S]*?resolveAppRetryUrl" -and $androidResumeRecoveryPolicySource -match "shouldRestoreExactRoute\(boolean\s+rendererCrashed\)[\s\S]*?return\s+!rendererCrashed") "a renderer crash must fall back to the app root instead of reopening a route that may crash repeatedly"
+  Assert-True ($androidMainActivitySource -match "probeWebViewAfterResume[\s\S]*?evaluateJavascript[\s\S]*?recoverWebViewAfterResume" -and $androidResumeRecoveryPolicySource -match "beginProbe[\s\S]*?markResponsive[\s\S]*?shouldRecover") "Android resume probes must isolate stale callbacks and reload only an unanswered current probe"
   $functionMatch = [regex]::Match($source, "async\s+function\s+startRuntimeTurnWithBoundedRecovery[\s\S]*?\n\s*function\s+hydrateCachedMessagesForThread")
   Assert-True ($functionMatch.Success) "could not find startRuntimeTurnWithBoundedRecovery source"
   $functionSource = $functionMatch.Value

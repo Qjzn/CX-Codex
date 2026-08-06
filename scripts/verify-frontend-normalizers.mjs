@@ -35,6 +35,7 @@ const composerEnterBehaviorImport = toImportPath(relative(outputRoot, join(repoR
 const threadGoalImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'threadGoal.ts')))
 const codexFileCitationImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'utils', 'codexFileCitation.ts')))
 const runtimeMessageQueueImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'runtimeMessageQueue.ts')))
+const foregroundRecoveryPolicyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'foregroundRecoveryPolicy.ts')))
 
 try {
   writeFileSync(entryPath, `
@@ -58,6 +59,7 @@ import {
   createClientMessageId,
   filterVisibleOptimisticUserMessages,
   mergeVisibleOptimisticUserMessages,
+  recoverOptimisticBaselineMatchCount,
   userMessageSignature,
 } from '${messageIdentityImport}'
 import {
@@ -123,6 +125,7 @@ import {
   mergePersistedRuntimeQueuedMessages,
   mergeRuntimeMessageQueueThreadState,
 } from '${runtimeMessageQueueImport}'
+import { shouldRefreshForegroundMessages } from '${foregroundRecoveryPolicyImport}'
 
 const queuedA = { id: 'local-a', clientMessageId: 'client-a', deliveryState: 'queued' } as any
 const queuedB = { id: 'local-b', clientMessageId: 'client-b', deliveryState: 'queued' } as any
@@ -146,6 +149,37 @@ assert.deepEqual(
   [serverC, serverA, queuedB],
 )
 assert.deepEqual(mergeRuntimeMessageQueueThreadState([serverA], []), [])
+
+const activeResumeState = {
+  hasThread: true,
+  requestedForceRefresh: true,
+  allowRoutineActiveRefresh: true,
+  pendingMessageRefresh: false,
+  unread: false,
+  executionActive: true,
+  executionStale: false,
+  hasLoadedThreadDetail: true,
+  hasPendingServerRequest: false,
+  hasQueuedWork: false,
+  connectionStale: false,
+  recentlySynced: true,
+  forceRefreshDue: false,
+}
+assert.equal(shouldRefreshForegroundMessages(activeResumeState), true)
+assert.equal(shouldRefreshForegroundMessages({
+  ...activeResumeState,
+  allowRoutineActiveRefresh: false,
+}), false)
+assert.equal(shouldRefreshForegroundMessages({
+  ...activeResumeState,
+  allowRoutineActiveRefresh: false,
+  pendingMessageRefresh: true,
+}), true)
+assert.equal(shouldRefreshForegroundMessages({
+  ...activeResumeState,
+  allowRoutineActiveRefresh: false,
+  executionStale: true,
+}), true)
 
 const resumePdfCitation = ':codex-file-citation{path="E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf" purpose="产品与项目经理通用投递简历"}'
 assert.deepEqual(readCodexFileCitationAt(resumePdfCitation, 0), {
@@ -585,6 +619,9 @@ const outboxEntry = (clientMessageId, createdAtMs, updatedAtMs = createdAtMs) =>
   reasoningEffort: 'high',
   collaborationMode: 'plan',
   turnOptions: normalizedTurnOptions,
+  baselineMatchCount: 2,
+  baselineMessageCount: 4,
+  baselineTailMessageId: 'baseline-tail',
   state: 'confirming',
   createdAtMs,
   updatedAtMs,
@@ -606,6 +643,9 @@ assert.deepEqual(parsedOutbox.entries.map((entry) => entry.clientMessageId), [
 assert.equal(parsedOutbox.entries[0]?.threadId, 'thread-outbox')
 assert.equal(parsedOutbox.entries[0]?.cwd, 'E:/repo')
 assert.equal(parsedOutbox.entries[0]?.modelId, 'model')
+assert.equal(parsedOutbox.entries[0]?.baselineMatchCount, 2)
+assert.equal(parsedOutbox.entries[0]?.baselineMessageCount, 4)
+assert.equal(parsedOutbox.entries[0]?.baselineTailMessageId, 'baseline-tail')
 assert.deepEqual(parsedOutbox.entries[1]?.fileAttachments, [])
 assert.deepEqual(parseMessageOutboxState('{bad json', outboxNowMs), { entries: [], removals: [] })
 assert.deepEqual(parseMessageOutboxState('{"version":2,"entries":[]}', outboxNowMs), { entries: [], removals: [] })
@@ -662,6 +702,29 @@ assert.deepEqual(
     [persistedIdentityMessage, { ...persistedIdentityMessage, id: 'persisted-identity-2' }],
     [optimisticIdentityMessage],
     rememberedIdentityMeta,
+  ),
+  [],
+)
+const recoveredLegacyBaselineMatchCount = recoverOptimisticBaselineMatchCount(
+  [
+    persistedIdentityMessage,
+    { id: 'baseline-assistant', role: 'assistant', text: 'Previous answer' },
+    { ...persistedIdentityMessage, id: 'persisted-identity-2' },
+  ],
+  identitySignature,
+  undefined,
+  2,
+  'baseline-assistant',
+)
+assert.equal(recoveredLegacyBaselineMatchCount, 1)
+assert.deepEqual(
+  filterVisibleOptimisticUserMessages(
+    [persistedIdentityMessage, { ...persistedIdentityMessage, id: 'persisted-identity-2' }],
+    [optimisticIdentityMessage],
+    new Map([[optimisticIdentityMessage.id, {
+      ...rememberedIdentityMeta.get(optimisticIdentityMessage.id),
+      baselineMatchCount: recoveredLegacyBaselineMatchCount,
+    }]]),
   ),
   [],
 )
