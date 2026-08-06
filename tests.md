@@ -15814,3 +15814,22 @@ Current evidence:
 - The root cause is limited to the Release ZIP manifest and its incomplete content assertion. The configuration exists in source, so repository and tag builds passed while the independently unpacked release could not rebuild the local-preview frontend.
 - The patched `2.7.4` release gate completed in 105.8 seconds with governance, production frontend/CLI builds, normalizer, server-module, CLI launcher, ZIP checksum/content and npm package smokes passing. The generated ZIP contains `vite.config.ts` and `vite.local-preview.config.ts` as required entries.
 - A fresh directory independently extracted that generated ZIP, installed 325 packages with npm `10.9.3`, and completed both Vite builds in 69.1 seconds. Its package version was `2.7.4`, and both `dist/index.html` and `dist/local-preview.html` existed after the build.
+
+## CX-Codex 2.7.5 release gate (2026-08-07)
+
+1. `package.json`, `package-lock.json`, the GitHub tag and `docs/release-notes-2.7.5.zh-CN.md` must all resolve to `2.7.5`.
+2. The release must retain the Android duplicate-message baseline, evidence-driven foreground retries, renderer liveness recovery, default renderer priority and crash-versus-low-memory route policy described above.
+3. The Windows App Server child process must use `windowsHide` without changing stdio or lifecycle ownership. Fork pull request bootstrap smoke must resolve the contributor repository and branch while retaining the active-task upgrade fixture.
+4. Run `npm.cmd run verify:release -- -AllowDirty -SchemaAudit warn`, the complete 7420 frontend regression and the Android focused unit/lint/release-build checks before tagging.
+5. After tagging, verify the public ZIP/APK and SHA-256 assets, the Android package/version/fixed signing certificate, and a public `latest` Windows `-NoStart` installation before calling the release stable.
+6. A physical Android background/process-death run remains required evidence for FCM deep Doze acceptance; the release must not close issue #28 based only on browser, JVM or lint checks.
+
+Current evidence:
+
+- `npm.cmd run verify:release -- -AllowDirty -SchemaAudit warn` completed in 155.2 seconds with governance, production frontend/CLI builds, normalizer, server-module, CLI launcher, ZIP checksum/content and npm package smokes passing. The regenerated schema counts exactly matched the committed reviewed checkpoint: TypeScript root `236 -> 77`, TypeScript v2 `199 -> 445`, JSON root `37 -> 35`, and JSON v2 `102 -> 202`.
+- The complete 36-surface frontend regression passed against an isolated server that served the exact final `dist/index.html` hash in 476.9 seconds. Its first attempt against the installed 7420 service failed because that service still served an older frontend hash; the source-matched run passed and the temporary server, child App Server and port were removed afterward.
+- Android frontend sync, focused recovery/config unit tests, `lintDebug` and `assembleRelease` completed successfully in 127.7 seconds. The official local ZIP/APK packaging and checksum flow completed in 84.9 seconds; both Vite configurations were present in the ZIP and the APK embedded the exact final frontend hash.
+- The local `2.7.5` APK uses package `com.cxcodex.bridge`, version code `20705`, and the same signing certificate SHA-256 as public `v2.7.4`, so it is eligible for an in-place upgrade.
+- npm `10.9.3` audited 131 production dependencies through the official registry with zero info, low, moderate, high or critical vulnerabilities.
+- Pull requests #46 and #47 were reviewed against current main and integrated with contributor authorship preserved. Dependency pull requests #49, #50 and #51 remain outside this stability release because they change PDF/WebView rendering, Markdown rendering or the native SQLite runtime and need dedicated regression evidence.
+- Final clean-worktree release verification, tag workflow, public asset checks, isolated Windows installation and physical Android process-death verification are not satisfied by this pre-release evidence and must be reported separately.
