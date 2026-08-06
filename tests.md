@@ -15798,3 +15798,17 @@ Current evidence:
 - npm 10.9.3 audited production dependencies through the official registry with zero vulnerabilities. Android lint retains the intentional cleartext-network warning because dynamic LAN URLs such as `http://192.168.x.x:7420` are a supported setup path; public access must use HTTPS.
 - The local Android delivery build uses version `2.7.5` / code `20705`, bundles the same frontend `index.html` hash as `dist`, passes release signature and zip-alignment verification, and matches the signing certificate of the public `v2.7.4` APK so it can be installed as an in-place upgrade.
 - No Android device was connected during implementation, so physical process-death verification is still required before publishing an APK.
+
+## CX-Codex 2.7.4 release-package completeness (2026-08-04)
+
+1. `scripts/package-release.ps1` must treat both `vite.config.ts` and `vite.local-preview.config.ts` as required Release ZIP inputs because `npm run build:frontend` executes both configurations.
+2. The release-package smoke must assert that both Vite configurations exist inside the generated ZIP. Governance verification must lock the same entries into the package manifest contract.
+3. After the tag workflow publishes the release, run `bootstrap-windows.ps1` from `raw.githubusercontent.com` in an isolated user root with `-ReleaseVersion latest -NoStart`. It must resolve `v2.7.4`, verify the public ZIP checksum, install dependencies, complete both frontend builds and install package version `2.7.4`.
+4. Do not restore the release to stable/latest until the public ZIP/APK, both SHA-256 files, Android version/signature and the isolated Windows installation all pass.
+
+Current evidence:
+
+- The isolated public `v2.7.3` bootstrap resolved and verified the published ZIP, then failed at `vite build --config vite.local-preview.config.ts` because the configuration was absent. The installer removed the incomplete installation; GitHub `releases/latest` was immediately restored to `v2.7.2`, and `v2.7.3` was marked as a prerelease.
+- The root cause is limited to the Release ZIP manifest and its incomplete content assertion. The configuration exists in source, so repository and tag builds passed while the independently unpacked release could not rebuild the local-preview frontend.
+- The patched `2.7.4` release gate completed in 105.8 seconds with governance, production frontend/CLI builds, normalizer, server-module, CLI launcher, ZIP checksum/content and npm package smokes passing. The generated ZIP contains `vite.config.ts` and `vite.local-preview.config.ts` as required entries.
+- A fresh directory independently extracted that generated ZIP, installed 325 packages with npm `10.9.3`, and completed both Vite builds in 69.1 seconds. Its package version was `2.7.4`, and both `dist/index.html` and `dist/local-preview.html` existed after the build.

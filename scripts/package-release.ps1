@@ -104,6 +104,7 @@ $releaseItems = @(
   "tsconfig.json",
   "tsup.config.ts",
   "vite.config.ts",
+  "vite.local-preview.config.ts",
   "dist",
   "dist-cli"
 )
