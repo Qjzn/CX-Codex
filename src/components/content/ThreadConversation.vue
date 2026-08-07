@@ -1295,6 +1295,7 @@ import {
   CONVERSATION_BOTTOM_THRESHOLD_PX,
   isConversationViewportAtBottom,
 } from '../../composables/conversationViewport'
+import { haveSameConversationMessageStructure } from '../../composables/conversationRenderPolicy'
 import { hasPlanImplementationConfirmation } from '../../composables/conversationProjection'
 import { copyTextToClipboard } from '../../utils/clipboard'
 import {
@@ -1313,7 +1314,7 @@ const prevCommandStatuses = ref<Record<string, string>>({})
 const commandElapsedNowMs = ref(Date.now())
 const observedCommandStartedAtById = ref<Record<string, number>>({})
 let commandElapsedTimer: number | null = null
-const estimatedMessageHeightById = new Map<string, { sourceText: string; signature: string; height: number }>()
+let estimatedMessageHeightByMessage = new WeakMap<UiMessage, { sourceText: string; signature: string; height: number }>()
 let chatFeedbackMetricFrame = 0
 
 type ThreadFirstScreenReadyMetric = {
@@ -1721,7 +1722,6 @@ const REMOTE_OLDER_HISTORY_REQUEST_TIMEOUT_MS = 8000
 const RECENT_DERIVED_UI_MESSAGE_LIMIT = 120
 const REACTIVE_WATCH_MESSAGE_LIMIT = RECENT_DERIVED_UI_MESSAGE_LIMIT * 2
 const PREPARED_MESSAGE_BLOCK_CACHE_LIMIT = 80
-const ESTIMATED_MESSAGE_HEIGHT_CACHE_LIMIT = 240
 const renderableMessages = computed<UiMessage[]>(() => (
   props.messages.filter((message) => !shouldSuppressConversationMessage(message))
 ))
@@ -2850,36 +2850,16 @@ function estimatedMessageHeightSignature(message: UiMessage): string {
   ].join('|')
 }
 
-function trimEstimatedMessageHeightCache(): void {
-  while (estimatedMessageHeightById.size > ESTIMATED_MESSAGE_HEIGHT_CACHE_LIMIT) {
-    const oldestMessageId = estimatedMessageHeightById.keys().next().value
-    if (typeof oldestMessageId !== 'string') return
-    estimatedMessageHeightById.delete(oldestMessageId)
-  }
-}
-
-function pruneEstimatedMessageHeightCache(keepIds: Set<string>): void {
-  for (const messageId of estimatedMessageHeightById.keys()) {
-    if (!keepIds.has(messageId)) {
-      estimatedMessageHeightById.delete(messageId)
-    }
-  }
-  trimEstimatedMessageHeightCache()
-}
-
 function getEstimatedMessageHeight(message: UiMessage): number {
   const sourceText = estimatedMessageHeightSourceText(message)
   const signature = estimatedMessageHeightSignature(message)
-  const cached = estimatedMessageHeightById.get(message.id)
+  const cached = estimatedMessageHeightByMessage.get(message)
   if (cached && cached.sourceText === sourceText && cached.signature === signature) {
-    estimatedMessageHeightById.delete(message.id)
-    estimatedMessageHeightById.set(message.id, cached)
     return cached.height
   }
 
   const height = estimateMessageHeight(message)
-  estimatedMessageHeightById.set(message.id, { sourceText, signature, height })
-  trimEstimatedMessageHeightCache()
+  estimatedMessageHeightByMessage.set(message, { sourceText, signature, height })
   return height
 }
 
@@ -4126,7 +4106,6 @@ function trimPreparedMessageBlockCache(): void {
 
 function prunePreparedMessageBlockCache(messages: UiMessage[]): void {
   const keepIds = new Set(messages.map((message) => message.id))
-  pruneEstimatedMessageHeightCache(keepIds)
   for (const messageId of preparedMessageBlocksById.keys()) {
     if (!keepIds.has(messageId)) {
       preparedMessageBlocksById.delete(messageId)
@@ -5561,9 +5540,10 @@ watch(
   () => props.messages,
   async (next, previous) => {
     const watchedMessages = messagesForReactiveWatch(next)
+    const previousMessages = previous ?? EMPTY_MESSAGES
+    const messageStructureChanged = !haveSameConversationMessageStructure(previousMessages, next)
     syncObservedCommandStartTimes(watchedMessages)
     if (props.isLoading && !hasVisibleConversationContent.value) return
-    const previousMessages = previous ?? EMPTY_MESSAGES
     const foregroundScrollIntent = pendingForegroundScrollIntent?.threadId === props.activeThreadId
       ? pendingForegroundScrollIntent
       : null
@@ -5583,8 +5563,10 @@ watch(
       prevCommandStatuses.value[m.id] = cur
     }
 
-    prunePreparedMessageBlockCache(next)
-    pruneMeasuredMessageHeights(renderableConversationEntries.value)
+    if (messageStructureChanged) {
+      prunePreparedMessageBlockCache(next)
+      pruneMeasuredMessageHeights(renderableConversationEntries.value)
+    }
 
     const hasNewRenderableOutput = previousMessages.length > 0 &&
       renderableMessageSignature(next) !== renderableMessageSignature(previousMessages)
@@ -5593,7 +5575,10 @@ watch(
       markBelowFoldUpdate()
     }
 
-    if (!threadSwitchScrollRestorePending) {
+    if (
+      !threadSwitchScrollRestorePending &&
+      (messageStructureChanged || foregroundScrollIntent !== null)
+    ) {
       await scheduleScrollRestore(shouldFollowBottom, foregroundScrollIntent?.anchorSnapshot ?? null)
     }
   },
@@ -5777,7 +5762,7 @@ watch(
     closeFileLinkContextMenu()
     failedMarkdownImageKeys.value = new Set()
     preparedMessageBlocksById.clear()
-    estimatedMessageHeightById.clear()
+    estimatedMessageHeightByMessage = new WeakMap()
     disconnectAllObservedElements(observedMessageElementsById)
     measuredMessageHeightById.value = {}
     expandedGuidedTurnIndexes.value = new Set()

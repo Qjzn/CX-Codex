@@ -262,6 +262,7 @@ function toUiMessages(item: ThreadItem, turnId = ''): UiMessage[] {
   if (item.type === 'agentMessage') {
     const text = typeof item.text === 'string' ? item.text : ''
     const images = extractAssistantImages(item)
+    const phase = rawItem.phase === 'commentary' ? 'commentary' as const : 'final' as const
     return [
       {
         id: item.id,
@@ -269,6 +270,7 @@ function toUiMessages(item: ThreadItem, turnId = ''): UiMessage[] {
         text,
         images: images.length > 0 ? images : undefined,
         messageType: item.type,
+        phase,
       },
     ]
   }

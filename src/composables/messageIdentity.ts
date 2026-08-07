@@ -78,7 +78,7 @@ export function mergeVisibleOptimisticUserMessages(
   rememberedMetaById?: ReadonlyMap<string, OptimisticUserMessageMeta>,
 ): UiMessage[] {
   const visible = filterVisibleOptimisticUserMessages(persisted, optimistic, rememberedMetaById)
-  if (visible.length === 0) return persisted
+  if (visible.length === 0) return [...persisted]
 
   const insertionsByPersistedIndex = new Map<number, UiMessage[]>()
   for (const message of visible) {

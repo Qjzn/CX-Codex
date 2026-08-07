@@ -15833,3 +15833,57 @@ Current evidence:
 - npm `10.9.3` audited 131 production dependencies through the official registry with zero info, low, moderate, high or critical vulnerabilities.
 - Pull requests #46 and #47 were reviewed against current main and integrated with contributor authorship preserved. Dependency pull requests #49, #50 and #51 remain outside this stability release because they change PDF/WebView rendering, Markdown rendering or the native SQLite runtime and need dedicated regression evidence.
 - Final clean-worktree release verification, tag workflow, public asset checks, isolated Windows installation and physical Android process-death verification are not satisfied by this pre-release evidence and must be reported separately.
+
+## GitHub 热门紧凑双列布局（2026-08-07）
+
+1. 在 `393 x 852` 视口打开 `/#/__regression/docs-showcase?regression=frontend&view=github`，页面内容区不得再出现重复的 GitHub 热门大标题卡；榜单选择和刷新操作应位于不高于 `52px` 的紧凑筛选栏内。
+2. 默认列表必须每行显示两个等高卡片；卡片高度保持 `17rem`，标题最多两行，简介最多三行，页面不得产生横向滚动。
+3. 点击任一卡片的“展开”后，只允许该卡片跨满当前行并显示完整简介和仓库地址；其余卡片顺延至下一行，不得重叠或跳出屏幕。
+4. 展开按钮必须同步 `aria-expanded=true` 并改为“收起”；再次操作应恢复默认固定高度。筛选下拉和刷新按钮应保留明确的无障碍名称与至少 `36px` 控件高度，卡片主操作保持 `44px` 触控高度。
+
+Verification:
+
+- Run `npm.cmd run build:frontend`.
+- Run `npm.cmd run test:7420:frontend` for the deterministic compact-grid, summary-clamp, expand-state and horizontal-overflow assertions.
+- Capture a Headless Playwright screenshot at `393 x 852` and inspect both collapsed and expanded states before publishing UI changes.
+
+## 移动端执行中会话响应与跨进程同步（2026-08-07）
+
+1. 在另一个 Codex 桌面进程持续写入长会话时，用 `393 x 852` 视口打开同一会话。阶段回复应由有界 session-log 投影持续更新；尾部最新助手消息仍是 `commentary` 时，不得自动触发 `thread/read(includeTurns=true)`。
+2. 同一会话文件中允许并发任务交错写入。中间出现另一个任务的 `final` 后，只要尾部仍有当前任务的 `commentary`，就必须继续延期权威收敛读取；仅当最新助手消息本身为 `final`，且没有运行、排队或待确认信号时才允许一次收敛读取。
+3. 在 `/#/__regression/conversation-blocks?regression=frontend&streamStress=1` 下加载至少 1500 条同轮消息并每 48ms 更新流式回复。3 秒内更新与心跳均不少于 20 次，最大心跳延迟不高于 250ms，实际挂载消息节点不超过 48 个。
+4. 压力期间点击响应测试按钮必须立即生效，随后流式更新继续增长；页面不得横向溢出，也不得破坏会话切换滚动位置、前后台恢复意图、排队消息和等待详情交互。
+
+Verification:
+
+- Run `npm.cmd run verify:frontend-normalizers` and `npm.cmd run verify:server-modules`.
+- Run `npm.cmd run build:frontend` and `npm.cmd run build:cli`.
+- Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7424` against an isolated production server.
+- Open the real active cross-process conversation and monitor `/codex-api/health`: session-log updates must remain visible while the observation window records zero `thread/read(includeTurns=true)`, zero queued RPCs and zero pending server requests.
+
+Current evidence:
+
+- The real long conversation previously produced a 1.5-1.7 second full-history read every 4-8 seconds. After requiring the latest assistant item itself to be terminal, a 36-second steady observation and a second explicit session-file append observation both recorded zero full reads and zero RPC queueing while new commentary appeared in the page.
+- The focused phone stress probe rendered 1602 messages with 13 mounted conversation items, 48ms live updates, 50ms maximum heartbeat lag, a successful user action during streaming and no horizontal overflow.
+- The complete production frontend regression passed in 462.5 seconds. Its independent stress pass measured 1602 messages, 13 mounted items and 57ms maximum heartbeat lag; composer, sidebar, image/PDF, scroll restoration, foreground recovery and task-pet scenarios also passed.
+
+## CX-Codex 2.7.6 conversation stability and release retention (2026-08-07)
+
+1. Merging live messages into the visible conversation must never mutate `persistedMessagesByThreadId`, including when no optimistic user message remains visible.
+2. A connected notification stream that is merely quiet while an idle conversation is selected must stay connected. Disconnected/reconnecting streams and stale streams with real synchronization demand must still restart.
+3. The 1602-message streaming fixture must mount no more than 48 conversation items, keep maximum heartbeat lag at or below 250ms, accept an action during output, continue updating afterward and avoid horizontal overflow.
+4. Release retention must preserve Git tags and commit history. Only GitHub Release objects outside the documented stable/rollback/history set may be deleted.
+
+Verification:
+
+- Run `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build:frontend`, `npm.cmd run build:cli` and `npm.cmd run verify:server-modules`.
+- Run `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7424 -CaptureScreenshots` against an isolated production server.
+- Run a headless Playwright probe at 393 × 852 against the streaming fixture and require zero console errors and failed requests.
+- Run `npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit skip` from the final clean candidate worktree before tagging.
+
+Current evidence:
+
+- The new immutable-projection test failed before the fix because `mergeVisibleOptimisticUserMessages` returned the persisted array by reference; it passes after returning an independent projection.
+- The foreground restart-policy test failed before the fix because a selected idle conversation forced a restart; it passes after requiring actual sync demand for a connected stale stream.
+- The full 38-surface regression passed in 499.7 seconds. The built-in stress probe mounted 13 of 1602 messages with 64ms maximum lag and accepted interaction while output continued.
+- Independent headless Playwright mounted 12 of 1602 messages with 47ms maximum lag; the action count increased by one, updates continued from 76 to 84, and console/request failure lists were empty.

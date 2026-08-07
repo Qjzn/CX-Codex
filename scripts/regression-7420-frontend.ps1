@@ -436,6 +436,8 @@ function Assert-RuntimeSnapshotOrderingSource {
   Assert-True ($source -match "shouldDeferCachedRpcRefresh\s*=\s*options\.forceSettledRpcRefresh\s*!==\s*true") "the forced authoritative refresh must not defer itself again"
   Assert-True ($source -match "options\.preferSessionLogMessages\s*===\s*true\s*&&\s*snapshot\.messageState\s*===\s*'cached'[\s\S]*?scheduleSessionLogAuthoritativeRefresh\(threadId") "session-log projections must coalesce a quiet-period authoritative refresh instead of remaining permanently lossy"
   Assert-True ($source -match "pendingSessionLogMessageRefresh\.add\(threadId\)[\s\S]{0,240}?scheduleSessionLogAuthoritativeRefresh\(threadId\)") "each session-log notification must reset the authoritative quiet window before its local projection begins"
+  Assert-True ($source -match "getSessionLogAuthoritativeRefreshAction\(\{[\s\S]*?executionActive:\s*isThreadExecutionActive\(threadId\)[\s\S]*?hasPendingServerRequest:\s*hasPendingServerRequestSignal\(threadId\)[\s\S]*?hasQueuedWork:\s*hasQueuedThreadWork\(threadId\)[\s\S]*?action\s*===\s*'defer'[\s\S]*?scheduleSessionLogAuthoritativeRefresh\(threadId\)") "session-log convergence must not issue a heavy authoritative history read while a turn or queued action is active"
+  Assert-True ($source -match "hasTerminalEvidence:\s*hasSettledSessionLogMessageEvidence\([\s\S]*?persistedMessagesByThreadId\.value\[threadId\][\s\S]*?action\s*===\s*'defer'") "cross-process session-log convergence must wait for a final assistant message instead of trusting a false settled light snapshot"
   Assert-True ($source -match "shouldForceCachedSnapshotRefresh\s*=\s*options\.force\s*===\s*true\s*&&\s*snapshot\.messageState\s*===\s*'cached'") "cached historical threads without a terminal event key must still receive an authoritative refresh"
   Assert-True ($source -match "!options\.olderHistory\s*&&\s*!shouldForceCachedSnapshotRefresh") "explicit older-history reads must not be blocked when a legacy thread has no terminal refresh key"
   Assert-True ($conversationSource -match "pendingRemoteOlderHistoryAnchor\s*=\s*anchorSnapshot[\s\S]*?emit\('loadOlderHistory'\)[\s\S]*?props\.messages\.length[\s\S]*?restoreScrollAnchorOverFrames\(anchorSnapshot,\s*6\)") "remote older-history insertion must restore the pre-request reading anchor after messages arrive"
@@ -2433,6 +2435,92 @@ JSON.stringify({
   Assert-True ([string]$closed.activeClass -like '*docs-skill-detail-launch*') "closing skill detail did not restore focus to its opener"
 }
 
+function Assert-GithubTrendingCompactLayout {
+  param([string]$Session)
+
+  $initial = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const hub = document.querySelector('.trending-hub');
+  const filter = document.querySelector('.trending-hub-filter');
+  const grid = document.querySelector('.trending-hub-grid');
+  const cards = Array.from(document.querySelectorAll('.trending-card:not(.trending-card-skeleton)'));
+  const firstCard = cards[0];
+  const firstSummary = firstCard?.querySelector('.trending-card-summary');
+  const firstExpand = firstCard?.querySelector('.trending-card-expand');
+  const filterRect = filter?.getBoundingClientRect();
+  const firstRect = firstCard?.getBoundingClientRect();
+  const secondRect = cards[1]?.getBoundingClientRect();
+  const gridStyle = grid ? getComputedStyle(grid) : null;
+  const summaryStyle = firstSummary ? getComputedStyle(firstSummary) : null;
+  return {
+    ready: !!hub && !!filter && !!grid && cards.length >= 3 && !!firstSummary && !!firstExpand,
+    hasLegacyHero: document.querySelector('.trending-hub-header') !== null,
+    filterHeight: filterRect?.height ?? 0,
+    columnCount: gridStyle?.gridTemplateColumns.split(' ').filter(Boolean).length ?? 0,
+    firstCardHeight: firstRect?.height ?? 0,
+    secondCardHeight: secondRect?.height ?? 0,
+    sameFirstRow: !!firstRect && !!secondRect && Math.abs(firstRect.top - secondRect.top) <= 1,
+    summaryLineClamp: summaryStyle?.webkitLineClamp || '',
+    expandState: firstExpand?.getAttribute('aria-expanded') || '',
+    expandLabel: firstExpand?.textContent?.replace(/\s+/g, ' ').trim() || '',
+    hasDetails: firstCard?.querySelector('.trending-card-details') !== null,
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+  };
+})())
+'@
+  Assert-True ($initial.ready -eq $true) "GitHub trending compact fixture did not render its filter and project cards"
+  Assert-True ($initial.hasLegacyHero -eq $false) "GitHub trending retained the oversized duplicate hero card"
+  Assert-True ([double]$initial.filterHeight -le 52) "GitHub trending filter is taller than the compact control contract"
+  Assert-True ([int]$initial.columnCount -eq 2) "GitHub trending phone layout did not render two cards per row"
+  Assert-True ($initial.sameFirstRow -eq $true) "GitHub trending first two cards are not aligned in one row"
+  Assert-True ([Math]::Abs([double]$initial.firstCardHeight - 272) -le 2) "GitHub trending first card does not keep the 17rem collapsed height"
+  Assert-True ([Math]::Abs([double]$initial.firstCardHeight - [double]$initial.secondCardHeight) -le 1) "GitHub trending collapsed cards do not keep a consistent height"
+  Assert-True ([string]$initial.summaryLineClamp -eq '3') "GitHub trending summary is not clamped to three lines"
+  Assert-True ([string]$initial.expandState -eq 'false' -and [string]$initial.expandLabel -like '展开*') "GitHub trending collapsed card is missing its expand action"
+  Assert-True ($initial.hasDetails -eq $false) "GitHub trending rendered repository details before expansion"
+  Assert-True ($initial.hasHorizontalOverflow -eq $false) "GitHub trending compact grid caused horizontal overflow"
+
+  $expanded = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const firstExpand = document.querySelector('.trending-card-expand');
+  if (!(firstExpand instanceof HTMLButtonElement)) return { clicked: false };
+  firstExpand.click();
+  return { clicked: true };
+})())
+'@
+  Assert-True ($expanded.clicked -eq $true) "GitHub trending first card could not be expanded"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '150') | Out-Null
+
+  $expandedState = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const grid = document.querySelector('.trending-hub-grid');
+  const cards = Array.from(document.querySelectorAll('.trending-card:not(.trending-card-skeleton)'));
+  const firstCard = cards[0];
+  const secondCard = cards[1];
+  const firstExpand = firstCard?.querySelector('.trending-card-expand');
+  const firstRect = firstCard?.getBoundingClientRect();
+  const secondRect = secondCard?.getBoundingClientRect();
+  const gridRect = grid?.getBoundingClientRect();
+  return {
+    isExpanded: firstCard?.classList.contains('is-expanded') === true,
+    expandState: firstExpand?.getAttribute('aria-expanded') || '',
+    expandLabel: firstExpand?.textContent?.replace(/\s+/g, ' ').trim() || '',
+    hasDetails: firstCard?.querySelector('.trending-card-details') !== null,
+    spansGrid: !!firstRect && !!gridRect && Math.abs(firstRect.width - gridRect.width) <= 2,
+    nextRowStartsAfterExpandedCard: !!firstRect && !!secondRect && secondRect.top >= firstRect.bottom - 1,
+    summaryIsExpanded: firstCard?.querySelector('.trending-card-summary')?.classList.contains('is-expanded') === true,
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+  };
+})())
+'@
+  Assert-True ($expandedState.isExpanded -eq $true) "GitHub trending expanded card is missing its state class"
+  Assert-True ([string]$expandedState.expandState -eq 'true' -and [string]$expandedState.expandLabel -like '收起*') "GitHub trending expanded card is missing its collapse action"
+  Assert-True ($expandedState.hasDetails -eq $true -and $expandedState.summaryIsExpanded -eq $true) "GitHub trending expansion did not reveal the complete project content"
+  Assert-True ($expandedState.spansGrid -eq $true) "GitHub trending expanded card did not span the full grid width"
+  Assert-True ($expandedState.nextRowStartsAfterExpandedCard -eq $true) "GitHub trending expanded card overlaps the following row"
+  Assert-True ($expandedState.hasHorizontalOverflow -eq $false) "GitHub trending expanded card caused horizontal overflow"
+}
+
 function Read-SettingsPanelMetrics {
   param([string]$Session)
 
@@ -3797,6 +3885,47 @@ JSON.stringify((() => {
 })())
 '@
   return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-ConversationStreamingResponsiveness {
+  param([string]$Session)
+
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "3000") | Out-Null
+  $before = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const status = document.querySelector('[data-testid="conversation-streaming-stress-status"]');
+  return {
+    found: Boolean(status),
+    updateCount: Number.parseInt(status?.getAttribute('data-update-count') || '0', 10),
+    heartbeatCount: Number.parseInt(status?.getAttribute('data-heartbeat-count') || '0', 10),
+    maxHeartbeatLagMs: Number.parseInt(status?.getAttribute('data-max-heartbeat-lag-ms') || '0', 10),
+    actionCount: Number.parseInt(status?.getAttribute('data-action-count') || '0', 10),
+    mountedConversationItems: document.querySelectorAll('.conversation-list > .conversation-item').length,
+    totalMessageCount: Number.parseInt(document.querySelector('.conversation-list')?.getAttribute('data-message-count') || '0', 10)
+  };
+})())
+'@
+  Assert-True ($before.found -eq $true) "streaming stress fixture status is missing"
+  Assert-True ([int]$before.updateCount -ge 20) "streaming stress fixture did not sustain live message updates"
+  Assert-True ([int]$before.heartbeatCount -ge 20) "streaming stress fixture event-loop heartbeat stopped"
+  Assert-True ([int]$before.maxHeartbeatLagMs -le 250) "streaming updates blocked the UI event loop for $($before.maxHeartbeatLagMs) ms"
+  Assert-True ([int]$before.totalMessageCount -ge 1500) "streaming stress fixture did not exercise a dense active turn"
+  Assert-True ([int]$before.mountedConversationItems -le 48) "streaming stress fixture mounted too many conversation items"
+
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "click", '[data-testid="conversation-streaming-stress-action"]') | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
+  $after = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const status = document.querySelector('[data-testid="conversation-streaming-stress-status"]');
+  return {
+    actionCount: Number.parseInt(status?.getAttribute('data-action-count') || '0', 10),
+    updateCount: Number.parseInt(status?.getAttribute('data-update-count') || '0', 10)
+  };
+})())
+'@
+  Assert-True ([int]$after.actionCount -eq ([int]$before.actionCount + 1)) "streaming stress fixture did not accept a user action while output was active"
+  Assert-True ([int]$after.updateCount -gt [int]$before.updateCount) "streaming output stopped while the user interacted with the page"
+  Write-Step ("conversation streaming responsiveness -> " + ($before | ConvertTo-Json -Compress))
 }
 
 function Read-ConversationLoadFailureFixtureMetrics {
@@ -7116,6 +7245,12 @@ Assert-ThreadAttentionChromeSource
   Assert-Page -Page $trending -Name "github trending phone" -RequireTrendingHub
   Add-RegressionResult -Name "github-trending-phone" -Page $trending
 
+  $trendingFixtureUrl = $BaseUrl + "/#/__regression/docs-showcase?regression=frontend&view=github"
+  $trendingFixture = Open-And-ReadPage -Session $session -Url $trendingFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $trendingFixture -Name "github trending compact fixture phone" -RequireTrendingHub
+  Assert-GithubTrendingCompactLayout -Session $session
+  Add-RegressionResult -Name "github-trending-compact-fixture-phone" -Page $trendingFixture
+
   $diagnosticsPage = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/diagnostics?regression=frontend" -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $diagnosticsPage -Name "diagnostics phone" -RequiredText "Runtime Store" -RequireDiagnostics
   Add-RegressionResult -Name "diagnostics-phone" -Page $diagnosticsPage
@@ -7223,6 +7358,12 @@ Assert-ThreadAttentionChromeSource
   Assert-ConversationCommandOutputLazy -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "phone"
   Add-RegressionResult -Name "conversation-blocks-fixture-phone" -Page $fixturePhone
+
+  $streamingStressFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&streamStress=1"
+  $streamingStressFixture = Open-And-ReadPage -Session $session -Url $streamingStressFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $streamingStressFixture -Name "conversation streaming stress fixture phone"
+  Assert-ConversationStreamingResponsiveness -Session $session
+  Add-RegressionResult -Name "conversation-streaming-stress-phone" -Page $streamingStressFixture
 
   $imagePreviewFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&imagePreview=1"
   $imagePreviewFixture = Open-And-ReadPage -Session $session -Url $imagePreviewFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
