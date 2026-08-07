@@ -207,6 +207,7 @@ export type UiMessage = {
   images?: string[]
   fileAttachments?: UiFileAttachment[]
   messageType?: string
+  phase?: 'commentary' | 'final'
   rawPayload?: string
   isUnhandled?: boolean
   commandExecution?: CommandExecutionData

@@ -441,7 +441,7 @@ const trendingProjects: GithubTrendingProject[] = [
     repo: 'codex',
     url: 'https://github.com/openai/codex',
     description: 'A coding agent that runs locally.',
-    descriptionZh: '在本地运行的开源编码智能体。',
+    descriptionZh: '在本地运行的开源编码智能体，支持在工作区内阅读代码、执行命令、修改文件并协助完成长流程研发任务。',
     language: 'Rust',
     languageLabel: 'Rust',
     stars: 57_000,

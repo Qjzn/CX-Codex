@@ -1,10 +1,31 @@
 <template>
   <main class="conversation-regression-fixture" aria-label="Conversation block regression fixture">
-    <section class="conversation-regression-shell">
+    <section
+      class="conversation-regression-shell"
+      :class="{ 'conversation-regression-shell--streaming-stress': isStreamingStressFixture }"
+    >
       <header class="conversation-regression-header">
         <p class="conversation-regression-kicker">Regression Fixture</p>
         <h1>Conversation Blocks</h1>
       </header>
+      <div
+        v-if="isStreamingStressFixture"
+        class="conversation-streaming-stress-status"
+        data-testid="conversation-streaming-stress-status"
+        :data-update-count="streamingStressUpdateCount"
+        :data-heartbeat-count="streamingStressHeartbeatCount"
+        :data-max-heartbeat-lag-ms="Math.round(streamingStressMaxHeartbeatLagMs)"
+        :data-action-count="streamingStressActionCount"
+      >
+        <span>流式压力回归运行中</span>
+        <button
+          type="button"
+          data-testid="conversation-streaming-stress-action"
+          @click="streamingStressActionCount += 1"
+        >
+          响应测试
+        </button>
+      </div>
       <div v-if="isScrollSwitchRaceFixture" class="conversation-scroll-switch-controls">
         <button type="button" data-testid="switch-scroll-thread-a" @click="activeThreadId = 'regression-scroll-a'">
           Thread A
@@ -102,7 +123,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ThreadConversation from './ThreadConversation.vue'
 import RuntimeStatusBar from './RuntimeStatusBar.vue'
 import QueuedMessages from './QueuedMessages.vue'
@@ -374,6 +395,7 @@ const isPlanFixture = fixtureParams.get('plan') === '1'
 const isPlanSubmittedFixture = fixtureParams.get('planSubmitted') === '1'
 const isPlanHistoryImplementedFixture = fixtureParams.get('planHistoryImplemented') === '1'
 const isFileCitationFixture = fixtureParams.get('fileCitation') === '1'
+const isStreamingStressFixture = fixtureParams.get('streamStress') === '1'
 const fixtureImplementingPlanId = ref(fixtureParams.get('planSubmitting') === '1' ? 'plan:fixture-plan-turn' : '')
 const fixtureImplementedPlanIds = ref<string[]>(isPlanSubmittedFixture ? ['plan:fixture-plan-turn'] : [])
 const activeThreadId = ref(isScrollSwitchRaceFixture ? 'regression-scroll-a' : 'regression-conversation-blocks')
@@ -476,8 +498,71 @@ const scrollRaceMessagesByThreadId = ref<Record<string, UiMessage[]>>(Object.fro
     })),
   ]),
 ))
+const streamingStressMessages = ref<UiMessage[]>([
+  {
+    id: 'fixture-stream-stress-user',
+    role: 'user',
+    text: '持续执行一个包含大量过程事件与长回复的任务，并保持页面可操作。',
+    turnIndex: 30,
+  },
+  ...Array.from({ length: 1600 }, (_, index): UiMessage => ({
+    id: `fixture-stream-stress-progress-${String(index + 1)}`,
+    role: 'system',
+    text: `过程事件 ${String(index + 1)} ${'bounded runtime progress '.repeat(3)}`,
+    messageType: 'fixture.progress',
+    turnIndex: 30,
+  })),
+  {
+    id: 'fixture-stream-stress-live',
+    role: 'assistant',
+    text: '正在生成',
+    messageType: 'agentMessage.live',
+    turnIndex: 30,
+  },
+])
+const streamingStressUpdateCount = ref(0)
+const streamingStressHeartbeatCount = ref(0)
+const streamingStressMaxHeartbeatLagMs = ref(0)
+const streamingStressActionCount = ref(0)
+let streamingStressUpdateTimer: number | null = null
+let streamingStressHeartbeatTimer: number | null = null
+
+onMounted(() => {
+  if (!isStreamingStressFixture || typeof window === 'undefined') return
+  let expectedHeartbeatAt = performance.now() + 50
+  streamingStressHeartbeatTimer = window.setInterval(() => {
+    const now = performance.now()
+    streamingStressMaxHeartbeatLagMs.value = Math.max(
+      streamingStressMaxHeartbeatLagMs.value,
+      Math.max(0, now - expectedHeartbeatAt),
+    )
+    expectedHeartbeatAt = now + 50
+    streamingStressHeartbeatCount.value += 1
+  }, 50)
+  streamingStressUpdateTimer = window.setInterval(() => {
+    const previous = streamingStressMessages.value
+    const lastIndex = previous.length - 1
+    const current = previous[lastIndex]
+    if (!current) return
+    const nextText = current.text.length >= 48_000
+      ? '正在生成'
+      : `${current.text}\n流式增量 ${String(streamingStressUpdateCount.value + 1)} ${'mobile response '.repeat(8)}`
+    streamingStressMessages.value = [
+      ...previous.slice(0, lastIndex),
+      { ...current, text: nextText },
+    ]
+    streamingStressUpdateCount.value += 1
+  }, 48)
+})
+
+onBeforeUnmount(() => {
+  if (streamingStressUpdateTimer !== null) window.clearInterval(streamingStressUpdateTimer)
+  if (streamingStressHeartbeatTimer !== null) window.clearInterval(streamingStressHeartbeatTimer)
+})
+
 const fixtureMessages = computed(() => {
   if (isLoadFailureFixture) return []
+  if (isStreamingStressFixture) return streamingStressMessages.value
   if (isScrollSwitchRaceFixture) {
     return scrollRaceMessagesByThreadId.value[activeThreadId.value] ?? []
   }
@@ -636,6 +721,11 @@ function onLoadOlderHistory(): void {
   background: var(--ui-bg-surface);
 }
 
+.conversation-regression-shell--streaming-stress {
+  height: calc(100dvh - 3rem);
+  min-height: 0;
+}
+
 .conversation-regression-header {
   @apply shrink-0 border-b px-4 py-3;
   border-color: var(--ui-border-subtle);
@@ -648,6 +738,19 @@ function onLoadOlderHistory(): void {
 
 .conversation-regression-header h1 {
   @apply m-0 mt-1 text-lg font-semibold;
+  color: var(--ui-text-primary);
+}
+
+.conversation-streaming-stress-status {
+  @apply flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2 text-xs;
+  border-color: var(--ui-border-subtle);
+  color: var(--ui-text-secondary);
+}
+
+.conversation-streaming-stress-status button {
+  @apply min-h-11 rounded-lg border px-3 text-sm font-medium;
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
   color: var(--ui-text-primary);
 }
 

@@ -99,7 +99,11 @@ import type {
 import { normalizeThreadGoal } from './threadGoal'
 import { isAbortLikeError } from '../api/codexErrors'
 import { normalizePathForUi, toProjectName } from '../pathUtils.js'
-import { getCxSessionFileChangeSyncPolicy } from '../sessionFileChange'
+import {
+  getCxSessionFileChangeSyncPolicy,
+  getSessionLogAuthoritativeRefreshAction,
+  hasSettledSessionLogMessageEvidence,
+} from '../sessionFileChange'
 import {
   areUiThreadFieldsEqual,
   dedupeProjectThreadGroups,
@@ -7314,8 +7318,21 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     sessionLogAuthoritativeRefreshGenerationByThreadId.set(threadId, generation)
     window.setTimeout(() => {
       if (sessionLogAuthoritativeRefreshGenerationByThreadId.get(threadId) !== generation) return
+      const action = getSessionLogAuthoritativeRefreshAction({
+        isSelected: selectedThreadId.value === threadId,
+        executionActive: isThreadExecutionActive(threadId),
+        hasPendingServerRequest: hasPendingServerRequestSignal(threadId),
+        hasQueuedWork: hasQueuedThreadWork(threadId),
+        hasTerminalEvidence: hasSettledSessionLogMessageEvidence(
+          persistedMessagesByThreadId.value[threadId] ?? [],
+        ),
+      })
+      if (action === 'defer') {
+        scheduleSessionLogAuthoritativeRefresh(threadId)
+        return
+      }
       sessionLogAuthoritativeRefreshGenerationByThreadId.delete(threadId)
-      if (selectedThreadId.value !== threadId) return
+      if (action === 'skip') return
       void loadMessages(threadId, { silent: true, forceSettledRpcRefresh: true }).catch((error) => {
         if (!isAbortLikeError(error)) setSyncErrorFromUnknown(error)
       })

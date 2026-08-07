@@ -1303,3 +1303,17 @@ After each feature implementation session that uses this skill:
 - CX-Codex now persists the pre-send signature count and reconstructs that boundary for older outbox rows before merging optimistic and authoritative messages. Stable `clientMessageId` ownership remains unchanged.
 - Android resume keeps the first reconciliation attempt eager but makes later retries evidence-driven, avoiding three full active-conversation reloads that can starve interaction on long mobile threads. The native Activity probes renderer responsiveness, presents recovery copy, and recreates or reloads the exact current route when the renderer hangs or is reclaimed.
 - Headless phone verification at 393 x 852 opened the waiting-state detail sheet with zero browser errors or failed responses. Native policy unit tests and a physical-device background/resume pass remain the Android release boundary.
+
+## Findings: Compact GitHub Trending Discovery (2026-08-07)
+
+- The installed Codex desktop bundle has no exact GitHub Trending surface, so this feature uses the closest current discovery and disclosure patterns instead of inventing false one-to-one parity.
+- Codex file discovery uses a compact rounded bordered filter with an accessible label, while truncated message content uses explicit `aria-expanded`, “显示更多/收起” copy and a rotating disclosure affordance.
+- CX-Codex adapts those patterns as a compact scope filter plus fixed two-column project cards. Expanded content spans the row to preserve reading width; CX-specific repository actions remain explicit because Codex has no equivalent surface.
+
+## Findings: Cross-process Streaming Responsiveness (2026-08-07)
+
+- Installed Codex `26.727.6591` virtualizes turn content, memoizes message subtrees, and batches dense deltas. CX-Codex keeps the same ownership boundary while adapting it to a browser/WebView that may mirror session files written by another desktop process.
+- Two amplification paths caused the reported freeze: a quiet-window convergence repeatedly requested the complete long rollout during external execution, while every text-only delta also invalidated conversation height/cache and scroll-restore work. A bounded file projection alone was therefore insufficient.
+- External session convergence now preserves `commentary/final` phase and requires the latest assistant item itself to be final. This remains correct when two Codex tasks interleave in one session file: an older sibling final cannot end a newer commentary stream.
+- Conversation rendering now prunes structural caches and schedules scroll restoration only when message identity/order changes. Text-only deltas leave height correction to `ResizeObserver`, and per-message estimates use weak identity ownership instead of a small sequential LRU that thrashed on dense turns.
+- At `393 x 852`, the final production stress fixture kept 1602 messages to 13 mounted items, sustained 48ms updates with 50-57ms maximum heartbeat lag, accepted an action during streaming, and produced no horizontal overflow. A real cross-process active conversation then updated from its session log without any full-history read during the observed windows.

@@ -9,6 +9,51 @@ export type CxSessionFileChangeSyncPolicy = {
   refreshThreads: boolean
 }
 
+export type SessionLogAuthoritativeRefreshState = {
+  isSelected: boolean
+  executionActive: boolean
+  hasPendingServerRequest: boolean
+  hasQueuedWork: boolean
+  hasTerminalEvidence: boolean
+}
+
+export type SessionLogAuthoritativeRefreshAction = 'skip' | 'defer' | 'refresh'
+
+export function getSessionLogAuthoritativeRefreshAction(
+  state: SessionLogAuthoritativeRefreshState,
+): SessionLogAuthoritativeRefreshAction {
+  if (!state.isSelected) return 'skip'
+  if (state.executionActive || state.hasPendingServerRequest || state.hasQueuedWork) return 'defer'
+  if (!state.hasTerminalEvidence) return 'defer'
+  return 'refresh'
+}
+
+export type SessionLogMessageEvidence = {
+  role: 'user' | 'assistant' | 'system'
+  messageType?: string
+  phase?: 'commentary' | 'final'
+}
+
+export function hasSettledSessionLogMessageEvidence(
+  messages: readonly SessionLogMessageEvidence[],
+): boolean {
+  let latestUserIndex = -1
+  let latestAssistantIndex = -1
+  let latestAssistantIsFinal = false
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]
+    if (message?.role === 'user') {
+      latestUserIndex = index
+      continue
+    }
+    if (message?.role === 'assistant' && message.messageType === 'agentMessage') {
+      latestAssistantIndex = index
+      latestAssistantIsFinal = message.phase !== 'commentary'
+    }
+  }
+  return latestAssistantIndex > latestUserIndex && latestAssistantIsFinal
+}
+
 export function isCxSessionFilesChangedMethod(method: string): boolean {
   return method === CX_SESSION_FILES_CHANGED_METHOD
 }

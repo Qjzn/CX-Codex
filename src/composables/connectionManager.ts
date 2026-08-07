@@ -137,7 +137,7 @@ export function shouldRestartNotificationStreamOnForeground(input: {
   return (
     input.connectionState === 'connected' &&
     input.notificationStale &&
-    (input.hasSyncDemand || input.hasSelectedThread)
+    input.hasSyncDemand
   )
 }
 

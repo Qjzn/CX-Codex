@@ -88,6 +88,7 @@ export function areMessageFieldsEqual(first: UiMessage, second: UiMessage): bool
     areStringArraysEqual(first.images, second.images) &&
     areFileAttachmentsEqual(first.fileAttachments, second.fileAttachments) &&
     first.messageType === second.messageType &&
+    first.phase === second.phase &&
     first.rawPayload === second.rawPayload &&
     first.isUnhandled === second.isUnhandled &&
     areCommandExecutionsEqual(first.commandExecution, second.commandExecution) &&

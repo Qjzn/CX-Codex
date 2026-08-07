@@ -15,6 +15,7 @@ const normalizerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src',
 const notificationReplayImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'notificationReplayCoordinator.ts')))
 const connectionManagerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'connectionManager.ts')))
 const conversationViewportImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'conversationViewport.ts')))
+const conversationRenderPolicyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'conversationRenderPolicy.ts')))
 const runtimeSnapshotOrderingImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'runtimeSnapshotOrdering.ts')))
 const runtimeExecutionRecoveryImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'runtimeExecutionRecovery.ts')))
 const messageOutboxMergeImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'messageOutboxMerge.ts')))
@@ -52,6 +53,7 @@ import {
   conversationDistanceFromBottom,
   isConversationViewportAtBottom,
 } from '${conversationViewportImport}'
+import { haveSameConversationMessageStructure } from '${conversationRenderPolicyImport}'
 import { shouldApplyRuntimeSnapshotVersion } from '${runtimeSnapshotOrderingImport}'
 import { isOptimisticOnlyExecutionEvidence } from '${runtimeExecutionRecoveryImport}'
 import { mergeMessageOutboxEntries, mergeMessageOutboxState } from '${messageOutboxMergeImport}'
@@ -111,6 +113,8 @@ import {
 import {
   CX_SESSION_FILES_CHANGED_METHOD,
   getCxSessionFileChangeSyncPolicy,
+  getSessionLogAuthoritativeRefreshAction,
+  hasSettledSessionLogMessageEvidence,
   isCxSessionFilesChangedMethod,
   readCxSessionFileChangeOrigin,
   readCxSessionFileChangeSource,
@@ -230,6 +234,18 @@ assert.deepEqual(splitCodexFileCitations('保留 :codex-file-citation{path="E:/u
 ])
 
 assert.equal(CONVERSATION_BOTTOM_THRESHOLD_PX, 24)
+assert.equal(haveSameConversationMessageStructure(
+  [{ id: 'one' }, { id: 'live', text: 'partial' }],
+  [{ id: 'one' }, { id: 'live', text: 'longer partial response' }],
+), true)
+assert.equal(haveSameConversationMessageStructure(
+  [{ id: 'one' }, { id: 'live' }],
+  [{ id: 'one' }, { id: 'tool' }, { id: 'live' }],
+), false)
+assert.equal(haveSameConversationMessageStructure(
+  [{ id: 'one' }, { id: 'two' }],
+  [{ id: 'two' }, { id: 'one' }],
+), false)
 assert.equal(CX_SESSION_FILES_CHANGED_METHOD, 'cx/session-files/changed')
 assert.equal(isCxSessionFilesChangedMethod('cx/session-files/changed'), true)
 assert.equal(isCxSessionFilesChangedMethod('turn/completed'), false)
@@ -259,6 +275,63 @@ assert.deepEqual(
   { refreshMessages: true, refreshThreads: true, preferSessionLogMessages: false },
 )
 assert.equal(getCxSessionFileChangeSyncPolicy('turn/completed', { source: 'session-log' }), null)
+assert.equal(getSessionLogAuthoritativeRefreshAction({
+  isSelected: true,
+  executionActive: true,
+  hasPendingServerRequest: false,
+  hasQueuedWork: false,
+  hasTerminalEvidence: false,
+}), 'defer')
+assert.equal(getSessionLogAuthoritativeRefreshAction({
+  isSelected: true,
+  executionActive: false,
+  hasPendingServerRequest: true,
+  hasQueuedWork: false,
+  hasTerminalEvidence: true,
+}), 'defer')
+assert.equal(getSessionLogAuthoritativeRefreshAction({
+  isSelected: true,
+  executionActive: false,
+  hasPendingServerRequest: false,
+  hasQueuedWork: true,
+  hasTerminalEvidence: true,
+}), 'defer')
+assert.equal(getSessionLogAuthoritativeRefreshAction({
+  isSelected: true,
+  executionActive: false,
+  hasPendingServerRequest: false,
+  hasQueuedWork: false,
+  hasTerminalEvidence: false,
+}), 'defer')
+assert.equal(getSessionLogAuthoritativeRefreshAction({
+  isSelected: true,
+  executionActive: false,
+  hasPendingServerRequest: false,
+  hasQueuedWork: false,
+  hasTerminalEvidence: true,
+}), 'refresh')
+assert.equal(getSessionLogAuthoritativeRefreshAction({
+  isSelected: false,
+  executionActive: true,
+  hasPendingServerRequest: true,
+  hasQueuedWork: true,
+  hasTerminalEvidence: false,
+}), 'skip')
+assert.equal(hasSettledSessionLogMessageEvidence([
+  { role: 'assistant', messageType: 'agentMessage', phase: 'final' },
+  { role: 'user', messageType: 'userMessage' },
+  { role: 'assistant', messageType: 'agentMessage', phase: 'commentary' },
+]), false)
+assert.equal(hasSettledSessionLogMessageEvidence([
+  { role: 'user', messageType: 'userMessage' },
+  { role: 'assistant', messageType: 'agentMessage', phase: 'commentary' },
+  { role: 'assistant', messageType: 'agentMessage', phase: 'final' },
+]), true)
+assert.equal(hasSettledSessionLogMessageEvidence([
+  { role: 'user', messageType: 'userMessage' },
+  { role: 'assistant', messageType: 'agentMessage', phase: 'final' },
+  { role: 'assistant', messageType: 'agentMessage', phase: 'commentary' },
+]), false)
 assert.equal(isOptimisticOnlyExecutionEvidence({
   executionActive: true,
   sourceInProgress: false,
@@ -374,6 +447,12 @@ assert.equal(shouldRestartNotificationStreamOnForeground({
   connectionState: 'connected',
   notificationStale: true,
   hasSyncDemand: false,
+  hasSelectedThread: true,
+}), false)
+assert.equal(shouldRestartNotificationStreamOnForeground({
+  connectionState: 'connected',
+  notificationStale: true,
+  hasSyncDemand: true,
   hasSelectedThread: true,
 }), true)
 assert.equal(shouldRestartNotificationStreamOnForeground({
@@ -740,6 +819,28 @@ assert.deepEqual(
   ).map((message) => message.id),
   ['persisted-identity-1', 'baseline-assistant', 'optimistic-user:identity-1', 'new-assistant'],
 )
+const persistedWithoutVisibleOptimistic = [
+  { id: 'persisted-stable', role: 'assistant', text: 'Authoritative history' },
+]
+const mergedWithoutVisibleOptimistic = mergeVisibleOptimisticUserMessages(
+  persistedWithoutVisibleOptimistic,
+  [],
+)
+assert.notStrictEqual(
+  mergedWithoutVisibleOptimistic,
+  persistedWithoutVisibleOptimistic,
+  'conversation projection must not alias the persisted reactive message array',
+)
+mergedWithoutVisibleOptimistic.push({
+  id: 'live-only',
+  role: 'assistant',
+  text: 'Streaming delta',
+})
+assert.deepEqual(
+  persistedWithoutVisibleOptimistic.map((message) => message.id),
+  ['persisted-stable'],
+  'adding a live projection must not mutate persisted history',
+)
 const optimisticAfterFirst = { id: 'optimistic-user:after-first', role: 'user', text: 'First queued prompt' }
 const optimisticAfterLast = { id: 'optimistic-user:after-last', role: 'user', text: 'Second queued prompt' }
 assert.deepEqual(
@@ -816,6 +917,10 @@ const projectedTurnZero = {
 }
 assert.equal(areMessageFieldsEqual(projectedTurnTwo, { ...projectedTurnTwo }), true)
 assert.equal(areMessageFieldsEqual(projectedTurnTwo, { ...projectedTurnTwo, text: 'changed' }), false)
+assert.equal(areMessageFieldsEqual(
+  { ...projectedTurnTwo, messageType: 'agentMessage', phase: 'commentary' },
+  { ...projectedTurnTwo, messageType: 'agentMessage', phase: 'final' },
+), false)
 assert.equal(areMessageFieldsEqual(projectedTurnTwo, {
   ...projectedTurnTwo,
   fileAttachments: [{ label: 'report', path: 'report.txt' }],
@@ -1082,6 +1187,26 @@ assert.equal(messages[3]?.isUnhandled, true)
 assert.equal(messages.some((message) => message.messageType === 'unhandled.fileChange'), false)
 assert.equal(messages.some((message) => message.messageType === 'unhandled.webSearch'), false)
 assert.equal(messages.some((message) => message.rawPayload?.includes('large internal patch details')), false)
+
+const phasedAgentMessages = normalizeThreadMessagesV2({
+  thread: {
+    id: 'thread-phased-agent',
+    cwd: 'E:\\repo',
+    preview: '',
+    updatedAt: 1,
+    createdAt: 1,
+    turns: [{
+      id: 'turn-phased-agent',
+      status: 'completed',
+      items: [
+        { id: 'agent-commentary', type: 'agentMessage', text: 'Still working', phase: 'commentary' },
+        { id: 'agent-final', type: 'agentMessage', text: 'Done', phase: 'final' },
+      ],
+    }],
+  },
+})
+assert.equal(phasedAgentMessages[0]?.phase, 'commentary')
+assert.equal(phasedAgentMessages[1]?.phase, 'final')
 
 const unloadedTurnMessages = normalizeThreadMessagesV2({
   thread: {
