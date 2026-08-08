@@ -19,6 +19,7 @@ import {
 } from './composerTurnOptions'
 import {
   MESSAGE_OUTBOX_STORAGE_KEY,
+  isMessageOutboxStorageKey,
   loadMessageOutboxState,
   saveMessageOutboxState,
   type MessageOutboxEntry,
@@ -112,6 +113,10 @@ import {
 } from '../utils/projectGroupOrdering'
 import { compactLatestReplyTail } from '../utils/latestReply'
 import {
+  beginThreadFirstScreenMetric,
+  setThreadFirstScreenSource,
+} from './threadFirstScreenMetrics'
+import {
   MOBILE_APP_PAUSE_EVENT,
   MOBILE_APP_RESUME_EVENT,
   MOBILE_NETWORK_OFFLINE_EVENT,
@@ -134,9 +139,18 @@ import {
   decideConnectedRecovery,
   shouldRestartNotificationStreamOnForeground,
 } from './connectionManager'
-import { shouldApplyRuntimeSnapshotVersion } from './runtimeSnapshotOrdering'
+import {
+  resetRuntimeSnapshotVersionMap,
+  shouldApplyRuntimeTerminalTurn,
+  shouldApplyRuntimeSnapshotVersion,
+} from './runtimeSnapshotOrdering'
 import { isOptimisticOnlyExecutionEvidence } from './runtimeExecutionRecovery'
 import { shouldRefreshForegroundMessages } from './foregroundRecoveryPolicy'
+import {
+  beginForegroundRecoveryMetric,
+  cancelForegroundRecoveryMetric,
+  settleForegroundRecoveryMetric,
+} from './foregroundRecoveryMetrics'
 import {
   isRuntimeRequestAwaitingDeliveryConfirmation,
   shouldSettleOptimisticDeliveryFromRuntimeSnapshot,
@@ -246,7 +260,7 @@ const THREAD_GROUP_CACHE_VERSION = 1
 const THREAD_GROUP_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const THREAD_GROUP_CACHE_MAX_GROUPS = 18
 const THREAD_GROUP_CACHE_MAX_THREADS_PER_GROUP = 30
-const THREAD_MESSAGE_CACHE_VERSION = 1
+const THREAD_MESSAGE_CACHE_VERSION = 2
 const THREAD_MESSAGE_CACHE_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
 const THREAD_MESSAGE_CACHE_MAX_THREADS = 12
 const THREAD_MESSAGE_CACHE_MAX_MESSAGES_PER_THREAD = 24
@@ -264,6 +278,7 @@ const ACTIVE_THREAD_DETAIL_SYNC_IDLE_MS = 18000
 const FOREGROUND_RECOVERY_DETAIL_REFRESH_MIN_INTERVAL_MS = ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS
 const THREAD_SELECTION_RECOVERY_SUPPRESS_MS = 5000
 const THREAD_SELECTION_CACHED_REFRESH_DELAY_MS = 650
+const THREAD_SELECTION_GOAL_REFRESH_DELAY_MS = 900
 const ACTIVE_SYNC_BOOST_INTERVAL_MS = 2500
 const ACTIVE_SYNC_BOOST_WINDOW_MS = 18000
 const RESUME_SYNC_RETRY_DELAYS_MS = [0, 1200, 4500, 12000]
@@ -819,6 +834,7 @@ function normalizeCachedMessage(value: unknown): UiMessage | null {
     isUnhandled: row.isUnhandled === true,
     ...(commandExecution ? { commandExecution } : {}),
     turnIndex: typeof row.turnIndex === 'number' && Number.isFinite(row.turnIndex) ? row.turnIndex : undefined,
+    turnId: readCachedString(row.turnId) || undefined,
   }
 }
 
@@ -1417,6 +1433,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   const threadGoalContinuationInFlight = new Set<string>()
   const threadGoalRefreshInFlightByThreadId = new Map<string, Promise<void>>()
   const threadGoalStateGenerationByThreadId = new Map<string, number>()
+  let selectedThreadGoalRefreshTimer: number | null = null
   const tokenUsageRefreshInFlightByThreadId = new Map<string, Promise<void>>()
   const tokenUsageRefreshAttemptedAtByThreadId = new Map<string, number>()
   const tokenUsageRefreshTimerByThreadId = new Map<string, number>()
@@ -1584,6 +1601,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     applyNotification: applyIncomingNotification,
     recoverSnapshot: recoverNotificationSnapshot,
     persistCursor: saveLastNotificationCursor,
+    onStreamChanged: resetRuntimeSnapshotOrderingForStreamChange,
     onRecoveryError: () => {
       pendingThreadsRefresh = true
       const activeThreadId = selectedThreadId.value
@@ -3394,6 +3412,13 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     latestRuntimeEventSeqByThreadId.set(threadId, normalizedSeq)
   }
 
+  function resetRuntimeSnapshotOrderingForStreamChange(): void {
+    latestRuntimeEventSeqByThreadId.clear()
+    runtimeStatusSummaryByThreadId.value = resetRuntimeSnapshotVersionMap(
+      runtimeStatusSummaryByThreadId.value,
+    )
+  }
+
   function rememberRuntimeSnapshotSummary(threadId: string, snapshot: ThreadRuntimeSnapshot): void {
     rememberRuntimeStatusSummary(threadId, {
       threadId,
@@ -3445,13 +3470,14 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
   function applyRuntimeSnapshotState(threadId: string, snapshot: ThreadRuntimeSnapshot): boolean {
     if (!threadId) return false
-    finishForegroundRecoveryFeedback(threadId)
     const currentSummary = runtimeStatusSummaryByThreadId.value[threadId]
     const currentEventSeq = Math.max(
       currentSummary?.lastEventSeq ?? 0,
       latestRuntimeEventSeqByThreadId.get(threadId) ?? 0,
     )
     if (!shouldApplyRuntimeSnapshotVersion({ lastEventSeq: currentEventSeq }, snapshot)) return false
+    settleForegroundRecoveryMetric(threadId)
+    finishForegroundRecoveryFeedback(threadId)
     rememberLatestRuntimeEventSequence(threadId, snapshot.lastEventSeq)
     rememberRuntimeSnapshotSummary(threadId, snapshot)
     const authoritativeTurnStartedAtMs = parseIsoTimestamp(snapshot.lastStartedAtIso ?? '')
@@ -3656,6 +3682,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     const threadId = extractThreadIdFromNotification(notification)
     if (!threadId) return
     rememberLatestRuntimeEventSequence(threadId, notification.seq)
+    if (isRuntimeTerminalNotificationForDifferentTurn(notification)) return
 
     if (method === 'turn/started' || method === 'thread/started') {
       const startedTurn = readTurnStartedInfo(notification)
@@ -3698,9 +3725,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     const method = notification.method
     const threadId = extractThreadIdFromNotification(notification)
     if (!threadId) return
-    const completedTurn = readTurnCompletedInfo(notification)
-    const currentTurnId = activeTurnIdByThreadId.value[threadId]
-    if (completedTurn?.turnId && currentTurnId && completedTurn.turnId !== currentTurnId) return
+    if (isRuntimeTerminalNotificationForDifferentTurn(notification)) return
 
     let state: ThreadRuntimeSnapshot['executionState'] | null = null
     if (method === 'turn/completed' || method === 'thread/completed') {
@@ -4093,6 +4118,26 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     })()
     threadGoalRefreshInFlightByThreadId.set(threadId, request)
     return request
+  }
+
+  function clearSelectedThreadGoalRefresh(): void {
+    if (selectedThreadGoalRefreshTimer === null || typeof window === 'undefined') return
+    window.clearTimeout(selectedThreadGoalRefreshTimer)
+    selectedThreadGoalRefreshTimer = null
+  }
+
+  function scheduleSelectedThreadGoalRefresh(threadId: string): void {
+    clearSelectedThreadGoalRefresh()
+    if (!threadId) return
+    if (typeof window === 'undefined') {
+      void refreshThreadGoal(threadId)
+      return
+    }
+    selectedThreadGoalRefreshTimer = window.setTimeout(() => {
+      selectedThreadGoalRefreshTimer = null
+      if (selectedThreadId.value !== threadId) return
+      void refreshThreadGoal(threadId)
+    }, THREAD_SELECTION_GOAL_REFRESH_DELAY_MS)
   }
 
   async function refreshSelectedThreadGoal(): Promise<void> {
@@ -6614,6 +6659,11 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   }
 
   function applyRealtimeUpdates(notification: RpcNotification): void {
+    if (isRuntimeTerminalNotificationForDifferentTurn(notification)) {
+      const threadId = extractThreadIdFromNotification(notification)
+      if (threadId) rememberLatestRuntimeEventSequence(threadId, notification.seq)
+      return
+    }
     if (notification.method === 'item/completed' || notification.method === 'turn/completed') {
       flushBufferedLiveDeltas()
     }
@@ -6954,6 +7004,23 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       }
     }
 
+  }
+
+  function isRuntimeTerminalNotificationForDifferentTurn(notification: RpcNotification): boolean {
+    const method = notification.method
+    const isTerminal = method === 'turn/completed'
+      || method === 'turn/interrupted'
+      || method === 'thread/completed'
+      || method === 'thread/interrupted'
+      || method === 'error'
+      || method.endsWith('/failed')
+    if (!isTerminal) return false
+    const threadId = extractThreadIdFromNotification(notification)
+    if (!threadId) return false
+    return !shouldApplyRuntimeTerminalTurn(
+      activeTurnIdByThreadId.value[threadId],
+      extractTurnIdFromNotification(notification),
+    )
   }
 
   function queueEventDrivenSync(
@@ -7963,6 +8030,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
   async function selectThread(threadId: string) {
     const normalizedThreadId = threadId.trim()
+    clearSelectedThreadGoalRefresh()
     const previousSkillCwd = selectedThread.value?.cwd?.trim() ?? ''
     const nextSkillThread = allThreads.value.find((thread) => thread.id === normalizedThreadId)
     const nextSkillCwd = nextSkillThread?.cwd?.trim() ?? ''
@@ -7986,7 +8054,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       return
     }
 
-    void refreshThreadGoal(normalizedThreadId)
+    beginThreadFirstScreenMetric(normalizedThreadId)
+    scheduleSelectedThreadGoalRefresh(normalizedThreadId)
 
     const abortController = new AbortController()
     threadSelectionAbortController = abortController
@@ -8021,6 +8090,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     const hydratedFromCache = hydrateCachedMessagesForThread(normalizedThreadId)
     const alreadyLoaded = loadedMessagesByThreadId.value[normalizedThreadId] === true
+    setThreadFirstScreenSource(
+      normalizedThreadId,
+      hydratedFromCache ? 'local-cache' : alreadyLoaded ? 'memory' : 'network',
+    )
     if (alreadyLoaded) {
       const currentVersion = currentThreadVersion(normalizedThreadId)
       const loadedVersion = loadedVersionByThreadId.value[normalizedThreadId] ?? ''
@@ -9635,6 +9708,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       if (androidShellAvailable) {
         lastAndroidResumeSyncScheduledAtMs = now
       }
+      beginForegroundRecoveryMetric(selectedThreadId.value)
       const shouldRestartNotifications = shouldRestartNotificationStreamOnForeground({
         connectionState: realtimeConnectionState.value,
         notificationStale: notificationStale.value,
@@ -9685,6 +9759,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     const onVisibilityChange = (): void => {
       if (document.hidden) {
+        cancelForegroundRecoveryMetric(selectedThreadId.value)
         clearForegroundRecoveryFeedback()
         clearVisibilitySyncTimer()
         clearResumeSyncTimers()
@@ -9704,6 +9779,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
 
     const onPageHide = (): void => {
+      cancelForegroundRecoveryMetric(selectedThreadId.value)
       clearForegroundRecoveryFeedback()
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
@@ -9720,6 +9796,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
 
     const onOffline = (): void => {
+      cancelForegroundRecoveryMetric(selectedThreadId.value)
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
       stopActiveSyncBoost()
@@ -9733,6 +9810,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     const onMobilePause = (): void => {
       androidAppPaused = true
+      cancelForegroundRecoveryMetric(selectedThreadId.value)
       clearForegroundRecoveryFeedback()
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
@@ -9745,6 +9823,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
 
     const onMobileOffline = (): void => {
+      cancelForegroundRecoveryMetric(selectedThreadId.value)
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
       stopActiveSyncBoost()
@@ -9763,8 +9842,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         })
         return
       }
-      if (event.key !== MESSAGE_OUTBOX_STORAGE_KEY) return
-      if (event.newValue === null) {
+      if (!isMessageOutboxStorageKey(event.key)) return
+      if (event.key === MESSAGE_OUTBOX_STORAGE_KEY && event.newValue === null) {
         replaceMessageOutboxFromStorage()
       } else {
         convergeMessageOutboxFromStorage()
@@ -10064,6 +10143,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     realtimeConnectionManager.stop()
     stopBackgroundSync()
     stopActiveSyncBoost()
+    clearSelectedThreadGoalRefresh()
     clearBufferedLiveDeltas()
 
     pendingThreadsRefresh = false

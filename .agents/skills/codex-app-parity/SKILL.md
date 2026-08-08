@@ -60,6 +60,8 @@ if idx >= 0:
 
 On Windows, locale bundles may be emitted as one very long line. To extract matching key/value pairs without printing the full bundle, load the file with PowerShell and apply `[regex]::Matches(...)` to the in-memory string.
 
+For large modular Windows bundles, first list likely chunk names, then load only those files with `[IO.File]::ReadAllText(...)` and use `IndexOf(...)` to print bounded context around each term. This is faster and safer than recursively scanning the complete extracted ASAR.
+
 ### What to Search For
 
 1. **i18n keys**: Search locale files (`webview/assets/zh-TW-*.js`, `webview/assets/en-*.js`, etc.) for human-readable labels. Keys follow the pattern `component.feature.property` (e.g., `composer.dictation.tooltip`).
@@ -1317,3 +1319,44 @@ After each feature implementation session that uses this skill:
 - External session convergence now preserves `commentary/final` phase and requires the latest assistant item itself to be final. This remains correct when two Codex tasks interleave in one session file: an older sibling final cannot end a newer commentary stream.
 - Conversation rendering now prunes structural caches and schedules scroll restoration only when message identity/order changes. Text-only deltas leave height correction to `ResizeObserver`, and per-message estimates use weak identity ownership instead of a small sequential LRU that thrashed on dense turns.
 - At `393 x 852`, the final production stress fixture kept 1602 messages to 13 mounted items, sustained 48ms updates with 50-57ms maximum heartbeat lag, accepted an action during streaming, and produced no horizontal overflow. A real cross-process active conversation then updated from its session log without any full-history read during the observed windows.
+
+## Findings: Safe App-server Launch Defaults (2026-08-08)
+
+- Installed Windows Codex `26.727.6591` maps its `auto` permission profile to `workspaceWrite` with `on-request`, no implicit network access, and user-owned approvals. `full-access` is the distinct `dangerFullAccess + never` profile rather than the unattended default.
+- The Agent Settings bundle separately falls back to `on-request` for a missing approval value and presents read-only, workspace-write, and full-access as explicit sandbox choices. Its copy describes workspace-write as editing only inside the workspace.
+- CX-Codex now uses `on-request + workspace-write` as the practical self-hosted default. The existing environment variables still permit explicit `never + danger-full-access`, while invalid values fall back to the safe default and diagnostics continue to expose only the effective policy plus `legacyHighTrust`.
+- This change affects App Server launch behavior only. It adds no new permission UI, protocol field, persistent setting, dependency, Runtime Store owner, or Android lifecycle path.
+
+## Findings: Workspace-scoped Local File Access (2026-08-08)
+
+- Installed Windows Codex `26.727.6591` has no equivalent remotely exposed HTTP file server. Its workspace-write copy nevertheless treats the selected workspace as the write boundary, so CX-Codex must add a server-side boundary for browser and Android file URLs instead of treating every authenticated absolute path as trusted.
+- CX-Codex now derives allowed roots from the existing Codex workspace-root state and applies the same resolver to local images, direct files, directory browsing and text editing. No second root registry or UI state owner was introduced.
+- Authorization checks both normalized and canonical file-system paths. This preserves hidden files inside a registered workspace while rejecting sibling-prefix paths, missing roots, symbolic links and Windows junctions that resolve outside the workspace.
+- The boundary is an intentional self-hosted adaptation rather than a claim of exact UI parity. Runtime verification covered allowed read/edit, all four denied route families, an unchanged denied edit target and a junction escape; the denial is a concise HTTP 403 with no outside file content disclosure.
+
+## Findings: Authenticated Non-loopback Binding (2026-08-08)
+
+- Installed Codex has no direct equivalent to CX-Codex's self-hosted HTTP bind. This is therefore a transport hardening adaptation, not a desktop UI parity claim.
+- Password-free CX-Codex startup is now limited to explicit localhost and loopback addresses. Wildcard, LAN and other host bindings fail before the port is opened unless a non-empty password is present; tunnel startup retains its separate password requirement.
+- The policy is a small pure CLI boundary with no new setting, dependency or background owner. Loopback reverse proxies remain responsible for authentication at the proxy layer because the local bind alone cannot infer the proxy's external exposure.
+
+## Findings: Final Diagnostic Response Redaction (2026-08-08)
+
+- Installed Codex does not expose CX-Codex's self-hosted diagnostics transport. The applicable parity principle is minimum disclosure: effective state and counts are useful, while raw credentials and request payloads are not.
+- Existing CX-Codex diagnostic projections already omitted Runtime payloads, event params and approval params. A final recursive response sanitizer now also covers sensitive keys and common credential fragments introduced by future or upstream diagnostic sources.
+- The sanitizer preserves object shape, arrays, counts, status and bounded error context. It does not add a new UI state owner or hide operational failure state; sensitive values become `[REDACTED]` before JSON serialization.
+
+## Findings: Semantic Text Contrast and Cold-start Ownership (2026-08-08)
+
+- Installed Windows Codex `26.727.6591` uses semantic VS Code description and placeholder foreground tokens, plus a tertiary workbench text token, rather than treating all secondary information as a fixed low-contrast gray.
+- CX-Codex adapted that hierarchy with light and dark semantic text tokens. Real DOM probes first reproduced 2.82-3.13 contrast for light tertiary text and 3.09 for a dark thread time; after the scoped change, non-disabled helper text measured at least 4.54 in light mode and 5.68 in dark mode. Disabled and decorative controls remain intentionally quieter.
+- Startup ownership now stays with the explicit initial thread selection until it completes, before the route watcher may react. The non-core goal refresh is deferred, and a bounded method/timing-only RPC trace lets regression gates count `thread/read` without confusing unrelated RPC traffic.
+- A focused real-thread run recorded one early `thread/read`, a 162 ms cached first screen, and 100 ms foreground-recovery P95. Full light and dark regressions each passed 38 surfaces with 13 of 1602 messages mounted and 62/60 ms maximum heartbeat lag.
+- Independent Headless Playwright covered light/dark desktop and phone layouts with no horizontal overflow or non-favicon application errors. Screenshots are retained under `output/regression-7420/steady-goal-playwright-20260808`.
+
+## Findings: Accessibility Landmarks and Forced Colors (2026-08-08)
+
+- Installed Windows Codex `26.727.6591` renders its App Shell content in a real `main[data-app-shell-main-surface="default"]`. CX-Codex should likewise expose one named main region while preserving its existing skip-link and programmatic focus boundary.
+- The installed app's current CSS includes explicit forced-colors rules using system colors such as `CanvasText`, `ButtonText`, and `ButtonBorder`, removing shadows and restoring outlines where needed.
+- Absence of matching handwritten CSS is not by itself evidence of failure. Verify actual computed behavior: CX-Codex's Windows Chromium forced-colors emulation retained readable boundaries and a system keyboard outline without additional visual styling.
+- CX-Codex now names the main region “会话内容”, names both desktop and mobile conversation navigation “会话导航”, and localizes the desktop resize control as “调整侧栏宽度”. Independent Headless Playwright verifies those role/name contracts, skip-link focus transfer, forced-colors focus, no duplicate IDs, no horizontal overflow, and no browser errors.

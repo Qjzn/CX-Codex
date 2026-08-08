@@ -567,12 +567,39 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse): UiMessag
           ? item
           : { id: `turn-${String(turnIndex)}:item-${String(messages.length)}`, type: 'invalidItem', content: item }
       ) as ThreadItem
-      for (const msg of toUiMessages(threadItem, readTrimmedString(rawTurn.id))) {
-        messages.push({ ...msg, turnIndex: absoluteTurnIndex })
+      const turnId = readTrimmedString(rawTurn.id)
+      for (const msg of toUiMessages(threadItem, turnId)) {
+        messages.push({ ...msg, turnIndex: absoluteTurnIndex, ...(turnId ? { turnId } : {}) })
       }
     }
   }
   return messages
+}
+
+export function applyActiveTurnIdToMessages(
+  messages: UiMessage[],
+  activeTurnId: string,
+  active: boolean,
+): UiMessage[] {
+  const normalizedTurnId = activeTurnId.trim()
+  if (!active || !normalizedTurnId || messages.length === 0) return messages
+
+  let activeTurnStartIndex = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.role !== 'user' || message.messageType !== 'userMessage') continue
+    activeTurnStartIndex = index
+    break
+  }
+  if (activeTurnStartIndex < 0) return messages
+
+  let changed = false
+  const nextMessages = messages.map((message, index) => {
+    if (index < activeTurnStartIndex || message.turnId === normalizedTurnId) return message
+    changed = true
+    return { ...message, turnId: normalizedTurnId }
+  })
+  return changed ? nextMessages : messages
 }
 
 export function readThreadInProgressFromResponse(payload: ThreadReadResponse): boolean {

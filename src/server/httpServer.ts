@@ -10,6 +10,10 @@ import { createCodexBridgeMiddleware } from './codexAppServerBridge.js'
 import { createAuthSession, isLoopbackRequest } from './authMiddleware.js'
 import { readJsonBody, RequestBodyTooLargeError } from './httpBody.js'
 import { persistAccessPassword } from './localAccessConfig.js'
+import {
+  LocalFileAccessError,
+  resolveWorkspaceLocalPath,
+} from './localFileAccessPolicy.js'
 import { getTunnelStatus } from './tunnelStatus.js'
 import { renderLocalSetupHtml } from './localPairingPage.js'
 import { generatePassword } from './password.js'
@@ -24,12 +28,14 @@ import { WebSocketServer, type WebSocket } from 'ws'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const distDir = join(__dirname, '..', 'dist')
 const spaEntryFile = join(distDir, 'index.html')
+const localPreviewContentSecurityPolicy = "default-src 'none'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 const BRIDGE_HEARTBEAT_METHOD = 'bridge/heartbeat'
 
 export type ServerOptions = {
   password?: string
   configPath?: string
   host?: string
+  resolveLocalFilePath?: typeof resolveWorkspaceLocalPath
 }
 
 export type ServerInstance = {
@@ -191,12 +197,35 @@ function setLocalFileDisposition(
   res.setHeader('Content-Disposition', 'inline')
 }
 
+async function resolveAuthorizedLocalPath(
+  res: express.Response,
+  localPath: string,
+  resolveLocalFilePath: typeof resolveWorkspaceLocalPath,
+  notFoundMessage: string,
+): Promise<string | null> {
+  try {
+    return await resolveLocalFilePath(localPath)
+  } catch (error) {
+    if (error instanceof LocalFileAccessError) {
+      if (error.code === 'outside-workspace') {
+        res.status(403).json({ error: '该路径不在已登记的工作区目录内。' })
+        return null
+      }
+      res.status(404).json({ error: notFoundMessage })
+      return null
+    }
+    res.status(500).json({ error: '本地文件访问校验失败。' })
+    return null
+  }
+}
+
 export function createServer(options: ServerOptions = {}): ServerInstance {
   const app = express()
   const bridge = createCodexBridgeMiddleware({
     remoteAccessProtected: Boolean(options.password),
   })
   const authSession = options.password ? createAuthSession(options.password) : null
+  const resolveLocalFilePath = options.resolveLocalFilePath ?? resolveWorkspaceLocalPath
   const localSetupToken = randomBytes(24).toString('hex')
   let invalidateWebSocketSessions = () => {}
 
@@ -286,7 +315,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
   app.use(bridge)
 
   // 3. Serve local images referenced in markdown (desktop parity for absolute image paths)
-  app.get('/codex-local-image', (req, res) => {
+  app.get('/codex-local-image', async (req, res) => {
     const rawPath = typeof req.query.path === 'string' ? req.query.path : ''
     const localPath = normalizeLocalImagePath(rawPath)
     if (!localPath || !isAbsolute(localPath)) {
@@ -294,7 +323,15 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       return
     }
 
-    const contentType = IMAGE_CONTENT_TYPES[extname(localPath).toLowerCase()]
+    const authorizedPath = await resolveAuthorizedLocalPath(
+      res,
+      localPath,
+      resolveLocalFilePath,
+      '图片文件不存在。',
+    )
+    if (!authorizedPath) return
+
+    const contentType = IMAGE_CONTENT_TYPES[extname(authorizedPath).toLowerCase()]
     if (!contentType) {
       res.status(415).json({ error: '不支持的图片类型。' })
       return
@@ -302,14 +339,14 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
 
     res.type(contentType)
     res.setHeader('Cache-Control', 'private, max-age=300')
-    res.sendFile(localPath, { dotfiles: 'allow' }, (error) => {
+    res.sendFile(authorizedPath, { dotfiles: 'allow' }, (error) => {
       if (!error) return
       if (!res.headersSent) res.status(404).json({ error: '图片文件不存在。' })
     })
   })
 
   // 4. Serve local files for direct file open/download.
-  app.get('/codex-local-file', (req, res) => {
+  app.get('/codex-local-file', async (req, res) => {
     const rawPath = typeof req.query.path === 'string' ? req.query.path : ''
     const localPath = normalizeLocalPath(rawPath)
     if (!localPath || !isAbsolute(localPath)) {
@@ -317,15 +354,23 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       return
     }
 
+    const authorizedPath = await resolveAuthorizedLocalPath(
+      res,
+      localPath,
+      resolveLocalFilePath,
+      '文件不存在。',
+    )
+    if (!authorizedPath) return
+
     res.setHeader('Cache-Control', 'private, no-store')
     const dispositionMode = req.query.inline === '1'
       ? 'inline'
       : req.query.download === '1'
         ? 'attachment'
         : undefined
-    setLocalFileContentType(res, localPath)
-    setLocalFileDisposition(res, localPath, dispositionMode)
-    res.sendFile(localPath, { dotfiles: 'allow' }, (error) => {
+    setLocalFileContentType(res, authorizedPath)
+    setLocalFileDisposition(res, authorizedPath, dispositionMode)
+    res.sendFile(authorizedPath, { dotfiles: 'allow' }, (error) => {
       if (!error) return
       if (!res.headersSent) res.status(404).json({ error: '文件不存在。' })
     })
@@ -340,32 +385,40 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       return
     }
 
+    const authorizedPath = await resolveAuthorizedLocalPath(
+      res,
+      localPath,
+      resolveLocalFilePath,
+      '文件不存在。',
+    )
+    if (!authorizedPath) return
+
     try {
-      const fileStat = await stat(localPath)
+      const fileStat = await stat(authorizedPath)
       res.setHeader('Cache-Control', 'private, no-store')
       if (fileStat.isDirectory()) {
-        const html = await createDirectoryListingHtml(localPath)
+        const html = await createDirectoryListingHtml(authorizedPath)
         res.status(200).type('text/html; charset=utf-8').send(html)
         return
       }
 
-      if (isPreviewableLocalPath(localPath)) {
-        res.redirect(302, toLocalFilePreviewHref(localPath))
+      if (isPreviewableLocalPath(authorizedPath)) {
+        res.redirect(302, toLocalFilePreviewHref(authorizedPath))
         return
       }
 
-      if (shouldDownloadLocalFile(localPath)) {
-        const html = createLocalFileActionHtml(localPath, {
+      if (shouldDownloadLocalFile(authorizedPath)) {
+        const html = createLocalFileActionHtml(authorizedPath, {
           sizeBytes: fileStat.size,
-          contentType: getLocalFileContentType(localPath),
+          contentType: getLocalFileContentType(authorizedPath),
         })
         res.status(200).type('text/html; charset=utf-8').send(html)
         return
       }
 
-      setLocalFileContentType(res, localPath)
-      setLocalFileDisposition(res, localPath)
-      res.sendFile(localPath, { dotfiles: 'allow' }, (error) => {
+      setLocalFileContentType(res, authorizedPath)
+      setLocalFileDisposition(res, authorizedPath)
+      res.sendFile(authorizedPath, { dotfiles: 'allow' }, (error) => {
         if (!error) return
         if (!res.headersSent) res.status(404).json({ error: '文件不存在。' })
       })
@@ -382,13 +435,20 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       res.status(400).json({ error: '需要提供绝对本地文件路径。' })
       return
     }
+    const authorizedPath = await resolveAuthorizedLocalPath(
+      res,
+      localPath,
+      resolveLocalFilePath,
+      '文件不存在。',
+    )
+    if (!authorizedPath) return
     try {
-      const fileStat = await stat(localPath)
+      const fileStat = await stat(authorizedPath)
       if (!fileStat.isFile()) {
         res.status(400).json({ error: '需要提供文件路径。' })
         return
       }
-      const html = await createTextEditorHtml(localPath)
+      const html = await createTextEditorHtml(authorizedPath)
       res.status(200).type('text/html; charset=utf-8').send(html)
     } catch {
       res.status(404).json({ error: '文件不存在。' })
@@ -402,13 +462,20 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       res.status(400).json({ error: '需要提供绝对本地文件路径。' })
       return
     }
-    if (!(await isTextEditableFile(localPath))) {
+    const authorizedPath = await resolveAuthorizedLocalPath(
+      res,
+      localPath,
+      resolveLocalFilePath,
+      '文件不存在。',
+    )
+    if (!authorizedPath) return
+    if (!(await isTextEditableFile(authorizedPath))) {
       res.status(415).json({ error: '仅支持编辑文本类文件。' })
       return
     }
     const body = typeof req.body === 'string' ? req.body : ''
     try {
-      await writeFile(localPath, body, 'utf8')
+      await writeFile(authorizedPath, body, 'utf8')
       res.status(200).json({ ok: true })
     } catch {
       res.status(404).json({ error: '文件不存在。' })
@@ -457,6 +524,11 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
         }
         if (basename(filePath) === 'index.html') {
           res.setHeader('Cache-Control', 'no-cache')
+          return
+        }
+        if (basename(filePath) === 'local-preview.html') {
+          res.setHeader('Cache-Control', 'no-cache')
+          res.setHeader('Content-Security-Policy', localPreviewContentSecurityPolicy)
         }
       },
     }))

@@ -126,13 +126,6 @@ export function createCodexBridgeRuntimeOperations(
     getAppServerStartedAtMs: () => appServer.getStartedAtMs(),
   })
 
-  const runtimeReconciliation = createAppServerRuntimeReconciliation({
-    readThreadRuntimeSnapshot: runtimeReaders.readThreadRuntimeSnapshot,
-    runtimeStore,
-    getErrorMessage: dependencies.getErrorMessage,
-    writeReconcileFailure: dependencies.writeReconcileFailure,
-  })
-
   const runtimeActions = createAppServerRuntimeActions({
     createRequest: (record) => runtimeStore.createRequest(record),
     updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
@@ -151,6 +144,14 @@ export function createCodexBridgeRuntimeOperations(
     markStopUncertain: (threadId, lastError = null) => runtimeStateStore.markStopUncertain(threadId, lastError),
     clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
     getErrorMessage: dependencies.getErrorMessage,
+  })
+
+  const runtimeReconciliation = createAppServerRuntimeReconciliation({
+    readThreadRuntimeSnapshot: runtimeReaders.readThreadRuntimeSnapshot,
+    resumePendingStart: runtimeActions.startRuntimeTurn,
+    runtimeStore,
+    getErrorMessage: dependencies.getErrorMessage,
+    writeReconcileFailure: dependencies.writeReconcileFailure,
   })
 
   return {

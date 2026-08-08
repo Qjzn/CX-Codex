@@ -128,7 +128,8 @@ watch(query, () => {
 }
 
 .skill-picker-desc {
-  @apply text-xs text-zinc-500 line-clamp-1;
+  @apply text-xs line-clamp-1;
+  color: var(--ui-text-tertiary);
 }
 
 .skill-picker-empty {

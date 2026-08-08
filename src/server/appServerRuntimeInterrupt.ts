@@ -1,6 +1,6 @@
 import {
   isInterruptSettledError,
-  isRpcTimeoutError,
+  isRpcOutcomeUncertainError,
 } from './appServerRpcErrors.js'
 import { parseRuntimeInterruptPayload } from './runtimePayload.js'
 import type {
@@ -72,7 +72,7 @@ export async function interruptRuntimeTurnWithAppServer(
       return completeRuntimeInterrupt(parsed, dependencies, dependencies.getErrorMessage(error, 'turn already settled'))
     }
 
-    if (isRpcTimeoutError(error)) {
+    if (isRpcOutcomeUncertainError(error)) {
       const lastError = dependencies.getErrorMessage(error, 'turn/interrupt timed out')
       dependencies.markStopUncertain(parsed.threadId, lastError)
       dependencies.persistRuntimeSnapshot(parsed.threadId)

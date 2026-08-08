@@ -8,12 +8,12 @@
 
 - 审计命令：`npm.cmd run audit:app-server-schemas`
 - 脱敏摘要更新命令：`npm.cmd run audit:app-server-schemas:update-summary`
-- 审计时间：2026-07-04
-- 审计输出：`output/app-server-schema-audit/20260704-141839`
+- 审计时间：2026-08-08（`codex-cli 0.130.0`）
+- 审计输出：`output/app-server-schema-audit/20260808-060651`
 - 已提交摘要：`docs/app-server-schema-audit-summary.json`
 - TypeScript schema diff：526 files changed，3038 insertions，2189 deletions
 - JSON schema diff：273 files changed，73005 insertions，61600 deletions
-- 结论：官方最新 schema 与仓库基线大范围不一致，不能直接覆盖基线，也不能声明已完全对齐最新 App Server。
+- 结论：当前本机 schema 与仓库基线大范围不一致，不能直接覆盖基线，也不能声明已完全对齐最新 App Server；四组 added/removed 完整名称集合与 2026-07-04 审计逐项相同，本轮没有新增漂移。
 
 ## 兼容状态定义
 

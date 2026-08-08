@@ -17,6 +17,7 @@ import {
   resolveCodexCommand,
 } from '../commandResolution.js'
 import { resolveLaunchOptions, type LaunchCliOptions } from './config.js'
+import { assertPasswordProtectedBind } from './accessPolicy.js'
 import { createServer as createApp } from '../server/httpServer.js'
 import { generatePassword } from '../server/password.js'
 import { RuntimeStore } from '../server/runtimeStore.js'
@@ -395,6 +396,20 @@ async function startServer(options: {
   remoteAccessMode: 'stable' | 'quick'
   tailscaleCommand?: string
 }) {
+  const host = options.host.trim()
+  if (!host) {
+    throw new Error('Host must not be empty')
+  }
+  const requestedPort = parseInt(options.port, 10)
+  if (!Number.isInteger(requestedPort) || requestedPort < 1 || requestedPort > 65535) {
+    throw new Error(`Invalid port: ${options.port}`)
+  }
+  const password = resolvePassword(options.password)
+  assertPasswordProtectedBind(host, password)
+  if (options.tunnel && !password) {
+    throw new Error('Remote access requires password protection. Remove --no-password and try again.')
+  }
+
   if (options.configPath) {
     process.env.CX_CODEX_CONFIG = options.configPath
     process.env.CODEXUI_CONFIG = options.configPath
@@ -431,18 +446,6 @@ async function startServer(options: {
     runOrFail(codexCommand, ['login'], 'Codex login')
   }
 
-  const host = options.host.trim()
-  if (!host) {
-    throw new Error('Host must not be empty')
-  }
-  const requestedPort = parseInt(options.port, 10)
-  if (!Number.isInteger(requestedPort) || requestedPort < 1 || requestedPort > 65535) {
-    throw new Error(`Invalid port: ${options.port}`)
-  }
-  const password = resolvePassword(options.password)
-  if (options.tunnel && !password) {
-    throw new Error('Remote access requires password protection. Remove --no-password and try again.')
-  }
   const { app, dispose, attachWebSocket } = createApp({
     password,
     configPath: options.configPath,

@@ -1,5 +1,7 @@
 # Candidate Branch / PR Review Pack
 
+> 历史快照：本文是 2026-07-05 候选分支的审查包草稿，其中分支、提交、工作树、schema 与发布结论均不代表当前状态。2026-08-08 起以 `PRODUCT_GOAL.md`、`PROJECT_SPEC.md`、当前 schema 审计和 `tests.md` 为权威；创建新 PR 时必须重新生成审查内容，不能直接复用本文事实。
+
 生成时间：2026-07-05 10:38 Asia/Shanghai。
 
 本文用于把当前候选分支整理成可审查、可发 PR、可准备候选发布的 review pack。它不替代正式 Release Notes；它是维护者审查入口和 PR 描述草稿。

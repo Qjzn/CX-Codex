@@ -371,11 +371,13 @@ onBeforeUnmount(() => {
 }
 
 .composer-dropdown-option-description {
-  @apply mt-0.5 block text-xs leading-snug text-zinc-500;
+  @apply mt-0.5 block text-xs leading-snug;
+  color: var(--ui-text-tertiary);
 }
 
 .composer-dropdown-empty {
-  @apply px-2 py-1.5 text-xs text-zinc-500;
+  @apply px-2 py-1.5 text-xs;
+  color: var(--ui-text-tertiary);
 }
 
 .composer-dropdown-add {

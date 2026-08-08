@@ -124,6 +124,7 @@ function Assert-RepresentativeList {
 $requiredFiles = @(
   "README.md",
   "README.zh-CN.md",
+  "PRODUCT_GOAL.md",
   "CODE_OF_CONDUCT.md",
   "CONTRIBUTING.md",
   "SECURITY.md",
@@ -133,6 +134,7 @@ $requiredFiles = @(
   "tests.md",
   "docs/app-server-schema-audit-summary.json",
   "docs/security-hardening.zh-CN.md",
+  "docs/github-security-baseline-20260808.zh-CN.md",
   "docs/protocol-compatibility.zh-CN.md",
   "docs/app-server-protocol-matrix.zh-CN.md",
   "docs/openai-docs-review.zh-CN.md",
@@ -157,6 +159,13 @@ $requiredFiles = @(
   "scripts/update-app-server-schema-audit-summary.mjs",
   "scripts/verify-release-artifacts.ps1",
   "scripts/verify-windows-productization.ps1"
+  "src/cli/accessPolicy.ts"
+  "src/server/diagnosticsRedaction.ts"
+  "src/server/githubGitAuth.ts"
+  "src/server/localFileAccessPolicy.ts"
+  "src/server/privateFile.ts"
+  "src/server/skillsSyncStateSecurity.ts"
+  "src/server/windowsDataProtection.ts"
 )
 
 foreach ($file in $requiredFiles) {
@@ -167,10 +176,50 @@ $packageVersion = [string](Get-Content -LiteralPath (Join-Path $repoRoot "packag
 $releaseNotesPath = "docs/release-notes-$packageVersion.zh-CN.md"
 Assert-FileExists $releaseNotesPath
 
+Assert-ContentIncludes "src/style.css" @(
+  '@import "tailwindcss" source("./");'
+)
+
+Assert-ContentIncludes "vite.config.ts" @(
+  "const buildSource =",
+  '"import.meta.env.VITE_WORKTREE_NAME": JSON.stringify(buildSource)'
+)
+
+Assert-ContentExcludes "vite.config.ts" @(
+  'spawnSync(',
+  'function getWorktreeName'
+)
+
 Assert-ContentExcludes "tests.md" @(
   "待本轮验证后补充",
   "待验证后补充",
   "待补充验证"
+)
+
+$privacyFixtureFiles = @(
+  "tests.md",
+  "scripts/regression-7420-frontend.ps1",
+  "scripts/verify-frontend-normalizers.mjs",
+  "src/components/sidebar/SidebarRegressionFixture.vue",
+  "src/components/content/ComposerRegressionFixture.vue",
+  "src/components/content/CommandMenuRegressionFixture.vue",
+  "src/components/content/ConversationRegressionFixture.vue"
+)
+foreach ($file in $privacyFixtureFiles) {
+  Assert-ContentExcludes $file @(
+    "C:/Users/"
+  )
+}
+
+Assert-ContentIncludes "src/components/content/ConversationRegressionFixture.vue" @(
+  "E:/workspace/",
+  "C:/ExampleUser/",
+  "示例用户"
+)
+
+Assert-ContentIncludes "scripts/verify-frontend-normalizers.mjs" @(
+  "E:/workspace/",
+  "示例用户"
 )
 
 Assert-ContentExcludes ".github/release-body.md" @(
@@ -207,6 +256,7 @@ foreach ($template in $issueTemplates) {
 
 Assert-ContentIncludes "README.md" @(
   "Self-hosted OpenAI Codex Web UI and Android client bridge",
+  "PRODUCT_GOAL.md",
   "docs/security-hardening.zh-CN.md",
   "docs/app-server-protocol-matrix.zh-CN.md",
   "docs/openai-docs-review.zh-CN.md",
@@ -219,6 +269,122 @@ Assert-ContentIncludes "README.md" @(
   "SECURITY.md",
   "CONTRIBUTING.md",
   "SUPPORT.md"
+)
+
+Assert-ContentIncludes "AGENTS.md" @(
+  "PRODUCT_GOAL.md",
+  "Do not mark the product goal complete"
+)
+
+Assert-ContentIncludes "PRODUCT_GOAL.md" @(
+  "# CX-Codex 稳态产品化目标",
+  "## 决策优先级",
+  "## 当前剩余门槛",
+  "## 不做什么",
+  "## 完成门槛",
+  "## 自主推进协议",
+  "## 阻塞处理"
+)
+
+Assert-ContentIncludes "docs/github-security-baseline-20260808.zh-CN.md" @(
+  "Branch protection",
+  "Dependabot alerts",
+  "Private vulnerability reporting",
+  "Secret scanning alert #1",
+  "build",
+  "windows-bootstrap-smoke"
+)
+
+Assert-ContentIncludes "src/server/localFileAccessPolicy.ts" @(
+  "resolveWorkspaceLocalPath",
+  "outside-workspace",
+  "realpath",
+  "readWorkspaceRootsState"
+)
+
+Assert-ContentIncludes "src/server/httpServer.ts" @(
+  "resolveAuthorizedLocalPath",
+  "该路径不在已登记的工作区目录内。"
+)
+
+Assert-ContentIncludes "src/cli/accessPolicy.ts" @(
+  "assertPasswordProtectedBind",
+  "Password protection is required when binding outside localhost",
+  "127"
+)
+
+Assert-ContentIncludes "src/server/diagnosticsRedaction.ts" @(
+  "redactDiagnosticsValue",
+  "redactSensitiveLogString",
+  "[REDACTED]"
+)
+
+Assert-ContentIncludes "src/server/githubGitAuth.ts" @(
+  "GIT_TERMINAL_PROMPT",
+  "core.hooksPath=/dev/null",
+  "credential.helper=",
+  "CX_CODEX_GITHUB_GIT_TOKEN"
+)
+
+Assert-ContentIncludes "src/server/privateFile.ts" @(
+  "mode: 0o600",
+  "chmod(path, 0o600)"
+)
+
+Assert-ContentIncludes "src/server/skillsSyncStateSecurity.ts" @(
+  "windows-dpapi-current-user-v1",
+  "delete stored.githubToken",
+  "needsMigration"
+)
+
+Assert-ContentIncludes "src/server/windowsDataProtection.ts" @(
+  "System.Security.Cryptography.ProtectedData",
+  "DataProtectionScope]::CurrentUser",
+  "System32",
+  "WindowsPowerShell",
+  "-NoProfile"
+)
+
+Assert-ContentIncludes "src/commandResolution.ts" @(
+  "resolveGitCommand",
+  "resolveRipgrepCommand",
+  "getAbsolutePathCommandCandidates",
+  "isAbsolute(directory)"
+)
+
+Assert-ContentIncludes "src/server/appServerRollbackGit.ts" @(
+  "resolveGitCommand",
+  "getRollbackGitCommand"
+)
+
+Assert-ContentExcludes "src/server/appServerRollbackGit.ts" @(
+  "runCommand('git'",
+  "runCommandCapture('git'",
+  "runCommandWithOutput('git'"
+)
+
+Assert-ContentIncludes "src/server/worktreeRoutes.ts" @(
+  "resolveGitCommand",
+  "gitCommand?: string",
+  "!isAbsolute(gitCommand)"
+)
+
+Assert-ContentExcludes "src/server/worktreeRoutes.ts" @(
+  "captureGitCommand('git'",
+  "runGitCommand('git'"
+)
+
+Assert-ContentIncludes "src/server/skillsRoutes.ts" @(
+  "resolveGitCommand",
+  "decodeSkillsSyncStateFromStorage",
+  "encodeSkillsSyncStateForStorage"
+)
+
+Assert-ContentExcludes "src/server/skillsRoutes.ts" @(
+  "https://x-access-token:",
+  "encodeURIComponent(token)}@github.com",
+  "runCommand('git'",
+  "runCommandWithOutput('git'"
 )
 
 Assert-ContentIncludes "CODE_OF_CONDUCT.md" @(
@@ -280,8 +446,10 @@ Assert-ContentIncludes "README.md" @(
   "CODEXUI_APP_SERVER_APPROVAL_POLICY",
   "CX_CODEX_APP_SERVER_SANDBOX_MODE",
   "CODEXUI_APP_SERVER_SANDBOX_MODE",
-  "CX_CODEX_APP_SERVER_APPROVAL_POLICY=on-request",
-  "CX_CODEX_APP_SERVER_SANDBOX_MODE=workspace-write",
+  '默认 `on-request`',
+  '默认 `workspace-write`',
+  "CX_CODEX_APP_SERVER_APPROVAL_POLICY=never",
+  "CX_CODEX_APP_SERVER_SANDBOX_MODE=danger-full-access",
   "CODEXUI_OPENAI_API_KEY",
   "CODEXUI_OPENAI_TRANSCRIBE_MODEL",
   "CODEXUI_OPENAI_TRANSCRIBE_MAX_BYTES",
@@ -310,12 +478,21 @@ Assert-ContentIncludes "RELEASE.md" @(
   "Release package smoke",
   "NPM package smoke",
   "npm pack --dry-run --json",
+  "PRODUCT_GOAL.md",
+  "docs/app-server-protocol-matrix.zh-CN.md",
+  "docs/app-server-schema-audit-summary.json",
   "docs/candidate-release-review.zh-CN.md",
+  "历史审查材料只用于追溯",
   "candidate-reviewed",
   "verify:release-artifacts",
   'zip / APK 与 `.sha256`',
   "docs/security-hardening.zh-CN.md",
   "docs/release-template.zh-CN.md"
+)
+
+Assert-ContentExcludes "RELEASE.md" @(
+  "正式宣传前必须对照 [docs/candidate-release-review.zh-CN.md]",
+  "对照 [docs/candidate-release-review.zh-CN.md] 检查 README"
 )
 
 Assert-ContentIncludes "scripts/verify-release.ps1" @(
@@ -345,6 +522,7 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "package:release",
   "verify:release-artifacts",
   "Assert-ZipContains",
+  "PRODUCT_GOAL.md",
   "NPM package smoke",
   "npm package smoke ok",
   "Assert-NpmPackDryRun",
@@ -417,6 +595,20 @@ Assert-ContentIncludes "scripts/verify-release.ps1" @(
   "src\server\workspaceMetaRoutes.ts"
 )
 
+Assert-ContentIncludes "scripts/soak-7420.ps1" @(
+  '[int]$MaxQueuedRpc = 0',
+  '[int]$MaxPendingRpc = 0',
+  '[int]$MaxConsecutiveFailures = 0',
+  'appServerReady',
+  'runtimeUncertainRequestCount',
+  'appServerPidChangeCount',
+  'runtimeStreamChangeCount',
+  'runtimeReplayStreamMismatchCount',
+  'publicHealthChecked',
+  'publicAuthChecked',
+  'new slow thread/list RPC detected'
+)
+
 Assert-ContentIncludes "scripts/verify-frontend-normalizers.mjs" @(
   "import * as esbuild from 'esbuild'",
   "mkdtempSync(join(outputBase, 'run-'))",
@@ -461,6 +653,12 @@ Assert-ContentIncludes "scripts/server-module-smoke.ts" @(
   "smokeGithubTrendingRoutes",
   "handleDiagnosticsRoutes",
   "smokeDiagnosticsRoutes",
+  "smokeGithubGitAuth",
+  "synthetic-github-token-value-1234567890",
+  "protectWindowsCurrentUserText",
+  "Object.prototype.hasOwnProperty.call(storedWindowsState, 'githubToken')",
+  "resolveRipgrepCommand",
+  "commandCalls.every((call) => isAbsolute(call.command))",
   "handleNotificationSseRoute",
   "smokeNotificationSseRoute",
   "handleRuntimeActionRoutes",
@@ -555,10 +753,37 @@ Assert-ContentIncludes "package.json" @(
   '"audit:app-server-schemas": "node ./scripts/run-powershell-script.mjs ./scripts/audit-app-server-schemas.ps1"',
   '"audit:app-server-schemas:update-summary": "node ./scripts/update-app-server-schema-audit-summary.mjs"',
   '"verify:governance": "node ./scripts/run-powershell-script.mjs ./scripts/verify-governance.ps1"',
+  '"verify:dependency-security": "node ./scripts/verify-dependency-security.mjs"',
   '"verify:windows-productization": "node ./scripts/run-powershell-script.mjs ./scripts/verify-windows-productization.ps1"',
   '"verify:release": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release.ps1"',
   '"verify:release-artifacts": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release-artifacts.ps1"',
   '"esbuild":'
+)
+
+Assert-ContentIncludes "scripts/verify-dependency-security.mjs" @(
+  "registry.npmjs.org",
+  "requires npm 9 or newer for lockfile v3",
+  "--audit-level=low",
+  "0 vulnerabilities"
+)
+
+Assert-ContentIncludes "local-preview.html" @(
+  'http-equiv="Content-Security-Policy"',
+  "script-src 'self'",
+  "object-src 'none'"
+)
+
+Assert-ContentExcludes "src/localPreview.ts" @(
+  "pdf_viewer",
+  "PDFScriptingManager",
+  "AnnotationLayer"
+)
+
+Assert-ContentIncludes "scripts/regression-7420-frontend.ps1" @(
+  "Assert-LiveModelSelector",
+  "model/list",
+  "defaultMarkerCount",
+  "live model selector"
 )
 
 Assert-ContentIncludes "scripts/update-app-server-schema-audit-summary.mjs" @(
@@ -628,9 +853,12 @@ Assert-ContentIncludes ".github/release-body.md" @(
   "CX-Codex Release",
   "docs/changelog.zh-CN.md",
   "docs/security-hardening.zh-CN.md",
+  "PRODUCT_GOAL.md",
   "docs/openai-docs-review.zh-CN.md",
   "docs/app-server-protocol-matrix.zh-CN.md",
+  "docs/app-server-schema-audit-summary.json",
   "docs/candidate-release-review.zh-CN.md",
+  "historical traceability only",
   "CX-Codex-<tag>.zip",
   "cx-codex-android-<tag>.apk",
   "stable official release certificate",
@@ -642,8 +870,15 @@ Assert-ContentIncludes ".github/release-body.md" @(
   "must not include private accounts"
 )
 
+Assert-ContentExcludes ".github/release-body.md" @(
+  "Review [docs/candidate-release-review.zh-CN.md]"
+)
+
 Assert-ContentIncludes ".github/workflows/release.yml" @(
   "Verify release metadata",
+  "Require stable tag from main",
+  "git merge-base --is-ancestor `$env:GITHUB_SHA origin/main",
+  "Official release tag `$env:GITHUB_REF_NAME must point to a commit on main.",
   "Release tag `$env:GITHUB_REF_NAME does not match package version `$packageVersion.",
   "docs/release-notes-`$tagVersion.zh-CN.md",
   "Require Android release signing secrets",
@@ -690,14 +925,16 @@ Assert-ContentIncludes "docs/security-hardening.zh-CN.md" @(
 Assert-ContentIncludes "docs/security-hardening.zh-CN.md" @(
   "src/server/appServerLaunch.ts",
   "legacy high-trust",
-  "CX_CODEX_APP_SERVER_APPROVAL_POLICY=on-request",
-  "CX_CODEX_APP_SERVER_SANDBOX_MODE=workspace-write",
+  '默认使用 `on-request` 与 `workspace-write`',
+  "CX_CODEX_APP_SERVER_APPROVAL_POLICY=never",
+  "CX_CODEX_APP_SERVER_SANDBOX_MODE=danger-full-access",
   "不展示原始环境变量值"
 )
 
 Assert-ContentIncludes "docs/changelog.zh-CN.md" @(
   "appServerLaunch.ts",
   "legacy high-trust approval/sandbox 策略",
+  "on-request + workspace-write",
   "CODEXUI_OPENAI_API_KEY",
   "chunking_strategy=auto",
   "25 MB",
@@ -771,6 +1008,8 @@ Assert-ContentIncludes "docs/release-readiness-audit.zh-CN.md" @(
 
 Assert-ContentIncludes "docs/candidate-release-review.zh-CN.md" @(
   "Candidate Release Review",
+  "历史快照",
+  "不代表 2026-08-08 当前状态",
   "docs/candidate-pr-review-pack.zh-CN.md",
   "npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn",
   "output/app-server-schema-audit/20260705-102346",
@@ -787,6 +1026,8 @@ Assert-ContentIncludes "docs/candidate-release-review.zh-CN.md" @(
 
 Assert-ContentIncludes "docs/candidate-pr-review-pack.zh-CN.md" @(
   "Candidate Branch / PR Review Pack",
+  "历史快照",
+  "均不代表当前状态",
   "codex/candidate-release-review",
   "Prepare CX-Codex candidate release review and App Server governance",
   "npm.cmd run verify:release -- -RequireCleanGit -SchemaAudit warn",
@@ -799,6 +1040,17 @@ Assert-ContentIncludes "docs/candidate-pr-review-pack.zh-CN.md" @(
   "gh pr create --base main --head codex/candidate-release-review",
   "git merge --no-ff codex/candidate-release-review",
   "不要把 `output/app-server-schema-audit/` 原始生成目录提交进 PR"
+)
+
+Assert-ContentIncludes "README.md" @(
+  "历史 Candidate release 审查（2026-07-05）",
+  "历史 Candidate PR review pack（2026-07-05）"
+)
+
+Assert-ContentIncludes "docs/local-regression-checklist.zh-CN.md" @(
+  "当前发布事实源",
+  "历史 Candidate 追溯",
+  "不能作为当前发布验收依据"
 )
 
 Assert-ContentIncludes "docs/local-regression-checklist.zh-CN.md" @(
@@ -866,12 +1118,15 @@ foreach ($key in @("typescriptRoot", "typescriptV2", "jsonRoot", "jsonV2")) {
 }
 
 Assert-ContentIncludes ".github/workflows/ci.yml" @(
+  "- beta",
+  "npm run verify:dependency-security",
   "npm run verify:release -- -SchemaAudit skip",
   "npm run verify:windows-productization",
   "./scripts/uninstall-windows.ps1"
 )
 
 Assert-ContentIncludes ".github/workflows/release.yml" @(
+  "npm run verify:dependency-security",
   "npm run verify:release -- -RequireCleanGit -SchemaAudit skip",
   "npm run package:release -- -Version",
   "npm run verify:release-artifacts -- -OutputDir"

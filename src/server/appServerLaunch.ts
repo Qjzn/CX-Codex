@@ -14,8 +14,8 @@ export type AppServerLaunchPolicySnapshot = AppServerLaunchPolicy & {
 }
 
 export const DEFAULT_APP_SERVER_LAUNCH_POLICY: AppServerLaunchPolicy = {
-  approvalPolicy: 'never',
-  sandboxMode: 'danger-full-access',
+  approvalPolicy: 'on-request',
+  sandboxMode: 'workspace-write',
 }
 
 export function resolveAppServerLaunchPolicy(env: NodeJS.ProcessEnv = process.env): AppServerLaunchPolicy {

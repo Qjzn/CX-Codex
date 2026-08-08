@@ -21,7 +21,7 @@ import { terminateAppServerProcess } from './appServerProcessTermination.js'
 import { AppServerPendingRpcStore } from './appServerPendingRpcStore.js'
 import { AppServerRpcCache, getShareableRpcKey, shouldInvalidateThreadListCacheForRpc } from './appServerRpcCache.js'
 import { AppServerRpcDiagnostics } from './appServerRpcDiagnostics.js'
-import { createRpcTimeoutError } from './appServerRpcErrors.js'
+import { createRpcTimeoutError, createRpcTransportError } from './appServerRpcErrors.js'
 import { AppServerRpcQueue, getAppServerRpcQueuePriority } from './appServerRpcQueue.js'
 import { createAppServerRpcTimeoutRecoveryDecision } from './appServerRpcTimeoutRecovery.js'
 import { getRpcTimeoutMs } from './appServerRpcTimeoutPolicy.js'
@@ -119,7 +119,7 @@ export class AppServerProcess {
       },
       handleProcessError: (error) => {
         logBridgeError('Codex app-server process error', error)
-        this.cleanupProcessRuntime(error)
+        this.cleanupProcessRuntime(createRpcTransportError(`codex app-server process error: ${error.message}`))
         this.process = null
         this.initialized = false
         this.initializePromise = null
@@ -127,7 +127,7 @@ export class AppServerProcess {
       },
       handleProcessExit: () => {
         const expectedExit = this.stopping || this.expectedExitProcesses.has(proc)
-        const failure = new Error(this.stopping ? 'codex app-server stopped' : 'codex app-server exited unexpectedly')
+        const failure = createRpcTransportError(this.stopping ? 'codex app-server stopped' : 'codex app-server exited unexpectedly')
         if (!expectedExit) {
           logBridgeError('Codex app-server exited unexpectedly', failure, {
             pendingRpcCount: this.pending.count,
@@ -263,7 +263,7 @@ export class AppServerProcess {
     this.initialized = false
     this.initializePromise = null
     this.stdoutLineBuffer.clear()
-    this.cleanupProcessRuntime(new Error(`codex app-server restarted: ${reason}`))
+    this.cleanupProcessRuntime(createRpcTransportError(`codex app-server restarted: ${reason}`))
 
     terminateAppServerProcess(proc)
   }
@@ -476,7 +476,7 @@ export class AppServerProcess {
   }
 
   dispose(): void {
-    const failure = new Error('codex app-server stopped')
+    const failure = createRpcTransportError('codex app-server stopped')
     this.rejectQueuedRpcCalls(failure)
     if (!this.process) return
 

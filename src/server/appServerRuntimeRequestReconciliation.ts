@@ -4,6 +4,7 @@ import type {
   RuntimeRequestStatus,
 } from './runtimeStore.js'
 import { readRuntimeRequestStatusFromExecutionState } from './appServerRuntimeBridge.js'
+import { createRuntimePromptHash } from './runtimePayload.js'
 
 export const RUNTIME_REQUEST_RECONCILE_ACTIVE_STATUSES: RuntimeRequestStatus[] = [
   'pending_start',
@@ -23,12 +24,14 @@ export type RuntimeRequestSnapshotPatch = {
   threadId: string
   turnId: string
   lastError: string | null
+  payload?: unknown
 }
 
 export type RuntimeRequestReconcileFailurePatch = {
   status: RuntimeRequestStatus
   lastError: string
   incrementRetry: true
+  payload?: unknown
 }
 
 export type RuntimeThreadStatePayload = {
@@ -90,6 +93,7 @@ export function selectRuntimeRequestsForReconcile(
 ): RuntimeRequestRecord[] {
   return requests
     .filter((request) => {
+      if (canResumeRuntimePendingStart(request)) return true
       if (!request.threadId) return false
       if (
         request.status !== 'running'
@@ -100,6 +104,21 @@ export function selectRuntimeRequestsForReconcile(
       return nowMs - lastAtMs >= RUNTIME_RECONCILE_RUNNING_THROTTLE_MS
     })
     .slice(0, Math.max(0, Math.trunc(limit)))
+}
+
+export function canResumeRuntimePendingStart(
+  request: Pick<
+    RuntimeRequestRecord,
+    'status' | 'requestId' | 'clientMessageId' | 'promptHash' | 'mode' | 'payload'
+  >,
+): boolean {
+  if (request.status !== 'pending_start') return false
+  const payload = asRecord(request.payload)
+  if (!payload || payload.requestId !== request.requestId) return false
+  if (payload.clientMessageId !== request.clientMessageId) return false
+  if (payload.collaborationMode !== request.mode) return false
+  if (!Array.isArray(payload.input) || payload.input.length === 0) return false
+  return createRuntimePromptHash(payload.input) === request.promptHash
 }
 
 export function createRuntimeReconcileFailurePatch(
@@ -113,8 +132,19 @@ export function createRuntimeReconcileFailurePatch(
   }
 }
 
+export function createRuntimePendingStartResumeFailurePatch(
+  lastError: string,
+): RuntimeRequestReconcileFailurePatch {
+  return {
+    status: 'failed',
+    lastError,
+    incrementRetry: true,
+    payload: {},
+  }
+}
+
 export function createRuntimeRequestSnapshotPatch(
-  request: Pick<RuntimeRequestRecord, 'status' | 'turnId'>,
+  request: Pick<RuntimeRequestRecord, 'status' | 'turnId'> & { payload?: unknown },
   threadId: string,
   snapshot: Pick<ThreadRuntimeSnapshot, 'activeTurnId' | 'executionState' | 'inProgress' | 'lastError'>,
 ): RuntimeRequestSnapshotPatch {
@@ -135,5 +165,20 @@ export function createRuntimeRequestSnapshotPatch(
     lastError: startWasInterrupted
       ? 'Turn start was not confirmed after bridge restart'
       : snapshot.lastError,
+    ...(hasDurableRuntimeSendPayload(request.payload) ? { payload: {} } : {}),
   }
+}
+
+function hasDurableRuntimeSendPayload(payload: unknown): boolean {
+  const record = asRecord(payload)
+  return typeof record?.requestId === 'string'
+    && typeof record.clientMessageId === 'string'
+    && typeof record.collaborationMode === 'string'
+    && Array.isArray(record.input)
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
 }

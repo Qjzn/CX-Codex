@@ -16,6 +16,7 @@ type NotificationReplayCoordinatorOptions = {
   applyNotification: (notification: RpcNotification, source: NotificationReplaySource) => void
   recoverSnapshot: (signal: AbortSignal) => Promise<void>
   persistCursor: (cursor: number, streamId: string) => void
+  onStreamChanged?: (streamId: string) => void
   onRecoveryError?: (error: unknown) => void
   pageSize?: number
   maxPages?: number
@@ -43,6 +44,7 @@ export function createNotificationReplayCoordinator(
   let stopped = false
   let recoveryPromise: Promise<NotificationReplayRecoveryResult> | null = null
   let activeRecoveryController: AbortController | null = null
+  let followUpRecoveryRequested = false
 
   const persistCurrentCursor = (): void => {
     options.persistCursor(cursor, streamId)
@@ -119,7 +121,18 @@ export function createNotificationReplayCoordinator(
       const oldestSeq = normalizeSequence(page.oldestSeq)
       const pageStreamId = normalizeStreamId(page.streamId)
       const streamChanged = Boolean(pageStreamId) && pageStreamId !== streamId
-      if (streamChanged) streamId = pageStreamId
+      if (streamChanged) {
+        streamId = pageStreamId
+        options.onStreamChanged?.(streamId)
+        if (bufferedLiveBySeq.size > 0) {
+          // Live events do not carry a stream id. Once the persisted stream changes,
+          // buffered sequence numbers from the previous stream are unsafe to apply.
+          // Drop them and verify the new stream once more; genuinely new events were
+          // persisted before broadcast and will be recovered by that follow-up page.
+          bufferedLiveBySeq.clear()
+          followUpRecoveryRequested = true
+        }
+      }
       const needsInitialSnapshot =
         streamChanged ||
         cursor === 0 ||
@@ -223,7 +236,8 @@ export function createNotificationReplayCoordinator(
       if (activeRecoveryController === controller) {
         activeRecoveryController = null
       }
-      if (!stopped && result.completed && bufferedLiveBySeq.size > 0) {
+      if (!stopped && result.completed && (bufferedLiveBySeq.size > 0 || followUpRecoveryRequested)) {
+        followUpRecoveryRequested = false
         void recover()
       }
     })
@@ -260,6 +274,7 @@ export function createNotificationReplayCoordinator(
       activeRecoveryController = null
       recoveryPromise = null
       bufferedLiveBySeq.clear()
+      followUpRecoveryRequested = false
     },
     getCursor: () => cursor,
   }

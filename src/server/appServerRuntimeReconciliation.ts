@@ -21,6 +21,7 @@ type RuntimeReconciliationStore = {
 
 export type AppServerRuntimeReconciliationDependencies = {
   readThreadRuntimeSnapshot(threadId: string): Promise<ThreadRuntimeSnapshot>
+  resumePendingStart(payload: unknown): Promise<unknown>
   runtimeStore: RuntimeReconciliationStore
   getErrorMessage(error: unknown, fallback: string): string
   writeReconcileFailure(details: {
@@ -47,6 +48,7 @@ export function createAppServerRuntimeReconciliation(
   const runtimeReconcileScheduler = createRuntimeReconcileScheduler({
     listUncertainRequests: (limit) => dependencies.runtimeStore.listUncertainRequests(limit),
     reconcileRuntimeThread,
+    resumePendingStart: dependencies.resumePendingStart,
     updateRequest: (requestId, patch) => dependencies.runtimeStore.updateRequest(requestId, patch),
     getErrorMessage: dependencies.getErrorMessage,
     writeReconcileFailure: dependencies.writeReconcileFailure,

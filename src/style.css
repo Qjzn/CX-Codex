@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import "tailwindcss" source("./");
 
 :root {
   --ui-bg-window: #f7f7f6;
@@ -10,8 +10,8 @@
   --ui-border-subtle: #e3e3df;
   --ui-border-strong: #d6d6d0;
   --ui-text-primary: #1f1f1f;
-  --ui-text-secondary: #6f6f6c;
-  --ui-text-tertiary: #92928d;
+  --ui-text-secondary: #5f5f5c;
+  --ui-text-tertiary: #6f6f6c;
   --ui-accent: #0f766e;
   --ui-success: #0f766e;
   --ui-warning: #9a6700;
@@ -124,6 +124,9 @@ pre {
 
 :root.dark {
   color-scheme: dark;
+  --ui-text-primary: #f4f4f5;
+  --ui-text-secondary: #d4d4d8;
+  --ui-text-tertiary: #a1a1aa;
 }
 
 :root.dark body {
@@ -197,7 +200,7 @@ pre {
 
 :root.dark .sidebar-settings-section-title,
 :root.dark .sidebar-settings-hint {
-  @apply text-zinc-500;
+  @apply text-zinc-400;
 }
 
 :root.dark .sidebar-settings-hint-status {
@@ -214,7 +217,7 @@ pre {
 
 :root.dark .sidebar-settings-about-label,
 :root.dark .sidebar-settings-about-meta {
-  @apply text-zinc-500;
+  @apply text-zinc-400;
 }
 
 :root.dark .sidebar-settings-about-version {
@@ -243,7 +246,7 @@ pre {
 }
 
 :root.dark .sidebar-settings-input::placeholder {
-  @apply text-zinc-500;
+  @apply text-zinc-400;
 }
 
 :root.dark .sidebar-settings-input:focus {
@@ -292,7 +295,7 @@ pre {
 }
 
 :root.dark .sidebar-search-input {
-  @apply text-zinc-200 placeholder-zinc-500;
+  @apply text-zinc-200 placeholder-zinc-400;
 }
 
 :root.dark .project-group {
@@ -300,7 +303,7 @@ pre {
 }
 
 :root.dark .thread-tree-header {
-  @apply text-zinc-500;
+  @apply text-zinc-400;
 }
 
 :root.dark .thread-row {
@@ -316,7 +319,7 @@ pre {
 }
 
 :root.dark .thread-row-time {
-  @apply bg-zinc-800 text-zinc-500;
+  @apply bg-zinc-800 text-zinc-400;
 }
 
 :root.dark .project-header-row {
@@ -421,7 +424,7 @@ pre {
 }
 
 :root.dark .rate-limit-card-title {
-  @apply text-zinc-500;
+  @apply text-zinc-400;
 }
 
 :root.dark .rate-limit-card-plan {
@@ -610,7 +613,7 @@ pre {
 
 :root.dark .conversation-loading,
 :root.dark .conversation-empty {
-  @apply text-zinc-500;
+  @apply text-zinc-400;
 }
 
 :root.dark .live-overlay-label {
@@ -618,7 +621,7 @@ pre {
 }
 
 :root.dark .live-overlay-reasoning {
-  @apply text-zinc-500;
+  @apply text-zinc-400;
 }
 
 :root.dark .cmd-row {
@@ -709,7 +712,7 @@ pre {
 }
 
 :root.dark .composer-dropdown-empty {
-  @apply text-zinc-500;
+  @apply text-zinc-400;
 }
 
 :root.dark .composer-dropdown-add {
@@ -729,7 +732,7 @@ pre {
 }
 
 :root.dark .thread-composer-input::placeholder {
-  @apply text-zinc-500;
+  @apply text-zinc-400;
 }
 
 :root.dark .new-thread-folder-dropdown {
@@ -829,7 +832,7 @@ pre {
 }
 
 :root.dark .skills-hub-search {
-  @apply text-zinc-200 placeholder-zinc-500;
+  @apply text-zinc-200 placeholder-zinc-400;
 }
 
 :root.dark .skills-hub-search-btn,
@@ -838,7 +841,7 @@ pre {
 }
 
 :root.dark .skills-hub-count {
-  @apply text-zinc-500;
+  @apply text-zinc-400;
 }
 
 :root.dark .skills-sync-panel {
@@ -920,7 +923,7 @@ pre {
 }
 
 :root.dark .skill-card-date {
-  @apply text-zinc-500;
+  @apply text-zinc-400;
 }
 
 :root.dark .sdm-panel {

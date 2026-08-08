@@ -350,6 +350,7 @@ if (-not $SkipPackageSmoke) {
 
   Assert-ZipContains -ZipPath $zipPath -RequiredEntries @(
     "README.md",
+    "PRODUCT_GOAL.md",
     "RELEASE.md",
     "release-capabilities.json",
     "CODE_OF_CONDUCT.md",

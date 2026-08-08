@@ -1,6 +1,6 @@
 {
   "name": "cx-codex",
-  "version": "2.7.6",
+  "version": "2.8.0",
   "description": "CX-Codex Web UI and browser bridge for Windows, Linux, Android, LAN, and remote self-hosted access",
   "type": "module",
   "license": "MIT",
@@ -71,6 +71,7 @@
     "audit:app-server-schemas": "node ./scripts/run-powershell-script.mjs ./scripts/audit-app-server-schemas.ps1",
     "audit:app-server-schemas:update-summary": "node ./scripts/update-app-server-schema-audit-summary.mjs",
     "verify:governance": "node ./scripts/run-powershell-script.mjs ./scripts/verify-governance.ps1",
+    "verify:dependency-security": "node ./scripts/verify-dependency-security.mjs",
     "verify:frontend-normalizers": "node ./scripts/verify-frontend-normalizers.mjs",
     "verify:quick-tunnel": "node ./scripts/verify-quick-tunnel-manager.mjs",
     "verify:server-modules": "node ./scripts/verify-server-modules.mjs",
@@ -87,10 +88,10 @@
     "better-sqlite3": "^12.11.1",
     "commander": "^15.0.0",
     "docx-preview": "^0.4.0",
-    "dompurify": "^3.4.12",
+    "dompurify": "^3.4.13",
     "express": "^5.1.0",
     "markdown-it": "^14.3.0",
-    "pdfjs-dist": "^6.1.200",
+    "pdfjs-dist": "^6.2.108",
     "qrcode-terminal": "^0.12.0",
     "ws": "^8.21.1"
   },
@@ -113,5 +114,11 @@
     "vue": "^3.5.40",
     "vue-router": "^4.6.4",
     "vue-tsc": "^3.3.8"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.9",
+    "esbuild": "$esbuild",
+    "nanoid": "3.3.18",
+    "postcss": "8.5.26"
   }
 }

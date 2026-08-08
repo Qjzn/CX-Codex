@@ -1,10 +1,11 @@
-import { isRpcTimeoutError } from './appServerRpcErrors.js'
+import { isRpcOutcomeUncertainError } from './appServerRpcErrors.js'
 import {
   readThreadIdFromPayload,
   readTurnIdFromPayload,
 } from './appServerPayloadIds.js'
 import {
   createRuntimePromptHash,
+  createDurableRuntimeSendPayload,
   normalizePlanModeTurnStartParams,
   parseRuntimeSendPayload,
   shouldRetryPlanModeWithoutNativeMode,
@@ -40,6 +41,7 @@ export type RuntimeStartDependencies = {
       status?: RuntimeRequestStatus
       lastError?: string | null
       incrementRetry?: boolean
+      payload?: unknown
     },
   ): RuntimeRequestRecord | null
   getRequest(requestId: string): RuntimeRequestRecord | null
@@ -151,7 +153,7 @@ async function startParsedRuntimeTurnWithAppServer(
       status: 'pending_start',
       promptHash,
       mode: parsed.mode,
-      payload: parsed.payloadSummary,
+      payload: createDurableRuntimeSendPayload(parsed),
     })
     if (accepted.requestId !== requestId) {
       if (!runtimeRequestMatchesParsed(accepted, parsed, promptHash)) {
@@ -186,12 +188,13 @@ async function startParsedRuntimeTurnWithAppServer(
       mode: parsed.mode,
     })
 
-    dependencies.markStarting(threadId)
-    dependencies.persistRuntimeSnapshot(threadId)
     dependencies.updateRequest(requestId, {
       status: 'starting',
       threadId,
+      payload: parsed.payloadSummary,
     })
+    dependencies.markStarting(threadId)
+    dependencies.persistRuntimeSnapshot(threadId)
 
     const rpcResult = await startRuntimeTurnRpc(turnParams, parsed.mode, dependencies)
     const turnId = readTurnIdFromPayload(rpcResult)
@@ -206,6 +209,7 @@ async function startParsedRuntimeTurnWithAppServer(
       threadId,
       turnId: effectiveTurnId,
       lastError: null,
+      payload: parsed.payloadSummary,
     }) ?? dependencies.getRequest(requestId)
     return {
       request: request as RuntimeRequestRecord,
@@ -214,7 +218,7 @@ async function startParsedRuntimeTurnWithAppServer(
       status: 'running',
     }
   } catch (error) {
-    if (threadId && isRpcTimeoutError(error)) {
+    if (threadId && isRpcOutcomeUncertainError(error)) {
       const lastError = dependencies.getErrorMessage(error, 'turn/start timed out')
       dependencies.markStartUncertain(threadId, lastError)
       dependencies.persistRuntimeSnapshot(threadId)
@@ -222,6 +226,7 @@ async function startParsedRuntimeTurnWithAppServer(
         status: 'start_uncertain',
         threadId,
         lastError,
+        payload: parsed.payloadSummary,
       }) ?? dependencies.getRequest(requestId)
       return {
         request: request as RuntimeRequestRecord,
@@ -236,6 +241,7 @@ async function startParsedRuntimeTurnWithAppServer(
       status: 'failed',
       threadId,
       lastError,
+      payload: parsed.payloadSummary,
     })
     if (threadId) {
       dependencies.markFailed(threadId, lastError)

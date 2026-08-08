@@ -549,6 +549,8 @@
           id="main-content"
           class="content-root"
           :class="{ 'content-root--dual-pane-touch': isDualPaneMobile }"
+          role="main"
+          aria-label="会话内容"
           tabindex="-1"
         >
         <ContentHeader :title="contentTitle">
@@ -5009,10 +5011,10 @@ function scheduleInitialBackgroundTasks(): void {
 async function initialize(): Promise<void> {
   const startupThreadId = isThreadRouteLike.value ? readStartupRouteThreadId() : ''
   if (startupThreadId) {
-    hasInitialized.value = true
     rememberRoutableThreadId(startupThreadId)
     void loadThreadTitleCache()
     await selectThread(startupThreadId)
+    hasInitialized.value = true
     queueDelayedIdleTask(() => {
       void refreshAll({
         loadMessages: false,

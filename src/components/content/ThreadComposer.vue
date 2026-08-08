@@ -3052,7 +3052,8 @@ watch(
 }
 
 .thread-composer-file-mention-empty {
-  @apply px-2 py-1.5 text-xs text-zinc-500;
+  @apply px-2 py-1.5 text-xs;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-composer-file-mention-loading {
@@ -3072,6 +3073,11 @@ watch(
 
 .thread-composer-input:focus {
   @apply ring-0;
+}
+
+.thread-composer-input::placeholder {
+  color: var(--ui-text-tertiary);
+  opacity: 1;
 }
 
 .thread-composer-input:disabled {

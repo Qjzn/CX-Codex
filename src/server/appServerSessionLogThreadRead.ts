@@ -23,6 +23,7 @@ type RecoveredMessage = {
   role: 'user' | 'assistant'
   text: string
   id: string
+  turnId?: string
   phase?: 'commentary'
   hidden?: boolean
 }
@@ -207,10 +208,12 @@ function readResponseItemMessage(entry: Record<string, unknown>): RecoveredMessa
   const text = role === 'assistant' ? normalizeRecoveredAssistantText(rawText) : rawText
   if (!text) return null
   const id = readTrimmedString(payload.id)
+  const metadata = asRecord(payload.internal_chat_message_metadata_passthrough)
+  const turnId = readTrimmedString(metadata?.turn_id)
   if (isInternalContextMessageText(text)) {
-    return role === 'user' ? { role, text: '', id, hidden: true } : null
+    return role === 'user' ? { role, text: '', id, ...(turnId ? { turnId } : {}), hidden: true } : null
   }
-  return { role, text, id, ...(phase ? { phase } : {}) }
+  return { role, text, id, ...(turnId ? { turnId } : {}), ...(phase ? { phase } : {}) }
 }
 
 function readEventMessage(entry: Record<string, unknown>): RecoveredMessage | null {
@@ -236,11 +239,19 @@ function readEventMessage(entry: Record<string, unknown>): RecoveredMessage | nu
 
 function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): void {
   const text = limitText(message.text)
-  const turn = message.role === 'user' || turns.length === 0
+  let matchingTurn: FallbackTurn | null = null
+  if (message.turnId) {
+    for (let index = turns.length - 1; index >= 0; index -= 1) {
+      if (turns[index]?.id !== message.turnId) continue
+      matchingTurn = turns[index] ?? null
+      break
+    }
+  }
+  const turn = matchingTurn ?? (message.role === 'user' || turns.length === 0
     ? null
-    : turns.at(-1) ?? null
+    : turns.at(-1) ?? null)
   const targetTurn = turn ?? {
-    id: message.id || `fallback-turn-${String(turns.length + 1)}`,
+    id: message.turnId || message.id || `fallback-turn-${String(turns.length + 1)}`,
     status: 'completed' as const,
     items: [],
   }

@@ -1,10 +1,19 @@
 import { readFile, mkdir, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { resolveGitCommand } from '../commandResolution.js'
 import {
   runCommand,
   runCommandCapture,
   runCommandWithOutput,
 } from './commandRunner.js'
+
+let rollbackGitCommand: string | null | undefined
+
+function getRollbackGitCommand(): string {
+  if (rollbackGitCommand === undefined) rollbackGitCommand = resolveGitCommand()
+  if (!rollbackGitCommand) throw new Error('Git is required for rollback operations')
+  return rollbackGitCommand
+}
 
 export async function ensureRepoHasInitialCommit(repoRoot: string): Promise<void> {
   const agentsPath = join(repoRoot, 'AGENTS.md')
@@ -14,9 +23,9 @@ export async function ensureRepoHasInitialCommit(repoRoot: string): Promise<void
     await writeFile(agentsPath, '', 'utf8')
   }
 
-  await runCommand('git', ['add', 'AGENTS.md'], { cwd: repoRoot })
+  await runCommand(getRollbackGitCommand(), ['add', 'AGENTS.md'], { cwd: repoRoot })
   await runCommand(
-    'git',
+    getRollbackGitCommand(),
     ['-c', 'user.name=Codex', '-c', 'user.email=codex@local', 'commit', '-m', 'Initialize repository for worktree support'],
     { cwd: repoRoot },
   )
@@ -63,15 +72,15 @@ export async function ensureRollbackGitRepo(cwd: string): Promise<string> {
     }
   } catch {
     await mkdir(dirname(gitDir), { recursive: true })
-    await runCommand('git', ['--git-dir', gitDir, '--work-tree', cwd, 'init'])
+    await runCommand(getRollbackGitCommand(), ['--git-dir', gitDir, '--work-tree', cwd, 'init'])
   }
-  await runCommand('git', ['--git-dir', gitDir, 'config', 'user.email', 'codex@local'])
-  await runCommand('git', ['--git-dir', gitDir, 'config', 'user.name', 'Codex Rollback'])
+  await runCommand(getRollbackGitCommand(), ['--git-dir', gitDir, 'config', 'user.email', 'codex@local'])
+  await runCommand(getRollbackGitCommand(), ['--git-dir', gitDir, 'config', 'user.name', 'Codex Rollback'])
   try {
-    await runCommandCapture('git', ['--git-dir', gitDir, '--work-tree', cwd, 'rev-parse', '--verify', 'HEAD'])
+    await runCommandCapture(getRollbackGitCommand(), ['--git-dir', gitDir, '--work-tree', cwd, 'rev-parse', '--verify', 'HEAD'])
   } catch {
     await runCommand(
-      'git',
+      getRollbackGitCommand(),
       ['--git-dir', gitDir, '--work-tree', cwd, 'commit', '--allow-empty', '-m', 'Initialize rollback history'],
     )
   }
@@ -81,17 +90,17 @@ export async function ensureRollbackGitRepo(cwd: string): Promise<string> {
 
 export async function runRollbackGit(cwd: string, args: string[]): Promise<void> {
   const gitDir = await ensureRollbackGitRepo(cwd)
-  await runCommand('git', ['--git-dir', gitDir, '--work-tree', cwd, ...args])
+  await runCommand(getRollbackGitCommand(), ['--git-dir', gitDir, '--work-tree', cwd, ...args])
 }
 
 export async function runRollbackGitCapture(cwd: string, args: string[]): Promise<string> {
   const gitDir = await ensureRollbackGitRepo(cwd)
-  return await runCommandCapture('git', ['--git-dir', gitDir, '--work-tree', cwd, ...args])
+  return await runCommandCapture(getRollbackGitCommand(), ['--git-dir', gitDir, '--work-tree', cwd, ...args])
 }
 
 export async function runRollbackGitWithOutput(cwd: string, args: string[]): Promise<string> {
   const gitDir = await ensureRollbackGitRepo(cwd)
-  return await runCommandWithOutput('git', ['--git-dir', gitDir, '--work-tree', cwd, ...args])
+  return await runCommandWithOutput(getRollbackGitCommand(), ['--git-dir', gitDir, '--work-tree', cwd, ...args])
 }
 
 export async function hasRollbackGitWorkingTreeChanges(cwd: string): Promise<boolean> {

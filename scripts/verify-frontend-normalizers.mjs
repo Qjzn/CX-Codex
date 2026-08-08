@@ -37,11 +37,13 @@ const threadGoalImport = toImportPath(relative(outputRoot, join(repoRoot, 'src',
 const codexFileCitationImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'utils', 'codexFileCitation.ts')))
 const runtimeMessageQueueImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'runtimeMessageQueue.ts')))
 const foregroundRecoveryPolicyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'foregroundRecoveryPolicy.ts')))
+const threadFirstScreenMetricsImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'threadFirstScreenMetrics.ts')))
+const foregroundRecoveryMetricsImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'foregroundRecoveryMetrics.ts')))
 
 try {
   writeFileSync(entryPath, `
 import assert from 'node:assert/strict'
-import { normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from '${normalizerImport}'
+import { applyActiveTurnIdToMessages, normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from '${normalizerImport}'
 import { createNotificationReplayCoordinator } from '${notificationReplayImport}'
 import {
   createConnectionManager,
@@ -54,7 +56,11 @@ import {
   isConversationViewportAtBottom,
 } from '${conversationViewportImport}'
 import { haveSameConversationMessageStructure } from '${conversationRenderPolicyImport}'
-import { shouldApplyRuntimeSnapshotVersion } from '${runtimeSnapshotOrderingImport}'
+import {
+  resetRuntimeSnapshotVersionMap,
+  shouldApplyRuntimeSnapshotVersion,
+  shouldApplyRuntimeTerminalTurn,
+} from '${runtimeSnapshotOrderingImport}'
 import { isOptimisticOnlyExecutionEvidence } from '${runtimeExecutionRecoveryImport}'
 import { mergeMessageOutboxEntries, mergeMessageOutboxState } from '${messageOutboxMergeImport}'
 import {
@@ -69,7 +75,11 @@ import {
   normalizeComposerTurnOptions,
 } from '${composerTurnOptionsImport}'
 import {
+  MESSAGE_OUTBOX_STORAGE_KEY,
+  isMessageOutboxStorageKey,
+  loadMessageOutboxStateFromStorage,
   parseMessageOutboxState,
+  saveMessageOutboxStateToStorage,
   serializeMessageOutboxState,
 } from '${messageOutboxPersistenceImport}'
 import {
@@ -130,6 +140,110 @@ import {
   mergeRuntimeMessageQueueThreadState,
 } from '${runtimeMessageQueueImport}'
 import { shouldRefreshForegroundMessages } from '${foregroundRecoveryPolicyImport}'
+import {
+  beginThreadFirstScreenMetric,
+  markThreadFirstScreenReady,
+  setThreadFirstScreenSource,
+} from '${threadFirstScreenMetricsImport}'
+import {
+  beginForegroundRecoveryMetric,
+  cancelForegroundRecoveryMetric,
+  readForegroundRecoveryMetricSummary,
+  settleForegroundRecoveryMetric,
+} from '${foregroundRecoveryMetricsImport}'
+
+const recoveryMetricHost: any = {}
+let recoveryMetricStorageValue: string | null = null
+const recoveryMetricStorage = {
+  getItem: () => recoveryMetricStorageValue,
+  setItem: (_key: string, value: string) => { recoveryMetricStorageValue = value },
+  removeItem: () => { recoveryMetricStorageValue = null },
+}
+beginForegroundRecoveryMetric(' recovery-thread ', 1_000, recoveryMetricHost)
+beginForegroundRecoveryMetric('recovery-thread', 1_100, recoveryMetricHost)
+assert.deepEqual(settleForegroundRecoveryMetric(
+  'recovery-thread',
+  1_240,
+  recoveryMetricHost,
+  recoveryMetricStorage,
+), {
+  startedAtMs: 1_000,
+  settledAtMs: 1_240,
+  latencyMs: 240,
+})
+assert.deepEqual(readForegroundRecoveryMetricSummary(1_240, recoveryMetricStorage), {
+  sampleCount: 1,
+  p50Ms: 240,
+  p95Ms: 240,
+  maxMs: 240,
+  latestMs: 240,
+})
+beginForegroundRecoveryMetric('cancelled-recovery', 1_300, recoveryMetricHost)
+cancelForegroundRecoveryMetric('cancelled-recovery', recoveryMetricHost)
+assert.equal(settleForegroundRecoveryMetric(
+  'cancelled-recovery',
+  1_500,
+  recoveryMetricHost,
+  recoveryMetricStorage,
+), null)
+for (let index = 0; index < 55; index += 1) {
+  const startedAtMs = 2_000 + index * 10
+  beginForegroundRecoveryMetric('bounded-recovery', startedAtMs, recoveryMetricHost)
+  settleForegroundRecoveryMetric(
+    'bounded-recovery',
+    startedAtMs + index,
+    recoveryMetricHost,
+    recoveryMetricStorage,
+  )
+}
+assert.equal(readForegroundRecoveryMetricSummary(3_000, recoveryMetricStorage).sampleCount, 50)
+
+const firstScreenMetricHost: any = {}
+beginThreadFirstScreenMetric(' thread-cache ', 100, firstScreenMetricHost)
+setThreadFirstScreenSource('thread-cache', 'local-cache', firstScreenMetricHost)
+const cachedFirstScreenMetric = markThreadFirstScreenReady({
+  threadId: 'thread-cache',
+  itemCount: 4,
+  userCount: 2,
+  assistantCount: 2,
+}, 225, firstScreenMetricHost)
+assert.deepEqual(cachedFirstScreenMetric, {
+  readyAtMs: 225,
+  selectionStartedAtMs: 100,
+  selectionLatencyMs: 125,
+  source: 'local-cache',
+  itemCount: 4,
+  userCount: 2,
+  assistantCount: 2,
+})
+assert.equal(markThreadFirstScreenReady({
+  threadId: 'thread-cache',
+  itemCount: 8,
+  userCount: 4,
+  assistantCount: 4,
+}, 275, firstScreenMetricHost), cachedFirstScreenMetric)
+beginThreadFirstScreenMetric('thread-cache', 300, firstScreenMetricHost)
+setThreadFirstScreenSource('thread-cache', 'memory', firstScreenMetricHost)
+assert.equal(firstScreenMetricHost.__cxCodexThreadFirstScreenReady['thread-cache'], undefined)
+assert.equal(markThreadFirstScreenReady({
+  threadId: 'thread-cache',
+  itemCount: 2,
+  userCount: 1,
+  assistantCount: 1,
+}, 330, firstScreenMetricHost)?.selectionLatencyMs, 30)
+for (let index = 0; index < 40; index += 1) {
+  const threadId = 'bounded-first-screen-' + String(index)
+  beginThreadFirstScreenMetric(threadId, 400 + index, firstScreenMetricHost)
+  setThreadFirstScreenSource(threadId, 'memory', firstScreenMetricHost)
+  markThreadFirstScreenReady({
+    threadId,
+    itemCount: 2,
+    userCount: 1,
+    assistantCount: 1,
+  }, 450 + index, firstScreenMetricHost)
+}
+assert.equal(Object.keys(firstScreenMetricHost.__cxCodexThreadFirstScreenStart).length, 32)
+assert.equal(Object.keys(firstScreenMetricHost.__cxCodexThreadFirstScreenReady).length, 32)
 
 const queuedA = { id: 'local-a', clientMessageId: 'client-a', deliveryState: 'queued' } as any
 const queuedB = { id: 'local-b', clientMessageId: 'client-b', deliveryState: 'queued' } as any
@@ -185,15 +299,15 @@ assert.equal(shouldRefreshForegroundMessages({
   executionStale: true,
 }), true)
 
-const resumePdfCitation = ':codex-file-citation{path="E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf" purpose="产品与项目经理通用投递简历"}'
+const resumePdfCitation = ':codex-file-citation{path="E:/workspace/CXCodex/role_resumes/示例用户-产品与项目经理-优化投递版-2026-08-03.pdf" purpose="产品与项目经理通用投递简历"}'
 assert.deepEqual(readCodexFileCitationAt(resumePdfCitation, 0), {
   raw: resumePdfCitation,
   start: 0,
   end: resumePdfCitation.length,
-  path: 'E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf',
+  path: 'E:/workspace/CXCodex/role_resumes/示例用户-产品与项目经理-优化投递版-2026-08-03.pdf',
   purpose: '产品与项目经理通用投递简历',
   attributes: {
-    path: 'E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf',
+    path: 'E:/workspace/CXCodex/role_resumes/示例用户-产品与项目经理-优化投递版-2026-08-03.pdf',
     purpose: '产品与项目经理通用投递简历',
   },
 })
@@ -207,10 +321,10 @@ assert.deepEqual(
         raw: resumePdfCitation,
         start: 4,
         end: 4 + resumePdfCitation.length,
-        path: 'E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf',
+        path: 'E:/workspace/CXCodex/role_resumes/示例用户-产品与项目经理-优化投递版-2026-08-03.pdf',
         purpose: '产品与项目经理通用投递简历',
         attributes: {
-          path: 'E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf',
+          path: 'E:/workspace/CXCodex/role_resumes/示例用户-产品与项目经理-优化投递版-2026-08-03.pdf',
           purpose: '产品与项目经理通用投递简历',
         },
       },
@@ -219,7 +333,7 @@ assert.deepEqual(
   ],
 )
 const windowsSeparator = String.fromCharCode(92)
-const spacedDocxPath = ['E:', '投递材料', '产品 经理', '邵卫 简历.docx'].join(windowsSeparator)
+const spacedDocxPath = ['E:', '投递材料', '产品 经理', '示例用户 简历.docx'].join(windowsSeparator)
 const spacedDocxCitation = ':codex-file-citation{purpose="带 ' + windowsSeparator + '"引号' + windowsSeparator + '" 的定制简历" path="' + spacedDocxPath + '" artifact_kind="document" page_number="2"}'
 assert.equal(readCodexFileCitationAt(spacedDocxCitation, 0)?.path, spacedDocxPath)
 assert.equal(readCodexFileCitationAt(spacedDocxCitation, 0)?.purpose, '带 "引号" 的定制简历')
@@ -640,6 +754,23 @@ assert.equal(shouldApplyRuntimeSnapshotVersion({ lastEventSeq: 42 }, { lastEvent
 assert.equal(shouldApplyRuntimeSnapshotVersion({ lastEventSeq: 42 }, { lastEventSeq: 42 }), true)
 assert.equal(shouldApplyRuntimeSnapshotVersion({ lastEventSeq: 42 }, { lastEventSeq: 43 }), true)
 assert.equal(shouldApplyRuntimeSnapshotVersion({ lastEventSeq: 42 }, { lastEventSeq: 0 }), true)
+const snapshotVersionMap = {
+  'thread-a': { lastEventSeq: 42, latestReplyEventSeq: 41, executionState: 'running' },
+  'thread-b': { lastEventSeq: 9, latestReplyEventSeq: 0, executionState: 'completed' },
+}
+const resetSnapshotVersionMap = resetRuntimeSnapshotVersionMap(snapshotVersionMap)
+assert.deepEqual(resetSnapshotVersionMap, {
+  'thread-a': { lastEventSeq: 0, latestReplyEventSeq: 0, executionState: 'running' },
+  'thread-b': { lastEventSeq: 0, latestReplyEventSeq: 0, executionState: 'completed' },
+})
+assert.notStrictEqual(resetSnapshotVersionMap, snapshotVersionMap)
+assert.equal(snapshotVersionMap['thread-a'].lastEventSeq, 42)
+const emptySnapshotVersionMap = {}
+assert.strictEqual(resetRuntimeSnapshotVersionMap(emptySnapshotVersionMap), emptySnapshotVersionMap)
+assert.equal(shouldApplyRuntimeTerminalTurn('turn-current', 'turn-current'), true)
+assert.equal(shouldApplyRuntimeTerminalTurn('turn-current', 'turn-old'), false)
+assert.equal(shouldApplyRuntimeTerminalTurn('turn-current', ''), true)
+assert.equal(shouldApplyRuntimeTerminalTurn('', 'turn-old'), true)
 
 const mergedOutbox = mergeMessageOutboxEntries([
   { clientMessageId: 'client-a', createdAtMs: 1, updatedAtMs: 3, state: 'confirming' },
@@ -740,6 +871,59 @@ assert.equal(serializedOutboxPayload.entries.length, 12)
 assert.equal(serializedOutboxPayload.entries[0]?.clientMessageId, 'client-bounded-2')
 assert.deepEqual(serializedOutboxPayload.removals, [])
 assert.equal(serializeMessageOutboxState([], [], outboxNowMs), null)
+
+class MemoryOutboxStorage {
+  values = new Map<string, string>()
+  get length() { return this.values.size }
+  getItem(key: string) { return this.values.get(key) ?? null }
+  setItem(key: string, value: string) { this.values.set(key, value) }
+  removeItem(key: string) { this.values.delete(key) }
+  key(index: number) { return [...this.values.keys()][index] ?? null }
+}
+const parallelOutboxStorage = new MemoryOutboxStorage()
+const parallelEntryA = outboxEntry('client-parallel-a', outboxNowMs - 20, outboxNowMs - 20)
+const parallelEntryB = outboxEntry('client-parallel-b', outboxNowMs - 10, outboxNowMs - 10)
+saveMessageOutboxStateToStorage(parallelOutboxStorage, [parallelEntryA], [], outboxNowMs)
+saveMessageOutboxStateToStorage(parallelOutboxStorage, [parallelEntryB], [], outboxNowMs)
+assert.deepEqual(
+  loadMessageOutboxStateFromStorage(parallelOutboxStorage, outboxNowMs).entries.map((entry) => entry.clientMessageId),
+  ['client-parallel-a', 'client-parallel-b'],
+)
+const parallelRemovalA = { clientMessageId: 'client-parallel-a', removedAtMs: outboxNowMs + 10 }
+saveMessageOutboxStateToStorage(parallelOutboxStorage, [parallelEntryB], [parallelRemovalA], outboxNowMs + 10)
+saveMessageOutboxStateToStorage(parallelOutboxStorage, [parallelEntryA], [], outboxNowMs + 20)
+assert.deepEqual(
+  loadMessageOutboxStateFromStorage(parallelOutboxStorage, outboxNowMs + 20).entries.map((entry) => entry.clientMessageId),
+  ['client-parallel-b'],
+)
+parallelOutboxStorage.setItem(MESSAGE_OUTBOX_STORAGE_KEY + '.entry.corrupt.1', '{bad json')
+saveMessageOutboxStateToStorage(parallelOutboxStorage, [parallelEntryB], [parallelRemovalA], outboxNowMs + 30)
+assert.equal(parallelOutboxStorage.getItem(MESSAGE_OUTBOX_STORAGE_KEY + '.entry.corrupt.1'), null)
+const boundedJournalStorage = new MemoryOutboxStorage()
+for (let index = 0; index < 20; index += 1) {
+  saveMessageOutboxStateToStorage(
+    boundedJournalStorage,
+    [outboxEntry('client-journal-updated', outboxNowMs - 100, outboxNowMs + index)],
+    [],
+    outboxNowMs + index,
+  )
+}
+assert.equal(
+  [...boundedJournalStorage.values.keys()].filter((key) => key.startsWith(MESSAGE_OUTBOX_STORAGE_KEY + '.entry.')).length,
+  1,
+)
+const boundedJournalEntries = Array.from({ length: 14 }, (_, index) => (
+  outboxEntry('client-journal-bounded-' + index, outboxNowMs + 100 + index, outboxNowMs + 100 + index)
+))
+saveMessageOutboxStateToStorage(boundedJournalStorage, boundedJournalEntries, [], outboxNowMs + 200)
+assert.equal(
+  [...boundedJournalStorage.values.keys()].filter((key) => key.startsWith(MESSAGE_OUTBOX_STORAGE_KEY + '.entry.')).length,
+  12,
+)
+assert.equal(isMessageOutboxStorageKey(MESSAGE_OUTBOX_STORAGE_KEY), true)
+assert.equal(isMessageOutboxStorageKey(MESSAGE_OUTBOX_STORAGE_KEY + '.entry.client.1'), true)
+assert.equal(isMessageOutboxStorageKey(MESSAGE_OUTBOX_STORAGE_KEY + '.removal.client.1'), true)
+assert.equal(isMessageOutboxStorageKey('unrelated.storage.key'), false)
 
 const generatedClientMessageId = createClientMessageId()
 assert.match(generatedClientMessageId, /^cm-\\d+-.+/)
@@ -1008,6 +1192,37 @@ assert.deepEqual(
   authoritativeTurnReplacement.map((message) => message.id),
   ['cached-turn-1', 'item-turn-2'],
 )
+const activeTurnUserReplacement = mergeMessages(
+  [{
+    id: 'msg_cached_user',
+    role: 'user',
+    text: 'same active prompt',
+    messageType: 'userMessage',
+    turnIndex: 9,
+    turnId: 'turn-active',
+  }],
+  [{
+    id: 'item_authoritative_user',
+    role: 'user',
+    text: 'same active prompt',
+    messageType: 'userMessage',
+    turnIndex: 100,
+    turnId: 'turn-active',
+  }],
+  true,
+)
+assert.deepEqual(
+  activeTurnUserReplacement.map((message) => message.id),
+  ['item_authoritative_user'],
+)
+assert.deepEqual(
+  mergeMessages(
+    [{ id: 'same-user-turn-8', role: 'user', text: 'repeatable prompt', messageType: 'userMessage', turnIndex: 8, turnId: 'turn-8' }],
+    [{ id: 'same-user-turn-9', role: 'user', text: 'repeatable prompt', messageType: 'userMessage', turnIndex: 9, turnId: 'turn-9' }],
+    true,
+  ).map((message) => message.id),
+  ['same-user-turn-8', 'same-user-turn-9'],
+)
 assert.deepEqual(
   mergeMessages(
     [{ id: 'same-text-turn-1', role: 'assistant', text: 'repeatable answer', turnIndex: 1 }],
@@ -1171,6 +1386,7 @@ const messages = normalizeThreadMessagesV2({
 
 assert.equal(messages.length, 4)
 assert.equal(messages[0]?.messageType, 'agentMessage')
+assert.equal(messages[0]?.turnId, 'turn-a')
 assert.equal(messages[1]?.role, 'system')
 assert.equal(messages[1]?.id, 'plan:turn-a')
 assert.equal(messages[1]?.messageType, 'plan')
@@ -1267,8 +1483,26 @@ assert.equal(recentTurnMessages[0]?.text, '已优先显示最近 2 轮，较早 
 assert.equal(recentTurnMessages[0]?.isUnhandled, undefined)
 assert.equal(recentTurnMessages[0]?.rawPayload, undefined)
 assert.equal(recentTurnMessages[1]?.messageType, 'agentMessage')
+assert.equal(recentTurnMessages[1]?.turnId, 'turn-3')
 assert.equal(recentTurnMessages[1]?.turnIndex, 2)
 assert.equal(recentTurnMessages[2]?.turnIndex, 3)
+
+const activeCachedMessages = [
+  { id: 'old-user', role: 'user', text: 'repeatable prompt', messageType: 'userMessage', turnId: 'turn-old', turnIndex: 98 },
+  { id: 'old-agent', role: 'assistant', text: 'old answer', messageType: 'agentMessage', turnId: 'turn-old', turnIndex: 98 },
+  { id: 'cached-user', role: 'user', text: 'repeatable prompt', messageType: 'userMessage', turnId: 'msg-fallback', turnIndex: 9 },
+  { id: 'cached-agent', role: 'assistant', text: 'working', messageType: 'agentMessage', turnId: 'fallback-after-compaction', turnIndex: 18 },
+]
+const activeCachedMessagesWithStableTurn = applyActiveTurnIdToMessages(
+  activeCachedMessages,
+  'turn-active',
+  true,
+)
+assert.deepEqual(
+  activeCachedMessagesWithStableTurn.map((message) => message.turnId),
+  ['turn-old', 'turn-old', 'turn-active', 'turn-active'],
+)
+assert.strictEqual(applyActiveTurnIdToMessages(activeCachedMessages, 'turn-active', false), activeCachedMessages)
 
 const olderTurnMessages = normalizeThreadMessagesV2({
   thread: {
@@ -1543,6 +1777,7 @@ assert.equal(resetResult.cursor, 20)
 
 const streamResetApplied: number[] = []
 const streamResetPersisted: Array<{ cursor: number; streamId: string }> = []
+const streamResetObserved: string[] = []
 let streamResetSnapshotCount = 0
 const streamResetCoordinator = createNotificationReplayCoordinator({
   initialCursor: 100,
@@ -1556,10 +1791,12 @@ const streamResetCoordinator = createNotificationReplayCoordinator({
   applyNotification: (notification) => { streamResetApplied.push(notification.seq ?? 0) },
   recoverSnapshot: async () => { streamResetSnapshotCount += 1 },
   persistCursor: (cursor, streamId) => { streamResetPersisted.push({ cursor, streamId }) },
+  onStreamChanged: (streamId) => { streamResetObserved.push(streamId) },
 })
 const streamResetResult = await streamResetCoordinator.recover()
 assert.deepEqual(streamResetApplied, [])
 assert.equal(streamResetSnapshotCount, 1)
+assert.deepEqual(streamResetObserved, ['stream-after-database-reset'])
 assert.deepEqual(streamResetPersisted, [{ cursor: 150, streamId: 'stream-after-database-reset' }])
 assert.equal(streamResetResult.cursor, 150)
 assert.equal(streamResetResult.snapshotRecovered, true)
@@ -1581,6 +1818,84 @@ const resetRaceResult = await resetRaceRecovery
 assert.deepEqual(resetRaceApplied, [{ seq: 21, source: 'live' }])
 assert.deepEqual(resetRacePersisted, [20, 21])
 assert.equal(resetRaceResult.cursor, 21)
+
+let resetOldStreamPageCalls = 0
+let resetOldStreamCoordinator: ReturnType<typeof createNotificationReplayCoordinator>
+const resetOldStreamApplied: number[] = []
+let noteResetOldStreamFollowUpStarted: (() => void) | null = null
+const resetOldStreamFollowUpStarted = new Promise<void>((resolve) => {
+  noteResetOldStreamFollowUpStarted = resolve
+})
+resetOldStreamCoordinator = createNotificationReplayCoordinator({
+  initialCursor: 500,
+  initialStreamId: 'stream-before-reset',
+  fetchPage: async () => {
+    resetOldStreamPageCalls += 1
+    if (resetOldStreamPageCalls > 2) {
+      throw new Error('an old-stream live event must not trigger repeated recovery')
+    }
+    if (resetOldStreamPageCalls === 2) noteResetOldStreamFollowUpStarted?.()
+    return {
+      notifications: [],
+      streamId: 'stream-after-reset',
+      latestSeq: 20,
+      oldestSeq: 1,
+    }
+  },
+  applyNotification: (notification) => { resetOldStreamApplied.push(notification.seq ?? 0) },
+  recoverSnapshot: async () => {},
+  persistCursor: () => {},
+})
+const resetOldStreamRecovery = resetOldStreamCoordinator.recover()
+resetOldStreamCoordinator.receiveLive(makeReplayNotification(501))
+const resetOldStreamResult = await resetOldStreamRecovery
+await resetOldStreamFollowUpStarted
+await Promise.resolve()
+resetOldStreamCoordinator.stop()
+assert.equal(resetOldStreamResult.snapshotRecovered, true)
+assert.equal(resetOldStreamResult.cursor, 20)
+assert.deepEqual(resetOldStreamApplied, [])
+assert.equal(resetOldStreamPageCalls, 2)
+
+let resetNewStreamPageCalls = 0
+const resetNewStreamApplied: Array<{ seq: number | undefined; source: string }> = []
+let noteResetNewStreamApplied: (() => void) | null = null
+const resetNewStreamAppliedOnce = new Promise<void>((resolve) => {
+  noteResetNewStreamApplied = resolve
+})
+const resetNewStreamCoordinator = createNotificationReplayCoordinator({
+  initialCursor: 500,
+  initialStreamId: 'stream-before-new-live',
+  fetchPage: async () => {
+    resetNewStreamPageCalls += 1
+    return resetNewStreamPageCalls === 1
+      ? {
+          notifications: [],
+          streamId: 'stream-after-new-live',
+          latestSeq: 20,
+          oldestSeq: 1,
+        }
+      : {
+          notifications: [makeReplayNotification(21)],
+          streamId: 'stream-after-new-live',
+          latestSeq: 21,
+          oldestSeq: 1,
+        }
+  },
+  applyNotification: (notification, source) => {
+    resetNewStreamApplied.push({ seq: notification.seq, source })
+    noteResetNewStreamApplied?.()
+  },
+  recoverSnapshot: async () => {},
+  persistCursor: () => {},
+})
+const resetNewStreamRecovery = resetNewStreamCoordinator.recover()
+resetNewStreamCoordinator.receiveLive(makeReplayNotification(21))
+await resetNewStreamRecovery
+await resetNewStreamAppliedOnce
+resetNewStreamCoordinator.stop()
+assert.equal(resetNewStreamPageCalls, 2)
+assert.deepEqual(resetNewStreamApplied, [{ seq: 21, source: 'replay' }])
 
 const raceRows = Array.from({ length: 451 }, (_, index) => makeReplayNotification(index + 11))
 const racePageCalls: number[] = []

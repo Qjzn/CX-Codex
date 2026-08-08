@@ -1297,6 +1297,7 @@ import {
 } from '../../composables/conversationViewport'
 import { haveSameConversationMessageStructure } from '../../composables/conversationRenderPolicy'
 import { hasPlanImplementationConfirmation } from '../../composables/conversationProjection'
+import { markThreadFirstScreenReady } from '../../composables/threadFirstScreenMetrics'
 import { copyTextToClipboard } from '../../utils/clipboard'
 import {
   CODEX_FILE_CITATION_PREFIX,
@@ -1316,14 +1317,6 @@ const observedCommandStartedAtById = ref<Record<string, number>>({})
 let commandElapsedTimer: number | null = null
 let estimatedMessageHeightByMessage = new WeakMap<UiMessage, { sourceText: string; signature: string; height: number }>()
 let chatFeedbackMetricFrame = 0
-
-type ThreadFirstScreenReadyMetric = {
-  readyAtMs: number
-  itemCount: number
-  userCount: number
-  assistantCount: number
-}
-
 
 function isCommandMessage(message: UiMessage): boolean {
   return message.messageType === 'commandExecution' && !!message.commandExecution
@@ -5194,10 +5187,6 @@ function markThreadFirstScreenReadyIfPossible(): void {
   if (typeof window === 'undefined') return
   const threadId = props.activeThreadId.trim()
   if (!threadId) return
-  const host = window as Window & {
-    __cxCodexThreadFirstScreenReady?: Record<string, ThreadFirstScreenReadyMetric>
-  }
-  if (host.__cxCodexThreadFirstScreenReady?.[threadId]) return
 
   const list = conversationListRef.value
   if (!list) return
@@ -5206,18 +5195,12 @@ function markThreadFirstScreenReadyIfPossible(): void {
   const assistantCount = items.filter((item) => item.getAttribute('data-role') === 'assistant').length
   if (userCount < 1 || assistantCount < 1) return
 
-  host.__cxCodexThreadFirstScreenReady = {
-    ...(host.__cxCodexThreadFirstScreenReady ?? {}),
-    [threadId]: {
-      readyAtMs:
-        typeof performance !== 'undefined' && typeof performance.now === 'function'
-          ? Math.round(performance.now())
-          : Date.now(),
-      itemCount: items.length,
-      userCount,
-      assistantCount,
-    },
-  }
+  markThreadFirstScreenReady({
+    threadId,
+    itemCount: items.length,
+    userCount,
+    assistantCount,
+  })
 }
 
 function scheduleChatFeedbackMetric(): void {

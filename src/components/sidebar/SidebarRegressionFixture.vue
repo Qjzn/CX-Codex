@@ -118,15 +118,15 @@ const fixtureVisibleMatchedThreadIds = computed(() => (
 
 const baseGroups: UiProjectGroup[] = [
   {
-    projectName: 'E:/javaword/CXCodex/codexui',
+    projectName: 'E:/workspace/CXCodex/codexui',
     isPinnedProject: true,
     pinnedProjectRank: 0,
     threads: [
       {
         id: 'fixture-thread-eight',
         title: '最近项目排序回归',
-        projectName: 'E:/javaword/CXCodex/codexui',
-        cwd: 'E:/javaword/CXCodex/codexui',
+        projectName: 'E:/workspace/CXCodex/codexui',
+        cwd: 'E:/workspace/CXCodex/codexui',
         sourceKind: 'cli',
         hasWorktree: false,
         createdAtIso: new Date(now - 104400000).toISOString(),
@@ -138,8 +138,8 @@ const baseGroups: UiProjectGroup[] = [
       {
         id: 'fixture-thread-running',
         title: '优化会话栏桌面端信息密度，确保长标题在窄侧栏中仍可完整识别',
-        projectName: 'E:/javaword/CXCodex/codexui',
-        cwd: 'E:/javaword/CXCodex/codexui',
+        projectName: 'E:/workspace/CXCodex/codexui',
+        cwd: 'E:/workspace/CXCodex/codexui',
         sourceKind: 'desktop',
         hasWorktree: true,
         createdAtIso: new Date(now - 3600000).toISOString(),
@@ -151,8 +151,8 @@ const baseGroups: UiProjectGroup[] = [
       {
         id: 'fixture-thread-unread',
         title: '回归测试前端布局',
-        projectName: 'E:/javaword/CXCodex/codexui',
-        cwd: 'E:/javaword/CXCodex/codexui',
+        projectName: 'E:/workspace/CXCodex/codexui',
+        cwd: 'E:/workspace/CXCodex/codexui',
         sourceKind: 'cli',
         hasWorktree: false,
         createdAtIso: new Date(now - 7200000).toISOString(),
@@ -164,8 +164,8 @@ const baseGroups: UiProjectGroup[] = [
       {
         id: 'fixture-thread-idle',
         title: '整理 release review 任务',
-        projectName: 'E:/javaword/CXCodex/codexui',
-        cwd: 'E:/javaword/CXCodex/codexui',
+        projectName: 'E:/workspace/CXCodex/codexui',
+        cwd: 'E:/workspace/CXCodex/codexui',
         sourceKind: 'subAgent.review',
         hasWorktree: false,
         createdAtIso: new Date(now - 86400000).toISOString(),
@@ -177,8 +177,8 @@ const baseGroups: UiProjectGroup[] = [
       {
         id: 'fixture-thread-four',
         title: '压缩侧栏操作入口',
-        projectName: 'E:/javaword/CXCodex/codexui',
-        cwd: 'E:/javaword/CXCodex/codexui',
+        projectName: 'E:/workspace/CXCodex/codexui',
+        cwd: 'E:/workspace/CXCodex/codexui',
         sourceKind: 'desktop',
         hasWorktree: false,
         createdAtIso: new Date(now - 90000000).toISOString(),
@@ -190,8 +190,8 @@ const baseGroups: UiProjectGroup[] = [
       {
         id: 'fixture-thread-five',
         title: '检查项目会话显示上限',
-        projectName: 'E:/javaword/CXCodex/codexui',
-        cwd: 'E:/javaword/CXCodex/codexui',
+        projectName: 'E:/workspace/CXCodex/codexui',
+        cwd: 'E:/workspace/CXCodex/codexui',
         sourceKind: 'cli',
         hasWorktree: false,
         createdAtIso: new Date(now - 93600000).toISOString(),
@@ -203,8 +203,8 @@ const baseGroups: UiProjectGroup[] = [
       {
         id: 'fixture-thread-seven',
         title: '侧栏更多入口文案',
-        projectName: 'E:/javaword/CXCodex/codexui',
-        cwd: 'E:/javaword/CXCodex/codexui',
+        projectName: 'E:/workspace/CXCodex/codexui',
+        cwd: 'E:/workspace/CXCodex/codexui',
         sourceKind: 'desktop',
         hasWorktree: false,
         createdAtIso: new Date(now - 100800000).toISOString(),
@@ -216,8 +216,8 @@ const baseGroups: UiProjectGroup[] = [
       {
         id: 'fixture-thread-six',
         title: '移动端菜单按钮触控优化',
-        projectName: 'E:/javaword/CXCodex/codexui',
-        cwd: 'E:/javaword/CXCodex/codexui',
+        projectName: 'E:/workspace/CXCodex/codexui',
+        cwd: 'E:/workspace/CXCodex/codexui',
         sourceKind: 'app',
         hasWorktree: false,
         createdAtIso: new Date(now - 97200000).toISOString(),
@@ -230,17 +230,17 @@ const baseGroups: UiProjectGroup[] = [
   },
   {
     projectName: 'empty-root',
-    workspaceRoot: 'E:/javaword/CXCodex/empty-root',
+    workspaceRoot: 'E:/workspace/CXCodex/empty-root',
     threads: [],
   },
   {
-    projectName: 'E:/javaword/CXCodex/playground',
+    projectName: 'E:/workspace/CXCodex/playground',
     threads: [
       {
         id: 'fixture-thread-waiting',
         title: '确认移动端工具权限',
-        projectName: 'E:/javaword/CXCodex/playground',
-        cwd: 'E:/javaword/CXCodex/playground',
+        projectName: 'E:/workspace/CXCodex/playground',
+        cwd: 'E:/workspace/CXCodex/playground',
         sourceKind: 'app',
         hasWorktree: false,
         createdAtIso: new Date(now - 5400000).toISOString(),
@@ -253,8 +253,8 @@ const baseGroups: UiProjectGroup[] = [
       {
         id: 'fixture-thread-background',
         title: '后台整理回归证据',
-        projectName: 'E:/javaword/CXCodex/playground',
-        cwd: 'E:/javaword/CXCodex/playground',
+        projectName: 'E:/workspace/CXCodex/playground',
+        cwd: 'E:/workspace/CXCodex/playground',
         sourceKind: 'app',
         hasWorktree: false,
         createdAtIso: new Date(now - 3600000).toISOString(),
@@ -266,8 +266,8 @@ const baseGroups: UiProjectGroup[] = [
       {
         id: 'fixture-thread-project',
         title: 'Playground 新会话',
-        projectName: 'E:/javaword/CXCodex/playground',
-        cwd: 'E:/javaword/CXCodex/playground',
+        projectName: 'E:/workspace/CXCodex/playground',
+        cwd: 'E:/workspace/CXCodex/playground',
         sourceKind: 'app',
         hasWorktree: false,
         createdAtIso: new Date(now - 172800000).toISOString(),
@@ -288,7 +288,7 @@ const scrollAnchorExtraGroups: UiProjectGroup[] = Array.from({ length: 5 }, (_, 
       id: `fixture-anchor-thread-${index + 1}`,
       title: `滚动锚点样本 ${index + 1}`,
       projectName,
-      cwd: `E:/javaword/CXCodex/${projectName}`,
+      cwd: `E:/workspace/CXCodex/${projectName}`,
       sourceKind: 'app',
       hasWorktree: false,
       createdAtIso: new Date(now - 7200000 - index * 3600000).toISOString(),
@@ -313,7 +313,7 @@ const groups = computed<UiProjectGroup[]>(() => {
                 id: 'fixture-thread-materialized',
                 title: '后台创建的新任务',
                 projectName: 'empty-root',
-                cwd: 'E:/javaword/CXCodex/empty-root',
+                cwd: 'E:/workspace/CXCodex/empty-root',
                 sourceKind: 'app',
                 hasWorktree: false,
                 createdAtIso: new Date(now + 60000).toISOString(),
@@ -347,9 +347,9 @@ const groups = computed<UiProjectGroup[]>(() => {
 })
 
 const projectDisplayNameById: Record<string, string> = {
-  'E:/javaword/CXCodex/codexui': 'codexui',
+  'E:/workspace/CXCodex/codexui': 'codexui',
   'empty-root': 'Empty Workspace',
-  'E:/javaword/CXCodex/playground': 'Playground',
+  'E:/workspace/CXCodex/playground': 'Playground',
   ...Object.fromEntries(scrollAnchorExtraGroups.map((group, index) => (
     [group.projectName, `Anchor Workspace ${index + 1}`]
   ))),

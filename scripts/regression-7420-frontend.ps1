@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
   [string]$BaseUrl = "http://127.0.0.1:7420",
   [string]$ThreadId = "",
@@ -15,6 +15,8 @@ param(
   [string]$ScreenshotOutputDir = "",
   [string]$RequireThreadTitle = "",
   [int]$AgentBrowserTimeoutSec = 25,
+  [switch]$HomeOnly,
+  [switch]$ThreadOnly,
   [switch]$MeasureSendFeedback,
   [switch]$MeasureNewThreadFeedback,
   [switch]$MeasureResponseFeedback
@@ -168,6 +170,9 @@ function Assert-MobileDrawerEnvironmentOwnershipSource {
 
   $hasModalSemantics = ($layoutSource -match 'ref="mobileDrawerRef"[\s\S]*?role="dialog"[\s\S]*?aria-modal="true"[\s\S]*?aria-label="会话导航"[\s\S]*?tabindex="-1"')
   Assert-True $hasModalSemantics "mobile drawer must expose one named modal navigation boundary"
+  Assert-True ($appSource -match 'id="main-content"[\s\S]*?role="main"[\s\S]*?aria-label="会话内容"[\s\S]*?tabindex="-1"') "the stable main-content boundary must expose one named main landmark"
+  Assert-True ($layoutSource -match '<aside v-if="!isSidebarCollapsed" class="desktop-sidebar" aria-label="会话导航">') "desktop conversation navigation must expose a localized accessible name"
+  Assert-True ($layoutSource -match 'class="desktop-resize-handle"[\s\S]*?aria-label="调整侧栏宽度"') "desktop sidebar resize control must expose a localized accessible name"
   Assert-True ($environmentSource -match "portalRoot\?\.parentElement\s*===\s*document\.body[\s\S]*?!element\.inert[\s\S]*?element\.inert\s*=\s*true[\s\S]*?element\.inert\s*=\s*false") "mobile drawer must reversibly remove its body-level background from sequential and assistive navigation"
   Assert-True ($layoutSource -match "useLazyModalEnvironment\([\s\S]*?isMobileDrawerOpen" -and $lazyEnvironmentSource -match "import\('\.\./utils/modalEnvironment'\)") "mobile drawer environment code must stay outside the cold main entry"
   $hasFocusOwnership = ($environmentSource -match "const\s+onKeydown[\s\S]*?event\.key\s*!==\s*'Tab'") -and ($environmentSource -match "const\s+onFocusIn[\s\S]*?focusInitial\(\)") -and ($environmentSource -match '\[role="menu"\]')
@@ -473,7 +478,8 @@ function Assert-RuntimeSnapshotOrderingSource {
   Assert-True ($source -match "ACTIVE_THREAD_DETAIL_FALLBACK_SYNC_INTERVAL_MS\s*=\s*60000") "healthy active turns must use the one-minute detail fallback instead of continuous heavy reads"
   Assert-True ($source -match "if\s*\(showRecoveryFeedback\)[\s\S]*?beginForegroundRecoveryFeedback\(selectedThreadId\.value\)[\s\S]*?ANDROID_RESUME_SYNC_DEBOUNCE_MS") "foreground recovery feedback must publish before Android resume sync debounce"
   Assert-True ($source -match "foregroundRecoveryThreadId\.value\s*===\s*threadId\)\s*return") "duplicate foreground lifecycle events must not restart recovery feedback"
-  Assert-True ($source -match "finishForegroundRecoveryFeedback\(threadId\)[\s\S]*?shouldApplyRuntimeSnapshotVersion") "the first runtime snapshot must settle foreground recovery feedback"
+  Assert-True ($source -match "function\s+applyRuntimeSnapshotState[\s\S]*?if\s*\(!shouldApplyRuntimeSnapshotVersion[\s\S]*?return\s+false[\s\S]*?settleForegroundRecoveryMetric\(threadId\)[\s\S]*?finishForegroundRecoveryFeedback\(threadId\)") "only an accepted runtime snapshot may settle foreground recovery feedback and timing"
+  Assert-True ($source -match "lastAndroidResumeSyncScheduledAtMs\s*=\s*now[\s\S]*?beginForegroundRecoveryMetric\(selectedThreadId\.value\)") "foreground recovery timing must start after the Android lifecycle debounce accepts the sync"
   $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadConversation.vue")
   $queueSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\QueuedMessages.vue")
   Assert-True ($queueSource -match "队列已暂停。重试、编辑或删除后继续") "the paused queue must explain the available recovery actions"
@@ -648,7 +654,7 @@ function Assert-TaskAttentionAndFileQuickOpenSource {
   Assert-True ($menuSource -match "if\s*\(normalizedQuery\)[\s\S]*?appendThreadSection\('threads',\s*'任务'" -and $menuSource -match "appendThreadSection\('threads',\s*'最近任务',\s*normalRecentThreads\)") "task search must stay unified while the empty-query home separates attention from normal recent tasks"
   Assert-True ($appSource -match "event\.key\.toLowerCase\(\)\s*===\s*'p'[\s\S]*?openCommandMenu\('files'\)" -and $appSource -match ':mode-request-id="commandMenuModeRequestId"') "Ctrl or Command + P must reopen file search even after an in-menu mode change"
   Assert-True ($appSource -match "function\s+onOpenCommandMenuFile[\s\S]*?codex-local-browse[\s\S]*?isNativeAndroidShell\(\)[\s\S]*?window\.location\.href[\s\S]*?window\.open") "quick-open files must use the existing local preview route and avoid fragile new-window behavior on mobile"
-  Assert-True ($fixtureSource -match 'cwd="E:/javaword/CXCodex/codexui"' -and $fixtureSource -match '@open-file="status\s*=\s*`file:\$\{\$event\}`"') "the command-menu fixture must expose file-search activation for browser regression"
+  Assert-True ($fixtureSource -match 'cwd="E:/workspace/CXCodex/codexui"' -and $fixtureSource -match '@open-file="status\s*=\s*`file:\$\{\$event\}`"') "the command-menu fixture must expose file-search activation for browser regression"
   Assert-True ($fixtureSource -match "typeAheadFixture" -and $fixtureSource -match "query\s*===\s*'src'\s*\?\s*initialRows" -and $fixtureSource -match "window\.setTimeout\(resolve,\s*query\s*===\s*'src'\s*\?\s*40\s*:\s*900\)") "the command-menu fixture must provide a deterministic slow follow-up search for type-ahead continuity verification"
   Assert-True ($fixtureSource -match 'data-command-menu-regression-launch' -and $fixtureSource -match "focusOwnershipFixture" -and $fixtureSource -match "const\s+isOpen\s*=\s*ref\(!focusOwnershipFixture\)") "the command-menu fixture must support opener focus-restoration verification"
   Assert-True ($fixtureSource -match 'selected-thread-id="thread-gateway"' -and $fixtureSource -match "id:\s*'thread-active'[\s\S]*?waitingForInput:\s*true" -and $fixtureSource -match "id:\s*'thread-running'[\s\S]*?inProgress:\s*true" -and $fixtureSource -match "id:\s*'thread-review'[\s\S]*?unread:\s*true") "the command-menu fixture must cover waiting, running, unread, selection, and recency priority"
@@ -1190,8 +1196,8 @@ JSON.stringify((() => {
     Assert-True ($null -ne $metrics.metric) "send feedback page metric was not recorded"
     Assert-True ([int]$metrics.promptCount -eq 1) "send feedback probe did not render exactly one optimistic bubble"
     Assert-True ([int]$metrics.metric.stateCommitLatencyMs -le 50) "send feedback state commit exceeded 50 ms"
-    Assert-True ([int]$metrics.metric.bubbleVisibleLatencyMs -le 200) "send feedback bubble exceeded 200 ms"
-    Assert-True ([int]$metrics.metric.runningVisibleLatencyMs -le 200) "send feedback running indicator exceeded 200 ms"
+    Assert-True ([int]$metrics.metric.bubbleVisibleLatencyMs -le 100) "send feedback bubble exceeded 100 ms"
+    Assert-True ([int]$metrics.metric.runningVisibleLatencyMs -le 100) "send feedback running indicator exceeded 100 ms"
     Write-Step ("send feedback timing -> " + (@{
       threadId = $ThreadId
       stateCommitMs = [int]$metrics.metric.stateCommitLatencyMs
@@ -1307,8 +1313,8 @@ JSON.stringify((() => {
     Assert-True ([int]$metrics.promptCount -eq 1) "new-thread feedback did not render exactly one provisional bubble"
     Assert-True ($metrics.composerDisabled -eq $true) "new-thread feedback did not guard against duplicate submit"
     Assert-True ([int]$metrics.metric.stateCommitLatencyMs -le 50) "new-thread feedback state commit exceeded 50 ms"
-    Assert-True ([int]$metrics.metric.bubbleVisibleLatencyMs -le 200) "new-thread feedback bubble exceeded 200 ms"
-    Assert-True ([int]$metrics.metric.runningVisibleLatencyMs -le 200) "new-thread feedback running indicator exceeded 200 ms"
+    Assert-True ([int]$metrics.metric.bubbleVisibleLatencyMs -le 100) "new-thread feedback bubble exceeded 100 ms"
+    Assert-True ([int]$metrics.metric.runningVisibleLatencyMs -le 100) "new-thread feedback running indicator exceeded 100 ms"
     Assert-True ([int]$metrics.storedMetricCount -eq 1) "new-thread feedback metric was not persisted"
     Assert-True ([int]$metrics.summary.sampleCount -eq 1) "new-thread feedback summary did not include the isolated sample"
     Assert-True ([int]$metrics.summary.stages.stateCommit.p50Ms -eq [int]$metrics.metric.stateCommitLatencyMs) "new-thread feedback state-commit P50 did not match the isolated sample"
@@ -1908,6 +1914,108 @@ function Invoke-PostJson {
     }
   }
   throw $lastError
+}
+
+function Assert-LiveModelSelector {
+  param(
+    [string]$Session,
+    [string]$BaseUrl
+  )
+
+  $models = @()
+  $seenModels = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  $seenCursors = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+  $cursor = ""
+  do {
+    $params = @{ includeHidden = $false }
+    if (-not [string]::IsNullOrWhiteSpace($cursor)) {
+      $params.cursor = $cursor
+    }
+    $payload = Invoke-PostJson `
+      -Name "live model catalog" `
+      -Url "$($BaseUrl)/codex-api/rpc" `
+      -Payload @{ method = "model/list"; params = $params }
+    foreach ($row in @($payload.result.data)) {
+      $modelId = ([string]$(if ($row.model) { $row.model } else { $row.id })).Trim()
+      if ([string]::IsNullOrWhiteSpace($modelId) -or [bool]$row.hidden -or -not $seenModels.Add($modelId)) {
+        continue
+      }
+      $displayName = ([string]$row.displayName).Trim()
+      $models += [pscustomobject]@{
+        id = $modelId
+        label = if ($displayName) { $displayName } else { $modelId }
+        description = ([string]$row.description).Trim()
+        isDefault = [bool]$row.isDefault
+      }
+    }
+    $nextCursor = ([string]$payload.result.nextCursor).Trim()
+    if (-not [string]::IsNullOrWhiteSpace($nextCursor)) {
+      Assert-True ($seenCursors.Add($nextCursor)) "model/list returned a repeated pagination cursor"
+    }
+    $cursor = $nextCursor
+  } while (-not [string]::IsNullOrWhiteSpace($cursor))
+
+  Assert-True ($models.Count -gt 0) "model/list returned no visible models"
+
+  $deadline = [DateTimeOffset]::UtcNow.AddSeconds([Math]::Min(15, $AgentBrowserTimeoutSec))
+  $metrics = $null
+  do {
+    $metrics = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const trigger = document.querySelector('[aria-label="配置模型、质量和速度"]');
+  if (!document.querySelector('#thread-composer-runtime-panel') && trigger instanceof HTMLButtonElement && !trigger.disabled) {
+    trigger.click();
+  }
+  const panel = document.querySelector('#thread-composer-runtime-panel');
+  const rows = Array.from(panel?.querySelectorAll('.thread-composer-runtime-options--models .thread-composer-runtime-option') || []);
+  return {
+    triggerPresent: Boolean(trigger),
+    triggerDisabled: trigger instanceof HTMLButtonElement ? trigger.disabled : null,
+    panelPresent: Boolean(panel),
+    models: rows.map((row) => ({
+      label: row.querySelector('span')?.textContent?.trim() || '',
+      description: row.querySelector('small')?.textContent?.replace(/\s+/g, ' ').trim() || '',
+      disabled: row instanceof HTMLButtonElement ? row.disabled : null,
+      selected: row.getAttribute('aria-pressed') === 'true'
+    })),
+    defaultMarkerCount: rows.filter((row) => (row.querySelector('small')?.textContent || '').trim().startsWith('默认 · ')).length
+  };
+})())
+'@
+    $disabledCount = @($metrics.models | Where-Object { $_.disabled -eq $true }).Count
+    if ($metrics.panelPresent -eq $true -and @($metrics.models).Count -eq $models.Count -and $disabledCount -eq 0) {
+      break
+    }
+    Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "200") | Out-Null
+  } while ([DateTimeOffset]::UtcNow -lt $deadline)
+
+  Assert-True ($metrics.triggerPresent -eq $true) "home composer is missing the live model selector trigger"
+  Assert-True ($metrics.triggerDisabled -eq $false) "home composer live model selector trigger is disabled"
+  Assert-True ($metrics.panelPresent -eq $true) "home composer live model selector did not open"
+  Assert-True (@($metrics.models).Count -eq $models.Count) "home composer model count does not match live model/list"
+  Assert-True (@($metrics.models | Where-Object { $_.disabled -eq $true }).Count -eq 0) "live model selector still contains disabled metadata placeholders"
+  Assert-True (@($metrics.models | Where-Object { $_.selected -eq $true }).Count -eq 1) "live model selector must expose exactly one selected model"
+  Assert-True ([int]$metrics.defaultMarkerCount -eq @($models | Where-Object { $_.isDefault }).Count) "live model selector default markers do not match model/list"
+
+  foreach ($model in $models) {
+    $matchingRows = @($metrics.models | Where-Object { ([string]$_.label) -ceq $model.label })
+    Assert-True ($matchingRows.Count -eq 1) "live model selector is missing or duplicating model label: $($model.label)"
+    $expectedDescription = if ($model.isDefault -and $model.description) {
+      "默认 · $($model.description)"
+    } else {
+      $model.description
+    }
+    Assert-True (([string]$matchingRows[0].description) -ceq $expectedDescription) "live model selector description does not match model/list for $($model.id)"
+  }
+
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const trigger = document.querySelector('[aria-label="配置模型、质量和速度"]');
+  if (trigger?.getAttribute('aria-expanded') === 'true') trigger.click();
+  return { closed: trigger?.getAttribute('aria-expanded') !== 'true' };
+})())
+'@ | Out-Null
+  Write-Step "live model selector -> $($models.Count) model/list entries matched"
 }
 
 function Get-WorkspaceProjectName {
@@ -3908,9 +4016,9 @@ JSON.stringify((() => {
   Assert-True ($before.found -eq $true) "streaming stress fixture status is missing"
   Assert-True ([int]$before.updateCount -ge 20) "streaming stress fixture did not sustain live message updates"
   Assert-True ([int]$before.heartbeatCount -ge 20) "streaming stress fixture event-loop heartbeat stopped"
-  Assert-True ([int]$before.maxHeartbeatLagMs -le 250) "streaming updates blocked the UI event loop for $($before.maxHeartbeatLagMs) ms"
+  Assert-True ([int]$before.maxHeartbeatLagMs -lt 80) "streaming updates blocked the UI event loop for $($before.maxHeartbeatLagMs) ms; expected < 80 ms"
   Assert-True ([int]$before.totalMessageCount -ge 1500) "streaming stress fixture did not exercise a dense active turn"
-  Assert-True ([int]$before.mountedConversationItems -le 48) "streaming stress fixture mounted too many conversation items"
+  Assert-True ([int]$before.mountedConversationItems -le 20) "streaming stress fixture mounted too many conversation items; expected <= 20"
 
   Invoke-AgentBrowser -Arguments @("--session", $Session, "click", '[data-testid="conversation-streaming-stress-action"]') | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
@@ -5330,7 +5438,7 @@ function Read-SidebarFixtureMetrics {
 JSON.stringify((() => {
   const rows = Array.from(document.querySelectorAll('.sidebar-regression-fixture .thread-row'));
   const projectGroups = Array.from(document.querySelectorAll('.sidebar-regression-fixture .project-group'));
-  const codexProjectGroup = projectGroups.find((node) => node.getAttribute('data-project-name') === 'E:/javaword/CXCodex/codexui') || null;
+  const codexProjectGroup = projectGroups.find((node) => node.getAttribute('data-project-name') === 'E:/workspace/CXCodex/codexui') || null;
   const codexProjectRows = Array.from(codexProjectGroup?.querySelectorAll('.thread-row') || []);
   const codexProjectThreadIds = codexProjectRows.map((node) => node.getAttribute('data-thread-id') || '');
   const emptyProjectGroup = projectGroups.find((node) => node.getAttribute('data-project-name') === 'empty-root') || null;
@@ -5474,8 +5582,8 @@ function Assert-SidebarFixture {
 
   Assert-True ($Metrics.rowCount -ge 4) "sidebar fixture is missing thread rows"
   Assert-True ($Metrics.projectOrder.Count -ge 3) "sidebar fixture is missing project groups"
-  Assert-True ([string]$Metrics.projectOrder[0] -eq "E:/javaword/CXCodex/playground") "sidebar fixture newest directory is not first"
-  Assert-True ([string]$Metrics.projectOrder[1] -eq "E:/javaword/CXCodex/codexui") "sidebar fixture second-newest directory order drifted"
+  Assert-True ([string]$Metrics.projectOrder[0] -eq "E:/workspace/CXCodex/playground") "sidebar fixture newest directory is not first"
+  Assert-True ([string]$Metrics.projectOrder[1] -eq "E:/workspace/CXCodex/codexui") "sidebar fixture second-newest directory order drifted"
   Assert-True ([string]$Metrics.projectOrder[2] -eq "empty-root") "sidebar fixture empty workspace should remain after projects with recent conversations"
   Assert-True ([int]$Metrics.pinnedProjectCount -eq 1) "sidebar fixture pinned project marker count is unexpected: $($Metrics.pinnedProjectCount)"
   Assert-True ($Metrics.firstProjectPinned -eq $false) "pinned-project metadata must not override recent directory order"
@@ -5808,7 +5916,7 @@ function Assert-SidebarFixtureProjectScrollAnchor {
   $before = Invoke-BrowserEvalJson -Session $Session -Script @'
 JSON.stringify((() => {
   const scroll = document.querySelector('.sidebar-regression-tree');
-  const playground = document.querySelector('[data-project-name="E:/javaword/CXCodex/playground"]');
+  const playground = document.querySelector('[data-project-name="E:/workspace/CXCodex/playground"]');
   const promote = document.querySelector('[data-regression-action="promote-background-project"]');
   if (!(scroll instanceof HTMLElement) || !(playground instanceof HTMLElement) || !(promote instanceof HTMLButtonElement)) {
     return { ready: false };
@@ -5824,7 +5932,7 @@ JSON.stringify((() => {
 })())
 '@
   Assert-True ($before.ready -eq $true) "sidebar fixture scroll-anchor probe is not ready"
-  Assert-True ([string]$before.projectOrder[0] -eq "E:/javaword/CXCodex/playground") "sidebar fixture scroll-anchor baseline order drifted"
+  Assert-True ([string]$before.projectOrder[0] -eq "E:/workspace/CXCodex/playground") "sidebar fixture scroll-anchor baseline order drifted"
 
   Invoke-BrowserEvalJson -Session $Session -Script @'
 JSON.stringify((() => {
@@ -5838,7 +5946,7 @@ JSON.stringify((() => {
   $after = Invoke-BrowserEvalJson -Session $Session -Script @'
 JSON.stringify((() => {
   const scroll = document.querySelector('.sidebar-regression-tree');
-  const playground = document.querySelector('[data-project-name="E:/javaword/CXCodex/playground"]');
+  const playground = document.querySelector('[data-project-name="E:/workspace/CXCodex/playground"]');
   const viewport = scroll?.getBoundingClientRect();
   return {
     scrollTop: scroll?.scrollTop || 0,
@@ -5849,7 +5957,7 @@ JSON.stringify((() => {
 })())
 '@
   Assert-True ([string]$after.projectOrder[0] -eq "empty-root") "background materialization did not promote the updated workspace"
-  Assert-True ([string]$after.projectOrder[1] -eq "E:/javaword/CXCodex/playground") "background materialization lost the previously visible project"
+  Assert-True ([string]$after.projectOrder[1] -eq "E:/workspace/CXCodex/playground") "background materialization lost the previously visible project"
   Assert-True ([Math]::Abs([double]$after.playgroundTop - [double]$before.playgroundTop) -le 1.5) "background project reorder moved the visible anchor by $([Math]::Round([double]$after.playgroundTop - [double]$before.playgroundTop, 2)) px"
   Assert-True ([double]$after.scrollTop -gt [double]$before.scrollTop) "sidebar did not compensate scroll position for the promoted workspace"
   Assert-True ($after.hasHorizontalOverflow -eq $false) "sidebar scroll anchoring introduced horizontal page overflow"
@@ -5861,7 +5969,7 @@ function Assert-SidebarFixtureCurrentThreadReveal {
   $before = Invoke-BrowserEvalJson -Session $Session -Script @'
 JSON.stringify((() => {
   const scroll = document.querySelector('.sidebar-regression-tree');
-  const selectedProject = document.querySelector('.sidebar-regression-tree .project-group[data-project-name="E:/javaword/CXCodex/codexui"]');
+  const selectedProject = document.querySelector('.sidebar-regression-tree .project-group[data-project-name="E:/workspace/CXCodex/codexui"]');
   const action = document.querySelector('[data-regression-action="reveal-current-thread"]');
   if (!(scroll instanceof HTMLElement) || !(action instanceof HTMLButtonElement)) {
     return { ready: false };
@@ -5892,7 +6000,7 @@ JSON.stringify((() => {
 JSON.stringify((() => {
   const scroll = document.querySelector('.sidebar-regression-tree');
   const row = document.querySelector('.sidebar-regression-tree .thread-row[data-active="true"]');
-  const selectedProject = document.querySelector('.sidebar-regression-tree .project-group[data-project-name="E:/javaword/CXCodex/codexui"]');
+  const selectedProject = document.querySelector('.sidebar-regression-tree .project-group[data-project-name="E:/workspace/CXCodex/codexui"]');
   const viewport = scroll?.getBoundingClientRect();
   const bounds = row?.getBoundingClientRect();
   return {
@@ -6731,6 +6839,14 @@ JSON.stringify((() => {
   const statePath = `/codex-api/state/thread/${encodeURIComponent(threadId)}`;
   const runtimePath = `/codex-api/runtime/thread/${encodeURIComponent(threadId)}`;
   const tokenPath = `/codex-api/thread-token-usage?threadId=${encodeURIComponent(threadId)}`;
+  const rpcTrace = Array.isArray(window.__cxCodexRpcTrace) ? window.__cxCodexRpcTrace : [];
+  const earlyThreadReadRpc = rpcTrace
+    .filter((entry) => entry?.method === 'thread/read' && Number(entry.startTime) <= 650)
+    .map((entry) => ({
+      method: entry.method,
+      startTime: Number(entry.startTime) || 0,
+      duration: Number(entry.duration) || 0,
+    }));
   const countByPath = (path) => resources.filter((entry) => entry.name === path).length;
   const summarizePath = (predicate) => {
     const matches = resources.filter(predicate);
@@ -6742,9 +6858,7 @@ JSON.stringify((() => {
       transferSize: matches.reduce((sum, entry) => sum + entry.transferSize, 0),
     };
   };
-  const earlyRpcRequestCount = resources
-    .filter((entry) => entry.startTime <= 650 && entry.name === '/codex-api/rpc')
-    .length;
+  const earlyRpcRequestCount = earlyThreadReadRpc.length;
   const firstScreenProjectRootSuggestionCounts = resources
     .filter((entry) => entry.startTime <= 1500 && entry.name.startsWith('/codex-api/project-root-suggestion?'))
     .reduce((counts, entry) => {
@@ -6779,6 +6893,7 @@ JSON.stringify((() => {
   return {
     apiCount: resources.length,
     earlyRpcRequestCount,
+    earlyThreadReadRpc,
     stateThreadRequestCount: countByPath(statePath),
     runtimeThreadRequestCount: countByPath(runtimePath),
     tokenUsageRequestCount: countByPath(tokenPath),
@@ -6793,6 +6908,9 @@ JSON.stringify((() => {
     emptyStateVisible: !!document.querySelector('.conversation-empty-state'),
     loadingIndicatorCount: document.querySelectorAll('.conversation-loading,[aria-busy="true"]').length,
     firstScreenReadyMs: firstScreenReadyMetric?.readyAtMs ?? null,
+    firstScreenSelectionStartedAtMs: firstScreenReadyMetric?.selectionStartedAtMs ?? null,
+    firstScreenSelectionLatencyMs: firstScreenReadyMetric?.selectionLatencyMs ?? null,
+    firstScreenSource: firstScreenReadyMetric?.source ?? 'unknown',
     firstScreenReadyItemCount: firstScreenReadyMetric?.itemCount ?? 0,
     firstScreenReadyUserCount: firstScreenReadyMetric?.userCount ?? 0,
     firstScreenReadyAssistantCount: firstScreenReadyMetric?.assistantCount ?? 0,
@@ -6828,6 +6946,91 @@ JSON.stringify((() => {
   return Invoke-BrowserEvalJson -Session $Session -Script $script
 }
 
+function Read-CoreTextContrastMetrics {
+  param([string]$Session)
+
+  return Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const colorCanvas = document.createElement('canvas');
+  colorCanvas.width = 1;
+  colorCanvas.height = 1;
+  const colorContext = colorCanvas.getContext('2d', { willReadFrequently: true });
+  const parseColor = (value) => {
+    if (!colorContext || !CSS.supports('color', String(value || ''))) return null;
+    colorContext.clearRect(0, 0, 1, 1);
+    colorContext.fillStyle = String(value);
+    colorContext.fillRect(0, 0, 1, 1);
+    const pixel = colorContext.getImageData(0, 0, 1, 1).data;
+    return { rgb: [pixel[0], pixel[1], pixel[2]], alpha: pixel[3] / 255 };
+  };
+  const blend = (front, back, alpha) => front.map((channel, index) => (
+    channel * alpha + back[index] * (1 - alpha)
+  ));
+  const backgroundFor = (element) => {
+    const ancestors = [];
+    for (let current = element; current instanceof Element; current = current.parentElement) {
+      ancestors.push(current);
+    }
+    let background = [255, 255, 255];
+    for (const current of ancestors.reverse()) {
+      const parsed = parseColor(getComputedStyle(current).backgroundColor);
+      if (parsed && parsed.alpha > 0) background = blend(parsed.rgb, background, parsed.alpha);
+    }
+    return background;
+  };
+  const luminance = (rgb) => {
+    const channels = rgb.map((channel) => {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  };
+  const contrast = (foreground, background) => {
+    const foregroundLuminance = luminance(foreground);
+    const backgroundLuminance = luminance(background);
+    return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
+      / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+  };
+  const read = (selector, pseudo = null) => Array.from(document.querySelectorAll(selector))
+    .filter((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    })
+    .slice(0, 12)
+    .map((element) => {
+      const foregroundStyle = getComputedStyle(element, pseudo);
+      const parsedForeground = parseColor(foregroundStyle.color);
+      const background = backgroundFor(element);
+      const foreground = parsedForeground
+        ? blend(parsedForeground.rgb, background, parsedForeground.alpha)
+        : [0, 0, 0];
+      return {
+        selector,
+        pseudo: pseudo || '',
+        ratio: Math.round(contrast(foreground, background) * 100) / 100,
+        color: foregroundStyle.color,
+        background: `rgb(${background.map((value) => Math.round(value)).join(', ')})`,
+      };
+    });
+  return [
+    ...read('.thread-tree-header'),
+    ...read('.thread-row-preview'),
+    ...read('.thread-row-time'),
+    ...read('.thread-composer-input', '::placeholder'),
+  ];
+})())
+'@
+}
+
+function Assert-CoreTextContrast {
+  param([object[]]$Metrics)
+
+  Assert-True ($Metrics.Count -gt 0) "core text contrast probe found no visible targets"
+  $failures = @($Metrics | Where-Object { [double]$_.ratio -lt 4.5 })
+  Assert-True ($failures.Count -eq 0) ("core non-disabled text contrast fell below 4.5:1 -> " + ($failures | ConvertTo-Json -Compress))
+}
+
 function Assert-ThreadPageLoadMetrics {
   param(
     [object]$Metrics,
@@ -6838,7 +7041,11 @@ function Assert-ThreadPageLoadMetrics {
   if ($null -ne $Metrics.firstUsableMs) {
     Assert-True ([int]$Metrics.firstUsableMs -le 12000) "thread page first usable content took $($Metrics.firstUsableMs)ms for $ThreadId; expected <= 12000ms"
   }
-  Assert-True ([int]$Metrics.earlyRpcRequestCount -le 1) "thread page issued $($Metrics.earlyRpcRequestCount) early RPC requests for $ThreadId; expected cache-first first screen to avoid duplicate RPC within 650ms"
+  if ([string]$Metrics.firstScreenSource -eq 'local-cache') {
+    Assert-True ($null -ne $Metrics.firstScreenSelectionLatencyMs) "cached thread first-screen metric did not record selection latency for $ThreadId"
+    Assert-True ([int]$Metrics.firstScreenSelectionLatencyMs -le 300) "cached thread first screen took $($Metrics.firstScreenSelectionLatencyMs)ms for $ThreadId; expected <= 300ms"
+  }
+  Assert-True ([int]$Metrics.earlyRpcRequestCount -le 1) "thread page issued $($Metrics.earlyRpcRequestCount) early thread/read RPC requests for $ThreadId; expected cache-first first screen to avoid duplicate message reads within 650ms"
   Assert-True ([int]$Metrics.stateThreadRequestCount -le 1) "thread page loaded $($Metrics.stateThreadRequestCount) state snapshots for $ThreadId; expected short snapshot reuse to avoid duplicate full state reads during initial settle"
   Assert-True ([int]$Metrics.runtimeThreadRequestCount -le 8) "thread page loaded $($Metrics.runtimeThreadRequestCount) runtime snapshots for $ThreadId; expected no more than 8 during initial settle"
   Assert-True ([int]$Metrics.tokenUsageRequestCount -eq 0) "thread page loaded $($Metrics.tokenUsageRequestCount) token usage snapshots for $ThreadId during initial settle; expected non-core token usage reads to wait until after first-screen regression"
@@ -6963,6 +7170,86 @@ function Wait-ThreadUsableMetrics {
   $lastUserCount = if ($null -ne $lastMetrics) { [int]$lastMetrics.visibleUserMessageCount } else { 0 }
   $lastAssistantCount = if ($null -ne $lastMetrics) { [int]$lastMetrics.visibleAssistantMessageCount } else { 0 }
   throw "thread page did not become usable within ${TimeoutMs}ms for $ThreadId; userCount=$lastUserCount assistantCount=$lastAssistantCount"
+}
+
+function Measure-CachedThreadFirstScreenBudget {
+  param(
+    [string]$Session,
+    [string]$BaseUrl,
+    [string]$ThreadId,
+    [int]$Width,
+    [int]$Height
+  )
+
+  $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+  $page = Open-And-ReadPage -Session $Session -Url "$($BaseUrl)/#/thread/$ThreadId" -Width $Width -Height $Height
+  Assert-Page -Page $page -Name "cached thread phone" -RequireComposer
+  $metrics = Wait-ThreadUsableMetrics -Session $Session -ThreadId $ThreadId -Stopwatch $stopwatch
+  Assert-True ([string]$metrics.firstScreenSource -eq 'local-cache') "cached thread reload did not use the local message cache for $ThreadId"
+  Assert-True ($null -ne $metrics.firstScreenSelectionLatencyMs) "cached thread reload did not record selection latency for $ThreadId"
+  Assert-True ([int]$metrics.firstScreenSelectionLatencyMs -le 300) "cached thread first screen took $($metrics.firstScreenSelectionLatencyMs)ms for $ThreadId; expected <= 300ms"
+  Write-Step ("cached thread first screen -> " + (@{
+    source = [string]$metrics.firstScreenSource
+    selectionLatencyMs = [int]$metrics.firstScreenSelectionLatencyMs
+    browserObservedUsableMs = [int]$metrics.browserObservedUsableMs
+    items = [int]$metrics.visibleConversationItemCount
+  } | ConvertTo-Json -Compress))
+  return $page
+}
+
+function Measure-ForegroundRecoveryConvergenceBudget {
+  param(
+    [string]$Session,
+    [string]$ThreadId,
+    [int]$SampleCount = 5
+  )
+
+  $lastMetrics = $null
+  for ($sampleIndex = 1; $sampleIndex -le $SampleCount; $sampleIndex++) {
+    $before = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  sampleCount: window.__cxCodexForegroundRecoveryMetricSummary?.sampleCount ?? 0,
+  generation: window.__cxCodexForegroundRecoveryMetricGeneration ?? 0
+})
+'@
+    $trigger = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  document.dispatchEvent(new Event('resume'));
+  return {
+    dispatched: true,
+    routeThreadId: decodeURIComponent(location.hash.replace(/^#\/thread\//, '').split(/[?#]/, 1)[0] || '')
+  };
+})())
+'@
+    Assert-True ($trigger.dispatched -eq $true) "foreground recovery lifecycle event was not dispatched"
+    Assert-True ([string]$trigger.routeThreadId -eq $ThreadId) "foreground recovery probe is not on the expected thread route"
+
+    $lastMetrics = $null
+    for ($attempt = 1; $attempt -le 50; $attempt++) {
+      $lastMetrics = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  sampleCount: window.__cxCodexForegroundRecoveryMetricSummary?.sampleCount ?? 0,
+  p95Ms: window.__cxCodexForegroundRecoveryMetricSummary?.p95Ms ?? null,
+  latestMs: window.__cxCodexForegroundRecoveryMetricLatest?.latencyMs ?? null,
+  activeCount: Object.keys(window.__cxCodexForegroundRecoveryActive ?? {}).length,
+  generation: window.__cxCodexForegroundRecoveryMetricGeneration ?? 0
+})
+'@
+      if ([int]$lastMetrics.generation -gt [int]$before.generation) {
+        break
+      }
+      Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '50') | Out-Null
+    }
+
+    Assert-True ([int]$lastMetrics.generation -gt [int]$before.generation) "foreground recovery sample $sampleIndex did not converge"
+    Assert-True ([int]$lastMetrics.latestMs -le 2000) "foreground recovery sample $sampleIndex took $($lastMetrics.latestMs)ms; expected <= 2000ms"
+  }
+
+  Assert-True ([int]$lastMetrics.sampleCount -ge $SampleCount) "foreground recovery did not retain enough samples for P95"
+  Assert-True ($null -ne $lastMetrics.p95Ms) "foreground recovery P95 was not calculated"
+  Assert-True ([int]$lastMetrics.p95Ms -le 2000) "foreground recovery P95 was $($lastMetrics.p95Ms)ms; expected <= 2000ms"
+  Assert-True ([int]$lastMetrics.activeCount -eq 0) "foreground recovery metric remained active after convergence"
+  Write-Step ("foreground recovery convergence -> " + ($lastMetrics | ConvertTo-Json -Compress))
 }
 
 function Read-ThreadWindowMetrics {
@@ -7106,6 +7393,12 @@ if (-not (Get-Command agent-browser -ErrorAction SilentlyContinue)) {
 }
 
 $BaseUrl = $BaseUrl.TrimEnd("/")
+if ($ThreadOnly -and [string]::IsNullOrWhiteSpace($ThreadId)) {
+  throw "-ThreadOnly requires -ThreadId"
+}
+if ($HomeOnly -and $ThreadOnly) {
+  throw "-HomeOnly and -ThreadOnly cannot be combined"
+}
 $session = "cx-codex-frontend-regression"
 $script:activeSession = $session
 $script:captureScreenshots = [bool]$CaptureScreenshots
@@ -7157,6 +7450,7 @@ Assert-ThreadAttentionChromeSource
   $workspaceRootsState = Test-HttpJson -Name "workspace roots state" -Url "$($BaseUrl)/codex-api/workspace-roots-state"
   $requiredSidebarThread = Resolve-RequiredSidebarThread -BaseUrl $BaseUrl -Title $RequireThreadTitle
 
+  if (-not $ThreadOnly) {
   $homePage = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $DesktopWidth -Height $DesktopHeight
   Reset-AppShellLayoutPreferences -Session $session
   $homeWorkspaceNavigationStartedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
@@ -7167,11 +7461,23 @@ Assert-ThreadAttentionChromeSource
     -RootsState $workspaceRootsState `
     -NavigationStartedAtMs $homeWorkspaceNavigationStartedAtMs
   Assert-WorkspaceRootProjectParity -RootsState $workspaceRootsState -Metrics $homeWorkspaceProjectMetrics
+  Assert-LiveModelSelector -Session $session -BaseUrl $BaseUrl
+  $coreTextContrastMetrics = @(Read-CoreTextContrastMetrics -Session $session)
+  Assert-CoreTextContrast -Metrics $coreTextContrastMetrics
+  Write-Step ("core text contrast -> " + (@{
+    sampleCount = $coreTextContrastMetrics.Count
+    minimumRatio = [Math]::Round([double](($coreTextContrastMetrics | Measure-Object -Property ratio -Minimum).Minimum), 2)
+  } | ConvertTo-Json -Compress))
   Assert-RequiredSidebarThreadDom `
     -Thread $requiredSidebarThread `
     -Metrics (Read-RequiredSidebarThreadMetrics -Session $session -Thread $requiredSidebarThread) `
     -Context "home desktop"
   Add-RegressionResult -Name "home-desktop" -Page $homePage
+  if ($HomeOnly) {
+    $results | Format-Table -AutoSize
+    Write-Step "home-only frontend checks passed"
+    return
+  }
   Invoke-AgentBrowser -Arguments @("--session", $session, "click", ".sidebar-settings-button[aria-expanded]") | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $session, "wait", "200") | Out-Null
   Assert-SettingsPanel -Metrics (Read-SettingsPanelMetrics -Session $session)
@@ -7572,6 +7878,7 @@ JSON.stringify({
 '@
   Assert-True ([string]$compactLatestReplyAction.action -match '打开会话：fixture-latest-reply') "compact latest-reply click did not preserve the exact conversation id"
   Add-RegressionResult -Name "latest-reply-promoted-phone" -Page $latestReplyFixture
+  }
 
   if (-not [string]::IsNullOrWhiteSpace($ThreadId)) {
     $threadLoadStopwatch = [Diagnostics.Stopwatch]::StartNew()
@@ -7587,6 +7894,8 @@ JSON.stringify({
     $threadPageLoadMetrics | Add-Member -NotePropertyName "browserObservedUsableMs" -NotePropertyValue ([int]$threadUsableMetrics.browserObservedUsableMs) -Force
     Write-Step ("thread DOM pressure -> " + (@{
       firstUsableMs = [int]$threadPageLoadMetrics.firstUsableMs
+      firstScreenSource = [string]$threadPageLoadMetrics.firstScreenSource
+      firstScreenSelectionLatencyMs = if ($null -ne $threadPageLoadMetrics.firstScreenSelectionLatencyMs) { [int]$threadPageLoadMetrics.firstScreenSelectionLatencyMs } else { $null }
       browserObservedUsableMs = [int]$threadPageLoadMetrics.browserObservedUsableMs
       items = [int]$threadPageLoadMetrics.visibleConversationItemCount
       cards = [int]$threadPageLoadMetrics.messageCardCount
@@ -7595,6 +7904,7 @@ JSON.stringify({
       conversationDomNodes = [int]$threadPageLoadMetrics.conversationDomNodeCount
     } | ConvertTo-Json -Compress))
     Write-Step ("thread endpoint timing -> " + ($threadPageLoadMetrics.endpointTiming | ConvertTo-Json -Compress))
+    Write-Step ("thread early rpc -> " + ($threadPageLoadMetrics.earlyThreadReadRpc | ConvertTo-Json -Compress))
     Write-Step ("thread state entries -> " + ($threadPageLoadMetrics.stateThreadEntries | ConvertTo-Json -Compress))
     Write-Step ("app-server recent rpc -> " + ((Read-AppServerRecentRpcMetrics -BaseUrl $BaseUrl) | ConvertTo-Json -Depth 4 -Compress))
     Assert-ThreadPageLoadMetrics -Metrics $threadPageLoadMetrics -ThreadId $ThreadId -AllowAuthoritativeEmptyThread:($threadUsableMetrics.authoritativeEmptyThread -eq $true)
@@ -7607,6 +7917,15 @@ JSON.stringify({
     }
     if ($MeasureResponseFeedback) {
       Measure-ThreadResponseFeedbackBudget -Session $session -ThreadId $ThreadId
+    }
+    if ($threadUsableMetrics.authoritativeEmptyThread -ne $true) {
+      $thread = Measure-CachedThreadFirstScreenBudget `
+        -Session $session `
+        -BaseUrl $BaseUrl `
+        -ThreadId $ThreadId `
+        -Width $PhoneWidth `
+        -Height $PhoneHeight
+      Measure-ForegroundRecoveryConvergenceBudget -Session $session -ThreadId $ThreadId
     }
     Add-RegressionResult -Name "thread-phone" -Page $thread
   } else {

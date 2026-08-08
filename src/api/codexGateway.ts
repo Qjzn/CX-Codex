@@ -19,6 +19,7 @@ import type {
 } from './appServerDtos'
 import { isAbortLikeError, normalizeCodexApiError } from './codexErrors'
 import {
+  applyActiveTurnIdToMessages,
   readActiveTurnIdFromResponse,
   normalizeThreadGroupsV2,
   normalizeThreadMessagesV2,
@@ -817,16 +818,23 @@ async function fetchThreadRuntimeSnapshot(
     typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
   )
 
+  const inProgress =
+    data.inProgress === true ||
+    (threadRead ? readThreadInProgressFromResponse(threadRead) : false)
+  const activeTurnId =
+    typeof data.activeTurnId === 'string' && data.activeTurnId.trim().length > 0
+      ? data.activeTurnId.trim()
+      : (threadRead ? readActiveTurnIdFromResponse(threadRead) : '')
+  const normalizedMessages = threadRead ? normalizeThreadMessagesV2(threadRead) : []
   const snapshot: ThreadRuntimeSnapshot = {
-    messages: threadRead ? normalizeThreadMessagesV2(threadRead) : [],
+    messages: applyActiveTurnIdToMessages(
+      normalizedMessages,
+      activeTurnId,
+      inProgress && messageState === 'cached',
+    ),
     executionState,
-    inProgress:
-      data.inProgress === true ||
-      (threadRead ? readThreadInProgressFromResponse(threadRead) : false),
-    activeTurnId:
-      typeof data.activeTurnId === 'string' && data.activeTurnId.trim().length > 0
-        ? data.activeTurnId.trim()
-        : (threadRead ? readActiveTurnIdFromResponse(threadRead) : ''),
+    inProgress,
+    activeTurnId,
     activeItemId,
     canStop: data.canStop === true,
     stopRequested: data.stopRequested === true,

@@ -23,14 +23,14 @@
     </Teleport>
 
     <template v-if="!isMobile">
-      <aside v-if="!isSidebarCollapsed" class="desktop-sidebar">
+      <aside v-if="!isSidebarCollapsed" class="desktop-sidebar" aria-label="会话导航">
         <slot name="sidebar" />
       </aside>
       <button
         v-if="!isSidebarCollapsed"
         class="desktop-resize-handle"
         type="button"
-        aria-label="Resize sidebar"
+        aria-label="调整侧栏宽度"
         @pointerdown="onResizeHandlePointerDown"
       />
     </template>

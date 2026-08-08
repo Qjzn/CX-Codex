@@ -41,7 +41,7 @@
       <ThreadComposer
         ref="composerRef"
         active-thread-id="fixture-thread-composer"
-        cwd="E:/javaword/CXCodex/codexui"
+        cwd="E:/workspace/CXCodex/codexui"
         :models="models"
         :available-models="availableModels"
         selected-model="gpt-5.5"
@@ -162,7 +162,7 @@ const skills = [
   {
     name: 'ui-ux-pro-max',
     description: '前端 UI/UX 优化',
-    path: 'C:/Users/SW/.agents/skills/ui-ux-pro-max/SKILL.md',
+    path: 'C:/ExampleUser/.agents/skills/ui-ux-pro-max/SKILL.md',
   },
 ]
 

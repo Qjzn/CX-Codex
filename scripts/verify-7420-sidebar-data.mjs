@@ -5,6 +5,7 @@ const THREAD_LIST_LIMIT = 100
 const SUPPLEMENTAL_THREAD_READ_LIMIT = 20
 const PINNED_THREAD_READ_SAMPLE_LIMIT = 20
 const ACTIVE_FIRST_PAGE_MAX_MS = 15_000
+const ARCHIVED_FOLLOWUP_MAX_MS = 1_500
 
 function readArgValue(names, fallback) {
   for (let index = 2; index < process.argv.length; index += 1) {
@@ -411,6 +412,12 @@ async function main() {
   const archivedFirstPageRead = await measureAsync(() => readThreadListFirstPage(true))
   const archivedFirstPage = archivedFirstPageRead.value
   assert(archivedFirstPage.data.length <= THREAD_LIST_LIMIT, 'archived first page was unexpectedly supplemented beyond the requested limit')
+  const archivedFollowupRead = await measureAsync(() => readThreadListFirstPage(true))
+  assert(
+    archivedFollowupRead.durationMs <= ARCHIVED_FOLLOWUP_MAX_MS,
+    `archived thread/list follow-up took ${archivedFollowupRead.durationMs}ms; expected <= ${ARCHIVED_FOLLOWUP_MAX_MS}ms while a refresh may still be running`,
+  )
+  assert(archivedFollowupRead.value.data.length <= THREAD_LIST_LIMIT, 'archived follow-up was unexpectedly supplemented beyond the requested limit')
 
   const activeThreadsRead = await measureAsync(() => readAllActiveThreads(activeFirstPage))
   const activeThreads = activeThreadsRead.value.threads
@@ -472,6 +479,7 @@ async function main() {
     activeFirstPageMs: activeFirstPageRead.durationMs,
     activeFullListMs: activeFirstPageRead.durationMs + activeThreadsRead.durationMs,
     archivedFirstPageMs: archivedFirstPageRead.durationMs,
+    archivedFollowupMs: archivedFollowupRead.durationMs,
     rpcRetryCount,
     requiredThread,
     projectGroupCount: groups.length,

@@ -79,7 +79,7 @@
         :show-connection-settings-action="isLoadFailureFixture"
         compact-runtime-chrome
         :active-thread-id="activeThreadId"
-        cwd="E:/javaword/CXCodex/codexui"
+        cwd="E:/workspace/CXCodex/codexui"
         :scroll-state="activeScrollState"
         :favorite-message-ids="favoriteMessageIds"
         :implementing-plan-id="fixtureImplementingPlanId"
@@ -151,11 +151,11 @@ const messages: UiMessage[] = [
     fileAttachments: [
       {
         label: 'PRODUCT.md',
-        path: 'E:/javaword/CXCodex/codexui/PRODUCT.md',
+        path: 'E:/workspace/CXCodex/codexui/PRODUCT.md',
       },
       {
         label: 'ThreadConversation.vue',
-        path: 'E:/javaword/CXCodex/codexui/src/components/content/ThreadConversation.vue',
+        path: 'E:/workspace/CXCodex/codexui/src/components/content/ThreadConversation.vue',
       },
     ],
     turnIndex: 0,
@@ -240,7 +240,7 @@ const messages: UiMessage[] = [
     messageType: 'commandExecution',
     commandExecution: {
       command: 'npm.cmd run test:7420:frontend -- --fixture command-output',
-      cwd: 'E:/javaword/CXCodex/codexui',
+      cwd: 'E:/workspace/CXCodex/codexui',
       status: 'completed',
       aggregatedOutput: [
         '> fixture command output',
@@ -312,7 +312,7 @@ const messages: UiMessage[] = [
     messageType: 'commandExecution',
     commandExecution: {
       command: 'npm.cmd run verify:frontend-normalizers',
-      cwd: 'E:/javaword/CXCodex/codexui',
+      cwd: 'E:/workspace/CXCodex/codexui',
       status: 'inProgress',
       aggregatedOutput: 'fixture-current-command: running',
       exitCode: null,
@@ -432,9 +432,9 @@ const fileCitationMessages: UiMessage[] = [
     text: [
       '已生成产品与项目经理通用投递版简历。',
       '',
-      ':codex-file-citation{path="E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.pdf" purpose="产品与项目经理通用投递简历"}',
+      ':codex-file-citation{path="E:/workspace/CXCodex/role_resumes/示例用户-产品与项目经理-优化投递版-2026-08-03.pdf" purpose="产品与项目经理通用投递简历"}',
       '',
-      '可编辑内容：:codex-file-citation{path="E:/javaword/CXCodex/role_resumes/邵卫-产品与项目经理-优化投递版-2026-08-03.md" purpose="产品与项目经理简历 Markdown 版本"}',
+      '可编辑内容：:codex-file-citation{path="E:/workspace/CXCodex/role_resumes/示例用户-产品与项目经理-优化投递版-2026-08-03.md" purpose="产品与项目经理简历 Markdown 版本"}',
     ].join('\n'),
     turnIndex: 10,
   },
@@ -643,12 +643,12 @@ const queuedMessages = [
     deliveryState: isQueueFailureFixture ? 'failed' as const : 'queued' as const,
     text: 'fixture queued message keeps compact neutral styling',
     imageUrls: [],
-    skills: [{ name: 'ui-ux-pro-max', path: 'C:/Users/SW/.agents/skills/ui-ux-pro-max/SKILL.md' }],
+    skills: [{ name: 'ui-ux-pro-max', path: 'C:/ExampleUser/.agents/skills/ui-ux-pro-max/SKILL.md' }],
     fileAttachments: [
       {
         label: 'PRODUCT.md',
-        path: 'E:/javaword/CXCodex/codexui/PRODUCT.md',
-        fsPath: 'E:/javaword/CXCodex/codexui/PRODUCT.md',
+        path: 'E:/workspace/CXCodex/codexui/PRODUCT.md',
+        fsPath: 'E:/workspace/CXCodex/codexui/PRODUCT.md',
       },
     ],
   },

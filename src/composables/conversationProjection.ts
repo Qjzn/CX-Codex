@@ -1,5 +1,5 @@
 import type { CommandExecutionData, UiMessage } from '../types/codex'
-import { normalizeMessageText } from './messageIdentity'
+import { normalizeMessageText, userMessageSignature } from './messageIdentity'
 
 export const PLAN_IMPLEMENTATION_CONFIRMATION = '是的，执行此计划'
 
@@ -94,6 +94,7 @@ export function areMessageFieldsEqual(first: UiMessage, second: UiMessage): bool
     areCommandExecutionsEqual(first.commandExecution, second.commandExecution) &&
     arePlansEqual(first.plan, second.plan) &&
     first.turnIndex === second.turnIndex &&
+    first.turnId === second.turnId &&
     first.deliveryState === second.deliveryState &&
     first.deliveryError === second.deliveryError &&
     first.deliveryAttempt === second.deliveryAttempt &&
@@ -127,6 +128,20 @@ export function sortMessagesByTurnIndex(messages: UiMessage[]): UiMessage[] {
   })
 }
 
+function readUserMessageTurnIdentity(message: UiMessage): string | null {
+  if (
+    message.role !== 'user'
+    || message.messageType !== 'userMessage'
+  ) return null
+
+  const turnIdentity = message.turnId?.trim()
+    || (typeof message.turnIndex === 'number' && Number.isFinite(message.turnIndex)
+      ? `index:${String(message.turnIndex)}`
+      : '')
+  if (!turnIdentity) return null
+  return `${turnIdentity}\u001d${userMessageSignature(message)}`
+}
+
 export function mergeMessages(
   previous: UiMessage[],
   incoming: UiMessage[],
@@ -137,6 +152,11 @@ export function mergeMessages(
 ): UiMessage[] {
   const previousById = new Map(previous.map((message) => [message.id, message]))
   const incomingById = new Map(incoming.map((message) => [message.id, message]))
+  const incomingUserMessageTurnIdentities = new Set(
+    incoming
+      .map((message) => readUserMessageTurnIdentity(message))
+      .filter((identity): identity is string => identity !== null),
+  )
   const incomingHasHistoryNotice = incoming.some((message) => message.messageType === 'history.notice')
   const incomingTurnIndexes = new Set(incoming.map((message) => message.turnIndex))
 
@@ -159,6 +179,14 @@ export function mergeMessages(
         previousMessage.turnIndex !== undefined &&
         incomingTurnIndexes.has(previousMessage.turnIndex) &&
         !incomingById.has(previousMessage.id)
+      ) {
+        return false
+      }
+      const previousUserMessageTurnIdentity = readUserMessageTurnIdentity(previousMessage)
+      if (
+        !incomingById.has(previousMessage.id)
+        && previousUserMessageTurnIdentity
+        && incomingUserMessageTurnIdentities.has(previousUserMessageTurnIdentity)
       ) {
         return false
       }

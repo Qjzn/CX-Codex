@@ -23,6 +23,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Require stable tag from main
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v?\d+\.\d+\.\d+$') {
+            throw "Official releases require a stable semantic version tag, received $env:GITHUB_REF_NAME."
+          }
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "Official release tag $env:GITHUB_REF_NAME must point to a commit on main."
+          }
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -32,6 +46,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Audit dependency security
+        run: npm run verify:dependency-security
 
       - name: Verify release metadata
         id: release-metadata

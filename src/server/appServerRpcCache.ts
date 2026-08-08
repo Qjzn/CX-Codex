@@ -257,10 +257,9 @@ export class AppServerRpcCache {
     if (cached) {
       if (cached.stale) {
         const existingRefresh = method === 'thread/list' ? this.getSharedRead(shareableKey) : null
-        if (existingRefresh) {
-          return existingRefresh
+        if (!existingRefresh) {
+          this.refreshShareableCacheInBackground(method, shareableKey, params, enqueueRpc)
         }
-        this.refreshShareableCacheInBackground(method, shareableKey, params, enqueueRpc)
       }
       return Promise.resolve(cached.value)
     }

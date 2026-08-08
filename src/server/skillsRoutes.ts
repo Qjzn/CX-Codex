@@ -5,7 +5,13 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
-import { resolvePythonCommand, resolveSkillInstallerScriptPath } from '../commandResolution.js'
+import { resolveGitCommand, resolvePythonCommand, resolveSkillInstallerScriptPath } from '../commandResolution.js'
+import { buildGithubGitRemoteUrl, createGithubGitAuth } from './githubGitAuth.js'
+import { writePrivateUtf8File } from './privateFile.js'
+import {
+  decodeSkillsSyncStateFromStorage,
+  encodeSkillsSyncStateForStorage,
+} from './skillsSyncStateSecurity.js'
 import {
   buildInstalledHubEntries,
   extractSkillDescriptionFromMarkdown,
@@ -82,12 +88,18 @@ function sanitizeGithubRef(value: string): string {
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000
 
-async function runCommand(command: string, args: string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<void> {
+type CommandOptions = {
+  cwd?: string
+  timeoutMs?: number
+  env?: NodeJS.ProcessEnv
+}
+
+async function runCommand(command: string, args: string[], options: CommandOptions = {}): Promise<void> {
   const timeout = options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(command, args, {
       cwd: options.cwd,
-      env: process.env,
+      env: options.env ?? process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let settled = false
@@ -122,12 +134,12 @@ async function runCommand(command: string, args: string[], options: { cwd?: stri
   })
 }
 
-async function runCommandWithOutput(command: string, args: string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<string> {
+async function runCommandWithOutput(command: string, args: string[], options: CommandOptions = {}): Promise<string> {
   const timeout = options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
   return await new Promise<string>((resolve, reject) => {
     const proc = spawn(command, args, {
       cwd: options.cwd,
-      env: process.env,
+      env: options.env ?? process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let settled = false
@@ -160,6 +172,22 @@ async function runCommandWithOutput(command: string, args: string[], options: { 
       reject(new Error(`Command failed (${command} ${args.join(' ')})${suffix}`))
     })
   })
+}
+
+let skillsGitCommand: string | null | undefined
+
+function getSkillsGitCommand(): string {
+  if (skillsGitCommand === undefined) skillsGitCommand = resolveGitCommand()
+  if (!skillsGitCommand) throw new Error('Git is required for Skills synchronization')
+  return skillsGitCommand
+}
+
+async function runGit(args: string[], options: CommandOptions = {}): Promise<void> {
+  await runCommand(getSkillsGitCommand(), args, options)
+}
+
+async function runGitWithOutput(args: string[], options: CommandOptions = {}): Promise<string> {
+  return await runCommandWithOutput(getSkillsGitCommand(), args, options)
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -276,17 +304,37 @@ async function scanInstalledSkillsFromDisk(): Promise<Map<string, InstalledSkill
 }
 
 async function readSkillsSyncState(): Promise<SkillsSyncState> {
+  let raw = ''
   try {
-    const raw = await readFile(getSkillsSyncStatePath(), 'utf8')
-    const parsed = JSON.parse(raw) as SkillsSyncState
-    return parsed && typeof parsed === 'object' ? parsed : {}
+    raw = await readFile(getSkillsSyncStatePath(), 'utf8')
   } catch {
     return {}
   }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw) as unknown
+  } catch {
+    return {}
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+  const decoded = await decodeSkillsSyncStateFromStorage(parsed as Record<string, unknown>)
+  const state = decoded.state as SkillsSyncState
+  if (decoded.needsMigration) await writeSkillsSyncState(state)
+  return state
 }
 
 async function writeSkillsSyncState(state: SkillsSyncState): Promise<void> {
-  await writeFile(getSkillsSyncStatePath(), JSON.stringify(state), 'utf8')
+  const stored = await encodeSkillsSyncStateForStorage(state as Record<string, unknown>)
+  await writePrivateUtf8File(getSkillsSyncStatePath(), JSON.stringify(stored))
+}
+
+async function runAuthenticatedGit(
+  token: string,
+  args: string[],
+  options: CommandOptions = {},
+): Promise<void> {
+  const auth = createGithubGitAuth(token, options.env ?? process.env)
+  await runGit([...auth.argsPrefix, ...args], { ...options, env: auth.env })
 }
 
 async function getGithubJson<T>(url: string, token: string, method = 'GET', body?: unknown): Promise<T> {
@@ -426,14 +474,14 @@ async function ensurePrivateForkFromUpstream(token: string, username: string, re
     const upstreamUrl = `https://github.com/${SYNC_UPSTREAM_SKILLS_OWNER}/${SYNC_UPSTREAM_SKILLS_REPO}.git`
     const branch = PRIVATE_SYNC_BRANCH
     try {
-      await runCommand('git', ['clone', '--depth', '1', '--single-branch', '--branch', branch, upstreamUrl, tmp])
+      await runGit(['clone', '--depth', '1', '--single-branch', '--branch', branch, upstreamUrl, tmp])
     } catch {
-      await runCommand('git', ['clone', '--depth', '1', upstreamUrl, tmp])
+      await runGit(['clone', '--depth', '1', upstreamUrl, tmp])
     }
-    const privateRemote = toGitHubTokenRemote(username, repoName, token)
-    await runCommand('git', ['remote', 'set-url', 'origin', privateRemote], { cwd: tmp })
-    try { await runCommand('git', ['checkout', '-B', branch], { cwd: tmp }) } catch {}
-    await runCommand('git', ['push', '-u', 'origin', `HEAD:${branch}`], { cwd: tmp })
+    const privateRemote = buildGithubGitRemoteUrl(username, repoName)
+    await runGit(['remote', 'set-url', 'origin', privateRemote], { cwd: tmp })
+    try { await runGit(['checkout', '-B', branch], { cwd: tmp }) } catch {}
+    await runAuthenticatedGit(token, ['push', '-u', 'origin', `HEAD:${branch}`], { cwd: tmp })
   } finally {
     await rm(tmp, { recursive: true, force: true })
   }
@@ -489,11 +537,7 @@ async function writeRemoteSkillsManifest(token: string, repoOwner: string, repoN
   })
 }
 
-function toGitHubTokenRemote(repoOwner: string, repoName: string, token: string): string {
-  return `https://x-access-token:${encodeURIComponent(token)}@github.com/${repoOwner}/${repoName}.git`
-}
-
-async function ensureSkillsWorkingTreeRepo(repoUrl: string, branch: string): Promise<string> {
+async function ensureSkillsWorkingTreeRepo(repoUrl: string, branch: string, token?: string): Promise<string> {
   const localDir = getSkillsInstallDir()
   await mkdir(localDir, { recursive: true })
   const gitDir = join(localDir, '.git')
@@ -501,44 +545,56 @@ async function ensureSkillsWorkingTreeRepo(repoUrl: string, branch: string): Pro
   try { hasGitDir = (await stat(gitDir)).isDirectory() } catch { hasGitDir = false }
 
   if (!hasGitDir) {
-    await runCommand('git', ['init'], { cwd: localDir })
-    await runCommand('git', ['config', 'user.email', 'skills-sync@local'], { cwd: localDir })
-    await runCommand('git', ['config', 'user.name', 'Skills Sync'], { cwd: localDir })
-    await runCommand('git', ['add', '-A'], { cwd: localDir })
-    try { await runCommand('git', ['commit', '-m', 'Local skills snapshot before sync'], { cwd: localDir }) } catch {}
-    await runCommand('git', ['branch', '-M', branch], { cwd: localDir })
-    try { await runCommand('git', ['remote', 'add', 'origin', repoUrl], { cwd: localDir }) } catch {
-      await runCommand('git', ['remote', 'set-url', 'origin', repoUrl], { cwd: localDir })
+    await runGit(['init'], { cwd: localDir })
+    await runGit(['config', 'user.email', 'skills-sync@local'], { cwd: localDir })
+    await runGit(['config', 'user.name', 'Skills Sync'], { cwd: localDir })
+    await runGit(['add', '-A'], { cwd: localDir })
+    try { await runGit(['commit', '-m', 'Local skills snapshot before sync'], { cwd: localDir }) } catch {}
+    await runGit(['branch', '-M', branch], { cwd: localDir })
+    try { await runGit(['remote', 'add', 'origin', repoUrl], { cwd: localDir }) } catch {
+      await runGit(['remote', 'set-url', 'origin', repoUrl], { cwd: localDir })
     }
-    await runCommand('git', ['fetch', 'origin'], { cwd: localDir })
+    if (token) {
+      await runAuthenticatedGit(token, ['fetch', 'origin'], { cwd: localDir })
+    } else {
+      await runGit(['fetch', 'origin'], { cwd: localDir })
+    }
     try {
-      await runCommand('git', ['merge', '--allow-unrelated-histories', '--no-edit', `origin/${branch}`], { cwd: localDir })
+      await runGit(['merge', '--allow-unrelated-histories', '--no-edit', `origin/${branch}`], { cwd: localDir })
     } catch {}
     return localDir
   }
 
-  await runCommand('git', ['remote', 'set-url', 'origin', repoUrl], { cwd: localDir })
-  await runCommand('git', ['fetch', 'origin'], { cwd: localDir })
+  await runGit(['remote', 'set-url', 'origin', repoUrl], { cwd: localDir })
+  if (token) {
+    await runAuthenticatedGit(token, ['fetch', 'origin'], { cwd: localDir })
+  } else {
+    await runGit(['fetch', 'origin'], { cwd: localDir })
+  }
   await resolveMergeConflictsByNewerCommit(localDir, branch)
   try {
-    await runCommand('git', ['checkout', branch], { cwd: localDir })
+    await runGit(['checkout', branch], { cwd: localDir })
   } catch {
     await resolveMergeConflictsByNewerCommit(localDir, branch)
-    await runCommand('git', ['checkout', '-B', branch], { cwd: localDir })
+    await runGit(['checkout', '-B', branch], { cwd: localDir })
   }
   await resolveMergeConflictsByNewerCommit(localDir, branch)
   const localMtimesBeforePull = await snapshotFileMtimes(localDir)
-  try { await runCommand('git', ['stash', 'push', '--include-untracked', '-m', 'codex-skills-autostash'], { cwd: localDir }) } catch {}
+  try { await runGit(['stash', 'push', '--include-untracked', '-m', 'codex-skills-autostash'], { cwd: localDir }) } catch {}
   let pulledMtimes = new Map<string, number>()
   try {
-    await runCommand('git', ['pull', '--no-rebase', '--no-ff', 'origin', branch], { cwd: localDir })
+    if (token) {
+      await runGit(['merge', '--no-ff', '--no-edit', `origin/${branch}`], { cwd: localDir })
+    } else {
+      await runGit(['pull', '--no-rebase', '--no-ff', 'origin', branch], { cwd: localDir })
+    }
     pulledMtimes = await snapshotFileMtimes(localDir)
   } catch {
     await resolveMergeConflictsByNewerCommit(localDir, branch)
     pulledMtimes = await snapshotFileMtimes(localDir)
   }
   try {
-    await runCommand('git', ['stash', 'pop'], { cwd: localDir })
+    await runGit(['stash', 'pop'], { cwd: localDir })
   } catch {
     await resolveStashPopConflictsByFileTime(localDir, localMtimesBeforePull, pulledMtimes)
   }
@@ -546,7 +602,7 @@ async function ensureSkillsWorkingTreeRepo(repoUrl: string, branch: string): Pro
 }
 
 async function resolveMergeConflictsByNewerCommit(repoDir: string, branch: string): Promise<void> {
-  const unmerged = (await runCommandWithOutput('git', ['diff', '--name-only', '--diff-filter=U'], { cwd: repoDir }))
+  const unmerged = (await runGitWithOutput(['diff', '--name-only', '--diff-filter=U'], { cwd: repoDir }))
     .split(/\r?\n/)
     .map((row) => row.trim())
     .filter(Boolean)
@@ -555,21 +611,21 @@ async function resolveMergeConflictsByNewerCommit(repoDir: string, branch: strin
     const oursTime = await getCommitTime(repoDir, 'HEAD', path)
     const theirsTime = await getCommitTime(repoDir, `origin/${branch}`, path)
     if (theirsTime > oursTime) {
-      await runCommand('git', ['checkout', '--theirs', '--', path], { cwd: repoDir })
+      await runGit(['checkout', '--theirs', '--', path], { cwd: repoDir })
     } else {
-      await runCommand('git', ['checkout', '--ours', '--', path], { cwd: repoDir })
+      await runGit(['checkout', '--ours', '--', path], { cwd: repoDir })
     }
-    await runCommand('git', ['add', '--', path], { cwd: repoDir })
+    await runGit(['add', '--', path], { cwd: repoDir })
   }
-  const mergeHead = (await runCommandWithOutput('git', ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd: repoDir })).trim()
+  const mergeHead = (await runGitWithOutput(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd: repoDir })).trim()
   if (mergeHead) {
-    await runCommand('git', ['commit', '-m', 'Auto-resolve skills merge by newer file'], { cwd: repoDir })
+    await runGit(['commit', '-m', 'Auto-resolve skills merge by newer file'], { cwd: repoDir })
   }
 }
 
 async function getCommitTime(repoDir: string, ref: string, path: string): Promise<number> {
   try {
-    const output = (await runCommandWithOutput('git', ['log', '-1', '--format=%ct', ref, '--', path], { cwd: repoDir })).trim()
+    const output = (await runGitWithOutput(['log', '-1', '--format=%ct', ref, '--', path], { cwd: repoDir })).trim()
     return output ? Number.parseInt(output, 10) : 0
   } catch {
     return 0
@@ -581,7 +637,7 @@ async function resolveStashPopConflictsByFileTime(
   localMtimesBeforePull: Map<string, number>,
   pulledMtimes: Map<string, number>,
 ): Promise<void> {
-  const unmerged = (await runCommandWithOutput('git', ['diff', '--name-only', '--diff-filter=U'], { cwd: repoDir }))
+  const unmerged = (await runGitWithOutput(['diff', '--name-only', '--diff-filter=U'], { cwd: repoDir }))
     .split(/\r?\n/)
     .map((row) => row.trim())
     .filter(Boolean)
@@ -590,12 +646,12 @@ async function resolveStashPopConflictsByFileTime(
     const localMtime = localMtimesBeforePull.get(path) ?? 0
     const pulledMtime = pulledMtimes.get(path) ?? 0
     const side = localMtime >= pulledMtime ? '--theirs' : '--ours'
-    await runCommand('git', ['checkout', side, '--', path], { cwd: repoDir })
-    await runCommand('git', ['add', '--', path], { cwd: repoDir })
+    await runGit(['checkout', side, '--', path], { cwd: repoDir })
+    await runGit(['add', '--', path], { cwd: repoDir })
   }
-  const mergeHead = (await runCommandWithOutput('git', ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd: repoDir })).trim()
+  const mergeHead = (await runGitWithOutput(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd: repoDir })).trim()
   if (mergeHead) {
-    await runCommand('git', ['commit', '-m', 'Auto-resolve stash-pop conflicts by file time'], { cwd: repoDir })
+    await runGit(['commit', '-m', 'Auto-resolve stash-pop conflicts by file time'], { cwd: repoDir })
   }
 }
 
@@ -645,30 +701,30 @@ async function syncInstalledSkillsFolderToRepo(
   async function pushWithNonFastForwardRetry(repoDir: string, branch: string): Promise<void> {
     const maxAttempts = 3
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      await runCommand('git', ['fetch', 'origin'], { cwd: repoDir })
+      await runAuthenticatedGit(token, ['fetch', 'origin'], { cwd: repoDir })
       let hasLatestRemote = false
       try {
-        await runCommand('git', ['merge-base', '--is-ancestor', `origin/${branch}`, 'HEAD'], { cwd: repoDir })
+        await runGit(['merge-base', '--is-ancestor', `origin/${branch}`, 'HEAD'], { cwd: repoDir })
         hasLatestRemote = true
       } catch {
         hasLatestRemote = false
       }
       if (!hasLatestRemote) {
         try {
-          await runCommand('git', ['pull', '--no-rebase', '--no-ff', 'origin', branch], { cwd: repoDir })
+          await runGit(['merge', '--no-ff', '--no-edit', `origin/${branch}`], { cwd: repoDir })
         } catch {
           await resolveMergeConflictsByNewerCommit(repoDir, branch)
         }
-        await runCommand('git', ['add', '.'], { cwd: repoDir })
-        const statusAfterReconcile = (await runCommandWithOutput('git', ['status', '--porcelain'], { cwd: repoDir })).trim()
+        await runGit(['add', '.'], { cwd: repoDir })
+        const statusAfterReconcile = (await runGitWithOutput(['status', '--porcelain'], { cwd: repoDir })).trim()
         if (statusAfterReconcile) {
-          await runCommand('git', ['commit', '-m', 'Reconcile skills sync before push retry'], { cwd: repoDir })
+          await runGit(['commit', '-m', 'Reconcile skills sync before push retry'], { cwd: repoDir })
         }
       }
       try {
-        await runCommand('git', ['push', 'origin', `HEAD:${branch}`], { cwd: repoDir })
+        await runAuthenticatedGit(token, ['push', 'origin', `HEAD:${branch}`], { cwd: repoDir })
         const state = await readSkillsSyncState()
-        const pushedHead = await runCommandWithOutput('git', ['rev-parse', 'HEAD'], { cwd: repoDir })
+        const pushedHead = await runGitWithOutput(['rev-parse', 'HEAD'], { cwd: repoDir })
         await writeSkillsSyncState({
           ...state,
           lastPushCommitSha: pushedHead.trim(),
@@ -693,14 +749,14 @@ async function syncInstalledSkillsFolderToRepo(
     throw new Error('Failed to push after non-fast-forward retries')
   }
 
-  const remoteUrl = toGitHubTokenRemote(repoOwner, repoName, token)
+  const remoteUrl = buildGithubGitRemoteUrl(repoOwner, repoName)
   const branch = PRIVATE_SYNC_BRANCH
-  const repoDir = await ensureSkillsWorkingTreeRepo(remoteUrl, branch)
+  const repoDir = await ensureSkillsWorkingTreeRepo(remoteUrl, branch, token)
   void _installedMap
-  await runCommand('git', ['config', 'user.email', 'skills-sync@local'], { cwd: repoDir })
-  await runCommand('git', ['config', 'user.name', 'Skills Sync'], { cwd: repoDir })
-  await runCommand('git', ['add', '.'], { cwd: repoDir })
-  const status = (await runCommandWithOutput('git', ['status', '--porcelain'], { cwd: repoDir })).trim()
+  await runGit(['config', 'user.email', 'skills-sync@local'], { cwd: repoDir })
+  await runGit(['config', 'user.name', 'Skills Sync'], { cwd: repoDir })
+  await runGit(['add', '.'], { cwd: repoDir })
+  const status = (await runGitWithOutput(['status', '--porcelain'], { cwd: repoDir })).trim()
   if (!status) {
     const state = await readSkillsSyncState()
     await writeSkillsSyncState({
@@ -711,14 +767,14 @@ async function syncInstalledSkillsFolderToRepo(
     })
     return
   }
-  await runCommand('git', ['commit', '-m', 'Sync installed skills folder and manifest'], { cwd: repoDir })
+  await runGit(['commit', '-m', 'Sync installed skills folder and manifest'], { cwd: repoDir })
   await pushWithNonFastForwardRetry(repoDir, branch)
 }
 
 async function pullInstalledSkillsFolderFromRepo(token: string, repoOwner: string, repoName: string): Promise<void> {
-  const remoteUrl = toGitHubTokenRemote(repoOwner, repoName, token)
+  const remoteUrl = buildGithubGitRemoteUrl(repoOwner, repoName)
   const branch = PRIVATE_SYNC_BRANCH
-  await ensureSkillsWorkingTreeRepo(remoteUrl, branch)
+  await ensureSkillsWorkingTreeRepo(remoteUrl, branch, token)
 }
 
 async function bootstrapSkillsFromUpstreamIntoLocal(): Promise<void> {
@@ -1123,7 +1179,7 @@ export async function handleSkillsRoutes(
         const owner = item.owner || uniqueOwnerByName.get(item.name) || ''
         if (owner) nextOwners[item.name] = owner
       }
-      const pulledHead = await runCommandWithOutput('git', ['rev-parse', 'HEAD'], { cwd: getSkillsInstallDir() }).catch(() => '')
+      const pulledHead = await runGitWithOutput(['rev-parse', 'HEAD'], { cwd: getSkillsInstallDir() }).catch(() => '')
       await writeSkillsSyncState({
         ...state,
         installedOwners: nextOwners,

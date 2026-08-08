@@ -155,7 +155,7 @@ export function parseRuntimeSendPayload(payload: unknown): ParsedRuntimeSendPayl
   if (!body) throw new Error('Invalid body: expected runtime send payload')
 
   const requestId = readString(body.requestId).trim() || createRuntimeRequestId()
-  const clientMessageId = readString(body.clientMessageId).trim()
+  const clientMessageId = readString(body.clientMessageId).trim() || requestId
   const mode = readCollaborationModeFromPayload(body)
   const model = readString(body.model).trim()
   const cwd = readString(body.cwd).trim()
@@ -187,6 +187,22 @@ export function parseRuntimeSendPayload(payload: unknown): ParsedRuntimeSendPayl
       attachments: body.attachments,
       turnOptions,
     }),
+  }
+}
+
+export function createDurableRuntimeSendPayload(
+  parsed: ParsedRuntimeSendPayload,
+): Record<string, unknown> {
+  return {
+    requestId: parsed.requestId,
+    clientMessageId: parsed.clientMessageId,
+    collaborationMode: parsed.mode,
+    model: parsed.model,
+    cwd: parsed.cwd,
+    threadId: parsed.threadId,
+    input: parsed.input,
+    attachments: parsed.attachments,
+    effort: parsed.effort,
   }
 }
 

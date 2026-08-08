@@ -1,4 +1,8 @@
-import { createRuntimePromptHash, parseRuntimeSendPayload } from './runtimePayload.js'
+import {
+  createDurableRuntimeSendPayload,
+  createRuntimePromptHash,
+  parseRuntimeSendPayload,
+} from './runtimePayload.js'
 import {
   RuntimeThreadBusyError,
   type RuntimeRequestRecord,
@@ -102,11 +106,10 @@ export class RuntimeMessageQueue {
     if (!parsed.threadId) throw new Error('runtime/queue requires threadId')
 
     const clientMessageId = parsed.clientMessageId || `queue-${parsed.requestId}`
+    const queueMetadata = asRecord(asRecord(payload)?.queueMetadata)
     const durablePayload = {
-      ...(asRecord(payload) ?? {}),
-      requestId: parsed.requestId,
-      clientMessageId,
-      threadId: parsed.threadId,
+      ...createDurableRuntimeSendPayload({ ...parsed, clientMessageId }),
+      ...(queueMetadata ? { queueMetadata } : {}),
     }
     const promptHash = createRuntimePromptHash(parsed.input)
     const existing = this.dependencies.store.getLatestRequestByClientMessageId(clientMessageId)

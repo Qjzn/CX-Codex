@@ -2,9 +2,15 @@
 
 -
 
+## 合并目标
+
+- [ ] 日常功能、修复或候选版本合并到 `beta`
+- [ ] 仅在全部发布门槛通过后，将已验证的 `beta` 合并到 `main`
+
 ## 验证结果
 
 - [ ] `npm run build`
+- [ ] `npm run verify:dependency-security`
 - [ ] `npm run verify:release -- -SchemaAudit skip`（会自动选择可用的 PowerShell；如未运行请说明原因）
 - [ ] 如涉及 Android：已验证 `mobile:android:sync` 或 APK 构建
 - [ ] 如涉及安装脚本：已说明目标系统和回滚方式

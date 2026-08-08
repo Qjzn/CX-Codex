@@ -1,5 +1,7 @@
 # Candidate Release Review
 
+> 历史快照：本文只记录 2026-07-05 当时的候选发布审查，包含当时的分支、工作树、schema、release gate 和下一步建议，不代表 2026-08-08 当前状态。当前权威依次为 `PRODUCT_GOAL.md`、`PROJECT_SPEC.md`、`docs/app-server-schema-audit-summary.json`、`docs/app-server-protocol-matrix.zh-CN.md` 与 `tests.md`；本文仅保留用于追溯当时决策。
+
 审查时间：2026-07-05 10:23 Asia/Shanghai。
 
 本文是 CX-Codex 候选发布审查记录，用于回答四个问题：
