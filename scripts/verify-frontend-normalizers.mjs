@@ -1019,6 +1019,55 @@ assert.deepEqual(
   ).map((message) => message.id),
   ['same-text-turn-1', 'same-text-turn-2'],
 )
+
+// Cross-source duplicate projection: the same logical messages can arrive with
+// different ids (App Server response-item ids like "item-1" versus session-log
+// message ids like "msg_..."). Merging both must collapse to one copy per
+// message instead of rendering each twice.
+const sessionLogProjection = [
+  { id: 'msg_user_1', role: 'user', text: 'hello duplicate', messageType: 'userMessage', turnIndex: 0 },
+  { id: 'msg_user_1:assistant:2', role: 'assistant', text: 'hi there', messageType: 'agentMessage', phase: 'final', turnIndex: 0 },
+]
+const appServerProjection = [
+  { id: 'item-1', role: 'user', text: 'hello duplicate', messageType: 'userMessage', turnIndex: 0 },
+  { id: 'item-2', role: 'assistant', text: 'hi there', messageType: 'agentMessage', phase: 'final', turnIndex: 0 },
+]
+assert.deepEqual(
+  mergeMessages(sessionLogProjection, appServerProjection, true, false, false, false).map((message) => message.id),
+  ['item-1', 'item-2'],
+)
+assert.deepEqual(
+  mergeMessages(appServerProjection, sessionLogProjection, true, false, false, false).map((message) => message.id),
+  ['msg_user_1', 'msg_user_1:assistant:2'],
+)
+// Identical text at distinct turns must never be collapsed.
+assert.deepEqual(
+  mergeMessages(
+    [{ id: 'msg_same_turn_1', role: 'user', text: 'repeat', messageType: 'userMessage', turnIndex: 1 }],
+    [{ id: 'item_same_turn_2', role: 'user', text: 'repeat', messageType: 'userMessage', turnIndex: 2 }],
+    true,
+    false,
+    false,
+    false,
+  ).map((message) => message.id),
+  ['msg_same_turn_1', 'item_same_turn_2'],
+)
+// A partial incoming array must not drop previous copies it does not represent.
+assert.deepEqual(
+  mergeMessages(
+    [
+      { id: 'msg_a', role: 'user', text: 'first', messageType: 'userMessage', turnIndex: 0 },
+      { id: 'msg_b', role: 'user', text: 'second', messageType: 'userMessage', turnIndex: 1 },
+    ],
+    [{ id: 'item-a', role: 'user', text: 'first', messageType: 'userMessage', turnIndex: 0 }],
+    true,
+    false,
+    false,
+    false,
+  ).map((message) => message.id),
+  ['msg_b', 'item-a'],
+)
+
 const laterHistoryMessages = [historyNoticeMessage, projectedTurnTwo]
 assert.equal(removeStaleHistoryNoticeAfterOlderMerge(laterHistoryMessages), laterHistoryMessages)
 assert.deepEqual(

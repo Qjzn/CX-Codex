@@ -177,11 +177,63 @@ export function mergeMessages(
 
   const previousIdSet = new Set(previous.map((message) => message.id))
   const appended = mergedIncoming.filter((message) => !previousIdSet.has(message.id))
+  const dedupedFromPrevious = dedupeProjectionAgainstIncoming(
+    mergedFromPrevious,
+    appended,
+    incomingById,
+  )
   const merged = sortByTurnIndex
-    ? sortMessagesByTurnIndex([...mergedFromPrevious, ...appended])
-    : [...mergedFromPrevious, ...appended]
+    ? sortMessagesByTurnIndex([...dedupedFromPrevious, ...appended])
+    : [...dedupedFromPrevious, ...appended]
 
   return areMessageArraysEqual(previous, merged) ? previous : merged
+}
+
+function messageContentIdentity(message: UiMessage): string {
+  const turnIndex = typeof message.turnIndex === 'number' ? String(message.turnIndex) : ''
+  const text = normalizeMessageText(message.text)
+  const images = (message.images ?? [])
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .join('\u001f')
+  const filePaths = (message.fileAttachments ?? [])
+    .map((file) => `${file.label.trim()}\u001e${file.path.trim()}`)
+    .join('\u001f')
+  const phase = message.phase ?? ''
+  return [message.role, message.messageType ?? '', phase, turnIndex, text, images, filePaths].join('\u001d')
+}
+
+/**
+ * The same logical message can be delivered under different ids by different
+ * sources (e.g. App Server response-item ids like "item-1" versus session-log
+ * message ids like "msg_..."). When the incoming array fully represents a
+ * content identity, drop the stale previous copy so the message does not
+ * render twice. Copies at distinct turns are never collapsed because their
+ * turnIndex differs, and partially-synced incoming arrays keep previous extras.
+ */
+function dedupeProjectionAgainstIncoming(
+  previous: UiMessage[],
+  appended: UiMessage[],
+  incomingById: ReadonlyMap<string, UiMessage>,
+): UiMessage[] {
+  const previousIdentityCounts = new Map<string, number>()
+  for (const message of previous) {
+    if (incomingById.has(message.id)) continue
+    const key = messageContentIdentity(message)
+    previousIdentityCounts.set(key, (previousIdentityCounts.get(key) ?? 0) + 1)
+  }
+  const appendedIdentityCounts = new Map<string, number>()
+  for (const message of appended) {
+    const key = messageContentIdentity(message)
+    appendedIdentityCounts.set(key, (appendedIdentityCounts.get(key) ?? 0) + 1)
+  }
+  return previous.filter((message) => {
+    if (incomingById.has(message.id)) return true
+    const key = messageContentIdentity(message)
+    const previousCount = previousIdentityCounts.get(key) ?? 0
+    const appendedCount = appendedIdentityCounts.get(key) ?? 0
+    return appendedCount < previousCount
+  })
 }
 
 export function earliestTurnIndexFromMessages(messages: UiMessage[]): number | null {
