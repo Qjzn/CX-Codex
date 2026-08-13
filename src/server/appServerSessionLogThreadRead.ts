@@ -186,7 +186,9 @@ function isInternalContextMessageText(text: string): boolean {
     text.startsWith('<codex_internal_context') ||
     text.startsWith('<environment_context') ||
     text.startsWith('<developer_context') ||
-    text.startsWith('<system_context')
+    text.startsWith('<system_context') ||
+    text.startsWith('# AGENTS.md instructions') ||
+    text.startsWith('<INSTRUCTIONS>')
   )
 }
 
@@ -235,6 +237,11 @@ function readEventMessage(entry: Record<string, unknown>): RecoveredMessage | nu
 }
 
 function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): void {
+  // Hidden internal-context messages (e.g. injected AGENTS.md prompts) are
+  // omitted by the App Server thread read; skipping them here keeps the
+  // fallback turn indexes aligned with the App Server view.
+  if (message.hidden) return
+
   const text = limitText(message.text)
   const turn = message.role === 'user' || turns.length === 0
     ? null
@@ -245,8 +252,6 @@ function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): vo
     items: [],
   }
   if (!turn) turns.push(targetTurn)
-
-  if (message.hidden) return
 
   const itemId = message.id || `${targetTurn.id}:${message.role}:${String(targetTurn.items.length + 1)}`
   targetTurn.items.push(message.role === 'user'
