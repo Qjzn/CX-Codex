@@ -99,7 +99,7 @@ export function shouldInvalidateThreadListCacheForRpc(method: string): boolean {
 
 export function shouldInvalidateThreadListCacheForNotification(method: string): boolean {
   if (isCxSessionFilesChangedMethod(method)) return true
-  if (method === 'thread/name/updated') return true
+  if (method === 'thread/name/updated' || method === 'thread/status/changed') return true
   if (!method.startsWith('thread/')) return false
   return (
     method.endsWith('/created') ||
@@ -137,6 +137,7 @@ export function shouldInvalidateThreadReadCacheForNotification(method: string, p
   if (
     method === 'thread/goal/updated' ||
     method === 'thread/goal/cleared' ||
+    method === 'thread/status/changed' ||
     method === 'thread/compacted' ||
     method === 'turn/started' ||
     method === 'turn/start' ||

@@ -1081,6 +1081,38 @@ assert.equal(generatedImageMessages.length, 1)
 assert.equal(generatedImageMessages[0]?.messageType, 'imageGeneration')
 assert.deepEqual(generatedImageMessages[0]?.images, ['C:\\work\\generated.png'])
 
+const internalContextMessages = normalizeThreadMessagesV2({
+  thread: {
+    id: 'thread-internal-context',
+    cwd: 'E:\\repo',
+    preview: '',
+    updatedAt: 1,
+    createdAt: 1,
+    turns: [{
+      id: 'turn-internal-context',
+      status: 'completed',
+      items: [
+        {
+          id: 'internal-agents-context',
+          type: 'userMessage',
+          content: [{ type: 'text', text: '# AGENTS.md instructions for E:\\repo\\n<INSTRUCTIONS>internal only</INSTRUCTIONS>' }],
+        },
+        {
+          id: 'internal-environment-context',
+          type: 'userMessage',
+          content: [{ type: 'text', text: '<environment_context>internal only</environment_context>' }],
+        },
+        {
+          id: 'visible-user-message',
+          type: 'userMessage',
+          content: [{ type: 'text', text: 'Visible request' }],
+        },
+      ],
+    }],
+  },
+})
+assert.deepEqual(internalContextMessages.map((message) => message.text), ['Visible request'])
+
 const historyNoticeMessage = {
   id: 'history-notice',
   role: 'system',
@@ -1215,6 +1247,142 @@ assert.deepEqual(
   activeTurnUserReplacement.map((message) => message.id),
   ['item_authoritative_user'],
 )
+const cachedProjectionMustNotReplaceAuthoritativeOrder = mergeMessages(
+  [
+    { id: 'item-user-a', role: 'user', text: 'older prompt', messageType: 'userMessage', turnIndex: 100, turnId: 'turn-a' },
+    { id: 'item-agent-a', role: 'assistant', text: 'older answer', messageType: 'agentMessage', phase: 'final', turnIndex: 100, turnId: 'turn-a' },
+    { id: 'item-user-b', role: 'user', text: 'current prompt', messageType: 'userMessage', turnIndex: 101, turnId: 'turn-b' },
+  ],
+  [
+    { id: 'msg-user-a', role: 'user', text: 'older prompt', messageType: 'userMessage', turnIndex: 8, turnId: 'turn-a' },
+    { id: 'msg-agent-a', role: 'assistant', text: 'older answer', messageType: 'agentMessage', turnIndex: 8, turnId: 'turn-a' },
+    { id: 'fallback-current-user', role: 'user', text: 'current prompt', messageType: 'userMessage', turnIndex: 9, turnId: 'fallback-turn-9' },
+    { id: 'msg-current-agent', role: 'assistant', text: 'new progress', messageType: 'agentMessage', phase: 'commentary', turnIndex: 9, turnId: 'turn-b' },
+  ],
+  true,
+  false,
+  false,
+  false,
+  'lower',
+)
+assert.deepEqual(
+  cachedProjectionMustNotReplaceAuthoritativeOrder.map((message) => message.id),
+  ['item-user-a', 'item-agent-a', 'item-user-b', 'msg-current-agent'],
+  'a lower-authority session projection must preserve authoritative order and append only unseen progress',
+)
+const freshAuthorityMustRestoreCanonicalOrder = mergeMessages(
+  [
+    { id: 'item-agent-first', role: 'assistant', text: 'first answer', messageType: 'agentMessage', phase: 'final', turnIndex: 0, turnId: 'turn-first' },
+    { id: 'item-user-first', role: 'user', text: 'first prompt', messageType: 'userMessage', turnIndex: 0, turnId: 'turn-first' },
+    { id: 'item-user-followup', role: 'user', text: 'follow-up prompt', messageType: 'userMessage', turnIndex: 1, turnId: 'turn-followup' },
+  ],
+  [
+    { id: 'item-user-first', role: 'user', text: 'first prompt', messageType: 'userMessage', turnIndex: 0, turnId: 'turn-first' },
+    { id: 'item-agent-first', role: 'assistant', text: 'first answer', messageType: 'agentMessage', phase: 'final', turnIndex: 0, turnId: 'turn-first' },
+    { id: 'item-user-followup', role: 'user', text: 'follow-up prompt', messageType: 'userMessage', turnIndex: 1, turnId: 'turn-followup' },
+    { id: 'item-agent-followup', role: 'assistant', text: 'follow-up answer', messageType: 'agentMessage', phase: 'final', turnIndex: 1, turnId: 'turn-followup' },
+  ],
+  true,
+)
+assert.deepEqual(
+  freshAuthorityMustRestoreCanonicalOrder.map((message) => message.id),
+  ['item-user-first', 'item-agent-first', 'item-user-followup', 'item-agent-followup'],
+  'a fresh authoritative projection must restore App Server item order after a live merge',
+)
+assert.deepEqual(
+  mergeMessages(
+    [
+      { id: 'item-overlap-user-a', role: 'user', text: 'unique overlap prompt', messageType: 'userMessage', turnId: 'turn-overlap-a' },
+      { id: 'item-overlap-agent-a', role: 'assistant', text: 'unique overlap answer', messageType: 'agentMessage', turnId: 'turn-overlap-a' },
+      { id: 'item-overlap-user-b', role: 'user', text: 'continue', messageType: 'userMessage', turnId: 'turn-overlap-b' },
+    ],
+    [
+      { id: 'msg-stale-duplicate-anchor', role: 'user', text: 'continue', messageType: 'userMessage', turnId: 'turn-stale' },
+      { id: 'msg-stale-answer', role: 'assistant', text: 'stale answer', messageType: 'agentMessage', turnId: 'turn-stale' },
+      { id: 'msg-overlap-user-a', role: 'user', text: 'unique overlap prompt', messageType: 'userMessage', turnId: 'turn-overlap-a' },
+      { id: 'msg-overlap-agent-a', role: 'assistant', text: 'unique overlap answer', messageType: 'agentMessage', turnId: 'turn-overlap-a' },
+      { id: 'fallback-overlap-user-b', role: 'user', text: 'continue', messageType: 'userMessage', turnId: 'fallback-turn-22' },
+      { id: 'msg-overlap-progress', role: 'assistant', text: 'latest progress', messageType: 'agentMessage', phase: 'commentary', turnId: 'turn-overlap-b' },
+    ],
+    true,
+    false,
+    false,
+    false,
+    'lower',
+  ).map((message) => message.id),
+  ['item-overlap-user-a', 'item-overlap-agent-a', 'item-overlap-user-b', 'msg-overlap-progress'],
+  'a repeated short message must not anchor a lower-authority cache to stale history',
+)
+const authoritativeAssistantReplacement = mergeMessages(
+  [{
+    id: 'msg-cached-agent',
+    role: 'assistant',
+    text: 'same final answer',
+    messageType: 'agentMessage',
+    turnIndex: 9,
+    turnId: 'turn-agent',
+  }],
+  [{
+    id: 'item-authoritative-agent',
+    role: 'assistant',
+    text: 'same final answer',
+    messageType: 'agentMessage',
+    phase: 'final',
+    turnIndex: 100,
+    turnId: 'turn-agent',
+  }],
+  true,
+)
+assert.deepEqual(
+  authoritativeAssistantReplacement.map((message) => message.id),
+  ['item-authoritative-agent'],
+  'a fresh App Server item must replace the matching cached assistant occurrence',
+)
+assert.deepEqual(
+  mergeMessages(
+    [
+      { id: 'msg-agent-first', role: 'assistant', text: 'same progress', messageType: 'agentMessage', phase: 'commentary', turnId: 'turn-repeat' },
+      { id: 'msg-agent-second', role: 'assistant', text: 'same progress', messageType: 'agentMessage', phase: 'commentary', turnId: 'turn-repeat' },
+    ],
+    [
+      { id: 'item-agent-first', role: 'assistant', text: 'same progress', messageType: 'agentMessage', phase: 'commentary', turnId: 'turn-repeat' },
+      { id: 'item-agent-second', role: 'assistant', text: 'same progress', messageType: 'agentMessage', phase: 'commentary', turnId: 'turn-repeat' },
+    ],
+    true,
+  ).map((message) => message.id),
+  ['item-agent-first', 'item-agent-second'],
+  'occurrence-aware reconciliation must preserve two legitimate identical assistant messages in one turn',
+)
+assert.deepEqual(
+  mergeMessages(
+    [{ id: 'item-existing', role: 'assistant', text: 'existing answer', messageType: 'agentMessage', turnId: 'turn-existing' }],
+    [
+      { id: 'msg-unrelated-history', role: 'assistant', text: 'unrelated history', messageType: 'agentMessage', turnId: 'turn-old' },
+      { id: 'fallback-new-user', role: 'user', text: 'brand new prompt', messageType: 'userMessage', turnId: 'fallback-turn-20' },
+      { id: 'msg-new-progress', role: 'assistant', text: 'brand new progress', messageType: 'agentMessage', phase: 'commentary', turnId: 'turn-new' },
+    ],
+    true,
+    false,
+    false,
+    false,
+    'lower',
+  ).map((message) => message.id),
+  ['item-existing', 'fallback-new-user', 'msg-new-progress'],
+  'a cache projection without overlap must add only its newest user-owned suffix',
+)
+assert.deepEqual(
+  mergeMessages(
+    [{ id: 'fallback-current-continue', role: 'user', text: 'continue', messageType: 'userMessage', turnIndex: 100, turnId: 'fallback-turn-current' }],
+    [{ id: 'item-older-continue', role: 'user', text: 'continue', messageType: 'userMessage', turnIndex: 10, turnId: 'turn-older' }],
+    true,
+    true,
+    true,
+    false,
+    'older',
+  ).map((message) => message.id),
+  ['item-older-continue', 'fallback-current-continue'],
+  'loading an older page must not replace the current fallback message by equal text',
+)
 assert.deepEqual(
   mergeMessages(
     [{ id: 'same-user-turn-8', role: 'user', text: 'repeatable prompt', messageType: 'userMessage', turnIndex: 8, turnId: 'turn-8' }],
@@ -1252,6 +1420,28 @@ assert.deepEqual(
     [{ ...projectedTurnTwo, text: ' same\\n live text ' }],
   ),
   [],
+)
+assert.deepEqual(
+  removeRedundantLiveAgentMessages(
+    [liveAgentProjection],
+    [
+      { id: 'old-agent-same-text', role: 'assistant', text: 'same live text', messageType: 'agentMessage', turnId: 'old-turn' },
+      { id: 'current-user', role: 'user', text: 'new request', messageType: 'userMessage', turnId: 'current-turn' },
+    ],
+  ).map((message) => message.id),
+  ['live-agent-projection'],
+  'an old equal assistant message must not suppress current live output',
+)
+assert.deepEqual(
+  removeRedundantLiveAgentMessages(
+    [liveAgentProjection],
+    [
+      { id: 'current-user', role: 'user', text: 'new request', messageType: 'userMessage', turnId: 'current-turn' },
+      { id: 'current-agent-same-text', role: 'assistant', text: 'same live text', messageType: 'agentMessage', turnId: 'current-turn' },
+    ],
+  ),
+  [],
+  'the same assistant message persisted in the active tail must suppress its live copy',
 )
 assert.equal(upsertMessage(unchangedProjection, { ...projectedTurnTwo }), unchangedProjection)
 assert.deepEqual(

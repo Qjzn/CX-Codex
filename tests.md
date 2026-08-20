@@ -16286,3 +16286,23 @@ Current evidence:
 Rollback:
 
 - 只停止命令行明确包含 17432 或对应 `soak-current-source-final-*-2h-20260808` 输出目录的隔离进程树，删除临时认证硬链接并确认真实认证文件仍存在；不得停止或重启 7420。
+
+## 权威消息投影与断线终态收敛（2026-08-21）
+
+### Expected behavior
+
+1. 新鲜 `thread/read` 按 `turns -> items` 的服务端顺序恢复会话，旧缓存只能补充尚未进入权威投影的尾部消息，不能改写已确认顺序。
+2. 去重必须同时考虑结构化 `turnId`、消息类型、阶段和出现次数；同一轮中两条内容完全相同的合法 assistant commentary 必须都保留。
+3. 会话日志回退与正常 App Server 投影都过滤内部上下文，内部消息不得占用可见轮次或造成刷新后的角色顺序错位。
+4. `thread/status/changed` 的活动、等待审批和终态必须驱动同一套 Runtime 状态清理；断线重连后不得残留虚假运行、待处理请求或重复 live 消息。
+
+### Verification
+
+- `npm.cmd run verify:frontend-normalizers` 覆盖权威顺序恢复、低权威缓存尾部对齐、短文本重复锚点、同轮两条同文本 commentary、旧轮同文本 live 消息、内部上下文过滤，并通过。
+- `npm.cmd run verify:server-modules` 覆盖 `thread/status/changed` 的缓存失效、计划状态清理、Runtime 终态、队列续跑与会话日志回退，并通过。
+- `npm.cmd run build:frontend`、`npm.cmd run build:cli` 与 `git diff --check` 通过；前端仅保留既有的大 chunk 提示。
+- `npm.cmd run test:7420:frontend -- -ThreadId 019fec12-1e1d-7293-b84a-95bcaca89e1c -ThreadOnly -CaptureScreenshots ...` 在已完成的三轮 H5 对话上通过：DOM 保持 6 条消息、无重复状态快照，缓存刷新选择反馈 132 ms，本轮 7 个前台恢复样本的 P95 为 443 ms、最近一次 8 ms，无横向溢出或页面错误；截图为 `C:\Users\SW\.codex\visualizations\2026\08\21\cx-codex-message-projection-beta-idle\thread-phone.png`。
+
+### Rollback
+
+- 回退本节对应的消息投影、内部上下文过滤、Runtime thread status 解析及其回归。不要删除会话、Runtime SQLite、上传缓存或用户配置。

@@ -8,6 +8,10 @@ import {
   type RuntimeRequestRecord,
   type RuntimeRequestStatus,
 } from './runtimeStore.js'
+import {
+  isRuntimeThreadStatusTerminal,
+  readRuntimeThreadStatusLifecycle,
+} from '../runtimeThreadStatus.js'
 
 const QUEUE_SWEEP_INTERVAL_MS = 4_000
 const QUEUE_STATUSES: RuntimeRequestStatus[] = ['queued', 'queue_failed']
@@ -174,9 +178,11 @@ export class RuntimeMessageQueue {
     return true
   }
 
-  handleRuntimeEvent(method: string, threadId: string): void {
+  handleRuntimeEvent(method: string, threadId: string, params?: unknown): void {
     if (!threadId || method === 'runtime/queue/updated') return
-    if (method === 'turn/completed' || method === 'turn/started' || method === 'error') {
+    const threadStatusSettled = method === 'thread/status/changed'
+      && isRuntimeThreadStatusTerminal(readRuntimeThreadStatusLifecycle(params))
+    if (method === 'turn/completed' || method === 'turn/started' || method === 'error' || threadStatusSettled) {
       this.scheduleThread(threadId)
     }
   }

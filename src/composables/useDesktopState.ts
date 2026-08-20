@@ -175,6 +175,10 @@ import {
   removeStaleHistoryNoticeAfterOlderMerge,
   upsertMessage,
 } from './conversationProjection'
+import {
+  isRuntimeThreadStatusTerminal,
+  readRuntimeThreadStatusLifecycle,
+} from '../runtimeThreadStatus'
 
 function removeRuntimeQueuedMessage(requestId: string): Promise<void> {
   return import('../api/runtimeMessageQueue').then((api) => api.removeRuntimeQueuedMessage(requestId))
@@ -188,11 +192,37 @@ function flattenThreads(groups: UiProjectGroup[]): UiThread[] {
   return groups.flatMap((group) => group.threads)
 }
 
+function isRuntimeExecutionSettledStateValue(state: string | undefined): boolean {
+  return (
+    state === 'completed_pending_sync' ||
+    state === 'completed' ||
+    state === 'failed' ||
+    state === 'interrupted' ||
+    state === 'stopped' ||
+    state === 'idle' ||
+    state === 'sync_degraded'
+  )
+}
+
+function readThreadStatusExecutionState(
+  notification: RpcNotification,
+): ThreadRuntimeSnapshot['executionState'] | null {
+  if (notification.method !== 'thread/status/changed') return null
+  const lifecycle = readRuntimeThreadStatusLifecycle(notification.params)
+  if (lifecycle === 'active') return 'running'
+  if (lifecycle === 'waiting_permission') return 'waiting_permission'
+  if (isRuntimeThreadStatusTerminal(lifecycle)) return lifecycle
+  return null
+}
+
 function shouldRefreshMessagesFromNotification(notification: RpcNotification): boolean {
   const { method } = notification
   if (method === THREAD_TOKEN_USAGE_UPDATED_METHOD) return false
   const sessionFileChangePolicy = getCxSessionFileChangeSyncPolicy(method, notification.params)
   if (sessionFileChangePolicy) return sessionFileChangePolicy.refreshMessages
+  if (method === 'thread/status/changed') {
+    return isRuntimeExecutionSettledStateValue(readThreadStatusExecutionState(notification) ?? undefined)
+  }
   return (
     method === 'turn/started' ||
     method === 'turn/completed' ||
@@ -209,7 +239,7 @@ function shouldRefreshThreadListFromNotification(notification: RpcNotification):
   if (method === THREAD_TOKEN_USAGE_UPDATED_METHOD) return false
   const sessionFileChangePolicy = getCxSessionFileChangeSyncPolicy(method, notification.params)
   if (sessionFileChangePolicy) return sessionFileChangePolicy.refreshThreads
-  if (method === 'thread/name/updated' || method === 'thread/started') return true
+  if (method === 'thread/name/updated' || method === 'thread/started' || method === 'thread/status/changed') return true
   if (!method.startsWith('thread/')) return false
   return (
     method.endsWith('/created') ||
@@ -222,11 +252,15 @@ function shouldRefreshThreadListFromNotification(notification: RpcNotification):
   )
 }
 
-function shouldUrgentlyRefreshFromNotification(method: string): boolean {
+function shouldUrgentlyRefreshFromNotification(method: string, params?: unknown): boolean {
   return (
     method === 'turn/completed' ||
     method === 'thread/completed' ||
-    method === 'error'
+    method === 'error' ||
+    (
+      method === 'thread/status/changed'
+      && isRuntimeThreadStatusTerminal(readRuntimeThreadStatusLifecycle(params))
+    )
   )
 }
 
@@ -260,7 +294,8 @@ const THREAD_GROUP_CACHE_VERSION = 1
 const THREAD_GROUP_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const THREAD_GROUP_CACHE_MAX_GROUPS = 18
 const THREAD_GROUP_CACHE_MAX_THREADS_PER_GROUP = 30
-const THREAD_MESSAGE_CACHE_VERSION = 2
+// v3 invalidates snapshots that older merge logic could persist out of order.
+const THREAD_MESSAGE_CACHE_VERSION = 3
 const THREAD_MESSAGE_CACHE_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
 const THREAD_MESSAGE_CACHE_MAX_THREADS = 12
 const THREAD_MESSAGE_CACHE_MAX_MESSAGES_PER_THREAD = 24
@@ -831,6 +866,7 @@ function normalizeCachedMessage(value: unknown): UiMessage | null {
     ...(images && images.length > 0 ? { images } : {}),
     ...(fileAttachments && fileAttachments.length > 0 ? { fileAttachments } : {}),
     messageType: readCachedString(row.messageType) || undefined,
+    phase: row.phase === 'commentary' || row.phase === 'final' ? row.phase : undefined,
     isUnhandled: row.isUnhandled === true,
     ...(commandExecution ? { commandExecution } : {}),
     turnIndex: typeof row.turnIndex === 'number' && Number.isFinite(row.turnIndex) ? row.turnIndex : undefined,
@@ -2094,7 +2130,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       optimisticUser,
       optimisticUserMessageMetaById,
     )
-    const liveAgent = liveAgentMessagesByThreadId.value[threadId] ?? []
+    const liveAgent = removeRedundantLiveAgentMessages(
+      liveAgentMessagesByThreadId.value[threadId] ?? [],
+      persisted,
+    )
     const livePlans = livePlanMessagesByThreadId.value[threadId] ?? []
     const liveCommands = liveCommandsByThreadId.value[threadId] ?? []
     for (const liveMessage of [...livePlans, ...liveCommands, ...liveAgent]) {
@@ -3321,15 +3360,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   }
 
   function isRuntimeExecutionSettledState(state: string | undefined): boolean {
-    return (
-      state === 'completed_pending_sync' ||
-      state === 'completed' ||
-      state === 'failed' ||
-      state === 'interrupted' ||
-      state === 'stopped' ||
-      state === 'idle' ||
-      state === 'sync_degraded'
-    )
+    return isRuntimeExecutionSettledStateValue(state)
   }
 
   function readAuthoritativeSettledAtMs(
@@ -3684,6 +3715,22 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     rememberLatestRuntimeEventSequence(threadId, notification.seq)
     if (isRuntimeTerminalNotificationForDifferentTurn(notification)) return
 
+    let threadStatusState = readThreadStatusExecutionState(notification)
+    const previousState = runtimeExecutionStateByThreadId.value[threadId]
+    if (
+      threadStatusState === 'completed'
+      && (previousState === 'failed' || previousState === 'interrupted' || previousState === 'stopped')
+    ) {
+      threadStatusState = previousState
+    }
+    if (threadStatusState) {
+      setRuntimeExecutionState(threadId, threadStatusState, {
+        canStop: isRuntimeExecutionActiveState(threadStatusState),
+        ...eventVersion,
+      })
+      return
+    }
+
     if (method === 'turn/started' || method === 'thread/started') {
       const startedTurn = readTurnStartedInfo(notification)
       setRuntimeExecutionState(threadId, 'running', {
@@ -3727,7 +3774,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     if (!threadId) return
     if (isRuntimeTerminalNotificationForDifferentTurn(notification)) return
 
-    let state: ThreadRuntimeSnapshot['executionState'] | null = null
+    let state: ThreadRuntimeSnapshot['executionState'] | null = readThreadStatusExecutionState(notification)
+    const currentState = runtimeExecutionStateByThreadId.value[threadId]
+    if (
+      state === 'completed'
+      && (currentState === 'failed' || currentState === 'interrupted' || currentState === 'stopped')
+    ) {
+      state = currentState
+    }
+    if (state && !isRuntimeExecutionSettledState(state)) state = null
     if (method === 'turn/completed' || method === 'thread/completed') {
       state = readTurnErrorMessage(notification) ? 'failed' : 'completed'
     } else if (method === 'turn/interrupted' || method === 'thread/interrupted') {
@@ -6664,11 +6719,37 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       if (threadId) rememberLatestRuntimeEventSequence(threadId, notification.seq)
       return
     }
-    if (notification.method === 'item/completed' || notification.method === 'turn/completed') {
+    let threadStatusState = readThreadStatusExecutionState(notification)
+    const statusThreadId = threadStatusState === null ? '' : extractThreadIdFromNotification(notification)
+    const previousStatusState = statusThreadId ? runtimeExecutionStateByThreadId.value[statusThreadId] : undefined
+    if (
+      threadStatusState === 'completed'
+      && (previousStatusState === 'failed' || previousStatusState === 'interrupted' || previousStatusState === 'stopped')
+    ) {
+      threadStatusState = previousStatusState
+    }
+    if (
+      notification.method === 'item/completed'
+      || notification.method === 'turn/completed'
+      || (threadStatusState !== null && isRuntimeExecutionSettledState(threadStatusState))
+    ) {
       flushBufferedLiveDeltas()
     }
 
     applyRuntimeNotificationState(notification)
+
+    if (threadStatusState !== null && isRuntimeExecutionSettledState(threadStatusState)) {
+      const threadId = statusThreadId || extractThreadIdFromNotification(notification)
+      if (threadId) {
+        clearPendingTurnRequest(threadId)
+        clearSettledRuntimeResidue(threadId, threadStatusState)
+        setPendingServerRequestsForThread(threadId, [])
+        markThreadUnreadByEvent(threadId)
+        pendingThreadMessageRefresh.add(threadId)
+        pendingThreadsRefresh = true
+        void processQueuedMessages(threadId)
+      }
+    }
 
     if (
       notification.method === 'turn/started'
@@ -7030,7 +7111,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     const threadId = extractThreadIdFromNotification(notification)
     const method = notification.method
     const sessionFileChangePolicy = getCxSessionFileChangeSyncPolicy(method, notification.params)
-    const urgentRefresh = shouldUrgentlyRefreshFromNotification(method)
+    const urgentRefresh = shouldUrgentlyRefreshFromNotification(method, notification.params)
     const shouldRefreshMessages =
       shouldRefreshMessagesFromNotification(notification) &&
       !(
@@ -7648,6 +7729,11 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         Boolean(options.olderHistory),
         Boolean(options.olderHistory),
         shouldPreserveSettledRpcMessages,
+        options.olderHistory
+          ? 'older'
+          : snapshot.messageState === 'cached'
+            ? 'lower'
+            : 'higher',
       )
       setPersistedMessagesForThread(
         threadId,

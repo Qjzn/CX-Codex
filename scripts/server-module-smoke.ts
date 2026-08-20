@@ -2450,6 +2450,15 @@ function smokeAppServerNotificationState(): void {
   }, dependencies)
   assert.deepEqual(clearedPlanModeTurns, [{ threadId: 'thread-plan', turnId: 'turn-plan' }])
 
+  captureAppServerNotificationState({
+    method: 'thread/status/changed',
+    params: { threadId: 'thread-idle', status: { type: 'idle' } },
+  }, dependencies)
+  assert.deepEqual(clearedPlanModeTurns, [
+    { threadId: 'thread-plan', turnId: 'turn-plan' },
+    { threadId: 'thread-idle', turnId: '' },
+  ])
+
   const tokenUsageParams = {
     threadId: 'thread-token',
     tokenUsage: {
@@ -2474,7 +2483,7 @@ function smokeAppServerNotificationState(): void {
     params: tokenUsageParams,
   }, dependencies)
   assert.deepEqual(observedTokenUsageParams, [tokenUsageParams])
-  assert.equal(invalidatedThreadListCount, 1)
+  assert.equal(invalidatedThreadListCount, 2)
 }
 
 async function smokeAppServerHookDiagnostics(): Promise<void> {
@@ -3899,6 +3908,7 @@ async function smokeAppServerRpcCache(): Promise<void> {
   assert.equal(shouldInvalidateThreadListCacheForRpc('thread/inject_items'), true)
   assert.equal(shouldInvalidateThreadListCacheForRpc('thread/read'), false)
   assert.equal(shouldInvalidateThreadListCacheForNotification('thread/name/updated'), true)
+  assert.equal(shouldInvalidateThreadListCacheForNotification('thread/status/changed'), true)
   assert.equal(shouldInvalidateThreadListCacheForNotification(CX_SESSION_FILES_CHANGED_METHOD), true)
   assert.equal(shouldInvalidateThreadListCacheForNotification('thread/created'), true)
   assert.equal(shouldInvalidateThreadListCacheForNotification('item/completed'), false)
@@ -3923,6 +3933,7 @@ async function smokeAppServerRpcCache(): Promise<void> {
     origin: 'external',
   }), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('thread/goal/cleared'), true)
+  assert.equal(shouldInvalidateThreadReadCacheForNotification('thread/status/changed'), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('thread/compacted'), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('turn/completed'), true)
   assert.equal(shouldInvalidateThreadReadCacheForNotification('turn/diff/updated'), true)
@@ -8358,6 +8369,47 @@ function smokeRuntimeStateStore(): void {
     getErrorMessage: (_payload, fallback) => fallback,
   }, { staleMs: 100 })
 
+  store.observeEvent({
+    method: 'thread/status/changed',
+    params: { threadId: 'thread-status', status: { type: 'active', activeFlags: [] } },
+    atIso: new Date(Date.now() - 1_000).toISOString(),
+    seq: 1,
+  })
+  assert.equal(store.snapshot('thread-status').executionState, 'sync_degraded')
+  store.observeEvent({
+    method: 'thread/status/changed',
+    params: { threadId: 'thread-status', status: { type: 'active', activeFlags: ['waitingOnApproval'] } },
+    atIso: new Date().toISOString(),
+    seq: 2,
+  })
+  assert.equal(store.snapshot('thread-status').executionState, 'waiting_permission')
+  const idleAtIso = new Date().toISOString()
+  store.observeEvent({
+    method: 'thread/status/changed',
+    params: { threadId: 'thread-status', status: { type: 'idle' } },
+    atIso: idleAtIso,
+    seq: 3,
+  })
+  const idleSnapshot = store.snapshot('thread-status')
+  assert.equal(idleSnapshot.executionState, 'completed_pending_sync')
+  assert.equal(idleSnapshot.inProgress, false)
+  assert.equal(idleSnapshot.activeTurnId, '')
+  assert.equal(idleSnapshot.canStop, false)
+  assert.equal(idleSnapshot.lastCompletedAtIso, idleAtIso)
+  store.observeEvent({
+    method: 'error',
+    params: { threadId: 'thread-status-failed', message: 'failed before idle' },
+    atIso: new Date().toISOString(),
+    seq: 4,
+  })
+  store.observeEvent({
+    method: 'thread/status/changed',
+    params: { threadId: 'thread-status-failed', status: { type: 'idle' } },
+    atIso: new Date().toISOString(),
+    seq: 5,
+  })
+  assert.equal(store.snapshot('thread-status-failed').executionState, 'failed')
+
   store.markQueued('thread-a')
   assert.equal(isRuntimeActiveState(store.snapshot('thread-a').executionState), true)
 
@@ -10992,6 +11044,28 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
         },
       }),
       JSON.stringify({
+        timestamp: '2026-07-06T10:00:02.700Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'internal-agents-context',
+          role: 'user',
+          content: [{ type: 'input_text', text: '# AGENTS.md instructions for E:/workspace/project\n<INSTRUCTIONS>\ninternal only\n</INSTRUCTIONS>' }],
+          internal_chat_message_metadata_passthrough: { turn_id: 'turn-internal-context' },
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:02.800Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'internal-environment-context',
+          role: 'user',
+          content: [{ type: 'input_text', text: '<environment_context>internal only</environment_context>' }],
+          internal_chat_message_metadata_passthrough: { turn_id: 'turn-internal-context' },
+        },
+      }),
+      JSON.stringify({
         timestamp: '2026-07-06T10:00:03.000Z',
         type: 'response_item',
         payload: {
@@ -11078,6 +11152,67 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
     assert.equal(threadRead?.thread.turns[1]?.items[1]?.text, 'Second recovered answer')
     assert.equal(threadRead?.thread.turns[2]?.items[0]?.content?.[0]?.text, '继续')
     assert.equal(threadRead?.thread.turns[2]?.items[1]?.text, 'Third recovered answer')
+
+    const imageSessionPath = join(dir, 'rollout-2026-07-06T10-01-00-thread-image.jsonl')
+    await writeFile(imageSessionPath, [
+      JSON.stringify({
+        timestamp: '2026-07-06T10:01:00.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'user-image-response',
+          role: 'user',
+          content: [{
+            type: 'input_text',
+            text: 'Inspect this failure <image name="Image #1" path="C:/uploads/failure.png"></image>',
+          }],
+          internal_chat_message_metadata_passthrough: { turn_id: 'turn-image' },
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:01:00.100Z',
+        type: 'event_msg',
+        payload: { type: 'user_message', message: 'Inspect this failure' },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:01:01.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'user-image-only-response',
+          role: 'user',
+          content: [{
+            type: 'input_text',
+            text: '<image name="Image #2" path="C:/uploads/image-only.png"></image>',
+          }],
+          internal_chat_message_metadata_passthrough: { turn_id: 'turn-image-only' },
+        },
+      }),
+    ].join('\n'), 'utf8')
+    const imageThreadRead = await parseThreadReadFromSessionLog(imageSessionPath, {
+      thread: { id: 'thread-image', path: imageSessionPath, turns: [] },
+    }) as {
+      thread: {
+        turns: Array<{
+          id: string
+          items: Array<{
+            type: string
+            content?: Array<{ type: string; text?: string; path?: string }>
+          }>
+        }>
+      }
+    } | null
+    assert.equal(imageThreadRead?.thread.turns.length, 2)
+    assert.equal(imageThreadRead?.thread.turns[0]?.id, 'turn-image')
+    assert.equal(imageThreadRead?.thread.turns[0]?.items.length, 1)
+    assert.deepEqual(imageThreadRead?.thread.turns[0]?.items[0]?.content, [
+      { type: 'text', text: 'Inspect this failure' },
+      { type: 'localImage', path: 'C:/uploads/failure.png' },
+    ])
+    assert.equal(imageThreadRead?.thread.turns[1]?.id, 'turn-image-only')
+    assert.deepEqual(imageThreadRead?.thread.turns[1]?.items[0]?.content, [
+      { type: 'localImage', path: 'C:/uploads/image-only.png' },
+    ])
 
     const incrementalSessionPath = join(dir, 'rollout-2026-07-06T10-02-00-thread-incremental.jsonl')
     const incrementalFallback = {
@@ -12144,7 +12279,7 @@ async function smokeRuntimeMessageQueue(): Promise<void> {
     assert.equal(queue.list('thread-queue').length, 1)
 
     store.updateRequest('active-request', { status: 'completed' })
-    queue.handleRuntimeEvent('turn/completed', 'thread-queue')
+    queue.handleRuntimeEvent('thread/status/changed', 'thread-queue', { status: { type: 'idle' } })
     await waitForCondition(() => startedClientMessageIds.length === 1)
     assert.deepEqual(startedClientMessageIds, ['queued-client-1'])
     assert.equal(queue.list('thread-queue').length, 0)

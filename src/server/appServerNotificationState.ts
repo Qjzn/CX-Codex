@@ -1,5 +1,9 @@
 import { readThreadIdFromPayload, readTurnIdFromPayload } from './appServerPayloadIds.js'
 import { shouldInvalidateThreadListCacheForNotification } from './appServerRpcCache.js'
+import {
+  isRuntimeThreadStatusTerminal,
+  readRuntimeThreadStatusLifecycle,
+} from '../runtimeThreadStatus.js'
 
 export type AppServerNotificationStateDependencies = {
   invalidateThreadListCache(): void
@@ -31,7 +35,9 @@ export function captureAppServerNotificationState(
     dependencies.invalidateThreadListCache()
   }
 
-  if (shouldClearPlanModeTurnForNotification(notification.method)) {
+  const terminalThreadStatus = notification.method === 'thread/status/changed'
+    && isRuntimeThreadStatusTerminal(readRuntimeThreadStatusLifecycle(notification.params))
+  if (shouldClearPlanModeTurnForNotification(notification.method) || terminalThreadStatus) {
     dependencies.clearPlanModeTurnByThreadOrTurn(
       readThreadIdFromPayload(notification.params),
       readTurnIdFromPayload(notification.params),

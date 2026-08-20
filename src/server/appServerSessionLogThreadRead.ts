@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { open, stat } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
+import { isInternalContextMessageText } from '../internalContextMessage.js'
 
 const FALLBACK_TURN_LIMIT = 40
 const FALLBACK_ITEM_TEXT_LIMIT = 20_000
@@ -15,7 +16,7 @@ type FallbackItem = {
   type: 'userMessage' | 'agentMessage'
   id: string
   phase?: 'commentary'
-  content?: Array<{ type: 'text'; text: string }>
+  content?: Array<{ type: 'text'; text: string } | { type: 'localImage'; path: string }>
   text?: string
 }
 
@@ -25,6 +26,7 @@ type RecoveredMessage = {
   id: string
   turnId?: string
   phase?: 'commentary'
+  images?: string[]
   hidden?: boolean
 }
 
@@ -42,6 +44,7 @@ type SessionLogThreadReadCacheState = {
 }
 
 const sessionLogThreadReadCacheStateByPath = new Map<string, SessionLogThreadReadCacheState>()
+const RECOVERED_USER_IMAGE_PATTERN = /\s*<image\b[^>]*\bpath=(?:"([^"]+)"|'([^']+)')[^>]*>[\s\S]*?<\/image>\s*/giu
 
 export function isSessionLogThreadReadCandidateLine(line: string): boolean {
   if (TOP_LEVEL_SESSION_META_PATTERN.test(line) || TOP_LEVEL_EVENT_MESSAGE_PATTERN.test(line)) return true
@@ -100,8 +103,22 @@ function cloneFallbackTurns(value: unknown): FallbackTurn[] {
       const id = readTrimmedString(item.id)
       if (item.type === 'userMessage') {
         const text = readTextContent(item.content)
-        if (text) {
-          items.push({ type: 'userMessage', id, content: [{ type: 'text', text }] })
+        const images = Array.isArray(item.content)
+          ? item.content
+              .map((block) => asRecord(block))
+              .filter((block): block is Record<string, unknown> => block?.type === 'localImage')
+              .map((block) => readTrimmedString(block.path))
+              .filter((path) => path.length > 0)
+          : []
+        if (text || images.length > 0) {
+          items.push({
+            type: 'userMessage',
+            id,
+            content: [
+              ...(text ? [{ type: 'text' as const, text }] : []),
+              ...images.map((path) => ({ type: 'localImage' as const, path })),
+            ],
+          })
         }
       } else if (item.type === 'agentMessage') {
         const text = readTrimmedString(item.text)
@@ -182,13 +199,14 @@ function readTextContent(content: unknown): string {
   return chunks.join('\n').trim()
 }
 
-function isInternalContextMessageText(text: string): boolean {
-  return (
-    text.startsWith('<codex_internal_context') ||
-    text.startsWith('<environment_context') ||
-    text.startsWith('<developer_context') ||
-    text.startsWith('<system_context')
-  )
+function readRecoveredUserContent(text: string): { text: string; images: string[] } {
+  const images: string[] = []
+  const visibleText = text.replace(RECOVERED_USER_IMAGE_PATTERN, (_match, doubleQuoted, singleQuoted) => {
+    const path = readTrimmedString(doubleQuoted || singleQuoted)
+    if (path) images.push(path)
+    return '\n'
+  }).replace(/\n{3,}/gu, '\n\n').trim()
+  return { text: visibleText, images }
 }
 
 function normalizeRecoveredAssistantText(text: string): string {
@@ -205,15 +223,25 @@ function readResponseItemMessage(entry: Record<string, unknown>): RecoveredMessa
     ? 'commentary' as const
     : undefined
   const rawText = readTextContent(payload.content)
-  const text = role === 'assistant' ? normalizeRecoveredAssistantText(rawText) : rawText
-  if (!text) return null
+  const recoveredUserContent = role === 'user' ? readRecoveredUserContent(rawText) : null
+  const text = role === 'assistant'
+    ? normalizeRecoveredAssistantText(rawText)
+    : recoveredUserContent?.text ?? rawText
+  if (!text && !(role === 'user' && recoveredUserContent?.images.length)) return null
   const id = readTrimmedString(payload.id)
   const metadata = asRecord(payload.internal_chat_message_metadata_passthrough)
   const turnId = readTrimmedString(metadata?.turn_id)
   if (isInternalContextMessageText(text)) {
     return role === 'user' ? { role, text: '', id, ...(turnId ? { turnId } : {}), hidden: true } : null
   }
-  return { role, text, id, ...(turnId ? { turnId } : {}), ...(phase ? { phase } : {}) }
+  return {
+    role,
+    text,
+    id,
+    ...(turnId ? { turnId } : {}),
+    ...(phase ? { phase } : {}),
+    ...(recoveredUserContent?.images.length ? { images: recoveredUserContent.images } : {}),
+  }
 }
 
 function readEventMessage(entry: Record<string, unknown>): RecoveredMessage | null {
@@ -238,6 +266,7 @@ function readEventMessage(entry: Record<string, unknown>): RecoveredMessage | nu
 }
 
 function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): void {
+  if (message.hidden) return
   const text = limitText(message.text)
   let matchingTurn: FallbackTurn | null = null
   if (message.turnId) {
@@ -257,14 +286,15 @@ function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): vo
   }
   if (!turn) turns.push(targetTurn)
 
-  if (message.hidden) return
-
   const itemId = message.id || `${targetTurn.id}:${message.role}:${String(targetTurn.items.length + 1)}`
   targetTurn.items.push(message.role === 'user'
     ? {
         type: 'userMessage',
         id: itemId,
-        content: [{ type: 'text', text }],
+        content: [
+          ...(text ? [{ type: 'text' as const, text }] : []),
+          ...(message.images ?? []).map((path) => ({ type: 'localImage' as const, path })),
+        ],
       }
     : {
         type: 'agentMessage',

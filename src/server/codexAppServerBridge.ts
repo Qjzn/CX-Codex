@@ -134,7 +134,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
           if (typeof oldestThreadId === 'string') recentLiveRuntimeEventAtMsByThreadId.delete(oldestThreadId)
         }
       }
-      runtimeMessageQueue?.handleRuntimeEvent(event.method, event.threadId)
+      runtimeMessageQueue?.handleRuntimeEvent(event.method, event.threadId, event.params)
       void mobilePushCoordinator.handleRuntimeEvent(event).catch((error) => {
         writeBridgeLog('warn', 'Mobile push terminal wake failed', {
           method: event.method,
