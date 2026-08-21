@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, stat, writeFile } from 'node:fs/promises'
 import type { IncomingMessage } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { RequestBodyTooLargeError, readRawBody } from './httpBody.js'
 
 export type ParsedMultipartFileUpload = {
@@ -22,6 +22,26 @@ export class FileUploadError extends Error {
   }
 }
 
+export type UploadedFileAccessErrorCode = 'not-found' | 'outside-upload-root'
+
+export class UploadedFileAccessError extends Error {
+  readonly code: UploadedFileAccessErrorCode
+
+  constructor(code: UploadedFileAccessErrorCode) {
+    super(code === 'outside-upload-root'
+      ? 'Local path is outside the CX-Codex upload cache.'
+      : 'Uploaded file does not exist.')
+    this.name = 'UploadedFileAccessError'
+    this.code = code
+  }
+}
+
+export type UploadedFileAccessDependencies = {
+  uploadDir?: string
+  realpath?: typeof realpath
+  stat?: typeof stat
+}
+
 function readUploadEnv(name: string): string {
   return (
     process.env[`CX_CODEX_${name}`]?.trim() ||
@@ -35,6 +55,20 @@ export function getFileUploadRequestBodyLimitBytes(): number {
   const configured = Number.parseInt(readUploadEnv('FILE_UPLOAD_MAX_BYTES'), 10)
   if (Number.isFinite(configured) && configured > 0) return configured
   return FILE_UPLOAD_REQUEST_BODY_LIMIT_BYTES
+}
+
+export function getFileUploadDir(): string {
+  return join(tmpdir(), 'codex-web-uploads')
+}
+
+function isPathWithinRoot(rootPath: string, candidatePath: string): boolean {
+  const relativePath = relative(rootPath, candidatePath)
+  return relativePath === '' || (
+    relativePath !== '..'
+    && !relativePath.startsWith(`..\\`)
+    && !relativePath.startsWith('../')
+    && !isAbsolute(relativePath)
+  )
 }
 
 export function bufferIndexOf(buf: Buffer, needle: Buffer, start = 0): number {
@@ -92,6 +126,48 @@ export function parseMultipartFileUpload(body: Buffer, contentType: string): Par
   throw new FileUploadError('No file in request', 400)
 }
 
+export async function resolveUploadedFilePath(
+  candidatePath: string,
+  dependencies: UploadedFileAccessDependencies = {},
+): Promise<string> {
+  if (!isAbsolute(candidatePath)) {
+    throw new UploadedFileAccessError('outside-upload-root')
+  }
+
+  const uploadRoot = resolve(dependencies.uploadDir ?? getFileUploadDir())
+  const normalizedCandidate = resolve(candidatePath)
+  if (!isPathWithinRoot(uploadRoot, normalizedCandidate)) {
+    throw new UploadedFileAccessError('outside-upload-root')
+  }
+
+  const resolveRealPath = dependencies.realpath ?? realpath
+  const readStat = dependencies.stat ?? stat
+  let canonicalCandidate: string
+  try {
+    canonicalCandidate = await resolveRealPath(normalizedCandidate)
+  } catch {
+    throw new UploadedFileAccessError('not-found')
+  }
+
+  let canonicalUploadRoot: string
+  try {
+    const uploadRootStat = await readStat(uploadRoot)
+    if (!uploadRootStat.isDirectory()) {
+      throw new UploadedFileAccessError('not-found')
+    }
+    canonicalUploadRoot = await resolveRealPath(uploadRoot)
+  } catch (error) {
+    if (error instanceof UploadedFileAccessError) throw error
+    throw new UploadedFileAccessError('not-found')
+  }
+
+  if (!isPathWithinRoot(canonicalUploadRoot, canonicalCandidate)) {
+    throw new UploadedFileAccessError('outside-upload-root')
+  }
+
+  return canonicalCandidate
+}
+
 export async function readRequestBody(req: IncomingMessage, options: { maxBytes?: number } = {}): Promise<Buffer> {
   const maxBytes = options.maxBytes ?? getFileUploadRequestBodyLimitBytes()
   try {
@@ -106,7 +182,7 @@ export async function readRequestBody(req: IncomingMessage, options: { maxBytes?
 
 export async function writeUploadedFile(
   upload: ParsedMultipartFileUpload,
-  uploadDir = join(tmpdir(), 'codex-web-uploads'),
+  uploadDir = getFileUploadDir(),
 ): Promise<string> {
   await mkdir(uploadDir, { recursive: true })
   const destDir = await mkdtemp(join(uploadDir, 'f-'))

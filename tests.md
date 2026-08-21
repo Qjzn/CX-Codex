@@ -14503,6 +14503,26 @@ Verification:
 - In a headless browser, delay `/codex-api/upload-file`, verify immediate image/file feedback, force one upload failure, retry it, and capture desktop plus 393 px mobile screenshots.
 - Start the built server and verify cache/Brotli headers for `index.html` and a hashed JS asset.
 
+## 上传图片与附件缓存读取（2026-08-12）
+
+### Expected behavior
+
+1. `/codex-api/upload-file` 返回的 `codex-web-uploads/f-*` 临时文件路径，在聊天消息里必须能通过 `/codex-local-image` 正常显示图片缩略图。
+2. 同一上传缓存内的普通文件必须能通过 `/codex-local-file` 和文件卡片使用的 `/codex-local-browse` 打开或进入预览。
+3. 上传缓存不是新的工作区根：缓存目录不能被目录浏览，`/codex-local-edit` 仍必须拒绝上传缓存路径，符号链接或 junction 逃逸仍必须被拒绝。
+4. 工作区外且不属于 CX-Codex 上传缓存的普通本地路径继续返回 `403`，不能为了修复图片而放宽全盘本地文件读取。
+
+### Verification
+
+- 复现探针确认真实上传图片文件存在，但旧 7420 对 `/codex-local-image?path=...codex-web-uploads...` 返回 `HTTP 403` 与“该路径不在已登记的工作区目录内”。
+- `npm.cmd run verify:server-modules` 覆盖上传缓存图片读取、直接文件读取、文件卡片 browse 预览、缓存目录拒绝、编辑拒绝、外部路径拒绝和 junction 逃逸拒绝。
+- 隔离候选服务使用临时 Runtime DB 和无副作用 bridge；`agent-browser` 在 393 x 852 H5 视口打开真实上传路径，图片 `complete=true`、原始尺寸 `1658 x 1658`、控制台无错误。同期 HTTP 探针确认图片/直接文件读取为 `200`，缓存目录、编辑接口和普通工作区外文件仍为 `403`。
+- 前端消息渲染映射未改动；发布前仍应在安装候选上补一次“上传后发送消息 -> 缩略图 -> 点击预览”的完整交互确认。
+
+### Rollback
+
+- 回退 `src/server/fileUpload.ts` 的上传缓存路径解析、`src/server/httpServer.ts` 对图片/文件只读路由的上传缓存授权，以及对应 server smoke 和本测试章节。不要回退工作区根目录授权策略。
+
 ## Cold-start code splitting and sidebar stability (2026-07-30)
 
 1. The home route does not request the conversation renderer, queued-message UI, sidebar tree on collapsed mobile, settings cards, task-pet settings, or favorites modal before those surfaces are actually needed.

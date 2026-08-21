@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { generateKeyPairSync } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { createServer as createNodeHttpServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -205,11 +206,13 @@ import {
 } from '../src/server/webBridgeSettings.js'
 import {
   FileUploadError,
+  UploadedFileAccessError,
   bufferIndexOf,
   getFileUploadRequestBodyLimitBytes,
   parseMultipartFileUpload,
   readRequestBody,
   readMultipartBoundary,
+  resolveUploadedFilePath,
   writeUploadedFile,
 } from '../src/server/fileUpload.js'
 import { handleFileUploadRoute } from '../src/server/fileUploadRoute.js'
@@ -440,6 +443,7 @@ import {
   LocalFileAccessError,
   resolveWorkspaceLocalPath,
 } from '../src/server/localFileAccessPolicy.js'
+import { createServer as createHttpAppServer } from '../src/server/httpServer.js'
 import { handleWorkspaceMetaRoutes } from '../src/server/workspaceMetaRoutes.js'
 import {
   ProjectRootError,
@@ -560,6 +564,7 @@ try {
   await smokeAppServerRollbackGit()
   await smokeFileUpload()
   await smokeFileUploadRoute()
+  await smokeUploadedLocalFileRoutes()
   smokeHttpJsonResponse()
   smokeCodexBridgeRequestError()
   await smokeCodexSessionFileChangeObserver()
@@ -4930,6 +4935,106 @@ async function smokeFileUploadRoute(): Promise<void> {
     new URL('http://127.0.0.1/codex-api/upload-file'),
     dependencies,
   ), false)
+}
+
+async function smokeUploadedLocalFileRoutes(): Promise<void> {
+  const uploadRoot = await mkdtemp(join(tmpdir(), 'cx-codex-http-upload-'))
+  const uploadDir = join(uploadRoot, 'f-route')
+  const imagePath = join(uploadDir, 'preview.png')
+  const textPath = join(uploadDir, 'note.txt')
+  const outsideDir = await mkdtemp(join(tmpdir(), 'cx-codex-http-upload-outside-'))
+  const outsidePath = join(outsideDir, 'secret.png')
+  const escapedLink = join(uploadDir, 'escaped-link')
+  const pngBytes = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+    'base64',
+  )
+
+  await mkdir(uploadDir, { recursive: true })
+  await writeFile(imagePath, pngBytes)
+  await writeFile(textPath, 'uploaded note', 'utf8')
+  await writeFile(outsidePath, pngBytes)
+  await symlink(outsideDir, escapedLink, 'junction')
+
+  const appServer = createHttpAppServer({
+    createBridgeMiddleware: () => Object.assign(
+      async (_req: unknown, _res: unknown, next: () => void) => { next() },
+      {
+        dispose: () => {},
+        subscribeNotifications: () => () => {},
+        listNotificationEventsAfter: () => ({ notifications: [], latestSeq: 0, oldestSeq: 0 }),
+      },
+    ),
+    runtimeDatabasePath: join(uploadRoot, 'runtime.sqlite'),
+    resolveLocalFilePath: async () => {
+      throw new LocalFileAccessError('outside-workspace')
+    },
+    resolveUploadedFilePath: (candidatePath: string) => resolveUploadedFilePath(candidatePath, {
+      uploadDir: uploadRoot,
+      realpath,
+      stat,
+    }),
+  })
+  const server = createNodeHttpServer(appServer.app)
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => {
+        server.off('error', reject)
+        resolve()
+      })
+    })
+    const address = server.address()
+    const port = typeof address === 'object' && address ? address.port : 0
+    const baseUrl = `http://127.0.0.1:${String(port)}`
+    const localRoutePath = (pathValue: string) => {
+      const normalized = pathValue.replace(/\\/g, '/')
+      const routePath = normalized.startsWith('/') ? normalized : `/${normalized}`
+      return encodeURI(routePath)
+    }
+    const uploadBrowsePath = (pathValue: string) => `${baseUrl}/codex-local-browse${localRoutePath(pathValue)}`
+
+    const imageResponse = await fetch(`${baseUrl}/codex-local-image?path=${encodeURIComponent(imagePath)}`)
+    assert.equal(imageResponse.status, 200)
+    assert.match(imageResponse.headers.get('content-type') ?? '', /^image\/png\b/u)
+    assert.equal(Buffer.from(await imageResponse.arrayBuffer()).length, pngBytes.length)
+
+    const fileResponse = await fetch(`${baseUrl}/codex-local-file?path=${encodeURIComponent(textPath)}&inline=1`)
+    assert.equal(fileResponse.status, 200)
+    assert.match(fileResponse.headers.get('content-type') ?? '', /^text\/plain\b/u)
+    assert.equal(await fileResponse.text(), 'uploaded note')
+
+    const browseResponse = await fetch(uploadBrowsePath(textPath), { redirect: 'manual' })
+    assert.equal(browseResponse.status, 302)
+    assert.match(browseResponse.headers.get('location') ?? '', /^\/local-preview\.html\?path=/u)
+
+    const directoryResponse = await fetch(uploadBrowsePath(uploadDir))
+    assert.equal(directoryResponse.status, 403)
+    assert.match(await directoryResponse.text(), /上传缓存只支持打开已上传文件/u)
+
+    const editResponse = await fetch(`${baseUrl}/codex-local-edit${localRoutePath(textPath)}`)
+    assert.equal(editResponse.status, 403)
+
+    const outsideResponse = await fetch(`${baseUrl}/codex-local-image?path=${encodeURIComponent(outsidePath)}`)
+    assert.equal(outsideResponse.status, 403)
+
+    await assert.rejects(
+      () => resolveUploadedFilePath(join(escapedLink, 'secret.png'), { uploadDir: uploadRoot, realpath, stat }),
+      (error: unknown) => error instanceof UploadedFileAccessError && error.code === 'outside-upload-root',
+    )
+    await assert.rejects(
+      () => resolveUploadedFilePath(join(uploadDir, 'missing.png'), { uploadDir: uploadRoot, realpath, stat }),
+      (error: unknown) => error instanceof UploadedFileAccessError && error.code === 'not-found',
+    )
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    }).catch(() => {})
+    appServer.dispose()
+    await rm(uploadRoot, { recursive: true, force: true })
+    await rm(outsideDir, { recursive: true, force: true })
+  }
 }
 
 function smokeHttpJsonResponse(): void {

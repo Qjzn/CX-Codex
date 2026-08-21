@@ -11,6 +11,10 @@ import { createAuthSession, isLoopbackRequest } from './authMiddleware.js'
 import { readJsonBody, RequestBodyTooLargeError } from './httpBody.js'
 import { persistAccessPassword } from './localAccessConfig.js'
 import {
+  resolveUploadedFilePath,
+  UploadedFileAccessError,
+} from './fileUpload.js'
+import {
   LocalFileAccessError,
   resolveWorkspaceLocalPath,
 } from './localFileAccessPolicy.js'
@@ -35,7 +39,10 @@ export type ServerOptions = {
   password?: string
   configPath?: string
   host?: string
+  createBridgeMiddleware?: typeof createCodexBridgeMiddleware
   resolveLocalFilePath?: typeof resolveWorkspaceLocalPath
+  resolveUploadedFilePath?: typeof resolveUploadedFilePath
+  runtimeDatabasePath?: string
 }
 
 export type ServerInstance = {
@@ -219,13 +226,57 @@ async function resolveAuthorizedLocalPath(
   }
 }
 
+type AuthorizedLocalPath = {
+  path: string
+  source: 'workspace' | 'upload'
+}
+
+async function resolveAuthorizedReadableLocalPath(
+  res: express.Response,
+  localPath: string,
+  resolveLocalFilePath: typeof resolveWorkspaceLocalPath,
+  resolveUploadedLocalFilePath: typeof resolveUploadedFilePath,
+  notFoundMessage: string,
+): Promise<AuthorizedLocalPath | null> {
+  try {
+    return { path: await resolveLocalFilePath(localPath), source: 'workspace' }
+  } catch (error) {
+    if (!(error instanceof LocalFileAccessError)) {
+      res.status(500).json({ error: '本地文件访问校验失败。' })
+      return null
+    }
+    if (error.code === 'not-found') {
+      res.status(404).json({ error: notFoundMessage })
+      return null
+    }
+  }
+
+  try {
+    return { path: await resolveUploadedLocalFilePath(localPath), source: 'upload' }
+  } catch (error) {
+    if (error instanceof UploadedFileAccessError && error.code === 'not-found') {
+      res.status(404).json({ error: notFoundMessage })
+      return null
+    }
+    if (error instanceof UploadedFileAccessError) {
+      res.status(403).json({ error: '该路径不在已登记的工作区目录或 CX-Codex 上传缓存内。' })
+      return null
+    }
+    res.status(500).json({ error: '本地文件访问校验失败。' })
+    return null
+  }
+}
+
 export function createServer(options: ServerOptions = {}): ServerInstance {
   const app = express()
-  const bridge = createCodexBridgeMiddleware({
+  const createBridgeMiddleware = options.createBridgeMiddleware ?? createCodexBridgeMiddleware
+  const bridge = createBridgeMiddleware({
     remoteAccessProtected: Boolean(options.password),
+    runtimeDatabasePath: options.runtimeDatabasePath,
   })
   const authSession = options.password ? createAuthSession(options.password) : null
   const resolveLocalFilePath = options.resolveLocalFilePath ?? resolveWorkspaceLocalPath
+  const resolveUploadedLocalFilePath = options.resolveUploadedFilePath ?? resolveUploadedFilePath
   const localSetupToken = randomBytes(24).toString('hex')
   let invalidateWebSocketSessions = () => {}
 
@@ -323,13 +374,15 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       return
     }
 
-    const authorizedPath = await resolveAuthorizedLocalPath(
+    const authorized = await resolveAuthorizedReadableLocalPath(
       res,
       localPath,
       resolveLocalFilePath,
+      resolveUploadedLocalFilePath,
       '图片文件不存在。',
     )
-    if (!authorizedPath) return
+    if (!authorized) return
+    const authorizedPath = authorized.path
 
     const contentType = IMAGE_CONTENT_TYPES[extname(authorizedPath).toLowerCase()]
     if (!contentType) {
@@ -354,13 +407,15 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       return
     }
 
-    const authorizedPath = await resolveAuthorizedLocalPath(
+    const authorized = await resolveAuthorizedReadableLocalPath(
       res,
       localPath,
       resolveLocalFilePath,
+      resolveUploadedLocalFilePath,
       '文件不存在。',
     )
-    if (!authorizedPath) return
+    if (!authorized) return
+    const authorizedPath = authorized.path
 
     res.setHeader('Cache-Control', 'private, no-store')
     const dispositionMode = req.query.inline === '1'
@@ -385,18 +440,24 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       return
     }
 
-    const authorizedPath = await resolveAuthorizedLocalPath(
+    const authorized = await resolveAuthorizedReadableLocalPath(
       res,
       localPath,
       resolveLocalFilePath,
+      resolveUploadedLocalFilePath,
       '文件不存在。',
     )
-    if (!authorizedPath) return
+    if (!authorized) return
+    const authorizedPath = authorized.path
 
     try {
       const fileStat = await stat(authorizedPath)
       res.setHeader('Cache-Control', 'private, no-store')
       if (fileStat.isDirectory()) {
+        if (authorized.source === 'upload') {
+          res.status(403).json({ error: '上传缓存只支持打开已上传文件。' })
+          return
+        }
         const html = await createDirectoryListingHtml(authorizedPath)
         res.status(200).type('text/html; charset=utf-8').send(html)
         return

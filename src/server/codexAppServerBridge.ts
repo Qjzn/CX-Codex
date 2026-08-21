@@ -64,6 +64,7 @@ function getSharedBridgeState(): SharedBridgeState {
 
 export type CodexBridgeMiddlewareOptions = {
   remoteAccessProtected?: boolean
+  runtimeDatabasePath?: string
 }
 
 export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOptions = {}): CodexBridgeMiddleware {
@@ -79,7 +80,9 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     statusDiagnostics,
     hookDiagnosticsCache,
     windowsSandboxReadinessCache,
-  } = createCodexBridgeMiddlewareState(appServer)
+  } = createCodexBridgeMiddlewareState(appServer, {
+    runtimeDatabasePath: options.runtimeDatabasePath,
+  })
   appServer.setRestartProtectionReader(() => Math.max(
     runtimeStore.getRestartBlockingRequestCount(),
     runtimeStateStore.getActiveThreadCount(),
