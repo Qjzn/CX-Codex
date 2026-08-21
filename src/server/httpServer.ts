@@ -166,9 +166,13 @@ function normalizeLocalImagePath(rawPath: string): string {
 }
 
 function readWildcardPathParam(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (Array.isArray(value)) return value.join('/')
-  return ''
+  const pathValue = typeof value === 'string'
+    ? value
+    : Array.isArray(value)
+      ? value.join('/')
+      : ''
+  if (!pathValue || pathValue.startsWith('/')) return pathValue
+  return `/${pathValue}`
 }
 
 function encodeContentDispositionFileName(fileName: string): string {
