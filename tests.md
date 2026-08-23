@@ -15993,6 +15993,19 @@ Current evidence:
 - The local Android delivery build uses version `2.7.5` / code `20705`, bundles the same frontend `index.html` hash as `dist`, passes release signature and zip-alignment verification, and matches the signing certificate of the public `v2.7.4` APK so it can be installed as an in-place upgrade.
 - No Android device was connected during implementation, so physical process-death verification is still required before publishing an APK.
 
+## Release ZIP 运行时完整性校验
+
+1. `verify-release-artifacts.ps1` 必须直接打开每个 Release ZIP，不能只验证外部 SHA-256 文件。
+2. ZIP 必须包含 `package.json`、`vite.config.ts` 和 `vite.local-preview.config.ts`。
+3. ZIP 内 `package.json.files` 声明的每个文件必须精确存在；声明的每个目录必须至少包含一个条目。
+4. APK 继续只执行 checksum 验证，不按 ZIP 结构解析。
+
+Verification:
+
+- 生成本地 Release smoke 构件后运行 `npm.cmd run verify:release-artifacts -- -OutputDir <目录>`，确认 checksum 和 ZIP 运行时契约均通过。
+- 从 ZIP 中移除一个必需配置、npm 文件或 npm 目录内容，重新生成匹配 checksum，确认校验器仍以稳定的缺失条目信息失败。
+- 解析 PowerShell 脚本，检查 UTF-8 无 BOM，并运行 `git diff --check`。
+
 ## CX-Codex 2.7.4 release-package completeness (2026-08-04)
 
 1. `scripts/package-release.ps1` must treat both `vite.config.ts` and `vite.local-preview.config.ts` as required Release ZIP inputs because `npm run build:frontend` executes both configurations.
