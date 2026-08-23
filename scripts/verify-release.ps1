@@ -377,6 +377,8 @@ if (-not $SkipPackageSmoke) {
     "docs\roadmap.zh-CN.md",
     "docs\security-hardening.zh-CN.md",
     "scripts\package-release.ps1",
+    "scripts\run-hidden-command.vbs",
+    "scripts\run-hidden-powershell.vbs",
     "scripts\start-detached-server.mjs",
     "scripts\uninstall-windows.ps1",
     "scripts\verify-windows-productization.ps1",

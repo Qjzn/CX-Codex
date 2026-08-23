@@ -16326,3 +16326,15 @@ Rollback:
 ### Rollback
 
 - 回退本节对应的消息投影、内部上下文过滤、Runtime thread status 解析及其回归。不要删除会话、Runtime SQLite、上传缓存或用户配置。
+## Windows 计划任务安全运行时
+
+1. 登录启动任务和 watchdog 必须通过 PowerShell ScheduledTasks API 注册到当前用户，使用 `Interactive` 登录类型和 `Limited` 运行级别，不再请求最高权限。
+2. 登录启动动作必须通过 `wscript.exe //B //NoLogo scripts/run-hidden-command.vbs` 启动绝对路径的 `cmd.exe /d /c`；watchdog 必须通过对应的 `run-hidden-powershell.vbs` 启动。
+3. 两个 VBS 运行器必须验证目标文件存在，正确转义带空格、引号和尾部反斜杠的参数，隐藏窗口并把子进程退出码返回给计划任务。
+4. Release ZIP 必须包含两个运行器；缺少任一文件时发布校验应失败。
+
+Verification:
+
+- Run `npm.cmd run verify:windows-productization` without registering or changing the machine's real CX-Codex scheduled tasks.
+- Run `npm.cmd run verify:release -- -SkipBuild -SkipCliSmoke` after existing build output is available to exercise the Release ZIP manifest.
+- Confirm the changed files are UTF-8 without BOM and inspect the PowerShell diff for intact task arguments.
