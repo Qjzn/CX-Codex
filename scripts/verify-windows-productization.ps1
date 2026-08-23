@@ -87,12 +87,28 @@ $installScript = Join-Path $repoRoot "scripts\install-windows-server.ps1"
 $uninstallScript = Join-Path $repoRoot "scripts\uninstall-windows.ps1"
 $bootstrapScript = Join-Path $repoRoot "scripts\bootstrap-windows.ps1"
 $restartScript = Join-Path $repoRoot "scripts\restart-local-service.ps1"
+$hiddenCommandRunner = Join-Path $repoRoot "scripts\run-hidden-command.vbs"
+$hiddenPowerShellRunner = Join-Path $repoRoot "scripts\run-hidden-powershell.vbs"
 $cliScript = Join-Path $repoRoot "src\cli\index.ts"
 $testRoot = Join-Path $env:TEMP "cx-codex-productization-$PID"
 $installSource = Get-Content -LiteralPath $installScript -Raw
 $bootstrapSource = Get-Content -LiteralPath $bootstrapScript -Raw
 $restartSource = Get-Content -LiteralPath $restartScript -Raw
 $cliSource = Get-Content -LiteralPath $cliScript -Raw
+$hiddenCommandSource = Get-Content -LiteralPath $hiddenCommandRunner -Raw
+$hiddenPowerShellSource = Get-Content -LiteralPath $hiddenPowerShellRunner -Raw
+Assert-True `
+  ($installSource -match 'New-ScheduledTaskPrincipal[\s\S]*?-LogonType\s+Interactive[\s\S]*?-RunLevel\s+Limited' -and $installSource -notmatch 'schtasks\.exe\s+/Create') `
+  "Windows startup and watchdog tasks must use the ScheduledTasks API with the current interactive user at limited privilege."
+Assert-True `
+  ($installSource -match 'run-hidden-command\.vbs[\s\S]*?New-ScheduledTaskAction[\s\S]*?wscriptPath' -and $installSource -match 'run-hidden-powershell\.vbs[\s\S]*?New-ScheduledTaskAction[\s\S]*?wscriptPath') `
+  "Windows scheduled tasks must use hidden WScript runtime adapters."
+Assert-True `
+  ($hiddenCommandSource -match 'shell\.Run\(command,\s*0,\s*True\)' -and $hiddenCommandSource -match 'Function\s+QuoteArgument') `
+  "Hidden command runtime must wait for completion and preserve Windows argument quoting."
+Assert-True `
+  ($hiddenPowerShellSource -match '-NonInteractive' -and $hiddenPowerShellSource -match 'shell\.Run\(command,\s*0,\s*True\)' -and $hiddenPowerShellSource -match 'Function\s+QuoteArgument') `
+  "Hidden PowerShell runtime must be non-interactive, wait for completion, and preserve long arguments."
 Assert-True `
   ($installSource -match "function\s+Wait-ForTunnelReadyState") `
   "Windows installer must wait for the runtime tunnel readiness state."
