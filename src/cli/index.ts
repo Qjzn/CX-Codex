@@ -27,6 +27,13 @@ import {
 } from '../server/quickTunnel.js'
 import { startStableAccess } from '../server/tailscaleFunnel.js'
 import { spawnSyncCommand } from '../utils/commandInvocation.js'
+import {
+  getDefaultWindowsServiceConfigPath,
+  getDefaultWindowsServiceLauncherPath,
+  runWindowsServiceCommand,
+  type WindowsServiceAction,
+  type WindowsServiceCliOptions,
+} from './windowsServiceCommand.js'
 
 const program = new Command().name('cx-codex').description('CX-Codex Web bridge for Codex app-server')
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -641,6 +648,54 @@ program
   .description('Compact the runtime replay database while CX-Codex is stopped')
   .option('--database <path>', 'override the runtime database path')
   .action(runRuntimeCompact)
+
+const serviceCommand = program
+  .command('service')
+  .description('Manage the installed CX-Codex Windows service')
+
+function addWindowsServiceOptions(command: Command): Command {
+  return command
+    .option('--port <number>', 'managed service port', '7420')
+    .option('--config <path>', 'managed service config path', getDefaultWindowsServiceConfigPath())
+    .option('--launcher <path>', 'managed service launcher path', getDefaultWindowsServiceLauncherPath())
+    .option('--task-name <name>', 'startup scheduled task name')
+    .option('--watchdog-task-name <name>', 'watchdog scheduled task name')
+    .option('--json', 'output a single JSON object')
+}
+
+function getServiceRawOptionValue(
+  action: WindowsServiceAction,
+  optionName: '--port' | '--config',
+): string | undefined {
+  const rawArgs = process.argv.slice(2)
+  const actionIndex = rawArgs.findIndex((value, index) => value === action && rawArgs[index - 1] === 'service')
+  if (actionIndex < 0) return undefined
+  for (let index = actionIndex + 1; index < rawArgs.length; index += 1) {
+    const value = rawArgs[index]
+    if (value === optionName) return rawArgs[index + 1]
+    if (value.startsWith(`${optionName}=`)) return value.slice(optionName.length + 1)
+  }
+  return undefined
+}
+
+for (const [action, description] of [
+  ['start', 'Start the managed service process'],
+  ['stop', 'Stop the managed service process'],
+  ['restart', 'Restart the managed service process'],
+  ['status', 'Inspect managed service, process, listener, and task state'],
+  ['enable', 'Enable startup and watchdog recovery tasks'],
+  ['disable', 'Disable startup and watchdog recovery tasks'],
+] as const) {
+  addWindowsServiceOptions(serviceCommand.command(action).description(description))
+    .action((options: WindowsServiceCliOptions) => {
+      const serviceOptions = {
+        ...options,
+        port: getServiceRawOptionValue(action, '--port') ?? options.port,
+        config: getServiceRawOptionValue(action, '--config') ?? options.config,
+      }
+      process.exitCode = runWindowsServiceCommand(action, serviceOptions)
+    })
+}
 
 program.command('help').description('Show CX-Codex command help').action(() => {
   program.outputHelp()

@@ -447,7 +447,9 @@ if (-not $SkipPackageSmoke) {
     "LICENSE",
     "dist\index.html",
     "dist-cli\index.js",
-    "docs\app-server-schema-audit-summary.json"
+    "docs\app-server-schema-audit-summary.json",
+    "scripts\run-powershell-script.mjs",
+    "scripts\manage-windows-service.ps1"
   ) -ForbiddenEntries @(
     "src\server\codexAppServerBridge.ts",
     "scripts\verify-release.ps1",

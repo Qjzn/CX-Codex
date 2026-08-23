@@ -48,7 +48,9 @@
   "files": [
     "dist/",
     "dist-cli/",
-    "docs/app-server-schema-audit-summary.json"
+    "docs/app-server-schema-audit-summary.json",
+    "scripts/run-powershell-script.mjs",
+    "scripts/manage-windows-service.ps1"
   ],
   "scripts": {
     "dev": "vite",

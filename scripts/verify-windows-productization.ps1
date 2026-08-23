@@ -87,12 +87,16 @@ $installScript = Join-Path $repoRoot "scripts\install-windows-server.ps1"
 $uninstallScript = Join-Path $repoRoot "scripts\uninstall-windows.ps1"
 $bootstrapScript = Join-Path $repoRoot "scripts\bootstrap-windows.ps1"
 $restartScript = Join-Path $repoRoot "scripts\restart-local-service.ps1"
+$serviceScript = Join-Path $repoRoot "scripts\manage-windows-service.ps1"
 $cliScript = Join-Path $repoRoot "src\cli\index.ts"
+$serviceAdapterScript = Join-Path $repoRoot "src\cli\windowsServiceCommand.ts"
 $testRoot = Join-Path $env:TEMP "cx-codex-productization-$PID"
 $installSource = Get-Content -LiteralPath $installScript -Raw
 $bootstrapSource = Get-Content -LiteralPath $bootstrapScript -Raw
 $restartSource = Get-Content -LiteralPath $restartScript -Raw
+$serviceSource = Get-Content -LiteralPath $serviceScript -Raw
 $cliSource = Get-Content -LiteralPath $cliScript -Raw
+$serviceAdapterSource = Get-Content -LiteralPath $serviceAdapterScript -Raw
 Assert-True `
   ($installSource -match "function\s+Wait-ForTunnelReadyState") `
   "Windows installer must wait for the runtime tunnel readiness state."
@@ -123,6 +127,18 @@ Assert-True `
 Assert-True `
   ($cliSource -match 'function\s+listenOnRequestedPort[\s\S]*?will not silently start a second broker[\s\S]*?server\.listen\(port,\s*host\)' -and $cliSource -notmatch 'attempt\(port\s*\+\s*1\)') `
   "CLI port conflicts must fail explicitly instead of starting a second broker on another port."
+Assert-True `
+  ($cliSource -match "'start'[\s\S]*?'stop'[\s\S]*?'restart'[\s\S]*?'status'[\s\S]*?'enable'[\s\S]*?'disable'" -and $serviceAdapterSource -match "WindowsServiceAction = 'start' \| 'stop' \| 'restart' \| 'status' \| 'enable' \| 'disable'") `
+  "Windows service CLI must expose the complete process and recovery-task action set."
+Assert-True `
+  ($serviceSource -match 'if \(\$Action -eq "stop"\)[\s\S]*?Stop-ManagedProcessTree' -and $serviceSource -notmatch 'if \(\$Action -eq "stop"\)[\s\S]*?Set-TaskEnabledState') `
+  "Windows service stop must control only the managed process tree."
+Assert-True `
+  ($serviceSource -match 'if \(\$Action -eq "disable"\)[\s\S]*?Set-TaskEnabledState[\s\S]*?if \(\$Action -eq "enable"\)[\s\S]*?Set-TaskEnabledState') `
+  "Windows service enable and disable must own scheduled-task state changes."
+Assert-True `
+  ($serviceSource -match 'UNMANAGED_PORT_CONFLICT' -and $serviceSource -match 'Add-ProcessTreePostOrder' -and $serviceAdapterSource -match 'scriptsDirectory') `
+  "Windows service management must protect unmanaged listeners, stop child-first, and resolve packaged scripts."
 Assert-True `
   ($bootstrapSource -match 'function\s+Get-Sha256Hex[\s\S]*?Get-Command\s+Get-FileHash[\s\S]*?\[System\.Security\.Cryptography\.SHA256\]::Create\(\)') `
   "Windows bootstrap must fall back to .NET SHA-256 when Get-FileHash is unavailable."
