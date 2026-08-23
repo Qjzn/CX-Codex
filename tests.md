@@ -16338,3 +16338,17 @@ Verification:
 - Run `npm.cmd run verify:windows-productization` without registering or changing the machine's real CX-Codex scheduled tasks.
 - Run `npm.cmd run verify:release -- -SkipBuild -SkipCliSmoke` after existing build output is available to exercise the Release ZIP manifest.
 - Confirm the changed files are UTF-8 without BOM and inspect the PowerShell diff for intact task arguments.
+## Windows 服务管理 CLI
+
+1. `cx-codex service start|stop|restart|status|enable|disable` 必须接受 `--port`、`--config`、`--launcher`、`--task-name`、`--watchdog-task-name` 和 `--json`，且不得改变根服务命令的既有参数。
+2. `start`、`stop` 和 `restart` 只管理与显式配置或 launcher 匹配的进程树；`stop` 不禁用任务，`start` 不启用任务，`restart` 不改变任何任务状态。
+3. `enable` 和 `disable` 只修改已存在的登录启动与 watchdog 任务，不启动或停止服务进程；任务名必须精确匹配。
+4. `status` 只读；服务未运行、资源缺失或 PID 标记过期应作为状态返回。非托管进程占用目标端口时，进程控制命令必须以稳定错误码拒绝操作。
+5. `--json` 成功和失败均只输出一个结构稳定的 JSON 对象；npm 包必须显式包含 PowerShell 运行器和服务管理脚本。
+
+Verification:
+
+- Run `npm.cmd run build:cli` and inspect `cx-codex service --help` plus each subcommand help entry.
+- Run `npm.cmd run verify:windows-productization` without changing the machine's real CX-Codex service or scheduled tasks.
+- Run `npm.cmd run verify:release -- -SkipBuild -SkipCliSmoke` after existing build output is available and confirm npm package smoke includes only the two required runtime scripts.
+- Parse `scripts/manage-windows-service.ps1`, confirm changed files are UTF-8 without BOM, and inspect `git diff --check`.
