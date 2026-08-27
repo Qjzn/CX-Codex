@@ -26,6 +26,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit dependency security
+        run: npm run verify:dependency-security
+
       - name: Run release verification
         run: npm run verify:release -- -SchemaAudit skip
 
