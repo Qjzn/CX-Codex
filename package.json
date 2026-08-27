@@ -90,7 +90,7 @@
     "dompurify": "^3.4.13",
     "express": "^5.1.0",
     "markdown-it": "^14.3.0",
-    "pdfjs-dist": "^6.1.200",
+    "pdfjs-dist": "^6.2.108",
     "qrcode-terminal": "^0.12.0",
     "ws": "^8.21.1"
   },
