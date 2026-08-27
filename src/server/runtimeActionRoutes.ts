@@ -114,7 +114,8 @@ export async function handleRuntimeActionRoutes(
 }
 
 function isRuntimeStartPending(status: string): boolean {
-  return status === 'pending_start'
+  return status === 'queued'
+    || status === 'pending_start'
     || status === 'starting'
     || status === 'start_uncertain'
     || status === 'sync_degraded'

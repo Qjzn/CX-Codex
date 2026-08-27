@@ -40,6 +40,7 @@ type SessionLogThreadReadCacheState = {
   fileSignature: string
   fileSize: number
   incrementalReady: boolean
+  fullScan: boolean
   threadRead: unknown | null
 }
 
@@ -72,6 +73,12 @@ function readUnixSeconds(value: unknown): number {
   if (!text) return 0
   const ms = Date.parse(text)
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0
+}
+
+function readNonNegativeInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : null
 }
 
 function limitText(value: string): string {
@@ -265,8 +272,8 @@ function readEventMessage(entry: Record<string, unknown>): RecoveredMessage | nu
   return { role, text, id: '' }
 }
 
-function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): void {
-  if (message.hidden) return
+function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): boolean {
+  if (message.hidden) return false
   const text = limitText(message.text)
   let matchingTurn: FallbackTurn | null = null
   if (message.turnId) {
@@ -306,6 +313,7 @@ function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): vo
   while (turns.length > FALLBACK_TURN_LIMIT) {
     turns.shift()
   }
+  return !turn
 }
 
 function isDuplicateRecoveredMessage(
@@ -337,7 +345,7 @@ function writeCacheState(sessionPath: string, cacheState: SessionLogThreadReadCa
 async function parseThreadReadFromSessionLogRange(
   sessionPath: string,
   fallbackThreadRead: unknown,
-  options: { startOffset?: number; seedTurns?: boolean } = {},
+  options: { startOffset?: number; seedTurns?: boolean; fromStart?: boolean } = {},
 ): Promise<unknown | null> {
   const fallbackRoot = asRecord(fallbackThreadRead)
   const fallbackThread = asRecord(fallbackRoot?.thread)
@@ -351,12 +359,20 @@ async function parseThreadReadFromSessionLogRange(
   let createdAt = readUnixSeconds(fallbackThread?.createdAt)
   let updatedAt = readUnixSeconds(fallbackThread?.updatedAt)
   const turns = options.seedTurns === true ? cloneFallbackTurns(fallbackThread.turns) : []
+  let recoveredTurnCount = options.seedTurns === true
+    ? Math.max(
+        turns.length,
+        readNonNegativeInteger(fallbackThread.originalTurnsCount) ?? 0,
+      )
+    : 0
   const seenMessageIds = new Set<string>()
   let lastRecoveredMessage = hydrateRecoveredMessageState(turns, seenMessageIds)
   const stats = await stat(sessionPath)
   const startOffset = typeof options.startOffset === 'number'
     ? Math.max(0, Math.min(options.startOffset, stats.size))
-    : Math.max(0, stats.size - FALLBACK_READ_BYTE_LIMIT)
+    : options.fromStart === true
+      ? 0
+      : Math.max(0, stats.size - FALLBACK_READ_BYTE_LIMIT)
 
   const processLine = (line: string): void => {
     const trimmed = line.trim()
@@ -383,7 +399,7 @@ async function parseThreadReadFromSessionLogRange(
         seenMessageIds.add(message.id)
       }
       if (message.hidden && turns.length === 0) return
-      appendMessageTurn(turns, message)
+      if (appendMessageTurn(turns, message)) recoveredTurnCount += 1
       if (!message.hidden) {
         lastRecoveredMessage = {
           role: message.role,
@@ -443,6 +459,9 @@ async function parseThreadReadFromSessionLogRange(
 
   if (turns.length === 0) return null
   const title = readFallbackThreadTitle(fallbackThread, preview)
+  const knownOriginalTurnsCount = readNonNegativeInteger(fallbackThread.originalTurnsCount) ?? 0
+  const originalTurnsCount = Math.max(recoveredTurnCount, knownOriginalTurnsCount, turns.length)
+  const turnsStartIndex = Math.max(0, originalTurnsCount - turns.length)
 
   return {
     thread: {
@@ -459,6 +478,13 @@ async function parseThreadReadFromSessionLogRange(
       source,
       gitInfo: fallbackThread?.gitInfo ?? null,
       turns,
+      ...(turnsStartIndex > 0
+        ? {
+            turnsView: 'recent',
+            originalTurnsCount,
+            turnsStartIndex,
+          }
+        : {}),
     },
   }
 }
@@ -466,13 +492,15 @@ async function parseThreadReadFromSessionLogRange(
 export async function parseThreadReadFromSessionLog(
   sessionPath: string,
   fallbackThreadRead: unknown,
+  options: { fromStart?: boolean } = {},
 ): Promise<unknown | null> {
-  return parseThreadReadFromSessionLogRange(sessionPath, fallbackThreadRead)
+  return parseThreadReadFromSessionLogRange(sessionPath, fallbackThreadRead, options)
 }
 
 export async function readThreadReadFromSessionLog(
   sessionPath: string,
   fallbackThreadRead: unknown,
+  options: { fromStart?: boolean } = {},
 ): Promise<unknown | null> {
   const normalizedSessionPath = sessionPath.trim()
   if (!normalizedSessionPath) return null
@@ -481,11 +509,14 @@ export async function readThreadReadFromSessionLog(
     const stats = await stat(normalizedSessionPath)
     const fileSignature = getFileSignature(stats)
     const cached = sessionLogThreadReadCacheStateByPath.get(normalizedSessionPath)
-    if (cached?.fileSignature === fileSignature) return cached.threadRead
+    if (cached?.fileSignature === fileSignature && (options.fromStart !== true || cached.fullScan)) {
+      return cached.threadRead
+    }
 
     const appendedByteCount = cached ? stats.size - cached.fileSize : 0
     const canReadIncrementally = Boolean(
       cached?.incrementalReady &&
+      (options.fromStart !== true || cached.fullScan) &&
       cached.threadRead &&
       appendedByteCount > 0 &&
       appendedByteCount <= FALLBACK_READ_BYTE_LIMIT,
@@ -501,12 +532,13 @@ export async function readThreadReadFromSessionLog(
           startOffset: cached?.fileSize,
           seedTurns: true,
         })
-      : await parseThreadReadFromSessionLog(normalizedSessionPath, fallbackThreadRead)
+      : await parseThreadReadFromSessionLog(normalizedSessionPath, fallbackThreadRead, options)
     const incrementalReady = await doesFileEndWithNewline(normalizedSessionPath, stats.size)
     writeCacheState(normalizedSessionPath, {
       fileSignature,
       fileSize: stats.size,
       incrementalReady,
+      fullScan: options.fromStart === true || cached?.fullScan === true,
       threadRead,
     })
     return threadRead
@@ -515,6 +547,7 @@ export async function readThreadReadFromSessionLog(
       fileSignature: 'missing',
       fileSize: 0,
       incrementalReady: false,
+      fullScan: false,
       threadRead: null,
     })
     return null

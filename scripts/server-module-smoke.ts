@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { generateKeyPairSync } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createServer as createNodeHttpServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -444,6 +444,10 @@ import {
   LocalFileAccessError,
   resolveWorkspaceLocalPath,
 } from '../src/server/localFileAccessPolicy.js'
+import {
+  SessionAttachmentAccessError,
+  SessionAttachmentAccessStore,
+} from '../src/server/sessionAttachmentAccess.js'
 import { createServer as createHttpAppServer } from '../src/server/httpServer.js'
 import { handleWorkspaceMetaRoutes } from '../src/server/workspaceMetaRoutes.js'
 import {
@@ -565,6 +569,7 @@ try {
   await smokeAppServerRollbackGit()
   await smokeFileUpload()
   await smokeFileUploadRoute()
+  await smokeSessionAttachmentAccess()
   await smokeUploadedLocalFileRoutes()
   smokeHttpJsonResponse()
   smokeCodexBridgeRequestError()
@@ -1377,6 +1382,9 @@ function smokeAppServerInitialization(): void {
   const clientInfo = createAppServerClientInfo('2.2.7')
   assert.deepEqual(createAppServerInitializeParams(clientInfo), {
     clientInfo,
+    capabilities: {
+      experimentalApi: true,
+    },
   })
 
   assert.deepEqual(createAppServerInitializeParams(clientInfo, { experimentalApi: false }), {
@@ -1395,7 +1403,7 @@ function smokeAppServerInitialization(): void {
   }), {
     clientInfo,
     capabilities: {
-      experimentalApi: false,
+      experimentalApi: true,
       optOutNotificationMethods: ['thread/started', 'item/agentMessage/delta'],
     },
   })
@@ -4938,6 +4946,95 @@ async function smokeFileUploadRoute(): Promise<void> {
   ), false)
 }
 
+async function smokeSessionAttachmentAccess(): Promise<void> {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'cx-codex-session-image-source-'))
+  const uploadRoot = await mkdtemp(join(tmpdir(), 'cx-codex-session-image-cache-'))
+  const boundedUploadRoot = await mkdtemp(join(tmpdir(), 'cx-codex-session-image-bounded-cache-'))
+  const imagePath = join(tempRoot, 'codex-clipboard-a609cc73-60c9-496b-a884-87addcbc72b3.jpg')
+  const prefetchedImagePath = join(tempRoot, 'codex-clipboard-73175ea6-4e8e-400b-a804-f9d3b1359289.jpg')
+  const unrelatedPath = join(tempRoot, 'private-note.jpg')
+  const imageBytes = Buffer.from('session-image-bytes')
+  const prefetchedImageBytes = Buffer.from('prefetched-session-image-bytes')
+  const store = new SessionAttachmentAccessStore({ tempDir: tempRoot, uploadDir: uploadRoot })
+
+  try {
+    await writeFile(imagePath, imageBytes)
+    await writeFile(prefetchedImagePath, prefetchedImageBytes)
+    await writeFile(unrelatedPath, Buffer.from('not-authorized'))
+    await assert.rejects(
+      () => store.resolve(imagePath),
+      (error: unknown) => error instanceof SessionAttachmentAccessError && error.code === 'not-registered',
+    )
+
+    const remembered = store.rememberFromThreadRead({
+      thread: {
+        turns: [{
+          items: [{
+            type: 'userMessage',
+            content: [{ type: 'localImage', path: imagePath }],
+          }],
+        }],
+      },
+    })
+    assert.deepEqual(remembered, [imagePath])
+    const cachedPath = await store.resolve(imagePath)
+    assert.equal((await readFile(cachedPath)).toString('utf8'), imageBytes.toString('utf8'))
+    assert.notEqual(cachedPath, imagePath)
+
+    await rm(imagePath, { force: true })
+    assert.equal((await readFile(await store.resolve(imagePath))).toString('utf8'), imageBytes.toString('utf8'))
+    await store.cacheFromThreadRead({
+      thread: {
+        turns: [{ items: [{ type: 'localImage', path: prefetchedImagePath }] }],
+      },
+    })
+    await rm(prefetchedImagePath, { force: true })
+    assert.equal(
+      (await readFile(await store.resolve(prefetchedImagePath))).toString('utf8'),
+      prefetchedImageBytes.toString('utf8'),
+    )
+
+    const boundedPaths = [
+      'codex-clipboard-11111111-1111-4111-8111-111111111111.jpg',
+      'codex-clipboard-22222222-2222-4222-8222-222222222222.jpg',
+      'codex-clipboard-33333333-3333-4333-8333-333333333333.jpg',
+    ].map((name) => join(tempRoot, name))
+    await Promise.all(boundedPaths.map((candidatePath, index) => writeFile(candidatePath, `bounded-${String(index)}`)))
+    const boundedStore = new SessionAttachmentAccessStore({
+      tempDir: tempRoot,
+      uploadDir: boundedUploadRoot,
+      maxCacheEntries: 2,
+    })
+    await boundedStore.cacheFromThreadRead({
+      thread: {
+        turns: boundedPaths.map((path) => ({ items: [{ type: 'localImage', path }] })),
+      },
+    })
+    assert.equal((await readdir(join(boundedUploadRoot, 'session-attachments'))).length, 2)
+    await Promise.all(boundedPaths.map((candidatePath) => rm(candidatePath, { force: true })))
+    const boundedCacheHits = await Promise.all(boundedPaths.map(async (candidatePath) => {
+      try {
+        await boundedStore.resolve(candidatePath)
+        return true
+      } catch {
+        return false
+      }
+    }))
+    assert.equal(boundedCacheHits.filter(Boolean).length, 2)
+    assert.deepEqual(store.rememberFromThreadRead({
+      thread: { turns: [{ items: [{ type: 'localImage', path: unrelatedPath }] }] },
+    }), [])
+    await assert.rejects(
+      () => store.resolve(unrelatedPath),
+      (error: unknown) => error instanceof SessionAttachmentAccessError && error.code === 'not-registered',
+    )
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true })
+    await rm(uploadRoot, { recursive: true, force: true })
+    await rm(boundedUploadRoot, { recursive: true, force: true })
+  }
+}
+
 async function smokeUploadedLocalFileRoutes(): Promise<void> {
   const uploadRoot = await mkdtemp(join(tmpdir(), 'cx-codex-http-upload-'))
   const uploadDir = join(uploadRoot, 'f-route')
@@ -4945,6 +5042,7 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
   const textPath = join(uploadDir, 'note.txt')
   const outsideDir = await mkdtemp(join(tmpdir(), 'cx-codex-http-upload-outside-'))
   const outsidePath = join(outsideDir, 'secret.png')
+  const clipboardPath = join(outsideDir, 'codex-clipboard-c574ffab-0033-4dbd-aef7-09267e4e7a30.jpg')
   const escapedLink = join(uploadDir, 'escaped-link')
   const pngBytes = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
@@ -4955,7 +5053,18 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
   await writeFile(imagePath, pngBytes)
   await writeFile(textPath, 'uploaded note', 'utf8')
   await writeFile(outsidePath, pngBytes)
+  await writeFile(clipboardPath, pngBytes)
   await symlink(outsideDir, escapedLink, 'junction')
+
+  const sessionAttachmentStore = new SessionAttachmentAccessStore({
+    tempDir: outsideDir,
+    uploadDir: uploadRoot,
+  })
+  sessionAttachmentStore.rememberFromThreadRead({
+    thread: {
+      turns: [{ items: [{ type: 'localImage', path: clipboardPath }] }],
+    },
+  })
 
   const appServerOptions = {
     createBridgeMiddleware: () => Object.assign(
@@ -4975,7 +5084,8 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
       realpath,
       stat,
     }),
-    localFileRateLimit: { limit: 6, windowMs: 60_000 },
+    resolveSessionAttachmentPath: (candidatePath: string) => sessionAttachmentStore.resolve(candidatePath),
+    localFileRateLimit: { limit: 8, windowMs: 60_000 },
   }
   const appServer = createHttpAppServer(appServerOptions)
   const server = createNodeHttpServer(appServer.app)
@@ -5021,6 +5131,14 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
 
     const outsideResponse = await fetch(`${baseUrl}/codex-local-image?path=${encodeURIComponent(outsidePath)}`)
     assert.equal(outsideResponse.status, 403)
+
+    const clipboardResponse = await fetch(`${baseUrl}/codex-local-image?path=${encodeURIComponent(clipboardPath)}`)
+    assert.equal(clipboardResponse.status, 200)
+    assert.equal(Buffer.from(await clipboardResponse.arrayBuffer()).length, pngBytes.length)
+    await rm(clipboardPath, { force: true })
+    const cachedClipboardResponse = await fetch(`${baseUrl}/codex-local-image?path=${encodeURIComponent(clipboardPath)}`)
+    assert.equal(cachedClipboardResponse.status, 200)
+    assert.equal(Buffer.from(await cachedClipboardResponse.arrayBuffer()).length, pngBytes.length)
 
     const rateLimitedResponse = await fetch(`${baseUrl}/codex-local-image?path=${encodeURIComponent(imagePath)}`)
     assert.equal(rateLimitedResponse.status, 429)
@@ -5426,6 +5544,7 @@ function smokeCodexBridgeRuntimeOperations(): void {
       snapshot: () => snapshot,
       observeThreadRead: () => {},
       markDegraded: () => {},
+      markQueued: () => {},
       markStarting: () => {},
       markRunning: () => {},
       markStartUncertain: () => {},
@@ -5454,6 +5573,7 @@ function smokeCodexBridgeRuntimeOperations(): void {
   assert.equal(typeof operations.readCachedThreadTokenUsage, 'function')
   assert.equal(typeof operations.reconcileRuntimeThread, 'function')
   assert.equal(typeof operations.startRuntimeTurn, 'function')
+  assert.equal(typeof operations.startRuntimeTurnSettled, 'function')
   assert.equal(typeof operations.interruptRuntimeTurn, 'function')
   assert.equal(operations.persistRuntimeSnapshot('thread-ops'), snapshot)
   assert.equal(upsertedSnapshots.length, 1)
@@ -8524,6 +8644,7 @@ function smokeRuntimeStateStore(): void {
 
   store.markQueued('thread-a')
   assert.equal(isRuntimeActiveState(store.snapshot('thread-a').executionState), true)
+  assert.equal(store.snapshot('thread-a').canStop, false)
 
   store.observeEvent({
     method: 'turn/started',
@@ -9209,6 +9330,7 @@ async function smokeRuntimePendingStartRestartRecovery(): Promise<void> {
         throw new Error(`unexpected restart recovery method ${method}`)
       },
       clearThreadSearchIndex: () => {},
+      markQueued: () => {},
       markStarting: () => {},
       markRunning: () => {},
       markStartUncertain: () => {},
@@ -9430,6 +9552,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     const rpcCalls: Array<{ method: string; params: unknown }> = []
     const clearedThreadSearchIndexes: string[] = []
     const planModeTurns: Array<{ threadId: string; turnId?: string }> = []
+    const queuedRequests: RuntimeRequestRecord[] = []
     const dependencies: RuntimeStartDependencies = {
       createRequest: (record) => {
         created.push(record)
@@ -9473,6 +9596,9 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
       clearThreadSearchIndex: () => {
         clearedThreadSearchIndexes.push('clear')
       },
+      markQueued: (threadId) => {
+        marks.push({ action: 'queued', threadId })
+      },
       markStarting: (threadId) => {
         marks.push({ action: 'starting', threadId })
       },
@@ -9492,6 +9618,9 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
       markPlanModeTurn: (threadId, turnId = '') => {
         planModeTurns.push({ threadId, turnId })
       },
+      notifyQueuedRequest: (request) => {
+        queuedRequests.push(request)
+      },
       getErrorMessage,
     }
 
@@ -9503,6 +9632,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
       rpcCalls,
       clearedThreadSearchIndexes,
       planModeTurns,
+      queuedRequests,
       dependencies,
       seedRequest: (request: RuntimeRequestRecord) => {
         currentRequest = request
@@ -9662,6 +9792,50 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     },
   ])
   assert.equal(transportInterrupted.getCurrentRequest()?.status, 'start_uncertain')
+
+  const activeWriter = createHarness(async (method) => {
+    assert.equal(method, 'turn/start')
+    throw new Error('thread thread-active-writer already has an active writer')
+  })
+  const activeWriterResult = await startRuntimeTurnWithAppServer({
+    requestId: 'request-active-writer',
+    clientMessageId: 'client-active-writer',
+    threadId: 'thread-active-writer',
+    input: [{ type: 'text', text: 'Queue this follow-up without losing it' }],
+    queueMetadata: {
+      text: 'Queue this follow-up without losing it',
+      speedMode: 'fast',
+    },
+  }, activeWriter.dependencies)
+  assert.equal(activeWriterResult.status, 'queued')
+  assert.equal(activeWriter.getCurrentRequest()?.status, 'queued')
+  assert.match(
+    JSON.stringify(activeWriter.getCurrentRequest()?.payload),
+    /Queue this follow-up without losing it/,
+  )
+  assert.equal(activeWriter.marks.some((mark) => mark.action === 'failed'), false)
+  assert.deepEqual(activeWriter.marks, [
+    { action: 'starting', threadId: 'thread-active-writer' },
+    { action: 'running', threadId: 'thread-active-writer', turnId: '' },
+  ])
+  assert.equal(activeWriter.queuedRequests[0]?.requestId, 'request-active-writer')
+  assert.deepEqual(asRecord(asRecord(activeWriter.getCurrentRequest()?.payload)?.queueMetadata), {
+    text: 'Queue this follow-up without losing it',
+    speedMode: 'fast',
+  })
+
+  const activeWriterFactory = createHarness(async () => {
+    throw new Error('thread thread-active-writer-factory already has an active writer')
+  })
+  const factoryAccepted = await createAppServerRuntimeTurnStarter(activeWriterFactory.dependencies)({
+    requestId: 'request-active-writer-factory',
+    clientMessageId: 'client-active-writer-factory',
+    threadId: 'thread-active-writer-factory',
+    input: [{ type: 'text', text: 'Queue after early acceptance' }],
+  })
+  assert.equal(factoryAccepted.status, 'starting')
+  await waitForCondition(() => activeWriterFactory.getCurrentRequest()?.status === 'queued')
+  assert.equal(activeWriterFactory.queuedRequests[0]?.status, 'queued')
 
   const failed = createHarness(async () => {
     throw new Error('permission denied')
@@ -10118,6 +10292,9 @@ async function smokeAppServerRuntimeActions(): Promise<void> {
     },
     clearThreadSearchIndex: () => {
       clearedThreadSearchIndexes.push('clear')
+    },
+    markQueued: (threadId) => {
+      marks.push({ action: 'queued', threadId })
     },
     markStarting: (threadId) => {
       marks.push({ action: 'starting', threadId })

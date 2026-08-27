@@ -58,6 +58,7 @@ export class AppServerProcess {
   private nextId = 1
   private stopping = false
   private startedAtMs = 0
+  private activeCodexCommand = ''
   private lastRestartAtMs = 0
   private readonly stderrLogger = new AppServerStderrLogger()
   private readonly rpcDiagnostics = new AppServerRpcDiagnostics(
@@ -102,7 +103,8 @@ export class AppServerProcess {
 
     this.stopping = false
     this.startedAtMs = Date.now()
-    const invocation = getSpawnInvocation(this.getCodexCommand(), this.appServerArgs)
+    this.activeCodexCommand = this.getCodexCommand()
+    const invocation = getSpawnInvocation(this.activeCodexCommand, this.appServerArgs)
     const proc = spawn(invocation.command, invocation.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: process.platform === 'win32',
@@ -138,6 +140,7 @@ export class AppServerProcess {
         if (this.process === proc) {
           this.cleanupProcessRuntime(failure)
           this.process = null
+          this.activeCodexCommand = ''
           this.initialized = false
           this.initializePromise = null
           this.stdoutLineBuffer.clear()
@@ -260,6 +263,7 @@ export class AppServerProcess {
     })
 
     this.process = null
+    this.activeCodexCommand = ''
     this.initialized = false
     this.initializePromise = null
     this.stdoutLineBuffer.clear()
@@ -459,6 +463,8 @@ export class AppServerProcess {
       initialized: this.initialized,
       stopping: this.stopping,
       pid: this.process?.pid ?? null,
+      command: this.activeCodexCommand,
+      startedAtIso: this.startedAtMs > 0 ? new Date(this.startedAtMs).toISOString() : '',
       pendingRpcCount: this.pending.count,
       queuedRpcCount: this.rpcQueue.count,
       pendingServerRequestCount: this.serverRequests.pendingCount,
@@ -483,6 +489,7 @@ export class AppServerProcess {
     const proc = this.process
     this.stopping = true
     this.process = null
+    this.activeCodexCommand = ''
     this.initialized = false
     this.initializePromise = null
     this.stdoutLineBuffer.clear()

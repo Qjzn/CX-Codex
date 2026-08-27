@@ -11,6 +11,29 @@ type ThreadTurnWindowOptions = {
   limit?: number
 }
 
+export function annotateRecentThreadReadWithRecoveredHistory(
+  threadRead: unknown,
+  recoveredThreadRead: unknown,
+): unknown {
+  const record = asRecord(threadRead)
+  const thread = asRecord(record?.thread)
+  const turns = Array.isArray(thread?.turns) ? thread.turns : null
+  const recoveredThread = asRecord(asRecord(recoveredThreadRead)?.thread)
+  const recoveredTurns = Array.isArray(recoveredThread?.turns) ? recoveredThread.turns : null
+  if (!record || !thread || !turns || !recoveredTurns || recoveredTurns.length <= turns.length) return threadRead
+  if (typeof thread.turnsView === 'string' && thread.turnsView.trim()) return threadRead
+
+  return {
+    ...record,
+    thread: {
+      ...thread,
+      turnsView: 'recent',
+      originalTurnsCount: recoveredTurns.length,
+      turnsStartIndex: recoveredTurns.length - turns.length,
+    },
+  }
+}
+
 export function trimThreadTurnsInRpcResult(
   method: string,
   result: unknown,
@@ -24,7 +47,17 @@ export function trimThreadTurnsInRpcResult(
   const turns = Array.isArray(thread?.turns) ? thread.turns : null
   if (!record || !thread || !turns) return result
 
-  const window = selectTurnWindow(turns, options.turnWindow)
+  const existingStartIndex = readNonNegativeInteger(thread.turnsStartIndex) ?? 0
+  const existingOriginalTurnsCount = Math.max(
+    existingStartIndex + turns.length,
+    readNonNegativeInteger(thread.originalTurnsCount) ?? 0,
+  )
+  const window = selectTurnWindow(
+    turns,
+    options.turnWindow,
+    existingStartIndex,
+    existingOriginalTurnsCount,
+  )
   const trimmedTurns = window.turns.map(trimTurnItems)
   const didTrimTurns = window.turns.length !== turns.length || window.startIndex !== 0 || window.view !== ''
   const didTrimItems = trimmedTurns.some((turn, index) => turn !== window.turns[index])
@@ -38,7 +71,7 @@ export function trimThreadTurnsInRpcResult(
       ...(didTrimTurns
         ? {
             turnsView: window.view || 'recent',
-            originalTurnsCount: turns.length,
+            originalTurnsCount: window.originalTurnsCount,
             turnsStartIndex: window.startIndex,
           }
         : {}),
@@ -46,26 +79,35 @@ export function trimThreadTurnsInRpcResult(
   }
 }
 
-function selectTurnWindow(turns: unknown[], options?: ThreadTurnWindowOptions): { turns: unknown[]; startIndex: number; view: '' | 'recent' | 'older' } {
+function selectTurnWindow(
+  turns: unknown[],
+  options: ThreadTurnWindowOptions | undefined,
+  existingStartIndex: number,
+  originalTurnsCount: number,
+): { turns: unknown[]; startIndex: number; originalTurnsCount: number; view: '' | 'recent' | 'older' } {
   if (options?.view === 'older') {
     const limit = clampTurnLimit(options.limit)
-    const beforeTurnIndex = clampIndex(options.beforeTurnIndex, 0, turns.length)
-    const startIndex = Math.max(0, beforeTurnIndex - limit)
+    const availableEndIndex = existingStartIndex + turns.length
+    const beforeTurnIndex = clampIndex(options.beforeTurnIndex, existingStartIndex, availableEndIndex)
+    const startIndex = Math.max(existingStartIndex, beforeTurnIndex - limit)
     return {
-      turns: turns.slice(startIndex, beforeTurnIndex),
+      turns: turns.slice(startIndex - existingStartIndex, beforeTurnIndex - existingStartIndex),
       startIndex,
+      originalTurnsCount,
       view: 'older',
     }
   }
 
   if (turns.length <= THREAD_RESPONSE_TURN_LIMIT) {
-    return { turns, startIndex: 0, view: '' }
+    return { turns, startIndex: existingStartIndex, originalTurnsCount, view: '' }
   }
 
-  const startIndex = turns.length - THREAD_RESPONSE_TURN_LIMIT
+  const relativeStartIndex = turns.length - THREAD_RESPONSE_TURN_LIMIT
+  const startIndex = existingStartIndex + relativeStartIndex
   return {
-    turns: turns.slice(startIndex),
+    turns: turns.slice(relativeStartIndex),
     startIndex,
+    originalTurnsCount,
     view: 'recent',
   }
 }
@@ -80,6 +122,12 @@ function clampIndex(value: unknown, minValue: number, maxValue: number): number 
   return typeof value === 'number' && Number.isFinite(value)
     ? Math.max(minValue, Math.min(maxValue, Math.trunc(value)))
     : maxValue
+}
+
+function readNonNegativeInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : null
 }
 
 function trimTurnItems(turn: unknown): unknown {

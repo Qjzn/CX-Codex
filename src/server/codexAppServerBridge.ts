@@ -98,6 +98,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     reconcileRuntimeThread,
     runtimeReconcileScheduler,
     startRuntimeTurn,
+    startRuntimeTurnSettled,
     interruptRuntimeTurn,
   } = createCodexBridgeRuntimeOperations({
     appServer,
@@ -107,6 +108,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     threadSearchIndexStore,
     statusDiagnostics,
     getErrorMessage,
+    notifyQueuedRequest: (request) => runtimeMessageQueue?.notifyQueuedRequest(request),
     writeWarning: (message, details) => {
       writeBridgeLog('warn', message, details)
     },
@@ -150,7 +152,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
   })
   runtimeMessageQueue = new RuntimeMessageQueue({
     store: runtimeStore,
-    startRuntimeTurn,
+    startRuntimeTurn: startRuntimeTurnSettled,
     rpc: (method, params) => appServer.rpc(method, params),
     publishNotification: (notification) => { publishBridgeNotification(notification) },
     getErrorMessage,

@@ -109,6 +109,7 @@ import {
   areUiThreadFieldsEqual,
   dedupeProjectThreadGroups,
   orderProjectGroupsByRecentActivity,
+  preserveResolvedThreadProjectIdentity,
   upsertThreadIntoProjectGroups,
 } from '../utils/projectGroupOrdering'
 import { compactLatestReplyTail } from '../utils/latestReply'
@@ -1275,7 +1276,7 @@ function mergeThreadGroups(
   previous: UiProjectGroup[],
   incoming: UiProjectGroup[],
 ): UiProjectGroup[] {
-  const dedupedIncoming = dedupeProjectThreadGroups(incoming)
+  const dedupedIncoming = preserveResolvedThreadProjectIdentity(previous, incoming)
   const previousGroupsByName = new Map(previous.map((group) => [group.projectName, group]))
   const mergedGroups: UiProjectGroup[] = dedupedIncoming.map((incomingGroup) => {
     const previousGroup = previousGroupsByName.get(incomingGroup.projectName)
@@ -2312,6 +2313,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         imageUrls: pending.imageUrls,
         model: MODEL_FALLBACK_ID,
         effort: pending.effort || undefined,
+        speedMode: selectedSpeedMode.value,
         skills: pending.skills.length > 0 ? pending.skills : undefined,
         fileAttachments: pending.fileAttachments,
         collaborationMode: pending.collaborationMode,
@@ -2396,7 +2398,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     try {
       const [models, currentConfig] = await Promise.all([
         getAvailableModels(),
-        getCurrentModelConfig(),
+        getCurrentModelConfig().catch(() => null),
       ])
 
       const modelIds = models.map((model) => model.model)
@@ -2405,7 +2407,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
       const hasSelectedModel = selectedModelId.value.length > 0 && modelIds.includes(selectedModelId.value)
       if (!hasSelectedModel) {
-        if (currentConfig.model && modelIds.includes(currentConfig.model)) {
+        if (currentConfig?.model && modelIds.includes(currentConfig.model)) {
           selectedModelId.value = currentConfig.model
         } else if (models.length > 0) {
           selectedModelId.value = models.find((model) => model.isDefault)?.model ?? models[0]?.model ?? ''
@@ -2417,7 +2419,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
       if (
         !hasStoredSelectedReasoningEffort() &&
-        currentConfig.reasoningEffort &&
+        currentConfig?.reasoningEffort &&
         REASONING_EFFORT_OPTIONS.includes(currentConfig.reasoningEffort)
       ) {
         selectedReasoningEffort.value = currentConfig.reasoningEffort
@@ -2427,7 +2429,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         selectedReasoningEffort.value = compatibleEffort
         saveSelectedReasoningEffort(compatibleEffort)
       }
-      selectedSpeedMode.value = currentConfig.speedMode
+      if (currentConfig) selectedSpeedMode.value = currentConfig.speedMode
     } catch {
       // Keep chat UI usable even if model metadata is temporarily unavailable.
     }
@@ -4999,6 +5001,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     fileAttachments: FileAttachment[]
     modelId: string
     reasoningEffort: ReasoningEffort | ''
+    speedMode: SpeedMode
     collaborationMode: CollaborationMode
     turnOptions?: ComposerTurnOptions
     baselineMessageCount?: number
@@ -5016,6 +5019,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       fileAttachments: args.fileAttachments.map((file) => ({ ...file })),
       modelId: args.modelId.trim(),
       reasoningEffort: args.reasoningEffort,
+      speedMode: args.speedMode,
       collaborationMode: args.collaborationMode,
       turnOptions: cloneTurnOptions(args.turnOptions),
       baselineMatchCount: args.baselineMatchCount,
@@ -5607,6 +5611,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         if (recoveredThreadId && recoveredThreadId !== entry.threadId) {
           updateMessageOutboxEntry(entry.clientMessageId, { threadId: recoveredThreadId })
         }
+        if (recovered?.status === 'queued' && recoveredThreadId) {
+          await adoptRuntimeQueuedRequest(recoveredThreadId, recovered.requestId)
+          continue
+        }
         const shouldResumePersistedSend =
           (recovered?.status === 'pending_start' && !recoveredThreadId)
           || (!recovered && (entry.state === 'sending' || entry.state === 'waiting'))
@@ -5625,6 +5633,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
               imageUrls: entry.imageUrls,
               model: entry.modelId || undefined,
               effort: entry.reasoningEffort || undefined,
+              speedMode: entry.speedMode,
               skills: entry.skills.length > 0 ? entry.skills : undefined,
               fileAttachments: entry.fileAttachments,
               collaborationMode: entry.collaborationMode,
@@ -8405,6 +8414,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       fileAttachments,
       modelId: selectedModelId.value,
       reasoningEffort: selectedReasoningEffort.value,
+      speedMode: selectedSpeedMode.value,
       collaborationMode,
       turnOptions,
     }))
@@ -8606,6 +8616,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       fileAttachments,
       modelId: selectedModel,
       reasoningEffort: selectedReasoningEffort.value,
+      speedMode: selectedSpeedMode.value,
       collaborationMode,
       turnOptions,
     }))
@@ -8690,6 +8701,13 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           turnId: recovered.turnId || undefined,
           turnStarted: Boolean(recovered.turnId && !awaitingDeliveryConfirmation),
         })
+        if (recovered.status === 'queued') {
+          await adoptRuntimeQueuedRequest(recovered.threadId, recovered.requestId)
+          markThreadResumed(recovered.threadId)
+          pendingThreadsRefresh = true
+          scheduleEventSync(700)
+          return true
+        }
         shouldAutoScrollOnNextAgentEvent = true
         markActiveSyncBoost()
         setTurnSummaryForThread(recovered.threadId, null)
@@ -8768,6 +8786,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           imageUrls,
           model: selectedModel || undefined,
           effort: selectedReasoningEffort.value || undefined,
+          speedMode: selectedSpeedMode.value,
           skills: skills.length > 0 ? skills : undefined,
           fileAttachments,
           collaborationMode,
@@ -8802,6 +8821,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             fileAttachments,
             modelId: MODEL_FALLBACK_ID,
             reasoningEffort: selectedReasoningEffort.value,
+            speedMode: selectedSpeedMode.value,
             collaborationMode,
             turnOptions,
           }))
@@ -8814,6 +8834,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             imageUrls,
             model: MODEL_FALLBACK_ID,
             effort: selectedReasoningEffort.value || undefined,
+            speedMode: selectedSpeedMode.value,
             skills: skills.length > 0 ? skills : undefined,
             fileAttachments,
             collaborationMode,
@@ -8856,6 +8877,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           threadId: resultThreadId,
           turnId: runtimeResult.turnId,
         })
+      }
+      if (runtimeResult?.status === 'queued') {
+        await adoptRuntimeQueuedRequest(resultThreadId, runtimeResult.requestId)
+        markThreadResumed(resultThreadId)
+        pendingThreadsRefresh = true
+        scheduleEventSync(700)
+        isSendingMessage.value = false
+        void requestThreadTitleGeneration(resultThreadId, nextText, targetCwd || null)
+        return resultThreadId
       }
       if (runtimeResult && isRuntimeRequestAwaitingDeliveryConfirmation(runtimeResult.status)) {
         markOptimisticUserMessageConfirming(resultThreadId, optimisticMessageId)
@@ -8973,6 +9003,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         fileAttachments: normalizedFileAttachments,
         modelId,
         reasoningEffort,
+        speedMode: selectedSpeedMode.value,
         collaborationMode,
         turnOptions,
       }))
@@ -8994,7 +9025,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     try {
       let startedTurnId = ''
-      let runtimeStartStatus: 'running' | 'confirming' | '' = ''
+      let runtimeRequestId = ''
+      let runtimeStartStatus: 'queued' | 'running' | 'confirming' | '' = ''
       try {
         const runtimeResult = await startRuntimeTurnWithBoundedRecovery({
           threadId,
@@ -9002,6 +9034,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           imageUrls,
           model: modelId || undefined,
           effort: reasoningEffort || undefined,
+          speedMode: selectedSpeedMode.value,
           skills: skills.length > 0 ? skills : undefined,
           fileAttachments,
           collaborationMode,
@@ -9015,7 +9048,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           onRequestDispatched: runtimeOverrides.onRequestDispatched,
         })
         startedTurnId = runtimeResult.turnId
-        runtimeStartStatus = isRuntimeRequestAwaitingDeliveryConfirmation(runtimeResult.status) ? 'confirming' : 'running'
+        runtimeRequestId = runtimeResult.requestId
+        runtimeStartStatus = runtimeResult.status === 'queued'
+          ? 'queued'
+          : isRuntimeRequestAwaitingDeliveryConfirmation(runtimeResult.status) ? 'confirming' : 'running'
       } catch (unknownError) {
         if (modelId && modelId !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
           await applyFallbackModelSelection()
@@ -9030,6 +9066,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             fileAttachments: normalizedFileAttachments,
             modelId: MODEL_FALLBACK_ID,
             reasoningEffort,
+            speedMode: selectedSpeedMode.value,
             collaborationMode,
             turnOptions,
           }))
@@ -9051,6 +9088,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             imageUrls,
             model: MODEL_FALLBACK_ID,
             effort: reasoningEffort || undefined,
+            speedMode: selectedSpeedMode.value,
             skills: skills.length > 0 ? skills : undefined,
             fileAttachments,
             collaborationMode,
@@ -9064,12 +9102,19 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             onRequestDispatched: runtimeOverrides.onRequestDispatched,
           })
           startedTurnId = runtimeFallbackResult.turnId
-          runtimeStartStatus = isRuntimeRequestAwaitingDeliveryConfirmation(runtimeFallbackResult.status) ? 'confirming' : 'running'
+          runtimeRequestId = runtimeFallbackResult.requestId
+          runtimeStartStatus = runtimeFallbackResult.status === 'queued'
+            ? 'queued'
+            : isRuntimeRequestAwaitingDeliveryConfirmation(runtimeFallbackResult.status) ? 'confirming' : 'running'
         } else {
           throw unknownError
         }
       }
 
+      if (runtimeStartStatus === 'queued') {
+        await adoptRuntimeQueuedRequest(threadId, runtimeRequestId)
+        return
+      }
       if (runtimeStartStatus === 'confirming') {
         setRuntimeExecutionState(threadId, 'start_uncertain', { canStop: false })
         setTurnActivityForThread(threadId, {
@@ -9157,6 +9202,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         fileAttachments: queued.fileAttachments,
         modelId: queued.modelId,
         reasoningEffort: queued.reasoningEffort,
+        speedMode: queued.speedMode,
         collaborationMode: queued.collaborationMode,
         turnOptions: queued.turnOptions,
       }))
@@ -9182,6 +9228,32 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       threadId,
       queue.filter((message) => message.id !== queued.id),
     )
+  }
+
+  function demoteOptimisticMessageToQueue(threadId: string, requestId: string): boolean {
+    const queued = (queuedMessagesByThreadId.value[threadId] ?? [])
+      .find((message) => message.serverRequestId === requestId || message.id === requestId)
+    if (!queued) return false
+    const optimisticMessageId = findOptimisticMessageIdForOutbox(queued.clientMessageId, threadId)
+    if (optimisticMessageId) removeOptimisticUserMessage(threadId, optimisticMessageId)
+    clearPendingTurnRequest(threadId)
+    return true
+  }
+
+  async function adoptRuntimeQueuedRequest(threadId: string, requestId: string): Promise<void> {
+    setRuntimeExecutionState(threadId, 'queued', { canStop: false })
+    setThreadInProgress(threadId, true)
+    setTurnActivityForThread(threadId, {
+      reset: true,
+      label: '已排队',
+      details: ['当前任务结束后自动发送'],
+    })
+    try {
+      await syncRuntimeMessageQueue(threadId)
+      demoteOptimisticMessageToQueue(threadId, requestId)
+    } catch {
+      // The durable server queue remains authoritative and will replay its update.
+    }
   }
 
   async function interruptSelectedThreadTurn(source: RuntimeInterruptSource = 'unknown'): Promise<void> {
@@ -10147,7 +10219,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       if (threadId && requestId && action === 'starting') {
         promoteQueuedMessageToOptimistic(threadId, requestId)
       }
-      if (threadId) void syncRuntimeMessageQueue(threadId).catch(() => {})
+      if (threadId) {
+        void syncRuntimeMessageQueue(threadId)
+          .then(() => {
+            if (requestId && action === 'queued') {
+              demoteOptimisticMessageToQueue(threadId, requestId)
+            }
+          })
+          .catch(() => {})
+      }
     }
     if (notification.method === SKILLS_CHANGED_METHOD) {
       scheduleSkillsRefreshFromNotification()

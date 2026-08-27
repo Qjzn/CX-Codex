@@ -15,7 +15,7 @@ export type AppServerInitializeParams = {
   capabilities?: AppServerInitializeCapabilities
 }
 
-const APP_SERVER_EXPERIMENTAL_API_ENABLED = false
+const APP_SERVER_EXPERIMENTAL_API_ENABLED = true
 
 export function createAppServerInitializeParams(
   clientInfo: AppServerClientInfo,

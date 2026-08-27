@@ -1339,6 +1339,7 @@ export async function startRuntimeThreadTurn(args: {
   imageUrls?: string[]
   model?: string
   effort?: ReasoningEffort
+  speedMode?: SpeedMode
   skills?: Array<{ name: string; path: string }>
   fileAttachments?: FileAttachmentParam[]
   collaborationMode?: CollaborationMode
@@ -1354,6 +1355,17 @@ export async function startRuntimeThreadTurn(args: {
     collaborationMode: args.collaborationMode ?? 'execute',
     turnOptions: args.turnOptions,
     clientMessageId: args.clientMessageId ?? '',
+    queueMetadata: {
+      text: args.text,
+      imageUrls: args.imageUrls ?? [],
+      skills: args.skills ?? [],
+      fileAttachments,
+      modelId: args.model?.trim() ?? '',
+      reasoningEffort: args.effort ?? '',
+      speedMode: args.speedMode ?? 'standard',
+      collaborationMode: args.collaborationMode ?? 'execute',
+      turnOptions: args.turnOptions,
+    },
   }
   if (args.model?.trim()) body.model = args.model.trim()
   if (args.effort?.trim()) body.effort = args.effort.trim()

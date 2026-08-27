@@ -8,6 +8,7 @@ import {
   readThreadSessionPathFromThreadReadPayload,
   readThreadUpdatedAtIsoFromThreadReadPayload,
 } from './appServerThreadPayload.js'
+import { rememberSessionAttachmentPaths } from './sessionAttachmentAccess.js'
 
 export type CachedThreadRead = {
   threadRead: unknown
@@ -55,6 +56,7 @@ export class AppServerThreadReadCacheStore {
   }
 
   remember(threadId: string, threadRead: unknown, source: ThreadReadCacheSource = 'app-server'): CachedThreadRead {
+    rememberSessionAttachmentPaths(threadRead)
     const cachedThreadRead = createCachedThreadRead(threadRead, () => new Date().toISOString(), source)
     this.cachedByThreadId.set(threadId, cachedThreadRead)
     return cachedThreadRead

@@ -48,12 +48,14 @@ export type RuntimeStartDependencies = {
   getLatestRequestByClientMessageId(clientMessageId: string): RuntimeRequestRecord | null
   rpc(method: string, params: unknown): Promise<unknown>
   clearThreadSearchIndex(): void
+  markQueued(threadId: string): void
   markStarting(threadId: string): void
   markRunning(threadId: string, turnId?: string): void
   markStartUncertain(threadId: string, lastError?: string | null): void
   markFailed(threadId: string, lastError?: string | null): void
   persistRuntimeSnapshot(threadId: string): { activeTurnId: string }
   markPlanModeTurn(threadId: string, turnId?: string): void
+  notifyQueuedRequest?(request: RuntimeRequestRecord): void
   getErrorMessage(error: unknown, fallback: string): string
 }
 
@@ -120,6 +122,7 @@ async function startParsedRuntimeTurnWithAppServer(
   promptHash: string,
   dependencies: RuntimeStartDependencies,
 ): Promise<RuntimeStartResult> {
+  const durablePayload = createDurableRuntimeSendPayload(parsed)
   let threadId = parsed.threadId
   let requestId = parsed.requestId
   let shouldCreateRequest = true
@@ -153,7 +156,7 @@ async function startParsedRuntimeTurnWithAppServer(
       status: 'pending_start',
       promptHash,
       mode: parsed.mode,
-      payload: createDurableRuntimeSendPayload(parsed),
+      payload: durablePayload,
     })
     if (accepted.requestId !== requestId) {
       if (!runtimeRequestMatchesParsed(accepted, parsed, promptHash)) {
@@ -237,6 +240,32 @@ async function startParsedRuntimeTurnWithAppServer(
     }
 
     const lastError = dependencies.getErrorMessage(error, 'runtime send failed')
+    if (threadId && isActiveWriterConflict(lastError)) {
+      const request = dependencies.updateRequest(requestId, {
+        status: 'queued',
+        threadId,
+        lastError: null,
+        payload: durablePayload,
+      }) ?? dependencies.getRequest(requestId)
+      // The queue is orthogonal to the turn that already owns this thread.
+      // Keep the authoritative execution state running so a queued follow-up
+      // cannot replace or masquerade as the active desktop turn.
+      dependencies.markRunning(threadId)
+      dependencies.persistRuntimeSnapshot(threadId)
+      if (request) {
+        try {
+          dependencies.notifyQueuedRequest?.(request)
+        } catch {
+          // Queue persistence is authoritative; notification delivery is best-effort.
+        }
+      }
+      return {
+        request: request as RuntimeRequestRecord,
+        threadId,
+        turnId: '',
+        status: 'queued',
+      }
+    }
     dependencies.updateRequest(requestId, {
       status: 'failed',
       threadId,
@@ -249,6 +278,10 @@ async function startParsedRuntimeTurnWithAppServer(
     }
     throw error
   }
+}
+
+function isActiveWriterConflict(message: string): boolean {
+  return message.trim().toLowerCase().includes('already has an active writer')
 }
 
 function runtimeRequestMatchesParsed(

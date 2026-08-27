@@ -99,6 +99,83 @@ export function dedupeProjectThreadGroups(groups: UiProjectGroup[]): UiProjectGr
     ))
 }
 
+export function preserveResolvedThreadProjectIdentity(
+  previousGroups: UiProjectGroup[],
+  incomingGroups: UiProjectGroup[],
+): UiProjectGroup[] {
+  const previousWinnerByThreadId = new Map<string, ThreadOccurrence>()
+  previousGroups.forEach((group, groupIndex) => {
+    group.threads.forEach((thread, threadIndex) => {
+      const threadId = thread.id.trim()
+      if (!threadId) return
+      const candidate = { thread, groupProjectName: group.projectName, groupIndex, threadIndex }
+      const current = previousWinnerByThreadId.get(threadId)
+      if (
+        !current
+        || readThreadProjectIdentityScore(candidate.thread, candidate.groupProjectName)
+          > readThreadProjectIdentityScore(current.thread, current.groupProjectName)
+      ) {
+        previousWinnerByThreadId.set(threadId, candidate)
+      }
+    })
+  })
+
+  const dedupedIncoming = dedupeProjectThreadGroups(incomingGroups)
+  const originallyEmptyProjectNames = new Set(
+    dedupedIncoming.filter((group) => group.threads.length === 0).map((group) => group.projectName),
+  )
+  const nextGroups: UiProjectGroup[] = dedupedIncoming.map((group) => ({ ...group, threads: [] }))
+  const nextGroupIndexByName = new Map(nextGroups.map((group, index) => [group.projectName, index]))
+
+  function ensureTargetGroup(projectName: string): UiProjectGroup {
+    const existingIndex = nextGroupIndexByName.get(projectName)
+    if (existingIndex !== undefined) return nextGroups[existingIndex]!
+
+    const previousGroup = previousGroups.find((group) => group.projectName === projectName)
+    const nextGroup: UiProjectGroup = previousGroup
+      ? { ...previousGroup, threads: [] }
+      : { projectName, threads: [] }
+    nextGroupIndexByName.set(projectName, nextGroups.length)
+    nextGroups.push(nextGroup)
+    return nextGroup
+  }
+
+  dedupedIncoming.forEach((group, groupIndex) => {
+    group.threads.forEach((thread, threadIndex) => {
+      const incomingOccurrence: ThreadOccurrence = {
+        thread,
+        groupProjectName: group.projectName,
+        groupIndex,
+        threadIndex,
+      }
+      const previousOccurrence = previousWinnerByThreadId.get(thread.id.trim())
+      const previousIdentityWins = previousOccurrence !== undefined
+        && readThreadProjectIdentityScore(previousOccurrence.thread, previousOccurrence.groupProjectName)
+          > readThreadProjectIdentityScore(thread, group.projectName)
+      const winningOccurrence = previousIdentityWins ? previousOccurrence : incomingOccurrence
+      const targetProjectName = resolveOccurrenceProjectName(winningOccurrence)
+      const nextThread = previousIdentityWins
+        ? {
+            ...thread,
+            projectName: targetProjectName,
+            cwd: previousOccurrence.thread.cwd,
+            hasWorktree: previousOccurrence.thread.hasWorktree,
+            sourceKind: thread.sourceKind || previousOccurrence.thread.sourceKind,
+          }
+        : thread.projectName === targetProjectName
+          ? thread
+          : { ...thread, projectName: targetProjectName }
+      ensureTargetGroup(targetProjectName).threads.push(nextThread)
+    })
+  })
+
+  return nextGroups.filter((group) => (
+    group.threads.length > 0
+    || originallyEmptyProjectNames.has(group.projectName)
+    || shouldKeepEmptyProjectGroup(group)
+  ))
+}
+
 export function upsertThreadIntoProjectGroups(
   groups: UiProjectGroup[],
   incomingThread: UiThread,

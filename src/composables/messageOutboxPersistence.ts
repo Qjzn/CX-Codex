@@ -2,6 +2,7 @@ import type {
   CollaborationMode,
   ComposerTurnOptions,
   ReasoningEffort,
+  SpeedMode,
 } from '../types/codex'
 import { normalizeComposerTurnOptions } from './composerTurnOptions'
 import {
@@ -35,6 +36,7 @@ export type MessageOutboxEntry = {
   fileAttachments: MessageOutboxFileAttachment[]
   modelId: string
   reasoningEffort: ReasoningEffort | ''
+  speedMode: SpeedMode
   collaborationMode: CollaborationMode
   turnOptions?: ComposerTurnOptions
   baselineMatchCount?: number
@@ -110,6 +112,7 @@ function normalizeMessageOutboxEntry(value: unknown, nowMs: number): MessageOutb
     fileAttachments,
     modelId: typeof row.modelId === 'string' ? row.modelId.trim() : '',
     reasoningEffort,
+    speedMode: row.speedMode === 'fast' ? 'fast' : 'standard',
     collaborationMode: row.collaborationMode === 'plan' ? 'plan' : 'execute',
     turnOptions: normalizeComposerTurnOptions(row.turnOptions),
     baselineMatchCount: typeof row.baselineMatchCount === 'number' && Number.isFinite(row.baselineMatchCount)

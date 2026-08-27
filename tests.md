@@ -1,5 +1,73 @@
 # Tests
 
+## 7420 消息、图片、恢复与长线程稳定性（2026-08-27）
+
+### Expected behavior
+
+1. 新请求进入 `starting` 后，在收到该轮 `turn/started` 前出现的旧 `thread/status/changed: idle` 不得提前结束请求、释放线程租约或留下永久重试任务。
+2. 本机服务必须启动当前 Codex 桌面版的版本化 CLI；健康诊断需暴露实际命令和启动时间，且 pending、queued、server request、uncertain request 与线程租约能够收敛为 0。
+3. 上传图片必须能够立即通过受限本地图片接口按原始字节读取；缓存目录只作为只读上传根，不扩大为工作区权限。
+4. 同一稳定 `clientMessageId` 的并发重复发送只能形成一个请求；状态必须从 `pending_start` 进入 `running` 并最终完成，回复可精确验证，测试线程默认自动归档。
+5. 长线程首次只返回最近 10 个绝对轮次；“加载更早”按 `turnsStartIndex` 分页，不得把消息条数误当轮次数，也不得用信息更少的日志恢复结果覆盖 App Server 的完整结构化历史。
+
+### Reusable verification
+
+- `npm.cmd run verify:runtime-stability`：无模型单元探针，覆盖启动前旧 idle 竞态、截断历史元数据与绝对轮次分页。
+- `npm.cmd run test:7420:stability -- --image-path <existing-image>`：不发送模型请求，检查健康、Runtime 持久状态、事件流连续性、当前桌面 CLI、活动线程 ID 唯一性和图片上传后逐字节回读。
+- `npm.cmd run test:7420:roundtrip -- --with-image <existing-image>`：会消耗一次模型请求；并发提交同一 client ID，验证单请求收敛、状态生命周期、精确回复、图片输入与测试线程清理。
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -ThreadOnly -ThreadId <thread-id>`：真实 H5 验证首屏、缓存重开、前后台恢复；短线程允许无加载按钮，长线程连续两次按轮次加载旧历史。
+- `npm.cmd run test:7420:soak -- -DurationSeconds 45 -IntervalSeconds 5 -SkipPublic -OutputDir output\soak-7420-stability-final`：本轮 9/9 样本通过，最大 pending/queued/serverPending/uncertain 均为 0，RPC timeout、慢 thread/list、PID 变化、事件流变化或回退均为 0。
+
+### Evidence and rollback
+
+- 真实图片稳定性检查通过：上传 8 ms、回读 91 ms、99,795 字节完全一致。微信临时原图已被系统清理时曾按预期以 `ENOENT` 失败，改用存在的回归截图后通过。
+- 真实图片消息往返用时 7,730 ms，重复提交收敛为同一请求，状态为 `pending_start -> running -> completed`，精确回复通过并自动归档测试线程。
+- 45 轮问题线程 `019fdd59-ff7a-70a2-8739-8231febffac1` 首屏 1,660 ms 可用，连续旧历史分页、缓存重开 159 ms、前后台恢复 P95 777 ms 均通过；手机视口无横向溢出。截图位于 `C:\Users\SW\.codex\visualizations\2026\07\19\019f7cb2-c0b5-7b22-aff4-08391a58c764\7420-long-thread-20260827\thread-phone.png`。
+- 本机 CLI 更新前备份位于 `C:\Users\SW\AppData\Local\CX-Codex\backups\long-history-pre-20260827-0106`；更早完整稳定性备份位于 `C:\Users\SW\AppData\Local\CX-Codex\backups\stability-pre-20260827-0044`。回滚前必须再次确认无活动请求和线程租约，只恢复安装构建文件，不修改配置、认证、Runtime SQLite 或会话文件。
+
+## 真实会话顺序、项目归属与刷新占位（2026-08-10）
+
+### Expected behavior
+
+1. 新鲜 App Server 详情返回后，前端必须恢复 `turns -> items` 的权威顺序；实时合并留下的旧 DOM 顺序不得让 assistant 跑到对应 user 前面。
+2. 活动中的部分线程摘要可以更新标题、预览和进度，但不得用空 cwd / `unknown-project` 覆盖已经确认的会话项目归属。
+3. 直接刷新真实会话路由时，在会话详情尚未收敛前显示加载状态，不得短暂误报“空会话”；真实加载错误和真正的空会话仍保留各自状态。
+
+### Verification
+
+- 真实 7420 前端新建会话后连续发送两轮无工具精确回复探针，分别得到 `CX_FRONTEND_DIALOG_OK` 和 `CX_FRONTEND_FOLLOWUP_OK`；服务端 `thread/read` 始终为 `user, assistant, user, assistant`，但修复前浏览器稳定复现 `assistant, user, user, assistant`，同时把当前任务移动到 `unknown-project`，刷新初期还会误显“空会话”。
+- `verify:frontend-normalizers` 新增权威顺序恢复与已解析项目身份保护断言；旧消息合并实现按预期失败为 `item-agent-first` 先于 `item-user-first`，项目身份 helper 尚不存在时也按预期失败。实现后同一检查通过。
+- `npm.cmd run build:frontend` 与 `git diff --check` 通过；生产构建只保留既有大 chunk 提示。
+- 本机安装在零活动请求门禁下只更新前端并重启为 Server PID 40416 / App Server PID 9716；安装入口与源码构建哈希一致，全局 Codex 配置哈希保持不变，旧前端保存在 `C:\Users\SW\AppData\Local\CX-Codex\backups\dialog-order-pre-20260810-2248`。
+- 同一真实会话第三轮精确得到 `CX_FRONTEND_ORDER_FIXED_OK`，App Server 记录 8007 ms 完成且无错误。桌面与 393 x 852 手机 DOM 均为 `user, assistant, user, assistant, user, assistant`，当前任务位于 `codexui（16 个会话）`，刷新前后均无 `unknown-project`、误导“空会话”、横向溢出或浏览器错误。
+- 独立 Headless Playwright 使用全新 Chrome 上下文再次验证三轮顺序、精确终态、整个加载周期未出现“当前会话还没有消息”、一个主地标、零横向溢出、零 page/console error；截图位于 `C:\Users\SW\.codex\visualizations\2026\08\10\019feab6-8af6-7742-b255-9de639b480fe\7420-dialog-test\19-headless-playwright-dialog.png`。
+
+### Rollback
+
+- 仅回退 `conversationProjection.ts` 的权威顺序恢复、`projectGroupOrdering.ts` / `useDesktopState.ts` 的项目身份保护、`App.vue` 的路由加载占位和对应断言。不得删除会话、Runtime 数据或修改全局 Codex 配置。
+
+## 当前 Codex 桌面 CLI 兼容与持续目标恢复（2026-08-10）
+
+### Expected behavior
+
+1. 本机 CX-Codex 配置不得继续固定到已经过期的 `C:\Users\SW\.local\bin\codex.exe`；未显式指定命令时由现有 Windows 发现逻辑选择当前 Codex 桌面版的可运行版本化 CLI。
+2. App Server 初始化默认声明 `experimentalApi: true`，使 `thread/goal/get` 与当前 Codex 桌面版保持同一能力边界；显式传入 `experimentalApi: false` 时仍必须尊重调用方覆盖。
+3. `config/read` 暂时失败不能连带清空已经成功取得的 `model/list`，模型选择器应继续显示可用模型，并只跳过当前配置的默认值同步。
+4. 修复后的 7420 会话页不得再显示原始配置解析错误、`thread/goal/get requires experimentalApi capability` 或已经结束任务的残留“思考中”；全局 Codex 配置不属于本轮写入范围。
+
+### Verification
+
+- 旧 CLI `0.130.0` 的隔离探针稳定复现 `config/read` 对当前 `service_tier` 的解析失败，以及未声明实验能力时的 `thread/goal/get` 拒绝；当前桌面版本化 CLI `0.147.0-alpha.6.5` 在 `experimentalApi: true` 下通过 `config/read`、`skills/list`、`model/list` 和 `thread/goal/get`。
+- 先更新 server module 断言，`npm.cmd run verify:server-modules` 按预期在旧默认值处失败；实现后同一命令通过，并保留显式 `experimentalApi: false` 的覆盖用例。
+- 本机安装重启后，App Server 的实际命令来自 Codex 桌面版本化目录；健康诊断显示 initialized，pending RPC、queued RPC、待处理 server request、活动 plan turn 和 uncertain Runtime request 均为 0。
+- `npm.cmd run build:frontend`、`npm.cmd run verify:frontend-normalizers` 与 `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420` 通过。独立 Headless Playwright 的 HomeOnly 回归匹配 7 个实时模型、最低文字对比度 4.54、无横向溢出，截图位于 `output/regression-7420/runtime-goal-fix-20260810/home-desktop.png`。
+- 真实浏览器覆盖当前会话、模型面板、Skills、运行诊断，以及 1440 x 900 和 393 x 852 会话视口；页面无浏览器错误、无横向溢出，配置错误、目标能力错误和残留“思考中”均不存在。
+
+### Rollback
+
+- CX-Codex 本机配置备份为 `C:\Users\SW\.cx-codex\backups\config.pre-runtime-auto-20260810-2207.json`；安装目录的 App Server 初始化源码和旧 `dist-cli` 备份为 `C:\Users\SW\AppData\Local\CX-Codex\backups\runtime-goal-pre-20260810-2209`。
+- 回滚前先确认 7420 无活动请求并精确停止当前 PID 树，再恢复上述 CX-Codex 配置和安装文件。不得替换 `C:\Users\SW\.codex\config.toml`、认证文件、Runtime SQLite 或工作区数据。
+
 ## 2.8.0 本地候选身份与前端构建可复现（2026-08-08）
 
 ### Expected behavior
@@ -16339,6 +16407,64 @@ Rollback:
 ### Rollback
 
 - 回退本节对应的消息投影、内部上下文过滤、Runtime thread status 解析及其回归。不要删除会话、Runtime SQLite、上传缓存或用户配置。
+
+## Android 跟进消息遇到活动写入者时自动排队（2026-08-27）
+
+### Expected behavior
+
+1. 移动端状态刚好过期、`turn/start` 返回 `thread ... already has an active writer` 时，同一个 `clientMessageId` 必须保留正文并原子转为持久队列，不能标成发送失败。
+2. 普通权限、参数或业务错误仍进入失败状态；不能用自动排队掩盖真正不可恢复的错误。
+3. 当前页面收到自动排队通知后，只保留一个消息所有者：撤下即时发送气泡，显示“已排队 / 当前任务结束后自动发送”；Runtime 快照仍保持原有桌面任务为 `running`，不得被覆写成 `queued`。
+4. 排队请求必须保留文字、附件、模型、推理强度和速度模式元数据；页面重载或 Android WebView 恢复后仍能给出可理解的排队反馈。
+
+### Verification
+
+- 本机 Runtime SQLite 的失败记录确认只有一个请求和一个 `clientMessageId`，最终错误为 `already has an active writer`；排除重复点击或重复重放。
+- 隔离工作树先加入同错误的失败用例；修改前 `npm.cmd run verify:server-modules` 在该错误处退出 1，修改后通过，并覆盖直接调用、生产 early-accept starter、正文/队列元数据保留、排队通知以及普通权限错误仍失败。
+- 回归额外断言 active-writer 分支的状态序列为 `starting -> running`，队列卡片与 Runtime 执行状态分离；任何 `queued` 快照也不允许暴露全局停止操作。
+- 当前工作树的 `npm.cmd run verify:server-modules`、`npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:runtime-stability` 和 `npm.cmd run test:7420:frontend -- -SourceOnly` 均通过；生产构建只保留既有的大 chunk 提示。
+- 独立端口 `127.0.0.1:17434`、独立 Runtime SQLite 的候选服务对当前真实任务发送唯一探针：HTTP 先以 `starting` 接收，App Server 随后真实返回 `already has an active writer`，同一请求收敛为 `queued`，正文、速度模式和 `clientMessageId` 均保留；测试队列立即取消并最终记录为 `interrupted`，探针未执行，现有 7420 未重启。
+- 先前获得授权的本机 7420 原子更新及生产排队探针已通过；本节新增的状态分离修复仍必须在新候选构建上重新验收，不复用旧 PID、流 ID 或备份路径作为当前证据。
+- `npm.cmd run test:7420:frontend -- -SourceOnly` 通过全部前端源码契约；既有完整回归在本地预览场景因生产 7420 不允许读取隔离工作树而退出，所以仍需要更新后的 7420 和 Android 真机复核。
+
+### Rollback
+
+- 回退 active-writer 分类、Runtime queued 回调、即时发送的 queue metadata、队列重试通知顺序和前端排队接管；无需删除 Runtime SQLite、用户会话、上传缓存或配置。已进入队列的消息可继续由既有 Runtime 队列处理。
+
+## Android 发送恢复保持速度模式（2026-08-27）
+
+### Expected behavior
+
+1. 每条未确认发送记录必须持久化本次提交的 `speedMode`，页面切换、WebView 恢复或后台重试时使用该记录的模式，不得改用当前界面选中值。
+2. 历史出站箱数据缺少字段或包含未知值时必须安全规范化为 `standard`，不破坏旧数据恢复。
+
+### Verification
+
+- `npm.cmd run verify:frontend-normalizers` 先在快速模式丢失断言上稳定失败；持久化字段与恢复路径修复后通过，并覆盖 `fast` 保留和非法值回落 `standard`。
+
+### Rollback
+
+- 回退出站箱 `speedMode` 字段及恢复时的记录选择；不清理用户已有出站箱数据。
+
+## Android 读取 Codex 桌面临时图片附件（2026-08-27）
+
+### Expected behavior
+
+1. 只有已出现在 `thread/read` 结果中的 `AppData\\Local\\Temp\\codex-clipboard-<UUID>.<image>` 才能经受限图片接口读取；未登记 UUID、普通临时文件、工作区外任意路径和目录穿越仍返回 403。
+2. `thread/read` 返回前必须立即把已登记图片的原始字节镜像到 CX-Codex 上传缓存；即使桌面临时源在手机首次 GET 前已清理，同一路径仍能从镜像读取。
+3. 镜像必须受既有单文件大小上限和 1024 个缓存项上限约束，并在返回前再次校验真实路径位于上传缓存内；不能因为兼容桌面附件而开放整个系统临时目录。
+
+### Verification
+
+- 修复前，截图对应的 `<system-temp>\\codex-clipboard-<uuid>.jpg` 源文件仍存在，但生产 7420 的 `/codex-local-image` 稳定返回 403，确认不是图片损坏或网络超时。
+- `npm.cmd run verify:server-modules` 新增登记前拒绝、`thread/read` 响应前预取、预取后先删除临时源再首次读取、缓存字节一致、普通临时图片拒绝及 HTTP 路由测试；另用 2 项上限夹具确认第 3 项写入后只保留 2 个镜像。
+- 独立 17434 候选读取当前真实任务后，同一图片返回 `200 image/jpeg`，响应 449,274 字节且 SHA-256 与源文件一致；未登记的伪 UUID 图片和 `C:\Windows\win.ini` 均保持 403。候选验证未重启生产 7420。
+- 本机 7420 更新后再次读取同一真实任务和图片：生产接口返回 `200 image/jpeg`、449,274 字节且 SHA-256 一致，`C:\Windows\win.ini` 仍为 403。`npm.cmd run test:7420:stability -- --image-path <same-image>` 全部通过，真实首页浏览器冒烟匹配 7 个实时模型、最低文字对比度 4.54、无横向溢出。
+
+### Rollback
+
+- 回退会话附件登记、受限缓存镜像和本地图片路由的第三授权来源；不修改工作区授权或普通上传缓存授权。已生成的镜像是只读缓存，可保留，也可在确认目标位于 `codex-web-uploads\\session-attachments` 后单独清理。
+
 ## Windows 计划任务安全运行时
 
 1. 登录启动任务和 watchdog 必须通过 PowerShell ScheduledTasks API 注册到当前用户，使用 `Interactive` 登录类型和 `Limited` 运行级别，不再请求最高权限。
