@@ -408,6 +408,7 @@ import {
   type QuickTunnelSnapshot,
 } from '../src/server/quickTunnel.js'
 import { readTailscaleFunnelPublicUrl } from '../src/server/tailscaleFunnel.js'
+import { isTryCloudflarePublicUrl } from '../src/server/tunnelStatus.js'
 import { handleStatusRoutes } from '../src/server/statusRoutes.js'
 import { handleLocalStateRoutes } from '../src/server/localStateRoutes.js'
 import {
@@ -4956,7 +4957,7 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
   await writeFile(outsidePath, pngBytes)
   await symlink(outsideDir, escapedLink, 'junction')
 
-  const appServer = createHttpAppServer({
+  const appServerOptions = {
     createBridgeMiddleware: () => Object.assign(
       async (_req: unknown, _res: unknown, next: () => void) => { next() },
       {
@@ -4974,7 +4975,9 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
       realpath,
       stat,
     }),
-  })
+    localFileRateLimit: { limit: 6, windowMs: 60_000 },
+  }
+  const appServer = createHttpAppServer(appServerOptions)
   const server = createNodeHttpServer(appServer.app)
 
   try {
@@ -5018,6 +5021,10 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
 
     const outsideResponse = await fetch(`${baseUrl}/codex-local-image?path=${encodeURIComponent(outsidePath)}`)
     assert.equal(outsideResponse.status, 403)
+
+    const rateLimitedResponse = await fetch(`${baseUrl}/codex-local-image?path=${encodeURIComponent(imagePath)}`)
+    assert.equal(rateLimitedResponse.status, 429)
+    assert.deepEqual(await rateLimitedResponse.json(), { error: '本地文件请求过于频繁，请稍后重试。' })
 
     await assert.rejects(
       () => resolveUploadedFilePath(join(escapedLink, 'secret.png'), { uploadDir: uploadRoot, realpath, stat }),
@@ -5930,6 +5937,7 @@ async function smokeGithubTrending(): Promise<void> {
   )
 
   assert.equal(decodeHtmlEntities('A &amp; B &lt;tag&gt; &quot;x&quot; &#39;y&#39; &#x2F;'), 'A & B <tag> "x" \'y\' /')
+  assert.equal(decodeHtmlEntities('&amp;lt;script&amp;gt;'), '&lt;script&gt;')
   assert.equal(stripHtml('<p> A&nbsp; <strong>&amp;</strong> B </p>').includes('&'), true)
   assert.equal(normalizeGithubDescriptionTranslationText('  hello\n world  '), 'hello world')
   assert.equal(shouldTranslateGithubDescription('hello world'), true)
@@ -7672,6 +7680,9 @@ async function smokeStatusRoutes(): Promise<void> {
     },
     AllowFunnel: { 'private.example.ts.net:8443': true },
   }), 7420), '')
+  assert.equal(isTryCloudflarePublicUrl('https://demo.trycloudflare.com'), true)
+  assert.equal(isTryCloudflarePublicUrl('https://demo.trycloudflare.com.evil.example'), false)
+  assert.equal(isTryCloudflarePublicUrl('https://trycloudflare.com'), false)
 
   const desktopStatus = {
     available: true,
@@ -7848,9 +7859,7 @@ async function smokeStatusRoutes(): Promise<void> {
   ), true)
   assert.deepEqual(tunnelUpdates, [{
     enabled: false,
-    cloudflaredCommand: ' C:\\tools\\cloudflared.exe ',
     preferredMode: undefined,
-    tailscaleCommand: undefined,
   }])
   assert.deepEqual(JSON.parse(tunnelUpdateResponse.body), { data: tunnelStatus })
 
@@ -7863,9 +7872,7 @@ async function smokeStatusRoutes(): Promise<void> {
   ), true)
   assert.deepEqual(tunnelUpdates[1], {
     enabled: null,
-    cloudflaredCommand: undefined,
     preferredMode: undefined,
-    tailscaleCommand: undefined,
   })
   assert.deepEqual(JSON.parse(invalidTunnelUpdateResponse.body), { data: tunnelStatus })
 
@@ -7878,7 +7885,7 @@ async function smokeStatusRoutes(): Promise<void> {
   ), true)
   assert.deepEqual(tunnelStarts, [{
     localPort: 7420,
-    preferredCommand: 'C:\\tools\\cloudflared.exe',
+    preferredCommand: 'cloudflared',
   }])
   assert.deepEqual(tunnelUpdates[2], {
     enabled: true,

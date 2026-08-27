@@ -54,3 +54,17 @@
 ## 两小时浸泡完成后的复核
 
 2026-08-08 09:28 +08:00 再次通过已认证 GitHub REST API 只读核验：`main` 仍返回 `Branch not protected`，仓库 ruleset 数为 0；Dependabot alerts 仍处于 disabled，security updates 为 disabled；私密漏洞报告仍为 `enabled: false`；Secret Scanning alert #1 仍为 `open` 且没有 resolution。Secret scanning 与 push protection 保持 enabled。此次复核没有修改仓库设置、告警、分支、Issue 或 Release。
+
+## 2026-08-27 授权执行结果
+
+仓库管理员已明确授权处理 GitHub 运营与安全待办，本节取代上文“待授权”的当前状态，但保留 2026-08-08 快照作为历史证据。
+
+- `main` 与 `beta` 已启用分支保护：`build` 与 `windows-bootstrap-smoke` 必须通过且分支必须最新；合并前要求解决对话；管理员同样受保护；禁止 force push 和删除分支。
+- Dependabot alerts、security updates、Private vulnerability reporting 已启用；常规 npm 与 GitHub Actions 更新的目标分支改为 `beta`。
+- GitHub CodeQL 默认扫描已配置为 JavaScript/TypeScript；首次分析由 GitHub Actions 执行。
+- 首次 CodeQL 分析成功并产生 33 条基线告警。测试断言、密码轮换指纹、错误分类字符串和仅由本地管理员控制的进程命令已逐条带理由分类；远程命令选择、文件路由限流、单层实体解码和 trycloudflare hostname 校验进入代码修复，旧 `main` 的绝对路径读写告警由 `beta` 已验证的 workspace/upload realpath 授权边界处理。
+- 已开启自动合并、PR 分支更新和合并后删除分支；空 Wiki 已关闭，7 条已进入 `main` 历史的陈旧远端分支已删除。
+- 启用告警后发现默认分支 4 条依赖告警。DOMPurify、PDF.js、PostCSS 由独立安全 PR 修复；esbuild 的根依赖已修复，但 `tsup` 仍解析到旧的嵌套版本，需用已在 `beta` 验证的 npm override 收敛后复核告警。
+- Secret Scanning alert #1 仍保持 open：当前 `main`、`beta` 及本轮候选均未检出 Google API Key 模式，但 alert 标记为 publicly leaked、validity unknown。由于没有 Google Cloud / Firebase 侧的撤销或限制证据，不能诚实地标记为 revoked 或 false positive。
+
+因此，仓库设置类外部门槛已完成；M1 只保留历史凭据处置这个凭据所有者阻塞项。任何后续结论仍不得把“源码已删除”替代为“凭据已撤销”。

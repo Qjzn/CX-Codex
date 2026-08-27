@@ -16365,3 +16365,23 @@ Verification:
 - Run `npm.cmd run verify:windows-productization` without changing the machine's real CX-Codex service or scheduled tasks.
 - Run `npm.cmd run verify:release -- -SkipBuild -SkipCliSmoke` after existing build output is available and confirm npm package smoke includes only the two required runtime scripts.
 - Parse `scripts/manage-windows-service.ps1`, confirm changed files are UTF-8 without BOM, and inspect `git diff --check`.
+
+## GitHub CodeQL 首次基线加固（2026-08-27）
+
+### Expected behavior
+
+1. 远程 `/codex-api/tunnel-status` 请求不得写入或直接选择 `cloudflared` / `tailscale` 可执行路径；只能使用服务所有者通过本地 CLI、环境或配置文件建立的当前命令。
+2. `/codex-local-image`、`/codex-local-file`、`/codex-local-browse` 与 `/codex-local-edit` 必须共享独立速率预算；超限返回 `429` 和稳定 JSON，不继续访问文件系统。
+3. GitHub Trending 实体解码每次只解一层，`&amp;lt;script&amp;gt;` 不得在同一轮变成 `<script>`。
+4. 从日志回退识别 trycloudflare 地址时必须解析完整 HTTPS hostname；包含 `.trycloudflare.com` 子串的攻击者域名不得被接受。
+
+### Verification
+
+- `npm.cmd run verify:server-modules` 先分别在“第 7 个文件请求仍返回 200”“请求体命令仍写入配置”“双层实体被解为标签”处稳定失败；修复后同一命令通过。
+- 回归同时断言合法 `https://demo.trycloudflare.com` 被接受，`https://demo.trycloudflare.com.evil.example` 与根域名被拒绝。
+- 运行 `npm.cmd run verify:dependency-security`，新增 `express-rate-limit` 后官方 npm registry 审计必须保持 0 漏洞。
+- 运行 `npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:governance` 与 `git diff --check`。
+
+### Rollback
+
+- 回退本节对应的 tunnel 命令信任边界、文件路由限流、单层实体解码、域名解析及回归。不要关闭 GitHub CodeQL、Dependabot、分支保护或私密漏洞报告。
