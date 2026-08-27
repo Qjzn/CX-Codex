@@ -16061,6 +16061,19 @@ Current evidence:
 - The local Android delivery build uses version `2.7.5` / code `20705`, bundles the same frontend `index.html` hash as `dist`, passes release signature and zip-alignment verification, and matches the signing certificate of the public `v2.7.4` APK so it can be installed as an in-place upgrade.
 - No Android device was connected during implementation, so physical process-death verification is still required before publishing an APK.
 
+## Release ZIP 运行时完整性校验
+
+1. `verify-release-artifacts.ps1` 必须直接打开每个 Release ZIP，不能只验证外部 SHA-256 文件。
+2. ZIP 必须包含 `package.json`、`vite.config.ts` 和 `vite.local-preview.config.ts`。
+3. ZIP 内 `package.json.files` 声明的每个文件必须精确存在；声明的每个目录必须至少包含一个条目。
+4. APK 继续只执行 checksum 验证，不按 ZIP 结构解析。
+
+Verification:
+
+- 生成本地 Release smoke 构件后运行 `npm.cmd run verify:release-artifacts -- -OutputDir <目录>`，确认 checksum 和 ZIP 运行时契约均通过。
+- 从 ZIP 中移除一个必需配置、npm 文件或 npm 目录内容，重新生成匹配 checksum，确认校验器仍以稳定的缺失条目信息失败。
+- 解析 PowerShell 脚本，检查 UTF-8 无 BOM，并运行 `git diff --check`。
+
 ## CX-Codex 2.7.4 release-package completeness (2026-08-04)
 
 1. `scripts/package-release.ps1` must treat both `vite.config.ts` and `vite.local-preview.config.ts` as required Release ZIP inputs because `npm run build:frontend` executes both configurations.
@@ -16451,3 +16464,50 @@ Rollback:
 ### Rollback
 
 - 回退会话附件登记、受限缓存镜像和本地图片路由的第三授权来源；不修改工作区授权或普通上传缓存授权。已生成的镜像是只读缓存，可保留，也可在确认目标位于 `codex-web-uploads\\session-attachments` 后单独清理。
+
+## Windows 计划任务安全运行时
+
+1. 登录启动任务和 watchdog 必须通过 PowerShell ScheduledTasks API 注册到当前用户，使用 `Interactive` 登录类型和 `Limited` 运行级别，不再请求最高权限。
+2. 登录启动动作必须通过 `wscript.exe //B //NoLogo scripts/run-hidden-command.vbs` 启动绝对路径的 `cmd.exe /d /c`；watchdog 必须通过对应的 `run-hidden-powershell.vbs` 启动。
+3. 两个 VBS 运行器必须验证目标文件存在，正确转义带空格、引号和尾部反斜杠的参数，隐藏窗口并把子进程退出码返回给计划任务。
+4. Release ZIP 必须包含两个运行器；缺少任一文件时发布校验应失败。
+
+Verification:
+
+- Run `npm.cmd run verify:windows-productization` without registering or changing the machine's real CX-Codex scheduled tasks.
+- Run `npm.cmd run verify:release -- -SkipBuild -SkipCliSmoke` after existing build output is available to exercise the Release ZIP manifest.
+- Confirm the changed files are UTF-8 without BOM and inspect the PowerShell diff for intact task arguments.
+## Windows 服务管理 CLI
+
+1. `cx-codex service start|stop|restart|status|enable|disable` 必须接受 `--port`、`--config`、`--launcher`、`--task-name`、`--watchdog-task-name` 和 `--json`，且不得改变根服务命令的既有参数。
+2. `start`、`stop` 和 `restart` 只管理与显式配置或 launcher 匹配的进程树；`stop` 不禁用任务，`start` 不启用任务，`restart` 不改变任何任务状态。
+3. `enable` 和 `disable` 只修改已存在的登录启动与 watchdog 任务，不启动或停止服务进程；任务名必须精确匹配。
+4. `status` 只读；服务未运行、资源缺失或 PID 标记过期应作为状态返回。非托管进程占用目标端口时，进程控制命令必须以稳定错误码拒绝操作。
+5. `--json` 成功和失败均只输出一个结构稳定的 JSON 对象；npm 包必须显式包含 PowerShell 运行器和服务管理脚本。
+
+Verification:
+
+- Run `npm.cmd run build:cli` and inspect `cx-codex service --help` plus each subcommand help entry.
+- Run `npm.cmd run verify:windows-productization` without changing the machine's real CX-Codex service or scheduled tasks.
+- Run `npm.cmd run verify:release -- -SkipBuild -SkipCliSmoke` after existing build output is available and confirm npm package smoke includes only the two required runtime scripts.
+- Parse `scripts/manage-windows-service.ps1`, confirm changed files are UTF-8 without BOM, and inspect `git diff --check`.
+
+## GitHub CodeQL 首次基线加固（2026-08-27）
+
+### Expected behavior
+
+1. 远程 `/codex-api/tunnel-status` 请求不得写入或直接选择 `cloudflared` / `tailscale` 可执行路径；只能使用服务所有者通过本地 CLI、环境或配置文件建立的当前命令。
+2. `/codex-local-image`、`/codex-local-file`、`/codex-local-browse` 与 `/codex-local-edit` 必须共享独立速率预算；超限返回 `429` 和稳定 JSON，不继续访问文件系统。
+3. GitHub Trending 实体解码每次只解一层，`&amp;lt;script&amp;gt;` 不得在同一轮变成 `<script>`。
+4. 从日志回退识别 trycloudflare 地址时必须解析完整 HTTPS hostname；包含 `.trycloudflare.com` 子串的攻击者域名不得被接受。
+
+### Verification
+
+- `npm.cmd run verify:server-modules` 先分别在“第 7 个文件请求仍返回 200”“请求体命令仍写入配置”“双层实体被解为标签”处稳定失败；修复后同一命令通过。
+- 回归同时断言合法 `https://demo.trycloudflare.com` 被接受，`https://demo.trycloudflare.com.evil.example` 与根域名被拒绝。
+- 运行 `npm.cmd run verify:dependency-security`，新增 `express-rate-limit` 后官方 npm registry 审计必须保持 0 漏洞。
+- 运行 `npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:governance` 与 `git diff --check`。
+
+### Rollback
+
+- 回退本节对应的 tunnel 命令信任边界、文件路由限流、单层实体解码、域名解析及回归。不要关闭 GitHub CodeQL、Dependabot、分支保护或私密漏洞报告。

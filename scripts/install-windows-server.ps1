@@ -519,14 +519,37 @@ URL=$shortcutUrl
 function Register-StartupTask {
   param(
     [string]$ResolvedTaskName,
-    [string]$TargetLauncherPath
+    [string]$TargetLauncherPath,
+    [string]$RepoRoot
   )
 
-  $taskRun = "cmd.exe /c `"$TargetLauncherPath`""
-  $output = & schtasks.exe /Create /F /SC ONLOGON /RL HIGHEST /TN $ResolvedTaskName /TR $taskRun 2>&1
-  if ($LASTEXITCODE -ne 0) {
-    $details = ($output | Out-String).Trim()
-    throw "Failed to create scheduled task $ResolvedTaskName. $details"
+  $hiddenCommandRunner = Join-Path $RepoRoot "scripts\run-hidden-command.vbs"
+  $wscriptPath = Join-Path $env:SystemRoot "System32\wscript.exe"
+  $cmdPath = Join-Path $env:SystemRoot "System32\cmd.exe"
+  foreach ($requiredPath in @($hiddenCommandRunner, $wscriptPath, $cmdPath)) {
+    if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+      throw "Startup task runtime not found: $requiredPath"
+    }
+  }
+
+  $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+  $actionArguments = @(
+    "//B", "//NoLogo", $hiddenCommandRunner, $cmdPath, "/d", "/c", $TargetLauncherPath
+  ) | ForEach-Object { ConvertTo-WindowsProcessArgument -Value ([string]$_) }
+  $action = New-ScheduledTaskAction -Execute $wscriptPath -Argument ($actionArguments -join " ")
+  $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
+  $settings = New-ScheduledTaskSettingsSet
+  $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
+  try {
+    Register-ScheduledTask `
+      -TaskName $ResolvedTaskName `
+      -Action $action `
+      -Trigger $trigger `
+      -Settings $settings `
+      -Principal $principal `
+      -Force | Out-Null
+  } catch {
+    throw "Failed to create scheduled task $ResolvedTaskName. $($_.Exception.Message)"
   }
 }
 
@@ -539,16 +562,38 @@ function Register-WatchdogTask {
     [string]$NodePath
   )
 
+  $hiddenPowerShellRunner = Join-Path $RepoRoot "scripts\run-hidden-powershell.vbs"
   $watchdogScript = Join-Path $RepoRoot "scripts\watchdog-7420.ps1"
-  if (-not (Test-Path -LiteralPath $watchdogScript)) {
-    throw "Watchdog script not found: $watchdogScript"
+  $wscriptPath = Join-Path $env:SystemRoot "System32\wscript.exe"
+  foreach ($requiredPath in @($hiddenPowerShellRunner, $watchdogScript, $wscriptPath)) {
+    if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+      throw "Watchdog task runtime not found: $requiredPath"
+    }
   }
 
-  $taskRun = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$watchdogScript`" -Port $TargetPort -ConfigPath `"$TargetConfigPath`" -NodePath `"$NodePath`" -RepoRoot `"$RepoRoot`""
-  $output = & schtasks.exe /Create /F /SC MINUTE /MO 1 /TN $ResolvedTaskName /TR $taskRun 2>&1
-  if ($LASTEXITCODE -ne 0) {
-    $details = ($output | Out-String).Trim()
-    throw "Failed to create scheduled task $ResolvedTaskName. $details"
+  $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+  $actionArguments = @(
+    "//B", "//NoLogo", $hiddenPowerShellRunner, $watchdogScript,
+    "-Port", "$TargetPort", "-ConfigPath", $TargetConfigPath,
+    "-NodePath", $NodePath, "-RepoRoot", $RepoRoot
+  ) | ForEach-Object { ConvertTo-WindowsProcessArgument -Value ([string]$_) }
+  $action = New-ScheduledTaskAction -Execute $wscriptPath -Argument ($actionArguments -join " ")
+  $trigger = New-ScheduledTaskTrigger `
+    -Once `
+    -At ((Get-Date).AddMinutes(1)) `
+    -RepetitionInterval (New-TimeSpan -Minutes 1)
+  $settings = New-ScheduledTaskSettingsSet
+  $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
+  try {
+    Register-ScheduledTask `
+      -TaskName $ResolvedTaskName `
+      -Action $action `
+      -Trigger $trigger `
+      -Settings $settings `
+      -Principal $principal `
+      -Force | Out-Null
+  } catch {
+    throw "Failed to create scheduled task $ResolvedTaskName. $($_.Exception.Message)"
   }
 }
 
@@ -1046,7 +1091,7 @@ $managementShortcutPaths = @(Create-ManagementShortcuts -TargetPort $Port)
 if ($CreateStartupTask) {
   Write-Step "Creating startup task"
   try {
-    Register-StartupTask -ResolvedTaskName $resolvedTaskName -TargetLauncherPath $LauncherPath
+    Register-StartupTask -ResolvedTaskName $resolvedTaskName -TargetLauncherPath $LauncherPath -RepoRoot $repoRoot
     Write-InstallerMessage "Scheduled task created: $resolvedTaskName"
   } catch {
     Write-InstallerWarning -Code "STARTUP_TASK_FAILED" -Message $_

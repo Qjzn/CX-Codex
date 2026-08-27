@@ -80,11 +80,9 @@ export async function handleStatusRoutes(
         : {}
     const status = await writeTunnelConfig({
       enabled: typeof record.enabled === 'boolean' ? record.enabled : null,
-      cloudflaredCommand: typeof record.cloudflaredCommand === 'string' ? record.cloudflaredCommand : undefined,
       preferredMode: record.preferredMode === 'stable' || record.preferredMode === 'quick'
         ? record.preferredMode
         : undefined,
-      tailscaleCommand: typeof record.tailscaleCommand === 'string' ? record.tailscaleCommand : undefined,
     })
     setJson(res, 200, { data: status })
     return true
@@ -105,14 +103,12 @@ export async function handleStatusRoutes(
         payload && typeof payload === 'object' && !Array.isArray(payload)
           ? payload as Record<string, unknown>
           : {}
+      const configuredStatus = await readTunnelStatus()
       const mode = record.mode === 'quick' ? 'quick' : 'stable'
       if (mode === 'stable') {
-        const preferredCommand = typeof record.tailscaleCommand === 'string'
-          ? record.tailscaleCommand.trim()
-          : ''
         const runtime = await startManagedStableAccess({
           localPort: req.socket.localPort ?? 0,
-          preferredCommand,
+          preferredCommand: configuredStatus.stable.command,
         })
         await stopManagedQuickTunnel()
         await writeTunnelConfig({
@@ -121,19 +117,15 @@ export async function handleStatusRoutes(
           tailscaleCommand: runtime.command,
         })
       } else {
-        const preferredCommand = typeof record.cloudflaredCommand === 'string'
-          ? record.cloudflaredCommand.trim()
-          : ''
         const runtime = await startQuickTunnelWithTransientRetry(
           {
             localPort: req.socket.localPort ?? 0,
-            preferredCommand,
+            preferredCommand: configuredStatus.configuredCommand,
           },
           startManagedQuickTunnel,
         )
-        const currentStatus = await readTunnelStatus()
         await stopManagedStableAccess(
-          currentStatus.stable.command,
+          configuredStatus.stable.command,
           req.socket.localPort ?? 0,
         )
         await writeTunnelConfig({

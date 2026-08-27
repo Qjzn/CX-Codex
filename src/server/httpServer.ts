@@ -6,6 +6,7 @@ import { networkInterfaces } from 'node:os'
 import { existsSync } from 'node:fs'
 import { writeFile, stat } from 'node:fs/promises'
 import express, { type Express } from 'express'
+import { rateLimit } from 'express-rate-limit'
 import { createCodexBridgeMiddleware } from './codexAppServerBridge.js'
 import { createAuthSession, isLoopbackRequest } from './authMiddleware.js'
 import { readJsonBody, RequestBodyTooLargeError } from './httpBody.js'
@@ -38,6 +39,14 @@ const distDir = join(__dirname, '..', 'dist')
 const spaEntryFile = join(distDir, 'index.html')
 const localPreviewContentSecurityPolicy = "default-src 'none'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 const BRIDGE_HEARTBEAT_METHOD = 'bridge/heartbeat'
+const LOCAL_FILE_RATE_LIMIT_WINDOW_MS = 60_000
+const LOCAL_FILE_RATE_LIMIT = 600
+const LOCAL_FILE_ROUTE_PREFIXES = [
+  '/codex-local-image',
+  '/codex-local-file',
+  '/codex-local-browse',
+  '/codex-local-edit',
+]
 
 export type ServerOptions = {
   password?: string
@@ -48,6 +57,10 @@ export type ServerOptions = {
   resolveUploadedFilePath?: typeof resolveUploadedFilePath
   resolveSessionAttachmentPath?: typeof resolveSessionAttachmentPath
   runtimeDatabasePath?: string
+  localFileRateLimit?: {
+    limit: number
+    windowMs: number
+  }
 }
 
 export type ServerInstance = {
@@ -389,6 +402,14 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
   if (authSession) {
     app.use(authSession.middleware)
   }
+
+  app.use(LOCAL_FILE_ROUTE_PREFIXES, rateLimit({
+    windowMs: options.localFileRateLimit?.windowMs ?? LOCAL_FILE_RATE_LIMIT_WINDOW_MS,
+    limit: options.localFileRateLimit?.limit ?? LOCAL_FILE_RATE_LIMIT,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { error: '本地文件请求过于频繁，请稍后重试。' },
+  }))
 
   // 2. Bridge middleware for /codex-api/*
   app.use(bridge)

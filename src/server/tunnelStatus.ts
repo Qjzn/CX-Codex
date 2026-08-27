@@ -64,6 +64,19 @@ type LogTunnelSnapshot = {
 const TRYCLOUDFLARE_URL_PATTERN = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/g
 const ANY_HTTPS_URL_PATTERN = /https:\/\/[^\s"'`<>()]+/g
 
+export function isTryCloudflarePublicUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'https:'
+      && parsed.username === ''
+      && parsed.password === ''
+      && parsed.port === ''
+      && parsed.hostname.toLowerCase().endsWith('.trycloudflare.com')
+  } catch {
+    return false
+  }
+}
+
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
@@ -189,7 +202,7 @@ function readLatestTunnelSnapshotFromLog(logText: string): LogTunnelSnapshot {
   const publicUrl =
     tunnelLineUrl
     || tryCloudflareMatches?.at(-1)?.trim()
-    || httpsMatches?.find((value) => value.includes('.trycloudflare.com'))?.trim()
+    || httpsMatches?.find(isTryCloudflarePublicUrl)?.trim()
     || ''
 
   const commandMatches = [...relevantText.matchAll(/^\s*cloudflared:\s*(.+)$/gim)]
