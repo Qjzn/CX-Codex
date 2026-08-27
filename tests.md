@@ -15887,3 +15887,23 @@ Current evidence:
 - The foreground restart-policy test failed before the fix because a selected idle conversation forced a restart; it passes after requiring actual sync demand for a connected stale stream.
 - The full 38-surface regression passed in 499.7 seconds. The built-in stress probe mounted 13 of 1602 messages with 64ms maximum lag and accepted interaction while output continued.
 - Independent headless Playwright mounted 12 of 1602 messages with 47ms maximum lag; the action count increased by one, updates continued from 76 to 84, and console/request failure lists were empty.
+
+## 稳定版 GitHub 安全热修（2026-08-27）
+
+### Expected behavior
+
+1. `/codex-local-image`、`/codex-local-file`、`/codex-local-browse` 与 `/codex-local-edit` 只能访问已登记工作区的真实路径；相似目录前缀、目录联接逃逸、相对路径、缺失路径和空工作区均不得获得访问权。
+2. 四类本地文件接口共享独立的速率预算；超限返回 `429` 和稳定 JSON，且不继续访问文件系统。
+3. 远程隧道接口不得接受请求体提供的 `cloudflared` 或 `tailscale` 可执行路径，只能使用维护者在本地配置的当前命令。
+4. GitHub Trending 实体每轮只解码一层；trycloudflare 回退地址必须是完整、无用户信息和端口的 HTTPS 子域名。
+5. CI 与发布流程必须使用官方 npm registry 执行低等级以上依赖审计；已知 `brace-expansion` 与旧 `esbuild` 传递依赖不得重新进入锁文件。
+
+### Verification
+
+- 运行 `npm.cmd run verify:server-modules`，覆盖真实路径边界、目录联接逃逸、共享限流、隧道命令信任边界、单层实体解码和域名解析。
+- 运行 `npm.cmd run verify:dependency-security`，要求官方 npm registry 返回 0 漏洞。
+- 运行 `npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:governance` 与 `git diff --check`。
+
+### Rollback
+
+- 仅回退本节对应的路径授权、限流、隧道命令边界、实体解码、域名解析和依赖覆盖；不要关闭 CodeQL、Dependabot、分支保护或私密漏洞报告。

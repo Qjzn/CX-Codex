@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { createServer as createNodeHttpServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -381,6 +382,7 @@ import {
   type QuickTunnelSnapshot,
 } from '../src/server/quickTunnel.js'
 import { readTailscaleFunnelPublicUrl } from '../src/server/tailscaleFunnel.js'
+import { isTryCloudflarePublicUrl } from '../src/server/tunnelStatus.js'
 import { handleStatusRoutes } from '../src/server/statusRoutes.js'
 import { handleLocalStateRoutes } from '../src/server/localStateRoutes.js'
 import {
@@ -410,6 +412,11 @@ import {
   upsertWorkspaceRootState,
   writeWorkspaceRootsState,
 } from '../src/server/workspaceRootsState.js'
+import {
+  LocalFileAccessError,
+  resolveWorkspaceLocalPath,
+} from '../src/server/localFileAccessPolicy.js'
+import { createServer as createHttpAppServer } from '../src/server/httpServer.js'
 import { handleWorkspaceMetaRoutes } from '../src/server/workspaceMetaRoutes.js'
 import {
   ProjectRootError,
@@ -556,6 +563,8 @@ try {
   await smokeRpcProxyRoute()
   await smokeQuickTunnelTransientRetry()
   await smokeStatusRoutes()
+  await smokeLocalFileAccessPolicy()
+  await smokeLocalFileHttpRateLimit()
   await smokeWorkspaceRootsState()
   await smokeWorkspaceMetaRoutes()
   await smokeProjectRoots()
@@ -5734,6 +5743,7 @@ async function smokeGithubTrending(): Promise<void> {
   )
 
   assert.equal(decodeHtmlEntities('A &amp; B &lt;tag&gt; &quot;x&quot; &#39;y&#39; &#x2F;'), 'A & B <tag> "x" \'y\' /')
+  assert.equal(decodeHtmlEntities('&amp;lt;script&amp;gt;'), '&lt;script&gt;')
   assert.equal(stripHtml('<p> A&nbsp; <strong>&amp;</strong> B </p>').includes('&'), true)
   assert.equal(normalizeGithubDescriptionTranslationText('  hello\n world  '), 'hello world')
   assert.equal(shouldTranslateGithubDescription('hello world'), true)
@@ -7370,6 +7380,9 @@ async function smokeStatusRoutes(): Promise<void> {
     },
     AllowFunnel: { 'private.example.ts.net:8443': true },
   }), 7420), '')
+  assert.equal(isTryCloudflarePublicUrl('https://demo.trycloudflare.com'), true)
+  assert.equal(isTryCloudflarePublicUrl('https://demo.trycloudflare.com.evil.example'), false)
+  assert.equal(isTryCloudflarePublicUrl('https://trycloudflare.com'), false)
 
   const desktopStatus = {
     available: true,
@@ -7426,10 +7439,10 @@ async function smokeStatusRoutes(): Promise<void> {
     },
   }
   const bodies: unknown[] = [
-    { enabled: false, cloudflaredCommand: ' C:\\tools\\cloudflared.exe ' },
+    { enabled: false, cloudflaredCommand: ' C:\\malicious\\cloudflared.exe ' },
     ['bad'],
-    { mode: 'quick', fallback: true, cloudflaredCommand: ' C:\\tools\\cloudflared.exe ' },
-    { mode: 'stable', tailscaleCommand: ' C:\\Program Files\\Tailscale\\tailscale.exe ' },
+    { mode: 'quick', fallback: true, cloudflaredCommand: ' C:\\malicious\\cloudflared.exe ' },
+    { mode: 'stable', tailscaleCommand: ' C:\\malicious\\tailscale.exe ' },
   ]
   const tunnelUpdates: unknown[] = []
   const tunnelStarts: unknown[] = []
@@ -7546,9 +7559,7 @@ async function smokeStatusRoutes(): Promise<void> {
   ), true)
   assert.deepEqual(tunnelUpdates, [{
     enabled: false,
-    cloudflaredCommand: ' C:\\tools\\cloudflared.exe ',
     preferredMode: undefined,
-    tailscaleCommand: undefined,
   }])
   assert.deepEqual(JSON.parse(tunnelUpdateResponse.body), { data: tunnelStatus })
 
@@ -7561,9 +7572,7 @@ async function smokeStatusRoutes(): Promise<void> {
   ), true)
   assert.deepEqual(tunnelUpdates[1], {
     enabled: null,
-    cloudflaredCommand: undefined,
     preferredMode: undefined,
-    tailscaleCommand: undefined,
   })
   assert.deepEqual(JSON.parse(invalidTunnelUpdateResponse.body), { data: tunnelStatus })
 
@@ -7576,7 +7585,7 @@ async function smokeStatusRoutes(): Promise<void> {
   ), true)
   assert.deepEqual(tunnelStarts, [{
     localPort: 7420,
-    preferredCommand: 'C:\\tools\\cloudflared.exe',
+    preferredCommand: 'cloudflared',
   }])
   assert.deepEqual(tunnelUpdates[2], {
     enabled: true,
@@ -7634,6 +7643,114 @@ async function smokeStatusRoutes(): Promise<void> {
     new URL('http://127.0.0.1/codex-api/desktop-app/refresh'),
     dependencies,
   ), false)
+}
+
+async function smokeLocalFileAccessPolicy(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'cx-codex-local-access-'))
+  const workspaceRoot = join(root, 'workspace')
+  const siblingRoot = join(root, 'workspace-secret')
+  const nestedDirectory = join(workspaceRoot, '.hidden')
+  const allowedFile = join(nestedDirectory, 'allowed.txt')
+  const outsideFile = join(siblingRoot, 'secret.txt')
+  const escapedLink = join(workspaceRoot, 'escaped-link')
+
+  await mkdir(nestedDirectory, { recursive: true })
+  await mkdir(siblingRoot, { recursive: true })
+  await writeFile(allowedFile, 'allowed', 'utf8')
+  await writeFile(outsideFile, 'secret', 'utf8')
+  await symlink(siblingRoot, escapedLink, 'junction')
+
+  const resolveLocalPath = (candidatePath: string, roots: string[] = [workspaceRoot]) => (
+    resolveWorkspaceLocalPath(candidatePath, {
+      getWorkspaceRoots: async () => roots,
+      realpath,
+      stat,
+    })
+  )
+
+  try {
+    assert.equal(await resolveLocalPath(allowedFile), await realpath(allowedFile))
+
+    await assert.rejects(
+      () => resolveLocalPath(outsideFile),
+      (error: unknown) => error instanceof LocalFileAccessError && error.code === 'outside-workspace',
+    )
+    await assert.rejects(
+      () => resolveLocalPath(outsideFile, [workspaceRoot + '-prefix']),
+      (error: unknown) => error instanceof LocalFileAccessError && error.code === 'outside-workspace',
+    )
+    await assert.rejects(
+      () => resolveLocalPath(join(escapedLink, 'secret.txt')),
+      (error: unknown) => error instanceof LocalFileAccessError && error.code === 'outside-workspace',
+    )
+    await assert.rejects(
+      () => resolveLocalPath(join(workspaceRoot, 'missing.txt')),
+      (error: unknown) => error instanceof LocalFileAccessError && error.code === 'not-found',
+    )
+    await assert.rejects(
+      () => resolveLocalPath(allowedFile, []),
+      (error: unknown) => error instanceof LocalFileAccessError && error.code === 'outside-workspace',
+    )
+    await assert.rejects(
+      () => resolveWorkspaceLocalPath('package.json', {
+        getWorkspaceRoots: async () => [process.cwd()],
+      }),
+      (error: unknown) => error instanceof LocalFileAccessError && error.code === 'outside-workspace',
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+async function smokeLocalFileHttpRateLimit(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'cx-codex-http-local-file-'))
+  const imagePath = join(root, 'preview.png')
+  const pngBytes = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+    'base64',
+  )
+  await writeFile(imagePath, pngBytes)
+
+  const appServer = createHttpAppServer({
+    createBridgeMiddleware: () => Object.assign(
+      async (_req: unknown, _res: unknown, next: () => void) => { next() },
+      {
+        dispose: () => {},
+        subscribeNotifications: () => () => {},
+        listNotificationEventsAfter: () => ({ notifications: [], latestSeq: 0, oldestSeq: 0 }),
+      },
+    ),
+    resolveLocalFilePath: async (candidatePath: string) => candidatePath,
+    localFileRateLimit: { limit: 1, windowMs: 60_000 },
+  })
+  const server = createNodeHttpServer(appServer.app)
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => {
+        server.off('error', reject)
+        resolve()
+      })
+    })
+    const address = server.address()
+    const port = typeof address === 'object' && address ? address.port : 0
+    const baseUrl = `http://127.0.0.1:${String(port)}`
+
+    const imageResponse = await fetch(`${baseUrl}/codex-local-image?path=${encodeURIComponent(imagePath)}`)
+    assert.equal(imageResponse.status, 200)
+    assert.equal(Buffer.from(await imageResponse.arrayBuffer()).length, pngBytes.length)
+
+    const rateLimitedResponse = await fetch(`${baseUrl}/codex-local-file?path=${encodeURIComponent(imagePath)}`)
+    assert.equal(rateLimitedResponse.status, 429)
+    assert.deepEqual(await rateLimitedResponse.json(), { error: '本地文件请求过于频繁，请稍后重试。' })
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    }).catch(() => {})
+    appServer.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
 }
 
 async function smokeWorkspaceRootsState(): Promise<void> {
