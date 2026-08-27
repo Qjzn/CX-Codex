@@ -6,6 +6,8 @@ export type AppServerHealth = {
   initialized: boolean
   stopping: boolean
   pid: number | null
+  command?: string
+  startedAtIso?: string
   pendingRpcCount: number
   queuedRpcCount: number
   pendingServerRequestCount: number
@@ -23,6 +25,8 @@ export function createAppServerHealthSnapshot(input: AppServerHealth): AppServer
     initialized: input.initialized,
     stopping: input.stopping,
     pid: input.pid,
+    ...(input.command ? { command: input.command } : {}),
+    ...(input.startedAtIso ? { startedAtIso: input.startedAtIso } : {}),
     pendingRpcCount: input.pendingRpcCount,
     queuedRpcCount: input.queuedRpcCount,
     pendingServerRequestCount: input.pendingServerRequestCount,

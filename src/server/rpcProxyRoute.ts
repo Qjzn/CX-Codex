@@ -9,7 +9,10 @@ import {
   isRpcTimeoutError,
   isThreadMaterializingError,
 } from './appServerRpcErrors.js'
-import { trimThreadTurnsInRpcResult } from './appServerRpcResult.js'
+import {
+  annotateRecentThreadReadWithRecoveredHistory,
+  trimThreadTurnsInRpcResult,
+} from './appServerRpcResult.js'
 import {
   readThreadIdFromPayload,
   readTurnIdFromPayload,
@@ -19,6 +22,7 @@ import { readThreadReadIncludeTurns } from './appServerThreadReadParams.js'
 import { readThreadReadFromSessionLog } from './appServerSessionLogThreadRead.js'
 import type { ThreadReadCacheSource } from './appServerThreadReadCache.js'
 import { setJson } from './httpJsonResponse.js'
+import { cacheSessionAttachmentPaths } from './sessionAttachmentAccess.js'
 import {
   normalizePlanModeTurnStartParams,
   readCollaborationModeFromPayload,
@@ -48,7 +52,11 @@ export type RpcProxyRouteDependencies = {
   observeThreadUnsubscribeResponse: (details: { threadId?: string; payload: unknown }) => void
   deleteCachedThreadRead: (threadId: string) => void
   rememberCachedThreadRead: (threadId: string, threadRead: unknown, source?: ThreadReadCacheSource) => void
-  readSessionLogThreadRead?: (sessionPath: string, fallbackThreadRead: unknown) => Promise<unknown | null>
+  readSessionLogThreadRead?: (
+    sessionPath: string,
+    fallbackThreadRead: unknown,
+    options?: { fromStart?: boolean },
+  ) => Promise<unknown | null>
   augmentThreadListRpcResult: (params: unknown, result: unknown) => Promise<unknown>
   clearThreadSearchIndex: () => void
 }
@@ -131,7 +139,9 @@ export async function handleRpcProxyRoute(
       readThreadReadIncludeTurns(rpcParams) &&
       isThreadMaterializingError(error)
     ) {
-      const fallbackThreadRead = await readSessionLogFallbackThreadRead(rpcThreadId, rpcParams, dependencies)
+      const fallbackThreadRead = await readSessionLogFallbackThreadRead(rpcThreadId, rpcParams, dependencies, {
+        fromStart: requestedFullThreadRead || Boolean(requestedTurnWindow),
+      })
       if (fallbackThreadRead) {
         const result = trimThreadTurnsInRpcResult(body.method, fallbackThreadRead, {
           preserveFullTurns: requestedFullThreadRead,
@@ -140,6 +150,7 @@ export async function handleRpcProxyRoute(
         if (!requestedFullThreadRead && !requestedTurnWindow) {
           dependencies.rememberCachedThreadRead(rpcThreadId, result, 'session-log')
         }
+        await cacheSessionAttachmentPaths(result)
         setJson(res, 200, {
           result,
           warning: 'thread/read fell back to local session log messages',
@@ -169,9 +180,21 @@ export async function handleRpcProxyRoute(
     throw error
   }
 
+  let historyAwareRpcResult = rpcResult
+  if (body.method === 'thread/read' && rpcThreadId && readThreadReadIncludeTurns(rpcParams)) {
+    const sessionPath = readThreadSessionPathFromThreadReadPayload(rpcResult)
+    const recoveredThreadRead = sessionPath
+      ? await (dependencies.readSessionLogThreadRead ?? readThreadReadFromSessionLog)(sessionPath, rpcResult)
+      : null
+    if (recoveredThreadRead) {
+      historyAwareRpcResult = requestedFullThreadRead || requestedTurnWindow
+        ? rpcResult
+        : annotateRecentThreadReadWithRecoveredHistory(rpcResult, recoveredThreadRead)
+    }
+  }
   const enrichedRpcResult = body.method === 'thread/list'
     ? await dependencies.augmentThreadListRpcResult(rpcParams, rpcResult)
-    : rpcResult
+    : historyAwareRpcResult
   const result = trimThreadTurnsInRpcResult(body.method, enrichedRpcResult, {
     preserveFullTurns: requestedFullThreadRead,
     turnWindow: requestedTurnWindow,
@@ -187,6 +210,9 @@ export async function handleRpcProxyRoute(
     !requestedTurnWindow
   ) {
     dependencies.rememberCachedThreadRead(rpcThreadId, result)
+  }
+  if (body.method === 'thread/read' && readThreadReadIncludeTurns(rpcParams)) {
+    await cacheSessionAttachmentPaths(result)
   }
   setJson(res, 200, { result })
   return true
@@ -253,6 +279,7 @@ async function readSessionLogFallbackThreadRead(
   threadId: string,
   rpcParams: unknown,
   dependencies: RpcProxyRouteDependencies,
+  options: { fromStart?: boolean } = {},
 ): Promise<unknown | null> {
   try {
     const rawParams = asRecord(rpcParams)
@@ -263,7 +290,7 @@ async function readSessionLogFallbackThreadRead(
     })
     const sessionPath = readThreadSessionPathFromThreadReadPayload(lightThreadRead)
     if (!sessionPath) return null
-    return await (dependencies.readSessionLogThreadRead ?? readThreadReadFromSessionLog)(sessionPath, lightThreadRead)
+    return await (dependencies.readSessionLogThreadRead ?? readThreadReadFromSessionLog)(sessionPath, lightThreadRead, options)
   } catch {
     return null
   }

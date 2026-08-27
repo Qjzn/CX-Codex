@@ -18,6 +18,10 @@ import {
   LocalFileAccessError,
   resolveWorkspaceLocalPath,
 } from './localFileAccessPolicy.js'
+import {
+  resolveSessionAttachmentPath,
+  SessionAttachmentAccessError,
+} from './sessionAttachmentAccess.js'
 import { getTunnelStatus } from './tunnelStatus.js'
 import { renderLocalSetupHtml } from './localPairingPage.js'
 import { generatePassword } from './password.js'
@@ -42,6 +46,7 @@ export type ServerOptions = {
   createBridgeMiddleware?: typeof createCodexBridgeMiddleware
   resolveLocalFilePath?: typeof resolveWorkspaceLocalPath
   resolveUploadedFilePath?: typeof resolveUploadedFilePath
+  resolveSessionAttachmentPath?: typeof resolveSessionAttachmentPath
   runtimeDatabasePath?: string
 }
 
@@ -232,7 +237,7 @@ async function resolveAuthorizedLocalPath(
 
 type AuthorizedLocalPath = {
   path: string
-  source: 'workspace' | 'upload'
+  source: 'workspace' | 'upload' | 'session-attachment'
 }
 
 async function resolveAuthorizedReadableLocalPath(
@@ -240,6 +245,7 @@ async function resolveAuthorizedReadableLocalPath(
   localPath: string,
   resolveLocalFilePath: typeof resolveWorkspaceLocalPath,
   resolveUploadedLocalFilePath: typeof resolveUploadedFilePath,
+  resolveSessionLocalAttachmentPath: typeof resolveSessionAttachmentPath,
   notFoundMessage: string,
 ): Promise<AuthorizedLocalPath | null> {
   try {
@@ -262,8 +268,25 @@ async function resolveAuthorizedReadableLocalPath(
       res.status(404).json({ error: notFoundMessage })
       return null
     }
-    if (error instanceof UploadedFileAccessError) {
-      res.status(403).json({ error: '该路径不在已登记的工作区目录或 CX-Codex 上传缓存内。' })
+    if (!(error instanceof UploadedFileAccessError)) {
+      res.status(500).json({ error: '本地文件访问校验失败。' })
+      return null
+    }
+  }
+
+  try {
+    return { path: await resolveSessionLocalAttachmentPath(localPath), source: 'session-attachment' }
+  } catch (error) {
+    if (error instanceof SessionAttachmentAccessError && error.code === 'not-found') {
+      res.status(404).json({ error: notFoundMessage })
+      return null
+    }
+    if (error instanceof SessionAttachmentAccessError && error.code === 'too-large') {
+      res.status(413).json({ error: '会话图片超过允许的大小。' })
+      return null
+    }
+    if (error instanceof SessionAttachmentAccessError) {
+      res.status(403).json({ error: '该路径不在已登记的工作区、CX-Codex 上传缓存或当前会话附件内。' })
       return null
     }
     res.status(500).json({ error: '本地文件访问校验失败。' })
@@ -281,6 +304,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
   const authSession = options.password ? createAuthSession(options.password) : null
   const resolveLocalFilePath = options.resolveLocalFilePath ?? resolveWorkspaceLocalPath
   const resolveUploadedLocalFilePath = options.resolveUploadedFilePath ?? resolveUploadedFilePath
+  const resolveSessionLocalAttachmentPath = options.resolveSessionAttachmentPath ?? resolveSessionAttachmentPath
   const localSetupToken = randomBytes(24).toString('hex')
   let invalidateWebSocketSessions = () => {}
 
@@ -383,6 +407,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       localPath,
       resolveLocalFilePath,
       resolveUploadedLocalFilePath,
+      resolveSessionLocalAttachmentPath,
       '图片文件不存在。',
     )
     if (!authorized) return
@@ -416,6 +441,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       localPath,
       resolveLocalFilePath,
       resolveUploadedLocalFilePath,
+      resolveSessionLocalAttachmentPath,
       '文件不存在。',
     )
     if (!authorized) return
@@ -449,6 +475,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       localPath,
       resolveLocalFilePath,
       resolveUploadedLocalFilePath,
+      resolveSessionLocalAttachmentPath,
       '文件不存在。',
     )
     if (!authorized) return

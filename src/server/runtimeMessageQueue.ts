@@ -105,6 +105,12 @@ export class RuntimeMessageQueue {
     this.scheduledThreadIds.clear()
   }
 
+  notifyQueuedRequest(request: RuntimeRequestRecord): void {
+    if (request.status !== 'queued' || !request.threadId) return
+    this.publish(request.threadId, request.requestId, 'queued')
+    this.scheduleThread(request.threadId)
+  }
+
   enqueue(payload: unknown): RuntimeMessageQueueEntry {
     const parsed = parseRuntimeSendPayload(payload)
     if (!parsed.threadId) throw new Error('runtime/queue requires threadId')
@@ -220,8 +226,9 @@ export class RuntimeMessageQueue {
         lastError: null,
       })
       if (!claimed) return
+      const result = await this.dependencies.startRuntimeTurn(claimed.payload)
+      if (asRecord(result)?.status === 'queued') return
       this.publish(threadId, next.requestId, 'starting')
-      await this.dependencies.startRuntimeTurn(claimed.payload)
     } catch (error) {
       if (error instanceof RuntimeThreadBusyError) return
       const lastError = this.dependencies.getErrorMessage(error, 'Queued message failed to start')

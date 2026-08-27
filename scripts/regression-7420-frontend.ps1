@@ -17,6 +17,7 @@ param(
   [int]$AgentBrowserTimeoutSec = 25,
   [switch]$HomeOnly,
   [switch]$ThreadOnly,
+  [switch]$SourceOnly,
   [switch]$MeasureSendFeedback,
   [switch]$MeasureNewThreadFeedback,
   [switch]$MeasureResponseFeedback
@@ -689,6 +690,7 @@ function Assert-BoundedRuntimeSendRecoverySource {
   $runtimeQueueClientSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\api\runtimeMessageQueue.ts")
   $runtimeQueueServerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\runtimeMessageQueue.ts")
   $codexBridgeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\codexAppServerBridge.ts")
+  $gatewaySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\api\codexGateway.ts")
   $codexBridgeDisposeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\codexBridgeMiddlewareDispose.ts")
   $androidTaskPetSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\TaskPetOverlayService.java")
   $androidTaskPetPolicySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "android\app\src\main\java\com\cxcodex\bridge\TaskPetRuntimePolicy.java")
@@ -796,6 +798,12 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($processQueuedMessagesMatch.Value -match "api\.persistRuntimeQueuedMessages\(threadId,\s*queue\)[\s\S]*?syncRuntimeMessageQueue\(threadId\)") "browser queue processing must hand local rows to the durable 7420 queue instead of owning turn execution"
   Assert-True ($runtimeQueueClientSource -match "persistRuntimeQueuedMessages[\s\S]*?clientMessageId:\s*message\.clientMessageId") "durable queue handoff must preserve the stable idempotency key"
   Assert-True ($source -match "function\s+promoteQueuedMessageToOptimistic[\s\S]*?createMessageOutboxEntry[\s\S]*?clientMessageId:\s*queued\.clientMessageId") "a server-started queue row must transfer its stable id to the durable optimistic outbox"
+  Assert-True ($serverSource -match "isActiveWriterConflict\(lastError\)[\s\S]*?status:\s*'queued'[\s\S]*?payload:\s*durablePayload[\s\S]*?notifyQueuedRequest") "an external active-writer race must preserve the same request as a durable queue row instead of failing it"
+  Assert-True ($gatewaySource -match "queueMetadata:\s*\{[\s\S]*?text:\s*args\.text[\s\S]*?speedMode:\s*args\.speedMode") "an immediate runtime send must retain enough metadata for truthful queue feedback after an active-writer race"
+  Assert-True ($source -match "function\s+demoteOptimisticMessageToQueue[\s\S]*?removeOptimisticUserMessage" -and $source -match "function\s+adoptRuntimeQueuedRequest[\s\S]*?setRuntimeExecutionState\(threadId,\s*'queued'[\s\S]*?当前任务结束后自动发送[\s\S]*?syncRuntimeMessageQueue") "an active-writer fallback must replace the optimistic sent bubble with one visible queued owner"
+  Assert-True ($source -match "recovered\?\.status\s*===\s*'queued'[\s\S]*?adoptRuntimeQueuedRequest\(recoveredThreadId,\s*recovered\.requestId\)") "a renderer reload must recover an already accepted active-writer fallback as queued instead of sent or failed"
+  Assert-True ($runtimeQueueServerSource -match "const\s+result\s*=\s*await\s+this\.dependencies\.startRuntimeTurn\(claimed\.payload\)[\s\S]*?status\s*===\s*'queued'\)\s*return[\s\S]*?this\.publish\(threadId,\s*next\.requestId,\s*'starting'\)") "a queue retry that still meets an external writer must not flicker into a false starting state"
+  Assert-True ($codexBridgeSource -match "startRuntimeTurnSettled[\s\S]*?startRuntimeTurn:\s*startRuntimeTurnSettled") "the background queue must await the actual turn/start result instead of the HTTP early-accept acknowledgement"
   Assert-True ($runtimeQueueServerSource -match "setInterval\(\(\)\s*=>\s*this\.scheduleAll\(\),\s*QUEUE_SWEEP_INTERVAL_MS\)" -and $runtimeQueueServerSource -match "listQueuedThreadIds[\s\S]*?processThread") "7420 must advance queued messages independently of the selected conversation and Android renderer lifecycle"
   Assert-True ($appSource -match "const\s+ownsSyncSlot\s*=\s*!mobileShellTaskPetSyncInFlight[\s\S]*?if\s*\(!ownsSyncSlot\s*&&\s*!force\)") "an immediate send handoff must bypass an older renderer sync already awaiting its bridge response"
   Assert-True ($source -match "setQueuedMessagesForThread\(threadId,\s*nextQueue\)[\s\S]*?notifyDeliveryPersisted\(internalOptions\.onDeliveryPersisted\)[\s\S]*?await\s+processQueuedMessages\(threadId\)") "queued delivery must be persisted locally before its immediate durable 7420 handoff"
@@ -7103,11 +7111,15 @@ JSON.stringify((() => {
     entry = JSON.parse(raw).threads?.[threadId] || null;
   } catch {}
   const messages = Array.isArray(entry?.messages) ? entry.messages : [];
+  const turnIndexes = messages
+    .map((row) => Number(row?.turnIndex))
+    .filter((turnIndex) => Number.isFinite(turnIndex));
   const maxTextLength = messages.reduce((max, row) => Math.max(max, String(row?.text || '').length), 0);
   const maxCommandOutputLength = messages.reduce((max, row) => Math.max(max, String(row?.commandExecution?.aggregatedOutput || '').length), 0);
   return {
     hasEntry: !!entry,
     messageCount: messages.length,
+    distinctTurnCount: new Set(turnIndexes).size,
     entryJsonLength: entry ? JSON.stringify(entry).length : 0,
     maxTextLength,
     maxCommandOutputLength,
@@ -7336,7 +7348,14 @@ function Assert-ThreadLoadMoreWindow {
       if ($null -ne $before.earliestTurnIndex -and $null -ne $after.earliestTurnIndex) {
         $turnProgress = [int]$before.earliestTurnIndex - [int]$after.earliestTurnIndex
       }
-      if ([Math]::Max([Math]::Max($itemProgress, $remainingProgress), $turnProgress) -ge 1) {
+      $historyProgress = if ($null -ne $before.earliestTurnIndex -and $null -ne $after.earliestTurnIndex) {
+        $turnProgress
+      } elseif ($null -ne $before.hiddenRemaining) {
+        $remainingProgress
+      } else {
+        $itemProgress
+      }
+      if ($historyProgress -ge 1) {
         break
       }
     }
@@ -7352,7 +7371,13 @@ function Assert-ThreadLoadMoreWindow {
     if ($null -ne $before.earliestTurnIndex -and $null -ne $after.earliestTurnIndex) {
       $turnDelta = [int]$before.earliestTurnIndex - [int]$after.earliestTurnIndex
     }
-    $progressDelta = [Math]::Max([Math]::Max($itemDelta, $remainingDelta), $turnDelta)
+    $progressDelta = if ($null -ne $before.earliestTurnIndex -and $null -ne $after.earliestTurnIndex) {
+      $turnDelta
+    } elseif ($null -ne $before.hiddenRemaining) {
+      $remainingDelta
+    } else {
+      $itemDelta
+    }
     $heightDelta = [int]$after.scrollHeight - [int]$before.scrollHeight
     $scrollDelta = [int]$after.scrollTop - [int]$before.scrollTop
     $anchorDrift = [Math]::Abs($scrollDelta - $heightDelta)
@@ -7362,7 +7387,7 @@ function Assert-ThreadLoadMoreWindow {
     Assert-True ([int]$after.userCount -ge 1) "thread page has no user context after load-more step $step for $ThreadId"
     Assert-True ([int]$after.assistantCount -ge 1) "thread page has no assistant response after load-more step $step for $ThreadId"
     Assert-True ($progressDelta -ge 1) "thread page load-more step $step did not advance visible history for $ThreadId; beforeItems=$($before.itemCount), afterItems=$($after.itemCount), beforeTurn=$($before.earliestTurnIndex), afterTurn=$($after.earliestTurnIndex), beforeRpc=$($before.rpcCount), afterRpc=$($after.rpcCount), beforeLoad='$($before.loadText)', afterLoad='$($after.loadText)'"
-    Assert-True ($progressDelta -le 16) "thread page load-more step $step advanced too much history for $ThreadId; delta=$progressDelta"
+    Assert-True ($progressDelta -le 16) "thread page load-more step $step advanced too much history for $ThreadId; delta=$progressDelta, itemDelta=$itemDelta, remainingDelta=$remainingDelta, turnDelta=$turnDelta, beforeTurn=$($before.earliestTurnIndex), afterTurn=$($after.earliestTurnIndex), beforeRemaining=$($before.hiddenRemaining), afterRemaining=$($after.hiddenRemaining)"
     Assert-True ($anchorDrift -le 180) "thread page load-more step $step shifted reading anchor too much for $ThreadId; drift=$anchorDrift"
   }
   Assert-True ($totalItemDelta -ge 1) "thread page load-more did not reveal any older history for $ThreadId"
@@ -7388,7 +7413,7 @@ function Add-RegressionResult {
   }
 }
 
-if (-not (Get-Command agent-browser -ErrorAction SilentlyContinue)) {
+if (-not $SourceOnly -and -not (Get-Command agent-browser -ErrorAction SilentlyContinue)) {
   throw "agent-browser is not available in PATH"
 }
 
@@ -7437,6 +7462,11 @@ Assert-ThreadAttentionChromeSource
   Assert-TaskAttentionAndFileQuickOpenSource
   Assert-MobileLatestReplyRecoverySource
   Assert-BoundedRuntimeSendRecoverySource
+
+  if ($SourceOnly) {
+    Write-Step "all frontend source checks passed"
+    return
+  }
 
   $health = Test-HttpJson -Name "health" -Url "$($BaseUrl)/health"
   Assert-True ($health.status -eq "ok") "health status is not ok"
@@ -7910,7 +7940,8 @@ JSON.stringify({
     Assert-ThreadPageLoadMetrics -Metrics $threadPageLoadMetrics -ThreadId $ThreadId -AllowAuthoritativeEmptyThread:($threadUsableMetrics.authoritativeEmptyThread -eq $true)
     $threadMessageCacheMetrics = Read-ThreadMessageCacheMetrics -Session $session -ThreadId $ThreadId
     Assert-ThreadMessageCacheMetrics -Metrics $threadMessageCacheMetrics -ThreadId $ThreadId -AllowMissingEmptyEntry:($threadUsableMetrics.authoritativeEmptyThread -eq $true)
-    $allowUnavailableLoadMore = [int]$threadMessageCacheMetrics.messageCount -le $ThreadInitialMessageWindowSize
+    $cachedTurnCount = [int]$threadMessageCacheMetrics.distinctTurnCount
+    $allowUnavailableLoadMore = $cachedTurnCount -gt 0 -and $cachedTurnCount -le $ThreadInitialMessageWindowSize
     Assert-ThreadLoadMoreWindow -Session $session -ThreadId $ThreadId -AllowUnavailable:$allowUnavailableLoadMore
     if ($MeasureSendFeedback) {
       Measure-ThreadSendFeedbackBudget -Session $session -ThreadId $ThreadId

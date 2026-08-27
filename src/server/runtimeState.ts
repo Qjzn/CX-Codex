@@ -320,6 +320,10 @@ export class RuntimeStateStore {
           latestReplyEventSeq: startingNewActivity ? 0 : state.latestReplyEventSeq,
         }, 'events', event)
       } else if (isRuntimeThreadStatusTerminal(lifecycle)) {
+        // App Server can replay the thread's previous idle status after turn/start
+        // has been requested but before the new turn/started event arrives. Settling
+        // here would release the request lease while the turn is actually starting.
+        if (state.executionState === 'starting' && !state.activeTurnId) return
         const wasActive = isRuntimeActiveState(state.executionState) || state.executionState === 'completed_pending_sync'
         const completedState = state.executionState === 'failed'
           || state.executionState === 'interrupted'
@@ -519,7 +523,11 @@ export class RuntimeStateStore {
       inProgress: isRuntimeActiveState(executionState),
       activeTurnId: state.activeTurnId,
       activeItemId: state.activeItemId,
-      canStop: isRuntimeActiveState(executionState) && executionState !== 'start_uncertain' && executionState !== 'stop_uncertain' && !state.stopRequested,
+      canStop: isRuntimeActiveState(executionState)
+        && executionState !== 'queued'
+        && executionState !== 'start_uncertain'
+        && executionState !== 'stop_uncertain'
+        && !state.stopRequested,
       stopRequested: state.stopRequested,
       updatedAtIso: state.updatedAtIso,
       lastEventSeq: state.lastEventSeq,

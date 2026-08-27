@@ -803,7 +803,7 @@
           <template v-else-if="isThreadRoute">
             <div class="content-grid">
               <div class="content-thread">
-                <ThreadConversation ref="threadConversationRef" :messages="displayedThreadMessages" :is-loading="isLoadingMessages || isManualThreadRefreshRunning"
+                <ThreadConversation ref="threadConversationRef" :messages="displayedThreadMessages" :is-loading="isLoadingMessages || isManualThreadRefreshRunning || isRouteThreadResolutionPending"
                   :active-thread-id="displayedThreadConversationId" :cwd="displayedThreadCwd" :scroll-state="displayedThreadScrollState"
                   :live-overlay="displayedThreadLiveOverlay"
                   :pending-requests="displayedThreadPendingRequests"
@@ -2039,12 +2039,27 @@ const mobileShellUpdatePromptText = computed(() => {
   }
   return `检测到 ${mobileShellLatestVersionLabel.value}，确认后会直接下载并打开系统安装界面。`
 })
+const isRouteThreadResolutionPending = computed(() => (
+  route.name === 'thread'
+  && !!routeThreadId.value
+  && !selectedThread.value
+  && filteredMessages.value.length === 0
+  && selectedThreadServerRequests.value.length === 0
+  && !selectedThreadLoadError.value
+  && (
+    isLoadingThreads.value
+    || isLoadingMessages.value
+    || selectedThreadRuntimeStatus.value.threadId !== routeThreadId.value
+    || selectedThreadRuntimeStatus.value.messageState !== 'fresh'
+  )
+))
 const isRouteOnlyEmptyThread = computed(() => (
   route.name === 'thread'
   && !!routeThreadId.value
   && !selectedThread.value
   && filteredMessages.value.length === 0
   && selectedThreadServerRequests.value.length === 0
+  && !isRouteThreadResolutionPending.value
 ))
 const routeThreadCachedTitle = computed(() => {
   if (route.name !== 'thread' || selectedThread.value) return ''

@@ -112,6 +112,7 @@ import {
   areUiThreadFieldsEqual,
   dedupeProjectThreadGroups,
   orderProjectGroupsByRecentActivity,
+  preserveResolvedThreadProjectIdentity,
   upsertThreadIntoProjectGroups,
 } from '${projectGroupOrderingImport}'
 import { readRuntimeActivityStartedAtMs } from '${activityTimerImport}'
@@ -827,6 +828,7 @@ const outboxEntry = (clientMessageId, createdAtMs, updatedAtMs = createdAtMs) =>
   fileAttachments: [{ label: 'file', path: 'file.txt', fsPath: 'E:/repo/file.txt' }],
   modelId: ' model ',
   reasoningEffort: 'high',
+  speedMode: 'fast',
   collaborationMode: 'plan',
   turnOptions: normalizedTurnOptions,
   baselineMatchCount: 2,
@@ -853,10 +855,15 @@ assert.deepEqual(parsedOutbox.entries.map((entry) => entry.clientMessageId), [
 assert.equal(parsedOutbox.entries[0]?.threadId, 'thread-outbox')
 assert.equal(parsedOutbox.entries[0]?.cwd, 'E:/repo')
 assert.equal(parsedOutbox.entries[0]?.modelId, 'model')
+assert.equal(parsedOutbox.entries[0]?.speedMode, 'fast')
 assert.equal(parsedOutbox.entries[0]?.baselineMatchCount, 2)
 assert.equal(parsedOutbox.entries[0]?.baselineMessageCount, 4)
 assert.equal(parsedOutbox.entries[0]?.baselineTailMessageId, 'baseline-tail')
 assert.deepEqual(parsedOutbox.entries[1]?.fileAttachments, [])
+assert.equal(parseMessageOutboxState(JSON.stringify({
+  version: 1,
+  entries: [{ ...outboxEntry('client-standard-speed', outboxNowMs - 100), speedMode: 'turbo' }],
+}), outboxNowMs).entries[0]?.speedMode, 'standard')
 assert.deepEqual(parseMessageOutboxState('{bad json', outboxNowMs), { entries: [], removals: [] })
 assert.deepEqual(parseMessageOutboxState('{"version":2,"entries":[]}', outboxNowMs), { entries: [], removals: [] })
 
@@ -1860,6 +1867,23 @@ assert.equal(protectedResolvedProject.length, 1)
 assert.equal(protectedResolvedProject[0].projectName, 'CXCodex')
 assert.equal(protectedResolvedProject[0].threads.length, 1)
 assert.equal(protectedResolvedProject[0].threads[0].cwd, 'E:\\\\javaword\\\\CXCodex')
+
+const stabilizedPartialProjectUpdate = preserveResolvedThreadProjectIdentity(
+  [{ projectName: 'CXCodex', threads: [resolvedSharedThread] }],
+  [{
+    projectName: 'unknown-project',
+    threads: [{
+      ...unresolvedSharedThread,
+      title: '继续测试同一会话',
+      preview: '继续测试同一会话',
+      inProgress: true,
+    }],
+  }],
+)
+assert.deepEqual(stabilizedPartialProjectUpdate.map((group) => group.projectName), ['CXCodex'])
+assert.equal(stabilizedPartialProjectUpdate[0].threads[0].cwd, 'E:\\\\javaword\\\\CXCodex')
+assert.equal(stabilizedPartialProjectUpdate[0].threads[0].title, '继续测试同一会话')
+assert.equal(stabilizedPartialProjectUpdate[0].threads[0].inProgress, true)
 
 const upgradedResolvedProject = upsertThreadIntoProjectGroups(
   [{ projectName: 'unknown-project', threads: [unresolvedSharedThread] }],
