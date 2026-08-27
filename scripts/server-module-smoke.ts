@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer as createNodeHttpServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7664,7 +7664,6 @@ async function smokeLocalFileAccessPolicy(): Promise<void> {
     resolveWorkspaceLocalPath(candidatePath, {
       getWorkspaceRoots: async () => roots,
       realpath,
-      stat,
     })
   )
 
