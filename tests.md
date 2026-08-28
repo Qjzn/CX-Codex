@@ -14585,6 +14585,7 @@ Verification:
 
 - 复现探针确认真实上传图片文件存在，但旧 7420 对 `/codex-local-image?path=...codex-web-uploads...` 返回 `HTTP 403` 与“该路径不在已登记的工作区目录内”。
 - `npm.cmd run verify:server-modules` 覆盖上传缓存图片读取、直接文件读取、文件卡片 browse 预览、缓存目录拒绝、编辑拒绝、外部路径拒绝和 junction 逃逸拒绝。
+- 上传缓存路径只接受服务器生成的 `f-xxxxxx/<filename>` 两段结构；请求值只参与匹配，传入 `realpath` 的目录名和文件名必须来自实际目录枚举，且 canonical 根目录检查继续拒绝 junction/符号链接逃逸。发布 PR 的高危 `js/path-injection` CodeQL 门禁必须为零。
 - 隔离候选服务使用临时 Runtime DB 和无副作用 bridge；`agent-browser` 在 393 x 852 H5 视口打开真实上传路径，图片 `complete=true`、原始尺寸 `1658 x 1658`、控制台无错误。同期 HTTP 探针确认图片/直接文件读取为 `200`，缓存目录、编辑接口和普通工作区外文件仍为 `403`。
 - 前端消息渲染映射未改动；发布前仍应在安装候选上补一次“上传后发送消息 -> 缩略图 -> 点击预览”的完整交互确认。
 
