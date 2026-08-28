@@ -2756,16 +2756,21 @@ watch(
 }
 
 .thread-composer-shell {
-  @apply relative border p-2 sm:p-2.5;
+  @apply relative border px-2 py-1;
   min-height: var(--ui-composer-min-height);
   border-radius: var(--ui-radius-composer);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
-  box-shadow: 0 8px 20px rgb(0 0 0 / 0.045);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.035);
   transition:
     border-color 180ms ease,
     box-shadow 180ms ease,
     background-color 180ms ease;
+}
+
+.thread-composer-shell:focus-within {
+  border-color: color-mix(in srgb, var(--ui-accent) 36%, var(--ui-border-strong));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ui-accent) 10%, transparent);
 }
 
 .thread-composer-shell--dictation-inserted {
@@ -3090,7 +3095,7 @@ watch(
 }
 
 .thread-composer-controls {
-  @apply relative mt-1.5 flex items-center gap-2 sm:gap-2.5 overflow-visible;
+  @apply relative mt-1 flex items-center gap-2 sm:gap-2.5 overflow-visible;
 }
 
 .thread-composer-controls--recording {
@@ -3766,16 +3771,16 @@ watch(
   @apply hidden;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (max-height: 480px) and (max-width: 932px) {
   .thread-composer {
     @apply px-2;
   }
 
   .thread-composer-shell {
-    @apply px-2.5 py-1.5;
-    min-height: 86px;
-    border-radius: 18px;
-    box-shadow: 0 6px 16px rgb(0 0 0 / 0.045);
+    @apply px-2 py-1;
+    min-height: 84px;
+    border-radius: var(--ui-radius-composer);
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.035);
   }
 
   .thread-composer-input {
@@ -3813,7 +3818,7 @@ watch(
   }
 
   .thread-composer-runtime-trigger {
-    @apply h-9 gap-1 border px-2 text-[13px];
+    @apply h-11 gap-1 border px-2 text-[13px];
     border-radius: var(--ui-radius-control);
     border-color: var(--ui-border-subtle);
     background: var(--ui-bg-surface-muted);
@@ -3847,6 +3852,12 @@ watch(
   }
 
   .thread-composer-runtime-options--models::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .thread-composer-expand {
     display: none;
   }
 }

@@ -1,10 +1,15 @@
 <template>
   <div
     class="desktop-layout"
-    :class="{ 'is-mobile': isMobile, 'is-dual-pane-touch': isDualPaneMobile }"
+    :class="{
+      'is-mobile': isMobile,
+      'is-compact': isCompactViewport,
+      'is-overlay-sidebar': isOverlaySidebar,
+      'is-dual-pane-touch': isDualPaneMobile,
+    }"
     :style="layoutStyle"
   >
-    <Teleport v-if="isMobile" to="body">
+    <Teleport v-if="isOverlaySidebar" to="body">
       <Transition name="drawer">
         <div v-if="!isSidebarCollapsed" class="mobile-drawer-backdrop" @click="$emit('close-sidebar')">
           <aside
@@ -22,7 +27,7 @@
       </Transition>
     </Teleport>
 
-    <template v-if="!isMobile">
+    <template v-if="!isOverlaySidebar">
       <aside v-if="!isSidebarCollapsed" class="desktop-sidebar" aria-label="会话导航">
         <slot name="sidebar" />
       </aside>
@@ -59,13 +64,14 @@ defineEmits<{
   'close-sidebar': []
 }>()
 
-const { isMobile, isDualPaneMobile, viewportWidth } = useMobile()
+const { isMobile, isCompactViewport, isDualPaneMobile, viewportWidth } = useMobile()
 const mobileDrawerRef = ref<HTMLElement | null>(null)
+const isOverlaySidebar = computed(() => isMobile.value || isCompactViewport.value)
 
 const SIDEBAR_WIDTH_KEY = 'codex-web-local.sidebar-width.v1'
-const MIN_SIDEBAR_WIDTH = 260
-const MAX_SIDEBAR_WIDTH = 420
-const DEFAULT_SIDEBAR_WIDTH = 356
+const MIN_SIDEBAR_WIDTH = 240
+const MAX_SIDEBAR_WIDTH = 360
+const DEFAULT_SIDEBAR_WIDTH = 288
 const TOUCH_DUAL_PANE_MIN_SIDEBAR_WIDTH = 236
 const TOUCH_DUAL_PANE_MAX_SIDEBAR_WIDTH = 340
 const TOUCH_DUAL_PANE_SIDEBAR_RATIO = 0.31
@@ -83,6 +89,7 @@ function clampTouchDualPaneSidebarWidth(value: number): number {
 function loadSidebarWidth(): number {
   if (typeof window === 'undefined') return DEFAULT_SIDEBAR_WIDTH
   const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY)
+  if (raw === null || raw.trim().length === 0) return DEFAULT_SIDEBAR_WIDTH
   const parsed = Number(raw)
   if (!Number.isFinite(parsed)) return DEFAULT_SIDEBAR_WIDTH
   return clampSidebarWidth(parsed)
@@ -99,7 +106,7 @@ const resolvedSidebarWidth = computed(() => {
   const preferredWidth = sidebarWidth.value === DEFAULT_SIDEBAR_WIDTH ? ratioWidth : sidebarWidth.value
   return clampTouchDualPaneSidebarWidth(Math.min(preferredWidth, touchDualPaneMaxSidebarWidth.value))
 })
-const isMobileDrawerOpen = computed(() => isMobile.value && !props.isSidebarCollapsed)
+const isMobileDrawerOpen = computed(() => isOverlaySidebar.value && !props.isSidebarCollapsed)
 
 useLazyModalEnvironment(
   isMobileDrawerOpen,
@@ -107,7 +114,7 @@ useLazyModalEnvironment(
   () => document.activeElement instanceof HTMLElement ? document.activeElement : null,
 )
 const layoutStyle = computed(() => {
-  if (isMobile.value || props.isSidebarCollapsed) {
+  if (isOverlaySidebar.value || props.isSidebarCollapsed) {
     return {
       '--sidebar-width': '0px',
       '--layout-columns': 'minmax(0, 1fr)',
@@ -235,7 +242,7 @@ function onResizeHandlePointerDown(event: PointerEvent): void {
 .mobile-drawer {
   @apply absolute top-0 left-0 bottom-0 overflow-hidden border-r;
   border-color: var(--ui-border-subtle);
-  width: min(22rem, calc(100vw - 2.5rem));
+  width: min(var(--ui-sidebar-width), calc(100vw - 2.5rem));
   max-width: calc(100vw - 2.5rem);
   border-top-right-radius: 1.5rem;
   border-bottom-right-radius: 1.5rem;
@@ -247,6 +254,8 @@ function onResizeHandlePointerDown(event: PointerEvent): void {
 
 @media (max-width: 767px) {
   .mobile-drawer {
+    width: min(22.5rem, calc(100vw - 3rem));
+    max-width: calc(100vw - 3rem);
     border-top-right-radius: 1.125rem;
     border-bottom-right-radius: 1.125rem;
   }

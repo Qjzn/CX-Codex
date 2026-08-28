@@ -877,14 +877,19 @@ Assert-ContentExcludes ".github/release-body.md" @(
 Assert-ContentIncludes ".github/workflows/release.yml" @(
   "Verify release metadata",
   "Require stable tag from main",
+  "Require signed candidate from current main",
   "git merge-base --is-ancestor `$env:GITHUB_SHA origin/main",
   "Official release tag `$env:GITHUB_REF_NAME must point to a commit on main.",
+  "Signed candidate builds must use the current origin/main commit.",
   "Release tag `$env:GITHUB_REF_NAME does not match package version `$packageVersion.",
   "docs/release-notes-`$tagVersion.zh-CN.md",
   "Require Android release signing secrets",
   "keystorePath.Replace('\', '/')",
   "Verify Android release signature",
   "ANDROID_RELEASE_CERT_SHA256",
+  "Upload signed candidate artifacts",
+  "signed-release-candidate-`${{ steps.release-metadata.outputs.artifact_version }}",
+  "if: github.event_name == 'push'",
   'body_path: ${{ steps.release-metadata.outputs.release_notes_path }}'
 )
 

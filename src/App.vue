@@ -81,7 +81,7 @@
               aria-label="侧栏快捷操作"
             >
               <button
-                class="sidebar-action-tile"
+                class="sidebar-action-tile sidebar-action-tile-primary"
                 type="button"
                 aria-label="新建会话"
                 title="新建会话"
@@ -554,8 +554,6 @@
           tabindex="-1"
         >
         <ContentHeader :title="contentTitle">
-          <template #title-prefix>
-          </template>
           <template #title-suffix>
             <button
               v-if="showMobileThreadRefreshButton"
@@ -595,7 +593,7 @@
               class="sidebar-thread-controls-header-host"
               :is-sidebar-collapsed="isSidebarCollapsed"
               :attention-count="attentionThreadCount"
-              :show-new-thread-button="true"
+              :show-new-thread-button="!isHomeRoute"
               @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
               @start-new-thread="onStartNewThreadFromToolbar"
             />
@@ -1569,8 +1567,9 @@ const enabledComposerSkills = computed(() => installedSkills.value.filter((skill
 
 const route = useRoute()
 const router = useRouter()
-const { isMobile, isDualPaneMobile, viewportWidth } = useMobile()
-const isSettingsSheetMode = computed(() => isMobile.value || isDualPaneMobile.value)
+const { isMobile, isCompactViewport, isDualPaneMobile, viewportWidth } = useMobile()
+const isOverlaySidebar = computed(() => isMobile.value || isCompactViewport.value)
+const isSettingsSheetMode = computed(() => isOverlaySidebar.value || isDualPaneMobile.value)
 const { favorites, toggleFavorite, removeFavorite, refreshFavorites } = useFavorites()
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
@@ -1605,7 +1604,7 @@ const worktreeInitStatus = ref<{ phase: 'idle' | 'running' | 'error'; title: str
   title: '',
   message: '',
 })
-const isSidebarCollapsed = ref(isMobile.value ? true : loadSidebarCollapsed())
+const isSidebarCollapsed = ref(isOverlaySidebar.value ? true : loadSidebarCollapsed())
 const isFavoritesModalVisible = ref(false)
 const favoritesStatusText = ref('')
 type ProductToastTone = 'success' | 'info' | 'warning' | 'danger'
@@ -2160,13 +2159,13 @@ const pageTitle = computed(() => {
     : baseTitle
 })
 const headerSubtitle = computed(() => {
+  if (isCompactTouchContent.value) return ''
   if (isWorkbenchRoute.value) return '集中查看状态、复用项目配置，并一键发起标准化任务。'
   if (isDiagnosticsRoute.value) return '检查后端队列、运行状态和恢复链路。'
   if (isSkillsRoute.value) return '管理已安装技能和当前运行能力。'
   if (isGithubTrendingRoute.value) return '浏览热门仓库、查看介绍，并直接带着项目链接发起提问。'
   if (isHomeRoute.value) return '从已配置工作区快速发起新的 Codex 任务。'
   if (isRouteOnlyEmptyThread.value) return '这个会话还没有消息，你可以直接发送第一条消息，或将它移除。'
-  if (isCompactTouchContent.value) return ''
   const cwd = selectedThread.value?.cwd?.trim() ?? ''
   return cwd || ''
 })
@@ -2176,6 +2175,7 @@ const showMobileThreadRefreshButton = computed(() => (
 ))
 const isCompactTouchContent = computed(() => (
   isMobile.value ||
+  isCompactViewport.value ||
   isDualPaneMobile.value ||
   (viewportWidth.value > 0 && viewportWidth.value < 1024)
 ))
@@ -3973,7 +3973,7 @@ function onRespondServerRequest(payload: { id: number; result?: unknown; error?:
 }
 
 function shouldUseMobileSidebarDrawer(): boolean {
-  return isMobile.value || viewportWidth.value < 768
+  return isOverlaySidebar.value
 }
 
 function closeMobileSidebarAfterNavigation(): void {
@@ -5336,8 +5336,8 @@ watch(
   { immediate: true },
 )
 
-watch(isMobile, (mobile) => {
-  if (mobile) {
+watch(isOverlaySidebar, (overlaySidebar) => {
+  if (overlaySidebar) {
     setSidebarCollapsed(true, { persist: false })
     return
   }
@@ -5653,7 +5653,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-action-grid {
-  @apply grid grid-cols-4 gap-1;
+  @apply grid grid-cols-3 gap-1;
 }
 
 .sidebar-tools-menu {
@@ -5689,10 +5689,21 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-action-tile {
-  @apply flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 border border-transparent bg-transparent px-1.5 py-1 text-[11px] font-medium transition-[background-color,border-color,color] duration-150;
+  @apply flex min-h-9 min-w-0 flex-row items-center justify-center gap-1.5 border border-transparent bg-transparent px-1.5 py-1 text-[11px] font-medium transition-[background-color,border-color,color] duration-150;
   border-radius: var(--ui-radius-control);
   color: var(--ui-text-secondary);
   touch-action: manipulation;
+}
+
+.sidebar-action-tile-primary {
+  @apply col-span-full justify-start px-2.5 text-[13px] font-semibold;
+  border-color: color-mix(in srgb, var(--ui-text-primary) 7%, transparent);
+  background: color-mix(in srgb, var(--ui-text-primary) 4%, transparent);
+  color: var(--ui-text-primary);
+}
+
+.sidebar-action-tile-primary .sidebar-action-icon {
+  color: var(--ui-accent);
 }
 
 .sidebar-action-tile[aria-pressed='true'],
@@ -5725,7 +5736,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-action-label {
-  @apply block max-w-full truncate text-center leading-4;
+  @apply block max-w-full truncate text-left leading-4;
 }
 
 .sidebar-search-toggle {
@@ -6290,21 +6301,21 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .new-thread-hero {
-  @apply m-0 text-[1.55rem] sm:text-[2.05rem] font-semibold leading-[1.08];
+  @apply m-0 text-xl sm:text-2xl font-semibold leading-[1.15];
   color: var(--ui-text-primary);
 }
 
 .new-thread-folder-dropdown {
-  @apply text-xl sm:text-[2.05rem];
+  @apply text-xl sm:text-2xl;
   color: var(--ui-text-secondary);
 }
 
 .new-thread-folder-dropdown :deep(.composer-dropdown-trigger) {
-  @apply h-auto text-xl sm:text-[2.2rem] leading-[1.05];
+  @apply h-auto text-xl sm:text-2xl leading-[1.15];
 }
 
 .new-thread-folder-dropdown :deep(.composer-dropdown-value) {
-  @apply leading-[1.05];
+  @apply leading-[1.15];
 }
 
 .new-thread-folder-dropdown :deep(.composer-dropdown-chevron) {
@@ -6845,6 +6856,12 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   .content-title-refresh-button,
   .content-favorites-button {
     @apply h-9 min-w-9;
+  }
+}
+
+@media (max-width: 767px), (pointer: coarse) {
+  .sidebar-action-tile {
+    min-height: 44px;
   }
 }
 

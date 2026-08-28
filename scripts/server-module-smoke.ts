@@ -3300,6 +3300,7 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
   }) as { data: Array<{ id: string; title?: string }>; marker: boolean }
   assert.deepEqual(calls, ['session-a', 'missing'])
   assert.deepEqual(augmented.data.map((thread) => thread.id), ['existing', 'session-a'])
+  assert.deepEqual((augmented as unknown as { supplementalThreadIds: string[] }).supplementalThreadIds, ['session-a'])
   assert.equal(augmented.marker, true)
 
   const cached = await augmenter.augmentThreadListRpcResult({
@@ -3987,6 +3988,41 @@ async function smokeAppServerRpcCache(): Promise<void> {
   Date.now = () => now
   const cache = new AppServerRpcCache({ threadListCachePath: '' })
   const key = getShareableRpcKey('thread/list', {}) ?? ''
+
+  cache.writeThreadList(key, {
+    data: [
+      { id: 'thread-current', path: 'newer.jsonl', updatedAt: 20 },
+      { id: 'thread-other', path: 'other.jsonl', updatedAt: 15 },
+      { id: 'thread-current', path: 'older.jsonl', updatedAt: 10 },
+      { id: '', path: 'unidentified-a.jsonl' },
+      { path: 'unidentified-b.jsonl' },
+    ],
+    nextCursor: 'cursor-a',
+  })
+  assert.deepEqual(cache.readThreadList(key, true)?.value, {
+    data: [
+      { id: 'thread-current', path: 'newer.jsonl', updatedAt: 20 },
+      { id: 'thread-other', path: 'other.jsonl', updatedAt: 15 },
+      { id: '', path: 'unidentified-a.jsonl' },
+      { path: 'unidentified-b.jsonl' },
+    ],
+    nextCursor: 'cursor-a',
+  })
+
+  const firstReadCache = new AppServerRpcCache({ threadListCachePath: '' })
+  assert.deepEqual(
+    await firstReadCache.executeShareableRead('thread/list', {}, key, async () => ({
+      data: [
+        { id: 'thread-current', path: 'newer.jsonl', updatedAt: 20 },
+        { id: 'thread-current', path: 'older.jsonl', updatedAt: 10 },
+      ],
+      nextCursor: 'cursor-a',
+    })),
+    {
+      data: [{ id: 'thread-current', path: 'newer.jsonl', updatedAt: 20 }],
+      nextCursor: 'cursor-a',
+    },
+  )
 
   cache.writeThreadList(key, { rows: ['fresh'] })
   assert.deepEqual(cache.readThreadList(key, true), { value: { rows: ['fresh'] }, stale: false })

@@ -88,7 +88,10 @@
                 <span class="live-overlay-indicator-core" />
               </span>
               <div class="live-overlay-heading">
-                <p class="live-overlay-label">{{ liveOverlayPrimaryLabel(effectiveLiveOverlay) }}</p>
+                <p class="live-overlay-active-state">{{ liveOverlayCompactLabel }}</p>
+                <p class="live-overlay-active-detail">
+                  {{ effectiveLiveOverlay.isRecovering === true ? liveOverlayTailHint : liveOverlayPrimaryLabel(effectiveLiveOverlay) }}
+                </p>
                 <span class="live-overlay-dots" aria-hidden="true">
                   <span class="live-overlay-dot" />
                   <span class="live-overlay-dot" />
@@ -533,10 +536,10 @@
               @click="onToggleGuidedTurn(entry.turnIndex)"
             >
               <span class="guided-turn-toggle-title">
-                {{ isGuidedTurnExpanded(entry.turnIndex) ? '隐藏阶段回复' : '阶段回复' }}
+                {{ isGuidedTurnExpanded(entry.turnIndex) ? '收起执行过程' : '执行过程' }}
               </span>
               <span class="guided-turn-toggle-meta">
-                {{ entry.hiddenCount }}条<span v-if="guidedTurnDurationLabel(entry.turnIndex)"> · {{ guidedTurnDurationLabel(entry.turnIndex) }}</span>
+                {{ activitySummaryMeta(entry) }}
               </span>
             </button>
           </div>
@@ -1721,10 +1724,27 @@ const renderableMessages = computed<UiMessage[]>(() => (
 const isRevealingOlderMessages = ref(false)
 const canAutoRevealOlderMessages = ref(true)
 const visibleMessageStartIndex = ref(0)
-const isRequestPanelExpanded = ref(false)
+const isRequestPanelExpanded = ref(props.pendingRequests.length > 0 && effectiveLiveOverlay.value === null)
 const isLiveOverlayDetailOpen = ref(false)
 const expandedGuidedTurnIndexes = ref<Set<number>>(new Set())
 const expandedRawPayloadMessageIds = ref<Set<string>>(new Set())
+
+watch(
+  [
+    () => props.activeThreadId,
+    () => props.pendingRequests.map((request) => request.id).join('|'),
+    () => effectiveLiveOverlay.value !== null,
+  ] as const,
+  ([threadId, requestIds, hasLiveOverlay], [previousThreadId, previousRequestIds]) => {
+    if (!requestIds) {
+      isRequestPanelExpanded.value = false
+      return
+    }
+    if (threadId !== previousThreadId || requestIds !== previousRequestIds) {
+      isRequestPanelExpanded.value = !hasLiveOverlay
+    }
+  },
+)
 
 function latestVisibleStartIndex(messages: UiMessage[]): number {
   const messageCount = messages.length
@@ -1864,6 +1884,7 @@ type GuidedSummaryEntry = {
   measureId: string
   turnIndex: number
   hiddenCount: number
+  commandCount: number
 }
 
 type ContextPreviewEntry = {
@@ -1906,10 +1927,13 @@ const collapsibleGuidedTurnDescriptors = computed<Map<number, GuidedTurnDescript
   for (const [turnIndex, messages] of groupedMessages.entries()) {
     if (!isTurnCompleted(turnIndex)) continue
     const guidedMessages = messages.filter(isGuidedAssistantMessage)
-    if (guidedMessages.length < 2) continue
     const finalMessage = guidedMessages[guidedMessages.length - 1]
-    const hiddenMessages = guidedMessages.slice(0, -1)
-    if (!finalMessage || hiddenMessages.length === 0) continue
+    if (!finalMessage) continue
+    const intermediateAssistantIds = new Set(guidedMessages.slice(0, -1).map((message) => message.id))
+    const hiddenMessages = messages.filter((message) => (
+      intermediateAssistantIds.has(message.id) || isCommandMessage(message)
+    ))
+    if (hiddenMessages.length === 0) continue
     descriptors.set(turnIndex, {
       turnIndex,
       hiddenMessages,
@@ -2038,13 +2062,22 @@ function guidedTurnDurationLabel(turnIndex: number): string {
   return guidedTurnDurationLabelByTurnIndex.value[turnIndex] ?? ''
 }
 
-function buildGuidedSummaryEntry(turnIndex: number, hiddenCount: number): GuidedSummaryEntry {
+function activitySummaryMeta(entry: GuidedSummaryEntry): string {
+  const activityCountLabel = entry.commandCount > 0
+    ? `${String(entry.commandCount)} 个操作`
+    : `${String(entry.hiddenCount)} 条更新`
+  const duration = guidedTurnDurationLabel(entry.turnIndex)
+  return duration ? `${activityCountLabel} · ${duration}` : activityCountLabel
+}
+
+function buildGuidedSummaryEntry(descriptor: GuidedTurnDescriptor): GuidedSummaryEntry {
   return {
     kind: 'guidedSummary',
-    key: `guided-summary:${String(turnIndex)}`,
-    measureId: `guided-summary:${String(turnIndex)}`,
-    turnIndex,
-    hiddenCount,
+    key: `guided-summary:${String(descriptor.turnIndex)}`,
+    measureId: `guided-summary:${String(descriptor.turnIndex)}`,
+    turnIndex: descriptor.turnIndex,
+    hiddenCount: descriptor.hiddenMessages.length,
+    commandCount: descriptor.hiddenMessages.filter(isCommandMessage).length,
   }
 }
 
@@ -2067,7 +2100,7 @@ const renderableConversationEntries = computed<ConversationRenderEntry[]>(() => 
     }
 
     if (descriptor && descriptor.finalMessageId === message.id) {
-      entries.push(buildGuidedSummaryEntry(descriptor.turnIndex, descriptor.hiddenMessages.length))
+      entries.push(buildGuidedSummaryEntry(descriptor))
     }
 
     entries.push({
@@ -2376,6 +2409,8 @@ const showProcessPanel = computed(() => (
 const shouldRenderDetailedLiveOverlay = computed<boolean>(() => {
   const overlay = effectiveLiveOverlay.value
   if (!overlay) return false
+  if (props.compactRuntimeChrome !== true) return true
+  if (props.isTurnInProgress === true) return true
   if (overlayPrimaryPendingRequest.value) return true
   if (overlay.errorText.trim().length > 0) return true
   return false
@@ -7061,6 +7096,16 @@ onBeforeUnmount(() => {
 
 .live-overlay-heading {
   @apply min-w-0 flex flex-col gap-0.5;
+}
+
+.live-overlay-active-state {
+  @apply m-0 text-[13px] font-semibold;
+  color: var(--ui-text-primary);
+}
+
+.live-overlay-active-detail {
+  @apply m-0 truncate text-xs;
+  color: var(--ui-text-secondary);
 }
 
 .live-overlay-compact-main {

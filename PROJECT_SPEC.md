@@ -117,7 +117,7 @@ Large orchestration files remain, but new independent policies belong in focused
 
 - Windows bootstrap, install, preserving/full uninstall, managed restart, active-task drain and watchdog flows.
 - Password-protected local/LAN access plus optional Tailscale or Cloudflare tunnel management.
-- Android WebView shell, task monitoring, foreground recovery, network recovery, notifications, optional FCM deep-Doze wake and task-pet overlay.
+- Android WebView shell, task monitoring, foreground/network/process recovery, exact-turn terminal fencing, deduplicated completion notifications, optional FCM deep-Doze wake and task-pet overlay.
 - Android official and debug packages use separate identities; release signing remains a release-workflow responsibility.
 
 ### Local files and diagnostics
@@ -166,6 +166,8 @@ Browser storage is an optimization and recovery aid, not a second server authori
 - queued follow-ups and timing-only diagnostics.
 
 Message caches, outbox journals and timing histories have TTL/count limits. Prompt or reply text is not copied into timing diagnostics.
+
+The bridge normalizes every `thread/list` page by stable thread id before returning or persisting it. First-page records appended from pinned/session-index recovery are identified by `supplementalThreadIds`, so pagination validation can distinguish intentional recovery overlap from duplicate authoritative rows without mutating session files.
 
 ## Routing
 
