@@ -39,6 +39,8 @@ const runtimeMessageQueueImport = toImportPath(relative(outputRoot, join(repoRoo
 const foregroundRecoveryPolicyImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'foregroundRecoveryPolicy.ts')))
 const threadFirstScreenMetricsImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'threadFirstScreenMetrics.ts')))
 const foregroundRecoveryMetricsImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'foregroundRecoveryMetrics.ts')))
+const codexGatewayImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'codexGateway.ts')))
+const queuedMessageTransferImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'queuedMessageTransfer.ts')))
 
 try {
   writeFileSync(entryPath, `
@@ -68,6 +70,7 @@ import {
   filterVisibleOptimisticUserMessages,
   mergeVisibleOptimisticUserMessages,
   recoverOptimisticBaselineMatchCount,
+  selectDetachedFailedOptimisticUserMessages,
   userMessageSignature,
 } from '${messageIdentityImport}'
 import {
@@ -152,6 +155,54 @@ import {
   readForegroundRecoveryMetricSummary,
   settleForegroundRecoveryMetric,
 } from '${foregroundRecoveryMetricsImport}'
+import { getThreadRuntimeSnapshot } from '${codexGatewayImport}'
+import {
+  restoreQueuedMessageAtIndex,
+  transferQueuedMessageWithRecovery,
+} from '${queuedMessageTransferImport}'
+
+const runtimeSnapshotOriginalFetch = globalThis.fetch
+const runtimeSnapshotOriginalDateNow = Date.now
+let runtimeSnapshotFetchCount = 0
+let runtimeSnapshotNow = 1_000
+Date.now = () => runtimeSnapshotNow
+globalThis.fetch = (async () => {
+  runtimeSnapshotFetchCount += 1
+  return new Response(JSON.stringify({
+    data: {
+      executionState: 'completed',
+      inProgress: false,
+      messageState: 'fresh',
+      pendingServerRequests: [],
+      stale: false,
+      updatedAtIso: '2026-08-28T00:00:00.000Z',
+    },
+  }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+}) as typeof fetch
+await getThreadRuntimeSnapshot('thread-session-log-quiet-window')
+runtimeSnapshotNow += 1_800
+await (getThreadRuntimeSnapshot as any)('thread-session-log-quiet-window', {
+  cachedSnapshotMaxAgeMs: 2_500,
+})
+assert.equal(
+  runtimeSnapshotFetchCount,
+  1,
+  'a delayed session-log convergence read should reuse the settled state snapshot',
+)
+runtimeSnapshotNow = 10_000
+await getThreadRuntimeSnapshot('thread-default-cache-window')
+runtimeSnapshotNow += 1_000
+await getThreadRuntimeSnapshot('thread-default-cache-window')
+assert.equal(
+  runtimeSnapshotFetchCount,
+  3,
+  'ordinary state reads must retain the shorter default freshness window',
+)
+globalThis.fetch = runtimeSnapshotOriginalFetch
+Date.now = runtimeSnapshotOriginalDateNow
 
 const recoveryMetricHost: any = {}
 let recoveryMetricStorageValue: string | null = null
@@ -268,6 +319,26 @@ assert.deepEqual(
   [serverC, serverA, queuedB],
 )
 assert.deepEqual(mergeRuntimeMessageQueueThreadState([serverA], []), [])
+
+const transferSnapshot = { index: 1, message: queuedB }
+let restoredTransferSnapshot: typeof transferSnapshot | null = null
+assert.equal(await transferQueuedMessageWithRecovery({
+  snapshot: transferSnapshot,
+  deliver: async () => { throw new Error('active writer rejected steer') },
+  restore: async (snapshot) => {
+    restoredTransferSnapshot = snapshot
+    return true
+  },
+}), 'restored')
+assert.equal(restoredTransferSnapshot, transferSnapshot)
+assert.deepEqual(
+  restoreQueuedMessageAtIndex([queuedA, queuedC], transferSnapshot).map((message) => message.id),
+  ['local-a', 'local-b', 'local-c'],
+)
+assert.equal(
+  restoreQueuedMessageAtIndex([queuedA, queuedB, queuedC], transferSnapshot).filter((message) => message.id === queuedB.id).length,
+  1,
+)
 
 const activeResumeState = {
   hasThread: true,
@@ -1062,6 +1133,160 @@ assert.deepEqual(
     ]),
   ).map((message) => message.id),
   ['persisted-a', 'optimistic-user:after-first', 'persisted-b', 'persisted-c', 'optimistic-user:after-last'],
+)
+
+const repeatedPrompt = { id: 'optimistic-user:repeated-current', role: 'user', text: '帮我进行下一步' }
+const repeatedPromptMeta = new Map([[repeatedPrompt.id, {
+  kind: 'optimisticUserMessage',
+  signature: userMessageSignature(repeatedPrompt),
+  baselineMatchCount: 1,
+  baselineMessageCount: 120,
+  baselineTailMessageId: 'history-anchor-outside-current-page',
+  authoritativeTurnId: 'turn-current-repeat',
+  createdAtMs: 4,
+}]])
+assert.deepEqual(
+  filterVisibleOptimisticUserMessages(
+    [{
+      id: 'persisted-current-repeat',
+      role: 'user',
+      text: '帮我进行下一步',
+      turnId: 'turn-current-repeat',
+      turnIndex: 48,
+    }],
+    [repeatedPrompt],
+    repeatedPromptMeta,
+  ),
+  [],
+  'turn identity must acknowledge a repeated prompt even when its older baseline match is outside the loaded page',
+)
+const laterRepeatedPrompt = { ...repeatedPrompt, id: 'optimistic-user:repeated-later' }
+assert.deepEqual(
+  filterVisibleOptimisticUserMessages(
+    [{
+      id: 'persisted-current-repeat',
+      role: 'user',
+      text: '帮我进行下一步',
+      turnId: 'turn-current-repeat',
+      turnIndex: 48,
+    }],
+    [repeatedPrompt, laterRepeatedPrompt],
+    new Map([
+      ...repeatedPromptMeta,
+      [laterRepeatedPrompt.id, {
+        ...repeatedPromptMeta.get(repeatedPrompt.id),
+        authoritativeTurnId: 'turn-later-repeat',
+        createdAtMs: 5,
+      }],
+    ]),
+  ).map((message) => message.id),
+  ['optimistic-user:repeated-later'],
+  'two intentional identical prompts must remain distinct until each own turn is authoritative',
+)
+
+const laterUnboundRepeatedPrompt = { ...repeatedPrompt, id: 'optimistic-user:repeated-later-unbound' }
+assert.deepEqual(
+  filterVisibleOptimisticUserMessages(
+    [
+      {
+        id: 'persisted-first-repeat',
+        role: 'user',
+        text: '帮我进行下一步',
+        turnId: 'turn-first-repeat',
+        turnIndex: 48,
+      },
+      {
+        id: 'persisted-later-repeat',
+        role: 'user',
+        text: '帮我进行下一步',
+        turnId: 'turn-later-repeat',
+        turnIndex: 49,
+      },
+    ],
+    [repeatedPrompt, laterUnboundRepeatedPrompt],
+    new Map([
+      [repeatedPrompt.id, {
+        ...repeatedPromptMeta.get(repeatedPrompt.id),
+        baselineMatchCount: 0,
+        baselineMessageCount: 0,
+        baselineTailMessageId: '',
+        authoritativeTurnId: 'turn-first-repeat',
+      }],
+      [laterUnboundRepeatedPrompt.id, {
+        ...repeatedPromptMeta.get(repeatedPrompt.id),
+        baselineMatchCount: 1,
+        baselineMessageCount: 1,
+        baselineTailMessageId: 'persisted-first-repeat',
+        authoritativeTurnId: undefined,
+        createdAtMs: 5,
+      }],
+    ]),
+  ),
+  [],
+  'an authoritative earlier prompt must not consume the signature acknowledgement for a later baseline',
+)
+
+const detachedFailedMessage = {
+  id: 'optimistic-user:failed-outside-page',
+  role: 'user',
+  text: '历史失败消息',
+  deliveryState: 'failed',
+}
+const detachedFailedMeta = new Map([[detachedFailedMessage.id, {
+  kind: 'optimisticUserMessage',
+  signature: userMessageSignature(detachedFailedMessage),
+  baselineMatchCount: 0,
+  baselineMessageCount: 80,
+  baselineTailMessageId: 'failed-message-anchor-outside-current-page',
+  createdAtMs: 6,
+}]])
+const currentPageMessages = [
+  { id: 'current-page-user', role: 'user', text: '最新问题', turnId: 'turn-latest', turnIndex: 90 },
+  { id: 'current-page-assistant', role: 'assistant', text: '最新回复', turnId: 'turn-latest', turnIndex: 90 },
+]
+assert.deepEqual(
+  selectDetachedFailedOptimisticUserMessages(
+    currentPageMessages,
+    [detachedFailedMessage],
+    detachedFailedMeta,
+  ).map((message) => message.id),
+  ['optimistic-user:failed-outside-page'],
+  'a recovered failed message whose anchor is outside the page must move to the recovery tray',
+)
+assert.deepEqual(
+  mergeVisibleOptimisticUserMessages(
+    currentPageMessages,
+    [detachedFailedMessage],
+    detachedFailedMeta,
+  ).map((message) => message.id),
+  ['current-page-user', 'current-page-assistant'],
+  'a detached historical failure must not be appended below the newest reply',
+)
+const anchoredFailedMessages = [
+  { id: 'loaded-failed-anchor', role: 'assistant', text: '原位置前的回复', turnId: 'turn-old', turnIndex: 12 },
+  ...currentPageMessages,
+]
+const anchoredFailedMeta = new Map([[detachedFailedMessage.id, {
+  ...detachedFailedMeta.get(detachedFailedMessage.id),
+  baselineMessageCount: 1,
+  baselineTailMessageId: 'loaded-failed-anchor',
+}]])
+assert.deepEqual(
+  selectDetachedFailedOptimisticUserMessages(
+    anchoredFailedMessages,
+    [detachedFailedMessage],
+    anchoredFailedMeta,
+  ),
+  [],
+  'a failed message must stay in the transcript when its original anchor is loaded',
+)
+assert.deepEqual(
+  mergeVisibleOptimisticUserMessages(
+    anchoredFailedMessages,
+    [detachedFailedMessage],
+    anchoredFailedMeta,
+  ).map((message) => message.id),
+  ['loaded-failed-anchor', 'optimistic-user:failed-outside-page', 'current-page-user', 'current-page-assistant'],
 )
 
 const generatedImageMessages = normalizeThreadMessagesV2({

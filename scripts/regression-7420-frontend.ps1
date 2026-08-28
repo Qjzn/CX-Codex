@@ -689,6 +689,11 @@ function Assert-BoundedRuntimeSendRecoverySource {
   $runtimeStoreSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\runtimeStore.ts")
   $runtimeQueueClientSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\api\runtimeMessageQueue.ts")
   $runtimeQueueServerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\runtimeMessageQueue.ts")
+  $nativeThreadQueueSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\appServerNativeThreadQueue.ts")
+  $queuedMessagesSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\QueuedMessages.vue")
+  $conversationFixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ConversationRegressionFixture.vue")
+  $failedMessagesTraySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\FailedMessagesTray.vue")
+  $messageIdentitySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\messageIdentity.ts")
   $codexBridgeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\codexAppServerBridge.ts")
   $gatewaySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\api\codexGateway.ts")
   $codexBridgeDisposeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\codexBridgeMiddlewareDispose.ts")
@@ -757,6 +762,11 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($manualRetryMatch.Value -match "durableEntry\?\.state\s*===\s*'failed'\s*\?\s*failedUserMessageRequestFromOutbox") "manual retry must recover its request from the durable outbox when volatile state was lost"
   Assert-True ($source -match "messageId:\s*reusedOptimisticMessageId\s*\|\|\s*undefined[\s\S]*?deliveryState:\s*'sending'") "the send path must reset a reused failed bubble to sending"
   Assert-True ($source -match "function\s+restoreFailedMessageOutboxEntry[\s\S]*?findOptimisticMessageIdForOutbox\(entry\.clientMessageId,\s*normalizedThreadId\)\s*\|\|\s*addOptimisticUserMessage") "failed outbox recovery must reuse the current optimistic bubble before creating one after reload"
+  Assert-True ($messageIdentitySource -match "authoritativeTurnId[\s\S]*?persistedUserTurnIds\.has\(authoritativeTurnId\)") "optimistic delivery acknowledgement must prefer authoritative turn identity over repeated text counts"
+  Assert-True ($source -match "bindOptimisticUserMessageToTurn\(optimisticMessageId,\s*startedTurnId\)" -and $source -match "bindOptimisticUserMessageToTurn\(optimisticMessageId,\s*recovered\.turnId\)") "fresh and recovered sends must bind the optimistic bubble to the authoritative turn"
+  Assert-True ($messageIdentitySource -match "selectDetachedFailedOptimisticUserMessages[\s\S]*?baselineTailMessageId[\s\S]*?!persistedIds\.has\(anchorId\)") "a historical failed message with an unloaded anchor must leave the newest transcript projection"
+  Assert-True ($appSource -match '<FailedMessagesTray[\s\S]*?:messages="selectedThreadDetachedFailedMessages"[\s\S]*?@edit="onEditFailedMessage"[\s\S]*?@retry="retryFailedUserMessage"[\s\S]*?@delete="deleteFailedUserMessage"') "detached failed messages must retain edit, retry, and delete recovery actions above the composer"
+  Assert-True ($failedMessagesTraySource -match "未发送消息[\s\S]*?已从最新回复下方移出" -and $failedMessagesTraySource -match "aria-expanded") "the historical failure tray must stay compact and explain why the message moved"
   Assert-True ($appSource -match "function\s+onSubmitThreadMessage[\s\S]*?const\s+feedbackStartedAtMs\s*=\s*isHomeRoute\.value\s*\|\|\s*payload\.mode\s*===\s*'steer'\s*\?\s*chatFeedbackNow\(\)") "message feedback timing must start at the composer submit handler"
   Assert-True ($source -match "const\s+feedbackStartedAtMs\s*=\s*internalOptions\.feedbackStartedAtMs\s*\?\?\s*chatFeedbackNow\(\)") "non-composer sends must retain a local feedback timing fallback"
   Assert-True ($source -match "beginChatFeedbackMetric\(\{[\s\S]*?clientMessageId,[\s\S]*?optimisticMessageId,[\s\S]*?submitStartedAtMs:\s*feedbackStartedAtMs") "message feedback timing must bind the send id to its optimistic bubble"
@@ -786,9 +796,10 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($source -match "async\s+function\s+quoteQueuedMessage\([\s\S]*?internalOptions[\s\S]*?sendMessageToSelectedThread\([\s\S]*?internalOptions") "queued-message immediate execution must forward submit timing and native handoff callbacks"
   $quoteQueuedMessageMatch = [regex]::Match($source, "async\s+function\s+quoteQueuedMessage[\s\S]*?\n\s*return\s+\{")
   Assert-True ($quoteQueuedMessageMatch.Success) "could not find queued-message immediate execution source"
-  Assert-True ($quoteQueuedMessageMatch.Value -match "if\s*\(!msg\s*\|\|\s*isUpdatingSpeedMode\.value\)\s*return[\s\S]*?removeQueuedMessageByThreadId") "queued-message ownership transfer must not remove the row when speed-mode switching would reject the send"
-  Assert-True ($quoteQueuedMessageMatch.Value -match "removeQueuedMessageByThreadId\(threadId,\s*messageId\)[\s\S]*?await\s+sendMessageToSelectedThread") "queued-message immediate execution must transfer ownership to the durable outbox before the network await"
-  Assert-True ($quoteQueuedMessageMatch.Value -notmatch "Keep the queued message") "a failed immediate execution must not retain a second queue owner beside its recovery bubble"
+  Assert-True ($quoteQueuedMessageMatch.Value -match "if\s*\(!msg\s*\|\|\s*isUpdatingSpeedMode\.value\)\s*return[\s\S]*?setQueuedMessagesForThread") "queued-message ownership transfer must not remove the row when speed-mode switching would reject the send"
+  Assert-True ($quoteQueuedMessageMatch.Value -match "transferQueuedMessageWithRecovery[\s\S]*?removeRuntimeQueuedMessage[\s\S]*?await\s+sendMessageToSelectedThread") "queued-message immediate execution must transfer ownership to the durable outbox before the network await"
+  Assert-True ($quoteQueuedMessageMatch.Value -match "restoreRuntimeQueuedMessage[\s\S]*?restoreQueuedMessageAtIndex" -and $quoteQueuedMessageMatch.Value -match "removeOptimisticUserMessage") "a failed immediate execution must remove its failed bubble and restore the original durable queue owner"
+  Assert-True ($conversationFixtureSource -match "queueTransferFailure" -and $conversationFixtureSource -match "transferQueuedMessageWithRecovery" -and $conversationFixtureSource -match 'data-testid="queue-transfer-feedback"') "the conversation fixture must preserve a browser-visible queue-transfer recovery scenario"
   Assert-True ($appSource -match "function\s+onQuoteQueuedMessage\([\s\S]*?feedbackStartedAtMs:\s*chatFeedbackNow\(\)[\s\S]*?onPendingRequestCreated:[\s\S]*?syncMobileShellTaskPet\(true\)[\s\S]*?onRequestDispatched:[\s\S]*?ensureMobileShellTaskNotificationPermission\(\)") "queued-message immediate execution must hand native monitoring ownership over before requesting notification permission"
   Assert-True ($source -match "export\s+function\s+useDesktopState\(submitCallbacks") "all internal send entry points must share one submit-time native handoff contract"
   Assert-True ($source -match "function\s+notifyPendingRequestCreated[\s\S]*?override\s*\?\?\s*submitCallbacks\.onPendingRequestCreated[\s\S]*?function\s+requestDispatchedCallback[\s\S]*?override\s*\?\?\s*submitCallbacks\.onRequestDispatched") "internal retries and rollback resend must inherit the App-level native handoff callbacks when they do not supply an override"
@@ -799,9 +810,31 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($runtimeQueueClientSource -match "persistRuntimeQueuedMessages[\s\S]*?clientMessageId:\s*message\.clientMessageId") "durable queue handoff must preserve the stable idempotency key"
   Assert-True ($source -match "function\s+promoteQueuedMessageToOptimistic[\s\S]*?createMessageOutboxEntry[\s\S]*?clientMessageId:\s*queued\.clientMessageId") "a server-started queue row must transfer its stable id to the durable optimistic outbox"
   Assert-True ($serverSource -match "isActiveWriterConflict\(lastError\)[\s\S]*?status:\s*'queued'[\s\S]*?payload:\s*durablePayload[\s\S]*?notifyQueuedRequest") "an external active-writer race must preserve the same request as a durable queue row instead of failing it"
+  Assert-True ($serverSource -match "isActiveWriterConflict\(lastError\)[\s\S]*?ensureNativeThreadQueueSubmission\([\s\S]*?createNativeThreadQueueMarker\(submission\.id\)") "an external active-writer race must hand the message to the writer owner's native queue"
+  Assert-True ($nativeThreadQueueSource -match "thread/queue/list[\s\S]*?clientUserMessageId[\s\S]*?thread/queue/add") "native queue delegation must deduplicate by stable client user-message id before adding"
+  Assert-True ($nativeThreadQueueSource -match "transport failure[\s\S]*?findExisting\(\)") "an uncertain native queue add must reconcile before the legacy path can retry"
+  Assert-True ($runtimeQueueServerSource -match "readNativeThreadQueueSubmissionId\(next\.lastError\)[\s\S]*?listNativeThreadQueueSubmissions[\s\S]*?status:\s*'completed'") "the 7420 queue mirror must wait without competing and clear only after native ownership accepts the item"
+  Assert-True ($runtimeQueueServerSource -match "async\s+cancel[\s\S]*?deleteNativeThreadQueueSubmission[\s\S]*?status:\s*'interrupted'") "deleting a native-owned queued message must delete native ownership before removing the local mirror"
+  Assert-True ($runtimeQueueServerSource -match "async\s+reorder[\s\S]*?reorderNativeThreadQueueSubmissions[\s\S]*?reorderQueuedRequests") "native-owned queue reorder must update the execution queue before the local mirror"
+  Assert-True ($runtimeQueueClientSource -match "waitReason\?:\s*'native_writer'\s*\|\s*'external_writer'[\s\S]*?waitReason:\s*entry\.waitReason") "native writer wait ownership must survive server normalization and local persistence"
+  Assert-True ($queuedMessagesSource -match "hasNativeWriterWait[\s\S]*?当前回复结束后会自动继续[\s\S]*?hasExternalWriterWait[\s\S]*?关闭或切换桌面端任务后") "the queue UI must distinguish automatic native handoff from an older-version writer blocker"
+  Assert-True ($queuedMessagesSource -notmatch "通常\s*10\s*秒") "the queue UI must not promise a fixed handoff time that the active writer cannot guarantee"
   Assert-True ($gatewaySource -match "queueMetadata:\s*\{[\s\S]*?text:\s*args\.text[\s\S]*?speedMode:\s*args\.speedMode") "an immediate runtime send must retain enough metadata for truthful queue feedback after an active-writer race"
-  Assert-True ($source -match "function\s+demoteOptimisticMessageToQueue[\s\S]*?removeOptimisticUserMessage" -and $source -match "function\s+adoptRuntimeQueuedRequest[\s\S]*?setRuntimeExecutionState\(threadId,\s*'queued'[\s\S]*?当前任务结束后自动发送[\s\S]*?syncRuntimeMessageQueue") "an active-writer fallback must replace the optimistic sent bubble with one visible queued owner"
+  Assert-True ($source -match "function\s+demoteOptimisticMessageToQueue[\s\S]*?removeOptimisticUserMessage") "an active-writer fallback must replace the optimistic sent bubble with one visible queued owner"
+  $adoptRuntimeQueuedRequestMatch = [regex]::Match(
+    $source,
+    "async\s+function\s+adoptRuntimeQueuedRequest\([\s\S]*?(?=\r?\n\s*async\s+function\s+interruptSelectedThreadTurn)",
+    [System.Text.RegularExpressions.RegexOptions]::Singleline
+  )
+  Assert-True ($adoptRuntimeQueuedRequestMatch.Success) "could not find active-writer queue adoption source"
+  Assert-True ($adoptRuntimeQueuedRequestMatch.Value -notmatch "setRuntimeExecutionState\(threadId,\s*'queued'" -and $adoptRuntimeQueuedRequestMatch.Value -notmatch "setThreadInProgress\(threadId" -and $adoptRuntimeQueuedRequestMatch.Value -notmatch "setTurnActivityForThread\(threadId") "queue adoption must not overwrite the authoritative active turn state or activity"
+  Assert-True ($adoptRuntimeQueuedRequestMatch.Value -match "syncRuntimeMessageQueue\(threadId\)[\s\S]*?refreshRuntimeStatusSnapshot\(threadId\)") "queue adoption must reconcile the authoritative runtime snapshot after the durable queue is visible"
+  Assert-True ($source -match "const\s+startOutcome\s*=\s*await\s+startTurnForThread[\s\S]*?startOutcome\s*===\s*'queued'[\s\S]*?setTurnActivityForThread\(threadId,\s*previousTurnActivity\)") "active-writer fallback must restore the pre-existing turn activity after queue adoption"
   Assert-True ($source -match "recovered\?\.status\s*===\s*'queued'[\s\S]*?adoptRuntimeQueuedRequest\(recoveredThreadId,\s*recovered\.requestId\)") "a renderer reload must recover an already accepted active-writer fallback as queued instead of sent or failed"
+  Assert-True ($source -match "function\s+failedUserMessageRequestFromOutbox[\s\S]*?modelId:\s*entry\.modelId[\s\S]*?reasoningEffort:\s*entry\.reasoningEffort[\s\S]*?speedMode:\s*entry\.speedMode") "failed-message retry must rebuild the original model, effort, and speed from its durable outbox row"
+  Assert-True ($source -match "async\s+function\s+retryFailedUserMessage[\s\S]*?modelId:\s*request\.modelId[\s\S]*?reasoningEffort:\s*request\.reasoningEffort[\s\S]*?speedMode:\s*request\.speedMode") "existing-thread manual retry must keep the failed message runtime selection"
+  Assert-True ($source -match "async\s+function\s+retryFailedNewThreadMessage[\s\S]*?modelId:\s*entry\.modelId[\s\S]*?reasoningEffort:\s*entry\.reasoningEffort[\s\S]*?speedMode:\s*entry\.speedMode") "new-thread manual retry must keep the failed message runtime selection"
+  Assert-True ($source -match "const\s+speedMode\s*=\s*runtimeOverrides\.speedMode\s*\?\?\s*selectedSpeedMode\.value[\s\S]*?speedMode,[\s\S]*?startRuntimeTurnWithBoundedRecovery") "runtime retry overrides must flow the recorded speed mode into persistence and dispatch"
   Assert-True ($runtimeQueueServerSource -match "const\s+result\s*=\s*await\s+this\.dependencies\.startRuntimeTurn\(claimed\.payload\)[\s\S]*?status\s*===\s*'queued'\)\s*return[\s\S]*?this\.publish\(threadId,\s*next\.requestId,\s*'starting'\)") "a queue retry that still meets an external writer must not flicker into a false starting state"
   Assert-True ($codexBridgeSource -match "startRuntimeTurnSettled[\s\S]*?startRuntimeTurn:\s*startRuntimeTurnSettled") "the background queue must await the actual turn/start result instead of the HTTP early-accept acknowledgement"
   Assert-True ($runtimeQueueServerSource -match "setInterval\(\(\)\s*=>\s*this\.scheduleAll\(\),\s*QUEUE_SWEEP_INTERVAL_MS\)" -and $runtimeQueueServerSource -match "listQueuedThreadIds[\s\S]*?processThread") "7420 must advance queued messages independently of the selected conversation and Android renderer lifecycle"
@@ -4042,6 +4075,51 @@ JSON.stringify((() => {
   Assert-True ([int]$after.actionCount -eq ([int]$before.actionCount + 1)) "streaming stress fixture did not accept a user action while output was active"
   Assert-True ([int]$after.updateCount -gt [int]$before.updateCount) "streaming output stopped while the user interacted with the page"
   Write-Step ("conversation streaming responsiveness -> " + ($before | ConvertTo-Json -Compress))
+}
+
+function Read-ConversationQueueTransferRecoveryMetrics {
+  param([string]$Session)
+
+  return Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const queueRows = Array.from(document.querySelectorAll('.conversation-regression-queue .queued-row'));
+  return {
+    queueCount: queueRows.length,
+    queueTexts: queueRows.map((row) => row.querySelector('.queued-row-text')?.textContent?.replace(/\s+/g, ' ').trim() || ''),
+    failedMessageCount: document.querySelectorAll('.message-delivery-state[data-state="failed"]').length,
+    feedbackText: document.querySelector('[data-testid="queue-transfer-feedback"]')?.textContent?.replace(/\s+/g, ' ').trim() || '',
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  };
+})())
+'@
+}
+
+function Assert-ConversationQueueTransferRecovery {
+  param([string]$Session)
+
+  $before = Read-ConversationQueueTransferRecoveryMetrics -Session $Session
+  Assert-True ([int]$before.queueCount -eq 2) "queue-transfer recovery fixture must start with two queued messages"
+  Assert-True (($before.queueTexts -join '|') -eq 'fixture queued message keeps compact neutral styling|second queued item should not introduce warm panels') "queue-transfer recovery fixture started with unexpected queue ordering"
+  Assert-True ($before.hasHorizontalOverflow -eq $false) "queue-transfer recovery fixture overflowed horizontally before interaction"
+
+  $click = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const button = document.querySelector('.conversation-regression-queue .queued-row-quote');
+  if (!(button instanceof HTMLElement)) return { clicked: false };
+  button.click();
+  return { clicked: true };
+})())
+'@
+  Assert-True ($click.clicked -eq $true) "queue-transfer recovery fixture is missing the immediate quote action"
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
+
+  $after = Read-ConversationQueueTransferRecoveryMetrics -Session $Session
+  Assert-True ([int]$after.queueCount -eq 2) "failed immediate execution must restore exactly one queue row without duplication"
+  Assert-True (($after.queueTexts -join '|') -eq ($before.queueTexts -join '|')) "failed immediate execution must restore the message at its original queue position"
+  Assert-True ([int]$after.failedMessageCount -eq [int]$before.failedMessageCount) "failed immediate execution must not append a second failed optimistic message"
+  Assert-True ([string]$after.feedbackText -match '原消息已恢复到队列') "failed immediate execution must explain that the original queue item was restored"
+  Assert-True ($after.hasHorizontalOverflow -eq $false) "queue-transfer recovery feedback overflowed horizontally"
+  Write-Step ("conversation queue transfer recovery -> " + ($after | ConvertTo-Json -Compress))
 }
 
 function Read-ConversationLoadFailureFixtureMetrics {
@@ -7694,6 +7772,12 @@ Assert-ThreadAttentionChromeSource
   Assert-ConversationCommandOutputLazy -Session $session
   Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "phone"
   Add-RegressionResult -Name "conversation-blocks-fixture-phone" -Page $fixturePhone
+
+  $queueTransferFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&queueTransferFailure=1"
+  $queueTransferFixture = Open-And-ReadPage -Session $session -Url $queueTransferFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $queueTransferFixture -Name "conversation queue-transfer recovery fixture phone"
+  Assert-ConversationQueueTransferRecovery -Session $session
+  Add-RegressionResult -Name "conversation-queue-transfer-recovery-phone" -Page $queueTransferFixture
 
   $streamingStressFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&streamStress=1"
   $streamingStressFixture = Open-And-ReadPage -Session $session -Url $streamingStressFixtureUrl -Width $PhoneWidth -Height $PhoneHeight

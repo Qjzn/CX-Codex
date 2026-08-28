@@ -7,13 +7,14 @@
 1. 新请求进入 `starting` 后，在收到该轮 `turn/started` 前出现的旧 `thread/status/changed: idle` 不得提前结束请求、释放线程租约或留下永久重试任务。
 2. 本机服务必须启动当前 Codex 桌面版的版本化 CLI；健康诊断需暴露实际命令和启动时间，且 pending、queued、server request、uncertain request 与线程租约能够收敛为 0。
 3. 上传图片必须能够立即通过受限本地图片接口按原始字节读取；缓存目录只作为只读上传根，不扩大为工作区权限。
-4. 同一稳定 `clientMessageId` 的并发重复发送只能形成一个请求；状态必须从 `pending_start` 进入 `running` 并最终完成，回复可精确验证，测试线程默认自动归档。
-5. 长线程首次只返回最近 10 个绝对轮次；“加载更早”按 `turnsStartIndex` 分页，不得把消息条数误当轮次数，也不得用信息更少的日志恢复结果覆盖 App Server 的完整结构化历史。
+4. 已出现在 `thread/read` 中的 `codex-clipboard-*` 临时图片必须在该响应返回后立即可读；测试不能用普通上传缓存替代这一会话附件链路。
+5. 同一稳定 `clientMessageId` 的并发重复发送只能形成一个请求；状态必须从 `pending_start` 进入 `running` 并最终完成，回复可精确验证，测试线程默认自动归档。
+6. 长线程首次只返回最近 10 个绝对轮次；“加载更早”按 `turnsStartIndex` 分页，不得把消息条数误当轮次数，也不得用信息更少的日志恢复结果覆盖 App Server 的完整结构化历史。
 
 ### Reusable verification
 
 - `npm.cmd run verify:runtime-stability`：无模型单元探针，覆盖启动前旧 idle 竞态、截断历史元数据与绝对轮次分页。
-- `npm.cmd run test:7420:stability -- --image-path <existing-image>`：不发送模型请求，检查健康、Runtime 持久状态、事件流连续性、当前桌面 CLI、活动线程 ID 唯一性和图片上传后逐字节回读。
+- `npm.cmd run test:7420:stability -- --image-path <existing-image> --session-image-thread-id <thread-id>`：不发送模型请求，检查健康、Runtime 持久状态、事件流连续性、当前桌面 CLI、活动线程 ID 唯一性、普通上传图片逐字节回读，以及真实 `thread/read -> codex-clipboard -> /codex-local-image` 会话图片链路。
 - `npm.cmd run test:7420:roundtrip -- --with-image <existing-image>`：会消耗一次模型请求；并发提交同一 client ID，验证单请求收敛、状态生命周期、精确回复、图片输入与测试线程清理。
 - `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -ThreadOnly -ThreadId <thread-id>`：真实 H5 验证首屏、缓存重开、前后台恢复；短线程允许无加载按钮，长线程连续两次按轮次加载旧历史。
 - `npm.cmd run test:7420:soak -- -DurationSeconds 45 -IntervalSeconds 5 -SkipPublic -OutputDir output\soak-7420-stability-final`：本轮 9/9 样本通过，最大 pending/queued/serverPending/uncertain 均为 0，RPC timeout、慢 thread/list、PID 变化、事件流变化或回退均为 0。
@@ -16422,6 +16423,8 @@ Rollback:
 - 本机 Runtime SQLite 的失败记录确认只有一个请求和一个 `clientMessageId`，最终错误为 `already has an active writer`；排除重复点击或重复重放。
 - 隔离工作树先加入同错误的失败用例；修改前 `npm.cmd run verify:server-modules` 在该错误处退出 1，修改后通过，并覆盖直接调用、生产 early-accept starter、正文/队列元数据保留、排队通知以及普通权限错误仍失败。
 - 回归额外断言 active-writer 分支的状态序列为 `starting -> running`，队列卡片与 Runtime 执行状态分离；任何 `queued` 快照也不允许暴露全局停止操作。
+- 审查回归先证明前端 `adoptRuntimeQueuedRequest` 会把已有运行态覆写成 `queued/canStop=false`；修复后该接管只同步持久队列、撤下重复乐观气泡并刷新权威 Runtime 快照，原有任务活动与停止能力不再被排队跟进覆盖。
+- 失败消息手动重试从持久 outbox 恢复原始模型、推理强度和 `speedMode`；现有会话与新会话重试都不再读取用户稍后切换的当前选项。
 - 当前工作树的 `npm.cmd run verify:server-modules`、`npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:runtime-stability` 和 `npm.cmd run test:7420:frontend -- -SourceOnly` 均通过；生产构建只保留既有的大 chunk 提示。
 - 独立端口 `127.0.0.1:17434`、独立 Runtime SQLite 的候选服务对当前真实任务发送唯一探针：HTTP 先以 `starting` 接收，App Server 随后真实返回 `already has an active writer`，同一请求收敛为 `queued`，正文、速度模式和 `clientMessageId` 均保留；测试队列立即取消并最终记录为 `interrupted`，探针未执行，现有 7420 未重启。
 - 先前获得授权的本机 7420 原子更新及生产排队探针已通过；本节新增的状态分离修复仍必须在新候选构建上重新验收，不复用旧 PID、流 ID 或备份路径作为当前证据。
@@ -16430,6 +16433,46 @@ Rollback:
 ### Rollback
 
 - 回退 active-writer 分类、Runtime queued 回调、即时发送的 queue metadata、队列重试通知顺序和前端排队接管；无需删除 Runtime SQLite、用户会话、上传缓存或配置。已进入队列的消息可继续由既有 Runtime 队列处理。
+
+## 跨进程活动写入者使用原生线程队列（2026-08-28）
+
+### Expected behavior
+
+1. 桌面 Codex 已结束可见回复但仍持有线程 writer 时，7420 不得每 4 秒重复调用 `turn/start`；执行模式消息必须按稳定 `clientMessageId` 幂等交给 App Server `thread/queue/*`。
+2. Runtime SQLite 行只作为移动端展示与重启恢复镜像。原生行存在时不得抢占 writer；原生行消失后本地镜像才结束并继续处理下一条。
+3. 删除和全原生队列排序必须先写入 App Server 再更新本地镜像；原生/本地混合队列不得接受无法真实执行的伪排序。
+4. 页面必须区分“已交给当前 Codex，约 10 秒内接管”和旧 App Server 的“仍被其他 Codex 占用”回退状态；刷新、切换任务或 Android WebView 恢复后仍保留同一条消息所有权。
+
+### Verification
+
+- 生产 7420 的 `/runtime/queue` 先稳定观察到同一 `requestId` 每约 4 秒更新，而 `/runtime/snapshot` 已完成；健康日志同时重复记录同一线程 `already has an active writer`，确认不是前端缓存或重复点击。
+- `npm.cmd run verify:server-modules` 覆盖原生 list/add 稳定 ID 去重、传输结果不确定后的重新读取、外部行保留排序、删除、本地镜像等待/收敛、禁止竞争性 `turn/start` 以及混合所有者拒绝排序。
+- `npm.cmd run test:7420:frontend -- -SourceOnly` 覆盖原生移交、回退原因和移动端文案源码契约；`npm.cmd run verify:frontend-normalizers`、`npm.cmd run build:frontend`、`npm.cmd run build:cli` 作为构建边界。
+- 独立 Headless Playwright 以 `393 x 852` 打开 `nativeWriterQueue=1` 夹具，断言队列数为 2、无横向溢出，并读取到“已交给正在使用此任务的 Codex；当前回复结束后会自动继续，通常 10 秒内接管。”；截图保存为 `output/regression-7420/native-writer-queue-20260828/native-writer-queue-phone.png`。
+- 本机 7420 更新后，原卡住请求从每约 4 秒更新一次改为稳定的 `native_writer` 镜像；`thread/queue/list` 只有一个与原 `clientMessageId` 相同的原生行，新进程日志不再出现重复 `turn/start` 或 `already has an active writer`。真实任务页在 `393 x 852` 下显示 1 条队列、正确原生接管文案且无横向溢出，截图为 `output/regression-7420/native-writer-queue-live-20260828/native-writer-queue-real-thread-phone.png`。
+- 完整 `-ThreadOnly` 安装页回归已实际执行，但因首次加载得到 2 次状态快照而触发既有“必须为 1 次”的性能断言；该结果不能计为本次完整前端回归通过，窄化的真实队列 DOM、截图和服务端所有权验证独立通过。
+
+### Rollback
+
+- 回退原生队列适配、active-writer 移交、Runtime 镜像和对应等待文案；保留现有 SQLite、用户会话、上传缓存与配置。旧版本仍会回到持久本地队列重试行为。
+
+## 首屏会话日志收敛复用稳定快照（2026-08-28）
+
+### Expected behavior
+
+1. 打开一个正在由其他 Codex 写会话日志的任务时，首屏只读取一次完整 `/codex-api/state/thread/:id`；1.8 秒静默窗口后的结构化消息收敛复用该次已结束、无待处理请求的稳定快照，再读取权威任务详情。
+2. 定向复用窗口为 2.5 秒，只用于会话日志权威收敛；普通状态读取仍保持 900ms 新鲜度，不得用全局延长缓存掩盖真实运行状态变化。
+3. 活动、排队、等待确认、陈旧或包含待处理请求的快照继续不可缓存；修复不得降低状态正确性门槛。
+
+### Verification
+
+- `npm.cmd run verify:frontend-normalizers` 新增可控时钟与网络计数用例；修复前在 1.8 秒延迟读取上稳定得到 `2 !== 1`，修复后只请求 1 次，并额外确认普通读取超过 900ms 仍会重新请求。
+- `pwsh -NoProfile -File scripts\regression-7420-frontend.ps1 -SourceOnly`、`npm.cmd run build:frontend` 与 `git diff --check` 通过；构建只保留既有 Vite 配置和大 chunk 提示。
+- 本机 7420 原子更新后，在当前任务仍持续写会话日志时执行 `npm.cmd run test:7420:frontend -- -ThreadId 019f7cb2-c0b5-7b22-aff4-08391a58c764 -ThreadOnly -CaptureScreenshots ...`：`stateThread.count=1`、完整线程回归通过，前台恢复 7 个样本 P95 为 794ms，手机页面无横向溢出；截图为 `output/regression-7420/first-screen-single-snapshot-20260828/thread-phone.png`。
+
+### Rollback
+
+- 回退 `cachedSnapshotMaxAgeMs` 定向选项、会话日志收敛调用参数和对应回归；无需修改 Runtime SQLite、用户会话、认证或配置。
 
 ## Android 发送恢复保持速度模式（2026-08-27）
 
@@ -16453,11 +16496,13 @@ Rollback:
 1. 只有已出现在 `thread/read` 结果中的 `AppData\\Local\\Temp\\codex-clipboard-<UUID>.<image>` 才能经受限图片接口读取；未登记 UUID、普通临时文件、工作区外任意路径和目录穿越仍返回 403。
 2. `thread/read` 返回前必须立即把已登记图片的原始字节镜像到 CX-Codex 上传缓存；即使桌面临时源在手机首次 GET 前已清理，同一路径仍能从镜像读取。
 3. 镜像必须受既有单文件大小上限和 1024 个缓存项上限约束，并在返回前再次校验真实路径位于上传缓存内；不能因为兼容桌面附件而开放整个系统临时目录。
+4. 多个会话读取并发触发预取时，全局同时复制数不得超过 4，避免长会话在一次 `thread/read` 中并发打开数百个临时文件。
 
 ### Verification
 
 - 修复前，截图对应的 `<system-temp>\\codex-clipboard-<uuid>.jpg` 源文件仍存在，但生产 7420 的 `/codex-local-image` 稳定返回 403，确认不是图片损坏或网络超时。
 - `npm.cmd run verify:server-modules` 新增登记前拒绝、`thread/read` 响应前预取、预取后先删除临时源再首次读取、缓存字节一致、普通临时图片拒绝及 HTTP 路由测试；另用 2 项上限夹具确认第 3 项写入后只保留 2 个镜像。
+- 并发夹具在修复前观察到 8 个复制同时开始并稳定失败；共享预取队列加入后峰值收敛到 4，且缓存字节与源删除后读取行为保持不变。
 - 独立 17434 候选读取当前真实任务后，同一图片返回 `200 image/jpeg`，响应 449,274 字节且 SHA-256 与源文件一致；未登记的伪 UUID 图片和 `C:\Windows\win.ini` 均保持 403。候选验证未重启生产 7420。
 - 本机 7420 更新后再次读取同一真实任务和图片：生产接口返回 `200 image/jpeg`、449,274 字节且 SHA-256 一致，`C:\Windows\win.ini` 仍为 403。`npm.cmd run test:7420:stability -- --image-path <same-image>` 全部通过，真实首页浏览器冒烟匹配 7 个实时模型、最低文字对比度 4.54、无横向溢出。
 
@@ -16511,3 +16556,64 @@ Verification:
 ### Rollback
 
 - 回退本节对应的 tunnel 命令信任边界、文件路由限流、单层实体解码、域名解析及回归。不要关闭 GitHub CodeQL、Dependabot、分支保护或私密漏洞报告。
+
+## 稳定版 GitHub 安全热修（2026-08-27）
+
+### Expected behavior
+
+1. `/codex-local-image`、`/codex-local-file`、`/codex-local-browse` 与 `/codex-local-edit` 只能访问已登记工作区的真实路径；相似目录前缀、目录联接逃逸、相对路径、缺失路径和空工作区均不得获得访问权。
+2. 四类本地文件接口共享独立的速率预算；超限返回 `429` 和稳定 JSON，且不继续访问文件系统。
+3. 远程隧道接口不得接受请求体提供的 `cloudflared` 或 `tailscale` 可执行路径，只能使用维护者在本地配置的当前命令。
+4. GitHub Trending 实体每轮只解码一层；trycloudflare 回退地址必须是完整、无用户信息和端口的 HTTPS 子域名。
+5. CI 与发布流程必须使用官方 npm registry 执行低等级以上依赖审计；已知 `brace-expansion` 与旧 `esbuild` 传递依赖不得重新进入锁文件。
+
+### Verification
+
+- 运行 `npm.cmd run verify:server-modules`，覆盖真实路径边界、目录联接逃逸、共享限流、隧道命令信任边界、单层实体解码和域名解析。
+- 运行 `npm.cmd run verify:dependency-security`，要求官方 npm registry 返回 0 漏洞。
+- 运行 `npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:governance` 与 `git diff --check`。
+
+### Rollback
+
+- 仅回退本节对应的路径授权、限流、隧道命令边界、实体解码、域名解析和依赖覆盖；不要关闭 CodeQL、Dependabot、分支保护或私密漏洞报告。
+
+## 重复发送与历史失败消息恢复（2026-08-28）
+
+### Expected behavior
+
+1. 乐观消息一旦取得本次发送对应的权威 `turnId`，只由该轮确认；分页窗口外存在同文历史消息时，不得把本次消息误判为已确认，也不得因文本相同隐藏用户连续发送的第二条消息。
+2. 失败消息的原始历史锚点不在当前分页窗口时，不再把它追加到最新回复下方；改为在输入框上方显示默认折叠的“未发送消息”入口。
+3. 恢复入口必须保留编辑、重试、删除能力；编辑时先恢复原文字、附件、技能、模型、推理强度、协作模式和速度模式，再删除失败副本。
+4. 已加载原始锚点的失败消息继续停留在原历史位置。原生队列仍是跨进程 writer 的执行所有者，本次不修改队列协议、数据库或 Runtime 排队顺序。
+
+### Verification
+
+- `npm.cmd run verify:frontend-normalizers` 覆盖分页窗口外同文消息、两次合法同文发送分别确认、前一条按 `turnId` 确认而后一条按独立发送基线回退确认、失去历史锚点的失败消息分离，以及锚点仍加载时保持原位。
+- `npm.cmd run test:7420:frontend -- -SourceOnly` 覆盖 `turnId` 绑定、失败消息分离投影、恢复入口接线，以及队列文案不再承诺固定“通常 10 秒”。
+- `npm.cmd run build:frontend` 与 `git diff --check` 通过。
+- 独立 Headless Playwright 在 `393 x 852` 验证恢复入口默认折叠、历史失败消息未进入正文、展开后编辑/重试/删除可见且页面无横向溢出；截图保存在 `output/regression-7420/message-recovery-20260828/failed-message-tray-phone.png`。
+
+### Rollback
+
+- 回退权威 `turnId` 绑定、失败消息分离投影和恢复入口即可；不需要迁移或清理 Runtime SQLite、历史会话、原生队列或出站箱数据。
+
+## 运行中队列消息直接引用失败恢复（2026-08-28）
+
+### Expected behavior
+
+1. 正在执行上一任务时，用户对队列消息点“引用”，前端可以临时移出该行并尝试交给当前任务，但交接失败后必须把原消息恢复到原位置。
+2. 持久队列请求被删除动作标为 `interrupted / Removed from message queue` 后，只允许通过专用恢复入口回到 `queued`；普通已完成、主动中断或内容不同的请求不得被复活。
+3. 引用失败产生的临时乐观消息和出站箱记录必须撤销，不得同时出现“发送失败”气泡和恢复后的队列行。
+4. 用户必须收到“原消息已恢复到队列”的明确反馈；附件、技能、模型、推理强度、协作模式、速度模式与队列顺序保持不变。
+
+### Verification
+
+- `npm.cmd run verify:server-modules` 先因缺少 `RuntimeMessageQueue.restore` 稳定编译失败；实现后通过，并覆盖原生队列删除、受限恢复、状态回到 `queued` 及 `/codex-api/runtime/queue/:id/restore` 路由。
+- `npm.cmd run verify:frontend-normalizers` 覆盖交接异常必调用恢复、按原索引插回以及重复恢复不产生第二条消息。
+- `npm.cmd run build:frontend`、`npm.cmd run build:cli` 通过；仅保留既有 Vite 配置与大 chunk 提示。
+- 独立 Headless Playwright 在 `393 x 852` 点击失败夹具的首条“引用”后，队列仍为 2 条且顺序不变，“发送失败”数量保持 1，显示“原消息已恢复到队列”，无浏览器错误；截图为 `output/queue-transfer-recovery-phone.png`。
+- 本机 7420 在运行态空闲后完成可回滚原子更新；配置 SHA-256 与 Runtime `streamId` 保持不变，随机不存在请求的恢复探针返回预期 `409 Queued message is not restorable`，证明新恢复路由已加载且没有创建队列行。生产页面 `393 x 852` 再次验证队列顺序、失败气泡数量、恢复提示和横向溢出全部通过，截图为 `output/queue-transfer-production-20260828/queue-transfer-production-phone.png`；旧安装保留在 `C:\Users\SW\AppData\Local\CX-Codex.rollback-queue-transfer-20260828-r1`。
+
+### Rollback
+
+- 回退队列恢复端点、前端可恢复交接与对应夹具即可；不需要迁移或清理 Runtime SQLite。回退后应停止提供“直接引用”入口，避免恢复能力缺失时再次丢消息。

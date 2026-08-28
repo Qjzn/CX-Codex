@@ -52,7 +52,7 @@
         />
       </div>
       <RuntimeStatusBar
-        v-if="!isQueueFailureFixture && !isLoadFailureFixture"
+        v-if="!isQueueFailureFixture && !isLoadFailureFixture && !isDetachedFailureFixture"
         class="conversation-regression-runtime"
         :summary="runtimeSummary"
         :live-overlay="liveOverlay"
@@ -74,7 +74,7 @@
         :pending-requests="pendingRequests"
         :live-overlay="liveOverlay"
         :is-loading="false"
-        :is-turn-in-progress="!isLoadFailureFixture && !isScrollSwitchRaceFixture && !isPlanFixture && !isFileCitationFixture"
+        :is-turn-in-progress="!isLoadFailureFixture && !isDetachedFailureFixture && !isScrollSwitchRaceFixture && !isPlanFixture && !isFileCitationFixture"
         :load-error="isLoadFailureFixture ? '连接不到桌面端，会话内容暂时未加载。页面会自动重试，也可以检查或修改连接地址。' : ''"
         :show-connection-settings-action="isLoadFailureFixture"
         compact-runtime-chrome
@@ -108,13 +108,29 @@
       <span class="conversation-regression-older-history-count" :data-count="olderHistoryRequestCount" aria-hidden="true" />
       <span class="conversation-regression-load-retry-count" :data-count="loadRetryCount" aria-hidden="true" />
       <span class="conversation-regression-connection-settings-count" :data-count="connectionSettingsCount" aria-hidden="true" />
+      <p
+        v-if="queueTransferFeedback"
+        class="conversation-regression-queue-transfer-feedback"
+        data-testid="queue-transfer-feedback"
+        role="status"
+      >
+        {{ queueTransferFeedback }}
+      </p>
       <QueuedMessages
-        v-if="!isLoadFailureFixture"
+        v-if="!isLoadFailureFixture && !isDetachedFailureFixture"
         class="conversation-regression-queue"
         :messages="queuedMessages"
-        :is-processing="!isQueueFailureFixture"
+        :is-processing="!isQueueFailureFixture && !isNativeWriterQueueFixture"
         @edit="noop"
-        @quote="noop"
+        @quote="onQuoteQueuedMessage"
+        @retry="noop"
+        @delete="noop"
+      />
+      <FailedMessagesTray
+        v-if="isDetachedFailureFixture"
+        class="conversation-regression-failed-messages"
+        :messages="detachedFailedMessages"
+        @edit="noop"
         @retry="noop"
         @delete="noop"
       />
@@ -124,9 +140,14 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import {
+  restoreQueuedMessageAtIndex,
+  transferQueuedMessageWithRecovery,
+} from '../../composables/queuedMessageTransfer'
 import ThreadConversation from './ThreadConversation.vue'
 import RuntimeStatusBar from './RuntimeStatusBar.vue'
 import QueuedMessages from './QueuedMessages.vue'
+import FailedMessagesTray from './FailedMessagesTray.vue'
 import { PLAN_IMPLEMENTATION_CONFIRMATION } from '../../composables/conversationProjection'
 import type {
   ThreadScrollState,
@@ -385,6 +406,9 @@ const isTailStatusFixture = fixtureParams.get('tailStatus') === '1'
 const isNextActivityFixture = fixtureParams.get('tailNextActivity') === '1'
 const isResumeRecoveryFixture = fixtureParams.get('resumeRecovery') === '1'
 const isQueueFailureFixture = fixtureParams.get('queueFailure') === '1'
+const isNativeWriterQueueFixture = fixtureParams.get('nativeWriterQueue') === '1'
+const isQueueTransferFailureFixture = fixtureParams.get('queueTransferFailure') === '1'
+const isDetachedFailureFixture = fixtureParams.get('detachedFailure') === '1'
 const isLoadFailureFixture = fixtureParams.get('loadFailure') === '1'
 const isScrollSwitchRaceFixture = fixtureParams.get('scrollSwitchRace') === '1'
 const isForegroundResumeScrollFixture = fixtureParams.get('foregroundResumeScroll') === '1'
@@ -404,6 +428,15 @@ const activeScrollState = computed(() => scrollStateByThreadId.value[activeThrea
 const favoriteMessageIds = computed(() => (
   isMessageActionHitFixture ? [`${activeThreadId.value}-message-39`] : []
 ))
+const detachedFailedMessages: UiMessage[] = [
+  {
+    id: 'optimistic-user:fixture-detached-failed',
+    role: 'user',
+    text: '帮我进行下一步',
+    deliveryState: 'failed',
+    deliveryError: '发送失败，请检查连接后重试。',
+  },
+]
 const imagePreviewMessage: UiMessage = {
   id: 'fixture-image-preview-gestures',
   role: 'assistant',
@@ -637,10 +670,12 @@ const runtimeSummary: UiRuntimeStatusSummary = {
   lastCompletedAtIso: null,
 }
 
-const queuedMessages = [
+const queuedMessages = ref([
   {
     id: 'fixture-queue-next',
+    backgroundPersisted: isNativeWriterQueueFixture ? true : undefined,
     deliveryState: isQueueFailureFixture ? 'failed' as const : 'queued' as const,
+    waitReason: isNativeWriterQueueFixture ? 'native_writer' as const : undefined,
     text: 'fixture queued message keeps compact neutral styling',
     imageUrls: [],
     skills: [{ name: 'ui-ux-pro-max', path: 'C:/ExampleUser/.agents/skills/ui-ux-pro-max/SKILL.md' }],
@@ -654,13 +689,36 @@ const queuedMessages = [
   },
   {
     id: 'fixture-queue-followup',
+    backgroundPersisted: isNativeWriterQueueFixture ? true : undefined,
     deliveryState: 'queued' as const,
     text: 'second queued item should not introduce warm panels',
     imageUrls: [],
     skills: [],
     fileAttachments: [],
   },
-]
+])
+
+const queueTransferFeedback = ref('')
+
+async function onQuoteQueuedMessage(messageId: string): Promise<void> {
+  if (!isQueueTransferFailureFixture) return
+  const index = queuedMessages.value.findIndex((message) => message.id === messageId)
+  const message = queuedMessages.value[index]
+  if (!message) return
+  const snapshot = { index, message }
+  queuedMessages.value = queuedMessages.value.filter((candidate) => candidate.id !== messageId)
+  const outcome = await transferQueuedMessageWithRecovery({
+    snapshot,
+    deliver: async () => { throw new Error('fixture active writer rejected steer') },
+    restore: (removed) => {
+      queuedMessages.value = restoreQueuedMessageAtIndex(queuedMessages.value, removed)
+      return true
+    },
+  })
+  queueTransferFeedback.value = outcome === 'restored'
+    ? '直接引用未被正在执行的任务接收，原消息已恢复到队列。'
+    : ''
+}
 
 function noop(): void {
   // Fixture route only needs rendered output for browser assertions.

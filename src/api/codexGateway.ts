@@ -52,7 +52,10 @@ type CurrentModelConfig = {
 }
 
 type RpcCallOptions = { signal?: AbortSignal }
-type ThreadRuntimeSnapshotOptions = RpcCallOptions & { preferCachedMessages?: boolean }
+type ThreadRuntimeSnapshotOptions = RpcCallOptions & {
+  preferCachedMessages?: boolean
+  cachedSnapshotMaxAgeMs?: number
+}
 type ThreadListOptions = RpcCallOptions & {
   maxPages?: number
 }
@@ -142,10 +145,16 @@ function isRuntimeSnapshotCacheable(snapshot: ThreadRuntimeSnapshot): boolean {
   )
 }
 
-function readCachedThreadRuntimeSnapshot(threadId: string): ThreadRuntimeSnapshot | null {
+function readCachedThreadRuntimeSnapshot(
+  threadId: string,
+  maxAgeMs = THREAD_RUNTIME_SNAPSHOT_CACHE_TTL_MS,
+): ThreadRuntimeSnapshot | null {
   const cached = threadRuntimeSnapshotCacheByThreadId.get(threadId)
   if (!cached) return null
-  if (Date.now() - cached.cachedAtMs > THREAD_RUNTIME_SNAPSHOT_CACHE_TTL_MS) {
+  const effectiveMaxAgeMs = Number.isFinite(maxAgeMs)
+    ? Math.max(0, maxAgeMs)
+    : THREAD_RUNTIME_SNAPSHOT_CACHE_TTL_MS
+  if (Date.now() - cached.cachedAtMs > effectiveMaxAgeMs) {
     threadRuntimeSnapshotCacheByThreadId.delete(threadId)
     return null
   }
@@ -716,7 +725,10 @@ export async function getThreadRuntimeSnapshot(
   const normalizedThreadId = threadId.trim()
   throwIfSignalAborted(options.signal)
 
-  const cachedSnapshot = readCachedThreadRuntimeSnapshot(normalizedThreadId)
+  const cachedSnapshot = readCachedThreadRuntimeSnapshot(
+    normalizedThreadId,
+    options.cachedSnapshotMaxAgeMs,
+  )
   if (cachedSnapshot) {
     return cachedSnapshot
   }

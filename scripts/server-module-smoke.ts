@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { generateKeyPairSync } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { appendFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createServer as createNodeHttpServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -379,6 +379,16 @@ import {
   type RuntimeStartDependencies,
 } from '../src/server/appServerRuntimeStart.js'
 import {
+  createNativeThreadQueueMarker,
+  deleteNativeThreadQueueSubmission,
+  ensureNativeThreadQueueSubmission,
+  EXTERNAL_ACTIVE_WRITER_MARKER,
+  listNativeThreadQueueSubmissions,
+  readNativeThreadQueueSubmissionId,
+  readRuntimeQueueWaitReason,
+  reorderNativeThreadQueueSubmissions,
+} from '../src/server/appServerNativeThreadQueue.js'
+import {
   createAppServerRuntimeSnapshotPersister,
   persistAppServerRuntimeSnapshot,
 } from '../src/server/appServerRuntimeSnapshotPersistence.js'
@@ -600,11 +610,13 @@ try {
   await smokeQuickTunnelTransientRetry()
   await smokeStatusRoutes()
   await smokeLocalFileAccessPolicy()
+  await smokeLocalFileHttpRateLimit()
   await smokeWorkspaceRootsState()
   await smokeWorkspaceMetaRoutes()
   await smokeProjectRoots()
   await smokeProjectRootRoutes()
   smokeRuntimePayloadParsing()
+  await smokeAppServerNativeThreadQueue()
   await smokeAppServerRuntimeStart()
   await smokeAppServerRuntimeInterrupt()
   await smokeAppServerRuntimeActions()
@@ -4950,6 +4962,7 @@ async function smokeSessionAttachmentAccess(): Promise<void> {
   const tempRoot = await mkdtemp(join(tmpdir(), 'cx-codex-session-image-source-'))
   const uploadRoot = await mkdtemp(join(tmpdir(), 'cx-codex-session-image-cache-'))
   const boundedUploadRoot = await mkdtemp(join(tmpdir(), 'cx-codex-session-image-bounded-cache-'))
+  const concurrencyUploadRoot = await mkdtemp(join(tmpdir(), 'cx-codex-session-image-concurrency-cache-'))
   const imagePath = join(tempRoot, 'codex-clipboard-a609cc73-60c9-496b-a884-87addcbc72b3.jpg')
   const prefetchedImagePath = join(tempRoot, 'codex-clipboard-73175ea6-4e8e-400b-a804-f9d3b1359289.jpg')
   const unrelatedPath = join(tempRoot, 'private-note.jpg')
@@ -5021,6 +5034,36 @@ async function smokeSessionAttachmentAccess(): Promise<void> {
       }
     }))
     assert.equal(boundedCacheHits.filter(Boolean).length, 2)
+
+    const concurrencyPaths = Array.from({ length: 8 }, (_, index) => join(
+      tempRoot,
+      `codex-clipboard-${index.toString(16).padStart(8, '0')}-1111-4111-8111-111111111111.jpg`,
+    ))
+    await Promise.all(concurrencyPaths.map((candidatePath, index) => writeFile(candidatePath, `concurrency-${String(index)}`)))
+    let activeCopies = 0
+    let maxActiveCopies = 0
+    const concurrencyStore = new SessionAttachmentAccessStore({
+      tempDir: tempRoot,
+      uploadDir: concurrencyUploadRoot,
+      maxCacheEntries: concurrencyPaths.length,
+      copyFile: async (...args) => {
+        activeCopies += 1
+        maxActiveCopies = Math.max(maxActiveCopies, activeCopies)
+        try {
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, 20))
+          return await copyFile(...args)
+        } finally {
+          activeCopies -= 1
+        }
+      },
+    })
+    await concurrencyStore.cacheFromThreadRead({
+      thread: {
+        turns: concurrencyPaths.map((path) => ({ items: [{ type: 'localImage', path }] })),
+      },
+    })
+    assert.ok(maxActiveCopies > 1, 'session attachment prefetch concurrency probe did not overlap')
+    assert.ok(maxActiveCopies <= 4, `session attachment prefetch opened ${String(maxActiveCopies)} concurrent copies`)
     assert.deepEqual(store.rememberFromThreadRead({
       thread: { turns: [{ items: [{ type: 'localImage', path: unrelatedPath }] }] },
     }), [])
@@ -5032,6 +5075,7 @@ async function smokeSessionAttachmentAccess(): Promise<void> {
     await rm(tempRoot, { recursive: true, force: true })
     await rm(uploadRoot, { recursive: true, force: true })
     await rm(boundedUploadRoot, { recursive: true, force: true })
+    await rm(concurrencyUploadRoot, { recursive: true, force: true })
   }
 }
 
@@ -7859,10 +7903,10 @@ async function smokeStatusRoutes(): Promise<void> {
     },
   }
   const bodies: unknown[] = [
-    { enabled: false, cloudflaredCommand: ' C:\\tools\\cloudflared.exe ' },
+    { enabled: false, cloudflaredCommand: ' C:\\malicious\\cloudflared.exe ' },
     ['bad'],
-    { mode: 'quick', fallback: true, cloudflaredCommand: ' C:\\tools\\cloudflared.exe ' },
-    { mode: 'stable', tailscaleCommand: ' C:\\Program Files\\Tailscale\\tailscale.exe ' },
+    { mode: 'quick', fallback: true, cloudflaredCommand: ' C:\\malicious\\cloudflared.exe ' },
+    { mode: 'stable', tailscaleCommand: ' C:\\malicious\\tailscale.exe ' },
   ]
   const tunnelUpdates: unknown[] = []
   const tunnelStarts: unknown[] = []
@@ -8117,6 +8161,57 @@ async function smokeLocalFileAccessPolicy(): Promise<void> {
       (error: unknown) => error instanceof LocalFileAccessError && error.code === 'outside-workspace',
     )
   } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+async function smokeLocalFileHttpRateLimit(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'cx-codex-http-local-file-'))
+  const imagePath = join(root, 'preview.png')
+  const pngBytes = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+    'base64',
+  )
+  await writeFile(imagePath, pngBytes)
+
+  const appServer = createHttpAppServer({
+    createBridgeMiddleware: () => Object.assign(
+      async (_req: unknown, _res: unknown, next: () => void) => { next() },
+      {
+        dispose: () => {},
+        subscribeNotifications: () => () => {},
+        listNotificationEventsAfter: () => ({ notifications: [], latestSeq: 0, oldestSeq: 0 }),
+      },
+    ),
+    resolveLocalFilePath: async (candidatePath: string) => candidatePath,
+    localFileRateLimit: { limit: 1, windowMs: 60_000 },
+  })
+  const server = createNodeHttpServer(appServer.app)
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => {
+        server.off('error', reject)
+        resolve()
+      })
+    })
+    const address = server.address()
+    const port = typeof address === 'object' && address ? address.port : 0
+    const baseUrl = `http://127.0.0.1:${String(port)}`
+
+    const imageResponse = await fetch(`${baseUrl}/codex-local-image?path=${encodeURIComponent(imagePath)}`)
+    assert.equal(imageResponse.status, 200)
+    assert.equal(Buffer.from(await imageResponse.arrayBuffer()).length, pngBytes.length)
+
+    const rateLimitedResponse = await fetch(`${baseUrl}/codex-local-file?path=${encodeURIComponent(imagePath)}`)
+    assert.equal(rateLimitedResponse.status, 429)
+    assert.deepEqual(await rateLimitedResponse.json(), { error: '本地文件请求过于频繁，请稍后重试。' })
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    }).catch(() => {})
+    appServer.dispose()
     await rm(root, { recursive: true, force: true })
   }
 }
@@ -9542,6 +9637,82 @@ function smokeRuntimePayloadParsing(): void {
   )
 }
 
+async function smokeAppServerNativeThreadQueue(): Promise<void> {
+  const nativeRows: Array<{ id: string; clientUserMessageId: string }> = []
+  const calls: Array<{ method: string; params: unknown }> = []
+  let failAddResponse = true
+  const rpc = async (method: string, params: unknown): Promise<unknown> => {
+    calls.push({ method, params })
+    if (method === 'thread/queue/list') {
+      return { data: nativeRows.map((row) => ({ ...row, input: [] })), nextCursor: null }
+    }
+    if (method === 'thread/queue/add') {
+      nativeRows.push({ id: 'native-queue-a', clientUserMessageId: 'client-native-a' })
+      if (failAddResponse) {
+        failAddResponse = false
+        throw new Error('transport closed after queue commit')
+      }
+      return { queuedSubmission: { ...nativeRows.at(-1), input: [] } }
+    }
+    if (method === 'thread/queue/delete') return { deleted: true }
+    if (method === 'thread/queue/reorder') return { ok: true }
+    throw new Error(`unexpected native queue method ${method}`)
+  }
+
+  const ensured = await ensureNativeThreadQueueSubmission({
+    rpc,
+    threadId: 'thread-native',
+    input: [{ type: 'text', text: 'Native queue prompt' }],
+    clientUserMessageId: 'client-native-a',
+  })
+  assert.deepEqual(ensured, {
+    id: 'native-queue-a',
+    clientUserMessageId: 'client-native-a',
+  })
+  assert.deepEqual(calls.map((call) => call.method), [
+    'thread/queue/list',
+    'thread/queue/add',
+    'thread/queue/list',
+  ])
+  const marker = createNativeThreadQueueMarker(ensured.id)
+  assert.equal(marker, 'native_thread_queue:native-queue-a')
+  assert.equal(readNativeThreadQueueSubmissionId(marker), 'native-queue-a')
+  assert.equal(readRuntimeQueueWaitReason(marker), 'native_writer')
+  assert.equal(readRuntimeQueueWaitReason(EXTERNAL_ACTIVE_WRITER_MARKER), 'external_writer')
+
+  const pageCursors: string[] = []
+  const pagedRows = await listNativeThreadQueueSubmissions(async (method, params) => {
+    assert.equal(method, 'thread/queue/list')
+    const cursor = readStringProperty(params, 'cursor')
+    pageCursors.push(cursor)
+    return cursor
+      ? { data: [{ id: 'native-page-b', clientUserMessageId: 'client-page-b' }], nextCursor: null }
+      : { data: [{ id: 'native-page-a', clientUserMessageId: 'client-page-a' }], nextCursor: 'page-b' }
+  }, 'thread-native-pages')
+  assert.deepEqual(pageCursors, ['', 'page-b'])
+  assert.deepEqual(pagedRows.map((row) => row.id), ['native-page-a', 'native-page-b'])
+
+  nativeRows.unshift({ id: 'native-foreign', clientUserMessageId: 'client-foreign' })
+  nativeRows.push({ id: 'native-queue-b', clientUserMessageId: 'client-native-b' })
+  await reorderNativeThreadQueueSubmissions(
+    rpc,
+    'thread-native',
+    ['native-queue-b', 'native-queue-a'],
+  )
+  assert.deepEqual(calls.at(-1), {
+    method: 'thread/queue/reorder',
+    params: {
+      threadId: 'thread-native',
+      queuedSubmissionIds: ['native-foreign', 'native-queue-b', 'native-queue-a'],
+    },
+  })
+  await deleteNativeThreadQueueSubmission(rpc, 'thread-native', 'native-queue-a')
+  assert.deepEqual(calls.at(-1), {
+    method: 'thread/queue/delete',
+    params: { threadId: 'thread-native', queuedSubmissionId: 'native-queue-a' },
+  })
+}
+
 async function smokeAppServerRuntimeStart(): Promise<void> {
   const createHarness = (rpc: (method: string, params: unknown) => Promise<unknown>) => {
     let currentRequest: RuntimeRequestRecord | null = null
@@ -9793,9 +9964,29 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
   ])
   assert.equal(transportInterrupted.getCurrentRequest()?.status, 'start_uncertain')
 
-  const activeWriter = createHarness(async (method) => {
-    assert.equal(method, 'turn/start')
-    throw new Error('thread thread-active-writer already has an active writer')
+  const activeWriter = createHarness(async (method, params) => {
+    if (method === 'turn/start') {
+      throw new Error('thread thread-active-writer already has an active writer')
+    }
+    if (method === 'thread/queue/list') {
+      assert.deepEqual(params, { threadId: 'thread-active-writer', limit: 100 })
+      return { data: [], nextCursor: null }
+    }
+    if (method === 'thread/queue/add') {
+      assert.deepEqual(params, {
+        threadId: 'thread-active-writer',
+        input: [{ type: 'text', text: 'Queue this follow-up without losing it' }],
+        clientUserMessageId: 'client-active-writer',
+      })
+      return {
+        queuedSubmission: {
+          id: 'native-submission-active-writer',
+          input: [{ type: 'text', text: 'Queue this follow-up without losing it' }],
+          clientUserMessageId: 'client-active-writer',
+        },
+      }
+    }
+    throw new Error(`unexpected active writer method ${method}`)
   })
   const activeWriterResult = await startRuntimeTurnWithAppServer({
     requestId: 'request-active-writer',
@@ -9819,6 +10010,15 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     { action: 'running', threadId: 'thread-active-writer', turnId: '' },
   ])
   assert.equal(activeWriter.queuedRequests[0]?.requestId, 'request-active-writer')
+  assert.equal(
+    activeWriter.getCurrentRequest()?.lastError,
+    'native_thread_queue:native-submission-active-writer',
+  )
+  assert.deepEqual(activeWriter.rpcCalls.map((call) => call.method), [
+    'turn/start',
+    'thread/queue/list',
+    'thread/queue/add',
+  ])
   assert.deepEqual(asRecord(asRecord(activeWriter.getCurrentRequest()?.payload)?.queueMetadata), {
     text: 'Queue this follow-up without losing it',
     speedMode: 'fast',
@@ -10763,6 +10963,7 @@ async function smokeRuntimeActionRoutes(): Promise<void> {
   }
   const listedQueueThreadIds: string[] = []
   const cancelledQueueRequestIds: string[] = []
+  const restoredQueueRequestIds: string[] = []
   const retriedQueueRequestIds: string[] = []
   const reorderedQueues: Array<{ threadId: string; requestIds: string[] }> = []
   const queueDependencies = {
@@ -10775,6 +10976,10 @@ async function smokeRuntimeActionRoutes(): Promise<void> {
     },
     cancelQueuedRuntimeTurn: (requestId: string) => {
       cancelledQueueRequestIds.push(requestId)
+      return true
+    },
+    restoreQueuedRuntimeTurn: (requestId: string) => {
+      restoredQueueRequestIds.push(requestId)
       return true
     },
     retryQueuedRuntimeTurn: (requestId: string) => {
@@ -10815,6 +11020,16 @@ async function smokeRuntimeActionRoutes(): Promise<void> {
   ), true)
   assert.equal(removed.response.statusCode, 200)
   assert.deepEqual(cancelledQueueRequestIds, ['queue-request-a'])
+
+  const restored = createRouteTestResponse()
+  assert.equal(await handleRuntimeActionRoutes(
+    { method: 'POST' } as never,
+    restored.response as never,
+    new URL('http://127.0.0.1/codex-api/runtime/queue/queue-request-a/restore'),
+    queueDependencies,
+  ), true)
+  assert.equal(restored.response.statusCode, 202)
+  assert.deepEqual(restoredQueueRequestIds, ['queue-request-a'])
 
   const retried = createRouteTestResponse()
   assert.equal(await handleRuntimeActionRoutes(
@@ -12482,6 +12697,7 @@ async function smokeRuntimeMessageQueue(): Promise<void> {
   let currentServiceTier: 'fast' | null = null
   let expectedConfigClientMessageId = 'queued-client-1'
   let queue: RuntimeMessageQueue | null = null
+  let nativeQueue: RuntimeMessageQueue | null = null
   try {
     store.createRequest({
       requestId: 'active-request',
@@ -12555,14 +12771,14 @@ async function smokeRuntimeMessageQueue(): Promise<void> {
       collaborationMode: 'execute',
       queueMetadata: { speedMode: 'standard', text: 'Temporary reorder peer' },
     })
-    assert.equal(queue.reorder('thread-queue', [reorderPeer.requestId, first.requestId]), true)
+    assert.equal(await queue.reorder('thread-queue', [reorderPeer.requestId, first.requestId]), true)
     assert.deepEqual(
       queue.list('thread-queue').map((entry) => entry.clientMessageId),
       ['queued-client-reorder-peer', 'queued-client-1'],
     )
-    assert.equal(queue.reorder('thread-queue', [first.requestId]), false)
-    assert.equal(queue.reorder('thread-queue', [first.requestId, reorderPeer.requestId]), true)
-    assert.equal(queue.cancel(reorderPeer.requestId), true)
+    assert.equal(await queue.reorder('thread-queue', [first.requestId]), false)
+    assert.equal(await queue.reorder('thread-queue', [first.requestId, reorderPeer.requestId]), true)
+    assert.equal(await queue.cancel(reorderPeer.requestId), true)
     await new Promise((resolve) => setTimeout(resolve, 30))
     assert.deepEqual(startedClientMessageIds, [])
     assert.equal(queue.list('thread-queue').length, 1)
@@ -12614,11 +12830,113 @@ async function smokeRuntimeMessageQueue(): Promise<void> {
     assert.equal(failedQueue.list('thread-queue')[0]?.lastError, 'background start failed')
     assert.equal(failedQueue.retry(failed.requestId), true)
     assert.equal(store.getRequest(failed.requestId)?.status, 'queued')
-    assert.equal(failedQueue.cancel(failed.requestId), true)
+    assert.equal(await failedQueue.cancel(failed.requestId), true)
     assert.equal(failedQueue.list('thread-queue').length, 0)
     failedQueue.dispose()
+
+    store.createRequest({
+      requestId: 'native-owner-request',
+      clientMessageId: 'native-owner-client',
+      threadId: 'thread-native-queue',
+      status: 'running',
+      promptHash: 'native-owner-hash',
+      mode: 'execute',
+      payload: {},
+    })
+    let nativeSubmissionPresent = true
+    const nativeRpcCalls: Array<{ method: string; params: unknown }> = []
+    nativeQueue = new RuntimeMessageQueue({
+      store,
+      rpc: async (method, params) => {
+        nativeRpcCalls.push({ method, params })
+        if (method === 'thread/queue/list') {
+          return {
+            data: nativeSubmissionPresent
+              ? [{ id: 'native-runtime-submission', clientUserMessageId: 'native-runtime-client' }]
+              : [],
+            nextCursor: null,
+          }
+        }
+        if (method === 'thread/queue/delete') {
+          nativeSubmissionPresent = false
+          return { deleted: true }
+        }
+        throw new Error(`native mirror must not call ${method}`)
+      },
+      startRuntimeTurn: async () => {
+        throw new Error('native mirror must not compete for the active writer')
+      },
+      publishNotification: (notification) => { notifications.push(notification) },
+      getErrorMessage: (error, fallback) => error instanceof Error ? error.message : fallback,
+    })
+    const mirrored = nativeQueue.enqueue({
+      threadId: 'thread-native-queue',
+      clientMessageId: 'native-runtime-client',
+      input: [{ type: 'text', text: 'Owned by the native queue' }],
+      queueMetadata: { speedMode: 'standard', text: 'Owned by the native queue' },
+    })
+    store.updateRequest(mirrored.requestId, {
+      status: 'queued',
+      lastError: createNativeThreadQueueMarker('native-runtime-submission'),
+    })
+    assert.equal(nativeQueue.list('thread-native-queue')[0]?.waitReason, 'native_writer')
+    const localOnlyPeer = nativeQueue.enqueue({
+      threadId: 'thread-native-queue',
+      clientMessageId: 'native-runtime-local-peer',
+      input: [{ type: 'text', text: 'Still owned by the local durable queue' }],
+      queueMetadata: { speedMode: 'standard', text: 'Still owned by the local durable queue' },
+    })
+    assert.equal(
+      await nativeQueue.reorder('thread-native-queue', [localOnlyPeer.requestId, mirrored.requestId]),
+      false,
+      'mixed native/local order must remain truthful until every row has the same execution owner',
+    )
+    assert.equal(await nativeQueue.cancel(localOnlyPeer.requestId), true)
+    store.updateRequest('native-owner-request', { status: 'completed' })
+    nativeQueue.handleRuntimeEvent('thread/status/changed', 'thread-native-queue', { status: { type: 'idle' } })
+    await waitForCondition(() => nativeRpcCalls.some((call) => call.method === 'thread/queue/list'))
+    assert.equal(store.getRequest(mirrored.requestId)?.status, 'queued')
+
+    nativeSubmissionPresent = false
+    nativeQueue.handleRuntimeEvent('thread/status/changed', 'thread-native-queue', { status: { type: 'idle' } })
+    await waitForCondition(() => store.getRequest(mirrored.requestId)?.status === 'completed')
+    assert.equal(nativeQueue.list('thread-native-queue').length, 0)
+
+    store.createRequest({
+      requestId: 'native-owner-cancel-request',
+      clientMessageId: 'native-owner-cancel-client',
+      threadId: 'thread-native-cancel',
+      status: 'running',
+      promptHash: 'native-owner-cancel-hash',
+      mode: 'execute',
+      payload: {},
+    })
+    nativeSubmissionPresent = true
+    const cancellable = nativeQueue.enqueue({
+      threadId: 'thread-native-cancel',
+      clientMessageId: 'native-runtime-cancel-client',
+      input: [{ type: 'text', text: 'Cancel in both queues' }],
+      queueMetadata: { speedMode: 'standard', text: 'Cancel in both queues' },
+    })
+    store.updateRequest(cancellable.requestId, {
+      status: 'queued',
+      lastError: createNativeThreadQueueMarker('native-runtime-submission'),
+    })
+    assert.equal(await nativeQueue.cancel(cancellable.requestId), true)
+    assert.equal(store.getRequest(cancellable.requestId)?.status, 'interrupted')
+    assert.equal(nativeRpcCalls.some((call) => call.method === 'thread/queue/delete'), true)
+    assert.equal(
+      nativeQueue.restore(cancellable.requestId),
+      true,
+      'a failed queue-to-steer handoff must be able to restore the original durable request',
+    )
+    assert.equal(store.getRequest(cancellable.requestId)?.status, 'queued')
+    assert.equal(store.getRequest(cancellable.requestId)?.lastError, null)
+    nativeQueue.dispose()
+    nativeQueue = null
   } finally {
     queue?.dispose()
+    nativeQueue?.dispose()
     store.close()
     await rm(tempDir, { recursive: true, force: true })
   }
