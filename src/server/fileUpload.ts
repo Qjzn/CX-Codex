@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, realpath, stat, writeFile } from 'node:fs/promises'
 import type { IncomingMessage } from 'node:http'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { RequestBodyTooLargeError, readRawBody } from './httpBody.js'
 
 export type ParsedMultipartFileUpload = {
@@ -159,7 +159,10 @@ export async function resolveUploadedFilePath(
     throw new UploadedFileAccessError('not-found')
   }
 
-  if (!isPathWithinRoot(canonicalUploadRoot, canonicalCandidate)) {
+  if (
+    canonicalCandidate !== canonicalUploadRoot
+    && !canonicalCandidate.startsWith(`${canonicalUploadRoot}${sep}`)
+  ) {
     throw new UploadedFileAccessError('outside-upload-root')
   }
 
