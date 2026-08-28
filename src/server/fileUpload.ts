@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, realpath, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, realpath, writeFile } from 'node:fs/promises'
 import type { IncomingMessage } from 'node:http'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { RequestBodyTooLargeError, readRawBody } from './httpBody.js'
 
 export type ParsedMultipartFileUpload = {
@@ -10,6 +10,7 @@ export type ParsedMultipartFileUpload = {
 }
 
 const FILE_UPLOAD_REQUEST_BODY_LIMIT_BYTES = 50 * 1024 * 1024
+const GENERATED_UPLOAD_DIRECTORY_PATTERN = /^f-[A-Za-z0-9]{6}$/u
 
 export class FileUploadError extends Error {
   constructor(
@@ -38,7 +39,6 @@ export class UploadedFileAccessError extends Error {
 
 export type UploadedFileAccessDependencies = {
   uploadDir?: string
-  stat?: typeof stat
 }
 
 function readUploadEnv(name: string): string {
@@ -139,34 +139,55 @@ export async function resolveUploadedFilePath(
     throw new UploadedFileAccessError('outside-upload-root')
   }
 
-  const readStat = dependencies.stat ?? stat
-  let canonicalCandidate: string
-  try {
-    canonicalCandidate = await realpath(normalizedCandidate)
-  } catch {
-    throw new UploadedFileAccessError('not-found')
-  }
-
-  let canonicalUploadRoot: string
-  try {
-    const uploadRootStat = await readStat(uploadRoot)
-    if (!uploadRootStat.isDirectory()) {
-      throw new UploadedFileAccessError('not-found')
-    }
-    canonicalUploadRoot = await realpath(uploadRoot)
-  } catch (error) {
-    if (error instanceof UploadedFileAccessError) throw error
-    throw new UploadedFileAccessError('not-found')
-  }
-
+  const relativeCandidate = relative(uploadRoot, normalizedCandidate)
+  const pathSegments = relativeCandidate.split(sep)
+  const requestedDirectoryName = pathSegments[0] ?? ''
+  const requestedFileName = pathSegments[1] ?? ''
   if (
-    canonicalCandidate !== canonicalUploadRoot
-    && !canonicalCandidate.startsWith(`${canonicalUploadRoot}${sep}`)
+    (pathSegments.length !== 1 && pathSegments.length !== 2)
+    || !GENERATED_UPLOAD_DIRECTORY_PATTERN.test(requestedDirectoryName)
+    || (pathSegments.length === 2 && (
+      !requestedFileName
+      || basename(requestedFileName) !== requestedFileName
+    ))
   ) {
     throw new UploadedFileAccessError('outside-upload-root')
   }
 
-  return canonicalCandidate
+  try {
+    const canonicalUploadRoot = await realpath(uploadRoot)
+    const uploadDirectoryEntry = (await readdir(canonicalUploadRoot, { withFileTypes: true }))
+      .find((entry) => (
+        entry.isDirectory()
+        && !entry.isSymbolicLink()
+        && GENERATED_UPLOAD_DIRECTORY_PATTERN.test(entry.name)
+        && entry.name === requestedDirectoryName
+      ))
+    if (!uploadDirectoryEntry) throw new UploadedFileAccessError('not-found')
+
+    const canonicalUploadDirectory = await realpath(join(canonicalUploadRoot, uploadDirectoryEntry.name))
+    if (
+      canonicalUploadDirectory === canonicalUploadRoot
+      || !canonicalUploadDirectory.startsWith(`${canonicalUploadRoot}${sep}`)
+    ) {
+      throw new UploadedFileAccessError('outside-upload-root')
+    }
+    if (pathSegments.length === 1) return canonicalUploadDirectory
+
+    const fileEntry = (await readdir(canonicalUploadDirectory, { withFileTypes: true }))
+      .find((entry) => entry.isFile() && !entry.isSymbolicLink() && entry.name === requestedFileName)
+    if (!fileEntry) throw new UploadedFileAccessError('not-found')
+
+    const canonicalCandidate = await realpath(join(canonicalUploadDirectory, fileEntry.name))
+    if (!canonicalCandidate.startsWith(`${canonicalUploadDirectory}${sep}`)) {
+      throw new UploadedFileAccessError('outside-upload-root')
+    }
+
+    return canonicalCandidate
+  } catch (error) {
+    if (error instanceof UploadedFileAccessError) throw error
+    throw new UploadedFileAccessError('not-found')
+  }
 }
 
 export async function readRequestBody(req: IncomingMessage, options: { maxBytes?: number } = {}): Promise<Buffer> {

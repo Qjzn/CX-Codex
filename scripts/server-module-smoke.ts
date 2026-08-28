@@ -5081,9 +5081,11 @@ async function smokeSessionAttachmentAccess(): Promise<void> {
 
 async function smokeUploadedLocalFileRoutes(): Promise<void> {
   const uploadRoot = await mkdtemp(join(tmpdir(), 'cx-codex-http-upload-'))
-  const uploadDir = join(uploadRoot, 'f-route')
+  const uploadDir = join(uploadRoot, 'f-route1')
   const imagePath = join(uploadDir, 'preview.png')
   const textPath = join(uploadDir, 'note.txt')
+  const internalCacheDir = join(uploadRoot, '_session-attachments')
+  const internalCachePath = join(internalCacheDir, 'private.txt')
   const outsideDir = await mkdtemp(join(tmpdir(), 'cx-codex-http-upload-outside-'))
   const outsidePath = join(outsideDir, 'secret.png')
   const clipboardPath = join(outsideDir, 'codex-clipboard-c574ffab-0033-4dbd-aef7-09267e4e7a30.jpg')
@@ -5096,6 +5098,8 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
   await mkdir(uploadDir, { recursive: true })
   await writeFile(imagePath, pngBytes)
   await writeFile(textPath, 'uploaded note', 'utf8')
+  await mkdir(internalCacheDir, { recursive: true })
+  await writeFile(internalCachePath, 'internal cache', 'utf8')
   await writeFile(outsidePath, pngBytes)
   await writeFile(clipboardPath, pngBytes)
   await symlink(outsideDir, escapedLink, 'junction')
@@ -5125,7 +5129,6 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
     },
     resolveUploadedFilePath: (candidatePath: string) => resolveUploadedFilePath(candidatePath, {
       uploadDir: uploadRoot,
-      stat,
     }),
     resolveSessionAttachmentPath: (candidatePath: string) => sessionAttachmentStore.resolve(candidatePath),
     localFileRateLimit: { limit: 8, windowMs: 60_000 },
@@ -5188,12 +5191,16 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
     assert.deepEqual(await rateLimitedResponse.json(), { error: '本地文件请求过于频繁，请稍后重试。' })
 
     await assert.rejects(
-      () => resolveUploadedFilePath(join(escapedLink, 'secret.png'), { uploadDir: uploadRoot, stat }),
+      () => resolveUploadedFilePath(join(escapedLink, 'secret.png'), { uploadDir: uploadRoot }),
       (error: unknown) => error instanceof UploadedFileAccessError && error.code === 'outside-upload-root',
     )
     await assert.rejects(
-      () => resolveUploadedFilePath(join(uploadDir, 'missing.png'), { uploadDir: uploadRoot, stat }),
+      () => resolveUploadedFilePath(join(uploadDir, 'missing.png'), { uploadDir: uploadRoot }),
       (error: unknown) => error instanceof UploadedFileAccessError && error.code === 'not-found',
+    )
+    await assert.rejects(
+      () => resolveUploadedFilePath(internalCachePath, { uploadDir: uploadRoot }),
+      (error: unknown) => error instanceof UploadedFileAccessError && error.code === 'outside-upload-root',
     )
   } finally {
     await new Promise<void>((resolve, reject) => {
