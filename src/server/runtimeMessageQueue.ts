@@ -12,9 +12,20 @@ import {
   isRuntimeThreadStatusTerminal,
   readRuntimeThreadStatusLifecycle,
 } from '../runtimeThreadStatus.js'
+import {
+  deleteNativeThreadQueueSubmission,
+  EXTERNAL_ACTIVE_WRITER_MARKER,
+  isNativeThreadQueueUnsupportedError,
+  listNativeThreadQueueSubmissions,
+  readNativeThreadQueueSubmissionId,
+  readRuntimeQueueWaitReason,
+  reorderNativeThreadQueueSubmissions,
+  type RuntimeQueueWaitReason,
+} from './appServerNativeThreadQueue.js'
 
 const QUEUE_SWEEP_INTERVAL_MS = 4_000
 const QUEUE_STATUSES: RuntimeRequestStatus[] = ['queued', 'queue_failed']
+const REMOVED_FROM_QUEUE_ERROR = 'Removed from message queue'
 
 type RuntimeMessageQueueStore = {
   createRequest(record: {
@@ -46,6 +57,7 @@ export type RuntimeMessageQueueEntry = {
   createdAtIso: string
   updatedAtIso: string
   lastError: string | null
+  waitReason?: RuntimeQueueWaitReason
   payload: unknown
 }
 
@@ -72,6 +84,7 @@ function toQueueEntry(request: RuntimeRequestRecord): RuntimeMessageQueueEntry {
     createdAtIso: request.createdAtIso,
     updatedAtIso: request.updatedAtIso,
     lastError: request.lastError,
+    waitReason: readRuntimeQueueWaitReason(request.lastError),
     payload: request.payload,
   }
 }
@@ -149,15 +162,37 @@ export class RuntimeMessageQueue {
     return this.dependencies.store.listQueuedRequests(threadId, 500).map(toQueueEntry)
   }
 
-  cancel(requestId: string): boolean {
+  async cancel(requestId: string): Promise<boolean> {
     const request = this.dependencies.store.getRequest(requestId)
     if (!request || !QUEUE_STATUSES.includes(request.status)) return false
+    const nativeSubmissionId = readNativeThreadQueueSubmissionId(request.lastError)
+    if (nativeSubmissionId) {
+      await deleteNativeThreadQueueSubmission(
+        this.dependencies.rpc,
+        request.threadId,
+        nativeSubmissionId,
+      )
+    }
     const updated = this.dependencies.store.updateRequest(requestId, {
       status: 'interrupted',
-      lastError: 'Removed from message queue',
+      lastError: REMOVED_FROM_QUEUE_ERROR,
     })
     if (!updated) return false
     this.publish(request.threadId, requestId, 'removed')
+    this.scheduleThread(request.threadId)
+    return true
+  }
+
+  restore(requestId: string): boolean {
+    const request = this.dependencies.store.getRequest(requestId)
+    if (request && QUEUE_STATUSES.includes(request.status)) return true
+    if (!request || request.status !== 'interrupted' || request.lastError !== REMOVED_FROM_QUEUE_ERROR) return false
+    const updated = this.dependencies.store.updateRequest(requestId, {
+      status: 'queued',
+      lastError: null,
+    })
+    if (!updated) return false
+    this.publish(request.threadId, requestId, 'restored')
     this.scheduleThread(request.threadId)
     return true
   }
@@ -176,8 +211,27 @@ export class RuntimeMessageQueue {
     return true
   }
 
-  reorder(threadId: string, requestIds: string[]): boolean {
+  async reorder(threadId: string, requestIds: string[]): Promise<boolean> {
     const normalizedThreadId = threadId.trim()
+    const queued = this.dependencies.store.listQueuedRequests(normalizedThreadId, 500)
+    if (queued.length !== requestIds.length) return false
+    const queuedIds = new Set(queued.map((request) => request.requestId))
+    if (requestIds.some((requestId) => !queuedIds.has(requestId))) return false
+    const nativeSubmissionIds = requestIds.flatMap((requestId) => {
+      const request = queued.find((candidate) => candidate.requestId === requestId)
+      const submissionId = readNativeThreadQueueSubmissionId(request?.lastError)
+      return submissionId ? [submissionId] : []
+    })
+    // A native-owned entry is already ahead of local-only entries in the App Server.
+    // Refuse a mixed reorder instead of showing an order that cannot be executed.
+    if (nativeSubmissionIds.length > 0 && nativeSubmissionIds.length !== queued.length) return false
+    if (nativeSubmissionIds.length > 1) {
+      await reorderNativeThreadQueueSubmissions(
+        this.dependencies.rpc,
+        normalizedThreadId,
+        nativeSubmissionIds,
+      )
+    }
     if (!this.dependencies.store.reorderQueuedRequests(normalizedThreadId, requestIds)) return false
     this.publish(normalizedThreadId, '', 'reordered')
     this.scheduleThread(normalizedThreadId)
@@ -218,6 +272,26 @@ export class RuntimeMessageQueue {
 
     this.processingThreadIds.add(threadId)
     try {
+      const nativeSubmissionId = readNativeThreadQueueSubmissionId(next.lastError)
+      if (nativeSubmissionId) {
+        try {
+          const nativeQueue = await listNativeThreadQueueSubmissions(this.dependencies.rpc, threadId)
+          if (nativeQueue.some((submission) => submission.id === nativeSubmissionId)) return
+          this.dependencies.store.updateRequest(next.requestId, {
+            status: 'completed',
+            lastError: null,
+          })
+          this.publish(threadId, next.requestId, 'starting')
+          this.scheduleThread(threadId)
+          return
+        } catch (error) {
+          if (!isNativeThreadQueueUnsupportedError(error)) return
+          this.dependencies.store.updateRequest(next.requestId, {
+            status: 'queued',
+            lastError: EXTERNAL_ACTIVE_WRITER_MARKER,
+          })
+        }
+      }
       await this.applyQueuedSpeedMode(next.payload)
       const pending = this.dependencies.store.getRequest(next.requestId)
       if (!pending || pending.status !== 'queued') return

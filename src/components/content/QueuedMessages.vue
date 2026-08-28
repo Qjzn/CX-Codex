@@ -17,6 +17,12 @@
       <p v-else-if="hasLocalPending" class="queued-messages-caption" role="status">
         已保存在本机，正在等待连接 7420；同步完成后才可脱离移动端执行。
       </p>
+      <p v-else-if="hasNativeWriterWait" class="queued-messages-caption" role="status">
+        已交给正在使用此任务的 Codex；当前回复结束后会自动继续。
+      </p>
+      <p v-else-if="hasExternalWriterWait" class="queued-messages-caption queued-messages-caption-failed" role="status">
+        当前 Codex 版本仍占用此任务；关闭或切换桌面端任务后，7420 才能继续。
+      </p>
       <p v-else class="queued-messages-caption">
         已交给 7420 后台；切换会话或关闭移动端后仍会按顺序执行。点正文可编辑。
       </p>
@@ -70,6 +76,7 @@ type QueuedMessageRow = {
   id: string
   backgroundPersisted?: boolean
   deliveryState?: 'queued' | 'failed'
+  waitReason?: 'native_writer' | 'external_writer'
   text: string
   imageUrls?: string[]
   skills?: Array<{ name: string; path: string }>
@@ -90,6 +97,8 @@ defineEmits<{
 
 const hasPausedFailure = computed(() => props.messages[0]?.deliveryState === 'failed')
 const hasLocalPending = computed(() => props.messages.some((message) => message.backgroundPersisted !== true))
+const hasNativeWriterWait = computed(() => props.messages.some((message) => message.waitReason === 'native_writer'))
+const hasExternalWriterWait = computed(() => props.messages.some((message) => message.waitReason === 'external_writer'))
 
 function getMessagePreview(message: QueuedMessageRow): string {
   const text = message.text.trim()

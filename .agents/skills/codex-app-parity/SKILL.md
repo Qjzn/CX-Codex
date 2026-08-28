@@ -1360,3 +1360,37 @@ After each feature implementation session that uses this skill:
 - The installed app's current CSS includes explicit forced-colors rules using system colors such as `CanvasText`, `ButtonText`, and `ButtonBorder`, removing shadows and restoring outlines where needed.
 - Absence of matching handwritten CSS is not by itself evidence of failure. Verify actual computed behavior: CX-Codex's Windows Chromium forced-colors emulation retained readable boundaries and a system keyboard outline without additional visual styling.
 - CX-Codex now names the main region “会话内容”, names both desktop and mobile conversation navigation “会话导航”, and localizes the desktop resize control as “调整侧栏宽度”. Independent Headless Playwright verifies those role/name contracts, skip-link focus transfer, forced-colors focus, no duplicate IDs, no horizontal overflow, and no browser errors.
+
+## Findings: Versioned Desktop CLI and Experimental Goal Capability (2026-08-10)
+
+- Installed Windows Codex `26.803.5235` relocates its bundled CLI to a content-hashed directory under `OpenAI\Codex\bin`; the unversioned sibling executable can remain older. CX-Codex should use its current newest-runnable discovery path unless the user deliberately supplies an explicit command, rather than retaining a stale automatically configured pin.
+- The installed desktop bundle initializes App Server with `capabilities.experimentalApi: true`. Current `thread/goal/*` methods depend on that capability, so CX-Codex now uses the same default while preserving an explicit false override for callers that need it.
+- Model catalog ownership remains independent from config synchronization. If `model/list` succeeds while `config/read` fails, the composer keeps the live catalog and only skips applying config-derived defaults.
+- A real 7420 run using the current versioned CLI returned success for `config/read`, `skills/list`, `model/list`, and `thread/goal/get`. Desktop and phone browser checks showed the current task without raw configuration/goal errors, stale busy state, browser errors, duplicate main landmarks, or horizontal overflow; independent Headless Playwright also matched all seven live models.
+
+## Findings: Canonical Conversation Order and Stable Project Ownership (2026-08-10)
+
+- The installed desktop bundle projects a thread by iterating `thread.turns` in server order and mapping each turn's `items` without reordering. A fresh authoritative CX-Codex projection must therefore restore that canonical sequence instead of preserving a stale live-array order when no genuinely missing item remains.
+- Desktop conversation ownership derives from the thread cwd, then session metadata or an explicit fallback. A partial active-thread row must not replace a previously resolved cwd/project identity with an empty cwd or `unknown-project`; live title, preview, and progress fields may still advance.
+- Parity verification for this behavior requires a real multi-turn browser conversation, a DOM role-order assertion after completion and refresh, a project-group assertion, and a loading-state check before the route detail converges.
+
+## Findings: Cross-process Native Queue Handoff (2026-08-28)
+
+- Installed Windows Codex `26.818.5229` keeps composer-adjacent queued messages under stable identity and exposes edit, delete, reorder, Steer, and paused-state ownership in its current webview bundle.
+- The matching App Server exposes the experimental `thread/queue/*` protocol. When another Codex process still owns a thread writer, CX-Codex must delegate the queued prompt by stable `clientUserMessageId` instead of repeatedly calling `turn/start`.
+- CX-Codex keeps its Runtime queue row only as a durable UI and recovery mirror while the native queue owns execution. Native presence suppresses local retries; disappearance means the owner has accepted the row. Delete and reorder are sent to the native owner before the local mirror changes.
+- Mixed native/local reorder is rejected because the displayed order must never promise an execution order the App Server cannot honor. Older App Server builds and unsupported collaboration modes retain an explicit local fallback rather than silently dropping the prompt.
+
+## Findings: Turn-bound Optimistic Delivery and Detached Failure Recovery (2026-08-28)
+
+- Installed Windows Codex `26.818.5229` keeps queued prompts in a composer-adjacent surface with stable identity, rather than rendering them as committed transcript messages. CX-Codex should preserve that separation for recovery-only failures whose original history anchor is outside the loaded page.
+- Repeated text is not message identity. CX-Codex now binds an optimistic send to the authoritative `turnId` returned by App Server and consumes signature-based acknowledgements at most once, so two intentional identical sends remain independently visible until each own turn is authoritative.
+- A failed optimistic message stays in the transcript when its original anchor is loaded. When that anchor is outside the current history window, the message moves to a compact, collapsed recovery tray above the composer with edit, retry, and delete actions.
+- This is a scoped CX-Codex recovery adaptation: it adds no queue protocol, Runtime owner, database migration, or automatic retry policy. Headless phone verification at `393 x 852` confirmed zero detached copies in the transcript, all three recovery actions, and no horizontal overflow.
+
+## Findings: Restorable Queue-to-Steer Transfer (2026-08-28)
+
+- Installed Windows Codex `26.818.5229` implements queued-message Steer as a transfer: it removes the row, attempts the active-turn handoff, and restores the same row at its original index when that handoff throws.
+- CX-Codex previously removed both the local row and durable Runtime request before attempting the send, then swallowed the error. The observed request therefore ended as `interrupted / Removed from message queue` without a `turnId`, while a separate failed optimistic bubble remained visible.
+- CX-Codex now mirrors the desktop transfer contract across both owners. A narrowly scoped restore endpoint revives only requests interrupted by queue removal, while the frontend removes the failed optimistic attempt and restores the original row and ordering.
+- Headless phone verification at `393 x 852` kept both queued rows in the same order, introduced no additional failed bubble, exposed explicit recovery feedback, and produced no browser errors.

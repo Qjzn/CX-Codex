@@ -11,6 +11,7 @@ import {
 const SESSION_ATTACHMENT_CACHE_DIRECTORY = 'session-attachments'
 const MAX_REGISTERED_SESSION_ATTACHMENTS = 1_024
 const MAX_CACHED_SESSION_ATTACHMENTS = 1_024
+const MAX_SESSION_ATTACHMENT_PREFETCH_CONCURRENCY = 4
 const MAX_THREAD_READ_SCAN_NODES = 20_000
 const CODEX_CLIPBOARD_IMAGE_PATTERN = /^codex-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:avif|bmp|gif|jpe?g|png|webp)$/iu
 const SESSION_ATTACHMENT_CACHE_KEY_PATTERN = /^[0-9a-f]{64}$/u
@@ -42,6 +43,7 @@ export type SessionAttachmentAccessDependencies = {
   copyFile?: typeof copyFile
   maxBytes?: number
   maxCacheEntries?: number
+  maxPrefetchConcurrency?: number
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -79,6 +81,9 @@ export class SessionAttachmentAccessStore {
   private readonly copyLocalFile: typeof copyFile
   private readonly maxBytes: number
   private readonly maxCacheEntries: number
+  private readonly maxPrefetchConcurrency: number
+  private activePrefetchCount = 0
+  private readonly pendingPrefetchStarts: Array<() => void> = []
 
   constructor(dependencies: SessionAttachmentAccessDependencies = {}) {
     this.tempRoot = resolve(dependencies.tempDir ?? tmpdir())
@@ -89,6 +94,10 @@ export class SessionAttachmentAccessStore {
     this.copyLocalFile = dependencies.copyFile ?? copyFile
     this.maxBytes = dependencies.maxBytes ?? getFileUploadRequestBodyLimitBytes()
     this.maxCacheEntries = Math.max(1, dependencies.maxCacheEntries ?? MAX_CACHED_SESSION_ATTACHMENTS)
+    this.maxPrefetchConcurrency = Math.max(
+      1,
+      dependencies.maxPrefetchConcurrency ?? MAX_SESSION_ATTACHMENT_PREFETCH_CONCURRENCY,
+    )
   }
 
   rememberFromThreadRead(value: unknown): string[] {
@@ -131,9 +140,26 @@ export class SessionAttachmentAccessStore {
 
   async cacheFromThreadRead(value: unknown): Promise<string[]> {
     const remembered = this.rememberFromThreadRead(value)
-    await Promise.allSettled(remembered.map((candidatePath) => this.resolve(candidatePath)))
+    await Promise.all(remembered.map((candidatePath) => this.prefetch(candidatePath)))
     await this.pruneCache()
     return remembered
+  }
+
+  private async prefetch(candidatePath: string): Promise<void> {
+    await new Promise<void>((resolvePrefetch) => {
+      const start = (): void => {
+        this.activePrefetchCount += 1
+        void this.resolve(candidatePath)
+          .catch(() => {})
+          .finally(() => {
+            this.activePrefetchCount -= 1
+            resolvePrefetch()
+            this.pendingPrefetchStarts.shift()?.()
+          })
+      }
+      if (this.activePrefetchCount < this.maxPrefetchConcurrency) start()
+      else this.pendingPrefetchStarts.push(start)
+    })
   }
 
   async resolve(candidatePath: string): Promise<string> {
