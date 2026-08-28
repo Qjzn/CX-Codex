@@ -33,6 +33,32 @@ function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null
 }
 
+function findSessionClipboardImagePath(value) {
+  const pending = [value]
+  const visited = new Set()
+  let scannedNodes = 0
+  while (pending.length > 0 && scannedNodes < 20_000) {
+    const current = pending.pop()
+    if (!current || typeof current !== 'object' || visited.has(current)) continue
+    visited.add(current)
+    scannedNodes += 1
+    if (Array.isArray(current)) {
+      for (const item of current) pending.push(item)
+      continue
+    }
+    const record = asRecord(current)
+    if (
+      record?.type === 'localImage'
+      && typeof record.path === 'string'
+      && /^codex-clipboard-[0-9a-f-]+\.(?:avif|bmp|gif|jpe?g|png|webp)$/iu.test(basename(record.path))
+    ) {
+      return record.path.trim()
+    }
+    for (const child of Object.values(record ?? {})) pending.push(child)
+  }
+  return ''
+}
+
 function readNumber(value, fallback = 0) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }
@@ -89,6 +115,7 @@ const baseUrl = readArg(['--base-url', '-BaseUrl'], DEFAULT_BASE_URL).replace(/\
 const imagePath = resolve(readArg(['--image-path', '-ImagePath'], DEFAULT_IMAGE_PATH))
 const maxUncertainRequests = readNonNegativeNumber(['--max-uncertain'], 0)
 const maxActiveListMs = readNonNegativeNumber(['--max-active-list-ms'], 5_000)
+const sessionImageThreadId = readArg(['--session-image-thread-id', '-SessionImageThreadId']).trim()
 const skipImage = hasArg('--skip-image', '-SkipImage')
 const failures = []
 const metrics = {}
@@ -208,6 +235,40 @@ if (!skipImage) {
     metrics.imageUploadMs = upload.durationMs
     metrics.imageReadMs = download.durationMs
     metrics.imageBytes = bytes
+  })
+}
+
+if (sessionImageThreadId) {
+  await check('thread/read session clipboard image is immediately readable', async () => {
+    const threadRead = await measure('session thread/read', () => readJson(`${baseUrl}/codex-api/rpc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: 'thread/read',
+        params: { threadId: sessionImageThreadId, includeTurns: true },
+      }),
+    }, 60_000))
+    const result = unwrap(threadRead.value, 'result', 'thread/read')
+    const sessionImagePath = findSessionClipboardImagePath(result)
+    if (!sessionImagePath) throw new Error('thread/read did not contain a codex-clipboard localImage path')
+    const sourceDetails = await stat(sessionImagePath).catch(() => null)
+    const download = await measure('session image read', () => fetchWithTimeout(
+      `${baseUrl}/codex-local-image?path=${encodeURIComponent(sessionImagePath)}`,
+      {},
+      30_000,
+    ))
+    if (!download.value.ok) {
+      const payload = await download.value.json().catch(() => null)
+      throw new Error(`session image read returned HTTP ${download.value.status}: ${String(asRecord(payload)?.error ?? 'request failed')}`)
+    }
+    const bytes = (await download.value.arrayBuffer()).byteLength
+    if (bytes <= 0) throw new Error('session image read returned an empty body')
+    if (sourceDetails?.isFile() && bytes !== sourceDetails.size) {
+      throw new Error(`session image size changed from ${sourceDetails.size} to ${bytes} bytes`)
+    }
+    metrics.sessionThreadReadMs = threadRead.durationMs
+    metrics.sessionImageReadMs = download.durationMs
+    metrics.sessionImageBytes = bytes
   })
 }
 

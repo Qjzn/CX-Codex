@@ -4,6 +4,11 @@ import {
   readTurnIdFromPayload,
 } from './appServerPayloadIds.js'
 import {
+  createNativeThreadQueueMarker,
+  ensureNativeThreadQueueSubmission,
+  EXTERNAL_ACTIVE_WRITER_MARKER,
+} from './appServerNativeThreadQueue.js'
+import {
   createRuntimePromptHash,
   createDurableRuntimeSendPayload,
   normalizePlanModeTurnStartParams,
@@ -241,10 +246,25 @@ async function startParsedRuntimeTurnWithAppServer(
 
     const lastError = dependencies.getErrorMessage(error, 'runtime send failed')
     if (threadId && isActiveWriterConflict(lastError)) {
+      let queueMarker = EXTERNAL_ACTIVE_WRITER_MARKER
+      if (parsed.mode === 'execute' && parsed.clientMessageId) {
+        try {
+          const submission = await ensureNativeThreadQueueSubmission({
+            rpc: dependencies.rpc,
+            threadId,
+            input: parsed.input,
+            clientUserMessageId: parsed.clientMessageId,
+          })
+          queueMarker = createNativeThreadQueueMarker(submission.id)
+        } catch {
+          // Older app-server builds do not expose the experimental native
+          // queue. Keep the durable 7420 queue as a compatibility fallback.
+        }
+      }
       const request = dependencies.updateRequest(requestId, {
         status: 'queued',
         threadId,
-        lastError: null,
+        lastError: queueMarker,
         payload: durablePayload,
       }) ?? dependencies.getRequest(requestId)
       // The queue is orthogonal to the turn that already owns this thread.

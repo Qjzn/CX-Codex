@@ -446,7 +446,8 @@ function Create-LauncherFile {
     [string]$TargetLauncherPath,
     [string]$NodePath,
     [string]$RepoRoot,
-    [string]$TargetConfigPath
+    [string]$TargetConfigPath,
+    [string]$TargetStandbyPath
   )
 
   $launcherDir = Split-Path -Parent $TargetLauncherPath
@@ -458,6 +459,8 @@ function Create-LauncherFile {
 @echo off
 setlocal
 set "CX_CODEX_LOG_DIR=%USERPROFILE%\.cx-codex\logs"
+set "CX_CODEX_STANDBY_PATH=$TargetStandbyPath"
+if exist "%CX_CODEX_STANDBY_PATH%" exit /b 0
 if not exist "%CX_CODEX_LOG_DIR%" mkdir "%CX_CODEX_LOG_DIR%"
 cd /d "$RepoRoot"
 "$NodePath" "$RepoRoot\dist-cli\index.js" --config "$TargetConfigPath" >>"%CX_CODEX_LOG_DIR%\cx-codex.out.log" 2>>"%CX_CODEX_LOG_DIR%\cx-codex.err.log"
@@ -1085,7 +1088,8 @@ $configTempPath = "$ConfigPath.tmp-$PID"
   (New-Object System.Text.UTF8Encoding($false))
 )
 Move-Item -LiteralPath $configTempPath -Destination $ConfigPath -Force
-Create-LauncherFile -TargetLauncherPath $LauncherPath -NodePath $nodeExecutable -RepoRoot $repoRoot -TargetConfigPath $ConfigPath
+$standbyMarkerPath = Join-Path (Split-Path -Parent ([System.IO.Path]::GetFullPath($ConfigPath))) "cx-codex-$Port.standby"
+Create-LauncherFile -TargetLauncherPath $LauncherPath -NodePath $nodeExecutable -RepoRoot $repoRoot -TargetConfigPath $ConfigPath -TargetStandbyPath $standbyMarkerPath
 $managementShortcutPaths = @(Create-ManagementShortcuts -TargetPort $Port)
 
 if ($CreateStartupTask) {

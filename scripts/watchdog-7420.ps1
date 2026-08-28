@@ -7,6 +7,7 @@ param(
   [string]$BindHealthHost = "127.0.0.1",
   [int]$FailureThreshold = 2,
   [string]$PublicHealthUrl = "",
+  [string]$StandbyPath = "",
   [string]$StatePath = "$env:USERPROFILE\.cx-codex\cx-codex-7420-watchdog.state.json",
   [string]$LogPath = "$env:USERPROFILE\.cx-codex\cx-codex-7420-watchdog.log"
 )
@@ -48,6 +49,8 @@ function Read-WatchdogState {
       lastRestartAt = ""
       lastLocalOkAt = ""
       lastPublicOkAt = ""
+      standbyActive = $false
+      lastStandbyAt = ""
     }
   }
 
@@ -60,6 +63,8 @@ function Read-WatchdogState {
       lastRestartAt = ""
       lastLocalOkAt = ""
       lastPublicOkAt = ""
+      standbyActive = $false
+      lastStandbyAt = ""
     }
   }
 }
@@ -83,6 +88,27 @@ function Test-HealthUrl {
   }
 }
 
+$state = Read-WatchdogState
+$configDirectory = Split-Path -Parent ([System.IO.Path]::GetFullPath($ConfigPath))
+$resolvedStandbyPath = if ([string]::IsNullOrWhiteSpace($StandbyPath)) {
+  Join-Path $configDirectory "cx-codex-$Port.standby"
+} else {
+  [System.IO.Path]::GetFullPath($StandbyPath)
+}
+$wasStandbyActive = [bool]($state.PSObject.Properties['standbyActive'] -and $state.standbyActive)
+if (Test-Path -LiteralPath $resolvedStandbyPath -PathType Leaf) {
+  $state.localFailures = 0
+  $state.publicFailures = 0
+  $state | Add-Member -NotePropertyName standbyActive -NotePropertyValue $true -Force
+  $state | Add-Member -NotePropertyName lastStandbyAt -NotePropertyValue (Get-Date).ToString("o") -Force
+  if (-not $wasStandbyActive) {
+    Write-WatchdogLog "standby active; automatic restart suspended path=$resolvedStandbyPath"
+  }
+  Write-WatchdogState -State $state
+  exit 0
+}
+$state | Add-Member -NotePropertyName standbyActive -NotePropertyValue $false -Force
+
 $resolvedRepoRoot = Resolve-RepoRoot -Value $RepoRoot
 $resolvedNodePath = Resolve-NodePath -Preferred $NodePath
 $restartScript = Join-Path $resolvedRepoRoot "scripts\restart-local-service.ps1"
@@ -90,7 +116,6 @@ if (-not (Test-Path -LiteralPath $restartScript)) {
   throw "Missing restart script: $restartScript"
 }
 
-$state = Read-WatchdogState
 $localHealthUrl = "http://$BindHealthHost`:$Port/health"
 $localOk = Test-HealthUrl -Url $localHealthUrl
 

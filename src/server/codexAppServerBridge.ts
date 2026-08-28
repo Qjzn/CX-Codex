@@ -230,6 +230,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
         enqueueRuntimeTurn: (payload) => runtimeMessageQueue!.enqueue(payload),
         listRuntimeQueue: (threadId = '') => runtimeMessageQueue!.list(threadId),
         cancelQueuedRuntimeTurn: (requestId) => runtimeMessageQueue!.cancel(requestId),
+        restoreQueuedRuntimeTurn: (requestId) => runtimeMessageQueue!.restore(requestId),
         retryQueuedRuntimeTurn: (requestId) => runtimeMessageQueue!.retry(requestId),
         reorderQueuedRuntimeTurns: (threadId, requestIds) => runtimeMessageQueue!.reorder(threadId, requestIds),
         augmentThreadListRpcResult,

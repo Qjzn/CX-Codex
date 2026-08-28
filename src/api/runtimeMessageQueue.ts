@@ -26,6 +26,7 @@ export type RuntimeMessageQueueEntry = {
   turnOptions?: ComposerTurnOptions
   createdAtIso: string
   error: string | null
+  waitReason?: 'native_writer' | 'external_writer'
 }
 
 export type RuntimeMessageQueueEnqueueArgs = {
@@ -57,6 +58,7 @@ export type RuntimeQueuedMessage = {
   speedMode: SpeedMode
   collaborationMode: CollaborationMode
   turnOptions?: ComposerTurnOptions
+  waitReason?: 'native_writer' | 'external_writer'
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -173,6 +175,9 @@ function normalizeEntry(value: unknown): RuntimeMessageQueueEntry | null {
     turnOptions: turnOptions ? turnOptions as ComposerTurnOptions : undefined,
     createdAtIso: typeof row.createdAtIso === 'string' ? row.createdAtIso : '',
     error: typeof row.lastError === 'string' ? row.lastError : null,
+    waitReason: row.waitReason === 'native_writer' || row.waitReason === 'external_writer'
+      ? row.waitReason
+      : undefined,
   }
 }
 
@@ -192,6 +197,7 @@ function queuedMessageFromRuntime(entry: RuntimeMessageQueueEntry): RuntimeQueue
     speedMode: entry.speedMode,
     collaborationMode: entry.collaborationMode,
     turnOptions: normalizeComposerTurnOptions(entry.turnOptions),
+    waitReason: entry.waitReason,
   }
 }
 
@@ -237,6 +243,9 @@ function normalizeQueuedMessage(value: unknown): RuntimeQueuedMessage | null {
     speedMode: row.speedMode === 'fast' ? 'fast' : 'standard',
     collaborationMode: row.collaborationMode === 'plan' ? 'plan' : 'execute',
     turnOptions: normalizeComposerTurnOptions(row.turnOptions),
+    waitReason: row.waitReason === 'native_writer' || row.waitReason === 'external_writer'
+      ? row.waitReason
+      : undefined,
   }
 }
 
@@ -456,6 +465,13 @@ export async function removeRuntimeQueuedMessage(requestId: string): Promise<voi
   const response = await queueFetch(`/codex-api/runtime/queue/${encodeURIComponent(requestId)}`, { method: 'DELETE' }, 'Runtime queue remove request')
   if (!response.ok && response.status !== 404) {
     throw new Error(errorMessageFromPayload(await response.json(), 'Failed to remove queued message'))
+  }
+}
+
+export async function restoreRuntimeQueuedMessage(requestId: string): Promise<void> {
+  const response = await queueFetch(`/codex-api/runtime/queue/${encodeURIComponent(requestId)}/restore`, { method: 'POST' }, 'Runtime queue restore request')
+  if (!response.ok && response.status !== 202) {
+    throw new Error(errorMessageFromPayload(await response.json(), 'Failed to restore queued message'))
   }
 }
 

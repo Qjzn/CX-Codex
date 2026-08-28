@@ -8,6 +8,7 @@ export type OptimisticUserMessageMeta = {
   baselineMatchCount: number
   baselineMessageCount: number
   baselineTailMessageId: string
+  authoritativeTurnId?: string
   createdAtMs: number
 }
 
@@ -65,6 +66,9 @@ function parseOptimisticUserMessageMeta(
       baselineTailMessageId: typeof record.baselineTailMessageId === 'string'
         ? record.baselineTailMessageId.trim()
         : '',
+      authoritativeTurnId: typeof record.authoritativeTurnId === 'string'
+        ? record.authoritativeTurnId.trim() || undefined
+        : undefined,
       createdAtMs: record.createdAtMs,
     }
   } catch {
@@ -77,7 +81,12 @@ export function mergeVisibleOptimisticUserMessages(
   optimistic: UiMessage[],
   rememberedMetaById?: ReadonlyMap<string, OptimisticUserMessageMeta>,
 ): UiMessage[] {
+  const detachedFailedIds = new Set(
+    selectDetachedFailedOptimisticUserMessages(persisted, optimistic, rememberedMetaById)
+      .map((message) => message.id),
+  )
   const visible = filterVisibleOptimisticUserMessages(persisted, optimistic, rememberedMetaById)
+    .filter((message) => !detachedFailedIds.has(message.id))
   if (visible.length === 0) return [...persisted]
 
   const insertionsByPersistedIndex = new Map<number, UiMessage[]>()
@@ -99,6 +108,26 @@ export function mergeVisibleOptimisticUserMessages(
     if (index < persisted.length) combined.push(persisted[index]!)
   }
   return combined
+}
+
+export function selectDetachedFailedOptimisticUserMessages(
+  persisted: UiMessage[],
+  optimistic: UiMessage[],
+  rememberedMetaById?: ReadonlyMap<string, OptimisticUserMessageMeta>,
+): UiMessage[] {
+  if (optimistic.length === 0) return optimistic
+
+  const persistedIds = new Set(persisted.map((message) => message.id))
+  return optimistic.filter((message) => {
+    if (message.deliveryState !== 'failed') return false
+    const meta = parseOptimisticUserMessageMeta(message, rememberedMetaById?.get(message.id))
+    if (!meta || meta.baselineMessageCount <= 0) return false
+
+    const anchorId = meta.baselineTailMessageId.trim()
+    if (anchorId) return !persistedIds.has(anchorId)
+
+    return persisted.length < meta.baselineMessageCount
+  })
 }
 
 export function countPersistedUserMessageSignatures(messages: UiMessage[]): Map<string, number> {
@@ -144,11 +173,22 @@ export function filterVisibleOptimisticUserMessages(
   if (optimistic.length === 0) return optimistic
 
   const persistedCounts = countPersistedUserMessageSignatures(persisted)
+  const persistedUserTurnIds = new Set(
+    persisted
+      .filter((message) => message.role === 'user')
+      .map((message) => message.turnId?.trim() ?? '')
+      .filter((turnId) => turnId.length > 0),
+  )
   const consumedAcknowledgements = new Map<string, number>()
 
   return optimistic.filter((message) => {
     const meta = parseOptimisticUserMessageMeta(message, rememberedMetaById?.get(message.id))
     const signature = meta?.signature ?? userMessageSignature(message)
+    const authoritativeTurnId = meta?.authoritativeTurnId?.trim() ?? ''
+    if (authoritativeTurnId && persistedUserTurnIds.has(authoritativeTurnId)) {
+      consumedAcknowledgements.set(signature, (consumedAcknowledgements.get(signature) ?? 0) + 1)
+      return false
+    }
     const baselineMatchCount = meta?.baselineMatchCount ?? 0
     const acknowledgedCount = Math.max((persistedCounts.get(signature) ?? 0) - baselineMatchCount, 0)
     const consumedCount = consumedAcknowledgements.get(signature) ?? 0

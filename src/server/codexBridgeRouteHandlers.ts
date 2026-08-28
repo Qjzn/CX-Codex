@@ -127,6 +127,7 @@ export type CodexBridgeRouteHandlersDependencies = {
   enqueueRuntimeTurn: RuntimeActionRoutesDependencies['enqueueRuntimeTurn']
   listRuntimeQueue: RuntimeActionRoutesDependencies['listRuntimeQueue']
   cancelQueuedRuntimeTurn: RuntimeActionRoutesDependencies['cancelQueuedRuntimeTurn']
+  restoreQueuedRuntimeTurn: RuntimeActionRoutesDependencies['restoreQueuedRuntimeTurn']
   retryQueuedRuntimeTurn: RuntimeActionRoutesDependencies['retryQueuedRuntimeTurn']
   reorderQueuedRuntimeTurns: RuntimeActionRoutesDependencies['reorderQueuedRuntimeTurns']
   augmentThreadListRpcResult: RpcProxyRouteDependencies['augmentThreadListRpcResult']
@@ -189,6 +190,7 @@ export function createCodexBridgeRouteHandlers(
       enqueueRuntimeTurn: dependencies.enqueueRuntimeTurn,
       listRuntimeQueue: dependencies.listRuntimeQueue,
       cancelQueuedRuntimeTurn: dependencies.cancelQueuedRuntimeTurn,
+      restoreQueuedRuntimeTurn: dependencies.restoreQueuedRuntimeTurn,
       retryQueuedRuntimeTurn: dependencies.retryQueuedRuntimeTurn,
       reorderQueuedRuntimeTurns: dependencies.reorderQueuedRuntimeTurns,
     }),

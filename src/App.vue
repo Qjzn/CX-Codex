@@ -813,6 +813,7 @@
                   :is-thread-switching="isThreadContentSwitching"
                   :compact-runtime-chrome="true"
                   :show-empty-thread-actions="isRouteOnlyEmptyThread"
+                  :allow-failed-message-edit="true"
                   :is-turn-in-progress="isSelectedThreadInProgress"
                   :is-rolling-back="isRollingBack"
                   :implementing-plan-id="implementingPlanId"
@@ -827,6 +828,7 @@
                   @dismiss-empty-thread="onDismissEmptyThread"
                   @copy-status="onConversationCopyStatus"
                   @retry-failed-message="retryFailedUserMessage"
+                  @edit-failed-message="onEditFailedMessage"
                   @implement-plan="onImplementPlan"
                   @rollback="onRollback" />
               </div>
@@ -864,6 +866,12 @@
                   @set-status="onSetThreadGoalStatus"
                   @clear-goal="onClearThreadGoal"
                   @retry="refreshSelectedThreadGoal"
+                />
+                <FailedMessagesTray
+                  :messages="selectedThreadDetachedFailedMessages"
+                  @edit="onEditFailedMessage"
+                  @retry="retryFailedUserMessage"
+                  @delete="deleteFailedUserMessage"
                 />
                 <ThreadComposer ref="threadComposerRef" :active-thread-id="composerThreadContextId"
                   :cwd="composerCwd"
@@ -955,8 +963,12 @@
         tabindex="-1"
       >
         <p class="desktop-refresh-confirm-kicker">保留当前输入</p>
-        <h2 id="queued-message-edit-title" class="desktop-refresh-confirm-title">替换为排队消息？</h2>
-        <p class="desktop-refresh-confirm-text">输入框里还有未发送内容。继续后会用选中的排队消息替换当前草稿。</p>
+        <h2 id="queued-message-edit-title" class="desktop-refresh-confirm-title">
+          {{ isPendingFailedMessageEdit ? '替换为未发送消息？' : '替换为排队消息？' }}
+        </h2>
+        <p class="desktop-refresh-confirm-text">
+          输入框里还有未发送内容。继续后会用选中的{{ isPendingFailedMessageEdit ? '未发送消息' : '排队消息' }}替换当前草稿。
+        </p>
         <div class="desktop-refresh-confirm-actions">
           <button class="desktop-refresh-confirm-button" type="button" @click="cancelQueuedMessageEdit">保留草稿</button>
           <button class="desktop-refresh-confirm-button desktop-refresh-confirm-button-primary" type="button" @click="confirmQueuedMessageEdit">
@@ -1204,6 +1216,7 @@ const ThreadConversation = defineAsyncComponent({
 })
 const ThreadGoalBar = defineAsyncComponent(() => import('./components/content/ThreadGoalBar.vue'))
 const QueuedMessages = defineAsyncComponent(() => import('./components/content/QueuedMessages.vue'))
+const FailedMessagesTray = defineAsyncComponent(() => import('./components/content/FailedMessagesTray.vue'))
 const RateLimitStatus = defineAsyncComponent(() => import('./components/content/RateLimitStatus.vue'))
 const FavoritesModal = defineAsyncComponent(() => import('./components/content/FavoritesModal.vue'))
 const CommandMenu = defineAsyncComponent(() => import('./components/content/CommandMenu.vue'))
@@ -1483,6 +1496,7 @@ const {
   accountRateLimitSnapshots,
   threadTitleById,
   messages,
+  selectedThreadDetachedFailedMessages,
   isLoadingThreads,
   isLoadingMessages,
   isSendingMessage,
@@ -1510,6 +1524,8 @@ const {
   renameThreadById,
   sendMessageToSelectedThread,
   retryFailedUserMessage,
+  takeFailedUserMessageForEditing,
+  deleteFailedUserMessage,
   retryFailedNewThreadMessage,
   takeFailedNewThreadMessageForEditing,
   clearPendingNewThreadPreview,
@@ -1573,7 +1589,11 @@ const githubTipsScope = ref<GithubTipsScope>('trending-daily')
 const lastLoadedGithubTipsScope = ref<GithubTipsScope | ''>('')
 const isManualThreadRefreshRunning = ref(false)
 const editingQueuedMessageState = ref<{ threadId: string; queueIndex: number } | null>(null)
+const FAILED_MESSAGE_EDIT_TARGET_PREFIX = 'failed-message:'
 const pendingQueuedMessageEditId = ref('')
+const isPendingFailedMessageEdit = computed(() => (
+  pendingQueuedMessageEditId.value.startsWith(FAILED_MESSAGE_EDIT_TARGET_PREFIX)
+))
 const isRouteSyncInProgress = ref(false)
 const hasInitialized = ref(false)
 const routeWarmThreadIds = ref<string[]>([])
@@ -4392,6 +4412,38 @@ function onEditQueuedMessage(messageId: string): void {
   hydrateQueuedMessageForEditing(messageId)
 }
 
+function onEditFailedMessage(messageId: string): void {
+  const composer = threadComposerRef.value
+  if (!composer) return
+
+  if (composer.hasUnsavedDraft()) {
+    pendingQueuedMessageEditId.value = `${FAILED_MESSAGE_EDIT_TARGET_PREFIX}${messageId}`
+    return
+  }
+
+  hydrateFailedMessageForEditing(messageId)
+}
+
+function hydrateFailedMessageForEditing(messageId: string): void {
+  const composer = threadComposerRef.value
+  if (!composer) return
+  const draft = takeFailedUserMessageForEditing(messageId)
+  if (!draft) return
+
+  if (draft.modelId) setSelectedModelId(draft.modelId)
+  setSelectedReasoningEffort(draft.reasoningEffort)
+  setSelectedCollaborationMode(draft.collaborationMode)
+  void updateSelectedSpeedMode(draft.speedMode)
+  composer.hydrateDraft({
+    text: draft.text,
+    imageUrls: [...draft.imageUrls],
+    fileAttachments: draft.fileAttachments.map((attachment) => ({ ...attachment })),
+    skills: draft.skills.map((skill) => ({ ...skill })),
+    plugins: draft.turnOptions?.plugins?.map((plugin) => ({ ...plugin })),
+    goal: draft.turnOptions?.goal ? { ...draft.turnOptions.goal } : undefined,
+  })
+}
+
 function hydrateQueuedMessageForEditing(messageId: string): void {
   const queueIndex = selectedThreadQueuedMessages.value.findIndex((item) => item.id === messageId)
   const message = queueIndex >= 0 ? selectedThreadQueuedMessages.value[queueIndex] : undefined
@@ -4426,11 +4478,15 @@ function cancelQueuedMessageEdit(): void {
 }
 
 function confirmQueuedMessageEdit(): void {
-  const messageId = pendingQueuedMessageEditId.value
+  const pendingTarget = pendingQueuedMessageEditId.value
   blockingDialogShouldRestoreFocus = false
   pendingQueuedMessageEditId.value = ''
-  if (!messageId) return
-  hydrateQueuedMessageForEditing(messageId)
+  if (!pendingTarget) return
+  if (pendingTarget.startsWith(FAILED_MESSAGE_EDIT_TARGET_PREFIX)) {
+    hydrateFailedMessageForEditing(pendingTarget.slice(FAILED_MESSAGE_EDIT_TARGET_PREFIX.length))
+    return
+  }
+  hydrateQueuedMessageForEditing(pendingTarget)
 }
 
 async function rollbackAndResendDictation(payload: {
