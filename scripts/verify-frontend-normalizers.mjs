@@ -1184,6 +1184,48 @@ assert.deepEqual(
   'two intentional identical prompts must remain distinct until each own turn is authoritative',
 )
 
+const laterUnboundRepeatedPrompt = { ...repeatedPrompt, id: 'optimistic-user:repeated-later-unbound' }
+assert.deepEqual(
+  filterVisibleOptimisticUserMessages(
+    [
+      {
+        id: 'persisted-first-repeat',
+        role: 'user',
+        text: '帮我进行下一步',
+        turnId: 'turn-first-repeat',
+        turnIndex: 48,
+      },
+      {
+        id: 'persisted-later-repeat',
+        role: 'user',
+        text: '帮我进行下一步',
+        turnId: 'turn-later-repeat',
+        turnIndex: 49,
+      },
+    ],
+    [repeatedPrompt, laterUnboundRepeatedPrompt],
+    new Map([
+      [repeatedPrompt.id, {
+        ...repeatedPromptMeta.get(repeatedPrompt.id),
+        baselineMatchCount: 0,
+        baselineMessageCount: 0,
+        baselineTailMessageId: '',
+        authoritativeTurnId: 'turn-first-repeat',
+      }],
+      [laterUnboundRepeatedPrompt.id, {
+        ...repeatedPromptMeta.get(repeatedPrompt.id),
+        baselineMatchCount: 1,
+        baselineMessageCount: 1,
+        baselineTailMessageId: 'persisted-first-repeat',
+        authoritativeTurnId: undefined,
+        createdAtMs: 5,
+      }],
+    ]),
+  ),
+  [],
+  'an authoritative earlier prompt must not consume the signature acknowledgement for a later baseline',
+)
+
 const detachedFailedMessage = {
   id: 'optimistic-user:failed-outside-page',
   role: 'user',

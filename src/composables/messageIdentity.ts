@@ -184,17 +184,21 @@ export function filterVisibleOptimisticUserMessages(
   return optimistic.filter((message) => {
     const meta = parseOptimisticUserMessageMeta(message, rememberedMetaById?.get(message.id))
     const signature = meta?.signature ?? userMessageSignature(message)
+    const baselineMatchCount = meta?.baselineMatchCount ?? 0
+    const acknowledgementKey = `${signature}\u001d${String(baselineMatchCount)}`
     const authoritativeTurnId = meta?.authoritativeTurnId?.trim() ?? ''
     if (authoritativeTurnId && persistedUserTurnIds.has(authoritativeTurnId)) {
-      consumedAcknowledgements.set(signature, (consumedAcknowledgements.get(signature) ?? 0) + 1)
+      consumedAcknowledgements.set(
+        acknowledgementKey,
+        (consumedAcknowledgements.get(acknowledgementKey) ?? 0) + 1,
+      )
       return false
     }
-    const baselineMatchCount = meta?.baselineMatchCount ?? 0
     const acknowledgedCount = Math.max((persistedCounts.get(signature) ?? 0) - baselineMatchCount, 0)
-    const consumedCount = consumedAcknowledgements.get(signature) ?? 0
+    const consumedCount = consumedAcknowledgements.get(acknowledgementKey) ?? 0
 
     if (acknowledgedCount > consumedCount) {
-      consumedAcknowledgements.set(signature, consumedCount + 1)
+      consumedAcknowledgements.set(acknowledgementKey, consumedCount + 1)
       return false
     }
 

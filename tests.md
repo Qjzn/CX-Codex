@@ -16588,7 +16588,7 @@ Verification:
 
 ### Verification
 
-- `npm.cmd run verify:frontend-normalizers` 覆盖分页窗口外同文消息、两次合法同文发送分别确认、失去历史锚点的失败消息分离，以及锚点仍加载时保持原位。
+- `npm.cmd run verify:frontend-normalizers` 覆盖分页窗口外同文消息、两次合法同文发送分别确认、前一条按 `turnId` 确认而后一条按独立发送基线回退确认、失去历史锚点的失败消息分离，以及锚点仍加载时保持原位。
 - `npm.cmd run test:7420:frontend -- -SourceOnly` 覆盖 `turnId` 绑定、失败消息分离投影、恢复入口接线，以及队列文案不再承诺固定“通常 10 秒”。
 - `npm.cmd run build:frontend` 与 `git diff --check` 通过。
 - 独立 Headless Playwright 在 `393 x 852` 验证恢复入口默认折叠、历史失败消息未进入正文、展开后编辑/重试/删除可见且页面无横向溢出；截图保存在 `output/regression-7420/message-recovery-20260828/failed-message-tray-phone.png`。
