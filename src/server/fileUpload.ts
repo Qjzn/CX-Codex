@@ -38,7 +38,6 @@ export class UploadedFileAccessError extends Error {
 
 export type UploadedFileAccessDependencies = {
   uploadDir?: string
-  realpath?: typeof realpath
   stat?: typeof stat
 }
 
@@ -140,11 +139,10 @@ export async function resolveUploadedFilePath(
     throw new UploadedFileAccessError('outside-upload-root')
   }
 
-  const resolveRealPath = dependencies.realpath ?? realpath
   const readStat = dependencies.stat ?? stat
   let canonicalCandidate: string
   try {
-    canonicalCandidate = await resolveRealPath(normalizedCandidate)
+    canonicalCandidate = await realpath(normalizedCandidate)
   } catch {
     throw new UploadedFileAccessError('not-found')
   }
@@ -155,7 +153,7 @@ export async function resolveUploadedFilePath(
     if (!uploadRootStat.isDirectory()) {
       throw new UploadedFileAccessError('not-found')
     }
-    canonicalUploadRoot = await resolveRealPath(uploadRoot)
+    canonicalUploadRoot = await realpath(uploadRoot)
   } catch (error) {
     if (error instanceof UploadedFileAccessError) throw error
     throw new UploadedFileAccessError('not-found')

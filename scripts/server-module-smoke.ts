@@ -5125,7 +5125,6 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
     },
     resolveUploadedFilePath: (candidatePath: string) => resolveUploadedFilePath(candidatePath, {
       uploadDir: uploadRoot,
-      realpath,
       stat,
     }),
     resolveSessionAttachmentPath: (candidatePath: string) => sessionAttachmentStore.resolve(candidatePath),
@@ -5189,11 +5188,11 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
     assert.deepEqual(await rateLimitedResponse.json(), { error: '本地文件请求过于频繁，请稍后重试。' })
 
     await assert.rejects(
-      () => resolveUploadedFilePath(join(escapedLink, 'secret.png'), { uploadDir: uploadRoot, realpath, stat }),
+      () => resolveUploadedFilePath(join(escapedLink, 'secret.png'), { uploadDir: uploadRoot, stat }),
       (error: unknown) => error instanceof UploadedFileAccessError && error.code === 'outside-upload-root',
     )
     await assert.rejects(
-      () => resolveUploadedFilePath(join(uploadDir, 'missing.png'), { uploadDir: uploadRoot, realpath, stat }),
+      () => resolveUploadedFilePath(join(uploadDir, 'missing.png'), { uploadDir: uploadRoot, stat }),
       (error: unknown) => error instanceof UploadedFileAccessError && error.code === 'not-found',
     )
   } finally {
