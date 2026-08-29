@@ -1131,6 +1131,9 @@ Assert-ContentIncludes ".github/workflows/ci.yml" @(
 )
 
 Assert-ContentIncludes ".github/workflows/release.yml" @(
+  "Install ripgrep",
+  "choco install ripgrep --version=15.2.0 --yes --no-progress",
+  "rg --version",
   "npm run verify:dependency-security",
   "npm run verify:release -- -RequireCleanGit -SchemaAudit skip",
   "npm run package:release -- -Version",
