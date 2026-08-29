@@ -5,9 +5,7 @@ function normalizeInitialHashRoute(): void {
 
   const { pathname, search, hash } = window.location
   const isKnownCleanRoute = pathname === '/skills'
-    || pathname === '/workbench'
     || pathname === '/github-trending'
-    || pathname === '/diagnostics'
     || pathname === '/__regression/conversation-blocks'
     || pathname === '/__regression/sidebar-rows'
     || pathname === '/__regression/composer-shell'
@@ -46,18 +44,8 @@ const router = createRouter({
       component: EmptyRouteView,
     },
     {
-      path: '/workbench',
-      name: 'workbench',
-      component: EmptyRouteView,
-    },
-    {
       path: '/github-trending',
       name: 'github-trending',
-      component: EmptyRouteView,
-    },
-    {
-      path: '/diagnostics',
-      name: 'diagnostics',
       component: EmptyRouteView,
     },
     {
@@ -94,7 +82,7 @@ const router = createRouter({
       path: '/new-thread',
       redirect: { name: 'home' },
     },
-    { path: '/:pathMatch(.*)*', redirect: { name: 'home' } },
+    { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
 
