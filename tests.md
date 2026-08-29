@@ -16835,6 +16835,9 @@ Verification:
 - `npm.cmd run verify:frontend-normalizers` 先证明 v1 的 119584 ms 样本会污染 P95；计量版本升级后通过，旧样本不再参与新摘要。
 - 修复候选再次在同一真机执行 150 秒命令并切到系统设置 147 秒；返回后任务显示“命令已完成”，同一 PID 继续存活，恢复计时为 168 ms，页面宽度 `763/763`。最终构建重载后再做短前后台复核，新摘要仅含 v2 样本，P95 为 82 ms、最新为 36 ms，页面宽度 `350/350`。
 - `npm.cmd run build:frontend`、`git diff --check` 通过。独立 Headless Playwright 在最终候选上验证完成态、等待态、重复消息身份、桌面/手机附件信封和 1602 条消息压力；压力场景仅挂载 12 项，最大心跳延迟 55 ms，无横向溢出。证据位于 `output/device-validation-20260829/headless-final`，真机截图为 `output/device-validation-20260829/cx-recovery-fix-after.png`。
+- 完整 `npm.cmd run verify:release -- -SchemaAudit warn` 通过；当前 `codex-cli 0.130.0` 重新生成的四组 schema 差异计数与提交摘要一致。PR #74 的 build、CodeQL 与 Windows bootstrap/升级/卸载 smoke 全绿后合并到 `beta`，合并提交为 `0aac72b`；beta push 与 beta→main PR #72 的同组检查也全部通过，PR #72 继续保持 Draft。
+- 最终编译 CLI 以单端口 `http://127.0.0.1:17437` 隔离运行，执行 `npm.cmd run test:7420:soak -- -DurationSeconds 7201 -IntervalSeconds 15 -LocalBaseUrl http://127.0.0.1:17437 -OutputDir output\soak-quiet-workbench-final3-20260829 -SkipPublic`：480 个样本全部通过，最大 pending/queued/server pending/Runtime uncertain/active plan turn 均为 0；超时、慢 `thread/list`、重放失败、App Server PID 变化、Runtime stream 变化/错配和事件序列回退均为 0。报告为 `output/soak-quiet-workbench-final3-20260829/soak-20260829-131736.json`，隔离 App Server PID 84204 与 stream `e9a86d25-7441-4968-a7a5-36fe00c070e2` 全程不变；完成后隔离进程树停止且 17437 释放。
+- 前两次浸泡尝试保留为环境反例：17435 是 Vite 开发 API 端口，`/health` 返回 HTML；17436 是静态开发代理，会在代理/API 之间持有大量连接，并在仍有调试客户端时触发零容忍 RPC 排队。两者都不能替代正式单端口 CLI 候选浸泡，也未被计入通过结论。
 - 本次真机验证阶段没有替换生产 APK、更新生产 7420 或发布；调试候选与真机通过不等同于正式签名包、CI 或 Release 门槛通过。
 
 ### Rollback
