@@ -22,6 +22,7 @@ public final class MobileShellConfig {
     public static final String PREF_TASK_PET_PENDING_REPLY_RENDER_KEY = "taskPetPendingReplyRenderKey";
     public static final String PREF_TASK_PET_PENDING_REPLY_RENDER_EVENT_SEQ = "taskPetPendingReplyRenderEventSeq";
     public static final String PREF_TASK_PET_NO_PROGRESS_REVIEW_AT_MS = "taskPetNoProgressReviewAtMs";
+    public static final String PREF_TASK_PET_PROCESS_RECOVERY_AT_MS = "taskPetProcessRecoveryAtMs";
     public static final String PREF_TASK_PET_PENDING_OPEN_THREAD_ID = "taskPetPendingOpenThreadId";
     public static final String PREF_TASK_PET_X = "taskPetX";
     public static final String PREF_TASK_PET_Y = "taskPetY";

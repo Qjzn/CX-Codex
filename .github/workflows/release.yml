@@ -5,6 +5,7 @@ on:
     tags:
       - 'v*'
       - '[0-9]*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -27,6 +28,7 @@ jobs:
           fetch-depth: 0
 
       - name: Require stable tag from main
+        if: github.event_name == 'push'
         shell: pwsh
         run: |
           if ($env:GITHUB_REF_NAME -notmatch '^v?\d+\.\d+\.\d+$') {
@@ -36,6 +38,16 @@ jobs:
           git merge-base --is-ancestor $env:GITHUB_SHA origin/main
           if ($LASTEXITCODE -ne 0) {
             throw "Official release tag $env:GITHUB_REF_NAME must point to a commit on main."
+          }
+
+      - name: Require signed candidate from current main
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          $mainSha = (git rev-parse origin/main).Trim()
+          if ($LASTEXITCODE -ne 0 -or $env:GITHUB_SHA -ne $mainSha) {
+            throw "Signed candidate builds must use the current origin/main commit."
           }
 
       - name: Set up Node.js
@@ -54,10 +66,19 @@ jobs:
         id: release-metadata
         shell: pwsh
         run: |
-          $tagVersion = $env:GITHUB_REF_NAME.TrimStart('v')
           $packageVersion = [string](Get-Content package.json -Raw | ConvertFrom-Json).version
-          if ($tagVersion -ne $packageVersion) {
-            throw "Release tag $env:GITHUB_REF_NAME does not match package version $packageVersion."
+          if ($packageVersion -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Release package version must be stable semantic versioning, received $packageVersion."
+          }
+          if ($env:GITHUB_EVENT_NAME -eq 'push') {
+            $tagVersion = $env:GITHUB_REF_NAME.TrimStart('v')
+            if ($tagVersion -ne $packageVersion) {
+              throw "Release tag $env:GITHUB_REF_NAME does not match package version $packageVersion."
+            }
+            $artifactVersion = $env:GITHUB_REF_NAME
+          } else {
+            $tagVersion = $packageVersion
+            $artifactVersion = "v$packageVersion-candidate-$env:GITHUB_RUN_NUMBER"
           }
 
           $releaseNotesPath = "docs/release-notes-$tagVersion.zh-CN.md"
@@ -65,12 +86,13 @@ jobs:
             throw "Missing release notes: $releaseNotesPath"
           }
           "release_notes_path=$releaseNotesPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "artifact_version=$artifactVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Run release verification
         run: npm run verify:release -- -RequireCleanGit -SchemaAudit skip
 
       - name: Package release bundle
-        run: npm run package:release -- -Version "${env:GITHUB_REF_NAME}" -OutputDir "${env:RUNNER_TEMP}\release"
+        run: npm run package:release -- -Version "${{ steps.release-metadata.outputs.artifact_version }}" -OutputDir "${env:RUNNER_TEMP}\release"
 
       - name: Set up Java 24 for Android
         uses: actions/setup-java@v5
@@ -128,7 +150,7 @@ jobs:
       - name: Build Android release APK
         shell: pwsh
         env:
-          APP_VERSION_NAME: ${{ github.ref_name }}
+          APP_VERSION_NAME: ${{ steps.release-metadata.outputs.artifact_version }}
         run: |
           Push-Location android
           .\gradlew.bat assembleRelease
@@ -171,7 +193,8 @@ jobs:
         run: |
           $outputDir = Join-Path $env:RUNNER_TEMP 'release'
           $apkSource = "android/app/build/outputs/apk/release/app-release.apk"
-          $apkTarget = Join-Path $outputDir "cx-codex-android-${env:GITHUB_REF_NAME}.apk"
+          $artifactVersion = "${{ steps.release-metadata.outputs.artifact_version }}"
+          $apkTarget = Join-Path $outputDir "cx-codex-android-$artifactVersion.apk"
           Copy-Item $apkSource $apkTarget -Force
           $hash = (Get-FileHash -Algorithm SHA256 $apkTarget).Hash.ToLowerInvariant()
           Set-Content -Path ($apkTarget + '.sha256') -Value "$hash  $(Split-Path -Leaf $apkTarget)" -Encoding ASCII
@@ -179,7 +202,17 @@ jobs:
       - name: Verify release artifact checksums
         run: npm run verify:release-artifacts -- -OutputDir "${env:RUNNER_TEMP}\release"
 
+      - name: Upload signed candidate artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: signed-release-candidate-${{ steps.release-metadata.outputs.artifact_version }}
+          path: ${{ runner.temp }}/release/*
+          retention-days: 3
+          if-no-files-found: error
+
       - name: Publish GitHub release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v3
         with:
           body_path: ${{ steps.release-metadata.outputs.release_notes_path }}

@@ -318,6 +318,114 @@ function Assert-StableHandsetViewportSource {
   Assert-True $hasStableHandsetFallback "handset-shaped landscape viewports must stay mobile when pointer media queries are temporarily unavailable"
 }
 
+function Assert-QuietWorkbenchShellSource {
+  $styleSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\style.css")
+  $viewportSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\useMobile.ts")
+  $layoutSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\layout\DesktopLayout.vue")
+  $headerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ContentHeader.vue")
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\App.vue")
+
+  Assert-True (
+    $styleSource -match '--ui-sidebar-width:\s*288px;' -and
+    $styleSource -match '--ui-topbar-height:\s*44px;' -and
+    $styleSource -match '--ui-content-max:\s*800px;' -and
+    $styleSource -match '--ui-composer-max:\s*800px;'
+  ) "Quiet Workbench shell tokens must keep the 288/44/800/800 default contract"
+  Assert-True (
+    $viewportSource -match 'COMPACT_LAYOUT_BREAKPOINT\s*=\s*1200' -and
+    $viewportSource -match 'const\s+isCompactViewport[\s\S]*?viewportWidth\.value\s*<\s*COMPACT_LAYOUT_BREAKPOINT[\s\S]*?!isDualPaneMobile\.value'
+  ) "compact desktop and tablet widths must use an overlay shell without replacing foldable dual-pane ownership"
+  Assert-True (
+    $layoutSource -match 'MIN_SIDEBAR_WIDTH\s*=\s*240' -and
+    $layoutSource -match 'MAX_SIDEBAR_WIDTH\s*=\s*360' -and
+    $layoutSource -match 'DEFAULT_SIDEBAR_WIDTH\s*=\s*288' -and
+    $layoutSource -match 'raw\s*===\s*null[\s\S]*?return\s+DEFAULT_SIDEBAR_WIDTH' -and
+    $layoutSource -match '<Teleport\s+v-if="isOverlaySidebar"' -and
+    $layoutSource -match '<template\s+v-if="!isOverlaySidebar">'
+  ) "sidebar defaults, safe persisted-width clamping, and compact overlay ownership must stay together"
+  Assert-True (
+    $appSource -match 'const\s+isOverlaySidebar\s*=\s*computed\(\(\)\s*=>\s*isMobile\.value\s*\|\|\s*isCompactViewport\.value\)' -and
+    $appSource -match 'watch\(isOverlaySidebar[\s\S]*?persist:\s*false[\s\S]*?loadSidebarCollapsed\(\)'
+  ) "temporary overlay sidebar state must not overwrite the desktop collapse preference"
+  Assert-True (
+    $headerSource -match 'height:\s*var\(--ui-topbar-height\);' -and
+    $headerSource -match '\.content-actions:empty,[\s\S]*?\.content-leading:empty[\s\S]*?display:\s*none;'
+  ) "the single-line header must keep a stable height and remove empty slot gaps"
+  Assert-True (
+    $styleSource -match '@media\s*\(forced-colors:\s*active\)[\s\S]*?--ui-bg-window:\s*Canvas;[\s\S]*?--ui-text-primary:\s*CanvasText;' -and
+    $styleSource -match ':where\(button,\s*a,\s*input,\s*textarea,\s*select,\s*\[role=''button''\]\):focus-visible[\s\S]*?outline:\s*2px solid Highlight;'
+  ) "forced-colors mode must map the touched shell to system colors and retain a common visible focus outline"
+  Assert-True (
+    $styleSource -match ':root\.dark\s*\{[\s\S]*?--ui-bg-window:\s*#09090b;[\s\S]*?--ui-bg-surface:\s*#202023;[\s\S]*?--ui-border-subtle:\s*#3f3f46;[\s\S]*?--ui-accent:\s*#5eead4;'
+  ) "dark mode must define the shared surface, border, and accent tokens instead of relying only on page selectors"
+}
+
+function Assert-QuietWorkbenchSidebarSource {
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\App.vue")
+  $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
+  )
+
+  Assert-True (
+    $appSource -match 'sidebar-action-tile\s+sidebar-action-tile-primary' -and
+    $appSource -match '\.sidebar-action-grid\s*\{[\s\S]*?grid-cols-3' -and
+    $appSource -match '\.sidebar-action-tile-primary\s*\{[\s\S]*?col-span-full[\s\S]*?justify-start'
+  ) "the new-conversation action must own the primary sidebar row above compact secondary actions"
+  Assert-True (
+    ([regex]::Matches($sidebarSource, ':data-detail="shouldShowThreadDetail\(thread\)"')).Count -eq 2 -and
+    $sidebarSource -match 'function\s+shouldShowThreadDetail\(thread:\s*UiThread\):\s*boolean\s*\{[\s\S]*?thread\.inProgress\s*\|\|\s*thread\.unread\s*\|\|\s*isSearchActive\.value'
+  ) "pinned and project rows must share one activity/search detail policy"
+  Assert-True (
+    $sidebarSource -match "\.thread-row\[data-detail='false'\]\s+\.thread-row-meta\s*\{\s*display:\s*none;" -and
+    $sidebarSource -match "\.thread-row\s*\{[\s\S]*?height:\s*2rem;[\s\S]*?\.thread-row\[data-detail='true'\]\s*\{[\s\S]*?height:\s*3rem;" -and
+    $sidebarSource -match "\(pointer:\s*coarse\)[\s\S]*?\.thread-row\s*\{\s*height:\s*44px;[\s\S]*?\.thread-row\[data-detail='true'\]\s*\{\s*height:\s*52px;" -and
+    $sidebarSource -match "@media\s*\(min-width:\s*1024px\)\s*and\s*\(hover:\s*hover\)\s*and\s*\(pointer:\s*fine\)[\s\S]*?\.thread-row\s*\{\s*height:\s*2rem;"
+  ) "idle rows must stay single-line while activity/search rows and touch targets use fixed bounded heights"
+}
+
+function Assert-QuietWorkbenchConversationSource {
+  $source = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\ThreadConversation.vue"
+  )
+
+  Assert-True ($source -match "intermediateAssistantIds\.has\(message\.id\)\s*\|\|\s*isCommandMessage\(message\)") "completed turn summaries must fold intermediate assistant updates and command rows through existing message identity"
+  Assert-True ($source -match "'收起执行过程'\s*:\s*'执行过程'") "completed turn summaries must expose one explicit process disclosure"
+  Assert-True ($source -match "descriptor\.finalMessageId\s*===\s*message\.id[\s\S]*?entries\.push\(buildGuidedSummaryEntry\(descriptor\)\)[\s\S]*?entries\.push\(\{[\s\S]*?message,") "the activity summary must precede rather than replace the final assistant response"
+  Assert-True ($source -match "if\s*\(props\.isTurnInProgress\s*===\s*true\)\s*return\s+true") "the active turn must keep its current process visible instead of forcing a second-layer disclosure"
+  Assert-True ($source -match "isRequestPanelExpanded\.value\s*=\s*!hasLiveOverlay") "new pending requests must expand when no live process already owns their direct actions"
+}
+
+function Assert-SemanticConversationMarkdownSource {
+  $markdownSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\utils\conversationMarkdown.ts"
+  )
+  $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\ThreadConversation.vue"
+  )
+  $fixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\ConversationRegressionFixture.vue"
+  )
+
+  Assert-True ($markdownSource -match "import\s+MarkdownIt\s+from\s+'markdown-it'" -and $markdownSource -match "html:\s*false") "conversation Markdown must use the installed parser with raw HTML disabled"
+  Assert-True ($markdownSource -match "kind:\s*'heading'" -and $markdownSource -match "kind:\s*'list'" -and $markdownSource -match "kind:\s*'blockquote'" -and $markdownSource -match "kind:\s*'thematicBreak'") "conversation Markdown must expose headings, lists, quotes, and thematic breaks as semantic blocks"
+  Assert-True ($conversationSource -match "parseConversationMarkdownBlocks" -and $conversationSource -match "block\.kind\s*===\s*'heading'" -and $conversationSource -match "block\.kind\s*===\s*'list'" -and $conversationSource -match "block\.kind\s*===\s*'blockquote'") "the conversation renderer must consume semantic Markdown blocks"
+  Assert-True ($conversationSource -notmatch 'v-else-if="isStreamingAgentMessage\(entry\.message\)"[\s\S]{0,180}?\{\{\s*entry\.message\.text\s*\}\}') "streaming assistant output must use the same Markdown path as settled output"
+  Assert-True ($conversationSource -match "\.message-card\[data-role='assistant'\][\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;") "assistant replies must read as document content instead of nested cards"
+  Assert-True ($fixtureSource -match "markdownSemantic" -and $fixtureSource -match "## 三、关键验证结果" -and $fixtureSource -match "- 运行时间：7200 秒") "the conversation fixture must retain a representative semantic Markdown report"
+}
+
+function Assert-QuietWorkbenchComposerSource {
+  $styleSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\style.css")
+  $composerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\ThreadComposer.vue"
+  )
+
+  Assert-True ($styleSource -match '--ui-composer-min-height:\s*88px;' -and $styleSource -match '--ui-radius-composer:\s*14px;') "the default Composer must retain its compact 88px shell and 14px boundary"
+  Assert-True ($composerSource -match '\.thread-composer-shell:focus-within\s*\{[\s\S]*?border-color:' -and $composerSource -match 'box-shadow:\s*0 1px 2px') "the compact Composer must keep a visible focus boundary without a floating-card shadow"
+  Assert-True ($composerSource -match '@media\s*\(max-width:\s*767px\),\s*\(max-height:\s*480px\)\s*and\s*\(max-width:\s*932px\)[\s\S]*?min-height:\s*84px;[\s\S]*?\.thread-composer-runtime-trigger\s*\{[\s\S]*?@apply\s+h-11') "portrait and low-landscape mobile Composer layouts must keep a compact shell and 44px runtime target"
+  Assert-True ($composerSource -match '@media\s*\(max-width:\s*420px\)[\s\S]*?\.thread-composer-expand\s*\{\s*display:\s*none;') "narrow phones must reserve the primary row for attachment, runtime, dictation, and send controls"
+}
+
 function Assert-ReversibleThreadArchiveSource {
   $gatewaySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\api\codexGateway.ts")
   $desktopStateSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\useDesktopState.ts")
@@ -479,7 +587,7 @@ function Assert-RuntimeSnapshotOrderingSource {
   Assert-True ($source -match "ACTIVE_THREAD_DETAIL_FALLBACK_SYNC_INTERVAL_MS\s*=\s*60000") "healthy active turns must use the one-minute detail fallback instead of continuous heavy reads"
   Assert-True ($source -match "if\s*\(showRecoveryFeedback\)[\s\S]*?beginForegroundRecoveryFeedback\(selectedThreadId\.value\)[\s\S]*?ANDROID_RESUME_SYNC_DEBOUNCE_MS") "foreground recovery feedback must publish before Android resume sync debounce"
   Assert-True ($source -match "foregroundRecoveryThreadId\.value\s*===\s*threadId\)\s*return") "duplicate foreground lifecycle events must not restart recovery feedback"
-  Assert-True ($source -match "function\s+applyRuntimeSnapshotState[\s\S]*?if\s*\(!shouldApplyRuntimeSnapshotVersion[\s\S]*?return\s+false[\s\S]*?settleForegroundRecoveryMetric\(threadId\)[\s\S]*?finishForegroundRecoveryFeedback\(threadId\)") "only an accepted runtime snapshot may settle foreground recovery feedback and timing"
+  Assert-True ($source -match "function\s+applyRuntimeSnapshotState[\s\S]*?settleForegroundRecoveryMetric\(threadId\)[\s\S]*?finishForegroundRecoveryFeedback\(threadId\)[\s\S]*?if\s*\(!shouldApplyRuntimeSnapshotVersion[\s\S]*?return\s+false") "a successful runtime snapshot read must settle foreground recovery before an older version is rejected from state mutation"
   Assert-True ($source -match "lastAndroidResumeSyncScheduledAtMs\s*=\s*now[\s\S]*?beginForegroundRecoveryMetric\(selectedThreadId\.value\)") "foreground recovery timing must start after the Android lifecycle debounce accepts the sync"
   $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadConversation.vue")
   $queueSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\QueuedMessages.vue")
@@ -922,6 +1030,8 @@ function Assert-BoundedRuntimeSendRecoverySource {
   ) "mobile push readiness gates must stay strict without exposing private keys, service-account email, or Firebase project identity"
   Assert-True ($androidTaskPetSource -match 'PowerManager\.PARTIAL_WAKE_LOCK[\s\S]*?taskWakeLock\.acquire\(remainingMs\)') "active native task monitoring must use a timeout-bounded partial wake lock"
   Assert-True ($androidTaskPetSource -match 'shouldHoldWakeLock\(activeTaskCount\(\)\)[\s\S]*?releaseTaskWakeLock\(\)') "the task wake lock must be released when no active task remains"
+  Assert-True ($androidTaskPetSource -match 'PROCESS_RECOVERY_INTERVAL_MS\s*=\s*15_000L[\s\S]*?setAndAllowWhileIdle\(AlarmManager\.RTC_WAKEUP[\s\S]*?PendingIntent\.getForegroundService') "active native tasks must retain an idle-safe process recovery watchdog"
+  Assert-True ($androidTaskPetSource -match 'ACTION_PROCESS_RECOVERY[\s\S]*?process_recovery_watchdog[\s\S]*?processRecoveryWakeCount' -and $androidConfigSource -match 'PREF_TASK_PET_PROCESS_RECOVERY_AT_MS') "process recovery must be persisted and distinguishable from a sticky null-intent restart"
   Assert-True ($androidNoProgressReviewSource -match 'INITIAL_REMINDER_MS\s*=\s*10\s*\*\s*60_000L') "native long-task review must begin after ten minutes without progress"
   Assert-True ($androidNoProgressReviewSource -match 'REVIEW_INTERVAL_MS\s*=\s*20\s*\*\s*60_000L') "native long-task review must repeat at a bounded twenty-minute cadence"
   Assert-True ($androidTaskPetSource -match 'lastNoProgressReminderAtMs[\s\S]*?put\("lastNoProgressReminderAtMs"') "no-progress reminder deduplication must survive service restarts"
@@ -939,10 +1049,16 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($androidPluginSource -match 'ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS[\s\S]*?isIgnoringBatteryOptimizations\(getContext\(\)\.getPackageName\(\)\)') "Android runtime info and its manual recovery action must expose the Doze allowlist boundary"
   Assert-True ($appSource -match '后台运行[\s\S]*?mobileShellBackgroundRuntimeLabel[\s\S]*?调整后台运行') "mobile settings must make the background execution restriction visible and actionable"
   Assert-True ($appSource -match 'function\s+onWindowFocusRefreshAccountState[\s\S]*?refreshMobileShellRuntimeInfo\(\)') "returning from Android background settings must refresh the visible runtime state"
+  Assert-True ($source -match 'activeTaskPetItems[\s\S]*?candidates\s*=\s*\[\.\.\.sourceThreads\.value\][\s\S]*?selectedThread\.value[\s\S]*?candidates\.unshift\(selected\)') "a newly created selected thread must remain eligible for native monitoring before thread/list catches up"
   Assert-True ($androidTaskPetSource -match "/codex-api/runtime/request\?clientMessageId=") "the native monitor must look up a provisional client id"
   Assert-True ($androidTaskPetPolicySource -match 'shouldConfirmRuntimeRequest[\s\S]*?!requestAccepted') "every new renderer request must remain confirmation-pending until native acceptance"
-  Assert-True ($androidTaskPetSource -match 'shouldConfirmRuntimeRequest\(task\.clientMessageId,\s*task\.requestAccepted\)[\s\S]*?readRuntimeRequest\(task\.clientMessageId\)[\s\S]*?task\.requestAccepted\s*=\s*true') "existing-thread monitoring must confirm the new request before reading a potentially terminal previous-turn snapshot"
+  Assert-True ($androidTaskPetSource -match 'shouldConfirmRuntimeRequest\(\s*task\.clientMessageId,\s*task\.requestAccepted\s*\)[\s\S]*?readRuntimeRequest\(task\.clientMessageId\)[\s\S]*?task\.requestAccepted\s*=\s*true') "existing-thread monitoring must confirm the new request before reading a potentially terminal previous-turn snapshot"
+  Assert-True ($androidTaskPetSource -match 'optString\("turnId"\)[\s\S]*?requestTurnId[\s\S]*?activeGenerationObserved') "native task monitoring must persist the authoritative request turn generation"
+  Assert-True ($androidTaskPetPolicySource -match 'shouldDeferRuntimeSnapshot[\s\S]*?lastStartedAtIso[\s\S]*?lastCompletedAtIso[\s\S]*?compareTo') "a previous-turn terminal snapshot must not settle a newly submitted task generation"
+  Assert-True ($androidTaskPetSource -match 'isNull\("lastStartedAtIso"\)[\s\S]*?isNull\("lastCompletedAtIso"\)') "native terminal fencing must preserve nullable runtime timestamps instead of coercing JSON null to text"
+  Assert-True ($androidTaskPetSource -match 'shouldRefreshRuntimeRequestGeneration[\s\S]*?shouldDeferRuntimeSnapshot[\s\S]*?正在确认新任务状态') "native monitoring must refresh and fence a submitted turn until its generation becomes authoritative"
   Assert-True ($androidTaskPetSource -match 'put\("requestAccepted",\s*task\.requestAccepted\)') "request acceptance must survive foreground-service recreation"
+  Assert-True ($androidTaskPetPolicySource -match 'shouldPreserveNativeActiveState[\s\S]*?frontendSnapshot[\s\S]*?sameTaskGeneration[\s\S]*?isActiveTaskState\(currentState\)') "a transient frontend terminal snapshot must not settle a native-owned active task generation"
   Assert-True ($androidTaskPetSource -match 'restoreReplyAttempt\(\)[\s\S]*?ensurePersistedReplyAttemptTask\(\)') "a persisted task-pet reply must be restored into native monitoring after service recreation"
   Assert-True ($androidTaskPetSource -match 'readRuntimeRequest\(replyAttemptClientMessageId\)') "a transport-uncertain native reply must reconcile its original id before any retry"
   Assert-True ($androidTaskPetSource -match 'new ReplyResult\(true,\s*"start_uncertain"') "a lost native send response must remain confirmation-pending instead of becoming a definite failure"
@@ -1012,9 +1128,10 @@ function Assert-BoundedRuntimeSendRecoverySource {
   $monitorDumpMatch = [regex]::Match($androidTaskPetSource, 'protected\s+void\s+dump[\s\S]*?\n\s*@Override\s*\n\s*public\s+void\s+onDestroy')
   Assert-True ($monitorDumpMatch.Success -and $monitorDumpMatch.Value -match 'CX_CODEX_TASK_PET_DIAGNOSTICS') "adb dumpsys must expose sanitized native monitor evidence without waking the WebView"
   Assert-True ($monitorDumpMatch.Value -notmatch 'threadId|clientMessageId|latestReply|serverUrl') "adb monitor evidence must not expose conversation content, identity, or server addresses"
-  Assert-True ($androidBackgroundVerifierSource -match 'ValidateSet\("Snapshot",\s*"Observe",\s*"ScreenOff",\s*"Doze"\)[\s\S]*?\[string\]\$Mode\s*=\s*"Snapshot"') "the Android background verifier must stay read-only unless a disruptive mode is explicit"
+  Assert-True ($androidBackgroundVerifierSource -match 'ValidateSet\("Snapshot",\s*"Observe",\s*"ScreenOff",\s*"Doze",\s*"NetworkSwitch"\)[\s\S]*?\[string\]\$Mode\s*=\s*"Snapshot"') "the Android background verifier must stay read-only unless a disruptive mode is explicit"
   Assert-True ($androidBackgroundVerifierSource -match 'finally\s*\{[\s\S]*?deviceidle",\s*"unforce"[\s\S]*?battery",\s*"reset"[\s\S]*?KEYCODE_WAKEUP') "the Android background verifier must restore forced-idle, battery, and screen state"
   Assert-True ($androidBackgroundVerifierSource -match '\[switch\]\$RequireActiveTask[\s\S]*?\[switch\]\$RequireTerminalNotification[\s\S]*?MaxTerminalNotificationLatencyMs') "the Android background verifier must support explicit active-task and terminal-notification gates"
+  Assert-True ($androidBackgroundVerifierSource -match 'RequireProcessRecovery[\s\S]*?latestServiceCreateCount[\s\S]*?latestProcessRecoveryWakeCount[\s\S]*?latestStickyRestartCount[\s\S]*?latestActiveTaskCount') "the Android background verifier must require attributed process recreation and active-task restoration together"
   Assert-True (
     ($androidBackgroundVerifierSource -match 'noProgressReviewScheduledAtMs[\s\S]*?summary\.json') -and
     ($androidBackgroundVerifierSource -match 'lastCompletionNotificationBodySource[\s\S]*?terminalToNotificationMs[\s\S]*?summary\.json') -and
@@ -2736,7 +2853,7 @@ function Assert-SettingsPanel {
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "settings panel page has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
 }
 
-function Read-FoldableShellMetrics {
+function Read-CompactOverlayShellMetrics {
   param([string]$Session)
 
   $script = @'
@@ -2813,32 +2930,22 @@ JSON.stringify((() => {
   return Invoke-BrowserEvalJson -Session $Session -Script $script
 }
 
-function Assert-FoldableShell {
+function Assert-CompactOverlayShell {
   param([object]$Metrics)
 
-  Assert-True ($Metrics.hasLayout -eq $true) "foldable shell is missing desktop layout"
-  Assert-True ($Metrics.hasSidebar -eq $true) "foldable shell is missing sidebar"
-  Assert-True ($Metrics.hasMain -eq $true) "foldable shell is missing main content"
-  Assert-True ($Metrics.hasContentGrid -eq $true) "foldable shell is missing content grid"
-  Assert-True ($Metrics.hasComposer -eq $true) "foldable shell is missing composer"
-  Assert-True ($Metrics.hasSettingsPanel -eq $false) "foldable shell screenshot is polluted by an open settings panel"
-  Assert-True ($Metrics.hasActionGrid -eq $true) "foldable shell is missing compact sidebar action grid"
-  Assert-True ($Metrics.actionGridDisplay -eq "grid") "foldable sidebar action grid is not grid: $($Metrics.actionGridDisplay)"
-  Assert-True (-not [string]::IsNullOrWhiteSpace($Metrics.actionGridTemplateColumns)) "foldable sidebar action grid is missing columns"
-  Assert-True ($Metrics.actionGridRowCount -le 2) "foldable sidebar action grid uses too many rows: $($Metrics.actionGridRowCount)"
-  Assert-True ($Metrics.actionGridHeight -le 96) "foldable sidebar action grid is too tall: $($Metrics.actionGridHeight)"
-  Assert-True ($Metrics.actionTileCount -eq 4) "foldable sidebar action grid should keep four primary entries: $($Metrics.actionTileCount)"
-  Assert-True ($Metrics.actionIconCount -ge $Metrics.actionTileCount) "foldable sidebar action grid is missing icons"
-  Assert-True ($Metrics.actionTileMaxRadius -le 10) "foldable sidebar action tiles are too rounded: $($Metrics.actionTileMaxRadius)"
-  Assert-True ($Metrics.actionTileMinHeight -ge 42) "foldable sidebar action tiles are too small for touch: $($Metrics.actionTileMinHeight)"
-  Assert-True ($Metrics.sidebarWidth -ge 260) "foldable sidebar is too narrow: $($Metrics.sidebarWidth)"
-  Assert-True ($Metrics.sidebarWidth -le 370) "foldable sidebar is too wide: $($Metrics.sidebarWidth)"
-  Assert-True ($Metrics.sidebarRatio -le 0.42) "foldable sidebar takes too much width: $($Metrics.sidebarRatio)"
-  Assert-True ($Metrics.mainWidth -ge 500) "foldable main content is too narrow: $($Metrics.mainWidth)"
-  Assert-True ($Metrics.contentGridWidth -ge 430) "foldable content grid is too narrow: $($Metrics.contentGridWidth)"
-  Assert-True ($Metrics.composerWidth -ge 430) "foldable composer is too narrow: $($Metrics.composerWidth)"
-  Assert-True ($Metrics.fitFailureCount -eq 0) "foldable shell elements overflow viewport: $($Metrics.fitFailures | ConvertTo-Json -Compress)"
-  Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "foldable shell has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+  Assert-True ($Metrics.hasLayout -eq $true) "compact overlay shell is missing desktop layout"
+  Assert-True ($Metrics.hasSidebar -eq $false) "ordinary compact viewport should not keep a fixed sidebar"
+  Assert-True ($Metrics.hasMain -eq $true) "compact overlay shell is missing main content"
+  Assert-True ($Metrics.hasContentGrid -eq $true) "compact overlay shell is missing content grid"
+  Assert-True ($Metrics.hasComposer -eq $true) "compact overlay shell is missing composer"
+  Assert-True ($Metrics.hasSettingsPanel -eq $false) "compact overlay screenshot is polluted by an open settings panel"
+  Assert-True ($Metrics.hasActionGrid -eq $false) "closed compact overlay leaked sidebar actions into the page"
+  Assert-True ($Metrics.sidebarWidth -eq 0 -and $Metrics.sidebarRatio -eq 0) "closed compact overlay still reserves sidebar width"
+  Assert-True ($Metrics.mainWidth -ge 800) "compact overlay main content is too narrow: $($Metrics.mainWidth)"
+  Assert-True ($Metrics.contentGridWidth -ge 760) "compact overlay content grid is too narrow: $($Metrics.contentGridWidth)"
+  Assert-True ($Metrics.composerWidth -ge 720) "compact overlay composer is too narrow: $($Metrics.composerWidth)"
+  Assert-True ($Metrics.fitFailureCount -eq 0) "compact overlay shell elements overflow viewport: $($Metrics.fitFailures | ConvertTo-Json -Compress)"
+  Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "compact overlay shell has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
 }
 
 function Read-MobileDrawerSidebarMetrics {
@@ -2989,6 +3096,23 @@ function Assert-MobileDrawerSidebar {
   Assert-True ($Metrics.rootOverflow -eq "hidden") "mobile drawer did not lock background root scrolling"
   Assert-True ($Metrics.fitFailureCount -eq 0) "mobile drawer elements overflow viewport: $($Metrics.fitFailures | ConvertTo-Json -Compress)"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "mobile drawer has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+}
+
+function Assert-CompactOverlayDrawer {
+  param([object]$Metrics)
+
+  Assert-True ($Metrics.hasDrawer -eq $true) "compact viewport did not open its overlay sidebar"
+  Assert-True ($Metrics.hasActionGrid -eq $true) "compact overlay is missing its sidebar actions"
+  Assert-True ($Metrics.isLoading -eq $false -and [int]$Metrics.rowCount -gt 0 -and [int]$Metrics.groupCount -gt 0) "compact overlay did not render the task hierarchy"
+  Assert-True ([int]$Metrics.actionTileCount -eq 4 -and $Metrics.hasVisibleWorkbenchTile -eq $true) "compact desktop overlay must keep all four desktop sidebar actions"
+  Assert-True ([int]$Metrics.displayedPinButtonCount -eq [int]$Metrics.rowCount -and [int]$Metrics.displayedPinButtonTabStopCount -eq [int]$Metrics.rowCount) "compact desktop overlay lost its direct pin actions"
+  Assert-True ([int]$Metrics.displayedThreadTimeCount -eq [int]$Metrics.rowCount) "compact desktop overlay lost its task timestamps"
+  Assert-True ($Metrics.drawerWidth -ge 240 -and $Metrics.drawerWidth -le 360) "compact overlay width is outside the desktop sidebar contract: $($Metrics.drawerWidth)"
+  Assert-True ($Metrics.drawerRightGap -ge 32) "compact overlay does not leave a dismissible backdrop edge"
+  Assert-True ($Metrics.role -eq "dialog" -and $Metrics.ariaModal -eq "true" -and $Metrics.ariaLabel -eq "会话导航") "compact overlay is missing named modal semantics"
+  Assert-True ($Metrics.focusInside -eq $true -and $Metrics.activeLabel -eq "收起侧栏") "compact overlay did not focus its close action"
+  Assert-True ($Metrics.backgroundInert -eq $true -and $Metrics.skipLinkInert -eq $true -and $Metrics.rootOverflow -eq "hidden") "compact overlay did not isolate and lock the background"
+  Assert-True ($Metrics.fitFailureCount -eq 0 -and $Metrics.hasHorizontalOverflow -eq $false) "compact overlay drawer overflows the viewport"
 }
 
 function Open-MobileDrawerSidebar {
@@ -4175,6 +4299,51 @@ JSON.stringify((() => {
   Assert-True ([int]$after.connectionSettingsCount -eq 1) "conversation load failure settings action did not emit exactly once"
 }
 
+function Assert-ConversationActiveTailStatusFixture {
+  param([string]$Session)
+
+  $metrics = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const overlay = document.querySelector('.live-overlay-inline');
+  const streamingMessage = document.querySelector('[data-message-id="fixture-streaming-assistant-tail"]');
+  const overlayRect = overlay?.getBoundingClientRect();
+  const streamingRect = streamingMessage?.getBoundingClientRect();
+  const textContent = overlay?.textContent?.replace(/\s+/g, ' ').trim() || '';
+  return {
+    overlayCount: document.querySelectorAll('.live-overlay-inline').length,
+    compactCount: document.querySelectorAll('.live-overlay-inline-compact').length,
+    activeHeadCount: overlay?.querySelectorAll('.live-overlay-head').length || 0,
+    commandPanelCount: overlay?.querySelectorAll('.live-overlay-command-panel').length || 0,
+    detailedSheetCount: document.querySelectorAll('.live-overlay-detail-sheet').length,
+    visibleRunningCommandRowCount: Array.from(document.querySelectorAll('.conversation-item[data-message-type="commandExecution"] .cmd-row')).filter((node) => node.textContent?.includes('npm.cmd run verify:frontend-normalizers')).length,
+    statusFollowsStreamingReply: Boolean(overlayRect && streamingRect && overlayRect.top >= streamingRect.bottom - 1),
+    statusFollowsStreamingReplyInDom: Boolean(
+      overlay && streamingMessage && (streamingMessage.compareDocumentPosition(overlay) & Node.DOCUMENT_POSITION_FOLLOWING)
+    ),
+    hasActivityLabel: textContent.includes('fixture runtime activity'),
+    hasLatestDetail: textContent.includes('fixture runtime detail should stay compact and neutral'),
+    hasCurrentCommand: textContent.includes('npm.cmd run verify:frontend-normalizers'),
+    hasCurrentOutput: textContent.includes('fixture-current-command: running'),
+    hasStreamingReply: (document.body.textContent || '').includes('回复仍在继续生成，不应让运行状态消失'),
+    hasStableElapsedTime: /已运行\s*(?:[6-9]|[1-9]\d+)\s*秒/.test(textContent),
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  };
+})())
+'@
+  Assert-True ([int]$metrics.overlayCount -eq 1) "active conversation tail must render exactly one surface"
+  Assert-True ([int]$metrics.compactCount -eq 0) "the current turn process was collapsed before completion"
+  Assert-True ([int]$metrics.activeHeadCount -eq 1 -and [int]$metrics.commandPanelCount -eq 1) "the current turn process is missing its expanded activity structure"
+  Assert-True ([int]$metrics.detailedSheetCount -eq 0) "the current turn process opened a modal detail without user action"
+  Assert-True ([int]$metrics.visibleRunningCommandRowCount -eq 0) "the current command was duplicated in message history"
+  Assert-True ($metrics.statusFollowsStreamingReply -eq $true) "the current turn process is not visually placed after the streaming reply"
+  Assert-True ($metrics.statusFollowsStreamingReplyInDom -eq $true) "the current turn process is not placed after the streaming reply in DOM reading order"
+  Assert-True ($metrics.hasActivityLabel -eq $true -and $metrics.hasLatestDetail -eq $true) "the current turn process is missing its latest activity"
+  Assert-True ($metrics.hasCurrentCommand -eq $true -and $metrics.hasCurrentOutput -eq $true) "the current turn process is missing active command detail"
+  Assert-True ($metrics.hasStreamingReply -eq $true) "active conversation tail fixture is missing streaming reply content"
+  Assert-True ($metrics.hasStableElapsedTime -eq $true) "the current turn process disappeared or reset elapsed time after a transient overlay gap"
+  Assert-True ($metrics.hasHorizontalOverflow -eq $false) "the expanded current turn process introduced horizontal overflow"
+}
+
 function Assert-ConversationTailStatusFixture {
   param([string]$Session)
 
@@ -4685,6 +4854,53 @@ JSON.stringify((() => {
   Save-RegressionScreenshot -Session $Session -Name 'conversation-markdown-image-recovery-phone' | Out-Null
 }
 
+function Assert-ConversationMarkdownSemantics {
+  param(
+    [string]$Session,
+    [string]$ViewportName
+  )
+
+  $metrics = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const message = document.querySelector('[data-message-id="fixture-markdown-semantic"]');
+  const card = message?.querySelector('.message-card[data-role="assistant"]');
+  const headingTwo = card?.querySelector('h2.message-markdown-heading');
+  const headingThree = card?.querySelector('h3.message-markdown-heading');
+  const bulletList = card?.querySelector('ul.message-markdown-list');
+  const orderedList = card?.querySelector('ol.message-markdown-list');
+  const quote = card?.querySelector('blockquote.message-markdown-blockquote');
+  const inlineCode = card?.querySelector('code.message-inline-code');
+  const cardStyle = card instanceof HTMLElement ? getComputedStyle(card) : null;
+  const bulletStyle = bulletList instanceof HTMLElement ? getComputedStyle(bulletList) : null;
+  return {
+    ready: card instanceof HTMLElement,
+    headingTwo: headingTwo?.textContent?.trim() || '',
+    headingThree: headingThree?.textContent?.trim() || '',
+    bulletCount: bulletList?.querySelectorAll(':scope > li').length || 0,
+    orderedCount: orderedList?.querySelectorAll(':scope > li').length || 0,
+    quote: quote?.textContent?.trim() || '',
+    inlineCode: inlineCode?.textContent?.trim() || '',
+    bulletStyle: bulletStyle?.listStyleType || '',
+    rawHeadingMarker: card?.textContent?.includes('## 三、关键验证结果') === true,
+    rawBulletMarker: Array.from(card?.querySelectorAll('p') || []).some((node) => (node.textContent || '').trim().startsWith('- ')),
+    borderWidth: cardStyle?.borderTopWidth || '',
+    backgroundColor: cardStyle?.backgroundColor || '',
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  };
+})())
+'@
+
+  Assert-True ($metrics.ready -eq $true) "$ViewportName semantic Markdown fixture did not render"
+  Assert-True ($metrics.headingTwo -eq '三、关键验证结果' -and $metrics.headingThree -eq '报告位置') "$ViewportName semantic Markdown headings were not rendered as headings"
+  Assert-True ([int]$metrics.bulletCount -eq 4 -and [int]$metrics.orderedCount -eq 2) "$ViewportName semantic Markdown lists have the wrong item count"
+  Assert-True ($metrics.bulletStyle -eq 'disc') "$ViewportName unordered list marker is not visible"
+  Assert-True ($metrics.quote -eq '本地链路验证通过。' -and $metrics.inlineCode -eq 'passed: true') "$ViewportName quote or inline code semantics are missing"
+  Assert-True ($metrics.rawHeadingMarker -eq $false -and $metrics.rawBulletMarker -eq $false) "$ViewportName leaked raw Markdown block markers"
+  Assert-True ($metrics.borderWidth -eq '0px' -and $metrics.backgroundColor -eq 'rgba(0, 0, 0, 0)') "$ViewportName assistant reply still renders as a nested card"
+  Assert-True ($metrics.hasHorizontalOverflow -eq $false) "$ViewportName semantic Markdown introduced horizontal overflow"
+  Save-RegressionScreenshot -Session $Session -Name "conversation-markdown-semantics-$ViewportName" | Out-Null
+}
+
 function Assert-ConversationFixture {
   param(
     [object]$Metrics,
@@ -5017,7 +5233,9 @@ JSON.stringify((() => {
 })())
 '@
   Assert-True ($captured.ready -eq $true) "foreground resume fixture could not dispatch the hidden-to-visible lifecycle"
-  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$captured.anchorId)) "foreground resume fixture did not capture a visible reading anchor"
+  if ($Mode -eq 'reading') {
+    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$captured.anchorId)) "foreground resume fixture did not capture a visible reading anchor"
+  }
   Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '120') | Out-Null
 
   Invoke-BrowserEvalJson -Session $Session -Script @"
@@ -5089,8 +5307,8 @@ JSON.stringify((() => {
     Assert-True ($settled.hasReturnToLatest -eq $true) "fresh user scrolling after resume lost the return-to-latest affordance"
   }
   if ($Mode -ne 'bottom') {
-    Assert-True ($settled.returnToLatestLabel -eq '最新输出') "phone return-to-latest action is missing its visible new-output label"
-    Assert-True ($settled.returnToLatestLabelDisplay -ne 'none' -and [int]$settled.returnToLatestWidth -ge 96) "phone return-to-latest new-output label remained visually hidden"
+    Assert-True ($settled.returnToLatestLabel -eq '最新输出') "phone return-to-latest action is missing its accessible new-output label"
+    Assert-True ($settled.returnToLatestLabelDisplay -ne 'none' -and [int]$settled.returnToLatestWidth -ge 44 -and [int]$settled.returnToLatestWidth -le 48) "phone return-to-latest action did not retain its compact circular target"
   }
 }
 
@@ -5254,7 +5472,20 @@ JSON.stringify((() => {
 function Expand-ConversationFixtureCommandOutput {
   param([string]$Session)
 
-  $script = @'
+  $processScript = @'
+JSON.stringify((() => {
+  if (!document.querySelector('.conversation-item[data-message-type="commandExecution"] .cmd-row')) {
+    const processToggle = Array.from(document.querySelectorAll('.guided-turn-toggle'))
+      .find((node) => (node.textContent || '').includes('执行过程'));
+    processToggle?.click();
+  }
+  return { processExpanded: Boolean(document.querySelector('.conversation-item[data-message-type="commandExecution"] .cmd-row')) };
+})())
+'@
+  Invoke-BrowserEvalJson -Session $Session -Script $processScript | Out-Null
+  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
+
+  $commandScript = @'
 JSON.stringify((() => {
   if (!document.querySelector('.conversation-item[data-message-type="commandExecution"] .cmd-output-wrap.cmd-output-visible')) {
     document.querySelector('.conversation-item[data-message-type="commandExecution"] .cmd-row')?.click();
@@ -5262,7 +5493,7 @@ JSON.stringify((() => {
   return { expanded: Boolean(document.querySelector('.conversation-item[data-message-type="commandExecution"] .cmd-output-wrap.cmd-output-visible')) };
 })())
 '@
-  Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
+  Invoke-BrowserEvalJson -Session $Session -Script $commandScript | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
 }
 
@@ -6220,6 +6451,8 @@ JSON.stringify((() => {
     })
     .filter((rect) => rect.left < -2 || rect.right > viewportWidth + 2);
   const style = shell ? window.getComputedStyle(shell) : null;
+  const expandStyle = expand ? window.getComputedStyle(expand) : null;
+  const expandRect = expand?.getBoundingClientRect();
   const bg = style?.backgroundColor || '';
   return {
     hasFixture: !!fixture,
@@ -6230,6 +6463,7 @@ JSON.stringify((() => {
     hasRuntime: !!runtime,
     hasMic: !!mic,
     hasExpand: !!expand,
+    expandVisible: !!expandRect && expandRect.width > 0 && expandRect.height > 0 && expandStyle?.display !== 'none' && expandStyle?.visibility !== 'hidden',
     hasSubmit: !!submit,
     hasDictationHelper: !!dictationStatusText,
     hasDictationProbe: !!dictationProbe,
@@ -6289,7 +6523,11 @@ function Assert-ComposerFixture {
   Assert-True ($Metrics.usesWarmShell -eq $false) "$ViewportName composer shell still uses warm beige background: $($Metrics.shellBackground)"
   $minimumControlSize = if ([int]$Metrics.viewportWidth -lt 768) { 44 } else { 34 }
   Assert-True ($Metrics.attachSize -ge $minimumControlSize) "$ViewportName composer attach button is too small: $($Metrics.attachSize)"
-  Assert-True ($Metrics.expandSize -ge $minimumControlSize) "$ViewportName composer expand button is too small: $($Metrics.expandSize)"
+  if ([int]$Metrics.viewportWidth -le 420) {
+    Assert-True ($Metrics.expandVisible -eq $false -and [int]$Metrics.expandSize -eq 0) "$ViewportName narrow composer still reserves space for the low-priority expand button"
+  } else {
+    Assert-True ($Metrics.expandVisible -eq $true -and $Metrics.expandSize -ge $minimumControlSize) "$ViewportName composer expand button is missing or too small: $($Metrics.expandSize)"
+  }
   Assert-True ($Metrics.micSize -ge $minimumControlSize) "$ViewportName composer mic button is too small: $($Metrics.micSize)"
   Assert-True ($Metrics.submitSize -ge $minimumControlSize) "$ViewportName composer submit button is too small: $($Metrics.submitSize)"
   Assert-True ($Metrics.runtimeWidth -ge 112) "$ViewportName composer runtime trigger is too narrow: $($Metrics.runtimeWidth)"
@@ -7523,6 +7761,11 @@ Assert-ExplicitSidebarSearchStatesSource
 Assert-ActiveThreadSidebarRevealSource
 Assert-MessageActionHitTestingSource
 Assert-StableHandsetViewportSource
+Assert-QuietWorkbenchShellSource
+Assert-QuietWorkbenchSidebarSource
+Assert-QuietWorkbenchConversationSource
+Assert-SemanticConversationMarkdownSource
+Assert-QuietWorkbenchComposerSource
 Assert-ReversibleThreadArchiveSource
 Assert-ForegroundResumeScrollIntentSource
 Assert-ThreadAttentionChromeSource
@@ -7592,10 +7835,11 @@ Assert-ThreadAttentionChromeSource
   Close-SettingsPanelIfOpen -Session $session
   Reset-AppShellLayoutPreferences -Session $session
 
-  $homeFoldable = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $FoldableWidth -Height $FoldableHeight
-  Assert-Page -Page $homeFoldable -Name "home foldable" -RequireComposer
-  Assert-FoldableShell -Metrics (Read-FoldableShellMetrics -Session $session)
-  Add-RegressionResult -Name "home-foldable" -Page $homeFoldable
+  $homeCompactOverlay = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $FoldableWidth -Height $FoldableHeight
+  Assert-Page -Page $homeCompactOverlay -Name "home compact overlay" -RequireComposer
+  Assert-CompactOverlayShell -Metrics (Read-CompactOverlayShellMetrics -Session $session)
+  Assert-CompactOverlayDrawer -Metrics (Open-MobileDrawerSidebar -Session $session)
+  Add-RegressionResult -Name "home-compact-overlay" -Page $homeCompactOverlay
 
   Set-SidebarCollapsedPreference -Session $session -Collapsed $false
   $homePhone = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/#/" -Width $PhoneWidth -Height $PhoneHeight
@@ -7797,6 +8041,17 @@ Assert-ThreadAttentionChromeSource
   Assert-ConversationMarkdownImageRecovery -Session $session
   Add-RegressionResult -Name "conversation-markdown-image-recovery-phone" -Page $markdownImageFixture
 
+  $markdownSemanticFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&markdownSemantic=1"
+  $markdownSemanticDesktop = Open-And-ReadPage -Session $session -Url $markdownSemanticFixtureUrl -Width $DesktopWidth -Height $DesktopHeight
+  Assert-Page -Page $markdownSemanticDesktop -Name "conversation semantic Markdown fixture desktop"
+  Assert-ConversationMarkdownSemantics -Session $session -ViewportName 'desktop'
+  Add-RegressionResult -Name "conversation-markdown-semantics-desktop" -Page $markdownSemanticDesktop
+
+  $markdownSemanticPhone = Open-And-ReadPage -Session $session -Url $markdownSemanticFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $markdownSemanticPhone -Name "conversation semantic Markdown fixture phone"
+  Assert-ConversationMarkdownSemantics -Session $session -ViewportName 'phone'
+  Add-RegressionResult -Name "conversation-markdown-semantics-phone" -Page $markdownSemanticPhone
+
   $scrollSwitchFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&scrollSwitchRace=1&messageActionHit=1"
   $scrollSwitchFixture = Open-And-ReadPage -Session $session -Url $scrollSwitchFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $scrollSwitchFixture -Name "conversation thread-switch scroll fixture phone"
@@ -7830,8 +8085,14 @@ Assert-ThreadAttentionChromeSource
   $tailStatusFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&tailStatus=1&tailGap=1"
   $tailStatusFixture = Open-And-ReadPage -Session $session -Url $tailStatusFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $tailStatusFixture -Name "conversation tail status fixture phone"
+  Assert-ConversationActiveTailStatusFixture -Session $session
+  Add-RegressionResult -Name "conversation-active-tail-status-fixture-phone" -Page $tailStatusFixture
+
+  $compactTailStatusFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&tailStatus=1&tailCompact=1"
+  $compactTailStatusFixture = Open-And-ReadPage -Session $session -Url $compactTailStatusFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $compactTailStatusFixture -Name "conversation compact tail status fixture phone"
   Assert-ConversationTailStatusFixture -Session $session
-  Add-RegressionResult -Name "conversation-tail-status-fixture-phone" -Page $tailStatusFixture
+  Add-RegressionResult -Name "conversation-compact-tail-status-fixture-phone" -Page $compactTailStatusFixture
 
   $nextActivityFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&tailStatus=1&tailNextActivity=1"
   $nextActivityFixture = Open-And-ReadPage -Session $session -Url $nextActivityFixtureUrl -Width $PhoneWidth -Height $PhoneHeight

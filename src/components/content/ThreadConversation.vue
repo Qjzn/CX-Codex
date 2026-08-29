@@ -88,7 +88,10 @@
                 <span class="live-overlay-indicator-core" />
               </span>
               <div class="live-overlay-heading">
-                <p class="live-overlay-label">{{ liveOverlayPrimaryLabel(effectiveLiveOverlay) }}</p>
+                <p class="live-overlay-active-state">{{ liveOverlayCompactLabel }}</p>
+                <p class="live-overlay-active-detail">
+                  {{ effectiveLiveOverlay.isRecovering === true ? liveOverlayTailHint : liveOverlayPrimaryLabel(effectiveLiveOverlay) }}
+                </p>
                 <span class="live-overlay-dots" aria-hidden="true">
                   <span class="live-overlay-dot" />
                   <span class="live-overlay-dot" />
@@ -533,10 +536,10 @@
               @click="onToggleGuidedTurn(entry.turnIndex)"
             >
               <span class="guided-turn-toggle-title">
-                {{ isGuidedTurnExpanded(entry.turnIndex) ? '隐藏阶段回复' : '阶段回复' }}
+                {{ isGuidedTurnExpanded(entry.turnIndex) ? '收起执行过程' : '执行过程' }}
               </span>
               <span class="guided-turn-toggle-meta">
-                {{ entry.hiddenCount }}条<span v-if="guidedTurnDurationLabel(entry.turnIndex)"> · {{ guidedTurnDurationLabel(entry.turnIndex) }}</span>
+                {{ activitySummaryMeta(entry) }}
               </span>
             </button>
           </div>
@@ -760,6 +763,7 @@
                   :class="{
                     'message-text-flow--long-collapsed': isLongUserMessageCollapsed(entry.message),
                     'message-text-flow--long-expanded': isLongUserMessage(entry.message) && !isLongUserMessageCollapsed(entry.message),
+                    'message-text-flow--streaming': isStreamingAgentMessage(entry.message),
                   }"
                 >
                   <template v-if="isLongUserMessageCollapsed(entry.message)">
@@ -767,9 +771,6 @@
                     <p class="message-long-summary">
                       当前为折叠预览，完整 Prompt 已发送 · {{ formatCharacterCount(entry.message.text.length) }} 字
                     </p>
-                  </template>
-                  <template v-else-if="isStreamingAgentMessage(entry.message)">
-                    <p class="message-text message-streaming-text">{{ entry.message.text }}</p>
                   </template>
                   <template v-else>
                     <template
@@ -808,6 +809,116 @@
                           <code v-else class="message-inline-code">{{ segment.value }}</code>
                         </template>
                       </p>
+                      <component
+                        :is="`h${block.level}`"
+                        v-else-if="block.kind === 'heading'"
+                        class="message-markdown-heading"
+                        :data-level="block.level"
+                      >
+                        <template v-for="(segment, segmentIndex) in block.segments" :key="`heading-seg-${blockIndex}-${segmentIndex}`">
+                          <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
+                          <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
+                          <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
+                            <a
+                              class="message-file-link"
+                              :href="toBrowseUrl(segment.path)"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              :title="segment.path"
+                              @click="onHyperlinkClick($event, toBrowseUrl(segment.path))"
+                              @contextmenu.prevent="onFileLinkContextMenu($event, segment.path)"
+                            >
+                              {{ segment.displayPath }}
+                            </a>
+                          </span>
+                          <a
+                            v-else-if="segment.kind === 'url'"
+                            class="message-file-link"
+                            :href="segment.href"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            :title="segment.href"
+                            @click="onHyperlinkClick($event, segment.href)"
+                            @contextmenu.prevent="onUrlLinkContextMenu($event, segment.href)"
+                          >
+                            {{ segment.value }}
+                          </a>
+                          <code v-else class="message-inline-code">{{ segment.value }}</code>
+                        </template>
+                      </component>
+                      <component
+                        :is="block.ordered ? 'ol' : 'ul'"
+                        v-else-if="block.kind === 'list'"
+                        class="message-markdown-list"
+                        :data-ordered="block.ordered"
+                        :start="block.ordered && block.start !== 1 ? block.start : undefined"
+                      >
+                        <li v-for="(item, itemIndex) in block.items" :key="`list-item-${blockIndex}-${itemIndex}`">
+                          <template v-for="(segment, segmentIndex) in item.segments" :key="`list-seg-${blockIndex}-${itemIndex}-${segmentIndex}`">
+                            <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
+                            <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
+                            <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
+                              <a
+                                class="message-file-link"
+                                :href="toBrowseUrl(segment.path)"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                :title="segment.path"
+                                @click="onHyperlinkClick($event, toBrowseUrl(segment.path))"
+                                @contextmenu.prevent="onFileLinkContextMenu($event, segment.path)"
+                              >
+                                {{ segment.displayPath }}
+                              </a>
+                            </span>
+                            <a
+                              v-else-if="segment.kind === 'url'"
+                              class="message-file-link"
+                              :href="segment.href"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              :title="segment.href"
+                              @click="onHyperlinkClick($event, segment.href)"
+                              @contextmenu.prevent="onUrlLinkContextMenu($event, segment.href)"
+                            >
+                              {{ segment.value }}
+                            </a>
+                            <code v-else class="message-inline-code">{{ segment.value }}</code>
+                          </template>
+                        </li>
+                      </component>
+                      <blockquote v-else-if="block.kind === 'blockquote'" class="message-markdown-blockquote">
+                        <template v-for="(segment, segmentIndex) in block.segments" :key="`quote-seg-${blockIndex}-${segmentIndex}`">
+                          <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
+                          <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
+                          <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
+                            <a
+                              class="message-file-link"
+                              :href="toBrowseUrl(segment.path)"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              :title="segment.path"
+                              @click="onHyperlinkClick($event, toBrowseUrl(segment.path))"
+                              @contextmenu.prevent="onFileLinkContextMenu($event, segment.path)"
+                            >
+                              {{ segment.displayPath }}
+                            </a>
+                          </span>
+                          <a
+                            v-else-if="segment.kind === 'url'"
+                            class="message-file-link"
+                            :href="segment.href"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            :title="segment.href"
+                            @click="onHyperlinkClick($event, segment.href)"
+                            @contextmenu.prevent="onUrlLinkContextMenu($event, segment.href)"
+                          >
+                            {{ segment.value }}
+                          </a>
+                          <code v-else class="message-inline-code">{{ segment.value }}</code>
+                        </template>
+                      </blockquote>
+                      <hr v-else-if="block.kind === 'thematicBreak'" class="message-markdown-divider" />
                       <div v-else-if="block.kind === 'table'" class="message-table-block">
                         <div
                           class="message-table-scroll"
@@ -978,6 +1089,11 @@
                         />
                       </button>
                     </template>
+                    <span
+                      v-if="isStreamingAgentMessage(entry.message)"
+                      class="message-streaming-caret"
+                      aria-hidden="true"
+                    />
                   </template>
                   <div v-if="isLongUserMessage(entry.message)" class="message-long-actions">
                     <button type="button" class="message-long-action" @click.stop="toggleLongUserMessage(entry.message)">
@@ -1299,6 +1415,10 @@ import { haveSameConversationMessageStructure } from '../../composables/conversa
 import { hasPlanImplementationConfirmation } from '../../composables/conversationProjection'
 import { markThreadFirstScreenReady } from '../../composables/threadFirstScreenMetrics'
 import { copyTextToClipboard } from '../../utils/clipboard'
+import {
+  parseConversationMarkdownBlocks,
+  type ConversationMarkdownBlock,
+} from '../../utils/conversationMarkdown'
 import {
   CODEX_FILE_CITATION_PREFIX,
   splitCodexFileCitations,
@@ -1721,10 +1841,27 @@ const renderableMessages = computed<UiMessage[]>(() => (
 const isRevealingOlderMessages = ref(false)
 const canAutoRevealOlderMessages = ref(true)
 const visibleMessageStartIndex = ref(0)
-const isRequestPanelExpanded = ref(false)
+const isRequestPanelExpanded = ref(props.pendingRequests.length > 0 && effectiveLiveOverlay.value === null)
 const isLiveOverlayDetailOpen = ref(false)
 const expandedGuidedTurnIndexes = ref<Set<number>>(new Set())
 const expandedRawPayloadMessageIds = ref<Set<string>>(new Set())
+
+watch(
+  [
+    () => props.activeThreadId,
+    () => props.pendingRequests.map((request) => request.id).join('|'),
+    () => effectiveLiveOverlay.value !== null,
+  ] as const,
+  ([threadId, requestIds, hasLiveOverlay], [previousThreadId, previousRequestIds]) => {
+    if (!requestIds) {
+      isRequestPanelExpanded.value = false
+      return
+    }
+    if (threadId !== previousThreadId || requestIds !== previousRequestIds) {
+      isRequestPanelExpanded.value = !hasLiveOverlay
+    }
+  },
+)
 
 function latestVisibleStartIndex(messages: UiMessage[]): number {
   const messageCount = messages.length
@@ -1864,6 +2001,7 @@ type GuidedSummaryEntry = {
   measureId: string
   turnIndex: number
   hiddenCount: number
+  commandCount: number
 }
 
 type ContextPreviewEntry = {
@@ -1906,10 +2044,13 @@ const collapsibleGuidedTurnDescriptors = computed<Map<number, GuidedTurnDescript
   for (const [turnIndex, messages] of groupedMessages.entries()) {
     if (!isTurnCompleted(turnIndex)) continue
     const guidedMessages = messages.filter(isGuidedAssistantMessage)
-    if (guidedMessages.length < 2) continue
     const finalMessage = guidedMessages[guidedMessages.length - 1]
-    const hiddenMessages = guidedMessages.slice(0, -1)
-    if (!finalMessage || hiddenMessages.length === 0) continue
+    if (!finalMessage) continue
+    const intermediateAssistantIds = new Set(guidedMessages.slice(0, -1).map((message) => message.id))
+    const hiddenMessages = messages.filter((message) => (
+      intermediateAssistantIds.has(message.id) || isCommandMessage(message)
+    ))
+    if (hiddenMessages.length === 0) continue
     descriptors.set(turnIndex, {
       turnIndex,
       hiddenMessages,
@@ -2038,13 +2179,22 @@ function guidedTurnDurationLabel(turnIndex: number): string {
   return guidedTurnDurationLabelByTurnIndex.value[turnIndex] ?? ''
 }
 
-function buildGuidedSummaryEntry(turnIndex: number, hiddenCount: number): GuidedSummaryEntry {
+function activitySummaryMeta(entry: GuidedSummaryEntry): string {
+  const activityCountLabel = entry.commandCount > 0
+    ? `${String(entry.commandCount)} 个操作`
+    : `${String(entry.hiddenCount)} 条更新`
+  const duration = guidedTurnDurationLabel(entry.turnIndex)
+  return duration ? `${activityCountLabel} · ${duration}` : activityCountLabel
+}
+
+function buildGuidedSummaryEntry(descriptor: GuidedTurnDescriptor): GuidedSummaryEntry {
   return {
     kind: 'guidedSummary',
-    key: `guided-summary:${String(turnIndex)}`,
-    measureId: `guided-summary:${String(turnIndex)}`,
-    turnIndex,
-    hiddenCount,
+    key: `guided-summary:${String(descriptor.turnIndex)}`,
+    measureId: `guided-summary:${String(descriptor.turnIndex)}`,
+    turnIndex: descriptor.turnIndex,
+    hiddenCount: descriptor.hiddenMessages.length,
+    commandCount: descriptor.hiddenMessages.filter(isCommandMessage).length,
   }
 }
 
@@ -2067,7 +2217,7 @@ const renderableConversationEntries = computed<ConversationRenderEntry[]>(() => 
     }
 
     if (descriptor && descriptor.finalMessageId === message.id) {
-      entries.push(buildGuidedSummaryEntry(descriptor.turnIndex, descriptor.hiddenMessages.length))
+      entries.push(buildGuidedSummaryEntry(descriptor))
     }
 
     entries.push({
@@ -2209,16 +2359,24 @@ type InlineSegment =
   | { kind: 'url'; value: string; href: string }
   | { kind: 'file'; value: string; path: string; displayPath: string; downloadName: string }
 type MessageBlock =
-  | { kind: 'text'; value: string }
+  | ConversationMarkdownBlock
   | { kind: 'table'; headers: string[]; rows: string[][] }
   | { kind: 'code'; language: string; code: string; isDiff: boolean }
   | { kind: 'image'; url: string; alt: string; markdown: string }
 type PreparedMessageBlock =
   | { kind: 'text'; value: string; segments: InlineSegment[] }
+  | { kind: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; value: string; segments: InlineSegment[] }
+  | { kind: 'list'; ordered: boolean; start: number; items: PreparedMarkdownListItem[] }
+  | { kind: 'blockquote'; value: string; segments: InlineSegment[] }
+  | { kind: 'thematicBreak' }
   | { kind: 'table'; headers: PreparedTableCell[]; rows: PreparedTableCell[][] }
   | { kind: 'code'; language: string; code: string; lines: PreparedCodeLine[]; lineCount: number; linesView: 'preview' | 'full'; isDiff: boolean }
   | { kind: 'image'; url: string; alt: string; markdown: string }
 type PreparedTableCell = {
+  value: string
+  segments: InlineSegment[]
+}
+type PreparedMarkdownListItem = {
   value: string
   segments: InlineSegment[]
 }
@@ -2376,6 +2534,8 @@ const showProcessPanel = computed(() => (
 const shouldRenderDetailedLiveOverlay = computed<boolean>(() => {
   const overlay = effectiveLiveOverlay.value
   if (!overlay) return false
+  if (props.compactRuntimeChrome !== true) return true
+  if (props.isTurnInProgress === true) return true
   if (overlayPrimaryPendingRequest.value) return true
   if (overlay.errorText.trim().length > 0) return true
   return false
@@ -3765,6 +3925,13 @@ function pushTextWithImages(blocks: MessageBlock[], text: string): void {
   }
 }
 
+function pushMarkdownTextWithImages(blocks: MessageBlock[], text: string): void {
+  for (const block of parseConversationMarkdownBlocks(text)) {
+    if (block.kind === 'text') pushTextWithImages(blocks, block.value)
+    else blocks.push(block)
+  }
+}
+
 function parseFenceStart(line: string): { marker: string; language: string } | null {
   const match = line.match(/^ {0,3}(```+|~~~+)\s*([^`]*)$/u)
   if (!match) return null
@@ -3795,7 +3962,7 @@ function parseMessageBlocks(text: string): MessageBlock[] {
 
   const flushText = (): void => {
     if (pendingTextLines.length === 0) return
-    pushTextWithImages(blocks, pendingTextLines.join('\n'))
+    pushMarkdownTextWithImages(blocks, pendingTextLines.join('\n'))
     pendingTextLines.length = 0
   }
 
@@ -3925,6 +4092,21 @@ function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
         kind: 'text',
         value: block.value,
         segments: parseInlineSegments(block.value),
+      }
+    }
+    if (block.kind === 'heading' || block.kind === 'blockquote') {
+      return {
+        ...block,
+        segments: parseInlineSegments(block.value),
+      }
+    }
+    if (block.kind === 'list') {
+      return {
+        ...block,
+        items: block.items.map((value) => ({
+          value,
+          segments: parseInlineSegments(value),
+        })),
       }
     }
     if (block.kind === 'table') {
@@ -6656,7 +6838,7 @@ onBeforeUnmount(() => {
 }
 
 .conversation-jump-to-latest {
-  @apply absolute bottom-4 left-1/2 z-20 inline-flex min-h-8 -translate-x-1/2 items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold;
+  @apply absolute bottom-4 left-1/2 z-20 inline-flex h-11 w-11 -translate-x-1/2 items-center justify-center rounded-full border p-0;
   bottom: max(1rem, calc(env(safe-area-inset-bottom) + 0.5rem));
   border-color: var(--ui-border-subtle);
   background: color-mix(in srgb, var(--ui-bg-surface) 96%, transparent);
@@ -6695,15 +6877,21 @@ onBeforeUnmount(() => {
 }
 
 .conversation-jump-to-latest-label {
-  @apply hidden sm:inline;
-}
-
-.conversation-jump-to-latest.has-pending-updates .conversation-jump-to-latest-label {
-  @apply inline;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .conversation-jump-to-latest-badge {
-  @apply h-2.5 w-2.5 rounded-full bg-blue-500;
+  @apply absolute right-1 top-1 h-2 w-2 rounded-full;
+  background: var(--ui-accent);
+  box-shadow: 0 0 0 2px var(--ui-bg-surface);
 }
 
 .conversation-item {
@@ -7061,6 +7249,16 @@ onBeforeUnmount(() => {
 
 .live-overlay-heading {
   @apply min-w-0 flex flex-col gap-0.5;
+}
+
+.live-overlay-active-state {
+  @apply m-0 text-[13px] font-semibold;
+  color: var(--ui-text-primary);
+}
+
+.live-overlay-active-detail {
+  @apply m-0 truncate text-xs;
+  color: var(--ui-text-secondary);
 }
 
 .live-overlay-compact-main {
@@ -7506,16 +7704,94 @@ onBeforeUnmount(() => {
   letter-spacing: var(--tracking-body-soft);
 }
 
-.message-streaming-text::after {
-  content: '';
+.message-streaming-caret {
   display: inline-block;
+  align-self: flex-start;
   width: 2px;
   height: 1em;
-  margin-left: 0.18rem;
+  margin-top: -1.2em;
+  margin-left: 0.1rem;
   border-radius: 999px;
   background: var(--ui-accent);
-  vertical-align: -0.12em;
   animation: streamingCaretPulse 900ms ease-in-out infinite;
+}
+
+.message-markdown-heading {
+  @apply m-0 font-semibold;
+  color: var(--ui-text-primary);
+  font-family: var(--font-sans-reading);
+  letter-spacing: -0.018em;
+}
+
+.message-markdown-heading[data-level='1'] {
+  margin-block: 0.45rem 0.6rem;
+  font-size: clamp(1.45rem, 2.2vw, 1.75rem);
+  line-height: 1.24;
+}
+
+.message-markdown-heading[data-level='2'] {
+  margin-block: 0.4rem 0.55rem;
+  font-size: clamp(1.25rem, 1.8vw, 1.5rem);
+  line-height: 1.3;
+}
+
+.message-markdown-heading[data-level='3'] {
+  margin-block: 0.35rem 0.45rem;
+  font-size: 1.08rem;
+  line-height: 1.38;
+}
+
+.message-markdown-heading[data-level='4'],
+.message-markdown-heading[data-level='5'],
+.message-markdown-heading[data-level='6'] {
+  margin-block: 0.3rem 0.4rem;
+  font-size: 0.96rem;
+  line-height: 1.45;
+}
+
+.message-markdown-list {
+  @apply my-1.5 pr-1;
+  padding-left: 1.45rem;
+  color: var(--ui-text-primary);
+  font-family: var(--font-sans-reading);
+  font-size: var(--font-size-reading, 15px);
+  line-height: var(--line-height-reading);
+}
+
+.message-markdown-list[data-ordered='false'] {
+  list-style: disc;
+}
+
+.message-markdown-list[data-ordered='true'] {
+  list-style: decimal;
+}
+
+.message-markdown-list li {
+  padding-left: 0.12rem;
+  white-space: pre-wrap;
+}
+
+.message-markdown-list li + li {
+  margin-top: 0.28rem;
+}
+
+.message-markdown-list li::marker {
+  color: var(--ui-text-secondary);
+}
+
+.message-markdown-blockquote {
+  @apply my-1.5 py-0.5 pl-3;
+  border-left: 3px solid color-mix(in srgb, var(--ui-accent) 42%, var(--ui-border-subtle));
+  color: var(--ui-text-secondary);
+  font-family: var(--font-sans-reading);
+  font-size: var(--font-size-reading, 15px);
+  line-height: var(--line-height-reading);
+  white-space: pre-wrap;
+}
+
+.message-markdown-divider {
+  @apply my-3 border-0 border-t;
+  border-color: var(--ui-border-subtle);
 }
 
 .message-bold-text {
@@ -7872,12 +8148,13 @@ onBeforeUnmount(() => {
 }
 
 .message-card[data-role='assistant'] {
-  @apply border px-3.5 py-2.5;
-  max-width: min(62rem, calc(100% - 0.5rem));
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  box-shadow: 0 10px 20px -28px rgb(31 41 55 / 0.14);
+  max-width: 100%;
+  width: 100%;
+  padding: 0.25rem 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .message-card[data-role='system'] {
@@ -8395,7 +8672,6 @@ onBeforeUnmount(() => {
     @apply px-5;
   }
 
-  .message-card[data-role='assistant'],
   .message-card[data-role='system'] {
     @apply px-4 py-3;
   }
