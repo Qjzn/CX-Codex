@@ -997,8 +997,11 @@ function activate(item: MenuItem): void {
   color: #a1a1aa;
 }
 
+:root.dark .command-menu-section-heading {
+  color: #a1a1aa;
+}
+
 :root.dark .command-menu-search-icon,
-:root.dark .command-menu-section-heading,
 :root.dark .command-menu-empty-icon {
   color: #71717a;
 }

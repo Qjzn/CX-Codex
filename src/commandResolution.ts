@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, isAbsolute, join } from 'node:path'
 
 export type CommandInvocation = {
   command: string
@@ -27,6 +27,22 @@ function isRunnableCommand(command: string, args: string[] = []): boolean {
     return false
   }
   return canRunCommand(command, args)
+}
+
+function getAbsolutePathCommandCandidates(command: string, pathValue = process.env.PATH): string[] {
+  const normalizedCommand = command.trim()
+  if (!normalizedCommand) return []
+  if (isPathLike(normalizedCommand)) {
+    return isAbsolute(normalizedCommand) ? [normalizedCommand] : []
+  }
+  const fileNames = process.platform === 'win32' && !/\.exe$/iu.test(normalizedCommand)
+    ? [`${normalizedCommand}.exe`]
+    : [normalizedCommand]
+  return uniqueStrings((pathValue ?? '').split(delimiter).flatMap((entry) => {
+    const directory = entry.trim().replace(/^"|"$/gu, '')
+    if (!directory || !isAbsolute(directory)) return []
+    return fileNames.map((fileName) => join(directory, fileName))
+  }))
 }
 
 function getWindowsAppDataNpmPrefix(): string | null {
@@ -169,16 +185,30 @@ export function resolveCodexCommand(): string | null {
 export function resolveRipgrepCommand(): string | null {
   const explicit = process.env.CX_CODEX_RG_COMMAND?.trim() || process.env.CODEXUI_RG_COMMAND?.trim()
   const packageCandidates = getPotentialNpmPrefixes().flatMap(getPotentialRipgrepExecutables)
-  const fallbackCandidates = process.platform === 'win32'
-    ? [...packageCandidates, 'rg']
-    : ['rg', ...packageCandidates]
+  const fallbackCandidates = uniqueStrings([
+    ...getAbsolutePathCommandCandidates(explicit ?? ''),
+    ...packageCandidates,
+    ...getAbsolutePathCommandCandidates('rg'),
+  ])
 
-  for (const candidate of uniqueStrings([explicit, ...fallbackCandidates])) {
+  for (const candidate of fallbackCandidates) {
     if (isRunnableCommand(candidate, ['--version'])) {
       return candidate
     }
   }
 
+  return null
+}
+
+export function resolveGitCommand(): string | null {
+  const explicit = process.env.CX_CODEX_GIT_COMMAND?.trim()
+  const candidates = uniqueStrings([
+    ...getAbsolutePathCommandCandidates(explicit ?? ''),
+    ...getAbsolutePathCommandCandidates('git'),
+  ])
+  for (const candidate of candidates) {
+    if (isRunnableCommand(candidate, ['--version'])) return candidate
+  }
   return null
 }
 

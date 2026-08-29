@@ -1,5 +1,7 @@
 # 阶段性 Release Readiness 审计
 
+> 历史快照：本文只记录 2026-07-05 当时的阶段状态，其中工作树、分支 ahead 数、目标 paused 状态和下一步建议均不代表当前事实。2026-08-08 起请以 `PRODUCT_GOAL.md`、`PROJECT_SPEC.md`、`docs/app-server-schema-audit-summary.json` 和 `tests.md` 为当前权威；本文保留用于追溯当时决策，不再作为发布结论。
+
 审计时间：2026-07-05 09:30 Asia/Shanghai。
 
 本文件用于收口当前长目标阶段，判断 CX-Codex 是否适合继续无界自动推进、是否具备发版条件，以及下一步最应该做什么。它不是正式 Release Notes，也不代表已经完全对齐最新 Codex App Server。

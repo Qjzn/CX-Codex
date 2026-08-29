@@ -1,5 +1,5 @@
 import type { CommandExecutionData, UiMessage } from '../types/codex'
-import { normalizeMessageText } from './messageIdentity'
+import { normalizeMessageText, userMessageSignature } from './messageIdentity'
 
 export const PLAN_IMPLEMENTATION_CONFIRMATION = '是的，执行此计划'
 
@@ -94,6 +94,7 @@ export function areMessageFieldsEqual(first: UiMessage, second: UiMessage): bool
     areCommandExecutionsEqual(first.commandExecution, second.commandExecution) &&
     arePlansEqual(first.plan, second.plan) &&
     first.turnIndex === second.turnIndex &&
+    first.turnId === second.turnId &&
     first.deliveryState === second.deliveryState &&
     first.deliveryError === second.deliveryError &&
     first.deliveryAttempt === second.deliveryAttempt &&
@@ -127,6 +128,117 @@ export function sortMessagesByTurnIndex(messages: UiMessage[]): UiMessage[] {
   })
 }
 
+export type MessageMergeAuthority = 'higher' | 'lower' | 'older'
+
+const TRAILING_MEMORY_CITATION_PATTERN = /\s*<oai-mem-citation>[\s\S]*<\/oai-mem-citation>\s*$/u
+
+function readPersistedMessageContentIdentity(message: UiMessage): string | null {
+  if (message.role === 'user' && message.messageType === 'userMessage') {
+    return `user\u001d${userMessageSignature(message)}`
+  }
+  if (message.role !== 'assistant' || message.messageType !== 'agentMessage') return null
+
+  const text = normalizeMessageText(message.text.replace(TRAILING_MEMORY_CITATION_PATTERN, ''))
+  if (!text) return null
+  const phase = message.phase === 'commentary' ? 'commentary' : 'response'
+  return `assistant\u001d${phase}\u001d${text}`
+}
+
+function readPersistedMessageTurnIdentity(message: UiMessage): string | null {
+  const contentIdentity = readPersistedMessageContentIdentity(message)
+  if (!contentIdentity) return null
+
+  const turnId = message.turnId?.trim() ?? ''
+  if (!turnId || turnId.startsWith('fallback-turn-')) return null
+  return `${turnId}\u001d${contentIdentity}`
+}
+
+function countMessageIdentities(
+  messages: UiMessage[],
+  readIdentity: (message: UiMessage) => string | null,
+): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const message of messages) {
+    const identity = readIdentity(message)
+    if (!identity) continue
+    counts.set(identity, (counts.get(identity) ?? 0) + 1)
+  }
+  return counts
+}
+
+function consumeMessageIdentity(counts: Map<string, number>, identity: string | null): boolean {
+  if (!identity) return false
+  const count = counts.get(identity) ?? 0
+  if (count <= 0) return false
+  if (count === 1) counts.delete(identity)
+  else counts.set(identity, count - 1)
+  return true
+}
+
+function findLastIncomingContentOverlap(previous: UiMessage[], incoming: UiMessage[]): number {
+  const alignmentWindow = 256
+  const previousEntries = previous.flatMap((message, index) => {
+    const identity = readPersistedMessageContentIdentity(message)
+    return identity ? [{ identity, index }] : []
+  }).slice(-alignmentWindow)
+  const incomingEntries = incoming.flatMap((message, index) => {
+    const identity = readPersistedMessageContentIdentity(message)
+    return identity ? [{ identity, index }] : []
+  }).slice(-alignmentWindow)
+  if (previousEntries.length === 0 || incomingEntries.length === 0) return -1
+
+  let precedingLengths = new Uint16Array(incomingEntries.length + 1)
+  let bestLength = 0
+  let bestPreviousIndex = -1
+  let bestIncomingIndex = -1
+  for (const previousEntry of previousEntries) {
+    const currentLengths = new Uint16Array(incomingEntries.length + 1)
+    for (let incomingOffset = 1; incomingOffset <= incomingEntries.length; incomingOffset += 1) {
+      const incomingEntry = incomingEntries[incomingOffset - 1]!
+      if (previousEntry.identity !== incomingEntry.identity) continue
+      const length = precedingLengths[incomingOffset - 1]! + 1
+      currentLengths[incomingOffset] = length
+      const isBetterAlignment =
+        length > bestLength
+        || (
+          length === bestLength
+          && (
+            previousEntry.index > bestPreviousIndex
+            || (
+              previousEntry.index === bestPreviousIndex
+              && incomingEntry.index > bestIncomingIndex
+            )
+          )
+        )
+      if (!isBetterAlignment) continue
+      bestLength = length
+      bestPreviousIndex = previousEntry.index
+      bestIncomingIndex = incomingEntry.index
+    }
+    precedingLengths = currentLengths
+  }
+  return bestIncomingIndex
+}
+
+function mergeLowerAuthorityMessages(previous: UiMessage[], incoming: UiMessage[]): UiMessage[] {
+  const lastOverlapIndex = findLastIncomingContentOverlap(previous, incoming)
+  let fallbackStartIndex = -1
+  for (let index = incoming.length - 1; index >= 0; index -= 1) {
+    if (incoming[index]?.messageType !== 'userMessage') continue
+    fallbackStartIndex = index
+    break
+  }
+  const startIndex = lastOverlapIndex >= 0
+    ? lastOverlapIndex + 1
+    : fallbackStartIndex >= 0
+      ? fallbackStartIndex
+      : Math.max(0, incoming.length - 1)
+  const previousIds = new Set(previous.map((message) => message.id))
+  const appended = incoming.slice(startIndex).filter((message) => !previousIds.has(message.id))
+  if (appended.length === 0) return previous
+  return [...previous, ...appended]
+}
+
 export function mergeMessages(
   previous: UiMessage[],
   incoming: UiMessage[],
@@ -134,9 +246,12 @@ export function mergeMessages(
   sortByTurnIndex = false,
   replaceHistoryNotice = false,
   replaceOverlappingTurns = false,
+  incomingAuthority: MessageMergeAuthority = 'higher',
 ): UiMessage[] {
   const previousById = new Map(previous.map((message) => [message.id, message]))
   const incomingById = new Map(incoming.map((message) => [message.id, message]))
+  const incomingTurnIdentityCounts = countMessageIdentities(incoming, readPersistedMessageTurnIdentity)
+  const incomingFallbackIdentityCounts = countMessageIdentities(incoming, readPersistedMessageContentIdentity)
   const incomingHasHistoryNotice = incoming.some((message) => message.messageType === 'history.notice')
   const incomingTurnIndexes = new Set(incoming.map((message) => message.turnIndex))
 
@@ -151,6 +266,9 @@ export function mergeMessages(
   if (!preserveMissing) {
     return areMessageArraysEqual(previous, mergedIncoming) ? previous : mergedIncoming
   }
+  if (incomingAuthority === 'lower') {
+    return mergeLowerAuthorityMessages(previous, mergedIncoming)
+  }
 
   const mergedFromPrevious = previous
     .filter((previousMessage) => {
@@ -161,6 +279,17 @@ export function mergeMessages(
         !incomingById.has(previousMessage.id)
       ) {
         return false
+      }
+      if (incomingAuthority !== 'older' && !incomingById.has(previousMessage.id)) {
+        const turnIdentity = readPersistedMessageTurnIdentity(previousMessage)
+        const contentIdentity = readPersistedMessageContentIdentity(previousMessage)
+        if (consumeMessageIdentity(incomingTurnIdentityCounts, turnIdentity)) {
+          consumeMessageIdentity(incomingFallbackIdentityCounts, contentIdentity)
+          return false
+        }
+        if (!turnIdentity) {
+          if (consumeMessageIdentity(incomingFallbackIdentityCounts, contentIdentity)) return false
+        }
       }
       return !(
         replaceHistoryNotice &&
@@ -177,6 +306,12 @@ export function mergeMessages(
 
   const previousIdSet = new Set(previous.map((message) => message.id))
   const appended = mergedIncoming.filter((message) => !previousIdSet.has(message.id))
+  const preservesMessagesMissingFromIncoming = mergedFromPrevious.some(
+    (message) => !incomingById.has(message.id),
+  )
+  if (incomingAuthority === 'higher' && !preservesMessagesMissingFromIncoming) {
+    return areMessageArraysEqual(previous, mergedIncoming) ? previous : mergedIncoming
+  }
   const merged = sortByTurnIndex
     ? sortMessagesByTurnIndex([...mergedFromPrevious, ...appended])
     : [...mergedFromPrevious, ...appended]
@@ -202,20 +337,28 @@ export function removeStaleHistoryNoticeAfterOlderMerge(messages: UiMessage[]): 
 }
 
 export function removeRedundantLiveAgentMessages(previous: UiMessage[], incoming: UiMessage[]): UiMessage[] {
-  const incomingAssistantTexts = new Set(
-    incoming
+  const incomingMessageIds = new Set(incoming.map((message) => message.id))
+  let activeTailStartIndex = -1
+  for (let index = incoming.length - 1; index >= 0; index -= 1) {
+    if (incoming[index]?.role !== 'user') continue
+    activeTailStartIndex = index
+    break
+  }
+  const incomingActiveTailAssistantTexts = new Set(
+    (activeTailStartIndex >= 0 ? incoming.slice(activeTailStartIndex + 1) : incoming)
       .filter((message) => message.role === 'assistant')
       .map((message) => normalizeMessageText(message.text))
       .filter((text) => text.length > 0),
   )
 
-  if (incomingAssistantTexts.size === 0) return previous
+  if (incomingMessageIds.size === 0 && incomingActiveTailAssistantTexts.size === 0) return previous
 
   const next = previous.filter((message) => {
     if (message.messageType !== 'agentMessage.live') return true
+    if (incomingMessageIds.has(message.id)) return false
     const normalized = normalizeMessageText(message.text)
     if (normalized.length === 0) return false
-    return !incomingAssistantTexts.has(normalized)
+    return !incomingActiveTailAssistantTexts.has(normalized)
   })
 
   return next.length === previous.length ? previous : next

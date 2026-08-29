@@ -3,6 +3,7 @@ import {
   type AppServerRuntimeActions,
   type AppServerRuntimeActionsDependencies,
 } from './appServerRuntimeActions.js'
+import { startRuntimeTurnWithAppServer } from './appServerRuntimeStart.js'
 import {
   createAppServerRuntimeReaders,
   type AppServerRuntimeReaders,
@@ -53,6 +54,7 @@ type RuntimeStateStoreForOperations = {
     source: 'thread-read' | 'cache',
   ): void
   markDegraded(threadId: string, reason: string): void
+  markQueued(threadId: string): void
   markStarting(threadId: string): void
   markRunning(threadId: string, turnId?: string): void
   markStartUncertain(threadId: string, lastError?: string | null): void
@@ -86,6 +88,7 @@ export type CodexBridgeRuntimeOperationsDependencies = {
     status: RuntimeRequestRecord['status']
     error: string
   }): void
+  notifyQueuedRequest?(request: RuntimeRequestRecord): void
 }
 
 export type CodexBridgeRuntimeOperations = AppServerRuntimeReaders
@@ -93,6 +96,7 @@ export type CodexBridgeRuntimeOperations = AppServerRuntimeReaders
   & AppServerRuntimeActions
   & {
     persistRuntimeSnapshot(threadId: string, snapshot?: ThreadRuntimeSnapshot): ThreadRuntimeSnapshot
+    startRuntimeTurnSettled(payload: unknown): ReturnType<typeof startRuntimeTurnWithAppServer>
   }
 
 export function createCodexBridgeRuntimeOperations(
@@ -126,31 +130,35 @@ export function createCodexBridgeRuntimeOperations(
     getAppServerStartedAtMs: () => appServer.getStartedAtMs(),
   })
 
-  const runtimeReconciliation = createAppServerRuntimeReconciliation({
-    readThreadRuntimeSnapshot: runtimeReaders.readThreadRuntimeSnapshot,
-    runtimeStore,
-    getErrorMessage: dependencies.getErrorMessage,
-    writeReconcileFailure: dependencies.writeReconcileFailure,
-  })
-
-  const runtimeActions = createAppServerRuntimeActions({
+  const runtimeActionDependencies: AppServerRuntimeActionsDependencies = {
     createRequest: (record) => runtimeStore.createRequest(record),
     updateRequest: (requestId, patch) => runtimeStore.updateRequest(requestId, patch),
     getRequest: (requestId) => runtimeStore.getRequest(requestId),
     getLatestRequestByClientMessageId: (clientMessageId) => runtimeStore.getLatestRequestByClientMessageId(clientMessageId),
     rpc: (method, params) => appServer.rpc(method, params),
     clearThreadSearchIndex: () => dependencies.threadSearchIndexStore.clear(),
+    markQueued: (threadId) => runtimeStateStore.markQueued(threadId),
     markStarting: (threadId) => runtimeStateStore.markStarting(threadId),
     markRunning: (threadId, turnId = '') => runtimeStateStore.markRunning(threadId, turnId),
     markStartUncertain: (threadId, lastError = null) => runtimeStateStore.markStartUncertain(threadId, lastError),
     markFailed: (threadId, lastError = null) => runtimeStateStore.markFailed(threadId, lastError),
     persistRuntimeSnapshot,
     markPlanModeTurn: (threadId, turnId = '') => appServer.markPlanModeTurn(threadId, turnId),
+    notifyQueuedRequest: (request) => dependencies.notifyQueuedRequest?.(request),
     markStopping: (threadId) => runtimeStateStore.markStopping(threadId),
     markInterrupted: (threadId, lastError = null) => runtimeStateStore.markInterrupted(threadId, lastError),
     markStopUncertain: (threadId, lastError = null) => runtimeStateStore.markStopUncertain(threadId, lastError),
     clearPlanModeTurn: (threadId, turnId = '') => appServer.clearPlanModeTurn(threadId, turnId),
     getErrorMessage: dependencies.getErrorMessage,
+  }
+  const runtimeActions = createAppServerRuntimeActions(runtimeActionDependencies)
+
+  const runtimeReconciliation = createAppServerRuntimeReconciliation({
+    readThreadRuntimeSnapshot: runtimeReaders.readThreadRuntimeSnapshot,
+    resumePendingStart: runtimeActions.startRuntimeTurn,
+    runtimeStore,
+    getErrorMessage: dependencies.getErrorMessage,
+    writeReconcileFailure: dependencies.writeReconcileFailure,
   })
 
   return {
@@ -158,5 +166,6 @@ export function createCodexBridgeRuntimeOperations(
     ...runtimeReaders,
     ...runtimeReconciliation,
     ...runtimeActions,
+    startRuntimeTurnSettled: (payload) => startRuntimeTurnWithAppServer(payload, runtimeActionDependencies),
   }
 }

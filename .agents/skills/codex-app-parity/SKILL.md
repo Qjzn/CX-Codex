@@ -60,6 +60,8 @@ if idx >= 0:
 
 On Windows, locale bundles may be emitted as one very long line. To extract matching key/value pairs without printing the full bundle, load the file with PowerShell and apply `[regex]::Matches(...)` to the in-memory string.
 
+For large modular Windows bundles, first list likely chunk names, then load only those files with `[IO.File]::ReadAllText(...)` and use `IndexOf(...)` to print bounded context around each term. This is faster and safer than recursively scanning the complete extracted ASAR.
+
 ### What to Search For
 
 1. **i18n keys**: Search locale files (`webview/assets/zh-TW-*.js`, `webview/assets/en-*.js`, etc.) for human-readable labels. Keys follow the pattern `component.feature.property` (e.g., `composer.dictation.tooltip`).
@@ -1317,3 +1319,99 @@ After each feature implementation session that uses this skill:
 - External session convergence now preserves `commentary/final` phase and requires the latest assistant item itself to be final. This remains correct when two Codex tasks interleave in one session file: an older sibling final cannot end a newer commentary stream.
 - Conversation rendering now prunes structural caches and schedules scroll restoration only when message identity/order changes. Text-only deltas leave height correction to `ResizeObserver`, and per-message estimates use weak identity ownership instead of a small sequential LRU that thrashed on dense turns.
 - At `393 x 852`, the final production stress fixture kept 1602 messages to 13 mounted items, sustained 48ms updates with 50-57ms maximum heartbeat lag, accepted an action during streaming, and produced no horizontal overflow. A real cross-process active conversation then updated from its session log without any full-history read during the observed windows.
+
+## Findings: Safe App-server Launch Defaults (2026-08-08)
+
+- Installed Windows Codex `26.727.6591` maps its `auto` permission profile to `workspaceWrite` with `on-request`, no implicit network access, and user-owned approvals. `full-access` is the distinct `dangerFullAccess + never` profile rather than the unattended default.
+- The Agent Settings bundle separately falls back to `on-request` for a missing approval value and presents read-only, workspace-write, and full-access as explicit sandbox choices. Its copy describes workspace-write as editing only inside the workspace.
+- CX-Codex now uses `on-request + workspace-write` as the practical self-hosted default. The existing environment variables still permit explicit `never + danger-full-access`, while invalid values fall back to the safe default and diagnostics continue to expose only the effective policy plus `legacyHighTrust`.
+- This change affects App Server launch behavior only. It adds no new permission UI, protocol field, persistent setting, dependency, Runtime Store owner, or Android lifecycle path.
+
+## Findings: Workspace-scoped Local File Access (2026-08-08)
+
+- Installed Windows Codex `26.727.6591` has no equivalent remotely exposed HTTP file server. Its workspace-write copy nevertheless treats the selected workspace as the write boundary, so CX-Codex must add a server-side boundary for browser and Android file URLs instead of treating every authenticated absolute path as trusted.
+- CX-Codex now derives allowed roots from the existing Codex workspace-root state and applies the same resolver to local images, direct files, directory browsing and text editing. No second root registry or UI state owner was introduced.
+- Authorization checks both normalized and canonical file-system paths. This preserves hidden files inside a registered workspace while rejecting sibling-prefix paths, missing roots, symbolic links and Windows junctions that resolve outside the workspace.
+- The boundary is an intentional self-hosted adaptation rather than a claim of exact UI parity. Runtime verification covered allowed read/edit, all four denied route families, an unchanged denied edit target and a junction escape; the denial is a concise HTTP 403 with no outside file content disclosure.
+
+## Findings: Authenticated Non-loopback Binding (2026-08-08)
+
+- Installed Codex has no direct equivalent to CX-Codex's self-hosted HTTP bind. This is therefore a transport hardening adaptation, not a desktop UI parity claim.
+- Password-free CX-Codex startup is now limited to explicit localhost and loopback addresses. Wildcard, LAN and other host bindings fail before the port is opened unless a non-empty password is present; tunnel startup retains its separate password requirement.
+- The policy is a small pure CLI boundary with no new setting, dependency or background owner. Loopback reverse proxies remain responsible for authentication at the proxy layer because the local bind alone cannot infer the proxy's external exposure.
+
+## Findings: Final Diagnostic Response Redaction (2026-08-08)
+
+- Installed Codex does not expose CX-Codex's self-hosted diagnostics transport. The applicable parity principle is minimum disclosure: effective state and counts are useful, while raw credentials and request payloads are not.
+- Existing CX-Codex diagnostic projections already omitted Runtime payloads, event params and approval params. A final recursive response sanitizer now also covers sensitive keys and common credential fragments introduced by future or upstream diagnostic sources.
+- The sanitizer preserves object shape, arrays, counts, status and bounded error context. It does not add a new UI state owner or hide operational failure state; sensitive values become `[REDACTED]` before JSON serialization.
+
+## Findings: Semantic Text Contrast and Cold-start Ownership (2026-08-08)
+
+- Installed Windows Codex `26.727.6591` uses semantic VS Code description and placeholder foreground tokens, plus a tertiary workbench text token, rather than treating all secondary information as a fixed low-contrast gray.
+- CX-Codex adapted that hierarchy with light and dark semantic text tokens. Real DOM probes first reproduced 2.82-3.13 contrast for light tertiary text and 3.09 for a dark thread time; after the scoped change, non-disabled helper text measured at least 4.54 in light mode and 5.68 in dark mode. Disabled and decorative controls remain intentionally quieter.
+- Startup ownership now stays with the explicit initial thread selection until it completes, before the route watcher may react. The non-core goal refresh is deferred, and a bounded method/timing-only RPC trace lets regression gates count `thread/read` without confusing unrelated RPC traffic.
+- A focused real-thread run recorded one early `thread/read`, a 162 ms cached first screen, and 100 ms foreground-recovery P95. Full light and dark regressions each passed 38 surfaces with 13 of 1602 messages mounted and 62/60 ms maximum heartbeat lag.
+- Independent Headless Playwright covered light/dark desktop and phone layouts with no horizontal overflow or non-favicon application errors. Screenshots are retained under `output/regression-7420/steady-goal-playwright-20260808`.
+
+## Findings: Accessibility Landmarks and Forced Colors (2026-08-08)
+
+- Installed Windows Codex `26.727.6591` renders its App Shell content in a real `main[data-app-shell-main-surface="default"]`. CX-Codex should likewise expose one named main region while preserving its existing skip-link and programmatic focus boundary.
+- The installed app's current CSS includes explicit forced-colors rules using system colors such as `CanvasText`, `ButtonText`, and `ButtonBorder`, removing shadows and restoring outlines where needed.
+- Absence of matching handwritten CSS is not by itself evidence of failure. Verify actual computed behavior: CX-Codex's Windows Chromium forced-colors emulation retained readable boundaries and a system keyboard outline without additional visual styling.
+- CX-Codex now names the main region “会话内容”, names both desktop and mobile conversation navigation “会话导航”, and localizes the desktop resize control as “调整侧栏宽度”. Independent Headless Playwright verifies those role/name contracts, skip-link focus transfer, forced-colors focus, no duplicate IDs, no horizontal overflow, and no browser errors.
+
+## Findings: Versioned Desktop CLI and Experimental Goal Capability (2026-08-10)
+
+- Installed Windows Codex `26.803.5235` relocates its bundled CLI to a content-hashed directory under `OpenAI\Codex\bin`; the unversioned sibling executable can remain older. CX-Codex should use its current newest-runnable discovery path unless the user deliberately supplies an explicit command, rather than retaining a stale automatically configured pin.
+- The installed desktop bundle initializes App Server with `capabilities.experimentalApi: true`. Current `thread/goal/*` methods depend on that capability, so CX-Codex now uses the same default while preserving an explicit false override for callers that need it.
+- Model catalog ownership remains independent from config synchronization. If `model/list` succeeds while `config/read` fails, the composer keeps the live catalog and only skips applying config-derived defaults.
+- A real 7420 run using the current versioned CLI returned success for `config/read`, `skills/list`, `model/list`, and `thread/goal/get`. Desktop and phone browser checks showed the current task without raw configuration/goal errors, stale busy state, browser errors, duplicate main landmarks, or horizontal overflow; independent Headless Playwright also matched all seven live models.
+
+## Findings: Canonical Conversation Order and Stable Project Ownership (2026-08-10)
+
+- The installed desktop bundle projects a thread by iterating `thread.turns` in server order and mapping each turn's `items` without reordering. A fresh authoritative CX-Codex projection must therefore restore that canonical sequence instead of preserving a stale live-array order when no genuinely missing item remains.
+- Desktop conversation ownership derives from the thread cwd, then session metadata or an explicit fallback. A partial active-thread row must not replace a previously resolved cwd/project identity with an empty cwd or `unknown-project`; live title, preview, and progress fields may still advance.
+- Parity verification for this behavior requires a real multi-turn browser conversation, a DOM role-order assertion after completion and refresh, a project-group assertion, and a loading-state check before the route detail converges.
+
+## Findings: Cross-process Native Queue Handoff (2026-08-28)
+
+- Installed Windows Codex `26.818.5229` keeps composer-adjacent queued messages under stable identity and exposes edit, delete, reorder, Steer, and paused-state ownership in its current webview bundle.
+- The matching App Server exposes the experimental `thread/queue/*` protocol. When another Codex process still owns a thread writer, CX-Codex must delegate the queued prompt by stable `clientUserMessageId` instead of repeatedly calling `turn/start`.
+- CX-Codex keeps its Runtime queue row only as a durable UI and recovery mirror while the native queue owns execution. Native presence suppresses local retries; disappearance means the owner has accepted the row. Delete and reorder are sent to the native owner before the local mirror changes.
+- Mixed native/local reorder is rejected because the displayed order must never promise an execution order the App Server cannot honor. Older App Server builds and unsupported collaboration modes retain an explicit local fallback rather than silently dropping the prompt.
+
+## Findings: Turn-bound Optimistic Delivery and Detached Failure Recovery (2026-08-28)
+
+- Installed Windows Codex `26.818.5229` keeps queued prompts in a composer-adjacent surface with stable identity, rather than rendering them as committed transcript messages. CX-Codex should preserve that separation for recovery-only failures whose original history anchor is outside the loaded page.
+- Repeated text is not message identity. CX-Codex now binds an optimistic send to the authoritative `turnId` returned by App Server and consumes signature-based acknowledgements at most once, so two intentional identical sends remain independently visible until each own turn is authoritative.
+- A failed optimistic message stays in the transcript when its original anchor is loaded. When that anchor is outside the current history window, the message moves to a compact, collapsed recovery tray above the composer with edit, retry, and delete actions.
+- This is a scoped CX-Codex recovery adaptation: it adds no queue protocol, Runtime owner, database migration, or automatic retry policy. Headless phone verification at `393 x 852` confirmed zero detached copies in the transcript, all three recovery actions, and no horizontal overflow.
+
+## Findings: Restorable Queue-to-Steer Transfer (2026-08-28)
+
+- Installed Windows Codex `26.818.5229` implements queued-message Steer as a transfer: it removes the row, attempts the active-turn handoff, and restores the same row at its original index when that handoff throws.
+- CX-Codex previously removed both the local row and durable Runtime request before attempting the send, then swallowed the error. The observed request therefore ended as `interrupted / Removed from message queue` without a `turnId`, while a separate failed optimistic bubble remained visible.
+- CX-Codex now mirrors the desktop transfer contract across both owners. A narrowly scoped restore endpoint revives only requests interrupted by queue removal, while the frontend removes the failed optimistic attempt and restores the original row and ordering.
+- Headless phone verification at `393 x 852` kept both queued rows in the same order, introduced no additional failed bubble, exposed explicit recovery feedback, and produced no browser errors.
+
+## Findings: Semantic Conversation Markdown and Quiet Reading Surface (2026-08-29)
+
+- Installed Windows Codex `26.818.5229` ships a conversation Markdown grammar with headings, blockquotes, lists, fenced code, tables and paragraphs; its local-conversation path uses the same Markdown presentation while the thread scroll owner exposes a compact return-to-bottom control.
+- CX-Codex previously rendered only fences, tables and images as blocks, and bypassed that parser entirely while streaming. This leaked literal `##` and `-` markers even though the message content itself was valid Markdown.
+- CX-Codex now uses its existing `markdown-it` dependency only for block structure with raw HTML disabled, then keeps existing Vue interpolation, local-file handling, URL handling, code, table and image owners. Streaming and settled assistant text share the same prepared-block cache.
+- The assistant reply is now a quiet document surface while user messages retain their distinct bubble. Headless checks at `1440 x 900` and `393 x 852` verified real H2/H3, unordered and ordered lists, blockquote and inline code DOM, transparent zero-border assistant content, preserved accessible link text and zero horizontal overflow.
+
+## Findings: Attachment-envelope Projection (2026-08-29)
+
+- Installed Windows Codex `26.818.5229` keeps the visible `user-message` item and `parentThreadAttachment` as separate renderer inputs in `local-conversation-turn-YQNBneD_.js`; attachment transport metadata is not presented as user-authored Markdown.
+- Codex hosts currently emit both `## My request:` and `## My request for Codex:` inside a `# Files mentioned by the user:` transport envelope. CX-Codex must recognize both at the thread-normalization boundary, retain the structured attachment cards, and expose only the request body.
+- The safe discriminator is the complete envelope shape: a leading files marker plus at least one parsed attachment and a later request marker. A standalone user-authored `## My request:` heading must remain untouched.
+- Semantic Markdown can amplify a projection leak into oversized headings, but it is not the data owner and must not be disabled to conceal transport metadata. Verify the normalized message shape before visual rendering.
+
+## Findings: Foreground Recovery Measurement Settlement (2026-08-29)
+
+- Installed Windows Codex `26.818.5229` keeps reconnecting as one compact composer-adjacent status while the existing conversation timeline continues to own task duration; connection recovery does not replace task state.
+- On Android, a successful foreground Runtime snapshot read may carry a lower event sequence than realtime state already applied by the WebView. That snapshot must remain ineligible to overwrite the newer execution state, but it is still the completion boundary for the foreground-recovery observation.
+- CX-Codex therefore settles the transient recovery feedback and timing before its monotonic snapshot-version guard, while keeping all Runtime state, message, queue, token and turn mutations behind that guard.
+- The corrected settlement boundary increments the local timing-payload version so invalid long-tail samples from the previous semantics cannot keep the seven-day P95 in a false recovery state; no message, task or configuration storage is migrated.

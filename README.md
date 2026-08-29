@@ -4,7 +4,7 @@
 [![Release build](https://github.com/Qjzn/CX-Codex/actions/workflows/release.yml/badge.svg)](https://github.com/Qjzn/CX-Codex/actions/workflows/release.yml)
 [![License](https://img.shields.io/github/license/Qjzn/CX-Codex)](./LICENSE)
 [![Android APK](https://img.shields.io/badge/Android-APK-3DDC84)](https://github.com/Qjzn/CX-Codex/releases/latest)
-[![Windows friendly](https://img.shields.io/badge/Windows-friendly-0078D4)](#快速安装)
+[![Windows friendly](https://img.shields.io/badge/Windows-friendly-0078D4)](#直接开始)
 
 Self-hosted OpenAI Codex Web UI and Android client bridge.
 
@@ -14,28 +14,26 @@ Self-hosted OpenAI Codex Web UI and Android client bridge.
 
 ![CX-Codex desktop workspace](./docs/screenshots/chat.png)
 
-## 快速入口
+## 直接开始
 
-- 最新 Release: [github.com/Qjzn/CX-Codex/releases/latest](https://github.com/Qjzn/CX-Codex/releases/latest)
-- 2.7.6 发布说明: [docs/release-notes-2.7.6.zh-CN.md](./docs/release-notes-2.7.6.zh-CN.md)
-- 可靠回滚版 2.7.4: [docs/release-notes-2.7.4.zh-CN.md](./docs/release-notes-2.7.4.zh-CN.md)
-- 完整更新日志: [docs/changelog.zh-CN.md](./docs/changelog.zh-CN.md)
-- 发行版保留策略: [docs/release-retention.zh-CN.md](./docs/release-retention.zh-CN.md)
-- Windows 一条命令安装: [快速安装](#快速安装)
-- Android 客户端说明: [docs/android-shell.zh-CN.md](./docs/android-shell.zh-CN.md)
-- 平台兼容与 Slash Command 支持: [docs/platform-and-commands.zh-CN.md](./docs/platform-and-commands.zh-CN.md)
-- Codex App Server 协议兼容: [docs/protocol-compatibility.zh-CN.md](./docs/protocol-compatibility.zh-CN.md)
-- 协议能力矩阵: [docs/app-server-protocol-matrix.zh-CN.md](./docs/app-server-protocol-matrix.zh-CN.md)
-- OpenAI 官方文档审查: [docs/openai-docs-review.zh-CN.md](./docs/openai-docs-review.zh-CN.md)
-- Release readiness 审计: [docs/release-readiness-audit.zh-CN.md](./docs/release-readiness-audit.zh-CN.md)
-- Candidate release 审查: [docs/candidate-release-review.zh-CN.md](./docs/candidate-release-review.zh-CN.md)
-- Candidate PR review pack: [docs/candidate-pr-review-pack.zh-CN.md](./docs/candidate-pr-review-pack.zh-CN.md)
-- Desktop parity UI 规划: [docs/desktop-parity-ui-plan.zh-CN.md](./docs/desktop-parity-ui-plan.zh-CN.md)
-- 前端 UI 整改方案: [docs/frontend-ui-remediation-plan.zh-CN.md](./docs/frontend-ui-remediation-plan.zh-CN.md)
-- 本地完整回归测试清单: [docs/local-regression-checklist.zh-CN.md](./docs/local-regression-checklist.zh-CN.md)
-- 远程访问方案: [docs/cloudflare-tunnel.zh-CN.md](./docs/cloudflare-tunnel.zh-CN.md)
-- 安全硬化清单: [docs/security-hardening.zh-CN.md](./docs/security-hardening.zh-CN.md)
-- 问题反馈前排查: [SUPPORT.md](./SUPPORT.md)
+在 Windows PowerShell 中运行：
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1 | iex
+```
+
+首次安装通常需要 2–5 分钟。脚本会复用或隔离安装合适的 Node.js、引导 Codex 登录、构建并启动服务；完成后自动打开只允许本机访问的管理中心。浏览器入口默认为 `http://127.0.0.1:7420`。
+
+如果脚本返回失败，不要反复重装或删除 `%USERPROFILE%\.codex`。保留错误码，先从“CX-Codex 管理中心”查看健康与日志；打不开管理中心时按 [SUPPORT.md](./SUPPORT.md) 的最小诊断清单排查。
+
+常用入口：
+
+- [最新 Release](https://github.com/Qjzn/CX-Codex/releases/latest)
+- [Android 客户端说明](./docs/android-shell.zh-CN.md)
+- [手机与远程访问](./docs/cloudflare-tunnel.zh-CN.md)
+- [完整更新日志](./docs/changelog.zh-CN.md)
+- [安全说明](./SECURITY.md)
+- [产品目标与完成门槛](./PRODUCT_GOAL.md)
 
 ## 为什么用它
 
@@ -93,16 +91,10 @@ Android 首次连接只需要自托管地址和访问密钥；图中的域名与
 
 ![GitHub trending module](./docs/screenshots/github-trending.png)
 
-## 快速安装
+## 安装过程与结果
 
 Windows bootstrap 会复用匹配的 Node.js `22.13.0+` 与 npm `9+`；当本机版本过旧或 Node/npm 错配时，会校验 Node.js 官方 SHA-256 后在安装目录内使用便携式 LTS 运行时，不切换系统全局 Node 版本。
 默认从 GitHub 最新正式 Release 下载，并校验配套 SHA-256；更新使用临时目录切换，失败时保留或恢复上一版本。
-
-Windows 一条命令：
-
-```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercontent.com/Qjzn/CX-Codex/main/scripts/bootstrap-windows.ps1 | iex
-```
 
 安装脚本会自动完成：
 
@@ -227,6 +219,8 @@ node dist-cli/index.js --host 0.0.0.0 --port 7420 --no-tunnel --password "change
 }
 ```
 
+`--no-password` 只允许与 `localhost`、`127.0.0.0/8` 或 `::1` 回环绑定组合，用于受控本机调试。绑定 `0.0.0.0`、局域网地址或其他主机名时必须提供密码，CLI 会在监听端口前拒绝无密码启动；回环地址后方如接入反向代理，代理层仍必须配置鉴权。
+
 运行库会保留有限的恢复事件。若长期运行后 `~/.cx-codex/runtime.sqlite` 明显膨胀，可先停止 CX-Codex，再执行：
 
 ```bash
@@ -249,9 +243,10 @@ cx-codex runtime-compact
 
 App Server 权限策略可选配置：
 
-- `CX_CODEX_APP_SERVER_APPROVAL_POLICY` 或 `CODEXUI_APP_SERVER_APPROVAL_POLICY`：可选 `untrusted`、`on-request`、`never`，默认保留 legacy `never`。
-- `CX_CODEX_APP_SERVER_SANDBOX_MODE` 或 `CODEXUI_APP_SERVER_SANDBOX_MODE`：可选 `read-only`、`workspace-write`、`danger-full-access`，默认保留 legacy `danger-full-access`。
-- 更保守的本机策略可设置为 `CX_CODEX_APP_SERVER_APPROVAL_POLICY=on-request` 和 `CX_CODEX_APP_SERVER_SANDBOX_MODE=workspace-write`；非法值会回退到默认 legacy 策略。
+- `CX_CODEX_APP_SERVER_APPROVAL_POLICY` 或 `CODEXUI_APP_SERVER_APPROVAL_POLICY`：可选 `untrusted`、`on-request`、`never`，默认 `on-request`。
+- `CX_CODEX_APP_SERVER_SANDBOX_MODE` 或 `CODEXUI_APP_SERVER_SANDBOX_MODE`：可选 `read-only`、`workspace-write`、`danger-full-access`，默认 `workspace-write`。
+- 默认组合只允许在当前工作区写入，越界操作由 Codex 请求确认；非法值会回退到这一安全默认值。
+- 仅在受控本机环境明确需要时，才同时设置 `CX_CODEX_APP_SERVER_APPROVAL_POLICY=never` 和 `CX_CODEX_APP_SERVER_SANDBOX_MODE=danger-full-access`。该组合不会请求升级审批，并可修改工作区外文件。
 
 ## 远程访问
 
@@ -279,7 +274,7 @@ Windows 安全一键入口（保留 `RemoteQuick` 参数名以兼容旧版本；
 - 移动端恢复补同步
 - 线程列表、会话内容、执行状态和停止状态展示
 - 消息收藏、置顶、复制和跳转
-- 本地文件链接、图片 / Markdown / PDF / DOCX 预览
+- 本地文件链接、图片 / Markdown / PDF / DOCX 预览；服务端只允许读取、浏览和编辑已登记工作区根目录内的真实路径
 - GitHub 热门项目模块
 - MCP / 工具权限状态、审批边界和只读诊断
 - 模型、推理档位、已连接插件与一次性计划 / 本轮要求操作栏
@@ -297,6 +292,7 @@ Windows 安全一键入口（保留 `RemoteQuick` 参数名以兼容旧版本；
 
 ## 文档
 
+- 稳态产品化目标与完成门槛: [PRODUCT_GOAL.md](./PRODUCT_GOAL.md)
 - 中文兼容页: [README.zh-CN.md](./README.zh-CN.md)
 - 更新日志: [docs/changelog.zh-CN.md](./docs/changelog.zh-CN.md)
 - 发版说明: [RELEASE.md](./RELEASE.md)
@@ -304,8 +300,8 @@ Windows 安全一键入口（保留 `RemoteQuick` 参数名以兼容旧版本；
 - App Server 协议能力矩阵: [docs/app-server-protocol-matrix.zh-CN.md](./docs/app-server-protocol-matrix.zh-CN.md)
 - OpenAI 官方文档审查: [docs/openai-docs-review.zh-CN.md](./docs/openai-docs-review.zh-CN.md)
 - Release readiness 审计: [docs/release-readiness-audit.zh-CN.md](./docs/release-readiness-audit.zh-CN.md)
-- Candidate release 审查: [docs/candidate-release-review.zh-CN.md](./docs/candidate-release-review.zh-CN.md)
-- Candidate PR review pack: [docs/candidate-pr-review-pack.zh-CN.md](./docs/candidate-pr-review-pack.zh-CN.md)
+- 历史 Candidate release 审查（2026-07-05）: [docs/candidate-release-review.zh-CN.md](./docs/candidate-release-review.zh-CN.md)
+- 历史 Candidate PR review pack（2026-07-05）: [docs/candidate-pr-review-pack.zh-CN.md](./docs/candidate-pr-review-pack.zh-CN.md)
 - Desktop parity UI 规划: [docs/desktop-parity-ui-plan.zh-CN.md](./docs/desktop-parity-ui-plan.zh-CN.md)
 - 前端 UI 整改方案: [docs/frontend-ui-remediation-plan.zh-CN.md](./docs/frontend-ui-remediation-plan.zh-CN.md)
 - 本地完整回归测试清单: [docs/local-regression-checklist.zh-CN.md](./docs/local-regression-checklist.zh-CN.md)

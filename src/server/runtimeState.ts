@@ -1,4 +1,8 @@
 import type { PendingServerRequest } from './pendingServerRequests.js'
+import {
+  isRuntimeThreadStatusTerminal,
+  readRuntimeThreadStatusLifecycle,
+} from '../runtimeThreadStatus.js'
 
 export type RuntimeExecutionState =
   | 'idle'
@@ -298,6 +302,47 @@ export class RuntimeStateStore {
     const turnId = this.readers.readTurnIdFromPayload(event.params)
     const itemId = this.readers.readItemIdFromPayload(event.params)
 
+    if (method === 'thread/status/changed') {
+      const lifecycle = readRuntimeThreadStatusLifecycle(event.params)
+      const state = this.getMutable(threadId)
+      if (lifecycle === 'active' || lifecycle === 'waiting_permission') {
+        const startingNewActivity = !isRuntimeActiveState(state.executionState)
+        this.touch(threadId, {
+          executionState: lifecycle === 'waiting_permission' ? 'waiting_permission' : 'running',
+          activeTurnId: startingNewActivity ? '' : state.activeTurnId,
+          activeItemId: startingNewActivity ? '' : state.activeItemId,
+          stopRequested: false,
+          degradedReason: null,
+          lastError: null,
+          lastStartedAtIso: startingNewActivity ? event.atIso : state.lastStartedAtIso,
+          latestReply: startingNewActivity ? '' : state.latestReply,
+          latestReplyItemId: startingNewActivity ? '' : state.latestReplyItemId,
+          latestReplyEventSeq: startingNewActivity ? 0 : state.latestReplyEventSeq,
+        }, 'events', event)
+      } else if (isRuntimeThreadStatusTerminal(lifecycle)) {
+        // App Server can replay the thread's previous idle status after turn/start
+        // has been requested but before the new turn/started event arrives. Settling
+        // here would release the request lease while the turn is actually starting.
+        if (state.executionState === 'starting' && !state.activeTurnId) return
+        const wasActive = isRuntimeActiveState(state.executionState) || state.executionState === 'completed_pending_sync'
+        const completedState = state.executionState === 'failed'
+          || state.executionState === 'interrupted'
+          || state.executionState === 'stopped'
+          || state.executionState === 'idle'
+          ? state.executionState
+          : 'completed_pending_sync'
+        this.touch(threadId, {
+          executionState: lifecycle === 'completed' ? completedState : lifecycle,
+          activeTurnId: '',
+          activeItemId: '',
+          stopRequested: false,
+          lastCompletedAtIso: wasActive ? event.atIso : state.lastCompletedAtIso,
+          degradedReason: null,
+        }, 'events', event)
+      }
+      return
+    }
+
     if (method === 'item/agentMessage/delta') {
       const delta = readStringProperty(event.params, 'delta')
       if (delta) {
@@ -478,7 +523,11 @@ export class RuntimeStateStore {
       inProgress: isRuntimeActiveState(executionState),
       activeTurnId: state.activeTurnId,
       activeItemId: state.activeItemId,
-      canStop: isRuntimeActiveState(executionState) && executionState !== 'start_uncertain' && executionState !== 'stop_uncertain' && !state.stopRequested,
+      canStop: isRuntimeActiveState(executionState)
+        && executionState !== 'queued'
+        && executionState !== 'start_uncertain'
+        && executionState !== 'stop_uncertain'
+        && !state.stopRequested,
       stopRequested: state.stopRequested,
       updatedAtIso: state.updatedAtIso,
       lastEventSeq: state.lastEventSeq,

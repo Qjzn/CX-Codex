@@ -350,6 +350,7 @@ if (-not $SkipPackageSmoke) {
 
   Assert-ZipContains -ZipPath $zipPath -RequiredEntries @(
     "README.md",
+    "PRODUCT_GOAL.md",
     "RELEASE.md",
     "release-capabilities.json",
     "CODE_OF_CONDUCT.md",
@@ -376,6 +377,8 @@ if (-not $SkipPackageSmoke) {
     "docs\roadmap.zh-CN.md",
     "docs\security-hardening.zh-CN.md",
     "scripts\package-release.ps1",
+    "scripts\run-hidden-command.vbs",
+    "scripts\run-hidden-powershell.vbs",
     "scripts\start-detached-server.mjs",
     "scripts\uninstall-windows.ps1",
     "scripts\verify-windows-productization.ps1",
@@ -447,7 +450,9 @@ if (-not $SkipPackageSmoke) {
     "LICENSE",
     "dist\index.html",
     "dist-cli\index.js",
-    "docs\app-server-schema-audit-summary.json"
+    "docs\app-server-schema-audit-summary.json",
+    "scripts\run-powershell-script.mjs",
+    "scripts\manage-windows-service.ps1"
   ) -ForbiddenEntries @(
     "src\server\codexAppServerBridge.ts",
     "scripts\verify-release.ps1",

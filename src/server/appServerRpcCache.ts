@@ -66,6 +66,25 @@ function stableJsonStringify(value: unknown): string {
   return JSON.stringify(toStableJsonValue(value))
 }
 
+function normalizeThreadListResult(value: unknown): unknown {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return value
+  const record = value as Record<string, unknown>
+  if (!Array.isArray(record.data)) return value
+
+  const seenThreadIds = new Set<string>()
+  const data = record.data.filter((row) => {
+    if (row === null || typeof row !== 'object' || Array.isArray(row)) return true
+    const rawThreadId = (row as Record<string, unknown>).id
+    const threadId = typeof rawThreadId === 'string' ? rawThreadId.trim() : ''
+    if (!threadId) return true
+    if (seenThreadIds.has(threadId)) return false
+    seenThreadIds.add(threadId)
+    return true
+  })
+  if (data.length === record.data.length) return value
+  return { ...record, data }
+}
+
 function toStableJsonValue(value: unknown): JsonValue {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value
   if (typeof value === 'number') return Number.isFinite(value) ? value : null
@@ -99,7 +118,7 @@ export function shouldInvalidateThreadListCacheForRpc(method: string): boolean {
 
 export function shouldInvalidateThreadListCacheForNotification(method: string): boolean {
   if (isCxSessionFilesChangedMethod(method)) return true
-  if (method === 'thread/name/updated') return true
+  if (method === 'thread/name/updated' || method === 'thread/status/changed') return true
   if (!method.startsWith('thread/')) return false
   return (
     method.endsWith('/created') ||
@@ -137,6 +156,7 @@ export function shouldInvalidateThreadReadCacheForNotification(method: string, p
   if (
     method === 'thread/goal/updated' ||
     method === 'thread/goal/cleared' ||
+    method === 'thread/status/changed' ||
     method === 'thread/compacted' ||
     method === 'turn/started' ||
     method === 'turn/start' ||
@@ -213,13 +233,14 @@ export class AppServerRpcCache {
     const staleTtlMs = shareableKey.includes('"archived":true')
       ? APP_SERVER_ARCHIVED_THREAD_LIST_STALE_CACHE_TTL_MS
       : APP_SERVER_THREAD_LIST_STALE_CACHE_TTL_MS
-    return readCachedRpc(
+    const cached = readCachedRpc(
       this.cachedThreadListRpcByKey,
       shareableKey,
       APP_SERVER_THREAD_LIST_FRESH_CACHE_TTL_MS,
       staleTtlMs,
       allowStale,
     )
+    return cached ? { ...cached, value: normalizeThreadListResult(cached.value) } : null
   }
 
   writeThreadList(
@@ -228,7 +249,7 @@ export class AppServerRpcCache {
     generation = this.threadListGeneration,
   ): void {
     if (generation !== this.threadListGeneration) return
-    writeCachedRpc(this.cachedThreadListRpcByKey, shareableKey, value)
+    writeCachedRpc(this.cachedThreadListRpcByKey, shareableKey, normalizeThreadListResult(value))
     this.persistThreadListCache()
   }
 
@@ -257,10 +278,9 @@ export class AppServerRpcCache {
     if (cached) {
       if (cached.stale) {
         const existingRefresh = method === 'thread/list' ? this.getSharedRead(shareableKey) : null
-        if (existingRefresh) {
-          return existingRefresh
+        if (!existingRefresh) {
+          this.refreshShareableCacheInBackground(method, shareableKey, params, enqueueRpc)
         }
-        this.refreshShareableCacheInBackground(method, shareableKey, params, enqueueRpc)
       }
       return Promise.resolve(cached.value)
     }
@@ -274,8 +294,9 @@ export class AppServerRpcCache {
     let request: Promise<unknown>
     request = enqueueRpc(method, params)
       .then((value) => {
-        this.writeShareableCache(method, shareableKey, value, threadListGeneration)
-        return value
+        const normalizedValue = method === 'thread/list' ? normalizeThreadListResult(value) : value
+        this.writeShareableCache(method, shareableKey, normalizedValue, threadListGeneration)
+        return normalizedValue
       })
       .finally(() => {
         this.deleteSharedRead(shareableKey, request)
@@ -303,8 +324,9 @@ export class AppServerRpcCache {
     let request: Promise<unknown>
     request = enqueueRpc('thread/list', params)
       .then((value) => {
-        this.writeThreadList(shareableKey, value, generation)
-        return value
+        const normalizedValue = normalizeThreadListResult(value)
+        this.writeThreadList(shareableKey, normalizedValue, generation)
+        return normalizedValue
       })
       .catch((error) => {
         logBridgeError('Background thread/list refresh failed', error)
@@ -406,7 +428,7 @@ export class AppServerRpcCache {
         if (!entry || typeof entry.key !== 'string') continue
         if (typeof entry.cachedAtMs !== 'number' || !Number.isFinite(entry.cachedAtMs)) continue
         this.cachedThreadListRpcByKey.set(entry.key, {
-          value: entry.value,
+          value: normalizeThreadListResult(entry.value),
           cachedAtMs: entry.cachedAtMs,
           refreshStartedAtMs: 0,
           invalidated: entry.invalidated === true,

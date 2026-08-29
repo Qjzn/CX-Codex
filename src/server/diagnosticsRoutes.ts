@@ -10,6 +10,7 @@ import type {
 import {
   createServerRequestDiagnosticsSnapshot,
 } from './serverRequestDiagnostics.js'
+import { redactDiagnosticsValue } from './diagnosticsRedaction.js'
 
 const HEALTH_DIAGNOSTICS_TIMEOUT_MS = 1_500
 const FULL_DIAGNOSTICS_TIMEOUT_MS = 5_000
@@ -104,7 +105,7 @@ export async function handleDiagnosticsRoutes(
   if (url.pathname === '/codex-api/health') {
     setJson(res, 200, {
       status: 'ok',
-      data: {
+      data: redactDiagnosticsValue({
         appServer: dependencies.getAppServerStatus(),
         notificationDiagnostics: dependencies.getNotificationDiagnostics(),
         statusDiagnostics: dependencies.getStatusDiagnostics(),
@@ -118,7 +119,7 @@ export async function handleDiagnosticsRoutes(
           : {}),
         runtimeStore: runtimeHealth,
         timestamp,
-      },
+      }),
     })
     return true
   }
@@ -147,7 +148,7 @@ export async function handleDiagnosticsRoutes(
 
   setJson(res, 200, {
     status: 'ok',
-    data: {
+    data: redactDiagnosticsValue({
       appServer: dependencies.getAppServerStatus(),
       notificationDiagnostics: dependencies.getNotificationDiagnostics(),
       statusDiagnostics: dependencies.getStatusDiagnostics(),
@@ -166,7 +167,7 @@ export async function handleDiagnosticsRoutes(
       },
       pendingServerRequests: serverRequestDiagnostics.pendingRequests,
       timestamp,
-    },
+    }),
   })
   return true
 }

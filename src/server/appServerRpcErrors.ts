@@ -50,6 +50,20 @@ export function isRpcTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AppServerRpcTimeoutError'
 }
 
+export function createRpcTransportError(message: string): Error {
+  const error = new Error(message)
+  error.name = 'AppServerRpcTransportError'
+  return error
+}
+
+export function isRpcTransportError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AppServerRpcTransportError'
+}
+
+export function isRpcOutcomeUncertainError(error: unknown): boolean {
+  return isRpcTimeoutError(error) || isRpcTransportError(error)
+}
+
 export function isInterruptSettledError(error: unknown): boolean {
   if (isRpcTimeoutError(error)) return false
   const message = getErrorMessage(error, '').toLowerCase()

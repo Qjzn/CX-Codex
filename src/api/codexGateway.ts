@@ -19,6 +19,7 @@ import type {
 } from './appServerDtos'
 import { isAbortLikeError, normalizeCodexApiError } from './codexErrors'
 import {
+  applyActiveTurnIdToMessages,
   readActiveTurnIdFromResponse,
   normalizeThreadGroupsV2,
   normalizeThreadMessagesV2,
@@ -51,7 +52,10 @@ type CurrentModelConfig = {
 }
 
 type RpcCallOptions = { signal?: AbortSignal }
-type ThreadRuntimeSnapshotOptions = RpcCallOptions & { preferCachedMessages?: boolean }
+type ThreadRuntimeSnapshotOptions = RpcCallOptions & {
+  preferCachedMessages?: boolean
+  cachedSnapshotMaxAgeMs?: number
+}
 type ThreadListOptions = RpcCallOptions & {
   maxPages?: number
 }
@@ -141,10 +145,16 @@ function isRuntimeSnapshotCacheable(snapshot: ThreadRuntimeSnapshot): boolean {
   )
 }
 
-function readCachedThreadRuntimeSnapshot(threadId: string): ThreadRuntimeSnapshot | null {
+function readCachedThreadRuntimeSnapshot(
+  threadId: string,
+  maxAgeMs = THREAD_RUNTIME_SNAPSHOT_CACHE_TTL_MS,
+): ThreadRuntimeSnapshot | null {
   const cached = threadRuntimeSnapshotCacheByThreadId.get(threadId)
   if (!cached) return null
-  if (Date.now() - cached.cachedAtMs > THREAD_RUNTIME_SNAPSHOT_CACHE_TTL_MS) {
+  const effectiveMaxAgeMs = Number.isFinite(maxAgeMs)
+    ? Math.max(0, maxAgeMs)
+    : THREAD_RUNTIME_SNAPSHOT_CACHE_TTL_MS
+  if (Date.now() - cached.cachedAtMs > effectiveMaxAgeMs) {
     threadRuntimeSnapshotCacheByThreadId.delete(threadId)
     return null
   }
@@ -715,7 +725,10 @@ export async function getThreadRuntimeSnapshot(
   const normalizedThreadId = threadId.trim()
   throwIfSignalAborted(options.signal)
 
-  const cachedSnapshot = readCachedThreadRuntimeSnapshot(normalizedThreadId)
+  const cachedSnapshot = readCachedThreadRuntimeSnapshot(
+    normalizedThreadId,
+    options.cachedSnapshotMaxAgeMs,
+  )
   if (cachedSnapshot) {
     return cachedSnapshot
   }
@@ -817,16 +830,23 @@ async function fetchThreadRuntimeSnapshot(
     typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
   )
 
+  const inProgress =
+    data.inProgress === true ||
+    (threadRead ? readThreadInProgressFromResponse(threadRead) : false)
+  const activeTurnId =
+    typeof data.activeTurnId === 'string' && data.activeTurnId.trim().length > 0
+      ? data.activeTurnId.trim()
+      : (threadRead ? readActiveTurnIdFromResponse(threadRead) : '')
+  const normalizedMessages = threadRead ? normalizeThreadMessagesV2(threadRead) : []
   const snapshot: ThreadRuntimeSnapshot = {
-    messages: threadRead ? normalizeThreadMessagesV2(threadRead) : [],
+    messages: applyActiveTurnIdToMessages(
+      normalizedMessages,
+      activeTurnId,
+      inProgress && messageState === 'cached',
+    ),
     executionState,
-    inProgress:
-      data.inProgress === true ||
-      (threadRead ? readThreadInProgressFromResponse(threadRead) : false),
-    activeTurnId:
-      typeof data.activeTurnId === 'string' && data.activeTurnId.trim().length > 0
-        ? data.activeTurnId.trim()
-        : (threadRead ? readActiveTurnIdFromResponse(threadRead) : ''),
+    inProgress,
+    activeTurnId,
     activeItemId,
     canStop: data.canStop === true,
     stopRequested: data.stopRequested === true,
@@ -1331,6 +1351,7 @@ export async function startRuntimeThreadTurn(args: {
   imageUrls?: string[]
   model?: string
   effort?: ReasoningEffort
+  speedMode?: SpeedMode
   skills?: Array<{ name: string; path: string }>
   fileAttachments?: FileAttachmentParam[]
   collaborationMode?: CollaborationMode
@@ -1346,6 +1367,17 @@ export async function startRuntimeThreadTurn(args: {
     collaborationMode: args.collaborationMode ?? 'execute',
     turnOptions: args.turnOptions,
     clientMessageId: args.clientMessageId ?? '',
+    queueMetadata: {
+      text: args.text,
+      imageUrls: args.imageUrls ?? [],
+      skills: args.skills ?? [],
+      fileAttachments,
+      modelId: args.model?.trim() ?? '',
+      reasoningEffort: args.effort ?? '',
+      speedMode: args.speedMode ?? 'standard',
+      collaborationMode: args.collaborationMode ?? 'execute',
+      turnOptions: args.turnOptions,
+    },
   }
   if (args.model?.trim()) body.model = args.model.trim()
   if (args.effort?.trim()) body.effort = args.effort.trim()

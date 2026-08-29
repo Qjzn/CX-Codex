@@ -2,6 +2,7 @@ import type {
   CollaborationMode,
   ComposerTurnOptions,
   ReasoningEffort,
+  SpeedMode,
 } from '../types/codex'
 import { normalizeComposerTurnOptions } from './composerTurnOptions'
 import {
@@ -10,6 +11,8 @@ import {
 } from './messageOutboxMerge'
 
 export const MESSAGE_OUTBOX_STORAGE_KEY = 'codex-web-local.message-outbox.v1'
+const MESSAGE_OUTBOX_ENTRY_JOURNAL_PREFIX = `${MESSAGE_OUTBOX_STORAGE_KEY}.entry.`
+const MESSAGE_OUTBOX_REMOVAL_JOURNAL_PREFIX = `${MESSAGE_OUTBOX_STORAGE_KEY}.removal.`
 
 const MESSAGE_OUTBOX_VERSION = 1
 const MESSAGE_OUTBOX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
@@ -33,6 +36,7 @@ export type MessageOutboxEntry = {
   fileAttachments: MessageOutboxFileAttachment[]
   modelId: string
   reasoningEffort: ReasoningEffort | ''
+  speedMode: SpeedMode
   collaborationMode: CollaborationMode
   turnOptions?: ComposerTurnOptions
   baselineMatchCount?: number
@@ -53,6 +57,8 @@ export type MessageOutboxState = {
   entries: MessageOutboxEntry[]
   removals: MessageOutboxRemoval[]
 }
+
+type MessageOutboxStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>
 
 function emptyMessageOutboxState(): MessageOutboxState {
   return { entries: [], removals: [] }
@@ -106,6 +112,7 @@ function normalizeMessageOutboxEntry(value: unknown, nowMs: number): MessageOutb
     fileAttachments,
     modelId: typeof row.modelId === 'string' ? row.modelId.trim() : '',
     reasoningEffort,
+    speedMode: row.speedMode === 'fast' ? 'fast' : 'standard',
     collaborationMode: row.collaborationMode === 'plan' ? 'plan' : 'execute',
     turnOptions: normalizeComposerTurnOptions(row.turnOptions),
     baselineMatchCount: typeof row.baselineMatchCount === 'number' && Number.isFinite(row.baselineMatchCount)
@@ -190,10 +197,78 @@ export function serializeMessageOutboxState(
   return JSON.stringify(payload)
 }
 
+export function isMessageOutboxStorageKey(key: string | null): boolean {
+  return key === MESSAGE_OUTBOX_STORAGE_KEY
+    || key?.startsWith(MESSAGE_OUTBOX_ENTRY_JOURNAL_PREFIX) === true
+    || key?.startsWith(MESSAGE_OUTBOX_REMOVAL_JOURNAL_PREFIX) === true
+}
+
+export function loadMessageOutboxStateFromStorage(
+  storage: MessageOutboxStorage,
+  nowMs = Date.now(),
+): MessageOutboxState {
+  const snapshot = parseMessageOutboxState(storage.getItem(MESSAGE_OUTBOX_STORAGE_KEY), nowMs)
+  const journalEntries: MessageOutboxEntry[] = []
+  const journalRemovals: MessageOutboxRemoval[] = []
+
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index)
+    if (!key || key === MESSAGE_OUTBOX_STORAGE_KEY) continue
+    const raw = storage.getItem(key)
+    if (!raw) continue
+    try {
+      const value = JSON.parse(raw) as unknown
+      if (key.startsWith(MESSAGE_OUTBOX_ENTRY_JOURNAL_PREFIX)) {
+        const entry = normalizeMessageOutboxEntry(value, nowMs)
+        if (entry) journalEntries.push(entry)
+      } else if (key.startsWith(MESSAGE_OUTBOX_REMOVAL_JOURNAL_PREFIX)) {
+        const removal = normalizeMessageOutboxRemoval(value, nowMs)
+        if (removal) journalRemovals.push(removal)
+      }
+    } catch {
+      // Invalid journal rows are ignored and pruned by the next successful save.
+    }
+  }
+
+  const merged = mergeMessageOutboxState(
+    snapshot.entries,
+    journalEntries,
+    snapshot.removals,
+    journalRemovals,
+  )
+  const bounded = serializeMessageOutboxState(merged.entries, merged.removals, nowMs)
+  return parseMessageOutboxState(bounded, nowMs)
+}
+
+export function saveMessageOutboxStateToStorage(
+  storage: MessageOutboxStorage,
+  entries: MessageOutboxEntry[],
+  removals: MessageOutboxRemoval[],
+  nowMs = Date.now(),
+): void {
+  pruneMessageOutboxJournals(storage, nowMs)
+  for (const entry of entries) {
+    storage.setItem(createMessageOutboxJournalKey(MESSAGE_OUTBOX_ENTRY_JOURNAL_PREFIX, entry.clientMessageId, entry.updatedAtMs), JSON.stringify(entry))
+  }
+  for (const removal of removals) {
+    storage.setItem(createMessageOutboxJournalKey(MESSAGE_OUTBOX_REMOVAL_JOURNAL_PREFIX, removal.clientMessageId, removal.removedAtMs), JSON.stringify(removal))
+  }
+
+  const persisted = loadMessageOutboxStateFromStorage(storage, nowMs)
+  const merged = mergeMessageOutboxState(entries, persisted.entries, removals, persisted.removals)
+  const serialized = serializeMessageOutboxState(merged.entries, merged.removals, nowMs)
+  if (serialized === null) {
+    storage.removeItem(MESSAGE_OUTBOX_STORAGE_KEY)
+  } else {
+    storage.setItem(MESSAGE_OUTBOX_STORAGE_KEY, serialized)
+  }
+  pruneMessageOutboxJournals(storage, nowMs)
+}
+
 export function loadMessageOutboxState(): MessageOutboxState {
   if (typeof window === 'undefined') return emptyMessageOutboxState()
   try {
-    return parseMessageOutboxState(window.localStorage.getItem(MESSAGE_OUTBOX_STORAGE_KEY))
+    return loadMessageOutboxStateFromStorage(window.localStorage)
   } catch {
     return emptyMessageOutboxState()
   }
@@ -205,13 +280,69 @@ export function saveMessageOutboxState(
 ): void {
   if (typeof window === 'undefined') return
   try {
-    const serialized = serializeMessageOutboxState(entries, removals)
-    if (serialized === null) {
-      window.localStorage.removeItem(MESSAGE_OUTBOX_STORAGE_KEY)
-      return
-    }
-    window.localStorage.setItem(MESSAGE_OUTBOX_STORAGE_KEY, serialized)
+    saveMessageOutboxStateToStorage(window.localStorage, entries, removals)
   } catch {
     // Sending still proceeds when private mode or storage quota makes persistence unavailable.
   }
+}
+
+function createMessageOutboxJournalKey(prefix: string, clientMessageId: string, atMs: number): string {
+  return `${prefix}${encodeURIComponent(clientMessageId)}.${Math.max(0, Math.trunc(atMs))}`
+}
+
+function pruneMessageOutboxJournals(storage: MessageOutboxStorage, nowMs: number): void {
+  const keysToRemove = new Set<string>()
+  const newestEntriesByClientId = new Map<string, { key: string; atMs: number }>()
+  const newestRemovalsByClientId = new Map<string, { key: string; atMs: number }>()
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index)
+    if (!key || (!key.startsWith(MESSAGE_OUTBOX_ENTRY_JOURNAL_PREFIX) && !key.startsWith(MESSAGE_OUTBOX_REMOVAL_JOURNAL_PREFIX))) {
+      continue
+    }
+    const raw = storage.getItem(key)
+    if (!raw) {
+      keysToRemove.add(key)
+      continue
+    }
+    try {
+      const value = JSON.parse(raw) as unknown
+      const isEntry = key.startsWith(MESSAGE_OUTBOX_ENTRY_JOURNAL_PREFIX)
+      const normalized = isEntry
+        ? (() => {
+            const entry = normalizeMessageOutboxEntry(value, nowMs)
+            return entry ? { clientMessageId: entry.clientMessageId, atMs: entry.updatedAtMs } : null
+          })()
+        : (() => {
+            const removal = normalizeMessageOutboxRemoval(value, nowMs)
+            return removal ? { clientMessageId: removal.clientMessageId, atMs: removal.removedAtMs } : null
+          })()
+      if (!normalized) {
+        keysToRemove.add(key)
+        continue
+      }
+      const newestByClientId = isEntry ? newestEntriesByClientId : newestRemovalsByClientId
+      const current = newestByClientId.get(normalized.clientMessageId)
+      if (!current || normalized.atMs >= current.atMs) {
+        if (current) keysToRemove.add(current.key)
+        newestByClientId.set(normalized.clientMessageId, { key, atMs: normalized.atMs })
+      } else {
+        keysToRemove.add(key)
+      }
+    } catch {
+      keysToRemove.add(key)
+    }
+  }
+
+  markJournalRowsOverLimit(newestEntriesByClientId, MESSAGE_OUTBOX_MAX_ENTRIES, keysToRemove)
+  markJournalRowsOverLimit(newestRemovalsByClientId, MESSAGE_OUTBOX_MAX_REMOVALS, keysToRemove)
+  for (const key of keysToRemove) storage.removeItem(key)
+}
+
+function markJournalRowsOverLimit(
+  rowsByClientId: ReadonlyMap<string, { key: string; atMs: number }>,
+  limit: number,
+  keysToRemove: Set<string>,
+): void {
+  const rows = [...rowsByClientId.values()].sort((left, right) => right.atMs - left.atMs)
+  for (const row of rows.slice(limit)) keysToRemove.add(row.key)
 }

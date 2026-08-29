@@ -1,6 +1,380 @@
 # Tests
 
+## 正式标签前的签名候选制品（2026-08-29）
+
+### Expected behavior
+
+1. `Release` workflow 的手动运行只接受当前 `origin/main` 精确提交，不能从 `beta`、功能分支或过期 main 提交读取正式 Android 签名 secrets。
+2. 手动候选与正式标签共用 release verification、打包、Android release 构建、固定证书指纹和 checksum 门禁，避免两套签名流程漂移。
+3. 手动候选只上传保留 3 天的 `signed-release-candidate-*` Actions artifact，不创建标签或 GitHub Release；只有稳定标签 push 才执行发布步骤。
+
+### Reusable verification
+
+- `npm.cmd run verify:governance`：验证 workflow 保留稳定标签/main 边界，并包含候选 main 精确提交、签名制品上传和正式发布条件。
+- 解析 `.github/workflows/release.yml`，确认 `workflow_dispatch` 与 tag push 同时存在，候选上传和 Release 发布条件互斥。
+- 合并到 `main` 后用 `gh workflow run release.yml --ref main`，等待成功并下载 `signed-release-candidate-*`；在目标真机验证后才创建 `vX.Y.Z`。
+
+### Evidence and rollback
+
+- 本地治理和 YAML 结构检查用于证明工作流契约；正式签名、固定证书指纹、Actions artifact 和真机覆盖安装只能由合并后的手动运行证明。
+- 回滚时删除 `workflow_dispatch`、main 精确提交检查和候选 artifact 上传步骤，并恢复本节与 `RELEASE.md`；不得放宽稳定标签必须来自 main 或正式签名 secrets 必须齐全的边界。
+
+## Android 任务代际、后台恢复与完成通知（2026-08-29）
+
+### Expected behavior
+
+1. 新任务提交后，原生监控保存 `/runtime/request` 返回的精确 `turnId`；请求记录的 `completed` 仅代表调度完成，不能直接把 turn 标记完成。
+2. 同一代原生任务仍为活动态时，前端瞬时终态不能覆盖它；原生只在 `/runtime/snapshots` 显示同代活动 turn，或最新 `lastCompletedAtIso >= lastStartedAtIso` 后接受权威终态。
+3. 锁屏、强制 Doze、网络切换和应用进程回收后，活动任务继续收敛且不会重复发送、提前完成或丢失监控。
+4. 后台终态只投递一次完成通知；点击完成项打开精确会话并自动清除，继续轮询不得重发同一终态。
+
+### Reusable verification
+
+- `cd android; .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`：验证代际、终态、原生活动态保留和 Android 构建。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-android-background.ps1 -Mode <Observe|ScreenOff|Doze|NetworkSwitch> ...`：在已连接真机上记录服务、Runtime、网络、终态、通知和恢复诊断；按场景使用 `-RequireActiveTask`、`-RequireProcessRecovery` 或 `-RequireTerminalNotification`。
+- `node scripts/inspect-android-quiet-workbench.mjs --submit <prompt> --output <evidence.json>`：通过已转发的 WebView 提交全新任务并记录目标路由；通知点击后再次采集精确 `#/thread/:id`。
+
+### Evidence and rollback
+
+- OPPO PKH110 / Android 16 调试包通过熄屏终态、强制 Doze、10 轮移动数据切换和进程回收；证据分别位于 `output/quiet-workbench/android-background-20260829/{screenoff-terminal-fixed,doze-locked-terminal,network-switch-10-authoritative,process-recovery-authoritative}/`。
+- 新任务在先前会误结算的 `turn/started` 窗口后仍保持 `running`，保存的 `requestTurnId` 与服务端 `activeTurnId` 一致；服务端真实完成时间晚于开始时间后才结算。
+- 后台完成的 `terminalToNotificationMs=11`，通知尝试和投递各增加 1；点击后回到目标会话，活动完成通知为 0，15 秒后投递计数仍未增长。证据位于 `output/quiet-workbench/android-background-20260829/notification-click-observe/`。
+- OPPO 最近任务划除会终止整个包并取消 Alarm；没有 OEM 后台自启动授权或 FCM 时仍是外部策略阻塞。410×502 Android 9 手表和最终签名 Release APK 未被本节证明。
+- 回滚只恢复 `TaskPetOverlayService`、`TaskPetRuntimePolicy`、相应偏好键、真机验证脚本与前端活动任务补充来源；不得清理用户会话、Runtime Store、通知权限或移动端认证。
+
+## Quiet Workbench UX-70 候选收口（2026-08-29）
+
+### Expected behavior
+
+1. 活动 turn 过程保持展开，显示一个稳定的任务计时、最新活动和当前命令/输出；非活动详情保持紧凑并按需打开，完成 turn 的中间过程只保留一个“执行过程”摘要。
+2. 1440×900 桌面、884×1104 折叠屏、768×1024 compact、393×852 手机竖屏和 852×393 手机横屏保留同一信息层级，compact/phone Sidebar 使用带遮罩和焦点所有权的覆盖层。
+3. 长会话虚拟化、线程切换滚动、前台恢复的贴底/阅读锚点/用户主动滚动三种意图、队列失败恢复、图片和 Composer 输入契约不得因视觉收口回退。
+4. `thread/list` 首次响应与缓存响应使用同一稳定 id 去重；补充任务通过显式元数据与普通分页区分。
+
+### Reusable verification
+
+- `npm.cmd run test:7420:frontend -- -BaseUrl <production-candidate-url>`：运行完整生产 bundle 门禁，不用 `-SourceOnly` 代替浏览器结果。
+- `npm.cmd run test:7420:sidebar-data -- --base-url <candidate-url>`：验证真实任务分页、去重、补充记录和性能。
+- `npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:frontend-normalizers`、`npm.cmd run verify:server-modules`、`npm.cmd run verify:governance` 与 `git diff --check`：验证受影响层级和文档契约。
+
+### Evidence and rollback
+
+- 隔离候选 `http://127.0.0.1:17436` 的完整前端门禁通过 41 个页面/状态：核心文字最低对比度 5.04:1；1602 条消息仅挂载 13 个会话项，117 次更新期间最大心跳延迟 60ms；三种前台恢复滚动意图、活动/紧凑过程双模式、Task Pet 和通知恢复均通过。
+- 同一候选的最终侧栏数据门禁读取 270 个活动任务，首屏 182ms、完整列表 196ms、RPC 重试为 0，普通分页无重复稳定 id。
+- 浏览器、主题矩阵和 Android UX 证据分别位于 `output/regression-7420/quiet-workbench-candidate-20260829/`、`output/quiet-workbench/` 与 `output/quiet-workbench/android-20260829/`；输出目录不进入 Git。
+- 本节证明隔离本地候选，不等同于生产 7420、远端 CI、正式 Release 或最终 Release APK。回滚按 Shell、Sidebar、Conversation、Composer、主题 token 和任务列表规范化的独立改动边界执行，不迁移或清理用户状态。
+
+## Quiet Workbench 主题、可访问性与 Android 真机（2026-08-29）
+
+### Expected behavior
+
+1. home、running、completed 和 waiting-input 在 1440×900、884×1104、768×1024、393×852 与 852×393 的浅色、深色、forced-colors 和 reduced-motion 环境中均无页面级横向溢出。
+2. 每个页面恰好一个主 landmark；所有可见 icon-only 按钮都有名称；forced-colors 保留边界和状态语义；reduced-motion 不保留持续无限装饰动画。
+3. Android 折叠屏、横屏和 332 CSS px 窄屏下，Composer、textarea 与 controls 始终位于软键盘上方；可见 Composer 控制至少 44px。
+4. Android Back 的优先级为软键盘、当前 sheet/drawer、页面导航；关闭临时 UI 后焦点与原页面保持可用。
+5. 屏幕旋转和前后台恢复不丢当前路由或未发送草稿，也不产生页面横向溢出。
+
+### Reusable verification
+
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/capture-quiet-workbench-baseline.ps1 -Scope all -BrowserMode playwright -Theme <light|dark|forced> -Motion <normal|reduced> -BaseUrl <production-candidate-url> -FixtureBaseUrl <production-candidate-url> -OutputDirectory output\quiet-workbench\<matrix>`：验证五视口、四状态、主题/动效、landmark、控件名称和溢出。
+- `node scripts/inspect-android-quiet-workbench.mjs --output <evidence.json>`：在已通过 ADB 转发的 debuggable WebView 上记录真实可视 viewport、Composer/controls 几何、触控尺寸、landmark、名称和溢出；`--clear-composer` 仅清理测试草稿。
+- 真机安装、输入法切换、旋转、Back 与前后台步骤见 `docs/quiet-workbench-android-validation.md`；测试结束必须恢复设备分辨率、旋转、输入法和硬键盘显示偏好。
+
+### Evidence and rollback
+
+- 浅色与修正后的深色 20 场景矩阵分别位于 `output/quiet-workbench/ux60-light-20260829/`、`output/quiet-workbench/ux60-dark-20260829-r2/`；forced-colors + reduced-motion 的 20 场景矩阵位于 `output/quiet-workbench/ux60-forced-reduced-20260829-r2/`。
+- 深色与 forced-colors Composer 五视口证据分别位于 `output/quiet-workbench/ux60-composer-dark-20260829/`、`output/quiet-workbench/ux60-composer-forced-20260829/`。全部断言通过。
+- OPPO PKH110 / Android 16 真机证据位于 `output/quiet-workbench/android-20260829/`：折叠屏和 332px 窄屏的软键盘、长输入、横竖屏、Back、设置 sheet、Sidebar drawer 与前后台恢复均通过；详细指标见 `docs/quiet-workbench-android-validation.md`。
+- 真机使用独立 `com.cxcodex.bridge.debug` 包和隔离候选地址；正式 2.8.0 应用、生产 7420、认证与用户数据未替换。该证据不替代通知、Doze、Task Pet、手表或最终 Release APK 门槛。
+- 回滚仅恢复本轮语义主题 token、强制颜色/焦点样式、响应式 Shell/Composer 规则及对应检查；不得改动用户主题偏好、会话、Runtime 或移动端认证数据。
+
+## Quiet Workbench 任务列表稳定身份（2026-08-29）
+
+### Expected behavior
+
+1. `thread/list` 即使从多份会话日志收到相同稳定任务 id，每一页也只返回一次该 id；优先保留上游排序中的第一条记录。
+2. 首次 cache miss、内存/持久缓存命中和后台刷新必须返回同样的规范化结果，不能出现“缓存已去重、当前 HTTP 响应未去重”的分叉。
+3. 首页为了补齐置顶或 session-index 任务而附加的记录通过 `supplementalThreadIds` 明确声明；游标页与这些补充记录重叠是允许的，普通分页记录仍不得重叠。
+
+### Reusable verification
+
+- `npm.cmd run verify:server-modules`：覆盖首次请求、缓存读写和持久缓存加载的重复 id 规范化，并验证补充记录身份元数据。
+- `npm.cmd run test:7420:sidebar-data -- --base-url <candidate-url>`：验证首屏、完整分页、置顶样本、项目顺序、RPC 重试和性能预算。
+
+### Evidence and rollback
+
+- 候选 `http://127.0.0.1:17436` 最终实测 270 个活动任务，分页无普通记录重叠，首屏 182ms、完整列表 196ms、RPC 重试为 0；服务器模块 smoke 同轮通过。
+- 根因是 App Server 可为同一任务 id 返回多份会话记录，而首次共享读取原先只把去重值写入缓存，却把未去重原值返回给当前 HTTP 请求。
+- 回滚只恢复 `appServerRpcCache.ts`、`appServerThreadListAugment.ts` 与对应两项回归；不得删除或改写任何会话日志、session index、置顶数据或用户缓存文件。
+
+## Quiet Workbench Conversation 与 Compact Composer（2026-08-29）
+
+### Expected behavior
+
+1. 活动 turn 的当前过程保持第一层可见；完成 turn 的中间助手更新和命令默认收敛为一个“执行过程”摘要，展开后仍按原消息身份和顺序显示，最终答复始终留在第一层。
+2. 没有 live process 承载动作时，新的待处理请求默认展开并可直接审批；用户手动收起后不因普通重渲染反复打开，只在切换任务或请求集合变化时重新计算。
+3. 两次相同文本的用户输入继续按强身份显示为两条独立消息；不得按文本去重。
+4. Composer 使用 14px 圆角、轻边框和 92–96px 实际空态高度；五个目标视口无控件重叠。393×852 与 852×393 的可见控制高度至少 44px。
+5. 393px 窄屏把低优先级“半屏展开”收进自动增长能力，第一层保留附件、模型/质量/速度、语音和发送；draft、附件、outbox、queue、Steer 与发送状态所有权不变。
+
+### Reusable verification
+
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-quiet-workbench-conversation.ps1 -BaseUrl <production-candidate-url> -OutputDirectory output\quiet-workbench\<conversation-contract>`：验证完成过程折叠/展开、最终答复、直接审批、重复文本身份，以及 1602 消息压力和交互。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/capture-quiet-workbench-baseline.ps1 -Scope composer -BrowserMode playwright -BaseUrl <candidate-url> -FixtureBaseUrl <candidate-url> -OutputDirectory output\quiet-workbench\<composer-candidate>`：检查五视口 Composer 高度、圆角、重叠、模型和发送控件，手机横竖屏追加 44px 触控门槛。
+- `npm.cmd run test:7420:frontend -- -SourceOnly`、`npm.cmd run build:frontend`、`npm.cmd run verify:governance` 与 `git diff --check`：检查呈现边界、类型、生产构建、治理和差异格式。
+
+### Evidence and rollback
+
+- `output/quiet-workbench/ux30-candidate-20260829-r3/` 的 15 张浅色截图覆盖运行、完成和等待输入 × 五视口：运行过程展开；完成态恰好一个摘要且无第一层命令；等待态可直接看到审批动作。
+- 生产 bundle 契约位于 `output/quiet-workbench/ux30-contract-production-20260829-r2/`：摘要折叠时命令数 0、展开后命令数 1、最终答复始终可见；相同文本的两个用户消息 id 分别为 `ux-identity-user-first` 与 `ux-identity-user-second`；1602 条消息挂载 12 个列表节点，最大心跳延迟 48ms，交互后更新继续且无横向溢出。
+- `output/quiet-workbench/ux40-candidate-20260829-r4/` 的 Composer 实测高度为 1440×900 96px、884×1104 92px、768×1024 92px、393×852 96px、852×393 96px；全部为 14px 圆角且无控件重叠，手机横竖屏最小可见控件均为 44px。
+- 开发/HMR bundle 的同一压力夹具曾测得 113–128ms，不能替代生产性能结论；在生产 bundle + 候选 API 代理下复测为 48ms，门槛未放宽。
+- 回滚只恢复 `ThreadConversation.vue` 的完成过程呈现与请求面板默认展开、`ThreadComposer.vue` / `style.css` 的密度 token，以及本节新增的回归入口；不得迁移或清理消息、目标、队列、Runtime 或附件数据。
+
+## Quiet Workbench Shell、compact 与 Sidebar 层级（2026-08-29）
+
+### Expected behavior
+
+1. 全新浏览器配置在桌面使用 288px Sidebar、44px 单行 Header，以及同为 800px 中轴上限的 Header、阅读区和 Composer；空 slot 不得留下不可解释的横向间距。
+2. 已保存的桌面 Sidebar 宽度继续生效，但只在 240–360px 安全范围内裁剪；未保存宽度不能因 `Number(null)` 落到最小值。
+3. 768–1199px 的普通窗口使用覆盖式 Sidebar，不再持久双栏挤压正文，也不把临时开合写回桌面偏好；满足粗指针和尺寸门槛的折叠屏继续使用既有双栏。
+4. 首页不重复显示“新建会话”Header 动作；标题、收藏、连接状态和恢复动作保持可见或具有可访问名称，手机横竖屏无页面级横向溢出。
+5. “新会话”是 Sidebar 唯一跨列主操作；搜索、工作台和工具位于同一紧凑次级行，低频能力不再与主操作争抢层级。
+6. 空闲任务使用 32px 固定单行，仅运行、等待、未读和搜索结果显示 48px 固定双行；手机或粗指针设备分别保持至少 44px/52px 触控高度。
+
+### Reusable verification
+
+- `npm.cmd run test:7420:frontend -- -SourceOnly`：检查语义 token、compact breakpoint、折叠屏例外、宽度默认/裁剪、覆盖式 Sidebar 所有权、桌面偏好保护、固定 Header 高度，以及 Sidebar 主次操作和单/双行策略。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/capture-quiet-workbench-baseline.ps1 -Scope all -BrowserMode playwright -BaseUrl <candidate-url> -FixtureBaseUrl <candidate-url> -OutputDirectory output\quiet-workbench\<candidate>`：在 5 个视口采集 home/running/completed/waiting-input，检查状态所有者、页面横向溢出和 Shell 几何。
+- `npm.cmd run build:frontend`、`npm.cmd run verify:governance` 与 `git diff --check`：检查类型、生产构建、文档治理与差异格式。
+
+### Evidence and rollback
+
+- UX-00 基线及本轮候选证据分别记录在 `output/quiet-workbench/ux00-baseline-20260829/` 与 `output/quiet-workbench/ux10-candidate-20260829-r2/`；输出目录不进入 Git。
+- 独立 Playwright 新上下文实测：1440×900 为 288px Sidebar、45px（44px 内容加 1px 分隔线）Header、800px Header 中轴；884×1104 与 768×1024 的固定 Sidebar 宽度均为 0，并带 `is-overlay-sidebar`；五个首页视口均无页面级横向溢出。
+- 真实候选会话 `output/quiet-workbench/ux10-thread-20260829/` 在五个视口均保持 45px Header 和零页面级横向溢出；393×852 的任务标题、连接恢复、收藏与 Composer 均可见，852×393 未遮挡状态操作。
+- Sidebar fixture `output/quiet-workbench/ux20-sidebar-20260829/` 同时覆盖 idle、running、waiting 和 unread：桌面/compact 为 32px 单行与 48px 双行，手机竖屏和横屏为 44px/52px，且可见 preview 数严格等于 detail row 数。
+- 浅色与深色候选分别保存在 `ux20-candidate-20260829-r2/` 和 `ux20-candidate-dark-20260829/`；深色加载骨架、收藏按钮、Context badge 与最终 Sidebar 行均未出现浅色闪块。
+- `npm run build:frontend`、`npm run test:7420:frontend -- -SourceOnly`、`npm run verify:governance` 和 `git diff --check` 通过；构建只有既有 Vite native-loader 与大 chunk 警告。
+- 回滚仅恢复 `src/style.css` 的 Shell token、`useMobile.ts` / `DesktopLayout.vue` 的 compact 布局判断、`ContentHeader.vue` 的单行结构和 `App.vue` 的对应呈现；不得修改 Sidebar/会话持久数据或 Runtime 状态。
+
+## 7420 消息、图片、恢复与长线程稳定性（2026-08-27）
+
+### Expected behavior
+
+1. 新请求进入 `starting` 后，在收到该轮 `turn/started` 前出现的旧 `thread/status/changed: idle` 不得提前结束请求、释放线程租约或留下永久重试任务。
+2. 本机服务必须启动当前 Codex 桌面版的版本化 CLI；健康诊断需暴露实际命令和启动时间，且 pending、queued、server request、uncertain request 与线程租约能够收敛为 0。
+3. 上传图片必须能够立即通过受限本地图片接口按原始字节读取；缓存目录只作为只读上传根，不扩大为工作区权限。
+4. 已出现在 `thread/read` 中的 `codex-clipboard-*` 临时图片必须在该响应返回后立即可读；测试不能用普通上传缓存替代这一会话附件链路。
+5. 同一稳定 `clientMessageId` 的并发重复发送只能形成一个请求；状态必须从 `pending_start` 进入 `running` 并最终完成，回复可精确验证，测试线程默认自动归档。
+6. 长线程首次只返回最近 10 个绝对轮次；“加载更早”按 `turnsStartIndex` 分页，不得把消息条数误当轮次数，也不得用信息更少的日志恢复结果覆盖 App Server 的完整结构化历史。
+
+### Reusable verification
+
+- `npm.cmd run verify:runtime-stability`：无模型单元探针，覆盖启动前旧 idle 竞态、截断历史元数据与绝对轮次分页。
+- `npm.cmd run test:7420:stability -- --image-path <existing-image> --session-image-thread-id <thread-id>`：不发送模型请求，检查健康、Runtime 持久状态、事件流连续性、当前桌面 CLI、活动线程 ID 唯一性、普通上传图片逐字节回读，以及真实 `thread/read -> codex-clipboard -> /codex-local-image` 会话图片链路。
+- `npm.cmd run test:7420:roundtrip -- --with-image <existing-image>`：会消耗一次模型请求；并发提交同一 client ID，验证单请求收敛、状态生命周期、精确回复、图片输入与测试线程清理。
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -ThreadOnly -ThreadId <thread-id>`：真实 H5 验证首屏、缓存重开、前后台恢复；短线程允许无加载按钮，长线程连续两次按轮次加载旧历史。
+- `npm.cmd run test:7420:soak -- -DurationSeconds 45 -IntervalSeconds 5 -SkipPublic -OutputDir output\soak-7420-stability-final`：本轮 9/9 样本通过，最大 pending/queued/serverPending/uncertain 均为 0，RPC timeout、慢 thread/list、PID 变化、事件流变化或回退均为 0。
+
+### Evidence and rollback
+
+- 真实图片稳定性检查通过：上传 8 ms、回读 91 ms、99,795 字节完全一致。微信临时原图已被系统清理时曾按预期以 `ENOENT` 失败，改用存在的回归截图后通过。
+- 真实图片消息往返用时 7,730 ms，重复提交收敛为同一请求，状态为 `pending_start -> running -> completed`，精确回复通过并自动归档测试线程。
+- 45 轮问题线程 `019fdd59-ff7a-70a2-8739-8231febffac1` 首屏 1,660 ms 可用，连续旧历史分页、缓存重开 159 ms、前后台恢复 P95 777 ms 均通过；手机视口无横向溢出。截图位于 `C:\Users\SW\.codex\visualizations\2026\07\19\019f7cb2-c0b5-7b22-aff4-08391a58c764\7420-long-thread-20260827\thread-phone.png`。
+- 本机 CLI 更新前备份位于 `C:\Users\SW\AppData\Local\CX-Codex\backups\long-history-pre-20260827-0106`；更早完整稳定性备份位于 `C:\Users\SW\AppData\Local\CX-Codex\backups\stability-pre-20260827-0044`。回滚前必须再次确认无活动请求和线程租约，只恢复安装构建文件，不修改配置、认证、Runtime SQLite 或会话文件。
+
+## 真实会话顺序、项目归属与刷新占位（2026-08-10）
+
+### Expected behavior
+
+1. 新鲜 App Server 详情返回后，前端必须恢复 `turns -> items` 的权威顺序；实时合并留下的旧 DOM 顺序不得让 assistant 跑到对应 user 前面。
+2. 活动中的部分线程摘要可以更新标题、预览和进度，但不得用空 cwd / `unknown-project` 覆盖已经确认的会话项目归属。
+3. 直接刷新真实会话路由时，在会话详情尚未收敛前显示加载状态，不得短暂误报“空会话”；真实加载错误和真正的空会话仍保留各自状态。
+
+### Verification
+
+- 真实 7420 前端新建会话后连续发送两轮无工具精确回复探针，分别得到 `CX_FRONTEND_DIALOG_OK` 和 `CX_FRONTEND_FOLLOWUP_OK`；服务端 `thread/read` 始终为 `user, assistant, user, assistant`，但修复前浏览器稳定复现 `assistant, user, user, assistant`，同时把当前任务移动到 `unknown-project`，刷新初期还会误显“空会话”。
+- `verify:frontend-normalizers` 新增权威顺序恢复与已解析项目身份保护断言；旧消息合并实现按预期失败为 `item-agent-first` 先于 `item-user-first`，项目身份 helper 尚不存在时也按预期失败。实现后同一检查通过。
+- `npm.cmd run build:frontend` 与 `git diff --check` 通过；生产构建只保留既有大 chunk 提示。
+- 本机安装在零活动请求门禁下只更新前端并重启为 Server PID 40416 / App Server PID 9716；安装入口与源码构建哈希一致，全局 Codex 配置哈希保持不变，旧前端保存在 `C:\Users\SW\AppData\Local\CX-Codex\backups\dialog-order-pre-20260810-2248`。
+- 同一真实会话第三轮精确得到 `CX_FRONTEND_ORDER_FIXED_OK`，App Server 记录 8007 ms 完成且无错误。桌面与 393 x 852 手机 DOM 均为 `user, assistant, user, assistant, user, assistant`，当前任务位于 `codexui（16 个会话）`，刷新前后均无 `unknown-project`、误导“空会话”、横向溢出或浏览器错误。
+- 独立 Headless Playwright 使用全新 Chrome 上下文再次验证三轮顺序、精确终态、整个加载周期未出现“当前会话还没有消息”、一个主地标、零横向溢出、零 page/console error；截图位于 `C:\Users\SW\.codex\visualizations\2026\08\10\019feab6-8af6-7742-b255-9de639b480fe\7420-dialog-test\19-headless-playwright-dialog.png`。
+
+### Rollback
+
+- 仅回退 `conversationProjection.ts` 的权威顺序恢复、`projectGroupOrdering.ts` / `useDesktopState.ts` 的项目身份保护、`App.vue` 的路由加载占位和对应断言。不得删除会话、Runtime 数据或修改全局 Codex 配置。
+
+## 当前 Codex 桌面 CLI 兼容与持续目标恢复（2026-08-10）
+
+### Expected behavior
+
+1. 本机 CX-Codex 配置不得继续固定到已经过期的 `C:\Users\SW\.local\bin\codex.exe`；未显式指定命令时由现有 Windows 发现逻辑选择当前 Codex 桌面版的可运行版本化 CLI。
+2. App Server 初始化默认声明 `experimentalApi: true`，使 `thread/goal/get` 与当前 Codex 桌面版保持同一能力边界；显式传入 `experimentalApi: false` 时仍必须尊重调用方覆盖。
+3. `config/read` 暂时失败不能连带清空已经成功取得的 `model/list`，模型选择器应继续显示可用模型，并只跳过当前配置的默认值同步。
+4. 修复后的 7420 会话页不得再显示原始配置解析错误、`thread/goal/get requires experimentalApi capability` 或已经结束任务的残留“思考中”；全局 Codex 配置不属于本轮写入范围。
+
+### Verification
+
+- 旧 CLI `0.130.0` 的隔离探针稳定复现 `config/read` 对当前 `service_tier` 的解析失败，以及未声明实验能力时的 `thread/goal/get` 拒绝；当前桌面版本化 CLI `0.147.0-alpha.6.5` 在 `experimentalApi: true` 下通过 `config/read`、`skills/list`、`model/list` 和 `thread/goal/get`。
+- 先更新 server module 断言，`npm.cmd run verify:server-modules` 按预期在旧默认值处失败；实现后同一命令通过，并保留显式 `experimentalApi: false` 的覆盖用例。
+- 本机安装重启后，App Server 的实际命令来自 Codex 桌面版本化目录；健康诊断显示 initialized，pending RPC、queued RPC、待处理 server request、活动 plan turn 和 uncertain Runtime request 均为 0。
+- `npm.cmd run build:frontend`、`npm.cmd run verify:frontend-normalizers` 与 `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420` 通过。独立 Headless Playwright 的 HomeOnly 回归匹配 7 个实时模型、最低文字对比度 4.54、无横向溢出，截图位于 `output/regression-7420/runtime-goal-fix-20260810/home-desktop.png`。
+- 真实浏览器覆盖当前会话、模型面板、Skills、运行诊断，以及 1440 x 900 和 393 x 852 会话视口；页面无浏览器错误、无横向溢出，配置错误、目标能力错误和残留“思考中”均不存在。
+
+### Rollback
+
+- CX-Codex 本机配置备份为 `C:\Users\SW\.cx-codex\backups\config.pre-runtime-auto-20260810-2207.json`；安装目录的 App Server 初始化源码和旧 `dist-cli` 备份为 `C:\Users\SW\AppData\Local\CX-Codex\backups\runtime-goal-pre-20260810-2209`。
+- 回滚前先确认 7420 无活动请求并精确停止当前 PID 树，再恢复上述 CX-Codex 配置和安装文件。不得替换 `C:\Users\SW\.codex\config.toml`、认证文件、Runtime SQLite 或工作区数据。
+
+## 2.8.0 本地候选身份与前端构建可复现（2026-08-08）
+
+### Expected behavior
+
+1. v2.7.6 之后的未发布改动使用 2.8.0 候选身份；设置页、CLI 和本机安装不得继续冒充公开 v2.7.6。
+2. Tailwind 只扫描 `src` 中的真实前端源码。仓库说明、测试证据、`node_modules`、输出目录或临时安装目录中的偶然类名不能改变生产 CSS。
+3. 前端构建标识来自稳定包名，不读取 cwd、Git worktree 路径或一次性缓存目录名；相同源码连续构建的完整 `dist` 文件名与 SHA-256 必须一致。
+4. 本机更新前必须连续确认 7420 无 pending、queued、待处理服务请求、活动 plan turn、未确定请求或升级阻塞；更新后配置、认证、Runtime 流与构建产物保持一致，并保留可恢复的 v2.7.6 安装。
+
+### Verification
+
+- 先把显式 Tailwind source 和稳定构建标识加入治理断言；旧实现按预期失败为 `src/style.css is missing required text: @import "tailwindcss" source("./");`。实现后 `npm.cmd run verify:governance` 通过。
+- 在 `src` 外加入包含 `hidden!`、`list-item`、`table-cell`、`italic`、`line-through`、`overline` 和 `filter!` 的一次性探针，再次执行 `npm.cmd run build:frontend`。探针前后 `dist` 均为 136 个文件，新增、缺失和 SHA-256 变化数全部为 0；探针随后删除。
+- `npm.cmd run build:cli` 通过；`npm.cmd run verify:dependency-security` 使用 npm 10.9.3 和官方 registry 检查 428 个依赖，结果为 0 漏洞。
+- `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip -SkipPackageSmoke` 用时 48.6 秒并通过治理、前端/CLI 构建、frontend normalizer、server module 与 CLI/CJS smoke。遵守本轮边界，没有执行 release package、NPM package、提交、推送或发布；server smoke 中的队列、慢 RPC 和 bridge failure 行为预期故障注入。
+- 2.8.0 完整本地候选先在隔离 17434 启动：App Server 运行并初始化，pending、queued 和 uncertain 均为 0。H5 HomeOnly 回归中实时 `model/list` 的 7 项全部匹配，产品可用时间 2641 ms、浏览器观测 5464 ms，最低对比度 4.54，无横向溢出。
+- 第一次生产停机在目录移动前因 Windows 监听释放晚于进程退出而安全中止，原 2.7.6 目录未移动。第一次换入 2.8.0 已健康启动，但把配置文件字节重写误判为语义变化，自动恢复到 2.7.6；恢复后 7420 健康、Runtime 流未改变。最终门禁改为排序后的配置语义哈希并独立检查认证哈希，且等待端口最多 10 秒完成释放。
+- 最终生产换入成功：本机版本为 2.8.0，监听 PID 46568、App Server PID 36796，pending、queued 和 uncertain 均为 0；配置语义与字节、认证哈希、Runtime `streamId`、CLI 哈希和前端入口哈希全部保持一致。完整旧安装保存在 `C:\Users\SW\AppData\Local\CX-Codex.rollback-pre-2.8.0-20260808-1600`，其中版本为 2.7.6。
+- 更新后的生产 7420 再次通过 H5 HomeOnly：实时模型 7 项全部匹配，产品可用时间 2678 ms、浏览器观测 6325 ms，最低对比度 4.54，无横向溢出；截图为 `output/regression-7420/local-production-2.8.0-h5-20260808/home-desktop.png`。
+- 更新后的生产 7420 随后通过完整 H5 回归：38 个页面/状态全部通过并生成 42 张截图，用时 558.2 秒；首页产品可用时间 2511 ms、浏览器观测 5149 ms，实时 `model/list` 的 7 项全部匹配，最低对比度 4.54。1602 条消息的手机流式压力场景只挂载 13 个节点，119 次更新与 113 次心跳期间最大心跳延迟为 70 ms，低于 80 ms 门槛；证据目录为 `output/regression-7420/local-production-2.8.0-full-h5-20260808`。
+
+### Rollback
+
+- 回滚前先确认 7420 无活动工作并精确停止当前进程树，再把当前 2.8.0 安装隔离，将 `C:\Users\SW\AppData\Local\CX-Codex.rollback-pre-2.8.0-20260808-1600` 恢复为 `C:\Users\SW\AppData\Local\CX-Codex`，最后用恢复目录的安装脚本以 `-SkipNpmInstall -SkipBuild -StartNow` 启动。
+- 不删除或替换 `C:\Users\SW\.cx-codex`、Codex 认证、Runtime SQLite 或工作区数据。本项没有证明 Android 真机、Windows 真实辅助功能、公网链路、发布包或 GitHub Release 通过。
+
+## H5 首页模型选择器与实时模型目录一致（2026-08-08）
+
+### Expected behavior
+
+1. 首页 H5 回归必须通过真实 7420 `model/list` 分页读取当前可见模型，不能只验证静态 Composer 夹具。
+2. 模型面板中的模型数量、显示名、描述和默认标记与实时目录一致；元数据完成后不残留禁用占位项，并且恰好有一个当前选中模型。
+3. 检查只读取模型目录并打开/关闭配置面板，不切换模型、不修改配置，也不把具体模型名称固化为产品常量。
+
+### Verification
+
+- 先在治理门禁加入动态检查入口断言；脚本尚未实现时，`npm.cmd run verify:governance` 按预期失败并报告缺少 `Assert-LiveModelSelector`。
+- 真实运行态基线：`model/list` 用时 99 ms 返回 7 个可见模型和 1 个默认模型；人工 H5 探针打开首页模型面板后显示同样 7 项，控制台只有产品欢迎日志、无页面错误。
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -HomeOnly -CaptureScreenshots -ScreenshotTaskName live-model-selector-h5-20260808` 用时 22.6 秒并通过：实时目录 7 项全部匹配，首页产品可用时间 2472 ms、浏览器观测 5054 ms，26 个核心文字样本最低对比度 4.54，无横向溢出；截图为 `output/regression-7420/live-model-selector-h5-20260808/home-desktop.png`。
+- `npm.cmd run verify:governance` 与 `git diff --check` 通过；`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 用时 82.6 秒并通过前端/CLI 构建、frontend normalizer、server module、CLI/CJS launcher、Release ZIP、SHA-256 与 NPM package smoke。server smoke 的队列、慢 RPC 和 bridge failure 行是预期故障注入，最终结果为通过。
+
+### Rollback
+
+- 同时恢复 `scripts/regression-7420-frontend.ps1` 中的实时目录检查与调用点、治理断言、本节、产品目标进度和更新日志；无需修改运行时缓存、模型选择配置或用户数据。
+
+## 当前发布事实源不再依赖历史 Candidate 快照（2026-08-08）
+
+### Expected behavior
+
+1. 当前发布宣传和验收以 `PRODUCT_GOAL.md`、`docs/app-server-protocol-matrix.zh-CN.md` 与 `docs/app-server-schema-audit-summary.json` 为事实源。
+2. `docs/candidate-release-review.zh-CN.md` 与 `docs/candidate-pr-review-pack.zh-CN.md` 保留 2026-07-05 的历史证据，但不能被 Release 指南或模板当作当前事实。
+3. README、回归清单、Release 模板和治理门禁必须一致表达这条边界；Release ZIP 继续同时携带当前权威文档和历史追溯材料。
+
+### Verification
+
+- 先在 `scripts/verify-governance.ps1` 加入当前权威入口、历史标签和旧引用禁用断言；文档尚未更新时，`npm.cmd run verify:governance` 按预期失败并报告 `RELEASE.md is missing required text: PRODUCT_GOAL.md`。
+- 更新文档后，`npm.cmd run verify:governance` 与 `git diff --check` 通过；`npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 用时 89.4 秒并通过前端/CLI 构建、frontend normalizer、server module、CLI/CJS launcher、Release ZIP、SHA-256 与 NPM package smoke。Release ZIP 同时包含当前权威文档和两份历史追溯材料。
+
+### Rollback
+
+- 同时恢复 `RELEASE.md`、`.github/release-body.md`、README 文档索引、P1 发布治理清单、治理断言、本节和更新日志；不要删除历史 Candidate 文档或篡改其中的 2026-07-05 证据。
+
+## 归档列表后台刷新不阻塞已有缓存读取（2026-08-08）
+
+### Expected behavior
+
+1. `thread/list` 存在可用旧缓存时，每个调用者都立即收到旧值；第一个调用者可启动后台刷新，但刷新 Promise 不能成为后续调用者的响应。
+2. 同一缓存键最多执行一个后台刷新；刷新完成后原子替换旧值。失效代际、3 分钟新鲜期、活动列表 20 分钟旧值边界和归档列表 24 小时旧值边界保持不变。
+3. 全新安装或对应键从未成功缓存时仍允许等待首次权威读取；真实 HTTP 回归只要求紧随第一次读取的第二次归档读取不超过 1500 ms，因此不会把必要的冷建缓存误判为回归。
+
+### Verification
+
+- 修复前生产 7420 的最小真实复现中，归档首次读取用 113 ms 返回旧缓存并开始后台刷新；紧随读取错误复用刷新 Promise，等待 8399 ms。缓存键、返回 100 条记录和 App Server 健康均正常，排除认证、页面渲染和 RPC 队列错误。
+- `scripts/server-module-smoke.ts` 先改为要求后台 gate 未释放时第二读仍在下一个事件循环前返回旧值；旧实现按预期失败为 `{ settled: false }`。`src/server/appServerRpcCache.ts` 只移除把已有刷新 Promise 返回给旧缓存读者的分支后，同一用例通过，并确认刷新调用次数仍为 1、释放 gate 后缓存更新为权威新值。
+- `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过前端/CLI 构建、frontend normalizer、server module、CLI/CJS、Release ZIP、SHA-256 与 NPM package smoke。验证 ZIP 在独立目录完成 323 个锁定依赖安装、生产构建和 server module smoke 后更新本机 7420。
+- 新生产 PID 38856、App Server PID 33200 健康接管，版本仍为 2.7.6；配置、认证哈希、Runtime `streamId` 均与更新前一致，安装后的 CLI 哈希与当前源码相同。
+- `npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420` 在超过新鲜期的真实归档缓存上通过：第一次/第二次归档 HTTP 读取为 7/8 ms，后台权威扫描真实耗时 8522 ms 后成功更新缓存；最终 pending、queued、uncertain 和 RPC retry 均为 0。
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -HomeOnly -CaptureScreenshots -ScreenshotTaskName archived-cache-fix-h5-20260808` 通过；首页产品可用时间 2418 ms，26 个核心文字样本最低对比度 4.54，无横向溢出。
+
+### Rollback
+
+- 修复前安装保留在 `C:\Users\SW\AppData\Local\CX-Codex.rollback-cache-fix-20260808-1113`。回滚前必须先确认 7420 无活动请求并只停止当前精确 PID 树；不得删除 `C:\Users\SW\.cx-codex`、Codex 认证、Runtime SQLite 或工作区数据。
+- 回退源码时同时恢复 `src/server/appServerRpcCache.ts`、server module 并发用例、7420 侧栏 1500 ms 跟随读门禁、本节和更新日志；Android 生命周期、GitHub 设置、提交、推送与正式发布不属于本项证据。
+
+## 当前工作树无推送更新本机 7420 与 H5 验收（2026-08-08）
+
+### Expected behavior
+
+1. 本地更新只能在 Runtime 无 pending、queued、未确定请求或活动 plan turn 时替换安装目录；失败时必须把旧安装恢复到稳定路径。
+2. 更新后继续使用原 `C:\Users\SW\.cx-codex\config.json`、Codex 认证和 Runtime 数据，端口保持 7420；不得把密码、Token 或认证文件打进验证包或日志。
+3. 本轮只更新本机运行版本并保留一个明确的旧安装回滚目录，不提交、不推送、不创建 Release，也不修改 GitHub 远端设置。
+4. H5 必须优先覆盖 1440 x 900 桌面、393 x 852 手机、852 x 393 横屏与 884 x 1104 折叠屏；Android 真机生命周期不以浏览器仿真代替。
+
+### Verification
+
+- `npm.cmd run verify:governance`、`git diff --check` 与 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip` 通过；验证 ZIP 完成干净依赖安装、前端/CLI 构建和 server module smoke。
+- 从验证 ZIP 的独立暂存目录构建后，在零活动请求条件下原子替换 `C:\Users\SW\AppData\Local\CX-Codex`。更新后 PID 为 39420、App Server PID 为 7296，`/health` 与 `/codex-api/health` 均为 `ok`，版本为 2.7.6；配置、认证哈希和 Runtime `streamId` 与更新前一致。
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName local-update-h5-20260808` 通过 38 个页面/状态场景并生成 42 张截图。首页工作区产品可用时间为 2509 ms，26 个核心文字样本最低对比度为 4.54；1602 条消息手机流式压力回归挂载 13 个消息节点，119 次更新期间最大心跳延迟为 64 ms。
+- 独立 agent-browser 在 1440 x 900 首页和 393 x 852 诊断页复核：每页只有一个主地标、`scrollWidth` 不超过视口、加载后无骨架屏，页面错误为空。`npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:7420` 通过，248 个活动会话、6 个可读置顶样本无不可读项或补充分页重叠，RPC 无重试。
+
+### Rollback
+
+- 更新前安装保留在 `C:\Users\SW\AppData\Local\CX-Codex.rollback-local-20260808-1015`。若后续本机验证发现回归，先确认 7420 无活动请求，停止当前精确进程树，再把当前安装隔离并将该目录恢复为稳定安装路径；不得删除 `C:\Users\SW\.cx-codex`、Codex 认证或工作区数据。
+- Android 真机、Windows 高对比度/屏幕阅读器、GitHub 安全设置、提交、推送与正式发布均不属于本轮已通过范围。
+
+## 产品目标文档随 Windows/Release 包交付（2026-08-08）
+
+1. README 链接的 `PRODUCT_GOAL.md` 必须进入正式 Release ZIP，不能只存在于源码工作树。
+2. Release package smoke 必须把该文件列为必需条目，遗漏时失败。
+
+Verification:
+
+- 运行 `npm.cmd run verify:governance` 与包含 package smoke 的 `npm.cmd run verify:release -- -AllowDirty -SchemaAudit skip`。
+- 检查生成 ZIP 只验证文件名和 SHA-256，不把本机路径、认证文件或工作区外内容打包。
+
+Rollback:
+
+- 同时回退 `scripts/package-release.ps1`、`scripts/verify-release.ps1`、治理断言、更新日志和本节；不得只移除 smoke 断言而保留断链。
+
 This file tracks manual regression and feature verification steps.
+
+## Skills Git credentials stay out of commands and repository config (2026-08-08)
+
+### Expected behavior
+
+1. A private Skills mirror always stores a clean `https://github.com/owner/repo.git` origin. GitHub tokens never appear in Git arguments, timeout/failure command text, or `.git/config`; an older credential-bearing origin is rewritten before the next authenticated network operation.
+2. Authentication is supplied only to the individual Git fetch/push process through a named environment variable and an ephemeral credential helper. Git terminal prompts and repository hooks are disabled for those automated network commands.
+3. An authenticated pull performs the credentialed fetch first and then merges `origin/<branch>` without the token environment, so merge/check-out behavior cannot inherit the token.
+4. The local Skills sync state remains inside the user profile. Windows stores the OAuth token only as a DPAPI `CurrentUser` payload, migrates a legacy plaintext field before allowing sync, and never passes the token in PowerShell arguments or environment; Linux/macOS files are forced to mode `0600` before and after writing.
+5. Every Git or `rg` command that changes into a user-controlled Skills, Worktree, Rollback, or file-search directory uses an absolute executable resolved from absolute `PATH` entries first. A same-name executable placed in that working tree is never selected.
+6. Publishable regression fixtures and test evidence use stable example users, workspaces, and document names; the known local username, workspace prefix, and personal resume name have zero matches in those files.
+
+### Verification
+
+- Run `npm.cmd run verify:server-modules`. Its synthetic credential helper test must return the expected username/password without placing the synthetic token in the Git argument list, then write/read a clean temporary origin and validate `0600` on POSIX.
+- On Windows, the same smoke must round-trip a synthetic token through real DPAPI, assert the stored JSON has no `githubToken` field or token substring, prove legacy plaintext is marked for migration, and require absolute Git/`rg` executable paths. Worktree injected command calls must all receive an absolute path, while source governance forbids bare Git calls in rollback and worktree modules.
+- Run `npm.cmd run build:cli`, `npm.cmd run verify:dependency-security`, `npm.cmd run verify:governance`, and `git diff --check`.
+- Search publishable source for `https://x-access-token:` and token-bearing GitHub userinfo construction; both must have zero matches. Do not use a real GitHub token or contact a real private repository for this regression.
+- Run the governance check after scanning the seven fixture/evidence files for the known personal user, workspace prefix, and resume owner name.
+
+### Current evidence
+
+- `npm.cmd run verify:server-modules` passed twice after the implementation, including the real Git credential protocol handshake with a synthetic token, clean temporary `.git/config`, and private-file helper coverage.
+- A later ACL audit found the Windows state file inherited read access for the sandbox reader group, proving profile placement alone was insufficient. The first two DPAPI smoke attempts failed safely before any real-state migration because Windows PowerShell required the fully qualified type plus `System.Security` assembly; after correcting that compatibility detail, the real synthetic DPAPI round-trip and complete server-module smoke passed.
+- The real local Skills origin contained one credential-bearing GitHub URL. It was rewritten to the same clean owner/repository URL with zero network contact and without reading, printing, or modifying the OAuth state; a post-check found zero credential-bearing remotes and production 7420 remained on PID 38268.
+- The rebuilt isolated 17432 candidate started with no Skills state. A synthetic legacy plaintext state was then written only inside its isolated profile: the first status read returned logged-in and replaced it with `windows-dpapi-current-user-v1` without a plaintext field or token substring; the second status read completed DPAPI decryption and left the file byte-for-byte stable. Removing the synthetic file restored logged-out state. The real OAuth file hash was unchanged, and candidate PID 35172 plus production PID 38268 remained healthy throughout.
+- `npm.cmd run build:cli`, `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the frontend PowerShell parser, `npm.cmd run verify:governance`, and `git diff --check` passed. `npm.cmd run verify:dependency-security` reported 0 vulnerabilities across 428 dependencies against the official npm registry.
+- Production source search found no remaining `https://x-access-token:` construction. A refined publishable-tree scan found zero GitHub PAT/classic token, Google/OpenAI key, credential-bearing GitHub URL, known public address, personal user/workspace, or personal document-owner matches; the governance script uses only generic example-path rules and does not retain the removed values. The paired frontend normalizer, fixture parser, and production build remained green. No real credentials were printed or sent to GitHub.
 
 ## Contextual browser titles and stable narrow headers (2026-08-01)
 
@@ -23,7 +397,7 @@ This file tracks manual regression and feature verification steps.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed on 2026-08-01. The frontend build retained only the existing large-chunk advisory.
 - Headless Playwright at 393 x 852 produced exact titles `新会话 · CX-Codex`, `技能 · CX-Codex`, `运行诊断 · CX-Codex`, and `分析 stablyai orca 项目 · CX-Codex`, with no console or page errors.
 - With a synthetic `正在恢复` label inserted into the real connection control, its computed display stayed `none` at both 393 px and 320 px while the full tooltip and accessible name remained. The title started 14 px after the leading controls, ended 6 px before the suffix, used `text-overflow: ellipsis`, and both widths kept `scrollWidth = clientWidth`. At 431 px the visible label returned, retained the same 6 px title/suffix gap, and still produced no overflow.
-- Visually inspected screenshot: `C:/Users/SW/AppData/Local/Temp/cx-codex-contextual-page-title-playwright-019fb91b.png`.
+- Visually inspected screenshot: `%TEMP%/cx-codex-contextual-page-title-playwright-019fb91b.png`.
 - The complete 32-surface `test:7420:frontend` gate passed in 356.4 seconds. Home project groups became product-ready in 1078 ms and browser-observed ready in 4947 ms; existing desktop, mobile, foldable, sidebar, composer, foreground-resume, recovery, and task-notification contracts stayed green.
 - Final health remained `ok` on the original PID 51368, running and initialized, with zero pending RPC, queued RPC, active RPC, server requests, plan turns, restart blockers, thread leases, and uncertain Runtime Store requests. The service was not restarted.
 
@@ -49,7 +423,7 @@ This file tracks manual regression and feature verification steps.
 - Before the change, the real 7420 endpoint took 253/133/136 ms for `c → co → com` across a 20,500-file repository because every request enumerated the full tree. The changed source module took 151/33/33 ms in a fresh process; the two follow-up queries reused the listing while retaining independent 20-result ranking.
 - `npm.cmd run build:cli`, the behavioral cache/in-flight/expiry server smoke, and `npm.cmd run verify:server-modules` passed. The smoke confirms two concurrent callers share one load, a TTL hit does not reload, the first request after expiry refreshes, a failed load is retried, and the oldest root is evicted after the four-root bound.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed.
-- Headless browser verification retained two locally matching rows with `aria-busy=true`, no full loading panel, stable input focus, and `scrollWidth = clientWidth`; it then converged to the single authoritative result without console errors. Visually inspected screenshot: `C:/Users/SW/AppData/Local/Temp/cx-codex-quick-open-large-repo-019fb91b.png`.
+- Headless browser verification retained two locally matching rows with `aria-busy=true`, no full loading panel, stable input focus, and `scrollWidth = clientWidth`; it then converged to the single authoritative result without console errors. Visually inspected screenshot: `%TEMP%/cx-codex-quick-open-large-repo-019fb91b.png`.
 - The complete 26-surface `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -AgentBrowserTimeoutSec 90` gate passed in 262.1 seconds. Its Quick Open contract measured `3 initial → 2 held → 1 resolved`, and Home became product-ready in 925 ms (browser-observed 4808 ms).
 
 ## Collapsed-sidebar attention badge and browser title count (2026-08-01)
@@ -73,7 +447,7 @@ This file tracks manual regression and feature verification steps.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser, and `git diff --check` passed on 2026-08-01.
 - Headless Playwright rendered the fixture badge as `2` inside a 36 × 36 px control, exposed `展开侧栏，2 个任务需要关注`, and kept `scrollWidth = clientWidth = 393`. The badge resolved to `rgb(154, 103, 0)` with white text.
 - In an isolated real 7420 page, one seeded unread task produced badge `1`, the exact accessible label, and the leading `(1)` title prefix. Clearing that isolated state removed the badge, restored `展开侧栏`, and removed the prefix; the current title suffix is covered by the contextual-browser-title contract above.
-- Visually inspected screenshots: `C:/Users/SW/AppData/Local/Temp/cx-codex-sidebar-attention-019fb91b.png` and `C:/Users/SW/AppData/Local/Temp/cx-codex-sidebar-attention-real-019fb91b.png`.
+- Visually inspected screenshots: `%TEMP%/cx-codex-sidebar-attention-019fb91b.png` and `%TEMP%/cx-codex-sidebar-attention-real-019fb91b.png`.
 - The complete 24-surface `test:7420:frontend` gate passed in 237.1 seconds. Home project groups became product-ready in 1521 ms and browser-observed ready in 4834 ms; existing desktop, mobile, foldable, sidebar, composer, conversation recovery, and task-pet contracts stayed green.
 
 ## Reliable clipboard fallback and feedback (2026-08-01)
@@ -98,7 +472,7 @@ This file tracks manual regression and feature verification steps.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser, and `git diff --check` passed on 2026-08-01.
 - Headless Playwright forced `navigator.clipboard.writeText` to reject. Code and message copy each made one primary attempt and one copy-event fallback, preserved the invoking button's focus, copied the complete expected text, and rendered `已复制`; the phone message action also changed to a visible check icon.
 - With `execCommand('copy')` forced to fail, the fixture showed `代码复制失败，请手动选择复制。` with danger semantics and did not mark the failed button as copied. The 393 px fixture had no horizontal overflow, console errors, or warnings.
-- The visually inspected phone screenshot is `C:/Users/SW/AppData/Local/Temp/cx-codex-clipboard-fallback-019fb91b.png`.
+- The visually inspected phone screenshot is `%TEMP%/cx-codex-clipboard-fallback-019fb91b.png`.
 - The full 24-surface `test:7420:frontend` run passed in 237.9 seconds; the home project list became product-ready in 936 ms and browser-observed ready in 4746 ms. Final health was `ok`, running and initialized, with zero pending RPC, queued RPC, and pending server requests.
 
 ## Hidden-page sync and clock quiescence (2026-08-01)
@@ -121,7 +495,7 @@ This file tracks manual regression and feature verification steps.
 
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser, and `git diff --check` passed on 2026-08-01.
 - A pre-load Playwright interval probe measured the browser fallback, command elapsed clock, and task-pet freshness clock as `1 -> 0 -> 1` across visible, hidden, and restored states. A repeated visible event left each at one active interval.
-- The conversation and task-pet phone fixtures both rendered at `393px` client and scroll width, with no console errors or warnings. The recovered conversation screenshot is `C:/Users/SW/AppData/Local/Temp/cx-codex-hidden-page-recovery-019fb91b.png`.
+- The conversation and task-pet phone fixtures both rendered at `393px` client and scroll width, with no console errors or warnings. The recovered conversation screenshot is `%TEMP%/cx-codex-hidden-page-recovery-019fb91b.png`.
 - The full 24-surface `test:7420:frontend` run passed in 235.8 seconds; the home project list became product-ready in 924 ms and browser-observed ready in 4710 ms.
 
 ## Manual unread state and direct composer attachments (2026-08-01)
@@ -985,8 +1359,8 @@ This file tracks manual regression and feature verification steps.
 ### Performance budgets
 
 - Composer submit handler to provisional conversation state: at most 50 ms.
-- Composer submit handler to first visible user bubble: at most 200 ms.
-- Composer submit handler to first visible running feedback: at most 200 ms.
+- Composer submit handler to first visible user bubble: at most 100 ms.
+- Composer submit handler to first visible running feedback: at most 100 ms.
 - While the first thread is being established, the composer is disabled to prevent accidental duplicate submission; no provisional row is inserted into the sidebar.
 
 ### Regression evidence (2026-07-17)
@@ -1090,16 +1464,16 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 ### Performance budgets
 
 - Composer submit handler to committed optimistic message plus running state: at most 50 ms.
-- Composer submit handler to the first rendered user bubble frame: at most 200 ms.
-- Composer submit handler to the first rendered running-feedback frame: at most 200 ms.
+- Composer submit handler to the first rendered user bubble frame: at most 100 ms.
+- Composer submit handler to the first rendered running-feedback frame: at most 100 ms.
 - Metrics use absolute `performance.timeOrigin + performance.now()` timestamps so an in-progress row can continue across WebView recreation.
 - Metrics retain at most the latest 50 rows from the last 7 days and expose sample count, P50, P95, and maximum for state commit, bubble/running visibility, request dispatch, server acknowledgement, turn start, first assistant data/visibility, and assistant render overhead.
 - The durable diagnostics record only thread/request/message ids plus timings. Prompt text and attachments are never copied into local storage or the window diagnostics surface.
 
 ### Regression evidence (2026-07-17)
 
-- Four manual offline phone samples measured state commit at `8, 8, 8, 10 ms`, bubble visibility at `69, 70, 71, 111 ms`, and running visibility at the same `69, 70, 71, 111 ms`.
-- The final automated full 7420 run passed with `stateCommitMs=9`, `bubbleVisibleMs=120`, and `runningVisibleMs=120`; the real thread first screen remained `317 ms` page-side while the external observer reported `5132 ms`.
+- 收紧到当前 100 ms 门槛前，四次手工离线手机样本记录状态提交 `8, 8, 8, 10 ms`，气泡/运行可见 `69, 70, 71, 111 ms`；其中 111 ms 样本按当前标准不再通过。
+- 旧 200 ms 门槛下的完整 7420 回归记录为 `stateCommitMs=9`、`bubbleVisibleMs=120`、`runningVisibleMs=120`；这些历史数值按当前标准不再作为通过证据。同期真实会话页面侧首屏为 `317 ms`，外部观察为 `5132 ms`。
 - After removing the redundant idle-send recovery preflight, the same offline gate passed again with `stateCommitMs=9`, `bubbleVisibleMs=52`, and `runningVisibleMs=52`.
 - Screenshot evidence: `output/regression-7420/frontend-ui-regression/send-feedback-budget-phone.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, and `git diff --check` passed for the timing implementation.
@@ -3882,7 +4256,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
      headers: { 'Content-Type': 'application/json' },
      body: JSON.stringify({
        method: 'thread/start',
-       params: { cwd: 'C:/Users/SW/Documents/Playground/codexui' },
+       params: { cwd: 'C:/ExampleUser/Documents/Playground/codexui' },
      }),
    }).then((res) => res.json());
    window.__emptyThreadId = created.result?.thread?.id || '';
@@ -4116,10 +4490,10 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. 查看 `output\soak-7420\soak-*.json` 报告。
 
 #### Expected Results
-- 脚本在每个采样点输出本机、公网、API、事件回放序号、公网 401、pending/queued RPC、timeout 和慢 `thread/list` 信息。
-- 没有连续健康检查失败。
-- 事件回放持续可用且 `latestSeq` 不倒退；公网鉴权边界持续为 HTTP 401。
-- `queuedRpcCount` 与 `pendingRpcCount` 不超过阈值。
+- 脚本在每个采样点输出本机、API、App Server、事件回放序号、pending/queued RPC、待处理服务请求、Runtime 未确定请求、timeout 和慢 `thread/list` 信息；配置公网时再输出公网健康与公网 401。
+- 每个样本的本机/API JSON 状态和 App Server 就绪状态都必须通过；App Server PID 与 Runtime `streamId` 必须保持不变，健康与回放端点的流 ID 必须一致；默认不容忍单次失败。
+- 事件回放持续可用且 `latestSeq` 不倒退；配置公网时，公网鉴权边界持续为 HTTP 401；使用 `-SkipPublic` 时，stdout 与 JSON 必须把公网健康和鉴权标记为 `skipped` / 未检查。
+- `queuedRpcCount`、`pendingRpcCount`、待处理服务请求、Runtime 未确定请求与活动 plan-mode turn 默认都必须为 0。
 - 浸泡窗口内不出现新的 RPC timeout。
 - 脚本退出码为 `0`，JSON 报告 `summary.passed=true`。
 
@@ -4146,7 +4520,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 - PowerShell parser 通过。
 - 真实 Quick Tunnel 短时浸泡通过 5 个样本：事件回放持续为 `latestSeq=51`，公网未登录 API 均为 HTTP 401，RPC pending/queued、timeout、慢 `thread/list`、回放失败、鉴权失败和序号倒退均为 0；报告为 `output\soak-7420\soak-20260725-124700.json`。
-- 负向门禁使用本机回环地址冒充公网，连续 3 次得到 HTTP 200 后按预期失败，并报告 `public auth boundary failed 3 times in a row`。
+- 历史负向门禁使用本机回环地址冒充公网，按当时允许两次连续失败的参数在第 3 个 HTTP 200 样本退出；当前默认值已收紧为零容忍，同类错误会在首个样本退出。
 
 ---
 
@@ -4841,6 +5215,31 @@ The pending home conversation must derive `is-turn-in-progress` from its current
   - 展开全文后页面存在 `.message-text-flow--long-expanded`，高度为 760px 且内部可滚动。
   - 触发回滚按钮时弹出 `确认回滚` 确认框，取消后 URL 保持在当前线程。
 
+### Feature: 执行中跨来源用户消息单气泡收敛
+
+#### Prerequisites
+- 会话正在执行，页面先取得本地会话日志缓存，随后取得 App Server 权威快照。
+- 两个来源中的同一条用户消息可能分别使用 `msg_*` 与 `item-*` 标识，甚至具有不同分页索引，但会话日志中的稳定 `turn_id`、正文和附件一致。
+
+#### Steps
+1. 打开一个正在执行的已有会话。
+2. 等待缓存消息和权威快照依次完成加载与合并。
+3. 观察本轮刚发送的用户消息气泡。
+4. 在相邻轮次再次发送相同正文，确认两个真实轮次仍分别显示。
+
+#### Expected Results
+- 同一稳定 `turn_id`、相同正文和附件的缓存消息与权威消息只显示一个气泡，并以权威消息为准。
+- 仅正文相同但轮次不同的用户消息不得被误删。
+- 收敛仅发生在前端消息合并阶段，不会重新发送或新建任务。
+
+#### Regression Evidence
+- `npm.cmd run verify:frontend-normalizers` 覆盖执行中 `preserveMissing=true`、跨来源 ID/分页索引不一致和相邻轮次同文消息场景。
+- `npm.cmd run verify:server-modules` 覆盖从会话日志元数据恢复稳定 `turn_id`。
+- 2026-08-07 真实线程诊断：运行数据库只有 1 个请求、1 个 `clientMessageId`、0 次重试，`thread/read` 也只返回 1 条目标用户消息；修复前移动页面连续 3 次出现 `msg_*` 与 `item-*` 两个气泡。
+- 2026-08-07 本机热更新后，393x852 真实线程连续 3 次均只统计到 1 个目标用户气泡；页面加载新版前端包，消息缓存升级到 v2。
+- 2026-08-07 验证通过：`git diff --check`、`npm.cmd run verify:frontend-normalizers`、`npm.cmd run verify:server-modules`、`npm.cmd run build:frontend`、`npm.cmd run build:cli`。
+- 2026-08-07 完整 7420 前端回归运行到最终 `latest-reply-promoted-phone` 场景并正常退出，产出 42 张自动化截图；另保留真实移动会话截图。
+
 ---
 
 ### Feature: 分层运行状态与强制恢复
@@ -5125,13 +5524,13 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 6. 代码审查确认 `src/server/codexAppServerBridge.ts` 不再内联 app-server approval/sandbox 参数，只调用 `createAppServerArgs(resolveAppServerLaunchPolicy())`。
 
 #### Expected Results
-- `appServerLaunch.ts` 集中声明当前 legacy high-trust 默认策略：`approvalPolicy: never`、`sandboxMode: danger-full-access`。
-- `createAppServerArgs()` 生成与既有行为一致的 `codex app-server -c approval_policy="never" -c sandbox_mode="danger-full-access"` 参数。
+- `appServerLaunch.ts` 集中声明安全默认策略：`approvalPolicy: on-request`、`sandboxMode: workspace-write`。
+- `createAppServerArgs()` 默认生成 `codex app-server -c approval_policy="on-request" -c sandbox_mode="workspace-write"` 参数；显式选择 `never + danger-full-access` 时继续保留兼容行为并标记 `legacyHighTrust=true`。
 - `resolveAppServerLaunchPolicy()` 支持 `CX_CODEX_APP_SERVER_APPROVAL_POLICY` / `CODEXUI_APP_SERVER_APPROVAL_POLICY` 和 `CX_CODEX_APP_SERVER_SANDBOX_MODE` / `CODEXUI_APP_SERVER_SANDBOX_MODE`。
-- 只接受官方常见枚举值；非法值回退到 legacy 默认策略。
+- 只接受官方常见枚举值；非法值回退到安全默认策略。
 - `/codex-api/health`、`/codex-api/diagnostics` 和诊断页的后端服务卡片展示有效 launch policy，只包含 `approvalPolicy`、`sandboxMode` 和 `legacyHighTrust`，不展示环境变量原文。
 - Server module smoke 覆盖默认策略、官方枚举、自定义策略参数生成、环境变量 trim、`CX_CODEX_` 优先级、`CODEXUI_` fallback、非法值回退和脱敏策略快照。
-- README 和安全文档记录更保守的 `on-request` + `workspace-write` 覆盖方式。
+- README 和安全文档记录默认 `on-request + workspace-write`，以及显式高信任兼容组合的风险边界。
 
 #### Rollback / Cleanup
 - 如需回滚，撤销 `src/server/appServerLaunch.ts`、bridge import/call 调整、server module smoke、verify-server-modules、README、changelog、安全文档和本节测试记录。
@@ -11004,7 +11403,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - Governance fails if the local regression documents or required key phrases are removed.
 - Release package smoke fails if either local regression document is missing from the source zip.
 - Non-browser 7420 regression confirms local health, App Server health, public health, and event replay endpoints.
-- Short soak completes without consecutive health failures, new RPC timeouts, or pending/queued RPC threshold failures.
+- Short soak requires every local/API/App Server sample to pass and keeps RPC pending/queued, pending server requests, Runtime uncertain requests, plan-mode turns, new RPC timeouts, and slow `thread/list` counts at zero by default.
 - If browser automation or Android checks are not run, the execution record explicitly says visual/device regression cannot be claimed complete.
 
 #### Rollback/Cleanup Notes
@@ -11586,7 +11985,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 2026-07-05 static verification: `git diff --check` passed.
 - 2026-07-05 frontend build: `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and Vite build; Vite still reports the existing large chunk warning.
 - 2026-07-05 frontend page regression: `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -CaptureScreenshots -ScreenshotTaskName sidebar-desktop-list-parity` passed for home desktop/foldable, skills phone, GitHub trending phone, diagnostics phone, local preview phone, `sidebar-rows-fixture-phone`, desktop/phone/foldable `composer-shell-fixture`, and desktop/phone/foldable `conversation-blocks-fixture`; thread page check was skipped because no `-ThreadId` was supplied.
-- 2026-07-05 fixture sidebar ordering assertions: `sidebar-rows` verified the first project group remains `E:/javaword/CXCodex/codexui`, the running thread appears in both the running shortcut and exactly once in its owning project list, and the pinned thread appears in both the pinned shortcut and exactly once in its owning project list.
+- 2026-07-05 fixture sidebar ordering assertions: `sidebar-rows` verified the first project group remains `E:/workspace/CXCodex/codexui`, the running thread appears in both the running shortcut and exactly once in its owning project list, and the pinned thread appears in both the pinned shortcut and exactly once in its owning project list.
 - 2026-07-05 screenshot artifact: `output/regression-7420/sidebar-desktop-list-parity/sidebar-rows-fixture-phone.png` shows the shortcut sections and project list coexisting without sidebar horizontal overflow.
 
 ### Feature: P4 compact mobile sidebar action grid and project thread limit
@@ -13864,7 +14263,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 2. In `发送` mode, confirm Enter sends, Shift + Enter inserts a line break, and Ctrl / Command + Enter also sends. In `换行` mode, confirm Enter inserts a line break and Ctrl / Command + Enter sends.
 3. Type with a Chinese IME in either mode and confirm a composition-confirming Enter does not send prematurely.
 4. Click the composer expand icon and confirm the input area grows to no more than half the viewport; click its collapse icon or press Escape to return to normal size.
-5. While a turn is running, confirm exactly one tail status reads `正在处理 · X 秒`, has only a subtle pulse, and clicking the row opens the latest runtime detail sheet.
+5. While a turn is running, confirm exactly one expanded tail process reads `正在处理 · X 秒`, shows the latest activity and current command/output inline, and keeps only a subtle pulse. In the explicit non-active compact fixture, confirm the one-line status opens the latest runtime detail sheet.
 6. Let an assistant reply begin streaming and confirm the same tail status remains below the partial reply, changes its hint without remounting, and keeps the original elapsed time.
 7. Start a command and confirm the active command is not duplicated in message history; its latest output is available from the tail status, while the completed command later returns as a collapsed history row.
 8. Stop a turn and confirm the conversation keeps `已在 X 后停止` plus the `编辑继续` action. Click it twice to confirm the prior user instruction is restored to the composer and the current turn is rolled back.
@@ -13881,7 +14280,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - Keyboard preference persists locally and works consistently across desktop and mobile layouts.
 - Long-form input is available without losing the current thread context or composer controls.
 - Thinking, execution, and reply generation share one stable tail status during normal work; partial text never makes it disappear or reset its timer.
-- The tail status is collapsed by default and exposes only the latest active detail; historical completed commands remain separately inspectable and collapsed.
+- The active turn process stays expanded with one stable timer and latest activity. Non-active runtime detail and historical completed commands remain separately inspectable and collapsed.
 - The tail status follows the streaming reply in both visual and DOM reading order.
 - A confirmed stop leaves a clear duration and a safe edit-and-continue route instead of a dead-end partial response.
 - Optimistic rendering stays instant but protocol bookkeeping is not exposed in the conversation UI.
@@ -14331,6 +14730,27 @@ Verification:
 - In a headless browser, delay `/codex-api/upload-file`, verify immediate image/file feedback, force one upload failure, retry it, and capture desktop plus 393 px mobile screenshots.
 - Start the built server and verify cache/Brotli headers for `index.html` and a hashed JS asset.
 
+## 上传图片与附件缓存读取（2026-08-12）
+
+### Expected behavior
+
+1. `/codex-api/upload-file` 返回的 `codex-web-uploads/f-*` 临时文件路径，在聊天消息里必须能通过 `/codex-local-image` 正常显示图片缩略图。
+2. 同一上传缓存内的普通文件必须能通过 `/codex-local-file` 和文件卡片使用的 `/codex-local-browse` 打开或进入预览。
+3. 上传缓存不是新的工作区根：缓存目录不能被目录浏览，`/codex-local-edit` 仍必须拒绝上传缓存路径，符号链接或 junction 逃逸仍必须被拒绝。
+4. 工作区外且不属于 CX-Codex 上传缓存的普通本地路径继续返回 `403`，不能为了修复图片而放宽全盘本地文件读取。
+
+### Verification
+
+- 复现探针确认真实上传图片文件存在，但旧 7420 对 `/codex-local-image?path=...codex-web-uploads...` 返回 `HTTP 403` 与“该路径不在已登记的工作区目录内”。
+- `npm.cmd run verify:server-modules` 覆盖上传缓存图片读取、直接文件读取、文件卡片 browse 预览、缓存目录拒绝、编辑拒绝、外部路径拒绝和 junction 逃逸拒绝。
+- 上传缓存路径只接受服务器生成的 `f-xxxxxx/<filename>` 两段结构；请求值只参与匹配，传入 `realpath` 的目录名和文件名必须来自实际目录枚举，且 canonical 根目录检查继续拒绝 junction/符号链接逃逸。发布 PR 的高危 `js/path-injection` CodeQL 门禁必须为零。
+- 隔离候选服务使用临时 Runtime DB 和无副作用 bridge；`agent-browser` 在 393 x 852 H5 视口打开真实上传路径，图片 `complete=true`、原始尺寸 `1658 x 1658`、控制台无错误。同期 HTTP 探针确认图片/直接文件读取为 `200`，缓存目录、编辑接口和普通工作区外文件仍为 `403`。
+- 前端消息渲染映射未改动；发布前仍应在安装候选上补一次“上传后发送消息 -> 缩略图 -> 点击预览”的完整交互确认。
+
+### Rollback
+
+- 回退 `src/server/fileUpload.ts` 的上传缓存路径解析、`src/server/httpServer.ts` 对图片/文件只读路由的上传缓存授权，以及对应 server smoke 和本测试章节。不要回退工作区根目录授权策略。
+
 ## Cold-start code splitting and sidebar stability (2026-07-30)
 
 1. The home route does not request the conversation renderer, queued-message UI, sidebar tree on collapsed mobile, settings cards, task-pet settings, or favorites modal before those surfaces are actually needed.
@@ -14524,7 +14944,7 @@ Verification:
 
 Current evidence:
 
-- Headless Playwright passed `等待处理 → 运行中 → 未读` command-menu priority, query-time collapse to one `任务` group, Arrow/Enter activation, and sidebar waiting-before-newer-running order. The waiting indicator resolved to `rgb(154, 103, 0)`, ordinary running to `rgb(15, 118, 110)`, and the 393 px viewport had no horizontal overflow. Screenshots: `C:\Users\SW\AppData\Local\Temp\cx-codex-waiting-priority-command-019fb91b.png` and `C:\Users\SW\AppData\Local\Temp\cx-codex-waiting-priority-sidebar-019fb91b.png`.
+- Headless Playwright passed `等待处理 → 运行中 → 未读` command-menu priority, query-time collapse to one `任务` group, Arrow/Enter activation, and sidebar waiting-before-newer-running order. The waiting indicator resolved to `rgb(154, 103, 0)`, ordinary running to `rgb(15, 118, 110)`, and the 393 px viewport had no horizontal overflow. Screenshots: `%TEMP%\cx-codex-waiting-priority-command-019fb91b.png` and `%TEMP%\cx-codex-waiting-priority-sidebar-019fb91b.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser, and `git diff --check` passed after the waiting-priority change.
 - `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -AgentBrowserTimeoutSec 90` passed all 24 desktop, phone portrait/landscape, and foldable surfaces in 246.9 seconds. The home screen was product-usable in 2253 ms (browser-observed 5012 ms), and existing composer, sidebar, conversation, local-preview, diagnostics, and task-pet contracts stayed green.
 
@@ -14549,15 +14969,15 @@ Verification:
 
 Current evidence:
 
-- The attention-group extension passed headless Playwright with explicit `推荐 → 需要关注 → 最近任务` ordering, running-before-newer-unread priority, query-time collapse to one `任务` group, Arrow/Enter activation, initial focus, and 393 × 852 containment (`scrollWidth = clientWidth = 393`). Screenshots: `C:\Users\SW\AppData\Local\Temp\cx-codex-task-attention-desktop-019fb91b.png` and `C:\Users\SW\AppData\Local\Temp\cx-codex-task-attention-phone-019fb91b.png`.
+- The attention-group extension passed headless Playwright with explicit `推荐 → 需要关注 → 最近任务` ordering, running-before-newer-unread priority, query-time collapse to one `任务` group, Arrow/Enter activation, initial focus, and 393 × 852 containment (`scrollWidth = clientWidth = 393`). Screenshots: `%TEMP%\cx-codex-task-attention-desktop-019fb91b.png` and `%TEMP%\cx-codex-task-attention-phone-019fb91b.png`.
 - After the attention-group change, `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -AgentBrowserTimeoutSec 90` passed all 24 desktop, phone portrait/landscape, and foldable surfaces in 247 seconds. The home screen was product-usable in 1261 ms (browser-observed 5112 ms), and existing composer, sidebar, conversation, local-preview, diagnostics, and task-pet contracts stayed green.
 - Headless Playwright passed initial focus, Arrow navigation, one-result filtering, Enter activation, Escape close, focus restoration, 393 × 852 viewport containment, horizontal-overflow, and visible running/unread labels.
 - Screenshots: `output/regression-7420/global-command-menu-parity/command-menu-desktop.png` and `output/regression-7420/global-command-menu-parity/command-menu-phone.png`.
-- The file quick-open extension passed headless Playwright with zero requests for an empty query, delayed stale-result rejection, first-file keyboard selection, explicit empty/error states, file activation, two-level Escape behavior, restored trigger focus, and 393 × 852 containment (`scrollWidth = clientWidth = 393`). Screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-quick-open-019fb91b.png`.
+- The file quick-open extension passed headless Playwright with zero requests for an empty query, delayed stale-result rejection, first-file keyboard selection, explicit empty/error states, file activation, two-level Escape behavior, restored trigger focus, and 393 × 852 containment (`scrollWidth = clientWidth = 393`). Screenshot: `%TEMP%\cx-codex-quick-open-019fb91b.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser, and `git diff --check` passed after the quick-open change.
 - `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -AgentBrowserTimeoutSec 90` passed all 24 desktop, phone portrait/landscape, and foldable surfaces. The home screen was product-usable in 1353 ms (browser-observed 4966 ms), and the existing composer, sidebar, conversation, local-preview, diagnostics, and task-pet contracts stayed green.
 - The workspace-recent-file extension passed an independent `agent-browser` flow against the real 7420 file-search endpoint: the first opened result was persisted, reopening empty file mode issued zero search requests, the first recent file retained keyboard selection and search-field focus, Enter reopened it, a newer foreign-workspace entry remained hidden, typing replaced `最近文件` with live `文件` results, and clearing restored recents.
-- At 393 × 852, the recent-file panel measured 369 px inside a 393 px document/viewport with no horizontal overflow. Visually inspected screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-quick-open-recents-019fb91b.png`.
+- At 393 × 852, the recent-file panel measured 369 px inside a 393 px document/viewport with no horizontal overflow. Visually inspected screenshot: `%TEMP%\cx-codex-quick-open-recents-019fb91b.png`.
 - After the recent-file change, `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser, and `git diff --check` passed. The complete `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:7420 -AgentBrowserTimeoutSec 90` gate passed all 24 surfaces in 234.9 seconds; the home screen was product-usable in 1916 ms (browser-observed 4811 ms).
 
 ## Copyable same-site conversation links (2026-08-01)
@@ -14579,7 +14999,7 @@ Current evidence:
 
 - Against `http://127.0.0.1:7420/#/`, a denied primary clipboard attempt fell back once and copied `http://127.0.0.1:7420/#/thread/019e0857-5579-7962-aba2-b3511ad4250e`; it matched the expected current-site URL byte for byte, closed the menu, and showed a success toast.
 - With the fallback forced to return false, the probe recorded one primary attempt, zero copied values, a closed menu, and the visible danger message `复制失败，请手动复制浏览器地址。`.
-- At 393 × 852, the visible menu measured 160 × 284 px, contained all eight actions, stayed within the visible viewport, and produced no horizontal overflow. Visually inspected screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-copy-thread-link-mobile-019fb91b.png`.
+- At 393 × 852, the visible menu measured 160 × 284 px, contained all eight actions, stayed within the visible viewport, and produced no horizontal overflow. Visually inspected screenshot: `%TEMP%\cx-codex-copy-thread-link-mobile-019fb91b.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, the PowerShell parser, and `git diff --check` passed. The complete 24-surface frontend regression passed in 237.6 seconds; Home became product-usable in 1183 ms (browser-observed 4785 ms), and all existing desktop, portrait/landscape phone, foldable, sidebar, composer, conversation, recovery, and task-pet checks remained green.
 
 ## Single collision-aware sidebar thread menu (2026-08-01)
@@ -14601,7 +15021,7 @@ Current evidence:
 
 - Before the fix, one click on a duplicated pinned/project thread produced two 160 × 284 menus; the second was offscreen at approximately `top=1385` / `bottom=1669` on a 393 × 852 viewport.
 - After the fix, the same fixture exposed two source rows but exactly one 160 × 284 menu, one expanded trigger, all eight actions, and first-action focus. ArrowDown moved to `导出会话`; Escape removed the menu and restored the exact pinned trigger.
-- A lower project-row menu flipped to `data-side="top"` at `left=192`, `top=523`, `right=352`, `bottom=807`; the 393 × 852 page had no horizontal overflow. Visually inspected screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-single-thread-menu-mobile-019fb91b.png`.
+- A lower project-row menu flipped to `data-side="top"` at `left=192`, `top=523`, `right=352`, `bottom=807`; the 393 × 852 page had no horizontal overflow. Visually inspected screenshot: `%TEMP%\cx-codex-single-thread-menu-mobile-019fb91b.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The complete 24-surface frontend regression passed in 246.7 seconds; Home became product-usable in 961 ms (browser-observed 4849 ms), and all existing desktop, portrait/landscape phone, foldable, sidebar, composer, conversation, recovery, and task-pet checks remained green.
 
 ## Collision-aware project action menu (2026-08-01)
@@ -14623,7 +15043,7 @@ Current evidence:
 
 - Before the fix, the lower `Empty Workspace` trigger sat at approximately `top=827.6` / `bottom=851.6`; its 160 × 114 menu opened below it at `top=859.6` / `bottom=973.6` on a 393 × 852 viewport, so the entire action surface was invisible.
 - After the fix, the same trigger produced exactly one 160 × 114 menu with one expanded trigger and all three actions. It flipped to `data-side="top"` at `left=194`, `top=706`, `right=354`, `bottom=820`; the page had no horizontal overflow and `新建任务` owned focus.
-- ArrowDown moved focus to `修改名称`; activation produced the current `Empty Workspace` value in a focused 220 px rename field, kept the resized menu in the viewport, and Escape restored the exact lower-project trigger. Visually inspected screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-project-menu-mobile-019fb91b.png`.
+- ArrowDown moved focus to `修改名称`; activation produced the current `Empty Workspace` value in a focused 220 px rename field, kept the resized menu in the viewport, and Escape restored the exact lower-project trigger. Visually inspected screenshot: `%TEMP%\cx-codex-project-menu-mobile-019fb91b.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The complete 26-surface frontend regression passed in 268.7 seconds; Home became product-usable in 1640 ms (browser-observed 4820 ms), and all existing desktop, portrait/landscape phone, foldable, sidebar, composer, conversation, recovery, and task-pet checks remained green.
 
 ## Background sidebar project reorder anchoring (2026-08-01)
@@ -14664,7 +15084,7 @@ Verification:
 
 Current evidence:
 
-- The real 7420 browser probe settled 3 initial rows for `src`, retained 2 locally matching rows during the delayed follow-up with `aria-busy=true`, zero full loading panels, stable input focus and active file row, then converged to 1 authoritative result with no horizontal overflow. Visually inspected screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-command-menu-typeahead-019fb91b.png`.
+- The real 7420 browser probe settled 3 initial rows for `src`, retained 2 locally matching rows during the delayed follow-up with `aria-busy=true`, zero full loading panels, stable input focus and active file row, then converged to 1 authoritative result with no horizontal overflow. Visually inspected screenshot: `%TEMP%\cx-codex-command-menu-typeahead-019fb91b.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The complete 26-surface frontend regression passed in 262.6 seconds; Home became product-usable in 922 ms (browser-observed 4772 ms), and all existing desktop, portrait/landscape phone, foldable, sidebar, composer, conversation, recovery, and task-pet checks remained green.
 
 ## IME-safe file-mention keyboard handling (2026-08-01)
@@ -14684,7 +15104,7 @@ Current evidence:
 
 - Before the fix, a composition-state Enter over 20 visible file suggestions was prevented by the mention handler; after Vue settled, the `@Th` token was removed and the highlighted file became an attachment instead of allowing the IME to confirm text.
 - The composer regression fixture owns a fixed three-row file-search response so this keyboard boundary does not depend on repository scan latency or current disk contents.
-- After the fix, the 393 x 852 browser probe left both composition-state Enter and `keyCode=229` unprevented, retained `@Th` plus all 20 real file candidates, created zero attachments, submitted zero drafts, and introduced no horizontal overflow. A following ordinary Enter remained prevented by the menu, closed the candidates, and created exactly one file attachment. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-ime-mention-safe-019fb91b.png`.
+- After the fix, the 393 x 852 browser probe left both composition-state Enter and `keyCode=229` unprevented, retained `@Th` plus all 20 real file candidates, created zero attachments, submitted zero drafts, and introduced no horizontal overflow. A following ordinary Enter remained prevented by the menu, closed the candidates, and created exactly one file attachment. Screenshot: `%TEMP%\cx-codex-ime-mention-safe-019fb91b.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The complete 26-surface frontend regression passed in 267.9 seconds; its deterministic composer probe recorded `valueRetained="@Th"`, `suggestionCount=3`, `attachmentCount=0`, and `submitCount=0` before all existing desktop, phone, foldable, sidebar, conversation, recovery, and task-pet checks completed successfully.
 
 ## Sidebar search result continuity (2026-08-01)
@@ -14702,7 +15122,7 @@ Verification:
 
 Current evidence:
 
-- The 393 x 852 browser probe held the prior content match plus current `移动端` title matches, switched to only `fixture-thread-idle` for the divergent `release` query, and restored the compatible rows without an empty state or horizontal overflow. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-sidebar-search-continuity-019fb91b.png`.
+- The 393 x 852 browser probe held the prior content match plus current `移动端` title matches, switched to only `fixture-thread-idle` for the divergent `release` query, and restored the compatible rows without an empty state or horizontal overflow. Screenshot: `%TEMP%\cx-codex-sidebar-search-continuity-019fb91b.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed.
 - The complete 27-surface frontend regression passed in 276.2 seconds. Its deterministic search probe reported `held=[unread,six,waiting]`, `diverged=[idle]`, and the same compatible set after restore; every existing desktop, phone, foldable, command-menu, composer, conversation, recovery, and task-pet check remained green.
 
@@ -14728,11 +15148,11 @@ Verification:
 Current evidence:
 
 - Before the fix, `SkillDetailModal.fetchReadme()` returned immediately for a non-OK response and swallowed thrown requests in an empty `catch`, leaving the detail body blank with no explanation or recovery path.
-- The 393 x 852 browser probe kept the skill title, explanation, source link, and install action visible alongside the inline failure card. The modal remained within `left=0`, `right=393`, `top=470.25`, `bottom=852`, with no horizontal overflow. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-skill-readme-retry-019fb91b.png`.
+- The 393 x 852 browser probe kept the skill title, explanation, source link, and install action visible alongside the inline failure card. The modal remained within `left=0`, `right=393`, `top=470.25`, `bottom=852`, with no horizontal overflow. Screenshot: `%TEMP%\cx-codex-skill-readme-retry-019fb91b.png`.
 - Activating `重试` removed the failure card and restored the deterministic README text `重试后已恢复技能说明。`; the stale retry control did not remain in the DOM.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The complete 28-surface frontend regression passed in 282.9 seconds; Home became product-usable in 2126 ms (browser-observed 4871 ms), and every existing desktop, phone, foldable, sidebar, command-menu, composer, conversation, recovery, and task-pet check remained green.
 - Before focus containment, opening a real Skills Hub card left `document.activeElement` on the background `.skill-card`; pressing Tab moved to another background card while the dialog stayed visible.
-- After containment, the 393 x 852 fixture opened on `.sdm-close`, Shift+Tab wrapped to `.sdm-btn-primary`, Tab wrapped back, and an attempted focus on the background launcher was immediately contained. Escape closed the detail and restored `.docs-skill-detail-launch`; no horizontal overflow appeared. The focused primary action exposed a 2 px solid `rgb(37, 99, 235)` outline. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-skill-modal-focus-019fb91b.png`.
+- After containment, the 393 x 852 fixture opened on `.sdm-close`, Shift+Tab wrapped to `.sdm-btn-primary`, Tab wrapped back, and an attempted focus on the background launcher was immediately contained. Escape closed the detail and restored `.docs-skill-detail-launch`; no horizontal overflow appeared. The focused primary action exposed a 2 px solid `rgb(37, 99, 235)` outline. Screenshot: `%TEMP%\cx-codex-skill-modal-focus-019fb91b.png`.
 - The final `npm.cmd run build:frontend` and complete 28-surface frontend regression passed in one 323.5-second run. The suite retained green coverage across desktop, portrait phone, landscape phone, foldable, Skills, sidebar, command menu, composer, conversation recovery, and task-pet fixtures.
 
 ## Recoverable sidebar labels and task-action names (2026-08-01)
@@ -14753,7 +15173,7 @@ Verification:
 Current evidence:
 
 - Before the fix, a 377 px test title was clipped to 242 px with no `title` attribute. Its adjacent action button exposed `title="thread_menu"` and no `aria-label`.
-- After the fix, both rendered copies of the deterministic long title were clipped and both retained the exact full-title hint. Both adjacent triggers exposed `会话操作：优化会话栏桌面端信息密度，确保长标题在窄侧栏中仍可完整识别`; internal-key leakage was `0`, all three project labels retained exact hints, and horizontal overflow stayed false. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-sidebar-full-title-after-019fb91b.png`.
+- After the fix, both rendered copies of the deterministic long title were clipped and both retained the exact full-title hint. Both adjacent triggers exposed `会话操作：优化会话栏桌面端信息密度，确保长标题在窄侧栏中仍可完整识别`; internal-key leakage was `0`, all three project labels retained exact hints, and horizontal overflow stayed false. Screenshot: `%TEMP%\cx-codex-sidebar-full-title-after-019fb91b.png`.
 - `npm.cmd run build:frontend`, PowerShell parser validation, and `git diff --check` passed. The complete 28-surface frontend regression passed in 288.5 seconds; Home became product-usable in 917 ms (browser-observed 4732 ms), and all existing desktop, phone, foldable, Skills, sidebar, command-menu, composer, conversation-recovery, and task-pet checks remained green.
 
 ## Anchored image-preview gestures (2026-08-01)
@@ -14776,7 +15196,7 @@ Current evidence:
 
 - Before the fix, a pixel-mode Ctrl-wheel event with `deltaY=-12` jumped directly from 100% to 125%.
 - After the fix, the same event reached 104%, was default-prevented, did not bubble, and produced a pointer-anchored `translate3d` offset. A synthetic two-pointer gesture reached exactly 150%; lifting one pointer and moving the other changed the image translation while retaining scale, and releasing the last pointer cleared dragging with no horizontal overflow.
-- The 393 x 852 preview remained inside one modal and retained its existing toolbar and close action. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-image-preview-pinch-after-019fb91b.png`.
+- The 393 x 852 preview remained inside one modal and retained its existing toolbar and close action. Screenshot: `%TEMP%\cx-codex-image-preview-pinch-after-019fb91b.png`.
 - A reused browser session that loaded `branding/cx-codex-logo.png` before mounting the conversation fixture still registered the cached image as ready (`complete=true`, `naturalWidth=512`, `is-loaded=true`), avoiding a permanent transparent skeleton when the native `load` event had already elapsed.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The complete 29-surface frontend regression passed in 314.6 seconds; Home became product-usable in 2050 ms (browser-observed 5616 ms), and every existing desktop, phone, foldable, Skills, sidebar, command-menu, composer, conversation-recovery, and task-pet check remained green.
 
@@ -14820,7 +15240,7 @@ Verification:
 Current evidence:
 
 - Before this change, `formatRelative()` read `Date.now()` directly during render, so elapsed labels had no reactive owner and could remain stale on an otherwise idle page.
-- The 393 x 852 headless Playwright probe started with one active 30-second interval, dropped to zero while hidden, and restored exactly one after becoming visible. Advancing the clock by seven days left the hidden label at `26d`, then refreshed it immediately to `33d` on visibility recovery; the page stayed at 393 px with no horizontal overflow, console errors, or page errors. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-sidebar-relative-time-019fb91b.png`.
+- The 393 x 852 headless Playwright probe started with one active 30-second interval, dropped to zero while hidden, and restored exactly one after becoming visible. Advancing the clock by seven days left the hidden label at `26d`, then refreshed it immediately to `33d` on visibility recovery; the page stayed at 393 px with no horizontal overflow, console errors, or page errors. Screenshot: `%TEMP%\cx-codex-sidebar-relative-time-019fb91b.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The complete 29-surface frontend regression passed in 311.4 seconds; Home became product-usable in 933 ms (browser-observed 4867 ms), and every existing desktop, phone, foldable, Skills, sidebar, command-menu, composer, conversation-recovery, image-preview, and task-pet check remained green.
 
 ## Message reading anchor and named composer input (2026-08-01)
@@ -14842,7 +15262,7 @@ Verification:
 Current evidence:
 
 - Before the change, assistant actions offered rollback, favorite, and copy but no direct way to restart reading a long response from its top. The composer textarea exposed a placeholder but no `aria-label`, `name`, or associated label.
-- The 390 x 844 Playwright probe moved the selected response from a 109 px viewport offset to exactly 16 px, exposed a 32 x 32 named action, retained the return-to-latest control 281 px away from the bottom, and reported no console, page, or horizontal-overflow error. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-message-reading-anchor-019fb91b.png`.
+- The 390 x 844 Playwright probe moved the selected response from a 109 px viewport offset to exactly 16 px, exposed a 32 x 32 named action, retained the return-to-latest control 281 px away from the bottom, and reported no console, page, or horizontal-overflow error. Screenshot: `%TEMP%\cx-codex-message-reading-anchor-019fb91b.png`.
 - The same probe resolved the composer by role and `向 Codex 提问，+ 添加功能`; its placeholder and `aria-label` were identical.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The complete 29-surface frontend regression passed in 317.8 seconds; Home became product-usable in 949 ms (browser-observed 4887 ms), and all existing desktop, phone, foldable, Skills, sidebar, command-menu, composer, conversation-recovery, image-preview, and task-pet checks remained green.
 
@@ -14867,7 +15287,7 @@ Current evidence:
 
 - Before the change, the UI labeled `thread/archive` as `删除会话`, used destructive styling, and claimed the task could later be found in an archive list even though 7420 exposes no clear archive-list entry.
 - The checked App Server schema defines a normal `ThreadArchiveResponse` as an empty object; the 7420 materializing-thread compatibility path returns `null`. The gateway now distinguishes those results, so a local-only hide cannot be presented as an undoable archive.
-- The first 393 x 852 Playwright probe verified a `status` toast, exact completion and undo wording, a 44 x 44 action, named close control, successful replacement feedback, unchanged route, no overflow, and no console or page error. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-archive-undo-019fb91b.png`.
+- The first 393 x 852 Playwright probe verified a `status` toast, exact completion and undo wording, a 44 x 44 action, named close control, successful replacement feedback, unchanged route, no overflow, and no console or page error. Screenshot: `%TEMP%\cx-codex-archive-undo-019fb91b.png`.
 - After the final style adjustment, the 393 x 852 toast measured 304 x 62, kept its message at a single 20 px line, and retained a 44 x 44 undo target with no console, page, or overflow error.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed after the final protocol-boundary correction. The complete 29-surface frontend regression passed in 319.3 seconds; Home became product-usable in 1603 ms (browser-observed 5173 ms), and all existing desktop, phone, foldable, Skills, sidebar, command-menu, composer, conversation-recovery, image-preview, and task-pet checks remained green.
 
@@ -14891,7 +15311,7 @@ Current evidence:
 
 - Before this change, a hidden-to-visible viewport scroll could update `autoFollowBottom` before the first recovered message array arrived, so recovery used the transient viewport position rather than the user's pre-background intent.
 - The 393 x 852 headless Playwright probe injected that race explicitly. Bottom-follow settled at 0 px from the bottom with no return action; history reading kept its visible anchor at a 0 px delta and stayed 729 px from the bottom with `返回最新`; an explicit post-resume wheel interaction stayed 357 px from the bottom with `返回最新`.
-- All three paths rendered the recovered output, remained exactly 393 px wide, and produced no console or page error. Visual inspection screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-foreground-scroll-intent-019fb91b.png`.
+- All three paths rendered the recovered output, remained exactly 393 px wide, and produced no console or page error. Visual inspection screenshot: `%TEMP%\cx-codex-foreground-scroll-intent-019fb91b.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The complete 32-surface frontend regression passed in 351 seconds; Home became product-usable in 935 ms (browser-observed 5043 ms), and all existing desktop, portrait/landscape phone, foldable, Skills, sidebar, command-menu, composer, conversation, recovery, image-preview, and task-pet checks remained green.
 
 ## Non-blocking thread-list cache persistence (2026-08-01)
@@ -14929,7 +15349,7 @@ Verification:
 Current evidence:
 
 - Before the fix, one Tab from the open command menu moved `document.activeElement` to `BODY`, outside the dialog, while `document.body.style.overflow` remained empty.
-- The 393 × 852 headless Playwright probe kept both Tab directions on the search input, reclaimed a forced background focus, restored the launcher plus prior body overflow after Escape, and reported no console, page, or horizontal-overflow error. Visually inspected screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-command-menu-focus-ownership-20260801.png`.
+- The 393 × 852 headless Playwright probe kept both Tab directions on the search input, reclaimed a forced background focus, restored the launcher plus prior body overflow after Escape, and reported no console, page, or horizontal-overflow error. Visually inspected screenshot: `%TEMP%\cx-codex-command-menu-focus-ownership-20260801.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The complete 33-surface frontend regression passed in 364.2 seconds; its new deterministic probe recorded `forwardWrap=true`, `backwardWrap=true`, `outsideFocusReclaimed=true`, `openerFocusRestored=true`, and `bodyScrollRestored=true`. Home became product-usable in 2477 ms (browser-observed 5197 ms), and every existing desktop, portrait/landscape phone, foldable, Skills, sidebar, command-menu type-ahead, composer, conversation-recovery, image-preview, and task-pet check remained green.
 ## Compact composer sheet environment ownership (2026-08-01)
 
@@ -14949,7 +15369,7 @@ Verification:
 Current evidence:
 
 - Before the fix, both compact sheets exposed `aria-modal="true"` while `document.body.style.overflow` remained empty; programmatically focusing the background sidebar left each sheet open with focus outside it. The nested skill chooser also wrote `body.style.overflow` independently and returned focus to `BODY` after Escape.
-- The 393 × 852 Chrome probe verified attachment/runtime initial focus, exact Tab wrapping, outside-focus recovery, scroll locking/restoration, Escape opener restoration, and nested skill focus return. The 1440 × 900 probe verified both desktop popovers remain non-modal and allow background focus. Both tests passed in 5.7 seconds with no console, page, or horizontal-overflow errors. Visually inspected screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-composer-sheet-focus-ownership-20260801.png`.
+- The 393 × 852 Chrome probe verified attachment/runtime initial focus, exact Tab wrapping, outside-focus recovery, scroll locking/restoration, Escape opener restoration, and nested skill focus return. The 1440 × 900 probe verified both desktop popovers remain non-modal and allow background focus. Both tests passed in 5.7 seconds with no console, page, or horizontal-overflow errors. Visually inspected screenshot: `%TEMP%\cx-codex-composer-sheet-focus-ownership-20260801.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The complete 33-surface frontend regression passed in 393 seconds; its deterministic output recorded both desktop popovers with `modal=false` and `outsideFocusAllowed=true`, both phone sheets with forward/reverse Tab containment, outside-focus recovery, opener/scroll restoration, and the attachment sheet with `nestedSkillOwned=true`. Home became product-usable in 2146 ms (browser-observed 5008 ms), and all existing desktop, portrait/landscape phone, foldable, Skills, sidebar, command-menu, composer, conversation-recovery, image-preview, and task-pet checks remained green.
 
 ## Mobile sidebar drawer environment ownership (2026-08-01)
@@ -14971,7 +15391,7 @@ Verification:
 Current evidence:
 
 - Before the change, the open phone drawer had no dialog role or `aria-modal`, retained empty root/body overflow styles, left focus on `收起侧栏` outside the drawer, and allowed the background Composer to receive focus.
-- The two-test Chrome probe passed in 5.8 seconds. The phone case verified exact initial focus, both Tab wraps, background-focus recovery, Settings-before-drawer Android Back ownership, unchanged `#/`, opener/root-overflow restoration, and no horizontal, console, or page error. The shared-sheet case reconfirmed both phone Composer sheets and the non-modal desktop popover. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx-codex-mobile-drawer-focus-ownership-20260801.png`.
+- The two-test Chrome probe passed in 5.8 seconds. The phone case verified exact initial focus, both Tab wraps, background-focus recovery, Settings-before-drawer Android Back ownership, unchanged `#/`, opener/root-overflow restoration, and no horizontal, console, or page error. The shared-sheet case reconfirmed both phone Composer sheets and the non-modal desktop popover. Screenshot: `%TEMP%\cx-codex-mobile-drawer-focus-ownership-20260801.png`.
 - `npm.cmd run build:frontend` passed with the shared modal environment in a separate 1.17 KB chunk and the main entry at 399.98 KB minified. `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` also passed.
 - The first complete-regression attempt exposed a portaled sidebar menu that needed to remain a valid nested focus owner; the second exposed the desktop Composer's existing initial-focus contract after deduplication. Both boundaries were corrected before the final run. The complete 33-surface frontend regression then passed in 392.8 seconds; Home became product-usable in 956 ms (browser-observed 4865 ms), and every desktop, portrait/landscape phone, foldable, sidebar, command-menu, Composer, conversation-recovery, image-preview, and task-pet check remained green.
 
@@ -14994,7 +15414,7 @@ Verification:
 Current evidence:
 
 - The raw App Server `thread/read` returned the known final reply once as `item-556`. Before reconciliation, the live DOM simultaneously retained `msg_...:assistant:1`, `msg_...`, and `item-556` identities for the same reply, producing repeated content and duplicate action bars.
-- The 393 x 852 fault-injection probe seeded `msg_fixture:assistant:1`, `msg_fixture_response`, and `item-556`. After reload, both DOM and the existing local cache contained exactly `item-556`; the conversation reported 157 messages, the reply aligned 78 px below the viewport top, and there was no horizontal, console, or page error. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx7420-authoritative-turn-reconciliation-20260801.png`.
+- The 393 x 852 fault-injection probe seeded `msg_fixture:assistant:1`, `msg_fixture_response`, and `item-556`. After reload, both DOM and the existing local cache contained exactly `item-556`; the conversation reported 157 messages, the reply aligned 78 px below the viewport top, and there was no horizontal, console, or page error. Screenshot: `%TEMP%\cx7420-authoritative-turn-reconciliation-20260801.png`.
 - `npm.cmd run verify:frontend-normalizers`, `npm.cmd run verify:server-modules`, `npm.cmd run build:frontend`, `npm.cmd run build:cli`, and `git diff --check` passed. The production main entry stayed within budget at 399,972 bytes minified.
 - The complete 33-surface frontend regression passed in 396.9 seconds. Home became product-usable in 1492 ms (browser-observed 4978 ms), and all existing desktop, portrait/landscape phone, foldable, sidebar, command-menu, Composer, long-conversation, thread-switch, foreground-recovery, image-preview, and Task Pet checks remained green.
 
@@ -15017,8 +15437,8 @@ Verification:
 Current evidence:
 
 - Before the fix, seven real Markdown screenshots had loaded or loadable sources but all shared computed opacity `0`; the current response screenshot had `naturalWidth=393` and rendered as an empty bordered block.
-- The deterministic phone fixture now renders its valid 512 px image at 334 × 334 with opacity `1`, enables `预览图片：Markdown 图片回归`, opens the shared preview at 100%, and restores the explicit failure surface after a retry of the invalid image. It remains exactly 393 px wide with no console error. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx7420-markdown-image-visible-20260801.png`.
-- The real long-running task now renders its previously invisible screenshot at 212 × 460 with opacity `1`, keeps the descriptive preview label `预览图片：权威会话 turn 对账验证`, and remains exactly 393 px wide. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx7420-real-markdown-image-visible-20260801.png`.
+- The deterministic phone fixture now renders its valid 512 px image at 334 × 334 with opacity `1`, enables `预览图片：Markdown 图片回归`, opens the shared preview at 100%, and restores the explicit failure surface after a retry of the invalid image. It remains exactly 393 px wide with no console error. Screenshot: `%TEMP%\cx7420-markdown-image-visible-20260801.png`.
+- The real long-running task now renders its previously invisible screenshot at 212 × 460 with opacity `1`, keeps the descriptive preview label `预览图片：权威会话 turn 对账验证`, and remains exactly 393 px wide. Screenshot: `%TEMP%\cx7420-real-markdown-image-visible-20260801.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The production main entry remained exactly 399,972 bytes minified.
 - The complete 34-surface frontend regression passed in 406.7 seconds. Its new deterministic surface covered visible success, failure recovery, retry remounting, and shared preview opening; Home became product-usable in 2087 ms (browser-observed 4899 ms), and every existing desktop, portrait/landscape phone, foldable, sidebar, command-menu, Composer, long-conversation, foreground-recovery, image-gesture, and Task Pet check remained green.
 
@@ -15042,8 +15462,8 @@ Verification:
 Current evidence:
 
 - Before the change, the real pending control was 60 × 34 px at 393 × 852 and its `最新输出` span had `display:none`; only a down arrow and an unexplained blue dot were visible. Activating the focused button reached the bottom but left `document.activeElement` on `BODY` after the control unmounted.
-- A live DOM probe showed the explicit label produces a 116 × 34 px control with zero horizontal overflow at both 320 px and 393 px widths; at 320 × 568 its bottom remained 26 px above the Composer. Probe screenshot: `C:\Users\SW\AppData\Local\Temp\cx7420-jump-latest-label-probe.png`.
-- The post-build real-task check reproduced new below-fold output at a 420 px reading distance. The control displayed `最新输出` at 116 × 34 px in both viewports, remained 33 px above the Composer at 320 × 568, and kept horizontal overflow at zero. Screenshots: `C:\Users\SW\AppData\Local\Temp\cx7420-real-new-output-label-393.png` and `C:\Users\SW\AppData\Local\Temp\cx7420-real-new-output-label-320.png`.
+- A live DOM probe showed the explicit label produces a 116 × 34 px control with zero horizontal overflow at both 320 px and 393 px widths; at 320 × 568 its bottom remained 26 px above the Composer. Probe screenshot: `%TEMP%\cx7420-jump-latest-label-probe.png`.
+- The post-build real-task check reproduced new below-fold output at a 420 px reading distance. The control displayed `最新输出` at 116 × 34 px in both viewports, remained 33 px above the Composer at 320 × 568, and kept horizontal overflow at zero. Screenshots: `%TEMP%\cx7420-real-new-output-label-393.png` and `%TEMP%\cx7420-real-new-output-label-320.png`.
 - Focusing and activating that real control removed it, settled the transcript at exactly 0 px from the bottom, and transferred `document.activeElement` to the `UL.conversation-list` named `会话消息`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The production main entry remained exactly 399,972 bytes minified.
 - The complete 34-surface frontend regression passed in 402 seconds. Its foreground-resume cases proved the phone label is visibly expanded for both pinned reading and fresh user-scroll intent, while the viewport-control case proved focus returns to the transcript after activation. Home became product-usable in 1057 ms (browser-observed 5015 ms), and every existing desktop, portrait/landscape phone, foldable, sidebar, command-menu, Composer, Markdown image, scroll-recovery, image-gesture, and Task Pet surface remained green.
@@ -15067,7 +15487,7 @@ Verification:
 Current evidence:
 
 - Before the change, the real 320 px thread header rendered recovery and Favorites controls at 37 × 28 px and 60 × 28 px, while adjacent navigation controls were 36 px high. The visible context badge said only `31` even though its tooltip and accessible label identified `31%`.
-- The post-build real-task probe renders the controls at 37 × 36 px and 60 × 36 px. The context badge now says `31%`, its accessible label remains `上下文已使用 31%，已用 80,425 / 258,400，累计 41,377,232`, the 320 px title remains 87 px wide, the context-bearing header remains 77 px high, and horizontal overflow is zero. Screenshots: `C:\Users\SW\AppData\Local\Temp\cx7420-next3-header-320-final2.png` and `C:\Users\SW\AppData\Local\Temp\cx7420-next3-header-393-final.png`.
+- The post-build real-task probe renders the controls at 37 × 36 px and 60 × 36 px. The context badge now says `31%`, its accessible label remains `上下文已使用 31%，已用 80,425 / 258,400，累计 41,377,232`, the 320 px title remains 87 px wide, the context-bearing header remains 77 px high, and horizontal overflow is zero. Screenshots: `%TEMP%\cx7420-next3-header-320-final2.png` and `%TEMP%\cx7420-next3-header-393-final.png`.
 - At 852 × 393, the same real task keeps 38 × 36 px and 60 × 36 px controls, a visible `31%` badge, a 590 px title, a 93 px context-bearing header, and zero horizontal overflow.
 - `npm.cmd run build:frontend` and PowerShell parser validation passed. The production main entry is 399,978 bytes minified, leaving 22 bytes below the existing 400 KB budget.
 - The complete 34-surface frontend regression passed in 403.7 seconds. Its portrait and landscape sidebar-to-thread paths verified the new header contract; Home became product-usable in 1001 ms (browser-observed 5088 ms), and every existing desktop, phone, foldable, sidebar, command-menu, Composer, conversation-recovery, Markdown-image, image-gesture, and Task Pet surface remained green.
@@ -15091,7 +15511,7 @@ Verification:
 Current evidence:
 
 - Before the change, programmatic selection could leave focus on `BODY`; a normal focused drawer flow returned focus to the still-connected `展开侧栏` opener after the chosen row unmounted. Both outcomes detached keyboard/assistive navigation from the newly selected conversation.
-- The post-build real 393 × 852 flow now navigates to the selected thread, closes the drawer, focuses `SECTION#main-content`, keeps the transcript exactly 0 px from the bottom, restores root overflow, leaves `window.scrollY` at zero, and has no horizontal overflow. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx7420-mobile-thread-focus-main-393.png`.
+- The post-build real 393 × 852 flow now navigates to the selected thread, closes the drawer, focuses `SECTION#main-content`, keeps the transcript exactly 0 px from the bottom, restores root overflow, leaves `window.scrollY` at zero, and has no horizontal overflow. Screenshot: `%TEMP%\cx7420-mobile-thread-focus-main-393.png`.
 - The complete 34-surface frontend regression passed in 401.8 seconds. Both portrait and landscape drawer-to-thread flows exercised the new focus assertion; Home became product-usable in 1836 ms (browser-observed 5182 ms), and every existing desktop, foldable, modal, command-menu, Composer, long-conversation, foreground-recovery, image, and Task Pet surface remained green.
 
 ## Mobile drawer assistive isolation (2026-08-01)
@@ -15114,7 +15534,7 @@ Current evidence:
 
 - Before the fix, the real 393 x 852 drawer had modal semantics, focus containment, and scroll locking, but its accessibility snapshot still exposed the background skip link, header actions, project radio controls, Composer textbox, and Composer actions.
 - The post-build real-page snapshots at 393 x 852 and 852 x 393 exclude those background controls while retaining `收起侧栏` and `搜索会话`. In both viewports `#app`, the layout ancestry, and the skip-link ancestry report inert while the drawer is open; closing removes that owned state, restores root overflow, and returns focus to `展开侧栏`.
-- The drawer's visual layout is unchanged at 393 x 852. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx7420-mobile-drawer-modal-isolation-393.png`.
+- The drawer's visual layout is unchanged at 393 x 852. Screenshot: `%TEMP%\cx7420-mobile-drawer-modal-isolation-393.png`.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The production main entry remains exactly 399,978 bytes minified.
 - The complete 34-surface frontend regression passed in 403.6 seconds. Its portrait and landscape mobile-drawer paths verified assistive isolation and reversible ownership; Home became product-usable in 977 ms (browser-observed 4936 ms), and every existing desktop, foldable, blocking-dialog, sidebar, command-menu, Composer, conversation-recovery, Markdown-image, image-gesture, and Task Pet surface remained green.
 
@@ -15138,7 +15558,7 @@ Verification:
 Current evidence:
 
 - Before the change, real 393 x 852 measurements found opacity-zero action buttons at multiple message rows with `pointer-events: auto`; `document.elementFromPoint` at each center returned the hidden button. Dispatching the hidden copy action reached its click listener, proving this was an execution risk rather than visual theory.
-- The final real-page probe reports the edit action as opacity/pointer/hit-label `0/none/empty -> 0.9/auto/编辑并从此处继续 -> 0/none/empty`. The seeded favorite remains `1/auto/取消收藏这条消息` in all three states. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx7420-message-actions-safe-favorited-393.png`.
+- The final real-page probe reports the edit action as opacity/pointer/hit-label `0/none/empty -> 0.9/auto/编辑并从此处继续 -> 0/none/empty`. The seeded favorite remains `1/auto/取消收藏这条消息` in all three states. Screenshot: `%TEMP%\cx7420-message-actions-safe-favorited-393.png`.
 - A final desktop probe reports opacity `0.9` with pointer `auto` while hovered and opacity `0` with pointer `none` after the pointer leaves.
 - `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The production main entry remains exactly 399,978 bytes minified.
 - The final complete 34-surface frontend regression passed in 407.1 seconds and emitted `conversation message-action hit testing -> inactive=none, active=auto, restored=none`. Home became product-usable in 981 ms (browser-observed 5248 ms), while existing desktop, phone, foldable, sidebar, command-menu, Composer, Markdown-image, image-preview, scroll-recovery, and Task Pet surfaces remained green.
@@ -15163,10 +15583,10 @@ Verification:
 Current evidence:
 
 - Before the change, the real 393 x 852 drawer accessibility snapshot exposed one generic focusable `置顶` button before every conversation, including pinned rows whose click would actually cancel pinning. The row's named three-dot menu remained hover/focus-only and passive relative time occupied its trailing slot.
-- The final real drawer probe at both 393 x 852 and 852 x 393 rendered 71/71 named conversation menus, zero displayed/focusable direct-pin controls, zero rendered relative-time slots, a 36 px minimum menu target, and zero horizontal overflow. Screenshots: `C:\Users\SW\AppData\Local\Temp\cx7420-mobile-thread-actions-393.png` and `C:\Users\SW\AppData\Local\Temp\cx7420-mobile-thread-actions-852x393.png`.
-- The pinned-row menu showed `取消置顶`; the first unpinned project row showed `置顶会话`. The portaled menu stayed within the 393 x 852 viewport at `{ left: 159, right: 319, top: 192, bottom: 476 }`, and Escape removed it and returned focus to the exact `会话操作：<title>` trigger. Menu screenshot: `C:\Users\SW\AppData\Local\Temp\cx7420-mobile-thread-actions-menu-393.png`.
+- The final real drawer probe at both 393 x 852 and 852 x 393 rendered 71/71 named conversation menus, zero displayed/focusable direct-pin controls, zero rendered relative-time slots, a 36 px minimum menu target, and zero horizontal overflow. Screenshots: `%TEMP%\cx7420-mobile-thread-actions-393.png` and `%TEMP%\cx7420-mobile-thread-actions-852x393.png`.
+- The pinned-row menu showed `取消置顶`; the first unpinned project row showed `置顶会话`. The portaled menu stayed within the 393 x 852 viewport at `{ left: 159, right: 319, top: 192, bottom: 476 }`, and Escape removed it and returned focus to the exact `会话操作：<title>` trigger. Menu screenshot: `%TEMP%\cx7420-mobile-thread-actions-menu-393.png`.
 - The first complete regression exposed that a naive 36 px layout box could move the sidebar reorder anchor by 117 px. The final compact wrapper preserves the larger hit target without increasing the established row layout; the deterministic rerun kept the visible project at `-11.84px` before and after reorder while compensating `scrollTop` from `700` to `813`.
-- `npm.cmd --cache C:\Users\SW\AppData\Local\Temp\cx-codex-npm-cache run build:frontend`, `npm.cmd --cache C:\Users\SW\AppData\Local\Temp\cx-codex-npm-cache run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The production main entry remains exactly 399,978 bytes minified.
+- `npm.cmd --cache %TEMP%\cx-codex-npm-cache run build:frontend`, `npm.cmd --cache %TEMP%\cx-codex-npm-cache run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The production main entry remains exactly 399,978 bytes minified.
 - The final complete 34-surface frontend regression passed in 420.6 seconds. Home became product-usable in 952 ms (browser-observed 4793 ms), and desktop, portrait/landscape phone, foldable, sidebar search/reorder, command-menu, Composer, conversation recovery, Markdown-image, image-preview, notification, and Task Pet surfaces remained green.
 
 ## Concise accessible thread names (2026-08-02)
@@ -15190,7 +15610,7 @@ Current evidence:
 - Before the change, the real drawer's primary button names included both title and full preview; one visible log-oriented row produced a 2,321-character derived name and repeated its title when the preview matched.
 - The final 393 x 852 drawer exposes 71/71 `打开会话：...` labels with zero preview leaks and zero horizontal overflow. The longest accessible name is now 287 characters, 2,034 fewer than the longest former derived name.
 - The deterministic fixture announces `等待处理`, `执行中`, `未读`, and the combined `执行中，工作树会话` suffixes exactly while retaining a separate `会话操作：<title>` control.
-- `npm.cmd --cache C:\Users\SW\AppData\Local\Temp\cx-codex-npm-cache run build:frontend`, `npm.cmd --cache C:\Users\SW\AppData\Local\Temp\cx-codex-npm-cache run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed.
+- `npm.cmd --cache %TEMP%\cx-codex-npm-cache run build:frontend`, `npm.cmd --cache %TEMP%\cx-codex-npm-cache run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed.
 - The final complete 34-surface frontend regression passed in 421.1 seconds and covered the concise-label contract in both portrait and landscape mobile drawers. Home became product-usable in 946 ms (browser-observed 4710 ms).
 
 ## Independent project navigation controls (2026-08-02)
@@ -15235,10 +15655,10 @@ Verification:
 Current evidence:
 
 - Before the change, the real 393 x 852 drawer immediately displayed `没有匹配的会话` for `低风险高收益`, while a direct `/codex-api/thread-search` probe remained unresolved for 15.5 seconds and the frontend request policy times out at 12 seconds. The UI exposed neither progress nor failure recovery.
-- The post-build real drawer keeps `低风险高收益-不存在` in the input, reports `aria-busy="true"`, shows `正在搜索全部会话…`, suppresses the settled no-result node, and has zero horizontal overflow. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx7420-sidebar-search-pending-393.png`.
-- After the 12-second request timeout, the same drawer retains the query, removes busy state, shows `完整搜索暂时不可用`, and renders a 36 px-high `重新搜索` action with zero horizontal overflow. Activating retry immediately restores busy progress without clearing the query. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx7420-sidebar-search-failed-393.png`.
+- The post-build real drawer keeps `低风险高收益-不存在` in the input, reports `aria-busy="true"`, shows `正在搜索全部会话…`, suppresses the settled no-result node, and has zero horizontal overflow. Screenshot: `%TEMP%\cx7420-sidebar-search-pending-393.png`.
+- After the 12-second request timeout, the same drawer retains the query, removes busy state, shows `完整搜索暂时不可用`, and renders a 36 px-high `重新搜索` action with zero horizontal overflow. Activating retry immediately restores busy progress without clearing the query. Screenshot: `%TEMP%\cx7420-sidebar-search-failed-393.png`.
 - While full search is pending, `stablyai` still renders the local `分析 stablyai orca 项目` row and never shows a competing progress or no-result block.
-- `npm.cmd --cache C:\Users\SW\AppData\Local\Temp\cx-codex-npm-cache run build:frontend`, `npm.cmd --cache C:\Users\SW\AppData\Local\Temp\cx-codex-npm-cache run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The production main entry is 399,316 bytes minified; the full-search state owner remains in the lazy sidebar chunk.
+- `npm.cmd --cache %TEMP%\cx-codex-npm-cache run build:frontend`, `npm.cmd --cache %TEMP%\cx-codex-npm-cache run verify:frontend-normalizers`, PowerShell parser validation, and `git diff --check` passed. The production main entry is 399,316 bytes minified; the full-search state owner remains in the lazy sidebar chunk.
 - The complete 34-surface frontend regression passed in 422.7 seconds. Existing compatible-prefix search continuity, divergent-result rejection, project scroll anchoring, portrait/landscape mobile drawers, command menu, Composer, conversation recovery, images, notifications, and Task Pet stayed green. Home became product-usable in 963 ms (browser-observed 4,875 ms).
 
 ## Coalesced sidebar search-index invalidation (2026-08-02)
@@ -15365,7 +15785,7 @@ Verification:
 Current evidence:
 
 - Before the change, the real 393 x 852 fixture remained 32 px high after receiving five explicit lines while its content needed 107 px. Users had to scroll inside a one-line slot or manually enter half-screen mode for ordinary multi-line prompts.
-- After enabling layout-driven sizing, the same real fixture reports `32 -> 107 -> 128 -> 32`; the 20-line draft has 406 px of content, the half-screen input reaches 368 px inside its 424 px shell, and the page has zero horizontal overflow. Screenshot: `C:\Users\SW\AppData\Local\Temp\cx7420-composer-autogrow-393.png`.
+- After enabling layout-driven sizing, the same real fixture reports `32 -> 107 -> 128 -> 32`; the 20-line draft has 406 px of content, the half-screen input reaches 368 px inside its 424 px shell, and the page has zero horizontal overflow. Screenshot: `%TEMP%\cx7420-composer-autogrow-393.png`.
 - `npm.cmd run build:frontend` and PowerShell parser validation passed. The production main entry remains 399.36 KB minified.
 - The complete 34-surface frontend regression passed in 397.1 seconds. Desktop measured `32 -> 124 -> 128 -> 32` with a 396 px half-screen field; phone measured `32 -> 107 -> 128 -> 32` with a 368 px half-screen field. Home became product-usable in 929 ms (browser-observed 4,809 ms), and existing mobile drawers, modal focus, IME/file mentions, conversation recovery, images, notifications, and Task Pet remained green.
 
@@ -15389,7 +15809,7 @@ Current evidence:
 - Black-box dogfood reproduced the prior failure twice at 393 x 852: ordinary Enter cleared the draft and advanced the fixture submit count from 0 to 1 and then 2. The issue report and step screenshots are under `output/dogfood-composer-20260802`.
 - The preference regression was added first and failed because the responsive resolver did not exist. After implementation, `npm.cmd run verify:frontend-normalizers` passed.
 - Real-page verification passed at 1440 x 900: Enter submitted once, cleared the draft, and retained textarea focus. At 393 x 852, Enter kept submit count 0, preserved `手机第一行\n`, retained focus, and grew the field to 48 px; Ctrl+Enter then submitted once and cleared it. At 852 x 393, Enter likewise kept count 0, preserved `横屏输入\n`, and retained focus.
-- `npm.cmd run build:frontend` passed. The production main entry is 399.51 KB minified and remains inside the existing 400 KB budget. The phone newline state is captured at `C:\Users\SW\AppData\Local\Temp\cx7420-mobile-enter-newline-393.png`.
+- `npm.cmd run build:frontend` passed. The production main entry is 399.51 KB minified and remains inside the existing 400 KB budget. The phone newline state is captured at `%TEMP%\cx7420-mobile-enter-newline-393.png`.
 - The complete 34-surface frontend regression passed in 412.3 seconds. Its deterministic Composer evidence was desktop `enter=submit`, 32 px and phone `enter=newline`, 48 px, `ctrlEnter=submit`; dictation, IME mention safety, compact sheet focus ownership, conversation recovery, images, notifications, and Task Pet also remained green. Home became product-usable in 987 ms (browser-observed 4,938 ms).
 
 ## Bulk project collapse in the conversation drawer (2026-08-02)
@@ -15801,6 +16221,19 @@ Current evidence:
 - The local Android delivery build uses version `2.7.5` / code `20705`, bundles the same frontend `index.html` hash as `dist`, passes release signature and zip-alignment verification, and matches the signing certificate of the public `v2.7.4` APK so it can be installed as an in-place upgrade.
 - No Android device was connected during implementation, so physical process-death verification is still required before publishing an APK.
 
+## Release ZIP 运行时完整性校验
+
+1. `verify-release-artifacts.ps1` 必须直接打开每个 Release ZIP，不能只验证外部 SHA-256 文件。
+2. ZIP 必须包含 `package.json`、`vite.config.ts` 和 `vite.local-preview.config.ts`。
+3. ZIP 内 `package.json.files` 声明的每个文件必须精确存在；声明的每个目录必须至少包含一个条目。
+4. APK 继续只执行 checksum 验证，不按 ZIP 结构解析。
+
+Verification:
+
+- 生成本地 Release smoke 构件后运行 `npm.cmd run verify:release-artifacts -- -OutputDir <目录>`，确认 checksum 和 ZIP 运行时契约均通过。
+- 从 ZIP 中移除一个必需配置、npm 文件或 npm 目录内容，重新生成匹配 checksum，确认校验器仍以稳定的缺失条目信息失败。
+- 解析 PowerShell 脚本，检查 UTF-8 无 BOM，并运行 `git diff --check`。
+
 ## CX-Codex 2.7.4 release-package completeness (2026-08-04)
 
 1. `scripts/package-release.ps1` must treat both `vite.config.ts` and `vite.local-preview.config.ts` as required Release ZIP inputs because `npm run build:frontend` executes both configurations.
@@ -15851,7 +16284,7 @@ Verification:
 
 1. 在另一个 Codex 桌面进程持续写入长会话时，用 `393 x 852` 视口打开同一会话。阶段回复应由有界 session-log 投影持续更新；尾部最新助手消息仍是 `commentary` 时，不得自动触发 `thread/read(includeTurns=true)`。
 2. 同一会话文件中允许并发任务交错写入。中间出现另一个任务的 `final` 后，只要尾部仍有当前任务的 `commentary`，就必须继续延期权威收敛读取；仅当最新助手消息本身为 `final`，且没有运行、排队或待确认信号时才允许一次收敛读取。
-3. 在 `/#/__regression/conversation-blocks?regression=frontend&streamStress=1` 下加载至少 1500 条同轮消息并每 48ms 更新流式回复。3 秒内更新与心跳均不少于 20 次，最大心跳延迟不高于 250ms，实际挂载消息节点不超过 48 个。
+3. 在 `/#/__regression/conversation-blocks?regression=frontend&streamStress=1` 下加载至少 1500 条同轮消息并每 48ms 更新流式回复。3 秒内更新与心跳均不少于 20 次，最大心跳延迟必须低于 80ms，实际挂载消息节点不超过 20 个。
 4. 压力期间点击响应测试按钮必须立即生效，随后流式更新继续增长；页面不得横向溢出，也不得破坏会话切换滚动位置、前后台恢复意图、排队消息和等待详情交互。
 
 Verification:
@@ -15871,7 +16304,7 @@ Current evidence:
 
 1. Merging live messages into the visible conversation must never mutate `persistedMessagesByThreadId`, including when no optimistic user message remains visible.
 2. A connected notification stream that is merely quiet while an idle conversation is selected must stay connected. Disconnected/reconnecting streams and stale streams with real synchronization demand must still restart.
-3. The 1602-message streaming fixture must mount no more than 48 conversation items, keep maximum heartbeat lag at or below 250ms, accept an action during output, continue updating afterward and avoid horizontal overflow.
+3. The 1602-message streaming fixture must mount no more than 20 conversation items, keep maximum heartbeat lag below 80ms, accept an action during output, continue updating afterward and avoid horizontal overflow.
 4. Release retention must preserve Git tags and commit history. Only GitHub Release objects outside the documented stable/rollback/history set may be deleted.
 
 Verification:
@@ -15887,6 +16320,401 @@ Current evidence:
 - The foreground restart-policy test failed before the fix because a selected idle conversation forced a restart; it passes after requiring actual sync demand for a connected stale stream.
 - The full 38-surface regression passed in 499.7 seconds. The built-in stress probe mounted 13 of 1602 messages with 64ms maximum lag and accepted interaction while output continued.
 - Independent headless Playwright mounted 12 of 1602 messages with 47ms maximum lag; the action count increased by one, updates continued from 76 to 84, and console/request failure lists were empty.
+
+## App Server 安全默认启动策略（2026-08-08）
+
+1. 未设置 CX-Codex 或兼容的 CODEXUI 权限环境变量时，App Server 启动参数必须是 `approval_policy="on-request"` 与 `sandbox_mode="workspace-write"`。
+2. 非法环境变量值必须回退到同一安全默认值，不能静默恢复为 high-trust。
+3. 显式设置 `CX_CODEX_APP_SERVER_APPROVAL_POLICY=never` 与 `CX_CODEX_APP_SERVER_SANDBOX_MODE=danger-full-access` 时继续保留兼容行为，诊断快照必须标记 `legacyHighTrust=true`。
+4. 默认诊断快照必须是 `legacyHighTrust=false`，且不得暴露环境变量原文。
+
+Verification:
+
+- 将 server smoke 的默认期望先改为 `on-request + workspace-write` 后，`npm.cmd run verify:server-modules` 在旧实现上按预期失败，实际值仍为 `never + danger-full-access`。
+- 修改 `src/server/appServerLaunch.ts` 后再次运行 `npm.cmd run verify:server-modules`，结果为 `server module smoke ok`。
+- `npm.cmd run build:cli` 与 `npm.cmd run verify:governance` 均通过；独立 7433 服务的 `/codex-api/health` 和诊断页同时显示 `on-request / workspace-write / legacyHighTrust=false`。
+- Headless browser 在 1440 × 900 诊断页确认有效策略可见且无页面错误，截图保存在忽略目录 `output/steady-goal-m1-safe-default/diagnostics-safe-default.png`。
+
+## 本地文件工作区根边界（2026-08-08）
+
+1. `/codex-local-image`、`/codex-local-file`、`/codex-local-browse` 和 `/codex-local-edit` 必须共同使用一个工作区根授权策略；只做绝对路径检查不再构成有效授权。
+2. 已登记工作区内的普通文件和隐藏文件必须保持可读，文本文件必须保持可编辑；工作区外路径、相邻同名前缀目录和空根集合必须返回 `403`。
+3. 工作区内指向外部目录的符号链接或 Windows junction 必须按真实路径拒绝，不能读取或修改外部目标。
+4. 已登记根内不存在的路径返回 `404`；被拒绝的编辑请求不得改变目标文件内容，也不得在响应中返回外部文件内容。
+
+Verification:
+
+- 新增策略测试前，`npm.cmd run verify:server-modules` 因缺少 `localFileAccessPolicy` 按预期失败；实现规范化与真实路径双重检查后，普通文件、隐藏文件、相邻前缀、空根、缺失文件和 junction 逃逸用例全部通过。
+- `npm.cmd run verify:server-modules` 结果为 `server module smoke ok`，`npm.cmd run build:cli` 构建成功。
+- 独立 7434 运行态验证结果：工作区内读取与编辑为 `200`；工作区外文件、图片、目录浏览、编辑及 junction 逃逸均为 `403`；外部编辑目标保持 `outside-unchanged`。
+- Headless browser 实际请求 `C:\\Windows\\win.ini` 得到 `HTTP 403` 与“该路径不在已登记的工作区目录内”，未展示文件内容；截图保存在忽略目录 `output/steady-goal-m1-safe-default/local-file-boundary-denied.png`。
+
+## 非回环绑定强制认证（2026-08-08）
+
+1. `--no-password` 只允许绑定 `localhost`、`localhost.`、`127.0.0.0/8`、`::1` 或完整 IPv6 回环地址。
+2. `0.0.0.0`、`::`、局域网 IP、其他主机名和空主机在没有密码时必须于监听端口前拒绝；提供非空密码时保持可用。
+3. 开启隧道时继续保留独立的密码强制要求；回环无密码模式不等于允许无鉴权反向代理。
+
+Verification:
+
+- 新增 CLI 绑定策略测试后，`npm.cmd run verify:server-modules` 因策略模块不存在按预期失败；实现后回环允许与非回环拒绝矩阵全部通过。
+- `npm.cmd run build:cli` 构建成功。
+- 运行 `node dist-cli/index.js --host 0.0.0.0 --port 7435 --no-password --no-tunnel --no-open ...` 得到退出码 `1` 和明确密码边界错误，7435 监听数为 `0`；校验发生在项目状态写入、Codex 安装/登录和服务创建之前。
+- 前一项独立 7434 运行态验证同时证明 `127.0.0.1 + --no-password` 仍能正常启动并完成本机安全测试。
+
+## 诊断响应统一脱敏（2026-08-08）
+
+1. `/codex-api/health` 与 `/codex-api/diagnostics` 必须在发送 JSON 前统一递归处理所有数据源，不能依赖每个上游模块自行脱敏。
+2. password、Authorization、Cookie、secret、API key、access/auth/refresh token 等敏感键必须替换为 `[REDACTED]`；错误字符串中的常见 Bearer、token 与 password 片段也必须脱敏。
+3. Runtime payload、通知 params 和待审批 params 不得进入诊断响应；状态、计数、时间、短错误上下文与请求身份字段保持可诊断。
+
+Verification:
+
+- 在通知诊断、状态诊断、Hook 错误和 Runtime `lastError` 注入测试凭据后，`npm.cmd run verify:server-modules` 在旧实现上按预期失败并显示原值。
+- 增加最终响应脱敏后，同一测试期望全部变为 `[REDACTED]`，`npm.cmd run verify:server-modules` 返回 `server module smoke ok`。
+- 既有断言继续确认诊断 recent events 不含 `params`、uncertain requests 不含 `payload`、pending server requests 不含审批参数。
+- 独立 7436 服务验证：公开 `/health` 只含 `atIso/service/status`，带转发头的未认证 `/codex-api/health` 返回 `401`，本机详细 health/diagnostics 返回 `200`，配置密码未出现在任一响应，停止后监听数为 `0`。
+
+## 事件流代际切换与不确定操作恢复（2026-08-08）
+
+1. 重放页返回与本地游标不同的 `streamId` 时，旧事件序号不再参与新流快照排序；即使新流序号更小，权威快照也必须能够替换旧运行状态。
+2. 流切换与实时事件并发时，没有流身份的缓冲事件不得直接应用。旧流高序号事件必须被丢弃且不能形成无限恢复；新流已持久化事件必须由一次后续重放补回。
+3. `turn/start` 或 `turn/interrupt` 已进入 App Server RPC 后遇到超时、子进程退出或内部传输重启时，结果分别保持 `start_uncertain` / `stop_uncertain`，由权威快照对账，不能标记为确定失败后盲目重复操作。
+4. 明确的 RPC 业务错误仍保持失败语义；同一 `clientMessageId` 的并发请求、进程重启恢复、内容或会话签名冲突仍只允许一个服务端请求所有者。
+
+Verification:
+
+- 故障测试先在旧协调器上稳定失败：数据库重置为新流后，一个旧流 `seq=501` 缓冲会触发第二次恢复请求，实际调用数为 `2` 而期望为 `1`；没有边界时该缓冲会继续触发后续恢复。
+- 修复后 `npm.cmd run verify:frontend-normalizers` 通过：旧流事件只触发一次有界复核且不会应用；并发到达的新流 `seq=21` 从第二页以 `source=replay` 精确补回；流变化回调同步清除前端快照排序水位。
+- `npm.cmd run build:frontend` 通过，包括 Vue 类型检查、生产构建、本地预览构建和 51 个前端资产的 Brotli 预压缩。
+- `npm.cmd run verify:server-modules` 通过：超时与 `AppServerRpcTransportError` 均被识别为结果不确定，start/interrupt 分别持久化 uncertain 状态；普通 permission error 仍走失败路径。
+- `npm.cmd run build:cli` 通过，生成 `dist-cli/index.js`（约 672.19 KB）。
+
+## 双页面 outbox、旧轮次终态与冷启动接管（2026-08-08）
+
+1. 两个离线页面基于同一旧快照分别写入不同消息后，重新加载必须同时得到两条消息；任一页面写入删除墓碑后，持有旧快照的页面再次保存也不得复活已删除消息。
+2. 聚合 outbox 与逐消息日志必须继续受 TTL 和数量上限约束；每条消息只保留最新日志版本，待发送日志最多 12 条、删除墓碑最多 256 条，损坏或过期日志应在下次保存时清理，旧版聚合存储仍可读取。
+3. 活动轮次为新 `turnId` 时，旧轮次的 completed/interrupted/error/failed 事件不得清除当前运行状态、队列或 outbox；匹配当前轮次的终态仍按原契约收敛。
+4. 服务进程在已持久化 `pending_start` 后退出并重启时，只允许恢复 `requestId`、`clientMessageId`、模式和正文哈希均匹配的完整负载；调用方省略 `clientMessageId` 时必须稳定复用 `requestId`，原请求必须产生且仅产生一次 `thread/start` 与一次 `turn/start`。
+5. 请求在任何 `turn/start` RPC 之前必须先持久化为 `starting`，并将临时正文替换为统计摘要；`starting`、`start_uncertain` 和哈希不匹配记录不得自动重发，恢复失败必须进入可诊断的终态而非无限循环。
+6. 服务端队列进入 `pending_start` 时必须使用同一最小恢复负载；排队速度元数据保留，但不持久化与发送无关的任意请求字段。
+
+Verification:
+
+- `npm.cmd run verify:frontend-normalizers` 覆盖双页面写入合并、删除墓碑、同消息日志压缩、12 条待发送日志硬上限、损坏日志清理、存储事件键识别，以及旧/新轮次终态匹配。
+- `npm.cmd run build:frontend` 覆盖 outbox 与运行态集成的 Vue/TypeScript 类型检查和两套生产构建。
+- `npm.cmd run verify:server-modules` 使用真实临时 SQLite 执行进程关闭/重开故障注入，验证原请求身份复用、单次 `thread/start`/`turn/start`、正文清理、队列恢复负载和失败终止策略。
+- `npm.cmd run build:cli` 验证恢复协调器、运行时动作与桥接装配可完整打包。
+
+Current evidence:
+
+- 内存存储双页面夹具在页面 A、B 交错保存后同时恢复两条消息；B 删除后 A 用旧状态再写，删除项仍未出现，损坏日志键被清理。
+- 旧轮次终态夹具只记录事件序号，不执行当前轮次清理；相同轮次与缺少活动轮次时仍允许终态收敛。
+- SQLite 重启夹具在关闭并重新打开数据库后自动接管一条 `pending_start`，最终仍使用 `request-before-process-restart` / `client-before-process-restart`，RPC 序列严格为 `thread/start`、`turn/start`，持久 payload 不再包含原正文。
+- Android 定向单元测试 `TaskPetRuntimePolicyTest`、`TaskNotificationPolicyTest`、`MobileShellConfigTest`、`WebViewResumeRecoveryPolicyTest` 与 `:app:lintDebug` 已通过；`test:android:background -- -ListDevices` 未发现已授权设备，因此不能视为真机进程回收、锁屏或网络切换通过。
+- 当前证据仍不等同于 Android 真机进程回收、真实网络切换或两小时浸泡；这些属于 M2/M5 未完成项。
+
+## M3 本地反馈与长会话性能预算（2026-08-08）
+
+1. 已有会话与新会话发送后的乐观气泡和运行反馈必须在点击后 100 ms 内可见；本地状态提交继续保持 50 ms 内。
+2. 1600 条以上消息持续增量输出时，页面事件循环心跳的最大延迟必须低于 80 ms，实际挂载的消息节点不得超过 20 个，并且输出过程中仍能接受点击且继续更新。
+3. 每次选择任务都必须重新记录首屏开始时间、可读时间、选择到可读延迟和来源；页面内只保留最近 32 个任务的首屏诊断。冷重载只有在来源明确为 `local-cache` 时才执行 300 ms 门槛，不能用包含网络权威读取的综合耗时冒充缓存首屏证据。
+4. 前台恢复从通过生命周期防抖后的同步起点计时，只允许通过事件序列校验的权威 runtime snapshot 结算；隐藏、离线或再次暂停应取消本次样本。最近 7 天最多保留 50 个不含 threadId、问题或回复正文的样本，连续 5 次恢复及滚动 P95 均须不超过 2 秒。
+
+Verification:
+
+- `scripts/regression-7420-frontend.ps1` 已将已有/新会话气泡和运行反馈门槛从 200 ms 收紧到 100 ms，将流式压力心跳门槛从 250 ms 收紧到低于 80 ms，并将挂载节点上限从 48 收紧到 20。
+- `threadFirstScreenMetrics.ts` 会在每次任务选择时清除旧样本、记录 `local-cache / memory / network` 来源，并将开始/完成诊断各限制为最近 32 个任务；回归先确认缓存条目存在，再冷重载同一路由并执行 300 ms 硬门槛。
+- `foregroundRecoveryMetrics.ts` 覆盖开始去重、取消、权威结算、P50/P95 和 50 条硬上限；回归连续触发 5 次页面 `resume` 生命周期，逐次检查 2 秒门槛后再检查滚动 P95。
+- 当前源码的聚焦线程回归通过：网络首屏选择耗时 190 ms、首次可用 303 ms；冷重载命中 `local-cache` 后首屏为 162 ms；前台恢复 6 个样本的 P95 为 100 ms、最新样本 13 ms；活动恢复计数最终为 0。RPC 观测在 650 ms 窗口内只记录一次早期 `thread/read`（306 ms 开始、282 ms 完成），证明首次选择与路由 watcher 不再重复读取。
+- 当前源码的明色全量回归通过 38 个界面：1602 条消息只挂载 13 项，最大心跳延迟 62 ms；25 个真实 DOM 对比度样本最低 4.54。深色全量回归同样通过 38 个界面：挂载 13 项、最大心跳延迟 60 ms；26 个样本最低 5.68。证据分别位于 `output/regression-7420/steady-goal-final-light-20260808` 与 `output/regression-7420/steady-goal-final-dark-20260808-b`。
+- 独立 Headless Playwright 使用生产构建验证浅色/深色 × 1440 x 900 桌面/393 x 852 手机四组组合；四组均无横向溢出、非 favicon 控制台错误或页面错误，桌面对比度最低值分别为 4.54/5.68，截图位于 `output/regression-7420/steady-goal-playwright-20260808`。
+- `npm.cmd run verify:frontend-normalizers` 与 `npm.cmd run build:frontend` 已通过，覆盖首屏/恢复纯逻辑、Vue/TypeScript 类型检查与两套生产构建；浏览器实测与构建证据分别记录，不互相替代。
+
+## M4 新用户主路径与 M5 Windows 产品化（2026-08-08）
+
+1. README 首屏必须在营销介绍后直接给出 Windows 一条命令安装、2–5 分钟预期、默认 `127.0.0.1:7420` 入口和失败后的下一步；不得要求新用户先阅读协议审计、候选发布或 UI 规划文档。
+2. 安装失败说明不得建议删除 `%USERPROFILE%\.codex`、清空工作区或盲目重复安装；应优先保留错误码并进入管理中心或 SUPPORT 最小诊断。
+3. Windows 产品化 smoke 必须在隔离临时目录和临时端口验证稳定安装 JSON、保留式卸载、完全卸载、失败 JSON、StartNow 健康与清理、进程树卸载、bootstrap 失败和能力不匹配。
+4. 构建、Windows smoke 或跳过发布包的 release verifier 不得被描述为真实升级回滚、发布包、远端发布、两小时浸泡或 Android 真机通过。
+5. `PROJECT_SPEC.md` 只描述当前已验证事实，不得把代码中已有的 fork、rollback、unarchive、skills、计划模式、token usage 或流式工具更新列为未实现；依赖版本以 `package.json`/lockfile 为权威，协议可用性以协议矩阵为权威。
+
+Verification:
+
+- `npm.cmd run verify:windows-productization` 通过，输出 `Windows productization smoke passed.`；脚本使用 `%TEMP%` 隔离根和 17419/17420 等测试端口，没有重启或替换当前 7420 服务。
+- `npm.cmd run verify:release -- -SkipBuild -SkipPackageSmoke -SchemaAudit skip -AllowDirty` 通过；whitespace、package JSON、治理、normalizer、server modules 和 CLI/CJS help 均通过，发布包、package smoke 与 schema audit 明确未执行。
+- `npm.cmd run verify:release -- -SkipBuild -SkipPackageSmoke -SchemaAudit warn -AllowDirty` 使用当前 `codex-cli 0.130.0` 再次通过同一非打包门禁，并生成 `output/app-server-schema-audit/20260808-060651`；schema 命令按契约返回 drift 退出码 1，warn 模式在记录并复核后完成，四组 added/removed 完整集合与 2026-07-04 审计逐项相同。
+- 最终一致性矩阵中的 `npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:frontend-normalizers`、`npm.cmd run verify:server-modules`、`npm.cmd run verify:governance`、PowerShell 语法、恢复时序源码契约与 `git diff --check` 全部通过。
+- README 主入口已收口为六个常用链接；工程与审计文档仍保留在后部“文档”索引，未删除可维护信息。
+- `PROJECT_SPEC.md` 已与当前 `package.json`、router、Runtime Store、App Server 启动策略及前端 API/状态模块交叉核对，并明确文档职责，删除虚构路线图而不删除协议矩阵。
+- 应用内 M4 本地浏览器审查已覆盖首页、设置、错误、键盘、浅/深主题及桌面/折叠屏/手机/横屏视口；全量回归与独立 Playwright 均无核心横向溢出。修复前真实 DOM 探针复现浅色三级文字 2.82–3.13、深色时间文字 3.09 的对比度缺口；改用语义文字 token 后，非禁用辅助文字最低值提高到浅色 4.54、深色 5.68。
+- 2026-07-27 的公开 v2.6.1 全空状态安装在 166.6 秒到达 `ok=true / started=true / healthReady=true / phase=ready`。2026-08-08 再通过公开 README bootstrap 与正式资产 SHA-256，在独立 USERPROFILE/LOCALAPPDATA、17433 和便携 Node 24.19.0 下冷安装当前 v2.7.6；108.1 秒到达 `ok=true / started=true / healthReady=true`，低于 300 秒门槛。随后官方卸载成功、17433 关闭、真实认证保留、临时认证硬链接移除，生产 7420 与浸泡候选 17432 均保持 `ok`；脱敏摘要位于 `output/m5-current-release-install-20260808/summary.json`。
+- UI/UX 审计与整改证据记录在 `docs/ui-ux-audit-20260808.zh-CN.md`；Windows 高对比度、屏幕阅读器、Android 真机、当前工作树候选发布包和两小时浸泡仍未完成，不以桌面浏览器、Windows smoke 或已发布版本升级证据代替。
+
+### 主内容与桌面会话导航的可访问语义（2026-08-08）
+
+1. 首页必须暴露且只暴露一个名称为“会话内容”的主地标；不得移除现有 `#main-content`、`tabindex="-1"` 或“跳到主要内容”链接。
+2. 桌面侧栏和移动抽屉统一使用“会话导航”名称；桌面宽度调节器使用“调整侧栏宽度”，不得混入英文控件名称。
+3. 强制颜色模式下，键盘焦点必须保持可见；语义整改不得引入重复 ID、横向溢出、页面错误或控制台错误。
+
+Verification:
+
+- `npm.cmd run build:frontend` 通过 Vue/TypeScript、主应用和本地预览两套生产构建。
+- `npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:17432 -HomeOnly` 通过现有源码契约、首页真实浏览器、工作区列表和 26 个文字对比度样本，最低值为 4.54。
+- 独立 Headless Playwright 通过 role/name 定位唯一主地标、桌面导航和宽度调节器；首个 Tab 聚焦跳转链接，激活后焦点进入 `#main-content`，强制颜色查询为 active、调节器具有系统轮廓，无重复 ID、横向溢出或浏览器错误。截图为 `output/a11y-landmarks-forced-colors-after-20260808.png`。
+
+Rollback:
+
+- 回退 `src/App.vue` 与 `src/components/layout/DesktopLayout.vue` 的三个可访问属性、对应前端源码契约和本文档记录；不移除既有跳转链接或焦点恢复逻辑。
+
+### 正式 Windows 运行中升级与失败自动恢复（2026-08-08）
+
+- 在唯一临时用户目录、`LOCALAPPDATA`、快捷方式根、安装目录、工作区和 17431 端口中执行正式资产生命周期；当前 7420 服务未重启、未替换且全过程健康。隔离环境显式使用已安装 Codex 桌面端的当前 CLI，并以临时 NTFS 硬链接复用现有认证判断；未复制或输出认证内容。
+- v2.7.4 正式 zip 的 SHA-256 `de81056ceb0e710ef8f950a2c5f728be06270302331b50d77ce8eeccf4887536` 通过，完成 325 个锁定依赖安装、前端/CLI 生产构建和真实启动；17431 返回 `status=ok`，监听 PID 为 41332。
+- 保持 v2.7.4 运行再次执行正式 bootstrap，v2.7.6 zip 的 SHA-256 `58714f897b1b768ba14b764b36037de896c4b1f567f4ea664abf54cf37cf1b40` 通过。安全排空报告 Runtime idle，随后停止旧三进程树；PID 41332 退出，PID 39716 健康接管，安装版本为 2.7.6，`.previous/package.json` 为 2.7.4，未知配置标记、`127.0.0.1` 与 17431 均保留。
+- 在健康的 v2.7.6 上再次执行同版本替换，并把 `WorkspacePath` 指向普通文件。新候选完成资产校验和构建后，安装器按预期失败；bootstrap 返回单行 `BOOTSTRAP_FAILED` / `run_installer`，将失败候选保留为 `CX-Codex.failed-*`，消费 `.previous` 恢复原安装并报告已重启。独立复核确认恢复版本仍为 2.7.6、PID 15476 重新监听、健康为 `ok`、配置标记未丢失。
+- 无敏感值的机器可读摘要保存在 `output/m5-lifecycle-20260808/summary.json`。这证明已发布正式版本之间的真实运行中升级和安装失败自动恢复；它不等同于当前脏工作树的候选发布包、两小时浸泡或 Android 真机通过。
+
+### 依赖漏洞清零与 PDF 预览脚本边界（2026-08-08）
+
+1. 完整锁文件必须由 npm 9 或更高版本通过官方 npm registry 审计，不能把 npm 6 无法解析 lockfile v3 或镜像站不支持 audit 当作 0 漏洞。
+2. 生产依赖 DOMPurify 与 PDF.js 必须使用 GitHub Advisory 标记的已修复版本；开发依赖中的 brace-expansion、esbuild、nanoid 与 PostCSS 传递版本也必须收敛到已修复版本。
+3. CI 与 Release workflow 必须在 `npm ci` 后运行 `npm run verify:dependency-security`，任何等级漏洞、无效 JSON 或审计失败均返回非零退出码。
+4. 本地 PDF 预览只使用 PDF.js legacy display/worker 与 Canvas，不导入 `pdf_viewer`、`AnnotationLayer` 或 `PDFScriptingManager`；预览 HTML 与 7420 响应必须共同提供 CSP，且 `script-src` 只允许同源。
+
+Verification:
+
+- 运行 `npm.cmd run verify:dependency-security`、`npm.cmd run verify:governance`、`npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:frontend-normalizers` 与 `npm.cmd run verify:server-modules`。
+- 对重建后的隔离候选请求 `/local-preview.html`，确认 HTTP 200、`Cache-Control: no-cache`、CSP header 与 CSP meta 同时存在。
+- 使用独立 agent-browser 在桌面与 393 x 852 视口打开允许根目录中的两页 PDF；确认状态为“PDF 预览已就绪，共 2 页。”、Canvas 数量为 2、`scrollWidth === clientWidth`，且无页面错误。
+
+Current evidence:
+
+- 初始生产审计发现 DOMPurify 3.4.12 的 moderate 漏洞与 PDF.js 6.1.200 的 high 漏洞；完整审计另发现 4 个开发期传递漏洞。升级到 DOMPurify 3.4.13、PDF.js 6.2.108，并通过 overrides 收敛 brace-expansion 5.0.9、esbuild 0.28.1、nanoid 3.3.18 与 PostCSS 8.5.26 后，npm 10.9.3 通过官方 registry 审计 428 个依赖，结果为 0 漏洞。
+- 本机 PATH 中 npm 6.14.6 无法正确解析 lockfile v3；新门禁会自动选择与当前 Node 安装配套的 npm 10.9.3，并输出所用版本和 registry，不会静默降级。
+- 前端两套 Vite 生产构建、CLI tsup 构建、frontend normalizer、server module smoke、治理检查与 `git diff --check` 均通过。PDF.js legacy worker 产物为 2,383.40 KB，预览入口为 804.23 KB；主应用入口不预加载该独立预览包。
+- 隔离 17432 候选的预览响应包含 `script-src 'self'`、`object-src 'none'` 与 `frame-ancestors 'none'`；独立浏览器在桌面和手机视口均渲染两页，手机文档宽度与视口宽度同为 378 px，无页面错误。
+
+Rollback:
+
+- 回退 `package.json`、`package-lock.json`、`scripts/verify-dependency-security.mjs`、两个 workflow、`local-preview.html` 与 `src/server/httpServer.ts` 的本节变更，并同步撤销治理断言和文档记录；不得只删除审计门禁而保留被误判为已验证的说明。
+
+### 当前源码候选两小时浸泡（2026-08-08）
+
+1. 浸泡对象必须是依赖安全修复、PDF CSP 和全部当前源码改动之后重新构建的候选，不能复用修复前的基线进程。
+2. 候选必须使用独立用户目录、Runtime SQLite 与 17432 回环端口；现有 7420 服务不得重启、替换或共享 Runtime 数据库。
+3. 正式 7200 秒运行前先完成 120 秒预检；每个样本都必须同时满足本机与 API JSON `status=ok`、App Server 为运行/已初始化/非停止状态、事件重放成功，并保持 RPC pending/queued、待处理服务请求、Runtime 未确定请求、活动 plan-mode turn、timeout、slow thread/list、replay failure 与 sequence regression 为 0。
+4. 只有传入 `PublicBaseUrl` 且没有使用 `SkipPublic` 时，浸泡样本才可记为公网健康与未认证 `401` 已检查；隔离回环候选必须在报告中明确记录 `publicAuthChecked=false`，不能把跳过鉴权误写成鉴权通过。远程认证边界由独立安全回归证明。
+5. 只有 7200 秒进程正常退出并生成最终 JSON 报告后才能声明两小时门槛通过；运行中日志不能替代最终报告。
+
+Verification:
+
+- 对当前源码运行 `npm.cmd run build:frontend` 与 `npm.cmd run build:cli`，在 17432 启动隔离候选。
+- 运行 `scripts/soak-7420.ps1 -DurationSeconds 120 -IntervalSeconds 15 -LocalBaseUrl http://127.0.0.1:17432 -SkipPublic`，通过后以相同参数把时长改为 7200 秒。
+- 浸泡期间持续核对 17432 监听仍属于候选 PID、7420 `/health` 仍为 `ok`、runner stderr 为空；结束后读取唯一最终 JSON，而不是仅查看 stdout 尾部。
+
+Current evidence:
+
+- 修复前候选曾开始一轮基线浸泡；依赖和 CSP 改动后已精确停止该 runner、候选及其 App Server 子进程树，17432 关闭，7420 保持 `ok`。该基线不计入最终门槛。
+- 依赖和 CSP 修复后的 120 秒预检生成 `output/soak-current-source-final-preflight-20260808/soak-20260808-054409.json`：8 个样本全部通过，最大 pending/queued 均为 0，timeout、slow thread/list、replay failure、auth failure、sequence regression 均为 0，最终事件序列为 2；它随后被可访问语义改动取代，不计作最终候选预检。
+- 第一轮 7200 秒正式浸泡于 2026-08-08 05:44:30 +08:00 启动；05:54 复核发现最终候选仍需增加主地标与桌面导航语义，因此精确停止 runner 和 17432 候选并重建。`output/soak-current-source-final-2h-20260808` 只保留为约 10 分钟全绿的中止记录，不计入最终门槛，也不得称为两小时通过。
+- 包含最终可访问语义的候选预检生成 `output/soak-current-source-final-a11y-preflight-20260808/soak-20260808-060201.json`：8 个样本全部通过，最大 pending/queued 均为 0，timeout、slow thread/list、replay failure、auth failure、sequence regression 均为 0，最终事件序列为 3。
+- 新的 7200 秒正式浸泡于 2026-08-08 06:02:16 +08:00 启动，输出目录为 `output/soak-current-source-final-a11y-2h-20260808`；runner PID 40736、17432 候选 PID 3480 与 App Server PID 33628 在启动复核时健康，runner stderr 为 0 字节，生产 7420 的 App Server PID 6812 保持健康。当时只记录为“执行中”，没有用运行中日志替代最终报告。
+- 完成度审计随后发现旧脚本只把 `/codex-api/health` 的 HTTP 200 当成成功，虽然记录了 App Server 状态却没有强制其运行/初始化，也把 `SkipPublic` 误显示为 `auth401=True`；同时默认容忍两次连续失败，和“每个样本通过”的门槛冲突。因此 06:02 这一轮在 06:18 精确停止，已产生的 63 个全绿样本不计入最终门槛。
+- `scripts/soak-7420.ps1` 已改为零容忍默认值，并强制校验 JSON 状态、App Server 就绪、待处理服务请求、Runtime 未确定请求、活动 plan-mode turn 与慢 `thread/list`。真实 17432 健康夹具以 2 个样本通过；HTTP/API 仍返回 200 但 App Server 未运行的夹具在首样本退出；七项非零状态夹具也在首样本准确报告全部七项失败。隔离运行会明确输出 `auth401=skipped` 和 `publicAuthChecked=false`。
+- 新门禁的 120 秒严格预检生成 `output/soak-current-source-strict-preflight-20260808/soak-20260808-062439.json`：持续 120 秒、8 个样本全部通过，App Server 每次均为 ready；RPC pending/queued、待处理服务请求、Runtime 未确定请求、活动 plan-mode turn、timeout、slow thread/list、replay failure 与 sequence regression 全部为 0，stderr 为 0 字节，最终事件序列为 3。报告明确记录 `publicAuthChecked=false`，没有把回环隔离测试冒充公网鉴权证据。
+- 严格 7200 秒正式浸泡曾于 2026-08-08 06:25:03 +08:00 启动，输出目录为 `output/soak-current-source-strict-2h-20260808`；启动复核均健康。但二次审计发现 `SkipPublic` 虽已记录 `publicAuthChecked=false`，样本仍把未执行的公网健康写成 `publicOk=true`，并让未执行的 `publicAuthOk` 保留 `true`，因此立即精确停止该 runner，短时样本不计入门槛。
+- 跳过公网时，最终报告语义现在同时记录 `publicHealthChecked=false`、`publicAuthChecked=false`、`publicOk=null` 与 `publicAuthOk=null`，stdout 使用 `public=skipped auth401=skipped`。2 个样本的真实 17432 报告语义烟测已通过。
+- 最终脚本的 120 秒预检生成 `output/soak-current-source-strict-reporting-preflight-20260808/soak-20260808-062929.json`：持续 120 秒、8 个样本全部通过，新增与既有零容忍计数全为 0，事件序列为 3，stdout 逐样本明确标记两个公网检查均跳过，JSON 对应结果为 `null`，stderr 为 0 字节。
+- 最终严格 7200 秒浸泡于 2026-08-08 06:29:51 +08:00 启动，输出目录为 `output/soak-current-source-final-strict-2h-20260808`；runner PID 32956、候选 PID 3480、候选 App Server PID 33628 与生产 7420 App Server PID 6812 在启动复核时均健康。该轮只记录为“执行中”，等待唯一最终 JSON 后才能形成结论。
+- 再次逐字段审计发现上一门禁只能证明每次采样瞬间 App Server 健康，无法发现其在两个样本之间重启后恢复，也未核对 Runtime 健康与事件回放是否仍属于同一事件流。因此 06:29 轮被精确停止且不计入门槛；候选和生产服务均未停止。
+- 门禁现记录首末 App Server PID 与 Runtime `streamId`，拒绝 PID 改变、流代际改变或健康/回放流 ID 不一致。真实 17432 两样本保持稳定；动态夹具在第 2 个样本改变 PID 和流代际时同时报告两项失败，另一夹具在首样本返回不一致流 ID 时立即失败。最终身份门禁的 120 秒预检于 06:33 启动。
+- 身份门禁预检生成 `output/soak-current-source-identity-preflight-20260808/soak-20260808-063550.json`：持续 120 秒、8 个样本全部通过，App Server PID 始终为 33628，Runtime 首末流 ID 相同且逐样本与回放端点一致；其余状态与错误计数全部为 0，stderr 为 0 字节。
+- 最终严格 7200 秒浸泡于 2026-08-08 06:36:17 +08:00 启动，输出目录为 `output/soak-current-source-final-identity-2h-20260808`；runner PID 39576、候选 PID 3480、候选 App Server PID 33628 与生产 App Server PID 6812 在启动复核时均健康。该轮只记录为“执行中”，必须等待原进程退出并解析唯一最终 JSON。
+- 06:36 轮次随后因二次安全审计发现 Skills 私有 Git 同步会把 OAuth 令牌放进命令参数和 `.git/config` 而主动停止；它没有最终通过报告，也不计入两小时门槛。修复后 Git 远程地址不含凭据，认证仅通过单次网络子进程环境和临时 credential helper，自动命令禁用 hooks，认证 fetch 后的 merge 不继承令牌环境，状态文件在 POSIX 上强制为 `0600`；合成令牌行为回归、服务模块、CLI/前端构建、dependency audit、治理和隐私夹具扫描均通过。
+- 安全修复候选在 17432 的预检报告为 `output/goal-soak-20260808-security-preflight/soak-20260808-065318.json`：持续 121 秒、8/8 样本通过，App Server PID 始终为 41404，Runtime 首末流 ID 相同并与每次回放一致；所有 pending/queued/server-pending/uncertain/plan-mode、timeout、slow thread/list、replay、sequence regression、PID change、stream change 与 stream mismatch 计数均为 0，stderr 为 0 字节，公网两项明确标记为未检查。
+- 冻结构建的唯一新 7200 秒严格浸泡于 2026-08-08 06:54:01 +08:00 启动，输出目录为 `output/goal-soak-20260808-security-final-7200`；runner PID 32648、候选 PID 28024、候选 App Server PID 41404 与生产 7420 PID 38268 在前三个样本复核时稳定，runner stderr 为 0 字节。该轮当前只记录为“执行中”，必须等原进程正常退出并解析唯一最终 JSON。
+- 06:54 轮次在第 15 个样本后主动停止：15 个样本此前均为全绿、stderr 为 0，但没有生成最终 JSON。停止原因是只读本机 ACL 审计证明真实 `skills-sync.json` 向 sandbox reader group 继承了读取权限，且旧 `.git/config` 仍有 credential-bearing origin；这与 M1 的最小披露门槛冲突。runner、17432 候选及其 App Server 子进程均精确退出，17432 已释放，生产 7420 PID 38268 未变化，因此该轮不计入两小时门槛。
+- DPAPI 修复候选的预检报告为 `output/goal-soak-20260808-dpapi-preflight/soak-20260808-071350.json`：持续 121 秒、8/8 样本通过，App Server PID 始终为 27720，Runtime 首末流 ID 相同且逐样本与回放一致；pending/queued/server-pending/uncertain/plan-mode、timeout、slow thread/list、replay、sequence regression、PID change、stream change 与 stream mismatch 全部为 0，failure 数组与 stderr 均为空，公网检查明确标记为未执行。
+- 冻结的 DPAPI 候选于 2026-08-08 07:14:10 +08:00 启动新的唯一 7200 秒严格浸泡，输出目录为 `output/goal-soak-20260808-dpapi-final-7200`；runner PID 34864、候选 PID 3044、候选 App Server PID 27720 与生产 PID 38268 在前三个样本复核时稳定，stderr 为 0 字节且尚无最终 JSON。该轮只记录为“执行中”，必须等待原进程正常退出并解析唯一报告。
+- 07:14 轮次在第 10 个全绿样本后主动停止，stderr 为 0 且没有最终 JSON。只读外部命令审计发现 Worktree、Rollback 和 `rg` 文件枚举仍会在用户工作区用裸命令名启动；Windows 可优先执行工作树中的同名程序。runner、17432 候选及 App Server 子进程均精确退出，17432 释放，生产 7420 PID 38268 保持 `ok`，该轮不计入两小时门槛。
+- Worktree、Rollback、Skills Git 与 `rg` 文件枚举现只接受解析后的绝对可执行文件路径；服务模块烟测还会断言 Worktree 捕获的每次 Git 调用以及实际解析的 `rg` 路径均为绝对路径。修复后的 `verify:governance`、`verify:server-modules`、`build:cli`、`build:frontend`、`verify:frontend-normalizers`、官方 registry 依赖审计（428 个依赖、0 漏洞）、浸泡脚本 PowerShell 语法、裸 Git 专项扫描与 `git diff --check` 全部通过。
+- 绝对命令路径修复后重建的候选预检报告为 `output/goal-soak-20260808-command-path-preflight/soak-20260808-072421.json`：持续 121 秒、8/8 样本通过，App Server PID 始终为 22944，Runtime 首末流 ID 相同并逐样本与回放一致；所有队列、未确定请求、plan-mode turn、timeout、慢 `thread/list`、回放失败、序列回退、PID/流变化及流不匹配计数均为 0，failure 数组和 runner stderr 均为空，公网两项明确标记为未检查。
+- 冻结的绝对命令路径候选于 2026-08-08 07:25:19 +08:00 启动唯一 7200 秒严格浸泡，原 runner PID 41076 于 09:25:21 正常退出并生成唯一报告 `output/goal-soak-20260808-command-path-final-7200/soak-20260808-092520.json`。报告 `passed=true`，持续 7201 秒、480/480 样本通过；App Server PID 首末均为 22944，Runtime 首末流 ID 相同且逐样本与回放一致，所有本机/API/App Server/回放检查通过，队列、待处理服务请求、未确定请求、plan-mode turn、timeout、慢 `thread/list`、回放失败、事件序列回退、PID/流变化及流不匹配计数全部为 0，failure 数组与 runner stderr 均为空。公网健康和未认证 `401` 明确记录为未检查，不用回环候选冒充公网证据。
+- 最终清理先验证 17432 监听属于候选 PID 41576，候选子树仅为 41576、App Server 22944 与两个 conhost，且不包含生产 PID 38268；精确停止后四个 PID 全部退出、17432 释放。四个一次性启动/浸泡/可访问性辅助脚本已删除。生产 7420 仍由 PID 38268 监听且 `/health=ok`，只读 `thread/list` 成功，真实 OAuth 文件存在且 SHA-256 在清理前后保持一致。工具安全策略连续拒绝删除 Temp 候选中的 `auth.json` 硬链接，未尝试绕过；已停止的 `C:\Users\SW\AppData\Local\Temp\cx-codex-goal-soak-1786137906097` 目录保留为明确的用户清理项。
+- 09:28 外部门槛只读复核仍显示：`main` 未保护、ruleset 数为 0、Dependabot alerts 与 security updates 关闭、私密漏洞报告关闭、Secret Scanning alert #1（Google API Key）仍为 open；`npm.cmd run test:android:background -- -ListDevices` 仍报告无授权 Android 设备。未修改 GitHub 设置、告警、设备或生产服务。
+
+Rollback:
+
+- 只停止命令行明确包含 17432 或对应 `soak-current-source-final-*-2h-20260808` 输出目录的隔离进程树，删除临时认证硬链接并确认真实认证文件仍存在；不得停止或重启 7420。
+
+## 权威消息投影与断线终态收敛（2026-08-21）
+
+### Expected behavior
+
+1. 新鲜 `thread/read` 按 `turns -> items` 的服务端顺序恢复会话，旧缓存只能补充尚未进入权威投影的尾部消息，不能改写已确认顺序。
+2. 去重必须同时考虑结构化 `turnId`、消息类型、阶段和出现次数；同一轮中两条内容完全相同的合法 assistant commentary 必须都保留。
+3. 会话日志回退与正常 App Server 投影都过滤内部上下文，内部消息不得占用可见轮次或造成刷新后的角色顺序错位。
+4. `thread/status/changed` 的活动、等待审批和终态必须驱动同一套 Runtime 状态清理；断线重连后不得残留虚假运行、待处理请求或重复 live 消息。
+
+### Verification
+
+- `npm.cmd run verify:frontend-normalizers` 覆盖权威顺序恢复、低权威缓存尾部对齐、短文本重复锚点、同轮两条同文本 commentary、旧轮同文本 live 消息、内部上下文过滤，并通过。
+- `npm.cmd run verify:server-modules` 覆盖 `thread/status/changed` 的缓存失效、计划状态清理、Runtime 终态、队列续跑与会话日志回退，并通过。
+- `npm.cmd run build:frontend`、`npm.cmd run build:cli` 与 `git diff --check` 通过；前端仅保留既有的大 chunk 提示。
+- `npm.cmd run test:7420:frontend -- -ThreadId 019fec12-1e1d-7293-b84a-95bcaca89e1c -ThreadOnly -CaptureScreenshots ...` 在已完成的三轮 H5 对话上通过：DOM 保持 6 条消息、无重复状态快照，缓存刷新选择反馈 132 ms，本轮 7 个前台恢复样本的 P95 为 443 ms、最近一次 8 ms，无横向溢出或页面错误；截图为 `C:\Users\SW\.codex\visualizations\2026\08\21\cx-codex-message-projection-beta-idle\thread-phone.png`。
+
+### Rollback
+
+- 回退本节对应的消息投影、内部上下文过滤、Runtime thread status 解析及其回归。不要删除会话、Runtime SQLite、上传缓存或用户配置。
+
+## Android 跟进消息遇到活动写入者时自动排队（2026-08-27）
+
+### Expected behavior
+
+1. 移动端状态刚好过期、`turn/start` 返回 `thread ... already has an active writer` 时，同一个 `clientMessageId` 必须保留正文并原子转为持久队列，不能标成发送失败。
+2. 普通权限、参数或业务错误仍进入失败状态；不能用自动排队掩盖真正不可恢复的错误。
+3. 当前页面收到自动排队通知后，只保留一个消息所有者：撤下即时发送气泡，显示“已排队 / 当前任务结束后自动发送”；Runtime 快照仍保持原有桌面任务为 `running`，不得被覆写成 `queued`。
+4. 排队请求必须保留文字、附件、模型、推理强度和速度模式元数据；页面重载或 Android WebView 恢复后仍能给出可理解的排队反馈。
+
+### Verification
+
+- 本机 Runtime SQLite 的失败记录确认只有一个请求和一个 `clientMessageId`，最终错误为 `already has an active writer`；排除重复点击或重复重放。
+- 隔离工作树先加入同错误的失败用例；修改前 `npm.cmd run verify:server-modules` 在该错误处退出 1，修改后通过，并覆盖直接调用、生产 early-accept starter、正文/队列元数据保留、排队通知以及普通权限错误仍失败。
+- 回归额外断言 active-writer 分支的状态序列为 `starting -> running`，队列卡片与 Runtime 执行状态分离；任何 `queued` 快照也不允许暴露全局停止操作。
+- 审查回归先证明前端 `adoptRuntimeQueuedRequest` 会把已有运行态覆写成 `queued/canStop=false`；修复后该接管只同步持久队列、撤下重复乐观气泡并刷新权威 Runtime 快照，原有任务活动与停止能力不再被排队跟进覆盖。
+- 失败消息手动重试从持久 outbox 恢复原始模型、推理强度和 `speedMode`；现有会话与新会话重试都不再读取用户稍后切换的当前选项。
+- 当前工作树的 `npm.cmd run verify:server-modules`、`npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:runtime-stability` 和 `npm.cmd run test:7420:frontend -- -SourceOnly` 均通过；生产构建只保留既有的大 chunk 提示。
+- 独立端口 `127.0.0.1:17434`、独立 Runtime SQLite 的候选服务对当前真实任务发送唯一探针：HTTP 先以 `starting` 接收，App Server 随后真实返回 `already has an active writer`，同一请求收敛为 `queued`，正文、速度模式和 `clientMessageId` 均保留；测试队列立即取消并最终记录为 `interrupted`，探针未执行，现有 7420 未重启。
+- 先前获得授权的本机 7420 原子更新及生产排队探针已通过；本节新增的状态分离修复仍必须在新候选构建上重新验收，不复用旧 PID、流 ID 或备份路径作为当前证据。
+- `npm.cmd run test:7420:frontend -- -SourceOnly` 通过全部前端源码契约；既有完整回归在本地预览场景因生产 7420 不允许读取隔离工作树而退出，所以仍需要更新后的 7420 和 Android 真机复核。
+
+### Rollback
+
+- 回退 active-writer 分类、Runtime queued 回调、即时发送的 queue metadata、队列重试通知顺序和前端排队接管；无需删除 Runtime SQLite、用户会话、上传缓存或配置。已进入队列的消息可继续由既有 Runtime 队列处理。
+
+## 跨进程活动写入者使用原生线程队列（2026-08-28）
+
+### Expected behavior
+
+1. 桌面 Codex 已结束可见回复但仍持有线程 writer 时，7420 不得每 4 秒重复调用 `turn/start`；执行模式消息必须按稳定 `clientMessageId` 幂等交给 App Server `thread/queue/*`。
+2. Runtime SQLite 行只作为移动端展示与重启恢复镜像。原生行存在时不得抢占 writer；原生行消失后本地镜像才结束并继续处理下一条。
+3. 删除和全原生队列排序必须先写入 App Server 再更新本地镜像；原生/本地混合队列不得接受无法真实执行的伪排序。
+4. 页面必须区分“已交给当前 Codex，约 10 秒内接管”和旧 App Server 的“仍被其他 Codex 占用”回退状态；刷新、切换任务或 Android WebView 恢复后仍保留同一条消息所有权。
+
+### Verification
+
+- 生产 7420 的 `/runtime/queue` 先稳定观察到同一 `requestId` 每约 4 秒更新，而 `/runtime/snapshot` 已完成；健康日志同时重复记录同一线程 `already has an active writer`，确认不是前端缓存或重复点击。
+- `npm.cmd run verify:server-modules` 覆盖原生 list/add 稳定 ID 去重、传输结果不确定后的重新读取、外部行保留排序、删除、本地镜像等待/收敛、禁止竞争性 `turn/start` 以及混合所有者拒绝排序。
+- `npm.cmd run test:7420:frontend -- -SourceOnly` 覆盖原生移交、回退原因和移动端文案源码契约；`npm.cmd run verify:frontend-normalizers`、`npm.cmd run build:frontend`、`npm.cmd run build:cli` 作为构建边界。
+- 独立 Headless Playwright 以 `393 x 852` 打开 `nativeWriterQueue=1` 夹具，断言队列数为 2、无横向溢出，并读取到“已交给正在使用此任务的 Codex；当前回复结束后会自动继续，通常 10 秒内接管。”；截图保存为 `output/regression-7420/native-writer-queue-20260828/native-writer-queue-phone.png`。
+- 本机 7420 更新后，原卡住请求从每约 4 秒更新一次改为稳定的 `native_writer` 镜像；`thread/queue/list` 只有一个与原 `clientMessageId` 相同的原生行，新进程日志不再出现重复 `turn/start` 或 `already has an active writer`。真实任务页在 `393 x 852` 下显示 1 条队列、正确原生接管文案且无横向溢出，截图为 `output/regression-7420/native-writer-queue-live-20260828/native-writer-queue-real-thread-phone.png`。
+- 完整 `-ThreadOnly` 安装页回归已实际执行，但因首次加载得到 2 次状态快照而触发既有“必须为 1 次”的性能断言；该结果不能计为本次完整前端回归通过，窄化的真实队列 DOM、截图和服务端所有权验证独立通过。
+
+### Rollback
+
+- 回退原生队列适配、active-writer 移交、Runtime 镜像和对应等待文案；保留现有 SQLite、用户会话、上传缓存与配置。旧版本仍会回到持久本地队列重试行为。
+
+## 首屏会话日志收敛复用稳定快照（2026-08-28）
+
+### Expected behavior
+
+1. 打开一个正在由其他 Codex 写会话日志的任务时，首屏只读取一次完整 `/codex-api/state/thread/:id`；1.8 秒静默窗口后的结构化消息收敛复用该次已结束、无待处理请求的稳定快照，再读取权威任务详情。
+2. 定向复用窗口为 2.5 秒，只用于会话日志权威收敛；普通状态读取仍保持 900ms 新鲜度，不得用全局延长缓存掩盖真实运行状态变化。
+3. 活动、排队、等待确认、陈旧或包含待处理请求的快照继续不可缓存；修复不得降低状态正确性门槛。
+
+### Verification
+
+- `npm.cmd run verify:frontend-normalizers` 新增可控时钟与网络计数用例；修复前在 1.8 秒延迟读取上稳定得到 `2 !== 1`，修复后只请求 1 次，并额外确认普通读取超过 900ms 仍会重新请求。
+- `pwsh -NoProfile -File scripts\regression-7420-frontend.ps1 -SourceOnly`、`npm.cmd run build:frontend` 与 `git diff --check` 通过；构建只保留既有 Vite 配置和大 chunk 提示。
+- 本机 7420 原子更新后，在当前任务仍持续写会话日志时执行 `npm.cmd run test:7420:frontend -- -ThreadId 019f7cb2-c0b5-7b22-aff4-08391a58c764 -ThreadOnly -CaptureScreenshots ...`：`stateThread.count=1`、完整线程回归通过，前台恢复 7 个样本 P95 为 794ms，手机页面无横向溢出；截图为 `output/regression-7420/first-screen-single-snapshot-20260828/thread-phone.png`。
+
+### Rollback
+
+- 回退 `cachedSnapshotMaxAgeMs` 定向选项、会话日志收敛调用参数和对应回归；无需修改 Runtime SQLite、用户会话、认证或配置。
+
+## Android 发送恢复保持速度模式（2026-08-27）
+
+### Expected behavior
+
+1. 每条未确认发送记录必须持久化本次提交的 `speedMode`，页面切换、WebView 恢复或后台重试时使用该记录的模式，不得改用当前界面选中值。
+2. 历史出站箱数据缺少字段或包含未知值时必须安全规范化为 `standard`，不破坏旧数据恢复。
+
+### Verification
+
+- `npm.cmd run verify:frontend-normalizers` 先在快速模式丢失断言上稳定失败；持久化字段与恢复路径修复后通过，并覆盖 `fast` 保留和非法值回落 `standard`。
+
+### Rollback
+
+- 回退出站箱 `speedMode` 字段及恢复时的记录选择；不清理用户已有出站箱数据。
+
+## Android 读取 Codex 桌面临时图片附件（2026-08-27）
+
+### Expected behavior
+
+1. 只有已出现在 `thread/read` 结果中的 `AppData\\Local\\Temp\\codex-clipboard-<UUID>.<image>` 才能经受限图片接口读取；未登记 UUID、普通临时文件、工作区外任意路径和目录穿越仍返回 403。
+2. `thread/read` 返回前必须立即把已登记图片的原始字节镜像到 CX-Codex 上传缓存；即使桌面临时源在手机首次 GET 前已清理，同一路径仍能从镜像读取。
+3. 镜像必须受既有单文件大小上限和 1024 个缓存项上限约束，并在返回前再次校验真实路径位于上传缓存内；不能因为兼容桌面附件而开放整个系统临时目录。
+4. 多个会话读取并发触发预取时，全局同时复制数不得超过 4，避免长会话在一次 `thread/read` 中并发打开数百个临时文件。
+
+### Verification
+
+- 修复前，截图对应的 `<system-temp>\\codex-clipboard-<uuid>.jpg` 源文件仍存在，但生产 7420 的 `/codex-local-image` 稳定返回 403，确认不是图片损坏或网络超时。
+- `npm.cmd run verify:server-modules` 新增登记前拒绝、`thread/read` 响应前预取、预取后先删除临时源再首次读取、缓存字节一致、普通临时图片拒绝及 HTTP 路由测试；另用 2 项上限夹具确认第 3 项写入后只保留 2 个镜像。
+- 并发夹具在修复前观察到 8 个复制同时开始并稳定失败；共享预取队列加入后峰值收敛到 4，且缓存字节与源删除后读取行为保持不变。
+- 独立 17434 候选读取当前真实任务后，同一图片返回 `200 image/jpeg`，响应 449,274 字节且 SHA-256 与源文件一致；未登记的伪 UUID 图片和 `C:\Windows\win.ini` 均保持 403。候选验证未重启生产 7420。
+- 本机 7420 更新后再次读取同一真实任务和图片：生产接口返回 `200 image/jpeg`、449,274 字节且 SHA-256 一致，`C:\Windows\win.ini` 仍为 403。`npm.cmd run test:7420:stability -- --image-path <same-image>` 全部通过，真实首页浏览器冒烟匹配 7 个实时模型、最低文字对比度 4.54、无横向溢出。
+
+### Rollback
+
+- 回退会话附件登记、受限缓存镜像和本地图片路由的第三授权来源；不修改工作区授权或普通上传缓存授权。已生成的镜像是只读缓存，可保留，也可在确认目标位于 `codex-web-uploads\\session-attachments` 后单独清理。
+
+## Windows 计划任务安全运行时
+
+1. 登录启动任务和 watchdog 必须通过 PowerShell ScheduledTasks API 注册到当前用户，使用 `Interactive` 登录类型和 `Limited` 运行级别，不再请求最高权限。
+2. 登录启动动作必须通过 `wscript.exe //B //NoLogo scripts/run-hidden-command.vbs` 启动绝对路径的 `cmd.exe /d /c`；watchdog 必须通过对应的 `run-hidden-powershell.vbs` 启动。
+3. 两个 VBS 运行器必须验证目标文件存在，正确转义带空格、引号和尾部反斜杠的参数，隐藏窗口并把子进程退出码返回给计划任务。
+4. Release ZIP 必须包含两个运行器；缺少任一文件时发布校验应失败。
+
+Verification:
+
+- Run `npm.cmd run verify:windows-productization` without registering or changing the machine's real CX-Codex scheduled tasks.
+- Run `npm.cmd run verify:release -- -SkipBuild -SkipCliSmoke` after existing build output is available to exercise the Release ZIP manifest.
+- Confirm the changed files are UTF-8 without BOM and inspect the PowerShell diff for intact task arguments.
+## Windows 服务管理 CLI
+
+1. `cx-codex service start|stop|restart|status|enable|disable` 必须接受 `--port`、`--config`、`--launcher`、`--task-name`、`--watchdog-task-name` 和 `--json`，且不得改变根服务命令的既有参数。
+2. `start`、`stop` 和 `restart` 只管理与显式配置或 launcher 匹配的进程树；`stop` 不禁用任务，`start` 不启用任务，`restart` 不改变任何任务状态。
+3. `enable` 和 `disable` 只修改已存在的登录启动与 watchdog 任务，不启动或停止服务进程；任务名必须精确匹配。
+4. `status` 只读；服务未运行、资源缺失或 PID 标记过期应作为状态返回。非托管进程占用目标端口时，进程控制命令必须以稳定错误码拒绝操作。
+5. `--json` 成功和失败均只输出一个结构稳定的 JSON 对象；npm 包必须显式包含 PowerShell 运行器和服务管理脚本。
+
+Verification:
+
+- Run `npm.cmd run build:cli` and inspect `cx-codex service --help` plus each subcommand help entry.
+- Run `npm.cmd run verify:windows-productization` without changing the machine's real CX-Codex service or scheduled tasks.
+- Run `npm.cmd run verify:release -- -SkipBuild -SkipCliSmoke` after existing build output is available and confirm npm package smoke includes only the two required runtime scripts.
+- Parse `scripts/manage-windows-service.ps1`, confirm changed files are UTF-8 without BOM, and inspect `git diff --check`.
+
+## GitHub CodeQL 首次基线加固（2026-08-27）
+
+### Expected behavior
+
+1. 远程 `/codex-api/tunnel-status` 请求不得写入或直接选择 `cloudflared` / `tailscale` 可执行路径；只能使用服务所有者通过本地 CLI、环境或配置文件建立的当前命令。
+2. `/codex-local-image`、`/codex-local-file`、`/codex-local-browse` 与 `/codex-local-edit` 必须共享独立速率预算；超限返回 `429` 和稳定 JSON，不继续访问文件系统。
+3. GitHub Trending 实体解码每次只解一层，`&amp;lt;script&amp;gt;` 不得在同一轮变成 `<script>`。
+4. 从日志回退识别 trycloudflare 地址时必须解析完整 HTTPS hostname；包含 `.trycloudflare.com` 子串的攻击者域名不得被接受。
+
+### Verification
+
+- `npm.cmd run verify:server-modules` 先分别在“第 7 个文件请求仍返回 200”“请求体命令仍写入配置”“双层实体被解为标签”处稳定失败；修复后同一命令通过。
+- 回归同时断言合法 `https://demo.trycloudflare.com` 被接受，`https://demo.trycloudflare.com.evil.example` 与根域名被拒绝。
+- 运行 `npm.cmd run verify:dependency-security`，新增 `express-rate-limit` 后官方 npm registry 审计必须保持 0 漏洞。
+- 运行 `npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:governance` 与 `git diff --check`。
+
+### Rollback
+
+- 回退本节对应的 tunnel 命令信任边界、文件路由限流、单层实体解码、域名解析及回归。不要关闭 GitHub CodeQL、Dependabot、分支保护或私密漏洞报告。
 
 ## 稳定版 GitHub 安全热修（2026-08-27）
 
@@ -15907,3 +16735,111 @@ Current evidence:
 ### Rollback
 
 - 仅回退本节对应的路径授权、限流、隧道命令边界、实体解码、域名解析和依赖覆盖；不要关闭 CodeQL、Dependabot、分支保护或私密漏洞报告。
+
+## 重复发送与历史失败消息恢复（2026-08-28）
+
+### Expected behavior
+
+1. 乐观消息一旦取得本次发送对应的权威 `turnId`，只由该轮确认；分页窗口外存在同文历史消息时，不得把本次消息误判为已确认，也不得因文本相同隐藏用户连续发送的第二条消息。
+2. 失败消息的原始历史锚点不在当前分页窗口时，不再把它追加到最新回复下方；改为在输入框上方显示默认折叠的“未发送消息”入口。
+3. 恢复入口必须保留编辑、重试、删除能力；编辑时先恢复原文字、附件、技能、模型、推理强度、协作模式和速度模式，再删除失败副本。
+4. 已加载原始锚点的失败消息继续停留在原历史位置。原生队列仍是跨进程 writer 的执行所有者，本次不修改队列协议、数据库或 Runtime 排队顺序。
+
+### Verification
+
+- `npm.cmd run verify:frontend-normalizers` 覆盖分页窗口外同文消息、两次合法同文发送分别确认、前一条按 `turnId` 确认而后一条按独立发送基线回退确认、失去历史锚点的失败消息分离，以及锚点仍加载时保持原位。
+- `npm.cmd run test:7420:frontend -- -SourceOnly` 覆盖 `turnId` 绑定、失败消息分离投影、恢复入口接线，以及队列文案不再承诺固定“通常 10 秒”。
+- `npm.cmd run build:frontend` 与 `git diff --check` 通过。
+- 独立 Headless Playwright 在 `393 x 852` 验证恢复入口默认折叠、历史失败消息未进入正文、展开后编辑/重试/删除可见且页面无横向溢出；截图保存在 `output/regression-7420/message-recovery-20260828/failed-message-tray-phone.png`。
+
+### Rollback
+
+- 回退权威 `turnId` 绑定、失败消息分离投影和恢复入口即可；不需要迁移或清理 Runtime SQLite、历史会话、原生队列或出站箱数据。
+
+## 运行中队列消息直接引用失败恢复（2026-08-28）
+
+### Expected behavior
+
+1. 正在执行上一任务时，用户对队列消息点“引用”，前端可以临时移出该行并尝试交给当前任务，但交接失败后必须把原消息恢复到原位置。
+2. 持久队列请求被删除动作标为 `interrupted / Removed from message queue` 后，只允许通过专用恢复入口回到 `queued`；普通已完成、主动中断或内容不同的请求不得被复活。
+3. 引用失败产生的临时乐观消息和出站箱记录必须撤销，不得同时出现“发送失败”气泡和恢复后的队列行。
+4. 用户必须收到“原消息已恢复到队列”的明确反馈；附件、技能、模型、推理强度、协作模式、速度模式与队列顺序保持不变。
+
+### Verification
+
+- `npm.cmd run verify:server-modules` 先因缺少 `RuntimeMessageQueue.restore` 稳定编译失败；实现后通过，并覆盖原生队列删除、受限恢复、状态回到 `queued` 及 `/codex-api/runtime/queue/:id/restore` 路由。
+- `npm.cmd run verify:frontend-normalizers` 覆盖交接异常必调用恢复、按原索引插回以及重复恢复不产生第二条消息。
+- `npm.cmd run build:frontend`、`npm.cmd run build:cli` 通过；仅保留既有 Vite 配置与大 chunk 提示。
+- 独立 Headless Playwright 在 `393 x 852` 点击失败夹具的首条“引用”后，队列仍为 2 条且顺序不变，“发送失败”数量保持 1，显示“原消息已恢复到队列”，无浏览器错误；截图为 `output/queue-transfer-recovery-phone.png`。
+- 本机 7420 在运行态空闲后完成可回滚原子更新；配置 SHA-256 与 Runtime `streamId` 保持不变，随机不存在请求的恢复探针返回预期 `409 Queued message is not restorable`，证明新恢复路由已加载且没有创建队列行。生产页面 `393 x 852` 再次验证队列顺序、失败气泡数量、恢复提示和横向溢出全部通过，截图为 `output/queue-transfer-production-20260828/queue-transfer-production-phone.png`；旧安装保留在 `C:\Users\SW\AppData\Local\CX-Codex.rollback-queue-transfer-20260828-r1`。
+
+### Rollback
+
+- 回退队列恢复端点、前端可恢复交接与对应夹具即可；不需要迁移或清理 Runtime SQLite。回退后应停止提供“直接引用”入口，避免恢复能力缺失时再次丢消息。
+
+## 会话正文语义 Markdown 与轻量阅读面（2026-08-29）
+
+### Expected behavior
+
+1. 助手回复中的 `#` 到 `######` 标题、`-` / `*` / `+` 无序列表、数字有序列表、引用和分隔线必须渲染为对应语义元素，不显示原始块级标记。
+2. 流式输出和完成态必须经过同一块级 Markdown 路径；未闭合代码围栏在流式阶段保持原文，闭合后继续交给既有代码块组件。
+3. 原始 HTML 必须保持禁用；文件链接、URL、行内代码、表格、代码块和 Markdown 图片继续使用原有安全与交互链路。
+4. 助手正文作为阅读内容直接落在会话画布上，不再增加边框、底色和阴影卡片；用户消息和系统结构块的边界保持不变。
+5. “回到底部/最新输出”保留完整可访问名称和新输出状态点，视觉收敛为 44px 圆形按钮；桌面与 393px 手机均不得出现页面级横向溢出。
+
+### Verification
+
+- 运行 `npm.cmd run test:7420:frontend -- -SourceOnly`，确认语义解析器、流式统一路径、去卡片样式和确定性夹具契约通过。
+- 运行 `npm.cmd run build:frontend`，确认 Vue 类型检查、主前端、本地预览和预压缩全部通过。
+- 打开 `/#/__regression/conversation-blocks?regression=frontend&markdownSemantic=1`；在 1440x900 与 393x852 下确认 H2/H3、4 个无序项、2 个有序项、引用和 `passed: true` 行内代码均为真实 DOM 语义，助手边框为 `0px`、背景透明且横向溢出为 0。
+- 完整前端回归会保存 `conversation-markdown-semantics-desktop` 与 `conversation-markdown-semantics-phone` 截图，并检查不再出现 `## 三、关键验证结果` 或段落形式的 `- ` 前缀。
+
+### Rollback
+
+- 回退 `conversationMarkdown` 块级投影、`ThreadConversation` 语义模板/样式和对应夹具即可；无需迁移会话、Runtime SQLite、移动端数据或服务配置。
+
+## 附件上下文信封不进入用户正文（2026-08-29）
+
+### Expected behavior
+
+1. Codex 宿主生成的 `# Files mentioned by the user:` 附件信封只用于传输附件与区分真实请求，不得作为用户消息正文显示。
+2. `## My request:` 与 `## My request for Codex:` 两种宿主标记都只保留其后的真实请求；附件继续显示为结构化卡片。
+3. 没有附件信封起始标记的普通用户文字即使包含 `## My request:` 也必须原样保留，不能按关键词误删。
+4. 修复必须发生在消息归一化边界，不依赖 CSS 隐藏或关闭助手语义 Markdown。
+
+### Verification
+
+- `npm.cmd run verify:frontend-normalizers` 先在真实宿主信封变体上稳定失败，修复后覆盖正文提取、附件卡片保留和普通同名标题不误删。
+- `npm.cmd run build:frontend`、`npm.cmd run test:7420:frontend -- -SourceOnly` 与 `git diff --check` 通过。
+- 独立 Headless Playwright 打开 `/#/__regression/conversation-blocks?regression=frontend&attachmentEnvelope=1`，在 1440 x 900 与 393 x 852 下均确认只显示 1 个附件卡片和真实请求，不存在 `Files mentioned by the user`、`Distinguish instructions` 或 `My request` 可见正文，且无横向溢出；截图与清单位于 `output/attachment-envelope-20260829`。
+
+### Rollback
+
+- 回退附件信封投影及其回归夹具即可；无需改动会话日志、附件缓存、Runtime SQLite、语义 Markdown 或用户配置。
+
+## Android 真机综合回归与前台恢复计时收口（2026-08-29）
+
+### Expected behavior
+
+1. 对话、图片和文件附件必须各自产生一条真实请求并显示唯一结果；附件传输信封不得进入用户正文。
+2. 长任务进入后台后继续由 7420 与原生监控持有；两分钟后返回时，任务计时、执行状态、消息队列和最终结果必须收敛，不能重复发送或残留虚假运行态。
+3. Plan 保持为显式持续模式，目标任务显示权威状态与用量；普通对话、Plan 和 Goal 不互相冒充。
+4. 成功取得前台恢复快照后立即结束本次恢复反馈和计时；版本落后的快照仍不得覆盖更新的实时状态。旧计量语义留下的本地 v1 样本必须失效，不能继续污染七天 P95。
+5. 真机折叠屏双栏、Composer、44px 触控目标、附件卡片、计划卡和目标栏不得出现页面级横向溢出或不可达操作。
+
+### Verification
+
+- OPPO PKH110 / Android 16 上使用隔离调试包 `com.cxcodex.bridge.debug` 和隔离候选端口 `17435/17436` 完成真实对话、图片、Markdown 附件、150 秒命令、队列跟随、Plan 与 Goal。基础对话首个可见回复为 6382 ms，图片为 4918 ms，文件为 9747 ms；本地提交、气泡和运行反馈均保持在 100 ms 内。
+- 首轮切到系统设置 131 秒后返回：应用 PID 未变化，长任务完成，队列自动执行并只出现一次结果；功能状态正常，但旧实现把恢复计时拖到下一任务，记录了无效的 119584 ms 样本。
+- 源码契约先在旧顺序上稳定失败；修复后 `npm.cmd run test:7420:frontend -- -SourceOnly` 通过，并继续证明落后快照不能修改 Runtime 状态。
+- `npm.cmd run verify:frontend-normalizers` 先证明 v1 的 119584 ms 样本会污染 P95；计量版本升级后通过，旧样本不再参与新摘要。
+- 修复候选再次在同一真机执行 150 秒命令并切到系统设置 147 秒；返回后任务显示“命令已完成”，同一 PID 继续存活，恢复计时为 168 ms，页面宽度 `763/763`。最终构建重载后再做短前后台复核，新摘要仅含 v2 样本，P95 为 82 ms、最新为 36 ms，页面宽度 `350/350`。
+- `npm.cmd run build:frontend`、`git diff --check` 通过。独立 Headless Playwright 在最终候选上验证完成态、等待态、重复消息身份、桌面/手机附件信封和 1602 条消息压力；压力场景仅挂载 12 项，最大心跳延迟 55 ms，无横向溢出。证据位于 `output/device-validation-20260829/headless-final`，真机截图为 `output/device-validation-20260829/cx-recovery-fix-after.png`。
+- 完整 `npm.cmd run verify:release -- -SchemaAudit warn` 通过；当前 `codex-cli 0.130.0` 重新生成的四组 schema 差异计数与提交摘要一致。PR #74 的 build、CodeQL 与 Windows bootstrap/升级/卸载 smoke 全绿后合并到 `beta`，合并提交为 `0aac72b`；beta push 与 beta→main PR #72 的同组检查也全部通过，PR #72 继续保持 Draft。
+- 最终编译 CLI 以单端口 `http://127.0.0.1:17437` 隔离运行，执行 `npm.cmd run test:7420:soak -- -DurationSeconds 7201 -IntervalSeconds 15 -LocalBaseUrl http://127.0.0.1:17437 -OutputDir output\soak-quiet-workbench-final3-20260829 -SkipPublic`：480 个样本全部通过，最大 pending/queued/server pending/Runtime uncertain/active plan turn 均为 0；超时、慢 `thread/list`、重放失败、App Server PID 变化、Runtime stream 变化/错配和事件序列回退均为 0。报告为 `output/soak-quiet-workbench-final3-20260829/soak-20260829-131736.json`，隔离 App Server PID 84204 与 stream `e9a86d25-7441-4968-a7a5-36fe00c070e2` 全程不变；完成后隔离进程树停止且 17437 释放。
+- 前两次浸泡尝试保留为环境反例：17435 是 Vite 开发 API 端口，`/health` 返回 HTML；17436 是静态开发代理，会在代理/API 之间持有大量连接，并在仍有调试客户端时触发零容忍 RPC 排队。两者都不能替代正式单端口 CLI 候选浸泡，也未被计入通过结论。
+- 本次真机验证阶段没有替换生产 APK、更新生产 7420 或发布；调试候选与真机通过不等同于正式签名包、CI 或 Release 门槛通过。
+
+### Rollback
+
+- 回退 `applyRuntimeSnapshotState` 中恢复观测的结算顺序、恢复指标版本和对应回归即可；无需迁移或清理消息、Runtime SQLite、原生队列、附件缓存或用户配置。

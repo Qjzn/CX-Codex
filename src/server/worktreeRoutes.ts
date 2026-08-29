@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdir as fsMkdir, stat as fsStat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, isAbsolute, join, resolve } from 'node:path'
+import { resolveGitCommand } from '../commandResolution.js'
 
 import {
   ensureRepoHasInitialCommit,
@@ -28,6 +29,7 @@ export type WorktreeRoutesDependencies = {
   mkdir?: (path: string, options: { recursive: boolean }) => Promise<unknown>
   randomWorktreeId?: () => string
   getCodexWorktreesDir?: typeof getCodexWorktreesDir
+  gitCommand?: string
   runCommand?: typeof runCommand
   runCommandCapture?: typeof runCommandCapture
   ensureRepoHasInitialCommit?: typeof ensureRepoHasInitialCommit
@@ -51,6 +53,7 @@ export async function handleWorktreeRoutes(
   const mkdirPath = dependencies.mkdir ?? fsMkdir
   const createRandomWorktreeId = dependencies.randomWorktreeId ?? (() => randomBytes(2).toString('hex'))
   const readWorktreesDir = dependencies.getCodexWorktreesDir ?? getCodexWorktreesDir
+  const gitCommand = dependencies.gitCommand ?? resolveGitCommand()
   const runGitCommand = dependencies.runCommand ?? runCommand
   const captureGitCommand = dependencies.runCommandCapture ?? runCommandCapture
   const ensureInitialCommit = dependencies.ensureRepoHasInitialCommit ?? ensureRepoHasInitialCommit
@@ -84,13 +87,16 @@ export async function handleWorktreeRoutes(
     }
 
     try {
+      if (!gitCommand || !isAbsolute(gitCommand)) {
+        throw new Error('Git is required for worktree operations')
+      }
       let gitRoot = ''
       try {
-        gitRoot = await captureGitCommand('git', ['rev-parse', '--show-toplevel'], { cwd: sourceCwd })
+        gitRoot = await captureGitCommand(gitCommand, ['rev-parse', '--show-toplevel'], { cwd: sourceCwd })
       } catch (error) {
         if (!isNotGitRepositoryError(error, readErrorMessage)) throw error
-        await runGitCommand('git', ['init'], { cwd: sourceCwd })
-        gitRoot = await captureGitCommand('git', ['rev-parse', '--show-toplevel'], { cwd: sourceCwd })
+        await runGitCommand(gitCommand, ['init'], { cwd: sourceCwd })
+        gitRoot = await captureGitCommand(gitCommand, ['rev-parse', '--show-toplevel'], { cwd: sourceCwd })
       }
       const repoName = basename(gitRoot) || 'repo'
       const worktreesRoot = readWorktreesDir()
@@ -121,11 +127,11 @@ export async function handleWorktreeRoutes(
 
       await mkdirPath(worktreeParent, { recursive: true })
       try {
-        await runGitCommand('git', ['worktree', 'add', '-b', branch, worktreeCwd, 'HEAD'], { cwd: gitRoot })
+        await runGitCommand(gitCommand, ['worktree', 'add', '-b', branch, worktreeCwd, 'HEAD'], { cwd: gitRoot })
       } catch (error) {
         if (!isMissingHeadError(error, readErrorMessage)) throw error
         await ensureInitialCommit(gitRoot)
-        await runGitCommand('git', ['worktree', 'add', '-b', branch, worktreeCwd, 'HEAD'], { cwd: gitRoot })
+        await runGitCommand(gitCommand, ['worktree', 'add', '-b', branch, worktreeCwd, 'HEAD'], { cwd: gitRoot })
       }
 
       setJson(res, 200, {

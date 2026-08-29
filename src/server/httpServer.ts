@@ -12,9 +12,17 @@ import { createAuthSession, isLoopbackRequest } from './authMiddleware.js'
 import { readJsonBody, RequestBodyTooLargeError } from './httpBody.js'
 import { persistAccessPassword } from './localAccessConfig.js'
 import {
+  resolveUploadedFilePath,
+  UploadedFileAccessError,
+} from './fileUpload.js'
+import {
   LocalFileAccessError,
   resolveWorkspaceLocalPath,
 } from './localFileAccessPolicy.js'
+import {
+  resolveSessionAttachmentPath,
+  SessionAttachmentAccessError,
+} from './sessionAttachmentAccess.js'
 import { getTunnelStatus } from './tunnelStatus.js'
 import { renderLocalSetupHtml } from './localPairingPage.js'
 import { generatePassword } from './password.js'
@@ -29,6 +37,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const distDir = join(__dirname, '..', 'dist')
 const spaEntryFile = join(distDir, 'index.html')
+const localPreviewContentSecurityPolicy = "default-src 'none'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 const BRIDGE_HEARTBEAT_METHOD = 'bridge/heartbeat'
 const LOCAL_FILE_RATE_LIMIT_WINDOW_MS = 60_000
 const LOCAL_FILE_RATE_LIMIT = 600
@@ -45,6 +54,9 @@ export type ServerOptions = {
   host?: string
   createBridgeMiddleware?: typeof createCodexBridgeMiddleware
   resolveLocalFilePath?: typeof resolveWorkspaceLocalPath
+  resolveUploadedFilePath?: typeof resolveUploadedFilePath
+  resolveSessionAttachmentPath?: typeof resolveSessionAttachmentPath
+  runtimeDatabasePath?: string
   localFileRateLimit?: {
     limit: number
     windowMs: number
@@ -172,9 +184,13 @@ function normalizeLocalImagePath(rawPath: string): string {
 }
 
 function readWildcardPathParam(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (Array.isArray(value)) return value.join('/')
-  return ''
+  const pathValue = typeof value === 'string'
+    ? value
+    : Array.isArray(value)
+      ? value.join('/')
+      : ''
+  if (!pathValue || pathValue.startsWith('/')) return pathValue
+  return `/${pathValue}`
 }
 
 function encodeContentDispositionFileName(fileName: string): string {
@@ -232,14 +248,76 @@ async function resolveAuthorizedLocalPath(
   }
 }
 
+type AuthorizedLocalPath = {
+  path: string
+  source: 'workspace' | 'upload' | 'session-attachment'
+}
+
+async function resolveAuthorizedReadableLocalPath(
+  res: express.Response,
+  localPath: string,
+  resolveLocalFilePath: typeof resolveWorkspaceLocalPath,
+  resolveUploadedLocalFilePath: typeof resolveUploadedFilePath,
+  resolveSessionLocalAttachmentPath: typeof resolveSessionAttachmentPath,
+  notFoundMessage: string,
+): Promise<AuthorizedLocalPath | null> {
+  try {
+    return { path: await resolveLocalFilePath(localPath), source: 'workspace' }
+  } catch (error) {
+    if (!(error instanceof LocalFileAccessError)) {
+      res.status(500).json({ error: '本地文件访问校验失败。' })
+      return null
+    }
+    if (error.code === 'not-found') {
+      res.status(404).json({ error: notFoundMessage })
+      return null
+    }
+  }
+
+  try {
+    return { path: await resolveUploadedLocalFilePath(localPath), source: 'upload' }
+  } catch (error) {
+    if (error instanceof UploadedFileAccessError && error.code === 'not-found') {
+      res.status(404).json({ error: notFoundMessage })
+      return null
+    }
+    if (!(error instanceof UploadedFileAccessError)) {
+      res.status(500).json({ error: '本地文件访问校验失败。' })
+      return null
+    }
+  }
+
+  try {
+    return { path: await resolveSessionLocalAttachmentPath(localPath), source: 'session-attachment' }
+  } catch (error) {
+    if (error instanceof SessionAttachmentAccessError && error.code === 'not-found') {
+      res.status(404).json({ error: notFoundMessage })
+      return null
+    }
+    if (error instanceof SessionAttachmentAccessError && error.code === 'too-large') {
+      res.status(413).json({ error: '会话图片超过允许的大小。' })
+      return null
+    }
+    if (error instanceof SessionAttachmentAccessError) {
+      res.status(403).json({ error: '该路径不在已登记的工作区、CX-Codex 上传缓存或当前会话附件内。' })
+      return null
+    }
+    res.status(500).json({ error: '本地文件访问校验失败。' })
+    return null
+  }
+}
+
 export function createServer(options: ServerOptions = {}): ServerInstance {
   const app = express()
   const createBridgeMiddleware = options.createBridgeMiddleware ?? createCodexBridgeMiddleware
   const bridge = createBridgeMiddleware({
     remoteAccessProtected: Boolean(options.password),
+    runtimeDatabasePath: options.runtimeDatabasePath,
   })
   const authSession = options.password ? createAuthSession(options.password) : null
   const resolveLocalFilePath = options.resolveLocalFilePath ?? resolveWorkspaceLocalPath
+  const resolveUploadedLocalFilePath = options.resolveUploadedFilePath ?? resolveUploadedFilePath
+  const resolveSessionLocalAttachmentPath = options.resolveSessionAttachmentPath ?? resolveSessionAttachmentPath
   const localSetupToken = randomBytes(24).toString('hex')
   let invalidateWebSocketSessions = () => {}
 
@@ -345,13 +423,16 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       return
     }
 
-    const authorizedPath = await resolveAuthorizedLocalPath(
+    const authorized = await resolveAuthorizedReadableLocalPath(
       res,
       localPath,
       resolveLocalFilePath,
+      resolveUploadedLocalFilePath,
+      resolveSessionLocalAttachmentPath,
       '图片文件不存在。',
     )
-    if (!authorizedPath) return
+    if (!authorized) return
+    const authorizedPath = authorized.path
 
     const contentType = IMAGE_CONTENT_TYPES[extname(authorizedPath).toLowerCase()]
     if (!contentType) {
@@ -376,13 +457,16 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       return
     }
 
-    const authorizedPath = await resolveAuthorizedLocalPath(
+    const authorized = await resolveAuthorizedReadableLocalPath(
       res,
       localPath,
       resolveLocalFilePath,
+      resolveUploadedLocalFilePath,
+      resolveSessionLocalAttachmentPath,
       '文件不存在。',
     )
-    if (!authorizedPath) return
+    if (!authorized) return
+    const authorizedPath = authorized.path
 
     res.setHeader('Cache-Control', 'private, no-store')
     const dispositionMode = req.query.inline === '1'
@@ -407,18 +491,25 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
       return
     }
 
-    const authorizedPath = await resolveAuthorizedLocalPath(
+    const authorized = await resolveAuthorizedReadableLocalPath(
       res,
       localPath,
       resolveLocalFilePath,
+      resolveUploadedLocalFilePath,
+      resolveSessionLocalAttachmentPath,
       '文件不存在。',
     )
-    if (!authorizedPath) return
+    if (!authorized) return
+    const authorizedPath = authorized.path
 
     try {
       const fileStat = await stat(authorizedPath)
       res.setHeader('Cache-Control', 'private, no-store')
       if (fileStat.isDirectory()) {
+        if (authorized.source === 'upload') {
+          res.status(403).json({ error: '上传缓存只支持打开已上传文件。' })
+          return
+        }
         const html = await createDirectoryListingHtml(authorizedPath)
         res.status(200).type('text/html; charset=utf-8').send(html)
         return
@@ -546,6 +637,11 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
         }
         if (basename(filePath) === 'index.html') {
           res.setHeader('Cache-Control', 'no-cache')
+          return
+        }
+        if (basename(filePath) === 'local-preview.html') {
+          res.setHeader('Cache-Control', 'no-cache')
+          res.setHeader('Content-Security-Policy', localPreviewContentSecurityPolicy)
         }
       },
     }))

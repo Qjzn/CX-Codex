@@ -15,9 +15,10 @@ export type RuntimeActionRoutesDependencies = {
   getLatestRequestByClientMessageId: (clientMessageId: string) => RuntimeRequestRecord | null
   enqueueRuntimeTurn?: (payload: unknown) => RuntimeMessageQueueEntry
   listRuntimeQueue?: (threadId?: string) => RuntimeMessageQueueEntry[]
-  cancelQueuedRuntimeTurn?: (requestId: string) => boolean
+  cancelQueuedRuntimeTurn?: (requestId: string) => boolean | Promise<boolean>
+  restoreQueuedRuntimeTurn?: (requestId: string) => boolean
   retryQueuedRuntimeTurn?: (requestId: string) => boolean
-  reorderQueuedRuntimeTurns?: (threadId: string, requestIds: string[]) => boolean
+  reorderQueuedRuntimeTurns?: (threadId: string, requestIds: string[]) => boolean | Promise<boolean>
 }
 
 export async function handleRuntimeActionRoutes(
@@ -48,7 +49,7 @@ export async function handleRuntimeActionRoutes(
     const requestIds = Array.isArray(row.requestIds)
       ? row.requestIds.filter((requestId): requestId is string => typeof requestId === 'string')
       : []
-    const reordered = dependencies.reorderQueuedRuntimeTurns(threadId, requestIds)
+    const reordered = await dependencies.reorderQueuedRuntimeTurns(threadId, requestIds)
     setJson(res, reordered ? 200 : 409, reordered ? { ok: true } : { error: 'Runtime queue changed before reorder' })
     return true
   }
@@ -56,19 +57,31 @@ export async function handleRuntimeActionRoutes(
   if (url.pathname.startsWith('/codex-api/runtime/queue/')) {
     const suffix = decodeURIComponent(url.pathname.slice('/codex-api/runtime/queue/'.length)).trim()
     const isRetry = suffix.endsWith('/retry')
-    const requestId = (isRetry ? suffix.slice(0, -'/retry'.length) : suffix).trim()
+    const isRestore = suffix.endsWith('/restore')
+    const requestId = (
+      isRetry
+        ? suffix.slice(0, -'/retry'.length)
+        : isRestore
+          ? suffix.slice(0, -'/restore'.length)
+          : suffix
+    ).trim()
     if (!requestId) {
       setJson(res, 400, { error: 'Missing queue request id' })
       return true
     }
-    if (req.method === 'DELETE' && !isRetry && dependencies.cancelQueuedRuntimeTurn) {
-      const removed = dependencies.cancelQueuedRuntimeTurn(requestId)
+    if (req.method === 'DELETE' && !isRetry && !isRestore && dependencies.cancelQueuedRuntimeTurn) {
+      const removed = await dependencies.cancelQueuedRuntimeTurn(requestId)
       setJson(res, removed ? 200 : 404, removed ? { ok: true } : { error: 'Queued message not found' })
       return true
     }
     if (req.method === 'POST' && isRetry && dependencies.retryQueuedRuntimeTurn) {
       const retried = dependencies.retryQueuedRuntimeTurn(requestId)
       setJson(res, retried ? 202 : 409, retried ? { ok: true } : { error: 'Queued message is not retryable' })
+      return true
+    }
+    if (req.method === 'POST' && isRestore && dependencies.restoreQueuedRuntimeTurn) {
+      const restored = dependencies.restoreQueuedRuntimeTurn(requestId)
+      setJson(res, restored ? 202 : 409, restored ? { ok: true } : { error: 'Queued message is not restorable' })
       return true
     }
   }
@@ -114,7 +127,8 @@ export async function handleRuntimeActionRoutes(
 }
 
 function isRuntimeStartPending(status: string): boolean {
-  return status === 'pending_start'
+  return status === 'queued'
+    || status === 'pending_start'
     || status === 'starting'
     || status === 'start_uncertain'
     || status === 'sync_degraded'

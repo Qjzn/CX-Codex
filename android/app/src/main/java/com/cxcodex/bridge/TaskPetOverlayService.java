@@ -1,6 +1,7 @@
 package com.cxcodex.bridge;
 
 import android.animation.ValueAnimator;
+import android.app.AlarmManager;
 import android.app.KeyguardManager;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -75,6 +76,7 @@ public final class TaskPetOverlayService extends Service {
     private static final String ACTION_NO_PROGRESS_REVIEW = "com.cxcodex.bridge.taskpet.RUN_NO_PROGRESS_REVIEW";
     private static final String ACTION_NOTIFICATION_REPLY = "com.cxcodex.bridge.taskpet.NOTIFICATION_REPLY";
     private static final String ACTION_NOTIFICATION_STOP = "com.cxcodex.bridge.taskpet.NOTIFICATION_STOP";
+    private static final String ACTION_PROCESS_RECOVERY = "com.cxcodex.bridge.taskpet.PROCESS_RECOVERY";
     private static final String EXTRA_SERVER_URL = "serverUrl";
     private static final String EXTRA_TASKS_JSON = "tasksJson";
     private static final String EXTRA_RECENT_THREADS_JSON = "recentThreadsJson";
@@ -87,12 +89,14 @@ public final class TaskPetOverlayService extends Service {
     static final String COMPLETION_CHANNEL_ID = "cx_codex_task_completion_v2";
     private static final String COMPLETION_CHANNEL_NAME = "CX-Codex 任务完成";
     private static final int FOREGROUND_NOTIFICATION_ID = 7421;
+    private static final int PROCESS_RECOVERY_REQUEST_CODE = 7422;
     private static final String NOTIFICATION_GROUP_KEY = "cx_codex_tasks";
     private static final long ACTIVE_POLL_INTERVAL_MS = 3_000L;
     private static final long RETRY_POLL_INTERVAL_MS = 7_500L;
     private static final long EVENT_STREAM_RETRY_MS = 1_500L;
     private static final long DIAGNOSTICS_PERSIST_INTERVAL_MS = 15_000L;
     private static final long ACTIVE_TASK_WAKE_LOCK_TIMEOUT_MS = 30 * 60_000L;
+    private static final long PROCESS_RECOVERY_INTERVAL_MS = 15_000L;
     private static final String ACTIVE_TASK_WAKE_LOCK_TAG = "CX-Codex:TaskMonitor";
     private static final int MAX_FRONTEND_TASKS = 8;
     private static final int MAX_TRACKED_TASKS = 16;
@@ -189,6 +193,7 @@ public final class TaskPetOverlayService extends Service {
     private long monitorStartedAtMs;
     private long serviceCreateCount;
     private long stickyRestartCount;
+    private long processRecoveryWakeCount;
     private long taskRemovedCount;
     private long lastStartCommandAtMs;
     private long lastTaskRemovedAtMs;
@@ -399,6 +404,12 @@ public final class TaskPetOverlayService extends Service {
         if (intent == null) {
             lastStartReason = "sticky_restart";
             stickyRestartCount += 1L;
+        } else if (ACTION_PROCESS_RECOVERY.equals(intent.getAction())) {
+            lastStartReason = "process_recovery_watchdog";
+            processRecoveryWakeCount += 1L;
+            MobileShellConfig.getPreferences(this).edit()
+                .remove(MobileShellConfig.PREF_TASK_PET_PROCESS_RECOVERY_AT_MS)
+                .commit();
         } else if (ACTION_MOBILE_PUSH_WAKE.equals(intent.getAction())) {
             lastStartReason = "mobile_push";
         } else if (ACTION_MARK_THREAD_READ.equals(intent.getAction())) {
@@ -670,6 +681,7 @@ public final class TaskPetOverlayService extends Service {
     }
 
     private void syncTaskWakeLock() {
+        syncProcessRecoveryWatchdog();
         if (!TaskPetRuntimePolicy.shouldHoldWakeLock(activeTaskCount())) {
             wakeLockProgressSignature = "";
             wakeLockProgressDeadlineMs = 0L;
@@ -694,6 +706,35 @@ public final class TaskPetOverlayService extends Service {
         } catch (SecurityException ignored) {
             // The foreground monitor still works while Android keeps the CPU active.
         }
+    }
+
+    private void syncProcessRecoveryWatchdog() {
+        android.content.SharedPreferences preferences = MobileShellConfig.getPreferences(this);
+        AlarmManager alarmManager = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+        if (alarmManager == null) return;
+        PendingIntent pendingIntent = createProcessRecoveryPendingIntent();
+        if (!hasActiveTasks()) {
+            alarmManager.cancel(pendingIntent);
+            preferences.edit().remove(MobileShellConfig.PREF_TASK_PET_PROCESS_RECOVERY_AT_MS).apply();
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long scheduledAtMs = preferences.getLong(MobileShellConfig.PREF_TASK_PET_PROCESS_RECOVERY_AT_MS, 0L);
+        if (scheduledAtMs > now) return;
+        long nextAtMs = now + PROCESS_RECOVERY_INTERVAL_MS;
+        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextAtMs, pendingIntent);
+        preferences.edit()
+            .putLong(MobileShellConfig.PREF_TASK_PET_PROCESS_RECOVERY_AT_MS, nextAtMs)
+            .apply();
+    }
+
+    private PendingIntent createProcessRecoveryPendingIntent() {
+        Intent intent = new Intent(this, TaskPetOverlayService.class).setAction(ACTION_PROCESS_RECOVERY);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            return PendingIntent.getForegroundService(this, PROCESS_RECOVERY_REQUEST_CODE, intent, flags);
+        }
+        return PendingIntent.getService(this, PROCESS_RECOVERY_REQUEST_CODE, intent, flags);
     }
 
     private String activeTaskProgressSignature() {
@@ -1831,6 +1872,8 @@ public final class TaskPetOverlayService extends Service {
                 false,
                 0
             );
+            task.requestTurnId = result.activeTurnId;
+            task.requestStatus = result.runtimeStatus;
             tasks.add(0, task);
             if (tasks.size() > 8) tasks.remove(tasks.size() - 1);
         } else {
@@ -1849,6 +1892,9 @@ public final class TaskPetOverlayService extends Service {
             task.lastUpdatedAtMs = System.currentTimeMillis();
             task.lastNoProgressReminderAtMs = 0L;
             task.requestAccepted = !awaitingConfirmation;
+            task.requestTurnId = result.activeTurnId;
+            task.requestStatus = result.runtimeStatus;
+            task.activeGenerationObserved = false;
             task.readAcknowledged = false;
             tasks.remove(task);
             tasks.add(0, task);
@@ -1906,6 +1952,9 @@ public final class TaskPetOverlayService extends Service {
             task.activityId = "request:" + clientMessageId;
             task.startedAtMs = now;
             task.activeTurnId = "";
+            task.requestTurnId = "";
+            task.requestStatus = "pending_start";
+            task.activeGenerationObserved = false;
             task.state = "waiting";
             task.runtimeState = "pending_start";
             task.detail = "回复已提交 · 正在确认";
@@ -2152,6 +2201,9 @@ public final class TaskPetOverlayService extends Service {
             task.activityId = activityId;
             task.startedAtMs = now;
             task.activeTurnId = "";
+            task.requestTurnId = "";
+            task.requestStatus = awaitingConfirmation ? "pending_start" : "retry";
+            task.activeGenerationObserved = false;
             task.state = restoredState;
             task.runtimeState = awaitingConfirmation ? "pending_start" : "retry";
             task.detail = awaitingConfirmation ? "回复已提交 · 正在确认" : "回复未送达 · 点击回复重试";
@@ -2498,6 +2550,15 @@ public final class TaskPetOverlayService extends Service {
                     frontendSnapshot ? false : row.optBoolean("omittedFromFrontend", false),
                     frontendSnapshot ? 0 : row.optInt("missingRequestPollCount", 0)
                 );
+                incoming.requestTurnId = previous != null && sameGeneration
+                    ? previous.requestTurnId
+                    : clean(row.optString("requestTurnId"), 160);
+                incoming.requestStatus = previous != null && sameGeneration
+                    ? previous.requestStatus
+                    : clean(row.optString("requestStatus"), 40);
+                incoming.activeGenerationObserved = previous != null && sameGeneration
+                    ? previous.activeGenerationObserved
+                    : !frontendSnapshot && row.optBoolean("activeGenerationObserved", false);
                 long incomingReplyObservedAtMs = row.has("latestReplyUpdatedAtMs")
                     ? Math.max(0L, row.optLong("latestReplyUpdatedAtMs", 0L))
                     : Math.max(0L, row.optLong("lastUpdatedAtMs", now));
@@ -2542,6 +2603,20 @@ public final class TaskPetOverlayService extends Service {
                     )
                 ) {
                     removeTaskFromFrontendActiveSnapshot(previous);
+                    next.add(previous);
+                    continue;
+                }
+                if (
+                    previous != null
+                    && TaskPetRuntimePolicy.shouldPreserveNativeActiveState(
+                        frontendSnapshot,
+                        sameGeneration,
+                        previous.state,
+                        incoming.state
+                    )
+                ) {
+                    previous.omittedFromFrontend = false;
+                    previous.missingRequestPollCount = 0;
                     next.add(previous);
                     continue;
                 }
@@ -2663,6 +2738,9 @@ public final class TaskPetOverlayService extends Service {
                     .put("lastUpdatedAtMs", task.lastUpdatedAtMs)
                     .put("lastNoProgressReminderAtMs", task.lastNoProgressReminderAtMs)
                     .put("requestAccepted", task.requestAccepted)
+                    .put("requestTurnId", task.requestTurnId)
+                    .put("requestStatus", task.requestStatus)
+                    .put("activeGenerationObserved", task.activeGenerationObserved)
                     .put("readAcknowledged", task.readAcknowledged)
                     .put("omittedFromFrontend", task.omittedFromFrontend)
                     .put("missingRequestPollCount", task.missingRequestPollCount));
@@ -3008,6 +3086,8 @@ public final class TaskPetOverlayService extends Service {
                 if (request == null) return null;
                 if (!request.threadId.isEmpty()) task.threadId = request.threadId;
                 String requestStatus = request.status.isEmpty() ? "pending_start" : request.status;
+                task.requestStatus = requestStatus;
+                if (!request.turnId.isEmpty()) task.requestTurnId = request.turnId;
                 if (
                     "not_found".equals(requestStatus)
                     || "failed".equals(requestStatus)
@@ -3026,6 +3106,8 @@ public final class TaskPetOverlayService extends Service {
                         0L,
                         0L,
                         "",
+                        "",
+                        "",
                         ""
                     ));
                     continue;
@@ -3034,11 +3116,22 @@ public final class TaskPetOverlayService extends Service {
                 resolvedTasks.add(task);
                 continue;
             }
-            if (TaskPetRuntimePolicy.shouldConfirmRuntimeRequest(task.clientMessageId, task.requestAccepted)) {
+            boolean shouldConfirmRequest = TaskPetRuntimePolicy.shouldConfirmRuntimeRequest(
+                task.clientMessageId,
+                task.requestAccepted
+            );
+            boolean shouldRefreshGeneration = TaskPetRuntimePolicy.shouldRefreshRuntimeRequestGeneration(
+                task.clientMessageId,
+                task.activeGenerationObserved,
+                task.requestStatus
+            );
+            if (shouldConfirmRequest || shouldRefreshGeneration) {
                 RuntimeRequestResult request = readRuntimeRequest(task.clientMessageId);
                 if (request == null) return null;
                 if (!request.threadId.isEmpty()) task.threadId = request.threadId;
                 String requestStatus = request.status.isEmpty() ? "pending_start" : request.status;
+                task.requestStatus = requestStatus;
+                if (!request.turnId.isEmpty()) task.requestTurnId = request.turnId;
                 if (
                     "not_found".equals(requestStatus)
                     || TaskPetRuntimePolicy.isAwaitingConfirmation(requestStatus)
@@ -3063,6 +3156,8 @@ public final class TaskPetOverlayService extends Service {
                         0L,
                         0L,
                         "",
+                        "",
+                        "",
                         ""
                     ));
                     continue;
@@ -3075,6 +3170,8 @@ public final class TaskPetOverlayService extends Service {
             }
             RuntimeRequestResult request = readRuntimeRequest(task.clientMessageId);
             if (request == null) return null;
+            task.requestStatus = request.status.isEmpty() ? "pending_start" : request.status;
+            if (!request.turnId.isEmpty()) task.requestTurnId = request.turnId;
             if (!request.threadId.isEmpty()) {
                 task.threadId = request.threadId;
                 resolvedTasks.add(task);
@@ -3095,6 +3192,8 @@ public final class TaskPetOverlayService extends Service {
                 false,
                 0L,
                 0L,
+                "",
+                "",
                 "",
                 ""
             ));
@@ -3155,7 +3254,13 @@ public final class TaskPetOverlayService extends Service {
                     lastEventSeq,
                     latestReplyEventSeq,
                     latestReplyItemId,
-                    latestReply
+                    latestReply,
+                    snapshot.isNull("lastStartedAtIso")
+                        ? ""
+                        : clean(snapshot.optString("lastStartedAtIso"), 64),
+                    snapshot.isNull("lastCompletedAtIso")
+                        ? ""
+                        : clean(snapshot.optString("lastCompletedAtIso"), 64)
                 ));
             }
             return results;
@@ -3183,13 +3288,14 @@ public final class TaskPetOverlayService extends Service {
             String cookies = CookieManager.getInstance().getCookie(endpoint);
             if (cookies != null && !cookies.isEmpty()) connection.setRequestProperty("Cookie", cookies);
             int statusCode = connection.getResponseCode();
-            if (statusCode == 404) return new RuntimeRequestResult("", "not_found");
+            if (statusCode == 404) return new RuntimeRequestResult("", "", "not_found");
             if (statusCode < 200 || statusCode >= 300) return null;
             JSONObject payload = new JSONObject(readText(connection.getInputStream()));
             JSONObject request = payload.optJSONObject("data");
-            if (request == null) return new RuntimeRequestResult("", "not_found");
+            if (request == null) return new RuntimeRequestResult("", "", "not_found");
             return new RuntimeRequestResult(
                 clean(request.optString("threadId"), 160),
+                clean(request.optString("turnId"), 160),
                 clean(request.optString("status"), 40)
             );
         } catch (Exception ignored) {
@@ -3233,6 +3339,14 @@ public final class TaskPetOverlayService extends Service {
                 ) break;
                 if (!TaskPetRuntimePolicy.shouldApplySnapshot(task.lastEventSeq, result.lastEventSeq)) break;
                 if (result.requestAccepted) task.requestAccepted = true;
+                if (requestedGeneration != null) {
+                    if (!requestedGeneration.requestTurnId.isEmpty()) {
+                        task.requestTurnId = requestedGeneration.requestTurnId;
+                    }
+                    if (!requestedGeneration.requestStatus.isEmpty()) {
+                        task.requestStatus = requestedGeneration.requestStatus;
+                    }
+                }
                 String previousState = task.state;
                 String previousRuntimeState = task.runtimeState;
                 String previousDetail = task.detail;
@@ -3295,6 +3409,25 @@ public final class TaskPetOverlayService extends Service {
                 task.omittedFromFrontend = false;
                 task.missingRequestPollCount = 0;
                 if (task.threadId.isEmpty() && !result.threadId.isEmpty()) task.threadId = result.threadId;
+                if (
+                    !task.requestTurnId.isEmpty()
+                    && task.requestTurnId.equals(result.activeTurnId)
+                ) task.activeGenerationObserved = true;
+                if (TaskPetRuntimePolicy.shouldDeferRuntimeSnapshot(
+                    task.requestTurnId,
+                    result.activeTurnId,
+                    result.inProgress,
+                    result.lastStartedAtIso,
+                    result.lastCompletedAtIso
+                )) {
+                    task.state = "waiting";
+                    task.runtimeState = "pending_start";
+                    task.detail = "正在确认新任务状态";
+                    if (!previousState.equals(task.state) || !previousDetail.equals(task.detail)) {
+                        task.lastUpdatedAtMs = System.currentTimeMillis();
+                    }
+                    break;
+                }
                 if (!result.activeTurnId.isEmpty()) task.activeTurnId = result.activeTurnId;
                 String nextRuntimeState = result.stale
                     ? "stale"
@@ -4073,6 +4206,7 @@ public final class TaskPetOverlayService extends Service {
                 .put("monitorStartedAtMs", monitorStartedAtMs)
                 .put("serviceCreateCount", serviceCreateCount)
                 .put("stickyRestartCount", stickyRestartCount)
+                .put("processRecoveryWakeCount", processRecoveryWakeCount)
                 .put("taskRemovedCount", taskRemovedCount)
                 .put("lastStartCommandAtMs", lastStartCommandAtMs)
                 .put("lastStartReason", lastStartReason)
@@ -4128,6 +4262,7 @@ public final class TaskPetOverlayService extends Service {
             JSONObject previous = new JSONObject(previousJson == null ? "{}" : previousJson);
             serviceCreateCount = Math.max(0L, previous.optLong("serviceCreateCount", 0L)) + 1L;
             stickyRestartCount = Math.max(0L, previous.optLong("stickyRestartCount", 0L));
+            processRecoveryWakeCount = Math.max(0L, previous.optLong("processRecoveryWakeCount", 0L));
             taskRemovedCount = Math.max(0L, previous.optLong("taskRemovedCount", 0L));
             lastTaskRemovedAtMs = Math.max(0L, previous.optLong("lastTaskRemovedAtMs", 0L));
             eventStreamReconnectCount = Math.max(0, previous.optInt("eventStreamReconnectCount", 0));
@@ -4415,6 +4550,9 @@ public final class TaskPetOverlayService extends Service {
         long lastUpdatedAtMs;
         long lastNoProgressReminderAtMs;
         boolean requestAccepted;
+        String requestTurnId = "";
+        String requestStatus = "";
+        boolean activeGenerationObserved;
         boolean readAcknowledged;
         boolean omittedFromFrontend;
         int missingRequestPollCount;
@@ -4494,6 +4632,9 @@ public final class TaskPetOverlayService extends Service {
                 missingRequestPollCount
             );
             copy.latestReplyUpdatedAtMs = latestReplyUpdatedAtMs;
+            copy.requestTurnId = requestTurnId;
+            copy.requestStatus = requestStatus;
+            copy.activeGenerationObserved = activeGenerationObserved;
             return copy;
         }
 
@@ -4535,6 +4676,8 @@ public final class TaskPetOverlayService extends Service {
         final long latestReplyEventSeq;
         final String latestReplyItemId;
         final String latestReply;
+        final String lastStartedAtIso;
+        final String lastCompletedAtIso;
 
         RuntimeResult(
             String threadId,
@@ -4548,7 +4691,9 @@ public final class TaskPetOverlayService extends Service {
             long lastEventSeq,
             long latestReplyEventSeq,
             String latestReplyItemId,
-            String latestReply
+            String latestReply,
+            String lastStartedAtIso,
+            String lastCompletedAtIso
         ) {
             this.threadId = threadId;
             this.clientMessageId = clientMessageId;
@@ -4562,15 +4707,19 @@ public final class TaskPetOverlayService extends Service {
             this.latestReplyEventSeq = latestReplyEventSeq;
             this.latestReplyItemId = latestReplyItemId;
             this.latestReply = latestReply;
+            this.lastStartedAtIso = lastStartedAtIso;
+            this.lastCompletedAtIso = lastCompletedAtIso;
         }
     }
 
     private static final class RuntimeRequestResult {
         final String threadId;
+        final String turnId;
         final String status;
 
-        RuntimeRequestResult(String threadId, String status) {
+        RuntimeRequestResult(String threadId, String turnId, String status) {
             this.threadId = threadId;
+            this.turnId = turnId;
             this.status = status;
         }
     }

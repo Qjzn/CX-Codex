@@ -1,6 +1,6 @@
 {
   "name": "cx-codex",
-  "version": "2.7.6",
+  "version": "2.8.0",
   "description": "CX-Codex Web UI and browser bridge for Windows, Linux, Android, LAN, and remote self-hosted access",
   "type": "module",
   "license": "MIT",
@@ -48,7 +48,9 @@
   "files": [
     "dist/",
     "dist-cli/",
-    "docs/app-server-schema-audit-summary.json"
+    "docs/app-server-schema-audit-summary.json",
+    "scripts/run-powershell-script.mjs",
+    "scripts/manage-windows-service.ps1"
   ],
   "scripts": {
     "dev": "vite",
@@ -67,6 +69,8 @@
     "test:7420": "node ./scripts/run-powershell-script.mjs ./scripts/regression-7420.ps1",
     "test:7420:frontend": "node ./scripts/run-powershell-script.mjs ./scripts/regression-7420-frontend.ps1",
     "test:7420:sidebar-data": "node ./scripts/verify-7420-sidebar-data.mjs",
+    "test:7420:stability": "node ./scripts/verify-7420-stability.mjs",
+    "test:7420:roundtrip": "node ./scripts/verify-7420-roundtrip.mjs",
     "test:7420:soak": "node ./scripts/run-powershell-script.mjs ./scripts/soak-7420.ps1",
     "audit:app-server-schemas": "node ./scripts/run-powershell-script.mjs ./scripts/audit-app-server-schemas.ps1",
     "audit:app-server-schemas:update-summary": "node ./scripts/update-app-server-schema-audit-summary.mjs",
@@ -74,6 +78,7 @@
     "verify:dependency-security": "node ./scripts/verify-dependency-security.mjs",
     "verify:frontend-normalizers": "node ./scripts/verify-frontend-normalizers.mjs",
     "verify:quick-tunnel": "node ./scripts/verify-quick-tunnel-manager.mjs",
+    "verify:runtime-stability": "node ./scripts/verify-runtime-stability-modules.mjs",
     "verify:server-modules": "node ./scripts/verify-server-modules.mjs",
     "verify:windows-productization": "node ./scripts/run-powershell-script.mjs ./scripts/verify-windows-productization.ps1",
     "verify:release": "node ./scripts/run-powershell-script.mjs ./scripts/verify-release.ps1",
@@ -83,41 +88,43 @@
   },
   "dependencies": {
     "@capacitor/app": "^8.1.1",
-    "@capacitor/core": "^8.4.2",
+    "@capacitor/core": "8.4.2",
     "@capacitor/network": "^8.0.1",
     "better-sqlite3": "^12.11.1",
     "commander": "^15.0.0",
     "docx-preview": "^0.4.0",
-    "dompurify": "^3.4.13",
+    "dompurify": "^3.4.14",
     "express": "^5.1.0",
     "express-rate-limit": "^8.6.2",
     "markdown-it": "^14.3.0",
     "pdfjs-dist": "^6.2.108",
     "qrcode-terminal": "^0.12.0",
-    "ws": "^8.21.1"
+    "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@capacitor/android": "^8.4.2",
-    "@capacitor/cli": "^8.4.2",
+    "@capacitor/android": "8.4.2",
+    "@capacitor/cli": "8.4.2",
     "@tailwindcss/vite": "^4.3.3",
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.0",
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.2.0",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^6.0.8",
-    "esbuild": "^0.28.1",
+    "esbuild": "^0.28.2",
     "tailwindcss": "^4.1.18",
     "tsup": "^8.4.0",
     "typescript": "^5.7.3",
-    "vite": "^8.1.5",
-    "vue": "^3.5.40",
+    "vite": "^8.2.2",
+    "vue": "^3.5.41",
     "vue-router": "^4.6.4",
-    "vue-tsc": "^3.3.8"
+    "vue-tsc": "^3.3.10"
   },
   "overrides": {
     "brace-expansion": "5.0.9",
-    "esbuild": "$esbuild"
+    "esbuild": "$esbuild",
+    "nanoid": "3.3.18",
+    "postcss": "8.5.26"
   }
 }

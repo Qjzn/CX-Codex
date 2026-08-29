@@ -1,4 +1,4 @@
-import { realpath } from 'node:fs/promises'
+import { realpath, stat } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
 
 import { getCodexGlobalStatePath } from './codexPaths.js'
@@ -21,6 +21,7 @@ export class LocalFileAccessError extends Error {
 export type LocalFileAccessDependencies = {
   getWorkspaceRoots?: () => Promise<string[]>
   realpath?: typeof realpath
+  stat?: typeof stat
 }
 
 async function readConfiguredWorkspaceRoots(): Promise<string[]> {
@@ -64,6 +65,7 @@ export async function resolveWorkspaceLocalPath(
   const normalizedCandidate = resolve(candidatePath)
   const getWorkspaceRoots = dependencies.getWorkspaceRoots ?? readConfiguredWorkspaceRoots
   const resolveRealPath = dependencies.realpath ?? realpath
+  const readStat = dependencies.stat ?? stat
   const roots = normalizeWorkspaceRoots(await getWorkspaceRoots())
   const lexicalRoots = roots.filter((rootPath) => isPathWithinRoot(rootPath, normalizedCandidate))
 
@@ -80,6 +82,8 @@ export async function resolveWorkspaceLocalPath(
 
   for (const rootPath of lexicalRoots) {
     try {
+      const rootStat = await readStat(rootPath)
+      if (!rootStat.isDirectory()) continue
       const canonicalRoot = await resolveRealPath(rootPath)
       if (isPathWithinRoot(canonicalRoot, canonicalCandidate)) {
         return canonicalCandidate

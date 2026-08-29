@@ -8,8 +8,9 @@ This release is built from the tagged source in this repository. It is intended 
 
 - Read [docs/changelog.zh-CN.md](./docs/changelog.zh-CN.md) for the user-facing changes in this release.
 - Review [docs/security-hardening.zh-CN.md](./docs/security-hardening.zh-CN.md) before exposing the service beyond localhost or LAN.
-- Review [docs/openai-docs-review.zh-CN.md](./docs/openai-docs-review.zh-CN.md) and [docs/app-server-protocol-matrix.zh-CN.md](./docs/app-server-protocol-matrix.zh-CN.md) for Codex App Server / OpenAI API compatibility notes.
-- Review [docs/candidate-release-review.zh-CN.md](./docs/candidate-release-review.zh-CN.md) before treating schema drift, MCP/plugin, WebSocket, Realtime, filesystem, terminal, or permission-profile capabilities as stable.
+- Use [PRODUCT_GOAL.md](./PRODUCT_GOAL.md), [docs/app-server-protocol-matrix.zh-CN.md](./docs/app-server-protocol-matrix.zh-CN.md), and [docs/app-server-schema-audit-summary.json](./docs/app-server-schema-audit-summary.json) as the current release-claim authority.
+- Review [docs/openai-docs-review.zh-CN.md](./docs/openai-docs-review.zh-CN.md) for OpenAI API compatibility notes.
+- [docs/candidate-release-review.zh-CN.md](./docs/candidate-release-review.zh-CN.md) and [docs/candidate-pr-review-pack.zh-CN.md](./docs/candidate-pr-review-pack.zh-CN.md) are retained for historical traceability only; their dated branch and release facts are not current evidence.
 - Android assets are published only after the stable official signing certificate passes the release fingerprint gate.
 
 ## Assets

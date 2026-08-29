@@ -9,6 +9,7 @@ import type {
 import type { CommandExecutionData, UiFileAttachment, UiMessage, UiProjectGroup, UiThread } from '../../types/codex.js'
 import { normalizePathForComparison, normalizePathForUi, toProjectName } from '../../pathUtils.js'
 import { orderProjectGroupsByRecentActivity } from '../../utils/projectGroupOrdering.js'
+import { isInternalContextMessageText } from '../../internalContextMessage.js'
 
 function toIso(seconds: number): string {
   return new Date(seconds * 1000).toISOString()
@@ -42,20 +43,23 @@ function extractFileAttachments(value: string): UiFileAttachment[] {
   return attachments
 }
 
-function extractCodexUserRequestText(value: string): string {
-  const markerRegex = /(?:^|\n)\s{0,3}#{0,6}\s*my request for codex\s*:?\s*/giu
-  const matches = Array.from(value.matchAll(markerRegex))
-  if (matches.length === 0) {
+function extractCodexUserRequestText(value: string, hasFileAttachments: boolean): string {
+  if (!hasFileAttachments) return value.trim()
+
+  const lines = value.replace(/\r\n?/gu, '\n').split('\n')
+  const envelopeStart = lines.findIndex((line) => line.trim().length > 0)
+  if (envelopeStart < 0 || !FILES_MENTIONED_MARKER.test(lines[envelopeStart]?.trim() ?? '')) {
     return value.trim()
   }
 
-  const lastMatch = matches.at(-1)
-  if (!lastMatch || typeof lastMatch.index !== 'number') {
-    return value.trim()
+  const requestMarker = /^#{1,6}\s*my request(?:\s+for\s+codex)?\s*:?\s*$/iu
+  let requestStart = -1
+  for (let index = lines.length - 1; index > envelopeStart; index -= 1) {
+    if (!requestMarker.test(lines[index]?.trim() ?? '')) continue
+    requestStart = index + 1
+    break
   }
-
-  const markerOffset = lastMatch.index + lastMatch[0].length
-  return value.slice(markerOffset).trim()
+  return requestStart >= 0 ? lines.slice(requestStart).join('\n').trim() : value.trim()
 }
 
 function parseUserMessageContent(
@@ -95,7 +99,7 @@ function parseUserMessageContent(
   const fileAttachments = extractFileAttachments(fullText)
 
   return {
-    text: extractCodexUserRequestText(fullText),
+    text: extractCodexUserRequestText(fullText, fileAttachments.length > 0),
     images,
     fileAttachments,
     rawBlocks,
@@ -333,6 +337,7 @@ function toUiMessages(item: ThreadItem, turnId = ''): UiMessage[] {
 
   if (item.type === 'userMessage') {
     const parsed = parseUserMessageContent(item.id, item.content as UserInput[] | undefined)
+    if (isInternalContextMessageText(parsed.text)) return []
     const messages: UiMessage[] = []
     const hasRenderableUserContent = parsed.text.length > 0 || parsed.images.length > 0 || parsed.fileAttachments.length > 0
 
@@ -567,12 +572,39 @@ export function normalizeThreadMessagesV2(payload: ThreadReadResponse): UiMessag
           ? item
           : { id: `turn-${String(turnIndex)}:item-${String(messages.length)}`, type: 'invalidItem', content: item }
       ) as ThreadItem
-      for (const msg of toUiMessages(threadItem, readTrimmedString(rawTurn.id))) {
-        messages.push({ ...msg, turnIndex: absoluteTurnIndex })
+      const turnId = readTrimmedString(rawTurn.id)
+      for (const msg of toUiMessages(threadItem, turnId)) {
+        messages.push({ ...msg, turnIndex: absoluteTurnIndex, ...(turnId ? { turnId } : {}) })
       }
     }
   }
   return messages
+}
+
+export function applyActiveTurnIdToMessages(
+  messages: UiMessage[],
+  activeTurnId: string,
+  active: boolean,
+): UiMessage[] {
+  const normalizedTurnId = activeTurnId.trim()
+  if (!active || !normalizedTurnId || messages.length === 0) return messages
+
+  let activeTurnStartIndex = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.role !== 'user' || message.messageType !== 'userMessage') continue
+    activeTurnStartIndex = index
+    break
+  }
+  if (activeTurnStartIndex < 0) return messages
+
+  let changed = false
+  const nextMessages = messages.map((message, index) => {
+    if (index < activeTurnStartIndex || message.turnId === normalizedTurnId) return message
+    changed = true
+    return { ...message, turnId: normalizedTurnId }
+  })
+  return changed ? nextMessages : messages
 }
 
 export function readThreadInProgressFromResponse(payload: ThreadReadResponse): boolean {

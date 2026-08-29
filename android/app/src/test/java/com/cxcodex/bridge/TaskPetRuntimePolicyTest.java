@@ -75,6 +75,25 @@ public class TaskPetRuntimePolicyTest {
     }
 
     @Test
+    public void preventsTransientFrontendSnapshotsFromSettlingActiveTasks() {
+        assertTrue(TaskPetRuntimePolicy.shouldPreserveNativeActiveState(
+            true, true, "running", "completed"
+        ));
+        assertTrue(TaskPetRuntimePolicy.shouldPreserveNativeActiveState(
+            true, true, "waiting", "completed"
+        ));
+        assertFalse(TaskPetRuntimePolicy.shouldPreserveNativeActiveState(
+            false, true, "running", "completed"
+        ));
+        assertFalse(TaskPetRuntimePolicy.shouldPreserveNativeActiveState(
+            true, false, "running", "completed"
+        ));
+        assertFalse(TaskPetRuntimePolicy.shouldPreserveNativeActiveState(
+            true, true, "running", "waiting"
+        ));
+    }
+
+    @Test
     public void retainsKnownTasksUntilNativeRuntimeReconciliation() {
         assertTrue(TaskPetRuntimePolicy.shouldRetainOmittedTask("completed"));
         assertTrue(TaskPetRuntimePolicy.shouldRetainOmittedTask("running"));
@@ -441,6 +460,41 @@ public class TaskPetRuntimePolicyTest {
         assertTrue(TaskPetRuntimePolicy.shouldConfirmRuntimeRequest("request-1", false));
         assertFalse(TaskPetRuntimePolicy.shouldConfirmRuntimeRequest("request-1", true));
         assertFalse(TaskPetRuntimePolicy.shouldConfirmRuntimeRequest("", false));
+    }
+
+    @Test
+    public void fencesTerminalThreadSnapshotsUntilTheSubmittedTurnIsAuthoritative() {
+        assertTrue(TaskPetRuntimePolicy.shouldRefreshRuntimeRequestGeneration("request-1", false, ""));
+        assertTrue(TaskPetRuntimePolicy.shouldRefreshRuntimeRequestGeneration("request-1", true, "running"));
+        assertFalse(TaskPetRuntimePolicy.shouldRefreshRuntimeRequestGeneration("request-1", true, "completed"));
+        assertFalse(TaskPetRuntimePolicy.shouldRefreshRuntimeRequestGeneration("", false, "running"));
+
+        assertTrue(TaskPetRuntimePolicy.shouldDeferRuntimeSnapshot(
+            "turn-new", "", false,
+            "2026-08-28T21:38:11.547Z", ""
+        ));
+        assertTrue(TaskPetRuntimePolicy.shouldDeferRuntimeSnapshot(
+            "turn-new", "turn-old", true,
+            "2026-08-28T21:38:11.547Z", ""
+        ));
+        assertFalse(TaskPetRuntimePolicy.shouldDeferRuntimeSnapshot(
+            "turn-new", "turn-new", true,
+            "2026-08-28T21:38:11.547Z", ""
+        ));
+        assertTrue(TaskPetRuntimePolicy.shouldDeferRuntimeSnapshot(
+            "turn-new", "", false,
+            "2026-08-28T21:38:11.547Z", "2026-08-28T21:37:00.000Z"
+        ));
+        assertFalse(TaskPetRuntimePolicy.shouldDeferRuntimeSnapshot(
+            "turn-new", "", false,
+            "2026-08-28T21:38:11.547Z", "2026-08-28T21:44:11.547Z"
+        ));
+        assertTrue(TaskPetRuntimePolicy.shouldDeferRuntimeSnapshot(
+            "turn-new", "turn-old", true,
+            "2026-08-28T21:38:11.547Z", "2026-08-28T21:44:11.547Z"
+        ));
+        assertTrue(TaskPetRuntimePolicy.isSettledRuntimeDispatchStatus("failed"));
+        assertFalse(TaskPetRuntimePolicy.isSettledRuntimeDispatchStatus("running"));
     }
 
     @Test

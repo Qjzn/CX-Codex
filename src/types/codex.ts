@@ -213,6 +213,7 @@ export type UiMessage = {
   commandExecution?: CommandExecutionData
   plan?: UiPlan
   turnIndex?: number
+  turnId?: string
   deliveryState?: 'sending' | 'retrying' | 'waiting' | 'confirming' | 'sent' | 'failed'
   deliveryError?: string
   deliveryAttempt?: number

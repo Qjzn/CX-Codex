@@ -27,6 +27,7 @@ node dist-cli/index.js --host 0.0.0.0 --port 7420 --no-tunnel --password "change
 需要注意：
 
 - `--host 0.0.0.0` 用于让 Windows 主机和局域网设备有机会访问该服务。
+- 非回环绑定必须提供密码；CLI 会拒绝 `--host 0.0.0.0 --no-password`。只有明确的 localhost / 回环地址可用于无密码本机调试。
 - Windows 访问 WSL2 服务时，可能需要查看 WSL2 IP，或配置端口转发。
 - Windows 防火墙、路由器隔离、公司网络策略都可能阻止 Android 访问 WSL2 端口。
 - 本地文件浏览读取的是“运行 CX-Codex 后端的环境”。服务跑在 WSL2 时，默认看到的是 WSL 文件系统。

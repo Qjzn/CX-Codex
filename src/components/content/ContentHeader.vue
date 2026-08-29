@@ -19,9 +19,9 @@
       <div class="content-actions">
         <slot name="actions" />
       </div>
-    </div>
-    <div v-if="hasMeta" class="content-meta">
-      <slot name="meta" />
+      <div v-if="hasMeta" class="content-meta">
+        <slot name="meta" />
+      </div>
     </div>
   </header>
 </template>
@@ -43,7 +43,7 @@ const hasTitleSuffix = computed(() => Boolean(slots['title-suffix']))
 @reference "tailwindcss";
 
 .content-header {
-  @apply sticky top-0 z-20 w-full flex flex-col gap-1 px-3 sm:px-4 pt-2 sm:pt-2 pb-2 border-b;
+  @apply sticky top-0 z-20 w-full px-3 sm:px-4 border-b;
   min-height: var(--ui-topbar-height);
   border-color: var(--ui-border-subtle);
   background: color-mix(in srgb, var(--ui-bg-surface) 94%, transparent);
@@ -51,7 +51,8 @@ const hasTitleSuffix = computed(() => Boolean(slots['title-suffix']))
 }
 
 .content-header-main {
-  @apply w-full min-h-11 sm:min-h-12 flex items-center gap-2 sm:gap-3;
+  @apply w-full min-w-0 flex items-center gap-2 sm:gap-3;
+  height: var(--ui-topbar-height);
   width: min(100%, var(--content-shell-max-width, var(--ui-content-max)));
   margin-inline: auto;
 }
@@ -64,7 +65,7 @@ const hasTitleSuffix = computed(() => Boolean(slots['title-suffix']))
 }
 
 .content-title-wrap {
-  @apply min-w-0 flex-1 flex flex-col gap-0.5;
+  @apply min-w-0 flex-1 flex items-center gap-2.5;
 }
 
 .content-title-line {
@@ -80,33 +81,34 @@ const hasTitleSuffix = computed(() => Boolean(slots['title-suffix']))
 }
 
 .content-actions {
-  @apply flex items-center justify-end gap-2;
+  @apply flex shrink-0 items-center justify-end gap-2;
 }
 
 .content-leading {
   @apply flex items-center gap-1;
 }
 
-.content-meta {
-  @apply flex flex-wrap items-center gap-1.5 min-h-0;
-  width: min(100%, var(--content-shell-max-width, var(--ui-content-max)));
-  margin-inline: auto;
+.content-actions:empty,
+.content-leading:empty {
+  display: none;
 }
 
-@media (min-width: 1024px) {
-  .content-header {
-    @apply px-4 pt-2.5 pb-2.5;
-  }
+.content-meta {
+  @apply flex min-w-0 shrink items-center gap-1.5;
+}
+
+.content-meta:empty {
+  display: none;
 }
 
 @media (max-width: 767px) {
   .content-header {
-    @apply gap-0.5 px-3 pb-1.5;
-    padding-top: max(0.35rem, env(safe-area-inset-top));
+    @apply px-2.5;
+    padding-top: env(safe-area-inset-top);
   }
 
   .content-header-main {
-    @apply min-h-10 gap-2;
+    @apply gap-1.5;
   }
 
   .content-title {
@@ -114,8 +116,7 @@ const hasTitleSuffix = computed(() => Boolean(slots['title-suffix']))
     letter-spacing: 0;
   }
 
-  .content-meta {
-    @apply gap-1;
-  }
+  .content-title-wrap { @apply gap-1.5; }
+  .content-meta { @apply gap-1; }
 }
 </style>

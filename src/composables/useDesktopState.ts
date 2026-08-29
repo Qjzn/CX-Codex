@@ -2,6 +2,10 @@ import { computed, ref, watch } from 'vue'
 import { runWithBoundedRecovery } from './boundedAsyncRecovery'
 import { readRuntimeActivityStartedAtMs } from './activityTimer'
 import {
+  restoreQueuedMessageAtIndex,
+  transferQueuedMessageWithRecovery,
+} from './queuedMessageTransfer'
+import {
   beginChatFeedbackMetric,
   chatFeedbackNow,
   markChatFeedbackFirstAssistantData,
@@ -19,6 +23,7 @@ import {
 } from './composerTurnOptions'
 import {
   MESSAGE_OUTBOX_STORAGE_KEY,
+  isMessageOutboxStorageKey,
   loadMessageOutboxState,
   saveMessageOutboxState,
   type MessageOutboxEntry,
@@ -108,9 +113,14 @@ import {
   areUiThreadFieldsEqual,
   dedupeProjectThreadGroups,
   orderProjectGroupsByRecentActivity,
+  preserveResolvedThreadProjectIdentity,
   upsertThreadIntoProjectGroups,
 } from '../utils/projectGroupOrdering'
 import { compactLatestReplyTail } from '../utils/latestReply'
+import {
+  beginThreadFirstScreenMetric,
+  setThreadFirstScreenSource,
+} from './threadFirstScreenMetrics'
 import {
   MOBILE_APP_PAUSE_EVENT,
   MOBILE_APP_RESUME_EVENT,
@@ -134,9 +144,18 @@ import {
   decideConnectedRecovery,
   shouldRestartNotificationStreamOnForeground,
 } from './connectionManager'
-import { shouldApplyRuntimeSnapshotVersion } from './runtimeSnapshotOrdering'
+import {
+  resetRuntimeSnapshotVersionMap,
+  shouldApplyRuntimeTerminalTurn,
+  shouldApplyRuntimeSnapshotVersion,
+} from './runtimeSnapshotOrdering'
 import { isOptimisticOnlyExecutionEvidence } from './runtimeExecutionRecovery'
 import { shouldRefreshForegroundMessages } from './foregroundRecoveryPolicy'
+import {
+  beginForegroundRecoveryMetric,
+  cancelForegroundRecoveryMetric,
+  settleForegroundRecoveryMetric,
+} from './foregroundRecoveryMetrics'
 import {
   isRuntimeRequestAwaitingDeliveryConfirmation,
   shouldSettleOptimisticDeliveryFromRuntimeSnapshot,
@@ -149,6 +168,7 @@ import {
   mergeVisibleOptimisticUserMessages,
   normalizeMessageText,
   recoverOptimisticBaselineMatchCount,
+  selectDetachedFailedOptimisticUserMessages,
   userMessageSignature,
   type OptimisticUserMessageMeta,
 } from './messageIdentity'
@@ -161,9 +181,17 @@ import {
   removeStaleHistoryNoticeAfterOlderMerge,
   upsertMessage,
 } from './conversationProjection'
+import {
+  isRuntimeThreadStatusTerminal,
+  readRuntimeThreadStatusLifecycle,
+} from '../runtimeThreadStatus'
 
 function removeRuntimeQueuedMessage(requestId: string): Promise<void> {
   return import('../api/runtimeMessageQueue').then((api) => api.removeRuntimeQueuedMessage(requestId))
+}
+
+function restoreRuntimeQueuedMessage(requestId: string): Promise<void> {
+  return import('../api/runtimeMessageQueue').then((api) => api.restoreRuntimeQueuedMessage(requestId))
 }
 
 function retryRuntimeQueuedMessage(requestId: string): Promise<void> {
@@ -174,11 +202,37 @@ function flattenThreads(groups: UiProjectGroup[]): UiThread[] {
   return groups.flatMap((group) => group.threads)
 }
 
+function isRuntimeExecutionSettledStateValue(state: string | undefined): boolean {
+  return (
+    state === 'completed_pending_sync' ||
+    state === 'completed' ||
+    state === 'failed' ||
+    state === 'interrupted' ||
+    state === 'stopped' ||
+    state === 'idle' ||
+    state === 'sync_degraded'
+  )
+}
+
+function readThreadStatusExecutionState(
+  notification: RpcNotification,
+): ThreadRuntimeSnapshot['executionState'] | null {
+  if (notification.method !== 'thread/status/changed') return null
+  const lifecycle = readRuntimeThreadStatusLifecycle(notification.params)
+  if (lifecycle === 'active') return 'running'
+  if (lifecycle === 'waiting_permission') return 'waiting_permission'
+  if (isRuntimeThreadStatusTerminal(lifecycle)) return lifecycle
+  return null
+}
+
 function shouldRefreshMessagesFromNotification(notification: RpcNotification): boolean {
   const { method } = notification
   if (method === THREAD_TOKEN_USAGE_UPDATED_METHOD) return false
   const sessionFileChangePolicy = getCxSessionFileChangeSyncPolicy(method, notification.params)
   if (sessionFileChangePolicy) return sessionFileChangePolicy.refreshMessages
+  if (method === 'thread/status/changed') {
+    return isRuntimeExecutionSettledStateValue(readThreadStatusExecutionState(notification) ?? undefined)
+  }
   return (
     method === 'turn/started' ||
     method === 'turn/completed' ||
@@ -195,7 +249,7 @@ function shouldRefreshThreadListFromNotification(notification: RpcNotification):
   if (method === THREAD_TOKEN_USAGE_UPDATED_METHOD) return false
   const sessionFileChangePolicy = getCxSessionFileChangeSyncPolicy(method, notification.params)
   if (sessionFileChangePolicy) return sessionFileChangePolicy.refreshThreads
-  if (method === 'thread/name/updated' || method === 'thread/started') return true
+  if (method === 'thread/name/updated' || method === 'thread/started' || method === 'thread/status/changed') return true
   if (!method.startsWith('thread/')) return false
   return (
     method.endsWith('/created') ||
@@ -208,11 +262,15 @@ function shouldRefreshThreadListFromNotification(notification: RpcNotification):
   )
 }
 
-function shouldUrgentlyRefreshFromNotification(method: string): boolean {
+function shouldUrgentlyRefreshFromNotification(method: string, params?: unknown): boolean {
   return (
     method === 'turn/completed' ||
     method === 'thread/completed' ||
-    method === 'error'
+    method === 'error' ||
+    (
+      method === 'thread/status/changed'
+      && isRuntimeThreadStatusTerminal(readRuntimeThreadStatusLifecycle(params))
+    )
   )
 }
 
@@ -246,7 +304,8 @@ const THREAD_GROUP_CACHE_VERSION = 1
 const THREAD_GROUP_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const THREAD_GROUP_CACHE_MAX_GROUPS = 18
 const THREAD_GROUP_CACHE_MAX_THREADS_PER_GROUP = 30
-const THREAD_MESSAGE_CACHE_VERSION = 1
+// v3 invalidates snapshots that older merge logic could persist out of order.
+const THREAD_MESSAGE_CACHE_VERSION = 3
 const THREAD_MESSAGE_CACHE_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
 const THREAD_MESSAGE_CACHE_MAX_THREADS = 12
 const THREAD_MESSAGE_CACHE_MAX_MESSAGES_PER_THREAD = 24
@@ -264,6 +323,7 @@ const ACTIVE_THREAD_DETAIL_SYNC_IDLE_MS = 18000
 const FOREGROUND_RECOVERY_DETAIL_REFRESH_MIN_INTERVAL_MS = ACTIVE_THREAD_DETAIL_SYNC_INTERVAL_MS
 const THREAD_SELECTION_RECOVERY_SUPPRESS_MS = 5000
 const THREAD_SELECTION_CACHED_REFRESH_DELAY_MS = 650
+const THREAD_SELECTION_GOAL_REFRESH_DELAY_MS = 900
 const ACTIVE_SYNC_BOOST_INTERVAL_MS = 2500
 const ACTIVE_SYNC_BOOST_WINDOW_MS = 18000
 const RESUME_SYNC_RETRY_DELAYS_MS = [0, 1200, 4500, 12000]
@@ -273,6 +333,7 @@ const FOREGROUND_RECOVERY_FEEDBACK_MIN_MS = 500
 const FOREGROUND_RECOVERY_FEEDBACK_TIMEOUT_MS = 8000
 const NON_FRESH_THREAD_DETAIL_RETRY_DELAYS_MS = [2500, 9000, 20000]
 const SESSION_LOG_AUTHORITATIVE_REFRESH_QUIET_MS = 1800
+const SESSION_LOG_SETTLED_SNAPSHOT_REUSE_MS = SESSION_LOG_AUTHORITATIVE_REFRESH_QUIET_MS + 700
 const ACTIVE_SYNC_THREAD_LIST_INTERVAL_MS = 120000
 const ACTIVE_SYNC_STALE_MS = 14000
 const STALE_THREAD_ACTIVE_TURN_TTL_MS = 5 * 60 * 1000
@@ -816,9 +877,11 @@ function normalizeCachedMessage(value: unknown): UiMessage | null {
     ...(images && images.length > 0 ? { images } : {}),
     ...(fileAttachments && fileAttachments.length > 0 ? { fileAttachments } : {}),
     messageType: readCachedString(row.messageType) || undefined,
+    phase: row.phase === 'commentary' || row.phase === 'final' ? row.phase : undefined,
     isUnhandled: row.isUnhandled === true,
     ...(commandExecution ? { commandExecution } : {}),
     turnIndex: typeof row.turnIndex === 'number' && Number.isFinite(row.turnIndex) ? row.turnIndex : undefined,
+    turnId: readCachedString(row.turnId) || undefined,
   }
 }
 
@@ -1223,7 +1286,7 @@ function mergeThreadGroups(
   previous: UiProjectGroup[],
   incoming: UiProjectGroup[],
 ): UiProjectGroup[] {
-  const dedupedIncoming = dedupeProjectThreadGroups(incoming)
+  const dedupedIncoming = preserveResolvedThreadProjectIdentity(previous, incoming)
   const previousGroupsByName = new Map(previous.map((group) => [group.projectName, group]))
   const mergedGroups: UiProjectGroup[] = dedupedIncoming.map((incomingGroup) => {
     const previousGroup = previousGroupsByName.get(incomingGroup.projectName)
@@ -1417,6 +1480,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   const threadGoalContinuationInFlight = new Set<string>()
   const threadGoalRefreshInFlightByThreadId = new Map<string, Promise<void>>()
   const threadGoalStateGenerationByThreadId = new Map<string, number>()
+  let selectedThreadGoalRefreshTimer: number | null = null
   const tokenUsageRefreshInFlightByThreadId = new Map<string, Promise<void>>()
   const tokenUsageRefreshAttemptedAtByThreadId = new Map<string, number>()
   const tokenUsageRefreshTimerByThreadId = new Map<string, number>()
@@ -1429,6 +1493,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     skills: Array<{ name: string; path: string }>
     fileAttachments: FileAttachment[]
     effort: ReasoningEffort | ''
+    speedMode: SpeedMode
     collaborationMode: CollaborationMode
     turnOptions?: ComposerTurnOptions
     fallbackRetried: boolean
@@ -1440,6 +1505,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     imageUrls: string[]
     skills: Array<{ name: string; path: string }>
     fileAttachments: FileAttachment[]
+    modelId: string
+    reasoningEffort: ReasoningEffort | ''
+    speedMode: SpeedMode
     collaborationMode: CollaborationMode
     turnOptions?: ComposerTurnOptions
   }
@@ -1584,6 +1652,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     applyNotification: applyIncomingNotification,
     recoverSnapshot: recoverNotificationSnapshot,
     persistCursor: saveLastNotificationCursor,
+    onStreamChanged: resetRuntimeSnapshotOrderingForStreamChange,
     onRecoveryError: () => {
       pendingThreadsRefresh = true
       const activeThreadId = selectedThreadId.value
@@ -1693,8 +1762,14 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     return ''
   }
 
-  const activeTaskPetItems = computed<UiTaskPetItem[]>(() => sourceThreads.value
-    .filter((thread) => (
+  const activeTaskPetItems = computed<UiTaskPetItem[]>(() => {
+    const candidates = [...sourceThreads.value]
+    const selected = selectedThread.value
+    if (selected && !candidates.some((thread) => thread.id === selected.id)) {
+      candidates.unshift(selected)
+    }
+
+    return candidates.filter((thread) => (
       isThreadExecutionActive(thread.id)
       || (pendingServerRequestsByThreadId.value[thread.id] ?? []).length > 0
     ))
@@ -1741,7 +1816,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       }
     })
     .sort((first, second) => second.updatedAtIso.localeCompare(first.updatedAtIso))
-    .slice(0, 8))
+    .slice(0, 8)
+  })
   const selectedThreadScrollState = computed<ThreadScrollState | null>(
     () => scrollStateByThreadId.value[selectedThreadId.value] ?? null,
   )
@@ -2065,6 +2141,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   const stopAndroidKeepAwakeWatch = androidShellAvailable
     ? watch(hasSyncDemand, (active) => setAndroidKeepAwake(active), { immediate: true })
     : null
+  const selectedThreadDetachedFailedMessages = computed<UiMessage[]>(() => {
+    const threadId = selectedThreadId.value
+    if (!threadId) return []
+    return selectDetachedFailedOptimisticUserMessages(
+      persistedMessagesByThreadId.value[threadId] ?? [],
+      optimisticUserMessagesByThreadId.value[threadId] ?? [],
+      optimisticUserMessageMetaById,
+    )
+  })
   const messages = computed<UiMessage[]>(() => {
     const threadId = selectedThreadId.value
     if (!threadId) return []
@@ -2076,7 +2161,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       optimisticUser,
       optimisticUserMessageMetaById,
     )
-    const liveAgent = liveAgentMessagesByThreadId.value[threadId] ?? []
+    const liveAgent = removeRedundantLiveAgentMessages(
+      liveAgentMessagesByThreadId.value[threadId] ?? [],
+      persisted,
+    )
     const livePlans = livePlanMessagesByThreadId.value[threadId] ?? []
     const liveCommands = liveCommandsByThreadId.value[threadId] ?? []
     for (const liveMessage of [...livePlans, ...liveCommands, ...liveAgent]) {
@@ -2255,6 +2343,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         imageUrls: pending.imageUrls,
         model: MODEL_FALLBACK_ID,
         effort: pending.effort || undefined,
+        speedMode: pending.speedMode,
         skills: pending.skills.length > 0 ? pending.skills : undefined,
         fileAttachments: pending.fileAttachments,
         collaborationMode: pending.collaborationMode,
@@ -2339,7 +2428,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     try {
       const [models, currentConfig] = await Promise.all([
         getAvailableModels(),
-        getCurrentModelConfig(),
+        getCurrentModelConfig().catch(() => null),
       ])
 
       const modelIds = models.map((model) => model.model)
@@ -2348,7 +2437,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
       const hasSelectedModel = selectedModelId.value.length > 0 && modelIds.includes(selectedModelId.value)
       if (!hasSelectedModel) {
-        if (currentConfig.model && modelIds.includes(currentConfig.model)) {
+        if (currentConfig?.model && modelIds.includes(currentConfig.model)) {
           selectedModelId.value = currentConfig.model
         } else if (models.length > 0) {
           selectedModelId.value = models.find((model) => model.isDefault)?.model ?? models[0]?.model ?? ''
@@ -2360,7 +2449,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
       if (
         !hasStoredSelectedReasoningEffort() &&
-        currentConfig.reasoningEffort &&
+        currentConfig?.reasoningEffort &&
         REASONING_EFFORT_OPTIONS.includes(currentConfig.reasoningEffort)
       ) {
         selectedReasoningEffort.value = currentConfig.reasoningEffort
@@ -2370,7 +2459,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         selectedReasoningEffort.value = compatibleEffort
         saveSelectedReasoningEffort(compatibleEffort)
       }
-      selectedSpeedMode.value = currentConfig.speedMode
+      if (currentConfig) selectedSpeedMode.value = currentConfig.speedMode
     } catch {
       // Keep chat UI usable even if model metadata is temporarily unavailable.
     }
@@ -3303,15 +3392,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   }
 
   function isRuntimeExecutionSettledState(state: string | undefined): boolean {
-    return (
-      state === 'completed_pending_sync' ||
-      state === 'completed' ||
-      state === 'failed' ||
-      state === 'interrupted' ||
-      state === 'stopped' ||
-      state === 'idle' ||
-      state === 'sync_degraded'
-    )
+    return isRuntimeExecutionSettledStateValue(state)
   }
 
   function readAuthoritativeSettledAtMs(
@@ -3394,6 +3475,13 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     latestRuntimeEventSeqByThreadId.set(threadId, normalizedSeq)
   }
 
+  function resetRuntimeSnapshotOrderingForStreamChange(): void {
+    latestRuntimeEventSeqByThreadId.clear()
+    runtimeStatusSummaryByThreadId.value = resetRuntimeSnapshotVersionMap(
+      runtimeStatusSummaryByThreadId.value,
+    )
+  }
+
   function rememberRuntimeSnapshotSummary(threadId: string, snapshot: ThreadRuntimeSnapshot): void {
     rememberRuntimeStatusSummary(threadId, {
       threadId,
@@ -3445,12 +3533,13 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
   function applyRuntimeSnapshotState(threadId: string, snapshot: ThreadRuntimeSnapshot): boolean {
     if (!threadId) return false
-    finishForegroundRecoveryFeedback(threadId)
     const currentSummary = runtimeStatusSummaryByThreadId.value[threadId]
     const currentEventSeq = Math.max(
       currentSummary?.lastEventSeq ?? 0,
       latestRuntimeEventSeqByThreadId.get(threadId) ?? 0,
     )
+    settleForegroundRecoveryMetric(threadId)
+    finishForegroundRecoveryFeedback(threadId)
     if (!shouldApplyRuntimeSnapshotVersion({ lastEventSeq: currentEventSeq }, snapshot)) return false
     rememberLatestRuntimeEventSequence(threadId, snapshot.lastEventSeq)
     rememberRuntimeSnapshotSummary(threadId, snapshot)
@@ -3656,6 +3745,23 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     const threadId = extractThreadIdFromNotification(notification)
     if (!threadId) return
     rememberLatestRuntimeEventSequence(threadId, notification.seq)
+    if (isRuntimeTerminalNotificationForDifferentTurn(notification)) return
+
+    let threadStatusState = readThreadStatusExecutionState(notification)
+    const previousState = runtimeExecutionStateByThreadId.value[threadId]
+    if (
+      threadStatusState === 'completed'
+      && (previousState === 'failed' || previousState === 'interrupted' || previousState === 'stopped')
+    ) {
+      threadStatusState = previousState
+    }
+    if (threadStatusState) {
+      setRuntimeExecutionState(threadId, threadStatusState, {
+        canStop: isRuntimeExecutionActiveState(threadStatusState),
+        ...eventVersion,
+      })
+      return
+    }
 
     if (method === 'turn/started' || method === 'thread/started') {
       const startedTurn = readTurnStartedInfo(notification)
@@ -3698,11 +3804,17 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     const method = notification.method
     const threadId = extractThreadIdFromNotification(notification)
     if (!threadId) return
-    const completedTurn = readTurnCompletedInfo(notification)
-    const currentTurnId = activeTurnIdByThreadId.value[threadId]
-    if (completedTurn?.turnId && currentTurnId && completedTurn.turnId !== currentTurnId) return
+    if (isRuntimeTerminalNotificationForDifferentTurn(notification)) return
 
-    let state: ThreadRuntimeSnapshot['executionState'] | null = null
+    let state: ThreadRuntimeSnapshot['executionState'] | null = readThreadStatusExecutionState(notification)
+    const currentState = runtimeExecutionStateByThreadId.value[threadId]
+    if (
+      state === 'completed'
+      && (currentState === 'failed' || currentState === 'interrupted' || currentState === 'stopped')
+    ) {
+      state = currentState
+    }
+    if (state && !isRuntimeExecutionSettledState(state)) state = null
     if (method === 'turn/completed' || method === 'thread/completed') {
       state = readTurnErrorMessage(notification) ? 'failed' : 'completed'
     } else if (method === 'turn/interrupted' || method === 'thread/interrupted') {
@@ -4093,6 +4205,26 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     })()
     threadGoalRefreshInFlightByThreadId.set(threadId, request)
     return request
+  }
+
+  function clearSelectedThreadGoalRefresh(): void {
+    if (selectedThreadGoalRefreshTimer === null || typeof window === 'undefined') return
+    window.clearTimeout(selectedThreadGoalRefreshTimer)
+    selectedThreadGoalRefreshTimer = null
+  }
+
+  function scheduleSelectedThreadGoalRefresh(threadId: string): void {
+    clearSelectedThreadGoalRefresh()
+    if (!threadId) return
+    if (typeof window === 'undefined') {
+      void refreshThreadGoal(threadId)
+      return
+    }
+    selectedThreadGoalRefreshTimer = window.setTimeout(() => {
+      selectedThreadGoalRefreshTimer = null
+      if (selectedThreadId.value !== threadId) return
+      void refreshThreadGoal(threadId)
+    }, THREAD_SELECTION_GOAL_REFRESH_DELAY_MS)
   }
 
   async function refreshSelectedThreadGoal(): Promise<void> {
@@ -4899,6 +5031,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     fileAttachments: FileAttachment[]
     modelId: string
     reasoningEffort: ReasoningEffort | ''
+    speedMode: SpeedMode
     collaborationMode: CollaborationMode
     turnOptions?: ComposerTurnOptions
     baselineMessageCount?: number
@@ -4916,6 +5049,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       fileAttachments: args.fileAttachments.map((file) => ({ ...file })),
       modelId: args.modelId.trim(),
       reasoningEffort: args.reasoningEffort,
+      speedMode: args.speedMode,
       collaborationMode: args.collaborationMode,
       turnOptions: cloneTurnOptions(args.turnOptions),
       baselineMatchCount: args.baselineMatchCount,
@@ -5158,6 +5292,16 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
   }
 
+  function bindOptimisticUserMessageToTurn(messageId: string, turnId: string): void {
+    const normalizedTurnId = turnId.trim()
+    const meta = optimisticUserMessageMetaById.get(messageId)
+    if (!meta || !normalizedTurnId || meta.authoritativeTurnId === normalizedTurnId) return
+    optimisticUserMessageMetaById.set(messageId, {
+      ...meta,
+      authoritativeTurnId: normalizedTurnId,
+    })
+  }
+
   function settleOptimisticUserMessagesThrough(threadId: string, settledAtMs: number): void {
     if (!threadId || !Number.isFinite(settledAtMs) || settledAtMs <= 0) return
     const settledMessageIds = (optimisticUserMessagesByThreadId.value[threadId] ?? [])
@@ -5307,7 +5451,11 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     })
   }
 
-  function restoreConfirmingMessageOutboxEntry(entry: MessageOutboxEntry, threadId: string): void {
+  function restoreConfirmingMessageOutboxEntry(
+    entry: MessageOutboxEntry,
+    threadId: string,
+    authoritativeTurnId = '',
+  ): void {
     const normalizedThreadId = threadId.trim()
     if (!normalizedThreadId) return
     insertOptimisticThread(normalizedThreadId, entry.cwd, entry.text || '[Image]')
@@ -5324,6 +5472,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       )
     restoreOptimisticMetaFromOutbox(entry, normalizedThreadId, optimisticMessageId)
     attachOutboxEntryToOptimisticMessage(entry.clientMessageId, normalizedThreadId, optimisticMessageId)
+    bindOptimisticUserMessageToTurn(optimisticMessageId, authoritativeTurnId)
     markOptimisticUserMessageConfirming(normalizedThreadId, optimisticMessageId)
   }
 
@@ -5334,9 +5483,45 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       imageUrls: [...entry.imageUrls],
       skills: entry.skills.map((skill) => ({ ...skill })),
       fileAttachments: entry.fileAttachments.map((file) => ({ ...file })),
+      modelId: entry.modelId,
+      reasoningEffort: entry.reasoningEffort,
+      speedMode: entry.speedMode,
       collaborationMode: entry.collaborationMode,
       turnOptions: cloneTurnOptions(entry.turnOptions),
     }
+  }
+
+  function takeFailedUserMessageForEditing(messageId: string): FailedUserMessageRequest | null {
+    const threadId = selectedThreadId.value
+    if (!threadId || !messageId) return null
+    const message = (optimisticUserMessagesByThreadId.value[threadId] ?? [])
+      .find((candidate) => candidate.id === messageId && candidate.deliveryState === 'failed')
+    if (!message) return null
+
+    mergeMessageOutboxFromStorage()
+    const clientMessageId = outboxClientIdByOptimisticMessageId.get(messageId)
+    const durableEntry = clientMessageId ? messageOutboxByClientId.get(clientMessageId) : undefined
+    const request = failedUserMessageRequestById.get(messageId)
+      ?? (durableEntry?.state === 'failed' ? failedUserMessageRequestFromOutbox(durableEntry) : undefined)
+    if (!request) return null
+
+    const draft: FailedUserMessageRequest = {
+      ...request,
+      imageUrls: [...request.imageUrls],
+      skills: request.skills.map((skill) => ({ ...skill })),
+      fileAttachments: request.fileAttachments.map((file) => ({ ...file })),
+      turnOptions: cloneTurnOptions(request.turnOptions),
+    }
+    removeOptimisticUserMessage(threadId, messageId)
+    return draft
+  }
+
+  function deleteFailedUserMessage(messageId: string): void {
+    const threadId = selectedThreadId.value
+    if (!threadId || !messageId) return
+    const isFailed = (optimisticUserMessagesByThreadId.value[threadId] ?? [])
+      .some((message) => message.id === messageId && message.deliveryState === 'failed')
+    if (isFailed) removeOptimisticUserMessage(threadId, messageId)
   }
 
   async function retryFailedUserMessage(messageId: string): Promise<void> {
@@ -5362,6 +5547,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         {
           reuseOptimisticMessageId: messageId,
           targetThreadId: request.threadId,
+          modelId: request.modelId,
+          reasoningEffort: request.reasoningEffort,
+          speedMode: request.speedMode,
         },
       )
     } catch {
@@ -5396,6 +5584,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         {
           feedbackStartedAtMs: chatFeedbackNow(),
           reuseOptimisticMessageId: messageId,
+          modelId: entry.modelId,
+          reasoningEffort: entry.reasoningEffort,
+          speedMode: entry.speedMode,
           onThreadCreated,
         },
       )
@@ -5452,6 +5643,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       imageUrls: [...entry.imageUrls],
       skills: entry.skills.map((skill) => ({ ...skill })),
       fileAttachments: entry.fileAttachments.map((file) => ({ ...file })),
+      modelId: entry.modelId,
+      reasoningEffort: entry.reasoningEffort,
+      speedMode: entry.speedMode,
       collaborationMode: entry.collaborationMode,
       turnOptions: cloneTurnOptions(entry.turnOptions),
     })
@@ -5507,6 +5701,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         if (recoveredThreadId && recoveredThreadId !== entry.threadId) {
           updateMessageOutboxEntry(entry.clientMessageId, { threadId: recoveredThreadId })
         }
+        if (recovered?.status === 'queued' && recoveredThreadId) {
+          await adoptRuntimeQueuedRequest(recoveredThreadId, recovered.requestId)
+          continue
+        }
         const shouldResumePersistedSend =
           (recovered?.status === 'pending_start' && !recoveredThreadId)
           || (!recovered && (entry.state === 'sending' || entry.state === 'waiting'))
@@ -5525,6 +5723,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
               imageUrls: entry.imageUrls,
               model: entry.modelId || undefined,
               effort: entry.reasoningEffort || undefined,
+              speedMode: entry.speedMode,
               skills: entry.skills.length > 0 ? entry.skills : undefined,
               fileAttachments: entry.fileAttachments,
               collaborationMode: entry.collaborationMode,
@@ -5540,6 +5739,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
                 restoreConfirmingMessageOutboxEntry(
                   messageOutboxByClientId.get(entry.clientMessageId) ?? entry,
                   resumedThreadId,
+                  resumed.turnId,
                 )
               } else {
                 const optimisticMessageId = findOptimisticMessageIdForOutbox(
@@ -5547,6 +5747,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
                   resumedThreadId,
                 )
                 if (optimisticMessageId) {
+                  bindOptimisticUserMessageToTurn(optimisticMessageId, resumed.turnId)
                   markOptimisticUserMessageSent(resumedThreadId, optimisticMessageId)
                 } else {
                   removeMessageOutboxEntry(entry.clientMessageId)
@@ -5581,10 +5782,12 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
               restoreConfirmingMessageOutboxEntry(
                 messageOutboxByClientId.get(entry.clientMessageId) ?? entry,
                 recoveredThreadId,
+                recovered.turnId,
               )
             } else {
               const optimisticMessageId = findOptimisticMessageIdForOutbox(entry.clientMessageId, recoveredThreadId)
               if (optimisticMessageId) {
+                bindOptimisticUserMessageToTurn(optimisticMessageId, recovered.turnId)
                 markOptimisticUserMessageSent(recoveredThreadId, optimisticMessageId)
               } else {
                 removeMessageOutboxEntry(entry.clientMessageId)
@@ -6614,11 +6817,42 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
   }
 
   function applyRealtimeUpdates(notification: RpcNotification): void {
-    if (notification.method === 'item/completed' || notification.method === 'turn/completed') {
+    if (isRuntimeTerminalNotificationForDifferentTurn(notification)) {
+      const threadId = extractThreadIdFromNotification(notification)
+      if (threadId) rememberLatestRuntimeEventSequence(threadId, notification.seq)
+      return
+    }
+    let threadStatusState = readThreadStatusExecutionState(notification)
+    const statusThreadId = threadStatusState === null ? '' : extractThreadIdFromNotification(notification)
+    const previousStatusState = statusThreadId ? runtimeExecutionStateByThreadId.value[statusThreadId] : undefined
+    if (
+      threadStatusState === 'completed'
+      && (previousStatusState === 'failed' || previousStatusState === 'interrupted' || previousStatusState === 'stopped')
+    ) {
+      threadStatusState = previousStatusState
+    }
+    if (
+      notification.method === 'item/completed'
+      || notification.method === 'turn/completed'
+      || (threadStatusState !== null && isRuntimeExecutionSettledState(threadStatusState))
+    ) {
       flushBufferedLiveDeltas()
     }
 
     applyRuntimeNotificationState(notification)
+
+    if (threadStatusState !== null && isRuntimeExecutionSettledState(threadStatusState)) {
+      const threadId = statusThreadId || extractThreadIdFromNotification(notification)
+      if (threadId) {
+        clearPendingTurnRequest(threadId)
+        clearSettledRuntimeResidue(threadId, threadStatusState)
+        setPendingServerRequestsForThread(threadId, [])
+        markThreadUnreadByEvent(threadId)
+        pendingThreadMessageRefresh.add(threadId)
+        pendingThreadsRefresh = true
+        void processQueuedMessages(threadId)
+      }
+    }
 
     if (
       notification.method === 'turn/started'
@@ -6956,6 +7190,23 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
   }
 
+  function isRuntimeTerminalNotificationForDifferentTurn(notification: RpcNotification): boolean {
+    const method = notification.method
+    const isTerminal = method === 'turn/completed'
+      || method === 'turn/interrupted'
+      || method === 'thread/completed'
+      || method === 'thread/interrupted'
+      || method === 'error'
+      || method.endsWith('/failed')
+    if (!isTerminal) return false
+    const threadId = extractThreadIdFromNotification(notification)
+    if (!threadId) return false
+    return !shouldApplyRuntimeTerminalTurn(
+      activeTurnIdByThreadId.value[threadId],
+      extractTurnIdFromNotification(notification),
+    )
+  }
+
   function queueEventDrivenSync(
     notification: RpcNotification,
     options: { deferSchedule?: boolean } = {},
@@ -6963,7 +7214,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     const threadId = extractThreadIdFromNotification(notification)
     const method = notification.method
     const sessionFileChangePolicy = getCxSessionFileChangeSyncPolicy(method, notification.params)
-    const urgentRefresh = shouldUrgentlyRefreshFromNotification(method)
+    const urgentRefresh = shouldUrgentlyRefreshFromNotification(method, notification.params)
     const shouldRefreshMessages =
       shouldRefreshMessagesFromNotification(notification) &&
       !(
@@ -7333,7 +7584,11 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       }
       sessionLogAuthoritativeRefreshGenerationByThreadId.delete(threadId)
       if (action === 'skip') return
-      void loadMessages(threadId, { silent: true, forceSettledRpcRefresh: true }).catch((error) => {
+      void loadMessages(threadId, {
+        silent: true,
+        forceSettledRpcRefresh: true,
+        cachedSnapshotMaxAgeMs: SESSION_LOG_SETTLED_SNAPSHOT_REUSE_MS,
+      }).catch((error) => {
         if (!isAbortLikeError(error)) setSyncErrorFromUnknown(error)
       })
     }, SESSION_LOG_AUTHORITATIVE_REFRESH_QUIET_MS)
@@ -7413,6 +7668,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       signal?: AbortSignal
       forceSettledRpcRefresh?: boolean
       preferSessionLogMessages?: boolean
+      cachedSnapshotMaxAgeMs?: number
       fullHistory?: boolean
       olderHistory?: { beforeTurnIndex: number; limit?: number }
     } = {},
@@ -7479,6 +7735,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       try {
         snapshot = await getThreadRuntimeSnapshot(threadId, {
           signal: options.signal,
+          cachedSnapshotMaxAgeMs: options.cachedSnapshotMaxAgeMs,
           preferCachedMessages:
             options.preferSessionLogMessages === true ||
             shouldShowLoading ||
@@ -7492,6 +7749,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         await ensureThreadResumed(threadId, { signal: options.signal })
         snapshot = await getThreadRuntimeSnapshot(threadId, {
           signal: options.signal,
+          cachedSnapshotMaxAgeMs: options.cachedSnapshotMaxAgeMs,
           preferCachedMessages:
             options.preferSessionLogMessages === true ||
             shouldShowLoading ||
@@ -7581,6 +7839,11 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         Boolean(options.olderHistory),
         Boolean(options.olderHistory),
         shouldPreserveSettledRpcMessages,
+        options.olderHistory
+          ? 'older'
+          : snapshot.messageState === 'cached'
+            ? 'lower'
+            : 'higher',
       )
       setPersistedMessagesForThread(
         threadId,
@@ -7963,6 +8226,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
   async function selectThread(threadId: string) {
     const normalizedThreadId = threadId.trim()
+    clearSelectedThreadGoalRefresh()
     const previousSkillCwd = selectedThread.value?.cwd?.trim() ?? ''
     const nextSkillThread = allThreads.value.find((thread) => thread.id === normalizedThreadId)
     const nextSkillCwd = nextSkillThread?.cwd?.trim() ?? ''
@@ -7986,7 +8250,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       return
     }
 
-    void refreshThreadGoal(normalizedThreadId)
+    beginThreadFirstScreenMetric(normalizedThreadId)
+    scheduleSelectedThreadGoalRefresh(normalizedThreadId)
 
     const abortController = new AbortController()
     threadSelectionAbortController = abortController
@@ -8021,6 +8286,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     const hydratedFromCache = hydrateCachedMessagesForThread(normalizedThreadId)
     const alreadyLoaded = loadedMessagesByThreadId.value[normalizedThreadId] === true
+    setThreadFirstScreenSource(
+      normalizedThreadId,
+      hydratedFromCache ? 'local-cache' : alreadyLoaded ? 'memory' : 'network',
+    )
     if (alreadyLoaded) {
       const currentVersion = currentThreadVersion(normalizedThreadId)
       const loadedVersion = loadedVersionByThreadId.value[normalizedThreadId] ?? ''
@@ -8184,6 +8453,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       reuseOptimisticMessageId?: string
       targetThreadId?: string
       feedbackStartedAtMs?: number
+      modelId?: string
+      reasoningEffort?: ReasoningEffort | ''
+      speedMode?: SpeedMode
       onDeliveryPersisted?: () => void
       onPendingRequestCreated?: (clientMessageId: string) => void
       onRequestDispatched?: () => void
@@ -8194,6 +8466,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     const threadId = internalOptions.targetThreadId?.trim() || selectedThreadId.value
     const nextText = text.trim()
     if (!threadId || (!nextText && imageUrls.length === 0 && fileAttachments.length === 0)) return
+    const modelId = (internalOptions.modelId ?? selectedModelId.value).trim()
+    const reasoningEffort = internalOptions.reasoningEffort ?? selectedReasoningEffort.value
+    const speedMode = internalOptions.speedMode ?? selectedSpeedMode.value
     const feedbackStartedAtMs = internalOptions.feedbackStartedAtMs ?? chatFeedbackNow()
     triggerAndroidHaptic(mode === 'queue' ? 'light' : 'medium')
     const runtimeStateBeforeSubmit = runtimeExecutionStateByThreadId.value[threadId]
@@ -8218,9 +8493,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         imageUrls,
         skills,
         fileAttachments,
-        modelId: selectedModelId.value.trim(),
-        reasoningEffort: selectedReasoningEffort.value,
-        speedMode: selectedSpeedMode.value,
+        modelId,
+        reasoningEffort,
+        speedMode,
         collaborationMode,
         turnOptions: cloneTurnOptions(turnOptions),
       })
@@ -8244,8 +8519,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       imageUrls,
       skills,
       fileAttachments,
-      modelId: selectedModelId.value,
-      reasoningEffort: selectedReasoningEffort.value,
+      modelId,
+      reasoningEffort,
+      speedMode,
       collaborationMode,
       turnOptions,
     }))
@@ -8273,6 +8549,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       imageUrls: [...imageUrls],
       skills: skills.map((skill) => ({ ...skill })),
       fileAttachments: fileAttachments.map((file) => ({ ...file })),
+      modelId,
+      reasoningEffort,
+      speedMode,
       collaborationMode,
       turnOptions: cloneTurnOptions(turnOptions),
     }
@@ -8283,7 +8562,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     setTurnActivityForThread(threadId, {
       reset: true,
       label: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
-      details: buildPendingTurnDetails(selectedModelId.value, selectedReasoningEffort.value, collaborationMode),
+      details: buildPendingTurnDetails(modelId, reasoningEffort, collaborationMode),
       startedAtMs: Date.now(),
     })
     setTurnErrorForThread(threadId, null)
@@ -8303,11 +8582,17 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       shouldAutoScrollOnNextAgentEvent = true
       markActiveSyncBoost()
       try {
-        await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode, turnOptions, {
+        const startOutcome = await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode, turnOptions, {
+          modelId,
+          reasoningEffort,
+          speedMode,
           optimisticMessageId,
           clientMessageId,
           onRequestDispatched: requestDispatchedCallback(internalOptions.onRequestDispatched),
         })
+        if (startOutcome === 'queued') {
+          setTurnActivityForThread(threadId, previousTurnActivity)
+        }
       } catch (unknownError) {
         if (isRetryableRuntimeSendError(unknownError)) {
           markOptimisticUserMessageWaiting(threadId, optimisticMessageId)
@@ -8324,11 +8609,17 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
 
     try {
-      await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode, turnOptions, {
+      const startOutcome = await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments, collaborationMode, turnOptions, {
+        modelId,
+        reasoningEffort,
+        speedMode,
         optimisticMessageId,
         clientMessageId,
         onRequestDispatched: requestDispatchedCallback(internalOptions.onRequestDispatched),
       })
+      if (startOutcome === 'queued') {
+        setTurnActivityForThread(threadId, previousTurnActivity)
+      }
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false
       if (isRetryableRuntimeSendError(unknownError)) {
@@ -8356,6 +8647,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     internalOptions: {
       feedbackStartedAtMs?: number
       reuseOptimisticMessageId?: string
+      modelId?: string
+      reasoningEffort?: ReasoningEffort | ''
+      speedMode?: SpeedMode
       onPendingRequestCreated?: (clientMessageId: string) => void
       onRequestDispatched?: () => void
       onThreadCreated?: (threadId: string) => void
@@ -8392,6 +8686,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     internalOptions: {
       feedbackStartedAtMs?: number
       reuseOptimisticMessageId?: string
+      modelId?: string
+      reasoningEffort?: ReasoningEffort | ''
+      speedMode?: SpeedMode
       onPendingRequestCreated?: (clientMessageId: string) => void
       onRequestDispatched?: () => void
       onThreadCreated?: (threadId: string) => void
@@ -8401,7 +8698,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     const nextText = text.trim()
     const targetCwd = cwd.trim()
-    const selectedModel = selectedModelId.value.trim()
+    const selectedModel = (internalOptions.modelId ?? selectedModelId.value).trim()
+    const reasoningEffort = internalOptions.reasoningEffort ?? selectedReasoningEffort.value
+    const speedMode = internalOptions.speedMode ?? selectedSpeedMode.value
     if (!nextText && imageUrls.length === 0 && fileAttachments.length === 0) return ''
     const feedbackStartedAtMs = internalOptions.feedbackStartedAtMs ?? chatFeedbackNow()
     let clientMessageId = createClientMessageId()
@@ -8446,7 +8745,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       skills,
       fileAttachments,
       modelId: selectedModel,
-      reasoningEffort: selectedReasoningEffort.value,
+      reasoningEffort,
+      speedMode,
       collaborationMode,
       turnOptions,
     }))
@@ -8464,6 +8764,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       imageUrls: [...imageUrls],
       skills: skills.map((skill) => ({ ...skill })),
       fileAttachments: fileAttachments.map((file) => ({ ...file })),
+      modelId: selectedModel,
+      reasoningEffort,
+      speedMode,
       collaborationMode,
       turnOptions: cloneTurnOptions(turnOptions),
     })
@@ -8472,6 +8775,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       if (threadId === nextThreadId) {
         rebindChatFeedbackMetric({ optimisticMessageId, threadId, clientMessageId })
         if (turnId) {
+          bindOptimisticUserMessageToTurn(optimisticMessageId, turnId)
           activeTurnIdByThreadId.value = {
             ...activeTurnIdByThreadId.value,
             [threadId]: turnId,
@@ -8495,13 +8799,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         createdAtMs: previewStartedAtMs,
       })
       attachOutboxEntryToOptimisticMessage(clientMessageId, threadId, optimisticMessageId)
+      bindOptimisticUserMessageToTurn(optimisticMessageId, turnId)
       rebindChatFeedbackMetric({ optimisticMessageId, threadId, clientMessageId })
       setPendingTurnRequest(threadId, {
         text: nextText,
         imageUrls: [...imageUrls],
         skills: skills.map((skill) => ({ name: skill.name, path: skill.path })),
         fileAttachments: fileAttachments.map((file) => ({ ...file })),
-        effort: selectedReasoningEffort.value,
+        effort: reasoningEffort,
+        speedMode,
         collaborationMode,
         turnOptions: cloneTurnOptions(turnOptions),
         fallbackRetried: false,
@@ -8531,6 +8837,13 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           turnId: recovered.turnId || undefined,
           turnStarted: Boolean(recovered.turnId && !awaitingDeliveryConfirmation),
         })
+        if (recovered.status === 'queued') {
+          await adoptRuntimeQueuedRequest(recovered.threadId, recovered.requestId)
+          markThreadResumed(recovered.threadId)
+          pendingThreadsRefresh = true
+          scheduleEventSync(700)
+          return true
+        }
         shouldAutoScrollOnNextAgentEvent = true
         markActiveSyncBoost()
         setTurnSummaryForThread(recovered.threadId, null)
@@ -8557,7 +8870,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           setRuntimeExecutionState(recovered.threadId, 'running', { canStop: true, activeTurnId: recovered.turnId })
           setTurnActivityForThread(recovered.threadId, {
             label: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
-            details: buildPendingTurnDetails(selectedModelId.value, selectedReasoningEffort.value, collaborationMode),
+            details: buildPendingTurnDetails(selectedModel, reasoningEffort, collaborationMode),
           })
         }
         if (awaitingDeliveryConfirmation) {
@@ -8608,7 +8921,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           text: nextText,
           imageUrls,
           model: selectedModel || undefined,
-          effort: selectedReasoningEffort.value || undefined,
+          effort: reasoningEffort || undefined,
+          speedMode,
           skills: skills.length > 0 ? skills : undefined,
           fileAttachments,
           collaborationMode,
@@ -8618,7 +8932,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           threadId,
           optimisticMessageId,
           activityLabel: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
-          activityDetails: buildPendingTurnDetails(selectedModel, selectedReasoningEffort.value, collaborationMode),
+          activityDetails: buildPendingTurnDetails(selectedModel, reasoningEffort, collaborationMode),
           onRequestDispatched: requestDispatchedCallback(internalOptions.onRequestDispatched),
         })
       } catch (unknownError) {
@@ -8642,7 +8956,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             skills,
             fileAttachments,
             modelId: MODEL_FALLBACK_ID,
-            reasoningEffort: selectedReasoningEffort.value,
+            reasoningEffort,
+            speedMode,
             collaborationMode,
             turnOptions,
           }))
@@ -8654,7 +8969,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             text: nextText,
             imageUrls,
             model: MODEL_FALLBACK_ID,
-            effort: selectedReasoningEffort.value || undefined,
+            effort: reasoningEffort || undefined,
+            speedMode,
             skills: skills.length > 0 ? skills : undefined,
             fileAttachments,
             collaborationMode,
@@ -8664,7 +8980,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             threadId,
             optimisticMessageId,
             activityLabel: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
-            activityDetails: buildPendingTurnDetails(MODEL_FALLBACK_ID, selectedReasoningEffort.value, collaborationMode),
+            activityDetails: buildPendingTurnDetails(MODEL_FALLBACK_ID, reasoningEffort, collaborationMode),
             onRequestDispatched: requestDispatchedCallback(internalOptions.onRequestDispatched),
           })
         } else {
@@ -8698,6 +9014,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           turnId: runtimeResult.turnId,
         })
       }
+      if (runtimeResult?.status === 'queued') {
+        await adoptRuntimeQueuedRequest(resultThreadId, runtimeResult.requestId)
+        markThreadResumed(resultThreadId)
+        pendingThreadsRefresh = true
+        scheduleEventSync(700)
+        isSendingMessage.value = false
+        void requestThreadTitleGeneration(resultThreadId, nextText, targetCwd || null)
+        return resultThreadId
+      }
       if (runtimeResult && isRuntimeRequestAwaitingDeliveryConfirmation(runtimeResult.status)) {
         markOptimisticUserMessageConfirming(resultThreadId, optimisticMessageId)
       } else {
@@ -8710,7 +9035,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         threadId,
         {
           label: collaborationMode === 'plan' ? 'Planning' : 'Thinking',
-          details: buildPendingTurnDetails(selectedModelId.value, selectedReasoningEffort.value, collaborationMode),
+          details: buildPendingTurnDetails(selectedModel, reasoningEffort, collaborationMode),
         },
       )
       setTurnErrorForThread(threadId, null)
@@ -8792,13 +9117,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     runtimeOverrides: {
       modelId?: string
       reasoningEffort?: ReasoningEffort | ''
+      speedMode?: SpeedMode
       optimisticMessageId?: string
       clientMessageId?: string
       onRequestDispatched?: () => void
     } = {},
-  ): Promise<void> {
+  ): Promise<'started' | 'queued'> {
     const modelId = (runtimeOverrides.modelId ?? selectedModelId.value).trim()
     const reasoningEffort = runtimeOverrides.reasoningEffort ?? selectedReasoningEffort.value
+    const speedMode = runtimeOverrides.speedMode ?? selectedSpeedMode.value
     const normalizedText = nextText.trim()
     const normalizedSkills = skills.map((skill) => ({ name: skill.name, path: skill.path }))
     const normalizedFileAttachments = fileAttachments.map((file) => ({ ...file }))
@@ -8814,6 +9141,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         fileAttachments: normalizedFileAttachments,
         modelId,
         reasoningEffort,
+        speedMode,
         collaborationMode,
         turnOptions,
       }))
@@ -8827,6 +9155,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       skills: normalizedSkills,
       fileAttachments: normalizedFileAttachments,
       effort: reasoningEffort,
+      speedMode,
       collaborationMode,
       turnOptions: cloneTurnOptions(turnOptions),
       fallbackRetried: false,
@@ -8835,7 +9164,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     try {
       let startedTurnId = ''
-      let runtimeStartStatus: 'running' | 'confirming' | '' = ''
+      let runtimeRequestId = ''
+      let runtimeStartStatus: 'queued' | 'running' | 'confirming' | '' = ''
       try {
         const runtimeResult = await startRuntimeTurnWithBoundedRecovery({
           threadId,
@@ -8843,6 +9173,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           imageUrls,
           model: modelId || undefined,
           effort: reasoningEffort || undefined,
+          speedMode,
           skills: skills.length > 0 ? skills : undefined,
           fileAttachments,
           collaborationMode,
@@ -8856,7 +9187,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
           onRequestDispatched: runtimeOverrides.onRequestDispatched,
         })
         startedTurnId = runtimeResult.turnId
-        runtimeStartStatus = isRuntimeRequestAwaitingDeliveryConfirmation(runtimeResult.status) ? 'confirming' : 'running'
+        runtimeRequestId = runtimeResult.requestId
+        runtimeStartStatus = runtimeResult.status === 'queued'
+          ? 'queued'
+          : isRuntimeRequestAwaitingDeliveryConfirmation(runtimeResult.status) ? 'confirming' : 'running'
       } catch (unknownError) {
         if (modelId && modelId !== MODEL_FALLBACK_ID && isUnsupportedChatGptModelError(unknownError)) {
           await applyFallbackModelSelection()
@@ -8871,6 +9205,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             fileAttachments: normalizedFileAttachments,
             modelId: MODEL_FALLBACK_ID,
             reasoningEffort,
+            speedMode,
             collaborationMode,
             turnOptions,
           }))
@@ -8881,6 +9216,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             skills: normalizedSkills,
             fileAttachments: normalizedFileAttachments,
             effort: reasoningEffort,
+            speedMode,
             collaborationMode,
             turnOptions: cloneTurnOptions(turnOptions),
             fallbackRetried: true,
@@ -8892,6 +9228,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             imageUrls,
             model: MODEL_FALLBACK_ID,
             effort: reasoningEffort || undefined,
+            speedMode,
             skills: skills.length > 0 ? skills : undefined,
             fileAttachments,
             collaborationMode,
@@ -8905,12 +9242,19 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
             onRequestDispatched: runtimeOverrides.onRequestDispatched,
           })
           startedTurnId = runtimeFallbackResult.turnId
-          runtimeStartStatus = isRuntimeRequestAwaitingDeliveryConfirmation(runtimeFallbackResult.status) ? 'confirming' : 'running'
+          runtimeRequestId = runtimeFallbackResult.requestId
+          runtimeStartStatus = runtimeFallbackResult.status === 'queued'
+            ? 'queued'
+            : isRuntimeRequestAwaitingDeliveryConfirmation(runtimeFallbackResult.status) ? 'confirming' : 'running'
         } else {
           throw unknownError
         }
       }
 
+      if (runtimeStartStatus === 'queued') {
+        await adoptRuntimeQueuedRequest(threadId, runtimeRequestId)
+        return 'queued'
+      }
       if (runtimeStartStatus === 'confirming') {
         setRuntimeExecutionState(threadId, 'start_uncertain', { canStop: false })
         setTurnActivityForThread(threadId, {
@@ -8919,6 +9263,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         })
       }
       if (startedTurnId) {
+        bindOptimisticUserMessageToTurn(optimisticMessageId, startedTurnId)
         activeTurnIdByThreadId.value = {
           ...activeTurnIdByThreadId.value,
           [threadId]: startedTurnId,
@@ -8936,6 +9281,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       pendingThreadMessageRefresh.add(threadId)
       pendingThreadsRefresh = true
       scheduleEventSync(700)
+      return 'started'
     } catch (unknownError) {
       clearPendingTurnRequest(threadId)
       throw unknownError
@@ -8998,6 +9344,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         fileAttachments: queued.fileAttachments,
         modelId: queued.modelId,
         reasoningEffort: queued.reasoningEffort,
+        speedMode: queued.speedMode,
         collaborationMode: queued.collaborationMode,
         turnOptions: queued.turnOptions,
       }))
@@ -9023,6 +9370,26 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       threadId,
       queue.filter((message) => message.id !== queued.id),
     )
+  }
+
+  function demoteOptimisticMessageToQueue(threadId: string, requestId: string): boolean {
+    const queued = (queuedMessagesByThreadId.value[threadId] ?? [])
+      .find((message) => message.serverRequestId === requestId || message.id === requestId)
+    if (!queued) return false
+    const optimisticMessageId = findOptimisticMessageIdForOutbox(queued.clientMessageId, threadId)
+    if (optimisticMessageId) removeOptimisticUserMessage(threadId, optimisticMessageId)
+    clearPendingTurnRequest(threadId)
+    return true
+  }
+
+  async function adoptRuntimeQueuedRequest(threadId: string, requestId: string): Promise<void> {
+    try {
+      await syncRuntimeMessageQueue(threadId)
+      demoteOptimisticMessageToQueue(threadId, requestId)
+    } catch {
+      // The durable server queue remains authoritative and will replay its update.
+    }
+    await refreshRuntimeStatusSnapshot(threadId)
   }
 
   async function interruptSelectedThreadTurn(source: RuntimeInterruptSource = 'unknown'): Promise<void> {
@@ -9635,6 +10002,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       if (androidShellAvailable) {
         lastAndroidResumeSyncScheduledAtMs = now
       }
+      beginForegroundRecoveryMetric(selectedThreadId.value)
       const shouldRestartNotifications = shouldRestartNotificationStreamOnForeground({
         connectionState: realtimeConnectionState.value,
         notificationStale: notificationStale.value,
@@ -9685,6 +10053,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     const onVisibilityChange = (): void => {
       if (document.hidden) {
+        cancelForegroundRecoveryMetric(selectedThreadId.value)
         clearForegroundRecoveryFeedback()
         clearVisibilitySyncTimer()
         clearResumeSyncTimers()
@@ -9704,6 +10073,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
 
     const onPageHide = (): void => {
+      cancelForegroundRecoveryMetric(selectedThreadId.value)
       clearForegroundRecoveryFeedback()
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
@@ -9720,6 +10090,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
 
     const onOffline = (): void => {
+      cancelForegroundRecoveryMetric(selectedThreadId.value)
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
       stopActiveSyncBoost()
@@ -9733,6 +10104,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
 
     const onMobilePause = (): void => {
       androidAppPaused = true
+      cancelForegroundRecoveryMetric(selectedThreadId.value)
       clearForegroundRecoveryFeedback()
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
@@ -9745,6 +10117,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     }
 
     const onMobileOffline = (): void => {
+      cancelForegroundRecoveryMetric(selectedThreadId.value)
       clearVisibilitySyncTimer()
       clearResumeSyncTimers()
       stopActiveSyncBoost()
@@ -9763,8 +10136,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
         })
         return
       }
-      if (event.key !== MESSAGE_OUTBOX_STORAGE_KEY) return
-      if (event.newValue === null) {
+      if (!isMessageOutboxStorageKey(event.key)) return
+      if (event.key === MESSAGE_OUTBOX_STORAGE_KEY && event.newValue === null) {
         replaceMessageOutboxFromStorage()
       } else {
         convergeMessageOutboxFromStorage()
@@ -9982,7 +10355,15 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       if (threadId && requestId && action === 'starting') {
         promoteQueuedMessageToOptimistic(threadId, requestId)
       }
-      if (threadId) void syncRuntimeMessageQueue(threadId).catch(() => {})
+      if (threadId) {
+        void syncRuntimeMessageQueue(threadId)
+          .then(() => {
+            if (requestId && action === 'queued') {
+              demoteOptimisticMessageToQueue(threadId, requestId)
+            }
+          })
+          .catch(() => {})
+      }
     }
     if (notification.method === SKILLS_CHANGED_METHOD) {
       scheduleSkillsRefreshFromNotification()
@@ -10064,6 +10445,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     realtimeConnectionManager.stop()
     stopBackgroundSync()
     stopActiveSyncBoost()
+    clearSelectedThreadGoalRefresh()
     clearBufferedLiveDeltas()
 
     pendingThreadsRefresh = false
@@ -10201,23 +10583,73 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     if (!threadId) return
     const queue = queuedMessagesByThreadId.value[threadId]
     if (!queue) return
-    const msg = queue.find((m) => m.id === messageId)
+    const queueIndex = queue.findIndex((message) => message.id === messageId)
+    const msg = queue[queueIndex]
     if (!msg || isUpdatingSpeedMode.value) return
-    removeQueuedMessageByThreadId(threadId, messageId)
-    try {
-      await sendMessageToSelectedThread(
-        msg.text,
-        msg.imageUrls,
-        msg.skills,
-        'steer',
-        msg.fileAttachments,
-        undefined,
-        msg.collaborationMode,
-        msg.turnOptions,
-        internalOptions,
-      )
-    } catch {
-      // The durable outgoing bubble now owns reconnect, edit, and retry recovery.
+    setQueuedMessagesForThread(threadId, queue.filter((message) => message.id !== messageId))
+    let transferClientMessageId = ''
+    const outcome = await transferQueuedMessageWithRecovery({
+      snapshot: { index: queueIndex, message: msg },
+      deliver: async (message) => {
+        if (message.serverRequestId) {
+          await removeRuntimeQueuedMessage(message.serverRequestId)
+        }
+        await sendMessageToSelectedThread(
+          message.text,
+          message.imageUrls,
+          message.skills,
+          'steer',
+          message.fileAttachments,
+          undefined,
+          message.collaborationMode,
+          message.turnOptions,
+          {
+            ...internalOptions,
+            onPendingRequestCreated: (clientMessageId) => {
+              transferClientMessageId = clientMessageId
+              try {
+                (internalOptions.onPendingRequestCreated ?? submitCallbacks.onPendingRequestCreated)?.(clientMessageId)
+              } catch {}
+            },
+          },
+        )
+      },
+      restore: async (snapshot) => {
+        const optimisticMessageId = transferClientMessageId
+          ? findOptimisticMessageIdForOutbox(transferClientMessageId, threadId)
+          : ''
+        if (optimisticMessageId) {
+          removeOptimisticUserMessage(threadId, optimisticMessageId)
+        } else if (transferClientMessageId) {
+          removeMessageOutboxEntry(transferClientMessageId)
+        }
+
+        let durableQueueRestored = !snapshot.message.serverRequestId
+        if (snapshot.message.serverRequestId) {
+          try {
+            await restoreRuntimeQueuedMessage(snapshot.message.serverRequestId)
+            durableQueueRestored = true
+          } catch {
+            durableQueueRestored = false
+          }
+        }
+
+        if (durableQueueRestored) {
+          const currentQueue = queuedMessagesByThreadId.value[threadId] ?? []
+          setQueuedMessagesForThread(threadId, restoreQueuedMessageAtIndex(currentQueue, snapshot))
+        }
+        if (snapshot.message.serverRequestId) {
+          try {
+            await syncRuntimeMessageQueue(threadId)
+          } catch {}
+        }
+        return durableQueueRestored
+      },
+    })
+    if (outcome !== 'delivered') {
+      error.value = outcome === 'restored'
+        ? '直接引用未被正在执行的任务接收，原消息已恢复到队列。'
+        : '直接引用失败，且队列状态暂时无法恢复，请刷新后重试。'
     }
   }
 
@@ -10254,6 +10686,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     accountRateLimitSnapshots,
     threadTitleById,
     messages,
+    selectedThreadDetachedFailedMessages,
     isLoadingThreads,
     isLoadingMessages,
     isSendingMessage,
@@ -10282,6 +10715,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     forkThreadById,
     sendMessageToSelectedThread,
     retryFailedUserMessage,
+    takeFailedUserMessageForEditing,
+    deleteFailedUserMessage,
     retryFailedNewThreadMessage,
     takeFailedNewThreadMessageForEditing,
     clearPendingNewThreadPreview,

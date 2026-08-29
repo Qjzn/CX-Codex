@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { getSkillsSyncStatePath } from './codexPaths.js'
+import { decodeSkillsSyncStateFromStorage } from './skillsSyncStateSecurity.js'
 
 export type SkillHubEntry = {
   name: string
@@ -67,10 +68,6 @@ type MetaJson = {
   latest?: { publishedAt?: number }
 }
 
-type SkillsSyncState = {
-  githubToken?: string
-}
-
 export type SkillsHubSource = {
   owner: string
   repo: string
@@ -124,8 +121,10 @@ export function getSkillsHubRawFileUrl(owner: string, name: string, fileName: st
 async function getSkillsSyncToken(): Promise<string | null> {
   try {
     const raw = await readFile(getSkillsSyncStatePath(), 'utf8')
-    const parsed = JSON.parse(raw) as SkillsSyncState
-    const token = typeof parsed.githubToken === 'string' ? parsed.githubToken.trim() : ''
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const decoded = await decodeSkillsSyncStateFromStorage(parsed as Record<string, unknown>)
+    const token = typeof decoded.state.githubToken === 'string' ? decoded.state.githubToken.trim() : ''
     return token || null
   } catch {
     return null

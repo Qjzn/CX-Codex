@@ -81,7 +81,7 @@
               aria-label="侧栏快捷操作"
             >
               <button
-                class="sidebar-action-tile"
+                class="sidebar-action-tile sidebar-action-tile-primary"
                 type="button"
                 aria-label="新建会话"
                 title="新建会话"
@@ -549,11 +549,11 @@
           id="main-content"
           class="content-root"
           :class="{ 'content-root--dual-pane-touch': isDualPaneMobile }"
+          role="main"
+          aria-label="会话内容"
           tabindex="-1"
         >
         <ContentHeader :title="contentTitle">
-          <template #title-prefix>
-          </template>
           <template #title-suffix>
             <button
               v-if="showMobileThreadRefreshButton"
@@ -593,7 +593,7 @@
               class="sidebar-thread-controls-header-host"
               :is-sidebar-collapsed="isSidebarCollapsed"
               :attention-count="attentionThreadCount"
-              :show-new-thread-button="true"
+              :show-new-thread-button="!isHomeRoute"
               @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
               @start-new-thread="onStartNewThreadFromToolbar"
             />
@@ -801,7 +801,7 @@
           <template v-else-if="isThreadRoute">
             <div class="content-grid">
               <div class="content-thread">
-                <ThreadConversation ref="threadConversationRef" :messages="displayedThreadMessages" :is-loading="isLoadingMessages || isManualThreadRefreshRunning"
+                <ThreadConversation ref="threadConversationRef" :messages="displayedThreadMessages" :is-loading="isLoadingMessages || isManualThreadRefreshRunning || isRouteThreadResolutionPending"
                   :active-thread-id="displayedThreadConversationId" :cwd="displayedThreadCwd" :scroll-state="displayedThreadScrollState"
                   :live-overlay="displayedThreadLiveOverlay"
                   :pending-requests="displayedThreadPendingRequests"
@@ -811,6 +811,7 @@
                   :is-thread-switching="isThreadContentSwitching"
                   :compact-runtime-chrome="true"
                   :show-empty-thread-actions="isRouteOnlyEmptyThread"
+                  :allow-failed-message-edit="true"
                   :is-turn-in-progress="isSelectedThreadInProgress"
                   :is-rolling-back="isRollingBack"
                   :implementing-plan-id="implementingPlanId"
@@ -825,6 +826,7 @@
                   @dismiss-empty-thread="onDismissEmptyThread"
                   @copy-status="onConversationCopyStatus"
                   @retry-failed-message="retryFailedUserMessage"
+                  @edit-failed-message="onEditFailedMessage"
                   @implement-plan="onImplementPlan"
                   @rollback="onRollback" />
               </div>
@@ -862,6 +864,12 @@
                   @set-status="onSetThreadGoalStatus"
                   @clear-goal="onClearThreadGoal"
                   @retry="refreshSelectedThreadGoal"
+                />
+                <FailedMessagesTray
+                  :messages="selectedThreadDetachedFailedMessages"
+                  @edit="onEditFailedMessage"
+                  @retry="retryFailedUserMessage"
+                  @delete="deleteFailedUserMessage"
                 />
                 <ThreadComposer ref="threadComposerRef" :active-thread-id="composerThreadContextId"
                   :cwd="composerCwd"
@@ -953,8 +961,12 @@
         tabindex="-1"
       >
         <p class="desktop-refresh-confirm-kicker">保留当前输入</p>
-        <h2 id="queued-message-edit-title" class="desktop-refresh-confirm-title">替换为排队消息？</h2>
-        <p class="desktop-refresh-confirm-text">输入框里还有未发送内容。继续后会用选中的排队消息替换当前草稿。</p>
+        <h2 id="queued-message-edit-title" class="desktop-refresh-confirm-title">
+          {{ isPendingFailedMessageEdit ? '替换为未发送消息？' : '替换为排队消息？' }}
+        </h2>
+        <p class="desktop-refresh-confirm-text">
+          输入框里还有未发送内容。继续后会用选中的{{ isPendingFailedMessageEdit ? '未发送消息' : '排队消息' }}替换当前草稿。
+        </p>
         <div class="desktop-refresh-confirm-actions">
           <button class="desktop-refresh-confirm-button" type="button" @click="cancelQueuedMessageEdit">保留草稿</button>
           <button class="desktop-refresh-confirm-button desktop-refresh-confirm-button-primary" type="button" @click="confirmQueuedMessageEdit">
@@ -1202,6 +1214,7 @@ const ThreadConversation = defineAsyncComponent({
 })
 const ThreadGoalBar = defineAsyncComponent(() => import('./components/content/ThreadGoalBar.vue'))
 const QueuedMessages = defineAsyncComponent(() => import('./components/content/QueuedMessages.vue'))
+const FailedMessagesTray = defineAsyncComponent(() => import('./components/content/FailedMessagesTray.vue'))
 const RateLimitStatus = defineAsyncComponent(() => import('./components/content/RateLimitStatus.vue'))
 const FavoritesModal = defineAsyncComponent(() => import('./components/content/FavoritesModal.vue'))
 const CommandMenu = defineAsyncComponent(() => import('./components/content/CommandMenu.vue'))
@@ -1481,6 +1494,7 @@ const {
   accountRateLimitSnapshots,
   threadTitleById,
   messages,
+  selectedThreadDetachedFailedMessages,
   isLoadingThreads,
   isLoadingMessages,
   isSendingMessage,
@@ -1508,6 +1522,8 @@ const {
   renameThreadById,
   sendMessageToSelectedThread,
   retryFailedUserMessage,
+  takeFailedUserMessageForEditing,
+  deleteFailedUserMessage,
   retryFailedNewThreadMessage,
   takeFailedNewThreadMessageForEditing,
   clearPendingNewThreadPreview,
@@ -1551,8 +1567,9 @@ const enabledComposerSkills = computed(() => installedSkills.value.filter((skill
 
 const route = useRoute()
 const router = useRouter()
-const { isMobile, isDualPaneMobile, viewportWidth } = useMobile()
-const isSettingsSheetMode = computed(() => isMobile.value || isDualPaneMobile.value)
+const { isMobile, isCompactViewport, isDualPaneMobile, viewportWidth } = useMobile()
+const isOverlaySidebar = computed(() => isMobile.value || isCompactViewport.value)
+const isSettingsSheetMode = computed(() => isOverlaySidebar.value || isDualPaneMobile.value)
 const { favorites, toggleFavorite, removeFavorite, refreshFavorites } = useFavorites()
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
@@ -1571,7 +1588,11 @@ const githubTipsScope = ref<GithubTipsScope>('trending-daily')
 const lastLoadedGithubTipsScope = ref<GithubTipsScope | ''>('')
 const isManualThreadRefreshRunning = ref(false)
 const editingQueuedMessageState = ref<{ threadId: string; queueIndex: number } | null>(null)
+const FAILED_MESSAGE_EDIT_TARGET_PREFIX = 'failed-message:'
 const pendingQueuedMessageEditId = ref('')
+const isPendingFailedMessageEdit = computed(() => (
+  pendingQueuedMessageEditId.value.startsWith(FAILED_MESSAGE_EDIT_TARGET_PREFIX)
+))
 const isRouteSyncInProgress = ref(false)
 const hasInitialized = ref(false)
 const routeWarmThreadIds = ref<string[]>([])
@@ -1583,7 +1604,7 @@ const worktreeInitStatus = ref<{ phase: 'idle' | 'running' | 'error'; title: str
   title: '',
   message: '',
 })
-const isSidebarCollapsed = ref(isMobile.value ? true : loadSidebarCollapsed())
+const isSidebarCollapsed = ref(isOverlaySidebar.value ? true : loadSidebarCollapsed())
 const isFavoritesModalVisible = ref(false)
 const favoritesStatusText = ref('')
 type ProductToastTone = 'success' | 'info' | 'warning' | 'danger'
@@ -2037,12 +2058,27 @@ const mobileShellUpdatePromptText = computed(() => {
   }
   return `检测到 ${mobileShellLatestVersionLabel.value}，确认后会直接下载并打开系统安装界面。`
 })
+const isRouteThreadResolutionPending = computed(() => (
+  route.name === 'thread'
+  && !!routeThreadId.value
+  && !selectedThread.value
+  && filteredMessages.value.length === 0
+  && selectedThreadServerRequests.value.length === 0
+  && !selectedThreadLoadError.value
+  && (
+    isLoadingThreads.value
+    || isLoadingMessages.value
+    || selectedThreadRuntimeStatus.value.threadId !== routeThreadId.value
+    || selectedThreadRuntimeStatus.value.messageState !== 'fresh'
+  )
+))
 const isRouteOnlyEmptyThread = computed(() => (
   route.name === 'thread'
   && !!routeThreadId.value
   && !selectedThread.value
   && filteredMessages.value.length === 0
   && selectedThreadServerRequests.value.length === 0
+  && !isRouteThreadResolutionPending.value
 ))
 const routeThreadCachedTitle = computed(() => {
   if (route.name !== 'thread' || selectedThread.value) return ''
@@ -2123,13 +2159,13 @@ const pageTitle = computed(() => {
     : baseTitle
 })
 const headerSubtitle = computed(() => {
+  if (isCompactTouchContent.value) return ''
   if (isWorkbenchRoute.value) return '集中查看状态、复用项目配置，并一键发起标准化任务。'
   if (isDiagnosticsRoute.value) return '检查后端队列、运行状态和恢复链路。'
   if (isSkillsRoute.value) return '管理已安装技能和当前运行能力。'
   if (isGithubTrendingRoute.value) return '浏览热门仓库、查看介绍，并直接带着项目链接发起提问。'
   if (isHomeRoute.value) return '从已配置工作区快速发起新的 Codex 任务。'
   if (isRouteOnlyEmptyThread.value) return '这个会话还没有消息，你可以直接发送第一条消息，或将它移除。'
-  if (isCompactTouchContent.value) return ''
   const cwd = selectedThread.value?.cwd?.trim() ?? ''
   return cwd || ''
 })
@@ -2139,6 +2175,7 @@ const showMobileThreadRefreshButton = computed(() => (
 ))
 const isCompactTouchContent = computed(() => (
   isMobile.value ||
+  isCompactViewport.value ||
   isDualPaneMobile.value ||
   (viewportWidth.value > 0 && viewportWidth.value < 1024)
 ))
@@ -3936,7 +3973,7 @@ function onRespondServerRequest(payload: { id: number; result?: unknown; error?:
 }
 
 function shouldUseMobileSidebarDrawer(): boolean {
-  return isMobile.value || viewportWidth.value < 768
+  return isOverlaySidebar.value
 }
 
 function closeMobileSidebarAfterNavigation(): void {
@@ -4375,6 +4412,38 @@ function onEditQueuedMessage(messageId: string): void {
   hydrateQueuedMessageForEditing(messageId)
 }
 
+function onEditFailedMessage(messageId: string): void {
+  const composer = threadComposerRef.value
+  if (!composer) return
+
+  if (composer.hasUnsavedDraft()) {
+    pendingQueuedMessageEditId.value = `${FAILED_MESSAGE_EDIT_TARGET_PREFIX}${messageId}`
+    return
+  }
+
+  hydrateFailedMessageForEditing(messageId)
+}
+
+function hydrateFailedMessageForEditing(messageId: string): void {
+  const composer = threadComposerRef.value
+  if (!composer) return
+  const draft = takeFailedUserMessageForEditing(messageId)
+  if (!draft) return
+
+  if (draft.modelId) setSelectedModelId(draft.modelId)
+  setSelectedReasoningEffort(draft.reasoningEffort)
+  setSelectedCollaborationMode(draft.collaborationMode)
+  void updateSelectedSpeedMode(draft.speedMode)
+  composer.hydrateDraft({
+    text: draft.text,
+    imageUrls: [...draft.imageUrls],
+    fileAttachments: draft.fileAttachments.map((attachment) => ({ ...attachment })),
+    skills: draft.skills.map((skill) => ({ ...skill })),
+    plugins: draft.turnOptions?.plugins?.map((plugin) => ({ ...plugin })),
+    goal: draft.turnOptions?.goal ? { ...draft.turnOptions.goal } : undefined,
+  })
+}
+
 function hydrateQueuedMessageForEditing(messageId: string): void {
   const queueIndex = selectedThreadQueuedMessages.value.findIndex((item) => item.id === messageId)
   const message = queueIndex >= 0 ? selectedThreadQueuedMessages.value[queueIndex] : undefined
@@ -4409,11 +4478,15 @@ function cancelQueuedMessageEdit(): void {
 }
 
 function confirmQueuedMessageEdit(): void {
-  const messageId = pendingQueuedMessageEditId.value
+  const pendingTarget = pendingQueuedMessageEditId.value
   blockingDialogShouldRestoreFocus = false
   pendingQueuedMessageEditId.value = ''
-  if (!messageId) return
-  hydrateQueuedMessageForEditing(messageId)
+  if (!pendingTarget) return
+  if (pendingTarget.startsWith(FAILED_MESSAGE_EDIT_TARGET_PREFIX)) {
+    hydrateFailedMessageForEditing(pendingTarget.slice(FAILED_MESSAGE_EDIT_TARGET_PREFIX.length))
+    return
+  }
+  hydrateQueuedMessageForEditing(pendingTarget)
 }
 
 async function rollbackAndResendDictation(payload: {
@@ -5009,10 +5082,10 @@ function scheduleInitialBackgroundTasks(): void {
 async function initialize(): Promise<void> {
   const startupThreadId = isThreadRouteLike.value ? readStartupRouteThreadId() : ''
   if (startupThreadId) {
-    hasInitialized.value = true
     rememberRoutableThreadId(startupThreadId)
     void loadThreadTitleCache()
     await selectThread(startupThreadId)
+    hasInitialized.value = true
     queueDelayedIdleTask(() => {
       void refreshAll({
         loadMessages: false,
@@ -5263,8 +5336,8 @@ watch(
   { immediate: true },
 )
 
-watch(isMobile, (mobile) => {
-  if (mobile) {
+watch(isOverlaySidebar, (overlaySidebar) => {
+  if (overlaySidebar) {
     setSidebarCollapsed(true, { persist: false })
     return
   }
@@ -5580,7 +5653,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-action-grid {
-  @apply grid grid-cols-4 gap-1;
+  @apply grid grid-cols-3 gap-1;
 }
 
 .sidebar-tools-menu {
@@ -5616,10 +5689,21 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-action-tile {
-  @apply flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 border border-transparent bg-transparent px-1.5 py-1 text-[11px] font-medium transition-[background-color,border-color,color] duration-150;
+  @apply flex min-h-9 min-w-0 flex-row items-center justify-center gap-1.5 border border-transparent bg-transparent px-1.5 py-1 text-[11px] font-medium transition-[background-color,border-color,color] duration-150;
   border-radius: var(--ui-radius-control);
   color: var(--ui-text-secondary);
   touch-action: manipulation;
+}
+
+.sidebar-action-tile-primary {
+  @apply col-span-full justify-start px-2.5 text-[13px] font-semibold;
+  border-color: color-mix(in srgb, var(--ui-text-primary) 7%, transparent);
+  background: color-mix(in srgb, var(--ui-text-primary) 4%, transparent);
+  color: var(--ui-text-primary);
+}
+
+.sidebar-action-tile-primary .sidebar-action-icon {
+  color: var(--ui-accent);
 }
 
 .sidebar-action-tile[aria-pressed='true'],
@@ -5652,7 +5736,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-action-label {
-  @apply block max-w-full truncate text-center leading-4;
+  @apply block max-w-full truncate text-left leading-4;
 }
 
 .sidebar-search-toggle {
@@ -6217,21 +6301,21 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .new-thread-hero {
-  @apply m-0 text-[1.55rem] sm:text-[2.05rem] font-semibold leading-[1.08];
+  @apply m-0 text-xl sm:text-2xl font-semibold leading-[1.15];
   color: var(--ui-text-primary);
 }
 
 .new-thread-folder-dropdown {
-  @apply text-xl sm:text-[2.05rem];
+  @apply text-xl sm:text-2xl;
   color: var(--ui-text-secondary);
 }
 
 .new-thread-folder-dropdown :deep(.composer-dropdown-trigger) {
-  @apply h-auto text-xl sm:text-[2.2rem] leading-[1.05];
+  @apply h-auto text-xl sm:text-2xl leading-[1.15];
 }
 
 .new-thread-folder-dropdown :deep(.composer-dropdown-value) {
-  @apply leading-[1.05];
+  @apply leading-[1.15];
 }
 
 .new-thread-folder-dropdown :deep(.composer-dropdown-chevron) {
@@ -6772,6 +6856,12 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   .content-title-refresh-button,
   .content-favorites-button {
     @apply h-9 min-w-9;
+  }
+}
+
+@media (max-width: 767px), (pointer: coarse) {
+  .sidebar-action-tile {
+    min-height: 44px;
   }
 }
 

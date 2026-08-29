@@ -1,5 +1,7 @@
 import {
+  canResumeRuntimePendingStart,
   createRuntimeReconcileFailurePatch,
+  createRuntimePendingStartResumeFailurePatch,
   selectRuntimeRequestsForReconcile,
   type RuntimeRequestReconcileFailurePatch,
 } from './appServerRuntimeRequestReconciliation.js'
@@ -13,6 +15,7 @@ type RuntimeReconcileUpdateRequest = (
 export type RuntimeReconcileSchedulerDependencies = {
   listUncertainRequests(limit: number): RuntimeRequestRecord[]
   reconcileRuntimeThread(threadId: string): Promise<unknown>
+  resumePendingStart(payload: unknown): Promise<unknown>
   updateRequest: RuntimeReconcileUpdateRequest
   getErrorMessage(error: unknown, fallback: string): string
   writeReconcileFailure(details: {
@@ -26,7 +29,7 @@ export type RuntimeReconcileSchedulerDependencies = {
 
 export type RuntimeReconcileBatchDependencies = Pick<
   RuntimeReconcileSchedulerDependencies,
-  'reconcileRuntimeThread' | 'updateRequest' | 'getErrorMessage' | 'writeReconcileFailure' | 'nowMs'
+  'reconcileRuntimeThread' | 'resumePendingStart' | 'updateRequest' | 'getErrorMessage' | 'writeReconcileFailure' | 'nowMs'
 > & {
   recordReconciled(threadId: string, atMs: number): void
 }
@@ -40,12 +43,24 @@ export async function runRuntimeReconcileBatch(
   dependencies: RuntimeReconcileBatchDependencies,
 ): Promise<number> {
   for (const request of requests) {
+    const shouldResumePendingStart = canResumeRuntimePendingStart(request)
     try {
-      await dependencies.reconcileRuntimeThread(request.threadId)
-      dependencies.recordReconciled(request.threadId, dependencies.nowMs?.() ?? Date.now())
+      if (shouldResumePendingStart) {
+        await dependencies.resumePendingStart(request.payload)
+      } else {
+        await dependencies.reconcileRuntimeThread(request.threadId)
+      }
+      if (request.threadId) {
+        dependencies.recordReconciled(request.threadId, dependencies.nowMs?.() ?? Date.now())
+      }
     } catch (error) {
       const lastError = dependencies.getErrorMessage(error, 'runtime reconcile failed')
-      dependencies.updateRequest(request.requestId, createRuntimeReconcileFailurePatch(request, lastError))
+      dependencies.updateRequest(
+        request.requestId,
+        shouldResumePendingStart
+          ? createRuntimePendingStartResumeFailurePatch(lastError)
+          : createRuntimeReconcileFailurePatch(request, lastError),
+      )
       dependencies.writeReconcileFailure({
         threadId: request.threadId,
         requestId: request.requestId,

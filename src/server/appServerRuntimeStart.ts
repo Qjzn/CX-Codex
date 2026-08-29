@@ -1,10 +1,16 @@
-import { isRpcTimeoutError } from './appServerRpcErrors.js'
+import { isRpcOutcomeUncertainError } from './appServerRpcErrors.js'
 import {
   readThreadIdFromPayload,
   readTurnIdFromPayload,
 } from './appServerPayloadIds.js'
 import {
+  createNativeThreadQueueMarker,
+  ensureNativeThreadQueueSubmission,
+  EXTERNAL_ACTIVE_WRITER_MARKER,
+} from './appServerNativeThreadQueue.js'
+import {
   createRuntimePromptHash,
+  createDurableRuntimeSendPayload,
   normalizePlanModeTurnStartParams,
   parseRuntimeSendPayload,
   shouldRetryPlanModeWithoutNativeMode,
@@ -40,18 +46,21 @@ export type RuntimeStartDependencies = {
       status?: RuntimeRequestStatus
       lastError?: string | null
       incrementRetry?: boolean
+      payload?: unknown
     },
   ): RuntimeRequestRecord | null
   getRequest(requestId: string): RuntimeRequestRecord | null
   getLatestRequestByClientMessageId(clientMessageId: string): RuntimeRequestRecord | null
   rpc(method: string, params: unknown): Promise<unknown>
   clearThreadSearchIndex(): void
+  markQueued(threadId: string): void
   markStarting(threadId: string): void
   markRunning(threadId: string, turnId?: string): void
   markStartUncertain(threadId: string, lastError?: string | null): void
   markFailed(threadId: string, lastError?: string | null): void
   persistRuntimeSnapshot(threadId: string): { activeTurnId: string }
   markPlanModeTurn(threadId: string, turnId?: string): void
+  notifyQueuedRequest?(request: RuntimeRequestRecord): void
   getErrorMessage(error: unknown, fallback: string): string
 }
 
@@ -118,6 +127,7 @@ async function startParsedRuntimeTurnWithAppServer(
   promptHash: string,
   dependencies: RuntimeStartDependencies,
 ): Promise<RuntimeStartResult> {
+  const durablePayload = createDurableRuntimeSendPayload(parsed)
   let threadId = parsed.threadId
   let requestId = parsed.requestId
   let shouldCreateRequest = true
@@ -151,7 +161,7 @@ async function startParsedRuntimeTurnWithAppServer(
       status: 'pending_start',
       promptHash,
       mode: parsed.mode,
-      payload: parsed.payloadSummary,
+      payload: durablePayload,
     })
     if (accepted.requestId !== requestId) {
       if (!runtimeRequestMatchesParsed(accepted, parsed, promptHash)) {
@@ -186,12 +196,13 @@ async function startParsedRuntimeTurnWithAppServer(
       mode: parsed.mode,
     })
 
-    dependencies.markStarting(threadId)
-    dependencies.persistRuntimeSnapshot(threadId)
     dependencies.updateRequest(requestId, {
       status: 'starting',
       threadId,
+      payload: parsed.payloadSummary,
     })
+    dependencies.markStarting(threadId)
+    dependencies.persistRuntimeSnapshot(threadId)
 
     const rpcResult = await startRuntimeTurnRpc(turnParams, parsed.mode, dependencies)
     const turnId = readTurnIdFromPayload(rpcResult)
@@ -206,6 +217,7 @@ async function startParsedRuntimeTurnWithAppServer(
       threadId,
       turnId: effectiveTurnId,
       lastError: null,
+      payload: parsed.payloadSummary,
     }) ?? dependencies.getRequest(requestId)
     return {
       request: request as RuntimeRequestRecord,
@@ -214,7 +226,7 @@ async function startParsedRuntimeTurnWithAppServer(
       status: 'running',
     }
   } catch (error) {
-    if (threadId && isRpcTimeoutError(error)) {
+    if (threadId && isRpcOutcomeUncertainError(error)) {
       const lastError = dependencies.getErrorMessage(error, 'turn/start timed out')
       dependencies.markStartUncertain(threadId, lastError)
       dependencies.persistRuntimeSnapshot(threadId)
@@ -222,6 +234,7 @@ async function startParsedRuntimeTurnWithAppServer(
         status: 'start_uncertain',
         threadId,
         lastError,
+        payload: parsed.payloadSummary,
       }) ?? dependencies.getRequest(requestId)
       return {
         request: request as RuntimeRequestRecord,
@@ -232,10 +245,52 @@ async function startParsedRuntimeTurnWithAppServer(
     }
 
     const lastError = dependencies.getErrorMessage(error, 'runtime send failed')
+    if (threadId && isActiveWriterConflict(lastError)) {
+      let queueMarker = EXTERNAL_ACTIVE_WRITER_MARKER
+      if (parsed.mode === 'execute' && parsed.clientMessageId) {
+        try {
+          const submission = await ensureNativeThreadQueueSubmission({
+            rpc: dependencies.rpc,
+            threadId,
+            input: parsed.input,
+            clientUserMessageId: parsed.clientMessageId,
+          })
+          queueMarker = createNativeThreadQueueMarker(submission.id)
+        } catch {
+          // Older app-server builds do not expose the experimental native
+          // queue. Keep the durable 7420 queue as a compatibility fallback.
+        }
+      }
+      const request = dependencies.updateRequest(requestId, {
+        status: 'queued',
+        threadId,
+        lastError: queueMarker,
+        payload: durablePayload,
+      }) ?? dependencies.getRequest(requestId)
+      // The queue is orthogonal to the turn that already owns this thread.
+      // Keep the authoritative execution state running so a queued follow-up
+      // cannot replace or masquerade as the active desktop turn.
+      dependencies.markRunning(threadId)
+      dependencies.persistRuntimeSnapshot(threadId)
+      if (request) {
+        try {
+          dependencies.notifyQueuedRequest?.(request)
+        } catch {
+          // Queue persistence is authoritative; notification delivery is best-effort.
+        }
+      }
+      return {
+        request: request as RuntimeRequestRecord,
+        threadId,
+        turnId: '',
+        status: 'queued',
+      }
+    }
     dependencies.updateRequest(requestId, {
       status: 'failed',
       threadId,
       lastError,
+      payload: parsed.payloadSummary,
     })
     if (threadId) {
       dependencies.markFailed(threadId, lastError)
@@ -243,6 +298,10 @@ async function startParsedRuntimeTurnWithAppServer(
     }
     throw error
   }
+}
+
+function isActiveWriterConflict(message: string): boolean {
+  return message.trim().toLowerCase().includes('already has an active writer')
 }
 
 function runtimeRequestMatchesParsed(

@@ -18,6 +18,7 @@ export type ParsedRuntimeSendPayload = {
   attachments: unknown
   effort: unknown
   turnOptions: RuntimeTurnOptions | null
+  queueMetadata: Record<string, unknown> | null
   payloadSummary: Record<string, unknown>
 }
 
@@ -155,12 +156,13 @@ export function parseRuntimeSendPayload(payload: unknown): ParsedRuntimeSendPayl
   if (!body) throw new Error('Invalid body: expected runtime send payload')
 
   const requestId = readString(body.requestId).trim() || createRuntimeRequestId()
-  const clientMessageId = readString(body.clientMessageId).trim()
+  const clientMessageId = readString(body.clientMessageId).trim() || requestId
   const mode = readCollaborationModeFromPayload(body)
   const model = readString(body.model).trim()
   const cwd = readString(body.cwd).trim()
   const threadId = readStringByAliases(body, 'threadId', 'thread_id')
   const turnOptions = readRuntimeTurnOptions(body.turnOptions)
+  const queueMetadata = asRecord(body.queueMetadata)
   const input = applyRuntimeTurnOptionsToInput(Array.isArray(body.input) ? body.input : [], turnOptions)
   if (input.length === 0) {
     throw new Error('runtime/send requires input')
@@ -177,6 +179,7 @@ export function parseRuntimeSendPayload(payload: unknown): ParsedRuntimeSendPayl
     attachments: body.attachments,
     effort: body.effort,
     turnOptions,
+    queueMetadata,
     payloadSummary: buildRuntimeRequestPayloadSummary({
       threadId,
       cwd,
@@ -187,6 +190,23 @@ export function parseRuntimeSendPayload(payload: unknown): ParsedRuntimeSendPayl
       attachments: body.attachments,
       turnOptions,
     }),
+  }
+}
+
+export function createDurableRuntimeSendPayload(
+  parsed: ParsedRuntimeSendPayload,
+): Record<string, unknown> {
+  return {
+    requestId: parsed.requestId,
+    clientMessageId: parsed.clientMessageId,
+    collaborationMode: parsed.mode,
+    model: parsed.model,
+    cwd: parsed.cwd,
+    threadId: parsed.threadId,
+    input: parsed.input,
+    attachments: parsed.attachments,
+    effort: parsed.effort,
+    ...(parsed.queueMetadata ? { queueMetadata: parsed.queueMetadata } : {}),
   }
 }
 

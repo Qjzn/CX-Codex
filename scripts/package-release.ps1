@@ -86,6 +86,7 @@ $releaseItems = @(
   "CODE_OF_CONDUCT.md",
   "CONTRIBUTING.md",
   "LICENSE",
+  "PRODUCT_GOAL.md",
   "README.md",
   "RELEASE.md",
   "SECURITY.md",

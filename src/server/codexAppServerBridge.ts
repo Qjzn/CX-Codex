@@ -64,6 +64,7 @@ function getSharedBridgeState(): SharedBridgeState {
 
 export type CodexBridgeMiddlewareOptions = {
   remoteAccessProtected?: boolean
+  runtimeDatabasePath?: string
 }
 
 export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOptions = {}): CodexBridgeMiddleware {
@@ -79,7 +80,9 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     statusDiagnostics,
     hookDiagnosticsCache,
     windowsSandboxReadinessCache,
-  } = createCodexBridgeMiddlewareState(appServer)
+  } = createCodexBridgeMiddlewareState(appServer, {
+    runtimeDatabasePath: options.runtimeDatabasePath,
+  })
   appServer.setRestartProtectionReader(() => Math.max(
     runtimeStore.getRestartBlockingRequestCount(),
     runtimeStateStore.getActiveThreadCount(),
@@ -95,6 +98,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     reconcileRuntimeThread,
     runtimeReconcileScheduler,
     startRuntimeTurn,
+    startRuntimeTurnSettled,
     interruptRuntimeTurn,
   } = createCodexBridgeRuntimeOperations({
     appServer,
@@ -104,6 +108,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
     threadSearchIndexStore,
     statusDiagnostics,
     getErrorMessage,
+    notifyQueuedRequest: (request) => runtimeMessageQueue?.notifyQueuedRequest(request),
     writeWarning: (message, details) => {
       writeBridgeLog('warn', message, details)
     },
@@ -134,7 +139,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
           if (typeof oldestThreadId === 'string') recentLiveRuntimeEventAtMsByThreadId.delete(oldestThreadId)
         }
       }
-      runtimeMessageQueue?.handleRuntimeEvent(event.method, event.threadId)
+      runtimeMessageQueue?.handleRuntimeEvent(event.method, event.threadId, event.params)
       void mobilePushCoordinator.handleRuntimeEvent(event).catch((error) => {
         writeBridgeLog('warn', 'Mobile push terminal wake failed', {
           method: event.method,
@@ -147,7 +152,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
   })
   runtimeMessageQueue = new RuntimeMessageQueue({
     store: runtimeStore,
-    startRuntimeTurn,
+    startRuntimeTurn: startRuntimeTurnSettled,
     rpc: (method, params) => appServer.rpc(method, params),
     publishNotification: (notification) => { publishBridgeNotification(notification) },
     getErrorMessage,
@@ -225,6 +230,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
         enqueueRuntimeTurn: (payload) => runtimeMessageQueue!.enqueue(payload),
         listRuntimeQueue: (threadId = '') => runtimeMessageQueue!.list(threadId),
         cancelQueuedRuntimeTurn: (requestId) => runtimeMessageQueue!.cancel(requestId),
+        restoreQueuedRuntimeTurn: (requestId) => runtimeMessageQueue!.restore(requestId),
         retryQueuedRuntimeTurn: (requestId) => runtimeMessageQueue!.retry(requestId),
         reorderQueuedRuntimeTurns: (threadId, requestIds) => runtimeMessageQueue!.reorder(threadId, requestIds),
         augmentThreadListRpcResult,

@@ -7,7 +7,7 @@
       :groups="groups"
       selected-thread-id="thread-gateway"
       :show-github="true"
-      cwd="E:/javaword/CXCodex/codexui"
+      cwd="E:/workspace/CXCodex/codexui"
       :initial-mode="typeAheadFixture ? 'files' : 'root'"
       @close="isOpen = false"
       @select-thread="onSelectThread"
@@ -61,13 +61,13 @@ if (typeAheadFixture) window.fetch = typeAheadFetch
 const groups: UiProjectGroup[] = [
   {
     projectName: 'CX-Codex',
-    workspaceRoot: 'E:/javaword/CXCodex/codexui',
+    workspaceRoot: 'E:/workspace/CXCodex/codexui',
     threads: [
       {
         id: 'thread-active',
         title: '确认工具权限请求',
         projectName: 'CX-Codex',
-        cwd: 'E:/javaword/CXCodex/codexui',
+        cwd: 'E:/workspace/CXCodex/codexui',
         hasWorktree: false,
         createdAtIso: '2026-07-31T08:00:00.000Z',
         updatedAtIso: '2026-07-31T09:00:00.000Z',
@@ -80,7 +80,7 @@ const groups: UiProjectGroup[] = [
         id: 'thread-running',
         title: '优化全局命令菜单',
         projectName: 'CX-Codex',
-        cwd: 'E:/javaword/CXCodex/codexui',
+        cwd: 'E:/workspace/CXCodex/codexui',
         hasWorktree: false,
         createdAtIso: '2026-08-01T09:30:00.000Z',
         updatedAtIso: '2026-08-01T11:00:00.000Z',
@@ -92,7 +92,7 @@ const groups: UiProjectGroup[] = [
         id: 'thread-review',
         title: '审查移动端会话恢复',
         projectName: 'CX-Codex',
-        cwd: 'E:/javaword/CXCodex/codexui',
+        cwd: 'E:/workspace/CXCodex/codexui',
         hasWorktree: false,
         createdAtIso: '2026-08-01T08:00:00.000Z',
         updatedAtIso: '2026-08-01T10:00:00.000Z',
@@ -104,13 +104,13 @@ const groups: UiProjectGroup[] = [
   },
   {
     projectName: '服务端网关',
-    workspaceRoot: 'E:/javaword/gateway',
+    workspaceRoot: 'E:/workspace/gateway',
     threads: [
       {
         id: 'thread-gateway',
         title: '检查事件回放边界',
         projectName: '服务端网关',
-        cwd: 'E:/javaword/gateway',
+        cwd: 'E:/workspace/gateway',
         hasWorktree: false,
         createdAtIso: '2026-07-30T08:00:00.000Z',
         updatedAtIso: '2026-07-30T12:00:00.000Z',

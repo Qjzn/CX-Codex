@@ -23,6 +23,11 @@ export type RpcNotificationReplay = {
 
 export type RpcConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 type RpcRequestOptions = { signal?: AbortSignal }
+type RpcTraceEntry = {
+  method: string
+  startTime: number
+  duration: number
+}
 
 type ServerRequestReplyBody = {
   id: number
@@ -122,6 +127,22 @@ async function fetchWithTimeout(
 }
 
 export async function rpcCall<T>(method: string, params?: unknown, options: RpcRequestOptions = {}): Promise<T> {
+  const startedAt = window.performance.now()
+  try {
+    return await rpcCallUntraced<T>(method, params, options)
+  } finally {
+    const diagnosticsWindow = window as Window & { __cxCodexRpcTrace?: RpcTraceEntry[] }
+    const trace = diagnosticsWindow.__cxCodexRpcTrace ?? []
+    trace.push({
+      method,
+      startTime: Math.round(startedAt),
+      duration: Math.max(0, Math.round(window.performance.now() - startedAt)),
+    })
+    diagnosticsWindow.__cxCodexRpcTrace = trace.slice(-64)
+  }
+}
+
+async function rpcCallUntraced<T>(method: string, params?: unknown, options: RpcRequestOptions = {}): Promise<T> {
   const body: RpcRequestBody = { method, params: params ?? null }
   const timeoutMs = getRpcFetchTimeoutMs(method, params ?? null)
 

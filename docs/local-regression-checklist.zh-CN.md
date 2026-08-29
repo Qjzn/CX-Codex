@@ -1,8 +1,8 @@
 # 本地完整回归测试清单
 
-更新时间：2026-07-05 10:55 Asia/Shanghai。
+初版时间：2026-07-05 10:55 Asia/Shanghai；门禁最近更新：2026-08-08。
 
-本文覆盖当前 `codex/candidate-release-review` 分支和本机 7420 新部署后的完整回归范围。它是执行清单，不是 release notes。
+本文是候选源码和本机 7420 部署的通用执行清单，不绑定某个历史分支，也不是 release notes。实际执行时必须结合 `PRODUCT_GOAL.md` 的当前剩余门槛、`tests.md` 的最新行为契约和当前工作树重新判定；2026-07-05 的具体执行结果只保存在 `docs/local-regression-execution-20260705.zh-CN.md`。
 
 ## 使用方式
 
@@ -36,7 +36,7 @@
 | P0-11 | App Server 健康 | `Invoke-WebRequest http://127.0.0.1:7420/codex-api/health` | HTTP 200，`appServer.running=true` 且 `initialized=true` |
 | P0-12 | 公网映射健康 | `Invoke-WebRequest http://203.0.113.10:17420/health` | HTTP 200，`status=ok`；失败时先定位 FRP/隧道/防火墙，不直接归因前端 |
 | P0-13 | 事件回放端点 | `npm.cmd run test:7420 -- -SkipBrowser -PublicHealthUrl http://203.0.113.10:17420/health` | 本机、公网、`/codex-api/events/replay` 通过 |
-| P0-14 | 短时浸泡 | `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://203.0.113.10:17420` | 无连续健康失败、事件回放序号不倒退、公网未登录 API 始终为 401、无新增 RPC timeout、pending/queued RPC 未超过阈值 |
+| P0-14 | 短时浸泡 | `npm.cmd run test:7420:soak -- -DurationSeconds 60 -IntervalSeconds 15 -PublicBaseUrl http://203.0.113.10:17420` | 每个本机/API/App Server 样本通过，App Server PID 与 Runtime 流代际稳定且健康/回放流 ID 一致，事件序号不倒退，公网未登录 API 始终为 401，RPC pending/queued、待处理服务请求、Runtime 未确定请求、plan-mode turn、新增 timeout 与慢 `thread/list` 均为 0 |
 
 ## P1 协议和发布治理
 
@@ -44,8 +44,8 @@
 | --- | --- | --- | --- |
 | P1-1 | Schema drift 摘要 | 查看 `docs/app-server-schema-audit-summary.json` 和最新 `output/app-server-schema-audit/*/audit-summary.json` | 计数变化时先更新摘要和矩阵；状态保持 `drift-recorded`，不宣称 fully aligned |
 | P1-2 | Protocol matrix | 查看 `docs/app-server-protocol-matrix.zh-CN.md` | P0/P1/P2/P3 边界明确，Thread/MCP/plugin/fs/process/realtime/Windows sandbox 不被误标稳定 |
-| P1-3 | Candidate review | 查看 `docs/candidate-release-review.zh-CN.md` | release gate 证据、官方文档复核、P0/P1/P2 清单和宣传边界完整 |
-| P1-4 | PR review pack | 查看 `docs/candidate-pr-review-pack.zh-CN.md` | PR 正文、候选发布说明、review checklist、P0/P1/P2 issue 草稿和远程 PR 准备命令完整 |
+| P1-3 | 当前发布事实源 | 查看 `PRODUCT_GOAL.md`、`docs/app-server-protocol-matrix.zh-CN.md` 和 `docs/app-server-schema-audit-summary.json` | 目标完成门槛、能力边界与当前 schema drift 相互一致；Release 宣传只引用这些当前事实 |
+| P1-4 | 历史 Candidate 追溯 | 查看 `docs/candidate-release-review.zh-CN.md` 和 `docs/candidate-pr-review-pack.zh-CN.md` | 两份文档明确标注 2026-07-05 历史快照和当前权威入口；只能追溯当时决策，不能作为当前发布验收依据 |
 | P1-5 | Release body | 查看 `.github/release-body.md` | 明确 schema drift 是 candidate-reviewed，不宣称 fully aligned |
 | P1-6 | Security boundary | 查看 `SECURITY.md` 和 `docs/security-hardening.zh-CN.md` | WebSocket experimental/unsupported、远程暴露、API key、日志脱敏和权限边界清楚 |
 
@@ -80,7 +80,7 @@
 
 | 编号 | 项目 | 命令 / 动作 | 通过标准 |
 | --- | --- | --- | --- |
-| P2-12 | 发布前浸泡 | `npm.cmd run test:7420:soak -- -DurationSeconds 7200 -IntervalSeconds 15 -PublicBaseUrl http://203.0.113.10:17420` | 2 小时内无连续健康或事件回放失败、事件序号不倒退、公网未登录 API 始终为 401、无新增 RPC timeout、pending/queued RPC 未超过阈值 |
+| P2-12 | 发布前浸泡 | `npm.cmd run test:7420:soak -- -DurationSeconds 7200 -IntervalSeconds 15 -PublicBaseUrl http://203.0.113.10:17420` | 2 小时内每个本机/API/App Server 与事件回放样本通过，App Server PID 与 Runtime 流代际稳定且健康/回放流 ID 一致，事件序号不倒退，公网未登录 API 始终为 401，RPC pending/queued、待处理服务请求、Runtime 未确定请求、plan-mode turn、新增 timeout 与慢 `thread/list` 均为 0 |
 | P2-13 | 日志审查 | 查看 `C:\Users\example\.codexui\logs` 最新 `.log` | 无重复崩溃、无限重启、明文凭据或异常堆积 |
 
 ## 失败处理规则

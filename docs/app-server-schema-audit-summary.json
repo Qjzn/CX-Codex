@@ -1,8 +1,8 @@
 {
-  "generatedAtIso": "2026-07-04T06:18:43.6547821Z",
+  "generatedAtIso": "2026-08-07T22:06:55.8568574Z",
   "officialDocsUrl": "https://developers.openai.com/codex/app-server",
   "auditCommand": "npm.cmd run audit:app-server-schemas",
-  "auditOutput": "output/app-server-schema-audit/20260704-141839",
+  "auditOutput": "output/app-server-schema-audit/20260808-060651",
   "codexCommand": "codex",
   "baseline": {
     "typescript": "documentation/app-server-schemas/typescript",
@@ -77,6 +77,7 @@
   "reviewStatus": "drift-recorded",
   "notes": [
     "This committed summary is a release-governance checkpoint, not a schema baseline update.",
+    "The complete added and removed name sets in all four comparison groups are identical to the 2026-07-04 audit when regenerated with codex-cli 0.130.0.",
     "Do not copy generated output directories into the repository; regenerate and review before updating documentation/app-server-schemas."
   ]
 }

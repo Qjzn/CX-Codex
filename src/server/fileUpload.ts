@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, realpath, writeFile } from 'node:fs/promises'
 import type { IncomingMessage } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { RequestBodyTooLargeError, readRawBody } from './httpBody.js'
 
 export type ParsedMultipartFileUpload = {
@@ -10,6 +10,7 @@ export type ParsedMultipartFileUpload = {
 }
 
 const FILE_UPLOAD_REQUEST_BODY_LIMIT_BYTES = 50 * 1024 * 1024
+const GENERATED_UPLOAD_DIRECTORY_PATTERN = /^f-[A-Za-z0-9]{6}$/u
 
 export class FileUploadError extends Error {
   constructor(
@@ -20,6 +21,24 @@ export class FileUploadError extends Error {
     super(message)
     this.name = 'FileUploadError'
   }
+}
+
+export type UploadedFileAccessErrorCode = 'not-found' | 'outside-upload-root'
+
+export class UploadedFileAccessError extends Error {
+  readonly code: UploadedFileAccessErrorCode
+
+  constructor(code: UploadedFileAccessErrorCode) {
+    super(code === 'outside-upload-root'
+      ? 'Local path is outside the CX-Codex upload cache.'
+      : 'Uploaded file does not exist.')
+    this.name = 'UploadedFileAccessError'
+    this.code = code
+  }
+}
+
+export type UploadedFileAccessDependencies = {
+  uploadDir?: string
 }
 
 function readUploadEnv(name: string): string {
@@ -35,6 +54,20 @@ export function getFileUploadRequestBodyLimitBytes(): number {
   const configured = Number.parseInt(readUploadEnv('FILE_UPLOAD_MAX_BYTES'), 10)
   if (Number.isFinite(configured) && configured > 0) return configured
   return FILE_UPLOAD_REQUEST_BODY_LIMIT_BYTES
+}
+
+export function getFileUploadDir(): string {
+  return join(tmpdir(), 'codex-web-uploads')
+}
+
+function isPathWithinRoot(rootPath: string, candidatePath: string): boolean {
+  const relativePath = relative(rootPath, candidatePath)
+  return relativePath === '' || (
+    relativePath !== '..'
+    && !relativePath.startsWith(`..\\`)
+    && !relativePath.startsWith('../')
+    && !isAbsolute(relativePath)
+  )
 }
 
 export function bufferIndexOf(buf: Buffer, needle: Buffer, start = 0): number {
@@ -92,6 +125,71 @@ export function parseMultipartFileUpload(body: Buffer, contentType: string): Par
   throw new FileUploadError('No file in request', 400)
 }
 
+export async function resolveUploadedFilePath(
+  candidatePath: string,
+  dependencies: UploadedFileAccessDependencies = {},
+): Promise<string> {
+  if (!isAbsolute(candidatePath)) {
+    throw new UploadedFileAccessError('outside-upload-root')
+  }
+
+  const uploadRoot = resolve(dependencies.uploadDir ?? getFileUploadDir())
+  const normalizedCandidate = resolve(candidatePath)
+  if (!isPathWithinRoot(uploadRoot, normalizedCandidate)) {
+    throw new UploadedFileAccessError('outside-upload-root')
+  }
+
+  const relativeCandidate = relative(uploadRoot, normalizedCandidate)
+  const pathSegments = relativeCandidate.split(sep)
+  const requestedDirectoryName = pathSegments[0] ?? ''
+  const requestedFileName = pathSegments[1] ?? ''
+  if (
+    (pathSegments.length !== 1 && pathSegments.length !== 2)
+    || !GENERATED_UPLOAD_DIRECTORY_PATTERN.test(requestedDirectoryName)
+    || (pathSegments.length === 2 && (
+      !requestedFileName
+      || basename(requestedFileName) !== requestedFileName
+    ))
+  ) {
+    throw new UploadedFileAccessError('outside-upload-root')
+  }
+
+  try {
+    const canonicalUploadRoot = await realpath(uploadRoot)
+    const uploadDirectoryEntry = (await readdir(canonicalUploadRoot, { withFileTypes: true }))
+      .find((entry) => (
+        entry.isDirectory()
+        && !entry.isSymbolicLink()
+        && GENERATED_UPLOAD_DIRECTORY_PATTERN.test(entry.name)
+        && entry.name === requestedDirectoryName
+      ))
+    if (!uploadDirectoryEntry) throw new UploadedFileAccessError('not-found')
+
+    const canonicalUploadDirectory = await realpath(join(canonicalUploadRoot, uploadDirectoryEntry.name))
+    if (
+      canonicalUploadDirectory === canonicalUploadRoot
+      || !canonicalUploadDirectory.startsWith(`${canonicalUploadRoot}${sep}`)
+    ) {
+      throw new UploadedFileAccessError('outside-upload-root')
+    }
+    if (pathSegments.length === 1) return canonicalUploadDirectory
+
+    const fileEntry = (await readdir(canonicalUploadDirectory, { withFileTypes: true }))
+      .find((entry) => entry.isFile() && !entry.isSymbolicLink() && entry.name === requestedFileName)
+    if (!fileEntry) throw new UploadedFileAccessError('not-found')
+
+    const canonicalCandidate = await realpath(join(canonicalUploadDirectory, fileEntry.name))
+    if (!canonicalCandidate.startsWith(`${canonicalUploadDirectory}${sep}`)) {
+      throw new UploadedFileAccessError('outside-upload-root')
+    }
+
+    return canonicalCandidate
+  } catch (error) {
+    if (error instanceof UploadedFileAccessError) throw error
+    throw new UploadedFileAccessError('not-found')
+  }
+}
+
 export async function readRequestBody(req: IncomingMessage, options: { maxBytes?: number } = {}): Promise<Buffer> {
   const maxBytes = options.maxBytes ?? getFileUploadRequestBodyLimitBytes()
   try {
@@ -106,7 +204,7 @@ export async function readRequestBody(req: IncomingMessage, options: { maxBytes?
 
 export async function writeUploadedFile(
   upload: ParsedMultipartFileUpload,
-  uploadDir = join(tmpdir(), 'codex-web-uploads'),
+  uploadDir = getFileUploadDir(),
 ): Promise<string> {
   await mkdir(uploadDir, { recursive: true })
   const destDir = await mkdtemp(join(uploadDir, 'f-'))
