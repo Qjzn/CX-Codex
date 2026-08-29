@@ -73,83 +73,50 @@
               >
                 <IconTablerBroom class="sidebar-toolbar-icon" />
               </button>
-            </SidebarThreadControls>
-
-            <div
-              class="sidebar-action-grid"
-              :class="{ 'sidebar-action-grid--mobile': isMobile }"
-              aria-label="侧栏快捷操作"
-            >
               <button
-                class="sidebar-action-tile sidebar-action-tile-primary"
+                class="sidebar-toolbar-new-thread-button"
                 type="button"
                 aria-label="新建会话"
                 title="新建会话"
-                @click="isSidebarToolsOpen = false; onStartNewThreadFromToolbar()"
+                @click="onStartNewThreadFromToolbar"
               >
-                <IconTablerFilePencil class="sidebar-action-icon" />
-                <span class="sidebar-action-label">新会话</span>
+                <IconTablerFilePencil class="sidebar-toolbar-icon" />
+                <span>新会话</span>
               </button>
+            </SidebarThreadControls>
+
+            <div class="sidebar-action-grid" aria-label="侧栏快捷操作">
               <button
                 class="sidebar-action-tile"
                 type="button"
                 :aria-pressed="isSidebarSearchVisible"
                 aria-label="搜索会话"
                 title="筛选侧栏会话；Ctrl / Command + K 打开命令菜单，Ctrl / Command + P 搜索文件"
-                @click="isSidebarToolsOpen = false; toggleSidebarSearch()"
+                @click="toggleSidebarSearch"
               >
                 <IconTablerSearch class="sidebar-action-icon" />
                 <span class="sidebar-action-label">搜索</span>
               </button>
               <button
-                class="sidebar-action-tile sidebar-action-tile-workbench"
-                :class="{ 'is-active': isWorkbenchRoute }"
+                class="sidebar-action-tile"
+                :class="{ 'is-active': isSkillsRoute }"
                 type="button"
-                :aria-current="isWorkbenchRoute ? 'page' : undefined"
-                @click="onOpenSidebarTool('workbench')"
+                :aria-current="isSkillsRoute ? 'page' : undefined"
+                @click="onOpenSidebarTool('skills')"
               >
-                <IconTablerFolder class="sidebar-action-icon" />
-                <span class="sidebar-action-label">工作台</span>
+                <IconTablerBolt class="sidebar-action-icon" />
+                <span class="sidebar-action-label">技能</span>
               </button>
-              <div class="sidebar-tools-menu">
-                <button
-                  class="sidebar-action-tile"
-                  :class="{ 'is-active': isSidebarToolsActive }"
-                  type="button"
-                  aria-label="更多工具"
-                  aria-haspopup="menu"
-                  :aria-expanded="isSidebarToolsOpen"
-                  @click="isSidebarToolsOpen = !isSidebarToolsOpen"
-                  @keydown.esc.prevent="isSidebarToolsOpen = false"
-                >
-                  <IconTablerDots class="sidebar-action-icon" />
-                  <span class="sidebar-action-label">工具</span>
-                </button>
-                <div v-if="isSidebarToolsOpen" class="sidebar-tools-menu-panel" role="menu" aria-label="更多工具">
-                  <button v-if="isMobile" class="sidebar-tools-menu-item" type="button" role="menuitem" @click="onOpenSidebarTool('workbench')">
-                    <IconTablerFolder class="sidebar-tools-menu-icon" />
-                    工作台
-                  </button>
-                  <button class="sidebar-tools-menu-item" type="button" role="menuitem" @click="onOpenSidebarTool('skills')">
-                    <IconTablerBolt class="sidebar-tools-menu-icon" />
-                    技能
-                  </button>
-                  <button
-                    v-if="showGithubTrendingProjects"
-                    class="sidebar-tools-menu-item"
-                    type="button"
-                    role="menuitem"
-                    @click="onOpenSidebarTool('github-trending')"
-                  >
-                    <IconTablerGitFork class="sidebar-tools-menu-icon" />
-                    GitHub
-                  </button>
-                  <button class="sidebar-tools-menu-item" type="button" role="menuitem" @click="onOpenSidebarTool('diagnostics')">
-                    <IconTablerSettings class="sidebar-tools-menu-icon" />
-                    诊断
-                  </button>
-                </div>
-              </div>
+              <button
+                class="sidebar-action-tile"
+                :class="{ 'is-active': isGithubTrendingRoute }"
+                type="button"
+                :aria-current="isGithubTrendingRoute ? 'page' : undefined"
+                @click="onOpenSidebarTool('github-trending')"
+              >
+                <IconTablerGitFork class="sidebar-action-icon" />
+                <span class="sidebar-action-label">GitHub</span>
+              </button>
             </div>
 
             <div v-if="isSidebarSearchVisible" class="sidebar-search-bar">
@@ -248,10 +215,6 @@
               <button class="sidebar-settings-row" type="button" :title="SETTINGS_HELP.rollbackCommits" @click="toggleWorktreeGitAutomation">
                 <span class="sidebar-settings-label">回滚时提交变更</span>
                 <span class="sidebar-settings-toggle" :class="{ 'is-on': worktreeGitAutomationEnabled }" />
-              </button>
-              <button class="sidebar-settings-row" type="button" :title="SETTINGS_HELP.githubTrendingProjects" @click="toggleGithubTrendingProjects">
-                <span class="sidebar-settings-label">GitHub 热门项目</span>
-                <span class="sidebar-settings-toggle" :class="{ 'is-on': showGithubTrendingProjects }" />
               </button>
               <RemoteAccessCard />
               <section class="sidebar-settings-section" aria-label="套餐余量">
@@ -360,18 +323,6 @@
                 <p class="sidebar-settings-hint">
                   默认地址：{{ mobileShellDefaultUrlLabel }}
                 </p>
-                <div class="sidebar-settings-row sidebar-settings-row--static">
-                  <span class="sidebar-settings-label">原生网络</span>
-                  <span class="sidebar-settings-value">{{ mobileShellRuntimeNetworkLabel }}</span>
-                </div>
-                <div class="sidebar-settings-row sidebar-settings-row--static">
-                  <span class="sidebar-settings-label">设备状态</span>
-                  <span class="sidebar-settings-value">{{ mobileShellRuntimeDeviceLabel }}</span>
-                </div>
-                <div class="sidebar-settings-row sidebar-settings-row--static">
-                  <span class="sidebar-settings-label">后台运行</span>
-                  <span class="sidebar-settings-value">{{ mobileShellBackgroundRuntimeLabel }}</span>
-                </div>
                 <div class="sidebar-settings-row sidebar-settings-row--static">
                   <span class="sidebar-settings-label">深度休眠通知</span>
                   <span class="sidebar-settings-value">{{ mobileShellDeepSleepPushLabel }}</span>
@@ -659,33 +610,7 @@
         </ContentHeader>
 
         <section class="content-body">
-          <template v-if="isWorkbenchRoute">
-            <WorkspaceWorkbench
-              :project-name="workbenchProjectName"
-              :project-path="workbenchProjectPath"
-              :runtime="newThreadRuntime"
-              :selected-model="selectedModelId"
-              :selected-reasoning-effort="selectedReasoningEffort"
-              :selected-speed-mode="selectedSpeedMode"
-              :selected-collaboration-mode="selectedCollaborationMode"
-              :has-preset="Boolean(currentProjectWorkbenchPreset)"
-              :preset-summary="currentProjectWorkbenchPresetSummary"
-              :status-items="workbenchStatusItems"
-              :templates="workbenchTemplates"
-              :is-sending="isSendingMessage"
-              @run-template="onRunWorkbenchTemplate"
-              @save-preset="onSaveWorkbenchProjectPreset"
-              @apply-preset="onApplyWorkbenchProjectPreset"
-              @open-diagnostics="router.push({ name: 'diagnostics' })"
-              @open-skills="router.push({ name: 'skills' })"
-              @open-github-trending="router.push({ name: 'github-trending' })"
-              @refresh="onWorkbenchRefresh"
-            />
-          </template>
-          <template v-else-if="isDiagnosticsRoute">
-            <DiagnosticsPanel />
-          </template>
-          <template v-else-if="isSkillsRoute">
+          <template v-if="isSkillsRoute">
             <SkillsHub @skills-changed="onSkillsChanged" />
           </template>
           <template v-else-if="isGithubTrendingRoute">
@@ -1066,7 +991,6 @@
     :open="isCommandMenuOpen"
     :groups="projectGroups"
     :selected-thread-id="selectedThreadId"
-    :show-github="showGithubTrendingProjects"
     :cwd="commandMenuCwd"
     :initial-mode="commandMenuInitialMode"
     :mode-request-id="commandMenuModeRequestId"
@@ -1105,9 +1029,7 @@ import SidebarLoadingSkeleton from './components/sidebar/SidebarLoadingSkeleton.
 import IconTablerBolt from './components/icons/IconTablerBolt.vue'
 import IconTablerBroom from './components/icons/IconTablerBroom.vue'
 import IconTablerBookmark from './components/icons/IconTablerBookmark.vue'
-import IconTablerDots from './components/icons/IconTablerDots.vue'
 import IconTablerFilePencil from './components/icons/IconTablerFilePencil.vue'
-import IconTablerFolder from './components/icons/IconTablerFolder.vue'
 import IconTablerGitFork from './components/icons/IconTablerGitFork.vue'
 import IconTablerMicrophone from './components/icons/IconTablerMicrophone.vue'
 import IconTablerRefresh from './components/icons/IconTablerRefresh.vue'
@@ -1220,22 +1142,12 @@ const FavoritesModal = defineAsyncComponent(() => import('./components/content/F
 const CommandMenu = defineAsyncComponent(() => import('./components/content/CommandMenu.vue'))
 const TaskPetPreview = defineAsyncComponent(() => import('./components/mobile/TaskPetPreview.vue'))
 const RemoteAccessCard = defineAsyncComponent(() => import('./components/settings/RemoteAccessCard.vue'))
-const WorkspaceWorkbench = defineAsyncComponent({
-  loader: () => import('./components/content/WorkspaceWorkbench.vue'),
-  loadingComponent: PageLoadingSkeleton,
-  delay: 0,
-})
 const GithubTrendingHub = defineAsyncComponent({
   loader: () => import('./components/content/GithubTrendingHub.vue'),
   loadingComponent: PageLoadingSkeleton,
   delay: 0,
 })
 const ComposerRuntimeDropdown = defineAsyncComponent(() => import('./components/content/ComposerRuntimeDropdown.vue'))
-const DiagnosticsPanel = defineAsyncComponent({
-  loader: () => import('./components/content/DiagnosticsPanel.vue'),
-  loadingComponent: PageLoadingSkeleton,
-  delay: 0,
-})
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
@@ -1259,7 +1171,6 @@ const SETTINGS_HELP = {
   dictationButtonVisible: '控制输入框右侧是否显示语音按钮。',
   dictationAutoSend: '转写后自动发送输入框内容；默认关闭，建议确认后手动发送。',
   rollbackCommits: '开启后每条消息都会生成回滚提交，回滚时会重置到该消息之前的提交。',
-  githubTrendingProjects: '显示或隐藏侧栏里的 GitHub 热门页面入口。',
   dictationLanguage: '选择转写语言，或保持自动识别。',
   allowAllPermissions: '开启后自动批准命令执行、文件变更和 MCP 工具权限请求。',
   commandExecutionPermission: '控制 Codex 请求运行命令时是否自动允许。',
@@ -1390,34 +1301,6 @@ type QuotaReminder = {
 type QuotaCandidate = {
   snapshot: UiRateLimitSnapshot
   window: UiRateLimitWindow
-}
-
-type WorkbenchStatusTone = 'good' | 'warning' | 'danger' | 'neutral'
-
-type WorkbenchStatusItem = {
-  label: string
-  value: string
-  detail?: string
-  tone: WorkbenchStatusTone
-}
-
-type WorkbenchTemplate = {
-  id: string
-  title: string
-  description: string
-  badge: string
-  prompt: string
-  collaborationMode: CollaborationMode
-}
-
-type WorkbenchProjectPreset = {
-  cwd: string
-  modelId: string
-  reasoningEffort: ReasoningEffort | ''
-  speedMode: SpeedMode
-  collaborationMode: CollaborationMode
-  runtime: 'local' | 'worktree'
-  savedAtIso: string
 }
 
 function formatQuotaWindowDuration(windowDurationMins: number | null): string {
@@ -1625,7 +1508,6 @@ let threadExportPromise: Promise<void> | null = null
 const pendingFavoriteJump = ref<{ threadId: string; messageId: string } | null>(null)
 const sidebarSearchQuery = ref('')
 const isSidebarSearchVisible = ref(false)
-const isSidebarToolsOpen = ref(false)
 const isCommandMenuOpen = ref(false)
 const commandMenuInitialMode = ref<'root' | 'files'>('root')
 const commandMenuModeRequestId = ref(0)
@@ -1658,8 +1540,6 @@ const DICTATION_BUTTON_VISIBLE_KEY = 'codex-web-local.dictation-button-visible.v
 const DICTATION_AUTO_SEND_KEY = 'codex-web-local.dictation-auto-send.v1'
 const DICTATION_LANGUAGE_KEY = 'codex-web-local.dictation-language.v1'
 const WORKTREE_GIT_AUTOMATION_KEY = 'codex-web-local.worktree-git-automation.v1'
-const GITHUB_TRENDING_PROJECTS_KEY = 'codex-web-local.github-trending-projects.v1'
-const WORKBENCH_PROJECT_PRESETS_KEY = 'cx-codex.workbench.project-presets.v1'
 const storedSendWithEnterPreference = ref(
   typeof window === 'undefined' ? null : window.localStorage.getItem(SEND_WITH_ENTER_KEY),
 )
@@ -1676,9 +1556,7 @@ const dictationAutoSend = ref(loadBoolPref(DICTATION_AUTO_SEND_KEY, false))
 const dictationLanguage = ref(loadDictationLanguagePref())
 const dictationLanguageOptions = computed(() => buildDictationLanguageOptions())
 const worktreeGitAutomationEnabled = ref(loadBoolPref(WORKTREE_GIT_AUTOMATION_KEY, true))
-const showGithubTrendingProjects = ref(loadBoolPref(GITHUB_TRENDING_PROJECTS_KEY, true))
 const webBridgeSettings = ref<WebBridgeSettings>(DEFAULT_WEB_BRIDGE_SETTINGS)
-const workbenchProjectPresets = ref<Record<string, WorkbenchProjectPreset>>(loadWorkbenchProjectPresets())
 const webBridgeSettingsStatus = ref('')
 let webBridgeSettingsStatusTimer: ReturnType<typeof setTimeout> | null = null
 let favoritesStatusTimer: ReturnType<typeof setTimeout> | null = null
@@ -1835,10 +1713,8 @@ const routableThreadIdSet = computed(() => {
 
 const isHomeRoute = computed(() => route.name === 'home')
 const isThreadRoute = computed(() => route.name === 'thread')
-const isWorkbenchRoute = computed(() => route.name === 'workbench')
 const isSkillsRoute = computed(() => route.name === 'skills')
 const isGithubTrendingRoute = computed(() => route.name === 'github-trending')
-const isDiagnosticsRoute = computed(() => route.name === 'diagnostics')
 const isStandaloneRoute = computed(() => {
   const isNamedFixture = route.name === 'regression-conversation-blocks'
     || route.name === 'regression-sidebar-rows'
@@ -1848,11 +1724,8 @@ const isStandaloneRoute = computed(() => {
   if (isNamedFixture || typeof window === 'undefined') return isNamedFixture
   return window.location.hash.startsWith('#/__regression/')
 })
-const isSidebarToolsActive = computed(() => (
-  isSkillsRoute.value || isGithubTrendingRoute.value || isDiagnosticsRoute.value
-))
 const isNonThreadRoute = computed(() => (
-  isHomeRoute.value || isWorkbenchRoute.value || isSkillsRoute.value || isGithubTrendingRoute.value || isDiagnosticsRoute.value
+  isHomeRoute.value || isSkillsRoute.value || isGithubTrendingRoute.value
 ))
 const displayAppVersion = computed(() => {
   const version = String(appVersion).trim()
@@ -1878,38 +1751,6 @@ const requiresMobileShellServerSetup = computed(() => (
 const mobileShellDefaultUrlLabel = computed(() => (
   mobileShellServerConfig.value?.defaultServerUrl.trim() || '未配置'
 ))
-const mobileShellRuntimeNetworkLabel = computed(() => {
-  const runtime = mobileShellRuntimeInfo.value
-  if (!runtime) return '未读取'
-  const state = runtime.connected ? (runtime.validated ? '可用' : '待验证') : '离线'
-  const transportLabels: Record<string, string> = {
-    wifi: 'Wi-Fi',
-    cellular: '蜂窝',
-    ethernet: '以太网',
-    vpn: 'VPN',
-    bluetooth: '蓝牙',
-    usb: 'USB',
-    none: '无网络',
-    unknown: '未知',
-  }
-  const transport = transportLabels[runtime.transport] ?? runtime.transport
-  return `${state} · ${transport}${runtime.metered ? ' · 计费网络' : ''}`
-})
-const mobileShellRuntimeDeviceLabel = computed(() => {
-  const runtime = mobileShellRuntimeInfo.value
-  if (!runtime) return '未读取'
-  const model = [runtime.manufacturer, runtime.model]
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join(' ')
-  return `${model || 'Android'} · ${runtime.powerSaveMode ? '省电模式' : '标准模式'}`
-})
-const mobileShellBackgroundRuntimeLabel = computed(() => {
-  const runtime = mobileShellRuntimeInfo.value
-  if (!runtime) return '未读取'
-  if (runtime.ignoringBatteryOptimizations) return '已允许持续运行'
-  return runtime.powerSaveMode ? '省电限制中' : '受系统休眠限制'
-})
 const mobileShellDeepSleepPushLabel = computed(() => {
   const diagnostics = mobileShellTaskPetStatus.value?.pushDiagnostics
   if (!diagnostics?.state) return '未读取'
@@ -2123,8 +1964,6 @@ const routeThreadFallbackTitle = computed(() => {
   return firstLine ? firstLine.slice(0, 48) : ''
 })
 const contentTitle = computed(() => {
-  if (isWorkbenchRoute.value) return '工作台'
-  if (isDiagnosticsRoute.value) return '运行诊断'
   if (isSkillsRoute.value) return '技能'
   if (isGithubTrendingRoute.value) return 'GitHub 热门'
   if (isHomeRoute.value) return '新会话'
@@ -2160,8 +1999,6 @@ const pageTitle = computed(() => {
 })
 const headerSubtitle = computed(() => {
   if (isCompactTouchContent.value) return ''
-  if (isWorkbenchRoute.value) return '集中查看状态、复用项目配置，并一键发起标准化任务。'
-  if (isDiagnosticsRoute.value) return '检查后端队列、运行状态和恢复链路。'
   if (isSkillsRoute.value) return '管理已安装技能和当前运行能力。'
   if (isGithubTrendingRoute.value) return '浏览热门仓库、查看介绍，并直接带着项目链接发起提问。'
   if (isHomeRoute.value) return '从已配置工作区快速发起新的 Codex 任务。'
@@ -2559,143 +2396,6 @@ const githubTipsScopeOptions = computed<Array<{ value: GithubTipsScope; label: s
   { value: 'trending-weekly', label: '趋势周榜' },
   { value: 'trending-monthly', label: '趋势月榜' },
 ])
-const workbenchProjectPath = computed(() => {
-  const selected = newThreadCwd.value.trim()
-  if (selected) return selected
-  return newThreadFolderOptions.value[0]?.value?.trim() ?? ''
-})
-const workbenchProjectName = computed(() => {
-  const path = workbenchProjectPath.value
-  if (!path) return '工作台'
-  const option = newThreadFolderOptions.value.find((item) => item.value === path)
-  return option?.label?.trim() || getPathLeafName(path)
-})
-const currentProjectWorkbenchPreset = computed<WorkbenchProjectPreset | null>(() => {
-  const key = normalizeWorkbenchPresetKey(workbenchProjectPath.value)
-  if (!key) return null
-  return workbenchProjectPresets.value[key] ?? null
-})
-const currentProjectWorkbenchPresetSummary = computed(() => {
-  const preset = currentProjectWorkbenchPreset.value
-  if (!preset) return ''
-  const parts = [
-    preset.modelId || '默认模型',
-    formatReasoningEffortLabel(preset.reasoningEffort),
-    preset.speedMode === 'fast' ? '快速' : '标准',
-    preset.collaborationMode === 'plan' ? '计划' : '执行',
-    preset.runtime === 'worktree' ? '新工作树' : '当前项目',
-  ]
-  return `${formatWorkbenchSavedAt(preset.savedAtIso)} 保存 · ${parts.join(' · ')}`
-})
-const workbenchStatusItems = computed<WorkbenchStatusItem[]>(() => {
-  const connectionState = realtimeConnectionState.value
-  const hasConnectionIssue = Boolean(syncError.value || notificationStale.value || syncLagging.value)
-  const connectionTone: WorkbenchStatusTone = syncError.value
-    ? 'danger'
-    : hasConnectionIssue
-      ? 'warning'
-      : connectionState === 'connected'
-        ? 'good'
-        : 'neutral'
-  const pendingRequestCount = selectedThreadServerRequests.value.length
-  const queuedMessageCount = selectedThreadQueuedMessages.value.length
-  const runtimeState = selectedThreadRuntimeStatus.value?.executionState?.trim() ?? ''
-  const taskTone: WorkbenchStatusTone = pendingRequestCount > 0
-    ? 'warning'
-    : selectedThreadExecutionActive.value || isSendingMessage.value
-      ? 'warning'
-      : 'good'
-  const taskValue = pendingRequestCount > 0
-    ? `${String(pendingRequestCount)} 个待确认`
-    : selectedThreadExecutionActive.value
-      ? '运行中'
-      : isSendingMessage.value
-        ? '发送中'
-        : queuedMessageCount > 0
-          ? `${String(queuedMessageCount)} 条排队`
-          : '空闲'
-  const quota = quotaReminder.value
-  const quotaTone: WorkbenchStatusTone = quota?.tone === 'danger'
-    ? 'danger'
-    : quota?.tone === 'warning'
-      ? 'warning'
-      : 'good'
-
-  return [
-    {
-      label: '连接',
-      value: formatConnectionStateLabel(connectionState),
-      detail: syncError.value || (notificationStale.value ? '通知流可能断档，可刷新恢复。' : syncLagging.value ? '同步有延迟。' : '实时事件正常。'),
-      tone: connectionTone,
-    },
-    {
-      label: '任务',
-      value: taskValue,
-      detail: runtimeState ? `后端状态：${runtimeState}` : '当前没有阻塞任务。',
-      tone: taskTone,
-    },
-    {
-      label: '额度',
-      value: quota?.title ?? '正常',
-      detail: quota?.detail ?? '未触发额度提醒。',
-      tone: quotaTone,
-    },
-    {
-      label: '能力',
-      value: `${String(enabledComposerSkills.value.length)} 技能 · ${String(availableComposerPlugins.value.length)} 插件`,
-      detail: isLoadingComposerPlugins.value ? '正在读取插件状态。' : '插件会作为本轮偏好传给 Codex。',
-      tone: 'neutral',
-    },
-  ]
-})
-const workbenchTemplates = computed<WorkbenchTemplate[]>(() => {
-  const projectName = workbenchProjectName.value
-  const projectPath = workbenchProjectPath.value || '当前工作区'
-  const context = `项目：${projectName}\n目录：${projectPath}`
-  return [
-    {
-      id: 'mobile-regression',
-      title: '移动端回归测试',
-      description: '检查最近改动、截图取证、发现问题后做小范围修复。',
-      badge: '测试',
-      collaborationMode: 'execute',
-      prompt: `${context}\n\n请对这个项目执行一次移动端前端回归测试，重点覆盖对话输入区、加号菜单、计划模式、插件选择、状态栏、文档查看和下载。使用浏览器自动化记录复现步骤和截图；如果发现确定问题，请做小范围修复并运行必要构建校验。不要自动重启 7420，除非我再次明确要求。`,
-    },
-    {
-      id: 'runtime-diagnostics',
-      title: '稳定性诊断',
-      description: '排查卡在思考中、无回复、队列堆积和慢调用风险。',
-      badge: '诊断',
-      collaborationMode: 'execute',
-      prompt: `${context}\n\n请全面检查 7420 当前稳定性风险：运行日志、后端队列、Runtime Store、通知 replay、发送/停止/恢复链路和前端状态收敛逻辑。先给出真实原因证据，再实施低风险修复，并用构建和前端回归验证。不要通过重启掩盖问题。`,
-    },
-    {
-      id: 'release-readiness',
-      title: '发布前检查',
-      description: '整理变更、构建验证、检查敏感信息和发布风险。',
-      badge: '发布',
-      collaborationMode: 'execute',
-      prompt: `${context}\n\n请做一次发布前检查：审查未提交改动、确认没有泄露本地隐私和凭据、运行构建/静态校验、列出版本发布风险和建议。只在确认安全后再给出提交与发布建议，不要立即推送或发布。`,
-    },
-    {
-      id: 'product-ux-audit',
-      title: '产品体验走查',
-      description: '从真实用户工作流找出能提升效率的下一批改造。',
-      badge: '体验',
-      collaborationMode: 'plan',
-      prompt: `${context}\n\n请从长期稳定产品角度审查当前 CX-Codex 使用体验，重点看移动端阅读、会话列表、任务恢复、插件/技能、文件查看下载、GitHub 运营入口。给出按收益排序的下一批设计方案，并标出哪些适合立即实施。`,
-    },
-    {
-      id: 'github-issues',
-      title: 'GitHub Issues 处理',
-      description: '读取待处理 issue，先复现再给修复方案。',
-      badge: '运营',
-      collaborationMode: 'execute',
-      prompt: `${context}\n\n请检查当前 GitHub 项目的最新 Issues，优先处理最近两个未解决问题。要求：先复现或确认原因，再做低风险修复，前端回归测试通过后再准备回复内容。不要泄露我的本地路径、token 或个人信息。`,
-    },
-  ]
-})
-
 watch(
   () => [
     composerThreadContextId.value,
@@ -2867,7 +2567,7 @@ function cancelPendingTrendingProjectsLoad(): void {
 }
 
 function scheduleTrendingProjectsLoad(priority: 'idle' | 'immediate' = 'idle'): void {
-  if (!showGithubTrendingProjects.value || !isGithubTrendingRoute.value) return
+  if (!isGithubTrendingRoute.value) return
   const targetScope = githubTipsScope.value
   if (
     lastLoadedGithubTipsScope.value === targetScope &&
@@ -3607,8 +3307,7 @@ function toggleSidebarSearch(): void {
   }
 }
 
-function onOpenSidebarTool(routeName: 'workbench' | 'skills' | 'github-trending' | 'diagnostics'): void {
-  isSidebarToolsOpen.value = false
+function onOpenSidebarTool(routeName: 'skills' | 'github-trending'): void {
   closeMobileSidebarAfterNavigation()
   void router.push({ name: routeName })
 }
@@ -3633,7 +3332,6 @@ function openCommandMenu(initialMode: 'root' | 'files' = 'root'): void {
   const resolvedMode = initialMode === 'files' && commandMenuCwd.value ? 'files' : 'root'
   isFavoritesModalVisible.value = false
   isSettingsOpen.value = false
-  isSidebarToolsOpen.value = false
   isSidebarSearchVisible.value = false
   sidebarSearchQuery.value = ''
   commandMenuInitialMode.value = resolvedMode
@@ -4055,10 +3753,6 @@ function dismissTopmostTransientSurface(): boolean {
     isSettingsOpen.value = false
     return true
   }
-  if (isSidebarToolsOpen.value) {
-    isSidebarToolsOpen.value = false
-    return true
-  }
   if (isSidebarSearchVisible.value) {
     isSidebarSearchVisible.value = false
     sidebarSearchQuery.value = ''
@@ -4333,73 +4027,6 @@ async function onAskTrendingProject(project: GithubTrendingProject): Promise<voi
   })
 }
 
-async function onWorkbenchRefresh(): Promise<void> {
-  await refreshAll({ loadMessages: false })
-  const message = desktopStateError.value.trim()
-  if (message) {
-    showProductToast(message, 'danger', 4200)
-    return
-  }
-  showProductToast('工作台状态已刷新。', 'success')
-}
-
-function onSaveWorkbenchProjectPreset(): void {
-  const cwd = workbenchProjectPath.value.trim()
-  if (!cwd) {
-    showProductToast('请先选择一个工作目录。', 'warning')
-    return
-  }
-  const key = normalizeWorkbenchPresetKey(cwd)
-  if (!key) return
-  saveWorkbenchProjectPresets({
-    ...workbenchProjectPresets.value,
-    [key]: {
-      cwd,
-      modelId: selectedModelId.value,
-      reasoningEffort: selectedReasoningEffort.value,
-      speedMode: selectedSpeedMode.value,
-      collaborationMode: selectedCollaborationMode.value,
-      runtime: newThreadRuntime.value,
-      savedAtIso: new Date().toISOString(),
-    },
-  })
-  showProductToast('已保存该项目默认配置。', 'success')
-}
-
-function onApplyWorkbenchProjectPreset(): void {
-  const preset = currentProjectWorkbenchPreset.value
-  if (!preset) {
-    showProductToast('当前项目还没有保存默认配置。', 'warning')
-    return
-  }
-  if (preset.modelId.trim()) setSelectedModelId(preset.modelId)
-  setSelectedReasoningEffort(preset.reasoningEffort)
-  setSelectedCollaborationMode(preset.collaborationMode)
-  void updateSelectedSpeedMode(preset.speedMode)
-  newThreadRuntime.value = preset.runtime
-  showProductToast('已应用该项目默认配置。', 'success')
-}
-
-async function onRunWorkbenchTemplate(templateId: string): Promise<void> {
-  const template = workbenchTemplates.value.find((item) => item.id === templateId)
-  if (!template || isSendingMessage.value) return
-  if (!newThreadCwd.value.trim() && workbenchProjectPath.value.trim()) {
-    newThreadCwd.value = workbenchProjectPath.value.trim()
-  }
-  const threadId = await submitFirstMessageForNewThread(
-    template.prompt,
-    [],
-    [],
-    [],
-    template.collaborationMode,
-  )
-  if (threadId) {
-    showProductToast('已发起工作台任务。', 'success')
-  } else {
-    showProductToast('任务未发出，请检查工作目录或连接状态。', 'warning')
-  }
-}
-
 function onEditQueuedMessage(messageId: string): void {
   const composer = threadComposerRef.value
   if (!composer) return
@@ -4650,7 +4277,7 @@ async function loadTrendingProjects(scope: GithubTipsScope = githubTipsScope.val
   try {
     const rows = await getGithubProjectsForScope(scope, 10)
     if (requestToken !== trendingProjectsRequestToken) return
-    if (!showGithubTrendingProjects.value || !isGithubTrendingRoute.value) return
+    if (!isGithubTrendingRoute.value) return
     if (scope !== githubTipsScope.value) return
     trendingProjects.value = rows
     lastLoadedGithubTipsScope.value = scope
@@ -4764,88 +4391,6 @@ function loadBoolPref(key: string, fallback: boolean): boolean {
   return v === '1'
 }
 
-function normalizeWorkbenchPresetKey(cwd: string): string {
-  return cwd.trim().toLowerCase()
-}
-
-function isWorkbenchProjectPreset(value: unknown): value is WorkbenchProjectPreset {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as Partial<WorkbenchProjectPreset>
-  return typeof candidate.cwd === 'string'
-    && typeof candidate.modelId === 'string'
-    && (candidate.reasoningEffort === ''
-      || candidate.reasoningEffort === 'none'
-      || candidate.reasoningEffort === 'minimal'
-      || candidate.reasoningEffort === 'low'
-      || candidate.reasoningEffort === 'medium'
-      || candidate.reasoningEffort === 'high'
-      || candidate.reasoningEffort === 'xhigh'
-      || candidate.reasoningEffort === 'max'
-      || candidate.reasoningEffort === 'ultra')
-    && (candidate.speedMode === 'standard' || candidate.speedMode === 'fast')
-    && (candidate.collaborationMode === 'execute' || candidate.collaborationMode === 'plan')
-    && (candidate.runtime === 'local' || candidate.runtime === 'worktree')
-    && typeof candidate.savedAtIso === 'string'
-}
-
-function loadWorkbenchProjectPresets(): Record<string, WorkbenchProjectPreset> {
-  if (typeof window === 'undefined') return {}
-  const raw = window.localStorage.getItem(WORKBENCH_PROJECT_PRESETS_KEY)
-  if (!raw) return {}
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    if (!parsed || typeof parsed !== 'object') return {}
-    const next: Record<string, WorkbenchProjectPreset> = {}
-    for (const [key, value] of Object.entries(parsed)) {
-      if (!isWorkbenchProjectPreset(value)) continue
-      const normalizedKey = normalizeWorkbenchPresetKey(key || value.cwd)
-      if (normalizedKey) next[normalizedKey] = value
-    }
-    return next
-  } catch {
-    return {}
-  }
-}
-
-function saveWorkbenchProjectPresets(next: Record<string, WorkbenchProjectPreset>): void {
-  workbenchProjectPresets.value = next
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(WORKBENCH_PROJECT_PRESETS_KEY, JSON.stringify(next))
-}
-
-function formatReasoningEffortLabel(value: ReasoningEffort | ''): string {
-  const labels: Record<string, string> = {
-    none: '无',
-    minimal: '极低',
-    low: '低',
-    medium: '中',
-    high: '高',
-    xhigh: '超高',
-    max: '最高',
-    ultra: '极致',
-  }
-  return labels[value] ?? '智能'
-}
-
-function formatWorkbenchSavedAt(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '最近'
-  return date.toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-function formatConnectionStateLabel(value: string): string {
-  if (value === 'connected') return '实时连接'
-  if (value === 'connecting') return '连接中'
-  if (value === 'reconnecting') return '重连中'
-  if (value === 'disconnected') return '已断开'
-  return value || '未知'
-}
-
 function showProductToast(
   message: string,
   tone: ProductToastTone = 'info',
@@ -4936,11 +4481,6 @@ function toggleDictationAutoSend(): void {
 function toggleWorktreeGitAutomation(): void {
   worktreeGitAutomationEnabled.value = !worktreeGitAutomationEnabled.value
   window.localStorage.setItem(WORKTREE_GIT_AUTOMATION_KEY, worktreeGitAutomationEnabled.value ? '1' : '0')
-}
-
-function toggleGithubTrendingProjects(): void {
-  showGithubTrendingProjects.value = !showGithubTrendingProjects.value
-  window.localStorage.setItem(GITHUB_TRENDING_PROJECTS_KEY, showGithubTrendingProjects.value ? '1' : '0')
 }
 
 function onDictationLanguageChange(nextValue: string): void {
@@ -5228,23 +4768,7 @@ watch(
 watch(
   () => githubTipsScope.value,
   () => {
-    if (!showGithubTrendingProjects.value || !isGithubTrendingRoute.value) return
-    scheduleTrendingProjectsLoad()
-  },
-)
-
-watch(
-  () => showGithubTrendingProjects.value,
-  (enabled) => {
-    cancelPendingTrendingProjectsLoad()
-    if (!enabled) {
-      trendingProjectsRequestToken += 1
-      isTrendingProjectsLoading.value = false
-      trendingProjects.value = []
-      trendingProjectsError.value = ''
-      lastLoadedGithubTipsScope.value = ''
-      return
-    }
+    if (!isGithubTrendingRoute.value) return
     scheduleTrendingProjectsLoad()
   },
 )
@@ -5656,54 +5180,11 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   @apply grid grid-cols-3 gap-1;
 }
 
-.sidebar-tools-menu {
-  @apply relative min-w-0;
-}
-
-.sidebar-tools-menu > .sidebar-action-tile {
-  @apply w-full;
-}
-
-.sidebar-tools-menu-panel {
-  @apply absolute left-0 top-[calc(100%+0.25rem)] z-20 flex min-w-32 flex-col gap-0.5 border p-1;
-  border-radius: var(--ui-radius-control);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  box-shadow: 0 4px 8px -6px rgba(31, 41, 55, 0.28);
-}
-
-.sidebar-tools-menu-item {
-  @apply flex min-h-8 items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors duration-150;
-  color: var(--ui-text-secondary);
-}
-
-.sidebar-tools-menu-item:hover,
-.sidebar-tools-menu-item:focus-visible {
-  background: var(--ui-bg-row-hover);
-  color: var(--ui-text-primary);
-}
-
-.sidebar-tools-menu-icon {
-  @apply h-3.5 w-3.5 shrink-0;
-  color: var(--ui-text-tertiary);
-}
-
 .sidebar-action-tile {
   @apply flex min-h-9 min-w-0 flex-row items-center justify-center gap-1.5 border border-transparent bg-transparent px-1.5 py-1 text-[11px] font-medium transition-[background-color,border-color,color] duration-150;
   border-radius: var(--ui-radius-control);
   color: var(--ui-text-secondary);
   touch-action: manipulation;
-}
-
-.sidebar-action-tile-primary {
-  @apply col-span-full justify-start px-2.5 text-[13px] font-semibold;
-  border-color: color-mix(in srgb, var(--ui-text-primary) 7%, transparent);
-  background: color-mix(in srgb, var(--ui-text-primary) 4%, transparent);
-  color: var(--ui-text-primary);
-}
-
-.sidebar-action-tile-primary .sidebar-action-icon {
-  color: var(--ui-accent);
 }
 
 .sidebar-action-tile[aria-pressed='true'],
@@ -5780,6 +5261,24 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   border-color: transparent;
   background: transparent;
   color: var(--ui-text-tertiary);
+}
+
+.sidebar-toolbar-new-thread-button {
+  @apply ml-auto inline-flex h-9 items-center justify-center gap-1.5 border px-3 text-xs font-semibold transition-colors duration-150;
+  border-radius: var(--ui-radius-control);
+  border-color: var(--ui-border-subtle);
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
+}
+
+.sidebar-toolbar-new-thread-button:hover,
+.sidebar-toolbar-new-thread-button:focus-visible {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
+}
+
+.sidebar-toolbar-new-thread-button .sidebar-toolbar-icon {
+  color: var(--ui-accent);
 }
 
 .sidebar-toolbar-icon {
@@ -6222,14 +5721,6 @@ function onEditPendingNewThreadMessage(messageId: string): void {
     width: 2.75rem;
     height: 2.75rem;
   }
-}
-
-.sidebar-action-grid--mobile {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.sidebar-action-grid--mobile .sidebar-action-tile-workbench {
-  display: none;
 }
 
 .content-grid {
@@ -6860,7 +6351,8 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 @media (max-width: 767px), (pointer: coarse) {
-  .sidebar-action-tile {
+  .sidebar-action-tile,
+  .sidebar-toolbar-new-thread-button {
     min-height: 44px;
   }
 }

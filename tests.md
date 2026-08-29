@@ -16860,3 +16860,23 @@ Verification:
 
 - 修复前 Actions run `33239061508` 在 server module smoke 的 `assert.ok(ripgrepCommand)` 失败，且尚未进入 Android 签名或 Release 发布步骤。
 - 回滚时同时撤销 Release workflow 的安装步骤、治理断言与本节；不得通过删除文件搜索烟测绕过依赖缺失。
+
+## 侧栏快捷入口精简（2026-08-29）
+
+### Expected behavior
+
+- 侧栏顶部从左到右显示侧栏展开/收起、全部已读和靠右的新会话按钮。
+- 第二行固定显示搜索、技能、GitHub 三个直接入口，不再显示工具菜单、工作台或诊断入口。
+- `/workbench` 与 `/diagnostics` 不再是前端路由，旧地址回到新会话页；后端诊断接口不受影响。
+- 移动端连接设置不再展示原生网络、设备状态、后台运行三条静态状态；深度休眠通知和调整后台运行操作继续保留。
+
+### Reusable verification
+
+- `npm run build:frontend`
+- `npm run test:7420:frontend -- -SourceOnly`
+- `CX_CODEX_PLAYWRIGHT_MODULE=<playwright-package> node scripts/verify-sidebar-quick-actions.mjs --base-url <candidate-url> --output-directory <evidence-dir>`
+- 在桌面与手机宽度展开侧栏，确认三项快捷入口顺序、激活态、触控尺寸和无横向溢出；打开设置确认三条静态状态已移除。
+
+### Rollback
+
+- 恢复侧栏工具菜单、相关前端路由与页面组件，并同步恢复本节和前端回归断言；不要回退底层诊断 API 或 Android 后台运行能力。
