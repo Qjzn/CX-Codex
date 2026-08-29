@@ -395,6 +395,25 @@ function Assert-QuietWorkbenchConversationSource {
   Assert-True ($source -match "isRequestPanelExpanded\.value\s*=\s*!hasLiveOverlay") "new pending requests must expand when no live process already owns their direct actions"
 }
 
+function Assert-SemanticConversationMarkdownSource {
+  $markdownSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\utils\conversationMarkdown.ts"
+  )
+  $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\ThreadConversation.vue"
+  )
+  $fixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\ConversationRegressionFixture.vue"
+  )
+
+  Assert-True ($markdownSource -match "import\s+MarkdownIt\s+from\s+'markdown-it'" -and $markdownSource -match "html:\s*false") "conversation Markdown must use the installed parser with raw HTML disabled"
+  Assert-True ($markdownSource -match "kind:\s*'heading'" -and $markdownSource -match "kind:\s*'list'" -and $markdownSource -match "kind:\s*'blockquote'" -and $markdownSource -match "kind:\s*'thematicBreak'") "conversation Markdown must expose headings, lists, quotes, and thematic breaks as semantic blocks"
+  Assert-True ($conversationSource -match "parseConversationMarkdownBlocks" -and $conversationSource -match "block\.kind\s*===\s*'heading'" -and $conversationSource -match "block\.kind\s*===\s*'list'" -and $conversationSource -match "block\.kind\s*===\s*'blockquote'") "the conversation renderer must consume semantic Markdown blocks"
+  Assert-True ($conversationSource -notmatch 'v-else-if="isStreamingAgentMessage\(entry\.message\)"[\s\S]{0,180}?\{\{\s*entry\.message\.text\s*\}\}') "streaming assistant output must use the same Markdown path as settled output"
+  Assert-True ($conversationSource -match "\.message-card\[data-role='assistant'\][\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;") "assistant replies must read as document content instead of nested cards"
+  Assert-True ($fixtureSource -match "markdownSemantic" -and $fixtureSource -match "## 三、关键验证结果" -and $fixtureSource -match "- 运行时间：7200 秒") "the conversation fixture must retain a representative semantic Markdown report"
+}
+
 function Assert-QuietWorkbenchComposerSource {
   $styleSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\style.css")
   $composerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
@@ -4835,6 +4854,53 @@ JSON.stringify((() => {
   Save-RegressionScreenshot -Session $Session -Name 'conversation-markdown-image-recovery-phone' | Out-Null
 }
 
+function Assert-ConversationMarkdownSemantics {
+  param(
+    [string]$Session,
+    [string]$ViewportName
+  )
+
+  $metrics = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const message = document.querySelector('[data-message-id="fixture-markdown-semantic"]');
+  const card = message?.querySelector('.message-card[data-role="assistant"]');
+  const headingTwo = card?.querySelector('h2.message-markdown-heading');
+  const headingThree = card?.querySelector('h3.message-markdown-heading');
+  const bulletList = card?.querySelector('ul.message-markdown-list');
+  const orderedList = card?.querySelector('ol.message-markdown-list');
+  const quote = card?.querySelector('blockquote.message-markdown-blockquote');
+  const inlineCode = card?.querySelector('code.message-inline-code');
+  const cardStyle = card instanceof HTMLElement ? getComputedStyle(card) : null;
+  const bulletStyle = bulletList instanceof HTMLElement ? getComputedStyle(bulletList) : null;
+  return {
+    ready: card instanceof HTMLElement,
+    headingTwo: headingTwo?.textContent?.trim() || '',
+    headingThree: headingThree?.textContent?.trim() || '',
+    bulletCount: bulletList?.querySelectorAll(':scope > li').length || 0,
+    orderedCount: orderedList?.querySelectorAll(':scope > li').length || 0,
+    quote: quote?.textContent?.trim() || '',
+    inlineCode: inlineCode?.textContent?.trim() || '',
+    bulletStyle: bulletStyle?.listStyleType || '',
+    rawHeadingMarker: card?.textContent?.includes('## 三、关键验证结果') === true,
+    rawBulletMarker: Array.from(card?.querySelectorAll('p') || []).some((node) => (node.textContent || '').trim().startsWith('- ')),
+    borderWidth: cardStyle?.borderTopWidth || '',
+    backgroundColor: cardStyle?.backgroundColor || '',
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  };
+})())
+'@
+
+  Assert-True ($metrics.ready -eq $true) "$ViewportName semantic Markdown fixture did not render"
+  Assert-True ($metrics.headingTwo -eq '三、关键验证结果' -and $metrics.headingThree -eq '报告位置') "$ViewportName semantic Markdown headings were not rendered as headings"
+  Assert-True ([int]$metrics.bulletCount -eq 4 -and [int]$metrics.orderedCount -eq 2) "$ViewportName semantic Markdown lists have the wrong item count"
+  Assert-True ($metrics.bulletStyle -eq 'disc') "$ViewportName unordered list marker is not visible"
+  Assert-True ($metrics.quote -eq '本地链路验证通过。' -and $metrics.inlineCode -eq 'passed: true') "$ViewportName quote or inline code semantics are missing"
+  Assert-True ($metrics.rawHeadingMarker -eq $false -and $metrics.rawBulletMarker -eq $false) "$ViewportName leaked raw Markdown block markers"
+  Assert-True ($metrics.borderWidth -eq '0px' -and $metrics.backgroundColor -eq 'rgba(0, 0, 0, 0)') "$ViewportName assistant reply still renders as a nested card"
+  Assert-True ($metrics.hasHorizontalOverflow -eq $false) "$ViewportName semantic Markdown introduced horizontal overflow"
+  Save-RegressionScreenshot -Session $Session -Name "conversation-markdown-semantics-$ViewportName" | Out-Null
+}
+
 function Assert-ConversationFixture {
   param(
     [object]$Metrics,
@@ -5241,8 +5307,8 @@ JSON.stringify((() => {
     Assert-True ($settled.hasReturnToLatest -eq $true) "fresh user scrolling after resume lost the return-to-latest affordance"
   }
   if ($Mode -ne 'bottom') {
-    Assert-True ($settled.returnToLatestLabel -eq '最新输出') "phone return-to-latest action is missing its visible new-output label"
-    Assert-True ($settled.returnToLatestLabelDisplay -ne 'none' -and [int]$settled.returnToLatestWidth -ge 96) "phone return-to-latest new-output label remained visually hidden"
+    Assert-True ($settled.returnToLatestLabel -eq '最新输出') "phone return-to-latest action is missing its accessible new-output label"
+    Assert-True ($settled.returnToLatestLabelDisplay -ne 'none' -and [int]$settled.returnToLatestWidth -ge 44 -and [int]$settled.returnToLatestWidth -le 48) "phone return-to-latest action did not retain its compact circular target"
   }
 }
 
@@ -7698,6 +7764,7 @@ Assert-StableHandsetViewportSource
 Assert-QuietWorkbenchShellSource
 Assert-QuietWorkbenchSidebarSource
 Assert-QuietWorkbenchConversationSource
+Assert-SemanticConversationMarkdownSource
 Assert-QuietWorkbenchComposerSource
 Assert-ReversibleThreadArchiveSource
 Assert-ForegroundResumeScrollIntentSource
@@ -7973,6 +8040,17 @@ Assert-ThreadAttentionChromeSource
   Assert-Page -Page $markdownImageFixture -Name "conversation markdown-image recovery fixture phone"
   Assert-ConversationMarkdownImageRecovery -Session $session
   Add-RegressionResult -Name "conversation-markdown-image-recovery-phone" -Page $markdownImageFixture
+
+  $markdownSemanticFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&markdownSemantic=1"
+  $markdownSemanticDesktop = Open-And-ReadPage -Session $session -Url $markdownSemanticFixtureUrl -Width $DesktopWidth -Height $DesktopHeight
+  Assert-Page -Page $markdownSemanticDesktop -Name "conversation semantic Markdown fixture desktop"
+  Assert-ConversationMarkdownSemantics -Session $session -ViewportName 'desktop'
+  Add-RegressionResult -Name "conversation-markdown-semantics-desktop" -Page $markdownSemanticDesktop
+
+  $markdownSemanticPhone = Open-And-ReadPage -Session $session -Url $markdownSemanticFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $markdownSemanticPhone -Name "conversation semantic Markdown fixture phone"
+  Assert-ConversationMarkdownSemantics -Session $session -ViewportName 'phone'
+  Add-RegressionResult -Name "conversation-markdown-semantics-phone" -Page $markdownSemanticPhone
 
   $scrollSwitchFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&scrollSwitchRace=1&messageActionHit=1"
   $scrollSwitchFixture = Open-And-ReadPage -Session $session -Url $scrollSwitchFixtureUrl -Width $PhoneWidth -Height $PhoneHeight

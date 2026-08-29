@@ -16776,3 +16776,24 @@ Verification:
 ### Rollback
 
 - 回退队列恢复端点、前端可恢复交接与对应夹具即可；不需要迁移或清理 Runtime SQLite。回退后应停止提供“直接引用”入口，避免恢复能力缺失时再次丢消息。
+
+## 会话正文语义 Markdown 与轻量阅读面（2026-08-29）
+
+### Expected behavior
+
+1. 助手回复中的 `#` 到 `######` 标题、`-` / `*` / `+` 无序列表、数字有序列表、引用和分隔线必须渲染为对应语义元素，不显示原始块级标记。
+2. 流式输出和完成态必须经过同一块级 Markdown 路径；未闭合代码围栏在流式阶段保持原文，闭合后继续交给既有代码块组件。
+3. 原始 HTML 必须保持禁用；文件链接、URL、行内代码、表格、代码块和 Markdown 图片继续使用原有安全与交互链路。
+4. 助手正文作为阅读内容直接落在会话画布上，不再增加边框、底色和阴影卡片；用户消息和系统结构块的边界保持不变。
+5. “回到底部/最新输出”保留完整可访问名称和新输出状态点，视觉收敛为 44px 圆形按钮；桌面与 393px 手机均不得出现页面级横向溢出。
+
+### Verification
+
+- 运行 `npm.cmd run test:7420:frontend -- -SourceOnly`，确认语义解析器、流式统一路径、去卡片样式和确定性夹具契约通过。
+- 运行 `npm.cmd run build:frontend`，确认 Vue 类型检查、主前端、本地预览和预压缩全部通过。
+- 打开 `/#/__regression/conversation-blocks?regression=frontend&markdownSemantic=1`；在 1440x900 与 393x852 下确认 H2/H3、4 个无序项、2 个有序项、引用和 `passed: true` 行内代码均为真实 DOM 语义，助手边框为 `0px`、背景透明且横向溢出为 0。
+- 完整前端回归会保存 `conversation-markdown-semantics-desktop` 与 `conversation-markdown-semantics-phone` 截图，并检查不再出现 `## 三、关键验证结果` 或段落形式的 `- ` 前缀。
+
+### Rollback
+
+- 回退 `conversationMarkdown` 块级投影、`ThreadConversation` 语义模板/样式和对应夹具即可；无需迁移会话、Runtime SQLite、移动端数据或服务配置。

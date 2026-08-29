@@ -1394,3 +1394,10 @@ After each feature implementation session that uses this skill:
 - CX-Codex previously removed both the local row and durable Runtime request before attempting the send, then swallowed the error. The observed request therefore ended as `interrupted / Removed from message queue` without a `turnId`, while a separate failed optimistic bubble remained visible.
 - CX-Codex now mirrors the desktop transfer contract across both owners. A narrowly scoped restore endpoint revives only requests interrupted by queue removal, while the frontend removes the failed optimistic attempt and restores the original row and ordering.
 - Headless phone verification at `393 x 852` kept both queued rows in the same order, introduced no additional failed bubble, exposed explicit recovery feedback, and produced no browser errors.
+
+## Findings: Semantic Conversation Markdown and Quiet Reading Surface (2026-08-29)
+
+- Installed Windows Codex `26.818.5229` ships a conversation Markdown grammar with headings, blockquotes, lists, fenced code, tables and paragraphs; its local-conversation path uses the same Markdown presentation while the thread scroll owner exposes a compact return-to-bottom control.
+- CX-Codex previously rendered only fences, tables and images as blocks, and bypassed that parser entirely while streaming. This leaked literal `##` and `-` markers even though the message content itself was valid Markdown.
+- CX-Codex now uses its existing `markdown-it` dependency only for block structure with raw HTML disabled, then keeps existing Vue interpolation, local-file handling, URL handling, code, table and image owners. Streaming and settled assistant text share the same prepared-block cache.
+- The assistant reply is now a quiet document surface while user messages retain their distinct bubble. Headless checks at `1440 x 900` and `393 x 852` verified real H2/H3, unordered and ordered lists, blockquote and inline code DOM, transparent zero-border assistant content, preserved accessible link text and zero horizontal overflow.

@@ -537,6 +537,7 @@ const isScrollSwitchRaceFixture = fixtureParams.get('scrollSwitchRace') === '1'
 const isForegroundResumeScrollFixture = fixtureParams.get('foregroundResumeScroll') === '1'
 const isImagePreviewFixture = fixtureParams.get('imagePreview') === '1'
 const isMarkdownImageFixture = fixtureParams.get('markdownImage') === '1'
+const isMarkdownSemanticFixture = fixtureParams.get('markdownSemantic') === '1'
 const isMessageActionHitFixture = fixtureParams.get('messageActionHit') === '1'
 const isPlanFixture = fixtureParams.get('plan') === '1'
 const isPlanSubmittedFixture = fixtureParams.get('planSubmitted') === '1'
@@ -579,6 +580,32 @@ const markdownImageMessages: UiMessage[] = [
     role: 'assistant',
     text: '失效图片应提供恢复入口：\n\n![失效 Markdown 图片](/__missing-markdown-image-regression.png)',
     turnIndex: 9,
+  },
+]
+const markdownSemanticMessages: UiMessage[] = [
+  {
+    id: 'fixture-markdown-semantic',
+    role: 'assistant',
+    text: [
+      '## 三、关键验证结果',
+      '',
+      '最终 2 小时浸泡报告：',
+      '',
+      '- 运行时间：7200 秒',
+      '- 采样：475 次',
+      '- RPC 最大排队数：0',
+      '- 结果：`passed: true`',
+      '',
+      '> 本地链路验证通过。',
+      '',
+      '1. Android 真机',
+      '2. Windows 桌面端',
+      '',
+      '### 报告位置',
+      '',
+      '[soak-20260829-090007.json](E:/workspace/CXCodex/reports/soak-20260829-090007.json)',
+    ].join('\n'),
+    turnIndex: 12,
   },
 ]
 const fileCitationMessages: UiMessage[] = [
@@ -739,6 +766,7 @@ const fixtureMessages = computed(() => {
   }
   if (isImagePreviewFixture) return [...messages, imagePreviewMessage]
   if (isMarkdownImageFixture) return [...messages, ...markdownImageMessages]
+  if (isMarkdownSemanticFixture) return markdownSemanticMessages
   if (isFileCitationFixture) return fileCitationMessages
   if (isPlanFixture) {
     return isPlanHistoryImplementedFixture
