@@ -56,6 +56,12 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
+      - name: Install ripgrep
+        shell: pwsh
+        run: |
+          choco install ripgrep --version=15.2.0 --yes --no-progress
+          rg --version
+
       - name: Install dependencies
         run: npm ci
 

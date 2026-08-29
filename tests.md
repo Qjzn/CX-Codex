@@ -16843,3 +16843,20 @@ Verification:
 ### Rollback
 
 - 回退 `applyRuntimeSnapshotState` 中恢复观测的结算顺序、恢复指标版本和对应回归即可；无需迁移或清理消息、Runtime SQLite、原生队列、附件缓存或用户配置。
+
+## GitHub Release runner 的 ripgrep 前置门禁（2026-08-29）
+
+### Expected behavior
+
+- Windows Release runner 在执行完整 `verify:release` 前显式安装并验证 `ripgrep`，与 Linux CI 的文件搜索依赖保持一致。
+- `ripgrep` 安装或解析失败时立即阻断候选与正式 Release，不得跳过服务器模块烟测。
+
+### Reusable verification
+
+- `npm.cmd run verify:governance`
+- 从当前 `main` 运行 `Release` workflow，确认 `Install ripgrep`、`Run release verification` 和签名候选制品步骤依次通过。
+
+### Evidence and rollback
+
+- 修复前 Actions run `33239061508` 在 server module smoke 的 `assert.ok(ripgrepCommand)` 失败，且尚未进入 Android 签名或 Release 发布步骤。
+- 回滚时同时撤销 Release workflow 的安装步骤、治理断言与本节；不得通过删除文件搜索烟测绕过依赖缺失。
