@@ -3538,9 +3538,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       currentSummary?.lastEventSeq ?? 0,
       latestRuntimeEventSeqByThreadId.get(threadId) ?? 0,
     )
-    if (!shouldApplyRuntimeSnapshotVersion({ lastEventSeq: currentEventSeq }, snapshot)) return false
     settleForegroundRecoveryMetric(threadId)
     finishForegroundRecoveryFeedback(threadId)
+    if (!shouldApplyRuntimeSnapshotVersion({ lastEventSeq: currentEventSeq }, snapshot)) return false
     rememberLatestRuntimeEventSequence(threadId, snapshot.lastEventSeq)
     rememberRuntimeSnapshotSummary(threadId, snapshot)
     const authoritativeTurnStartedAtMs = parseIsoTimestamp(snapshot.lastStartedAtIso ?? '')

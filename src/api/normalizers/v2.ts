@@ -43,20 +43,23 @@ function extractFileAttachments(value: string): UiFileAttachment[] {
   return attachments
 }
 
-function extractCodexUserRequestText(value: string): string {
-  const markerRegex = /(?:^|\n)\s{0,3}#{0,6}\s*my request for codex\s*:?\s*/giu
-  const matches = Array.from(value.matchAll(markerRegex))
-  if (matches.length === 0) {
+function extractCodexUserRequestText(value: string, hasFileAttachments: boolean): string {
+  if (!hasFileAttachments) return value.trim()
+
+  const lines = value.replace(/\r\n?/gu, '\n').split('\n')
+  const envelopeStart = lines.findIndex((line) => line.trim().length > 0)
+  if (envelopeStart < 0 || !FILES_MENTIONED_MARKER.test(lines[envelopeStart]?.trim() ?? '')) {
     return value.trim()
   }
 
-  const lastMatch = matches.at(-1)
-  if (!lastMatch || typeof lastMatch.index !== 'number') {
-    return value.trim()
+  const requestMarker = /^#{1,6}\s*my request(?:\s+for\s+codex)?\s*:?\s*$/iu
+  let requestStart = -1
+  for (let index = lines.length - 1; index > envelopeStart; index -= 1) {
+    if (!requestMarker.test(lines[index]?.trim() ?? '')) continue
+    requestStart = index + 1
+    break
   }
-
-  const markerOffset = lastMatch.index + lastMatch[0].length
-  return value.slice(markerOffset).trim()
+  return requestStart >= 0 ? lines.slice(requestStart).join('\n').trim() : value.trim()
 }
 
 function parseUserMessageContent(
@@ -96,7 +99,7 @@ function parseUserMessageContent(
   const fileAttachments = extractFileAttachments(fullText)
 
   return {
-    text: extractCodexUserRequestText(fullText),
+    text: extractCodexUserRequestText(fullText, fileAttachments.length > 0),
     images,
     fileAttachments,
     rawBlocks,

@@ -83,6 +83,32 @@ try {
   assert(new Set(messageIds).size === 2 && messageIds.every(Boolean), 'same-text user inputs must retain distinct strong identities')
   results.identity = { renderedCount: 2, messageIds }
 
+  async function verifyAttachmentEnvelope(width, height, screenshotName) {
+    await openFixture(
+      '/#/__regression/conversation-blocks?regression=frontend&attachmentEnvelope=1',
+      width,
+      height,
+      'li.conversation-item[data-role="user"]',
+    )
+    const visibleText = await page.locator('body').innerText()
+    const userMessage = page.locator('article.message-card[data-role="user"]')
+    assert(await page.locator('.message-file-card').count() === 1, 'attachment envelope must retain one structured file card')
+    assert(await userMessage.innerText() === '为什么会出现这种情况？如何解决？', 'attachment envelope must expose only the actual user request')
+    assert(!visibleText.includes('Files mentioned by the user'), 'attachment transport heading must not be visible')
+    assert(!visibleText.includes('Distinguish instructions'), 'attachment transport instruction must not be visible')
+    assert(!visibleText.includes('My request'), 'attachment request marker must not be visible')
+    const hasHorizontalOverflow = await page.evaluate(() => (
+      document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+    ))
+    assert(!hasHorizontalOverflow, `attachment envelope fixture overflowed at ${String(width)}x${String(height)}`)
+    await page.screenshot({ path: path.join(outputDirectory, screenshotName), fullPage: true })
+    return { width, height, fileCardCount: 1, hasHorizontalOverflow }
+  }
+  results.attachmentEnvelope = {
+    desktop: await verifyAttachmentEnvelope(1440, 900, 'attachment-envelope-desktop.png'),
+    phone: await verifyAttachmentEnvelope(393, 852, 'attachment-envelope-phone.png'),
+  }
+
   await page.close()
   page = await context.newPage()
   page.on('pageerror', (error) => pageErrors.push(error.message))

@@ -16797,3 +16797,46 @@ Verification:
 ### Rollback
 
 - 回退 `conversationMarkdown` 块级投影、`ThreadConversation` 语义模板/样式和对应夹具即可；无需迁移会话、Runtime SQLite、移动端数据或服务配置。
+
+## 附件上下文信封不进入用户正文（2026-08-29）
+
+### Expected behavior
+
+1. Codex 宿主生成的 `# Files mentioned by the user:` 附件信封只用于传输附件与区分真实请求，不得作为用户消息正文显示。
+2. `## My request:` 与 `## My request for Codex:` 两种宿主标记都只保留其后的真实请求；附件继续显示为结构化卡片。
+3. 没有附件信封起始标记的普通用户文字即使包含 `## My request:` 也必须原样保留，不能按关键词误删。
+4. 修复必须发生在消息归一化边界，不依赖 CSS 隐藏或关闭助手语义 Markdown。
+
+### Verification
+
+- `npm.cmd run verify:frontend-normalizers` 先在真实宿主信封变体上稳定失败，修复后覆盖正文提取、附件卡片保留和普通同名标题不误删。
+- `npm.cmd run build:frontend`、`npm.cmd run test:7420:frontend -- -SourceOnly` 与 `git diff --check` 通过。
+- 独立 Headless Playwright 打开 `/#/__regression/conversation-blocks?regression=frontend&attachmentEnvelope=1`，在 1440 x 900 与 393 x 852 下均确认只显示 1 个附件卡片和真实请求，不存在 `Files mentioned by the user`、`Distinguish instructions` 或 `My request` 可见正文，且无横向溢出；截图与清单位于 `output/attachment-envelope-20260829`。
+
+### Rollback
+
+- 回退附件信封投影及其回归夹具即可；无需改动会话日志、附件缓存、Runtime SQLite、语义 Markdown 或用户配置。
+
+## Android 真机综合回归与前台恢复计时收口（2026-08-29）
+
+### Expected behavior
+
+1. 对话、图片和文件附件必须各自产生一条真实请求并显示唯一结果；附件传输信封不得进入用户正文。
+2. 长任务进入后台后继续由 7420 与原生监控持有；两分钟后返回时，任务计时、执行状态、消息队列和最终结果必须收敛，不能重复发送或残留虚假运行态。
+3. Plan 保持为显式持续模式，目标任务显示权威状态与用量；普通对话、Plan 和 Goal 不互相冒充。
+4. 成功取得前台恢复快照后立即结束本次恢复反馈和计时；版本落后的快照仍不得覆盖更新的实时状态。旧计量语义留下的本地 v1 样本必须失效，不能继续污染七天 P95。
+5. 真机折叠屏双栏、Composer、44px 触控目标、附件卡片、计划卡和目标栏不得出现页面级横向溢出或不可达操作。
+
+### Verification
+
+- OPPO PKH110 / Android 16 上使用隔离调试包 `com.cxcodex.bridge.debug` 和隔离候选端口 `17435/17436` 完成真实对话、图片、Markdown 附件、150 秒命令、队列跟随、Plan 与 Goal。基础对话首个可见回复为 6382 ms，图片为 4918 ms，文件为 9747 ms；本地提交、气泡和运行反馈均保持在 100 ms 内。
+- 首轮切到系统设置 131 秒后返回：应用 PID 未变化，长任务完成，队列自动执行并只出现一次结果；功能状态正常，但旧实现把恢复计时拖到下一任务，记录了无效的 119584 ms 样本。
+- 源码契约先在旧顺序上稳定失败；修复后 `npm.cmd run test:7420:frontend -- -SourceOnly` 通过，并继续证明落后快照不能修改 Runtime 状态。
+- `npm.cmd run verify:frontend-normalizers` 先证明 v1 的 119584 ms 样本会污染 P95；计量版本升级后通过，旧样本不再参与新摘要。
+- 修复候选再次在同一真机执行 150 秒命令并切到系统设置 147 秒；返回后任务显示“命令已完成”，同一 PID 继续存活，恢复计时为 168 ms，页面宽度 `763/763`。最终构建重载后再做短前后台复核，新摘要仅含 v2 样本，P95 为 82 ms、最新为 36 ms，页面宽度 `350/350`。
+- `npm.cmd run build:frontend`、`git diff --check` 通过。独立 Headless Playwright 在最终候选上验证完成态、等待态、重复消息身份、桌面/手机附件信封和 1602 条消息压力；压力场景仅挂载 12 项，最大心跳延迟 55 ms，无横向溢出。证据位于 `output/device-validation-20260829/headless-final`，真机截图为 `output/device-validation-20260829/cx-recovery-fix-after.png`。
+- 本次真机验证阶段没有替换生产 APK、更新生产 7420 或发布；调试候选与真机通过不等同于正式签名包、CI 或 Release 门槛通过。
+
+### Rollback
+
+- 回退 `applyRuntimeSnapshotState` 中恢复观测的结算顺序、恢复指标版本和对应回归即可；无需迁移或清理消息、Runtime SQLite、原生队列、附件缓存或用户配置。
