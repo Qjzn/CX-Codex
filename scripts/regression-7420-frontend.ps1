@@ -60,9 +60,7 @@ function Assert-ImmediateAsyncRouteFallbackSource {
   $expectedFallbacks = @{
     SkillsHub = "PageLoadingSkeleton"
     ThreadConversation = "ConversationLoadingSkeleton"
-    WorkspaceWorkbench = "PageLoadingSkeleton"
     GithubTrendingHub = "PageLoadingSkeleton"
-    DiagnosticsPanel = "PageLoadingSkeleton"
   }
 
   foreach ($componentName in $expectedFallbacks.Keys) {
@@ -362,15 +360,27 @@ function Assert-QuietWorkbenchShellSource {
 
 function Assert-QuietWorkbenchSidebarSource {
   $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\App.vue")
+  $routerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\router\index.ts")
   $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
     Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
   )
 
   Assert-True (
-    $appSource -match 'sidebar-action-tile\s+sidebar-action-tile-primary' -and
-    $appSource -match '\.sidebar-action-grid\s*\{[\s\S]*?grid-cols-3' -and
-    $appSource -match '\.sidebar-action-tile-primary\s*\{[\s\S]*?col-span-full[\s\S]*?justify-start'
-  ) "the new-conversation action must own the primary sidebar row above compact secondary actions"
+    $appSource -match '<SidebarThreadControls[\s\S]*?sidebar-toolbar-icon-button[\s\S]*?IconTablerBroom[\s\S]*?sidebar-toolbar-new-thread-button[\s\S]*?新会话[\s\S]*?</SidebarThreadControls>' -and
+    $appSource -match '\.sidebar-toolbar-new-thread-button\s*\{[\s\S]*?ml-auto' -and
+    $appSource -match '\.sidebar-action-grid\s*\{[\s\S]*?grid-cols-3'
+  ) "sidebar utilities must keep toggle and mark-all-read on the left with new conversation on the right"
+  Assert-True (
+    ([regex]::Matches($appSource, 'class="sidebar-action-tile"')).Count -eq 3 -and
+    $appSource -match '<span class="sidebar-action-label">搜索</span>' -and
+    $appSource -match '<span class="sidebar-action-label">技能</span>' -and
+    $appSource -match '<span class="sidebar-action-label">GitHub</span>'
+  ) "the sidebar shortcut row must expose exactly Search, Skills, and GitHub"
+  Assert-True (
+    $routerSource -notmatch "name:\s*'workbench'|name:\s*'diagnostics'" -and
+    -not (Test-Path -LiteralPath (Join-Path (Get-Location) "src\components\content\WorkspaceWorkbench.vue")) -and
+    -not (Test-Path -LiteralPath (Join-Path (Get-Location) "src\components\content\DiagnosticsPanel.vue"))
+  ) "Workbench and diagnostics frontend modules must stay removed"
   Assert-True (
     ([regex]::Matches($sidebarSource, ':data-detail="shouldShowThreadDetail\(thread\)"')).Count -eq 2 -and
     $sidebarSource -match 'function\s+shouldShowThreadDetail\(thread:\s*UiThread\):\s*boolean\s*\{[\s\S]*?thread\.inProgress\s*\|\|\s*thread\.unread\s*\|\|\s*isSearchActive\.value'
@@ -634,23 +644,19 @@ function Assert-ManualUnreadAndComposerAttachmentSource {
 
 function Assert-CurrentReasoningEffortCoverageSource {
   $typeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\types\codex.ts")
-  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\App.vue")
   $gatewaySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\api\codexGateway.ts")
   $desktopStateSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\useDesktopState.ts")
   $outboxSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\messageOutboxPersistence.ts")
   $composerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadComposer.vue")
-  $workbenchSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\WorkspaceWorkbench.vue")
 
   foreach ($effort in @('max', 'ultra')) {
     Assert-True ($typeSource -match "ReasoningEffort[^\r\n]+'$effort'") "ReasoningEffort must include the app-server $effort level"
     Assert-True ($gatewaySource -match "allowed:[^\r\n]+'$effort'") "config normalization must retain the app-server $effort level"
     Assert-True ($desktopStateSource -match "REASONING_EFFORT_OPTIONS[^\r\n]+'$effort'") "desktop state must persist and submit the $effort level"
     Assert-True ($outboxSource -match "OUTBOX_REASONING_EFFORTS[^\r\n]+'$effort'") "queued messages must preserve the $effort level"
-    Assert-True ($appSource -match "candidate\.reasoningEffort\s*===\s*'$effort'") "workbench presets must accept the $effort level"
   }
 
   Assert-True ($composerSource -match "max:\s*'最高'" -and $composerSource -match "ultra:\s*'极致'") "every current reasoning option must render a visible and accessible Chinese label"
-  Assert-True ($workbenchSource -match "max:\s*'最高'" -and $workbenchSource -match "ultra:\s*'极致'") "workbench summaries must label max and ultra without falling back to smart"
 }
 
 function Assert-CollisionAwareThreadMenuSource {
@@ -823,7 +829,6 @@ function Assert-BoundedRuntimeSendRecoverySource {
   $serverMobilePushSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\mobilePush.ts")
   $serverMobilePushRoutesSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\mobilePushRoutes.ts")
   $chatFeedbackSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\chatFeedbackMetrics.ts")
-  $diagnosticsPanelSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\DiagnosticsPanel.vue")
   $taskPetPreviewSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\mobile\TaskPetPreview.vue")
   $sidebarThreadTreeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue")
   Assert-True ($androidTaskNotificationPolicySource -match 'waiting_permission[\s\S]*?return\s+"等待"' -and $androidTaskNotificationPolicySource -match 'start_uncertain[\s\S]*?sync_degraded[\s\S]*?return\s+"同步"' -and $androidTaskNotificationPolicySource -match 'completed[\s\S]*?return\s+"完成"' -and $androidTaskNotificationPolicySource -match 'failed[\s\S]*?return\s+"失败"' -and $androidTaskNotificationPolicySource -match 'interrupted[\s\S]*?return\s+"停止"') "smartwatch notification states must stay truthful and two characters"
@@ -883,9 +888,6 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($chatFeedbackSource -match "performance\.timeOrigin[\s\S]*?performance\.now\(\)") "mobile feedback timestamps must remain comparable across a WebView reload"
   Assert-True ($chatFeedbackSource -match "p50Ms[\s\S]*?p95Ms[\s\S]*?assistantRenderOverhead") "mobile feedback review must expose P50/P95 stage and render-overhead summaries"
   Assert-True ($chatFeedbackSource -notmatch "\b(prompt|attachments|messageText)\b") "mobile feedback diagnostics must not retain prompt or attachment content"
-  Assert-True ($diagnosticsPanelSource -match "MESSAGE_FEEDBACK_MIN_SAMPLE_COUNT\s*=\s*5") "mobile feedback review must not classify a trend before five stage samples"
-  Assert-True ($diagnosticsPanelSource -match "stateCommit[\s\S]*?bubbleVisible[\s\S]*?requestDispatched[\s\S]*?serverAcknowledged[\s\S]*?firstAssistantData[\s\S]*?assistantRenderOverhead") "diagnostics must keep the complete local-to-visible response review path"
-  Assert-True ($diagnosticsPanelSource -match "消息响应复盘[\s\S]*?P50[\s\S]*?P95[\s\S]*?复盘线") "diagnostics must expose the mobile response review in a user-visible compact surface"
   Assert-True ($source -match "pendingNewThreadPreview\.value\s*=\s*\{[\s\S]*?message:\s*\{[\s\S]*?id:\s*optimisticMessageId") "new-thread sends must publish an immediate in-memory conversation preview"
   Assert-True ($source -match "addOptimisticUserMessage\(threadId,[\s\S]*?messageId:\s*optimisticMessageId") "the real thread must adopt the provisional bubble id instead of creating a duplicate"
   $newThreadSendMatch = [regex]::Match($source, "function\s+sendMessageToNewThread[\s\S]*?\n\s*function\s+clearPendingNewThreadPreview")
@@ -1047,7 +1049,10 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($androidNoProgressReviewSource -notmatch 'HttpURLConnection|/codex-api|startForegroundService|ContextCompat\.startForegroundService') "the idle review receiver must not access the network or start a killed foreground service"
   Assert-True ($appSource -match '连续 10 分钟无新进展时首次提醒，之后约每 20 分钟复盘一次，有进展后重新计时。省电模式可能延后提醒') "mobile settings must explain the approximate long-task reminder cadence"
   Assert-True ($androidPluginSource -match 'ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS[\s\S]*?isIgnoringBatteryOptimizations\(getContext\(\)\.getPackageName\(\)\)') "Android runtime info and its manual recovery action must expose the Doze allowlist boundary"
-  Assert-True ($appSource -match '后台运行[\s\S]*?mobileShellBackgroundRuntimeLabel[\s\S]*?调整后台运行') "mobile settings must make the background execution restriction visible and actionable"
+  Assert-True (
+    $appSource -notmatch '<span class="sidebar-settings-label">原生网络</span>|<span class="sidebar-settings-label">设备状态</span>|<span class="sidebar-settings-label">后台运行</span>' -and
+    $appSource -match '调整后台运行'
+  ) "mobile settings must hide raw device status rows while retaining the background-settings recovery action"
   Assert-True ($appSource -match 'function\s+onWindowFocusRefreshAccountState[\s\S]*?refreshMobileShellRuntimeInfo\(\)') "returning from Android background settings must refresh the visible runtime state"
   Assert-True ($source -match 'activeTaskPetItems[\s\S]*?candidates\s*=\s*\[\.\.\.sourceThreads\.value\][\s\S]*?selectedThread\.value[\s\S]*?candidates\.unshift\(selected\)') "a newly created selected thread must remain eligible for native monitoring before thread/list catches up"
   Assert-True ($androidTaskPetSource -match "/codex-api/runtime/request\?clientMessageId=") "the native monitor must look up a provisional client id"
@@ -2517,7 +2522,6 @@ JSON.stringify((() => {
   const hasSkillsHub = !!document.querySelector('.skills-hub');
   const hasTrendingHub = !!document.querySelector('.trending-hub');
   const hasRuntimeBar = !!document.querySelector('.runtime-status-bar');
-  const hasDiagnosticsPanel = !!document.querySelector('.diagnostics-panel');
   const hasMarkdownBody = !!document.querySelector('.markdown-body');
   const notificationRecovery = document.querySelector('.fixture-notification-recovery');
   return {
@@ -2526,12 +2530,11 @@ JSON.stringify((() => {
     textLength: text.length,
     hasInternalCodexContext: /<codex_internal_context\s+source=/i.test(text),
     hasInternalThreadReadError: /thread-store internal error|failed to read thread\s+[A-Za-z]:\\/i.test(text),
-    hasBlankBody: text.length < 5 && !hasComposer && !hasSkillsHub && !hasTrendingHub && !hasRuntimeBar && !hasDiagnosticsPanel && !hasMarkdownBody,
+    hasBlankBody: text.length < 5 && !hasComposer && !hasSkillsHub && !hasTrendingHub && !hasRuntimeBar && !hasMarkdownBody,
     hasComposer,
     hasSkillsHub,
     hasTrendingHub,
     hasRuntimeBar,
-    hasDiagnosticsPanel,
     hasMarkdownBody,
     hasCompletionNotificationRecovery: !!notificationRecovery
       && notificationRecovery.textContent.includes('任务完成通道已关闭')
@@ -2564,7 +2567,6 @@ function Assert-Page {
     [switch]$RequireSkillsHub,
     [switch]$RequireTrendingHub,
     [switch]$RequireRuntimeBar,
-    [switch]$RequireDiagnostics,
     [switch]$RequireMarkdown
   )
 
@@ -2583,9 +2585,6 @@ function Assert-Page {
   }
   if ($RequireRuntimeBar) {
     Assert-True ($Page.hasRuntimeBar -eq $true) "$Name is missing runtime status bar"
-  }
-  if ($RequireDiagnostics) {
-    Assert-True ($Page.hasDiagnosticsPanel -eq $true) "$Name is missing diagnostics panel"
   }
   if ($RequireMarkdown) {
     Assert-True ($Page.hasMarkdownBody -eq $true) "$Name is missing markdown preview"
@@ -2967,9 +2966,7 @@ JSON.stringify((() => {
   const displayedPinButtons = pinButtons.filter(isRendered);
   const displayedThreadMenuTriggers = threadMenuTriggers.filter(isRendered);
   const displayedThreadTimes = threadTimes.filter(isRendered);
-  const actionTiles = Array.from(drawer?.querySelectorAll(
-    '.sidebar-action-grid > .sidebar-action-tile, .sidebar-action-grid > .sidebar-tools-menu > .sidebar-action-tile'
-  ) || []);
+  const actionTiles = Array.from(drawer?.querySelectorAll('.sidebar-action-grid > .sidebar-action-tile') || []);
   const loading = drawer?.querySelector('.thread-tree-loading') || null;
   const emptyText = drawer?.querySelector('.thread-tree-empty-text') || null;
   const drawerRect = drawer?.getBoundingClientRect();
@@ -3038,9 +3035,9 @@ JSON.stringify((() => {
     isLoading: !!loading,
     hasEmptyText: !!emptyText,
     actionTileCount: actionTiles.filter((node) => window.getComputedStyle(node).display !== 'none').length,
-    hasVisibleWorkbenchTile: actionTiles.some((node) => (
-      window.getComputedStyle(node).display !== 'none' && (node.textContent || '').includes('工作台')
-    )),
+    actionLabels: actionTiles
+      .filter((node) => window.getComputedStyle(node).display !== 'none')
+      .map((node) => (node.textContent || '').replace(/\s+/g, ' ').trim()),
     drawerWidth: drawerRect ? Math.round(drawerRect.width) : 0,
     drawerRightGap: drawerRect ? Math.round(viewportWidth - drawerRect.right) : 0,
     sidebarCollapsedPreference: window.localStorage.getItem('codex-web-local.sidebar-collapsed.v1'),
@@ -3083,7 +3080,7 @@ function Assert-MobileDrawerSidebar {
   Assert-True ([int]$Metrics.displayedThreadTimeCount -eq 0) "mobile drawer still prioritizes passive timestamps over its primary action entry"
   Assert-True ($Metrics.hasEmptyText -eq $false) "mobile drawer sidebar rendered empty/error text despite available threads"
   Assert-True ([int]$Metrics.actionTileCount -eq 3) "mobile drawer should keep three primary actions: $($Metrics.actionTileCount)"
-  Assert-True ($Metrics.hasVisibleWorkbenchTile -eq $false) "mobile drawer should move Workbench into the Tools menu"
+  Assert-True (($Metrics.actionLabels -join '|') -eq '搜索|技能|GitHub') "mobile drawer actions must be Search, Skills, and GitHub: $($Metrics.actionLabels -join ', ')"
   Assert-True ($Metrics.drawerWidth -lt $Metrics.clientWidth) "mobile drawer should leave a visible backdrop edge: $($Metrics.drawerWidth) >= $($Metrics.clientWidth)"
   Assert-True ($Metrics.drawerRightGap -ge 32) "mobile drawer backdrop edge is too narrow: $($Metrics.drawerRightGap)"
   if ($Metrics.clientWidth -le 480) {
@@ -3104,7 +3101,7 @@ function Assert-CompactOverlayDrawer {
   Assert-True ($Metrics.hasDrawer -eq $true) "compact viewport did not open its overlay sidebar"
   Assert-True ($Metrics.hasActionGrid -eq $true) "compact overlay is missing its sidebar actions"
   Assert-True ($Metrics.isLoading -eq $false -and [int]$Metrics.rowCount -gt 0 -and [int]$Metrics.groupCount -gt 0) "compact overlay did not render the task hierarchy"
-  Assert-True ([int]$Metrics.actionTileCount -eq 4 -and $Metrics.hasVisibleWorkbenchTile -eq $true) "compact desktop overlay must keep all four desktop sidebar actions"
+  Assert-True ([int]$Metrics.actionTileCount -eq 3 -and ($Metrics.actionLabels -join '|') -eq '搜索|技能|GitHub') "compact desktop overlay must keep Search, Skills, and GitHub as direct actions"
   Assert-True ([int]$Metrics.displayedPinButtonCount -eq [int]$Metrics.rowCount -and [int]$Metrics.displayedPinButtonTabStopCount -eq [int]$Metrics.rowCount) "compact desktop overlay lost its direct pin actions"
   Assert-True ([int]$Metrics.displayedThreadTimeCount -eq [int]$Metrics.rowCount) "compact desktop overlay lost its task timestamps"
   Assert-True ($Metrics.drawerWidth -ge 240 -and $Metrics.drawerWidth -le 360) "compact overlay width is outside the desktop sidebar contract: $($Metrics.drawerWidth)"
@@ -7908,10 +7905,6 @@ Assert-ThreadAttentionChromeSource
   Assert-Page -Page $trendingFixture -Name "github trending compact fixture phone" -RequireTrendingHub
   Assert-GithubTrendingCompactLayout -Session $session
   Add-RegressionResult -Name "github-trending-compact-fixture-phone" -Page $trendingFixture
-
-  $diagnosticsPage = Open-And-ReadPage -Session $session -Url "$($BaseUrl)/diagnostics?regression=frontend" -Width $PhoneWidth -Height $PhoneHeight
-  Assert-Page -Page $diagnosticsPage -Name "diagnostics phone" -RequiredText "Runtime Store" -RequireDiagnostics
-  Add-RegressionResult -Name "diagnostics-phone" -Page $diagnosticsPage
 
   $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
   $readmePath = (Join-Path $repoRoot "README.md").Replace('\', '/')

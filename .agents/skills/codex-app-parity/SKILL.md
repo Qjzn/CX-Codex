@@ -1415,3 +1415,9 @@ After each feature implementation session that uses this skill:
 - On Android, a successful foreground Runtime snapshot read may carry a lower event sequence than realtime state already applied by the WebView. That snapshot must remain ineligible to overwrite the newer execution state, but it is still the completion boundary for the foreground-recovery observation.
 - CX-Codex therefore settles the transient recovery feedback and timing before its monotonic snapshot-version guard, while keeping all Runtime state, message, queue, token and turn mutations behind that guard.
 - The corrected settlement boundary increments the local timing-payload version so invalid long-tail samples from the previous semantics cannot keep the seven-day P95 in a false recovery state; no message, task or configuration storage is migrated.
+
+## Findings: Quiet Sidebar Primary Actions (2026-08-29)
+
+- Installed Windows Codex `26.818.5229` keeps sidebar toggle, mark-all-read, and new-thread as independent actions in its current Chinese locale instead of combining them under a tools surface.
+- CX-Codex mirrors that ownership in one top utility row, then uses a fixed three-column Search, Skills, and GitHub row as a mobile-oriented adaptation.
+- Workbench and diagnostics are removed only as frontend destinations by explicit product decision; native background execution and backend diagnostics remain available to their existing recovery and verification owners.
