@@ -88,7 +88,7 @@
   },
   "dependencies": {
     "@capacitor/app": "^8.1.1",
-    "@capacitor/core": "8.4.2",
+    "@capacitor/core": "8.5.0",
     "@capacitor/network": "^8.0.1",
     "better-sqlite3": "^12.11.1",
     "commander": "^15.0.0",
@@ -102,13 +102,13 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@capacitor/android": "8.4.2",
-    "@capacitor/cli": "8.4.2",
+    "@capacitor/android": "8.5.0",
+    "@capacitor/cli": "8.5.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.0",
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.3.0",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^6.0.8",
@@ -119,7 +119,7 @@
     "vite": "^8.2.2",
     "vue": "^3.5.41",
     "vue-router": "^4.6.4",
-    "vue-tsc": "^3.3.10"
+    "vue-tsc": "^3.3.11"
   },
   "overrides": {
     "brace-expansion": "5.0.9",
