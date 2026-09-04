@@ -64,6 +64,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-windows-server.ps1 `
   -Port 7420 `
   -Password "change-me" `
   -CreateStartupTask `
+  -CreateCliShim `
   -EnsureCodexLogin `
   -OpenFirewall `
   -InstallCloudflared `
@@ -75,6 +76,9 @@ The script writes:
 
 - a stable JSON config file at `%USERPROFILE%\.cx-codex\config.json`
 - a launcher at `%USERPROFILE%\.local\bin\cx-codex-start.cmd`
+- optionally, a CLI shim at `%USERPROFILE%\.local\bin\cx-codex.cmd` when `-CreateCliShim` is specified
+
+With the optional shim, the installed CLI service commands are available as `cx-codex service status`, `cx-codex service restart`, and the other commands shown by `cx-codex service --help`. The default installation does not create this command or install an npm global package.
 
 By default the installer writes `tunnel: false` and `open: false`, which is usually the right choice for Windows server usage.
 

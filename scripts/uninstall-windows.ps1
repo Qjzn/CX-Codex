@@ -236,6 +236,7 @@ $resolvedInstallDir = Assert-SafeManagedDirectory -Path $InstallDir -Label "inst
 $resolvedStateDir = Assert-SafeManagedDirectory -Path $StateDir -Label "state"
 $resolvedManagedBinDir = Assert-SafeManagedDirectory -Path $ManagedBinDir -Label "managed bin"
 $resolvedLauncherPath = Get-FullPath -Path $LauncherPath -Label "launcher"
+$resolvedCliShimPath = Join-Path $resolvedManagedBinDir "cx-codex.cmd"
 $resolvedConfigPath = Join-Path $resolvedStateDir "config.json"
 $resolvedTaskName = if ([string]::IsNullOrWhiteSpace($TaskName)) { "CodexUI-$Port" } else { $TaskName }
 $resolvedWatchdogTaskName = if ([string]::IsNullOrWhiteSpace($WatchdogTaskName)) { "CodexUI-$Port-Watchdog" } else { $WatchdogTaskName }
@@ -393,6 +394,16 @@ if ($firewallCommand) {
 $script:UninstallStage = "remove_program_files"
 Remove-ManagedItem -Path $resolvedServerPidPath -Label "server PID marker"
 Remove-ManagedItem -Path $resolvedLauncherPath -Label "launcher"
+if (Test-Path -LiteralPath $resolvedCliShimPath) {
+  $shimText = Get-Content -Raw -Encoding ASCII -LiteralPath $resolvedCliShimPath
+  $managedIndexPath = Join-Path $resolvedInstallDir "dist-cli\index.js"
+  if ($shimText -like "*$managedIndexPath*") {
+    Remove-ManagedItem -Path $resolvedCliShimPath -Label "CLI shim"
+  } else {
+    $script:PreservedItems.Add("cli-shim:$resolvedCliShimPath") | Out-Null
+    Write-UninstallWarning -Code "CLI_SHIM_PRESERVED" -Message "Preserved CLI shim because it does not target the managed CX-Codex installation."
+  }
+}
 foreach ($managementShortcutPath in $managementShortcutPaths) {
   if (
     (Test-Path -LiteralPath $managementShortcutPath) -and
