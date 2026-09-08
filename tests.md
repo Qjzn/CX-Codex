@@ -1,5 +1,13 @@
 # Tests
 
+## Optional Windows CLI shim (2026-09-08)
+
+- `-CreateCliShim` creates a user-local command only when requested. Repeating the option updates the Node command in a shim owned by the same installation.
+- Installation preserves foreign and empty same-name files, reports `CLI_SHIM_PRESERVED`, and leaves `cliShimPath` empty when no shim was created.
+- Uninstall requires both the ownership marker and quoted CLI target. A foreign wrapper that mentions the target stays unchanged; a managed target containing square brackets is removed using literal path matching.
+- Verify with `npm run verify:windows-productization`: hash checks for preserved files, a stale Node command replaced during upgrade, and both uninstall ownership cases. This is isolated Windows script evidence, not a production service or Android test.
+- Rollback: revert the CLI shim PR; the option is off by default and no global npm installation or PATH mutation is performed.
+
 ## 正式标签前的签名候选制品（2026-08-29）
 
 ### Expected behavior
