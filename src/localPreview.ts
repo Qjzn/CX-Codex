@@ -54,6 +54,8 @@ const markdown = new MarkdownIt({
   linkify: true,
   typographer: true,
 })
+// Preserve bare-domain links after linkify-it 6 changed its default.
+markdown.linkify.set({ fuzzyLink: true })
 
 const state = {
   localPath: new URLSearchParams(window.location.search).get('path')?.trim() ?? '',

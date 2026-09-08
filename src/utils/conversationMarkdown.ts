@@ -55,7 +55,7 @@ function readList(
     }
   }
 
-  const start = Number.parseInt(opening?.attrGet('start') ?? '1', 10)
+  const start = Number.parseInt(String(opening?.attrGet('start') ?? '1'), 10)
   return {
     block: {
       kind: 'list',

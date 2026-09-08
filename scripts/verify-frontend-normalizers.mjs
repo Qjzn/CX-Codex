@@ -12,6 +12,7 @@ const outputRoot = mkdtempSync(join(outputBase, 'run-'))
 const entryPath = join(outputRoot, 'entry.ts')
 const bundledPath = join(outputRoot, 'entry.mjs')
 const normalizerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'api', 'normalizers', 'v2.ts')))
+const conversationMarkdownImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'utils', 'conversationMarkdown.ts')))
 const notificationReplayImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'notificationReplayCoordinator.ts')))
 const connectionManagerImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'connectionManager.ts')))
 const conversationViewportImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'conversationViewport.ts')))
@@ -45,6 +46,13 @@ const queuedMessageTransferImport = toImportPath(relative(outputRoot, join(repoR
 try {
   writeFileSync(entryPath, `
 import assert from 'node:assert/strict'
+import { parseConversationMarkdownBlocks } from '${conversationMarkdownImport}'
+assert.deepEqual(parseConversationMarkdownBlocks('3. Third\\n4. Fourth'), [
+  { kind: 'list', ordered: true, start: 3, items: ['Third', 'Fourth'] },
+])
+assert.deepEqual(parseConversationMarkdownBlocks('1. First'), [
+  { kind: 'list', ordered: true, start: 1, items: ['First'] },
+])
 import { applyActiveTurnIdToMessages, normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from '${normalizerImport}'
 import { createNotificationReplayCoordinator } from '${notificationReplayImport}'
 import {
