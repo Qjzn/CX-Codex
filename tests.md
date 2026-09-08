@@ -1,5 +1,12 @@
 # Tests
 
+## Markdown 15 compatibility (2026-09-08)
+
+- Conversation ordered lists preserve their original starting number when parser attributes are numeric or textual. Headings, quotes and unfinished code fences retain their existing behavior.
+- The local Markdown preview keeps bare domains and email links clickable. Explicit IPv6 links remain intact and Chinese punctuation terminates links correctly. Raw HTML and unsafe JavaScript links remain inert.
+- Validate with `npm run build:frontend`, `npm run verify:frontend-normalizers`, and isolated H5 conversation/local-preview checks. Markdown 15 supplies its own types; the old `@types/markdown-it` package is removed.
+- Rollback: revert the Markdown dependency, lockfile and compatibility changes together. No protocol, queue or runtime persistence change is included.
+
 ## Optional Windows CLI shim (2026-09-08)
 
 - `-CreateCliShim` creates a user-local command only when requested. Repeating the option updates the Node command in a shim owned by the same installation.
