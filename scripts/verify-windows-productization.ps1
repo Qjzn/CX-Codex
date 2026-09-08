@@ -257,6 +257,7 @@ Start-Sleep -Seconds 16
     "-NodeCommand", $nodePath,
     "-SkipNpmInstall",
     "-SkipBuild",
+    "-CreateCliShim",
     "-JsonOutput"
   )
   if (Test-Path -LiteralPath $npmCliPath) {
@@ -283,6 +284,33 @@ URL=https://example.invalid/personal-shortcut
   Assert-True (-not [bool]$installJson.started) "No-start installation must report started=false."
   Assert-True (-not [bool]$installJson.healthReady) "No-start installation must report healthReady=false."
   Assert-True ([string]::IsNullOrWhiteSpace([string]$installJson.publicUrl)) "Local no-start installation must not report a public URL."
+  $cliShimPath = Join-Path $testRoot "bin\cx-codex.cmd"
+  $externalShimContent = "@echo off`r`nrem external command shim`r`n"
+  [System.IO.File]::WriteAllText($cliShimPath, $externalShimContent, [System.Text.Encoding]::ASCII)
+  $externalShimHash = (Get-FileHash -LiteralPath $cliShimPath -Algorithm SHA256).Hash
+  $externalShimResult = Invoke-CapturedPowerShell `
+    -ScriptPath $installScript `
+    -Arguments $installerArgs `
+    -CaptureRoot $testRoot `
+    -Label "install-external-shim"
+  Assert-True ($externalShimResult.ExitCode -eq 0) "Installer must succeed when preserving an external CLI shim."
+  $externalShimJson = ConvertFrom-SingleJsonLine -Text $externalShimResult.Stdout -Label "External shim installation"
+  Assert-True (@($externalShimJson.warnings | Where-Object { $_.code -eq "CLI_SHIM_PRESERVED" }).Count -eq 1) "Installer must warn when preserving an external CLI shim."
+  $preservedShimHash = (Get-FileHash -LiteralPath $cliShimPath -Algorithm SHA256).Hash
+  Assert-True ($preservedShimHash -ceq $externalShimHash) "Installer must not overwrite an external CLI shim."
+  Assert-True ([string]::IsNullOrWhiteSpace([string]$externalShimJson.cliShimPath)) "A preserved external shim must not be reported as created."
+  [System.IO.File]::WriteAllText($cliShimPath, "", [System.Text.Encoding]::ASCII)
+  $emptyShimResult = Invoke-CapturedPowerShell `
+    -ScriptPath $installScript `
+    -Arguments $installerArgs `
+    -CaptureRoot $testRoot `
+    -Label "install-empty-shim"
+  Assert-True ($emptyShimResult.ExitCode -eq 0) "An empty existing CLI shim must not fail installation. $($emptyShimResult.Stderr)"
+  $emptyShimJson = ConvertFrom-SingleJsonLine -Text $emptyShimResult.Stdout -Label "Empty shim installation"
+  Assert-True (@($emptyShimJson.warnings | Where-Object { $_.code -eq "CLI_SHIM_PRESERVED" }).Count -eq 1) "An empty unowned shim must be preserved with a warning."
+  Assert-True ((Get-Item -LiteralPath $cliShimPath).Length -eq 0) "Installer must preserve the empty shim unchanged."
+  $managedShimContent = "@echo off`r`nrem CX-Codex managed CLI shim`r`nrem stale runtime`r`n`"C:\old-node\node.exe`" `"$(Join-Path $repoRoot 'dist-cli\index.js')`" %*`r`n"
+  Set-Content -LiteralPath $cliShimPath -Value $managedShimContent -Encoding ASCII
   $expectedManagementShortcuts = @(
     (Join-Path $env:CX_CODEX_MANAGEMENT_SHORTCUT_ROOT "Desktop\CX-Codex 管理中心 (17420).url"),
     (Join-Path $env:CX_CODEX_MANAGEMENT_SHORTCUT_ROOT "Programs\CX-Codex 管理中心.url")
@@ -315,6 +343,7 @@ URL=https://example.invalid/personal-shortcut
     "-NodeCommand", $nodePath,
     "-SkipNpmInstall",
     "-SkipBuild",
+    "-CreateCliShim",
     "-JsonOutput"
   )
   if (Test-Path -LiteralPath $npmCliPath) {
@@ -331,12 +360,19 @@ URL=https://example.invalid/personal-shortcut
   Assert-True ([bool]$upgradedConfig.tunnel) "Upgrade must preserve the existing remote-access enabled state."
   Assert-True ($upgradedConfig.remoteAccessMode -eq "quick") "Upgrade must preserve the selected remote-access mode."
   Assert-True ($upgradedConfig.futureOption -eq "preserve-me") "Upgrade must preserve unknown future config fields."
+  $updatedShimContent = Get-Content -LiteralPath $cliShimPath -Raw -Encoding ASCII
+  Assert-True ($updatedShimContent -match "rem CX-Codex managed CLI shim") "Upgrade must retain the managed CLI shim marker."
+  Assert-True ($updatedShimContent.Contains((Join-Path $repoRoot "dist-cli\index.js"))) "Upgrade must update a managed CLI shim."
+  Assert-True ($updatedShimContent.Contains($nodePath) -and $updatedShimContent -notmatch 'stale runtime|old-node') "Upgrade must replace the old Node command, not merely leave the old shim in place."
   $originalPassword = $null
   Write-Host "productization: stable install JSON passed"
 
   $fakeInstallDir = Join-Path $testRoot "program"
   New-Item -ItemType Directory -Path $fakeInstallDir -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $fakeInstallDir "marker.txt") -Value "managed program"
+  $externalUninstallShim = "@echo off`r`nrem external wrapper for `"$(Join-Path $fakeInstallDir 'dist-cli\index.js')`"`r`n"
+  [System.IO.File]::WriteAllText($cliShimPath, $externalUninstallShim, [System.Text.Encoding]::ASCII)
+  $externalUninstallHash = (Get-FileHash -LiteralPath $cliShimPath -Algorithm SHA256).Hash
 
   $preserveResult = Invoke-CapturedPowerShell `
     -ScriptPath $uninstallScript `
@@ -359,19 +395,26 @@ URL=https://example.invalid/personal-shortcut
     Assert-True (-not (Test-Path -LiteralPath $managementShortcut)) "Uninstaller must remove management shortcut: $managementShortcut"
   }
   Assert-True (Test-Path -LiteralPath $shortcutConflictPath) "Uninstaller must preserve a shortcut it does not own."
+  Assert-True (Test-Path -LiteralPath $cliShimPath) "Uninstaller must preserve an unmarked external wrapper even when it mentions the managed target."
+  Assert-True ((Get-FileHash -LiteralPath $cliShimPath -Algorithm SHA256).Hash -ceq $externalUninstallHash) "Uninstaller must not change the external wrapper."
+  Assert-True (@($preserveJson.warnings | Where-Object { $_.code -eq "CLI_SHIM_PRESERVED" }).Count -eq 1) "Uninstall must report that the external shim was preserved."
   Assert-True `
-    (@($preserveJson.warnings).Count -eq 0) `
-    "Preserving a shortcut owned by another application must not emit an uninstall failure warning."
+    (@($preserveJson.warnings | Where-Object { $_.code -ne "CLI_SHIM_PRESERVED" }).Count -eq 0) `
+    "Preserving resources owned by another application must not emit an uninstall failure warning."
   Assert-True (Test-Path -LiteralPath (Join-Path $testRoot "state\config.json")) "User data must be preserved by default."
   Write-Host "productization: preserving uninstall passed"
 
-  $secondInstallDir = Join-Path $testRoot "program-remove-data"
+  $secondInstallDir = Join-Path $testRoot "program-remove-data[managed]"
   $secondStateDir = Join-Path $testRoot "state-remove-data"
   $managedBinDir = Join-Path $testRoot "managed-bin"
   $managedCloudflaredPath = Join-Path $managedBinDir "cloudflared-0123456789ab.exe"
   New-Item -ItemType Directory -Path $secondInstallDir,$secondStateDir,$managedBinDir -Force | Out-Null
   Set-Content -LiteralPath (Join-Path $secondInstallDir "marker.txt") -Value "managed program"
   Set-Content -LiteralPath $managedCloudflaredPath -Value "managed cloudflared"
+  $secondShimPath = Join-Path $managedBinDir "cx-codex.cmd"
+  $shortTestRoot = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($testRoot).ShortPath
+  $shortShimTarget = Join-Path $shortTestRoot "program-remove-data[managed]\dist-cli\index.js"
+  Set-Content -LiteralPath $secondShimPath -Encoding ASCII -Value "@echo off`r`nrem CX-Codex managed CLI shim`r`n`"$nodePath`" `"$shortShimTarget`" %*"
   [ordered]@{
     port = 17421
     cloudflaredCommand = $managedCloudflaredPath
@@ -397,6 +440,7 @@ URL=https://example.invalid/personal-shortcut
   Assert-True (-not (Test-Path -LiteralPath $secondInstallDir)) "Full uninstall must remove the managed program directory."
   Assert-True (-not (Test-Path -LiteralPath $secondStateDir)) "Full uninstall must remove CX-Codex user data when requested."
   Assert-True (-not (Test-Path -LiteralPath $managedCloudflaredPath)) "Full uninstall must remove the managed cloudflared binary when requested."
+  Assert-True (-not (Test-Path -LiteralPath $secondShimPath)) "Full uninstall must remove its marked CLI shim with short paths and brackets. $($removeDataResult.Stderr)"
   Write-Host "productization: full uninstall passed"
 
   $uninstallFailureResult = Invoke-CapturedPowerShell `
