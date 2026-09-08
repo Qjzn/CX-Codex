@@ -236,6 +236,7 @@ $resolvedInstallDir = Assert-SafeManagedDirectory -Path $InstallDir -Label "inst
 $resolvedStateDir = Assert-SafeManagedDirectory -Path $StateDir -Label "state"
 $resolvedManagedBinDir = Assert-SafeManagedDirectory -Path $ManagedBinDir -Label "managed bin"
 $resolvedLauncherPath = Get-FullPath -Path $LauncherPath -Label "launcher"
+$resolvedCliShimPath = Join-Path $resolvedManagedBinDir "cx-codex.cmd"
 $resolvedConfigPath = Join-Path $resolvedStateDir "config.json"
 $resolvedTaskName = if ([string]::IsNullOrWhiteSpace($TaskName)) { "CodexUI-$Port" } else { $TaskName }
 $resolvedWatchdogTaskName = if ([string]::IsNullOrWhiteSpace($WatchdogTaskName)) { "CodexUI-$Port-Watchdog" } else { $WatchdogTaskName }
@@ -393,6 +394,27 @@ if ($firewallCommand) {
 $script:UninstallStage = "remove_program_files"
 Remove-ManagedItem -Path $resolvedServerPidPath -Label "server PID marker"
 Remove-ManagedItem -Path $resolvedLauncherPath -Label "launcher"
+if (Test-Path -LiteralPath $resolvedCliShimPath) {
+  $shimText = [System.IO.File]::ReadAllText($resolvedCliShimPath, [System.Text.Encoding]::ASCII)
+  $managedIndexPath = Join-Path $resolvedInstallDir "dist-cli\index.js"
+  $targetMatch = [regex]::Match($shimText, '(?m)^"[^"\r\n]+"\s+"(?<target>[^"\r\n]+)"\s+%\*')
+  $isManagedShim = $false
+  if ($shimText.Contains("rem CX-Codex managed CLI shim") -and $targetMatch.Success) {
+    try {
+      $shimTarget = $targetMatch.Groups["target"].Value
+      $isManagedShim = [System.IO.Path]::IsPathRooted($shimTarget) -and
+        [string]::Equals([System.IO.Path]::GetFullPath($shimTarget), $managedIndexPath, [System.StringComparison]::OrdinalIgnoreCase)
+    } catch {
+      $isManagedShim = $false
+    }
+  }
+  if ($isManagedShim) {
+    Remove-ManagedItem -Path $resolvedCliShimPath -Label "CLI shim"
+  } else {
+    $script:PreservedItems.Add("cli-shim:$resolvedCliShimPath") | Out-Null
+    Write-UninstallWarning -Code "CLI_SHIM_PRESERVED" -Message "Preserved CLI shim because it does not target the managed CX-Codex installation."
+  }
+}
 foreach ($managementShortcutPath in $managementShortcutPaths) {
   if (
     (Test-Path -LiteralPath $managementShortcutPath) -and
