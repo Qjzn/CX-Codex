@@ -70,6 +70,7 @@ jobs:
               -Port 7441 `
               -Password "ci-password" `
               -SkipStartupTask `
+              -SkipWatchdogTask `
               -SkipFirewall `
               -SkipLogin `
               -NoStart `
