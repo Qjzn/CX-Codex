@@ -63,6 +63,8 @@ export const CHAT_FEEDBACK_METRIC_STORAGE_KEY = 'codex-web-local.chat-feedback-m
 
 const CHAT_FEEDBACK_METRIC_LIMIT = 50
 const CHAT_FEEDBACK_METRIC_TTL_MS = 7 * 24 * 60 * 60 * 1_000
+// Telemetry ownership only: old persisted samples must not acquire new DOM timestamps on reload.
+const currentPageOptimisticMessageIds = new Set<string>()
 const CHAT_FEEDBACK_STAGE_READERS: Record<
   ChatFeedbackStageName,
   (metric: ChatFeedbackMetric) => number | undefined
@@ -76,6 +78,8 @@ const CHAT_FEEDBACK_STAGE_READERS: Record<
   firstAssistantData: (metric) => metric.firstAssistantDataLatencyMs,
   firstAssistantVisible: (metric) => metric.firstAssistantVisibleLatencyMs,
   assistantRenderOverhead: (metric) => {
+    // Compatibility name: data-to-visible wall time, including time the user
+    // keeps the reply offscreen/hidden. This is not a pure rendering CPU metric.
     if (
       metric.firstAssistantDataLatencyMs === undefined
       || metric.firstAssistantVisibleLatencyMs === undefined
@@ -273,6 +277,11 @@ export function beginChatFeedbackMetric(args: {
   submitStartedAtMs: number
 }): void {
   if (typeof window === 'undefined') return
+  currentPageOptimisticMessageIds.add(args.optimisticMessageId)
+  if (currentPageOptimisticMessageIds.size > CHAT_FEEDBACK_METRIC_LIMIT) {
+    const oldestId = currentPageOptimisticMessageIds.values().next().value
+    if (oldestId) currentPageOptimisticMessageIds.delete(oldestId)
+  }
   const stateCommittedAtMs = chatFeedbackNow()
   const host = window as ChatFeedbackMetricHost
   const nextMetric: ChatFeedbackMetric = {
@@ -310,6 +319,7 @@ export function markChatFeedbackRendered(args: {
   threadId: string
   optimisticMessageId: string
   runningVisible: boolean
+  bubbleVisible?: boolean
 }): void {
   if (typeof window === 'undefined') return
   const host = window as ChatFeedbackMetricHost
@@ -321,7 +331,7 @@ export function markChatFeedbackRendered(args: {
     if (
       metric.threadId === args.threadId
       && metric.optimisticMessageId === args.optimisticMessageId
-      && (metric.bubbleVisibleAtMs === undefined || (args.runningVisible && metric.runningVisibleAtMs === undefined))
+      && ((args.bubbleVisible !== false && metric.bubbleVisibleAtMs === undefined) || (args.runningVisible && metric.runningVisibleAtMs === undefined))
     ) {
       metricIndex = index
       break
@@ -332,7 +342,7 @@ export function markChatFeedbackRendered(args: {
   const nowMs = chatFeedbackNow()
   const current = metrics[metricIndex]
   const next: ChatFeedbackMetric = { ...current }
-  if (next.bubbleVisibleAtMs === undefined) {
+  if (args.bubbleVisible !== false && next.bubbleVisibleAtMs === undefined) {
     next.bubbleVisibleAtMs = nowMs
     next.bubbleVisibleLatencyMs = Math.max(0, Math.round(nowMs - next.submitStartedAtMs))
   }
@@ -430,11 +440,13 @@ export function markChatFeedbackFirstAssistantData(args: {
 
 export function markChatFeedbackFirstAssistantVisible(args: {
   threadId: string
+  turnId?: string
   visibleMessageIds: ReadonlySet<string>
 }): void {
   updateChatFeedbackMetric(
     (metric) => (
       metric.threadId === args.threadId
+      && (!args.turnId || metric.turnId === args.turnId)
       && metric.firstAssistantDataAtMs !== undefined
       && Boolean(
         metric.firstAssistantMessageId
@@ -448,6 +460,70 @@ export function markChatFeedbackFirstAssistantVisible(args: {
       firstAssistantVisibleLatencyMs: Math.max(0, Math.round(nowMs - metric.submitStartedAtMs)),
     }),
   )
+}
+
+export type ChatFeedbackDomIdentity = {
+  kind: 'user' | 'running' | 'assistant'
+  threadId: string
+  turnId?: string
+  itemId?: string
+  clientMessageId?: string
+  optimisticMessageId?: string
+}
+
+function findChatFeedbackDomMetric(identity: ChatFeedbackDomIdentity): ChatFeedbackMetric | undefined {
+  if (typeof window === 'undefined') return undefined
+  const metrics = getChatFeedbackMetrics(window as ChatFeedbackMetricHost)
+  for (let index = metrics.length - 1; index >= 0; index -= 1) {
+    const metric = metrics[index]
+    if (!currentPageOptimisticMessageIds.has(metric.optimisticMessageId) || metric.threadId !== identity.threadId) continue
+    if (identity.kind === 'user') {
+      if (!identity.optimisticMessageId && !identity.clientMessageId) continue
+      if (identity.optimisticMessageId && metric.optimisticMessageId !== identity.optimisticMessageId) continue
+      if (identity.clientMessageId && metric.clientMessageId !== identity.clientMessageId) continue
+    } else {
+      if (!identity.turnId || metric.turnId !== identity.turnId) continue
+      if (identity.kind === 'assistant' && (!identity.itemId || metric.firstAssistantMessageId !== identity.itemId
+        || metric.firstAssistantDataAtMs === undefined)) continue
+    }
+    return metric
+  }
+  return undefined
+}
+
+/** Cheap identity-only gate, before observers or any synchronous layout reads. */
+export function isChatFeedbackDomMetricPending(identity: ChatFeedbackDomIdentity): boolean {
+  const metric = findChatFeedbackDomMetric(identity)
+  if (!metric) return false
+  if (identity.kind === 'user') return metric.bubbleVisibleAtMs === undefined
+  if (identity.kind === 'running') return metric.runningVisibleAtMs === undefined
+  return metric.firstAssistantVisibleAtMs === undefined
+}
+
+/** Called only after a matching DOM node is mounted and visible in the conversation viewport. */
+export function markChatFeedbackDomVisible(identity: ChatFeedbackDomIdentity): void {
+  if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+  const metric = findChatFeedbackDomMetric(identity)
+  if (!metric) return
+  if (identity.kind !== 'user') {
+    if (identity.kind === 'running') {
+      markChatFeedbackRendered({
+        threadId: metric.threadId, optimisticMessageId: metric.optimisticMessageId,
+        runningVisible: true, bubbleVisible: false,
+      })
+    } else if (identity.itemId && metric.firstAssistantMessageId === identity.itemId) {
+      markChatFeedbackFirstAssistantVisible({
+        threadId: identity.threadId, turnId: identity.turnId,
+        visibleMessageIds: new Set([identity.itemId]),
+      })
+    }
+    return
+  }
+  markChatFeedbackRendered({
+    threadId: metric.threadId,
+    optimisticMessageId: metric.optimisticMessageId,
+    runningVisible: false,
+  })
 }
 
 if (typeof window !== 'undefined') {

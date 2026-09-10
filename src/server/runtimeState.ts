@@ -378,7 +378,7 @@ export class RuntimeStateStore {
       return
     }
 
-    if (method === 'turn/started' || method === 'turn/start' || method === 'thread/started') {
+    if (method === 'turn/started' || method === 'turn/start') {
       this.touch(threadId, {
         executionState: 'running',
         activeTurnId: turnId,

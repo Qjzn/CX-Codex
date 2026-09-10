@@ -45,6 +45,22 @@
 
         <div class="queued-row-actions">
           <button
+            v-if="canReorderQueue && index > 0"
+            class="queued-row-move"
+            type="button"
+            :aria-label="`上移第 ${index + 1} 条排队消息`"
+            title="上移"
+            @click.stop="$emit('move', msg.id, 'up')"
+          >↑</button>
+          <button
+            v-if="canReorderQueue && index < messages.length - 1"
+            class="queued-row-move"
+            type="button"
+            :aria-label="`下移第 ${index + 1} 条排队消息`"
+            title="下移"
+            @click.stop="$emit('move', msg.id, 'down')"
+          >↓</button>
+          <button
             v-if="msg.deliveryState === 'failed'"
             class="queued-row-retry"
             type="button"
@@ -93,12 +109,20 @@ defineEmits<{
   quote: [messageId: string]
   retry: [messageId: string]
   delete: [messageId: string]
+  move: [messageId: string, direction: 'up' | 'down']
 }>()
 
 const hasPausedFailure = computed(() => props.messages[0]?.deliveryState === 'failed')
 const hasLocalPending = computed(() => props.messages.some((message) => message.backgroundPersisted !== true))
 const hasNativeWriterWait = computed(() => props.messages.some((message) => message.waitReason === 'native_writer'))
 const hasExternalWriterWait = computed(() => props.messages.some((message) => message.waitReason === 'external_writer'))
+const canReorderQueue = computed(() => {
+  if (props.messages.length < 2 || props.isProcessing === true || hasPausedFailure.value || hasLocalPending.value) {
+    return false
+  }
+  const ownershipKinds = new Set(props.messages.map((message) => message.waitReason ?? 'local'))
+  return ownershipKinds.size === 1
+})
 
 function getMessagePreview(message: QueuedMessageRow): string {
   const text = message.text.trim()
@@ -243,12 +267,14 @@ function getMessageMeta(message: QueuedMessageRow): string {
   background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-bg-surface));
 }
 
+.queued-row-move,
 .queued-row-delete {
   @apply inline-flex h-7 w-7 items-center justify-center border-0 bg-transparent transition;
   border-radius: var(--ui-radius-control);
   color: var(--ui-text-tertiary);
 }
 
+.queued-row-move:hover,
 .queued-row-delete:hover {
   background: var(--ui-bg-row-hover);
   color: var(--ui-text-primary);
@@ -273,6 +299,18 @@ function getMessageMeta(message: QueuedMessageRow): string {
 
   .queued-row-retry {
     @apply px-2 py-0.5;
+  }
+
+  .queued-row-quote,
+  .queued-row-retry,
+  .queued-row-move,
+  .queued-row-delete {
+    min-height: 44px;
+  }
+
+  .queued-row-move,
+  .queued-row-delete {
+    min-width: 44px;
   }
 }
 </style>

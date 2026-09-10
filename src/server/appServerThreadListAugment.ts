@@ -42,6 +42,21 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function deduplicateThreadRowsById(data: unknown[]): unknown[] {
+  const seenThreadIds = new Set<string>()
+  const deduplicated: unknown[] = []
+
+  for (const row of data) {
+    const record = asRecord(row)
+    const threadId = typeof record?.id === 'string' ? record.id.trim() : ''
+    if (threadId && seenThreadIds.has(threadId)) continue
+    if (threadId) seenThreadIds.add(threadId)
+    deduplicated.push(row)
+  }
+
+  return deduplicated.length === data.length ? data : deduplicated
+}
+
 export class AppServerThreadListAugmenter {
   private readonly cacheByThreadId = new Map<string, SupplementalThreadSummaryCacheEntry>()
   private readonly ttlMs: number
@@ -71,19 +86,28 @@ export class AppServerThreadListAugmenter {
   }
 
   async augmentThreadListRpcResult(options: ThreadListAugmentOptions): Promise<unknown> {
-    const paramsRecord = asRecord(options.params)
-    if (paramsRecord?.archived === true) return options.result
-    if (typeof paramsRecord?.cursor === 'string' && paramsRecord.cursor.length > 0) return options.result
-
     const resultRecord = asRecord(options.result)
     const data = Array.isArray(resultRecord?.data) ? resultRecord.data : null
     if (!data) return options.result
 
+    // Codex can expose different session files with the same thread id. The web
+    // client keys pagination and selection by thread id, so keep the first
+    // (highest-ranked) row and make every thread/list page stable before adding
+    // local session-index supplements.
+    const deduplicatedData = deduplicateThreadRowsById(data)
+    const normalizedResult = deduplicatedData === data
+      ? options.result
+      : { ...resultRecord, data: deduplicatedData }
+
+    const paramsRecord = asRecord(options.params)
+    if (paramsRecord?.archived === true) return normalizedResult
+    if (typeof paramsRecord?.cursor === 'string' && paramsRecord.cursor.length > 0) return normalizedResult
+
     const supplementalThreadIds = await options.readSupplementalThreadIds()
-    if (supplementalThreadIds.length === 0) return options.result
+    if (supplementalThreadIds.length === 0) return normalizedResult
 
     const existingThreadIds = new Set<string>()
-    for (const row of data) {
+    for (const row of deduplicatedData) {
       const record = asRecord(row)
       const id = typeof record?.id === 'string' ? record.id : ''
       if (id) existingThreadIds.add(id)
@@ -94,11 +118,11 @@ export class AppServerThreadListAugmenter {
       existingThreadIds,
       options.readThreadById,
     )
-    if (supplementalThreads.length === 0) return options.result
+    if (supplementalThreads.length === 0) return normalizedResult
 
     return {
       ...resultRecord,
-      data: [...data, ...supplementalThreads],
+      data: [...deduplicatedData, ...supplementalThreads],
     }
   }
 

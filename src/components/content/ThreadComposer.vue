@@ -420,6 +420,19 @@
             </button>
             <div class="thread-composer-attach-separator" />
             <button
+              v-if="props.canManageThreadGoal === true"
+              class="thread-composer-attach-item"
+              type="button"
+              :disabled="isInteractionDisabled"
+              @click="openThreadGoalEditor"
+            >
+              <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--text">◎</span>
+              <span class="thread-composer-attach-item-body">
+                <span class="thread-composer-attach-item-title">设置持续目标</span>
+                <span class="thread-composer-attach-item-subtitle">任务空闲时持续推进，可随时暂停或编辑</span>
+              </span>
+            </button>
+            <button
               class="thread-composer-attach-item thread-composer-attach-item--toggle"
               type="button"
               :aria-pressed="selectedCollaborationMode === 'plan'"
@@ -811,6 +824,7 @@ import type {
   TurnGoalSelection,
 } from '../../types/codex'
 import { useDictation } from '../../composables/useDictation'
+import { toRenderableImageUrl } from '../../utils/localImageUrl'
 import { searchComposerFiles, uploadFile, type ComposerFileSuggestion } from '../../api/codexGateway'
 import { useLazyModalEnvironment } from '../../composables/useLazyModalEnvironment'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
@@ -853,6 +867,7 @@ const props = defineProps<{
   prependDraftRequest?: { id: number; text: string } | null
   dictationAutoSend?: boolean
   dictationLanguage?: string
+  canManageThreadGoal?: boolean
 }>()
 
 export type FileAttachment = { label: string; path: string; fsPath: string }
@@ -893,6 +908,7 @@ const emit = defineEmits<{
   'refresh-plugins': []
   'reload-plugins': []
   'login-plugin': [pluginId: string]
+  'open-thread-goal': []
 }>()
 
 type SelectedImage = {
@@ -1427,27 +1443,6 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer', options?: { rollbackLatestU
   nextTick(() => inputRef.value?.focus())
 }
 
-function toRenderableImageUrl(value: string): string {
-  const normalized = value.trim()
-  if (!normalized) return ''
-  if (
-    normalized.startsWith('data:') ||
-    normalized.startsWith('blob:') ||
-    normalized.startsWith('http://') ||
-    normalized.startsWith('https://') ||
-    normalized.startsWith('/codex-local-image?')
-  ) {
-    return normalized
-  }
-  if (normalized.startsWith('file://')) {
-    return `/codex-local-image?path=${encodeURIComponent(normalized)}`
-  }
-  if (normalized.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(normalized)) {
-    return `/codex-local-image?path=${encodeURIComponent(normalized)}`
-  }
-  return normalized
-}
-
 function reconcilePendingRestoredSkills(): void {
   if (!props.hasLoadedSkills) {
     return
@@ -1697,6 +1692,12 @@ function toggleGoalMode(): void {
   if (goalModeEnabled.value && !goalText.value.trim()) {
     goalText.value = '主动给出可执行的下一步，并补齐关键风险。'
   }
+}
+
+function openThreadGoalEditor(): void {
+  if (isInteractionDisabled.value || props.canManageThreadGoal !== true) return
+  closeAttachMenu(false)
+  void nextTick(() => emit('open-thread-goal'))
 }
 
 function disableGoalMode(): void {
@@ -2717,7 +2718,7 @@ watch(
 @reference "tailwindcss";
 
 .thread-composer {
-  @apply relative w-full mx-auto px-2 sm:px-6;
+  @apply relative w-full mx-auto px-2 sm:px-5;
   max-width: min(var(--ui-composer-max, var(--content-shell-max-width, 88rem)), 100%);
 }
 
@@ -2758,14 +2759,19 @@ watch(
 .thread-composer-shell {
   @apply relative border p-2 sm:p-2.5;
   min-height: var(--ui-composer-min-height);
-  border-radius: var(--ui-radius-composer);
+  border-radius: 12px;
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
-  box-shadow: 0 8px 20px rgb(0 0 0 / 0.045);
+  box-shadow: none;
   transition:
     border-color 180ms ease,
     box-shadow 180ms ease,
     background-color 180ms ease;
+}
+
+.thread-composer-shell:focus-within {
+  border-color: color-mix(in srgb, var(--ui-accent, #0f766e) 42%, var(--ui-border-subtle));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ui-accent, #0f766e) 18%, transparent);
 }
 
 .thread-composer-shell--dictation-inserted {
@@ -3698,8 +3704,8 @@ watch(
 }
 
 .thread-composer-submit {
-  @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-0 bg-[#1f1f1f] text-white transition hover:bg-black disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-500;
-  box-shadow: 0 12px 24px -22px rgba(0, 0, 0, 0.55);
+  @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-0 bg-[#1f1f1f] text-white transition hover:bg-black disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-500;
+  box-shadow: none;
 }
 
 .thread-composer-submit--queue {
@@ -3713,7 +3719,7 @@ watch(
 
   .thread-composer-shell {
     @apply px-3 py-1.5;
-    border-radius: var(--ui-radius-composer);
+    border-radius: 12px;
   }
 }
 
@@ -3766,6 +3772,22 @@ watch(
   @apply hidden;
 }
 
+@media (pointer: coarse) {
+  .thread-composer-input,
+  .thread-composer-runtime-trigger {
+    min-height: 44px;
+  }
+
+  .thread-composer-expand,
+  .thread-composer-attach-trigger,
+  .thread-composer-mic,
+  .thread-composer-submit,
+  .thread-composer-stop {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
 @media (max-width: 767px) {
   .thread-composer {
     @apply px-2;
@@ -3774,12 +3796,12 @@ watch(
   .thread-composer-shell {
     @apply px-2.5 py-1.5;
     min-height: 86px;
-    border-radius: 18px;
-    box-shadow: 0 6px 16px rgb(0 0 0 / 0.045);
+    border-radius: 12px;
+    box-shadow: none;
   }
 
   .thread-composer-input {
-    @apply min-h-8 py-1 text-[14px];
+    @apply min-h-11 py-1 text-[14px];
     line-height: 1.42;
   }
 

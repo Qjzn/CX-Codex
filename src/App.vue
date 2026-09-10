@@ -81,7 +81,7 @@
               aria-label="侧栏快捷操作"
             >
               <button
-                class="sidebar-action-tile"
+                class="sidebar-action-tile sidebar-action-tile--primary"
                 type="button"
                 aria-label="新建会话"
                 title="新建会话"
@@ -554,8 +554,6 @@
           tabindex="-1"
         >
         <ContentHeader :title="contentTitle">
-          <template #title-prefix>
-          </template>
           <template #title-suffix>
             <button
               v-if="showMobileThreadRefreshButton"
@@ -586,8 +584,8 @@
               <span v-if="favoriteCount > 0" class="content-favorites-button-badge">{{ favoriteCount }}</span>
             </button>
           </template>
-          <template #subtitle>
-            <p v-if="headerSubtitle" class="content-header-subtitle">{{ headerSubtitle }}</p>
+          <template v-if="headerSubtitle" #subtitle>
+            <p class="content-header-subtitle">{{ headerSubtitle }}</p>
           </template>
           <template #leading>
             <SidebarThreadControls
@@ -600,7 +598,7 @@
               @start-new-thread="onStartNewThreadFromToolbar"
             />
           </template>
-          <template #meta>
+          <template v-if="showContentHeaderMeta" #meta>
             <div class="content-meta-row" aria-live="polite">
             <span
               v-if="showContentContextBadge"
@@ -625,7 +623,12 @@
               </span>
               <span class="content-context-badge-number">{{ contentContextPercentLabel }}</span>
             </span>
-              <div v-if="showHeaderStatusStrip" class="content-status-strip">
+              <div
+                v-if="showHeaderStatusStrip"
+                class="content-status-strip"
+                :title="contentStatusDetail || undefined"
+                :aria-label="contentStatusAriaLabel"
+              >
                 <span class="content-status-pill" :data-tone="contentStatusTone">
                   <span class="content-status-pill-label">{{ contentStatusCaption }}</span>
                   <span>{{ contentStatusLabel }}</span>
@@ -711,18 +714,16 @@
               >
                 <ThreadConversation
                   ref="threadConversationRef"
-                  :messages="[pendingNewThreadPreview.message]"
+                  :projection="pendingNewThreadConversationProjection"
                   :is-loading="false"
                   active-thread-id="__new-thread__"
                   :cwd="pendingNewThreadPreview.cwd"
                   :scroll-state="null"
-                  :live-overlay="pendingNewThreadPreview.liveOverlay"
-                  :pending-requests="[]"
                   :favorite-message-ids="[]"
                   :is-thread-switching="false"
                   :compact-runtime-chrome="true"
                   :show-empty-thread-actions="false"
-                  :is-turn-in-progress="pendingNewThreadPreview.liveOverlay !== null"
+                  :is-turn-in-progress="pendingNewThreadPreview.message.deliveryState === 'sending' || pendingNewThreadPreview.message.deliveryState === 'confirming' || pendingNewThreadPreview.message.deliveryState === 'sent'"
                   :is-rolling-back="false"
                   :allow-failed-message-edit="true"
                   @copy-status="onConversationCopyStatus"
@@ -803,10 +804,8 @@
           <template v-else-if="isThreadRoute">
             <div class="content-grid">
               <div class="content-thread">
-                <ThreadConversation ref="threadConversationRef" :messages="displayedThreadMessages" :is-loading="isLoadingMessages || isManualThreadRefreshRunning || isRouteThreadResolutionPending"
+                <ThreadConversation ref="threadConversationRef" :projection="displayedThreadConversationProjection" :is-loading="isLoadingMessages || isManualThreadRefreshRunning || isRouteThreadResolutionPending"
                   :active-thread-id="displayedThreadConversationId" :cwd="displayedThreadCwd" :scroll-state="displayedThreadScrollState"
-                  :live-overlay="displayedThreadLiveOverlay"
-                  :pending-requests="displayedThreadPendingRequests"
                   :load-error="selectedThreadLoadError"
                   :show-connection-settings-action="isMobileShellAvailable"
                   :favorite-message-ids="favoriteMessageIdsForDisplayedThread"
@@ -817,7 +816,6 @@
                   :is-turn-in-progress="isSelectedThreadInProgress"
                   :is-rolling-back="isRollingBack"
                   :implementing-plan-id="implementingPlanId"
-                  :implemented-plan-ids="implementedPlanIds"
                   @update-scroll-state="onUpdateThreadScrollState"
                   @respond-server-request="onRespondServerRequest"
                   @toggle-favorite="onToggleFavoriteMessage"
@@ -852,6 +850,7 @@
                   @quote="onQuoteQueuedMessage"
                   @retry="retryQueuedMessage"
                   @delete="deleteQueuedMessage"
+                  @move="moveQueuedMessage"
                 />
                 <ThreadGoalBar
                   :key="selectedThreadId"
@@ -861,6 +860,7 @@
                   :error="selectedThreadGoalError"
                   :execution-hint="selectedThreadGoalExecutionHint"
                   :plan-mode-active="selectedCollaborationMode === 'plan'"
+                  :open-editor-request="threadGoalEditorRequestId"
                   :disabled="isThreadContentSwitching"
                   @set-goal="onSaveThreadGoal"
                   @set-status="onSetThreadGoalStatus"
@@ -893,6 +893,7 @@
                   :show-dictation-button="dictationButtonVisible"
                   :prepend-draft-request="rollbackDraftPrependRequest"
                   :dictation-language="dictationLanguage"
+                  :can-manage-thread-goal="true"
                   @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
                   @update:selected-reasoning-effort="onSelectReasoningEffort"
                   @update:selected-speed-mode="onSelectSpeedMode"
@@ -900,6 +901,7 @@
                   @refresh-plugins="refreshComposerPlugins"
                   @reload-plugins="reloadComposerPlugins"
                   @login-plugin="loginComposerPlugin"
+                  @open-thread-goal="onOpenThreadGoalEditor"
                   @interrupt="onInterruptTurn('composer-stop')" />
               </div>
             </div>
@@ -1121,7 +1123,6 @@ import { chatFeedbackNow } from './composables/chatFeedbackMetrics'
 import { useFavorites, type FavoriteRecord } from './composables/useFavorites'
 import { useMobile } from './composables/useMobile'
 import { resolveSendWithEnterPreference } from './composables/composerEnterBehavior'
-import { PLAN_IMPLEMENTATION_CONFIRMATION } from './composables/conversationProjection'
 import { useLazyModalEnvironment } from './composables/useLazyModalEnvironment'
 import {
   createWorktree,
@@ -1143,16 +1144,22 @@ import type {
   ReasoningEffort,
   SpeedMode,
   ThreadScrollState,
-  UiLiveOverlay,
-  UiMessage,
   UiRateLimitSnapshot,
   UiRateLimitWindow,
-  UiServerRequest,
   UiTaskPetRecentThread,
   UiThread,
 } from './types/codex'
 import type { ComposerDraftPayload, SubmitPayload, ThreadComposerExposed } from './components/content/ThreadComposer.vue'
 import type { ThreadConversationExposed } from './components/content/ThreadConversation.vue'
+import {
+  PLAN_IMPLEMENTATION_CONFIRMATION,
+  derivePlanImplementationState,
+  planImplementationKey,
+  projectConversation,
+  type ConversationFavoriteIntent,
+  type ConversationPlanImplementationIntent,
+  type ConversationProjection,
+} from './conversation-transcript'
 import type {
   DesktopAppStatus,
   GithubTipsScope,
@@ -1472,8 +1479,8 @@ const {
   activeTaskPetItems,
   selectedThreadScrollState,
   selectedThreadServerRequests,
-  selectedLiveOverlay,
   selectedThreadRuntimeStatus,
+  selectedConversationProjection,
   selectedThreadTokenUsage,
   selectedThreadGoal,
   isSelectedThreadGoalLoading,
@@ -1495,7 +1502,6 @@ const {
   hasLoadedComposerPlugins,
   accountRateLimitSnapshots,
   threadTitleById,
-  messages,
   selectedThreadDetachedFailedMessages,
   isLoadingThreads,
   isLoadingMessages,
@@ -1540,6 +1546,7 @@ const {
   removeQueuedMessage,
   deleteQueuedMessage,
   retryQueuedMessage,
+  moveQueuedMessage,
   quoteQueuedMessage,
   markThreadAsRead,
   markThreadAsUnread,
@@ -1574,8 +1581,10 @@ const isSettingsSheetMode = computed(() => isMobile.value || isDualPaneMobile.va
 const { favorites, toggleFavorite, removeFavorite, refreshFavorites } = useFavorites()
 const homeThreadComposerRef = ref<ThreadComposerExposed | null>(null)
 const threadComposerRef = ref<ThreadComposerExposed | null>(null)
-const implementingPlanId = ref('')
-const implementedPlanIds = ref<string[]>([])
+const threadGoalEditorRequestId = ref(0)
+const implementingPlan = ref<{ threadId: string; activityId: string } | null>(null)
+const implementingPlanId = computed(() => implementingPlan.value?.threadId === selectedThreadId.value
+  ? implementingPlan.value.activityId : '')
 const threadConversationRef = ref<ThreadConversationExposed | null>(null)
 const sidebarThreadTreeRef = ref<{ revealSelectedThread: () => Promise<boolean> } | null>(null)
 const sidebarScrollableRef = ref<HTMLElement | null>(null)
@@ -1747,7 +1756,7 @@ const mobileShellTaskPetItems = computed<MobileShellTaskPetItem[]>(() => {
       clientMessageId: preview.clientMessageId,
       activityId: `request:${preview.clientMessageId}`,
       activeTurnId: '',
-      startedAtMs: preview.liveOverlay?.startedAtMs,
+      startedAtMs: preview.submittedAtMs,
       lastEventSeq: 0,
       executionState: deliveryState === 'confirming' ? 'start_uncertain' : 'starting',
       title,
@@ -1757,11 +1766,15 @@ const mobileShellTaskPetItems = computed<MobileShellTaskPetItem[]>(() => {
         : deliveryState === 'confirming'
           ? '正在确认任务状态'
           : '正在创建会话',
-      latestActivity: preview.liveOverlay?.activityDetails.at(-1)?.trim() || '首条消息已保存，正在连接 7420',
+      latestActivity: deliveryState === 'waiting'
+        ? '首条消息已保存，等待网络恢复'
+        : deliveryState === 'confirming'
+          ? '首条消息已保存，正在确认 7420 是否接收'
+          : '首条消息已保存，正在连接 7420',
       latestReply: '',
       latestReplyEventSeq: 0,
       state: deliveryState === 'waiting' || deliveryState === 'confirming' ? 'waiting' : 'running',
-      updatedAtIso: new Date(preview.liveOverlay?.startedAtMs ?? 0).toISOString(),
+      updatedAtIso: new Date(preview.submittedAtMs).toISOString(),
     })
   }
   return items.slice(0, 8)
@@ -2063,7 +2076,7 @@ const isRouteThreadResolutionPending = computed(() => (
   route.name === 'thread'
   && !!routeThreadId.value
   && !selectedThread.value
-  && filteredMessages.value.length === 0
+  && selectedConversationProjection.value.turns.length === 0
   && selectedThreadServerRequests.value.length === 0
   && !selectedThreadLoadError.value
   && (
@@ -2077,7 +2090,7 @@ const isRouteOnlyEmptyThread = computed(() => (
   route.name === 'thread'
   && !!routeThreadId.value
   && !selectedThread.value
-  && filteredMessages.value.length === 0
+  && selectedConversationProjection.value.turns.length === 0
   && selectedThreadServerRequests.value.length === 0
   && !isRouteThreadResolutionPending.value
 ))
@@ -2090,34 +2103,14 @@ const routeThreadCachedTitle = computed(() => {
 function isInternalThreadTitleCandidate(line: string): boolean {
   return /^<(?:codex_internal_context|recommended_plugins|permissions|app-context|collaboration_mode|skills_instructions|apps_instructions|plugins_instructions|environment_context)\b/iu.test(line.trim())
 }
-function isInternalCodexContextMessage(message: UiMessage): boolean {
-  if (message.role !== 'user') return false
-  const text = message.text.trim()
-  return /^<(?:codex_internal_context|recommended_plugins|permissions|app-context|collaboration_mode|skills_instructions|apps_instructions|plugins_instructions|environment_context)\b/iu.test(text)
-}
-function stripAssistantTransportMetadata(text: string): string {
-  return text
-    .replace(/(?:^|\n)::(?:git-(?:stage|commit|create-branch|push|create-pr)|created-thread|code-comment)\{[^\n]*\}(?=\n|$)/gu, '\n')
-    .replace(/\s*<oai-mem-citation>[\s\S]*?<\/oai-mem-citation>\s*$/iu, '')
-    .replace(/\n{3,}/gu, '\n\n')
-    .trimEnd()
-}
-function toVisibleConversationMessage(message: UiMessage): UiMessage {
-  if (
-    message.role !== 'assistant' ||
-    (!message.text.includes('<oai-mem-citation>') && !/(?:^|\n)::(?:git-|created-thread|code-comment)/u.test(message.text))
-  ) return message
-  const text = stripAssistantTransportMetadata(message.text)
-  return text === message.text ? message : { ...message, text }
-}
 const routeThreadFallbackTitle = computed(() => {
   if (route.name !== 'thread' || selectedThread.value) return ''
   const cachedTitle = routeThreadCachedTitle.value
   if (cachedTitle) return cachedTitle
-  const userMessage = messages.value.find((message) => (
-    message.role === 'user' && message.text.trim() && !isInternalCodexContextMessage(message)
-  ))
-  const firstLine = userMessage?.text
+  const firstVisibleOpener = selectedConversationProjection.value.turns
+    .map((turn) => turn.opener)
+    .find((opener) => opener?.text.trim())
+  const firstLine = firstVisibleOpener?.text
     .split('\n')
     .map((line) => line.trim())
     .find((line) => line.length > 0 && !isInternalThreadTitleCandidate(line)) ?? ''
@@ -2315,6 +2308,25 @@ const serviceStatusLabel = computed(() => {
   if (isLoadingMessages.value || isSendingMessage.value) return '同步中'
   return '连接正常'
 })
+const selectedProjectedActiveTurn = computed(() => (
+  [...selectedConversationProjection.value.turns]
+    .reverse()
+    .find((turn) => turn.state === 'submitting' || turn.state === 'queued' || turn.state === 'running' || turn.state === 'waiting') ?? null
+))
+const selectedProjectedActivityLabel = computed(() => {
+  const turn = selectedProjectedActiveTurn.value
+  if (!turn) return ''
+  if (turn.state === 'submitting') {
+    if (turn.opener?.deliveryState === 'waitingNetwork') return '等待网络'
+    if (turn.opener?.deliveryState === 'confirmationPending') return '正在确认送达'
+    return turn.opener?.deliveryState === 'sent' ? '已送达，等待启动' : '发送中'
+  }
+  if (turn.state === 'waiting') return '等待确认'
+  const activity = turn.activities.at(-1)
+  if (activity?.label) return activity.label
+  if (turn.commentary.at(-1)?.streaming) return '整理回复'
+  return turn.state === 'queued' ? '等待执行' : '处理中'
+})
 const serviceStatusDetail = computed(() => {
   if (syncError.value.trim().length > 0) return syncError.value.trim()
   if (realtimeConnectionState.value === 'disconnected' && hasActiveSyncDemand.value) return '实时通道暂时断开，页面会自动重连并补齐最新内容。'
@@ -2325,39 +2337,17 @@ const serviceStatusDetail = computed(() => {
   if (selectedThreadServerRequests.value.length > 0) return '当前任务需要你的确认或补充，处理后会自动继续。'
   if (realtimeConnectionState.value === 'reconnecting' || realtimeConnectionState.value === 'disconnected') return '网络或通知恢复后会自动加载最新内容。'
   if (notificationStale.value) return '当前没有进行中的任务，页面会在回到前台或网络恢复时自动同步。'
-  if (selectedLiveOverlay.value?.activityLabel) return humanizeActivityLabel(selectedLiveOverlay.value.activityLabel)
+  if (selectedProjectedActivityLabel.value) return humanizeActivityLabel(selectedProjectedActivityLabel.value)
   return '实时连接正常。'
 })
-function visibleConversationMessages(sourceMessages: UiMessage[]): UiMessage[] {
-  return sourceMessages.flatMap((message) => {
-    if (isInternalCodexContextMessage(message)) return []
-    const type = normalizeMessageType(message.messageType, message.role)
-    if (type === 'commandExecution' && message.commandExecution?.status !== 'inProgress') return []
-    if (type === 'turnActivity.live' || type === 'turnError.live' || type === 'agentReasoning.live') return []
-    const visibleMessage = toVisibleConversationMessage(message)
-    if (
-      visibleMessage !== message &&
-      !visibleMessage.text.trim() &&
-      (visibleMessage.images?.length ?? 0) === 0 &&
-      (visibleMessage.fileAttachments?.length ?? 0) === 0 &&
-      !visibleMessage.commandExecution &&
-      !visibleMessage.rawPayload
-    ) return []
-    return [visibleMessage]
-  })
-}
-
-const filteredMessages = computed(() => visibleConversationMessages(messages.value))
 const latestUserTurnIndex = computed(() => {
   let latest = -1
-  for (const message of filteredMessages.value) {
-    if (message.role !== 'user') continue
-    if (typeof message.turnIndex !== 'number') continue
-    if (message.turnIndex > latest) latest = message.turnIndex
+  for (const turn of selectedConversationProjection.value.turns) {
+    if (!turn.opener) continue
+    if (turn.index > latest) latest = turn.index
   }
   return latest
 })
-const liveOverlay = computed(() => selectedLiveOverlay.value)
 const composerThreadContextId = computed(() => (isHomeRoute.value ? '__new-thread__' : selectedThreadId.value))
 const composerCwd = computed(() => {
   if (isHomeRoute.value) return newThreadCwd.value.trim()
@@ -2366,11 +2356,51 @@ const composerCwd = computed(() => {
 const commandMenuCwd = computed(() => composerCwd.value || newThreadCwd.value.trim())
 const displayedThreadConversationId = ref('')
 const displayedThreadCwd = ref('')
-const displayedThreadMessages = ref<UiMessage[]>([])
-const displayedThreadPendingRequests = ref<UiServerRequest[]>([])
-const displayedThreadLiveOverlay = ref<UiLiveOverlay | null>(null)
+const displayedThreadConversationProjection = ref<ConversationProjection>(projectConversation({
+  threadRead: null,
+  nowMs: Date.now(),
+}))
+const displayedThreadTurnCount = computed(() => displayedThreadConversationProjection.value.turns.length)
 const displayedThreadScrollState = ref<ThreadScrollState | null>(null)
 const isThreadContentSwitching = ref(false)
+const pendingNewThreadConversationProjection = computed<ConversationProjection>(() => {
+  const preview = pendingNewThreadPreview.value
+  if (!preview) return projectConversation({ threadRead: null, nowMs: Date.now() })
+  const message = preview.message
+  const turnId = `local:${message.id}`
+  const deliveryState = message.deliveryState === 'failed'
+    ? 'failed'
+    : message.deliveryState === 'waiting'
+      ? 'waitingNetwork'
+      : message.deliveryState === 'confirming'
+        ? 'confirmationPending'
+        : message.deliveryState === 'sent'
+          ? 'sent'
+          : 'sending'
+  return projectConversation({
+    threadRead: { thread: { id: '__new-thread__', turns: [] } },
+    runtime: {
+      executionState: message.deliveryState === 'failed'
+        ? 'failed'
+        : message.deliveryState === 'waiting'
+          ? 'queued'
+          : 'running',
+      activeTurnId: message.deliveryState === 'failed' || message.deliveryState === 'waiting' ? undefined : turnId,
+      lastStartedAtIso: new Date(preview.submittedAtMs).toISOString(),
+      lastError: message.deliveryState === 'failed' ? message.deliveryError ?? '发送失败' : null,
+      messageState: 'fresh',
+    },
+    localUserMessages: [{
+      id: message.id,
+      turnId,
+      text: message.text,
+      imageUrls: message.images,
+      attachmentNames: message.fileAttachments?.map((attachment) => attachment.label || attachment.path),
+      deliveryState,
+    }],
+    nowMs: Date.now(),
+  })
+})
 const favoriteMessageIdsForDisplayedThread = computed(() => {
   const threadId = displayedThreadConversationId.value.trim()
   if (!threadId) return []
@@ -2407,7 +2437,7 @@ const selectedThreadGoalExecutionHint = computed(() => {
 })
 const shouldShowSelectedThreadProcessing = computed(() => (
   selectedThreadServerRequests.value.length > 0 ||
-  selectedLiveOverlay.value !== null ||
+  selectedProjectedActiveTurn.value !== null ||
   isSelectedThreadInProgress.value
 ))
 const threadStatusLabel = computed(() => {
@@ -2415,10 +2445,10 @@ const threadStatusLabel = computed(() => {
   if (isRouteOnlyEmptyThread.value) return '空会话'
   if (!selectedThread.value) return ''
   if (selectedThreadServerRequests.value.length > 0) {
-    return humanizeActivityLabel(selectedLiveOverlay.value?.activityLabel ?? '') || '等待处理'
+    return humanizeActivityLabel(selectedProjectedActivityLabel.value) || '等待处理'
   }
   if (shouldShowSelectedThreadProcessing.value) {
-    return humanizeActivityLabel(selectedLiveOverlay.value?.activityLabel ?? '') || '处理中'
+    return humanizeActivityLabel(selectedProjectedActivityLabel.value) || '处理中'
   }
   if (selectedThread.value.unread) return '有新进展'
   return '就绪'
@@ -2472,7 +2502,7 @@ const contentStatusDetail = computed(() => {
     return '这条任务现在卡在你的确认或补充输入，处理后会继续推进。'
   }
   if (shouldShowSelectedThreadProcessing.value) {
-    return humanizeActivityLabel(selectedLiveOverlay.value?.activityLabel ?? '') || '当前任务仍在继续处理。'
+    return humanizeActivityLabel(selectedProjectedActivityLabel.value) || '当前任务仍在继续处理。'
   }
   if (serviceStatusTone.value !== 'live' && showServiceStatusDetail.value) {
     return serviceStatusDetail.value
@@ -2484,6 +2514,11 @@ const contentStatusDetail = computed(() => {
   }
   return ''
 })
+const contentStatusAriaLabel = computed(() => (
+  [contentStatusCaption.value, contentStatusLabel.value, contentStatusDetail.value]
+    .filter((value) => value.trim().length > 0)
+    .join('：')
+))
 
 const quotaReminder = computed<QuotaReminder | null>(() => {
   const candidates: QuotaCandidate[] = []
@@ -2700,9 +2735,7 @@ watch(
   () => [
     composerThreadContextId.value,
     composerCwd.value,
-    filteredMessages.value,
-    selectedThreadServerRequests.value,
-    liveOverlay.value,
+    selectedConversationProjection.value,
     selectedThreadScrollState.value,
     isLoadingMessages.value,
     isHomeRoute.value,
@@ -2710,24 +2743,17 @@ watch(
   ([
     nextThreadId,
     nextCwd,
-    nextMessages,
-    nextPendingRequests,
-    nextLiveOverlay,
+    nextProjection,
     nextScrollState,
     loading,
     homeRoute,
   ]) => {
-    const hasDisplayedConversation =
-      displayedThreadMessages.value.length > 0 ||
-      displayedThreadPendingRequests.value.length > 0 ||
-      displayedThreadLiveOverlay.value !== null
+    const hasDisplayedConversation = displayedThreadConversationProjection.value.turns.length > 0
     if (!nextThreadId || homeRoute) {
       isThreadContentSwitching.value = false
       displayedThreadConversationId.value = nextThreadId
       displayedThreadCwd.value = nextCwd
-      displayedThreadMessages.value = nextMessages
-      displayedThreadPendingRequests.value = nextPendingRequests
-      displayedThreadLiveOverlay.value = nextLiveOverlay
+      displayedThreadConversationProjection.value = nextProjection
       displayedThreadScrollState.value = nextScrollState
       return
     }
@@ -2740,9 +2766,7 @@ watch(
 
     displayedThreadConversationId.value = nextThreadId
     displayedThreadCwd.value = nextCwd
-    displayedThreadMessages.value = nextMessages
-    displayedThreadPendingRequests.value = nextPendingRequests
-    displayedThreadLiveOverlay.value = nextLiveOverlay
+    displayedThreadConversationProjection.value = nextProjection
     displayedThreadScrollState.value = nextScrollState
     isThreadContentSwitching.value = false
   },
@@ -2754,11 +2778,11 @@ watch(
     pendingFavoriteJump.value?.threadId ?? '',
     pendingFavoriteJump.value?.messageId ?? '',
     displayedThreadConversationId.value,
-    displayedThreadMessages.value.length,
+    displayedThreadTurnCount.value,
     isLoadingMessages.value,
     isThreadContentSwitching.value,
   ] as const,
-  ([pendingThreadId, pendingMessageId, currentThreadId, _messageCount, loading, switching]) => {
+  ([pendingThreadId, pendingMessageId, currentThreadId, _turnCount, loading, switching]) => {
     if (!pendingThreadId || !pendingMessageId) return
     if (loading || switching) return
     if (pendingThreadId !== currentThreadId) return
@@ -2780,6 +2804,12 @@ const showDesktopSyncNotice = computed(() => (
   desktopSyncPendingThreadId.value.trim().length > 0 &&
   desktopAppStatus.value.available
 ))
+const showContentHeaderMeta = computed(() => (
+  showContentContextBadge.value ||
+  showHeaderStatusStrip.value ||
+  showDesktopSyncNotice.value ||
+  !isCompactTouchContent.value
+))
 const desktopSyncNoticeLabel = computed(() => (
   isDesktopRefreshRunning.value
     ? '同步中'
@@ -2796,7 +2826,7 @@ const hasUnreadThreads = computed(() =>
   projectGroups.value.some((group) => group.threads.some((thread) => thread.unread)),
 )
 const isDesktopRefreshRiskHigh = computed(() => (
-  selectedThread.value?.inProgress === true || selectedLiveOverlay.value !== null
+  selectedThread.value?.inProgress === true || selectedProjectedActiveTurn.value !== null
 ))
 const desktopRefreshConfirmTitle = computed(() => (
   isDesktopRefreshRiskHigh.value
@@ -3699,10 +3729,10 @@ function closeFavoritesModal(): void {
   isFavoritesModalVisible.value = false
 }
 
-function onToggleFavoriteMessage(message: UiMessage): void {
+function onToggleFavoriteMessage(intent: ConversationFavoriteIntent): void {
   const threadId = displayedThreadConversationId.value.trim()
-  const messageId = message.id.trim()
-  const text = message.text.trim()
+  const messageId = intent.messageId.trim()
+  const text = intent.text.trim()
   if (!threadId || !messageId || !text) return
 
   const threadSnapshot = threadById.value[threadId]
@@ -3711,9 +3741,9 @@ function onToggleFavoriteMessage(message: UiMessage): void {
     messageId,
     threadTitle: displayedThreadTitle.value.trim() || threadSnapshot?.title?.trim() || '未命名会话',
     threadCwd: displayedThreadCwd.value.trim() || threadSnapshot?.cwd?.trim() || '',
-    role: message.role,
+    role: intent.role,
     text,
-    turnIndex: typeof message.turnIndex === 'number' ? message.turnIndex : null,
+    turnIndex: intent.turnIndex,
   })
   setFavoritesStatusText(added ? '已加入收藏' : '已取消收藏')
 }
@@ -3819,8 +3849,16 @@ async function runCompleteThreadExport(threadId: string, copyToClipboard: boolea
     const thread = threadById.value[threadId]
     if (!thread) throw new Error('Thread metadata is unavailable')
     const detail = await getThreadDetail(threadId, { responseView: 'full' })
-    const exportMessages = visibleConversationMessages(detail.messages)
-    if (exportMessages.length === 0) {
+    const exportProjection = projectConversation({
+      threadRead: detail.threadRead,
+      runtime: {
+        executionState: detail.inProgress ? 'running' : 'completed',
+        activeTurnId: detail.activeTurnId,
+        messageState: 'fresh',
+      },
+      nowMs: Date.now(),
+    })
+    if (exportProjection.turns.length === 0) {
       throw new Error('No thread content is available to export')
     }
 
@@ -3829,7 +3867,7 @@ async function runCompleteThreadExport(threadId: string, copyToClipboard: boolea
       title: thread.title,
       threadId: thread.id,
       exportedAtIso: new Date().toISOString(),
-      messages: exportMessages,
+      projection: exportProjection,
     }
     if (copyToClipboard) {
       await copyTextToClipboard(buildThreadMarkdown(exportInput))
@@ -4695,6 +4733,10 @@ function onSaveThreadGoal(objective: string): void {
   })
 }
 
+function onOpenThreadGoalEditor(): void {
+  threadGoalEditorRequestId.value += 1
+}
+
 function onSetThreadGoalStatus(status: 'active' | 'paused'): void {
   void updateSelectedThreadGoalStatus(status).catch(() => {
     // Keep the existing goal visible so the user can retry without re-entering it.
@@ -4707,16 +4749,20 @@ function onClearThreadGoal(): void {
   })
 }
 
-async function onImplementPlan(message: UiMessage): Promise<void> {
+async function onImplementPlan(intent: ConversationPlanImplementationIntent): Promise<void> {
   const threadId = selectedThreadId.value
   if (
     !threadId
     || isSelectedThreadInProgress.value
-    || implementingPlanId.value
-    || implementedPlanIds.value.includes(message.id)
+    || isUpdatingSpeedMode.value
+    || implementingPlan.value
+    || displayedThreadConversationProjection.value.threadId !== threadId
+    || derivePlanImplementationState(displayedThreadConversationProjection.value).actionablePlanKey
+      !== planImplementationKey(intent.turnId, intent.activityId)
   ) return
   const previousMode = selectedCollaborationMode.value
-  implementingPlanId.value = message.id
+  const submission = { threadId, activityId: intent.activityId }
+  implementingPlan.value = submission
   setSelectedCollaborationMode('execute')
   try {
     await sendMessageToSelectedThread(
@@ -4727,14 +4773,17 @@ async function onImplementPlan(message: UiMessage): Promise<void> {
       [],
       undefined,
       'execute',
+      undefined,
+      { targetThreadId: threadId },
     )
-    implementedPlanIds.value = [...implementedPlanIds.value, message.id].slice(-12)
     markDesktopSyncPending(threadId)
   } catch {
     if (selectedThreadId.value === threadId) setSelectedCollaborationMode(previousMode)
     showProductToast('计划提交失败，计划卡已保留，可直接重试。', 'danger')
   } finally {
-    if (implementingPlanId.value === message.id) implementingPlanId.value = ''
+    if (implementingPlan.value?.threadId === threadId && implementingPlan.value.activityId === intent.activityId) {
+      implementingPlan.value = null
+    }
   }
 }
 
@@ -5027,14 +5076,6 @@ function saveSidebarCollapsed(value: boolean): void {
   window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, value ? '1' : '0')
 }
 
-function normalizeMessageType(rawType: string | undefined, role: string): string {
-  const normalized = (rawType ?? '').trim()
-  if (normalized.length > 0) {
-    return normalized
-  }
-  return role.trim() || 'message'
-}
-
 function rememberRoutableThreadId(threadId: string): void {
   const normalized = threadId.trim()
   if (!normalized || routeWarmThreadIds.value.includes(normalized)) return
@@ -5199,17 +5240,17 @@ watch(
   () => [
     routeThreadId.value,
     displayedThreadConversationId.value,
-    displayedThreadMessages.value.length,
+    displayedThreadTurnCount.value,
     isLoadingMessages.value,
     isThreadContentSwitching.value,
     isSelectedThreadInProgress.value,
   ] as const,
-  ([routeId, displayedId, messageCount, loading, switching, inProgress]) => {
+  ([routeId, displayedId, visibleTurnCount, loading, switching, inProgress]) => {
     if (!isMobileShellAvailable.value) return
     const viewState = {
       routeThreadId: routeId,
       displayedThreadId: displayedId,
-      messageCount,
+      visibleTurnCount,
       loading,
       switching,
     }
@@ -5653,7 +5694,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-action-grid {
-  @apply grid grid-cols-4 gap-1;
+  @apply grid grid-cols-3 gap-1;
 }
 
 .sidebar-tools-menu {
@@ -5689,10 +5730,26 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-action-tile {
-  @apply flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 border border-transparent bg-transparent px-1.5 py-1 text-[11px] font-medium transition-[background-color,border-color,color] duration-150;
+  @apply flex min-w-0 flex-row items-center justify-center gap-1.5 border border-transparent bg-transparent px-1.5 py-1 text-[11px] font-medium transition-[background-color,border-color,color] duration-150;
+  min-height: 42px;
   border-radius: var(--ui-radius-control);
   color: var(--ui-text-secondary);
   touch-action: manipulation;
+}
+
+.sidebar-action-tile--primary {
+  grid-column: 1 / -1;
+  min-height: 42px;
+  justify-content: flex-start;
+  padding-inline: 0.625rem;
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-primary);
+  font-size: 12.5px;
+}
+
+:global(:root.dark .sidebar-action-tile--primary) {
+  background: #27272a;
+  color: #f4f4f5;
 }
 
 .sidebar-action-tile[aria-pressed='true'],
@@ -5725,7 +5782,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-action-label {
-  @apply block max-w-full truncate text-center leading-4;
+  @apply block max-w-full truncate leading-4;
 }
 
 .sidebar-search-toggle {
@@ -5887,7 +5944,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .content-header-subtitle {
-  @apply m-0 text-[11px] leading-4 truncate;
+  @apply m-0 truncate text-[11px] leading-4;
   color: var(--ui-text-tertiary);
   font-family: var(--font-sans-ui);
   letter-spacing: 0;
@@ -6005,13 +6062,13 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .content-meta-row {
-  @apply flex w-full min-w-0 flex-nowrap items-center gap-1.5;
+  @apply flex min-w-0 flex-nowrap items-center justify-end gap-1;
 }
 
 .content-context-badge {
-  @apply inline-flex items-center gap-1.5 rounded-full border border-transparent px-1.5 py-0.5 text-[11px] font-semibold leading-none;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 244, 236, 0.9) 100%);
-  box-shadow: 0 8px 20px -20px rgba(31, 41, 55, 0.34);
+  @apply inline-flex h-7 items-center gap-1 rounded-md border border-transparent px-1 text-[11px] font-semibold leading-none;
+  background: transparent;
+  box-shadow: none;
 }
 
 .content-context-badge[data-tone='live'] {
@@ -6059,12 +6116,12 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .content-status-strip {
-  @apply flex min-h-0 min-w-0 flex-1 flex-wrap items-center gap-1.5;
+  @apply flex h-7 min-w-28 max-w-36 shrink-0 items-center justify-end;
 }
 
 .content-status-pill {
-  @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-medium;
-  box-shadow: 0 8px 18px -20px rgba(31, 41, 55, 0.2);
+  @apply inline-flex max-w-full items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-medium whitespace-nowrap;
+  box-shadow: none;
 }
 
 .content-status-pill-label {
@@ -6089,8 +6146,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .content-status-detail {
-  @apply hidden sm:inline text-[11px] leading-4 text-[#8f8577] truncate;
-  max-width: min(40rem, 52vw);
+  @apply hidden;
 }
 
 .content-desktop-sync-button {
@@ -6223,7 +6279,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
 .content-grid {
   @apply flex-1 min-h-0 min-w-0 flex flex-col gap-2.5 w-full;
-  width: min(100%, var(--content-shell-max-width));
+  width: min(100%, var(--ui-composer-max));
   margin-inline: auto;
 }
 
@@ -6848,6 +6904,22 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   }
 }
 
+@media (pointer: coarse) {
+  .sidebar-action-tile,
+  .sidebar-settings-button,
+  .sidebar-toolbar-icon-button,
+  .content-title-refresh-button,
+  .content-favorites-button {
+    min-height: 44px;
+  }
+
+  .sidebar-toolbar-icon-button,
+  .content-title-refresh-button,
+  .content-favorites-button {
+    min-width: 44px;
+  }
+}
+
 @media (max-width: 767px) {
   .content-root {
     --content-shell-max-width: 100%;
@@ -6933,7 +7005,7 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   }
 
   .content-status-strip {
-    @apply basis-full;
+    @apply min-w-0 max-w-16;
   }
 
   .composer-with-queue {

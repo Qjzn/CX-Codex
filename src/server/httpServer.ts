@@ -57,6 +57,7 @@ export type ServerOptions = {
   resolveUploadedFilePath?: typeof resolveUploadedFilePath
   resolveSessionAttachmentPath?: typeof resolveSessionAttachmentPath
   runtimeDatabasePath?: string
+  startupSkillsSync?: boolean
   localFileRateLimit?: {
     limit: number
     windowMs: number
@@ -313,6 +314,7 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
   const bridge = createBridgeMiddleware({
     remoteAccessProtected: Boolean(options.password),
     runtimeDatabasePath: options.runtimeDatabasePath,
+    startupSkillsSync: options.startupSkillsSync,
   })
   const authSession = options.password ? createAuthSession(options.password) : null
   const resolveLocalFilePath = options.resolveLocalFilePath ?? resolveWorkspaceLocalPath

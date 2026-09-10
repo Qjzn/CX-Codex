@@ -1,4 +1,4 @@
-import type { UiMessage } from '../types/codex'
+import type { AcknowledgedUserMessage, OptimisticUserMessage } from '../types/codex'
 
 export const OPTIMISTIC_USER_MESSAGE_PREFIX = 'optimistic-user:'
 
@@ -31,7 +31,12 @@ function normalizeMessageSignatureList(values: string[] | undefined): string {
     .join('\u001f')
 }
 
-export function userMessageSignature(message: UiMessage): string {
+type UserMessageSignatureInput = Pick<
+  AcknowledgedUserMessage,
+  'text' | 'images' | 'fileAttachments'
+>
+
+export function userMessageSignature(message: UserMessageSignatureInput): string {
   const filePaths = (message.fileAttachments ?? []).map((file) => file.path)
   return [
     normalizeMessageText(message.text),
@@ -41,7 +46,7 @@ export function userMessageSignature(message: UiMessage): string {
 }
 
 function parseOptimisticUserMessageMeta(
-  message: UiMessage,
+  message: OptimisticUserMessage,
   rememberedMeta?: OptimisticUserMessageMeta,
 ): OptimisticUserMessageMeta | null {
   if (!message.id.startsWith(OPTIMISTIC_USER_MESSAGE_PREFIX)) return null
@@ -77,10 +82,10 @@ function parseOptimisticUserMessageMeta(
 }
 
 export function mergeVisibleOptimisticUserMessages(
-  persisted: UiMessage[],
-  optimistic: UiMessage[],
+  persisted: AcknowledgedUserMessage[],
+  optimistic: OptimisticUserMessage[],
   rememberedMetaById?: ReadonlyMap<string, OptimisticUserMessageMeta>,
-): UiMessage[] {
+): Array<AcknowledgedUserMessage | OptimisticUserMessage> {
   const detachedFailedIds = new Set(
     selectDetachedFailedOptimisticUserMessages(persisted, optimistic, rememberedMetaById)
       .map((message) => message.id),
@@ -89,7 +94,7 @@ export function mergeVisibleOptimisticUserMessages(
     .filter((message) => !detachedFailedIds.has(message.id))
   if (visible.length === 0) return [...persisted]
 
-  const insertionsByPersistedIndex = new Map<number, UiMessage[]>()
+  const insertionsByPersistedIndex = new Map<number, OptimisticUserMessage[]>()
   for (const message of visible) {
     const meta = parseOptimisticUserMessageMeta(message, rememberedMetaById?.get(message.id))
     const anchorId = meta?.baselineTailMessageId ?? ''
@@ -102,7 +107,7 @@ export function mergeVisibleOptimisticUserMessages(
     insertionsByPersistedIndex.set(insertIndex, insertions)
   }
 
-  const combined: UiMessage[] = []
+  const combined: Array<AcknowledgedUserMessage | OptimisticUserMessage> = []
   for (let index = 0; index <= persisted.length; index += 1) {
     combined.push(...(insertionsByPersistedIndex.get(index) ?? []))
     if (index < persisted.length) combined.push(persisted[index]!)
@@ -111,10 +116,10 @@ export function mergeVisibleOptimisticUserMessages(
 }
 
 export function selectDetachedFailedOptimisticUserMessages(
-  persisted: UiMessage[],
-  optimistic: UiMessage[],
+  persisted: AcknowledgedUserMessage[],
+  optimistic: OptimisticUserMessage[],
   rememberedMetaById?: ReadonlyMap<string, OptimisticUserMessageMeta>,
-): UiMessage[] {
+): OptimisticUserMessage[] {
   if (optimistic.length === 0) return optimistic
 
   const persistedIds = new Set(persisted.map((message) => message.id))
@@ -130,7 +135,7 @@ export function selectDetachedFailedOptimisticUserMessages(
   })
 }
 
-export function countPersistedUserMessageSignatures(messages: UiMessage[]): Map<string, number> {
+export function countPersistedUserMessageSignatures(messages: AcknowledgedUserMessage[]): Map<string, number> {
   const counts = new Map<string, number>()
   for (const message of messages) {
     if (message.role !== 'user') continue
@@ -142,7 +147,7 @@ export function countPersistedUserMessageSignatures(messages: UiMessage[]): Map<
 }
 
 export function recoverOptimisticBaselineMatchCount(
-  persisted: UiMessage[],
+  persisted: AcknowledgedUserMessage[],
   signature: string,
   storedBaselineMatchCount?: number,
   baselineMessageCount?: number,
@@ -166,10 +171,10 @@ export function recoverOptimisticBaselineMatchCount(
 }
 
 export function filterVisibleOptimisticUserMessages(
-  persisted: UiMessage[],
-  optimistic: UiMessage[],
+  persisted: AcknowledgedUserMessage[],
+  optimistic: OptimisticUserMessage[],
   rememberedMetaById?: ReadonlyMap<string, OptimisticUserMessageMeta>,
-): UiMessage[] {
+): OptimisticUserMessage[] {
   if (optimistic.length === 0) return optimistic
 
   const persistedCounts = countPersistedUserMessageSignatures(persisted)

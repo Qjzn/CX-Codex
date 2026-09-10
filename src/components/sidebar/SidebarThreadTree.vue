@@ -193,7 +193,7 @@
       <button class="thread-tree-empty-retry" type="button" @click="emit('refresh')">重新加载</button>
     </SidebarMenuRow>
 
-    <div v-else ref="groupsContainerRef" class="thread-tree-groups" :style="groupsContainerStyle">
+    <div v-if="displayedGroups.length > 0" ref="groupsContainerRef" class="thread-tree-groups" :style="groupsContainerStyle">
       <article
         v-for="group in displayedGroups"
         :key="group.projectName"
@@ -1160,8 +1160,7 @@ function captureProjectScrollAnchor(previousProjectOrder: string[]): ProjectScro
   const groupsContentTop = readGroupsContentTop(scrollContainer)
   if (groupsContentTop === null) return null
 
-  const visibleTopInGroups = scrollContainer.scrollTop - groupsContentTop
-  if (visibleTopInGroups <= 0) return null
+  const visibleTopInGroups = Math.max(0, scrollContainer.scrollTop - groupsContentTop)
 
   const previousLayoutTop = buildProjectLayoutTop(previousProjectOrder)
   const projectName = previousProjectOrder.find((name) => (
@@ -2422,9 +2421,8 @@ onBeforeUnmount(() => {
 }
 
 .thread-section-count {
-  @apply inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-semibold;
-  background: var(--ui-bg-surface-muted);
-  color: var(--ui-text-secondary);
+  @apply inline-flex min-w-4 items-center justify-end text-[11px] font-medium;
+  color: var(--ui-text-tertiary);
 }
 
 .thread-tree-header-row {
@@ -2432,7 +2430,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-tree-header-stack {
-  @apply flex min-w-0 flex-col gap-0.5;
+  @apply flex min-w-0 flex-row items-baseline gap-2;
 }
 
 .thread-tree-header {
@@ -2891,7 +2889,7 @@ onBeforeUnmount(() => {
 
 .thread-row-time {
   @apply block self-center text-[10px] font-medium;
-  color: var(--ui-text-tertiary);
+  color: var(--ui-text-secondary);
   font-family: var(--font-sans-ui);
   font-variant-numeric: tabular-nums;
   line-height: 1rem;
@@ -3193,14 +3191,33 @@ onBeforeUnmount(() => {
   }
 
   .thread-menu-trigger {
-    width: 2.25rem;
-    height: 2.25rem;
+    width: 2.75rem;
+    height: 2.75rem;
   }
 
   .thread-menu-wrap {
     display: flex;
     align-items: center;
-    height: 1.75rem;
+    height: 2.75rem;
+  }
+
+  .organize-menu-trigger,
+  .thread-start-button,
+  .project-main-button,
+  .project-menu-trigger,
+  .thread-menu-trigger {
+    min-height: 44px;
+  }
+
+  .organize-menu-trigger,
+  .thread-start-button,
+  .project-menu-trigger,
+  .thread-menu-trigger {
+    min-width: 44px;
+  }
+
+  .thread-show-more-button {
+    min-height: 44px;
   }
 }
 

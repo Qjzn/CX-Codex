@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 
 const PROBE_TIMEOUT_MS = 15_000
 
@@ -17,8 +17,11 @@ function unique(values) {
 
 function getCandidates() {
   const preferred = process.env.CX_CODEX_POWERSHELL_COMMAND?.trim()
+  const installedPwsh = process.env.ProgramFiles
+    ? join(process.env.ProgramFiles, 'PowerShell', '7', 'pwsh.exe')
+    : ''
   const defaults = process.platform === 'win32'
-    ? ['pwsh', 'powershell.exe', 'powershell']
+    ? [installedPwsh, 'pwsh', 'powershell.exe', 'powershell']
     : ['pwsh', 'powershell']
   return unique([preferred, ...defaults])
 }

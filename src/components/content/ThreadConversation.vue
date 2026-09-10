@@ -1,35 +1,20 @@
 <template>
-  <section class="conversation-root" :class="{ 'conversation-root--switching': isThreadSwitchingState }">
-    <div
-      v-if="showLoadingIndicator"
-      class="conversation-status-loading"
-      :class="{ 'conversation-status-loading--switching': props.isThreadSwitching === true }"
-      aria-live="polite"
-    >
-      <LoadingInline
-        class="conversation-status-loading-inline"
-        :label="loadingIndicatorText"
-        :tone="props.isThreadSwitching === true ? 'warm' : 'muted'"
-        compact
-      />
+  <section class="transcript-root" :class="{ 'is-switching': props.isThreadSwitching === true }">
+    <div v-if="showLoading" class="transcript-loading" role="status" aria-live="polite">
+      <LoadingInline :label="props.isThreadSwitching ? '正在切换会话' : '正在读取会话'" tone="muted" compact />
     </div>
 
-    <div
-      v-if="showLoadErrorState"
-      class="conversation-load-error"
-      role="status"
-      aria-live="polite"
-    >
-      <p class="conversation-load-error-title">会话内容未加载</p>
-      <p class="conversation-load-error-detail">{{ props.loadError }}</p>
-      <div class="conversation-load-error-actions">
-        <button type="button" class="conversation-load-error-action conversation-load-error-action-primary" @click="emit('retryLoad')">
-          重新连接
-        </button>
+    <div v-if="props.loadError" class="transcript-alert transcript-alert--danger" role="alert">
+      <div>
+        <strong>会话内容未完整加载</strong>
+        <p>{{ props.loadError }}</p>
+      </div>
+      <div class="transcript-alert-actions">
+        <button type="button" class="quiet-button quiet-button--primary" @click="emit('retryLoad')">重新连接</button>
         <button
           v-if="props.showConnectionSettingsAction === true"
           type="button"
-          class="conversation-load-error-action"
+          class="quiet-button"
           @click="emit('openConnectionSettings')"
         >
           修改地址
@@ -37,1622 +22,518 @@
       </div>
     </div>
 
-    <div
-      v-else-if="!hasRenderableConversation && !props.isLoading"
-      class="conversation-empty-state"
-    >
-      <p class="conversation-empty">当前会话还没有消息。</p>
-      <div v-if="showEmptyThreadActions" class="conversation-empty-actions">
-        <button type="button" class="conversation-empty-action conversation-empty-action-primary" @click="emit('returnToNewThread')">
-          返回新会话
-        </button>
-        <button type="button" class="conversation-empty-action" @click="emit('dismissEmptyThread')">
-          移除此空会话
-        </button>
+    <div v-if="showEmpty" class="transcript-empty">
+      <p>当前会话还没有内容。</p>
+      <div v-if="props.showEmptyThreadActions === true" class="transcript-empty-actions">
+        <button type="button" class="quiet-button quiet-button--primary" @click="emit('returnToNewThread')">返回新会话</button>
+        <button type="button" class="quiet-button" @click="emit('dismissEmptyThread')">移除此空会话</button>
       </div>
     </div>
 
-    <template v-else>
-      <ul
-        ref="conversationListRef"
-        class="conversation-list"
-        :class="{ 'conversation-list--switching': isThreadSwitchingState }"
-        :data-thread-id="activeThreadId"
-        :data-message-count="renderableMessages.length"
-        :data-earliest-turn-index="earliestRenderableTurnIndex ?? undefined"
-        tabindex="0"
-        aria-label="会话消息"
-      >
-      <Teleport
-        v-if="showProcessPanel"
-        defer
-        :to="`#${conversationProcessTargetId}`"
-      >
-      <section class="conversation-process-panel">
-        <article
-          v-if="showInlineLiveOverlay && effectiveLiveOverlay"
-          class="live-overlay-inline"
-          :class="{
-            'live-overlay-inline-compact': !shouldRenderDetailedLiveOverlay,
-            'live-overlay-inline-thinking': !liveOverlayCommandMessage,
-            'live-overlay-inline-command': Boolean(liveOverlayCommandMessage),
-            'live-overlay-inline-recovering': effectiveLiveOverlay.isRecovering === true,
-          }"
-          aria-live="polite"
-          :aria-busy="effectiveLiveOverlay.isRecovering === true ? 'true' : undefined"
-        >
-          <template v-if="shouldRenderDetailedLiveOverlay">
-            <div class="live-overlay-head">
-              <span class="live-overlay-indicator" aria-hidden="true">
-                <span class="live-overlay-indicator-ring" />
-                <span class="live-overlay-indicator-core" />
-              </span>
-              <div class="live-overlay-heading">
-                <p class="live-overlay-label">{{ liveOverlayPrimaryLabel(effectiveLiveOverlay) }}</p>
-                <span class="live-overlay-dots" aria-hidden="true">
-                  <span class="live-overlay-dot" />
-                  <span class="live-overlay-dot" />
-                  <span class="live-overlay-dot" />
-                </span>
-              </div>
-            </div>
-            <div
-              v-if="!liveOverlayCommandMessage && liveOverlayDetails(effectiveLiveOverlay).length > 0"
-              class="live-overlay-detail-list"
-            >
-              <span
-                v-for="detail in liveOverlayDetails(effectiveLiveOverlay)"
-                :key="detail"
-                class="live-overlay-detail-chip"
-              >
-                {{ detail }}
-              </span>
-            </div>
-            <section v-if="liveOverlayCommandMessage" class="live-overlay-command-panel">
-              <div v-if="liveOverlayDetails(effectiveLiveOverlay).length > 0" class="live-overlay-detail-list live-overlay-command-details">
-                <span
-                  v-for="detail in liveOverlayDetails(effectiveLiveOverlay)"
-                  :key="detail"
-                  class="live-overlay-detail-chip"
-                >
-                  {{ detail }}
-                </span>
-              </div>
-              <div class="cmd-row cmd-status-running live-overlay-command-row">
-                <span class="cmd-status">{{ commandStatusLabel(liveOverlayCommandMessage) }}</span>
-                <span v-if="commandDurationLabel(liveOverlayCommandMessage)" class="cmd-duration">
-                  {{ commandDurationLabel(liveOverlayCommandMessage) }}
-                </span>
-                <code class="cmd-label">{{ liveOverlayCommandMessage.commandExecution?.command || '（命令）' }}</code>
-              </div>
-              <div v-if="liveOverlayCommandOutput" class="live-overlay-command-output-wrap">
-                <pre class="cmd-output live-overlay-command-output">{{ liveOverlayCommandOutput }}</pre>
-              </div>
-            </section>
-            <p
-              v-else-if="effectiveLiveOverlay.reasoningText"
-              class="live-overlay-reasoning"
-              ref="liveOverlayReasoningRef"
-            >
-              {{ effectiveLiveOverlay.reasoningText }}
-            </p>
-            <p v-else class="live-overlay-hint">
-              {{ liveOverlayHint(effectiveLiveOverlay) }}
-            </p>
-            <section v-if="overlayPrimaryPendingRequest" class="live-overlay-actions">
-              <template v-if="isApprovalRequestMethod(overlayPrimaryPendingRequest.method)">
-                <button
-                  type="button"
-                  class="live-overlay-action live-overlay-action-primary"
-                  @click="onRespondApproval(overlayPrimaryPendingRequest.id, 'accept')"
-                >
-                  允许
-                </button>
-                <button
-                  type="button"
-                  class="live-overlay-action"
-                  @click="onRespondApproval(overlayPrimaryPendingRequest.id, 'acceptForSession')"
-                >
-                  始终允许
-                </button>
-                <button
-                  type="button"
-                  class="live-overlay-action"
-                  @click="onRespondApproval(overlayPrimaryPendingRequest.id, 'decline')"
-                >
-                  拒绝
-                </button>
-                <button
-                  type="button"
-                  class="live-overlay-action"
-                  @click="onRespondApproval(overlayPrimaryPendingRequest.id, 'cancel')"
-                >
-                  取消
-                </button>
-              </template>
-              <template v-else-if="overlayPrimaryPendingRequest.method === 'item/tool/call'">
-                <button
-                  type="button"
-                  class="live-overlay-action live-overlay-action-primary"
-                  @click="onRespondToolCallFailure(overlayPrimaryPendingRequest.id)"
-                >
-                  让 Codex 改用文字继续
-                </button>
-                <button
-                  type="button"
-                  class="live-overlay-action"
-                  @click="scrollToPendingRequests"
-                >
-                  查看详情
-                </button>
-              </template>
-              <template v-else>
-                <button
-                  type="button"
-                  class="live-overlay-action live-overlay-action-primary"
-                  @click="scrollToPendingRequests"
-                >
-                  {{ pendingRequestActionLabel(overlayPrimaryPendingRequest) }}
-                </button>
-              </template>
-            </section>
-            <p v-if="pendingRequests.length > 1" class="live-overlay-request-count">
-              还有 {{ pendingRequests.length - 1 }} 个待处理请求
-            </p>
-            <p v-if="effectiveLiveOverlay.errorText" class="live-overlay-error">{{ effectiveLiveOverlay.errorText }}</p>
-          </template>
-          <template v-else>
-            <button
-              class="live-overlay-compact-main"
-              type="button"
-              :aria-label="`${liveOverlayCompactLabel}，${liveOverlayTailHint}`"
-              @click="openLiveOverlayDetail"
-            >
-              <span class="live-overlay-indicator" aria-hidden="true">
-                <span class="live-overlay-indicator-ring" />
-                <span class="live-overlay-indicator-core" />
-              </span>
-              <div class="live-overlay-compact-copy">
-                <p class="live-overlay-compact-label">{{ liveOverlayCompactLabel }}</p>
-                <p class="live-overlay-compact-hint">{{ liveOverlayTailHint }}</p>
-              </div>
-              <span class="live-overlay-compact-chevron" aria-hidden="true">›</span>
-            </button>
-          </template>
-        </article>
-
-        <section v-if="pendingRequests.length > 0" class="conversation-process-section">
-          <button type="button" class="conversation-process-toggle" @click="isRequestPanelExpanded = !isRequestPanelExpanded">
-            <span>待处理请求</span>
-            <span>{{ pendingRequests.length }} 项</span>
-          </button>
-          <div v-if="isRequestPanelExpanded" class="conversation-process-stack">
-            <article
-              v-for="request in pendingRequests"
-              :key="`panel-request:${request.id}`"
-              class="request-card"
-              :class="requestCardClass(request)"
-            >
-              <p class="request-title">{{ requestTitleLabel(request) }}</p>
-              <p class="request-meta">请求 #{{ request.id }} · {{ formatIsoTime(request.receivedAtIso) }}</p>
-
-              <p v-if="readRequestReason(request)" class="request-reason">{{ readRequestReason(request) }}</p>
-
-              <section v-if="request.method === 'item/commandExecution/requestApproval'" class="request-actions">
-                <button type="button" class="request-button request-button-primary" @click="onRespondApproval(request.id, 'accept')">允许</button>
-                <button type="button" class="request-button" @click="onRespondApproval(request.id, 'acceptForSession')">本次会话始终允许</button>
-                <button type="button" class="request-button" @click="onRespondApproval(request.id, 'decline')">拒绝</button>
-                <button type="button" class="request-button" @click="onRespondApproval(request.id, 'cancel')">取消</button>
-              </section>
-
-              <section v-else-if="request.method === 'item/fileChange/requestApproval'" class="request-actions">
-                <button type="button" class="request-button request-button-primary" @click="onRespondApproval(request.id, 'accept')">允许</button>
-                <button type="button" class="request-button" @click="onRespondApproval(request.id, 'acceptForSession')">本次会话始终允许</button>
-                <button type="button" class="request-button" @click="onRespondApproval(request.id, 'decline')">拒绝</button>
-                <button type="button" class="request-button" @click="onRespondApproval(request.id, 'cancel')">取消</button>
-              </section>
-
-              <section v-else-if="request.method === 'item/tool/requestUserInput'" class="request-user-input">
-                <div
-                  v-for="question in readToolQuestions(request)"
-                  :key="`${request.id}:${question.id}`"
-                  class="request-question"
-                >
-                  <p class="request-question-title">{{ question.header || question.question }}</p>
-                  <p v-if="question.header && question.question" class="request-question-text">{{ question.question }}</p>
-                  <select
-                    class="request-select"
-                    :value="readQuestionAnswer(request.id, question.id, question.options[0] || '')"
-                    @change="onQuestionAnswerChange(request.id, question.id, $event)"
-                  >
-                    <option v-for="option in question.options" :key="`${request.id}:${question.id}:${option}`" :value="option">
-                      {{ option }}
-                    </option>
-                  </select>
-                  <input
-                    v-if="question.isOther"
-                    class="request-input"
-                    type="text"
-                    :value="readQuestionOtherAnswer(request.id, question.id)"
-                    placeholder="其他答案"
-                    @input="onQuestionOtherAnswerInput(request.id, question.id, $event)"
-                  />
-                </div>
-
-                <button type="button" class="request-button request-button-primary" @click="onRespondToolRequestUserInput(request)">
-                  提交答案
-                </button>
-              </section>
-
-              <section v-else-if="isMcpElicitationRequest(request.method)" class="request-user-input">
-                <template v-if="isMcpPermissionElicitationRequest(request)">
-                  <div class="request-permission-panel">
-                    <span class="request-permission-badge">权限确认</span>
-                    <p class="request-permission-title">{{ readMcpPermissionTitle(request) }}</p>
-                    <p class="request-permission-text">{{ readMcpPermissionSummary(request) }}</p>
-                    <dl class="request-permission-grid">
-                      <div class="request-permission-item">
-                        <dt class="request-permission-term">服务</dt>
-                        <dd class="request-permission-value">{{ readMcpPermissionServerName(request) }}</dd>
-                      </div>
-                      <div class="request-permission-item">
-                        <dt class="request-permission-term">工具</dt>
-                        <dd class="request-permission-value">{{ readMcpPermissionToolName(request) }}</dd>
-                      </div>
-                    </dl>
-                    <dl
-                      v-if="readMcpPermissionParams(request).length > 0"
-                      class="request-permission-params"
-                    >
-                      <div
-                        v-for="param in readMcpPermissionParams(request)"
-                        :key="`${request.id}:permission:${param.label}`"
-                        class="request-permission-param"
-                      >
-                        <dt>{{ param.label }}</dt>
-                        <dd>{{ param.value }}</dd>
-                      </div>
-                    </dl>
-                    <p class="request-permission-note">
-                      {{ readMcpPermissionNote(request) }}
-                    </p>
-                  </div>
-
-                  <section class="request-actions request-actions-prominent">
-                    <button
-                      type="button"
-                      class="request-button request-button-primary"
-                      :disabled="isRequestResponding(request.id)"
-                      @click="onRespondMcpElicitation(request, 'accept')"
-                    >
-                      {{ isRequestResponding(request.id) ? '正在处理…' : '仅本次允许' }}
-                    </button>
-                    <button
-                      v-if="supportsMcpPermissionPersistence(request, 'session')"
-                      type="button"
-                      class="request-button"
-                      :disabled="isRequestResponding(request.id)"
-                      @click="onRespondMcpElicitation(request, 'accept', 'session')"
-                    >
-                      本会话允许
-                    </button>
-                    <button
-                      v-if="supportsMcpPermissionPersistence(request, 'always')"
-                      type="button"
-                      class="request-button request-button-subtle"
-                      :disabled="isRequestResponding(request.id)"
-                      @click="onRespondMcpElicitation(request, 'accept', 'always')"
-                    >
-                      始终允许此工具
-                    </button>
-                    <button
-                      type="button"
-                      class="request-button"
-                      :disabled="isRequestResponding(request.id)"
-                      @click="onRespondMcpElicitation(request, 'decline')"
-                    >
-                      拒绝
-                    </button>
-                  </section>
-                </template>
-
-                <template v-else>
-                <p v-if="readMcpElicitationIntro(request)" class="request-question-text">
-                  {{ readMcpElicitationIntro(request) }}
-                </p>
-
-                <a
-                  v-if="readMcpElicitationUrl(request)"
-                  class="request-link"
-                  :href="readMcpElicitationUrl(request)"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  @click="onHyperlinkClick($event, readMcpElicitationUrl(request))"
-                >
-                  打开需要处理的页面
-                </a>
-
-                <div
-                  v-for="field in readMcpElicitationFields(request)"
-                  :key="`${request.id}:mcp:${field.id}`"
-                  class="request-question"
-                >
-                  <p class="request-question-title">
-                    {{ field.title }}
-                    <span v-if="field.required" class="request-required">必填</span>
-                  </p>
-                  <p v-if="field.description" class="request-question-text">{{ field.description }}</p>
-
-                  <select
-                    v-if="field.enumOptions.length > 0"
-                    class="request-select"
-                    :value="readMcpElicitationAnswer(request.id, field)"
-                    @change="onMcpElicitationAnswerChange(request.id, field.id, $event)"
-                  >
-                    <option v-if="!field.required" value="">不填写</option>
-                    <option
-                      v-for="option in field.enumOptions"
-                      :key="`${request.id}:mcp:${field.id}:${option.value}`"
-                      :value="option.value"
-                    >
-                      {{ option.label }}
-                    </option>
-                  </select>
-
-                  <label v-else-if="field.type === 'boolean'" class="request-checkbox-row">
-                    <input
-                      type="checkbox"
-                      :checked="readMcpElicitationBooleanAnswer(request.id, field)"
-                      @change="onMcpElicitationBooleanAnswerChange(request.id, field.id, $event)"
-                    />
-                    <span>是</span>
-                  </label>
-
-                  <input
-                    v-else
-                    class="request-input"
-                    :type="field.type === 'number' || field.type === 'integer' ? 'number' : 'text'"
-                    :value="readMcpElicitationAnswer(request.id, field)"
-                    :placeholder="field.required ? '请输入' : '可选'"
-                    @input="onMcpElicitationAnswerChange(request.id, field.id, $event)"
-                  />
-                </div>
-
-                <div
-                  v-if="readMcpElicitationFields(request).length === 0 && !readMcpElicitationUrl(request)"
-                  class="request-question"
-                >
-                  <p class="request-question-title">补充内容</p>
-                  <textarea
-                    class="request-textarea"
-                    :value="readMcpElicitationFallbackAnswer(request.id)"
-                    placeholder="输入后提交，Codex 会继续执行"
-                    @input="onMcpElicitationFallbackInput(request.id, $event)"
-                  />
-                </div>
-
-                <section class="request-actions">
-                  <button type="button" class="request-button request-button-primary" @click="onRespondMcpElicitation(request, 'accept')">
-                    {{ readMcpElicitationUrl(request) ? '已处理，继续' : '提交并继续' }}
-                  </button>
-                  <button type="button" class="request-button" @click="onRespondMcpElicitation(request, 'decline')">拒绝</button>
-                  <button type="button" class="request-button" @click="onRespondMcpElicitation(request, 'cancel')">取消本次请求</button>
-                </section>
-                </template>
-              </section>
-
-              <section v-else-if="request.method === 'item/tool/call'" class="request-tool-call">
-                <div class="request-tool-panel">
-                  <span class="request-tool-badge">工具调用</span>
-                  <p class="request-tool-title">{{ readToolCallTitle(request) }}</p>
-                  <p class="request-tool-text">{{ readToolCallSummary(request) }}</p>
-                  <dl class="request-tool-grid">
-                    <div class="request-tool-item">
-                      <dt class="request-tool-term">服务</dt>
-                      <dd class="request-tool-value">{{ readToolCallServerName(request) }}</dd>
-                    </div>
-                    <div class="request-tool-item">
-                      <dt class="request-tool-term">工具</dt>
-                      <dd class="request-tool-value">{{ readToolCallName(request) }}</dd>
-                    </div>
-                  </dl>
-                </div>
-                <section class="request-actions request-actions-prominent">
-                  <button type="button" class="request-button request-button-primary" @click="onRespondToolCallFailure(request.id)">让 Codex 改用文字继续</button>
-                </section>
-              </section>
-
-              <section v-else class="request-actions">
-                <button type="button" class="request-button request-button-primary" @click="onRespondEmptyResult(request.id)">返回空结果</button>
-                <button type="button" class="request-button" @click="onRejectUnknownRequest(request.id)">拒绝请求</button>
-              </section>
-            </article>
-          </div>
-        </section>
-      </section>
-      </Teleport>
-      <li
-        v-if="hasOlderMessagesAffordance"
-        class="conversation-item conversation-item-load-more"
-      >
-        <button
-          type="button"
-          class="conversation-load-more-button"
-          :disabled="isRevealingOlderMessages"
-          @click="onRevealOlderMessages"
-        >
-          <span class="conversation-load-more-title">
-            {{ olderMessagesAffordanceTitle }}
-          </span>
-          <span class="conversation-load-more-hint">滑到顶部也会继续加载</span>
+    <ol
+      v-else
+      ref="conversationListRef"
+      class="transcript-list"
+      :data-thread-id="props.activeThreadId"
+      :data-turn-count="props.projection.turns.length"
+      :data-message-count="projectionItemCount"
+      :data-history-start-index="props.projection.history.startIndex"
+      :data-history-original-turn-count="props.projection.history.originalTurnCount"
+      :data-history-source="props.projection.sourceState"
+      :data-mounted-turn-count="virtualizedTurns.length"
+      :data-virtualized="shouldVirtualizeTurns ? 'true' : 'false'"
+      tabindex="0"
+      aria-label="会话记录"
+      @scroll.passive="onConversationScroll"
+    >
+      <li v-if="props.projection.history.hasOlder" class="history-row">
+        <button type="button" class="history-button" :disabled="props.isLoading" @click="requestOlderHistory">
+          {{ props.isLoading ? '正在加载…' : '加载较早会话' }}
         </button>
       </li>
-      <li
-        v-if="visibleContextPreview"
-        class="conversation-item conversation-item-context-preview"
-        data-role="user"
-        data-message-type="contextPreview"
-      >
-        <div class="message-row" data-role="user" data-message-type="contextPreview">
-          <div class="message-stack" data-role="user">
-            <p class="message-eyebrow" data-role="user">{{ visibleContextPreview.label }}</p>
-            <article class="message-body" data-role="user">
-              <article class="message-card message-card-context-preview" data-role="user">
-                <p class="message-text">{{ visibleContextPreview.text }}</p>
-              </article>
-            </article>
-          </div>
-        </div>
-      </li>
+
       <li
         v-if="virtualTopSpacerHeight > 0"
-        class="conversation-spacer"
-        aria-hidden="true"
+        class="virtual-turn-spacer"
         :style="{ height: `${String(virtualTopSpacerHeight)}px` }"
-      />
-      <li
-        v-for="entry in virtualizedMessages"
-        :key="entry.key"
-        :ref="(el) => setMessageMeasureRef(entry.measureId, el)"
-        class="conversation-item"
-        :class="{
-          'conversation-item-actionable': entry.kind === 'message' && (canShowMessageActions(entry.message) || canFavoriteMessage(entry.message)),
-          'conversation-item-actions-active': entry.kind === 'message' && isMessageActionBarActive(entry.message),
-          'conversation-item-highlighted': entry.kind === 'message' && highlightedMessageId === entry.message.id,
-        }"
-        :data-role="entry.kind === 'message' ? entry.message.role : 'assistant'"
-        :data-message-id="entry.kind === 'message' ? entry.message.id : ''"
-        :data-message-type="entry.kind === 'message' ? (entry.message.messageType || '') : 'guidedSummary'"
-      >
-        <div v-if="entry.kind === 'guidedSummary'" class="message-row" data-role="assistant" data-message-type="guidedSummary">
-          <div class="message-stack" data-role="assistant">
-            <button
-              type="button"
-              class="guided-turn-toggle"
-              :aria-expanded="isGuidedTurnExpanded(entry.turnIndex)"
-              @click="onToggleGuidedTurn(entry.turnIndex)"
-            >
-              <span class="guided-turn-toggle-title">
-                {{ isGuidedTurnExpanded(entry.turnIndex) ? '隐藏阶段回复' : '阶段回复' }}
-              </span>
-              <span class="guided-turn-toggle-meta">
-                {{ entry.hiddenCount }}条<span v-if="guidedTurnDurationLabel(entry.turnIndex)"> · {{ guidedTurnDurationLabel(entry.turnIndex) }}</span>
-              </span>
-            </button>
-          </div>
-        </div>
-
-        <div v-else-if="isPlanMessage(entry.message)" class="message-row" data-role="system" data-message-type="plan">
-          <div class="message-stack" data-role="system">
-            <section class="plan-card" :class="{ 'is-streaming': entry.message.plan?.isStreaming }">
-              <button
-                type="button"
-                class="plan-card-header"
-                :aria-expanded="isPlanExpanded(entry.message)"
-                @click="togglePlanExpanded(entry.message)"
-              >
-                <span class="plan-card-title-wrap">
-                  <span class="plan-card-icon" aria-hidden="true">✓</span>
-                  <span class="plan-card-title">计划</span>
-                </span>
-                <span class="plan-card-meta">{{ planProgressLabel(entry.message) }}</span>
-                <span class="plan-card-chevron" :class="{ 'is-open': isPlanExpanded(entry.message) }" aria-hidden="true">›</span>
-              </button>
-              <div v-if="isPlanExpanded(entry.message)" class="plan-card-body">
-                <p v-if="entry.message.plan?.explanation" class="plan-card-explanation">
-                  {{ entry.message.plan.explanation }}
-                </p>
-                <ol v-if="entry.message.plan?.steps.length" class="plan-step-list">
-                  <template
-                    v-for="stepEntry in visiblePlanStepEntries(entry.message)"
-                    :key="`${entry.message.id}:${stepEntry.index}`"
-                  >
-                    <li v-if="stepEntry.hiddenBefore > 0" class="plan-step-gap">
-                      已隐藏 {{ stepEntry.hiddenBefore }} 步
-                    </li>
-                    <li class="plan-step" :data-status="stepEntry.step.status">
-                      <span class="plan-step-marker" aria-hidden="true">{{ planStepMarker(stepEntry.step.status) }}</span>
-                      <span class="plan-step-copy">{{ stepEntry.step.step }}</span>
-                      <span class="plan-step-status">{{ planStepStatusLabel(stepEntry.step.status) }}</span>
-                    </li>
-                  </template>
-                </ol>
-                <button
-                  v-if="shouldShowPlanStepToggle(entry.message)"
-                  type="button"
-                  class="plan-steps-toggle"
-                  @click.stop="togglePlanSteps(entry.message)"
-                >
-                  {{ isPlanStepListExpanded(entry.message) ? '收起步骤' : `显示全部 ${entry.message.plan?.steps.length ?? 0} 步` }}
-                </button>
-                <p
-                  v-if="!entry.message.plan?.steps.length && entry.message.plan?.rawText"
-                  class="plan-card-raw"
-                >{{ entry.message.plan.rawText }}</p>
-                <p v-else-if="!entry.message.plan?.steps.length" class="plan-card-raw">正在整理计划…</p>
-                <div v-if="shouldShowPlanImplementationAction(entry.message)" class="plan-card-actions">
-                  <span>{{ isPlanImplemented(entry.message) ? '计划已交给执行模式' : '实施此计划？' }}</span>
-                  <button
-                    type="button"
-                    :class="{ 'is-submitted': isPlanImplemented(entry.message) }"
-                    :disabled="isPlanImplementing(entry.message) || isPlanImplemented(entry.message)"
-                    @click.stop="onImplementPlan(entry.message)"
-                  >{{ planImplementationActionLabel(entry.message) }}</button>
-                </div>
-              </div>
-            </section>
-          </div>
-        </div>
-
-        <div v-else-if="isCommandMessage(entry.message)" class="message-row" data-role="system">
-          <div class="message-stack" data-role="system">
-            <button
-              type="button"
-              class="cmd-row"
-              :class="[commandStatusClass(entry.message), { 'cmd-expanded': isCommandExpanded(entry.message) }]"
-              @click="toggleCommandExpand(entry.message)"
-            >
-              <span class="cmd-chevron" :class="{ 'cmd-chevron-open': isCommandExpanded(entry.message) }">▶</span>
-              <span class="cmd-status">{{ commandStatusLabel(entry.message) }}</span>
-              <span v-if="commandDurationLabel(entry.message)" class="cmd-duration">{{ commandDurationLabel(entry.message) }}</span>
-              <code class="cmd-label">{{ entry.message.commandExecution?.command || '（命令）' }}</code>
-            </button>
-            <div
-              class="cmd-output-wrap"
-              :class="{ 'cmd-output-visible': isCommandExpanded(entry.message), 'cmd-output-collapsing': isCommandCollapsing(entry.message) }"
-            >
-              <div v-if="shouldMountCommandOutput(entry.message)" class="cmd-output-inner">
-                <pre class="cmd-output">{{ entry.message.commandExecution?.aggregatedOutput || '（无输出）' }}</pre>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div v-else-if="isInterruptedTurnMessage(entry.message)" class="message-row" data-role="system" data-message-type="turn.interrupted">
-          <div class="message-stack" data-role="system">
-            <section class="interrupted-turn-card" aria-live="polite">
-              <span class="interrupted-turn-dot" aria-hidden="true" />
-              <p class="interrupted-turn-copy">{{ entry.message.text }}</p>
-              <button
-                v-if="interruptedTurnUserMessage"
-                class="interrupted-turn-edit"
-                type="button"
-                :title="isRollbackConfirming(interruptedTurnUserMessage) ? '再次点击确认：将此前指令放回输入框并从此处继续' : '编辑上条指令并从此处继续'"
-                :aria-label="isRollbackConfirming(interruptedTurnUserMessage) ? '确认编辑上条指令并继续' : '编辑上条指令并继续'"
-                @click="onRollback(interruptedTurnUserMessage)"
-              >
-                <IconTablerPencil class="message-action-icon" />
-                <span>{{ isRollbackConfirming(interruptedTurnUserMessage) ? '确认编辑' : '编辑继续' }}</span>
-              </button>
-            </section>
-          </div>
-        </div>
-
-        <div
-          v-else
-          class="message-row"
-          :data-role="entry.message.role"
-          :data-message-type="entry.message.messageType || ''"
-        >
-          <div class="message-stack" :data-role="entry.message.role">
-            <p
-              v-if="messageRoleLabel(entry.message, entry.messageIndex)"
-              class="message-eyebrow"
-              :data-role="entry.message.role"
-            >
-              {{ messageRoleLabel(entry.message, entry.messageIndex) }}
-            </p>
-            <article class="message-body" :data-role="entry.message.role">
-              <ul
-                v-if="entry.message.images && entry.message.images.length > 0"
-                class="message-image-list"
-                :data-role="entry.message.role"
-              >
-                <li
-                  v-for="(imageUrl, imageIndex) in entry.message.images"
-                  :key="`${imageUrl}-${imageIndex}`"
-                  class="message-image-item"
-                >
-                  <button
-                    class="message-image-button"
-                    :class="{
-                      'is-loading': !isMessageImageLoaded(entry.message.id, imageIndex) && !isMessageImageFailed(entry.message.id, imageIndex),
-                      'is-failed': isMessageImageFailed(entry.message.id, imageIndex),
-                    }"
-                    type="button"
-                    :aria-label="isMessageImageFailed(entry.message.id, imageIndex) ? '图片加载失败，重新加载' : '打开消息图片预览'"
-                    @click="openOrRetryMessageImage(imageUrl, entry.message.id, imageIndex)"
-                  >
-                    <span
-                      v-if="!isMessageImageLoaded(entry.message.id, imageIndex) && !isMessageImageFailed(entry.message.id, imageIndex)"
-                      class="message-image-loading"
-                      aria-hidden="true"
-                    />
-                    <img
-                      v-if="!isMessageImageFailed(entry.message.id, imageIndex)"
-                      :key="messageImageRenderKey(entry.message.id, imageIndex)"
-                      class="message-image-preview"
-                      :class="{ 'is-loaded': isMessageImageLoaded(entry.message.id, imageIndex) }"
-                      :src="messageImageRenderUrl(imageUrl, entry.message.id, imageIndex)"
-                      alt="消息图片预览"
-                      loading="lazy"
-                      :ref="(element) => onMessageImageElementRef(element, entry.message.id, imageIndex)"
-                      @load="onMessageImageLoad(entry.message.id, imageIndex)"
-                      @error="onMessageImageError(entry.message.id, imageIndex)"
-                    />
-                    <span v-else class="message-image-failed" role="img" aria-label="图片加载失败">
-                      图片加载失败，点此重试
-                    </span>
-                  </button>
-                </li>
-              </ul>
-
-              <div
-                v-if="entry.message.fileAttachments && entry.message.fileAttachments.length > 0"
-                class="message-file-attachments"
-              >
-                <article v-for="att in entry.message.fileAttachments" :key="att.path" class="message-file-card">
-                  <span class="message-file-card-icon" aria-hidden="true">
-                    <IconTablerFilePencil class="message-file-card-icon-svg" />
-                  </span>
-                  <span class="message-file-card-copy">
-                    <a
-                      class="message-file-link message-file-card-title"
-                      :href="toBrowseUrl(att.path)"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      :title="att.path"
-                      @click="onHyperlinkClick($event, toBrowseUrl(att.path))"
-                      @contextmenu.prevent="onFileLinkContextMenu($event, att.path)"
-                    >
-                      {{ att.label || getBasename(att.path) }}
-                    </a>
-                    <span class="message-file-card-path">{{ att.path }}</span>
-                  </span>
-                </article>
-              </div>
-
-              <details
-                v-if="shouldRenderRawPayloadCard(entry.message)"
-                class="message-structured-card"
-                @toggle="onRawPayloadToggle($event, entry.message.id)"
-              >
-                <summary class="message-structured-summary">
-                  <span class="message-structured-title">{{ rawPayloadTitle(entry.message) }}</span>
-                  <span class="message-structured-meta">{{ rawPayloadMeta(entry.message) }}</span>
-                </summary>
-                <pre v-if="isRawPayloadExpanded(entry.message.id)" class="message-structured-pre">{{ rawPayloadPreview(entry.message) }}</pre>
-              </details>
-
-              <article
-                v-if="entry.message.text.length > 0"
-                class="message-card"
-                :class="{ 'is-favorited': isFavoriteMessage(entry.message) }"
-                :data-role="entry.message.role"
-                :tabindex="canShowMessageActionBar(entry.message) ? 0 : undefined"
-                @click="onMessageCardActivate(entry.message)"
-                @focusin="onMessageCardActivate(entry.message)"
-                @keydown.enter.prevent="onMessageCardActivate(entry.message)"
-                @keydown.space.prevent="onMessageCardActivate(entry.message)"
-              >
-                <div
-                  class="message-text-flow"
-                  :class="{
-                    'message-text-flow--long-collapsed': isLongUserMessageCollapsed(entry.message),
-                    'message-text-flow--long-expanded': isLongUserMessage(entry.message) && !isLongUserMessageCollapsed(entry.message),
-                  }"
-                >
-                  <template v-if="isLongUserMessageCollapsed(entry.message)">
-                    <p class="message-text">{{ longMessagePreview(entry.message) }}</p>
-                    <p class="message-long-summary">
-                      当前为折叠预览，完整 Prompt 已发送 · {{ formatCharacterCount(entry.message.text.length) }} 字
-                    </p>
-                  </template>
-                  <template v-else-if="isStreamingAgentMessage(entry.message)">
-                    <p class="message-text message-streaming-text">{{ entry.message.text }}</p>
-                  </template>
-                  <template v-else>
-                    <template
-                      v-for="(block, blockIndex) in getPreparedMessageBlocks(entry.message)"
-                      :key="`block-${blockIndex}`"
-                    >
-                      <p v-if="block.kind === 'text'" class="message-text">
-                        <template v-for="(segment, segmentIndex) in block.segments" :key="`seg-${blockIndex}-${segmentIndex}`">
-                          <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
-                          <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
-                          <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
-                            <a
-                              class="message-file-link"
-                              :href="toBrowseUrl(segment.path)"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              :title="segment.path"
-                              @click="onHyperlinkClick($event, toBrowseUrl(segment.path))"
-                              @contextmenu.prevent="onFileLinkContextMenu($event, segment.path)"
-                            >
-                              {{ segment.displayPath }}
-                            </a>
-                          </span>
-                          <a
-                            v-else-if="segment.kind === 'url'"
-                            class="message-file-link"
-                            :href="segment.href"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            :title="segment.href"
-                            @click="onHyperlinkClick($event, segment.href)"
-                            @contextmenu.prevent="onUrlLinkContextMenu($event, segment.href)"
-                          >
-                            {{ segment.value }}
-                          </a>
-                          <code v-else class="message-inline-code">{{ segment.value }}</code>
-                        </template>
-                      </p>
-                      <div v-else-if="block.kind === 'table'" class="message-table-block">
-                        <div
-                          class="message-table-scroll"
-                          role="region"
-                          tabindex="0"
-                          aria-label="表格内容，可横向滚动查看"
-                        >
-                          <table class="message-table">
-                            <thead>
-                              <tr>
-                                <th v-for="(header, headerIndex) in block.headers" :key="`table-head-${blockIndex}-${headerIndex}`">
-                                  <template v-for="(segment, segmentIndex) in header.segments" :key="`table-head-seg-${blockIndex}-${headerIndex}-${segmentIndex}`">
-                                    <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
-                                    <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
-                                    <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
-                                      <a
-                                        class="message-file-link"
-                                        :href="toBrowseUrl(segment.path)"
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        :title="segment.path"
-                                        @click="onHyperlinkClick($event, toBrowseUrl(segment.path))"
-                                        @contextmenu.prevent="onFileLinkContextMenu($event, segment.path)"
-                                      >
-                                        {{ segment.displayPath }}
-                                      </a>
-                                    </span>
-                                    <a
-                                      v-else-if="segment.kind === 'url'"
-                                      class="message-file-link"
-                                      :href="segment.href"
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      :title="segment.href"
-                                      @click="onHyperlinkClick($event, segment.href)"
-                                      @contextmenu.prevent="onUrlLinkContextMenu($event, segment.href)"
-                                    >
-                                      {{ segment.value }}
-                                    </a>
-                                    <code v-else class="message-inline-code">{{ segment.value }}</code>
-                                  </template>
-                                </th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              <tr v-for="(row, rowIndex) in block.rows" :key="`table-row-${blockIndex}-${rowIndex}`">
-                                <td v-for="(cell, cellIndex) in row" :key="`table-cell-${blockIndex}-${rowIndex}-${cellIndex}`">
-                                  <template v-for="(segment, segmentIndex) in cell.segments" :key="`table-cell-seg-${blockIndex}-${rowIndex}-${cellIndex}-${segmentIndex}`">
-                                    <span v-if="segment.kind === 'text'">{{ segment.value }}</span>
-                                    <strong v-else-if="segment.kind === 'bold'" class="message-bold-text">{{ segment.value }}</strong>
-                                    <span v-else-if="segment.kind === 'file'" class="message-file-link-wrap">
-                                      <a
-                                        class="message-file-link"
-                                        :href="toBrowseUrl(segment.path)"
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        :title="segment.path"
-                                        @click="onHyperlinkClick($event, toBrowseUrl(segment.path))"
-                                        @contextmenu.prevent="onFileLinkContextMenu($event, segment.path)"
-                                      >
-                                        {{ segment.displayPath }}
-                                      </a>
-                                    </span>
-                                    <a
-                                      v-else-if="segment.kind === 'url'"
-                                      class="message-file-link"
-                                      :href="segment.href"
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      :title="segment.href"
-                                      @click="onHyperlinkClick($event, segment.href)"
-                                      @contextmenu.prevent="onUrlLinkContextMenu($event, segment.href)"
-                                    >
-                                      {{ segment.value }}
-                                    </a>
-                                    <code v-else class="message-inline-code">{{ segment.value }}</code>
-                                  </template>
-                                </td>
-                              </tr>
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                      <div
-                        v-else-if="block.kind === 'code'"
-                        class="message-code-block"
-                        :data-diff="block.isDiff"
-                      >
-                        <div class="message-code-header">
-                          <span class="message-code-meta">
-                            <span class="message-code-language">{{ block.language || (block.isDiff ? 'diff' : 'text') }}</span>
-                            <span class="message-code-count">{{ block.lineCount }} 行</span>
-                            <span
-                              v-if="isLongCodeBlock(block) && !isCodeBlockExpanded(entry.message.id, blockIndex)"
-                              class="message-code-count"
-                            >
-                              预览 {{ CODE_BLOCK_PREVIEW_LINE_COUNT }} 行
-                            </span>
-                          </span>
-                          <button
-                            class="message-code-copy"
-                            type="button"
-                            :aria-label="isCodeBlockCopied(entry.message.id, blockIndex) ? '代码已复制' : '复制代码块'"
-                            @click.stop="onCopyCodeBlock(entry.message.id, blockIndex, block)"
-                          >
-                            <IconTablerCopy class="message-code-copy-icon" />
-                            <span>{{ isCodeBlockCopied(entry.message.id, blockIndex) ? '已复制' : '复制' }}</span>
-                          </button>
-                        </div>
-                        <pre class="message-code-pre"><code><span
-                          v-for="(line, lineIndex) in visibleCodeBlockLines(entry.message.id, blockIndex, block)"
-                          :key="`code-line-${blockIndex}-${lineIndex}`"
-                          class="message-code-line"
-                          :data-kind="line.kind"
-                        >{{ line.value || ' ' }}</span></code></pre>
-                        <div v-if="isLongCodeBlock(block)" class="message-code-footer">
-                          <button
-                            class="message-code-expand"
-                            type="button"
-                            @click.stop="toggleCodeBlockExpand(entry.message.id, blockIndex)"
-                          >
-                            {{
-                              isCodeBlockExpanded(entry.message.id, blockIndex)
-                                ? '收起代码'
-                                : `展开剩余 ${hiddenCodeBlockLineCount(block)} 行`
-                            }}
-                          </button>
-                        </div>
-                      </div>
-                      <div
-                        v-else-if="isMarkdownImageFailed(entry.message.id, blockIndex)"
-                        class="message-markdown-image-failed"
-                      >
-                        <span role="status">图片加载失败</span>
-                        <button
-                          type="button"
-                          class="message-markdown-image-retry"
-                          @click="retryMarkdownImage(entry.message.id, blockIndex)"
-                        >
-                          重试
-                        </button>
-                      </div>
-                      <button
-                        v-else
-                        class="message-image-button message-markdown-image-button"
-                        :class="{ 'is-loading': !isMarkdownImageLoaded(entry.message.id, blockIndex) }"
-                        type="button"
-                        :aria-label="markdownImageActionLabel(block.alt, isMarkdownImageLoaded(entry.message.id, blockIndex))"
-                        :aria-busy="isMarkdownImageLoaded(entry.message.id, blockIndex) ? undefined : 'true'"
-                        :disabled="!isMarkdownImageLoaded(entry.message.id, blockIndex)"
-                        @click="openImageModal(block.url)"
-                      >
-                        <span
-                          v-if="!isMarkdownImageLoaded(entry.message.id, blockIndex)"
-                          class="message-image-loading"
-                          aria-hidden="true"
-                        />
-                        <img
-                          :key="markdownImageRenderKey(entry.message.id, blockIndex)"
-                          class="message-image-preview message-markdown-image"
-                          :class="{ 'is-loaded': isMarkdownImageLoaded(entry.message.id, blockIndex) }"
-                          :src="block.url"
-                          :alt="block.alt || '消息内图片'"
-                          loading="lazy"
-                          :ref="(element) => onMarkdownImageElementRef(element, entry.message.id, blockIndex)"
-                          @load="onMarkdownImageLoad(entry.message.id, blockIndex)"
-                          @error="onMarkdownImageError(entry.message.id, blockIndex)"
-                        />
-                      </button>
-                    </template>
-                  </template>
-                  <div v-if="isLongUserMessage(entry.message)" class="message-long-actions">
-                    <button type="button" class="message-long-action" @click.stop="toggleLongUserMessage(entry.message)">
-                      {{ isLongUserMessageCollapsed(entry.message) ? '展开完整 Prompt' : '收起' }}
-                    </button>
-                    <button type="button" class="message-long-action" @click.stop="onCopyMessage(entry.message)">
-                      {{ isMessageCopied(entry.message.id) ? '已复制全文' : '复制全文' }}
-                    </button>
-                  </div>
-                  <div v-if="isHistoryNoticeMessage(entry.message)" class="history-notice-actions">
-                    <button
-                      type="button"
-                      class="history-notice-action"
-                      @click.stop="emit('loadOlderHistory')"
-                    >
-                      加载较早历史
-                    </button>
-                  </div>
-                </div>
-                <div
-                  v-if="entry.message.deliveryState"
-                  class="message-delivery-state"
-                  :data-state="entry.message.deliveryState"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <span class="message-delivery-dot" aria-hidden="true" />
-                  <span>{{ messageDeliveryLabel(entry.message) }}</span>
-                  <button
-                    v-if="entry.message.deliveryState === 'failed' && props.allowFailedMessageEdit"
-                    type="button"
-                    class="message-delivery-retry"
-                    title="编辑后重新发送"
-                    @click.stop="emit('editFailedMessage', entry.message.id)"
-                  >
-                    编辑
-                  </button>
-                  <button
-                    v-if="entry.message.deliveryState === 'failed'"
-                    type="button"
-                    class="message-delivery-retry"
-                    :title="entry.message.deliveryError || '重新发送这条消息'"
-                    @click.stop="emit('retryFailedMessage', entry.message.id)"
-                  >
-                    重试
-                  </button>
-                </div>
-              </article>
-            </article>
-
-            <div v-if="canShowMessageActionBar(entry.message)" class="message-actions">
-              <button
-                v-if="canRollbackMessage(entry.message)"
-                class="message-action-button"
-                :class="[
-                  entry.message.role === 'user' ? 'message-action-button--edit' : 'message-action-button--rollback',
-                  { 'is-confirming': isRollbackConfirming(entry.message) },
-                ]"
-                type="button"
-                :title="isRollbackConfirming(entry.message) ? '再次点击确认操作' : entry.message.role === 'user' ? '编辑这条指令并从此处继续' : '回滚到这条消息，并移除其后的当前轮次内容'"
-                :aria-label="isRollbackConfirming(entry.message) ? '确认操作' : entry.message.role === 'user' ? '编辑并从此处继续' : '回滚到这条消息'"
-                @click.stop="onRollback(entry.message)"
-              >
-                <IconTablerPencil v-if="entry.message.role === 'user'" class="message-action-icon" />
-                <IconTablerArrowBackUp v-else class="message-action-icon" />
-                <span class="message-action-label">{{ isRollbackConfirming(entry.message) ? '确认操作' : entry.message.role === 'user' ? '编辑继续' : '回滚' }}</span>
-              </button>
-              <div v-if="canFavoriteMessage(entry.message) || canCopyMessage(entry.message) || canScrollMessageToTop(entry.message)" class="message-actions-main">
-                <button
-                  v-if="canFavoriteMessage(entry.message)"
-                  class="message-action-button message-action-button--favorite"
-                  :class="{ 'is-favorited': isFavoriteMessage(entry.message) }"
-                  type="button"
-                  :title="isFavoriteMessage(entry.message) ? '取消收藏这条消息' : '收藏这条消息'"
-                  :aria-label="isFavoriteMessage(entry.message) ? '取消收藏这条消息' : '收藏这条消息'"
-                  @click.stop="onToggleFavorite(entry.message)"
-                >
-                  <IconTablerBookmark class="message-action-icon" :filled="isFavoriteMessage(entry.message)" />
-                  <span class="message-action-label">{{ isFavoriteMessage(entry.message) ? '取消收藏' : '收藏' }}</span>
-                </button>
-                <button
-                  v-if="canCopyMessage(entry.message)"
-                  class="message-action-button"
-                  :class="{ 'is-copied': isMessageCopied(entry.message.id) }"
-                  type="button"
-                  :title="isMessageCopied(entry.message.id) ? '消息内容已复制' : '复制消息内容'"
-                  :aria-label="isMessageCopied(entry.message.id) ? '消息内容已复制' : '复制消息内容'"
-                  @click.stop="onCopyMessage(entry.message)"
-                >
-                  <IconTablerCheck v-if="isMessageCopied(entry.message.id)" class="message-action-icon" />
-                  <IconTablerCopy v-else class="message-action-icon" />
-                  <span class="message-action-label">{{ isMessageCopied(entry.message.id) ? '已复制' : '复制' }}</span>
-                </button>
-                <button
-                  v-if="canScrollMessageToTop(entry.message)"
-                  class="message-action-button"
-                  type="button"
-                  title="将这条回复滚动到阅读区顶部"
-                  aria-label="将这条回复滚动到阅读区顶部"
-                  @click.stop="scrollMessageToTop(entry.message.id)"
-                >
-                  <IconTablerArrowUp class="message-action-icon" />
-                  <span class="message-action-label">移到顶部</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </li>
-      <li
-        v-if="virtualBottomSpacerHeight > 0"
-        class="conversation-spacer"
         aria-hidden="true"
-        :style="{ height: `${String(virtualBottomSpacerHeight)}px` }"
       />
+
       <li
-        v-if="showProcessPanel"
-        :id="conversationProcessTargetId"
-        ref="processPanelRef"
-        class="conversation-item conversation-item-process"
-      />
-      <li ref="bottomAnchorRef" class="conversation-bottom-anchor" />
-      </ul>
-
-      <button
-        v-if="showJumpToLatestButton"
-        class="conversation-jump-to-latest"
-        :class="{ 'has-pending-updates': hasPendingBelowFoldUpdates }"
-        type="button"
-        :title="jumpToLatestTitle"
-        :aria-label="jumpToLatestTitle"
-        @click="jumpToLatest"
+        v-for="turn in virtualizedTurns"
+        :key="turn.id"
+        :ref="(element) => setTurnMeasureRef(turn.id, element)"
+        class="turn-shell"
+        :class="[`turn-shell--${turn.state}`, { 'is-active': isActiveTurn(turn) }]"
+        :data-turn-id="turn.id"
+        :data-turn-index="turn.index"
+        :data-activity-count="turn.activities.length"
       >
-        <IconTablerArrowUp class="conversation-jump-to-latest-icon" />
-        <span class="conversation-jump-to-latest-label">
-          {{ hasPendingBelowFoldUpdates ? '最新输出' : '回到底部' }}
-        </span>
-        <span v-if="hasPendingBelowFoldUpdates" class="conversation-jump-to-latest-badge" />
-      </button>
-    </template>
-
-    <Teleport to="body">
-      <div
-        v-if="isLiveOverlayDetailOpen && effectiveLiveOverlay"
-        class="live-overlay-detail-backdrop"
-        role="presentation"
-        @click="closeLiveOverlayDetail"
-      >
-        <section
-          ref="liveOverlayDetailSheetRef"
-          class="live-overlay-detail-sheet"
-          role="dialog"
-          aria-modal="true"
-          aria-label="运行详情"
-          tabindex="-1"
-          @click.stop
+        <article
+          v-if="turn.opener"
+          class="user-message"
+          :class="{ 'is-failed': turn.opener.deliveryState === 'failed' }"
+          :data-message-id="turn.opener.id"
+          data-chat-feedback-kind="user"
+          :data-chat-feedback-thread-id="props.activeThreadId"
+          :data-chat-feedback-turn-id="turn.id"
+          :data-chat-feedback-item-id="turn.opener.id"
+          :data-chat-feedback-client-message-id="turn.opener.clientMessageId || undefined"
+          :data-chat-feedback-optimistic-message-id="turn.opener.deliveryState ? turn.opener.id : undefined"
         >
-          <span class="live-overlay-detail-handle" aria-hidden="true" />
-          <header class="live-overlay-detail-header">
-            <div class="live-overlay-detail-title-group">
-              <p class="live-overlay-detail-kicker">运行状态</p>
-              <h2 class="live-overlay-detail-title">{{ liveOverlayPrimaryLabel(effectiveLiveOverlay) }}</h2>
-            </div>
-            <button class="live-overlay-detail-close" type="button" @click="closeLiveOverlayDetail">
-              关闭
-            </button>
-          </header>
-
-          <div v-if="liveOverlayDetails(effectiveLiveOverlay).length > 0" class="live-overlay-detail-list live-overlay-detail-sheet-chips">
-            <span
-              v-for="detail in liveOverlayDetails(effectiveLiveOverlay)"
-              :key="`detail-sheet:${detail}`"
-              class="live-overlay-detail-chip"
-            >
-              {{ detail }}
+          <div v-if="turn.opener.text" class="message-markdown message-markdown--user" v-html="renderMarkdown(turn.opener.text)" />
+          <div v-if="turn.opener.images.length > 0" class="user-images">
+            <UserAttachmentImage
+              v-for="imageUrl in turn.opener.images"
+              :key="imageUrl"
+              :url="imageUrl"
+            />
+          </div>
+          <div v-if="turn.opener.mentions.length > 0" class="attachment-list">
+            <span v-for="mention in turn.opener.mentions" :key="`${mention.path}:${mention.name}`" class="attachment-chip">
+              {{ mention.name || mention.path }}
             </span>
           </div>
+          <div class="message-actions message-actions--user">
+            <span v-if="turn.opener.deliveryState" class="delivery-state" :data-state="turn.opener.deliveryState" role="status" aria-live="polite">
+              {{ deliveryStateLabel(turn.opener.deliveryState, turn) }}
+            </span>
+            <button v-if="turn.opener.text" type="button" class="message-action" @click="copyBlock(turn.opener.text)">复制</button>
+            <button
+              v-if="canFavorite(turn.opener)"
+              type="button"
+              class="message-action"
+              :aria-pressed="isFavorite(turn.opener.id)"
+              @click="toggleFavorite(turn.opener, turn)"
+            >
+              {{ isFavorite(turn.opener.id) ? '取消收藏' : '收藏' }}
+            </button>
+            <button
+              v-if="turn.opener.deliveryState === 'failed' && props.allowFailedMessageEdit === true"
+              type="button"
+              class="message-action"
+              @click="emit('editFailedMessage', turn.opener.id)"
+            >
+              编辑
+            </button>
+            <button
+              v-if="turn.opener.deliveryState === 'failed'"
+              type="button"
+              class="message-action"
+              @click="emit('retryFailedMessage', turn.opener.id)"
+            >
+              重试
+            </button>
+            <button
+              v-if="canRollback(turn)"
+              type="button"
+              class="message-action"
+              :class="{ 'is-confirming': confirmingRollbackTurnIndex === turn.index }"
+              @click="requestRollback(turn)"
+            >
+              {{ confirmingRollbackTurnIndex === turn.index ? '确认回退' : '回退到此轮' }}
+            </button>
+          </div>
+        </article>
 
-          <section v-if="liveOverlayCommandMessage" class="live-overlay-detail-block">
-            <p class="live-overlay-detail-block-title">命令执行</p>
-            <div class="cmd-row cmd-status-running live-overlay-detail-command-row">
-              <span class="cmd-status">{{ commandStatusLabel(liveOverlayCommandMessage) }}</span>
-              <span v-if="commandDurationLabel(liveOverlayCommandMessage)" class="cmd-duration">
-                {{ commandDurationLabel(liveOverlayCommandMessage) }}
-              </span>
-              <code class="cmd-label">{{ liveOverlayCommandMessage.commandExecution?.command || '（命令）' }}</code>
+        <section class="assistant-turn" :aria-label="`Codex 第 ${String(turn.index + 1)} 轮`">
+          <div v-if="turn.state !== 'submitting'" class="turn-divider" :data-state="turn.state">
+            <button
+              v-if="hasProcessContent(turn)"
+              type="button"
+              class="process-toggle turn-timing"
+              :data-status="turn.timingStatus"
+              :aria-expanded="isProcessExpanded(turn)"
+              :disabled="isActiveTurn(turn)"
+              @click="toggleProcess(turn)"
+            >
+              <span>{{ timingLabel(turn) }}</span>
+              <span v-if="turn.waitedMs > 0" class="turn-wait-time">等待你 {{ formatDuration(turn.waitedMs) }}</span>
+              <span
+                class="process-toggle-icon"
+                :class="{ 'is-expanded': isProcessExpanded(turn) }"
+                aria-hidden="true"
+              >›</span>
+            </button>
+            <div
+              v-else-if="hasVisibleTiming(turn)"
+              class="turn-timing turn-timing--static"
+              :data-status="turn.timingStatus"
+            >
+              <span>{{ timingLabel(turn) }}</span>
+              <span v-if="turn.waitedMs > 0" class="turn-wait-time">等待你 {{ formatDuration(turn.waitedMs) }}</span>
             </div>
-            <pre v-if="liveOverlayCommandOutput" class="cmd-output live-overlay-detail-output">{{ liveOverlayCommandOutput }}</pre>
-            <p v-else class="live-overlay-detail-empty">暂无命令输出。</p>
+            <span class="turn-divider-line" aria-hidden="true" />
+          </div>
+
+          <section v-if="hasProcessContent(turn)" class="turn-process">
+            <Transition name="process-reveal">
+              <div
+                v-if="isProcessExpanded(turn)"
+                class="process-content"
+                :class="{
+                  'has-history': processHistoryCount(turn) > 0,
+                  'is-history-expanded': isProcessHistoryExpanded(turn),
+                }"
+                :data-visible-process-count="visibleProcessBlockCount(turn)"
+              >
+              <button
+                v-if="isProcessHistoryExpanded(turn) && hiddenOlderProcessCount(turn) > 0"
+                type="button"
+                class="process-history-action process-history-action--older"
+                @click="showMoreProcessHistory(turn)"
+              >
+                再看更早过程（{{ String(Math.min(hiddenOlderProcessCount(turn), PROCESS_HISTORY_BATCH_SIZE)) }}）
+              </button>
+              <template v-for="entry in visibleProcessEntries(turn)" :key="entry.id">
+                <article
+                  v-if="entry.kind === 'commentary'"
+                  class="commentary-block"
+                  :data-message-id="entry.block.id"
+                >
+                  <span class="process-rail-dot" aria-hidden="true" />
+                  <div
+                    class="commentary-copy message-markdown"
+                    :data-chat-feedback-kind="entry.block.text ? 'assistant' : undefined"
+                    :data-chat-feedback-thread-id="props.activeThreadId"
+                    :data-chat-feedback-turn-id="turn.id"
+                    :data-chat-feedback-item-id="entry.block.id"
+                    v-html="renderMarkdown(entry.block.text)"
+                  />
+                  <button v-if="entry.block.text" type="button" class="inline-copy" @click="copyBlock(entry.block.text)">复制</button>
+                </article>
+
+                <section
+                  v-else
+                  class="activity-group"
+                  :data-activity-group-id="entry.group.id"
+                  :aria-label="entry.group.label"
+                >
+                  <article
+                    v-for="activity in entry.activities"
+                    :key="activity.id"
+                    class="activity-block"
+                    :class="`activity-block--${activity.status}`"
+                    :data-activity-id="activity.id"
+                    v-memo="[activityRenderSignature(activity)]"
+                  >
+                    <span class="process-rail-dot" aria-hidden="true" />
+                    <div class="activity-main">
+                      <div class="activity-heading">
+                        <strong>{{ activity.label }}</strong>
+                        <span>{{ activityStatusLabel(activity.status) }}</span>
+                        <span v-if="activity.durationMs !== null">{{ formatDuration(activity.durationMs) }}</span>
+                      </div>
+
+                      <template v-if="activity.activityType === 'command'">
+                        <code v-if="activity.command" class="activity-command">{{ activity.command }}</code>
+                        <details v-if="activity.output" class="activity-details">
+                          <summary>查看命令输出</summary>
+                          <pre>{{ activity.output }}</pre>
+                        </details>
+                      </template>
+
+                      <template v-else-if="activity.activityType === 'mcp'">
+                        <p v-if="activity.server || activity.tool" class="activity-subtitle">{{ [activity.server, activity.tool].filter(Boolean).join(' · ') }}</p>
+                        <ul v-if="activity.progress.length > 0" class="activity-progress">
+                          <li v-for="progress in activity.progress" :key="progress">{{ progress }}</li>
+                        </ul>
+                        <p v-if="activity.error" class="activity-error">{{ activity.error }}</p>
+                      </template>
+
+                      <template v-else-if="activity.activityType === 'web-search'">
+                        <p v-if="activity.query" class="activity-subtitle">{{ activity.query }}</p>
+                      </template>
+
+                      <template v-else-if="activity.activityType === 'plan'">
+                        <p v-if="activity.explanation" class="activity-subtitle">{{ activity.explanation }}</p>
+                        <ol v-if="activity.steps.length > 0" class="plan-steps">
+                          <li v-for="(step, stepIndex) in activity.steps" :key="`${activity.id}:${String(stepIndex)}`" :data-status="step.status">
+                            <span aria-hidden="true">{{ planStepMark(step.status) }}</span>
+                            <span>{{ step.step }}</span>
+                          </li>
+                        </ol>
+                      </template>
+
+                      <p v-else-if="activityTarget(activity)" class="activity-subtitle">{{ activityTarget(activity) }}</p>
+                    </div>
+                  </article>
+                </section>
+              </template>
+
+              <div v-if="processHistoryCount(turn) > 0" class="process-history-controls">
+                <button
+                  type="button"
+                  class="process-history-action"
+                  :aria-expanded="isProcessHistoryExpanded(turn)"
+                  @click="toggleProcessHistory(turn)"
+                >
+                  {{ isProcessHistoryExpanded(turn) ? '收起历史过程' : `查看历史过程（${String(processHistoryCount(turn))}）` }}
+                </button>
+              </div>
+
+              <div v-if="turn.interactions.some((interaction) => interaction.status !== 'pending')" class="resolved-interactions">
+                <span
+                  v-for="interaction in turn.interactions.filter((entry) => entry.status !== 'pending')"
+                  :key="interaction.id"
+                  class="resolved-interaction"
+                >
+                  {{ interaction.label }} · {{ interaction.status === 'resolved' ? '已处理' : '已失效' }}
+                </span>
+              </div>
+              </div>
+            </Transition>
           </section>
 
-          <section v-if="effectiveLiveOverlay.reasoningText" class="live-overlay-detail-block">
-            <p class="live-overlay-detail-block-title">最新进展</p>
-            <pre class="live-overlay-detail-reasoning">{{ effectiveLiveOverlay.reasoningText }}</pre>
-          </section>
+          <details
+            v-for="plan in proposedPlans(turn)"
+            :key="plan.id"
+            class="plan-proposal"
+            :data-plan-id="plan.id"
+            :open="isActiveTurn(turn) || canImplementPlan(plan, turn) || props.implementingPlanId === plan.id"
+          >
+            <summary>
+              <strong>{{ plan.status === 'in-progress' ? '正在制定计划' : '实施计划' }}</strong>
+              <span>{{ isPlanImplemented(plan.id, turn.id) ? '已提交执行' : plan.status === 'completed' ? canImplementPlan(plan, turn) ? '待确认' : '历史方案' : activityStatusLabel(plan.status) }}</span>
+            </summary>
+            <div class="plan-proposal-body">
+              <div class="message-markdown" v-html="renderMarkdown(plan.text)" />
+              <button
+                v-if="canImplementPlan(plan, turn) || isPlanImplemented(plan.id, turn.id) || props.implementingPlanId === plan.id"
+                type="button"
+                class="quiet-button quiet-button--primary plan-action"
+                :disabled="props.isTurnInProgress === true || Boolean(props.implementingPlanId) || isPlanImplemented(plan.id, turn.id)"
+                @click="emit('implementPlan', planImplementationIntent(plan, turn))"
+              >
+                {{ props.implementingPlanId === plan.id ? '正在提交…' : isPlanImplemented(plan.id, turn.id) ? '已提交执行' : '执行此计划' }}
+              </button>
+            </div>
+          </details>
 
-          <section v-if="overlayPrimaryPendingRequest" class="live-overlay-detail-block">
-            <p class="live-overlay-detail-block-title">待处理请求</p>
-            <p class="live-overlay-detail-copy">下方有待处理请求，处理后任务会继续执行。</p>
-            <button class="live-overlay-detail-primary" type="button" @click="goToPendingRequestsFromDetail">
-              查看待处理请求
-            </button>
-          </section>
+          <details v-if="turn.fileChanges.length > 0" class="file-summary">
+            <summary>
+              <span class="file-summary-icon" aria-hidden="true">±</span>
+              <span class="file-summary-title">文件变更</span>
+              <span class="file-summary-meta">{{ fileSummaryLabel(turn) }}</span>
+              <span class="file-summary-chevron" aria-hidden="true">›</span>
+            </summary>
+            <div class="file-list">
+              <details v-for="file in turn.fileChanges" :key="file.path" class="file-row">
+                <summary>
+                  <span class="file-kind" :data-kind="file.kind">{{ fileKindLabel(file.kind) }}</span>
+                  <code :title="file.path">{{ file.path }}</code>
+                  <span class="file-stats"><b>+{{ file.additions }}</b> <i>-{{ file.removals }}</i></span>
+                </summary>
+                <pre v-if="file.diff">{{ file.diff }}</pre>
+              </details>
+            </div>
+          </details>
 
-          <p v-if="effectiveLiveOverlay.errorText" class="live-overlay-detail-error">{{ effectiveLiveOverlay.errorText }}</p>
+          <div v-if="pendingInteractionsForTurn(turn).length > 0" class="request-stack" aria-live="polite">
+            <article
+              v-for="interaction in pendingInteractionsForTurn(turn)"
+              :key="interaction.id"
+              class="request-card"
+              :data-interaction-type="interaction.interactionType"
+            >
+              <div class="request-card-heading">
+                <span class="request-dot" aria-hidden="true" />
+                <div>
+                  <strong>{{ interaction.title }}</strong>
+                  <p>{{ interaction.detail }}</p>
+                </div>
+              </div>
+
+              <dl v-if="interaction.context.length > 0" class="request-context">
+                <div v-for="entry in interaction.context" :key="`${entry.label}:${entry.value}`" class="request-context-row">
+                  <dt>{{ entry.label }}</dt>
+                  <dd>{{ entry.value }}</dd>
+                </div>
+              </dl>
+
+              <template v-if="interaction.interactionType === 'user-input'">
+                <label v-for="question in interaction.questions" :key="question.id" class="request-field">
+                  <span>{{ question.header || question.question || '请选择' }}</span>
+                  <select
+                    v-if="question.options.length > 0"
+                    :value="requestAnswers[answerKey(interaction.id, question.id)] ?? ''"
+                    @change="onRequestAnswerChange(interaction.id, question.id, $event)"
+                  >
+                    <option value="" disabled>请选择</option>
+                    <option v-for="option in question.options" :key="option" :value="option">{{ option }}</option>
+                  </select>
+                  <input v-if="question.isOther || question.options.length === 0" v-model="requestOtherAnswers[answerKey(interaction.id, question.id)]" type="text" placeholder="补充说明" />
+                </label>
+                <div class="request-actions">
+                  <button type="button" class="quiet-button quiet-button--primary" data-request-action="submit-user-input" :disabled="isInteractionResponding(interaction) || !canSubmitToolInput(interaction)" @click="submitToolInput(interaction)">提交并继续</button>
+                  <button type="button" class="quiet-button" :disabled="isInteractionResponding(interaction)" @click="rejectInteraction(interaction)">取消</button>
+                </div>
+              </template>
+
+              <template v-else-if="interaction.interactionType === 'approval'">
+                <div class="request-actions">
+                  <button type="button" class="quiet-button quiet-button--primary" :disabled="isInteractionResponding(interaction)" @click="respondApproval(interaction, 'accept')">允许一次</button>
+                  <button v-if="interaction.allowForSession" type="button" class="quiet-button" :disabled="isInteractionResponding(interaction)" @click="respondApproval(interaction, 'acceptForSession')">本次会话允许</button>
+                  <button type="button" class="quiet-button quiet-button--danger" :disabled="isInteractionResponding(interaction)" @click="respondApproval(interaction, 'decline')">拒绝</button>
+                </div>
+              </template>
+
+              <template v-else-if="interaction.interactionType === 'mcp-approval' || interaction.interactionType === 'mcp-input'">
+                <label v-if="interaction.interactionType === 'mcp-input' && !interaction.authorizationUrl" class="request-field">
+                  <span>回复内容</span>
+                  <textarea v-model="mcpAnswers[interaction.id]" rows="3" placeholder="输入后继续任务" />
+                </label>
+                <a v-if="interaction.authorizationUrl" class="request-link" :href="interaction.authorizationUrl" target="_blank" rel="noopener noreferrer">打开授权页面</a>
+                <div class="request-actions">
+                  <button type="button" class="quiet-button quiet-button--primary" :disabled="isInteractionResponding(interaction)" @click="respondMcp(interaction, 'accept')">{{ mcpPrimaryActionLabel(interaction) }}</button>
+                  <button
+                    v-if="interaction.interactionType === 'mcp-approval' && interaction.mcpPersistenceScopes.includes('session')"
+                    type="button"
+                    class="quiet-button"
+                    data-persistence-scope="session"
+                    :disabled="isInteractionResponding(interaction)"
+                    @click="respondMcp(interaction, 'accept', 'session')"
+                  >本次会话允许</button>
+                  <button
+                    v-if="interaction.interactionType === 'mcp-approval' && interaction.mcpPersistenceScopes.includes('always')"
+                    type="button"
+                    class="quiet-button"
+                    data-persistence-scope="always"
+                    :disabled="isInteractionResponding(interaction)"
+                    @click="respondMcp(interaction, 'accept', 'always')"
+                  >始终允许</button>
+                  <button type="button" class="quiet-button quiet-button--danger" :disabled="isInteractionResponding(interaction)" @click="respondMcp(interaction, 'decline')">拒绝</button>
+                </div>
+              </template>
+
+              <template v-else-if="interaction.interactionType === 'unsupported-tool'">
+                <div class="request-actions">
+                  <button type="button" class="quiet-button quiet-button--primary" :disabled="isInteractionResponding(interaction)" @click="reportUnsupportedTool(interaction)">改用文字方式继续</button>
+                </div>
+              </template>
+
+              <div v-else class="request-actions">
+                <button type="button" class="quiet-button" :disabled="isInteractionResponding(interaction)" @click="respondEmpty(interaction)">继续</button>
+                <button type="button" class="quiet-button quiet-button--danger" :disabled="isInteractionResponding(interaction)" @click="rejectInteraction(interaction)">拒绝请求</button>
+              </div>
+            </article>
+          </div>
+
+          <div
+            v-if="turn.finalStatus === 'pending' && (turn.state === 'running' || turn.state === 'sync-degraded')"
+            class="turn-live-state"
+            :data-state="turn.state"
+            :data-chat-feedback-kind="turn.state === 'running' ? 'running' : undefined"
+            :data-chat-feedback-thread-id="props.activeThreadId"
+            :data-chat-feedback-turn-id="turn.id"
+            role="status"
+            aria-live="polite"
+          >
+            <span class="turn-live-dot" aria-hidden="true" />
+            <span>{{ turn.state === 'sync-degraded' ? '正在恢复实时状态' : '正在思考' }}</span>
+          </div>
+
+          <article
+            v-if="turn.final"
+            class="final-answer"
+            :class="{ 'is-streaming': turn.final.streaming }"
+            :data-message-id="turn.final.id"
+            aria-live="polite"
+          >
+            <div
+              class="message-markdown message-markdown--final"
+              :data-chat-feedback-kind="turn.final.text ? 'assistant' : undefined"
+              :data-chat-feedback-thread-id="props.activeThreadId"
+              :data-chat-feedback-turn-id="turn.id"
+              :data-chat-feedback-item-id="turn.final.id"
+              v-html="renderMarkdown(turn.final.text)"
+            />
+            <div class="message-actions">
+              <button type="button" class="message-action" @click="copyBlock(turn.final.text)">复制</button>
+              <button
+                type="button"
+                class="message-action"
+                :aria-pressed="isFavorite(turn.final.id)"
+                @click="toggleFavorite(turn.final, turn)"
+              >
+                {{ isFavorite(turn.final.id) ? '取消收藏' : '收藏' }}
+              </button>
+            </div>
+          </article>
+
+          <div
+            v-else-if="turn.finalStatus !== 'pending' && turn.finalStatus !== 'missing'"
+            class="final-status"
+            :data-status="turn.finalStatus"
+            role="status"
+          >
+            <strong>{{ finalStatusTitle(turn) }}</strong>
+            <p>{{ finalStatusDetail(turn) }}</p>
+          </div>
+
+          <div
+            v-for="notice in turn.blocks.filter((block) => block.kind === 'notice')"
+            :key="notice.id"
+            class="turn-notice"
+            :data-tone="notice.kind === 'notice' ? notice.tone : 'neutral'"
+          >
+            {{ notice.kind === 'notice' ? notice.text : '' }}
+          </div>
         </section>
-      </div>
-    </Teleport>
+      </li>
 
-    <Transition name="image-modal">
-      <div v-if="modalImageUrl.length > 0" class="image-modal-backdrop" @click="closeImageModal">
-      <div
-        ref="imageModalContentRef"
-        class="image-modal-content"
-        role="dialog"
-        aria-modal="true"
-        aria-label="图片预览"
-        @click.stop
-      >
-        <div class="image-modal-toolbar">
-          <div class="image-modal-toolbar-group">
-            <button class="image-modal-tool" type="button" aria-label="缩小图片" :disabled="!canZoomOutImageModal" @click="zoomOutImageModal">
-              -
-            </button>
-            <button class="image-modal-tool image-modal-scale" type="button" aria-label="重置图片缩放" :disabled="!canZoomOutImageModal" @click="resetImageModalView">
-              {{ modalImageScaleLabel }}
-            </button>
-            <button class="image-modal-tool" type="button" aria-label="放大图片" :disabled="!canZoomInImageModal" @click="zoomInImageModal">
-              +
-            </button>
-          </div>
-          <button ref="imageModalCloseRef" class="image-modal-close" type="button" aria-label="关闭图片预览" @click="closeImageModal">
-            <IconTablerX class="icon-svg" />
-          </button>
-        </div>
-        <div
-          ref="imageModalStageRef"
-          class="image-modal-stage"
-          :class="{ 'image-modal-stage--zoomed': isImageModalZoomed, 'image-modal-stage--dragging': isImageModalDragging }"
-          @wheel="onImageModalWheel"
-          @dblclick="onImageModalDoubleClick"
-          @pointerdown="onImageModalPointerDown"
-          @pointermove="onImageModalPointerMove"
-          @pointerup="onImageModalPointerUp"
-          @pointercancel="onImageModalPointerUp"
-        >
-          <div v-if="isModalImageLoading" class="image-modal-status" role="status">
-            <span class="image-modal-spinner" aria-hidden="true" />
-            正在加载图片…
-          </div>
-          <div v-else-if="isModalImageFailed" class="image-modal-status image-modal-status--error" role="alert">
-            图片加载失败，请关闭后重试。
-          </div>
-          <img
-            v-show="!isModalImageFailed"
-            ref="imageModalImageRef"
-            class="image-modal-image"
-            :class="{ 'is-loaded': !isModalImageLoading }"
-            :src="modalImageUrl"
-            alt="放大的消息图片"
-            :style="imageModalStyle"
-            @load="onModalImageLoad"
-            @error="onModalImageError"
-            @dragstart.prevent
-          />
-        </div>
-      </div>
-    </div>
-    </Transition>
+      <li
+        v-if="virtualBottomSpacerHeight > 0"
+        class="virtual-turn-spacer"
+        :style="{ height: `${String(virtualBottomSpacerHeight)}px` }"
+        aria-hidden="true"
+      />
 
-    <div
-      v-if="isFileLinkContextMenuVisible"
-      ref="fileLinkContextMenuRef"
-      class="file-link-context-menu"
-      :style="fileLinkContextMenuStyle"
-      @click.stop
+      <li ref="bottomAnchorRef" class="bottom-anchor" aria-hidden="true" />
+    </ol>
+    <button
+      v-if="isAwayFromBottom"
+      type="button"
+      class="conversation-jump-to-latest"
+      aria-label="返回最新输出"
+      @click="returnToLatest"
     >
-      <button type="button" class="file-link-context-menu-item" @click="openFileLinkContextBrowse">
-        打开链接
-      </button>
-      <button type="button" class="file-link-context-menu-item" @click="copyFileLinkContextLink">
-        复制链接
-      </button>
-      <button
-        v-if="fileLinkContextEditUrl"
-        type="button"
-        class="file-link-context-menu-item"
-        @click="openFileLinkContextEdit"
-      >
-        编辑文件
-      </button>
-    </div>
+      <span v-if="latestTurnIsActive" class="run-dots" aria-hidden="true"><i /><i /><i /></span>
+      <span v-else aria-hidden="true">↓</span>
+      <span class="conversation-jump-to-latest-label">返回最新输出</span>
+    </button>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { ComponentPublicInstance } from 'vue'
-import type { ThreadScrollState, UiLiveOverlay, UiMessage, UiServerRequest } from '../../types/codex'
-import IconTablerX from '../icons/IconTablerX.vue'
-import IconTablerArrowBackUp from '../icons/IconTablerArrowBackUp.vue'
-import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
-import IconTablerBookmark from '../icons/IconTablerBookmark.vue'
-import IconTablerCheck from '../icons/IconTablerCheck.vue'
-import IconTablerCopy from '../icons/IconTablerCopy.vue'
-import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
-import IconTablerPencil from '../icons/IconTablerPencil.vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from 'vue'
+import DOMPurify from 'dompurify'
+import MarkdownIt from 'markdown-it'
 import LoadingInline from './LoadingInline.vue'
-import { isNativeAndroidShell, openMobileShellUrl } from '../../mobile/mobileShell'
-import {
-  markChatFeedbackFirstAssistantVisible,
-  markChatFeedbackRendered,
-} from '../../composables/chatFeedbackMetrics'
-import {
-  CONVERSATION_BOTTOM_THRESHOLD_PX,
-  isConversationViewportAtBottom,
-} from '../../composables/conversationViewport'
-import { haveSameConversationMessageStructure } from '../../composables/conversationRenderPolicy'
-import { hasPlanImplementationConfirmation } from '../../composables/conversationProjection'
-import { markThreadFirstScreenReady } from '../../composables/threadFirstScreenMetrics'
+import UserAttachmentImage from './UserAttachmentImage.vue'
+import { useChatFeedbackDomMetrics } from '../../composables/useChatFeedbackDomMetrics'
 import { copyTextToClipboard } from '../../utils/clipboard'
-import {
-  CODEX_FILE_CITATION_PREFIX,
-  splitCodexFileCitations,
-  type CodexFileCitation,
-} from '../../utils/codexFileCitation'
+import { derivePlanImplementationState, planImplementationKey } from '../../conversation-transcript'
+import type {
+  ConversationActivity,
+  ConversationActivityGroup,
+  ConversationAssistantBlock,
+  ConversationFavoriteIntent,
+  ConversationInteractionBlock,
+  ConversationPlanActivity,
+  ConversationPlanImplementationIntent,
+  ConversationProjection,
+  ConversationTurn,
+  ConversationUserBlock,
+} from '../../conversation-transcript'
+import type { ThreadScrollState } from '../../types/codex'
 
 export type ThreadConversationExposed = {
   focusMessage: (messageId: string) => Promise<boolean>
 }
 
-const expandedCommandIds = ref<Set<string>>(new Set())
-const collapsingCommandIds = ref<Set<string>>(new Set())
-const prevCommandStatuses = ref<Record<string, string>>({})
-const commandElapsedNowMs = ref(Date.now())
-const observedCommandStartedAtById = ref<Record<string, number>>({})
-let commandElapsedTimer: number | null = null
-let estimatedMessageHeightByMessage = new WeakMap<UiMessage, { sourceText: string; signature: string; height: number }>()
-let chatFeedbackMetricFrame = 0
-
-function isCommandMessage(message: UiMessage): boolean {
-  return message.messageType === 'commandExecution' && !!message.commandExecution
-}
-
-function isPlanMessage(message: UiMessage): boolean {
-  return message.messageType === 'plan' && !!message.plan
-}
-
-const collapsedLatestPlanIds = ref<Set<string>>(new Set())
-const expandedOlderPlanIds = ref<Set<string>>(new Set())
-const expandedPlanStepIds = ref<Set<string>>(new Set())
-
-const latestPlanMessageId = computed(() => {
-  for (let index = props.messages.length - 1; index >= 0; index -= 1) {
-    const message = props.messages[index]
-    if (message && isPlanMessage(message)) return message.id
-  }
-  return ''
-})
-
-function isPlanExpanded(message: UiMessage): boolean {
-  if (message.id === latestPlanMessageId.value) {
-    return !collapsedLatestPlanIds.value.has(message.id)
-  }
-  return expandedOlderPlanIds.value.has(message.id)
-}
-
-function togglePlanExpanded(message: UiMessage): void {
-  if (message.id === latestPlanMessageId.value) {
-    const next = new Set(collapsedLatestPlanIds.value)
-    if (next.has(message.id)) next.delete(message.id)
-    else next.add(message.id)
-    collapsedLatestPlanIds.value = next
-    return
-  }
-  const next = new Set(expandedOlderPlanIds.value)
-  if (next.has(message.id)) next.delete(message.id)
-  else next.add(message.id)
-  expandedOlderPlanIds.value = next
-}
-
-function planProgressLabel(message: UiMessage): string {
-  const plan = message.plan
-  if (!plan) return ''
-  if (plan.isStreaming) return '生成中'
-  if (isPlanImplemented(message)) return '已提交执行'
-  if (plan.steps.length > 0 && plan.steps.every((step) => step.status === 'completed')) return '已完成'
-  return '已生成'
-}
-
-function planStepMarker(status: NonNullable<UiMessage['plan']>['steps'][number]['status']): string {
-  if (status === 'completed') return '✓'
-  if (status === 'inProgress') return '→'
-  return '·'
-}
-
-function planStepStatusLabel(status: NonNullable<UiMessage['plan']>['steps'][number]['status']): string {
-  if (status === 'completed') return '已完成'
-  if (status === 'inProgress') return '执行中'
-  return '待处理'
-}
-
-function isPlanStepListExpanded(message: UiMessage): boolean {
-  return expandedPlanStepIds.value.has(message.id)
-}
-
-function shouldShowPlanStepToggle(message: UiMessage): boolean {
-  return (message.plan?.steps.length ?? 0) > 6
-}
-
-function togglePlanSteps(message: UiMessage): void {
-  const next = new Set(expandedPlanStepIds.value)
-  if (next.has(message.id)) next.delete(message.id)
-  else next.add(message.id)
-  expandedPlanStepIds.value = next
-}
-
-function visiblePlanStepEntries(message: UiMessage): Array<{
-  index: number
-  step: NonNullable<UiMessage['plan']>['steps'][number]
-  hiddenBefore: number
-}> {
-  const steps = message.plan?.steps ?? []
-  if (steps.length <= 6 || isPlanStepListExpanded(message)) {
-    return steps.map((step, index) => ({ index, step, hiddenBefore: 0 }))
-  }
-  const currentIndex = steps.findIndex((step) => step.status === 'inProgress')
-  const visibleIndexes = new Set([0, 1, currentIndex >= 0 ? currentIndex : 2])
-  const sortedIndexes = [...visibleIndexes]
-    .filter((index) => index >= 0 && index < steps.length)
-    .sort((left, right) => left - right)
-  return sortedIndexes.map((index, position) => ({
-    index,
-    step: steps[index]!,
-    hiddenBefore: position > 0 ? Math.max(0, index - sortedIndexes[position - 1]! - 1) : 0,
-  }))
-}
-
-const latestImplementablePlanMessageId = computed(() => {
-  let hasLaterUserMessage = false
-  for (let index = props.messages.length - 1; index >= 0; index -= 1) {
-    const message = props.messages[index]
-    if (!message) continue
-    if (message.role === 'user') hasLaterUserMessage = true
-    if (isPlanMessage(message)) return hasLaterUserMessage ? '' : message.id
-  }
-  return ''
-})
-
-function canImplementPlan(message: UiMessage): boolean {
-  return latestImplementablePlanMessageId.value === message.id
-    && message.plan?.isStreaming !== true
-    && !props.isTurnInProgress
-    && !isPlanImplementing(message)
-    && !isPlanImplemented(message)
-}
-
-function isPlanImplementing(message: UiMessage): boolean {
-  return props.implementingPlanId === message.id
-}
-
-function isPlanImplemented(message: UiMessage): boolean {
-  return props.implementedPlanIds?.includes(message.id) === true
-    || hasPlanImplementationConfirmation(props.messages, message.id)
-}
-
-function shouldShowPlanImplementationAction(message: UiMessage): boolean {
-  return canImplementPlan(message) || isPlanImplementing(message) || isPlanImplemented(message)
-}
-
-function planImplementationActionLabel(message: UiMessage): string {
-  if (isPlanImplementing(message)) return '正在提交…'
-  if (isPlanImplemented(message)) return '已提交执行'
-  return '是，实施此计划'
-}
-
-function onImplementPlan(message: UiMessage): void {
-  if (!canImplementPlan(message)) return
-  emit('implementPlan', message)
-}
-
-function isInterruptedTurnMessage(message: UiMessage): boolean {
-  return message.messageType === 'turn.interrupted'
-}
-
-function isRunningCommandMessage(message: UiMessage): boolean {
-  return isCommandMessage(message) && message.commandExecution?.status === 'inProgress'
-}
-
-function isCommandExpanded(message: UiMessage): boolean {
-  if (collapsingCommandIds.value.has(message.id)) return true
-  return expandedCommandIds.value.has(message.id)
-}
-
-function isCommandCollapsing(message: UiMessage): boolean {
-  return collapsingCommandIds.value.has(message.id)
-}
-
-function shouldMountCommandOutput(message: UiMessage): boolean {
-  return isCommandExpanded(message) || isCommandCollapsing(message)
-}
-
-function toggleCommandExpand(message: UiMessage): void {
-  const next = new Set(expandedCommandIds.value)
-  if (next.has(message.id)) next.delete(message.id)
-  else next.add(message.id)
-  expandedCommandIds.value = next
-}
-
-function commandStatusLabel(message: UiMessage): string {
-  const ce = message.commandExecution
-  if (!ce) return ''
-  switch (ce.status) {
-    case 'inProgress': return '⟳ 执行中'
-    case 'completed': return ce.exitCode === 0 ? '✓ 已完成' : `✗ 退出 ${ce.exitCode ?? '?'}`
-    case 'failed': return '✗ 执行失败'
-    case 'declined': return '⊘ 已拒绝'
-    case 'interrupted': return '⊘ 已中断'
-    default: return ''
-  }
-}
-
-function formatCommandDuration(durationMs: number): string {
-  if (!Number.isFinite(durationMs) || durationMs < 0) return ''
-  const totalSeconds = Math.max(1, Math.floor(durationMs / 1000))
-  const hours = Math.floor(totalSeconds / 3600)
-  const minutes = Math.floor((totalSeconds % 3600) / 60)
-  const seconds = totalSeconds % 60
-  if (hours > 0) {
-    if (minutes > 0) return `${String(hours)} 小时 ${String(minutes)} 分`
-    return `${String(hours)} 小时`
-  }
-  if (minutes > 0) {
-    if (seconds > 0) return `${String(minutes)} 分 ${String(seconds)} 秒`
-    return `${String(minutes)} 分`
-  }
-  return `${String(seconds)} 秒`
-}
-
-function formatHandledDuration(durationMs: number): string {
-  if (!Number.isFinite(durationMs) || durationMs < 0) return ''
-  if (durationMs < 1000) return '<1 秒'
-  return formatCommandDuration(durationMs)
-}
-
-function parseWorkedMessageDurationMs(text: string): number | null {
-  const match = text.trim().match(/^Worked for\s+(.+)$/i)
-  if (!match) return null
-  const rawDuration = match[1]?.trim() ?? ''
-  if (!rawDuration) return null
-  if (rawDuration === '<1s') return 0
-
-  let durationMs = 0
-  let matched = false
-  for (const part of rawDuration.matchAll(/(\d+)\s*([hms])/gi)) {
-    const value = Number.parseInt(part[1] ?? '', 10)
-    const unit = (part[2] ?? '').toLowerCase()
-    if (!Number.isFinite(value) || value < 0) continue
-    matched = true
-    if (unit === 'h') durationMs += value * 60 * 60 * 1000
-    else if (unit === 'm') durationMs += value * 60 * 1000
-    else if (unit === 's') durationMs += value * 1000
-  }
-
-  return matched ? durationMs : null
-}
-
-function resolveCommandDurationMs(message: UiMessage): number | null {
-  const ce = message.commandExecution
-  if (!ce) return null
-  if (ce.status === 'inProgress') {
-    const startedAtMs =
-      (typeof ce.startedAtMs === 'number' && Number.isFinite(ce.startedAtMs) && ce.startedAtMs > 0)
-        ? ce.startedAtMs
-        : observedCommandStartedAtById.value[message.id]
-    if (typeof startedAtMs === 'number' && Number.isFinite(startedAtMs) && startedAtMs > 0) {
-      return Math.max(0, commandElapsedNowMs.value - startedAtMs)
-    }
-  }
-  return typeof ce.durationMs === 'number' && Number.isFinite(ce.durationMs)
-    ? Math.max(0, ce.durationMs)
-    : null
-}
-
-function commandDurationLabel(message: UiMessage): string {
-  const ce = message.commandExecution
-  if (!ce) return ''
-  const durationMs = resolveCommandDurationMs(message)
-  if (durationMs === null) return ''
-  const durationText = formatCommandDuration(durationMs)
-  if (!durationText) return ''
-  return ce.status === 'inProgress' ? `已运行 ${durationText}` : `用时 ${durationText}`
-}
-
-function commandStatusClass(message: UiMessage): string {
-  const s = message.commandExecution?.status
-  if (s === 'inProgress') return 'cmd-status-running'
-  if (s === 'completed' && message.commandExecution?.exitCode === 0) return 'cmd-status-ok'
-  return 'cmd-status-error'
-}
-
-function stopCommandElapsedTimer(): void {
-  if (commandElapsedTimer !== null && typeof window !== 'undefined') {
-    window.clearInterval(commandElapsedTimer)
-    commandElapsedTimer = null
-  }
-}
-
-function startCommandElapsedTimer(): void {
-  if (typeof window === 'undefined') return
-  if (typeof document !== 'undefined' && document.hidden) return
-  commandElapsedNowMs.value = Date.now()
-  if (commandElapsedTimer !== null) return
-  commandElapsedTimer = window.setInterval(() => {
-    commandElapsedNowMs.value = Date.now()
-  }, 1000)
-}
-
-function onCommandElapsedVisibilityChange(): void {
-  if (document.hidden) {
-    stopCommandElapsedTimer()
-    return
-  }
-  if (effectiveLiveOverlay.value || Object.keys(observedCommandStartedAtById.value).length > 0) {
-    startCommandElapsedTimer()
-  }
-}
-
-function syncObservedCommandStartTimes(messages: UiMessage[]): void {
-  const next: Record<string, number> = {}
-  const now = Date.now()
-  let hasRunningCommand = false
-
-  for (const message of messages) {
-    const ce = message.commandExecution
-    if (!ce || message.messageType !== 'commandExecution' || ce.status !== 'inProgress') continue
-    hasRunningCommand = true
-    if (typeof ce.startedAtMs === 'number' && Number.isFinite(ce.startedAtMs) && ce.startedAtMs > 0) {
-      next[message.id] = ce.startedAtMs
-      continue
-    }
-    const knownStartedAt = observedCommandStartedAtById.value[message.id]
-    if (typeof knownStartedAt === 'number' && Number.isFinite(knownStartedAt) && knownStartedAt > 0) {
-      next[message.id] = knownStartedAt
-      continue
-    }
-    const baseDurationMs = typeof ce.durationMs === 'number' && Number.isFinite(ce.durationMs)
-      ? Math.max(0, ce.durationMs)
-      : 0
-    next[message.id] = Math.max(0, now - baseDurationMs)
-  }
-
-  observedCommandStartedAtById.value = next
-  if (hasRunningCommand || effectiveLiveOverlay.value) {
-    startCommandElapsedTimer()
-  } else {
-    stopCommandElapsedTimer()
-  }
-}
-
-function scheduleCollapse(messageId: string): void {
-  const nextCollapsing = new Set(collapsingCommandIds.value)
-  nextCollapsing.add(messageId)
-  collapsingCommandIds.value = nextCollapsing
-  setTimeout(() => {
-    const next = new Set(collapsingCommandIds.value)
-    next.delete(messageId)
-    collapsingCommandIds.value = next
-  }, 1000)
-}
-
 const props = defineProps<{
-  messages: UiMessage[]
-  pendingRequests: UiServerRequest[]
-  liveOverlay: UiLiveOverlay | null
+  projection: ConversationProjection
   isLoading: boolean
   activeThreadId: string
   cwd: string
@@ -1670,461 +551,11 @@ const props = defineProps<{
   implementedPlanIds?: string[]
 }>()
 
-const retainedLiveOverlay = ref<UiLiveOverlay | null>(null)
-watch(
-  [() => props.activeThreadId, () => props.liveOverlay, () => props.isTurnInProgress] as const,
-  ([threadId, nextOverlay, isTurnInProgress], [previousThreadId]) => {
-    if (threadId !== previousThreadId) retainedLiveOverlay.value = null
-    if (nextOverlay) {
-      const previousOverlay = retainedLiveOverlay.value
-      const sameActivity = previousOverlay !== null && (
-        previousOverlay.activityId && nextOverlay.activityId
-          ? previousOverlay.activityId === nextOverlay.activityId
-          : previousOverlay.startedAtMs === nextOverlay.startedAtMs
-      )
-      const shouldKeepStartedAt = (
-        isTurnInProgress === true &&
-        sameActivity &&
-        previousOverlay !== null &&
-        previousOverlay.startedAtMs > 0
-      )
-      retainedLiveOverlay.value = {
-        ...nextOverlay,
-        startedAtMs: shouldKeepStartedAt
-          ? Math.min(previousOverlay.startedAtMs, nextOverlay.startedAtMs || previousOverlay.startedAtMs)
-          : nextOverlay.startedAtMs,
-      }
-      return
-    }
-    if (isTurnInProgress !== true) retainedLiveOverlay.value = null
-  },
-  { immediate: true },
-)
-
-const effectiveLiveOverlay = computed<UiLiveOverlay | null>(() => (
-  props.liveOverlay ?? (props.isTurnInProgress === true ? retainedLiveOverlay.value : null)
-))
-const conversationProcessTargetId = computed(() => {
-  const threadKey = props.activeThreadId.replace(/[^a-zA-Z0-9_-]/gu, '-').slice(-64) || 'new'
-  return `conversation-process-tail-${threadKey}`
-})
-
-const MESSAGE_WINDOW_SIZE = 10
-const MESSAGE_WINDOW_CONTEXT_BACKFILL_LIMIT = 24
-const REMOTE_OLDER_HISTORY_REQUEST_TIMEOUT_MS = 8000
-const RECENT_DERIVED_UI_MESSAGE_LIMIT = 120
-const REACTIVE_WATCH_MESSAGE_LIMIT = RECENT_DERIVED_UI_MESSAGE_LIMIT * 2
-const PREPARED_MESSAGE_BLOCK_CACHE_LIMIT = 80
-const renderableMessages = computed<UiMessage[]>(() => (
-  props.messages.filter((message) => !shouldSuppressConversationMessage(message))
-))
-const isRevealingOlderMessages = ref(false)
-const canAutoRevealOlderMessages = ref(true)
-const visibleMessageStartIndex = ref(0)
-const isRequestPanelExpanded = ref(false)
-const isLiveOverlayDetailOpen = ref(false)
-const expandedGuidedTurnIndexes = ref<Set<number>>(new Set())
-const expandedRawPayloadMessageIds = ref<Set<string>>(new Set())
-
-function latestVisibleStartIndex(messages: UiMessage[]): number {
-  const messageCount = messages.length
-  const latestWindowStart = Math.max(messageCount - MESSAGE_WINDOW_SIZE, 0)
-  let latestTurnIndex: number | null = null
-
-  for (let index = messageCount - 1; index >= 0; index -= 1) {
-    latestTurnIndex = readTurnIndex(messages[index])
-    if (latestTurnIndex !== null) break
-  }
-
-  if (latestTurnIndex === null) return latestWindowStart
-
-  let latestTurnStart = latestWindowStart
-  for (let index = messageCount - 1; index >= 0; index -= 1) {
-    if (readTurnIndex(messages[index]) === latestTurnIndex) {
-      latestTurnStart = index
-      continue
-    }
-    if (latestTurnStart < messageCount) break
-  }
-
-  const windowStart = Math.min(latestWindowStart, latestTurnStart)
-  if (messages.slice(windowStart).some((message) => message.role === 'user')) {
-    return windowStart
-  }
-
-  const contextSearchStart = Math.max(windowStart - MESSAGE_WINDOW_CONTEXT_BACKFILL_LIMIT, 0)
-  for (let index = windowStart - 1; index >= contextSearchStart; index -= 1) {
-    if (messages[index]?.role === 'user') return index
-  }
-
-  return windowStart
-}
-
-function readTurnIndex(message: UiMessage): number | null {
-  return typeof message.turnIndex === 'number' ? message.turnIndex : null
-}
-
-const recentRenderableMessagesForDerivedUi = computed<UiMessage[]>(() => {
-  const messages = renderableMessages.value
-  if (messages.length <= RECENT_DERIVED_UI_MESSAGE_LIMIT) return messages
-  return messages.slice(-RECENT_DERIVED_UI_MESSAGE_LIMIT)
-})
-const visibleRenderableMessages = computed<UiMessage[]>(() => (
-  renderableMessages.value.slice(visibleMessageStartIndex.value)
-))
-const earliestRenderableTurnIndex = computed<number | null>(() => {
-  let earliest: number | null = null
-  for (const message of renderableMessages.value) {
-    const turnIndex = readTurnIndex(message)
-    if (turnIndex === null) continue
-    earliest = earliest === null ? turnIndex : Math.min(earliest, turnIndex)
-  }
-  return earliest
-})
-
-function recentMessagesForReactiveWatch(messages: UiMessage[]): UiMessage[] {
-  if (messages.length <= REACTIVE_WATCH_MESSAGE_LIMIT) return messages
-  return messages.slice(-REACTIVE_WATCH_MESSAGE_LIMIT)
-}
-
-function messagesForReactiveWatch(messages: UiMessage[]): UiMessage[] {
-  const recentMessages = recentMessagesForReactiveWatch(messages)
-  const visibleMessages = visibleRenderableMessages.value
-  if (visibleMessages.length === 0) return recentMessages
-
-  const watchedById = new Map<string, UiMessage>()
-  for (const message of recentMessages) {
-    watchedById.set(message.id, message)
-  }
-  for (const message of visibleMessages) {
-    watchedById.set(message.id, message)
-  }
-  return Array.from(watchedById.values())
-}
-
-function isGuidedAssistantMessage(message: UiMessage): boolean {
-  return (
-    message.role === 'assistant' &&
-    !isCommandMessage(message) &&
-    message.messageType !== 'worked' &&
-    message.text.trim().length > 0
-  )
-}
-
-function isStreamingAgentMessage(message: UiMessage): boolean {
-  return (
-    props.isTurnInProgress === true &&
-    message.role === 'assistant' &&
-    message.messageType === 'agentMessage.live' &&
-    message.text.length > 0
-  )
-}
-
-function isInternalCodexContextMessage(message: UiMessage): boolean {
-  if (message.role !== 'user') return false
-  const text = message.text.trim()
-  return /^<(?:codex_internal_context|recommended_plugins|permissions|app-context|collaboration_mode|skills_instructions|apps_instructions|plugins_instructions|environment_context)\b/iu.test(text)
-}
-
-function shouldSuppressConversationMessage(message: UiMessage): boolean {
-  if (message.messageType === 'worked') return true
-
-  // The active command belongs to the single tail status surface. Once it
-  // completes it returns to history as a normal, collapsed command row.
-  if (isRunningCommandMessage(message) && effectiveLiveOverlay.value) return true
-
-  if (isInternalCodexContextMessage(message)) {
-    return true
-  }
-
-  if (message.isUnhandled) {
-    return true
-  }
-
-  return false
-}
-
-type GuidedTurnDescriptor = {
-  turnIndex: number
-  hiddenMessages: UiMessage[]
-  finalMessageId: string
-}
-
-type ConversationMessageEntry = {
-  kind: 'message'
-  key: string
-  measureId: string
-  message: UiMessage
-  messageIndex: number
-}
-
-type GuidedSummaryEntry = {
-  kind: 'guidedSummary'
-  key: string
-  measureId: string
-  turnIndex: number
-  hiddenCount: number
-}
-
-type ContextPreviewEntry = {
-  label: string
-  text: string
-}
-
-type ConversationRenderEntry = ConversationMessageEntry | GuidedSummaryEntry
-
-const latestRenderableTurnIndex = computed<number | null>(() => {
-  for (let index = renderableMessages.value.length - 1; index >= 0; index -= 1) {
-    const turnIndex = readTurnIndex(renderableMessages.value[index])
-    if (typeof turnIndex === 'number') return turnIndex
-  }
-  return null
-})
-
-function isTurnCompleted(turnIndex: number): boolean {
-  if (turnIndex !== latestRenderableTurnIndex.value) return true
-  if (
-    props.isTurnInProgress !== true &&
-    !effectiveLiveOverlay.value &&
-    props.pendingRequests.length === 0
-  ) return true
-  return typeof workedSummaryDurationByTurnIndex.value[turnIndex] === 'number'
-}
-
-const collapsibleGuidedTurnDescriptors = computed<Map<number, GuidedTurnDescriptor>>(() => {
-  const groupedMessages = new Map<number, UiMessage[]>()
-
-  for (const message of recentRenderableMessagesForDerivedUi.value) {
-    const turnIndex = readTurnIndex(message)
-    if (typeof turnIndex !== 'number') continue
-    const messages = groupedMessages.get(turnIndex) ?? []
-    messages.push(message)
-    groupedMessages.set(turnIndex, messages)
-  }
-
-  const descriptors = new Map<number, GuidedTurnDescriptor>()
-  for (const [turnIndex, messages] of groupedMessages.entries()) {
-    if (!isTurnCompleted(turnIndex)) continue
-    const guidedMessages = messages.filter(isGuidedAssistantMessage)
-    if (guidedMessages.length < 2) continue
-    const finalMessage = guidedMessages[guidedMessages.length - 1]
-    const hiddenMessages = guidedMessages.slice(0, -1)
-    if (!finalMessage || hiddenMessages.length === 0) continue
-    descriptors.set(turnIndex, {
-      turnIndex,
-      hiddenMessages,
-      finalMessageId: finalMessage.id,
-    })
-  }
-
-  return descriptors
-})
-
-const workedSummaryDurationByTurnIndex = computed<Record<number, number>>(() => {
-  const next: Record<number, number> = {}
-  const derivedMessageIds = new Set(recentRenderableMessagesForDerivedUi.value.map((message) => message.id))
-  const scanStartIndex = Math.max(0, props.messages.length - RECENT_DERIVED_UI_MESSAGE_LIMIT * 2)
-
-  for (let index = scanStartIndex; index < props.messages.length; index += 1) {
-    const message = props.messages[index]
-    if (message.messageType !== 'worked') continue
-    const durationMs = parseWorkedMessageDurationMs(message.text)
-    if (durationMs === null) continue
-
-    for (let nextIndex = index + 1; nextIndex < props.messages.length; nextIndex += 1) {
-      const candidate = props.messages[nextIndex]
-      if (candidate.role !== 'assistant' || candidate.messageType === 'worked') continue
-      if (!derivedMessageIds.has(candidate.id)) break
-      const turnIndex = readTurnIndex(candidate)
-      if (typeof turnIndex !== 'number') break
-      next[turnIndex] = durationMs
-      break
-    }
-  }
-
-  return next
-})
-
-const guidedTurnDurationLabelByTurnIndex = computed<Record<number, string>>(() => {
-  const commandDurationByTurnIndex: Record<number, number> = {}
-
-  for (const message of recentRenderableMessagesForDerivedUi.value) {
-    if (!isCommandMessage(message)) continue
-    const turnIndex = readTurnIndex(message)
-    if (typeof turnIndex !== 'number') continue
-    const durationMs = resolveCommandDurationMs(message)
-    if (durationMs === null) continue
-    commandDurationByTurnIndex[turnIndex] = (commandDurationByTurnIndex[turnIndex] ?? 0) + durationMs
-  }
-
-  const next: Record<number, string> = {}
-  for (const descriptor of collapsibleGuidedTurnDescriptors.value.values()) {
-    const durationMs = workedSummaryDurationByTurnIndex.value[descriptor.turnIndex] ?? commandDurationByTurnIndex[descriptor.turnIndex]
-    if (typeof durationMs !== 'number' || durationMs < 0) continue
-    const durationLabel = formatHandledDuration(durationMs)
-    if (!durationLabel) continue
-    next[descriptor.turnIndex] = `已处理 ${durationLabel}`
-  }
-
-  return next
-})
-
-const hiddenGuidedMessageTurnIndexById = computed<Record<string, number>>(() => {
-  const next: Record<string, number> = {}
-  for (const descriptor of collapsibleGuidedTurnDescriptors.value.values()) {
-    for (const message of descriptor.hiddenMessages) {
-      next[message.id] = descriptor.turnIndex
-    }
-  }
-  return next
-})
-
-function compactContextPreviewText(text: string): string {
-  const normalized = text.replace(/\s+/gu, ' ').trim()
-  if (normalized.length <= 140) return normalized
-  return `${normalized.slice(0, 140)}...`
-}
-
-const visibleContextPreview = computed<ContextPreviewEntry | null>(() => {
-  const visibleMessages = visibleRenderableMessages.value
-  const renderedMessageEntries = virtualizedMessages.value.filter((entry): entry is ConversationMessageEntry => entry.kind === 'message')
-  const hasRenderedUserContent = renderedMessageEntries.some((entry) => (
-    entry.message.role === 'user' &&
-    (
-      entry.message.text.trim().length > 0 ||
-      (entry.message.images?.length ?? 0) > 0 ||
-      (entry.message.fileAttachments?.length ?? 0) > 0
-    )
-  ))
-  if (visibleMessages.length === 0 || hasRenderedUserContent) return null
-
-  const firstRenderedMessageIndex = renderedMessageEntries[0]?.messageIndex ?? visibleMessages.length
-  const firstRenderedAbsoluteIndex = visibleMessageStartIndex.value + firstRenderedMessageIndex
-  for (let index = firstRenderedAbsoluteIndex - 1; index >= 0; index -= 1) {
-    const message = renderableMessages.value[index]
-    if (message?.role !== 'user') continue
-    const text = compactContextPreviewText(message.text)
-    if (!text) continue
-    return {
-      label: '折叠上下文',
-      text,
-    }
-  }
-
-  const hasAssistantContent = visibleMessages.some((message) => (
-    message.role === 'assistant' &&
-    (
-      message.text.trim().length > 0 ||
-      (message.images?.length ?? 0) > 0 ||
-      (message.fileAttachments?.length ?? 0) > 0
-    )
-  ))
-
-  if (hasHiddenEarlierMessages.value || hasAssistantContent) {
-    return {
-      label: '当前任务',
-      text: '持续目标自动推进中，相关上下文已折叠。',
-    }
-  }
-
-  return null
-})
-
-function isGuidedTurnExpanded(turnIndex: number): boolean {
-  return expandedGuidedTurnIndexes.value.has(turnIndex)
-}
-
-function guidedTurnDurationLabel(turnIndex: number): string {
-  return guidedTurnDurationLabelByTurnIndex.value[turnIndex] ?? ''
-}
-
-function buildGuidedSummaryEntry(turnIndex: number, hiddenCount: number): GuidedSummaryEntry {
-  return {
-    kind: 'guidedSummary',
-    key: `guided-summary:${String(turnIndex)}`,
-    measureId: `guided-summary:${String(turnIndex)}`,
-    turnIndex,
-    hiddenCount,
-  }
-}
-
-const renderableConversationEntries = computed<ConversationRenderEntry[]>(() => {
-  const entries: ConversationRenderEntry[] = []
-  let visibleMessageIndex = 0
-
-  for (const message of visibleRenderableMessages.value) {
-    const turnIndex = readTurnIndex(message)
-    const descriptor =
-      typeof turnIndex === 'number' ? (collapsibleGuidedTurnDescriptors.value.get(turnIndex) ?? null) : null
-    const hiddenTurnIndex = hiddenGuidedMessageTurnIndexById.value[message.id]
-
-    if (
-      typeof hiddenTurnIndex === 'number' &&
-      descriptor &&
-      !isGuidedTurnExpanded(hiddenTurnIndex)
-    ) {
-      continue
-    }
-
-    if (descriptor && descriptor.finalMessageId === message.id) {
-      entries.push(buildGuidedSummaryEntry(descriptor.turnIndex, descriptor.hiddenMessages.length))
-    }
-
-    entries.push({
-      kind: 'message',
-      key: message.id,
-      measureId: message.id,
-      message,
-      messageIndex: visibleMessageIndex,
-    })
-    visibleMessageIndex += 1
-  }
-
-  return entries
-})
-
-const visibleRenderableEntries = computed<ConversationRenderEntry[]>(() => (
-  renderableConversationEntries.value
-))
-const visibleMessageEntries = computed<ConversationMessageEntry[]>(() => (
-  visibleRenderableEntries.value.filter((entry): entry is ConversationMessageEntry => entry.kind === 'message')
-))
-const hasVisibleConversationContent = computed(() => (
-  visibleRenderableEntries.value.length > 0 || visibleContextPreview.value !== null
-))
-const hiddenEarlierMessageCount = computed(() => visibleMessageStartIndex.value)
-const hasHiddenEarlierMessages = computed(() => hiddenEarlierMessageCount.value > 0)
-const hasRemoteOlderHistoryNotice = computed(() => (
-  renderableMessages.value.some(isHistoryNoticeMessage)
-))
-const hasOlderMessagesAffordance = computed(() => (
-  hasHiddenEarlierMessages.value || hasRemoteOlderHistoryNotice.value
-))
-const olderMessagesAffordanceTitle = computed(() => {
-  if (isRevealingOlderMessages.value) return '正在加载更早消息...'
-  if (hasHiddenEarlierMessages.value) return `继续查看更多（剩余 ${hiddenEarlierMessageCount.value} 条）`
-  return '继续加载较早历史'
-})
-
-const liveOverlayCommandMessage = computed<UiMessage | null>(() => {
-  const overlay = effectiveLiveOverlay.value
-  if (!overlay) return null
-  for (let index = props.messages.length - 1; index >= 0; index -= 1) {
-    const candidate = props.messages[index]
-    if (candidate && isRunningCommandMessage(candidate)) return candidate
-  }
-  return null
-})
-
-const liveOverlayCommandOutput = computed<string>(() => (
-  liveOverlayCommandMessage.value?.commandExecution?.aggregatedOutput?.trim() ?? ''
-))
-
 const emit = defineEmits<{
   updateScrollState: [payload: { threadId: string; state: ThreadScrollState }]
   respondServerRequest: [payload: { id: number; result?: unknown; error?: { code?: number; message: string } }]
   rollback: [payload: { turnIndex: number; prependText?: string }]
-  toggleFavorite: [message: UiMessage]
+  toggleFavorite: [intent: ConversationFavoriteIntent]
   loadOlderHistory: []
   returnToNewThread: []
   dismissEmptyThread: []
@@ -2133,4545 +564,983 @@ const emit = defineEmits<{
   retryFailedMessage: [messageId: string]
   editFailedMessage: [messageId: string]
   copyStatus: [payload: { message: string; tone: 'success' | 'info' | 'warning' | 'danger' }]
-  implementPlan: [message: UiMessage]
+  implementPlan: [intent: ConversationPlanImplementationIntent]
 }>()
 
+const markdown = new MarkdownIt({ html: false, linkify: true, breaks: true })
+const PROCESS_HISTORY_BATCH_SIZE = 17
+const VIRTUALIZE_MIN_TURNS = 24
+const MAX_MOUNTED_TURNS = 10
+const ESTIMATED_TURN_HEIGHT_PX = 280
+const TURN_GAP_PX = 34
+const VIRTUAL_TURN_OVERSCAN_PX = 560
+const defaultLinkOpen = markdown.renderer.rules.link_open ?? ((tokens, index, options, _env, renderer) => renderer.renderToken(tokens, index, options))
+markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
+  tokens[index]?.attrSet('target', '_blank')
+  tokens[index]?.attrSet('rel', 'noopener noreferrer')
+  return defaultLinkOpen(tokens, index, options, env, renderer)
+}
+
 const conversationListRef = ref<HTMLElement | null>(null)
+useChatFeedbackDomMetrics({ root: conversationListRef, threadId: () => props.activeThreadId })
 const bottomAnchorRef = ref<HTMLElement | null>(null)
-const processPanelRef = ref<HTMLElement | null>(null)
-const liveOverlayReasoningRef = ref<HTMLElement | null>(null)
-const liveOverlayDetailSheetRef = ref<HTMLElement | null>(null)
-const modalImageUrl = ref('')
-const isModalImageLoading = ref(false)
-const isModalImageFailed = ref(false)
-const imageModalContentRef = ref<HTMLElement | null>(null)
-const imageModalCloseRef = ref<HTMLButtonElement | null>(null)
-const imageModalStageRef = ref<HTMLElement | null>(null)
-const imageModalImageRef = ref<HTMLImageElement | null>(null)
-const loadedMessageImageKeys = ref<Set<string>>(new Set())
-const failedMessageImageKeys = ref<Set<string>>(new Set())
-const messageImageRetryAttempts = ref<Map<string, number>>(new Map())
-const loadedMarkdownImageKeys = ref<Set<string>>(new Set())
-const markdownImageRetryAttempts = ref<Map<string, number>>(new Map())
-const modalImageScale = ref(1)
-const modalImageOffsetX = ref(0)
-const modalImageOffsetY = ref(0)
-const isImageModalDragging = ref(false)
-const fileLinkContextMenuRef = ref<HTMLElement | null>(null)
-const toolQuestionAnswers = ref<Record<string, string>>({})
-const toolQuestionOtherAnswers = ref<Record<string, string>>({})
-const mcpElicitationAnswers = ref<Record<string, string | boolean>>({})
-const respondingRequestIds = ref<Set<number>>(new Set())
-const requestResponseResetTimers = new Map<number, number>()
-const hasPendingBelowFoldUpdates = ref(false)
-const autoFollowBottom = ref(props.scrollState?.isAtBottom !== false)
-const autoAnchoredLongResponseId = ref('')
-const LONG_RESPONSE_ANCHOR_MAX_WIDTH_PX = 1100
-const LONG_RESPONSE_MIN_HEIGHT_PX = 260
-const LONG_USER_MESSAGE_COLLAPSE_THRESHOLD = 3000
-const LONG_USER_MESSAGE_PREVIEW_LENGTH = 1600
-const LONG_USER_MESSAGE_EXPANDED_MAX_HEIGHT_PX = 760
-const CODE_BLOCK_PREVIEW_LINE_COUNT = 120
-const IMAGE_MODAL_MIN_SCALE = 1
-const IMAGE_MODAL_MAX_SCALE = 4
-const IMAGE_MODAL_SCALE_STEP = 0.25
-const IMAGE_MODAL_WHEEL_ZOOM_SENSITIVITY = 300
-const IMAGE_MODAL_WHEEL_DELTA_LIMIT = 120
-const IMAGE_MODAL_LINE_DELTA_PX = 16
-type ImageModalPointerPoint = { clientX: number; clientY: number }
-const modalImageTouchPointers = new Map<number, ImageModalPointerPoint>()
-let modalImagePointerId: number | null = null
-let modalImageDragStartX = 0
-let modalImageDragStartY = 0
-let modalImageDragOriginX = 0
-let modalImageDragOriginY = 0
-let modalImagePinchStartDistance = 0
-let modalImagePinchStartScale = IMAGE_MODAL_MIN_SCALE
-let modalImagePinchImageAnchorX = 0
-let modalImagePinchImageAnchorY = 0
-let highlightedMessageTimer: number | null = null
-const pendingRollbackMessageId = ref('')
-let rollbackConfirmTimer: number | null = null
-let liveOverlayDetailPreviousFocus: HTMLElement | null = null
-let liveOverlayDetailPreviousBodyOverflow = ''
-let liveOverlayDetailOwnsBodyScrollLock = false
-let previousBodyOverflow = ''
-let imageModalPreviousFocus: HTMLElement | null = null
-const copiedCodeBlockKey = ref('')
-let copiedCodeBlockTimer: number | null = null
-const copiedMessageId = ref('')
-let copiedMessageTimer: number | null = null
-let remoteOlderHistoryRequestTimer: number | null = null
-type InlineSegment =
-  | { kind: 'text'; value: string }
-  | { kind: 'bold'; value: string }
-  | { kind: 'code'; value: string }
-  | { kind: 'url'; value: string; href: string }
-  | { kind: 'file'; value: string; path: string; displayPath: string; downloadName: string }
-type MessageBlock =
-  | { kind: 'text'; value: string }
-  | { kind: 'table'; headers: string[]; rows: string[][] }
-  | { kind: 'code'; language: string; code: string; isDiff: boolean }
-  | { kind: 'image'; url: string; alt: string; markdown: string }
-type PreparedMessageBlock =
-  | { kind: 'text'; value: string; segments: InlineSegment[] }
-  | { kind: 'table'; headers: PreparedTableCell[]; rows: PreparedTableCell[][] }
-  | { kind: 'code'; language: string; code: string; lines: PreparedCodeLine[]; lineCount: number; linesView: 'preview' | 'full'; isDiff: boolean }
-  | { kind: 'image'; url: string; alt: string; markdown: string }
-type PreparedTableCell = {
-  value: string
-  segments: InlineSegment[]
-}
-type PreparedCodeLine = {
-  value: string
-  kind: 'add' | 'delete' | 'meta' | 'context'
-}
-type MeasureRefTarget = Element | ComponentPublicInstance | null
-type ScrollAnchorSnapshot = {
-  measureId: string
-  viewportOffset: number
-}
-type ForegroundScrollIntent = {
-  threadId: string
-  followBottom: boolean
-  anchorSnapshot: ScrollAnchorSnapshot | null
-}
-let pendingRemoteOlderHistoryAnchor: ScrollAnchorSnapshot | null = null
-
-const VIRTUALIZE_MIN_MESSAGES = 80
-const VIRTUAL_OVERSCAN_PX = 640
-const ESTIMATED_PENDING_REQUEST_HEIGHT_PX = 156
-
-let scrollRestoreFrame = 0
-let scrollAnchorRestoreFrame = 0
-let bottomLockFrame = 0
-let bottomLockFramesLeft = 0
-let scrollStateEmitFrame = 0
-let scrollInteractionFrame = 0
-let scrollStateIdleTimer: number | null = null
-let pendingScrollStateContainer: HTMLElement | null = null
-let pendingScrollStateForce = false
-let pendingScrollStateThreadId = ''
-let pendingScrollInteractionContainer: HTMLElement | null = null
-let pendingForegroundScrollIntent: ForegroundScrollIntent | null = null
-let scrollContextGeneration = 0
-let threadSwitchScrollRestorePending = false
-let scrollAnchorRestoreResolve: ((restored: boolean) => void) | null = null
-let lastGapMeasuredContainer: HTMLElement | null = null
-let lastGapMeasuredViewportHeight = -1
-let observedConversationListElement: HTMLElement | null = null
-let lastScrollStateEmitAt = 0
-const trackedPendingImages = new WeakSet<HTMLImageElement>()
-const failedMarkdownImageKeys = ref<Set<string>>(new Set())
-const preparedMessageBlocksById = new Map<string, { text: string; blocks: PreparedMessageBlock[] }>()
-const expandedLongUserMessageIds = ref<Set<string>>(new Set())
-const expandedCodeBlockKeys = ref<Set<string>>(new Set())
-const isFileLinkContextMenuVisible = ref(false)
-const fileLinkContextMenuX = ref(0)
-const fileLinkContextMenuY = ref(0)
-const fileLinkContextBrowseUrl = ref('')
-const fileLinkContextEditUrl = ref('')
+const manuallyExpandedTurnIds = ref<Set<string>>(new Set())
+const visibleProcessHistoryCountByTurnId = ref<Record<string, number>>({})
+const confirmingRollbackTurnIndex = ref<number | null>(null)
 const highlightedMessageId = ref('')
-const activeMessageActionId = ref('')
-const EMPTY_MESSAGES: UiMessage[] = []
+const requestAnswers = ref<Record<string, string>>({})
+const requestOtherAnswers = ref<Record<string, string>>({})
+const mcpAnswers = ref<Record<string, string>>({})
+const respondingRequestIds = ref<Set<number>>(new Set())
+const isAwayFromBottom = ref(false)
 const conversationViewportHeight = ref(0)
 const conversationScrollTop = ref(0)
-const conversationItemGap = ref(0)
-const lastEmittedScrollStateSignature = ref('')
-const measuredMessageHeightById = ref<Record<string, number>>({})
-const observedMessageElementsById = new Map<string, HTMLElement>()
-const itemResizeObserver =
-  typeof ResizeObserver !== 'undefined'
-    ? new ResizeObserver((entries) => {
-      const anchorSnapshot = !shouldLockToBottom() ? captureVisibleConversationAnchor() : null
-      let nextMessageHeights = measuredMessageHeightById.value
-      let hasMessageHeightChange = false
+const measuredTurnHeightById = ref<Record<string, number>>({})
+const pinnedTurnId = ref('')
+const observedTurnElementsById = new Map<string, HTMLElement>()
+let scrollFrame = 0
+let heightRestoreFrame = 0
+let rollbackTimer = 0
+let highlightTimer = 0
+let userIsAwayFromBottom = false
+let pendingOlderHistoryAnchor: { turnId: string; top: number } | null = null
 
-      for (const entry of entries) {
-        const target = entry.target
-        if (!(target instanceof HTMLElement)) continue
-        const ownerThreadId = target.closest<HTMLElement>('.conversation-list')?.dataset.threadId?.trim() ?? ''
-        if (ownerThreadId && ownerThreadId !== props.activeThreadId) continue
-        const measureKind = target.dataset.measureKind
-        const measureId = target.dataset.measureId ?? ''
-        if (!measureKind || !measureId) continue
+const favoriteIds = computed(() => new Set(props.favoriteMessageIds ?? []))
+const projectionItemCount = computed(() => props.projection.turns.reduce((total, turn) => total + turn.blocks.length, 0))
+const latestTurnIsActive = computed(() => {
+  const latestTurn = props.projection.turns.at(-1)
+  return latestTurn ? isActiveTurn(latestTurn) : false
+})
+const showLoading = computed(() => props.isLoading && props.projection.turns.length === 0)
+const showEmpty = computed(() => (
+  !props.isLoading &&
+  props.projection.turns.length === 0 &&
+  !props.loadError
+))
+const shouldVirtualizeTurns = computed(() => props.projection.turns.length >= VIRTUALIZE_MIN_TURNS)
 
-        const nextHeight = Math.max(Math.ceil(target.getBoundingClientRect().height), 1)
-        if (measureKind === 'message') {
-          if (nextMessageHeights[measureId] === nextHeight) continue
-          if (!hasMessageHeightChange) {
-            nextMessageHeights = { ...nextMessageHeights }
-            hasMessageHeightChange = true
-          }
-          nextMessageHeights[measureId] = nextHeight
-        }
-      }
-
-      if (hasMessageHeightChange) {
-        measuredMessageHeightById.value = nextMessageHeights
-      }
-      if (hasMessageHeightChange) {
-        if (shouldLockToBottom()) {
-          scheduleBottomLock(2)
-        } else if (anchorSnapshot) {
-          void scheduleScrollAnchorRestore(anchorSnapshot)
-        }
-      }
-    })
-    : null
-const conversationListResizeObserver =
-  typeof ResizeObserver !== 'undefined'
-    ? new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const target = entry.target
-        if (!(target instanceof HTMLElement)) continue
-        if ((target.dataset.threadId?.trim() ?? '') !== props.activeThreadId) continue
-        syncConversationViewport(target)
-        if (shouldLockToBottom()) {
-          scheduleBottomLock(1)
-        }
-      }
-    })
-    : null
-const hasRenderableConversation = computed(() => (
-  visibleRenderableEntries.value.length > 0 ||
-  props.pendingRequests.length > 0 ||
-  effectiveLiveOverlay.value !== null
-))
-const showLoadErrorState = computed(() => (
-  !hasRenderableConversation.value &&
-  props.isLoading !== true &&
-  Boolean(props.loadError?.trim())
-))
-const isThreadSwitchingState = computed(() => props.isThreadSwitching === true && hasRenderableConversation.value)
-const showLoadingIndicator = computed(() => (
-  props.isLoading &&
-  !(props.compactRuntimeChrome === true && props.isThreadSwitching === true && hasRenderableConversation.value)
-))
-const loadingIndicatorText = computed(() => {
-  if (props.isThreadSwitching === true) return '正在切换到这个会话...'
-  return hasRenderableConversation.value ? '正在同步最新内容...' : '正在载入会话...'
-})
-const showJumpToLatestButton = computed(() => (
-  hasRenderableConversation.value &&
-  !shouldLockToBottom()
-))
-const overlayPrimaryPendingRequest = computed<UiServerRequest | null>(() => props.pendingRequests[0] ?? null)
-const favoriteMessageIdSet = computed(() => new Set(props.favoriteMessageIds ?? []))
-const hasVisibleLiveAgentText = computed(() => props.messages.some(isStreamingAgentMessage))
-const hasLiveOverlayDetail = computed<boolean>(() => {
-  const overlay = effectiveLiveOverlay.value
-  if (!overlay) return false
-  return true
-})
-const showInlineLiveOverlay = computed<boolean>(() => {
-  const overlay = effectiveLiveOverlay.value
-  if (!overlay) return false
-  if (props.compactRuntimeChrome !== true) return true
-  return hasLiveOverlayDetail.value
-})
-const showProcessPanel = computed(() => (
-  showInlineLiveOverlay.value || props.pendingRequests.length > 0
-))
-const shouldRenderDetailedLiveOverlay = computed<boolean>(() => {
-  const overlay = effectiveLiveOverlay.value
-  if (!overlay) return false
-  if (overlayPrimaryPendingRequest.value) return true
-  if (overlay.errorText.trim().length > 0) return true
-  return false
-})
-const liveOverlayBehaviorSignature = computed<string>(() => {
-  const overlay = effectiveLiveOverlay.value
-  if (!overlay) return ''
-  return [
-    overlay.activityLabel.trim(),
-    overlay.errorText.trim(),
-    overlayPrimaryPendingRequest.value?.id ?? '',
-    overlayPrimaryPendingRequest.value?.method ?? '',
-    String(props.pendingRequests.length),
-  ].join('|')
-})
-const liveOverlayElapsedLabel = computed(() => {
-  const overlay = effectiveLiveOverlay.value
-  if (!overlay || overlay.startedAtMs <= 0) return ''
-  return formatHandledDuration(Math.max(0, commandElapsedNowMs.value - overlay.startedAtMs))
-})
-const liveOverlayCompactLabel = computed(() => (
-  effectiveLiveOverlay.value?.isRecovering === true
-    ? `正在恢复任务 · ${liveOverlayElapsedLabel.value || '<1 秒'}`
-    : `正在处理 · ${liveOverlayElapsedLabel.value || '<1 秒'}`
-))
-const liveOverlayTailHint = computed(() => {
-  if (effectiveLiveOverlay.value?.isRecovering === true) return '正在同步最新进度，完成后会自动更新'
-  if (overlayPrimaryPendingRequest.value) return '等待你的确认，处理后会继续'
-  if (liveOverlayCommandMessage.value) return '正在执行最新操作 · 点击查看'
-  if (hasVisibleLiveAgentText.value) return '正在继续生成回复 · 点击查看最新进展'
-  return '正在准备回复 · 点击查看最新进展'
-})
-const interruptedTurnUserMessage = computed<UiMessage | null>(() => {
-  for (let index = props.messages.length - 1; index >= 0; index -= 1) {
-    const message = props.messages[index]
-    if (message.role === 'user' && message.text.trim().length > 0) return message
-  }
-  return null
-})
-const jumpToLatestTitle = computed(() => (
-  hasPendingBelowFoldUpdates.value ? '跳到最新输出' : '回到底部'
-))
-const isImageModalZoomed = computed(() => modalImageScale.value > IMAGE_MODAL_MIN_SCALE + 0.001)
-const canZoomOutImageModal = computed(() => modalImageScale.value > IMAGE_MODAL_MIN_SCALE + 0.001)
-const canZoomInImageModal = computed(() => modalImageScale.value < IMAGE_MODAL_MAX_SCALE - 0.001)
-const modalImageScaleLabel = computed(() => `${Math.round(modalImageScale.value * 100)}%`)
-const imageModalStyle = computed(() => ({
-  transform: `translate3d(${String(modalImageOffsetX.value)}px, ${String(modalImageOffsetY.value)}px, 0) scale(${String(modalImageScale.value)})`,
-  cursor: isImageModalZoomed.value ? (isImageModalDragging.value ? 'grabbing' : 'grab') : 'zoom-in',
-  transition: isImageModalDragging.value ? 'none' : 'transform 180ms cubic-bezier(0.16, 1, 0.3, 1)',
-}))
-const shouldVirtualizeMessages = computed(() => visibleRenderableEntries.value.length >= VIRTUALIZE_MIN_MESSAGES)
-
-function estimateConversationEntryHeight(entry: ConversationRenderEntry): number {
-  if (entry.kind === 'guidedSummary') {
-    return 52
-  }
-  return getEstimatedMessageHeight(entry.message)
-}
+type MeasureRefTarget = Element | ComponentPublicInstance | null
+type VisibleTurnAnchor = { turnId: string; top: number }
 
 function lowerBoundNumber(values: number[], target: number): number {
   let low = 0
   let high = values.length
   while (low < high) {
-    const mid = Math.floor((low + high) / 2)
-    if ((values[mid] ?? 0) < target) {
-      low = mid + 1
-    } else {
-      high = mid
-    }
+    const middle = Math.floor((low + high) / 2)
+    if ((values[middle] ?? 0) < target) low = middle + 1
+    else high = middle
   }
   return low
 }
 
-const entryHeightMetrics = computed(() => {
+const turnHeightMetrics = computed(() => {
   const cumulativeHeights: number[] = [0]
-  for (const entry of visibleRenderableEntries.value) {
-    const height = measuredMessageHeightById.value[entry.measureId] ?? estimateConversationEntryHeight(entry)
-    cumulativeHeights.push(cumulativeHeights[cumulativeHeights.length - 1] + height + conversationItemGap.value)
+  for (const turn of props.projection.turns) {
+    const height = measuredTurnHeightById.value[turn.id] ?? ESTIMATED_TURN_HEIGHT_PX
+    cumulativeHeights.push((cumulativeHeights.at(-1) ?? 0) + height + TURN_GAP_PX)
   }
-
-  const totalHeight = visibleRenderableEntries.value.length > 0
-    ? Math.max((cumulativeHeights[cumulativeHeights.length - 1] ?? 0) - conversationItemGap.value, 0)
-    : 0
-
   return {
     cumulativeHeights,
-    totalHeight,
+    totalHeight: cumulativeHeights.at(-1) ?? 0,
   }
 })
 
-const virtualizedMessageRange = computed(() => {
-  if (!shouldVirtualizeMessages.value || visibleRenderableEntries.value.length === 0) {
-    return {
-      startIndex: 0,
-      endIndex: visibleRenderableEntries.value.length,
-    }
-  }
-
-  const { cumulativeHeights } = entryHeightMetrics.value
-
-  const relativeScrollTop = Math.max(conversationScrollTop.value, 0)
-  const viewportHeight = Math.max(conversationViewportHeight.value, 1)
-  const visibleStart = Math.max(relativeScrollTop - VIRTUAL_OVERSCAN_PX, 0)
-  const visibleEnd = relativeScrollTop + viewportHeight + VIRTUAL_OVERSCAN_PX
-
-  const startIndex = Math.max(lowerBoundNumber(cumulativeHeights, visibleStart) - 1, 0)
-  const visibleEndIndex = lowerBoundNumber(cumulativeHeights, visibleEnd)
-  const endIndex = Math.min(
-    visibleRenderableEntries.value.length,
-    Math.max(visibleEndIndex + 1, startIndex + 1),
+function boundedTurnRangeAround(index: number, turnCount: number): { startIndex: number; endIndex: number } {
+  const rangeSize = Math.min(MAX_MOUNTED_TURNS, turnCount)
+  const startIndex = Math.min(
+    Math.max(index - Math.floor(rangeSize / 2), 0),
+    Math.max(turnCount - rangeSize, 0),
   )
+  return { startIndex, endIndex: startIndex + rangeSize }
+}
 
-  return {
-    startIndex,
-    endIndex,
+const virtualizedTurnRange = computed(() => {
+  const turnCount = props.projection.turns.length
+  if (!shouldVirtualizeTurns.value || turnCount === 0) {
+    return { startIndex: 0, endIndex: turnCount }
   }
+
+  if (pinnedTurnId.value) {
+    const pinnedIndex = props.projection.turns.findIndex((turn) => turn.id === pinnedTurnId.value)
+    if (pinnedIndex >= 0) return boundedTurnRangeAround(pinnedIndex, turnCount)
+  }
+
+  const { cumulativeHeights } = turnHeightMetrics.value
+  const viewportHeight = Math.max(conversationViewportHeight.value, 1)
+  const scrollTop = Math.max(conversationScrollTop.value, 0)
+  const visibleStart = Math.max(scrollTop - VIRTUAL_TURN_OVERSCAN_PX, 0)
+  const visibleEnd = scrollTop + viewportHeight + VIRTUAL_TURN_OVERSCAN_PX
+  let startIndex = Math.max(lowerBoundNumber(cumulativeHeights, visibleStart) - 1, 0)
+  let endIndex = Math.min(turnCount, Math.max(lowerBoundNumber(cumulativeHeights, visibleEnd) + 1, startIndex + 1))
+
+  if (endIndex - startIndex > MAX_MOUNTED_TURNS) {
+    const midpoint = scrollTop + viewportHeight / 2
+    const midpointIndex = Math.min(Math.max(lowerBoundNumber(cumulativeHeights, midpoint) - 1, 0), turnCount - 1)
+    return boundedTurnRangeAround(midpointIndex, turnCount)
+  }
+
+  const remainingCapacity = MAX_MOUNTED_TURNS - (endIndex - startIndex)
+  const before = Math.min(Math.ceil(remainingCapacity / 2), startIndex)
+  startIndex -= before
+  endIndex = Math.min(turnCount, endIndex + remainingCapacity - before)
+  if (endIndex - startIndex < MAX_MOUNTED_TURNS) {
+    startIndex = Math.max(0, endIndex - MAX_MOUNTED_TURNS)
+  }
+  return { startIndex, endIndex }
 })
-const virtualizedMessageMetrics = computed(() => ({
-  ...entryHeightMetrics.value,
-  ...virtualizedMessageRange.value,
-}))
-const virtualizedMessages = computed<ConversationRenderEntry[]>(() => {
-  const { startIndex, endIndex } = virtualizedMessageMetrics.value
-  return visibleRenderableEntries.value.slice(startIndex, endIndex)
+const virtualizedTurns = computed(() => {
+  const { startIndex, endIndex } = virtualizedTurnRange.value
+  return props.projection.turns.slice(startIndex, endIndex)
 })
 const virtualTopSpacerHeight = computed(() => {
-  if (!shouldVirtualizeMessages.value) return 0
-  return Math.max(
-    (virtualizedMessageMetrics.value.cumulativeHeights[virtualizedMessageMetrics.value.startIndex] ?? 0) -
-      conversationItemGap.value,
-    0,
-  )
+  if (!shouldVirtualizeTurns.value) return 0
+  return turnHeightMetrics.value.cumulativeHeights[virtualizedTurnRange.value.startIndex] ?? 0
 })
 const virtualBottomSpacerHeight = computed(() => {
-  if (!shouldVirtualizeMessages.value) return 0
-  const { cumulativeHeights, endIndex, totalHeight } = virtualizedMessageMetrics.value
-  return Math.max(totalHeight - (cumulativeHeights[endIndex] ?? totalHeight), 0)
+  if (!shouldVirtualizeTurns.value) return 0
+  const renderedEnd = turnHeightMetrics.value.cumulativeHeights[virtualizedTurnRange.value.endIndex]
+    ?? turnHeightMetrics.value.totalHeight
+  return Math.max(turnHeightMetrics.value.totalHeight - renderedEnd, 0)
 })
 
-function measureObservedElementHeight(element: HTMLElement): number {
-  return Math.max(Math.ceil(element.getBoundingClientRect().height), 1)
+function renderMarkdown(text: string): string {
+  return DOMPurify.sanitize(markdown.render(text), {
+    USE_PROFILES: { html: true },
+    ADD_ATTR: ['target', 'rel'],
+  })
 }
 
-function captureVisibleConversationAnchor(): ScrollAnchorSnapshot | null {
-  const container = conversationListRef.value
-  if (!container) return null
-  const containerRect = container.getBoundingClientRect()
-  const measuredElements: Array<{
-    element: HTMLElement
-    measureId: string
-  }> = []
+function isActiveTurn(turn: ConversationTurn): boolean {
+  return turn.state === 'submitting'
+    || turn.state === 'queued'
+    || turn.state === 'running'
+    || turn.state === 'waiting'
+    || turn.state === 'sync-degraded'
+}
 
-  for (const entry of virtualizedMessages.value) {
-    const measureId = entry.measureId
-    const element = observedMessageElementsById.get(measureId)
-    if (!element) continue
-    measuredElements.push({
-      element,
-      measureId,
-    })
+function hasProcessContent(turn: ConversationTurn): boolean {
+  return turn.commentary.length > 0
+    || turn.activities.some((activity) => activity.activityType !== 'plan' || !activity.text.trim())
+    || turn.interactions.some((entry) => entry.status !== 'pending')
+}
+
+function hasVisibleTiming(turn: ConversationTurn): boolean {
+  return isActiveTurn(turn) || turn.activeElapsedMs !== null || turn.waitedMs > 0
+}
+
+function isProcessExpanded(turn: ConversationTurn): boolean {
+  return isActiveTurn(turn) || manuallyExpandedTurnIds.value.has(turn.id)
+}
+
+function toggleProcess(turn: ConversationTurn): void {
+  if (isActiveTurn(turn)) return
+  const next = new Set(manuallyExpandedTurnIds.value)
+  if (next.has(turn.id)) {
+    next.delete(turn.id)
+    hideProcessHistory(turn)
+  } else {
+    next.add(turn.id)
+  }
+  manuallyExpandedTurnIds.value = next
+}
+
+type ProcessBlock = ConversationAssistantBlock | ConversationActivity
+
+function processBlocks(turn: ConversationTurn): ProcessBlock[] {
+  return turn.blocks.filter((block): block is ProcessBlock => (
+    (block.kind === 'activity' && (block.activityType !== 'plan' || !block.text.trim()))
+    || (block.kind === 'assistant' && block.phase === 'commentary')
+  ))
+}
+
+function processHistoryCount(turn: ConversationTurn): number {
+  return Math.max(0, processBlocks(turn).length - 1)
+}
+
+function visibleProcessHistoryCount(turn: ConversationTurn): number {
+  return Math.min(
+    processHistoryCount(turn),
+    Math.max(0, visibleProcessHistoryCountByTurnId.value[turn.id] ?? 0),
+  )
+}
+
+function isProcessHistoryExpanded(turn: ConversationTurn): boolean {
+  return visibleProcessHistoryCount(turn) > 0
+}
+
+function visibleProcessBlockCount(turn: ConversationTurn): number {
+  return Math.min(processBlocks(turn).length, visibleProcessHistoryCount(turn) + 1)
+}
+
+function hiddenOlderProcessCount(turn: ConversationTurn): number {
+  return Math.max(0, processHistoryCount(turn) - visibleProcessHistoryCount(turn))
+}
+
+function showMoreProcessHistory(turn: ConversationTurn): void {
+  const next = { ...visibleProcessHistoryCountByTurnId.value }
+  next[turn.id] = Math.min(
+    processHistoryCount(turn),
+    visibleProcessHistoryCount(turn) + PROCESS_HISTORY_BATCH_SIZE,
+  )
+  visibleProcessHistoryCountByTurnId.value = next
+}
+
+function hideProcessHistory(turn: ConversationTurn): void {
+  const next = { ...visibleProcessHistoryCountByTurnId.value }
+  delete next[turn.id]
+  visibleProcessHistoryCountByTurnId.value = next
+}
+
+function toggleProcessHistory(turn: ConversationTurn): void {
+  if (isProcessHistoryExpanded(turn)) hideProcessHistory(turn)
+  else showMoreProcessHistory(turn)
+}
+
+type VisibleProcessEntry =
+  | { kind: 'commentary'; id: string; block: ConversationAssistantBlock }
+  | { kind: 'activity-group'; id: string; group: ConversationActivityGroup; activities: ConversationActivity[] }
+
+function visibleProcessEntries(turn: ConversationTurn): VisibleProcessEntry[] {
+  const visibleBlocks = processBlocks(turn).slice(-visibleProcessBlockCount(turn))
+  const visibleActivityIds = new Set(
+    visibleBlocks
+      .filter((block): block is ConversationActivity => block.kind === 'activity')
+      .map((activity) => activity.id),
+  )
+  const activitiesById = new Map(turn.activities.map((activity) => [activity.id, activity]))
+  const groupsByActivityId = new Map<string, ConversationActivityGroup>()
+  for (const group of turn.activityGroups) {
+    for (const activityId of group.activityIds) groupsByActivityId.set(activityId, group)
   }
 
-  for (const { element, measureId } of measuredElements) {
-    const rect = element.getBoundingClientRect()
-    if (rect.bottom <= containerRect.top + 1) continue
-    if (rect.top >= containerRect.bottom) break
-
-    return {
-      measureId,
-      viewportOffset: rect.top - containerRect.top,
+  const entries: VisibleProcessEntry[] = []
+  const renderedGroupIds = new Set<string>()
+  for (const block of visibleBlocks) {
+    if (block.kind === 'assistant' && block.phase === 'commentary') {
+      entries.push({ kind: 'commentary', id: block.id, block })
+      continue
     }
+    if (block.kind !== 'activity' || !visibleActivityIds.has(block.id)) continue
+    const group = groupsByActivityId.get(block.id)
+    if (!group || renderedGroupIds.has(group.id)) continue
+    const activities = group.activityIds
+      .filter((activityId) => visibleActivityIds.has(activityId))
+      .map((activityId) => activitiesById.get(activityId))
+      .filter((activity): activity is ConversationActivity => Boolean(activity))
+    if (activities.length === 0) continue
+    renderedGroupIds.add(group.id)
+    entries.push({ kind: 'activity-group', id: group.id, group, activities })
   }
-
-  return null
+  return entries
 }
 
-function syncConversationViewport(container: HTMLElement): void {
-  const viewportHeight = container.clientHeight
-  conversationViewportHeight.value = viewportHeight
-  conversationScrollTop.value = container.scrollTop
-  if (lastGapMeasuredContainer === container && lastGapMeasuredViewportHeight === viewportHeight) {
+function activityRenderSignature(activity: ConversationActivity): string {
+  const parts: Array<string | number | null> = [
+    activity.id,
+    activity.activityType,
+    activity.label,
+    activity.status,
+    activity.durationMs,
+    activity.completedAtMs,
+  ]
+  if ('command' in activity) parts.push(activity.command, activity.output, activity.exitCode)
+  if ('progress' in activity) parts.push(...activity.progress)
+  if ('query' in activity) parts.push(activity.query)
+  if ('explanation' in activity) {
+    parts.push(activity.explanation, activity.text, ...activity.steps.flatMap((step) => [step.status, step.step]))
+  }
+  if ('target' in activity) parts.push(activity.target)
+  return parts.join('\u001f')
+}
+
+function activityStatusLabel(status: ConversationActivity['status']): string {
+  switch (status) {
+    case 'pending': return '等待中'
+    case 'in-progress': return '进行中'
+    case 'failed': return '失败'
+    case 'declined': return '已拒绝'
+    default: return '完成'
+  }
+}
+
+function activityTarget(activity: ConversationActivity): string {
+  return 'target' in activity ? activity.target : ''
+}
+
+function planStepMark(status: ConversationPlanActivity['steps'][number]['status']): string {
+  if (status === 'completed') return '✓'
+  if (status === 'in-progress') return '→'
+  return '○'
+}
+
+function formatDuration(durationMs: number | null): string {
+  if (durationMs === null || !Number.isFinite(durationMs)) return '耗时未知'
+  const seconds = Math.max(0, Math.round(durationMs / 1000))
+  if (seconds < 60) return `${String(seconds)} 秒`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  if (minutes < 60) return remainingSeconds > 0 ? `${String(minutes)} 分 ${String(remainingSeconds)} 秒` : `${String(minutes)} 分钟`
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  return remainingMinutes > 0 ? `${String(hours)} 小时 ${String(remainingMinutes)} 分` : `${String(hours)} 小时`
+}
+
+function timingLabel(turn: ConversationTurn): string {
+  if (turn.timingStatus === 'unavailable' || turn.activeElapsedMs === null) {
+    if (turn.state === 'queued') return '等待执行'
+    if (turn.state === 'waiting') return '等待你的处理'
+    if (turn.state === 'running' || turn.state === 'sync-degraded') return '正在处理'
+    return '过程记录'
+  }
+  return turn.timingStatus === 'running'
+    ? `已处理 ${formatDuration(turn.activeElapsedMs)}`
+    : `耗时 ${formatDuration(turn.activeElapsedMs)}`
+}
+
+function fileSummaryLabel(turn: ConversationTurn): string {
+  const additions = turn.fileChanges.reduce((total, file) => total + file.additions, 0)
+  const removals = turn.fileChanges.reduce((total, file) => total + file.removals, 0)
+  return `${String(turn.fileChanges.length)} 个文件 · +${String(additions)} −${String(removals)}`
+}
+
+function fileKindLabel(kind: 'add' | 'delete' | 'update'): string {
+  if (kind === 'add') return '新增'
+  if (kind === 'delete') return '删除'
+  return '修改'
+}
+
+function finalStatusTitle(turn: ConversationTurn): string {
+  if (turn.opener?.deliveryState === 'failed' && turn.startedAtMs === null) return '消息发送失败'
+  if (turn.finalStatus === 'failed') return '本轮执行失败'
+  if (turn.finalStatus === 'interrupted') return '本轮已中断'
+  if (turn.finalStatus === 'stopped') return '本轮已停止'
+  return ''
+}
+
+function finalStatusDetail(turn: ConversationTurn): string {
+  if (turn.error) return turn.error
+  return '过程记录仍然保留，可根据上方状态决定是否重试。'
+}
+
+function deliveryStateLabel(state: ConversationUserBlock['deliveryState'], turn: ConversationTurn): string {
+  switch (state) {
+    case 'waitingNetwork': return '等待网络'
+    case 'confirmationPending': return '正在确认送达'
+    case 'sent': return turn.state === 'submitting' ? '已送达，等待启动' : '已发送'
+    case 'failed': return '发送失败'
+    default: return '发送中'
+  }
+}
+
+function canRollback(turn: ConversationTurn): boolean {
+  return !isActiveTurn(turn) && props.isTurnInProgress !== true && props.isRollingBack !== true && turn.index >= 0
+}
+
+function requestRollback(turn: ConversationTurn): void {
+  if (!canRollback(turn)) return
+  if (confirmingRollbackTurnIndex.value !== turn.index) {
+    confirmingRollbackTurnIndex.value = turn.index
+    if (rollbackTimer) window.clearTimeout(rollbackTimer)
+    rollbackTimer = window.setTimeout(() => { confirmingRollbackTurnIndex.value = null }, 4_000)
     return
   }
-  lastGapMeasuredContainer = container
-  lastGapMeasuredViewportHeight = viewportHeight
-  const style = window.getComputedStyle(container)
-  const gapCandidate = style.rowGap || style.gap
-  const parsedGap = Number.parseFloat(gapCandidate)
-  conversationItemGap.value = Number.isFinite(parsedGap) ? parsedGap : 0
+  confirmingRollbackTurnIndex.value = null
+  emit('rollback', { turnIndex: turn.index, prependText: turn.opener?.text || undefined })
 }
 
-function updateMeasuredHeight(measureId: string, height: number): void {
-  if (measuredMessageHeightById.value[measureId] === height) return
-  measuredMessageHeightById.value = {
-    ...measuredMessageHeightById.value,
-    [measureId]: height,
+function canFavorite(block: ConversationUserBlock): boolean {
+  return !block.deliveryState && block.text.trim().length > 0
+}
+
+function isFavorite(messageId: string): boolean {
+  return favoriteIds.value.has(messageId)
+}
+
+function favoriteIntent(
+  block: ConversationUserBlock | ConversationAssistantBlock,
+  turn: ConversationTurn,
+): ConversationFavoriteIntent {
+  return {
+    messageId: block.id,
+    role: block.kind === 'user' ? 'user' : 'assistant',
+    text: block.text,
+    turnId: turn.id,
+    turnIndex: turn.index,
   }
 }
 
-function observeMeasuredElement(
-  measureId: string,
-  element: HTMLElement,
-  observedElementsById: Map<string, HTMLElement>,
-): void {
-  const previousElement = observedElementsById.get(measureId)
-  if (previousElement && previousElement !== element) {
-    itemResizeObserver?.unobserve(previousElement)
+function toggleFavorite(block: ConversationUserBlock | ConversationAssistantBlock, turn: ConversationTurn): void {
+  if (!block.text.trim()) return
+  emit('toggleFavorite', favoriteIntent(block, turn))
+}
+
+async function copyBlock(text: string): Promise<void> {
+  try {
+    await copyTextToClipboard(text)
+    emit('copyStatus', { message: '已复制', tone: 'success' })
+  } catch {
+    emit('copyStatus', { message: '复制失败，请手动选择内容', tone: 'danger' })
   }
-
-  element.dataset.measureId = measureId
-  observedElementsById.set(measureId, element)
-  updateMeasuredHeight(measureId, measureObservedElementHeight(element))
-  itemResizeObserver?.observe(element)
 }
 
-function disconnectMeasuredElement(
-  measureId: string,
-  observedElementsById: Map<string, HTMLElement>,
+function planImplementationIntent(
+  activity: ConversationPlanActivity,
+  turn: ConversationTurn,
+): ConversationPlanImplementationIntent {
+  return {
+    activityId: activity.id,
+    turnId: turn.id,
+    turnIndex: turn.index,
+  }
+}
+
+const planImplementationState = computed(() => derivePlanImplementationState(props.projection))
+
+function proposedPlans(turn: ConversationTurn): ConversationPlanActivity[] {
+  return turn.activities.filter((activity): activity is ConversationPlanActivity => (
+    activity.activityType === 'plan' && Boolean(activity.text.trim())
+  ))
+}
+
+function canImplementPlan(activity: ConversationPlanActivity, turn: ConversationTurn): boolean {
+  return planImplementationState.value.actionablePlanKey === planImplementationKey(turn.id, activity.id)
+}
+
+function isPlanImplemented(activityId: string, turnId: string): boolean {
+  return planImplementationState.value.implementedPlanKeys.includes(planImplementationKey(turnId, activityId))
+    || (props.implementedPlanIds ?? []).includes(activityId)
+}
+
+function pendingInteractionsForTurn(turn: ConversationTurn): ConversationInteractionBlock[] {
+  return turn.interactions.filter((interaction) => interaction.status === 'pending')
+}
+
+function answerKey(interactionId: string, questionId: string): string {
+  return `${interactionId}:${questionId}`
+}
+
+function onRequestAnswerChange(interactionId: string, questionId: string, event: Event): void {
+  const target = event.target
+  if (!(target instanceof HTMLSelectElement)) return
+  requestAnswers.value = {
+    ...requestAnswers.value,
+    [answerKey(interactionId, questionId)]: target.value,
+  }
+}
+
+function beginRequestResponse(requestId: number): boolean {
+  if (respondingRequestIds.value.has(requestId)) return false
+  respondingRequestIds.value = new Set(respondingRequestIds.value).add(requestId)
+  return true
+}
+
+function beginInteractionResponse(interaction: ConversationInteractionBlock): number | null {
+  const responseId = interaction.responseId
+  if (responseId === null || !beginRequestResponse(responseId)) return null
+  return responseId
+}
+
+function respondApproval(interaction: ConversationInteractionBlock, decision: 'accept' | 'acceptForSession' | 'decline'): void {
+  const responseId = beginInteractionResponse(interaction)
+  if (responseId === null) return
+  emit('respondServerRequest', { id: responseId, result: { decision } })
+}
+
+function submitToolInput(interaction: ConversationInteractionBlock): void {
+  const responseId = beginInteractionResponse(interaction)
+  if (responseId === null) return
+  const answers: Record<string, { answers: string[] }> = {}
+  for (const question of interaction.questions) {
+    const selected = requestAnswers.value[answerKey(interaction.id, question.id)] || ''
+    const other = requestOtherAnswers.value[answerKey(interaction.id, question.id)] || ''
+    answers[question.id] = { answers: [selected, other].map((value) => value.trim()).filter(Boolean) }
+  }
+  emit('respondServerRequest', { id: responseId, result: { answers } })
+}
+
+function canSubmitToolInput(interaction: ConversationInteractionBlock): boolean {
+  return interaction.questions.length > 0 && interaction.questions.every((question) => {
+    const selected = requestAnswers.value[answerKey(interaction.id, question.id)]?.trim() ?? ''
+    const other = requestOtherAnswers.value[answerKey(interaction.id, question.id)]?.trim() ?? ''
+    return Boolean(selected || other)
+  })
+}
+
+function mcpPrimaryActionLabel(interaction: ConversationInteractionBlock): string {
+  if (interaction.interactionType === 'mcp-approval') return '允许一次'
+  return interaction.authorizationUrl ? '完成授权后继续' : '提交并继续'
+}
+
+function respondMcp(
+  interaction: ConversationInteractionBlock,
+  action: 'accept' | 'decline',
+  persistence?: 'session' | 'always',
 ): void {
-  const previousElement = observedElementsById.get(measureId)
-  if (!previousElement) return
-  itemResizeObserver?.unobserve(previousElement)
-  observedElementsById.delete(measureId)
-}
-
-function pruneMeasuredHeightCache(
-  keepIds: Set<string>,
-  measuredHeightMap: Record<string, number>,
-): Record<string, number> {
-  let nextMeasuredHeightMap: Record<string, number> | null = null
-  for (const [measureId, height] of Object.entries(measuredHeightMap)) {
-    if (keepIds.has(measureId)) continue
-    if (!nextMeasuredHeightMap) {
-      nextMeasuredHeightMap = { ...measuredHeightMap }
+  const responseId = beginInteractionResponse(interaction)
+  if (responseId === null) return
+  const result: Record<string, unknown> = { action }
+  const answer = mcpAnswers.value[interaction.id]?.trim() ?? ''
+  if (action === 'accept') {
+    result.content = answer && !interaction.authorizationUrl ? { response: answer } : {}
+    if (persistence && interaction.mcpPersistenceScopes.includes(persistence)) {
+      result._meta = { persist: persistence }
     }
-    delete nextMeasuredHeightMap[measureId]
   }
-  return nextMeasuredHeightMap ?? measuredHeightMap
+  emit('respondServerRequest', { id: responseId, result })
 }
 
-function pruneObservedElements(
-  keepIds: Set<string>,
-  observedElementsById: Map<string, HTMLElement>,
-): void {
-  for (const [measureId, element] of observedElementsById.entries()) {
-    if (keepIds.has(measureId)) continue
-    itemResizeObserver?.unobserve(element)
-    observedElementsById.delete(measureId)
-  }
+function reportUnsupportedTool(interaction: ConversationInteractionBlock): void {
+  const responseId = beginInteractionResponse(interaction)
+  if (responseId === null) return
+  emit('respondServerRequest', {
+    id: responseId,
+    result: {
+      success: false,
+      contentItems: [{ type: 'inputText', text: '当前 Web 端不能代执行这个工具。请改用文字方案继续，或提示用户在桌面端处理。' }],
+    },
+  })
 }
 
-function disconnectAllObservedElements(observedElementsById: Map<string, HTMLElement>): void {
-  for (const element of observedElementsById.values()) {
-    itemResizeObserver?.unobserve(element)
-  }
-  observedElementsById.clear()
+function respondEmpty(interaction: ConversationInteractionBlock): void {
+  const responseId = beginInteractionResponse(interaction)
+  if (responseId === null) return
+  emit('respondServerRequest', { id: responseId, result: {} })
 }
 
-function pruneMeasuredMessageHeights(entries: ConversationRenderEntry[]): void {
-  const keepIds = new Set(entries.map((entry) => entry.measureId))
-  measuredMessageHeightById.value = pruneMeasuredHeightCache(keepIds, measuredMessageHeightById.value)
-  pruneObservedElements(keepIds, observedMessageElementsById)
+function rejectInteraction(interaction: ConversationInteractionBlock): void {
+  const responseId = beginInteractionResponse(interaction)
+  if (responseId === null) return
+  emit('respondServerRequest', { id: responseId, error: { code: -32000, message: '请求已被用户拒绝。' } })
 }
 
-function setMessageMeasureRef(messageId: string, element: MeasureRefTarget): void {
-  const measuredElement = toMeasuredElement(element)
-  if (!measuredElement) {
-    disconnectMeasuredElement(messageId, observedMessageElementsById)
-    return
-  }
-  observeMeasuredElement(messageId, measuredElement, observedMessageElementsById)
+function isInteractionResponding(interaction: ConversationInteractionBlock): boolean {
+  return interaction.responseId === null || respondingRequestIds.value.has(interaction.responseId)
+}
+
+function syncConversationViewport(element: HTMLElement): void {
+  conversationViewportHeight.value = element.clientHeight
+  conversationScrollTop.value = element.scrollTop
 }
 
 function toMeasuredElement(target: MeasureRefTarget): HTMLElement | null {
   if (target instanceof HTMLElement) return target
-  if (target && '$el' in target) {
-    const element = target.$el
-    return element instanceof HTMLElement ? element : null
-  }
+  if (target && '$el' in target && target.$el instanceof HTMLElement) return target.$el
   return null
 }
 
-function restoreScrollAnchor(snapshot: ScrollAnchorSnapshot): boolean {
-  if (shouldLockToBottom()) return false
+function setTurnMeasureRef(turnId: string, target: MeasureRefTarget): void {
+  const previous = observedTurnElementsById.get(turnId)
+  const element = toMeasuredElement(target)
+  if (!element) {
+    if (previous) turnResizeObserver?.unobserve(previous)
+    observedTurnElementsById.delete(turnId)
+    return
+  }
+  if (previous && previous !== element) turnResizeObserver?.unobserve(previous)
+  element.dataset.measureTurnId = turnId
+  observedTurnElementsById.set(turnId, element)
+  const height = Math.max(Math.ceil(element.getBoundingClientRect().height), 1)
+  if (measuredTurnHeightById.value[turnId] !== height) {
+    measuredTurnHeightById.value = { ...measuredTurnHeightById.value, [turnId]: height }
+  }
+  turnResizeObserver?.observe(element)
+}
+
+function captureVisibleTurnAnchor(): VisibleTurnAnchor | null {
   const container = conversationListRef.value
-  if (!container) return false
-
-  const element = observedMessageElementsById.get(snapshot.measureId)
-  if (!element) return false
-
-  const containerRect = container.getBoundingClientRect()
-  const nextViewportOffset = element.getBoundingClientRect().top - containerRect.top
-  const scrollDelta = nextViewportOffset - snapshot.viewportOffset
-  if (Math.abs(scrollDelta) < 1) {
-    syncConversationViewport(container)
-    return true
+  if (!container) return null
+  const containerTop = container.getBoundingClientRect().top
+  for (const turn of virtualizedTurns.value) {
+    const element = observedTurnElementsById.get(turn.id)
+    if (!element) continue
+    const rect = element.getBoundingClientRect()
+    if (rect.bottom <= containerTop + 1) continue
+    return { turnId: turn.id, top: rect.top }
   }
+  return null
+}
 
-  const maxScrollTop = Math.max(container.scrollHeight - container.clientHeight, 0)
-  container.scrollTop = Math.min(Math.max(container.scrollTop + scrollDelta, 0), maxScrollTop)
+function restoreVisibleTurnAnchor(anchor: VisibleTurnAnchor): boolean {
+  const container = conversationListRef.value
+  const element = observedTurnElementsById.get(anchor.turnId)
+  if (!container || !element) return false
+  const delta = element.getBoundingClientRect().top - anchor.top
+  if (Math.abs(delta) >= 1) {
+    const maxScrollTop = Math.max(container.scrollHeight - container.clientHeight, 0)
+    container.scrollTop = Math.min(Math.max(container.scrollTop + delta, 0), maxScrollTop)
+  }
   syncConversationViewport(container)
-  scheduleEmitScrollState(container)
   return true
 }
 
-async function scheduleScrollAnchorRestore(snapshot: ScrollAnchorSnapshot | null): Promise<boolean> {
-  if (!snapshot) return false
-  const requestedThreadId = props.activeThreadId
-  const requestedGeneration = scrollContextGeneration
-  await nextTick()
-  if (
-    requestedGeneration !== scrollContextGeneration
-    || requestedThreadId !== props.activeThreadId
-  ) return false
-  cancelScheduledScrollAnchorRestore()
-
-  return await new Promise<boolean>((resolve) => {
-    scrollAnchorRestoreResolve = resolve
-    scrollAnchorRestoreFrame = requestAnimationFrame(() => {
-      scrollAnchorRestoreFrame = 0
-      scrollAnchorRestoreResolve = null
-      if (
-        requestedGeneration !== scrollContextGeneration
-        || requestedThreadId !== props.activeThreadId
-      ) {
-        resolve(false)
-        return
+function scheduleTurnHeightCompensation(anchor: VisibleTurnAnchor | null, shouldFollow: boolean, ownerThreadId: string): void {
+  const ownsPin = Boolean(anchor && !pinnedTurnId.value)
+  if (anchor && ownsPin) pinnedTurnId.value = anchor.turnId
+  void nextTick().then(() => {
+    if (heightRestoreFrame) window.cancelAnimationFrame(heightRestoreFrame)
+    heightRestoreFrame = window.requestAnimationFrame(() => {
+      heightRestoreFrame = 0
+      if (ownerThreadId !== props.activeThreadId) return
+      if (shouldFollow && !userIsAwayFromBottom) {
+        scrollToBottom()
+      } else if (!shouldFollow && userIsAwayFromBottom && anchor) {
+        restoreVisibleTurnAnchor(anchor)
       }
-      resolve(restoreScrollAnchor(snapshot))
+      if (ownsPin && pinnedTurnId.value === anchor?.turnId) pinnedTurnId.value = ''
     })
   })
 }
 
-function cancelScheduledScrollAnchorRestore(): void {
-  if (scrollAnchorRestoreFrame) {
-    cancelAnimationFrame(scrollAnchorRestoreFrame)
-    scrollAnchorRestoreFrame = 0
-  }
-  if (scrollAnchorRestoreResolve) {
-    const resolve = scrollAnchorRestoreResolve
-    scrollAnchorRestoreResolve = null
-    resolve(false)
-  }
+const turnResizeObserver = typeof ResizeObserver === 'undefined'
+  ? null
+  : new ResizeObserver((entries) => {
+      const shouldFollow = !userIsAwayFromBottom
+      const anchor = shouldFollow ? null : captureVisibleTurnAnchor()
+      let nextHeights = measuredTurnHeightById.value
+      let changed = false
+      for (const entry of entries) {
+        const element = entry.target
+        if (!(element instanceof HTMLElement)) continue
+        const ownerThreadId = element.closest<HTMLElement>('.transcript-list')?.dataset.threadId ?? ''
+        if (ownerThreadId && ownerThreadId !== props.activeThreadId) continue
+        const turnId = element.dataset.measureTurnId ?? ''
+        if (!turnId) continue
+        const height = Math.max(Math.ceil(element.getBoundingClientRect().height), 1)
+        if (nextHeights[turnId] === height) continue
+        if (!changed) nextHeights = { ...nextHeights }
+        nextHeights[turnId] = height
+        changed = true
+      }
+      if (!changed) return
+      measuredTurnHeightById.value = nextHeights
+      scheduleTurnHeightCompensation(anchor, shouldFollow, props.activeThreadId)
+    })
+
+const conversationListResizeObserver = typeof ResizeObserver === 'undefined'
+  ? null
+  : new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const element = entry.target
+        if (!(element instanceof HTMLElement)) continue
+        if ((element.dataset.threadId ?? '') !== props.activeThreadId) continue
+        syncConversationViewport(element)
+      }
+    })
+
+function isViewportAtBottom(element: HTMLElement): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= 88
 }
 
-async function restoreScrollAnchorOverFrames(snapshot: ScrollAnchorSnapshot | null, frames = 4): Promise<void> {
-  if (!snapshot) return
-  for (let remaining = Math.max(frames, 1); remaining > 0; remaining -= 1) {
-    await scheduleScrollAnchorRestore(snapshot)
-  }
+function publishScrollState(): void {
+  const element = conversationListRef.value
+  if (!element || !props.activeThreadId) return
+  const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight)
+  emit('updateScrollState', {
+    threadId: props.activeThreadId,
+    state: {
+      scrollTop: element.scrollTop,
+      isAtBottom: isViewportAtBottom(element),
+      scrollRatio: maxScrollTop > 0 ? element.scrollTop / maxScrollTop : 1,
+    },
+  })
 }
 
-async function revealOlderMessages(): Promise<void> {
-  if (!hasOlderMessagesAffordance.value || isRevealingOlderMessages.value) return
-  autoFollowBottom.value = false
-  const anchorSnapshot = captureVisibleConversationAnchor()
-  isRevealingOlderMessages.value = true
-  canAutoRevealOlderMessages.value = false
-  if (hasHiddenEarlierMessages.value) {
-    visibleMessageStartIndex.value = Math.max(visibleMessageStartIndex.value - MESSAGE_WINDOW_SIZE, 0)
-    await restoreScrollAnchorOverFrames(anchorSnapshot)
-    isRevealingOlderMessages.value = false
+function onConversationScroll(): void {
+  const element = conversationListRef.value
+  if (!element) return
+  userIsAwayFromBottom = !isViewportAtBottom(element)
+  isAwayFromBottom.value = userIsAwayFromBottom
+  if (scrollFrame) return
+  scrollFrame = window.requestAnimationFrame(() => {
+    scrollFrame = 0
+    syncConversationViewport(element)
+    publishScrollState()
+  })
+}
+
+function scrollToBottom(behavior: ScrollBehavior = 'auto'): void {
+  const container = conversationListRef.value
+  if (container && behavior === 'auto') {
+    container.scrollTop = container.scrollHeight
+    syncConversationViewport(container)
     return
   }
+  bottomAnchorRef.value?.scrollIntoView({ block: 'end', behavior })
+}
 
-  pendingRemoteOlderHistoryAnchor = anchorSnapshot
-  markRemoteOlderHistoryRequestInFlight()
+async function returnToLatest(): Promise<void> {
+  userIsAwayFromBottom = false
+  isAwayFromBottom.value = false
+  scrollToBottom('smooth')
+  await nextTick()
+  conversationListRef.value?.focus({ preventScroll: true })
+}
+
+function requestOlderHistory(): void {
+  const container = conversationListRef.value
+  if (container) {
+    const containerTop = container.getBoundingClientRect().top
+    const visibleTurn = Array.from(container.querySelectorAll<HTMLElement>('.turn-shell'))
+      .find((element) => element.getBoundingClientRect().bottom > containerTop + 4)
+    const turnId = visibleTurn?.dataset.turnId ?? ''
+    if (visibleTurn && turnId) {
+      pendingOlderHistoryAnchor = { turnId, top: visibleTurn.getBoundingClientRect().top }
+      pinnedTurnId.value = turnId
+    }
+  }
   emit('loadOlderHistory')
+}
+
+async function restoreOlderHistoryAnchor(): Promise<boolean> {
+  const anchor = pendingOlderHistoryAnchor
+  const container = conversationListRef.value
+  if (!anchor || !container) return false
   await nextTick()
-  await scheduleScrollAnchorRestore(anchorSnapshot)
+  const turn = Array.from(container.querySelectorAll<HTMLElement>('.turn-shell'))
+    .find((element) => element.dataset.turnId === anchor.turnId)
+  if (!turn) {
+    pendingOlderHistoryAnchor = null
+    if (pinnedTurnId.value === anchor.turnId) pinnedTurnId.value = ''
+    return false
+  }
+  container.scrollTop += turn.getBoundingClientRect().top - anchor.top
+  syncConversationViewport(container)
+  pendingOlderHistoryAnchor = null
+  if (pinnedTurnId.value === anchor.turnId) pinnedTurnId.value = ''
+  userIsAwayFromBottom = true
+  isAwayFromBottom.value = true
+  publishScrollState()
+  return true
 }
 
-function markRemoteOlderHistoryRequestInFlight(): void {
-  if (remoteOlderHistoryRequestTimer !== null && typeof window !== 'undefined') {
-    window.clearTimeout(remoteOlderHistoryRequestTimer)
+async function restoreScrollState(): Promise<void> {
+  await nextTick()
+  const element = conversationListRef.value
+  if (!element) return
+  const state = props.scrollState
+  if (!state || state.isAtBottom) {
+    scrollToBottom()
+    userIsAwayFromBottom = false
+    isAwayFromBottom.value = false
+    return
   }
-  if (typeof window === 'undefined') return
-  remoteOlderHistoryRequestTimer = window.setTimeout(() => {
-    remoteOlderHistoryRequestTimer = null
-    isRevealingOlderMessages.value = false
-  }, REMOTE_OLDER_HISTORY_REQUEST_TIMEOUT_MS)
+  const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight)
+  element.scrollTop = typeof state.scrollRatio === 'number'
+    ? Math.min(maxScrollTop, Math.max(0, state.scrollRatio * maxScrollTop))
+    : Math.min(maxScrollTop, Math.max(0, state.scrollTop))
+  syncConversationViewport(element)
+  userIsAwayFromBottom = !isViewportAtBottom(element)
+  isAwayFromBottom.value = userIsAwayFromBottom
 }
 
-function clearRemoteOlderHistoryRequestInFlight(): void {
-  if (remoteOlderHistoryRequestTimer !== null && typeof window !== 'undefined') {
-    window.clearTimeout(remoteOlderHistoryRequestTimer)
-    remoteOlderHistoryRequestTimer = null
-  }
-  pendingRemoteOlderHistoryAnchor = null
-  isRevealingOlderMessages.value = false
-}
-
-function onRevealOlderMessages(): void {
-  void revealOlderMessages()
-}
-
-function estimateTextHeight(text: string, pixelsPerLine = 22, charsPerLine = 54): number {
-  const normalized = text.trim()
-  if (!normalized) return 0
-  const lineCount = normalized.split(/\r?\n/u).length
-  const wrappedLineCount = Math.ceil(normalized.length / charsPerLine)
-  return Math.max(Math.max(lineCount, wrappedLineCount), 1) * pixelsPerLine
-}
-
-function estimateMessageHeight(message: UiMessage): number {
-  if (isCommandMessage(message)) {
-    const output = message.commandExecution?.aggregatedOutput ?? ''
-    if (!isCommandExpanded(message)) return 68
-    return Math.min(120 + estimateTextHeight(output, 16, 78), 520)
-  }
-
-  let height = message.role === 'user' ? 74 : 92
-  if (isLongUserMessageCollapsed(message)) {
-    height += 230
-  } else if (isLongUserMessage(message)) {
-    height += LONG_USER_MESSAGE_EXPANDED_MAX_HEIGHT_PX
-  } else {
-    height += Math.min(estimateTextHeight(message.text), 520)
-  }
-
-  const attachmentCount = message.fileAttachments?.length ?? 0
-  if (attachmentCount > 0) {
-    height += 18 + attachmentCount * 32
-  }
-
-  const inlineImageCount = message.images?.length ?? 0
-  const markdownImageCount = (message.text.match(/!\[[^\]]*\]\(([^)\n]+)\)/gu) ?? []).length
-  const imageCount = inlineImageCount + markdownImageCount
-  if (imageCount > 0) {
-    height += imageCount * 196
-  }
-
-  if (canShowMessageActionBar(message)) {
-    height += 30
-  }
-
-  return Math.min(Math.max(height, 72), isLongUserMessage(message) ? 1120 : 980)
-}
-
-function estimatedMessageHeightSourceText(message: UiMessage): string {
-  if (isCommandMessage(message)) return message.commandExecution?.aggregatedOutput ?? ''
-  return message.text
-}
-
-function estimatedMessageHeightSignature(message: UiMessage): string {
-  if (isCommandMessage(message)) {
-    const command = message.commandExecution
-    return [
-      message.role,
-      message.messageType ?? '',
-      command?.status ?? '',
-      command?.exitCode ?? '',
-      isCommandExpanded(message) ? 'expanded' : 'collapsed',
-    ].join('|')
-  }
-
+function projectionContentSignature(projection: ConversationProjection): string {
+  const lastTurn = projection.turns.at(-1)
+  if (!lastTurn) return `${projection.threadId}:0`
+  const lastCommentary = lastTurn.commentary.at(-1)
+  const lastActivity = lastTurn.activities.at(-1)
+  const activityOutputLength = lastActivity && 'output' in lastActivity ? lastActivity.output.length : 0
   return [
-    message.role,
-    message.messageType ?? '',
-    isLongUserMessageCollapsed(message) ? 'long-collapsed' : isLongUserMessage(message) ? 'long-expanded' : 'normal',
-    String(message.fileAttachments?.length ?? 0),
-    String(message.images?.length ?? 0),
-    canShowMessageActionBar(message) ? 'actions' : 'no-actions',
-  ].join('|')
-}
-
-function getEstimatedMessageHeight(message: UiMessage): number {
-  const sourceText = estimatedMessageHeightSourceText(message)
-  const signature = estimatedMessageHeightSignature(message)
-  const cached = estimatedMessageHeightByMessage.get(message)
-  if (cached && cached.sourceText === sourceText && cached.signature === signature) {
-    return cached.height
-  }
-
-  const height = estimateMessageHeight(message)
-  estimatedMessageHeightByMessage.set(message, { sourceText, signature, height })
-  return height
-}
-
-type ParsedToolQuestion = {
-  id: string
-  header: string
-  question: string
-  isOther: boolean
-  options: string[]
-}
-
-type McpElicitationFieldType = 'string' | 'number' | 'integer' | 'boolean'
-
-type McpElicitationEnumOption = {
-  value: string
-  label: string
-}
-
-type ParsedMcpElicitationField = {
-  id: string
-  title: string
-  description: string
-  type: McpElicitationFieldType
-  required: boolean
-  defaultValue: string
-  enumOptions: McpElicitationEnumOption[]
-}
-
-type ParsedMcpPermissionPrompt = {
-  serverName: string
-  toolName: string
-}
-
-type ParsedMcpPermissionParam = {
-  label: string
-  value: string
-}
-
-type McpPermissionPersistence = 'session' | 'always'
-
-type TextRange = {
-  start: number
-  end: number
-}
-
-const LIKELY_PROJECT_DIRECTORY_ROOTS = new Set([
-  '.agents',
-  '.codex',
-  '.github',
-  'app',
-  'artifacts',
-  'assets',
-  'components',
-  'configs',
-  'dist',
-  'docs',
-  'pages',
-  'packages',
-  'public',
-  'scripts',
-  'skills',
-  'src',
-  'test',
-  'tests',
-  'tmp',
-  '记忆',
-])
-
-function isFilePath(value: string): boolean {
-  if (!value) return false
-  if (value.endsWith('/') || value.endsWith('\\')) return false
-  if (value.startsWith('file://')) return true
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//u.test(value)) return false
-
-  const looksLikeUnixAbsolute = value.startsWith('/')
-  const looksLikeWindowsAbsolute = /^[A-Za-z]:[\\/]/u.test(value)
-  const looksLikeWindowsUnc = /^\\\\[^\\]+\\[^\\]+/u.test(value)
-  const looksLikeRelative = value.startsWith('./') || value.startsWith('../') || value.startsWith('~/')
-  if (looksLikeUnixAbsolute || looksLikeWindowsAbsolute || looksLikeWindowsUnc || looksLikeRelative) {
-    return true
-  }
-
-  const normalized = normalizePathSeparators(value)
-  if (!normalized.includes('/')) return false
-
-  const segments = normalized.split('/').filter(Boolean)
-  if (segments.length < 2) return false
-
-  const basename = segments[segments.length - 1] ?? ''
-  const hasLikelyFileExtension = /\.[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/u.test(basename)
-  if (hasLikelyFileExtension) return true
-
-  return LIKELY_PROJECT_DIRECTORY_ROOTS.has(segments[0] ?? '')
-}
-
-function getBasename(pathValue: string): string {
-  const normalized = pathValue.replace(/\\/gu, '/')
-  const name = normalized.split('/').filter(Boolean).pop()
-  return name || pathValue
-}
-
-function normalizePathSeparators(pathValue: string): string {
-  return pathValue.replace(/\\/gu, '/')
-}
-
-function normalizeFileUrlToPath(pathValue: string): string {
-  if (!pathValue.startsWith('file://')) return pathValue
-  let stripped = pathValue.replace(/^file:\/\//u, '')
-  try {
-    stripped = decodeURIComponent(stripped)
-  } catch {
-    // Keep best-effort path if decoding fails.
-  }
-  if (/^\/[A-Za-z]:\//u.test(stripped)) {
-    stripped = stripped.slice(1)
-  }
-  return stripped
-}
-
-function inferHomeFromCwd(cwd: string): string {
-  const normalized = normalizePathSeparators(cwd)
-  const userMatch = normalized.match(/^\/Users\/([^/]+)/u)
-  if (userMatch) return `/Users/${userMatch[1]}`
-  const homeMatch = normalized.match(/^\/home\/([^/]+)/u)
-  if (homeMatch) return `/home/${homeMatch[1]}`
-  return ''
-}
-
-function normalizePathDots(pathValue: string): string {
-  const normalized = normalizePathSeparators(pathValue)
-  if (!normalized) return normalized
-
-  let root = ''
-  let rest = normalized
-  const driveMatch = rest.match(/^([A-Za-z]:)(\/.*)?$/u)
-  if (driveMatch) {
-    root = `${driveMatch[1]}/`
-    rest = (driveMatch[2] ?? '').replace(/^\/+/u, '')
-  } else if (rest.startsWith('/')) {
-    root = '/'
-    rest = rest.slice(1)
-  }
-
-  const parts = rest.split('/').filter(Boolean)
-  const stack: string[] = []
-  for (const part of parts) {
-    if (part === '.') continue
-    if (part === '..') {
-      if (stack.length > 0) stack.pop()
-      continue
-    }
-    stack.push(part)
-  }
-
-  const joined = stack.join('/')
-  if (root) return `${root}${joined}`.replace(/\/+$/u, '') || root
-  return joined || normalized
-}
-
-function resolveRelativePath(pathValue: string, cwd: string): string {
-  const normalizedPath = normalizePathSeparators(normalizeFileUrlToPath(pathValue.trim()))
-  if (!normalizedPath) return ''
-
-  const looksLikeAbsolute = normalizedPath.startsWith('/') || /^[A-Za-z]:\//u.test(normalizedPath)
-  if (looksLikeAbsolute) return normalizePathDots(normalizedPath)
-
-  if (normalizedPath.startsWith('~/')) {
-    const homeBase = inferHomeFromCwd(cwd)
-    if (homeBase) {
-      return normalizePathDots(`${homeBase}/${normalizedPath.slice(2)}`)
-    }
-  }
-
-  const base = normalizePathSeparators(cwd.trim())
-  if (!base) return normalizePathDots(normalizedPath)
-  return normalizePathDots(`${base.replace(/\/+$/u, '')}/${normalizedPath}`)
-}
-
-function parseFileReference(value: string): { path: string; line: number | null } | null {
-  if (!value) return null
-
-  let pathValue = value.trim()
-  const wrapped = trimLinkWrappers(pathValue)
-  pathValue = wrapped.core.trim()
-  let line: number | null = null
-
-  const hashLineMatch = pathValue.match(/^(.*)#L(\d+)(?:C\d+)?$/u)
-  if (hashLineMatch) {
-    pathValue = hashLineMatch[1]
-    line = Number(hashLineMatch[2])
-  } else {
-    const colonLineMatch = pathValue.match(/^(.*):(\d+)(?::\d+)?$/u)
-    if (colonLineMatch) {
-      pathValue = colonLineMatch[1]
-      line = Number(colonLineMatch[2])
-    }
-  }
-
-  pathValue = normalizeFileUrlToPath(pathValue)
-  if (!isFilePath(pathValue)) return null
-  return { path: pathValue, line }
-}
-
-const LEADING_LINK_WRAPPER_PATTERN = /^['"`“‘<(\[{（【《「『]/u
-const TRAILING_LINK_WRAPPER_PATTERN = /['"`”’>)\]}）】》」』]$/u
-const TRAILING_LINK_PUNCTUATION_PATTERN = /[.,;:!?，。；：！？]$/u
-const TRAILING_LINK_DELIMITER_PAIRS = [
-  ['(', ')'],
-  ['[', ']'],
-  ['{', '}'],
-  ['<', '>'],
-  ['（', '）'],
-  ['【', '】'],
-  ['《', '》'],
-  ['「', '」'],
-  ['『', '』'],
-] as const
-
-function trimLinkWrappers(value: string): { core: string; leading: string; trailing: string } {
-  let core = value
-  let leading = ''
-  let trailing = ''
-
-  while (LEADING_LINK_WRAPPER_PATTERN.test(core)) {
-    leading += core[0]
-    core = core.slice(1)
-  }
-  while (TRAILING_LINK_WRAPPER_PATTERN.test(core)) {
-    trailing = core.slice(-1) + trailing
-    core = core.slice(0, -1)
-  }
-
-  return { core, leading, trailing }
-}
-
-function countCharacter(value: string, character: string): number {
-  let count = 0
-  for (const part of value) {
-    if (part === character) count += 1
-  }
-  return count
-}
-
-function hasUnbalancedTrailingDelimiter(value: string): boolean {
-  if (!value) return false
-  const lastCharacter = value.slice(-1)
-  for (const [opening, closing] of TRAILING_LINK_DELIMITER_PAIRS) {
-    if (lastCharacter !== closing) continue
-    return countCharacter(value, closing) > countCharacter(value, opening)
-  }
-  return false
-}
-
-function splitTrailingLinkSuffix(value: string): { core: string; trailing: string } {
-  let core = value
-  let trailing = ''
-
-  while (core.length > 0) {
-    if (TRAILING_LINK_PUNCTUATION_PATTERN.test(core) || hasUnbalancedTrailingDelimiter(core)) {
-      trailing = core.slice(-1) + trailing
-      core = core.slice(0, -1)
-      continue
-    }
-    break
-  }
-
-  return { core, trailing }
-}
-
-function toExternalHref(value: string): string | null {
-  const normalized = value.trim()
-  if (!normalized) return null
-  if (/^https?:\/\//iu.test(normalized)) return normalized
-  if (/^mailto:/iu.test(normalized)) return normalized
-  if (/^www\./iu.test(normalized)) return `https://${normalized}`
-  return null
-}
-
-function parseMarkdownLinkToken(value: string): { label: string; target: string } | null {
-  const trimmed = value.trim()
-  const parsed = readMarkdownLinkAt(trimmed, 0)
-  if (!parsed || parsed.end !== trimmed.length) return null
-  const labelRaw = parsed.label.trim()
-  const targetRaw = parsed.target.trim()
-  const label = trimLinkWrappers(labelRaw).core.trim() || labelRaw
-  const target = trimLinkWrappers(targetRaw).core.trim()
-  if (!target) return null
-  return { label, target }
-}
-
-function readMarkdownLinkAt(
-  text: string,
-  startIndex: number,
-): { label: string; target: string; end: number } | null {
-  if (text[startIndex] !== '[') return null
-  const closeBracket = text.indexOf('](', startIndex + 1)
-  if (closeBracket < 0) return null
-
-  const label = text.slice(startIndex + 1, closeBracket)
-  if (!label || label.includes('\n')) return null
-
-  let cursor = closeBracket + 2
-  let depth = 1
-  while (cursor < text.length) {
-    const char = text[cursor]
-    if (char === '\n') return null
-    if (char === '(') depth += 1
-    else if (char === ')') {
-      depth -= 1
-      if (depth === 0) {
-        const target = text.slice(closeBracket + 2, cursor)
-        if (!target.trim()) return null
-        return { label, target, end: cursor + 1 }
-      }
-    }
-    cursor += 1
-  }
-
-  return null
-}
-
-function splitPlainTextByLinks(text: string): InlineSegment[] {
-  const segments: InlineSegment[] = []
-  const pattern = /https?:\/\/\S+|mailto:\S+|www\.\S+|file:\/\/\S+|\S*[\\/]\S+/gu
-  let cursor = 0
-
-  for (const match of text.matchAll(pattern)) {
-    if (typeof match.index !== 'number') continue
-    const start = match.index
-    const end = start + match[0].length
-
-    if (start > cursor) {
-      segments.push({ kind: 'text', value: text.slice(cursor, start) })
-    }
-
-    let token = match[0]
-    const trailingSplit = splitTrailingLinkSuffix(token)
-    token = trailingSplit.core
-    const wrapped = trimLinkWrappers(token)
-    token = wrapped.core
-    const leading = wrapped.leading
-    const trailing = wrapped.trailing + trailingSplit.trailing
-
-    if (leading) {
-      segments.push({ kind: 'text', value: leading })
-    }
-
-    if (token.startsWith('**') && token.endsWith('**') && token.length > 4) {
-      segments.push({ kind: 'bold', value: token.slice(2, -2) })
-      if (trailing) {
-        segments.push({ kind: 'text', value: trailing })
-      }
-    } else {
-      const externalHref = toExternalHref(token)
-      if (externalHref) {
-        segments.push({ kind: 'url', value: token, href: externalHref })
-        if (trailing) {
-          segments.push({ kind: 'text', value: trailing })
-        }
-      } else {
-        const ref = parseFileReference(token)
-        if (ref) {
-          segments.push({
-            kind: 'file',
-            value: token,
-            path: ref.path,
-            displayPath: token,
-            downloadName: getBasename(ref.path),
-          })
-          if (trailing) {
-            segments.push({ kind: 'text', value: trailing })
-          }
-        } else {
-          segments.push({ kind: 'text', value: match[0] })
-        }
-      }
-    }
-
-    cursor = end
-  }
-
-  if (cursor < text.length) {
-    segments.push({ kind: 'text', value: text.slice(cursor) })
-  }
-
-  return applyBoldMarkersAcrossTextSegments(segments)
-}
-
-function pushMarkdownLinkSegment(
-  segments: InlineSegment[],
-  label: string,
-  target: string,
-  fallbackText: string,
-): boolean {
-  const externalHref = toExternalHref(target)
-  if (externalHref) {
-    segments.push({ kind: 'url', value: label || target, href: externalHref })
-    return true
-  }
-
-  const ref = parseFileReference(target)
-  if (ref) {
-    segments.push({
-      kind: 'file',
-      value: target,
-      path: ref.path,
-      displayPath: label || target,
-      downloadName: getBasename(ref.path),
-    })
-    return true
-  }
-
-  if (fallbackText) {
-    segments.push({ kind: 'text', value: fallbackText })
-    return true
-  }
-
-  return false
-}
-
-function applyBoldMarkersAcrossTextSegments(segments: InlineSegment[]): InlineSegment[] {
-  const output: InlineSegment[] = []
-  let inBold = false
-  let boldBuffer = ''
-
-  const pushText = (value: string): void => {
-    if (!value) return
-    output.push({ kind: 'text', value })
-  }
-
-  for (const segment of segments) {
-    if (segment.kind !== 'text') {
-      if (inBold) {
-        pushText(`**${boldBuffer}`)
-        inBold = false
-        boldBuffer = ''
-      }
-      output.push(segment)
-      continue
-    }
-
-    let remaining = segment.value
-    while (remaining.length > 0) {
-      const markerIndex = remaining.indexOf('**')
-      if (markerIndex < 0) {
-        if (inBold) boldBuffer += remaining
-        else pushText(remaining)
-        break
-      }
-
-      const before = remaining.slice(0, markerIndex)
-      if (inBold) boldBuffer += before
-      else pushText(before)
-
-      remaining = remaining.slice(markerIndex + 2)
-      if (inBold) {
-        if (boldBuffer.length > 0) output.push({ kind: 'bold', value: boldBuffer })
-        else pushText('****')
-        boldBuffer = ''
-        inBold = false
-      } else {
-        inBold = true
-      }
-    }
-  }
-
-  if (inBold) {
-    pushText(`**${boldBuffer}`)
-  }
-
-  return output
-}
-function splitTextByMarkdownLinks(text: string): InlineSegment[] {
-  const segments: InlineSegment[] = []
-  let cursor = 0
-
-  while (cursor < text.length) {
-    const openBracket = text.indexOf('[', cursor)
-    if (openBracket < 0) break
-    const markdownToken = readMarkdownLinkAt(text, openBracket)
-    if (!markdownToken) {
-      cursor = openBracket + 1
-      continue
-    }
-
-    if (openBracket > cursor) {
-      segments.push(...splitPlainTextByLinks(text.slice(cursor, openBracket)))
-    }
-
-    const label = trimLinkWrappers(markdownToken.label.trim()).core.trim() || markdownToken.label.trim()
-    const target = trimLinkWrappers(markdownToken.target.trim()).core.trim()
-    pushMarkdownLinkSegment(segments, label, target, text.slice(openBracket, markdownToken.end))
-
-    cursor = markdownToken.end
-  }
-
-  if (cursor < text.length) {
-    segments.push(...splitPlainTextByLinks(text.slice(cursor)))
-  }
-
-  return segments
-}
-
-function pushCodexFileCitationSegment(
-  segments: InlineSegment[],
-  citation: CodexFileCitation,
-): void {
-  const fileReference = parseFileReference(citation.path)
-  if (!fileReference) {
-    const fallbackText = citation.purpose || citation.raw
-    if (fallbackText) segments.push({ kind: 'text', value: fallbackText })
-    return
-  }
-
-  segments.push({
-    kind: 'file',
-    value: citation.raw,
-    path: fileReference.path,
-    displayPath: getBasename(fileReference.path),
-    downloadName: getBasename(fileReference.path),
-  })
-}
-
-function splitTextByFileUrls(text: string): InlineSegment[] {
-  const parts = splitCodexFileCitations(text)
-  const segments: InlineSegment[] = []
-
-  for (const part of parts) {
-    if (part.kind === 'citation') {
-      pushCodexFileCitationSegment(segments, part.citation)
-      continue
-    }
-    const invalidDirectiveStart = part.value.indexOf(CODEX_FILE_CITATION_PREFIX)
-    if (invalidDirectiveStart < 0) {
-      segments.push(...splitTextByMarkdownLinks(part.value))
-      continue
-    }
-    if (invalidDirectiveStart > 0) {
-      segments.push(...splitTextByMarkdownLinks(part.value.slice(0, invalidDirectiveStart)))
-    }
-    segments.push({ kind: 'text', value: part.value.slice(invalidDirectiveStart) })
-  }
-
-  return segments
-}
-
-function collectMarkdownLinkRanges(text: string): TextRange[] {
-  const ranges: TextRange[] = []
-  let cursor = 0
-
-  while (cursor < text.length) {
-    const openBracket = text.indexOf('[', cursor)
-    if (openBracket < 0) break
-    const markdownToken = readMarkdownLinkAt(text, openBracket)
-    if (!markdownToken) {
-      cursor = openBracket + 1
-      continue
-    }
-    ranges.push({ start: openBracket, end: markdownToken.end })
-    cursor = markdownToken.end
-  }
-
-  return ranges
-}
-
-function isIndexInsideRanges(index: number, ranges: TextRange[]): boolean {
-  for (const range of ranges) {
-    if (index < range.start) return false
-    if (index < range.end) return true
-  }
-  return false
-}
-
-function parseInlineSegments(text: string): InlineSegment[] {
-  if (!text.includes('`')) return splitTextByFileUrls(text)
-  const markdownLinkRanges = collectMarkdownLinkRanges(text)
-
-  const segments: InlineSegment[] = []
-  let cursor = 0
-  let textStart = 0
-
-  while (cursor < text.length) {
-    if (text[cursor] !== '`' || isIndexInsideRanges(cursor, markdownLinkRanges)) {
-      cursor += 1
-      continue
-    }
-
-    let openLength = 1
-    while (cursor + openLength < text.length && text[cursor + openLength] === '`') {
-      openLength += 1
-    }
-    const delimiter = '`'.repeat(openLength)
-
-    let searchFrom = cursor + openLength
-    let closingStart = -1
-    while (searchFrom < text.length) {
-      const candidate = text.indexOf(delimiter, searchFrom)
-      if (candidate < 0) break
-      if (isIndexInsideRanges(candidate, markdownLinkRanges)) {
-        searchFrom = candidate + 1
-        continue
-      }
-
-      const hasBacktickBefore = candidate > 0 && text[candidate - 1] === '`'
-      const hasBacktickAfter =
-        candidate + openLength < text.length && text[candidate + openLength] === '`'
-      const hasNewLineInside = text.slice(cursor + openLength, candidate).includes('\n')
-
-      if (!hasBacktickBefore && !hasBacktickAfter && !hasNewLineInside) {
-        closingStart = candidate
-        break
-      }
-      searchFrom = candidate + 1
-    }
-
-    if (closingStart < 0) {
-      cursor += openLength
-      continue
-    }
-
-    if (cursor > textStart) {
-      segments.push(...splitTextByFileUrls(text.slice(textStart, cursor)))
-    }
-
-    const token = text.slice(cursor + openLength, closingStart)
-    if (token.length > 0) {
-      const markdownLink = parseMarkdownLinkToken(token)
-      if (markdownLink) {
-        const pushed = pushMarkdownLinkSegment(segments, markdownLink.label, markdownLink.target, '')
-        if (!pushed) {
-          segments.push({ kind: 'code', value: token })
-        }
-      } else {
-        const fileReference = parseFileReference(token)
-        if (fileReference) {
-          const displayPath = fileReference.line
-            ? `${fileReference.path}:${String(fileReference.line)}`
-            : fileReference.path
-          segments.push({
-            kind: 'file',
-            value: token,
-            path: fileReference.path,
-            displayPath,
-            downloadName: getBasename(fileReference.path),
-          })
-        } else {
-          segments.push({ kind: 'code', value: token })
-        }
-      }
-    } else {
-      segments.push({ kind: 'text', value: `${delimiter}${delimiter}` })
-    }
-
-    cursor = closingStart + openLength
-    textStart = cursor
-  }
-
-  if (textStart < text.length) {
-    segments.push(...splitTextByFileUrls(text.slice(textStart)))
-  }
-
-  return segments
-}
-
-function toRenderableImageUrl(value: string): string {
-  const normalized = value.trim()
-  if (!normalized) return ''
-  if (
-    normalized.startsWith('data:') ||
-    normalized.startsWith('blob:') ||
-    normalized.startsWith('http://') ||
-    normalized.startsWith('https://') ||
-    normalized.startsWith('/codex-local-image?')
-  ) {
-    return normalized
-  }
-
-  if (normalized.startsWith('file://')) {
-    return `/codex-local-image?path=${encodeURIComponent(normalized)}`
-  }
-
-  const looksLikeUnixAbsolute = normalized.startsWith('/')
-  const looksLikeWindowsAbsolute = /^[A-Za-z]:[\\/]/u.test(normalized)
-  if (looksLikeUnixAbsolute || looksLikeWindowsAbsolute) {
-    return `/codex-local-image?path=${encodeURIComponent(normalized)}`
-  }
-
-  return normalized
-}
-
-function toBrowseUrl(pathValue: string): string {
-  const normalized = pathValue.trim()
-  if (!normalized) return '#'
-  const looksLikeAbsolutePath = (candidate: string): boolean => (
-    candidate.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(candidate)
-  )
-
-  const parsed = parseFileReference(normalized)
-  const candidatePath = parsed?.path ?? normalized
-  const resolved = resolveRelativePath(candidatePath, props.cwd)
-
-  if (looksLikeAbsolutePath(resolved)) {
-    const normalizedResolved = resolved.startsWith('/') ? resolved : `/${resolved}`
-    return `/codex-local-browse${encodeURI(normalizedResolved)}`
-  }
-
-  return '#'
-}
-
-function toEditUrl(pathValue: string): string {
-  const normalized = pathValue.trim()
-  if (!normalized) return '#'
-  const parsed = parseFileReference(normalized)
-  const candidatePath = parsed?.path ?? normalized
-  const resolved = resolveRelativePath(candidatePath, props.cwd)
-  const looksLikeAbsolutePath = (candidate: string): boolean => (
-    candidate.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(candidate)
-  )
-  if (!looksLikeAbsolutePath(resolved)) return '#'
-  const normalizedResolved = resolved.startsWith('/') ? resolved : `/${resolved}`
-  return `/codex-local-edit${encodeURI(normalizedResolved)}`
-}
-
-const fileLinkContextMenuStyle = computed(() => ({
-  left: `${String(fileLinkContextMenuX.value)}px`,
-  top: `${String(fileLinkContextMenuY.value)}px`,
-}))
-
-function onFileLinkContextMenu(event: MouseEvent, pathValue: string): void {
-  const browseUrl = toBrowseUrl(pathValue)
-  if (browseUrl === '#') return
-  fileLinkContextBrowseUrl.value = browseUrl
-  const editUrl = toEditUrl(pathValue)
-  fileLinkContextEditUrl.value = editUrl === '#' ? '' : editUrl
-  fileLinkContextMenuX.value = event.clientX
-  fileLinkContextMenuY.value = event.clientY
-  isFileLinkContextMenuVisible.value = true
-}
-
-function onUrlLinkContextMenu(event: MouseEvent, href: string): void {
-  const normalizedHref = href.trim()
-  if (!normalizedHref) return
-  fileLinkContextBrowseUrl.value = normalizedHref
-  fileLinkContextEditUrl.value = ''
-  fileLinkContextMenuX.value = event.clientX
-  fileLinkContextMenuY.value = event.clientY
-  isFileLinkContextMenuVisible.value = true
-}
-
-function isMobileShellExternalUrl(href: string): boolean {
-  return /^(https?:|mailto:|tel:)/iu.test(href.trim())
-}
-
-function shouldOpenInternalHrefInCurrentWindow(href: string): boolean {
-  if (!href.startsWith('/')) return false
-  return isNativeAndroidShell() || window.matchMedia('(max-width: 820px)').matches
-}
-
-async function openHyperlink(href: string): Promise<void> {
-  const normalizedHref = href.trim()
-  if (!normalizedHref || normalizedHref === '#') return
-
-  if (shouldOpenInternalHrefInCurrentWindow(normalizedHref)) {
-    window.location.href = normalizedHref
-    return
-  }
-
-  if (isNativeAndroidShell() && isMobileShellExternalUrl(normalizedHref)) {
-    try {
-      await openMobileShellUrl(normalizedHref)
-      return
-    } catch {
-      // Fall through to the browser fallback for non-standard Android WebView setups.
-    }
-  }
-
-  window.open(normalizedHref, '_blank', 'noopener,noreferrer')
-}
-
-function onHyperlinkClick(event: MouseEvent, href: string): void {
-  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-  event.preventDefault()
-  void openHyperlink(href)
-}
-
-function closeFileLinkContextMenu(): void {
-  if (!isFileLinkContextMenuVisible.value) return
-  isFileLinkContextMenuVisible.value = false
-}
-
-function openFileLinkContextBrowse(): void {
-  const href = fileLinkContextBrowseUrl.value
-  closeFileLinkContextMenu()
-  if (!href || href === '#') return
-  void openHyperlink(href)
-}
-
-function openFileLinkContextEdit(): void {
-  const href = fileLinkContextEditUrl.value
-  closeFileLinkContextMenu()
-  if (!href || href === '#') return
-  void openHyperlink(href)
-}
-
-async function copyFileLinkContextLink(): Promise<void> {
-  const href = fileLinkContextBrowseUrl.value
-  closeFileLinkContextMenu()
-  if (!href || href === '#') return
-  try {
-    await copyTextToClipboard(href)
-    emit('copyStatus', { message: '链接已复制。', tone: 'success' })
-  } catch {
-    emit('copyStatus', { message: '复制失败，请长按链接手动复制。', tone: 'danger' })
-  }
-}
-
-function onWindowPointerDownForFileLinkContextMenu(event: PointerEvent): void {
-  if (!isFileLinkContextMenuVisible.value) return
-  const menu = fileLinkContextMenuRef.value
-  if (!menu) {
-    closeFileLinkContextMenu()
-    return
-  }
-  const target = event.target
-  if (target instanceof Node && menu.contains(target)) return
-  closeFileLinkContextMenu()
-}
-
-function onWindowBlurForFileLinkContextMenu(): void {
-  closeFileLinkContextMenu()
-}
-
-function onWindowKeydownForFileLinkContextMenu(event: KeyboardEvent): void {
-  if (event.key !== 'Escape') return
-  event.preventDefault()
-  closeFileLinkContextMenu()
-}
-
-function splitMarkdownTableRow(line: string): string[] {
-  const trimmed = line.trim()
-  if (!trimmed.includes('|')) return []
-  const normalized = trimmed.startsWith('|') ? trimmed.slice(1) : trimmed
-  const withoutTrailingPipe = normalized.endsWith('|') ? normalized.slice(0, -1) : normalized
-  const cells: string[] = []
-  let current = ''
-  let escaped = false
-
-  for (const char of withoutTrailingPipe) {
-    if (escaped) {
-      current += char
-      escaped = false
-      continue
-    }
-    if (char === '\\') {
-      escaped = true
-      continue
-    }
-    if (char === '|') {
-      cells.push(current.trim())
-      current = ''
-      continue
-    }
-    current += char
-  }
-  cells.push(current.trim())
-  return cells
-}
-
-function isMarkdownTableSeparator(line: string): boolean {
-  const cells = splitMarkdownTableRow(line)
-  if (cells.length < 2) return false
-  return cells.every((cell) => /^:?-{3,}:?$/u.test(cell.replace(/\s+/gu, '')))
-}
-
-function normalizeMarkdownTableRow(cells: string[], columnCount: number): string[] {
-  const normalized = cells.slice(0, columnCount)
-  while (normalized.length < columnCount) normalized.push('')
-  return normalized
-}
-
-function pushTextWithImages(blocks: MessageBlock[], text: string): void {
-  if (!text) return
-  if (!text.includes('![') || !text.includes('](')) {
-    blocks.push({ kind: 'text', value: text })
-    return
-  }
-
-  const imagePattern = /!\[([^\]]*)\]\(([^)\n]+)\)/gu
-  let cursor = 0
-
-  for (const match of text.matchAll(imagePattern)) {
-    const [fullMatch, altRaw, urlRaw] = match
-    if (typeof match.index !== 'number') continue
-
-    const start = match.index
-    const end = start + fullMatch.length
-    const imageUrl = toRenderableImageUrl(urlRaw.trim())
-    if (!imageUrl) continue
-
-    if (start > cursor) {
-      blocks.push({ kind: 'text', value: text.slice(cursor, start) })
-    }
-
-    blocks.push({ kind: 'image', url: imageUrl, alt: altRaw.trim(), markdown: fullMatch })
-    cursor = end
-  }
-
-  if (cursor < text.length) {
-    blocks.push({ kind: 'text', value: text.slice(cursor) })
-  }
-}
-
-function parseFenceStart(line: string): { marker: string; language: string } | null {
-  const match = line.match(/^ {0,3}(```+|~~~+)\s*([^`]*)$/u)
-  if (!match) return null
-  const marker = match[1] ?? ''
-  const info = (match[2] ?? '').trim()
-  const language = info.split(/\s+/u)[0]?.replace(/[^\w.+#-]/gu, '') ?? ''
-  return { marker, language }
-}
-
-function isFenceEnd(line: string, marker: string): boolean {
-  const trimmed = line.trim()
-  if (!trimmed.startsWith(marker[0] ?? '`')) return false
-  const sameChar = marker[0] ?? '`'
-  let count = 0
-  while (count < trimmed.length && trimmed[count] === sameChar) count += 1
-  return count >= marker.length && trimmed.slice(count).trim().length === 0
-}
-
-function isDiffLanguage(language: string): boolean {
-  const normalized = language.trim().toLowerCase()
-  return normalized === 'diff' || normalized === 'patch' || normalized === 'udiff'
-}
-
-function parseMessageBlocks(text: string): MessageBlock[] {
-  const blocks: MessageBlock[] = []
-  const lines = text.split('\n')
-  const pendingTextLines: string[] = []
-
-  const flushText = (): void => {
-    if (pendingTextLines.length === 0) return
-    pushTextWithImages(blocks, pendingTextLines.join('\n'))
-    pendingTextLines.length = 0
-  }
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const fence = parseFenceStart(lines[index] ?? '')
-    if (fence) {
-      const codeLines: string[] = []
-      let cursor = index + 1
-      let closed = false
-      while (cursor < lines.length) {
-        const line = lines[cursor] ?? ''
-        if (isFenceEnd(line, fence.marker)) {
-          closed = true
-          break
-        }
-        codeLines.push(line)
-        cursor += 1
-      }
-
-      if (closed) {
-        flushText()
-        const code = codeLines.join('\n')
-        blocks.push({
-          kind: 'code',
-          language: fence.language,
-          code,
-          isDiff: isDiffLanguage(fence.language) || codeLines.some((line) => /^(diff --git|@@ |\+\+\+ |--- )/u.test(line)),
-        })
-        index = cursor
-        continue
-      }
-    }
-
-    const headerCells = splitMarkdownTableRow(lines[index] ?? '')
-    const separatorLine = lines[index + 1] ?? ''
-    if (headerCells.length >= 2 && isMarkdownTableSeparator(separatorLine)) {
-      const columnCount = headerCells.length
-      const rows: string[][] = []
-      let cursor = index + 2
-      while (cursor < lines.length) {
-        const rowCells = splitMarkdownTableRow(lines[cursor] ?? '')
-        if (rowCells.length < 2) break
-        rows.push(normalizeMarkdownTableRow(rowCells, columnCount))
-        cursor += 1
-      }
-
-      if (rows.length > 0) {
-        flushText()
-        blocks.push({
-          kind: 'table',
-          headers: normalizeMarkdownTableRow(headerCells, columnCount),
-          rows,
-        })
-        index = cursor - 1
-        continue
-      }
-    }
-    pendingTextLines.push(lines[index] ?? '')
-  }
-
-  flushText()
-
-  return blocks.length > 0 ? blocks : [{ kind: 'text', value: text }]
-}
-
-function prepareTableCell(value: string): PreparedTableCell {
-  return {
-    value,
-    segments: parseInlineSegments(value),
-  }
-}
-
-function prepareCodeLine(value: string, isDiff: boolean): PreparedCodeLine {
-  if (!isDiff) return { value, kind: 'context' }
-  if (value.startsWith('+') && !value.startsWith('+++')) return { value, kind: 'add' }
-  if (value.startsWith('-') && !value.startsWith('---')) return { value, kind: 'delete' }
-  if (value.startsWith('@@') || value.startsWith('diff --git') || value.startsWith('+++') || value.startsWith('---')) {
-    return { value, kind: 'meta' }
-  }
-  return { value, kind: 'context' }
-}
-
-function readCodePreviewLines(code: string, lineLimit: number): { lines: string[]; lineCount: number } {
-  if (!code) return { lines: [''], lineCount: 1 }
-
-  const lines: string[] = []
-  let lineCount = 1
-  let lineStart = 0
-  for (let index = 0; index < code.length; index += 1) {
-    if (code.charCodeAt(index) !== 10) continue
-    if (lines.length < lineLimit) {
-      lines.push(code.slice(lineStart, index))
-    }
-    lineCount += 1
-    lineStart = index + 1
-  }
-  if (lines.length < lineLimit) {
-    lines.push(code.slice(lineStart))
-  }
-  return { lines: lines.length > 0 ? lines : [''], lineCount }
-}
-
-function prepareCodeBlock(block: Extract<MessageBlock, { kind: 'code' }>): Extract<PreparedMessageBlock, { kind: 'code' }> {
-  const preview = readCodePreviewLines(block.code, CODE_BLOCK_PREVIEW_LINE_COUNT)
-  return {
-    kind: 'code',
-    language: block.language,
-    code: block.code,
-    lines: preview.lines.map((line) => prepareCodeLine(line, block.isDiff)),
-    lineCount: preview.lineCount,
-    linesView: preview.lineCount > CODE_BLOCK_PREVIEW_LINE_COUNT ? 'preview' : 'full',
-    isDiff: block.isDiff,
-  }
-}
-
-function getPreparedMessageBlocks(message: UiMessage): PreparedMessageBlock[] {
-  const cached = preparedMessageBlocksById.get(message.id)
-  if (cached && cached.text === message.text) {
-    preparedMessageBlocksById.delete(message.id)
-    preparedMessageBlocksById.set(message.id, cached)
-    return cached.blocks
-  }
-
-  const blocks = parseMessageBlocks(message.text).map<PreparedMessageBlock>((block) => {
-    if (block.kind === 'text') {
-      return {
-        kind: 'text',
-        value: block.value,
-        segments: parseInlineSegments(block.value),
-      }
-    }
-    if (block.kind === 'table') {
-      return {
-        kind: 'table',
-        headers: block.headers.map(prepareTableCell),
-        rows: block.rows.map((row) => row.map(prepareTableCell)),
-      }
-    }
-    if (block.kind === 'code') {
-      return prepareCodeBlock(block)
-    }
-    return block
-  })
-
-  preparedMessageBlocksById.set(message.id, { text: message.text, blocks })
-  trimPreparedMessageBlockCache()
-  return blocks
-}
-
-function shouldRenderRawPayloadCard(message: UiMessage): boolean {
-  return typeof message.rawPayload === 'string' && message.rawPayload.trim().length > 0
-}
-
-function isHistoryNoticeMessage(message: UiMessage): boolean {
-  return message.role === 'system' && message.messageType === 'history.notice'
-}
-
-function rawPayloadTitle(message: UiMessage): string {
-  if (message.isUnhandled) return '未适配的 App Server 内容'
-  return '原始结构内容'
-}
-
-function rawPayloadMeta(message: UiMessage): string {
-  const type = message.messageType?.trim() || 'payload'
-  const raw = message.rawPayload?.trim() ?? ''
-  return `${type} · ${formatCharacterCount(raw.length)} 字符`
-}
-
-function rawPayloadPreview(message: UiMessage): string {
-  const raw = message.rawPayload?.trim() ?? ''
-  if (!raw) return ''
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    const pretty = JSON.stringify(parsed, null, 2)
-    return pretty.length > 6000 ? `${pretty.slice(0, 6000).trimEnd()}\n...` : pretty
-  } catch {
-    return raw.length > 6000 ? `${raw.slice(0, 6000).trimEnd()}\n...` : raw
-  }
-}
-
-function isRawPayloadExpanded(messageId: string): boolean {
-  return expandedRawPayloadMessageIds.value.has(messageId)
-}
-
-function onRawPayloadToggle(event: Event, messageId: string): void {
-  const details = event.currentTarget instanceof HTMLDetailsElement ? event.currentTarget : null
-  if (!details) return
-  const nextIds = new Set(expandedRawPayloadMessageIds.value)
-  if (details.open) nextIds.add(messageId)
-  else nextIds.delete(messageId)
-  expandedRawPayloadMessageIds.value = nextIds
-}
-
-function codeBlockKey(messageId: string, blockIndex: number): string {
-  return `${messageId}:${String(blockIndex)}`
-}
-
-function isCodeBlockCopied(messageId: string, blockIndex: number): boolean {
-  return copiedCodeBlockKey.value === codeBlockKey(messageId, blockIndex)
-}
-
-function isLongCodeBlock(block: Extract<PreparedMessageBlock, { kind: 'code' }>): boolean {
-  return block.lineCount > CODE_BLOCK_PREVIEW_LINE_COUNT
-}
-
-function isCodeBlockExpanded(messageId: string, blockIndex: number): boolean {
-  return expandedCodeBlockKeys.value.has(codeBlockKey(messageId, blockIndex))
-}
-
-function visibleCodeBlockLines(
-  messageId: string,
-  blockIndex: number,
-  block: Extract<PreparedMessageBlock, { kind: 'code' }>,
-): PreparedCodeLine[] {
-  if (!isLongCodeBlock(block) || isCodeBlockExpanded(messageId, blockIndex)) {
-    if (block.linesView !== 'full') {
-      block.lines = block.code.split('\n').map((line) => prepareCodeLine(line, block.isDiff))
-      block.linesView = 'full'
-    }
-    return block.lines
-  }
-  return block.lines.slice(0, CODE_BLOCK_PREVIEW_LINE_COUNT)
-}
-
-function hiddenCodeBlockLineCount(block: Extract<PreparedMessageBlock, { kind: 'code' }>): number {
-  return Math.max(block.lineCount - CODE_BLOCK_PREVIEW_LINE_COUNT, 0)
-}
-
-function toggleCodeBlockExpand(messageId: string, blockIndex: number): void {
-  const key = codeBlockKey(messageId, blockIndex)
-  const next = new Set(expandedCodeBlockKeys.value)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  expandedCodeBlockKeys.value = next
-}
-
-function codeBlockText(block: Extract<PreparedMessageBlock, { kind: 'code' }>): string {
-  return block.code
-}
-
-async function onCopyCodeBlock(messageId: string, blockIndex: number, block: Extract<PreparedMessageBlock, { kind: 'code' }>): Promise<void> {
-  try {
-    await copyTextToClipboard(codeBlockText(block))
-  } catch {
-    emit('copyStatus', { message: '代码复制失败，请手动选择复制。', tone: 'danger' })
-    return
-  }
-  copiedCodeBlockKey.value = codeBlockKey(messageId, blockIndex)
-  if (copiedCodeBlockTimer !== null && typeof window !== 'undefined') {
-    window.clearTimeout(copiedCodeBlockTimer)
-  }
-  if (typeof window !== 'undefined') {
-    copiedCodeBlockTimer = window.setTimeout(() => {
-      copiedCodeBlockTimer = null
-      if (copiedCodeBlockKey.value === codeBlockKey(messageId, blockIndex)) {
-        copiedCodeBlockKey.value = ''
-      }
-    }, 1600)
-  }
-}
-
-function isLongUserMessage(message: UiMessage): boolean {
-  return message.role === 'user' && message.text.trim().length >= LONG_USER_MESSAGE_COLLAPSE_THRESHOLD
-}
-
-function isLongUserMessageCollapsed(message: UiMessage): boolean {
-  return isLongUserMessage(message) && !expandedLongUserMessageIds.value.has(message.id)
-}
-
-function longMessagePreview(message: UiMessage): string {
-  const normalizedText = message.text.trim()
-  if (normalizedText.length <= LONG_USER_MESSAGE_PREVIEW_LENGTH) return normalizedText
-  return `${normalizedText.slice(0, LONG_USER_MESSAGE_PREVIEW_LENGTH).trimEnd()}...`
-}
-
-function formatCharacterCount(count: number): string {
-  if (count >= 10000) {
-    return `${(count / 10000).toFixed(1)}万`
-  }
-  return String(count)
-}
-
-function toggleLongUserMessage(message: UiMessage): void {
-  if (!isLongUserMessage(message)) return
-  const nextIds = new Set(expandedLongUserMessageIds.value)
-  if (nextIds.has(message.id)) {
-    nextIds.delete(message.id)
-  } else {
-    nextIds.add(message.id)
-  }
-  expandedLongUserMessageIds.value = nextIds
-}
-
-function trimPreparedMessageBlockCache(): void {
-  while (preparedMessageBlocksById.size > PREPARED_MESSAGE_BLOCK_CACHE_LIMIT) {
-    const oldestMessageId = preparedMessageBlocksById.keys().next().value
-    if (typeof oldestMessageId !== 'string') return
-    preparedMessageBlocksById.delete(oldestMessageId)
-  }
-}
-
-function prunePreparedMessageBlockCache(messages: UiMessage[]): void {
-  const keepIds = new Set(messages.map((message) => message.id))
-  for (const messageId of preparedMessageBlocksById.keys()) {
-    if (!keepIds.has(messageId)) {
-      preparedMessageBlocksById.delete(messageId)
-    }
-  }
-  trimPreparedMessageBlockCache()
-  let nextExpandedIds = expandedLongUserMessageIds.value
-  let hasExpandedIdChange = false
-  for (const messageId of expandedLongUserMessageIds.value) {
-    if (keepIds.has(messageId)) continue
-    if (!hasExpandedIdChange) {
-      nextExpandedIds = new Set(expandedLongUserMessageIds.value)
-      hasExpandedIdChange = true
-    }
-    nextExpandedIds.delete(messageId)
-  }
-  if (hasExpandedIdChange) {
-    expandedLongUserMessageIds.value = nextExpandedIds
-  }
-
-  let nextExpandedCodeBlockKeys = expandedCodeBlockKeys.value
-  let hasExpandedCodeBlockChange = false
-  for (const key of expandedCodeBlockKeys.value) {
-    const messageId = key.slice(0, key.lastIndexOf(':'))
-    if (keepIds.has(messageId)) continue
-    if (!hasExpandedCodeBlockChange) {
-      nextExpandedCodeBlockKeys = new Set(expandedCodeBlockKeys.value)
-      hasExpandedCodeBlockChange = true
-    }
-    nextExpandedCodeBlockKeys.delete(key)
-  }
-  if (hasExpandedCodeBlockChange) {
-    expandedCodeBlockKeys.value = nextExpandedCodeBlockKeys
-  }
-
-  let nextExpandedRawPayloadMessageIds = expandedRawPayloadMessageIds.value
-  let hasExpandedRawPayloadChange = false
-  for (const messageId of expandedRawPayloadMessageIds.value) {
-    if (keepIds.has(messageId)) continue
-    if (!hasExpandedRawPayloadChange) {
-      nextExpandedRawPayloadMessageIds = new Set(expandedRawPayloadMessageIds.value)
-      hasExpandedRawPayloadChange = true
-    }
-    nextExpandedRawPayloadMessageIds.delete(messageId)
-  }
-  if (hasExpandedRawPayloadChange) {
-    expandedRawPayloadMessageIds.value = nextExpandedRawPayloadMessageIds
-  }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
-}
-
-function formatIsoTime(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleTimeString()
-}
-
-function readRequestReason(request: UiServerRequest): string {
-  const params = asRecord(request.params)
-  const reason = params?.reason
-  return typeof reason === 'string' ? reason.trim() : ''
-}
-
-function requestCardClass(request: UiServerRequest): string {
-  if (request.method === 'item/tool/call') return 'request-card--tool-call'
-  if (isMcpPermissionElicitationRequest(request)) return 'request-card--permission'
-  return ''
-}
-
-function readToolCallPayload(request: UiServerRequest): Record<string, unknown> {
-  return asRecord(request.params) ?? {}
-}
-
-function readToolCallServerName(request: UiServerRequest): string {
-  const payload = readToolCallPayload(request)
-  const value = payload.serverName ?? payload.server ?? payload.mcpServer
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : '未知服务'
-}
-
-function readToolCallName(request: UiServerRequest): string {
-  const payload = readToolCallPayload(request)
-  const value = payload.toolName ?? payload.tool ?? payload.name
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : '未知工具'
-}
-
-function readToolCallTitle(request: UiServerRequest): string {
-  return `${readToolCallName(request)} 等待处理`
-}
-
-function readToolCallSummary(request: UiServerRequest): string {
-  const payload = readToolCallPayload(request)
-  const summary = payload.summary ?? payload.message ?? payload.reason
-  if (typeof summary === 'string' && summary.trim().length > 0) return summary.trim()
-  return '当前 Web 端不能代执行这个工具调用，可让 Codex 改用文字方式继续。'
-}
-
-function isMcpElicitationRequest(method: string): boolean {
-  const normalized = method.trim().toLowerCase()
-  return (
-    normalized === 'mcpserver/elicitation/request' ||
-    normalized === 'mcpserver/elication/request' ||
-    normalized === 'elicitation/create'
-  )
-}
-
-function isInputLikeServerRequest(method: string): boolean {
-  return method === 'item/tool/requestUserInput' || isMcpElicitationRequest(method)
-}
-
-function looksLikeMcpElicitationPayload(payload: Record<string, unknown> | null): boolean {
-  if (!payload) return false
-  return (
-    typeof payload.message === 'string' ||
-    typeof payload.mode === 'string' ||
-    typeof payload.url === 'string' ||
-    asRecord(payload.requestedSchema) !== null ||
-    asRecord(payload.schema) !== null ||
-    asRecord(payload.inputSchema) !== null ||
-    asRecord(payload.jsonSchema) !== null
-  )
-}
-
-function readMcpElicitationPayload(request: UiServerRequest): Record<string, unknown> | null {
-  const params = asRecord(request.params)
-  if (!params) return null
-  const requestParams = asRecord(asRecord(params.request)?.params)
-  if (looksLikeMcpElicitationPayload(requestParams)) return requestParams
-  const elicitationParams = asRecord(asRecord(params.elicitation)?.params)
-  if (looksLikeMcpElicitationPayload(elicitationParams)) return elicitationParams
-  const nestedParams = asRecord(params.params)
-  if (looksLikeMcpElicitationPayload(nestedParams)) return nestedParams
-  return params
-}
-
-function readMcpElicitationIntro(request: UiServerRequest): string {
-  const payload = readMcpElicitationPayload(request)
-  const message = payload?.message
-  if (typeof message === 'string' && message.trim().length > 0) return message.trim()
-  const reason = readRequestReason(request)
-  if (reason) return reason
-  return 'MCP 服务需要你补充信息，提交后 Codex 会继续执行。'
-}
-
-function readMcpPermissionPrompt(request: UiServerRequest): ParsedMcpPermissionPrompt | null {
-  const payload = readMcpElicitationPayload(request)
-  const message = readMcpElicitationIntro(request)
-  const metadata = asRecord(payload?._meta)
-  const isPermissionMetadata = metadata?.codex_approval_kind === 'mcp_tool_call'
-  const serverNameFromPayload = typeof payload?.serverName === 'string'
-    ? payload.serverName.trim()
-    : typeof payload?.server === 'string'
-      ? payload.server.trim()
-      : ''
-  const connectorName = typeof metadata?.connector_name === 'string' ? metadata.connector_name.trim() : ''
-  const toolNameFromPayload = typeof payload?.toolName === 'string'
-    ? payload.toolName.trim()
-    : typeof payload?.tool === 'string'
-      ? payload.tool.trim()
-      : ''
-  const toolNameFromMetadata = typeof metadata?.tool_name === 'string'
-    ? metadata.tool_name.trim()
-    : typeof metadata?.tool_title === 'string'
-      ? metadata.tool_title.trim()
-      : ''
-
-  const promptMatch = message.match(/^Allow\s+(?:the\s+(.+?)\s+MCP\s+server|(.+?))\s+to\s+run\s+tool\s+["'“”‘’]([^"'“”‘’]+)["'“”‘’]\??$/iu)
-  const serverName = (connectorName || promptMatch?.[1] || promptMatch?.[2] || serverNameFromPayload).trim()
-  const toolName = (promptMatch?.[3] || toolNameFromPayload || toolNameFromMetadata).trim()
-
-  if (!serverName || !toolName || (!promptMatch && !isPermissionMetadata)) return null
-  return {
-    serverName,
-    toolName,
-  }
-}
-
-function isMcpPermissionElicitationRequest(request: UiServerRequest): boolean {
-  return isMcpElicitationRequest(request.method) && readMcpPermissionPrompt(request) !== null
-}
-
-function readMcpPermissionServerName(request: UiServerRequest): string {
-  return readMcpPermissionPrompt(request)?.serverName || '未知 MCP 服务'
-}
-
-function readMcpPermissionToolName(request: UiServerRequest): string {
-  return readMcpPermissionPrompt(request)?.toolName || '未知工具'
-}
-
-function readMcpPermissionTitle(request: UiServerRequest): string {
-  const toolName = readMcpPermissionToolName(request)
-  if (toolName.startsWith('browser_')) return '浏览器自动化请求权限'
-  return 'MCP 工具请求权限'
-}
-
-function readMcpPermissionSummary(request: UiServerRequest): string {
-  const prompt = readMcpPermissionPrompt(request)
-  if (!prompt) return '外部 MCP 服务正在请求运行工具。'
-  return `${prompt.serverName} 想运行 ${prompt.toolName}，用于继续当前任务。`
-}
-
-function readMcpPermissionNote(request: UiServerRequest): string {
-  const toolName = readMcpPermissionToolName(request)
-  const writeLike = /(?:^|_)(?:add|archive|close|create|delete|edit|merge|move|publish|remove|rename|send|set|submit|update|upload)(?:_|$)/iu.test(toolName)
-  return writeLike
-    ? '这是外部写操作。选择允许后任务会立即继续；拒绝后只会取消这次工具操作。'
-    : '这是外部工具操作。选择允许后任务会立即继续；拒绝后只会取消这次工具操作。'
-}
-
-function readMcpPermissionParams(request: UiServerRequest): ParsedMcpPermissionParam[] {
-  const metadata = asRecord(readMcpElicitationPayload(request)?._meta)
-  const displayRows = Array.isArray(metadata?.tool_params_display) ? metadata.tool_params_display : []
-  const labelMap: Record<string, string> = {
-    repository_full_name: '仓库',
-    pr_number: 'PR',
-    state: '变更',
-  }
-  const valueMap: Record<string, string> = {
-    closed: '关闭',
-    open: '重新打开',
-  }
-
-  return displayRows.flatMap((rawRow) => {
-    const row = asRecord(rawRow)
-    if (!row) return []
-    const name = typeof row.name === 'string' ? row.name.trim() : ''
-    const displayName = typeof row.display_name === 'string' ? row.display_name.trim() : ''
-    if (!name && !displayName) return []
-    const rawValue = row.value
-    const serializedValue = typeof rawValue === 'string'
-      ? rawValue
-      : rawValue === null || rawValue === undefined
-        ? ''
-        : JSON.stringify(rawValue)
-    const value = valueMap[serializedValue] || serializedValue
-    if (!value) return []
-    return [{ label: labelMap[name] || displayName || name, value }]
-  }).slice(0, 6)
-}
-
-function supportsMcpPermissionPersistence(request: UiServerRequest, persistence: McpPermissionPersistence): boolean {
-  const metadata = asRecord(readMcpElicitationPayload(request)?._meta)
-  const values = Array.isArray(metadata?.persist) ? metadata.persist : [metadata?.persist]
-  return values.includes(persistence)
-}
-
-function readMcpElicitationUrl(request: UiServerRequest): string {
-  const payload = readMcpElicitationPayload(request)
-  const url = payload?.url
-  return typeof url === 'string' && /^https?:\/\//iu.test(url.trim()) ? url.trim() : ''
-}
-
-function readMcpElicitationSchema(request: UiServerRequest): Record<string, unknown> | null {
-  const payload = readMcpElicitationPayload(request)
-  if (!payload) return null
-  return (
-    asRecord(payload.requestedSchema) ||
-    asRecord(payload.schema) ||
-    asRecord(payload.inputSchema) ||
-    asRecord(payload.jsonSchema)
-  )
-}
-
-function readMcpFieldType(value: unknown): McpElicitationFieldType {
-  const rawType = Array.isArray(value) ? value.find((item) => item !== 'null') : value
-  if (rawType === 'number') return 'number'
-  if (rawType === 'integer') return 'integer'
-  if (rawType === 'boolean') return 'boolean'
-  return 'string'
-}
-
-function readMcpElicitationFields(request: UiServerRequest): ParsedMcpElicitationField[] {
-  const schema = readMcpElicitationSchema(request)
-  const properties = asRecord(schema?.properties)
-  if (!properties) return []
-
-  const requiredIds = new Set(
-    Array.isArray(schema?.required)
-      ? schema.required.filter((value): value is string => typeof value === 'string')
-      : [],
-  )
-
-  return Object.entries(properties).flatMap(([id, rawField]) => {
-    const field = asRecord(rawField)
-    if (!field) return []
-
-    const enumValues = Array.isArray(field.enum)
-      ? field.enum.filter((value) => ['string', 'number', 'boolean'].includes(typeof value))
-      : []
-    const enumNames = Array.isArray(field.enumNames)
-      ? field.enumNames.filter((value): value is string => typeof value === 'string')
-      : []
-
-    const enumOptions = enumValues.map<McpElicitationEnumOption>((value, index) => ({
-      value: String(value),
-      label: enumNames[index] || String(value),
-    }))
-
-    const title = typeof field.title === 'string' && field.title.trim().length > 0
-      ? field.title.trim()
-      : id
-    const description = typeof field.description === 'string' ? field.description.trim() : ''
-    const defaultValue = ['string', 'number', 'boolean'].includes(typeof field.default)
-      ? String(field.default)
-      : ''
-
-    return [{
-      id,
-      title,
-      description,
-      type: readMcpFieldType(field.type),
-      required: requiredIds.has(id),
-      defaultValue,
-      enumOptions,
-    }]
-  })
-}
-
-function toolQuestionKey(requestId: number, questionId: string): string {
-  return `${String(requestId)}:${questionId}`
-}
-
-function readToolQuestions(request: UiServerRequest): ParsedToolQuestion[] {
-  const params = asRecord(request.params)
-  const questions = Array.isArray(params?.questions) ? params.questions : []
-  const parsed: ParsedToolQuestion[] = []
-
-  for (const row of questions) {
-    const question = asRecord(row)
-    if (!question) continue
-    const id = typeof question.id === 'string' ? question.id : ''
-    if (!id) continue
-
-    const options = Array.isArray(question.options)
-      ? question.options
-        .map((option) => asRecord(option))
-        .map((option) => option?.label)
-        .filter((option): option is string => typeof option === 'string' && option.length > 0)
-      : []
-
-    parsed.push({
-      id,
-      header: typeof question.header === 'string' ? question.header : '',
-      question: typeof question.question === 'string' ? question.question : '',
-      isOther: question.isOther === true,
-      options,
-    })
-  }
-
-  return parsed
-}
-
-function readQuestionAnswer(requestId: number, questionId: string, fallback: string): string {
-  const key = toolQuestionKey(requestId, questionId)
-  const saved = toolQuestionAnswers.value[key]
-  if (typeof saved === 'string' && saved.length > 0) return saved
-  return fallback
-}
-
-function readQuestionOtherAnswer(requestId: number, questionId: string): string {
-  const key = toolQuestionKey(requestId, questionId)
-  return toolQuestionOtherAnswers.value[key] ?? ''
-}
-
-function onQuestionAnswerChange(requestId: number, questionId: string, event: Event): void {
-  const target = event.target
-  if (!(target instanceof HTMLSelectElement)) return
-  const key = toolQuestionKey(requestId, questionId)
-  toolQuestionAnswers.value = {
-    ...toolQuestionAnswers.value,
-    [key]: target.value,
-  }
-}
-
-function onQuestionOtherAnswerInput(requestId: number, questionId: string, event: Event): void {
-  const target = event.target
-  if (!(target instanceof HTMLInputElement)) return
-  const key = toolQuestionKey(requestId, questionId)
-  toolQuestionOtherAnswers.value = {
-    ...toolQuestionOtherAnswers.value,
-    [key]: target.value,
-  }
-}
-
-function mcpElicitationKey(requestId: number, fieldId: string): string {
-  return `${String(requestId)}:mcp:${fieldId}`
-}
-
-function readMcpElicitationAnswer(requestId: number, field: ParsedMcpElicitationField): string {
-  const saved = mcpElicitationAnswers.value[mcpElicitationKey(requestId, field.id)]
-  if (typeof saved === 'string') return saved
-  if (typeof saved === 'boolean') return saved ? 'true' : 'false'
-  if (field.defaultValue) return field.defaultValue
-  const firstOption = field.enumOptions[0]
-  return field.required && firstOption ? firstOption.value : ''
-}
-
-function readMcpElicitationBooleanAnswer(requestId: number, field: ParsedMcpElicitationField): boolean {
-  const saved = mcpElicitationAnswers.value[mcpElicitationKey(requestId, field.id)]
-  if (typeof saved === 'boolean') return saved
-  if (typeof saved === 'string') return saved === 'true'
-  return field.defaultValue === 'true'
-}
-
-function onMcpElicitationAnswerChange(requestId: number, fieldId: string, event: Event): void {
-  const target = event.target
-  if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLSelectElement) && !(target instanceof HTMLTextAreaElement)) return
-  mcpElicitationAnswers.value = {
-    ...mcpElicitationAnswers.value,
-    [mcpElicitationKey(requestId, fieldId)]: target.value,
-  }
-}
-
-function onMcpElicitationBooleanAnswerChange(requestId: number, fieldId: string, event: Event): void {
-  const target = event.target
-  if (!(target instanceof HTMLInputElement)) return
-  mcpElicitationAnswers.value = {
-    ...mcpElicitationAnswers.value,
-    [mcpElicitationKey(requestId, fieldId)]: target.checked,
-  }
-}
-
-function readMcpElicitationFallbackAnswer(requestId: number): string {
-  const saved = mcpElicitationAnswers.value[mcpElicitationKey(requestId, '__freeform')]
-  return typeof saved === 'string' ? saved : ''
-}
-
-function onMcpElicitationFallbackInput(requestId: number, event: Event): void {
-  const target = event.target
-  if (!(target instanceof HTMLTextAreaElement)) return
-  mcpElicitationAnswers.value = {
-    ...mcpElicitationAnswers.value,
-    [mcpElicitationKey(requestId, '__freeform')]: target.value,
-  }
-}
-
-function coerceMcpElicitationValue(field: ParsedMcpElicitationField, rawValue: string | boolean): string | number | boolean {
-  if (field.type === 'boolean') {
-    if (typeof rawValue === 'boolean') return rawValue
-    return rawValue === 'true'
-  }
-
-  const text = String(rawValue).trim()
-  if (field.type === 'number' || field.type === 'integer') {
-    const numericValue = Number(text)
-    if (Number.isFinite(numericValue)) {
-      return field.type === 'integer' ? Math.trunc(numericValue) : numericValue
-    }
-  }
-
-  return text
-}
-
-function buildMcpElicitationContent(request: UiServerRequest): Record<string, string | number | boolean> {
-  const content: Record<string, string | number | boolean> = {}
-  const fields = readMcpElicitationFields(request)
-
-  for (const field of fields) {
-    if (field.type === 'boolean') {
-      content[field.id] = readMcpElicitationBooleanAnswer(request.id, field)
-      continue
-    }
-
-    const rawValue = readMcpElicitationAnswer(request.id, field)
-    if (!field.required && rawValue.trim().length === 0) continue
-    content[field.id] = coerceMcpElicitationValue(field, rawValue)
-  }
-
-  if (fields.length === 0) {
-    const freeform = readMcpElicitationFallbackAnswer(request.id).trim()
-    if (freeform) {
-      content.response = freeform
-    }
-  }
-
-  return content
-}
-
-function onRespondApproval(requestId: number, decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'): void {
-  emit('respondServerRequest', {
-    id: requestId,
-    result: { decision },
-  })
-}
-
-function onRespondToolRequestUserInput(request: UiServerRequest): void {
-  const questions = readToolQuestions(request)
-  const answers: Record<string, { answers: string[] }> = {}
-
-  for (const question of questions) {
-    const selected = readQuestionAnswer(request.id, question.id, question.options[0] || '')
-    const other = readQuestionOtherAnswer(request.id, question.id).trim()
-    const values = [selected, other].map((value) => value.trim()).filter((value) => value.length > 0)
-    answers[question.id] = { answers: values }
-  }
-
-  emit('respondServerRequest', {
-    id: request.id,
-    result: { answers },
-  })
-}
-
-function isRequestResponding(requestId: number): boolean {
-  return respondingRequestIds.value.has(requestId)
-}
-
-function clearRequestResponding(requestId: number): void {
-  const timer = requestResponseResetTimers.get(requestId)
-  if (timer !== undefined && typeof window !== 'undefined') window.clearTimeout(timer)
-  requestResponseResetTimers.delete(requestId)
-  if (!respondingRequestIds.value.has(requestId)) return
-  const next = new Set(respondingRequestIds.value)
-  next.delete(requestId)
-  respondingRequestIds.value = next
-}
-
-function beginRequestResponse(requestId: number): boolean {
-  if (isRequestResponding(requestId)) return false
-  respondingRequestIds.value = new Set(respondingRequestIds.value).add(requestId)
-  if (typeof window !== 'undefined') {
-    requestResponseResetTimers.set(requestId, window.setTimeout(() => clearRequestResponding(requestId), 10000))
-  }
-  return true
-}
-
-function onRespondMcpElicitation(
-  request: UiServerRequest,
-  action: 'accept' | 'decline' | 'cancel',
-  persistence?: McpPermissionPersistence,
-): void {
-  if (!beginRequestResponse(request.id)) return
-  const result: Record<string, unknown> = { action }
-  if (action === 'accept' && !readMcpElicitationUrl(request)) {
-    result.content = buildMcpElicitationContent(request)
-  }
-  if (action === 'accept' && persistence) {
-    result._meta = { persist: persistence }
-  }
-
-  emit('respondServerRequest', {
-    id: request.id,
-    result,
-  })
-}
-
-function onRespondToolCallFailure(requestId: number): void {
-  emit('respondServerRequest', {
-    id: requestId,
-    result: {
-      success: false,
-      contentItems: [
-        {
-          type: 'inputText',
-          text: 'CX-Codex Web 收到了 Codex 工具调用请求，但当前 Web 端不能代执行这个工具。请改用文字方案继续，或提示用户在桌面端 Codex 客户端处理需要的工具操作。',
-        },
-      ],
-    },
-  })
-}
-
-function onRespondEmptyResult(requestId: number): void {
-  emit('respondServerRequest', {
-    id: requestId,
-    result: {},
-  })
-}
-
-function onRejectUnknownRequest(requestId: number): void {
-  emit('respondServerRequest', {
-    id: requestId,
-    error: {
-      code: -32000,
-      message: '请求已被 CX-Codex Web 拒绝。',
-    },
-  })
-}
-
-function canRollbackMessage(message: UiMessage): boolean {
-  if (message.role !== 'user' && message.role !== 'assistant') return false
-  if (typeof message.turnIndex !== 'number') return false
-  if (props.isTurnInProgress || props.isRollingBack) return false
-  return true
-}
-
-function messageDeliveryLabel(message: UiMessage): string {
-  if (message.deliveryState === 'failed') return '发送失败'
-  if (message.deliveryState === 'sent') return '已发送'
-  if (message.deliveryState === 'waiting') return '等待网络'
-  if (message.deliveryState === 'confirming') return '确认中'
-  if (message.deliveryState === 'retrying') {
-    const attempt = Math.max(1, message.deliveryAttempt ?? 1)
-    const maxAttempts = Math.max(attempt, message.deliveryAttemptMax ?? attempt)
-    return `正在重连 ${String(attempt)}/${String(maxAttempts)}`
-  }
-  return '发送中'
-}
-
-function canFavoriteMessage(message: UiMessage): boolean {
-  if (message.role !== 'user' && message.role !== 'assistant') return false
-  if (message.deliveryState) return false
-  return message.text.trim().length > 0
-}
-
-function isFavoriteMessage(message: UiMessage): boolean {
-  return favoriteMessageIdSet.value.has(message.id)
-}
-
-function canCopyMessage(message: UiMessage): boolean {
-  if (message.role !== 'user' && message.role !== 'assistant') return false
-  return message.text.trim().length > 0
-}
-
-function canScrollMessageToTop(message: UiMessage): boolean {
-  return message.role === 'assistant' && message.text.trim().length > 0
-}
-
-function canShowMessageActions(message: UiMessage): boolean {
-  return canCopyMessage(message) || canRollbackMessage(message) || canScrollMessageToTop(message)
-}
-
-function canShowMessageActionBar(message: UiMessage): boolean {
-  return canFavoriteMessage(message) || canShowMessageActions(message)
-}
-
-function isMessageActionBarActive(message: UiMessage): boolean {
-  return activeMessageActionId.value === message.id
-}
-
-function onMessageCardActivate(message: UiMessage): void {
-  if (!canShowMessageActionBar(message)) return
-  activeMessageActionId.value = message.id
-}
-
-function onToggleFavorite(message: UiMessage): void {
-  if (!canFavoriteMessage(message)) return
-  emit('toggleFavorite', message)
-}
-
-function findPreviousVisibleMessage(index: number): UiMessage | null {
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    const candidate = visibleMessageEntries.value[cursor]
-    if (!candidate) continue
-    return candidate.message
-  }
-  return null
-}
-
-async function onToggleGuidedTurn(turnIndex: number): Promise<void> {
-  const anchorSnapshot = !shouldLockToBottom() ? captureVisibleConversationAnchor() : null
-  const next = new Set(expandedGuidedTurnIndexes.value)
-  if (next.has(turnIndex)) next.delete(turnIndex)
-  else next.add(turnIndex)
-  expandedGuidedTurnIndexes.value = next
-
-  await nextTick()
-  if (shouldLockToBottom()) {
-    scheduleBottomLock(2)
-    return
-  }
-  if (anchorSnapshot) {
-    await scheduleScrollAnchorRestore(anchorSnapshot)
-  }
-}
-
-function messageRoleLabel(message: UiMessage, index: number): string {
-  const previousMessage = findPreviousVisibleMessage(index)
-  if (
-    previousMessage &&
-    previousMessage.role === message.role &&
-    previousMessage.messageType !== 'worked' &&
-    message.messageType !== 'worked'
-  ) {
-    return ''
-  }
-
-  if (message.role === 'user') return '你'
-  if (message.role === 'assistant') return 'Codex'
-  if (message.role === 'system') return '系统'
-  return ''
-}
-
-function requestMethodLabel(method: string): string {
-  switch (method) {
-    case 'item/commandExecution/requestApproval':
-      return '命令执行需要批准'
-    case 'item/fileChange/requestApproval':
-      return '文件变更需要批准'
-    case 'item/tool/requestUserInput':
-      return '需要补充输入'
-    case 'item/tool/call':
-      return '不支持的工具调用'
-    default:
-      if (isMcpElicitationRequest(method)) return 'MCP 服务需要补充信息'
-      return method
-  }
-}
-
-function requestTitleLabel(request: UiServerRequest): string {
-  if (isMcpPermissionElicitationRequest(request)) return 'MCP 工具权限确认'
-  return requestMethodLabel(request.method)
-}
-
-function isApprovalRequestMethod(method: string): boolean {
-  return (
-    method === 'item/commandExecution/requestApproval' ||
-    method === 'item/fileChange/requestApproval'
-  )
-}
-
-function pendingRequestActionLabel(request: UiServerRequest): string {
-  if (isMcpPermissionElicitationRequest(request)) return '去确认'
-  return isInputLikeServerRequest(request.method) ? '去填写' : '查看请求'
-}
-
-function liveOverlayPrimaryLabel(overlay: UiLiveOverlay): string {
-  if (overlay.isRecovering === true) return '正在恢复任务'
-  const label = overlay.activityLabel.trim()
-  if (!label) return '思考中'
-  if (/工具不可用|unsupported tool|tool unavailable/iu.test(label)) return '工具不可用'
-  if (/等待授权|waiting for approval|approval required/iu.test(label)) return '等待确认'
-  if (/等待确认|requires confirmation|needs confirmation/iu.test(label)) return '等待确认'
-  if (/等待输入|request user input|needs input/iu.test(label)) return '等待补充'
-  if (/等待处理|pending request/iu.test(label)) return '等待处理'
-  if (/执行命令|running command|executing command/iu.test(label)) return '执行命令'
-  if (/writing response|thinking|reasoning|整理回复|思考/iu.test(label)) return '思考中'
-  return label
-}
-
-function liveOverlayDetails(overlay: UiLiveOverlay): string[] {
-  const details = overlay.activityDetails
-    .map((detail) => detail.trim())
-    .filter((detail) => detail.length > 0)
-  const command = liveOverlayCommandMessage.value?.commandExecution?.command?.trim() ?? ''
-  if (command && !details.includes(command)) {
-    details.push(command)
-  }
-  const isUnsupportedTool = /工具不可用|unsupported tool|tool unavailable/iu.test(overlay.activityLabel)
-  if (!command && !isUnsupportedTool) {
-    if (!details.some((detail) => /命令|command/iu.test(detail))) {
-      details.push('暂无命令执行')
-    }
-    if (liveOverlayElapsedLabel.value && !details.some((detail) => /已等待|waiting/iu.test(detail))) {
-      details.push(`已等待 ${liveOverlayElapsedLabel.value}`)
-    }
-  }
-  return details.slice(-3)
-}
-
-function liveOverlayHint(overlay: UiLiveOverlay): string {
-  if (overlay.isRecovering === true) {
-    return '正在同步离开期间的最新进度，完成后会自动继续显示。'
-  }
-  if (/工具不可用|unsupported tool|tool unavailable/iu.test(overlay.activityLabel)) {
-    return '这个工具调用无法在 CX-Codex Web 执行，可让 Codex 改用文字方式继续。'
-  }
-  if (/等待授权|waiting for approval|approval required/iu.test(overlay.activityLabel)) {
-    return '下方有权限确认，允许或拒绝后会继续执行。'
-  }
-  if (/等待确认|requires confirmation|needs confirmation/iu.test(overlay.activityLabel)) {
-    return '下方有待确认请求，允许或拒绝后会继续执行。'
-  }
-  if (/等待输入|request user input|needs input/iu.test(overlay.activityLabel)) {
-    return '下方有待补充内容，提交后会继续执行。'
-  }
-  if (/等待处理|pending request/iu.test(overlay.activityLabel)) {
-    return '下方有待处理请求，完成后会继续执行。'
-  }
-  if (/执行命令|running command|executing command/iu.test(overlay.activityLabel)) {
-    return '命令仍在运行，输出会持续追加。'
-  }
-  return '正在处理，新的结果会继续补到下方。'
-}
-
-function liveOverlayCompactHint(overlay: UiLiveOverlay): string {
-  if (/工具不可用|unsupported tool|tool unavailable/iu.test(overlay.activityLabel)) {
-    return '当前工具调用不可用，可让 Codex 改用文字方式继续。'
-  }
-  if (/执行命令|running command|executing command/iu.test(overlay.activityLabel)) {
-    return '命令仍在执行，可先查看上方历史，新输出会继续追加。'
-  }
-  if (/writing response|thinking|reasoning|整理回复|思考/iu.test(overlay.activityLabel)) {
-    return '正在整理回复，你可以先查看上方历史。'
-  }
-  return '正在继续处理，界面会自动更新。'
-}
-
-function scrollToPendingRequests(): void {
-  isRequestPanelExpanded.value = true
-  clearBelowFoldUpdates()
-  autoFollowBottom.value = false
-  const processPanel = processPanelRef.value
-  if (processPanel) {
-    processPanel.scrollIntoView({ behavior: 'smooth', block: 'end' })
-    return
-  }
-  jumpToLatest()
-}
-
-function openLiveOverlayDetail(): void {
-  if (!hasLiveOverlayDetail.value) return
-  isLiveOverlayDetailOpen.value = true
-}
-
-function closeLiveOverlayDetail(): void {
-  isLiveOverlayDetailOpen.value = false
-}
-
-function restoreLiveOverlayDetailEnvironment(): void {
-  if (typeof document === 'undefined') return
-  if (liveOverlayDetailOwnsBodyScrollLock) {
-    document.body.style.overflow = liveOverlayDetailPreviousBodyOverflow
-    liveOverlayDetailOwnsBodyScrollLock = false
-    liveOverlayDetailPreviousBodyOverflow = ''
-  }
-  const focusTarget = liveOverlayDetailPreviousFocus
-  liveOverlayDetailPreviousFocus = null
-  if (focusTarget?.isConnected) {
-    focusTarget.focus({ preventScroll: true })
-  }
-}
-
-function onWindowKeyDownForConversationSurface(event: KeyboardEvent): void {
-  if (event.key !== 'Escape' || event.defaultPrevented) return
-
-  let handled = true
-  if (isLiveOverlayDetailOpen.value) {
-    closeLiveOverlayDetail()
-  } else if (modalImageUrl.value) {
-    closeImageModal()
-  } else if (isFileLinkContextMenuVisible.value) {
-    closeFileLinkContextMenu()
-  } else if (pendingRollbackMessageId.value) {
-    clearRollbackConfirmation()
-  } else if (activeMessageActionId.value) {
-    activeMessageActionId.value = ''
-  } else {
-    handled = false
-  }
-
-  if (!handled) return
-  event.preventDefault()
-  event.stopPropagation()
-}
-
-function goToPendingRequestsFromDetail(): void {
-  closeLiveOverlayDetail()
-  void nextTick(() => {
-    scrollToPendingRequests()
-  })
-}
-
-async function onCopyMessage(message: UiMessage): Promise<void> {
-  if (!canCopyMessage(message)) return
-  const text = message.text.trim()
-  try {
-    await copyTextToClipboard(text)
-  } catch {
-    emit('copyStatus', { message: '消息复制失败，请手动选择复制。', tone: 'danger' })
-    return
-  }
-  copiedMessageId.value = message.id
-  if (copiedMessageTimer !== null && typeof window !== 'undefined') {
-    window.clearTimeout(copiedMessageTimer)
-  }
-  if (typeof window !== 'undefined') {
-    copiedMessageTimer = window.setTimeout(() => {
-      copiedMessageTimer = null
-      if (copiedMessageId.value === message.id) copiedMessageId.value = ''
-    }, 1600)
-  }
-}
-
-function isMessageCopied(messageId: string): boolean {
-  return copiedMessageId.value === messageId
-}
-
-function clearRollbackConfirmation(): void {
-  pendingRollbackMessageId.value = ''
-  if (rollbackConfirmTimer !== null && typeof window !== 'undefined') {
-    window.clearTimeout(rollbackConfirmTimer)
-    rollbackConfirmTimer = null
-  }
-}
-
-function isRollbackConfirming(message: UiMessage): boolean {
-  return pendingRollbackMessageId.value === message.id
-}
-
-function onRollback(message: UiMessage): void {
-  if (!canRollbackMessage(message)) return
-  if (!isRollbackConfirming(message)) {
-    pendingRollbackMessageId.value = message.id
-    if (rollbackConfirmTimer !== null && typeof window !== 'undefined') {
-      window.clearTimeout(rollbackConfirmTimer)
-    }
-    if (typeof window !== 'undefined') {
-      rollbackConfirmTimer = window.setTimeout(() => {
-        rollbackConfirmTimer = null
-        if (pendingRollbackMessageId.value === message.id) {
-          pendingRollbackMessageId.value = ''
-        }
-      }, 3600)
-    }
-    return
-  }
-  clearRollbackConfirmation()
-  const prependText = message.role === 'user' ? message.text.trim() : ''
-  emit('rollback', {
-    turnIndex: message.turnIndex!,
-    prependText: prependText.length > 0 ? prependText : undefined,
-  })
-}
-
-function clearHighlightedMessage(): void {
-  highlightedMessageId.value = ''
-  if (highlightedMessageTimer !== null && typeof window !== 'undefined') {
-    window.clearTimeout(highlightedMessageTimer)
-    highlightedMessageTimer = null
-  }
-}
-
-function highlightMessage(messageId: string): void {
-  highlightedMessageId.value = messageId
-  if (typeof window === 'undefined') return
-  if (highlightedMessageTimer !== null) {
-    window.clearTimeout(highlightedMessageTimer)
-  }
-  highlightedMessageTimer = window.setTimeout(() => {
-    highlightedMessageTimer = null
-    if (highlightedMessageId.value === messageId) {
-      highlightedMessageId.value = ''
-    }
-  }, 2600)
+    projection.threadId,
+    projection.turns.length,
+    lastTurn.id,
+    lastTurn.state,
+    lastTurn.blocks.length,
+    lastCommentary?.text.length ?? 0,
+    lastTurn.final?.text.length ?? 0,
+    activityOutputLength,
+    ...lastTurn.interactions.flatMap((interaction) => [interaction.id, interaction.status]),
+  ].join(':')
 }
 
 async function focusMessage(messageId: string): Promise<boolean> {
-  const normalizedMessageId = messageId.trim()
-  if (!normalizedMessageId) return false
-  const hiddenTurnIndex = hiddenGuidedMessageTurnIndexById.value[normalizedMessageId]
-  if (typeof hiddenTurnIndex === 'number' && !isGuidedTurnExpanded(hiddenTurnIndex)) {
-    expandedGuidedTurnIndexes.value = new Set([...expandedGuidedTurnIndexes.value, hiddenTurnIndex])
+  const normalizedId = messageId.trim()
+  if (!normalizedId) return false
+  const owningTurn = props.projection.turns.find((turn) => turn.blocks.some((block) => block.id === normalizedId))
+  if (owningTurn) {
+    pinnedTurnId.value = owningTurn.id
     await nextTick()
   }
-
-  const targetIndex = renderableMessages.value.findIndex((message) => message.id === normalizedMessageId)
-  if (targetIndex < 0) return false
-
-  if (visibleMessageStartIndex.value > targetIndex) {
-    visibleMessageStartIndex.value = Math.max(targetIndex - 2, 0)
+  if (owningTurn && !isProcessExpanded(owningTurn)) {
+    manuallyExpandedTurnIds.value = new Set(manuallyExpandedTurnIds.value).add(owningTurn.id)
     await nextTick()
   }
-
-  const container = conversationListRef.value
-  await nextTick()
-  if (!container) {
-    highlightMessage(normalizedMessageId)
-    return true
-  }
-
-  syncConversationViewport(container)
-  const targetVisibleIndex = renderableConversationEntries.value.findIndex((entry) => (
-    entry.kind === 'message' && entry.message.id === normalizedMessageId
-  ))
-  if (targetVisibleIndex < 0) return false
-  const topOffset = entryHeightMetrics.value.cumulativeHeights[targetVisibleIndex] ?? 0
-  const maxScrollTop = Math.max(container.scrollHeight - container.clientHeight, 0)
-  autoFollowBottom.value = false
-  clearBelowFoldUpdates()
-  container.scrollTop = Math.min(Math.max(topOffset - 24, 0), maxScrollTop)
-  syncConversationViewport(container)
-  scheduleEmitScrollState(container, true)
-
-  await nextTick()
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-
-  const targetElement = observedMessageElementsById.get(normalizedMessageId)
-  if (targetElement) {
-    targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }
-
-  highlightMessage(normalizedMessageId)
-  return true
-}
-
-function scrollMessageToTop(messageId: string): void {
-  const container = conversationListRef.value
-  const target = observedMessageElementsById.get(messageId)
-  if (!container || !target) return
-
-  const containerRect = container.getBoundingClientRect()
-  const targetRect = target.getBoundingClientRect()
-  const maxScrollTop = Math.max(container.scrollHeight - container.clientHeight, 0)
-  const nextScrollTop = container.scrollTop + targetRect.top - containerRect.top - 16
-  autoFollowBottom.value = false
-  container.scrollTo({
-    top: Math.min(Math.max(nextScrollTop, 0), maxScrollTop),
-    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-  })
-}
-
-function scrollToBottom(): void {
-  const container = conversationListRef.value
-  if (!container) return
-  container.scrollTop = container.scrollHeight
-}
-
-function isAtBottom(container: HTMLElement): boolean {
-  return isConversationViewportAtBottom({
-    scrollHeight: container.scrollHeight,
-    scrollTop: container.scrollTop,
-    clientHeight: container.clientHeight,
-  }, CONVERSATION_BOTTOM_THRESHOLD_PX)
-}
-
-function flushScrollState(): void {
-  scrollStateEmitFrame = 0
-  const container = pendingScrollStateContainer
-  const force = pendingScrollStateForce
-  const threadId = pendingScrollStateThreadId
-  pendingScrollStateContainer = null
-  pendingScrollStateForce = false
-  pendingScrollStateThreadId = ''
-  if (!container || !threadId) return
-  emitScrollState(container, force, false, threadId)
-}
-
-function emitScrollState(
-  container: HTMLElement,
-  force = false,
-  viewportSynced = false,
-  threadId = props.activeThreadId,
-): void {
-  const normalizedThreadId = threadId.trim()
-  if (!normalizedThreadId) return
-  if (!viewportSynced) {
-    syncConversationViewport(container)
-  }
-  const maxScrollTop = Math.max(container.scrollHeight - container.clientHeight, 0)
-  const scrollRatio = maxScrollTop > 0 ? Math.min(Math.max(container.scrollTop / maxScrollTop, 0), 1) : 1
-  const atBottom = isAtBottom(container)
-  const nextSignature = [
-    normalizedThreadId,
-    String(Math.round(container.scrollTop / 24)),
-    atBottom ? '1' : '0',
-    String(Math.round(scrollRatio * 100)),
-  ].join(':')
-  const now =
-    typeof performance !== 'undefined' && typeof performance.now === 'function'
-      ? performance.now()
-      : Date.now()
-  if (!force && !atBottom && now - lastScrollStateEmitAt < 120) {
-    return
-  }
-  if (!force && nextSignature === lastEmittedScrollStateSignature.value) {
-    return
-  }
-  lastScrollStateEmitAt = now
-  lastEmittedScrollStateSignature.value = nextSignature
-  emit('updateScrollState', {
-    threadId: normalizedThreadId,
-    state: {
-      scrollTop: container.scrollTop,
-      isAtBottom: atBottom,
-      scrollRatio,
-    },
-  })
-}
-
-function scheduleEmitScrollState(container: HTMLElement, force = false): void {
-  if (typeof window === 'undefined') {
-    emitScrollState(container, force)
-    return
-  }
-  pendingScrollStateContainer = container
-  pendingScrollStateForce = pendingScrollStateForce || force
-  pendingScrollStateThreadId = props.activeThreadId
-  if (scrollStateEmitFrame) return
-  scrollStateEmitFrame = requestAnimationFrame(flushScrollState)
-}
-
-function markThreadFirstScreenReadyIfPossible(): void {
-  if (typeof window === 'undefined') return
-  const threadId = props.activeThreadId.trim()
-  if (!threadId) return
-
-  const list = conversationListRef.value
-  if (!list) return
-  const items = Array.from(list.querySelectorAll<HTMLElement>('.conversation-item[data-role]'))
-  const userCount = items.filter((item) => item.getAttribute('data-role') === 'user').length
-  const assistantCount = items.filter((item) => item.getAttribute('data-role') === 'assistant').length
-  if (userCount < 1 || assistantCount < 1) return
-
-  markThreadFirstScreenReady({
-    threadId,
-    itemCount: items.length,
-    userCount,
-    assistantCount,
-  })
-}
-
-function scheduleChatFeedbackMetric(): void {
-  if (typeof window === 'undefined' || chatFeedbackMetricFrame) return
-  chatFeedbackMetricFrame = requestAnimationFrame(() => {
-    chatFeedbackMetricFrame = 0
-    const threadId = props.activeThreadId.trim()
-    const list = conversationListRef.value
-    if (!threadId || !list) return
-    const visibleMessageIds = new Set(
-      Array.from(list.querySelectorAll<HTMLElement>('.conversation-item[data-message-id]'))
-        .map((item) => item.dataset.messageId ?? '')
-        .filter(Boolean),
-    )
-    const runningVisible = Boolean(list.querySelector('.live-overlay-inline'))
-    for (const message of props.messages) {
-      if (!message.id.startsWith('optimistic-user:') || !visibleMessageIds.has(message.id)) continue
-      markChatFeedbackRendered({
-        threadId,
-        optimisticMessageId: message.id,
-        runningVisible,
-      })
-    }
-    markChatFeedbackFirstAssistantVisible({ threadId, visibleMessageIds })
-  })
-}
-
-function scheduleIdleScrollStateEmit(container: HTMLElement, force = false): void {
-  pendingScrollStateContainer = container
-  pendingScrollStateForce = pendingScrollStateForce || force
-  pendingScrollStateThreadId = props.activeThreadId
-  if (typeof window === 'undefined') {
-    flushScrollState()
-    return
-  }
-  if (scrollStateIdleTimer) {
-    window.clearTimeout(scrollStateIdleTimer)
-  }
-  scrollStateIdleTimer = window.setTimeout(() => {
-    scrollStateIdleTimer = null
-    flushScrollState()
-  }, force ? 0 : 140)
-}
-
-function flushConversationScrollInteraction(): void {
-  scrollInteractionFrame = 0
-  const container = pendingScrollInteractionContainer
-  pendingScrollInteractionContainer = null
-  if (!container || props.isLoading) return
-  syncConversationViewport(container)
-  if (container.scrollTop > 160) {
-    canAutoRevealOlderMessages.value = true
-  }
-  if (
-    container.scrollTop <= 96 &&
-    hasOlderMessagesAffordance.value &&
-    canAutoRevealOlderMessages.value &&
-    !isRevealingOlderMessages.value
-  ) {
-    void revealOlderMessages()
-  }
-  const atBottom = isAtBottom(container)
-  autoFollowBottom.value = atBottom
-  if (atBottom) {
-    clearBelowFoldUpdates()
-  }
-}
-
-function markBelowFoldUpdate(): void {
-  if (shouldLockToBottom()) return
-  hasPendingBelowFoldUpdates.value = true
-}
-
-function clearBelowFoldUpdates(): void {
-  hasPendingBelowFoldUpdates.value = false
-}
-
-function renderableMessageSignature(messages: UiMessage[]): string {
-  return recentMessagesForReactiveWatch(messages)
-    .filter((message) => !isCommandMessage(message) && message.messageType !== 'worked')
-    .map((message) => [
-      message.id,
-      message.messageType ?? '',
-      message.text.length,
-      message.turnIndex ?? '',
-    ].join(':'))
-    .join('|')
-}
-
-watch(
-  () => renderableMessages.value.length,
-  (nextLength, previousLength) => {
-    const nextLatestStartIndex = latestVisibleStartIndex(renderableMessages.value)
-    if (previousLength == null) {
-      visibleMessageStartIndex.value = nextLatestStartIndex
-      return
-    }
-
-    if (nextLength === 0) {
-      visibleMessageStartIndex.value = 0
-      return
-    }
-
-    if (previousLength === 0) {
-      visibleMessageStartIndex.value = nextLatestStartIndex
-      return
-    }
-
-    visibleMessageStartIndex.value = Math.min(visibleMessageStartIndex.value, nextLatestStartIndex)
-  },
-  { immediate: true },
-)
-
-function applySavedScrollState(): void {
-  const container = conversationListRef.value
-  if (!container) return
-  syncConversationViewport(container)
-
-  const savedState = props.scrollState
-  if (!savedState || savedState.isAtBottom) {
-    autoFollowBottom.value = true
-    enforceBottomState()
-    return
-  }
-
-  autoFollowBottom.value = false
-  const maxScrollTop = Math.max(container.scrollHeight - container.clientHeight, 0)
-  const targetScrollTop =
-    typeof savedState.scrollRatio === 'number'
-      ? savedState.scrollRatio * maxScrollTop
-      : savedState.scrollTop
-  container.scrollTop = Math.min(Math.max(targetScrollTop, 0), maxScrollTop)
-  syncConversationViewport(container)
-  if (maybeAnchorLongAssistantResponse(true)) return
-  scheduleEmitScrollState(container, true)
-}
-
-function isAssistantResponseEntry(entry: ConversationRenderEntry): entry is ConversationMessageEntry {
-  return (
-    entry.kind === 'message' &&
-    entry.message.role === 'assistant' &&
-    !isCommandMessage(entry.message) &&
-    entry.message.messageType !== 'worked' &&
-    entry.message.text.trim().length > 0
-  )
-}
-
-function findLatestAssistantResponseEntryAfterUser(): ConversationMessageEntry | null {
-  const entries = visibleRenderableEntries.value
-  let latestUserEntryIndex = -1
-
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index]
-    if (entry.kind === 'message' && entry.message.role === 'user') {
-      latestUserEntryIndex = index
-      break
+  if (owningTurn) {
+    const blocks = processBlocks(owningTurn)
+    const targetIndex = blocks.findIndex((block) => block.id === normalizedId)
+    if (targetIndex >= 0) {
+      const requiredHistoryCount = Math.max(0, blocks.length - targetIndex - 1)
+      if (requiredHistoryCount > visibleProcessHistoryCount(owningTurn)) {
+        visibleProcessHistoryCountByTurnId.value = {
+          ...visibleProcessHistoryCountByTurnId.value,
+          [owningTurn.id]: requiredHistoryCount,
+        }
+        await nextTick()
+      }
     }
   }
-
-  for (let index = entries.length - 1; index > latestUserEntryIndex; index -= 1) {
-    const entry = entries[index]
-    if (isAssistantResponseEntry(entry)) {
-      return entry
-    }
-  }
-
-  return null
-}
-
-function maybeAnchorLongAssistantResponse(allowActualBottom = false): boolean {
-  if (props.isTurnInProgress === true) return false
-  const container = conversationListRef.value
-  if (!container) return false
-  if (!shouldLockToBottom() && !(allowActualBottom && isAtBottom(container))) return false
-  if (container.clientWidth > LONG_RESPONSE_ANCHOR_MAX_WIDTH_PX) return false
-
-  const responseEntry = findLatestAssistantResponseEntryAfterUser()
-  if (!responseEntry || autoAnchoredLongResponseId.value === responseEntry.message.id) {
+  const root = conversationListRef.value
+  if (!root) return false
+  const candidates = root.querySelectorAll<HTMLElement>('[data-message-id]')
+  const element = Array.from(candidates).find((candidate) => candidate.dataset.messageId === normalizedId)
+  if (!element) {
+    if (owningTurn && pinnedTurnId.value === owningTurn.id) pinnedTurnId.value = ''
     return false
   }
-
-  const responseElement = observedMessageElementsById.get(responseEntry.measureId)
-  if (!responseElement) return false
-
-  const containerRect = container.getBoundingClientRect()
-  const responseRect = responseElement.getBoundingClientRect()
-  const minLongResponseHeight = Math.max(LONG_RESPONSE_MIN_HEIGHT_PX, container.clientHeight * 0.55)
-  const isLongResponse = responseRect.height >= minLongResponseHeight
-  const responseStartIsHidden = responseRect.top < containerRect.top + 18
-  const responseStillContinues = responseRect.bottom > containerRect.bottom - 80
-  if (!isLongResponse || !responseStartIsHidden || !responseStillContinues) {
-    return false
+  element.scrollIntoView({ block: 'center', behavior: 'auto' })
+  syncConversationViewport(root)
+  if (owningTurn && pinnedTurnId.value === owningTurn.id) {
+    pinnedTurnId.value = ''
+    await nextTick()
   }
-
-  autoAnchoredLongResponseId.value = responseEntry.message.id
-  autoFollowBottom.value = false
-  const maxScrollTop = Math.max(container.scrollHeight - container.clientHeight, 0)
-  const nextScrollTop = container.scrollTop + (responseRect.top - containerRect.top) - 18
-  container.scrollTop = Math.min(Math.max(nextScrollTop, 0), maxScrollTop)
-  syncConversationViewport(container)
-  scheduleEmitScrollState(container, true)
-  markBelowFoldUpdate()
+  highlightedMessageId.value = normalizedId
+  element.classList.add('is-highlighted')
+  if (highlightTimer) window.clearTimeout(highlightTimer)
+  highlightTimer = window.setTimeout(() => {
+    element.classList.remove('is-highlighted')
+    highlightedMessageId.value = ''
+  }, 2_000)
   return true
-}
-
-function enforceBottomState(): void {
-  const container = conversationListRef.value
-  if (!container) return
-  if (maybeAnchorLongAssistantResponse()) return
-  autoFollowBottom.value = true
-  scrollToBottom()
-  syncConversationViewport(container)
-  scheduleEmitScrollState(container)
-  clearBelowFoldUpdates()
-}
-
-function shouldLockToBottom(): boolean {
-  return autoFollowBottom.value
-}
-
-function runBottomLockFrame(): void {
-  if (!shouldLockToBottom()) {
-    bottomLockFramesLeft = 0
-    bottomLockFrame = 0
-    return
-  }
-
-  if (maybeAnchorLongAssistantResponse()) {
-    bottomLockFramesLeft = 0
-    bottomLockFrame = 0
-    return
-  }
-
-  enforceBottomState()
-  bottomLockFramesLeft -= 1
-  if (bottomLockFramesLeft <= 0) {
-    bottomLockFrame = 0
-    return
-  }
-  bottomLockFrame = requestAnimationFrame(runBottomLockFrame)
-}
-
-function scheduleBottomLock(frames = 1): void {
-  if (!shouldLockToBottom()) return
-  if (bottomLockFrame) {
-    cancelAnimationFrame(bottomLockFrame)
-    bottomLockFrame = 0
-  }
-  bottomLockFramesLeft = Math.max(frames, 1)
-  bottomLockFrame = requestAnimationFrame(runBottomLockFrame)
-}
-
-function onPendingImageSettled(ownerThreadId: string): void {
-  if (ownerThreadId !== props.activeThreadId) return
-  scheduleBottomLock(3)
-}
-
-function bindPendingImageHandlers(): void {
-  if (!shouldLockToBottom()) return
-  const container = conversationListRef.value
-  if (!container) return
-
-  const images = container.querySelectorAll<HTMLImageElement>('img.message-image-preview')
-  const ownerThreadId = props.activeThreadId
-  for (const image of images) {
-    if (image.complete || trackedPendingImages.has(image)) continue
-    trackedPendingImages.add(image)
-    const onSettled = () => {
-      image.removeEventListener('load', onSettled)
-      image.removeEventListener('error', onSettled)
-      onPendingImageSettled(ownerThreadId)
-    }
-    image.addEventListener('load', onSettled, { once: true })
-    image.addEventListener('error', onSettled, { once: true })
-  }
-}
-
-async function scheduleScrollRestore(
-  forceBottom: boolean | null = shouldLockToBottom(),
-  preferredAnchorSnapshot: ScrollAnchorSnapshot | null = null,
-): Promise<void> {
-  const requestedThreadId = props.activeThreadId
-  const requestedGeneration = scrollContextGeneration
-  const anchorSnapshot = forceBottom === false
-    ? preferredAnchorSnapshot ?? captureVisibleConversationAnchor()
-    : null
-  await nextTick()
-  if (
-    requestedGeneration !== scrollContextGeneration
-    || requestedThreadId !== props.activeThreadId
-  ) return
-  if (scrollRestoreFrame) {
-    cancelAnimationFrame(scrollRestoreFrame)
-  }
-  scrollRestoreFrame = requestAnimationFrame(() => {
-    scrollRestoreFrame = 0
-    if (
-      requestedGeneration !== scrollContextGeneration
-      || requestedThreadId !== props.activeThreadId
-    ) return
-    const resolvedForceBottom = forceBottom === null
-      ? props.scrollState?.isAtBottom !== false
-      : forceBottom
-    if (resolvedForceBottom) {
-      enforceBottomState()
-    } else {
-      const didRestoreAnchor = anchorSnapshot ? restoreScrollAnchor(anchorSnapshot) : false
-      if (!didRestoreAnchor) {
-        applySavedScrollState()
-      }
-    }
-    bindPendingImageHandlers()
-    if (resolvedForceBottom) {
-      scheduleBottomLock()
-    }
-  })
-}
-
-watch(
-  () => props.messages,
-  async (next, previous) => {
-    const watchedMessages = messagesForReactiveWatch(next)
-    const previousMessages = previous ?? EMPTY_MESSAGES
-    const messageStructureChanged = !haveSameConversationMessageStructure(previousMessages, next)
-    syncObservedCommandStartTimes(watchedMessages)
-    if (props.isLoading && !hasVisibleConversationContent.value) return
-    const foregroundScrollIntent = pendingForegroundScrollIntent?.threadId === props.activeThreadId
-      ? pendingForegroundScrollIntent
-      : null
-    if (foregroundScrollIntent) {
-      pendingForegroundScrollIntent = null
-      autoFollowBottom.value = foregroundScrollIntent.followBottom
-    }
-    const shouldFollowBottom = foregroundScrollIntent?.followBottom ?? shouldLockToBottom()
-
-    for (const m of watchedMessages) {
-      if (m.messageType !== 'commandExecution' || !m.commandExecution) continue
-      const prev = prevCommandStatuses.value[m.id]
-      const cur = m.commandExecution.status
-      if (prev === 'inProgress' && cur !== 'inProgress' && expandedCommandIds.value.has(m.id)) {
-        scheduleCollapse(m.id)
-      }
-      prevCommandStatuses.value[m.id] = cur
-    }
-
-    if (messageStructureChanged) {
-      prunePreparedMessageBlockCache(next)
-      pruneMeasuredMessageHeights(renderableConversationEntries.value)
-    }
-
-    const hasNewRenderableOutput = previousMessages.length > 0 &&
-      renderableMessageSignature(next) !== renderableMessageSignature(previousMessages)
-
-    if (hasNewRenderableOutput && !shouldFollowBottom) {
-      markBelowFoldUpdate()
-    }
-
-    if (
-      !threadSwitchScrollRestorePending &&
-      (messageStructureChanged || foregroundScrollIntent !== null)
-    ) {
-      await scheduleScrollRestore(shouldFollowBottom, foregroundScrollIntent?.anchorSnapshot ?? null)
-    }
-  },
-  { immediate: true },
-)
-
-watch(
-  () => [
-    props.activeThreadId,
-    visibleRenderableEntries.value.length,
-    visibleContextPreview.value?.text ?? '',
-  ] as const,
-  async () => {
-    await nextTick()
-    markThreadFirstScreenReadyIfPossible()
-  },
-  { immediate: true, flush: 'post' },
-)
-
-watch(
-  () => [
-    props.activeThreadId,
-    props.messages.map((message) => `${message.id}:${message.deliveryState ?? ''}`).join('|'),
-    liveOverlayBehaviorSignature.value,
-  ] as const,
-  async () => {
-    await nextTick()
-    scheduleChatFeedbackMetric()
-  },
-  { immediate: true, flush: 'post' },
-)
-
-watch(
-  liveOverlayBehaviorSignature,
-  async (signature) => {
-    if (!signature) return
-    const shouldFollowBottom = shouldLockToBottom()
-    await nextTick()
-    if (!shouldFollowBottom) return
-    enforceBottomState()
-    scheduleBottomLock(1)
-  },
-)
-
-watch(
-  effectiveLiveOverlay,
-  (overlay) => {
-    if (overlay) {
-      startCommandElapsedTimer()
-      return
-    }
-    if (Object.keys(observedCommandStartedAtById.value).length === 0) {
-      stopCommandElapsedTimer()
-    }
-  },
-  { immediate: true },
-)
-
-watch(
-  () => props.pendingRequests.map((request) => request.id),
-  (pendingRequestIds) => {
-    const pendingIdSet = new Set(pendingRequestIds)
-    for (const requestId of respondingRequestIds.value) {
-      if (!pendingIdSet.has(requestId)) clearRequestResponding(requestId)
-    }
-  },
-)
-
-watch(isLiveOverlayDetailOpen, async (isOpen) => {
-  if (typeof document === 'undefined') return
-  if (!isOpen) {
-    restoreLiveOverlayDetailEnvironment()
-    return
-  }
-
-  liveOverlayDetailPreviousFocus = document.activeElement instanceof HTMLElement
-    ? document.activeElement
-    : null
-  liveOverlayDetailPreviousBodyOverflow = document.body.style.overflow
-  document.body.style.overflow = 'hidden'
-  liveOverlayDetailOwnsBodyScrollLock = true
-  await nextTick()
-  liveOverlayDetailSheetRef.value?.focus({ preventScroll: true })
-})
-
-watch(
-  () => props.isLoading,
-  async (loading) => {
-    if (loading) return
-    await scheduleScrollRestore()
-  },
-)
-
-watch(
-  () => props.messages.length,
-  async () => {
-    if (remoteOlderHistoryRequestTimer === null) return
-    const anchorSnapshot = pendingRemoteOlderHistoryAnchor
-    clearRemoteOlderHistoryRequestInFlight()
-    await restoreScrollAnchorOverFrames(anchorSnapshot, 6)
-  },
-)
-
-watch(
-  collapsibleGuidedTurnDescriptors,
-  (nextDescriptors) => {
-    const keepTurnIndexes = new Set(nextDescriptors.keys())
-    const nextExpanded = new Set<number>()
-    for (const turnIndex of expandedGuidedTurnIndexes.value) {
-      if (keepTurnIndexes.has(turnIndex)) {
-        nextExpanded.add(turnIndex)
-      }
-    }
-    if (nextExpanded.size !== expandedGuidedTurnIndexes.value.size) {
-      expandedGuidedTurnIndexes.value = nextExpanded
-    }
-  },
-  { deep: false },
-)
-
-function settlePendingScrollStateBeforeThreadChange(previousThreadId: string): void {
-  if (scrollStateEmitFrame) {
-    cancelAnimationFrame(scrollStateEmitFrame)
-    scrollStateEmitFrame = 0
-  }
-  if (scrollStateIdleTimer && typeof window !== 'undefined') {
-    window.clearTimeout(scrollStateIdleTimer)
-    scrollStateIdleTimer = null
-  }
-
-  const container = pendingScrollStateContainer
-  const force = pendingScrollStateForce
-  const threadId = pendingScrollStateThreadId
-  pendingScrollStateContainer = null
-  pendingScrollStateForce = false
-  pendingScrollStateThreadId = ''
-  if (container && threadId && threadId === previousThreadId) {
-    emitScrollState(container, force, false, threadId)
-  }
-}
-
-function cancelScheduledScrollWorkForThreadChange(): void {
-  if (scrollRestoreFrame) {
-    cancelAnimationFrame(scrollRestoreFrame)
-    scrollRestoreFrame = 0
-  }
-  cancelScheduledScrollAnchorRestore()
-  if (bottomLockFrame) {
-    cancelAnimationFrame(bottomLockFrame)
-    bottomLockFrame = 0
-  }
-  bottomLockFramesLeft = 0
-  if (scrollInteractionFrame) {
-    cancelAnimationFrame(scrollInteractionFrame)
-    scrollInteractionFrame = 0
-  }
-  pendingScrollInteractionContainer = null
-  pendingForegroundScrollIntent = null
 }
 
 watch(
   () => props.activeThreadId,
-  (_nextThreadId, previousThreadId) => {
-    scrollContextGeneration += 1
-    threadSwitchScrollRestorePending = true
-    settlePendingScrollStateBeforeThreadChange(previousThreadId)
-    cancelScheduledScrollWorkForThreadChange()
-  },
-  { flush: 'sync' },
-)
-
-watch(
-  () => props.activeThreadId,
-  () => {
-    modalImageUrl.value = ''
-    loadedMessageImageKeys.value = new Set()
-    failedMessageImageKeys.value = new Set()
-    messageImageRetryAttempts.value = new Map()
-    loadedMarkdownImageKeys.value = new Set()
-    markdownImageRetryAttempts.value = new Map()
-    closeFileLinkContextMenu()
-    failedMarkdownImageKeys.value = new Set()
-    preparedMessageBlocksById.clear()
-    estimatedMessageHeightByMessage = new WeakMap()
-    disconnectAllObservedElements(observedMessageElementsById)
-    measuredMessageHeightById.value = {}
-    expandedGuidedTurnIndexes.value = new Set()
-    expandedCodeBlockKeys.value = new Set()
-    expandedRawPayloadMessageIds.value = new Set()
+  async () => {
+    for (const element of observedTurnElementsById.values()) turnResizeObserver?.unobserve(element)
+    observedTurnElementsById.clear()
+    measuredTurnHeightById.value = {}
+    pinnedTurnId.value = ''
     conversationScrollTop.value = 0
-    lastGapMeasuredContainer = null
-    lastGapMeasuredViewportHeight = -1
-    lastScrollStateEmitAt = 0
-    lastEmittedScrollStateSignature.value = ''
-    clearRemoteOlderHistoryRequestInFlight()
-    canAutoRevealOlderMessages.value = true
-    visibleMessageStartIndex.value = latestVisibleStartIndex(renderableMessages.value)
-    clearBelowFoldUpdates()
-    autoAnchoredLongResponseId.value = ''
-    autoFollowBottom.value = props.scrollState?.isAtBottom !== false
-    threadSwitchScrollRestorePending = false
-    void scheduleScrollRestore(null)
-  },
-  { flush: 'post' },
-)
-
-watch(
-  modalImageUrl,
-  async (nextUrl) => {
-    if (typeof window === 'undefined' || typeof document === 'undefined') return
-    if (nextUrl) {
-      previousBodyOverflow = document.body.style.overflow
-      document.body.style.overflow = 'hidden'
-      window.addEventListener('keydown', onWindowKeydownForImageModal)
-      window.addEventListener('resize', onWindowResizeForImageModal)
-      await nextTick()
-      resetImageModalView()
-      imageModalCloseRef.value?.focus()
-      return
-    }
-
-    window.removeEventListener('keydown', onWindowKeydownForImageModal)
-    window.removeEventListener('resize', onWindowResizeForImageModal)
-    document.body.style.overflow = previousBodyOverflow
-    previousBodyOverflow = ''
-    resetImageModalView()
-    isModalImageLoading.value = false
-    isModalImageFailed.value = false
-    const focusTarget = imageModalPreviousFocus
-    imageModalPreviousFocus = null
-    if (focusTarget?.isConnected) {
-      focusTarget.focus()
-    }
+    manuallyExpandedTurnIds.value = new Set()
+    visibleProcessHistoryCountByTurnId.value = {}
+    confirmingRollbackTurnIndex.value = null
+    respondingRequestIds.value = new Set()
+    await restoreScrollState()
   },
 )
 
 watch(
-  () => props.scrollState?.isAtBottom,
-  (isAtBottomState) => {
-    autoFollowBottom.value = isAtBottomState !== false
-  },
-)
-
-watch(isFileLinkContextMenuVisible, (isVisible) => {
-  if (isVisible) {
-    window.addEventListener('pointerdown', onWindowPointerDownForFileLinkContextMenu, { capture: true })
-    window.addEventListener('blur', onWindowBlurForFileLinkContextMenu)
-    window.addEventListener('keydown', onWindowKeydownForFileLinkContextMenu)
-    return
-  }
-
-  window.removeEventListener('pointerdown', onWindowPointerDownForFileLinkContextMenu, { capture: true })
-  window.removeEventListener('blur', onWindowBlurForFileLinkContextMenu)
-  window.removeEventListener('keydown', onWindowKeydownForFileLinkContextMenu)
-})
-
-watch(
-  conversationListRef,
-  (nextElement, previousElement) => {
-    if (previousElement) {
-      previousElement.removeEventListener('scroll', onConversationScroll, { passive: true } as AddEventListenerOptions)
-      previousElement.removeEventListener('wheel', clearPendingForegroundScrollIntent)
-      previousElement.removeEventListener('touchstart', clearPendingForegroundScrollIntent)
-      previousElement.removeEventListener('pointerdown', clearPendingForegroundScrollIntent)
-      previousElement.removeEventListener('keydown', onConversationScrollIntentKeydown)
-      observedConversationListElement = null
-    }
-    if (previousElement) {
-      conversationListResizeObserver?.unobserve(previousElement)
-    }
-    if (!nextElement) return
-    nextElement.addEventListener('scroll', onConversationScroll, { passive: true })
-    nextElement.addEventListener('wheel', clearPendingForegroundScrollIntent, { passive: true })
-    nextElement.addEventListener('touchstart', clearPendingForegroundScrollIntent, { passive: true })
-    nextElement.addEventListener('pointerdown', clearPendingForegroundScrollIntent)
-    nextElement.addEventListener('keydown', onConversationScrollIntentKeydown)
-    observedConversationListElement = nextElement
-    syncConversationViewport(nextElement)
-    conversationListResizeObserver?.observe(nextElement)
-  },
-  { flush: 'post' },
-)
-
-function clearPendingForegroundScrollIntent(): void {
-  pendingForegroundScrollIntent = null
-}
-
-function onConversationScrollIntentKeydown(event: KeyboardEvent): void {
-  if (!['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) return
-  clearPendingForegroundScrollIntent()
-}
-
-function onConversationScrollVisibilityChange(): void {
-  const container = conversationListRef.value
-  const threadId = props.activeThreadId.trim()
-  if (document.hidden) {
-    if (!container || !threadId) {
-      pendingForegroundScrollIntent = null
-      return
-    }
-    syncConversationViewport(container)
-    const followBottom = isAtBottom(container)
-    pendingForegroundScrollIntent = {
-      threadId,
-      followBottom,
-      anchorSnapshot: followBottom ? null : captureVisibleConversationAnchor(),
-    }
-    return
-  }
-
-  const intent = pendingForegroundScrollIntent
-  if (!intent || intent.threadId !== threadId) {
-    pendingForegroundScrollIntent = null
-    return
-  }
-  autoFollowBottom.value = intent.followBottom
-  if (intent.followBottom) {
-    scheduleBottomLock(2)
-  } else {
-    void scheduleScrollAnchorRestore(intent.anchorSnapshot)
-  }
-}
-
-function onConversationScroll(event: Event): void {
-  const container = event.currentTarget instanceof HTMLElement
-    ? event.currentTarget
-    : conversationListRef.value
-  if (!container || props.isLoading) return
-  pendingScrollInteractionContainer = container
-  scheduleIdleScrollStateEmit(container)
-  if (scrollInteractionFrame) return
-  scrollInteractionFrame = requestAnimationFrame(flushConversationScrollInteraction)
-}
-
-function jumpToLatest(): void {
-  const ownerThreadId = props.activeThreadId
-  autoFollowBottom.value = true
-  enforceBottomState()
-  scheduleBottomLock(4)
-  requestAnimationFrame(() => {
-    if (props.activeThreadId !== ownerThreadId) return
-    conversationListRef.value?.focus({ preventScroll: true })
-  })
-}
-
-function clampImageModalScale(scale: number): number {
-  if (!Number.isFinite(scale)) return IMAGE_MODAL_MIN_SCALE
-  return Math.min(IMAGE_MODAL_MAX_SCALE, Math.max(IMAGE_MODAL_MIN_SCALE, scale))
-}
-
-function readImageModalOffsetBounds(scale = modalImageScale.value): { maxX: number; maxY: number } {
-  const stage = imageModalStageRef.value
-  const image = imageModalImageRef.value
-  if (!stage || !image) {
-    return { maxX: 0, maxY: 0 }
-  }
-
-  const stageRect = stage.getBoundingClientRect()
-  const width = image.offsetWidth * scale
-  const height = image.offsetHeight * scale
-
-  return {
-    maxX: Math.max((width - stageRect.width) / 2, 0),
-    maxY: Math.max((height - stageRect.height) / 2, 0),
-  }
-}
-
-function clampImageModalOffsets(
-  offsetX: number,
-  offsetY: number,
-  scale = modalImageScale.value,
-): { x: number; y: number } {
-  const { maxX, maxY } = readImageModalOffsetBounds(scale)
-  return {
-    x: Math.min(maxX, Math.max(-maxX, offsetX)),
-    y: Math.min(maxY, Math.max(-maxY, offsetY)),
-  }
-}
-
-function syncImageModalOffsets(scale = modalImageScale.value): void {
-  const { x, y } = clampImageModalOffsets(modalImageOffsetX.value, modalImageOffsetY.value, scale)
-  modalImageOffsetX.value = x
-  modalImageOffsetY.value = y
-}
-
-function applyImageModalScale(
-  nextScale: number,
-  anchor?: ImageModalPointerPoint,
-): void {
-  const clampedScale = clampImageModalScale(nextScale)
-  const currentScale = modalImageScale.value
-  let nextOffsetX = modalImageOffsetX.value
-  let nextOffsetY = modalImageOffsetY.value
-  const stage = imageModalStageRef.value
-  if (anchor && stage && currentScale > 0) {
-    const stageRect = stage.getBoundingClientRect()
-    const anchorX = anchor.clientX - stageRect.left - stageRect.width / 2
-    const anchorY = anchor.clientY - stageRect.top - stageRect.height / 2
-    const scaleRatio = clampedScale / currentScale
-    nextOffsetX = anchorX - (anchorX - modalImageOffsetX.value) * scaleRatio
-    nextOffsetY = anchorY - (anchorY - modalImageOffsetY.value) * scaleRatio
-  }
-  modalImageScale.value = clampedScale
-  if (clampedScale <= IMAGE_MODAL_MIN_SCALE) {
-    modalImageOffsetX.value = 0
-    modalImageOffsetY.value = 0
-    return
-  }
-  const clampedOffsets = clampImageModalOffsets(nextOffsetX, nextOffsetY, clampedScale)
-  modalImageOffsetX.value = clampedOffsets.x
-  modalImageOffsetY.value = clampedOffsets.y
-}
-
-function resetImageModalView(): void {
-  modalImageScale.value = IMAGE_MODAL_MIN_SCALE
-  modalImageOffsetX.value = 0
-  modalImageOffsetY.value = 0
-  isImageModalDragging.value = false
-  modalImagePointerId = null
-  modalImageTouchPointers.clear()
-  modalImagePinchStartDistance = 0
-  modalImagePinchStartScale = IMAGE_MODAL_MIN_SCALE
-}
-
-function zoomInImageModal(): void {
-  applyImageModalScale(modalImageScale.value + IMAGE_MODAL_SCALE_STEP)
-}
-
-function zoomOutImageModal(): void {
-  applyImageModalScale(modalImageScale.value - IMAGE_MODAL_SCALE_STEP)
-}
-
-function onImageModalWheel(event: WheelEvent): void {
-  if (!modalImageUrl.value) return
-  event.preventDefault()
-  event.stopPropagation()
-  if (event.deltaY === 0) return
-  if (event.ctrlKey) {
-    const deltaModeMultiplier = event.deltaMode === WheelEvent.DOM_DELTA_LINE
-      ? IMAGE_MODAL_LINE_DELTA_PX
-      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
-        ? Math.max(imageModalStageRef.value?.clientHeight ?? 0, 1)
-        : 1
-    const normalizedDelta = Math.min(
-      IMAGE_MODAL_WHEEL_DELTA_LIMIT,
-      Math.max(-IMAGE_MODAL_WHEEL_DELTA_LIMIT, event.deltaY * deltaModeMultiplier),
-    )
-    applyImageModalScale(
-      modalImageScale.value * Math.exp(-normalizedDelta / IMAGE_MODAL_WHEEL_ZOOM_SENSITIVITY),
-      { clientX: event.clientX, clientY: event.clientY },
-    )
-    return
-  }
-  if (event.deltaY < 0) {
-    zoomInImageModal()
-    return
-  }
-  zoomOutImageModal()
-}
-
-function onImageModalDoubleClick(): void {
-  if (isImageModalZoomed.value) {
-    resetImageModalView()
-    return
-  }
-  applyImageModalScale(2)
-}
-
-function captureImageModalPointer(target: HTMLElement, pointerId: number): void {
-  if (typeof target.setPointerCapture !== 'function') return
-  try {
-    target.setPointerCapture(pointerId)
-  } catch {
-    // Synthetic regression events and older WebViews may not expose an active pointer to capture.
-  }
-}
-
-function readImageModalPinchGesture(): (ImageModalPointerPoint & { distance: number }) | null {
-  const points = Array.from(modalImageTouchPointers.values())
-  const first = points[0]
-  const second = points[1]
-  if (!first || !second) return null
-  const deltaX = second.clientX - first.clientX
-  const deltaY = second.clientY - first.clientY
-  const distance = Math.hypot(deltaX, deltaY)
-  if (distance <= 0) return null
-  return {
-    clientX: (first.clientX + second.clientX) / 2,
-    clientY: (first.clientY + second.clientY) / 2,
-    distance,
-  }
-}
-
-function beginImageModalDrag(pointerId: number, point: ImageModalPointerPoint): void {
-  modalImagePointerId = pointerId
-  modalImageDragStartX = point.clientX
-  modalImageDragStartY = point.clientY
-  modalImageDragOriginX = modalImageOffsetX.value
-  modalImageDragOriginY = modalImageOffsetY.value
-  isImageModalDragging.value = isImageModalZoomed.value
-}
-
-function beginImageModalPinch(): void {
-  const gesture = readImageModalPinchGesture()
-  const stage = imageModalStageRef.value
-  if (!gesture || !stage) return
-  const stageRect = stage.getBoundingClientRect()
-  const anchorX = gesture.clientX - stageRect.left - stageRect.width / 2
-  const anchorY = gesture.clientY - stageRect.top - stageRect.height / 2
-  modalImagePointerId = null
-  modalImagePinchStartDistance = gesture.distance
-  modalImagePinchStartScale = modalImageScale.value
-  modalImagePinchImageAnchorX = (anchorX - modalImageOffsetX.value) / modalImageScale.value
-  modalImagePinchImageAnchorY = (anchorY - modalImageOffsetY.value) / modalImageScale.value
-  isImageModalDragging.value = true
-}
-
-function onImageModalPointerDown(event: PointerEvent): void {
-  const target = event.currentTarget
-  if (!(target instanceof HTMLElement)) return
-
-  const point = { clientX: event.clientX, clientY: event.clientY }
-  if (event.pointerType === 'touch') {
-    modalImageTouchPointers.set(event.pointerId, point)
-    captureImageModalPointer(target, event.pointerId)
-    if (modalImageTouchPointers.size >= 2) {
-      beginImageModalPinch()
-    } else if (isImageModalZoomed.value) {
-      beginImageModalDrag(event.pointerId, point)
-    }
-    event.preventDefault()
-    return
-  }
-
-  if (!isImageModalZoomed.value) return
-  beginImageModalDrag(event.pointerId, point)
-  captureImageModalPointer(target, event.pointerId)
-  event.preventDefault()
-}
-
-function onImageModalPointerMove(event: PointerEvent): void {
-  if (event.pointerType === 'touch' && modalImageTouchPointers.has(event.pointerId)) {
-    modalImageTouchPointers.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY })
-    if (modalImageTouchPointers.size >= 2) {
-      event.preventDefault()
-      event.stopPropagation()
-      const gesture = readImageModalPinchGesture()
-      const stage = imageModalStageRef.value
-      if (!gesture || !stage || modalImagePinchStartDistance <= 0) return
-      const nextScale = clampImageModalScale(
-        modalImagePinchStartScale * (gesture.distance / modalImagePinchStartDistance),
-      )
-      const stageRect = stage.getBoundingClientRect()
-      const anchorX = gesture.clientX - stageRect.left - stageRect.width / 2
-      const anchorY = gesture.clientY - stageRect.top - stageRect.height / 2
-      modalImageScale.value = nextScale
-      const offsets = clampImageModalOffsets(
-        anchorX - modalImagePinchImageAnchorX * nextScale,
-        anchorY - modalImagePinchImageAnchorY * nextScale,
-        nextScale,
-      )
-      modalImageOffsetX.value = offsets.x
-      modalImageOffsetY.value = offsets.y
-      return
-    }
-  }
-  if (!isImageModalDragging.value || modalImagePointerId !== event.pointerId) return
-  event.preventDefault()
-  const deltaX = event.clientX - modalImageDragStartX
-  const deltaY = event.clientY - modalImageDragStartY
-  const { x, y } = clampImageModalOffsets(
-    modalImageDragOriginX + deltaX,
-    modalImageDragOriginY + deltaY,
-  )
-  modalImageOffsetX.value = x
-  modalImageOffsetY.value = y
-}
-
-function onImageModalPointerUp(event: PointerEvent): void {
-  const target = event.currentTarget
-  if (target instanceof HTMLElement && target.hasPointerCapture(event.pointerId)) {
-    target.releasePointerCapture(event.pointerId)
-  }
-
-  if (event.pointerType === 'touch') {
-    modalImageTouchPointers.delete(event.pointerId)
-    if (modalImageTouchPointers.size >= 2) {
-      beginImageModalPinch()
-      return
-    }
-    const remaining = modalImageTouchPointers.entries().next().value as [number, ImageModalPointerPoint] | undefined
-    if (remaining && isImageModalZoomed.value) {
-      beginImageModalDrag(remaining[0], remaining[1])
-      modalImagePinchStartDistance = 0
-      return
-    }
-    isImageModalDragging.value = false
-    modalImagePointerId = null
-    modalImagePinchStartDistance = 0
-    return
-  }
-
-  if (modalImagePointerId !== event.pointerId) return
-  isImageModalDragging.value = false
-  modalImagePointerId = null
-}
-
-function messageImageKey(messageId: string, imageIndex: number): string {
-  return `${messageId}:${imageIndex}`
-}
-
-function messageImageRenderKey(messageId: string, imageIndex: number): string {
-  const key = messageImageKey(messageId, imageIndex)
-  return `${key}:${String(messageImageRetryAttempts.value.get(key) ?? 0)}`
-}
-
-function messageImageRenderUrl(imageUrl: string, messageId: string, imageIndex: number): string {
-  const rendered = toRenderableImageUrl(imageUrl)
-  const attempt = messageImageRetryAttempts.value.get(messageImageKey(messageId, imageIndex)) ?? 0
-  if (attempt <= 0 || rendered.startsWith('data:') || rendered.startsWith('blob:')) return rendered
-  return `${rendered}${rendered.includes('?') ? '&' : '?'}cx_retry=${String(attempt)}`
-}
-
-function retryMessageImage(messageId: string, imageIndex: number): void {
-  const key = messageImageKey(messageId, imageIndex)
-  const nextFailed = new Set(failedMessageImageKeys.value)
-  nextFailed.delete(key)
-  failedMessageImageKeys.value = nextFailed
-  const nextLoaded = new Set(loadedMessageImageKeys.value)
-  nextLoaded.delete(key)
-  loadedMessageImageKeys.value = nextLoaded
-  const nextAttempts = new Map(messageImageRetryAttempts.value)
-  nextAttempts.set(key, (nextAttempts.get(key) ?? 0) + 1)
-  messageImageRetryAttempts.value = nextAttempts
-}
-
-function openOrRetryMessageImage(imageUrl: string, messageId: string, imageIndex: number): void {
-  if (isMessageImageFailed(messageId, imageIndex)) {
-    retryMessageImage(messageId, imageIndex)
-    return
-  }
-  openImageModal(imageUrl)
-}
-
-function onMessageImageElementRef(
-  element: MeasureRefTarget,
-  messageId: string,
-  imageIndex: number,
-): void {
-  if (!(element instanceof HTMLImageElement) || !element.complete || !element.currentSrc) return
-  if (element.naturalWidth > 0) {
-    onMessageImageLoad(messageId, imageIndex)
-    return
-  }
-  onMessageImageError(messageId, imageIndex)
-}
-
-function onMessageImageLoad(messageId: string, imageIndex: number): void {
-  const key = messageImageKey(messageId, imageIndex)
-  if (loadedMessageImageKeys.value.has(key)) return
-  const nextLoaded = new Set(loadedMessageImageKeys.value)
-  nextLoaded.add(key)
-  loadedMessageImageKeys.value = nextLoaded
-}
-
-function onMessageImageError(messageId: string, imageIndex: number): void {
-  const key = messageImageKey(messageId, imageIndex)
-  if (failedMessageImageKeys.value.has(key)) return
-  const nextFailed = new Set(failedMessageImageKeys.value)
-  nextFailed.add(key)
-  failedMessageImageKeys.value = nextFailed
-}
-
-function isMessageImageLoaded(messageId: string, imageIndex: number): boolean {
-  return loadedMessageImageKeys.value.has(messageImageKey(messageId, imageIndex))
-}
-
-function isMessageImageFailed(messageId: string, imageIndex: number): boolean {
-  return failedMessageImageKeys.value.has(messageImageKey(messageId, imageIndex))
-}
-
-function openImageModal(imageUrl: string): void {
-  if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
-    imageModalPreviousFocus = document.activeElement
-  }
-  isModalImageLoading.value = true
-  isModalImageFailed.value = false
-  modalImageUrl.value = toRenderableImageUrl(imageUrl)
-}
-
-function onModalImageLoad(): void {
-  isModalImageLoading.value = false
-  isModalImageFailed.value = false
-}
-
-function onModalImageError(): void {
-  isModalImageLoading.value = false
-  isModalImageFailed.value = true
-}
-
-function markdownImageKey(messageId: string, blockIndex: number): string {
-  return `${messageId}:${String(blockIndex)}`
-}
-
-function markdownImageRenderKey(messageId: string, blockIndex: number): string {
-  const key = markdownImageKey(messageId, blockIndex)
-  return `${key}:${String(markdownImageRetryAttempts.value.get(key) ?? 0)}`
-}
-
-function markdownImageActionLabel(alt: string, isLoaded: boolean): string {
-  const description = alt.trim() || '消息内图片'
-  return isLoaded ? `预览图片：${description}` : `正在加载图片：${description}`
-}
-
-function onMarkdownImageElementRef(
-  element: MeasureRefTarget,
-  messageId: string,
-  blockIndex: number,
-): void {
-  if (!(element instanceof HTMLImageElement) || !element.complete || !element.currentSrc) return
-  if (element.naturalWidth > 0) {
-    onMarkdownImageLoad(messageId, blockIndex)
-    return
-  }
-  onMarkdownImageError(messageId, blockIndex)
-}
-
-function onMarkdownImageLoad(messageId: string, blockIndex: number): void {
-  const key = markdownImageKey(messageId, blockIndex)
-  if (loadedMarkdownImageKeys.value.has(key)) return
-  const nextLoaded = new Set(loadedMarkdownImageKeys.value)
-  nextLoaded.add(key)
-  loadedMarkdownImageKeys.value = nextLoaded
-}
-
-function onMarkdownImageError(messageId: string, blockIndex: number): void {
-  const key = markdownImageKey(messageId, blockIndex)
-  if (loadedMarkdownImageKeys.value.has(key)) {
-    const nextLoaded = new Set(loadedMarkdownImageKeys.value)
-    nextLoaded.delete(key)
-    loadedMarkdownImageKeys.value = nextLoaded
-  }
-  const next = new Set(failedMarkdownImageKeys.value)
-  next.add(key)
-  failedMarkdownImageKeys.value = next
-}
-
-function isMarkdownImageLoaded(messageId: string, blockIndex: number): boolean {
-  return loadedMarkdownImageKeys.value.has(markdownImageKey(messageId, blockIndex))
-}
-
-function isMarkdownImageFailed(messageId: string, blockIndex: number): boolean {
-  return failedMarkdownImageKeys.value.has(markdownImageKey(messageId, blockIndex))
-}
-
-function retryMarkdownImage(messageId: string, blockIndex: number): void {
-  const key = markdownImageKey(messageId, blockIndex)
-  const nextFailed = new Set(failedMarkdownImageKeys.value)
-  nextFailed.delete(key)
-  failedMarkdownImageKeys.value = nextFailed
-  const nextAttempts = new Map(markdownImageRetryAttempts.value)
-  nextAttempts.set(key, (nextAttempts.get(key) ?? 0) + 1)
-  markdownImageRetryAttempts.value = nextAttempts
-}
-
-function closeImageModal(): void {
-  modalImageUrl.value = ''
-}
-
-function onWindowKeydownForImageModal(event: KeyboardEvent): void {
-  if (!modalImageUrl.value) return
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    closeImageModal()
-    return
-  }
-  if (event.key === 'Tab') {
-    const focusable = imageModalContentRef.value?.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
-    )
-    if (!focusable || focusable.length === 0) return
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    if (!first || !last) return
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault()
-      last.focus()
-      return
-    }
-    if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault()
-      first.focus()
-      return
-    }
-  }
-  if (event.key === '+' || event.key === '=') {
-    event.preventDefault()
-    zoomInImageModal()
-    return
-  }
-  if (event.key === '-' || event.key === '_') {
-    event.preventDefault()
-    zoomOutImageModal()
-    return
-  }
-  if (event.key === '0') {
-    event.preventDefault()
-    resetImageModalView()
-  }
-}
-
-function onWindowResizeForImageModal(): void {
-  if (!modalImageUrl.value) return
-  syncImageModalOffsets()
-}
-
-function alignLiveOverlayReasoningToBottom(): void {
-  const reasoning = liveOverlayReasoningRef.value
-  if (!reasoning) return
-  reasoning.scrollTop = reasoning.scrollHeight
-}
-
-watch(
-  () => effectiveLiveOverlay.value?.reasoningText,
-  async (reasoningText) => {
-    if (!reasoningText || !shouldRenderDetailedLiveOverlay.value) return
+  () => projectionContentSignature(props.projection),
+  async () => {
+    if (await restoreOlderHistoryAnchor()) return
+    const shouldFollow = !userIsAwayFromBottom
     await nextTick()
-    alignLiveOverlayReasoningToBottom()
-  },
-)
-
-watch(
-  effectiveLiveOverlay,
-  (overlay) => {
-    if (!overlay) {
-      closeLiveOverlayDetail()
+    if (shouldFollow && !userIsAwayFromBottom) {
+      isAwayFromBottom.value = false
+      scrollToBottom()
     }
   },
 )
 
-watch(() => props.activeThreadId, () => {
-  clearHighlightedMessage()
-  clearRollbackConfirmation()
-  activeMessageActionId.value = ''
-  expandedCodeBlockKeys.value = new Set()
-  closeLiveOverlayDetail()
-})
+watch(
+  () => props.projection.turns.flatMap((turn) => turn.interactions)
+    .filter((interaction) => interaction.status === 'pending' && interaction.responseId !== null)
+    .map((interaction) => interaction.responseId)
+    .join(','),
+  () => {
+    const pendingIds = new Set(props.projection.turns.flatMap((turn) => turn.interactions)
+      .filter((interaction) => interaction.status === 'pending' && interaction.responseId !== null)
+      .map((interaction) => interaction.responseId as number))
+    respondingRequestIds.value = new Set([...respondingRequestIds.value].filter((id) => pendingIds.has(id)))
+  },
+)
 
-defineExpose<{
-  focusMessage: (messageId: string) => Promise<boolean>
-}>({
-  focusMessage,
-})
+defineExpose<ThreadConversationExposed>({ focusMessage })
 
-onMounted(() => {
-  window.addEventListener('keydown', onWindowKeyDownForConversationSurface, { capture: true })
-  document.addEventListener('visibilitychange', onCommandElapsedVisibilityChange)
-  document.addEventListener('visibilitychange', onConversationScrollVisibilityChange)
+onMounted(async () => {
+  await nextTick()
+  const container = conversationListRef.value
+  if (container) {
+    syncConversationViewport(container)
+    conversationListResizeObserver?.observe(container)
+  }
+  await restoreScrollState()
 })
 
 onBeforeUnmount(() => {
-  settlePendingScrollStateBeforeThreadChange(props.activeThreadId)
-  cancelScheduledScrollWorkForThreadChange()
-  document.removeEventListener('visibilitychange', onCommandElapsedVisibilityChange)
-  document.removeEventListener('visibilitychange', onConversationScrollVisibilityChange)
-  for (const requestId of requestResponseResetTimers.keys()) clearRequestResponding(requestId)
-  stopCommandElapsedTimer()
-  clearHighlightedMessage()
-  clearRollbackConfirmation()
-  restoreLiveOverlayDetailEnvironment()
-  if (copiedCodeBlockTimer !== null && typeof window !== 'undefined') {
-    window.clearTimeout(copiedCodeBlockTimer)
-    copiedCodeBlockTimer = null
-  }
-  if (copiedMessageTimer !== null && typeof window !== 'undefined') {
-    window.clearTimeout(copiedMessageTimer)
-    copiedMessageTimer = null
-  }
-  if (chatFeedbackMetricFrame) {
-    cancelAnimationFrame(chatFeedbackMetricFrame)
-  }
-  if (scrollStateIdleTimer && typeof window !== 'undefined') {
-    window.clearTimeout(scrollStateIdleTimer)
-    scrollStateIdleTimer = null
-  }
-  clearRemoteOlderHistoryRequestInFlight()
-  if (observedConversationListElement) {
-    observedConversationListElement.removeEventListener('scroll', onConversationScroll, { passive: true } as AddEventListenerOptions)
-    observedConversationListElement.removeEventListener('wheel', clearPendingForegroundScrollIntent)
-    observedConversationListElement.removeEventListener('touchstart', clearPendingForegroundScrollIntent)
-    observedConversationListElement.removeEventListener('pointerdown', clearPendingForegroundScrollIntent)
-    observedConversationListElement.removeEventListener('keydown', onConversationScrollIntentKeydown)
-    observedConversationListElement = null
-  }
+  publishScrollState()
+  if (scrollFrame) window.cancelAnimationFrame(scrollFrame)
+  if (heightRestoreFrame) window.cancelAnimationFrame(heightRestoreFrame)
+  if (rollbackTimer) window.clearTimeout(rollbackTimer)
+  if (highlightTimer) window.clearTimeout(highlightTimer)
   conversationListResizeObserver?.disconnect()
-  itemResizeObserver?.disconnect()
-  disconnectAllObservedElements(observedMessageElementsById)
-  window.removeEventListener('pointerdown', onWindowPointerDownForFileLinkContextMenu, { capture: true })
-  window.removeEventListener('blur', onWindowBlurForFileLinkContextMenu)
-  window.removeEventListener('keydown', onWindowKeydownForFileLinkContextMenu)
-  window.removeEventListener('keydown', onWindowKeydownForImageModal)
-  window.removeEventListener('resize', onWindowResizeForImageModal)
-  window.removeEventListener('keydown', onWindowKeyDownForConversationSurface, { capture: true })
-  if (typeof document !== 'undefined') {
-    document.body.style.overflow = previousBodyOverflow
-  }
+  turnResizeObserver?.disconnect()
+  observedTurnElementsById.clear()
 })
 </script>
 
 <style scoped>
-@reference "tailwindcss";
-
-.conversation-root {
-  @apply relative h-full min-h-0 p-0 flex flex-col overflow-y-hidden overflow-x-visible bg-transparent border-none rounded-none;
-}
-
-.conversation-root--switching {
-  @apply overflow-hidden;
-}
-
-.conversation-status-loading {
-  @apply sticky top-0 z-10 mb-1.5 mt-1.5 flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs;
-  width: fit-content;
-  max-width: min(32rem, calc(100% - 1rem));
-  margin-inline: auto;
-  border-color: var(--ui-border-subtle);
-  background: color-mix(in srgb, var(--ui-bg-surface) 96%, transparent);
-  color: var(--ui-text-secondary);
-  backdrop-filter: blur(6px);
-  animation: conversationFadeIn 160ms ease-out;
-  box-shadow: 0 10px 24px -22px rgb(31 41 55 / 0.16);
-}
-
-.conversation-status-loading--switching {
-  border-color: color-mix(in srgb, var(--ui-warning) 24%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-warning) 6%, var(--ui-bg-surface));
-  color: color-mix(in srgb, var(--ui-warning) 72%, var(--ui-text-primary));
-}
-
-.conversation-status-loading-inline {
-  @apply min-w-0;
-}
-
-.conversation-item-process {
-  @apply justify-center;
-}
-
-.conversation-process-panel {
-  @apply w-full mx-auto mb-1 flex flex-col gap-2;
-  max-width: min(var(--content-shell-max-width, 88rem), 100%);
-}
-
-.conversation-process-toggle {
-  @apply inline-flex w-full items-center justify-between border px-3 py-1.5 text-left text-[11px] font-semibold transition-colors;
-  border-radius: var(--ui-radius-control);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  color: var(--ui-text-secondary);
-}
-
-.conversation-process-toggle:hover {
-  border-color: var(--ui-border-strong);
-  background: var(--ui-bg-row-hover);
-}
-
-.conversation-process-section {
-  @apply flex flex-col gap-2;
-}
-
-.conversation-process-stack {
-  @apply flex flex-col gap-2;
-}
-
-.conversation-empty-state {
-  @apply flex flex-col items-start gap-3 px-2 sm:px-5 py-2.5;
-}
-
-.conversation-load-error {
-  @apply mx-2 flex max-w-[28rem] flex-col items-start gap-2 rounded-xl border px-4 py-3 sm:mx-5;
-  border-color: color-mix(in srgb, var(--ui-warning) 32%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-warning) 7%, var(--ui-bg-surface));
-}
-
-.conversation-load-error-title {
-  @apply m-0 text-sm font-semibold;
+.transcript-root {
+  --transcript-content-max: min(var(--ui-content-max), 48rem);
+  position: relative;
+  height: 100%;
+  min-height: 0;
   color: var(--ui-text-primary);
 }
 
-.conversation-load-error-detail {
-  @apply m-0 text-xs leading-5;
-  color: var(--ui-text-secondary);
+.transcript-root.is-switching {
+  opacity: 0.78;
 }
 
-.conversation-load-error-actions {
-  @apply mt-1 flex flex-wrap items-center gap-2;
+.transcript-loading {
+  position: absolute;
+  z-index: 3;
+  top: 10px;
+  left: 50%;
+  translate: -50% 0;
+  pointer-events: none;
 }
 
-.conversation-load-error-action {
-  @apply inline-flex min-h-11 items-center justify-center border px-3.5 py-2 text-xs font-semibold transition-colors;
-  border-radius: var(--ui-radius-control);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  color: var(--ui-text-secondary);
-  touch-action: manipulation;
-}
-
-.conversation-load-error-action:hover {
-  border-color: var(--ui-border-strong);
-  background: var(--ui-bg-row-hover);
-  color: var(--ui-text-primary);
-}
-
-.conversation-load-error-action-primary {
-  border-color: color-mix(in srgb, var(--ui-accent) 28%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-accent) 8%, var(--ui-bg-surface));
-  color: var(--ui-accent);
-}
-
-.conversation-empty {
-  @apply m-0 text-sm;
-  color: var(--ui-text-tertiary);
-}
-
-.conversation-empty-actions {
-  @apply flex flex-wrap items-center gap-2;
-}
-
-.conversation-empty-action {
-  @apply inline-flex items-center justify-center border px-3.5 py-1.5 text-xs font-medium transition-colors;
-  border-radius: var(--ui-radius-control);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  color: var(--ui-text-secondary);
-}
-
-.conversation-empty-action:hover {
-  border-color: var(--ui-border-strong);
-  background: var(--ui-bg-row-hover);
-  color: var(--ui-text-primary);
-}
-
-.conversation-empty-action-primary {
-  border-color: color-mix(in srgb, var(--ui-accent) 26%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-bg-surface));
-  color: var(--ui-accent);
-}
-
-.conversation-empty-action-primary:hover {
-  border-color: color-mix(in srgb, var(--ui-accent) 42%, var(--ui-border-strong));
-  background: color-mix(in srgb, var(--ui-accent) 10%, var(--ui-bg-surface));
-}
-
-.conversation-list {
-  @apply h-full min-h-0 list-none m-0 px-2.5 sm:px-5 py-0 overflow-y-auto overflow-x-visible flex flex-col gap-1.5;
-  padding-bottom: max(0.875rem, env(safe-area-inset-bottom));
+.transcript-list {
+  box-sizing: border-box;
+  height: 100%;
+  margin: 0;
+  padding: 28px max(20px, calc((100% - var(--transcript-content-max)) / 2)) 64px;
+  overflow: auto;
   overflow-anchor: none;
-  overscroll-behavior-y: contain;
-  -webkit-overflow-scrolling: touch;
-  touch-action: pan-y;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--ui-text-tertiary) 42%, transparent) transparent;
-  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  list-style: none;
+  scroll-padding-block: 72px;
 }
 
-.conversation-list:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--ui-focus) 46%, transparent);
-  outline-offset: -2px;
-}
-
-.conversation-list::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-.conversation-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.conversation-list::-webkit-scrollbar-thumb {
-  min-height: 3rem;
-  border: 0;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--ui-text-tertiary) 32%, transparent);
-}
-
-.conversation-list::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--ui-text-secondary) 42%, transparent);
-}
-
-.conversation-list--switching {
-  opacity: 0.9;
+.virtual-turn-spacer {
+  width: 100%;
+  min-height: 0;
+  pointer-events: none;
 }
 
 .conversation-jump-to-latest {
-  @apply absolute bottom-4 left-1/2 z-20 inline-flex min-h-8 -translate-x-1/2 items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold;
-  bottom: max(1rem, calc(env(safe-area-inset-bottom) + 0.5rem));
-  border-color: var(--ui-border-subtle);
-  background: color-mix(in srgb, var(--ui-bg-surface) 96%, transparent);
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  bottom: 18px;
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: 999px;
+  background: var(--ui-bg-surface);
+  box-shadow: 0 8px 20px rgb(0 0 0 / 0.1);
   color: var(--ui-text-secondary);
-  box-shadow: 0 8px 22px rgb(0 0 0 / 0.08);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+  transform: translateX(-50%);
   transition:
     background-color var(--motion-duration-fast) var(--motion-ease-standard),
     border-color var(--motion-duration-fast) var(--motion-ease-standard),
     color var(--motion-duration-fast) var(--motion-ease-standard),
-    transform var(--motion-duration-press) var(--motion-ease-out);
+    transform var(--motion-duration-fast) var(--motion-ease-out);
 }
 
 .conversation-jump-to-latest:hover {
   border-color: var(--ui-border-strong);
+  background: var(--ui-bg-row-hover);
   color: var(--ui-text-primary);
+  transform: translateX(-50%) translateY(-1px);
 }
 
 .conversation-jump-to-latest:focus-visible {
@@ -6679,2120 +1548,1138 @@ onBeforeUnmount(() => {
   outline-offset: 2px;
 }
 
-.conversation-jump-to-latest:active {
-  transform: translateX(-50%) scale(0.96);
-}
-
-.conversation-jump-to-latest.has-pending-updates {
-  border-color: color-mix(in srgb, var(--ui-accent) 28%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-bg-surface));
-  color: var(--ui-accent);
-}
-
-.conversation-jump-to-latest-icon {
-  @apply h-4 w-4;
-  transform: rotate(180deg);
-}
-
 .conversation-jump-to-latest-label {
-  @apply hidden sm:inline;
-}
-
-.conversation-jump-to-latest.has-pending-updates .conversation-jump-to-latest-label {
-  @apply inline;
-}
-
-.conversation-jump-to-latest-badge {
-  @apply h-2.5 w-2.5 rounded-full bg-blue-500;
-}
-
-.conversation-item {
-  @apply m-0 w-full flex;
-}
-
-.conversation-item-actionable {
-  position: relative;
-  z-index: 0;
-  overflow: visible;
-}
-
-.conversation-spacer {
-  @apply m-0 w-full flex-none p-0 pointer-events-none;
-}
-
-.conversation-item-load-more {
-  @apply justify-center;
-}
-
-.conversation-load-more-button {
-  @apply mx-auto flex w-full flex-col items-center gap-0.5 border border-dashed px-3 py-2 text-center transition-colors disabled:cursor-default disabled:opacity-70;
-  max-width: min(var(--content-shell-max-width, 88rem), 100%);
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-}
-
-.conversation-load-more-button:hover {
-  border-color: var(--ui-border-strong);
-  background: var(--ui-bg-row-hover);
-}
-
-.conversation-load-more-title {
-  @apply text-xs font-semibold;
-  color: var(--ui-text-primary);
-}
-
-.conversation-load-more-hint {
-  @apply text-[11px];
-  color: var(--ui-text-tertiary);
-}
-
-.message-row {
-  @apply relative w-full mx-auto flex;
-  max-width: min(var(--content-shell-max-width, 88rem), 100%);
-}
-
-.message-row[data-role='user'] {
-  @apply justify-end;
-}
-
-.message-row[data-role='assistant'],
-.message-row[data-role='system'] {
-  @apply justify-start;
-}
-
-.conversation-bottom-anchor {
-  @apply h-px;
-  order: 30;
-}
-
-.message-stack {
-  @apply relative flex flex-col w-full gap-0.5;
-  overflow: visible;
-}
-
-.request-card {
-  @apply w-full border px-3 sm:px-3.5 py-2.5 sm:py-3 flex flex-col gap-2;
-  max-width: min(60rem, 100%);
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-}
-
-.request-card--tool-call {
-  border-color: color-mix(in srgb, var(--ui-danger) 20%, var(--ui-border-subtle));
-}
-
-.request-card--permission {
-  border-color: color-mix(in srgb, var(--ui-accent) 34%, var(--ui-border-subtle));
-}
-
-.request-title {
-  @apply m-0 text-sm leading-5 font-semibold;
-  color: var(--ui-text-primary);
-}
-
-.request-meta {
-  @apply m-0 text-xs leading-4;
-  color: var(--ui-text-tertiary);
-}
-
-.request-reason {
-  @apply m-0 whitespace-pre-wrap text-sm leading-5;
-  color: var(--ui-text-secondary);
-}
-
-.request-actions {
-  @apply flex flex-wrap gap-1.5 sm:gap-2;
-}
-
-.request-actions-prominent {
-  @apply pt-0.5;
-}
-
-.request-button {
-  @apply border px-3 py-1.5 text-xs font-medium transition-colors;
-  min-height: 2rem;
-  border-radius: var(--ui-radius-control);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  color: var(--ui-text-secondary);
-}
-
-.request-button:hover {
-  border-color: var(--ui-border-strong);
-  background: var(--ui-bg-row-hover);
-  color: var(--ui-text-primary);
-}
-
-.request-button:disabled {
-  cursor: wait;
-  opacity: 0.6;
-}
-
-.request-button-subtle {
-  color: var(--ui-text-tertiary);
-}
-
-.request-button-primary {
-  border-color: var(--ui-accent);
-  background: var(--ui-accent);
-  color: #fff;
-}
-
-.request-button-primary:hover {
-  border-color: color-mix(in srgb, var(--ui-accent) 82%, #000);
-  background: color-mix(in srgb, var(--ui-accent) 88%, #000);
-  color: #fff;
-}
-
-.request-user-input {
-  @apply flex flex-col gap-2.5;
-}
-
-.request-tool-call {
-  @apply flex flex-col gap-2.5;
-}
-
-.request-tool-panel {
-  @apply border px-3 py-3 flex flex-col gap-2;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
-}
-
-.request-tool-badge {
-  @apply w-fit rounded-full border px-2 py-0.5 text-[10px] font-semibold;
-  border-color: color-mix(in srgb, var(--ui-danger) 26%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
-  color: var(--ui-danger);
-}
-
-.request-tool-title {
-  @apply m-0 text-base leading-6 font-semibold;
-  color: var(--ui-text-primary);
-}
-
-.request-tool-text {
-  @apply m-0 text-sm leading-5;
-  color: var(--ui-text-secondary);
-}
-
-.request-tool-grid {
-  @apply m-0 grid grid-cols-1 sm:grid-cols-2 gap-2;
-}
-
-.request-tool-item {
-  @apply border px-2.5 py-2;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-}
-
-.request-tool-term {
-  @apply text-[11px] leading-4;
-  color: var(--ui-text-tertiary);
-}
-
-.request-tool-value {
-  @apply m-0 break-all font-mono text-xs leading-5;
-  color: var(--ui-text-primary);
-}
-
-.request-permission-panel {
-  @apply border px-3 py-3 flex flex-col gap-2;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
-}
-
-.request-permission-badge {
-  @apply w-fit rounded-full border px-2 py-0.5 text-[10px] font-semibold;
-  border-color: color-mix(in srgb, var(--ui-danger) 26%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
-  color: var(--ui-danger);
-}
-
-.request-permission-title {
-  @apply m-0 text-base leading-6 font-semibold;
-  color: var(--ui-text-primary);
-}
-
-.request-permission-text {
-  @apply m-0 text-sm leading-5;
-  color: var(--ui-text-secondary);
-}
-
-.request-permission-grid {
-  @apply m-0 grid grid-cols-1 sm:grid-cols-2 gap-2;
-}
-
-.request-permission-item {
-  @apply border px-2.5 py-2;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-}
-
-.request-permission-term {
-  @apply text-[11px] leading-4;
-  color: var(--ui-text-tertiary);
-}
-
-.request-permission-value {
-  @apply m-0 break-all font-mono text-xs leading-5;
-  color: var(--ui-text-primary);
-}
-
-.request-permission-params {
-  @apply m-0 flex flex-col divide-y;
-  border-color: var(--ui-border-subtle);
-}
-
-.request-permission-param {
-  @apply grid grid-cols-[5rem_minmax(0,1fr)] gap-2 py-1.5 text-xs leading-5;
-  border-color: var(--ui-border-subtle);
-}
-
-.request-permission-param dt {
-  color: var(--ui-text-tertiary);
-}
-
-.request-permission-param dd {
-  @apply m-0 break-all font-mono;
-  color: var(--ui-text-primary);
-}
-
-.request-permission-note {
-  @apply m-0 px-2.5 py-2 text-xs leading-5;
-  border-radius: var(--ui-radius-card);
-  background: color-mix(in srgb, var(--ui-danger) 6%, var(--ui-bg-surface));
-  color: color-mix(in srgb, var(--ui-danger) 78%, var(--ui-text-primary));
-}
-
-.request-question {
-  @apply flex flex-col gap-1;
-}
-
-.request-question-title {
-  @apply m-0 text-sm leading-5 font-medium text-amber-900;
-}
-
-.request-required {
-  @apply ml-1 rounded-full bg-[#f3d7a4] px-1.5 py-0.5 text-[10px] font-semibold text-[#8a4a0d];
-}
-
-.request-question-text {
-  @apply m-0 text-xs leading-4 text-amber-800;
-}
-
-.request-link {
-  @apply inline-flex w-fit rounded-xl border border-[#e2c486] bg-white px-3 py-1.5 text-xs font-medium text-[#8a4a0d] underline-offset-2 hover:bg-[#fff0c9] hover:underline;
-}
-
-.request-select {
-  @apply h-8 rounded-xl border border-[#e2c486] bg-white px-2 text-sm text-[#7d4911];
-}
-
-.request-input {
-  @apply h-8 rounded-xl border border-[#e2c486] bg-white px-2 text-sm text-[#7d4911] placeholder:text-[#c28a4a];
-}
-
-.request-textarea {
-  @apply min-h-20 resize-y rounded-xl border border-[#e2c486] bg-white px-2.5 py-2 text-sm leading-5 text-[#7d4911] placeholder:text-[#c28a4a];
-}
-
-.request-checkbox-row {
-  @apply inline-flex min-h-8 w-fit items-center gap-2 rounded-xl border border-[#e2c486] bg-white px-3 py-1 text-sm text-[#7d4911];
-}
-
-.request-checkbox-row input {
-  @apply h-4 w-4 accent-[#0f766e];
-}
-
-.live-overlay-inline {
-  @apply w-full border px-3 py-2 flex flex-col gap-1.5;
-  max-width: min(60rem, 100%);
-  position: relative;
-  overflow: hidden;
-  border-radius: var(--ui-radius-card);
-  border-color: color-mix(in srgb, var(--ui-accent) 24%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-accent) 5%, var(--ui-bg-surface));
-  box-shadow: 0 10px 24px -24px color-mix(in srgb, var(--ui-accent) 42%, transparent);
-}
-
-.live-overlay-inline-compact {
-  @apply rounded-2xl px-3 py-2;
-  max-width: min(42rem, 100%);
-  transition: border-color var(--motion-duration-fast) var(--motion-ease-standard),
-    background-color var(--motion-duration-fast) var(--motion-ease-standard);
-}
-
-.live-overlay-inline-compact:hover {
-  border-color: color-mix(in srgb, var(--ui-accent) 38%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-bg-surface));
-}
-
-.live-overlay-inline-compact::after {
-  display: none;
-}
-
-.live-overlay-inline::after {
-  display: none;
-}
-
-.live-overlay-head {
-  @apply flex items-center gap-2;
-}
-
-.live-overlay-indicator {
-  @apply relative flex h-6 w-6 items-center justify-center rounded-full border border-[#d7ebe7] bg-white shrink-0;
-  overflow: visible;
-}
-
-.live-overlay-indicator-ring {
-  display: none;
-}
-
-.live-overlay-indicator-core {
-  @apply block h-2 w-2 rounded-full bg-[#0f766e];
-  animation: liveOverlayCorePulse 1.4s var(--motion-ease-standard) infinite;
-}
-
-.live-overlay-heading {
-  @apply min-w-0 flex flex-col gap-0.5;
-}
-
-.live-overlay-compact-main {
-  @apply flex w-full items-center gap-2 border-0 bg-transparent p-0 text-left;
-  color: inherit;
-}
-
-.live-overlay-compact-main:hover .live-overlay-compact-label,
-.live-overlay-compact-main:focus-visible .live-overlay-compact-label {
-  color: var(--ui-accent);
-}
-
-.live-overlay-compact-main:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--ui-accent) 35%, transparent);
-  outline-offset: 3px;
-  border-radius: var(--ui-radius-control);
-}
-
-.live-overlay-compact-copy {
-  @apply min-w-0 flex-1 flex flex-col gap-0.5;
-}
-
-.live-overlay-compact-chevron {
-  @apply shrink-0 text-xl leading-none;
-  color: var(--ui-text-tertiary);
-  transform: translateX(0);
-  transition: transform var(--motion-duration-fast) var(--motion-ease-standard),
-    color var(--motion-duration-fast) var(--motion-ease-standard);
-}
-
-.live-overlay-compact-main:hover .live-overlay-compact-chevron,
-.live-overlay-compact-main:focus-visible .live-overlay-compact-chevron {
-  color: var(--ui-accent);
-  transform: translateX(2px);
-}
-
-.live-overlay-compact-head {
-  @apply flex items-center gap-2;
-}
-
-.live-overlay-inline-compact .live-overlay-indicator {
-  @apply h-5 w-5 border-0 bg-transparent;
-}
-
-.live-overlay-inline-compact .live-overlay-indicator-ring {
-  display: none;
-}
-
-.live-overlay-inline-compact .live-overlay-indicator-core {
-  @apply h-2 w-2;
-  animation: liveOverlayCorePulse 1.4s var(--motion-ease-standard) infinite;
-}
-
-.live-overlay-inline-recovering .live-overlay-indicator-ring {
-  display: block;
-  position: absolute;
-  inset: 2px;
-  border: 1.5px solid color-mix(in srgb, var(--ui-accent) 28%, transparent);
-  border-top-color: var(--ui-accent);
-  border-radius: 999px;
-  animation: liveOverlayRecoverySpin 820ms linear infinite;
-}
-
-.live-overlay-inline-recovering .live-overlay-indicator-core {
-  animation: liveOverlayRecoveryCore 820ms var(--motion-ease-standard) infinite;
-}
-
-.live-overlay-label {
-  @apply m-0 text-[11px] uppercase tracking-[0.08em] font-semibold text-[#0f766e];
-}
-
-.live-overlay-compact-label {
-  @apply m-0 text-[13px] font-semibold text-[#1b4d47];
-}
-
-.live-overlay-dots {
-  @apply inline-flex items-center gap-1;
-}
-
-.live-overlay-dot {
-  @apply h-1.5 w-1.5 rounded-full bg-[#0f766e];
-  opacity: 0.28;
-}
-
-.live-overlay-dot:nth-child(2) {
-  opacity: 0.52;
-}
-
-.live-overlay-dot:nth-child(3) {
-  opacity: 0.78;
-}
-
-.live-overlay-detail-list {
-  @apply flex flex-wrap gap-1.5;
-}
-
-.live-overlay-command-details {
-  @apply mb-1;
-}
-
-.live-overlay-detail-chip {
-  @apply inline-flex max-w-full items-center rounded-full border border-[#d6ebe6] bg-white/80 px-2 py-0.5 text-[11px] text-[#476760];
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.live-overlay-command-panel {
-  @apply flex flex-col gap-0;
-}
-
-.live-overlay-command-row {
-  @apply cursor-default;
-}
-
-.live-overlay-command-row:hover {
-  background: var(--ui-bg-row-hover);
-}
-
-.live-overlay-command-output-wrap {
-  @apply rounded-b-lg bg-zinc-900 border border-[#d8cfbf] border-t-0;
-}
-
-.live-overlay-command-output {
-  @apply max-h-40;
-}
-
-.live-overlay-hint {
-  @apply m-0 text-sm leading-5 text-[#5b756f];
-}
-
-.live-overlay-compact-hint {
-  @apply m-0 text-[11px] leading-4 text-[#6b8a84];
-}
-
-.live-overlay-detail-button {
-  @apply relative z-[1] inline-flex h-7 shrink-0 items-center justify-center rounded-full border border-[#c8ddd8] bg-white/90 px-3 text-[11px] font-semibold text-[#0f766e] shadow-sm transition-[background-color,border-color,color,transform] duration-150 hover:border-[#97c2b8] hover:bg-white hover:text-[#0b5e58];
-  touch-action: manipulation;
-}
-
-.live-overlay-detail-button:active {
-  transform: translateY(1px);
-}
-
-.live-overlay-detail-backdrop {
-  @apply fixed inset-0 z-[80] flex items-end justify-center bg-[#111827]/28 px-2 pb-0 backdrop-blur-[2px];
-}
-
-.live-overlay-detail-sheet {
-  @apply w-full max-w-3xl border px-4 pb-4 pt-2 shadow-2xl shadow-[#1f2937]/20;
-  max-height: min(74dvh, 40rem);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-  border-radius: 18px 18px 0 0;
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  color: var(--ui-text-primary);
-}
-
-.live-overlay-detail-handle {
-  @apply mx-auto mb-2 block h-1.5 w-10 rounded-full bg-[#d8cfbf];
-}
-
-.live-overlay-detail-header {
-  @apply sticky top-0 z-[1] -mx-4 flex items-start justify-between gap-3 border-b px-4 pb-3 pt-1 backdrop-blur;
-  border-color: var(--ui-border-subtle);
-  background: color-mix(in srgb, var(--ui-bg-surface) 96%, transparent);
-}
-
-.live-overlay-detail-title-group {
-  @apply min-w-0;
-}
-
-.live-overlay-detail-kicker {
-  @apply m-0 text-[11px] font-semibold uppercase text-[#8f8577];
-  letter-spacing: 0.08em;
-}
-
-.live-overlay-detail-title {
-  @apply m-0 mt-0.5 truncate text-base font-semibold leading-6 text-[#1f2937];
-}
-
-.live-overlay-detail-close {
-  @apply inline-flex h-8 shrink-0 items-center justify-center rounded-full border border-[#d8cfbf] bg-white px-3 text-xs font-semibold text-[#544a3d] shadow-sm;
-}
-
-.live-overlay-detail-sheet-chips {
-  @apply py-3;
-}
-
-.live-overlay-detail-block {
-  @apply border-t border-[#eee6d8] py-3;
-}
-
-.live-overlay-detail-block-title {
-  @apply m-0 mb-2 text-xs font-semibold text-[#0f766e];
-}
-
-.live-overlay-detail-command-row {
-  @apply cursor-default;
-}
-
-.live-overlay-detail-command-row:hover {
-  background: var(--ui-bg-row-hover);
-}
-
-.live-overlay-detail-output,
-.live-overlay-detail-reasoning {
-  @apply mt-2 max-h-[44dvh] overflow-auto border bg-[#111827] px-3 py-2 text-xs leading-5 text-[#f8fafc];
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  -webkit-overflow-scrolling: touch;
-}
-
-.live-overlay-detail-reasoning {
-  background: var(--ui-bg-surface-muted);
-  color: var(--ui-text-primary);
-}
-
-.live-overlay-detail-empty,
-.live-overlay-detail-copy {
-  @apply m-0 text-sm leading-5 text-[#6d6354];
-}
-
-.live-overlay-detail-primary {
-  @apply mt-2 inline-flex h-9 items-center justify-center rounded-full border border-[#0f766e] bg-[#0f766e] px-4 text-sm font-semibold text-white shadow-sm;
-}
-
-.live-overlay-detail-error {
-  @apply m-0 border px-3 py-2 text-sm leading-5;
-  border-radius: var(--ui-radius-card);
-  border-color: color-mix(in srgb, var(--ui-danger) 26%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
-  color: var(--ui-danger);
-}
-
-.live-overlay-request-link {
-  @apply inline-flex w-fit items-center rounded-full border border-[#c8ddd8] bg-white px-3 py-1.5 text-xs font-semibold text-[#0f766e] shadow-sm transition-colors hover:border-[#97c2b8] hover:text-[#0b5e58];
-}
-
-.live-overlay-actions {
-  @apply flex flex-wrap gap-1.5 sm:gap-2;
-}
-
-.live-overlay-action {
-  @apply rounded-xl border border-[#c8ddd8] bg-white px-3 py-1.5 text-xs font-semibold text-[#0f766e] shadow-sm transition-colors hover:border-[#97c2b8] hover:text-[#0b5e58];
-}
-
-.live-overlay-action-primary {
-  @apply border-[#0f766e] bg-[#0f766e] text-white hover:border-[#0b5e58] hover:bg-[#0b5e58] hover:text-white;
-}
-
-.live-overlay-request-count {
-  @apply m-0 text-xs leading-4 text-[#6b8a84];
-}
-
-.live-overlay-reasoning {
-  @apply m-0 text-sm leading-5 text-[#33564f] whitespace-pre-wrap;
-  display: block;
-  max-height: calc(1.25rem * 5);
-  overflow: auto;
-  scrollbar-width: none;
-  mask-image: linear-gradient(to top, black 75%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to top, black 75%, transparent 100%);
-}
-
-.live-overlay-reasoning::-webkit-scrollbar {
-  display: none;
-}
-
-.live-overlay-error {
-  @apply m-0 text-sm leading-5 text-[#c2410c] whitespace-pre-wrap;
-}
-
-.message-body {
-  @apply flex flex-col max-w-full;
-  width: fit-content;
-}
-
-.message-body[data-role='user'] {
-  @apply ml-auto items-end;
-  align-self: flex-end;
-}
-
-.message-image-list {
-  @apply list-none m-0 mb-1.5 p-0 flex flex-wrap gap-1.5;
-}
-
-.message-image-list[data-role='user'] {
-  @apply ml-auto justify-end;
-}
-
-.message-image-item {
-  @apply m-0;
-}
-
-.message-image-button {
-  @apply relative block h-16 w-16 overflow-hidden border p-0;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-}
-
-.message-image-button:hover {
-  border-color: var(--ui-border-strong);
-}
-
-.message-image-button:disabled {
-  @apply cursor-default;
-}
-
-.message-image-loading {
-  @apply absolute inset-0;
-  background:
-    linear-gradient(
-      100deg,
-      var(--ui-bg-surface-muted) 20%,
-      var(--ui-bg-row-hover) 42%,
-      var(--ui-bg-surface-muted) 64%
-    );
-  background-size: 220% 100%;
-  animation: message-image-shimmer 1.2s ease-in-out infinite;
-}
-
-.message-image-preview {
-  @apply block w-16 h-16 object-cover;
-  opacity: 0;
-  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
-}
-
-.message-image-preview.is-loaded {
-  opacity: 1;
-}
-
-.message-image-failed {
-  @apply flex h-full w-full items-center justify-center px-1 text-center text-[10px] leading-3;
-  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
-  color: var(--ui-danger);
-}
-
-.message-markdown-image-button {
-  @apply h-auto w-auto min-h-16 min-w-16;
-  max-width: min(560px, 85vw);
-  max-height: min(460px, 62vh);
-}
-
-.message-markdown-image-button.is-loading {
-  @apply h-16 w-16;
-}
-
-.message-markdown-image-failed {
-  @apply flex min-h-16 w-fit min-w-32 items-center gap-2 border px-3 py-2 text-xs;
-  border-radius: var(--ui-radius-card);
-  border-color: color-mix(in srgb, var(--ui-danger) 24%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-danger) 7%, var(--ui-bg-surface));
-  color: var(--ui-danger);
-}
-
-.message-markdown-image-retry {
-  @apply border px-2 py-1 font-medium;
-  border-radius: var(--ui-radius-control);
-  border-color: color-mix(in srgb, var(--ui-danger) 32%, var(--ui-border-subtle));
-  background: var(--ui-bg-surface);
-  color: var(--ui-danger);
-}
-
-.message-markdown-image-retry:hover {
-  border-color: var(--ui-danger);
-  background: color-mix(in srgb, var(--ui-danger) 10%, var(--ui-bg-surface));
-}
-
-.message-file-attachments {
-  @apply mb-2 grid max-w-full gap-1.5;
-  grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
-}
-
-.message-file-card {
-  @apply flex min-w-0 items-center gap-2 border px-2.5 py-2;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
-}
-
-.message-file-card-icon {
-  @apply inline-flex h-8 w-8 shrink-0 items-center justify-center;
-  border-radius: var(--ui-radius-control);
-  background: var(--ui-bg-surface);
-  color: var(--ui-text-secondary);
-}
-
-.message-file-card-icon-svg {
-  @apply h-4 w-4;
-}
-
-.message-file-card-copy {
-  @apply flex min-w-0 flex-1 flex-col gap-0.5;
-}
-
-.message-file-card-title {
-  @apply block max-w-full truncate text-sm font-medium;
-  color: var(--ui-text-primary);
-}
-
-.message-file-card-path {
-  @apply block max-w-full truncate text-xs;
-  color: var(--ui-text-tertiary);
-  font-family: var(--font-mono-ui);
-}
-
-.message-card {
-  @apply max-w-full px-0 py-0 bg-transparent border-none rounded-none;
-  position: relative;
-}
-
-.message-text-flow {
-  @apply flex flex-col gap-1;
-  overflow-wrap: anywhere;
-}
-
-.message-text-flow--long-collapsed {
-  @apply border p-3;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
-}
-
-.message-text-flow--long-expanded {
-  @apply max-h-[760px] overflow-auto border p-2.5;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
-  overscroll-behavior: contain;
-}
-
-.message-text {
-  @apply m-0 text-sm whitespace-pre-wrap text-[#28231d];
-  font-family: var(--font-sans-reading);
-  font-size: var(--font-size-reading, 15px);
-  line-height: var(--line-height-reading);
-  letter-spacing: var(--tracking-body-soft);
-}
-
-.message-streaming-text::after {
-  content: '';
-  display: inline-block;
-  width: 2px;
-  height: 1em;
-  margin-left: 0.18rem;
-  border-radius: 999px;
-  background: var(--ui-accent);
-  vertical-align: -0.12em;
-  animation: streamingCaretPulse 900ms ease-in-out infinite;
-}
-
-.message-bold-text {
-  @apply font-semibold text-[#1f2937];
-}
-
-.message-markdown-image {
-  @apply w-auto h-auto max-w-[min(560px,85vw)] max-h-[min(460px,62vh)] object-contain bg-white;
-}
-
-.message-inline-code {
-  @apply border px-1.5 py-0.5 text-[0.875em] leading-[1.4] font-mono;
-  border-radius: calc(var(--ui-radius-card) - 2px);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
-  color: var(--ui-text-primary);
-  font-family: var(--font-mono-ui);
-}
-
-.message-table-block {
-  @apply my-1 max-w-full;
-}
-
-.message-table-scroll {
-  @apply max-w-full overflow-x-auto border;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  overscroll-behavior-x: contain;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-gutter: stable;
-}
-
-.message-table-scroll:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--ui-accent) 55%, transparent);
-  outline-offset: 2px;
-}
-
-.message-table {
-  @apply w-full border-collapse text-left;
-  min-width: 620px;
-  font-family: var(--font-sans-reading);
-  font-size: var(--font-size-reading, 15px);
-  line-height: 1.58;
-}
-
-.message-table th {
-  @apply border-b px-3 py-2 text-xs font-semibold;
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
-  color: var(--ui-text-secondary);
-  vertical-align: top;
-}
-
-.message-table td {
-  @apply border-b px-3 py-2 text-sm;
-  border-color: var(--ui-border-subtle);
-  color: var(--ui-text-primary);
-  vertical-align: top;
-}
-
-.message-table tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-.message-table th,
-.message-table td {
-  overflow-wrap: anywhere;
-}
-
-.message-table-cards {
-  @apply hidden flex-col gap-2;
-}
-
-.message-table-card {
-  @apply border p-2.5;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-}
-
-.message-table-card-row {
-  @apply grid gap-1 border-b py-2 first:pt-0 last:border-b-0 last:pb-0;
-  grid-template-columns: minmax(5.5rem, 34%) minmax(0, 1fr);
-  border-color: var(--ui-border-subtle);
-}
-
-.message-table-card-label {
-  @apply text-xs font-semibold leading-relaxed;
-  color: var(--ui-text-secondary);
-}
-
-.message-table-card-value {
-  @apply text-sm leading-relaxed;
-  color: var(--ui-text-primary);
-  overflow-wrap: anywhere;
-}
-
-.message-code-block {
-  @apply my-1 max-w-full overflow-hidden border border-[#d8d1c6] bg-[#191816];
-  border-radius: var(--ui-radius-card);
-}
-
-.message-code-header {
-  @apply flex items-center justify-between gap-3 border-b border-white/10 bg-[#24211d] px-3 py-1.5;
-}
-
-.message-code-meta {
-  @apply flex min-w-0 items-center gap-2;
-}
-
-.message-code-language,
-.message-code-count {
-  @apply text-[11px] font-medium leading-none text-[#d8d0c3];
-  font-family: var(--font-sans-ui);
-}
-
-.message-code-count {
-  @apply text-[#a69c8d];
-}
-
-.message-code-copy {
-  @apply inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 text-[11px] font-medium text-[#d8d0c3] transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30;
-  font-family: var(--font-sans-ui);
-}
-
-.message-code-copy-icon {
-  @apply h-3.5 w-3.5;
-}
-
-.message-code-pre {
-  @apply m-0 max-w-full overflow-x-auto p-0 text-[12.5px] leading-5 text-[#ece7de];
-  font-family: var(--font-mono-ui);
-  tab-size: 2;
-}
-
-.message-code-pre code {
-  @apply block min-w-full py-2;
-}
-
-.message-code-footer {
-  @apply flex justify-center border-t border-white/10 bg-[#24211d] px-3 py-1.5;
-}
-
-.message-code-expand {
-  @apply rounded-md px-2 py-1 text-[11px] font-medium text-[#d8d0c3] transition hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30;
-  font-family: var(--font-sans-ui);
-}
-
-.message-code-line {
-  @apply block min-h-5 px-3 whitespace-pre;
-}
-
-.message-code-line[data-kind='add'] {
-  @apply bg-emerald-500/12 text-emerald-100;
-}
-
-.message-code-line[data-kind='delete'] {
-  @apply bg-rose-500/12 text-rose-100;
-}
-
-.message-code-line[data-kind='meta'] {
-  @apply bg-sky-500/10 text-sky-100;
-}
-
-.message-structured-card {
-  @apply mb-1.5 max-w-full overflow-hidden border;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
-}
-
-.message-structured-summary {
-  @apply flex cursor-pointer items-center justify-between gap-3 px-3 py-2 text-xs;
-  color: var(--ui-text-secondary);
-  font-family: var(--font-sans-ui);
-}
-
-.message-structured-title {
-  @apply font-semibold;
-  color: var(--ui-text-primary);
-}
-
-.message-structured-meta {
-  @apply shrink-0;
-  color: var(--ui-text-tertiary);
-}
-
-.message-structured-pre {
-  @apply m-0 max-h-72 overflow-auto border-t p-3 text-[12px] leading-5;
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  color: var(--ui-text-primary);
-  font-family: var(--font-mono-ui);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.message-long-summary {
-  @apply m-0 text-xs leading-snug;
-  color: var(--ui-text-secondary);
-}
-
-.message-long-actions {
-  @apply mt-1 flex flex-wrap gap-1.5;
-}
-
-.message-delivery-state {
-  @apply mt-1 flex min-h-8 items-center justify-end gap-1.5 px-0.5 text-[11px] font-medium;
-  color: var(--ui-text-tertiary);
-}
-
-.message-delivery-state[data-state='failed'] {
-  color: var(--ui-danger);
-}
-
-.message-delivery-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: currentColor;
-}
-
-.message-delivery-state[data-state='sending'] .message-delivery-dot,
-.message-delivery-state[data-state='confirming'] .message-delivery-dot,
-.message-delivery-state[data-state='retrying'] .message-delivery-dot {
-  animation: message-delivery-pulse 1.2s ease-in-out infinite;
-}
-
-.message-delivery-retry {
-  @apply inline-flex min-h-8 items-center px-2 text-[11px] font-semibold transition-colors duration-150;
-  border-radius: var(--ui-radius-control);
-  color: var(--ui-danger);
-}
-
-.message-delivery-retry:hover,
-.message-delivery-retry:focus-visible {
-  background: color-mix(in srgb, var(--ui-danger) 9%, transparent);
-  outline: none;
-}
-
-@keyframes message-delivery-pulse {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .message-delivery-state[data-state='sending'] .message-delivery-dot,
-  .message-delivery-state[data-state='confirming'] .message-delivery-dot,
-  .message-delivery-state[data-state='retrying'] .message-delivery-dot {
-    animation: none;
-  }
-}
-
-.message-long-action {
-  @apply inline-flex min-h-7 items-center border px-2.5 py-1 text-xs font-medium transition-[background-color,border-color,color] duration-150;
-  border-radius: var(--ui-radius-control);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  color: var(--ui-text-secondary);
-}
-
-.message-long-action:hover {
-  border-color: var(--ui-border-strong);
-  background: var(--ui-bg-row-hover);
-  color: var(--ui-text-primary);
-}
-
-.history-notice-actions {
-  @apply mt-2 flex flex-wrap gap-1.5;
-}
-
-.history-notice-action {
-  @apply inline-flex min-h-7 items-center border px-2.5 py-1 text-xs font-medium transition-[background-color,border-color,color] duration-150;
-  border-radius: var(--ui-radius-control);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  color: var(--ui-text-secondary);
-}
-
-.history-notice-action:hover {
-  border-color: var(--ui-border-strong);
-  background: var(--ui-bg-row-hover);
-  color: var(--ui-text-primary);
-}
-
-.message-file-link {
-  @apply text-sm leading-relaxed text-[#0969da] no-underline hover:text-[#1f6feb] hover:underline underline-offset-2;
-}
-
-.message-file-link-wrap {
-  @apply inline-block align-baseline;
-}
-
-.file-link-context-menu {
-  @apply fixed z-50 min-w-28 border p-1.5 shadow-lg;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-}
-
-.file-link-context-menu-item {
-  @apply block w-full px-2.5 py-1.5 text-left text-xs;
-  border-radius: calc(var(--ui-radius-card) - 2px);
-  color: var(--ui-text-secondary);
-}
-
-.file-link-context-menu-item:hover {
-  background: var(--ui-bg-row-hover);
-  color: var(--ui-text-primary);
-}
-
-.message-stack[data-role='user'] {
-  @apply items-end;
-}
-
-.message-stack[data-role='assistant'],
-.message-stack[data-role='system'] {
-  @apply items-start;
-}
-
-.message-eyebrow {
-  @apply mb-0.5 px-1 text-[10px] font-semibold uppercase;
-  color: var(--ui-text-tertiary);
-  font-family: var(--font-sans-ui);
-}
-
-.message-eyebrow[data-role='user'] {
-  color: var(--ui-text-secondary);
-}
-
-.message-eyebrow[data-role='assistant'] {
-  color: var(--ui-accent);
-}
-
-.message-eyebrow[data-role='system'] {
-  color: var(--ui-warning);
-}
-
-.message-card[data-role='user'] {
-  @apply border px-3 py-2;
-  max-width: min(36rem, 86vw);
-  width: fit-content;
-  margin-left: auto;
-  align-self: flex-end;
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-row-active);
-}
-
-.message-card-context-preview[data-role='user'] {
-  opacity: 0.78;
-  border-style: dashed;
-}
-
-.message-card[data-role='assistant'] {
-  @apply border px-3.5 py-2.5;
-  max-width: min(62rem, calc(100% - 0.5rem));
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  box-shadow: 0 10px 20px -28px rgb(31 41 55 / 0.14);
-}
-
-.message-card[data-role='system'] {
-  @apply border px-3.5 py-2.5;
-  max-width: min(62rem, 100%);
-  border-radius: var(--ui-radius-card);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface-muted);
-}
-
-.sr-only {
   position: absolute;
   width: 1px;
   height: 1px;
-  padding: 0;
   margin: -1px;
+  padding: 0;
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
+}
+
+.run-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.run-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: transcript-dot-bounce 1.2s ease-in-out infinite;
+}
+
+.run-dots i:nth-child(2) { animation-delay: 150ms; }
+.run-dots i:nth-child(3) { animation-delay: 300ms; }
+
+.turn-shell {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 34px;
+}
+
+.user-message {
+  justify-self: end;
+  max-width: min(80%, 640px);
+  padding: 9px 14px;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background: var(--ui-bg-surface-muted);
+}
+
+.user-message.is-failed {
+  border-color: color-mix(in srgb, var(--ui-danger) 42%, var(--ui-border-subtle));
+}
+
+.assistant-turn {
+  min-width: 0;
+}
+
+.turn-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: 2px 0 10px;
+}
+
+.turn-divider-line {
+  height: 1px;
+  min-width: 28px;
+  flex: 1;
+  background: var(--ui-border-subtle);
+}
+
+.turn-wait-time {
+  color: var(--ui-warning);
+}
+
+.turn-live-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 5px 0 12px;
+  color: var(--ui-text-tertiary);
+  font-size: 13px;
+}
+
+.turn-live-state[data-state='sync-degraded'] {
+  color: var(--ui-warning);
+}
+
+.turn-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--ui-accent);
+  animation: transcript-live-pulse 1.2s var(--motion-ease-standard) infinite;
+}
+
+.turn-live-state[data-state='sync-degraded'] .turn-live-dot {
+  background: var(--ui-warning);
+}
+
+.message-markdown {
+  min-width: 0;
+  font-family: var(--font-sans-reading);
+  font-size: var(--font-size-reading);
+  line-height: var(--line-height-reading);
+  overflow-wrap: anywhere;
+}
+
+.message-markdown--final {
+  font-size: calc(var(--font-size-reading) + 0.25px);
+}
+
+.message-markdown :deep(p) {
+  margin: 0 0 0.82em;
+}
+
+.message-markdown :deep(p:last-child),
+.message-markdown :deep(ul:last-child),
+.message-markdown :deep(ol:last-child),
+.message-markdown :deep(pre:last-child) {
+  margin-bottom: 0;
+}
+
+.message-markdown :deep(h1),
+.message-markdown :deep(h2),
+.message-markdown :deep(h3),
+.message-markdown :deep(h4),
+.message-markdown :deep(h5),
+.message-markdown :deep(h6) {
+  margin: 1.2em 0 0.55em;
+  line-height: 1.28;
+  font-weight: 600;
+}
+
+.message-markdown :deep(h1) { font-size: 1.35em; }
+.message-markdown :deep(h2) { font-size: 1.2em; }
+.message-markdown :deep(h3) { font-size: 1.08em; }
+.message-markdown :deep(h4),
+.message-markdown :deep(h5),
+.message-markdown :deep(h6) { font-size: 1em; }
+.message-markdown :deep(:is(h1, h2, h3, h4, h5, h6):first-child) { margin-top: 0; }
+
+.message-markdown :deep(ul),
+.message-markdown :deep(ol) {
+  margin: 0.6em 0 0.85em;
+  padding-left: 1.5em;
+}
+
+.message-markdown :deep(ul) { list-style-type: disc; }
+.message-markdown :deep(ol) { list-style-type: decimal; }
+.message-markdown :deep(ul ul) { list-style-type: circle; }
+.message-markdown :deep(ul ul ul) { list-style-type: square; }
+.message-markdown :deep(li + li) { margin-top: 0.3em; }
+.message-markdown :deep(li > :is(ul, ol)) { margin-block: 0.35em; }
+
+.message-markdown :deep(a),
+.request-link {
+  color: var(--ui-accent);
+  text-underline-offset: 3px;
+}
+
+.message-markdown :deep(code) {
+  padding: 0.12em 0.38em;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: 6px;
+  background: var(--ui-bg-surface-muted);
+  font-size: 0.9em;
+}
+
+.message-markdown :deep(pre),
+.activity-details pre,
+.file-row pre {
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ui-bg-surface-muted) 86%, var(--ui-bg-window));
+  color: var(--ui-text-primary);
+  font: 12.5px/1.55 var(--font-mono-ui);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message-markdown :deep(pre code) {
+  padding: 0;
   border: 0;
-}
-
-.image-modal-backdrop {
-  @apply fixed inset-0 z-50 bg-black/55 p-2 sm:p-6 flex items-center justify-center;
-  backdrop-filter: blur(2px);
-}
-
-.image-modal-enter-active,
-.image-modal-leave-active {
-  transition: opacity var(--motion-duration-base) var(--motion-ease-standard);
-}
-
-.image-modal-enter-active .image-modal-content,
-.image-modal-leave-active .image-modal-content {
-  transition: transform var(--motion-duration-base) var(--motion-ease-out);
-}
-
-.image-modal-enter-from,
-.image-modal-leave-to {
-  opacity: 0;
-}
-
-.image-modal-enter-from .image-modal-content,
-.image-modal-leave-to .image-modal-content {
-  transform: translateY(8px) scale(0.985);
-}
-
-.image-modal-content {
-  @apply relative flex w-full max-w-[min(96vw,1200px)] max-h-[94vh] flex-col gap-3 rounded-[28px] border border-white/10 bg-[#17120c]/92 p-3 shadow-2xl;
-}
-
-.image-modal-toolbar {
-  @apply flex items-center justify-between gap-3;
-}
-
-.image-modal-toolbar-group {
-  @apply flex items-center gap-2;
-}
-
-.image-modal-tool,
-.image-modal-close {
-  @apply inline-flex h-10 items-center justify-center rounded-full border border-[#3d3327] bg-[#f8f2e6] px-3 text-sm font-medium text-[#2b241d] shadow-sm transition-colors;
-}
-
-.image-modal-tool:hover,
-.image-modal-close:hover {
-  @apply bg-white;
-}
-
-.image-modal-tool:disabled {
-  @apply cursor-not-allowed opacity-50;
-}
-
-.image-modal-tool:disabled:hover {
-  @apply bg-[#f8f2e6];
-}
-
-.image-modal-scale {
-  @apply min-w-18 px-4 tabular-nums;
-}
-
-.image-modal-close {
-  @apply w-10 px-0;
-}
-
-.image-modal-stage {
-  @apply relative flex min-h-[min(58vh,420px)] flex-1 items-center justify-center overflow-hidden rounded-[24px] bg-[#0d0b08]/55;
-  touch-action: none;
-}
-
-.image-modal-status {
-  @apply absolute inset-0 z-10 flex items-center justify-center gap-2 text-sm font-medium text-white/80;
-}
-
-.image-modal-status--error {
-  @apply text-red-200;
-}
-
-.image-modal-spinner {
-  @apply h-5 w-5 rounded-full border-2 border-white/25 border-t-white;
-  animation: image-modal-spin 800ms linear infinite;
-}
-
-.image-modal-stage--dragging {
-  cursor: grabbing;
-}
-
-.image-modal-image {
-  @apply block max-w-full max-h-[calc(94vh-7rem)] rounded-2xl bg-white shadow-2xl select-none;
-  transform-origin: center center;
-  will-change: transform;
-  opacity: 0;
-  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
-}
-
-.image-modal-image.is-loaded {
-  opacity: 1;
-}
-
-.icon-svg {
-  @apply w-5 h-5;
-}
-
-.conversation-item-actionable:hover,
-.conversation-item-actionable:focus-within {
-  z-index: 8;
-}
-
-.conversation-item-highlighted .message-card {
-  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.16), 0 14px 32px rgba(15, 118, 110, 0.12);
-}
-
-.message-card:focus-visible {
-  outline: 2px solid rgba(15, 118, 110, 0.28);
-  outline-offset: 3px;
-}
-
-.conversation-item-actions-active .message-action-button,
-.conversation-item-actionable:focus-within .message-action-button {
-  @apply opacity-90;
-  pointer-events: auto;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .conversation-item-actionable:hover .message-action-button {
-    @apply opacity-90;
-    pointer-events: auto;
-  }
+  background: transparent;
 }
 
 .message-actions {
-  @apply inline-flex items-center gap-2;
-  position: absolute;
-  left: 0.5rem;
-  right: 0.5rem;
-  bottom: -0.5rem;
-  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  opacity: 0;
   pointer-events: none;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
-.message-actions-main {
-  @apply inline-flex items-center gap-0.5;
-  margin-left: auto;
-}
-
-.message-action-button {
-  @apply opacity-0 inline-flex h-8 w-8 items-center justify-center self-start border border-transparent p-0 text-[11px] shadow-sm;
-  border-radius: var(--ui-radius-control);
-  background: color-mix(in srgb, var(--ui-bg-surface) 88%, transparent);
-  color: var(--ui-text-tertiary);
-  box-shadow: 0 6px 14px rgb(0 0 0 / 0.05);
-  pointer-events: none;
-  transition:
-    background-color var(--motion-duration-fast) var(--motion-ease-standard),
-    border-color var(--motion-duration-fast) var(--motion-ease-standard),
-    color var(--motion-duration-fast) var(--motion-ease-standard),
-    opacity var(--motion-duration-fast) var(--motion-ease-standard),
-    transform var(--motion-duration-fast) var(--motion-ease-out);
-}
-
-.message-action-button:active {
-  transform: scale(0.96);
-}
-
-.message-action-button:hover {
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-row-hover);
-  color: var(--ui-text-secondary);
-}
-
-.message-action-button.is-copied {
-  color: var(--ui-success);
-}
-
-.message-action-button--favorite.is-favorited {
-  @apply opacity-100;
-  border-color: color-mix(in srgb, var(--ui-warning) 28%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-warning) 8%, var(--ui-bg-surface));
-  color: var(--ui-warning);
+.user-message:hover .message-actions,
+.user-message:focus-within .message-actions,
+.final-answer:hover .message-actions,
+.final-answer:focus-within .message-actions,
+.message-actions:has(.delivery-state) {
+  opacity: 1;
   pointer-events: auto;
 }
 
-.message-action-button--rollback {
-  border-color: color-mix(in srgb, var(--ui-danger) 22%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-danger) 6%, var(--ui-bg-surface));
+.message-actions--user {
+  justify-content: flex-end;
+}
+
+.message-action,
+.inline-copy {
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ui-text-tertiary);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.message-action:hover,
+.inline-copy:hover {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+.message-action.is-confirming {
+  background: color-mix(in srgb, var(--ui-danger) 10%, transparent);
   color: var(--ui-danger);
 }
 
-.message-action-button--edit {
-  border-color: color-mix(in srgb, var(--ui-accent) 18%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-accent) 5%, var(--ui-bg-surface));
-  color: var(--ui-accent);
-}
-
-.message-action-button--rollback:hover {
-  border-color: color-mix(in srgb, var(--ui-danger) 34%, var(--ui-border-strong));
-  background: color-mix(in srgb, var(--ui-danger) 9%, var(--ui-bg-surface));
-  color: color-mix(in srgb, var(--ui-danger) 84%, var(--ui-text-primary));
-}
-
-.message-action-button--rollback.is-confirming {
-  @apply opacity-100;
-  border-color: color-mix(in srgb, var(--ui-danger) 46%, var(--ui-border-strong));
-  background: color-mix(in srgb, var(--ui-danger) 10%, var(--ui-bg-surface));
-  color: color-mix(in srgb, var(--ui-danger) 84%, var(--ui-text-primary));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-danger) 18%, transparent);
-}
-
-.message-action-icon {
-  @apply w-3.5 h-3.5;
-}
-
-.message-action-label {
-  @apply sr-only;
-}
-
-.plan-card {
-  box-sizing: border-box;
-  width: min(42rem, 100%);
-  max-width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--ui-accent) 22%, var(--ui-border-subtle));
-  border-radius: var(--ui-radius-card);
-  background: color-mix(in srgb, var(--ui-accent) 4%, var(--ui-bg-surface));
-}
-
-.plan-card.is-streaming {
-  border-color: color-mix(in srgb, var(--ui-accent) 34%, var(--ui-border-subtle));
-}
-
-.plan-card-header {
-  box-sizing: border-box;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: .65rem;
-  width: 100%;
-  min-height: 42px;
-  padding: .55rem .7rem;
-  border: 0;
-  background: transparent;
-  color: var(--ui-text-primary);
-  text-align: left;
-  cursor: pointer;
-}
-
-.plan-card-header:hover,
-.plan-card-header:focus-visible {
-  background: color-mix(in srgb, var(--ui-accent) 6%, transparent);
-}
-
-.plan-card-title-wrap {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: .5rem;
-}
-
-.plan-card-icon {
-  display: inline-grid;
-  width: 20px;
-  height: 20px;
-  flex: 0 0 auto;
-  place-items: center;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--ui-accent) 12%, transparent);
-  color: var(--ui-accent);
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.plan-card-title {
-  overflow: hidden;
+.delivery-state {
+  margin-right: auto;
+  color: var(--ui-text-tertiary);
   font-size: 12px;
-  font-weight: 650;
+}
+
+.delivery-state[data-state='failed'] {
+  color: var(--ui-danger);
+}
+
+.user-images {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.attachment-chip {
+  max-width: 100%;
+  padding: 3px 8px;
+  overflow: hidden;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: 999px;
+  color: var(--ui-text-secondary);
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.plan-card-meta,
-.plan-step-status {
-  color: var(--ui-text-secondary);
-  font-size: 11px;
-  white-space: nowrap;
+.turn-process {
+  margin: 0 0 12px;
 }
 
-.plan-card-chevron {
-  color: var(--ui-text-tertiary);
-  font-size: 18px;
-  line-height: 1;
-  transform: rotate(90deg);
-  transition: transform var(--motion-duration-fast) var(--motion-ease-standard);
-}
-
-.plan-card-chevron.is-open {
-  transform: rotate(-90deg);
-}
-
-.plan-card-body {
-  padding: 0 .75rem .75rem 2.95rem;
-}
-
-.plan-card-explanation,
-.plan-card-raw {
-  margin: 0 0 .6rem;
-  color: var(--ui-text-secondary);
-  font-size: 12px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-
-.plan-step-list {
-  display: grid;
-  gap: .42rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.plan-step {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  align-items: start;
-  gap: .35rem;
-  color: var(--ui-text-secondary);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.plan-step-gap {
-  padding-left: 1.45rem;
-  color: var(--ui-text-secondary);
-  font-size: 11px;
-  line-height: 1.35;
-  list-style: none;
-}
-
-.plan-step-marker {
-  display: inline-grid;
-  width: 16px;
-  height: 16px;
-  place-items: center;
-  margin-top: 1px;
-  border: 1px solid var(--ui-border-subtle);
-  border-radius: 50%;
-  color: var(--ui-text-tertiary);
-  font-size: 10px;
-}
-
-.plan-step[data-status='completed'] .plan-step-marker {
-  border-color: color-mix(in srgb, var(--ui-success) 38%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-success) 9%, transparent);
-  color: var(--ui-success);
-}
-
-.plan-step[data-status='inProgress'] .plan-step-marker,
-.plan-step[data-status='inProgress'] .plan-step-status {
-  border-color: color-mix(in srgb, var(--ui-accent) 42%, var(--ui-border-subtle));
-  color: var(--ui-accent);
-}
-
-.plan-steps-toggle {
-  min-height: 28px;
-  margin-top: .55rem;
-  padding: 0 .45rem;
+.process-toggle {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
   border: 0;
-  border-radius: var(--ui-radius-control);
   background: transparent;
-  color: var(--ui-text-secondary);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
+  color: var(--ui-text-tertiary);
   cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  transition: color var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
-.plan-steps-toggle:hover,
-.plan-steps-toggle:focus-visible {
-  background: var(--ui-bg-row-hover);
+.process-toggle:hover:not(:disabled),
+.process-toggle:focus-visible {
   color: var(--ui-text-primary);
 }
 
-.plan-card-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: .55rem;
-  margin-top: .75rem;
-  color: var(--ui-text-secondary);
-  font-size: 11px;
+.process-toggle:focus-visible {
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 
-.plan-card-actions button {
-  min-height: 30px;
-  padding: 0 .7rem;
-  border: 1px solid color-mix(in srgb, var(--ui-accent) 38%, var(--ui-border-subtle));
-  border-radius: var(--ui-radius-control);
-  background: var(--ui-accent);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.plan-card-actions button:hover,
-.plan-card-actions button:focus-visible {
-  filter: brightness(.96);
-}
-
-.plan-card-actions button:disabled {
-  cursor: wait;
-  opacity: .72;
-}
-
-.plan-card-actions button.is-submitted {
-  border-color: color-mix(in srgb, var(--ui-success) 36%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-success) 10%, var(--ui-bg-surface));
-  color: var(--ui-success);
+.process-toggle:disabled {
   cursor: default;
   opacity: 1;
 }
 
-.interrupted-turn-card {
-  @apply flex w-full items-center gap-2 border px-3 py-2;
-  max-width: min(38rem, 100%);
-  border-radius: var(--ui-radius-card);
-  border-color: color-mix(in srgb, var(--ui-warning) 26%, var(--ui-border-subtle));
+.process-toggle-icon {
+  display: inline-grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  color: var(--ui-text-tertiary);
+  font-size: 16px;
+  line-height: 1;
+  transform-origin: center;
+  transition: transform var(--motion-duration-base) var(--motion-ease-out);
+}
+
+.process-toggle-icon.is-expanded {
+  transform: rotate(90deg);
+}
+
+.process-content {
+  min-width: 0;
+}
+
+.process-content.has-history:not(.is-history-expanded) .commentary-copy,
+.process-content.has-history:not(.is-history-expanded) .activity-command,
+.process-content.has-history:not(.is-history-expanded) .activity-subtitle,
+.process-content.has-history:not(.is-history-expanded) .activity-progress {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.process-history-controls {
+  display: flex;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.process-history-action {
+  min-height: 32px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ui-text-tertiary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  transition: color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.process-history-action--older {
+  margin-bottom: 2px;
+}
+
+.process-history-action:hover,
+.process-history-action:focus-visible {
+  color: var(--ui-text-primary);
+}
+
+.process-history-action:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--ui-focus);
+  outline-offset: 2px;
+}
+
+.activity-group {
+  min-width: 0;
+}
+
+.process-reveal-enter-active,
+.process-reveal-leave-active {
+  transition:
+    opacity var(--motion-duration-base) var(--motion-ease-standard),
+    transform var(--motion-duration-base) var(--motion-ease-out);
+}
+
+.process-reveal-enter-from,
+.process-reveal-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.commentary-block,
+.activity-block {
+  position: relative;
+  padding: 7px 0;
+}
+
+.activity-block {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 7px;
+}
+
+.process-rail-dot {
+  width: 6px;
+  height: 6px;
+  margin-top: 7px;
+  border-radius: 999px;
+  background: var(--ui-border-strong);
+}
+
+.commentary-block > .process-rail-dot {
+  display: none;
+}
+
+.activity-block--in-progress .process-rail-dot,
+.activity-block--pending .process-rail-dot {
+  background: var(--ui-accent);
+}
+
+.activity-block--in-progress .process-rail-dot {
+  animation: transcript-live-pulse 1.2s var(--motion-ease-standard) infinite;
+}
+
+.activity-block--failed .process-rail-dot,
+.activity-block--declined .process-rail-dot {
+  background: var(--ui-danger);
+}
+
+.commentary-block {
+  color: var(--ui-text-secondary);
+}
+
+.commentary-copy {
+  padding-right: 44px;
+  font-size: 13.5px;
+}
+
+.inline-copy {
+  position: absolute;
+  top: 5px;
+  right: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.commentary-block:hover .inline-copy,
+.commentary-block:focus-within .inline-copy {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.activity-main {
+  min-width: 0;
+}
+
+.activity-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  color: var(--ui-text-tertiary);
+  font-size: 12px;
+}
+
+.activity-heading strong {
+  color: var(--ui-text-secondary);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.activity-command {
+  display: block;
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+  color: var(--ui-text-secondary);
+  font-size: 12.5px;
+}
+
+.activity-subtitle,
+.activity-error {
+  margin: 6px 0 0;
+  color: var(--ui-text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.activity-error {
+  color: var(--ui-danger);
+}
+
+.activity-details,
+.file-summary,
+.file-row {
+  margin-top: 8px;
+}
+
+.activity-details summary,
+.file-summary > summary,
+.file-row > summary {
+  cursor: pointer;
+  color: var(--ui-text-secondary);
+  font-size: 12.5px;
+}
+
+.activity-progress,
+.plan-steps {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ui-text-secondary);
+  font-size: 13px;
+}
+
+.plan-steps li {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 4px;
+}
+
+.plan-steps li[data-status='completed'] {
+  color: var(--ui-text-tertiary);
+}
+
+.plan-action {
+  margin-top: 10px;
+}
+
+.plan-proposal {
+  margin-top: 12px;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: 12px;
+  background: var(--ui-bg-surface);
+}
+
+.plan-proposal > summary {
+  min-height: 44px;
+  padding: 12px 16px;
+  cursor: pointer;
+  color: var(--ui-text-primary);
+}
+
+.plan-proposal > summary span {
+  margin-left: 12px;
+  font-size: 12px;
+  color: var(--ui-text-secondary);
+}
+
+.plan-proposal-body {
+  padding: 4px 16px 16px;
+}
+
+.resolved-interactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.resolved-interaction {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-tertiary);
+  font-size: 11.5px;
+}
+
+.file-summary {
+  margin: 6px 0 14px;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: 12px;
+  background: var(--ui-bg-surface);
+  overflow: hidden;
+}
+
+.file-summary > summary,
+.file-row > summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  list-style: none;
+}
+
+.file-summary > summary {
+  min-height: 46px;
+  padding: 5px 10px;
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.file-summary > summary:hover {
+  background: var(--ui-bg-row-hover);
+}
+
+.file-summary-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
+  font-family: var(--font-mono-ui);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.file-summary-title {
+  color: var(--ui-text-primary);
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.file-summary-meta {
+  margin-left: auto;
+  color: var(--ui-text-tertiary);
+  font-family: var(--font-mono-ui);
+  font-size: 11.5px;
+}
+
+.file-summary-chevron {
+  display: inline-grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  color: var(--ui-text-tertiary);
+  font-size: 16px;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition: transform var(--motion-duration-base) var(--motion-ease-out);
+}
+
+.file-summary[open] .file-summary-chevron {
+  transform: rotate(90deg);
+}
+
+.file-list {
+  display: grid;
+  gap: 0;
+  padding: 4px;
+  border-top: 1px solid var(--ui-border-subtle);
+}
+
+.file-row {
+  margin: 0;
+  border: 0;
+}
+
+.file-row > summary {
+  min-height: 34px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.file-row > summary:hover {
+  background: var(--ui-bg-row-hover);
+}
+
+.file-row code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-row pre {
+  margin: 3px 8px 8px;
+}
+
+.file-kind {
+  flex: 0 0 auto;
+  color: var(--ui-text-tertiary);
+  font-size: 11px;
+}
+
+.file-kind[data-kind='add'] { color: var(--ui-success); }
+.file-kind[data-kind='delete'] { color: var(--ui-danger); }
+
+.file-stats {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.file-stats b { color: var(--ui-success); }
+.file-stats i { color: var(--ui-danger); font-style: normal; }
+
+.request-stack {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 16px;
+}
+
+.request-card {
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--ui-warning) 34%, var(--ui-border-subtle));
+  border-radius: 12px;
   background: color-mix(in srgb, var(--ui-warning) 6%, var(--ui-bg-surface));
 }
 
-@media (max-width: 640px) {
-  .plan-card-body {
-    padding: 0 .65rem .65rem;
+.request-card-heading {
+  display: grid;
+  grid-template-columns: 10px 1fr;
+  gap: 9px;
+}
+
+.request-card strong {
+  font-size: 13.5px;
+}
+
+.request-card p {
+  margin: 4px 0 0;
+  color: var(--ui-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.request-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--ui-warning);
+}
+
+.request-context {
+  display: grid;
+  gap: 6px;
+  margin: 11px 0 0 19px;
+}
+
+.request-context-row {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.request-context-row dt {
+  color: var(--ui-text-tertiary);
+}
+
+.request-context-row dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ui-text-secondary);
+  font-family: var(--font-mono-ui);
+}
+
+.request-field {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  color: var(--ui-text-secondary);
+  font-size: 12px;
+}
+
+.request-field input,
+.request-field select,
+.request-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 9px;
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
+  outline: none;
+}
+
+.request-field input:focus,
+.request-field select:focus,
+.request-field textarea:focus {
+  border-color: var(--ui-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-focus) 15%, transparent);
+}
+
+.request-link {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 12.5px;
+}
+
+.request-actions,
+.transcript-alert-actions,
+.transcript-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.quiet-button,
+.history-button {
+  min-height: 34px;
+  padding: 6px 11px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 9px;
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-secondary);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.quiet-button:hover:not(:disabled),
+.history-button:hover:not(:disabled) {
+  background: var(--ui-bg-row-hover);
+  color: var(--ui-text-primary);
+}
+
+.quiet-button--primary {
+  border-color: var(--ui-text-primary);
+  background: var(--ui-text-primary);
+  color: var(--ui-bg-surface);
+}
+
+.quiet-button--danger {
+  color: var(--ui-danger);
+}
+
+.quiet-button:disabled,
+.history-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.turn-timing {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 0;
+  color: var(--ui-text-tertiary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.turn-timing--static {
+  min-height: 32px;
+  align-items: center;
+}
+
+.turn-timing[data-status='running'] {
+  color: var(--ui-accent);
+}
+
+.final-answer {
+  min-width: 0;
+  margin-top: 4px;
+  padding-bottom: 2px;
+  color: var(--ui-text-primary);
+}
+
+.final-answer.is-streaming::after {
+  display: inline-block;
+  width: 6px;
+  height: 1em;
+  margin-left: 3px;
+  border-radius: 2px;
+  background: var(--ui-accent);
+  vertical-align: -2px;
+  animation: transcript-caret 1s steps(1) infinite;
+  content: '';
+}
+
+.final-status,
+.turn-notice,
+.transcript-alert {
+  padding: 12px 14px;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: 10px;
+  background: var(--ui-bg-surface-muted);
+  color: var(--ui-text-secondary);
+}
+
+.final-status[data-status='failed'],
+.final-status[data-status='interrupted'],
+.final-status[data-status='stopped'],
+.transcript-alert--danger {
+  border-color: color-mix(in srgb, var(--ui-danger) 35%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-danger) 5%, var(--ui-bg-surface));
+}
+
+.final-status strong,
+.transcript-alert strong {
+  color: var(--ui-text-primary);
+  font-size: 13.5px;
+}
+
+.final-status p,
+.transcript-alert p {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+}
+
+.turn-notice {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.transcript-alert {
+  position: absolute;
+  z-index: 2;
+  top: 14px;
+  right: 18px;
+  left: 18px;
+  display: flex;
+  max-width: 760px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 auto;
+  box-shadow: var(--ui-shadow-float);
+}
+
+.transcript-alert-actions {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+.transcript-empty {
+  display: grid;
+  height: 100%;
+  place-content: center;
+  justify-items: center;
+  color: var(--ui-text-tertiary);
+  text-align: center;
+}
+
+.history-row {
+  display: flex;
+  justify-content: center;
+  margin: 0 0 28px;
+}
+
+.history-button {
+  border-color: transparent;
+  background: transparent;
+}
+
+.bottom-anchor {
+  height: 1px;
+}
+
+[data-message-id].is-highlighted {
+  animation: transcript-highlight 1.8s var(--motion-ease-out);
+}
+
+@keyframes transcript-highlight {
+  0%, 24% { outline: 3px solid color-mix(in srgb, var(--ui-focus) 35%, transparent); outline-offset: 5px; }
+  100% { outline: 3px solid transparent; outline-offset: 10px; }
+}
+
+@keyframes transcript-caret {
+  0%, 48% { opacity: 1; }
+  49%, 100% { opacity: 0; }
+}
+
+@keyframes transcript-live-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+@keyframes transcript-dot-bounce {
+  0%, 60%, 100% { opacity: 0.4; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+
+@media (max-width: 767px) {
+  .transcript-list {
+    padding: 22px 14px 48px;
+    scrollbar-gutter: auto;
   }
 
-  .plan-step-status {
-    display: none;
+  .turn-shell {
+    gap: 8px;
+    margin-bottom: 28px;
   }
 
-  .plan-step {
-    grid-template-columns: 18px minmax(0, 1fr);
+  .conversation-jump-to-latest {
+    left: 50%;
+    bottom: 12px;
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
   }
 
-  .plan-card-actions {
-    align-items: stretch;
-    flex-direction: column;
-    gap: .4rem;
+  .user-message {
+    max-width: 88%;
+    padding: 10px 12px;
   }
 
-  .plan-card-actions button {
-    width: 100%;
+  .message-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .message-action,
+  .inline-copy,
+  .quiet-button,
+  .history-button,
+  .process-toggle,
+  .process-history-action,
+  .activity-details > summary,
+  .file-summary > summary,
+  .file-row > summary {
+    min-height: 44px;
+  }
+
+  .process-content {
+    margin: 0;
+    padding: 0;
+  }
+
+  .turn-process {
+    margin-bottom: 8px;
+  }
+
+  .commentary-block,
+  .activity-block {
+    padding-block: 5px;
+  }
+
+  .file-row > summary {
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 7px;
+  }
+
+  .file-row code {
+    width: auto;
+    flex: 1 1 auto;
+    white-space: nowrap;
+  }
+
+  .file-stats {
+    margin-left: auto;
+  }
+
+  .file-row[open] code {
+    white-space: normal;
+  }
+
+  .request-context {
+    margin-left: 0;
+  }
+
+  .request-context-row {
+    grid-template-columns: 1fr;
+    gap: 1px;
+  }
+
+  .transcript-alert {
+    top: 8px;
+    right: 8px;
+    left: 8px;
+    display: block;
+  }
+
+  .transcript-alert-actions {
+    margin-top: 10px;
+  }
+}
+
+@media (pointer: coarse) {
+  .message-action,
+  .inline-copy,
+  .quiet-button,
+  .history-button,
+  .process-toggle,
+  .process-history-action,
+  .activity-details > summary,
+  .file-summary > summary,
+  .file-row > summary {
     min-height: 44px;
   }
 }
 
-.interrupted-turn-dot {
-  @apply h-2 w-2 shrink-0 rounded-full;
-  background: var(--ui-warning);
-}
-
-.interrupted-turn-copy {
-  @apply m-0 min-w-0 flex-1 text-xs font-medium;
-  color: var(--ui-text-secondary);
-}
-
-.interrupted-turn-edit {
-  @apply inline-flex h-8 shrink-0 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold transition;
-  border-color: color-mix(in srgb, var(--ui-accent) 22%, var(--ui-border-subtle));
-  background: var(--ui-bg-surface);
-  color: var(--ui-accent);
-}
-
-.interrupted-turn-edit:hover,
-.interrupted-turn-edit:focus-visible {
-  border-color: color-mix(in srgb, var(--ui-accent) 40%, var(--ui-border-strong));
-  background: var(--ui-bg-row-hover);
-}
-
-.guided-turn-toggle {
-  @apply inline-flex max-w-full items-center gap-1.5 self-start border px-2 py-1 text-left transition-[background-color,border-color,color] duration-150;
-  border-radius: var(--ui-radius-control);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  color: var(--ui-text-secondary);
-  box-shadow: none;
-}
-
-.guided-turn-toggle:hover {
-  border-color: var(--ui-border-strong);
-  background: var(--ui-bg-row-hover);
-  color: var(--ui-text-primary);
-}
-
-@media (min-width: 1024px) {
-  .conversation-list {
-    @apply px-5;
-  }
-
-  .message-card[data-role='assistant'],
-  .message-card[data-role='system'] {
-    @apply px-4 py-3;
-  }
-
-  .message-card[data-role='user'] {
-    @apply px-3.5 py-2.5;
-  }
-}
-
-@media (max-width: 767px) {
-  .conversation-list {
-    @apply gap-1 px-2;
-    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
-  }
-
-  .conversation-process-panel {
-    @apply mb-0;
-  }
-
-  .live-overlay-inline {
-    @apply rounded-[16px];
-  }
-
-  .live-overlay-inline-compact {
-    max-width: 100%;
-  }
-
-  .live-overlay-compact-main {
-    @apply gap-1.5;
-  }
-
-  .live-overlay-compact-copy {
-    @apply gap-0;
-  }
-
-  .live-overlay-compact-hint {
-    @apply truncate;
-  }
-
-  .live-overlay-detail-button {
-    @apply h-7 px-2.5;
-  }
-
-  .live-overlay-detail-backdrop {
-    @apply px-0;
-  }
-
-  .live-overlay-detail-sheet {
-    @apply rounded-t-[22px] px-3 pb-3;
-    max-height: min(78dvh, 42rem);
-  }
-
-  .live-overlay-detail-header {
-    @apply -mx-3 px-3;
-  }
-
-  .message-text {
-    font-size: 15px;
-    line-height: 1.58;
-  }
-
-  .message-table-scroll {
-    @apply block;
-    max-width: 100%;
-  }
-
-  .message-table {
-    min-width: 620px;
-    font-size: 13px;
-    line-height: 1.45;
-  }
-
-  .message-table th,
-  .message-table td {
-    padding: 0.5rem 0.625rem;
-    font-size: 13px;
-  }
-
-  .request-card {
-    @apply gap-1.5 px-2.5 py-2;
-    max-width: 100%;
-  }
-
-  .request-tool-panel,
-  .request-permission-panel {
-    @apply gap-1.5 px-2.5 py-2;
-  }
-
-  .request-tool-title,
-  .request-permission-title {
-    @apply text-sm leading-5;
-  }
-
-  .request-tool-text,
-  .request-permission-text {
-    @apply text-xs leading-5;
-  }
-
-  .request-tool-grid,
-  .request-permission-grid {
-    @apply gap-1.5;
-  }
-
-  .request-tool-item,
-  .request-permission-item {
-    @apply px-2 py-1.5;
-  }
-
-  .request-actions {
-    @apply grid grid-cols-1 gap-1.5;
-  }
-
-  .request-button {
-    @apply w-full justify-center;
-    min-height: 2.25rem;
-  }
-
-  .message-file-attachments {
-    @apply gap-1;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .message-file-card {
-    @apply gap-1.5 px-2 py-1.5;
-  }
-
-  .message-file-card-icon {
-    @apply h-7 w-7;
-  }
-
-  .message-file-card-title {
-    @apply text-xs;
-  }
-
-  .message-file-card-path {
-    @apply text-[11px];
-  }
-
-  .message-card[data-role='assistant'],
-  .message-card[data-role='system'] {
-    @apply rounded-[14px] px-2.5 py-2;
-  }
-
-  .message-body[data-role='assistant'] {
-    width: 100%;
-  }
-
-  .message-card[data-role='assistant'] {
-    @apply rounded-none border-0 bg-transparent px-0.5 py-1 shadow-none;
-    max-width: 100%;
-  }
-
-  .message-eyebrow[data-role='user'],
-  .message-eyebrow[data-role='assistant'] {
-    display: none;
-  }
-
-  .message-card[data-role='user'] {
-    @apply rounded-[14px] px-2.5 py-1.5;
-    max-width: min(34rem, 86vw);
-  }
-
-  .message-action-button {
-    @apply h-8 w-8 justify-center px-0;
-  }
-
-  .message-action-label {
-    @apply sr-only;
-  }
-}
-
-.guided-turn-toggle[aria-expanded='true'] {
-  border-color: color-mix(in srgb, var(--ui-accent) 28%, var(--ui-border-subtle));
-  background: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-bg-surface));
-  color: var(--ui-accent);
-}
-
-.guided-turn-toggle-title {
-  @apply text-[11px] font-medium leading-none;
-}
-
-.guided-turn-toggle-meta {
-  @apply rounded-full px-1 py-0.5 text-[10px] font-medium leading-none;
-  background: var(--ui-bg-surface-muted);
-  color: var(--ui-text-tertiary);
-}
-
-.cmd-row {
-  @apply w-full flex items-center gap-1.5 border px-2.5 py-1.5 cursor-pointer transition-colors duration-150 text-left;
-  overflow-x: auto;
-  overflow-y: hidden;
-  white-space: nowrap;
-  -webkit-overflow-scrolling: touch;
-  touch-action: pan-x;
-  border-radius: var(--ui-radius-control);
-  border-color: var(--ui-border-subtle);
-  background: var(--ui-bg-surface);
-  color: var(--ui-text-secondary);
-}
-
-.cmd-row:hover {
-  border-color: var(--ui-border-strong);
-  background: var(--ui-bg-row-hover);
-}
-
-.cmd-row.cmd-expanded {
-  border-bottom: 0;
-  border-bottom-right-radius: 0;
-  border-bottom-left-radius: 0;
-}
-
-.cmd-chevron {
-  @apply text-[10px] transition-transform duration-100 flex-shrink-0;
-  color: var(--ui-text-tertiary);
-}
-
-.cmd-chevron-open {
-  transform: rotate(90deg);
-}
-
-.cmd-label {
-  @apply text-xs font-mono;
-  flex: 0 0 auto;
-  min-width: max-content;
-  color: var(--ui-text-primary);
-}
-
-.cmd-status {
-  @apply text-[11px] font-medium flex-shrink-0;
-}
-
-.cmd-row.cmd-status-running .cmd-status::before {
-  content: '';
-  display: inline-block;
-  width: 0.45rem;
-  height: 0.45rem;
-  margin-right: 0.35rem;
-  border-radius: 9999px;
-  background: currentColor;
-  vertical-align: middle;
-}
-
-.cmd-duration {
-  @apply text-[11px] flex-shrink-0;
-  color: var(--ui-text-tertiary);
-}
-
-.cmd-status-running .cmd-status {
-  @apply text-[#0f766e];
-}
-
-.cmd-status-ok .cmd-status {
-  @apply text-[#0f766e];
-}
-
-.cmd-status-error .cmd-status {
-  @apply text-[#c2410c];
-}
-
-.cmd-output-wrap {
-  background: #18181b;
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows 150ms ease-out;
-  border: 1px solid transparent;
-  border-top: none;
-  border-bottom-right-radius: var(--ui-radius-control);
-  border-bottom-left-radius: var(--ui-radius-control);
-}
-
-.cmd-output-wrap.cmd-output-visible {
-  grid-template-rows: 1fr;
-  border-color: var(--ui-border-subtle);
-}
-
-.cmd-output-wrap.cmd-output-collapsing {
-  grid-template-rows: 1fr;
-  border-color: var(--ui-border-subtle);
-}
-
-.cmd-output-inner {
-  overflow: hidden;
-  min-height: 0;
-}
-
-.cmd-output {
-  @apply m-0 px-2.5 py-2 text-xs font-mono text-zinc-200 max-h-56 overflow-x-auto overflow-y-auto;
-  white-space: pre;
-  word-break: normal;
-  overflow-wrap: normal;
-  -webkit-overflow-scrolling: touch;
-  touch-action: pan-x;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .conversation-list--switching,
-  .live-overlay-inline-compact,
-  .live-overlay-compact-chevron,
-  .live-overlay-inline::after,
-  .live-overlay-indicator-ring,
-  .live-overlay-indicator-core,
-  .live-overlay-dot,
-  .conversation-loading-card::after,
-  .message-action-button,
-  .message-image-loading,
-  .message-image-preview,
-  .image-modal-spinner,
-  .image-modal-enter-active,
-  .image-modal-leave-active,
-  .image-modal-enter-active .image-modal-content,
-  .image-modal-leave-active .image-modal-content,
-  .image-modal-image,
-  .cmd-row,
-  .cmd-chevron,
-  .worked-chevron,
-  .cmd-output-wrap {
-    animation: none !important;
-    transition: none !important;
+  .run-dots i,
+  .turn-live-dot,
+  .activity-block--in-progress .process-rail-dot {
+    animation: none;
   }
 
-  .message-streaming-text::after {
-    animation: none !important;
+  .process-reveal-enter-active,
+  .process-reveal-leave-active,
+  .process-toggle-icon,
+  .file-summary-chevron {
+    transition-duration: 1ms;
+  }
+
+  .final-answer.is-streaming::after {
+    animation: none;
+  }
+
+  [data-message-id].is-highlighted {
+    animation: none;
+    outline: 2px solid var(--ui-focus);
+    outline-offset: 4px;
   }
 }
 
-@keyframes message-image-shimmer {
-  to {
-    background-position: -120% 0;
-  }
+.dark .transcript-root {
+  --ui-bg-window: #09090b;
+  --ui-bg-surface: #18181b;
+  --ui-bg-surface-muted: #27272a;
+  --ui-bg-row-hover: #3f3f46;
+  --ui-border-subtle: #3f3f46;
+  --ui-border-strong: #52525b;
+  --ui-accent: #5eead4;
 }
 
-@keyframes image-modal-spin {
-  to {
-    transform: rotate(360deg);
-  }
+.dark .user-message,
+.dark .quiet-button,
+.dark .request-field input,
+.dark .request-field select,
+.dark .request-field textarea {
+  background: #27272a;
 }
 
-@keyframes streamingCaretPulse {
-  0%,
-  100% {
-    opacity: 0.25;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-@keyframes conversationFadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes conversationSwitchFloat {
-  from {
-    opacity: 0.78;
-    transform: translateY(3px);
-  }
-  to {
-    opacity: 0.92;
-    transform: translateY(0);
-  }
-}
-
-@keyframes liveOverlayCorePulse {
-  0%,
-  100% {
-    transform: scale(0.82);
-    opacity: 0.72;
-  }
-  50% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-@keyframes liveOverlayRecoverySpin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes liveOverlayRecoveryCore {
-  0%,
-  100% {
-    transform: scale(0.62);
-    opacity: 0.58;
-  }
-  50% {
-    transform: scale(0.82);
-    opacity: 0.92;
-  }
+.dark .quiet-button--primary {
+  background: #f4f4f5;
+  color: #18181b;
 }
 
 </style>

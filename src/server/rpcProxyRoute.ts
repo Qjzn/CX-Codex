@@ -25,6 +25,7 @@ import { setJson } from './httpJsonResponse.js'
 import { cacheSessionAttachmentPaths } from './sessionAttachmentAccess.js'
 import {
   normalizePlanModeTurnStartParams,
+  prepareNativeCollaborationTurnStartParams,
   readCollaborationModeFromPayload,
   shouldRetryPlanModeWithoutNativeMode,
 } from './runtimePayload.js'
@@ -87,7 +88,7 @@ export async function handleRpcProxyRoute(
   const requestedTurnWindow = readThreadReadTurnWindow(body.method, body.params)
   const forwardedParams = stripLocalThreadReadParams(body.method, body.params)
   const rpcParams = body.method === 'turn/start'
-    ? normalizePlanModeTurnStartParams(forwardedParams, { includeNativeMode: true })
+    ? await prepareNativeCollaborationTurnStartParams(forwardedParams, dependencies.rpc)
     : forwardedParams
   const rpcThreadId = readThreadIdFromPayload(rpcParams)
   if (rpcThreadId && shouldInvalidateThreadReadCacheForRpc(body.method)) {

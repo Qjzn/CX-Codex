@@ -1,6 +1,7 @@
 import type { WebBridgeSettings } from './serverRequestPolicy.js'
 
 export type CodexBridgeStartupTaskDependencies = {
+  startupSkillsSync?: boolean
   initializeSkillsSyncOnStartup: () => Promise<void>
   warmupAppServer: () => Promise<void>
   getWebBridgeSettingsPath: () => string
@@ -12,10 +13,12 @@ export type CodexBridgeStartupTaskDependencies = {
 export function startCodexBridgeStartupTasks(
   dependencies: CodexBridgeStartupTaskDependencies,
 ): void {
-  void dependencies.initializeSkillsSyncOnStartup()
-    .catch((error) => {
-      dependencies.logError('Startup skills sync failed', error)
-    })
+  if (dependencies.startupSkillsSync !== false) {
+    void dependencies.initializeSkillsSyncOnStartup()
+      .catch((error) => {
+        dependencies.logError('Startup skills sync failed', error)
+      })
+  }
 
   void dependencies.warmupAppServer()
     .catch((error) => {

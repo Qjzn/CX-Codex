@@ -12,6 +12,7 @@ import {
   createRuntimePromptHash,
   createDurableRuntimeSendPayload,
   normalizePlanModeTurnStartParams,
+  prepareNativeCollaborationTurnStartParams,
   parseRuntimeSendPayload,
   shouldRetryPlanModeWithoutNativeMode,
   type ParsedRuntimeSendPayload,
@@ -370,7 +371,7 @@ function createRuntimeTurnStartParams(args: {
   if (args.model) turnParams.model = args.model
   const effort = typeof args.effort === 'string' ? args.effort.trim() : ''
   if (effort) turnParams.effort = effort
-  if (args.mode === 'plan') turnParams.collaborationMode = 'plan'
+  turnParams.collaborationMode = args.mode === 'plan' ? 'plan' : 'execute'
   return turnParams
 }
 
@@ -379,9 +380,7 @@ async function startRuntimeTurnRpc(
   mode: string,
   dependencies: RuntimeStartDependencies,
 ): Promise<unknown> {
-  let rpcParams: unknown = mode === 'plan'
-    ? normalizePlanModeTurnStartParams(turnParams, { includeNativeMode: true })
-    : turnParams
+  let rpcParams: unknown = await prepareNativeCollaborationTurnStartParams(turnParams, dependencies.rpc)
   try {
     return await startRuntimeTurnRpcWithResume(rpcParams, dependencies)
   } catch (error) {

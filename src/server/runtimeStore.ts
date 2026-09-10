@@ -692,13 +692,13 @@ export class RuntimeStore {
       ? this.db.prepare(`
           SELECT * FROM runtime_requests
           WHERE thread_id = ? AND status IN ('queued', 'queue_failed')
-          ORDER BY created_at_iso ASC, request_id ASC
+          ORDER BY created_at_iso ASC, rowid ASC
           LIMIT ?
         `).all(normalizedThreadId, boundedLimit) as RuntimeRequestRow[]
       : this.db.prepare(`
           SELECT * FROM runtime_requests
           WHERE status IN ('queued', 'queue_failed')
-          ORDER BY created_at_iso ASC, request_id ASC
+          ORDER BY created_at_iso ASC, rowid ASC
           LIMIT ?
         `).all(boundedLimit) as RuntimeRequestRow[]
     return rows.map(fromRequestRow)

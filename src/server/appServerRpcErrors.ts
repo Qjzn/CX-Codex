@@ -40,6 +40,11 @@ export function isThreadMaterializingError(error: unknown): boolean {
   )
 }
 
+export function isThreadNotLoadedError(error: unknown): boolean {
+  const message = getErrorMessage(error, '').toLowerCase()
+  return message.includes('thread not loaded:') || message.includes('thread is not loaded')
+}
+
 export function createRpcTimeoutError(method: string, timeoutMs: number): Error {
   const error = new Error(`${method} timed out after ${Math.ceil(timeoutMs / 1000)}s`)
   error.name = 'AppServerRpcTimeoutError'

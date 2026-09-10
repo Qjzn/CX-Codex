@@ -105,6 +105,7 @@ import {
   isRpcTimeoutError,
   isRpcTransportError,
   isThreadMaterializingError,
+  isThreadNotLoadedError,
 } from '../src/server/appServerRpcErrors.js'
 import { settleAppServerRpcResponse } from '../src/server/appServerRpcResponse.js'
 import { dispatchAppServerJsonRpcLine } from '../src/server/appServerLineDispatcher.js'
@@ -135,6 +136,7 @@ import {
   isCachedThreadReadStaleForRuntime,
   readIsoTimestampMs,
   type CachedThreadRead,
+  type ThreadReadCacheSource,
 } from '../src/server/appServerThreadReadCache.js'
 import {
   createAppServerThreadRuntimeSnapshotReader,
@@ -163,6 +165,7 @@ import { startCodexBridgeStartupTasks } from '../src/server/codexBridgeStartupTa
 import {
   createServerRequestResolvedNotification,
   PendingServerRequestStore,
+  type PendingServerRequest,
 } from '../src/server/pendingServerRequests.js'
 import {
   normalizePinnedThreadIds,
@@ -499,6 +502,7 @@ import {
   createCodexSessionFileChangedNotification,
   resolveCodexSessionFileChangeOrigin,
 } from '../src/server/codexSessionFileChangeObserver.js'
+import { resolveCodexSessionLogPath } from '../src/server/codexSessionPathResolver.js'
 import {
   CX_SESSION_FILES_CHANGED_METHOD,
   shouldInvalidateThreadCollectionForCxSessionFileChange,
@@ -942,6 +946,32 @@ async function smokeCodexBridgeStartupTasks(): Promise<void> {
     'settings:settings.json',
     'set:ask',
   ])
+
+  calls.length = 0
+  const disabledSkillsSyncDependencies = {
+    startupSkillsSync: false,
+    initializeSkillsSyncOnStartup: async () => {
+      calls.push('skills')
+    },
+    warmupAppServer: async () => {
+      calls.push('warmup')
+    },
+    getWebBridgeSettingsPath: () => 'settings.json',
+    readWebBridgeSettings: async (settingsPath: string) => {
+      calls.push(`settings:${settingsPath}`)
+      return settings
+    },
+    setWebBridgeSettings: (value: WebBridgeSettings) => {
+      calls.push(`set:${value.permissions.commandExecution}`)
+    },
+    logError: (message: string, error: unknown) => {
+      calls.push(`error:${message}:${getErrorMessage(error, 'unknown')}`)
+    },
+  }
+  startCodexBridgeStartupTasks(disabledSkillsSyncDependencies)
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.deepEqual(calls, ['warmup', 'settings:settings.json', 'set:ask'])
 
   const errors: string[] = []
   startCodexBridgeStartupTasks({
@@ -1709,14 +1739,17 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('account/rateLimits/updated'), true)
   assert.equal(isKnownAppServerNotificationMethod('model/rerouted'), true)
   assert.equal(isKnownAppServerNotificationMethod('model/verification'), true)
+  assert.equal(isKnownAppServerNotificationMethod('model/safetyBuffering/updated'), true)
   assert.equal(isKnownAppServerNotificationMethod('warning'), true)
   assert.equal(isKnownAppServerNotificationMethod('guardianWarning'), true)
   assert.equal(isKnownAppServerNotificationMethod('item/autoApprovalReview/started'), true)
   assert.equal(isKnownAppServerNotificationMethod('item/autoApprovalReview/completed'), true)
+  assert.equal(isKnownAppServerNotificationMethod('autoApprovalReview/strictReviewRequired'), true)
   assert.equal(isKnownAppServerNotificationMethod('deprecationNotice'), true)
   assert.equal(isKnownAppServerNotificationMethod('configWarning'), true)
   assert.equal(isKnownAppServerNotificationMethod('fs/changed'), true)
   assert.equal(isKnownAppServerNotificationMethod('externalAgentConfig/import/completed'), true)
+  assert.equal(isKnownAppServerNotificationMethod('externalAgentConfig/import/progress'), true)
   assert.equal(isKnownAppServerNotificationMethod('hook/started'), true)
   assert.equal(isKnownAppServerNotificationMethod('hook/completed'), true)
   assert.equal(isKnownAppServerNotificationMethod('windows/worldWritableWarning'), true)
@@ -1758,6 +1791,8 @@ function smokeAppServerNotificationDiagnostics(): void {
   assert.equal(isKnownAppServerNotificationMethod('account/login/completed'), true)
   assert.equal(isKnownAppServerNotificationMethod('fuzzyFileSearch/sessionUpdated'), true)
   assert.equal(isKnownAppServerNotificationMethod('fuzzyFileSearch/sessionCompleted'), true)
+  assert.equal(isKnownAppServerNotificationMethod('thread/queue/changed'), true)
+  assert.equal(isKnownAppServerNotificationMethod('turn/moderationMetadata'), true)
 
   const officialServerNotifications = [
     'error',
@@ -1765,9 +1800,16 @@ function smokeAppServerNotificationDiagnostics(): void {
     'thread/status/changed',
     'thread/archived',
     'thread/unarchived',
+    'thread/deleted',
     'thread/closed',
     'skills/changed',
     'thread/name/updated',
+    'thread/project/updated',
+    'thread/environment/connected',
+    'thread/environment/disconnected',
+    'thread/settings/updated',
+    'thread/queue/changed',
+    'thread/reverted',
     'thread/goal/updated',
     'thread/goal/cleared',
     'thread/tokenUsage/updated',
@@ -1780,8 +1822,8 @@ function smokeAppServerNotificationDiagnostics(): void {
     'item/started',
     'item/autoApprovalReview/started',
     'item/autoApprovalReview/completed',
+    'autoApprovalReview/strictReviewRequired',
     'item/completed',
-    'rawResponseItem/completed',
     'item/agentMessage/delta',
     'item/plan/delta',
     'command/exec/outputDelta',
@@ -1798,7 +1840,9 @@ function smokeAppServerNotificationDiagnostics(): void {
     'account/updated',
     'account/rateLimits/updated',
     'app/list/updated',
+    'project/changed',
     'remoteControl/status/changed',
+    'externalAgentConfig/import/progress',
     'externalAgentConfig/import/completed',
     'fs/changed',
     'item/reasoning/summaryTextDelta',
@@ -1807,6 +1851,8 @@ function smokeAppServerNotificationDiagnostics(): void {
     'thread/compacted',
     'model/rerouted',
     'model/verification',
+    'model/safetyBuffering/updated',
+    'turn/moderationMetadata',
     'warning',
     'guardianWarning',
     'deprecationNotice',
@@ -1825,6 +1871,8 @@ function smokeAppServerNotificationDiagnostics(): void {
     'windowsSandbox/setupCompleted',
     'account/login/completed',
   ]
+  assert.equal(officialServerNotifications.length, 75)
+  assert.equal(new Set(officialServerNotifications).size, 75)
   assert.deepEqual(officialServerNotifications.filter((method) => !isKnownAppServerNotificationMethod(method)), [])
 
   const diagnostics = new AppServerNotificationDiagnostics({ maxRecentUnknown: 2, maxRecentRealtimeNotifications: 4 })
@@ -3159,31 +3207,70 @@ function smokeAppServerRpcResult(): void {
   assert.equal(heavyTurn.itemsView, 'recent')
   assert.equal(heavyTurn.originalItemsCount, 200)
 
-  const filteredLowValueItems = trimThreadTurnsInRpcResult('thread/read', {
+  const observableStructuredItems = trimThreadTurnsInRpcResult('thread/read', {
     thread: {
       id: 'thread-filtered-items',
       turns: [
         {
           id: 'turn-filtered',
           items: [
-            { id: 'file-change-1', type: 'fileChange', patch: 'large ignored patch' },
-            { id: 'mcp-tool-1', type: 'mcpToolCall', result: { text: 'internal mcp result' } },
-            { id: 'reasoning-1', type: 'reasoning', text: 'internal chain of thought' },
+            {
+              id: 'file-change-1',
+              type: 'fileChange',
+              status: 'completed',
+              changes: [{ path: 'src/a.ts', kind: { type: 'update', move_path: null }, diff: `+visible line\n${'x'.repeat(25_000)}` }],
+            },
+            {
+              id: 'mcp-tool-1',
+              type: 'mcpToolCall',
+              server: 'docs',
+              tool: 'search',
+              status: 'completed',
+              arguments: { secret: 'must not cross the transcript seam' },
+              result: { text: 'internal mcp result' },
+              error: null,
+              durationMs: 12,
+            },
+            {
+              id: 'reasoning-1',
+              type: 'reasoning',
+              status: 'completed',
+              startedAt: '2026-08-30T00:00:00.000Z',
+              completedAt: '2026-08-30T00:00:01.000Z',
+              durationMs: 1_000,
+              text: 'internal chain of thought',
+            },
             { id: 'unknown-1', type: 'threadShellCommandOutput', output: 'diagnostic payload stays available' },
             { id: 'agent-1', type: 'agentMessage', text: 'Visible answer' },
           ],
         },
       ],
     },
-  }) as { thread: { turns: Array<{ items: Array<{ id: string; type?: string; output?: string; text?: string }> }> } }
-  assert.deepEqual(filteredLowValueItems.thread.turns[0]?.items.map((item) => item.id), [
+  }) as { thread: { turns: Array<{ items: Array<Record<string, unknown>> }> } }
+  assert.deepEqual(observableStructuredItems.thread.turns[0]?.items.map((item) => item.id), [
+    'file-change-1',
+    'mcp-tool-1',
+    'reasoning-1',
     'unknown-1',
     'agent-1',
   ])
-  assert.equal(filteredLowValueItems.thread.turns[0]?.items[0]?.output, 'diagnostic payload stays available')
-  assert.equal(JSON.stringify(filteredLowValueItems).includes('large ignored patch'), false)
-  assert.equal(JSON.stringify(filteredLowValueItems).includes('internal mcp result'), false)
-  assert.equal(JSON.stringify(filteredLowValueItems).includes('internal chain of thought'), false)
+  const observableJson = JSON.stringify(observableStructuredItems)
+  assert.equal(observableJson.includes('src/a.ts'), true)
+  assert.equal(observableJson.includes('+visible line'), true)
+  assert.equal(observableJson.includes('[content bounded by CX-Codex]'), true)
+  assert.equal(observableJson.includes('must not cross the transcript seam'), false)
+  assert.equal(observableJson.includes('internal mcp result'), false)
+  assert.equal(observableJson.includes('internal chain of thought'), false)
+  assert.deepEqual(observableStructuredItems.thread.turns[0]?.items[2], {
+    id: 'reasoning-1',
+    type: 'reasoning',
+    status: 'completed',
+    startedAt: '2026-08-30T00:00:00.000Z',
+    completedAt: '2026-08-30T00:00:01.000Z',
+    durationMs: 1_000,
+    payloadView: 'metadata-only',
+  })
+  assert.equal(observableStructuredItems.thread.turns[0]?.items[3]?.output, 'diagnostic payload stays available')
   assert.deepEqual(trimThreadTurnsInRpcResult('thread/resume', { thread: { turns: null } }), { thread: { turns: null } })
 }
 
@@ -3291,6 +3378,29 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
   }), baseResult)
   assert.equal(calls.length, 0)
 
+  const duplicateBaseResult = {
+    data: [
+      { id: 'duplicate', marker: 'highest-ranked' },
+      { id: 'duplicate', marker: 'lower-ranked' },
+      { marker: 'row-without-id' },
+    ],
+    marker: true,
+  }
+  const deduplicatedArchived = await augmenter.augmentThreadListRpcResult({
+    params: { archived: true },
+    result: duplicateBaseResult,
+    readSupplementalThreadIds,
+    readThreadById,
+  }) as typeof duplicateBaseResult
+  assert.deepEqual(deduplicatedArchived, {
+    data: [
+      { id: 'duplicate', marker: 'highest-ranked' },
+      { marker: 'row-without-id' },
+    ],
+    marker: true,
+  })
+  assert.equal(calls.length, 0)
+
   const augmented = await augmenter.augmentThreadListRpcResult({
     params: { archived: false },
     result: baseResult,
@@ -3377,6 +3487,32 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
     method: 'thread/read',
     params: { threadId: 'pin-factory', includeTurns: false },
   }])
+
+  const idempotentReadCalls: string[] = []
+  const idempotentAugmenter = new AppServerThreadListAugmenter({
+    maxReads: 2,
+    nowMs: () => 2_500,
+  })
+  const idempotentFirst = await idempotentAugmenter.augmentThreadListRpcResult({
+    params: { archived: false },
+    result: { data: [{ id: 'base-id' }] },
+    readSupplementalThreadIds: async () => ['supplement-id', 'supplement-id'],
+    readThreadById: async (threadId) => {
+      idempotentReadCalls.push(threadId)
+      return { thread: { id: threadId, title: 'Supplement' } }
+    },
+  }) as { data: Array<{ id: string }> }
+  const idempotentSecond = await idempotentAugmenter.augmentThreadListRpcResult({
+    params: { archived: false },
+    result: idempotentFirst,
+    readSupplementalThreadIds: async () => ['supplement-id'],
+    readThreadById: async (threadId) => {
+      idempotentReadCalls.push(threadId)
+      return { thread: { id: threadId, title: 'Supplement' } }
+    },
+  }) as { data: Array<{ id: string }> }
+  assert.deepEqual(idempotentSecond.data.map((thread) => thread.id), ['base-id', 'supplement-id'])
+  assert.deepEqual(idempotentReadCalls, ['supplement-id'])
 
   const timeoutAugmenter = new AppServerThreadListAugmenter({
     ttlMs: 1_000,
@@ -4209,6 +4345,9 @@ function smokeAppServerRpcErrors(): void {
   assert.equal(isThreadMaterializingError(new Error('failed to read thread C:\\Users\\SW\\.codex\\sessions\\2026\\07\\03\\rollout.jsonl: rollout at C:\\Users\\SW\\.codex\\sessions\\2026\\07\\03\\rollout.jsonl does not start with session metadata')), true)
   assert.equal(isThreadMaterializingError(new Error('thread-store internal error: failed to read thread C:\\Users\\SW\\.codex\\sessions\\broken.jsonl')), true)
   assert.equal(isThreadMaterializingError(new Error('permission denied')), false)
+  assert.equal(isThreadNotLoadedError(new Error('thread not loaded: 019f7e69-25a4-7aa2-8166-b8257873b8ab')), true)
+  assert.equal(isThreadNotLoadedError(new Error('thread is not loaded')), true)
+  assert.equal(isThreadNotLoadedError(new Error('thread not found')), false)
 
   const timeout = createRpcTimeoutError('thread/read', 30_000)
   assert.equal(timeout.name, 'AppServerRpcTimeoutError')
@@ -5110,15 +5249,23 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
   })
 
   const appServerOptions = {
-    createBridgeMiddleware: () => Object.assign(
-      async (_req: unknown, _res: unknown, next: () => void) => { next() },
-      {
-        dispose: () => {},
-        subscribeNotifications: () => () => {},
-        listNotificationEventsAfter: () => ({ notifications: [], latestSeq: 0, oldestSeq: 0 }),
-      },
-    ),
+    createBridgeMiddleware: (options: unknown) => {
+      assert.deepEqual(options, {
+        remoteAccessProtected: false,
+        runtimeDatabasePath: join(uploadRoot, 'runtime.sqlite'),
+        startupSkillsSync: false,
+      })
+      return Object.assign(
+        async (_req: unknown, _res: unknown, next: () => void) => { next() },
+        {
+          dispose: () => {},
+          subscribeNotifications: () => () => {},
+          listNotificationEventsAfter: () => ({ notifications: [], latestSeq: 0, oldestSeq: 0 }),
+        },
+      )
+    },
     runtimeDatabasePath: join(uploadRoot, 'runtime.sqlite'),
+    startupSkillsSync: false,
     resolveLocalFilePath: async () => {
       throw new LocalFileAccessError('outside-workspace')
     },
@@ -5487,24 +5634,12 @@ async function smokeCodexSessionFileChangeObserver(): Promise<void> {
   assert.equal(shouldInvalidateThreadCollectionForCxSessionFileChange({ source: 'session-log' }), false)
   assert.equal(shouldInvalidateThreadCollectionForCxSessionFileChange({ source: 'session-index' }), true)
   assert.equal(shouldInvalidateThreadCollectionForCxSessionFileChange({ source: 'unknown' }), true)
-  assert.deepEqual(classifyCodexSessionFileChange('session_index.jsonl'), {
+  assert.deepEqual(await classifyCodexSessionFileChange('session_index.jsonl'), {
     source: 'session-index',
     threadId: '',
   })
-  assert.deepEqual(classifyCodexSessionFileChange(
-    `sessions\\2026\\07\\20\\rollout-2026-07-20T15-24-12-${threadId}.jsonl`,
-  ), {
-    source: 'session-log',
-    threadId,
-  })
-  assert.deepEqual(classifyCodexSessionFileChange(Buffer.from(
-    `archived_sessions/rollout-2026-07-20T15-24-12-${threadId}.jsonl`,
-  )), {
-    source: 'session-log',
-    threadId,
-  })
-  assert.equal(classifyCodexSessionFileChange('runtime/runtime.sqlite'), null)
-  assert.equal(classifyCodexSessionFileChange(null), null)
+  assert.equal(await classifyCodexSessionFileChange('runtime/runtime.sqlite'), null)
+  assert.equal(await classifyCodexSessionFileChange(null), null)
   assert.deepEqual(createCodexSessionFileChangedNotification({ source: 'session-log', threadId }), {
     method: CX_SESSION_FILES_CHANGED_METHOD,
     params: { source: 'session-log', threadId },
@@ -5526,7 +5661,16 @@ async function smokeCodexSessionFileChangeObserver(): Promise<void> {
     await mkdir(sessionsDir, { recursive: true })
     observer.start()
     const sessionPath = join(sessionsDir, `rollout-2026-07-20T15-24-12-${threadId}.jsonl`)
-    await writeFile(sessionPath, '{}\n', 'utf8')
+    await writeFile(sessionPath, `${JSON.stringify({ type: 'session_meta', payload: { id: threadId } })}\n`, 'utf8')
+    assert.deepEqual(await classifyCodexSessionFileChange(
+      `sessions\\rollout-2026-07-20T15-24-12-${threadId}.jsonl`, root,
+    ), { source: 'session-log', threadId })
+    assert.deepEqual(await classifyCodexSessionFileChange(Buffer.from(
+      `sessions/rollout-2026-07-20T15-24-12-${threadId}.jsonl`,
+    ), root), { source: 'session-log', threadId })
+    assert.equal(await resolveCodexSessionLogPath(threadId, root), sessionPath)
+    assert.equal(await resolveCodexSessionLogPath('not-a-thread-id', root), '')
+    assert.equal(await resolveCodexSessionLogPath('019f7e69-25a4-7aa2-8166-b8257873b8ac', root), '')
     await waitForCondition(() => changes.some((change) => change.threadId === threadId))
     await appendFile(sessionPath, '{}\n', 'utf8')
     await new Promise((resolve) => setTimeout(resolve, 10))
@@ -7404,6 +7548,7 @@ async function smokeRpcProxyRoute(): Promise<void> {
         threadId: 'thread-plan',
         turnId: 'turn-initial',
         collaborationMode: 'plan',
+        model: 'gpt-test',
         input: [{ type: 'text', text: 'Draft a plan' }],
       },
     },
@@ -7485,7 +7630,7 @@ async function smokeRpcProxyRoute(): Promise<void> {
       rpcCalls.push({ method, params })
       if (method === 'turn/start') {
         turnStartAttempts += 1
-        if (turnStartAttempts === 1) throw new Error('unknown field mode')
+        if (turnStartAttempts === 1) throw createAppServerJsonRpcError({ code: -32602, message: 'unknown field collaborationMode' })
         return { turnId: 'turn-started' }
       }
       if (method === 'turn/interrupt') throw new Error('no active turn')
@@ -7557,7 +7702,8 @@ async function smokeRpcProxyRoute(): Promise<void> {
   ), true)
   assert.deepEqual(JSON.parse(planStart.body), { result: { turnId: 'turn-started' } })
   assert.equal(rpcCalls[0].method, 'turn/start')
-  assert.equal(readStringProperty(rpcCalls[0].params, 'mode'), 'plan')
+  assert.equal(readStringProperty(asRecord(rpcCalls[0].params)?.collaborationMode, 'mode'), 'plan')
+  assert.equal(readStringProperty(rpcCalls[0].params, 'mode'), '')
   assert.equal(rpcCalls[1].method, 'turn/start')
   assert.equal(readStringProperty(rpcCalls[1].params, 'mode'), '')
   assert.equal(readStringProperty(rpcCalls[1].params, 'collaborationMode'), '')
@@ -9336,6 +9482,7 @@ async function smokeRuntimePendingStartRestartRecovery(): Promise<void> {
   try {
     const sendPayload = {
       requestId: 'request-before-process-restart',
+      model: 'gpt-test',
       clientMessageId: 'client-before-process-restart',
       cwd: 'E:/project',
       input: [{ type: 'text', text: 'Survive the bridge process restart' }],
@@ -9780,8 +9927,9 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
       planStartCallCount += 1
       const root = asRecord(params)
       if (planStartCallCount === 1) {
-        assert.equal(root?.mode, 'plan')
-        throw new Error('unknown mode')
+        assert.equal(asRecord(root?.collaborationMode)?.mode, 'plan')
+        assert.equal(root?.mode, undefined)
+        throw createAppServerJsonRpcError({ code: -32602, message: 'unknown field collaborationMode' })
       }
       assert.equal(root?.mode, undefined)
       assert.equal(root?.collaborationMode, undefined)
@@ -9828,6 +9976,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     return {}
   })
   const snapshotFallbackResult = await startRuntimeTurnWithAppServer({
+    model: 'gpt-test',
     requestId: 'request-fallback',
     threadId: 'thread-fallback',
     input: [{ type: 'text', text: 'Continue' }],
@@ -9837,6 +9986,8 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     method: 'turn/start',
     params: {
       threadId: 'thread-fallback',
+      model: 'gpt-test',
+      collaborationMode: { mode: 'default', settings: { model: 'gpt-test', reasoning_effort: null, developer_instructions: null } },
       input: [{ type: 'text', text: 'Continue' }],
     },
   }])
@@ -9855,6 +10006,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     throw new Error(`unexpected rpc method ${method}`)
   })
   const resumedMissingThreadResult = await startRuntimeTurnWithAppServer({
+    model: 'gpt-test',
     requestId: 'request-mobile',
     clientMessageId: 'client-mobile',
     threadId: 'thread-mobile',
@@ -9873,6 +10025,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     throw createRpcTimeoutError('turn/start', 1000)
   })
   const timedOutResult = await startRuntimeTurnWithAppServer({
+    model: 'gpt-test',
     requestId: 'request-timeout',
     threadId: 'thread-timeout',
     input: [{ type: 'text', text: 'Wait' }],
@@ -9897,6 +10050,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     throw createRpcTransportError('codex app-server exited unexpectedly')
   })
   const transportInterruptedResult = await startRuntimeTurnWithAppServer({
+    model: 'gpt-test',
     requestId: 'request-transport-interrupted',
     threadId: 'thread-transport-interrupted',
     input: [{ type: 'text', text: 'Do not duplicate this turn' }],
@@ -9937,6 +10091,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     throw new Error(`unexpected active writer method ${method}`)
   })
   const activeWriterResult = await startRuntimeTurnWithAppServer({
+    model: 'gpt-test',
     requestId: 'request-active-writer',
     clientMessageId: 'client-active-writer',
     threadId: 'thread-active-writer',
@@ -9976,6 +10131,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     throw new Error('thread thread-active-writer-factory already has an active writer')
   })
   const factoryAccepted = await createAppServerRuntimeTurnStarter(activeWriterFactory.dependencies)({
+    model: 'gpt-test',
     requestId: 'request-active-writer-factory',
     clientMessageId: 'client-active-writer-factory',
     threadId: 'thread-active-writer-factory',
@@ -9990,6 +10146,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
   })
   await assert.rejects(
     () => startRuntimeTurnWithAppServer({
+      model: 'gpt-test',
       requestId: 'request-failed',
       threadId: 'thread-failed',
       input: [{ type: 'text', text: 'Run' }],
@@ -10021,6 +10178,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
   })
   const deduplicatedStarter = createAppServerRuntimeTurnStarter(deduplicated.dependencies)
   const deduplicatedPayload = {
+    model: 'gpt-test',
     requestId: 'request-deduplicated-first',
     clientMessageId: 'client-deduplicated',
     threadId: 'thread-deduplicated',
@@ -10078,6 +10236,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     lastError: null,
   })
   const resumedPendingResult = await startRuntimeTurnWithAppServer({
+    model: 'gpt-test',
     requestId: 'request-after-restart',
     clientMessageId: 'client-pending-before-restart',
     input: resumedInput,
@@ -10114,6 +10273,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     lastError: null,
   })
   const resumedPendingTurnResult = await startRuntimeTurnWithAppServer({
+    model: 'gpt-test',
     requestId: 'request-after-thread-created',
     clientMessageId: 'client-pending-with-thread',
     input: resumedTurnInput,
@@ -10135,6 +10295,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
   })
   const concurrentStarter = createAppServerRuntimeTurnStarter(concurrent.dependencies)
   const concurrentPayload = {
+    model: 'gpt-test',
     clientMessageId: 'client-concurrent',
     threadId: 'thread-concurrent',
     input: [{ type: 'text', text: 'Send concurrently once' }],
@@ -10479,6 +10640,7 @@ async function smokeAppServerRuntimeActions(): Promise<void> {
   })
 
   const startResult = await actions.startRuntimeTurn({
+    model: 'gpt-test',
     requestId: 'request-actions-start',
     clientMessageId: 'client-actions-start',
     threadId: 'thread-actions',
@@ -11472,6 +11634,7 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
         payload: {
           type: 'agent_message',
           message: 'Recovered answer',
+          phase: 'final_answer',
         },
       }),
       JSON.stringify({
@@ -11480,6 +11643,7 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
         payload: {
           type: 'agent_message',
           message: 'Recovered answer',
+          phase: 'final_answer',
         },
       }),
       JSON.stringify({
@@ -11493,6 +11657,7 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
             type: 'output_text',
             text: 'Recovered answer\n\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[transport metadata]\n</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>',
           }],
+          phase: 'final_answer',
         },
       }),
       JSON.stringify({
@@ -11533,6 +11698,7 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
         payload: {
           type: 'agent_message',
           message: 'Second recovered answer',
+          phase: 'final_answer',
         },
       }),
       JSON.stringify({
@@ -11553,6 +11719,7 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
           id: 'agent-3',
           role: 'assistant',
           content: [{ type: 'output_text', text: 'Third recovered answer' }],
+          phase: 'final_answer',
         },
       }),
       JSON.stringify({
@@ -11561,6 +11728,7 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
         payload: {
           type: 'agent_message',
           message: 'Third recovered answer',
+          phase: 'final_answer',
         },
       }),
     ].join('\n'), 'utf8')
@@ -11598,12 +11766,145 @@ async function smokeAppServerSessionLogThreadRead(): Promise<void> {
     assert.equal(threadRead?.thread.turns[0]?.items[1]?.type, 'agentMessage')
     assert.equal(threadRead?.thread.turns[0]?.items[1]?.phase, 'commentary')
     assert.equal(threadRead?.thread.turns[0]?.items[1]?.text, 'Intermediate progress should not be restored')
-    assert.equal(threadRead?.thread.turns[0]?.items[2]?.text, 'Recovered answer')
-    assert.equal(threadRead?.thread.turns[0]?.items.length, 3)
+    assert.equal(threadRead?.thread.turns[0]?.items[2]?.text, 'Intermediate event progress should not be restored')
+    assert.equal(threadRead?.thread.turns[0]?.items[2]?.phase, 'commentary')
+    assert.equal(threadRead?.thread.turns[0]?.items[3]?.text, 'Recovered answer')
+    assert.equal(threadRead?.thread.turns[0]?.items[3]?.phase, 'final_answer')
+    assert.equal(threadRead?.thread.turns[0]?.items.length, 4)
     assert.equal(threadRead?.thread.turns[1]?.items[0]?.content?.[0]?.text, '继续')
     assert.equal(threadRead?.thread.turns[1]?.items[1]?.text, 'Second recovered answer')
+    assert.equal(threadRead?.thread.turns[1]?.items[1]?.phase, 'final_answer')
     assert.equal(threadRead?.thread.turns[2]?.items[0]?.content?.[0]?.text, '继续')
     assert.equal(threadRead?.thread.turns[2]?.items[1]?.text, 'Third recovered answer')
+    assert.equal(threadRead?.thread.turns[2]?.items[1]?.phase, 'final_answer')
+
+    const semanticSessionPath = join(dir, 'rollout-2026-07-06T10-00-30-thread-semantic.jsonl')
+    await writeFile(semanticSessionPath, [
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:30.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'semantic-user-1',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Run the semantic recovery probe' }],
+          internal_chat_message_metadata_passthrough: { turn_id: 'semantic-turn-1' },
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:31.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'agent_message',
+          message: 'First explicit final',
+          phase: 'final_answer',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:31.100Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'semantic-final-1',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'First explicit final' }],
+          phase: 'final_answer',
+          internal_chat_message_metadata_passthrough: { turn_id: 'semantic-turn-1' },
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:32.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'semantic-internal-continuation',
+          role: 'user',
+          content: [{
+            type: 'input_text',
+            text: '<codex_internal_context source="goal">continue without exposing this prompt</codex_internal_context>',
+          }],
+          internal_chat_message_metadata_passthrough: { turn_id: 'semantic-turn-2' },
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:33.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'patch_apply_end',
+          call_id: 'semantic-patch-2',
+          turn_id: 'semantic-turn-2',
+          success: true,
+          status: 'completed',
+          changes: {
+            'E:/workspace/project/src/semantic.ts': {
+              type: 'update',
+              unified_diff: '@@ -1 +1,2 @@\n-old line\n+new line\n+second line',
+              move_path: null,
+            },
+          },
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:34.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'agent_message',
+          message: 'Second explicit final',
+          phase: 'final_answer',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-07-06T10:00:34.100Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          id: 'semantic-final-2',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Second explicit final' }],
+          phase: 'final_answer',
+          internal_chat_message_metadata_passthrough: { turn_id: 'semantic-turn-2' },
+        },
+      }),
+    ].join('\n'), 'utf8')
+    const semanticThreadRead = await parseThreadReadFromSessionLog(semanticSessionPath, {
+      thread: { id: 'thread-semantic', path: semanticSessionPath, turns: [] },
+    }) as {
+      thread: {
+        turns: Array<{
+          id: string
+          items: Array<{
+            type: string
+            phase?: string
+            text?: string
+            content?: Array<{ text?: string }>
+            changes?: Array<{
+              path: string
+              kind: { type: string; move_path: string | null }
+              diff: string
+            }>
+          }>
+        }>
+      }
+    } | null
+    assert.equal(semanticThreadRead?.thread.turns.length, 2)
+    assert.deepEqual(semanticThreadRead?.thread.turns.map((turn) => turn.id), [
+      'semantic-turn-1',
+      'semantic-turn-2',
+    ])
+    assert.deepEqual(
+      semanticThreadRead?.thread.turns.map((turn) => turn.items.filter((item) => item.phase === 'final_answer').length),
+      [1, 1],
+    )
+    assert.equal(semanticThreadRead?.thread.turns[1]?.items.some((item) => item.type === 'userMessage'), false)
+    assert.equal(JSON.stringify(semanticThreadRead).includes('continue without exposing this prompt'), false)
+    assert.deepEqual(
+      semanticThreadRead?.thread.turns[1]?.items.find((item) => item.type === 'fileChange')?.changes,
+      [{
+        path: 'E:/workspace/project/src/semantic.ts',
+        kind: { type: 'update', move_path: null },
+        diff: '@@ -1 +1,2 @@\n-old line\n+new line\n+second line',
+      }],
+    )
 
     const imageSessionPath = join(dir, 'rollout-2026-07-06T10-01-00-thread-image.jsonl')
     await writeFile(imageSessionPath, [
@@ -11918,6 +12219,50 @@ async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
   assert.equal(cacheHitSnapshot.messageState, 'fresh')
   assert.deepEqual(cacheHitPersistedSnapshots, [cacheHitSnapshot])
 
+  const immediateCacheRpcCalls: unknown[] = []
+  const immediateCacheRuntimeObservations: unknown[] = []
+  const immediateCachePendingRequests = [{ id: 'request-cache-first' }] as unknown as PendingServerRequest[]
+  const immediateCacheSnapshot = await readAppServerThreadRuntimeSnapshot(' thread-cache ', {
+    rpc: async (_method, params) => {
+      immediateCacheRpcCalls.push(params)
+      throw new Error('cache-first hit must not wait for any App Server RPC')
+    },
+    observeThreadRead: () => {
+      throw new Error('cache-first hit must not present cached messages as an authoritative thread read')
+    },
+    getCachedThreadRead: () => cachedThreadRead,
+    rememberCachedThreadRead: () => {
+      throw new Error('cache-first hit should not rewrite cached thread read')
+    },
+    snapshotRuntime: (threadId, overlay = {}) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'completed',
+      threadRead: overlay.threadRead ?? null,
+      messageState: overlay.messageState ?? 'unavailable',
+      pendingServerRequests: overlay.pendingServerRequests ?? [],
+      tokenUsage: overlay.tokenUsage ?? null,
+    }),
+    observeRuntimeThreadRead: (...args) => {
+      immediateCacheRuntimeObservations.push(args)
+    },
+    markRuntimeDegraded: () => {
+      throw new Error('cache-first hit should not mark degraded')
+    },
+    persistRuntimeSnapshot: (_threadId, snapshot) => snapshot,
+    listPendingServerRequestsForThread: () => immediateCachePendingRequests,
+    getThreadTokenUsage: () => ({ totalTokens: 42 }) as unknown as ThreadTokenUsage,
+    getErrorMessage,
+    writeWarning: () => {
+      throw new Error('cache-first hit should not warn')
+    },
+  }, { preferCachedMessages: true })
+  assert.deepEqual(immediateCacheRpcCalls, [])
+  assert.deepEqual(immediateCacheRuntimeObservations, [])
+  assert.equal(immediateCacheSnapshot.threadRead, cachedThreadReadPayload)
+  assert.equal(immediateCacheSnapshot.messageState, 'cached')
+  assert.equal(immediateCacheSnapshot.pendingServerRequests, immediateCachePendingRequests)
+  assert.deepEqual(immediateCacheSnapshot.tokenUsage, { totalTokens: 42 })
+
   const fallbackThreadReadPayload = {
     thread: {
       updatedAt: updatedAtSeconds,
@@ -12036,6 +12381,7 @@ async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
       assert.equal(readThreadSessionPathFromThreadReadPayload(fallbackThreadRead), 'session-fallback.jsonl')
       return sessionFallbackThreadReadPayload
     },
+    validateSessionLogPath: async (path) => path, // Explicit trusted path in this no-filesystem fixture.
     getErrorMessage,
     writeWarning: (message, details) => {
       sessionFallbackWarnings.push({ message, details })
@@ -12046,6 +12392,109 @@ async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
   assert.equal(sessionFallbackSnapshot.threadRead, sessionFallbackThreadReadPayload)
   assert.equal(sessionFallbackSnapshot.messageState, 'cached')
   assert.deepEqual(sessionFallbackWarnings, [])
+
+  const notLoadedThreadReadPayload = {
+    thread: {
+      id: 'thread-not-loaded',
+      updatedAt: updatedAtSeconds,
+      path: 'session-not-loaded.jsonl',
+      turns: [{
+        id: 'turn-not-loaded',
+        status: 'completed',
+        items: [{ type: 'agentMessage', id: 'agent-not-loaded', text: 'Recovered without loading the writer thread' }],
+      }],
+    },
+  }
+  const notLoadedRpcCalls: unknown[] = []
+  const notLoadedResolvedThreadIds: string[] = []
+  const notLoadedRemembered: Array<{ threadRead: unknown; source?: ThreadReadCacheSource }> = []
+  const notLoadedDependencies = {
+    rpc: async (_method: string, params: unknown) => {
+      notLoadedRpcCalls.push(params)
+      throw new Error('thread not loaded: thread-not-loaded')
+    },
+    observeThreadRead: () => {
+      throw new Error('unloaded App Server reads must not be observed as authoritative')
+    },
+    getCachedThreadRead: () => null,
+    rememberCachedThreadRead: (_threadId: string, threadRead: unknown, source?: ThreadReadCacheSource) => {
+      notLoadedRemembered.push({ threadRead, source })
+      return createCachedThreadRead(threadRead, () => '2026-01-01T00:00:30.000Z', source)
+    },
+    snapshotRuntime: (threadId: string, overlay: RuntimeSnapshotOverlay = {}) => createThreadRuntimeSnapshot({
+      threadId,
+      executionState: 'completed',
+      threadRead: overlay.threadRead ?? null,
+      messageState: overlay.messageState ?? 'unavailable',
+      pendingServerRequests: overlay.pendingServerRequests ?? [],
+      tokenUsage: overlay.tokenUsage ?? null,
+    }),
+    observeRuntimeThreadRead: () => {},
+    markRuntimeDegraded: () => {
+      throw new Error('an exact session-log recovery must not mark runtime degraded')
+    },
+    persistRuntimeSnapshot: (_threadId: string, snapshot: ThreadRuntimeSnapshot) => snapshot,
+    listPendingServerRequestsForThread: () => [],
+    getThreadTokenUsage: () => null,
+    resolveSessionLogPath: async (threadId: string) => {
+      notLoadedResolvedThreadIds.push(threadId)
+      return 'session-not-loaded.jsonl'
+    },
+    readSessionLogThreadRead: async (sessionPath: string, fallbackThreadRead: unknown) => {
+      assert.equal(sessionPath, 'session-not-loaded.jsonl')
+      assert.equal(readThreadSessionPathFromThreadReadPayload(fallbackThreadRead), 'session-not-loaded.jsonl')
+      return notLoadedThreadReadPayload
+    },
+    getErrorMessage,
+    writeWarning: () => {},
+  }
+  const notLoadedSnapshot = await readAppServerThreadRuntimeSnapshot('thread-not-loaded', notLoadedDependencies)
+  assert.deepEqual(notLoadedRpcCalls.map(readIncludeTurns), [false])
+  assert.deepEqual(notLoadedResolvedThreadIds, ['thread-not-loaded'])
+  assert.equal(notLoadedSnapshot.threadRead, notLoadedThreadReadPayload)
+  assert.equal(notLoadedSnapshot.messageState, 'cached')
+  assert.deepEqual(notLoadedRemembered, [{ threadRead: notLoadedThreadReadPayload, source: 'session-log' }])
+
+  const rotatedReads: string[] = []
+  const rotatedPayload = { thread: { id: 'thread-rotated', path: 'session-latest.jsonl', updatedAt: updatedAtSeconds, turns: [] } }
+  const rotatedSnapshot = await readAppServerThreadRuntimeSnapshot('thread-rotated', {
+    ...notLoadedDependencies,
+    observeThreadRead: () => {},
+    rpc: async (_method, params) => {
+      assert.equal(readIncludeTurns(params), false, 'rotated log recovery needs no heavy RPC')
+      return { thread: { id: 'thread-rotated', updatedAt: updatedAtSeconds, path: 'session-old.jsonl' } }
+    },
+    getCachedThreadRead: () => createCachedThreadRead({ thread: { id: 'thread-rotated', updatedAt: updatedAtSeconds, path: 'session-old.jsonl', turns: [] } }, () => '2026-01-01T00:00:30.000Z', 'session-log'),
+    resolveSessionLogPath: async () => 'session-latest.jsonl',
+    readSessionLogThreadRead: async (sessionPath, fallback) => {
+      rotatedReads.push(sessionPath)
+      assert.equal(readThreadSessionPathFromThreadReadPayload(fallback), 'session-latest.jsonl')
+      return rotatedPayload
+    },
+  })
+  assert.deepEqual(rotatedReads, ['session-latest.jsonl'], 'matching updatedAt must not reuse another log shard')
+  assert.equal(rotatedSnapshot.threadRead, rotatedPayload)
+
+  const rejectedPathRpcCalls: boolean[] = []
+  const ownedPayload = { thread: { id: 'thread-owned', turns: [] } }
+  const rejectedPathSnapshot = await readAppServerThreadRuntimeSnapshot('thread-owned', {
+    ...notLoadedDependencies,
+    observeThreadRead: () => {},
+    rpc: async (_method, params) => {
+      const includeTurns = readIncludeTurns(params) === true
+      rejectedPathRpcCalls.push(includeTurns)
+      return includeTurns ? ownedPayload : { thread: { id: 'thread-owned', path: 'another-thread.jsonl' } }
+    },
+    resolveSessionLogPath: async () => '',
+    validateSessionLogPath: async (path, threadId) => {
+      assert.equal(path, 'another-thread.jsonl')
+      assert.equal(threadId, 'thread-owned')
+      return ''
+    },
+    readSessionLogThreadRead: async () => { throw new Error('unverified RPC paths must never be read') },
+  })
+  assert.deepEqual(rejectedPathRpcCalls, [false, true])
+  assert.equal(rejectedPathSnapshot.threadRead, ownedPayload)
 
   const cacheFirstRpcCalls: unknown[] = []
   const cacheFirstRemembered: unknown[] = []
@@ -12101,6 +12550,7 @@ async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
       assert.equal(readThreadSessionPathFromThreadReadPayload(fallbackThreadRead), 'session-cache-first.jsonl')
       return cacheFirstThreadReadPayload
     },
+    validateSessionLogPath: async (path) => path,
     getErrorMessage,
     writeWarning: () => {
       throw new Error('expected cache-first session recovery must not warn')
@@ -12171,6 +12621,7 @@ async function smokeAppServerThreadRuntimeSnapshot(): Promise<void> {
     listPendingServerRequestsForThread: () => [],
     getThreadTokenUsage: () => null,
     readSessionLogThreadRead: async () => activeSessionThreadRead,
+    validateSessionLogPath: async (path) => path,
     getErrorMessage,
     writeWarning: () => {
       throw new Error('active session recovery should not warn')

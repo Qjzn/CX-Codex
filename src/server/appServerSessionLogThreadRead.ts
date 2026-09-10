@@ -13,11 +13,20 @@ const TOP_LEVEL_SESSION_META_PATTERN = /^\s*\{(?:\s*"timestamp"\s*:\s*"[^"]*"\s*
 const TRAILING_MEMORY_CITATION_PATTERN = /\s*<oai-mem-citation>[\s\S]*<\/oai-mem-citation>\s*$/u
 
 type FallbackItem = {
-  type: 'userMessage' | 'agentMessage'
+  type: 'userMessage' | 'agentMessage' | 'fileChange'
   id: string
-  phase?: 'commentary'
+  phase?: 'commentary' | 'final_answer'
+  startedAt?: string
+  completedAt?: string
+  status?: 'completed' | 'failed'
+  recoverySource?: 'response_item' | 'event_msg'
   content?: Array<{ type: 'text'; text: string } | { type: 'localImage'; path: string }>
   text?: string
+  changes?: Array<{
+    path: string
+    kind: { type: 'add' | 'delete' | 'update'; move_path: string | null }
+    diff: string
+  }>
 }
 
 type RecoveredMessage = {
@@ -25,9 +34,19 @@ type RecoveredMessage = {
   text: string
   id: string
   turnId?: string
-  phase?: 'commentary'
+  phase?: 'commentary' | 'final_answer'
+  atIso?: string
+  source: 'response_item' | 'event_msg'
   images?: string[]
   hidden?: boolean
+}
+
+type RecoveredFileChange = {
+  id: string
+  turnId: string
+  atIso?: string
+  status: 'completed' | 'failed'
+  changes: NonNullable<FallbackItem['changes']>
 }
 
 type FallbackTurn = {
@@ -134,8 +153,42 @@ function cloneFallbackTurns(value: unknown): FallbackTurn[] {
           type: 'agentMessage',
           id,
           text,
-          ...(phase === 'commentary' ? { phase } : {}),
+          ...(phase === 'commentary' || phase === 'final_answer' ? { phase } : {}),
+          ...(readTrimmedString(item.startedAt) ? { startedAt: readTrimmedString(item.startedAt) } : {}),
+          ...(item.recoverySource === 'response_item' || item.recoverySource === 'event_msg'
+            ? { recoverySource: item.recoverySource }
+          : {}),
         })
+      } else if (item.type === 'fileChange') {
+        const changes = Array.isArray(item.changes)
+          ? item.changes.flatMap((changeValue) => {
+              const change = asRecord(changeValue)
+              const path = readTrimmedString(change?.path)
+              if (!path) return []
+              const kind = asRecord(change?.kind)
+              const type = readTrimmedString(kind?.type)
+              const normalizedType: 'add' | 'delete' | 'update' = type === 'add' || type === 'delete'
+                ? type
+                : 'update'
+              return [{
+                path,
+                kind: {
+                  type: normalizedType,
+                  move_path: readTrimmedString(kind?.move_path) || null,
+                },
+                diff: limitText(readTrimmedString(change?.diff)),
+              }]
+            })
+          : []
+        if (changes.length > 0) {
+          items.push({
+            type: 'fileChange',
+            id,
+            status: item.status === 'failed' ? 'failed' : 'completed',
+            ...(readTrimmedString(item.completedAt) ? { completedAt: readTrimmedString(item.completedAt) } : {}),
+            changes,
+          })
+        }
       }
     }
     turns.push({
@@ -147,27 +200,15 @@ function cloneFallbackTurns(value: unknown): FallbackTurn[] {
   return turns.slice(-FALLBACK_TURN_LIMIT)
 }
 
-function hydrateRecoveredMessageState(
+function hydrateRecoveredMessageIds(
   turns: FallbackTurn[],
   seenMessageIds: Set<string>,
-): RecoveredMessage | null {
-  let lastRecoveredMessage: RecoveredMessage | null = null
+): void {
   for (const turn of turns) {
     for (const item of turn.items) {
       if (item.id) seenMessageIds.add(item.id)
-      const role = item.type === 'userMessage' ? 'user' : 'assistant'
-      const text = item.type === 'userMessage'
-        ? readTextContent(item.content)
-        : readTrimmedString(item.text)
-      if (text) lastRecoveredMessage = {
-        role,
-        text,
-        id: item.id,
-        ...(item.phase === 'commentary' ? { phase: item.phase } : {}),
-      }
     }
   }
-  return lastRecoveredMessage
 }
 
 async function doesFileEndWithNewline(sessionPath: string, fileSize: number): Promise<boolean> {
@@ -226,9 +267,9 @@ function readResponseItemMessage(entry: Record<string, unknown>): RecoveredMessa
   if (payload?.type !== 'message') return null
   const role = payload.role === 'user' || payload.role === 'assistant' ? payload.role : null
   if (!role) return null
-  const phase = role === 'assistant' && readTrimmedString(payload.phase) === 'commentary'
-    ? 'commentary' as const
-    : undefined
+  const rawPhase = role === 'assistant' ? readTrimmedString(payload.phase) : ''
+  const phase = rawPhase === 'commentary' || rawPhase === 'final_answer' ? rawPhase : undefined
+  const atIso = readTrimmedString(entry.timestamp)
   const rawText = readTextContent(payload.content)
   const recoveredUserContent = role === 'user' ? readRecoveredUserContent(rawText) : null
   const text = role === 'assistant'
@@ -239,7 +280,15 @@ function readResponseItemMessage(entry: Record<string, unknown>): RecoveredMessa
   const metadata = asRecord(payload.internal_chat_message_metadata_passthrough)
   const turnId = readTrimmedString(metadata?.turn_id)
   if (isInternalContextMessageText(text)) {
-    return role === 'user' ? { role, text: '', id, ...(turnId ? { turnId } : {}), hidden: true } : null
+    return role === 'user' ? {
+      role,
+      text: '',
+      id,
+      ...(turnId ? { turnId } : {}),
+      ...(atIso ? { atIso } : {}),
+      source: 'response_item',
+      hidden: true,
+    } : null
   }
   return {
     role,
@@ -247,11 +296,13 @@ function readResponseItemMessage(entry: Record<string, unknown>): RecoveredMessa
     id,
     ...(turnId ? { turnId } : {}),
     ...(phase ? { phase } : {}),
+    ...(atIso ? { atIso } : {}),
+    source: 'response_item',
     ...(recoveredUserContent?.images.length ? { images: recoveredUserContent.images } : {}),
   }
 }
 
-function readEventMessage(entry: Record<string, unknown>): RecoveredMessage | null {
+function readEventMessage(entry: Record<string, unknown>, entryIndex: number): RecoveredMessage | null {
   if (entry.type !== 'event_msg') return null
   const payload = asRecord(entry.payload)
   const type = readTrimmedString(payload?.type)
@@ -262,28 +313,119 @@ function readEventMessage(entry: Record<string, unknown>): RecoveredMessage | nu
         ? 'assistant'
         : null
   if (!role) return null
-  if (role === 'assistant' && readTrimmedString(payload?.phase) === 'commentary') return null
+  const rawPhase = role === 'assistant' ? readTrimmedString(payload?.phase) : ''
+  const phase = rawPhase === 'commentary' || rawPhase === 'final_answer' ? rawPhase : undefined
   const rawText = readTrimmedString(payload?.message)
   const text = role === 'assistant' ? normalizeRecoveredAssistantText(rawText) : rawText
   if (!text) return null
   if (isInternalContextMessageText(text)) {
-    return role === 'user' ? { role, text: '', id: '', hidden: true } : null
+    return role === 'user' ? {
+      role,
+      text: '',
+      id: `event:${String(entryIndex)}`,
+      source: 'event_msg',
+      hidden: true,
+    } : null
   }
-  return { role, text, id: '' }
+  const atIso = readTrimmedString(entry.timestamp)
+  return {
+    role,
+    text,
+    id: `event:${atIso || 'unknown'}:${String(entryIndex)}`,
+    ...(phase ? { phase } : {}),
+    ...(atIso ? { atIso } : {}),
+    source: 'event_msg',
+  }
+}
+
+function readEventFileChange(entry: Record<string, unknown>, entryIndex: number): RecoveredFileChange | null {
+  if (entry.type !== 'event_msg') return null
+  const payload = asRecord(entry.payload)
+  if (payload?.type !== 'patch_apply_end') return null
+  const turnId = readTrimmedString(payload.turn_id)
+  const rawChanges = asRecord(payload.changes)
+  if (!turnId || !rawChanges) return null
+
+  const changes: NonNullable<FallbackItem['changes']> = []
+  for (const [rawPath, rawChange] of Object.entries(rawChanges)) {
+    const path = rawPath.trim()
+    const change = asRecord(rawChange)
+    if (!path || !change) continue
+    const rawType = readTrimmedString(change.type)
+    changes.push({
+      path,
+      kind: {
+        type: rawType === 'add' || rawType === 'delete' ? rawType : 'update',
+        move_path: readTrimmedString(change.move_path) || null,
+      },
+      diff: limitText(readTrimmedString(change.unified_diff)),
+    })
+  }
+  if (changes.length === 0) return null
+
+  const atIso = readTrimmedString(entry.timestamp)
+  const callId = readTrimmedString(payload.call_id)
+  return {
+    id: callId || `event:patch:${atIso || 'unknown'}:${String(entryIndex)}`,
+    turnId,
+    ...(atIso ? { atIso } : {}),
+    status: payload.success === false || payload.status === 'failed' ? 'failed' : 'completed',
+    changes,
+  }
+}
+
+function findFallbackTurn(turns: FallbackTurn[], turnId: string): FallbackTurn | null {
+  if (!turnId) return null
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    if (turns[index]?.id === turnId) return turns[index] ?? null
+  }
+  return null
+}
+
+function matchesRecoveredMessage(item: FallbackItem, message: RecoveredMessage, source: RecoveredMessage['source']): boolean {
+  if (item.recoverySource !== source || item.phase !== message.phase) return false
+  if (message.role === 'assistant') {
+    return item.type === 'agentMessage' && item.text === limitText(message.text)
+  }
+  return item.type === 'userMessage' && readTextContent(item.content) === limitText(message.text)
+}
+
+function trimFallbackTurns(turns: FallbackTurn[]): void {
+  while (turns.length > FALLBACK_TURN_LIMIT) turns.shift()
 }
 
 function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): boolean {
-  if (message.hidden) return false
-  const text = limitText(message.text)
-  let matchingTurn: FallbackTurn | null = null
-  if (message.turnId) {
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      if (turns[index]?.id !== message.turnId) continue
-      matchingTurn = turns[index] ?? null
-      break
+  if (message.hidden) {
+    if (
+      message.role === 'user'
+      && message.source === 'response_item'
+      && message.turnId
+      && !findFallbackTurn(turns, message.turnId)
+    ) {
+      turns.push({ id: message.turnId, status: 'completed', items: [] })
+      trimFallbackTurns(turns)
     }
+    return false
   }
-  const turn = matchingTurn ?? (message.role === 'user' || turns.length === 0
+  const text = limitText(message.text)
+  const matchingTurn = findFallbackTurn(turns, message.turnId ?? '')
+  if (message.role === 'user' && !matchingTurn && turns.at(-1)?.items.length === 0) {
+    turns.pop()
+  }
+  const messageItemType = message.role === 'user' ? 'userMessage' : 'agentMessage'
+  const canonicalEventTarget = message.source === 'event_msg' && !message.turnId
+    ? turns.at(-1)?.items.some((item) => (
+        item.type === messageItemType && matchesRecoveredMessage(item, message, 'response_item')
+      ))
+      ? turns.at(-1) ?? null
+      : null
+    : null
+  const mustCreateAuthoritativeTurn = Boolean(
+    message.source === 'response_item' && message.turnId && !matchingTurn,
+  )
+  const turn = matchingTurn ?? canonicalEventTarget ?? (mustCreateAuthoritativeTurn
+    ? null
+    : message.role === 'user' || turns.length === 0
     ? null
     : turns.at(-1) ?? null)
   const targetTurn = turn ?? {
@@ -291,7 +433,27 @@ function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): bo
     status: 'completed' as const,
     items: [],
   }
-  if (!turn) turns.push(targetTurn)
+  if (!turn) {
+    if (message.source === 'response_item' && message.turnId && message.role === 'assistant') {
+      const previousTurn = turns.at(-1)
+      if (previousTurn) {
+        previousTurn.items = previousTurn.items.filter((item) => !matchesRecoveredMessage(item, message, 'event_msg'))
+      }
+    }
+    turns.push(targetTurn)
+  }
+
+  if (
+    message.source === 'event_msg' &&
+    targetTurn.items.some((item) => item.type === messageItemType && matchesRecoveredMessage(item, message, 'response_item'))
+  ) {
+    return !turn
+  }
+  if (message.source === 'response_item') {
+    targetTurn.items = targetTurn.items.filter((item) => !(
+      item.type === messageItemType && matchesRecoveredMessage(item, message, 'event_msg')
+    ))
+  }
 
   const itemId = message.id || `${targetTurn.id}:${message.role}:${String(targetTurn.items.length + 1)}`
   targetTurn.items.push(message.role === 'user'
@@ -302,32 +464,39 @@ function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): bo
           ...(text ? [{ type: 'text' as const, text }] : []),
           ...(message.images ?? []).map((path) => ({ type: 'localImage' as const, path })),
         ],
+        ...(message.atIso ? { startedAt: message.atIso } : {}),
+        recoverySource: message.source,
       }
     : {
         type: 'agentMessage',
         id: itemId,
         text,
-        ...(message.phase === 'commentary' ? { phase: message.phase } : {}),
+        ...(message.phase === 'commentary' || message.phase === 'final_answer' ? { phase: message.phase } : {}),
+        ...(message.atIso ? { startedAt: message.atIso } : {}),
+        recoverySource: message.source,
       })
 
-  while (turns.length > FALLBACK_TURN_LIMIT) {
-    turns.shift()
-  }
+  trimFallbackTurns(turns)
   return !turn
 }
 
-function isDuplicateRecoveredMessage(
-  first: RecoveredMessage | null,
-  second: RecoveredMessage,
-): boolean {
-  if (second.hidden) return false
-  if (
-    !first ||
-    first.role !== second.role ||
-    first.text !== second.text ||
-    first.phase !== second.phase
-  ) return false
-  return !first.id || !second.id
+function appendFileChangeTurn(turns: FallbackTurn[], fileChange: RecoveredFileChange): boolean {
+  const matchingTurn = findFallbackTurn(turns, fileChange.turnId)
+  const targetTurn = matchingTurn ?? {
+    id: fileChange.turnId,
+    status: 'completed' as const,
+    items: [],
+  }
+  if (!matchingTurn) turns.push(targetTurn)
+  targetTurn.items.push({
+    type: 'fileChange',
+    id: fileChange.id,
+    status: fileChange.status,
+    ...(fileChange.atIso ? { completedAt: fileChange.atIso } : {}),
+    changes: fileChange.changes,
+  })
+  trimFallbackTurns(turns)
+  return !matchingTurn
 }
 
 function writeCacheState(sessionPath: string, cacheState: SessionLogThreadReadCacheState): void {
@@ -366,7 +535,8 @@ async function parseThreadReadFromSessionLogRange(
       )
     : 0
   const seenMessageIds = new Set<string>()
-  let lastRecoveredMessage = hydrateRecoveredMessageState(turns, seenMessageIds)
+  hydrateRecoveredMessageIds(turns, seenMessageIds)
+  let recoveredEntryIndex = 0
   const stats = await stat(sessionPath)
   const startOffset = typeof options.startOffset === 'number'
     ? Math.max(0, Math.min(options.startOffset, stats.size))
@@ -381,6 +551,7 @@ async function parseThreadReadFromSessionLogRange(
     try {
       const entry = asRecord(JSON.parse(trimmed) as unknown)
       if (!entry) return
+      recoveredEntryIndex += 1
 
       updatedAt = Math.max(updatedAt, readUnixSeconds(entry.timestamp))
       if (entry.type === 'session_meta') {
@@ -392,22 +563,22 @@ async function parseThreadReadFromSessionLogRange(
         }
       }
 
-      const message = readResponseItemMessage(entry) ?? readEventMessage(entry)
-      if (!message || isDuplicateRecoveredMessage(lastRecoveredMessage, message)) return
+      const fileChange = readEventFileChange(entry, recoveredEntryIndex)
+      if (fileChange) {
+        if (seenMessageIds.has(fileChange.id)) return
+        seenMessageIds.add(fileChange.id)
+        if (appendFileChangeTurn(turns, fileChange)) recoveredTurnCount += 1
+        return
+      }
+
+      const message = readResponseItemMessage(entry) ?? readEventMessage(entry, recoveredEntryIndex)
+      if (!message) return
       if (message.id) {
         if (seenMessageIds.has(message.id)) return
         seenMessageIds.add(message.id)
       }
       if (message.hidden && turns.length === 0) return
       if (appendMessageTurn(turns, message)) recoveredTurnCount += 1
-      if (!message.hidden) {
-        lastRecoveredMessage = {
-          role: message.role,
-          text: message.text,
-          id: message.id,
-          ...(message.phase === 'commentary' ? { phase: message.phase } : {}),
-        }
-      }
       if (!preview && message.role === 'user') {
         preview = message.text.split('\n')[0]?.trim() ?? ''
       }
@@ -457,11 +628,12 @@ async function parseThreadReadFromSessionLogRange(
     }
   }
 
-  if (turns.length === 0) return null
+  const visibleTurns = turns.filter((turn) => turn.items.length > 0)
+  if (visibleTurns.length === 0) return null
   const title = readFallbackThreadTitle(fallbackThread, preview)
   const knownOriginalTurnsCount = readNonNegativeInteger(fallbackThread.originalTurnsCount) ?? 0
-  const originalTurnsCount = Math.max(recoveredTurnCount, knownOriginalTurnsCount, turns.length)
-  const turnsStartIndex = Math.max(0, originalTurnsCount - turns.length)
+  const originalTurnsCount = Math.max(recoveredTurnCount, knownOriginalTurnsCount, visibleTurns.length)
+  const turnsStartIndex = Math.max(0, originalTurnsCount - visibleTurns.length)
 
   return {
     thread: {
@@ -477,7 +649,7 @@ async function parseThreadReadFromSessionLogRange(
       cliVersion: readTrimmedString(fallbackThread?.cliVersion),
       source,
       gitInfo: fallbackThread?.gitInfo ?? null,
-      turns,
+      turns: visibleTurns,
       ...(turnsStartIndex > 0
         ? {
             turnsView: 'recent',

@@ -1,10 +1,14 @@
-import type { UiMessage } from '../types/codex'
+import type {
+  ConversationActivity,
+  ConversationProjection,
+  ConversationTurn,
+} from '../conversation-transcript/index.js'
 
 export type ThreadMarkdownExportInput = {
   title: string
   threadId: string
   exportedAtIso: string
-  messages: readonly UiMessage[]
+  projection: ConversationProjection
 }
 
 export function buildThreadMarkdown(input: ThreadMarkdownExportInput): string {
@@ -17,56 +21,102 @@ export function buildThreadMarkdown(input: ThreadMarkdownExportInput): string {
   lines.push('---')
   lines.push('')
 
-  for (const message of input.messages) {
-    const roleLabel = message.role === 'user'
-      ? '用户'
-      : message.role === 'assistant'
-        ? 'Codex'
-        : message.role === 'system'
-          ? '系统'
-          : '消息'
-    lines.push(`## ${roleLabel}`)
-    lines.push('')
-
-    const normalizedText = message.text.trim()
-    if (normalizedText) {
-      lines.push(normalizedText)
-      lines.push('')
-    }
-
-    if (message.commandExecution) {
-      lines.push('```text')
-      lines.push(`命令：${message.commandExecution.command}`)
-      lines.push(`状态：${message.commandExecution.status}`)
-      if (message.commandExecution.cwd) {
-        lines.push(`目录：${message.commandExecution.cwd}`)
-      }
-      if (message.commandExecution.exitCode !== null) {
-        lines.push(`退出码：${message.commandExecution.exitCode}`)
-      }
-      lines.push(message.commandExecution.aggregatedOutput || '（无输出）')
-      lines.push('```')
-      lines.push('')
-    }
-
-    if (message.fileAttachments && message.fileAttachments.length > 0) {
-      lines.push('附件：')
-      for (const attachment of message.fileAttachments) {
-        lines.push(`- ${attachment.path}`)
-      }
-      lines.push('')
-    }
-
-    if (message.images && message.images.length > 0) {
-      lines.push('图片：')
-      for (const imageUrl of message.images) {
-        lines.push(`- ${imageUrl}`)
-      }
-      lines.push('')
-    }
+  for (const turn of input.projection.turns) {
+    appendTurn(lines, turn)
   }
 
   return `${lines.join('\n').trimEnd()}\n`
+}
+
+function appendTurn(lines: string[], turn: ConversationTurn): void {
+  lines.push(`## 第 ${String(turn.index + 1)} 轮`)
+  lines.push('')
+  if (turn.opener) {
+    lines.push('### 用户')
+    lines.push('')
+    appendText(lines, turn.opener.text)
+    if (turn.opener.images.length > 0) appendList(lines, '图片', turn.opener.images)
+    const attachments = turn.opener.mentions.map((entry) => entry.path || entry.name).filter(Boolean)
+    if (attachments.length > 0) appendList(lines, '附件', attachments)
+  }
+
+  if (turn.commentary.length > 0 || turn.activities.length > 0) {
+    lines.push('### 执行过程')
+    lines.push('')
+    for (const commentary of turn.commentary) appendText(lines, commentary.text)
+    for (const activity of turn.activities) appendActivity(lines, activity)
+  }
+
+  if (turn.fileChanges.length > 0) {
+    lines.push('### 文件变更')
+    lines.push('')
+    for (const file of turn.fileChanges) {
+      lines.push(`- ${file.path}（${file.kind}，+${String(file.additions)} / -${String(file.removals)}）`)
+    }
+    lines.push('')
+  }
+
+  const pendingInteractions = turn.interactions.filter((entry) => entry.status === 'pending')
+  if (pendingInteractions.length > 0) {
+    lines.push('### 待处理交互')
+    lines.push('')
+    for (const interaction of pendingInteractions) lines.push(`- ${interaction.label}${interaction.detail ? `：${interaction.detail}` : ''}`)
+    lines.push('')
+  }
+
+  lines.push('### Codex 最终回复')
+  lines.push('')
+  if (turn.final) appendText(lines, turn.final.text)
+  else appendText(lines, finalStatusText(turn))
+}
+
+function appendActivity(lines: string[], activity: ConversationActivity): void {
+  const duration = activity.durationMs === null ? '' : `，${formatDuration(activity.durationMs)}`
+  lines.push(`- ${activity.label}（${activity.status}${duration}）`)
+  if (activity.activityType === 'command') {
+    lines.push('')
+    lines.push('```text')
+    if (activity.command) lines.push(`命令：${activity.command}`)
+    if (activity.cwd) lines.push(`目录：${activity.cwd}`)
+    if (activity.exitCode !== null) lines.push(`退出码：${String(activity.exitCode)}`)
+    if (activity.output) lines.push(activity.output)
+    lines.push('```')
+  } else if (activity.activityType === 'mcp') {
+    const target = [activity.server, activity.tool].filter(Boolean).join(' / ')
+    if (target) lines.push(`  - 目标：${target}`)
+  } else if (activity.activityType === 'web-search' && activity.query) {
+    lines.push(`  - 查询：${activity.query}`)
+  }
+  lines.push('')
+}
+
+function finalStatusText(turn: ConversationTurn): string {
+  if (turn.finalStatus === 'failed') return `本轮执行失败${turn.error ? `：${turn.error}` : '。'}`
+  if (turn.finalStatus === 'interrupted') return '本轮已中断，未产生明确最终回复。'
+  if (turn.finalStatus === 'stopped') return '本轮已停止，未产生明确最终回复。'
+  if (turn.finalStatus === 'pending') return '本轮仍在执行，尚未产生明确最终回复。'
+  return '本轮未产生明确标记为 final_answer 的最终回复。'
+}
+
+function appendText(lines: string[], text: string): void {
+  const normalized = text.trim()
+  if (!normalized) return
+  lines.push(normalized)
+  lines.push('')
+}
+
+function appendList(lines: string[], label: string, values: readonly string[]): void {
+  lines.push(`${label}：`)
+  for (const value of values) lines.push(`- ${value}`)
+  lines.push('')
+}
+
+function formatDuration(durationMs: number): string {
+  const seconds = Math.max(0, Math.round(durationMs / 1000))
+  if (seconds < 60) return `${String(seconds)} 秒`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  return remainingSeconds > 0 ? `${String(minutes)} 分 ${String(remainingSeconds)} 秒` : `${String(minutes)} 分钟`
 }
 
 export function downloadThreadMarkdown(input: ThreadMarkdownExportInput): void {

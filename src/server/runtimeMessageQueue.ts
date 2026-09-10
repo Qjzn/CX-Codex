@@ -213,8 +213,10 @@ export class RuntimeMessageQueue {
 
   async reorder(threadId: string, requestIds: string[]): Promise<boolean> {
     const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId || new Set(requestIds).size !== requestIds.length) return false
     const queued = this.dependencies.store.listQueuedRequests(normalizedThreadId, 500)
     if (queued.length !== requestIds.length) return false
+    if (queued[0]?.status === 'queue_failed') return false
     const queuedIds = new Set(queued.map((request) => request.requestId))
     if (requestIds.some((requestId) => !queuedIds.has(requestId))) return false
     const nativeSubmissionIds = requestIds.flatMap((requestId) => {
@@ -276,6 +278,8 @@ export class RuntimeMessageQueue {
       if (nativeSubmissionId) {
         try {
           const nativeQueue = await listNativeThreadQueueSubmissions(this.dependencies.rpc, threadId)
+          const current = this.dependencies.store.getRequest(next.requestId)
+          if (current?.status !== 'queued' || readNativeThreadQueueSubmissionId(current.lastError) !== nativeSubmissionId) return
           if (nativeQueue.some((submission) => submission.id === nativeSubmissionId)) return
           this.dependencies.store.updateRequest(next.requestId, {
             status: 'completed',
@@ -286,6 +290,8 @@ export class RuntimeMessageQueue {
           return
         } catch (error) {
           if (!isNativeThreadQueueUnsupportedError(error)) return
+          const current = this.dependencies.store.getRequest(next.requestId)
+          if (current?.status !== 'queued' || readNativeThreadQueueSubmissionId(current.lastError) !== nativeSubmissionId) return
           this.dependencies.store.updateRequest(next.requestId, {
             status: 'queued',
             lastError: EXTERNAL_ACTIVE_WRITER_MARKER,
@@ -295,6 +301,11 @@ export class RuntimeMessageQueue {
       await this.applyQueuedSpeedMode(next.payload)
       const pending = this.dependencies.store.getRequest(next.requestId)
       if (!pending || pending.status !== 'queued') return
+      // Configuration may await a slow RPC while the user changes the queue.
+      // Claim only the current head, never the entry selected before that await.
+      if (this.dependencies.store.listQueuedRequests(threadId, 1)[0]?.requestId !== pending.requestId) {
+        return
+      }
       const claimed = this.dependencies.store.updateRequest(pending.requestId, {
         status: 'pending_start',
         lastError: null,
@@ -305,6 +316,8 @@ export class RuntimeMessageQueue {
       this.publish(threadId, next.requestId, 'starting')
     } catch (error) {
       if (error instanceof RuntimeThreadBusyError) return
+      const current = this.dependencies.store.getRequest(next.requestId)
+      if (!current || current.status === 'interrupted') return
       const lastError = this.dependencies.getErrorMessage(error, 'Queued message failed to start')
       this.dependencies.store.updateRequest(next.requestId, {
         status: 'queue_failed',
@@ -313,6 +326,12 @@ export class RuntimeMessageQueue {
       this.publish(threadId, next.requestId, 'failed')
     } finally {
       this.processingThreadIds.delete(threadId)
+      // A cancel/reorder notification received during the RPC was coalesced by
+      // processingThreadIds. Hand off a changed head now, not on the next sweep.
+      if (!this.disposed && !this.dependencies.store.getThreadLease(threadId)) {
+        const head = this.dependencies.store.listQueuedRequests(threadId, 1)[0]
+        if (head?.status === 'queued' && head.requestId !== next.requestId) this.scheduleThread(threadId)
+      }
     }
   }
 

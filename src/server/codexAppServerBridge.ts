@@ -65,6 +65,7 @@ function getSharedBridgeState(): SharedBridgeState {
 export type CodexBridgeMiddlewareOptions = {
   remoteAccessProtected?: boolean
   runtimeDatabasePath?: string
+  startupSkillsSync?: boolean
 }
 
 export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOptions = {}): CodexBridgeMiddleware {
@@ -194,6 +195,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeMiddlewareOption
   })
 
   startCodexBridgeStartupTasks({
+    startupSkillsSync: options.startupSkillsSync,
     initializeSkillsSyncOnStartup: () => initializeSkillsSyncOnStartup(appServer),
     warmupAppServer: () => appServer.warmup(),
     getWebBridgeSettingsPath,

@@ -41,21 +41,25 @@
     </section>
   </main>
 
-  <DesktopLayout v-else :is-sidebar-collapsed="isMobile">
+  <DesktopLayout
+    v-else
+    :is-sidebar-collapsed="isSidebarCollapsed"
+    @close-sidebar="closeMobileDrawer"
+  >
     <template #sidebar>
-      <section class="docs-sidebar">
+      <section class="docs-sidebar sidebar-root">
         <div class="docs-sidebar-toolbar">
           <div class="docs-sidebar-brand">
             <img src="/branding/cx-codex-app-icon.png" alt="" />
             <span>CX-Codex</span>
           </div>
-          <button type="button" aria-label="收起侧栏">
+          <button type="button" aria-label="收起侧栏" @click="closeMobileDrawer">
             <IconTablerLayoutSidebar />
           </button>
         </div>
 
         <nav class="docs-sidebar-actions" aria-label="演示快捷操作">
-          <button type="button">
+          <button type="button" class="docs-sidebar-action-primary">
             <IconTablerFilePencil />
             <span>新会话</span>
           </button>
@@ -105,10 +109,16 @@
     </template>
 
     <template #content>
-      <section class="docs-content">
+      <section class="docs-content content-root" role="main" aria-label="会话内容">
         <ContentHeader :title="isGithubView ? 'GitHub 热门' : '优化聊天交互与消息稳定性'">
           <template v-if="isMobile" #leading>
-            <button type="button" class="docs-mobile-menu" aria-label="打开会话列表">
+            <button
+              ref="mobileMenuRef"
+              type="button"
+              class="docs-mobile-menu"
+              aria-label="打开会话列表"
+              @click="openMobileDrawer"
+            >
               <IconTablerLayoutSidebar />
             </button>
           </template>
@@ -136,9 +146,7 @@
           <div v-else class="docs-conversation-grid">
             <div class="docs-conversation">
               <ThreadConversation
-                :messages="messages"
-                :pending-requests="[]"
-                :live-overlay="null"
+                :projection="conversationProjection"
                 :is-loading="false"
                 active-thread-id="docs-thread-stability"
                 cwd="/workspace/cx-demo"
@@ -204,7 +212,6 @@ import type {
   ComposerModelInfo,
   ComposerPluginInfo,
   ReasoningEffort,
-  UiMessage,
   UiProjectGroup,
 } from '../../types/codex'
 import IconTablerDots from '../icons/IconTablerDots.vue'
@@ -220,9 +227,13 @@ import GithubTrendingHub from './GithubTrendingHub.vue'
 import SkillDetailModal from './SkillDetailModal.vue'
 import ThreadComposer from './ThreadComposer.vue'
 import ThreadConversation from './ThreadConversation.vue'
+import { projectConversation } from '../../conversation-transcript'
 
 const route = useRoute()
 const { isMobile } = useMobile()
+const isMobileDrawerOpen = ref(false)
+const isSidebarCollapsed = computed(() => isMobile.value && !isMobileDrawerOpen.value)
+const mobileMenuRef = ref<HTMLButtonElement | null>(null)
 const isGithubView = computed(() => route.query.view === 'github')
 const isSetupView = computed(() => route.query.view === 'setup')
 const isSkillDetailView = computed(() => route.query.view === 'skill-detail')
@@ -333,38 +344,59 @@ const projectDisplayNameById: Record<string, string> = {
   'cx-demo': 'CX 演示工作区',
 }
 
-const messages: UiMessage[] = [
+const documentationTurns = [
   {
-    id: 'docs-user-check',
-    role: 'user',
-    text: '请检查聊天窗口在桌面端和手机端的交互，并整理发布前清单。',
-    turnIndex: 0,
+    id: 'docs-turn-0',
+    status: 'completed',
+    items: [
+      {
+        type: 'userMessage',
+        id: 'docs-user-check',
+        content: [{ type: 'text', text: '请检查聊天窗口在桌面端和手机端的交互，并整理发布前清单。' }],
+      },
+      {
+        type: 'agentMessage',
+        id: 'docs-assistant-check',
+        phase: 'final_answer',
+        text: [
+          '检查完成，当前界面已经收敛为更轻、更紧凑的工作台。',
+          '',
+          '- 会话切换优先显示缓存，再后台补同步最新消息。',
+          '- 发送内容立即出现在窗口中，弱网恢复不会重复提交。',
+          '- 手机端保留附件、模型、质量、速度和语音入口。',
+        ].join('\n'),
+      },
+    ],
   },
   {
-    id: 'docs-assistant-check',
-    role: 'assistant',
-    text: [
-      '检查完成，当前界面已经收敛为更轻、更紧凑的工作台。',
-      '',
-      '- 会话切换优先显示缓存，再后台补同步最新消息。',
-      '- 发送内容立即出现在窗口中，弱网恢复不会重复提交。',
-      '- 手机端保留附件、模型、质量、速度和语音入口。',
-    ].join('\n'),
-    turnIndex: 0,
-  },
-  {
-    id: 'docs-user-next',
-    role: 'user',
-    text: '下一步先更新公开说明和脱敏截图。',
-    turnIndex: 1,
-  },
-  {
-    id: 'docs-assistant-next',
-    role: 'assistant',
-    text: '已准备好桌面、手机、输入菜单、模型设置和 GitHub 热门的演示截图；所有内容均为虚构数据。',
-    turnIndex: 1,
+    id: 'docs-turn-1',
+    status: 'completed',
+    items: [
+      {
+        type: 'userMessage',
+        id: 'docs-user-next',
+        content: [{ type: 'text', text: '下一步先更新公开说明和脱敏截图。' }],
+      },
+      {
+        type: 'agentMessage',
+        id: 'docs-assistant-next',
+        phase: 'final_answer',
+        text: '已准备好桌面、手机、输入菜单、模型设置和 GitHub 热门的演示截图；所有内容均为虚构数据。',
+      },
+    ],
   },
 ]
+
+const conversationProjection = projectConversation({
+  threadRead: {
+    thread: {
+      id: 'docs-thread-stability',
+      turns: documentationTurns,
+    },
+  },
+  runtime: { executionState: 'completed', messageState: 'fresh' },
+  nowMs: now,
+})
 
 const modelIds = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini']
 const reasoningOptions = (values: ReasoningEffort[]) => values.map((value) => ({ value, description: '' }))
@@ -476,6 +508,14 @@ function noop(): void {
   // Documentation fixture only renders stable, sanitized UI states.
 }
 
+function openMobileDrawer(): void {
+  isMobileDrawerOpen.value = true
+}
+
+function closeMobileDrawer(): void {
+  isMobileDrawerOpen.value = false
+}
+
 function openSkillDetailFixture(): void {
   isSkillDetailVisible.value = true
 }
@@ -557,22 +597,44 @@ onBeforeUnmount(() => {
 }
 
 .docs-sidebar-actions {
-  @apply grid grid-cols-4 gap-1 border-b px-2 py-2;
+  @apply grid grid-cols-3 gap-1 border-b px-2 py-2;
   border-color: var(--ui-border-subtle);
 }
 
 .docs-sidebar-actions button {
-  @apply flex min-w-0 flex-col items-center justify-center gap-1 rounded-lg border-0 bg-transparent py-1.5 text-[11px];
+  @apply flex min-h-8 min-w-0 flex-row items-center justify-center gap-1.5 rounded-lg border-0 bg-transparent px-1.5 py-1 text-[11px];
   color: var(--ui-text-secondary);
 }
 
-.docs-sidebar-actions button:first-child {
+.docs-sidebar-actions .docs-sidebar-action-primary {
+  grid-column: 1 / -1;
+  min-height: 36px;
+  justify-content: flex-start;
+  padding-inline: 0.625rem;
   background: var(--ui-bg-row-active);
   color: var(--ui-text-primary);
+  font-size: 12.5px;
+}
+
+:global(:root.dark .docs-sidebar-actions .docs-sidebar-action-primary) {
+  background: #27272a;
+  color: #f4f4f5;
 }
 
 .docs-sidebar-actions svg {
   @apply h-4 w-4;
+}
+
+@media (pointer: coarse) {
+  .docs-sidebar-toolbar > button,
+  .docs-mobile-menu {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .docs-sidebar-actions button {
+    min-height: 44px;
+  }
 }
 
 .docs-sidebar-tree {
@@ -611,13 +673,19 @@ onBeforeUnmount(() => {
   @apply h-1.5 w-1.5 rounded-full bg-emerald-500;
 }
 
+:global(:root.dark .docs-status) {
+  border-color: #3f3f46;
+  background: #18181b;
+  color: #d4d4d8;
+}
+
 .docs-content-body {
   @apply min-h-0 min-w-0 flex-1 overflow-hidden pt-0.5 pb-3;
 }
 
 .docs-conversation-grid {
   @apply mx-auto flex h-full min-h-0 min-w-0 w-full flex-col gap-2;
-  width: min(100%, var(--content-shell-max-width));
+  width: min(100%, var(--ui-composer-max));
 }
 
 .docs-conversation {

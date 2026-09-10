@@ -19,13 +19,14 @@ import type {
 } from './appServerDtos'
 import { isAbortLikeError, normalizeCodexApiError } from './codexErrors'
 import {
-  applyActiveTurnIdToMessages,
+  applyActiveTurnIdToAcknowledgedUserMessages,
   readActiveTurnIdFromResponse,
+  normalizeAcknowledgedUserMessagesV2,
   normalizeThreadGroupsV2,
-  normalizeThreadMessagesV2,
   readThreadInProgressFromResponse,
 } from './normalizers/v2'
 import type {
+  AcknowledgedUserMessage,
   CollaborationMode,
   ComposerModelInfo,
   ComposerPluginInfo,
@@ -34,7 +35,6 @@ import type {
   PluginAuthStatus,
   ReasoningEffort,
   SpeedMode,
-  UiMessage,
   UiProjectGroup,
   UiThreadGoal,
   UiThreadGoalStatus,
@@ -107,7 +107,8 @@ export type RuntimeExecutionState =
   | 'sync_degraded'
 
 export type ThreadRuntimeSnapshot = {
-  messages: UiMessage[]
+  threadRead: unknown | null
+  acknowledgedUserMessages: AcknowledgedUserMessage[]
   executionState: RuntimeExecutionState
   inProgress: boolean
   activeTurnId: string
@@ -691,18 +692,10 @@ async function getThreadGroupsV2(options: ThreadListOptions = {}): Promise<UiPro
   return normalizeThreadGroupsV2({ data, nextCursor: null })
 }
 
-async function getThreadMessagesV2(threadId: string, options: RpcCallOptions = {}): Promise<UiMessage[]> {
-  const payload = await callRpc<ThreadReadResponse>('thread/read', {
-    threadId,
-    includeTurns: true,
-  }, options)
-  return normalizeThreadMessagesV2(payload)
-}
-
 async function getThreadDetailV2(
   threadId: string,
   options: ThreadDetailOptions = {},
-): Promise<{ messages: UiMessage[]; inProgress: boolean; activeTurnId: string }> {
+): Promise<{ threadRead: unknown; acknowledgedUserMessages: AcknowledgedUserMessage[]; inProgress: boolean; activeTurnId: string }> {
   const payload = await callRpc<ThreadReadResponse>('thread/read', {
     threadId,
     includeTurns: true,
@@ -712,7 +705,8 @@ async function getThreadDetailV2(
     ...(typeof options.turnLimit === 'number' ? { turnLimit: options.turnLimit } : {}),
   }, options)
   return {
-    messages: normalizeThreadMessagesV2(payload),
+    threadRead: payload,
+    acknowledgedUserMessages: normalizeAcknowledgedUserMessagesV2(payload),
     inProgress: readThreadInProgressFromResponse(payload),
     activeTurnId: readActiveTurnIdFromResponse(payload),
   }
@@ -837,10 +831,11 @@ async function fetchThreadRuntimeSnapshot(
     typeof data.activeTurnId === 'string' && data.activeTurnId.trim().length > 0
       ? data.activeTurnId.trim()
       : (threadRead ? readActiveTurnIdFromResponse(threadRead) : '')
-  const normalizedMessages = threadRead ? normalizeThreadMessagesV2(threadRead) : []
+  const acknowledgedUserMessages = threadRead ? normalizeAcknowledgedUserMessagesV2(threadRead) : []
   const snapshot: ThreadRuntimeSnapshot = {
-    messages: applyActiveTurnIdToMessages(
-      normalizedMessages,
+    threadRead: threadRead ?? null,
+    acknowledgedUserMessages: applyActiveTurnIdToAcknowledgedUserMessages(
+      acknowledgedUserMessages,
       activeTurnId,
       inProgress && messageState === 'cached',
     ),
@@ -923,7 +918,8 @@ export async function getThreadRuntimeStatusSnapshot(
       : 'unavailable'
 
   return {
-    messages: [],
+    threadRead: null,
+    acknowledgedUserMessages: [],
     executionState,
     inProgress: snapshotData.inProgress === true,
     activeTurnId: typeof snapshotData.activeTurnId === 'string' ? snapshotData.activeTurnId.trim() : '',
@@ -988,21 +984,10 @@ export async function getThreadGroups(options: ThreadListOptions = {}): Promise<
   }
 }
 
-export async function getThreadMessages(threadId: string, options: RpcCallOptions = {}): Promise<UiMessage[]> {
-  try {
-    return await getThreadMessagesV2(threadId, options)
-  } catch (error) {
-    if (isAbortLikeError(error)) {
-      throw error
-    }
-    throw normalizeCodexApiError(error, `Failed to load thread ${threadId}`, 'thread/read')
-  }
-}
-
 export async function getThreadDetail(
   threadId: string,
   options: ThreadDetailOptions = {},
-): Promise<{ messages: UiMessage[]; inProgress: boolean; activeTurnId: string }> {
+): Promise<{ threadRead: unknown; acknowledgedUserMessages: AcknowledgedUserMessage[]; inProgress: boolean; activeTurnId: string }> {
   try {
     return await getThreadDetailV2(threadId, options)
   } catch (error) {
@@ -1092,9 +1077,15 @@ export async function clearThreadGoal(threadId: string): Promise<void> {
   await callRpc('thread/goal/clear', { threadId })
 }
 
-export async function rollbackThread(threadId: string, numTurns: number): Promise<UiMessage[]> {
+export async function rollbackThread(
+  threadId: string,
+  numTurns: number,
+): Promise<{ threadRead: unknown; acknowledgedUserMessages: AcknowledgedUserMessage[] }> {
   const payload = await callRpc<ThreadReadResponse>('thread/rollback', { threadId, numTurns })
-  return normalizeThreadMessagesV2(payload)
+  return {
+    threadRead: payload,
+    acknowledgedUserMessages: normalizeAcknowledgedUserMessagesV2(payload),
+  }
 }
 
 function normalizeThreadIdFromPayload(payload: unknown): string {
@@ -1500,7 +1491,8 @@ export async function reconcileThreadRuntime(threadId: string, options: RpcCallO
       ? data.snapshot as Record<string, unknown>
       : {}
   return {
-    messages: [],
+    threadRead: null,
+    acknowledgedUserMessages: [],
     executionState: normalizeRuntimeExecutionState(snapshot.executionState),
     inProgress: snapshot.inProgress === true,
     activeTurnId: typeof snapshot.activeTurnId === 'string' ? snapshot.activeTurnId : '',

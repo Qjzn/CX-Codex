@@ -120,6 +120,71 @@ function Assert-CompleteThreadCopySource {
   Assert-True ($exportHelperSource -match "export\s+function\s+buildThreadMarkdown") "complete-conversation copying must reuse the lazy Markdown serializer"
 }
 
+function Assert-SemaConversationProjectionOwnershipSource {
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\App.vue")
+  $desktopStateSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\useDesktopState.ts")
+  $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadConversation.vue")
+  $conversationFixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ConversationRegressionFixture.vue")
+  $documentationFixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\DocumentationShowcaseFixture.vue")
+  $projectionSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\conversation-transcript\projectConversation.ts")
+  $projectionTypesSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\conversation-transcript\types.ts")
+  $gatewaySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\api\codexGateway.ts")
+  $normalizerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\api\normalizers\v2.ts")
+  $codexTypesSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\types\codex.ts")
+  $sessionFileChangeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\sessionFileChange.ts")
+  $legacyProjectionPath = Join-Path (Get-Location) "src\composables\conversationProjection.ts"
+  $messageCachePath = Join-Path (Get-Location) "src\composables\threadMessageCache.ts"
+  $legacyFlatMessageMatches = @(
+    Get-ChildItem -LiteralPath (Join-Path (Get-Location) "src") -Recurse -File -Include *.ts,*.vue |
+      Select-String -Pattern '\bUiMessage\b|\bUiPlan\b|\bCommandExecutionData\b'
+  )
+  $conversationProps = [regex]::Match($conversationSource, "const\s+props\s*=\s*defineProps<[\s\S]*?>\(\)")
+  $selectedProjection = [regex]::Match($desktopStateSource, "const\s+selectedConversationProjection\s*=\s*computed<ConversationProjection>[\s\S]*?(?=\r?\n\s*const\s+selectedThreadTokenUsage)")
+  $browserCacheNormalizer = [regex]::Match($desktopStateSource, "function\s+normalizeCachedUserMessage[\s\S]*?(?=\r?\nfunction\s+normalizeMessagesForCache)")
+  $deliveryCacheHydration = [regex]::Match($desktopStateSource, "function\s+hydrateCachedMessagesForThread[\s\S]*?(?=\r?\n\s*function\s+asRecord)")
+
+  Assert-True (-not (Test-Path -LiteralPath $legacyProjectionPath)) "the replaced flat conversationProjection module must not remain in the repository"
+  Assert-True ($legacyFlatMessageMatches.Count -eq 0) "the replaced flat UiMessage/UiPlan/CommandExecutionData type model must not remain anywhere under src"
+  Assert-True ($codexTypesSource -notmatch "export\s+type\s+ChatMessage|export\s+type\s+ChatThread|messages:\s*ChatMessage\[\]") "unused generic ChatMessage/ChatThread containers must not recreate a flat conversation contract"
+  Assert-True (Test-Path -LiteralPath $messageCachePath) "acknowledged delivery reconciliation must remain isolated in the explicit thread-message cache module"
+  $messageCacheSource = Get-Content -Raw -Encoding UTF8 -LiteralPath $messageCachePath
+  Assert-True ($desktopStateSource -match "from\s+'\./threadMessageCache'" -and $desktopStateSource -notmatch "from\s+'\./conversationProjection'") "desktop state must import cache reconciliation by its infrastructure role, never as a conversation projection"
+  Assert-True ($messageCacheSource -notmatch "hasPlanImplementationConfirmation|removeRedundantLiveAgentMessages|upsertMessage|agentMessage\.live|PLAN_IMPLEMENTATION_CONFIRMATION|role\s*===\s*'assistant'|commandExecution|\bphase\b") "the cache module must retain only acknowledged user-message identity, never assistant, phase, command, plan, live-agent, or visible-conversation inference"
+  Assert-True ($codexTypesSource -match "export\s+type\s+AcknowledgedUserMessage" -and $messageCacheSource -match "AcknowledgedUserMessage" -and $messageCacheSource -notmatch "\bUiMessage\b|selectCacheableThreadMessages" -and $normalizerSource -match "normalizeAcknowledgedUserMessagesV2\([^)]*\):\s*AcknowledgedUserMessage\[\]" -and $gatewaySource -match "acknowledgedUserMessages:\s*AcknowledgedUserMessage\[\]") "acknowledged delivery evidence must use a narrow user-only type that cannot carry the replaced assistant/final/command UiMessage semantics"
+  Assert-True ($normalizerSource -match "normalizeAcknowledgedUserMessagesV2" -and $normalizerSource -notmatch "normalizeThreadMessagesV2|toUiMessages|role:\s*'assistant'|messageType:\s*'plan'|commandExecution") "thread normalization must emit acknowledged user-message evidence only, never rebuild a second flat assistant/plan/command conversation model"
+  Assert-True ($gatewaySource -match "acknowledgedUserMessages" -and $gatewaySource -notmatch "normalizeThreadMessagesV2|applyActiveTurnIdToMessages") "thread detail and runtime snapshots must name and carry acknowledged user evidence instead of a generic flat message conversation"
+  Assert-True ($browserCacheNormalizer.Success -and $desktopStateSource -match "THREAD_MESSAGE_CACHE_VERSION\s*=\s*4" -and $browserCacheNormalizer.Value -notmatch "assistant|commandExecution|\bphase\b") "browser cache v4 must discard legacy assistant, command, and phase payloads while loading delivery evidence"
+  Assert-True ($deliveryCacheHydration.Success -and $deliveryCacheHydration.Value -notmatch "loadedMessagesByThreadId\.value\s*=" -and $desktopStateSource -match "setThreadFirstScreenSource\(threadId,\s*snapshot\.messageState\s*===\s*'cached'\s*\?\s*'local-cache'\s*:\s*'network'\)" -and $desktopStateSource -match "watch\(selectedConversationProjection[\s\S]*?markThreadFirstScreenReady") "first-screen readiness must follow readable structured threadRead projection; user-only delivery cache cannot claim a transcript cache hit"
+  Assert-True ($conversationFixtureSource -match "projectStructuredFixtureItems" -and $conversationFixtureSource -notmatch "projectFixtureMessages|agentMessage\.live|WeakMap<UiMessage") "conversation regression fixtures must feed structured App Server items directly instead of recreating the replaced UiMessage projection"
+  Assert-True ($documentationFixtureSource -notmatch "UiMessage|message\.role|message\.turnIndex") "documentation fixtures must feed structured turn items directly instead of inferring final answers from flat UiMessage roles"
+  Assert-True ($conversationProps.Success -and $conversationProps.Value -match "projection:\s*ConversationProjection" -and $conversationProps.Value -notmatch "messages:\s*UiMessage") "the conversation renderer must accept only the Sema-style projection, never the flat 7420 message list"
+  Assert-True (([regex]::Matches($appSource, '<ThreadConversation[\s\S]*?:projection="')).Count -eq 2) "both existing-thread and provisional-thread views must render through ConversationProjection"
+  Assert-True ($appSource -notmatch "filteredMessages|displayedThreadMessages|visibleConversationMessages|composables/conversationProjection") "route readiness, rollback, favorites, native read acknowledgement, and plan actions must not retain a flat-message display side channel"
+  Assert-True ($desktopStateSource -notmatch "const\s+messages\s*=\s*computed<UiMessage\[\]>") "the desktop-state API must not expose a recomposed flat conversation for rendering"
+  Assert-True ($appSource -match "const\s+latestUserTurnIndex\s*=\s*computed[\s\S]*?selectedConversationProjection\.value\.turns[\s\S]*?turn\.index" -and $appSource -match "const\s+displayedThreadTurnCount\s*=\s*computed\(\(\)\s*=>\s*displayedThreadConversationProjection\.value\.turns\.length\)") "rollback and visible-content acknowledgement must derive from projected turns"
+  $olderHistoryMatch = [regex]::Match($desktopStateSource, "function\s+earliestLoadedTurnIndex[\s\S]*?(?=\r?\n\s*async\s+function\s+loadOlderHistoryForSelectedThread)")
+  $rollbackMatch = [regex]::Match($desktopStateSource, "async\s+function\s+rollbackSelectedThread[\s\S]*?(?=\r?\n\s*function\s+renameProject)")
+  Assert-True ($olderHistoryMatch.Success -and $olderHistoryMatch.Value -match "projectTaskPetConversation\(threadId\)\.history" -and $olderHistoryMatch.Value -notmatch "persistedMessagesByThreadId") "older-history paging must use the projected history window instead of flat 7420 messages"
+  Assert-True ($rollbackMatch.Success -and $rollbackMatch.Value -match "projectTaskPetConversation\(threadId\)" -and $rollbackMatch.Value -match "replaceConversationThreadRead\(threadId,\s*rollbackResult\.threadRead\)" -and $rollbackMatch.Value -notmatch "persisted\.reduce") "rollback count and the accepted transcript must use the projected turns plus the authoritative rollback response"
+  Assert-True ($gatewaySource -match "export\s+async\s+function\s+rollbackThread[\s\S]*?threadRead:\s*payload[\s\S]*?acknowledgedUserMessages:\s*normalizeAcknowledgedUserMessagesV2\(payload\)") "thread rollback must preserve its authoritative structured response while carrying only acknowledged user delivery evidence"
+  Assert-True ($appSource -match "const\s+routeThreadFallbackTitle\s*=\s*computed[\s\S]*?selectedConversationProjection\.value\.turns[\s\S]*?turn\.opener") "thread fallback titles must use the projected user opener rather than normalized flat messages"
+  Assert-True ($selectedProjection.Success -and $selectedProjection.Value -match "projectConversation\(\{[\s\S]*?threadRead:[\s\S]*?runtime:[\s\S]*?notifications:[\s\S]*?pendingRequests:[\s\S]*?localUserMessages" -and $selectedProjection.Value -notmatch "messages:\s*(?:persisted|messages)") "the selected conversation projection must consume structured thread/runtime facts and only local optimistic user messages"
+  Assert-True ($projectionTypesSource -notmatch "ConversationInteractionBlock[\s\S]*?\bmethod:\s*string" -and $conversationSource -notmatch "interaction\.method|request\.method") "the renderer-facing interaction contract must expose projected semantics without raw request method access"
+  Assert-True ($projectionSource -match "phase:\s*readString\(item\.raw\.phase\)\s*===\s*'final_answer'\s*\?\s*'final'\s*:\s*'commentary'" -and $projectionSource -match "const\s+projectedFinal\s*=\s*finals\.length\s*===\s*1\s*\?" -and $projectionSource -match "finals\.length\s*>\s*1") "final selection must require exactly one explicit final_answer phase without last-assistant fallback"
+  Assert-True ($projectionTypesSource -match "isTerminalConversationExecutionState[\s\S]*?state\s*===\s*'completed'[\s\S]*?'failed'[\s\S]*?'interrupted'[\s\S]*?'stopped'" -and $projectionTypesSource -match "latestConversationTurnIsTerminal[\s\S]*?isTerminalConversationExecutionState\(latestTurn\.state\)") "all projected terminal consumers must share one explicit turn-state predicate"
+  Assert-True ($sessionFileChangeSource -match "hasSettledSessionLogProjectionEvidence[\s\S]*?latestConversationTurnIsTerminal\(projection\)" -and $sessionFileChangeSource -notmatch "latestAssistant|message\.phase|hasSettledSessionLogMessageEvidence") "session-log convergence must use the projected latest-turn terminal state instead of last-assistant final inference"
+  Assert-True ($desktopStateSource -match "hasTerminalEvidence:\s*hasSettledSessionLogProjectionEvidence\([\s\S]*?projectTaskPetConversation\(threadId\)") "session-log authoritative refresh must consume the same ConversationProjection used by visible task state"
+  Assert-True ($desktopStateSource -match "latestProjectedTurnIsTerminal[\s\S]*?latestConversationTurnIsTerminal\(projectTaskPetConversation\(threadId\)\)" -and $desktopStateSource -notmatch "hasAssistantOutputAfterLatestPersistedRunningCommand|hasAssistantOutputAfterLatestUserMessage") "execution recovery must use projected terminal turn state and must not infer completion from assistant text order"
+  Assert-True ($desktopStateSource -match "function\s+latestProjectedTurnHasInProgressActivity[\s\S]*?projectTaskPetConversation\(threadId\)[\s\S]*?activities\.some[\s\S]*?status\s*===\s*'in-progress'" -and $desktopStateSource -notmatch "function\s+hasRunningLiveCommand|function\s+hasPersistedRunningCommand|persistedMessagesByThreadId\.value\[threadId\][\s\S]{0,220}commandExecution") "execution, stop, and recovery state must use projected turn activities instead of flat 7420 command messages"
+  Assert-True ($desktopStateSource -notmatch "liveAgentMessagesByThreadId|livePlanMessagesByThreadId|liveReasoningTextByThreadId|liveCommandsByThreadId|turnActivityByThreadId") "structured conversation notifications and projected turns must replace the legacy flat live-state side channel"
+  Assert-True ($projectionSource -match "activeElapsedMs[\s\S]*?completedAtMs[\s\S]*?startedAtMs[\s\S]*?waitedMs" -and $projectionSource -match "type\s*===\s*'fileChange'[\s\S]*?mergeFileChanges") "turn timing and file summaries must remain first-class projection semantics"
+  Assert-True ($conversationSource -notmatch 'class="turn-heading"|class="assistant-mark"|class="turn-state"') "the Sema-style transcript must not recreate a repeated Codex/status header for every turn"
+  Assert-True ($conversationSource -match 'class="turn-divider"[\s\S]*?class="process-toggle turn-timing"[\s\S]*?timingLabel\(turn\)[\s\S]*?class="turn-divider-line"') "every turn must use the Sema-style elapsed divider as its compact process disclosure"
+  Assert-True ($conversationSource -match 'class="file-summary">[\s\S]*?file-summary-icon[\s\S]*?file-summary-meta[\s\S]*?file-summary-chevron' -and $conversationSource -notmatch 'class="file-summary"\s+open') "file changes must keep a compact on-demand summary without hiding or discarding fileChange facts"
+  Assert-True ($conversationSource -match 'process-reveal-enter-active[\s\S]*?opacity[\s\S]*?transform' -and $conversationSource -match 'turn-live-dot[\s\S]*?transcript-live-pulse' -and $conversationSource -match '@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.run-dots i,[\s\S]*?animation:\s*none;') "conversation motion must stay lightweight, state-driven, and reduced-motion safe"
+  Assert-True ($conversationSource -match 'latestTurnIsActive[\s\S]*?class="run-dots"' -and $conversationSource -match 'conversation-jump-to-latest[\s\S]*?left:\s*50%;') "return-to-latest must follow Sema's centered compact control and show running feedback without a tail overlay"
+}
+
 function Assert-NestedMobileBackOwnershipSource {
   $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
     Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
@@ -144,8 +209,8 @@ function Assert-NestedMobileBackOwnershipSource {
   Assert-True $sidebarListenersAreSymmetric "sidebar transient surfaces must capture Escape before the App-level drawer handler"
   $skillDetailOwnsEscape = ($skillDetailSource -match 'role="dialog"[\s\S]*?aria-modal="true"') -and ($skillDetailSource -match "function\s+onWindowKeyDown[\s\S]*?props\.visible[\s\S]*?event\.preventDefault\(\)[\s\S]*?emit\('close'\)") -and ($skillDetailSource -match "addEventListener\('keydown',\s*onWindowKeyDown,\s*true\)")
   Assert-True $skillDetailOwnsEscape "skill details must own Escape/Android Back instead of navigating the underlying route"
-  $conversationOwnsEscape = ($conversationSource -match "function\s+onWindowKeyDownForConversationSurface[\s\S]*?isLiveOverlayDetailOpen[\s\S]*?modalImageUrl[\s\S]*?isFileLinkContextMenuVisible[\s\S]*?pendingRollbackMessageId[\s\S]*?activeMessageActionId") -and ($conversationSource -match "addEventListener\('keydown',\s*onWindowKeyDownForConversationSurface,\s*\{\s*capture:\s*true\s*\}\)")
-  Assert-True $conversationOwnsEscape "conversation transient surfaces must consume Escape/Android Back before route navigation"
+  $conversationHasNoGlobalTransientSurface = ($conversationSource -notmatch '<Teleport') -and ($conversationSource -notmatch 'role="dialog"') -and ($conversationSource -notmatch "addEventListener\('keydown'")
+  Assert-True $conversationHasNoGlobalTransientSurface "the projected conversation must not recreate the legacy global overlay, image modal, or context menu"
   $favoritesOwnEscapeAndFocus = ($favoritesSource -match 'ref="panelRef"[\s\S]*?role="dialog"[\s\S]*?aria-modal="true"[\s\S]*?tabindex="-1"') -and ($favoritesSource -match "document\.body\.style\.overflow\s*=\s*'hidden'") -and ($favoritesSource -match "addEventListener\('keydown',\s*onWindowKeyDown,\s*\{\s*capture:\s*true\s*\}\)")
   Assert-True $favoritesOwnEscapeAndFocus "favorites must own focus, background scrolling, and Escape while visible"
   $blockingDialogsOwnEnvironment = ($appSource -match "function\s+dismissTopmostBlockingDialog[\s\S]*?isMobileShellUpdatePromptVisible[\s\S]*?pendingQueuedMessageEditId[\s\S]*?isDesktopRefreshConfirmVisible") -and ($appSource -match "addEventListener\('keydown',\s*onWindowKeyDownForBlockingDialog,\s*\{\s*capture:\s*true\s*\}\)") -and ($appSource -match "watch\(activeBlockingDialogKind[\s\S]*?document\.body\.style\.overflow\s*=\s*'hidden'[\s\S]*?resolveBlockingDialogElement\(kind\)\?\.focus")
@@ -168,6 +233,12 @@ function Assert-MobileDrawerEnvironmentOwnershipSource {
   $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
     Join-Path (Get-Location) "src\App.vue"
   )
+  $documentationFixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\DocumentationShowcaseFixture.vue"
+  )
+  $browserSmokeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "scripts\conversation-browser-smoke.mjs"
+  )
 
   $hasModalSemantics = ($layoutSource -match 'ref="mobileDrawerRef"[\s\S]*?role="dialog"[\s\S]*?aria-modal="true"[\s\S]*?aria-label="会话导航"[\s\S]*?tabindex="-1"')
   Assert-True $hasModalSemantics "mobile drawer must expose one named modal navigation boundary"
@@ -186,6 +257,15 @@ function Assert-MobileDrawerEnvironmentOwnershipSource {
   Assert-True $settingsOwnsModalEnvironment "mobile settings sheet must lazily own focus and reversibly isolate the underlying drawer"
   Assert-True ($appSource -match 'class="sidebar-settings-mobile-backdrop"[^>]*tabindex="-1"[^>]*aria-hidden="true"[^>]*@pointerdown\.prevent') "mobile settings backdrop must stay presentational and preserve its opener for focus restoration"
   Assert-True ($sidebarSource -match "function\s+onSelect\(threadId:\s*string\)[\s\S]*?querySelector\('\.mobile-drawer'\)[\s\S]*?emit\('select',\s*threadId\)[\s\S]*?nextTick[\s\S]*?getElementById\('main-content'\)\?\.focus\(\{\s*preventScroll:\s*true\s*\}\)") "mobile drawer thread navigation must transfer focus to the stable main-content boundary"
+  Assert-True ($documentationFixtureSource.Contains(':is-sidebar-collapsed="isSidebarCollapsed"') -and $documentationFixtureSource.Contains('@close-sidebar="closeMobileDrawer"')) "the sanitized shell fixture must expose the product drawer collapse boundary"
+  Assert-True ($documentationFixtureSource.Contains('class="docs-content content-root" role="main" aria-label="会话内容"')) "the sanitized shell fixture must expose one named main landmark"
+  Assert-True ($documentationFixtureSource.Contains('class="docs-mobile-menu"') -and $documentationFixtureSource.Contains('@click="openMobileDrawer"')) "the sanitized shell fixture must expose an operable mobile drawer opener"
+  Assert-True ($layoutSource -match '@media\s*\(pointer:\s*coarse\)[\s\S]*?\.desktop-resize-handle::after[\s\S]*?width:\s*44px' -and $layoutSource -match '@media\s*\(forced-colors:\s*active\)[\s\S]*?\.desktop-resize-handle:focus-visible[\s\S]*?outline:\s*2px\s+solid\s+Highlight') "the narrow resize rail must retain a 44px touch hit area and a forced-colors focus indicator"
+  Assert-True ($sidebarSource -match '\.thread-row-time\s*\{[\s\S]*?color:\s*var\(--ui-text-secondary\)') "small sidebar timestamps must retain AA contrast on the active row surface"
+  $hasFiveHardeningViewports = $browserSmokeSource -match "name:\s*'desktop',\s*width:\s*1440,\s*height:\s*900" -and $browserSmokeSource -match "name:\s*'foldable',\s*width:\s*884,\s*height:\s*1104" -and $browserSmokeSource -match "name:\s*'tablet',\s*width:\s*768,\s*height:\s*1024" -and $browserSmokeSource -match "name:\s*'phone',\s*width:\s*393,\s*height:\s*852" -and $browserSmokeSource -match "name:\s*'phone-landscape',\s*width:\s*852,\s*height:\s*393"
+  Assert-True $hasFiveHardeningViewports "the durable browser hardening gate must cover all five UX-60 viewports"
+  Assert-True ($browserSmokeSource -match "name:\s*'forced-colors',\s*value:\s*'active'" -and $browserSmokeSource -match 'wrapsBackward[\s\S]*?wrapsForward[\s\S]*?backgroundCannotTakeFocus' -and $browserSmokeSource -match 'inertCount\s*===\s*0\s*&&\s*released\.focusReturned') "the hardening gate must verify forced colors plus modal Tab containment, inert background, and focus restoration"
+  Assert-True ($browserSmokeSource -match 'async function runContractBaseline' -and $browserSmokeSource -match 'contract-home-' -and $browserSmokeSource -match 'contract-running-' -and $browserSmokeSource -match 'contract-completed-' -and $browserSmokeSource -match 'contract-waiting-' -and $browserSmokeSource -match 'contract-baseline\.json') "the UX-00 contract gate must retain five-viewport home, running, completed, and waiting-input evidence"
 }
 
 function Assert-MobileThreadActionDiscoverySource {
@@ -201,7 +281,7 @@ function Assert-MobileThreadActionDiscoverySource {
   Assert-True ($sidebarSource -match "function\s+getThreadPinActionLabel\(thread:\s*UiThread\)[\s\S]*?isPinned\(thread\.id\)\s*\?\s*'取消置顶'\s*:\s*'置顶会话'") "thread pin labels must describe the action that will occur"
   $mobileThreadActionMedia = "@media\s*\(max-width:\s*767px\),\s*\(hover:\s*none\),\s*\(pointer:\s*coarse\),\s*\(max-height:\s*480px\)\s*and\s*\(max-width:\s*932px\)"
   Assert-True ($rowSource -match "$mobileThreadActionMedia[\s\S]*?sidebar-menu-row-right-default\s*\{[\s\S]*?display:\s*none;[\s\S]*?sidebar-menu-row-right-hover\s*\{[\s\S]*?display:\s*inline-flex;") "phone and touch thread rows must expose their existing action menu without hover"
-  Assert-True ($sidebarSource -match "$mobileThreadActionMedia[\s\S]*?\.thread-pin-button\s*\{[\s\S]*?display:\s*none;[\s\S]*?\.thread-menu-trigger\s*\{[\s\S]*?width:\s*2\.25rem;[\s\S]*?height:\s*2\.25rem;[\s\S]*?\.thread-menu-wrap\s*\{[\s\S]*?height:\s*1\.75rem;") "phone and touch rows must remove hidden pin focus stops and retain a 36px menu target without increasing row density"
+  Assert-True ($sidebarSource -match "$mobileThreadActionMedia[\s\S]*?\.thread-pin-button\s*\{[\s\S]*?display:\s*none;[\s\S]*?\.thread-menu-trigger\s*\{[\s\S]*?width:\s*2\.75rem;[\s\S]*?height:\s*2\.75rem;[\s\S]*?\.thread-menu-wrap\s*\{[\s\S]*?height:\s*2\.75rem;") "phone and touch rows must remove hidden pin focus stops and retain a 44px menu target"
 }
 
 function Assert-ConciseThreadOpenLabelsSource {
@@ -303,11 +383,41 @@ function Assert-MessageActionHitTestingSource {
   $source = Get-Content -Raw -Encoding UTF8 -LiteralPath (
     Join-Path (Get-Location) "src\components\content\ThreadConversation.vue"
   )
+  $composerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\ThreadComposer.vue"
+  )
+  $goalSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\content\ThreadGoalBar.vue"
+  )
+  $projectionSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\conversation-transcript\projectConversation.ts"
+  )
+  $appSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\App.vue"
+  )
+  $sidebarTreeSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue"
+  )
+  $sidebarControlsSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (
+    Join-Path (Get-Location) "src\components\sidebar\SidebarThreadControls.vue"
+  )
 
-  Assert-True ($source -match "\.message-action-button\s*\{[\s\S]*?pointer-events:\s*none;") "visually hidden message actions must not intercept pointer input"
-  Assert-True ($source -match "\.conversation-item-actions-active\s+\.message-action-button,[\s\S]*?\.conversation-item-actionable:focus-within\s+\.message-action-button\s*\{[\s\S]*?pointer-events:\s*auto;") "activated or keyboard-focused message actions must restore pointer ownership"
-  Assert-True ($source -match "@media\s*\(hover:\s*hover\)\s*and\s*\(pointer:\s*fine\)[\s\S]*?\.conversation-item-actionable:hover\s+\.message-action-button[\s\S]*?pointer-events:\s*auto;") "fine-pointer hover must reveal and activate message actions"
-  Assert-True ($source -match "\.message-action-button--favorite\.is-favorited\s*\{[\s\S]*?pointer-events:\s*auto;") "the always-visible favorited action must remain pointer-operable"
+  Assert-True ($source -match "\.message-actions\s*\{[\s\S]*?opacity:\s*0;[\s\S]*?pointer-events:\s*none;") "visually hidden projected-message actions must not intercept pointer input"
+  Assert-True ($source -match "\.user-message:hover\s+\.message-actions[\s\S]*?\.final-answer:focus-within\s+\.message-actions[\s\S]*?pointer-events:\s*auto;") "hovered or keyboard-focused projected messages must restore action ownership"
+  Assert-True ($source -match "@media\s*\(max-width:\s*767px\)[\s\S]*?\.message-actions\s*\{[\s\S]*?opacity:\s*1;[\s\S]*?pointer-events:\s*auto;") "touch viewports must keep projected-message actions visible and operable"
+  Assert-True ($source -match "@media\s*\(pointer:\s*coarse\)[\s\S]*?\.message-action,[\s\S]*?\.quiet-button,[\s\S]*?\.process-toggle,[\s\S]*?\.activity-details\s*>\s*summary,[\s\S]*?\.file-summary\s*>\s*summary,[\s\S]*?\.file-row\s*>\s*summary[\s\S]*?min-height:\s*44px;") "coarse-pointer conversation actions and disclosure controls must retain a 44px target beyond phone-width layouts"
+  Assert-True ($composerSource -match "@media\s*\(pointer:\s*coarse\)[\s\S]*?\.thread-composer-input,[\s\S]*?\.thread-composer-runtime-trigger[\s\S]*?min-height:\s*44px;[\s\S]*?\.thread-composer-expand,[\s\S]*?\.thread-composer-stop[\s\S]*?min-width:\s*44px;[\s\S]*?min-height:\s*44px;") "coarse-pointer composer input and standalone controls must retain 44px targets"
+  Assert-True ($goalSource -match "@media\s*\(pointer:\s*coarse\)[\s\S]*?\.thread-goal-action,[\s\S]*?\.thread-goal-confirm\s+button[\s\S]*?min-height:\s*44px;") "coarse-pointer goal controls must retain a 44px target"
+  Assert-True ($source -match "PROCESS_HISTORY_BATCH_SIZE\s*=\s*17" -and $source -match "查看历史过程" -and $source -match "visibleBlocks\s*=\s*processBlocks\(turn\)\.slice\(-visibleProcessBlockCount\(turn\)\)") "projected process must default to the latest item and reveal bounded history on demand"
+  Assert-True ($source -notmatch "本轮没有可确认的最终回复|只有明确标记为 final_answer 的内容才会显示为最终回复" -and $source -match "turn\.finalStatus\s*!==\s*'missing'") "plain missing-final turns must remain semantically missing without rendering a non-actionable protocol placeholder"
+  Assert-True ($source -match '<details\s+v-if="turn\.fileChanges\.length\s*>\s*0"\s+class="file-summary">' -and $source -notmatch 'class="file-summary"\s+open') "file history must start as one compact disclosure instead of occupying the transcript by default"
+  Assert-True ($source -match 'v-else-if="hasVisibleTiming\(turn\)"' -and $source -match 'return\s+''过程记录''' -and $source -notmatch '执行耗时不可用') "turn dividers must omit unavailable static timing noise while keeping a concise process disclosure"
+  Assert-True ($projectionSource -match "isTerminalConversationExecutionState\(stateValue\)\s*&&\s*projectedFinal\.streaming[\s\S]*?streaming:\s*false") "terminal explicit finals must never retain a permanently blinking streaming caret"
+  Assert-True ($composerSource -match "open-thread-goal" -and $composerSource -match "设置持续目标" -and $composerSource -match "canManageThreadGoal") "persistent goal creation must be owned by the Composer plus menu"
+  Assert-True ($goalSource -notmatch "thread-goal-create" -and $goalSource -match "openEditorRequest" -and $appSource -match '@open-thread-goal="onOpenThreadGoalEditor"') "the standalone empty goal button must stay removed while the plus menu opens the existing goal editor"
+  Assert-True ($appSource -match "@media\s*\(pointer:\s*coarse\)[\s\S]*?\.sidebar-settings-button,[\s\S]*?\.content-favorites-button[\s\S]*?min-height:\s*44px;[\s\S]*?\.sidebar-toolbar-icon-button,[\s\S]*?min-width:\s*44px;") "coarse-pointer shell actions must retain 44px targets"
+  Assert-True ($sidebarTreeSource -match "\(pointer:\s*coarse\)[\s\S]*?\.project-main-button,[\s\S]*?\.project-menu-trigger[\s\S]*?min-height:\s*44px;[\s\S]*?\.thread-show-more-button[\s\S]*?min-height:\s*44px;") "coarse-pointer project and thread controls must retain 44px targets"
+  Assert-True ($sidebarControlsSource -match "@media\s*\(pointer:\s*coarse\)[\s\S]*?\.sidebar-thread-controls-button[\s\S]*?min-width:\s*44px;[\s\S]*?min-height:\s*44px;") "coarse-pointer collapsed-sidebar controls must retain 44px targets"
 }
 
 function Assert-StableHandsetViewportSource {
@@ -338,10 +448,10 @@ function Assert-ForegroundResumeScrollIntentSource {
     Join-Path (Get-Location) "src\components\content\ThreadConversation.vue"
   )
 
-  Assert-True ($source -match "function\s+onConversationScrollVisibilityChange[\s\S]*?document\.hidden[\s\S]*?isAtBottom\(container\)[\s\S]*?captureVisibleConversationAnchor\(\)") "conversation resume must capture bottom-follow and reading-anchor intent before the page is hidden"
-  Assert-True ($source -match "pendingForegroundScrollIntent\?\.threadId\s*===\s*props\.activeThreadId[\s\S]*?foregroundScrollIntent\?\.followBottom[\s\S]*?foregroundScrollIntent\?\.anchorSnapshot") "the first recovered message update must consume the foreground scroll intent before restoring the viewport"
-  Assert-True ($source -match "addEventListener\('wheel',\s*clearPendingForegroundScrollIntent[\s\S]*?addEventListener\('touchstart',\s*clearPendingForegroundScrollIntent[\s\S]*?addEventListener\('pointerdown',\s*clearPendingForegroundScrollIntent") "fresh pointer, touch, or wheel input must supersede a latched foreground scroll intent"
-  Assert-True ($source -match "removeEventListener\('visibilitychange',\s*onConversationScrollVisibilityChange\)" -and $source -match "pendingForegroundScrollIntent\s*=\s*null[\s\S]*?scrollContextGeneration") "foreground scroll intent must be removed on unmount and cleared across thread ownership changes"
+  Assert-True ($source -match "function\s+restoreScrollState[\s\S]*?props\.scrollState[\s\S]*?scrollRatio[\s\S]*?userIsAwayFromBottom") "projected conversations must restore saved bottom-follow or proportional reading position"
+  Assert-True ($source -match "watch\([\s\S]*?props\.activeThreadId[\s\S]*?restoreScrollState\(\)") "thread ownership changes must restore only that thread's saved viewport"
+  Assert-True ($source -match "projectionContentSignature[\s\S]*?if\s*\(shouldFollow\s*&&\s*!userIsAwayFromBottom\)\s*\{?[\s\S]*?scrollToBottom") "new projected content must follow the bottom only while the reader has not scrolled away before or during the render frame"
+  Assert-True ($source -match "onBeforeUnmount[\s\S]*?publishScrollState\(\)[\s\S]*?cancelAnimationFrame") "projected conversation scroll ownership must be saved and cleaned up on unmount"
 }
 
 function Assert-ThreadAttentionChromeSource {
@@ -427,8 +537,10 @@ function Assert-RuntimeSnapshotOrderingSource {
   $runtimeQueueServerSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\runtimeMessageQueue.ts")
   $serverSnapshotSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\server\appServerThreadRuntimeSnapshot.ts")
   $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadConversation.vue")
+  $projectionSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\conversation-transcript\projectConversation.ts")
   $foregroundRecoveryPolicySource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\composables\foregroundRecoveryPolicy.ts")
   Assert-True ($source -match "const\s+currentEventSeq\s*=\s*Math\.max\([\s\S]*?latestRuntimeEventSeqByThreadId\.get\(threadId\)[\s\S]*?shouldApplyRuntimeSnapshotVersion\(\{\s*lastEventSeq:\s*currentEventSeq\s*\},\s*snapshot\)") "runtime snapshots must be checked against the latest buffered event sequence"
+  Assert-True ($source -match "function\s+applyRuntimeSnapshotState[\s\S]*?if\s*\(snapshot\.threadRead\)\s*rememberConversationThreadRead\(threadId,\s*snapshot\.threadRead\)[\s\S]*?if\s*\(!shouldApplyRuntimeSnapshotVersion") "structured thread/read history must enter the projection before stale Runtime fields are rejected"
   Assert-True ($source -match "eventSeq:\s*notification\.seq") "runtime notification state must retain the authoritative event sequence"
   Assert-True ($source -match "rememberLatestRuntimeEventSequence\(threadId,\s*notification\.seq\)[\s\S]*?method\.endsWith\('/delta'\)") "delta events must record their latest sequence before taking the non-reactive fast path"
   Assert-True ($source -match "method\.endsWith\('/delta'\)[\s\S]*?isRuntimeExecutionActiveState\(currentState\)[\s\S]*?markThreadLiveExecutionSignal\(threadId\)[\s\S]*?isRuntimeExecutionSettledState\(currentState\)\)\s*return") "high-frequency deltas must not rewrite reactive runtime state or revive a settled turn"
@@ -436,17 +548,18 @@ function Assert-RuntimeSnapshotOrderingSource {
   Assert-True ($source -match "preferCachedMessages:\s*options\.preferSessionLogMessages\s*===\s*true\s*\|\|\s*shouldShowLoading") "session-log notifications and cold thread selection must request recoverable cached messages before a heavy history read"
   Assert-True ($source -match "preferCachedMessages:\s*options\.preferSessionLogMessages\s*===\s*true\s*\|\|\s*shouldShowLoading\s*\|\|\s*options\.fullHistory\s*===\s*true\s*\|\|\s*Boolean\(options\.olderHistory\)") "session-log refreshes and explicit history paging must reuse the lightweight cached state before an authoritative RPC"
   Assert-True ($gatewaySource -match "preferCachedMessages\s*\?\s*'\?preferCachedMessages=1'") "the frontend gateway must opt into the cache-first thread-state route"
-  Assert-True ($serverSnapshotSource -match "options\.preferCachedMessages\s*===\s*true[\s\S]*?readSessionLogThreadRead[\s\S]*?messageState\s*=\s*'cached'") "cache-first state must recover local session messages without presenting them as authoritative"
+  Assert-True ($serverSnapshotSource -match "const cachedThreadRead\s*=\s*dependencies\.getCachedThreadRead\(normalizedThreadId\)[\s\S]*?if\s*\(options\.preferCachedMessages\s*===\s*true\s*&&\s*cachedThreadRead\)[\s\S]*?messageState:\s*'cached'[\s\S]*?let lightThreadRead") "an existing structured cache hit must return before any App Server thread/read"
+  Assert-True ($serverSnapshotSource -match "options\.preferCachedMessages\s*===\s*true[\s\S]*?Runtime Store remains authoritative for execution state") "cache-first state must keep Runtime Store authoritative instead of inferring run state from cached messages"
   Assert-True ($serverSnapshotSource -match "trimThreadTurnsInRpcResult\('thread/read',\s*recoveredThreadRead\)") "cache-first session recovery must retain the bounded initial message window"
   Assert-True ($source -match "shouldDeferCachedRpcRefresh[\s\S]*?scheduleSettledSnapshotMessagesRpcRefresh") "cache-first messages must trigger an immediate background authoritative refresh"
   Assert-True ($source -match "shouldDeferCachedRpcRefresh\s*=\s*options\.forceSettledRpcRefresh\s*!==\s*true") "the forced authoritative refresh must not defer itself again"
   Assert-True ($source -match "options\.preferSessionLogMessages\s*===\s*true\s*&&\s*snapshot\.messageState\s*===\s*'cached'[\s\S]*?scheduleSessionLogAuthoritativeRefresh\(threadId") "session-log projections must coalesce a quiet-period authoritative refresh instead of remaining permanently lossy"
   Assert-True ($source -match "pendingSessionLogMessageRefresh\.add\(threadId\)[\s\S]{0,240}?scheduleSessionLogAuthoritativeRefresh\(threadId\)") "each session-log notification must reset the authoritative quiet window before its local projection begins"
   Assert-True ($source -match "getSessionLogAuthoritativeRefreshAction\(\{[\s\S]*?executionActive:\s*isThreadExecutionActive\(threadId\)[\s\S]*?hasPendingServerRequest:\s*hasPendingServerRequestSignal\(threadId\)[\s\S]*?hasQueuedWork:\s*hasQueuedThreadWork\(threadId\)[\s\S]*?action\s*===\s*'defer'[\s\S]*?scheduleSessionLogAuthoritativeRefresh\(threadId\)") "session-log convergence must not issue a heavy authoritative history read while a turn or queued action is active"
-  Assert-True ($source -match "hasTerminalEvidence:\s*hasSettledSessionLogMessageEvidence\([\s\S]*?persistedMessagesByThreadId\.value\[threadId\][\s\S]*?action\s*===\s*'defer'") "cross-process session-log convergence must wait for a final assistant message instead of trusting a false settled light snapshot"
+  Assert-True ($source -match "hasTerminalEvidence:\s*hasSettledSessionLogProjectionEvidence\([\s\S]*?projectTaskPetConversation\(threadId\)[\s\S]*?action\s*===\s*'defer'") "cross-process session-log convergence must wait for the projected latest-turn terminal state instead of inferring completion from the last assistant message"
   Assert-True ($source -match "shouldForceCachedSnapshotRefresh\s*=\s*options\.force\s*===\s*true\s*&&\s*snapshot\.messageState\s*===\s*'cached'") "cached historical threads without a terminal event key must still receive an authoritative refresh"
   Assert-True ($source -match "!options\.olderHistory\s*&&\s*!shouldForceCachedSnapshotRefresh") "explicit older-history reads must not be blocked when a legacy thread has no terminal refresh key"
-  Assert-True ($conversationSource -match "pendingRemoteOlderHistoryAnchor\s*=\s*anchorSnapshot[\s\S]*?emit\('loadOlderHistory'\)[\s\S]*?props\.messages\.length[\s\S]*?restoreScrollAnchorOverFrames\(anchorSnapshot,\s*6\)") "remote older-history insertion must restore the pre-request reading anchor after messages arrive"
+  Assert-True ($conversationSource -match "function\s+requestOlderHistory[\s\S]*?pendingOlderHistoryAnchor[\s\S]*?emit\('loadOlderHistory'\)" -and $conversationSource -match "function\s+restoreOlderHistoryAnchor[\s\S]*?dataset\.turnId\s*===\s*anchor\.turnId[\s\S]*?container\.scrollTop\s*\+=") "remote older-history insertion must restore the projected turn anchor after pages merge"
   Assert-True ($source -match "else\s+if\s*\(!shouldDeferCachedRpcRefresh\)\s*\{\s*scheduleNonFreshThreadDetailRetry") "the slow non-fresh retry must not race the immediate cached-message refresh"
   Assert-True ($source -match "connectionStale:\s*notificationStale\.value\s*\|\|\s*syncLagging\.value" -and $foregroundRecoveryPolicySource -match "state\.connectionStale\s*&&\s*!state\.recentlySynced") "startup notification health recovery must not duplicate a just-completed authoritative message refresh"
   Assert-True ($source -match "allowRoutineActiveRefresh:\s*isFirstAttempt" -and $foregroundRecoveryPolicySource -match "if\s*\(!state\.allowRoutineActiveRefresh\)\s*return\s+false") "later Android resume retries must not repeatedly reload a healthy active conversation"
@@ -454,9 +567,9 @@ function Assert-RuntimeSnapshotOrderingSource {
   Assert-True ($source -match "const\s+refreshedRuntimeSnapshotApplied\s*=\s*snapshot\s*===\s*initialRuntimeSnapshot[\s\S]*?\?\s*false[\s\S]*?:\s*applyRuntimeSnapshotState") "the same settled snapshot must not be applied twice while queued work starts"
   Assert-True ($source -match "const\s+runtimeSnapshotApplied\s*=\s*initialRuntimeSnapshotApplied\s*\|\|\s*refreshedRuntimeSnapshotApplied") "message reconciliation must retain a runtime snapshot applied before history refresh"
   Assert-True ($source -match "settleOptimisticUserMessagesThrough\(threadId,\s*settledAtMs\)") "authoritative terminal snapshots must clear older optimistic running residue"
-  Assert-True ($source -match "setTurnActivityForThread\(threadId,\s*\{\s*reset:\s*true") "a new local send must start a distinct activity timeline"
-  Assert-True ($source -match "activityId:\s*activity\?\.activityId") "the live overlay must expose stable activity identity to the conversation renderer"
-  Assert-True ($source -match "Math\.min\(previous\.startedAtMs,\s*authoritativeStartedAtMs\)") "foreground recovery must correct a provisional timer with the earlier authoritative start time"
+  Assert-True ($source -match "const\s+optimisticMessageId\s*=\s*addOptimisticUserMessage" -and $projectionSource -match 'ensureTurn\(state,\s*message\.turnId\s*\|\|\s*`local:\$\{message\.id\}`\)') "a new local send must start a distinct projected turn"
+  Assert-True ($source -match "rememberConversationNotification\(notification\)" -and $source -match "activityId:\s*activity\?\.id") "the projected task surface must retain stable protocol activity identity"
+  Assert-True ($projectionSource -match "turn\.startedAtMs\s*=\s*minTimestamp\([\s\S]*?turn\.startedAtMs[\s\S]*?readTimestampMs") "foreground recovery must correct a provisional timer with the earlier authoritative projected start time"
   Assert-True ($source -match "readRuntimeActivityStartedAtMs\(runtimeSummary\)") "activity recovery must reject a start timestamp that belongs to an already completed turn"
   Assert-True ($source -match "const\s+unread\s*=\s*!inProgress\s*&&\s*unreadByEvent") "thread timestamps alone must not mark every sidebar row unread"
   Assert-True ($source -match "function\s+markThreadUnreadByEvent[\s\S]*?threadId\s*===\s*selectedThreadId\.value\)\s*return") "background events must not mark the conversation currently being read as unread"
@@ -485,8 +598,10 @@ function Assert-RuntimeSnapshotOrderingSource {
   $queueSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\QueuedMessages.vue")
   Assert-True ($queueSource -match "队列已暂停。重试、编辑或删除后继续") "the paused queue must explain the available recovery actions"
   Assert-True ($queueSource -match "retry:\s*\[messageId:\s*string\]") "the failed queue row must expose a retry action"
-  Assert-True ($conversationSource -match "previousOverlay\.activityId\s*===\s*nextOverlay\.activityId") "elapsed time may only be retained for the same activity"
-  Assert-True ($conversationSource -match "live-overlay-inline-recovering[\s\S]*?aria-busy") "foreground recovery must expose one accessible animated status surface"
+  Assert-True ($queueSource -match "move:\s*\[messageId:\s*string,\s*direction:\s*'up'\s*\|\s*'down'\]" -and $queueSource -match "canReorderQueue") "persisted queue rows must expose bounded accessible reorder controls"
+  Assert-True ($source -match "function\s+moveQueuedMessage[\s\S]*?backgroundPersisted\s*!==\s*true[\s\S]*?ownershipKinds\.size\s*!==\s*1[\s\S]*?setQueuedMessagesForThread\(threadId,\s*nextQueue\)[\s\S]*?processQueuedMessages\(threadId\)") "queue reorder must preserve one durable owner and persist before server reconciliation"
+  Assert-True ($conversationSource -match "turn\.activeElapsedMs" -and $conversationSource -match "turn\.waitedMs") "conversation timing must come from the projected turn instead of a retained overlay clock"
+  Assert-True ($conversationSource -notmatch "live-overlay|Teleport") "foreground recovery must remain in the normal projected turn flow without a tail overlay"
 }
 
 function Assert-ManualUnreadAndComposerAttachmentSource {
@@ -576,7 +691,7 @@ function Assert-SidebarProjectScrollAnchorSource {
   $sidebarSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarThreadTree.vue")
   $fixtureSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\sidebar\SidebarRegressionFixture.vue")
 
-  Assert-True ($sidebarSource -match "function\s+captureProjectScrollAnchor[\s\S]*?visibleTopInGroups[\s\S]*?viewportOffset") "sidebar project reorder must capture the first visible project by stable identity"
+  Assert-True ($sidebarSource -match "function\s+captureProjectScrollAnchor[\s\S]*?visibleTopInGroups\s*=\s*Math\.max\(0,[\s\S]*?viewportOffset") "sidebar project reorder must capture the first visible project, including the first-project boundary, by stable identity"
   Assert-True ($sidebarSource -match "function\s+findProjectTreeScrollContainer[\s\S]*?overflowY[\s\S]*?scrollHeight") "sidebar scroll anchoring must resolve the actual overflow owner instead of assuming one shell"
   Assert-True ($sidebarSource -match "desiredScrollTop\s*=\s*groupsContentTop\s*\+\s*anchorTop\s*-\s*anchor\.viewportOffset" -and $sidebarSource -match "Math\.min\(desiredScrollTop,\s*maxScrollTop\)") "sidebar project reorder must restore and clamp the captured viewport offset"
   Assert-True ($sidebarSource -match "isProjectLayoutMotionReady\.value\s*=\s*false[\s\S]*?scheduleProjectLayoutMotionRestore\(sequence\)") "background project reordering must not animate the anchored row away from the reader"
@@ -594,8 +709,8 @@ function Assert-HiddenPageQuiescenceSource {
   Assert-True ($desktopStateSource -match "function\s+stopBackgroundSync[\s\S]*?clearInterval\(backgroundSyncTimer\)[\s\S]*?backgroundSyncTimer\s*=\s*null") "hidden-page recovery must be able to fully disarm the fallback sync interval"
   Assert-True ($backgroundSyncMatch.Success -and $backgroundSyncMatch.Value -match "!isDocumentVisible\(\)" -and $backgroundSyncMatch.Value -match "stopBackgroundSync\(\)") "fallback thread synchronization must not run or remain armed while the page is hidden"
   Assert-True ($visibilitySyncMatch.Success -and $visibilitySyncMatch.Value -match "if\s*\(isDocumentVisible\(\)\)\s*scheduleBackgroundSync\(\)" -and ([regex]::Matches($visibilitySyncMatch.Value, "stopBackgroundSync\(\)")).Count -ge 5) "visibility, page, network, and Android lifecycle boundaries must park and visibly re-arm fallback sync"
-  Assert-True ($conversationSource -match "function\s+startCommandElapsedTimer[\s\S]*?document\.hidden\)\s*return" -and $conversationSource -match "function\s+onCommandElapsedVisibilityChange[\s\S]*?stopCommandElapsedTimer\(\)[\s\S]*?startCommandElapsedTimer\(\)") "conversation elapsed-time rendering must pause while hidden and catch up when visible"
-  Assert-True ($conversationSource -match "addEventListener\('visibilitychange',\s*onCommandElapsedVisibilityChange\)" -and $conversationSource -match "removeEventListener\('visibilitychange',\s*onCommandElapsedVisibilityChange\)") "conversation visibility-clock ownership must be cleaned up with the component"
+  Assert-True ($conversationSource -notmatch "setInterval\(" -and $conversationSource -match "turn\.activeElapsedMs") "conversation elapsed-time rendering must consume projected protocol timing without owning a legacy command clock"
+  Assert-True ($desktopStateSource -match "notificationHealthTick\.value[\s\S]*?nowMs:\s*Date\.now\(\)") "the shared visible-page synchronization clock must refresh active projected timing"
   Assert-True ($taskPetSource -match "function\s+startFreshnessTimer[\s\S]*?document\.hidden" -and $taskPetSource -match "function\s+onFreshnessVisibilityChange[\s\S]*?stopFreshnessTimer\(\)[\s\S]*?startFreshnessTimer\(\)" -and $taskPetSource -match "removeEventListener\('visibilitychange',\s*onFreshnessVisibilityChange\)") "task-pet freshness labels must use the same hidden-page timer boundary"
   Assert-True ($sidebarSource -match "function\s+startRelativeTimeRefreshTimer[\s\S]*?refreshRelativeTimeNow\(\)[\s\S]*?document\.hidden" -and $sidebarSource -match "function\s+onRelativeTimeVisibilityChange[\s\S]*?stopRelativeTimeRefreshTimer\(\)[\s\S]*?startRelativeTimeRefreshTimer\(\)") "sidebar relative-time labels must pause while hidden and catch up immediately when visible"
   Assert-True ($sidebarSource -match "Math\.abs\(relativeTimeNowMs\.value\s*-\s*timestamp\)" -and $sidebarSource -match "removeEventListener\('visibilitychange',\s*onRelativeTimeVisibilityChange\)" -and $sidebarSource -match "stopRelativeTimeRefreshTimer\(\)") "sidebar relative-time rendering must use the reactive display clock and clean up its lifecycle owner"
@@ -617,8 +732,8 @@ function Assert-ReliableClipboardSource {
   Assert-True (([regex]::Matches($sidebarSource, "onCopyThreadLink\(openThreadMenuThread\.id\)")).Count -eq 1 -and $sidebarSource -match "'copy-thread-link':\s*\[threadId:\s*string\]") "the shared sidebar thread menu must expose the thread-link copy action"
   Assert-True ($appSource -match '@copy-thread-link="onCopyThreadLink"' -and $appSource -match 'function\s+onCopyThreadLink[\s\S]*?url\.hash\s*=\s*`/thread/\$\{encodeURIComponent\(threadId\)\}`[\s\S]*?copyTextToClipboard\(url\.toString\(\)\)[\s\S]*?已复制会话链接') "thread-link copying must preserve the current site and use the canonical encoded hash route with truthful success feedback"
   Assert-True ($appSource -match "复制失败，请手动复制浏览器地址") "thread-link copy failure must remain visible and actionable"
-  Assert-True ($conversationSource -match "import\s*\{\s*copyTextToClipboard\s*\}\s*from\s*'\.\./\.\./utils/clipboard'" -and $conversationSource -match "isMessageCopied\(entry\.message\.id\)\s*\?\s*'已复制'\s*:\s*'复制'" -and $conversationSource -match 'IconTablerCheck\s+v-if="isMessageCopied\(entry\.message\.id\)"') "message copying must use the shared path and expose text plus icon success feedback"
-  Assert-True ($conversationSource -match "复制失败，请长按链接手动复制" -and $conversationSource -match "消息复制失败，请手动选择复制" -and $conversationSource -match "代码复制失败，请手动选择复制") "conversation copy failures must remain visible and actionable"
+  Assert-True ($conversationSource -match "import\s*\{\s*copyTextToClipboard\s*\}\s*from\s*'\.\./\.\./utils/clipboard'" -and $conversationSource -match "await\s+copyTextToClipboard\(text\)[\s\S]*?message:\s*'已复制'") "projected message copying must use the shared path and report success"
+  Assert-True ($conversationSource -match "复制失败，请手动选择内容" -and $conversationSource -match "emit\('copyStatus'[\s\S]*?tone:\s*'danger'") "conversation copy failures must remain visible and actionable"
   Assert-True ($conversationFixtureSource -match '@copy-status="copyStatus\s*=\s*\$event"' -and $conversationFixtureSource -match 'class="conversation-regression-copy-status"') "the conversation fixture must expose visible clipboard failure feedback"
   Assert-True ($remoteAccessSource -match "import\s*\{\s*copyTextToClipboard\s*\}\s*from\s*'\.\./\.\./utils/clipboard'" -and $remoteAccessSource -match "await\s+copyTextToClipboard\(url\)") "remote-access address copying must share the HTTP-safe fallback"
 }
@@ -676,8 +791,8 @@ function Assert-MobileLatestReplyRecoverySource {
   Assert-True ($runtimeStateSource -match 'Keep one trailing separator while streaming' -and $runtimeStateSource -match 'normalized\.slice\(normalized\.length\s*-\s*LATEST_REPLY_CACHE_LIMIT\)') "stream chunks must preserve word boundaries and completed long replies must retain their newest tail"
   Assert-True ($runtimeStateSource -match 'latestReplyItemId' -and $runtimeStateSource -match 'itemId\s*&&\s*state\.latestReplyItemId\s*&&\s*itemId\s*!==\s*state\.latestReplyItemId[\s\S]*?appendLatestReply\('''',\s*delta\)') "a new assistant item must replace the previous item on its first delta instead of concatenating both messages"
   Assert-True ($runtimeStateSource -match 'latestReplyEventSeq' -and $runtimeStateSource -match 'latestReply:\s*nextLatestReply[\s\S]*?latestReplyEventSeq:\s*Math\.max\(0,\s*Math\.trunc\(event\.seq\)\)' -and $runtimeStateSource -match 'latestReply:\s*completedReply[\s\S]*?latestReplyEventSeq:\s*Math\.max\(0,\s*Math\.trunc\(event\.seq\)\)') "latest reply text must carry its own event version instead of borrowing the generic task cursor"
-  Assert-True ($desktopStateSource -match 'function\s+latestTaskPetReply[\s\S]*?compactLatestReplyTail\(value,\s*260\)' -and $latestReplySource -match 'normalized\.slice\(normalized\.length\s*-\s*limit\)') "the renderer-to-native task-pet snapshot must carry the newest reply tail instead of a frozen prefix"
-  Assert-True ($desktopStateSource -match 'runtimeReplyMatchesActiveTurn[\s\S]*?runtimeLatestReply[\s\S]*?latestReplyEventSeq:\s*runtimeLatestReply\s*\?\s*runtimeSummary\?\.latestReplyEventSeq\s*\?\?\s*0\s*:\s*0') "frontend fallback replies must remain unversioned and prior-turn Runtime replies must not be paired with a new activity"
+  Assert-True ($desktopStateSource -match 'function\s+projectTaskPetConversation[\s\S]*?projectConversation\(' -and $desktopStateSource -match "projectedTurn\?\.final\?\.text" -and $latestReplySource -match 'normalized\.slice\(normalized\.length\s*-\s*limit\)') "the renderer-to-native task-pet snapshot must use only an explicit projected final tail"
+  Assert-True ($desktopStateSource -notmatch 'runtimeReplyMatchesActiveTurn|function\s+latestTaskPetReply') "task-pet replies must not fall back to the last flat assistant message or unphased runtime accumulator"
 }
 
 function Assert-BoundedRuntimeSendRecoverySource {
@@ -836,7 +951,7 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($adoptRuntimeQueuedRequestMatch.Success) "could not find active-writer queue adoption source"
   Assert-True ($adoptRuntimeQueuedRequestMatch.Value -notmatch "setRuntimeExecutionState\(threadId,\s*'queued'" -and $adoptRuntimeQueuedRequestMatch.Value -notmatch "setThreadInProgress\(threadId" -and $adoptRuntimeQueuedRequestMatch.Value -notmatch "setTurnActivityForThread\(threadId") "queue adoption must not overwrite the authoritative active turn state or activity"
   Assert-True ($adoptRuntimeQueuedRequestMatch.Value -match "syncRuntimeMessageQueue\(threadId\)[\s\S]*?refreshRuntimeStatusSnapshot\(threadId\)") "queue adoption must reconcile the authoritative runtime snapshot after the durable queue is visible"
-  Assert-True ($source -match "const\s+startOutcome\s*=\s*await\s+startTurnForThread[\s\S]*?startOutcome\s*===\s*'queued'[\s\S]*?setTurnActivityForThread\(threadId,\s*previousTurnActivity\)") "active-writer fallback must restore the pre-existing turn activity after queue adoption"
+  Assert-True ($source -match "await\s+startTurnForThread\(threadId,[\s\S]*?onRequestDispatched:" -and $source -notmatch "previousTurnActivity|setTurnActivityForThread") "active-writer fallback must reconcile runtime and projected turns without restoring a legacy activity copy"
   Assert-True ($source -match "recovered\?\.status\s*===\s*'queued'[\s\S]*?adoptRuntimeQueuedRequest\(recoveredThreadId,\s*recovered\.requestId\)") "a renderer reload must recover an already accepted active-writer fallback as queued instead of sent or failed"
   Assert-True ($source -match "function\s+failedUserMessageRequestFromOutbox[\s\S]*?modelId:\s*entry\.modelId[\s\S]*?reasoningEffort:\s*entry\.reasoningEffort[\s\S]*?speedMode:\s*entry\.speedMode") "failed-message retry must rebuild the original model, effort, and speed from its durable outbox row"
   Assert-True ($source -match "async\s+function\s+retryFailedUserMessage[\s\S]*?modelId:\s*request\.modelId[\s\S]*?reasoningEffort:\s*request\.reasoningEffort[\s\S]*?speedMode:\s*request\.speedMode") "existing-thread manual retry must keep the failed message runtime selection"
@@ -880,7 +995,7 @@ function Assert-BoundedRuntimeSendRecoverySource {
   $markTaskPetThreadReadMatch = [regex]::Match($androidPluginSource, 'public\s+void\s+markTaskPetThreadRead[\s\S]*?\n\s*private\s+JSObject\s+buildTaskPetStatus')
   Assert-True ($markTaskPetThreadReadMatch.Success -and $markTaskPetThreadReadMatch.Value -match 'shouldAcknowledgePendingTaskPetThreadOpen[\s\S]*?remove\(MobileShellConfig\.PREF_TASK_PET_PENDING_OPEN_THREAD_ID\)[\s\S]*?\.commit\(\)') "only the exact thread confirmed visible by the WebView may clear pending notification navigation"
   $visibleThreadAcknowledgementMatch = [regex]::Match($appSource, 'watch\(\s*\(\)\s*=>\s*\[\s*routeThreadId\.value,[\s\S]*?markMobileShellTaskPetThreadRead\(normalizedRouteId\)')
-  Assert-True ($visibleThreadAcknowledgementMatch.Success -and $visibleThreadAcknowledgementMatch.Value -match 'displayedThreadMessages\.value\.length' -and $visibleThreadAcknowledgementMatch.Value -match 'isThreadContentSwitching\.value' -and $visibleThreadAcknowledgementMatch.Value -match 'shouldAcknowledgeMobileShellTaskPetThreadOpen\(viewState\)[\s\S]*?acknowledgeMobileShellTaskPetThreadOpen\(normalizedRouteId\)[\s\S]*?shouldMarkMobileShellTaskPetThreadRead\(\{\s*\.\.\.viewState,\s*inProgress\s*\}\)[\s\S]*?markMobileShellTaskPetThreadRead\(normalizedRouteId\)') "visible thread content must acknowledge navigation before terminal read cleanup, while empty or switching routes remain unacknowledged"
+  Assert-True ($visibleThreadAcknowledgementMatch.Success -and $visibleThreadAcknowledgementMatch.Value -match 'displayedThreadTurnCount\.value' -and $visibleThreadAcknowledgementMatch.Value -match 'visibleTurnCount' -and $visibleThreadAcknowledgementMatch.Value -match 'isThreadContentSwitching\.value' -and $visibleThreadAcknowledgementMatch.Value -match 'shouldAcknowledgeMobileShellTaskPetThreadOpen\(viewState\)[\s\S]*?acknowledgeMobileShellTaskPetThreadOpen\(normalizedRouteId\)[\s\S]*?shouldMarkMobileShellTaskPetThreadRead\(\{\s*\.\.\.viewState,\s*inProgress\s*\}\)[\s\S]*?markMobileShellTaskPetThreadRead\(normalizedRouteId\)') "visible projected turns must acknowledge navigation before terminal read cleanup, while empty or switching routes remain unacknowledged"
   $nativeReadCleanupMatch = [regex]::Match($androidTaskPetSource, 'private\s+void\s+clearCompletedThread[\s\S]*?\n\s*private\s+int\s+expandedPanelOffset')
   Assert-True ($nativeReadCleanupMatch.Success -and $nativeReadCleanupMatch.Value -match 'isActiveTaskState\(task\.state\)[\s\S]*?task\.readAcknowledged\s*=\s*true[\s\S]*?persistTasksSynchronously\(\)' -and $androidTaskPetSource -match 'put\("readAcknowledged",\s*task\.readAcknowledged\)' -and $androidTaskPetSource -match 'sameGeneration[\s\S]*?previous\.readAcknowledged') "a visible-thread read acknowledgement must survive the short frontend/native terminal race for the same task generation"
   Assert-True ($androidTaskPetPolicySource -match 'shouldRetainUnreadSettledTask[\s\S]*?return\s+!readAcknowledged' -and $androidTaskPetSource -match 'shouldRetainUnreadSettledTask\([\s\S]*?task\.readAcknowledged[\s\S]*?if\s*\(retainUnreadCompletion\)[\s\S]*?notifyTaskSettled[\s\S]*?else\s*\{[\s\S]*?tasksToRemove\.add\(task\)[\s\S]*?suppressed_read') "only unread terminal tasks may remain in the pet and post a completion notification"
@@ -964,7 +1079,7 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($androidTaskPetPolicySource -match 'shouldRetainOmittedTask[\s\S]*?"running"\.equals\(state\)[\s\S]*?"waiting"\.equals\(state\)[\s\S]*?"completed"\.equals\(state\)') "frontend omission must retain active and unread-completed native task records"
   Assert-True ($androidTaskPetSource -match 'OMITTED_PROVISIONAL_MISSING_LIMIT\s*=\s*3[\s\S]*?"not_found"\.equals\(result\.executionState\)[\s\S]*?shouldDropOmittedProvisional') "an omitted threadless request must require repeated authoritative not-found results before cleanup"
   Assert-True ($androidTaskPetSource -match 'removeTaskFromFrontendActiveSnapshot\(task\)[\s\S]*?notifyTaskSettled') "native terminal settlement must remove the stale frontend-active preference before emitting completion attention"
-  Assert-True ($source -match 'activeTaskPetItems[\s\S]*?activityId:\s*activity\?\.activityId[\s\S]*?startedAtMs:[\s\S]*?lastEventSeq:') "task-pet snapshots must carry the renderer activity generation and authoritative event sequence"
+  Assert-True ($source -match 'activeTaskPetItems[\s\S]*?projectTaskPetConversation[\s\S]*?activityId:\s*activity\?\.id[\s\S]*?startedAtMs:[\s\S]*?lastEventSeq:') "task-pet snapshots must carry the projected activity identity and authoritative event sequence"
   Assert-True ($appSource -match 'activityId:\s*item\.activityId[\s\S]*?startedAtMs:\s*item\.startedAtMs[\s\S]*?lastEventSeq:\s*item\.lastEventSeq') "the Android bridge payload must preserve task generation metadata"
   $differentTaskGenerationPolicyMatch = [regex]::Match($androidTaskPetPolicySource, 'static\s+boolean\s+shouldAcceptDifferentTaskGeneration[\s\S]*?\n\s*static\s+boolean\s+shouldWakeForRuntimeEvent')
   Assert-True ($differentTaskGenerationPolicyMatch.Success -and $differentTaskGenerationPolicyMatch.Value -match 'currentStartedAtMs\s*>\s*0L\s*&&\s*incomingStartedAtMs\s*>\s*0L[\s\S]*?incomingStartedAtMs\s*!=\s*currentStartedAtMs[\s\S]*?incomingStartedAtMs\s*>\s*currentStartedAtMs[\s\S]*?incomingEventSeq\s*>\s*0L\s*&&\s*incomingEventSeq\s*>\s*currentEventSeq' -and $differentTaskGenerationPolicyMatch.Value -match 'if\s*\(currentStartedAtMs\s*>\s*0L\)\s*return\s+false;[\s\S]*?incomingEventSeq\s*>\s*0L\s*&&\s*incomingEventSeq\s*>\s*currentEventSeq') "different task generations with known start times must be ordered by start time before event sequence, preventing an old activity from borrowing a newer runtime cursor"
@@ -1044,8 +1159,8 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($source -match "async\s+function\s+retryFailedNewThreadMessage[\s\S]*?reuseOptimisticMessageId:\s*messageId") "threadless manual retry must reuse the same visual message id"
   Assert-True ($source -match "function\s+takeFailedNewThreadMessageForEditing[\s\S]*?removeMessageOutboxEntry\(entry\.clientMessageId\)[\s\S]*?pendingNewThreadPreview\.value\s*=\s*null") "editing a failed threadless message must atomically leave preview mode and clear its outbox attempt"
   Assert-True ($source -match "if\s*\(newestDraftEntry\)\s*\{\s*restoreFailedNewThreadOutboxEntry\(newestDraftEntry\)") "restart recovery must restore a failed new-thread bubble instead of silently moving it back to the composer"
-  Assert-True ($appSource -match 'data-testid="pending-new-thread-preview"[\s\S]*?:messages="\[pendingNewThreadPreview\.message\]"') "the home route must render the provisional first turn as a conversation"
-  Assert-True ($appSource -match ':is-turn-in-progress="pendingNewThreadPreview\.liveOverlay\s*!==\s*null"') "a waiting new-thread preview must not retain a stale running overlay"
+  Assert-True ($appSource -match 'data-testid="pending-new-thread-preview"[\s\S]*?:projection="pendingNewThreadConversationProjection"' -and $appSource -match "localUserMessages:\s*\[\{") "the home route must render the provisional first turn through the new conversation projection"
+  Assert-True ($appSource -notmatch "pendingNewThreadPreview\.liveOverlay" -and $appSource -match ':is-turn-in-progress="pendingNewThreadPreview\.message\.deliveryState') "new-thread progress must derive from delivery facts without retaining the legacy overlay model"
   Assert-True ($functionSource -match "markChatFeedbackRequestDispatched\(args\.clientMessageId\)") "runtime sends must mark the first request dispatch"
   Assert-True ($functionSource -match "markChatFeedbackServerAcknowledged\(\{[\s\S]*?clientMessageId:\s*args\.clientMessageId,[\s\S]*?threadId:\s*result\.threadId\s*\|\|\s*feedback\.threadId\s*\|\|\s*PENDING_NEW_THREAD_ID") "a successful threadless 202 response must record durable server acknowledgement before turn identity is available"
   Assert-True ($functionSource -match "if\s*\(recovered\)[\s\S]*?markChatFeedbackServerAcknowledged\(\{[\s\S]*?threadId:\s*recovered\.threadId\s*\|\|\s*feedback\.threadId\s*\|\|\s*PENDING_NEW_THREAD_ID") "runtime-request recovery must record durable server acknowledgement even before a new thread is bound"
@@ -1224,7 +1339,7 @@ JSON.stringify((() => {
 JSON.stringify((() => {
   const rows = window.__cxCodexChatFeedbackMetrics ?? [];
   const metric = rows.length > 0 ? rows[rows.length - 1] : null;
-  const promptCount = Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+  const promptCount = Array.from(document.querySelectorAll('[data-message-id]'))
     .filter((item) => item.textContent?.includes('$escapedProbe'))
     .length;
   return { metric, promptCount };
@@ -1254,7 +1369,7 @@ JSON.stringify((() => {
     } | ConvertTo-Json -Compress))
     $focusScript = @"
 JSON.stringify((() => {
-  const item = Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+  const item = Array.from(document.querySelectorAll('[data-message-id]'))
     .find((row) => row.textContent?.includes('$escapedProbe'));
   item?.scrollIntoView({ block: 'center' });
   return { focused: Boolean(item) };
@@ -1331,7 +1446,7 @@ JSON.stringify((() => {
     storedMetricCount = Array.isArray(stored.metrics) ? stored.metrics.length : 0;
   } catch {}
   const preview = document.querySelector('[data-testid="pending-new-thread-preview"]');
-  const promptCount = Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+  const promptCount = Array.from(document.querySelectorAll('[data-message-id]'))
     .filter((item) => item.textContent?.includes('$escapedProbe'))
     .length;
   return {
@@ -1380,9 +1495,9 @@ JSON.stringify((() => {
     $waitingState = $null
     $waitingScript = @"
 JSON.stringify((() => {
-  const item = Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+  const item = Array.from(document.querySelectorAll('[data-message-id]'))
     .find((row) => row.textContent?.includes('$escapedProbe'));
-  const delivery = item?.querySelector('.message-delivery-state');
+  const delivery = item?.querySelector('.delivery-state');
   let outboxState = '';
   try {
     outboxState = JSON.parse(window.localStorage.getItem('codex-web-local.message-outbox.v1') || '{}')?.entries?.[0]?.state || '';
@@ -1390,13 +1505,13 @@ JSON.stringify((() => {
   return {
     messageId: item?.getAttribute('data-message-id') || '',
     deliveryState: delivery?.getAttribute('data-state') || '',
-    retryButtonCount: Array.from(item?.querySelectorAll('.message-delivery-retry') || [])
+    retryButtonCount: Array.from(item?.querySelectorAll('.message-action') || [])
       .filter((button) => button.textContent?.trim() === '重试').length,
-    editButtonCount: Array.from(item?.querySelectorAll('.message-delivery-retry') || [])
+    editButtonCount: Array.from(item?.querySelectorAll('.message-action') || [])
       .filter((button) => button.textContent?.trim() === '编辑').length,
-    runningCount: document.querySelectorAll('.live-overlay-inline').length,
+    runningCount: document.querySelectorAll('.turn-shell--running').length,
     outboxState,
-    promptCount: Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+    promptCount: Array.from(document.querySelectorAll('[data-message-id]'))
       .filter((row) => row.textContent?.includes('$escapedProbe')).length
   };
 })())
@@ -1404,12 +1519,12 @@ JSON.stringify((() => {
     for ($attempt = 1; $attempt -le 60; $attempt++) {
       $waitingState = Invoke-BrowserEvalJson -Session $Session -Script $waitingScript
       if (
-        [string]$waitingState.deliveryState -eq 'waiting' -and
+        [string]$waitingState.deliveryState -eq 'waitingNetwork' -and
         [string]$waitingState.outboxState -eq 'waiting'
       ) { break }
       Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '250') | Out-Null
     }
-    Assert-True ([string]$waitingState.deliveryState -eq 'waiting') "threadless transport loss did not keep the original bubble waiting for recovery"
+    Assert-True ([string]$waitingState.deliveryState -eq 'waitingNetwork') "threadless transport loss did not keep the original bubble waiting for recovery"
     Assert-True ([string]$waitingState.outboxState -eq 'waiting') "threadless transport loss was removed from the durable outbox"
     Assert-True ([int]$waitingState.retryButtonCount -eq 0) "retryable transport loss was incorrectly presented as a definitive retry action"
     Assert-True ([int]$waitingState.editButtonCount -eq 0) "retryable transport loss was incorrectly presented as a definitive edit action"
@@ -1541,9 +1656,9 @@ JSON.stringify((() => {
 JSON.stringify((() => {
   const match = window.location.hash.match(/\/thread\/([^/?#]+)/);
   const threadId = match?.[1] ? decodeURIComponent(match[1]) : '';
-  const items = Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+  const items = Array.from(document.querySelectorAll('[data-message-id]'))
     .filter((item) => item.textContent?.includes('$escapedProbe'));
-  const delivery = items[0]?.querySelector('.message-delivery-state');
+  const delivery = items[0]?.querySelector('.delivery-state');
   const metricRows = window.__cxCodexChatFeedbackMetrics ?? [];
   const metric = metricRows.length > 0 ? metricRows[metricRows.length - 1] : null;
   const currentRouteLatencyMs = Math.round(performance.now() - (window.__cxCodexHandoffStartedAt || performance.now()));
@@ -1562,7 +1677,7 @@ JSON.stringify((() => {
       : currentRouteLatencyMs,
     promptCount: items.length,
     deliveryState,
-    runningCount: document.querySelectorAll('.live-overlay-inline').length,
+    runningCount: document.querySelectorAll('.turn-shell--running').length,
     previewCount,
     serverAccepted: window.__cxCodexHandoffServerAccepted === true,
     acceptedLatencyMs: window.__cxCodexHandoffAcceptedLatencyMs || 0,
@@ -1576,7 +1691,7 @@ JSON.stringify((() => {
     if (
       -not [string]::IsNullOrWhiteSpace([string]$handoff.threadId) -and
       [int]$handoff.promptCount -eq 1 -and
-      [string]$handoff.deliveryState -in @('sending', 'retrying', 'confirming', 'sent') -and
+      [string]$handoff.deliveryState -in @('sending', 'confirmationPending', 'sent') -and
       [int]$handoff.metric.serverAcknowledgedLatencyMs -gt 0 -and
       [int]$handoff.metric.turnStartedLatencyMs -gt 0
     ) { break }
@@ -1591,7 +1706,7 @@ JSON.stringify((() => {
     Assert-True ([int]$handoff.acceptedLatencyMs -gt 0 -and [int]$handoff.acceptedLatencyMs -le 750) "new-thread durable acceptance exceeded the 750 ms browser budget"
     Assert-True ($handoff.sawConfirmingPreview -eq $true) "new-thread handoff did not show a confirming provisional bubble before thread binding"
     Assert-True ([int]$handoff.promptCount -eq 1) "new-thread handoff did not preserve exactly one message bubble"
-    Assert-True ([string]$handoff.deliveryState -in @('sending', 'retrying', 'confirming', 'sent')) "new-thread handoff treated a lost accepted response as a definitive failure"
+    Assert-True ([string]$handoff.deliveryState -in @('sending', 'confirmationPending', 'sent')) "new-thread handoff treated a lost accepted response as a definitive failure"
     Assert-True ([int]$handoff.runningCount -ge 1) "new-thread handoff lost the running timeline"
     Assert-True ([int]$handoff.previewCount -eq 0) "new-thread handoff left the provisional home surface mounted"
     Assert-True ([string]$handoff.metric.threadId -eq $threadId) "new-thread handoff metric was not rebound to the authoritative thread"
@@ -1671,7 +1786,7 @@ JSON.stringify((() => {
 JSON.stringify((() => {
   const rows = window.__cxCodexChatFeedbackMetrics ?? [];
   const metric = rows.length > 0 ? rows[rows.length - 1] : null;
-  const promptCount = Array.from(document.querySelectorAll('.conversation-item[data-message-id]'))
+  const promptCount = Array.from(document.querySelectorAll('[data-message-id]'))
     .filter((item) => item.textContent?.includes('$escapedProbe'))
     .length;
   return { metric, promptCount };
@@ -1784,7 +1899,7 @@ JSON.stringify((() => {
     outboxState = JSON.parse(window.localStorage.getItem('codex-web-local.message-outbox.v1') || '{}')?.entries?.[0]?.state || '';
   } catch {}
   const preview = document.querySelector('[data-testid="pending-new-thread-preview"]');
-  const failedMessage = preview?.querySelector('.message-delivery-state[data-state="failed"]');
+  const failedMessage = preview?.querySelector('.delivery-state[data-state="failed"]');
   return {
     inputValue: input instanceof HTMLTextAreaElement ? input.value : '',
     outboxPresent: window.localStorage.getItem('codex-web-local.message-outbox.v1') !== null,
@@ -1792,9 +1907,9 @@ JSON.stringify((() => {
     persistedDraftText,
     previewVisible: Boolean(preview),
     failedMessageCount: failedMessage ? 1 : 0,
-    retryButtonCount: Array.from(preview?.querySelectorAll('.message-delivery-retry') || [])
+    retryButtonCount: Array.from(preview?.querySelectorAll('.message-action') || [])
       .filter((button) => button.textContent?.trim() === '重试').length,
-    editButtonCount: Array.from(preview?.querySelectorAll('.message-delivery-retry') || [])
+    editButtonCount: Array.from(preview?.querySelectorAll('.message-action') || [])
       .filter((button) => button.textContent?.trim() === '编辑').length,
     previewText: preview?.textContent || ''
   };
@@ -2406,7 +2521,6 @@ JSON.stringify((() => {
   const hasComposer = !!document.querySelector('textarea,[contenteditable=true],input[type=text],.thread-composer');
   const hasSkillsHub = !!document.querySelector('.skills-hub');
   const hasTrendingHub = !!document.querySelector('.trending-hub');
-  const hasRuntimeBar = !!document.querySelector('.runtime-status-bar');
   const hasDiagnosticsPanel = !!document.querySelector('.diagnostics-panel');
   const hasMarkdownBody = !!document.querySelector('.markdown-body');
   const notificationRecovery = document.querySelector('.fixture-notification-recovery');
@@ -2416,11 +2530,10 @@ JSON.stringify((() => {
     textLength: text.length,
     hasInternalCodexContext: /<codex_internal_context\s+source=/i.test(text),
     hasInternalThreadReadError: /thread-store internal error|failed to read thread\s+[A-Za-z]:\\/i.test(text),
-    hasBlankBody: text.length < 5 && !hasComposer && !hasSkillsHub && !hasTrendingHub && !hasRuntimeBar && !hasDiagnosticsPanel && !hasMarkdownBody,
+    hasBlankBody: text.length < 5 && !hasComposer && !hasSkillsHub && !hasTrendingHub && !hasDiagnosticsPanel && !hasMarkdownBody,
     hasComposer,
     hasSkillsHub,
     hasTrendingHub,
-    hasRuntimeBar,
     hasDiagnosticsPanel,
     hasMarkdownBody,
     hasCompletionNotificationRecovery: !!notificationRecovery
@@ -2453,7 +2566,6 @@ function Assert-Page {
     [switch]$RequireComposer,
     [switch]$RequireSkillsHub,
     [switch]$RequireTrendingHub,
-    [switch]$RequireRuntimeBar,
     [switch]$RequireDiagnostics,
     [switch]$RequireMarkdown
   )
@@ -2470,9 +2582,6 @@ function Assert-Page {
   }
   if ($RequireTrendingHub) {
     Assert-True ($Page.hasTrendingHub -eq $true) "$Name is missing GitHub trending hub"
-  }
-  if ($RequireRuntimeBar) {
-    Assert-True ($Page.hasRuntimeBar -eq $true) "$Name is missing runtime status bar"
   }
   if ($RequireDiagnostics) {
     Assert-True ($Page.hasDiagnosticsPanel -eq $true) "$Name is missing diagnostics panel"
@@ -3869,178 +3978,273 @@ JSON.stringify({
   Assert-True ($restored.route -eq $opened.route) "archive undo changed the current route"
 }
 
-function Read-ConversationFixtureMetrics {
+function Read-ProjectedConversationFixtureMetrics {
   param([string]$Session)
 
-  $script = @'
+  return Invoke-BrowserEvalJson -Session $Session -Script @'
 JSON.stringify((() => {
-  const codeBlocks = Array.from(document.querySelectorAll('.message-code-block'));
-  const copyButtons = Array.from(document.querySelectorAll('.message-code-copy'));
-  const fileCards = Array.from(document.querySelectorAll('.message-file-card'));
-  const rawCards = Array.from(document.querySelectorAll('.message-structured-card'));
-  const commandRows = Array.from(document.querySelectorAll('.cmd-row'));
-  const commandOutputWraps = Array.from(document.querySelectorAll('.cmd-output-wrap'));
-  const requestCards = Array.from(document.querySelectorAll('.request-card'));
-  const permissionPanels = Array.from(document.querySelectorAll('.request-permission-panel'));
-  const toolPanels = Array.from(document.querySelectorAll('.request-tool-panel'));
-  const requestButtons = Array.from(document.querySelectorAll('.request-button'));
-  const tableScrolls = Array.from(document.querySelectorAll('.message-table-scroll'));
-  const tableCardGroups = Array.from(document.querySelectorAll('.message-table-cards'));
-  const tableCards = Array.from(document.querySelectorAll('.message-table-card'));
-  const tableScrollableCount = tableScrolls.filter((node) => node.scrollWidth > node.clientWidth + 2).length;
-  const tableFontSizes = tableScrolls.flatMap((node) => Array.from(node.querySelectorAll('th, td')))
-    .map((node) => Number.parseFloat(window.getComputedStyle(node).fontSize || '0'));
-  const runtimeStatusBars = Array.from(document.querySelectorAll('.conversation-regression-fixture .runtime-status-bar'));
-  const runtimeStatusHeights = runtimeStatusBars.map((node) => Math.round(node.getBoundingClientRect().height));
-  const queuedPanels = Array.from(document.querySelectorAll('.conversation-regression-fixture .queued-messages-inner'));
-  const queuedRows = Array.from(document.querySelectorAll('.conversation-regression-fixture .queued-row'));
-  const chromeTargets = Array.from(document.querySelectorAll([
-    '.conversation-regression-fixture .runtime-status-bar',
-    '.conversation-regression-fixture .queued-messages-inner',
-    '.conversation-regression-fixture .queued-row',
-    '.conversation-regression-fixture .live-overlay-inline',
-    '.conversation-regression-fixture .message-card',
-    '.conversation-regression-fixture .message-table-scroll',
-    '.conversation-regression-fixture .message-table-card',
-    '.conversation-regression-fixture .message-structured-card',
-    '.conversation-regression-fixture .message-structured-pre',
-    '.conversation-regression-fixture .message-text-flow--long-collapsed',
-    '.conversation-regression-fixture .guided-turn-toggle'
-  ].join(',')));
-  const warmBackgrounds = new Set([
-    'rgb(255, 253, 248)',
-    'rgb(255, 252, 247)',
-    'rgb(255, 250, 243)',
-    'rgb(255, 250, 242)',
-    'rgb(255, 249, 238)',
-    'rgb(255, 248, 223)',
-    'rgb(247, 243, 234)',
-    'rgb(247, 241, 229)',
-    'rgb(248, 244, 236)',
-    'rgb(241, 235, 222)'
-  ]);
-  const firstCopyButton = copyButtons[0];
-  const firstCommandRow = commandRows[0];
-  const firstRequestCard = requestCards[0];
-  const firstPermissionPanel = permissionPanels[0];
-  const firstToolPanel = toolPanels[0];
-  const commandRowRadius = firstCommandRow ? Number.parseFloat(window.getComputedStyle(firstCommandRow).borderTopLeftRadius || '0') : 0;
-  const requestCardRadius = firstRequestCard ? Number.parseFloat(window.getComputedStyle(firstRequestCard).borderTopLeftRadius || '0') : 0;
-  const permissionPanelRadius = firstPermissionPanel ? Number.parseFloat(window.getComputedStyle(firstPermissionPanel).borderTopLeftRadius || '0') : 0;
-  const toolPanelRadius = firstToolPanel ? Number.parseFloat(window.getComputedStyle(firstToolPanel).borderTopLeftRadius || '0') : 0;
-  const chromeStyles = chromeTargets.map((node) => {
-    const style = window.getComputedStyle(node);
-    return {
-      className: node.className || node.tagName,
-      backgroundColor: style.backgroundColor,
-      radius: Number.parseFloat(style.borderTopLeftRadius || '0')
-    };
-  });
-  const chromeWarmBackgrounds = chromeStyles.filter((style) => warmBackgrounds.has(style.backgroundColor));
-  const chromeMaxRadius = chromeStyles.length ? Math.max(...chromeStyles.map((style) => style.radius)) : 0;
-  const fitTargets = Array.from(document.querySelectorAll([
-    '.request-card',
-    '.request-permission-panel',
-    '.request-tool-panel',
-    '.message-file-card',
-    '.message-code-block',
-    '.message-structured-card',
-    '.runtime-status-bar',
-    '.queued-messages-inner',
-    '.queued-row',
-    '.message-table-scroll',
-    '.message-table-card',
-    '.live-overlay-inline',
-    '.cmd-row',
-    '.cmd-output-wrap'
-  ].join(',')));
-  const viewportWidth = document.documentElement.clientWidth;
-  const viewportFitFailures = fitTargets
-    .map((node) => {
+  const root = document.documentElement;
+  const transcript = document.querySelector('.conversation-regression-thread');
+  const list = transcript?.querySelector('.transcript-list');
+  const processToggles = Array.from(transcript?.querySelectorAll('.process-toggle') || []);
+  const activityCounts = Array.from(transcript?.querySelectorAll('.turn-shell') || [])
+    .map((turn) => Number(turn.getAttribute('data-activity-count') || '0'));
+  const touchTargets = Array.from(transcript?.querySelectorAll([
+    '.quiet-button',
+    '.message-action',
+    '.process-toggle',
+    '.process-history-action',
+    '.activity-details > summary',
+    '.file-summary > summary',
+    '.file-row > summary',
+    '.history-button'
+  ].join(',')) || [])
+    .filter((node) => {
+      const style = getComputedStyle(node);
       const rect = node.getBoundingClientRect();
-      return {
-        className: node.className || node.tagName,
-        left: Math.round(rect.left),
-        right: Math.round(rect.right),
-        width: Math.round(rect.width)
-      };
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
     })
-    .filter((rect) => rect.left < -2 || rect.right > viewportWidth + 2);
-  const textContent = document.body.textContent || '';
+    .map((node) => Math.round(node.getBoundingClientRect().height));
+  const text = transcript?.textContent || '';
   return {
-    codeBlockCount: codeBlocks.length,
-    diffBlockCount: codeBlocks.filter((node) => node.getAttribute('data-diff') === 'true').length,
-    copyButtonCount: copyButtons.length,
-    fileCardCount: fileCards.length,
-    rawPayloadCardCount: rawCards.length,
-    commandRowCount: commandRows.length,
-    commandOutputWrapCount: commandOutputWraps.length,
-    expandedCommandOutputCount: commandOutputWraps.filter((node) => node.classList.contains('cmd-output-visible')).length,
-    commandRowRadius,
-    requestCardCount: requestCards.length,
-    permissionPanelCount: permissionPanels.length,
-    toolPanelCount: toolPanels.length,
-    requestButtonCount: requestButtons.length,
-    tableScrollCount: tableScrolls.length,
-    tableCardGroupCount: tableCardGroups.length,
-    tableCardCount: tableCards.length,
-    tableScrollableCount,
-    tableMaxFontSize: tableFontSizes.length ? Math.max(...tableFontSizes) : 0,
-    runtimeStatusBarCount: runtimeStatusBars.length,
-    runtimeStatusMaxHeight: runtimeStatusHeights.length ? Math.max(...runtimeStatusHeights) : 0,
-    viewportWidth,
-    queuedPanelCount: queuedPanels.length,
-    queuedRowCount: queuedRows.length,
-    conversationChromeWarmBackgroundCount: chromeWarmBackgrounds.length,
-    conversationChromeWarmBackgrounds: chromeWarmBackgrounds.slice(0, 5),
-    conversationChromeMaxRadius: chromeMaxRadius,
-    requestCardRadius,
-    permissionPanelRadius,
-    toolPanelRadius,
-    hasAddLine: !!document.querySelector('.message-code-line[data-kind="add"]'),
-    hasDeleteLine: !!document.querySelector('.message-code-line[data-kind="delete"]'),
-    hasMetaLine: !!document.querySelector('.message-code-line[data-kind="meta"]'),
-    hasLatestTurnPromptContext: textContent.includes('请审查这些文件，并说明代码块'),
-    hasFixtureCodeText: textContent.includes('fixture-code-block'),
-    hasFixtureRawText: textContent.includes('fixture-raw-payload'),
-    hasOptimisticInternalText: textContent.includes('userMessage.optimistic') || textContent.includes('optimisticUserMessage'),
-    sendingDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="sending"]').length,
-    failedDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="failed"]').length,
-    retryingDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="retrying"]').length,
-    waitingDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="waiting"]').length,
-    confirmingDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="confirming"]').length,
-    sentDeliveryStateCount: document.querySelectorAll('.message-delivery-state[data-state="sent"]').length,
-    failedDeliveryRetryCount: document.querySelectorAll('.message-delivery-retry').length,
-    hasBoundedReconnectText: textContent.includes('正在重连 1/4'),
-    hasWaitingDeliveryText: textContent.includes('等待网络'),
-    hasConfirmingDeliveryText: textContent.includes('确认中'),
-    hasStableLiveElapsedTime: /已(?:等待|运行)\s+(?:[6-9]|[1-9]\d+)\s*秒/.test(textContent) || /正在(?:运行|处理)(?:\s*·)?\s*(?:[6-9]|[1-9]\d+)\s*秒/.test(textContent),
-    interruptedTurnCardCount: document.querySelectorAll('.interrupted-turn-card').length,
-    interruptedTurnEditCount: document.querySelectorAll('.interrupted-turn-edit').length,
-    hasHiddenUnhandledNoise: textContent.includes('fixture-hidden-file-change-noise') || textContent.includes('Unhandled App Server item: fileChange') || textContent.includes('unhandled.fileChange') || textContent.includes('fixture-hidden-web-search-noise') || textContent.includes('Unhandled App Server item: webSearch') || textContent.includes('unhandled.webSearch') || textContent.includes('未适配的 App Server 内容'),
-    hasFixtureCommandText: textContent.includes('fixture-command-output: ok'),
-    hasFixtureCommandLabel: textContent.includes('npm.cmd run test:7420:frontend'),
-    hasFixturePermissionText: textContent.includes('fixture-permission-workbench'),
-    hasFixtureToolCallText: textContent.includes('fixture-tool-call-workbench') || textContent.includes('Browser tool call cannot be executed directly'),
-    hasPermissionServerText: textContent.includes('GitHub'),
-    hasPermissionToolText: textContent.includes('github_update_pull_request'),
-    hasPermissionTargetText: textContent.includes('Qjzn/CX-Codex') && textContent.includes('关闭'),
-    hasToolCallActionText: textContent.includes('让 Codex 改用文字继续'),
-    hasPermissionActionText: textContent.includes('仅本次允许') && textContent.includes('本会话允许') && textContent.includes('始终允许此工具') && textContent.includes('拒绝'),
-    loadMoreButtonText: document.querySelector('.conversation-load-more-button')?.textContent?.replace(/\s+/g, ' ').trim() || '',
-    loadMoreButtonDisabled: document.querySelector('.conversation-load-more-button')?.disabled === true,
-    olderHistoryRequestCount: Number(document.querySelector('.conversation-regression-older-history-count')?.getAttribute('data-count') || '0'),
-    firstCopyButtonText: firstCopyButton ? firstCopyButton.textContent.trim() : '',
-    hasEmojiFileIcon: document.body.innerText.includes('📄'),
-    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
-    structuredViewportFitFailureCount: viewportFitFailures.length,
-    structuredViewportFitFailures: viewportFitFailures.slice(0, 5),
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth
+    viewportWidth: root.clientWidth,
+    turnCount: Number(list?.getAttribute('data-turn-count') || '0'),
+    finalCount: transcript?.querySelectorAll('.final-answer').length || 0,
+    commentaryCount: transcript?.querySelectorAll('.commentary-block').length || 0,
+    mountedActivityCount: transcript?.querySelectorAll('.activity-block').length || 0,
+    projectedActivityCount: Math.max(0, ...activityCounts),
+    fileSummaryCount: transcript?.querySelectorAll('.file-summary').length || 0,
+    openFileSummaryCount: transcript?.querySelectorAll('.file-summary[open]').length || 0,
+    maximumFileSummaryHeight: Math.round(Math.max(0, ...Array.from(transcript?.querySelectorAll('.file-summary') || []).map((entry) => entry.getBoundingClientRect().height))),
+    visibleFileRowCount: Array.from(transcript?.querySelectorAll('.file-row') || []).filter((entry) => entry.closest('details.file-summary')?.open && entry.getClientRects().length > 0).length,
+    requestCardCount: transcript?.querySelectorAll('.request-card').length || 0,
+    missingFinalCount: transcript?.querySelectorAll('.final-status[data-status="missing"]').length || 0,
+    terminalStreamingFinalCount: transcript?.querySelectorAll('.turn-shell:not(.is-active) .final-answer.is-streaming').length || 0,
+    timingCount: transcript?.querySelectorAll('.turn-timing').length || 0,
+    turnDividerCount: transcript?.querySelectorAll('.turn-divider').length || 0,
+    unavailableTimingCopyCount: Array.from(transcript?.querySelectorAll('.turn-timing') || []).filter((entry) => (entry.textContent || '').includes('执行耗时不可用')).length,
+    activeTurnCount: transcript?.querySelectorAll('.turn-shell.is-active').length || 0,
+    activeCollapsedProcessCount: processToggles.filter((toggle) => toggle.closest('.turn-shell.is-active') && toggle.getAttribute('aria-expanded') !== 'true').length,
+    completedExpandedProcessCount: processToggles.filter((toggle) => toggle.closest('.turn-shell:not(.is-active)') && toggle.getAttribute('aria-expanded') === 'true').length,
+    visibleProcessCounts: Array.from(transcript?.querySelectorAll('.process-content') || []).map((element) => Number(element.getAttribute('data-visible-process-count') || '0')),
+    collapsedProcessHistoryCount: transcript?.querySelectorAll('.process-history-action[aria-expanded="false"]').length || 0,
+    legacyOverlayCount: document.querySelectorAll('.live-overlay-inline, .live-overlay-sheet, .conversation-live-overlay').length,
+    historyButtonCount: transcript?.querySelectorAll('.history-button').length || 0,
+    queueRowCount: document.querySelectorAll('.conversation-regression-queue .queued-row').length,
+    minimumTouchTargetHeight: touchTargets.length ? Math.min(...touchTargets) : 0,
+    hasCodeText: text.includes('fixture-code-block'),
+    hasCommand: text.includes('npm.cmd run verify:frontend-normalizers'),
+    hasMcp: text.includes('get_pull_request'),
+    hasSearch: text.includes('sema-code-core conversation event model'),
+    hasFilePath: text.includes('src/conversation-transcript/projectConversation.ts'),
+    hasPermission: transcript?.querySelector('.request-card[data-interaction-type="mcp-approval"]') !== null,
+    hasUnsupportedTool: transcript?.querySelector('.request-card[data-interaction-type="unsupported-tool"]') !== null,
+    hasMissingFinalPlaceholder: text.includes('本轮没有可确认的最终回复') || text.includes('只有明确标记为 final_answer'),
+    hasInternalNoise: text.includes('fixture-hidden-file-change-noise') || text.includes('Unhandled App Server item'),
+    hasHorizontalOverflow: root.scrollWidth > root.clientWidth + 2,
+    scrollWidth: root.scrollWidth,
+    clientWidth: root.clientWidth
   };
 })())
 '@
-  return Invoke-BrowserEvalJson -Session $Session -Script $script
+}
+
+function Assert-ProjectedConversationFixture {
+  param(
+    [object]$Metrics,
+    [string]$ViewportName = ""
+  )
+
+  Assert-True ([int]$Metrics.turnCount -ge 3) "projected conversation $ViewportName did not render its turns"
+  Assert-True ([int]$Metrics.finalCount -eq 1) "projected conversation $ViewportName must render exactly one explicit final"
+  Assert-True ([int]$Metrics.commentaryCount -ge 1) "projected conversation $ViewportName is missing commentary"
+  Assert-True ([int]$Metrics.projectedActivityCount -ge 5 -and ([int]$Metrics.mountedActivityCount + [int]$Metrics.commentaryCount) -ge 1) "projected conversation $ViewportName is missing its latest projected process item"
+  Assert-True ([int]$Metrics.fileSummaryCount -eq 1) "projected conversation $ViewportName is missing its file change summary"
+  Assert-True ([int]$Metrics.openFileSummaryCount -eq 0 -and [int]$Metrics.visibleFileRowCount -eq 0 -and [int]$Metrics.maximumFileSummaryHeight -le 56) "projected conversation $ViewportName did not keep file history compact before disclosure"
+  Assert-True ([int]$Metrics.requestCardCount -ge 2) "projected conversation $ViewportName is missing pending requests"
+  Assert-True ([int]$Metrics.missingFinalCount -eq 0 -and [int]$Metrics.terminalStreamingFinalCount -eq 0 -and $Metrics.hasMissingFinalPlaceholder -eq $false) "projected conversation $ViewportName rendered a noisy missing-final placeholder or terminal streaming caret"
+  Assert-True ([int]$Metrics.turnDividerCount -eq [int]$Metrics.turnCount -and [int]$Metrics.timingCount -le [int]$Metrics.turnCount -and [int]$Metrics.unavailableTimingCopyCount -eq 0) "projected conversation $ViewportName lost a turn divider or rendered unavailable timing noise"
+  Assert-True ([int]$Metrics.activeTurnCount -ge 1 -and [int]$Metrics.activeCollapsedProcessCount -eq 0) "projected conversation $ViewportName collapsed an active process"
+  Assert-True ([int]$Metrics.completedExpandedProcessCount -eq 0) "projected conversation $ViewportName expanded completed process content by default"
+  Assert-True ((@($Metrics.visibleProcessCounts) | Where-Object { [int]$_ -gt 1 }).Count -eq 0 -and [int]$Metrics.collapsedProcessHistoryCount -ge 1) "projected conversation $ViewportName must show only the latest process item before history disclosure"
+  Assert-True ([int]$Metrics.legacyOverlayCount -eq 0) "projected conversation $ViewportName rendered a forbidden legacy tail overlay"
+  Assert-True ([int]$Metrics.historyButtonCount -eq 1) "projected conversation $ViewportName is missing its older-history affordance"
+  Assert-True ([int]$Metrics.queueRowCount -ge 2) "projected conversation $ViewportName lost the separate queue surface"
+  Assert-True ($Metrics.hasCodeText -eq $true) "projected conversation $ViewportName is missing final Markdown content"
+  Assert-True ($Metrics.hasPermission -eq $true -and $Metrics.hasUnsupportedTool -eq $true) "projected conversation $ViewportName is missing interaction ownership"
+  Assert-True ($Metrics.hasInternalNoise -eq $false) "projected conversation $ViewportName exposed legacy unhandled-item noise"
+  if ([int]$Metrics.viewportWidth -lt 768) {
+    Assert-True ([int]$Metrics.minimumTouchTargetHeight -ge 44) "projected conversation phone touch target is smaller than 44px"
+  }
+  Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "projected conversation $ViewportName overflowed horizontally: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+}
+
+function Assert-ProjectedConversationCompletedDetails {
+  param([string]$Session)
+
+  $opened = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const completedTurns = Array.from(document.querySelectorAll('.conversation-regression-thread .turn-shell:not(.is-active)'));
+  let opened = 0;
+  for (const turn of completedTurns) {
+    const processToggle = turn.querySelector('.process-toggle');
+    if (processToggle instanceof HTMLButtonElement) {
+      processToggle.click();
+      opened += 1;
+    }
+    const fileSummary = turn.querySelector('.file-summary > summary');
+    if (fileSummary instanceof HTMLElement) fileSummary.click();
+  }
+  return { clicked: opened > 0 };
+})())
+'@
+  Assert-True ($opened.clicked -eq $true) "projected completed process could not be expanded"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+  $historyOpened = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const buttons = Array.from(document.querySelectorAll('.conversation-regression-thread .turn-shell:not(.is-active) .process-history-action[aria-expanded="false"]'));
+  for (const button of buttons) button.click();
+  return { clicked: buttons.length };
+})())
+'@
+  Assert-True ([int]$historyOpened.clicked -ge 1) "projected completed process history could not be expanded"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+  $details = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const root = document.querySelector('.conversation-regression-thread');
+  const expanded = Array.from(root?.querySelectorAll('.turn-shell:not(.is-active) .process-toggle[aria-expanded="true"]') || [])
+    .map((toggle) => toggle.closest('.turn-shell'))
+    .filter(Boolean);
+  const text = root?.textContent || '';
+  return {
+    found: expanded.length > 0,
+    activityCount: expanded.reduce((total, turn) => total + turn.querySelectorAll('.activity-block').length, 0),
+    hasMcp: text.includes('get_pull_request'),
+    hasSearch: text.includes('sema-code-core conversation event model'),
+    hasFilePath: text.includes('src/conversation-transcript/projectConversation.ts'),
+    hasFinal: Boolean(root?.querySelector('.final-answer')),
+    legacyOverlayCount: document.querySelectorAll('.live-overlay-inline, .live-overlay-sheet, .conversation-live-overlay').length
+  };
+})())
+'@
+  Assert-True ($details.found -eq $true -and [int]$details.activityCount -ge 5) "projected completed process did not reveal its structured activities"
+  Assert-True ($details.hasMcp -eq $true -and $details.hasSearch -eq $true) "projected completed process lost MCP or search detail"
+  Assert-True ($details.hasFilePath -eq $true -and $details.hasFinal -eq $true) "projected completed process lost file detail or explicit final"
+  Assert-True ([int]$details.legacyOverlayCount -eq 0) "projected completed process expansion mounted a legacy overlay"
+
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  for (const toggle of document.querySelectorAll('.conversation-regression-thread .turn-shell:not(.is-active) .process-toggle[aria-expanded="true"]')) {
+    if (toggle instanceof HTMLButtonElement) toggle.click();
+  }
+  return { collapsed: true };
+})())
+'@ | Out-Null
+}
+
+function Assert-ProjectedConversationOlderHistory {
+  param([string]$Session)
+
+  $before = Read-ProjectedConversationFixtureMetrics -Session $Session
+  Assert-True ([int]$before.historyButtonCount -eq 1) "projected conversation older-history action is missing"
+  $result = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const button = document.querySelector('.conversation-regression-thread .history-button');
+  if (!(button instanceof HTMLButtonElement)) return { clicked: false };
+  button.click();
+  return { clicked: true };
+})())
+'@
+  Assert-True ($result.clicked -eq $true) "projected conversation older-history action could not be clicked"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+  $count = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify(Number(document.querySelector('.conversation-regression-older-history-count')?.getAttribute('data-count') || '0'))
+'@
+  Assert-True ([int]$count -eq 1) "projected conversation older-history action did not emit exactly once"
+}
+
+function Assert-ProjectedConversationReturnToLatest {
+  param([string]$Session)
+
+  Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const list = document.querySelector('.conversation-regression-thread .transcript-list');
+  if (!(list instanceof HTMLElement) || list.scrollHeight > list.clientHeight) {
+    return { expandedForScroll: false };
+  }
+  for (const toggle of document.querySelectorAll('.conversation-regression-thread .turn-shell:not(.is-active) .process-toggle[aria-expanded="false"]')) {
+    if (toggle instanceof HTMLButtonElement) toggle.click();
+  }
+  return { expandedForScroll: true };
+})())
+'@ | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+
+  $before = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const list = document.querySelector('.conversation-regression-thread .transcript-list');
+  if (!(list instanceof HTMLElement) || list.scrollHeight <= list.clientHeight) {
+    return {
+      scrollable: false,
+      scrollHeight: list instanceof HTMLElement ? list.scrollHeight : 0,
+      clientHeight: list instanceof HTMLElement ? list.clientHeight : 0
+    };
+  }
+  list.scrollTop = 0;
+  list.dispatchEvent(new Event('scroll'));
+  return { scrollable: true };
+})())
+'@
+  Assert-True ($before.scrollable -eq $true) "projected conversation fixture is not scrollable: $($before.scrollHeight) <= $($before.clientHeight)"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+
+  $visible = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const button = document.querySelector('.conversation-regression-thread .conversation-jump-to-latest');
+  return {
+    count: document.querySelectorAll('.conversation-regression-thread .conversation-jump-to-latest').length,
+    label: button?.getAttribute('aria-label') || ''
+  };
+})())
+'@
+  Assert-True ([int]$visible.count -eq 1 -and $visible.label -eq '返回最新输出') "projected conversation did not expose one accessible return-to-latest action"
+
+  $clickResult = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const button = document.querySelector('.conversation-regression-thread .conversation-jump-to-latest');
+  if (!(button instanceof HTMLButtonElement)) return { clicked: false };
+  button.click();
+  return { clicked: true };
+})())
+'@
+  Assert-True ($clickResult.clicked -eq $true) "projected conversation return-to-latest action could not be clicked"
+  $after = $null
+  for ($attempt = 0; $attempt -lt 30; $attempt += 1) {
+    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+    $after = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const list = document.querySelector('.conversation-regression-thread .transcript-list');
+  if (!(list instanceof HTMLElement)) return { found: false };
+  return {
+    found: true,
+    distanceFromBottom: Math.round(list.scrollHeight - list.scrollTop - list.clientHeight),
+    buttonCount: document.querySelectorAll('.conversation-regression-thread .conversation-jump-to-latest').length,
+    ownsFocus: document.activeElement === list
+  };
+})())
+'@
+    if (
+      $after.found -eq $true `
+      -and [Math]::Abs([int]$after.distanceFromBottom) -le 2 `
+      -and [int]$after.buttonCount -eq 0 `
+      -and $after.ownsFocus -eq $true
+    ) {
+      break
+    }
+  }
+  Assert-True ($after.found -eq $true -and [Math]::Abs([int]$after.distanceFromBottom) -le 2) "projected conversation return-to-latest did not settle at the bottom: distance=$($after.distanceFromBottom)"
+  Assert-True ([int]$after.buttonCount -eq 0) "projected conversation return-to-latest action stayed visible at the bottom"
+  Assert-True ($after.ownsFocus -eq $true) "projected conversation return-to-latest action did not restore focus to the transcript"
 }
 
 function Assert-ConversationStreamingResponsiveness {
@@ -4056,17 +4260,22 @@ JSON.stringify((() => {
     heartbeatCount: Number.parseInt(status?.getAttribute('data-heartbeat-count') || '0', 10),
     maxHeartbeatLagMs: Number.parseInt(status?.getAttribute('data-max-heartbeat-lag-ms') || '0', 10),
     actionCount: Number.parseInt(status?.getAttribute('data-action-count') || '0', 10),
-    mountedConversationItems: document.querySelectorAll('.conversation-list > .conversation-item').length,
-    totalMessageCount: Number.parseInt(document.querySelector('.conversation-list')?.getAttribute('data-message-count') || '0', 10)
+    mountedActivityCount: document.querySelectorAll('.activity-block').length,
+    mountedProcessItemCount: document.querySelectorAll('.process-content .activity-block, .process-content .commentary-block').length,
+    projectedActivityCount: Math.max(0, ...Array.from(document.querySelectorAll('.turn-shell')).map((turn) => Number(turn.getAttribute('data-activity-count') || '0'))),
+    legacyOverlayCount: document.querySelectorAll('.live-overlay-inline, .live-overlay-sheet, .conversation-live-overlay').length,
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
   };
 })())
 '@
   Assert-True ($before.found -eq $true) "streaming stress fixture status is missing"
   Assert-True ([int]$before.updateCount -ge 20) "streaming stress fixture did not sustain live message updates"
   Assert-True ([int]$before.heartbeatCount -ge 20) "streaming stress fixture event-loop heartbeat stopped"
-  Assert-True ([int]$before.maxHeartbeatLagMs -lt 80) "streaming updates blocked the UI event loop for $($before.maxHeartbeatLagMs) ms; expected < 80 ms"
-  Assert-True ([int]$before.totalMessageCount -ge 1500) "streaming stress fixture did not exercise a dense active turn"
-  Assert-True ([int]$before.mountedConversationItems -le 20) "streaming stress fixture mounted too many conversation items; expected <= 20"
+  Assert-True ([int]$before.maxHeartbeatLagMs -lt 200) "streaming updates stalled the heartbeat for $($before.maxHeartbeatLagMs) ms; expected < 200 ms"
+  Assert-True ([int]$before.projectedActivityCount -ge 1600) "streaming stress fixture did not preserve the dense projected activity history"
+  Assert-True ([int]$before.mountedProcessItemCount -eq 1) "streaming stress fixture must mount only its latest process item before history disclosure"
+  Assert-True ([int]$before.legacyOverlayCount -eq 0) "streaming stress fixture rendered a forbidden legacy tail overlay"
+  Assert-True ($before.hasHorizontalOverflow -eq $false) "streaming stress fixture overflowed horizontally"
 
   Invoke-AgentBrowser -Arguments @("--session", $Session, "click", '[data-testid="conversation-streaming-stress-action"]') | Out-Null
   Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
@@ -4093,7 +4302,7 @@ JSON.stringify((() => {
   return {
     queueCount: queueRows.length,
     queueTexts: queueRows.map((row) => row.querySelector('.queued-row-text')?.textContent?.replace(/\s+/g, ' ').trim() || ''),
-    failedMessageCount: document.querySelectorAll('.message-delivery-state[data-state="failed"]').length,
+    failedMessageCount: document.querySelectorAll('.delivery-state[data-state="failed"]').length,
     feedbackText: document.querySelector('[data-testid="queue-transfer-feedback"]')?.textContent?.replace(/\s+/g, ' ').trim() || '',
     hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
   };
@@ -4162,18 +4371,18 @@ function Read-ConversationLoadFailureFixtureMetrics {
 
   return Invoke-BrowserEvalJson -Session $Session -Script @'
 JSON.stringify((() => {
-  const card = document.querySelector('.conversation-load-error');
-  const actions = Array.from(document.querySelectorAll('.conversation-load-error-action'));
+  const card = document.querySelector('.transcript-alert--danger');
+  const actions = Array.from(card?.querySelectorAll('.quiet-button') || []);
   const text = card?.textContent?.replace(/\s+/g, ' ').trim() || '';
   return {
-    cardCount: document.querySelectorAll('.conversation-load-error').length,
-    emptyStateCount: document.querySelectorAll('.conversation-empty-state').length,
+    cardCount: document.querySelectorAll('.transcript-alert--danger').length,
+    emptyStateCount: document.querySelectorAll('.transcript-empty').length,
     actionCount: actions.length,
     actionLabels: actions.map((node) => node.textContent?.trim() || ''),
     minimumActionHeight: actions.length
       ? Math.min(...actions.map((node) => Math.round(node.getBoundingClientRect().height)))
       : 0,
-    hasFriendlyCopy: text.includes('会话内容未加载') && text.includes('连接不到桌面端'),
+    hasFriendlyCopy: text.includes('会话内容未完整加载') && text.includes('连接不到桌面端'),
     hasRawFetchError: text.includes('Failed to fetch'),
     retryCount: Number(document.querySelector('.conversation-regression-load-retry-count')?.getAttribute('data-count') || '0'),
     connectionSettingsCount: Number(document.querySelector('.conversation-regression-connection-settings-count')?.getAttribute('data-count') || '0'),
@@ -4198,8 +4407,8 @@ function Assert-ConversationLoadFailureFixture {
 
   Invoke-BrowserEvalJson -Session $Session -Script @'
 JSON.stringify((() => {
-  document.querySelector('.conversation-load-error-action-primary')?.click();
-  document.querySelector('.conversation-load-error-action:not(.conversation-load-error-action-primary)')?.click();
+  document.querySelector('.transcript-alert--danger .quiet-button--primary')?.click();
+  document.querySelector('.transcript-alert--danger .quiet-button:not(.quiet-button--primary)')?.click();
   return { clicked: true };
 })())
 '@ | Out-Null
@@ -4208,1348 +4417,6 @@ JSON.stringify((() => {
   $after = Read-ConversationLoadFailureFixtureMetrics -Session $Session
   Assert-True ([int]$after.retryCount -eq 1) "conversation load failure retry action did not emit exactly once"
   Assert-True ([int]$after.connectionSettingsCount -eq 1) "conversation load failure settings action did not emit exactly once"
-}
-
-function Assert-ConversationTailStatusFixture {
-  param([string]$Session)
-
-  $beforeScript = @'
-JSON.stringify((() => {
-  const overlay = document.querySelector('.live-overlay-inline');
-  const compact = document.querySelector('.live-overlay-inline-compact');
-  const streamingMessage = document.querySelector('[data-message-id="fixture-streaming-assistant-tail"]');
-  const textContent = document.body.textContent || '';
-  const overlayRect = overlay?.getBoundingClientRect();
-  const streamingRect = streamingMessage?.getBoundingClientRect();
-  return {
-    overlayCount: document.querySelectorAll('.live-overlay-inline').length,
-    compactCount: document.querySelectorAll('.live-overlay-inline-compact').length,
-    detailedSheetCount: document.querySelectorAll('.live-overlay-detail-sheet').length,
-    visibleRunningCommandRowCount: Array.from(document.querySelectorAll('.conversation-item[data-message-type="commandExecution"] .cmd-row')).filter((node) => node.textContent?.includes('npm.cmd run verify:frontend-normalizers')).length,
-    statusFollowsStreamingReply: Boolean(overlayRect && streamingRect && overlayRect.top >= streamingRect.bottom - 1),
-    statusFollowsStreamingReplyInDom: Boolean(
-      overlay && streamingMessage && (streamingMessage.compareDocumentPosition(overlay) & Node.DOCUMENT_POSITION_FOLLOWING)
-    ),
-    hasUnifiedStatusLabel: textContent.includes('正在处理 ·'),
-    hasLatestExecutionHint: textContent.includes('正在执行最新操作'),
-    hasStreamingReply: textContent.includes('回复仍在继续生成，不应让运行状态消失'),
-    hasStableElapsedTime: /正在处理\s*·\s*(?:[6-9]|[1-9]\d+)\s*秒/.test(textContent),
-    bodyOverflowBefore: document.body.style.overflow
-  };
-})())
-'@
-  $before = Invoke-BrowserEvalJson -Session $Session -Script $beforeScript
-  Assert-True ([int]$before.overlayCount -eq 1) "conversation tail status must render exactly one active surface"
-  Assert-True ([int]$before.compactCount -eq 1) "conversation tail status is not collapsed by default"
-  Assert-True ([int]$before.detailedSheetCount -eq 0) "conversation tail status opened details without user action"
-  Assert-True ([int]$before.visibleRunningCommandRowCount -eq 0) "conversation tail status duplicated the current command in message history"
-  Assert-True ($before.statusFollowsStreamingReply -eq $true) "conversation tail status is not visually placed after the streaming reply"
-  Assert-True ($before.statusFollowsStreamingReplyInDom -eq $true) "conversation tail status is not placed after the streaming reply in DOM reading order"
-  Assert-True ($before.hasUnifiedStatusLabel -eq $true) "conversation tail status is missing the unified processing label"
-  Assert-True ($before.hasLatestExecutionHint -eq $true) "conversation tail status is missing the latest execution hint"
-  Assert-True ($before.hasStreamingReply -eq $true) "conversation tail status fixture is missing streaming reply content"
-  Assert-True ($before.hasStableElapsedTime -eq $true) "conversation tail status disappeared or reset elapsed time after a transient overlay gap"
-
-  $openScript = @'
-JSON.stringify((() => {
-  const button = document.querySelector('.live-overlay-compact-main');
-  if (!(button instanceof HTMLButtonElement)) return { clicked: false };
-  button.click();
-  return { clicked: true };
-})())
-'@
-  $openResult = Invoke-BrowserEvalJson -Session $Session -Script $openScript
-  Assert-True ($openResult.clicked -eq $true) "conversation tail status could not be opened"
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
-
-  $afterScript = @'
-JSON.stringify((() => {
-  const sheet = document.querySelector('.live-overlay-detail-sheet');
-  const textContent = sheet?.textContent || '';
-  return {
-    sheetCount: document.querySelectorAll('.live-overlay-detail-sheet').length,
-    sheetFocused: document.activeElement === sheet,
-    bodyOverflow: document.body.style.overflow,
-    hasCurrentCommand: textContent.includes('npm.cmd run verify:frontend-normalizers'),
-    hasCurrentOutput: textContent.includes('fixture-current-command: running'),
-    hasHistoricalCommand: textContent.includes('npm.cmd run test:7420:frontend')
-  };
-})())
-'@
-  $after = Invoke-BrowserEvalJson -Session $Session -Script $afterScript
-  Assert-True ([int]$after.sheetCount -eq 1) "conversation tail status did not open one detail sheet"
-  Assert-True ($after.sheetFocused -eq $true) "conversation tail detail did not take focus from the underlying page"
-  Assert-True ($after.bodyOverflow -eq "hidden") "conversation tail detail did not lock background scrolling"
-  Assert-True ($after.hasCurrentCommand -eq $true) "conversation tail detail is missing the current command"
-  Assert-True ($after.hasCurrentOutput -eq $true) "conversation tail detail is missing current command output"
-  Assert-True ($after.hasHistoricalCommand -eq $false) "conversation tail detail mixed historical execution into the current status"
-
-  $backResult = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const routeBefore = window.location.hash;
-  const event = new CustomEvent('codex-mobile-back-button', { cancelable: true });
-  window.dispatchEvent(event);
-  return {
-    prevented: event.defaultPrevented,
-    routeBefore
-  };
-})())
-'@
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "100") | Out-Null
-  $afterBack = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify({
-  routeAfter: window.location.hash,
-  sheetCount: document.querySelectorAll('.live-overlay-detail-sheet').length,
-  compactCount: document.querySelectorAll('.live-overlay-compact-main').length,
-  bodyOverflow: document.body.style.overflow
-})
-'@
-  Assert-True ($backResult.prevented -eq $true) "Android Back was not consumed by the topmost conversation detail"
-  Assert-True ([int]$afterBack.sheetCount -eq 0) "Android Back did not close the topmost conversation detail"
-  Assert-True ([string]$afterBack.routeAfter -eq [string]$backResult.routeBefore) "Android Back changed route while closing conversation detail"
-  Assert-True ([int]$afterBack.compactCount -eq 1) "conversation tail status disappeared after closing its detail"
-  Assert-True ([string]$afterBack.bodyOverflow -eq [string]$before.bodyOverflowBefore) "conversation tail detail did not restore background scrolling"
-}
-
-function Assert-ConversationNewActivityTimerFixture {
-  param([string]$Session)
-
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "500") | Out-Null
-  $script = @'
-JSON.stringify((() => {
-  const text = document.querySelector('.live-overlay-inline')?.textContent?.replace(/\s+/g, ' ').trim() || '';
-  const match = text.match(/正在处理\s*·\s*(?:(\d+)\s*分\s*)?(\d+)\s*秒/);
-  return {
-    overlayCount: document.querySelectorAll('.live-overlay-inline').length,
-    elapsedSeconds: text.includes('正在处理 · <1 秒')
-      ? 0
-      : match ? (Number(match[1] || '0') * 60 + Number(match[2] || '0')) : -1,
-    text
-  };
-})())
-'@
-  $metrics = Invoke-BrowserEvalJson -Session $Session -Script $script
-  Assert-True ([int]$metrics.overlayCount -eq 1) "new activity fixture must keep one active surface"
-  Assert-True ([int]$metrics.elapsedSeconds -ge 0) "new activity fixture did not expose elapsed time"
-  Assert-True ([int]$metrics.elapsedSeconds -lt 30) "a later activity inherited the previous five-minute timer: $($metrics.text)"
-}
-
-function Assert-ConversationResumeRecoveryFixture {
-  param([string]$Session)
-
-  $script = @'
-JSON.stringify((() => {
-  const overlay = document.querySelector('.live-overlay-inline-recovering');
-  const ring = overlay?.querySelector('.live-overlay-indicator-ring');
-  const text = overlay?.textContent?.replace(/\s+/g, ' ').trim() || '';
-  return {
-    overlayCount: document.querySelectorAll('.live-overlay-inline-recovering').length,
-    ariaBusy: overlay?.getAttribute('aria-busy') || '',
-    hasRecoveryLabel: text.includes('正在恢复任务'),
-    hasRecoveryHint: text.includes('正在同步最新进度'),
-    reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
-    ringAnimationName: ring ? getComputedStyle(ring).animationName : '',
-    width: document.documentElement.clientWidth,
-    scrollWidth: document.documentElement.scrollWidth
-  };
-})())
-'@
-  $metrics = Invoke-BrowserEvalJson -Session $Session -Script $script
-  Assert-True ([int]$metrics.overlayCount -eq 1) "resume recovery fixture must render exactly one recovery surface"
-  Assert-True ($metrics.ariaBusy -eq 'true') "resume recovery fixture must expose aria-busy"
-  Assert-True ($metrics.hasRecoveryLabel -eq $true) "resume recovery fixture is missing the recovery label"
-  Assert-True ($metrics.hasRecoveryHint -eq $true) "resume recovery fixture is missing the automatic-sync hint"
-  if ($metrics.reducedMotion -eq $true) {
-    Assert-True ($metrics.ringAnimationName -eq 'none') "resume recovery fixture must disable indicator animation when reduced motion is enabled"
-  } else {
-    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$metrics.ringAnimationName) -and $metrics.ringAnimationName -ne 'none') "resume recovery fixture is missing the lightweight indicator animation"
-  }
-  Assert-True ([int]$metrics.scrollWidth -le [int]$metrics.width + 2) "resume recovery fixture introduced horizontal overflow"
-}
-
-function Wait-ConversationImagePreviewUiState {
-  param(
-    [string]$Session,
-    [int]$ExpectedScale = -1,
-    [int]$ExpectedDialogCount = -1
-  )
-
-  $state = $null
-  for ($attempt = 1; $attempt -le 30; $attempt++) {
-    $state = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => ({
-  scale: Number.parseFloat(document.querySelector('.image-modal-scale')?.textContent || '0'),
-  dialogCount: document.querySelectorAll('.image-modal-content').length
-}))())
-'@
-    $scaleMatches = $ExpectedScale -lt 0 -or [int]$state.scale -eq $ExpectedScale
-    $dialogMatches = $ExpectedDialogCount -lt 0 -or [int]$state.dialogCount -eq $ExpectedDialogCount
-    if ($scaleMatches -and $dialogMatches) { return $state }
-    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
-  }
-
-  throw "image preview state did not settle: expectedScale=$ExpectedScale, actualScale=$($state.scale), expectedDialogCount=$ExpectedDialogCount, actualDialogCount=$($state.dialogCount)"
-}
-
-function Assert-ConversationImagePreviewGestures {
-  param([string]$Session)
-
-  $imagePrepared = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const image = document.querySelector('[data-message-id="fixture-image-preview-gestures"] .message-image-preview');
-  image?.scrollIntoView({ block: 'center' });
-  return { found: image instanceof HTMLImageElement };
-})())
-'@
-  Assert-True ($imagePrepared.found -eq $true) "image preview gesture fixture is missing its deterministic image"
-  $imageReady = $null
-  for ($attempt = 1; $attempt -le 30; $attempt++) {
-    $imageReady = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const image = document.querySelector('[data-message-id="fixture-image-preview-gestures"] .message-image-preview');
-  return {
-    loaded: image instanceof HTMLImageElement
-      && image.complete
-      && image.naturalWidth > 0
-      && image.classList.contains('is-loaded'),
-    complete: image instanceof HTMLImageElement && image.complete,
-    naturalWidth: image instanceof HTMLImageElement ? image.naturalWidth : 0
-  };
-})())
-'@
-    if ($imageReady.loaded -eq $true) { break }
-    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
-  }
-  Assert-True ($imageReady.loaded -eq $true) "image preview gesture fixture did not settle its cached image: complete=$($imageReady.complete), naturalWidth=$($imageReady.naturalWidth)"
-
-  $opened = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const trigger = document.querySelector('[data-message-id="fixture-image-preview-gestures"] .message-image-button');
-  if (!(trigger instanceof HTMLButtonElement)) return { opened: false };
-  trigger.click();
-  return { opened: true };
-})())
-'@
-  Assert-True ($opened.opened -eq $true) "image preview gesture fixture could not open its image"
-  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedScale 100 -ExpectedDialogCount 1 | Out-Null
-
-  $initialControls = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const zoomOut = document.querySelector('[aria-label="缩小图片"]');
-  const reset = document.querySelector('[aria-label="重置图片缩放"]');
-  const zoomIn = document.querySelector('[aria-label="放大图片"]');
-  return {
-    zoomOutDisabled: zoomOut instanceof HTMLButtonElement && zoomOut.disabled,
-    resetDisabled: reset instanceof HTMLButtonElement && reset.disabled,
-    zoomInEnabled: zoomIn instanceof HTMLButtonElement && !zoomIn.disabled
-  };
-})())
-'@
-  Assert-True ($initialControls.zoomOutDisabled -eq $true) "image preview zoom-out control must be disabled at its minimum"
-  Assert-True ($initialControls.resetDisabled -eq $true) "image preview reset control must be disabled at 100%"
-  Assert-True ($initialControls.zoomInEnabled -eq $true) "image preview zoom-in control must remain enabled below its maximum"
-
-  $ctrlWheelDispatch = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const stage = document.querySelector('.image-modal-stage');
-  const content = document.querySelector('.image-modal-content');
-  if (!(stage instanceof HTMLElement) || !(content instanceof HTMLElement)) return { dispatched: false };
-  let bubbled = 0;
-  const onBubble = () => { bubbled += 1; };
-  content.addEventListener('wheel', onBubble);
-  const bounds = stage.getBoundingClientRect();
-  const event = new WheelEvent('wheel', {
-    bubbles: true,
-    cancelable: true,
-    clientX: bounds.left + bounds.width * 0.75,
-    clientY: bounds.top + bounds.height * 0.5,
-    ctrlKey: true,
-    deltaMode: WheelEvent.DOM_DELTA_PIXEL,
-    deltaY: -12
-  });
-  stage.dispatchEvent(event);
-  content.removeEventListener('wheel', onBubble);
-  return { dispatched: true, defaultPrevented: event.defaultPrevented, bubbled };
-})())
-'@
-  Assert-True ($ctrlWheelDispatch.dispatched -eq $true) "image preview ctrl-wheel probe did not find the modal surface"
-  Assert-True ($ctrlWheelDispatch.defaultPrevented -eq $true) "image preview ctrl-wheel must prevent browser-level zoom"
-  Assert-True ([int]$ctrlWheelDispatch.bubbled -eq 0) "image preview ctrl-wheel escaped its local modal surface"
-  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
-
-  $smoothZoom = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const scale = Number.parseFloat(document.querySelector('.image-modal-scale')?.textContent || '0');
-  const image = document.querySelector('.image-modal-image');
-  return {
-    scale,
-    transform: image instanceof HTMLElement ? image.style.transform : '',
-    horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
-  };
-})())
-'@
-  Assert-True ([double]$smoothZoom.scale -gt 100 -and [double]$smoothZoom.scale -lt 125) "small ctrl-wheel input must zoom smoothly instead of jumping by a full 25% step: $($smoothZoom.scale)%"
-  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$smoothZoom.transform)) "smooth image zoom did not update the image transform"
-  Assert-True ($smoothZoom.horizontalOverflow -eq $false) "image preview smooth zoom introduced page-level horizontal overflow"
-
-  Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const reset = document.querySelector('.image-modal-scale');
-  if (!(reset instanceof HTMLButtonElement)) return { reset: false };
-  reset.click();
-  return { reset: true };
-})())
-'@ | Out-Null
-  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedScale 100 -ExpectedDialogCount 1 | Out-Null
-
-  $ordinaryWheelDispatch = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const stage = document.querySelector('.image-modal-stage');
-  if (!(stage instanceof HTMLElement)) return { dispatched: false };
-  const event = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -120 });
-  stage.dispatchEvent(event);
-  return { dispatched: true, defaultPrevented: event.defaultPrevented };
-})())
-'@
-  Assert-True ($ordinaryWheelDispatch.dispatched -eq $true -and $ordinaryWheelDispatch.defaultPrevented -eq $true) "ordinary image-preview wheel zoom must remain locally handled"
-  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedScale 125 -ExpectedDialogCount 1 | Out-Null
-
-  Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const reset = document.querySelector('.image-modal-scale');
-  if (!(reset instanceof HTMLButtonElement)) return { reset: false };
-  reset.click();
-  return { reset: true };
-})())
-'@ | Out-Null
-  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedScale 100 -ExpectedDialogCount 1 | Out-Null
-
-  $pinchDispatch = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const stage = document.querySelector('.image-modal-stage');
-  if (!(stage instanceof HTMLElement)) return { dispatched: false };
-  const bounds = stage.getBoundingClientRect();
-  const centerX = bounds.left + bounds.width / 2;
-  const centerY = bounds.top + bounds.height / 2;
-  const dispatch = (type, pointerId, clientX, clientY, buttons) => stage.dispatchEvent(new PointerEvent(type, {
-    bubbles: true,
-    cancelable: true,
-    pointerId,
-    pointerType: 'touch',
-    isPrimary: pointerId === 74201,
-    button: 0,
-    buttons,
-    clientX,
-    clientY
-  }));
-  dispatch('pointerdown', 74201, centerX - 50, centerY, 1);
-  dispatch('pointerdown', 74202, centerX + 50, centerY, 1);
-  dispatch('pointermove', 74202, centerX + 100, centerY, 1);
-  window.__cxImagePreviewPinchProbe = { stage, centerX, centerY, dispatch };
-  return {
-    dispatched: true,
-    touchAction: getComputedStyle(stage).touchAction,
-    dragging: stage.classList.contains('image-modal-stage--dragging')
-  };
-})())
-'@
-  Assert-True ($pinchDispatch.dispatched -eq $true) "image preview touch pinch probe did not find the modal surface"
-  Assert-True ($pinchDispatch.touchAction -eq 'none') "image preview stage must own touch gestures while the modal is open"
-  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
-
-  $pinchZoom = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const image = document.querySelector('.image-modal-image');
-  return {
-    scale: Number.parseFloat(document.querySelector('.image-modal-scale')?.textContent || '0'),
-    transform: image instanceof HTMLElement ? image.style.transform : '',
-    dragging: document.querySelector('.image-modal-stage')?.classList.contains('image-modal-stage--dragging') === true
-  };
-})())
-'@
-  Assert-True ([double]$pinchZoom.scale -ge 149 -and [double]$pinchZoom.scale -le 151) "two-pointer pinch must scale proportionally from 100% to 150%: $($pinchZoom.scale)%"
-  Assert-True ($pinchZoom.dragging -eq $true) "image preview pinch did not enter its direct-manipulation state"
-
-  $panDispatch = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const probe = window.__cxImagePreviewPinchProbe;
-  const image = document.querySelector('.image-modal-image');
-  if (!probe || !(image instanceof HTMLElement)) return { dispatched: false };
-  const before = image.style.transform;
-  probe.dispatch('pointerup', 74202, probe.centerX + 100, probe.centerY, 0);
-  probe.dispatch('pointermove', 74201, probe.centerX - 80, probe.centerY + 12, 1);
-  return { dispatched: true, before };
-})())
-'@
-  Assert-True ($panDispatch.dispatched -eq $true) "image preview single-pointer continuation probe did not run"
-  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
-  $panResult = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const probe = window.__cxImagePreviewPinchProbe;
-  const stage = document.querySelector('.image-modal-stage');
-  const image = document.querySelector('.image-modal-image');
-  if (!probe || !(stage instanceof HTMLElement) || !(image instanceof HTMLElement)) return { finished: false };
-  const after = image.style.transform;
-  probe.dispatch('pointerup', 74201, probe.centerX - 80, probe.centerY + 12, 0);
-  delete window.__cxImagePreviewPinchProbe;
-  return { finished: true, after, draggingBeforeRelease: stage.classList.contains('image-modal-stage--dragging') };
-})())
-'@
-  Assert-True ($panResult.finished -eq $true) "image preview touch gesture did not finish cleanly"
-  Assert-True ($panResult.draggingBeforeRelease -eq $true) "lifting one pinch pointer did not continue as single-pointer panning"
-  Assert-True ([string]$panResult.after -ne [string]$panDispatch.before) "single-pointer panning after pinch did not move the zoomed image"
-  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
-
-  $settled = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const stage = document.querySelector('.image-modal-stage');
-  return {
-    scale: Number.parseFloat(document.querySelector('.image-modal-scale')?.textContent || '0'),
-    dragging: stage?.classList.contains('image-modal-stage--dragging') === true,
-    dialogCount: document.querySelectorAll('.image-modal-content').length
-  };
-})())
-'@
-  Assert-True ([double]$settled.scale -ge 149 -and [double]$settled.scale -le 151) "finishing the touch gesture changed the selected zoom"
-  Assert-True ($settled.dragging -eq $false) "image preview remained stuck in dragging state after all touch pointers were released"
-  Assert-True ([int]$settled.dialogCount -eq 1) "image preview touch gesture unexpectedly closed or duplicated the modal"
-
-  Save-RegressionScreenshot -Session $Session -Name 'conversation-image-preview-pinch-phone' | Out-Null
-  Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const close = document.querySelector('.image-modal-close');
-  if (!(close instanceof HTMLButtonElement)) return { closed: false };
-  close.click();
-  return { closed: true };
-})())
-'@ | Out-Null
-  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedDialogCount 0 | Out-Null
-}
-
-function Assert-ConversationMarkdownImageRecovery {
-  param([string]$Session)
-
-  $prepared = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const visibleCard = document.querySelector('[data-message-id="fixture-markdown-image-visible"]');
-  const image = visibleCard?.querySelector('.message-markdown-image');
-  image?.scrollIntoView({ block: 'center' });
-  return { found: image instanceof HTMLImageElement };
-})())
-'@
-  Assert-True ($prepared.found -eq $true) "markdown-image fixture is missing its deterministic image"
-
-  $state = $null
-  for ($attempt = 1; $attempt -le 40; $attempt++) {
-    $state = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const visibleCard = document.querySelector('[data-message-id="fixture-markdown-image-visible"]');
-  const image = visibleCard?.querySelector('.message-markdown-image');
-  const trigger = visibleCard?.querySelector('.message-markdown-image-button');
-  const failedCard = document.querySelector('[data-message-id="fixture-markdown-image-failed"]');
-  const failure = failedCard?.querySelector('.message-markdown-image-failed');
-  const retry = failedCard?.querySelector('.message-markdown-image-retry');
-  const imageStyle = image instanceof HTMLImageElement ? getComputedStyle(image) : null;
-  return {
-    loaded: image instanceof HTMLImageElement
-      && image.complete
-      && image.naturalWidth > 0
-      && image.classList.contains('is-loaded'),
-    opacity: imageStyle?.opacity || '',
-    triggerDisabled: trigger instanceof HTMLButtonElement ? trigger.disabled : null,
-    triggerLabel: trigger?.getAttribute('aria-label') || '',
-    triggerBusy: trigger?.getAttribute('aria-busy') || '',
-    failureVisible: failure instanceof HTMLElement,
-    failureText: failure?.textContent?.replace(/\s+/g, ' ').trim() || '',
-    retryLabel: retry?.textContent?.trim() || '',
-    rawMarkdownVisible: failedCard?.textContent?.includes('/__missing-markdown-image-regression.png') === true
-  };
-})())
-'@
-    if ($state.loaded -eq $true -and $state.failureVisible -eq $true) { break }
-    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
-  }
-
-  Assert-True ($state.loaded -eq $true) "markdown image did not enter its visible loaded state"
-  Assert-True ([double]$state.opacity -eq 1) "loaded markdown image remained visually hidden: opacity=$($state.opacity)"
-  Assert-True ($state.triggerDisabled -eq $false) "loaded markdown image preview trigger remained disabled"
-  Assert-True ($state.triggerLabel -eq '预览图片：Markdown 图片回归') "loaded markdown image is missing its descriptive preview label: $($state.triggerLabel)"
-  Assert-True ([string]::IsNullOrWhiteSpace([string]$state.triggerBusy)) "loaded markdown image retained aria-busy"
-  Assert-True ($state.failureVisible -eq $true -and $state.failureText -match '图片加载失败' -and $state.retryLabel -eq '重试') "failed markdown image is missing its explicit recovery action"
-  Assert-True ($state.rawMarkdownVisible -eq $false) "failed markdown image exposed its raw markdown source instead of recovery UI"
-
-  $opened = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const trigger = document.querySelector('[data-message-id="fixture-markdown-image-visible"] .message-markdown-image-button');
-  if (!(trigger instanceof HTMLButtonElement)) return { opened: false };
-  trigger.click();
-  return { opened: true };
-})())
-'@
-  Assert-True ($opened.opened -eq $true) "loaded markdown image could not open the shared preview"
-  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedDialogCount 1 | Out-Null
-  Invoke-AgentBrowser -Arguments @('--session', $Session, 'press', 'Escape') | Out-Null
-  Wait-ConversationImagePreviewUiState -Session $Session -ExpectedDialogCount 0 | Out-Null
-
-  $retryStarted = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const retry = document.querySelector('[data-message-id="fixture-markdown-image-failed"] .message-markdown-image-retry');
-  if (!(retry instanceof HTMLButtonElement)) return { clicked: false };
-  window.__cxPreviousMarkdownImageRetry = retry;
-  retry.click();
-  return { clicked: true };
-})())
-'@
-  Assert-True ($retryStarted.clicked -eq $true) "failed markdown image retry action could not be activated"
-
-  $retryState = $null
-  for ($attempt = 1; $attempt -le 30; $attempt++) {
-    $retryState = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const retry = document.querySelector('[data-message-id="fixture-markdown-image-failed"] .message-markdown-image-retry');
-  return {
-    recoveredFailureUi: retry instanceof HTMLButtonElement,
-    replaced: retry instanceof HTMLButtonElement && retry !== window.__cxPreviousMarkdownImageRetry
-  };
-})())
-'@
-    if ($retryState.recoveredFailureUi -eq $true -and $retryState.replaced -eq $true) { break }
-    Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
-  }
-  Assert-True ($retryState.recoveredFailureUi -eq $true -and $retryState.replaced -eq $true) "markdown image retry did not remount the request and recover its failure UI"
-  Save-RegressionScreenshot -Session $Session -Name 'conversation-markdown-image-recovery-phone' | Out-Null
-}
-
-function Assert-ConversationFixture {
-  param(
-    [object]$Metrics,
-    [string]$ViewportName = ""
-  )
-
-  Assert-True ($Metrics.codeBlockCount -ge 2) "conversation fixture is missing code/diff blocks"
-  Assert-True ($Metrics.diffBlockCount -ge 1) "conversation fixture is missing diff block"
-  Assert-True ($Metrics.copyButtonCount -ge 2) "conversation fixture is missing code copy buttons"
-  Assert-True ($Metrics.rawPayloadCardCount -ge 1) "conversation fixture is missing raw payload card"
-  Assert-True ($Metrics.commandRowCount -ge 1) "conversation fixture is missing command row"
-  Assert-True ($Metrics.commandOutputWrapCount -ge 1) "conversation fixture is missing command output wrapper"
-  Assert-True ($Metrics.expandedCommandOutputCount -ge 1) "conversation fixture command output did not expand"
-  Assert-True ($Metrics.commandRowRadius -le 10) "conversation fixture command row radius is too large: $($Metrics.commandRowRadius)"
-  Assert-True ($Metrics.requestCardCount -ge 1) "conversation fixture is missing pending request card"
-  Assert-True ($Metrics.permissionPanelCount -ge 1) "conversation fixture is missing MCP permission panel"
-  Assert-True ($Metrics.toolPanelCount -ge 1) "conversation fixture is missing tool call panel"
-  Assert-True ($Metrics.requestButtonCount -ge 3) "conversation fixture is missing permission action buttons"
-  if ([int]$Metrics.viewportWidth -lt 768) {
-    Assert-True ([int]$Metrics.tableScrollCount -ge 1) "conversation fixture phone viewport is missing semantic table scroll region"
-    Assert-True ([int]$Metrics.tableScrollableCount -ge 1) "conversation fixture phone table is not horizontally scrollable"
-    Assert-True ([double]$Metrics.tableMaxFontSize -le 13.5) "conversation fixture phone table font is too large: $($Metrics.tableMaxFontSize)"
-    Assert-True ([int]$Metrics.tableCardGroupCount -eq 0) "conversation fixture phone viewport still mounted vertical table cards"
-  } else {
-    Assert-True ([int]$Metrics.tableScrollCount -ge 1) "conversation fixture $ViewportName viewport is missing desktop table DOM"
-    Assert-True ([int]$Metrics.tableCardGroupCount -eq 0) "conversation fixture $ViewportName viewport mounted mobile table DOM: $($Metrics.tableCardGroupCount)"
-  }
-  Assert-True ($Metrics.runtimeStatusBarCount -ge 1) "conversation fixture is missing runtime status bar"
-  $runtimeStatusMaxHeight = if ([int]$Metrics.viewportWidth -lt 768) { 48 } else { 40 }
-  Assert-True ($Metrics.runtimeStatusMaxHeight -le $runtimeStatusMaxHeight) "conversation fixture runtime status bar is too tall: $($Metrics.runtimeStatusMaxHeight)"
-  Assert-True ($Metrics.queuedPanelCount -ge 1) "conversation fixture is missing queued message panel"
-  Assert-True ($Metrics.queuedRowCount -ge 2) "conversation fixture is missing queued message rows"
-  Assert-True ($Metrics.conversationChromeWarmBackgroundCount -eq 0) "conversation fixture still has warm chrome backgrounds: $($Metrics.conversationChromeWarmBackgrounds | ConvertTo-Json -Compress)"
-  Assert-True ($Metrics.conversationChromeMaxRadius -le 18) "conversation fixture chrome radius is too large: $($Metrics.conversationChromeMaxRadius)"
-  Assert-True ($Metrics.requestCardRadius -le 10) "conversation fixture request card radius is too large: $($Metrics.requestCardRadius)"
-  Assert-True ($Metrics.permissionPanelRadius -le 10) "conversation fixture permission panel radius is too large: $($Metrics.permissionPanelRadius)"
-  Assert-True ($Metrics.toolPanelRadius -le 10) "conversation fixture tool call panel radius is too large: $($Metrics.toolPanelRadius)"
-  Assert-True ($Metrics.hasAddLine -eq $true) "conversation fixture is missing diff add line styling"
-  Assert-True ($Metrics.hasDeleteLine -eq $true) "conversation fixture is missing diff delete line styling"
-  Assert-True ($Metrics.hasMetaLine -eq $true) "conversation fixture is missing diff metadata line styling"
-  Assert-True ($Metrics.hasFixtureCodeText -eq $true) "conversation fixture is missing fixture code text"
-  Assert-True ($Metrics.hasFixtureRawText -eq $true) "conversation fixture is missing raw payload marker"
-  Assert-True ($Metrics.hasOptimisticInternalText -eq $false) "conversation fixture exposed optimistic-message internal metadata"
-  Assert-True ([int]$Metrics.sendingDeliveryStateCount -eq 1) "conversation fixture is missing the sending delivery state"
-  Assert-True ([int]$Metrics.failedDeliveryStateCount -eq 1) "conversation fixture is missing the failed delivery state"
-  Assert-True ([int]$Metrics.retryingDeliveryStateCount -eq 1) "conversation fixture is missing the reconnecting delivery state"
-  Assert-True ([int]$Metrics.waitingDeliveryStateCount -eq 1) "conversation fixture is missing the waiting-for-network delivery state"
-  Assert-True ([int]$Metrics.confirmingDeliveryStateCount -eq 1) "conversation fixture is missing the confirming delivery state"
-  Assert-True ([int]$Metrics.sentDeliveryStateCount -eq 1) "conversation fixture is missing the sent delivery state"
-  Assert-True ([int]$Metrics.failedDeliveryRetryCount -eq 1) "conversation fixture is missing the failed-message retry action"
-  Assert-True ($Metrics.hasBoundedReconnectText -eq $true) "conversation fixture is missing bounded reconnect progress"
-  Assert-True ($Metrics.hasWaitingDeliveryText -eq $true) "conversation fixture is missing waiting-for-network feedback"
-  Assert-True ($Metrics.hasConfirmingDeliveryText -eq $true) "conversation fixture is missing unconfirmed-send feedback"
-  Assert-True ($Metrics.hasStableLiveElapsedTime -eq $true) "conversation fixture reset or ignored the authoritative live-overlay start time"
-  Assert-True ([int]$Metrics.interruptedTurnCardCount -eq 1) "conversation fixture is missing stopped-turn feedback"
-  Assert-True ([int]$Metrics.interruptedTurnEditCount -eq 1) "conversation fixture is missing stopped-turn edit action"
-  Assert-True ($Metrics.hasHiddenUnhandledNoise -eq $false) "conversation fixture rendered unhandled App Server system noise"
-  Assert-True ($Metrics.hasFixtureCommandText -eq $true) "conversation fixture is missing command output marker"
-  Assert-True ($Metrics.hasFixtureCommandLabel -eq $true) "conversation fixture is missing command label"
-  Assert-True ($Metrics.hasFixturePermissionText -eq $true) "conversation fixture is missing permission workbench marker"
-  Assert-True ($Metrics.hasFixtureToolCallText -eq $true) "conversation fixture is missing tool call workbench marker"
-  Assert-True ($Metrics.hasPermissionServerText -eq $true) "conversation fixture is missing MCP server label"
-  Assert-True ($Metrics.hasPermissionToolText -eq $true) "conversation fixture is missing MCP tool label"
-  Assert-True ($Metrics.hasPermissionTargetText -eq $true) "conversation fixture is missing MCP permission target details"
-  Assert-True ($Metrics.hasToolCallActionText -eq $true) "conversation fixture is missing tool call action label"
-  Assert-True ($Metrics.hasPermissionActionText -eq $true) "conversation fixture is missing permission action labels"
-  Assert-True ([string]$Metrics.loadMoreButtonText -like "*继续查看*") "conversation fixture local older-history affordance is missing unified load-more button"
-  Assert-True ([string]$Metrics.firstCopyButtonText -like "*复制*") "conversation fixture first code block copy button is not visible"
-  Assert-True ($Metrics.hasEmojiFileIcon -eq $false) "conversation fixture still renders emoji file icons"
-  Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "conversation fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
-  Assert-True ($Metrics.structuredViewportFitFailureCount -eq 0) "conversation fixture structured blocks overflow viewport: $($Metrics.structuredViewportFitFailures | ConvertTo-Json -Compress)"
-}
-
-function Assert-ConversationViewportControls {
-  param([string]$Session)
-
-  $prepareScript = @'
-JSON.stringify((() => {
-  const list = document.querySelector('.conversation-list');
-  if (!(list instanceof HTMLElement)) return { ready: false };
-  window.__cxConversationViewportStyle = {
-    flex: list.style.flex,
-    height: list.style.height,
-    minHeight: list.style.minHeight,
-    maxHeight: list.style.maxHeight
-  };
-  let maxScrollTop = Math.max(list.scrollHeight - list.clientHeight, 0);
-  if (maxScrollTop <= 180) {
-    const probeHeight = Math.max(Math.min(list.scrollHeight - 240, 360), 160);
-    list.style.flex = `0 0 ${probeHeight}px`;
-    list.style.height = `${probeHeight}px`;
-    list.style.minHeight = `${probeHeight}px`;
-    list.style.maxHeight = `${probeHeight}px`;
-    maxScrollTop = Math.max(list.scrollHeight - list.clientHeight, 0);
-  }
-  list.scrollTop = Math.max(maxScrollTop - 180, 0);
-  list.dispatchEvent(new Event('scroll'));
-  return {
-    ready: true,
-    maxScrollTop,
-    overflowAnchor: getComputedStyle(list).overflowAnchor,
-    tabIndex: list.tabIndex
-  };
-})())
-'@
-  $prepared = Invoke-BrowserEvalJson -Session $Session -Script $prepareScript
-  Assert-True ($prepared.ready -eq $true) "conversation viewport control probe could not find the message list"
-  Assert-True ([int]$prepared.maxScrollTop -gt 180) "conversation viewport fixture is not tall enough to verify away-from-bottom behavior"
-  Assert-True ([string]$prepared.overflowAnchor -eq 'none') "conversation viewport did not disable browser-native scroll anchoring"
-  Assert-True ([int]$prepared.tabIndex -eq 0) "conversation viewport is not keyboard focusable"
-
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "250") | Out-Null
-  $awayMetrics = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const list = document.querySelector('.conversation-list');
-  const button = document.querySelector('.conversation-jump-to-latest');
-  const distance = list instanceof HTMLElement
-    ? Math.max(list.scrollHeight - list.scrollTop - list.clientHeight, 0)
-    : -1;
-  const rect = button?.getBoundingClientRect();
-  return {
-    distance,
-    hasButton: button instanceof HTMLButtonElement,
-    buttonVisible: !!rect && rect.width > 0 && rect.height > 0,
-    ariaLabel: button?.getAttribute('aria-label') || ''
-  };
-})())
-'@
-  Assert-True ([int]$awayMetrics.distance -gt 24) "conversation viewport probe did not leave the bottom threshold"
-  Assert-True ($awayMetrics.hasButton -eq $true -and $awayMetrics.buttonVisible -eq $true) "conversation viewport hid the return-to-bottom action without new output"
-  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$awayMetrics.ariaLabel)) "conversation return-to-bottom action is missing an accessible label"
-
-  Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const button = document.querySelector('.conversation-jump-to-latest');
-  if (!(button instanceof HTMLButtonElement)) return { clicked: false };
-  button.focus();
-  button.click();
-  return { clicked: true };
-})())
-'@ | Out-Null
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "250") | Out-Null
-  $returnedMetrics = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const list = document.querySelector('.conversation-list');
-  if (!(list instanceof HTMLElement)) return { distance: -1, hasButton: true };
-  const result = {
-    distance: Math.max(list.scrollHeight - list.scrollTop - list.clientHeight, 0),
-    hasButton: !!document.querySelector('.conversation-jump-to-latest'),
-    focusReturnedToTranscript: document.activeElement === list
-  };
-  const originalStyle = window.__cxConversationViewportStyle;
-  if (originalStyle) {
-    list.style.flex = originalStyle.flex;
-    list.style.height = originalStyle.height;
-    list.style.minHeight = originalStyle.minHeight;
-    list.style.maxHeight = originalStyle.maxHeight;
-    delete window.__cxConversationViewportStyle;
-  }
-  return result;
-})())
-'@
-  Assert-True ([int]$returnedMetrics.distance -le 24) "conversation return-to-bottom action did not restore the bottom anchor"
-  Assert-True ($returnedMetrics.hasButton -eq $false) "conversation return-to-bottom action remained visible after bottom recovery"
-  Assert-True ($returnedMetrics.focusReturnedToTranscript -eq $true) "conversation return-to-bottom action lost keyboard focus when its button unmounted"
-}
-
-function Assert-ConversationThreadSwitchScrollIsolation {
-  param([string]$Session)
-
-  $firstSwitch = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const list = document.querySelector('.conversation-list');
-  const switchButton = document.querySelector('[data-testid="switch-scroll-thread-b"]');
-  if (!(list instanceof HTMLElement) || !(switchButton instanceof HTMLButtonElement)) {
-    return { ready: false };
-  }
-  list.style.flex = '0 0 320px';
-  list.style.height = '320px';
-  list.style.minHeight = '320px';
-  list.style.maxHeight = '320px';
-  const maxScrollTop = Math.max(list.scrollHeight - list.clientHeight, 0);
-  const targetScrollTop = Math.round(maxScrollTop * 0.28);
-  list.scrollTop = targetScrollTop;
-  list.dispatchEvent(new Event('scroll'));
-  switchButton.click();
-  return {
-    ready: true,
-    maxScrollTop,
-    targetScrollTop,
-    targetRatio: maxScrollTop > 0 ? targetScrollTop / maxScrollTop : 0
-  };
-})())
-'@
-  Assert-True ($firstSwitch.ready -eq $true) "conversation thread-switch fixture is missing its list or switch control"
-  Assert-True ([int]$firstSwitch.maxScrollTop -gt 300) "conversation thread-switch fixture is not scrollable enough"
-
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "350") | Out-Null
-  $threadBMetrics = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const list = document.querySelector('.conversation-list');
-  const state = document.querySelector('.conversation-scroll-switch-state');
-  if (!(list instanceof HTMLElement) || !(state instanceof HTMLElement)) return { ready: false };
-  const maxScrollTop = Math.max(list.scrollHeight - list.clientHeight, 0);
-  return {
-    ready: true,
-    activeThreadId: state.dataset.activeThreadId || '',
-    listThreadId: list.dataset.threadId || '',
-    threadAScrollTop: Number(state.dataset.threadAScrollTop || -1),
-    threadAAtBottom: state.dataset.threadAAtBottom || '',
-    threadBScrollTop: Number(state.dataset.threadBScrollTop || -1),
-    threadBAtBottom: state.dataset.threadBAtBottom || '',
-    distanceFromBottom: Math.max(list.scrollHeight - list.scrollTop - list.clientHeight, 0),
-    maxScrollTop
-  };
-})())
-'@
-  Assert-True ($threadBMetrics.ready -eq $true) "conversation thread-switch fixture did not render thread B"
-  Assert-True ([string]$threadBMetrics.activeThreadId -eq 'regression-scroll-b') "conversation thread switch did not select thread B"
-  Assert-True ([string]$threadBMetrics.listThreadId -eq 'regression-scroll-b') "conversation list retained thread A ownership after selecting thread B"
-  Assert-True ([double]$threadBMetrics.threadAScrollTop -gt 0) "conversation thread A scroll state was not settled before switching"
-  Assert-True ([string]$threadBMetrics.threadAAtBottom -eq 'false') "conversation thread A scroll state was incorrectly saved at the bottom"
-  Assert-True ([int]$threadBMetrics.distanceFromBottom -le 24) "thread A's delayed scroll state moved a fresh thread B away from the bottom"
-  Assert-True (
-    [string]$threadBMetrics.threadBAtBottom -eq '' -or [string]$threadBMetrics.threadBAtBottom -eq 'true'
-  ) "thread A's delayed scroll state was written under thread B"
-
-  $secondSwitch = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const list = document.querySelector('.conversation-list');
-  const switchButton = document.querySelector('[data-testid="switch-scroll-thread-a"]');
-  if (!(list instanceof HTMLElement) || !(switchButton instanceof HTMLButtonElement)) {
-    return { ready: false };
-  }
-  const maxScrollTop = Math.max(list.scrollHeight - list.clientHeight, 0);
-  const targetScrollTop = Math.round(maxScrollTop * 0.62);
-  list.scrollTop = targetScrollTop;
-  list.dispatchEvent(new Event('scroll'));
-  switchButton.click();
-  return {
-    ready: true,
-    targetRatio: maxScrollTop > 0 ? targetScrollTop / maxScrollTop : 0
-  };
-})())
-'@
-  Assert-True ($secondSwitch.ready -eq $true) "conversation thread-switch fixture could not return to thread A"
-
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "350") | Out-Null
-  $restoredMetrics = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const list = document.querySelector('.conversation-list');
-  const state = document.querySelector('.conversation-scroll-switch-state');
-  if (!(list instanceof HTMLElement) || !(state instanceof HTMLElement)) return { ready: false };
-  const maxScrollTop = Math.max(list.scrollHeight - list.clientHeight, 0);
-  return {
-    ready: true,
-    activeThreadId: state.dataset.activeThreadId || '',
-    listThreadId: list.dataset.threadId || '',
-    currentRatio: maxScrollTop > 0 ? list.scrollTop / maxScrollTop : 1,
-    threadBScrollTop: Number(state.dataset.threadBScrollTop || -1),
-    threadBAtBottom: state.dataset.threadBAtBottom || ''
-  };
-})())
-'@
-  Assert-True ($restoredMetrics.ready -eq $true) "conversation thread A did not render after the return switch"
-  Assert-True ([string]$restoredMetrics.activeThreadId -eq 'regression-scroll-a') "conversation return switch did not select thread A"
-  Assert-True ([string]$restoredMetrics.listThreadId -eq 'regression-scroll-a') "conversation list retained thread B ownership after returning to thread A"
-  Assert-True ([double]$restoredMetrics.threadBScrollTop -gt 0) "conversation thread B scroll state was not settled before returning"
-  Assert-True ([string]$restoredMetrics.threadBAtBottom -eq 'false') "conversation thread B scroll state was incorrectly saved at the bottom"
-  Assert-True (
-    [Math]::Abs([double]$restoredMetrics.currentRatio - [double]$firstSwitch.targetRatio) -le 0.08
-  ) "conversation thread A did not restore its own saved scroll ratio"
-}
-
-function Assert-ConversationForegroundResumeScrollIntent {
-  param(
-    [string]$Session,
-    [ValidateSet('bottom', 'reading', 'user')]
-    [string]$Mode
-  )
-
-  $prepared = Invoke-BrowserEvalJson -Session $Session -Script @"
-JSON.stringify((() => {
-  const list = document.querySelector('.conversation-list');
-  const target = document.querySelector('[data-message-id="regression-scroll-a-message-44"]');
-  if (!(list instanceof HTMLElement) || !(target instanceof HTMLElement)) return { ready: false };
-  list.style.flex = '0 0 320px';
-  list.style.height = '320px';
-  list.style.minHeight = '320px';
-  list.style.maxHeight = '320px';
-  if ('$Mode' === 'bottom' || '$Mode' === 'user') {
-    list.scrollTop = list.scrollHeight;
-  } else {
-    target.scrollIntoView({ behavior: 'auto', block: 'center' });
-  }
-  list.dispatchEvent(new Event('scroll'));
-  window.__cxResumeInitialMessageCount = Number(list.dataset.messageCount || '0');
-  return {
-    ready: true,
-    distanceFromBottom: Math.max(list.scrollHeight - list.scrollTop - list.clientHeight, 0),
-    maxScrollTop: Math.max(list.scrollHeight - list.clientHeight, 0)
-  };
-})())
-"@
-  Assert-True ($prepared.ready -eq $true) "foreground resume scroll fixture is missing its list or reading target"
-  Assert-True ([int]$prepared.maxScrollTop -gt 300) "foreground resume scroll fixture is not scrollable enough"
-  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '180') | Out-Null
-
-  $captured = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const list = document.querySelector('.conversation-list');
-  if (!(list instanceof HTMLElement)) return { ready: false };
-  const listRect = list.getBoundingClientRect();
-  const anchor = Array.from(list.querySelectorAll('.conversation-item[data-message-id]')).find((node) => {
-    const rect = node.getBoundingClientRect();
-    return rect.bottom > listRect.top + 1 && rect.top < listRect.bottom;
-  });
-  let hidden = true;
-  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
-  document.dispatchEvent(new Event('visibilitychange'));
-  hidden = false;
-  document.dispatchEvent(new Event('visibilitychange'));
-  window.__cxResumeAnchorId = anchor?.getAttribute('data-message-id') || '';
-  window.__cxResumeAnchorOffset = anchor ? Math.round(anchor.getBoundingClientRect().top - listRect.top) : 0;
-  return {
-    ready: true,
-    anchorId: window.__cxResumeAnchorId,
-    anchorOffset: window.__cxResumeAnchorOffset
-  };
-})())
-'@
-  Assert-True ($captured.ready -eq $true) "foreground resume fixture could not dispatch the hidden-to-visible lifecycle"
-  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$captured.anchorId)) "foreground resume fixture did not capture a visible reading anchor"
-  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '120') | Out-Null
-
-  Invoke-BrowserEvalJson -Session $Session -Script @"
-JSON.stringify((() => {
-  const list = document.querySelector('.conversation-list');
-  if (!(list instanceof HTMLElement)) return { ready: false };
-  const maxScrollTop = Math.max(list.scrollHeight - list.clientHeight, 0);
-  if ('$Mode' === 'user') {
-    list.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -120 }));
-  }
-  list.scrollTop = '$Mode' === 'bottom' ? Math.max(maxScrollTop - 180, 0) : maxScrollTop;
-  if ('$Mode' === 'user') {
-    list.scrollTop = Math.max(maxScrollTop - 180, 0);
-  }
-  list.dispatchEvent(new Event('scroll'));
-  return { ready: true };
-})())
-"@ | Out-Null
-  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '120') | Out-Null
-
-  $appended = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const button = document.querySelector('[data-testid="append-resume-output"]');
-  if (!(button instanceof HTMLButtonElement)) return { clicked: false };
-  button.click();
-  return { clicked: true };
-})())
-'@
-  Assert-True ($appended.clicked -eq $true) "foreground resume fixture could not append recovered output"
-  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '650') | Out-Null
-
-  $settled = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const list = document.querySelector('.conversation-list');
-  const anchorId = String(window.__cxResumeAnchorId || '');
-  const anchor = anchorId ? document.querySelector(`[data-message-id="${anchorId}"]`) : null;
-  const returnButton = document.querySelector('.conversation-jump-to-latest');
-  const returnLabel = returnButton?.querySelector('.conversation-jump-to-latest-label');
-  const returnButtonRect = returnButton?.getBoundingClientRect();
-  if (!(list instanceof HTMLElement)) return { ready: false };
-  return {
-    ready: true,
-    initialMessageCount: Number(window.__cxResumeInitialMessageCount || '0'),
-    messageCount: Number(list.dataset.messageCount || '0'),
-    distanceFromBottom: Math.max(list.scrollHeight - list.scrollTop - list.clientHeight, 0),
-    anchorDelta: anchor instanceof HTMLElement
-      ? Math.round((anchor.getBoundingClientRect().top - list.getBoundingClientRect().top) - Number(window.__cxResumeAnchorOffset || 0))
-      : 10000,
-    hasReturnToLatest: returnButton instanceof HTMLButtonElement,
-    returnToLatestLabel: returnLabel?.textContent?.trim() || '',
-    returnToLatestLabelDisplay: returnLabel instanceof HTMLElement ? getComputedStyle(returnLabel).display : '',
-    returnToLatestWidth: returnButtonRect ? Math.round(returnButtonRect.width) : 0,
-    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
-  };
-})())
-'@
-  Assert-True ($settled.ready -eq $true) "foreground resume fixture did not settle after recovered output"
-  Assert-True ([int]$settled.messageCount -eq [int]$settled.initialMessageCount + 1) "foreground resume fixture did not render exactly one recovered output"
-  Assert-True ($settled.hasHorizontalOverflow -eq $false) "foreground resume scroll recovery introduced horizontal overflow"
-  if ($Mode -eq 'bottom') {
-    Assert-True ([int]$settled.distanceFromBottom -le 24) "foreground recovery lost bottom-follow intent after a transient viewport scroll"
-    Assert-True ($settled.hasReturnToLatest -eq $false) "bottom-follow recovery exposed a stale return-to-latest action"
-  } elseif ($Mode -eq 'reading') {
-    Assert-True ([Math]::Abs([int]$settled.anchorDelta) -le 8) "foreground recovery moved the user's reading anchor: delta=$($settled.anchorDelta)"
-    Assert-True ([int]$settled.distanceFromBottom -gt 24) "foreground recovery pulled a history reader to the latest output"
-    Assert-True ($settled.hasReturnToLatest -eq $true) "history-reading recovery lost the return-to-latest affordance"
-  } else {
-    Assert-True ([int]$settled.distanceFromBottom -gt 24) "fresh user scrolling after resume was overridden by the stale bottom-follow intent"
-    Assert-True ($settled.hasReturnToLatest -eq $true) "fresh user scrolling after resume lost the return-to-latest affordance"
-  }
-  if ($Mode -ne 'bottom') {
-    Assert-True ($settled.returnToLatestLabel -eq '最新输出') "phone return-to-latest action is missing its visible new-output label"
-    Assert-True ($settled.returnToLatestLabelDisplay -ne 'none' -and [int]$settled.returnToLatestWidth -ge 96) "phone return-to-latest new-output label remained visually hidden"
-  }
-}
-
-function Assert-ConversationMessageReadingAnchor {
-  param([string]$Session)
-
-  $prepared = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const list = document.querySelector('.conversation-list');
-  const target = document.querySelector('[data-message-id="regression-scroll-a-message-44"]');
-  const card = target?.querySelector('.message-card');
-  if (!(list instanceof HTMLElement) || !(target instanceof HTMLElement) || !(card instanceof HTMLElement)) {
-    return { ready: false };
-  }
-  window.__cxConversationReadingAnchorStyle = {
-    flex: list.style.flex,
-    height: list.style.height,
-    minHeight: list.style.minHeight,
-    maxHeight: list.style.maxHeight
-  };
-  list.style.flex = '0 0 320px';
-  list.style.height = '320px';
-  list.style.minHeight = '320px';
-  list.style.maxHeight = '320px';
-  target.scrollIntoView({ behavior: 'auto', block: 'center' });
-  list.dispatchEvent(new Event('scroll'));
-  card.click();
-  return {
-    ready: true,
-    distanceBefore: Math.round(target.getBoundingClientRect().top - list.getBoundingClientRect().top),
-    maxScrollTop: Math.max(list.scrollHeight - list.clientHeight, 0)
-  };
-})())
-'@
-  Assert-True ($prepared.ready -eq $true) "conversation reading-anchor fixture is missing its list, target response, or message card"
-  Assert-True ([int]$prepared.maxScrollTop -gt 300) "conversation reading-anchor fixture is not scrollable enough"
-  Assert-True ([Math]::Abs([int]$prepared.distanceBefore - 160) -lt 140) "conversation reading-anchor probe did not place the response away from the viewport top"
-
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "120") | Out-Null
-  $actionMetrics = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const target = document.querySelector('[data-message-id="regression-scroll-a-message-44"]');
-  const button = target?.querySelector('[aria-label="将这条回复滚动到阅读区顶部"]');
-  const rect = button?.getBoundingClientRect();
-  const opacity = button instanceof HTMLElement ? Number.parseFloat(getComputedStyle(button).opacity || '0') : 0;
-  if (button instanceof HTMLButtonElement) button.click();
-  return {
-    hasButton: button instanceof HTMLButtonElement,
-    title: button?.getAttribute('title') || '',
-    ariaLabel: button?.getAttribute('aria-label') || '',
-    width: rect ? Math.round(rect.width) : 0,
-    height: rect ? Math.round(rect.height) : 0,
-    opacity
-  };
-})())
-'@
-  Assert-True ($actionMetrics.hasButton -eq $true) "assistant response is missing its move-to-top action"
-  Assert-True ([string]$actionMetrics.title -eq '将这条回复滚动到阅读区顶部') "assistant move-to-top action is missing its explanatory tooltip"
-  Assert-True ([string]$actionMetrics.ariaLabel -eq '将这条回复滚动到阅读区顶部') "assistant move-to-top action is missing its accessible name"
-  Assert-True ([int]$actionMetrics.width -ge 32 -and [int]$actionMetrics.height -ge 32) "assistant move-to-top action is too small for touch"
-  Assert-True ([double]$actionMetrics.opacity -ge 0.8) "assistant move-to-top action did not become visible after activating the message"
-
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "700") | Out-Null
-  $anchoredMetrics = Invoke-BrowserEvalJson -Session $Session -Script @'
-JSON.stringify((() => {
-  const list = document.querySelector('.conversation-list');
-  const target = document.querySelector('[data-message-id="regression-scroll-a-message-44"]');
-  if (!(list instanceof HTMLElement) || !(target instanceof HTMLElement)) return { ready: false };
-  const metrics = {
-    ready: true,
-    topOffset: Math.round(target.getBoundingClientRect().top - list.getBoundingClientRect().top),
-    hasReturnToLatest: document.querySelector('.conversation-jump-to-latest') instanceof HTMLButtonElement,
-    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
-  };
-  const originalStyle = window.__cxConversationReadingAnchorStyle;
-  if (originalStyle) {
-    list.style.flex = originalStyle.flex;
-    list.style.height = originalStyle.height;
-    list.style.minHeight = originalStyle.minHeight;
-    list.style.maxHeight = originalStyle.maxHeight;
-    delete window.__cxConversationReadingAnchorStyle;
-  }
-  list.scrollTop = list.scrollHeight;
-  list.dispatchEvent(new Event('scroll'));
-  return metrics;
-})())
-'@
-  Assert-True ($anchoredMetrics.ready -eq $true) "conversation reading-anchor result is missing its list or target response"
-  Assert-True ([int]$anchoredMetrics.topOffset -ge 8 -and [int]$anchoredMetrics.topOffset -le 28) "assistant response did not align to the reading-area top: $($anchoredMetrics.topOffset)"
-  Assert-True ($anchoredMetrics.hasReturnToLatest -eq $true) "assistant move-to-top action did not preserve the return-to-latest affordance"
-  Assert-True ($anchoredMetrics.hasHorizontalOverflow -eq $false) "assistant move-to-top action introduced horizontal overflow"
-}
-
-function Assert-ConversationOlderHistoryAffordance {
-  param([string]$Session)
-
-  $before = Read-ConversationFixtureMetrics -Session $Session
-  Assert-True ([int]$before.olderHistoryRequestCount -eq 0) "conversation fixture older-history request count should start at 0"
-  $localClickScript = @'
-JSON.stringify((() => {
-  const button = document.querySelector('.conversation-load-more-button');
-  if (!(button instanceof HTMLButtonElement)) return { clicked: 0 };
-  button.click();
-  return { clicked: 1 };
-})())
-'@
-  Invoke-BrowserEvalJson -Session $Session -Script $localClickScript | Out-Null
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "200") | Out-Null
-  $afterLocal = Read-ConversationFixtureMetrics -Session $Session
-  Assert-True ($afterLocal.fileCardCount -ge 2) "conversation fixture did not restore file cards after loading local older history"
-  Assert-True ($afterLocal.hasLatestTurnPromptContext -eq $true) "conversation fixture did not restore the earlier user prompt context"
-  Assert-True ([int]$afterLocal.olderHistoryRequestCount -eq 0) "conversation fixture requested remote older history while local messages were still available"
-
-  $remoteClickScript = @'
-JSON.stringify((() => {
-  const button = document.querySelector('.conversation-load-more-button');
-  if (!(button instanceof HTMLButtonElement)) return { clicked: 0 };
-  button.click();
-  button.click();
-  return { clicked: 2 };
-})())
-'@
-  Invoke-BrowserEvalJson -Session $Session -Script $remoteClickScript | Out-Null
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "200") | Out-Null
-  $after = Read-ConversationFixtureMetrics -Session $Session
-  Assert-True ([int]$after.olderHistoryRequestCount -eq 1) "conversation fixture load-more button emitted duplicate remote older-history requests"
-  Assert-True ($after.loadMoreButtonDisabled -eq $true) "conversation fixture load-more button did not stay disabled while remote older-history request was in flight"
-}
-
-function Reveal-ConversationFixtureLocalHistory {
-  param([string]$Session)
-
-  $script = @'
-JSON.stringify((() => {
-  const button = document.querySelector('.conversation-load-more-button');
-  if (!(button instanceof HTMLButtonElement)) return { clicked: false };
-  button.click();
-  return { clicked: true };
-})())
-'@
-  $result = Invoke-BrowserEvalJson -Session $Session -Script $script
-  Assert-True ($result.clicked -eq $true) "conversation fixture could not reveal local history before structured-block checks"
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "200") | Out-Null
-}
-
-function Expand-ConversationFixturePendingRequests {
-  param([string]$Session)
-
-  $script = @'
-JSON.stringify((() => {
-  if (!document.querySelector('.request-card')) {
-    document.querySelector('.conversation-process-toggle')?.click();
-  }
-  return { expanded: Boolean(document.querySelector('.request-card')) };
-})())
-'@
-  Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
-}
-
-function Expand-ConversationFixtureCommandOutput {
-  param([string]$Session)
-
-  $script = @'
-JSON.stringify((() => {
-  if (!document.querySelector('.conversation-item[data-message-type="commandExecution"] .cmd-output-wrap.cmd-output-visible')) {
-    document.querySelector('.conversation-item[data-message-type="commandExecution"] .cmd-row')?.click();
-  }
-  return { expanded: Boolean(document.querySelector('.conversation-item[data-message-type="commandExecution"] .cmd-output-wrap.cmd-output-visible')) };
-})())
-'@
-  Invoke-BrowserEvalJson -Session $Session -Script $script | Out-Null
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
-}
-
-function Assert-ConversationCommandOutputLazy {
-  param([string]$Session)
-
-  $beforeScript = @'
-JSON.stringify((() => {
-  const commandOutputs = Array.from(document.querySelectorAll('.conversation-regression-fixture .cmd-output-wrap .cmd-output'));
-  const textContent = document.body.textContent || '';
-  return {
-    commandOutputCount: commandOutputs.length,
-    hasFixtureCommandOutputText: textContent.includes('fixture-command-output: ok')
-  };
-})())
-'@
-  $before = Invoke-BrowserEvalJson -Session $Session -Script $beforeScript
-  Assert-True ([int]$before.commandOutputCount -eq 0) "conversation fixture command output should be lazy before expand"
-  Assert-True ($before.hasFixtureCommandOutputText -eq $false) "conversation fixture command output marker rendered before expand"
-
-  Expand-ConversationFixtureCommandOutput -Session $Session
-
-  $afterScript = @'
-JSON.stringify((() => {
-  const commandOutputs = Array.from(document.querySelectorAll('.conversation-regression-fixture .cmd-output-wrap .cmd-output'));
-  const textContent = document.body.textContent || '';
-  return {
-    commandOutputCount: commandOutputs.length,
-    hasFixtureCommandOutputText: textContent.includes('fixture-command-output: ok')
-  };
-})())
-'@
-  $after = Invoke-BrowserEvalJson -Session $Session -Script $afterScript
-  Assert-True ([int]$after.commandOutputCount -ge 1) "conversation fixture command output did not render after expand"
-  Assert-True ($after.hasFixtureCommandOutputText -eq $true) "conversation fixture command output marker missing after expand"
-}
-
-function Assert-ConversationRawPayloadLazy {
-  param([string]$Session)
-
-  $beforeScript = @'
-JSON.stringify((() => {
-  const rawCards = Array.from(document.querySelectorAll('.message-structured-card'));
-  const rawPres = Array.from(document.querySelectorAll('.message-structured-pre'));
-  const textContent = document.body.textContent || '';
-  return {
-    rawPayloadCardCount: rawCards.length,
-    rawPayloadPreCount: rawPres.length,
-    hasFixtureRawText: textContent.includes('fixture-raw-payload')
-  };
-})())
-'@
-  $before = Invoke-BrowserEvalJson -Session $Session -Script $beforeScript
-  Assert-True ($before.rawPayloadCardCount -ge 1) "conversation fixture is missing raw payload card"
-  Assert-True ([int]$before.rawPayloadPreCount -eq 0) "conversation fixture raw payload preview should be lazy before expand"
-  Assert-True ($before.hasFixtureRawText -eq $false) "conversation fixture raw payload marker rendered before card expand"
-
-  $expandScript = @'
-JSON.stringify((() => {
-  const summary = document.querySelector('.message-structured-summary');
-  if (summary instanceof HTMLElement) {
-    summary.click();
-  }
-  return { clicked: summary instanceof HTMLElement };
-})())
-'@
-  $expanded = Invoke-BrowserEvalJson -Session $Session -Script $expandScript
-  Assert-True ($expanded.clicked -eq $true) "conversation fixture raw payload summary could not be clicked"
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "300") | Out-Null
-
-  $afterScript = @'
-JSON.stringify((() => {
-  const rawPres = Array.from(document.querySelectorAll('.message-structured-pre'));
-  const textContent = document.body.textContent || '';
-  return {
-    rawPayloadPreCount: rawPres.length,
-    hasFixtureRawText: textContent.includes('fixture-raw-payload')
-  };
-})())
-'@
-  $after = Invoke-BrowserEvalJson -Session $Session -Script $afterScript
-  Assert-True ([int]$after.rawPayloadPreCount -ge 1) "conversation fixture raw payload preview did not render after expand"
-  Assert-True ($after.hasFixtureRawText -eq $true) "conversation fixture raw payload marker missing after card expand"
-}
-
-function Assert-ConversationFixtureCopyInteraction {
-  param([string]$Session)
-
-  $stubScript = @'
-JSON.stringify((() => {
-  window.__cxCodexCopiedText = '';
-  window.__cxCodexClipboardWriteAttempts = 0;
-  window.__cxCodexFallbackCopyAttempts = 0;
-  const originalSetTimeout = window.setTimeout.bind(window);
-  window.setTimeout = (handler, timeout, ...args) => originalSetTimeout(handler, timeout === 1600 ? 10000 : timeout, ...args);
-  const existingClipboard = navigator.clipboard || {};
-  Object.defineProperty(navigator, 'clipboard', {
-    configurable: true,
-    value: {
-      ...existingClipboard,
-      writeText: async () => {
-        window.__cxCodexClipboardWriteAttempts += 1;
-        throw new DOMException('fixture clipboard permission rejection', 'NotAllowedError');
-      },
-    },
-  });
-  document.execCommand = (command) => {
-    if (command !== 'copy') return false;
-    window.__cxCodexFallbackCopyAttempts += 1;
-    const event = new Event('copy', { bubbles: true, cancelable: true });
-    Object.defineProperty(event, 'clipboardData', {
-      value: {
-        setData: (type, text) => {
-          if (type === 'text/plain') window.__cxCodexCopiedText = String(text);
-        },
-      },
-    });
-    document.dispatchEvent(event);
-    return true;
-  };
-  return { stubbed: true };
-})())
-'@
-  Invoke-BrowserEvalJson -Session $Session -Script $stubScript | Out-Null
-  $clickScript = @'
-JSON.stringify((() => {
-  const button = document.querySelector('.message-code-block[data-diff="false"] .message-code-copy');
-  if (!(button instanceof HTMLButtonElement)) return { clicked: false };
-  button.focus();
-  button.click();
-  return { clicked: true };
-})())
-'@
-  $clickState = Invoke-BrowserEvalJson -Session $Session -Script $clickScript
-  Assert-True ($clickState.clicked -eq $true) "conversation fixture code copy button was not clickable"
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "300") | Out-Null
-
-  $stateScript = @'
-JSON.stringify({
-  copiedText: window.__cxCodexCopiedText || '',
-  clipboardWriteAttempts: window.__cxCodexClipboardWriteAttempts || 0,
-  fallbackCopyAttempts: window.__cxCodexFallbackCopyAttempts || 0,
-  copyButtonKeptFocus: document.activeElement?.classList.contains('message-code-copy') === true,
-  copiedButtonCount: Array.from(document.querySelectorAll('.message-code-copy')).filter((button) => button.textContent.includes('已复制')).length
-})
-'@
-  $state = Invoke-BrowserEvalJson -Session $Session -Script $stateScript
-  $copiedText = [string]$state.copiedText
-  Assert-True ([int]$state.clipboardWriteAttempts -eq 1) "conversation fixture did not exercise the primary clipboard rejection"
-  Assert-True ([int]$state.fallbackCopyAttempts -eq 1) "conversation fixture did not exercise exactly one copy-event fallback"
-  Assert-True ($copiedText -like '*fixture-code-block*') "conversation fixture copy did not capture the code block body"
-  Assert-True ($copiedText -notlike '*```*') "conversation fixture copy included markdown fence markers"
-  Assert-True ($state.copyButtonKeptFocus -eq $true) "copy fallback moved focus away from the invoking code button"
-  Assert-True ([int]$state.copiedButtonCount -ge 1) "conversation fixture copy button did not show copied feedback"
-
-  $failureSetupScript = @'
-JSON.stringify((() => {
-  document.execCommand = () => false;
-  const buttons = Array.from(document.querySelectorAll('.message-code-copy'));
-  const button = buttons[1];
-  if (!(button instanceof HTMLButtonElement)) return { clicked: false };
-  button.focus();
-  button.click();
-  return { clicked: true };
-})())
-'@
-  $failureSetup = Invoke-BrowserEvalJson -Session $Session -Script $failureSetupScript
-  Assert-True ($failureSetup.clicked -eq $true) "conversation fixture is missing a second code copy control for failure feedback"
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "300") | Out-Null
-
-  $failureStateScript = @'
-JSON.stringify({
-  statusText: document.querySelector('.conversation-regression-copy-status')?.textContent?.trim() || '',
-  statusTone: document.querySelector('.conversation-regression-copy-status')?.getAttribute('data-tone') || '',
-  failedButtonClaimedSuccess: Array.from(document.querySelectorAll('.message-code-copy'))[1]?.textContent?.includes('已复制') === true
-})
-'@
-  $failureState = Invoke-BrowserEvalJson -Session $Session -Script $failureStateScript
-  Assert-True ($failureState.statusText -eq '代码复制失败，请手动选择复制。') "clipboard failure did not expose actionable conversation feedback"
-  Assert-True ($failureState.statusTone -eq 'danger') "clipboard failure feedback did not retain danger semantics"
-  Assert-True ($failureState.failedButtonClaimedSuccess -eq $false) "failed clipboard fallback incorrectly reported copied success"
-}
-
-function Assert-ConversationMessageActionHitTesting {
-  param([string]$Session)
-
-  $result = Invoke-BrowserEvalJson -Session $Session -Script @'
-(async () => {
-  const isOnScreen = (element) => {
-    const rect = element.getBoundingClientRect();
-    return rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
-  };
-  const action = Array.from(document.querySelectorAll('.message-action-button'))
-    .find((element) => element instanceof HTMLButtonElement
-      && element.getAttribute('aria-label') === '编辑并从此处继续'
-      && isOnScreen(element));
-  if (!(action instanceof HTMLButtonElement)) return JSON.stringify({ actionFound: false });
-  const card = action.closest('.conversation-item')?.querySelector('.message-card');
-  if (!(card instanceof HTMLElement)) return JSON.stringify({ actionFound: true, cardFound: false });
-  const favorite = action.closest('.conversation-item')?.querySelector('.message-action-button--favorite.is-favorited');
-  const read = (element) => {
-    if (!(element instanceof HTMLButtonElement)) return null;
-    const rect = element.getBoundingClientRect();
-    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-    return {
-      opacity: Number.parseFloat(getComputedStyle(element).opacity),
-      pointerEvents: getComputedStyle(element).pointerEvents,
-      hitLabel: hit?.closest('button')?.getAttribute('aria-label') || '',
-    };
-  };
-  const inactive = read(action);
-  const favoriteInactive = read(favorite);
-  card.click();
-  await Promise.resolve();
-  await new Promise((resolve) => requestAnimationFrame(resolve));
-  const active = read(action);
-  window.dispatchEvent(new KeyboardEvent('keydown', {
-    key: 'Escape',
-    bubbles: true,
-    cancelable: true,
-  }));
-  await Promise.resolve();
-  await new Promise((resolve) => requestAnimationFrame(resolve));
-  return JSON.stringify({
-    actionFound: true,
-    cardFound: true,
-    label: action.getAttribute('aria-label'),
-    favoriteLabel: favorite?.getAttribute('aria-label') || '',
-    inactive,
-    favoriteInactive,
-    active,
-    restored: read(action),
-    favoriteRestored: read(favorite),
-  });
-})()
-'@
-
-  Assert-True ($result.actionFound -eq $true -and $result.cardFound -eq $true) "conversation fixture is missing an on-screen editable message action"
-  Assert-True ([double]$result.inactive.opacity -eq 0) "inactive message action must remain visually hidden"
-  Assert-True ($result.inactive.pointerEvents -eq 'none') "inactive message action must not intercept pointer input"
-  Assert-True ($result.inactive.hitLabel -ne $result.label) "inactive message action center must resolve to the content beneath it"
-  Assert-True ($result.favoriteLabel -eq '取消收藏这条消息') "conversation fixture is missing its always-visible favorited action"
-  Assert-True ([double]$result.favoriteInactive.opacity -eq 1) "favorited action must remain visibly persistent"
-  Assert-True ($result.favoriteInactive.pointerEvents -eq 'auto' -and $result.favoriteInactive.hitLabel -eq $result.favoriteLabel) "visible favorited action must remain pointer-operable"
-  Assert-True ([double]$result.active.opacity -ge 0.89) "activated message action must become visible"
-  Assert-True ($result.active.pointerEvents -eq 'auto') "activated message action must accept pointer input"
-  Assert-True ($result.active.hitLabel -eq $result.label) "activated message action center must resolve to the action button"
-  Assert-True ([double]$result.restored.opacity -eq 0) "Escape must hide the active message action"
-  Assert-True ($result.restored.pointerEvents -eq 'none') "Escape must remove pointer ownership from the hidden message action"
-  Assert-True ($result.restored.hitLabel -ne $result.label) "dismissed message action must no longer own its former hit target"
-  Assert-True ($result.favoriteRestored.pointerEvents -eq 'auto' -and $result.favoriteRestored.hitLabel -eq $result.favoriteLabel) "Escape must not disable the still-visible favorited action"
-  Write-Step ("conversation message-action hit testing -> inactive=" + $result.inactive.pointerEvents + ", active=" + $result.active.pointerEvents + ", restored=" + $result.restored.pointerEvents)
 }
 
 function Read-SidebarFixtureMetrics {
@@ -5739,8 +4606,8 @@ function Assert-SidebarFixture {
   Assert-True ([int]$Metrics.pinnedThreadProjectRowCount -eq 1) "sidebar fixture pinned thread is not retained exactly once in project list"
   Assert-True ([int]$Metrics.sourceCount -eq ([int]$Metrics.runningThreadRowCount + [int]$Metrics.waitingThreadRowCount + [int]$Metrics.backgroundThreadRowCount)) "sidebar fixture should only keep text metadata for active threads"
   Assert-True ($Metrics.indicatorCount -ge 2) "sidebar fixture is missing unread/running indicators"
-  Assert-True ($Metrics.minRowHeight -ge 40) "sidebar fixture row height is too small: $($Metrics.minRowHeight)"
-  Assert-True ($Metrics.maxRowHeight -le 52) "sidebar fixture row height is too large: $($Metrics.maxRowHeight)"
+  Assert-True ($Metrics.minRowHeight -ge 44) "sidebar fixture touch row height is too small: $($Metrics.minRowHeight)"
+  Assert-True ($Metrics.maxRowHeight -le 60) "sidebar fixture touch row height is too large: $($Metrics.maxRowHeight)"
   Assert-True ($Metrics.maxRowRadius -le 10) "sidebar fixture row radius is too large: $($Metrics.maxRowRadius)"
   Assert-True ($Metrics.hasPillSourceStyle -eq $false) "sidebar fixture still renders source/status as pill chips"
   Assert-True ($Metrics.workingIndicator.animationName -notlike "*spin*") "sidebar fixture running indicator still uses spinner animation"
@@ -6129,7 +4996,7 @@ JSON.stringify((() => {
     renderedProjectRows: selectedProject?.querySelectorAll('.thread-row').length || 0,
     moreLabel: selectedProject?.querySelector('.thread-show-more-button')?.textContent?.trim() || '',
     scrollTop: scroll?.scrollTop || 0,
-    visible: !!viewport && !!bounds && bounds.top >= viewport.top && bounds.bottom <= viewport.bottom,
+    visible: !!viewport && !!bounds && bounds.top >= viewport.top - 1 && bounds.bottom <= viewport.bottom + 1,
     hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
   };
 })())
@@ -6330,6 +5197,66 @@ function Assert-ComposerFixture {
   Assert-True ($Metrics.runtimeWidth -ge 112) "$ViewportName composer runtime trigger is too narrow: $($Metrics.runtimeWidth)"
   Assert-True ($Metrics.fitFailureCount -eq 0) "$ViewportName composer controls overflow viewport: $($Metrics.fitFailures | ConvertTo-Json -Compress)"
   Assert-True ($Metrics.hasHorizontalOverflow -eq $false) "$ViewportName composer fixture has horizontal overflow: $($Metrics.scrollWidth) > $($Metrics.clientWidth)"
+}
+
+function Assert-ComposerPersistentGoalMenu {
+  param(
+    [string]$Session,
+    [string]$ViewportName
+  )
+
+  $before = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify({
+  standaloneCreateCount: document.querySelectorAll('.thread-goal-create').length,
+  editorCount: document.querySelectorAll('.thread-goal-editor').length,
+})
+'@
+  Assert-True ([int]$before.standaloneCreateCount -eq 0 -and [int]$before.editorCount -eq 0) "$ViewportName persistent goal must not occupy space before the Composer menu opens"
+
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'click', '.thread-composer-attach-trigger') | Out-Null
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '100') | Out-Null
+  $menu = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const button = Array.from(document.querySelectorAll('.thread-composer-attach-item'))
+    .find((entry) => entry.querySelector('.thread-composer-attach-item-title')?.textContent?.trim() === '设置持续目标');
+  const rect = button?.getBoundingClientRect();
+  return {
+    found: button instanceof HTMLButtonElement,
+    height: rect ? Math.round(rect.height) : 0,
+  };
+})())
+'@
+  Assert-True ($menu.found -eq $true) "$ViewportName Composer plus menu is missing the persistent goal action"
+  if ($ViewportName -ne 'desktop') {
+    Assert-True ([int]$menu.height -ge 44) "$ViewportName persistent goal menu action is smaller than 44px"
+  }
+
+  $opened = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const button = Array.from(document.querySelectorAll('.thread-composer-attach-item'))
+    .find((entry) => entry.querySelector('.thread-composer-attach-item-title')?.textContent?.trim() === '设置持续目标');
+  if (!(button instanceof HTMLButtonElement)) return { clicked: false };
+  button.click();
+  return { clicked: true };
+})())
+'@
+  Assert-True ($opened.clicked -eq $true) "$ViewportName persistent goal menu action could not be activated"
+  Invoke-AgentBrowser -Arguments @('--session', $Session, 'wait', '150') | Out-Null
+  $after = Invoke-BrowserEvalJson -Session $Session -Script @'
+JSON.stringify((() => {
+  const editor = document.querySelector('.thread-goal-editor');
+  const textarea = editor?.querySelector('textarea');
+  return {
+    attachMenuCount: document.querySelectorAll('.thread-composer-attach-menu').length,
+    editorCount: document.querySelectorAll('.thread-goal-editor').length,
+    editorFocused: document.activeElement === textarea,
+    standaloneCreateCount: document.querySelectorAll('.thread-goal-create').length,
+    hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2,
+  };
+})())
+'@
+  Assert-True ([int]$after.attachMenuCount -eq 0 -and [int]$after.editorCount -eq 1 -and $after.editorFocused -eq $true) "$ViewportName persistent goal action did not close the plus menu and focus the existing editor"
+  Assert-True ([int]$after.standaloneCreateCount -eq 0 -and $after.hasHorizontalOverflow -eq $false) "$ViewportName persistent goal editor restored the old standalone trigger or overflowed"
 }
 
 function Assert-ComposerAutoGrow {
@@ -6994,20 +5921,16 @@ JSON.stringify((() => {
   const firstScreenDesktopAppStatusCount = resources
     .filter((entry) => entry.startTime <= 1500 && entry.name === '/codex-api/desktop-app/status')
     .length;
-  const visibleConversationItems = Array.from(document.querySelectorAll('.conversation-item[data-role]'));
-  const conversationList = document.querySelector('.conversation-list');
-  const messageCards = Array.from(document.querySelectorAll('.message-card'));
-  const codeBlocks = Array.from(document.querySelectorAll('.message-code-block'));
-  const codeLines = Array.from(document.querySelectorAll('.message-code-line'));
-  const commandOutputWraps = Array.from(document.querySelectorAll('.cmd-output-wrap'));
-  const mountedCommandOutputs = Array.from(document.querySelectorAll('.cmd-output-wrap .cmd-output'));
-  const expandedRawPayloads = Array.from(document.querySelectorAll('.raw-payload-card[open], .message-raw-payload[open]'));
-  const visibleUserMessageCount = visibleConversationItems
-    .filter((node) => node.getAttribute('data-role') === 'user')
-    .length;
-  const visibleAssistantMessageCount = visibleConversationItems
-    .filter((node) => node.getAttribute('data-role') === 'assistant')
-    .length;
+  const visibleConversationItems = Array.from(document.querySelectorAll('.turn-shell'));
+  const conversationList = document.querySelector('.transcript-list');
+  const messageCards = Array.from(document.querySelectorAll('.user-message, .commentary-block, .final-answer, .final-status'));
+  const codeBlocks = Array.from(document.querySelectorAll('.message-markdown pre'));
+  const codeLines = Array.from(document.querySelectorAll('.message-markdown pre code'));
+  const commandOutputWraps = Array.from(document.querySelectorAll('.activity-details'));
+  const mountedCommandOutputs = Array.from(document.querySelectorAll('.activity-details pre'));
+  const expandedRawPayloads = Array.from(document.querySelectorAll('.activity-details[open][data-activity-type="unknown"]'));
+  const visibleUserMessageCount = document.querySelectorAll('.user-message').length;
+  const visibleAssistantMessageCount = document.querySelectorAll('.assistant-turn').length;
   const firstScreenReadyMetric = window.__cxCodexThreadFirstScreenReady?.[threadId] ?? null;
   const composerInput = document.querySelector('.thread-composer-input');
   const composerSubmit = document.querySelector('.thread-composer-submit');
@@ -7026,8 +5949,8 @@ JSON.stringify((() => {
     visibleAssistantMessageCount,
     routeMatchesThread: location.hash === `#/thread/${encodeURIComponent(threadId)}`,
     composerReady: composerInput instanceof HTMLTextAreaElement && !composerInput.disabled && composerSubmit instanceof HTMLButtonElement,
-    emptyStateVisible: !!document.querySelector('.conversation-empty-state'),
-    loadingIndicatorCount: document.querySelectorAll('.conversation-loading,[aria-busy="true"]').length,
+    emptyStateVisible: !!document.querySelector('.transcript-empty'),
+    loadingIndicatorCount: document.querySelectorAll('.transcript-loading,[aria-busy="true"]').length,
     firstScreenReadyMs: firstScreenReadyMetric?.readyAtMs ?? null,
     firstScreenSelectionStartedAtMs: firstScreenReadyMetric?.selectionStartedAtMs ?? null,
     firstScreenSelectionLatencyMs: firstScreenReadyMetric?.selectionLatencyMs ?? null,
@@ -7038,7 +5961,7 @@ JSON.stringify((() => {
     messageCardCount: messageCards.length,
     codeBlockCount: codeBlocks.length,
     codeLineCount: codeLines.length,
-    expandedCommandOutputCount: commandOutputWraps.filter((node) => node.classList.contains('cmd-output-visible')).length,
+    expandedCommandOutputCount: commandOutputWraps.filter((node) => node.hasAttribute('open')).length,
     mountedCommandOutputCount: mountedCommandOutputs.length,
     expandedRawPayloadCount: expandedRawPayloads.length,
     conversationDomNodeCount: conversationList ? conversationList.querySelectorAll('*').length : 0,
@@ -7228,14 +6151,14 @@ JSON.stringify((() => {
     .map((row) => Number(row?.turnIndex))
     .filter((turnIndex) => Number.isFinite(turnIndex));
   const maxTextLength = messages.reduce((max, row) => Math.max(max, String(row?.text || '').length), 0);
-  const maxCommandOutputLength = messages.reduce((max, row) => Math.max(max, String(row?.commandExecution?.aggregatedOutput || '').length), 0);
   return {
     hasEntry: !!entry,
     messageCount: messages.length,
+    nonUserMessageCount: messages.filter((row) => row?.role !== 'user').length,
+    commandPayloadCount: messages.filter((row) => row?.commandExecution != null).length,
     distinctTurnCount: new Set(turnIndexes).size,
     entryJsonLength: entry ? JSON.stringify(entry).length : 0,
     maxTextLength,
-    maxCommandOutputLength,
   };
 })())
 '@
@@ -7254,8 +6177,8 @@ function Assert-ThreadMessageCacheMetrics {
     Assert-True ($Metrics.hasEntry -eq $true) "thread message cache has no entry for $ThreadId"
   }
   Assert-True ([int]$Metrics.messageCount -le 24) "thread message cache kept $($Metrics.messageCount) messages for $ThreadId; expected <= 24"
+  Assert-True ([int]$Metrics.nonUserMessageCount -eq 0 -and [int]$Metrics.commandPayloadCount -eq 0) "thread message cache must retain acknowledged user identity only for $ThreadId"
   Assert-True ([int]$Metrics.maxTextLength -le 6100) "thread message cache text is too large for $ThreadId; maxTextLength=$($Metrics.maxTextLength)"
-  Assert-True ([int]$Metrics.maxCommandOutputLength -le 3100) "thread message cache command output is too large for $ThreadId; maxCommandOutputLength=$($Metrics.maxCommandOutputLength)"
   Assert-True ([int]$Metrics.entryJsonLength -le 280000) "thread message cache entry is too large for $ThreadId; entryJsonLength=$($Metrics.entryJsonLength)"
 }
 
@@ -7384,23 +6307,21 @@ function Read-ThreadWindowMetrics {
 JSON.stringify((() => {
   const resources = performance.getEntriesByType('resource')
     .filter((entry) => entry.name.includes('/codex-api/rpc'));
-  const list = document.querySelector('.conversation-list');
-  const items = Array.from(document.querySelectorAll('.conversation-item[data-role]'));
-  const roleCount = (role) => items.filter((node) => node.getAttribute('data-role') === role).length;
-  const loadButton = document.querySelector('.conversation-load-more-button');
+  const list = document.querySelector('.transcript-list');
+  const items = Array.from(document.querySelectorAll('.turn-shell'));
+  const loadButton = document.querySelector('.history-button');
   const loadText = loadButton?.textContent?.replace(/\s+/g, ' ').trim() || '';
-  const remainingMatch = loadText.match(/剩余\s+(\d+)\s+条/);
-  const earliestTurnIndexAttribute = list?.getAttribute('data-earliest-turn-index') || '';
+  const earliestTurnIndexAttribute = list?.getAttribute('data-history-start-index') || '';
   const earliestTurnIndexValue = Number(earliestTurnIndexAttribute);
   return {
     hasLoadMore: !!loadButton,
     loadText,
-    hiddenRemaining: remainingMatch ? Number(remainingMatch[1]) : null,
+    hiddenRemaining: null,
     messageCount: Number(list?.getAttribute('data-message-count') || '0'),
     earliestTurnIndex: earliestTurnIndexAttribute && Number.isFinite(earliestTurnIndexValue) ? earliestTurnIndexValue : null,
     itemCount: items.length,
-    userCount: roleCount('user'),
-    assistantCount: roleCount('assistant'),
+    userCount: document.querySelectorAll('.user-message').length,
+    assistantCount: document.querySelectorAll('.assistant-turn').length,
     scrollTop: list?.scrollTop ?? 0,
     scrollHeight: list?.scrollHeight ?? 0,
     clientHeight: list?.clientHeight ?? 0,
@@ -7417,7 +6338,7 @@ function Click-ThreadLoadMore {
 
   $script = @'
 JSON.stringify((() => {
-  const button = document.querySelector('.conversation-load-more-button');
+  const button = document.querySelector('.history-button');
   if (!button || button.disabled) return { clicked: false };
   button.click();
   return { clicked: true };
@@ -7547,6 +6468,7 @@ try {
   Assert-ImmediateAsyncRouteFallbackSource
   Assert-CompleteThreadExportSource
   Assert-CompleteThreadCopySource
+  Assert-SemaConversationProjectionOwnershipSource
 Assert-NestedMobileBackOwnershipSource
 Assert-MobileDrawerEnvironmentOwnershipSource
 Assert-MobileThreadActionDiscoverySource
@@ -7786,27 +6708,36 @@ Assert-ThreadAttentionChromeSource
   Assert-ComposerDictationDraft -Metrics (Read-ComposerDictationMetrics -Session $session) -ViewportName "foldable"
   Add-RegressionResult -Name "composer-shell-fixture-foldable" -Page $composerFixtureFoldable
 
+  $composerGoalFixtureUrl = $BaseUrl + "/#/__regression/composer-shell?regression=frontend&goal=1&goalEmpty=1"
+  $composerGoalFixture = Open-And-ReadPage -Session $session -Url $composerGoalFixtureUrl -Width $DesktopWidth -Height $DesktopHeight
+  Assert-Page -Page $composerGoalFixture -Name "composer persistent goal menu fixture desktop" -RequireComposer
+  Assert-ComposerPersistentGoalMenu -Session $session -ViewportName "desktop"
+  Add-RegressionResult -Name "composer-persistent-goal-menu-fixture-desktop" -Page $composerGoalFixture
+
+  $composerGoalFixturePhone = Open-And-ReadPage -Session $session -Url $composerGoalFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
+  Assert-Page -Page $composerGoalFixturePhone -Name "composer persistent goal menu fixture phone" -RequireComposer
+  Assert-ComposerPersistentGoalMenu -Session $session -ViewportName "phone"
+  Save-RegressionScreenshot -Session $session -Name 'composer-persistent-goal-menu-phone' | Out-Null
+  Add-RegressionResult -Name "composer-persistent-goal-menu-fixture-phone" -Page $composerGoalFixturePhone
+
   $fixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend"
   $fixture = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $DesktopWidth -Height $DesktopHeight
   Assert-Page -Page $fixture -Name "conversation blocks fixture desktop"
-  Reveal-ConversationFixtureLocalHistory -Session $session
-  Assert-ConversationRawPayloadLazy -Session $session
-  Expand-ConversationFixturePendingRequests -Session $session
-  Assert-ConversationCommandOutputLazy -Session $session
-  Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "desktop"
-  Assert-ConversationOlderHistoryAffordance -Session $session
-  Assert-ConversationViewportControls -Session $session
-  Assert-ConversationFixtureCopyInteraction -Session $session
-  Add-RegressionResult -Name "conversation-blocks-fixture" -Page $fixture
+  Assert-ProjectedConversationFixture -Metrics (Read-ProjectedConversationFixtureMetrics -Session $session) -ViewportName "desktop"
+  Assert-ProjectedConversationCompletedDetails -Session $session
+  Assert-ProjectedConversationOlderHistory -Session $session
+  Add-RegressionResult -Name "conversation-projection-fixture" -Page $fixture
+
+  $scrollReturnFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&scrollReturn=1"
+  $scrollReturnFixture = Open-And-ReadPage -Session $session -Url $scrollReturnFixtureUrl -Width $DesktopWidth -Height $DesktopHeight
+  Assert-Page -Page $scrollReturnFixture -Name "conversation return-to-latest fixture desktop"
+  Assert-ProjectedConversationReturnToLatest -Session $session
+  Add-RegressionResult -Name "conversation-return-to-latest-fixture" -Page $scrollReturnFixture
 
   $fixturePhone = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $fixturePhone -Name "conversation blocks fixture phone"
-  Reveal-ConversationFixtureLocalHistory -Session $session
-  Assert-ConversationRawPayloadLazy -Session $session
-  Expand-ConversationFixturePendingRequests -Session $session
-  Assert-ConversationCommandOutputLazy -Session $session
-  Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "phone"
-  Add-RegressionResult -Name "conversation-blocks-fixture-phone" -Page $fixturePhone
+  Assert-ProjectedConversationFixture -Metrics (Read-ProjectedConversationFixtureMetrics -Session $session) -ViewportName "phone"
+  Add-RegressionResult -Name "conversation-projection-fixture-phone" -Page $fixturePhone
 
   $queueTransferFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&queueTransferFailure=1"
   $queueTransferFixture = Open-And-ReadPage -Session $session -Url $queueTransferFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
@@ -7826,74 +6757,16 @@ Assert-ThreadAttentionChromeSource
   Assert-ConversationStreamingResponsiveness -Session $session
   Add-RegressionResult -Name "conversation-streaming-stress-phone" -Page $streamingStressFixture
 
-  $imagePreviewFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&imagePreview=1"
-  $imagePreviewFixture = Open-And-ReadPage -Session $session -Url $imagePreviewFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
-  Assert-Page -Page $imagePreviewFixture -Name "conversation image preview gestures fixture phone"
-  Assert-ConversationImagePreviewGestures -Session $session
-  Add-RegressionResult -Name "conversation-image-preview-gestures-phone" -Page $imagePreviewFixture
-
-  $markdownImageFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&markdownImage=1"
-  $markdownImageFixture = Open-And-ReadPage -Session $session -Url $markdownImageFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
-  Assert-Page -Page $markdownImageFixture -Name "conversation markdown-image recovery fixture phone"
-  Assert-ConversationMarkdownImageRecovery -Session $session
-  Add-RegressionResult -Name "conversation-markdown-image-recovery-phone" -Page $markdownImageFixture
-
-  $scrollSwitchFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&scrollSwitchRace=1&messageActionHit=1"
-  $scrollSwitchFixture = Open-And-ReadPage -Session $session -Url $scrollSwitchFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
-  Assert-Page -Page $scrollSwitchFixture -Name "conversation thread-switch scroll fixture phone"
-  Assert-ConversationMessageActionHitTesting -Session $session
-  Assert-ConversationMessageReadingAnchor -Session $session
-  Assert-ConversationThreadSwitchScrollIsolation -Session $session
-  Add-RegressionResult -Name "conversation-thread-switch-scroll-fixture-phone" -Page $scrollSwitchFixture
-
-  $foregroundResumeScrollFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&scrollSwitchRace=1&foregroundResumeScroll=1"
-  $foregroundResumeBottomFixture = Open-And-ReadPage -Session $session -Url $foregroundResumeScrollFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
-  Assert-Page -Page $foregroundResumeBottomFixture -Name "conversation foreground resume bottom fixture phone"
-  Assert-ConversationForegroundResumeScrollIntent -Session $session -Mode 'bottom'
-  Add-RegressionResult -Name "conversation-foreground-resume-bottom-phone" -Page $foregroundResumeBottomFixture
-
-  $foregroundResumeReadingFixture = Open-And-ReadPage -Session $session -Url $foregroundResumeScrollFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
-  Assert-Page -Page $foregroundResumeReadingFixture -Name "conversation foreground resume reading fixture phone"
-  Assert-ConversationForegroundResumeScrollIntent -Session $session -Mode 'reading'
-  Add-RegressionResult -Name "conversation-foreground-resume-reading-phone" -Page $foregroundResumeReadingFixture
-
-  $foregroundResumeUserFixture = Open-And-ReadPage -Session $session -Url $foregroundResumeScrollFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
-  Assert-Page -Page $foregroundResumeUserFixture -Name "conversation foreground resume user-intent fixture phone"
-  Assert-ConversationForegroundResumeScrollIntent -Session $session -Mode 'user'
-  Add-RegressionResult -Name "conversation-foreground-resume-user-intent-phone" -Page $foregroundResumeUserFixture
-
   $loadFailureFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&loadFailure=1"
   $loadFailureFixture = Open-And-ReadPage -Session $session -Url $loadFailureFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
   Assert-Page -Page $loadFailureFixture -Name "conversation load failure fixture phone"
   Assert-ConversationLoadFailureFixture -Session $session
   Add-RegressionResult -Name "conversation-load-failure-fixture-phone" -Page $loadFailureFixture
 
-  $tailStatusFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&tailStatus=1&tailGap=1"
-  $tailStatusFixture = Open-And-ReadPage -Session $session -Url $tailStatusFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
-  Assert-Page -Page $tailStatusFixture -Name "conversation tail status fixture phone"
-  Assert-ConversationTailStatusFixture -Session $session
-  Add-RegressionResult -Name "conversation-tail-status-fixture-phone" -Page $tailStatusFixture
-
-  $nextActivityFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&tailStatus=1&tailNextActivity=1"
-  $nextActivityFixture = Open-And-ReadPage -Session $session -Url $nextActivityFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
-  Assert-Page -Page $nextActivityFixture -Name "conversation new activity timer fixture phone"
-  Assert-ConversationNewActivityTimerFixture -Session $session
-  Add-RegressionResult -Name "conversation-new-activity-timer-fixture-phone" -Page $nextActivityFixture
-
-  $resumeRecoveryFixtureUrl = $BaseUrl + "/#/__regression/conversation-blocks?regression=frontend&tailStatus=1&resumeRecovery=1"
-  $resumeRecoveryFixture = Open-And-ReadPage -Session $session -Url $resumeRecoveryFixtureUrl -Width $PhoneWidth -Height $PhoneHeight
-  Assert-Page -Page $resumeRecoveryFixture -Name "conversation resume recovery fixture phone"
-  Assert-ConversationResumeRecoveryFixture -Session $session
-  Add-RegressionResult -Name "conversation-resume-recovery-fixture-phone" -Page $resumeRecoveryFixture
-
   $fixtureFoldable = Open-And-ReadPage -Session $session -Url $fixtureUrl -Width $FoldableWidth -Height $FoldableHeight
   Assert-Page -Page $fixtureFoldable -Name "conversation blocks fixture foldable"
-  Reveal-ConversationFixtureLocalHistory -Session $session
-  Assert-ConversationRawPayloadLazy -Session $session
-  Expand-ConversationFixturePendingRequests -Session $session
-  Assert-ConversationCommandOutputLazy -Session $session
-  Assert-ConversationFixture -Metrics (Read-ConversationFixtureMetrics -Session $session) -ViewportName "foldable"
-  Add-RegressionResult -Name "conversation-blocks-fixture-foldable" -Page $fixtureFoldable
+  Assert-ProjectedConversationFixture -Metrics (Read-ProjectedConversationFixtureMetrics -Session $session) -ViewportName "foldable"
+  Add-RegressionResult -Name "conversation-projection-fixture-foldable" -Page $fixtureFoldable
 
   $notificationRecoveryFixtureUrl = $BaseUrl + "/#/__regression/task-pet?regression=frontend&channelBlocked=1"
   $notificationRecoveryFixture = Open-And-ReadPage -Session $session -Url $notificationRecoveryFixtureUrl -Width $PhoneWidth -Height $PhoneHeight

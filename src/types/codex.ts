@@ -58,21 +58,6 @@ export type UiThreadGoal = {
   updatedAt: number
 }
 
-export type UiPlanStepStatus = 'pending' | 'inProgress' | 'completed'
-
-export type UiPlanStep = {
-  step: string
-  status: UiPlanStepStatus
-}
-
-export type UiPlan = {
-  turnId: string
-  explanation: string
-  steps: UiPlanStep[]
-  rawText: string
-  isStreaming: boolean
-}
-
 export type ComposerPluginInfo = {
   id: string
   name: string
@@ -188,32 +173,26 @@ export type UiTaskPetRecentThread = {
   updatedAtIso: string
 }
 
-export type CommandExecutionData = {
-  command: string
-  cwd: string | null
-  status: 'inProgress' | 'completed' | 'failed' | 'declined' | 'interrupted'
-  aggregatedOutput: string
-  exitCode: number | null
-  durationMs: number | null
-  startedAtMs: number | null
-}
-
 export type UiFileAttachment = { label: string; path: string }
 
-export type UiMessage = {
+type UserDeliveryMessageContent = {
   id: string
-  role: 'user' | 'assistant' | 'system'
   text: string
   images?: string[]
   fileAttachments?: UiFileAttachment[]
-  messageType?: string
-  phase?: 'commentary' | 'final'
-  rawPayload?: string
-  isUnhandled?: boolean
-  commandExecution?: CommandExecutionData
-  plan?: UiPlan
   turnIndex?: number
   turnId?: string
+}
+
+export type AcknowledgedUserMessage = UserDeliveryMessageContent & {
+  role: 'user'
+  messageType: 'userMessage'
+}
+
+export type OptimisticUserMessage = UserDeliveryMessageContent & {
+  role: 'user'
+  messageType?: 'userMessage'
+  rawPayload?: string
   deliveryState?: 'sending' | 'retrying' | 'waiting' | 'confirming' | 'sent' | 'failed'
   deliveryError?: string
   deliveryAttempt?: number
@@ -237,16 +216,6 @@ export type UiServerRequestReply = {
     code?: number
     message: string
   }
-}
-
-export type UiLiveOverlay = {
-  activityId?: string
-  isRecovering?: boolean
-  startedAtMs: number
-  activityLabel: string
-  activityDetails: string[]
-  reasoningText: string
-  errorText: string
 }
 
 export type UiRuntimeStatusSummary = {
@@ -316,19 +285,4 @@ export type ThreadScrollState = {
   scrollTop: number
   isAtBottom: boolean
   scrollRatio?: number
-}
-
-export type ChatMessage = {
-  id: string
-  role: string
-  text: string
-  createdAt: string | null
-}
-
-export type ChatThread = {
-  id: string
-  title: string
-  projectName: string
-  updatedAt: string | null
-  messages: ChatMessage[]
 }

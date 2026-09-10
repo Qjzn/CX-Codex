@@ -17,10 +17,11 @@
   --ui-warning: #9a6700;
   --ui-danger: #c2410c;
   --ui-focus: #2563eb;
-  --ui-sidebar-width: 356px;
-  --ui-topbar-height: 54px;
-  --ui-content-max: 900px;
-  --ui-composer-max: 900px;
+  --ui-sidebar-width: 288px;
+  --ui-topbar-height: 44px;
+  --ui-content-max: 48rem;
+  /* 48rem visible shell + the composer's 1.25rem desktop gutters on both sides. */
+  --ui-composer-max: calc(48rem + 2.5rem);
   --ui-composer-min-height: 92px;
   --ui-row-height: 40px;
   --ui-radius-row: 10px;
@@ -163,6 +164,10 @@ pre {
 
 :root.dark .content-root {
   @apply bg-zinc-950;
+}
+
+:root.dark .user-message {
+  background: #27272a;
 }
 
 :root.dark .composer-with-queue {
@@ -613,14 +618,6 @@ pre {
 
 :root.dark .conversation-loading,
 :root.dark .conversation-empty {
-  @apply text-zinc-400;
-}
-
-:root.dark .live-overlay-label {
-  @apply text-zinc-400;
-}
-
-:root.dark .live-overlay-reasoning {
   @apply text-zinc-400;
 }
 

@@ -40,6 +40,15 @@ Node.js 22 bridge (Express 5)
 - WebSocket is the preferred notification transport; SSE is the fallback. Transport events wake reconciliation, while accepted event order and authoritative snapshots decide state.
 - A 7420 process owns one managed App Server child and multiplexes JSON-RPC calls through a bounded queue.
 
+### Core workflow contracts
+
+- The local `plan` / `execute` selection is translated to native `collaborationMode: { mode: 'plan' | 'default', settings }` on turn start. A plain top-level `mode` is not the current CLI protocol. Explicit models require no extra lookup; legacy callers without a model resolve the actual thread/config model before sending.
+- Proposed-plan text is rendered separately from progress checklists. Submission state is derived from the following accepted confirmation in the transcript, not a separate persisted browser list of plan IDs.
+- Thread goals use App Server goal state, generation-guarded responses and the same live/replay notification handler. Ambiguous same-second mutation responses trigger a fresh authoritative read while the existing updating guard remains held.
+- SQLite queue order uses insertion order when timestamps tie. A configuration or native-queue await must revalidate the current head and cancellation state before starting or changing an entry.
+- Background metadata cannot occupy every queued RPC slot; bounded foreground bursts also let background reads proceed. Urgent writes retain their existing bypass, so the queued concurrency limit is not a global RPC concurrency limit.
+- Known turn lifecycle timestamps outrank later Runtime reconciliation timestamps when displaying completed-turn duration.
+
 ### Safety defaults
 
 - A new App Server launch defaults to `approvalPolicy=on-request` and `sandboxMode=workspace-write`.
@@ -111,7 +120,7 @@ Large orchestration files remain, but new independent policies belong in focused
 - Replayable notification cursor with stream-generation reset, gap recovery and stale snapshot rejection.
 - Transport-uncertain start/interrupt states that reconcile instead of blindly repeating an RPC.
 - Cold-start resume only for a complete `pending_start` payload whose identity and prompt hash still match; a request is persisted as `starting` before `turn/start` is called.
-- Cached thread messages, session-log fallback and deferred authoritative refresh for a readable first screen.
+- Cached structured thread reads, session-log fallback and deferred authoritative refresh for a readable first screen; gateway/thread normalizers and the browser flat cache expose only `AcknowledgedUserMessage`, while local sending/failure recovery uses the separate user-only `OptimisticUserMessage`. No assistant-capable flat message type participates in either path, and the structured response remains authoritative for conversation projection.
 
 ### Windows, remote access and Android
 
@@ -165,7 +174,7 @@ Browser storage is an optimization and recovery aid, not a second server authori
 - notification cursor/sequence, unread state and scroll anchors;
 - queued follow-ups and timing-only diagnostics.
 
-Message caches, outbox journals and timing histories have TTL/count limits. Prompt or reply text is not copied into timing diagnostics.
+Structured thread-read caches, acknowledged-user delivery evidence, outbox journals and timing histories have TTL/count limits. Assistant replies, command output, plans, finals, history notices and conversation phase metadata are neither flattened by gateway normalizers nor copied into the browser flat cache; prompt or reply text is not copied into timing diagnostics.
 
 ## Routing
 

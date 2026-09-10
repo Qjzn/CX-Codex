@@ -33,6 +33,7 @@ const DEFAULT_OVERLOAD_RETRY: OverloadRetryOptions = {
   jitterMs: 60,
   random: Math.random,
 }
+const MAX_FOREGROUND_BURST = 2
 
 export function getAppServerRpcQueuePriority(method: string, _params: unknown): number {
   if (
@@ -69,6 +70,8 @@ export function getAppServerRpcQueuePriority(method: string, _params: unknown): 
 export class AppServerRpcQueue {
   private readonly queuedRpcCalls: QueuedRpcTask[] = []
   private readonly overloadRetry: OverloadRetryOptions
+  private activeBackgroundRpcCalls = 0
+  private foregroundDispatchesSinceBackground = 0
 
   constructor(private readonly options: RpcQueueOptions) {
     this.overloadRetry = {
@@ -115,9 +118,30 @@ export class AppServerRpcQueue {
 
   private drain(): void {
     while (this.options.diagnostics.activeCount < this.options.maxInFlight && this.queuedRpcCalls.length > 0) {
-      const request = this.queuedRpcCalls.shift()
+      // Slow catalog/list reads must not occupy every slot needed to render a conversation.
+      // Keep maxInFlight=1 usable; priority-zero AppServerProcess calls retain their existing bypass.
+      const maxBackgroundInFlight = Math.max(1, this.options.maxInFlight - 1)
+      let requestIndex = this.queuedRpcCalls.findIndex((request) => (
+        request.priority < 4 || this.activeBackgroundRpcCalls < maxBackgroundInFlight
+      ))
+      if (requestIndex < 0) return
+      if (
+        this.queuedRpcCalls[requestIndex]?.priority !== 0
+        && this.foregroundDispatchesSinceBackground >= MAX_FOREGROUND_BURST
+        && this.activeBackgroundRpcCalls < maxBackgroundInFlight
+      ) {
+        const backgroundIndex = this.queuedRpcCalls.findIndex((request) => request.priority >= 4)
+        if (backgroundIndex >= 0) requestIndex = backgroundIndex
+      }
+      const [request] = this.queuedRpcCalls.splice(requestIndex, 1)
       if (!request) return
 
+      const isBackground = request.priority >= 4
+      if (isBackground) this.activeBackgroundRpcCalls += 1
+      // Catalogs must also progress during a stream of reads; urgent writes still win unconditionally.
+      this.foregroundDispatchesSinceBackground = isBackground
+        ? 0
+        : Math.min(MAX_FOREGROUND_BURST, this.foregroundDispatchesSinceBackground + 1)
       this.options.diagnostics.incrementActive()
       let execution: Promise<unknown>
       try {
@@ -129,6 +153,7 @@ export class AppServerRpcQueue {
       void execution
         .then(request.resolve, request.reject)
         .finally(() => {
+          if (isBackground) this.activeBackgroundRpcCalls -= 1
           this.options.diagnostics.decrementActive()
           this.drain()
         })

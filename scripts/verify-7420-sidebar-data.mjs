@@ -244,6 +244,8 @@ async function readAllActiveThreads(firstPage) {
   const threads = []
   const seenThreadIds = new Set()
   const overlappingSupplementalThreadIds = new Set()
+  const overlappingCursorThreadIds = new Set()
+  const seenCursors = new Set()
   const supplementalThreadIds = new Set(
     firstPage.data
       .slice(THREAD_LIST_LIMIT)
@@ -252,18 +254,16 @@ async function readAllActiveThreads(firstPage) {
   )
 
   const appendPage = (rows, label) => {
-    const pageThreadIds = new Set()
-    for (const row of rows) {
+    const pageThreadIndexById = new Map()
+    for (const [rowIndex, row] of rows.entries()) {
       const threadId = readThreadId(row)
       if (threadId) {
-        assert(!pageThreadIds.has(threadId), `${label} contains duplicate thread id: ${threadId}`)
-        pageThreadIds.add(threadId)
+        const previousIndex = pageThreadIndexById.get(threadId)
+        assert(previousIndex === undefined, `${label} contains duplicate thread id at rows ${String(previousIndex)} and ${String(rowIndex)}: ${threadId}`)
+        pageThreadIndexById.set(threadId, rowIndex)
         if (seenThreadIds.has(threadId)) {
-          assert(
-            supplementalThreadIds.has(threadId),
-            `${label} overlaps a non-supplemental earlier thread: ${threadId}`,
-          )
-          overlappingSupplementalThreadIds.add(threadId)
+          if (supplementalThreadIds.has(threadId)) overlappingSupplementalThreadIds.add(threadId)
+          else overlappingCursorThreadIds.add(threadId)
           continue
         }
         seenThreadIds.add(threadId)
@@ -277,6 +277,8 @@ async function readAllActiveThreads(firstPage) {
     ? firstPage.nextCursor
     : null
   while (cursor) {
+    assert(!seenCursors.has(cursor), `active thread/list repeated cursor: ${cursor}`)
+    seenCursors.add(cursor)
     const result = await rpc('thread/list', {
       archived: false,
       limit: THREAD_LIST_LIMIT,
@@ -292,6 +294,7 @@ async function readAllActiveThreads(firstPage) {
   return {
     threads,
     overlappingSupplementalThreadIds: [...overlappingSupplementalThreadIds],
+    overlappingCursorThreadIds: [...overlappingCursorThreadIds],
   }
 }
 
@@ -422,6 +425,7 @@ async function main() {
   const activeThreadsRead = await measureAsync(() => readAllActiveThreads(activeFirstPage))
   const activeThreads = activeThreadsRead.value.threads
   const overlappingSupplementalThreadIds = activeThreadsRead.value.overlappingSupplementalThreadIds
+  const overlappingCursorThreadIds = activeThreadsRead.value.overlappingCursorThreadIds
   const activeThreadIds = activeThreads.map(readThreadId).filter(Boolean)
   assertUnique(activeThreadIds, 'active thread/list result')
 
@@ -474,6 +478,7 @@ async function main() {
     unreadablePinnedSampleCount: unreadable.length,
     activeThreadCount: activeThreads.length,
     overlappingSupplementalThreadIds,
+    overlappingCursorThreadIds,
     activeFirstPageCount: activeFirstPage.data.length,
     archivedFirstPageCount: archivedFirstPage.data.length,
     activeFirstPageMs: activeFirstPageRead.durationMs,

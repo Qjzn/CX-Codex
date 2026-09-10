@@ -1,5 +1,108 @@
 # Tests
 
+## 7420替换与前端复核（2026-09-10）
+
+- 本轮获准替换本地7420；先核对RPC、重启保护、Runtime非终态/队列、原生队列及active goal均为空，再优雅退出旧实例。保留原配置、认证、数据库和可恢复部署；没有提交、推送或发布。
+- 真实新测试任务跑完5轮：Markdown对话、TXT/图片读取、20秒等待期间入队、原生Plan方案、页面按钮确认执行。刷新后5轮均completed、4个最终回复、1份已提交方案；goal/queue为空且无虚假活动态。暂停目标经真实API创建、页面编辑/刷新/确认清除，未执行自然续跑。
+- 本机新会话单样本：气泡25ms、服务确认30ms、权威turn启动729ms、运行可见754ms、首段数据9204ms/可见9230ms；不是公网P95或桌面同轮对照。上传轮气泡34ms/服务确认39ms。回复已显示后未被加载态替换；保留偶发已分发历史RPC约6秒的未定位项。
+- 附件显示身份新增契约：明确的Windows绝对路径与同文件的`file:///C:/...`仅显示一个标签，保留首个原始名称/路径；URI只解码一次，不误合并`#/%`编码代表的不同文件，不改文件访问权限或共享路径工具。`scripts/conversation-transcript-smoke.ts`新增24个投影场景红→绿；reply-quality夹具包含同文件两种写法，浏览器显示一个checklist标签，并验证首次图片503后重试成功。
+- 搜索显示新增契约：索引返回partial时，“更多会话仍在整理”与已有本地/远端匹配结果同时显示，不能因提示出现而卸载结果；没有匹配时只显示对应空态。真实7420先复现结果1→0，再修复提示与列表互斥的模板分支。`node --test scripts/verify-sidebar-search-render.mjs`直接渲染生产SFC模板，9项中2项修复前失败、修复后全部通过；最终7420在独立浏览器页注入partial响应，桌面/手机均保持1条结果和提示，随后刷新移除注入。
+- 最终前端构建和公开投影/样式检查通过；核心65项、搜索模板9项、retention4项、DOM反馈6项、图片URL3项、normalizer、CLI构建/server modules均通过。真实7420的桌面/手机/折叠屏尺寸无横向溢出；有暗色浏览器复核，图片503重试属于隔离夹具证据，均不是真机或公网证据。
+- 精确部署哈希、端口/PID、截图、可重复命令、工具误报及回滚路径见 `output/local-deploy-20260910-core/report.md`。附件去重与搜索修正均只更新Web资源，保留本轮先前版本的哈希资源，不再次重启后端。Android、自然目标完成、定时任务、长时间浸泡及发布门禁仍未覆盖。
+
+## 计划、目标、队列核心契约（2026-09-09 至 09-10，本地候选）
+
+### 用户行为契约
+
+- 待执行方案使用原生计划协议；执行确认必须切回执行模式。结构化 `plan.text` 独立展示 Markdown 正文，不藏在默认折叠的过程记录中；`turn/plan/updated` 进度清单不能冒充待执行方案。普通最终回复不靠文本猜测成计划卡。
+- 只有最新且已完成的方案可直接提交；从紧随其后的已送达确认消息恢复“已提交执行”，刷新、跨任务同名计划不能丢失或串状态。发送中不冒充成功，明确发送失败后可重试；按钮标识“待确认”，不能将方案生成完成误称为执行完成。
+- 目标通知的 live/replay 路径一致；旧 GET/SET/CLEAR 不覆盖较新的暂停、完成或清除。整秒时间戳无法区分响应先后时重新读取权威值，不使用 `>=` 猜顺序。更新及重读期间不自动续跑，重读失败保留状态、显示错误并等待恢复。
+- 目标续跑让位于已排队消息、在途发送、执行中任务及全局/本任务待输入；暂停、预算/额度受限、阻塞、完成不自动启动。
+- 队列取消后迟到的配置失败或原生列表不能恢复消息；准备期间重排控制实际启动顺序，删除头项后的下一条不额外等4秒扫描。失败首项必须显式处理，不能被重排绕过；重复ID的无效重排在修改原生队列前拒绝。
+- 同毫秒入队仍保持插入顺序，SQLite重新打开后不变；同一 clientMessageId 的重复入队、双连接消费保持一次启动。steer失败原位恢复一次。
+- 后台插件/MCP/列表读取不占满会话读取通道，后台也有公平调度机会。发送/停止原本就走紧急旁路，本次不能宣称修复了它们在普通读取队列里等待；后台冷加载可能更晚。
+- 已完成轮次的实际开始/结束时间优先于Runtime同步时刻，重读和刷新不得把回复耗时拉长；无权威轮次时间时才补缺。
+
+### 可重复验证
+
+```powershell
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run verify:core-flows
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-transcript.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-retention.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-chat-feedback-dom.mjs
+& 'C:/Program Files/nodejs/node.exe' --test scripts/conversation-style.test.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-frontend-normalizers.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:frontend
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:cli
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-server-modules.mjs
+```
+
+`verify:core-flows` 不连接现有7420、不调用真实模型、不修改用户数据库；状态测试使用受控HTTP/WebSocket，队列使用临时SQLite。真实模型、浏览器、设备分别验收，详见 `output/core-flow-20260909/report.md`。
+
+### 浏览器和真实服务边界
+
+- 静态fixture：`#/__regression/conversation-blocks?regression=frontend&plan=1` 核对方案正文、标题和列表、44px手机执行按钮；点击后仅fixture模拟提交。加入 `planHistoryImplemented=1` 后刷新，历史确认能恢复禁用状态，不依赖本地已提交ID数组。
+- `#/__regression/composer-shell?regression=frontend&goal=1&goalSwitch=1&planMode=1` 验证暂停/恢复、编辑、切换任务清掉草稿、清除二次确认、计划模式不被目标操作退出。
+- 393×852、884×1104、1440×900及暗色检查无核心内容横向溢出；浏览器尺寸模拟不等同手机真机、锁屏、Doze或后台两分钟恢复。
+- 17424使用独立Runtime及认证存储。首次真实四轮验证了只计划提示、确认后安全20秒等待、排队A/B顺序与最终清空；当时发现原生计划参数契约错误，因此该首次结果不算原生Plan模式或真实计划按钮证明。
+- 修正协议后另建原生计划测试，真实返回 `[userMessage, plan]`。补齐已完成turn对plan/delta残留的结算后，真实Web按钮发出精确执行确认、收到预期结果，刷新保持两轮completed及“已提交执行”。最终证据 `native-plan-result.json`、`native-plan-ui-result.json`；该UI单样本气泡32ms、运行状态144ms、首回复4407ms，不是P95或同模型速度对比。
+- 真实目标验证仅覆盖paused创建、读取、编辑、清除，最终goal为空且无执行轮次；自然达成与真实自动续跑未验证。真实4轮历史在Web刷新后仍为4个最终回复，无虚假运行状态。
+- 当前7420、Git/CI、两小时浸泡、Android及正式发布不因这些候选检查通过而自动通过。本轮没有部署到7420或提交/推送/发版；回滚仅撤销本轮对应差异块，不还原整个脏工作区。
+
+## 回复呈现质量与可见性计时（2026-09-09，本地候选）
+
+### 用户行为契约
+
+- 已选会话完成后，侧栏列表暂时漏项不得清空已显示正文；显式回退、归档、切换后的状态释放仍然生效。检查每次中间响应式更新，不只检查最终结果；远端 `thread/deleted` 不在本次覆盖范围。
+- 仅解析完整的前置附件传输封装，兼容 `My request` / `My request for Codex`、BOM、CRLF。普通标题、代码块、引用和不完整封装不误删；附件按路径去重，实时与快照走同一投影。
+- 本地图片复用 `/codex-local-image` 鉴权及路径授权，不输出空 `src`。加载中有占位，失败有44px重试，成功后开放链接；正文不展示上传协议/临时路径。
+- Markdown标题字重600；无序/有序/嵌套列表保留标记。暗色背景与代码表面仅作用于会话，Vue编译后的CSS不能退化为裸 `.dark` 全局规则。
+- 可见指标只归属本页提交的精确thread/turn/item；sending/accepted不等于running。隐藏、折叠、离屏、恢复历史不补记；170个历史标记不能挤掉末尾当前回复；里程碑完成后100次重复更新不增加布局读取或存储写入。
+- `assistantRenderOverhead`保留旧字段名，但含义是“首数据到实际可见的墙钟间隔”，包含用户停留历史区/隐藏页面的时间，不能当作纯CPU渲染耗时。
+
+### 定向命令
+
+本机使用显式Node22，避免旧npm shim：
+
+```powershell
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-retention.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-transcript.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-chat-feedback-dom.mjs
+& 'C:/Program Files/nodejs/node.exe' --experimental-strip-types --test scripts/local-image-url.test.mjs
+& 'C:/Program Files/nodejs/node.exe' --test scripts/conversation-style.test.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-frontend-normalizers.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:frontend
+```
+
+### 隔离浏览器验证
+
+构建后检查17423未占用，运行 `node scripts/reply-quality-fixture-server.mjs 17423`。它仅绑定localhost、只读构建资源，只提供固定测试图片/收藏夹响应；不启动bridge、模型任务或写用户状态，不替换7420。使用agent-browser，结束后关闭会话及该测试服务。
+
+- 打开 `http://127.0.0.1:17423/#/__regression/conversation-blocks?regression=frontend&fixture=reply-quality`。首次固定图片响应503，点击重试后成功，刷新仍可见。断言naturalWidth>0、opacity=1、无封装文本、恰好两个附件标签、h3字重600、ul为disc。
+- 改为 `fixture=send-feedback` 后刷新页面，依次操作sending/accepted/running/completed。核对 `window.__cxCodexChatFeedbackMetrics`；旧final不记为新回复；隐藏/离屏后指标保持缺省，恢复可见才记录，重复resize不改既有时间。
+- 393×852、884×1104、1440×900无文档或会话横向溢出；另检查手机暗色正文、代码与图片恢复状态。尺寸模拟不等同Android/折叠屏真机证据。
+- `streamStress=1` 本次5秒窗口：1600个投影活动、105次更新、101次心跳、操作成功、无横向溢出；该窗口无>=50ms Long Task，页面生命周期最大定时器迟滞31ms。默认仅展示最新过程，未展开全活动，因此不是全展开压力测试、P95或长期稳定性门禁。
+- 报告与截图：`output/reply-quality-20260909/report.md`。未替换7420、未复测真实模型发送/附件读取，未推送/发版；本地代码与线上可用性分别验收。
+
+## 发送反馈与会话日志身份（2026-09-09，本地候选）
+
+### 验收边界
+
+- `thread/started` 只代表会话创建，不启动执行计时，也不得让空闲会话自动进入排队模式。
+- 未取得权威 turn 的本地消息使用 `submitting`；分别显示发送中、正在确认送达、已送达且等待启动、等待网络。只有真实队列条目才显示排队；只有执行证据才显示思考与执行计时。
+- 旧轮 idle/completed 不得结算新提交；旧 active Runtime 不得复活已完成轮次或与新轮同时运行。真实 turnId 回填后同一用户消息只显示一次，失败发送不继承旧执行耗时。
+- 单/双 UUID 日志文件名只用来发现候选；日志首行 metadata 的线程身份才决定内容归属和文件变化通知的目标。读取有字节上限，拒绝越界路径、身份冲突和目录重定向；显式 RPC 路径也必须验证。
+- light RPC 和缓存仍指向旧分片时，恢复必须读取最新有效同线程分片，并将实际路径写回恢复结果。不能验证的 RPC 文件路径不得进入正文读取，转由该线程的正式 RPC 获取内容。
+
+### 自动化与证据
+
+- `npm run verify:conversation-transcript`：含 `scripts/send-feedback-smoke.ts` 的 17 项状态/代际检查及已有投影、导出、长历史性能检查。无真实开始时间时不借用发送时间或旧 Runtime 时间伪造计时。
+- `npm run verify:session-identity`：16 项，15 通过；Windows 未授予文件 symlink 创建权限的一项跳过，真实目录 junction 防护已通过。
+- `npm run verify:server-modules`：覆盖创建会话、日志变化通知、分片旋转缓存收敛和未验证 RPC 路径拒绝。
+- `npm run test:send-feedback:browser -- --base-url http://127.0.0.1:17421`：先在隔离端口启动本地静态预览；独立无头浏览器验证桌面 1440×900、手机 393×852 的七种发送状态、单消息、无执行假计时、无横向溢出。脚本可用 `CX_CODEX_PLAYWRIGHT_MODULE` / `CX_CODEX_CHROMIUM_EXECUTABLE` 指定已有测试运行时。
+- 浏览器仅模拟初始化收藏 GET，其余 Runtime API/WS 全部阻断。截图与报告：`output/send-feedback-browser-20260909/`。它不代表真实网络首字耗时、Android 锁屏恢复、7420 部署或正式发布已通过。
+- 当前目录上的只读分片定位样本约 143–167 ms，是额外的恢复路径发现成本，不是端到端 P95；后续应以真实链路时间戳验证后决定是否增加带文件变化失效的发现缓存。
+
 ## 7420 消息、图片、恢复与长线程稳定性（2026-08-27）
 
 ### Expected behavior
@@ -4648,7 +4751,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 准备一个当前无运行任务的已有会话。
 
 #### Steps
-1. 打开会话，点击输入区上方的 `设置持续目标`，输入可衡量目标并点击 `保存并开始`。
+1. 打开会话，点击输入区的 `+`，选择 `设置持续目标`，输入可衡量目标并点击 `保存并开始`。
 2. 确认目标条显示目标、运行提示、预算使用百分比和耗时；刷新页面并重新进入会话。
 3. 在目标运行时点击 `暂停`，确认任务完成后不会自动继续；再点击 `继续`，确认空闲时继续推进。
 4. 点击 `编辑` 修改目标，确认状态和已用量保持为服务端返回值。
@@ -4668,6 +4771,53 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 
 #### Rollback/Cleanup
 - 清除回归目标；若需回退，恢复 `threadGoal.ts`、`useDesktopState.ts`、`ThreadGoalBar.vue` 及 App 接线改动。
+
+---
+
+### Feature: 最新过程优先与持续目标菜单入口（2026-08-31）
+
+#### Prerequisites
+
+- 会话内容继续以固定 Sema 参考下的唯一 `ConversationProjection` 为语义来源，不引入 7420 原有消息归并、final 推断或恢复回退。
+- 准备包含多条 commentary/activity、一个显式 final 和空持续目标的结构化回归夹具。
+
+#### Steps
+
+1. 打开运行中的会话，确认过程区域默认只挂载最新一条过程信息；当存在历史过程时，最新过程正文最多显示三行。
+2. 点击 `查看历史过程（N）`，确认首次只增加 17 条历史过程；继续点击 `再看更早过程（N）` 可分批加载，点击 `收起历史过程` 回到最新一条。
+3. 展开已完成回合的过程，确认同样先显示最新一条，并可按需查看完整结构化历史；最终回复保持独立、清晰且位于视觉主层级。
+4. 打开包含多文件变更的回合，确认文件变更默认只占一行紧凑摘要且不挂载可见文件行；点击摘要后才显示路径、增删统计和差异入口。
+5. 打开没有显式 `phase: final_answer` 的普通终态回合，确认不显示“本轮没有可确认的最终回复”等占位提示；没有真实计时且没有过程入口的回合也不显示“执行耗时不可用”，只保留轻量分隔线。打开失败、中断或停止回合，确认可行动状态仍可见；终态 final 不显示持续闪烁光标。
+6. 在 393 x 852 手机宽度和 884 x 1104 粗指针宽度重复步骤 1-5，确认历史与文件入口至少 44px、目标条正文保持单行紧凑且页面无横向溢出。
+7. 在没有持续目标的会话点击输入区 `+`，确认菜单内出现 `设置持续目标`；点击后菜单关闭、原目标编辑器打开并自动聚焦。
+8. 确认输入区上方不再出现独立的 `设置持续目标` 按钮；已有活跃目标的目标栏及暂停、继续、编辑、清除操作保持不变。
+9. 在有更新实时事件的长会话中冷启动手机宽度页面，令初始 Runtime 快照的 `lastEventSeq` 落后于已缓冲事件；确认快照内的结构化历史回合仍进入投影，而旧运行态字段不覆盖新事件。
+
+#### Expected Results
+
+- 完整过程历史仍保留在唯一结构化投影中；本功能只限制默认渲染窗口，不删除、不重排、不改写语义。
+- 运行中和显式展开的已完成过程均以最新内容为默认摘要，历史必须由用户主动展开并按 17 条一批有界加载。
+- 最终回复是会话正文的视觉主体；过程、状态和历史入口保持次级但可访问。
+- 文件变更默认摘要高度不超过 56px，文件行仅按需展示；普通终态缺失显式 final 时视觉静默，无真实计时且无过程入口时不渲染不可用提示，失败/中断/停止保持可见，终态 final 不保留闪烁光标。
+- 持续目标创建入口位于 Composer 的 `+` 菜单，移动端菜单项和历史操作满足 44px 触控目标。
+- `thread/read` 历史窗口与 Runtime 状态采用不同的接纳边界：较旧快照的结构化回合仍按稳定 turn/item identity 进入唯一投影，较旧 execution/stop/active-turn 字段继续被事件序号门禁拒绝。
+
+#### Regression Evidence
+
+- `vue-tsc --noEmit`、前端 source-only、normalizer、conversation transcript、生产 Vite、local-preview Vite 和预压缩脚本均直接退出 0；最终投影压力为 26.5ms/1602 回合、5.5ms/1600 活动。`npm.cmd run build:frontend` 的内部完整构建成功，但旧 npm 包装器因无法清理全局日志返回 EPERM，随后按同一构建步骤直接复验为 0。
+- 候选页面的独立 Headless Playwright 验证桌面、手机、折叠屏默认过程数为 1、三行截断、首批展开后挂载 18 条、收起后恢复为 1；手机和折叠屏历史入口为 44px，零横向溢出。
+- 当前真实 `http://127.0.0.1:7420` 返回的首页 SHA-256 为 `013BB44446D03F6F21E517081E41B86D5C0AE93CE4FEBE2FF44CE112FF2254D9`。真实地址的 CDP 夹具在 1600 条投影活动下仅挂载 1 条默认过程；桌面、393 x 852 手机和 884 x 1104 折叠屏均无横向溢出，移动端触控目标最小 44px。
+- 真实 7420 Composer 回归确认独立创建按钮为 0；`+` 菜单内目标项在手机宽度为 302 x 52px，点击后菜单为 0、编辑器为 1 且获得焦点。证据位于 `output/regression-7420/latest-process-goal-20260831`。
+- 修复前真实手机冷启动只保留 1 个当前回合和 0 个 final，而服务端同一结构化窗口有 10 个 completed turn / 8 个 `final_answer`。修复后的 500ms-20s 冷启动采样持续保持 10/8；严格真实会话脚本在桌面、手机和折叠宽度均通过 10 个回合、8 个 final、每回合最多一个 final、零旧叠层、零内部上下文泄漏、零横向溢出和零浏览器错误。截图位于 `output/regression-7420/latest-process-goal-20260831/current-7420-real-fixed-retry`。
+- 全量 `test:7420:frontend` 的浏览器矩阵被真实运行态的 `uncertainRequestCount=1` 空闲门禁阻止；其余 pending/queued/server-request/plan-turn 计数均为 0。未清除或取消真实任务来强行通过门禁，产品定向 Web 夹具已在同一真实 7420 地址独立通过。
+- 最新候选夹具在桌面、393 x 852 手机和 884 x 1104 粗指针折叠屏均为 `openFileSummaryCount=0`、`visibleFileRowCount=0`，摘要高度分别为 48/46/46px；缺失 final 占位数和终态闪烁 final 数均为 0，手机/折叠屏最小触控目标为 44px且横向溢出为 0。1600 活动压力窗 `maxLongTaskMs=0`、按钮保持响应；截图位于 `output/regression-7420/mobile-ui-candidate-20260831/fixture`。
+- 隔离候选 Bridge 的真实长会话严格缓存重载通过：`source=local-cache`、`selectionLatencyMs=283`，满足 300ms 门槛；三种视口均为 8 个文件摘要默认折叠、0 个可见文件行、0 个缺失-final 占位、0 个终态闪烁 final、0 个旧浮层、0 个内部上下文泄漏和 0 横向溢出。证据位于 `output/regression-7420/mobile-ui-candidate-20260831/isolated-cache-real`。
+- 已将最新静态候选可回滚切换到当前 `http://127.0.0.1:7420`，首页 SHA-256 为 `72F7302FAB455F048E5D08101192284F24CCDCEA6008B8E8171C33B0586BFFFD`，最近备份为 `E:\javaword\CXCodex\codexui-sidebar-shortcuts\dist.web-previous-20260831-085628`。当前 7420 的 fixture、真实目标 thread、Composer、合同视图、Shell、Sidebar 与 hardening CDP 回归均通过：手机/折叠屏最小触控目标 44px、横向溢出 0；文件摘要 46px 且默认折叠；没有真实计时且没有过程入口时仅保留分隔线，三种会话视口 `unavailableTimingCopyCount=0`；1600 活动窗口 68 次更新/65 次心跳、`maxLagMs=11`、`maxLongTaskMs=0`；Composer 本地反馈 12.4ms，目标入口只在 `+` 菜单内且点击后编辑器获得焦点。证据位于 `output/regression-7420/mobile-ui-current-7420-20260831`。
+- 最终收口中 conversation transcript 为 23.1ms/1602 回合、5.1ms/1600 活动；frontend normalizers、frontend source-only、server modules、治理、`vue-tsc --noEmit`、生产/local-preview Vite、CLI、预压缩、`node --check` 和 `git diff --check` 均直接退出 0。隔离候选的旧完整 PowerShell 浏览器矩阵两次通过健康、诊断和工作区前置检查后，都在 `agent-browser set viewport 1440 900` 首步返回 `CDP response channel closed`；清空其专用会话并重启守护进程后结果不变，因此记录为测试工具故障，不将其冒充产品失败或完整矩阵通过。
+
+#### Rollback/Cleanup
+
+- 若需回退，整体恢复过程披露窗口、Composer 菜单入口与对应回归断言；不得恢复旧 7420 会话推断、双投影或缓存兼容路径。
 
 ---
 
@@ -16649,3 +16799,297 @@ Verification:
 ### Cleanup
 
 - 所有探针最终清理：1 条从手机队列删除，其余 6 条通过 Runtime 队列删除接口清理，最终队列为 0；草稿清空，临时 ADB 输入法卸载并恢复微信输入法，手机上的 3 个测试文件删除。7420 和 Android App 保持运行。
+
+## 基于 Sema 的会话投影重建（2026-08-30）
+
+### Expected behavior
+
+1. 会话展示必须以 `midea-ai/sema-code-core@f564e8d930053becdd5c31fe53f65fd863b6f283` 的事件、轮次、过程活动、文件变化与完成态设计为强制语义基线；不得复用或兼容 7420 原有扁平消息归并、最后助手消息推断 final、`Worked for`/命令累计耗时、阶段回复折叠、尾部过程浮层及 `fileChange` 丢弃逻辑。
+2. UI 只消费纯 `ConversationProjection`。每轮必须区分用户开场、commentary、结构化活动、待处理交互、文件变更、真实执行/等待耗时和唯一显式 final；无 `phase: final_answer` 的普通终态轮次不得猜测 final，也不生成无行动价值的占位提示，失败、中断和停止仍必须可见。审批、补充输入、MCP 授权/批准和不支持工具的类型、标题、摘要、问题、授权地址及响应身份必须由投影给出，`ThreadConversation.vue` 不得读取原始 request method/params。
+3. 运行中过程默认展开，完成过程默认收起；过程历史在模型中完整保留，高密度运行轮次只限制 DOM 挂载数量。通知重放、分页、恢复与乐观消息必须按稳定 ID 合并，不能按文本去重。
+4. 桌面和移动端不得再出现尾部过程浮层。权限/输入请求属于轮次正文；移动端操作目标至少 44px，页面不得产生横向溢出。
+5. 允许继续使用经验证必要且不定义会话语义的传输、鉴权、队列、恢复和移动端基础设施；这些基础设施不得重新成为 final、轮次或耗时的推断来源。
+6. UI 必须保持一轮一个 Sema 式耗时/过程分隔，不显示重复的 Codex 头像/状态头；文件变更默认只显示紧凑摘要，文件行和差异按需展开；只有活动 turn 可显示轻量持续反馈，终态 final 不得保留闪烁光标，回到底部使用居中紧凑控件。动效只使用短时 opacity/transform/color，reduced-motion 下停止持续动画，不得增加卡片堆叠或页面编舞。
+7. 可见 Composer 边框必须与 `48rem` 会话阅读列同轴，保持输入在上、控制条在下；默认使用 `12px` 轻边框且无浮卡阴影，聚焦只增加一像素强调环。桌面主控件不得小于 32px，粗指针手机/折叠屏不得小于 44px。
+
+### Verification
+
+- 运行 `npm.cmd run verify:conversation-transcript`，覆盖精确 final、commentary、命令/MCP/搜索/计划/fileChange、等待耗时扣除、重复通知、分页合并、恢复终态、无 final 和 1600 轮性能。
+- 运行 `npm.cmd run verify:server-modules` 与 `npm.cmd run verify:frontend-normalizers`，确认服务端保留结构化事件与相位，前端恢复/通知路径仍保持稳定身份。
+- `verify:server-modules` 的 session-log 回放必须覆盖 `thread not loaded` 精确路径恢复、隐藏内部续跑 user item 的 `turn_id` 边界、同正文 event/response final 去重及 `patch_apply_end.changes` 到同轮 `fileChange` 的转换；内部提示正文不得进入 payload。
+- 运行 `node scripts/conversation-browser-smoke.mjs --cdp-port <isolated-port> --base-url <candidate-preview> --output-dir output/regression-7420/conversation-sema-rebuild-20260830`。桌面 `1440 x 900`、移动端 `393 x 852` 和粗指针折叠屏 `884 x 1104` 必须只有一个显式 final、每轮一个 divider、重复助手头为 0、文件摘要默认折叠且不超过 56px、文件行按需可见、缺失 final 占位和终态闪烁 final 均为 0、请求卡存在、运行状态反馈存在、旧浮层为 0、横向溢出为 0，且手机/折叠屏最小操作目标不小于 44px；脚本还必须验证正常动效与 reduced-motion 停止持续动画。
+- 运行 `node scripts/conversation-browser-smoke.mjs --mode composer --cdp-port <isolated-port> --base-url <candidate-preview> --output-dir output/regression-7420/conversation-sema-composer-20260830`。桌面和粗指针折叠屏可见 shell 必须为 `48rem`，三种视口都必须保持双层结构、`12px` 圆角、无默认阴影、无横向溢出；桌面最小主控件至少 32px，手机/折叠屏至少 44px，桌面聚焦必须出现轻量强调环。
+- 运行 `node scripts/conversation-browser-smoke.mjs --mode sidebar --cdp-port <isolated-port> --base-url <candidate-preview> --output-dir output/regression-7420/quiet-sidebar-regression-20260830`。手机夹具必须保持项目新近排序、有意 pinned shortcut、等待文字状态、触控 row、项目菜单与新建任务入口；stale-search、查询前缀保持/分叉/恢复、后台重排锚点和当前任务定位必须通过，横向溢出为 0。
+- 对真实会话运行 `node scripts/conversation-browser-smoke.mjs --mode real --cdp-port <isolated-port> --base-url <真实或隔离候选> --thread-id <精确 UUID> --output-dir <证据目录>`。该模式必须核对路由与投影线程身份、至少一个历史显式 final、任一 turn 最多一个 final、结构化文件摘要、内部上下文泄漏为 0、旧浮层为 0、横向溢出为 0，并在桌面、手机和粗指针折叠屏分别截图；默认还要求冷重载来源为 `local-cache` 且首屏不超过 300ms。只读 spectator 因没有生产 writer 而预期出现原始 RPC/goal 502 时，可显式增加 `--allow-isolated-rpc-errors true --require-cache-reload false`，脚本会把被允许的 502 单独列出，该结果不得冒充真实 7420 无错误或缓存首屏证据。
+- 压力夹具必须保留至少 1600 条投影活动、DOM 挂载不超过 20 条，并在流式更新期间保持心跳、最长主线程任务低于 80ms 和按钮响应；计时器排队延迟单独记录，不能冒充单次主线程阻塞。
+- 运行 `npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:governance` 与 `git diff --check`。真实 7420、Android 真机和发布状态必须分别报告；未执行时不得标记为通过。
+
+### Current local candidate evidence
+
+- UX-00 设计契约与回归基线本地验收通过：当前 Codex.app 包为 `OpenAI.Codex_26.818.5229.0_x64`，`DESIGN.md` 已固定 `midea-ai/sema-code-core@f564e8d930053becdd5c31fe53f65fd863b6f283` 的源码映射并禁止恢复 7420 原有会话归并/final/elapsed/阶段浮层/fileChange 语义。`conversation-browser-smoke.mjs --mode contract` 在 1440×900、884×1104、768×1024、393×852、852×393 五个视口分别验证首页、运行、完成、等待输入，产出 20 张状态截图和 `contract-baseline.json`；所有视口均为一个命名主地标、一个显式 final、一个未作答选择器，首页和会话横向溢出为 0。独立 Headless Playwright 的 393×852 会话截图与关键桌面/折叠屏/横屏截图已目视复核，证据位于 `output/regression-7420/ux00-contract-baseline-20260830`。历史改造前截图仍单独保存在 `output/regression-7420/p5-screenshot-baseline`；本次矩阵是当前候选合同基线，不冒充完整的改造前证据。独立 Vite 预览缺少 7420 Bridge，首页 `/codex-api` 404 作为预期环境限制单独记录，会话夹具浏览器错误为 0。此次没有业务代码变更；`node --check`、`vue-tsc --noEmit`、`npm.cmd run build:frontend`、`npm.cmd run verify:conversation-transcript`、UTF-8 等价 frontend source-only/governance 和 `git diff --check` 均通过。未执行生产切换、Android、真实 Windows 辅助技术、提交、推送、CI 或发布。
+- `verify:conversation-transcript` 通过；本次待处理交互所有权复跑中 1602 轮首次投影为 21.1 ms、1600 条活动投影为 3.5 ms。精确 final、无 final 不回退到 commentary、分页、重复文本、恢复终态、等待扣除及结构化命令/MCP/搜索/计划/fileChange 均通过；新增夹具覆盖 file approval、用户问题、MCP 授权、MCP 工具批准和不支持工具，并证明底层 Runtime 即使滞后为 `running`，有待处理交互的轮次仍投影为 `waiting`。
+- 类型检查、前端主构建与本地预览构建、预压缩、CLI 构建、server modules、frontend normalizers、frontend source-only、governance 和 `git diff --check` 均通过；server smoke 中的 warn/error 为预期故障注入。
+- frontend source-only 现额外禁止 `filteredMessages`、`displayedThreadMessages` 和 `visibleConversationMessages` 会话展示旁路；路由空态、fallback 标题、回滚轮次、收藏跳转就绪及 Android 已读确认统一从 `ConversationProjection`/投影 turn 读取。真实会话 CDP 回归已固化为 `test:conversation:real-session`，不再依赖一次性脚本。
+- 独立 CDP 浏览器和 Headless Playwright 在 `1440 x 900`、`393 x 852` 与粗指针 `884 x 1104` 验证：唯一显式 final、文件摘要、两个请求卡、完成过程折叠/按需展开、旧尾部浮层为 0、横向溢出为 0；手机和折叠屏最小操作目标均为 44px。截图保存在 `output/regression-7420/conversation-sema-rebuild-20260830` 并完成目视检查。
+- 1600 条活动完整保留且只挂载 18 条。五轮隔离流式窗口分别完成 69-70 次更新和 66-67 次心跳，`maxLongTaskMs = 0`（未出现浏览器可报告的 50ms 以上 Long Task），计时器排队延迟为 88-125 ms，按钮仍响应；该排队诊断不冒充单次主线程阻塞。
+- 额外冷导航追踪在不同压力项数量下记录 123-207 ms Long Task，主要耗时来自整页首次 Layout，且零压力项仍可复现；该数据只作诊断，不得误当成 1600 条流式窗口的 <80ms 门禁，也不能替代真实 `local-cache` 首屏 ≤300ms 证据。本轮没有把候选部署到真实 7420，也没有执行 Android/物理折叠屏真机、APK、提交、推送或发布，所以这些门禁不得标记为通过。
+- 隔离候选在 `127.0.0.1:17435` 对当前真实 session JSONL 完成只读 spectator 回放：8 个 turn、6 个历史明确 final、每轮最多一个 final、4 组文件摘要；桌面、393 x 852 手机和 884 x 1104 粗指针折叠屏均为 0 内部上下文泄漏、0 旧浮层、0 横向溢出，手机/折叠屏独立控件最小高度 44px。截图保存在 `output/regression-7420/conversation-sema-real-runtime-20260830` 并完成目视检查。隔离 App Server 未持有生产 writer，预期的原始 thread/goal RPC 502 被单独记录并未算作生产无错误证据；当前会话最后一轮仍在本次目标中执行，且隔离实例无法提供其生产运行态，所以这项回放不替代真实 7420 的缓存刷新、运行态或最终回复验收。
+- 最新 UI/交互/动效复核由固化 CDP 脚本完成：每轮保持单一 divider、旧 Codex 轮次头为 0、显式 final 每轮最多一个；完成过程默认收拢且可按需展开，活动过程保持展开。2026-08-31 候选进一步把文件摘要改为默认折叠，桌面/手机/粗指针折叠屏摘要高度为 48/46/46px、可见文件行为 0；缺失 final 占位与终态闪烁 final 均为 0。三种视口横向溢出与旧浮层均为 0，手机和折叠屏最小触控目标为 44px；正常 disclosure 为 180 ms，reduced-motion 为 1 ms 且运行点动画为 `none`。压力 turn 保留 1600 条活动并有界挂载，流式窗口 `maxLongTaskMs = 0` 且按钮仍响应。最新截图保存在 `output/regression-7420/mobile-ui-candidate-20260831/fixture` 并完成目视检查。
+- 待处理交互改为投影单一所有者后，固化浏览器脚本在 `output/regression-7420/conversation-sema-all-interactions-20260830` 通过桌面、393 x 852 手机和 884 x 1104 粗指针折叠屏，真实 DOM 同时覆盖 `approval`、`user-input`、`mcp-input`、`mcp-approval` 与 `unsupported-tool` 五类请求。MCP 卡片显示连接器、工具和有界关键参数，只在 `_meta.persist` 明示时呈现“本次会话允许 / 始终允许”；实际点击得到 `{ action: 'accept', content: {}, _meta: { persist: 'session' | 'always' } }`。用户问题初始明确显示“请选择”且提交禁用，显式选择与补充后回包保留两项答案；URL 授权不再渲染无关文本框。三种视口横向溢出和旧浮层均为 0，手机/折叠屏最小触控目标 44px；压力 turn 保留 1600 条活动、只挂载 18 条，69 次更新和 66 次心跳期间 `maxLongTaskMs = 0`、最大排队延迟 79 ms、操作仍响应。三张截图已目视复核；这是隔离本地候选证据，不是生产 7420 或 Android 真机证据。
+- Composer 专项 CDP 门禁在 `1440 x 900`、`393 x 852` 和粗指针 `884 x 1104` 通过：桌面/折叠屏可见 shell 均为 768px，三种视口均为输入在上、控制条在下、12px 圆角、无默认阴影、零横向溢出；桌面主控件最小宽/高为 36/32px，手机和折叠屏均为 44/44px，聚焦后的 1px 强调环可见。截图保存在 `output/regression-7420/conversation-sema-composer-20260830` 并完成目视检查。
+- 当前 schema 活动审计后的重建候选 `dist/index.html` SHA-256 为 `7F01FDFDB3813D46E5448E81B14DBEEE0EC8CF9C3546DA0FBAD592CB3279C854`，生产安装仍为 `C00C1ED84E6A7AFA5E71F6D07506F9F4FF82DA3A1CF1E57C650096C671E8B577`，两者明确不同。2026-08-30 只读健康检查显示生产状态 `ok`、App Server 已初始化、pending/queued RPC 与交互请求均为 0、Runtime uncertain 为 0，但本目标仍运行使 `restartProtection.blockingRequestCount = 1`；Android SDK 的 ADB 可用但设备列表为空。未获生产切换授权且没有授权真机，不能执行剩余门槛。
+- UX-10 Quiet Shell 本地验收通过：1440×900 默认侧栏/顶栏/内容轴分别为 288/44/768px，保存的 340px 偏好保持，Header 与 Composer 轴线偏差 0；状态从“同步正常”变为“正在重新连接，等待恢复”后标题和主轴坐标不变。393×852 手机与 852×393 横屏没有固定侧栏、内容遮挡或横向溢出；明暗主题中的正文与用户消息背景均完成自动断言和目视复核。固化 CDP 截图位于 `output/regression-7420/quiet-shell-20260830`，独立 Headless Playwright 桌面/手机截图位于 `output/regression-7420/quiet-shell-playwright-20260830`。本轮同时通过 `vue-tsc --noEmit`、Vite 主构建/本地预览构建/预压缩、CLI 构建、conversation transcript、frontend normalizers、server modules 和 governance；系统 PowerShell 5.1 直接读取无 BOM 中文脚本会误解析，治理门禁改以等价 UTF-8 读取执行后通过。会话夹具三视口和 1600 活动窗口、Composer 三视口也再次通过，未执行生产切换、Android、提交、推送或发布。
+- UX-20 Sidebar 本地验收通过：桌面操作区为两行，`新会话` 主操作覆盖完整 271px 轴线且高 36px，搜索/工作台/工具为 32px 第二行；340px 保存宽度下轴线同步扩展为 323px。深色主操作背景/文字分别为 `rgb(39, 39, 42)` / `rgb(244, 244, 245)`，明暗主题和手机/横屏均无横向溢出。聚焦手机夹具验证 10 条 row、58px 粗指针行高、项目顺序、唯一有意 pinned shortcut、等待文字、项目菜单/新建任务、stale-search、查询连续性和当前任务定位；首项目顶部边界修复后，后台项目上浮将 scrollTop 从 220 补偿至 348，原项目相对顶部保持 7.046875px。CDP 与独立 Headless Playwright 截图保存在 `output/regression-7420/quiet-sidebar-20260830`、`output/regression-7420/quiet-sidebar-regression-20260830` 和 `output/regression-7420/quiet-sidebar-playwright-20260830`；未执行真实 7420、Android、Git 或发布动作。
+- UX-40 Compact Composer 本地验收通过：桌面和 884×1104 粗指针折叠屏 shell 宽 768px，393×852 手机 shell 宽 353px；三种视口输入均位于控制条之上，12px 圆角、无默认阴影、无点击目标重叠或横向溢出，手机/折叠屏最小控制目标 44px。五行输入分别增长到 124px/107px，二十行封顶 128px，清空回到 32px/44px，展开达到 400px/368px；IME composing 与 keyCode 229 均未提交或误选，语音文本只进入 draft。桌面 Enter 提交、手机 Enter 换行、Ctrl+Enter 提交；附件/Runtime 面板桌面非模态、手机 `aria-modal=true` 且锁定背景滚动，关闭后恢复触发器焦点。两次本地反馈分别为 12.9ms 与 12.8ms。队列重排夹具在 393×852 下展示首条下移和末条上移两个 44×44 控件，实际顺序完成反转和恢复，横向溢出 0；生产接线仅在全部已持久化、单一所有者、未处理、首条未失败时允许重排，先写本地顺序再复用现有 durable queue/server reconciliation。`node --check scripts/conversation-browser-smoke.mjs`、`vue-tsc --noEmit`、`npm.cmd run build:frontend`、UTF-8 等价 `scripts/regression-7420-frontend.ps1 -SourceOnly` 和 `git diff --check` 均通过；截图在 `output/regression-7420/quiet-composer-audit-20260830`。系统 PowerShell 5.1 直接 `-File` 读取无 BOM 中文脚本仍会误解析，故源码门禁使用 UTF-8 显式读取执行；未执行真实 7420、Android、提交、推送或发布。
+- UX-60 响应式、主题与可访问性本地验收通过：`conversation-browser-smoke.mjs --mode hardening` 覆盖 1440×900、884×1104、768×1024、393×852、852×393 的浅色/深色组合；十个组合均为零横向溢出、唯一命名主地标、命名导航、可见交互控件有名称、无隐藏命中目标或重复 ID，抽样必要文字无 WCAG AA 失败，状态保留文本。粗指针菜单与侧栏调宽轨的有效命中区至少 44px；forced-colors 媒体查询生效，真实 Tab 将焦点移至调宽轨并显示 2px solid 轮廓；reduced-motion 下持续动画列表为空。393×852 抽屉为命名 modal dialog，背景完全 inert、页面滚动锁定，Tab/Shift+Tab 双向闭环，背景触发器不能夺取焦点，关闭后清除隔离并归还焦点。`node --check scripts/conversation-browser-smoke.mjs`、`vue-tsc --noEmit`、`npm.cmd run build:frontend`、UTF-8 等价 frontend source-only、UTF-8 等价 governance、`npm.cmd run verify:frontend-normalizers` 与 `git diff --check` 通过；Shell/Sidebar 回归再次通过。系统 PowerShell 5.1 的 npm 治理包装仍会把无 BOM 中文误解码并在解析阶段失败，显式 UTF-8 读取同一治理脚本后断言通过。独立 Headless Playwright 使用已安装 Chrome 捕获 768×1024 候选，关键桌面、手机抽屉、forced-colors 与深色手机截图已人工复核；证据位于 `output/regression-7420/ux60-hardening-20260830` 和 `output/regression-7420/ux60-final-20260830`。浏览器仿真不替代真实 Windows 高对比度、系统屏幕阅读器、Android 或物理折叠屏；未执行生产切换、提交、推送或发布。
+
+- UX-25 Sema Conversation Transcript module 本地验收通过：完整 `ConversationProjection` 在实时事件、刷新快照和乱序/重复 replay 间逐字段相同；同文不同 ID 的 commentary 保持独立，终态缺少 `completedAt` 时 `activeElapsedMs=null` 且 `timingStatus=unavailable`，多个显式 final 冲突时不猜测。reasoning 只保留类型、身份、状态、起止/耗时等有界元数据，原始思维链正文不进入客户端；fileChange/MCP 压缩、50k 文本限制、未知事件、失败、中断、等待扣除及 1600+ 活动均通过。session-log smoke 继续证明 spectator 按精确 UUID 只读定位且不 resume writer、隐藏续跑只保留 `turn_id`、同轮同 phase 同正文 final 去重、`patch_apply_end` 归入同轮文件变化。`npm.cmd run verify:conversation-transcript` 最新为 1602 turns 20.6ms、1600 activities 5.6ms；frontend normalizers、server modules、`vue-tsc --noEmit`、`build:frontend`、`build:cli` 与内容相同的 UTF-8 BOM governance 脚本均通过。本机 PowerShell 5.1 直接解析无 BOM 中文治理脚本失败属于启动器编码问题，临时 BOM 文件已删除。`output/regression-7420/ux25-transcript-20260830/missing-terminal-timing.png` 只保留为投影阶段历史证据；其中无行动价值的耗时提示已由当前 Web 收口移除，并新增源码与浏览器门禁防止回流。这不是 Android、Windows 高对比度、屏幕阅读器、CI 或 Release 证据。
+
+- UX-30 Turn-based Conversation 本地验收通过：`ThreadConversation.vue` 不再引用或构造旧 `UiMessage`，收藏与计划执行只回传投影原生窄类型意图；commentary 与 `activityGroups` 按 `ConversationProjection.blocks` 原事件顺序呈现，活动轮次固定展开、完成轮次默认收起。`sync-degraded` 恢复轮次保持 active 与固定展开，1600 项投影只挂载 18 项。`npm.cmd run verify:conversation-transcript` 最新为 1602 turns 19.8ms、1600 activities 4.8ms；frontend normalizers、`build:frontend`、内容相同的 UTF-8 BOM `-SourceOnly` 门禁、浏览器脚本语法和定向 `git diff --check` 通过。CDP 回归在 1440×900、393×852、884×1104 下验证显式 final、完成态折叠、五类首层交互、文件摘要、活动组、reduced-motion、44px 移动触控与零横向溢出；70 次流式更新、67 次心跳期间 `maxLongTaskMs=0`、最大心跳延迟 79ms、操作响应正常。恢复专用夹具为 1 个 active `sync-degraded` turn、1600 项投影/18 项挂载、0 横向溢出。独立 Playwright 1.55 使用本机 Chrome 等待真实恢复状态后截图并目视复核，证据为 `output/ux30-conversation/conversation-sync-degraded-playwright.png`。未验证真实 7420、Android 真机、系统辅助技术、远端 CI、部署或 Release。
+
+- UX-30 长会话门禁补强：新增 `longTurns=1` 权威 thread/turn/item 夹具，801 个 projected turn 共 1602 条 user/assistant 消息，最后一轮每 48ms 增量更新 commentary。`ThreadConversation.vue` 仅对 `ConversationProjection.turns` 做动态测高虚拟化，最多挂载 10 个 turn/20 条消息节点，并用顶部/底部 spacer、用户阅读锚点和 `overflow-anchor: none` 保持唯一滚动所有者；静态门禁禁止恢复 `v-for="turn in props.projection.turns"`、`UiMessage` 或旧 final/elapsed/folding/overlay。CDP 回归在 393×852 下验证尾部 `791–800`、顶部 `0–9`、中段 `397–406` 三个窗口都为 10/20，流式尾部 78 次更新、70 次心跳、最大排队延迟 29ms、`maxLongTaskMs=0`，点击后更新继续、横向溢出为 0；同次回归的 1600 活动和 `sync-degraded` 场景继续为 18 项挂载和 0 长任务。`npm.cmd run build:frontend`、`npm.cmd run verify:conversation-transcript`（1602 turns 20.6ms；1600 activities 5.0ms）、浏览器脚本语法和定向 `git diff --check` 通过。独立 Headless Playwright 使用本机 Chrome 通过完整 regression URL 截图并目视复核，证据在 `output/ux30-turn-virtualization-20260830`。最初两轮浏览器回归暴露的陈旧跟随底部帧与原生 scroll anchoring 竞争已修复并由顶部/中段断言固化。本证据不替代真实缓存首屏、生产 7420、Android 真机、CI、部署或 Release。
+
+- UX-70 本地候选收口：`npm.cmd run test:7420:frontend -- -BaseUrl http://127.0.0.1:17438 -SourceOnly` 和不带 `-SourceOnly` 的完整浏览器矩阵均以退出码 0 通过，启动器明确选择 `C:\Program Files\PowerShell\7\pwsh.exe` 7.5.5。矩阵覆盖桌面、393×852 手机、884×1104 折叠屏、横屏、侧栏搜索连续性/滚动锚点/当前会话揭示、命令面板焦点闭环、Composer、会话投影、五类交互、队列转移失败恢复、原生 writer 队列、加载失败、任务完成通知和“返回最新消息”；专用 `scrollReturn=1` 夹具验证原生 DOM 点击后滚动距离归零、返回按钮消失且焦点归还会话列表。1600 活动压力轮只挂载 18 项，115 次更新/110 次心跳最大延迟 22ms；独立长会话 CDP 门禁还验证 801 轮/1602 条消息最多挂载 10 轮/20 条消息、离屏第 400 轮定位与高位 prepend 761→801 轮时 5.875px 阅读锚点漂移。`npm.cmd run verify:conversation-transcript` 通过（1602 turns 20.7ms；1600 activities 5.7ms），`npm.cmd run verify:governance`、`npm.cmd run build:frontend`、`npm.cmd run verify:frontend-normalizers`、`npm.cmd run build:cli`、`npm.cmd run verify:server-modules` 与 `git diff --check` 均通过；server smoke 的慢 RPC/失败日志为既有故障注入。`npm.cmd run test:7420:sidebar-data -- --base-url http://127.0.0.1:17438` 读取 289 个活动会话、首屏 100 项和 23 个项目组，页内重复为 0；一个跨游标重叠 ID 被记录并只展示一次，App Server augment 对同页重复 ID 保留首项且重复执行结果幂等。以上均为隔离本地候选证据；当前生产 7420、Android 真机、物理折叠屏、系统辅助技术、远端 CI、Git、部署和 Release 未因此通过，本轮也未提交、推送、安装或切换生产。
+
+- M4-C 完成审计发现并移除两处渲染层外的旧 final/完成推断：`hasSettledSessionLogMessageEvidence` 曾通过“最新 assistant 位于最新 user 之后且 phase 不是 commentary”判断 session-log 已终结；`hasAssistantOutputAfterLatestPersistedRunningCommand` / `hasAssistantOutputAfterLatestUserMessage` 又会让停止按钮、陈旧运行态和 persisted running command 因后续 assistant 文本而提前收敛。现由共享 `latestConversationTurnIsTerminal` 统一判定，session-log 和执行恢复都只接受最新 projected turn 的 `completed`、`failed`、`interrupted` 或 `stopped`，并拒绝 queued、running、waiting 与 sync-degraded；较早 completed 后跟 running、存在 pending interaction 或 fresh active Runtime 时同样不得误判。`verify:frontend-normalizers`、frontend source-only、`npm.cmd run build:frontend` 与 `git diff --check` 通过；源码门禁禁止 `latestAssistant`、`message.phase`、两个 assistant-order helper 和旧 message-evidence helper 回流。该修复改变的是前端旧残留运行态的恢复判据，不改变 Runtime 协议/存储、队列、outbox、审批、通知协议或可见渲染，也不是生产 7420/Android 证据。
+
+- Sema 结构活动补充回归：`collabAgentToolCall` 继续由唯一 `ConversationProjection` 投影为现有 generic activity，但按 `spawnAgent`、`sendInput`、`resumeAgent`、`wait`、`closeAgent` 显示创建、补充、继续、等待、结束协同子任务，并仅显示最长 800 字符的 prompt 摘要，未知工具安全回退为“协同子任务”。`verify:conversation-transcript` 联合覆盖 MCP、Web Search、计划与两类协同活动，最新为 1602 turns 20.7ms、1600 activities 5.5ms；`verify:frontend-normalizers`、`build:frontend`、frontend source-only 与 `git diff --check` 通过。CDP 浏览器回归确认展开完成轮次包含可读协同标题与摘要，1440×900、393×852、884×1104 均零横向溢出，手机/折叠屏最小触控目标 44px，长会话与 1600 活动压力门禁继续通过；可视证据为 `output/regression-7420/conversation-collaboration-20260830/conversation-collaboration-activity.png`。本轮没有切换生产 7420、提交、推送、安装或发布。
+
+- 完成 turn 的无状态结构活动收拢回归：generated App Server `ThreadItem` 证明 `webSearch`、`plan`、`imageView`、`enteredReviewMode`、`exitedReviewMode` 与 `contextCompaction` 不携带 item status/时间。新增纯投影用例先复现六项在已完成 turn 中全部错误显示为 `pending`，修复后全部为 `completed`；只收拢缺失状态产生的 pending，显式 `inProgress` 协同活动继续保持进行中，failed/declined 也不被覆盖。`npm.cmd run verify:conversation-transcript` 通过（1602 turns 22.1ms；1600 activities 5.2ms），`npm.cmd run verify:frontend-normalizers`、`npm.cmd run build:frontend`、浏览器脚本语法和 `git diff --check` 通过。固化 CDP 完整门禁在 1440×900、393×852、884×1104 验证展开完成轮次的无状态 Web Search 显示“完成”而非“等待中”，三视口横向溢出为 0、移动/折叠屏最小触控目标 44px；801 轮/1602 消息保持 10 轮/20 消息挂载，流式长会话最大排队延迟 28ms、1600 活动压力最大延迟 11ms，二者 `maxLongTaskMs=0`。截图经人工复核，证据位于 `output/regression-7420/conversation-structural-settlement-20260830`。未切换生产 7420，未执行 Android、真实 Windows 辅助技术、Git、部署或 Release。
+
+- 当前 App Server schema 活动回归：以 `output/app-server-schema-audit/20260828-232442/typescript/v2/ThreadItem.ts` 复现 `hookPrompt`、`dynamicToolCall`、`imageGeneration` 全部落入“执行活动”兜底；修复后内部 hook 完全不投影，动态工具只显示“创建任务 / codex_app”，图片生成只显示“生成图片 / savedPath”。纯投影明确断言 hook fragments、dynamic arguments/content items、revised prompt 和 data URL 均不出现在序列化结果。`npm.cmd run verify:conversation-transcript` 通过（1602 turns 21.4ms；1600 activities 5.5ms），`npm.cmd run verify:frontend-normalizers`、`npm.cmd run build:frontend` 与浏览器脚本语法通过。固化 CDP 完整门禁在 1440×900、393×852、884×1104 下通过泄漏、状态、横向溢出和 44px 粗指针断言；801 轮/1602 消息保持 10/20 挂载，流式窗口 80 次更新/72 次心跳、最大延迟 34ms、`maxLongTaskMs=0`，1600 活动窗口 68 次更新/65 次心跳、最大延迟 11ms、`maxLongTaskMs=0`。独立 Headless Playwright 1.60 使用本机 Chrome 再次通过三视口标签、载荷隔离与零横向溢出断言；CDP 与 Playwright 截图均位于 `output/regression-7420/conversation-current-schema-20260830`，手机图已目视复核。未切换生产 7420，未执行 Android、真实 Windows 辅助技术、Git、部署或 Release。
+
+- UX-50 Artifact Inspector 准入已完成并判定 No-go：现有 inline 文件行、按需 diff/命令/计划详情没有两个已证实的高频阅读打断场景，低保真路径也未证明右栏比 inline/modal 少一次以上上下文切换；尽管只读与小屏覆盖层可行，四条准入未同时满足。保持现有 inline/modal，不新增 Inspector、权限、状态、持久化、固定移动栏或回滚负担。
+
+### Rollback
+
+- 回退会话投影模块、投影接线与新轮次 UI；不要恢复上述 7420 旧会话语义作为兼容层。传输、鉴权、原生队列、Runtime 恢复数据库和移动端生命周期没有数据迁移，可独立保留。
+
+---
+
+### Feature: Current App Server notification classification without transcript leakage
+
+#### Prerequisites
+
+- Use `output/live-appserver-schema-20260828/ServerNotification.json` from the current 2026-08-28 CLI schema audit.
+- Keep `midea-ai/sema-code-core@f564e8d930053becdd5c31fe53f65fd863b6f283` as the transcript semantic baseline; Codex.app is only the host interaction/safety cross-check.
+
+#### Steps
+
+1. Extract `oneOf[].properties.method.enum[0]` from the live schema and compare all 75 methods with `isKnownAppServerNotificationMethod()`.
+2. Run `npm.cmd run verify:server-modules` and confirm the smoke contains exactly 75 unique current-schema methods; `rawResponseItem/completed` remains a separate known union notification rather than being counted in that JSON set.
+3. Run `npm.cmd run verify:conversation-transcript` and confirm `turn/moderationMetadata` plus `model/safetyBuffering/updated` keep the owning turn running but create no activity, commentary, or final and leak no metadata body.
+4. Run the smallest relevant CLI/governance/diff checks.
+
+#### Expected Results
+
+- The comparison reports `OfficialCount=75` and `UnknownOfficial=[]`.
+- Official host metadata no longer increments unknown-notification diagnostics merely because it has no CX UI owner.
+- Classification does not create a transcript item, UI banner, state owner, queue action, or legacy 7420 fallback.
+
+#### Regression Evidence
+
+- The test-first server smoke failed with `false !== true` at the first missing current-schema notification, then passed after the known-classification update.
+- `npm.cmd run verify:server-modules` passed with `server module smoke ok`.
+- `npm.cmd run verify:conversation-transcript` passed at 22.9 ms for 1602 turns and 6.0 ms for 1600 activities.
+- `npm.cmd run build:cli`, `npm.cmd run verify:governance`, and `git diff --check` passed.
+
+#### Rollback
+
+- Remove only the ten newly classified methods and their current-schema assertions. Do not replace the Sema projection with raw notification rendering or restore an old 7420 inference path.
+
+---
+
+### Feature: Projection-owned rollback and older-history reconciliation
+
+#### Prerequisites
+
+- Keep `midea-ai/sema-code-core@f564e8d930053becdd5c31fe53f65fd863b6f283` as the mandatory transcript baseline.
+- Use a recent history window whose absolute `turnsStartIndex` is greater than zero, plus a newer realtime turn.
+
+#### Steps
+
+1. Run `npm.cmd run verify:conversation-transcript` and confirm a recent window containing absolute turns 10 and 11 plus a realtime `turn/started` event projects indexes `[10, 11, 12]`.
+2. Run `npm.cmd run test:7420:frontend -- -SourceOnly` and confirm older-history and rollback source checks reject `persistedMessagesByThreadId` / flattened `UiMessage[]` as the decision owner.
+3. Run `npm.cmd run build:frontend`.
+4. In a 393 x 852 headless Playwright fixture, focus `回退到此轮`, activate once, and confirm it changes to `确认回退` without emitting. Activate again and confirm it returns to the idle label.
+5. In a real-candidate follow-up, rollback a non-latest projected turn and confirm the accepted `thread/rollback` response immediately removes that turn and every later turn; refresh and load older history to prove none reappear.
+
+#### Expected Results
+
+- Live turns after a bounded recent window continue from the latest absolute projected index, not from the number of loaded rows.
+- Older-history `beforeTurnIndex`, rollback target/count, and worktree rollback text come from `ConversationProjection`.
+- A successful rollback replaces retained structured `threadRead` pages and clears pre-rollback transcript notifications before authoritative refresh.
+- The compact two-step inline confirmation remains keyboard/touch operable and creates no modal or legacy transcript overlay.
+
+#### Regression Evidence
+
+- The test-first projection assertion failed with actual `[10, 11, 2]` and expected `[10, 11, 12]`, then passed after absolute turn continuation was fixed.
+- `npm.cmd run verify:conversation-transcript` passed at 22.1 ms for 1602 turns and 4.7 ms for 1600 activities.
+- `npm.cmd run test:7420:frontend -- -SourceOnly`, `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run build:cli`, `npm.cmd run verify:governance`, and `git diff --check` passed.
+- Headless Playwright on Chromium at 393 x 852 observed `确认回退`, then `回退到此轮`, with no page errors. Screenshot: `output/codex-app-parity/sema-rollback-confirmation-phone-20260830.png`.
+- Real 7420 rollback, Android, physical foldable, and system assistive-technology evidence remain pending.
+
+#### Rollback
+
+- Revert this candidate as one UX-25/UX-30 change. Do not restore flattened `UiMessage[]` history or rollback decisions as a compatibility fallback.
+
+---
+
+### Feature: Projection-owned execution and recovery state
+
+#### Prerequisites
+
+- Keep `midea-ai/sema-code-core@f564e8d930053becdd5c31fe53f65fd863b6f283` as the mandatory conversation semantic baseline.
+- Use installed Windows Codex `26.818.5229` only to cross-check structured turn/item status ownership and stop/recovery interaction safety.
+
+#### Steps
+
+1. Run `npm.cmd run test:7420:frontend -- -SourceOnly` and reject execution helpers that inspect flattened persisted/live `commandExecution` messages.
+2. Run `npm.cmd run build:frontend` and `npm.cmd run verify:frontend-normalizers`.
+3. In Headless Playwright at 393 x 852, open the `syncDegraded` structured projection fixture and confirm one active recovery turn, an expanded process disclosure, `正在恢复实时状态`, zero page errors, and no horizontal overflow.
+
+#### Expected Results
+
+- Execution activity comes from the latest `ConversationProjection` turn/activity, gated by fresh Runtime/event/request authority.
+- A terminal projected turn wins even if an old flattened cache still contains an `inProgress` command.
+- Stop, recovery, queue continuation, and task-pet status cannot be revived by legacy 7420 command-message semantics.
+
+#### Regression Evidence
+
+- The test-first source gate failed with `execution, stop, and recovery state must use projected turn activities instead of flat 7420 command messages`, then passed after the semantic owner was replaced.
+- `npm.cmd run build:frontend` passed, including `vue-tsc --noEmit` and production/local-preview builds.
+- Independent Headless Playwright observed one active `sync-degraded` turn, expanded process disclosure, exact recovery copy, zero errors, and zero horizontal overflow. Screenshot: `output/codex-app-parity/projection-owned-execution-20260830/projection-running-phone.png`.
+- Production 7420, Android, physical foldable, and system assistive-technology evidence remain pending.
+
+#### Rollback
+
+- Revert this projection-owner change together with its source gate. Do not restore flattened `commandExecution` messages as an execution-state fallback.
+
+## Projection-only realtime state (2026-08-30)
+
+### Purpose
+
+Prove that realtime assistant, plan, reasoning, command, and turn activity no longer accumulate in a second flat 7420 state model after `ConversationProjection` became the visible and behavioral owner.
+
+### Steps
+
+1. Run `npm.cmd run test:7420:frontend -- -SourceOnly`; reject `liveAgentMessagesByThreadId`, `livePlanMessagesByThreadId`, `liveReasoningTextByThreadId`, `liveCommandsByThreadId`, or `turnActivityByThreadId` in `useDesktopState.ts`.
+2. Run `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run verify:conversation-transcript`, `npm.cmd run verify:governance`, and `git diff --check`.
+3. In Headless Playwright at 393 x 852, open the structured `syncDegraded` fixture and require one active projected turn, 1600 retained activities with at most 20 mounted rows, expanded recovery process, exact `正在恢复实时状态`, zero legacy overlays, zero page errors, and no horizontal overflow.
+
+### Expected Results
+
+- `conversationNotificationsByThreadId` is the only realtime conversation-event input; the normal authoritative `thread/read` remains the durable snapshot input.
+- Execution state uses projected activities plus Runtime/event/request freshness. Raw reasoning text, flattened plan/agent/command messages, and a legacy `turnActivity` copy cannot revive or label a turn.
+- Message outbox, durable queue, Runtime recovery, pending interaction, first-assistant-data measurement, and bottom-follow behavior remain intact because they are infrastructure and feedback paths rather than transcript semantics.
+
+### Regression Evidence
+
+- The new source gate first failed with `structured conversation notifications and projected turns must replace the legacy flat live-state side channel`, then passed after the five legacy state owners and their buffering/parsing paths were removed.
+- `npm.cmd run build:frontend`, frontend source-only, frontend normalizers, conversation transcript verification, governance verification, and `git diff --check` passed. Projection stress completed in 22.8ms for 1602 turns and 5.6ms for 1600 activities.
+- Independent Headless Playwright observed one active `sync-degraded` turn, 1600 projected / 18 mounted activities, expanded process disclosure, exact recovery copy, zero legacy overlays, zero page errors, and zero horizontal overflow. Screenshot: `output/codex-app-parity/projection-only-live-state-20260830/projection-only-live-state-phone.png`.
+- Current production 7420, Android, physical foldable, and real Windows assistive-technology evidence remain pending.
+
+### Rollback
+
+- Revert this deletion together with its source gate. Do not restore any flattened realtime state as a rendering, execution, stop, or recovery fallback.
+
+## Structured-only conversation cache and fixtures (2026-08-30)
+
+### Purpose
+
+Close the remaining local dual-semantics gap after `ConversationProjection` became authoritative: only acknowledged user-message identity may support browser cache/outbox delivery evidence, and neither production code nor regression fixtures may retain assistant/phase/command data or reinterpret old 7420 role/phase/live-message rules.
+
+### Steps
+
+1. Run `npm.cmd run test:7420:frontend -- -SourceOnly`; require the old `src/composables/conversationProjection.ts` file to be absent, `useDesktopState.ts` to import `threadMessageCache.ts`, and the cache module to exclude assistant, phase, command, plan, live-agent, and visible-conversation inference.
+2. Require `ConversationRegressionFixture.vue` to call `projectStructuredFixtureItems` with structured App Server items and `localUserMessages`; reject `projectFixtureMessages`, `agentMessage.live`, and `WeakMap<UiMessage` adapters.
+3. Require `DocumentationShowcaseFixture.vue` to provide structured turn items directly; reject `UiMessage`, `message.role`, or `message.turnIndex` adapters that would infer every assistant row as `final_answer`.
+4. Require gateway/thread normalization to expose `acknowledgedUserMessages` only; reject `normalizeThreadMessagesV2`, `toUiMessages`, assistant/plan/command flattening, or a generic flat `messages` contract alongside the authoritative structured response.
+5. Run `npm.cmd run build:frontend`, `npm.cmd run verify:frontend-normalizers`, `npm.cmd run verify:conversation-transcript`, `npm.cmd run verify:governance`, and `git diff --check`.
+6. Open the structured fixture at 393 x 852 in Headless Playwright. Confirm the explicit final, commentary, structured activities, file summary, pending interactions, missing-final explanation, older-history action, zero legacy overlay, zero page errors, and no horizontal overflow. Expand completed process detail and confirm MCP, search, and file facts remain visible.
+7. Open `streamStress=1` and `longTurns=1`; confirm 1600 projected activities remain bounded in the DOM and 801 projected turns mount no more than 10 turn shells while incremental updates and an action still progress.
+
+### Expected Results
+
+- Gateway/thread normalizers and `threadMessageCache.ts` may reconcile acknowledged user identity for delivery confirmation only through `AcknowledgedUserMessage`; local sending and failed-message recovery use `OptimisticUserMessage`. Both are user-only, and the former cannot carry raw delivery metadata. The assistant-capable `UiMessage`, `UiPlan`, and `CommandExecutionData` types must be absent from `src` so neither path can decide visible turn grouping, final selection, execution status, timing, rollback, or recovery.
+- Regression and documentation fixtures exercise the same structured interface as realtime/snapshot/replay production inputs instead of maintaining a second compatibility projection.
+- Completed process stays collapsed by default, active process stays expanded, and structured facts remain available on demand without restoring old tail overlays or raw JSON text.
+
+### Regression Evidence
+
+- The cache source gate first failed because `src/composables/conversationProjection.ts` still existed; after the rename it failed again because assistant/phase/command reconciliation still survived inside the cache. The fixture gate separately failed because `projectFixtureMessages` and `agentMessage.live` recreated replaced semantics. All pass after the cache was reduced to acknowledged user identity and the fixtures were replaced.
+- A later completion audit found `DocumentationShowcaseFixture.vue` still constructed `UiMessage[]` and promoted every assistant role to `final_answer`. The new source gate failed on that adapter first; after direct structured turn/item replacement, source-only and `build:frontend` passed. Headless Playwright at 393 x 852 rendered two turns, two user prompts, two explicit finals, zero missing-final rows, zero horizontal overflow, and zero page errors. Screenshot: `output/codex-app-parity/documentation-structured-fixture-20260830/docs-showcase-phone.png`.
+- A following normalizer audit found `normalizeThreadMessagesV2` still rebuilt assistant, plan, image, command, history-notice and unknown structured items into a second flat `UiMessage[]` model, including the invalid inference that every non-commentary agent message was final. The source gate failed first; after replacement with `normalizeAcknowledgedUserMessagesV2`, thread details, runtime snapshots and rollback preserve the structured response and carry user delivery evidence only. Source-only, frontend normalizers and `build:frontend` passed; the main app bundle dropped from 443.50 kB to 439.77 kB minified.
+- A final type-boundary audit found those user-only values still used the broad `UiMessage` contract, which could compile assistant/final/command fields back into delivery infrastructure. The new source gate failed first. `AcknowledgedUserMessage` now limits gateway, rollback, runtime snapshots and both memory/browser caches to user content, attachments and turn identity. The remaining optimistic/failure references were also user-only in behavior, so they moved to `OptimisticUserMessage`; unused `UiMessage`, `UiPlan`, and `CommandExecutionData` were deleted. A recursive source gate rejects their return. Frontend source-only, frontend normalizers, `vue-tsc --noEmit` and `build:frontend` passed; the main app bundle is 439.58 kB minified.
+- Headless Playwright at 393 x 852 rendered 14 projected turns, one explicit final, zero legacy Runtime bars and zero horizontal overflow. A fresh page opened with `detachedFailure=1`, expanded one `OptimisticUserMessage` failure row with preview `帮我进行下一步`, and retained zero page errors and zero overflow. Screenshot: `output/codex-app-parity/user-delivery-types-20260830/detached-failure-phone.png`.
+- Post-replacement Headless Playwright at 393 x 852 rendered the documentation fixture as 2 turns / 2 users / 2 explicit finals, and the conversation fixture as 14 turns / 7 users / 1 explicit final / 1 commentary / 1 file summary / 5 requests. Both had zero legacy overlay, zero page errors and zero horizontal overflow. Screenshots: `output/codex-app-parity/user-only-normalizer-20260830/docs-phone.png` and `output/codex-app-parity/user-only-normalizer-20260830/conversation-phone.png`.
+- `npm.cmd run build:frontend`, frontend source-only, frontend normalizers, conversation transcript verification, governance verification, and `git diff --check` passed. The final transcript rerun completed in 22.9 ms for 1602 turns and 4.9 ms for 1600 activities.
+- Headless Playwright at 393 x 852 observed 14 turns / 14 dividers, one explicit final, one commentary block, one file summary, five request cards, a projected activity maximum of 8, no internal noise, no page errors, and no horizontal overflow. Expanding completed process detail mounted 15 activities and retained MCP, search, and file facts.
+- The streaming fixture retained 1600 projected / 18 mounted activities while updates, heartbeat, and action counters advanced. The 801-turn fixture mounted 10 turn shells. Screenshot: `output/codex-app-parity/structured-fixture-20260830/structured-fixture-phone.png`.
+- Production 7420, Android, physical foldable, and real Windows assistive-technology evidence remain pending.
+
+### Rollback
+
+- Revert the cache rename, fixture replacement, and source gate together if the candidate itself must be reverted. Do not restore the old flat projection or fixture adapter as a runtime compatibility option.
+
+## Current 7420 Web-only candidate switch (2026-08-30)
+
+### Scope
+
+- Switch and validate the current 7420 Web frontend only, as explicitly requested by the user.
+- Exclude Android and Windows-environment checks from this run.
+- Do not restart the active Node/App Server while this goal turn owns the only restart-protection slot.
+
+### Steps
+
+1. Resolve the active launcher and compare the HTTP `/` body with all candidate/install `dist/index.html` files. Confirm the active 7420 serves `E:\javaword\CXCodex\codexui-sidebar-shortcuts\dist`, not the stale `C:\Users\SW\AppData\Local\CX-Codex\dist` copy.
+2. Copy the built candidate `dist` into a sibling staging directory, verify its SHA-256, atomically move the old live `dist` to `dist.web-previous-20260830-224606`, and move staging to the live name. Do not stop or force the service.
+3. Fetch the real 7420 `/`, every JS/CSS entry asset, `/health`, and `/codex-api/health` with cache bypass headers.
+4. Run `scripts/conversation-browser-smoke.mjs --mode fixture --base-url http://127.0.0.1:7420` in hidden headless Chrome.
+5. Run the same script in `real` mode against thread `01a04e9c-8aaf-7952-bbdf-556f4e70d703`, requiring the selected transcript plus a historical explicit final before taking metrics. Validate desktop, 393 x 852 phone width, and 884 x 1104 foldable width.
+6. Run the smallest syntax, governance, and diff checks after updating the Web regression harness and evidence.
+
+### Expected Results
+
+- The HTTP entry hash equals the candidate hash and all referenced entry assets return 200.
+- Existing App Server/runtime work remains healthy and uninterrupted throughout the Web-only switch.
+- Fixture and real-session Web views preserve explicit final ownership, one final at most per turn, active-turn feedback, bounded DOM, no legacy tail overlay, no internal-context leakage, and no horizontal overflow.
+- A real transcript with no currently visible controls reports an empty undersized-control list instead of inventing a 0px control failure.
+
+### Evidence
+
+- Candidate, live file, and actual HTTP response SHA-256: `893AEDCEFBF76C32C8E68EDED085A1B9E5978A0DA69F45FB85F6551110939295`.
+- Previous live Web SHA-256 retained for rollback: `23D5A076D648B9BADD7209039AC4079B7A3684CCAE870485F2A36794BC67E75D`.
+- `/health` and `/codex-api/health` returned `ok`; App Server remained running and initialized with zero pending RPC, queued RPC, and pending interactions. The one blocking/uncertain request was this still-running goal turn and was not interrupted.
+- All five entry JS/CSS assets returned HTTP 200.
+- Production-served fixture passed desktop, phone, and foldable assertions. The 801-turn case mounted 10 turns / 20 messages; its streaming window completed 78 updates and 71 heartbeats with `maxLagMs=29`, `maxLongTaskMs=0`, and one responsive action. The 1600-activity window mounted 18 activities and completed 68 updates / 65 heartbeats with `maxLongTaskMs=0`.
+- Real thread projection passed all three Web widths with 9 historical explicit finals, no multiple-final turn, one active turn, zero legacy overlays, zero internal-context leaks, zero horizontal overflow, and zero browser errors. Screenshots are under `output/codex-app-parity/production-7420-sema-20260830`, including `real-session/conversation-real-desktop.png` and `real-session/conversation-real-mobile.png`.
+- The first strict real-session probe exposed two harness timing/empty-set defects, not product failures: raw `thread/read` contained 32 completed turns and 32 `final_answer` items, while the cache-first page required a short background-history convergence; visual capture confirmed the final before the updated waiter passed. Mobile then had no visible transcript controls and an empty undersized list, so the assertion now applies 44px only when a target exists.
+- Android, Windows environment/accessibility, backend CLI restart, Git, push, and Release were intentionally not run in this Web-only scope.
+
+### Rollback
+
+- Restore the timestamped `dist.web-previous-20260830-224606` directory to the active `dist` name using the same verified sibling-directory swap. This rollback is Web-only and does not touch configuration, Runtime data, App Server state, Git, or the fixed Sema semantic baseline.
+
+## Current 7420 backend switch and Web regression (2026-08-30)
+
+### Scope
+
+- Load the already-staged Sema candidate backend only after the active 7420 reaches a genuine zero-blocker window.
+- Re-run the current real 7420 Web regression after the process restart; exclude Android and Windows-environment checks as requested.
+
+### Evidence
+
+- The one-time idle switch recorded `runtime_idle`, a successful managed restart, and `candidate_ready`; it did not use the force override and did not enter rollback.
+- Active `dist-cli/index.js` SHA-256 is `75D53C41C582D114E4B53040E22C397060DF44366DAF05BDB2E240F61852B138`; the previous CLI remains recoverable as `dist-cli.sema-previous-20260830-230129`.
+- The restarted App Server reports PID `78328`, `startedAtIso=2026-08-30T15:11:26.861Z`, zero pending/queued RPC, zero pending server requests, zero uncertain Runtime requests, and zero unknown notifications after startup.
+- `/codex-api/state/thread/01a04e9c-8aaf-7952-bbdf-556f4e70d703` returns structured `thread.turns/items`; its payload has no legacy `messages` or `commandExecution` property.
+- The production-served fixture passed desktop, 393 x 852 phone, and 884 x 1104 foldable-width assertions. The 801-turn case mounted 10 turns / 20 messages; streaming completed 78 updates / 71 heartbeats with `maxLagMs=35` and `maxLongTaskMs=0`. The 1600-activity case mounted 18 rows, completed 68 updates / 65 heartbeats with `maxLagMs=17`, and retained a responsive action.
+- The real goal thread passed all three Web widths with at most one explicit final per turn, visible active-turn feedback, seven visible file-summary groups in the sampled window, zero legacy overlays, zero internal-context leakage, zero browser errors, and zero horizontal overflow. Because the thread remained active, the newest two turns and active-turn count changed naturally between viewport captures rather than being treated as a fixed snapshot.
+- Screenshots were visually reviewed at `output/codex-app-parity/production-7420-sema-20260830/backend-regression`, including `real-session/conversation-real-desktop.png`, `conversation-real-mobile.png`, and `conversation-real-foldable.png`.
+
+### Rollback
+
+- Restore `dist-cli.sema-previous-20260830-230129` through the same verified sibling-directory swap and managed restart if the backend candidate must be reverted. Keep the Web rollback and backend rollback independent; neither rollback may restore 7420 legacy conversation semantics into the authoritative source tree.

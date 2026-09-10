@@ -80,9 +80,12 @@ function getErrorMessage(payload: unknown, fallback: string): string {
 
 export function readCollaborationModeFromPayload(payload: unknown): CollaborationMode {
   const root = asRecord(payload)
+  const nativeMode = asRecord(root?.collaborationMode)
   const raw =
     typeof root?.collaborationMode === 'string'
       ? root.collaborationMode
+      : typeof nativeMode?.mode === 'string'
+        ? nativeMode.mode
       : typeof root?.mode === 'string'
         ? root.mode
         : ''
@@ -314,18 +317,28 @@ export function buildPlanModePrompt(text: string): string {
 
 export function normalizePlanModeTurnStartParams(params: unknown, options: { includeNativeMode?: boolean } = {}): unknown {
   const root = asRecord(params)
-  if (!root || readCollaborationModeFromPayload(root) !== 'plan') return params
+  if (!root || (!root.collaborationMode && !root.mode)) return params
+  const mode = readCollaborationModeFromPayload(root)
+  const nativeMode = asRecord(root.collaborationMode)
+  if (options.includeNativeMode !== false && nativeMode) return params
 
   const next: Record<string, unknown> = { ...root }
   delete next.collaborationMode
+  delete next.mode
   if (options.includeNativeMode !== false) {
-    next.mode = 'plan'
+    const model = readString(root.model).trim()
+    if (!model) throw new Error('Native collaboration mode requires a resolved model before turn/start')
+    next.collaborationMode = {
+      mode: mode === 'plan' ? 'plan' : 'default',
+      settings: {
+        model,
+        reasoning_effort: readString(root.effort).trim() || null,
+        developer_instructions: null,
+      },
+    }
     return next
   }
-
-  if (next.mode === 'plan') {
-    delete next.mode
-  }
+  if (mode !== 'plan') return next
 
   const input = Array.isArray(root.input) ? root.input : []
   let didWrapText = false
@@ -351,17 +364,45 @@ export function normalizePlanModeTurnStartParams(params: unknown, options: { inc
   return next
 }
 
+// Normal UI sends already include the selected model. Legacy callers may omit
+// it, but native Settings.model is required: resolve the real thread/config
+// value without inventing a model or adding an RPC on the normal send path.
+export async function prepareNativeCollaborationTurnStartParams(
+  params: unknown,
+  rpc: (method: string, params: unknown) => Promise<unknown>,
+): Promise<unknown> {
+  const root = asRecord(params)
+  if (!root || (!root.collaborationMode && !root.mode) || asRecord(root.collaborationMode) || readString(root.model).trim()) {
+    return normalizePlanModeTurnStartParams(params)
+  }
+  try {
+    const threadId = readString(root.threadId).trim()
+    const threadRead = threadId ? asRecord(await rpc('thread/read', { threadId, includeTurns: false })) : null
+    const thread = asRecord(threadRead?.thread)
+    let model = readString(thread?.model).trim() || readString(threadRead?.model).trim()
+    let effort = root.effort ?? thread?.reasoningEffort ?? threadRead?.reasoningEffort
+    if (!model) {
+      const cwd = readString(root.cwd).trim() || readString(thread?.cwd).trim()
+      const configRead = asRecord(await rpc('config/read', {
+        includeLayers: false,
+        ...(cwd ? { cwd } : {}),
+      }))
+      const config = asRecord(configRead?.config)
+      model = readString(config?.model).trim()
+      effort ??= config?.model_reasoning_effort
+    }
+    return normalizePlanModeTurnStartParams({ ...root, model, effort })
+  } catch (error) {
+    // No turn/start has been dispatched, so a lookup timeout is a definite
+    // pre-send failure, not an uncertain write that may already be running.
+    throw new Error(`Unable to resolve collaboration model before turn/start: ${getErrorMessage(error, 'model unavailable')}`)
+  }
+}
+
 export function shouldRetryPlanModeWithoutNativeMode(error: unknown): boolean {
+  // Retry only a definite parameter rejection. A generic "invalid model" or
+  // transport failure may follow an accepted start and must never start twice.
+  if (asRecord(error)?.code !== -32602) return false
   const message = getErrorMessage(error, '').toLowerCase()
-  if (!message) return false
-  return (
-    message.includes('mode') &&
-    (
-      message.includes('unknown') ||
-      message.includes('invalid') ||
-      message.includes('unexpected') ||
-      message.includes('unrecognized') ||
-      message.includes('deserialize')
-    )
-  )
+  return /unknown field[^\n]*(?:collaborationmode|collaboration_mode)/.test(message)
 }

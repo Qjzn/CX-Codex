@@ -63,9 +63,9 @@ const { isMobile, isDualPaneMobile, viewportWidth } = useMobile()
 const mobileDrawerRef = ref<HTMLElement | null>(null)
 
 const SIDEBAR_WIDTH_KEY = 'codex-web-local.sidebar-width.v1'
-const MIN_SIDEBAR_WIDTH = 260
-const MAX_SIDEBAR_WIDTH = 420
-const DEFAULT_SIDEBAR_WIDTH = 356
+const MIN_SIDEBAR_WIDTH = 240
+const MAX_SIDEBAR_WIDTH = 360
+const DEFAULT_SIDEBAR_WIDTH = 288
 const TOUCH_DUAL_PANE_MIN_SIDEBAR_WIDTH = 236
 const TOUCH_DUAL_PANE_MAX_SIDEBAR_WIDTH = 340
 const TOUCH_DUAL_PANE_SIDEBAR_RATIO = 0.31
@@ -83,6 +83,7 @@ function clampTouchDualPaneSidebarWidth(value: number): number {
 function loadSidebarWidth(): number {
   if (typeof window === 'undefined') return DEFAULT_SIDEBAR_WIDTH
   const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY)
+  if (raw === null || raw.trim().length === 0) return DEFAULT_SIDEBAR_WIDTH
   const parsed = Number(raw)
   if (!Number.isFinite(parsed)) return DEFAULT_SIDEBAR_WIDTH
   return clampSidebarWidth(parsed)
@@ -212,6 +213,36 @@ function onResizeHandlePointerDown(event: PointerEvent): void {
   content: '';
   @apply absolute left-1/2 top-0 bottom-0 w-px -translate-x-1/2 transition-colors;
   background: var(--ui-border-subtle);
+}
+
+@media (pointer: coarse) {
+  .desktop-resize-handle {
+    z-index: 2;
+  }
+
+  .desktop-resize-handle::after {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    left: 50%;
+    width: 44px;
+    transform: translateX(-50%);
+  }
+}
+
+@media (forced-colors: active) {
+  .desktop-resize-handle {
+    forced-color-adjust: auto;
+  }
+
+  .desktop-resize-handle:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .desktop-resize-handle::before {
+    background: ButtonText;
+  }
 }
 
 .desktop-resize-handle:hover::before,

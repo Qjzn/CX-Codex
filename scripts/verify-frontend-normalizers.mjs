@@ -22,7 +22,7 @@ const messageOutboxMergeImport = toImportPath(relative(outputRoot, join(repoRoot
 const messageIdentityImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'messageIdentity.ts')))
 const composerTurnOptionsImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'composerTurnOptions.ts')))
 const messageOutboxPersistenceImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'messageOutboxPersistence.ts')))
-const conversationProjectionImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'conversationProjection.ts')))
+const threadMessageCacheImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'threadMessageCache.ts')))
 const boundedAsyncRecoveryImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'boundedAsyncRecovery.ts')))
 const chatFeedbackMetricsImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'chatFeedbackMetrics.ts')))
 const runtimeRequestDeliveryImport = toImportPath(relative(outputRoot, join(repoRoot, 'src', 'composables', 'runtimeRequestDelivery.ts')))
@@ -45,7 +45,7 @@ const queuedMessageTransferImport = toImportPath(relative(outputRoot, join(repoR
 try {
   writeFileSync(entryPath, `
 import assert from 'node:assert/strict'
-import { applyActiveTurnIdToMessages, normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from '${normalizerImport}'
+import { applyActiveTurnIdToAcknowledgedUserMessages, normalizeAcknowledgedUserMessagesV2, normalizeThreadGroupsV2 } from '${normalizerImport}'
 import { createNotificationReplayCoordinator } from '${notificationReplayImport}'
 import {
   createConnectionManager,
@@ -86,15 +86,8 @@ import {
   serializeMessageOutboxState,
 } from '${messageOutboxPersistenceImport}'
 import {
-  areMessageFieldsEqual,
-  hasPlanImplementationConfirmation,
-  mergeMessages,
-  PLAN_IMPLEMENTATION_CONFIRMATION,
-  removeRedundantLiveAgentMessages,
-  removeStaleHistoryNoticeAfterOlderMerge,
-  sortMessagesByTurnIndex,
-  upsertMessage,
-} from '${conversationProjectionImport}'
+  mergeCachedThreadMessages,
+} from '${threadMessageCacheImport}'
 import { runWithBoundedRecovery } from '${boundedAsyncRecoveryImport}'
 import {
   beginChatFeedbackMetric,
@@ -128,7 +121,7 @@ import {
   CX_SESSION_FILES_CHANGED_METHOD,
   getCxSessionFileChangeSyncPolicy,
   getSessionLogAuthoritativeRefreshAction,
-  hasSettledSessionLogMessageEvidence,
+  hasSettledSessionLogProjectionEvidence,
   isCxSessionFilesChangedMethod,
   readCxSessionFileChangeOrigin,
   readCxSessionFileChangeSource,
@@ -503,21 +496,16 @@ assert.equal(getSessionLogAuthoritativeRefreshAction({
   hasQueuedWork: true,
   hasTerminalEvidence: false,
 }), 'skip')
-assert.equal(hasSettledSessionLogMessageEvidence([
-  { role: 'assistant', messageType: 'agentMessage', phase: 'final' },
-  { role: 'user', messageType: 'userMessage' },
-  { role: 'assistant', messageType: 'agentMessage', phase: 'commentary' },
-]), false)
-assert.equal(hasSettledSessionLogMessageEvidence([
-  { role: 'user', messageType: 'userMessage' },
-  { role: 'assistant', messageType: 'agentMessage', phase: 'commentary' },
-  { role: 'assistant', messageType: 'agentMessage', phase: 'final' },
-]), true)
-assert.equal(hasSettledSessionLogMessageEvidence([
-  { role: 'user', messageType: 'userMessage' },
-  { role: 'assistant', messageType: 'agentMessage', phase: 'final' },
-  { role: 'assistant', messageType: 'agentMessage', phase: 'commentary' },
-]), false)
+assert.equal(hasSettledSessionLogProjectionEvidence({ turns: [] }), false)
+assert.equal(hasSettledSessionLogProjectionEvidence({
+  turns: [{ state: 'completed' }, { state: 'running' }],
+}), false)
+for (const state of ['completed', 'failed', 'interrupted', 'stopped'] as const) {
+  assert.equal(hasSettledSessionLogProjectionEvidence({ turns: [{ state }] }), true)
+}
+for (const state of ['queued', 'running', 'waiting', 'sync-degraded'] as const) {
+  assert.equal(hasSettledSessionLogProjectionEvidence({ turns: [{ state }] }), false)
+}
 assert.equal(isOptimisticOnlyExecutionEvidence({
   executionActive: true,
   sourceInProgress: false,
@@ -716,14 +704,14 @@ assert.deepEqual(decideConnectedRecovery({
 const visibleTaskPetThread = {
   routeThreadId: ' thread-visible ',
   displayedThreadId: 'thread-visible',
-  messageCount: 2,
+  visibleTurnCount: 2,
   loading: false,
   switching: false,
 }
 assert.equal(shouldAcknowledgeMobileShellTaskPetThreadOpen(visibleTaskPetThread), true)
 assert.equal(shouldMarkMobileShellTaskPetThreadRead({ ...visibleTaskPetThread, inProgress: true }), false)
 assert.equal(shouldMarkMobileShellTaskPetThreadRead({ ...visibleTaskPetThread, inProgress: false }), true)
-assert.equal(shouldAcknowledgeMobileShellTaskPetThreadOpen({ ...visibleTaskPetThread, messageCount: 0 }), false)
+assert.equal(shouldAcknowledgeMobileShellTaskPetThreadOpen({ ...visibleTaskPetThread, visibleTurnCount: 0 }), false)
 assert.equal(shouldAcknowledgeMobileShellTaskPetThreadOpen({ ...visibleTaskPetThread, loading: true }), false)
 assert.equal(shouldAcknowledgeMobileShellTaskPetThreadOpen({ ...visibleTaskPetThread, switching: true }), false)
 assert.equal(shouldAcknowledgeMobileShellTaskPetThreadOpen({ ...visibleTaskPetThread, displayedThreadId: 'thread-other' }), false)
@@ -1247,7 +1235,7 @@ assert.deepEqual(
   ['loaded-failed-anchor', 'optimistic-user:failed-outside-page', 'current-page-user', 'current-page-assistant'],
 )
 
-const generatedImageMessages = normalizeThreadMessagesV2({
+const generatedImageMessages = normalizeAcknowledgedUserMessagesV2({
   thread: {
     id: 'thread-generated-image',
     cwd: 'E:\\repo',
@@ -1267,11 +1255,9 @@ const generatedImageMessages = normalizeThreadMessagesV2({
     }],
   },
 })
-assert.equal(generatedImageMessages.length, 1)
-assert.equal(generatedImageMessages[0]?.messageType, 'imageGeneration')
-assert.deepEqual(generatedImageMessages[0]?.images, ['C:\\work\\generated.png'])
+assert.deepEqual(generatedImageMessages, [], 'assistant image output must remain in ConversationProjection only')
 
-const internalContextMessages = normalizeThreadMessagesV2({
+const internalContextMessages = normalizeAcknowledgedUserMessagesV2({
   thread: {
     id: 'thread-internal-context',
     cwd: 'E:\\repo',
@@ -1303,340 +1289,72 @@ const internalContextMessages = normalizeThreadMessagesV2({
 })
 assert.deepEqual(internalContextMessages.map((message) => message.text), ['Visible request'])
 
-const historyNoticeMessage = {
-  id: 'history-notice',
-  role: 'system',
-  text: 'Older history available',
-  messageType: 'history.notice',
-}
-const projectedTurnTwo = {
-  id: 'projected-turn-2',
-  role: 'assistant',
-  text: 'turn two',
+const cachedUserTwo = {
+  id: 'cached-user-2',
+  role: 'user',
+  text: 'turn two prompt',
+  messageType: 'userMessage',
+  turnId: 'turn-2',
   turnIndex: 2,
 }
-const projectedTurnZero = {
-  id: 'projected-turn-0',
+const cachedUserZero = {
+  id: 'cached-user-0',
   role: 'user',
-  text: 'turn zero',
+  text: 'turn zero prompt',
+  messageType: 'userMessage',
+  turnId: 'turn-0',
   turnIndex: 0,
 }
-assert.equal(areMessageFieldsEqual(projectedTurnTwo, { ...projectedTurnTwo }), true)
-assert.equal(areMessageFieldsEqual(projectedTurnTwo, { ...projectedTurnTwo, text: 'changed' }), false)
-assert.equal(areMessageFieldsEqual(
-  { ...projectedTurnTwo, messageType: 'agentMessage', phase: 'commentary' },
-  { ...projectedTurnTwo, messageType: 'agentMessage', phase: 'final' },
-), false)
-assert.equal(areMessageFieldsEqual(projectedTurnTwo, {
-  ...projectedTurnTwo,
-  fileAttachments: [{ label: 'report', path: 'report.txt' }],
-}), false)
-const projectedCommand = {
-  id: 'command-projection',
-  role: 'assistant',
-  text: '',
-  commandExecution: {
-    command: 'npm test',
-    cwd: 'E:/repo',
-    status: 'inProgress',
-    aggregatedOutput: '',
-    exitCode: null,
-    durationMs: null,
-    startedAtMs: 1,
-  },
-}
-assert.equal(areMessageFieldsEqual(projectedCommand, {
-  ...projectedCommand,
-  commandExecution: { ...projectedCommand.commandExecution, command: 'npm run test' },
-}), false)
-const projectedPlan = {
-  id: 'plan:turn-projection',
-  role: 'system',
-  text: '',
-  messageType: 'plan',
-  plan: {
-    turnId: 'turn-projection',
-    explanation: 'Plan safely',
-    steps: [{ step: 'Inspect', status: 'pending' }],
-    rawText: '',
-    isStreaming: false,
-  },
-}
-assert.equal(areMessageFieldsEqual(projectedPlan, { ...projectedPlan, plan: { ...projectedPlan.plan } }), true)
-assert.equal(areMessageFieldsEqual(projectedPlan, {
-  ...projectedPlan,
-  plan: { ...projectedPlan.plan, steps: [{ step: 'Inspect', status: 'completed' }] },
-}), false)
-assert.equal(hasPlanImplementationConfirmation([
-  projectedPlan,
-  { id: 'plan-confirmation', role: 'user', text: PLAN_IMPLEMENTATION_CONFIRMATION },
-], projectedPlan.id), true)
-assert.equal(hasPlanImplementationConfirmation([
-  projectedPlan,
-  { id: 'ordinary-follow-up', role: 'user', text: '继续检查，但先不要执行' },
-], projectedPlan.id), false)
-assert.equal(hasPlanImplementationConfirmation([
-  projectedPlan,
-  { ...projectedPlan, id: 'plan:newer-turn' },
-  { id: 'late-confirmation', role: 'user', text: PLAN_IMPLEMENTATION_CONFIRMATION },
-], projectedPlan.id), false)
-assert.equal(areMessageFieldsEqual(projectedCommand, {
-  ...projectedCommand,
-  commandExecution: { ...projectedCommand.commandExecution, cwd: 'E:/other' },
-}), false)
-const unchangedProjection = [projectedTurnTwo]
-assert.equal(mergeMessages(unchangedProjection, [{ ...projectedTurnTwo }]), unchangedProjection)
-assert.deepEqual(
-  sortMessagesByTurnIndex([projectedTurnTwo, historyNoticeMessage, projectedTurnZero]).map((message) => message.id),
-  ['history-notice', 'projected-turn-0', 'projected-turn-2'],
+const unchangedCache = [cachedUserTwo]
+assert.equal(
+  mergeCachedThreadMessages(unchangedCache, [{ ...cachedUserTwo }]),
+  unchangedCache,
+  'an unchanged user-message cache must retain array identity',
 )
-const mergedOlderHistory = mergeMessages(
-  [historyNoticeMessage, projectedTurnTwo],
-  [projectedTurnZero],
-  true,
-  true,
-  true,
+const mergedOlderHistory = mergeCachedThreadMessages(
+  [cachedUserTwo],
+  [cachedUserZero],
+  { preserveMissing: true, sortByTurnIndex: true, incomingAuthority: 'older' },
 )
-assert.deepEqual(mergedOlderHistory.map((message) => message.id), ['projected-turn-0', 'projected-turn-2'])
-const authoritativeTurnReplacement = mergeMessages(
+assert.deepEqual(mergedOlderHistory.map((message) => message.id), ['cached-user-0', 'cached-user-2'])
+const authoritativeTurnReplacement = mergeCachedThreadMessages(
   [
-    { id: 'cached-turn-1', role: 'assistant', text: 'same final answer', turnIndex: 1 },
-    { id: 'fallback-turn-2', role: 'assistant', text: 'same final answer', turnIndex: 2 },
-    { id: 'response-turn-2', role: 'assistant', text: 'same final answer', turnIndex: 2 },
+    { id: 'cached-user-1', role: 'user', text: 'first prompt', messageType: 'userMessage', turnIndex: 1, turnId: 'turn-1' },
+    { id: 'fallback-user-2', role: 'user', text: 'same active prompt', messageType: 'userMessage', turnIndex: 2, turnId: 'turn-2' },
   ],
-  [{ id: 'item-turn-2', role: 'assistant', text: 'same final answer', turnIndex: 2 }],
-  true,
-  false,
-  false,
-  true,
+  [{ id: 'item-user-2', role: 'user', text: 'same active prompt', messageType: 'userMessage', turnIndex: 2, turnId: 'turn-2' }],
+  { preserveMissing: true, replaceOverlappingTurns: true },
 )
 assert.deepEqual(
   authoritativeTurnReplacement.map((message) => message.id),
-  ['cached-turn-1', 'item-turn-2'],
+  ['cached-user-1', 'item-user-2'],
+  'higher-authority user evidence must replace the matching turn occurrence',
 )
-const activeTurnUserReplacement = mergeMessages(
-  [{
-    id: 'msg_cached_user',
-    role: 'user',
-    text: 'same active prompt',
-    messageType: 'userMessage',
-    turnIndex: 9,
-    turnId: 'turn-active',
-  }],
-  [{
-    id: 'item_authoritative_user',
-    role: 'user',
-    text: 'same active prompt',
-    messageType: 'userMessage',
-    turnIndex: 100,
-    turnId: 'turn-active',
-  }],
-  true,
-)
-assert.deepEqual(
-  activeTurnUserReplacement.map((message) => message.id),
-  ['item_authoritative_user'],
-)
-const cachedProjectionMustNotReplaceAuthoritativeOrder = mergeMessages(
+const lowerAuthorityCacheMustNotReplaceAuthoritativeOrder = mergeCachedThreadMessages(
   [
     { id: 'item-user-a', role: 'user', text: 'older prompt', messageType: 'userMessage', turnIndex: 100, turnId: 'turn-a' },
-    { id: 'item-agent-a', role: 'assistant', text: 'older answer', messageType: 'agentMessage', phase: 'final', turnIndex: 100, turnId: 'turn-a' },
     { id: 'item-user-b', role: 'user', text: 'current prompt', messageType: 'userMessage', turnIndex: 101, turnId: 'turn-b' },
   ],
   [
     { id: 'msg-user-a', role: 'user', text: 'older prompt', messageType: 'userMessage', turnIndex: 8, turnId: 'turn-a' },
-    { id: 'msg-agent-a', role: 'assistant', text: 'older answer', messageType: 'agentMessage', turnIndex: 8, turnId: 'turn-a' },
     { id: 'fallback-current-user', role: 'user', text: 'current prompt', messageType: 'userMessage', turnIndex: 9, turnId: 'fallback-turn-9' },
-    { id: 'msg-current-agent', role: 'assistant', text: 'new progress', messageType: 'agentMessage', phase: 'commentary', turnIndex: 9, turnId: 'turn-b' },
+    { id: 'fallback-next-user', role: 'user', text: 'new prompt', messageType: 'userMessage', turnIndex: 10, turnId: 'fallback-turn-10' },
   ],
-  true,
-  false,
-  false,
-  false,
-  'lower',
+  { preserveMissing: true, incomingAuthority: 'lower' },
 )
 assert.deepEqual(
-  cachedProjectionMustNotReplaceAuthoritativeOrder.map((message) => message.id),
-  ['item-user-a', 'item-agent-a', 'item-user-b', 'msg-current-agent'],
-  'a lower-authority session projection must preserve authoritative order and append only unseen progress',
-)
-const freshAuthorityMustRestoreCanonicalOrder = mergeMessages(
-  [
-    { id: 'item-agent-first', role: 'assistant', text: 'first answer', messageType: 'agentMessage', phase: 'final', turnIndex: 0, turnId: 'turn-first' },
-    { id: 'item-user-first', role: 'user', text: 'first prompt', messageType: 'userMessage', turnIndex: 0, turnId: 'turn-first' },
-    { id: 'item-user-followup', role: 'user', text: 'follow-up prompt', messageType: 'userMessage', turnIndex: 1, turnId: 'turn-followup' },
-  ],
-  [
-    { id: 'item-user-first', role: 'user', text: 'first prompt', messageType: 'userMessage', turnIndex: 0, turnId: 'turn-first' },
-    { id: 'item-agent-first', role: 'assistant', text: 'first answer', messageType: 'agentMessage', phase: 'final', turnIndex: 0, turnId: 'turn-first' },
-    { id: 'item-user-followup', role: 'user', text: 'follow-up prompt', messageType: 'userMessage', turnIndex: 1, turnId: 'turn-followup' },
-    { id: 'item-agent-followup', role: 'assistant', text: 'follow-up answer', messageType: 'agentMessage', phase: 'final', turnIndex: 1, turnId: 'turn-followup' },
-  ],
-  true,
+  lowerAuthorityCacheMustNotReplaceAuthoritativeOrder.map((message) => message.id),
+  ['item-user-a', 'item-user-b', 'fallback-next-user'],
+  'a lower-authority cache must preserve authoritative order and append only its unseen suffix',
 )
 assert.deepEqual(
-  freshAuthorityMustRestoreCanonicalOrder.map((message) => message.id),
-  ['item-user-first', 'item-agent-first', 'item-user-followup', 'item-agent-followup'],
-  'a fresh authoritative projection must restore App Server item order after a live merge',
-)
-assert.deepEqual(
-  mergeMessages(
-    [
-      { id: 'item-overlap-user-a', role: 'user', text: 'unique overlap prompt', messageType: 'userMessage', turnId: 'turn-overlap-a' },
-      { id: 'item-overlap-agent-a', role: 'assistant', text: 'unique overlap answer', messageType: 'agentMessage', turnId: 'turn-overlap-a' },
-      { id: 'item-overlap-user-b', role: 'user', text: 'continue', messageType: 'userMessage', turnId: 'turn-overlap-b' },
-    ],
-    [
-      { id: 'msg-stale-duplicate-anchor', role: 'user', text: 'continue', messageType: 'userMessage', turnId: 'turn-stale' },
-      { id: 'msg-stale-answer', role: 'assistant', text: 'stale answer', messageType: 'agentMessage', turnId: 'turn-stale' },
-      { id: 'msg-overlap-user-a', role: 'user', text: 'unique overlap prompt', messageType: 'userMessage', turnId: 'turn-overlap-a' },
-      { id: 'msg-overlap-agent-a', role: 'assistant', text: 'unique overlap answer', messageType: 'agentMessage', turnId: 'turn-overlap-a' },
-      { id: 'fallback-overlap-user-b', role: 'user', text: 'continue', messageType: 'userMessage', turnId: 'fallback-turn-22' },
-      { id: 'msg-overlap-progress', role: 'assistant', text: 'latest progress', messageType: 'agentMessage', phase: 'commentary', turnId: 'turn-overlap-b' },
-    ],
-    true,
-    false,
-    false,
-    false,
-    'lower',
-  ).map((message) => message.id),
-  ['item-overlap-user-a', 'item-overlap-agent-a', 'item-overlap-user-b', 'msg-overlap-progress'],
-  'a repeated short message must not anchor a lower-authority cache to stale history',
-)
-const authoritativeAssistantReplacement = mergeMessages(
-  [{
-    id: 'msg-cached-agent',
-    role: 'assistant',
-    text: 'same final answer',
-    messageType: 'agentMessage',
-    turnIndex: 9,
-    turnId: 'turn-agent',
-  }],
-  [{
-    id: 'item-authoritative-agent',
-    role: 'assistant',
-    text: 'same final answer',
-    messageType: 'agentMessage',
-    phase: 'final',
-    turnIndex: 100,
-    turnId: 'turn-agent',
-  }],
-  true,
-)
-assert.deepEqual(
-  authoritativeAssistantReplacement.map((message) => message.id),
-  ['item-authoritative-agent'],
-  'a fresh App Server item must replace the matching cached assistant occurrence',
-)
-assert.deepEqual(
-  mergeMessages(
-    [
-      { id: 'msg-agent-first', role: 'assistant', text: 'same progress', messageType: 'agentMessage', phase: 'commentary', turnId: 'turn-repeat' },
-      { id: 'msg-agent-second', role: 'assistant', text: 'same progress', messageType: 'agentMessage', phase: 'commentary', turnId: 'turn-repeat' },
-    ],
-    [
-      { id: 'item-agent-first', role: 'assistant', text: 'same progress', messageType: 'agentMessage', phase: 'commentary', turnId: 'turn-repeat' },
-      { id: 'item-agent-second', role: 'assistant', text: 'same progress', messageType: 'agentMessage', phase: 'commentary', turnId: 'turn-repeat' },
-    ],
-    true,
-  ).map((message) => message.id),
-  ['item-agent-first', 'item-agent-second'],
-  'occurrence-aware reconciliation must preserve two legitimate identical assistant messages in one turn',
-)
-assert.deepEqual(
-  mergeMessages(
-    [{ id: 'item-existing', role: 'assistant', text: 'existing answer', messageType: 'agentMessage', turnId: 'turn-existing' }],
-    [
-      { id: 'msg-unrelated-history', role: 'assistant', text: 'unrelated history', messageType: 'agentMessage', turnId: 'turn-old' },
-      { id: 'fallback-new-user', role: 'user', text: 'brand new prompt', messageType: 'userMessage', turnId: 'fallback-turn-20' },
-      { id: 'msg-new-progress', role: 'assistant', text: 'brand new progress', messageType: 'agentMessage', phase: 'commentary', turnId: 'turn-new' },
-    ],
-    true,
-    false,
-    false,
-    false,
-    'lower',
-  ).map((message) => message.id),
-  ['item-existing', 'fallback-new-user', 'msg-new-progress'],
-  'a cache projection without overlap must add only its newest user-owned suffix',
-)
-assert.deepEqual(
-  mergeMessages(
+  mergeCachedThreadMessages(
     [{ id: 'fallback-current-continue', role: 'user', text: 'continue', messageType: 'userMessage', turnIndex: 100, turnId: 'fallback-turn-current' }],
     [{ id: 'item-older-continue', role: 'user', text: 'continue', messageType: 'userMessage', turnIndex: 10, turnId: 'turn-older' }],
-    true,
-    true,
-    true,
-    false,
-    'older',
+    { preserveMissing: true, sortByTurnIndex: true, incomingAuthority: 'older' },
   ).map((message) => message.id),
   ['item-older-continue', 'fallback-current-continue'],
-  'loading an older page must not replace the current fallback message by equal text',
-)
-assert.deepEqual(
-  mergeMessages(
-    [{ id: 'same-user-turn-8', role: 'user', text: 'repeatable prompt', messageType: 'userMessage', turnIndex: 8, turnId: 'turn-8' }],
-    [{ id: 'same-user-turn-9', role: 'user', text: 'repeatable prompt', messageType: 'userMessage', turnIndex: 9, turnId: 'turn-9' }],
-    true,
-  ).map((message) => message.id),
-  ['same-user-turn-8', 'same-user-turn-9'],
-)
-assert.deepEqual(
-  mergeMessages(
-    [{ id: 'same-text-turn-1', role: 'assistant', text: 'repeatable answer', turnIndex: 1 }],
-    [{ id: 'same-text-turn-2', role: 'assistant', text: 'repeatable answer', turnIndex: 2 }],
-    true,
-    false,
-    false,
-    true,
-  ).map((message) => message.id),
-  ['same-text-turn-1', 'same-text-turn-2'],
-)
-const laterHistoryMessages = [historyNoticeMessage, projectedTurnTwo]
-assert.equal(removeStaleHistoryNoticeAfterOlderMerge(laterHistoryMessages), laterHistoryMessages)
-assert.deepEqual(
-  removeStaleHistoryNoticeAfterOlderMerge([historyNoticeMessage, projectedTurnZero]).map((message) => message.id),
-  ['projected-turn-0'],
-)
-const liveAgentProjection = {
-  id: 'live-agent-projection',
-  role: 'assistant',
-  text: 'same live text',
-  messageType: 'agentMessage.live',
-}
-assert.deepEqual(
-  removeRedundantLiveAgentMessages(
-    [liveAgentProjection],
-    [{ ...projectedTurnTwo, text: ' same\\n live text ' }],
-  ),
-  [],
-)
-assert.deepEqual(
-  removeRedundantLiveAgentMessages(
-    [liveAgentProjection],
-    [
-      { id: 'old-agent-same-text', role: 'assistant', text: 'same live text', messageType: 'agentMessage', turnId: 'old-turn' },
-      { id: 'current-user', role: 'user', text: 'new request', messageType: 'userMessage', turnId: 'current-turn' },
-    ],
-  ).map((message) => message.id),
-  ['live-agent-projection'],
-  'an old equal assistant message must not suppress current live output',
-)
-assert.deepEqual(
-  removeRedundantLiveAgentMessages(
-    [liveAgentProjection],
-    [
-      { id: 'current-user', role: 'user', text: 'new request', messageType: 'userMessage', turnId: 'current-turn' },
-      { id: 'current-agent-same-text', role: 'assistant', text: 'same live text', messageType: 'agentMessage', turnId: 'current-turn' },
-    ],
-  ),
-  [],
-  'the same assistant message persisted in the active tail must suppress its live copy',
-)
-assert.equal(upsertMessage(unchangedProjection, { ...projectedTurnTwo }), unchangedProjection)
-assert.deepEqual(
-  upsertMessage(unchangedProjection, projectedTurnZero).map((message) => message.id),
-  ['projected-turn-2', 'projected-turn-0'],
+  'loading an older cache page must not replace a current message by equal text',
 )
 
 const retryAttempts = []
@@ -1711,7 +1429,7 @@ await assert.rejects(() => runWithBoundedRecovery({
 }), /Server rejected the request/)
 assert.equal(rejectedRecoveryAttempts, 1)
 
-const messages = normalizeThreadMessagesV2({
+const acknowledgedUserMessages = normalizeAcknowledgedUserMessagesV2({
   thread: {
     id: 'thread-a',
     cwd: 'E:\\\\repo',
@@ -1723,6 +1441,11 @@ const messages = normalizeThreadMessagesV2({
         id: 'turn-a',
         status: 'completed',
         items: [
+          {
+            id: 'item-user',
+            type: 'userMessage',
+            content: [{ type: 'text', text: 'Visible request' }],
+          },
           { id: 'item-known', type: 'agentMessage', text: 'Known message' },
           { id: 'item-plan', type: 'plan', text: '1. Inspect\\n2. Implement' },
           {
@@ -1764,27 +1487,15 @@ const messages = normalizeThreadMessagesV2({
   },
 })
 
-assert.equal(messages.length, 4)
-assert.equal(messages[0]?.messageType, 'agentMessage')
-assert.equal(messages[0]?.turnId, 'turn-a')
-assert.equal(messages[1]?.role, 'system')
-assert.equal(messages[1]?.id, 'plan:turn-a')
-assert.equal(messages[1]?.messageType, 'plan')
-assert.equal(messages[1]?.plan?.turnId, 'turn-a')
-assert.equal(messages[1]?.plan?.rawText, '1. Inspect\\n2. Implement')
-assert.equal(messages[1]?.plan?.isStreaming, false)
-assert.equal(messages[2]?.messageType, 'unhandled.threadShellCommandOutput')
-assert.equal(messages[2]?.text, 'Unhandled App Server item: threadShellCommandOutput')
-assert.equal(messages[2]?.isUnhandled, true)
-assert.equal(messages[2]?.turnIndex, 0)
-assert.equal(messages[2]?.rawPayload?.includes('secret command'), true)
-assert.equal(messages[3]?.messageType, 'unhandled.invalidItem')
-assert.equal(messages[3]?.isUnhandled, true)
-assert.equal(messages.some((message) => message.messageType === 'unhandled.fileChange'), false)
-assert.equal(messages.some((message) => message.messageType === 'unhandled.webSearch'), false)
-assert.equal(messages.some((message) => message.rawPayload?.includes('large internal patch details')), false)
+assert.equal(acknowledgedUserMessages.length, 1)
+assert.equal(acknowledgedUserMessages[0]?.id, 'item-user')
+assert.equal(acknowledgedUserMessages[0]?.role, 'user')
+assert.equal(acknowledgedUserMessages[0]?.messageType, 'userMessage')
+assert.equal(acknowledgedUserMessages[0]?.turnId, 'turn-a')
+assert.equal(acknowledgedUserMessages[0]?.turnIndex, 0)
+assert.equal(acknowledgedUserMessages[0]?.text, 'Visible request')
 
-const phasedAgentMessages = normalizeThreadMessagesV2({
+const phasedAgentMessages = normalizeAcknowledgedUserMessagesV2({
   thread: {
     id: 'thread-phased-agent',
     cwd: 'E:\\repo',
@@ -1801,10 +1512,9 @@ const phasedAgentMessages = normalizeThreadMessagesV2({
     }],
   },
 })
-assert.equal(phasedAgentMessages[0]?.phase, 'commentary')
-assert.equal(phasedAgentMessages[1]?.phase, 'final')
+assert.deepEqual(phasedAgentMessages, [], 'assistant phase belongs exclusively to ConversationProjection')
 
-const unloadedTurnMessages = normalizeThreadMessagesV2({
+const unloadedTurnMessages = normalizeAcknowledgedUserMessagesV2({
   thread: {
     id: 'thread-items-view',
     cwd: 'E:\\\\repo',
@@ -1822,16 +1532,9 @@ const unloadedTurnMessages = normalizeThreadMessagesV2({
   },
 })
 
-assert.equal(unloadedTurnMessages.length, 1)
-assert.equal(unloadedTurnMessages[0]?.id, 'turn-summary')
-assert.equal(unloadedTurnMessages[0]?.role, 'system')
-assert.equal(unloadedTurnMessages[0]?.messageType, 'unhandled.turnItemsView.summary')
-assert.equal(unloadedTurnMessages[0]?.text, 'App Server turn items not loaded: summary')
-assert.equal(unloadedTurnMessages[0]?.isUnhandled, true)
-assert.equal(unloadedTurnMessages[0]?.turnIndex, 0)
-assert.equal(unloadedTurnMessages[0]?.rawPayload?.includes('"itemsView": "summary"'), true)
+assert.deepEqual(unloadedTurnMessages, [], 'history-window metadata belongs exclusively to ConversationProjection')
 
-const recentTurnMessages = normalizeThreadMessagesV2({
+const recentTurnMessages = normalizeAcknowledgedUserMessagesV2({
   thread: {
     id: 'thread-recent-view',
     cwd: 'E:\\\\repo',
@@ -1845,46 +1548,46 @@ const recentTurnMessages = normalizeThreadMessagesV2({
       {
         id: 'turn-3',
         status: 'completed',
-        items: [{ id: 'agent-3', type: 'agentMessage', text: 'Recent answer 3' }],
+        items: [
+          { id: 'user-3', type: 'userMessage', content: [{ type: 'text', text: 'Recent request 3' }] },
+          { id: 'agent-3', type: 'agentMessage', text: 'Recent answer 3' },
+        ],
       },
       {
         id: 'turn-4',
         status: 'completed',
-        items: [{ id: 'agent-4', type: 'agentMessage', text: 'Recent answer 4' }],
+        items: [
+          { id: 'user-4', type: 'userMessage', content: [{ type: 'text', text: 'Recent request 4' }] },
+          { id: 'agent-4', type: 'agentMessage', text: 'Recent answer 4' },
+        ],
       },
     ],
   },
 })
 
-assert.equal(recentTurnMessages.length, 3)
-assert.equal(recentTurnMessages[0]?.role, 'system')
-assert.equal(recentTurnMessages[0]?.messageType, 'history.notice')
-assert.equal(recentTurnMessages[0]?.text, '已优先显示最近 2 轮，较早 2 轮已折叠以保持流畅。')
-assert.equal(recentTurnMessages[0]?.isUnhandled, undefined)
-assert.equal(recentTurnMessages[0]?.rawPayload, undefined)
-assert.equal(recentTurnMessages[1]?.messageType, 'agentMessage')
-assert.equal(recentTurnMessages[1]?.turnId, 'turn-3')
-assert.equal(recentTurnMessages[1]?.turnIndex, 2)
-assert.equal(recentTurnMessages[2]?.turnIndex, 3)
+assert.equal(recentTurnMessages.length, 2)
+assert.equal(recentTurnMessages[0]?.id, 'user-3')
+assert.equal(recentTurnMessages[0]?.turnId, 'turn-3')
+assert.equal(recentTurnMessages[0]?.turnIndex, 2)
+assert.equal(recentTurnMessages[1]?.id, 'user-4')
+assert.equal(recentTurnMessages[1]?.turnIndex, 3)
 
 const activeCachedMessages = [
   { id: 'old-user', role: 'user', text: 'repeatable prompt', messageType: 'userMessage', turnId: 'turn-old', turnIndex: 98 },
-  { id: 'old-agent', role: 'assistant', text: 'old answer', messageType: 'agentMessage', turnId: 'turn-old', turnIndex: 98 },
   { id: 'cached-user', role: 'user', text: 'repeatable prompt', messageType: 'userMessage', turnId: 'msg-fallback', turnIndex: 9 },
-  { id: 'cached-agent', role: 'assistant', text: 'working', messageType: 'agentMessage', turnId: 'fallback-after-compaction', turnIndex: 18 },
 ]
-const activeCachedMessagesWithStableTurn = applyActiveTurnIdToMessages(
+const activeCachedMessagesWithStableTurn = applyActiveTurnIdToAcknowledgedUserMessages(
   activeCachedMessages,
   'turn-active',
   true,
 )
 assert.deepEqual(
   activeCachedMessagesWithStableTurn.map((message) => message.turnId),
-  ['turn-old', 'turn-old', 'turn-active', 'turn-active'],
+  ['turn-old', 'turn-active'],
 )
-assert.strictEqual(applyActiveTurnIdToMessages(activeCachedMessages, 'turn-active', false), activeCachedMessages)
+assert.strictEqual(applyActiveTurnIdToAcknowledgedUserMessages(activeCachedMessages, 'turn-active', false), activeCachedMessages)
 
-const olderTurnMessages = normalizeThreadMessagesV2({
+const olderTurnMessages = normalizeAcknowledgedUserMessagesV2({
   thread: {
     id: 'thread-recent-view',
     cwd: 'E:\\\\repo',
@@ -1898,22 +1601,21 @@ const olderTurnMessages = normalizeThreadMessagesV2({
       {
         id: 'turn-3',
         status: 'completed',
-        items: [{ id: 'agent-3-old', type: 'agentMessage', text: 'Older answer 3' }],
+        items: [{ id: 'user-3-old', type: 'userMessage', content: [{ type: 'text', text: 'Older request 3' }] }],
       },
       {
         id: 'turn-4',
         status: 'completed',
-        items: [{ id: 'agent-4-old', type: 'agentMessage', text: 'Older answer 4' }],
+        items: [{ id: 'user-4-old', type: 'userMessage', content: [{ type: 'text', text: 'Older request 4' }] }],
       },
     ],
   },
 })
 
-assert.equal(olderTurnMessages[0]?.id, 'thread-recent-view:history-window-notice')
-assert.equal(olderTurnMessages[0]?.messageType, 'history.notice')
-assert.equal(olderTurnMessages[0]?.text, '已加载较早 2 轮，前面还有 2 轮可继续加载。')
-assert.equal(olderTurnMessages[1]?.turnIndex, 2)
-assert.equal(olderTurnMessages[2]?.turnIndex, 3)
+assert.equal(olderTurnMessages[0]?.id, 'user-3-old')
+assert.equal(olderTurnMessages[0]?.turnIndex, 2)
+assert.equal(olderTurnMessages[1]?.id, 'user-4-old')
+assert.equal(olderTurnMessages[1]?.turnIndex, 3)
 
 const groups = normalizeThreadGroupsV2({
   data: [

@@ -6,21 +6,13 @@ import type {
   Turn,
   UserInput,
 } from '../appServerDtos.js'
-import type { CommandExecutionData, UiFileAttachment, UiMessage, UiProjectGroup, UiThread } from '../../types/codex.js'
+import type { AcknowledgedUserMessage, UiFileAttachment, UiProjectGroup, UiThread } from '../../types/codex.js'
 import { normalizePathForComparison, normalizePathForUi, toProjectName } from '../../pathUtils.js'
 import { orderProjectGroupsByRecentActivity } from '../../utils/projectGroupOrdering.js'
 import { isInternalContextMessageText } from '../../internalContextMessage.js'
 
 function toIso(seconds: number): string {
   return new Date(seconds * 1000).toISOString()
-}
-
-function toRawPayload(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
 }
 
 const FILE_ATTACHMENT_LINE = /^##\s+(.+?):\s+(.+?)\s*$/
@@ -60,16 +52,14 @@ function extractCodexUserRequestText(value: string): string {
 }
 
 function parseUserMessageContent(
-  itemId: string,
   content: UserInput[] | undefined,
-): { text: string; images: string[]; fileAttachments: UiFileAttachment[]; rawBlocks: UiMessage[] } {
-  if (!Array.isArray(content)) return { text: '', images: [], fileAttachments: [], rawBlocks: [] }
+): { text: string; images: string[]; fileAttachments: UiFileAttachment[] } {
+  if (!Array.isArray(content)) return { text: '', images: [], fileAttachments: [] }
 
   const textChunks: string[] = []
   const images: string[] = []
-  const rawBlocks: UiMessage[] = []
 
-  for (const [index, block] of content.entries()) {
+  for (const block of content) {
     if (block.type === 'text' && typeof block.text === 'string' && block.text.length > 0) {
       textChunks.push(block.text)
     }
@@ -78,17 +68,6 @@ function parseUserMessageContent(
     }
     if (block.type === 'localImage' && typeof block.path === 'string' && block.path.trim().length > 0) {
       images.push(block.path.trim())
-    }
-
-    if (block.type !== 'text' && block.type !== 'image' && block.type !== 'localImage') {
-      rawBlocks.push({
-        id: `${itemId}:user-content:${index}`,
-        role: 'user',
-        text: '',
-        messageType: `userContent.${block.type}`,
-        rawPayload: toRawPayload(block),
-        isUnhandled: true,
-      })
     }
   }
 
@@ -99,18 +78,11 @@ function parseUserMessageContent(
     text: extractCodexUserRequestText(fullText),
     images,
     fileAttachments,
-    rawBlocks,
   }
 }
 
 function readTrimmedString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
-}
-
-function readPositiveInteger(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.trunc(value)
-    : 0
 }
 
 function readNonNegativeInteger(value: unknown): number {
@@ -144,257 +116,19 @@ function readThreadSourceKind(value: unknown): string | undefined {
   return tag || undefined
 }
 
-function pushImageCandidate(images: string[], value: unknown): void {
-  const candidate = readTrimmedString(value)
-  if (!candidate || images.includes(candidate)) return
-  images.push(candidate)
-}
-
-function collectImageCandidatesFromValue(value: unknown, images: string[], depth = 0, trustedImageContext = false): void {
-  if (depth > 6 || value === null || value === undefined) return
-
-  if (typeof value === 'string') {
-    if (trustedImageContext) {
-      pushImageCandidate(images, value)
-    }
-    return
+function toAcknowledgedUserMessage(item: ThreadItem): AcknowledgedUserMessage | null {
+  if (item.type !== 'userMessage') return null
+  const parsed = parseUserMessageContent(item.content as UserInput[] | undefined)
+  if (isInternalContextMessageText(parsed.text)) return null
+  if (parsed.text.length === 0 && parsed.images.length === 0 && parsed.fileAttachments.length === 0) return null
+  return {
+    id: item.id,
+    role: 'user',
+    text: parsed.text,
+    images: parsed.images,
+    fileAttachments: parsed.fileAttachments.length > 0 ? parsed.fileAttachments : undefined,
+    messageType: item.type,
   }
-
-  if (Array.isArray(value)) {
-    for (const row of value) {
-      collectImageCandidatesFromValue(row, images, depth + 1, trustedImageContext)
-    }
-    return
-  }
-
-  if (typeof value !== 'object') return
-
-  const record = value as Record<string, unknown>
-  const type = readTrimmedString(record.type).toLowerCase()
-  const isImageRecord =
-    type.includes('image') ||
-    record.image_url !== undefined ||
-    record.images !== undefined ||
-    record.localImage !== undefined ||
-    record.local_image !== undefined
-
-  if (isImageRecord) {
-    pushImageCandidate(images, record.url)
-    pushImageCandidate(images, record.path)
-    pushImageCandidate(images, record.image)
-    pushImageCandidate(images, record.image_url)
-    pushImageCandidate(images, record.localImage)
-    pushImageCandidate(images, record.local_image)
-  }
-
-  const data = record.data
-  if (data && typeof data === 'object') {
-    if (isImageRecord) {
-      const dataRecord = data as Record<string, unknown>
-      pushImageCandidate(images, dataRecord.url)
-      pushImageCandidate(images, dataRecord.path)
-      pushImageCandidate(images, dataRecord.image)
-      pushImageCandidate(images, dataRecord.image_url)
-    }
-    collectImageCandidatesFromValue(data, images, depth + 1, isImageRecord)
-  }
-
-  const imageUrl = record.image_url
-  if (imageUrl && typeof imageUrl === 'object') {
-    const imageUrlRecord = imageUrl as Record<string, unknown>
-    pushImageCandidate(images, imageUrlRecord.url)
-    pushImageCandidate(images, imageUrlRecord.path)
-    collectImageCandidatesFromValue(imageUrl, images, depth + 1, true)
-  }
-
-  const imagesValue = record.images
-  if (Array.isArray(imagesValue)) {
-    collectImageCandidatesFromValue(imagesValue, images, depth + 1, true)
-  }
-
-  const content = record.content
-  if (Array.isArray(content)) {
-    collectImageCandidatesFromValue(content, images, depth + 1)
-  }
-}
-
-function extractAssistantImages(item: ThreadItem): string[] {
-  const images: string[] = []
-  collectImageCandidatesFromValue(item, images)
-  return images
-}
-
-function normalizeGeneratedImageResult(value: unknown): string {
-  const result = readTrimmedString(value)
-  if (!result) return ''
-  if (
-    result.startsWith('data:image/')
-    || result.startsWith('http://')
-    || result.startsWith('https://')
-    || result.startsWith('blob:')
-    || result.startsWith('/')
-    || /^[A-Za-z]:[\\/]/u.test(result)
-  ) {
-    return result
-  }
-
-  const compact = result.replace(/\s+/gu, '')
-  if (compact.length < 256 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(compact)) return ''
-  return `data:image/png;base64,${compact}`
-}
-
-function toUiMessages(item: ThreadItem, turnId = ''): UiMessage[] {
-  const rawItem = item as Record<string, unknown>
-  const itemId = readTrimmedString(rawItem.id) || `unhandled:${readTrimmedString(rawItem.type) || 'item'}`
-  const itemType = readTrimmedString(rawItem.type)
-
-  if (itemType === 'mcpToolCall') {
-    return []
-  }
-
-  if (itemType === 'fileChange') {
-    return []
-  }
-
-  if (itemType === 'webSearch') {
-    return []
-  }
-
-  if (item.type === 'agentMessage') {
-    const text = typeof item.text === 'string' ? item.text : ''
-    const images = extractAssistantImages(item)
-    const phase = rawItem.phase === 'commentary' ? 'commentary' as const : 'final' as const
-    return [
-      {
-        id: item.id,
-        role: 'assistant',
-        text,
-        images: images.length > 0 ? images : undefined,
-        messageType: item.type,
-        phase,
-      },
-    ]
-  }
-
-  if (item.type === 'plan') {
-    const text = typeof item.text === 'string' ? item.text : ''
-    const normalizedTurnId = turnId.trim()
-    return [
-      {
-        id: normalizedTurnId ? `plan:${normalizedTurnId}` : item.id,
-        role: 'system',
-        text,
-        messageType: 'plan',
-        plan: {
-          turnId: normalizedTurnId,
-          explanation: '',
-          steps: [],
-          rawText: text,
-          isStreaming: false,
-        },
-      },
-    ]
-  }
-
-  if (item.type === 'imageView') {
-    const images: string[] = []
-    pushImageCandidate(images, rawItem.path)
-    pushImageCandidate(images, rawItem.url)
-    collectImageCandidatesFromValue(rawItem, images)
-    if (images.length === 0) return []
-    return [
-      {
-        id: item.id,
-        role: 'assistant',
-        text: '',
-        images,
-        messageType: item.type,
-      },
-    ]
-  }
-
-  if (itemType === 'imageGeneration') {
-    const images: string[] = []
-    pushImageCandidate(images, rawItem.savedPath)
-    pushImageCandidate(images, rawItem.path)
-    pushImageCandidate(images, rawItem.url)
-    if (images.length === 0) {
-      const generatedResult = normalizeGeneratedImageResult(rawItem.result)
-      if (generatedResult) pushImageCandidate(images, generatedResult)
-    }
-    if (images.length === 0) return []
-    return [{
-      id: itemId,
-      role: 'assistant',
-      text: '',
-      images,
-      messageType: itemType,
-    }]
-  }
-
-  if (item.type === 'userMessage') {
-    const parsed = parseUserMessageContent(item.id, item.content as UserInput[] | undefined)
-    if (isInternalContextMessageText(parsed.text)) return []
-    const messages: UiMessage[] = []
-    const hasRenderableUserContent = parsed.text.length > 0 || parsed.images.length > 0 || parsed.fileAttachments.length > 0
-
-    if (hasRenderableUserContent) {
-      messages.push({
-        id: item.id,
-        role: 'user',
-        text: parsed.text,
-        images: parsed.images,
-        fileAttachments: parsed.fileAttachments.length > 0 ? parsed.fileAttachments : undefined,
-        messageType: item.type,
-      })
-    }
-
-    messages.push(...parsed.rawBlocks)
-    if (messages.length === 0) {
-      return []
-    }
-
-    return messages
-  }
-
-  if (item.type === 'reasoning') {
-    return []
-  }
-
-  if (item.type === 'commandExecution') {
-    const status = normalizeCommandStatus(rawItem.status)
-    const cmd = typeof rawItem.command === 'string' ? rawItem.command : ''
-    const cwd = typeof rawItem.cwd === 'string' ? rawItem.cwd : null
-    const aggregatedOutput = typeof rawItem.aggregatedOutput === 'string' ? rawItem.aggregatedOutput : ''
-    const exitCode = typeof rawItem.exitCode === 'number' ? rawItem.exitCode : null
-    const durationMs = typeof rawItem.durationMs === 'number' && Number.isFinite(rawItem.durationMs) ? Math.max(0, rawItem.durationMs) : null
-    return [
-      {
-        id: item.id,
-        role: 'system' as const,
-        text: cmd,
-        messageType: 'commandExecution',
-        commandExecution: { command: cmd, cwd, status, aggregatedOutput, exitCode, durationMs, startedAtMs: null },
-      },
-    ]
-  }
-
-  return [
-    {
-      id: itemId,
-      role: 'system',
-      text: itemType ? `Unhandled App Server item: ${itemType}` : 'Unhandled App Server item',
-      messageType: itemType ? `unhandled.${itemType}` : 'unhandled.item',
-      rawPayload: toRawPayload(item),
-      isUnhandled: true,
-    },
-  ]
-}
-
-function normalizeCommandStatus(value: unknown): CommandExecutionData['status'] {
-  if (value === 'completed' || value === 'failed' || value === 'declined' || value === 'interrupted') return value
-  if (value === 'inProgress' || value === 'in_progress') return 'inProgress'
-  return 'completed'
 }
 
 function pickThreadName(summary: Thread): string {
@@ -526,63 +260,32 @@ export function normalizeThreadGroupsV2(payload: ThreadListResponse): UiProjectG
   return groupThreadsByProject(uiThreads)
 }
 
-export function normalizeThreadMessagesV2(payload: ThreadReadResponse): UiMessage[] {
+export function normalizeAcknowledgedUserMessagesV2(payload: ThreadReadResponse): AcknowledgedUserMessage[] {
   const turns = Array.isArray(payload.thread.turns) ? payload.thread.turns : []
-  const messages: UiMessage[] = []
+  const messages: AcknowledgedUserMessage[] = []
   const rawThread = payload.thread as Record<string, unknown>
-  const turnsView = readTrimmedString(rawThread.turnsView)
-  const originalTurnsCount = readPositiveInteger(rawThread.originalTurnsCount)
   const turnsStartIndex = readNonNegativeInteger(rawThread.turnsStartIndex)
-  const hiddenBeforeCount = Math.max(0, turnsStartIndex)
-  if ((turnsView === 'recent' || turnsView === 'older') && hiddenBeforeCount > 0) {
-    const threadId = readTrimmedString(rawThread.id) || 'thread'
-    messages.push({
-      id: `${threadId}:history-window-notice`,
-      role: 'system',
-      text: turnsView === 'older'
-        ? `已加载较早 ${turns.length} 轮，前面还有 ${hiddenBeforeCount} 轮可继续加载。`
-        : `已优先显示最近 ${turns.length} 轮，较早 ${hiddenBeforeCount} 轮已折叠以保持流畅。`,
-      messageType: 'history.notice',
-    })
-  }
   for (let turnIndex = 0; turnIndex < turns.length; turnIndex++) {
     const absoluteTurnIndex = turnsStartIndex + turnIndex
     const turn = turns[turnIndex]
     const rawTurn = turn as Record<string, unknown>
-    const itemsView = readTrimmedString(rawTurn.itemsView)
     const items = Array.isArray(turn.items) ? turn.items : []
-    if (items.length === 0 && itemsView && itemsView !== 'full') {
-      messages.push({
-        id: readTrimmedString(rawTurn.id) || `turn-${String(turnIndex)}:items-view`,
-        role: 'system',
-        text: `App Server turn items not loaded: ${itemsView}`,
-        messageType: `unhandled.turnItemsView.${itemsView}`,
-        rawPayload: toRawPayload(turn),
-        isUnhandled: true,
-        turnIndex: absoluteTurnIndex,
-      })
-      continue
-    }
     for (const item of items) {
-      const threadItem = (
-        item && typeof item === 'object' && !Array.isArray(item)
-          ? item
-          : { id: `turn-${String(turnIndex)}:item-${String(messages.length)}`, type: 'invalidItem', content: item }
-      ) as ThreadItem
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+      const threadItem = item as ThreadItem
       const turnId = readTrimmedString(rawTurn.id)
-      for (const msg of toUiMessages(threadItem, turnId)) {
-        messages.push({ ...msg, turnIndex: absoluteTurnIndex, ...(turnId ? { turnId } : {}) })
-      }
+      const message = toAcknowledgedUserMessage(threadItem)
+      if (message) messages.push({ ...message, turnIndex: absoluteTurnIndex, ...(turnId ? { turnId } : {}) })
     }
   }
   return messages
 }
 
-export function applyActiveTurnIdToMessages(
-  messages: UiMessage[],
+export function applyActiveTurnIdToAcknowledgedUserMessages(
+  messages: AcknowledgedUserMessage[],
   activeTurnId: string,
   active: boolean,
-): UiMessage[] {
+): AcknowledgedUserMessage[] {
   const normalizedTurnId = activeTurnId.trim()
   if (!active || !normalizedTurnId || messages.length === 0) return messages
 

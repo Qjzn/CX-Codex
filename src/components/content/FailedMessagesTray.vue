@@ -42,10 +42,10 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import type { UiMessage } from '../../types/codex'
+import type { OptimisticUserMessage } from '../../types/codex'
 
 defineProps<{
-  messages: UiMessage[]
+  messages: OptimisticUserMessage[]
 }>()
 
 defineEmits<{
@@ -56,7 +56,7 @@ defineEmits<{
 
 const expanded = ref(false)
 
-function messagePreview(message: UiMessage): string {
+function messagePreview(message: OptimisticUserMessage): string {
   const text = message.text.trim()
   if (text) return text
   const parts: string[] = []
