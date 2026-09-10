@@ -48,6 +48,12 @@ Dependabot 当前覆盖：
 
 ## 维护记录
 
+### 2026-09-08 PR #88
+
+- 合入 main 已验证的 `qs` / `@xmldom/xmldom` 锁文件修复后，只保留 `express-rate-limit`、`pdfjs-dist`、`@types/node`、`vue`、`vue-tsc` 五项更新。
+- Capacitor core/android/cli 保持成套的 8.4.2。8.5.1 CLI 新增 `xcode -> uuid@7`，在当前完整依赖审计中带入三项中等级告警；本次不强制跨大版本覆盖传递依赖。后续升级需先通过安全审计和移动端验证。
+- 本地 Node 22 / npm 10.9.8：完整审计 0 漏洞，前端与 CLI 构建、frontend normalizers、server modules 通过。远端 CI 和浏览器预览验证在 PR 中单独记录。
+
 每次人工依赖升级或 Dependabot PR 合并后，应在 PR 中保留验证结果。若更新影响用户部署、移动端、协议兼容或安全策略，还需要同步更新：
 
 - `docs/changelog.zh-CN.md`

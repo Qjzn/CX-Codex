@@ -16,6 +16,7 @@
             :data-thread-id="thread.id"
             :data-active="thread.id === selectedThreadId"
             :data-pinned="isPinned(thread.id)"
+            :data-detail="shouldShowThreadDetail(thread)"
             :force-right-hover="isThreadMenuOpen('pinned:' + thread.id)"
             @contextmenu="onThreadRowContextMenu($event, thread.id, 'pinned:' + thread.id)"
           >
@@ -275,6 +276,7 @@
                 :data-thread-id="thread.id"
                 :data-active="thread.id === selectedThreadId"
                 :data-pinned="isPinned(thread.id)"
+                :data-detail="shouldShowThreadDetail(thread)"
                 :force-right-hover="isThreadMenuOpen('project:' + group.projectName + ':' + thread.id)"
                 @contextmenu="onThreadRowContextMenu($event, thread.id, 'project:' + group.projectName + ':' + thread.id)"
               >
@@ -1080,6 +1082,8 @@ function findProjectTreeScrollContainer(): HTMLElement | null {
   return null
 }
 
+const REVEALED_THREAD_SCROLL_PADDING_PX = 4
+
 async function revealSelectedThread(): Promise<boolean> {
   const threadId = props.selectedThreadId.trim()
   if (!threadId) return false
@@ -1117,9 +1121,9 @@ async function revealSelectedThread(): Promise<boolean> {
   const viewportTop = container.scrollTop
   const viewportBottom = viewportTop + container.clientHeight
   const nextScrollTop = targetTop < viewportTop
-    ? targetTop
+    ? targetTop - REVEALED_THREAD_SCROLL_PADDING_PX
     : targetBottom > viewportBottom
-      ? targetBottom - container.clientHeight
+      ? targetBottom - container.clientHeight + REVEALED_THREAD_SCROLL_PADDING_PX
       : null
   if (nextScrollTop === null) return true
 
@@ -1348,6 +1352,10 @@ function getThreadPreview(thread: UiThread): string {
   const normalizedCwd = thread.cwd.trim().replace(/\\/gu, '/')
   if (!normalizedCwd) return getProjectDisplayName(thread.projectName)
   return normalizedCwd.split('/').filter(Boolean).pop() || normalizedCwd
+}
+
+function shouldShowThreadDetail(thread: UiThread): boolean {
+  return thread.inProgress || thread.unread || isSearchActive.value
 }
 
 function getThreadStatusLabel(thread: UiThread): string {
@@ -2779,13 +2787,19 @@ onBeforeUnmount(() => {
 
 .thread-row {
   @apply border border-transparent bg-transparent;
-  min-height: var(--ui-row-height);
+  height: 2rem;
+  min-height: 2rem;
   align-items: center;
   transition:
     background-color var(--motion-duration-fast) var(--motion-ease-standard),
     border-color var(--motion-duration-fast) var(--motion-ease-standard),
     color var(--motion-duration-fast) var(--motion-ease-standard),
     box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.thread-row[data-detail='true'] {
+  height: 3rem;
+  min-height: 3rem;
 }
 
 .thread-row-priority {
@@ -2815,8 +2829,12 @@ onBeforeUnmount(() => {
 
 .thread-row-content {
   @apply min-w-0 flex flex-col justify-center;
-  min-height: 2.05rem;
+  min-height: 0;
   gap: 0.08rem;
+}
+
+.thread-row[data-detail='false'] .thread-row-meta {
+  display: none;
 }
 
 .thread-row-title-wrap {
@@ -3149,9 +3167,8 @@ onBeforeUnmount(() => {
     @apply gap-0.5;
   }
 
-  .thread-row {
-    min-height: 44px;
-  }
+  .thread-row { height: 44px; min-height: 44px; }
+  .thread-row[data-detail='true'] { height: 52px; min-height: 52px; }
 
   .thread-row-content {
     min-height: 2rem;
@@ -3186,6 +3203,9 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 767px), (hover: none), (pointer: coarse), (max-height: 480px) and (max-width: 932px) {
+  .thread-row { height: 44px; min-height: 44px; }
+  .thread-row[data-detail='true'] { height: 52px; min-height: 52px; }
+
   .thread-pin-button {
     display: none;
   }
@@ -3233,10 +3253,11 @@ onBeforeUnmount(() => {
   .project-group > .thread-list {
     @apply px-1.5 pb-1.5;
   }
+}
 
-  .thread-row {
-    min-height: 44px;
-  }
+@media (min-width: 1024px) and (hover: hover) and (pointer: fine) {
+  .thread-row { height: 2rem; min-height: 2rem; }
+  .thread-row[data-detail='true'] { height: 3rem; min-height: 3rem; }
 }
 
 @keyframes thread-skeleton-sheen {

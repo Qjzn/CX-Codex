@@ -1,9 +1,13 @@
 [CmdletBinding()]
 param(
-  [ValidateSet("Snapshot", "Observe", "ScreenOff", "Doze")]
+  [ValidateSet("Snapshot", "Observe", "ScreenOff", "Doze", "NetworkSwitch")]
   [string]$Mode = "Snapshot",
   [ValidateRange(1, 60)]
   [int]$ObservationSeconds = 15,
+  [ValidateRange(1, 20)]
+  [int]$NetworkSwitchCycles = 1,
+  [ValidateSet("Auto", "Wifi", "Data")]
+  [string]$NetworkTransport = "Auto",
   [string]$Serial = "",
   [string]$AdbPath = "",
   [string]$PackageName = "com.cxcodex.bridge",
@@ -12,6 +16,7 @@ param(
   [switch]$RequireActiveTask,
   [switch]$RequireTaskRemoval,
   [switch]$RequireStickyRestart,
+  [switch]$RequireProcessRecovery,
   [switch]$RequireTerminalNotification,
   [switch]$RequireDeviceAcknowledgement,
   [switch]$RequireLiveReplyUpdate,
@@ -128,7 +133,10 @@ function Get-MatchingLines {
 }
 
 function Read-ServiceDiagnostics {
-  $component = "$PackageName/.TaskPetOverlayService"
+  # The debug build uses an applicationId suffix while the service keeps its
+  # Java package. Android does not expand the short `.TaskPetOverlayService`
+  # name against `com.cxcodex.bridge.debug`, so always address the real class.
+  $component = "$PackageName/com.cxcodex.bridge.TaskPetOverlayService"
   $serviceDump = Invoke-Adb -AdbArguments @("shell", "dumpsys", "activity", "service", $component) -AllowFailure
   $match = [regex]::Match($serviceDump, 'CX_CODEX_TASK_PET_DIAGNOSTICS=(\{.*\})')
   if (-not $match.Success) {
@@ -206,6 +214,7 @@ function Write-VerificationSummary {
     Select-Object -First 1
   $latestPushDiagnostics = Get-PushDiagnostics -Evidence $latestPushEvidence
   $latestServiceDiagnostics = if ($latestEvidence) { $latestEvidence.Snapshot.taskPetService } else { $null }
+  $duringServiceDiagnostics = if ($During -and $During.Snapshot) { $During.Snapshot.taskPetService } else { $null }
 
   $beforeActiveTaskCount = Read-DiagnosticLong -Diagnostics $beforeDiagnostics -Name "activeTaskCount"
   $latestActiveTaskCount = Read-DiagnosticLong -Diagnostics $latestDiagnostics -Name "activeTaskCount"
@@ -213,6 +222,8 @@ function Write-VerificationSummary {
   $latestServiceCreateCount = Read-DiagnosticLong -Diagnostics $latestDiagnostics -Name "serviceCreateCount"
   $beforeStickyRestartCount = Read-DiagnosticLong -Diagnostics $beforeDiagnostics -Name "stickyRestartCount"
   $latestStickyRestartCount = Read-DiagnosticLong -Diagnostics $latestDiagnostics -Name "stickyRestartCount"
+  $beforeProcessRecoveryWakeCount = Read-DiagnosticLong -Diagnostics $beforeDiagnostics -Name "processRecoveryWakeCount"
+  $latestProcessRecoveryWakeCount = Read-DiagnosticLong -Diagnostics $latestDiagnostics -Name "processRecoveryWakeCount"
   $beforeTaskRemovedCount = Read-DiagnosticLong -Diagnostics $beforeDiagnostics -Name "taskRemovedCount"
   $latestTaskRemovedCount = Read-DiagnosticLong -Diagnostics $latestDiagnostics -Name "taskRemovedCount"
   $beforeRelevantEventAtMs = Read-DiagnosticLong -Diagnostics $beforeDiagnostics -Name "lastRelevantEventAtMs"
@@ -241,6 +252,8 @@ function Write-VerificationSummary {
   $latestNotificationAttemptCount = Read-DiagnosticLong -Diagnostics $latestDiagnostics -Name "completionNotificationAttemptCount"
   $beforeNotificationPostedCount = Read-DiagnosticLong -Diagnostics $beforeDiagnostics -Name "completionNotificationPostedCount"
   $latestNotificationPostedCount = Read-DiagnosticLong -Diagnostics $latestDiagnostics -Name "completionNotificationPostedCount"
+  $beforeNetworkRecoveryCount = Read-DiagnosticLong -Diagnostics $beforeDiagnostics -Name "networkRecoveryCount"
+  $latestNetworkRecoveryCount = Read-DiagnosticLong -Diagnostics $latestDiagnostics -Name "networkRecoveryCount"
   $beforeAcknowledgementAtMs = Read-DiagnosticLong -Diagnostics $beforePushDiagnostics -Name "lastAcknowledgementAtMs"
   $latestAcknowledgementAtMs = Read-DiagnosticLong -Diagnostics $latestPushDiagnostics -Name "lastAcknowledgementAtMs"
 
@@ -289,11 +302,16 @@ function Write-VerificationSummary {
     generatedAt = (Get-Date).ToString("o")
     mode = $Mode
     observationSeconds = $ObservationSeconds
+    networkSwitchCycles = if ($Mode -eq "NetworkSwitch") { $NetworkSwitchCycles } else { 0 }
+    networkSwitchTransport = if ($Mode -eq "NetworkSwitch") { $resolvedNetworkTransport } else { "" }
     beforeActiveTaskCount = $beforeActiveTaskCount
     latestActiveTaskCount = $latestActiveTaskCount
+    duringScreenInteractive = if ($duringServiceDiagnostics) { [bool]$duringServiceDiagnostics.screenInteractive } else { $null }
+    duringDeviceIdleMode = if ($duringServiceDiagnostics) { [bool]$duringServiceDiagnostics.deviceIdleMode } else { $null }
     serviceCreateCount = $latestServiceCreateCount
     serviceRecreated = $latestServiceCreateCount -gt $beforeServiceCreateCount
     stickyRestartAdvanced = $latestStickyRestartCount -gt $beforeStickyRestartCount
+    processRecoveryWakeAdvanced = $latestProcessRecoveryWakeCount -gt $beforeProcessRecoveryWakeCount
     taskRemovedAdvanced = $latestTaskRemovedCount -gt $beforeTaskRemovedCount
     lastStartReason = if ($latestDiagnostics) { [string]$latestDiagnostics.lastStartReason } else { "none" }
     lastTaskRemovedAtMs = Read-DiagnosticLong -Diagnostics $latestDiagnostics -Name "lastTaskRemovedAtMs"
@@ -310,6 +328,10 @@ function Write-VerificationSummary {
     completionNotificationPosted = $notificationResult -eq "posted"
     completionNotificationAttemptDelta = $notificationAttemptDelta
     completionNotificationPostedDelta = $notificationPostedDelta
+    networkRecoveryCount = $latestNetworkRecoveryCount
+    networkRecoveryDelta = [Math]::Max(0L, $latestNetworkRecoveryCount - $beforeNetworkRecoveryCount)
+    lastDefaultNetworkAvailableAtMs = Read-DiagnosticLong -Diagnostics $latestDiagnostics -Name "lastDefaultNetworkAvailableAtMs"
+    lastDefaultNetworkLostAtMs = Read-DiagnosticLong -Diagnostics $latestDiagnostics -Name "lastDefaultNetworkLostAtMs"
     deviceAcknowledgementAdvanced = $acknowledgementAdvanced
     deviceAcknowledgementSucceeded = $acknowledgementState -eq "acknowledged"
     eventToPollMs = Get-OrderedLatency -StartedAtMs $latestRelevantEventAtMs -CompletedAtMs $latestEventDrivenPollAtMs
@@ -334,11 +356,34 @@ function Write-VerificationSummary {
   if ($RequireActiveTask -and $beforeActiveTaskCount -lt 1) {
     throw "验证开始时没有原生监控中的活跃任务。请先发送任务并确认浮窗显示处理中，再重试。"
   }
+  if ($Mode -in @("ScreenOff", "Doze") -and $duringServiceDiagnostics -and [bool]$duringServiceDiagnostics.screenInteractive) {
+    throw "$Mode 观察窗口内设备仍处于交互态，不能作为锁屏后台证据。证据保留在 $summaryPath。"
+  }
+  if ($Mode -eq "Doze" -and $duringServiceDiagnostics -and -not [bool]$duringServiceDiagnostics.deviceIdleMode) {
+    throw "Doze 观察窗口内设备未进入 device idle，不能作为 Doze 证据。证据保留在 $summaryPath。"
+  }
+  if ($Mode -eq "NetworkSwitch" -and ($latestNetworkRecoveryCount - $beforeNetworkRecoveryCount) -lt $NetworkSwitchCycles) {
+    throw "网络切换 $NetworkSwitchCycles 轮只触发了 $($latestNetworkRecoveryCount - $beforeNetworkRecoveryCount) 次原生恢复，证据保留在 $summaryPath。"
+  }
   if ($RequireTaskRemoval -and $latestTaskRemovedCount -le $beforeTaskRemovedCount) {
     throw "观察窗口内没有检测到最近任务被移除。请在 Observe 窗口内从最近任务中划掉 CX-Codex。"
   }
   if ($RequireStickyRestart -and $latestStickyRestartCount -le $beforeStickyRestartCount) {
     throw "观察窗口内没有检测到 START_STICKY 服务重建。证据保留在 $summaryPath。"
+  }
+  if ($RequireProcessRecovery) {
+    if ($latestServiceCreateCount -le $beforeServiceCreateCount) {
+      throw "观察窗口内没有检测到任务监控进程重建。证据保留在 $summaryPath。"
+    }
+    if (
+      $latestProcessRecoveryWakeCount -le $beforeProcessRecoveryWakeCount -and
+      $latestStickyRestartCount -le $beforeStickyRestartCount
+    ) {
+      throw "任务监控进程已变化，但没有系统粘性重启或恢复看门狗的归因证据。证据保留在 $summaryPath。"
+    }
+    if ($latestActiveTaskCount -lt 1) {
+      throw "任务监控进程已重建，但没有恢复活动任务。证据保留在 $summaryPath。"
+    }
   }
   if ($RequireLiveReplyUpdate) {
     if (-not $replyEventAdvanced) {
@@ -480,6 +525,27 @@ $initiallyInteractive = $initial.PowerDump -match 'mWakefulness=Awake|mInteracti
 $screenWasTurnedOff = $false
 $deviceIdleWasForced = $false
 $batteryWasUnplugged = $false
+$initialWifiState = if ($Mode -eq "NetworkSwitch") {
+  (Invoke-Adb -AdbArguments @("shell", "settings", "get", "global", "wifi_on") -AllowFailure).Trim()
+} else {
+  ""
+}
+$initialDataState = if ($Mode -eq "NetworkSwitch") {
+  (Invoke-Adb -AdbArguments @("shell", "settings", "get", "global", "mobile_data") -AllowFailure).Trim()
+} else {
+  ""
+}
+$resolvedNetworkTransport = if ($NetworkTransport -ne "Auto") {
+  $NetworkTransport
+} elseif ($initialWifiState -eq "1") {
+  "Wifi"
+} elseif ($initialDataState -eq "1") {
+  "Data"
+} else {
+  ""
+}
+$wifiWasChanged = $false
+$dataWasChanged = $false
 
 try {
   if ($Mode -in @("Observe", "ScreenOff", "Doze")) {
@@ -494,9 +560,41 @@ try {
       $batteryWasUnplugged = $true
       Invoke-Adb -AdbArguments @("shell", "dumpsys", "deviceidle", "force-idle") | Out-Null
       $deviceIdleWasForced = $true
+      # Some OEM builds wake the display while forcing idle. Re-assert the
+      # lock-screen condition so Doze evidence cannot be captured foreground.
+      Invoke-Adb -AdbArguments @("shell", "input", "keyevent", "KEYCODE_SLEEP") | Out-Null
+      $screenWasTurnedOff = $true
     }
     Start-Sleep -Seconds $ObservationSeconds
     $during = Write-EvidenceSnapshot -Phase "during-$($Mode.ToLowerInvariant())" -TargetDirectory $resolvedOutputDirectory
+  }
+  if ($Mode -eq "NetworkSwitch") {
+    $initialTransportState = if ($resolvedNetworkTransport -eq "Wifi") { $initialWifiState } else { $initialDataState }
+    if ([string]::IsNullOrWhiteSpace($resolvedNetworkTransport) -or $initialTransportState -ne "1") {
+      throw "NetworkSwitch 模式要求所选网络传输开始时已开启，以便精确恢复原状态。"
+    }
+    $serviceName = if ($resolvedNetworkTransport -eq "Wifi") { "wifi" } else { "data" }
+    for ($cycle = 1; $cycle -le $NetworkSwitchCycles; $cycle += 1) {
+      $cycleDiagnostics = Read-ServiceDiagnostics
+      $cycleRecoveryBefore = Read-DiagnosticLong -Diagnostics $cycleDiagnostics.monitorDiagnostics -Name "networkRecoveryCount"
+      Invoke-Adb -AdbArguments @("shell", "svc", $serviceName, "disable") | Out-Null
+      if ($resolvedNetworkTransport -eq "Wifi") { $wifiWasChanged = $true } else { $dataWasChanged = $true }
+      Start-Sleep -Milliseconds 1200
+      Invoke-Adb -AdbArguments @("shell", "svc", $serviceName, "enable") | Out-Null
+      $cycleDeadline = (Get-Date).AddSeconds(8)
+      $cycleRecoveryAfter = $cycleRecoveryBefore
+      while ((Get-Date) -lt $cycleDeadline -and $cycleRecoveryAfter -le $cycleRecoveryBefore) {
+        Start-Sleep -Milliseconds 500
+        $cycleDiagnostics = Read-ServiceDiagnostics
+        $cycleRecoveryAfter = Read-DiagnosticLong -Diagnostics $cycleDiagnostics.monitorDiagnostics -Name "networkRecoveryCount"
+      }
+      if ($cycleRecoveryAfter -le $cycleRecoveryBefore) {
+        throw "网络切换第 $cycle/$NetworkSwitchCycles 轮没有触发原生恢复。"
+      }
+      Write-Host "[network-switch] $resolvedNetworkTransport cycle $cycle/$NetworkSwitchCycles recovery=$cycleRecoveryAfter"
+    }
+    Start-Sleep -Seconds $ObservationSeconds
+    $during = Write-EvidenceSnapshot -Phase "during-network-switch" -TargetDirectory $resolvedOutputDirectory
   }
 } finally {
   if ($deviceIdleWasForced) {
@@ -508,7 +606,13 @@ try {
   if ($screenWasTurnedOff) {
     Invoke-Adb -AdbArguments @("shell", "input", "keyevent", "KEYCODE_WAKEUP") -AllowFailure | Out-Null
   }
-  if ($Mode -in @("ScreenOff", "Doze")) {
+  if ($wifiWasChanged -and $initialWifiState -eq "1") {
+    Invoke-Adb -AdbArguments @("shell", "svc", "wifi", "enable") -AllowFailure | Out-Null
+  }
+  if ($dataWasChanged -and $initialDataState -eq "1") {
+    Invoke-Adb -AdbArguments @("shell", "svc", "data", "enable") -AllowFailure | Out-Null
+  }
+  if ($Mode -in @("ScreenOff", "Doze", "NetworkSwitch")) {
     Start-Sleep -Milliseconds 500
     $restored = Write-EvidenceSnapshot -Phase "restored" -TargetDirectory $resolvedOutputDirectory
   }

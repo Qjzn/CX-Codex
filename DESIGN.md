@@ -1,6 +1,6 @@
 # CX-Codex Conversation Design
 
-This document is the durable visual and interaction contract for the 7420 conversation surface. It keeps the product quiet, compact, reliable, and efficient. It does not define session semantics; `src/conversation-transcript/` owns those semantics.
+This document is the durable visual and interaction contract for the 7420 conversation surface. It keeps the product quiet, compact, reliable, and efficient. It does not define session semantics; `src/conversation-transcript/` owns those semantics. Product scope belongs to `PRODUCT.md`, mandatory completion gates to `PRODUCT_GOAL.md`, and verified implementation facts to `PROJECT_SPEC.md`; feature PRDs may refine but not weaken those contracts.
 
 ## Reference baseline
 
@@ -26,11 +26,11 @@ The Vue implementation may preserve CX-Codex infrastructure and accessibility im
 
 ## Sidebar hierarchy
 
-- Keep one dominant `新会话` action on its own first row. Search, workspace, and tools share one quieter second row; they retain their existing events, labels, menus, and state owners.
+- Keep sidebar toggle, mark-all-read, and one dominant new-task action independent in the top utility row. Search, Skills, and GitHub share the quieter three-column row; they retain their existing events, labels and state owners. Workbench and diagnostics are no longer frontend destinations; native background execution and backend diagnostics keep their existing owners.
 - The project tree remains the primary navigation surface. A pinned section is an intentional shortcut, so a pinned task may appear once there and once inside its project; no separate running collection is added.
 - Project ordering, collapse state, pin state, search pending/partial/failed behavior, and current-thread reveal stay inside the existing Sidebar data path. Visual simplification must not create a parallel index or snapshot.
 - Background reordering preserves the first visible project even when it sits exactly at the top boundary. Current-thread reveal expands the bounded preview and scrolls only once; later user scrolling remains authoritative.
-- Desktop quick actions use a 36px primary row and 32px secondary row. Coarse-pointer controls and thread rows keep the verified touch sizing, full labels, explicit waiting text, and viewport-clamped menus.
+- Desktop quick actions remain compact. Coarse-pointer controls and thread rows keep the verified touch sizing, full labels, explicit waiting text, and viewport-clamped menus.
 - Light and dark primary actions use neutral contrast, not an accent card or elevated treatment. Count metadata is tertiary text rather than a decorative pill.
 
 ## Conversation hierarchy
@@ -74,6 +74,22 @@ Do not add a repeated Codex avatar/status heading to every turn. The divider and
 - Long conversations virtualize projected turns, not legacy messages: keep at most 10 turn shells and 20 rendered message nodes, measure mounted turn heights, use top/bottom spacers, and disable browser scroll anchoring on the single transcript scroll owner. Virtualization may change DOM residency only; it must not infer, merge, reorder, or reclassify `ConversationProjection` content.
 - Artifact details remain inline or modal. A persistent/right-side Inspector is intentionally not part of the current design because no two high-frequency disrupted-reading tasks or context-switch advantage were demonstrated; Sema's optional panel is a reference, not an implementation requirement.
 
+## 交互与可访问性
+
+- 所有图标按钮都有中文可访问名称；状态文本不依赖颜色。
+- 键盘焦点可见，dialog、drawer、sheet 和嵌套弹层只有一个焦点/滚动所有者。
+- 鼠标 hover 只增强，不成为发现操作的唯一方式。
+- `prefers-reduced-motion` 下取消非必要动画；状态仍须可理解。
+- 普通文字目标对比度不低于 4.5:1；禁用控件不承担关键说明。
+- 加载、缓存、陈旧、部分结果、失败、恢复和空状态都必须使用简洁中文并给出下一步。
+
+## Additional shell and input safeguards
+
+- Phone drawer state must not overwrite the saved desktop Sidebar preference. Nested dialogs and sheets retain one focus and scroll owner.
+- Model and effective permissions remain visible in the Composer. Phone Enter inserts a newline; Ctrl/Command + Enter submits. Desktop follows the user preference, and IME composition never submits.
+- The draft retains its editable capacity and bounded internal growth. Queued text stays selectable and read-only until a cancellation contract can prove that an accepted or uncertain item cannot start; detached failed-message recovery remains separate.
+- New presentation components receive normalized props and emit user intent; they do not request Runtime or persist a second state source. A turn-local display clock remains presentation-only.
+
 ## Motion contract
 
 Motion communicates state; it does not decorate the page.
@@ -102,3 +118,9 @@ Motion communicates state; it does not decorate the page.
 - Streaming stress keeps the complete projection, mounts a bounded activity window, and stays below the documented long-task threshold.
 - The 801-turn/1602-message fixture must remain navigable at the top, middle, and live tail while mounting no more than 10 turns / 20 message nodes. Incremental tail output must remain below the documented long-task threshold and user scrolling must override any stale follow-to-bottom frame.
 - Conversation regression and documentation fixtures must provide structured thread/turn/item facts and `localUserMessages` directly. A fixture-side `UiMessage[]` adapter, `agentMessage.live`, or role/phase reinterpretation would recreate the deleted 7420 semantics and must fail the source gate.
+
+## Broader shell regression matrix
+
+Shell, Sidebar and Composer changes additionally retain the existing 768×1024 compact-boundary and 852×393 phone-landscape checks alongside desktop, phone and foldable-width coverage. Home, running, completed and waiting-input surfaces need light/dark, keyboard-focus, reduced-motion and forced-colors checks when affected. Browser viewport evidence is not physical-device or system-assistive-technology evidence.
+
+Complete the relevant frontend build/regression, inspect browser DOM and console, and manually review at least one desktop and one phone screenshot. Keep candidate, production 7420, Android device, remote CI and official Release evidence separate. Historical baseline evidence remains in `docs/quiet-workbench-ux00-baseline.md` and `tests.md`.

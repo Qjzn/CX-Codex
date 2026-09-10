@@ -131,13 +131,11 @@ import type { UiProjectGroup, UiThread } from '../../types/codex'
 import IconTablerBolt from '../icons/IconTablerBolt.vue'
 import IconTablerChevronLeft from '../icons/IconTablerChevronLeft.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
-import IconTablerFolder from '../icons/IconTablerFolder.vue'
 import IconTablerFolderOpen from '../icons/IconTablerFolderOpen.vue'
 import IconTablerGitFork from '../icons/IconTablerGitFork.vue'
 import IconTablerSearch from '../icons/IconTablerSearch.vue'
-import IconTablerSettings from '../icons/IconTablerSettings.vue'
 
-type CommandRoute = 'workbench' | 'skills' | 'github-trending' | 'diagnostics'
+type CommandRoute = 'skills' | 'github-trending'
 type CommandMenuMode = 'root' | 'files'
 type RecentFileEntry = {
   cwd: string
@@ -173,7 +171,6 @@ const props = defineProps<{
   open: boolean
   groups: UiProjectGroup[]
   selectedThreadId?: string
-  showGithub?: boolean
   cwd?: string
   initialMode?: CommandMenuMode
   modeRequestId?: number
@@ -253,14 +250,6 @@ const commandDefinitions = computed<CommandDefinition[]>(() => {
       action: 'new-thread',
     },
     {
-      key: 'command:workbench',
-      title: '打开工作台',
-      detail: '浏览项目和本地文件',
-      searchText: '打开工作台 项目 文件 workbench project files',
-      icon: IconTablerFolder,
-      routeName: 'workbench',
-    },
-    {
       key: 'command:skills',
       title: '打开技能',
       detail: '查看已安装和可用技能',
@@ -280,23 +269,13 @@ const commandDefinitions = computed<CommandDefinition[]>(() => {
       shortcut: fileSearchShortcut,
     })
   }
-  if (props.showGithub) {
-    items.push({
-      key: 'command:github-trending',
-      title: '打开 GitHub',
-      detail: '查看 GitHub 项目',
-      searchText: '打开 github 项目 trending',
-      icon: IconTablerGitFork,
-      routeName: 'github-trending',
-    })
-  }
   items.push({
-    key: 'command:diagnostics',
-    title: '打开诊断',
-    detail: '检查连接和运行状态',
-    searchText: '打开诊断 设置 连接 状态 diagnostics settings',
-    icon: IconTablerSettings,
-    routeName: 'diagnostics',
+    key: 'command:github-trending',
+    title: '打开 GitHub',
+    detail: '查看 GitHub 项目',
+    searchText: '打开 github 项目 trending',
+    icon: IconTablerGitFork,
+    routeName: 'github-trending',
   })
   return items
 })

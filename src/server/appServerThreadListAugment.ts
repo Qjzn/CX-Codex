@@ -120,9 +120,17 @@ export class AppServerThreadListAugmenter {
     )
     if (supplementalThreads.length === 0) return normalizedResult
 
+    const appendedThreadIds = supplementalThreads
+      .map((thread) => {
+        const id = asRecord(thread)?.id
+        return typeof id === 'string' ? id.trim() : ''
+      })
+      .filter(Boolean)
+
     return {
       ...resultRecord,
       data: [...deduplicatedData, ...supplementalThreads],
+      supplementalThreadIds: appendedThreadIds,
     }
   }
 

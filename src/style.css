@@ -28,7 +28,7 @@
   --ui-radius-card: 8px;
   --ui-radius-control: 10px;
   --ui-radius-pill: 999px;
-  --ui-radius-composer: 22px;
+  --ui-radius-composer: 12px;
   --ui-shadow-float: 0 14px 40px rgb(0 0 0 / 0.08);
   --ui-z-popover: 70;
   --motion-duration-press: 80ms;
@@ -125,9 +125,55 @@ pre {
 
 :root.dark {
   color-scheme: dark;
+  --ui-bg-window: #09090b;
+  --ui-bg-sidebar: #18181b;
+  --ui-bg-surface: #202023;
+  --ui-bg-surface-muted: #27272a;
+  --ui-bg-row-hover: #303034;
+  --ui-bg-row-active: #37373c;
+  --ui-border-subtle: #3f3f46;
+  --ui-border-strong: #52525b;
   --ui-text-primary: #f4f4f5;
   --ui-text-secondary: #d4d4d8;
   --ui-text-tertiary: #a1a1aa;
+  --ui-accent: #5eead4;
+  --ui-success: #5eead4;
+  --ui-warning: #fbbf24;
+  --ui-danger: #fb923c;
+  --ui-focus: #60a5fa;
+  --ui-shadow-float: 0 16px 44px rgb(0 0 0 / 0.34);
+}
+
+@media (forced-colors: active) {
+  :root,
+  :root.dark {
+    --ui-bg-window: Canvas;
+    --ui-bg-sidebar: Canvas;
+    --ui-bg-surface: Canvas;
+    --ui-bg-surface-muted: Canvas;
+    --ui-bg-row-hover: Highlight;
+    --ui-bg-row-active: Highlight;
+    --ui-border-subtle: ButtonBorder;
+    --ui-border-strong: CanvasText;
+    --ui-text-primary: CanvasText;
+    --ui-text-secondary: CanvasText;
+    --ui-text-tertiary: GrayText;
+    --ui-accent: LinkText;
+    --ui-success: LinkText;
+    --ui-warning: CanvasText;
+    --ui-danger: LinkText;
+    --ui-focus: Highlight;
+  }
+
+  :where(button, a, input, textarea, select, [role='button']):focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  :where(.thread-status-indicator, .thread-goal-status-dot, .execution-pulse) {
+    border: 1px solid CanvasText;
+    forced-color-adjust: none;
+  }
 }
 
 :root.dark body {
@@ -410,6 +456,22 @@ pre {
 :root.dark .content-header .content-title,
 :root.dark .content-title {
   @apply text-zinc-200;
+}
+
+:root.dark .content-favorites-button {
+  @apply border-zinc-700 bg-zinc-900 text-zinc-300 hover:border-zinc-600 hover:bg-zinc-800 hover:text-zinc-100;
+}
+
+:root.dark .content-context-badge {
+  background: linear-gradient(180deg, rgba(39, 39, 42, 0.96) 0%, rgba(24, 24, 27, 0.94) 100%);
+}
+
+:root.dark .thread-loading-skeleton {
+  @apply border-zinc-700 bg-zinc-800;
+}
+
+:root.dark .thread-loading-skeleton::after {
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.08) 50%, transparent 100%);
 }
 
 :root.dark .sidebar-thread-controls-button {

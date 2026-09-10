@@ -1,16 +1,16 @@
 # PRD：CX-Codex 安静工作台（UI/UX VNext）
 
-> 文档状态：目标已确认，会话重建候选验证中
+> 文档状态：Sema 会话候选已验证；本轮合并后需重新验收，整体产品门槛未关闭
 >
-> 版本：1.2
+> 版本：1.3
 >
-> 日期：2026-08-30
+> 日期：2026-09-11
 >
 > 产品范围：CX-Codex 浏览器端与 Android WebView 共用前端
 >
 > 实施方式：Codex 按本文任务包顺序、小步执行、逐包验证
 >
-> 不包含：未授权提交、推送、部署或发布；会话与 Composer 代码仅按 UX-25/UX-30/UX-40 进入本地候选验证
+> 当前授权边界：本轮允许替换 7420、提交并推送 beta，以及准备 2.8.1 版本草稿；不正式打 tag 或发布。历史发布授权不自动延续，不得跳过安全、Runtime、Android、CI 或 Release 门槛。
 
 ## 0. Codex 执行契约
 
@@ -266,8 +266,8 @@ CX-Codex 不需要在功能数量上追赶 Sema。更有价值的差异化是：
 Conversation 以 turn 为阅读单位：
 
 - 用户输入使用轻量、可识别的表面，不使用高饱和大气泡。
-- 当前 turn 展开可观察的 tool、command、MCP、search、plan、subtask、permission 和进度，显示由结构时间戳与等待区间计算的稳定执行耗时；不展示内部 thinking 链。
-- turn 完成后，中间活动自动收敛为一个 ActivitySummary；明确 `final`、文件变更摘要和待处理动作留在第一层。
+- 当前 turn 默认展开最近两段明确的公开 commentary，不截断正文；tool、command、MCP、search、plan 等操作详情仅在显式点击后挂载，不占用公开进展窗口，不展示内部 thinking 链。执行时间只从结构时间戳与等待区间计算；本地显示时钟不拥有 Runtime 状态。
+- turn 完成后，中间活动默认收敛为一个 ActivitySummary；选择文字、聚焦过程控件、离底部或显式展开历史时保留当前阅读内容，直到返回最新或明确导航。明确 `final`、文件变更摘要和待处理动作留在第一层。
 - 两个及以上连续工具操作合并为 ActivityGroup，默认显示“读取 / 编辑 / 执行”的摘要和最新目标。
 - 文件变更显示文件数、增删统计和结果状态；详情按需展开。
 - 审批、失败、等待输入和单写者冲突永远不随普通过程摘要一起折叠。
@@ -362,10 +362,9 @@ projectConversation(input: ConversationProjectionInput): ConversationProjection
 | 工具/文件摘要 | [`Blocks.tsx`](https://github.com/midea-ai/sema-code-core/blob/f564e8d930053becdd5c31fe53f65fd863b6f283/webui/client/src/features/chat/Blocks.tsx) | 参考 tool verb、目标、diff stat、ActivityGroup 和 FileChangesCard |
 | 小型 UI primitives | [`common/ui.tsx`](https://github.com/midea-ai/sema-code-core/blob/f564e8d930053becdd5c31fe53f65fd863b6f283/webui/client/src/common/ui.tsx) | 参考 Button/Popover/Menu/Dropdown/Toggle 的小边界，不引入 React 实现 |
 
-当前 Vue 映射与偏离记录在根目录 [`DESIGN.md`](../DESIGN.md)。UI 实施必须保留以下可审计关系：`TurnGroup/TurnDivider` 对应 `.turn-shell/.turn-divider/.process-toggle`，`ToolCard/ToolGroup` 对应平面 `.activity-block`，`FileChangesCard` 对应默认显示文件行的 `.file-summary`，运行 Spinner/StatusLine/return-to-bottom 对应活动点、轻量 live state 与居中三点按钮。CX 明确保留单栏手机布局、44px 粗指针目标和恢复能力，不复制 Sema 的固定多栏移动布局。
+当前 Vue 映射与偏离记录在根目录 [`DESIGN.md`](../DESIGN.md)。UI 实施必须保留以下可审计关系：`TurnGroup/TurnDivider` 对应 `.turn-shell/.turn-divider/.process-toggle`，`ToolCard/ToolGroup` 对应平面 `.activity-block`，`FileChangesCard` 对应按需展开文件行的 `.file-summary`，运行 Spinner/StatusLine/return-to-bottom 对应活动点、轻量 live state 与居中三点按钮。CX 明确保留单栏手机布局、44px 粗指针目标和恢复能力，不复制 Sema 的固定多栏移动布局。
 
 动效只用于状态与披露：过程展开使用 180ms opacity/transform，箭头使用 180ms rotate，运行点/回到底部三点只在任务活跃时持续；`prefers-reduced-motion: reduce` 停止持续动画并把披露过渡压到 1ms。禁止页面入场编舞、测量高度动画、弹簧/视差、动画渐变和装饰性卡片堆叠。
-
 ### 7.11 工作包与执行顺序
 
 | ID | 名称 | 依赖 | 发布必要性 | 状态 |
@@ -402,7 +401,6 @@ projectConversation(input: ConversationProjectionInput): ConversationProjection
 - 无业务代码变更；`git diff --check` 与 `npm.cmd run verify:governance` 通过。
 
 **本地验收（2026-08-30）：** 当前运行中的 Codex.app 已核实为 `OpenAI.Codex_26.818.5229.0_x64`，其 Shell、Sidebar、Conversation、Composer、队列和审批行为继续作为交互安全对照；`DESIGN.md` 已固定 `midea-ai/sema-code-core@f564e8d930053becdd5c31fe53f65fd863b6f283` 的源码映射，并明确禁止恢复 7420 原有会话归并、final/elapsed 推断、阶段折叠、尾部浮层和 `fileChange` 丢弃逻辑。新增固化的 `contract` 回归模式在 1440×900、884×1104、768×1024、393×852、852×393 五个视口逐一验证首页、运行、完成、等待输入，共生成 20 张状态截图和 `contract-baseline.json`；每个视口均只有一个命名主地标、一个显式 final、一个未作答选择器，且首页/会话横向溢出为 0。当前候选矩阵位于 `output/regression-7420/ux00-contract-baseline-20260830`，独立 Headless Playwright 手机截图也已目视复核。历史改造前截图继续单独保存在 `output/regression-7420/p5-screenshot-baseline`，不把本次候选截图冒充完整的改造前证据。独立 Vite 预览没有 7420 Bridge，首页预期出现 `/codex-api` 404 并已记录为环境限制；会话夹具浏览器错误为 0。此次只修改回归脚本和文档，没有修改用户可见业务逻辑；`node --check`、`vue-tsc --noEmit`、`npm.cmd run build:frontend`、`npm.cmd run verify:conversation-transcript`、UTF-8 等价 frontend source-only/governance 与 `git diff --check` 均通过。该结论只关闭本地 UX-00，不代表生产 7420、Android 真机、真实 Windows 高对比度/屏幕阅读器、Git、CI 或 Release 通过。
-
 **回滚：** 删除新增设计/基线文件即可，不影响运行时。
 
 #### UX-10：Quiet Shell 与 Header
@@ -427,7 +425,6 @@ projectConversation(input: ConversationProjectionInput): ConversationProjection
 - 发送、连接、恢复状态仍能通过文本或可访问名称区分。
 
 **本地验收（2026-08-30）：** 固定 Sema 提交的 256px 侧栏、44px Header 和 `max-w-3xl` 轴线已映射为 CX 的 288px 默认侧栏、44px 单行 Header 和 768px Header/Composer 同轴布局；保存的 340px 用户偏好保持不变，缺失偏好不再因 `Number(null)` 错误落到最小宽度。固化 CDP 回归覆盖 1440×900、393×852、852×393、明暗主题和状态文案变长，轴线偏差与横向溢出均为 0，标题位置不变；独立 Headless Playwright 另行复核桌面和手机截图。证据位于 `output/regression-7420/quiet-shell-20260830` 与 `output/regression-7420/quiet-shell-playwright-20260830`。这是本地候选任务包完成，不代表真实 7420、Android、提交或发布完成。
-
 **回滚：** 任务包独立回退，旧 token 和布局值可一次恢复；不涉及持久化迁移。
 
 #### UX-20：Sidebar 信息架构
@@ -454,6 +451,8 @@ projectConversation(input: ConversationProjectionInput): ConversationProjection
 **回滚：** 只回退 Sidebar 呈现；项目顺序、折叠、置顶和搜索数据格式不变。
 
 **本地候选证据（2026-08-30）：** `新会话` 成为独立首行主操作，搜索、工作台和工具收敛为第二行低频入口；仍复用现有四个事件、搜索状态机、项目顺序、折叠、置顶和菜单所有权，没有引入新的 Sidebar 数据模型。固定手机夹具验证 10 条基线 row、运行/等待/未读识别、唯一有意 pinned shortcut、项目菜单、新建任务入口、stale-search 合并、查询连续性、后台项目重排锚点与隐藏当前任务定位；边界修复后项目上浮使 scrollTop 从 220 调整为 348，而原可见项目相对顶部保持 7.046875px 不变。默认 288px 和保存的 340px 侧栏均为两行操作区，主操作高度 36px、次操作 32px；粗指针 row 为 58px，所有视口无横向溢出。明暗主题、CDP 截图和独立 Headless Playwright 桌面截图已目视复核，证据位于 `output/regression-7420/quiet-sidebar-20260830`、`output/regression-7420/quiet-sidebar-regression-20260830` 与 `output/regression-7420/quiet-sidebar-playwright-20260830`。这是本地任务包完成，不代表真实 7420、Android、提交或发布完成。
+
+**合并后侧栏合同（2026-09-11）：** 保留远端顶部侧栏开关、全部已读、新建任务的独立所有权，以及第二行搜索、Skills、GitHub 三列入口；工作台与诊断只移除前端目的地，后台能力不删除。上段为旧候选证据，不是合并后布局验收。
 
 #### UX-25：Sema Conversation Transcript module
 
@@ -505,7 +504,7 @@ projectConversation(input: ConversationProjectionInput): ConversationProjection
 **步骤：**
 
 1. `ThreadConversation.vue` 只负责窗口化、滚动、投影列表编排和交互意图回传；turn、activity、elapsed、final、file summary 及 approval/input/MCP 的呈现字段全部来自 UX-25 interface，组件内禁止解析原始 server request。
-2. 活跃 turn 展开可观察活动；两个及以上连续活动形成 ActivityGroup；完成 turn 折叠成唯一 ActivitySummary。
+2. 活跃 turn 默认展开最近两段公开 commentary；技术操作通过显式详情入口按需挂载。ActivityGroup 保留投影顺序；完成 turn 默认折叠为唯一 ActivitySummary，受保护的阅读窗口不自动撤回。
 3. commentary 与 ActivityGroup 严格按投影块顺序呈现；`running`、`waiting`、`queued` 和 `sync-degraded` 都属于活动轮次，恢复态不得被误折叠或绕过长会话窗口上限。
 3. 最终回复使用独立正文层级；审批、失败、等待输入和 writer collision 始终在第一层。
 4. 文件变更、命令、diff、MCP、search、plan 和未知 payload 使用一致的摘要/详情模式。
@@ -516,7 +515,7 @@ projectConversation(input: ConversationProjectionInput): ConversationProjection
 **验收：**
 
 - `ThreadConversation.vue` 只接收 `ConversationProjection`，不出现 `UiMessage`、原始请求解析、旧 final/elapsed/folding 或 Teleport 标记；收藏和计划执行只回传窄类型意图。
-- commentary 与投影 `activityGroups` 保持原事件顺序；活动轮次过程固定展开，完成轮次过程默认收起，显式 final、文件摘要与待处理交互保持独立层级。
+- commentary 与投影 `activityGroups` 保持原事件顺序；活动轮次公开进展固定展开、操作详情按需，完成轮次过程默认收起但受保护阅读不撤回，显式 final、文件摘要与待处理交互保持独立层级。
 - `sync-degraded` 显示明确恢复状态、固定展开且不可误折叠；1600 项活动仍只挂载最近 18 项，浏览器采样窗口主线程长任务小于 80ms。
 - 桌面、393×852 手机和 884×1104 折叠屏夹具无横向溢出；手机和折叠屏可见交互目标不低于 44px；reduced-motion 下无持续动画。
 
@@ -557,7 +556,6 @@ projectConversation(input: ConversationProjectionInput): ConversationProjection
 - 本地输入和发送反馈 ≤100ms。
 
 **本地验收（2026-08-30）：** Composer 按固定 Sema 提交收敛为与 48rem Transcript 同轴的 12px 轻边框、无默认阴影双层工具壳；桌面、393×852 手机和 884×1104 粗指针折叠屏均保持输入在上、控制在下且横向溢出为 0，手机/折叠屏控制目标最小 44px。五行输入自然增长，二十行在 128px 封顶，清空后回缩，显式展开仍可达半屏；IME composing/229 不提交或误选，语音结果只写入可编辑 draft，桌面 Enter 提交、Shift+Enter 换行，手机 Enter 换行、Ctrl+Enter 提交。附件与 Runtime 面板在桌面保持非模态，在手机保持 focus、`aria-modal`、背景滚动锁定和关闭后焦点恢复；页面内可见发送反馈为 12.8-12.9ms。审计同时发现原队列虽有服务端重排能力却没有可达入口，因此新增仅在“全部已持久化、单一所有者、未处理、首条未失败”时出现的上下移动作；393×852 实际完成下移反转与上移恢复，按钮 44×44、零溢出，并复用现有持久化与服务端 409 顺序收敛。编辑、删除、引用立即执行（Steer）与首失败暂停继续沿用原所有者。类型检查、前端构建、UTF-8 源码契约门禁和浏览器断言通过，截图位于 `output/regression-7420/quiet-composer-audit-20260830`。这是本地候选完成，不代表生产 7420、Android、Git 或 Release 完成。
-
 **回滚：** 仅回退 Composer 布局/样式；draft、outbox、queue 和 runtime send 代码不迁移。
 
 #### UX-50：Artifact Inspector 准入与可选实现
@@ -578,7 +576,6 @@ projectConversation(input: ConversationProjectionInput): ConversationProjection
 - 关闭 Inspector 后阅读位置、焦点和任务状态不变。
 
 **准入决定（2026-08-30）：No-go。** 当前文件变更行默认可见、diff 按文件原位展开，命令输出、计划和完成过程均按需披露；审计没有找到两个被这些 inline 详情明显打断的高频任务，因此标准 1 不成立。低保真路径比较中，inline 从所属 turn 一次点击即可查看且不离开阅读位置，modal 与右栏同样至少需要一次打开动作；右栏没有证明比 inline/modal 少一次以上上下文切换，因此标准 2 不成立。1024px 以下覆盖层和只读无新权限在技术上可满足标准 3/4，但四项必须同时成立。依据 7.8 保留现有 inline/modal，不建设 Inspector、不新增入口、状态、权限、持久化或移动固定栏；No-go 不阻塞 Phase 1。
-
 **回滚：** 移除 Inspector 入口和呈现组件即可；原 inline/modal 详情继续可用。
 
 #### UX-60：响应式、主题与可访问性硬化
@@ -600,7 +597,6 @@ projectConversation(input: ConversationProjectionInput): ConversationProjection
 - reduced-motion 下无持续装饰动画，功能反馈仍然存在。
 
 **本地验收（2026-08-30）：** 固化 `hardening` 浏览器门禁覆盖 1440×900、884×1104、768×1024、393×852 与 852×393 五个视口的浅色/深色主题；十个组合均无横向溢出、重复 ID、无名称的可见控件、隐藏命中目标或低于 WCAG AA 的抽样必要文字，状态同时保留文本。粗指针侧栏调宽轨仍为 6px 视觉宽度，但有效命中宽度为 44px；forced-colors 下使用真实键盘 Tab 聚焦调宽轨并得到 2px 可见轮廓；reduced-motion 下没有持续动画。手机抽屉具有命名 dialog/`aria-modal`、背景 `inert` 与滚动锁，Tab/Shift+Tab 双向闭环，关闭后解除隔离并把焦点归还菜单按钮。审计修复了活动任务时间文字对比度、深色状态底色、粗指针菜单/调宽命中区和 forced-colors 焦点轮廓；没有新增 UI、状态模型或重型依赖。独立 Headless Playwright 的 768×1024 截图与 CDP 证据位于 `output/regression-7420/ux60-final-20260830` 和 `output/regression-7420/ux60-hardening-20260830`，关键截图已人工复核。这只关闭本地 UX-60 任务包；真实 Windows 高对比度、系统屏幕阅读器、Android 真机、生产 7420、Git 与 Release 仍未完成。
-
 **回滚：** 语义 token 与组件变更按任务包回退；不做不可逆主题迁移。
 
 #### UX-70：候选验证与文档收口
@@ -633,7 +629,6 @@ npm.cmd run verify:server-modules
 - 记录所有命令、结果、截图目录和已知偏离。
 - 更新 `tests.md` 中用户可见行为与手工验证契约。
 **本地候选验收（2026-08-30）：** 隔离候选 `http://127.0.0.1:17438` 已通过 PowerShell 7.5.5 驱动的 frontend source-only 与完整浏览器矩阵；覆盖桌面、手机、884×1104 折叠屏、侧栏搜索/锚点/当前会话揭示、命令面板焦点、Composer、五类首层交互、队列恢复、1600 活动流式压力、长会话虚拟化及“返回最新消息”。专用返回最新夹具验证点击后滚动距离归零、按钮消失且焦点归还；801 轮/1602 条消息最多挂载 10 轮/20 条消息，离屏第 400 轮可定位，高位 prepend 从 761 增至 801 轮时阅读锚点漂移 5.875px。`verify:conversation-transcript` 为 1602 轮 20.7ms、1600 活动 5.7ms；governance、frontend build、frontend normalizers、CLI build、server modules、sidebar data 与 `git diff --check` 均通过。App Server 会话列表按稳定 ID 保留首项并对分页结果幂等去重；候选侧栏读取 289 个活动会话、首屏 100 项和 23 个项目组，页内无重复，跨游标重叠被记录并只展示一次。此结论只关闭 UX-70 的本地候选任务包；当前生产 7420 仍不是该候选，Android 真机、物理折叠屏、系统辅助技术、远端 CI、Git、部署与 Release 均未完成。
-
 - 不把本地候选、生产 7420、远端 CI、正式 Release 和 Android 真机证据混为一谈。
 - 没有用户明确授权时，到本地候选即停止。
 

@@ -15,7 +15,7 @@
 - `main` 是正式稳定分支，不直接接收日常开发提交；只有 `beta` 候选通过 `PRODUCT_GOAL.md` 的全部强制门槛和正式发布检查后，才通过 PR 合并到 `main`。
 - 正式标签只允许使用 `vX.Y.Z` 或 `X.Y.Z`，并且必须指向已属于 `origin/main` 的提交。`beta`、`rc` 等候选状态使用分支和 CI 表达，不创建会触发正式 Release 的版本标签。
 
-标准流转顺序为：本地改动 -> `beta` -> CI 与候选验证 -> `beta` 合并到 `main` -> 正式标签 -> GitHub Release。任何设备、安全或发布门槛未完成时，候选可以继续留在 `beta`，但不能合并到 `main` 或创建正式标签。
+标准流转顺序为：本地改动 -> `beta` -> CI 与候选验证 -> `beta` 合并到 `main` -> 从当前 `main` 手动生成短期签名候选制品 -> 真机验证签名候选 -> 正式标签 -> GitHub Release。任何设备、安全或发布门槛未完成时，候选可以继续留在 `beta`；只有除“最终签名候选”外的门槛均通过时才进入 `main`，正式标签仍需签名候选真机通过后才能创建。
 
 ## 本地检查清单
 
@@ -94,22 +94,24 @@ git tag v2.1.15
 git push origin v2.1.15
 ```
 
+在创建正式标签前，先从 GitHub Actions 的 `Release` workflow 对当前 `main` 执行一次 `workflow_dispatch`。手动路径会强制要求检出的提交等于 `origin/main`，使用与正式发布相同的签名 secrets、证书指纹、构建和 checksum 门禁，只上传保留 3 天的 `signed-release-candidate-*` Actions artifact，不创建标签或 GitHub Release。下载其中的 APK 到发布目标真机，完成覆盖安装、启动、核心会话和后台通知烟测；通过后才可给同一 `main` 提交打正式标签。
+
 Release 工作流会自动完成：
 
 1. 安装依赖
 2. 构建项目
 3. 打包 zip 与 sha256
-4. 如果仓库配置了 Android 签名 secrets，构建并上传 APK
+4. 强制检查 Android 签名 secrets，构建并验证固定证书指纹的 APK
 5. 校验 zip / APK 与 `.sha256`
-6. 发布 GitHub Release
+6. 手动候选仅上传短期 Actions artifact；正式标签才发布 GitHub Release
 
 ## Android 正式签名密钥运维
 
 - 正式签名只通过 GitHub Actions Secrets 提供：`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 和 `ANDROID_KEY_PASSWORD`。不要把 keystore、密码、Base64 内容或可还原片段写入提交、Issue、Release、日志或构建产物。
-- 日常只轮换密码时，保留原 keystore 与签名证书，原子更新四个 Secrets，并先用候选 Tag 验证 Release workflow、APK SHA-256、包名、版本号和 `apksigner verify --print-certs` 的证书 SHA-256。
+- 日常只轮换密码时，保留原 keystore 与签名证书，原子更新四个 Secrets，并先从当前 `main` 手动运行 Release workflow，验证候选 APK SHA-256、包名、版本号和 `apksigner verify --print-certs` 的证书 SHA-256；不要创建候选 Tag。
 - 更换 keystore 或签名证书会影响 Android 覆盖升级。除非证书已泄露、失效或平台迁移明确要求，否则不要更换签名证书；必须更换时，要在发布说明中明确旧版无法直接覆盖升级及迁移路径。
 - 怀疑密钥泄露时，立即停止打新 Tag，删除或覆盖仓库中的四个签名 Secrets，使 Release workflow 在签名准备阶段阻断；清理已公开的敏感内容，轮换相关仓库访问凭据，并按 `SECURITY.md` 记录脱敏事件时间线。
-- 轮换或恢复后，使用新的候选 Tag 重跑正式签名流程；只有固定证书指纹、正式 APK、对应 `.sha256` 和公开下载复核全部通过，才恢复稳定发布。受影响的旧 Release 应标记撤回或预发布，并指向安全替代版本。
+- 轮换或恢复后，使用当前 `main` 的手动签名候选重跑正式签名流程；只有固定证书指纹、候选 APK、对应 `.sha256` 和真机覆盖安装全部通过，才恢复稳定发布。受影响的旧 Release 应标记撤回或预发布，并指向安全替代版本。
 - keystore 的离线备份、恢复权限和失效处置由维护者在仓库外管理。GitHub Secrets 只保存 CI 所需副本，不能作为唯一备份或证书恢复来源。
 
 ## Release 包内容

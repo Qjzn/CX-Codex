@@ -246,12 +246,18 @@ async function readAllActiveThreads(firstPage) {
   const overlappingSupplementalThreadIds = new Set()
   const overlappingCursorThreadIds = new Set()
   const seenCursors = new Set()
-  const supplementalThreadIds = new Set(
-    firstPage.data
+  const declaredSupplementalThreadIds = Array.isArray(firstPage.supplementalThreadIds)
+    ? firstPage.supplementalThreadIds
+    : []
+  const supplementalThreadIds = new Set([
+    ...declaredSupplementalThreadIds
+      .map((value) => (typeof value === 'string' ? value.trim() : ''))
+      .filter(Boolean),
+    ...firstPage.data
       .slice(THREAD_LIST_LIMIT)
       .map(readThreadId)
       .filter(Boolean),
-  )
+  ])
 
   const appendPage = (rows, label) => {
     const pageThreadIndexById = new Map()

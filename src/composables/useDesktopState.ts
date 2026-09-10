@@ -1576,8 +1576,14 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     return ''
   }
 
-  const activeTaskPetItems = computed<UiTaskPetItem[]>(() => sourceThreads.value
-    .filter((thread) => (
+  const activeTaskPetItems = computed<UiTaskPetItem[]>(() => {
+    const candidates = [...sourceThreads.value]
+    const selected = selectedThread.value
+    if (selected && !candidates.some((thread) => thread.id === selected.id)) {
+      candidates.unshift(selected)
+    }
+
+    return candidates.filter((thread) => (
       isThreadExecutionActive(thread.id)
       || (pendingServerRequestsByThreadId.value[thread.id] ?? []).length > 0
     ))
@@ -1616,7 +1622,8 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       }
     })
     .sort((first, second) => second.updatedAtIso.localeCompare(first.updatedAtIso))
-    .slice(0, 8))
+    .slice(0, 8)
+  })
   const selectedThreadScrollState = computed<ThreadScrollState | null>(
     () => scrollStateByThreadId.value[selectedThreadId.value] ?? null,
   )
@@ -3278,9 +3285,9 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
       currentSummary?.lastEventSeq ?? 0,
       latestRuntimeEventSeqByThreadId.get(threadId) ?? 0,
     )
-    if (!shouldApplyRuntimeSnapshotVersion({ lastEventSeq: currentEventSeq }, snapshot)) return false
     settleForegroundRecoveryMetric(threadId)
     finishForegroundRecoveryFeedback(threadId)
+    if (!shouldApplyRuntimeSnapshotVersion({ lastEventSeq: currentEventSeq }, snapshot)) return false
     rememberLatestRuntimeEventSequence(threadId, snapshot.lastEventSeq)
     rememberRuntimeSnapshotSummary(threadId, snapshot, options.runtimeOnly)
     const authoritativeTurnStartedAtMs = parseIsoTimestamp(snapshot.lastStartedAtIso ?? '')

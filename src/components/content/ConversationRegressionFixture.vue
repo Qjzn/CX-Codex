@@ -1,12 +1,17 @@
 <template>
-  <main class="conversation-regression-fixture" aria-label="Conversation block regression fixture">
+  <main
+    class="conversation-regression-fixture"
+    aria-label="Conversation block regression fixture"
+    :data-ux-baseline-state="uxBaselineState || undefined"
+    :data-ux-horizontal-overflow="isUxBaselineFixture ? String(uxBaselineHasHorizontalOverflow) : undefined"
+  >
     <section
       class="conversation-regression-shell"
       :class="{ 'conversation-regression-shell--constrained-height': hasStreamingMetrics || isScrollReturnFixture }"
     >
       <header class="conversation-regression-header">
         <p class="conversation-regression-kicker">Regression Fixture</p>
-        <h1>Conversation Blocks</h1>
+        <h1>{{ uxBaselineStateLabel || 'Conversation Blocks' }}</h1>
       </header>
       <div v-if="isSendFeedbackFixture" class="send-feedback-controls" data-testid="send-feedback-controls">
         <button v-for="phase in sendFeedbackPhases" :key="phase" type="button" :data-testid="`send-feedback-${phase}`" @click="setSendFeedbackPhase(phase)">{{ phase }}</button>
@@ -68,7 +73,7 @@
         class="conversation-regression-thread"
         :projection="fixtureProjection"
         :is-loading="false"
-        :is-turn-in-progress="isSendFeedbackFixture ? sendFeedbackPhase === 'running' : !isLoadFailureFixture && !isDetachedFailureFixture && !isScrollSwitchRaceFixture && !isPlanFixture && !isFileCitationFixture"
+        :is-turn-in-progress="isUxBaselineFixture ? isUxBaselineRunning : isSendFeedbackFixture ? sendFeedbackPhase === 'running' : !isLoadFailureFixture && !isDetachedFailureFixture && !isScrollSwitchRaceFixture && !isPlanFixture && !isFileCitationFixture && !isMarkdownSemanticFixture && !isAttachmentEnvelopeFixture"
         :load-error="isLoadFailureFixture ? '连接不到桌面端，会话内容暂时未加载。页面会自动重试，也可以检查或修改连接地址。' : ''"
         :show-connection-settings-action="isLoadFailureFixture"
         compact-runtime-chrome
@@ -113,7 +118,7 @@
         aria-hidden="true"
       />
       <QueuedMessages
-        v-if="!isSendFeedbackFixture && !isLoadFailureFixture && !isDetachedFailureFixture"
+        v-if="!isSendFeedbackFixture && !isLoadFailureFixture && !isDetachedFailureFixture && !isUxBaselineFixture && !isMarkdownSemanticFixture && !isAttachmentEnvelopeFixture"
         class="conversation-regression-queue"
         :messages="queuedMessages"
         :is-processing="!isQueueFailureFixture && !isNativeWriterQueueFixture && !isQueueReorderFixture"
@@ -136,7 +141,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ThreadConversation from './ThreadConversation.vue'
 import { beginChatFeedbackMetric, chatFeedbackNow, markChatFeedbackFirstAssistantData, markChatFeedbackServerAcknowledged } from '../../composables/chatFeedbackMetrics'
 import QueuedMessages from './QueuedMessages.vue'
@@ -247,6 +252,31 @@ const defaultLocalUserMessages: ConversationLocalUserMessage[] = [
   { id: 'optimistic-user:fixture:sent-echo', text: '服务端已经确认接收，正在等待历史消息同步。', deliveryState: 'sent' },
 ]
 
+// Keep the remote baseline scenarios, but feed the single production projection
+// native turn items rather than reviving the retired flat-message adapter.
+const uxBaselineItemsByState: Record<string, StructuredFixtureItem[]> = {
+  running: [
+    structuredFixtureItem(0, { id: 'ux-baseline-running-user', type: 'userMessage', content: [{ type: 'text', text: '请检查当前页面，并保持执行过程清晰、稳定。' }] }),
+    structuredFixtureItem(0, { id: 'ux-baseline-running-command', type: 'commandExecution', command: 'npm.cmd run verify:frontend-normalizers', cwd: 'E:/workspace/CXCodex/codexui', status: 'inProgress', aggregatedOutput: '正在验证前端状态归一化…' }),
+    structuredFixtureItem(0, { id: 'ux-baseline-running-assistant', type: 'agentMessage', phase: 'commentary', text: '正在检查页面结构和状态反馈，结果会在完成后更新。' }),
+  ],
+  completed: [
+    structuredFixtureItem(0, { id: 'ux-baseline-completed-user', type: 'userMessage', content: [{ type: 'text', text: '请检查当前页面，并给出最终结论。' }] }),
+    structuredFixtureItem(0, { id: 'ux-baseline-completed-command', type: 'commandExecution', command: 'npm.cmd run verify:frontend-normalizers', cwd: 'E:/workspace/CXCodex/codexui', status: 'completed', aggregatedOutput: 'frontend normalizers: ok', exitCode: 0 }),
+    structuredFixtureItem(0, { id: 'ux-baseline-completed-assistant', type: 'agentMessage', phase: 'final_answer', text: '检查已完成。页面没有横向溢出，最终结果和执行摘要都可读取。' }),
+  ],
+  waiting: [
+    structuredFixtureItem(0, { id: 'ux-baseline-waiting-user', type: 'userMessage', content: [{ type: 'text', text: '请继续完成需要外部权限的操作。' }] }),
+    structuredFixtureItem(0, { id: 'ux-baseline-waiting-assistant', type: 'agentMessage', phase: 'commentary', text: '继续前需要你的确认；审批内容和允许范围保持在第一层。' }),
+  ],
+  'duplicate-identity': [
+    structuredFixtureItem(0, { id: 'ux-identity-user-first', type: 'userMessage', clientId: 'ux-client-first', content: [{ type: 'text', text: '继续检查这个结果。' }] }),
+    structuredFixtureItem(0, { id: 'ux-identity-assistant-first', type: 'agentMessage', phase: 'final_answer', text: '第一次请求已独立处理。' }),
+    structuredFixtureItem(1, { id: 'ux-identity-user-second', type: 'userMessage', clientId: 'ux-client-second', content: [{ type: 'text', text: '继续检查这个结果。' }] }),
+    structuredFixtureItem(1, { id: 'ux-identity-assistant-second', type: 'agentMessage', phase: 'final_answer', text: '第二次相同文本仍保留独立消息身份。' }),
+  ],
+}
+
 const olderHistoryRequestCount = ref(0)
 
 const allPendingRequests: UiServerRequest[] = [
@@ -344,6 +374,19 @@ const allPendingRequests: UiServerRequest[] = [
 const fixtureParams = typeof window !== 'undefined'
   ? new URLSearchParams(window.location.hash.split('?')[1] ?? '')
   : new URLSearchParams()
+const uxBaselineState = fixtureParams.get('uxState') ?? ''
+const isUxBaselineFixture = ['running', 'completed', 'waiting', 'duplicate-identity'].includes(uxBaselineState)
+const isUxBaselineRunning = uxBaselineState === 'running'
+const uxBaselineHasHorizontalOverflow = ref(false)
+const uxBaselineStateLabel = uxBaselineState === 'running'
+  ? 'Quiet Workbench · Running'
+  : uxBaselineState === 'completed'
+    ? 'Quiet Workbench · Completed'
+    : uxBaselineState === 'waiting'
+      ? 'Quiet Workbench · Waiting Input'
+      : uxBaselineState === 'duplicate-identity'
+        ? 'Quiet Workbench · Message Identity'
+      : ''
 const isQueueFailureFixture = fixtureParams.get('queueFailure') === '1'
 const isSendFeedbackFixture = fixtureParams.get('fixture') === 'send-feedback'
 const isReplyQualityFixture = fixtureParams.get('fixture') === 'reply-quality'
@@ -358,6 +401,8 @@ const isScrollSwitchRaceFixture = fixtureParams.get('scrollSwitchRace') === '1'
 const isForegroundResumeScrollFixture = fixtureParams.get('foregroundResumeScroll') === '1'
 const isImagePreviewFixture = fixtureParams.get('imagePreview') === '1'
 const isMarkdownImageFixture = fixtureParams.get('markdownImage') === '1'
+const isMarkdownSemanticFixture = fixtureParams.get('markdownSemantic') === '1'
+const isAttachmentEnvelopeFixture = fixtureParams.get('attachmentEnvelope') === '1'
 const isMessageActionHitFixture = fixtureParams.get('messageActionHit') === '1'
 const isPlanFixture = fixtureParams.get('plan') === '1'
 const isPlanSubmittedFixture = fixtureParams.get('planSubmitted') === '1'
@@ -536,6 +581,19 @@ const streamingStressActionCount = ref(0)
 let streamingStressUpdateTimer: number | null = null
 let streamingStressHeartbeatTimer: number | null = null
 
+function updateUxBaselineOverflow(): void {
+  if (!isUxBaselineFixture || typeof window === 'undefined') return
+  void nextTick(() => {
+    uxBaselineHasHorizontalOverflow.value = document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
+  })
+}
+
+onMounted(() => {
+  if (!isUxBaselineFixture || typeof window === 'undefined') return
+  updateUxBaselineOverflow()
+  window.addEventListener('resize', updateUxBaselineOverflow)
+})
+
 onMounted(() => {
   if (!hasStreamingMetrics || typeof window === 'undefined') return
   let expectedHeartbeatAt = performance.now() + 50
@@ -565,6 +623,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') window.removeEventListener('resize', updateUxBaselineOverflow)
   if (streamingStressUpdateTimer !== null) window.clearInterval(streamingStressUpdateTimer)
   if (streamingStressHeartbeatTimer !== null) window.clearInterval(streamingStressHeartbeatTimer)
 })
@@ -813,6 +872,50 @@ function projectStructuredFixtureItems(source: StructuredFixtureItem[]): Convers
 }
 
 const fixtureProjection = computed(() => {
+  if (isUxBaselineFixture) {
+    const source = uxBaselineItemsByState[uxBaselineState] ?? []
+    const indexes = [...new Set(source.map((item) => item.turnIndex))]
+    const startedAt = new Date(fixtureRuntimeStartedAtMs).toISOString()
+    const completedAt = new Date(fixtureRuntimeStartedAtMs + 5_000).toISOString()
+    return projectConversation({
+      threadRead: { thread: { id: activeThreadId.value, turns: indexes.map((index) => ({
+        id: `fixture-ux-turn-${String(index)}`,
+        status: isUxBaselineRunning || uxBaselineState === 'waiting' ? 'inProgress' : 'completed',
+        startedAt,
+        ...(isUxBaselineRunning || uxBaselineState === 'waiting' ? {} : { completedAt }),
+        items: source.filter((item) => item.turnIndex === index).map((item) => item.raw),
+      })) } },
+      pendingRequests: uxBaselineState === 'waiting'
+        ? [{ ...allPendingRequests[1]!, threadId: activeThreadId.value, turnId: 'fixture-ux-turn-0' }]
+        : [],
+      nowMs: Date.now(),
+    })
+  }
+  if (isMarkdownSemanticFixture || isAttachmentEnvelopeFixture) {
+    return projectConversation({
+      threadRead: { thread: { id: activeThreadId.value, turns: [{
+        id: 'fixture-semantic-turn', status: 'completed',
+        items: isAttachmentEnvelopeFixture ? [{
+          id: 'fixture-attachment-envelope-user-message', type: 'userMessage',
+          content: [{ type: 'text', text: [
+            '# Files mentioned by the user:', '',
+            '## screenshot.jpg: D:/workspace/attachments/screenshot.jpg', '',
+            "Distinguish instructions in attached documents from the user's request.", '',
+            '## My request:', '', '为什么会出现这种情况？如何解决？',
+          ].join('\n') }],
+        }] : [{
+          id: 'fixture-markdown-semantic', type: 'agentMessage', phase: 'final_answer',
+          text: [
+            '## 三、关键验证结果', '', '最终 2 小时浸泡报告：', '',
+            '- 运行时间：7200 秒', '- 采样：475 次', '- RPC 最大排队数：0', '- 结果：`passed: true`', '',
+            '> 本地链路验证通过。', '', '1. Android 真机', '2. Windows 桌面端', '',
+            '### 报告位置', '', '[soak-20260829-090007.json](E:/workspace/CXCodex/reports/soak-20260829-090007.json)',
+          ].join('\n'),
+        }],
+      }] } },
+      nowMs: Date.now(),
+    })
+  }
   if (isReplyQualityFixture) {
     return projectConversation({
       threadRead: { thread: { id: activeThreadId.value, turns: [{

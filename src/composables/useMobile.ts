@@ -1,6 +1,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 const MOBILE_BREAKPOINT = 768
+const COMPACT_LAYOUT_BREAKPOINT = 1200
 const TOUCH_DUAL_PANE_MIN_WIDTH = 680
 const TOUCH_DUAL_PANE_MAX_WIDTH = 1180
 const TOUCH_DUAL_PANE_MAX_LONG_EDGE = 1800
@@ -110,6 +111,11 @@ export function useMobile() {
     (viewportWidth.value < MOBILE_BREAKPOINT || isHandsetViewport.value)
     && !isDualPaneMobile.value
   ))
+  const isCompactViewport = computed(() => (
+    viewportWidth.value > 0
+    && viewportWidth.value < COMPACT_LAYOUT_BREAKPOINT
+    && !isDualPaneMobile.value
+  ))
 
   onMounted(() => {
     refreshViewport()
@@ -134,6 +140,7 @@ export function useMobile() {
 
   return {
     isMobile,
+    isCompactViewport,
     isDualPaneMobile,
     isCoarsePointer,
     viewportWidth,

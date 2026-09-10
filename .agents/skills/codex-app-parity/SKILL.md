@@ -1553,3 +1553,32 @@ After each feature implementation session that uses this skill:
 - Goal timestamps were measured at whole-second precision. Mutation/replay races require generation invalidation plus fresh authoritative reads for ambiguous responses, keeping the existing updating guard through reconciliation. Queue cancellation/reorder must revalidate after asynchronous preparation; the SQLite queue keeps insertion FIFO for equal timestamps.
 - Slow metadata is isolated from queued conversation reads with bounded fairness. Existing urgent send/stop bypass is unchanged. Completed-turn timing uses its own lifecycle rather than a later Runtime sync timestamp; a real 2535ms reply formerly shown as19s now displays3s after reload.
 - Agent-browser verified a real native plan, an actual Web implementation click, exact execute confirmation and durable submitted display after reload on isolated17424. One sample showed32ms bubble feedback and144ms running feedback, not a production/P95 claim. Goal paused CRUD, four-turn queue sequencing and65 deterministic core checks have separate evidence in `output/core-flow-20260909/report.md`; unchanged7420, real goal continuation, Android, scheduled jobs and release gates are not implied.
+
+## Findings: Semantic Conversation Markdown and Quiet Reading Surface (2026-08-29)
+
+- Installed Windows Codex `26.818.5229` ships a conversation Markdown grammar with headings, blockquotes, lists, fenced code, tables and paragraphs; its local-conversation path uses the same Markdown presentation while the thread scroll owner exposes a compact return-to-bottom control.
+- CX-Codex previously rendered only fences, tables and images as blocks, and bypassed that parser entirely while streaming. This leaked literal `##` and `-` markers even though the message content itself was valid Markdown.
+- CX-Codex now uses its existing `markdown-it` dependency only for block structure with raw HTML disabled, then keeps existing Vue interpolation, local-file handling, URL handling, code, table and image owners. Streaming and settled assistant text share the same prepared-block cache.
+- The assistant reply is now a quiet document surface while user messages retain their distinct bubble. Headless checks at `1440 x 900` and `393 x 852` verified real H2/H3, unordered and ordered lists, blockquote and inline code DOM, transparent zero-border assistant content, preserved accessible link text and zero horizontal overflow.
+
+## Findings: Attachment-envelope Projection (2026-08-29)
+
+- Installed Windows Codex `26.818.5229` keeps the visible `user-message` item and `parentThreadAttachment` as separate renderer inputs in `local-conversation-turn-YQNBneD_.js`; attachment transport metadata is not presented as user-authored Markdown.
+- Codex hosts currently emit both `## My request:` and `## My request for Codex:` inside a `# Files mentioned by the user:` transport envelope. CX-Codex must recognize both at the thread-normalization boundary, retain the structured attachment cards, and expose only the request body.
+- The safe discriminator is the complete envelope shape: a leading files marker plus at least one parsed attachment and a later request marker. A standalone user-authored `## My request:` heading must remain untouched.
+- Semantic Markdown can amplify a projection leak into oversized headings, but it is not the data owner and must not be disabled to conceal transport metadata. Verify the normalized message shape before visual rendering.
+
+## Findings: Foreground Recovery Measurement Settlement (2026-08-29)
+
+Foreground recovery feedback and conversation-body freshness are separate boundaries. A completed snapshot HTTP read may end the transient recovery observation even when newer WebSocket state makes its Runtime payload ineligible to apply. Runtime mutations remain behind the version guard, and an explicit fresh-body request must still complete its required authoritative read; feedback settlement alone does not prove fresh conversation content.
+
+- Installed Windows Codex `26.818.5229` keeps reconnecting as one compact composer-adjacent status while the existing conversation timeline continues to own task duration; connection recovery does not replace task state.
+- On Android, a successful foreground Runtime snapshot read may carry a lower event sequence than realtime state already applied by the WebView. That snapshot must remain ineligible to overwrite the newer execution state, but it is still the completion boundary for the foreground-recovery observation.
+- CX-Codex therefore settles the transient recovery feedback and timing before its monotonic snapshot-version guard, while keeping all Runtime state, message, queue, token and turn mutations behind that guard.
+- The corrected settlement boundary increments the local timing-payload version so invalid long-tail samples from the previous semantics cannot keep the seven-day P95 in a false recovery state; no message, task or configuration storage is migrated.
+
+## Findings: Quiet Sidebar Primary Actions (2026-08-29)
+
+- Installed Windows Codex `26.818.5229` keeps sidebar toggle, mark-all-read, and new-thread as independent actions in its current Chinese locale instead of combining them under a tools surface.
+- CX-Codex mirrors that ownership in one top utility row, then uses a fixed three-column Search, Skills, and GitHub row as a mobile-oriented adaptation.
+- Workbench and diagnostics are removed only as frontend destinations by explicit product decision; native background execution and backend diagnostics remain available to their existing recovery and verification owners.

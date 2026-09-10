@@ -14,6 +14,7 @@ param(
   [switch]$RemoteQuick,
   [switch]$JsonOutput,
   [switch]$SkipOpenPairing,
+  [switch]$CreateCliShim,
   [switch]$SkipStartupTask,
   [switch]$SkipWatchdogTask,
   [switch]$SkipFirewall,
@@ -748,6 +749,9 @@ function Assert-RepositoryCapabilities {
   if ($JsonOutput -and -not [bool]$manifest.features.jsonOutput) {
     throw "Selected CX-Codex source does not support JsonOutput."
   }
+  if ($CreateCliShim -and -not [bool]$manifest.features.cliShim) {
+    throw "Selected CX-Codex source does not support CreateCliShim."
+  }
 }
 
 function Get-VerifiedReleaseArchive {
@@ -914,6 +918,9 @@ $invokeArgs = @(
 )
 if (-not [string]::IsNullOrWhiteSpace($runtime.NpmCli)) {
   $invokeArgs += @("-NpmCliPath", $runtime.NpmCli)
+}
+if ($CreateCliShim) {
+  $invokeArgs += "-CreateCliShim"
 }
 
 if ($NoPassword) {

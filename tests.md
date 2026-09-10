@@ -413,6 +413,180 @@ Codex对照：读取缓存桌面包`queued-message-list-DJj2tNz-.js`的编辑、
 - `npm run test:send-feedback:browser -- --base-url http://127.0.0.1:17421`：先在隔离端口启动本地静态预览；独立无头浏览器验证桌面 1440×900、手机 393×852 的七种发送状态、单消息、无执行假计时、无横向溢出。脚本可用 `CX_CODEX_PLAYWRIGHT_MODULE` / `CX_CODEX_CHROMIUM_EXECUTABLE` 指定已有测试运行时。
 - 浏览器仅模拟初始化收藏 GET，其余 Runtime API/WS 全部阻断。截图与报告：`output/send-feedback-browser-20260909/`。它不代表真实网络首字耗时、Android 锁屏恢复、7420 部署或正式发布已通过。
 - 当前目录上的只读分片定位样本约 143–167 ms，是额外的恢复路径发现成本，不是端到端 P95；后续应以真实链路时间戳验证后决定是否增加带文件变化失效的发现缓存。
+## Markdown 15 compatibility (2026-09-08)
+
+- Conversation ordered lists preserve their original starting number when parser attributes are numeric or textual. Headings, quotes and unfinished code fences retain their existing behavior.
+- The local Markdown preview keeps bare domains and email links clickable. Explicit IPv6 links remain intact and Chinese punctuation terminates links correctly. Raw HTML and unsafe JavaScript links remain inert.
+- Validate with `npm run build:frontend`, `npm run verify:frontend-normalizers`, and isolated H5 conversation/local-preview checks. Markdown 15 supplies its own types; the old `@types/markdown-it` package is removed.
+- Rollback: revert the Markdown dependency, lockfile and compatibility changes together. No protocol, queue or runtime persistence change is included.
+
+## Optional Windows CLI shim (2026-09-08)
+
+- `-CreateCliShim` creates a user-local command only when requested. Repeating the option updates the Node command in a shim owned by the same installation.
+- Installation preserves foreign and empty same-name files, reports `CLI_SHIM_PRESERVED`, and leaves `cliShimPath` empty when no shim was created.
+- Uninstall requires both the ownership marker and quoted CLI target. A foreign wrapper that mentions the target stays unchanged; a managed target containing square brackets is removed using literal path matching.
+- Verify with `npm run verify:windows-productization`: hash checks for preserved files, a stale Node command replaced during upgrade, and both uninstall ownership cases. This is isolated Windows script evidence, not a production service or Android test.
+- Rollback: revert the CLI shim PR; the option is off by default and no global npm installation or PATH mutation is performed.
+
+## 正式标签前的签名候选制品（2026-08-29）
+
+### Expected behavior
+
+1. `Release` workflow 的手动运行只接受当前 `origin/main` 精确提交，不能从 `beta`、功能分支或过期 main 提交读取正式 Android 签名 secrets。
+2. 手动候选与正式标签共用 release verification、打包、Android release 构建、固定证书指纹和 checksum 门禁，避免两套签名流程漂移。
+3. 手动候选只上传保留 3 天的 `signed-release-candidate-*` Actions artifact，不创建标签或 GitHub Release；只有稳定标签 push 才执行发布步骤。
+
+### Reusable verification
+
+- `npm.cmd run verify:governance`：验证 workflow 保留稳定标签/main 边界，并包含候选 main 精确提交、签名制品上传和正式发布条件。
+- 解析 `.github/workflows/release.yml`，确认 `workflow_dispatch` 与 tag push 同时存在，候选上传和 Release 发布条件互斥。
+- 合并到 `main` 后用 `gh workflow run release.yml --ref main`，等待成功并下载 `signed-release-candidate-*`；在目标真机验证后才创建 `vX.Y.Z`。
+
+### Evidence and rollback
+
+- 本地治理和 YAML 结构检查用于证明工作流契约；正式签名、固定证书指纹、Actions artifact 和真机覆盖安装只能由合并后的手动运行证明。
+- 回滚时删除 `workflow_dispatch`、main 精确提交检查和候选 artifact 上传步骤，并恢复本节与 `RELEASE.md`；不得放宽稳定标签必须来自 main 或正式签名 secrets 必须齐全的边界。
+
+## Android 任务代际、后台恢复与完成通知（2026-08-29）
+
+### Expected behavior
+
+1. 新任务提交后，原生监控保存 `/runtime/request` 返回的精确 `turnId`；请求记录的 `completed` 仅代表调度完成，不能直接把 turn 标记完成。
+2. 同一代原生任务仍为活动态时，前端瞬时终态不能覆盖它；原生只在 `/runtime/snapshots` 显示同代活动 turn，或最新 `lastCompletedAtIso >= lastStartedAtIso` 后接受权威终态。
+3. 锁屏、强制 Doze、网络切换和应用进程回收后，活动任务继续收敛且不会重复发送、提前完成或丢失监控。
+4. 后台终态只投递一次完成通知；点击完成项打开精确会话并自动清除，继续轮询不得重发同一终态。
+
+### Reusable verification
+
+- `cd android; .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`：验证代际、终态、原生活动态保留和 Android 构建。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-android-background.ps1 -Mode <Observe|ScreenOff|Doze|NetworkSwitch> ...`：在已连接真机上记录服务、Runtime、网络、终态、通知和恢复诊断；按场景使用 `-RequireActiveTask`、`-RequireProcessRecovery` 或 `-RequireTerminalNotification`。
+- `node scripts/inspect-android-quiet-workbench.mjs --submit <prompt> --output <evidence.json>`：通过已转发的 WebView 提交全新任务并记录目标路由；通知点击后再次采集精确 `#/thread/:id`。
+
+### Evidence and rollback
+
+- OPPO PKH110 / Android 16 调试包通过熄屏终态、强制 Doze、10 轮移动数据切换和进程回收；证据分别位于 `output/quiet-workbench/android-background-20260829/{screenoff-terminal-fixed,doze-locked-terminal,network-switch-10-authoritative,process-recovery-authoritative}/`。
+- 新任务在先前会误结算的 `turn/started` 窗口后仍保持 `running`，保存的 `requestTurnId` 与服务端 `activeTurnId` 一致；服务端真实完成时间晚于开始时间后才结算。
+- 后台完成的 `terminalToNotificationMs=11`，通知尝试和投递各增加 1；点击后回到目标会话，活动完成通知为 0，15 秒后投递计数仍未增长。证据位于 `output/quiet-workbench/android-background-20260829/notification-click-observe/`。
+- OPPO 最近任务划除会终止整个包并取消 Alarm；没有 OEM 后台自启动授权或 FCM 时仍是外部策略阻塞。410×502 Android 9 手表和最终签名 Release APK 未被本节证明。
+- 回滚只恢复 `TaskPetOverlayService`、`TaskPetRuntimePolicy`、相应偏好键、真机验证脚本与前端活动任务补充来源；不得清理用户会话、Runtime Store、通知权限或移动端认证。
+
+## Quiet Workbench UX-70 候选收口（2026-08-29）
+
+> 以下 Quiet Workbench 章节保留远端 2026-08-29 候选原始证据，并非本轮合并后验收。旧会话/Composer 呈现以随后 Sema 重建及 2026-09-10 公开进展、只读队列和恢复合同为准；历史 Android、浸泡和 Release 结果不自动关闭当前候选门槛。
+
+### Expected behavior
+
+1. 活动 turn 过程保持展开，显示一个稳定的任务计时、最新活动和当前命令/输出；非活动详情保持紧凑并按需打开，完成 turn 的中间过程只保留一个“执行过程”摘要。
+2. 1440×900 桌面、884×1104 折叠屏、768×1024 compact、393×852 手机竖屏和 852×393 手机横屏保留同一信息层级，compact/phone Sidebar 使用带遮罩和焦点所有权的覆盖层。
+3. 长会话虚拟化、线程切换滚动、前台恢复的贴底/阅读锚点/用户主动滚动三种意图、队列失败恢复、图片和 Composer 输入契约不得因视觉收口回退。
+4. `thread/list` 首次响应与缓存响应使用同一稳定 id 去重；补充任务通过显式元数据与普通分页区分。
+
+### Reusable verification
+
+- `npm.cmd run test:7420:frontend -- -BaseUrl <production-candidate-url>`：运行完整生产 bundle 门禁，不用 `-SourceOnly` 代替浏览器结果。
+- `npm.cmd run test:7420:sidebar-data -- --base-url <candidate-url>`：验证真实任务分页、去重、补充记录和性能。
+- `npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:frontend-normalizers`、`npm.cmd run verify:server-modules`、`npm.cmd run verify:governance` 与 `git diff --check`：验证受影响层级和文档契约。
+
+### Evidence and rollback
+
+- 隔离候选 `http://127.0.0.1:17436` 的完整前端门禁通过 41 个页面/状态：核心文字最低对比度 5.04:1；1602 条消息仅挂载 13 个会话项，117 次更新期间最大心跳延迟 60ms；三种前台恢复滚动意图、活动/紧凑过程双模式、Task Pet 和通知恢复均通过。
+- 同一候选的最终侧栏数据门禁读取 270 个活动任务，首屏 182ms、完整列表 196ms、RPC 重试为 0，普通分页无重复稳定 id。
+- 浏览器、主题矩阵和 Android UX 证据分别位于 `output/regression-7420/quiet-workbench-candidate-20260829/`、`output/quiet-workbench/` 与 `output/quiet-workbench/android-20260829/`；输出目录不进入 Git。
+- 本节证明隔离本地候选，不等同于生产 7420、远端 CI、正式 Release 或最终 Release APK。回滚按 Shell、Sidebar、Conversation、Composer、主题 token 和任务列表规范化的独立改动边界执行，不迁移或清理用户状态。
+
+## Quiet Workbench 主题、可访问性与 Android 真机（2026-08-29）
+
+### Expected behavior
+
+1. home、running、completed 和 waiting-input 在 1440×900、884×1104、768×1024、393×852 与 852×393 的浅色、深色、forced-colors 和 reduced-motion 环境中均无页面级横向溢出。
+2. 每个页面恰好一个主 landmark；所有可见 icon-only 按钮都有名称；forced-colors 保留边界和状态语义；reduced-motion 不保留持续无限装饰动画。
+3. Android 折叠屏、横屏和 332 CSS px 窄屏下，Composer、textarea 与 controls 始终位于软键盘上方；可见 Composer 控制至少 44px。
+4. Android Back 的优先级为软键盘、当前 sheet/drawer、页面导航；关闭临时 UI 后焦点与原页面保持可用。
+5. 屏幕旋转和前后台恢复不丢当前路由或未发送草稿，也不产生页面横向溢出。
+
+### Reusable verification
+
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/capture-quiet-workbench-baseline.ps1 -Scope all -BrowserMode playwright -Theme <light|dark|forced> -Motion <normal|reduced> -BaseUrl <production-candidate-url> -FixtureBaseUrl <production-candidate-url> -OutputDirectory output\quiet-workbench\<matrix>`：验证五视口、四状态、主题/动效、landmark、控件名称和溢出。
+- `node scripts/inspect-android-quiet-workbench.mjs --output <evidence.json>`：在已通过 ADB 转发的 debuggable WebView 上记录真实可视 viewport、Composer/controls 几何、触控尺寸、landmark、名称和溢出；`--clear-composer` 仅清理测试草稿。
+- 真机安装、输入法切换、旋转、Back 与前后台步骤见 `docs/quiet-workbench-android-validation.md`；测试结束必须恢复设备分辨率、旋转、输入法和硬键盘显示偏好。
+
+### Evidence and rollback
+
+- 浅色与修正后的深色 20 场景矩阵分别位于 `output/quiet-workbench/ux60-light-20260829/`、`output/quiet-workbench/ux60-dark-20260829-r2/`；forced-colors + reduced-motion 的 20 场景矩阵位于 `output/quiet-workbench/ux60-forced-reduced-20260829-r2/`。
+- 深色与 forced-colors Composer 五视口证据分别位于 `output/quiet-workbench/ux60-composer-dark-20260829/`、`output/quiet-workbench/ux60-composer-forced-20260829/`。全部断言通过。
+- OPPO PKH110 / Android 16 真机证据位于 `output/quiet-workbench/android-20260829/`：折叠屏和 332px 窄屏的软键盘、长输入、横竖屏、Back、设置 sheet、Sidebar drawer 与前后台恢复均通过；详细指标见 `docs/quiet-workbench-android-validation.md`。
+- 真机使用独立 `com.cxcodex.bridge.debug` 包和隔离候选地址；正式 2.8.0 应用、生产 7420、认证与用户数据未替换。该证据不替代通知、Doze、Task Pet、手表或最终 Release APK 门槛。
+- 回滚仅恢复本轮语义主题 token、强制颜色/焦点样式、响应式 Shell/Composer 规则及对应检查；不得改动用户主题偏好、会话、Runtime 或移动端认证数据。
+
+## Quiet Workbench 任务列表稳定身份（2026-08-29）
+
+### Expected behavior
+
+1. `thread/list` 即使从多份会话日志收到相同稳定任务 id，每一页也只返回一次该 id；优先保留上游排序中的第一条记录。
+2. 首次 cache miss、内存/持久缓存命中和后台刷新必须返回同样的规范化结果，不能出现“缓存已去重、当前 HTTP 响应未去重”的分叉。
+3. 首页为了补齐置顶或 session-index 任务而附加的记录通过 `supplementalThreadIds` 明确声明；游标页与这些补充记录重叠是允许的，普通分页记录仍不得重叠。
+
+### Reusable verification
+
+- `npm.cmd run verify:server-modules`：覆盖首次请求、缓存读写和持久缓存加载的重复 id 规范化，并验证补充记录身份元数据。
+- `npm.cmd run test:7420:sidebar-data -- --base-url <candidate-url>`：验证首屏、完整分页、置顶样本、项目顺序、RPC 重试和性能预算。
+
+### Evidence and rollback
+
+- 候选 `http://127.0.0.1:17436` 最终实测 270 个活动任务，分页无普通记录重叠，首屏 182ms、完整列表 196ms、RPC 重试为 0；服务器模块 smoke 同轮通过。
+- 根因是 App Server 可为同一任务 id 返回多份会话记录，而首次共享读取原先只把去重值写入缓存，却把未去重原值返回给当前 HTTP 请求。
+- 回滚只恢复 `appServerRpcCache.ts`、`appServerThreadListAugment.ts` 与对应两项回归；不得删除或改写任何会话日志、session index、置顶数据或用户缓存文件。
+
+## Quiet Workbench Conversation 与 Compact Composer（2026-08-29）
+
+### Expected behavior
+
+1. 活动 turn 的当前过程保持第一层可见；完成 turn 的中间助手更新和命令默认收敛为一个“执行过程”摘要，展开后仍按原消息身份和顺序显示，最终答复始终留在第一层。
+2. 没有 live process 承载动作时，新的待处理请求默认展开并可直接审批；用户手动收起后不因普通重渲染反复打开，只在切换任务或请求集合变化时重新计算。
+3. 两次相同文本的用户输入继续按强身份显示为两条独立消息；不得按文本去重。
+4. Composer 使用 14px 圆角、轻边框和 92–96px 实际空态高度；五个目标视口无控件重叠。393×852 与 852×393 的可见控制高度至少 44px。
+5. 393px 窄屏把低优先级“半屏展开”收进自动增长能力，第一层保留附件、模型/质量/速度、语音和发送；draft、附件、outbox、queue、Steer 与发送状态所有权不变。
+
+### Reusable verification
+
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-quiet-workbench-conversation.ps1 -BaseUrl <production-candidate-url> -OutputDirectory output\quiet-workbench\<conversation-contract>`：验证完成过程折叠/展开、最终答复、直接审批、重复文本身份，以及 1602 消息压力和交互。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/capture-quiet-workbench-baseline.ps1 -Scope composer -BrowserMode playwright -BaseUrl <candidate-url> -FixtureBaseUrl <candidate-url> -OutputDirectory output\quiet-workbench\<composer-candidate>`：检查五视口 Composer 高度、圆角、重叠、模型和发送控件，手机横竖屏追加 44px 触控门槛。
+- `npm.cmd run test:7420:frontend -- -SourceOnly`、`npm.cmd run build:frontend`、`npm.cmd run verify:governance` 与 `git diff --check`：检查呈现边界、类型、生产构建、治理和差异格式。
+
+### Evidence and rollback
+
+- `output/quiet-workbench/ux30-candidate-20260829-r3/` 的 15 张浅色截图覆盖运行、完成和等待输入 × 五视口：运行过程展开；完成态恰好一个摘要且无第一层命令；等待态可直接看到审批动作。
+- 生产 bundle 契约位于 `output/quiet-workbench/ux30-contract-production-20260829-r2/`：摘要折叠时命令数 0、展开后命令数 1、最终答复始终可见；相同文本的两个用户消息 id 分别为 `ux-identity-user-first` 与 `ux-identity-user-second`；1602 条消息挂载 12 个列表节点，最大心跳延迟 48ms，交互后更新继续且无横向溢出。
+- `output/quiet-workbench/ux40-candidate-20260829-r4/` 的 Composer 实测高度为 1440×900 96px、884×1104 92px、768×1024 92px、393×852 96px、852×393 96px；全部为 14px 圆角且无控件重叠，手机横竖屏最小可见控件均为 44px。
+- 开发/HMR bundle 的同一压力夹具曾测得 113–128ms，不能替代生产性能结论；在生产 bundle + 候选 API 代理下复测为 48ms，门槛未放宽。
+- 回滚只恢复 `ThreadConversation.vue` 的完成过程呈现与请求面板默认展开、`ThreadComposer.vue` / `style.css` 的密度 token，以及本节新增的回归入口；不得迁移或清理消息、目标、队列、Runtime 或附件数据。
+
+## Quiet Workbench Shell、compact 与 Sidebar 层级（2026-08-29）
+
+### Expected behavior
+
+1. 全新浏览器配置在桌面使用 288px Sidebar、44px 单行 Header，以及同为 800px 中轴上限的 Header、阅读区和 Composer；空 slot 不得留下不可解释的横向间距。
+2. 已保存的桌面 Sidebar 宽度继续生效，但只在 240–360px 安全范围内裁剪；未保存宽度不能因 `Number(null)` 落到最小值。
+3. 768–1199px 的普通窗口使用覆盖式 Sidebar，不再持久双栏挤压正文，也不把临时开合写回桌面偏好；满足粗指针和尺寸门槛的折叠屏继续使用既有双栏。
+4. 首页不重复显示“新建会话”Header 动作；标题、收藏、连接状态和恢复动作保持可见或具有可访问名称，手机横竖屏无页面级横向溢出。
+5. “新会话”是 Sidebar 唯一跨列主操作；搜索、工作台和工具位于同一紧凑次级行，低频能力不再与主操作争抢层级。
+6. 空闲任务使用 32px 固定单行，仅运行、等待、未读和搜索结果显示 48px 固定双行；手机或粗指针设备分别保持至少 44px/52px 触控高度。
+
+### Reusable verification
+
+- `npm.cmd run test:7420:frontend -- -SourceOnly`：检查语义 token、compact breakpoint、折叠屏例外、宽度默认/裁剪、覆盖式 Sidebar 所有权、桌面偏好保护、固定 Header 高度，以及 Sidebar 主次操作和单/双行策略。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/capture-quiet-workbench-baseline.ps1 -Scope all -BrowserMode playwright -BaseUrl <candidate-url> -FixtureBaseUrl <candidate-url> -OutputDirectory output\quiet-workbench\<candidate>`：在 5 个视口采集 home/running/completed/waiting-input，检查状态所有者、页面横向溢出和 Shell 几何。
+- `npm.cmd run build:frontend`、`npm.cmd run verify:governance` 与 `git diff --check`：检查类型、生产构建、文档治理与差异格式。
+
+### Evidence and rollback
+
+- UX-00 基线及本轮候选证据分别记录在 `output/quiet-workbench/ux00-baseline-20260829/` 与 `output/quiet-workbench/ux10-candidate-20260829-r2/`；输出目录不进入 Git。
+- 独立 Playwright 新上下文实测：1440×900 为 288px Sidebar、45px（44px 内容加 1px 分隔线）Header、800px Header 中轴；884×1104 与 768×1024 的固定 Sidebar 宽度均为 0，并带 `is-overlay-sidebar`；五个首页视口均无页面级横向溢出。
+- 真实候选会话 `output/quiet-workbench/ux10-thread-20260829/` 在五个视口均保持 45px Header 和零页面级横向溢出；393×852 的任务标题、连接恢复、收藏与 Composer 均可见，852×393 未遮挡状态操作。
+- Sidebar fixture `output/quiet-workbench/ux20-sidebar-20260829/` 同时覆盖 idle、running、waiting 和 unread：桌面/compact 为 32px 单行与 48px 双行，手机竖屏和横屏为 44px/52px，且可见 preview 数严格等于 detail row 数。
+- 浅色与深色候选分别保存在 `ux20-candidate-20260829-r2/` 和 `ux20-candidate-dark-20260829/`；深色加载骨架、收藏按钮、Context badge 与最终 Sidebar 行均未出现浅色闪块。
+- `npm run build:frontend`、`npm run test:7420:frontend -- -SourceOnly`、`npm run verify:governance` 和 `git diff --check` 通过；构建只有既有 Vite native-loader 与大 chunk 警告。
+- 回滚仅恢复 `src/style.css` 的 Shell token、`useMobile.ts` / `DesktopLayout.vue` 的 compact 布局判断、`ContentHeader.vue` 的单行结构和 `App.vue` 的对应呈现；不得修改 Sidebar/会话持久数据或 Runtime 状态。
 
 ## 7420 消息、图片、恢复与长线程稳定性（2026-08-27）
 
@@ -14566,7 +14740,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 2. In `发送` mode, confirm Enter sends, Shift + Enter inserts a line break, and Ctrl / Command + Enter also sends. In `换行` mode, confirm Enter inserts a line break and Ctrl / Command + Enter sends.
 3. Type with a Chinese IME in either mode and confirm a composition-confirming Enter does not send prematurely.
 4. Click the composer expand icon and confirm the input area grows to no more than half the viewport; click its collapse icon or press Escape to return to normal size.
-5. While a turn is running, confirm exactly one tail status reads `正在处理 · X 秒`, has only a subtle pulse, and clicking the row opens the latest runtime detail sheet.
+5. While a turn is running, confirm exactly one expanded tail process reads `正在处理 · X 秒`, shows the latest activity and current command/output inline, and keeps only a subtle pulse. In the explicit non-active compact fixture, confirm the one-line status opens the latest runtime detail sheet.
 6. Let an assistant reply begin streaming and confirm the same tail status remains below the partial reply, changes its hint without remounting, and keeps the original elapsed time.
 7. Start a command and confirm the active command is not duplicated in message history; its latest output is available from the tail status, while the completed command later returns as a collapsed history row.
 8. Stop a turn and confirm the conversation keeps `已在 X 后停止` plus the `编辑继续` action. Click it twice to confirm the prior user instruction is restored to the composer and the current turn is rolled back.
@@ -14583,7 +14757,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - Keyboard preference persists locally and works consistently across desktop and mobile layouts.
 - Long-form input is available without losing the current thread context or composer controls.
 - Thinking, execution, and reply generation share one stable tail status during normal work; partial text never makes it disappear or reset its timer.
-- The tail status is collapsed by default and exposes only the latest active detail; historical completed commands remain separately inspectable and collapsed.
+- The active turn process stays expanded with one stable timer and latest activity. Non-active runtime detail and historical completed commands remain separately inspectable and collapsed.
 - The tail status follows the streaming reply in both visual and DOM reading order.
 - A confirmed stop leaves a clear duration and a safe edit-and-continue route instead of a dead-end partial response.
 - Optimistic rendering stays instant but protocol bookkeeping is not exposed in the conversation UI.
@@ -15046,6 +15220,7 @@ Verification:
 
 - 复现探针确认真实上传图片文件存在，但旧 7420 对 `/codex-local-image?path=...codex-web-uploads...` 返回 `HTTP 403` 与“该路径不在已登记的工作区目录内”。
 - `npm.cmd run verify:server-modules` 覆盖上传缓存图片读取、直接文件读取、文件卡片 browse 预览、缓存目录拒绝、编辑拒绝、外部路径拒绝和 junction 逃逸拒绝。
+- 上传缓存路径只接受服务器生成的 `f-xxxxxx/<filename>` 两段结构；请求值只参与匹配，传入 `realpath` 的目录名和文件名必须来自实际目录枚举，且 canonical 根目录检查继续拒绝 junction/符号链接逃逸。发布 PR 的高危 `js/path-injection` CodeQL 门禁必须为零。
 - 隔离候选服务使用临时 Runtime DB 和无副作用 bridge；`agent-browser` 在 393 x 852 H5 视口打开真实上传路径，图片 `complete=true`、原始尺寸 `1658 x 1658`、控制台无错误。同期 HTTP 探针确认图片/直接文件读取为 `200`，缓存目录、编辑接口和普通工作区外文件仍为 `403`。
 - 前端消息渲染映射未改动；发布前仍应在安装候选上补一次“上传后发送消息 -> 缩略图 -> 点击预览”的完整交互确认。
 
@@ -17018,7 +17193,29 @@ Verification:
 
 - 回退本节对应的 tunnel 命令信任边界、文件路由限流、单层实体解码、域名解析及回归。不要关闭 GitHub CodeQL、Dependabot、分支保护或私密漏洞报告。
 
+## 稳定版 GitHub 安全热修（2026-08-27）
+
+### Expected behavior
+
+1. `/codex-local-image`、`/codex-local-file`、`/codex-local-browse` 与 `/codex-local-edit` 只能访问已登记工作区的真实路径；相似目录前缀、目录联接逃逸、相对路径、缺失路径和空工作区均不得获得访问权。
+2. 四类本地文件接口共享独立的速率预算；超限返回 `429` 和稳定 JSON，且不继续访问文件系统。
+3. 远程隧道接口不得接受请求体提供的 `cloudflared` 或 `tailscale` 可执行路径，只能使用维护者在本地配置的当前命令。
+4. GitHub Trending 实体每轮只解码一层；trycloudflare 回退地址必须是完整、无用户信息和端口的 HTTPS 子域名。
+5. CI 与发布流程必须使用官方 npm registry 执行低等级以上依赖审计；已知 `brace-expansion` 与旧 `esbuild` 传递依赖不得重新进入锁文件。
+
+### Verification
+
+- 运行 `npm.cmd run verify:server-modules`，覆盖真实路径边界、目录联接逃逸、共享限流、隧道命令信任边界、单层实体解码和域名解析。
+- 运行 `npm.cmd run verify:dependency-security`，要求官方 npm registry 返回 0 漏洞。
+- 运行 `npm.cmd run build:frontend`、`npm.cmd run build:cli`、`npm.cmd run verify:governance` 与 `git diff --check`。
+
+### Rollback
+
+- 仅回退本节对应的路径授权、限流、隧道命令边界、实体解码、域名解析和依赖覆盖；不要关闭 CodeQL、Dependabot、分支保护或私密漏洞报告。
+
 ## 重复发送与历史失败消息恢复（2026-08-28）
+
+> 历史兼容记录：下述无 client ID 的旧 outbox 基线确认不适用于现代发送。现代 clientMessageId 必须按当前精确身份证据确认；没有证据时保守保留，见本文 2026-09-10 的消息身份闭环章节。
 
 ### Expected behavior
 
@@ -17029,7 +17226,7 @@ Verification:
 
 ### Verification
 
-- `npm.cmd run verify:frontend-normalizers` 覆盖分页窗口外同文消息、两次合法同文发送分别确认、失去历史锚点的失败消息分离，以及锚点仍加载时保持原位。
+- `npm.cmd run verify:frontend-normalizers` 覆盖分页窗口外同文消息、两次合法同文发送分别确认、前一条按 `turnId` 确认而后一条按独立发送基线回退确认、失去历史锚点的失败消息分离，以及锚点仍加载时保持原位。
 - `npm.cmd run test:7420:frontend -- -SourceOnly` 覆盖 `turnId` 绑定、失败消息分离投影、恢复入口接线，以及队列文案不再承诺固定“通常 10 秒”。
 - `npm.cmd run build:frontend` 与 `git diff --check` 通过。
 - 独立 Headless Playwright 在 `393 x 852` 验证恢复入口默认折叠、历史失败消息未进入正文、展开后编辑/重试/删除可见且页面无横向溢出；截图保存在 `output/regression-7420/message-recovery-20260828/failed-message-tray-phone.png`。
@@ -17404,3 +17601,108 @@ Close the remaining local dual-semantics gap after `ConversationProjection` beca
 ### Rollback
 
 - Restore `dist-cli.sema-previous-20260830-230129` through the same verified sibling-directory swap and managed restart if the backend candidate must be reverted. Keep the Web rollback and backend rollback independent; neither rollback may restore 7420 legacy conversation semantics into the authoritative source tree.
+## 会话正文语义 Markdown 与轻量阅读面（2026-08-29）
+
+### Expected behavior
+
+1. 助手回复中的 `#` 到 `######` 标题、`-` / `*` / `+` 无序列表、数字有序列表、引用和分隔线必须渲染为对应语义元素，不显示原始块级标记。
+2. 流式输出和完成态必须经过同一块级 Markdown 路径；未闭合代码围栏在流式阶段保持原文，闭合后继续交给既有代码块组件。
+3. 原始 HTML 必须保持禁用；文件链接、URL、行内代码、表格、代码块和 Markdown 图片继续使用原有安全与交互链路。
+4. 助手正文作为阅读内容直接落在会话画布上，不再增加边框、底色和阴影卡片；用户消息和系统结构块的边界保持不变。
+5. “回到底部/最新输出”保留完整可访问名称和新输出状态点，视觉收敛为 44px 圆形按钮；桌面与 393px 手机均不得出现页面级横向溢出。
+
+### Verification
+
+- 运行 `npm.cmd run test:7420:frontend -- -SourceOnly`，确认语义解析器、流式统一路径、去卡片样式和确定性夹具契约通过。
+- 运行 `npm.cmd run build:frontend`，确认 Vue 类型检查、主前端、本地预览和预压缩全部通过。
+- 打开 `/#/__regression/conversation-blocks?regression=frontend&markdownSemantic=1`；在 1440x900 与 393x852 下确认 H2/H3、4 个无序项、2 个有序项、引用和 `passed: true` 行内代码均为真实 DOM 语义，助手边框为 `0px`、背景透明且横向溢出为 0。
+- 完整前端回归会保存 `conversation-markdown-semantics-desktop` 与 `conversation-markdown-semantics-phone` 截图，并检查不再出现 `## 三、关键验证结果` 或段落形式的 `- ` 前缀。
+
+### Rollback
+
+- 回退 `conversationMarkdown` 块级投影、`ThreadConversation` 语义模板/样式和对应夹具即可；无需迁移会话、Runtime SQLite、移动端数据或服务配置。
+
+## 附件上下文信封不进入用户正文（2026-08-29）
+
+### Expected behavior
+
+1. Codex 宿主生成的 `# Files mentioned by the user:` 附件信封只用于传输附件与区分真实请求，不得作为用户消息正文显示。
+2. `## My request:` 与 `## My request for Codex:` 两种宿主标记都只保留其后的真实请求；附件继续显示为结构化卡片。
+3. 没有附件信封起始标记的普通用户文字即使包含 `## My request:` 也必须原样保留，不能按关键词误删。
+4. 修复必须发生在消息归一化边界，不依赖 CSS 隐藏或关闭助手语义 Markdown。
+
+### Verification
+
+- `npm.cmd run verify:frontend-normalizers` 先在真实宿主信封变体上稳定失败，修复后覆盖正文提取、附件卡片保留和普通同名标题不误删。
+- `npm.cmd run build:frontend`、`npm.cmd run test:7420:frontend -- -SourceOnly` 与 `git diff --check` 通过。
+- 独立 Headless Playwright 打开 `/#/__regression/conversation-blocks?regression=frontend&attachmentEnvelope=1`，在 1440 x 900 与 393 x 852 下均确认只显示 1 个附件卡片和真实请求，不存在 `Files mentioned by the user`、`Distinguish instructions` 或 `My request` 可见正文，且无横向溢出；截图与清单位于 `output/attachment-envelope-20260829`。
+
+### Rollback
+
+- 回退附件信封投影及其回归夹具即可；无需改动会话日志、附件缓存、Runtime SQLite、语义 Markdown 或用户配置。
+
+## Android 真机综合回归与前台恢复计时收口（2026-08-29）
+
+> 恢复反馈计时与正文新鲜度是两条合同：HTTP 快照返回可以结束本次短暂恢复反馈，但落后的 Runtime 字段仍须被版本门禁拒绝；明确的刷新正文意图仍须完成权威补读，不能以反馈结算代替 fresh 正文。历史 P95、真机及浸泡结果仅对应下述原候选。
+
+### Expected behavior
+
+1. 对话、图片和文件附件必须各自产生一条真实请求并显示唯一结果；附件传输信封不得进入用户正文。
+2. 长任务进入后台后继续由 7420 与原生监控持有；两分钟后返回时，任务计时、执行状态、消息队列和最终结果必须收敛，不能重复发送或残留虚假运行态。
+3. Plan 保持为显式持续模式，目标任务显示权威状态与用量；普通对话、Plan 和 Goal 不互相冒充。
+4. 成功取得前台恢复快照后立即结束本次恢复反馈和计时；版本落后的快照仍不得覆盖更新的实时状态。旧计量语义留下的本地 v1 样本必须失效，不能继续污染七天 P95。
+5. 真机折叠屏双栏、Composer、44px 触控目标、附件卡片、计划卡和目标栏不得出现页面级横向溢出或不可达操作。
+
+### Verification
+
+- OPPO PKH110 / Android 16 上使用隔离调试包 `com.cxcodex.bridge.debug` 和隔离候选端口 `17435/17436` 完成真实对话、图片、Markdown 附件、150 秒命令、队列跟随、Plan 与 Goal。基础对话首个可见回复为 6382 ms，图片为 4918 ms，文件为 9747 ms；本地提交、气泡和运行反馈均保持在 100 ms 内。
+- 首轮切到系统设置 131 秒后返回：应用 PID 未变化，长任务完成，队列自动执行并只出现一次结果；功能状态正常，但旧实现把恢复计时拖到下一任务，记录了无效的 119584 ms 样本。
+- 源码契约先在旧顺序上稳定失败；修复后 `npm.cmd run test:7420:frontend -- -SourceOnly` 通过，并继续证明落后快照不能修改 Runtime 状态。
+- `npm.cmd run verify:frontend-normalizers` 先证明 v1 的 119584 ms 样本会污染 P95；计量版本升级后通过，旧样本不再参与新摘要。
+- 修复候选再次在同一真机执行 150 秒命令并切到系统设置 147 秒；返回后任务显示“命令已完成”，同一 PID 继续存活，恢复计时为 168 ms，页面宽度 `763/763`。最终构建重载后再做短前后台复核，新摘要仅含 v2 样本，P95 为 82 ms、最新为 36 ms，页面宽度 `350/350`。
+- `npm.cmd run build:frontend`、`git diff --check` 通过。独立 Headless Playwright 在最终候选上验证完成态、等待态、重复消息身份、桌面/手机附件信封和 1602 条消息压力；压力场景仅挂载 12 项，最大心跳延迟 55 ms，无横向溢出。证据位于 `output/device-validation-20260829/headless-final`，真机截图为 `output/device-validation-20260829/cx-recovery-fix-after.png`。
+- 完整 `npm.cmd run verify:release -- -SchemaAudit warn` 通过；当前 `codex-cli 0.130.0` 重新生成的四组 schema 差异计数与提交摘要一致。PR #74 的 build、CodeQL 与 Windows bootstrap/升级/卸载 smoke 全绿后合并到 `beta`，合并提交为 `0aac72b`；beta push 与 beta→main PR #72 的同组检查也全部通过，PR #72 继续保持 Draft。
+- 最终编译 CLI 以单端口 `http://127.0.0.1:17437` 隔离运行，执行 `npm.cmd run test:7420:soak -- -DurationSeconds 7201 -IntervalSeconds 15 -LocalBaseUrl http://127.0.0.1:17437 -OutputDir output\soak-quiet-workbench-final3-20260829 -SkipPublic`：480 个样本全部通过，最大 pending/queued/server pending/Runtime uncertain/active plan turn 均为 0；超时、慢 `thread/list`、重放失败、App Server PID 变化、Runtime stream 变化/错配和事件序列回退均为 0。报告为 `output/soak-quiet-workbench-final3-20260829/soak-20260829-131736.json`，隔离 App Server PID 84204 与 stream `e9a86d25-7441-4968-a7a5-36fe00c070e2` 全程不变；完成后隔离进程树停止且 17437 释放。
+- 前两次浸泡尝试保留为环境反例：17435 是 Vite 开发 API 端口，`/health` 返回 HTML；17436 是静态开发代理，会在代理/API 之间持有大量连接，并在仍有调试客户端时触发零容忍 RPC 排队。两者都不能替代正式单端口 CLI 候选浸泡，也未被计入通过结论。
+- 本次真机验证阶段没有替换生产 APK、更新生产 7420 或发布；调试候选与真机通过不等同于正式签名包、CI 或 Release 门槛通过。
+
+### Rollback
+
+- 回退 `applyRuntimeSnapshotState` 中恢复观测的结算顺序、恢复指标版本和对应回归即可；无需迁移或清理消息、Runtime SQLite、原生队列、附件缓存或用户配置。
+
+## GitHub Release runner 的 ripgrep 前置门禁（2026-08-29）
+
+### Expected behavior
+
+- Windows Release runner 在执行完整 `verify:release` 前显式安装并验证 `ripgrep`，与 Linux CI 的文件搜索依赖保持一致。
+- `ripgrep` 安装或解析失败时立即阻断候选与正式 Release，不得跳过服务器模块烟测。
+
+### Reusable verification
+
+- `npm.cmd run verify:governance`
+- 从当前 `main` 运行 `Release` workflow，确认 `Install ripgrep`、`Run release verification` 和签名候选制品步骤依次通过。
+
+### Evidence and rollback
+
+- 修复前 Actions run `33239061508` 在 server module smoke 的 `assert.ok(ripgrepCommand)` 失败，且尚未进入 Android 签名或 Release 发布步骤。
+- 回滚时同时撤销 Release workflow 的安装步骤、治理断言与本节；不得通过删除文件搜索烟测绕过依赖缺失。
+
+## 侧栏快捷入口精简（2026-08-29）
+
+### Expected behavior
+
+- 侧栏顶部从左到右显示侧栏展开/收起、全部已读和靠右的新会话按钮。
+- 第二行固定显示搜索、技能、GitHub 三个直接入口，不再显示工具菜单、工作台或诊断入口。
+- `/workbench` 与 `/diagnostics` 不再是前端路由，旧地址回到新会话页；后端诊断接口不受影响。
+- 移动端连接设置不再展示原生网络、设备状态、后台运行三条静态状态；深度休眠通知和调整后台运行操作继续保留。
+
+### Reusable verification
+
+- `npm run build:frontend`
+- `npm run test:7420:frontend -- -SourceOnly`
+- `CX_CODEX_PLAYWRIGHT_MODULE=<playwright-package> node scripts/verify-sidebar-quick-actions.mjs --base-url <candidate-url> --output-directory <evidence-dir>`
+- 在桌面与手机宽度展开侧栏，确认三项快捷入口顺序、激活态、触控尺寸和无横向溢出；打开设置确认三条静态状态已移除。
+
+### Rollback
+
+- 恢复侧栏工具菜单、相关前端路由与页面组件，并同步恢复本节和前端回归断言；不要回退底层诊断 API 或 Android 后台运行能力。

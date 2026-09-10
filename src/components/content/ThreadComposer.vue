@@ -2757,7 +2757,7 @@ watch(
 }
 
 .thread-composer-shell {
-  @apply relative border p-2 sm:p-2.5;
+  @apply relative border px-2 py-1;
   min-height: var(--ui-composer-min-height);
   border-radius: 12px;
   border-color: var(--ui-border-subtle);
@@ -3096,7 +3096,7 @@ watch(
 }
 
 .thread-composer-controls {
-  @apply relative mt-1.5 flex items-center gap-2 sm:gap-2.5 overflow-visible;
+  @apply relative mt-1 flex items-center gap-2 sm:gap-2.5 overflow-visible;
 }
 
 .thread-composer-controls--recording {
@@ -3788,7 +3788,7 @@ watch(
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (max-height: 480px) and (max-width: 932px) {
   .thread-composer {
     @apply px-2;
   }
@@ -3835,7 +3835,7 @@ watch(
   }
 
   .thread-composer-runtime-trigger {
-    @apply h-9 gap-1 border px-2 text-[13px];
+    @apply h-11 gap-1 border px-2 text-[13px];
     border-radius: var(--ui-radius-control);
     border-color: var(--ui-border-subtle);
     background: var(--ui-bg-surface-muted);
@@ -3869,6 +3869,12 @@ watch(
   }
 
   .thread-composer-runtime-options--models::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .thread-composer-expand {
     display: none;
   }
 }

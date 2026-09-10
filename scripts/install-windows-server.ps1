@@ -10,6 +10,7 @@ param(
   [switch]$OpenBrowser,
   [string]$ConfigPath = "$env:USERPROFILE\.cx-codex\config.json",
   [string]$LauncherPath = "$env:USERPROFILE\.local\bin\cx-codex-start.cmd",
+  [switch]$CreateCliShim,
   [string]$NodeCommand = "",
   [string]$NpmCommand = "",
   [string]$NpmCliPath = "",
@@ -467,6 +468,51 @@ cd /d "$RepoRoot"
 "@
 
   Set-Content -LiteralPath $TargetLauncherPath -Value $launcherContent -Encoding ASCII
+}
+
+function Create-CliShimFile {
+  param(
+    [string]$TargetShimPath,
+    [string]$NodePath,
+    [string]$RepoRoot
+  )
+
+  $shimDir = Split-Path -Parent $TargetShimPath
+  if (-not [string]::IsNullOrWhiteSpace($shimDir)) {
+    New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
+  }
+
+  if (Test-Path -LiteralPath $TargetShimPath) {
+    $existingShimContent = [System.IO.File]::ReadAllText($TargetShimPath, [System.Text.Encoding]::ASCII)
+    $managedTarget = Join-Path $RepoRoot "dist-cli\index.js"
+    $targetMatch = [regex]::Match($existingShimContent, '(?m)^"[^"\r\n]+"\s+"(?<target>[^"\r\n]+)"\s+%\*')
+    $isManagedShim = $false
+    if ($existingShimContent.Contains("rem CX-Codex managed CLI shim") -and $targetMatch.Success) {
+      try {
+        $shimTarget = $targetMatch.Groups["target"].Value
+        $isManagedShim = [System.IO.Path]::IsPathRooted($shimTarget) -and
+          [string]::Equals([System.IO.Path]::GetFullPath($shimTarget), [System.IO.Path]::GetFullPath($managedTarget), [System.StringComparison]::OrdinalIgnoreCase)
+      } catch {
+        $isManagedShim = $false
+      }
+    }
+    if (-not $isManagedShim) {
+      Write-InstallerWarning `
+        -Code "CLI_SHIM_PRESERVED" `
+        -Message "Preserved existing CLI shim because it is not owned by this CX-Codex installation: $TargetShimPath"
+      return $false
+    }
+  }
+
+  $shimContent = @"
+@echo off
+rem CX-Codex managed CLI shim
+setlocal
+"$NodePath" "$RepoRoot\dist-cli\index.js" %*
+"@
+
+  Set-Content -LiteralPath $TargetShimPath -Value $shimContent -Encoding ASCII
+  return $true
 }
 
 function Create-ManagementShortcuts {
@@ -1090,6 +1136,10 @@ $configTempPath = "$ConfigPath.tmp-$PID"
 Move-Item -LiteralPath $configTempPath -Destination $ConfigPath -Force
 $standbyMarkerPath = Join-Path (Split-Path -Parent ([System.IO.Path]::GetFullPath($ConfigPath))) "cx-codex-$Port.standby"
 Create-LauncherFile -TargetLauncherPath $LauncherPath -NodePath $nodeExecutable -RepoRoot $repoRoot -TargetConfigPath $ConfigPath -TargetStandbyPath $standbyMarkerPath
+$cliShimPath = Join-Path (Split-Path -Parent $LauncherPath) "cx-codex.cmd"
+if ($CreateCliShim) {
+  $cliShimCreated = Create-CliShimFile -TargetShimPath $cliShimPath -NodePath $nodeExecutable -RepoRoot $repoRoot
+}
 $managementShortcutPaths = @(Create-ManagementShortcuts -TargetPort $Port)
 
 if ($CreateStartupTask) {
@@ -1202,6 +1252,9 @@ if (-not $JsonOutput) {
   Write-InstallerMessage "Install complete."
   Write-InstallerMessage "Config:   $ConfigPath"
   Write-InstallerMessage "Launcher: $LauncherPath"
+  if ($CreateCliShim -and $cliShimCreated) {
+    Write-InstallerMessage "CLI shim: $cliShimPath"
+  }
   foreach ($shortcutPath in $managementShortcutPaths) {
     Write-InstallerMessage "Manage:   $shortcutPath"
   }
@@ -1274,6 +1327,7 @@ if ($JsonOutput) {
       [ordered]@{ health = $false; auth = $false; websocketAuth = $false }
     }
     configPath = $ConfigPath
+    cliShimPath = if ($CreateCliShim -and $cliShimCreated) { $cliShimPath } else { "" }
     managementUrl = "http://127.0.0.1:$Port/local-setup"
     managementShortcuts = @($managementShortcutPaths)
     logsPath = $logDir

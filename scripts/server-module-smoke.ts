@@ -614,6 +614,7 @@ try {
   await smokeQuickTunnelTransientRetry()
   await smokeStatusRoutes()
   await smokeLocalFileAccessPolicy()
+  await smokeLocalFileHttpRateLimit()
   await smokeWorkspaceRootsState()
   await smokeWorkspaceMetaRoutes()
   await smokeProjectRoots()
@@ -3409,6 +3410,7 @@ async function smokeAppServerThreadListAugment(): Promise<void> {
   }) as { data: Array<{ id: string; title?: string }>; marker: boolean }
   assert.deepEqual(calls, ['session-a', 'missing'])
   assert.deepEqual(augmented.data.map((thread) => thread.id), ['existing', 'session-a'])
+  assert.deepEqual((augmented as unknown as { supplementalThreadIds: string[] }).supplementalThreadIds, ['session-a'])
   assert.equal(augmented.marker, true)
 
   const cached = await augmenter.augmentThreadListRpcResult({
@@ -4122,6 +4124,41 @@ async function smokeAppServerRpcCache(): Promise<void> {
   Date.now = () => now
   const cache = new AppServerRpcCache({ threadListCachePath: '' })
   const key = getShareableRpcKey('thread/list', {}) ?? ''
+
+  cache.writeThreadList(key, {
+    data: [
+      { id: 'thread-current', path: 'newer.jsonl', updatedAt: 20 },
+      { id: 'thread-other', path: 'other.jsonl', updatedAt: 15 },
+      { id: 'thread-current', path: 'older.jsonl', updatedAt: 10 },
+      { id: '', path: 'unidentified-a.jsonl' },
+      { path: 'unidentified-b.jsonl' },
+    ],
+    nextCursor: 'cursor-a',
+  })
+  assert.deepEqual(cache.readThreadList(key, true)?.value, {
+    data: [
+      { id: 'thread-current', path: 'newer.jsonl', updatedAt: 20 },
+      { id: 'thread-other', path: 'other.jsonl', updatedAt: 15 },
+      { id: '', path: 'unidentified-a.jsonl' },
+      { path: 'unidentified-b.jsonl' },
+    ],
+    nextCursor: 'cursor-a',
+  })
+
+  const firstReadCache = new AppServerRpcCache({ threadListCachePath: '' })
+  assert.deepEqual(
+    await firstReadCache.executeShareableRead('thread/list', {}, key, async () => ({
+      data: [
+        { id: 'thread-current', path: 'newer.jsonl', updatedAt: 20 },
+        { id: 'thread-current', path: 'older.jsonl', updatedAt: 10 },
+      ],
+      nextCursor: 'cursor-a',
+    })),
+    {
+      data: [{ id: 'thread-current', path: 'newer.jsonl', updatedAt: 20 }],
+      nextCursor: 'cursor-a',
+    },
+  )
 
   cache.writeThreadList(key, { rows: ['fresh'] })
   assert.deepEqual(cache.readThreadList(key, true), { value: { rows: ['fresh'] }, stale: false })
@@ -5219,9 +5256,11 @@ async function smokeSessionAttachmentAccess(): Promise<void> {
 
 async function smokeUploadedLocalFileRoutes(): Promise<void> {
   const uploadRoot = await mkdtemp(join(tmpdir(), 'cx-codex-http-upload-'))
-  const uploadDir = join(uploadRoot, 'f-route')
+  const uploadDir = join(uploadRoot, 'f-route1')
   const imagePath = join(uploadDir, 'preview.png')
   const textPath = join(uploadDir, 'note.txt')
+  const internalCacheDir = join(uploadRoot, '_session-attachments')
+  const internalCachePath = join(internalCacheDir, 'private.txt')
   const outsideDir = await mkdtemp(join(tmpdir(), 'cx-codex-http-upload-outside-'))
   const outsidePath = join(outsideDir, 'secret.png')
   const clipboardPath = join(outsideDir, 'codex-clipboard-c574ffab-0033-4dbd-aef7-09267e4e7a30.jpg')
@@ -5234,6 +5273,8 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
   await mkdir(uploadDir, { recursive: true })
   await writeFile(imagePath, pngBytes)
   await writeFile(textPath, 'uploaded note', 'utf8')
+  await mkdir(internalCacheDir, { recursive: true })
+  await writeFile(internalCachePath, 'internal cache', 'utf8')
   await writeFile(outsidePath, pngBytes)
   await writeFile(clipboardPath, pngBytes)
   await symlink(outsideDir, escapedLink, 'junction')
@@ -5271,8 +5312,6 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
     },
     resolveUploadedFilePath: (candidatePath: string) => resolveUploadedFilePath(candidatePath, {
       uploadDir: uploadRoot,
-      realpath,
-      stat,
     }),
     resolveSessionAttachmentPath: (candidatePath: string) => sessionAttachmentStore.resolve(candidatePath),
     localFileRateLimit: { limit: 8, windowMs: 60_000 },
@@ -5335,12 +5374,16 @@ async function smokeUploadedLocalFileRoutes(): Promise<void> {
     assert.deepEqual(await rateLimitedResponse.json(), { error: '本地文件请求过于频繁，请稍后重试。' })
 
     await assert.rejects(
-      () => resolveUploadedFilePath(join(escapedLink, 'secret.png'), { uploadDir: uploadRoot, realpath, stat }),
+      () => resolveUploadedFilePath(join(escapedLink, 'secret.png'), { uploadDir: uploadRoot }),
       (error: unknown) => error instanceof UploadedFileAccessError && error.code === 'outside-upload-root',
     )
     await assert.rejects(
-      () => resolveUploadedFilePath(join(uploadDir, 'missing.png'), { uploadDir: uploadRoot, realpath, stat }),
+      () => resolveUploadedFilePath(join(uploadDir, 'missing.png'), { uploadDir: uploadRoot }),
       (error: unknown) => error instanceof UploadedFileAccessError && error.code === 'not-found',
+    )
+    await assert.rejects(
+      () => resolveUploadedFilePath(internalCachePath, { uploadDir: uploadRoot }),
+      (error: unknown) => error instanceof UploadedFileAccessError && error.code === 'outside-upload-root',
     )
   } finally {
     await new Promise<void>((resolve, reject) => {
@@ -8048,10 +8091,10 @@ async function smokeStatusRoutes(): Promise<void> {
     },
   }
   const bodies: unknown[] = [
-    { enabled: false, cloudflaredCommand: ' C:\\tools\\cloudflared.exe ' },
+    { enabled: false, cloudflaredCommand: ' C:\\malicious\\cloudflared.exe ' },
     ['bad'],
-    { mode: 'quick', fallback: true, cloudflaredCommand: ' C:\\tools\\cloudflared.exe ' },
-    { mode: 'stable', tailscaleCommand: ' C:\\Program Files\\Tailscale\\tailscale.exe ' },
+    { mode: 'quick', fallback: true, cloudflaredCommand: ' C:\\malicious\\cloudflared.exe ' },
+    { mode: 'stable', tailscaleCommand: ' C:\\malicious\\tailscale.exe ' },
   ]
   const tunnelUpdates: unknown[] = []
   const tunnelStarts: unknown[] = []
@@ -8306,6 +8349,57 @@ async function smokeLocalFileAccessPolicy(): Promise<void> {
       (error: unknown) => error instanceof LocalFileAccessError && error.code === 'outside-workspace',
     )
   } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+async function smokeLocalFileHttpRateLimit(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'cx-codex-http-local-file-'))
+  const imagePath = join(root, 'preview.png')
+  const pngBytes = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+    'base64',
+  )
+  await writeFile(imagePath, pngBytes)
+
+  const appServer = createHttpAppServer({
+    createBridgeMiddleware: () => Object.assign(
+      async (_req: unknown, _res: unknown, next: () => void) => { next() },
+      {
+        dispose: () => {},
+        subscribeNotifications: () => () => {},
+        listNotificationEventsAfter: () => ({ notifications: [], latestSeq: 0, oldestSeq: 0 }),
+      },
+    ),
+    resolveLocalFilePath: async (candidatePath: string) => candidatePath,
+    localFileRateLimit: { limit: 1, windowMs: 60_000 },
+  })
+  const server = createNodeHttpServer(appServer.app)
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => {
+        server.off('error', reject)
+        resolve()
+      })
+    })
+    const address = server.address()
+    const port = typeof address === 'object' && address ? address.port : 0
+    const baseUrl = `http://127.0.0.1:${String(port)}`
+
+    const imageResponse = await fetch(`${baseUrl}/codex-local-image?path=${encodeURIComponent(imagePath)}`)
+    assert.equal(imageResponse.status, 200)
+    assert.equal(Buffer.from(await imageResponse.arrayBuffer()).length, pngBytes.length)
+
+    const rateLimitedResponse = await fetch(`${baseUrl}/codex-local-file?path=${encodeURIComponent(imagePath)}`)
+    assert.equal(rateLimitedResponse.status, 429)
+    assert.deepEqual(await rateLimitedResponse.json(), { error: '本地文件请求过于频繁，请稍后重试。' })
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    }).catch(() => {})
+    appServer.dispose()
     await rm(root, { recursive: true, force: true })
   }
 }

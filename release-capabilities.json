@@ -4,6 +4,7 @@
   "features": {
     "remoteQuick": true,
     "jsonOutput": true,
+    "cliShim": true,
     "stableJsonContract": true,
     "windowsUninstall": true
   }

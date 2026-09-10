@@ -37,6 +37,18 @@ final class TaskPetRuntimePolicy {
             && isActiveTaskState(incomingState);
     }
 
+    static boolean shouldPreserveNativeActiveState(
+        boolean frontendSnapshot,
+        boolean sameTaskGeneration,
+        String currentState,
+        String incomingState
+    ) {
+        return frontendSnapshot
+            && sameTaskGeneration
+            && isActiveTaskState(currentState)
+            && !isActiveTaskState(incomingState);
+    }
+
     static boolean shouldRetainOmittedTask(String state) {
         return "running".equals(state)
             || "waiting".equals(state)
@@ -362,6 +374,43 @@ final class TaskPetRuntimePolicy {
 
     static boolean shouldConfirmRuntimeRequest(String clientMessageId, boolean requestAccepted) {
         return clientMessageId != null && !clientMessageId.isEmpty() && !requestAccepted;
+    }
+
+    static boolean shouldRefreshRuntimeRequestGeneration(
+        String clientMessageId,
+        boolean activeGenerationObserved,
+        String requestStatus
+    ) {
+        return clientMessageId != null
+            && !clientMessageId.isEmpty()
+            && (!activeGenerationObserved || !isSettledRuntimeDispatchStatus(requestStatus));
+    }
+
+    static boolean isSettledRuntimeDispatchStatus(String status) {
+        return "completed".equals(status)
+            || "failed".equals(status)
+            || "stopped".equals(status)
+            || "interrupted".equals(status)
+            || "cancelled".equals(status);
+    }
+
+    static boolean shouldDeferRuntimeSnapshot(
+        String expectedTurnId,
+        String snapshotActiveTurnId,
+        boolean snapshotInProgress,
+        String lastStartedAtIso,
+        String lastCompletedAtIso
+    ) {
+        String expected = expectedTurnId == null ? "" : expectedTurnId.trim();
+        String observed = snapshotActiveTurnId == null ? "" : snapshotActiveTurnId.trim();
+        if (snapshotInProgress) {
+            return !expected.isEmpty() && !expected.equals(observed);
+        }
+        if (expected.isEmpty()) return false;
+        String startedAt = lastStartedAtIso == null ? "" : lastStartedAtIso.trim();
+        String completedAt = lastCompletedAtIso == null ? "" : lastCompletedAtIso.trim();
+        if (startedAt.isEmpty() || completedAt.isEmpty()) return true;
+        return completedAt.compareTo(startedAt) < 0;
     }
 
     static boolean shouldReconcileReplyAttempt(
