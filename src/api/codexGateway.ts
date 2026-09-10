@@ -17,9 +17,8 @@ import type {
   ThreadReadResponse,
   Turn,
 } from './appServerDtos'
-import { isAbortLikeError, normalizeCodexApiError } from './codexErrors'
+import { CodexApiError, isAbortLikeError, normalizeCodexApiError } from './codexErrors'
 import {
-  applyActiveTurnIdToAcknowledgedUserMessages,
   readActiveTurnIdFromResponse,
   normalizeAcknowledgedUserMessagesV2,
   normalizeThreadGroupsV2,
@@ -55,6 +54,7 @@ type RpcCallOptions = { signal?: AbortSignal }
 type ThreadRuntimeSnapshotOptions = RpcCallOptions & {
   preferCachedMessages?: boolean
   cachedSnapshotMaxAgeMs?: number
+  refreshSnapshot?: boolean
 }
 type ThreadListOptions = RpcCallOptions & {
   maxPages?: number
@@ -719,7 +719,7 @@ export async function getThreadRuntimeSnapshot(
   const normalizedThreadId = threadId.trim()
   throwIfSignalAborted(options.signal)
 
-  const cachedSnapshot = readCachedThreadRuntimeSnapshot(
+  const cachedSnapshot = options.refreshSnapshot ? null : readCachedThreadRuntimeSnapshot(
     normalizedThreadId,
     options.cachedSnapshotMaxAgeMs,
   )
@@ -727,7 +727,9 @@ export async function getThreadRuntimeSnapshot(
     return cachedSnapshot
   }
 
-  if (options.signal) {
+  // Explicit content invalidation must not join bytes requested before it.
+  // The conversation loader coalesces these refreshes per thread.
+  if (options.signal || options.refreshSnapshot) {
     const snapshot = await fetchThreadRuntimeSnapshot(
       normalizedThreadId,
       options.signal,
@@ -834,11 +836,7 @@ async function fetchThreadRuntimeSnapshot(
   const acknowledgedUserMessages = threadRead ? normalizeAcknowledgedUserMessagesV2(threadRead) : []
   const snapshot: ThreadRuntimeSnapshot = {
     threadRead: threadRead ?? null,
-    acknowledgedUserMessages: applyActiveTurnIdToAcknowledgedUserMessages(
-      acknowledgedUserMessages,
-      activeTurnId,
-      inProgress && messageState === 'cached',
-    ),
+    acknowledgedUserMessages,
     executionState,
     inProgress,
     activeTurnId,
@@ -1191,6 +1189,50 @@ function normalizeRuntimeRequestLookupResult(payload: unknown): RuntimeRequestLo
   }
 }
 
+async function readRuntimeDeliveryResponse(response: Response, method: string): Promise<unknown> {
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch {
+    // An unreadable acknowledgement says nothing about whether execution was accepted.
+    throw new CodexApiError('服务器响应不完整，正在核对消息送达状态。', {
+      code: 'invalid_response', method, status: response.status,
+    })
+  }
+  if (!response.ok) {
+    throw new CodexApiError(getErrorMessageFromPayload(payload, '无法确认消息送达状态'), {
+      code: 'http_error', method, status: response.status,
+    })
+  }
+  return payload
+}
+
+function validateRuntimeDeliveryResponse(
+  payload: unknown,
+  method: string,
+  expected: { clientMessageId?: string; threadId?: string } = {},
+): void {
+  const root = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown> : {}
+  const data = root.data && typeof root.data === 'object' && !Array.isArray(root.data)
+    ? root.data as Record<string, unknown> : root
+  const request = data.request && typeof data.request === 'object' && !Array.isArray(data.request)
+    ? data.request as Record<string, unknown> : {}
+  const result = normalizeRuntimeTurnStartResult(payload)
+  // The compatibility normalizer's unknown -> failed default is not rejection evidence.
+  const needsThread = result.status !== 'pending_start' && result.status !== 'failed'
+  const mismatchedClient = [data.clientMessageId, request.clientMessageId].some((id) => (
+    id !== undefined && expected.clientMessageId && id !== expected.clientMessageId
+  ))
+  if (!result.requestId
+    || result.status !== (typeof data.status === 'string' ? data.status.trim() : '')
+    || (needsThread && !result.threadId)
+    || mismatchedClient
+    || (expected.threadId && result.threadId && expected.threadId !== result.threadId)) {
+    throw new CodexApiError('消息确认信息不完整，正在核对送达状态。', { code: 'invalid_response', method })
+  }
+}
+
 export async function startThread(cwd?: string, model?: string): Promise<string> {
   try {
     const params: Record<string, unknown> = {}
@@ -1381,10 +1423,10 @@ export async function startRuntimeThreadTurn(args: {
     timeoutMs: GATEWAY_RUNTIME_FETCH_TIMEOUT_MS,
     label: 'Runtime turn start request',
   })
-  const payload = (await response.json()) as unknown
-  if (!response.ok && response.status !== 202) {
-    throw new Error(getErrorMessageFromPayload(payload, 'Failed to start runtime turn'))
-  }
+  const payload = await readRuntimeDeliveryResponse(response, 'runtime/send')
+  validateRuntimeDeliveryResponse(payload, 'runtime/send', {
+    clientMessageId: args.clientMessageId?.trim(), threadId: args.threadId?.trim(),
+  })
   return normalizeRuntimeTurnStartResult(payload)
 }
 
@@ -1400,11 +1442,15 @@ export async function getRuntimeRequestByClientMessageId(clientMessageId: string
     },
   )
   if (response.status === 404) return null
-  const payload = (await response.json()) as unknown
-  if (!response.ok) {
-    throw new Error(getErrorMessageFromPayload(payload, 'Failed to look up runtime request'))
+  const payload = await readRuntimeDeliveryResponse(response, 'runtime/request')
+  validateRuntimeDeliveryResponse(payload, 'runtime/request')
+  const result = normalizeRuntimeRequestLookupResult(payload)
+  if (!result || result.clientMessageId !== normalizedClientMessageId) {
+    throw new CodexApiError('消息确认身份不匹配，正在核对送达状态。', {
+      code: 'invalid_response', method: 'runtime/request',
+    })
   }
-  return normalizeRuntimeRequestLookupResult(payload)
+  return result
 }
 
 export async function interruptThreadTurn(threadId: string, turnId?: string): Promise<void> {

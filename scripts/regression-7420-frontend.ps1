@@ -179,9 +179,9 @@ function Assert-SemaConversationProjectionOwnershipSource {
   Assert-True ($desktopStateSource -notmatch "liveAgentMessagesByThreadId|livePlanMessagesByThreadId|liveReasoningTextByThreadId|liveCommandsByThreadId|turnActivityByThreadId") "structured conversation notifications and projected turns must replace the legacy flat live-state side channel"
   Assert-True ($projectionSource -match "activeElapsedMs[\s\S]*?completedAtMs[\s\S]*?startedAtMs[\s\S]*?waitedMs" -and $projectionSource -match "type\s*===\s*'fileChange'[\s\S]*?mergeFileChanges") "turn timing and file summaries must remain first-class projection semantics"
   Assert-True ($conversationSource -notmatch 'class="turn-heading"|class="assistant-mark"|class="turn-state"') "the Sema-style transcript must not recreate a repeated Codex/status header for every turn"
-  Assert-True ($conversationSource -match 'class="turn-divider"[\s\S]*?class="process-toggle turn-timing"[\s\S]*?timingLabel\(turn\)[\s\S]*?class="turn-divider-line"') "every turn must use the Sema-style elapsed divider as its compact process disclosure"
+  Assert-True ($conversationSource -match 'class="turn-divider"[\s\S]*?class="process-toggle turn-timing"[\s\S]*?<TurnExecutionClock[\s\S]*?class="turn-divider-line"') "every turn must use one Sema-style elapsed divider with the independent display clock"
   Assert-True ($conversationSource -match 'class="file-summary">[\s\S]*?file-summary-icon[\s\S]*?file-summary-meta[\s\S]*?file-summary-chevron' -and $conversationSource -notmatch 'class="file-summary"\s+open') "file changes must keep a compact on-demand summary without hiding or discarding fileChange facts"
-  Assert-True ($conversationSource -match 'process-reveal-enter-active[\s\S]*?opacity[\s\S]*?transform' -and $conversationSource -match 'turn-live-dot[\s\S]*?transcript-live-pulse' -and $conversationSource -match '@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.run-dots i,[\s\S]*?animation:\s*none;') "conversation motion must stay lightweight, state-driven, and reduced-motion safe"
+  Assert-True ($conversationSource -match 'process-reveal-enter-active[\s\S]*?opacity[\s\S]*?transform' -and $conversationSource -notmatch 'class="turn-live-state"' -and $conversationSource -match '@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.run-dots i,[\s\S]*?animation:\s*none;') "conversation motion must stay lightweight and reduced-motion safe without a duplicate live-status row"
   Assert-True ($conversationSource -match 'latestTurnIsActive[\s\S]*?class="run-dots"' -and $conversationSource -match 'conversation-jump-to-latest[\s\S]*?left:\s*50%;') "return-to-latest must follow Sema's centered compact control and show running feedback without a tail overlay"
 }
 
@@ -408,10 +408,13 @@ function Assert-MessageActionHitTestingSource {
   Assert-True ($source -match "@media\s*\(pointer:\s*coarse\)[\s\S]*?\.message-action,[\s\S]*?\.quiet-button,[\s\S]*?\.process-toggle,[\s\S]*?\.activity-details\s*>\s*summary,[\s\S]*?\.file-summary\s*>\s*summary,[\s\S]*?\.file-row\s*>\s*summary[\s\S]*?min-height:\s*44px;") "coarse-pointer conversation actions and disclosure controls must retain a 44px target beyond phone-width layouts"
   Assert-True ($composerSource -match "@media\s*\(pointer:\s*coarse\)[\s\S]*?\.thread-composer-input,[\s\S]*?\.thread-composer-runtime-trigger[\s\S]*?min-height:\s*44px;[\s\S]*?\.thread-composer-expand,[\s\S]*?\.thread-composer-stop[\s\S]*?min-width:\s*44px;[\s\S]*?min-height:\s*44px;") "coarse-pointer composer input and standalone controls must retain 44px targets"
   Assert-True ($goalSource -match "@media\s*\(pointer:\s*coarse\)[\s\S]*?\.thread-goal-action,[\s\S]*?\.thread-goal-confirm\s+button[\s\S]*?min-height:\s*44px;") "coarse-pointer goal controls must retain a 44px target"
-  Assert-True ($source -match "PROCESS_HISTORY_BATCH_SIZE\s*=\s*17" -and $source -match "查看历史过程" -and $source -match "visibleBlocks\s*=\s*processBlocks\(turn\)\.slice\(-visibleProcessBlockCount\(turn\)\)") "projected process must default to the latest item and reveal bounded history on demand"
+  Assert-True ($source -match "PROCESS_HISTORY_BATCH_SIZE\s*=\s*17" -and $source -match "turn\.commentary\.slice\(-\(visibleProcessHistoryCount\(turn\) \+ 2\)\)" -and $source -match "expandedOperationTurnIds\.value\.has\(turn\.renderKey\) \? processActivities\(turn\)\.slice" -and $source -match "查看操作详情") "public progress must keep two prose entries independently of explicitly disclosed bounded operation history"
+  $clockSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\TurnExecutionClock.vue")
+  Assert-True ($clockSource -match "visibilitychange" -and $clockSource -match "setInterval" -and $clockSource -match "clearInterval" -and $clockSource -match "prefers-reduced-motion" -and $clockSource -notmatch "codexGateway|useDesktopState|fetch\(") "the display clock must be local, pause when hidden, clean up, and respect reduced motion"
+  Assert-True ($source -match "useConversationReading" -and $source -match "reading\.refresh\(owningTurn\.renderKey" -and $source -match "reading\.retainMounted\(\)") "reading protection must preserve explicit navigation and bound retained presentation to mounted turns"
   Assert-True ($source -notmatch "本轮没有可确认的最终回复|只有明确标记为 final_answer 的内容才会显示为最终回复" -and $source -match "turn\.finalStatus\s*!==\s*'missing'") "plain missing-final turns must remain semantically missing without rendering a non-actionable protocol placeholder"
   Assert-True ($source -match '<details\s+v-if="turn\.fileChanges\.length\s*>\s*0"\s+class="file-summary">' -and $source -notmatch 'class="file-summary"\s+open') "file history must start as one compact disclosure instead of occupying the transcript by default"
-  Assert-True ($source -match 'v-else-if="hasVisibleTiming\(turn\)"' -and $source -match 'return\s+''过程记录''' -and $source -notmatch '执行耗时不可用') "turn dividers must omit unavailable static timing noise while keeping a concise process disclosure"
+  Assert-True ($source -match 'v-else-if="hasVisibleTiming\(turn\)"' -and $clockSource -match '过程记录' -and $source -notmatch '执行耗时不可用') "turn dividers must omit unavailable static timing noise while keeping a concise process disclosure"
   Assert-True ($projectionSource -match "isTerminalConversationExecutionState\(stateValue\)\s*&&\s*projectedFinal\.streaming[\s\S]*?streaming:\s*false") "terminal explicit finals must never retain a permanently blinking streaming caret"
   Assert-True ($composerSource -match "open-thread-goal" -and $composerSource -match "设置持续目标" -and $composerSource -match "canManageThreadGoal") "persistent goal creation must be owned by the Composer plus menu"
   Assert-True ($goalSource -notmatch "thread-goal-create" -and $goalSource -match "openEditorRequest" -and $appSource -match '@open-thread-goal="onOpenThreadGoalEditor"') "the standalone empty goal button must stay removed while the plus menu opens the existing goal editor"
@@ -450,7 +453,7 @@ function Assert-ForegroundResumeScrollIntentSource {
 
   Assert-True ($source -match "function\s+restoreScrollState[\s\S]*?props\.scrollState[\s\S]*?scrollRatio[\s\S]*?userIsAwayFromBottom") "projected conversations must restore saved bottom-follow or proportional reading position"
   Assert-True ($source -match "watch\([\s\S]*?props\.activeThreadId[\s\S]*?restoreScrollState\(\)") "thread ownership changes must restore only that thread's saved viewport"
-  Assert-True ($source -match "projectionContentSignature[\s\S]*?if\s*\(shouldFollow\s*&&\s*!userIsAwayFromBottom\)\s*\{?[\s\S]*?scrollToBottom") "new projected content must follow the bottom only while the reader has not scrolled away before or during the render frame"
+  Assert-True ($source -match "projectionContentSignature[\s\S]*?if\s*\(shouldFollow\s*&&\s*shouldFollowOutput\(\)\)\s*\{?[\s\S]*?scrollToBottom" -and $source -match "return !userIsAwayFromBottom && !reading\.protectedReading\.value") "new projected content must follow only when neither scroll position nor protected reading blocks it before or during the render frame"
   Assert-True ($source -match "onBeforeUnmount[\s\S]*?publishScrollState\(\)[\s\S]*?cancelAnimationFrame") "projected conversation scroll ownership must be saved and cleaned up on unmount"
 }
 
@@ -559,7 +562,8 @@ function Assert-RuntimeSnapshotOrderingSource {
   Assert-True ($source -match "hasTerminalEvidence:\s*hasSettledSessionLogProjectionEvidence\([\s\S]*?projectTaskPetConversation\(threadId\)[\s\S]*?action\s*===\s*'defer'") "cross-process session-log convergence must wait for the projected latest-turn terminal state instead of inferring completion from the last assistant message"
   Assert-True ($source -match "shouldForceCachedSnapshotRefresh\s*=\s*options\.force\s*===\s*true\s*&&\s*snapshot\.messageState\s*===\s*'cached'") "cached historical threads without a terminal event key must still receive an authoritative refresh"
   Assert-True ($source -match "!options\.olderHistory\s*&&\s*!shouldForceCachedSnapshotRefresh") "explicit older-history reads must not be blocked when a legacy thread has no terminal refresh key"
-  Assert-True ($conversationSource -match "function\s+requestOlderHistory[\s\S]*?pendingOlderHistoryAnchor[\s\S]*?emit\('loadOlderHistory'\)" -and $conversationSource -match "function\s+restoreOlderHistoryAnchor[\s\S]*?dataset\.turnId\s*===\s*anchor\.turnId[\s\S]*?container\.scrollTop\s*\+=") "remote older-history insertion must restore the projected turn anchor after pages merge"
+  Assert-True ($conversationSource -match "function\s+requestOlderHistory[\s\S]*?pendingOlderHistoryAnchor[\s\S]*?emit\('loadOlderHistory'\)" -and $conversationSource -match "function\s+restoreOlderHistoryAnchor[\s\S]*?dataset\.turnRenderKey\s*===\s*anchor\.turnId[\s\S]*?container\.scrollTop\s*\+=") "remote older-history insertion must restore the stable projected rendering anchor after pages merge"
+  Assert-True ($conversationSource.Contains(':key="turn.renderKey"') -and $conversationSource.Contains('setTurnMeasureRef(turn.renderKey, element)') -and $conversationSource.Contains(':data-turn-id="turn.id"')) "turn rendering and measurement must keep a stable display key without replacing authoritative action IDs"
   Assert-True ($source -match "else\s+if\s*\(!shouldDeferCachedRpcRefresh\)\s*\{\s*scheduleNonFreshThreadDetailRetry") "the slow non-fresh retry must not race the immediate cached-message refresh"
   Assert-True ($source -match "connectionStale:\s*notificationStale\.value\s*\|\|\s*syncLagging\.value" -and $foregroundRecoveryPolicySource -match "state\.connectionStale\s*&&\s*!state\.recentlySynced") "startup notification health recovery must not duplicate a just-completed authoritative message refresh"
   Assert-True ($source -match "allowRoutineActiveRefresh:\s*isFirstAttempt" -and $foregroundRecoveryPolicySource -match "if\s*\(!state\.allowRoutineActiveRefresh\)\s*return\s+false") "later Android resume retries must not repeatedly reload a healthy active conversation"
@@ -596,7 +600,7 @@ function Assert-RuntimeSnapshotOrderingSource {
   Assert-True ($source -match "lastAndroidResumeSyncScheduledAtMs\s*=\s*now[\s\S]*?beginForegroundRecoveryMetric\(selectedThreadId\.value\)") "foreground recovery timing must start after the Android lifecycle debounce accepts the sync"
   $conversationSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\ThreadConversation.vue")
   $queueSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\QueuedMessages.vue")
-  Assert-True ($queueSource -match "队列已暂停。重试、编辑或删除后继续") "the paused queue must explain the available recovery actions"
+  Assert-True ($queueSource -match "队列已暂停。重试或删除后继续") "the paused queue must explain only the recovery actions currently available"
   Assert-True ($queueSource -match "retry:\s*\[messageId:\s*string\]") "the failed queue row must expose a retry action"
   Assert-True ($queueSource -match "move:\s*\[messageId:\s*string,\s*direction:\s*'up'\s*\|\s*'down'\]" -and $queueSource -match "canReorderQueue") "persisted queue rows must expose bounded accessible reorder controls"
   Assert-True ($source -match "function\s+moveQueuedMessage[\s\S]*?backgroundPersisted\s*!==\s*true[\s\S]*?ownershipKinds\.size\s*!==\s*1[\s\S]*?setQueuedMessagesForThread\(threadId,\s*nextQueue\)[\s\S]*?processQueuedMessages\(threadId\)") "queue reorder must preserve one durable owner and persist before server reconciliation"
@@ -877,8 +881,8 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($manualRetryMatch.Value -match "durableEntry\?\.state\s*===\s*'failed'\s*\?\s*failedUserMessageRequestFromOutbox") "manual retry must recover its request from the durable outbox when volatile state was lost"
   Assert-True ($source -match "messageId:\s*reusedOptimisticMessageId\s*\|\|\s*undefined[\s\S]*?deliveryState:\s*'sending'") "the send path must reset a reused failed bubble to sending"
   Assert-True ($source -match "function\s+restoreFailedMessageOutboxEntry[\s\S]*?findOptimisticMessageIdForOutbox\(entry\.clientMessageId,\s*normalizedThreadId\)\s*\|\|\s*addOptimisticUserMessage") "failed outbox recovery must reuse the current optimistic bubble before creating one after reload"
-  Assert-True ($messageIdentitySource -match "authoritativeTurnId[\s\S]*?persistedUserTurnIds\.has\(authoritativeTurnId\)") "optimistic delivery acknowledgement must prefer authoritative turn identity over repeated text counts"
-  Assert-True ($source -match "bindOptimisticUserMessageToTurn\(optimisticMessageId,\s*startedTurnId\)" -and $source -match "bindOptimisticUserMessageToTurn\(optimisticMessageId,\s*recovered\.turnId\)") "fresh and recovered sends must bind the optimistic bubble to the authoritative turn"
+  Assert-True ($messageIdentitySource -match 'if\s*\(meta\?\.clientMessageId\)\s*\{\s*return\s+!findUserMessageIdentityMatch' -and -not $messageIdentitySource.Contains('openerTurnId')) "modern request acknowledgement must use exact message identity before the legacy cache migration branch"
+  Assert-True ($source -match "bindOptimisticUserMessageToTurn\(optimisticMessageId,\s*startedTurnId\)" -and $source -match "bindOptimisticUserMessageToTurn\(optimisticMessageId,\s*recovered\.turnId\)") "fresh and recovered sends must bind execution turns separately from user message identity"
   Assert-True ($messageIdentitySource -match "selectDetachedFailedOptimisticUserMessages[\s\S]*?baselineTailMessageId[\s\S]*?!persistedIds\.has\(anchorId\)") "a historical failed message with an unloaded anchor must leave the newest transcript projection"
   Assert-True ($appSource -match '<FailedMessagesTray[\s\S]*?:messages="selectedThreadDetachedFailedMessages"[\s\S]*?@edit="onEditFailedMessage"[\s\S]*?@retry="retryFailedUserMessage"[\s\S]*?@delete="deleteFailedUserMessage"') "detached failed messages must retain edit, retry, and delete recovery actions above the composer"
   Assert-True ($failedMessagesTraySource -match "未发送消息[\s\S]*?已从最新回复下方移出" -and $failedMessagesTraySource -match "aria-expanded") "the historical failure tray must stay compact and explain why the message moved"
@@ -908,13 +912,13 @@ function Assert-BoundedRuntimeSendRecoverySource {
   Assert-True ($existingThreadSendMatch.Value -match "beginChatFeedbackMetric\([\s\S]*?notifyPendingRequestCreated\(internalOptions\.onPendingRequestCreated,\s*clientMessageId\)[\s\S]*?const\s+isInProgress\s*=\s*wasThreadInProgressBeforeSubmit[\s\S]*?startTurnForThread") "existing-thread native handoff must happen before immediate durable runtime dispatch"
   Assert-True ($appSource -match "onDeliveryPersisted:[\s\S]*?onPendingRequestCreated:[\s\S]*?syncMobileShellTaskPet\(true\)[\s\S]*?onRequestDispatched:") "existing-thread sends must force native monitoring without delaying runtime dispatch"
   Assert-True ($appSource -match '@quote="onQuoteQueuedMessage"') "queued-message immediate execution must use the Android-aware submit wrapper"
-  Assert-True ($source -match "async\s+function\s+quoteQueuedMessage\([\s\S]*?internalOptions[\s\S]*?sendMessageToSelectedThread\([\s\S]*?internalOptions") "queued-message immediate execution must forward submit timing and native handoff callbacks"
   $quoteQueuedMessageMatch = [regex]::Match($source, "async\s+function\s+quoteQueuedMessage[\s\S]*?\n\s*return\s+\{")
-  Assert-True ($quoteQueuedMessageMatch.Success) "could not find queued-message immediate execution source"
-  Assert-True ($quoteQueuedMessageMatch.Value -match "if\s*\(!msg\s*\|\|\s*isUpdatingSpeedMode\.value\)\s*return[\s\S]*?setQueuedMessagesForThread") "queued-message ownership transfer must not remove the row when speed-mode switching would reject the send"
-  Assert-True ($quoteQueuedMessageMatch.Value -match "transferQueuedMessageWithRecovery[\s\S]*?removeRuntimeQueuedMessage[\s\S]*?await\s+sendMessageToSelectedThread") "queued-message immediate execution must transfer ownership to the durable outbox before the network await"
-  Assert-True ($quoteQueuedMessageMatch.Value -match "restoreRuntimeQueuedMessage[\s\S]*?restoreQueuedMessageAtIndex" -and $quoteQueuedMessageMatch.Value -match "removeOptimisticUserMessage") "a failed immediate execution must remove its failed bubble and restore the original durable queue owner"
-  Assert-True ($conversationFixtureSource -match "queueTransferFailure" -and $conversationFixtureSource -match "transferQueuedMessageWithRecovery" -and $conversationFixtureSource -match 'data-testid="queue-transfer-feedback"') "the conversation fixture must preserve a browser-visible queue-transfer recovery scenario"
+  Assert-True ($quoteQueuedMessageMatch.Success) "could not find the guarded queue quote entry"
+  Assert-True ($quoteQueuedMessageMatch.Value -notmatch "\b(sendMessageToSelectedThread|removeRuntimeQueuedMessage|restoreRuntimeQueuedMessage|setQueuedMessagesForThread|putMessageOutboxEntry)\(") "queue quote must not cancel or start a replacement while safe cancellation is unproven"
+  Assert-True ($quoteQueuedMessageMatch.Value -match "error\.value\s*=.*暂不支持立即引用") "the guarded quote entry must explain why the original message is retained"
+  $queuedMessagesSource = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path (Get-Location) "src\components\content\QueuedMessages.vue")
+  Assert-True ($queuedMessagesSource -match '<div class="queued-row-main">' -and $queuedMessagesSource -notmatch '\$emit\(''(edit|quote)''') "queue content must be read-only until cancellation has a reliable contract"
+  Assert-True ($queuedMessagesSource -match 'queued-messages-edit-note' -and $queuedMessagesSource -notmatch '点正文可编辑') "queue editing limits must be visible without a modal"
   Assert-True ($appSource -match "function\s+onQuoteQueuedMessage\([\s\S]*?feedbackStartedAtMs:\s*chatFeedbackNow\(\)[\s\S]*?onPendingRequestCreated:[\s\S]*?syncMobileShellTaskPet\(true\)[\s\S]*?onRequestDispatched:[\s\S]*?ensureMobileShellTaskNotificationPermission\(\)") "queued-message immediate execution must hand native monitoring ownership over before requesting notification permission"
   Assert-True ($source -match "export\s+function\s+useDesktopState\(submitCallbacks") "all internal send entry points must share one submit-time native handoff contract"
   Assert-True ($source -match "function\s+notifyPendingRequestCreated[\s\S]*?override\s*\?\?\s*submitCallbacks\.onPendingRequestCreated[\s\S]*?function\s+requestDispatchedCallback[\s\S]*?override\s*\?\?\s*submitCallbacks\.onRequestDispatched") "internal retries and rollback resend must inherit the App-level native handoff callbacks when they do not supply an override"
@@ -4066,7 +4070,7 @@ function Assert-ProjectedConversationFixture {
   Assert-True ([int]$Metrics.turnDividerCount -eq [int]$Metrics.turnCount -and [int]$Metrics.timingCount -le [int]$Metrics.turnCount -and [int]$Metrics.unavailableTimingCopyCount -eq 0) "projected conversation $ViewportName lost a turn divider or rendered unavailable timing noise"
   Assert-True ([int]$Metrics.activeTurnCount -ge 1 -and [int]$Metrics.activeCollapsedProcessCount -eq 0) "projected conversation $ViewportName collapsed an active process"
   Assert-True ([int]$Metrics.completedExpandedProcessCount -eq 0) "projected conversation $ViewportName expanded completed process content by default"
-  Assert-True ((@($Metrics.visibleProcessCounts) | Where-Object { [int]$_ -gt 1 }).Count -eq 0 -and [int]$Metrics.collapsedProcessHistoryCount -ge 1) "projected conversation $ViewportName must show only the latest process item before history disclosure"
+  Assert-True ((@($Metrics.visibleProcessCounts) | Where-Object { [int]$_ -gt 2 }).Count -eq 0 -and [int]$Metrics.mountedActivityCount -eq 0 -and [int]$Metrics.collapsedProcessHistoryCount -ge 1) "projected conversation $ViewportName must show at most two public progress entries and no operation details before disclosure"
   Assert-True ([int]$Metrics.legacyOverlayCount -eq 0) "projected conversation $ViewportName rendered a forbidden legacy tail overlay"
   Assert-True ([int]$Metrics.historyButtonCount -eq 1) "projected conversation $ViewportName is missing its older-history affordance"
   Assert-True ([int]$Metrics.queueRowCount -ge 2) "projected conversation $ViewportName lost the separate queue surface"
@@ -4273,7 +4277,7 @@ JSON.stringify((() => {
   Assert-True ([int]$before.heartbeatCount -ge 20) "streaming stress fixture event-loop heartbeat stopped"
   Assert-True ([int]$before.maxHeartbeatLagMs -lt 200) "streaming updates stalled the heartbeat for $($before.maxHeartbeatLagMs) ms; expected < 200 ms"
   Assert-True ([int]$before.projectedActivityCount -ge 1600) "streaming stress fixture did not preserve the dense projected activity history"
-  Assert-True ([int]$before.mountedProcessItemCount -eq 1) "streaming stress fixture must mount only its latest process item before history disclosure"
+  Assert-True ([int]$before.mountedProcessItemCount -le 2 -and [int]$before.mountedActivityCount -eq 0) "streaming stress fixture must keep a bounded public prose window and defer all operation rows until disclosure"
   Assert-True ([int]$before.legacyOverlayCount -eq 0) "streaming stress fixture rendered a forbidden legacy tail overlay"
   Assert-True ($before.hasHorizontalOverflow -eq $false) "streaming stress fixture overflowed horizontally"
 
@@ -4303,7 +4307,7 @@ JSON.stringify((() => {
     queueCount: queueRows.length,
     queueTexts: queueRows.map((row) => row.querySelector('.queued-row-text')?.textContent?.replace(/\s+/g, ' ').trim() || ''),
     failedMessageCount: document.querySelectorAll('.delivery-state[data-state="failed"]').length,
-    feedbackText: document.querySelector('[data-testid="queue-transfer-feedback"]')?.textContent?.replace(/\s+/g, ' ').trim() || '',
+    feedbackText: document.querySelector('.queued-messages-edit-note')?.textContent?.replace(/\s+/g, ' ').trim() || '',
     hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 2
   };
 })())
@@ -4320,20 +4324,19 @@ function Assert-ConversationQueueTransferRecovery {
 
   $click = Invoke-BrowserEvalJson -Session $Session -Script @'
 JSON.stringify((() => {
-  const button = document.querySelector('.conversation-regression-queue .queued-row-quote');
-  if (!(button instanceof HTMLElement)) return { clicked: false };
-  button.click();
-  return { clicked: true };
+  const row = document.querySelector('.conversation-regression-queue .queued-row-main');
+  if (!(row instanceof HTMLElement)) return { clicked: false };
+  row.click();
+  return { clicked: true, readOnly: row.tagName === 'DIV', quoteCount: document.querySelectorAll('.queued-row-quote').length };
 })())
 '@
-  Assert-True ($click.clicked -eq $true) "queue-transfer recovery fixture is missing the immediate quote action"
-  Invoke-AgentBrowser -Arguments @("--session", $Session, "wait", "150") | Out-Null
+  Assert-True ($click.clicked -eq $true -and $click.readOnly -eq $true -and [int]$click.quoteCount -eq 0) "queue content must not offer unsafe editing or immediate quote"
 
   $after = Read-ConversationQueueTransferRecoveryMetrics -Session $Session
-  Assert-True ([int]$after.queueCount -eq 2) "failed immediate execution must restore exactly one queue row without duplication"
-  Assert-True (($after.queueTexts -join '|') -eq ($before.queueTexts -join '|')) "failed immediate execution must restore the message at its original queue position"
-  Assert-True ([int]$after.failedMessageCount -eq [int]$before.failedMessageCount) "failed immediate execution must not append a second failed optimistic message"
-  Assert-True ([string]$after.feedbackText -match '原消息已恢复到队列') "failed immediate execution must explain that the original queue item was restored"
+  Assert-True ([int]$after.queueCount -eq 2) "clicking queue content must keep both original messages"
+  Assert-True (($after.queueTexts -join '|') -eq ($before.queueTexts -join '|')) "queue content must not be rewritten or reordered by a blocked edit"
+  Assert-True ([int]$after.failedMessageCount -eq [int]$before.failedMessageCount) "blocked editing must not create another failed optimistic message"
+  Assert-True ([string]$after.feedbackText -match '暂不支持直接修改或立即引用') "queue restrictions must explain why original content is retained"
   Assert-True ($after.hasHorizontalOverflow -eq $false) "queue-transfer recovery feedback overflowed horizontally"
   Write-Step ("conversation queue transfer recovery -> " + ($after | ConvertTo-Json -Compress))
 }

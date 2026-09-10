@@ -9959,6 +9959,11 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
   ])
   assert.deepEqual(plan.persisted, ['thread-plan', 'thread-plan'])
   assert.deepEqual(plan.rpcCalls.map((call) => call.method), ['thread/start', 'turn/start', 'turn/start'])
+  assert.equal(Object.hasOwn(planResult, 'openerTurnId'), false)
+  assert.equal(Object.hasOwn(asRecord(planResult.request.payload) ?? {}, '_cxTurnStartOpener'), false)
+  for (const call of plan.rpcCalls.filter((call) => call.method === 'turn/start')) {
+    assert.equal(asRecord(call.params)?.clientUserMessageId, 'client-plan')
+  }
   assert.deepEqual(plan.updates.map((call) => call.patch), [
     { threadId: 'thread-plan', status: 'pending_start' },
     { status: 'starting', threadId: 'thread-plan', payload: planResult.request.payload },
@@ -9986,6 +9991,7 @@ async function smokeAppServerRuntimeStart(): Promise<void> {
     method: 'turn/start',
     params: {
       threadId: 'thread-fallback',
+      clientUserMessageId: 'request-fallback',
       model: 'gpt-test',
       collaborationMode: { mode: 'default', settings: { model: 'gpt-test', reasoning_effort: null, developer_instructions: null } },
       input: [{ type: 'text', text: 'Continue' }],
@@ -10649,10 +10655,14 @@ async function smokeAppServerRuntimeActions(): Promise<void> {
   assert.equal(startResult.status, 'starting')
   assert.equal(startResult.threadId, 'thread-actions')
   assert.equal(startResult.turnId, '')
+  assert.equal(Object.hasOwn(startResult, 'openerTurnId'), false)
+  assert.equal(Object.hasOwn(asRecord(startResult.request.payload) ?? {}, '_cxTurnStartOpener'), false)
   await new Promise<void>((resolve) => setImmediate(resolve))
   assert.equal((currentRequest as RuntimeRequestRecord | null)?.status, 'running')
   assert.equal((currentRequest as RuntimeRequestRecord | null)?.turnId, 'turn-actions')
   const startPayloadSummary = (currentRequest as RuntimeRequestRecord | null)?.payload
+  assert.equal(Object.hasOwn(asRecord(startPayloadSummary) ?? {}, '_cxTurnStartOpener'), false)
+  assert.equal(asRecord(rpcCalls.find((call) => call.method === 'turn/start')?.params)?.clientUserMessageId, 'client-actions-start')
 
   const interruptResult = await actions.interruptRuntimeTurn({
     requestId: 'request-actions-interrupt',
@@ -10672,7 +10682,7 @@ async function smokeAppServerRuntimeActions(): Promise<void> {
   ])
   assert.deepEqual(persisted, ['thread-actions', 'thread-actions', 'thread-actions', 'thread-actions'])
   assert.deepEqual(updates.map((call) => call.patch), [
-    { status: 'starting', threadId: 'thread-actions', payload: startPayloadSummary },
+    { status: 'starting', threadId: 'thread-actions', payload: startResult.request.payload },
     { status: 'running', threadId: 'thread-actions', turnId: 'turn-actions', lastError: null, payload: startPayloadSummary },
     { status: 'stopped', threadId: 'thread-actions', turnId: 'turn-actions', lastError: null },
   ])

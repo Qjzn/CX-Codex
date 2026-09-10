@@ -1,4 +1,5 @@
 import type { AcknowledgedUserMessage, OptimisticUserMessage } from '../types/codex'
+import { findUserMessageIdentityMatch, userMessageDisplayId } from '../conversation-transcript/userMessageIdentity'
 
 export const OPTIMISTIC_USER_MESSAGE_PREFIX = 'optimistic-user:'
 
@@ -9,6 +10,8 @@ export type OptimisticUserMessageMeta = {
   baselineMessageCount: number
   baselineTailMessageId: string
   authoritativeTurnId?: string
+  clientMessageId?: string
+  displayMessageId?: string
   createdAtMs: number
 }
 
@@ -74,6 +77,8 @@ function parseOptimisticUserMessageMeta(
       authoritativeTurnId: typeof record.authoritativeTurnId === 'string'
         ? record.authoritativeTurnId.trim() || undefined
         : undefined,
+      clientMessageId: typeof record.clientMessageId === 'string' ? record.clientMessageId.trim() || undefined : undefined,
+      displayMessageId: typeof record.displayMessageId === 'string' ? record.displayMessageId.trim() || undefined : undefined,
       createdAtMs: record.createdAtMs,
     }
   } catch {
@@ -188,6 +193,12 @@ export function filterVisibleOptimisticUserMessages(
 
   return optimistic.filter((message) => {
     const meta = parseOptimisticUserMessageMeta(message, rememberedMetaById?.get(message.id))
+    if (meta?.clientMessageId) {
+      return !findUserMessageIdentityMatch(persisted, {
+        clientMessageId: meta.clientMessageId,
+        turnId: meta.authoritativeTurnId,
+      })
+    }
     const signature = meta?.signature ?? userMessageSignature(message)
     const authoritativeTurnId = meta?.authoritativeTurnId?.trim() ?? ''
     if (authoritativeTurnId && persistedUserTurnIds.has(authoritativeTurnId)) {
@@ -205,4 +216,62 @@ export function filterVisibleOptimisticUserMessages(
 
     return true
   })
+}
+
+/** Keep confirmed display bindings in the existing bounded user cache before
+ * outbox cleanup removes the transient request-to-optimistic mapping. */
+export function reconcileUserDisplayIdentities(
+  previous: AcknowledgedUserMessage[],
+  incoming: AcknowledgedUserMessage[],
+  optimistic: OptimisticUserMessage[],
+  metaById: ReadonlyMap<string, OptimisticUserMessageMeta>,
+): AcknowledgedUserMessage[] {
+  const previousByIdentity = new Map(previous.map((message) => [JSON.stringify([message.turnId, message.id]), message]))
+  const groupByClient = (rows: AcknowledgedUserMessage[]): Map<string, AcknowledgedUserMessage[]> => {
+    const groups = new Map<string, AcknowledgedUserMessage[]>()
+    for (const row of rows) {
+      if (!row.turnId || !row.clientMessageId) continue
+      const key = JSON.stringify([row.turnId, row.clientMessageId])
+      const group = groups.get(key) ?? []
+      group.push(row)
+      groups.set(key, group)
+    }
+    return groups
+  }
+  const previousByClient = groupByClient(previous)
+  const incomingByClient = groupByClient(incoming)
+  const restoredBindings = new Set<AcknowledgedUserMessage>()
+  const messages = incoming.map((message) => {
+    let remembered = previousByIdentity.get(JSON.stringify([message.turnId, message.id]))
+    // Native thread/read can replace a live UUID with item-1. Preserve the
+    // display only for one-to-one client identity within this exact turn.
+    if (!remembered && message.turnId && message.clientMessageId) {
+      const key = JSON.stringify([message.turnId, message.clientMessageId])
+      const previousMatches = previousByClient.get(key)
+      if (previousMatches?.length === 1 && incomingByClient.get(key)?.length === 1) {
+        remembered = previousMatches[0]
+      }
+    }
+    if (!remembered?.displayMessageId || (message.clientMessageId && remembered.clientMessageId
+      && message.clientMessageId !== remembered.clientMessageId)) return message
+    const restored = { ...message, displayMessageId: remembered.displayMessageId,
+      clientMessageId: message.clientMessageId || remembered.clientMessageId }
+    restoredBindings.add(restored)
+    return restored
+  })
+  for (const message of optimistic) {
+    const meta = metaById.get(message.id)
+    if (!meta?.clientMessageId) continue
+    const match = findUserMessageIdentityMatch(messages, { clientMessageId: meta.clientMessageId,
+      turnId: meta.authoritativeTurnId })
+    if (!match || restoredBindings.has(match)) continue
+    const index = messages.indexOf(match)
+    const desiredDisplayId = userMessageDisplayId({ id: message.id, clientMessageId: meta.clientMessageId,
+      displayMessageId: meta.displayMessageId })
+    const displayIsLocked = messages.some((candidate) => restoredBindings.has(candidate)
+      && candidate.displayMessageId === desiredDisplayId)
+    messages[index] = { ...match, clientMessageId: match.clientMessageId || meta.clientMessageId,
+      displayMessageId: displayIsLocked ? `${match.turnId ?? ''}:${match.id}` : desiredDisplayId }
+  }
+  return messages
 }

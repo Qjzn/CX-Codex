@@ -45,7 +45,7 @@ const queuedMessageTransferImport = toImportPath(relative(outputRoot, join(repoR
 try {
   writeFileSync(entryPath, `
 import assert from 'node:assert/strict'
-import { applyActiveTurnIdToAcknowledgedUserMessages, normalizeAcknowledgedUserMessagesV2, normalizeThreadGroupsV2 } from '${normalizerImport}'
+import { normalizeAcknowledgedUserMessagesV2, normalizeThreadGroupsV2 } from '${normalizerImport}'
 import { createNotificationReplayCoordinator } from '${notificationReplayImport}'
 import {
   createConnectionManager,
@@ -1576,16 +1576,23 @@ const activeCachedMessages = [
   { id: 'old-user', role: 'user', text: 'repeatable prompt', messageType: 'userMessage', turnId: 'turn-old', turnIndex: 98 },
   { id: 'cached-user', role: 'user', text: 'repeatable prompt', messageType: 'userMessage', turnId: 'msg-fallback', turnIndex: 9 },
 ]
-const activeCachedMessagesWithStableTurn = applyActiveTurnIdToAcknowledgedUserMessages(
-  activeCachedMessages,
-  'turn-active',
-  true,
-)
-assert.deepEqual(
-  activeCachedMessagesWithStableTurn.map((message) => message.turnId),
-  ['turn-old', 'turn-active'],
-)
-assert.strictEqual(applyActiveTurnIdToAcknowledgedUserMessages(activeCachedMessages, 'turn-active', false), activeCachedMessages)
+const historicalTurnOriginalFetch = globalThis.fetch
+globalThis.fetch = async () => Response.json({ data: {
+  messageState: 'cached', inProgress: true, executionState: 'running', activeTurnId: 'turn-active',
+  threadRead: { thread: { id: 'thread-active-cached-identity', turns: activeCachedMessages.map((message) => ({
+    id: message.turnId, status: 'completed', items: [{
+      id: message.id, type: 'userMessage', content: [{ type: 'text', text: message.text }],
+    }],
+  })) } },
+} })
+try {
+  const historicalSnapshot = await getThreadRuntimeSnapshot('thread-active-cached-identity')
+  assert.equal(historicalSnapshot.activeTurnId, 'turn-active')
+  assert.deepEqual(historicalSnapshot.acknowledgedUserMessages.map((message) => message.turnId),
+    ['turn-old', 'msg-fallback'], 'runtime activity must not rewrite historical user turn identities')
+} finally {
+  globalThis.fetch = historicalTurnOriginalFetch
+}
 
 const olderTurnMessages = normalizeAcknowledgedUserMessagesV2({
   thread: {

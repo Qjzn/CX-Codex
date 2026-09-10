@@ -1,5 +1,316 @@
 # Tests
 
+## 会话体验P0：真实前后台验证与跨轮计时（2026-09-10，本地候选）
+
+- 独立17448、专用native任务两轮真实发送：气泡分别48/32ms、服务端接受51/37ms、运行提示358/129ms。前台公开进展数据到DOM可见11.1ms；两个样本不是P95，也没有桌面/Web同时同源对照。
+- 第二轮在手机宽度浏览器实际隐藏141248.4ms；返回前原生已完成，返回时无需刷新即可看到final、fresh/completed，计时保持34秒。浏览器标签页不是Android后台进程、锁屏或Doze证据。
+- 真实逐帧观察发现第二轮开始时短暂00:36→00:00，约103ms。公开state专项修前精确复现36130ms应为130ms；原因是线程级Runtime摘要沿用上一轮起点。修复只改该摘要的代际清理、开始事件时间传递及projection时间字段的数值读取，不新建时钟或状态源，不修改UI模板。
+- 新轮或已结束后无ID的新accepted执行清旧起止时间；同轮通知保留起点，缺失时间可被明确native起点补齐。原生Unix秒不再被字符串读取过滤，缺少所有时间证据时不以Date.now制造执行起点。晚到旧序号快照仍按原版本门槛拒绝。
+- 独立复核新增真实红例：既有helper把sync_degraded也算settled，同轮恢复会清空摘要起点，旧snapshot可能掩盖它。仅在本轮新执行判定排除此状态，不改全局helper合同；公开摘要与投影均回归通过。
+- 永久入口`node scripts/verify-conversation-runtime-timing-contract.mjs`已接入core-flows，最终8/8。仅原始跨轮与sync恢复有明确修前红证据，其余是保留/新增控制，不全部宣称红→绿。
+- 修后bridge-free浏览器使用真实state/gateway/projection/ThreadConversation/TurnExecutionClock，HTTP/WS与输入时钟为夹具。1365×900、393×852均在新正文GET挂起时显示B00:00，真实组件tick至00:05，释放快照后不归零；A始终00:05，公开进展可见、普通动态偏好有脉冲、无错误/横向溢出。主代理已目视复核截图；这不是补丁后的真实native重跑。
+- 仍开放：预创建但尚无首轮的原生任务直达URL时，thread/read(includeTurns)返回`list_turns is not supported yet`，首轮发送后恢复。尚未修复，不等同于所有新会话入口失败，也不能声称完整发布门禁通过。
+
+原始样本、修后浏览器报告、截图和最终检查日志见`output/conversation-live-validation-20260910/`。本轮没有替换/重启7420，没有Git提交/推送/发布，没有Android测试；仅私有候选及测试浏览器启停。人工复验合同：连续两轮、同轮断线恢复、旧快照晚到均不得借上一轮计时或丢失本轮起点；公开进展与final继续各自呈现。
+
+最终检查：`build:frontend`、`verify-core-flows.mjs`（含8项计时、16项刷新合同）、`verify-frontend-normalizers.mjs`、`test:7420:frontend -- -SourceOnly`、`verify:governance`、`git diff --check`全部通过；构建既有Vite配置/大chunk警告未隐藏。私有浏览器关闭，17448/17449均0监听，7420健康ok。
+
+回滚按本节新增计时hunk及专项测试撤销，保留之前dirty变更，不整文件回退。
+
+## 会话体验P0：刷新意图与正文来源（2026-09-10，本地候选）
+
+修复边界：只改前端gateway/公开state的读取协调，不改会话投影、UI模板、原生Runtime写入、队列持久化或日志reader；没有替换/重启7420、真实模型/手机测试、Git提交/推送或发布。
+
+- 使用正确HTTP响应结构先得到7项定向结果：5红/2绿。明确复现旧A尚未完成时B刷新只等待A就返回、6秒内被12秒静默节流跳过、同毫秒被900ms gateway缓存满足、同期刷新丢补读，以及runtime-only响应把正文来源误写为unavailable。真实state不可用和cached不冒fresh是原本通过的对照；后续新增取消/失败等控制不全部计为修前红例。
+- `refreshSnapshot`只表达必须重新读取状态正文的意图，不等于`forceSettledRpcRefresh`，不强制重型原生RPC。旧读结束后由首个有效等待者启动补读，同期等待者共享它；补读开始之后的新意图还需要下一次读取。WeakSet只标记真正处理完成的补读，不把普通缓存读、异常或中途取消当作完成。
+- status/reconcile只携带运行事实，通过显式`runtimeOnly`更新，不能用`threadRead===null`猜来源。同版本保留已知fresh/cached，新序号、生命周期变化或stale把fresh降为cached，正文读取后才能确认fresh；实际state返回unavailable仍诚实降级并保留可读旧正文。
+- 自动前台/连接恢复及正文失效通知沿既有公共同步链传递刷新意图；普通无正文失效的侧栏通知继续受静默节流约束，没有增加轮询频率或新的状态所有者。
+- 扩展到16项时又稳定复现一个真实红例：自动R2读取过程中收到新正文通知，R2结束后删除pending导致第三版正文丢补读。修正为读取开始前领取旧标记、失败/取消恢复需求，途中到达的新标记留给下一次读取。对应公开WebSocket用例只执行该通知新建的一次350ms debounce，不运行背景轮询来凑结果。
+
+永久入口：`node scripts/verify-conversation-refresh-contract.mjs`（已接入`npm run verify:core-flows`）。真实`useDesktopState`→HTTP gateway→唯一projection，只有HTTP与浏览器宿主受控。每个用例独立进程/任务ID，逐请求记录开始和实际释放的版本；不启动真实服务、不调用模型。浏览器专项使用agent-browser的独立17447与真实组件，证据见`output/conversation-refresh-browser-20260910/`；它不是7420部署、真实端到端P95或Android证据。
+
+最终本地检查：专项16/16，主代理执行包含该专项的`node scripts/verify-core-flows.mjs`、`node scripts/verify-frontend-normalizers.mjs`、`npm run test:7420:frontend -- -SourceOnly`、`npm run build:frontend`、`npm run verify:governance`及`git diff --check`通过。中间成功标记自引用导致TS2454，修正后重新构建通过；Vite既有配置/大chunk警告仍存在。最终指纹与参考边界见`output/conversation-refresh-audit-20260910/implementation.md`；CLI/server实现本轮未改，不拿之前的server构建当作本轮重跑。
+
+浏览器主代理独立重跑`node output/conversation-refresh-browser-20260910/verify-after.mjs`，202条保存证据断言通过（不是202个独立场景，`productOverallPass:false`）。最终源码重启私有fixture后重跑393×852及1365×900旧A挂起主例：每组只一次公开refresh、2次state GET、1用户/1轮/1final、source=fresh、终态20秒且无运行标记/错误/横向溢出；两张final截图已目视核对，4份源文件hash匹配。较早修订另有两尺寸6秒内更新及runtime-only保留正文控制，不能反向标成最终hash全矩阵。私有浏览器已关闭，17447无监听，主代理独立检查确认；不是真机触摸或生产延迟证据。
+
+旧证据更正：`output/conversation-refresh-audit-20260910/fixture-audit.md`及真实gateway的22条检查区分了state的平铺data与reconcile的`data.snapshot`。上轮旧reconcile桩确实错误，但正确桩也能重现上述产品缺陷；6544ms间隔不支持“900ms启动缓存”旧归因。旧output保持原样，不能回写旧样本冒认通过。
+
+人工复验合同：旧正文请求未返回时刷新一次，释放旧响应后无需第二次刷新即显示最新final；完成后6秒内再刷新应读取新内容；连续刷新不并发放大正文GET；运行状态先到时不伪造回复，正文恢复后source与终态/耗时一致。失败或取消某个等待者不能吞掉其他有效刷新。此切片不取消底层读超时、不承诺模型更快，完整生产/设备/发布门禁继续开放。
+
+回滚须按本节`refreshSnapshot`协调、`runtimeOnly`来源处理及对应专项测试逐hunk撤销，保留之前的dirty变更；不整文件回退。
+
+## 会话体验P0：公开进展、执行计时与阅读保护（2026-09-10，本地候选）
+
+本轮按“进行下一步”实施，不替换/重启7420，不提交、推送或发布；没有真实模型、用户会话或设备操作。之前身份恢复的dirty改动保持不变，以下证据不放行完整P0或产品目标。
+
+- 先复现真实reader把尚无`task_complete`的任务恢复成completed；15项生命周期测试最初11红/4绿。修复仅映射明确`task_started/task_complete/turn_aborted`和同turn时间，失败、中断与普通完成分开；原生Unix秒优先，旧记录外层事件时间为兼容回退。显式null在projection仍保持未知，不借item/轮询时间；wall `duration_ms`不冒充排除等待后的active elapsed。
+- 修复过程中另复现空生命周期边界导致分页轮数虚增，以及已结束任务的旧start回放阻断下一合法任务；前者按首个可见item计数，后者精确终态ID的旧start对scope也no-op。第7项增加后续新轮断言，保持15项。最终15生命周期＋20来源＋37身份＋12显示合同共84/84通过。
+- 浏览器修前两条commentary默认只挂载最后一条；追加command后正文DOM变为0、选区失效。两个相隔约3秒的样本停在同一个“已处理34秒”。此红例来自原生结构snapshot→公开state→真实组件；不是人为把reader结果改成running。
+- 新UI默认最近两段公开commentary且不作三行截断；操作不占文字窗口，只有显式“查看操作详情”后才挂载命令/输出等结构行。操作归本轮，不虚构与某段文字的因果关联。文件摘要和审批仍沿既有独立层级；不展示内部reasoning。
+- `TurnExecutionClock.vue`只在known-anchor running时本地逐秒更新，hidden清interval，waiting/terminal停表、sync-degraded隐藏不可信秒数，未知时间不伪造00:00；降低动态效果时取消持续动画。现有state恢复轮询仍存在，不把“时钟本身无RPC”冒称全链没有请求。
+- 目视复核发现新分隔状态旁仍保留旧“正在思考”行；最终候选已删除重复行，将原运行反馈指标属性迁入同一时钟根节点，运行只保留一个状态所有者。既有浏览器smoke断言同步检查唯一状态；本轮不冒称已执行该Playwright脚本。
+- 选择文字、焦点进入过程、离底部或显式展开历史时，保留当前挂载的过程快照，阻止自动裁剪、v-html替换及终态收起。返回最新释放保护；显式定位可刷新目标窗口；快照只保留当前挂载轮次、不持久化。两处独立审查发现的新消息定位与冻结Map累积边界已修复。
+
+验证命令（均本地）：`node --test scripts/session-log-lifecycle.test.mjs scripts/session-log-history-source.test.mjs scripts/session-log-user-identity.test.mjs scripts/session-log-display-contract.test.mjs`、`npm run verify:core-flows`、`npm run verify:frontend-normalizers`、`npm run test:7420:frontend -- -SourceOnly`、`npm run build:frontend`、`npm run build:cli`、`npm run verify:server-modules`、`npm run verify:governance`、`git diff --check`。上述命令通过；source-only最初按旧“最后一个混合过程项/内联时钟”的实现断言失败，已更新为两段文字/独立时钟/操作显式挂载的当前合同，并保留有界、无网络时钟和双重跟随保护断言。未跑该大脚本完整浏览器矩阵。Vite既有配置前向兼容和localPreview大chunk警告仍在。
+
+浏览器证据目录：`output/conversation-live-progress-browser-20260910/`；协议/参考审计：`output/conversation-live-progress-20260910/audit.md`。隔离Vite不加载真实Bridge，夹具API只供测试；实际日志恢复用自有JSONL→生产reader结果。主代理独立执行`node output/conversation-live-progress-browser-20260910/verify-before.mjs`及`verify-after.mjs`：分别14条红例证据断言、1070条修后证据断言通过，后者明确`productOverallPass: false`；这些是保存的浏览器证据核对数，不是1070个独立场景。
+
+- 前一UI修订的完整交互：393×852、1365×900、884×1104及393 reduced-motion四组，从两段公开文字经过新命令/第三段与正文delta到终态，保持原文字节点、选区/Range、复制节点与祖先，命令/输出默认0挂载。手机和reduced组scrollTop=200，desktop=93；884内容未形成可滚窗口，scrollTop=0，不能算非零滚动锚点测试。手机详情按钮44px，实点后才挂载命令和输出，Tab可继续；desktop显式定位新C3成功。普通时钟自行推进、同节点动画继续，终态冻结；reduced无持续动画。
+- 最终UI修订删除重复状态后，重新获取桌面/手机/884/reduced四份窄回归截图与JSON：均1个divider、1个live状态、1个running反馈标记，普通动画1、reduced0，无横向溢出；`final-mobile-running.png`等四图由主代理目视确认。实际reader手机运行→完成另重跑选区/节点保持与15秒终态冻结。六份当前源码SHA-256核对通过，但这些hash不追溯证明前一修订的交互截图；完整版本边界记录于report。
+- 884实测`pointer:coarse=false`，仅视口模拟；普通desktop/884详情32px符合既有设计，不声称触摸折叠屏44px通过。waiting/stale/hidden-tab停表及多轮冻结缓存上限本轮只有投影测试/源码审查，未做相应浏览器行为验证。两次私有浏览器about:blank中断的样本被排除并保留记录，后续用新case完成验证，不当成产品通过或失败。
+- 终态reader浏览器样本曾需要额外公开刷新，最终`projection.sourceState=unavailable`保留为限制；当时“启动缓存”的归因未被验证。后续刷新专项审计确认旧reconcile夹具嵌套不正确，同时正确合同下仍可复现12秒静默节流和in-flight刷新意图丢失；历史证据不回写成通过。生命周期事实与视觉终态通过不等于整体fresh恢复通过。
+- 最终报告见`output/conversation-live-progress-browser-20260910/report.md`。`cleanup.json`记录专用浏览器正常关闭、17446无监听；主代理另行读取清理记录并确认端口无监听。没有关闭用户浏览器或其他服务。
+
+人工复验：运行时不点过程即读到公开文字；不更新snapshot仍能看秒数；选择当前文字并追加工具/第三段/终态，选区与位置不丢；点操作详情后才看到技术行；Tab可达且窄屏44px；点击返回最新恢复跟随，收藏定位新到文字可达；等待审批/断连/完成时文案、动画与秒数对应真实状态。
+
+剩余范围：真实7420发送反馈与端到端P95、完整长会话压力重跑、手机后台两分钟/网络恢复、跨组件新任务交接、未知或paginated日志及旧完整性限制均未放行。新计时使用已有权威锚点，不代表模型更快；历史缺生命周期的兼容策略未伪装成完整原生等价。下一步优先真实发送→公开进展→final的延迟分段取证，再决定是否调整订阅/刷新链路。回滚只逐hunk撤销本节UI/helper、生命周期接线及对应测试合同，保留既有身份/缓存/队列改动，不整文件回退。
+
+## 会话体验P0：原生 raw-first 中间帧与日志来源（2026-09-10，本地候选）
+
+问题：上一切片修正了最终双来源快照，但普通模型输入先于UI事件到达时，公开状态链路仍暂时插入匿名用户气泡。此次隔离浏览器先保存真实reader驱动的红例：raw阶段2用户/2轮，event到达后才恢复1用户/1轮，不能只验最后一帧。
+
+- 按固定原生0.153.4历史契约，仅实际文件首个完整非空`session_meta`声明`history_mode=legacy`且ID匹配时，从首帧仅恢复规范UI用户。raw不确认本地发送，不按正文关联身份；原日志不改。来源审计见`output/session-log-history-source-20260910/audit.md`。
+- 新`appServerSessionLogCheckpoint.ts`复用checkpoint文件句柄，以4KiB块探测、最多64KiB；完整头字节指纹覆盖真实头部可能超过512字节的模式字段。cold full/tail与direct parse使用同一规则，cache绑定文件及thread身份；后续fork meta不覆盖首头。缺失/未知/损坏/不完整/超预算/mismatched头保守兼容，这是CX边界，不冒充原生默认/报错语义。
+- 完整或可信增量的原生空历史返回可用thread，真实runtime snapshot链路仅调用轻量`thread/read(includeTurns:false)`；这验证避免无谓heavy RPC，不是实际模型或7420延迟数据。冷截断尾窗没有记录则返回null，不能抹掉窗口外历史；读取前后原生来源证据不一致同样拒绝，外层cache不记混源空快照。
+- 私有恢复缓存逐次clone并保留隐藏的显式轮次边界，不向UI生成空轮/用户。后续无turnId的agent event在增量与完整读取中归属一致，不落到上一轮；包含首轮仅raw的控制。
+
+专项`node --test scripts/session-log-history-source.test.mjs`最终20/20，纳入`verify:core-flows`。修前最初7项6红/1绿，扩至14项9红/5绿；随后新增2项是修后控制。独立审查再复现尾窗假空、读取时原子替换混源及隐藏边界丢失，固化4项真实文件/流时序红例后修绿；不是全部20项都曾失败。相邻37项日志身份、12项显示来源一起运行69/69通过。
+
+浏览器证据：`output/session-log-history-source-browser-20260910/`，私有17445、agent-browser、真实reader产物→公开useDesktopState→真实组件/CSS，自有JSONL与受控API，不接真实模型/会话。393×852和1365×900主例均经local→202（仅request/thread/starting）→raw-only→真实追加event→公开refresh；最终源码另重跑手机主例。每个观察阶段均1用户/1轮、原user/turn节点、display/render key、DOM Range/anchor及scrollTop=120，MutationObserver只记录初始挂载；raw不清outbox，实际event身份到达才清。缺失/unknown头对照保守保留2用户且不确认A，不算零重复通过。真reload仅验证逻辑身份及无重发，sourceState仍unavailable，不冒认状态恢复或跨document物理连续性。
+
+`node output/session-log-history-source-browser-20260910/verify-after.mjs`由主代理独立重跑，329项证据断言通过；按最终源码重生所有reader输入并核对JSONL/源码哈希。桌面浏览器来自早候选，最终reader重生一致，不冒称最终hash桌面全重跑；报告明确`productOverallPass:false`。已查看最终手机raw/event截图，没有改版或字体/触控/真机验收声明。私有浏览器关闭、17445无监听，见`cleanup.json`。
+
+最终检查：`node scripts/verify-core-flows.mjs`（含最终20项）、`node scripts/verify-frontend-normalizers.mjs`、`npm run build:cli`、`node scripts/verify-server-modules.mjs`、`npm run verify:governance`及`git diff --check`通过。服务模块日志中的慢RPC/bridge failed是受控失败夹具，不是7420实况。未改前端实现，因此本轮不重跑frontend build，也不拿上一切片构建当作本轮构建。
+
+残余：未知格式raw-only仍可能保守显示两条；paginated规范completed-item、远程图片/音频空文本事件、新任务跨组件/父轮次交接未覆盖。普通fallback仍沿用completed呈现策略；本轮没有修复进展默认折叠、思考动画/计时与终态组合问题。任意同inode中段改写仍超出增量append-only契约，完整P0/CX-CE-02和发布门禁未放行。
+
+边界/回滚：本轮生产改动仅reader及独立checkpoint helper；没有改CSS、数据库、outbox格式、模型协议或原日志。未替换/重启7420、未Git提交/推送/发布，无真机或真实模型测试。回滚应逐hunk撤销本节来源/缓存变化及测试入口并移除本轮新增helper/专项脚本，保留既有dirty改动，不整文件回退。
+
+## 会话体验P0：双来源用户显示与阅读连续性（2026-09-10，本地候选）
+
+> 以下为上一切片证据；其中显式可信legacy的raw-first缺口由上节候选继续修正，未知格式及其他残余仍有效。
+
+问题：上轮原生结构JSONL的模型输入与UI事件进入同一轮，匿名response抢占opener。DOM虽然只有一条气泡，实际已替换原user/turn节点并清空选区。本轮先重现该浏览器红例，再修投影来源，不用正文去重掩盖问题。
+
+- 官方CLI `rust-v0.153.4`固定提交`3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`的[ThreadHistoryBuilder](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/app-server-protocol/src/protocol/thread_history.rs#L443)明确：普通raw user不产生UI用户，legacy用户事件才产生并携带client身份。原生确实先写模型输入再发UI事件。证据和paginated差异见`output/session-log-display-20260910/audit.md`；不是重新跑真实模型。
+- `projectConversation.ts`在同轮存在日志用户事件或原生snapshot/notification用户时，不将`recoverySource=response_item`的模型输入投影成用户。原始reader记录保留、不改ID、不回填client、不建立猜测alias；本地optimistic不充当规范来源，跨轮不抑制。
+- `ThreadConversation.vue`按稳定display key逐条显示该轮全部user blocks，补上同轮后续用户正文；复制、收藏、失败操作和反馈属性各自绑定当前用户项。轮次回退仅首条显示。保持既有同轮用户聚合布局，不声称逐事件交错时间线，也没有新增弹窗或动效。
+- 新永久脚本`node --test scripts/session-log-display-contract.test.mjs`执行真实reader→真实projection：最初6项为4红/2绿；补中间态时另有1项真实红→绿；其余新增控制首跑即绿。最终**12/12通过**，纳入`verify:core-flows`，不是12项都曾失败。涵盖native通知已到而日志event未到、native snapshot与fallback页并存、不同正文来源选择、同文独立client、跨轮legacy、空client和未知response-only。
+
+浏览器证据在`output/session-log-display-browser-20260910/`：隔离17444的真实reader产物→公开useDesktopState/gateway→真实组件；自有JSONL及API，不接7420/真实用户sessions/模型。
+
+- 原生双源主例从local→仅含request/thread/starting的202→快照→公开刷新，在393×852、1365×900、884×1104均保持1用户/1轮次、原user/turn节点、display/render key、DOM Range和scrollTop=120；快照清outbox，无重发、失败气泡或非预期API/JS错误。最终源码另跑手机主例，早期与最终哈希分别留存。
+- 同turn双独立client A/B控制：原始1个response+2个event→2个投影用户→2个DOM，A原节点、选区和滚动保持，仅新增B。B-only不能确认A；raw-only无client也不能确认A。后两者保守保留两条/两轮，不能算零重复或零跳动通过。
+- 真正浏览器重载后逻辑身份恢复，本document发送0次、累计1次；不要求跨document物理节点/选区/滚动相同。884仅视口模拟，coarse pointer为false，不是真机/触摸证据；native通知早到的分支本轮仅永久测试，不冒称浏览器覆盖。
+- 本轮未改过程折叠规则：快照来自既有fallback completed策略，公开进展仍在展开后可读；不据此声称“文字优先”“思考动画/时间”和真实执行速度已验收。
+
+`node output/session-log-display-browser-20260910/verify-after.mjs`的310项证据核对通过，并重新用当前reader读取7份夹具、核对浏览器输入与最终源码哈希；输出明确`scopedIdentitySlice: passed`及`productOverallPass: false`。`reloadSourceState: unavailable`也如实保留，仅逻辑身份/无重发通过，不冒认完整reload状态恢复。自有浏览器已关闭，17444无监听，见`cleanup.json`；7420仍为原PID 91540，未执行服务操作。
+
+验证：`node scripts/verify-core-flows.mjs`、`node scripts/verify-frontend-normalizers.mjs`、`npm run build:frontend`、`npm run verify:governance`通过；Vite配置前向兼容/localPreview大chunk警告仍存在。本轮生产改动只在前端投影和组件，无server实现修改；上一轮CLI/server构建不冒充本轮重跑。最后一次完整核心检查含11项显示测试，第12项原生snapshot控制单独运行通过。
+
+残余与下一步：raw先到且尚无任何规范UI来源的正常增量区间、paginated日志、远程图片/音频空文本事件、首次新任务跨组件及跨父轮次交接仍未关闭；上轮同inode中段重写绕过采样checkpoint的限制仍在。完整CX-CE-02、P0和发布门禁未放行。下一切片优先显式识别日志历史模式，从读取入口分离规范UI源与未知兼容源，再验逐帧反馈。
+
+边界/回滚：未替换或重启7420，未提交、推送、部署或发布。只需按本节列出的投影来源过滤、user模板遍历及新增测试入口逐hunk撤销可回到本轮前行为；保留先前未提交改动，禁止整文件回退。原始日志、数据库和outbox存储格式未变。
+
+## 会话体验P0：日志回退身份恢复（2026-09-10，本地候选）
+
+> 以下为上一切片的原始证据；其中双来源opener替换已由上节候选修复，其余边界继续有效。
+
+- 通过真实`readThreadReadFromSessionLog`读取自有合成JSONL，不读用户sessions、不调用模型。初始11项为7失败/4通过，复现event身份未读取、同文response吞掉identified event及增量clone丢身份；后续边界用例不能都计为旧版红灯。
+- `event_msg/user_message.client_id`仅属于事件本身，恢复为`clientId`；明确`task_started.turn_id`且无冲突时才归属轮次，孤立turn_context、结束后事件、冲突生命周期不猜配。增量保留身份、来源、时间、图片与解析scope；全量/增量使用日志字节偏移生成记录ID，避免同时间戳或分段读重置序号丢消息。
+- 路径替换、截断及首末各512字节检查失败时重新扫描，不继承旧scope；不是任意同inode中段重写的完整检测。没有末尾换行时下次完整重扫；大行分块只在完整行边界拼接，避免反复复制整条记录。
+- 纯图片event保留字符串local_images及既有image path标记；非本地URL不伪装成本地文件，未知远程图片/音频格式未在本轮扩展。内部context仍过滤。identified event与无身份response没有精确join，禁止按正文互相删除或转移身份；两种表示可能继续保留，完整CX-CE-02仍未放行。
+- 参考已生成的隔离原生CLI 0.153.4日志，以及缓存桌面26.818.5229对clientId的消费职责。未找到桌面JSONL恢复等价实现，不声称全量桌面对齐；只读审计见`output/session-log-identity-20260910/audit.md`。
+
+本轮专项命令：`node --test scripts/session-log-user-identity.test.mjs`，37/37通过，并纳入`scripts/verify-core-flows.mjs`。独立审查另复现非候选坏JSON误绑、流解析结束后文件改写导致旧scope/新checkpoint混存；修复后固化真实文件和流结束时序，另加正常并发追加仍从原字节末尾增量继续的控制。核心计划/目标/队列契约、frontend-normalizers、前后端构建、server-modules及governance通过；首次server编译发现新增Buffer类型推断不匹配，修复后重跑通过。Vite前向兼容及localPreview大chunk警告仍为已知项；这些检查不代替生产/真机。
+
+独立审查最终**4/5，不是整体全绿**：`output/session-log-identity-20260910/run-reader-review.mjs`通过坏行、真实stream-end后首尾变化竞态、普通追加等价及8MiB单行恢复；仍可复现同inode中段task_started等长改写并追加时误用旧scope，首尾512B采样不构成整段完整性证明。当前增量契约仅支持原区间不变的正常追加；任意中段原地改写未解决，记录在`reader-review-findings.md`，不能据此放行完整P0。8MiB检查不是生产延迟或性能门禁证据。
+
+浏览器（隔离17443，真实reader产物→真实useDesktopState/gateway/ThreadConversation，产品API受控；不是7420）：
+
+- identified event-only正例在393×852、1365×900的local→202 starting→snapshot→首次公开refresh保持1用户/1轮次、原节点、display key、DOM Range与scrollTop=120；snapshot清outbox，无失败或逃逸API。真reload走selectThread，逻辑身份恢复且不再次POST。后续手动滚动/点击展开用于截图，不计入上述阅读保护断言；进展默认仍折叠，展开后内容存在，不称文字优先已实现。字体实取符合既有style.css，未美化夹具。
+- 缺response turn元数据的legacy双源对照：2原始用户/2投影/2DOM，保留无法关联的匿名mirror，不冒认全面去重。与当前原生结构相同的独立对照补有`metadata.turn_id`与`content_item_kinds=['user.text']`：**2原始用户/1轮次→2投影用户→DOM仅1个opener，但原用户/轮次节点均被替换、选区丢失**；outbox虽然清空，身份稳定仍未通过。不能用DOM只有一条判为去重成功。证据：`output/session-log-identity-browser-20260910/unjoined-native-shape-report.json`。
+- 同文独立client的公开刷新控制：B-only证据不能确认A，A继续confirming；A+B证据到齐才清A，2条原始/投影/DOM均保留。图片本轮浏览器未扩测，仅有reader自动化控制。全部素材见`output/session-log-identity-browser-20260910/`；不得用event-only正例替代原生双源反例。
+
+`node output/session-log-identity-browser-20260910/verify-reports.mjs`的235个**证据核对**断言exit 0，包含确认上述已知失败存在，并明确输出`productOverallPass: false`，不是235个产品验收通过。当前reader重新读取6份夹具，与捕获的浏览器输入逐项相等；手机采集时的较早源码哈希单独保留，未伪装全部来自同一版本。
+
+边界不变：未替换/重启7420，未提交、推送、部署或发布。日志回退仍沿用既有completed状态策略，本轮不证明运行状态、计时或所有历史重复已修复；后续优先消除恢复来源歧义，再验证首次新任务交接与进展层级。
+
+## 会话体验P0：原生消息身份闭环（2026-09-10，本地候选）
+
+> 本节为上一切片证据；其中“session-log仍丢client_id”已由上方修复替代，其余未验收边界仍保留。
+
+### 当前契约及失败优先验证
+
+- Runtime启动将持久请求的`clientMessageId`传为原生`clientUserMessageId`；execute、plan兼容降级、thread/resume重试均保持原键、正文和选项，不创建新的重试循环。前端快照和实时通知优先读取用户`clientId`，旧`clientMessageId/clientUserMessageId`仍兼容；非空原生字段优先，旧别名不得冒领。
+- 原生0.153.4的通知用户item ID为UUID，历史read可改为`item-1`。投影只归并同轮、跨快照/通知来源、一对一的原生身份；保留真实snapshot ID及经过验证的live别名以恢复精确显示绑定。同来源多项、跨轮冲突、缺身份不按正文或位置猜配。缓存也只在同轮一对一客户端关联下保留自定义display，歧义不得转移。
+- 同item的空clientId回放不抹除已知身份；精确绑定与未匹配本地项碰撞时保持不同渲染键。只有runtime状态先到、仍无真实轮次/消息证据且存在未绑定本地提交时，不凭status创造第二个空轮次。本地仍确认中，不伪装正在执行；实际turn/item通知的活动仍显示。
+- **撤回上轮临时opener推断**：真实新版`turn/start`可能接续当前轮，返回turnId不是“快照第一位用户属于本请求”的证据。删除本地临时`runtimeOpenerIdentity.ts`，移除生成/顶层返回/前端解释；旧诊断payload保留原样且不作确认依据，不迁移数据库、不删除用户数据。原服务端测试改名为`runtime-user-identity-contract.test.mjs`并保留HTTP、SQLite、重放、native queue、伪造/损坏控制责任。
+- 首批16项：旧实现13失败/3通过，仅补发送字段后7失败/9通过；读取映射、撤回位置推断、快照/实时别名与缓存补测分别先复现再修复。浏览器及独立审查还复现空轮次、空client回放抹除和精确alias display丢失。最终专项为**native 34/34、display 48/48、runtime 17/17，共99项**；不是99项都在旧实现失败。最后两个审查用例先在独立output脚本红→绿，再迁入永久测试。
+
+### 原生协议实证（区别于真实模型与生产）
+
+- 当前CLI 0.153.4真实app-server，隔离配置/工作目录，唯一模型请求由回环假provider返回固定文字。通知、live thread/read、进程重启后resume/read均保留相同clientId。最终1次本地`/responses`、0 Authorization、0外部代理尝试、0工具/授权请求；两个自有CLI进程exit 0。证据：`output/native-identity-protocol-20260910/native-run-jzly7k/result.json`。
+- 首次运行后台插件发现产生4次外部CONNECT尝试，全部被本地拒绝代理阻断，因此首轮总门禁记红；关闭相关功能后连续两次通过。原红记录保留，不称首次全绿。该测试没有真实模型、真实账号、7420、手机或公网性能证据。
+- 对齐参考为缓存桌面26.818.5229的客户端消息关联职责，加当前本机CLI新生成schema及真实协议实证；不是当前桌面GUI全量对齐，没有复制专有实现。维护/诊断/对齐技能要求分别取协议、节点和恢复证据，不以字段存在或截图代替端到端验证。
+
+### 浏览器与剩余边界
+
+- 隔离17442、agent-browser专用会话、真实useDesktopState/gateway/ThreadConversation和既有样式，产品HTTP桩控制且WebSocket/逃逸API阻断。POST202严格仅requestId/threadId/starting，不提供turn/opener；快照只提供原生clientId，不提前放GET证明。旧实现393×852明确2个用户DOM/2轮次/2投影块，outbox confirming 1。
+- 首次修复后用户已不重复，但MutationObserver发现runtime先到产生一个空权威轮次；该次严格验证失败，另存`first-after-red-*`。补保护后393×852、1365×900从local→202→native snapshot→refresh各帧始终1用户/1轮次；原user/turn对象、选区、display/render键与scrollTop=120保留。Mutation只有初始各1次插入，此后0新增/移除；snapshot即清outbox，无request证明查询、失败态或逃逸API。
+- 真浏览器reload通过真实selectThread水合与公开刷新，只验逻辑身份、缓存及不再次提交；不承诺跨document物理DOM/选区/scroll。无原生身份对照仍保留2用户/2轮次和1条confirming outbox，防止误吞；该反例不是所有旧版本去重通过。截图、严格采样、完整复现和最终状态见`output/native-identity-browser-20260910/README.md`。
+- 本次不是完整P0/发布放行：session-log fallback仍会丢`event_msg.payload.client_id`，且不能靠相同正文给无身份response补配。旧CLI、首次新任务跨组件预览、同轮后续用户呈现、真实服务消息一次执行及真机等仍需独立验收。未替换/重启7420，未提交/推送/部署/发布；保留之前未提交改动。
+
+### 已运行检查
+
+```powershell
+& 'C:/Program Files/nodejs/node.exe' --test scripts/native-user-identity.test.mjs scripts/runtime-user-identity-contract.test.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-display-identity.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-core-flows.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-transcript.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-frontend-normalizers.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run test:7420:frontend -- -SourceOnly
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:frontend
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:cli
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-server-modules.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run verify:governance
+& 'C:/Program Files/nodejs/node.exe' output/native-identity-browser-20260910/verify-before.mjs
+& 'C:/Program Files/nodejs/node.exe' output/native-identity-browser-20260910/verify-after.mjs
+```
+
+上述专项、核心门禁、normalizer、transcript、源码检查、governance、构建及最终浏览器报告校验均exit 0。before校验只确认旧缺陷，after中的无身份分支只确认未解决边界。server smoke曾因旧全量RPC参数断言缺少新增原生字段失败，补全原键断言后通过，未删除原责任。构建仍有已有Vite配置前向兼容和localPreview大chunk警告；server故障注入日志不是7420故障。core-flows仅证明本地计划/目标/队列等确定性契约，不能代替生产表现或延迟测试。
+
+## 会话体验P0：消息显示身份稳定（2026-09-10，本地候选）
+
+> 历史记录：本节原始opener证明方案及早确认未解决状态，已由上方“原生消息身份闭环”替代。以下保留当时实验结果和旧证据路径，不作为当前实现/当前门禁声明；旧runtime-opener测试已改名。
+
+### 本轮契约与实现边界
+
+- 用户气泡的`displayMessageId`、轮次容器的`renderKey`独立于权威`itemId/turnId`。确认只更新真实身份与送达事实，不因Vue父容器换键而重建同页消息；展开状态、虚拟化测高、定位及阅读锚点同步使用渲染键。收藏、回退和诊断属性仍使用真实服务端身份。
+- 关联使用明确`clientMessageId/clientUserMessageId`，或原始`turn/start`响应产生的`openerTurnId`。该证明写入现有Runtime请求payload，绑定request/client/thread，POST与GET按需返回；普通activeTurnId、恢复轮次、正文或时间相近不构成证明。原生队列接管与状态恢复不会凭空生成证明，不新增数据库表或恢复循环。
+- 精确item/turn显示映射先写入现有用户缓存，再清理本地副本、outbox和临时元数据；缓存序列化与相等比较保留client/display，明确重试换执行键时outbox仍能保留逻辑显示键。用户缓存仍为3天/12个任务/每任务24条，outbox仍为7天/12条，未复制助手回复。无现代身份的历史迁移分支仍保留，不能声称全部旧正文推断已移除。
+- 审查补查缓存身份来源与重复client冲突：运行中的新turn不能覆盖历史用户的turn；重复client不能由普通恢复turn消歧，可信原始opener或已锁定的精确item/turn才可关联。否则保留独立消息，不以看起来相同为由清理outbox。
+
+### 失败优先与自动化
+
+- 最初纯投影两项红灯分别证明用户显示ID和父轮次键在确认时变化；现代身份过滤又复现同文不同client被正文吞并、同轮历史opener吞掉另一条消息、无client快照按正文消耗本地项三类错误。缓存补充红灯确认仅client/display变化曾被相等比较丢弃，同轮同文不同client也曾被错误合并。新增对照用例并非全部在旧代码执行过，不把最后的通过数量等同于红灯数量。
+- `scripts/verify-display-identity.mjs`执行生产投影、身份过滤、缓存合并、outbox编解码及公开`useDesktopState`。公开入口控制首次/已有任务HTML502后GET恢复，权威用户item不带client；观察每个Vue渲染批次、storage写入顺序、outbox删除日志和新state实例经`selectThread`恢复。无证明对照不误认原消息已确认；真正浏览器重载另列。
+- `node --test scripts/runtime-opener-identity.test.mjs`15项通过，使用真实Runtime启动/路由逻辑与临时内存SQLite，只替换外部RPC/HTTP边界。覆盖原始响应、早期接受/晚到GET、相同ID重放、恢复保留或不制造证明、native queue以及伪造/损坏身份。先复现实际POST缺失证明，再补实现；不证明真实模型只执行一次。
+- 两项纳入`verify:core-flows`。前端源码门禁改为同时核对稳定渲染键与真实DOM身份、显式传递opener证明；server smoke保留starting/running阶段和Plan正文断言，区分启动前无证明、真实响应后持久化证明，没有删掉旧验证责任。
+- 最终显示身份专项46/46、服务端关联专项15/15通过；core-flows、conversation transcript（含发送反馈30项）、normalizer、前端源码门禁、governance、前端构建（含vue-tsc）、CLI构建及server modules均exit 0。审查新增真实gateway历史turn误绑红灯、弱turn覆盖原始证明、缓存锁定与冲突渲染键红灯后逐项修复。构建仍有既存Vite配置前向兼容及localPreview大chunk警告；server模块测试中的队列/健康失败日志来自故障夹具，不是7420现场故障。
+
+本轮相关检查命令（显式Node路径运行；不访问7420）：
+
+```powershell
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-display-identity.mjs
+& 'C:/Program Files/nodejs/node.exe' --test scripts/runtime-opener-identity.test.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-core-flows.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-transcript.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-frontend-normalizers.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run test:7420:frontend -- -SourceOnly
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:frontend
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:cli
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run verify:server-modules
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run verify:governance
+```
+
+### 浏览器证据
+
+- 隔离17441加载真实`useDesktopState`、gateway和`ThreadConversation`；所有产品HTTP均受控，WebSocket与逃逸API被阻断，不加载7420 bridge。agent-browser基线在393×852、1365×900均复现ACK时user节点1→3、轮次节点2→4，原节点断开且文字选区消失；快照随后改真实item ID，没有再发生第二次物理替换。
+- 候选393×852、1365×900、884×1104：ACK含原始opener证明，随后fresh权威用户快照不带client，最终公开刷新并清理本地项。各阶段user节点1/轮次节点2仍连接；显示键、选区及scrollTop=120保持，MutationObserver没有确认后的移除/重插，无失败态、重复DOM或意外API。此处基线快照带client，候选另验证新证明契约，不能描述成完全相同网络载荷的前后对照。
+- 无证明反例：ACK无opener且快照无client，投影保留authority与local两条user block，outbox仍1条confirming且删除日志为0；目前组件只渲染turn.opener，单条DOM不代表去重完成。该路径会换节点、丢选区，明确不是稳定性通过。
+- 真浏览器reload保留本夹具storage，不再次提交，经真实`selectThread`水合后公开刷新：逻辑显示键和cache client/display仍保留，当前document发送0次、累计1次，outbox为空。最初夹具直接改selectedThreadId再刷新跳过水合造成假失败，修正夹具而未改生产；旧证据标记为shortcut，不算生产红灯。跨document物理节点、选区和scroll不在重载通过声明内。
+- 普通早确认时序另行取证：POST202仅有request/thread/starting，无turn/opener；新turn的无client快照先到时仍出现2个DOM user/2个投影块，原本地节点保留但位置变化。`turn/started`触发的第一次GET仍starting，既有约750ms二次查询取得证明后收敛回原节点并清理outbox。该结果证明最后能够收敛，不满足“全过程只有一条消息”；不通过修改fixture提前提供证明来掩盖。
+- 截图、DOM引用/选区/请求/缓存JSON及重现说明见`output/display-identity-browser-20260910/README.md`。文字选择通过DOM Range，滚动位置通过显式scroll事件验证；不是手机长按或触摸惯性。884视口的pointer:coarse为false，不是真机折叠屏。
+- 最终源码重启隔离服务后再次验证393手机正例；`verify-before.mjs`、`verify-after.mjs`、`verify-early.mjs`均exit 0，其中early/无证明断言仅确认未解决边界。专用浏览器已关闭，17441已确认无监听，证据目录保留。
+
+Codex对照使用缓存`26.818.5229`包的`local-conversation-thread-turn-entries-CaJaieGL.js`，只核对真实item ID与独立turnSearchKey的职责区分；不是当前安装桌面版完整对齐，没有复制其专有代码。此次技能影响是要求同时验证真实节点与操作身份，而不是只把投影单测当作视觉通过。
+
+### 尚未放行
+
+这是一段有可信关联时的显示身份修复，不是全部P0完成。下一项优先解决已复现的早确认/快照先到短暂重复；首次新任务预览与真实会话仍属两个组件，同轮第二条用户消息的显示、送达失败与执行失败分离仍待处理。旧服务/原生队列及RPC响应成功但证明持久化前崩溃可能没有证明。需要Web与CLI配套候选，不能只更新静态Web就声称本契约已生效。
+
+opener补充证明还依赖候选turn中首条用户item的完整性：当前RPC裁剪保留头部与尾部，但局部通知、回退日志或不完整用户集合的原opener完整性未逐项验证。该限制不能因正常fresh快照通过而忽略；异常冲突分支优先保留真实消息及唯一渲染键，不承诺其DOM完全不变。
+
+收尾协议复核发现更直接的下一步：`output/core-flow-20260909/protocol-schema/codex_app_server_protocol.v2.schemas.json`的TurnStartParams/TurnSteerParams包含`clientUserMessageId`，用户ThreadItem包含`clientId`。当前普通启动及用户归一化未接通这一原生组合，不能继续把“所有原生用户快照均无关联字段”当作结论。本轮未验证实际Runtime的回传/重载语义，也未接入；下轮优先验证原生关联并评估是否替代桥接opener补充证明，避免长期维护多条映射链路。
+
+未替换/重启7420，未提交/推送/发布，未调用真实模型、真机、公网、P95或浸泡测试；完整CX-CE-02和产品目标保持未完成。回滚仅撤销本节对应差异块及新文件，保留先前未提交修改，不还原整个文件或工作区。
+
+## 会话体验P0：队列修改安全降级（2026-09-10，本地候选）
+
+### 决策及用户行为
+
+- 审计确认：`backgroundPersisted=false`、缺少`serverRequestId`或`deliveryState=failed`都不是“从未交给服务”的证明；入队响应丢失后也可能出现这些标记。DELETE 404不能证明原消息未开始，native取消等待后也没有原子状态条件保护。因此按PRD7.2.1的既定降级规则，已进入队列链路的消息暂不开放原位编辑或立即引用。
+- 队列正文改为可选择的只读内容，用内联文字说明限制，不打开替换草稿弹窗。长正文完整换行显示，外层保留34dvh滚动边界；操作区顶对齐，手机和粗指针操作保持44×44px。暗色队列补齐既有surface/border/accent token，仅作用于组件自身，不改全局主题。
+- App编辑入口与历史确认入口均保留防御：原队列项、正文、身份和已有草稿不变，不创建修订上下文或调用移除；独立FailedMessagesTray编辑保持原流程。公开`quoteQueuedMessage`也拒绝旧调用，不DELETE、不restore、不创建第二个outbox/request或触发提交回调。
+- 保留重排、重试和删除入口；本轮没有修复或宣称其取消状态已可靠。底层安全取消、入队不确定响应分类、稳定显示身份仍未完成，不能把关闭入口描述为完整编辑功能已实现。
+
+### 失败优先与复现
+
+- `verify-queue-edit-contract.mjs`以AST提取并执行真实App.vue编辑/确认函数，控制ref、composer和移除边界。八类队列状态、草稿确认期间状态变化/消失、切换任务、缺少composer及独立失败编辑控制，先27失败/4通过，修复后31项通过；另加真实SFC模板事件、SSR全文、scoped CSS可读性及三个粗指针44px目标共5项，当时36项通过。纯内存恢复旧clamp时35/36且仅正文可读性失败。浏览器发现暗色白底浅字后再补第37项：旧样式36/37红，修复后37/37绿；验证编译后的暗色选择器仅命中组件本体、祖先无需scope且不泄漏到全局或浅色。这些检查不替代实际HTTP或浏览器证明。
+- `verify-queue-quote-safety.mjs`通过真实`useDesktopState`的storage及公开队列恢复装载；native/external/server-failed与取消200/404/409/ACK丢失矩阵，加无服务端ID的queued/failed，共14项。旧实现全部失败并观察到DELETE、新client ID/outbox或restore；保护后14项通过，调用期间队列不消失且变更请求为0。最终实现不进入取消路径，因此不声称底层取消协议通过。
+- 两项已纳入`verify:core-flows`。旧源码门禁同步把“必须立即引用并恢复”改为“禁止取消/再发送，解释限制”，没有静默删除验收责任；原fixture也不再模拟已撤下的引用流程。
+- 最终源码的37项编辑/UI契约、14项公开引用入口通过，整套core-flows再次通过；前端源码门禁、conversation transcript、normalizer、governance及diff检查通过。`build:frontend`（含vue-tsc）仅保留已有Vite配置前向兼容和localPreview大chunk警告；不将这些检查冒充服务端取消已修复。
+
+```powershell
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-queue-edit-contract.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-queue-quote-safety.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-core-flows.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-transcript.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-frontend-normalizers.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run test:7420:frontend -- -SourceOnly
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:frontend
+```
+
+Codex对照：读取缓存桌面包`queued-message-list-DJj2tNz-.js`的编辑、删除、立即发送回调与禁用状态。保留紧凑队列层级，但不照搬未经本项目协议保证的修改能力；这是有意的安全差异，不是当前安装桌面版的完整对齐。
+
+### 浏览器证据与边界
+
+- 隔离17440加载真实`QueuedMessages.vue`及全局样式，不加载gateway；真实API和实时连接被阻断，保留操作仅记录组件事件。agent-browser覆盖1365×900、393×852、884×1104的明暗六组：没有编辑/引用入口或事件，草稿保留，重排/重试/删除事件参数正确，无横向溢出、页面错误或意外API。它不证明实际删除/重试的服务端结果。
+- 393×852长消息可在34dvh队列内滚动阅读全文；后续行按钮显式滚入后可命中并触发正确事件，重试/移动/删除均至少44×44px。全文通过DOM Range选择验证，不冒充真机长按选择；884×1104为视口验证，预设设备的`pointer:coarse`仍为false，所以粗指针实际交互未验证，只有CSS契约测试。
+- 暗色截图先复现白底浅字，原因是队列位于transcript旁边，未继承其局部暗色背景token。仅在队列组件内补齐已有暗色调色板，三组暗色重新取证；正文计算颜色为`rgb(244,244,245)`，行背景为`rgb(24,24,27)`，正文对比度16.12:1。修复前后截图及JSON、复现步骤见`output/queue-safety-browser-20260910/README.md`；`verify-reports.mjs`六组及三暗正文对比度检查通过。不使用fixture覆盖队列主题掩盖缺陷。本次专用浏览器与17440服务已关闭，无该端口监听，未触及7420。
+
+本轮仅本地候选；未替换/重启7420、未提交/推送/发布、未调用真实模型或设备。浏览器证据单列于`output/queue-safety-browser-20260910/`；只读UI与桩事件不等于真实执行次数、手机锁屏或公网验证。保留上一批未提交改动；回滚仅撤销本节对应差异块，不还原整个文件或工作区。
+
+## 会话体验P0：发送确认可信（2026-09-10，本地候选）
+
+### 本轮行为契约
+
+- 无效ACK（HTML、截断JSON、空对象、缺少必要字段、未知状态或不匹配身份）不是明确拒绝。HTTP 404/408/5xx与网络不确定性沿用现有有界恢复；明确400参数拒绝仍失败一次，不因错误正文包含网络关键词就自动重发。
+- 恢复查询只接受原`clientMessageId`；发送ACK若携带身份必须匹配请求，已有会话的确认不得绑定另一线程。兼容202及尚无thread/turn的`pending_start`，不因严格校验破坏合法的异步接受。
+- 每次重放保留原请求完整正文和`clientMessageId`，先核对再重试；现有700/2000/5000/10000ms退避耗尽后保留waiting outbox，恢复时取得确认不再额外提交。没有新增重试循环或后端状态机。
+- 权威用户快照早于outbox清理时，按`clientMessageId`／`clientUserMessageId`抑制本地副本，不按文字去重。同文不同请求或缺少身份的消息仍各自保留。
+- 仅收到用户item、没有turn状态/开始/结束证据的轮次仍待启动；不继承旧idle的完成状态，不借用户消息时间伪造处理用时。有无本地残留均一致，明确running/waiting/completed/failed保持权威语义。
+
+### 自动化结果与复现
+
+- API边界14项通过：先复现无效响应丢失错误类型、空响应被当成failed及身份校验缺口，再最小修复。
+- 公开`useDesktopState`入口44项通过：首次/已有会话、晚到running/completed、无效查询、明确拒绝及退避耗尽恢复；同步观察每个失败状态，Vue提交批次观察重复气泡，完整POST正文和请求ID逐次相等。早期12个异常场景先记录红灯；不得把最终成功当作中间无误报的唯一断言。
+- `send-feedback-smoke.ts`现30项通过（原17项＋本轮13项），含4个快照抢先去重红→绿、同文不同ID控制、4个早到用户确认/有无本地残留及4个明确状态控制。审查先复现2条假终态红灯，再补齐无本地残留分支；完整conversation transcript通过。
+- `verify:core-flows`已纳入API14项和公开入口44项；原有计划、目标、队列、计时及RPC公平性检查也全部通过。normalizer、前端源码门禁、governance、`build:frontend`（含vue-tsc）通过；构建保留已有Vite配置前向兼容及localPreview大chunk警告，不扩大到无关重构。
+
+```powershell
+& 'C:/Program Files/nodejs/node.exe' --test scripts/runtime-send-response.test.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-delivery-contract.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-core-flows.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-conversation-transcript.mjs
+& 'C:/Program Files/nodejs/node.exe' scripts/verify-frontend-normalizers.mjs
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run test:7420:frontend -- -SourceOnly
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run verify:governance
+& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js' run build:frontend
+```
+
+上述状态测试使用受控HTTP/WebSocket、内存storage及虚拟退避时钟；既有队列测试使用临时SQLite，不连接7420、不调用模型、不写用户数据库。请求重放次数及mock请求记录不能证明真实服务恰好执行一次。
+
+### 浏览器及尚未完成的门禁
+
+- 隔离17439，真实`useDesktopState`和`ThreadConversation`，所有API桩化且禁用bridge；agent-browser验证393×852、1365×900两端的HTML502→查询404→同ID重放→晚到running及权威user快照。首次渲染后的每个DOM观察批次均1条用户消息、0个failed，应用/页面错误为空，无意外API；证据与复现见`output/delivery-browser-20260910/README.md`，截图及JSON同目录。这是浏览器尺寸模拟，不是真机或公网。
+- 本轮Codex对照仅使用缓存提取包`output/codex-app-extracted-26.818.5229/`，核对`clientUserMessageId`及连接恢复/运行语义；不是当前安装版本实测，没有复制其专有实现。修复保留本项目单一投影和已有恢复协调器。
+- 完整CX-CE-02仍未放行：同页确认绑定后用户DOM及显示ID仍会改变，确认期间文案仍“发送中”；实际服务一次执行、设备和统计性能门槛未验证。用户原始故障现场未复现，只复现并修复了同类可触发路径。
+- 下一项P0：已接受队列消息编辑时，当前UI在取消结果未知便删除本地项并允许提交修订；DELETE 404不能证明原请求已安全取消，存在原消息先开始的竞态。需先明确安全取消/确认契约，无法保证时禁用已接受消息的原位编辑并保留草稿，不能用乐观替换掩盖。
+- 执行失败与送达失败分离、稳定显示身份及组合状态其余场景仍待P0；Composer上缘运行栏、公开进展优先、动画/权威计时和阅读保护待P1。本轮不改变完整产品目标或正式发布阻塞状态。
+- 未替换/重启7420、未提交/推送/发布，未执行真实模型、手机、后台两分钟、P95或浸泡测试。回滚只撤销本轮对应差异块，保留先前修改；隔离测试服务与浏览器完成后关闭。
+
 ## 7420替换与前端复核（2026-09-10）
 
 - 本轮获准替换本地7420；先核对RPC、重启保护、Runtime非终态/队列、原生队列及active goal均为空，再优雅退出旧实例。保留原配置、认证、数据库和可恢复部署；没有提交、推送或发布。

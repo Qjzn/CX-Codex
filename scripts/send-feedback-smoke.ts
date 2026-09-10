@@ -258,5 +258,118 @@ for (const runtime of [{ executionState: 'idle' }, previousRuntime]) {
   })
 }
 
+for (const clientKey of ['clientMessageId', 'clientUserMessageId']) {
+  for (const bound of [true, false]) {
+    check(`snapshot acknowledgement before outbox cleanup: ${clientKey}, bound=${bound}`, () => {
+      const result = project({
+        runtime: null,
+        threadRead: { thread: { id: threadId, turns: [{ id: 'turn-next', status: 'inProgress', items: [{
+          type: 'userMessage', id: 'authoritative-user', [clientKey]: 'client-next-message',
+          content: [{ type: 'text', text: 'Start a new task.' }],
+        }] }] } },
+        localUserMessages: [localMessage('confirmationPending', bound ? 'turn-next' : undefined)],
+      })
+      const users = result.turns.flatMap((turn) => turn.blocks.filter((block) => block.kind === 'user'))
+      assert.equal(users.length, 1, 'snapshot and local outbox must not display the same execution request twice')
+      assert.equal(users[0]?.id, 'authoritative-user')
+      assert.equal(result.turns.length, 1, 'acknowledged unbound outbox must not add an empty local turn')
+    })
+  }
+}
+
+check('identical prompts with distinct or absent client ids are not text-deduplicated', () => {
+  for (const clientMessageId of ['another-intent', '']) {
+    const result = project({
+      runtime: null,
+      threadRead: { thread: { id: threadId, turns: [{ id: 'turn-other', status: 'completed', items: [{
+        type: 'userMessage', id: 'another-user', clientMessageId,
+        content: [{ type: 'text', text: 'Start a new task.' }],
+      }] }] } },
+      localUserMessages: [localMessage('confirmationPending')],
+    })
+    assert.equal(result.turns.flatMap((turn) => turn.blocks.filter((block) => block.kind === 'user')).length, 2)
+  }
+})
+
+for (const runtime of [null, previousRuntime]) {
+  for (const keepLocal of [true, false]) {
+    check(`user item acknowledgement before turn start stays pending with ${runtime ? 'older idle runtime' : 'no runtime'}, local=${keepLocal}`, () => {
+      const acknowledged = {
+        method: 'item/completed',
+        params: {
+          threadId,
+          turnId: 'turn-next',
+          item: {
+            type: 'userMessage',
+            id: 'authoritative-user',
+            clientMessageId: 'client-next-message',
+            content: [{ type: 'text', text: 'Start a new task.' }],
+          },
+        },
+        atIso: at(2_200),
+        seq: 20,
+      }
+      const localUserMessages = keepLocal ? [localMessage('confirmationPending')] : []
+      const result = project({
+        runtime,
+        notifications: [acknowledged],
+        localUserMessages,
+      })
+      const latest = result.turns.at(-1)
+      assert.equal(result.turns[0]?.state, 'completed', 'the previous completed turn must retain its outcome')
+      assert.equal(latest?.id, 'turn-next')
+      assert.deepEqual(result.turns.flatMap((turn) => turn.blocks.filter((block) => block.kind === 'user').map((block) => block.id)), ['authoritative-user'])
+      assert.equal(latest?.state, 'submitting', 'a user item acknowledgement does not prove turn execution or completion')
+      assert.equal(latest?.finalStatus, 'pending')
+      assert.equal(latest?.startedAtMs, null, 'the user item acknowledgement time is not an execution start time')
+      assert.equal(latest?.completedAtMs, null, 'neither user item completion nor old runtime completion settles the new turn')
+      assert.equal(latest?.activeElapsedMs, null)
+
+      const started = project({
+        runtime,
+        notifications: [acknowledged, {
+          method: 'turn/started',
+          params: { threadId, turn: { id: 'turn-next', status: 'inProgress', startedAt: at(2_300) } },
+          atIso: at(2_300),
+          seq: 21,
+        }],
+        localUserMessages,
+      })
+      assert.equal(started.turns.at(-1)?.state, 'running', 'the later authoritative turn start must advance the same turn')
+      assert.equal(started.turns.at(-1)?.startedAtMs, originMs + 2_300)
+      assert.equal(started.turns.at(-1)?.completedAtMs, null)
+      assert.deepEqual(started.turns.flatMap((turn) => turn.blocks.filter((block) => block.kind === 'user').map((block) => block.id)), ['authoritative-user'])
+    })
+  }
+}
+
+for (const state of ['completed', 'failed', 'running', 'waiting'] as const) {
+  check(`authoritative ${state} is not overwritten by a matching local acknowledgement`, () => {
+    const terminal = state === 'completed' || state === 'failed'
+    const result = project({
+      runtime: null,
+      threadRead: { thread: { id: threadId, turns: [{
+        id: 'turn-next',
+        status: state === 'running' ? 'inProgress' : state,
+        startedAt: at(2_100),
+        ...(terminal ? { completedAt: at(2_300) } : {}),
+        items: [{
+          type: 'userMessage',
+          id: 'authoritative-user',
+          clientMessageId: 'client-next-message',
+          content: [{ type: 'text', text: 'Start a new task.' }],
+        }],
+      }] } },
+      localUserMessages: [localMessage('confirmationPending')],
+    })
+    assert.equal(result.turns.length, 1)
+    const latest = result.turns[0]
+    assert.equal(latest?.state, state)
+    assert.equal(latest?.startedAtMs, originMs + 2_100)
+    assert.equal(latest?.completedAtMs, terminal ? originMs + 2_300 : null)
+    assert.deepEqual(latest?.blocks.filter((block) => block.kind === 'user').map((block) => block.id), ['authoritative-user'])
+  })
+}
+
 assert.equal(failures.length, 0, `${String(failures.length)} send-feedback checks failed: ${failures.join('; ')}`)
 console.log('Send-feedback projection smoke passed.')

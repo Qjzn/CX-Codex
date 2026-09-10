@@ -171,7 +171,8 @@ async function verifyViewport({ name, width, height, mobile }) {
     }, true)
     await step('running', async () => {
       assert.match(await latestTurn.getAttribute('class') ?? '', /turn-shell--running\b/u)
-      assert.match(await latestTurn.locator('.turn-live-state').innerText(), /正在思考/u)
+      assert.equal(await latestTurn.locator('.turn-live-state').count(), 1, 'Running feedback must have one status owner')
+      assert.match(await latestTurn.locator('.turn-live-state').innerText(), /正在处理/u)
       assert.equal(await latestTurn.locator('.turn-timing[data-status="running"]').count(), 1, 'Confirmed execution must expose its execution clock')
     }, true)
     await step('completed', async () => {

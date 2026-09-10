@@ -187,6 +187,8 @@ type UserDeliveryMessageContent = {
 export type AcknowledgedUserMessage = UserDeliveryMessageContent & {
   role: 'user'
   messageType: 'userMessage'
+  clientMessageId?: string
+  displayMessageId?: string
 }
 
 export type OptimisticUserMessage = UserDeliveryMessageContent & {

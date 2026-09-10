@@ -1,7 +1,11 @@
 import { createReadStream } from 'node:fs'
-import { open, stat } from 'node:fs/promises'
-import { createInterface } from 'node:readline'
+import { stat } from 'node:fs/promises'
 import { isInternalContextMessageText } from '../internalContextMessage.js'
+import { readSessionLogCheckpoint, type SessionLogCheckpoint } from './appServerSessionLogCheckpoint.js'
+import {
+  applySessionLogLifecycle, hasSettledSessionLogLifecycle, readSessionLogLifecycle,
+  type SessionLogTurnLifecycle,
+} from './appServerSessionLogLifecycle.js'
 
 const FALLBACK_TURN_LIMIT = 40
 const FALLBACK_ITEM_TEXT_LIMIT = 20_000
@@ -10,11 +14,13 @@ const FALLBACK_CACHE_LIMIT = 40
 const TOP_LEVEL_RESPONSE_ITEM_PATTERN = /^\s*\{(?:\s*"timestamp"\s*:\s*"[^"]*"\s*,)?\s*"type"\s*:\s*"response_item"/
 const TOP_LEVEL_EVENT_MESSAGE_PATTERN = /^\s*\{(?:\s*"timestamp"\s*:\s*"[^"]*"\s*,)?\s*"type"\s*:\s*"event_msg"/
 const TOP_LEVEL_SESSION_META_PATTERN = /^\s*\{(?:\s*"timestamp"\s*:\s*"[^"]*"\s*,)?\s*"type"\s*:\s*"session_meta"/
+const TOP_LEVEL_TURN_CONTEXT_PATTERN = /^\s*\{(?:\s*"timestamp"\s*:\s*"[^"]*"\s*,)?\s*"type"\s*:\s*"turn_context"/
 const TRAILING_MEMORY_CITATION_PATTERN = /\s*<oai-mem-citation>[\s\S]*<\/oai-mem-citation>\s*$/u
 
 type FallbackItem = {
   type: 'userMessage' | 'agentMessage' | 'fileChange'
   id: string
+  clientId?: string
   phase?: 'commentary' | 'final_answer'
   startedAt?: string
   completedAt?: string
@@ -33,6 +39,7 @@ type RecoveredMessage = {
   role: 'user' | 'assistant'
   text: string
   id: string
+  clientId?: string
   turnId?: string
   phase?: 'commentary' | 'final_answer'
   atIso?: string
@@ -49,25 +56,64 @@ type RecoveredFileChange = {
   changes: NonNullable<FallbackItem['changes']>
 }
 
-type FallbackTurn = {
+type FallbackTurn = SessionLogTurnLifecycle & {
   id: string
-  status: 'completed'
   items: FallbackItem[]
 }
 
 type SessionLogThreadReadCacheState = {
+  threadId: string
   fileSignature: string
+  fileIdentity: string
   fileSize: number
+  checkpoint: string
   incrementalReady: boolean
   fullScan: boolean
   threadRead: unknown | null
+  cursor: SessionLogRecoveryCursor
+  recoveryTurns: FallbackTurn[]
+}
+
+type SessionLogRecoveryCursor = { activeTurnId: string; conflicted: boolean }
+
+function createRecoveryCursor(): SessionLogRecoveryCursor {
+  return { activeTurnId: '', conflicted: false }
+}
+
+function invalidateRecoveryCursor(cursor: SessionLogRecoveryCursor): void {
+  cursor.activeTurnId = ''
+  cursor.conflicted = true
+}
+
+function updateRecoveryCursor(cursor: SessionLogRecoveryCursor, entry: Record<string, unknown>): void {
+  const payload = asRecord(entry.payload)
+  const eventType = entry.type === 'event_msg' ? readTrimmedString(payload?.type) : ''
+  const turnId = readTrimmedString(payload?.turn_id)
+  if (eventType === 'task_started') {
+    if (!turnId || cursor.conflicted || (cursor.activeTurnId && cursor.activeTurnId !== turnId)) {
+      invalidateRecoveryCursor(cursor)
+    } else {
+      cursor.activeTurnId = turnId
+    }
+  } else if (eventType === 'task_complete' || eventType === 'turn_aborted') {
+    // A terminal boundary never lends its turn to the following input.
+    cursor.activeTurnId = ''
+    cursor.conflicted = false
+  } else if (entry.type === 'turn_context' && cursor.activeTurnId && turnId !== cursor.activeTurnId) {
+    invalidateRecoveryCursor(cursor)
+  } else if (entry.type === 'response_item' && cursor.activeTurnId) {
+    const metadata = asRecord(payload?.internal_chat_message_metadata_passthrough)
+    const responseTurnId = readTrimmedString(metadata?.turn_id)
+    if (responseTurnId && responseTurnId !== cursor.activeTurnId) invalidateRecoveryCursor(cursor)
+  }
 }
 
 const sessionLogThreadReadCacheStateByPath = new Map<string, SessionLogThreadReadCacheState>()
 const RECOVERED_USER_IMAGE_PATTERN = /\s*<image\b[^>]*\bpath=(?:"([^"]+)"|'([^']+)')[^>]*>[\s\S]*?<\/image>\s*/giu
 
 export function isSessionLogThreadReadCandidateLine(line: string): boolean {
-  if (TOP_LEVEL_SESSION_META_PATTERN.test(line) || TOP_LEVEL_EVENT_MESSAGE_PATTERN.test(line)) return true
+  if (TOP_LEVEL_SESSION_META_PATTERN.test(line) || TOP_LEVEL_EVENT_MESSAGE_PATTERN.test(line)
+    || TOP_LEVEL_TURN_CONTEXT_PATTERN.test(line)) return true
   if (!TOP_LEVEL_RESPONSE_ITEM_PATTERN.test(line)) return false
   return line.includes('"role":"user"') || line.includes('"role":"assistant"')
 }
@@ -80,6 +126,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function getFileSignature(stats: { mtimeMs: number; size: number }): string {
   return `${String(stats.mtimeMs)}:${String(stats.size)}`
+}
+
+function getFileIdentity(stats: { dev: number; ino: number; birthtimeMs: number }): string {
+  return `${String(stats.dev)}:${String(stats.ino)}:${String(stats.birthtimeMs)}`
 }
 
 function readTrimmedString(value: unknown): string {
@@ -140,6 +190,10 @@ function cloneFallbackTurns(value: unknown): FallbackTurn[] {
           items.push({
             type: 'userMessage',
             id,
+            ...(readTrimmedString(item.clientId) ? { clientId: readTrimmedString(item.clientId) } : {}),
+            ...(readTrimmedString(item.startedAt) ? { startedAt: readTrimmedString(item.startedAt) } : {}),
+            ...(item.recoverySource === 'response_item' || item.recoverySource === 'event_msg'
+              ? { recoverySource: item.recoverySource } : {}),
             content: [
               ...(text ? [{ type: 'text' as const, text }] : []),
               ...images.map((path) => ({ type: 'localImage' as const, path })),
@@ -193,7 +247,13 @@ function cloneFallbackTurns(value: unknown): FallbackTurn[] {
     }
     turns.push({
       id: readTrimmedString(turn.id) || `fallback-turn-${String(turns.length + 1)}`,
-      status: 'completed',
+      status: turn.status === 'inProgress' || turn.status === 'failed' || turn.status === 'interrupted'
+        ? turn.status : 'completed',
+      ...(Object.hasOwn(turn, 'startedAt') ? { startedAt: readTrimmedString(turn.startedAt) || null } : {}),
+      ...(Object.hasOwn(turn, 'completedAt') ? { completedAt: readTrimmedString(turn.completedAt) || null } : {}),
+      ...(readNonNegativeInteger(turn.durationMs) !== null ? { durationMs: readNonNegativeInteger(turn.durationMs)! } : {}),
+      ...(readTrimmedString(asRecord(turn.error)?.message)
+        ? { error: { message: readTrimmedString(asRecord(turn.error)?.message) } } : {}),
       items,
     })
   }
@@ -208,18 +268,6 @@ function hydrateRecoveredMessageIds(
     for (const item of turn.items) {
       if (item.id) seenMessageIds.add(item.id)
     }
-  }
-}
-
-async function doesFileEndWithNewline(sessionPath: string, fileSize: number): Promise<boolean> {
-  if (fileSize <= 0) return false
-  const handle = await open(sessionPath, 'r')
-  try {
-    const byte = Buffer.allocUnsafe(1)
-    const result = await handle.read(byte, 0, 1, fileSize - 1)
-    return result.bytesRead === 1 && byte[0] === 10
-  } finally {
-    await handle.close()
   }
 }
 
@@ -255,6 +303,10 @@ function readRecoveredUserContent(text: string): { text: string; images: string[
     return '\n'
   }).replace(/\n{3,}/gu, '\n\n').trim()
   return { text: visibleText, images }
+}
+
+function isLocalImagePath(path: string): boolean {
+  return Boolean(path) && (!/^[a-z][a-z0-9+.-]*:/iu.test(path) || /^[a-z]:[\\/]/iu.test(path))
 }
 
 function normalizeRecoveredAssistantText(text: string): string {
@@ -302,7 +354,7 @@ function readResponseItemMessage(entry: Record<string, unknown>): RecoveredMessa
   }
 }
 
-function readEventMessage(entry: Record<string, unknown>, entryIndex: number): RecoveredMessage | null {
+function readEventMessage(entry: Record<string, unknown>, entryOffset: number, cursor: SessionLogRecoveryCursor, nativeUiUserHistory: boolean): RecoveredMessage | null {
   if (entry.type !== 'event_msg') return null
   const payload = asRecord(entry.payload)
   const type = readTrimmedString(payload?.type)
@@ -316,13 +368,18 @@ function readEventMessage(entry: Record<string, unknown>, entryIndex: number): R
   const rawPhase = role === 'assistant' ? readTrimmedString(payload?.phase) : ''
   const phase = rawPhase === 'commentary' || rawPhase === 'final_answer' ? rawPhase : undefined
   const rawText = readTrimmedString(payload?.message)
-  const text = role === 'assistant' ? normalizeRecoveredAssistantText(rawText) : rawText
-  if (!text) return null
+  const recoveredUserContent = role === 'user' ? readRecoveredUserContent(rawText) : null
+  const localImages = role === 'user' && Array.isArray(payload?.local_images)
+    ? payload.local_images.map(readTrimmedString).filter(isLocalImagePath) : []
+  const images = [...new Set([...(recoveredUserContent?.images ?? []), ...localImages])].filter(isLocalImagePath)
+  const text = role === 'assistant' ? normalizeRecoveredAssistantText(rawText) : recoveredUserContent?.text ?? rawText
+  if (!text && images.length === 0) return null
+  const clientId = role === 'user' ? readTrimmedString(payload?.client_id) : ''
   if (isInternalContextMessageText(text)) {
     return role === 'user' ? {
       role,
       text: '',
-      id: `event:${String(entryIndex)}`,
+      id: `event:offset:${String(entryOffset)}`,
       source: 'event_msg',
       hidden: true,
     } : null
@@ -331,7 +388,10 @@ function readEventMessage(entry: Record<string, unknown>, entryIndex: number): R
   return {
     role,
     text,
-    id: `event:${atIso || 'unknown'}:${String(entryIndex)}`,
+    id: `event:${atIso || 'unknown'}:offset:${String(entryOffset)}`,
+    ...(clientId ? { clientId } : {}),
+    ...((clientId || nativeUiUserHistory) && cursor.activeTurnId ? { turnId: cursor.activeTurnId } : {}),
+    ...(images.length > 0 ? { images } : {}),
     ...(phase ? { phase } : {}),
     ...(atIso ? { atIso } : {}),
     source: 'event_msg',
@@ -387,6 +447,9 @@ function matchesRecoveredMessage(item: FallbackItem, message: RecoveredMessage, 
   if (message.role === 'assistant') {
     return item.type === 'agentMessage' && item.text === limitText(message.text)
   }
+  // The log has no explicit response-item <-> client-event alias. Never drop
+  // or relabel an identified event merely because the bodies happen to match.
+  if (item.clientId || message.clientId) return false
   return item.type === 'userMessage' && readTextContent(item.content) === limitText(message.text)
 }
 
@@ -433,6 +496,7 @@ function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): bo
     status: 'completed' as const,
     items: [],
   }
+  const wasVisible = targetTurn.items.length > 0
   if (!turn) {
     if (message.source === 'response_item' && message.turnId && message.role === 'assistant') {
       const previousTurn = turns.at(-1)
@@ -460,6 +524,7 @@ function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): bo
     ? {
         type: 'userMessage',
         id: itemId,
+        ...(message.clientId ? { clientId: message.clientId } : {}),
         content: [
           ...(text ? [{ type: 'text' as const, text }] : []),
           ...(message.images ?? []).map((path) => ({ type: 'localImage' as const, path })),
@@ -477,7 +542,7 @@ function appendMessageTurn(turns: FallbackTurn[], message: RecoveredMessage): bo
       })
 
   trimFallbackTurns(turns)
-  return !turn
+  return !wasVisible
 }
 
 function appendFileChangeTurn(turns: FallbackTurn[], fileChange: RecoveredFileChange): boolean {
@@ -487,6 +552,7 @@ function appendFileChangeTurn(turns: FallbackTurn[], fileChange: RecoveredFileCh
     status: 'completed' as const,
     items: [],
   }
+  const wasVisible = targetTurn.items.length > 0
   if (!matchingTurn) turns.push(targetTurn)
   targetTurn.items.push({
     type: 'fileChange',
@@ -496,7 +562,7 @@ function appendFileChangeTurn(turns: FallbackTurn[], fileChange: RecoveredFileCh
     changes: fileChange.changes,
   })
   trimFallbackTurns(turns)
-  return !matchingTurn
+  return !wasVisible
 }
 
 function writeCacheState(sessionPath: string, cacheState: SessionLogThreadReadCacheState): void {
@@ -514,7 +580,12 @@ function writeCacheState(sessionPath: string, cacheState: SessionLogThreadReadCa
 async function parseThreadReadFromSessionLogRange(
   sessionPath: string,
   fallbackThreadRead: unknown,
-  options: { startOffset?: number; seedTurns?: boolean; fromStart?: boolean } = {},
+  options: {
+    startOffset?: number; seedTurns?: boolean; fromStart?: boolean
+    cursor?: SessionLogRecoveryCursor; fileSize?: number
+    checkpoint?: SessionLogCheckpoint
+    recoveryTurns?: FallbackTurn[]
+  } = {},
 ): Promise<unknown | null> {
   const fallbackRoot = asRecord(fallbackThreadRead)
   const fallbackThread = asRecord(fallbackRoot?.thread)
@@ -527,31 +598,64 @@ async function parseThreadReadFromSessionLogRange(
   let source = fallbackThread?.source ?? 'unknown'
   let createdAt = readUnixSeconds(fallbackThread?.createdAt)
   let updatedAt = readUnixSeconds(fallbackThread?.updatedAt)
-  const turns = options.seedTurns === true ? cloneFallbackTurns(fallbackThread.turns) : []
+  const turns = options.recoveryTurns ?? (options.seedTurns === true ? cloneFallbackTurns(fallbackThread.turns) : [])
   let recoveredTurnCount = options.seedTurns === true
     ? Math.max(
-        turns.length,
+        turns.filter((turn) => turn.items.length > 0).length,
         readNonNegativeInteger(fallbackThread.originalTurnsCount) ?? 0,
       )
     : 0
   const seenMessageIds = new Set<string>()
   hydrateRecoveredMessageIds(turns, seenMessageIds)
-  let recoveredEntryIndex = 0
-  const stats = await stat(sessionPath)
+  const cursor = options.cursor ?? createRecoveryCursor()
+  const fileSize = options.fileSize ?? (await stat(sessionPath)).size
+  const checkpoint = options.checkpoint ?? await readSessionLogCheckpoint(sessionPath, fileSize)
+  const nativeUiUserHistory = checkpoint.nativeLegacyThreadId === fallbackThreadId
   const startOffset = typeof options.startOffset === 'number'
-    ? Math.max(0, Math.min(options.startOffset, stats.size))
+    ? Math.max(0, Math.min(options.startOffset, fileSize))
     : options.fromStart === true
       ? 0
-      : Math.max(0, stats.size - FALLBACK_READ_BYTE_LIMIT)
+      : Math.max(0, fileSize - FALLBACK_READ_BYTE_LIMIT)
 
-  const processLine = (line: string): void => {
+  const processLine = (line: string, entryOffset: number): void => {
     const trimmed = line.trim()
-    if (!trimmed || !isSessionLogThreadReadCandidateLine(trimmed)) return
+    if (!trimmed) return
+    if (!isSessionLogThreadReadCandidateLine(trimmed)) {
+      // A damaged non-candidate can hide a task boundary too. Only validate
+      // otherwise skipped records while we hold a scope that could be misused.
+      if (cursor.activeTurnId) {
+        try { JSON.parse(trimmed) } catch { invalidateRecoveryCursor(cursor) }
+      }
+      return
+    }
 
     try {
       const entry = asRecord(JSON.parse(trimmed) as unknown)
       if (!entry) return
-      recoveredEntryIndex += 1
+      const lifecycle = readSessionLogLifecycle(entry)
+      let lifecycleTurn = lifecycle ? findFallbackTurn(turns, lifecycle.turnId) : null
+      // A known settled start replay is also a no-op for input ownership. It
+      // must neither reopen that turn nor poison the next legitimate start.
+      const settledStartReplay = lifecycle?.status === 'inProgress'
+        && lifecycleTurn && hasSettledSessionLogLifecycle(lifecycleTurn)
+      if (!settledStartReplay) updateRecoveryCursor(cursor, entry)
+
+      if (lifecycle && !settledStartReplay) {
+        if (lifecycle.status === 'inProgress') {
+          if (cursor.activeTurnId === lifecycle.turnId) {
+            if (!lifecycleTurn) {
+              lifecycleTurn = { id: lifecycle.turnId, status: 'completed', items: [] }
+              turns.push(lifecycleTurn)
+              trimFallbackTurns(turns)
+            }
+            applySessionLogLifecycle(lifecycleTurn, lifecycle)
+          }
+        } else if (lifecycleTurn) {
+          // A bounded suffix can contain another turn's terminal event. Only
+          // the explicitly identified, retained turn may be settled by it.
+          applySessionLogLifecycle(lifecycleTurn, lifecycle)
+        }
+      }
 
       updatedAt = Math.max(updatedAt, readUnixSeconds(entry.timestamp))
       if (entry.type === 'session_meta') {
@@ -563,7 +667,7 @@ async function parseThreadReadFromSessionLogRange(
         }
       }
 
-      const fileChange = readEventFileChange(entry, recoveredEntryIndex)
+      const fileChange = readEventFileChange(entry, entryOffset)
       if (fileChange) {
         if (seenMessageIds.has(fileChange.id)) return
         seenMessageIds.add(fileChange.id)
@@ -571,8 +675,15 @@ async function parseThreadReadFromSessionLogRange(
         return
       }
 
-      const message = readResponseItemMessage(entry) ?? readEventMessage(entry, recoveredEntryIndex)
+      const message = readResponseItemMessage(entry) ?? readEventMessage(entry, entryOffset, cursor, nativeUiUserHistory)
       if (!message) return
+      if (nativeUiUserHistory && message.role === 'user' && message.source === 'response_item') {
+        // Native legacy records model input before its canonical UI user event.
+        // It supplies neither an extra user bubble nor evidence to confirm a
+        // local send. Keep only its explicit turn boundary for later activity.
+        appendMessageTurn(turns, { ...message, hidden: true })
+        return
+      }
       if (message.id) {
         if (seenMessageIds.has(message.id)) return
         seenMessageIds.add(message.id)
@@ -584,52 +695,56 @@ async function parseThreadReadFromSessionLogRange(
       }
     } catch {
       // Skip malformed lines and keep the rest of the recoverable history.
+      invalidateRecoveryCursor(cursor)
     }
   }
 
-  if (options.startOffset !== undefined) {
-    const byteCount = Math.max(0, stats.size - startOffset)
-    if (byteCount > 0) {
-      const handle = await open(sessionPath, 'r')
-      try {
-        const buffer = Buffer.allocUnsafe(byteCount)
-        let bytesRead = 0
-        while (bytesRead < byteCount) {
-          const result = await handle.read(buffer, bytesRead, byteCount - bytesRead, startOffset + bytesRead)
-          if (result.bytesRead === 0) break
-          bytesRead += result.bytesRead
-        }
-        for (const line of buffer.subarray(0, bytesRead).toString('utf8').split(/\r?\n/u)) {
-          processLine(line)
-        }
-      } finally {
-        await handle.close()
-      }
-    }
-  } else {
+  if (fileSize > startOffset) {
     const input = createReadStream(sessionPath, {
-      encoding: 'utf8',
       start: startOffset,
-      end: Math.max(startOffset, stats.size - 1),
+      end: fileSize - 1,
     })
-    const lines = createInterface({ input, crlfDelay: Infinity })
-    let skipPartialFirstLine = startOffset > 0
+    // Byte offsets remain stable across full, incremental and UTF-8/CRLF reads.
+    // A per-read line counter can collide after append and silently lose input.
+    let pending: Buffer[] = []
+    let pendingBytes = 0
+    let lineOffset = startOffset
+    let skipPartialFirstLine = options.startOffset === undefined && startOffset > 0
+    const consumeLine = (bytes: Buffer, terminated: boolean): void => {
+      if (skipPartialFirstLine) skipPartialFirstLine = false
+      else processLine(bytes.toString('utf8'), lineOffset)
+      lineOffset += bytes.length + (terminated ? 1 : 0)
+    }
     try {
-      for await (const line of lines) {
-        if (skipPartialFirstLine) {
-          skipPartialFirstLine = false
-          continue
+      for await (const chunk of input) {
+        const data = chunk as Buffer
+        let start = 0
+        let newline = data.indexOf(10, start)
+        while (newline !== -1) {
+          const part = data.subarray(start, newline)
+          consumeLine(pending.length > 0 ? Buffer.concat([...pending, part], pendingBytes + part.length) : part, true)
+          pending = []
+          pendingBytes = 0
+          start = newline + 1
+          newline = data.indexOf(10, start)
         }
-        processLine(line)
+        if (start < data.length) {
+          const part = data.subarray(start)
+          pending.push(part)
+          pendingBytes += part.length
+        }
       }
+      if (pendingBytes > 0) consumeLine(Buffer.concat(pending, pendingBytes), false)
     } finally {
-      lines.close()
-      input.close()
+      input.destroy()
     }
   }
 
   const visibleTurns = turns.filter((turn) => turn.items.length > 0)
-  if (visibleTurns.length === 0) return null
+  // A complete known-native read with no UI input yet is usable. A cold tail
+  // without visible records says nothing about history outside its window.
+  const canReturnEmpty = nativeUiUserHistory && (startOffset === 0 || options.seedTurns === true)
+  if (visibleTurns.length === 0 && !canReturnEmpty) return null
   const title = readFallbackThreadTitle(fallbackThread, preview)
   const knownOriginalTurnsCount = readNonNegativeInteger(fallbackThread.originalTurnsCount) ?? 0
   const originalTurnsCount = Math.max(recoveredTurnCount, knownOriginalTurnsCount, visibleTurns.length)
@@ -676,23 +791,38 @@ export async function readThreadReadFromSessionLog(
 ): Promise<unknown | null> {
   const normalizedSessionPath = sessionPath.trim()
   if (!normalizedSessionPath) return null
+  const threadId = readTrimmedString(asRecord(asRecord(fallbackThreadRead)?.thread)?.id)
+  if (!threadId) return null
 
   try {
     const stats = await stat(normalizedSessionPath)
     const fileSignature = getFileSignature(stats)
+    const fileIdentity = getFileIdentity(stats)
     const cached = sessionLogThreadReadCacheStateByPath.get(normalizedSessionPath)
-    if (cached?.fileSignature === fileSignature && (options.fromStart !== true || cached.fullScan)) {
+    if (cached?.threadId === threadId && cached.fileIdentity === fileIdentity && cached.fileSignature === fileSignature
+      && (options.fromStart !== true || cached.fullScan)) {
       return cached.threadRead
     }
 
     const appendedByteCount = cached ? stats.size - cached.fileSize : 0
-    const canReadIncrementally = Boolean(
+    let canReadIncrementally = Boolean(
       cached?.incrementalReady &&
+      cached.threadId === threadId &&
+      cached.fileIdentity === fileIdentity &&
       (options.fromStart !== true || cached.fullScan) &&
       cached.threadRead &&
       appendedByteCount > 0 &&
       appendedByteCount <= FALLBACK_READ_BYTE_LIMIT,
     )
+    if (canReadIncrementally && cached) {
+      canReadIncrementally = (await readSessionLogCheckpoint(normalizedSessionPath, cached.fileSize)).key === cached.checkpoint
+    }
+    const beforeReadCheckpoint = await readSessionLogCheckpoint(normalizedSessionPath, stats.size)
+    const cursor = canReadIncrementally && cached ? { ...cached.cursor } : createRecoveryCursor()
+    // Keep non-visible explicit turn boundaries privately, otherwise activity
+    // appended after a raw-only batch can attach to the previous visible turn.
+    // Clone before parsing so a rejected read cannot mutate a previous cache.
+    const recoveryTurns = canReadIncrementally && cached ? cloneFallbackTurns(cached.recoveryTurns) : []
     const threadRead = canReadIncrementally
       ? await parseThreadReadFromSessionLogRange(normalizedSessionPath, {
           thread: {
@@ -703,24 +833,56 @@ export async function readThreadReadFromSessionLog(
         }, {
           startOffset: cached?.fileSize,
           seedTurns: true,
+          cursor,
+          fileSize: stats.size,
+          checkpoint: beforeReadCheckpoint,
+          recoveryTurns,
         })
-      : await parseThreadReadFromSessionLog(normalizedSessionPath, fallbackThreadRead, options)
-    const incrementalReady = await doesFileEndWithNewline(normalizedSessionPath, stats.size)
+      : await parseThreadReadFromSessionLogRange(normalizedSessionPath, fallbackThreadRead, {
+          ...options, cursor, fileSize: stats.size, checkpoint: beforeReadCheckpoint, recoveryTurns,
+        })
+    const checkpoint = await readSessionLogCheckpoint(normalizedSessionPath, stats.size)
+    const afterReadStats = await stat(normalizedSessionPath)
+    if (getFileIdentity(afterReadStats) !== fileIdentity
+      || checkpoint.key !== beforeReadCheckpoint.key
+      || (afterReadStats.size <= stats.size && getFileSignature(afterReadStats) !== fileSignature)) {
+      // Never seed a later append with a cursor parsed before a rewrite and a
+      // checkpoint captured after it. Ordinary append beyond our fixed range
+      // can keep the cache; the next read starts at that original range end.
+      // These sampled guards assume append-only log interiors. Arbitrary
+      // in-place middle edits plus append need stronger integrity evidence.
+      sessionLogThreadReadCacheStateByPath.delete(normalizedSessionPath)
+      // Do not let the outer runtime cache remember a UI history interpreted
+      // using a native-source declaration that changed during this read.
+      if (beforeReadCheckpoint.nativeLegacyThreadId === threadId
+        || checkpoint.nativeLegacyThreadId === threadId) return null
+      return threadRead
+    }
     writeCacheState(normalizedSessionPath, {
+      threadId,
       fileSignature,
+      fileIdentity,
       fileSize: stats.size,
-      incrementalReady,
-      fullScan: options.fromStart === true || cached?.fullScan === true,
+      checkpoint: checkpoint.key,
+      incrementalReady: checkpoint.endsWithNewline,
+      fullScan: options.fromStart === true || (canReadIncrementally && cached?.fullScan === true),
       threadRead,
+      cursor,
+      recoveryTurns,
     })
     return threadRead
   } catch {
     writeCacheState(normalizedSessionPath, {
+      threadId,
       fileSignature: 'missing',
+      fileIdentity: '',
       fileSize: 0,
+      checkpoint: '',
       incrementalReady: false,
       fullScan: false,
       threadRead: null,
+      cursor: createRecoveryCursor(),
+      recoveryTurns: [],
     })
     return null
   }

@@ -17,6 +17,7 @@ import type {
 } from './types.js'
 import { isTerminalConversationExecutionState } from './types.js'
 import { deduplicateFileMentions, presentUserMessageText } from './userMessagePresentation.js'
+import { findUserMessageIdentityMatch, readUserMessageClientId, userMessageDisplayId } from './userMessageIdentity.js'
 
 const MAX_TEXT_LENGTH = 40_000
 const MAX_OUTPUT_LENGTH = 24_000
@@ -34,6 +35,7 @@ type UnknownRecord = Record<string, unknown>
 
 type MutableItem = {
   id: string
+  aliases: string[]
   raw: UnknownRecord
   startedAtMs: number | null
   completedAtMs: number | null
@@ -60,8 +62,12 @@ type MutableTurn = {
   error: string
   startedAtMs: number | null
   completedAtMs: number | null
+  startedAtExplicitlyUnavailable: boolean
+  completedAtExplicitlyUnavailable: boolean
   itemOrder: string[]
   items: Map<string, MutableItem>
+  snapshotUserIds: Set<string>
+  notificationUserIds: Set<string>
   interactions: Map<string, MutableInteraction>
 }
 
@@ -75,10 +81,12 @@ type ProjectionState = {
 export function projectConversation(input: ConversationProjectionInput): ConversationProjection {
   const state = readSnapshot(input.threadRead)
   applyNotifications(state, input.notifications ?? [])
+  reconcileNativeUserItemAliases(state)
   applyPendingRequests(state, input.pendingRequests ?? [], input.nowMs)
-  applyRuntimeFacts(state, input.runtime ?? null)
+  applyRuntimeFacts(state, input.runtime ?? null, (input.localUserMessages ?? [])
+    .some((message) => !message.turnId && message.deliveryState !== 'failed'))
   // A transport-only submission is not the previous runtime generation's turn.
-  applyLocalUserMessages(state, input.localUserMessages ?? [])
+  applyLocalUserMessages(state, input.localUserMessages ?? [], input.userMessageIdentities ?? [])
 
   const history = readHistoryWindow(input.threadRead, state)
 
@@ -119,13 +127,17 @@ function readSnapshot(threadRead: unknown): ProjectionState {
       }
       turn.rawStatus = readString(rawTurn.status) || turn.rawStatus
       turn.error = readErrorMessage(rawTurn.error) || turn.error
+      // Recovery distinguishes unknown lifecycle clocks (explicit null) from
+      // old payloads that omit them. Unknown is not an item or polling clock.
+      turn.startedAtExplicitlyUnavailable ||= rawTurn.startedAt === null
+      turn.completedAtExplicitlyUnavailable ||= rawTurn.completedAt === null
       turn.startedAtMs = minTimestamp(
         turn.startedAtMs,
-        readTimestampMs(rawTurn, ['startedAt', 'startedAtIso', 'createdAt', 'timestamp']),
+        rawTurn.startedAt === null ? null : readTimestampMs(rawTurn, ['startedAt', 'startedAtIso', 'createdAt', 'timestamp']),
       )
       turn.completedAtMs = maxTimestamp(
         turn.completedAtMs,
-        readTimestampMs(rawTurn, ['completedAt', 'completedAtIso', 'finishedAt']),
+        rawTurn.completedAt === null ? null : readTimestampMs(rawTurn, ['completedAt', 'completedAtIso', 'finishedAt']),
       )
       const rawItems = Array.isArray(rawTurn.items) ? rawTurn.items : []
       for (let itemIndex = 0; itemIndex < rawItems.length; itemIndex += 1) {
@@ -136,6 +148,7 @@ function readSnapshot(threadRead: unknown): ProjectionState {
           startedAtMs: readTimestampMs(rawItem, ['startedAt', 'startedAtIso', 'createdAt', 'timestamp']),
           completedAtMs: readTimestampMs(rawItem, ['completedAt', 'completedAtIso', 'finishedAt']),
         })
+        if (rawItem.type === 'userMessage') turn.snapshotUserIds.add(itemId)
       }
     }
   }
@@ -192,8 +205,12 @@ function createTurn(id: string, index: number): MutableTurn {
     error: '',
     startedAtMs: null,
     completedAtMs: null,
+    startedAtExplicitlyUnavailable: false,
+    completedAtExplicitlyUnavailable: false,
     itemOrder: [],
     items: new Map(),
+    snapshotUserIds: new Set(),
+    notificationUserIds: new Set(),
     interactions: new Map(),
   }
 }
@@ -221,6 +238,7 @@ function upsertItem(
     existing.raw = {
       ...existing.raw,
       ...raw,
+      ...(readString(existing.raw.clientId) && !readString(raw.clientId) ? { clientId: existing.raw.clientId } : {}),
       ...(nextText || !existing.streamingText ? {} : { text: existing.streamingText }),
     }
     existing.startedAtMs = minTimestamp(existing.startedAtMs, timing.startedAtMs ?? null)
@@ -231,6 +249,7 @@ function upsertItem(
 
   const created: MutableItem = {
     id: itemId,
+    aliases: [],
     raw: readString(raw.id) === itemId ? raw : { ...raw, id: itemId },
     startedAtMs: timing.startedAtMs ?? null,
     completedAtMs: timing.completedAtMs ?? null,
@@ -256,6 +275,40 @@ function applyNotifications(state: ProjectionState, notifications: ConversationN
 
   for (const { notification } of ordered) {
     applyNotification(state, notification)
+  }
+}
+
+/** Native history can rename a live UUID to item-1. Only join a unique pair
+ * across the two sources, within one turn and by native clientId. Same-source
+ * duplicate claims are ambiguous and must remain visible for reconciliation. */
+function reconcileNativeUserItemAliases(state: ProjectionState): void {
+  for (const turn of state.turns) {
+    const byClient = (ids: Set<string>): Map<string, MutableItem[]> => {
+      const groups = new Map<string, MutableItem[]>()
+      for (const id of ids) {
+        const item = turn.items.get(id)
+        const clientId = readString(item?.raw.clientId)
+        if (!item || !clientId) continue
+        const group = groups.get(clientId) ?? []
+        group.push(item)
+        groups.set(clientId, group)
+      }
+      return groups
+    }
+    const snapshots = byClient(turn.snapshotUserIds)
+    const notifications = byClient(turn.notificationUserIds)
+    for (const [clientId, snapshotItems] of snapshots) {
+      const liveItems = notifications.get(clientId)
+      if (snapshotItems.length !== 1 || liveItems?.length !== 1) continue
+      const snapshot = snapshotItems[0]!
+      const live = liveItems[0]!
+      if (snapshot.id === live.id) continue
+      snapshot.startedAtMs = minTimestamp(snapshot.startedAtMs, live.startedAtMs)
+      snapshot.completedAtMs = maxTimestamp(snapshot.completedAtMs, live.completedAtMs)
+      snapshot.aliases.push(live.id)
+      turn.items.delete(live.id)
+      turn.itemOrder = turn.itemOrder.filter((id) => id !== live.id)
+    }
   }
 }
 
@@ -365,11 +418,13 @@ function applyNotification(state: ProjectionState, notification: ConversationNot
 
   if (notification.method === 'item/started' && item) {
     upsertItem(turn, itemId, item, { startedAtMs: atMs })
+    if (item.type === 'userMessage') turn.notificationUserIds.add(itemId)
     return
   }
 
   if (notification.method === 'item/completed' && item) {
     const mutable = upsertItem(turn, itemId, item, { completedAtMs: atMs })
+    if (item.type === 'userMessage') turn.notificationUserIds.add(itemId)
     if (!mutable.startedAtMs) mutable.startedAtMs = atMs
     return
   }
@@ -476,9 +531,72 @@ function applyPendingRequests(state: ProjectionState, pendingRequests: unknown[]
   }
 }
 
-function applyLocalUserMessages(state: ProjectionState, messages: ProjectionInputLocalMessages): void {
+function applyLocalUserMessages(
+  state: ProjectionState,
+  messages: ProjectionInputLocalMessages,
+  identities: NonNullable<ConversationProjectionInput['userMessageIdentities']>,
+): void {
+  const candidates: Array<{ id: string; itemAliases: string[]; turnId: string; clientMessageId: string; item: MutableItem }> = []
+  for (const turn of state.turns) {
+    for (const itemId of turn.itemOrder) {
+      const item = turn.items.get(itemId)!
+      if (item.raw.type !== 'userMessage') continue
+      candidates.push({ id: item.id, itemAliases: item.aliases, turnId: turn.id,
+        clientMessageId: readUserMessageClientId(item.raw), item })
+    }
+  }
+  const clientCounts = new Map<string, number>()
+  for (const candidate of candidates) {
+    if (candidate.clientMessageId) clientCounts.set(candidate.clientMessageId, (clientCounts.get(candidate.clientMessageId) ?? 0) + 1)
+  }
+  // Conflicting authoritative claims remain separate; a bound identity can name
+  // one of them, but never coalesce two server items into one rendering key.
+  for (const candidate of candidates) {
+    if ((clientCounts.get(candidate.clientMessageId) ?? 0) > 1) {
+      candidate.item.raw = { ...candidate.item.raw, displayMessageId: `${candidate.turnId}:${candidate.id}` }
+    }
+  }
+  const lockedIdentityItems = new Set<MutableItem>()
+  for (const identity of identities) {
+    const match = findUserMessageIdentityMatch(candidates, identity)
+    if (match) {
+      match.clientMessageId ||= identity.clientMessageId || ''
+      match.item.raw = { ...match.item.raw, displayMessageId: identity.displayMessageId, clientMessageId: match.clientMessageId }
+      lockedIdentityItems.add(match.item)
+    }
+  }
   for (const message of messages) {
     if (!message.id.trim()) continue
+    const match = findUserMessageIdentityMatch(candidates, message)
+    if (match) {
+      if (!lockedIdentityItems.has(match.item)) {
+        match.clientMessageId ||= message.clientMessageId || ''
+        const desiredDisplayId = userMessageDisplayId(message)
+        const displayIsLocked = candidates.some((candidate) => lockedIdentityItems.has(candidate.item)
+          && readString(candidate.item.raw.displayMessageId) === desiredDisplayId)
+        match.item.raw = { ...match.item.raw,
+          displayMessageId: displayIsLocked ? `${match.turnId}:${match.id}` : desiredDisplayId,
+          clientMessageId: match.clientMessageId }
+      }
+      continue
+    }
+    let displayMessageId = userMessageDisplayId(message)
+    if (candidates.some((candidate) => lockedIdentityItems.has(candidate.item)
+      && readString(candidate.item.raw.displayMessageId) === displayMessageId)) {
+      displayMessageId = `local:${message.id}`
+    }
+    if (message.clientMessageId) {
+      for (const candidate of candidates) {
+        if (candidate.clientMessageId !== message.clientMessageId) continue
+        if (lockedIdentityItems.has(candidate.item)) {
+          // Contradictory display claims cannot both keep one rendering key.
+          // Keep the exact item binding; retain the local user under its own row.
+          if (readString(candidate.item.raw.displayMessageId) === displayMessageId) displayMessageId = `local:${message.id}`
+        } else {
+          candidate.item.raw = { ...candidate.item.raw, displayMessageId: `${candidate.turnId}:${candidate.id}` }
+        }
+      }
+    }
     let turn = message.turnId ? state.turnById.get(message.turnId) : null
     if (!turn) {
       turn = ensureTurn(state, message.turnId || `local:${message.id}`)
@@ -495,6 +613,7 @@ function applyLocalUserMessages(state: ProjectionState, messages: ProjectionInpu
         ...(message.attachmentNames ?? []).map((name) => ({ type: 'mention', name, path: name })),
       ],
       clientMessageId: message.clientMessageId ?? '',
+      displayMessageId,
       deliveryState: message.deliveryState ?? null,
     }, { startedAtMs: message.createdAtMs ?? null })
   }
@@ -502,9 +621,18 @@ function applyLocalUserMessages(state: ProjectionState, messages: ProjectionInpu
 
 type ProjectionInputLocalMessages = NonNullable<ConversationProjectionInput['localUserMessages']>
 
-function applyRuntimeFacts(state: ProjectionState, runtime: ConversationProjectionInput['runtime']): void {
+function isUserOnlyTurnAwaitingStart(turn: MutableTurn): boolean {
+  return !turn.rawStatus && turn.startedAtMs === null && turn.completedAtMs === null
+    && turn.items.size > 0 && [...turn.items.values()].every((item) => item.raw.type === 'userMessage')
+}
+
+function applyRuntimeFacts(state: ProjectionState, runtime: ConversationProjectionInput['runtime'], hasUnboundLocalUser = false): void {
   if (!runtime) return
   const activeTurnId = readString(runtime.activeTurnId)
+  // A status-only poll is not user-item ownership. While a local submission
+  // is still unbound, wait for transcript evidence instead of inventing a
+  // second empty turn. The local row remains honestly confirmation-pending.
+  if (activeTurnId && hasUnboundLocalUser && !state.turnById.has(activeTurnId)) return
   if (activeTurnId) {
     const runtimeStartedAtMs = parseTimestamp(runtime.lastStartedAtIso ?? '')
     const observedActiveTurn = state.turnById.get(state.activeTurnId)
@@ -519,12 +647,17 @@ function applyRuntimeFacts(state: ProjectionState, runtime: ConversationProjecti
     activeTurn.rawStatus = hasPendingInteraction || isWaitingRuntimeState(runtime.executionState)
       ? 'waiting'
       : 'inProgress'
-    activeTurn.startedAtMs = minTimestamp(activeTurn.startedAtMs, runtimeStartedAtMs)
+    if (!activeTurn.startedAtExplicitlyUnavailable) {
+      activeTurn.startedAtMs = minTimestamp(activeTurn.startedAtMs, runtimeStartedAtMs)
+    }
   }
 
   const lastTurn = state.turns.at(-1)
   if (!lastTurn) return
   if (!activeTurnId && isTerminalRuntimeState(runtime.executionState)) {
+    // A user-item acknowledgement does not identify the runtime's finished turn.
+    // Wait for bound lifecycle evidence instead of inheriting the previous idle.
+    if (isUserOnlyTurnAwaitingStart(lastTurn)) return
     const runtimeCompletedAtMs = parseTimestamp(runtime.lastCompletedAtIso ?? '')
     if (runtimeCompletedAtMs !== null && lastTurn.startedAtMs !== null && runtimeCompletedAtMs < lastTurn.startedAtMs) return
     const hasActiveEvidence = lastTurn.id === state.activeTurnId
@@ -536,8 +669,8 @@ function applyRuntimeFacts(state: ProjectionState, runtime: ConversationProjecti
     lastTurn.rawStatus = runtimeStateToTurnStatus(runtime.executionState, lastTurn.rawStatus)
     // Runtime reconciliation clocks may include time spent waiting for a fresh read.
     // Bound turn lifecycle timestamps are authoritative; runtime only fills gaps.
-    lastTurn.completedAtMs ??= runtimeCompletedAtMs
-    lastTurn.startedAtMs ??= parseTimestamp(runtime.lastStartedAtIso ?? '')
+    if (!lastTurn.completedAtExplicitlyUnavailable) lastTurn.completedAtMs ??= runtimeCompletedAtMs
+    if (!lastTurn.startedAtExplicitlyUnavailable) lastTurn.startedAtMs ??= parseTimestamp(runtime.lastStartedAtIso ?? '')
     if (runtime.lastError) lastTurn.error = runtime.lastError
   }
 }
@@ -551,10 +684,24 @@ function projectTurn(
   const activities: ConversationActivity[] = []
   const fileChangesByPath = new Map<string, ConversationFileChange>()
   const stateValue = resolveTurnState(turn, state, input)
+  // Native legacy history builds visible users from user_message events, not
+  // model-input response records (Codex 0.153.4 ThreadHistoryBuilder). Native
+  // snapshot/notification user items also own UI if the log event is delayed.
+  // Select only within this turn; keep response-only recovery readable.
+  // This is not a per-item alias: never transfer a client ID or compare text.
+  const hasUiUserSource = turn.itemOrder.some((id) => {
+    const raw = turn.items.get(id)?.raw
+    if (raw?.type !== 'userMessage') return false
+    return raw.recoverySource === 'event_msg'
+      || (raw.recoverySource === undefined
+        && (turn.snapshotUserIds.has(id) || turn.notificationUserIds.has(id)))
+  })
 
   for (const itemId of turn.itemOrder) {
     const item = turn.items.get(itemId)
     if (!item) continue
+    if (hasUiUserSource && item.raw.type === 'userMessage'
+      && item.raw.recoverySource === 'response_item') continue
     const rawProjection = projectItem(item, fileChangesByPath)
     const projected = stateValue === 'completed'
       ? settleCompletedTurnActivity(rawProjection)
@@ -617,6 +764,7 @@ function projectTurn(
 
   return {
     id: turn.id,
+    renderKey: opener ? `user-turn:${opener.displayMessageId}` : `turn:${turn.id}`,
     index: turn.index,
     state: stateValue,
     startedAtMs,
@@ -739,6 +887,9 @@ function projectUserItem(item: MutableItem): ConversationUserBlock | null {
   return {
     kind: 'user',
     id: item.id,
+    displayMessageId: userMessageDisplayId({ id: item.id,
+      clientMessageId: readUserMessageClientId(item.raw),
+      displayMessageId: readString(item.raw.displayMessageId) }),
     text: boundText(presentation.mentions.length > 0
       ? presentation.text.trim()
       : text.map((chunk) => chunk.trim()).join('\n'), MAX_TEXT_LENGTH),
@@ -746,7 +897,7 @@ function projectUserItem(item: MutableItem): ConversationUserBlock | null {
     images,
     skills,
     mentions: deduplicateFileMentions([...mentions, ...presentation.mentions]),
-    clientMessageId: readString(item.raw.clientMessageId) || null,
+    clientMessageId: readUserMessageClientId(item.raw) || null,
     deliveryState: readDeliveryState(item.raw.deliveryState),
   }
 }
@@ -1148,6 +1299,7 @@ function resolveTurnState(
     return input.runtime?.stale ? 'sync-degraded' : 'running'
   }
   if (status === 'waiting') return 'waiting'
+  if (isUserOnlyTurnAwaitingStart(turn)) return 'submitting'
   if (input.runtime?.stale && turn === state.turns.at(-1) && !isTerminalRuntimeState(input.runtime.executionState)) {
     return 'sync-degraded'
   }
@@ -1157,8 +1309,9 @@ function resolveTurnState(
 function resolveStartedAtMs(
   turn: MutableTurn,
 ): number | null {
-  if (turn.localOnly) return null
+  if (turn.localOnly || isUserOnlyTurnAwaitingStart(turn)) return null
   if (turn.startedAtMs !== null) return turn.startedAtMs
+  if (turn.startedAtExplicitlyUnavailable) return null
   // A locally echoed user message has a delivery timestamp, not an execution clock.
   // Runtime timing was already applied above with generation checks; never reapply it here.
   return minOf(Array.from(turn.items.values())
@@ -1172,6 +1325,7 @@ function resolveCompletedAtMs(
 ): number | null {
   if (turn.localOnly) return null
   if (turn.completedAtMs !== null) return turn.completedAtMs
+  if (turn.completedAtExplicitlyUnavailable) return null
   if (!isTerminalConversationExecutionState(turnState)) return null
   return maxOf(Array.from(turn.items.values()).map((item) => item.completedAtMs))
 }
@@ -1290,7 +1444,7 @@ function readTurnId(params: UnknownRecord | null): string {
 }
 
 function readTurnTimestamp(params: UnknownRecord | null, key: 'startedAt' | 'completedAt'): number | null {
-  return parseTimestamp(readString(params?.[key])) ?? parseTimestamp(readString(asRecord(params?.turn)?.[key]))
+  return parseTimestamp(params?.[key]) ?? parseTimestamp(asRecord(params?.turn)?.[key])
 }
 
 function readTimestampMs(record: UnknownRecord, keys: string[]): number | null {

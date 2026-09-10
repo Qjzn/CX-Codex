@@ -1543,7 +1543,6 @@ const {
   selectedThreadCanStop,
   selectedThreadQueuedMessages,
   selectedThreadQueueProcessing,
-  removeQueuedMessage,
   deleteQueuedMessage,
   retryQueuedMessage,
   moveQueuedMessage,
@@ -1597,7 +1596,7 @@ const trendingProjectsError = ref('')
 const githubTipsScope = ref<GithubTipsScope>('trending-daily')
 const lastLoadedGithubTipsScope = ref<GithubTipsScope | ''>('')
 const isManualThreadRefreshRunning = ref(false)
-const editingQueuedMessageState = ref<{ threadId: string; queueIndex: number } | null>(null)
+const QUEUED_MESSAGE_EDIT_UNAVAILABLE = '为避免重复执行，排队消息暂不支持直接修改或立即引用。原内容已保留。'
 const FAILED_MESSAGE_EDIT_TARGET_PREFIX = 'failed-message:'
 const pendingQueuedMessageEditId = ref('')
 const isPendingFailedMessageEdit = computed(() => (
@@ -4219,14 +4218,6 @@ function onWindowPointerDownForSettings(event: PointerEvent): void {
 function onSubmitThreadMessage(payload: SubmitPayload): void {
   const feedbackStartedAtMs = isHomeRoute.value || payload.mode === 'steer' ? chatFeedbackNow() : undefined
   const text = payload.text
-  const editingState = editingQueuedMessageState.value
-  const queueInsertIndex =
-    payload.mode === 'queue'
-    && editingState
-    && editingState.threadId === selectedThreadId.value
-      ? editingState.queueIndex
-      : undefined
-  editingQueuedMessageState.value = null
   if (isHomeRoute.value) {
     if (newThreadSubmitInFlight || isSendingMessage.value || pendingNewThreadPreview.value) return
     void submitFirstMessageForNewThread(
@@ -4250,7 +4241,7 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
     payload.skills,
     payload.mode,
     payload.fileAttachments,
-    queueInsertIndex,
+    undefined,
     payload.collaborationMode,
     payload.turnOptions,
     {
@@ -4439,14 +4430,6 @@ async function onRunWorkbenchTemplate(templateId: string): Promise<void> {
 }
 
 function onEditQueuedMessage(messageId: string): void {
-  const composer = threadComposerRef.value
-  if (!composer) return
-
-  if (composer.hasUnsavedDraft()) {
-    pendingQueuedMessageEditId.value = messageId
-    return
-  }
-
   hydrateQueuedMessageForEditing(messageId)
 }
 
@@ -4483,24 +4466,10 @@ function hydrateFailedMessageForEditing(messageId: string): void {
 }
 
 function hydrateQueuedMessageForEditing(messageId: string): void {
-  const queueIndex = selectedThreadQueuedMessages.value.findIndex((item) => item.id === messageId)
-  const message = queueIndex >= 0 ? selectedThreadQueuedMessages.value[queueIndex] : undefined
-  const composer = threadComposerRef.value
-  if (!message || !composer) return
-
-  editingQueuedMessageState.value = selectedThreadId.value
-    ? { threadId: selectedThreadId.value, queueIndex }
-    : null
-  const payload: ComposerDraftPayload = {
-    text: message.text,
-    imageUrls: [...message.imageUrls],
-    fileAttachments: message.fileAttachments.map((attachment) => ({ ...attachment })),
-    skills: message.skills.map((skill) => ({ ...skill })),
-    plugins: message.turnOptions?.plugins?.map((plugin) => ({ ...plugin })),
-    goal: message.turnOptions?.goal ? { ...message.turnOptions.goal } : undefined,
-  }
-  composer.hydrateDraft(payload)
-  removeQueuedMessage(messageId)
+  if (!threadComposerRef.value || !selectedThreadQueuedMessages.value.some((item) => item.id === messageId)) return
+  // Even a local "failed" row can have an accepted enqueue with a lost ACK.
+  // Keep both the original queue item and the draft until cancellation is provable.
+  showProductToast(QUEUED_MESSAGE_EDIT_UNAVAILABLE, 'warning')
 }
 
 function onQuoteQueuedMessage(messageId: string): void {

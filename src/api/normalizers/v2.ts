@@ -10,6 +10,7 @@ import type { AcknowledgedUserMessage, UiFileAttachment, UiProjectGroup, UiThrea
 import { normalizePathForComparison, normalizePathForUi, toProjectName } from '../../pathUtils.js'
 import { orderProjectGroupsByRecentActivity } from '../../utils/projectGroupOrdering.js'
 import { isInternalContextMessageText } from '../../internalContextMessage.js'
+import { readUserMessageClientId } from '../../conversation-transcript/userMessageIdentity.js'
 
 function toIso(seconds: number): string {
   return new Date(seconds * 1000).toISOString()
@@ -128,6 +129,7 @@ function toAcknowledgedUserMessage(item: ThreadItem): AcknowledgedUserMessage | 
     images: parsed.images,
     fileAttachments: parsed.fileAttachments.length > 0 ? parsed.fileAttachments : undefined,
     messageType: item.type,
+    clientMessageId: readUserMessageClientId(item as unknown as Record<string, unknown>) || undefined,
   }
 }
 
@@ -279,32 +281,6 @@ export function normalizeAcknowledgedUserMessagesV2(payload: ThreadReadResponse)
     }
   }
   return messages
-}
-
-export function applyActiveTurnIdToAcknowledgedUserMessages(
-  messages: AcknowledgedUserMessage[],
-  activeTurnId: string,
-  active: boolean,
-): AcknowledgedUserMessage[] {
-  const normalizedTurnId = activeTurnId.trim()
-  if (!active || !normalizedTurnId || messages.length === 0) return messages
-
-  let activeTurnStartIndex = -1
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (message?.role !== 'user' || message.messageType !== 'userMessage') continue
-    activeTurnStartIndex = index
-    break
-  }
-  if (activeTurnStartIndex < 0) return messages
-
-  let changed = false
-  const nextMessages = messages.map((message, index) => {
-    if (index < activeTurnStartIndex || message.turnId === normalizedTurnId) return message
-    changed = true
-    return { ...message, turnId: normalizedTurnId }
-  })
-  return changed ? nextMessages : messages
 }
 
 export function readThreadInProgressFromResponse(payload: ThreadReadResponse): boolean {

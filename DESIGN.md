@@ -59,13 +59,15 @@ Do not add a repeated Codex avatar/status heading to every turn. The divider and
 
 - Pending interaction ownership belongs to `ConversationProjection`: approval, user-input, MCP approval/input, unsupported-tool, and generic requests arrive with their display type, title, detail, questions, safe authorization URL, response identity, and session-persistence capability already projected. Renderers emit user intent only; they never classify raw request methods or parse request params.
 - Official host metadata is not automatically transcript content. Safety buffering, moderation metadata, project/environment/settings changes, and queue notifications remain outside activities, commentary, and final selection unless the fixed Sema event model provides an explicit observable-work mapping.
-- Active process disclosure is always expanded and non-collapsible.
-- Completed process disclosure starts collapsed and toggles with a native button exposing `aria-expanded`.
+- Active public progress is always expanded and non-collapsible: follow mode shows the latest two explicit commentary entries without a line clamp. Operation events never evict that prose window.
+- Commands and other technical operations mount only after the explicit per-turn operation-details button is activated. Details belong to the turn; do not invent a causal link to an individual commentary paragraph. History is revealed in bounded batches.
+- Completed process disclosure starts collapsed and toggles with a native button exposing `aria-expanded`, except when the reader has selected text, focused process controls, scrolled away, or explicitly opened history. Preserve that mounted presentation until explicit navigation or return-to-latest; do not retract text beneath the reader.
+- A small turn-local display clock extends projected elapsed time once per second only while running with a known anchor. Hidden pages stop the interval; waiting, degraded, unknown-clock and terminal states never fabricate running seconds. This clock does not poll or own task state.
 - File summaries start collapsed; opening one reveals compact single-line file rows and per-file additions/removals, while each large diff remains collapsed until requested.
 - Hover-only actions become persistently visible on phone or coarse-pointer devices.
 - Every independent coarse-pointer action is at least 44px high or wide as appropriate.
 - The return-to-latest action is a centered circular control. It shows an arrow while idle and three running dots while the latest turn is active.
-- Expanding history or process detail must preserve the user's reading anchor. New streaming content follows only while the reader remains at the bottom.
+- Expanding history or process detail must preserve the user's reading anchor. New streaming content follows only while the reader remains at the bottom and is not selecting or focusing process content. Frozen presentation is bounded to mounted turns, is not persisted, and explicit message navigation can refresh its target window.
 - Older-history anchors and rollback targets/counts belong to `ConversationProjection`; flat `UiMessage[]` indexes or text may not decide either action. An accepted rollback response replaces retained structured history before the normal authoritative refresh, so removed turns cannot survive through stale pages or notifications.
 - Execution, stop availability, stale-state recovery, and task-pet activity must read the latest projected turn/activity plus authoritative Runtime freshness. Gateway/thread normalizers and the browser flat cache may emit or retain acknowledged user-message identity for delivery reconciliation only through `AcknowledgedUserMessage`; local send/failure state uses the separate user-only `OptimisticUserMessage`. The old assistant-capable `UiMessage`, `UiPlan`, and `CommandExecutionData` types must not exist under `src`; structured assistant, phase, command, plan, final, timing, history-notice, and activity facts remain owned by `ConversationProjection` and must never be rebuilt as a flat message list.
 - Realtime agent, plan, reasoning, and command events live only in the retained structured notification stream until an authoritative `thread/read` replaces them. `useDesktopState` must not accumulate parallel `live*Messages`, raw reasoning text, command output, or `turnActivity` copies; those legacy buffers are neither a rendering source nor an execution/recovery fallback.
@@ -79,7 +81,7 @@ Motion communicates state; it does not decorate the page.
 - Disclosure chevrons: 180ms, ease-out, transform only.
 - Process reveal: 180ms, opacity plus at most 4px vertical translation. Do not animate measured height.
 - Hover/focus/press feedback: 80–180ms using color, opacity, or transform.
-- Continuous animation is limited to running dots, active activity dots, and the active turn's streaming caret. A terminal final never keeps a blinking caret merely because its item timestamp is absent.
+- Continuous animation is limited to the running divider dot, running return-to-latest dots, disclosed active activity dots, and the active turn's streaming caret. A terminal final never keeps a blinking caret merely because its item timestamp is absent.
 - No page-load choreography, spring physics, parallax, glass blur, animated gradients, or layout animation.
 - Under `prefers-reduced-motion: reduce`, continuous animation stops and disclosure transitions complete in 1ms while all controls remain usable.
 
@@ -93,7 +95,7 @@ Motion communicates state; it does not decorate the page.
 ## Acceptance gates
 
 - Exactly one `.turn-divider` per projected turn and no `.turn-heading`, `.assistant-mark`, or `.turn-state` legacy visual heading.
-- Active process expanded; completed process collapsed by default.
+- Active public prose expanded, technical details explicitly disclosed; completed process collapsed by default unless protected reading or explicit expansion retains it.
 - File summaries visible, final answer count at most one per turn, and no internal context or old tail overlay in the rendered transcript.
 - Normal and reduced-motion behavior verified in a real browser.
 - No horizontal overflow at desktop, phone, or foldable widths.

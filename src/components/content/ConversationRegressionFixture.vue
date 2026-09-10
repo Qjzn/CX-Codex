@@ -112,21 +112,13 @@
         :data-last-response="lastServerRequestResponse"
         aria-hidden="true"
       />
-      <p
-        v-if="queueTransferFeedback"
-        class="conversation-regression-queue-transfer-feedback"
-        data-testid="queue-transfer-feedback"
-        role="status"
-      >
-        {{ queueTransferFeedback }}
-      </p>
       <QueuedMessages
         v-if="!isSendFeedbackFixture && !isLoadFailureFixture && !isDetachedFailureFixture"
         class="conversation-regression-queue"
         :messages="queuedMessages"
         :is-processing="!isQueueFailureFixture && !isNativeWriterQueueFixture && !isQueueReorderFixture"
         @edit="noop"
-        @quote="onQuoteQueuedMessage"
+        @quote="noop"
         @retry="noop"
         @delete="noop"
         @move="onMoveQueuedMessage"
@@ -145,10 +137,6 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import {
-  restoreQueuedMessageAtIndex,
-  transferQueuedMessageWithRecovery,
-} from '../../composables/queuedMessageTransfer'
 import ThreadConversation from './ThreadConversation.vue'
 import { beginChatFeedbackMetric, chatFeedbackNow, markChatFeedbackFirstAssistantData, markChatFeedbackServerAcknowledged } from '../../composables/chatFeedbackMetrics'
 import QueuedMessages from './QueuedMessages.vue'
@@ -363,7 +351,6 @@ const sendFeedbackPhases = ['sending', 'confirming', 'accepted', 'running', 'com
 const sendFeedbackPhase = ref<typeof sendFeedbackPhases[number]>('sending')
 const sendFeedbackOriginMs = Date.now() - 5_000
 const isNativeWriterQueueFixture = fixtureParams.get('nativeWriterQueue') === '1'
-const isQueueTransferFailureFixture = fixtureParams.get('queueTransferFailure') === '1'
 const isQueueReorderFixture = fixtureParams.get('queueReorder') === '1'
 const isDetachedFailureFixture = fixtureParams.get('detachedFailure') === '1'
 const isLoadFailureFixture = fixtureParams.get('loadFailure') === '1'
@@ -906,7 +893,6 @@ const queuedMessages = ref([
   },
 ])
 
-const queueTransferFeedback = ref('')
 
 function onMoveQueuedMessage(messageId: string, direction: 'up' | 'down'): void {
   if (!isQueueReorderFixture) return
@@ -918,26 +904,6 @@ function onMoveQueuedMessage(messageId: string, direction: 'up' | 'down'): void 
   if (!moved) return
   nextQueue.splice(nextIndex, 0, moved)
   queuedMessages.value = nextQueue
-}
-
-async function onQuoteQueuedMessage(messageId: string): Promise<void> {
-  if (!isQueueTransferFailureFixture) return
-  const index = queuedMessages.value.findIndex((message) => message.id === messageId)
-  const message = queuedMessages.value[index]
-  if (!message) return
-  const snapshot = { index, message }
-  queuedMessages.value = queuedMessages.value.filter((candidate) => candidate.id !== messageId)
-  const outcome = await transferQueuedMessageWithRecovery({
-    snapshot,
-    deliver: async () => { throw new Error('fixture active writer rejected steer') },
-    restore: (removed) => {
-      queuedMessages.value = restoreQueuedMessageAtIndex(queuedMessages.value, removed)
-      return true
-    },
-  })
-  queueTransferFeedback.value = outcome === 'restored'
-    ? '直接引用未被正在执行的任务接收，原消息已恢复到队列。'
-    : ''
 }
 
 function noop(): void {

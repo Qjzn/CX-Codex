@@ -190,6 +190,7 @@ async function startParsedRuntimeTurnWithAppServer(
 
     const turnParams = createRuntimeTurnStartParams({
       threadId,
+      clientMessageId: parsed.clientMessageId,
       input: parsed.input,
       attachments: parsed.attachments,
       model: parsed.model,
@@ -355,6 +356,7 @@ function runtimeSendIdempotencySignature(parsed: ParsedRuntimeSendPayload, promp
 
 function createRuntimeTurnStartParams(args: {
   threadId: string
+  clientMessageId: string
   input: unknown[]
   attachments: unknown
   model: string
@@ -365,6 +367,7 @@ function createRuntimeTurnStartParams(args: {
     threadId: args.threadId,
     input: args.input,
   }
+  if (args.clientMessageId) turnParams.clientUserMessageId = args.clientMessageId
   if (Array.isArray(args.attachments) && args.attachments.length > 0) {
     turnParams.attachments = args.attachments
   }

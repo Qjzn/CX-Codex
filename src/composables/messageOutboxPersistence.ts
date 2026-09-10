@@ -28,6 +28,7 @@ export type MessageOutboxFileAttachment = {
 
 export type MessageOutboxEntry = {
   clientMessageId: string
+  displayMessageId?: string
   threadId: string
   cwd: string
   text: string
@@ -104,6 +105,7 @@ function normalizeMessageOutboxEntry(value: unknown, nowMs: number): MessageOutb
 
   return {
     clientMessageId,
+    displayMessageId: typeof row.displayMessageId === 'string' ? row.displayMessageId.trim() || undefined : undefined,
     threadId: typeof row.threadId === 'string' ? row.threadId.trim() : '',
     cwd: typeof row.cwd === 'string' ? row.cwd.trim() : '',
     text: typeof row.text === 'string' ? row.text : '',

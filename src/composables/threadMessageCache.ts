@@ -46,6 +46,8 @@ function areCachedUserMessageFieldsEqual(first: AcknowledgedUserMessage, second:
     && first.messageType === second.messageType
     && first.turnIndex === second.turnIndex
     && first.turnId === second.turnId
+    && first.clientMessageId === second.clientMessageId
+    && first.displayMessageId === second.displayMessageId
   )
 }
 
@@ -60,10 +62,12 @@ export function areMessageArraysEqual<T>(first: T[], second: T[]): boolean {
 function readStrongUserIdentity(message: AcknowledgedUserMessage): string | null {
   const turnId = message.turnId?.trim() ?? ''
   if (!turnId || turnId.startsWith('fallback-turn-')) return null
+  if (message.clientMessageId) return JSON.stringify([turnId, message.clientMessageId])
   return `${turnId}\u001d${userMessageSignature(message)}`
 }
 
 function readFallbackUserIdentity(message: AcknowledgedUserMessage): string {
+  if (message.clientMessageId) return `client:${message.clientMessageId}`
   return userMessageSignature(message)
 }
 

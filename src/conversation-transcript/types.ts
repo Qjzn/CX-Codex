@@ -50,6 +50,7 @@ export type ConversationLocalUserMessage = {
   id: string
   text: string
   clientMessageId?: string
+  displayMessageId?: string
   turnId?: string
   createdAtMs?: number
   imageUrls?: string[]
@@ -63,6 +64,12 @@ export type ConversationProjectionInput = {
   notifications?: ConversationNotificationInput[]
   pendingRequests?: unknown[]
   localUserMessages?: ConversationLocalUserMessage[]
+  userMessageIdentities?: Array<{
+    itemId: string
+    turnId: string
+    clientMessageId?: string
+    displayMessageId: string
+  }>
   nowMs: number
 }
 
@@ -76,6 +83,7 @@ export type ConversationHistoryWindow = {
 export type ConversationUserBlock = {
   kind: 'user'
   id: string
+  displayMessageId: string
   text: string
   atMs: number | null
   images: string[]
@@ -254,6 +262,7 @@ export type ConversationPlanImplementationIntent = {
 
 export type ConversationTurn = {
   id: string
+  renderKey: string
   index: number
   state: ConversationExecutionState
   startedAtMs: number | null

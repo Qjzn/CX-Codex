@@ -61,71 +61,74 @@
 
       <li
         v-for="turn in virtualizedTurns"
-        :key="turn.id"
-        :ref="(element) => setTurnMeasureRef(turn.id, element)"
+        :key="turn.renderKey"
+        :ref="(element) => setTurnMeasureRef(turn.renderKey, element)"
         class="turn-shell"
         :class="[`turn-shell--${turn.state}`, { 'is-active': isActiveTurn(turn) }]"
         :data-turn-id="turn.id"
+        :data-turn-render-key="turn.renderKey"
         :data-turn-index="turn.index"
         :data-activity-count="turn.activities.length"
       >
         <article
-          v-if="turn.opener"
+          v-for="user in turnUserBlocks(turn)"
+          :key="user.displayMessageId"
           class="user-message"
-          :class="{ 'is-failed': turn.opener.deliveryState === 'failed' }"
-          :data-message-id="turn.opener.id"
+          :class="{ 'is-failed': user.deliveryState === 'failed' }"
+          :data-message-id="user.id"
+          :data-display-message-id="user.displayMessageId"
           data-chat-feedback-kind="user"
           :data-chat-feedback-thread-id="props.activeThreadId"
           :data-chat-feedback-turn-id="turn.id"
-          :data-chat-feedback-item-id="turn.opener.id"
-          :data-chat-feedback-client-message-id="turn.opener.clientMessageId || undefined"
-          :data-chat-feedback-optimistic-message-id="turn.opener.deliveryState ? turn.opener.id : undefined"
+          :data-chat-feedback-item-id="user.id"
+          :data-chat-feedback-client-message-id="user.clientMessageId || undefined"
+          :data-chat-feedback-optimistic-message-id="user.deliveryState ? user.id : undefined"
         >
-          <div v-if="turn.opener.text" class="message-markdown message-markdown--user" v-html="renderMarkdown(turn.opener.text)" />
-          <div v-if="turn.opener.images.length > 0" class="user-images">
+          <div v-if="user.text" class="message-markdown message-markdown--user" v-html="renderMarkdown(user.text)" />
+          <div v-if="user.images.length > 0" class="user-images">
             <UserAttachmentImage
-              v-for="imageUrl in turn.opener.images"
+              v-for="imageUrl in user.images"
               :key="imageUrl"
               :url="imageUrl"
             />
           </div>
-          <div v-if="turn.opener.mentions.length > 0" class="attachment-list">
-            <span v-for="mention in turn.opener.mentions" :key="`${mention.path}:${mention.name}`" class="attachment-chip">
+          <div v-if="user.mentions.length > 0" class="attachment-list">
+            <span v-for="mention in user.mentions" :key="`${mention.path}:${mention.name}`" class="attachment-chip">
               {{ mention.name || mention.path }}
             </span>
           </div>
           <div class="message-actions message-actions--user">
-            <span v-if="turn.opener.deliveryState" class="delivery-state" :data-state="turn.opener.deliveryState" role="status" aria-live="polite">
-              {{ deliveryStateLabel(turn.opener.deliveryState, turn) }}
+            <span v-if="user.deliveryState" class="delivery-state" :data-state="user.deliveryState" role="status" aria-live="polite">
+              {{ deliveryStateLabel(user.deliveryState, turn) }}
             </span>
-            <button v-if="turn.opener.text" type="button" class="message-action" @click="copyBlock(turn.opener.text)">复制</button>
+            <button v-if="user.text" type="button" class="message-action" @click="copyBlock(user.text)">复制</button>
             <button
-              v-if="canFavorite(turn.opener)"
+              v-if="canFavorite(user)"
               type="button"
               class="message-action"
-              :aria-pressed="isFavorite(turn.opener.id)"
-              @click="toggleFavorite(turn.opener, turn)"
+              :aria-pressed="isFavorite(user.id)"
+              @click="toggleFavorite(user, turn)"
             >
-              {{ isFavorite(turn.opener.id) ? '取消收藏' : '收藏' }}
+              {{ isFavorite(user.id) ? '取消收藏' : '收藏' }}
             </button>
             <button
-              v-if="turn.opener.deliveryState === 'failed' && props.allowFailedMessageEdit === true"
+              v-if="user.deliveryState === 'failed' && props.allowFailedMessageEdit === true"
               type="button"
               class="message-action"
-              @click="emit('editFailedMessage', turn.opener.id)"
+              @click="emit('editFailedMessage', user.id)"
             >
               编辑
             </button>
             <button
-              v-if="turn.opener.deliveryState === 'failed'"
+              v-if="user.deliveryState === 'failed'"
               type="button"
               class="message-action"
-              @click="emit('retryFailedMessage', turn.opener.id)"
+              @click="emit('retryFailedMessage', user.id)"
             >
               重试
             </button>
             <button
-              v-if="canRollback(turn)"
+              v-if="user === turn.opener && canRollback(turn)"
               type="button"
               class="message-action"
               :class="{ 'is-confirming': confirmingRollbackTurnIndex === turn.index }"
@@ -147,7 +150,7 @@
               :disabled="isActiveTurn(turn)"
               @click="toggleProcess(turn)"
             >
-              <span>{{ timingLabel(turn) }}</span>
+              <TurnExecutionClock :turn="turn" :generated-at-ms="projection.generatedAtMs" :thread-id="props.activeThreadId" />
               <span v-if="turn.waitedMs > 0" class="turn-wait-time">等待你 {{ formatDuration(turn.waitedMs) }}</span>
               <span
                 class="process-toggle-icon"
@@ -160,7 +163,7 @@
               class="turn-timing turn-timing--static"
               :data-status="turn.timingStatus"
             >
-              <span>{{ timingLabel(turn) }}</span>
+              <TurnExecutionClock :turn="turn" :generated-at-ms="projection.generatedAtMs" :thread-id="props.activeThreadId" />
               <span v-if="turn.waitedMs > 0" class="turn-wait-time">等待你 {{ formatDuration(turn.waitedMs) }}</span>
             </div>
             <span class="turn-divider-line" aria-hidden="true" />
@@ -185,9 +188,9 @@
               >
                 再看更早过程（{{ String(Math.min(hiddenOlderProcessCount(turn), PROCESS_HISTORY_BATCH_SIZE)) }}）
               </button>
-              <template v-for="entry in visibleProcessEntries(turn)" :key="entry.id">
                 <article
-                  v-if="entry.kind === 'commentary'"
+                  v-for="entry in visibleCommentaryEntries(turn)"
+                  :key="entry.id"
                   class="commentary-block"
                   :data-message-id="entry.block.id"
                 >
@@ -203,8 +206,36 @@
                   <button v-if="entry.block.text" type="button" class="inline-copy" @click="copyBlock(entry.block.text)">复制</button>
                 </article>
 
+              <div class="process-history-controls">
+                <button
+                  v-if="processHistoryCount(turn) > 0"
+                  type="button"
+                  class="process-history-action"
+                  :aria-expanded="isProcessHistoryExpanded(turn)"
+                  @click="toggleProcessHistory(turn)"
+                >
+                  {{ isProcessHistoryExpanded(turn) ? '收起历史过程' : `查看历史过程（${String(processHistoryCount(turn))}）` }}
+                </button>
+                <button
+                  v-if="processActivities(turn).length > 0"
+                  type="button"
+                  class="process-history-action process-details-toggle"
+                  :aria-expanded="expandedOperationTurnIds.has(turn.renderKey)"
+                  @click="toggleOperationDetails(turn)"
+                >
+                  {{ expandedOperationTurnIds.has(turn.renderKey) ? '收起操作详情' : `查看操作详情（${String(processActivities(turn).length)}）` }}
+                </button>
+                <button
+                  v-if="expandedOperationTurnIds.has(turn.renderKey) && processActivities(turn).length > visibleOperationCount(turn)"
+                  type="button"
+                  class="process-history-action"
+                  @click="showMoreOperations(turn)"
+                >再看更早操作</button>
+              </div>
+
                 <section
-                  v-else
+                  v-for="entry in visibleOperationEntries(turn)"
+                  :key="entry.id"
                   class="activity-group"
                   :data-activity-group-id="entry.group.id"
                   :aria-label="entry.group.label"
@@ -259,18 +290,6 @@
                     </div>
                   </article>
                 </section>
-              </template>
-
-              <div v-if="processHistoryCount(turn) > 0" class="process-history-controls">
-                <button
-                  type="button"
-                  class="process-history-action"
-                  :aria-expanded="isProcessHistoryExpanded(turn)"
-                  @click="toggleProcessHistory(turn)"
-                >
-                  {{ isProcessHistoryExpanded(turn) ? '收起历史过程' : `查看历史过程（${String(processHistoryCount(turn))}）` }}
-                </button>
-              </div>
 
               <div v-if="turn.interactions.some((interaction) => interaction.status !== 'pending')" class="resolved-interactions">
                 <span
@@ -419,20 +438,6 @@
             </article>
           </div>
 
-          <div
-            v-if="turn.finalStatus === 'pending' && (turn.state === 'running' || turn.state === 'sync-degraded')"
-            class="turn-live-state"
-            :data-state="turn.state"
-            :data-chat-feedback-kind="turn.state === 'running' ? 'running' : undefined"
-            :data-chat-feedback-thread-id="props.activeThreadId"
-            :data-chat-feedback-turn-id="turn.id"
-            role="status"
-            aria-live="polite"
-          >
-            <span class="turn-live-dot" aria-hidden="true" />
-            <span>{{ turn.state === 'sync-degraded' ? '正在恢复实时状态' : '正在思考' }}</span>
-          </div>
-
           <article
             v-if="turn.final"
             class="final-answer"
@@ -492,7 +497,7 @@
       <li ref="bottomAnchorRef" class="bottom-anchor" aria-hidden="true" />
     </ol>
     <button
-      v-if="isAwayFromBottom"
+      v-if="isAwayFromBottom || reading.protectedReading.value"
       type="button"
       class="conversation-jump-to-latest"
       aria-label="返回最新输出"
@@ -511,7 +516,9 @@ import DOMPurify from 'dompurify'
 import MarkdownIt from 'markdown-it'
 import LoadingInline from './LoadingInline.vue'
 import UserAttachmentImage from './UserAttachmentImage.vue'
+import TurnExecutionClock from './TurnExecutionClock.vue'
 import { useChatFeedbackDomMetrics } from '../../composables/useChatFeedbackDomMetrics'
+import { useConversationReading } from '../../composables/useConversationReading'
 import { copyTextToClipboard } from '../../utils/clipboard'
 import { derivePlanImplementationState, planImplementationKey } from '../../conversation-transcript'
 import type {
@@ -584,8 +591,12 @@ markdown.renderer.rules.link_open = (tokens, index, options, env, renderer) => {
 const conversationListRef = ref<HTMLElement | null>(null)
 useChatFeedbackDomMetrics({ root: conversationListRef, threadId: () => props.activeThreadId })
 const bottomAnchorRef = ref<HTMLElement | null>(null)
+// Presentation-only IDs below (expansion, height, pins and anchors) are renderKey
+// values. Keep authoritative turn/item IDs for actions and data-message-id.
 const manuallyExpandedTurnIds = ref<Set<string>>(new Set())
 const visibleProcessHistoryCountByTurnId = ref<Record<string, number>>({})
+const expandedOperationTurnIds = ref(new Set<string>())
+const visibleOperationCountByTurnId = ref<Record<string, number>>({})
 const confirmingRollbackTurnIndex = ref<number | null>(null)
 const highlightedMessageId = ref('')
 const requestAnswers = ref<Record<string, string>>({})
@@ -636,7 +647,7 @@ function lowerBoundNumber(values: number[], target: number): number {
 const turnHeightMetrics = computed(() => {
   const cumulativeHeights: number[] = [0]
   for (const turn of props.projection.turns) {
-    const height = measuredTurnHeightById.value[turn.id] ?? ESTIMATED_TURN_HEIGHT_PX
+    const height = measuredTurnHeightById.value[turn.renderKey] ?? ESTIMATED_TURN_HEIGHT_PX
     cumulativeHeights.push((cumulativeHeights.at(-1) ?? 0) + height + TURN_GAP_PX)
   }
   return {
@@ -661,7 +672,7 @@ const virtualizedTurnRange = computed(() => {
   }
 
   if (pinnedTurnId.value) {
-    const pinnedIndex = props.projection.turns.findIndex((turn) => turn.id === pinnedTurnId.value)
+    const pinnedIndex = props.projection.turns.findIndex((turn) => turn.renderKey === pinnedTurnId.value)
     if (pinnedIndex >= 0) return boundedTurnRangeAround(pinnedIndex, turnCount)
   }
 
@@ -692,6 +703,11 @@ const virtualizedTurns = computed(() => {
   const { startIndex, endIndex } = virtualizedTurnRange.value
   return props.projection.turns.slice(startIndex, endIndex)
 })
+const reading = useConversationReading<VisibleProcessEntry>(conversationListRef, () => new Map(
+  virtualizedTurns.value.filter((turn) => isProcessExpanded(turn))
+    .map((turn) => [turn.renderKey, liveProcessEntries(turn)]),
+))
+watch(() => virtualizedTurns.value.map((turn) => turn.renderKey).join('\u001f'), () => reading.retainMounted())
 const virtualTopSpacerHeight = computed(() => {
   if (!shouldVirtualizeTurns.value) return 0
   return turnHeightMetrics.value.cumulativeHeights[virtualizedTurnRange.value.startIndex] ?? 0
@@ -729,38 +745,34 @@ function hasVisibleTiming(turn: ConversationTurn): boolean {
 }
 
 function isProcessExpanded(turn: ConversationTurn): boolean {
-  return isActiveTurn(turn) || manuallyExpandedTurnIds.value.has(turn.id)
+  return isActiveTurn(turn) || manuallyExpandedTurnIds.value.has(turn.renderKey) || reading.frozen.value.has(turn.renderKey)
 }
 
 function toggleProcess(turn: ConversationTurn): void {
   if (isActiveTurn(turn)) return
   const next = new Set(manuallyExpandedTurnIds.value)
-  if (next.has(turn.id)) {
-    next.delete(turn.id)
+  if (isProcessExpanded(turn)) {
+    next.delete(turn.renderKey)
     hideProcessHistory(turn)
+    reading.frozen.value = new Map([...reading.frozen.value].filter(([key]) => key !== turn.renderKey))
   } else {
-    next.add(turn.id)
+    next.add(turn.renderKey)
   }
   manuallyExpandedTurnIds.value = next
 }
 
-type ProcessBlock = ConversationAssistantBlock | ConversationActivity
-
-function processBlocks(turn: ConversationTurn): ProcessBlock[] {
-  return turn.blocks.filter((block): block is ProcessBlock => (
-    (block.kind === 'activity' && (block.activityType !== 'plan' || !block.text.trim()))
-    || (block.kind === 'assistant' && block.phase === 'commentary')
-  ))
+function processActivities(turn: ConversationTurn): ConversationActivity[] {
+  return turn.activities.filter((block) => block.activityType !== 'plan' || !block.text.trim())
 }
 
 function processHistoryCount(turn: ConversationTurn): number {
-  return Math.max(0, processBlocks(turn).length - 1)
+  return Math.max(0, turn.commentary.length - 2)
 }
 
 function visibleProcessHistoryCount(turn: ConversationTurn): number {
   return Math.min(
     processHistoryCount(turn),
-    Math.max(0, visibleProcessHistoryCountByTurnId.value[turn.id] ?? 0),
+    Math.max(0, visibleProcessHistoryCountByTurnId.value[turn.renderKey] ?? 0),
   )
 }
 
@@ -769,7 +781,7 @@ function isProcessHistoryExpanded(turn: ConversationTurn): boolean {
 }
 
 function visibleProcessBlockCount(turn: ConversationTurn): number {
-  return Math.min(processBlocks(turn).length, visibleProcessHistoryCount(turn) + 1)
+  return visibleProcessEntries(turn).reduce((count, entry) => count + (entry.kind === 'commentary' ? 1 : entry.activities.length), 0)
 }
 
 function hiddenOlderProcessCount(turn: ConversationTurn): number {
@@ -777,18 +789,42 @@ function hiddenOlderProcessCount(turn: ConversationTurn): number {
 }
 
 function showMoreProcessHistory(turn: ConversationTurn): void {
+  reading.protect()
   const next = { ...visibleProcessHistoryCountByTurnId.value }
-  next[turn.id] = Math.min(
+  next[turn.renderKey] = Math.min(
     processHistoryCount(turn),
     visibleProcessHistoryCount(turn) + PROCESS_HISTORY_BATCH_SIZE,
   )
   visibleProcessHistoryCountByTurnId.value = next
+  reading.refresh(turn.renderKey, liveProcessEntries(turn))
 }
 
 function hideProcessHistory(turn: ConversationTurn): void {
   const next = { ...visibleProcessHistoryCountByTurnId.value }
-  delete next[turn.id]
+  delete next[turn.renderKey]
   visibleProcessHistoryCountByTurnId.value = next
+  reading.refresh(turn.renderKey, liveProcessEntries(turn))
+}
+
+function visibleOperationCount(turn: ConversationTurn): number {
+  return visibleOperationCountByTurnId.value[turn.renderKey] ?? PROCESS_HISTORY_BATCH_SIZE
+}
+
+function toggleOperationDetails(turn: ConversationTurn): void {
+  reading.protect()
+  const next = new Set(expandedOperationTurnIds.value)
+  if (next.has(turn.renderKey)) next.delete(turn.renderKey)
+  else next.add(turn.renderKey)
+  expandedOperationTurnIds.value = next
+  reading.refresh(turn.renderKey, liveProcessEntries(turn))
+}
+
+function showMoreOperations(turn: ConversationTurn): void {
+  visibleOperationCountByTurnId.value = {
+    ...visibleOperationCountByTurnId.value,
+    [turn.renderKey]: visibleOperationCount(turn) + PROCESS_HISTORY_BATCH_SIZE,
+  }
+  reading.refresh(turn.renderKey, liveProcessEntries(turn))
 }
 
 function toggleProcessHistory(turn: ConversationTurn): void {
@@ -801,7 +837,22 @@ type VisibleProcessEntry =
   | { kind: 'activity-group'; id: string; group: ConversationActivityGroup; activities: ConversationActivity[] }
 
 function visibleProcessEntries(turn: ConversationTurn): VisibleProcessEntry[] {
-  const visibleBlocks = processBlocks(turn).slice(-visibleProcessBlockCount(turn))
+  return reading.frozen.value.get(turn.renderKey) ?? liveProcessEntries(turn)
+}
+
+function visibleCommentaryEntries(turn: ConversationTurn) {
+  return visibleProcessEntries(turn).filter((entry) => entry.kind === 'commentary')
+}
+
+function visibleOperationEntries(turn: ConversationTurn) {
+  return visibleProcessEntries(turn).filter((entry) => entry.kind === 'activity-group')
+}
+
+function liveProcessEntries(turn: ConversationTurn): VisibleProcessEntry[] {
+  const visibleBlocks: (ConversationAssistantBlock | ConversationActivity)[] = [
+    ...turn.commentary.slice(-(visibleProcessHistoryCount(turn) + 2)),
+    ...(expandedOperationTurnIds.value.has(turn.renderKey) ? processActivities(turn).slice(-visibleOperationCount(turn)) : []),
+  ]
   const visibleActivityIds = new Set(
     visibleBlocks
       .filter((block): block is ConversationActivity => block.kind === 'activity')
@@ -885,18 +936,6 @@ function formatDuration(durationMs: number | null): string {
   return remainingMinutes > 0 ? `${String(hours)} 小时 ${String(remainingMinutes)} 分` : `${String(hours)} 小时`
 }
 
-function timingLabel(turn: ConversationTurn): string {
-  if (turn.timingStatus === 'unavailable' || turn.activeElapsedMs === null) {
-    if (turn.state === 'queued') return '等待执行'
-    if (turn.state === 'waiting') return '等待你的处理'
-    if (turn.state === 'running' || turn.state === 'sync-degraded') return '正在处理'
-    return '过程记录'
-  }
-  return turn.timingStatus === 'running'
-    ? `已处理 ${formatDuration(turn.activeElapsedMs)}`
-    : `耗时 ${formatDuration(turn.activeElapsedMs)}`
-}
-
 function fileSummaryLabel(turn: ConversationTurn): string {
   const additions = turn.fileChanges.reduce((total, file) => total + file.additions, 0)
   const removals = turn.fileChanges.reduce((total, file) => total + file.removals, 0)
@@ -920,6 +959,10 @@ function finalStatusTitle(turn: ConversationTurn): string {
 function finalStatusDetail(turn: ConversationTurn): string {
   if (turn.error) return turn.error
   return '过程记录仍然保留，可根据上方状态决定是否重试。'
+}
+
+function turnUserBlocks(turn: ConversationTurn): ConversationUserBlock[] {
+  return turn.blocks.filter((block): block is ConversationUserBlock => block.kind === 'user')
 }
 
 function deliveryStateLabel(state: ConversationUserBlock['deliveryState'], turn: ConversationTurn): string {
@@ -1151,11 +1194,11 @@ function captureVisibleTurnAnchor(): VisibleTurnAnchor | null {
   if (!container) return null
   const containerTop = container.getBoundingClientRect().top
   for (const turn of virtualizedTurns.value) {
-    const element = observedTurnElementsById.get(turn.id)
+    const element = observedTurnElementsById.get(turn.renderKey)
     if (!element) continue
     const rect = element.getBoundingClientRect()
     if (rect.bottom <= containerTop + 1) continue
-    return { turnId: turn.id, top: rect.top }
+    return { turnId: turn.renderKey, top: rect.top }
   }
   return null
 }
@@ -1181,9 +1224,9 @@ function scheduleTurnHeightCompensation(anchor: VisibleTurnAnchor | null, should
     heightRestoreFrame = window.requestAnimationFrame(() => {
       heightRestoreFrame = 0
       if (ownerThreadId !== props.activeThreadId) return
-      if (shouldFollow && !userIsAwayFromBottom) {
+      if (shouldFollow && shouldFollowOutput()) {
         scrollToBottom()
-      } else if (!shouldFollow && userIsAwayFromBottom && anchor) {
+      } else if (!shouldFollow && !shouldFollowOutput() && anchor) {
         restoreVisibleTurnAnchor(anchor)
       }
       if (ownsPin && pinnedTurnId.value === anchor?.turnId) pinnedTurnId.value = ''
@@ -1194,7 +1237,7 @@ function scheduleTurnHeightCompensation(anchor: VisibleTurnAnchor | null, should
 const turnResizeObserver = typeof ResizeObserver === 'undefined'
   ? null
   : new ResizeObserver((entries) => {
-      const shouldFollow = !userIsAwayFromBottom
+      const shouldFollow = shouldFollowOutput()
       const anchor = shouldFollow ? null : captureVisibleTurnAnchor()
       let nextHeights = measuredTurnHeightById.value
       let changed = false
@@ -1249,6 +1292,7 @@ function onConversationScroll(): void {
   const element = conversationListRef.value
   if (!element) return
   userIsAwayFromBottom = !isViewportAtBottom(element)
+  if (userIsAwayFromBottom) reading.protect()
   isAwayFromBottom.value = userIsAwayFromBottom
   if (scrollFrame) return
   scrollFrame = window.requestAnimationFrame(() => {
@@ -1256,6 +1300,10 @@ function onConversationScroll(): void {
     syncConversationViewport(element)
     publishScrollState()
   })
+}
+
+function shouldFollowOutput(): boolean {
+  return !userIsAwayFromBottom && !reading.protectedReading.value
 }
 
 function scrollToBottom(behavior: ScrollBehavior = 'auto'): void {
@@ -1269,10 +1317,11 @@ function scrollToBottom(behavior: ScrollBehavior = 'auto'): void {
 }
 
 async function returnToLatest(): Promise<void> {
+  reading.reset()
   userIsAwayFromBottom = false
   isAwayFromBottom.value = false
-  scrollToBottom('smooth')
   await nextTick()
+  scrollToBottom()
   conversationListRef.value?.focus({ preventScroll: true })
 }
 
@@ -1282,7 +1331,7 @@ function requestOlderHistory(): void {
     const containerTop = container.getBoundingClientRect().top
     const visibleTurn = Array.from(container.querySelectorAll<HTMLElement>('.turn-shell'))
       .find((element) => element.getBoundingClientRect().bottom > containerTop + 4)
-    const turnId = visibleTurn?.dataset.turnId ?? ''
+    const turnId = visibleTurn?.dataset.turnRenderKey ?? ''
     if (visibleTurn && turnId) {
       pendingOlderHistoryAnchor = { turnId, top: visibleTurn.getBoundingClientRect().top }
       pinnedTurnId.value = turnId
@@ -1297,7 +1346,7 @@ async function restoreOlderHistoryAnchor(): Promise<boolean> {
   if (!anchor || !container) return false
   await nextTick()
   const turn = Array.from(container.querySelectorAll<HTMLElement>('.turn-shell'))
-    .find((element) => element.dataset.turnId === anchor.turnId)
+    .find((element) => element.dataset.turnRenderKey === anchor.turnId)
   if (!turn) {
     pendingOlderHistoryAnchor = null
     if (pinnedTurnId.value === anchor.turnId) pinnedTurnId.value = ''
@@ -1357,25 +1406,29 @@ async function focusMessage(messageId: string): Promise<boolean> {
   if (!normalizedId) return false
   const owningTurn = props.projection.turns.find((turn) => turn.blocks.some((block) => block.id === normalizedId))
   if (owningTurn) {
-    pinnedTurnId.value = owningTurn.id
+    pinnedTurnId.value = owningTurn.renderKey
     await nextTick()
   }
   if (owningTurn && !isProcessExpanded(owningTurn)) {
-    manuallyExpandedTurnIds.value = new Set(manuallyExpandedTurnIds.value).add(owningTurn.id)
+    manuallyExpandedTurnIds.value = new Set(manuallyExpandedTurnIds.value).add(owningTurn.renderKey)
     await nextTick()
   }
   if (owningTurn) {
-    const blocks = processBlocks(owningTurn)
+    const blocks = owningTurn.commentary
     const targetIndex = blocks.findIndex((block) => block.id === normalizedId)
     if (targetIndex >= 0) {
-      const requiredHistoryCount = Math.max(0, blocks.length - targetIndex - 1)
+      const requiredHistoryCount = Math.max(0, blocks.length - targetIndex - 2)
       if (requiredHistoryCount > visibleProcessHistoryCount(owningTurn)) {
         visibleProcessHistoryCountByTurnId.value = {
           ...visibleProcessHistoryCountByTurnId.value,
-          [owningTurn.id]: requiredHistoryCount,
+          [owningTurn.renderKey]: requiredHistoryCount,
         }
         await nextTick()
       }
+      // Explicit navigation can leave the frozen reading window, including a
+      // new message that needs no additional history page to become visible.
+      reading.refresh(owningTurn.renderKey, liveProcessEntries(owningTurn))
+      await nextTick()
     }
   }
   const root = conversationListRef.value
@@ -1383,12 +1436,12 @@ async function focusMessage(messageId: string): Promise<boolean> {
   const candidates = root.querySelectorAll<HTMLElement>('[data-message-id]')
   const element = Array.from(candidates).find((candidate) => candidate.dataset.messageId === normalizedId)
   if (!element) {
-    if (owningTurn && pinnedTurnId.value === owningTurn.id) pinnedTurnId.value = ''
+    if (owningTurn && pinnedTurnId.value === owningTurn.renderKey) pinnedTurnId.value = ''
     return false
   }
   element.scrollIntoView({ block: 'center', behavior: 'auto' })
   syncConversationViewport(root)
-  if (owningTurn && pinnedTurnId.value === owningTurn.id) {
+  if (owningTurn && pinnedTurnId.value === owningTurn.renderKey) {
     pinnedTurnId.value = ''
     await nextTick()
   }
@@ -1412,6 +1465,9 @@ watch(
     conversationScrollTop.value = 0
     manuallyExpandedTurnIds.value = new Set()
     visibleProcessHistoryCountByTurnId.value = {}
+    expandedOperationTurnIds.value = new Set()
+    visibleOperationCountByTurnId.value = {}
+    reading.reset()
     confirmingRollbackTurnIndex.value = null
     respondingRequestIds.value = new Set()
     await restoreScrollState()
@@ -1422,9 +1478,9 @@ watch(
   () => projectionContentSignature(props.projection),
   async () => {
     if (await restoreOlderHistoryAnchor()) return
-    const shouldFollow = !userIsAwayFromBottom
+    const shouldFollow = shouldFollowOutput()
     await nextTick()
-    if (shouldFollow && !userIsAwayFromBottom) {
+    if (shouldFollow && shouldFollowOutput()) {
       isAwayFromBottom.value = false
       scrollToBottom()
     }
@@ -1616,31 +1672,6 @@ onBeforeUnmount(() => {
 
 .turn-wait-time {
   color: var(--ui-warning);
-}
-
-.turn-live-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  margin: 5px 0 12px;
-  color: var(--ui-text-tertiary);
-  font-size: 13px;
-}
-
-.turn-live-state[data-state='sync-degraded'] {
-  color: var(--ui-warning);
-}
-
-.turn-live-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--ui-accent);
-  animation: transcript-live-pulse 1.2s var(--motion-ease-standard) infinite;
-}
-
-.turn-live-state[data-state='sync-degraded'] .turn-live-dot {
-  background: var(--ui-warning);
 }
 
 .message-markdown {
@@ -1874,7 +1905,6 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.process-content.has-history:not(.is-history-expanded) .commentary-copy,
 .process-content.has-history:not(.is-history-expanded) .activity-command,
 .process-content.has-history:not(.is-history-expanded) .activity-subtitle,
 .process-content.has-history:not(.is-history-expanded) .activity-progress {
@@ -1886,7 +1916,9 @@ onBeforeUnmount(() => {
 
 .process-history-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 0 16px;
   margin-top: 2px;
 }
 
@@ -2636,7 +2668,6 @@ onBeforeUnmount(() => {
 
 @media (prefers-reduced-motion: reduce) {
   .run-dots i,
-  .turn-live-dot,
   .activity-block--in-progress .process-rail-dot {
     animation: none;
   }
