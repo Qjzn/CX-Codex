@@ -1,4 +1,5 @@
 import { computed, ref, watch } from 'vue'
+import { readAsyncQuestionItem } from '../asyncQuestions'
 import { runWithBoundedRecovery } from './boundedAsyncRecovery'
 import { readRuntimeActivityStartedAtMs } from './activityTimer'
 import {
@@ -227,6 +228,7 @@ function readThreadStatusExecutionState(
 
 function shouldRefreshMessagesFromNotification(notification: RpcNotification): boolean {
   const { method } = notification
+  if (method === 'item/completed' && readAsyncQuestionItem((notification.params as { item?: unknown } | null)?.item)) return true
   if (method === THREAD_TOKEN_USAGE_UPDATED_METHOD) return false
   const sessionFileChangePolicy = getCxSessionFileChangeSyncPolicy(method, notification.params)
   if (sessionFileChangePolicy) return sessionFileChangePolicy.refreshMessages

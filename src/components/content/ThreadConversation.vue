@@ -666,6 +666,9 @@
               {{ messageRoleLabel(entry.message, entry.messageIndex) }}
             </p>
             <article class="message-body" :data-role="entry.message.role">
+              <AsyncQuestionCard v-if="entry.message.asyncQuestion" :key="`${activeThreadId}:${entry.message.id}`"
+                :batch="entry.message.asyncQuestion" :answer-message="findAsyncAnswerMessage(entry.message.asyncQuestion, asyncAnswerMessages ?? messages)"
+                :disabled="!answerAsyncQuestion || isThreadSwitching" :send-answer="sendAsyncAnswer" />
               <ul
                 v-if="entry.message.images && entry.message.images.length > 0"
                 class="message-image-list"
@@ -1390,6 +1393,8 @@
 </template>
 
 <script setup lang="ts">
+import AsyncQuestionCard from './AsyncQuestionCard.vue'
+import { displayAsyncAnswer, findAsyncAnswerMessage } from '../../asyncQuestions'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import type { ThreadScrollState, UiLiveOverlay, UiMessage, UiServerRequest } from '../../types/codex'
@@ -1788,7 +1793,14 @@ const props = defineProps<{
   allowFailedMessageEdit?: boolean
   implementingPlanId?: string
   implementedPlanIds?: string[]
+  answerAsyncQuestion?: (callId: string, answers: string[]) => Promise<void>
+  asyncAnswerMessages?: UiMessage[]
 }>()
+
+async function sendAsyncAnswer(callId: string, answers: string[]): Promise<void> {
+  if (!props.answerAsyncQuestion) throw new Error('当前任务不可回答。')
+  await props.answerAsyncQuestion(callId, answers)
+}
 
 const retainedLiveOverlay = ref<UiLiveOverlay | null>(null)
 watch(
@@ -3926,6 +3938,7 @@ function pushTextWithImages(blocks: MessageBlock[], text: string): void {
 }
 
 function pushMarkdownTextWithImages(blocks: MessageBlock[], text: string): void {
+  text = displayAsyncAnswer(text)
   for (const block of parseConversationMarkdownBlocks(text)) {
     if (block.kind === 'text') pushTextWithImages(blocks, block.value)
     else blocks.push(block)

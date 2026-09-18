@@ -77,6 +77,8 @@
     "verify:governance": "node ./scripts/run-powershell-script.mjs ./scripts/verify-governance.ps1",
     "verify:dependency-security": "node ./scripts/verify-dependency-security.mjs",
     "verify:frontend-normalizers": "node ./scripts/verify-frontend-normalizers.mjs",
+    "verify:async-questions": "node ./scripts/verify-async-questions.mjs",
+    "preview:async-questions": "node ./scripts/preview-async-questions.mjs",
     "verify:quick-tunnel": "node ./scripts/verify-quick-tunnel-manager.mjs",
     "verify:runtime-stability": "node ./scripts/verify-runtime-stability-modules.mjs",
     "verify:server-modules": "node ./scripts/verify-server-modules.mjs",

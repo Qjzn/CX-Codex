@@ -743,6 +743,8 @@
                   :implemented-plan-ids="implementedPlanIds"
                   @update-scroll-state="onUpdateThreadScrollState"
                   @respond-server-request="onRespondServerRequest"
+                  :answer-async-question="onAnswerAsyncQuestion"
+                  :async-answer-messages="asyncQuestionAnswerMessages"
                   @toggle-favorite="onToggleFavoriteMessage"
                   @load-older-history="loadOlderHistoryForSelectedThread"
                   @retry-load="onRefreshSelectedThreadContent"
@@ -1016,6 +1018,7 @@
 </template>
 
 <script setup lang="ts">
+import { encodeAsyncAnswer, findAsyncAnswerMessage } from './asyncQuestions'
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import DesktopLayout from './components/layout/DesktopLayout.vue'
@@ -4332,6 +4335,31 @@ function onClearThreadGoal(): void {
   void clearSelectedThreadGoal().catch(() => {
     // The goal remains visible when the authoritative clear fails.
   })
+}
+
+const asyncAnswerInFlight = new Set<string>()
+const asyncQuestionAnswerMessages = computed<UiMessage[]>(() => [
+  ...displayedThreadMessages.value,
+  ...selectedThreadDetachedFailedMessages.value,
+  ...selectedThreadQueuedMessages.value.map((message): UiMessage => ({
+    id: message.id, role: 'user', text: message.text,
+    deliveryState: message.deliveryState === 'failed' ? 'failed' : 'waiting',
+  })),
+])
+async function onAnswerAsyncQuestion(callId: string, answers: string[]): Promise<void> {
+  const threadId = selectedThreadId.value
+  if (!threadId || threadId !== displayedThreadConversationId.value) throw new Error('任务已切换，请在原任务中回答。')
+  const batch = displayedThreadMessages.value.find((message) => message.asyncQuestion?.callId === callId)?.asyncQuestion
+  if (!batch) throw new Error('问题已不在当前任务中，请刷新后重试。')
+  const key = `${threadId}:${callId}`
+  if (asyncAnswerInFlight.has(key) || findAsyncAnswerMessage(batch, asyncQuestionAnswerMessages.value)) return
+  const text = encodeAsyncAnswer(batch, answers)
+  asyncAnswerInFlight.add(key)
+  try {
+    await sendMessageToSelectedThread(text, [], [], 'steer', [], undefined, selectedCollaborationMode.value, undefined, { targetThreadId: threadId })
+  } finally {
+    asyncAnswerInFlight.delete(key)
+  }
 }
 
 async function onImplementPlan(message: UiMessage): Promise<void> {

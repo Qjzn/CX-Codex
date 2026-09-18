@@ -8,6 +8,7 @@ import { PendingServerRequestStore, type PendingServerRequest } from './pendingS
 import { PlanModeTurnStore } from './planModeTurnStore.js'
 import type { ServerRequestReply } from './serverRequestReply.js'
 import type { WebBridgePermissionSettings } from './serverRequestPolicy.js'
+import { asyncQuestionReply } from './asyncQuestionTool.js'
 
 type AppServerProcessServerRequestDependencies = {
   permissions: WebBridgePermissionSettings
@@ -80,6 +81,11 @@ export class AppServerProcessServerRequests {
     params: unknown,
     dependencies: AppServerProcessServerRequestDependencies,
   ): void {
+    const asyncReply = asyncQuestionReply(method, params)
+    if (asyncReply) {
+      dependencies.sendServerRequestReply(requestId, asyncReply)
+      return
+    }
     handleAppServerServerRequest(requestId, method, params, {
       permissions: dependencies.permissions,
       isPlanModeRequest: (requestParams) => {

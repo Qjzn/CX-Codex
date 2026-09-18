@@ -54,6 +54,11 @@ const router = createRouter({
       component: () => import('../components/content/ConversationRegressionFixture.vue'),
     },
     {
+      path: '/__regression/async-questions',
+      name: 'regression-async-questions',
+      component: () => import('../components/content/AsyncQuestionRegressionFixture.vue'),
+    },
+    {
       path: '/__regression/sidebar-rows',
       name: 'regression-sidebar-rows',
       component: () => import('../components/sidebar/SidebarRegressionFixture.vue'),

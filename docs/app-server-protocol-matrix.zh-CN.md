@@ -6,6 +6,12 @@
 
 ## 当前证据
 
+### 2026-09-18 异步提问的限定核验
+
+CLI 0.153.4 的常规 schema 生成成功，但与旧基线存在差异（审计退出码 1）。额外的 `generate-ts --experimental` 及真实模型往返验证了 `thread/start.dynamicTools` → `item/tool/call` → `dynamicToolCall` 历史项，以及活动 turn 的 `turn/steer` 回答。此核验仅覆盖可选的异步提问；没有将其余差异视为已兼容，也没有替换整个 schema 基线。用法和边界见 [异步提问说明](async-questions.zh-CN.md)。
+
+### 既有基线核验
+
 - 审计命令：`npm.cmd run audit:app-server-schemas`
 - 脱敏摘要更新命令：`npm.cmd run audit:app-server-schemas:update-summary`
 - 审计时间：2026-08-08（`codex-cli 0.130.0`）

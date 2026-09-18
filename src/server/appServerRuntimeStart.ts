@@ -1,4 +1,5 @@
 import { isRpcOutcomeUncertainError } from './appServerRpcErrors.js'
+import { asyncQuestionTool, asyncQuestionsEnabled } from './asyncQuestionTool.js'
 import {
   readThreadIdFromPayload,
   readTurnIdFromPayload,
@@ -329,6 +330,7 @@ export function createRuntimeThreadStartParams(
   platform = process.platform,
 ): Record<string, unknown> {
   const threadParams: Record<string, unknown> = {}
+  if (asyncQuestionsEnabled()) threadParams.dynamicTools = [asyncQuestionTool]
   if (parsed.cwd) threadParams.cwd = parsed.cwd
   if (parsed.model) threadParams.model = parsed.model
   if (platform === 'win32') {
