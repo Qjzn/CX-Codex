@@ -75,6 +75,17 @@
     }
   },
   "reviewStatus": "drift-recorded",
+  "asyncQuestionsReview": {
+    "reviewedOn": "2026-09-18",
+    "codexCliVersion": "0.153.4",
+    "auditOutput": "output/app-server-schema-audit/20260918-091616",
+    "auditExitCode": 1,
+    "scope": "Experimental dynamic tools only; other baseline drift remains unreviewed by this contribution.",
+    "experimentalTypes": ["DynamicToolSpec", "DynamicToolCallParams", "DynamicToolCallResponse", "ThreadItem", "ThreadStartParams"],
+    "methods": ["thread/start", "item/tool/call", "item/completed", "turn/steer", "thread/read"],
+    "nativeRoundtrip": "passed",
+    "notes": "docs/async-questions.zh-CN.md"
+  },
   "notes": [
     "This committed summary is a release-governance checkpoint, not a schema baseline update.",
     "The complete added and removed name sets in all four comparison groups are identical to the 2026-07-04 audit when regenerated with codex-cli 0.130.0.",

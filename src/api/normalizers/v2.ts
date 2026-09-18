@@ -10,6 +10,7 @@ import type { CommandExecutionData, UiFileAttachment, UiMessage, UiProjectGroup,
 import { normalizePathForComparison, normalizePathForUi, toProjectName } from '../../pathUtils.js'
 import { orderProjectGroupsByRecentActivity } from '../../utils/projectGroupOrdering.js'
 import { isInternalContextMessageText } from '../../internalContextMessage.js'
+import { readAsyncQuestionItem } from '../../asyncQuestions.js'
 
 function toIso(seconds: number): string {
   return new Date(seconds * 1000).toISOString()
@@ -250,6 +251,9 @@ function toUiMessages(item: ThreadItem, turnId = ''): UiMessage[] {
   const rawItem = item as Record<string, unknown>
   const itemId = readTrimmedString(rawItem.id) || `unhandled:${readTrimmedString(rawItem.type) || 'item'}`
   const itemType = readTrimmedString(rawItem.type)
+
+  const asyncQuestion = readAsyncQuestionItem(rawItem)
+  if (asyncQuestion) return [{ id: itemId, role: 'assistant', text: '', messageType: 'cx.asyncQuestion', asyncQuestion }]
 
   if (itemType === 'mcpToolCall') {
     return []

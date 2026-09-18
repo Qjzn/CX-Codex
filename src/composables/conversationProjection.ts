@@ -90,6 +90,7 @@ export function areMessageFieldsEqual(first: UiMessage, second: UiMessage): bool
     first.messageType === second.messageType &&
     first.phase === second.phase &&
     first.rawPayload === second.rawPayload &&
+    JSON.stringify(first.asyncQuestion) === JSON.stringify(second.asyncQuestion) &&
     first.isUnhandled === second.isUnhandled &&
     areCommandExecutionsEqual(first.commandExecution, second.commandExecution) &&
     arePlansEqual(first.plan, second.plan) &&

@@ -201,6 +201,7 @@ export type CommandExecutionData = {
 export type UiFileAttachment = { label: string; path: string }
 
 export type UiMessage = {
+  asyncQuestion?: import('../asyncQuestions.js').AsyncQuestionBatch
   id: string
   role: 'user' | 'assistant' | 'system'
   text: string
