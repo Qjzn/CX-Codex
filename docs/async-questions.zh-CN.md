@@ -52,7 +52,17 @@ npm run build
 
 `npm run preview:async-questions` 在 `127.0.0.1:17520` 打开合成回归页面，使用真实 `ThreadConversation` 和 normalizer，不启动 App Server，也不调用模型。可测试选择、文本、确认中、失败、重试与明暗主题；退出进程即关闭预览。截图保存在忽略的 `output/` 中。
 
-2026-09-18，真实 CLI 0.153.4 已完成 initialize → 注册工具 → 模型调用 → 立即回复 → 活动 turn 的 steer 回答 → thread/read 恢复问题和回答，合成任务随后归档。浏览器检查覆盖五种视口的待回答布局、桌面/手机已回答状态、手机深色和发送中；控制台无错误。失败状态匹配由模块检查覆盖，浏览器中的失败重试尚未完成。键盘焦点已检查，原生 Enter 提交仍需补验。未替代 Android 真机、其他 CLI 版本或整个产品的发布验收。
+2026-09-18，真实 CLI 0.153.4 已完成 initialize → 注册工具 → 模型调用 → 立即回复 → 活动 turn 的 steer 回答 → thread/read 恢复问题和回答，合成任务随后归档。浏览器检查覆盖五种视口的待回答布局、桌面/手机已回答状态、手机深色和发送中；控制台无错误。
+
+补验已通过：合成发送失败后保留全部答案，点击原失败消息的“重试”后显示“已回答”，没有新增重复回答；Chrome 原生键盘事件（CDP）确认文本框内 Enter 只换行，焦点位于“发送回答”按钮时 Enter 仅提交一次。测试使用完整虚拟键码及字符参数，不以工具返回“按键成功”代替实际页面结果。失败与重试在合成夹具中模拟，不代表真实网络断开恢复已经端到端覆盖；也未替代 Windows 物理键盘、Android 真机、其他 CLI 版本或整个产品的发布验收。
+
+### 合成页面截图
+
+以下仅包含公开的合成示例，没有真实任务内容。
+
+![桌面异步提问](screenshots/async-questions-desktop.png)
+
+![手机宽度异步提问](screenshots/async-questions-phone.png)
 
 常规 schema audit 返回 1，表示 CLI 0.153.4 与仓库旧基线存在差异，生成过程成功；本次仅核验以上相关协议。额外使用 `codex app-server generate-ts --experimental` 复核 `DynamicToolSpec`、调用参数/结果及 `ThreadItem`，没有整体替换历史 schema 基线。
 
