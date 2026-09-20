@@ -608,17 +608,17 @@
                   <button
                     v-for="option in modelOptions"
                     :key="option.value"
-                    class="thread-composer-runtime-option thread-composer-runtime-option--stacked"
+                    class="thread-composer-runtime-option"
                     :class="{ 'is-selected': option.value === selectedModel }"
                     type="button"
                     :aria-pressed="option.value === selectedModel"
+                    :title="option.description
+                      ? (option.isDefault ? '默认 · ' + option.description : option.description)
+                      : undefined"
                     :disabled="disabled || !activeThreadId || isModelMetadataPending"
                     @click="onRuntimeModelSelect(option.value)"
                   >
                     <span>{{ option.label }}</span>
-                    <small v-if="option.description">
-                      {{ option.isDefault ? '默认 · ' + option.description : option.description }}
-                    </small>
                   </button>
                 </div>
               </div>
@@ -3505,7 +3505,7 @@ watch(
 }
 
 .thread-composer-runtime-options--models {
-  @apply grid-cols-1;
+  @apply grid-cols-2;
 }
 
 .thread-composer-runtime-option {
