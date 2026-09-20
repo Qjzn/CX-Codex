@@ -275,6 +275,8 @@
 1. 首页 H5 回归必须通过真实 7420 `model/list` 分页读取当前可见模型，不能只验证静态 Composer 夹具。
 2. 模型面板中的模型数量、显示名、描述和默认标记与实时目录一致；元数据完成后不残留禁用占位项，并且恰好有一个当前选中模型。
 3. 检查只读取模型目录并打开/关闭配置面板，不切换模型、不修改配置，也不把具体模型名称固化为产品常量。
+4. 桌面端模型选项使用双列布局；描述不直接显示在模型名称下，鼠标悬停模型项时通过提示显示解释。
+5. 侧栏会话标题与右侧时间/操作控件在各自行框内视觉居中，切换 hover 操作不改变会话行高度。
 
 ### Verification
 
@@ -649,6 +651,8 @@ This file tracks manual regression and feature verification steps.
 2. Users do not need to scroll past package usage or permission controls before they can generate, copy, open, refresh, stop, or inspect the local pairing password.
 3. Package usage, permission controls, Android-only settings, voice settings, and version information retain their existing behavior and relative order.
 4. The phone-access card keeps its safety verification and responsive layout while clearly distinguishing the recommended fixed address from the temporary fallback.
+5. Opening settings displays the settings panel as an overlay above the bottom actions; expanding it does not move the sidebar conversation list upward.
+6. The settings overlay hides its visible scrollbar, keeps rounded corners, and the active 设置 button uses a white background.
 
 ### Verification
 

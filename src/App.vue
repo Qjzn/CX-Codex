@@ -499,7 +499,13 @@
               <span class="sidebar-current-thread-icon" aria-hidden="true">◎</span>
               <span>当前会话</span>
             </button>
-            <button class="sidebar-settings-button" type="button" :aria-expanded="isSettingsOpen" @click="isSettingsOpen = !isSettingsOpen">
+            <button
+              class="sidebar-settings-button"
+              :class="{ 'sidebar-settings-button--active': isSettingsOpen }"
+              type="button"
+              :aria-expanded="isSettingsOpen"
+              @click="isSettingsOpen = !isSettingsOpen"
+            >
               <IconTablerSettings class="sidebar-settings-icon" />
               <span>设置</span>
             </button>
@@ -1200,7 +1206,9 @@ const GithubTrendingHub = defineAsyncComponent({
 })
 const ComposerRuntimeDropdown = defineAsyncComponent(() => import('./components/content/ComposerRuntimeDropdown.vue'))
 
-const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
+// v1 could retain the collapsed state from the broken sidebar layout. Start
+// with a fresh key so that stale state cannot hide the desktop sidebar again.
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v2'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 const appVersion = import.meta.env.VITE_APP_VERSION ?? 'unknown'
 const MOBILE_SHELL_BRAND_NAME = 'CX-Codex'
@@ -6026,6 +6034,13 @@ function onEditPendingNewThreadMessage(messageId: string): void {
   color: var(--ui-text-primary);
 }
 
+.sidebar-settings-button--active,
+.sidebar-settings-button--active:hover,
+.sidebar-settings-button--active:focus-visible {
+  background: var(--ui-bg-surface);
+  color: var(--ui-text-primary);
+}
+
 .sidebar-settings-icon {
   @apply w-4.5 h-4.5;
 }
@@ -6035,15 +6050,21 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 }
 
 .sidebar-settings-panel {
-  @apply mb-1 border;
+  @apply absolute bottom-full z-[69] mb-2 border;
+  left: 2px;
+  right: 2px;
   border-radius: var(--ui-radius-composer);
   border-color: var(--ui-border-subtle);
   background: var(--ui-bg-surface);
-  box-shadow: 0 10px 28px rgb(0 0 0 / 0.06);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.08);
   max-height: min(72dvh, 38rem);
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+.sidebar-settings-panel::-webkit-scrollbar {
+  display: none;
 }
 
 .sidebar-settings-mobile-backdrop {
@@ -6052,6 +6073,8 @@ function onEditPendingNewThreadMessage(messageId: string): void {
 
 .sidebar-settings-panel-mobile {
   @apply fixed inset-x-0 bottom-0 z-[69] m-0 rounded-b-none;
+  left: 0;
+  right: 0;
   border-top-left-radius: var(--ui-radius-composer);
   border-top-right-radius: var(--ui-radius-composer);
   border-color: var(--ui-border-subtle);

@@ -608,17 +608,17 @@
                   <button
                     v-for="option in modelOptions"
                     :key="option.value"
-                    class="thread-composer-runtime-option thread-composer-runtime-option--stacked"
+                    class="thread-composer-runtime-option"
                     :class="{ 'is-selected': option.value === selectedModel }"
                     type="button"
                     :aria-pressed="option.value === selectedModel"
+                    :title="option.description
+                      ? (option.isDefault ? '默认 · ' + option.description : option.description)
+                      : undefined"
                     :disabled="disabled || !activeThreadId || isModelMetadataPending"
                     @click="onRuntimeModelSelect(option.value)"
                   >
                     <span>{{ option.label }}</span>
-                    <small v-if="option.description">
-                      {{ option.isDefault ? '默认 · ' + option.description : option.description }}
-                    </small>
                   </button>
                 </div>
               </div>
@@ -1057,14 +1057,22 @@ function formatModelLabel(modelId: string): string {
 }
 
 function formatModelTriggerLabel(modelId: string): string {
-  const normalized = modelId.trim().toLowerCase()
-  const version = normalized.match(/^gpt-(\d+(?:\.\d+)?)/u)?.[1]
-  if (version) {
-    if (normalized.includes('spark')) return `${version} Spark`
-    if (normalized.includes('mini')) return `${version} mini`
-    return version
+  const normalized = modelId.trim()
+  const match = normalized.match(/^gpt[-\s]*(\d+(?:\.\d+)?)(.*)$/iu)
+  if (match) {
+    const version = match[1]
+    const suffix = match[2]
+      .replace(/^[-_\s]+/u, '')
+      .replace(/[-_]+/gu, ' ')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      .split(' ')
+      .filter(Boolean)
+      .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1).toLowerCase()}`)
+      .join(' ')
+    return suffix ? `${version} ${suffix}` : version
   }
-  return formatModelLabel(modelId).replace(/^GPT-?/i, '').trim()
+  return formatModelLabel(modelId).replace(/^GPT[-\s]?/iu, '').trim()
 }
 
 const modelOptions = computed(() => {
@@ -3505,7 +3513,7 @@ watch(
 }
 
 .thread-composer-runtime-options--models {
-  @apply grid-cols-1;
+  @apply grid-cols-2;
 }
 
 .thread-composer-runtime-option {

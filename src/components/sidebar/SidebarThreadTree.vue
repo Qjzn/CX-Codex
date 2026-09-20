@@ -2697,11 +2697,11 @@ onBeforeUnmount(() => {
 }
 
 .project-hover-controls {
-  @apply flex items-start gap-1;
+  @apply self-center flex items-center gap-1;
 }
 
 .project-menu-trigger {
-  @apply h-6 w-6 rounded-lg p-0 flex items-center justify-center;
+  @apply h-8 w-8 rounded-lg p-0 flex items-center justify-center;
   color: var(--ui-text-secondary);
 }
 
@@ -2821,7 +2821,7 @@ onBeforeUnmount(() => {
 }
 
 .thread-main-button {
-  @apply min-w-0 w-full text-left rounded px-0 py-0 flex items-center min-h-0;
+  @apply min-w-0 w-full self-stretch text-left rounded px-0 py-0 flex items-center min-h-0;
   transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
 }
 
@@ -2831,8 +2831,21 @@ onBeforeUnmount(() => {
 
 .thread-row-content {
   @apply min-w-0 flex flex-col justify-center;
+  height: 100%;
   min-height: 0;
   gap: 0.08rem;
+  position: relative;
+}
+
+@media (min-width: 768px) {
+  .thread-row-content {
+    top: -4px;
+  }
+
+  .thread-row :deep(.sidebar-menu-row-left),
+  .thread-row :deep(.sidebar-menu-row-right) {
+    transform: translateY(-4px);
+  }
 }
 
 .thread-row[data-detail='false'] .thread-row-meta {
