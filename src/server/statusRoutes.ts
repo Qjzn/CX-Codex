@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+import type { AppServerHandoffResult } from './appServerHealth.js'
 import {
   getDesktopAppRefreshStatus,
   requestDesktopAppRefresh,
@@ -32,6 +33,7 @@ export type StatusRoutesDependencies = {
   stopStableAccess?: typeof stopStableAccess
   remoteAccessProtected?: boolean
   getErrorMessage?: typeof getErrorMessage
+  handoffAppServerToDesktop?: () => AppServerHandoffResult | Promise<AppServerHandoffResult>
 }
 
 export async function handleStatusRoutes(
@@ -49,6 +51,34 @@ export async function handleStatusRoutes(
   const startManagedStableAccess = dependencies.startStableAccess ?? startStableAccess
   const stopManagedStableAccess = dependencies.stopStableAccess ?? stopStableAccess
   const readErrorMessage = dependencies.getErrorMessage ?? getErrorMessage
+
+  if (req.method === 'POST' && url.pathname === '/codex-api/app-server/handoff') {
+    const handoff = await dependencies.handoffAppServerToDesktop?.()
+    if (!handoff) {
+      setJson(res, 503, { error: 'App-server handoff is not available.' })
+      return true
+    }
+    if (!handoff.released) {
+      const message = handoff.reason === 'stopping'
+        ? 'WebUI app-server 仍在退出，请等待几秒后重试。'
+        : '当前 WebUI 仍有活动请求或任务，暂不能交接给桌面端。请等待任务结束后重试。'
+      setJson(res, 409, {
+        error: message,
+        code: 'APP_SERVER_BUSY',
+        data: handoff,
+      })
+      return true
+    }
+    setJson(res, 200, {
+      data: {
+        ...handoff,
+        message: handoff.reason === 'already_idle'
+          ? 'WebUI 会话当前已释放，可以在桌面端打开同一会话。'
+          : 'WebUI 会话已释放，可以在桌面端打开同一会话。',
+      },
+    })
+    return true
+  }
 
   if (req.method === 'GET' && url.pathname === '/codex-api/desktop-app/status') {
     const status = await readDesktopStatus()

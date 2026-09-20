@@ -19,6 +19,12 @@ export type AppServerHealth = {
   rpcDiagnostics?: RpcDiagnostics
 }
 
+export type AppServerHandoffResult = {
+  released: boolean
+  reason: 'released' | 'already_idle' | 'busy' | 'stopping'
+  status: AppServerHealth
+}
+
 export function createAppServerHealthSnapshot(input: AppServerHealth): AppServerHealth {
   return {
     running: input.running,

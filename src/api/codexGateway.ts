@@ -273,6 +273,11 @@ export type DesktopAppRefreshResult = {
   message: string
 }
 
+export type AppServerHandoffResult = {
+  released: boolean
+  message: string
+}
+
 export type TunnelStatus = {
   enabled: boolean | null
   active: boolean
@@ -2162,6 +2167,34 @@ export async function refreshDesktopApp(): Promise<DesktopAppRefreshResult> {
       typeof data.message === 'string' && data.message.trim().length > 0
         ? data.message
         : 'Official Codex desktop app refresh requested.',
+  }
+}
+
+export async function handoffAppServerToDesktop(): Promise<AppServerHandoffResult> {
+  const response = await fetchWithTimeout('/codex-api/app-server/handoff', {
+    method: 'POST',
+  }, {
+    label: 'App-server desktop handoff request',
+  })
+  const payload = await response.json()
+  if (!response.ok) {
+    const message = getErrorMessageFromPayload(payload, '当前 WebUI 仍有活动请求或任务，暂不能交接给桌面端。')
+    throw new Error(message)
+  }
+  const record =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : {}
+  const data =
+    record.data && typeof record.data === 'object' && !Array.isArray(record.data)
+      ? (record.data as Record<string, unknown>)
+      : {}
+  return {
+    released: data.released === true,
+    message:
+      typeof data.message === 'string' && data.message.trim().length > 0
+        ? data.message
+        : 'WebUI 会话已释放，可以在桌面端打开同一会话。',
   }
 }
 

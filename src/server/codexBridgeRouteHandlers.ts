@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 
-import type { AppServerHealth } from './appServerHealth.js'
+import type { AppServerHandoffResult, AppServerHealth } from './appServerHealth.js'
 import type { AppServerMethodCatalog } from './appServerMethodCatalog.js'
 import type { RuntimeRequestRecord } from './runtimeStore.js'
 import type { ThreadRuntimeSnapshot } from './runtimeState.js'
@@ -74,6 +74,7 @@ type CodexBridgeRouteAppServer = {
   listPendingServerRequestsForThread: RuntimeStateRoutesDependencies['listPendingServerRequestsForThread']
   getThreadTokenUsage: RuntimeStateRoutesDependencies['getThreadTokenUsage']
   getStatus(): AppServerHealth
+  handoffToDesktop(): AppServerHandoffResult | Promise<AppServerHandoffResult>
 }
 
 type RuntimeRouteStore = RuntimeStateRoutesDependencies['runtimeRequestStore']
@@ -252,6 +253,7 @@ export function createCodexBridgeRouteHandlers(
     () => handleStatusRoutes(req, res, url, {
       readJsonBody,
       remoteAccessProtected: dependencies.remoteAccessProtected,
+      handoffAppServerToDesktop: () => appServer.handoffToDesktop(),
     }),
     () => handleNotificationSseRoute(req, res, url, {
       latestSeq: () => dependencies.notificationReplay.latestSeq,

@@ -2,7 +2,11 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { resolveCodexCommand } from '../commandResolution.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 import { createAppServerClientInfo, readPackageVersion } from './appServerClientInfo.js'
-import { createAppServerHealthSnapshot, type AppServerHealth } from './appServerHealth.js'
+import {
+  createAppServerHealthSnapshot,
+  type AppServerHandoffResult,
+  type AppServerHealth,
+} from './appServerHealth.js'
 import { createAppServerInitializeParams } from './appServerInitialization.js'
 import { createAppServerRpcNotification, createAppServerRpcRequest } from './appServerJsonRpcWire.js'
 import { sendAppServerJsonRpcLine } from './appServerJsonRpcWriter.js'
@@ -49,6 +53,12 @@ const APP_SERVER_RPC_TIMEOUT_RESTART_WINDOW_MS = 45_000
 const APP_SERVER_RPC_TIMEOUT_RESTART_THRESHOLD = 2
 const APP_SERVER_RESTART_COOLDOWN_MS = 10_000
 const APP_SERVER_COLD_START_GRACE_MS = 60_000
+const APP_SERVER_HANDOFF_EXIT_WAIT_MS = 3_000
+
+type AppServerProcessExitWaiter = {
+  promise: Promise<void>
+  resolve: () => void
+}
 
 export class AppServerProcess {
   private process: ChildProcessWithoutNullStreams | null = null
@@ -81,6 +91,7 @@ export class AppServerProcess {
     execute: (method, params) => this.call(method, params),
   })
   private readonly expectedExitProcesses = new WeakSet<ChildProcessWithoutNullStreams>()
+  private readonly processExitWaiters = new WeakMap<ChildProcessWithoutNullStreams, AppServerProcessExitWaiter>()
   private readonly notificationListeners = new AppServerNotificationListeners<{ method: string; params: unknown }>()
   private readonly serverRequests = new AppServerProcessServerRequests()
   private readonly rpcCache = new AppServerRpcCache()
@@ -110,6 +121,7 @@ export class AppServerProcess {
       windowsHide: process.platform === 'win32',
     })
     this.process = proc
+    this.processExitWaiters.set(proc, createProcessExitWaiter())
 
     attachAppServerProcessHandlers(proc, {
       isCurrentProcess: (eventProc) => this.process === eventProc,
@@ -122,12 +134,14 @@ export class AppServerProcess {
       handleProcessError: (error) => {
         logBridgeError('Codex app-server process error', error)
         this.cleanupProcessRuntime(createRpcTransportError(`codex app-server process error: ${error.message}`))
+        this.resolveProcessExit(proc)
         this.process = null
         this.initialized = false
         this.initializePromise = null
         this.stdoutLineBuffer.clear()
       },
       handleProcessExit: () => {
+        this.resolveProcessExit(proc)
         const expectedExit = this.stopping || this.expectedExitProcesses.has(proc)
         const failure = createRpcTransportError(this.stopping ? 'codex app-server stopped' : 'codex app-server exited unexpectedly')
         if (!expectedExit) {
@@ -144,6 +158,9 @@ export class AppServerProcess {
           this.initialized = false
           this.initializePromise = null
           this.stdoutLineBuffer.clear()
+        }
+        if (this.process === null && this.stopping) {
+          this.stopping = false
         }
       },
     })
@@ -477,6 +494,51 @@ export class AppServerProcess {
     })
   }
 
+  async handoffToDesktop(): Promise<AppServerHandoffResult> {
+    const status = this.getStatus()
+    const blockingRequestCount = Math.max(0, Math.trunc(status.restartProtection?.blockingRequestCount ?? 0))
+    const isBusy =
+      blockingRequestCount > 0
+      || status.pendingServerRequestCount > 0
+      || status.pendingRpcCount > 0
+      || status.queuedRpcCount > 0
+      || status.activePlanModeTurnCount > 0
+
+    if (isBusy) {
+      return {
+        released: false,
+        reason: 'busy',
+        status,
+      }
+    }
+
+    if (!status.running) {
+      return {
+        released: true,
+        reason: 'already_idle',
+        status,
+      }
+    }
+
+    const proc = this.process
+    this.dispose()
+    if (proc) {
+      const exited = await this.waitForProcessExit(proc, APP_SERVER_HANDOFF_EXIT_WAIT_MS)
+      if (!exited) {
+        return {
+          released: false,
+          reason: 'stopping',
+          status: this.getStatus(),
+        }
+      }
+    }
+    return {
+      released: true,
+      reason: 'released',
+      status: this.getStatus(),
+    }
+  }
+
   getStartedAtMs(): number {
     return this.startedAtMs
   }
@@ -498,4 +560,38 @@ export class AppServerProcess {
 
     terminateAppServerProcess(proc)
   }
+
+  private resolveProcessExit(proc: ChildProcessWithoutNullStreams): void {
+    const waiter = this.processExitWaiters.get(proc)
+    if (!waiter) return
+    waiter.resolve()
+    this.processExitWaiters.delete(proc)
+  }
+
+  private async waitForProcessExit(
+    proc: ChildProcessWithoutNullStreams,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    const waiter = this.processExitWaiters.get(proc)
+    if (!waiter) return true
+
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timeoutId = setTimeout(() => resolve('timeout'), timeoutMs)
+    })
+    try {
+      const result = await Promise.race([waiter.promise.then(() => 'exited' as const), timeout])
+      return result === 'exited'
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId)
+    }
+  }
+}
+
+function createProcessExitWaiter(): AppServerProcessExitWaiter {
+  let resolve!: () => void
+  const promise = new Promise<void>((settle) => {
+    resolve = settle
+  })
+  return { promise, resolve }
 }

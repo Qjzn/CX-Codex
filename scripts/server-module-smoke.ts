@@ -522,7 +522,7 @@ try {
   await smokeAppServerClientInfo()
   smokeAppServerPendingRpcStore()
   smokeAppServerProcessCleanup()
-  smokeAppServerProcess()
+  await smokeAppServerProcess()
   smokeAppServerProcessServerRequests()
   smokeAppServerSessionCleanup()
   smokeAppServerProcessHandlers()
@@ -5847,7 +5847,7 @@ function smokeCodexBridgeSharedState(): void {
   assert.equal(globalScope[CODEX_BRIDGE_SHARED_STATE_KEY], first)
 }
 
-function smokeAppServerProcess(): void {
+async function smokeAppServerProcess(): Promise<void> {
   const appServer = new AppServerProcess()
   const initialStatus = appServer.getStatus()
 
@@ -5867,9 +5867,15 @@ function smokeAppServerProcess(): void {
   appServer.markPlanModeTurn('thread-1', 'turn-1')
   assert.equal(appServer.getActivePlanModeTurnCount(), 1)
   assert.equal(appServer.getStatus().activePlanModeTurnCount, 1)
+  const busyHandoff = await appServer.handoffToDesktop()
+  assert.equal(busyHandoff.released, false)
+  assert.equal(busyHandoff.reason, 'busy')
 
   appServer.clearPlanModeTurn('thread-1', 'turn-1')
   assert.equal(appServer.getActivePlanModeTurnCount(), 0)
+  const idleHandoff = await appServer.handoffToDesktop()
+  assert.equal(idleHandoff.released, true)
+  assert.equal(idleHandoff.reason, 'already_idle')
 
   const unsubscribe = appServer.onNotification(() => {
     throw new Error('unexpected notification')
@@ -7956,6 +7962,15 @@ async function smokeStatusRoutes(): Promise<void> {
   let stableStopCount = 0
   const stableStarts: unknown[] = []
   let shouldFailRefresh = false
+  let handoffResult: {
+    released: boolean
+    reason: 'released' | 'busy'
+    status: unknown
+  } = {
+    released: true,
+    reason: 'released',
+    status: {},
+  }
   const dependencies = {
     readJsonBody: async () => bodies.shift(),
     getDesktopAppRefreshStatus: async () => desktopStatus,
@@ -8015,6 +8030,7 @@ async function smokeStatusRoutes(): Promise<void> {
     },
     remoteAccessProtected: true,
     getErrorMessage: (error: unknown, fallback: string) => getErrorMessage(error, fallback),
+    handoffAppServerToDesktop: () => handoffResult as never,
   }
 
   const desktopStatusResponse = createRouteTestResponse()
@@ -8046,6 +8062,38 @@ async function smokeStatusRoutes(): Promise<void> {
   ), true)
   assert.equal(refreshFailureResponse.response.statusCode, 409)
   assert.deepEqual(JSON.parse(refreshFailureResponse.body), { error: 'refresh unavailable' })
+
+  const handoffResponse = createRouteTestResponse()
+  assert.equal(await handleStatusRoutes(
+    { method: 'POST' } as never,
+    handoffResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/app-server/handoff'),
+    dependencies,
+  ), true)
+  assert.equal(handoffResponse.response.statusCode, 200)
+  assert.deepEqual(JSON.parse(handoffResponse.body), {
+    data: {
+      released: true,
+      reason: 'released',
+      status: {},
+      message: 'WebUI 会话已释放，可以在桌面端打开同一会话。',
+    },
+  })
+
+  handoffResult = { released: false, reason: 'busy', status: {} }
+  const busyHandoffResponse = createRouteTestResponse()
+  assert.equal(await handleStatusRoutes(
+    { method: 'POST' } as never,
+    busyHandoffResponse.response as never,
+    new URL('http://127.0.0.1/codex-api/app-server/handoff'),
+    dependencies,
+  ), true)
+  assert.equal(busyHandoffResponse.response.statusCode, 409)
+  assert.deepEqual(JSON.parse(busyHandoffResponse.body), {
+    error: '当前 WebUI 仍有活动请求或任务，暂不能交接给桌面端。请等待任务结束后重试。',
+    code: 'APP_SERVER_BUSY',
+    data: { released: false, reason: 'busy', status: {} },
+  })
 
   const tunnelStatusResponse = createRouteTestResponse()
   assert.equal(await handleStatusRoutes(

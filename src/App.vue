@@ -427,6 +427,19 @@
                 <span class="sidebar-settings-label">刷新桌面端</span>
                 <span class="sidebar-settings-value">{{ desktopRefreshButtonLabel }}</span>
               </button>
+              <button
+                class="sidebar-settings-row"
+                type="button"
+                :title="desktopHandoffButtonTitle"
+                :disabled="isDesktopHandoffRunning"
+                @click="onHandoffAppServerToDesktop"
+              >
+                <span class="sidebar-settings-label">释放 WebUI 会话</span>
+                <span class="sidebar-settings-value">{{ desktopHandoffButtonLabel }}</span>
+              </button>
+              <p class="sidebar-settings-hint">
+                交接前会检查活动请求；释放后即可在远程 Codex Desktop 打开同一会话。
+              </p>
               <section class="sidebar-settings-about" aria-label="项目版本和 GitHub 仓库">
                 <div class="sidebar-settings-brand-card">
                   <img class="sidebar-settings-brand-logo" :src="MOBILE_SHELL_BRANDING_LOGO_URL" alt="CX-Codex 标识" />
@@ -873,6 +886,43 @@
 
   <Teleport to="body">
     <div
+      v-if="isDesktopHandoffConfirmVisible"
+      class="desktop-refresh-confirm-overlay"
+      @click.self="closeDesktopHandoffConfirm"
+    >
+      <div
+        ref="desktopHandoffConfirmDialogRef"
+        class="desktop-refresh-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="desktop-handoff-confirm-title"
+        tabindex="-1"
+      >
+        <p class="desktop-refresh-confirm-kicker">确认交接会话</p>
+        <h2 id="desktop-handoff-confirm-title" class="desktop-refresh-confirm-title">
+          是否释放 WebUI 会话？
+        </h2>
+        <p class="desktop-refresh-confirm-text">
+          这会停止 WebUI 到 app-server 的连接，释放同一会话的占用，让远程 Codex Desktop 可以打开它。活动任务不会被强行中断；如果仍有活动请求，系统会拒绝交接。
+        </p>
+        <div class="desktop-refresh-confirm-actions">
+          <button class="desktop-refresh-confirm-button" type="button" @click="closeDesktopHandoffConfirm">
+            取消
+          </button>
+          <button
+            class="desktop-refresh-confirm-button desktop-refresh-confirm-button-primary"
+            type="button"
+            @click="confirmDesktopHandoff"
+          >
+            {{ isDesktopHandoffRunning ? '释放中...' : '释放并交接' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div
       v-if="pendingQueuedMessageEditId"
       class="desktop-refresh-confirm-overlay"
       @click.self="cancelQueuedMessageEdit"
@@ -1052,6 +1102,7 @@ import {
   getProjectRootSuggestion,
   getWebBridgeSettings,
   getWorkspaceRootsState,
+  handoffAppServerToDesktop,
   openProjectRoot,
   refreshDesktopApp,
   startRuntimeThreadTurn,
@@ -1514,6 +1565,7 @@ const commandMenuModeRequestId = ref(0)
 const BLOCKING_DIALOG_REGRESSION_EVENT = 'cx-codex-regression-open-blocking-dialog'
 const sidebarSearchInputRef = ref<HTMLInputElement | null>(null)
 const desktopRefreshConfirmDialogRef = ref<HTMLElement | null>(null)
+const desktopHandoffConfirmDialogRef = ref<HTMLElement | null>(null)
 const queuedMessageEditDialogRef = ref<HTMLElement | null>(null)
 const mobileUpdateConfirmDialogRef = ref<HTMLElement | null>(null)
 let blockingDialogPreviousFocus: HTMLElement | null = null
@@ -1653,13 +1705,16 @@ const desktopAppStatus = ref<DesktopAppStatus>({
 })
 const isDesktopRefreshRunning = ref(false)
 const isDesktopRefreshConfirmVisible = ref(false)
+const isDesktopHandoffRunning = ref(false)
+const isDesktopHandoffConfirmVisible = ref(false)
 const desktopSyncPendingThreadId = ref('')
 const desktopSyncPendingAtMs = ref(0)
-type BlockingDialogKind = '' | 'mobile-update' | 'queued-edit' | 'desktop-refresh'
+type BlockingDialogKind = '' | 'mobile-update' | 'queued-edit' | 'desktop-refresh' | 'desktop-handoff'
 const activeBlockingDialogKind = computed<BlockingDialogKind>(() => {
   if (isMobileShellUpdatePromptVisible.value) return 'mobile-update'
   if (pendingQueuedMessageEditId.value) return 'queued-edit'
   if (isDesktopRefreshConfirmVisible.value) return 'desktop-refresh'
+  if (isDesktopHandoffConfirmVisible.value) return 'desktop-handoff'
   return ''
 })
 
@@ -2508,6 +2563,12 @@ const desktopRefreshConfirmMessage = computed(() => (
     ? '这会关闭并重开当前机器上的官方 Codex 桌面端。桌面端正在执行的任务可能会停止，7420 网页端不会关闭。'
     : '这会关闭并重开官方 Codex 桌面端，让它重新载入最新的本地会话记录。'
 ))
+const desktopHandoffButtonTitle = computed(() => (
+  '释放 WebUI 对 app-server 的占用，让远程 Codex Desktop 可以打开同一会话；活动任务运行时会拒绝操作。'
+))
+const desktopHandoffButtonLabel = computed(() => (
+  isDesktopHandoffRunning.value ? '释放中...' : '交接给桌面端'
+))
 
 type IdleSchedulerWindow = Window & typeof globalThis & {
   requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number
@@ -3139,6 +3200,11 @@ function onRefreshDesktopApp(): void {
   isDesktopRefreshConfirmVisible.value = true
 }
 
+function onHandoffAppServerToDesktop(): void {
+  if (isDesktopHandoffRunning.value) return
+  isDesktopHandoffConfirmVisible.value = true
+}
+
 async function openMobileShellServerUrl(): Promise<void> {
   const url = mobileShellServerConfig.value?.serverUrl.trim() || ''
   if (!url) {
@@ -3257,6 +3323,11 @@ function closeDesktopRefreshConfirm(): void {
   isDesktopRefreshConfirmVisible.value = false
 }
 
+function closeDesktopHandoffConfirm(): void {
+  if (isDesktopHandoffRunning.value) return
+  isDesktopHandoffConfirmVisible.value = false
+}
+
 function markDesktopSyncPending(threadId: string): void {
   const normalizedThreadId = threadId.trim()
   if (!normalizedThreadId) return
@@ -3291,6 +3362,27 @@ function confirmDesktopRefresh(): void {
     .finally(() => {
       isDesktopRefreshRunning.value = false
       void refreshDesktopAppAvailability()
+    })
+}
+
+function confirmDesktopHandoff(): void {
+  if (isDesktopHandoffRunning.value) return
+
+  blockingDialogShouldRestoreFocus = false
+  isDesktopHandoffConfirmVisible.value = false
+  isDesktopHandoffRunning.value = true
+  void handoffAppServerToDesktop()
+    .then((result) => {
+      stopPolling()
+      clearDesktopSyncPending()
+      showProductToast(result.message, 'success', 5200)
+    })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : '释放 WebUI 会话失败'
+      showProductToast(message, 'danger', 5600)
+    })
+    .finally(() => {
+      isDesktopHandoffRunning.value = false
     })
 }
 
@@ -3707,6 +3799,10 @@ function dismissTopmostBlockingDialog(): boolean {
     closeDesktopRefreshConfirm()
     return true
   }
+  if (isDesktopHandoffConfirmVisible.value) {
+    closeDesktopHandoffConfirm()
+    return true
+  }
   return false
 }
 
@@ -3714,12 +3810,14 @@ function isAnyBlockingDialogVisible(): boolean {
   return isMobileShellUpdatePromptVisible.value
     || Boolean(pendingQueuedMessageEditId.value)
     || isDesktopRefreshConfirmVisible.value
+    || isDesktopHandoffConfirmVisible.value
 }
 
 function resolveBlockingDialogElement(kind: BlockingDialogKind): HTMLElement | null {
   if (kind === 'mobile-update') return mobileUpdateConfirmDialogRef.value
   if (kind === 'queued-edit') return queuedMessageEditDialogRef.value
   if (kind === 'desktop-refresh') return desktopRefreshConfirmDialogRef.value
+  if (kind === 'desktop-handoff') return desktopHandoffConfirmDialogRef.value
   return null
 }
 
