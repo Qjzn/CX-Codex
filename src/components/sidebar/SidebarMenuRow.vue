@@ -82,12 +82,16 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
 .sidebar-menu-row-right {
   @apply shrink-0 flex items-center justify-end;
   min-width: 2.4rem;
+  position: relative;
+  align-self: stretch;
 }
 
 .sidebar-menu-row-right-default,
 .sidebar-menu-row-right-hover {
   @apply transition duration-150 items-center justify-end;
   display: inline-flex;
+  position: absolute;
+  inset: 0;
   width: 100%;
 }
 
@@ -109,36 +113,47 @@ const hasRight = computed(() => hasRightDefault.value || hasRightHover.value)
 }
 
 .sidebar-menu-row[data-has-right='true'] .sidebar-menu-row-right-hover {
-  display: none;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true']:hover .sidebar-menu-row-right-default,
 .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true']:focus-within .sidebar-menu-row-right-default {
-  display: none;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true']:hover .sidebar-menu-row-right-hover,
 .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true']:focus-within .sidebar-menu-row-right-hover {
-  display: inline-flex;
+  visibility: visible;
+  opacity: 1;
   pointer-events: auto;
 }
 
 .sidebar-menu-row[data-has-right='true'][data-force-right-hover='true'] .sidebar-menu-row-right-default {
-  display: none;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .sidebar-menu-row[data-has-right='true'][data-force-right-hover='true'] .sidebar-menu-row-right-hover {
-  display: inline-flex;
+  visibility: visible;
+  opacity: 1;
   pointer-events: auto;
 }
 
 @media (max-width: 767px), (hover: none), (pointer: coarse), (max-height: 480px) and (max-width: 932px) {
   .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true'] .sidebar-menu-row-right-default {
-    display: none;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
   }
 
   .sidebar-menu-row[data-has-right='true'][data-has-right-hover='true'] .sidebar-menu-row-right-hover {
-    display: inline-flex;
+    visibility: visible;
+    opacity: 1;
     pointer-events: auto;
   }
 }
