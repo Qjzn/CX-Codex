@@ -38,12 +38,7 @@ const buildSource = typeof pkg.name === "string" && pkg.name.trim()
   : "cx-codex";
 const appVersion = typeof pkg.version === "string" ? pkg.version : "unknown";
 const WS_UPGRADE_ATTACHED_KEY = "__codexBridgeWsAttached__";
-const configuredBasePath = process.env.CX_CODEX_BASE_PATH?.trim() ?? "";
-const frontendBase = configuredBasePath.length === 0
-  ? "/"
-  : `${configuredBasePath.replace(/\/+$/u, "")}/`;
 export default defineConfig({
-  base: frontendBase,
   define: {
     "import.meta.env.VITE_WORKTREE_NAME": JSON.stringify(buildSource),
     "import.meta.env.VITE_APP_VERSION": JSON.stringify(appVersion),
