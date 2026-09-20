@@ -222,7 +222,7 @@
       </div>
 
       <div
-        v-if="selectedPlugins.length > 0 || goalModeEnabled || selectedCollaborationMode === 'plan' || pendingCapabilityCount > 0"
+        v-if="selectedPlugins.length > 0 || goalModeEnabled || isThreadGoalModeOn || selectedCollaborationMode === 'plan' || pendingCapabilityCount > 0"
         class="thread-composer-option-chips"
       >
         <span
@@ -269,6 +269,22 @@
             aria-label="退出计划模式"
             title="退出计划模式"
             @click="togglePlanMode"
+          >×</button>
+        </span>
+        <span
+          v-if="isThreadGoalModeOn"
+          class="thread-composer-option-chip thread-composer-option-chip--thread-goal"
+          role="status"
+          title="持续目标会在当前目标完成、暂停或受限后继续推进"
+        >
+          <span class="thread-composer-option-chip-dot" aria-hidden="true" />
+          <span class="thread-composer-option-chip-name">持续目标 · 持续开启</span>
+          <button
+            class="thread-composer-option-chip-remove"
+            type="button"
+            aria-label="关闭持续目标"
+            title="关闭持续目标"
+            @click="toggleThreadGoalMode"
           >×</button>
         </span>
       </div>
@@ -423,18 +439,40 @@
               class="thread-composer-attach-item thread-composer-attach-item--toggle"
               type="button"
               :aria-pressed="selectedCollaborationMode === 'plan'"
-              :disabled="isInteractionDisabled"
+              :disabled="isInteractionDisabled || isThreadGoalPlanBlocked"
+              :title="isThreadGoalPlanBlocked ? '持续目标进行中，请先暂停或清除持续目标' : undefined"
               @click="togglePlanMode"
             >
               <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--text">✓</span>
               <span class="thread-composer-attach-item-body">
                 <span class="thread-composer-attach-item-title">计划模式</span>
                 <span class="thread-composer-attach-item-subtitle">
-                  {{ selectedCollaborationMode === 'plan' ? '持续开启，仅规划，不执行修改' : '开启后持续使用计划模式' }}
+                  {{ isThreadGoalPlanBlocked
+                    ? '持续目标进行中，请先暂停或清除目标'
+                    : selectedCollaborationMode === 'plan'
+                      ? '持续开启，仅规划，不执行修改'
+                      : '开启后持续使用计划模式' }}
                 </span>
               </span>
               <span class="thread-composer-switch" :class="{ 'is-on': selectedCollaborationMode === 'plan' }" aria-hidden="true" />
             </button>
+            <template v-if="activeThreadId && threadGoal !== undefined">
+              <button
+                class="thread-composer-attach-item thread-composer-attach-item--toggle"
+                type="button"
+                :aria-pressed="isThreadGoalModeOn"
+                :disabled="isThreadGoalSwitchDisabled"
+                :title="threadGoalError || undefined"
+                @click="toggleThreadGoalMode"
+              >
+                <span class="thread-composer-attach-item-icon thread-composer-attach-item-icon--text">◎</span>
+                <span class="thread-composer-attach-item-body">
+                  <span class="thread-composer-attach-item-title">持续目标</span>
+                  <span class="thread-composer-attach-item-subtitle">{{ threadGoalMenuSummary }}</span>
+                </span>
+                <span class="thread-composer-switch" :class="{ 'is-on': isThreadGoalModeOn }" aria-hidden="true" />
+              </button>
+            </template>
             <button
               class="thread-composer-attach-item thread-composer-attach-item--toggle"
               type="button"
@@ -809,6 +847,8 @@ import type {
   ReasoningEffort,
   SpeedMode,
   TurnGoalSelection,
+  UiThreadGoal,
+  UiThreadGoalStatus,
 } from '../../types/codex'
 import { useDictation } from '../../composables/useDictation'
 import { searchComposerFiles, uploadFile, type ComposerFileSuggestion } from '../../api/codexGateway'
@@ -837,6 +877,11 @@ const props = defineProps<{
   selectedReasoningEffort: ReasoningEffort | ''
   selectedSpeedMode: SpeedMode
   selectedCollaborationMode: CollaborationMode
+  threadGoal?: UiThreadGoal | null
+  isThreadGoalLoading?: boolean
+  isThreadGoalUpdating?: boolean
+  threadGoalError?: string
+  threadGoalDisabled?: boolean
   skills?: SkillItem[]
   hasLoadedSkills?: boolean
   plugins?: ComposerPluginInfo[]
@@ -871,6 +916,7 @@ export type SubmitPayload = {
   imageUrls: string[]
   fileAttachments: FileAttachment[]
   skills: Array<{ name: string; path: string }>
+  threadGoalObjective?: string
   turnOptions?: ComposerTurnOptions
   collaborationMode: CollaborationMode
   mode: 'steer' | 'queue'
@@ -890,6 +936,7 @@ const emit = defineEmits<{
   'update:selected-reasoning-effort': [effort: ReasoningEffort | '']
   'update:selected-speed-mode': [mode: SpeedMode]
   'update:selected-collaboration-mode': [mode: CollaborationMode]
+  'set-thread-goal-status': [status: Extract<UiThreadGoalStatus, 'active' | 'paused'>]
   'refresh-plugins': []
   'reload-plugins': []
   'login-plugin': [pluginId: string]
@@ -933,6 +980,8 @@ const pendingRestoredSkills = ref<Array<{ name: string; path: string }>>([])
 const pendingRestoredPlugins = ref<ComposerPluginSelection[]>([])
 const goalModeEnabled = ref(false)
 const goalText = ref('')
+const threadGoalModeEnabled = ref(false)
+const pendingThreadGoalObjective = ref('')
 const pluginSearchQuery = ref('')
 const fileAttachments = ref<FileAttachment[]>([])
 const pendingFileUploads = ref<PendingFileUpload[]>([])
@@ -1163,6 +1212,22 @@ const activeGoalLabel = computed(() => {
   if (goalModeEnabled.value && text) return text
   return goalModeEnabled.value ? '随本次消息发送，不会持续运行' : '添加一次性任务要求'
 })
+const threadGoalObjectivePreview = computed(() => {
+  const objective = props.threadGoal?.objective.trim() ?? ''
+  return objective.length > 42 ? `${objective.slice(0, 42)}…` : objective
+})
+const threadGoalMenuSummary = computed(() => {
+  if (props.isThreadGoalLoading === true && !props.threadGoal) return '正在读取持续目标…'
+  if (props.threadGoalError?.trim()) return '同步失败，可重新输入目标'
+  if (isThreadGoalModeOn.value) {
+    if (threadGoalObjectivePreview.value) return `输入框修改目标 · ${threadGoalObjectivePreview.value}`
+    return '在输入框输入目标并发送'
+  }
+  if (props.threadGoal?.status === 'paused') return '已暂停，开启后可修改并继续'
+  if (props.threadGoal?.status === 'complete') return '已完成，开启后可设置新目标'
+  if (props.threadGoal?.status === 'blocked' || props.threadGoal?.status === 'usageLimited') return '当前不可继续，开启后可重设'
+  return '开启后在输入框输入目标并发送'
+})
 const pluginMenuTitle = computed(() =>
   allPluginOptions.value.length > 0 ? `${allPluginOptions.value.length} 个已连接插件` : '插件',
 )
@@ -1207,8 +1272,10 @@ const canSubmit = computed(() => {
   if (props.disabled) return false
   if (props.isUpdatingSpeedMode) return false
   if (!props.activeThreadId) return false
+  if ((threadGoalModeEnabled.value || props.threadGoal?.status === 'active') && props.isThreadGoalUpdating === true) return false
   if (pendingCapabilityCount.value > 0) return false
   if (activeUploadCount.value > 0 || hasUploadFailures.value) return false
+  if ((threadGoalModeEnabled.value || props.threadGoal?.status === 'active') && draft.value.trim().length === 0) return false
   return draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0
 })
 const hasUnsavedDraft = computed(() =>
@@ -1230,6 +1297,17 @@ const standaloneFileAttachments = computed(() => {
   return fileAttachments.value.filter((att) => !grouped.has(att.fsPath))
 })
 const isInteractionDisabled = computed(() => props.disabled || !props.activeThreadId)
+const isThreadGoalActive = computed(() => props.threadGoal?.status === 'active')
+const isThreadGoalModeOn = computed(() => threadGoalModeEnabled.value || isThreadGoalActive.value)
+const isThreadGoalPlanBlocked = computed(() => (
+  isThreadGoalModeOn.value && props.selectedCollaborationMode !== 'plan'
+))
+const isThreadGoalSwitchDisabled = computed(() => (
+  isInteractionDisabled.value
+  || props.isThreadGoalLoading === true
+  || props.isThreadGoalUpdating === true
+  || props.threadGoalDisabled === true
+))
 const isSpeedToggleDisabled = computed(() =>
   isInteractionDisabled.value || props.isUpdatingSpeedMode === true,
 )
@@ -1291,9 +1369,11 @@ const dictationDurationLabel = computed(() => {
   return `${minutes}:${String(seconds).padStart(2, '0')}`
 })
 
-const placeholderText = computed(() =>
-  props.activeThreadId ? '向 Codex 提问，+ 添加功能' : '请先选择一个会话再发送消息',
-)
+const placeholderText = computed(() => {
+  if (!props.activeThreadId) return '请先选择一个会话再发送消息'
+  if (isThreadGoalModeOn.value) return '输入持续目标，发送后开始'
+  return '向 Codex 提问，+ 添加功能'
+})
 const hasSubmitContent = computed(() =>
   draft.value.trim().length > 0
   || selectedImages.value.length > 0
@@ -1369,6 +1449,7 @@ function onInterruptClick(): void {
 
 function onCollaborationModeSelect(mode: CollaborationMode): void {
   if (isInteractionDisabled.value) return
+  if (mode === 'plan' && isThreadGoalActive.value) return
   emit('update:selected-collaboration-mode', mode)
 }
 
@@ -1421,11 +1502,16 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer', options?: { rollbackLatestU
     skills: selectedSkills.value
       .filter((skill) => (props.skills ?? []).some((available) => available.path === skill.path))
       .map((skill) => ({ name: skill.name, path: skill.path })),
+    threadGoalObjective: isThreadGoalModeOn.value ? text : undefined,
     turnOptions: buildTurnOptions(),
     collaborationMode: props.selectedCollaborationMode,
     mode,
     rollbackLatestUserTurn: options?.rollbackLatestUserTurn === true,
   })
+  if (isThreadGoalModeOn.value) {
+    pendingThreadGoalObjective.value = text
+    return
+  }
   clearPersistedDraftForThread(props.activeThreadId)
   clearDraftState()
   if (isAndroid) {
@@ -1695,7 +1781,7 @@ function closeRuntimeSettings(restoreFocus = true): void {
 }
 
 function togglePlanMode(): void {
-  if (isInteractionDisabled.value) return
+  if (isInteractionDisabled.value || isThreadGoalPlanBlocked.value) return
   onCollaborationModeSelect(props.selectedCollaborationMode === 'plan' ? 'execute' : 'plan')
 }
 
@@ -1704,6 +1790,29 @@ function toggleGoalMode(): void {
   goalModeEnabled.value = !goalModeEnabled.value
   if (goalModeEnabled.value && !goalText.value.trim()) {
     goalText.value = '主动给出可执行的下一步，并补齐关键风险。'
+  }
+}
+
+function toggleThreadGoalMode(): void {
+  if (isThreadGoalSwitchDisabled.value) return
+  if (isThreadGoalModeOn.value) {
+    threadGoalModeEnabled.value = false
+    if (props.threadGoal?.status === 'active') {
+      emit('set-thread-goal-status', 'paused')
+    }
+    return
+  }
+  threadGoalModeEnabled.value = true
+  if (
+    props.threadGoal
+    && (props.threadGoal.status === 'paused'
+      || props.threadGoal.status === 'blocked'
+      || props.threadGoal.status === 'usageLimited')
+  ) {
+    emit('set-thread-goal-status', 'active')
+  }
+  if (props.selectedCollaborationMode === 'plan') {
+    emit('update:selected-collaboration-mode', 'execute')
   }
 }
 
@@ -2637,6 +2746,8 @@ watch(
   () => props.activeThreadId,
   (nextThreadId) => {
     cancelDictation()
+    pendingThreadGoalObjective.value = ''
+    threadGoalModeEnabled.value = false
     if (lastActiveThreadId) {
       persistDraftForThread(lastActiveThreadId, getCurrentDraftPayload())
     }
@@ -2650,6 +2761,20 @@ watch(
   },
   { immediate: true },
 )
+
+watch([
+  () => props.threadGoal?.objective,
+  () => props.threadGoal?.status,
+  () => props.isThreadGoalUpdating,
+  () => props.threadGoalError,
+], ([objective, status, updating, error]) => {
+  const pending = pendingThreadGoalObjective.value.trim()
+  if (!pending || updating === true || Boolean(error?.trim())) return
+  if (status !== 'active' || objective?.trim() !== pending) return
+  pendingThreadGoalObjective.value = ''
+  clearPersistedDraftForThread(props.activeThreadId)
+  clearDraftState()
+})
 
 watch([
   draft,
@@ -2985,6 +3110,12 @@ watch(
   color: var(--ui-accent);
 }
 
+.thread-composer-option-chip--thread-goal {
+  border-color: color-mix(in srgb, var(--ui-accent) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-accent) 7%, var(--ui-bg-surface));
+  color: var(--ui-accent);
+}
+
 .thread-composer-option-chip-dot {
   @apply h-1.5 w-1.5 shrink-0 rounded-full bg-[#0d9488];
 }
@@ -3228,6 +3359,10 @@ watch(
   color: var(--ui-text-tertiary);
 }
 
+.thread-composer-attach-separator {
+  @apply my-1 h-px bg-zinc-100;
+}
+
 .thread-composer-attach-item--toggle,
 .thread-composer-attach-item--submenu {
   @apply pr-2;
@@ -3376,10 +3511,6 @@ watch(
 .thread-composer-plugin-login {
   background: var(--ui-bg-row-active);
   color: var(--ui-text-secondary);
-}
-
-.thread-composer-attach-separator {
-  @apply my-1 h-px bg-zinc-100;
 }
 
 .thread-composer-attach-section {

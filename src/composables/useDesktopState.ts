@@ -4233,8 +4233,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     await refreshThreadGoal(threadId)
   }
 
-  async function saveSelectedThreadGoal(objective: string): Promise<void> {
-    const threadId = selectedThreadId.value
+  async function saveThreadGoalById(threadId: string, objective: string, activate = false): Promise<void> {
     const normalizedObjective = objective.trim()
     if (!threadId || !normalizedObjective || threadGoalUpdatingByThreadId.value[threadId]) return
     setThreadGoalUpdating(threadId, true)
@@ -4244,7 +4243,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     try {
       const current = threadGoalByThreadId.value[threadId]
       const goal = await setThreadGoal(threadId, current
-        ? { objective: normalizedObjective }
+        ? { objective: normalizedObjective, ...(activate ? { status: 'active' as const } : {}) }
         : { objective: normalizedObjective, status: 'active' })
       setThreadGoalState(threadId, goal)
       if (goal.status === 'active') scheduleThreadGoalContinuation(threadId)
@@ -4255,6 +4254,10 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     } finally {
       setThreadGoalUpdating(threadId, false)
     }
+  }
+
+  async function saveSelectedThreadGoal(objective: string, activate = false): Promise<void> {
+    await saveThreadGoalById(selectedThreadId.value, objective, activate)
   }
 
   async function updateSelectedThreadGoalStatus(status: Extract<UiThreadGoalStatus, 'active' | 'paused'>): Promise<void> {
@@ -10738,6 +10741,7 @@ export function useDesktopState(submitCallbacks: DesktopStateSubmitCallbacks = {
     setSelectedCollaborationMode,
     refreshSelectedThreadGoal,
     saveSelectedThreadGoal,
+    saveThreadGoalById,
     updateSelectedThreadGoalStatus,
     clearSelectedThreadGoal,
     setSelectedReasoningEffort,

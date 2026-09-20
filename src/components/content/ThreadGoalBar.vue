@@ -1,6 +1,36 @@
 <template>
-  <section class="thread-goal" :data-state="goal?.status || 'empty'" aria-label="持续目标">
-    <div v-if="isLoading && !goal" class="thread-goal-loading" role="status">
+  <section
+    class="thread-goal"
+    :class="{ 'thread-goal--embedded': embedded }"
+    :data-state="goal?.status || 'empty'"
+    aria-label="持续目标"
+  >
+    <div v-if="embedded" class="thread-goal-menu-item" role="group">
+      <span class="thread-goal-menu-icon" aria-hidden="true">◎</span>
+      <button
+        type="button"
+        class="thread-goal-menu-body"
+        :aria-expanded="isEditing"
+        :disabled="isUpdating || disabled"
+        @click="openEditor"
+      >
+        <span class="thread-goal-menu-title">持续目标</span>
+        <span class="thread-goal-menu-subtitle">{{ menuSummary }}</span>
+      </button>
+      <button
+        type="button"
+        class="thread-goal-menu-switch"
+        :class="{ 'is-on': goal?.status === 'active' }"
+        :aria-pressed="goal?.status === 'active'"
+        aria-label="切换持续目标"
+        :disabled="isUpdating || disabled"
+        @click="toggleEmbeddedGoal"
+      >
+        <span aria-hidden="true" />
+      </button>
+    </div>
+
+    <div v-if="!embedded && isLoading && !goal" class="thread-goal-loading" role="status">
       <span class="thread-goal-spinner" aria-hidden="true" />
       正在读取持续目标…
     </div>
@@ -10,7 +40,7 @@
       <button type="button" :disabled="isLoading || isUpdating" @click="$emit('retry')">重试</button>
     </div>
 
-    <template v-if="goal">
+    <template v-if="goal && !embedded">
       <div class="thread-goal-summary">
         <span class="thread-goal-status-dot" aria-hidden="true" />
         <button
@@ -85,23 +115,10 @@
         </div>
       </div>
 
-      <p v-if="planModeActive && goal.status === 'active'" class="thread-goal-scope-note" role="status">
-        计划模式只影响新消息；持续目标仍会推进，可随时暂停。
-      </p>
-
-      <div v-if="isConfirmingClear" class="thread-goal-confirm" role="alert">
-        <span>确定清除“{{ objectivePreview }}”？清除后不会自动继续。</span>
-        <div>
-          <button type="button" :disabled="isUpdating" @click="cancelClear">取消</button>
-          <button type="button" class="is-danger" :disabled="isUpdating" @click="confirmClear">
-            {{ isUpdating ? '清除中…' : '确认清除' }}
-          </button>
-        </div>
-      </div>
     </template>
 
     <button
-      v-else-if="!isLoading && !isEditing"
+      v-if="!embedded && !goal && !isLoading && !isEditing"
       type="button"
       class="thread-goal-create"
       :disabled="isUpdating || disabled"
@@ -110,6 +127,16 @@
       <span aria-hidden="true">◎</span>
       设置持续目标
     </button>
+
+    <div v-if="isConfirmingClear" class="thread-goal-confirm" role="alert">
+      <span>确定清除“{{ objectivePreview }}”？清除后不会自动继续。</span>
+      <div>
+        <button type="button" :disabled="isUpdating" @click="cancelClear">取消</button>
+        <button type="button" class="is-danger" :disabled="isUpdating" @click="confirmClear">
+          {{ isUpdating ? '清除中…' : '确认清除' }}
+        </button>
+      </div>
+    </div>
 
     <form v-if="isEditing" class="thread-goal-editor" @submit.prevent="save">
       <label class="thread-goal-editor-label" for="thread-goal-objective">
@@ -128,6 +155,13 @@
       <p class="thread-goal-help">任务空闲时，CX-Codex 将继续推进；暂停后不会自动恢复。</p>
       <div class="thread-goal-editor-actions">
         <button type="button" :disabled="isUpdating" @click="cancelEditor">取消</button>
+        <button
+          v-if="embedded && goal"
+          type="button"
+          class="is-danger"
+          :disabled="isUpdating"
+          @click="requestClear"
+        >清除</button>
         <button type="submit" class="is-primary" :disabled="!canSave">
           {{ saveButtonLabel }}
         </button>
@@ -147,14 +181,14 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   error?: string
   executionHint?: string
-  planModeActive?: boolean
+  embedded?: boolean
 }>(), {
   isLoading: false,
   isUpdating: false,
   disabled: false,
   error: '',
   executionHint: '',
-  planModeActive: false,
+  embedded: false,
 })
 
 const emit = defineEmits<{
@@ -203,6 +237,30 @@ const objectivePreview = computed(() => {
   return objective.length > 42 ? `${objective.slice(0, 42)}…` : objective
 })
 
+const menuSummary = computed(() => {
+  if (props.isLoading && !props.goal) return '正在读取持续目标…'
+  if (props.error) return '读取失败，点击重试'
+  if (!props.goal) return '开启后持续追求一个目标'
+  const objective = objectivePreview.value
+  const suffix = objective ? ` · ${objective}` : ''
+  switch (props.goal.status) {
+    case 'active':
+      return `进行中${props.executionHint ? ` · ${props.executionHint}` : ''}${suffix}`
+    case 'paused':
+      return `已暂停${suffix}`
+    case 'blocked':
+      return `已阻塞${suffix}`
+    case 'usageLimited':
+      return `用量受限${suffix}`
+    case 'budgetLimited':
+      return `预算已用完${suffix}`
+    case 'complete':
+      return `已完成${suffix}`
+    default:
+      return `已设置${suffix}`
+  }
+})
+
 const canSave = computed(() => (
   draft.value.trim().length > 0
   && draft.value.trim() !== (props.goal?.objective ?? '')
@@ -226,12 +284,29 @@ function formatDuration(seconds: number): string {
 }
 
 function openEditor(): void {
-  if (props.disabled) return
+  if (props.disabled || props.isUpdating) return
   closeMoreMenu()
   cancelClear()
   draft.value = props.goal?.objective ?? ''
   isEditing.value = true
   void nextTick(() => editorRef.value?.focus())
+}
+
+function toggleEmbeddedGoal(): void {
+  if (props.disabled || props.isUpdating) return
+  if (!props.goal) {
+    openEditor()
+    return
+  }
+  if (props.goal.status === 'active') {
+    requestStatus('paused')
+    return
+  }
+  if (props.goal.status === 'paused' || props.goal.status === 'blocked' || props.goal.status === 'usageLimited') {
+    requestStatus('active')
+    return
+  }
+  openEditor()
 }
 
 function cancelEditor(): void {
@@ -419,13 +494,6 @@ onBeforeUnmount(() => {
   font-size: 11px;
 }
 
-.thread-goal-scope-note {
-  margin: 4px 4px 0;
-  color: var(--ui-text-secondary);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
 .thread-goal-error {
   border-color: color-mix(in srgb, var(--ui-danger) 30%, var(--ui-border-subtle));
   color: var(--ui-danger);
@@ -602,6 +670,110 @@ onBeforeUnmount(() => {
 .thread-goal-editor-actions { justify-content: flex-end; }
 .thread-goal-editor-actions button { border-color: var(--ui-border-subtle); }
 .thread-goal-editor-actions .is-primary { border-color: var(--ui-accent); background: var(--ui-accent); color: #fff; }
+
+.thread-goal--embedded {
+  width: 100%;
+  margin: 4px 0 2px;
+}
+
+.thread-goal-menu-item {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-text-primary);
+}
+
+.thread-goal-menu-item:focus-within,
+.thread-goal-menu-item:hover { background: var(--ui-bg-row-hover); }
+
+.thread-goal-menu-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--ui-text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.thread-goal-menu-body {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.thread-goal-menu-body:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.thread-goal-menu-body:disabled { cursor: not-allowed; }
+
+.thread-goal-menu-title {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.thread-goal-menu-subtitle {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: var(--ui-text-tertiary);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-goal-menu-switch {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ui-bg-row-active);
+  cursor: pointer;
+  transition: background var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.thread-goal-menu-switch > span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / .18);
+  transition: transform var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.thread-goal-menu-switch.is-on { background: #0d9488; }
+.thread-goal-menu-switch.is-on > span { transform: translateX(16px); }
+.thread-goal-menu-switch:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.thread-goal-menu-switch:disabled { cursor: not-allowed; opacity: .55; }
 
 button:disabled,
 textarea:disabled { cursor: not-allowed; opacity: .55; }

@@ -1871,7 +1871,7 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 4. Confirm internal `<recommended_plugins>` / Codex context messages, trailing `<oai-mem-citation>` blocks, and supported `::git-*` / task directives do not appear as chat content.
 5. Reload the thread and confirm the existing conversation is readable before deferred capability metadata completes; after the background refresh, open the model control.
 6. Confirm the model list matches visible `model/list` entries, uses server display names/descriptions/default markers, and only offers reasoning levels supported by the selected model. If the runtime later exposes GPT-5.6 variants, confirm they appear without a frontend code change.
-7. Open `+`, verify `添加照片和文件`, `添加文件夹`, `拍照`, persistent `计划模式`, `本轮要求（一次性）`, `插件`, and enabled skills remain available with concise descriptions.
+7. Open `+`, verify `添加照片和文件`, `添加文件夹`, `拍照`, persistent `计划模式`, `持续目标`, `本轮要求（一次性）`, `插件`, and enabled skills remain available with concise descriptions. With an active 持续目标, confirm 计划模式 cannot be enabled; pause or clear the goal and confirm 计划模式 can be enabled again. Confirm 本轮要求（一次性） remains independent and still applies only to the next message.
 8. Open the plugin subview and confirm installed/enabled native plugins appear as soon as `plugin/list` returns without waiting for the slower MCP scan; after background completion, search by name and confirm only usable ready/login-required MCP servers are merged. Use Tab/Shift+Tab to confirm focus stays inside the mobile sheet, then close it with Escape or the close control and confirm focus returns to `+`.
 9. Save a draft with one skill/plugin selected and reload. Before capability metadata completes, confirm a compact `正在恢复 N 项能力` state is shown and Send is disabled; after loading, confirm valid selections are restored, unavailable selections are removed, and the draft text is preserved.
 10. Start a reply from the second client. Confirm the first assistant text appears immediately, subsequent text remains smooth, only one copy of the live answer is visible, and the compact activity overlay yields to the answer text.
@@ -4825,23 +4825,24 @@ The pending home conversation must derive `is-turn-in-progress` from its current
 - 准备一个当前无运行任务的已有会话。
 
 #### Steps
-1. 打开会话，点击输入区上方的 `设置持续目标`，输入可衡量目标并点击 `保存并开始`。
-2. 确认目标条显示目标、运行提示、预算使用百分比和耗时；刷新页面并重新进入会话。
-3. 在目标运行时点击 `暂停`，确认任务完成后不会自动继续；再点击 `继续`，确认空闲时继续推进。
-4. 点击 `编辑` 修改目标，确认状态和已用量保持为服务端返回值。
-5. 在目标活跃且任务运行时点击停止，确认目标同步变为暂停，不会立即重新启动。
-6. 点击 `清除`，确认界面先展示目标摘要和 `确认清除`，取消一次后重新确认清除，刷新页面确认目标不再出现。
-7. 在移动宽度确认只保留 `暂停/继续` 主操作，`编辑/清除` 收入更多菜单，所有直接操作目标至少为 44px；目标正文最多显示两行且页面无横向溢出。
-8. 模拟 `thread/goal/get` 失败，确认错误显示在目标栏附近、草稿不丢失且 `重试` 可恢复；快速重复触发刷新时只保留一个读取请求，较旧响应不会覆盖更新后的目标。
-9. 打开目标编辑器并输入未保存内容，切换到另一个会话，确认编辑器、更多菜单和清除确认全部关闭，新会话不会继承上一会话草稿。
-10. 同时开启计划模式与活跃持续目标，确认目标栏明确提示 `计划模式只影响新消息；持续目标仍会推进`，暂停目标仍是直接操作。
-11. 在手机宽度用键盘打开目标更多菜单，确认焦点进入第一个菜单项，方向键可移动，Escape 关闭并回到触发按钮；点击菜单外部也会关闭。打开清除确认后等待超过 6 秒，确认操作不会自行消失。
+1. 打开会话，点击输入框的 `+` 菜单，打开 `持续目标` 开关；在主输入框输入可衡量目标并发送。
+2. 在首页新建任务时也打开 `持续目标` 开关，输入目标并发送；确认先创建新线程，再用返回的真实 `threadId` 调用 `thread/goal/set`，目标状态变为 active。
+3. 确认持续目标开关保持开启，目标开始运行；刷新页面并重新进入会话。
+4. 在目标运行时关闭 `持续目标` 开关，确认任务完成后不会自动继续；再次打开开关，确认目标恢复推进。
+5. 打开 `持续目标` 开关，在主输入框输入新目标并发送，确认状态和已用量保持为服务端返回值且目标内容更新。
+6. 在目标活跃且任务运行时点击停止，确认目标同步变为暂停，不会立即重新启动。
+7. 通过服务端清除目标后刷新页面，确认 `持续目标` 开关恢复为关闭状态；重新打开开关可设置新目标。
+8. 在移动宽度确认持续目标仍以 `+` 菜单中的单个开关显示，主输入框可直接编辑目标并发送，页面无横向溢出。
+9. 模拟 `thread/goal/get` 失败，确认错误显示在 `+` 菜单中的持续目标项附近、主输入框草稿不丢失；快速重复触发刷新时只保留一个读取请求，较旧响应不会覆盖更新后的目标。
+10. 打开持续目标开关并输入未发送内容，切换到另一个会话，确认目标草稿按普通输入草稿隔离，新会话不会继承上一会话内容。
+11. 在活跃持续目标时打开 `+` 菜单，确认 `计划模式` 不能开启；暂停或清除目标后确认可以重新开启计划模式。确认 `本轮要求（一次性）` 仍可独立开启，不会被持续目标或计划模式改写。
+12. 在手机宽度用键盘打开 `+` 菜单，确认持续目标开关与计划模式使用相同的可聚焦开关样式，输入框仍可正常编辑和发送，页面无横向溢出。
 
 #### Expected Results
 - 目标状态以 App Server 为唯一事实来源，通过 `thread/goal/updated` / `thread/goal/cleared` 实时同步。
 - 活跃目标仅在会话空闲、无排队消息且无待处理授权时继续，不与用户消息抢占执行。
 - 目标读取失败不阻塞会话加载；读取请求按会话去重并以状态代次阻止旧响应回写；保存、状态切换或清除失败会保留当前草稿和可重试界面并显示就近错误。
-- 目标用量在移动端仍可见，计划模式与持续目标并存时不隐藏执行边界；切换会话不会携带任何目标栏临时交互状态。
+- 目标用量在移动端仍可见；持续目标开关位于 `+` 菜单，选中后像计划模式一样在输入框上方显示状态标注；活跃持续目标与计划模式互斥，切换会话不会携带任何目标控件临时交互状态。
 
 #### Rollback/Cleanup
 - 清除回归目标；若需回退，恢复 `threadGoal.ts`、`useDesktopState.ts`、`ThreadGoalBar.vue` 及 App 接线改动。

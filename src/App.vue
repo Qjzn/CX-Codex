@@ -719,6 +719,7 @@
                 :selected-reasoning-effort="selectedReasoningEffort"
                 :selected-speed-mode="selectedSpeedMode"
                 :selected-collaboration-mode="selectedCollaborationMode"
+                :thread-goal="null"
                 :is-updating-speed-mode="isUpdatingSpeedMode"
                 :disabled="Boolean(pendingNewThreadPreview)"
                 :skills="enabledComposerSkills"
@@ -795,20 +796,6 @@
                   @retry="retryQueuedMessage"
                   @delete="deleteQueuedMessage"
                 />
-                <ThreadGoalBar
-                  :key="selectedThreadId"
-                  :goal="selectedThreadGoal"
-                  :is-loading="isSelectedThreadGoalLoading"
-                  :is-updating="isSelectedThreadGoalUpdating"
-                  :error="selectedThreadGoalError"
-                  :execution-hint="selectedThreadGoalExecutionHint"
-                  :plan-mode-active="selectedCollaborationMode === 'plan'"
-                  :disabled="isThreadContentSwitching"
-                  @set-goal="onSaveThreadGoal"
-                  @set-status="onSetThreadGoalStatus"
-                  @clear-goal="onClearThreadGoal"
-                  @retry="refreshSelectedThreadGoal"
-                />
                 <FailedMessagesTray
                   :messages="selectedThreadDetachedFailedMessages"
                   @edit="onEditFailedMessage"
@@ -823,6 +810,11 @@
                   :selected-reasoning-effort="selectedReasoningEffort"
                   :selected-speed-mode="selectedSpeedMode"
                   :selected-collaboration-mode="selectedCollaborationMode"
+                  :thread-goal="selectedThreadGoal"
+                  :is-thread-goal-loading="isSelectedThreadGoalLoading"
+                  :is-thread-goal-updating="isSelectedThreadGoalUpdating"
+                  :thread-goal-error="selectedThreadGoalError"
+                  :thread-goal-disabled="isThreadContentSwitching"
                   :is-updating-speed-mode="isUpdatingSpeedMode"
                   :skills="enabledComposerSkills"
                   :has-loaded-skills="hasLoadedSkills"
@@ -839,6 +831,7 @@
                   @update:selected-reasoning-effort="onSelectReasoningEffort"
                   @update:selected-speed-mode="onSelectSpeedMode"
                   @update:selected-collaboration-mode="onSelectCollaborationMode"
+                  @set-thread-goal-status="onSetThreadGoalStatus"
                   @refresh-plugins="refreshComposerPlugins"
                   @reload-plugins="reloadComposerPlugins"
                   @login-plugin="loginComposerPlugin"
@@ -1191,7 +1184,6 @@ const ThreadConversation = defineAsyncComponent({
   loadingComponent: ConversationLoadingSkeleton,
   delay: 0,
 })
-const ThreadGoalBar = defineAsyncComponent(() => import('./components/content/ThreadGoalBar.vue'))
 const QueuedMessages = defineAsyncComponent(() => import('./components/content/QueuedMessages.vue'))
 const FailedMessagesTray = defineAsyncComponent(() => import('./components/content/FailedMessagesTray.vue'))
 const RateLimitStatus = defineAsyncComponent(() => import('./components/content/RateLimitStatus.vue'))
@@ -1488,10 +1480,9 @@ const {
   setWorktreeGitAutomationEnabled,
   setSelectedReasoningEffort,
   setSelectedCollaborationMode,
-  refreshSelectedThreadGoal,
   saveSelectedThreadGoal,
+  saveThreadGoalById,
   updateSelectedThreadGoalStatus,
-  clearSelectedThreadGoal,
   updateSelectedSpeedMode,
   respondToPendingServerRequest,
   renameProject,
@@ -2298,13 +2289,17 @@ const displayFavorites = computed<FavoriteRecord[]>(() => (
 ))
 const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThreadExecutionActive.value)
 const isSelectedThreadInterruptible = computed(() => !isHomeRoute.value && selectedThreadCanStop.value)
-const selectedThreadGoalExecutionHint = computed(() => {
-  if (selectedThreadGoal.value?.status !== 'active') return ''
-  if (selectedThreadServerRequests.value.length > 0) return '等待确认'
-  if (selectedThreadQueuedMessages.value.length > 0) return '等待消息队列'
-  if (isSelectedThreadInProgress.value) return '正在推进'
-  return '等待继续'
-})
+
+watch(
+  [selectedCollaborationMode, () => selectedThreadGoal.value?.status],
+  ([mode, goalStatus]) => {
+    if (mode === 'plan' && goalStatus === 'active') {
+      setSelectedCollaborationMode('execute')
+    }
+  },
+  { immediate: true },
+)
+
 const shouldShowSelectedThreadProcessing = computed(() => (
   selectedThreadServerRequests.value.length > 0 ||
   selectedLiveOverlay.value !== null ||
@@ -3981,6 +3976,7 @@ function onWindowPointerDownForSettings(event: PointerEvent): void {
 function onSubmitThreadMessage(payload: SubmitPayload): void {
   const feedbackStartedAtMs = isHomeRoute.value || payload.mode === 'steer' ? chatFeedbackNow() : undefined
   const text = payload.text
+  const threadGoalObjective = payload.threadGoalObjective?.trim() ?? ''
   const editingState = editingQueuedMessageState.value
   const queueInsertIndex =
     payload.mode === 'queue'
@@ -3989,6 +3985,24 @@ function onSubmitThreadMessage(payload: SubmitPayload): void {
       ? editingState.queueIndex
       : undefined
   editingQueuedMessageState.value = null
+  if (threadGoalObjective) {
+    if (isHomeRoute.value) {
+      if (newThreadSubmitInFlight || isSendingMessage.value || pendingNewThreadPreview.value) return
+      void submitFirstMessageForNewThread(
+        text,
+        payload.imageUrls,
+        payload.skills,
+        payload.fileAttachments,
+        payload.collaborationMode,
+        payload.turnOptions,
+        feedbackStartedAtMs,
+        threadGoalObjective,
+      )
+    } else {
+      onSaveThreadGoal(threadGoalObjective, true)
+    }
+    return
+  }
   if (isHomeRoute.value) {
     if (newThreadSubmitInFlight || isSendingMessage.value || pendingNewThreadPreview.value) return
     void submitFirstMessageForNewThread(
@@ -4419,24 +4433,25 @@ function onSelectSpeedMode(mode: SpeedMode): void {
 }
 
 function onSelectCollaborationMode(mode: CollaborationMode): void {
+  if (mode === 'plan' && selectedThreadGoal.value?.status === 'active') return
   setSelectedCollaborationMode(mode)
 }
 
-function onSaveThreadGoal(objective: string): void {
-  void saveSelectedThreadGoal(objective).catch(() => {
+function onSaveThreadGoal(objective: string, activate = false): void {
+  if (selectedCollaborationMode.value === 'plan') {
+    setSelectedCollaborationMode('execute')
+  }
+  void saveSelectedThreadGoal(objective, activate).catch(() => {
     // The desktop state exposes the actionable RPC error in the shared error banner.
   })
 }
 
 function onSetThreadGoalStatus(status: 'active' | 'paused'): void {
+  if (status === 'active' && selectedCollaborationMode.value === 'plan') {
+    setSelectedCollaborationMode('execute')
+  }
   void updateSelectedThreadGoalStatus(status).catch(() => {
     // Keep the existing goal visible so the user can retry without re-entering it.
-  })
-}
-
-function onClearThreadGoal(): void {
-  void clearSelectedThreadGoal().catch(() => {
-    // The goal remains visible when the authoritative clear fails.
   })
 }
 
@@ -4984,6 +4999,7 @@ function submitFirstMessageForNewThread(
   collaborationMode: CollaborationMode = selectedCollaborationMode.value,
   turnOptions?: ComposerTurnOptions,
   feedbackStartedAtMs?: number,
+  threadGoalObjective = '',
 ): Promise<string> {
   if (newThreadSubmitInFlight) return newThreadSubmitInFlight
 
@@ -4995,6 +5011,7 @@ function submitFirstMessageForNewThread(
     collaborationMode,
     turnOptions,
     feedbackStartedAtMs,
+    threadGoalObjective,
   ))
   newThreadSubmitInFlight = request
   const clearInFlight = (): void => {
@@ -5012,6 +5029,7 @@ async function submitFirstMessageForNewThreadOnce(
   collaborationMode: CollaborationMode = selectedCollaborationMode.value,
   turnOptions?: ComposerTurnOptions,
   feedbackStartedAtMs?: number,
+  threadGoalObjective = '',
 ): Promise<string> {
   let activatedThreadId = ''
   let routeToCreatedThreadPromise: Promise<void> | null = null
@@ -5081,6 +5099,9 @@ async function submitFirstMessageForNewThreadOnce(
         })
       }
       return ''
+    }
+    if (threadGoalObjective.trim()) {
+      await saveThreadGoalById(threadId, threadGoalObjective, true)
     }
     if (routeToCreatedThreadPromise) {
       await routeToCreatedThreadPromise
